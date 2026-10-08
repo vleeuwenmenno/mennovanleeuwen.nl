@@ -141,6 +141,8 @@ function useFollow(dep: unknown) {
 // The text console is a terminal without a window around it.
 const CONSOLE_WIN: WinState = { pid: -1, app: 'terminal', x: 0, y: 0, w: 0, h: 0, z: 0, minimized: false, maximized: false, props: {}, openedAt: 0 }
 
+const MODIFIERS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'OS', 'CapsLock', 'NumLock', 'Fn', 'Dead', 'Unidentified', ''])
+
 function Boot() {
   // P asks for a text console: the boot still runs to the end, then logs in on tty1 instead of
   // starting the desktop. `exit` there starts the graphical session after all.
@@ -171,19 +173,27 @@ function Boot() {
   const pause = () => canPause && setWantConsole(true)
 
   // P asks for the console; any other key skips the boot. Once asked, keys wait for the console.
+  // Listening in the capture phase, ahead of the page's other shortcuts.
   const pauseRef = useRef(pause)
   pauseRef.current = pause
   useEffect(() => {
     if (wantConsole) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey) return
-      if (e.key.toLowerCase() === 'p') {
-        e.preventDefault()
-        pauseRef.current()
-      } else bootDone()
+      if (e.ctrlKey || e.metaKey || e.altKey || e.repeat || MODIFIERS.has(e.key)) return
+      e.preventDefault()
+      if (e.code === 'KeyP' || e.key.toLowerCase() === 'p') pauseRef.current()
+      else bootDone()
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [wantConsole])
+
+  // Keys typed on a page with nothing focused can be taken by the browser (find as you type) or
+  // by keyboard extensions such as Vimium. An invisible focused input keeps them on the page.
+  const keysRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (wantConsole || matchMedia('(pointer: coarse)').matches) return
+    keysRef.current?.focus({ preventScroll: true })
   }, [wantConsole])
 
   return (
@@ -192,6 +202,17 @@ function Boot() {
       className={`boot ${leaving ? 'is-leaving' : ''} ${consoleOpen && !resumed ? 'is-paused' : ''} ${consoleOpen ? 'has-console' : ''}`}
       onClick={() => !wantConsole && bootDone()}
     >
+      {!wantConsole && (
+        <input
+          ref={keysRef}
+          className="boot-keys"
+          aria-label="Boot screen: press P to boot to a shell, any other key to skip"
+          value=""
+          onChange={() => {}}
+          onBlur={(e) => !matchMedia('(pointer: coarse)').matches && e.currentTarget.focus({ preventScroll: true })}
+          autoComplete="off"
+        />
+      )}
       <pre>
         {main.slice(0, n).map((l, i) => (
           <Line key={i} line={l} />
