@@ -274,6 +274,7 @@ export function Desktop() {
       { label: 'Clean up icons', onSelect: resetLayout },
       ...(desk.trashed.length ? [{ label: `Put back ${desk.trashed.length} trashed item${desk.trashed.length === 1 ? '' : 's'}`, onSelect: () => restoreIcons(desk.trashed) }] : []),
       { separator: true },
+      { label: 'Focus follows mouse', checked: wm.focusMode === 'hover', onSelect: () => wm.setFocusMode(wm.focusMode === 'hover' ? 'click' : 'hover') },
       { label: 'Accent color', submenu: Object.entries(ACCENTS).map(([name, color]) => ({ label: name[0].toUpperCase() + name.slice(1), swatch: color, onSelect: () => setAccent(name) })) },
     ]
   }

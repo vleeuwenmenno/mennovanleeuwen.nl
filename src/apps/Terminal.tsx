@@ -97,7 +97,11 @@ export function Terminal({ win }: { win: WinState }) {
 
   // Focus the prompt whenever this window comes to the front (not on touch, where it pops the keyboard).
   useEffect(() => {
-    if (wm.focusedPid === win.pid && !matchMedia('(pointer: coarse)').matches) inputRef.current?.focus({ preventScroll: true })
+    if (wm.focusedPid !== win.pid || matchMedia('(pointer: coarse)').matches) return
+    // Hover focus must not pull the caret out of something else being typed in (Spotlight, a rename).
+    const active = document.activeElement
+    if (active && active !== document.body && !active.closest('.window')) return
+    inputRef.current?.focus({ preventScroll: true })
   }, [wm.focusedPid, win.pid])
 
   // Other apps can ask the terminal to run something (e.g. "Open in terminal" buttons).

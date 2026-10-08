@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState, type ReactNode } from 'react'
 
 export type AppId = 'terminal' | 'notes' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'trash'
 
@@ -26,14 +26,18 @@ type Action =
   | { type: 'open'; app: AppId; geometry: Geometry; props?: WinState['props']; newInstance?: boolean }
   | { type: 'close'; pid: number }
   | { type: 'focus'; pid: number }
+  | { type: 'hoverFocus'; pid: number }
   | { type: 'minimize'; pid: number }
   | { type: 'toggleMax'; pid: number }
   | { type: 'setGeometry'; pid: number; geometry: Partial<Geometry> }
   | { type: 'viewport'; width: number; height: number; layout: { app: AppId; geometry: Geometry }[] }
 
 /** `touched` flips once the visitor moves, resizes or opens something; until then a viewport
- * change re-applies the opening layout instead of just clamping. */
-type State = { windows: WinState[]; nextPid: number; topZ: number; touched: boolean }
+ * change re-applies the opening layout instead of just clamping. `focused` is tracked apart from
+ * stacking so hover can move keyboard focus without raising a window (sloppy focus). */
+type State = { windows: WinState[]; nextPid: number; topZ: number; touched: boolean; focused: number | null }
+
+export type FocusMode = 'hover' | 'click'
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -48,6 +52,7 @@ function reducer(state: State, action: Action): State {
           ...state,
           touched: true,
           topZ: z,
+          focused: existing.pid,
           windows: state.windows.map((w) =>
             w.pid === existing.pid ? { ...w, z, minimized: false, props: action.props ? { ...action.props } : w.props } : w,
           ),
@@ -63,18 +68,24 @@ function reducer(state: State, action: Action): State {
         props: action.props ?? {},
         openedAt: Date.now(),
       }
-      return { ...state, touched: true, windows: [...state.windows, win], nextPid: state.nextPid + 1, topZ: z }
+      return { ...state, touched: true, focused: win.pid, windows: [...state.windows, win], nextPid: state.nextPid + 1, topZ: z }
     }
     case 'close':
-      return { ...state, windows: state.windows.filter((w) => w.pid !== action.pid) }
+      return { ...state, focused: state.focused === action.pid ? null : state.focused, windows: state.windows.filter((w) => w.pid !== action.pid) }
     case 'focus': {
       const target = state.windows.find((w) => w.pid === action.pid)
-      if (!target || (target.z === state.topZ && !target.minimized)) return state
+      if (!target) return state
+      if (target.z === state.topZ && !target.minimized) return state.focused === action.pid ? state : { ...state, focused: action.pid }
       const z = state.topZ + 1
-      return { ...state, topZ: z, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, z, minimized: false } : w)) }
+      return { ...state, topZ: z, focused: action.pid, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, z, minimized: false } : w)) }
+    }
+    case 'hoverFocus': {
+      const target = state.windows.find((w) => w.pid === action.pid)
+      if (!target || target.minimized || state.focused === action.pid) return state
+      return { ...state, focused: action.pid }
     }
     case 'minimize':
-      return { ...state, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, minimized: true } : w)) }
+      return { ...state, focused: state.focused === action.pid ? null : state.focused, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, minimized: true } : w)) }
     case 'toggleMax':
       return { ...state, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, maximized: !w.maximized } : w)) }
     case 'setGeometry':
@@ -103,13 +114,19 @@ type WM = {
   /** Always opens another window, except for single-instance apps. */
   openNew: (app: AppId, props?: WinState['props']) => void
   close: (pid: number) => void
+  /** Raises and focuses a window. */
   focus: (pid: number) => void
+  /** Focuses without raising; what hovering does in 'hover' focus mode. */
+  hoverFocus: (pid: number) => void
+  focusMode: FocusMode
+  setFocusMode: (mode: FocusMode) => void
   minimize: (pid: number) => void
   toggleMax: (pid: number) => void
   setGeometry: (pid: number, geometry: Partial<Geometry>) => void
 }
 
 const Ctx = createContext<WM | null>(null)
+const FOCUS_KEY = 'mvlos.focusMode'
 
 export function WindowManagerProvider({
   children,
@@ -122,10 +139,26 @@ export function WindowManagerProvider({
 }) {
   const [state, dispatch] = useReducer(reducer, relayout, (make) => {
     const init = make()
-    let s: State = { windows: [], nextPid: 100, topZ: 10, touched: false }
+    let s: State = { windows: [], nextPid: 100, topZ: 10, touched: false, focused: null }
     for (const w of init) s = reducer(s, { type: 'open', app: w.app, geometry: w.geometry, props: w.props })
     return { ...s, touched: false }
   })
+
+  const [focusMode, setFocusModeState] = useState<FocusMode>(() => {
+    try {
+      return localStorage.getItem(FOCUS_KEY) === 'click' ? 'click' : 'hover'
+    } catch {
+      return 'hover'
+    }
+  })
+  const setFocusMode = useCallback((mode: FocusMode) => {
+    setFocusModeState(mode)
+    try {
+      localStorage.setItem(FOCUS_KEY, mode)
+    } catch {
+      /* not persisted */
+    }
+  }, [])
 
   const open = useCallback(
     (app: AppId, props?: WinState['props']) => {
@@ -158,18 +191,22 @@ export function WindowManagerProvider({
   const value = useMemo<WM>(() => {
     const visible = state.windows.filter((w) => !w.minimized)
     const top = visible.reduce<WinState | null>((a, w) => (!a || w.z > a.z ? w : a), null)
+    const focused = visible.some((w) => w.pid === state.focused) ? state.focused : (top?.pid ?? null)
     return {
       windows: state.windows,
-      focusedPid: top?.pid ?? null,
+      focusedPid: focused,
       open,
       openNew,
       close: (pid) => dispatch({ type: 'close', pid }),
       focus: (pid) => dispatch({ type: 'focus', pid }),
+      hoverFocus: (pid) => dispatch({ type: 'hoverFocus', pid }),
+      focusMode,
+      setFocusMode,
       minimize: (pid) => dispatch({ type: 'minimize', pid }),
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
       setGeometry: (pid, geometry) => dispatch({ type: 'setGeometry', pid, geometry }),
     }
-  }, [state.windows, open, openNew])
+  }, [state.windows, state.focused, open, openNew, focusMode, setFocusMode])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

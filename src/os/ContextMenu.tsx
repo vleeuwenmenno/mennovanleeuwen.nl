@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 
 export type MenuItem =
   | { separator: true }
-  | { label: string; onSelect?: () => void; disabled?: boolean; shortcut?: string; danger?: boolean; submenu?: MenuItem[]; swatch?: string }
+  | { label: string; onSelect?: () => void; disabled?: boolean; shortcut?: string; danger?: boolean; submenu?: MenuItem[]; swatch?: string; checked?: boolean }
 
 type OpenMenu = { x: number; y: number; items: MenuItem[] } | null
 
@@ -70,6 +70,7 @@ function MenuList({ items, x, y, altX, onClose }: { items: MenuItem[]; x: number
                 item.onSelect?.()
               }}
             >
+              {item.checked !== undefined && <span className="ctx-check">{item.checked ? '✓' : ''}</span>}
               {item.swatch && <span className="ctx-swatch" style={{ background: item.swatch }} />}
               <span className="ctx-label">{item.label}</span>
               {item.shortcut && <span className="ctx-shortcut">{item.shortcut}</span>}

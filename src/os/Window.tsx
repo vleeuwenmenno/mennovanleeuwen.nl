@@ -18,6 +18,7 @@ type Drag = { mode: 'move' | 'resize'; edge: string; startX: number; startY: num
 export function Window({ win, title, chrome = 'default', className = '', children }: Props) {
   const wm = useWM()
   const drag = useRef<Drag | null>(null)
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const focused = wm.focusedPid === win.pid
 
   const begin = (mode: Drag['mode'], edge = '') => (e: ReactPointerEvent) => {
@@ -65,6 +66,12 @@ export function Window({ win, title, chrome = 'default', className = '', childre
       className={`window chrome-${chrome} ${focused ? 'is-focused' : ''} ${win.maximized ? 'is-max' : ''} ${win.minimized ? 'is-min' : ''} ${className}`}
       style={{ left: win.x, top: win.y, width: win.w, height: win.h, zIndex: win.z }}
       onPointerDown={() => wm.focus(win.pid)}
+      // Focus follows the mouse after a short pause, so sweeping across windows does not flicker.
+      onPointerEnter={(e) => {
+        if (wm.focusMode !== 'hover' || e.pointerType === 'touch' || document.body.matches('.is-dragging, .is-resizing')) return
+        hoverTimer.current = setTimeout(() => wm.hoverFocus(win.pid), 70)
+      }}
+      onPointerLeave={() => hoverTimer.current && clearTimeout(hoverTimer.current)}
       role="dialog"
       aria-label={title}
       data-app={win.app}
