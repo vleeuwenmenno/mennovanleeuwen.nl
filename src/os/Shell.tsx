@@ -221,7 +221,45 @@ function Dock() {
   const orderRef = useRef(order)
   orderRef.current = order
   const suppressClick = useRef(false)
-  const dock = useDockVisibility(!!dragging || overlay === 'launchpad', wm.windows.some((w) => w.maximized && !w.minimized))
+  const [fit, setFit] = useState(order.length)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const navRef = useRef<HTMLElement>(null)
+  const firstRef = useRef<HTMLButtonElement>(null)
+  const dock = useDockVisibility(!!dragging || overlay === 'launchpad' || moreOpen, wm.windows.some((w) => w.maximized && !w.minimized))
+
+  // How many apps fit between "All apps" and Trash. The rest go behind a "More" button, so the dock
+  // never scrolls or runs off a phone screen. Every item is as wide as the "All apps" button.
+  useLayoutEffect(() => {
+    const measure = () => {
+      const nav = navRef.current
+      const first = firstRef.current
+      if (!nav || !first) return
+      const cs = getComputedStyle(nav)
+      const gap = parseFloat(cs.columnGap) || 0
+      const chrome = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth)
+      const sep = nav.querySelector<HTMLElement>('.dock-sep')
+      const sepW = sep ? sep.offsetWidth + parseFloat(getComputedStyle(sep).marginLeft) * 2 : 0
+      const room = window.innerWidth - 16 - chrome - 2 * sepW
+      const W = first.offsetWidth
+      // n apps plus All apps and Trash (plus More when it is needed), with gaps between all children.
+      const width = (n: number, more: boolean) => (n + 2 + +more) * W + (n + 3 + +more) * gap
+      const n = order.length
+      if (width(n, false) <= room) return setFit(n)
+      let k = n - 1
+      while (k > 0 && width(k, true) > room) k--
+      setFit(k)
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    document.fonts?.ready.then(measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [order.length])
+
+  const shown = order.slice(0, fit)
+  const overflow = order.slice(fit)
+  useEffect(() => {
+    if (!overflow.length) setMoreOpen(false)
+  }, [overflow.length])
 
   // FLIP: icons that changed slot slide from where they were instead of jumping.
   useLayoutEffect(() => {
@@ -297,6 +335,13 @@ function Dock() {
     window.addEventListener('pointercancel', onUp)
   }
 
+  const launch = (app: AppId) => {
+    const wins = wm.windows.filter((x) => x.app === app)
+    const focused = wins.find((x) => x.pid === wm.focusedPid && !x.minimized)
+    if (focused && app !== 'trash') wm.minimize(focused.pid)
+    else wm.open(app)
+  }
+
   const appButton = (app: AppId) => {
     const isDragged = dragging?.app === app
     return (
@@ -314,10 +359,7 @@ function Dock() {
             suppressClick.current = false
             return
           }
-          const wins = wm.windows.filter((x) => x.app === app)
-          const focused = wins.find((x) => x.pid === wm.focusedPid && !x.minimized)
-          if (focused && app !== 'trash') wm.minimize(focused.pid)
-          else wm.open(app)
+          launch(app)
         }}
         aria-label={APP_META[app].dock}
         onContextMenu={(e) => {
@@ -361,13 +403,14 @@ function Dock() {
     <>
     {dock.autohide && <div className="dock-hotzone" onPointerEnter={dock.show} onPointerLeave={dock.hideSoon} aria-hidden />}
     <nav
+      ref={navRef}
       className={`dock ${dragging ? 'is-reordering' : ''} ${dock.visible ? '' : 'is-hidden'}`}
       aria-label="Dock"
       onPointerEnter={dock.show}
       onPointerLeave={() => !dragging && dock.hideSoon()}
       onFocus={dock.show}
     >
-      <button className="dock-item" onClick={() => toggleOverlay('launchpad')} aria-label="All apps">
+      <button ref={firstRef} className="dock-item" onClick={() => toggleOverlay('launchpad')} aria-label="All apps">
         <span className="app-icon lp-dock-icon" style={{ width: 48, height: 48 }}>
           {Array.from({ length: 9 }, (_, i) => (
             <span key={i} />
@@ -376,11 +419,67 @@ function Dock() {
         <span className="dock-label">All apps</span>
       </button>
       <span className="dock-sep" />
-      {order.map(appButton)}
+      {shown.map(appButton)}
+      {overflow.length > 0 && (
+        <DockMore apps={overflow} open={moreOpen} setOpen={setMoreOpen} onLaunch={launch} running={(app) => wm.windows.filter((w) => w.app === app).length} />
+      )}
       <span className="dock-sep" />
       {appButton('trash')}
     </nav>
     </>
+  )
+}
+
+/** The "More" button and the stack of apps that did not fit in the dock. */
+function DockMore({ apps, open, setOpen, onLaunch, running }: { apps: AppId[]; open: boolean; setOpen: (o: boolean) => void; onLaunch: (app: AppId) => void; running: (app: AppId) => number }) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const away = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
+    window.addEventListener('pointerdown', away)
+    window.addEventListener('keydown', esc)
+    return () => {
+      window.removeEventListener('pointerdown', away)
+      window.removeEventListener('keydown', esc)
+    }
+  }, [open, setOpen])
+
+  const anyRunning = apps.some((a) => running(a) > 0)
+  return (
+    <div ref={ref} className="dock-more">
+      <button className={`dock-item ${open ? 'is-open' : ''}`} onClick={() => setOpen(!open)} aria-label="More apps" aria-expanded={open}>
+        <span className="app-icon dock-more-icon" style={{ width: 48, height: 48 }}>
+          <span />
+          <span />
+          <span />
+        </span>
+        <span className="dock-label">More</span>
+        <span className="dock-dots">{anyRunning && <span className="dock-dot is-on" />}</span>
+      </button>
+      {open && (
+        <div className="dock-stack" role="menu">
+          {apps.map((app) => (
+            <button
+              key={app}
+              role="menuitem"
+              className="dock-stack-item"
+              onClick={() => {
+                setOpen(false)
+                onLaunch(app)
+              }}
+            >
+              <AppIcon app={app} size={40} />
+              <span>{APP_META[app].dock}</span>
+              {running(app) > 0 && <span className="dock-dot is-on" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
