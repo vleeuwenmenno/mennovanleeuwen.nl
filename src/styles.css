@@ -99,9 +99,7 @@ body.is-resizing * {
 .desktop {
   position: fixed;
   inset: 0 0 auto 0;
-  /* The whole screen: in an installed iOS app 100% can stop above the home indicator. */
   height: 100%;
-  height: var(--app-h, 100lvh);
   /* clip, not hidden: hidden still lets focus changes scroll the desktop sideways */
   overflow: clip;
 }
@@ -4988,9 +4986,6 @@ kbd {
   bottom: auto;
   height: var(--vvh, 100%);
 }
-:root:not(.keyboard-open) .boot {
-  height: var(--app-h, var(--vvh, 100%));
-}
 .boot.is-leaving {
   animation: boot-out 0.3s ease forwards;
 }
@@ -5039,7 +5034,7 @@ kbd {
     left: 6px !important;
     top: calc(var(--top) + 6px) !important;
     width: calc(100vw - 12px) !important;
-    height: calc(var(--app-h, 100dvh) - var(--top) - 104px - var(--sab)) !important;
+    height: calc(100dvh - var(--top) - 104px - var(--sab)) !important;
   }
   /* Keyboard open: windows fill the space above it, and the dock steps aside. */
   :root.keyboard-open .window:not(.chrome-note),
@@ -5053,7 +5048,7 @@ kbd {
   }
   /* With the dock tucked away, app windows reach down to the handle bar. */
   :root[data-dock-tucked] .window:not(.chrome-note) {
-    height: calc(var(--app-h, 100dvh) - var(--top) - 36px - var(--sab)) !important;
+    height: calc(100dvh - var(--top) - 36px - var(--sab)) !important;
   }
   .window.chrome-note {
     transform: rotate(-1deg);
