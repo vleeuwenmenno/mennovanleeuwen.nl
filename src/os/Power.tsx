@@ -174,7 +174,7 @@ function useFollow(dep: unknown) {
 const CONSOLE_WIN: WinState = { pid: -1, app: 'terminal', x: 0, y: 0, w: 0, h: 0, z: 0, minimized: false, maximized: false, props: {}, openedAt: 0 }
 
 // The boot log's line delays are written short; this stretches them to a readable pace.
-const BOOT_PACE = 1.35
+const BOOT_PACE = 1.15
 
 const MODIFIERS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'OS', 'CapsLock', 'NumLock', 'Fn', 'Dead', 'Unidentified', ''])
 
