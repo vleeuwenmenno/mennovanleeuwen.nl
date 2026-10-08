@@ -49,7 +49,7 @@ export function fetchMinecraft(force = false): Promise<State> {
     .then((j: McStatus) => {
       if (typeof j?.online !== 'boolean') throw new Error('no status endpoint')
       const status = { ...j, checkedAt: Date.now() }
-      watch(status)
+      watch(status, true)
       set({ loading: false, error: undefined, status })
       return state
     })
@@ -81,8 +81,9 @@ function fromPublicApis(get: (url: string) => Promise<Json>): Promise<State> {
     })
 }
 
-// Join, leave and up/down notifications. The first answer is the baseline; a player only counts
-// as gone after two polls in a row without them, since the caches can briefly disagree.
+// Join, leave and up/down notifications. The first answer is the baseline. A live answer from the
+// server itself is trusted at once; with the public APIs a player only counts as gone after two
+// polls in a row without them, since their caches can briefly disagree.
 const NOTIFY_KEY = 'mvlos.mc.notify'
 let notifyOn = (() => {
   try {
@@ -105,7 +106,7 @@ export function setMcNotifications(on: boolean) {
 let last: { online: boolean; count: number; misses: Map<string, number> } | null = null
 const head = (name: string) => `https://mc-heads.net/avatar/${encodeURIComponent(name)}/32`
 
-function watch(st: McStatus) {
+function watch(st: McStatus, live = false) {
   const prev = last
   const misses = new Map<string, number>()
   last = { online: st.online, count: st.players.online, misses }
@@ -123,7 +124,7 @@ function watch(st: McStatus) {
   const left: string[] = []
   for (const [name, n] of prev.misses) {
     if (misses.has(name)) continue
-    if (n + 1 >= 2) left.push(name)
+    if (live || n + 1 >= 2) left.push(name)
     else misses.set(name, n + 1) // missing once: keep watching
   }
   const total = `${st.players.online}/${st.players.max} online`
