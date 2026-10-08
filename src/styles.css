@@ -3683,11 +3683,23 @@ kbd {
   inset: 0;
   z-index: 200000;
   background: #07080b;
-  display: flex;
-  align-items: flex-end;
-  padding: 24px;
+  padding: 20px 24px;
+  overflow: hidden;
   cursor: pointer;
-  animation: boot-out 0.3s ease 0.95s forwards;
+}
+.boot.is-leaving {
+  animation: boot-out 0.3s ease forwards;
+}
+.boot-k {
+  color: #7d8392;
+}
+.boot-cursor {
+  animation: boot-blink 0.8s steps(1) infinite;
+}
+@keyframes boot-blink {
+  50% {
+    opacity: 0;
+  }
 }
 .boot pre {
   margin: 0;

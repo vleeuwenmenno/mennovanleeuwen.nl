@@ -485,33 +485,104 @@ function SnapPreview() {
   return <div className="snap-preview" style={{ left: g.x, top: g.y, width: g.w, height: g.h }} aria-hidden />
 }
 
-const BOOT = [
-  '[    0.000000] MvL OS 1.0 booting on ' + (typeof navigator !== 'undefined' ? navigator.platform || 'the web' : 'the web'),
-  '[    0.041337] Mounting /home/menno (read-only, for your safety)',
-  '[    0.090210] Starting react-wm window manager',
-  '[    0.130077] Loading projects: boltwarden savuvo pepper omasoloist',
-  '[    0.171995] Connecting to api.github.com',
-  '[  OK  ] Reached target Graphical Interface',
+const platform = typeof navigator !== 'undefined' ? navigator.platform || 'the web' : 'the web'
+
+// [kind, text, delay before the line in ms]. Kernel lines fly by, systemd takes its time.
+type BootLine = ['k' | 'ok' | 'start' | 'info', string, number]
+const BOOT: BootLine[] = [
+  ['k', `[    0.000000] Linux version 6.42.0-mvl (menno@arch) (gcc 15.2.1) #1 SMP PREEMPT_DYNAMIC`, 0],
+  ['k', `[    0.000000] Command line: BOOT_IMAGE=/vmlinuz-mvl root=/dev/cv rw quiet splash=no`, 30],
+  ['k', `[    0.000000] DMI: ${platform}, BIOS curiosity 1.0 19/09/1996`, 30],
+  ['k', '[    0.004211] Memory: 30 years available, 0 wasted', 30],
+  ['k', '[    0.017302] smpboot: Allowing 1 human CPU, coffee-powered', 30],
+  ['k', '[    0.041337] ACPI: Interpreter enabled, sleep states: S0 (coding) S3 (gaming)', 30],
+  ['k', '[    0.083120] PCI: Using configuration type 1 for base access', 30],
+  ['k', '[    0.120954] NET: Registered PF_TAILSCALE protocol family', 30],
+  ['k', '[    0.162008] usb 1-1: new high-speed USB device: Mechanical Keyboard (very clicky)', 30],
+  ['k', '[    0.210447] nvme0n1: p1 p2 p3 (projects, contributions, games)', 30],
+  ['k', '[    0.264113] EXT4-fs (nvme0n1p2): mounted filesystem /home/menno ro, for your safety', 30],
+  ['k', '[    0.301772] Run /sbin/init as init process', 40],
+  ['info', '', 60],
+  ['info', 'Welcome to MvL OS (Arch, Omarchy flavour)!', 120],
+  ['info', '', 60],
+  ['ok', 'Created slice Slice /system/getty.', 70],
+  ['ok', 'Reached target Local Encrypted Volumes.', 60],
+  ['ok', 'Listening on Journal Socket.', 60],
+  ['start', 'Starting Journal Service...', 80],
+  ['ok', 'Started Journal Service.', 110],
+  ['start', 'Starting Load Kernel Module caffeine...', 70],
+  ['ok', 'Finished Load Kernel Module caffeine.', 120],
+  ['ok', 'Mounted /home/menno/Projects.', 70],
+  ['ok', 'Reached target Local File Systems.', 60],
+  ['start', 'Starting Network Manager...', 90],
+  ['ok', 'Started Network Manager.', 140],
+  ['start', 'Starting Tailscale node agent...', 80],
+  ['ok', 'Started Tailscale node agent.', 150],
+  ['ok', 'Reached target Network is Online.', 70],
+  ['start', 'Starting Fetch recent activity from api.github.com...', 90],
+  ['start', 'Starting Fetch recent activity from git.mvl.sh...', 60],
+  ['ok', 'Finished Fetch recent activity from git.mvl.sh.', 160],
+  ['ok', 'Finished Fetch recent activity from api.github.com.', 90],
+  ['start', 'Starting Pepper cluster agent...', 80],
+  ['ok', 'Started Pepper cluster agent.', 130],
+  ['ok', 'Started Minecraft status probe for cloud.mvl.sh.', 90],
+  ['ok', 'Started Boltwarden vault (locked, nice try).', 90],
+  ['ok', 'Loaded projects: boltwarden savuvo pepper golinks omasoloist.', 100],
+  ['start', 'Starting Hyprland compositor (react-wm)...', 90],
+  ['ok', 'Started Hyprland compositor (react-wm).', 170],
+  ['ok', 'Reached target Graphical Interface.', 110],
 ]
 
 function Boot({ onDone }: { onDone: () => void }) {
   const [n, setN] = useState(0)
+  const [leaving, setLeaving] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  // The parent passes a new callback every render; keep the timers below from restarting.
+  const done = useRef(onDone)
+  done.current = onDone
+
   useEffect(() => {
-    if (n >= BOOT.length) {
-      const t = setTimeout(onDone, 260)
+    if (n < BOOT.length) {
+      const t = setTimeout(() => setN(n + 1), BOOT[n][2])
       return () => clearTimeout(t)
     }
-    const t = setTimeout(() => setN(n + 1), 110)
+    const t = setTimeout(() => setLeaving(true), 450)
     return () => clearTimeout(t)
-  }, [n, onDone])
+  }, [n])
+
+  useEffect(() => {
+    if (!leaving) return
+    const t = setTimeout(() => done.current(), 300)
+    return () => clearTimeout(t)
+  }, [leaving])
+
+  // Any key skips, like a click.
+  useEffect(() => {
+    const skip = () => done.current()
+    window.addEventListener('keydown', skip)
+    return () => window.removeEventListener('keydown', skip)
+  }, [])
+
+  // Printed from the top; once the screen is full it scrolls like a real console.
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [n])
+
   return (
-    <div className="boot" onClick={onDone}>
+    <div ref={ref} className={`boot ${leaving ? 'is-leaving' : ''}`} onClick={() => done.current()}>
       <pre>
-        {BOOT.slice(0, n).map((l) => (
-          <div key={l} className={l.includes('OK') ? 't-green' : ''}>
-            {l}
+        {BOOT.slice(0, n).map(([kind, text], i) => (
+          <div key={i} className={kind === 'k' ? 'boot-k' : undefined}>
+            {kind === 'ok' && (
+              <>
+                [<span className="t-green">  OK  </span>]{' '}
+              </>
+            )}
+            {kind === 'start' ? `         ${text}` : text || ' '}
           </div>
         ))}
+        {n < BOOT.length && <span className="boot-cursor">_</span>}
       </pre>
     </div>
   )
