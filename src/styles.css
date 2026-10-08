@@ -1717,6 +1717,18 @@ body.is-resizing * {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.ev-sha,
+.ev-ref {
+  color: var(--accent);
+}
+.ev-repo {
+  color: inherit;
+}
+.ev-sha:hover,
+.ev-ref:hover,
+.ev-repo:hover {
+  text-decoration: underline;
+}
 .ev-meta {
   margin: 3px 0 0;
   display: flex;

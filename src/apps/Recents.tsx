@@ -96,10 +96,22 @@ export function Recents() {
                     <a href={i.url} target="_blank" rel="noopener noreferrer" className="ev-title">
                       {i.title}
                     </a>
-                    {i.detail && <p className="ev-detail">{i.detail}</p>}
+                    {i.detail && i.detail !== i.ref?.name && <p className="ev-detail">{i.detail}</p>}
                     <p className="ev-meta">
                       <span className="tag">{KIND_LABEL[i.kind]}</span>
-                      <span>{i.repo}</span>
+                      <a href={`${i.source === 'forgejo' ? 'https://git.mvl.sh' : 'https://github.com'}/${i.repo}`} target="_blank" rel="noopener noreferrer" className="ev-repo">
+                        {i.repo}
+                      </a>
+                      {i.ref && (
+                        <a href={i.ref.url} target="_blank" rel="noopener noreferrer" className="ev-ref" title={`${i.ref.type} ${i.ref.name}`}>
+                          {i.ref.type === 'tag' ? '◆' : '⑂'} {i.ref.name}
+                        </a>
+                      )}
+                      {i.sha && (
+                        <a href={i.url} target="_blank" rel="noopener noreferrer" className="ev-sha" title={i.sha}>
+                          {i.sha.slice(0, 7)}
+                        </a>
+                      )}
                       <span className="src">{i.source === 'forgejo' ? 'git.mvl.sh' : 'GitHub'}</span>
                       <time dateTime={i.date} title={new Date(i.date).toLocaleString()}>
                         {timeAgo(i.date)}

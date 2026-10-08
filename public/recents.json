@@ -1,14 +1,64 @@
 {
-  "generatedAt": "2026-10-08T19:22:55.388Z",
+  "generatedAt": "2026-10-08T20:51:16.919Z",
   "items": [
     {
       "source": "github",
       "repo": "vleeuwenmenno/mennovanleeuwen.nl",
-      "date": "2026-10-08T18:35:38Z",
-      "id": "gh-23400497583",
+      "date": "2026-10-08T20:48:50Z",
+      "id": "gh-23410422987",
       "kind": "push",
       "title": "Pushed to main",
-      "url": "https://github.com/vleeuwenmenno/mennovanleeuwen.nl/commit/e441c2a9891ad4ac64f35a8156c9a723089ad85f"
+      "url": "https://github.com/vleeuwenmenno/mennovanleeuwen.nl/commit/0a587ec72d6fa002297ff5f0a23643c7d6f28395",
+      "sha": "0a587ec72d6fa002297ff5f0a23643c7d6f28395",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://github.com/vleeuwenmenno/mennovanleeuwen.nl/tree/main"
+      }
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T20:14:30Z",
+      "id": "gh-16765067692",
+      "kind": "pr",
+      "title": "Opened PR #54",
+      "detail": "feat/card-identity-editors",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/pull/54",
+      "ref": {
+        "type": "branch",
+        "name": "feat/card-identity-editors",
+        "url": "https://github.com/vleeuwenmenno/boltwarden/tree/feat/card-identity-editors"
+      }
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T20:14:14Z",
+      "id": "gh-23407828319",
+      "kind": "create",
+      "title": "Created branch feat/card-identity-editors",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/tree/feat/card-identity-editors",
+      "ref": {
+        "type": "branch",
+        "name": "feat/card-identity-editors",
+        "url": "https://github.com/vleeuwenmenno/boltwarden/tree/feat/card-identity-editors"
+      }
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T20:07:32Z",
+      "id": "gh-23407326703",
+      "kind": "push",
+      "title": "Pushed to feat/password-generator",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/commit/fe8643fe9b61a41d6fb7e35ccab4e048450b8e93",
+      "sha": "fe8643fe9b61a41d6fb7e35ccab4e048450b8e93",
+      "ref": {
+        "type": "branch",
+        "name": "feat/password-generator",
+        "url": "https://github.com/vleeuwenmenno/boltwarden/tree/feat/password-generator"
+      }
     },
     {
       "source": "github",
@@ -17,7 +67,13 @@
       "id": "gh-23393183037",
       "kind": "push",
       "title": "Pushed to faster-wheel-scrolling",
-      "url": "https://github.com/vleeuwenmenno/omarchy-omafile/commit/2b76920be737fd098abe26ca3913fe2ce71cbcd2"
+      "url": "https://github.com/vleeuwenmenno/omarchy-omafile/commit/2b76920be737fd098abe26ca3913fe2ce71cbcd2",
+      "sha": "2b76920be737fd098abe26ca3913fe2ce71cbcd2",
+      "ref": {
+        "type": "branch",
+        "name": "faster-wheel-scrolling",
+        "url": "https://github.com/vleeuwenmenno/omarchy-omafile/tree/faster-wheel-scrolling"
+      }
     },
     {
       "source": "github",
@@ -41,6 +97,30 @@
     },
     {
       "source": "github",
+      "repo": "vleeuwenmenno/omarchy-omafile",
+      "date": "2026-10-08T16:47:46Z",
+      "id": "gh-23392394667",
+      "kind": "create",
+      "title": "Created branch custom-scrollbars",
+      "url": "https://github.com/vleeuwenmenno/omarchy-omafile/tree/custom-scrollbars",
+      "ref": {
+        "type": "branch",
+        "name": "custom-scrollbars",
+        "url": "https://github.com/vleeuwenmenno/omarchy-omafile/tree/custom-scrollbars"
+      }
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/omarchy-omafile",
+      "date": "2026-10-08T16:37:42Z",
+      "id": "gh-16761611723",
+      "kind": "comment",
+      "title": "Commented on #1",
+      "detail": "Add New folder to the main menu",
+      "url": "https://github.com/vleeuwenmenno/omarchy-omafile/pull/1#issuecomment-6064556314"
+    },
+    {
+      "source": "github",
       "repo": "chr0nzz/omarchy-omafile",
       "date": "2026-10-08T16:37:41Z",
       "id": "gh-16747526087",
@@ -57,7 +137,12 @@
       "kind": "merge",
       "title": "Merged PR #1",
       "detail": "new-folder-in-main-menu",
-      "url": "https://github.com/vleeuwenmenno/omarchy-omafile/pull/1"
+      "url": "https://github.com/vleeuwenmenno/omarchy-omafile/pull/1",
+      "ref": {
+        "type": "branch",
+        "name": "new-folder-in-main-menu",
+        "url": "https://github.com/vleeuwenmenno/omarchy-omafile/tree/new-folder-in-main-menu"
+      }
     },
     {
       "source": "github",
@@ -67,7 +152,12 @@
       "kind": "pr",
       "title": "Opened PR #1",
       "detail": "new-folder-in-main-menu",
-      "url": "https://github.com/vleeuwenmenno/omarchy-omafile/pull/1"
+      "url": "https://github.com/vleeuwenmenno/omarchy-omafile/pull/1",
+      "ref": {
+        "type": "branch",
+        "name": "new-folder-in-main-menu",
+        "url": "https://github.com/vleeuwenmenno/omarchy-omafile/tree/new-folder-in-main-menu"
+      }
     },
     {
       "source": "github",
@@ -77,7 +167,12 @@
       "kind": "pr",
       "title": "Opened PR #53",
       "detail": "feat/password-generator",
-      "url": "https://github.com/vleeuwenmenno/boltwarden/pull/53"
+      "url": "https://github.com/vleeuwenmenno/boltwarden/pull/53",
+      "ref": {
+        "type": "branch",
+        "name": "feat/password-generator",
+        "url": "https://github.com/vleeuwenmenno/boltwarden/tree/feat/password-generator"
+      }
     },
     {
       "source": "github",
@@ -136,7 +231,13 @@
       "id": "gh-23376218041",
       "kind": "push",
       "title": "Pushed to feat/exposed-passwords",
-      "url": "https://github.com/vleeuwenmenno/boltwarden/commit/494a31acb6dd55533c0c1b6b64bf606f3de83716"
+      "url": "https://github.com/vleeuwenmenno/boltwarden/commit/494a31acb6dd55533c0c1b6b64bf606f3de83716",
+      "sha": "494a31acb6dd55533c0c1b6b64bf606f3de83716",
+      "ref": {
+        "type": "branch",
+        "name": "feat/exposed-passwords",
+        "url": "https://github.com/vleeuwenmenno/boltwarden/tree/feat/exposed-passwords"
+      }
     },
     {
       "source": "github",
@@ -146,7 +247,26 @@
       "kind": "pr",
       "title": "Opened PR #51",
       "detail": "feat/data-breaches",
-      "url": "https://github.com/vleeuwenmenno/boltwarden/pull/51"
+      "url": "https://github.com/vleeuwenmenno/boltwarden/pull/51",
+      "ref": {
+        "type": "branch",
+        "name": "feat/data-breaches",
+        "url": "https://github.com/vleeuwenmenno/boltwarden/tree/feat/data-breaches"
+      }
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T13:08:44Z",
+      "id": "gh-23376042909",
+      "kind": "create",
+      "title": "Created branch feat/data-breaches",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/tree/feat/data-breaches",
+      "ref": {
+        "type": "branch",
+        "name": "feat/data-breaches",
+        "url": "https://github.com/vleeuwenmenno/boltwarden/tree/feat/data-breaches"
+      }
     },
     {
       "source": "github",
@@ -166,7 +286,12 @@
       "kind": "pr",
       "title": "Opened PR #49",
       "detail": "feat/exposed-passwords",
-      "url": "https://github.com/vleeuwenmenno/boltwarden/pull/49"
+      "url": "https://github.com/vleeuwenmenno/boltwarden/pull/49",
+      "ref": {
+        "type": "branch",
+        "name": "feat/exposed-passwords",
+        "url": "https://github.com/vleeuwenmenno/boltwarden/tree/feat/exposed-passwords"
+      }
     },
     {
       "source": "github",
@@ -185,7 +310,13 @@
       "id": "gh-23363877835",
       "kind": "push",
       "title": "Pushed to main",
-      "url": "https://github.com/vleeuwenmenno/boltwarden/commit/c8ec54c31bc7b326c2ff0c28983a8aa5d8c50206"
+      "url": "https://github.com/vleeuwenmenno/boltwarden/commit/c8ec54c31bc7b326c2ff0c28983a8aa5d8c50206",
+      "sha": "c8ec54c31bc7b326c2ff0c28983a8aa5d8c50206",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://github.com/vleeuwenmenno/boltwarden/tree/main"
+      }
     },
     {
       "source": "github",
@@ -195,7 +326,12 @@
       "kind": "pr",
       "title": "Opened PR #48",
       "detail": "chore/agents-issue-workflow",
-      "url": "https://github.com/vleeuwenmenno/boltwarden/pull/48"
+      "url": "https://github.com/vleeuwenmenno/boltwarden/pull/48",
+      "ref": {
+        "type": "branch",
+        "name": "chore/agents-issue-workflow",
+        "url": "https://github.com/vleeuwenmenno/boltwarden/tree/chore/agents-issue-workflow"
+      }
     },
     {
       "source": "github",
@@ -205,7 +341,12 @@
       "kind": "pr",
       "title": "Opened PR #47",
       "detail": "feat/breached-websites",
-      "url": "https://github.com/vleeuwenmenno/boltwarden/pull/47"
+      "url": "https://github.com/vleeuwenmenno/boltwarden/pull/47",
+      "ref": {
+        "type": "branch",
+        "name": "feat/breached-websites",
+        "url": "https://github.com/vleeuwenmenno/boltwarden/tree/feat/breached-websites"
+      }
     },
     {
       "source": "github",
@@ -269,53 +410,32 @@
     },
     {
       "source": "github",
-      "repo": "vleeuwenmenno/boltwarden",
-      "date": "2026-10-08T10:05:02Z",
-      "id": "gh-16718261389",
-      "kind": "issue",
-      "title": "Opened issue #39",
-      "detail": "Windows: unlock at app start with a Windows Hello-bound key",
-      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/39"
+      "repo": "vleeuwenmenno/omarchy-omafile",
+      "date": "2026-10-07T18:25:12Z",
+      "id": "gh-23405075819",
+      "kind": "create",
+      "title": "Created branch fix/reclaim-folder-handler",
+      "url": "https://github.com/vleeuwenmenno/omarchy-omafile/tree/fix/reclaim-folder-handler",
+      "ref": {
+        "type": "branch",
+        "name": "fix/reclaim-folder-handler",
+        "url": "https://github.com/vleeuwenmenno/omarchy-omafile/tree/fix/reclaim-folder-handler"
+      }
     },
     {
       "source": "github",
-      "repo": "vleeuwenmenno/boltwarden",
-      "date": "2026-10-08T10:04:53Z",
-      "id": "gh-16718254735",
-      "kind": "issue",
-      "title": "Opened issue #35",
-      "detail": "System unlock on Linux with polkit (password or fingerprint)",
-      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/35"
-    },
-    {
-      "source": "github",
-      "repo": "vleeuwenmenno/boltwarden",
-      "date": "2026-10-08T10:04:28Z",
-      "id": "gh-16718234389",
-      "kind": "issue",
-      "title": "Opened issue #40",
-      "detail": "macOS: unlock at app start with a biometry-bound keychain item",
-      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/40"
-    },
-    {
-      "source": "github",
-      "repo": "vleeuwenmenno/boltwarden",
-      "date": "2026-10-08T10:04:26Z",
-      "id": "gh-16718231665",
-      "kind": "issue",
-      "title": "Opened issue #38",
-      "detail": "Use system authentication for reprompts and approvals",
-      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/38"
-    },
-    {
-      "source": "github",
-      "repo": "vleeuwenmenno/boltwarden",
-      "date": "2026-10-08T10:04:16Z",
-      "id": "gh-16718221069",
-      "kind": "issue",
-      "title": "Opened issue #33",
-      "detail": "Epic: Unlock with fingerprint and system authentication",
-      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/33"
+      "repo": "vleeuwenmenno/omarchy-omafile",
+      "date": "2026-10-07T14:03:19Z",
+      "id": "gh-23405737491",
+      "kind": "push",
+      "title": "Pushed to feat/context-menu-layout",
+      "url": "https://github.com/vleeuwenmenno/omarchy-omafile/commit/0248b75cb5d10a99e9a23381cd6894897be064f8",
+      "sha": "0248b75cb5d10a99e9a23381cd6894897be064f8",
+      "ref": {
+        "type": "branch",
+        "name": "feat/context-menu-layout",
+        "url": "https://github.com/vleeuwenmenno/omarchy-omafile/tree/feat/context-menu-layout"
+      }
     },
     {
       "id": "ghrel-405615869",
@@ -325,7 +445,12 @@
       "title": "Released Boltwarden 1.0.0-rc.3",
       "detail": "## What's Changed",
       "url": "https://github.com/vleeuwenmenno/boltwarden/releases/tag/v1.0.0-rc.3",
-      "date": "2026-10-07T11:40:11Z"
+      "date": "2026-10-07T11:40:11Z",
+      "ref": {
+        "type": "tag",
+        "name": "v1.0.0-rc.3",
+        "url": "https://github.com/vleeuwenmenno/boltwarden/releases/tag/v1.0.0-rc.3"
+      }
     },
     {
       "id": "ghrel-404855604",
@@ -335,7 +460,12 @@
       "title": "Released Boltwarden browser extension 0.5.8",
       "detail": "## What's Changed",
       "url": "https://github.com/vleeuwenmenno/boltwarden/releases/tag/extension-v0.5.8",
-      "date": "2026-10-06T15:06:52Z"
+      "date": "2026-10-06T15:06:52Z",
+      "ref": {
+        "type": "tag",
+        "name": "extension-v0.5.8",
+        "url": "https://github.com/vleeuwenmenno/boltwarden/releases/tag/extension-v0.5.8"
+      }
     },
     {
       "id": "ghrel-404828169",
@@ -345,7 +475,12 @@
       "title": "Released Boltwarden 1.0.0-rc.2",
       "detail": "## What's Changed",
       "url": "https://github.com/vleeuwenmenno/boltwarden/releases/tag/v1.0.0-rc.2",
-      "date": "2026-10-06T14:57:58Z"
+      "date": "2026-10-06T14:57:58Z",
+      "ref": {
+        "type": "tag",
+        "name": "v1.0.0-rc.2",
+        "url": "https://github.com/vleeuwenmenno/boltwarden/releases/tag/v1.0.0-rc.2"
+      }
     },
     {
       "id": "ghrel-401816471",
@@ -355,7 +490,12 @@
       "title": "Released Boltwarden 1.0.0-rc.1",
       "detail": "# Boltwarden 1.0.0-rc.1 / browser extension 0.5.6",
       "url": "https://github.com/vleeuwenmenno/boltwarden/releases/tag/v1.0.0-rc.1",
-      "date": "2026-10-02T13:06:30Z"
+      "date": "2026-10-02T13:06:30Z",
+      "ref": {
+        "type": "tag",
+        "name": "v1.0.0-rc.1",
+        "url": "https://github.com/vleeuwenmenno/boltwarden/releases/tag/v1.0.0-rc.1"
+      }
     },
     {
       "id": "ghrel-400142956",
@@ -365,7 +505,12 @@
       "title": "Released OmaSoloist 0.4.0",
       "detail": "## OmaSoloist 0.4.0",
       "url": "https://github.com/vleeuwenmenno/omasoloist/releases/tag/v0.4.0",
-      "date": "2026-09-30T14:43:19Z"
+      "date": "2026-09-30T14:43:19Z",
+      "ref": {
+        "type": "tag",
+        "name": "v0.4.0",
+        "url": "https://github.com/vleeuwenmenno/omasoloist/releases/tag/v0.4.0"
+      }
     },
     {
       "id": "ghrel-399519958",
@@ -375,7 +520,12 @@
       "title": "Released OmaSoloist 0.3.5",
       "detail": "## OmaSoloist 0.3.5",
       "url": "https://github.com/vleeuwenmenno/omasoloist/releases/tag/v0.3.5",
-      "date": "2026-09-29T20:53:27Z"
+      "date": "2026-09-29T20:53:27Z",
+      "ref": {
+        "type": "tag",
+        "name": "v0.3.5",
+        "url": "https://github.com/vleeuwenmenno/omasoloist/releases/tag/v0.3.5"
+      }
     },
     {
       "id": "ghrel-399261870",
@@ -385,7 +535,12 @@
       "title": "Released OmaSoloist 0.3.4",
       "detail": "## OmaSoloist 0.3.4",
       "url": "https://github.com/vleeuwenmenno/omasoloist/releases/tag/v0.3.4",
-      "date": "2026-09-29T15:04:32Z"
+      "date": "2026-09-29T15:04:32Z",
+      "ref": {
+        "type": "tag",
+        "name": "v0.3.4",
+        "url": "https://github.com/vleeuwenmenno/omasoloist/releases/tag/v0.3.4"
+      }
     },
     {
       "id": "fj-5900",
@@ -394,6 +549,11 @@
       "repo": "pepper/docs",
       "title": "Released v0.1.20",
       "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.20",
+      "ref": {
+        "type": "tag",
+        "name": "v0.1.20",
+        "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.20"
+      },
       "date": "2026-09-23T15:01:07.000Z"
     },
     {
@@ -403,6 +563,11 @@
       "repo": "pepper/cli",
       "title": "Released v0.22.0",
       "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.22.0",
+      "ref": {
+        "type": "tag",
+        "name": "v0.22.0",
+        "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.22.0"
+      },
       "date": "2026-09-23T15:00:35.000Z"
     },
     {
@@ -412,6 +577,11 @@
       "repo": "pepper/core",
       "title": "Released v2.4.1",
       "url": "https://git.mvl.sh/pepper/core/releases/tag/v2.4.1",
+      "ref": {
+        "type": "tag",
+        "name": "v2.4.1",
+        "url": "https://git.mvl.sh/pepper/core/releases/tag/v2.4.1"
+      },
       "date": "2026-09-23T14:59:41.000Z"
     },
     {
@@ -422,6 +592,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "chore(release): prepare core 2.4.1, CLI 0.22.0, and docs 0.1.20",
       "url": "https://git.mvl.sh/pepper/pepper/commit/72d6ce4f475448fd2bf7fbde76225f32008b2f76",
+      "sha": "72d6ce4f475448fd2bf7fbde76225f32008b2f76",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/pepper/src/branch/main"
+      },
       "date": "2026-09-23T14:58:43.000Z"
     },
     {
@@ -432,6 +608,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "docs: describe live state progress and live event bounds",
       "url": "https://git.mvl.sh/pepper/docs/commit/30caf3230f2cea6c7e15a21c65c4baaee9b7ba1d",
+      "sha": "30caf3230f2cea6c7e15a21c65c4baaee9b7ba1d",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/docs/src/branch/main"
+      },
       "date": "2026-09-23T14:58:01.000Z"
     },
     {
@@ -442,6 +624,12 @@
       "title": "Pushed 4 commits to main",
       "detail": "test(cli): isolate the suite from the host machine",
       "url": "https://git.mvl.sh/pepper/cli/commit/b0f23e29b068e50237bd273e61dbbe898ddd9deb",
+      "sha": "b0f23e29b068e50237bd273e61dbbe898ddd9deb",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/cli/src/branch/main"
+      },
       "date": "2026-09-23T14:57:59.000Z"
     },
     {
@@ -452,6 +640,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "feat(command): bound streamed command output",
       "url": "https://git.mvl.sh/pepper/core/commit/fc61f649733ee7464f9edc610710aa3f82228a17",
+      "sha": "fc61f649733ee7464f9edc610710aa3f82228a17",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/core/src/branch/main"
+      },
       "date": "2026-09-23T14:57:57.000Z"
     },
     {
@@ -462,6 +656,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "chore: pin CLI and docs patch releases",
       "url": "https://git.mvl.sh/pepper/pepper/commit/6f12af71af120f37a17758a8736fe0a3d5f72ef3",
+      "sha": "6f12af71af120f37a17758a8736fe0a3d5f72ef3",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/pepper/src/branch/main"
+      },
       "date": "2026-09-23T11:54:07.000Z"
     },
     {
@@ -471,6 +671,11 @@
       "repo": "pepper/docs",
       "title": "Released v0.1.19",
       "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.19",
+      "ref": {
+        "type": "tag",
+        "name": "v0.1.19",
+        "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.19"
+      },
       "date": "2026-09-23T11:53:44.000Z"
     },
     {
@@ -480,6 +685,11 @@
       "repo": "pepper/cli",
       "title": "Released v0.21.1",
       "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.21.1",
+      "ref": {
+        "type": "tag",
+        "name": "v0.21.1",
+        "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.21.1"
+      },
       "date": "2026-09-23T11:53:23.000Z"
     },
     {
@@ -490,6 +700,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "docs: clarify unprivileged state LSP startup",
       "url": "https://git.mvl.sh/pepper/docs/commit/ed528079c23e52f0f8534d2479b72e37325ba995",
+      "sha": "ed528079c23e52f0f8534d2479b72e37325ba995",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/docs/src/branch/main"
+      },
       "date": "2026-09-23T11:52:35.000Z"
     },
     {
@@ -500,6 +716,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "fix: defer inaccessible extension store reads",
       "url": "https://git.mvl.sh/pepper/cli/commit/f9b80e2e17c4cfeb95a0bfa9d542a49327bea9cd",
+      "sha": "f9b80e2e17c4cfeb95a0bfa9d542a49327bea9cd",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/cli/src/branch/main"
+      },
       "date": "2026-09-23T11:52:18.000Z"
     },
     {
@@ -509,6 +731,11 @@
       "repo": "pepper/docs",
       "title": "Released v0.1.18",
       "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.18",
+      "ref": {
+        "type": "tag",
+        "name": "v0.1.18",
+        "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.18"
+      },
       "date": "2026-09-22T20:54:57.000Z"
     },
     {
@@ -518,6 +745,11 @@
       "repo": "pepper/cli",
       "title": "Released v0.21.0",
       "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.21.0",
+      "ref": {
+        "type": "tag",
+        "name": "v0.21.0",
+        "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.21.0"
+      },
       "date": "2026-09-22T20:54:11.000Z"
     },
     {
@@ -528,6 +760,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "chore(release): prepare CLI 0.21.0 and docs 0.1.18",
       "url": "https://git.mvl.sh/pepper/pepper/commit/4b3386a07566c26fcd7feff27470bb3a595cf93d",
+      "sha": "4b3386a07566c26fcd7feff27470bb3a595cf93d",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/pepper/src/branch/main"
+      },
       "date": "2026-09-22T20:52:27.000Z"
     },
     {
@@ -538,6 +776,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "docs: document pepper update",
       "url": "https://git.mvl.sh/pepper/docs/commit/e420bbccf20c33fc6222a238b689a20172a9383e",
+      "sha": "e420bbccf20c33fc6222a238b689a20172a9383e",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/docs/src/branch/main"
+      },
       "date": "2026-09-22T20:52:18.000Z"
     },
     {
@@ -548,6 +792,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "feat(cli): add verified self update command",
       "url": "https://git.mvl.sh/pepper/cli/commit/d0c109b85e8acb0f9b8aeca25650a0d15203b6a9",
+      "sha": "d0c109b85e8acb0f9b8aeca25650a0d15203b6a9",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/cli/src/branch/main"
+      },
       "date": "2026-09-22T20:51:57.000Z"
     },
     {
@@ -557,6 +807,11 @@
       "repo": "pepper/docs",
       "title": "Released v0.1.17",
       "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.17",
+      "ref": {
+        "type": "tag",
+        "name": "v0.1.17",
+        "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.17"
+      },
       "date": "2026-09-22T20:21:58.000Z"
     },
     {
@@ -566,6 +821,11 @@
       "repo": "pepper/cli",
       "title": "Released v0.20.0",
       "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.20.0",
+      "ref": {
+        "type": "tag",
+        "name": "v0.20.0",
+        "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.20.0"
+      },
       "date": "2026-09-22T20:20:58.000Z"
     },
     {
@@ -576,6 +836,12 @@
       "title": "Pushed 2 commits to main",
       "detail": "chore(release): prepare CLI 0.20.0 and docs 0.1.17",
       "url": "https://git.mvl.sh/pepper/pepper/commit/f7413cd9172cb3afb7da435c0bfd25d96554c980",
+      "sha": "f7413cd9172cb3afb7da435c0bfd25d96554c980",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/pepper/src/branch/main"
+      },
       "date": "2026-09-22T20:16:38.000Z"
     },
     {
@@ -586,6 +852,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "docs: explain source attribution in state output",
       "url": "https://git.mvl.sh/pepper/docs/commit/834116c940c25edbf06699ae0341f09146aedba2",
+      "sha": "834116c940c25edbf06699ae0341f09146aedba2",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/docs/src/branch/main"
+      },
       "date": "2026-09-22T20:16:35.000Z"
     },
     {
@@ -596,6 +868,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "feat(state): show declaring source locations in output cards",
       "url": "https://git.mvl.sh/pepper/cli/commit/d095a122059b74dea9979e510e52b72cade12638",
+      "sha": "d095a122059b74dea9979e510e52b72cade12638",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/cli/src/branch/main"
+      },
       "date": "2026-09-22T20:16:33.000Z"
     },
     {
@@ -605,6 +883,11 @@
       "repo": "pepper/docs",
       "title": "Released v0.1.16",
       "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.16",
+      "ref": {
+        "type": "tag",
+        "name": "v0.1.16",
+        "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.16"
+      },
       "date": "2026-09-22T14:04:40.000Z"
     },
     {
@@ -614,6 +897,11 @@
       "repo": "pepper/cli",
       "title": "Released v0.19.0",
       "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.19.0",
+      "ref": {
+        "type": "tag",
+        "name": "v0.19.0",
+        "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.19.0"
+      },
       "date": "2026-09-22T14:03:00.000Z"
     },
     {
@@ -624,6 +912,12 @@
       "title": "Pushed 3 commits to main",
       "detail": "merge: retain remote workspace history with published release pins",
       "url": "https://git.mvl.sh/pepper/pepper/commit/b6cdb0c46fa20418c10b997c70832b29acdbb2e2",
+      "sha": "b6cdb0c46fa20418c10b997c70832b29acdbb2e2",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/pepper/src/branch/main"
+      },
       "date": "2026-09-22T14:02:58.000Z"
     },
     {
@@ -634,6 +928,12 @@
       "title": "Pushed 2 commits to main",
       "detail": "docs: explain quiet defaults and state outcome diagnostics",
       "url": "https://git.mvl.sh/pepper/docs/commit/7d1f2bdeccd77783befa3232838758a95cc27820",
+      "sha": "7d1f2bdeccd77783befa3232838758a95cc27820",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/docs/src/branch/main"
+      },
       "date": "2026-09-22T14:01:36.000Z"
     },
     {
@@ -644,6 +944,12 @@
       "title": "Pushed 2 commits to main",
       "detail": "feat(state): add quiet output defaults and safe blocker diagnostics",
       "url": "https://git.mvl.sh/pepper/cli/commit/495cb26b06758cbf3bf76b1ea30b3f41a87d90eb",
+      "sha": "495cb26b06758cbf3bf76b1ea30b3f41a87d90eb",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/cli/src/branch/main"
+      },
       "date": "2026-09-22T14:01:25.000Z"
     },
     {
@@ -654,6 +960,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "fix(lsp): pin lazy extension store lookup",
       "url": "https://git.mvl.sh/pepper/pepper/commit/9e6ab8a44012872017ece685e750071028faaa1f",
+      "sha": "9e6ab8a44012872017ece685e750071028faaa1f",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/pepper/src/branch/main"
+      },
       "date": "2026-09-22T12:31:22.000Z"
     },
     {
@@ -663,6 +975,11 @@
       "repo": "pepper/docs",
       "title": "Released v0.1.15",
       "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.15",
+      "ref": {
+        "type": "tag",
+        "name": "v0.1.15",
+        "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.15"
+      },
       "date": "2026-09-19T20:41:37.000Z"
     },
     {
@@ -673,6 +990,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "chore(release): publish docs 0.1.15",
       "url": "https://git.mvl.sh/pepper/pepper/commit/273dd20a0c0f4644af136287484c78b3b0cda5db",
+      "sha": "273dd20a0c0f4644af136287484c78b3b0cda5db",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/pepper/src/branch/main"
+      },
       "date": "2026-09-19T20:40:23.000Z"
     },
     {
@@ -683,6 +1006,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "docs: add Password Store setup guide",
       "url": "https://git.mvl.sh/pepper/docs/commit/1deb89cfb4732fbcb7228a6fcaa942e7f421aa41",
+      "sha": "1deb89cfb4732fbcb7228a6fcaa942e7f421aa41",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/docs/src/branch/main"
+      },
       "date": "2026-09-19T20:39:52.000Z"
     },
     {
@@ -692,6 +1021,11 @@
       "repo": "pepper/docs",
       "title": "Released v0.1.14",
       "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.14",
+      "ref": {
+        "type": "tag",
+        "name": "v0.1.14",
+        "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.14"
+      },
       "date": "2026-09-18T23:29:30.000Z"
     },
     {
@@ -701,6 +1035,11 @@
       "repo": "pepper/cli",
       "title": "Released v0.18.0",
       "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.18.0",
+      "ref": {
+        "type": "tag",
+        "name": "v0.18.0",
+        "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.18.0"
+      },
       "date": "2026-09-18T23:22:42.000Z"
     },
     {
@@ -710,6 +1049,11 @@
       "repo": "pepper/core",
       "title": "Released v2.4.0",
       "url": "https://git.mvl.sh/pepper/core/releases/tag/v2.4.0",
+      "ref": {
+        "type": "tag",
+        "name": "v2.4.0",
+        "url": "https://git.mvl.sh/pepper/core/releases/tag/v2.4.0"
+      },
       "date": "2026-09-18T23:21:29.000Z"
     },
     {
@@ -720,6 +1064,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "chore(release): prepare Core 2.4.0, CLI 0.18.0, and docs 0.1.14",
       "url": "https://git.mvl.sh/pepper/pepper/commit/e38eda306d10fcc6a26ae244ba97a31080230219",
+      "sha": "e38eda306d10fcc6a26ae244ba97a31080230219",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/pepper/src/branch/main"
+      },
       "date": "2026-09-18T23:18:41.000Z"
     },
     {
@@ -730,6 +1080,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "feat(state): add deferred command output, pass secrets, and complete previews",
       "url": "https://git.mvl.sh/pepper/cli/commit/5e770a2f11bbc088265daa62ae584304c1b211a8",
+      "sha": "5e770a2f11bbc088265daa62ae584304c1b211a8",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/pepper/cli/src/branch/main"
+      },
       "date": "2026-09-18T23:18:30.000Z"
     },
     {
@@ -740,6 +1096,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "fix(startup): check sqlite write access",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/commit/395d23fefbce9e2c33959e65d70ff87a4c0815a0",
+      "sha": "395d23fefbce9e2c33959e65d70ff87a4c0815a0",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/src/branch/main"
+      },
       "date": "2026-07-06T13:24:16.000Z"
     },
     {
@@ -749,6 +1111,11 @@
       "repo": "vleeuwenmenno/golinks",
       "title": "Released v0.1.8",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/releases/tag/v0.1.8",
+      "ref": {
+        "type": "tag",
+        "name": "v0.1.8",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/releases/tag/v0.1.8"
+      },
       "date": "2026-07-06T13:14:18.000Z"
     },
     {
@@ -759,6 +1126,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "fix(auth): log session failures",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/commit/c738daa83cd7ac3f868d3faa53d4eb59ef3f1da5",
+      "sha": "c738daa83cd7ac3f868d3faa53d4eb59ef3f1da5",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/src/branch/main"
+      },
       "date": "2026-07-06T13:13:29.000Z"
     },
     {
@@ -768,6 +1141,11 @@
       "repo": "vleeuwenmenno/golinks",
       "title": "Released v0.1.6",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/releases/tag/v0.1.6",
+      "ref": {
+        "type": "tag",
+        "name": "v0.1.6",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/releases/tag/v0.1.6"
+      },
       "date": "2026-06-10T15:22:55.000Z"
     },
     {
@@ -778,6 +1156,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "adds better landing page animation",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/commit/57e97da7837e06b2347f213e9bce628e54c1d6e9",
+      "sha": "57e97da7837e06b2347f213e9bce628e54c1d6e9",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/src/branch/main"
+      },
       "date": "2026-06-10T15:22:50.000Z"
     },
     {
@@ -787,6 +1171,11 @@
       "repo": "vleeuwenmenno/golinks",
       "title": "Released v0.1.5",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/releases/tag/v0.1.5",
+      "ref": {
+        "type": "tag",
+        "name": "v0.1.5",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/releases/tag/v0.1.5"
+      },
       "date": "2026-06-09T15:06:50.000Z"
     },
     {
@@ -797,6 +1186,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "adds in a fuzzy match mode",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/commit/5836ef3ed693d8d65f439caed894d55d2f02055b",
+      "sha": "5836ef3ed693d8d65f439caed894d55d2f02055b",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/src/branch/main"
+      },
       "date": "2026-06-09T15:06:47.000Z"
     },
     {
@@ -806,6 +1201,11 @@
       "repo": "vleeuwenmenno/golinks",
       "title": "Released v0.1.4",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/releases/tag/v0.1.4",
+      "ref": {
+        "type": "tag",
+        "name": "v0.1.4",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/releases/tag/v0.1.4"
+      },
       "date": "2026-06-09T14:41:56.000Z"
     },
     {
@@ -816,6 +1216,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "adds favicon",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/commit/56841d3730c0c2ecc6185e2bcac30c89e528c00e",
+      "sha": "56841d3730c0c2ecc6185e2bcac30c89e528c00e",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/src/branch/main"
+      },
       "date": "2026-06-09T14:41:50.000Z"
     },
     {
@@ -825,6 +1231,11 @@
       "repo": "vleeuwenmenno/golinks",
       "title": "Released v0.1.3",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/releases/tag/v0.1.3",
+      "ref": {
+        "type": "tag",
+        "name": "v0.1.3",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/releases/tag/v0.1.3"
+      },
       "date": "2026-06-09T14:39:00.000Z"
     },
     {
@@ -835,6 +1246,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "async mail and better tls/starttls support",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/commit/76a6381c8b1cde6df42c31723f908790f8ffaebe",
+      "sha": "76a6381c8b1cde6df42c31723f908790f8ffaebe",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/src/branch/main"
+      },
       "date": "2026-06-09T14:38:55.000Z"
     },
     {
@@ -844,6 +1261,11 @@
       "repo": "vleeuwenmenno/golinks",
       "title": "Released v0.1.2",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/releases/tag/v0.1.2",
+      "ref": {
+        "type": "tag",
+        "name": "v0.1.2",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/releases/tag/v0.1.2"
+      },
       "date": "2026-06-09T14:31:09.000Z"
     },
     {
@@ -854,6 +1276,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "adds delete alias on alias edit page",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/commit/69b68521728acb7ca59b9cad1715ea898250e4bd",
+      "sha": "69b68521728acb7ca59b9cad1715ea898250e4bd",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/src/branch/main"
+      },
       "date": "2026-06-09T14:31:02.000Z"
     },
     {
@@ -863,6 +1291,11 @@
       "repo": "vleeuwenmenno/golinks",
       "title": "Released v0.1.1",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/releases/tag/v0.1.1",
+      "ref": {
+        "type": "tag",
+        "name": "v0.1.1",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/releases/tag/v0.1.1"
+      },
       "date": "2026-06-09T14:25:31.000Z"
     },
     {
@@ -873,6 +1306,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "adds csv export",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/commit/0a4b92bcf940ed07d3f53abc6c4f57fc51c64adf",
+      "sha": "0a4b92bcf940ed07d3f53abc6c4f57fc51c64adf",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/src/branch/main"
+      },
       "date": "2026-06-09T14:25:20.000Z"
     },
     {
@@ -882,6 +1321,11 @@
       "repo": "vleeuwenmenno/golinks",
       "title": "Released v0.1.0",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/releases/tag/v0.1.0",
+      "ref": {
+        "type": "tag",
+        "name": "v0.1.0",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/releases/tag/v0.1.0"
+      },
       "date": "2026-06-09T14:12:32.000Z"
     },
     {
@@ -892,6 +1336,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "stuff",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/commit/fe2b86f7ae5ca9fe9c6bc6ae5fe120eb1470c78f",
+      "sha": "fe2b86f7ae5ca9fe9c6bc6ae5fe120eb1470c78f",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/src/branch/main"
+      },
       "date": "2026-06-09T14:12:23.000Z"
     },
     {
@@ -901,6 +1351,11 @@
       "repo": "vleeuwenmenno/golinks",
       "title": "Pushed commits to main",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/src/branch/main"
+      },
       "date": "2026-06-09T13:29:20.000Z"
     },
     {
@@ -911,6 +1366,12 @@
       "title": "Pushed 1 commit to main",
       "detail": "initial commit",
       "url": "https://git.mvl.sh/vleeuwenmenno/golinks/commit/b320b997fa5a2b063ae07f1e061fcf4f51dae198",
+      "sha": "b320b997fa5a2b063ae07f1e061fcf4f51dae198",
+      "ref": {
+        "type": "branch",
+        "name": "main",
+        "url": "https://git.mvl.sh/vleeuwenmenno/golinks/src/branch/main"
+      },
       "date": "2026-06-09T13:29:20.000Z"
     },
     {
