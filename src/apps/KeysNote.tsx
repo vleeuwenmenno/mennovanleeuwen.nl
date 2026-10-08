@@ -17,7 +17,7 @@ export function KeysNote({ win }: { win: WinState }) {
     const place = (final: boolean) => {
       const note = document.querySelector<HTMLElement>('.window[data-app="notes"]')
       if (!note || done) return
-      const y = note.offsetTop + note.offsetHeight + 6
+      const y = note.offsetTop + note.offsetHeight - 16
       const h = Math.min(400, window.innerHeight - DOCK_SPACE - 14 - y)
       if (h >= 160) wm.setGeometry(win.pid, { y, h })
       else if (final) {

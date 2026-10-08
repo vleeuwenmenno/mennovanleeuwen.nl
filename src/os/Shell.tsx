@@ -50,16 +50,32 @@ export function initialLayout(): { app: AppId; geometry: Geometry; props?: WinSt
     ]
   }
   const noteW = 310
+
+  // Big screens get a composed desk: notes on the left (shortcuts tucked under the headline
+  // note), the terminal in the middle and the CV on top, overlapping its lower right.
+  if (vw >= 1600 && vh >= 860) {
+    const compW = 644 + 790
+    const compH = 700
+    const ox = Math.max(40, Math.round((vw - compW) / 2) - 40) // a little left of centre, clear of the icons
+    const oy = Math.max(TOP + 30, Math.round((vh - TOP - DOCK_SPACE - compH) / 2) + TOP)
+    return [
+      { app: 'terminal', geometry: { x: ox + 440, y: oy - 18, w: 680, h: 450 }, props: { motd: '1' } },
+      { app: 'keys', geometry: { x: ox + 150, y: oy + 330, w: 300, h: 360 }, props: { under: '1' } },
+      { app: 'notes', geometry: { x: ox, y: oy, w: noteW, h: 330 } },
+      { app: 'cv', geometry: { x: ox + 644, y: oy + 87, w: 790, h: 560 } },
+    ]
+  }
+
   const termH = Math.min(520, vh - TOP - DOCK_SPACE - 60)
   const top = Math.max(TOP + 24, Math.round((vh - TOP - DOCK_SPACE - termH) / 2) + TOP - 10)
   // The headline note sits high so the shortcuts note fits underneath it, slightly tucked in.
   const noteY = TOP + 22
   // A first guess; the shortcuts note measures the headline note once rendered (props.under).
-  const keysY = noteY + 400
+  const keysY = noteY + 380
   const keysH = Math.min(400, vh - DOCK_SPACE - 14 - keysY)
   const notes = (x: number) => [
-    { app: 'notes' as const, geometry: { x, y: noteY, w: noteW, h: 330 } },
     ...(keysH >= 150 ? [{ app: 'keys' as const, geometry: { x: x + 8, y: keysY, w: noteW, h: keysH }, props: { under: '1' } }] : []),
+    { app: 'notes' as const, geometry: { x, y: noteY, w: noteW, h: 330 } },
   ]
   if (vw < 1180) {
     // Not enough room side by side: the notes overlap the terminal's left edge, like they were stuck on.

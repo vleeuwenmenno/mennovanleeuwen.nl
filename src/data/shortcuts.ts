@@ -16,8 +16,8 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
     area: 'Windows & dock',
     keys: [
       ['Double-click title', 'maximize / restore'],
-      ['Drag title / edges', 'move / resize'],
-      ['Drag to left / right edge', 'snap to half the screen'],
+      ['Drag title / Drag edge', 'move / resize'],
+      ['Drag to a side edge', 'snap to half the screen'],
       ['Drag to a corner', 'snap to a quarter'],
       ['Drag to top edge', 'maximize'],
       ['Drag a snapped window', 'back to its old size'],
@@ -31,7 +31,7 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
     area: 'Desktop',
     keys: [
       ['Double-click / ↵', 'open'],
-      ['Ctrl / Shift click', 'add to selection'],
+      ['Ctrl click / Shift click', 'add to selection'],
       ['Drag on empty space', 'select with a box'],
       ['Ctrl A', 'select all icons'],
       ['F2', 'rename'],

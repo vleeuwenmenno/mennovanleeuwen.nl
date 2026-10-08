@@ -3662,11 +3662,19 @@ kbd {
     height: calc(100dvh - var(--top) - 104px) !important;
   }
   .window.chrome-note {
-    height: auto !important;
     transform: rotate(-1deg);
     left: 18px !important;
     width: calc(100vw - 36px) !important;
     top: calc(var(--top) + 18px) !important;
+  }
+  .window.chrome-note:not([data-app='keys']) {
+    height: auto !important;
+  }
+  .window.chrome-note[data-app='keys'] {
+    top: auto !important;
+    bottom: 104px;
+    height: min(46dvh, 380px) !important;
+    transform: rotate(1deg);
   }
   .rz,
   .ctl-max {
