@@ -731,13 +731,15 @@ export const commands: Record<string, Command> = {
   },
   games: {
     desc: 'open the arcade',
-    usage: 'games [snake|minesweeper|2048|breakout]',
+    usage: 'games [tetris|pacman|snake|minesweeper|2048|breakout]',
     run: (ctx) => {
       const game = ctx.args[0]
-      if (game && !['snake', 'minesweeper', '2048', 'breakout'].includes(game)) throw new CmdError(`games: no game called '${game}' (try snake, minesweeper, 2048, breakout)`)
+      if (game && !['tetris', 'pacman', 'snake', 'minesweeper', '2048', 'breakout'].includes(game)) throw new CmdError(`games: no game called '${game}' (try tetris, pacman, snake, minesweeper, 2048, breakout)`)
       ctx.openNewApp('games', game ? { game } : undefined)
     },
   },
+  tetris: { desc: 'play tetris', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['tetris'] }) },
+  pacman: { desc: 'play pac-man', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['pacman'] }) },
   snake: { desc: 'play snake', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['snake'] }) },
   minesweeper: { desc: 'play minesweeper', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['minesweeper'] }) },
   '2048': { desc: 'play 2048', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['2048'] }) },

@@ -26,7 +26,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   recents: { title: 'Activity', dock: 'Activity', blurb: 'Live activity and contribution graph', size: [780, 680], render: () => <Recents /> },
   cv: { title: 'cv.md — Viewer', dock: 'CV', blurb: 'The printable version of me', size: [760, 680], render: () => <Cv /> },
   contact: { title: 'New message', dock: 'Contact', blurb: 'Get in touch', size: [560, 500], render: () => <Contact /> },
-  games: { title: 'Games', dock: 'Games', blurb: 'Snake, Minesweeper, 2048, Breakout', size: [720, 600], render: (w) => <Games win={w} /> },
+  games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, 2048, Breakout', size: [720, 640], render: (w) => <Games win={w} /> },
   trash: { title: 'Trash', dock: 'Trash', blurb: 'Cautionary tales', size: [560, 360], render: () => <Trash /> },
 }
 

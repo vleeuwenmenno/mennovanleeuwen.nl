@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useRecents } from '../data/recents'
 import { APP_META } from './apps'
 import { Launchpad } from './Launchpad'
@@ -119,10 +119,174 @@ function TopBar() {
   )
 }
 
+const DOCK_KEY = 'mvlos.dock.v1'
+const DEFAULT_ORDER = DOCK.filter((x): x is AppId => x !== '|' && x !== 'trash')
+
+/** Saved dock order, with apps added since it was saved appended and removed ones dropped. */
+function loadOrder(): AppId[] {
+  try {
+    const saved: AppId[] = JSON.parse(localStorage.getItem(DOCK_KEY) ?? '[]')
+    const known = saved.filter((a) => DEFAULT_ORDER.includes(a))
+    return [...known, ...DEFAULT_ORDER.filter((a) => !known.includes(a))]
+  } catch {
+    return DEFAULT_ORDER
+  }
+}
+
+function saveOrder(order: AppId[]) {
+  try {
+    if (order.join() === DEFAULT_ORDER.join()) localStorage.removeItem(DOCK_KEY)
+    else localStorage.setItem(DOCK_KEY, JSON.stringify(order))
+  } catch {
+    /* order just won't persist */
+  }
+}
+
 function Dock() {
   const wm = useWM()
+  const [order, setOrder] = useState<AppId[]>(loadOrder)
+  const [dragging, setDragging] = useState<{ app: AppId; dx: number } | null>(null)
+  const drag = useRef<{ app: AppId; startX: number; moved: boolean } | null>(null)
+  const items = useRef(new Map<AppId, HTMLElement>())
+  const prevRects = useRef<Map<AppId, number> | null>(null)
+  const orderRef = useRef(order)
+  orderRef.current = order
+  const suppressClick = useRef(false)
+
+  // FLIP: icons that changed slot slide from where they were instead of jumping.
+  useLayoutEffect(() => {
+    const prev = prevRects.current
+    if (!prev) return
+    prevRects.current = null
+    for (const [app, el] of items.current) {
+      if (app === drag.current?.app) continue
+      const before = prev.get(app)
+      if (before === undefined) continue
+      const dx = before - el.getBoundingClientRect().left
+      if (!dx) continue
+      el.style.transition = 'none'
+      el.style.transform = `translateX(${dx}px)`
+      requestAnimationFrame(() => {
+        el.style.transition = 'transform 0.2s ease'
+        el.style.transform = ''
+      })
+    }
+  }, [order])
+
+  // Mouse and pen only: on touch the dock scrolls sideways instead. Move/up are tracked on window
+  // because React moving the icon in the DOM mid-drag drops its pointer capture.
+  const dxRef = useRef(0)
+  const onPointerDown = (e: React.PointerEvent, app: AppId) => {
+    if (e.button !== 0 || e.pointerType === 'touch') return
+    drag.current = { app, startX: e.clientX, moved: false }
+    dxRef.current = 0
+
+    const onMove = (ev: PointerEvent) => {
+      const d = drag.current
+      if (!d) return
+      if (!d.moved && Math.abs(ev.clientX - d.startX) < 6) return
+      d.moved = true
+      document.body.classList.add('is-dragging')
+      const el = items.current.get(d.app)!
+      const r = el.getBoundingClientRect()
+      const naturalCenter = r.left + r.width / 2 - dxRef.current
+      const others = orderRef.current.filter((a) => a !== d.app)
+      let idx = 0
+      for (const a of others) {
+        const o = items.current.get(a)!.getBoundingClientRect()
+        if (ev.clientX > o.left + o.width / 2) idx++
+      }
+      const next = [...others.slice(0, idx), d.app, ...others.slice(idx)]
+      if (next.join() !== orderRef.current.join()) {
+        prevRects.current = new Map([...items.current].map(([a, node]) => [a, node.getBoundingClientRect().left]))
+        orderRef.current = next // a quick drop can land before the re-render
+        setOrder(next)
+      }
+      dxRef.current = ev.clientX - naturalCenter
+      setDragging({ app: d.app, dx: dxRef.current })
+    }
+
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      const d = drag.current
+      drag.current = null
+      document.body.classList.remove('is-dragging')
+      if (d?.moved) {
+        suppressClick.current = true
+        // The click that follows a drag lands on whatever is under the pointer; drop the flag soon either way.
+        setTimeout(() => (suppressClick.current = false), 50)
+        saveOrder(orderRef.current)
+      }
+      setDragging(null)
+    }
+
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+  }
+
+  const appButton = (app: AppId) => {
+    const isDragged = dragging?.app === app
+    return (
+      <button
+        key={app}
+        ref={(el) => {
+          if (el) items.current.set(app, el)
+          else items.current.delete(app)
+        }}
+        className={`dock-item ${isDragged ? 'is-dragged' : ''}`}
+        style={isDragged ? { transform: `translate(${dragging.dx}px, -10px) scale(1.12)` } : undefined}
+        onPointerDown={app === 'trash' ? undefined : (e) => onPointerDown(e, app)}
+        onClick={() => {
+          if (suppressClick.current) {
+            suppressClick.current = false
+            return
+          }
+          const wins = wm.windows.filter((x) => x.app === app)
+          const focused = wins.find((x) => x.pid === wm.focusedPid && !x.minimized)
+          if (focused) wm.minimize(focused.pid)
+          else wm.open(app)
+        }}
+        aria-label={APP_META[app].dock}
+        onContextMenu={(e) => {
+          const wins = wm.windows.filter((x) => x.app === app).sort((a, b) => a.pid - b.pid)
+          const multi = !SINGLE_INSTANCE.has(app)
+          openContextMenu(e, [
+            ...wins.map((w) => ({ label: `${APP_META[w.app].dock} · pid ${w.pid}${w.minimized ? ' (minimized)' : ''}`, onSelect: () => wm.focus(w.pid) })),
+            ...(wins.length ? [{ separator: true as const }] : []),
+            wins.length && multi ? { label: 'New window', onSelect: () => wm.openNew(app) } : { label: wins.length ? 'Show' : 'Open', onSelect: () => wm.open(app) },
+            ...(wins.some((w) => !w.minimized) ? [{ label: wins.length > 1 ? 'Minimize all' : 'Minimize', onSelect: () => wins.forEach((w) => wm.minimize(w.pid)) }] : []),
+            ...(order.join() !== DEFAULT_ORDER.join()
+              ? [
+                  { separator: true as const },
+                  {
+                    label: 'Reset dock order',
+                    onSelect: () => {
+                      setOrder(DEFAULT_ORDER)
+                      saveOrder(DEFAULT_ORDER)
+                    },
+                  },
+                ]
+              : []),
+            ...(wins.length ? [{ separator: true as const }, { label: wins.length > 1 ? `Quit all ${wins.length}` : 'Quit', danger: true, onSelect: () => wins.forEach((w) => wm.close(w.pid)) }] : []),
+          ])
+        }}
+      >
+        <AppIcon app={app} />
+        <span className="dock-label">{APP_META[app].dock}</span>
+        <span className="dock-dots">
+          {Array.from({ length: Math.min(3, wm.windows.filter((w) => w.app === app).length) }, (_, n) => (
+            <span key={n} className="dock-dot is-on" />
+          ))}
+        </span>
+      </button>
+    )
+  }
+
   return (
-    <nav className="dock" aria-label="Dock">
+    <nav className={`dock ${dragging ? 'is-reordering' : ''}`} aria-label="Dock">
       <button className="dock-item" onClick={() => toggleOverlay('launchpad')} aria-label="All apps">
         <span className="app-icon lp-dock-icon" style={{ width: 48, height: 48 }}>
           {Array.from({ length: 9 }, (_, i) => (
@@ -130,46 +294,11 @@ function Dock() {
           ))}
         </span>
         <span className="dock-label">All apps</span>
-        <span className="dock-dots">
-          <span className="dock-dot" />
-        </span>
       </button>
-      {DOCK.map((app, i) =>
-        app === '|' ? (
-          <span key={i} className="dock-sep" />
-        ) : (
-          <button
-            key={app}
-            className="dock-item"
-            onClick={() => {
-              const wins = wm.windows.filter((x) => x.app === app)
-              const focused = wins.find((x) => x.pid === wm.focusedPid && !x.minimized)
-              if (focused) wm.minimize(focused.pid)
-              else wm.open(app)
-            }}
-            aria-label={APP_META[app].dock}
-            onContextMenu={(e) => {
-              const wins = wm.windows.filter((x) => x.app === app).sort((a, b) => a.pid - b.pid)
-              const multi = !SINGLE_INSTANCE.has(app)
-              openContextMenu(e, [
-                ...wins.map((w) => ({ label: `${APP_META[w.app].dock} · pid ${w.pid}${w.minimized ? ' (minimized)' : ''}`, onSelect: () => wm.focus(w.pid) })),
-                ...(wins.length ? [{ separator: true as const }] : []),
-                wins.length && multi ? { label: 'New window', onSelect: () => wm.openNew(app) } : { label: wins.length ? 'Show' : 'Open', onSelect: () => wm.open(app) },
-                ...(wins.some((w) => !w.minimized) ? [{ label: wins.length > 1 ? 'Minimize all' : 'Minimize', onSelect: () => wins.forEach((w) => wm.minimize(w.pid)) }] : []),
-                ...(wins.length ? [{ separator: true as const }, { label: wins.length > 1 ? `Quit all ${wins.length}` : 'Quit', danger: true, onSelect: () => wins.forEach((w) => wm.close(w.pid)) }] : []),
-              ])
-            }}
-          >
-            <AppIcon app={app} />
-            <span className="dock-label">{APP_META[app].dock}</span>
-            <span className="dock-dots">
-              {Array.from({ length: Math.max(1, Math.min(3, wm.windows.filter((w) => w.app === app).length)) }, (_, n) => (
-                <span key={n} className={`dock-dot ${wm.windows.some((w) => w.app === app) ? 'is-on' : ''}`} />
-              ))}
-            </span>
-          </button>
-        ),
-      )}
+      <span className="dock-sep" />
+      {order.map(appButton)}
+      <span className="dock-sep" />
+      {appButton('trash')}
     </nav>
   )
 }

@@ -3,9 +3,13 @@ import type { WinState } from '../../os/wm'
 import { Breakout } from './Breakout'
 import { Game2048 } from './Game2048'
 import { Minesweeper } from './Minesweeper'
+import { PacMan } from './PacMan'
 import { Snake } from './Snake'
+import { Tetris } from './Tetris'
 
 export const GAMES: { id: string; name: string; blurb: string; glyph: string; color: string; component: ComponentType<{ win: WinState }> }[] = [
+  { id: 'tetris', name: 'Tetris', blurb: 'Seven shapes, ten columns, no mercy', glyph: '🧩', color: '#bb9af7', component: Tetris },
+  { id: 'pacman', name: 'Pac-Man', blurb: 'Pellets, power-ups and four ghosts', glyph: '🟡', color: '#f6c453', component: PacMan },
   { id: 'snake', name: 'Snake', blurb: 'Eat, grow, do not bite yourself', glyph: '🐍', color: '#9ece6a', component: Snake },
   { id: 'minesweeper', name: 'Minesweeper', blurb: 'The reason office PCs had a mouse', glyph: '💣', color: '#7aa2f7', component: Minesweeper },
   { id: '2048', name: '2048', blurb: 'Slide, merge, reach 2048', glyph: '🔢', color: '#f6c453', component: Game2048 },
@@ -48,7 +52,7 @@ export function Games({ win }: { win: WinState }) {
     <div className="games">
       <header className="games-head">
         <h2>Arcade</h2>
-        <p className="muted">Four small games, written for this site. High scores stay in your browser.</p>
+        <p className="muted">Small games, written for this site. High scores stay in your browser.</p>
       </header>
       <div className="games-grid">
         {GAMES.map((g) => (

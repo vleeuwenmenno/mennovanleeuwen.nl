@@ -1950,6 +1950,59 @@ body.is-resizing * {
     grid-row: 2;
   }
 }
+/* Tetris */
+.tetris-wrap {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: center;
+}
+.tetris-stage {
+  width: auto;
+  max-width: none;
+}
+.tetris-stage .game-canvas {
+  width: auto;
+  height: min(440px, calc(100dvh - 330px));
+  aspect-ratio: 1 / 2;
+}
+.tetris-side {
+  width: 80px;
+  height: 300px;
+}
+.touch-pad {
+  display: none;
+}
+@media (pointer: coarse) {
+  .touch-pad {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 6px;
+    width: 100%;
+    max-width: 420px;
+  }
+  .touch-pad button {
+    height: 46px;
+    border-radius: 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--line-strong);
+    font-size: 15px;
+  }
+}
+/* Pac-Man */
+.pac-stage {
+  max-width: 380px;
+}
+.pac-lives {
+  display: inline-flex;
+  gap: 4px;
+}
+.pac-lives span {
+  width: 12px;
+  height: 12px;
+  border-radius: 99px;
+  background: conic-gradient(from 120deg, transparent 0 60deg, #f6c453 60deg);
+}
 /* Minesweeper */
 .mines-panel {
   display: flex;
@@ -2084,16 +2137,18 @@ body.is-resizing * {
 /* ---------- Dock ---------- */
 
 .dock {
+  --dock-pad: 8px;
   position: absolute;
   left: 50%;
   bottom: 12px;
   transform: translateX(-50%);
   z-index: 100000;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 6px;
-  padding: 8px 10px 10px;
-  border-radius: 20px;
+  /* Even padding, and a radius of icon radius + padding, so the corners run parallel to the icons. */
+  padding: var(--dock-pad);
+  border-radius: calc(13px + var(--dock-pad));
   background: rgba(20, 23, 31, 0.6);
   backdrop-filter: blur(20px) saturate(1.5);
   border: 1px solid var(--line-strong);
@@ -2140,15 +2195,29 @@ body.is-resizing * {
   transform: none;
 }
 .dock-dots {
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   gap: 3px;
 }
 .dock-dot {
   width: 4px;
   height: 4px;
-  margin-top: 4px;
   border-radius: 99px;
   background: transparent;
+}
+.dock-item.is-dragged {
+  z-index: 2;
+  transition: none;
+  cursor: grabbing;
+}
+.dock.is-reordering .dock-item:not(.is-dragged):hover {
+  transform: none;
+}
+.dock.is-reordering .dock-label {
+  opacity: 0 !important;
 }
 .dock-dot.is-on {
   background: var(--accent);
@@ -2157,7 +2226,7 @@ body.is-resizing * {
 .dock-sep {
   width: 1px;
   align-self: stretch;
-  margin: 6px 4px 12px;
+  margin: 8px 3px;
   background: var(--line-strong);
 }
 
@@ -2632,9 +2701,9 @@ kbd {
     cursor: default;
   }
   .dock {
+    --dock-pad: 6px;
     bottom: 8px;
     gap: 2px;
-    padding: 6px 8px 8px;
     overflow-x: auto;
     scrollbar-width: none;
   }
