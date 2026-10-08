@@ -110,7 +110,7 @@ function fmtUptime() {
   return `${years} years, ${days} day${days === 1 ? '' : 's'}`
 }
 
-const LOGO = ['', '  __  __ ', ' |  \\/  |', ' | |\\/| |', ' | |  | |', ' |_|  |_|', '', '  mvlOS']
+const LOGO = ['', '  __  __ ', ' |  \\/  |', ' | |\\/| |', ' | |  | |', ' |_|  |_|', '', '  MvL OS']
 
 export function fastfetch(ctx: Pick<Ctx, 'windows'>) {
   const ua = navigator.userAgent
@@ -118,7 +118,7 @@ export function fastfetch(ctx: Pick<Ctx, 'windows'>) {
   const info = [
     `${c('accent', profile.handle)}@${c('accent', 'mvlos')}`,
     c('muted', '─'.repeat(16)),
-    `${c('accent', 'OS')}        mvlOS 1.0 (${browser})`,
+    `${c('accent', 'OS')}        MvL OS 1.0 (${browser})`,
     `${c('accent', 'Host')}      ${location.host || 'localhost'}`,
     `${c('accent', 'Uptime')}    ${fmtUptime()}`,
     `${c('accent', 'Shell')}     msh 1.0`,
@@ -400,7 +400,7 @@ export const commands: Record<string, Command> = {
   uname: {
     desc: 'system info',
     usage: 'uname [-a]',
-    run: ({ args }) => (args.includes('-a') ? `mvlOS mvlos 1.0.0-menno #1 SMP PREEMPT_DYNAMIC ${new Date().toUTCString()} wasm32 GNU/React` : 'mvlOS'),
+    run: ({ args }) => (args.includes('-a') ? `MvL OS mvlos 1.0.0-menno #1 SMP PREEMPT_DYNAMIC ${new Date().toUTCString()} wasm32 GNU/React` : 'MvL OS'),
   },
   date: { desc: 'current date and time', run: () => new Date().toString() },
   uptime: {
@@ -622,7 +622,7 @@ export const commands: Record<string, Command> = {
     hidden: true,
     run: () => {
       setTimeout(() => location.reload(), 600)
-      return 'Rebooting mvlOS...'
+      return 'Rebooting MvL OS...'
     },
   },
   headlines: { desc: 'what the sticky note says', hidden: true, run: () => headlines.map((h) => `• ${h}`).join('\n') },

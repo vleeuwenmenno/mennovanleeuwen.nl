@@ -133,11 +133,11 @@ export const root: DirNode = dir('', [
     ]),
   ]),
   dir('etc', [
-    file('os-release', 'NAME="mvlOS"\nPRETTY_NAME="mvlOS 1.0 (Vaporwave Penguin)"\nID=mvlos\nID_LIKE=arch\nHOME_URL="https://mennovanleeuwen.nl"'),
+    file('os-release', 'NAME="MvL OS"\nPRETTY_NAME="MvL OS 1.0 (Vaporwave Penguin)"\nID=mvlos\nID_LIKE=arch\nHOME_URL="https://mennovanleeuwen.nl"'),
     file('hostname', 'mvlos'),
-    file('motd', 'Welcome to mvlOS. Nothing in here can hurt you, or me.'),
+    file('motd', 'Welcome to MvL OS. Nothing in here can hurt you, or me.'),
   ]),
-  dir('proc', [file('uptime', () => `${uptimeSeconds()}.00 0.00`), file('version', 'mvlOS 1.0 (react 19, vite) #1 SMP PREEMPT_DYNAMIC')]),
+  dir('proc', [file('uptime', () => `${uptimeSeconds()}.00 0.00`), file('version', 'MvL OS 1.0 (react 19, vite) #1 SMP PREEMPT_DYNAMIC')]),
   dir('tmp', []),
   dir('bin', []),
 ])

@@ -65,7 +65,7 @@ export function Terminal({ win }: { win: WinState }) {
     {
       id: nextId++,
       kind: 'out',
-      text: `\nWelcome to {c:accent}mvlOS{/}. Type {c:green}help{/} to see what works, or try {c:green}projects{/}, {c:green}recent{/}, {c:green}cat cv.md{/}.\n`,
+      text: `\nWelcome to {c:accent}MvL OS{/}. Type {c:green}help{/} to see what works, or try {c:green}projects{/}, {c:green}recent{/}, {c:green}cat cv.md{/}.\n`,
     },
   ])
   const [cwd, setCwd] = useState(HOME)

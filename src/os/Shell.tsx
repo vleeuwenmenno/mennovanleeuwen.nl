@@ -103,7 +103,7 @@ function TopBar() {
           <svg viewBox="0 0 64 64" width="16" height="16" aria-hidden>
             <path d="M14 46V18l18 16 18-16v28" fill="none" stroke="currentColor" strokeWidth="7" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          mvlOS
+          MvL OS
         </button>
         <span className="focused-app">{focused ? APP_META[focused.app].dock : 'Desktop'}</span>
       </div>
@@ -185,7 +185,7 @@ function DesktopIcons() {
 }
 
 const BOOT = [
-  '[    0.000000] mvlOS 1.0 booting on ' + (typeof navigator !== 'undefined' ? navigator.platform || 'the web' : 'the web'),
+  '[    0.000000] MvL OS 1.0 booting on ' + (typeof navigator !== 'undefined' ? navigator.platform || 'the web' : 'the web'),
   '[    0.041337] Mounting /home/menno (read-only, for your safety)',
   '[    0.090210] Starting react-wm window manager',
   '[    0.130077] Loading projects: boltwarden savuvo pepper omasoloist',

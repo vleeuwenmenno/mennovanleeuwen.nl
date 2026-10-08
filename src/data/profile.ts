@@ -21,7 +21,7 @@ export const profile = {
     'I build infrastructure tooling, desktop apps and the occasional web product, ' +
     'mostly in Go, Rust, TypeScript and QML, from a Linux desktop I configured myself.',
   favourites: {
-    platform: 'NixOS / Arch (Omarchy)',
+    platform: 'Arch (Omarchy) / Ubuntu',
     languages: ['Go', 'TypeScript / React', 'Rust'],
   },
 }
@@ -187,7 +187,7 @@ export const contributions: Contribution[] = [
 
 export const skills = {
   Languages: ['Go', 'TypeScript', 'Rust', 'Python', 'QML', 'Starlark', 'Bash'],
-  Infrastructure: ['Linux', 'NixOS', 'Docker / Podman', 'Incus / LXD', 'SaltStack', 'CI/CD'],
+  Infrastructure: ['Arch Linux', 'Ubuntu', 'Docker / Podman', 'Incus / LXD', 'SaltStack', 'CI/CD'],
   Frontend: ['React', 'Vite', 'PWA', 'WebExtensions', 'Quickshell'],
 }
 
