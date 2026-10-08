@@ -1,6 +1,65 @@
 {
-  "generatedAt": "2026-10-08T16:27:51.943Z",
+  "generatedAt": "2026-10-08T17:30:07.950Z",
   "items": [
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/omarchy-omafile",
+      "date": "2026-10-08T16:58:09Z",
+      "id": "gh-23393183037",
+      "kind": "push",
+      "title": "Pushed to faster-wheel-scrolling",
+      "url": "https://github.com/vleeuwenmenno/omarchy-omafile/commit/2b76920be737fd098abe26ca3913fe2ce71cbcd2"
+    },
+    {
+      "source": "github",
+      "repo": "chr0nzz/omarchy-omafile",
+      "date": "2026-10-08T16:57:31Z",
+      "id": "gh-16749213356",
+      "kind": "pr",
+      "title": "Opened PR #48",
+      "detail": "faster-wheel-scrolling",
+      "url": "https://github.com/chr0nzz/omarchy-omafile/pull/48"
+    },
+    {
+      "source": "github",
+      "repo": "chr0nzz/omarchy-omafile",
+      "date": "2026-10-08T16:48:01Z",
+      "id": "gh-16748410360",
+      "kind": "pr",
+      "title": "Opened PR #47",
+      "detail": "custom-scrollbars",
+      "url": "https://github.com/chr0nzz/omarchy-omafile/pull/47"
+    },
+    {
+      "source": "github",
+      "repo": "chr0nzz/omarchy-omafile",
+      "date": "2026-10-08T16:37:41Z",
+      "id": "gh-16747526087",
+      "kind": "pr",
+      "title": "Opened PR #46",
+      "detail": "new-folder-in-main-menu",
+      "url": "https://github.com/chr0nzz/omarchy-omafile/pull/46"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/omarchy-omafile",
+      "date": "2026-10-08T16:35:21Z",
+      "id": "gh-16747531713",
+      "kind": "merge",
+      "title": "Merged PR #1",
+      "detail": "new-folder-in-main-menu",
+      "url": "https://github.com/vleeuwenmenno/omarchy-omafile/pull/1"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/omarchy-omafile",
+      "date": "2026-10-08T16:35:21Z",
+      "id": "gh-16747330571",
+      "kind": "pr",
+      "title": "Opened PR #1",
+      "detail": "new-folder-in-main-menu",
+      "url": "https://github.com/vleeuwenmenno/omarchy-omafile/pull/1"
+    },
     {
       "source": "github",
       "repo": "vleeuwenmenno/boltwarden",
@@ -248,26 +307,6 @@
       "title": "Opened issue #33",
       "detail": "Epic: Unlock with fingerprint and system authentication",
       "url": "https://github.com/vleeuwenmenno/boltwarden/issues/33"
-    },
-    {
-      "source": "github",
-      "repo": "vleeuwenmenno/boltwarden",
-      "date": "2026-10-08T10:03:43Z",
-      "id": "gh-16718194934",
-      "kind": "issue",
-      "title": "Opened issue #37",
-      "detail": "System unlock on macOS with Touch ID",
-      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/37"
-    },
-    {
-      "source": "github",
-      "repo": "vleeuwenmenno/boltwarden",
-      "date": "2026-10-08T10:03:42Z",
-      "id": "gh-16718194201",
-      "kind": "issue",
-      "title": "Opened issue #36",
-      "detail": "System unlock on Windows with Windows Hello",
-      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/36"
     },
     {
       "id": "ghrel-405615869",

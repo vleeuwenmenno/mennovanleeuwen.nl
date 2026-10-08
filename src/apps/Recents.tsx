@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { timeAgo, useRecents, type Activity } from '../data/recents'
+import { ContributionGraph } from './ContributionGraph'
 
 const KIND_LABEL: Record<Activity['kind'], string> = {
   push: 'Push',
@@ -70,13 +71,14 @@ export function Recents() {
           ))}
         </div>
       </header>
+      <ContributionGraph />
       <div className="repo-filter">
         <button className={`chip ${repo === 'all' ? 'is-active' : ''}`} onClick={() => setRepo('all')}>
           everything
         </button>
         {repos.map(([r, n]) => (
           <button key={r} className={`chip ${repo === r ? 'is-active' : ''}`} onClick={() => setRepo(r)}>
-            {r.split('/')[1] === '*' ? 'pepper' : r.split('/')[1]} <span className="muted">{n}</span>
+            {r.split('/')[1] === '*' ? 'pepper' : repos.filter(([x]) => x.split('/')[1] === r.split('/')[1]).length > 1 ? r : r.split('/')[1]} <span className="muted">{n}</span>
           </button>
         ))}
       </div>

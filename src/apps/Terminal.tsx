@@ -101,8 +101,12 @@ export function Terminal({ win }: { win: WinState }) {
   }, [wm.focusedPid, win.pid])
 
   // Other apps can ask the terminal to run something (e.g. "Open in terminal" buttons).
+  // Run each request once: React's dev-mode double effects (and re-renders) must not repeat it.
+  const handledProps = useRef<WinState['props'] | null>(null)
   useEffect(() => {
-    if (win.props.run) submit(win.props.run)
+    if (!win.props.run || handledProps.current === win.props) return
+    handledProps.current = win.props
+    submit(win.props.run)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [win.props])
 

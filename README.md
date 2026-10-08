@@ -20,17 +20,23 @@ Everything the site says lives in [`src/data/profile.ts`](src/data/profile.ts): 
 sticky note, projects, contributions, skills and experience. The terminal's filesystem
 (`~/cv.md`, `~/projects/*/README.md`, ...) is generated from the same file.
 
-## Recent activity
+## Data snapshots
 
-The Activity app and the `recent` command merge two sources:
+`pnpm data` (`scripts/fetch-data.ts`) writes two files the site reads at runtime:
 
-- **Live**: the GitHub events and releases APIs, fetched from the browser (CORS allowed,
-  60 requests/hour per visitor, cached in `sessionStorage` for 10 minutes).
-- **Snapshot**: `public/recents.json`, written by `pnpm recents`. This is the only way
-  Pepper's activity on git.mvl.sh gets in, because Forgejo does not send CORS headers.
+- `public/recents.json`: recent activity. The Activity app and `recent` merge it with the live
+  GitHub events API (fetched from the browser, cached in `sessionStorage` for 10 minutes).
+  Pepper's activity on git.mvl.sh only arrives this way, because Forgejo sends no CORS headers.
+- `public/contributions.json`: a year of daily contributions for the graph in the Activity app
+  and `heatmap`. GitHub's count comes from its contribution calendar; git.mvl.sh's is counted
+  from the activity feed (commits, repos, releases, PRs, issues) because Forgejo's own heatmap
+  also counts mirror syncs of GitHub repos, which would double count.
 
-Refresh the snapshot before each deploy (`pnpm build:full` does both), or on a schedule in CI.
-Set `GITHUB_TOKEN` there to avoid the anonymous rate limit.
+Refresh both before each deploy (`pnpm build:full` does it), or on a schedule in CI. Set
+`GITHUB_TOKEN` there to avoid the anonymous API rate limit.
+
+Live from the browser: GitHub events and stars, DNS lookups (Cloudflare DNS-over-HTTPS) and the
+Minecraft server status for cloud.mvl.sh (mcstatus.io).
 
 ## Terminal
 

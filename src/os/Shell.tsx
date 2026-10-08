@@ -11,6 +11,7 @@ import { ContextMenuHost, openContextMenu } from './ContextMenu'
 import { Desktop } from './Desktop'
 import { AppIcon } from './icons'
 import { ACCENTS, currentAccent, setAccent } from './theme'
+import { ClockWidget, MinecraftWidget } from './TopbarWidgets'
 import { Window } from './Window'
 import { SINGLE_INSTANCE, useWM, type AppId, type Geometry, type WinState } from './wm'
 
@@ -18,7 +19,7 @@ export const APP_META: Record<AppId, { title: string; dock: string; size: [numbe
   terminal: { title: 'menno@mvlos: ~', dock: 'Terminal', size: [760, 500], render: (w) => <Terminal win={w} /> },
   notes: { title: 'Sticky note', dock: 'Note', size: [310, 340], chrome: 'note', render: () => <Notes /> },
   projects: { title: 'Files — Projects', dock: 'Projects', size: [880, 580], render: (w) => <Projects win={w} /> },
-  recents: { title: 'Activity', dock: 'Activity', size: [620, 620], render: () => <Recents /> },
+  recents: { title: 'Activity', dock: 'Activity', size: [780, 680], render: () => <Recents /> },
   cv: { title: 'cv.md — Viewer', dock: 'CV', size: [760, 680], render: () => <Cv /> },
   contact: { title: 'New message', dock: 'Contact', size: [560, 500], render: () => <Contact /> },
   trash: { title: 'Trash', dock: 'Trash', size: [560, 360], render: () => <Trash /> },
@@ -78,20 +79,6 @@ export function initialLayout(): { app: AppId; geometry: Geometry; props?: WinSt
   ]
 }
 
-function Clock() {
-  const [now, setNow] = useState(() => new Date())
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000 * 15)
-    return () => clearInterval(t)
-  }, [])
-  return (
-    <span className="clock">
-      <span className="clock-date">{now.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}</span>
-      {now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
-    </span>
-  )
-}
-
 function TopBar() {
   const wm = useWM()
   const recents = useRecents()
@@ -131,7 +118,8 @@ function TopBar() {
             setAccent(accents[next])
           }}
         />
-        <Clock />
+        <MinecraftWidget />
+        <ClockWidget />
       </div>
     </header>
   )

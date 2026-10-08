@@ -1,4 +1,6 @@
 import { contributions, headlines, profile, projects } from '../data/profile'
+import { countFor, levels, loadContributions } from '../data/contributions'
+import { fetchMinecraft, MC_ADDRESS } from '../data/minecraft'
 import { fetchStars, loadRecents, timeAgo } from '../data/recents'
 import type { AppId, WinState } from '../os/wm'
 import { lookupAddress, RECORD_TYPES, resolve } from './dns'
@@ -172,10 +174,10 @@ export const commands: Record<string, Command> = {
     run: () => {
       const groups: [string, string[]][] = [
         ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'open']],
-        ['About me', ['whoami', 'cv', 'projects', 'contribs', 'recent', 'stars', 'contact']],
+        ['About me', ['whoami', 'cv', 'projects', 'contribs', 'recent', 'heatmap', 'stars', 'contact']],
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo']],
-        ['Network', ['ping', 'dig', 'host', 'nslookup']],
-        ['System', ['ps', 'kill', 'uname', 'uptime', 'date', 'history', 'env', 'export', 'theme', 'clear', 'exit']],
+        ['Network', ['ping', 'dig', 'host', 'nslookup', 'minecraft']],
+        ['System', ['ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'env', 'export', 'theme', 'clear', 'exit']],
         ['Fun', ['fastfetch', 'fortune', 'cowsay', 'sl', 'sudo']],
       ]
       return [
@@ -657,6 +659,71 @@ export const commands: Record<string, Command> = {
       if (a.status === 'NXDOMAIN') throw new CmdError(`** server can't find ${name}: NXDOMAIN`)
       const addrs = [...a.answers, ...aaaa.answers].filter((x) => x.type === 'A' || x.type === 'AAAA')
       return [`Server:\t\t${a.resolver}`, '', 'Non-authoritative answer:', ...addrs.flatMap((x) => [`Name:\t${x.name}`, `Address: ${x.data}`])].join('\n')
+    },
+  },
+  cal: {
+    desc: 'show a calendar',
+    usage: 'cal [month] [year]',
+    run: ({ args }) => {
+      const now = new Date()
+      const month = args[0] ? parseInt(args[0], 10) - 1 : now.getMonth()
+      const year = args[1] ? parseInt(args[1], 10) : now.getFullYear()
+      if (!(month >= 0 && month < 12) || !(year > 0 && year < 10000)) throw new CmdError('cal: usage: cal [month 1-12] [year]')
+      const first = new Date(year, month, 1)
+      const days = new Date(year, month + 1, 0).getDate()
+      const title = first.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+      const cells = [...Array((first.getDay() + 6) % 7).fill('  '), ...Array.from({ length: days }, (_, i) => {
+        const d = String(i + 1).padStart(2)
+        const isToday = year === now.getFullYear() && month === now.getMonth() && i + 1 === now.getDate()
+        const isBday = month === 8 && i + 1 === 19
+        return isToday ? `{c:accent}${d}{/}` : isBday ? `{c:magenta}${d}{/}` : d
+      })]
+      const rows: string[] = []
+      for (let i = 0; i < cells.length; i += 7) rows.push(cells.slice(i, i + 7).join(' '))
+      return [' '.repeat(Math.max(0, Math.floor((20 - title.length) / 2))) + title, c('muted', 'Mo Tu We Th Fr Sa Su'), ...rows].join('\n')
+    },
+  },
+  minecraft: {
+    desc: 'status of my Minecraft server',
+    run: async () => {
+      const { status, error } = await fetchMinecraft(true)
+      if (!status) throw new CmdError(`minecraft: could not reach the status API (${error})`)
+      if (!status.online) return `${c('red', '●')} ${MC_ADDRESS} is offline right now.`
+      return [
+        `${c('green', '●')} ${c('bold', status.motd || MC_ADDRESS)}`,
+        `  address  ${c('green', MC_ADDRESS)}`,
+        `  version  Java ${status.version ?? '?'}`,
+        `  players  ${status.players.online}/${status.players.max}${status.players.list.length ? `: ${status.players.list.join(', ')}` : c('muted', ' (nobody mining right now)')}`,
+      ].join('\n')
+    },
+  },
+  mc: { desc: 'alias for minecraft', hidden: true, run: (ctx) => commands.minecraft.run(ctx) },
+  heatmap: {
+    desc: 'contribution graph, GitHub + git.mvl.sh',
+    usage: 'heatmap [github|forgejo]',
+    run: async ({ args }) => {
+      const data = await loadContributions()
+      if (!data?.days.length) throw new CmdError('heatmap: no contribution data (run `pnpm data` when building)')
+      const source = args[0] === 'github' ? 'github' : args[0] === 'forgejo' || args[0] === 'gitea' ? 'forgejo' : 'all'
+      const level = levels(data.days, source)
+      // Fit the terminal: one column per week, newest on the right.
+      const weeksWanted = Math.max(8, Math.min(53, Math.floor((window.innerWidth < 720 ? 300 : 640) / 9) - 5))
+      const allWeeks: (typeof data.days)[] = []
+      for (const d of data.days) {
+        if (!allWeeks.length || new Date(`${d.date}T12:00:00`).getDay() === 0) allWeeks.push([])
+        allWeeks[allWeeks.length - 1].push(d)
+      }
+      const weeks = allWeeks.slice(-weeksWanted)
+      const days = weeks.flat()
+      const shades = [c('muted', '·'), '{c:heat1}■{/}', '{c:heat2}■{/}', '{c:heat3}■{/}', '{c:heat4}■{/}']
+      const labels = ['   ', 'Mon', '   ', 'Wed', '   ', 'Fri', '   ']
+      const rows = labels.map((l, dow) => c('muted', l) + ' ' + weeks.map((w) => {
+        const d = w.find((x) => new Date(`${x.date}T12:00:00`).getDay() === dow)
+        return d ? shades[level(countFor(d, source))] : ' '
+      }).join(''))
+      const total = days.reduce((a, d) => a + countFor(d, source), 0)
+      const name = source === 'github' ? 'GitHub' : source === 'forgejo' ? 'git.mvl.sh' : 'GitHub + git.mvl.sh'
+      return [`${c('bold', total.toLocaleString('en-GB'))} contributions in the last ${weeks.length} weeks ${c('muted', `(${name})`)}`, '', ...rows, '', `${c('muted', 'Less')} ${shades.join(' ')} ${c('muted', 'More')}   ${c('muted', 'open activity for the full year')}`].join('\n')
     },
   },
   shutdown: { desc: 'power off', hidden: true, run: () => 'Shutting down... no. Close the tab like everyone else.' },
