@@ -655,12 +655,23 @@ async function xrandr(ctx: Ctx): Promise<string> {
   const hz = await measureRefresh(ctx.signal)
   const rate = hz ? `${hz.toFixed(2)}*+` : '60.00 (could not measure)'
   const orient = screen.orientation?.type?.startsWith('portrait') ? 'left' : 'normal'
+  // Safe-area insets (phone notches, home indicator), read back through a probe element.
+  const probe = document.createElement('div')
+  probe.style.cssText = 'position:fixed;visibility:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)'
+  document.body.append(probe)
+  const cs = getComputedStyle(probe)
+  const inset = `top ${cs.paddingTop} · bottom ${cs.paddingBottom} · left ${cs.paddingLeft} · right ${cs.paddingRight}`
+  probe.remove()
+  const standalone = (navigator as Navigator & { standalone?: boolean }).standalone === true || matchMedia('(display-mode: standalone)').matches
+  const desk = document.querySelector('.desktop')?.getBoundingClientRect()
   return [
     `Screen 0: minimum 320 x 200, current ${w} x ${h}, maximum 16384 x 16384`,
     `${c('green', 'default')} connected primary ${w}x${h}+0+0 (${orient}) ${screen.colorDepth}-bit colour`,
     `   ${`${w}x${h}`.padEnd(14)}${c('bold', rate)}`,
     '',
     c('muted', `Scale ${dpr}x · browser window ${window.innerWidth}x${window.innerHeight} CSS px · refresh measured from animation frames`),
+    c('muted', `Screen ${screen.width}x${screen.height} CSS px · visible ${Math.round(window.visualViewport?.width ?? 0)}x${Math.round(window.visualViewport?.height ?? 0)} · desktop ${Math.round(desk?.width ?? 0)}x${Math.round(desk?.height ?? 0)}`),
+    c('muted', `Safe area: ${inset} · installed app: ${standalone ? 'yes' : 'no'}`),
   ].join('\n')
 }
 
