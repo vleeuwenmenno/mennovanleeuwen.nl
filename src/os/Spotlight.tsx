@@ -1,11 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { GAMES } from '../apps/games/Games'
+import { openSticky } from '../apps/Sticky'
+import { MarkdownPreview } from '../apps/Zed'
+import { isCodeQuery, type BranchHit, type Hit, type IssueHit, type RepoHit } from '../data/code'
+import { faviconOf, launch, useLaunchers } from '../data/launchers'
+import { createNote, noteTitle, NOTE_COLORS, useAllNotes } from '../data/notes'
 import { countFor, useContributions } from '../data/contributions'
 import { fetchMinecraft, MC_ADDRESS, useMinecraft } from '../data/minecraft'
 import { contributions, profile, projects } from '../data/profile'
 import { timeAgo, useRecents } from '../data/recents'
 import { age, HOME, lookup, prettyPath, walk } from '../terminal/vfs'
+import { signIn, useAccount } from './account'
 import { APP_META } from './apps'
+import { useCodeSearch } from './codeSearch'
 import { revealEmail } from '../data/email'
 import { cachedRates, loadRates, smartCalc, type CalcResult } from './smartcalc'
 import { resetLayout } from './desktopStore'
@@ -18,7 +25,7 @@ import { SINGLE_INSTANCE, useWM, type AppId } from './wm'
 // Ctrl+K: one search box for apps, files, projects, games, live status, quick actions, maths and
 // terminal commands, with a preview of the highlighted result on the right.
 
-type Group = 'Top hit' | 'Status' | 'Apps' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Fallback'
+type Group = 'Top hit' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Fallback'
 
 type Result = {
   id: string
@@ -33,6 +40,8 @@ type Result = {
   alt?: { label: string; run: () => void }
   enterLabel?: string
   preview?: () => ReactNode
+  /** Tab fills the search box with this, e.g. "owner/repo" so # or @ can follow */
+  complete?: string
 }
 
 const Glyph = ({ children, color = 'var(--panel-2)' }: { children: ReactNode; color?: string }) => (
@@ -142,6 +151,175 @@ function FilePreview({ path }: { path: string }) {
   )
 }
 
+const ago = (iso?: string | null) => (iso ? timeAgo(iso) : '')
+
+function StateBadge({ state, draft }: { state: IssueHit['state']; draft?: boolean }) {
+  const label = draft && state === 'open' ? 'draft' : state
+  return <span className={`sp-state is-${label}`}>{label}</span>
+}
+
+function RepoPreview({ r }: { r: RepoHit }) {
+  return (
+    <>
+      <h4>{r.fullName}</h4>
+      {r.description && <p>{r.description}</p>}
+      <dl className="sp-dl">
+        <dt>Host</dt>
+        <dd>{r.sourceLabel}</dd>
+        <dt>Visibility</dt>
+        <dd>
+          {r.private ? 'Private' : 'Public'}
+          {r.fork ? ' · fork' : ''}
+          {r.archived ? ' · archived' : ''}
+        </dd>
+        {r.language && (
+          <>
+            <dt>Language</dt>
+            <dd>{r.language}</dd>
+          </>
+        )}
+        <dt>Default</dt>
+        <dd>
+          <code>{r.defaultBranch}</code>
+        </dd>
+        <dt>Open</dt>
+        <dd>{r.openIssues} issues and PRs</dd>
+        <dt>Stars</dt>
+        <dd>{r.stars}</dd>
+        {r.pushedAt && (
+          <>
+            <dt>Pushed</dt>
+            <dd>{ago(r.pushedAt)}</dd>
+          </>
+        )}
+      </dl>
+      <p className="muted sp-small">
+        Tab completes <code>{r.fullName}</code>, then type <code>#</code> for issues or <code>@</code> for branches.
+      </p>
+    </>
+  )
+}
+
+function IssuePreview({ i }: { i: IssueHit }) {
+  return (
+    <>
+      <h4>
+        {i.title} <span className="muted">#{i.number}</span>
+      </h4>
+      <p className="sp-issue-meta">
+        <StateBadge state={i.state} draft={i.draft} /> {i.kind === 'pr' ? 'Pull request' : 'Issue'} in <code>{i.repo}</code>
+      </p>
+      <dl className="sp-dl">
+        {i.author && (
+          <>
+            <dt>By</dt>
+            <dd>@{i.author}</dd>
+          </>
+        )}
+        {i.headRef && (
+          <>
+            <dt>Branch</dt>
+            <dd>
+              <code>{i.headRef}</code> → <code>{i.baseRef}</code>
+            </dd>
+          </>
+        )}
+        <dt>Updated</dt>
+        <dd>
+          {ago(i.updatedAt)} · opened {ago(i.createdAt)}
+        </dd>
+        <dt>Comments</dt>
+        <dd>{i.comments}</dd>
+      </dl>
+      {i.labels.length > 0 && (
+        <p className="sp-labels">
+          {i.labels.map((l) => (
+            <span key={l.name} className="sp-label" style={{ ['--label' as string]: l.color }}>
+              {l.name}
+            </span>
+          ))}
+        </p>
+      )}
+      {i.body && <pre className="sp-file sp-body">{i.body}</pre>}
+    </>
+  )
+}
+
+function BranchPreview({ b }: { b: BranchHit }) {
+  return (
+    <>
+      <h4>
+        <code>{b.name}</code>
+      </h4>
+      <p className="muted">
+        {b.repo} · {b.sourceLabel}
+        {b.isDefault ? ' · default branch' : ''}
+        {b.protected ? ' · protected' : ''}
+      </p>
+      <dl className="sp-dl">
+        <dt>Head</dt>
+        <dd>
+          <code>{b.sha.slice(0, 7)}</code>
+          {b.commitDate ? ` · ${ago(b.commitDate)}` : ''}
+        </dd>
+        {b.commitMessage && (
+          <>
+            <dt>Commit</dt>
+            <dd>{b.commitMessage}</dd>
+          </>
+        )}
+        {b.pr && (
+          <>
+            <dt>PR</dt>
+            <dd>
+              <StateBadge state={b.pr.state} /> #{b.pr.number} {b.pr.title}
+            </dd>
+          </>
+        )}
+      </dl>
+    </>
+  )
+}
+
+function codeRow(h: Hit, open: (url: string) => void, copy: (text: string, label: string) => void): Result {
+  if (h.kind === 'repo')
+    return {
+      id: `repo-${h.source}-${h.fullName}`,
+      group: 'Repositories',
+      title: h.fullName,
+      subtitle: [h.description, h.private ? 'private' : null, h.pushedAt ? `pushed ${ago(h.pushedAt)}` : null, h.sourceLabel].filter(Boolean).join(' · '),
+      icon: <Glyph color="color-mix(in srgb, var(--accent) 25%, transparent)">{h.private ? '◆' : '◇'}</Glyph>,
+      run: () => open(h.url),
+      enterLabel: 'Open',
+      alt: { label: 'Copy clone command', run: () => copy(`git clone ${h.cloneUrl}`, 'clone command') },
+      complete: h.fullName,
+      preview: () => <RepoPreview r={h} />,
+    }
+  if (h.kind === 'branch')
+    return {
+      id: `branch-${h.source}-${h.repo}-${h.name}`,
+      group: 'Branches',
+      title: h.name,
+      subtitle: [h.repo, h.pr ? `PR #${h.pr.number} ${h.pr.state}` : null, h.commitDate ? ago(h.commitDate) : null, h.sourceLabel].filter(Boolean).join(' · '),
+      icon: <Glyph color="color-mix(in srgb, var(--magenta) 25%, transparent)">⑂</Glyph>,
+      run: () => open(h.url),
+      alt: h.pr ? { label: `Open PR #${h.pr.number}`, run: () => open(h.pr!.url) } : { label: 'Copy branch name', run: () => copy(h.name, h.name) },
+      complete: `${h.repo}@${h.name}`,
+      preview: () => <BranchPreview b={h} />,
+    }
+  return {
+    id: `issue-${h.source}-${h.repo}-${h.number}`,
+    group: 'Issues & PRs',
+    title: h.title,
+    subtitle: `${h.repo}#${h.number} · ${h.draft && h.state === 'open' ? 'draft' : h.state}${h.author ? ` · @${h.author}` : ''} · ${ago(h.updatedAt)} · ${h.sourceLabel}`,
+    icon: <Glyph color={`color-mix(in srgb, var(--${h.state === 'open' ? 'green' : h.state === 'merged' ? 'magenta' : 'red'}) 28%, transparent)`}>{h.kind === 'pr' ? '⇄' : '●'}</Glyph>,
+    run: () => open(h.url),
+    alt: { label: 'Copy link', run: () => copy(h.url, 'link') },
+    complete: `${h.repo}#${h.number}`,
+    preview: () => <IssuePreview i={h} />,
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 
 export function Spotlight() {
@@ -153,7 +331,12 @@ export function Spotlight() {
   const list = useRef<HTMLDivElement>(null)
   const mc = useMinecraft()
   const recents = useRecents()
+  const account = useAccount()
+  const notes = useAllNotes()
+  const launchers = useLaunchers()
+  const code = useCodeSearch(q)
   const close = () => setOverlay(null)
+  const openUrl = (url: string) => window.open(url, '_blank', 'noopener')
 
   useEffect(() => {
     input.current?.focus()
@@ -227,7 +410,7 @@ export function Spotlight() {
 
     // Apps
     for (const app of Object.keys(APP_META) as AppId[]) {
-      if (app === 'viewer') continue // needs a file to open
+      if (app === 'viewer' || app === 'sticky') continue // need a file or a note to open
       const meta = APP_META[app]
       const open = wm.windows.filter((w) => w.app === app).length
       out.push({
@@ -246,6 +429,9 @@ export function Spotlight() {
     const action = (id: string, title: string, keywords: string, run: () => void, glyph: ReactNode, subtitle?: string) =>
       out.push({ id: `act-${id}`, group: 'Actions', title, subtitle, keywords, icon: <Glyph>{glyph}</Glyph>, run })
     action('new-terminal', 'New terminal window', 'terminal shell new window launch console bash', () => wm.openNew('terminal'), '›_')
+    action('new-note', 'New sticky note', 'note sticky new write memo todo', () => openSticky(wm, createNote().id), '✎')
+    if (account.status === 'anon') action('sign-in', 'Sign in with GitHub', 'login sign in account github sync owner', signIn, '⎆', 'Sync notes and search your repositories')
+    action('settings', 'Settings', 'settings preferences account launchers gitea forgejo token sync', () => wm.open('settings'), '⚙')
     action('minimize', 'Minimize all windows', 'minimize hide windows show desktop', () => wm.windows.forEach((w) => wm.minimize(w.pid)), '▁')
     action('close', 'Close all windows', 'close quit all windows', () => wm.windows.forEach((w) => wm.close(w.pid)), '✕')
     action('cleanup', 'Clean up desktop icons', 'desktop icons tidy arrange reset', resetLayout, '▤')
@@ -357,12 +543,46 @@ export function Spotlight() {
       })
     }
 
+    // Your notes
+    for (const n of notes) {
+      if (n.deleted || n.purged) continue
+      out.push({
+        id: `note-${n.id}`,
+        group: 'Notes',
+        title: noteTitle(n),
+        subtitle: n.text.split('\n').filter((l) => l.trim()).slice(1).join(' ').slice(0, 80) || 'Note',
+        keywords: `note ${n.text.slice(0, 2000)}`,
+        icon: <Glyph color={NOTE_COLORS[n.color].bg}>✎</Glyph>,
+        run: () => openSticky(wm, n.id),
+        enterLabel: 'Show on desktop',
+        alt: { label: 'Open in Notebook', run: () => wm.open('notebook', { id: n.id, t: String(Date.now()) }) },
+        preview: () => (
+          <div className="zed-preview sp-note">
+            <MarkdownPreview text={n.text || '_Empty note_'} />
+          </div>
+        ),
+      })
+    }
+
+    // Your launchers
+    for (const l of launchers)
+      out.push({
+        id: `launcher-${l.id}`,
+        group: 'Links',
+        title: l.label,
+        subtitle: l.url.replace(/^https?:\/\//, '').replace(/\/$/, ''),
+        keywords: `launcher link bookmark ${l.url}`,
+        icon: l.glyph ? <Glyph>{l.glyph}</Glyph> : <Glyph><img className="sp-fav" src={faviconOf(l.url)} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} /></Glyph>,
+        run: () => launch(l),
+        alt: { label: 'Copy link', run: () => copy(l.url, 'link') },
+      })
+
     // Links
     for (const l of profile.links)
       out.push({ id: `link-${l.label}`, group: 'Links', title: l.label, subtitle: l.url.replace(/^https:\/\//, ''), keywords: 'link profile social', icon: <Glyph>↗</Glyph>, run: () => window.open(l.url, '_blank', 'noopener') })
 
     return out
-  }, [mc.status, recents.items, wm])
+  }, [mc.status, recents.items, wm, account.status, notes, launchers])
 
   // Calculator, units and currencies. Exchange rates load the first time a currency appears.
   const [rates, setRates] = useState(cachedRates)
@@ -412,17 +632,34 @@ export function Spotlight() {
       return [...out, ...all.filter((r) => pick.has(r.id))]
     }
 
+    // Repositories, issues, PRs and branches from the owner's code hosts.
+    const codeRows = (code.result?.hits ?? []).map((h) => codeRow(h, openUrl, copy))
+    const codeStatus: Result[] = []
+    if (code.loading && !codeRows.length) codeStatus.push({ id: 'code-loading', group: 'Code', title: 'Searching your code hosts…', icon: <Glyph>⌕</Glyph>, run: () => {} })
+    if (code.error) codeStatus.push({ id: 'code-error', group: 'Code', title: `Code search failed: ${code.error}`, icon: <Glyph>!</Glyph>, run: () => {} })
+    for (const e of code.result?.errors ?? []) codeStatus.push({ id: `code-err-${e}`, group: 'Code', title: e, subtitle: 'Some results may be missing', icon: <Glyph>!</Glyph>, run: () => wm.open('settings', { section: 'instances' }) })
+    if (isCodeQuery(query)) {
+      // #123, repo#123, repo@branch: only code results make sense.
+      if (account.status === 'anon') codeStatus.push({ id: 'code-signin', group: 'Code', title: 'Sign in to search repositories, issues and branches', icon: <Glyph>⎆</Glyph>, run: signIn })
+      else if (!code.loading && !code.error && code.result && !codeRows.length) codeStatus.push({ id: 'code-none', group: 'Code', title: 'No matching issues, pull requests or branches', subtitle: 'Try owner/repo#123, repo#text or repo@branch', icon: <Glyph>∅</Glyph>, run: () => {} })
+      const [first, ...more] = codeRows
+      return [...out, ...(first ? [{ ...first, group: 'Top hit' as Group }] : []), ...more, ...codeStatus]
+    }
+
     const scored = all
       .map((r) => ({ r, s: Math.max(score(r.title, query, true) * 1.2, score(r.keywords ?? '', query) * 0.8, score(r.subtitle ?? '', query) * 0.6) }))
       .filter((x) => x.s > 0)
       .sort((a, b) => b.s - a.s)
 
     // The single best match leads, then everything else grouped.
-    const order: Group[] = ['Status', 'Apps', 'Actions', 'Projects', 'Games', 'Files', 'Links']
+    const order: Group[] = ['Status', 'Apps', 'Repositories', 'Issues & PRs', 'Branches', 'Notes', 'Actions', 'Projects', 'Games', 'Files', 'Links']
     const [top, ...rest] = scored
     if (top && !out.length) out.push({ ...top.r, group: 'Top hit' })
     else if (top) rest.unshift(top)
-    for (const g of order) out.push(...rest.filter((x) => x.r.group === g).slice(0, g === 'Files' ? 6 : 5).map((x) => x.r))
+    for (const g of order) {
+      out.push(...rest.filter((x) => x.r.group === g).slice(0, g === 'Files' ? 6 : 5).map((x) => x.r))
+      if (g === 'Apps') out.push(...codeRows.filter((r) => r.id !== out[0]?.id), ...codeStatus)
+    }
 
     out.push({
       id: 'run',
@@ -440,7 +677,7 @@ export function Spotlight() {
       run: () => window.open(`https://duckduckgo.com/?q=${encodeURIComponent(q.trim())}`, '_blank', 'noopener'),
     })
     return out
-  }, [q, all, calc])
+  }, [q, all, calc, code])
 
   useEffect(() => setActive(0), [q])
   useEffect(() => {
@@ -455,7 +692,7 @@ export function Spotlight() {
   const current = results[active]
   const execute = (r: Result | undefined, alt: boolean) => {
     if (!r) return
-    const keepOpen = r.id === 'calc' || r.id === 'status-mc' || r.id.startsWith('act-email') || r.id.startsWith('accent-') || r.id.startsWith('theme-')
+    const keepOpen = r.id === 'calc' || (r.id.startsWith('code-') && r.id !== 'code-signin' && !r.id.startsWith('code-err-')) || r.id === 'status-mc' || r.id.startsWith('act-email') || r.id.startsWith('accent-') || r.id.startsWith('theme-')
     ;(alt && r.alt ? r.alt.run : r.run)()
     if (!keepOpen) close()
   }
@@ -473,6 +710,7 @@ export function Spotlight() {
           else if (e.key === 'ArrowDown') setActive((a) => Math.min(results.length - 1, a + 1))
           else if (e.key === 'ArrowUp') setActive((a) => Math.max(0, a - 1))
           else if (e.key === 'Enter') execute(current, e.ctrlKey || e.metaKey)
+          else if (e.key === 'Tab' && current?.complete && !e.shiftKey) setQ(current.complete)
           else return
           e.preventDefault()
         }}
@@ -482,7 +720,15 @@ export function Spotlight() {
             <circle cx="11" cy="11" r="7" />
             <path d="M20 20l-3.5-3.5" />
           </svg>
-          <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search apps, files, status… or try 5 ft in cm, €20 to USD, 1 TB in GiB" aria-label="Search" spellCheck={false} autoComplete="off" />
+          <input
+            ref={input}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={account.status === 'user' ? 'Search apps, notes, repos… or #123, repo#text, repo@branch' : 'Search apps, files, status… or try 5 ft in cm, €20 to USD, 1 TB in GiB'}
+            aria-label="Search"
+            spellCheck={false}
+            autoComplete="off"
+          />
           <kbd>esc</kbd>
         </div>
         <div className="sp-main">
@@ -515,6 +761,11 @@ export function Spotlight() {
           <span>
             <kbd>↵</kbd> {current?.enterLabel ?? 'open'}
           </span>
+          {current?.complete && (
+            <span>
+              <kbd>tab</kbd> complete
+            </span>
+          )}
           {current?.alt && (
             <span>
               <kbd>ctrl</kbd>
