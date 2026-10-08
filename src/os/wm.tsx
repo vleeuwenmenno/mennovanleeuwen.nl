@@ -1,3 +1,4 @@
+import { snapReserve } from './dockPrefs'
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, type ReactNode } from 'react'
 
 export type AppId = 'terminal' | 'files' | 'viewer' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'trash'
@@ -31,7 +32,7 @@ export function snapRect(zone: SnapZone, vw = window.innerWidth, vh = window.inn
   const x0 = GAP
   const y0 = BAR + GAP
   const w = vw - 2 * GAP
-  const h = vh - BAR - 2 * GAP
+  const h = vh - BAR - 2 * GAP - snapReserve()
   const hw = Math.floor((w - GAP) / 2)
   const hh = Math.floor((h - GAP) / 2)
   const right = x0 + hw + GAP

@@ -21,7 +21,7 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
       ['Drag to a corner', 'snap to a quarter'],
       ['Drag to top edge', 'maximize'],
       ['Drag a snapped window', 'back to its old size'],
-      ['Hover bottom edge', 'show the dock'],
+      ['Hover bottom edge', 'show a hidden dock'],
       ['Click dock icon', 'open, focus or minimize'],
       ['Right-click dock', 'new window, quit'],
       ['Drag dock icon', 'reorder the dock'],

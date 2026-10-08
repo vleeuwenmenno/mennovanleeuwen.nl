@@ -706,11 +706,11 @@ body.is-resizing * {
   display: none;
 }
 .window.is-max {
-  /* Full screen inside Omarchy's 10px gaps; the dock hides, so it does not reserve space. */
+  /* Full screen inside Omarchy's 10px gaps, leaving room for the dock when it always shows. */
   left: 10px !important;
   top: calc(var(--top) + 10px) !important;
   width: calc(100vw - 20px) !important;
-  height: calc(100vh - var(--top) - 20px) !important;
+  height: calc(100vh - var(--top) - 20px - var(--dock-reserve, 0px)) !important;
 }
 .snap-preview {
   position: fixed;

@@ -4,7 +4,7 @@ import { HOME } from '../terminal/vfs'
 import { closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
 import { resetLayout, restoreIcons, trashIcons, updateDesktop, useDesktop, type IconPos } from './desktopStore'
 import { appearanceMenu } from './appearanceMenu'
-import { dockAutohide } from './dockPrefs'
+import { DOCK_MODES, getDockMode, setDockMode } from './dockPrefs'
 import { useWM, type AppId } from './wm'
 
 // A desktop that behaves like one: click to select, Ctrl/Shift-click to add, drag a marquee over
@@ -282,7 +282,7 @@ export function Desktop() {
       ...(desk.trashed.length ? [{ label: `Put back ${desk.trashed.length} trashed item${desk.trashed.length === 1 ? '' : 's'}`, onSelect: () => restoreIcons(desk.trashed) }] : []),
       { separator: true },
       { label: 'Appearance', submenu: appearanceMenu() },
-      { label: 'Auto-hide dock', checked: dockAutohide.get(), onSelect: () => dockAutohide.set(!dockAutohide.get()) },
+      { label: 'Dock', submenu: DOCK_MODES.map(([m, label]) => ({ label, checked: getDockMode() === m, onSelect: () => setDockMode(m) })) },
     ]
   }
 

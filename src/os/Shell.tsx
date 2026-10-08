@@ -5,7 +5,7 @@ import { Launchpad } from './Launchpad'
 import { setOverlay, toggleOverlay, useOverlay } from './overlays'
 import { Spotlight } from './Spotlight'
 import { useSnapPreview } from './snapPreview'
-import { dockAutohide } from './dockPrefs'
+import { DOCK_MODES, getDockMode, setDockMode, type DockMode } from './dockPrefs'
 import { ContextMenuHost, openContextMenu } from './ContextMenu'
 import { Desktop } from './Desktop'
 import { AppIcon } from './icons'
@@ -163,20 +163,19 @@ function saveOrder(order: AppId[]) {
 }
 
 /**
- * Auto-hide: the dock slides away and comes back when the pointer reaches the bottom edge (or
- * rests on the dock). Touch screens have no hover, so there it always stays. It also shows for a
- * moment after boot so visitors know it exists, and while the launcher is open.
+ * Dock visibility per the chosen mode. When it is hiding, it slides away and comes back when the
+ * pointer reaches the bottom edge (or rests on the dock). Touch screens have no hover, so there it
+ * always stays; it also stays while the launcher is open or icons are being dragged.
  */
-function useDockVisibility(pinned: boolean) {
-  const [autohide, setAutohide] = useState(dockAutohide.get)
-  const [hover, setHover] = useState(true)
+function useDockVisibility(pinned: boolean, anyMaximized: boolean) {
+  const [mode, setMode] = useState<DockMode>(getDockMode)
+  const [hover, setHover] = useState(false)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const touch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches
 
   useEffect(() => {
-    const sync = () => setAutohide(dockAutohide.get())
+    const sync = () => setMode(getDockMode())
     window.addEventListener('mvlos:dock', sync)
-    hideTimer.current = setTimeout(() => setHover(false), 2500)
     return () => {
       window.removeEventListener('mvlos:dock', sync)
       if (hideTimer.current) clearTimeout(hideTimer.current)
@@ -191,7 +190,8 @@ function useDockVisibility(pinned: boolean) {
     if (hideTimer.current) clearTimeout(hideTimer.current)
     hideTimer.current = setTimeout(() => setHover(false), 450)
   }
-  return { visible: !autohide || touch || pinned || hover, autohide: autohide && !touch, show, hideSoon }
+  const hiding = !touch && (mode === 'hide' || (mode === 'maximized' && anyMaximized))
+  return { visible: !hiding || pinned || hover, autohide: hiding, mode, show, hideSoon }
 }
 
 function Dock() {
@@ -205,7 +205,7 @@ function Dock() {
   const orderRef = useRef(order)
   orderRef.current = order
   const suppressClick = useRef(false)
-  const dock = useDockVisibility(!!dragging || overlay === 'launchpad')
+  const dock = useDockVisibility(!!dragging || overlay === 'launchpad', wm.windows.some((w) => w.maximized && !w.minimized))
 
   // FLIP: icons that changed slot slide from where they were instead of jumping.
   useLayoutEffect(() => {
@@ -324,6 +324,8 @@ function Dock() {
                   },
                 ]
               : []),
+            { separator: true as const },
+            { label: 'Dock', submenu: DOCK_MODES.map(([m, label]) => ({ label, checked: getDockMode() === m, onSelect: () => setDockMode(m) })) },
             ...(wins.length ? [{ separator: true as const }, { label: wins.length > 1 ? `Quit all ${wins.length}` : 'Quit', danger: true, onSelect: () => wins.forEach((w) => wm.close(w.pid)) }] : []),
           ])
         }}

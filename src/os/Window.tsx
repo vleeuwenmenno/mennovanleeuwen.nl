@@ -1,4 +1,5 @@
 import { useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { getDockMode, snapReserve } from './dockPrefs'
 import { setSnapPreview } from './snapPreview'
 import { snapRect, useWM, type Geometry, type SnapZone, type WinState } from './wm'
 
@@ -36,7 +37,7 @@ function zoneAt(x: number, y: number): Target {
   return null
 }
 
-const maxRect = (): Geometry => ({ x: 10, y: TOP_BAR + 10, w: window.innerWidth - 20, h: window.innerHeight - TOP_BAR - 20 })
+const maxRect = (): Geometry => ({ x: 10, y: TOP_BAR + 10, w: window.innerWidth - 20, h: window.innerHeight - TOP_BAR - 20 - (getDockMode() === 'show' ? snapReserve() : 0) })
 
 export function Window({ win, title, chrome = 'default', className = '', children }: Props) {
   const wm = useWM()
