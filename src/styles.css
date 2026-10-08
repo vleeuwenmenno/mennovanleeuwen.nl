@@ -3387,6 +3387,29 @@ kbd {
   transform-origin: left top;
   margin-bottom: 22px;
 }
+.sp-calc-expr {
+  margin: 0 0 4px !important;
+  font-size: 12px;
+  word-break: break-word;
+}
+.sp-calc-value {
+  margin: 0 0 12px !important;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent);
+  word-break: break-word;
+}
+.sp-calc-alts {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.sp-calc-alts li::before {
+  content: '= ';
+  color: var(--muted);
+}
 .sp-foot {
   display: flex;
   gap: 16px;

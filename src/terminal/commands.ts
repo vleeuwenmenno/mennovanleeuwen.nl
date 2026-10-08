@@ -5,6 +5,7 @@ import { fetchStars, loadRecents, timeAgo } from '../data/recents'
 import type { AppId } from '../os/wm'
 import { lookupAddress, RECORD_TYPES, resolve } from './dns'
 import { pepper } from './pepper'
+import { loadRates, smartCalc } from '../os/smartcalc'
 import { THEMES as OMARCHY_THEMES } from '../os/omarchyThemes'
 import { ACCENTS, setMode, setTheme, themeLabel, themeSettings } from '../os/theme'
 import { age, HOME, lookup, prettyPath, resolvePath, walk, type DirNode, type Node } from './vfs'
@@ -164,7 +165,7 @@ export const commands: Record<string, Command> = {
       const groups: [string, string[]][] = [
         ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'open', 'files']],
         ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'heatmap', 'stars', 'contact']],
-        ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo']],
+        ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo', 'calc']],
         ['Network', ['ping', 'dig', 'host', 'nslookup', 'minecraft']],
         ['System', ['ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'env', 'export', 'theme', 'clear', 'exit']],
         ['Fun', ['games', 'fastfetch', 'fortune', 'cowsay', 'sl', 'sudo']],
@@ -773,6 +774,21 @@ export const commands: Record<string, Command> = {
     },
   },
   nautilus: { desc: 'alias for files', hidden: true, run: (ctx) => commands.files.run(ctx) },
+  calc: {
+    desc: 'calculator with units and currencies',
+    usage: "calc <expression>   e.g. calc 5 ft 11 in to cm · calc €20 + 15 USD in GBP · calc 1 TB in GiB",
+    run: async ({ args, stdin }) => {
+      const text = (args.length ? args.join(' ') : (stdin ?? '')).trim()
+      if (!text) throw new CmdError(`usage: ${commands.calc.usage}`)
+      let res = smartCalc(text)
+      if (res?.kind === 'pending') res = smartCalc(text, await loadRates())
+      if (!res || res.kind === 'pending') throw new CmdError(res ? 'calc: exchange rates are unavailable right now' : `calc: '${text}' is not something I can calculate`)
+      if (res.kind === 'error') throw new CmdError(`calc: ${res.message}`)
+      return [c('accent', res.value), ...res.alternatives.map((a) => c('muted', `= ${a}`)), ...(res.note ? [c('muted', res.note)] : [])].join('\n')
+    },
+  },
+  units: { desc: 'alias for calc', hidden: true, run: (ctx) => commands.calc.run(ctx) },
+  bc: { desc: 'alias for calc', hidden: true, run: (ctx) => commands.calc.run(ctx) },
   shutdown: { desc: 'power off', hidden: true, run: () => 'Shutting down... no. Close the tab like everyone else.' },
   reboot: {
     desc: 'reload the page',

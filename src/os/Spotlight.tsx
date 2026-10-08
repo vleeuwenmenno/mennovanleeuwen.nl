@@ -6,7 +6,7 @@ import { contributions, profile, projects } from '../data/profile'
 import { timeAgo, useRecents } from '../data/recents'
 import { age, HOME, lookup, prettyPath, walk } from '../terminal/vfs'
 import { APP_META } from './apps'
-import { calculate, formatNumber } from './calc'
+import { cachedRates, loadRates, smartCalc, type CalcResult } from './smartcalc'
 import { resetLayout } from './desktopStore'
 import { AppIcon } from './icons'
 import { setOverlay } from './overlays'
@@ -363,21 +363,47 @@ export function Spotlight() {
     return out
   }, [mc.status, recents.items, wm])
 
+  // Calculator, units and currencies. Exchange rates load the first time a currency appears.
+  const [rates, setRates] = useState(cachedRates)
+  const calc = useMemo(() => smartCalc(q, rates), [q, rates])
+  useEffect(() => {
+    if (calc?.kind === 'pending') loadRates().then((r) => r && setRates(r))
+  }, [calc?.kind])
+
+  const calcRow = (c: CalcResult): Result => {
+    const icon = <Glyph color="color-mix(in srgb, var(--accent) 25%, transparent)">{c.kind === 'ok' && c.usesRates ? '¤' : '∑'}</Glyph>
+    if (c.kind === 'pending') return { id: 'calc', group: 'Top hit', title: 'Fetching exchange rates…', subtitle: c.expression, icon, run: () => {} }
+    if (c.kind === 'error') return { id: 'calc', group: 'Top hit', title: `Can't calculate: ${c.message}`, subtitle: c.expression, icon, run: () => {} }
+    return {
+      id: 'calc',
+      group: 'Top hit',
+      title: c.value,
+      subtitle: c.note ?? c.expression,
+      icon,
+      run: () => copy(c.copy, c.copy),
+      enterLabel: 'Copy',
+      preview: () => (
+        <>
+          <p className="sp-calc-expr muted">{c.expression}</p>
+          <p className="sp-calc-value">{c.value}</p>
+          {c.alternatives.length > 0 && (
+            <ul className="sp-calc-alts">
+              {c.alternatives.map((a) => (
+                <li key={a}>{a}</li>
+              ))}
+            </ul>
+          )}
+          {c.note && <p className="muted sp-small">{c.note}</p>}
+        </>
+      ),
+    }
+  }
+
   const results = useMemo(() => {
     const query = q.trim().toLowerCase()
     const out: Result[] = []
 
-    const value = calculate(q)
-    if (value !== null)
-      out.push({
-        id: 'calc',
-        group: 'Top hit',
-        title: `= ${formatNumber(value)}`,
-        subtitle: `${q.trim()}`,
-        icon: <Glyph color="color-mix(in srgb, var(--accent) 25%, transparent)">∑</Glyph>,
-        run: () => copy(String(value), 'result'),
-        enterLabel: 'Copy',
-      })
+    if (calc) out.push(calcRow(calc))
 
     if (!query) {
       // Empty box: status first, then the common things.
@@ -413,7 +439,7 @@ export function Spotlight() {
       run: () => window.open(`https://duckduckgo.com/?q=${encodeURIComponent(q.trim())}`, '_blank', 'noopener'),
     })
     return out
-  }, [q, all])
+  }, [q, all, calc])
 
   useEffect(() => setActive(0), [q])
   useEffect(() => {
@@ -455,7 +481,7 @@ export function Spotlight() {
             <circle cx="11" cy="11" r="7" />
             <path d="M20 20l-3.5-3.5" />
           </svg>
-          <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search apps, files, projects, status… or type a sum" aria-label="Search" spellCheck={false} autoComplete="off" />
+          <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search apps, files, status… or try 5 ft in cm, €20 to USD, 1 TB in GiB" aria-label="Search" spellCheck={false} autoComplete="off" />
           <kbd>esc</kbd>
         </div>
         <div className="sp-main">
