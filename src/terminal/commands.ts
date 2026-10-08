@@ -1,0 +1,806 @@
+import { contributions, headlines, profile, projects } from '../data/profile'
+import { fetchStars, loadRecents, timeAgo } from '../data/recents'
+import type { AppId, WinState } from '../os/wm'
+import { age, HOME, lookup, prettyPath, resolvePath, walk, type DirNode, type Node } from './vfs'
+
+// Output markup understood by the terminal renderer:
+//   {c:green}text{/}      colored span (green, red, yellow, blue, cyan, magenta, muted, accent, bold)
+//   {link:https://…}text{/}  clickable link
+// Pipes and redirects receive the text with this markup stripped.
+
+export const strip = (s: string) => s.replace(/\{(?:c|link):[^}]*\}|\{\/\}/g, '')
+const c = (color: string, s: string) => `{c:${color}}${s}{/}`
+const link = (url: string, text = url) => `{link:${url}}${text}{/}`
+
+export class CmdError extends Error {}
+
+export type Ctx = {
+  args: string[]
+  stdin: string | null
+  cwd: string
+  setCwd: (path: string) => void
+  env: Record<string, string>
+  history: string[]
+  windows: WinState[]
+  openApp: (app: AppId, props?: Record<string, string>) => void
+  closeWindow: (pid: number) => void
+  clear: () => void
+  exit: () => void
+  setAccent: (name: string) => boolean
+}
+
+type Out = string | void
+type Command = { desc: string; usage?: string; hidden?: boolean; run: (ctx: Ctx) => Out | Promise<Out> }
+
+const APPS: Record<string, AppId> = {
+  terminal: 'terminal',
+  notes: 'notes',
+  note: 'notes',
+  sticky: 'notes',
+  projects: 'projects',
+  files: 'projects',
+  recents: 'recents',
+  activity: 'recents',
+  cv: 'cv',
+  resume: 'cv',
+  about: 'cv',
+  contact: 'contact',
+  mail: 'contact',
+  trash: 'trash',
+}
+
+const APP_NAMES: Record<AppId, string> = {
+  terminal: 'terminal',
+  notes: 'sticky-notes',
+  projects: 'files',
+  recents: 'activity',
+  cv: 'cv-viewer',
+  contact: 'mail',
+  trash: 'trash',
+}
+
+// Scratch space: the only writable part of the filesystem, so `echo hi > /tmp/x` works.
+const tmp = () => lookup('/tmp') as DirNode
+
+function flags(args: string[]) {
+  const set = new Set<string>()
+  const rest: string[] = []
+  for (const a of args) {
+    if (/^-[a-zA-Z]+$/.test(a)) for (const ch of a.slice(1)) set.add(ch)
+    else rest.push(a)
+  }
+  return { has: (f: string) => set.has(f), rest }
+}
+
+function readFile(ctx: Ctx, path: string, cmd: string): string {
+  const abs = resolvePath(ctx.cwd, path)
+  const node = lookup(abs)
+  if (!node) throw new CmdError(`${cmd}: ${path}: No such file or directory`)
+  if (node.type === 'dir') throw new CmdError(`${cmd}: ${path}: Is a directory`)
+  return node.content()
+}
+
+/** Input text for filters: stdin from a pipe, or the named files. */
+function input(ctx: Ctx, files: string[], cmd: string): string {
+  if (files.length) return files.map((f) => readFile(ctx, f, cmd)).join('\n')
+  if (ctx.stdin !== null) return ctx.stdin
+  throw new CmdError(`${cmd}: missing file operand`)
+}
+
+const lines = (s: string) => (s === '' ? [] : s.replace(/\n$/, '').split('\n'))
+
+function colorName(node: Node) {
+  if (node.type === 'dir') return c('blue', node.name + '/')
+  if (node.name.endsWith('.url')) return c('cyan', node.name)
+  if (node.name.startsWith('.')) return c('muted', node.name)
+  return node.name
+}
+
+function treeLines(node: DirNode, prefix = ''): string[] {
+  const kids = [...node.children.values()].filter((n) => !n.name.startsWith('.'))
+  return kids.flatMap((k, i) => {
+    const last = i === kids.length - 1
+    const line = `${prefix}${last ? '└── ' : '├── '}${colorName(k)}`
+    return k.type === 'dir' ? [line, ...treeLines(k, prefix + (last ? '    ' : '│   '))] : [line]
+  })
+}
+
+function fmtUptime() {
+  const { years, days } = age()
+  return `${years} years, ${days} day${days === 1 ? '' : 's'}`
+}
+
+const LOGO = ['', '  __  __ ', ' |  \\/  |', ' | |\\/| |', ' | |  | |', ' |_|  |_|', '', '  mvlOS']
+
+export function fastfetch(ctx: Pick<Ctx, 'windows'>) {
+  const ua = navigator.userAgent
+  const browser = /Firefox\/(\d+)/.exec(ua)?.[0].replace('/', ' ') ?? /Edg\/(\d+)/.exec(ua)?.[0].replace('Edg/', 'Edge ') ?? /Chrome\/(\d+)/.exec(ua)?.[0].replace('/', ' ') ?? /Version\/(\d+).*Safari/.exec(ua)?.[1].replace(/^/, 'Safari ') ?? 'a browser'
+  const info = [
+    `${c('accent', profile.handle)}@${c('accent', 'mvlos')}`,
+    c('muted', '─'.repeat(16)),
+    `${c('accent', 'OS')}        mvlOS 1.0 (${browser})`,
+    `${c('accent', 'Host')}      ${location.host || 'localhost'}`,
+    `${c('accent', 'Uptime')}    ${fmtUptime()}`,
+    `${c('accent', 'Shell')}     msh 1.0`,
+    `${c('accent', 'Display')}   ${window.innerWidth}x${window.innerHeight}`,
+    `${c('accent', 'WM')}        react-wm (${ctx.windows.length} windows)`,
+    `${c('accent', 'Role')}      ${profile.role} @ ${profile.company}`,
+    `${c('accent', 'Langs')}     ${profile.favourites.languages.join(', ')}`,
+    `${c('accent', 'Distro')}    ${profile.favourites.platform}`,
+    '',
+    ['red', 'yellow', 'green', 'cyan', 'blue', 'magenta'].map((k) => c(k, '███')).join(''),
+  ]
+  // Phones are ~40 columns wide: drop the logo column and the longest lines so nothing wraps.
+  if (window.innerWidth < 720) return info.filter((_, i) => ![3, 4, 6].includes(i)).join('\n')
+  return info.map((l, i) => c('accent', (LOGO[i] ?? ' '.repeat(16)).padEnd(17)) + l).join('\n')
+}
+
+const FORTUNES = [
+  'It works on my machine. Ship the machine.',
+  'There is no cloud, just someone else\'s computer.',
+  'YAML is a configuration language in the same way a minefield is a park.',
+  'The best time to write tests was before the outage. The second best time is now.',
+  'A deterministic deploy is a boring deploy, and boring is the goal.',
+  'rm -rf is a lifestyle choice, not a cleanup strategy.',
+  'Every sufficiently old cron job becomes load-bearing.',
+  'DNS. It was DNS.',
+]
+
+function cowsay(text: string) {
+  const t = text || 'moo'
+  const width = Math.min(40, Math.max(...t.split('\n').map((l) => l.length)))
+  const wrapped = t.match(new RegExp(`.{1,${width}}(\\s|$)`, 'g'))?.map((s) => s.trim()) ?? [t]
+  const w = Math.max(...wrapped.map((l) => l.length))
+  const body = wrapped.length === 1 ? [`< ${wrapped[0]} >`] : wrapped.map((l, i) => `${i === 0 ? '/' : i === wrapped.length - 1 ? '\\' : '|'} ${l.padEnd(w)} ${i === 0 ? '\\' : i === wrapped.length - 1 ? '/' : '|'}`)
+  return [` ${'_'.repeat(w + 2)}`, ...body, ` ${'-'.repeat(w + 2)}`, '        \\   ^__^', '         \\  (oo)\\_______', '            (__)\\       )\\/\\', '                ||----w |', '                ||     ||'].join('\n')
+}
+
+const KIND_ICON: Record<string, string> = { push: '↑', pr: '⇄', merge: '⑂', issue: '◎', release: '★', create: '+', star: '☆', comment: '…', fork: '⑂' }
+
+export const commands: Record<string, Command> = {
+  help: {
+    desc: 'list commands',
+    run: () => {
+      const groups: [string, string[]][] = [
+        ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'open']],
+        ['About me', ['whoami', 'cv', 'projects', 'contribs', 'recent', 'stars', 'contact']],
+        ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo']],
+        ['System', ['ps', 'kill', 'uname', 'uptime', 'date', 'history', 'env', 'export', 'theme', 'clear', 'exit']],
+        ['Fun', ['fastfetch', 'fortune', 'cowsay', 'sl', 'sudo']],
+      ]
+      return [
+        ...groups.map(([g, cmds]) => `${c('accent', g.padEnd(9))} ${cmds.map((n) => c('green', n)).join('  ')}`),
+        '',
+        `Pipes work: ${c('cyan', 'cat cv.md | grep -i go')}   Writes go to /tmp: ${c('cyan', 'echo hi > /tmp/x')}`,
+        `${c('muted', 'Tab completes, ↑/↓ walks history, Ctrl+L clears, `man <cmd>` explains one.')}`,
+      ].join('\n')
+    },
+  },
+  man: {
+    desc: 'explain a command',
+    usage: 'man <command>',
+    run: ({ args }) => {
+      if (!args[0]) throw new CmdError('What manual page do you want?')
+      const cmd = commands[args[0]]
+      if (!cmd) throw new CmdError(`No manual entry for ${args[0]}`)
+      return `${c('bold', args[0].toUpperCase())}\n  ${args[0]} - ${cmd.desc}\n\n${c('bold', 'USAGE')}\n  ${cmd.usage ?? args[0]}`
+    },
+  },
+  ls: {
+    desc: 'list directory contents',
+    usage: 'ls [-a] [-l] [path]',
+    run: (ctx) => {
+      const f = flags(ctx.args)
+      const target = f.rest[0] ?? '.'
+      const abs = resolvePath(ctx.cwd, target)
+      const node = lookup(abs)
+      if (!node) throw new CmdError(`ls: cannot access '${target}': No such file or directory`)
+      if (node.type === 'file') return colorName(node)
+      const kids = [...node.children.values()].filter((n) => f.has('a') || !n.name.startsWith('.'))
+      if (!f.has('l')) return kids.map(colorName).join('  ')
+      return kids
+        .map((k) => {
+          const size = k.type === 'file' ? k.content().length : 4096
+          return `${k.type === 'dir' ? 'dr-xr-xr-x' : '-r--r--r--'}  ${profile.handle}  ${String(size).padStart(5)}  ${colorName(k)}`
+        })
+        .join('\n')
+    },
+  },
+  ll: { desc: 'alias for ls -la', hidden: true, run: (ctx) => commands.ls.run({ ...ctx, args: ['-la', ...ctx.args] }) },
+  cd: {
+    desc: 'change directory',
+    usage: 'cd [path]',
+    run: (ctx) => {
+      const target = ctx.args[0] === '-' ? ctx.env.OLDPWD || HOME : ctx.args[0] ?? '~'
+      const abs = resolvePath(ctx.cwd, target)
+      const node = lookup(abs)
+      if (!node) throw new CmdError(`cd: ${target}: No such file or directory`)
+      if (node.type !== 'dir') throw new CmdError(`cd: ${target}: Not a directory`)
+      ctx.env.OLDPWD = ctx.cwd
+      ctx.setCwd(abs)
+    },
+  },
+  pwd: { desc: 'print working directory', run: (ctx) => ctx.cwd },
+  cat: {
+    desc: 'print files',
+    usage: 'cat <file>...',
+    run: (ctx) => input(ctx, ctx.args, 'cat'),
+  },
+  less: { desc: 'alias for cat (no pager here)', hidden: true, run: (ctx) => commands.cat.run(ctx) },
+  more: { desc: 'alias for cat', hidden: true, run: (ctx) => commands.cat.run(ctx) },
+  bat: { desc: 'alias for cat', hidden: true, run: (ctx) => commands.cat.run(ctx) },
+  head: {
+    desc: 'first lines of input',
+    usage: 'head [-n N] [file]',
+    run: (ctx) => {
+      let n = 10
+      const files: string[] = []
+      for (let i = 0; i < ctx.args.length; i++) {
+        const a = ctx.args[i]
+        if (a === '-n') n = parseInt(ctx.args[++i], 10)
+        else if (/^-\d+$/.test(a)) n = parseInt(a.slice(1), 10)
+        else files.push(a)
+      }
+      return lines(input(ctx, files, 'head')).slice(0, n).join('\n')
+    },
+  },
+  tail: {
+    desc: 'last lines of input',
+    usage: 'tail [-n N] [file]',
+    run: (ctx) => {
+      let n = 10
+      const files: string[] = []
+      for (let i = 0; i < ctx.args.length; i++) {
+        const a = ctx.args[i]
+        if (a === '-n') n = parseInt(ctx.args[++i], 10)
+        else if (/^-\d+$/.test(a)) n = parseInt(a.slice(1), 10)
+        else files.push(a)
+      }
+      return lines(input(ctx, files, 'tail')).slice(-n).join('\n')
+    },
+  },
+  wc: {
+    desc: 'count lines, words, bytes',
+    usage: 'wc [-l|-w|-c] [file]',
+    run: (ctx) => {
+      const f = flags(ctx.args)
+      const text = input(ctx, f.rest, 'wc')
+      const counts = { l: lines(text).length, w: text.split(/\s+/).filter(Boolean).length, c: new TextEncoder().encode(text).length }
+      const picked = (['l', 'w', 'c'] as const).filter((k) => f.has(k))
+      return (picked.length ? picked : (['l', 'w', 'c'] as const)).map((k) => String(counts[k]).padStart(6)).join(' ')
+    },
+  },
+  grep: {
+    desc: 'search text',
+    usage: 'grep [-i] [-n] [-v] [-r] <pattern> [file|dir]',
+    run: (ctx) => {
+      const f = flags(ctx.args)
+      const [pattern, ...files] = f.rest
+      if (pattern === undefined) throw new CmdError('usage: grep [-i] [-n] [-v] [-r] <pattern> [file]')
+      let re: RegExp
+      try {
+        re = new RegExp(pattern, f.has('i') ? 'i' : '')
+      } catch {
+        throw new CmdError(`grep: invalid pattern '${pattern}'`)
+      }
+      const hi = (l: string) => (f.has('v') ? l : l.replace(new RegExp(re.source, re.flags + 'g'), (m) => c('red', m)))
+      const match = (l: string) => re.test(l) !== f.has('v')
+
+      if (f.has('r') || files.some((p) => lookup(resolvePath(ctx.cwd, p))?.type === 'dir')) {
+        const roots = files.length ? files : ['.']
+        const out: string[] = []
+        for (const r of roots) {
+          for (const path of walk(resolvePath(ctx.cwd, r))) {
+            const node = lookup(path)
+            if (node?.type !== 'file') continue
+            lines(node.content()).forEach((l, i) => {
+              if (match(l)) out.push(`${c('magenta', prettyPath(path))}:${f.has('n') ? c('green', String(i + 1)) + ':' : ''}${hi(l)}`)
+            })
+          }
+        }
+        return out.join('\n')
+      }
+      return lines(input(ctx, files, 'grep'))
+        .map((l, i) => ({ l, i }))
+        .filter(({ l }) => match(l))
+        .map(({ l, i }) => (f.has('n') ? `${c('green', String(i + 1))}:` : '') + hi(l))
+        .join('\n')
+    },
+  },
+  sort: {
+    desc: 'sort lines',
+    usage: 'sort [-r] [-n] [file]',
+    run: (ctx) => {
+      const f = flags(ctx.args)
+      const out = lines(input(ctx, f.rest, 'sort')).sort((a, b) => (f.has('n') ? parseFloat(a) - parseFloat(b) : a.localeCompare(b)))
+      return (f.has('r') ? out.reverse() : out).join('\n')
+    },
+  },
+  uniq: {
+    desc: 'drop repeated adjacent lines',
+    usage: 'uniq [-c] [file]',
+    run: (ctx) => {
+      const f = flags(ctx.args)
+      const out: { l: string; n: number }[] = []
+      for (const l of lines(input(ctx, f.rest, 'uniq'))) {
+        if (out.length && out[out.length - 1].l === l) out[out.length - 1].n++
+        else out.push({ l, n: 1 })
+      }
+      return out.map(({ l, n }) => (f.has('c') ? `${String(n).padStart(4)} ${l}` : l)).join('\n')
+    },
+  },
+  tree: {
+    desc: 'show directory tree',
+    usage: 'tree [path]',
+    run: (ctx) => {
+      const abs = resolvePath(ctx.cwd, ctx.args[0] ?? '.')
+      const node = lookup(abs)
+      if (!node || node.type !== 'dir') throw new CmdError(`tree: ${ctx.args[0] ?? '.'}: not a directory`)
+      return [c('blue', prettyPath(abs)), ...treeLines(node)].join('\n')
+    },
+  },
+  find: {
+    desc: 'find files by name',
+    usage: 'find [path] [-name pattern]',
+    run: (ctx) => {
+      const nameIdx = ctx.args.indexOf('-name')
+      const pattern = nameIdx >= 0 ? ctx.args[nameIdx + 1] : null
+      const start = ctx.args.find((a, i) => !a.startsWith('-') && i !== nameIdx + 1) ?? '.'
+      const abs = resolvePath(ctx.cwd, start)
+      if (!lookup(abs)) throw new CmdError(`find: '${start}': No such file or directory`)
+      const re = pattern ? new RegExp('^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$') : null
+      return walk(abs)
+        .filter((p) => !re || re.test(p.split('/').pop() ?? ''))
+        .map((p) => (start.startsWith('/') ? p : './' + p.slice(abs.length + 1)).replace(/^\.\/$/, '.'))
+        .join('\n')
+    },
+  },
+  echo: { desc: 'print arguments', usage: 'echo [text]', run: ({ args }) => args.join(' ') },
+  touch: {
+    desc: 'create an empty file (in /tmp)',
+    usage: 'touch /tmp/<name>',
+    run: (ctx) => {
+      for (const a of ctx.args) writeTmp(ctx.cwd, a, '', true)
+    },
+  },
+  mkdir: {
+    desc: 'not here',
+    hidden: true,
+    run: () => {
+      throw new CmdError('mkdir: /tmp is flat on purpose; files only')
+    },
+  },
+  rm: {
+    desc: 'remove files (only in /tmp)',
+    usage: 'rm /tmp/<name>',
+    run: (ctx) => {
+      const f = flags(ctx.args)
+      if (f.has('r') && f.has('f')) return `${c('yellow', 'Nice try.')} The only thing getting deleted today is your expectations.`
+      for (const a of f.rest) {
+        const abs = resolvePath(ctx.cwd, a)
+        if (!abs.startsWith('/tmp/')) throw new CmdError(`rm: cannot remove '${a}': Read-only file system`)
+        if (!tmp().children.delete(abs.slice(5))) throw new CmdError(`rm: cannot remove '${a}': No such file or directory`)
+      }
+    },
+  },
+  whoami: {
+    desc: 'who is this',
+    run: () =>
+      [
+        c('accent', profile.name),
+        `${profile.role} @ ${profile.company}`,
+        '',
+        profile.summary,
+        '',
+        `Run ${c('green', 'cv')} for the full picture or ${c('green', 'projects')} for the fun part.`,
+      ].join('\n'),
+  },
+  id: { desc: 'user identity', hidden: true, run: () => `uid=1000(${profile.handle}) gid=1000(${profile.handle}) groups=1000(${profile.handle}),998(wheel),27(devops),42(omarchy)` },
+  hostname: { desc: 'print hostname', hidden: true, run: () => 'mvlos' },
+  uname: {
+    desc: 'system info',
+    usage: 'uname [-a]',
+    run: ({ args }) => (args.includes('-a') ? `mvlOS mvlos 1.0.0-menno #1 SMP PREEMPT_DYNAMIC ${new Date().toUTCString()} wasm32 GNU/React` : 'mvlOS'),
+  },
+  date: { desc: 'current date and time', run: () => new Date().toString() },
+  uptime: {
+    desc: 'how long I have been running',
+    run: () => `${new Date().toTimeString().slice(0, 8)} up ${fmtUptime()},  1 user,  load average: coffee, coffee, coffee`,
+  },
+  history: { desc: 'command history', run: ({ history }) => history.map((h, i) => `${String(i + 1).padStart(4)}  ${h}`).join('\n') },
+  env: { desc: 'environment variables', run: ({ env }) => Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n') },
+  export: {
+    desc: 'set an environment variable',
+    usage: 'export NAME=value',
+    run: (ctx) => {
+      for (const a of ctx.args) {
+        const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(a)
+        if (!m) throw new CmdError(`export: '${a}': not a valid identifier`)
+        ctx.env[m[1]] = m[2]
+      }
+    },
+  },
+  which: {
+    desc: 'locate a command',
+    usage: 'which <command>',
+    run: ({ args }) => args.map((a) => (commands[a] ? `/bin/${a}` : `${a} not found`)).join('\n'),
+  },
+  clear: { desc: 'clear the screen', run: (ctx) => ctx.clear() },
+  exit: { desc: 'close this terminal', run: (ctx) => ctx.exit() },
+  open: {
+    desc: 'open an app, file or URL',
+    usage: 'open <app|file|url>',
+    run: (ctx) => {
+      const target = ctx.args[0]
+      if (!target) return `usage: open <app|file|url>\napps: ${Object.keys(APPS).filter((k, i, a) => a.findIndex((x) => APPS[x] === APPS[k]) === i).join(', ')}`
+      if (/^https?:\/\//.test(target)) {
+        window.open(target, '_blank', 'noopener')
+        return `Opening ${link(target)}`
+      }
+      if (APPS[target]) {
+        ctx.openApp(APPS[target])
+        return
+      }
+      const slug = target.replace(/\/$/, '').split('/').pop() ?? ''
+      const abs = resolvePath(ctx.cwd, target)
+      const node = lookup(abs)
+      if (node?.type === 'file' && node.open) {
+        if (node.open.url) {
+          window.open(node.open.url, '_blank', 'noopener')
+          return `Opening ${link(node.open.url)}`
+        }
+        if (node.open.app) ctx.openApp(node.open.app as AppId, node.open.props)
+        return
+      }
+      if (node?.type === 'dir' || [...projects, ...contributions].some((p) => p.slug === slug)) {
+        if ([...projects, ...contributions].some((p) => p.slug === slug)) {
+          ctx.openApp('projects', { slug })
+          return
+        }
+        ctx.openApp('projects')
+        return
+      }
+      throw new CmdError(`open: ${target}: no app, file or URL by that name`)
+    },
+  },
+  'xdg-open': { desc: 'alias for open', hidden: true, run: (ctx) => commands.open.run(ctx) },
+  cv: {
+    desc: 'open my CV',
+    run: (ctx) => {
+      ctx.openApp('cv')
+      return `Opened ${c('accent', 'cv-viewer')}. Prefer text? ${c('green', 'cat ~/cv.md')}`
+    },
+  },
+  projects: {
+    desc: 'list my projects',
+    usage: 'projects [name]',
+    run: (ctx) => {
+      if (ctx.args[0]) return commands.open.run({ ...ctx, args: [ctx.args[0]] })
+      return [
+        ...projects.map((p) => `${c('accent', p.name.padEnd(12))} ${p.tagline}\n${' '.repeat(13)}${c('muted', p.stack.join(' · '))}  ${link(p.url ?? p.repo ?? '', (p.url ?? p.repo ?? '').replace(/^https:\/\//, ''))}`),
+        '',
+        c('muted', `open <name> for details, e.g. ${c('green', 'open boltwarden')}`),
+      ].join('\n')
+    },
+  },
+  contribs: {
+    desc: 'open source I contribute to',
+    run: () =>
+      [
+        ...contributions.map((x) => `${c('accent', `${x.owner}/${x.slug}`)}\n  ${x.description}\n${x.work.map((w) => `  ${c('green', '+')} ${w}`).join('\n')}\n  ${link(x.repo)}`),
+      ].join('\n\n'),
+  },
+  contributions: { desc: 'alias for contribs', hidden: true, run: (ctx) => commands.contribs.run(ctx) },
+  recent: {
+    desc: 'latest activity from GitHub and git.mvl.sh',
+    usage: 'recent [count] [repo-filter]',
+    run: async (ctx) => {
+      const n = parseInt(ctx.args.find((a) => /^\d+$/.test(a)) ?? '12', 10)
+      const filter = ctx.args.find((a) => !/^\d+$/.test(a))?.toLowerCase()
+      const s = await loadRecents()
+      const items = s.items.filter((i) => !filter || i.repo.toLowerCase().includes(filter)).slice(0, n)
+      if (!items.length) return s.status === 'error' ? c('red', `recent: could not reach GitHub (${s.error})`) : 'Nothing recent. Suspicious.'
+      return items
+        .map((i) => `${c('muted', timeAgo(i.date).padStart(8))}  ${c('yellow', KIND_ICON[i.kind] ?? '·')} ${c('cyan', i.repo.split('/')[1])}  ${link(i.url, i.title)}${i.detail ? c('muted', ` · ${i.detail}`) : ''}`)
+        .join('\n')
+    },
+  },
+  'git': {
+    desc: 'only `git log` works here',
+    usage: 'git log',
+    run: (ctx) => {
+      if (ctx.args[0] === 'log') return commands.recent.run({ ...ctx, args: ctx.args.slice(1) })
+      if (ctx.args[0] === 'status') return 'On branch main\nnothing to commit, working tree clean (it is read-only)'
+      if (ctx.args[0] === 'push') return c('yellow', 'Everything is already pushed. That is the whole point of a CV.')
+      throw new CmdError(`git: '${ctx.args[0] ?? ''}' is not supported here. Try 'git log'.`)
+    },
+  },
+  stars: {
+    desc: 'live GitHub stars',
+    run: async () => {
+      const repos = [...projects.filter((p) => p.github).map((p) => p.github!), ...contributions.map((x) => x.github)]
+      const counts = await Promise.all(repos.map(fetchStars))
+      return repos.map((r, i) => `${c('yellow', '★')} ${String(counts[i] ?? '?').padStart(4)}  ${link(`https://github.com/${r}`, r)}`).join('\n')
+    },
+  },
+  contact: {
+    desc: 'how to reach me',
+    run: (ctx) => {
+      ctx.openApp('contact')
+      return [`${c('accent', 'email')}   ${link(`mailto:${profile.email}`, profile.email)}`, ...profile.links.map((l) => `${c('accent', l.label.toLowerCase().padEnd(8))}${link(l.url)}`)].join('\n')
+    },
+  },
+  ps: {
+    desc: 'running windows',
+    run: ({ windows }) =>
+      [
+        c('muted', '  PID  STATE   TIME   COMMAND'),
+        ...windows
+          .slice()
+          .sort((a, b) => a.pid - b.pid)
+          .map((w) => {
+            const secs = Math.floor((Date.now() - w.openedAt) / 1000)
+            return `${String(w.pid).padStart(5)}  ${(w.minimized ? 'S' : 'R').padEnd(6)}  ${`${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`.padStart(5)}  ${APP_NAMES[w.app]}`
+          }),
+      ].join('\n'),
+  },
+  kill: {
+    desc: 'close a window by pid',
+    usage: 'kill <pid>',
+    run: (ctx) => {
+      const pids = ctx.args.filter((a) => !a.startsWith('-'))
+      if (!pids.length) throw new CmdError('usage: kill <pid>  (see `ps`)')
+      for (const p of pids) {
+        const pid = parseInt(p, 10)
+        if (pid === 1) throw new CmdError('kill: (1) - Operation not permitted. init is load-bearing.')
+        if (!ctx.windows.some((w) => w.pid === pid)) throw new CmdError(`kill: (${p}) - No such process`)
+        ctx.closeWindow(pid)
+      }
+    },
+  },
+  killall: { desc: 'kill everything', hidden: true, run: () => c('yellow', 'killall: refusing to end the world without a ticket.') },
+  theme: {
+    desc: 'change the accent color',
+    usage: 'theme <amber|blue|green|pink|red|purple>',
+    run: (ctx) => {
+      const name = ctx.args[0]
+      if (!name) return 'usage: theme <amber|blue|green|pink|red|purple>'
+      if (!ctx.setAccent(name)) throw new CmdError(`theme: unknown theme '${name}'`)
+      return `Accent set to ${c('accent', name)}.`
+    },
+  },
+  fastfetch: { desc: 'system summary', run: (ctx) => fastfetch(ctx) },
+  neofetch: { desc: 'alias for fastfetch', hidden: true, run: (ctx) => fastfetch(ctx) },
+  fortune: { desc: 'ops wisdom', run: () => FORTUNES[Math.floor(Math.random() * FORTUNES.length)] },
+  cowsay: { desc: 'a cow says things', usage: 'cowsay [text]', run: (ctx) => cowsay(ctx.args.length ? ctx.args.join(' ') : ctx.stdin?.trim() || FORTUNES[Math.floor(Math.random() * FORTUNES.length)]) },
+  sl: {
+    desc: 'you meant ls',
+    run: () =>
+      [
+        '      ====        ________                ___________',
+        '  _D _|  |_______/        \\__I_I_____===__|_________|',
+        '   |(_)---  |   H\\________/ |   |        =|___ ___|',
+        '   /     |  |   H  |  |     |   |         ||_| |_||',
+        '  |      |  |   H  |__--------------------| [___] |',
+        '  | ________|___H__/__|_____/[][]~\\_______|       |',
+        '  |/ |   |-----------I_____I [][] []  D   |=======|_',
+        '__/ =| o |=-~~\\  /~~\\  /~~\\  /~~\\ ____Y___________|__',
+        ' |/-=|___|=    ||    ||    ||    |_____/~\\___/',
+        '  \\_/      \\O=====O=====O=====O_/      \\_/',
+        '',
+        c('muted', 'You typed sl. The train is the punishment.'),
+      ].join('\n'),
+  },
+  sudo: {
+    desc: 'become root',
+    run: ({ args }) => {
+      if (args.join(' ').startsWith('rm')) return `${c('red', 'sudo:')} absolutely not.`
+      if (args[0] === 'make' && args.slice(1).join(' ') === 'me a sandwich') return 'Okay.'
+      return `[sudo] password for ${profile.handle}: \n${c('red', `${profile.handle} is not in the sudoers file. This incident will be reported.`)}`
+    },
+  },
+  su: { desc: 'switch user', hidden: true, run: () => c('red', 'su: Authentication failure (there is no root here, only vibes)') },
+  vim: { desc: 'editor', hidden: true, run: () => 'You are now trapped in vim. Just kidding: this filesystem is read-only. Type :q anyway, it helps.' },
+  nvim: { desc: 'editor', hidden: true, run: (ctx) => commands.vim.run(ctx) },
+  nano: { desc: 'editor', hidden: true, run: () => 'nano: read-only filesystem. Try `echo text > /tmp/notes`.' },
+  emacs: { desc: 'operating system', hidden: true, run: () => 'emacs: you already have an operating system open.' },
+  ':q': { desc: 'quit vim', hidden: true, run: () => 'Freedom.' },
+  curl: { desc: 'no network', hidden: true, run: () => c('yellow', 'curl: outbound network is disabled in this sandbox. Try `recent` for live data.') },
+  wget: { desc: 'no network', hidden: true, run: (ctx) => commands.curl.run(ctx) },
+  ssh: { desc: 'no', hidden: true, run: () => c('yellow', 'ssh: you are already inside the only machine here.') },
+  ping: {
+    desc: 'ping a host',
+    hidden: true,
+    run: ({ args }) => {
+      const host = args[0] ?? 'mennovanleeuwen.nl'
+      return [`PING ${host}: 56 data bytes`, ...[1, 2, 3].map((i) => `64 bytes from ${host}: icmp_seq=${i} ttl=64 time=${(Math.random() * 3 + 0.2).toFixed(3)} ms`), c('muted', '(simulated; browsers cannot send ICMP)')].join('\n')
+    },
+  },
+  shutdown: { desc: 'power off', hidden: true, run: () => 'Shutting down... no. Close the tab like everyone else.' },
+  reboot: {
+    desc: 'reload the page',
+    hidden: true,
+    run: () => {
+      setTimeout(() => location.reload(), 600)
+      return 'Rebooting mvlOS...'
+    },
+  },
+  headlines: { desc: 'what the sticky note says', hidden: true, run: () => headlines.map((h) => `• ${h}`).join('\n') },
+}
+
+function writeTmp(cwd: string, target: string, content: string, append: boolean) {
+  const abs = resolvePath(cwd, target)
+  if (!abs.startsWith('/tmp/') || abs.slice(5).includes('/')) throw new CmdError(`${target}: Read-only file system (only /tmp is writable)`)
+  const name = abs.slice(5)
+  const existing = tmp().children.get(name)
+  const prev = existing?.type === 'file' ? existing.content() : ''
+  const next = append && prev ? `${prev}\n${content}` : content
+  tmp().children.set(name, { type: 'file', name, content: () => next })
+}
+
+// ---------------------------------------------------------------------------
+// Parsing: quotes, $VARS, pipes, `;`/`&&`, and `>`/`>>` into /tmp.
+
+function tokenize(line: string, env: Record<string, string>): string[] {
+  const out: string[] = []
+  let cur = ''
+  let quote: '"' | "'" | null = null
+  let has = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (quote) {
+      if (ch === quote) quote = null
+      else if (ch === '$' && quote === '"') {
+        const m = /^\$(\w+|\{\w+\})/.exec(line.slice(i))
+        if (m) {
+          cur += env[m[1].replace(/[{}]/g, '')] ?? ''
+          i += m[0].length - 1
+        } else cur += ch
+      } else cur += ch
+    } else if (ch === '"' || ch === "'") {
+      quote = ch
+      has = true
+    } else if (/\s/.test(ch)) {
+      if (cur || has) out.push(cur)
+      cur = ''
+      has = false
+    } else if (ch === '$') {
+      const m = /^\$(\w+|\{\w+\}|\?)/.exec(line.slice(i))
+      if (m) {
+        cur += env[m[1].replace(/[{}]/g, '')] ?? ''
+        i += m[0].length - 1
+        has = true
+      } else cur += ch
+    } else cur += ch
+  }
+  if (quote) throw new CmdError('msh: unterminated quote')
+  if (cur || has) out.push(cur)
+  return out
+}
+
+/** Splits on an unquoted separator. */
+function splitTop(line: string, sep: RegExp, seps: string[] = []): string[] {
+  const parts: string[] = []
+  let cur = ''
+  let quote: string | null = null
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (quote) {
+      if (ch === quote) quote = null
+      cur += ch
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      cur += ch
+      continue
+    }
+    const m = sep.exec(line.slice(i))
+    if (m && m.index === 0) {
+      seps.push(m[0])
+      parts.push(cur)
+      cur = ''
+      i += m[0].length - 1
+      continue
+    }
+    cur += ch
+  }
+  parts.push(cur)
+  return parts
+}
+
+export type RunResult = { output: string; ok: boolean }
+
+export async function runLine(line: string, base: Omit<Ctx, 'args' | 'stdin'>): Promise<RunResult[]> {
+  const results: RunResult[] = []
+  // `;` always continues, `&&` stops after a failure.
+  const ops: string[] = []
+  const sequence = splitTop(line, /^(;|&&)/, ops)
+  for (let s = 0; s < sequence.length; s++) {
+    const stmt = sequence[s].trim()
+    if (!stmt) continue
+    const res = await runPipeline(stmt, base)
+    results.push(res)
+    base.env['?'] = res.ok ? '0' : '1'
+    if (!res.ok && ops[s] === '&&') break
+  }
+  return results
+}
+
+async function runPipeline(stmt: string, base: Omit<Ctx, 'args' | 'stdin'>): Promise<RunResult> {
+  let redirect: { target: string; append: boolean } | null = null
+  const ops: string[] = []
+  const redir = splitTop(stmt, /^>>?/, ops)
+  if (redir.length > 1) {
+    redirect = { target: redir[redir.length - 1].trim(), append: ops[ops.length - 1] === '>>' }
+    stmt = redir[0]
+    if (!redirect.target) return { output: c('red', 'msh: syntax error near `>`'), ok: false }
+  }
+
+  const stages = splitTop(stmt, /^\|/)
+  let stdin: string | null = null
+  let rendered = ''
+  try {
+    for (const stage of stages) {
+      const [name, ...args] = tokenize(stage.trim(), base.env)
+      if (!name) throw new CmdError('msh: syntax error near `|`')
+      const cmd = commands[name]
+      if (!cmd) throw new CmdError(`msh: command not found: ${name}${name.length > 2 ? suggest(name) : ''}`)
+      const out = (await cmd.run({ ...base, args, stdin })) ?? ''
+      rendered = out
+      stdin = strip(out)
+    }
+    if (redirect) {
+      writeTmp(base.cwd, redirect.target, stdin ?? '', redirect.append)
+      return { output: '', ok: true }
+    }
+    return { output: rendered, ok: true }
+  } catch (err) {
+    const msg = err instanceof CmdError ? err.message : `msh: ${(err as Error).message}`
+    return { output: c('red', msg), ok: false }
+  }
+}
+
+function suggest(name: string) {
+  const near = Object.keys(commands).find((k) => !commands[k].hidden && levenshtein(k, name) <= 1)
+  return near ? `. Did you mean '${near}'?` : ''
+}
+
+function levenshtein(a: string, b: string) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)])
+  for (let j = 1; j <= b.length; j++) d[0][j] = j
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+  return d[a.length][b.length]
+}
+
+/** Tab completion: commands for the first word, paths (and app names after `open`) for the rest. */
+export function complete(line: string, cwd: string): { line: string; options: string[] } {
+  const m = /^(.*?)(\S*)$/.exec(line)!
+  const [, before, word] = m
+  const isFirst = !before.trim() || /(\||;|&&)\s*$/.test(before)
+  let candidates: string[]
+  if (isFirst) {
+    candidates = Object.keys(commands).filter((k) => !commands[k].hidden && k.startsWith(word))
+  } else {
+    const slash = word.lastIndexOf('/')
+    const dirPart = slash >= 0 ? word.slice(0, slash + 1) : ''
+    const namePart = word.slice(slash + 1)
+    const dirNode = lookup(resolvePath(cwd, dirPart || '.'))
+    candidates =
+      dirNode?.type === 'dir'
+        ? [...dirNode.children.values()].filter((n) => n.name.startsWith(namePart) && (namePart.startsWith('.') || !n.name.startsWith('.'))).map((n) => dirPart + n.name + (n.type === 'dir' ? '/' : ''))
+        : []
+    if (/^\s*open\s+$/.test(before) && !dirPart) candidates.push(...Object.keys(APPS).filter((a) => a.startsWith(word) && !candidates.includes(a)))
+  }
+  if (candidates.length === 1) {
+    const done = candidates[0]
+    return { line: before + done + (done.endsWith('/') ? '' : ' '), options: [] }
+  }
+  if (candidates.length > 1) {
+    let prefix = candidates[0]
+    for (const cand of candidates) while (!cand.startsWith(prefix)) prefix = prefix.slice(0, -1)
+    return { line: before + (prefix.length > word.length ? prefix : word), options: candidates.map((x) => x.split('/').filter(Boolean).pop()! + (x.endsWith('/') ? '/' : '')) }
+  }
+  return { line, options: [] }
+}

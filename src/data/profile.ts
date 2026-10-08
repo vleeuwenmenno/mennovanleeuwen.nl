@@ -1,0 +1,202 @@
+// Everything the site says about Menno lives in this file. The terminal's
+// virtual filesystem, the Projects app and the sticky note are all built from it.
+
+export const profile = {
+  name: 'Menno van Leeuwen',
+  handle: 'menno',
+  role: 'DevOps Engineer',
+  company: 'DiscountOffice',
+  location: 'The Netherlands',
+  /** Shown as the system uptime in the terminal */
+  born: '1996-09-19',
+  email: 'menno@vleeuwen.me',
+  github: 'vleeuwenmenno',
+  links: [
+    { label: 'GitHub', url: 'https://github.com/vleeuwenmenno' },
+    { label: 'Forgejo', url: 'https://git.mvl.sh/vleeuwenmenno' },
+    { label: 'mvl.sh', url: 'https://mvl.sh' },
+  ],
+  summary:
+    'DevOps engineer who keeps production boring and side projects interesting. ' +
+    'I build infrastructure tooling, desktop apps and the occasional web product, ' +
+    'mostly in Go, Rust, TypeScript and QML, from a Linux desktop I configured myself.',
+  favourites: {
+    platform: 'NixOS / Arch (Omarchy)',
+    languages: ['Go', 'TypeScript / React', 'Rust'],
+  },
+}
+
+export const headlines = [
+  'DevOps Engineer @ DiscountOffice',
+  'Shipped Boltwarden: a desktop Bitwarden client',
+  'Building Pepper: infra graphs without YAML',
+  'Savuvo: personal finance, calmly',
+  'Contributor to the Omarchy shell ecosystem',
+]
+
+export type Project = {
+  slug: string
+  name: string
+  tagline: string
+  description: string
+  highlights: string[]
+  stack: string[]
+  url?: string
+  repo?: string
+  status: string
+  accent: string
+  /** GitHub "owner/name", used for live stars and activity */
+  github?: string
+}
+
+export const projects: Project[] = [
+  {
+    slug: 'boltwarden',
+    name: 'Boltwarden',
+    tagline: 'Your Vaultwarden or Bitwarden vault on your desktop',
+    description:
+      'A free, unofficial desktop app and browser extension for Vaultwarden and Bitwarden. ' +
+      'One unlock covers the desktop app and the browser, the vault stays on your machine, ' +
+      'and there is no tracking, subscription or cloud copy of your data.',
+    highlights: [
+      'Single unlock shared by the desktop app and the browser extension',
+      'Quick access popup with keyboard shortcuts',
+      'Autofill for passwords, TOTP codes, cards and passkeys',
+      'SSH agent backed by keys stored in the vault',
+      'Vault health: weak and reused password detection',
+      'Offline access through an encrypted local cache',
+      'Runs on Linux, Windows 11 and macOS; extensions for Firefox and Chrome',
+    ],
+    stack: ['Rust', 'TypeScript', 'WebExtensions'],
+    url: 'https://boltwarden.org/',
+    repo: 'https://github.com/vleeuwenmenno/boltwarden',
+    github: 'vleeuwenmenno/boltwarden',
+    status: 'Active development',
+    accent: '#5b9cff',
+  },
+  {
+    slug: 'savuvo',
+    name: 'Savuvo',
+    tagline: 'A calm view of where your money is heading',
+    description:
+      'A personal finance tracker built around planning rather than bookkeeping. ' +
+      'Budgets, planned transactions and savings goals feed a forecast of how the month ' +
+      'will end, shared across a household if you want.',
+    highlights: [
+      'Budgets, planned transactions and savings goals',
+      'Month-end and four-week forecasts',
+      'Household spaces for shared finances',
+      'Multi-currency accounts and subscriptions',
+      'AI assistant and receipt scanning, answering only from your own data',
+      'Available in English, Dutch and German',
+    ],
+    stack: ['React', 'TypeScript', 'PWA'],
+    url: 'https://savuvo.nl/',
+    status: 'Live',
+    accent: '#3fcf8e',
+  },
+  {
+    slug: 'pepper',
+    name: 'Pepper',
+    tagline: 'Deterministic infrastructure graphs without YAML',
+    description:
+      'Configuration management that turns Starlark into a deterministic per-node ' +
+      'deployment graph and applies it to Linux machines through a clustered ' +
+      'controller with active-passive failover.',
+    highlights: [
+      'State defined in Starlark instead of templated YAML',
+      'Master/minion cluster with high availability and failover',
+      'Secrets from 1Password, Bitwarden or age, injected by the operator',
+      '"Blends" share per-node configuration across states and templates',
+      'gRPC provider SDK and an extension catalog (packages, services, mounts, containers)',
+      'Migration tooling from SaltStack',
+    ],
+    stack: ['Go', 'Starlark', 'gRPC', 'Protobuf'],
+    url: 'https://pepper.mvl.sh/',
+    repo: 'https://git.mvl.sh/pepper',
+    status: 'Active development',
+    accent: '#ff6b5b',
+  },
+  {
+    slug: 'omasoloist',
+    name: 'Omasoloist',
+    tagline: 'Lossless Spotify with a tiny footprint',
+    description:
+      'A Spotify client for the Omarchy shell built on the new Spotify soloist daemon. ' +
+      'Lossless playback without an Electron window eating your RAM and VRAM.',
+    highlights: [
+      'Native Quickshell / QML interface that fits the Omarchy desktop',
+      'Talks to the soloist daemon for lossless playback',
+      'Minimal memory and GPU usage compared to the official client',
+    ],
+    stack: ['QML', 'Quickshell'],
+    repo: 'https://github.com/vleeuwenmenno/omasoloist',
+    github: 'vleeuwenmenno/omasoloist',
+    status: 'Active development',
+    accent: '#1ed760',
+  },
+]
+
+export type Contribution = {
+  slug: string
+  name: string
+  owner: string
+  description: string
+  repo: string
+  url?: string
+  github: string
+  accent: string
+  work: string[]
+}
+
+export const contributions: Contribution[] = [
+  {
+    slug: 'omarchy-spotlight',
+    name: 'Omarchy Spotlight',
+    owner: 'maajix',
+    description:
+      'Raycast-style command palette for Omarchy: apps, windows, calculator, reminders, ' +
+      'calendar events, file search, web search and more.',
+    repo: 'https://github.com/maajix/omarchy-spotlight',
+    url: 'https://maajix.github.io/omarchy-spotlight/',
+    github: 'maajix/omarchy-spotlight',
+    accent: '#e0af68',
+    work: [
+      'In-app settings panel covering every writable key, with debounced saves',
+      'Mixed-currency calculator expressions',
+      'Serialized settings writes that surface save failures',
+    ],
+  },
+  {
+    slug: 'omarchy-omafile',
+    name: 'Omafile',
+    owner: 'chr0nzz',
+    description: 'A file manager for the Omarchy shell.',
+    repo: 'https://github.com/chr0nzz/omarchy-omafile',
+    url: 'https://omarchy.xyzlab.dev/omafile/',
+    github: 'chr0nzz/omarchy-omafile',
+    accent: '#7dcfff',
+    work: [
+      'Redesigned properties dialog with tabs, "Opens with" and editable permissions',
+      'Drag to reorder sidebar rows and sections',
+      'Open-with menu with app icons and an always-open-with option',
+      'Regrouped context menu with permanent delete behind Shift',
+    ],
+  },
+]
+
+export const skills = {
+  Languages: ['Go', 'TypeScript', 'Rust', 'Python', 'QML', 'Starlark', 'Bash'],
+  Infrastructure: ['Linux', 'NixOS', 'Docker / Podman', 'Incus / LXD', 'SaltStack', 'CI/CD'],
+  Frontend: ['React', 'Vite', 'PWA', 'WebExtensions', 'Quickshell'],
+}
+
+// Fill in the rest of your work history here; the CV app and `cat cv.md` read it.
+export const experience = [
+  {
+    role: 'DevOps Engineer',
+    company: 'DiscountOffice',
+    period: 'Present',
+    notes: ['Infrastructure, deployment pipelines and keeping production calm.'],
+  },
+]

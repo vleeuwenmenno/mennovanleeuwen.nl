@@ -1,0 +1,688 @@
+{
+  "generatedAt": "2026-10-08T16:27:51.943Z",
+  "items": [
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T14:03:00Z",
+      "id": "gh-16733978551",
+      "kind": "pr",
+      "title": "Opened PR #53",
+      "detail": "feat/password-generator",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/pull/53"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T14:02:31Z",
+      "id": "gh-16733932832",
+      "kind": "issue",
+      "title": "Opened issue #52",
+      "detail": "Quick-access command to generate and copy a password",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/52"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T13:37:58Z",
+      "id": "gh-16731773100",
+      "kind": "issue",
+      "title": "Closed issue #44",
+      "detail": "Epic: Breach monitoring with Have I Been Pwned (free and anonymous)",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/44"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T13:37:56Z",
+      "id": "gh-16744026767",
+      "kind": "comment",
+      "title": "Commented on #44",
+      "detail": "Epic: Breach monitoring with Have I Been Pwned (free and anonymous)",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/44#issuecomment-6061111701"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T13:36:03Z",
+      "id": "gh-16731603407",
+      "kind": "issue",
+      "title": "Closed issue #50",
+      "detail": "Show breaches that leaked personal data but no passwords",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/50"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T13:36:02Z",
+      "id": "gh-16731602362",
+      "kind": "issue",
+      "title": "Closed issue #45",
+      "detail": "Exposed passwords check via Pwned Passwords k-anonymity API (opt-in)",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/45"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T13:10:23Z",
+      "id": "gh-23376218041",
+      "kind": "push",
+      "title": "Pushed to feat/exposed-passwords",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/commit/494a31acb6dd55533c0c1b6b64bf606f3de83716"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T13:08:57Z",
+      "id": "gh-16729118572",
+      "kind": "pr",
+      "title": "Opened PR #51",
+      "detail": "feat/data-breaches",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/pull/51"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T13:04:23Z",
+      "id": "gh-16728822534",
+      "kind": "issue",
+      "title": "Opened issue #50",
+      "detail": "Show breaches that leaked personal data but no passwords",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/50"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T12:51:24Z",
+      "id": "gh-16728167073",
+      "kind": "pr",
+      "title": "Opened PR #49",
+      "detail": "feat/exposed-passwords",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/pull/49"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T12:35:53Z",
+      "id": "gh-16727376211",
+      "kind": "issue",
+      "title": "Closed issue #46",
+      "detail": "Breached websites check via the public HIBP breach list",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/46"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T10:30:02Z",
+      "id": "gh-23363877835",
+      "kind": "push",
+      "title": "Pushed to main",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/commit/c8ec54c31bc7b326c2ff0c28983a8aa5d8c50206"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T10:19:47Z",
+      "id": "gh-16719073364",
+      "kind": "pr",
+      "title": "Opened PR #48",
+      "detail": "chore/agents-issue-workflow",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/pull/48"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T10:19:43Z",
+      "id": "gh-16719068101",
+      "kind": "pr",
+      "title": "Opened PR #47",
+      "detail": "feat/breached-websites",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/pull/47"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T10:11:03Z",
+      "id": "gh-16718584458",
+      "kind": "issue",
+      "title": "Opened issue #46",
+      "detail": "Breached websites check via the public HIBP breach list",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/46"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T10:11:03Z",
+      "id": "gh-16718583950",
+      "kind": "issue",
+      "title": "Opened issue #45",
+      "detail": "Exposed passwords check via Pwned Passwords k-anonymity API (opt-in)",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/45"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T10:10:52Z",
+      "id": "gh-16718574287",
+      "kind": "issue",
+      "title": "Opened issue #44",
+      "detail": "Epic: Breach monitoring with Have I Been Pwned (free and anonymous)",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/44"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T10:10:51Z",
+      "id": "gh-16718573598",
+      "kind": "issue",
+      "title": "Opened issue #43",
+      "detail": "Card and identity item editors",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/43"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T10:10:49Z",
+      "id": "gh-16718572784",
+      "kind": "issue",
+      "title": "Opened issue #42",
+      "detail": "Password generator options and passphrases on the desktop",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/42"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T10:10:48Z",
+      "id": "gh-16718571771",
+      "kind": "issue",
+      "title": "Opened issue #41",
+      "detail": "File attachments: view, download, upload and delete",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/41"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T10:05:02Z",
+      "id": "gh-16718261389",
+      "kind": "issue",
+      "title": "Opened issue #39",
+      "detail": "Windows: unlock at app start with a Windows Hello-bound key",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/39"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T10:04:53Z",
+      "id": "gh-16718254735",
+      "kind": "issue",
+      "title": "Opened issue #35",
+      "detail": "System unlock on Linux with polkit (password or fingerprint)",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/35"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T10:04:28Z",
+      "id": "gh-16718234389",
+      "kind": "issue",
+      "title": "Opened issue #40",
+      "detail": "macOS: unlock at app start with a biometry-bound keychain item",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/40"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T10:04:26Z",
+      "id": "gh-16718231665",
+      "kind": "issue",
+      "title": "Opened issue #38",
+      "detail": "Use system authentication for reprompts and approvals",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/38"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T10:04:16Z",
+      "id": "gh-16718221069",
+      "kind": "issue",
+      "title": "Opened issue #33",
+      "detail": "Epic: Unlock with fingerprint and system authentication",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/33"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T10:03:43Z",
+      "id": "gh-16718194934",
+      "kind": "issue",
+      "title": "Opened issue #37",
+      "detail": "System unlock on macOS with Touch ID",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/37"
+    },
+    {
+      "source": "github",
+      "repo": "vleeuwenmenno/boltwarden",
+      "date": "2026-10-08T10:03:42Z",
+      "id": "gh-16718194201",
+      "kind": "issue",
+      "title": "Opened issue #36",
+      "detail": "System unlock on Windows with Windows Hello",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/issues/36"
+    },
+    {
+      "id": "ghrel-405615869",
+      "source": "github",
+      "kind": "release",
+      "repo": "vleeuwenmenno/boltwarden",
+      "title": "Released Boltwarden 1.0.0-rc.3",
+      "detail": "## What's Changed",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/releases/tag/v1.0.0-rc.3",
+      "date": "2026-10-07T11:40:11Z"
+    },
+    {
+      "id": "ghrel-404855604",
+      "source": "github",
+      "kind": "release",
+      "repo": "vleeuwenmenno/boltwarden",
+      "title": "Released Boltwarden browser extension 0.5.8",
+      "detail": "## What's Changed",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/releases/tag/extension-v0.5.8",
+      "date": "2026-10-06T15:06:52Z"
+    },
+    {
+      "id": "ghrel-404828169",
+      "source": "github",
+      "kind": "release",
+      "repo": "vleeuwenmenno/boltwarden",
+      "title": "Released Boltwarden 1.0.0-rc.2",
+      "detail": "## What's Changed",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/releases/tag/v1.0.0-rc.2",
+      "date": "2026-10-06T14:57:58Z"
+    },
+    {
+      "id": "ghrel-401816471",
+      "source": "github",
+      "kind": "release",
+      "repo": "vleeuwenmenno/boltwarden",
+      "title": "Released Boltwarden 1.0.0-rc.1",
+      "detail": "# Boltwarden 1.0.0-rc.1 / browser extension 0.5.6",
+      "url": "https://github.com/vleeuwenmenno/boltwarden/releases/tag/v1.0.0-rc.1",
+      "date": "2026-10-02T13:06:30Z"
+    },
+    {
+      "id": "ghrel-400142956",
+      "source": "github",
+      "kind": "release",
+      "repo": "vleeuwenmenno/omasoloist",
+      "title": "Released OmaSoloist 0.4.0",
+      "detail": "## OmaSoloist 0.4.0",
+      "url": "https://github.com/vleeuwenmenno/omasoloist/releases/tag/v0.4.0",
+      "date": "2026-09-30T14:43:19Z"
+    },
+    {
+      "id": "ghrel-399519958",
+      "source": "github",
+      "kind": "release",
+      "repo": "vleeuwenmenno/omasoloist",
+      "title": "Released OmaSoloist 0.3.5",
+      "detail": "## OmaSoloist 0.3.5",
+      "url": "https://github.com/vleeuwenmenno/omasoloist/releases/tag/v0.3.5",
+      "date": "2026-09-29T20:53:27Z"
+    },
+    {
+      "id": "ghrel-399261870",
+      "source": "github",
+      "kind": "release",
+      "repo": "vleeuwenmenno/omasoloist",
+      "title": "Released OmaSoloist 0.3.4",
+      "detail": "## OmaSoloist 0.3.4",
+      "url": "https://github.com/vleeuwenmenno/omasoloist/releases/tag/v0.3.4",
+      "date": "2026-09-29T15:04:32Z"
+    },
+    {
+      "id": "fj-5900",
+      "source": "forgejo",
+      "kind": "release",
+      "repo": "pepper/docs",
+      "title": "Released v0.1.20",
+      "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.20",
+      "date": "2026-09-23T15:01:07.000Z"
+    },
+    {
+      "id": "fj-5898",
+      "source": "forgejo",
+      "kind": "release",
+      "repo": "pepper/cli",
+      "title": "Released v0.22.0",
+      "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.22.0",
+      "date": "2026-09-23T15:00:35.000Z"
+    },
+    {
+      "id": "fj-5896",
+      "source": "forgejo",
+      "kind": "release",
+      "repo": "pepper/core",
+      "title": "Released v2.4.1",
+      "url": "https://git.mvl.sh/pepper/core/releases/tag/v2.4.1",
+      "date": "2026-09-23T14:59:41.000Z"
+    },
+    {
+      "id": "fj-5894",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/pepper",
+      "title": "Pushed 1 commit to main",
+      "detail": "chore(release): prepare core 2.4.1, CLI 0.22.0, and docs 0.1.20",
+      "url": "https://git.mvl.sh/pepper/pepper/commit/72d6ce4f475448fd2bf7fbde76225f32008b2f76",
+      "date": "2026-09-23T14:58:43.000Z"
+    },
+    {
+      "id": "fj-5890",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/docs",
+      "title": "Pushed 1 commit to main",
+      "detail": "docs: describe live state progress and live event bounds",
+      "url": "https://git.mvl.sh/pepper/docs/commit/30caf3230f2cea6c7e15a21c65c4baaee9b7ba1d",
+      "date": "2026-09-23T14:58:01.000Z"
+    },
+    {
+      "id": "fj-5886",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/cli",
+      "title": "Pushed 4 commits to main",
+      "detail": "test(cli): isolate the suite from the host machine",
+      "url": "https://git.mvl.sh/pepper/cli/commit/b0f23e29b068e50237bd273e61dbbe898ddd9deb",
+      "date": "2026-09-23T14:57:59.000Z"
+    },
+    {
+      "id": "fj-5882",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/core",
+      "title": "Pushed 1 commit to main",
+      "detail": "feat(command): bound streamed command output",
+      "url": "https://git.mvl.sh/pepper/core/commit/fc61f649733ee7464f9edc610710aa3f82228a17",
+      "date": "2026-09-23T14:57:57.000Z"
+    },
+    {
+      "id": "fj-5875",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/pepper",
+      "title": "Pushed 1 commit to main",
+      "detail": "chore: pin CLI and docs patch releases",
+      "url": "https://git.mvl.sh/pepper/pepper/commit/6f12af71af120f37a17758a8736fe0a3d5f72ef3",
+      "date": "2026-09-23T11:54:07.000Z"
+    },
+    {
+      "id": "fj-5873",
+      "source": "forgejo",
+      "kind": "release",
+      "repo": "pepper/docs",
+      "title": "Released v0.1.19",
+      "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.19",
+      "date": "2026-09-23T11:53:44.000Z"
+    },
+    {
+      "id": "fj-5871",
+      "source": "forgejo",
+      "kind": "release",
+      "repo": "pepper/cli",
+      "title": "Released v0.21.1",
+      "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.21.1",
+      "date": "2026-09-23T11:53:23.000Z"
+    },
+    {
+      "id": "fj-5867",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/docs",
+      "title": "Pushed 1 commit to main",
+      "detail": "docs: clarify unprivileged state LSP startup",
+      "url": "https://git.mvl.sh/pepper/docs/commit/ed528079c23e52f0f8534d2479b72e37325ba995",
+      "date": "2026-09-23T11:52:35.000Z"
+    },
+    {
+      "id": "fj-5863",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/cli",
+      "title": "Pushed 1 commit to main",
+      "detail": "fix: defer inaccessible extension store reads",
+      "url": "https://git.mvl.sh/pepper/cli/commit/f9b80e2e17c4cfeb95a0bfa9d542a49327bea9cd",
+      "date": "2026-09-23T11:52:18.000Z"
+    },
+    {
+      "id": "fj-5858",
+      "source": "forgejo",
+      "kind": "release",
+      "repo": "pepper/docs",
+      "title": "Released v0.1.18",
+      "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.18",
+      "date": "2026-09-22T20:54:57.000Z"
+    },
+    {
+      "id": "fj-5856",
+      "source": "forgejo",
+      "kind": "release",
+      "repo": "pepper/cli",
+      "title": "Released v0.21.0",
+      "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.21.0",
+      "date": "2026-09-22T20:54:11.000Z"
+    },
+    {
+      "id": "fj-5854",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/pepper",
+      "title": "Pushed 1 commit to main",
+      "detail": "chore(release): prepare CLI 0.21.0 and docs 0.1.18",
+      "url": "https://git.mvl.sh/pepper/pepper/commit/4b3386a07566c26fcd7feff27470bb3a595cf93d",
+      "date": "2026-09-22T20:52:27.000Z"
+    },
+    {
+      "id": "fj-5850",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/docs",
+      "title": "Pushed 1 commit to main",
+      "detail": "docs: document pepper update",
+      "url": "https://git.mvl.sh/pepper/docs/commit/e420bbccf20c33fc6222a238b689a20172a9383e",
+      "date": "2026-09-22T20:52:18.000Z"
+    },
+    {
+      "id": "fj-5846",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/cli",
+      "title": "Pushed 1 commit to main",
+      "detail": "feat(cli): add verified self update command",
+      "url": "https://git.mvl.sh/pepper/cli/commit/d0c109b85e8acb0f9b8aeca25650a0d15203b6a9",
+      "date": "2026-09-22T20:51:57.000Z"
+    },
+    {
+      "id": "fj-5844",
+      "source": "forgejo",
+      "kind": "release",
+      "repo": "pepper/docs",
+      "title": "Released v0.1.17",
+      "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.17",
+      "date": "2026-09-22T20:21:58.000Z"
+    },
+    {
+      "id": "fj-5842",
+      "source": "forgejo",
+      "kind": "release",
+      "repo": "pepper/cli",
+      "title": "Released v0.20.0",
+      "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.20.0",
+      "date": "2026-09-22T20:20:58.000Z"
+    },
+    {
+      "id": "fj-5836",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/pepper",
+      "title": "Pushed 2 commits to main",
+      "detail": "chore(release): prepare CLI 0.20.0 and docs 0.1.17",
+      "url": "https://git.mvl.sh/pepper/pepper/commit/f7413cd9172cb3afb7da435c0bfd25d96554c980",
+      "date": "2026-09-22T20:16:38.000Z"
+    },
+    {
+      "id": "fj-5834",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/docs",
+      "title": "Pushed 1 commit to main",
+      "detail": "docs: explain source attribution in state output",
+      "url": "https://git.mvl.sh/pepper/docs/commit/834116c940c25edbf06699ae0341f09146aedba2",
+      "date": "2026-09-22T20:16:35.000Z"
+    },
+    {
+      "id": "fj-5832",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/cli",
+      "title": "Pushed 1 commit to main",
+      "detail": "feat(state): show declaring source locations in output cards",
+      "url": "https://git.mvl.sh/pepper/cli/commit/d095a122059b74dea9979e510e52b72cade12638",
+      "date": "2026-09-22T20:16:33.000Z"
+    },
+    {
+      "id": "fj-5827",
+      "source": "forgejo",
+      "kind": "release",
+      "repo": "pepper/docs",
+      "title": "Released v0.1.16",
+      "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.16",
+      "date": "2026-09-22T14:04:40.000Z"
+    },
+    {
+      "id": "fj-5825",
+      "source": "forgejo",
+      "kind": "release",
+      "repo": "pepper/cli",
+      "title": "Released v0.19.0",
+      "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.19.0",
+      "date": "2026-09-22T14:03:00.000Z"
+    },
+    {
+      "id": "fj-5823",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/pepper",
+      "title": "Pushed 3 commits to main",
+      "detail": "merge: retain remote workspace history with published release pins",
+      "url": "https://git.mvl.sh/pepper/pepper/commit/b6cdb0c46fa20418c10b997c70832b29acdbb2e2",
+      "date": "2026-09-22T14:02:58.000Z"
+    },
+    {
+      "id": "fj-5818",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/docs",
+      "title": "Pushed 2 commits to main",
+      "detail": "docs: explain quiet defaults and state outcome diagnostics",
+      "url": "https://git.mvl.sh/pepper/docs/commit/7d1f2bdeccd77783befa3232838758a95cc27820",
+      "date": "2026-09-22T14:01:36.000Z"
+    },
+    {
+      "id": "fj-5814",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/cli",
+      "title": "Pushed 2 commits to main",
+      "detail": "feat(state): add quiet output defaults and safe blocker diagnostics",
+      "url": "https://git.mvl.sh/pepper/cli/commit/495cb26b06758cbf3bf76b1ea30b3f41a87d90eb",
+      "date": "2026-09-22T14:01:25.000Z"
+    },
+    {
+      "id": "fj-5811",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/pepper",
+      "title": "Pushed 1 commit to main",
+      "detail": "fix(lsp): pin lazy extension store lookup",
+      "url": "https://git.mvl.sh/pepper/pepper/commit/9e6ab8a44012872017ece685e750071028faaa1f",
+      "date": "2026-09-22T12:31:22.000Z"
+    },
+    {
+      "id": "fj-5797",
+      "source": "forgejo",
+      "kind": "release",
+      "repo": "pepper/docs",
+      "title": "Released v0.1.15",
+      "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.15",
+      "date": "2026-09-19T20:41:37.000Z"
+    },
+    {
+      "id": "fj-5793",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/pepper",
+      "title": "Pushed 1 commit to main",
+      "detail": "chore(release): publish docs 0.1.15",
+      "url": "https://git.mvl.sh/pepper/pepper/commit/273dd20a0c0f4644af136287484c78b3b0cda5db",
+      "date": "2026-09-19T20:40:23.000Z"
+    },
+    {
+      "id": "fj-5791",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/docs",
+      "title": "Pushed 1 commit to main",
+      "detail": "docs: add Password Store setup guide",
+      "url": "https://git.mvl.sh/pepper/docs/commit/1deb89cfb4732fbcb7228a6fcaa942e7f421aa41",
+      "date": "2026-09-19T20:39:52.000Z"
+    },
+    {
+      "id": "fj-5785",
+      "source": "forgejo",
+      "kind": "release",
+      "repo": "pepper/docs",
+      "title": "Released v0.1.14",
+      "url": "https://git.mvl.sh/pepper/docs/releases/tag/v0.1.14",
+      "date": "2026-09-18T23:29:30.000Z"
+    },
+    {
+      "id": "fj-5781",
+      "source": "forgejo",
+      "kind": "release",
+      "repo": "pepper/cli",
+      "title": "Released v0.18.0",
+      "url": "https://git.mvl.sh/pepper/cli/releases/tag/v0.18.0",
+      "date": "2026-09-18T23:22:42.000Z"
+    },
+    {
+      "id": "fj-5779",
+      "source": "forgejo",
+      "kind": "release",
+      "repo": "pepper/core",
+      "title": "Released v2.4.0",
+      "url": "https://git.mvl.sh/pepper/core/releases/tag/v2.4.0",
+      "date": "2026-09-18T23:21:29.000Z"
+    },
+    {
+      "id": "fj-5777",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/pepper",
+      "title": "Pushed 1 commit to main",
+      "detail": "chore(release): prepare Core 2.4.0, CLI 0.18.0, and docs 0.1.14",
+      "url": "https://git.mvl.sh/pepper/pepper/commit/e38eda306d10fcc6a26ae244ba97a31080230219",
+      "date": "2026-09-18T23:18:41.000Z"
+    },
+    {
+      "id": "fj-5773",
+      "source": "forgejo",
+      "kind": "push",
+      "repo": "pepper/cli",
+      "title": "Pushed 1 commit to main",
+      "detail": "feat(state): add deferred command output, pass secrets, and complete previews",
+      "url": "https://git.mvl.sh/pepper/cli/commit/5e770a2f11bbc088265daa62ae584304c1b211a8",
+      "date": "2026-09-18T23:18:30.000Z"
+    }
+  ]
+}
