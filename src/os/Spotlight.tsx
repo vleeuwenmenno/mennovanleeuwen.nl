@@ -13,6 +13,8 @@ import { age, HOME, lookup, prettyPath, walk } from '../terminal/vfs'
 import { signIn, useAccount } from './account'
 import { APP_META } from './apps'
 import { useCodeSearch } from './codeSearch'
+import { openContextMenu } from './ContextMenu'
+import { isDockableApp, linkDockId, pinLink, pinToDock, unpinFromDock, useCanCustomizeDock, useDock, type DockId } from './dockItems'
 import { revealEmail } from '../data/email'
 import { cachedRates, loadRates, smartCalc, type CalcResult } from './smartcalc'
 import { resetLayout } from './desktopStore'
@@ -42,6 +44,8 @@ type Result = {
   preview?: () => ReactNode
   /** Tab fills the search box with this, e.g. "owner/repo" so # or @ can follow */
   complete?: string
+  /** A web page this result can be pinned to the dock as (repositories) */
+  link?: { label: string; url: string }
 }
 
 const Glyph = ({ children, color = 'var(--panel-2)' }: { children: ReactNode; color?: string }) => (
@@ -293,6 +297,7 @@ function codeRow(h: Hit, open: (url: string) => void, copy: (text: string, label
       enterLabel: 'Open',
       alt: { label: 'Copy clone command', run: () => copy(`git clone ${h.cloneUrl}`, 'clone command') },
       complete: h.fullName,
+      link: { label: h.fullName.split('/').pop()!, url: h.url },
       preview: () => <RepoPreview r={h} />,
     }
   if (h.kind === 'branch')
@@ -335,6 +340,8 @@ export function Spotlight() {
   const notes = useAllNotes()
   const launchers = useLaunchers()
   const code = useCodeSearch(q)
+  const dock = useDock()
+  const canPin = useCanCustomizeDock()
   const close = () => setOverlay(null)
   const openUrl = (url: string) => window.open(url, '_blank', 'noopener')
 
@@ -689,7 +696,32 @@ export function Spotlight() {
     return () => clearTimeout(t)
   }, [flash])
 
+  /** Pin or unpin: apps, your launchers and repositories (as a launcher). Signed in only. */
+  const pinFor = (r: Result | undefined): { pinned: boolean; toggle: () => void } | null => {
+    if (!r || !canPin) return null
+    let id: DockId | null = null
+    if (r.id.startsWith('app-') && isDockableApp(r.id.slice(4) as AppId)) id = r.id.slice(4) as AppId
+    else if (r.id.startsWith('launcher-')) id = `launcher:${r.id.slice('launcher-'.length)}`
+    else if (r.link) {
+      const existing = linkDockId(r.link.url)
+      const link = r.link
+      if (!existing || !dock.includes(existing)) return { pinned: false, toggle: () => pinLink(link.label, link.url) }
+      id = existing
+    }
+    if (!id) return null
+    const pinned = dock.includes(id)
+    const target = id
+    return { pinned, toggle: () => (pinned ? unpinFromDock : pinToDock)(target) }
+  }
+  const togglePin = (r: Result | undefined) => {
+    const pin = pinFor(r)
+    if (!pin) return
+    pin.toggle()
+    setFlash(pin.pinned ? 'Removed from the dock' : 'Pinned to the dock')
+  }
+
   const current = results[active]
+  const currentPin = pinFor(current)
   const execute = (r: Result | undefined, alt: boolean) => {
     if (!r) return
     const keepOpen = r.id === 'calc' || (r.id.startsWith('code-') && r.id !== 'code-signin' && !r.id.startsWith('code-err-')) || r.id === 'status-mc' || r.id.startsWith('act-email') || r.id.startsWith('accent-') || r.id.startsWith('theme-')
@@ -709,6 +741,7 @@ export function Spotlight() {
           if (e.key === 'Escape') close()
           else if (e.key === 'ArrowDown') setActive((a) => Math.min(results.length - 1, a + 1))
           else if (e.key === 'ArrowUp') setActive((a) => Math.max(0, a - 1))
+          else if (e.key === 'Enter' && e.shiftKey && currentPin) togglePin(current)
           else if (e.key === 'Enter') execute(current, e.ctrlKey || e.metaKey)
           else if (e.key === 'Tab' && current?.complete && !e.shiftKey) setQ(current.complete)
           else return
@@ -739,7 +772,17 @@ export function Spotlight() {
               return (
                 <div key={r.id}>
                   {header && <p className="sp-group">{header}</p>}
-                  <button className={`sp-item ${i === active ? 'is-active' : ''}`} role="option" aria-selected={i === active} onPointerMove={() => setActive(i)} onClick={(e) => execute(r, e.ctrlKey || e.metaKey)}>
+                  <button className={`sp-item ${i === active ? 'is-active' : ''}`} role="option" aria-selected={i === active} onPointerMove={() => setActive(i)}
+                    onClick={(e) => execute(r, e.ctrlKey || e.metaKey)}
+                    onContextMenu={(e) => {
+                      const pin = pinFor(r)
+                      openContextMenu(e, [
+                        { label: r.enterLabel ?? 'Open', onSelect: () => execute(r, false) },
+                        ...(r.alt ? [{ label: r.alt.label, onSelect: () => execute(r, true) }] : []),
+                        ...(pin ? [{ separator: true as const }, { label: pin.pinned ? 'Remove from dock' : 'Pin to dock', onSelect: () => togglePin(r) }] : []),
+                      ])
+                    }}
+                  >
                     {r.icon}
                     <span className="sp-text">
                       <span className="sp-title">{r.title}</span>
@@ -770,6 +813,12 @@ export function Spotlight() {
             <span>
               <kbd>ctrl</kbd>
               <kbd>↵</kbd> {current.alt.label.toLowerCase()}
+            </span>
+          )}
+          {currentPin && (
+            <span>
+              <kbd>shift</kbd>
+              <kbd>↵</kbd> {currentPin.pinned ? 'unpin' : 'pin to dock'}
             </span>
           )}
           {flash && <span className="sp-flash">{flash}</span>}

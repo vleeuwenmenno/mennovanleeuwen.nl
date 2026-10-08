@@ -140,7 +140,7 @@ export function Desktop() {
 
   const launchers = useLaunchers()
   const [broken, setBroken] = useState<Set<string>>(new Set())
-  const linkIcons = launchers.map<DesktopIcon>((l) => ({
+  const linkIcons = launchers.filter((l) => l.desktop !== false).map<DesktopIcon>((l) => ({
     id: `launcher:${l.id}`,
     label: l.label,
     glyph: l.glyph ?? '🔗',

@@ -3,7 +3,7 @@ import { synced } from '../os/synced'
 // Desktop launchers of your own: a label, a URL and an optional emoji. They sit on the desktop
 // next to the built-in icons and show up in the launcher and Spotlight. Synced like notes.
 
-export type Launcher = { id: string; label: string; url: string; glyph?: string }
+export type Launcher = { id: string; label: string; url: string; glyph?: string; /** false: dock and menus only */ desktop?: boolean }
 
 const store = synced<Launcher[]>('launchers', [], { normalize: (v) => (Array.isArray(v) ? v.filter((l) => l && typeof l.id === 'string' && typeof l.url === 'string') : []) })
 

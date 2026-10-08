@@ -95,6 +95,11 @@ and turns Spotlight into a code search over GitHub and any linked Gitea/Forgejo 
 Tab completes the highlighted result (`owner/repo`, then type `#` or `@`); Ctrl+Enter copies a
 clone command, link or branch name.
 
+Signed in, the dock is yours too ([`src/os/dockItems.ts`](src/os/dockItems.ts)): right-click a
+dock icon to remove it, and right-click (or Shift+Enter) an app, launcher or repository in
+Spotlight or All apps to pin it. Settings → Dock lists what was taken off, to add it back, and
+restores the default dock. Everyone can still drag dock icons to reorder them.
+
 Only GitHub logins in `ALLOWED_USERS` (default `vleeuwenmenno`) can sign in; everyone else keeps
 the CV. Gitea/Forgejo instances are linked in Settings with a personal access token (read access to
 repository, issue, user and organization). Tokens are stored encrypted (AES-256-GCM) in SQLite

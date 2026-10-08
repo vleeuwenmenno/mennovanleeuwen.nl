@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { faviconOf, launch as launchLink, useLaunchers } from '../data/launchers'
 import { useStickyStyle } from '../data/notes'
 import { useRecents } from '../data/recents'
 import { APP_META } from './apps'
@@ -7,22 +8,20 @@ import { setOverlay, toggleOverlay, useOverlay } from './overlays'
 import { Spotlight } from './Spotlight'
 import { useSnapPreview } from './snapPreview'
 import { DOCK_MODES, getDockMode, setDockMode, type DockMode } from './dockPrefs'
-import { ContextMenuHost, openContextMenu } from './ContextMenu'
+import { ContextMenuHost, openContextMenu, type MenuItem } from './ContextMenu'
 import { Desktop } from './Desktop'
 import { PowerScreens } from './Power'
 import { Notifications } from './Notifications'
 import { startActivityAlerts } from './activityAlerts'
 import { usePower } from './powerState'
 import { notify } from './notify'
-import { synced } from './synced'
+import { isDefaultDock, isLauncherId, resetDock, setDockOrder, unpinFromDock, useCanCustomizeDock, useDock, type DockId } from './dockItems'
 import { AppIcon } from './icons'
 import { appearanceMenu } from './appearanceMenu'
 import { toggleMode, useTheme } from './theme'
 import { ClockWidget, MinecraftWidget, SystemMenu } from './TopbarWidgets'
 import { Window } from './Window'
 import { SINGLE_INSTANCE, useWM, type AppId, type Geometry, type WinState } from './wm'
-
-const DOCK: (AppId | '|')[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'notes', 'notebook', 'contact', '|', 'trash']
 
 const TOP = 28
 const DOCK_SPACE = 96
@@ -153,18 +152,14 @@ function TopBar() {
   )
 }
 
-const DEFAULT_ORDER = DOCK.filter((x): x is AppId => x !== '|' && x !== 'trash')
-/** The visitor's own dock order; empty means the default. */
-const dockOrder = synced<AppId[]>('dock', [], { legacyKey: 'mvlos.dock.v1', normalize: (v) => (Array.isArray(v) ? v : []) })
-
-/** Saved dock order, with apps added since it was saved appended and removed ones dropped. */
-function loadOrder(): AppId[] {
-  const known = dockOrder.get().filter((a) => DEFAULT_ORDER.includes(a))
-  return [...known, ...DEFAULT_ORDER.filter((a) => !known.includes(a))]
-}
-
-function saveOrder(order: AppId[]) {
-  dockOrder.set(order.join() === DEFAULT_ORDER.join() ? [] : order)
+/** A launcher's dock icon: the site's favicon (or your emoji) on a flat tile like the apps'. */
+function LauncherIcon({ url, glyph, size = 48 }: { url: string; glyph?: string; size?: number }) {
+  const [broken, setBroken] = useState(false)
+  return (
+    <span className="app-icon is-tone dock-launcher" style={{ width: size, height: size, ['--hue' as string]: 'var(--accent)' }}>
+      {glyph || broken ? <span className="dock-launcher-glyph">{glyph ?? '↗'}</span> : <img src={faviconOf(url)} alt="" draggable={false} onError={() => setBroken(true)} />}
+    </span>
+  )
 }
 
 /** True below the phone breakpoint, kept in step with the viewport. */
@@ -238,12 +233,19 @@ function useDockVisibility(pinned: boolean, covered: boolean, appOpen: boolean, 
 function Dock() {
   const wm = useWM()
   const overlay = useOverlay()
-  const [order, setOrder] = useState<AppId[]>(loadOrder)
-  useEffect(() => dockOrder.onRemote(() => setOrder(loadOrder())), [])
-  const [dragging, setDragging] = useState<{ app: AppId; dx: number } | null>(null)
-  const drag = useRef<{ app: AppId; startX: number; moved: boolean } | null>(null)
-  const items = useRef(new Map<AppId, HTMLElement>())
-  const prevRects = useRef<Map<AppId, number> | null>(null)
+  const dockItems = useDock()
+  const canCustomize = useCanCustomizeDock()
+  const launchers = useLaunchers()
+  const [order, setOrder] = useState<DockId[]>(dockItems)
+  const [dragging, setDragging] = useState<{ app: DockId; dx: number } | null>(null)
+  const drag = useRef<{ app: DockId; startX: number; moved: boolean } | null>(null)
+  // Follow pins, removals and other devices, except in the middle of a drag.
+  useEffect(() => {
+    if (!drag.current) setOrder(dockItems)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dockItems.join()])
+  const items = useRef(new Map<DockId, HTMLElement>())
+  const prevRects = useRef<Map<DockId, number> | null>(null)
   const orderRef = useRef(order)
   orderRef.current = order
   const suppressClick = useRef(false)
@@ -329,7 +331,7 @@ function Dock() {
   // Mouse and pen only: on touch the dock scrolls sideways instead. Move/up are tracked on window
   // because React moving the icon in the DOM mid-drag drops its pointer capture.
   const dxRef = useRef(0)
-  const onPointerDown = (e: React.PointerEvent, app: AppId) => {
+  const onPointerDown = (e: React.PointerEvent, app: DockId) => {
     if (e.button !== 0 || e.pointerType === 'touch') return
     drag.current = { app, startX: e.clientX, moved: false }
     dxRef.current = 0
@@ -370,7 +372,7 @@ function Dock() {
         suppressClick.current = true
         // The click that follows a drag lands on whatever is under the pointer; drop the flag soon either way.
         setTimeout(() => (suppressClick.current = false), 50)
-        saveOrder(orderRef.current)
+        setDockOrder(orderRef.current)
       }
       setDragging(null)
     }
@@ -380,14 +382,56 @@ function Dock() {
     window.addEventListener('pointercancel', onUp)
   }
 
-  const launch = (app: AppId) => {
+  const launcherOf = (id: DockId) => (isLauncherId(id) ? launchers.find((l) => `launcher:${l.id}` === id) : undefined)
+  const labelOf = (id: DockId) => (isLauncherId(id) ? (launcherOf(id)?.label ?? 'Link') : APP_META[id].dock)
+  const runningOf = (id: DockId) => (isLauncherId(id) ? 0 : wm.windows.filter((w) => w.app === id).length)
+  const iconOf = (id: DockId, size = 48) => {
+    const l = launcherOf(id)
+    return l ? <LauncherIcon url={l.url} glyph={l.glyph} size={size} /> : <AppIcon app={id as AppId} size={size} tone />
+  }
+
+  const launch = (id: DockId) => {
+    const l = launcherOf(id)
+    if (l) return void launchLink(l)
+    const app = id as AppId
     const wins = wm.windows.filter((x) => x.app === app)
     const focused = wins.find((x) => x.pid === wm.focusedPid && !x.minimized)
     if (focused && app !== 'trash') wm.minimize(focused.pid)
     else wm.open(app)
   }
 
-  const appButton = (app: AppId) => {
+  // Shared tail of every dock item's menu: take it off, restore the default dock, dock behaviour.
+  const dockMenu = (id: DockId) => [
+    ...(canCustomize && id !== 'trash' ? [{ separator: true as const }, { label: 'Remove from dock', onSelect: () => unpinFromDock(id) }] : []),
+    ...(!isDefaultDock() ? [{ separator: true as const }, { label: canCustomize ? 'Restore default dock' : 'Reset dock order', onSelect: resetDock }] : []),
+    ...(canCustomize ? [{ label: 'Customize dock…', onSelect: () => wm.open('settings', { section: 'dock', t: String(Date.now()) }) }] : []),
+    { separator: true as const },
+    { label: 'Dock', submenu: DOCK_MODES.map(([m, label]) => ({ label, checked: getDockMode() === m, onSelect: () => setDockMode(m) })) },
+  ]
+
+  const itemMenu = (id: DockId) => {
+    const l = launcherOf(id)
+    if (l)
+      return [
+        { label: 'Open ↗', onSelect: () => launchLink(l) },
+        { label: 'Copy link', onSelect: () => navigator.clipboard?.writeText(l.url).catch(() => {}) },
+        { label: 'Edit launchers…', onSelect: () => wm.open('settings', { section: 'launchers', t: String(Date.now()) }) },
+        ...dockMenu(id),
+      ]
+    const app = id as AppId
+    const wins = wm.windows.filter((x) => x.app === app).sort((a, b) => a.pid - b.pid)
+    const multi = !SINGLE_INSTANCE.has(app)
+    return [
+      ...wins.map((w) => ({ label: `${APP_META[w.app].dock} · pid ${w.pid}${w.minimized ? ' (minimized)' : ''}`, onSelect: () => wm.focus(w.pid) })),
+      ...(wins.length ? [{ separator: true as const }] : []),
+      wins.length && multi ? { label: 'New window', onSelect: () => wm.openNew(app) } : { label: wins.length ? 'Show' : 'Open', onSelect: () => wm.open(app) },
+      ...(wins.some((w) => !w.minimized) ? [{ label: wins.length > 1 ? 'Minimize all' : 'Minimize', onSelect: () => wins.forEach((w) => wm.minimize(w.pid)) }] : []),
+      ...dockMenu(id),
+      ...(wins.length ? [{ separator: true as const }, { label: wins.length > 1 ? `Quit all ${wins.length}` : 'Quit', danger: true, onSelect: () => wins.forEach((w) => wm.close(w.pid)) }] : []),
+    ]
+  }
+
+  const appButton = (app: DockId) => {
     const isDragged = dragging?.app === app
     return (
       <button
@@ -406,37 +450,13 @@ function Dock() {
           }
           launch(app)
         }}
-        aria-label={APP_META[app].dock}
-        onContextMenu={(e) => {
-          const wins = wm.windows.filter((x) => x.app === app).sort((a, b) => a.pid - b.pid)
-          const multi = !SINGLE_INSTANCE.has(app)
-          openContextMenu(e, [
-            ...wins.map((w) => ({ label: `${APP_META[w.app].dock} · pid ${w.pid}${w.minimized ? ' (minimized)' : ''}`, onSelect: () => wm.focus(w.pid) })),
-            ...(wins.length ? [{ separator: true as const }] : []),
-            wins.length && multi ? { label: 'New window', onSelect: () => wm.openNew(app) } : { label: wins.length ? 'Show' : 'Open', onSelect: () => wm.open(app) },
-            ...(wins.some((w) => !w.minimized) ? [{ label: wins.length > 1 ? 'Minimize all' : 'Minimize', onSelect: () => wins.forEach((w) => wm.minimize(w.pid)) }] : []),
-            ...(order.join() !== DEFAULT_ORDER.join()
-              ? [
-                  { separator: true as const },
-                  {
-                    label: 'Reset dock order',
-                    onSelect: () => {
-                      setOrder(DEFAULT_ORDER)
-                      saveOrder(DEFAULT_ORDER)
-                    },
-                  },
-                ]
-              : []),
-            { separator: true as const },
-            { label: 'Dock', submenu: DOCK_MODES.map(([m, label]) => ({ label, checked: getDockMode() === m, onSelect: () => setDockMode(m) })) },
-            ...(wins.length ? [{ separator: true as const }, { label: wins.length > 1 ? `Quit all ${wins.length}` : 'Quit', danger: true, onSelect: () => wins.forEach((w) => wm.close(w.pid)) }] : []),
-          ])
-        }}
+        aria-label={labelOf(app)}
+        onContextMenu={(e) => openContextMenu(e, itemMenu(app))}
       >
-        <AppIcon app={app} tone />
-        <span className="dock-label">{APP_META[app].dock}</span>
+        {iconOf(app)}
+        <span className="dock-label">{labelOf(app)}</span>
         <span className="dock-dots">
-          {Array.from({ length: Math.min(3, wm.windows.filter((w) => w.app === app).length) }, (_, n) => (
+          {Array.from({ length: Math.min(3, runningOf(app)) }, (_, n) => (
             <span key={n} className="dock-dot is-on" />
           ))}
         </span>
@@ -471,7 +491,7 @@ function Dock() {
       <span className="dock-sep" />
       {shown.map(appButton)}
       {overflow.length > 0 && (
-        <DockMore apps={overflow} open={moreOpen} setOpen={setMoreOpen} onLaunch={launch} running={(app) => wm.windows.filter((w) => w.app === app).length} />
+        <DockMore apps={overflow} open={moreOpen} setOpen={setMoreOpen} onLaunch={launch} running={runningOf} icon={iconOf} label={labelOf} menu={itemMenu} />
       )}
       <span className="dock-sep" />
       {appButton('trash')}
@@ -481,7 +501,25 @@ function Dock() {
 }
 
 /** The "More" button and the stack of apps that did not fit in the dock. */
-function DockMore({ apps, open, setOpen, onLaunch, running }: { apps: AppId[]; open: boolean; setOpen: (o: boolean) => void; onLaunch: (app: AppId) => void; running: (app: AppId) => number }) {
+function DockMore({
+  apps,
+  open,
+  setOpen,
+  onLaunch,
+  running,
+  icon,
+  label,
+  menu,
+}: {
+  apps: DockId[]
+  open: boolean
+  setOpen: (o: boolean) => void
+  onLaunch: (app: DockId) => void
+  running: (app: DockId) => number
+  icon: (app: DockId, size?: number) => ReactNode
+  label: (app: DockId) => string
+  menu: (app: DockId) => MenuItem[]
+}) {
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -521,9 +559,10 @@ function DockMore({ apps, open, setOpen, onLaunch, running }: { apps: AppId[]; o
                 setOpen(false)
                 onLaunch(app)
               }}
+              onContextMenu={(e) => openContextMenu(e, menu(app))}
             >
-              <AppIcon app={app} size={40} tone />
-              <span>{APP_META[app].dock}</span>
+              {icon(app, 40)}
+              <span>{label(app)}</span>
               {running(app) > 0 && <span className="dock-dot is-on" />}
             </button>
           ))}

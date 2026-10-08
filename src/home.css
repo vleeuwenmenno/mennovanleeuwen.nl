@@ -493,3 +493,29 @@ input.is-bad {
 .sp-note {
   padding: 0;
 }
+
+/* ---------- Dock: launchers and customizing ---------- */
+
+.dock-launcher {
+  display: grid;
+  place-items: center;
+}
+.dock-launcher img {
+  width: 55%;
+  height: 55%;
+  object-fit: contain;
+}
+.dock-launcher-glyph {
+  font-size: 24px;
+  line-height: 1;
+}
+.dock-stack-item .dock-launcher-glyph {
+  font-size: 20px;
+}
+.set-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
