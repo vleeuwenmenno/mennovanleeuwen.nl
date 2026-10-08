@@ -44,8 +44,8 @@ export const DESKTOP_ICONS: DesktopIcon[] = [
       url: p.url,
     }
   }),
-  { id: 'cv', label: 'cv.md', glyph: '📄', kind: 'file', path: '~/cv.md', open: { app: 'cv' }, terminal: 'cat ~/cv.md' },
-  { id: 'readme', label: 'README.md', glyph: '📝', kind: 'file', path: '~/README.md', open: { app: 'terminal', props: { run: 'cat ~/README.md' } }, terminal: 'cat ~/README.md' },
+  { id: 'cv', label: 'cv.md', glyph: '📄', kind: 'file', path: '~/cv.md', open: { app: 'zed', props: { path: `${HOME}/cv.md`, view: 'preview' } }, terminal: 'cat ~/cv.md' },
+  { id: 'readme', label: 'README.md', glyph: '📝', kind: 'file', path: '~/README.md', open: { app: 'zed', props: { path: `${HOME}/README.md`, view: 'preview' } }, terminal: 'cat ~/README.md' },
 ]
 
 const CELL_W = 100

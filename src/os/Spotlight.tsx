@@ -349,6 +349,7 @@ export function Spotlight() {
         run: () => {
           if (node.open?.url) window.open(node.open.url, '_blank', 'noopener')
           else if (node.open?.app) wm.open(node.open.app as AppId, node.open.props)
+          else if (name.endsWith('.md')) wm.open('zed', { path, view: 'preview', t: String(Date.now()) })
           else wm.openNew('viewer', { path })
         },
         alt: { label: 'Open in terminal', run: () => term(`cat ${prettyPath(path)}`, true) },

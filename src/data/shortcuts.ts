@@ -70,6 +70,19 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
     ],
   },
   {
+    area: 'Zed',
+    keys: [
+      ['Ctrl P', 'go to file'],
+      ['Ctrl F', 'find in the file (↵ next, Shift ↵ previous)'],
+      ['Ctrl Shift F', 'search the whole project'],
+      ['Ctrl Shift V', 'Markdown preview (Alt-click the eye: split)'],
+      ['Ctrl S', 'save (only /tmp is writable)'],
+      ['Ctrl O / Click project name', 'open another folder'],
+      ['Ctrl B', 'project panel'],
+      ['Alt W / Middle-click tab', 'close the tab'],
+    ],
+  },
+  {
     area: 'Spotlight & launcher',
     keys: [
       ['↑ ↓', 'move'],

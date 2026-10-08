@@ -19,7 +19,7 @@ import { ClockWidget, MinecraftWidget } from './TopbarWidgets'
 import { Window } from './Window'
 import { SINGLE_INSTANCE, useWM, type AppId, type Geometry, type WinState } from './wm'
 
-const DOCK: (AppId | '|')[] = ['terminal', 'files', 'projects', 'recents', 'cv', 'games', 'notes', 'contact', '|', 'trash']
+const DOCK: (AppId | '|')[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'notes', 'contact', '|', 'trash']
 
 const TOP = 28
 const DOCK_SPACE = 96

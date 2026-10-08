@@ -217,7 +217,7 @@ export function Files({ win }: { win: WinState }) {
 
   // --- actions ----------------------------------------------------------------------------------
 
-  const openItem = (item: Item, how: 'default' | 'viewer' | 'terminal' = 'default') => {
+  const openItem = (item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' = 'default') => {
     if (item.trash) {
       setToast(item.trash === 'desktop' ? 'Put it back first (right-click → Put back).' : 'That file is a cautionary tale. It stays in the trash.')
       return
@@ -232,8 +232,10 @@ export function Files({ win }: { win: WinState }) {
     remember(item.path)
     if (how === 'terminal') return wm.openNew('terminal', { run: `cat ${prettyPath(item.path)}`, t: String(Date.now()) })
     if (how === 'viewer') return wm.openNew('viewer', { path: item.path })
+    if (how === 'zed') return wm.open('zed', { path: item.path, view: 'preview', t: String(Date.now()) })
     if (node.open?.url) return void window.open(node.open.url, '_blank', 'noopener')
     if (node.open?.app) return wm.open(node.open.app as AppId, { ...node.open.props, t: String(Date.now()) })
+    if (item.kind === 'markdown') return openItem(item, 'zed')
     wm.openNew('viewer', { path: item.path })
   }
 
@@ -289,6 +291,7 @@ export function Files({ win }: { win: WinState }) {
               label: 'Open with',
               submenu: [
                 { label: 'Default app', onSelect: () => openItem(item) },
+                { label: 'Zed', onSelect: () => openItem(item, 'zed') },
                 { label: 'Viewer', onSelect: () => openItem(item, 'viewer') },
                 { label: 'Terminal (cat)', onSelect: () => openItem(item, 'terminal') },
               ],

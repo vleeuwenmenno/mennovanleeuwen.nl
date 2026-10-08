@@ -9,6 +9,7 @@ import { Recents } from '../apps/Recents'
 import { Terminal } from '../apps/Terminal'
 import { Files } from '../apps/Files'
 import { Viewer } from '../apps/Viewer'
+import { Zed } from '../apps/Zed'
 import type { AppId, WinState } from './wm'
 
 export type AppMeta = {
@@ -24,6 +25,7 @@ export type AppMeta = {
 export const APP_META: Record<AppId, AppMeta> = {
   terminal: { title: 'menno@mvlos: ~', dock: 'Terminal', blurb: 'A shell that actually works', size: [760, 500], render: (w) => <Terminal win={w} /> },
   files: { title: 'Files', dock: 'Files', blurb: 'Browse the filesystem', size: [940, 600], render: (w) => <Files win={w} /> },
+  zed: { title: 'Zed', dock: 'Zed', blurb: 'Edit Markdown and text files', size: [960, 620], render: (w) => <Zed win={w} /> },
   viewer: { title: 'Viewer', dock: 'Viewer', blurb: 'Open text files and images', size: [720, 560], render: (w) => <Viewer win={w} /> },
   notes: { title: 'Sticky note', dock: 'Note', blurb: 'Headlines on a sticky note', size: [310, 340], chrome: 'note', render: () => <Notes /> },
   keys: { title: 'Shortcuts', dock: 'Shortcuts', blurb: 'Every keyboard and mouse shortcut', size: [310, 320], chrome: 'note', render: (w) => <KeysNote win={w} /> },

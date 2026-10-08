@@ -13,7 +13,7 @@ import { loadRates, smartCalc } from '../os/smartcalc'
 import { THEMES as OMARCHY_THEMES } from '../os/omarchyThemes'
 import { ACCENTS, setMode, setTheme, themeLabel, themeSettings } from '../os/theme'
 import { reboot, shutdown } from '../os/powerState'
-import { age, HOME, lookup, prettyPath, resolvePath, walk, type DirNode, type Node } from './vfs'
+import { age, fileKind, HOME, lookup, prettyPath, resolvePath, walk, type DirNode, type Node } from './vfs'
 
 // Output markup understood by the terminal renderer:
 //   {c:green}text{/}      colored span (green, red, yellow, blue, cyan, magenta, muted, accent, bold)
@@ -51,6 +51,8 @@ const APPS: Record<string, AppId> = {
   mail: 'contact',
   games: 'games',
   arcade: 'games',
+  zed: 'zed',
+  editor: 'zed',
   trash: 'trash',
 }
 
@@ -65,6 +67,7 @@ const APP_NAMES: Record<AppId, string> = {
   cv: 'cv-viewer',
   contact: 'mail',
   games: 'arcade',
+  zed: 'zed',
   trash: 'trash',
 }
 
@@ -490,7 +493,8 @@ export const commands: Record<string, Command> = {
         return
       }
       if (node?.type === 'file') {
-        ctx.openNewApp('viewer', { path: abs })
+        if (fileKind(node) === 'markdown') ctx.openApp('zed', { path: abs, view: 'preview', t: String(Date.now()) })
+        else ctx.openNewApp('viewer', { path: abs })
         return
       }
       throw new CmdError(`open: ${target}: no app, file or URL by that name`)
@@ -822,14 +826,14 @@ export const commands: Record<string, Command> = {
   headlines: { desc: 'what the sticky note says', hidden: true, run: () => headlines.map((h) => `• ${h}`).join('\n') },
 }
 
+// The real-network and device tools live in extra.ts.
+Object.assign(commands, extraCommands)
+
 /** Shuts down or reboots the whole "machine" after the broadcast has had a moment on screen. */
 function power(ctx: Ctx, what: 'reboot' | 'power off') {
   setTimeout(what === 'reboot' ? reboot : shutdown, 500)
   return `Broadcast message from ${profile.handle}@mvlos on ${ctx.console ? 'tty1' : 'pts/0'}:\n\nThe system will ${what} now!`
 }
-// The real-network and device tools live in extra.ts.
-Object.assign(commands, extraCommands)
-
 
 /**
  * Arguments the way dig, host and nslookup take them: the name and record type in either order,

@@ -13,7 +13,7 @@ import { SINGLE_INSTANCE, useWM, type AppId } from './wm'
 
 type Row = { key: string; section: 'Applications' | 'Games' | 'Commands'; name: string; detail?: string; kind: string; icon: ReactNode; run: () => void; runNew?: () => void }
 
-const APP_ORDER: AppId[] = ['terminal', 'files', 'projects', 'recents', 'cv', 'games', 'contact', 'notes', 'keys', 'trash']
+const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'contact', 'notes', 'keys', 'trash']
 
 export function Launchpad() {
   const wm = useWM()

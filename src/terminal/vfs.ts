@@ -58,30 +58,37 @@ function contributionReadme(c: (typeof contributions)[number]) {
     .trimEnd()
 }
 
+// Real Markdown, so Zed's preview renders it properly; `cat` shows the same text.
 function cv() {
   return [
     `# ${profile.name}`,
-    `${profile.role} @ ${profile.company} · ${profile.location}`,
+    '',
+    `**${profile.role}** @ ${profile.company} · ${profile.location}`,
     '',
     profile.summary,
     '',
     '## Experience',
-    ...experience.map((e) => `  ${e.role}, ${e.company} (${e.period})\n${e.notes.map((n) => `    ${n}`).join('\n')}`),
+    ...experience.flatMap((e) => ['', `### ${e.role}, ${e.company}`, '', `*${e.period}*`, '', ...e.notes.map((n) => `- ${n}`)]),
     '',
     '## Projects',
-    ...projects.map((p) => `  ${p.name.padEnd(12)} ${p.tagline}`),
+    '',
+    ...projects.map((p) => `- **${p.name}**: ${p.tagline}`),
     '',
     '## Open source',
-    ...contributions.map((c) => `  ${`${c.owner}/${c.slug}`.padEnd(26)} ${c.description.split(':')[0]}`),
+    '',
+    ...contributions.map((c) => `- **${c.owner}/${c.slug}**: ${c.description.split(':')[0]}`),
     '',
     '## Education',
-    ...education.map((e) => `  ${e.title}, ${e.school} (${e.period})`),
+    '',
+    ...education.map((e) => `- **${e.title}**, ${e.school} (${e.period})`),
     '',
     '## Skills',
-    ...Object.entries(skills).map(([k, v]) => `  ${k.padEnd(16)} ${v.join(', ')}`),
+    '',
+    ...Object.entries(skills).map(([k, v]) => `- **${k}**: ${v.join(', ')}`),
     '',
     '## Off the clock',
-    ...hobbies.map((h) => `  ${h.name.padEnd(19)} ${h.note}`),
+    '',
+    ...hobbies.map((h) => `- **${h.name}**: ${h.note}`),
   ].join('\n')
 }
 
@@ -120,7 +127,7 @@ const readmeNode = file('README.md', () =>
           'Try `open projects/boltwarden` or `recent | head -5`.',
         ].join('\n'),
       )
-const cvNode = file('cv.md', cv, { app: 'cv' })
+const cvNode = file('cv.md', cv, { app: 'zed', props: { path: `${HOME}/cv.md`, view: 'preview' } })
 const projectsNode = dir(
         'projects',
         projects.map((p) =>

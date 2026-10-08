@@ -102,6 +102,16 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  zed: {
+    bg: 'linear-gradient(160deg,#3b4a6b,#151a26)',
+    fg: '#8fb4ff',
+    glyph: (
+      <>
+        <path d="M13 13h22L13 35h22" />
+        <path d="M19 24h10" />
+      </>
+    ),
+  },
   trash: {
     bg: 'linear-gradient(160deg,#3a3f4f,#1d2029)',
     fg: '#c0c6d6',
@@ -126,6 +136,7 @@ const HUES: Record<AppId, string> = {
   cv: 'var(--text)',
   contact: 'var(--magenta)',
   games: 'var(--cyan)',
+  zed: 'var(--blue)',
   trash: 'var(--muted)',
 }
 

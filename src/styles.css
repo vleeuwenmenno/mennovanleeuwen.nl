@@ -3130,6 +3130,659 @@ button.fm-dd-row:hover {
   font-weight: 700;
 }
 
+/* ---------- Zed ---------- */
+
+.zed {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  font-size: 12.5px;
+  background: var(--bg);
+}
+.zed-title,
+.zed-status {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--bg-dark);
+  font-size: 12px;
+}
+.zed-title {
+  border-bottom: 1px solid var(--line);
+}
+.zed-status {
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+}
+.zed-chip,
+.zed-status-btn {
+  padding: 2px 6px;
+  border: 0;
+  background: none;
+  color: var(--fg-bright);
+  font: inherit;
+  cursor: pointer;
+}
+.zed-chip:hover,
+.zed-status-btn:hover {
+  background: var(--panel-2);
+}
+.zed-branch {
+  color: var(--muted);
+  cursor: default;
+}
+.zed-status-btn {
+  color: var(--muted);
+}
+.zed-title-path {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.zed-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.zed-panel {
+  flex: none;
+  width: 220px;
+  overflow: auto;
+  padding: 4px 0;
+  background: var(--bg-dark);
+  border-right: 1px solid var(--line);
+}
+.zed-tree {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.zed-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.zed-row:hover {
+  background: var(--panel-2);
+}
+.zed-row.is-active {
+  background: var(--selection);
+  color: var(--fg-bright);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.zed-root {
+  font-weight: 700;
+  color: var(--fg-bright);
+}
+.zed-caret {
+  width: 10px;
+  color: var(--muted);
+}
+.zed-file-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin: 0 1px;
+}
+.zed-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.zed-tabs {
+  flex: none;
+  display: flex;
+  overflow-x: auto;
+  background: var(--bg-dark);
+  border-bottom: 1px solid var(--line);
+  scrollbar-width: none;
+}
+.zed-tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 4px 0 12px;
+  border-right: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.zed-tab.is-active {
+  background: var(--bg);
+  color: var(--fg-bright);
+  margin-bottom: -1px;
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.zed-tab-x {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.zed-tab-x > span {
+  grid-area: 1 / 1;
+}
+.zed-tab-x .zed-x,
+.zed-tab-x .zed-dot,
+.zed-tab:hover .zed-tab-x.is-dirty .zed-dot {
+  visibility: hidden;
+}
+.zed-tab.is-active .zed-x,
+.zed-tab:hover .zed-x,
+.zed-tab-x.is-dirty .zed-dot {
+  visibility: visible;
+}
+.zed-tab-x.is-dirty .zed-x {
+  visibility: hidden;
+}
+.zed-tab:hover .zed-tab-x.is-dirty .zed-x {
+  visibility: visible;
+}
+.zed-dot {
+  font-size: 9px;
+  color: var(--accent);
+}
+.zed-tab-x:hover {
+  background: var(--panel-2);
+}
+.zed-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  overflow: auto;
+  line-height: 20px;
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.zed-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  flex: none;
+  min-width: 52px;
+  min-height: 100%;
+  padding: 12px 14px 12px 8px;
+  background: var(--bg);
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+}
+.zed-gutter .is-current {
+  color: var(--fg-bright);
+}
+.zed-code {
+  position: relative;
+  flex: 1 0 auto;
+  min-height: 100%;
+}
+.zed-line-hl {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 20px;
+  background: var(--panel-2);
+  pointer-events: none;
+}
+.zed-hl,
+.zed-input {
+  margin: 0;
+  padding: 12px 24px 12px 0;
+  font: inherit;
+  line-height: inherit;
+  letter-spacing: 0;
+  tab-size: 2;
+  white-space: pre;
+}
+.zed-hl {
+  position: relative;
+  color: var(--text);
+  pointer-events: none;
+}
+.zed-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--accent);
+}
+.zed-input::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: transparent;
+}
+.md-h {
+  color: var(--blue);
+  font-weight: 700;
+}
+.md-h0 {
+  color: var(--accent);
+}
+.md-punct,
+.md-fence {
+  color: var(--muted);
+}
+.md-quote {
+  color: var(--muted);
+  font-style: italic;
+}
+.md-bullet {
+  color: var(--orange);
+}
+.md-code {
+  color: var(--green);
+}
+.md-bold {
+  color: var(--fg-bright);
+  font-weight: 700;
+}
+.md-em {
+  font-style: italic;
+  color: var(--magenta);
+}
+.md-link,
+.md-url {
+  color: var(--cyan);
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+}
+.zed-welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+.zed-welcome > svg {
+  color: var(--line-strong);
+}
+.zed-welcome p {
+  margin: 0;
+}
+.zed-welcome-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--fg-bright);
+}
+.zed-welcome-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  margin: 8px 0;
+}
+.zed-keys {
+  font-size: 11px;
+}
+.zed {
+  position: relative;
+  outline: 0;
+}
+/* Selecting text in the editor must never scroll the window frame itself. */
+.window[data-app='zed'],
+.window[data-app='zed'] > .window-body {
+  overflow: clip;
+}
+.zed-project {
+  font-weight: 700;
+}
+.zed-project.is-open {
+  background: var(--selection);
+}
+.zed-muted {
+  color: var(--muted);
+}
+.zed-crumbs {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.zed-crumb-file {
+  color: var(--fg-bright);
+}
+.zed-crumb-heading {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--blue);
+  font-weight: 700;
+}
+.zed-icon-btn {
+  display: grid;
+  min-width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.zed-icon-btn:hover:not(:disabled) {
+  background: var(--panel-2);
+  color: var(--fg-bright);
+}
+.zed-icon-btn.is-on {
+  background: var(--selection);
+  color: var(--accent);
+}
+.zed-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.zed-find,
+.zed-search-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-dark);
+}
+.zed-find-input,
+.zed-palette-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  outline: 0;
+  background: var(--bg);
+  color: var(--fg-bright);
+  font: inherit;
+}
+.zed-find-input:focus {
+  border-color: var(--accent);
+}
+.zed-find-count {
+  min-width: 64px;
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.zed-find-count.is-none {
+  color: var(--red);
+}
+.zed-panes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.zed-panes > * {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.zed-panes.is-split > .zed-editor {
+  border-right: 1px solid var(--line);
+}
+.zed-marks {
+  position: absolute;
+  inset: 0;
+  color: transparent;
+}
+.zed-marks mark {
+  background: color-mix(in srgb, var(--yellow) 28%, transparent);
+  color: transparent;
+}
+.zed-marks mark.is-current {
+  background: color-mix(in srgb, var(--orange) 55%, transparent);
+  outline: 1px solid var(--orange);
+}
+.zed-preview {
+  overflow: auto;
+  padding: 18px 28px 40px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.zed-preview > :first-child {
+  margin-top: 0;
+}
+.zed-preview h1,
+.zed-preview h2,
+.zed-preview h3,
+.zed-preview h4 {
+  margin: 1.3em 0 0.5em;
+  color: var(--fg-bright);
+  line-height: 1.3;
+}
+.zed-preview h1 {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--line);
+  font-size: 1.7em;
+}
+.zed-preview h2 {
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--line);
+  font-size: 1.35em;
+}
+.zed-preview h3 {
+  font-size: 1.12em;
+}
+.zed-preview p,
+.zed-preview ul,
+.zed-preview ol,
+.zed-preview pre,
+.zed-preview blockquote {
+  margin: 0 0 0.9em;
+}
+.zed-preview ul,
+.zed-preview ol {
+  padding-left: 1.6em;
+}
+.zed-preview li > ul,
+.zed-preview li > ol {
+  margin: 0.2em 0 0;
+}
+.zed-preview a {
+  color: var(--accent);
+}
+.zed-preview code {
+  padding: 0.1em 0.35em;
+  background: var(--panel-2);
+  color: var(--green);
+  font-size: 0.92em;
+}
+.zed-preview pre {
+  overflow: auto;
+  padding: 10px 12px;
+  background: var(--bg-dark);
+  border: 1px solid var(--line);
+}
+.zed-preview pre code {
+  padding: 0;
+  background: none;
+  color: var(--text);
+}
+.zed-preview blockquote {
+  padding: 0 0 0 12px;
+  border-left: 3px solid var(--line-strong);
+  color: var(--muted);
+}
+.zed-preview hr {
+  border: 0;
+  border-top: 1px solid var(--line-strong);
+  margin: 1.4em 0;
+}
+.zed-tab-preview {
+  font-style: italic;
+}
+.zed-tab-icon {
+  color: var(--muted);
+}
+.zed-status-msg {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.zed-palette {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  max-height: min(440px, calc(100% - 50px));
+  background: var(--bg-dark);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 14px 40px -12px rgba(0, 0, 0, 0.55);
+}
+.zed-palette.is-project {
+  top: 30px;
+  left: 6px;
+  width: min(340px, calc(100% - 12px));
+}
+.zed-palette.is-files {
+  top: 34px;
+  left: 50%;
+  width: min(520px, calc(100% - 24px));
+  transform: translateX(-50%);
+}
+.zed-palette-input {
+  flex: none;
+  height: 34px;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+}
+.zed-palette-list {
+  overflow: auto;
+  padding: 4px;
+}
+.zed-palette-section {
+  padding: 8px 8px 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.zed-palette-section:not(:first-child) {
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+}
+.zed-palette-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.zed-palette-item.is-sel {
+  background: var(--selection);
+  color: var(--fg-bright);
+}
+.zed-palette-detail {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.zed-check {
+  color: var(--accent);
+}
+.zed-palette-empty {
+  padding: 10px;
+  color: var(--muted);
+}
+.zed-search {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.zed-search-results {
+  flex: 1;
+  overflow: auto;
+  padding: 6px 0 20px;
+}
+.zed-search-hint {
+  padding: 10px 14px;
+  margin: 0;
+}
+.zed-search-file header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px 4px;
+  color: var(--fg-bright);
+}
+.zed-search-hit {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  padding: 2px 14px 2px 30px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  white-space: pre;
+  cursor: pointer;
+}
+.zed-search-hit:hover {
+  background: var(--panel-2);
+}
+.zed-search-ln {
+  flex: none;
+  min-width: 28px;
+  color: var(--muted);
+  text-align: right;
+}
+.zed-search-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.zed-search-hit mark,
+.zed-search mark {
+  background: color-mix(in srgb, var(--yellow) 30%, transparent);
+  color: var(--fg-bright);
+}
+@media (max-width: 640px) {
+  .zed-panel {
+    width: 150px;
+  }
+}
+
 /* ---------- All apps (Omarchy Spotlight style) ---------- */
 
 .al-backdrop {
