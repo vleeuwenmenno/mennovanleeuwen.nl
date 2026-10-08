@@ -23,10 +23,32 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
-  projects: {
+  files: {
     bg: 'linear-gradient(160deg,#7aa2f7,#3d5bd1)',
     fg: '#fff',
     glyph: <path d="M11 16a2 2 0 0 1 2-2h7l3 3h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H13a2 2 0 0 1-2-2z" />,
+  },
+  projects: {
+    bg: 'linear-gradient(160deg,#ffb86b,#e0782f)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <path d="M24 11l13 7-13 7-13-7z" />
+        <path d="M11 24l13 7 13-7" />
+        <path d="M11 30l13 7 13-7" />
+      </>
+    ),
+  },
+  viewer: {
+    bg: 'linear-gradient(160deg,#4fd1c5,#2c8f86)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <rect x="11" y="13" width="26" height="22" rx="2" />
+        <path d="M11 31l8-7 6 5 4-3 8 6" />
+        <circle cx="30" cy="20" r="2" />
+      </>
+    ),
   },
   recents: {
     bg: 'linear-gradient(160deg,#ff8f6b,#e2483d)',

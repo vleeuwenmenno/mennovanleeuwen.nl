@@ -40,7 +40,7 @@ export function Minecraft() {
           <span className="mc-studio-mark">M</span>
           <span>MVL STUDIOS</span>
         </div>
-        <div className="mc-bar mc-bar-white">
+        <div className="mcg-bar mcg-bar-white">
           <span style={{ width: `${progress}%` }} />
         </div>
       </div>
@@ -52,7 +52,7 @@ export function Minecraft() {
       <div className="mc-boot mc-world">
         <p className="mc-title">MINECRAFT</p>
         <p className="mc-step">{step}</p>
-        <div className="mc-bar mc-bar-green">
+        <div className="mcg-bar mcg-bar-green">
           <span style={{ width: `${progress}%` }} />
         </div>
         <p className="mc-percent">{progress}%</p>

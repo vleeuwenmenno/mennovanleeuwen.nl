@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { projects } from '../data/profile'
+import { HOME } from '../terminal/vfs'
 import { closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
 import { resetLayout, restoreIcons, trashIcons, updateDesktop, useDesktop, type IconPos } from './desktopStore'
-import { ACCENTS, setAccent } from './theme'
+import { appearanceMenu } from './appearanceMenu'
 import { useWM, type AppId } from './wm'
 
 // A desktop that behaves like one: click to select, Ctrl/Shift-click to add, drag a marquee over
@@ -23,9 +24,9 @@ export type DesktopIcon = {
 // Order is the default layout, top to bottom: folders, projects, then files. Folders and projects
 // get capitalized names like apps; files keep their real file names.
 export const DESKTOP_ICONS: DesktopIcon[] = [
-  { id: 'projects', label: 'Projects', glyph: '📁', kind: 'folder', path: '~/projects', open: { app: 'projects', props: { section: 'project' } }, terminal: 'cd ~/projects && ls -l' },
-  { id: 'contributions', label: 'Contributions', glyph: '📂', kind: 'folder', path: '~/contributions', open: { app: 'projects', props: { section: 'contrib' } }, terminal: 'cd ~/contributions && ls -l' },
-  { id: 'games', label: 'Games', glyph: '🎮', kind: 'folder', path: '~/games', open: { app: 'games' }, terminal: 'cd ~/games && ls -l' },
+  { id: 'projects', label: 'Projects', glyph: '📁', kind: 'folder', path: '~/projects', open: { app: 'files', props: { path: `${HOME}/projects` } }, terminal: 'cd ~/projects && ls -l' },
+  { id: 'contributions', label: 'Contributions', glyph: '📂', kind: 'folder', path: '~/contributions', open: { app: 'files', props: { path: `${HOME}/contributions` } }, terminal: 'cd ~/contributions && ls -l' },
+  { id: 'games', label: 'Games', glyph: '🎮', kind: 'folder', path: '~/games', open: { app: 'files', props: { path: `${HOME}/games` } }, terminal: 'cd ~/games && ls -l' },
   ...(['boltwarden', 'pepper'] as const).map((slug) => {
     const p = projects.find((x) => x.slug === slug)!
     return {
@@ -45,7 +46,7 @@ export const DESKTOP_ICONS: DesktopIcon[] = [
 
 const CELL_W = 100
 const CELL_H = 96
-const TOP = 34 + 14
+const TOP = 28 + 12
 const LEFT = 14
 const DOCK_SPACE = 100
 
@@ -134,7 +135,7 @@ export function Desktop() {
   }, [])
 
   const label = (i: DesktopIcon) => desk.names[i.id] ?? i.label
-  const open = (i: DesktopIcon) => wm.open(i.open.app, { ...i.open.props, t: String(Date.now()) })
+  const open = (i: DesktopIcon) => (i.kind === 'folder' ? wm.openNew : wm.open)(i.open.app, { ...i.open.props, t: String(Date.now()) })
   const openInTerminal = (i: DesktopIcon) => wm.open('terminal', { run: i.terminal, t: String(Date.now()) })
   const selectedIcons = () => visible.filter((i) => selected.has(i.id))
 
@@ -277,7 +278,7 @@ export function Desktop() {
       ...(desk.trashed.length ? [{ label: `Put back ${desk.trashed.length} trashed item${desk.trashed.length === 1 ? '' : 's'}`, onSelect: () => restoreIcons(desk.trashed) }] : []),
       { separator: true },
       { label: 'Focus follows mouse', checked: wm.focusMode === 'hover', onSelect: () => wm.setFocusMode(wm.focusMode === 'hover' ? 'click' : 'hover') },
-      { label: 'Accent color', submenu: Object.entries(ACCENTS).map(([name, color]) => ({ label: name[0].toUpperCase() + name.slice(1), swatch: color, onSelect: () => setAccent(name) })) },
+      { label: 'Appearance', submenu: appearanceMenu() },
     ]
   }
 

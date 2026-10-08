@@ -1,7 +1,7 @@
 import { useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { useWM, type WinState } from './wm'
 
-const TOP_BAR = 34
+const TOP_BAR = 28
 const MIN_W = 280
 const MIN_H = 180
 

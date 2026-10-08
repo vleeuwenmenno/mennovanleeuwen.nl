@@ -7,14 +7,15 @@ import { Spotlight } from './Spotlight'
 import { ContextMenuHost, openContextMenu } from './ContextMenu'
 import { Desktop } from './Desktop'
 import { AppIcon } from './icons'
-import { ACCENTS, currentAccent, setAccent } from './theme'
+import { appearanceMenu } from './appearanceMenu'
+import { toggleMode, useTheme } from './theme'
 import { ClockWidget, MinecraftWidget } from './TopbarWidgets'
 import { Window } from './Window'
 import { SINGLE_INSTANCE, useWM, type AppId, type Geometry, type WinState } from './wm'
 
-const DOCK: (AppId | '|')[] = ['terminal', 'projects', 'recents', 'cv', 'games', 'notes', 'contact', '|', 'trash']
+const DOCK: (AppId | '|')[] = ['terminal', 'files', 'projects', 'recents', 'cv', 'games', 'notes', 'contact', '|', 'trash']
 
-const TOP = 34
+const TOP = 28
 const DOCK_SPACE = 96
 
 export const isMobile = () => window.innerWidth < 720
@@ -70,8 +71,7 @@ function TopBar() {
   const wm = useWM()
   const recents = useRecents()
   const focused = wm.windows.find((w) => w.pid === wm.focusedPid)
-  const accents = Object.keys(ACCENTS)
-  const [accentIdx, setAccentIdx] = useState(() => Math.max(0, accents.indexOf(currentAccent())))
+  const theme = useTheme()
   return (
     <header className="topbar">
       <div className="topbar-left">
@@ -104,14 +104,23 @@ function TopBar() {
           {recents.live ? 'GitHub live' : recents.status === 'loading' ? 'syncing' : 'offline'}
         </button>
         <button
-          className="accent-btn"
-          title="Change accent (or run `theme` in the terminal)"
-          onClick={() => {
-            const next = (accentIdx + 1) % accents.length
-            setAccentIdx(next)
-            setAccent(accents[next])
-          }}
-        />
+          className="theme-btn"
+          title={`${theme.label} · click for ${theme.palette.mode === 'light' ? 'night' : 'day'}, right-click for themes`}
+          aria-label="Toggle light and dark theme"
+          onClick={toggleMode}
+          onContextMenu={(e) => openContextMenu(e, appearanceMenu())}
+        >
+          {theme.palette.mode === 'light' ? (
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" />
+            </svg>
+          )}
+        </button>
         <MinecraftWidget />
         <ClockWidget />
       </div>

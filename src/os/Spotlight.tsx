@@ -10,7 +10,8 @@ import { calculate, formatNumber } from './calc'
 import { resetLayout } from './desktopStore'
 import { AppIcon } from './icons'
 import { setOverlay } from './overlays'
-import { ACCENTS, setAccent } from './theme'
+import { THEMES } from './omarchyThemes'
+import { ACCENTS, setAccent, setMode, setTheme, themeLabel, themeSettings } from './theme'
 import { SINGLE_INSTANCE, useWM, type AppId } from './wm'
 
 // Ctrl+K: one search box for apps, files, projects, games, live status, quick actions, maths and
@@ -225,6 +226,7 @@ export function Spotlight() {
 
     // Apps
     for (const app of Object.keys(APP_META) as AppId[]) {
+      if (app === 'viewer') continue // needs a file to open
       const meta = APP_META[app]
       const open = wm.windows.filter((w) => w.app === app).length
       out.push({
@@ -252,8 +254,14 @@ export function Spotlight() {
       setTimeout(() => window.print(), 300)
     }, '⎙')
     action('email', `Copy email address`, 'email mail contact copy', () => copy(profile.email, 'email address'), '@', profile.email)
+    const ts = themeSettings()
+    out.push({ id: 'theme-mode-light', group: 'Actions', title: 'Day mode', subtitle: themeLabel(ts.light), keywords: 'theme light day mode appearance', icon: <Glyph color={THEMES[ts.light].background}>☀</Glyph>, run: () => setMode('light') })
+    out.push({ id: 'theme-mode-dark', group: 'Actions', title: 'Night mode', subtitle: themeLabel(ts.dark), keywords: 'theme dark night mode appearance', icon: <Glyph color={THEMES[ts.dark].background}>☾</Glyph>, run: () => setMode('dark') })
+    out.push({ id: 'theme-mode-auto', group: 'Actions', title: 'Auto theme (follow system)', keywords: 'theme auto system appearance', icon: <Glyph>◐</Glyph>, run: () => setMode('auto') })
+    for (const t of Object.keys(THEMES))
+      out.push({ id: `theme-${t}`, group: 'Actions', title: `Theme: ${themeLabel(t)}`, subtitle: `Omarchy ${THEMES[t].mode} theme`, keywords: `theme omarchy appearance ${t} ${THEMES[t].mode}`, icon: <Glyph color={THEMES[t].background}><span style={{ color: THEMES[t].accent }}>●</span></Glyph>, run: () => setTheme(t) })
     for (const [name, color] of Object.entries(ACCENTS))
-      out.push({ id: `accent-${name}`, group: 'Actions', title: `Accent color: ${name}`, keywords: `theme accent color colour ${name}`, icon: <Glyph color={color}> </Glyph>, run: () => setAccent(name) })
+      out.push({ id: `accent-${name}`, group: 'Actions', title: `Accent color: ${name}`, keywords: `accent color colour ${name}`, icon: <Glyph color={color}> </Glyph>, run: () => setAccent(name) })
 
     // Projects & contributions
     for (const p of projects)
@@ -315,7 +323,21 @@ export function Spotlight() {
     // Files in the home directory
     for (const path of walk(HOME)) {
       const node = lookup(path)
-      if (node?.type !== 'file') continue
+      if (!node || path.split('/').some((part) => part.startsWith('.'))) continue
+      if (node.type === 'dir') {
+        if (path === HOME) continue
+        out.push({
+          id: `dir-${path}`,
+          group: 'Files',
+          title: path.split('/').slice(-1)[0] + '/',
+          subtitle: prettyPath(path),
+          keywords: `folder directory ${prettyPath(path)}`,
+          icon: <Glyph color="color-mix(in srgb, var(--accent) 30%, transparent)">▰</Glyph>,
+          run: () => wm.openNew('files', { path }),
+          alt: { label: 'Open in terminal', run: () => term(`cd ${prettyPath(path)} && ls`, true) },
+        })
+        continue
+      }
       const name = path.split('/').pop()!
       out.push({
         id: `file-${path}`,
@@ -327,7 +349,7 @@ export function Spotlight() {
         run: () => {
           if (node.open?.url) window.open(node.open.url, '_blank', 'noopener')
           else if (node.open?.app) wm.open(node.open.app as AppId, node.open.props)
-          else term(`cat ${prettyPath(path)}`)
+          else wm.openNew('viewer', { path })
         },
         alt: { label: 'Open in terminal', run: () => term(`cat ${prettyPath(path)}`, true) },
         preview: () => <FilePreview path={path} />,
@@ -406,7 +428,7 @@ export function Spotlight() {
   const current = results[active]
   const execute = (r: Result | undefined, alt: boolean) => {
     if (!r) return
-    const keepOpen = r.id === 'calc' || r.id === 'status-mc' || r.id.startsWith('act-email') || r.id.startsWith('accent-')
+    const keepOpen = r.id === 'calc' || r.id === 'status-mc' || r.id.startsWith('act-email') || r.id.startsWith('accent-') || r.id.startsWith('theme-')
     ;(alt && r.alt ? r.alt.run : r.run)()
     if (!keepOpen) close()
   }

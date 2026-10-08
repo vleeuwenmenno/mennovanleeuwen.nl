@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState, type ReactNode } from 'react'
 
-export type AppId = 'terminal' | 'notes' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'trash'
+export type AppId = 'terminal' | 'files' | 'viewer' | 'notes' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'trash'
 
 export type WinState = {
   pid: number

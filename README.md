@@ -14,6 +14,15 @@ pnpm typecheck
 pnpm build        # static site in dist/
 ```
 
+## Look and themes
+
+The design follows Omarchy: square windows with a 2px accent border on the active one, a solid
+bar, one monospace face, and colours from Omarchy's own theme palettes
+([`src/os/omarchyThemes.ts`](src/os/omarchyThemes.ts), generated from
+`/usr/share/omarchy/themes/*/colors.toml`). Day is Flexoki Light, night is Tokyo Night, and
+"auto" follows the OS. The sun/moon button in the bar toggles; right-click it (or the desktop)
+for every Omarchy theme and accent overrides. `theme list` / `theme <name>` in the terminal too.
+
 ## Editing content
 
 Everything the site says lives in [`src/data/profile.ts`](src/data/profile.ts): headlines on the

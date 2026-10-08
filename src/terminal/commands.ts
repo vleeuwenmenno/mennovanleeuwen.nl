@@ -5,6 +5,8 @@ import { fetchStars, loadRecents, timeAgo } from '../data/recents'
 import type { AppId } from '../os/wm'
 import { lookupAddress, RECORD_TYPES, resolve } from './dns'
 import { pepper } from './pepper'
+import { THEMES as OMARCHY_THEMES } from '../os/omarchyThemes'
+import { ACCENTS, setMode, setTheme, themeLabel, themeSettings } from '../os/theme'
 import { age, HOME, lookup, prettyPath, resolvePath, walk, type DirNode, type Node } from './vfs'
 
 // Output markup understood by the terminal renderer:
@@ -25,11 +27,13 @@ type Command = { desc: string; usage?: string; hidden?: boolean; run: (ctx: Ctx)
 
 const APPS: Record<string, AppId> = {
   terminal: 'terminal',
+  files: 'files',
+  nautilus: 'files',
+  omafile: 'files',
   notes: 'notes',
   note: 'notes',
   sticky: 'notes',
   projects: 'projects',
-  files: 'projects',
   recents: 'recents',
   activity: 'recents',
   cv: 'cv',
@@ -44,6 +48,8 @@ const APPS: Record<string, AppId> = {
 
 const APP_NAMES: Record<AppId, string> = {
   terminal: 'terminal',
+  files: 'files',
+  viewer: 'viewer',
   notes: 'sticky-notes',
   projects: 'files',
   recents: 'activity',
@@ -156,7 +162,7 @@ export const commands: Record<string, Command> = {
     desc: 'list commands',
     run: () => {
       const groups: [string, string[]][] = [
-        ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'open']],
+        ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'open', 'files']],
         ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'heatmap', 'stars', 'contact']],
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo']],
         ['Network', ['ping', 'dig', 'host', 'nslookup', 'minecraft']],
@@ -455,12 +461,16 @@ export const commands: Record<string, Command> = {
         if (node.open.app) ctx.openApp(node.open.app as AppId, node.open.props)
         return
       }
-      if (node?.type === 'dir' || [...projects, ...contributions].some((p) => p.slug === slug)) {
-        if ([...projects, ...contributions].some((p) => p.slug === slug)) {
-          ctx.openApp('projects', { slug })
-          return
-        }
-        ctx.openApp('projects')
+      if (node?.type === 'dir') {
+        ctx.openNewApp('files', { path: abs })
+        return
+      }
+      if ([...projects, ...contributions].some((p) => p.slug === slug)) {
+        ctx.openApp('projects', { slug })
+        return
+      }
+      if (node?.type === 'file') {
+        ctx.openNewApp('viewer', { path: abs })
         return
       }
       throw new CmdError(`open: ${target}: no app, file or URL by that name`)
@@ -563,13 +573,35 @@ export const commands: Record<string, Command> = {
   },
   killall: { desc: 'kill everything', hidden: true, run: () => c('yellow', 'killall: refusing to end the world without a ticket.') },
   theme: {
-    desc: 'change the accent color',
-    usage: 'theme <amber|blue|green|pink|red|purple>',
+    desc: 'Omarchy theme, day/night mode and accent',
+    usage: 'theme [light|dark|auto] | theme list | theme <omarchy-theme> | theme accent <name|theme>',
     run: (ctx) => {
-      const name = ctx.args[0]
-      if (!name) return 'usage: theme <amber|blue|green|pink|red|purple>'
-      if (!ctx.setAccent(name)) throw new CmdError(`theme: unknown theme '${name}'`)
-      return `Accent set to ${c('accent', name)}.`
+      const [a, b] = ctx.args
+      const s = themeSettings()
+      if (!a)
+        return [
+          `${c('accent', themeLabel(s.name))} ${c('muted', `(${s.mode} mode · day ${s.light} · night ${s.dark}${s.accent ? ` · accent ${s.accent}` : ''})`)}`,
+          `usage: ${commands.theme.usage}`,
+        ].join('\n')
+      if (a === 'list')
+        return Object.keys(OMARCHY_THEMES)
+          .map((t) => `${t === s.name ? c('accent', '●') : ' '} ${t.padEnd(18)} ${c('muted', OMARCHY_THEMES[t].mode)}`)
+          .join('\n')
+      if (a === 'light' || a === 'dark' || a === 'auto') {
+        setMode(a)
+        return `Mode: ${c('accent', a)} (${themeLabel(themeSettings().name)})`
+      }
+      if (a === 'accent') {
+        if (!b || !ctx.setAccent(b)) throw new CmdError(`theme: accent must be one of: theme, ${Object.keys(ACCENTS).join(', ')}`)
+        return `Accent: ${c('accent', b)}`
+      }
+      if (OMARCHY_THEMES[a]) {
+        setTheme(a)
+        return `Theme: ${c('accent', themeLabel(a))}`
+      }
+      // Older habit: `theme pink` meant the accent.
+      if (ACCENTS[a] && ctx.setAccent(a)) return `Accent: ${c('accent', a)}`
+      throw new CmdError(`theme: unknown theme '${a}' (try \`theme list\`)`)
     },
   },
   fastfetch: { desc: 'system summary', run: (ctx) => fastfetch(ctx) },
@@ -729,6 +761,18 @@ export const commands: Record<string, Command> = {
     usage: "pepper [--local | TARGET] COMMAND   (try: pepper --help)",
     run: (ctx) => pepper(ctx),
   },
+  files: {
+    desc: 'open a folder in the Files app',
+    usage: 'files [path]',
+    run: (ctx) => {
+      const abs = resolvePath(ctx.cwd, ctx.args[0] ?? '.')
+      const node = lookup(abs)
+      if (!node) throw new CmdError(`files: ${ctx.args[0]}: No such file or directory`)
+      if (node.type === 'dir') ctx.openNewApp('files', { path: abs })
+      else ctx.openNewApp('files', { path: abs.split('/').slice(0, -1).join('/') || '/', select: abs })
+    },
+  },
+  nautilus: { desc: 'alias for files', hidden: true, run: (ctx) => commands.files.run(ctx) },
   shutdown: { desc: 'power off', hidden: true, run: () => 'Shutting down... no. Close the tab like everyone else.' },
   reboot: {
     desc: 'reload the page',
