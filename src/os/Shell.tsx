@@ -588,14 +588,9 @@ function Boot({ onDone }: { onDone: () => void }) {
   )
 }
 
+// Boots on every page load; a click or any key skips it. Not for people who asked for less motion.
 function shouldBoot() {
-  try {
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches || sessionStorage.getItem('mvlos.booted')) return false
-    sessionStorage.setItem('mvlos.booted', '1')
-  } catch {
-    /* storage blocked: boot every time, it's short */
-  }
-  return true
+  return !matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
 export function Shell() {
