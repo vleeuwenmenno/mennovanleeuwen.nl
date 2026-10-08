@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentType } from 'react'
+import { lazy, Suspense, useEffect, useState, type ComponentType } from 'react'
 import type { WinState } from '../../os/wm'
 import { Breakout } from './Breakout'
 import { GAME_CATALOG } from './catalog'
@@ -9,6 +9,9 @@ import { Pool } from './Pool'
 import { Snake } from './Snake'
 import { Tetris } from './Tetris'
 
+// Gladiator is big (art, rules, sound), so it loads only when picked.
+const Gladiator = lazy(() => import('./Gladiator').then((m) => ({ default: m.Gladiator })))
+
 const COMPONENTS: Record<string, ComponentType<{ win: WinState }>> = {
   'tetris': Tetris,
   'pacman': PacMan,
@@ -17,6 +20,7 @@ const COMPONENTS: Record<string, ComponentType<{ win: WinState }>> = {
   'minesweeper': Minesweeper,
   'breakout': Breakout,
   'pool': Pool,
+  'gladiator': Gladiator,
 }
 
 export const GAMES = GAME_CATALOG.map((g) => ({ ...g, component: COMPONENTS[g.id] }))
@@ -27,6 +31,11 @@ function readBest(id: string) {
     if (id === 'minesweeper') return all['minesweeper-easy'] !== undefined ? `${all['minesweeper-easy']}s` : null
     if (id === 'minecraft') return 'touch grass'
     if (id === 'pool') return all.pool !== undefined ? `${all.pool} ${all.pool === 1 ? 'win' : 'wins'}` : null
+    if (id === 'gladiator') {
+      const g = JSON.parse(localStorage.getItem('mvlos.gladiator.v1') ?? 'null') as { slots: ({ g: { level: number } } | null)[]; hall: { level: number }[] } | null
+      const top = Math.max(0, ...(g?.slots ?? []).map((s) => s?.g.level ?? 0), ...(g?.hall ?? []).map((h) => h.level))
+      return top ? `level ${top}` : null
+    }
     return all[id] ?? null
   } catch {
     return null
@@ -50,7 +59,9 @@ export function Games({ win }: { win: WinState }) {
             {current.glyph} {current.name}
           </span>
         </div>
-        <Game key={current.id} win={win} />
+        <Suspense fallback={<div className="game"><p className="muted">Loading…</p></div>}>
+          <Game key={current.id} win={win} />
+        </Suspense>
       </div>
     )
   }

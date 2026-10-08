@@ -36,7 +36,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   recents: { title: 'Activity', dock: 'Activity', blurb: 'Live activity and contribution graph', size: [780, 680], render: () => <Recents /> },
   cv: { title: 'cv.md — Viewer', dock: 'CV', blurb: 'The printable version of me', size: [760, 680], render: () => <Cv /> },
   contact: { title: 'New message', dock: 'Contact', blurb: 'Get in touch', size: [560, 500], render: () => <Contact /> },
-  games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, Pool, Breakout', size: [720, 640], render: (w) => <Games win={w} /> },
+  games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, Pool, Gladiator, Breakout', size: [720, 640], render: (w) => <Games win={w} /> },
   notebook: { title: 'Notebook', dock: 'Notebook', blurb: 'Your notes, in Markdown, on any device', size: [860, 560], render: (w) => <Notebook win={w} /> },
   // One per note on the desktop (props.id); opened from the Notebook, never on its own.
   sticky: { title: 'Note', dock: 'Sticky note', blurb: 'One of your notes, stuck on the desktop', size: [260, 240], chrome: 'note', render: (w) => <Sticky win={w} /> },
