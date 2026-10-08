@@ -731,10 +731,10 @@ export const commands: Record<string, Command> = {
   },
   games: {
     desc: 'open the arcade',
-    usage: 'games [tetris|pacman|snake|minesweeper|2048|breakout]',
+    usage: 'games [tetris|pacman|minecraft|snake|minesweeper|2048|breakout]',
     run: (ctx) => {
       const game = ctx.args[0]
-      if (game && !['tetris', 'pacman', 'snake', 'minesweeper', '2048', 'breakout'].includes(game)) throw new CmdError(`games: no game called '${game}' (try tetris, pacman, snake, minesweeper, 2048, breakout)`)
+      if (game && !['tetris', 'pacman', 'minecraft', 'snake', 'minesweeper', '2048', 'breakout'].includes(game)) throw new CmdError(`games: no game called '${game}' (try tetris, pacman, minecraft, snake, minesweeper, 2048, breakout)`)
       ctx.openNewApp('games', game ? { game } : undefined)
     },
   },

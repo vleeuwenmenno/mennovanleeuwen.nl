@@ -1910,6 +1910,7 @@ body.is-resizing * {
   font-size: 13px;
 }
 .game-overlay .actions {
+  --p: var(--accent);
   justify-content: center;
   margin-top: 8px;
 }
@@ -1949,6 +1950,127 @@ body.is-resizing * {
     grid-column: 3;
     grid-row: 2;
   }
+}
+/* "Minecraft" */
+.mc-boot {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 24px;
+  user-select: none;
+}
+.mc-studio {
+  background: #ef323d;
+}
+.mc-studio-logo {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: #fff;
+  font-weight: 700;
+  font-size: clamp(22px, 5vw, 36px);
+  letter-spacing: 0.12em;
+}
+.mc-studio-mark {
+  display: grid;
+  place-items: center;
+  width: 1.6em;
+  height: 1.6em;
+  border: 4px solid #fff;
+  font-family: var(--mono);
+  letter-spacing: 0;
+}
+.mc-bar {
+  width: min(360px, 80%);
+  height: 10px;
+  border: 2px solid #fff;
+  padding: 2px;
+}
+.mc-bar span {
+  display: block;
+  height: 100%;
+  background: #fff;
+  transition: width 0.18s linear;
+}
+.mc-world {
+  /* Dirt: a few shades of brown in a 4-cell repeating pattern, scaled up for chunky pixels. */
+  background-color: #593d29;
+  background-image: linear-gradient(45deg, #4b3322 25%, transparent 25%), linear-gradient(-45deg, #6b4a32 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #4b3322 75%), linear-gradient(-45deg, transparent 75%, #3f2a1c 75%);
+  background-size: 32px 32px;
+  background-position: 0 0, 0 16px, 16px -16px, -16px 0;
+  image-rendering: pixelated;
+  color: #fff;
+  font-family: var(--mono);
+  text-shadow: 2px 2px 0 #3a3a3a;
+}
+.mc-title {
+  margin: 0;
+  font-weight: 700;
+  font-size: clamp(26px, 6vw, 46px);
+  letter-spacing: 0.06em;
+  color: #e8e8e8;
+  text-shadow: 3px 3px 0 #555, 6px 6px 0 rgba(0, 0, 0, 0.35);
+}
+.mc-step,
+.mc-percent {
+  margin: 0;
+  font-size: 14px;
+}
+.mc-bar-green {
+  border-color: #000;
+  background: #1a1a1a;
+  padding: 0;
+  height: 12px;
+}
+.mc-bar-green span {
+  background: #7fcc19;
+}
+.mc-joke-wrap {
+  text-shadow: none;
+}
+.mc-joke {
+  --p: #7fcc19;
+  max-width: 440px;
+  padding: 22px 24px;
+  border-radius: 14px;
+  background: rgba(13, 15, 21, 0.92);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.8);
+  font-family: var(--ui);
+  font-size: 14px;
+  color: var(--text);
+  animation: win-in 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.4);
+}
+.mc-joke p {
+  margin: 0 0 10px;
+}
+.mc-joke-title {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--accent);
+}
+.mc-joke-server {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 14px 0 4px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  font-size: 13px;
+}
+.mc-joke-server code {
+  font-family: var(--mono);
+  color: var(--green);
+}
+.mc-joke .actions {
+  margin-top: 14px;
 }
 /* Tetris */
 .tetris-wrap {
