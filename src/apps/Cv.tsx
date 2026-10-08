@@ -1,4 +1,4 @@
-import { contributions, experience, profile, projects, skills } from '../data/profile'
+import { contributions, education, experience, hobbies, profile, projects, skills } from '../data/profile'
 import { useWM } from '../os/wm'
 
 export function Cv() {
@@ -85,6 +85,19 @@ export function Cv() {
         </section>
 
         <section>
+          <h2>Education</h2>
+          {education.map((e) => (
+            <div className="cv-row" key={e.title}>
+              <div className="cv-when">{e.period}</div>
+              <div>
+                <strong>{e.title}</strong>, {e.school}
+                {e.note && <p>{e.note}</p>}
+              </div>
+            </div>
+          ))}
+        </section>
+
+        <section>
           <h2>Skills</h2>
           {Object.entries(skills).map(([k, v]) => (
             <div className="cv-row" key={k}>
@@ -93,6 +106,26 @@ export function Cv() {
                 {v.map((s) => (
                   <span key={s}>{s}</span>
                 ))}
+              </div>
+            </div>
+          ))}
+        </section>
+
+        <section>
+          <h2>Off the clock</h2>
+          {hobbies.map((h) => (
+            <div className="cv-row" key={h.name}>
+              <div className="cv-when">{h.name}</div>
+              <div>
+                {h.note}
+                {h.url && (
+                  <>
+                    {' '}
+                    <a href={h.url} target="_blank" rel="noopener noreferrer">
+                      See my work ↗
+                    </a>
+                  </>
+                )}
               </div>
             </div>
           ))}

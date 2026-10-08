@@ -1,4 +1,4 @@
-import { contributions, experience, headlines, profile, projects, skills } from '../data/profile'
+import { contributions, education, experience, headlines, hobbies, profile, projects, skills } from '../data/profile'
 
 // A read-only, in-memory filesystem built from profile.ts. Nothing here touches the real
 // machine; "files" are strings and a few of them point at an app or URL for `open`.
@@ -61,8 +61,14 @@ function cv() {
     '## Open source',
     ...contributions.map((c) => `  ${`${c.owner}/${c.slug}`.padEnd(26)} ${c.description.split(':')[0]}`),
     '',
+    '## Education',
+    ...education.map((e) => `  ${e.title}, ${e.school} (${e.period})`),
+    '',
     '## Skills',
-    ...Object.entries(skills).map(([k, v]) => `  ${k.padEnd(15)} ${v.join(', ')}`),
+    ...Object.entries(skills).map(([k, v]) => `  ${k.padEnd(16)} ${v.join(', ')}`),
+    '',
+    '## Off the clock',
+    ...hobbies.map((h) => `  ${h.name.padEnd(19)} ${h.note}`),
   ].join('\n')
 }
 
@@ -98,11 +104,13 @@ export const root: DirNode = dir('', [
           '  projects/        things I built and run',
           '  contributions/   other people\'s projects I help with',
           '  contact.txt      how to reach me',
+          '  hobbies.txt      what I do when the laptop is closed',
           '',
           'Try `open projects/boltwarden` or `recent | head -5`.',
         ].join('\n'),
       ),
       file('cv.md', cv, { app: 'cv' }),
+      file('hobbies.txt', hobbies.map((h) => `${h.name}\n  ${h.note}${h.url ? `\n  ${h.url}` : ''}`).join('\n\n')),
       file('headlines.txt', headlines.join('\n'), { app: 'notes' }),
       file(
         'contact.txt',

@@ -13,6 +13,7 @@ export const profile = {
   github: 'vleeuwenmenno',
   links: [
     { label: 'GitHub', url: 'https://github.com/vleeuwenmenno' },
+    { label: 'LinkedIn', url: 'https://www.linkedin.com/in/menno-v-44477b176/' },
     { label: 'Forgejo', url: 'https://git.mvl.sh/vleeuwenmenno' },
     { label: 'mvl.sh', url: 'https://mvl.sh' },
   ],
@@ -186,12 +187,12 @@ export const contributions: Contribution[] = [
 ]
 
 export const skills = {
-  Languages: ['Go', 'TypeScript', 'Rust', 'Python', 'QML', 'Starlark', 'Bash'],
-  Infrastructure: ['Arch Linux', 'Ubuntu', 'Docker / Podman', 'Incus / LXD', 'SaltStack', 'CI/CD'],
-  Frontend: ['React', 'Vite', 'PWA', 'WebExtensions', 'Quickshell'],
+  Languages: ['Go', 'TypeScript', 'Rust', 'C# / .NET', 'PHP', 'Dart', 'Python', 'QML', 'Starlark', 'Bash'],
+  Infrastructure: ['Arch Linux', 'Ubuntu', 'Docker / Podman', 'Incus / LXD', 'SaltStack', 'CI/CD', 'Networking'],
+  Frameworks: ['React', 'Flutter', 'Laravel', 'Vite', 'WebExtensions', 'Quickshell'],
+  'Ways of working': ['Agile / Scrum', 'Object-oriented design'],
 }
 
-// Fill in the rest of your work history here; the CV app and `cat cv.md` read it.
 export const experience = [
   {
     role: 'DevOps Engineer',
@@ -199,4 +200,52 @@ export const experience = [
     period: 'Present',
     notes: ['Infrastructure, deployment pipelines and keeping production calm.'],
   },
+  {
+    role: 'Software Engineer',
+    company: 'Sandwave / Your.Online (formerly TWS)',
+    period: 'From Nov 2021',
+    notes: [
+      'Built complex authentication flows using modern security practices.',
+      'Kept the dependency tree healthy and up to date across projects.',
+      'Worked in an agile/scrum setup, sparring with smaller teams.',
+    ],
+  },
+  {
+    role: '.NET / PHP Developer',
+    company: 'Minty Media',
+    period: 'Nov 2020 – Oct 2021',
+    notes: [
+      'Built API bridges between Bol.com and WooCommerce.',
+      'Set up CI/CD pipelines to streamline testing and deployment.',
+      'Started a full hosting panel: DNS editor, domain purchasing, VPS options.',
+    ],
+  },
+  {
+    role: 'Flutter Developer',
+    company: 'Bots.io (formerly RevenYOU)',
+    period: 'Mar 2019 – Oct 2019',
+    notes: ['Led development of the Bots.io app, now past 1M downloads.', 'Built the app skeleton and worked closely with the UI designers.'],
+  },
+  {
+    role: 'All-round / Repair Technician / Sales',
+    company: 'Com Today',
+    period: 'Jan 2014 – Mar 2019',
+    notes: [
+      'Wrote an in-house PHP cashier system for sales, expenses, stock and open tasks.',
+      'Repaired computers, laptops, phones and everything in between.',
+      'Managed stock, sold systems and gave customers technical support.',
+    ],
+  },
+]
+
+export const education = [
+  { title: 'MBO 4 Application & Media Developer', school: 'Nova College, Beverwijk', period: '2015 – 2019' },
+  { title: 'MBO 2 IT Employee', school: 'Nova College, Beverwijk', period: '2012 – 2014', note: 'Cisco networking courses' },
+]
+
+export const hobbies = [
+  { name: 'Astrophotography', note: 'Galaxies, nebulae and star fields, plus a lot of image processing.', url: 'https://www.astrobin.com/users/vleeuwenmenno/' },
+  { name: 'FPV drones', note: 'Building, flying and crashing freestyle and cinematic quads, mostly in summer.' },
+  { name: 'Languages & travel', note: 'Getting out of my comfort zone by speaking the local language.' },
+  { name: 'Side projects', note: 'Endless test projects. Some of them turn into Boltwarden.' },
 ]
