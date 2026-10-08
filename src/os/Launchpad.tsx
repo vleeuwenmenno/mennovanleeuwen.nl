@@ -1,22 +1,97 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { GAMES } from '../apps/games/Games'
+import { GAME_CATALOG } from '../apps/games/catalog'
+import { contributions, profile, projects } from '../data/profile'
 import { APP_META } from './apps'
-import { openContextMenu } from './ContextMenu'
+import { appearanceMenu } from './appearanceMenu'
+import type { MenuItem } from './ContextMenu'
 import { resetLayout } from './desktopStore'
+import { DOCK_MODES, getDockMode, setDockMode } from './dockPrefs'
 import { AppIcon } from './icons'
 import { setOverlay } from './overlays'
-import { toggleMode, themeSettings } from './theme'
+import { reboot, shutdown } from './powerState'
 import { SINGLE_INSTANCE, useWM, type AppId } from './wm'
 
-// The "All apps" launcher, laid out like Omarchy Spotlight: one search field, Applications and
-// Commands sections, a type label per row and the highlighted row's name in the accent colour.
+// The "All apps" launcher, modelled on Omarchy's menu (Super + Alt + Space): a small "Go…" list
+// of categories that open into submenus. Typing searches every entry at once. Ctrl+K's
+// Spotlight is the separate, bigger search for files, maths and status.
 
-type Row = { key: string; section: 'Applications' | 'Games' | 'Commands'; name: string; detail?: string; kind: string; icon: ReactNode; run: () => void; runNew?: () => void }
+type Entry = {
+  label: string
+  icon?: ReactNode
+  /** Leaf: what choosing it does. */
+  run?: () => void
+  /** Ctrl+Enter / right half: open another window. */
+  runNew?: () => void
+  /** Branch: its entries, built when opened so they reflect the current state. */
+  children?: () => Entry[]
+  checked?: boolean
+  swatch?: string
+}
 
 const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'contact', 'notes', 'keys', 'trash']
 
+const stroke = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const
+const Icon = ({ children }: { children: ReactNode }) => (
+  <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden {...stroke}>
+    {children}
+  </svg>
+)
+const ICONS = {
+  apps: (
+    <Icon>
+      <path d="M5 5h2v2H5zM11 5h2v2h-2zM17 5h2v2h-2zM5 11h2v2H5zM11 11h2v2h-2zM17 11h2v2h-2zM5 17h2v2H5zM11 17h2v2h-2zM17 17h2v2h-2z" />
+    </Icon>
+  ),
+  games: (
+    <Icon>
+      <path d="M7 8h10a4 4 0 0 1 4 4v1a4 4 0 0 1-7 2.6L13 14h-2l-1 1.6A4 4 0 0 1 3 13v-1a4 4 0 0 1 4-4zM8 10.5v3M6.5 12h3" />
+    </Icon>
+  ),
+  projects: (
+    <Icon>
+      <path d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5" />
+    </Icon>
+  ),
+  learn: (
+    <Icon>
+      <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5zM4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5" />
+    </Icon>
+  ),
+  style: (
+    <Icon>
+      <path d="M4 20l10-10M14 4v2M14 12v2M10 8h-2M20 8h-2M17 5l-1.5 1.5M17 11l-1.5-1.5" />
+    </Icon>
+  ),
+  setup: (
+    <Icon>
+      <path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+    </Icon>
+  ),
+  about: (
+    <Icon>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 8h.01" />
+    </Icon>
+  ),
+  system: (
+    <Icon>
+      <path d="M12 3v8M6.3 6.8a8 8 0 1 0 11.4 0" />
+    </Icon>
+  ),
+}
+
+/** Context-menu items (the Appearance menu) as launcher entries. */
+const fromMenu = (items: MenuItem[]): Entry[] =>
+  items.flatMap((m) =>
+    'separator' in m ? [] : [{ label: m.label, checked: m.checked, swatch: m.swatch, run: m.onSelect, children: m.submenu ? () => fromMenu(m.submenu!) : undefined }],
+  )
+
+const link = (url: string) => () => window.open(url, '_blank', 'noopener')
+
 export function Launchpad() {
   const wm = useWM()
+  const [path, setPath] = useState<Entry[]>([])
   const [q, setQ] = useState('')
   const [active, setActive] = useState(0)
   const input = useRef<HTMLInputElement>(null)
@@ -25,122 +100,151 @@ export function Launchpad() {
 
   useEffect(() => input.current?.focus(), [])
 
-  const rows = useMemo<Row[]>(() => {
-    const apps: Row[] = APP_ORDER.filter((a) => APP_META[a]).map((app) => ({
-      key: app,
-      section: 'Applications',
-      name: APP_META[app].dock,
-      detail: APP_META[app].blurb,
-      kind: 'App',
-      icon: <AppIcon app={app} size={20} />,
-      run: () => wm.open(app),
-      runNew: SINGLE_INSTANCE.has(app) ? undefined : () => wm.openNew(app),
-    }))
-    const games: Row[] = GAMES.map((g) => ({
-      key: `game-${g.id}`,
-      section: 'Games',
-      name: g.name,
-      detail: g.blurb,
-      kind: 'Game',
-      icon: <span className="al-glyph">{g.glyph}</span>,
-      run: () => wm.openNew('games', { game: g.id }),
-    }))
-    const dark = themeSettings().name && document.documentElement.dataset.mode === 'dark'
-    const commands: Row[] = [
-      { key: 'cmd-terminal', section: 'Commands', name: 'New terminal', detail: 'Open another shell', kind: 'Command', icon: <span className="al-glyph">›_</span>, run: () => wm.openNew('terminal') },
-      { key: 'cmd-theme', section: 'Commands', name: dark ? 'Day mode' : 'Night mode', detail: 'Switch between the light and dark theme', kind: 'Command', icon: <span className="al-glyph">{dark ? '☀' : '☾'}</span>, run: toggleMode },
-      { key: 'cmd-search', section: 'Commands', name: 'Search everything', detail: 'Files, status, projects (Ctrl+K)', kind: 'Command', icon: <span className="al-glyph">⌕</span>, run: () => setTimeout(() => setOverlay('spotlight'), 0) },
-      { key: 'cmd-minimize', section: 'Commands', name: 'Show desktop', detail: 'Minimize every window', kind: 'Command', icon: <span className="al-glyph">▁</span>, run: () => wm.windows.forEach((w) => wm.minimize(w.pid)) },
-      { key: 'cmd-cleanup', section: 'Commands', name: 'Clean up icons', detail: 'Put desktop icons back in order', kind: 'Command', icon: <span className="al-glyph">▤</span>, run: resetLayout },
-    ]
-    const query = q.trim().toLowerCase()
-    const match = (r: Row) => !query || `${r.name} ${r.detail ?? ''} ${r.kind}`.toLowerCase().includes(query)
-    // Name matches first, then description matches.
-    const rank = (r: Row) => (!query ? 0 : r.name.toLowerCase().startsWith(query) ? 0 : r.name.toLowerCase().includes(query) ? 1 : 2)
-    return [...apps, ...games, ...commands].filter(match).sort((a, b) => (query ? rank(a) - rank(b) : 0))
-  }, [q, wm])
+  const root = useMemo<Entry[]>(
+    () => [
+      {
+        label: 'Apps',
+        icon: ICONS.apps,
+        children: () =>
+          APP_ORDER.filter((a) => APP_META[a]).map((app) => ({
+            label: APP_META[app].dock,
+            icon: <AppIcon app={app} size={16} tone />,
+            run: () => wm.open(app),
+            runNew: SINGLE_INSTANCE.has(app) ? undefined : () => wm.openNew(app),
+          })),
+      },
+      {
+        label: 'Games',
+        icon: ICONS.games,
+        children: () => GAME_CATALOG.map((g) => ({ label: g.name, icon: <span className="om-glyph">{g.glyph}</span>, run: () => wm.openNew('games', { game: g.id }) })),
+      },
+      {
+        label: 'Projects',
+        icon: ICONS.projects,
+        children: () => [
+          ...projects.map((p) => ({ label: p.name, run: () => wm.open('projects', { slug: p.slug }) })),
+          ...contributions.map((c) => ({ label: `${c.owner}/${c.slug}`, run: () => wm.open('projects', { slug: c.slug }) })),
+        ],
+      },
+      {
+        label: 'Learn',
+        icon: ICONS.learn,
+        children: () => [
+          { label: 'CV', run: () => wm.open('cv') },
+          { label: 'Keyboard shortcuts', run: () => wm.open('keys') },
+          { label: 'Terminal commands', run: () => wm.openNew('terminal', { run: 'help' }) },
+          { label: 'Recent activity', run: () => wm.open('recents') },
+          { label: 'Source code', run: link('https://github.com/vleeuwenmenno/mennovanleeuwen.nl') },
+          { label: 'GitHub', run: link(`https://github.com/${profile.github}`) },
+        ],
+      },
+      { label: 'Style', icon: ICONS.style, children: () => fromMenu(appearanceMenu()) },
+      {
+        label: 'Setup',
+        icon: ICONS.setup,
+        children: () => [
+          { label: 'Dock', children: () => DOCK_MODES.map(([m, label]) => ({ label, checked: getDockMode() === m, run: () => setDockMode(m) })) },
+          { label: 'Clean up desktop icons', run: resetLayout },
+          { label: 'Show desktop', run: () => wm.windows.forEach((w) => wm.minimize(w.pid)) },
+          { label: 'New terminal', run: () => wm.openNew('terminal') },
+        ],
+      },
+      { label: 'About', icon: ICONS.about, run: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) },
+      {
+        label: 'System',
+        icon: ICONS.system,
+        children: () => [
+          { label: 'Reboot', run: reboot },
+          { label: 'Shut down', run: shutdown },
+        ],
+      },
+    ],
+    [wm],
+  )
 
-  const sections = query(rows)
-  const flat = sections.flatMap((s) => s.rows)
-  useEffect(() => setActive(0), [q])
+  const level = path.length ? path[path.length - 1].children!() : root
+  // Typing searches every entry below where you are, showing where each one lives.
+  const rows = useMemo(() => {
+    const query = q.trim().toLowerCase()
+    if (!query) return level.map((e) => ({ e, where: '' }))
+    const out: { e: Entry; where: string }[] = []
+    const walk = (entries: Entry[], where: string) => {
+      for (const e of entries) {
+        if (e.label.toLowerCase().includes(query) && (e.run || e.children)) out.push({ e, where })
+        if (e.children) walk(e.children(), where ? `${where} › ${e.label}` : e.label)
+      }
+    }
+    walk(level, path.map((p) => p.label).join(' › '))
+    return out.sort((a, b) => Number(!a.e.label.toLowerCase().startsWith(query)) - Number(!b.e.label.toLowerCase().startsWith(query)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, path, root])
+
+  useEffect(() => setActive(0), [q, path])
   useEffect(() => {
-    list.current?.querySelector('.al-row.is-active')?.scrollIntoView({ block: 'nearest' })
+    list.current?.querySelector('.om-row.is-active')?.scrollIntoView({ block: 'nearest' })
   }, [active])
 
-  const launch = (r: Row, fresh = false) => {
+  const choose = (e: Entry, fresh = false) => {
+    if (e.children && !(fresh && e.run)) {
+      setPath((p) => [...p, e])
+      setQ('')
+      return
+    }
     close()
-    ;(fresh && r.runNew ? r.runNew : r.run)()
+    ;(fresh && e.runNew ? e.runNew : e.run)?.()
+  }
+  const back = () => {
+    setPath((p) => p.slice(0, -1))
+    setQ('')
   }
 
+  const title = path.length ? `${path[path.length - 1].label}…` : 'Go…'
   return (
-    <div className="al-backdrop" onPointerDown={(e) => e.target === e.currentTarget && close()}>
+    <div className="om-backdrop" onPointerDown={(e) => e.target === e.currentTarget && close()}>
       <div
-        className="al-panel"
+        className="om-panel"
         role="dialog"
         aria-label="All apps"
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') close()
-          else if (e.key === 'ArrowDown') setActive((a) => Math.min(flat.length - 1, a + 1))
-          else if (e.key === 'ArrowUp') setActive((a) => Math.max(0, a - 1))
-          else if (e.key === 'Enter' && flat[active]) launch(flat[active], e.ctrlKey || e.metaKey)
+        onKeyDown={(ev) => {
+          if (ev.key === 'Escape') close()
+          else if (ev.key === 'ArrowDown') setActive((a) => Math.min(rows.length - 1, a + 1))
+          else if (ev.key === 'ArrowUp') setActive((a) => Math.max(0, a - 1))
+          else if ((ev.key === 'Enter' || (ev.key === 'ArrowRight' && rows[active]?.e.children)) && rows[active]) choose(rows[active].e, ev.ctrlKey || ev.metaKey)
+          else if ((ev.key === 'ArrowLeft' || ev.key === 'Backspace') && !q && path.length) back()
           else return
-          e.preventDefault()
+          ev.preventDefault()
         }}
       >
-        <div className="al-search">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
-            <circle cx="11" cy="11" r="7" />
-            <path d="M20 20l-3.5-3.5" />
-          </svg>
-          <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search for apps and commands…" aria-label="Search for apps and commands" spellCheck={false} autoComplete="off" />
+        <div className="om-head">
+          {path.length > 0 && (
+            <button className="om-back" onClick={back} aria-label="Back">
+              ‹
+            </button>
+          )}
+          <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} placeholder={title} aria-label={title} spellCheck={false} autoComplete="off" />
         </div>
-        <div className="al-list" ref={list}>
-          {sections.map((s) => (
-            <section key={s.title}>
-              <p className="al-section">{s.title}</p>
-              {s.rows.map((r) => {
-                const i = flat.indexOf(r)
-                return (
-                  <button
-                    key={r.key}
-                    className={`al-row ${i === active ? 'is-active' : ''}`}
-                    onPointerMove={() => setActive(i)}
-                    onClick={(e) => launch(r, e.ctrlKey || e.metaKey)}
-                    onContextMenu={(e) =>
-                      openContextMenu(e, [
-                        { label: 'Open', onSelect: () => launch(r) },
-                        ...(r.runNew ? [{ label: 'Open in new window', onSelect: () => launch(r, true) }] : []),
-                      ])
-                    }
-                  >
-                    <span className="al-icon">{r.icon}</span>
-                    <span className="al-name">{r.name}</span>
-                    {r.detail && <span className="al-detail">{r.detail}</span>}
-                    <span className="al-kind">{r.kind}</span>
-                  </button>
-                )
-              })}
-            </section>
+        <div className="om-list" ref={list} role="listbox">
+          {rows.map(({ e, where }, i) => (
+            <button
+              key={`${where}/${e.label}`}
+              role="option"
+              aria-selected={i === active}
+              className={`om-row ${i === active ? 'is-active' : ''}`}
+              onPointerMove={() => setActive(i)}
+              onClick={(ev) => choose(e, ev.ctrlKey || ev.metaKey)}
+            >
+              <span className="om-icon">{e.swatch ? <span className="om-swatch" style={{ background: e.swatch }} /> : e.icon}</span>
+              <span className="om-label">
+                {e.label}
+                {where && <span className="om-where">{where}</span>}
+              </span>
+              {e.checked && <span className="om-check">✓</span>}
+              {e.children && <span className="om-more">›</span>}
+            </button>
           ))}
-          {!flat.length && <p className="al-empty">Nothing called “{q}”. Ctrl+K searches files and more.</p>}
+          {!rows.length && <p className="om-empty">Nothing called “{q}”. Ctrl+K searches files and more.</p>}
         </div>
-        <footer className="al-foot">
-          <span className="al-brand">
-            <svg viewBox="0 0 64 64" width="11" height="11" aria-hidden>
-              <path d="M14 46V18l18 16 18-16v28" fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            MvL OS
-          </span>
-          <span>
-            {flat[active]?.runNew && <span className="al-hint">ctrl ↵ new window</span>}↵ Open
-          </span>
-        </footer>
       </div>
     </div>
   )
-}
-
-function query(rows: Row[]) {
-  const order: Row['section'][] = ['Applications', 'Games', 'Commands']
-  return order.map((title) => ({ title, rows: rows.filter((r) => r.section === title) })).filter((s) => s.rows.length)
 }

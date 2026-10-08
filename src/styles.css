@@ -3939,145 +3939,113 @@ button.fm-dd-row:hover {
   }
 }
 
-/* ---------- All apps (Omarchy Spotlight style) ---------- */
+/* ---------- All apps (Omarchy menu style) ---------- */
 
-.al-backdrop {
+.om-backdrop {
   position: fixed;
   inset: 0;
   z-index: 250000;
+  display: grid;
+  place-items: center;
+  padding: 16px;
 }
-.al-panel {
-  position: absolute;
-  left: 50%;
-  bottom: 92px;
-  transform: translateX(-50%);
-  width: min(780px, calc(100vw - 24px));
-  max-height: min(560px, calc(100vh - 140px));
+.om-panel {
   display: flex;
   flex-direction: column;
-  background: color-mix(in srgb, var(--bg) 97%, transparent);
-  color: var(--fg);
-  border: 1px solid var(--line-strong);
-  border-radius: 10px;
-  box-shadow: 0 30px 70px -20px rgba(0, 0, 0, 0.55);
-  overflow: hidden;
-  animation: al-in 0.14s ease-out;
+  width: min(300px, 100%);
+  max-height: min(560px, calc(var(--vvh, 100dvh) - 80px));
+  padding: 14px 14px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: var(--border) solid var(--accent);
+  box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.6);
+  animation: ctx-in 0.1s ease-out;
 }
-@keyframes al-in {
-  from {
-    opacity: 0;
-    transform: translate(-50%, 8px);
-  }
-}
-.al-search {
+.om-head {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--line);
-  color: var(--muted);
+  gap: 6px;
+  padding: 0 4px 10px;
 }
-.al-search input {
+.om-head input {
   flex: 1;
   min-width: 0;
   background: none;
   border: 0;
   outline: 0;
-  color: var(--fg);
+  color: var(--text);
   font: inherit;
+  font-size: 13px;
+}
+.om-head input::placeholder {
+  color: var(--muted);
+}
+.om-back {
+  color: var(--muted);
   font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
 }
-.al-search input::placeholder {
-  color: var(--muted);
-}
-.al-list {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 6px 8px 8px;
-}
-.al-section {
-  margin: 10px 12px 4px;
-  font-size: 11px;
-  color: var(--muted);
-}
-.al-row {
-  width: 100%;
-  display: grid;
-  grid-template-columns: 22px auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 12px;
-  border-radius: 8px;
-  text-align: left;
-  color: var(--fg);
-}
-.al-row.is-active {
-  background: color-mix(in srgb, var(--fg) 8%, transparent);
-}
-.al-row.is-active .al-name {
+.om-back:hover {
   color: var(--accent);
 }
-.al-icon {
-  display: grid;
-  place-items: center;
+.om-list {
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
-.al-icon .app-icon {
-  border-radius: 5px;
-  box-shadow: none;
-}
-.al-glyph {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  font-size: 14px;
-  line-height: 1;
-}
-.al-name {
-  white-space: nowrap;
-  font-size: 14px;
-}
-.al-detail {
-  color: var(--muted);
-  font-size: 12.5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.al-kind {
-  color: var(--muted);
-  font-size: 12px;
-}
-.al-empty {
-  padding: 24px;
-  text-align: center;
-  color: var(--muted);
-}
-.al-foot {
+.om-row {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 8px 16px;
-  border-top: 1px solid var(--line);
+  gap: 12px;
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 10px;
+  text-align: left;
+  color: var(--text);
+  font-size: 13.5px;
+}
+.om-row.is-active {
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+  color: var(--accent);
+}
+.om-icon {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  flex: none;
+  color: var(--accent);
+}
+.om-glyph {
+  font-size: 13px;
+}
+.om-swatch {
+  width: 12px;
+  height: 12px;
+  outline: 1px solid var(--line-strong);
+}
+.om-label {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+}
+.om-where {
   font-size: 11px;
   color: var(--muted);
 }
-.al-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.om-check {
+  color: var(--green);
 }
-.al-hint {
-  margin-right: 14px;
+.om-more {
+  color: var(--muted);
+  font-size: 15px;
 }
-@media (max-width: 719px) {
-  .al-panel {
-    bottom: 84px;
-  }
-  .al-detail {
-    display: none;
-  }
+.om-row.is-active .om-more {
+  color: var(--accent);
+}
+.om-empty {
+  margin: 8px 10px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 /* ---------- Notifications (mako style) ---------- */
