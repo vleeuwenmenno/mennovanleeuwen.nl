@@ -6,9 +6,10 @@ import { age, HOME, lookup, prettyPath, resolvePath, walk, type DirNode, type No
 // Output markup understood by the terminal renderer:
 //   {c:green}text{/}      colored span (green, red, yellow, blue, cyan, magenta, muted, accent, bold)
 //   {link:https://…}text{/}  clickable link
+//   {anim:sl}{/}          an animation component (only `sl` today)
 // Pipes and redirects receive the text with this markup stripped.
 
-export const strip = (s: string) => s.replace(/\{(?:c|link):[^}]*\}|\{\/\}/g, '')
+export const strip = (s: string) => s.replace(/\{anim:[^}]*\}\{\/\}/g, '').replace(/\{(?:c|link):[^}]*\}|\{\/\}/g, '')
 const c = (color: string, s: string) => `{c:${color}}${s}{/}`
 const link = (url: string, text = url) => `{link:${url}}${text}{/}`
 
@@ -575,21 +576,8 @@ export const commands: Record<string, Command> = {
   cowsay: { desc: 'a cow says things', usage: 'cowsay [text]', run: (ctx) => cowsay(ctx.args.length ? ctx.args.join(' ') : ctx.stdin?.trim() || FORTUNES[Math.floor(Math.random() * FORTUNES.length)]) },
   sl: {
     desc: 'you meant ls',
-    run: () =>
-      [
-        '      ====        ________                ___________',
-        '  _D _|  |_______/        \\__I_I_____===__|_________|',
-        '   |(_)---  |   H\\________/ |   |        =|___ ___|',
-        '   /     |  |   H  |  |     |   |         ||_| |_||',
-        '  |      |  |   H  |__--------------------| [___] |',
-        '  | ________|___H__/__|_____/[][]~\\_______|       |',
-        '  |/ |   |-----------I_____I [][] []  D   |=======|_',
-        '__/ =| o |=-~~\\  /~~\\  /~~\\  /~~\\ ____Y___________|__',
-        ' |/-=|___|=    ||    ||    ||    |_____/~\\___/',
-        '  \\_/      \\O=====O=====O=====O_/      \\_/',
-        '',
-        c('muted', 'You typed sl. The train is the punishment.'),
-      ].join('\n'),
+    // Rendered by SlTrain in the terminal; piping it gives nothing, like the real thing.
+    run: () => '{anim:sl}{/}',
   },
   sudo: {
     desc: 'become root',

@@ -3,21 +3,24 @@ import { profile } from '../data/profile'
 import { setAccent } from '../os/theme'
 import { useWM, type WinState } from '../os/wm'
 import { complete, fastfetch, runLine } from '../terminal/commands'
+import { SlTrain } from '../terminal/SlTrain'
 import { HOME, prettyPath } from '../terminal/vfs'
 
 type Entry = { id: number; kind: 'cmd'; cwd: string; text: string } | { id: number; kind: 'out'; text: string }
 
-const MARKUP = /\{(c|link):([^}]*)\}([\s\S]*?)\{\/\}/g
+const MARKUP = /\{(c|link|anim):([^}]*)\}([\s\S]*?)\{\/\}/g
 
 /** Renders the `{c:color}…{/}` / `{link:url}…{/}` markup produced by commands. */
-function Markup({ text }: { text: string }) {
+function Markup({ text, onAnimationEnd }: { text: string; onAnimationEnd?: () => void }) {
   const parts: ReactNode[] = []
   let last = 0
   for (const m of text.matchAll(MARKUP)) {
     if (m.index! > last) parts.push(text.slice(last, m.index))
     const [, kind, arg, inner] = m
     parts.push(
-      kind === 'link' ? (
+      kind === 'anim' ? (
+        <SlTrain key={m.index} onDone={onAnimationEnd} />
+      ) : kind === 'link' ? (
         <a key={m.index} href={arg} target="_blank" rel="noopener noreferrer">
           {inner}
         </a>
@@ -70,7 +73,10 @@ export function Terminal({ win }: { win: WinState }) {
   ])
   const [cwd, setCwd] = useState(HOME)
   const [value, setValue] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [running, setRunning] = useState(false)
+  // An animation (sl) holds the prompt until it finishes, like the real one.
+  const [animating, setAnimating] = useState(false)
+  const busy = running || animating
   const history = useRef<string[]>(loadHistory())
   const histIdx = useRef<number | null>(null)
   const env = useRef<Record<string, string>>({ USER: profile.handle, HOME, SHELL: '/bin/msh', TERM: 'xterm-mvlos', EDITOR: 'nvim', LANG: 'en_US.UTF-8' })
@@ -94,6 +100,11 @@ export function Terminal({ win }: { win: WinState }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [win.props])
 
+  useEffect(() => {
+    if (!animating && wm.focusedPid === win.pid && !matchMedia('(pointer: coarse)').matches) inputRef.current?.focus({ preventScroll: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [animating])
+
   env.current.PWD = cwd
 
   async function submit(line: string) {
@@ -113,7 +124,7 @@ export function Terminal({ win }: { win: WinState }) {
     }
 
     let cleared = false
-    setBusy(true)
+    setRunning(true)
     const results = await runLine(trimmed, {
       cwd,
       setCwd,
@@ -128,7 +139,8 @@ export function Terminal({ win }: { win: WinState }) {
       exit: () => setTimeout(() => wm.close(win.pid), 120),
       setAccent,
     })
-    setBusy(false)
+    setRunning(false)
+    if (results.some((r) => r.output.includes('{anim:'))) setAnimating(true)
     setEntries((e) => {
       const base = cleared ? [] : e
       return [...base, ...results.filter((r) => r.output).map((r) => ({ id: nextId++, kind: 'out' as const, text: r.output }))]
@@ -189,7 +201,7 @@ export function Terminal({ win }: { win: WinState }) {
             </div>
           ) : (
             <pre className="t-out">
-              <Markup text={e.text} />
+              <Markup text={e.text} onAnimationEnd={() => setAnimating(false)} />
             </pre>
           )}
         </Fragment>
@@ -199,7 +211,7 @@ export function Terminal({ win }: { win: WinState }) {
           <span className="spinner" /> working…
         </div>
       )}
-      <label className={`t-line t-input ${busy ? 'is-busy' : ''}`}>
+      <label className={`t-line t-input ${busy ? 'is-busy' : ''}`} hidden={animating}>
         <Prompt cwd={cwd} />
         <input
           ref={inputRef}
