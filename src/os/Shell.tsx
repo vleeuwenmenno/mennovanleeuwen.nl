@@ -1,12 +1,6 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { Contact } from '../apps/Contact'
-import { Cv } from '../apps/Cv'
-import { Notes } from '../apps/Notes'
-import { Projects } from '../apps/Projects'
-import { Recents } from '../apps/Recents'
-import { Terminal } from '../apps/Terminal'
-import { Trash } from '../apps/Trash'
+import { useEffect, useState } from 'react'
 import { useRecents } from '../data/recents'
+import { APP_META } from './apps'
 import { ContextMenuHost, openContextMenu } from './ContextMenu'
 import { Desktop } from './Desktop'
 import { AppIcon } from './icons'
@@ -15,17 +9,7 @@ import { ClockWidget, MinecraftWidget } from './TopbarWidgets'
 import { Window } from './Window'
 import { SINGLE_INSTANCE, useWM, type AppId, type Geometry, type WinState } from './wm'
 
-export const APP_META: Record<AppId, { title: string; dock: string; size: [number, number]; chrome?: 'note'; render: (w: WinState) => ReactNode }> = {
-  terminal: { title: 'menno@mvlos: ~', dock: 'Terminal', size: [760, 500], render: (w) => <Terminal win={w} /> },
-  notes: { title: 'Sticky note', dock: 'Note', size: [310, 340], chrome: 'note', render: () => <Notes /> },
-  projects: { title: 'Files — Projects', dock: 'Projects', size: [880, 580], render: (w) => <Projects win={w} /> },
-  recents: { title: 'Activity', dock: 'Activity', size: [780, 680], render: () => <Recents /> },
-  cv: { title: 'cv.md — Viewer', dock: 'CV', size: [760, 680], render: () => <Cv /> },
-  contact: { title: 'New message', dock: 'Contact', size: [560, 500], render: () => <Contact /> },
-  trash: { title: 'Trash', dock: 'Trash', size: [560, 360], render: () => <Trash /> },
-}
-
-const DOCK: (AppId | '|')[] = ['terminal', 'projects', 'recents', 'cv', 'notes', 'contact', '|', 'trash']
+const DOCK: (AppId | '|')[] = ['terminal', 'projects', 'recents', 'cv', 'games', 'notes', 'contact', '|', 'trash']
 
 const TOP = 34
 const DOCK_SPACE = 96

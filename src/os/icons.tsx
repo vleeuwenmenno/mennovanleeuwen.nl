@@ -58,6 +58,18 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  games: {
+    bg: 'linear-gradient(160deg,#4fd1a5,#1f8a6b)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <path d="M15 17h18a6 6 0 0 1 6 6v3a6 6 0 0 1-10.6 3.9L26 27h-4l-2.4 2.9A6 6 0 0 1 9 26v-3a6 6 0 0 1 6-6z" />
+        <path d="M16 21v6M13 24h6" />
+        <circle cx="31" cy="22.5" r="0.8" fill="#fff" />
+        <circle cx="34" cy="25.5" r="0.8" fill="#fff" />
+      </>
+    ),
+  },
   trash: {
     bg: 'linear-gradient(160deg,#3a3f4f,#1d2029)',
     fg: '#c0c6d6',

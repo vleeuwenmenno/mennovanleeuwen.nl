@@ -57,6 +57,8 @@ const APPS: Record<string, AppId> = {
   about: 'cv',
   contact: 'contact',
   mail: 'contact',
+  games: 'games',
+  arcade: 'games',
   trash: 'trash',
 }
 
@@ -67,6 +69,7 @@ const APP_NAMES: Record<AppId, string> = {
   recents: 'activity',
   cv: 'cv-viewer',
   contact: 'mail',
+  games: 'arcade',
   trash: 'trash',
 }
 
@@ -178,7 +181,7 @@ export const commands: Record<string, Command> = {
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo']],
         ['Network', ['ping', 'dig', 'host', 'nslookup', 'minecraft']],
         ['System', ['ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'env', 'export', 'theme', 'clear', 'exit']],
-        ['Fun', ['fastfetch', 'fortune', 'cowsay', 'sl', 'sudo']],
+        ['Fun', ['games', 'fastfetch', 'fortune', 'cowsay', 'sl', 'sudo']],
       ]
       return [
         ...groups.map(([g, cmds]) => `${c('accent', g.padEnd(9))} ${cmds.map((n) => c('green', n)).join('  ')}`),
@@ -726,6 +729,19 @@ export const commands: Record<string, Command> = {
       return [`${c('bold', total.toLocaleString('en-GB'))} contributions in the last ${weeks.length} weeks ${c('muted', `(${name})`)}`, '', ...rows, '', `${c('muted', 'Less')} ${shades.join(' ')} ${c('muted', 'More')}   ${c('muted', 'open activity for the full year')}`].join('\n')
     },
   },
+  games: {
+    desc: 'open the arcade',
+    usage: 'games [snake|minesweeper|2048|breakout]',
+    run: (ctx) => {
+      const game = ctx.args[0]
+      if (game && !['snake', 'minesweeper', '2048', 'breakout'].includes(game)) throw new CmdError(`games: no game called '${game}' (try snake, minesweeper, 2048, breakout)`)
+      ctx.openNewApp('games', game ? { game } : undefined)
+    },
+  },
+  snake: { desc: 'play snake', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['snake'] }) },
+  minesweeper: { desc: 'play minesweeper', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['minesweeper'] }) },
+  '2048': { desc: 'play 2048', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['2048'] }) },
+  breakout: { desc: 'play breakout', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['breakout'] }) },
   shutdown: { desc: 'power off', hidden: true, run: () => 'Shutting down... no. Close the tab like everyone else.' },
   reboot: {
     desc: 'reload the page',
