@@ -5,6 +5,7 @@ import { fetchStars, loadRecents, timeAgo } from '../data/recents'
 import type { AppId } from '../os/wm'
 import { lookupAddress, RECORD_TYPES, resolve } from './dns'
 import { pepper } from './pepper'
+import { SHORTCUTS } from '../data/shortcuts'
 import { loadRates, smartCalc } from '../os/smartcalc'
 import { THEMES as OMARCHY_THEMES } from '../os/omarchyThemes'
 import { ACCENTS, setMode, setTheme, themeLabel, themeSettings } from '../os/theme'
@@ -34,6 +35,8 @@ const APPS: Record<string, AppId> = {
   notes: 'notes',
   note: 'notes',
   sticky: 'notes',
+  keys: 'keys',
+  shortcuts: 'keys',
   projects: 'projects',
   recents: 'recents',
   activity: 'recents',
@@ -52,6 +55,7 @@ const APP_NAMES: Record<AppId, string> = {
   files: 'files',
   viewer: 'viewer',
   notes: 'sticky-notes',
+  keys: 'shortcuts-note',
   projects: 'files',
   recents: 'activity',
   cv: 'cv-viewer',
@@ -167,7 +171,7 @@ export const commands: Record<string, Command> = {
         ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'heatmap', 'stars', 'contact']],
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo', 'calc']],
         ['Network', ['ping', 'dig', 'host', 'nslookup', 'minecraft']],
-        ['System', ['ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'env', 'export', 'theme', 'clear', 'exit']],
+        ['System', ['keys', 'ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'env', 'export', 'theme', 'clear', 'exit']],
         ['Fun', ['games', 'fastfetch', 'fortune', 'cowsay', 'sl', 'sudo']],
       ]
       return [
@@ -789,6 +793,14 @@ export const commands: Record<string, Command> = {
   },
   units: { desc: 'alias for calc', hidden: true, run: (ctx) => commands.calc.run(ctx) },
   bc: { desc: 'alias for calc', hidden: true, run: (ctx) => commands.calc.run(ctx) },
+  keys: {
+    desc: 'every keyboard and mouse shortcut',
+    run: (ctx) => {
+      ctx.openApp('keys')
+      return SHORTCUTS.map((g) => [c('accent', g.area), ...g.keys.map(([k, what]) => `  ${c('green', k.padEnd(20))} ${what}`)].join('\n')).join('\n\n')
+    },
+  },
+  shortcuts: { desc: 'alias for keys', hidden: true, run: (ctx) => commands.keys.run(ctx) },
   shutdown: { desc: 'power off', hidden: true, run: () => 'Shutting down... no. Close the tab like everyone else.' },
   reboot: {
     desc: 'reload the page',

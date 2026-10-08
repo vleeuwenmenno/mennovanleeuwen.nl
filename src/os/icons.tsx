@@ -23,6 +23,16 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  keys: {
+    bg: 'linear-gradient(160deg,#d6ecff,#9fcaf5)',
+    fg: '#163a5f',
+    glyph: (
+      <>
+        <rect x="9" y="15" width="30" height="19" rx="3" />
+        <path d="M14 21h2M20 21h2M26 21h2M32 21h2M16 28h16" />
+      </>
+    ),
+  },
   files: {
     bg: 'linear-gradient(160deg,#7aa2f7,#3d5bd1)',
     fg: '#fff',

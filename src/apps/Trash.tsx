@@ -25,7 +25,7 @@ export function Trash() {
       <ul>
         {trashed.map((i) => (
           <li key={i.id} className="trash-desk">
-            <span className="trash-icon">{i.glyph}</span>
+            <span className="trash-icon">{i.image ? <img src={i.image} alt="" width={18} height={18} /> : i.glyph}</span>
             <span className="trash-name">{desk.names[i.id] ?? i.label}</span>
             <button className="btn btn-small" onClick={() => restoreIcons([i.id])}>
               Put back

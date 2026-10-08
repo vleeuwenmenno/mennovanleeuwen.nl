@@ -50,61 +50,72 @@ export function initialLayout(): { app: AppId; geometry: Geometry; props?: WinSt
   const noteW = 310
   const termH = Math.min(520, vh - TOP - DOCK_SPACE - 60)
   const top = Math.max(TOP + 24, Math.round((vh - TOP - DOCK_SPACE - termH) / 2) + TOP - 10)
+  // The headline note sits high so the shortcuts note fits underneath it, slightly tucked in.
+  const noteY = TOP + 22
+  // A first guess; the shortcuts note measures the headline note once rendered (props.under).
+  const keysY = noteY + 400
+  const keysH = Math.min(400, vh - DOCK_SPACE - 14 - keysY)
+  const notes = (x: number) => [
+    { app: 'notes' as const, geometry: { x, y: noteY, w: noteW, h: 330 } },
+    ...(keysH >= 150 ? [{ app: 'keys' as const, geometry: { x: x + 8, y: keysY, w: noteW, h: keysH }, props: { under: '1' } }] : []),
+  ]
   if (vw < 1180) {
-    // Not enough room side by side: the note overlaps the terminal's left edge, like it was stuck on.
+    // Not enough room side by side: the notes overlap the terminal's left edge, like they were stuck on.
     const gutter = vw >= 900 ? 124 : 24 // keep the desktop icons visible when there is room
     const termW = Math.min(760, Math.max(420, vw - noteW - 36 - gutter))
-    return [
-      { app: 'terminal', geometry: { x: vw - termW - gutter, y: top, w: termW, h: termH }, props: { motd: '1' } },
-      { app: 'notes', geometry: { x: 28, y: top + 30, w: noteW, h: 350 } },
-    ]
+    return [{ app: 'terminal', geometry: { x: vw - termW - gutter, y: top, w: termW, h: termH }, props: { motd: '1' } }, ...notes(28)]
   }
   const termW = 780
   const left = Math.round((vw - (noteW + 40 + termW)) / 2)
-  return [
-    { app: 'terminal', geometry: { x: left + noteW + 40, y: top, w: termW, h: termH }, props: { motd: '1' } },
-    { app: 'notes', geometry: { x: left, y: top + 20, w: noteW, h: 350 } },
-  ]
+  return [{ app: 'terminal', geometry: { x: left + noteW + 40, y: top, w: termW, h: termH }, props: { motd: '1' } }, ...notes(left)]
 }
 
 function TopBar() {
   const wm = useWM()
   const recents = useRecents()
-  const focused = wm.windows.find((w) => w.pid === wm.focusedPid)
   const theme = useTheme()
+  const ordered = wm.windows.slice().sort((a, b) => a.pid - b.pid)
   return (
     <header className="topbar">
       <div className="topbar-left">
         <button className="logo" onClick={() => toggleOverlay('launchpad')} title="All apps">
-          <svg viewBox="0 0 64 64" width="16" height="16" aria-hidden>
-            <path d="M14 46V18l18 16 18-16v28" fill="none" stroke="currentColor" strokeWidth="7" strokeLinecap="round" strokeLinejoin="round" />
+          <svg viewBox="0 0 64 64" width="14" height="14" aria-hidden>
+            <path d="M14 46V18l18 16 18-16v28" fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           MvL OS
         </button>
-        <span className="focused-app">{focused ? APP_META[focused.app].dock : 'Desktop'}</span>
-      </div>
-      <div className="workspaces" aria-label="Open windows">
-        {wm.windows
-          .slice()
-          .sort((a, b) => a.pid - b.pid)
-          .map((w) => (
-            <button key={w.pid} className={`ws ${w.pid === wm.focusedPid ? 'is-active' : ''} ${w.minimized ? 'is-min' : ''}`} onClick={() => wm.focus(w.pid)} title={APP_META[w.app].dock} />
+        {/* One numbered "workspace" per window, like the Omarchy bar. */}
+        <nav className="workspaces" aria-label="Open windows">
+          {ordered.slice(0, 9).map((w, i) => (
+            <button
+              key={w.pid}
+              className={`ws ${w.pid === wm.focusedPid && !w.minimized ? 'is-active' : ''} ${w.minimized ? 'is-min' : ''}`}
+              onClick={() => (w.pid === wm.focusedPid && !w.minimized ? wm.minimize(w.pid) : wm.focus(w.pid))}
+              title={`${APP_META[w.app].dock}${w.minimized ? ' (minimized)' : ''}`}
+            >
+              {i + 1}
+            </button>
           ))}
+          {ordered.length > 9 && <span className="ws-more">+{ordered.length - 9}</span>}
+        </nav>
       </div>
+      <ClockWidget />
       <div className="topbar-right">
-        <button className="tb-search" onClick={() => toggleOverlay('spotlight')} title="Search (Ctrl+K)" aria-label="Search">
+        <button className="tb-icon" onClick={() => toggleOverlay('spotlight')} title="Search (Ctrl+K)" aria-label="Search">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
             <circle cx="11" cy="11" r="7" />
             <path d="M20 20l-3.5-3.5" />
           </svg>
-          <kbd>Ctrl K</kbd>
         </button>
-        <button className="status" onClick={() => wm.open('recents')} title="Recent activity">
-          <span className={`live-dot ${recents.live ? 'is-live' : ''}`} />
-          {recents.live ? 'GitHub live' : recents.status === 'loading' ? 'syncing' : 'offline'}
+        <button className="tb-icon tb-activity" onClick={() => wm.open('recents')} title={recents.live ? 'Activity · GitHub live' : recents.status === 'loading' ? 'Activity · syncing' : 'Activity · offline'} aria-label="Recent activity">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M3 12h4l2.5-6 4 12 2.5-6H21" />
+          </svg>
+          <span className={`tb-dot ${recents.live ? 'is-live' : ''}`} />
         </button>
+        <MinecraftWidget />
         <button
-          className="theme-btn"
+          className="tb-icon"
           title={`${theme.label} · click for ${theme.palette.mode === 'light' ? 'night' : 'day'}, right-click for themes`}
           aria-label="Toggle light and dark theme"
           onClick={toggleMode}
@@ -121,8 +132,6 @@ function TopBar() {
             </svg>
           )}
         </button>
-        <MinecraftWidget />
-        <ClockWidget />
       </div>
     </header>
   )

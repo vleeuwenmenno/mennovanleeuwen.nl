@@ -14,6 +14,8 @@ export type DesktopIcon = {
   id: string
   label: string
   glyph: string
+  /** A real logo, shown instead of the emoji glyph */
+  image?: string
   kind: 'file' | 'folder' | 'project'
   path: string
   open: { app: AppId; props?: Record<string, string> }
@@ -33,6 +35,7 @@ export const DESKTOP_ICONS: DesktopIcon[] = [
       id: slug,
       label: p.name,
       glyph: slug === 'boltwarden' ? '🔐' : '🌶️',
+      image: slug === 'boltwarden' ? '/icons/boltwarden.svg' : undefined,
       kind: 'project' as const,
       path: `~/projects/${slug}`,
       open: { app: 'projects' as const, props: { slug } },
@@ -322,7 +325,7 @@ export function Desktop() {
               openContextMenu(e, iconMenu(icon))
             }}
           >
-            <span className="desk-glyph">{icon.glyph}</span>
+            {icon.image ? <img className="desk-img" src={icon.image} alt="" draggable={false} /> : <span className="desk-glyph">{icon.glyph}</span>}
             {renaming === icon.id ? (
               <input
                 className="desk-rename"

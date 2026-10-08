@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { Contact } from '../apps/Contact'
 import { Cv } from '../apps/Cv'
 import { Games } from '../apps/games/Games'
+import { KeysNote } from '../apps/KeysNote'
 import { Notes } from '../apps/Notes'
 import { Projects } from '../apps/Projects'
 import { Recents } from '../apps/Recents'
@@ -26,6 +27,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   files: { title: 'Files', dock: 'Files', blurb: 'Browse the filesystem', size: [940, 600], render: (w) => <Files win={w} /> },
   viewer: { title: 'Viewer', dock: 'Viewer', blurb: 'Open text files and images', size: [720, 560], render: (w) => <Viewer win={w} /> },
   notes: { title: 'Sticky note', dock: 'Note', blurb: 'Headlines on a sticky note', size: [310, 340], chrome: 'note', render: () => <Notes /> },
+  keys: { title: 'Shortcuts', dock: 'Shortcuts', blurb: 'Every keyboard and mouse shortcut', size: [310, 320], chrome: 'note', render: (w) => <KeysNote win={w} /> },
   projects: { title: 'Projects', dock: 'Projects', blurb: 'Things I built and contribute to', size: [880, 580], render: (w) => <Projects win={w} /> },
   recents: { title: 'Activity', dock: 'Activity', blurb: 'Live activity and contribution graph', size: [780, 680], render: () => <Recents /> },
   cv: { title: 'cv.md — Viewer', dock: 'CV', blurb: 'The printable version of me', size: [760, 680], render: () => <Cv /> },
