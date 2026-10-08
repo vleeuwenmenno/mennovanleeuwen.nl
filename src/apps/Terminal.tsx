@@ -159,6 +159,15 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
       clear: () => setEntries([]),
       exit: () => setTimeout(() => (onLogout ? onLogout() : wm.close(win.pid)), 120),
       console: !!onLogout,
+      startx: onLogout
+        ? (launch) => {
+            if (launch) {
+              wm.reset(true)
+              wm.openNew(launch.app, launch.props)
+            }
+            setTimeout(onLogout, 400)
+          }
+        : undefined,
       setAccent,
       print,
       signal: abortRef.current.signal,

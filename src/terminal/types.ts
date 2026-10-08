@@ -25,6 +25,8 @@ export type Ctx = {
   exit: () => void
   /** True on the detached text console reached by pausing the boot (no graphical session yet). */
   console?: boolean
+  /** On the text console: start the desktop. With `launch`, on an empty desk with just that app. */
+  startx?: (launch?: { app: AppId; props?: Record<string, string> }) => void
   setAccent: (name: string) => boolean
   /** Writes a line to the screen right away (for commands that stream, like ping). */
   print: (text: string) => void

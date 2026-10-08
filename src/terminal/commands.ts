@@ -7,6 +7,7 @@ import { lookupAddress, RECORD_TYPES, resolve } from './dns'
 import { pepper } from './pepper'
 import { revealEmail } from '../data/email'
 import { SHORTCUTS } from '../data/shortcuts'
+import { GAME_CATALOG } from '../apps/games/catalog'
 import { loadRates, smartCalc } from '../os/smartcalc'
 import { THEMES as OMARCHY_THEMES } from '../os/omarchyThemes'
 import { ACCENTS, setMode, setTheme, themeLabel, themeSettings } from '../os/theme'
@@ -443,8 +444,8 @@ export const commands: Record<string, Command> = {
     desc: 'start the graphical session',
     hidden: true,
     run: (ctx) => {
-      if (!ctx.console) throw new CmdError('startx: a graphical session is already running on :0')
-      ctx.exit()
+      if (!ctx.startx) throw new CmdError('startx: a graphical session is already running on :0')
+      ctx.startx()
     },
   },
   open: {
@@ -764,8 +765,8 @@ export const commands: Record<string, Command> = {
     usage: 'games [tetris|pacman|minecraft|snake|minesweeper|2048|breakout]',
     run: (ctx) => {
       const game = ctx.args[0]
-      if (game && !['tetris', 'pacman', 'minecraft', 'snake', 'minesweeper', '2048', 'breakout'].includes(game)) throw new CmdError(`games: no game called '${game}' (try tetris, pacman, minecraft, snake, minesweeper, 2048, breakout)`)
-      ctx.openNewApp('games', game ? { game } : undefined)
+      if (game && !GAME_CATALOG.some((g) => g.id === game)) throw new CmdError(`games: no game called '${game}' (try ${GAME_CATALOG.map((g) => g.id).join(', ')})`)
+      return launchGame(ctx, game)
     },
   },
   tetris: { desc: 'play tetris', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['tetris'] }) },
@@ -1068,7 +1069,7 @@ async function runPipeline(stmt: string, base: Base): Promise<RunResult> {
     for (let i = 0; i < stages.length; i++) {
       const [name, ...args] = tokenize(stages[i].trim(), base.env)
       if (!name) throw new CmdError('msh: syntax error near `|`')
-      const cmd = commands[name]
+      const cmd = commands[name] ?? executable(name, base.cwd)
       if (!cmd) throw new CmdError(`msh: command not found: ${name}${name.length > 2 ? suggest(name) : ''}`)
       const tty = i === stages.length - 1 && !redirect
       const out = (await cmd.run({ ...base, args, stdin, tty })) ?? ''
@@ -1085,6 +1086,27 @@ async function runPipeline(stmt: string, base: Base): Promise<RunResult> {
     const msg = err instanceof CmdError ? err.message : `msh: ${(err as Error).message}`
     return { output: msg ? c('red', msg) : '', ok: false }
   }
+}
+
+/** Games run from the terminal; on the text console there is no display, so one gets started. */
+function launchGame(ctx: Ctx, game?: string) {
+  const props = game ? { game } : undefined
+  if (!ctx.startx) return void ctx.openNewApp('games', props)
+  const name = GAME_CATALOG.find((g) => g.id === game)?.name ?? 'the arcade'
+  ctx.startx({ app: 'games', props })
+  return `${c('yellow', 'No display on tty1.')} Starting a fresh graphical session for ${name}...`
+}
+
+/** `./tetris.game` (or just `tetris.game`) runs a game file; other files are not executable. */
+function executable(name: string, cwd: string): Command | undefined {
+  const local = name.includes('/')
+  if (!local && !name.endsWith('.game')) return undefined
+  const node = lookup(resolvePath(cwd, name))
+  if (!node) return local ? { desc: '', run: () => { throw new CmdError(`msh: no such file or directory: ${name}`) } } : undefined
+  if (node.type === 'dir') return { desc: '', run: () => { throw new CmdError(`msh: is a directory: ${name}`) } }
+  const game = node.open?.app === 'games' ? node.open.props?.game : undefined
+  if (game) return { desc: 'play a game', run: (ctx) => launchGame(ctx, game) }
+  return { desc: '', run: () => { throw new CmdError(`msh: permission denied: ${name}`) } }
 }
 
 function suggest(name: string) {
@@ -1106,7 +1128,7 @@ export function complete(line: string, cwd: string): { line: string; options: st
   const [, before, word] = m
   const isFirst = !before.trim() || /(\||;|&&)\s*$/.test(before)
   let candidates: string[]
-  if (isFirst) {
+  if (isFirst && !word.includes('/')) {
     candidates = Object.keys(commands).filter((k) => !commands[k].hidden && k.startsWith(word))
   } else {
     const slash = word.lastIndexOf('/')
@@ -1115,7 +1137,11 @@ export function complete(line: string, cwd: string): { line: string; options: st
     const dirNode = lookup(resolvePath(cwd, dirPart || '.'))
     candidates =
       dirNode?.type === 'dir'
-        ? [...dirNode.children.values()].filter((n) => n.name.startsWith(namePart) && (namePart.startsWith('.') || !n.name.startsWith('.'))).map((n) => dirPart + n.name + (n.type === 'dir' ? '/' : ''))
+        ? [...dirNode.children.values()]
+            .filter((n) => n.name.startsWith(namePart) && (namePart.startsWith('.') || !n.name.startsWith('.')))
+            // As a command (`./te<Tab>`), only folders and things that run.
+            .filter((n) => !isFirst || n.type === 'dir' || n.name.endsWith('.game'))
+            .map((n) => dirPart + n.name + (n.type === 'dir' ? '/' : ''))
         : []
     if (/^\s*open\s+$/.test(before) && !dirPart) candidates.push(...Object.keys(APPS).filter((a) => a.startsWith(word) && !candidates.includes(a)))
   }

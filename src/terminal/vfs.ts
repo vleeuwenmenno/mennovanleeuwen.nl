@@ -134,7 +134,7 @@ const projectsNode = dir(
 const gamesNode = dir(
         'games',
         GAME_CATALOG.map((g) =>
-          file(`${g.id}.game`, [`${g.glyph} ${g.name}`, '', g.blurb, '', `Play: open ~/games/${g.id}.game   (or: games ${g.id})`].join('\n'), { app: 'games', props: { game: g.id } }),
+          file(`${g.id}.game`, [`${g.glyph} ${g.name}`, '', g.blurb, '', `Play: ./${g.id}.game   (or: games ${g.id})`].join('\n'), { app: 'games', props: { game: g.id } }),
         ),
       )
 const contributionsNode = dir(

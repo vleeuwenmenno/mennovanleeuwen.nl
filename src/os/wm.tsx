@@ -161,8 +161,8 @@ type WM = {
   minimize: (pid: number) => void
   toggleMax: (pid: number) => void
   setGeometry: (pid: number, geometry: GeometryPatch) => void
-  /** Closes everything and opens the opening layout again (after a reboot). */
-  reset: () => void
+  /** Closes everything and opens the opening layout again (after a reboot), or nothing at all. */
+  reset: (empty?: boolean) => void
 }
 
 const Ctx = createContext<WM | null>(null)
@@ -225,7 +225,7 @@ export function WindowManagerProvider({
       minimize: (pid) => dispatch({ type: 'minimize', pid }),
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
       setGeometry: (pid, geometry) => dispatch({ type: 'setGeometry', pid, geometry }),
-      reset: () => dispatch({ type: 'reset', layout: relayout() }),
+      reset: (empty) => dispatch({ type: 'reset', layout: empty ? [] : relayout() }),
     }
   }, [state.windows, state.focused, open, openNew, relayout])
 

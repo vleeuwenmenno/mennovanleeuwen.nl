@@ -10,7 +10,7 @@ import type { WinState } from './wm'
 const platform = typeof navigator !== 'undefined' ? navigator.platform || 'the web' : 'the web'
 
 // [kind, text, delay before the line in ms]. Kernel lines fly by, systemd takes its time.
-type LogLine = ['k' | 'ok' | 'warn' | 'start' | 'info', string, number]
+type LogLine = ['k' | 'ok' | 'warn' | 'cancel' | 'start' | 'job' | 'info', string, number]
 const BOOT: LogLine[] = [
   ['k', `[    0.000000] Linux version 6.42.0-mvl (menno@arch) (gcc 15.2.1) #1 SMP PREEMPT_DYNAMIC`, 0],
   ['k', `[    0.000000] Command line: BOOT_IMAGE=/vmlinuz-mvl root=/dev/cv rw quiet splash=no`, 30],
@@ -52,18 +52,27 @@ const BOOT: LogLine[] = [
   ['ok', 'Loaded projects: boltwarden savuvo pepper golinks omasoloist.', 100],
 ]
 
+// The display server's start job: shown running (systemd's bouncing stars) while it is the last
+// line, then replaced by its outcome. P while it runs cancels it.
+const XORG_JOB: LogLine = ['job', 'X.Org Server', 120]
+const XORG_CANCELLED: LogLine = ['cancel', 'Cancelled X.Org Server: boot to a shell was requested.', 700]
+
 // The graphical session: the end of a normal boot, or what `exit` starts from the text console.
 const GUI: LogLine[] = [
-  ['start', 'Starting Hyprland compositor (react-wm)...', 90],
-  ['ok', 'Started Hyprland compositor (react-wm).', 170],
-  ['ok', 'Reached target Graphical Interface.', 110],
+  ['ok', 'Started X.Org Server.', 1500],
+  ['start', 'Starting Hyprland compositor (react-wm)...', 140],
+  ['ok', 'Started Hyprland compositor (react-wm).', 320],
+  ['ok', 'Reached target Graphical Interface.', 200],
 ]
+// From the text console the job starts again, after the logout.
+const STARTX: LogLine[] = [['job', 'X.Org Server', 350], ...GUI]
 
 // Instead of the graphical session, when P was pressed: stop at multi-user and log in on tty1.
 function consoleLines(): LogLine[] {
   const last = new Date().toLocaleString('en-GB', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
   return [
-    ['ok', 'Reached target Multi-User System.', 110],
+    XORG_CANCELLED,
+    ['ok', 'Reached target Multi-User System.', 160],
     ['warn', 'Graphical session held back on request. Starting a shell on tty1.', 160],
     ['info', '         Type exit to start the desktop; reboot and shutdown work too.', 0],
     ['info', '', 200],
@@ -99,12 +108,19 @@ const SHUTDOWN = (reboot: boolean): LogLine[] => [
 ]
 
 /** One line of boot or shutdown log, systemd style. */
-function Line({ line: [kind, text] }: { line: LogLine }) {
+function Line({ line: [kind, text], last }: { line: LogLine; last?: boolean }) {
+  // A start job only shows while it is running, i.e. while nothing has replaced it yet.
+  if (kind === 'job') return last ? <JobLine name={text} /> : null
   return (
     <div className={kind === 'k' ? 'boot-k' : undefined}>
       {kind === 'ok' && (
         <>
           [<span className="t-green">  OK  </span>]{' '}
+        </>
+      )}
+      {kind === 'cancel' && (
+        <>
+          [<span className="t-yellow">CANCEL</span>]{' '}
         </>
       )}
       {kind === 'warn' && (
@@ -117,14 +133,30 @@ function Line({ line: [kind, text] }: { line: LogLine }) {
   )
 }
 
-/** Prints `lines` one by one at their own pace; `paused` holds it where it is. */
-function useLog(lines: LogLine[], paused = false) {
+const STARS = ['*     ', '**    ', '***   ', ' ***  ', '  *** ', '   ***', '    **', '     *', '    **', '   ***', '  *** ', ' ***  ', '***   ', '**    ']
+
+/** "[ *** ] A start job is running for X.Org Server (2s / no limit)", stars bouncing. */
+function JobLine({ name }: { name: string }) {
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setTick((x) => x + 1), 120)
+    return () => clearInterval(t)
+  }, [])
+  return (
+    <div>
+      [<span className="t-red">{STARS[tick % STARS.length]}</span>] A start job is running for {name} ({Math.floor((tick * 120) / 1000)}s / no limit)
+    </div>
+  )
+}
+
+/** Prints `lines` one by one at their own pace (times `pace`); `paused` holds it where it is. */
+function useLog(lines: LogLine[], paused = false, pace = 1) {
   const [n, setN] = useState(0)
   useEffect(() => {
     if (paused || n >= lines.length) return
-    const t = setTimeout(() => setN(n + 1), lines[n][2])
+    const t = setTimeout(() => setN(n + 1), lines[n][2] * pace)
     return () => clearTimeout(t)
-  }, [n, paused, lines])
+  }, [n, paused, lines, pace])
   return [n, n >= lines.length] as const
 }
 
@@ -141,6 +173,9 @@ function useFollow(dep: unknown) {
 // The text console is a terminal without a window around it.
 const CONSOLE_WIN: WinState = { pid: -1, app: 'terminal', x: 0, y: 0, w: 0, h: 0, z: 0, minimized: false, maximized: false, props: {}, openedAt: 0 }
 
+// The boot log's line delays are written short; this stretches them to a readable pace.
+const BOOT_PACE = 1.35
+
 const MODIFIERS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'OS', 'CapsLock', 'NumLock', 'Fn', 'Dead', 'Unidentified', ''])
 
 function Boot() {
@@ -149,9 +184,9 @@ function Boot() {
   const [wantConsole, setWantConsole] = useState(false)
   const [resumed, setResumed] = useState(false)
   const [leaving, setLeaving] = useState(false)
-  const main = useMemo(() => [...BOOT, ...(wantConsole ? consoleLines() : GUI)], [wantConsole])
-  const [n, mainDone] = useLog(main)
-  const [g, guiDone] = useLog(GUI, !resumed)
+  const main = useMemo(() => [...BOOT, XORG_JOB, ...(wantConsole ? consoleLines() : GUI)], [wantConsole])
+  const [n, mainDone] = useLog(main, false, BOOT_PACE)
+  const [g, guiDone] = useLog(STARTX, !resumed)
   const consoleOpen = wantConsole && mainDone
   const finished = wantConsole ? resumed && guiDone : mainDone
   const ref = useFollow(n + g)
@@ -168,8 +203,8 @@ function Boot() {
     return () => clearTimeout(t)
   }, [leaving])
 
-  // Too late once the desktop has started coming up.
-  const canPause = !wantConsole && n < BOOT.length
+  // Possible until the display server has started (pressing P while it starts cancels it).
+  const canPause = !wantConsole && n <= BOOT.length + 1
   const pause = () => canPause && setWantConsole(true)
 
   // P asks for the console; any other key skips the boot. Once asked, keys wait for the console.
@@ -215,14 +250,14 @@ function Boot() {
       )}
       <pre>
         {main.slice(0, n).map((l, i) => (
-          <Line key={i} line={l} />
+          <Line key={i} line={l} last={i === n - 1} />
         ))}
         {consoleOpen && (
           <>
             <Terminal win={CONSOLE_WIN} onLogout={() => setResumed(true)} />
             {resumed && <div>logout</div>}
-            {GUI.slice(0, g).map((l, i) => (
-              <Line key={`g${i}`} line={l} />
+            {STARTX.slice(0, g).map((l, i) => (
+              <Line key={`g${i}`} line={l} last={i === g - 1} />
             ))}
           </>
         )}
