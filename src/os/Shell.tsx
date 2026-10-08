@@ -9,6 +9,7 @@ import { DOCK_MODES, getDockMode, setDockMode, type DockMode } from './dockPrefs
 import { ContextMenuHost, openContextMenu } from './ContextMenu'
 import { Desktop } from './Desktop'
 import { PowerScreens } from './Power'
+import { Notifications } from './Notifications'
 import { usePower } from './powerState'
 import { AppIcon } from './icons'
 import { appearanceMenu } from './appearanceMenu'
@@ -582,6 +583,7 @@ export function Shell() {
       {overlay === 'launchpad' && <Launchpad />}
       {overlay === 'spotlight' && <Spotlight />}
       <ContextMenuHost />
+      <Notifications />
       <PowerScreens />
     </div>
   )

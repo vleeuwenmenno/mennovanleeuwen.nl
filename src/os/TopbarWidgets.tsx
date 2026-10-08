@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { profile } from '../data/profile'
 import { timeAgo } from '../data/recents'
-import { fetchMinecraft, MC_ADDRESS, MC_PORT, useMinecraft } from '../data/minecraft'
+import { fetchMinecraft, MC_ADDRESS, MC_PORT, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
 
 /** A top-bar button with a dropdown panel that closes on outside click or Escape. */
 function TopbarPopover({ label, className = '', title, children }: { label: ReactNode; className?: string; title: string; children: (close: () => void) => ReactNode }) {
@@ -215,6 +215,10 @@ export function MinecraftWidget() {
               )}
             </div>
           )}
+          <label className="mc-notify">
+            <input type="checkbox" checked={mcNotificationsOn()} onChange={(e) => setMcNotifications(e.target.checked)} />
+            Notify me when players join or leave
+          </label>
           <footer className="mc-foot muted">
             <span>Port {MC_PORT} · {status ? `checked ${timeAgo(new Date(status.checkedAt).toISOString())}` : ''}</span>
             <button className="mc-refresh" onClick={() => fetchMinecraft(true)} disabled={loading}>

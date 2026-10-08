@@ -3121,6 +3121,60 @@ button.fm-dd-row:hover {
   }
 }
 
+/* ---------- Notifications (mako style) ---------- */
+
+.notices {
+  position: fixed;
+  top: calc(var(--top) + 10px);
+  right: 10px;
+  z-index: 150000;
+  display: grid;
+  gap: 10px;
+  width: min(340px, calc(100vw - 20px));
+}
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  text-align: left;
+  background: var(--bg);
+  border: var(--border) solid var(--accent);
+  color: var(--text);
+  box-shadow: 0 12px 28px -14px rgba(0, 0, 0, 0.55);
+  animation: notice-in 0.18s ease-out;
+}
+.notice-icon {
+  flex: none;
+  image-rendering: pixelated;
+}
+.notice-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  font-size: 13px;
+}
+.notice-text .muted {
+  font-size: 12px;
+}
+@keyframes notice-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+.mc-notify {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mc-notify input {
+  accent-color: var(--accent);
+}
+
 /* ---------- Dock ---------- */
 
 .dock {
