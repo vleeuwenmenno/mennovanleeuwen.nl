@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WinState } from '../../os/wm'
-import { keyToDir, swipeHandlers, useGameKeys, useHighScore, type Dir } from './shared'
+import { keyToDir, swipeHandlers, useGameKeys, usePress, useHighScore, type Dir } from './shared'
 
 // An original maze in the spirit of the arcade game. # wall, . pellet, o power pellet,
 // - ghost-house door, G ghost house, P start. Row 9 wraps around as a tunnel.
@@ -118,6 +118,7 @@ export function PacMan({ win }: { win: WinState }) {
     setState('playing')
   }
 
+  const press = usePress()
   const steer = (d: Dir) => {
     g.current.pac.next = d
     if (state === 'ready' || state === 'over' || state === 'cleared') start()
@@ -421,7 +422,7 @@ export function PacMan({ win }: { win: WinState }) {
       </div>
       <div className="dpad" aria-label="Direction pad">
         {(['up', 'left', 'down', 'right'] as Dir[]).map((d) => (
-          <button key={d} className={`dpad-${d}`} onClick={() => steer(d)} aria-label={d}>
+          <button key={d} className={`dpad-${d}`} {...press(() => steer(d))} aria-label={d}>
             {{ up: '▲', down: '▼', left: '◀', right: '▶' }[d]}
           </button>
         ))}

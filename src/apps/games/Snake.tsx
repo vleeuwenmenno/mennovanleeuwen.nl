@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WinState } from '../../os/wm'
-import { cssVar, keyToDir, swipeHandlers, useGameKeys, useHighScore, type Dir } from './shared'
+import { cssVar, keyToDir, swipeHandlers, useGameKeys, usePress, useHighScore, type Dir } from './shared'
 
 const N = 20
 type P = { x: number; y: number }
@@ -30,6 +30,7 @@ export function Snake({ win }: { win: WinState }) {
     setState('playing')
   }, [])
 
+  const press = usePress()
   const steer = (d: Dir) => {
     // Start (or restart) first, so the key that started the game also steers it.
     if (state === 'ready' || state === 'over') reset()
@@ -123,7 +124,7 @@ export function Snake({ win }: { win: WinState }) {
       </div>
       <div className="dpad" aria-label="Direction pad">
         {(['up', 'left', 'down', 'right'] as Dir[]).map((d) => (
-          <button key={d} className={`dpad-${d}`} onClick={() => steer(d)} aria-label={d}>
+          <button key={d} className={`dpad-${d}`} {...press(() => steer(d))} aria-label={d}>
             {{ up: '▲', down: '▼', left: '◀', right: '▶' }[d]}
           </button>
         ))}

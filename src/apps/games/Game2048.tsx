@@ -102,7 +102,7 @@ export function Game2048({ win }: { win: WinState }) {
           New game
         </button>
       </div>
-      <div className="g2048" {...swipeHandlers(play)}>
+      <div className="g2048" {...swipeHandlers(play, false)}>
         {Array.from({ length: 16 }, (_, i) => (
           <span key={i} className="g2048-slot" />
         ))}

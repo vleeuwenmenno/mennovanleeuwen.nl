@@ -51,6 +51,7 @@ export function Minesweeper({ win }: { win: WinState }) {
   const [newBest, setNewBest] = useState(false)
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressed = useRef(false)
+  const [flagMode, setFlagMode] = useState(false)
 
   const reset = (lv: Level = level) => {
     setLevel(lv)
@@ -140,6 +141,15 @@ export function Minesweeper({ win }: { win: WinState }) {
         </button>
         <span className="mines-lcd">{String(time).padStart(3, '0')}</span>
       </div>
+      {/* Touch: holding to flag works, but a switch is easier on a phone. */}
+      <div className="seg seg-small touch-only mines-mode" role="group" aria-label="Tap action">
+        <button className={!flagMode ? 'is-active' : ''} onClick={() => setFlagMode(false)}>
+          ⛏ Dig
+        </button>
+        <button className={flagMode ? 'is-active' : ''} onClick={() => setFlagMode(true)}>
+          🚩 Flag
+        </button>
+      </div>
       <div className="mines-scroll">
         <div className="mines-grid" style={{ gridTemplateColumns: `repeat(${w}, var(--cell))` }} onContextMenu={(e) => e.preventDefault()}>
           {board.map((c, i) => (
@@ -149,6 +159,7 @@ export function Minesweeper({ win }: { win: WinState }) {
               onClick={() => {
                 if (longPressed.current) return
                 if (c.open) chord(i)
+                else if (flagMode) toggleFlag(i)
                 else reveal([i])
               }}
               onContextMenu={(e) => {
@@ -181,7 +192,7 @@ export function Minesweeper({ win }: { win: WinState }) {
             : `Cleared in ${time}s.`
           : status === 'lost'
             ? 'Boom. Click the face (or press R) to try again.'
-            : 'Click to dig, right-click (or hold on touch) to flag, click a number to clear around it.'}
+            : 'Click to dig, right-click (or hold, or the Flag switch on touch) to flag, click a number to clear around it.'}
       </p>
     </div>
   )

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WinState } from '../../os/wm'
-import { useGameKeys, useHighScore } from './shared'
+import { useGameKeys, useHighScore, usePress } from './shared'
 
 const COLS = 10
 const ROWS = 20
@@ -150,6 +150,53 @@ export function Tetris({ win }: { win: WinState }) {
     draw()
   }
 
+  const press = usePress()
+
+  // Touch gestures on the board: drag sideways to move a column at a time, drag down to soft
+  // drop, flick down to hard drop, flick up to hold, tap to rotate.
+  const touch = useRef<{ x0: number; y0: number; x: number; y: number; t: number; moved: boolean } | null>(null)
+  const gesture = {
+    onPointerDown: (e: React.PointerEvent) => {
+      if (e.pointerType === 'mouse' || state !== 'playing') return
+      touch.current = { x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, t: performance.now(), moved: false }
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      const t = touch.current
+      if (!t || !canvas.current) return
+      const cell = canvas.current.getBoundingClientRect().width / COLS
+      while (e.clientX - t.x >= cell) {
+        act('right')
+        t.x += cell
+        t.moved = true
+      }
+      while (t.x - e.clientX >= cell) {
+        act('left')
+        t.x -= cell
+        t.moved = true
+      }
+      // Soft drop only once the drag is clearly downwards, so sideways drags don't sink the piece.
+      while (e.clientY - t.y >= cell * 1.2 && e.clientY - t.y0 > Math.abs(e.clientX - t.x0)) {
+        act('down')
+        t.y += cell * 1.2
+        t.moved = true
+      }
+    },
+    onPointerUp: (e: React.PointerEvent) => {
+      const t = touch.current
+      touch.current = null
+      if (!t) return
+      const dx = e.clientX - t.x0
+      const dy = e.clientY - t.y0
+      const fast = performance.now() - t.t < 260
+      if (fast && dy > 50 && dy > Math.abs(dx) * 1.5) act('drop')
+      else if (fast && dy < -40 && -dy > Math.abs(dx) * 1.5) act('hold')
+      else if (!t.moved && Math.abs(dx) < 12 && Math.abs(dy) < 12) act('rotate')
+    },
+    onPointerCancel: () => {
+      touch.current = null
+    },
+  }
+
   const focused = useGameKeys(win, (e) => {
     if (state !== 'playing' && (e.key === 'Enter' || e.key === ' ')) {
       if (state === 'paused') setState('playing')
@@ -257,7 +304,7 @@ export function Tetris({ win }: { win: WinState }) {
       </div>
       <div className="tetris-wrap">
         <div className="game-stage tetris-stage">
-          <canvas ref={canvas} width={COLS * CELL} height={ROWS * CELL} className="game-canvas" />
+          <canvas ref={canvas} width={COLS * CELL} height={ROWS * CELL} className="game-canvas" {...gesture} />
           {state !== 'playing' && (
             <button className="game-overlay" onClick={() => (state === 'paused' ? setState('playing') : start())}>
               <strong>{state === 'over' ? (newBest ? 'New high score!' : 'Game over') : state === 'paused' ? 'Paused' : 'Tetris'}</strong>
@@ -274,13 +321,15 @@ export function Tetris({ win }: { win: WinState }) {
         <canvas ref={side} width={80} height={300} className="tetris-side" />
       </div>
       <div className="touch-pad tetris-pad">
-        <button onClick={() => act('hold')}>Hold</button>
-        <button onClick={() => act('left')}>◀</button>
-        <button onClick={() => act('rotate')}>⟳</button>
-        <button onClick={() => act('right')}>▶</button>
-        <button onClick={() => act('down')}>▼</button>
-        <button onClick={() => act('drop')}>Drop</button>
+        <button {...press(() => act('hold'))}>Hold</button>
+        <button {...press(() => act('rotateBack'))} aria-label="Rotate left">↺</button>
+        <button {...press(() => act('rotate'))} aria-label="Rotate right">↻</button>
+        <button {...press(() => act('drop'))}>Drop</button>
+        <button className="is-big" {...press(() => act('left'), true)} aria-label="Left">◀</button>
+        <button className="is-big" {...press(() => act('down'), true)} aria-label="Soft drop">▼</button>
+        <button className="is-big" {...press(() => act('right'), true)} aria-label="Right">▶</button>
       </div>
+      <p className="game-hint muted touch-only">Or on the board: tap rotates, drag moves, flick down drops, flick up holds.</p>
     </div>
   )
 }

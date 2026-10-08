@@ -67,22 +67,70 @@ export type Dir = 'up' | 'down' | 'left' | 'right'
 export const keyToDir = (key: string): Dir | null =>
   ({ ArrowUp: 'up', w: 'up', W: 'up', ArrowDown: 'down', s: 'down', S: 'down', ArrowLeft: 'left', a: 'left', A: 'left', ArrowRight: 'right', d: 'right', D: 'right' })[key] as Dir | null ?? null
 
-/** Pointer handlers that turn a swipe into a direction. */
-export function swipeHandlers(onSwipe: (d: Dir) => void) {
+/**
+ * Pointer handlers that turn a swipe into a direction as soon as the finger has travelled far
+ * enough, rather than on release. With `repeat`, carrying on in another direction without lifting
+ * swipes again (steering in Snake and Pac-Man); otherwise one swipe per touch (2048).
+ */
+export function swipeHandlers(onSwipe: (d: Dir) => void, repeat = true) {
   let start: { x: number; y: number } | null = null
+  const end = () => {
+    start = null
+  }
   return {
     onPointerDown: (e: React.PointerEvent) => {
       start = { x: e.clientX, y: e.clientY }
     },
-    onPointerUp: (e: React.PointerEvent) => {
+    onPointerMove: (e: React.PointerEvent) => {
       if (!start) return
       const dx = e.clientX - start.x
       const dy = e.clientY - start.y
-      start = null
-      if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < 22) return
       onSwipe(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : dy > 0 ? 'down' : 'up')
+      start = repeat ? { x: e.clientX, y: e.clientY } : null
     },
+    onPointerUp: end,
+    onPointerCancel: end,
   }
+}
+
+/**
+ * Touch buttons that act on finger-down instead of on click (no tap delay, no double-tap zoom)
+ * and, with `repeat`, keep acting while held, like a key. Returns a maker for each button's props.
+ */
+export function usePress() {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const stop = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = null
+  }, [])
+  useEffect(() => stop, [stop])
+  return useCallback(
+    (fn: () => void, repeat = false) => ({
+      onPointerDown: (e: React.PointerEvent) => {
+        e.preventDefault()
+        stop()
+        fn()
+        if (!repeat) return
+        const again = (delay: number) => {
+          timer.current = setTimeout(() => {
+            fn()
+            again(55)
+          }, delay)
+        }
+        again(190)
+      },
+      onPointerUp: stop,
+      onPointerLeave: stop,
+      onPointerCancel: stop,
+      onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+      // Keyboard activation (Enter/Space on a focused button) still works.
+      onClick: (e: React.MouseEvent) => {
+        if (e.detail === 0) fn()
+      },
+    }),
+    [stop],
+  )
 }
 
 /** Reads a CSS custom property so canvas games follow the accent color. */
