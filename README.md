@@ -70,7 +70,7 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) typechecks and build
 
 Publishing a GitHub release with a semver tag (`v1.2.3`) runs
 [`.github/workflows/release.yml`](.github/workflows/release.yml): it refreshes the activity
-snapshot, builds the site, and pushes a multi-arch (amd64 + arm64) nginx image to
+snapshot, builds the site, and pushes a multi-arch (amd64 + arm64) image to
 `ghcr.io/vleeuwenmenno/mennovanleeuwen.nl` tagged `1.2.3`, `1.2`, `1` and `latest`. Prereleases
 skip `latest`.
 
@@ -83,8 +83,12 @@ services:
     image: ghcr.io/vleeuwenmenno/mennovanleeuwen.nl:latest
     restart: unless-stopped
     ports:
-      - "8080:80"
+      - "8080:8080"
 ```
 
-The container serves on port 80 and answers `/healthz`. Build it locally with
-`docker build -t mvlos .`.
+The container runs [`server/index.ts`](server/index.ts), a dependency-free Node server, as a
+non-root user on port 8080 (`PORT` changes it). It serves the built site, answers `/healthz`, and
+serves `/api/minecraft`: a live Server List Ping of the Minecraft server, cached for 10 seconds,
+so the status and join/leave notifications don't wait on public status APIs that cache for
+minutes. On a static host without that endpoint the site falls back to those APIs. `pnpm dev`
+and `pnpm preview` serve the endpoint too. Build the image locally with `docker build -t mvlos .`.

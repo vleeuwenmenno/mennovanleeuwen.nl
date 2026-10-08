@@ -2,8 +2,10 @@ import { useEffect, useSyncExternalStore } from 'react'
 import { notify } from '../os/notify'
 
 // Status of the Minecraft server Menno hosts. Browsers cannot open a raw TCP connection to
-// port 25565, so this asks two public status APIs that allow cross-origin requests. Either one
-// sometimes reports a running server as offline, so the server counts as online if either sees it.
+// port 25565, so the site's own server pings it (server/minecraft.ts, served at /api/minecraft).
+// Where that endpoint is missing (a plain static host), it falls back to two public status APIs
+// that allow cross-origin requests. Those cache for minutes and either one sometimes reports a
+// running server as offline, so then the server counts as online if either sees it.
 
 export const MC_ADDRESS = 'cloud.mvl.sh'
 export const MC_PORT = 25565
@@ -43,7 +45,23 @@ export function fetchMinecraft(force = false): Promise<State> {
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       return r.json()
     })
-  inflight = Promise.allSettled([get(APIS.mcstatus), get(APIS.mcsrvstat)])
+  inflight = get('/api/minecraft')
+    .then((j: McStatus) => {
+      if (typeof j?.online !== 'boolean') throw new Error('no status endpoint')
+      const status = { ...j, checkedAt: Date.now() }
+      watch(status)
+      set({ loading: false, error: undefined, status })
+      return state
+    })
+    .catch(() => fromPublicApis(get))
+    .finally(() => {
+      inflight = null
+    })
+  return inflight
+}
+
+function fromPublicApis(get: (url: string) => Promise<Json>): Promise<State> {
+  return Promise.allSettled([get(APIS.mcstatus), get(APIS.mcsrvstat)])
     .then(([a, b]) => {
       const fromMcstatus = a.status === 'fulfilled' ? fromMcstatusJson(a.value) : null
       const fromMcsrvstat = b.status === 'fulfilled' ? fromMcsrvstatJson(b.value) : null
@@ -61,10 +79,6 @@ export function fetchMinecraft(force = false): Promise<State> {
       set({ loading: false, error: err.message })
       return state
     })
-    .finally(() => {
-      inflight = null
-    })
-  return inflight
 }
 
 // Join, leave and up/down notifications. The first answer is the baseline; a player only counts
