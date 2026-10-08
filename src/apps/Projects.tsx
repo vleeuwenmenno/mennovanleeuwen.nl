@@ -94,10 +94,14 @@ function Detail({ item, onBack }: { item: Item; onBack: () => void }) {
 }
 
 export function Projects({ win }: { win: WinState }) {
-  const [section, setSection] = useState<'all' | 'project' | 'contrib'>('all')
+  type Section = 'all' | 'project' | 'contrib'
+  const [section, setSection] = useState<Section>((win.props.section as Section) ?? 'all')
   const [slug, setSlug] = useState<string | undefined>(win.props.slug)
 
-  useEffect(() => setSlug(win.props.slug), [win.props])
+  useEffect(() => {
+    setSlug(win.props.slug)
+    if (win.props.section) setSection(win.props.section as Section)
+  }, [win.props])
 
   const selected = all.find((i) => i.data.slug === slug)
   const list = all.filter((i) => section === 'all' || i.kind === section)

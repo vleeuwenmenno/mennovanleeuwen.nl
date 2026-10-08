@@ -7,6 +7,8 @@ import { Recents } from '../apps/Recents'
 import { Terminal } from '../apps/Terminal'
 import { Trash } from '../apps/Trash'
 import { useRecents } from '../data/recents'
+import { ContextMenuHost, openContextMenu } from './ContextMenu'
+import { Desktop } from './Desktop'
 import { AppIcon } from './icons'
 import { ACCENTS, currentAccent, setAccent } from './theme'
 import { Window } from './Window'
@@ -152,6 +154,15 @@ function Dock() {
               else wm.open(app)
             }}
             aria-label={APP_META[app].dock}
+            onContextMenu={(e) => {
+              const w = wm.windows.find((x) => x.app === app)
+              openContextMenu(e, [
+                { label: w ? 'Show' : 'Open', onSelect: () => wm.open(app) },
+                ...(w && !w.minimized ? [{ label: 'Minimize', onSelect: () => wm.minimize(w.pid) }] : []),
+                ...(app === 'terminal' ? [{ label: 'Run fastfetch', onSelect: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) }] : []),
+                ...(w ? [{ separator: true as const }, { label: 'Quit', danger: true, onSelect: () => wm.close(w.pid) }] : []),
+              ])
+            }}
           >
             <AppIcon app={app} />
             <span className="dock-label">{APP_META[app].dock}</span>
@@ -160,27 +171,6 @@ function Dock() {
         ),
       )}
     </nav>
-  )
-}
-
-const DESKTOP_ICONS: { label: string; app: AppId; glyph: string; props?: Record<string, string> }[] = [
-  { label: 'cv.md', app: 'cv', glyph: '📄' },
-  { label: 'projects', app: 'projects', glyph: '📁' },
-  { label: 'boltwarden', app: 'projects', glyph: '🔐', props: { slug: 'boltwarden' } },
-  { label: 'pepper', app: 'projects', glyph: '🌶️', props: { slug: 'pepper' } },
-]
-
-function DesktopIcons() {
-  const wm = useWM()
-  return (
-    <div className="desk-icons">
-      {DESKTOP_ICONS.map((d) => (
-        <button key={d.label} className="desk-icon" onDoubleClick={() => wm.open(d.app, d.props)} onKeyDown={(e) => e.key === 'Enter' && wm.open(d.app, d.props)}>
-          <span className="desk-glyph">{d.glyph}</span>
-          <span className="desk-label">{d.label}</span>
-        </button>
-      ))}
-    </div>
   )
 }
 
@@ -241,7 +231,7 @@ export function Shell() {
         </div>
       </div>
       <TopBar />
-      <DesktopIcons />
+      <Desktop />
       <main className="windows">
         {wm.windows.map((w) => (
           <Window key={w.pid} win={w} title={APP_META[w.app].title} chrome={APP_META[w.app].chrome}>
@@ -250,6 +240,7 @@ export function Shell() {
         ))}
       </main>
       <Dock />
+      <ContextMenuHost />
       {booting && <Boot onDone={() => setBooting(false)} />}
     </div>
   )
