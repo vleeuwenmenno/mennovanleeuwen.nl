@@ -190,7 +190,7 @@ export const root: DirNode = dir('', [
       file('headlines.txt', headlines.join('\n'), { app: 'notes' }),
       file(
         'contact.txt',
-        [`email   ${profile.email}`, ...profile.links.map((l) => `${l.label.toLowerCase().padEnd(8)}${l.url}`)].join('\n'),
+        [`email     ${profile.email}`, ...profile.links.map((l) => `${l.label.toLowerCase().padEnd(10)}${l.url}`)].join('\n'),
         { app: 'contact' },
       ),
       file('.bashrc', ['# not actually bash, but it reads like it', "alias ll='ls -la'", 'export EDITOR=nvim', 'export PAGER=cat'].join('\n')),

@@ -14,8 +14,8 @@ export const profile = {
   links: [
     { label: 'GitHub', url: 'https://github.com/vleeuwenmenno' },
     { label: 'LinkedIn', url: 'https://www.linkedin.com/in/menno-v-44477b176/' },
-    { label: 'Forgejo', url: 'https://git.mvl.sh/vleeuwenmenno' },
-    { label: 'mvl.sh', url: 'https://mvl.sh' },
+    { label: 'Gitea', url: 'https://git.mvl.sh/vleeuwenmenno' },
+    { label: 'Homepage', url: 'https://mennovanleeuwen.nl' },
   ],
   summary:
     'DevOps engineer who keeps production boring and side projects interesting. ' +
