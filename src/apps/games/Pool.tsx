@@ -507,10 +507,21 @@ export function Pool({ win }: { win: WinState }) {
     ;(e.target as Element).setPointerCapture(e.pointerId)
     const p = toWorld(e)
     const cue = g.balls[0]
-    if (g.hand && Math.hypot(p.x - cue.x, p.y - cue.y) < R * 1.8) g.press = { kind: 'cue', ...p }
+    // A fingertip is about 24 px wide, whatever the table's size on screen.
+    const r = canvas.current!.getBoundingClientRect()
+    const finger = e.pointerType === 'touch' ? 24 / ((g.rot ? r.height : r.width) / TOTAL_W) : 0
+    const dx = p.x - cue.x
+    const dy = p.y - cue.y
+    if (g.hand && Math.hypot(dx, dy) < Math.max(R * 1.8, finger)) g.press = { kind: 'cue', ...p }
     else if (e.pointerType === 'touch') {
-      g.press = { kind: 'aim', ...p }
-      aimAt(p)
+      // On the cue stick (or the cue ball): pull it back to shoot. Anywhere else: aim.
+      const behind = -(dx * Math.cos(g.aim) + dy * Math.sin(g.aim))
+      const across = Math.abs(-dx * Math.sin(g.aim) + dy * Math.cos(g.aim))
+      if (behind > -R && behind < 1.2 && across < Math.max(R, finger)) g.press = { kind: 'charge', ...p }
+      else {
+        g.press = { kind: 'aim', ...p }
+        aimAt(p)
+      }
     } else g.press = { kind: 'charge', ...p }
   }
   const onMove = (e: React.PointerEvent) => {
@@ -702,15 +713,24 @@ export function Pool({ win }: { win: WinState }) {
             <span className="pool-spin-dot" style={{ left: `${50 + spinDot.x * 50}%`, top: `${50 + spinDot.y * 50}%` }} />
           </div>
         </div>
-        <div className="pool-power touch-only" ref={powerBar} {...barHandlers}>
-          <span style={{ width: `${barPower * 100}%` }} />
-          <em>{barPower > 0 ? 'Let go to shoot' : 'Drag to set power, let go to shoot'}</em>
+        <div className={`pool-power touch-only ${hud.phase === 'aim' ? '' : 'is-idle'} ${barPower > 0 ? 'is-pulling' : ''} ${barPower > 0.5 ? 'is-far' : ''}`} ref={powerBar} {...barHandlers} role="slider" aria-label="Shot power: slide and let go to shoot" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(barPower * 100)}>
+          <span className="pool-power-fill" style={{ width: `${barPower * 100}%` }} />
+          <span className="pool-power-thumb" style={{ ['--p' as string]: barPower }}>
+            {barPower > 0 ? Math.round(barPower * 100) : ''}
+          </span>
+          <em>
+            {hud.phase !== 'aim' ? (hud.phase === 'cpu' ? 'Computer’s shot' : 'Balls rolling…') : barPower > 0 ? 'Let go to shoot' : (
+              <>
+                Slide to shoot <b aria-hidden="true">›››</b>
+              </>
+            )}
+          </em>
         </div>
       </div>
       <p className="game-hint muted">
         {hud.hand && hud.phase === 'aim' ? 'Ball in hand: drag the cue ball to place it. ' : ''}
         <span className="pool-hint-mouse">Move the mouse to aim, hold and drag back to set power, let go to shoot. Arrow keys fine-tune the aim. </span>
-        <span className="touch-only">Drag on the table to aim. </span>
+        <span className="touch-only">Drag on the table to aim. To shoot, grab the cue stick and pull it back, or slide the power bar, then let go. </span>
         The dot bottom-left sets follow, draw and english.
       </p>
       {!playing && (
