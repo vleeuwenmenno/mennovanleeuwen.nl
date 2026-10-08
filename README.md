@@ -87,8 +87,9 @@ services:
 ```
 
 The container runs [`server/index.ts`](server/index.ts), a dependency-free Node server, as a
-non-root user on port 8080 (`PORT` changes it). It serves the built site, answers `/healthz`, and
-serves `/api/minecraft`: a live Server List Ping of the Minecraft server, cached for 10 seconds,
+non-root user on port 8080 (`PORT` changes it). It serves the built site, answers `/healthz`, serves
+`/api/activity` (git.mvl.sh's activity feeds, which browsers can't read cross-origin), and
+`/api/minecraft`: a live Server List Ping of the Minecraft server, cached for 10 seconds,
 so the status and join/leave notifications don't wait on public status APIs that cache for
 minutes. On a static host without that endpoint the site falls back to those APIs. `pnpm dev`
 and `pnpm preview` serve the endpoint too. Build the image locally with `docker build -t mvlos .`.

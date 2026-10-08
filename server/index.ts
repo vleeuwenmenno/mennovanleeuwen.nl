@@ -2,9 +2,11 @@ import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
+import { forgejoActivity } from './activity.ts'
 import { minecraftStatus } from './minecraft.ts'
 
-// Serves the built site and one live endpoint: /api/minecraft. No dependencies, just Node.
+// Serves the built site and two live endpoints: /api/minecraft and /api/activity (git.mvl.sh).
+// No dependencies, just Node.
 
 const ROOT = join(import.meta.dirname, '..', 'dist')
 const PORT = Number(process.env.PORT ?? 80)
@@ -56,8 +58,8 @@ createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok\n')
     return
   }
-  if (path === '/api/minecraft') {
-    const body = JSON.stringify(await minecraftStatus())
+  if (path === '/api/minecraft' || path === '/api/activity') {
+    const body = JSON.stringify(path === '/api/minecraft' ? await minecraftStatus() : { items: await forgejoActivity() })
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SECURITY }).end(req.method === 'HEAD' ? undefined : body)
     return
   }

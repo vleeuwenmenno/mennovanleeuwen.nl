@@ -7,6 +7,9 @@ const GITHUB_USER = 'vleeuwenmenno'
 const RELEASE_REPOS = ['vleeuwenmenno/boltwarden']
 const CACHE_KEY = 'mvlos.recents.v1'
 const CACHE_TTL = 10 * 60 * 1000
+// Live refresh while the page is open: GitHub's events (20 requests an hour, well inside the
+// anonymous limit of 60) and git.mvl.sh through the site's own /api/activity.
+const POLL_MS = 3 * 60 * 1000
 
 export type RecentsState = {
   items: Activity[]
@@ -64,6 +67,12 @@ export function loadRecents(): Promise<RecentsState> {
       /* no snapshot in dev until `pnpm recents` has run */
     }
 
+    // git.mvl.sh, live, when the site's server is there to fetch it (not on a static host).
+    getJson('/api/activity')
+      .then((d) => Array.isArray(d.items) && set({ items: mergeActivity(state.items, d.items) }))
+      .catch(() => {})
+    startPolling()
+
     const cached = readCache()
     if (cached) {
       set({ items: mergeActivity(snapshot, cached), live: true, status: 'ready' })
@@ -84,6 +93,33 @@ export function loadRecents(): Promise<RecentsState> {
     return state
   })()
   return inflight
+}
+
+let polling = false
+function startPolling() {
+  if (polling) return
+  polling = true
+  setInterval(() => {
+    if (document.visibilityState !== 'visible') return
+    getJson(`https://api.github.com/users/${GITHUB_USER}/events/public?per_page=100`)
+      .then((events) => {
+        const live = normalizeGithubEvents(events)
+        writeCache(mergeActivity(readCache() ?? [], live))
+        set({ items: mergeActivity(state.items, live), live: true })
+      })
+      .catch(() => {})
+    getJson('/api/activity')
+      .then((d) => Array.isArray(d.items) && set({ items: mergeActivity(state.items, d.items) }))
+      .catch(() => {})
+  }, POLL_MS)
+}
+
+/** For code outside React (the activity notifications). */
+export function subscribeRecents(fn: (s: RecentsState) => void) {
+  const l = () => fn(state)
+  listeners.add(l)
+  l()
+  return () => listeners.delete(l)
 }
 
 export function useRecents() {

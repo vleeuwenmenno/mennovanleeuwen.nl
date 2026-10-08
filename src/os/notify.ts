@@ -3,7 +3,7 @@ import { useSyncExternalStore } from 'react'
 // Desktop notifications, Omarchy (mako) style: a short stack in the top-right corner that fades
 // out on its own. Anything can post one.
 
-export type Notice = { id: number; title: string; body?: string; icon?: string; at: number }
+export type Notice = { id: number; title: string; body?: string; icon?: string; onClick?: () => void; at: number }
 
 const LIFETIME_MS = 7000
 const MAX = 4

@@ -17,6 +17,7 @@ WORKDIR /app
 ENV NODE_ENV=production PORT=8080
 COPY --from=build /app/dist ./dist
 COPY server ./server
+COPY src/data/normalize.ts ./src/data/normalize.ts
 EXPOSE 8080
 USER node
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1

@@ -10,6 +10,7 @@ import { ContextMenuHost, openContextMenu } from './ContextMenu'
 import { Desktop } from './Desktop'
 import { PowerScreens } from './Power'
 import { Notifications } from './Notifications'
+import { startActivityAlerts } from './activityAlerts'
 import { usePower } from './powerState'
 import { AppIcon } from './icons'
 import { appearanceMenu } from './appearanceMenu'
@@ -539,6 +540,18 @@ export function Shell() {
   const wm = useWM()
   const power = usePower()
   const overlay = useOverlay()
+
+  // Fresh activity notifications start counting once the desktop is up.
+  useEffect(() => {
+    if (power.phase === 'up') startActivityAlerts()
+  }, [power.phase])
+
+  // Notifications (and anything else outside React's tree) can ask for an app to open.
+  useEffect(() => {
+    const onOpen = (e: Event) => wm.open((e as CustomEvent<AppId>).detail)
+    window.addEventListener('mvlos:open', onOpen)
+    return () => window.removeEventListener('mvlos:open', onOpen)
+  }, [wm.open])
 
   // A reboot (or powering on again) starts from a clean desk, like a real one.
   useEffect(() => {
