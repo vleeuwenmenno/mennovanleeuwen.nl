@@ -245,7 +245,7 @@ export function Spotlight() {
     action('new-terminal', 'New terminal window', 'terminal shell new window launch console bash', () => wm.openNew('terminal'), '›_')
     action('minimize', 'Minimize all windows', 'minimize hide windows show desktop', () => wm.windows.forEach((w) => wm.minimize(w.pid)), '▁')
     action('close', 'Close all windows', 'close quit all windows', () => wm.windows.forEach((w) => wm.close(w.pid)), '✕')
-    action('focus-mode', `Focus follows mouse: turn ${wm.focusMode === 'hover' ? 'off' : 'on'}`, 'focus follows mouse hover click window manager sloppy', () => wm.setFocusMode(wm.focusMode === 'hover' ? 'click' : 'hover'), '◎', wm.focusMode === 'hover' ? 'Currently on: hovering focuses windows' : 'Currently off: click to focus')
+    action('focus-mode', `Focus follows mouse: turn ${wm.focusMode === 'hover' ? 'off' : 'on'}`, 'focus follows mouse hover click window manager sloppy', () => wm.setFocusMode(wm.focusMode === 'hover' ? 'click' : 'hover'), '◎', wm.focusMode === 'hover' ? 'Currently on: hovering focuses and raises windows' : 'Currently off: click to focus')
     action('cleanup', 'Clean up desktop icons', 'desktop icons tidy arrange reset', resetLayout, '▤')
     action('print', 'Print or save CV as PDF', 'print pdf cv resume download', () => {
       wm.open('cv')

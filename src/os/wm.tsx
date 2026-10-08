@@ -26,15 +26,14 @@ type Action =
   | { type: 'open'; app: AppId; geometry: Geometry; props?: WinState['props']; newInstance?: boolean }
   | { type: 'close'; pid: number }
   | { type: 'focus'; pid: number }
-  | { type: 'hoverFocus'; pid: number }
   | { type: 'minimize'; pid: number }
   | { type: 'toggleMax'; pid: number }
   | { type: 'setGeometry'; pid: number; geometry: Partial<Geometry> }
   | { type: 'viewport'; width: number; height: number; layout: { app: AppId; geometry: Geometry }[] }
 
 /** `touched` flips once the visitor moves, resizes or opens something; until then a viewport
- * change re-applies the opening layout instead of just clamping. `focused` is tracked apart from
- * stacking so hover can move keyboard focus without raising a window (sloppy focus). */
+ * change re-applies the opening layout instead of just clamping. `focused` is the window that
+ * last received focus; it falls back to the frontmost one when that window closes or minimizes. */
 type State = { windows: WinState[]; nextPid: number; topZ: number; touched: boolean; focused: number | null }
 
 export type FocusMode = 'hover' | 'click'
@@ -79,11 +78,6 @@ function reducer(state: State, action: Action): State {
       const z = state.topZ + 1
       return { ...state, topZ: z, focused: action.pid, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, z, minimized: false } : w)) }
     }
-    case 'hoverFocus': {
-      const target = state.windows.find((w) => w.pid === action.pid)
-      if (!target || target.minimized || state.focused === action.pid) return state
-      return { ...state, focused: action.pid }
-    }
     case 'minimize':
       return { ...state, focused: state.focused === action.pid ? null : state.focused, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, minimized: true } : w)) }
     case 'toggleMax':
@@ -114,10 +108,8 @@ type WM = {
   /** Always opens another window, except for single-instance apps. */
   openNew: (app: AppId, props?: WinState['props']) => void
   close: (pid: number) => void
-  /** Raises and focuses a window. */
+  /** Raises and focuses a window (on click, or on hover in 'hover' focus mode). */
   focus: (pid: number) => void
-  /** Focuses without raising; what hovering does in 'hover' focus mode. */
-  hoverFocus: (pid: number) => void
   focusMode: FocusMode
   setFocusMode: (mode: FocusMode) => void
   minimize: (pid: number) => void
@@ -199,7 +191,6 @@ export function WindowManagerProvider({
       openNew,
       close: (pid) => dispatch({ type: 'close', pid }),
       focus: (pid) => dispatch({ type: 'focus', pid }),
-      hoverFocus: (pid) => dispatch({ type: 'hoverFocus', pid }),
       focusMode,
       setFocusMode,
       minimize: (pid) => dispatch({ type: 'minimize', pid }),

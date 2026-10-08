@@ -66,10 +66,11 @@ export function Window({ win, title, chrome = 'default', className = '', childre
       className={`window chrome-${chrome} ${focused ? 'is-focused' : ''} ${win.maximized ? 'is-max' : ''} ${win.minimized ? 'is-min' : ''} ${className}`}
       style={{ left: win.x, top: win.y, width: win.w, height: win.h, zIndex: win.z }}
       onPointerDown={() => wm.focus(win.pid)}
-      // Focus follows the mouse after a short pause, so sweeping across windows does not flicker.
+      // Focus (and raise) follows the mouse after a short pause, so sweeping across windows on the
+      // way somewhere else does not shuffle the stack.
       onPointerEnter={(e) => {
         if (wm.focusMode !== 'hover' || e.pointerType === 'touch' || document.body.matches('.is-dragging, .is-resizing')) return
-        hoverTimer.current = setTimeout(() => wm.hoverFocus(win.pid), 70)
+        hoverTimer.current = setTimeout(() => wm.focus(win.pid), 120)
       }}
       onPointerLeave={() => hoverTimer.current && clearTimeout(hoverTimer.current)}
       role="dialog"
