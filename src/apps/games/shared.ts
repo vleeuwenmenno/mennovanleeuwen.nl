@@ -42,7 +42,8 @@ export function useIsFocused(win: WinState) {
   return wm.focusedPid === win.pid
 }
 
-/** Keyboard handler that only fires while this window is focused, and swallows arrow-key scrolling. */
+/** Keyboard handler that only fires while this window is focused. It swallows the browser's own
+ * use of game keys: arrow and space scrolling, and Firefox's find-as-you-type on letters (WASD). */
 export function useGameKeys(win: WinState, handler: (e: KeyboardEvent) => void) {
   const focused = useIsFocused(win)
   const ref = useRef(handler)
@@ -51,7 +52,8 @@ export function useGameKeys(win: WinState, handler: (e: KeyboardEvent) => void) 
     if (!focused) return
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.closest?.('input, textarea')) return
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault()
+      const plain = !e.ctrlKey && !e.metaKey && !e.altKey
+      if (plain && (e.key.length === 1 || ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter'].includes(e.key))) e.preventDefault()
       ref.current(e)
     }
     window.addEventListener('keydown', onKey)
