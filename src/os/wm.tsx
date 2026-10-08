@@ -68,6 +68,7 @@ type Action =
   | { type: 'toggleMax'; pid: number }
   | { type: 'setGeometry'; pid: number; geometry: GeometryPatch }
   | { type: 'viewport'; width: number; height: number; layout: { app: AppId; geometry: Geometry }[] }
+  | { type: 'reset'; layout: { app: AppId; geometry: Geometry; props?: WinState['props'] }[] }
 
 /** `touched` flips once the visitor moves, resizes or opens something; until then a viewport
  * change re-applies the opening layout instead of just clamping. `focused` is the window that
@@ -75,8 +76,17 @@ type Action =
 type State = { windows: WinState[]; nextPid: number; topZ: number; touched: boolean; focused: number | null }
 
 
+/** Opens the opening layout on an empty desk, as if nobody had touched it yet. */
+function fresh(layout: { app: AppId; geometry: Geometry; props?: WinState['props'] }[]): State {
+  let s: State = { windows: [], nextPid: 100, topZ: 10, touched: false, focused: null }
+  for (const w of layout) s = reducer(s, { type: 'open', app: w.app, geometry: w.geometry, props: w.props })
+  return { ...s, touched: false }
+}
+
 function reducer(state: State, action: Action): State {
   switch (action.type) {
+    case 'reset':
+      return fresh(action.layout)
     case 'open': {
       // Reuse the app's frontmost window unless a new one was asked for.
       const existing = action.newInstance && !SINGLE_INSTANCE.has(action.app)
@@ -151,6 +161,8 @@ type WM = {
   minimize: (pid: number) => void
   toggleMax: (pid: number) => void
   setGeometry: (pid: number, geometry: GeometryPatch) => void
+  /** Closes everything and opens the opening layout again (after a reboot). */
+  reset: () => void
 }
 
 const Ctx = createContext<WM | null>(null)
@@ -166,12 +178,7 @@ export function WindowManagerProvider({
   initial: () => { app: AppId; geometry: Geometry; props?: WinState['props'] }[]
   placement: (app: AppId, openCount: number) => Geometry
 }) {
-  const [state, dispatch] = useReducer(reducer, relayout, (make) => {
-    const init = make()
-    let s: State = { windows: [], nextPid: 100, topZ: 10, touched: false, focused: null }
-    for (const w of init) s = reducer(s, { type: 'open', app: w.app, geometry: w.geometry, props: w.props })
-    return { ...s, touched: false }
-  })
+  const [state, dispatch] = useReducer(reducer, relayout, (make) => fresh(make()))
 
   // "Trash" is a place, not an app: it opens in Files (whose trash:// view lists trashed items).
   const open = useCallback(
@@ -218,8 +225,9 @@ export function WindowManagerProvider({
       minimize: (pid) => dispatch({ type: 'minimize', pid }),
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
       setGeometry: (pid, geometry) => dispatch({ type: 'setGeometry', pid, geometry }),
+      reset: () => dispatch({ type: 'reset', layout: relayout() }),
     }
-  }, [state.windows, state.focused, open, openNew])
+  }, [state.windows, state.focused, open, openNew, relayout])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

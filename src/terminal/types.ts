@@ -23,6 +23,8 @@ export type Ctx = {
   closeWindow: (pid: number) => void
   clear: () => void
   exit: () => void
+  /** True on the detached text console reached by pausing the boot (no graphical session yet). */
+  console?: boolean
   setAccent: (name: string) => boolean
   /** Writes a line to the screen right away (for commands that stream, like ping). */
   print: (text: string) => void

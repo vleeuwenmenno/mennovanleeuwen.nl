@@ -57,3 +57,7 @@ on the open windows.
 `pepper` ([`src/terminal/pepper.ts`](src/terminal/pepper.ts)) simulates the Pepper CLI against a
 pretend lab cluster (3 masters, 4 minions). Its grammar, outcome names and output layout follow
 the real CLI; the cluster, states and timings are invented, and applies only last for the session.
+
+Pressing P during the boot log pauses it and drops to a text console on "tty1" (the same shell,
+without a window manager); `exit` resumes the boot. `reboot` and `shutdown` play the systemd
+shutdown log ([`src/os/Power.tsx`](src/os/Power.tsx)); a reboot starts from the opening layout again.

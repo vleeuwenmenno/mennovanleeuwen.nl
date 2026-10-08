@@ -61,7 +61,8 @@ function loadHistory(): string[] {
   }
 }
 
-export function Terminal({ win }: { win: WinState }) {
+/** `onLogout` makes this the detached text console reached by pausing the boot, rather than a window. */
+export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => void }) {
   const wm = useWM()
   // Only the terminal that opens at boot greets the visitor; any terminal opened later starts clean.
   const [entries, setEntries] = useState<Entry[]>(() =>
@@ -93,7 +94,13 @@ export function Terminal({ win }: { win: WinState }) {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
-  }, [entries, busy])
+    // The console grows inside the boot screen, which does the scrolling.
+    if (onLogout) scrollRef.current?.scrollIntoView({ block: 'end' })
+  }, [entries, busy, onLogout])
+
+  useEffect(() => {
+    if (onLogout && !matchMedia('(pointer: coarse)').matches) inputRef.current?.focus({ preventScroll: true })
+  }, [onLogout])
 
   // Focus the prompt whenever this window comes to the front (not on touch, where it pops the keyboard).
   useEffect(() => {
@@ -150,7 +157,8 @@ export function Terminal({ win }: { win: WinState }) {
       openNewApp: wm.openNew,
       closeWindow: wm.close,
       clear: () => setEntries([]),
-      exit: () => setTimeout(() => wm.close(win.pid), 120),
+      exit: () => setTimeout(() => (onLogout ? onLogout() : wm.close(win.pid)), 120),
+      console: !!onLogout,
       setAccent,
       print,
       signal: abortRef.current.signal,
@@ -203,7 +211,7 @@ export function Terminal({ win }: { win: WinState }) {
 
   return (
     <div
-      className="terminal"
+      className={`terminal ${onLogout ? 'is-console' : ''}`}
       ref={scrollRef}
       onMouseUp={() => {
         if (!window.getSelection()?.toString()) inputRef.current?.focus({ preventScroll: true })

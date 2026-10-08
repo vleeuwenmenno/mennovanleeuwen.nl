@@ -10,6 +10,7 @@ import { SHORTCUTS } from '../data/shortcuts'
 import { loadRates, smartCalc } from '../os/smartcalc'
 import { THEMES as OMARCHY_THEMES } from '../os/omarchyThemes'
 import { ACCENTS, setMode, setTheme, themeLabel, themeSettings } from '../os/theme'
+import { reboot, shutdown } from '../os/powerState'
 import { age, HOME, lookup, prettyPath, resolvePath, walk, type DirNode, type Node } from './vfs'
 
 // Output markup understood by the terminal renderer:
@@ -172,7 +173,7 @@ export const commands: Record<string, Command> = {
         ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'heatmap', 'stars', 'contact']],
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo', 'calc']],
         ['Network', ['ping', 'dig', 'host', 'nslookup', 'minecraft']],
-        ['System', ['keys', 'ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'env', 'export', 'theme', 'clear', 'exit']],
+        ['System', ['keys', 'ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'env', 'export', 'theme', 'tty', 'reboot', 'shutdown', 'clear', 'exit']],
         ['Fun', ['games', 'fastfetch', 'fortune', 'cowsay', 'sl', 'sudo']],
       ]
       return [
@@ -435,7 +436,17 @@ export const commands: Record<string, Command> = {
     run: ({ args }) => args.map((a) => (commands[a] ? `/bin/${a}` : `${a} not found`)).join('\n'),
   },
   clear: { desc: 'clear the screen', run: (ctx) => ctx.clear() },
-  exit: { desc: 'close this terminal', run: (ctx) => ctx.exit() },
+  exit: { desc: 'close this terminal', run: (ctx) => void ctx.exit() },
+  logout: { desc: 'alias for exit', hidden: true, run: (ctx) => void ctx.exit() },
+  tty: { desc: 'print the terminal name', run: (ctx) => (ctx.console ? '/dev/tty1' : '/dev/pts/0') },
+  startx: {
+    desc: 'start the graphical session',
+    hidden: true,
+    run: (ctx) => {
+      if (!ctx.console) throw new CmdError('startx: a graphical session is already running on :0')
+      ctx.exit()
+    },
+  },
   open: {
     desc: 'open an app, file or URL',
     usage: 'open [-n] <app|file|url>   (-n opens a new window)',
@@ -803,16 +814,24 @@ export const commands: Record<string, Command> = {
     },
   },
   shortcuts: { desc: 'alias for keys', hidden: true, run: (ctx) => commands.keys.run(ctx) },
-  shutdown: { desc: 'power off', hidden: true, run: () => 'Shutting down... no. Close the tab like everyone else.' },
-  reboot: {
-    desc: 'reload the page',
-    hidden: true,
-    run: () => {
-      setTimeout(() => location.reload(), 600)
-      return 'Rebooting MvL OS...'
+  shutdown: {
+    desc: 'power off (-r to reboot)',
+    usage: 'shutdown [-r|-h|-c] [now]',
+    run: (ctx) => {
+      if (ctx.args.includes('-c')) return 'No scheduled shutdown to cancel.'
+      return power(ctx, ctx.args.includes('-r') ? 'reboot' : 'power off')
     },
   },
+  poweroff: { desc: 'alias for shutdown', hidden: true, run: (ctx) => power(ctx, 'power off') },
+  halt: { desc: 'alias for shutdown', hidden: true, run: (ctx) => power(ctx, 'power off') },
+  reboot: { desc: 'restart MvL OS', run: (ctx) => power(ctx, 'reboot') },
   headlines: { desc: 'what the sticky note says', hidden: true, run: () => headlines.map((h) => `• ${h}`).join('\n') },
+}
+
+/** Shuts down or reboots the whole "machine" after the broadcast has had a moment on screen. */
+function power(ctx: Ctx, what: 'reboot' | 'power off') {
+  setTimeout(what === 'reboot' ? reboot : shutdown, 500)
+  return `Broadcast message from ${profile.handle}@mvlos on ${ctx.console ? 'tty1' : 'pts/0'}:\n\nThe system will ${what} now!`
 }
 
 function dnsArgs(args: string[], cmd: string): [string, string] {
