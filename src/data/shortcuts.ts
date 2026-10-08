@@ -41,7 +41,7 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
   {
     area: 'Boot screen',
     keys: [
-      ['P', 'pause and drop to a shell (exit resumes)'],
+      ['P', 'boot to a shell instead (exit starts the desktop)'],
       ['Space / Click', 'skip the boot (any other key works too)'],
     ],
   },

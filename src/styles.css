@@ -3749,6 +3749,14 @@ kbd {
   font-weight: 700;
   animation: boot-hint-pulse 1.6s ease-in-out infinite;
 }
+.boot-hint.is-armed {
+  border-style: solid;
+  border-color: var(--yellow);
+  animation: none;
+}
+.boot-hint.is-armed kbd {
+  animation: none;
+}
 .boot-hint-main {
   white-space: nowrap;
 }

@@ -58,6 +58,7 @@ on the open windows.
 pretend lab cluster (3 masters, 4 minions). Its grammar, outcome names and output layout follow
 the real CLI; the cluster, states and timings are invented, and applies only last for the session.
 
-Pressing P during the boot log pauses it and drops to a text console on "tty1" (the same shell,
-without a window manager); `exit` resumes the boot. `reboot` and `shutdown` play the systemd
+Pressing P during the boot log lets the boot finish but stops short of the desktop, logging in
+on a text console on "tty1" instead (the same shell, without a window manager); `exit` starts the
+desktop. `reboot` and `shutdown` play the systemd
 shutdown log ([`src/os/Power.tsx`](src/os/Power.tsx)); a reboot starts from the opening layout again.

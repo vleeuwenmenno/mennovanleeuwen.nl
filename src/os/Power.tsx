@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '../apps/Terminal'
 import { profile } from '../data/profile'
 import { bootDone, finishShutdown, powerOn, usePower } from './powerState'
@@ -50,10 +50,29 @@ const BOOT: LogLine[] = [
   ['ok', 'Started Minecraft status probe for cloud.mvl.sh.', 90],
   ['ok', 'Started Boltwarden vault (locked, nice try).', 90],
   ['ok', 'Loaded projects: boltwarden savuvo pepper golinks omasoloist.', 100],
+]
+
+// The graphical session: the end of a normal boot, or what `exit` starts from the text console.
+const GUI: LogLine[] = [
   ['start', 'Starting Hyprland compositor (react-wm)...', 90],
   ['ok', 'Started Hyprland compositor (react-wm).', 170],
   ['ok', 'Reached target Graphical Interface.', 110],
 ]
+
+// Instead of the graphical session, when P was pressed: stop at multi-user and log in on tty1.
+function consoleLines(): LogLine[] {
+  const last = new Date().toLocaleString('en-GB', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return [
+    ['ok', 'Reached target Multi-User System.', 110],
+    ['warn', 'Graphical session held back on request. Starting a shell on tty1.', 160],
+    ['info', '         Type exit to start the desktop; reboot and shutdown work too.', 0],
+    ['info', '', 200],
+    ['info', 'MvL OS 1.0 mvlos tty1', 0],
+    ['info', '', 0],
+    ['info', `mvlos login: ${profile.handle} (automatic login)`, 300],
+    ['info', `Last login: ${last} on tty1`, 120],
+  ]
+}
 
 
 const kernelTime = () => `[${(performance.now() / 1000).toFixed(6).padStart(12)}]`
@@ -122,28 +141,18 @@ function useFollow(dep: unknown) {
 // The text console is a terminal without a window around it.
 const CONSOLE_WIN: WinState = { pid: -1, app: 'terminal', x: 0, y: 0, w: 0, h: 0, z: 0, minimized: false, maximized: false, props: {}, openedAt: 0 }
 
-function pauseLines(): LogLine[] {
-  const last = new Date().toLocaleString('en-GB', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
-  return [
-    ['info', '^Z', 0],
-    ['warn', 'Boot paused by user. Dropping to a shell on tty1.', 0],
-    ['info', '         Type exit to carry on booting; reboot and shutdown work too.', 0],
-    ['info', '', 0],
-    ['info', 'MvL OS 1.0 mvlos tty1', 0],
-    ['info', '', 0],
-    ['info', `mvlos login: ${profile.handle} (automatic login)`, 0],
-    ['info', `Last login: ${last} on tty1`, 0],
-  ]
-}
-
 function Boot() {
-  // Paused at line `pausedAt`; the console stays on screen (and in the log) after it resumes.
-  const [pausedAt, setPausedAt] = useState<number | null>(null)
+  // P asks for a text console: the boot still runs to the end, then logs in on tty1 instead of
+  // starting the desktop. `exit` there starts the graphical session after all.
+  const [wantConsole, setWantConsole] = useState(false)
   const [resumed, setResumed] = useState(false)
   const [leaving, setLeaving] = useState(false)
-  const paused = pausedAt !== null && !resumed
-  const [n, finished] = useLog(BOOT, paused)
-  const ref = useFollow(n)
+  const main = useMemo(() => [...BOOT, ...(wantConsole ? consoleLines() : GUI)], [wantConsole])
+  const [n, mainDone] = useLog(main)
+  const [g, guiDone] = useLog(GUI, !resumed)
+  const consoleOpen = wantConsole && mainDone
+  const finished = wantConsole ? resumed && guiDone : mainDone
+  const ref = useFollow(n + g)
 
   useEffect(() => {
     if (!finished) return
@@ -157,14 +166,15 @@ function Boot() {
     return () => clearTimeout(t)
   }, [leaving])
 
-  const pause = () => pausedAt === null && !finished && setPausedAt(n)
+  // Too late once the desktop has started coming up.
+  const canPause = !wantConsole && n < BOOT.length
+  const pause = () => canPause && setWantConsole(true)
 
-  // P pauses into the console; any other key skips the boot. Keys belong to the console once it is open.
+  // P asks for the console; any other key skips the boot. Once asked, keys wait for the console.
   const pauseRef = useRef(pause)
   pauseRef.current = pause
-  const consoleOpen = pausedAt !== null
   useEffect(() => {
-    if (consoleOpen) return
+    if (wantConsole) return
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return
       if (e.key.toLowerCase() === 'p') {
@@ -174,42 +184,30 @@ function Boot() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [consoleOpen])
+  }, [wantConsole])
 
-  const before = BOOT.slice(0, pausedAt ?? n)
-  const after = pausedAt === null ? [] : BOOT.slice(pausedAt, n)
   return (
     <div
       ref={ref}
-      className={`boot ${leaving ? 'is-leaving' : ''} ${paused ? 'is-paused' : ''} ${consoleOpen ? 'has-console' : ''}`}
-      onClick={() => !consoleOpen && bootDone()}
+      className={`boot ${leaving ? 'is-leaving' : ''} ${consoleOpen && !resumed ? 'is-paused' : ''} ${consoleOpen ? 'has-console' : ''}`}
+      onClick={() => !wantConsole && bootDone()}
     >
       <pre>
-        {before.map((l, i) => (
+        {main.slice(0, n).map((l, i) => (
           <Line key={i} line={l} />
         ))}
         {consoleOpen && (
           <>
-            {pauseLines().map((l, i) => (
-              <Line key={`p${i}`} line={l} />
-            ))}
             <Terminal win={CONSOLE_WIN} onLogout={() => setResumed(true)} />
-            {resumed && (
-              <>
-                <div>logout</div>
-                <Line line={['ok', 'Resuming boot.', 0]} />
-              </>
-            )}
+            {resumed && <div>logout</div>}
+            {GUI.slice(0, g).map((l, i) => (
+              <Line key={`g${i}`} line={l} />
+            ))}
           </>
         )}
-        {after.map((l, i) => (
-          <Fragment key={`a${i}`}>
-            <Line line={l} />
-          </Fragment>
-        ))}
-        {!paused && !finished && <span className="boot-cursor">_</span>}
+        {!(consoleOpen && !resumed) && !finished && <span className="boot-cursor">_</span>}
       </pre>
-      {!consoleOpen && !finished && (
+      {canPause && (
         <button
           className="boot-hint"
           onClick={(e) => {
@@ -218,10 +216,17 @@ function Boot() {
           }}
         >
           <span className="boot-hint-main">
-            <kbd>P</kbd> pause boot &amp; drop to a shell
+            <kbd>P</kbd> drop to a shell after boot
           </span>
           <span className="boot-hint-skip">click or any other key skips</span>
         </button>
+      )}
+      {wantConsole && !consoleOpen && (
+        <div className="boot-hint is-armed" aria-live="polite">
+          <span className="boot-hint-main">
+            <kbd>P</kbd> shell on tty1 once boot finishes
+          </span>
+        </div>
       )}
     </div>
   )
