@@ -2,7 +2,6 @@ import { useEffect, useState, type ComponentType } from 'react'
 import type { WinState } from '../../os/wm'
 import { Breakout } from './Breakout'
 import { GAME_CATALOG } from './catalog'
-import { Game2048 } from './Game2048'
 import { Minecraft } from './Minecraft'
 import { Minesweeper } from './Minesweeper'
 import { PacMan } from './PacMan'
@@ -15,7 +14,6 @@ const COMPONENTS: Record<string, ComponentType<{ win: WinState }>> = {
   'minecraft': Minecraft,
   'snake': Snake,
   'minesweeper': Minesweeper,
-  '2048': Game2048,
   'breakout': Breakout,
 }
 

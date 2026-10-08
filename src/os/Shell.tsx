@@ -198,7 +198,7 @@ function useIsMobile() {
  * notes don't count) and comes back once they are all closed. A bar at the bottom brings it up;
  * it goes again when a window opens or the screen is tapped elsewhere.
  */
-function useDockVisibility(pinned: boolean, anyMaximized: boolean, appOpen: boolean, openKey: string) {
+function useDockVisibility(pinned: boolean, covered: boolean, appOpen: boolean, openKey: string) {
   const [mode, setMode] = useState<DockMode>(getDockMode)
   const [hover, setHover] = useState(false)
   const [peek, setPeek] = useState(false)
@@ -242,7 +242,7 @@ function useDockVisibility(pinned: boolean, anyMaximized: boolean, appOpen: bool
     hideTimer.current = setTimeout(() => setHover(false), 450)
   }
   if (mobile) return { visible: !tucked || peek || pinned, autohide: false, tucked, peek: () => setPeek(true), mode, show() {}, hideSoon() {} }
-  const hiding = !touch && (mode === 'hide' || (mode === 'maximized' && anyMaximized))
+  const hiding = !touch && (mode === 'hide' || (mode === 'maximized' && covered))
   return { visible: !hiding || pinned || hover, autohide: hiding, tucked: false, peek: () => setPeek(true), mode, show, hideSoon }
 }
 
@@ -262,9 +262,22 @@ function Dock() {
   const navRef = useRef<HTMLElement>(null)
   const firstRef = useRef<HTMLButtonElement>(null)
   const appWindows = wm.windows.filter((w) => !w.minimized && APP_META[w.app].chrome !== 'note')
+  // Whether a window sits where the dock is (or is maximized), for "auto-hide when a window covers it".
+  // The dock's spot is worked out from its size, since a hidden dock is moved off-screen.
+  const covered = wm.windows.some((w) => {
+    if (w.minimized) return false
+    if (w.maximized) return true
+    const nav = navRef.current
+    if (!nav) return false
+    const dw = nav.offsetWidth
+    const dh = nav.offsetHeight
+    const dx = (window.innerWidth - dw) / 2
+    const dy = window.innerHeight - 10 - dh
+    return w.x < dx + dw && w.x + w.w > dx && w.y < dy + dh && w.y + w.h > dy
+  })
   const dock = useDockVisibility(
     !!dragging || overlay === 'launchpad' || moreOpen,
-    wm.windows.some((w) => w.maximized && !w.minimized),
+    covered,
     appWindows.length > 0,
     `${appWindows.map((w) => w.pid).join()}|${wm.focusedPid}`,
   )

@@ -2326,8 +2326,7 @@ body.is-resizing * {
   .tetris-stage .game-canvas {
     height: min(600px, calc(100dvh - 380px));
   }
-  .tetris-stage .game-canvas,
-  .g2048 {
+  .tetris-stage .game-canvas {
     touch-action: none;
   }
 }
@@ -2413,69 +2412,6 @@ body.is-resizing * {
 .mine.n5 { color: var(--yellow); }
 .mine.n6 { color: var(--cyan); }
 .mine.n7, .mine.n8 { color: var(--text); }
-/* 2048 */
-.g2048 {
-  --gap: 10px;
-  --size: min(84px, calc((100vw - 90px) / 4));
-  position: relative;
-  display: grid;
-  grid-template-columns: repeat(4, var(--size));
-  gap: var(--gap);
-  padding: var(--gap);
-  border-radius: 14px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid var(--line);
-  touch-action: none;
-  user-select: none;
-}
-.g2048-slot {
-  width: var(--size);
-  height: var(--size);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-}
-.g2048-tile {
-  position: absolute;
-  left: calc(var(--gap) + var(--c) * (var(--size) + var(--gap)));
-  top: calc(var(--gap) + var(--r) * (var(--size) + var(--gap)));
-  width: var(--size);
-  height: var(--size);
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  font-family: var(--mono);
-  font-weight: 700;
-  font-size: calc(var(--size) * 0.36);
-  color: var(--on-accent);
-  transition: left 0.12s ease, top 0.12s ease;
-}
-.g2048-tile.is-fresh {
-  animation: tile-pop 0.18s ease;
-}
-.g2048-tile.is-merged {
-  animation: tile-pop 0.18s ease;
-  z-index: 1;
-}
-@keyframes tile-pop {
-  0% { transform: scale(0.6); }
-  60% { transform: scale(1.1); }
-}
-.g2048-tile.v2 { background: #e9e4d8; }
-.g2048-tile.v4 { background: #e6dcc0; }
-.g2048-tile.v8 { background: #f2b179; }
-.g2048-tile.v16 { background: #f59563; }
-.g2048-tile.v32 { background: #f67c5f; color: #fff; }
-.g2048-tile.v64 { background: #f65e3b; color: #fff; }
-.g2048-tile.v128 { background: #edcf72; font-size: calc(var(--size) * 0.3); }
-.g2048-tile.v256 { background: #edcc61; font-size: calc(var(--size) * 0.3); }
-.g2048-tile.v512 { background: #edc850; font-size: calc(var(--size) * 0.3); }
-.g2048-tile.v1024 { background: #9ece6a; font-size: calc(var(--size) * 0.24); }
-.g2048-tile.v2048, .g2048-tile.v4096 { background: var(--accent); font-size: calc(var(--size) * 0.24); box-shadow: 0 0 24px color-mix(in srgb, var(--accent) 60%, transparent); }
-.g2048-overlay {
-  border-radius: 14px;
-  z-index: 2;
-}
-
 /* ---------- Files (Omafile style) ---------- */
 
 .fm {
@@ -3240,7 +3176,7 @@ button.fm-dd-row:hover {
   max-width: calc(100vw - 16px);
 }
 .dock {
-  transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.15s;
+  transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.22s ease, border-color 0.15s;
 }
 .dock:hover,
 .dock:focus-within {
@@ -3248,6 +3184,8 @@ button.fm-dd-row:hover {
 }
 .dock.is-hidden {
   transform: translate(-50%, calc(100% + 24px));
+  opacity: 0;
+  pointer-events: none;
 }
 /* Phones: the bar that brings a tucked-away dock back. */
 .dock-handle {

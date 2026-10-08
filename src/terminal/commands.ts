@@ -762,7 +762,7 @@ export const commands: Record<string, Command> = {
   },
   games: {
     desc: 'open the arcade',
-    usage: 'games [tetris|pacman|minecraft|snake|minesweeper|2048|breakout]',
+    usage: 'games [tetris|pacman|minecraft|snake|minesweeper|breakout]',
     run: (ctx) => {
       const game = ctx.args[0]
       if (game && !GAME_CATALOG.some((g) => g.id === game)) throw new CmdError(`games: no game called '${game}' (try ${GAME_CATALOG.map((g) => g.id).join(', ')})`)
@@ -773,7 +773,6 @@ export const commands: Record<string, Command> = {
   pacman: { desc: 'play pac-man', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['pacman'] }) },
   snake: { desc: 'play snake', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['snake'] }) },
   minesweeper: { desc: 'play minesweeper', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['minesweeper'] }) },
-  '2048': { desc: 'play 2048', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['2048'] }) },
   breakout: { desc: 'play breakout', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['breakout'] }) },
   pepper: {
     desc: 'Pepper CLI against a simulated lab cluster',

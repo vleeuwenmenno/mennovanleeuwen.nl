@@ -1,5 +1,6 @@
-// How the dock behaves: always shown (default), auto-hidden only while a window is maximized, or
-// always auto-hidden. Windows that snap or maximize leave room for the dock when it can be there.
+// How the dock behaves: always shown, auto-hidden while a window covers it or is maximized (the
+// default), or always auto-hidden. Windows that snap or maximize leave room for the dock when it
+// can be there.
 
 export type DockMode = 'show' | 'maximized' | 'hide'
 
@@ -8,16 +9,16 @@ const DOCK_RESERVE = 86 // dock height (76) plus a 10px gap
 
 export const DOCK_MODES: [DockMode, string][] = [
   ['show', 'Always show'],
-  ['maximized', 'Auto-hide when a window is maximized'],
+  ['maximized', 'Auto-hide when a window covers it'],
   ['hide', 'Always auto-hide'],
 ]
 
 export function getDockMode(): DockMode {
   try {
     const v = localStorage.getItem(KEY)
-    return v === 'maximized' || v === 'hide' ? v : 'show'
+    return v === 'show' || v === 'hide' ? v : 'maximized'
   } catch {
-    return 'show'
+    return 'maximized'
   }
 }
 

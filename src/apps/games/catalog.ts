@@ -9,6 +9,5 @@ export const GAME_CATALOG: GameInfo[] = [
   { id: 'minecraft', name: 'Minecraft', blurb: 'The full game. In a browser tab. Definitely.', glyph: '⛏️', color: '#5d9b3a' },
   { id: 'snake', name: 'Snake', blurb: 'Eat, grow, do not bite yourself', glyph: '🐍', color: '#9ece6a' },
   { id: 'minesweeper', name: 'Minesweeper', blurb: 'The reason office PCs had a mouse', glyph: '💣', color: '#7aa2f7' },
-  { id: '2048', name: '2048', blurb: 'Slide, merge, reach 2048', glyph: '🔢', color: '#f6c453' },
   { id: 'breakout', name: 'Breakout', blurb: 'Bounce the ball, break the wall', glyph: '🧱', color: '#f7768e' },
 ]

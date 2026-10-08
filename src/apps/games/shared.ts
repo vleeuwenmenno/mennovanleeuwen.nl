@@ -70,7 +70,7 @@ export const keyToDir = (key: string): Dir | null =>
 /**
  * Pointer handlers that turn a swipe into a direction as soon as the finger has travelled far
  * enough, rather than on release. With `repeat`, carrying on in another direction without lifting
- * swipes again (steering in Snake and Pac-Man); otherwise one swipe per touch (2048).
+ * swipes again (steering in Snake and Pac-Man); otherwise one swipe per touch.
  */
 export function swipeHandlers(onSwipe: (d: Dir) => void, repeat = true) {
   let start: { x: number; y: number } | null = null
