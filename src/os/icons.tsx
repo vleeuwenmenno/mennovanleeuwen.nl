@@ -97,8 +97,8 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       <>
         <path d="M15 17h18a6 6 0 0 1 6 6v3a6 6 0 0 1-10.6 3.9L26 27h-4l-2.4 2.9A6 6 0 0 1 9 26v-3a6 6 0 0 1 6-6z" />
         <path d="M16 21v6M13 24h6" />
-        <circle cx="31" cy="22.5" r="0.8" fill="#fff" />
-        <circle cx="34" cy="25.5" r="0.8" fill="#fff" />
+        <circle cx="31" cy="22.5" r="0.8" fill="currentColor" />
+        <circle cx="34" cy="25.5" r="0.8" fill="currentColor" />
       </>
     ),
   },
@@ -114,11 +114,31 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
   },
 }
 
-export function AppIcon({ app, size = 48 }: { app: AppId; size?: number }) {
+// The dock's Omarchy look: the same glyphs, flat and square, in the active theme's own palette.
+const HUES: Record<AppId, string> = {
+  terminal: 'var(--green)',
+  notes: 'var(--yellow)',
+  keys: 'var(--blue)',
+  files: 'var(--blue)',
+  projects: 'var(--orange)',
+  viewer: 'var(--cyan)',
+  recents: 'var(--red)',
+  cv: 'var(--text)',
+  contact: 'var(--magenta)',
+  games: 'var(--cyan)',
+  trash: 'var(--muted)',
+}
+
+/** An app's icon: a tinted tile, or with `tone`, a flat square in the theme's colours. */
+export function AppIcon({ app, size = 48, tone = false }: { app: AppId; size?: number; tone?: boolean }) {
   const t = tiles[app]
+  const fg = tone ? HUES[app] : t.fg
   return (
-    <span className="app-icon" style={{ width: size, height: size, background: t.bg }}>
-      <svg viewBox="0 0 48 48" width={size} height={size} fill="none" stroke={t.fg} strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <span
+      className={`app-icon ${tone ? 'is-tone' : ''}`}
+      style={{ width: size, height: size, ...(tone ? { ['--hue' as string]: fg, color: fg } : { background: t.bg, color: fg }) }}
+    >
+      <svg viewBox="0 0 48 48" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={tone ? 2.4 : 2.6} strokeLinecap={tone ? 'square' : 'round'} strokeLinejoin={tone ? 'miter' : 'round'} aria-hidden>
         {t.glyph}
       </svg>
     </span>

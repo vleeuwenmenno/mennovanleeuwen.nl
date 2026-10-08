@@ -386,7 +386,7 @@ function Dock() {
           ])
         }}
       >
-        <AppIcon app={app} />
+        <AppIcon app={app} tone />
         <span className="dock-label">{APP_META[app].dock}</span>
         <span className="dock-dots">
           {Array.from({ length: Math.min(3, wm.windows.filter((w) => w.app === app).length) }, (_, n) => (
@@ -409,7 +409,7 @@ function Dock() {
       onFocus={dock.show}
     >
       <button ref={firstRef} className="dock-item" onClick={() => toggleOverlay('launchpad')} aria-label="All apps">
-        <span className="app-icon lp-dock-icon" style={{ width: 48, height: 48 }}>
+        <span className="app-icon is-tone lp-dock-icon" style={{ width: 48, height: 48 }}>
           {Array.from({ length: 9 }, (_, i) => (
             <span key={i} />
           ))}
@@ -450,7 +450,7 @@ function DockMore({ apps, open, setOpen, onLaunch, running }: { apps: AppId[]; o
   return (
     <div ref={ref} className="dock-more">
       <button className={`dock-item ${open ? 'is-open' : ''}`} onClick={() => setOpen(!open)} aria-label="More apps" aria-expanded={open}>
-        <span className="app-icon dock-more-icon" style={{ width: 48, height: 48 }}>
+        <span className="app-icon is-tone dock-more-icon" style={{ width: 48, height: 48 }}>
           <span />
           <span />
           <span />
@@ -470,7 +470,7 @@ function DockMore({ apps, open, setOpen, onLaunch, running }: { apps: AppId[]; o
                 onLaunch(app)
               }}
             >
-              <AppIcon app={app} size={40} />
+              <AppIcon app={app} size={40} tone />
               <span>{APP_META[app].dock}</span>
               {running(app) > 0 && <span className="dock-dot is-on" />}
             </button>

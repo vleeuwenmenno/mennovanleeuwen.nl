@@ -3097,16 +3097,20 @@ button.fm-dd-row:hover {
   display: flex;
   align-items: center;
   gap: 6px;
-  /* Even padding, and a radius of icon radius + padding, so the corners run parallel to the icons. */
+  /* Omarchy: square, a 2px border like an unfocused window that lights up in the accent on hover. */
   padding: var(--dock-pad);
-  border-radius: calc(13px + var(--dock-pad));
-  background: color-mix(in srgb, var(--bg) 92%, transparent);
-  border: 1px solid var(--line-strong);
-  box-shadow: 0 16px 36px -12px rgba(0, 0, 0, 0.45);
+  border-radius: 0;
+  background: var(--bg);
+  border: var(--border) solid var(--inactive-border);
+  box-shadow: 0 10px 28px -14px rgba(0, 0, 0, 0.5);
   max-width: calc(100vw - 16px);
 }
 .dock {
-  transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.15s;
+}
+.dock:hover,
+.dock:focus-within {
+  border-color: var(--accent);
 }
 .dock.is-hidden {
   transform: translate(-50%, calc(100% + 24px));
@@ -3128,10 +3132,27 @@ button.fm-dd-row:hover {
 }
 .dock-item:hover,
 .dock-item:focus-visible {
-  transform: translateY(-8px) scale(1.18);
+  transform: translateY(-3px);
 }
 .dock-item:active {
-  transform: translateY(-4px) scale(1.08);
+  transform: none;
+}
+/* Flat, square tiles tinted with the theme's own colours. */
+.app-icon.is-tone {
+  border-radius: 0;
+  box-shadow: none;
+  background: color-mix(in srgb, var(--hue) 12%, var(--bg));
+  outline: 1px solid color-mix(in srgb, var(--hue) 28%, transparent);
+  outline-offset: -1px;
+  transition: background 0.12s, outline-color 0.12s;
+}
+.dock-item:hover .app-icon.is-tone,
+.dock-item:focus-visible .app-icon.is-tone,
+.dock-stack-item:hover .app-icon.is-tone,
+.dock-item.is-open .app-icon {
+  background: color-mix(in srgb, var(--hue, var(--accent)) 24%, var(--bg));
+  outline: var(--border) solid var(--hue, var(--accent));
+  outline-offset: -2px;
 }
 .app-icon {
   display: grid;
@@ -3160,16 +3181,16 @@ button.fm-dd-row:hover {
 }
 .dock-dots {
   position: absolute;
-  bottom: -6px;
+  bottom: -5px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
   gap: 3px;
 }
 .dock-dot {
-  width: 4px;
-  height: 4px;
-  border-radius: 99px;
+  width: 8px;
+  height: 2px;
+  border-radius: 0;
   background: transparent;
 }
 .dock-item.is-dragged {
@@ -3185,7 +3206,6 @@ button.fm-dd-row:hover {
 }
 .dock-dot.is-on {
   background: var(--accent);
-  box-shadow: 0 0 6px var(--accent);
 }
 .dock-sep {
   width: 1px;
@@ -3198,17 +3218,16 @@ button.fm-dd-row:hover {
   display: grid;
 }
 .dock-more-icon {
+  --hue: var(--accent);
   display: flex !important;
   gap: 5px;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(160deg, #3b4152, #1c1f28);
 }
 .dock-more-icon span {
-  width: 7px;
-  height: 7px;
-  border-radius: 99px;
-  background: rgba(255, 255, 255, 0.85);
+  width: 6px;
+  height: 6px;
+  background: var(--text);
 }
 .dock-more-icon span:nth-child(2) {
   background: var(--accent);
@@ -3270,17 +3289,16 @@ kbd {
   color: var(--muted);
 }
 .lp-dock-icon {
+  --hue: var(--accent);
   display: grid !important;
-  grid-template-columns: repeat(3, 8px);
+  grid-template-columns: repeat(3, 7px);
   gap: 5px;
   place-content: center;
-  background: linear-gradient(160deg, #3b4152, #1c1f28);
 }
 .lp-dock-icon span {
-  width: 8px;
-  height: 8px;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.85);
+  width: 7px;
+  height: 7px;
+  background: var(--text);
 }
 .lp-dock-icon span:nth-child(odd) {
   background: var(--accent);
