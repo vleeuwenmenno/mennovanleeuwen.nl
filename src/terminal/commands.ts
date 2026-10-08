@@ -28,6 +28,12 @@ export type Ctx = {
   clear: () => void
   exit: () => void
   setAccent: (name: string) => boolean
+  /** Writes a line to the screen right away (for commands that stream, like ping). */
+  print: (text: string) => void
+  /** True when output goes to the screen rather than into a pipe or redirect. */
+  tty: boolean
+  /** Aborted by Ctrl+C. */
+  signal: AbortSignal
 }
 
 type Out = string | void
@@ -166,7 +172,7 @@ export const commands: Record<string, Command> = {
         ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'open']],
         ['About me', ['whoami', 'cv', 'projects', 'contribs', 'recent', 'stars', 'contact']],
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo']],
-        ['System', ['ps', 'kill', 'uname', 'uptime', 'date', 'history', 'env', 'export', 'theme', 'clear', 'exit']],
+        ['System', ['ps', 'kill', 'ping', 'uname', 'uptime', 'date', 'history', 'env', 'export', 'theme', 'clear', 'exit']],
         ['Fun', ['fastfetch', 'fortune', 'cowsay', 'sl', 'sudo']],
       ]
       return [
@@ -273,7 +279,7 @@ export const commands: Record<string, Command> = {
   },
   grep: {
     desc: 'search text',
-    usage: 'grep [-i] [-n] [-v] [-r] <pattern> [file|dir]',
+    usage: 'grep [-i] [-n] [-v] [-c] [-r] <pattern> [file|dir]',
     run: (ctx) => {
       const f = flags(ctx.args)
       const [pattern, ...files] = f.rest
@@ -301,9 +307,11 @@ export const commands: Record<string, Command> = {
         }
         return out.join('\n')
       }
-      return lines(input(ctx, files, 'grep'))
+      const hits = lines(input(ctx, files, 'grep'))
         .map((l, i) => ({ l, i }))
         .filter(({ l }) => match(l))
+      if (f.has('c')) return String(hits.length)
+      return hits
         .map(({ l, i }) => (f.has('n') ? `${c('green', String(i + 1))}:` : '') + hi(l))
         .join('\n')
     },
@@ -597,12 +605,9 @@ export const commands: Record<string, Command> = {
   wget: { desc: 'no network', hidden: true, run: (ctx) => commands.curl.run(ctx) },
   ssh: { desc: 'no', hidden: true, run: () => c('yellow', 'ssh: you are already inside the only machine here.') },
   ping: {
-    desc: 'ping a host',
-    hidden: true,
-    run: ({ args }) => {
-      const host = args[0] ?? 'mennovanleeuwen.nl'
-      return [`PING ${host}: 56 data bytes`, ...[1, 2, 3].map((i) => `64 bytes from ${host}: icmp_seq=${i} ttl=64 time=${(Math.random() * 3 + 0.2).toFixed(3)} ms`), c('muted', '(simulated; browsers cannot send ICMP)')].join('\n')
-    },
+    desc: 'time HTTPS round trips to a host',
+    usage: 'ping [-c count] <host>',
+    run: (ctx) => ping(ctx),
   },
   shutdown: { desc: 'power off', hidden: true, run: () => 'Shutting down... no. Close the tab like everyone else.' },
   reboot: {
@@ -614,6 +619,76 @@ export const commands: Record<string, Command> = {
     },
   },
   headlines: { desc: 'what the sticky note says', hidden: true, run: () => headlines.map((h) => `• ${h}`).join('\n') },
+}
+
+/** Resolves after `ms`, or immediately when the signal aborts (Ctrl+C). */
+function sleep(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(t)
+      signal.removeEventListener('abort', done)
+      resolve()
+    }
+    const t = setTimeout(done, ms)
+    signal.addEventListener('abort', done)
+  })
+}
+
+// Browsers cannot send ICMP, so ping times an HTTPS HEAD request instead. `no-cors` lets it
+// reach any host: the response is opaque, but it only resolves once the server has answered.
+async function ping(ctx: Ctx): Promise<string> {
+  let count = 4
+  let target = ''
+  for (let i = 0; i < ctx.args.length; i++) {
+    if (ctx.args[i] === '-c') count = parseInt(ctx.args[++i], 10)
+    else target = ctx.args[i]
+  }
+  if (!target) throw new CmdError('usage: ping [-c count] <host>')
+  if (!Number.isFinite(count) || count < 1) throw new CmdError('ping: invalid count')
+  count = Math.min(count, 20)
+
+  const host = target.replace(/^[a-z]+:\/\//i, '').replace(/[/?#].*$/, '').toLowerCase()
+  if (!/^([a-z0-9-]+\.)*[a-z0-9-]+(:\d{1,5})?$/.test(host)) throw new CmdError(`ping: ${target}: Name or service not known`)
+  const url = `https://${host}/`
+
+  const lines: string[] = []
+  const out = (l: string) => (ctx.tty ? ctx.print(l) : lines.push(l))
+  const times: number[] = []
+  let sent = 0
+
+  out(`PING ${host} over HTTPS (browsers cannot send ICMP)`)
+  for (let seq = 1; seq <= count && !ctx.signal.aborted; seq++) {
+    sent++
+    const timeout = new AbortController()
+    const stop = () => timeout.abort()
+    const timer = setTimeout(stop, 4000)
+    ctx.signal.addEventListener('abort', stop)
+    const t0 = performance.now()
+    try {
+      await fetch(url, { method: 'HEAD', mode: 'no-cors', cache: 'no-store', credentials: 'omit', signal: timeout.signal })
+      const ms = performance.now() - t0
+      times.push(ms)
+      out(`reply from ${host}: seq=${seq} time=${ms.toFixed(1)} ms${seq === 1 ? c('muted', '  (includes DNS + TLS setup)') : ''}`)
+    } catch {
+      if (ctx.signal.aborted) break
+      out(c('red', `no reply from ${host}: seq=${seq} ${performance.now() - t0 >= 3990 ? 'timed out' : 'connection failed'}`))
+    } finally {
+      clearTimeout(timer)
+      ctx.signal.removeEventListener('abort', stop)
+    }
+    if (seq < count && !ctx.signal.aborted) await sleep(1000, ctx.signal)
+  }
+
+  if (ctx.signal.aborted) out('^C')
+  const loss = sent ? Math.round(((sent - times.length) / sent) * 100) : 0
+  out(`--- ${host} ping statistics ---`)
+  out(`${sent} requests sent, ${times.length} replies, ${loss}% loss`)
+  if (times.length) {
+    const avg = times.reduce((a, b) => a + b, 0) / times.length
+    out(`rtt min/avg/max = ${Math.min(...times).toFixed(1)}/${avg.toFixed(1)}/${Math.max(...times).toFixed(1)} ms`)
+  }
+  if (!times.length && sent) throw new CmdError(ctx.tty ? '' : lines.join('\n'))
+  return lines.join('\n')
 }
 
 function writeTmp(cwd: string, target: string, content: string, append: boolean) {
@@ -699,8 +774,18 @@ function splitTop(line: string, sep: RegExp, seps: string[] = []): string[] {
 
 export type RunResult = { output: string; ok: boolean }
 
-export async function runLine(line: string, base: Omit<Ctx, 'args' | 'stdin'>): Promise<RunResult[]> {
+type Base = Omit<Ctx, 'args' | 'stdin' | 'tty'>
+
+export async function runLine(line: string, shell: Base): Promise<RunResult[]> {
   const results: RunResult[] = []
+  // `cd a; ls` must list a, so later statements see the new cwd.
+  const base: Base = {
+    ...shell,
+    setCwd: (p) => {
+      base.cwd = p
+      shell.setCwd(p)
+    },
+  }
   // `;` always continues, `&&` stops after a failure.
   const ops: string[] = []
   const sequence = splitTop(line, /^(;|&&)/, ops)
@@ -709,13 +794,14 @@ export async function runLine(line: string, base: Omit<Ctx, 'args' | 'stdin'>): 
     if (!stmt) continue
     const res = await runPipeline(stmt, base)
     results.push(res)
+    if (res.output) base.print(res.output)
     base.env['?'] = res.ok ? '0' : '1'
     if (!res.ok && ops[s] === '&&') break
   }
   return results
 }
 
-async function runPipeline(stmt: string, base: Omit<Ctx, 'args' | 'stdin'>): Promise<RunResult> {
+async function runPipeline(stmt: string, base: Base): Promise<RunResult> {
   let redirect: { target: string; append: boolean } | null = null
   const ops: string[] = []
   const redir = splitTop(stmt, /^>>?/, ops)
@@ -729,12 +815,13 @@ async function runPipeline(stmt: string, base: Omit<Ctx, 'args' | 'stdin'>): Pro
   let stdin: string | null = null
   let rendered = ''
   try {
-    for (const stage of stages) {
-      const [name, ...args] = tokenize(stage.trim(), base.env)
+    for (let i = 0; i < stages.length; i++) {
+      const [name, ...args] = tokenize(stages[i].trim(), base.env)
       if (!name) throw new CmdError('msh: syntax error near `|`')
       const cmd = commands[name]
       if (!cmd) throw new CmdError(`msh: command not found: ${name}${name.length > 2 ? suggest(name) : ''}`)
-      const out = (await cmd.run({ ...base, args, stdin })) ?? ''
+      const tty = i === stages.length - 1 && !redirect
+      const out = (await cmd.run({ ...base, args, stdin, tty })) ?? ''
       rendered = out
       stdin = strip(out)
     }
@@ -745,7 +832,7 @@ async function runPipeline(stmt: string, base: Omit<Ctx, 'args' | 'stdin'>): Pro
     return { output: rendered, ok: true }
   } catch (err) {
     const msg = err instanceof CmdError ? err.message : `msh: ${(err as Error).message}`
-    return { output: c('red', msg), ok: false }
+    return { output: msg ? c('red', msg) : '', ok: false }
   }
 }
 

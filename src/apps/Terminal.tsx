@@ -50,7 +50,7 @@ function Prompt({ cwd }: { cwd: string }) {
 let nextId = 1
 
 // Phones have no Tab key and typing is slow, so touch devices get one-tap commands.
-const QUICK = ['help', 'projects', 'recent 8', 'cat cv.md', 'ls -l', 'contribs', 'fastfetch', 'fortune | cowsay']
+const QUICK = ['help', 'projects', 'recent 8', 'cat cv.md', 'ping boltwarden.org', 'sl', 'fastfetch', 'fortune | cowsay']
 const HISTORY_KEY = 'mvlos.history'
 
 function loadHistory(): string[] {
@@ -81,6 +81,7 @@ export function Terminal({ win }: { win: WinState }) {
   const histIdx = useRef<number | null>(null)
   const env = useRef<Record<string, string>>({ USER: profile.handle, HOME, SHELL: '/bin/msh', TERM: 'xterm-mvlos', EDITOR: 'nvim', LANG: 'en_US.UTF-8' })
   const inputRef = useRef<HTMLInputElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const windowsRef = useRef(wm.windows)
   windowsRef.current = wm.windows
@@ -123,7 +124,8 @@ export function Terminal({ win }: { win: WinState }) {
       }
     }
 
-    let cleared = false
+    const print = (text: string) => setEntries((e) => [...e, { id: nextId++, kind: 'out', text }])
+    abortRef.current = new AbortController()
     setRunning(true)
     const results = await runLine(trimmed, {
       cwd,
@@ -133,18 +135,15 @@ export function Terminal({ win }: { win: WinState }) {
       windows: windowsRef.current,
       openApp: wm.open,
       closeWindow: wm.close,
-      clear: () => {
-        cleared = true
-      },
+      clear: () => setEntries([]),
       exit: () => setTimeout(() => wm.close(win.pid), 120),
       setAccent,
+      print,
+      signal: abortRef.current.signal,
     })
+    abortRef.current = null
     setRunning(false)
     if (results.some((r) => r.output.includes('{anim:'))) setAnimating(true)
-    setEntries((e) => {
-      const base = cleared ? [] : e
-      return [...base, ...results.filter((r) => r.output).map((r) => ({ id: nextId++, kind: 'out' as const, text: r.output }))]
-    })
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
@@ -176,6 +175,10 @@ export function Terminal({ win }: { win: WinState }) {
     } else if (e.ctrlKey && e.key.toLowerCase() === 'c') {
       if (window.getSelection()?.toString()) return
       e.preventDefault()
+      if (abortRef.current) {
+        abortRef.current.abort()
+        return
+      }
       setEntries((x) => [...x, { id: nextId++, kind: 'cmd', cwd, text: value + '^C' }])
       setValue('')
     } else if (e.ctrlKey && e.key.toLowerCase() === 'u') {
@@ -206,7 +209,7 @@ export function Terminal({ win }: { win: WinState }) {
           )}
         </Fragment>
       ))}
-      {busy && (
+      {running && (
         <div className="t-line t-muted">
           <span className="spinner" /> working…
         </div>

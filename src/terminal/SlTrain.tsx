@@ -103,11 +103,10 @@ export function SlTrain({ onDone }: { onDone?: () => void }) {
       <span ref={probe} className="sl-probe" aria-hidden>
         0000000000
       </span>
-      {cols !== null && (
-        <pre className="sl-train" style={{ transform: `translateX(${cols - tick}ch)` }} aria-hidden>
-          {frame(tick)}
-        </pre>
-      )}
+      {/* Rendered from the first paint (parked off-screen) so the terminal can scroll to its full height. */}
+      <pre className="sl-train" style={{ transform: cols === null ? 'translateX(200vw)' : `translateX(${cols - tick}ch)` }} aria-hidden>
+        {frame(tick)}
+      </pre>
     </div>
   )
 }
