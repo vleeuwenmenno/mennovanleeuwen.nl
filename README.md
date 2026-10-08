@@ -62,3 +62,29 @@ Pressing P during the boot log lets the boot finish but stops short of the deskt
 on a text console on "tty1" instead (the same shell, without a window manager); `exit` starts the
 desktop. `reboot` and `shutdown` play the systemd
 shutdown log ([`src/os/Power.tsx`](src/os/Power.tsx)); a reboot starts from the opening layout again.
+
+## Releases and hosting
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) typechecks and builds every push to
+`main` and every pull request.
+
+Publishing a GitHub release with a semver tag (`v1.2.3`) runs
+[`.github/workflows/release.yml`](.github/workflows/release.yml): it refreshes the activity
+snapshot, builds the site, and pushes a multi-arch (amd64 + arm64) nginx image to
+`ghcr.io/vleeuwenmenno/mennovanleeuwen.nl` tagged `1.2.3`, `1.2`, `1` and `latest`. Prereleases
+skip `latest`.
+
+Run it on a server:
+
+```yaml
+# compose.yml
+services:
+  site:
+    image: ghcr.io/vleeuwenmenno/mennovanleeuwen.nl:latest
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+```
+
+The container serves on port 80 and answers `/healthz`. Build it locally with
+`docker build -t mvlos .`.
