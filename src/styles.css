@@ -2279,12 +2279,18 @@ body.is-resizing * {
   container-type: size;
   --pool-w: min(100cqw - 32px, (100cqh - 125px) * 2.88 / 1.61);
 }
-.game-pool .game-bar,
-.pool-stage,
-.pool-power,
-.game-pool .game-hint {
+.pool-table {
+  position: relative;
+}
+.pool-stage {
   max-width: none;
   width: max(280px, var(--pool-w));
+}
+/* The bar and hint may be wider than a small table, so they don't wrap needlessly. */
+.game-pool .game-bar,
+.game-pool .game-hint {
+  max-width: none;
+  width: max(var(--pool-w), min(100cqw - 32px, 640px));
 }
 .pool-canvas {
   aspect-ratio: 2.88 / 1.61;
@@ -2343,6 +2349,21 @@ body.is-resizing * {
   color: var(--muted);
   min-width: 160px;
 }
+.pool-sound {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.pool-volume {
+  width: 72px;
+  accent-color: var(--accent);
+  touch-action: none;
+}
+@container (max-width: 420px) {
+  .pool-volume {
+    width: 54px;
+  }
+}
 .pool-mute {
   font-size: 15px;
   padding: 2px 4px;
@@ -2395,6 +2416,7 @@ body.is-resizing * {
 }
 .pool-power {
   position: relative;
+  margin-top: 10px;
   height: 44px;
   border: 1px solid var(--line-strong);
   background: var(--panel-2);
@@ -2422,6 +2444,15 @@ body.is-resizing * {
   .pool-hint-mouse {
     display: none;
   }
+}
+.game-pool {
+  position: relative;
+}
+/* The menu covers the whole game, not just the table, so it fits on a phone on its side; when
+   even that is too short it scrolls instead of being cut off. */
+.pool-menu {
+  overflow-y: auto;
+  place-content: safe center;
 }
 .pool-menu .seg {
   justify-self: center;
@@ -2457,7 +2488,7 @@ body.is-resizing * {
 .pool-stage.is-portrait .pool-canvas {
   width: auto;
   max-width: 100%;
-  height: max(320px, min((100cqw - 32px) * 2.88 / 1.61, 100cqh - 250px));
+  height: max(320px, min((100cqw - 32px) * 2.88 / 1.61, 100cqh - 205px));
   margin: 0 auto;
 }
 .pool-stage.is-portrait .pool-spin {
@@ -2465,6 +2496,51 @@ body.is-resizing * {
 }
 .game-pool > * {
   flex-shrink: 0;
+}
+/* Not much height (a phone on its side): one-line bar, no hint, power bar over the bottom rail. */
+@container (max-height: 480px) {
+  .pool-stage {
+    width: max(280px, min(100cqw - 32px, (100cqh - 64px) * 2.88 / 1.61));
+  }
+  .game-pool .game-hint {
+    display: none;
+  }
+  .pool-bar {
+    flex-wrap: nowrap;
+    font-size: 12px;
+  }
+  .pool-player {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 0 6px;
+  }
+  .pool-player:last-of-type {
+    align-items: center;
+  }
+  .pool-msg {
+    order: 0;
+    flex-basis: auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pool-power {
+    position: absolute;
+    left: 16%;
+    right: 16%;
+    bottom: 1.5%;
+    height: 7%;
+    min-height: 22px;
+    margin: 0;
+    background: rgba(10, 12, 16, 0.55);
+  }
+  .pool-power em {
+    font-size: 11px;
+    white-space: nowrap;
+  }
 }
 @media (max-width: 600px) {
   .pool-msg {

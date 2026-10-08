@@ -34,7 +34,7 @@ const NAMES: Record<Mode, [string, string]> = { cpu: ['You', 'Computer'], duo: [
 const has = (name: string) => (name === 'You' ? 'have' : 'has')
 const plainCss = `rgb(${PLAIN.join(',')})`
 
-type Hud = { phase: Phase; mode: Mode; rules: Rules; turn: 0 | 1; groups: [Group | null, Group | null]; scores: [number, number]; shots: number; onTable: number[]; msg: string; over: { title: string; text: string } | null; hand: Hand; muted: boolean }
+type Hud = { phase: Phase; mode: Mode; rules: Rules; turn: 0 | 1; groups: [Group | null, Group | null]; scores: [number, number]; shots: number; onTable: number[]; msg: string; over: { title: string; text: string } | null; hand: Hand; muted: boolean; volume: number }
 
 export function Pool({ win }: { win: WinState }) {
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -84,7 +84,7 @@ export function Pool({ win }: { win: WinState }) {
   const snapshot = (): Hud => {
     const g = s.current
     const m = g.match
-    return { phase: g.phase, mode: g.mode, rules: m.rules, turn: m.turn, groups: [...m.groups], scores: [...m.scores], shots: m.shots, onTable: g.balls.filter((b) => b.on).map((b) => b.id), msg: g.msg, over: g.over, hand: g.hand, muted: sound.current.muted }
+    return { phase: g.phase, mode: g.mode, rules: m.rules, turn: m.turn, groups: [...m.groups], scores: [...m.scores], shots: m.shots, onTable: g.balls.filter((b) => b.on).map((b) => b.id), msg: g.msg, over: g.over, hand: g.hand, muted: sound.current.muted, volume: sound.current.volume }
   }
   const [hud, setHud] = useState<Hud>(snapshot)
   const sync = () => setHud(snapshot())
@@ -262,6 +262,7 @@ export function Pool({ win }: { win: WinState }) {
           sound.current.cue(g.shot.speed, pan(cue.x, cue.y))
           g.hand = null
           g.phase = 'moving'
+          sync()
         }
       } else if (g.phase === 'moving') {
         simulate(g.balls, dt, events)
@@ -601,6 +602,11 @@ export function Pool({ win }: { win: WinState }) {
     sound.current.setMuted(!sound.current.muted)
     sync()
   }
+  const changeVolume = (v: number) => {
+    sound.current.wake()
+    sound.current.setVolume(v)
+    sync()
+  }
 
   useGameKeys(win, (e) => {
     const g = s.current
@@ -663,90 +669,43 @@ export function Pool({ win }: { win: WinState }) {
             {panel(1)}
           </>
         )}
-        <button className="pool-mute" onClick={toggleMute} title={hud.muted ? 'Sound off (M)' : 'Sound on (M)'} aria-label={hud.muted ? 'Turn sound on' : 'Turn sound off'}>
-          {hud.muted ? '🔇' : '🔊'}
-        </button>
+        <div className="pool-sound">
+          <button className="pool-mute" onClick={toggleMute} title={hud.muted ? 'Sound off (M)' : 'Sound on (M)'} aria-label={hud.muted ? 'Turn sound on' : 'Turn sound off'}>
+            {hud.muted || hud.volume === 0 ? '🔇' : hud.volume < 0.5 ? '🔉' : '🔊'}
+          </button>
+          <input
+            type="range"
+            className="pool-volume"
+            min={0}
+            max={1}
+            step={0.05}
+            value={hud.muted ? 0 : hud.volume}
+            onChange={(e) => changeVolume(Number(e.target.value))}
+            aria-label="Volume"
+            title={`Volume ${Math.round((hud.muted ? 0 : hud.volume) * 100)}%`}
+          />
+        </div>
       </div>
       <div className={`game-stage pool-stage ${portrait ? 'is-portrait' : ''}`}>
-        <canvas
-          ref={canvas}
-          className="game-canvas pool-canvas"
-          style={{ aspectRatio: portrait ? `${TOTAL_H} / ${TOTAL_W}` : `${TOTAL_W} / ${TOTAL_H}` }}
-          onPointerDown={onDown}
-          onPointerMove={onMove}
-          onPointerUp={onUp}
-          onPointerCancel={onUp}
-          onContextMenu={(e) => e.preventDefault()}
-        />
-        <div className={`pool-spin ${hud.phase === 'aim' ? '' : 'is-idle'}`} ref={spinRef} {...spinHandlers} title="Spin: drag the dot. Double-click to centre.">
-          <span className="pool-spin-dot" style={{ left: `${50 + spinDot.x * 50}%`, top: `${50 + spinDot.y * 50}%` }} />
-        </div>
-        {!playing && (
-          <div className="game-overlay pool-menu">
-            <strong>{hud.over?.title ?? 'Pool'}</strong>
-            <span>{hud.over?.text ?? 'A 9-foot table with real spin, throw and cushions.'}</span>
-            <div className="seg pool-rules" role="radiogroup" aria-label="Game">
-              <button role="radio" aria-checked={pick === 'eight'} className={pick === 'eight' ? 'is-active' : ''} onClick={() => setPick('eight')}>
-                8-Ball
-              </button>
-              <button role="radio" aria-checked={pick === 'simple'} className={pick === 'simple' ? 'is-active' : ''} onClick={() => setPick('simple')}>
-                Simple
-              </button>
-            </div>
-            <span className="pool-rules-text">
-              {pick === 'eight' ? 'Solids or stripes, then the 8.' : `All balls alike. Pot one, shoot again. First to ${WIN_SIMPLE} wins.`}
-            </span>
-            <div className="pool-settings">
-              <span>Helpers</span>
-              <div className="seg" role="radiogroup" aria-label="Helpers">
-                {[true, false].map((on) => (
-                  <button key={String(on)} role="radio" aria-checked={settings.helpers === on} className={settings.helpers === on ? 'is-active' : ''} onClick={() => changeSettings({ helpers: on })}>
-                    {on ? 'On' : 'Off'}
-                  </button>
-                ))}
-              </div>
-              <span>Sensitivity</span>
-              <div className="seg" role="radiogroup" aria-label="Sensitivity">
-                {(['low', 'medium', 'high'] as const).map((k) => (
-                  <button key={k} role="radio" aria-checked={settings.sensitivity === k} className={settings.sensitivity === k ? 'is-active' : ''} onClick={() => changeSettings({ sensitivity: k })}>
-                    {k[0].toUpperCase() + k.slice(1)}
-                  </button>
-                ))}
-              </div>
-              <span>Computer</span>
-              <div className="seg" role="radiogroup" aria-label="Computer difficulty">
-                {LEVELS.map((k) => (
-                  <button key={k} role="radio" aria-checked={settings.level === k} className={settings.level === k ? 'is-active' : ''} onClick={() => changeSettings({ level: k })}>
-                    {k[0].toUpperCase() + k.slice(1)}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <span className="pool-rules-text muted">
-              {settings.helpers ? 'Aim line and power meter shown. ' : 'No aim line or power meter. '}
-              Full power takes a {Math.round(DRAG[settings.sensitivity] * 100)} cm pull on the table.
-            </span>
-            <div className="actions">
-              <button className="btn btn-primary" onClick={() => start('cpu', pick)}>
-                Play the computer
-              </button>
-              <button className="btn" onClick={() => start('duo', pick)}>
-                Two players
-              </button>
-              <button className="btn" onClick={() => start('solo', pick)}>
-                Solo
-              </button>
-            </div>
-            <span className="pool-rules-text muted">
-              Wins against the computer: {wins.best ?? 0}
-              {soloBest[pick].best ? ` · solo best: ${soloBest[pick].best} shots` : ''}
-            </span>
+        <div className="pool-table">
+          <canvas
+            ref={canvas}
+            className="game-canvas pool-canvas"
+            style={{ aspectRatio: portrait ? `${TOTAL_H} / ${TOTAL_W}` : `${TOTAL_W} / ${TOTAL_H}` }}
+            onPointerDown={onDown}
+            onPointerMove={onMove}
+            onPointerUp={onUp}
+            onPointerCancel={onUp}
+            onContextMenu={(e) => e.preventDefault()}
+          />
+          <div className={`pool-spin ${hud.phase === 'aim' ? '' : 'is-idle'}`} ref={spinRef} {...spinHandlers} title="Spin: drag the dot. Double-click to centre.">
+            <span className="pool-spin-dot" style={{ left: `${50 + spinDot.x * 50}%`, top: `${50 + spinDot.y * 50}%` }} />
           </div>
-        )}
-      </div>
-      <div className="pool-power touch-only" ref={powerBar} {...barHandlers}>
-        <span style={{ width: `${barPower * 100}%` }} />
-        <em>{barPower > 0 ? 'Let go to shoot' : 'Drag to set power, let go to shoot'}</em>
+        </div>
+        <div className="pool-power touch-only" ref={powerBar} {...barHandlers}>
+          <span style={{ width: `${barPower * 100}%` }} />
+          <em>{barPower > 0 ? 'Let go to shoot' : 'Drag to set power, let go to shoot'}</em>
+        </div>
       </div>
       <p className="game-hint muted">
         {hud.hand && hud.phase === 'aim' ? 'Ball in hand: drag the cue ball to place it. ' : ''}
@@ -754,6 +713,68 @@ export function Pool({ win }: { win: WinState }) {
         <span className="touch-only">Drag on the table to aim. </span>
         The dot bottom-left sets follow, draw and english.
       </p>
+      {!playing && (
+        <div className="game-overlay pool-menu">
+          <strong>{hud.over?.title ?? 'Pool'}</strong>
+          <span>{hud.over?.text ?? 'A 9-foot table with real spin, throw and cushions.'}</span>
+          <div className="seg pool-rules" role="radiogroup" aria-label="Game">
+            <button role="radio" aria-checked={pick === 'eight'} className={pick === 'eight' ? 'is-active' : ''} onClick={() => setPick('eight')}>
+              8-Ball
+            </button>
+            <button role="radio" aria-checked={pick === 'simple'} className={pick === 'simple' ? 'is-active' : ''} onClick={() => setPick('simple')}>
+              Simple
+            </button>
+          </div>
+          <span className="pool-rules-text">
+            {pick === 'eight' ? 'Solids or stripes, then the 8.' : `All balls alike. Pot one, shoot again. First to ${WIN_SIMPLE} wins.`}
+          </span>
+          <div className="pool-settings">
+            <span>Helpers</span>
+            <div className="seg" role="radiogroup" aria-label="Helpers">
+              {[true, false].map((on) => (
+                <button key={String(on)} role="radio" aria-checked={settings.helpers === on} className={settings.helpers === on ? 'is-active' : ''} onClick={() => changeSettings({ helpers: on })}>
+                  {on ? 'On' : 'Off'}
+                </button>
+              ))}
+            </div>
+            <span>Sensitivity</span>
+            <div className="seg" role="radiogroup" aria-label="Sensitivity">
+              {(['low', 'medium', 'high'] as const).map((k) => (
+                <button key={k} role="radio" aria-checked={settings.sensitivity === k} className={settings.sensitivity === k ? 'is-active' : ''} onClick={() => changeSettings({ sensitivity: k })}>
+                  {k[0].toUpperCase() + k.slice(1)}
+                </button>
+              ))}
+            </div>
+            <span>Computer</span>
+            <div className="seg" role="radiogroup" aria-label="Computer difficulty">
+              {LEVELS.map((k) => (
+                <button key={k} role="radio" aria-checked={settings.level === k} className={settings.level === k ? 'is-active' : ''} onClick={() => changeSettings({ level: k })}>
+                  {k[0].toUpperCase() + k.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <span className="pool-rules-text muted">
+            {settings.helpers ? 'Aim line and power meter shown. ' : 'No aim line or power meter. '}
+            Full power takes a {Math.round(DRAG[settings.sensitivity] * 100)} cm pull on the table.
+          </span>
+          <div className="actions">
+            <button className="btn btn-primary" onClick={() => start('cpu', pick)}>
+              Play the computer
+            </button>
+            <button className="btn" onClick={() => start('duo', pick)}>
+              Two players
+            </button>
+            <button className="btn" onClick={() => start('solo', pick)}>
+              Solo
+            </button>
+          </div>
+          <span className="pool-rules-text muted">
+            Wins against the computer: {wins.best ?? 0}
+            {soloBest[pick].best ? ` · solo best: ${soloBest[pick].best} shots` : ''}
+          </span>
+        </div>
+      )}
     </div>
   )
 }

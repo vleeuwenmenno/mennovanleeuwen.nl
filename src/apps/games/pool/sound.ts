@@ -3,6 +3,7 @@
 // return, and the hiss of balls rolling on the cloth.
 
 const MUTE_KEY = 'mvlos.pool.muted'
+const VOLUME_KEY = 'mvlos.pool.volume'
 
 type Mode = [freq: number, decay: number, amp: number]
 
@@ -59,26 +60,44 @@ export class PoolSound {
   private recent: number[] = []
   private clicks: AudioBuffer[] = []
   private tips: AudioBuffer[] = []
-  muted: boolean
+  muted = false
+  /** 0 to 1, on top of mute. */
+  volume = 0.8
 
   constructor() {
-    let m = false
     try {
-      m = localStorage.getItem(MUTE_KEY) === '1'
+      this.muted = localStorage.getItem(MUTE_KEY) === '1'
+      const v = Number(localStorage.getItem(VOLUME_KEY))
+      if (localStorage.getItem(VOLUME_KEY) !== null && v >= 0 && v <= 1) this.volume = v
     } catch {
-      /* sound stays on */
+      /* defaults */
     }
-    this.muted = m
+  }
+
+  private save(key: string, value: string) {
+    try {
+      localStorage.setItem(key, value)
+    } catch {
+      /* the choice just won't persist */
+    }
+  }
+
+  private applyGain() {
+    // Squared, so the slider feels even to the ear rather than all happening at the top.
+    if (this.out && this.ctx) this.out.gain.setTargetAtTime(this.muted ? 0 : this.volume * this.volume, this.ctx.currentTime, 0.02)
   }
 
   setMuted(m: boolean) {
     this.muted = m
-    try {
-      localStorage.setItem(MUTE_KEY, m ? '1' : '0')
-    } catch {
-      /* the choice just won't persist */
-    }
-    if (this.out && this.ctx) this.out.gain.setTargetAtTime(m ? 0 : 1, this.ctx.currentTime, 0.02)
+    this.save(MUTE_KEY, m ? '1' : '0')
+    this.applyGain()
+  }
+
+  setVolume(v: number) {
+    this.volume = Math.max(0, Math.min(1, v))
+    this.save(VOLUME_KEY, String(this.volume))
+    if (this.muted && v > 0) this.setMuted(false)
+    else this.applyGain()
   }
 
   /** Browsers only allow audio after a user gesture, so this is called from one. */
@@ -89,7 +108,7 @@ export class PoolSound {
       const ctx = new Ctx()
       this.ctx = ctx
       this.out = ctx.createGain()
-      this.out.gain.value = this.muted ? 0 : 1
+      this.out.gain.value = this.muted ? 0 : this.volume * this.volume
       const comp = ctx.createDynamicsCompressor()
       comp.threshold.value = -14
       comp.ratio.value = 6
