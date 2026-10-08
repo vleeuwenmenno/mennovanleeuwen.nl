@@ -1,6 +1,7 @@
 import { contributions, headlines, profile, projects } from '../data/profile'
 import { fetchStars, loadRecents, timeAgo } from '../data/recents'
 import type { AppId, WinState } from '../os/wm'
+import { lookupAddress, RECORD_TYPES, resolve } from './dns'
 import { age, HOME, lookup, prettyPath, resolvePath, walk, type DirNode, type Node } from './vfs'
 
 // Output markup understood by the terminal renderer:
@@ -172,7 +173,8 @@ export const commands: Record<string, Command> = {
         ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'open']],
         ['About me', ['whoami', 'cv', 'projects', 'contribs', 'recent', 'stars', 'contact']],
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo']],
-        ['System', ['ps', 'kill', 'ping', 'uname', 'uptime', 'date', 'history', 'env', 'export', 'theme', 'clear', 'exit']],
+        ['Network', ['ping', 'dig', 'host', 'nslookup']],
+        ['System', ['ps', 'kill', 'uname', 'uptime', 'date', 'history', 'env', 'export', 'theme', 'clear', 'exit']],
         ['Fun', ['fastfetch', 'fortune', 'cowsay', 'sl', 'sudo']],
       ]
       return [
@@ -609,6 +611,47 @@ export const commands: Record<string, Command> = {
     usage: 'ping [-c count] <host>',
     run: (ctx) => ping(ctx),
   },
+  dig: {
+    desc: 'DNS lookup (over HTTPS)',
+    usage: 'dig <name> [A|AAAA|MX|TXT|NS|CNAME|SOA|CAA] [+short]',
+    run: async (ctx) => {
+      const short = ctx.args.includes('+short')
+      const [name, type] = dnsArgs(ctx.args.filter((a) => a !== '+short'), 'dig')
+      const r = await resolve(name, type, ctx.signal)
+      if (short) return r.answers.filter((a) => a.type === type).map((a) => a.data).join('\n')
+      return [
+        c('muted', `; <<>> DiG over HTTPS <<>> ${name} ${type}`),
+        `;; status: ${r.status === 'NOERROR' ? c('green', r.status) : c('red', r.status)}, via ${r.resolver} in ${r.ms.toFixed(0)} ms`,
+        '',
+        ';; ANSWER SECTION:',
+        ...(r.answers.length ? r.answers.map((a) => `${(a.name + '.').padEnd(28)} ${String(a.ttl).padStart(6)}  IN  ${c('yellow', a.type.padEnd(5))} ${a.data}`) : [c('muted', ';; (no records)')]),
+      ].join('\n')
+    },
+  },
+  host: {
+    desc: 'DNS lookup, short form',
+    usage: 'host <name> [type]',
+    run: async (ctx) => {
+      const [name, explicit] = dnsArgs(ctx.args, 'host')
+      const types = ctx.args[1] ? [explicit] : ['A', 'AAAA', 'MX']
+      const results = await Promise.all(types.map((t) => resolve(name, t, ctx.signal)))
+      if (results[0].status === 'NXDOMAIN') throw new CmdError(`Host ${name} not found: 3(NXDOMAIN)`)
+      const verb: Record<string, string> = { A: 'has address', AAAA: 'has IPv6 address', MX: 'mail is handled by', CNAME: 'is an alias for', NS: 'name server', TXT: 'descriptive text' }
+      const out = results.flatMap((r, i) => r.answers.filter((a) => a.type === types[i] || a.type === 'CNAME').map((a) => `${a.name} ${verb[a.type] ?? `has ${a.type} record`} ${a.data}`))
+      return [...new Set(out)].join('\n') || `${name} has no ${types.join('/')} record`
+    },
+  },
+  nslookup: {
+    desc: 'DNS lookup, nslookup style',
+    usage: 'nslookup <name>',
+    run: async (ctx) => {
+      const [name] = dnsArgs(ctx.args, 'nslookup')
+      const [a, aaaa] = await Promise.all([resolve(name, 'A', ctx.signal), resolve(name, 'AAAA', ctx.signal)])
+      if (a.status === 'NXDOMAIN') throw new CmdError(`** server can't find ${name}: NXDOMAIN`)
+      const addrs = [...a.answers, ...aaaa.answers].filter((x) => x.type === 'A' || x.type === 'AAAA')
+      return [`Server:\t\t${a.resolver}`, '', 'Non-authoritative answer:', ...addrs.flatMap((x) => [`Name:\t${x.name}`, `Address: ${x.data}`])].join('\n')
+    },
+  },
   shutdown: { desc: 'power off', hidden: true, run: () => 'Shutting down... no. Close the tab like everyone else.' },
   reboot: {
     desc: 'reload the page',
@@ -619,6 +662,15 @@ export const commands: Record<string, Command> = {
     },
   },
   headlines: { desc: 'what the sticky note says', hidden: true, run: () => headlines.map((h) => `• ${h}`).join('\n') },
+}
+
+function dnsArgs(args: string[], cmd: string): [string, string] {
+  const name = args[0]?.replace(/^[a-z]+:\/\//i, '').replace(/[/?#:].*$/, '').replace(/\.$/, '').toLowerCase()
+  if (!name) throw new CmdError(`usage: ${cmd} <name> [type]`)
+  if (!/^([a-z0-9_-]+\.)*[a-z0-9_-]+$/.test(name)) throw new CmdError(`${cmd}: '${args[0]}' is not a valid domain name`)
+  const type = (args[1] ?? 'A').toUpperCase()
+  if (!(type in RECORD_TYPES)) throw new CmdError(`${cmd}: unsupported record type '${args[1]}' (try ${Object.keys(RECORD_TYPES).join(', ')})`)
+  return [name, type]
 }
 
 /** Resolves after `ms`, or immediately when the signal aborts (Ctrl+C). */
@@ -650,6 +702,20 @@ async function ping(ctx: Ctx): Promise<string> {
   const host = target.replace(/^[a-z]+:\/\//i, '').replace(/[/?#].*$/, '').toLowerCase()
   if (!/^([a-z0-9-]+\.)*[a-z0-9-]+(:\d{1,5})?$/.test(host)) throw new CmdError(`ping: ${target}: Name or service not known`)
   const url = `https://${host}/`
+  const hostname = host.replace(/:\d+$/, '')
+
+  // Resolve first like real ping, so a typo fails with the real error and the header shows the IP.
+  let address: string | null = /^\d+\.\d+\.\d+\.\d+$/.test(hostname) ? hostname : null
+  if (!address) {
+    try {
+      const r = await lookupAddress(hostname, ctx.signal)
+      if (!r.address) throw new CmdError(`ping: ${hostname}: ${r.status === 'NXDOMAIN' ? 'Name or service not known' : `no address (${r.status})`}`)
+      address = r.address
+    } catch (err) {
+      if (err instanceof CmdError) throw err
+      /* DNS-over-HTTPS unreachable: ping anyway and let the browser resolve */
+    }
+  }
 
   const lines: string[] = []
   const out = (l: string) => (ctx.tty ? ctx.print(l) : lines.push(l))
@@ -657,7 +723,7 @@ async function ping(ctx: Ctx): Promise<string> {
   let sent = 0
   let fastFails = 0
 
-  out(`PING ${host} over HTTPS (browsers cannot send ICMP)`)
+  out(`PING ${host}${address && address !== hostname ? ` (${address})` : ''} over HTTPS (browsers cannot send ICMP)`)
   for (let seq = 1; seq <= count && !ctx.signal.aborted; seq++) {
     sent++
     const timeout = new AbortController()
@@ -690,10 +756,17 @@ async function ping(ctx: Ctx): Promise<string> {
     const avg = times.reduce((a, b) => a + b, 0) / times.length
     out(`rtt min/avg/max = ${Math.min(...times).toFixed(1)}/${avg.toFixed(1)}/${Math.max(...times).toFixed(1)} ms`)
   }
-  // A request that fails without timing out never left the browser or found no server: usually a
-  // tracker blocker refusing the host, otherwise a DNS name that does not exist.
+  // A request that fails without timing out never left the browser: with a resolved address that
+  // means a tracker blocker refused the host.
   if (!times.length && fastFails === sent && sent)
-    out(c('muted', `Every request was refused right away. Either ${host} does not exist, or your browser or an extension (tracking protection, an ad blocker) blocks it from other sites.`))
+    out(
+      c(
+        'muted',
+        address
+          ? `${hostname} resolves to ${address}, but your browser refused every request. Tracking protection or an ad blocker is blocking it from other sites.`
+          : `Every request was refused right away. Either ${host} does not exist, or your browser or an extension (tracking protection, an ad blocker) blocks it from other sites.`,
+      ),
+    )
   if (!times.length && sent) throw new CmdError(ctx.tty ? '' : lines.join('\n'))
   return lines.join('\n')
 }
