@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 
-// Desktop icon state shared by the Desktop and the Trash app: where each icon sits, what it is
+// Desktop icon state shared by the Desktop and Files' Trash view: where each icon sits, what it is
 // called, and which icons are in the trash. Remembered per browser, so a visitor's tidy (or messy)
 // desktop survives a reload.
 

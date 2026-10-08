@@ -7,7 +7,6 @@ import { Notes } from '../apps/Notes'
 import { Projects } from '../apps/Projects'
 import { Recents } from '../apps/Recents'
 import { Terminal } from '../apps/Terminal'
-import { Trash } from '../apps/Trash'
 import { Files } from '../apps/Files'
 import { Viewer } from '../apps/Viewer'
 import type { AppId, WinState } from './wm'
@@ -33,6 +32,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   cv: { title: 'cv.md — Viewer', dock: 'CV', blurb: 'The printable version of me', size: [760, 680], render: () => <Cv /> },
   contact: { title: 'New message', dock: 'Contact', blurb: 'Get in touch', size: [560, 500], render: () => <Contact /> },
   games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, 2048, Breakout', size: [720, 640], render: (w) => <Games win={w} /> },
-  trash: { title: 'Trash', dock: 'Trash', blurb: 'Cautionary tales', size: [560, 360], render: () => <Trash /> },
+  // Never rendered: the window manager opens Trash as a view in Files. Kept for the dock icon and name.
+  trash: { title: 'Trash', dock: 'Trash', blurb: 'Trashed desktop items, in Files', size: [940, 600], render: () => null },
 }
 

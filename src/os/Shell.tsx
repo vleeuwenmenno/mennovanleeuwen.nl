@@ -264,7 +264,7 @@ function Dock() {
           }
           const wins = wm.windows.filter((x) => x.app === app)
           const focused = wins.find((x) => x.pid === wm.focusedPid && !x.minimized)
-          if (focused) wm.minimize(focused.pid)
+          if (focused && app !== 'trash') wm.minimize(focused.pid)
           else wm.open(app)
         }}
         aria-label={APP_META[app].dock}

@@ -119,6 +119,8 @@ type WM = {
 
 const Ctx = createContext<WM | null>(null)
 const FOCUS_KEY = 'mvlos.focusMode'
+/** Files' trash view (see apps/Files.tsx). */
+const TRASH_PATH = 'trash://'
 
 export function WindowManagerProvider({
   children,
@@ -152,14 +154,17 @@ export function WindowManagerProvider({
     }
   }, [])
 
+  // "Trash" is a place, not an app: it opens in Files (whose trash:// view lists trashed items).
   const open = useCallback(
     (app: AppId, props?: WinState['props']) => {
+      if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH, t: String(Date.now()) }, geometry: placement('files', state.windows.length) })
       dispatch({ type: 'open', app, props, geometry: placement(app, state.windows.length) })
     },
     [placement, state.windows.length],
   )
   const openNew = useCallback(
     (app: AppId, props?: WinState['props']) => {
+      if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH }, newInstance: true, geometry: placement('files', state.windows.length) })
       dispatch({ type: 'open', app, props, newInstance: true, geometry: placement(app, state.windows.length) })
     },
     [placement, state.windows.length],
