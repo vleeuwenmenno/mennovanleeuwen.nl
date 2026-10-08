@@ -2,6 +2,9 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { linkForge, signIn, signOut, unlinkForge, useAccount } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
+import { APP_META } from '../os/apps'
+import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
+import { AppIcon } from '../os/icons'
 import { pullAll } from '../os/synced'
 import type { WinState } from '../os/wm'
 import { SyncLine } from './Notebook'
@@ -130,6 +133,8 @@ function Instances() {
 }
 
 function LauncherRow({ l, first, last }: { l: Launcher; first: boolean; last: boolean }) {
+  const canDock = useCanCustomizeDock()
+  const docked = useDock().includes(launcherDockId(l.id))
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(l)
   const [error, setError] = useState(false)
@@ -179,10 +184,76 @@ function LauncherRow({ l, first, last }: { l: Launcher; first: boolean; last: bo
       >
         Edit
       </button>
+      <button className={`btn btn-small ${l.desktop !== false ? 'is-on' : ''}`} onClick={() => updateLauncher(l.id, { desktop: l.desktop === false })} title="Show on the desktop">
+        Desktop
+      </button>
+      {canDock && (
+        <button className={`btn btn-small ${docked ? 'is-on' : ''}`} onClick={() => (docked ? unpinFromDock : pinToDock)(launcherDockId(l.id))} title="Pin to the dock">
+          Dock
+        </button>
+      )}
       <button className="btn btn-small" onClick={() => removeLauncher(l.id)}>
         Remove
       </button>
     </li>
+  )
+}
+
+/** Dock contents: reorder, take off, add back, restore the default. Signed in only. */
+function DockSettings() {
+  const dock = useDock()
+  const can = useCanCustomizeDock()
+  const launchers = useLaunchers()
+  if (!can) return <p className="muted">Drag dock icons to reorder them. Sign in to add apps and launchers to the dock or take them off.</p>
+  const launcherOf = (id: DockId) => launchers.find((l) => launcherDockId(l.id) === id)
+  const label = (id: DockId) => (isLauncherId(id) ? (launcherOf(id)?.label ?? 'Link') : APP_META[id].dock)
+  const icon = (id: DockId) => {
+    if (!isLauncherId(id)) return <AppIcon app={id} size={22} tone />
+    const l = launcherOf(id)
+    return l?.glyph ? <span className="set-glyph">{l.glyph}</span> : <img className="set-fav" src={l ? faviconOf(l.url) : undefined} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
+  }
+  const move = (i: number, by: number) => {
+    const next = dock.slice()
+    next.splice(i + by, 0, next.splice(i, 1)[0])
+    setDockOrder(next)
+  }
+  const available: DockId[] = [...unpinnedApps(dock), ...launchers.map((l) => launcherDockId(l.id)).filter((id) => !dock.includes(id))]
+  return (
+    <>
+      <ul className="set-list">
+        {dock.map((id, i) => (
+          <li key={id} className="set-row">
+            {icon(id)}
+            <span className="set-row-text">
+              <strong>{label(id)}</strong>
+            </span>
+            <button className="btn btn-small btn-ghost" disabled={i === 0} onClick={() => move(i, -1)} aria-label="Move left">
+              ↑
+            </button>
+            <button className="btn btn-small btn-ghost" disabled={i === dock.length - 1} onClick={() => move(i, 1)} aria-label="Move right">
+              ↓
+            </button>
+            <button className="btn btn-small" onClick={() => unpinFromDock(id)}>
+              Remove
+            </button>
+          </li>
+        ))}
+      </ul>
+      {available.length > 0 && (
+        <div className="set-chips">
+          <span className="muted">Add:</span>
+          {available.map((id) => (
+            <button key={id} className="btn btn-small" onClick={() => pinToDock(id)}>
+              + {label(id)}
+            </button>
+          ))}
+        </div>
+      )}
+      <p className="muted set-help">Right-click anything in Spotlight or All apps to pin it, including repositories.</p>
+      <button className="btn btn-small" disabled={isDefaultDock()} onClick={resetDock}>
+        Restore default dock
+      </button>
+    </>
   )
 }
 
@@ -240,6 +311,10 @@ export function Settings({ win }: { win: WinState }) {
       <section id="set-launchers">
         <h3>Launchers</h3>
         <Launchers />
+      </section>
+      <section id="set-dock">
+        <h3>Dock</h3>
+        <DockSettings />
       </section>
       <section id="set-sync">
         <h3>Sync</h3>

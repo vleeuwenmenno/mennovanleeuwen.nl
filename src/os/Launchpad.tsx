@@ -6,7 +6,8 @@ import { createNote } from '../data/notes'
 import { contributions, profile, projects } from '../data/profile'
 import { APP_META } from './apps'
 import { appearanceMenu } from './appearanceMenu'
-import type { MenuItem } from './ContextMenu'
+import { openContextMenu, type MenuItem } from './ContextMenu'
+import { isDockableApp, launcherDockId, pinToDock, unpinFromDock, useCanCustomizeDock, useDock, type DockId } from './dockItems'
 import { resetLayout } from './desktopStore'
 import { DOCK_MODES, getDockMode, setDockMode } from './dockPrefs'
 import { AppIcon } from './icons'
@@ -29,6 +30,8 @@ type Entry = {
   children?: () => Entry[]
   checked?: boolean
   swatch?: string
+  /** Right-click pins it to the dock or takes it off (signed in). */
+  dockId?: DockId
 }
 
 const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'notebook', 'contact', 'notes', 'keys', 'settings', 'trash']
@@ -106,6 +109,8 @@ export function Launchpad() {
   const list = useRef<HTMLDivElement>(null)
   const close = () => setOverlay(null)
   const launchers = useLaunchers()
+  const dock = useDock()
+  const canPin = useCanCustomizeDock()
 
   useEffect(() => input.current?.focus(), [])
 
@@ -120,6 +125,7 @@ export function Launchpad() {
             icon: <AppIcon app={app} size={16} tone />,
             run: () => wm.open(app),
             runNew: SINGLE_INSTANCE.has(app) ? undefined : () => wm.openNew(app),
+            dockId: isDockableApp(app) ? app : undefined,
           })),
       },
       // Your own links (Settings → Launchers), when there are any.
@@ -133,6 +139,7 @@ export function Launchpad() {
                   label: l.label,
                   icon: l.glyph ? <span className="om-glyph">{l.glyph}</span> : <img className="al-fav" src={faviconOf(l.url)} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />,
                   run: () => launchLink(l),
+                  dockId: launcherDockId(l.id),
                 })),
             },
           ]
@@ -258,6 +265,17 @@ export function Launchpad() {
               className={`om-row ${i === active ? 'is-active' : ''}`}
               onPointerMove={() => setActive(i)}
               onClick={(ev) => choose(e, ev.ctrlKey || ev.metaKey)}
+              onContextMenu={(ev) => {
+                const id = e.dockId
+                if (!canPin || !id) return
+                const pinned = dock.includes(id)
+                openContextMenu(ev, [
+                  { label: 'Open', onSelect: () => choose(e) },
+                  ...(e.runNew ? [{ label: 'Open in new window', onSelect: () => choose(e, true) }] : []),
+                  { separator: true },
+                  { label: pinned ? 'Remove from dock' : 'Pin to dock', onSelect: () => (pinned ? unpinFromDock : pinToDock)(id) },
+                ])
+              }}
             >
               <span className="om-icon">{e.swatch ? <span className="om-swatch" style={{ background: e.swatch }} /> : e.icon}</span>
               <span className="om-label">
