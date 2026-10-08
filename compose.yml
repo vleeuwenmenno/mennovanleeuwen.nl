@@ -1,0 +1,14 @@
+# Runs the site in Docker, the same way as on the server.
+#   docker compose up -d            pull the released image and start it
+#   docker compose up -d --build    build from this checkout instead
+# .env next to this file can set PORT (host port, default 8080) and GITHUB_TOKEN (optional,
+# for `git log` in the terminal).
+services:
+  site:
+    image: ghcr.io/vleeuwenmenno/mennovanleeuwen.nl:latest
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}

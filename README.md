@@ -80,17 +80,11 @@ snapshot, builds the site, and pushes a multi-arch (amd64 + arm64) image to
 `ghcr.io/vleeuwenmenno/mennovanleeuwen.nl` tagged `1.2.3`, `1.2`, `1` and `latest`. Prereleases
 skip `latest`.
 
-Run it on a server:
-
-```yaml
-# compose.yml
-services:
-  site:
-    image: ghcr.io/vleeuwenmenno/mennovanleeuwen.nl:latest
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-```
+Run it with [`compose.yml`](compose.yml), on a server or locally: `docker compose up -d` pulls
+the released image, `docker compose up -d --build` builds this checkout instead. Put
+`GITHUB_TOKEN=...` in a `.env` next to it (git-ignored) to give `git log` GitHub's signed-in rate
+limit; a fine-grained token with read-only access to public repositories is enough. `PORT=...` in the
+same file changes the host port (default 8080).
 
 The container runs [`server/index.ts`](server/index.ts), a dependency-free Node server, as a
 non-root user on port 8080 (`PORT` changes it). It serves the built site, answers `/healthz`, serves
