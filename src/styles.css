@@ -506,10 +506,11 @@ body.is-resizing * {
 }
 .desk-icon {
   position: absolute;
-  width: 92px;
-  display: grid;
-  justify-items: center;
-  align-content: start;
+  width: 96px;
+  /* Flex, not grid: a label wider than the icon then overflows evenly on both sides. */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 4px;
   padding: 8px 4px 6px;
   border-radius: 0;
