@@ -755,7 +755,7 @@ export const commands: Record<string, Command> = {
   },
   games: {
     desc: 'open the arcade',
-    usage: 'games [tetris|pacman|minecraft|snake|minesweeper|breakout]',
+    usage: 'games [tetris|pacman|minecraft|snake|minesweeper|pool|breakout]',
     run: (ctx) => {
       const game = ctx.args[0]
       if (game && !GAME_CATALOG.some((g) => g.id === game)) throw new CmdError(`games: no game called '${game}' (try ${GAME_CATALOG.map((g) => g.id).join(', ')})`)
@@ -767,6 +767,7 @@ export const commands: Record<string, Command> = {
   snake: { desc: 'play snake', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['snake'] }) },
   minesweeper: { desc: 'play minesweeper', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['minesweeper'] }) },
   breakout: { desc: 'play breakout', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['breakout'] }) },
+  pool: { desc: 'play 8-ball pool', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['pool'] }) },
   pepper: {
     desc: 'Pepper CLI against a simulated lab cluster',
     usage: "pepper [--local | TARGET] COMMAND   (try: pepper --help)",

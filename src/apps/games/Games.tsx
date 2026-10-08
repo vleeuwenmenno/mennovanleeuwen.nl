@@ -5,6 +5,7 @@ import { GAME_CATALOG } from './catalog'
 import { Minecraft } from './Minecraft'
 import { Minesweeper } from './Minesweeper'
 import { PacMan } from './PacMan'
+import { Pool } from './Pool'
 import { Snake } from './Snake'
 import { Tetris } from './Tetris'
 
@@ -15,6 +16,7 @@ const COMPONENTS: Record<string, ComponentType<{ win: WinState }>> = {
   'snake': Snake,
   'minesweeper': Minesweeper,
   'breakout': Breakout,
+  'pool': Pool,
 }
 
 export const GAMES = GAME_CATALOG.map((g) => ({ ...g, component: COMPONENTS[g.id] }))
@@ -24,6 +26,7 @@ function readBest(id: string) {
     const all = JSON.parse(localStorage.getItem('mvlos.highscores.v1') ?? '{}')
     if (id === 'minesweeper') return all['minesweeper-easy'] !== undefined ? `${all['minesweeper-easy']}s` : null
     if (id === 'minecraft') return 'touch grass'
+    if (id === 'pool') return all.pool !== undefined ? `${all.pool} ${all.pool === 1 ? 'win' : 'wins'}` : null
     return all[id] ?? null
   } catch {
     return null

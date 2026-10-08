@@ -2273,6 +2273,208 @@ body.is-resizing * {
   width: 80px;
   height: 300px;
 }
+/* Pool: the table grows to whatever the window leaves after the bar and the hint, at the
+   table's own aspect ratio. */
+.game-pool {
+  container-type: size;
+  --pool-w: min(100cqw - 32px, (100cqh - 125px) * 2.88 / 1.61);
+}
+.game-pool .game-bar,
+.pool-stage,
+.pool-power,
+.game-pool .game-hint {
+  max-width: none;
+  width: max(280px, var(--pool-w));
+}
+.pool-canvas {
+  aspect-ratio: 2.88 / 1.61;
+  border: 0;
+  cursor: crosshair;
+  touch-action: none;
+}
+.pool-bar {
+  flex-wrap: wrap;
+}
+.pool-player {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 130px;
+  padding: 4px 8px;
+  border-left: 2px solid transparent;
+  opacity: 0.6;
+}
+.pool-player:last-of-type {
+  align-items: flex-end;
+  border-left: 0;
+  border-right: 2px solid transparent;
+}
+.pool-player.is-active {
+  opacity: 1;
+  border-color: var(--accent);
+}
+.pool-player strong {
+  font-family: inherit;
+  color: var(--fg);
+  font-size: 13px;
+}
+.pool-chips {
+  display: flex;
+  gap: 3px;
+  min-height: 13px;
+  font-size: 11px;
+}
+.pool-chip {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--c);
+  box-shadow: inset -2px -2px 3px rgba(0, 0, 0, 0.35);
+}
+.pool-chip.is-stripe {
+  background: linear-gradient(#f6f3e8 22%, var(--c) 22% 78%, #f6f3e8 78%);
+}
+.pool-chip.is-gone {
+  opacity: 0.18;
+}
+.pool-msg {
+  flex: 1;
+  text-align: center;
+  color: var(--muted);
+  min-width: 160px;
+}
+.pool-mute {
+  font-size: 15px;
+  padding: 2px 4px;
+  background: none;
+  border: 0;
+}
+.pool-spin {
+  position: absolute;
+  left: 1.6%;
+  bottom: 3%;
+  width: clamp(40px, 8%, 70px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 32%, #fff, #d8d4c8 60%, #9c988c);
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.45), 0 3px 8px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  touch-action: none;
+}
+.pool-spin::before,
+.pool-spin::after {
+  content: '';
+  position: absolute;
+  background: rgba(0, 0, 0, 0.18);
+}
+.pool-spin::before {
+  left: 50%;
+  top: 10%;
+  bottom: 10%;
+  width: 1px;
+}
+.pool-spin::after {
+  top: 50%;
+  left: 10%;
+  right: 10%;
+  height: 1px;
+}
+.pool-spin.is-idle {
+  cursor: default;
+  opacity: 0.75;
+}
+.pool-spin-dot {
+  position: absolute;
+  width: 22%;
+  height: 22%;
+  border-radius: 50%;
+  background: #d22;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}
+.pool-power {
+  position: relative;
+  height: 44px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.pool-power span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, var(--green), var(--yellow), var(--red));
+  opacity: 0.7;
+}
+.pool-power em {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  font-style: normal;
+  font-size: 12px;
+  color: var(--muted);
+  pointer-events: none;
+}
+@media (pointer: coarse) {
+  .pool-hint-mouse {
+    display: none;
+  }
+}
+.pool-menu .seg {
+  justify-self: center;
+  margin-top: 10px;
+}
+.pool-settings {
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: center;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.pool-settings span {
+  text-align: right;
+}
+.pool-settings .seg {
+  justify-self: start;
+  margin: 0;
+}
+.pool-menu .pool-rules-text {
+  font-size: 12px;
+}
+.pool-menu .actions {
+  margin-top: 10px;
+}
+/* Upright on phones: the table's height sets its width. */
+.pool-stage.is-portrait {
+  width: auto;
+}
+.pool-stage.is-portrait .pool-canvas {
+  width: auto;
+  max-width: 100%;
+  height: max(320px, min((100cqw - 32px) * 2.88 / 1.61, 100cqh - 250px));
+  margin: 0 auto;
+}
+.pool-stage.is-portrait .pool-spin {
+  width: 44px;
+}
+.game-pool > * {
+  flex-shrink: 0;
+}
+@media (max-width: 600px) {
+  .pool-msg {
+    order: 5;
+    flex-basis: 100%;
+  }
+  .pool-player {
+    min-width: 0;
+  }
+}
 .touch-pad,
 .touch-only {
   display: none;
