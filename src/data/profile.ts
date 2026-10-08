@@ -9,7 +9,7 @@ export const profile = {
   location: 'The Netherlands',
   /** Shown as the system uptime in the terminal */
   born: '1996-09-19',
-  email: 'menno@vleeuwen.me',
+  // The email address lives in data/email.ts, encoded, so harvesters cannot read it from the source.
   github: 'vleeuwenmenno',
   links: [
     { label: 'GitHub', url: 'https://github.com/vleeuwenmenno' },

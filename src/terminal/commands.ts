@@ -5,6 +5,7 @@ import { fetchStars, loadRecents, timeAgo } from '../data/recents'
 import type { AppId } from '../os/wm'
 import { lookupAddress, RECORD_TYPES, resolve } from './dns'
 import { pepper } from './pepper'
+import { revealEmail } from '../data/email'
 import { SHORTCUTS } from '../data/shortcuts'
 import { loadRates, smartCalc } from '../os/smartcalc'
 import { THEMES as OMARCHY_THEMES } from '../os/omarchyThemes'
@@ -545,7 +546,8 @@ export const commands: Record<string, Command> = {
     desc: 'how to reach me',
     run: (ctx) => {
       ctx.openApp('contact')
-      return [`${c('accent', 'email')}     ${link(`mailto:${profile.email}`, profile.email)}`, ...profile.links.map((l) => `${c('accent', l.label.toLowerCase().padEnd(10))}${link(l.url)}`)].join('\n')
+      const address = revealEmail()
+      return [`${c('accent', 'email')}     ${link(`mailto:${address}`, address)}`, ...profile.links.map((l) => `${c('accent', l.label.toLowerCase().padEnd(10))}${link(l.url)}`)].join('\n')
     },
   },
   ps: {

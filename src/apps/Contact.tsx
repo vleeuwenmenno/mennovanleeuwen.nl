@@ -1,11 +1,13 @@
 import { useState } from 'react'
+import { composeEmail, revealEmail } from '../data/email'
 import { profile } from '../data/profile'
+import { EmailReveal } from './EmailReveal'
 
 export function Contact() {
   const [copied, setCopied] = useState(false)
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(profile.email)
+      await navigator.clipboard.writeText(revealEmail())
       setCopied(true)
       setTimeout(() => setCopied(false), 1600)
     } catch {
@@ -17,7 +19,7 @@ export function Contact() {
       <div className="mail-head">
         <div className="mail-field">
           <span className="muted">To</span>
-          <span className="mail-to">{profile.email}</span>
+          <EmailReveal className="mail-to" />
           <button className="btn btn-small" onClick={copy}>
             {copied ? 'Copied ✓' : 'Copy'}
           </button>
@@ -32,9 +34,9 @@ export function Contact() {
         <p className="muted">
           Infrastructure that needs to stop paging people, a desktop app idea, or a question about Boltwarden or Pepper? Write me. I read everything, and I answer most of it.
         </p>
-        <a className="btn btn-primary" href={`mailto:${profile.email}?subject=${encodeURIComponent("Saw your site, let's talk")}`}>
+        <button className="btn btn-primary" onClick={() => composeEmail("Saw your site, let's talk")}>
           Open in mail app ↗
-        </a>
+        </button>
       </div>
       <div className="mail-links">
         {profile.links.map((l) => (

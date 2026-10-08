@@ -1,6 +1,7 @@
 import { GAME_CATALOG } from '../apps/games/catalog'
 import { contributions, education, experience, headlines, hobbies, profile, projects, skills } from '../data/profile'
 import { PICTURES } from './pictures'
+import { revealEmail } from '../data/email'
 
 // A read-only, in-memory filesystem built from profile.ts. Nothing here touches the real
 // machine; "files" are strings and a few of them point at an app or URL for `open`.
@@ -190,7 +191,7 @@ export const root: DirNode = dir('', [
       file('headlines.txt', headlines.join('\n'), { app: 'notes' }),
       file(
         'contact.txt',
-        [`email     ${profile.email}`, ...profile.links.map((l) => `${l.label.toLowerCase().padEnd(10)}${l.url}`)].join('\n'),
+        () => [`email     ${revealEmail()}`, ...profile.links.map((l) => `${l.label.toLowerCase().padEnd(10)}${l.url}`)].join('\n'),
         { app: 'contact' },
       ),
       file('.bashrc', ['# not actually bash, but it reads like it', "alias ll='ls -la'", 'export EDITOR=nvim', 'export PAGER=cat'].join('\n')),

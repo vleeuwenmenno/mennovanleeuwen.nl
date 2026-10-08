@@ -6,6 +6,7 @@ import { contributions, profile, projects } from '../data/profile'
 import { timeAgo, useRecents } from '../data/recents'
 import { age, HOME, lookup, prettyPath, walk } from '../terminal/vfs'
 import { APP_META } from './apps'
+import { revealEmail } from '../data/email'
 import { cachedRates, loadRates, smartCalc, type CalcResult } from './smartcalc'
 import { resetLayout } from './desktopStore'
 import { AppIcon } from './icons'
@@ -253,7 +254,7 @@ export function Spotlight() {
       wm.open('cv')
       setTimeout(() => window.print(), 300)
     }, '⎙')
-    action('email', `Copy email address`, 'email mail contact copy', () => copy(profile.email, 'email address'), '@', profile.email)
+    action('email', `Copy email address`, 'email mail contact copy', () => copy(revealEmail(), 'email address'), '@', 'Copies it; it is not shown here')
     const ts = themeSettings()
     out.push({ id: 'theme-mode-light', group: 'Actions', title: 'Day mode', subtitle: themeLabel(ts.light), keywords: 'theme light day mode appearance', icon: <Glyph color={THEMES[ts.light].background}>☀</Glyph>, run: () => setMode('light') })
     out.push({ id: 'theme-mode-dark', group: 'Actions', title: 'Night mode', subtitle: themeLabel(ts.dark), keywords: 'theme dark night mode appearance', icon: <Glyph color={THEMES[ts.dark].background}>☾</Glyph>, run: () => setMode('dark') })

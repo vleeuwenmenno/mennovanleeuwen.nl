@@ -1,8 +1,12 @@
+import { useState } from 'react'
 import { contributions, education, experience, hobbies, profile, projects, skills } from '../data/profile'
 import { useWM } from '../os/wm'
+import { EmailReveal } from './EmailReveal'
 
 export function Cv() {
   const wm = useWM()
+  // A printed CV needs the real address, so printing reveals it first.
+  const [printing, setPrinting] = useState(false)
   return (
     <div className="cv-wrap">
       <div className="cv-toolbar">
@@ -11,7 +15,13 @@ export function Cv() {
         <button className="btn btn-small" onClick={() => wm.open('terminal', { run: 'cat ~/cv.md' })}>
           View as text
         </button>
-        <button className="btn btn-small btn-primary" onClick={() => window.print()}>
+        <button
+          className="btn btn-small btn-primary"
+          onClick={() => {
+            setPrinting(true)
+            setTimeout(() => window.print(), 50)
+          }}
+        >
           Print / PDF
         </button>
       </div>
@@ -25,7 +35,7 @@ export function Cv() {
           </div>
           <ul className="cv-contact">
             <li>
-              <a href={`mailto:${profile.email}`}>{profile.email}</a>
+              <EmailReveal link forceShown={printing} />
             </li>
             {profile.links.map((l) => (
               <li key={l.url}>

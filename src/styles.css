@@ -1866,6 +1866,20 @@ body.is-resizing * {
 .mail-field .btn {
   margin-left: auto;
 }
+.email-reveal {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.email-show {
+  font-size: 11px;
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  opacity: 0.7;
+}
+.email-show:hover {
+  opacity: 1;
+}
 .mail-body {
   padding: 18px;
   flex: 1;
