@@ -2,6 +2,10 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { profile } from '../data/profile'
 import { timeAgo } from '../data/recents'
 import { fetchMinecraft, MC_ADDRESS, MC_PORT, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
+import { BUILT, COMMIT, REPO, VERSION } from '../version'
+import { toggleOverlay } from './overlays'
+import { reboot, shutdown } from './powerState'
+import { useWM } from './wm'
 
 /** A top-bar button with a dropdown panel that closes on outside click or Escape. */
 function TopbarPopover({ label, className = '', title, children }: { label: ReactNode; className?: string; title: string; children: (close: () => void) => ReactNode }) {
@@ -225,6 +229,145 @@ export function MinecraftWidget() {
               {loading ? 'Checking…' : 'Refresh'}
             </button>
           </footer>
+        </div>
+      )}
+    </TopbarPopover>
+  )
+}
+
+// ---------------------------------------------------------------------------------------------
+// System menu (the MvL OS logo): which build this is, and whether it is the latest release.
+
+let latestRelease: Promise<string | null> | null = null
+const fetchLatestRelease = () =>
+  (latestRelease ??= fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => (typeof j?.tag_name === 'string' ? j.tag_name.replace(/^v/, '') : null))
+    .catch(() => null))
+
+/** -1, 0 or 1 for dotted version numbers; anything after a dash is ignored. */
+function compareVersions(a: string, b: string) {
+  const pa = a.split('-')[0].split('.').map(Number)
+  const pb = b.split('-')[0].split('.').map(Number)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (d) return Math.sign(d)
+  }
+  return 0
+}
+
+function ReleaseStatus() {
+  const [latest, setLatest] = useState<string | null | undefined>(undefined)
+  useEffect(() => {
+    let live = true
+    fetchLatestRelease().then((v) => live && setLatest(v))
+    return () => {
+      live = false
+    }
+  }, [])
+  const dev = !/^\d+\.\d+\.\d+$/.test(VERSION)
+  if (latest === undefined) return <span className="muted">checking…</span>
+  if (latest === null) return <span className="muted">could not check</span>
+  if (dev) return <span>development build · latest release {latest}</span>
+  const cmp = compareVersions(VERSION, latest)
+  if (cmp >= 0) return <span className="t-green">up to date ✓</span>
+  return (
+    <span>
+      <span className="t-yellow">{latest} is out</span>{' '}
+      <button className="sys-link" onClick={() => location.reload()}>
+        reload
+      </button>
+    </span>
+  )
+}
+
+export function SystemMenu() {
+  const wm = useWM()
+  const built = new Date(BUILT)
+  return (
+    <TopbarPopover
+      className="tb-sys"
+      title="About MvL OS"
+      label={
+        <span className="logo">
+          <svg viewBox="0 0 64 64" width="14" height="14" aria-hidden>
+            <path d="M14 46V18l18 16 18-16v28" fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          MvL OS
+        </span>
+      }
+    >
+      {(close) => (
+        <div className="sys">
+          <div className="sys-head">
+            <span className="sys-logo" aria-hidden>
+              <svg viewBox="0 0 64 64" width="26" height="26">
+                <path d="M14 46V18l18 16 18-16v28" fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+            <div>
+              <strong>MvL OS</strong>
+              <p className="muted">Version {VERSION}</p>
+            </div>
+          </div>
+          <dl className="sys-facts">
+            <dt>Release</dt>
+            <dd>
+              <ReleaseStatus />
+            </dd>
+            <dt>Build</dt>
+            <dd>
+              {COMMIT ? (
+                <a href={`https://github.com/${REPO}/commit/${COMMIT}`} target="_blank" rel="noopener noreferrer">
+                  {COMMIT.slice(0, 7)}
+                </a>
+              ) : (
+                'local'
+              )}{' '}
+              · {built.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })} {built.toTimeString().slice(0, 5)}
+            </dd>
+            <dt>Owner</dt>
+            <dd>{profile.name}</dd>
+          </dl>
+          <div className="sys-actions">
+            <button
+              onClick={() => {
+                close()
+                wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) })
+              }}
+            >
+              About this system
+            </button>
+            <button
+              onClick={() => {
+                close()
+                toggleOverlay('launchpad')
+              }}
+            >
+              All apps
+            </button>
+            <a href={`https://github.com/${REPO}/releases`} target="_blank" rel="noopener noreferrer" onClick={close}>
+              Release notes
+            </a>
+            <span className="sys-sep" />
+            <button
+              onClick={() => {
+                close()
+                reboot()
+              }}
+            >
+              Reboot
+            </button>
+            <button
+              className="is-danger"
+              onClick={() => {
+                close()
+                shutdown()
+              }}
+            >
+              Shut down
+            </button>
+          </div>
         </div>
       )}
     </TopbarPopover>

@@ -1,5 +1,6 @@
 import { loadRecents } from '../data/recents'
 import { CmdError, type Ctx } from './types'
+import { SHORT_VERSION } from '../version'
 
 // A simulated Pepper CLI against a pretend lab cluster: 3 masters and 4 minions. The command
 // grammar, outcome names and output layout follow the real CLI (pepper.mvl.sh, pepper/cli's
@@ -23,7 +24,7 @@ const NODES: MockNode[] = [
   { id: 'mc-01', role: 'minion', platform: 'linux/arm64', os: 'Ubuntu 24.04', labels: { role: 'game', site: 'ams' }, advertise: 'cloud.mvl.sh' },
 ]
 
-const LOCAL: MockNode = { id: 'mvlos', role: 'minion', platform: 'wasm32/browser', os: 'MvL OS 1.0', labels: { role: 'cv' }, advertise: 'localhost' }
+const LOCAL: MockNode = { id: 'mvlos', role: 'minion', platform: 'wasm32/browser', os: `MvL OS ${SHORT_VERSION}`, labels: { role: 'cv' }, advertise: 'localhost' }
 
 type Entry = {
   id: string

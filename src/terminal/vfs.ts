@@ -2,6 +2,7 @@ import { GAME_CATALOG } from '../apps/games/catalog'
 import { contributions, education, experience, headlines, hobbies, profile, projects, skills } from '../data/profile'
 import { PICTURES } from './pictures'
 import { revealEmail } from '../data/email'
+import { BUILT, COMMIT, SHORT_VERSION, VERSION } from '../version'
 
 // A read-only, in-memory filesystem built from profile.ts. Nothing here touches the real
 // machine; "files" are strings and a few of them point at an app or URL for `open`.
@@ -206,11 +207,11 @@ export const root: DirNode = dir('', [
     ]),
   ]),
   dir('etc', [
-    file('os-release', 'NAME="MvL OS"\nPRETTY_NAME="MvL OS 1.0 (Vaporwave Penguin)"\nID=mvlos\nID_LIKE=arch\nHOME_URL="https://mennovanleeuwen.nl"'),
+    file('os-release', `NAME="MvL OS"\nPRETTY_NAME="MvL OS ${SHORT_VERSION} (Vaporwave Penguin)"\nVERSION_ID="${VERSION}"\nBUILD_ID="${COMMIT.slice(0, 7)}"\nID=mvlos\nID_LIKE=arch\nHOME_URL="https://mennovanleeuwen.nl"`),
     file('hostname', 'mvlos'),
     file('motd', 'Welcome to MvL OS. Nothing in here can hurt you, or me.'),
   ]),
-  dir('proc', [file('uptime', () => `${uptimeSeconds()}.00 0.00`), file('version', 'MvL OS 1.0 (react 19, vite) #1 SMP PREEMPT_DYNAMIC')]),
+  dir('proc', [file('uptime', () => `${uptimeSeconds()}.00 0.00`), file('version', `MvL OS ${VERSION} (react 19, vite) #1 SMP PREEMPT_DYNAMIC ${BUILT}`)]),
   dir('tmp', []),
   dir('bin', []),
 ])

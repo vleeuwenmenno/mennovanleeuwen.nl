@@ -27,6 +27,7 @@ const link = (url: string, text = url) => `{link:${url}}${text}{/}`
 
 export { CmdError, type Ctx } from './types'
 import { CmdError, type Ctx } from './types'
+import { BUILT, VERSION } from '../version'
 
 type Out = string | void
 type Command = { desc: string; usage?: string; hidden?: boolean; run: (ctx: Ctx) => Out | Promise<Out> }
@@ -130,7 +131,7 @@ export function fastfetch(ctx: Pick<Ctx, 'windows'>) {
   const info = [
     `${c('accent', profile.handle)}@${c('accent', 'mvlos')}`,
     c('muted', '─'.repeat(16)),
-    `${c('accent', 'OS')}        MvL OS 1.0 (${browser})`,
+    `${c('accent', 'OS')}        MvL OS ${VERSION} (${browser})`,
     `${c('accent', 'Host')}      ${location.host || 'localhost'}`,
     `${c('accent', 'Uptime')}    ${fmtUptime()}`,
     `${c('accent', 'Shell')}     msh 1.0`,
@@ -416,7 +417,7 @@ export const commands: Record<string, Command> = {
   uname: {
     desc: 'system info',
     usage: 'uname [-a]',
-    run: ({ args }) => (args.includes('-a') ? `MvL OS mvlos 1.0.0-menno #1 SMP PREEMPT_DYNAMIC ${new Date().toUTCString()} wasm32 GNU/React` : 'MvL OS'),
+    run: ({ args }) => (args.includes('-a') ? `MvL OS mvlos ${VERSION}-menno #1 SMP PREEMPT_DYNAMIC ${new Date(BUILT).toUTCString()} wasm32 GNU/React` : 'MvL OS'),
   },
   date: { desc: 'current date and time', run: () => new Date().toString() },
   uptime: {

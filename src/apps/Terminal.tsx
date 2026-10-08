@@ -116,6 +116,21 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
     if (onLogout && !matchMedia('(pointer: coarse)').matches) inputRef.current?.focus({ preventScroll: true })
   }, [onLogout])
 
+  // A phone keyboard opening shrinks the visible area: keep the prompt above it.
+  useEffect(() => {
+    const keep = () => {
+      if (document.activeElement !== inputRef.current) return
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+      inputRef.current?.scrollIntoView({ block: 'nearest' })
+    }
+    window.addEventListener('mvlos:keyboard', keep)
+    window.visualViewport?.addEventListener('resize', keep)
+    return () => {
+      window.removeEventListener('mvlos:keyboard', keep)
+      window.visualViewport?.removeEventListener('resize', keep)
+    }
+  }, [])
+
   // Focus the prompt whenever this window comes to the front (not on touch, where it pops the keyboard).
   useEffect(() => {
     if (wm.focusedPid !== win.pid || matchMedia('(pointer: coarse)').matches) return

@@ -8,13 +8,19 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY . .
+# The release workflow passes these; the system menu and /api/version show them.
+ARG APP_VERSION=""
+ARG APP_COMMIT=""
+ENV APP_VERSION=$APP_VERSION APP_COMMIT=$APP_COMMIT
 RUN pnpm build
 
 # Serve it with the small dependency-free Node server, which also pings the Minecraft server
 # live for /api/minecraft.
 FROM node:24-alpine
+ARG APP_VERSION=""
+ARG APP_COMMIT=""
 WORKDIR /app
-ENV NODE_ENV=production PORT=8080
+ENV NODE_ENV=production PORT=8080 APP_VERSION=$APP_VERSION APP_COMMIT=$APP_COMMIT
 COPY --from=build /app/dist ./dist
 COPY server ./server
 COPY src/data/normalize.ts ./src/data/normalize.ts

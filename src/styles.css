@@ -282,6 +282,86 @@ body.is-resizing * {
 .tb-btn.is-open {
   background: color-mix(in srgb, var(--fg) 13%, transparent);
 }
+/* The system menu opens from the logo, at the far left. */
+.tb-sys .tb-btn {
+  padding: 0;
+}
+.tb-sys .tb-btn:hover,
+.tb-sys .tb-btn.is-open {
+  background: none;
+}
+.tb-sys .tb-btn.is-open .logo {
+  background: var(--panel-2);
+}
+.tb-sys .tb-panel {
+  right: auto;
+  left: 0;
+  transform-origin: top left;
+}
+.sys {
+  width: 300px;
+  padding: 14px;
+  font-size: 13px;
+}
+.sys-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.sys-head strong {
+  font-size: 15px;
+}
+.sys-head p {
+  margin: 2px 0 0;
+}
+.sys-logo {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  color: var(--yellow);
+  background: #0d0f14;
+}
+.sys-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 14px 0 12px;
+  font-size: 12px;
+}
+.sys-facts dt {
+  color: var(--muted);
+}
+.sys-facts dd {
+  margin: 0;
+}
+.sys-link {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.sys-actions {
+  display: grid;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+.sys-actions button,
+.sys-actions a {
+  padding: 6px 8px;
+  text-align: left;
+  color: var(--text);
+}
+.sys-actions button:hover,
+.sys-actions a:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.sys-actions .is-danger {
+  color: var(--red);
+}
+.sys-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--line);
+}
 .tb-clock .tb-panel {
   right: auto;
   left: 50%;
@@ -4857,6 +4937,12 @@ kbd {
   border-color: var(--green);
   box-shadow: 0 0 24px -4px var(--green);
 }
+/* Fit the console above a phone keyboard (see os/viewport.ts). */
+.boot {
+  top: var(--vvt, 0);
+  bottom: auto;
+  height: var(--vvh, 100%);
+}
 .boot.is-leaving {
   animation: boot-out 0.3s ease forwards;
 }
@@ -4906,6 +4992,16 @@ kbd {
     top: calc(var(--top) + 6px) !important;
     width: calc(100vw - 12px) !important;
     height: calc(100dvh - var(--top) - 104px) !important;
+  }
+  /* Keyboard open: windows fill the space above it, and the dock steps aside. */
+  :root.keyboard-open .window:not(.chrome-note),
+  :root.keyboard-open .window.is-max {
+    top: calc(var(--vvt, 0px) + var(--top) + 6px) !important;
+    height: calc(var(--vvh, 100dvh) - var(--top) - 12px) !important;
+  }
+  :root.keyboard-open .dock,
+  :root.keyboard-open .dock-handle {
+    display: none;
   }
   /* With the dock tucked away, app windows reach down to the handle bar. */
   :root[data-dock-tucked] .window:not(.chrome-note) {

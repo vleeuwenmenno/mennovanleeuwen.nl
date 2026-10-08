@@ -15,7 +15,7 @@ import { usePower } from './powerState'
 import { AppIcon } from './icons'
 import { appearanceMenu } from './appearanceMenu'
 import { toggleMode, useTheme } from './theme'
-import { ClockWidget, MinecraftWidget } from './TopbarWidgets'
+import { ClockWidget, MinecraftWidget, SystemMenu } from './TopbarWidgets'
 import { Window } from './Window'
 import { SINGLE_INSTANCE, useWM, type AppId, type Geometry, type WinState } from './wm'
 
@@ -96,12 +96,7 @@ function TopBar() {
   return (
     <header className="topbar">
       <div className="topbar-left">
-        <button className="logo" onClick={() => toggleOverlay('launchpad')} title="All apps">
-          <svg viewBox="0 0 64 64" width="14" height="14" aria-hidden>
-            <path d="M14 46V18l18 16 18-16v28" fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          MvL OS
-        </button>
+        <SystemMenu />
         {/* One numbered "workspace" per window, like the Omarchy bar. */}
         <nav className="workspaces" aria-label="Open windows">
           {ordered.slice(0, 9).map((w, i) => (

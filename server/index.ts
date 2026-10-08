@@ -67,6 +67,11 @@ createServer(async (req, res) => {
     return
   }
 
+  if (path === '/api/version') {
+    const body = JSON.stringify({ version: process.env.APP_VERSION || 'dev', commit: process.env.APP_COMMIT || null })
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SECURITY }).end(req.method === 'HEAD' ? undefined : body)
+    return
+  }
   if (path.startsWith('/api/git/')) {
     const r = await githubCommits(path.slice('/api/git/'.length) + url.search)
     res.writeHead(r.status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SECURITY }).end(req.method === 'HEAD' ? undefined : r.body)

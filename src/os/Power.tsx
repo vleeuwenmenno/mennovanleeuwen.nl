@@ -3,6 +3,7 @@ import { Terminal } from '../apps/Terminal'
 import { profile } from '../data/profile'
 import { bootDone, finishShutdown, powerOn, usePower } from './powerState'
 import type { WinState } from './wm'
+import { VERSION } from '../version'
 
 // The screens around the desktop: the boot log (which can be paused into a text console), the
 // shutdown log, and the powered-off screen.
@@ -76,7 +77,7 @@ function consoleLines(): LogLine[] {
     ['warn', 'Graphical session held back on request. Starting a shell on tty1.', 160],
     ['info', '         Type exit to start the desktop; reboot and shutdown work too.', 0],
     ['info', '', 200],
-    ['info', 'MvL OS 1.0 mvlos tty1', 0],
+    ['info', `MvL OS ${VERSION} mvlos tty1`, 0],
     ['info', '', 0],
     ['info', `mvlos login: ${profile.handle} (automatic login)`, 300],
     ['info', `Last login: ${last} on tty1`, 120],

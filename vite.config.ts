@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { execSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -49,8 +50,25 @@ const serviceWorker = (): Plugin => ({
   },
 })
 
+/** Release builds get APP_VERSION/APP_COMMIT from the workflow; local ones ask git. */
+const git = (cmd: string) => {
+  try {
+    return execSync(`git ${cmd}`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()
+  } catch {
+    return ''
+  }
+}
+const pkgVersion = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version as string
+const appVersion = process.env.APP_VERSION?.replace(/^v/, '') || git('describe --tags --always --dirty').replace(/^v/, '') || `${pkgVersion}-dev`
+const appCommit = process.env.APP_COMMIT || git('rev-parse HEAD')
+
 export default defineConfig({
   plugins: [react(), liveApi(), serviceWorker()],
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+    __APP_COMMIT__: JSON.stringify(appCommit),
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+  },
   // Listen on all interfaces so the dev site can be opened from a phone over Tailscale or LAN.
   server: { host: '0.0.0.0', allowedHosts: ['.ts.net'] },
   preview: { host: '0.0.0.0', allowedHosts: ['.ts.net'] },
