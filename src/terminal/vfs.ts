@@ -1,3 +1,4 @@
+import { GAME_CATALOG } from '../apps/games/catalog'
 import { contributions, education, experience, headlines, hobbies, profile, projects, skills } from '../data/profile'
 
 // A read-only, in-memory filesystem built from profile.ts. Nothing here touches the real
@@ -103,6 +104,7 @@ export const root: DirNode = dir('', [
           '  cv.md            the short version of me',
           '  projects/        things I built and run',
           '  contributions/   other people\'s projects I help with',
+          '  games/           the arcade, one launcher per game',
           '  contact.txt      how to reach me',
           '  hobbies.txt      what I do when the laptop is closed',
           '',
@@ -125,6 +127,12 @@ export const root: DirNode = dir('', [
             ...(p.url ? [file('website.url', p.url, { url: p.url })] : []),
             ...(p.repo ? [file('source.url', p.repo, { url: p.repo })] : []),
           ]),
+        ),
+      ),
+      dir(
+        'games',
+        GAME_CATALOG.map((g) =>
+          file(`${g.id}.game`, [`${g.glyph} ${g.name}`, '', g.blurb, '', `Play: open ~/games/${g.id}.game   (or: games ${g.id})`].join('\n'), { app: 'games', props: { game: g.id } }),
         ),
       ),
       dir(

@@ -24,6 +24,7 @@ export const DESKTOP_ICONS: DesktopIcon[] = [
   { id: 'readme', label: 'README.md', glyph: '📝', kind: 'file', path: '~/README.md', open: { app: 'terminal', props: { run: 'cat ~/README.md' } }, terminal: 'cat ~/README.md' },
   { id: 'cv', label: 'cv.md', glyph: '📄', kind: 'file', path: '~/cv.md', open: { app: 'cv' }, terminal: 'cat ~/cv.md' },
   { id: 'projects', label: 'projects', glyph: '📁', kind: 'folder', path: '~/projects', open: { app: 'projects', props: { section: 'project' } }, terminal: 'cd ~/projects && ls -l' },
+  { id: 'games', label: 'games', glyph: '🎮', kind: 'folder', path: '~/games', open: { app: 'games' }, terminal: 'cd ~/games && ls -l' },
   { id: 'contributions', label: 'contributions', glyph: '📂', kind: 'folder', path: '~/contributions', open: { app: 'projects', props: { section: 'contrib' } }, terminal: 'cd ~/contributions && ls -l' },
   ...(['boltwarden', 'pepper'] as const).map((slug) => {
     const p = projects.find((x) => x.slug === slug)!

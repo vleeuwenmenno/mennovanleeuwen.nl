@@ -1,6 +1,7 @@
 import { useEffect, useState, type ComponentType } from 'react'
 import type { WinState } from '../../os/wm'
 import { Breakout } from './Breakout'
+import { GAME_CATALOG } from './catalog'
 import { Game2048 } from './Game2048'
 import { Minecraft } from './Minecraft'
 import { Minesweeper } from './Minesweeper'
@@ -8,15 +9,17 @@ import { PacMan } from './PacMan'
 import { Snake } from './Snake'
 import { Tetris } from './Tetris'
 
-export const GAMES: { id: string; name: string; blurb: string; glyph: string; color: string; component: ComponentType<{ win: WinState }> }[] = [
-  { id: 'tetris', name: 'Tetris', blurb: 'Seven shapes, ten columns, no mercy', glyph: '🧩', color: '#bb9af7', component: Tetris },
-  { id: 'pacman', name: 'Pac-Man', blurb: 'Pellets, power-ups and four ghosts', glyph: '🟡', color: '#f6c453', component: PacMan },
-  { id: 'minecraft', name: 'Minecraft', blurb: 'The full game. In a browser tab. Definitely.', glyph: '⛏️', color: '#5d9b3a', component: Minecraft },
-  { id: 'snake', name: 'Snake', blurb: 'Eat, grow, do not bite yourself', glyph: '🐍', color: '#9ece6a', component: Snake },
-  { id: 'minesweeper', name: 'Minesweeper', blurb: 'The reason office PCs had a mouse', glyph: '💣', color: '#7aa2f7', component: Minesweeper },
-  { id: '2048', name: '2048', blurb: 'Slide, merge, reach 2048', glyph: '🔢', color: '#f6c453', component: Game2048 },
-  { id: 'breakout', name: 'Breakout', blurb: 'Bounce the ball, break the wall', glyph: '🧱', color: '#f7768e', component: Breakout },
-]
+const COMPONENTS: Record<string, ComponentType<{ win: WinState }>> = {
+  'tetris': Tetris,
+  'pacman': PacMan,
+  'minecraft': Minecraft,
+  'snake': Snake,
+  'minesweeper': Minesweeper,
+  '2048': Game2048,
+  'breakout': Breakout,
+}
+
+export const GAMES = GAME_CATALOG.map((g) => ({ ...g, component: COMPONENTS[g.id] }))
 
 function readBest(id: string) {
   try {
