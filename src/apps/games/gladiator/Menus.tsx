@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { Save, HallEntry, Mode } from './career'
 import { randomLook, randomName, type Gladiator, newGladiator } from './character'
-import { BASE_STAT, BEARDS, CREATION_POINTS, emptyStats, HAIR_COLOURS, HAIR_STYLES, SKIN_TONES, STATS, TUNIC_COLOURS, type Look, type StatKey, type Stats } from './data'
+import { BASE_STAT, BEARDS, CREATION_POINTS, DIFFICULTIES, DIFFICULTY_IDS, emptyStats, HAIR_COLOURS, HAIR_STYLES, SKIN_TONES, STATS, TUNIC_COLOURS, type Difficulty, type Look, type StatKey, type Stats } from './data'
 import { Portrait } from './ui'
 
 // The title screen with its save slots, the character creator and the Hall of Fame.
@@ -77,7 +77,7 @@ export function HallScreen({ hall, onBack }: { hall: HallEntry[]; onBack: () => 
             <div>
               <strong>{h.name}</strong>
               <span>
-                Level {h.level} · {h.wins} wins, {h.losses} losses · {h.fame} fame{h.mode === 'hardcore' ? ' · Hardcore' : ''}
+                Level {h.level} · {h.wins} wins, {h.losses} losses · {h.fame} fame{h.difficulty ? ` · ${DIFFICULTIES[h.difficulty].name}` : ''}{h.mode === 'hardcore' ? ' · Hardcore' : ''}
               </span>
               <span className="gl-muted">
                 {h.fate === 'emperor' ? 'Crowned Champion of Rome' : h.fate === 'fell' ? `Fell in the arena${h.by ? ` to ${h.by}` : ''}` : 'Retired'} · {new Date(h.date).toLocaleDateString()}
@@ -120,11 +120,30 @@ function Choice<T extends string>({ list, value, onPick, label }: { list: readon
   )
 }
 
-export function CreatorScreen({ onDone, onBack }: { onDone: (g: Gladiator, mode: Mode) => void; onBack: () => void }) {
+export function DifficultyPicker({ value, onPick }: { value: Difficulty; onPick: (d: Difficulty) => void }) {
+  return (
+    <div className="gl-difficulty">
+      <div className="gl-seg" role="radiogroup" aria-label="Difficulty">
+        {DIFFICULTY_IDS.map((d) => (
+          <button key={d} role="radio" aria-checked={value === d} className={value === d ? 'is-active' : ''} onClick={() => onPick(d)}>
+            {DIFFICULTIES[d].name}
+          </button>
+        ))}
+      </div>
+      <span className="gl-muted">
+        {DIFFICULTIES[value].text}
+        {DIFFICULTIES[value].reward !== 1 ? ` Rewards ×${DIFFICULTIES[value].reward}.` : ''}
+      </span>
+    </div>
+  )
+}
+
+export function CreatorScreen({ onDone, onBack }: { onDone: (g: Gladiator, mode: Mode, difficulty: Difficulty) => void; onBack: () => void }) {
   const [name, setName] = useState(() => randomName())
   const [look, setLook] = useState<Look>(() => randomLook())
   const [stats, setStats] = useState<Stats>(() => emptyStats(BASE_STAT))
   const [mode, setMode] = useState<Mode>('normal')
+  const [difficulty, setDifficulty] = useState<Difficulty>('normal')
   const spent = Object.values(stats).reduce((a, b) => a + b, 0) - STATS.length * BASE_STAT
   const left = CREATION_POINTS - spent
   const set = (k: StatKey, d: number) => {
@@ -212,6 +231,8 @@ export function CreatorScreen({ onDone, onBack }: { onDone: (g: Gladiator, mode:
               </div>
             </div>
           ))}
+          <h3>Difficulty</h3>
+          <DifficultyPicker value={difficulty} onPick={setDifficulty} />
           <h3>Fate</h3>
           <div className="gl-modes">
             <button className={`gl-mode ${mode === 'normal' ? 'is-active' : ''}`} onClick={() => setMode('normal')}>
@@ -223,7 +244,7 @@ export function CreatorScreen({ onDone, onBack }: { onDone: (g: Gladiator, mode:
               <span>Fall, and the crowd decides with its thumbs. Thumbs down ends the run for good.</span>
             </button>
           </div>
-          <button className="gl-btn is-primary is-big" onClick={() => onDone({ ...newGladiator(name, look, stats), points: left }, mode)}>
+          <button className="gl-btn is-primary is-big" onClick={() => onDone({ ...newGladiator(name, look, stats), points: left }, mode, difficulty)}>
             Enter the ludus
           </button>
         </div>

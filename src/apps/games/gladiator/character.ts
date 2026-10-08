@@ -166,7 +166,7 @@ export function totalPoints(level: number) {
   return STAT_KEYS.length * BASE_STAT + CREATION_POINTS + (level - 1) * POINTS_PER_LEVEL
 }
 
-export type OpponentOpts = { name?: string; title?: string; look?: Look; gearBoost?: number }
+export type OpponentOpts = { name?: string; title?: string; look?: Look; gearBoost?: number; statBoost?: number; lag?: number }
 
 /** A computer gladiator of `level`, built and kitted out the way its archetype would be. */
 export function makeOpponent(level: number, archetype: Archetype, seed: number, opts: OpponentOpts = {}): Gladiator {
@@ -176,7 +176,7 @@ export function makeOpponent(level: number, archetype: Archetype, seed: number, 
   const w = WEIGHTS[archetype]
   const keys = Object.keys(w) as StatKey[]
   const sum = keys.reduce((a, k) => a + (w[k] ?? 0), 0)
-  let left = totalPoints(level) - STAT_KEYS.length * BASE_STAT
+  let left = Math.round((totalPoints(level) - STAT_KEYS.length * BASE_STAT) * (opts.statBoost ?? 1))
   while (left > 0) {
     let x = r() * sum
     for (const k of keys) {
@@ -209,8 +209,10 @@ export function makeOpponent(level: number, archetype: Archetype, seed: number, 
   const boost = opts.gearBoost ?? 0
   const best = MATERIALS.reduce((t, m, i) => (m.level <= level ? i : t), 0)
   const kind = pick(r, ARCH_WEAPONS[archetype])
-  // Arena regulars kit out about as fast as a player can afford to: mostly a tier behind.
-  const tierFor = () => Math.max(0, Math.min(MATERIALS.length - 1, best + boost - (r() < 0.75 ? 1 : 0) - (r() < 0.25 ? 1 : 0)))
+  // Arena regulars kit out about as fast as a player can afford to: on easier settings, often a
+  // tier or two behind.
+  const lag = opts.lag ?? 0.5
+  const tierFor = () => Math.max(0, Math.min(MATERIALS.length - 1, best + boost - (r() < lag ? 1 : 0) - (r() < lag / 3 ? 1 : 0)))
   const weapon = [...ITEMS].reverse().find((i) => i.weapon === kind && i.tier <= tierFor() && i.str <= stats.str + 2)
   if (weapon) g.gear.weapon = weapon.id
   const twoHanded = weaponType(kind).twoHanded

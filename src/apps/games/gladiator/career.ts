@@ -1,6 +1,6 @@
 import { ARCHETYPES, gearStats, has, makeOpponent, pick, randomLook, randomName, rng, xpFor, type Gladiator } from './character'
 import { simulate } from './combat'
-import { league, LEAGUES, MAX_LEVEL, PERK_LEVELS, POINTS_PER_LEVEL, type Archetype, type LeagueId, type Look } from './data'
+import { DIFFICULTIES, league, LEAGUES, MAX_LEVEL, PERK_LEVELS, POINTS_PER_LEVEL, type Archetype, type Difficulty, type LeagueId, type Look } from './data'
 
 // The career around the fights: what is saved, which fights are on offer, tournaments, rivals and
 // what a win or a loss is worth.
@@ -25,6 +25,8 @@ export type Tournament = {
 export type Save = {
   version: 1
   mode: Mode
+  /** Missing in saves from before difficulty levels: those play on Normal. */
+  difficulty?: Difficulty
   g: Gladiator
   gold: number
   fame: number
@@ -44,7 +46,9 @@ export type Save = {
   emperor?: boolean
 }
 
-export type HallEntry = { name: string; level: number; mode: Mode; fate: 'fell' | 'emperor' | 'retired'; wins: number; losses: number; fame: number; date: number; look: Look; gear: Gladiator['gear']; by?: string }
+export type HallEntry = { name: string; level: number; mode: Mode; difficulty?: Difficulty; fate: 'fell' | 'emperor' | 'retired'; wins: number; losses: number; fame: number; date: number; look: Look; gear: Gladiator['gear']; by?: string }
+
+export const rules = (s: Save) => DIFFICULTIES[s.difficulty ?? 'normal']
 
 const KEY = 'mvlos.gladiator.v1'
 type Store = { slots: (Save | null)[]; hall: HallEntry[] }
@@ -82,7 +86,7 @@ export function addHall(e: HallEntry) {
 
 // --- Starting out --------------------------------------------------------------------------------
 
-export function newSave(g: Gladiator, mode: Mode): Save {
+export function newSave(g: Gladiator, mode: Mode, difficulty: Difficulty = 'normal'): Save {
   const seed = Math.floor(Math.random() * 1e9)
   const r = rng(seed)
   const archs = [...ARCHETYPES].sort(() => r() - 0.5)
@@ -99,6 +103,7 @@ export function newSave(g: Gladiator, mode: Mode): Save {
   const save: Save = {
     version: 1,
     mode,
+    difficulty,
     g,
     gold: 60,
     fame: 0,
@@ -127,13 +132,15 @@ export function rivalLevel(s: Save, r: Rival) {
 }
 
 export function foeGladiator(s: Save, f: Foe): Gladiator {
+  const d = rules(s)
+  const hard = { statBoost: d.stats, lag: d.lag }
   if (f.champion) {
     const c = league(f.champion).champion
-    return makeOpponent(c.level, c.archetype, c.seed, { name: c.name, title: c.title, gearBoost: 1 })
+    return makeOpponent(c.level + d.champion, c.archetype, c.seed, { name: c.name, title: c.title, gearBoost: 1, ...hard })
   }
   const rival = f.rival ? s.rivals.find((r) => r.id === f.rival) : undefined
-  if (rival) return { ...makeOpponent(f.level, rival.archetype, rival.seed + f.level, { name: rival.name, look: rival.look, title: 'your rival' }), id: rival.id }
-  return makeOpponent(f.level, f.archetype, f.seed)
+  if (rival) return { ...makeOpponent(f.level, rival.archetype, rival.seed + f.level, { name: rival.name, look: rival.look, title: 'your rival', ...hard }), id: rival.id }
+  return makeOpponent(f.level, f.archetype, f.seed, hard)
 }
 
 const nextSeed = (s: Save) => (s.nextSeed = (Math.imul(s.nextSeed ^ 0x5bd1e995, 1664525) + 1013904223) >>> 0)
@@ -151,10 +158,11 @@ export function refreshOffers(save: Save, leagueId: LeagueId = save.league): Sav
   const L = league(leagueId)
   const r = rng(nextSeed(s))
   const lv = (d: number) => Math.max(L.levels[0], Math.min(L.levels[1], s.g.level + d))
+  const [o1, o2, o3] = rules(s).offers
   const offers: Offer[] = [
-    { label: 'Warm-up', d: -1 },
-    { label: 'Even match', d: 0 },
-    { label: 'Tough draw', d: 2 },
+    { label: 'Warm-up', d: o1 },
+    { label: 'Even match', d: o2 },
+    { label: 'Tough draw', d: o3 },
   ].map(({ label, d }) => {
     const level = lv(d + (r() < 0.3 ? 1 : 0))
     return { seed: Math.floor(r() * 1e9), level, archetype: pick(r, ARCHETYPES), label, purse: purseFor(level) }
@@ -178,8 +186,9 @@ export function enterTournament(save: Save, leagueId: LeagueId): Save {
   const L = league(leagueId)
   const r = rng(nextSeed(s))
   const entrants: Tournament['entrants'] = { you: 'you' }
-  const lo = Math.max(L.levels[0], s.g.level - 2)
-  const hi = Math.max(lo, Math.min(L.levels[1], s.g.level + 2))
+  const [below, above] = rules(s).field
+  const lo = Math.max(L.levels[0], s.g.level + below)
+  const hi = Math.max(lo, Math.min(L.levels[1] + 1, s.g.level + above))
   const rivals = s.rivals.filter((rv) => rivalLevel(s, rv) >= L.levels[0] && rivalLevel(s, rv) <= L.levels[1] + 1).slice(0, 2)
   for (const rv of rivals) entrants[rv.id] = { seed: rv.seed, level: rivalLevel(s, rv), archetype: rv.archetype, rival: rv.id }
   let n = 0
@@ -209,7 +218,7 @@ export function advanceTournament(s: Save, t: Tournament, youWon: boolean, hpLef
     else next.push(simulate(foeGladiator(s, t.entrants[a] as Foe), foeGladiator(s, t.entrants[b] as Foe)) === 0 ? a : b)
   }
   // Between rounds the surgeon patches up a third of what's missing.
-  return { ...t, rounds: [...t.rounds, next], hp: Math.min(1, hpLeft + (1 - hpLeft) * 0.35), out: !youWon }
+  return { ...t, rounds: [...t.rounds, next], hp: Math.min(1, hpLeft + (1 - hpLeft) * rules(s).surgeon), out: !youWon }
 }
 
 export function entrantName(s: Save, t: Tournament, id: string) {
@@ -239,14 +248,15 @@ export function settle(s: Save, foe: Foe, kind: FightKind, won: boolean, peakFav
   const crowd = 1 + peakFavour / 200
   const tongue = has(g, 'goldTongue') ? 1.25 : 1
   const ratio = Math.max(0.4, Math.min(2, Math.pow(foe.level / g.level, 1.1)))
-  let xp = Math.round((18 + 14 * foe.level) * ratio * (kind === 'champion' ? 2 : 1))
+  const reward = rules(s).reward
+  let xp = Math.round((18 + 14 * foe.level) * ratio * (kind === 'champion' ? 2 : 1) * reward)
   let gold = 0
   let fame = 0
   let save: Save = { ...s, record: { ...s.record } }
   let dead = false
 
   if (won) {
-    gold = Math.round(purseFor(foe.level, kind) * (1 + cha * 0.01) * crowd * tongue)
+    gold = Math.round(purseFor(foe.level, kind) * (1 + cha * 0.01) * crowd * tongue * reward)
     fame = Math.round((1 + foe.level / 3) * (kind === 'champion' ? 6 : kind === 'rival' ? 2 : 1) * tongue)
     save.record.wins++
     if (peakFavour >= 80) notes.push('The crowd loved you: bigger purse.')

@@ -4,7 +4,7 @@ import { useGameKeys } from '../shared'
 import { makeActor, ArenaScene } from './arena'
 import type { Rand } from './character'
 import type { Gladiator } from './character'
-import { act, attackCost, ATTACKS, blockers, choose, hitChance, inReach, newFight, spellChance, spellCost, startTurn, STATUS_NAMES, type Action, type AttackType, type Ev, type Fight, type Snap } from './combat'
+import { act, attackCost, ATTACKS, blockers, choose, hitChance, inReach, newFight, RETREAT, retreatCost, spellChance, spellCost, startTurn, STATUS_NAMES, type Action, type AttackType, type Ev, type Fight, type Snap } from './combat'
 import { POTIONS, spell, type PotionId } from './data'
 import { kitOf } from './render'
 import { IMPACT } from './rig'
@@ -584,7 +584,9 @@ export function FightScreen(p: Props) {
       <div className={`gl-actions ${hud.phase === 'player' ? '' : 'is-waiting'}`}>
         <button className="gl-act is-move" disabled={!enabled('retreat')} onClick={() => doAction({ kind: 'retreat' })} title={why?.retreat ?? 'Step back'}>
           <strong>◀ Back</strong>
-          <small>{Math.round(me.d.move)} · 3 sta</small>
+          <small>
+            {Math.round(me.d.move * RETREAT)} · {retreatCost(me)} sta
+          </small>
           <kbd>←</kbd>
         </button>
         <button className="gl-act is-move" disabled={!enabled('advance')} onClick={() => doAction({ kind: 'advance' })} title={why?.advance ?? 'Close in'}>

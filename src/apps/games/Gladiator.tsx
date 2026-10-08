@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { WinState } from '../../os/wm'
 import {
-  addHall, advanceTournament, enterTournament, foeGladiator, newSave, readStore, refreshOffers, saveSlot, settle, tournamentFoe, type Foe, type FightKind, type Mode, type Save,
+  addHall, advanceTournament, rules, enterTournament, foeGladiator, newSave, readStore, refreshOffers, saveSlot, settle, tournamentFoe, type Foe, type FightKind, type Mode, type Save,
 } from './gladiator/career'
 import type { Gladiator as G } from './gladiator/character'
-import { league, LEAGUES, type LeagueId } from './gladiator/data'
+import { league, LEAGUES, type Difficulty, type LeagueId } from './gladiator/data'
 import { FightScreen, type FightResultView } from './gladiator/Fight'
 import { CreatorScreen, HallScreen, TitleScreen } from './gladiator/Menus'
 import { GladiatorSound } from './gladiator/sound'
@@ -86,7 +86,7 @@ export function Gladiator({ win }: { win: WinState }) {
     let { save: next, result } = settle(before, foe, kind, won, peak, spared)
     if (kind === 'tournament' && before.tournament) next = { ...next, tournament: advanceTournament(next, before.tournament, won, hpLeft) }
     else if (kind !== 'champion') next = refreshOffers(next)
-    const hall = { name: next.g.name, level: next.g.level, mode: next.mode, wins: next.record.wins, losses: next.record.losses, fame: next.fame, date: Date.now(), look: next.g.look, gear: next.g.gear }
+    const hall = { name: next.g.name, level: next.g.level, mode: next.mode, difficulty: next.difficulty ?? ('normal' as const), wins: next.record.wins, losses: next.record.losses, fame: next.fame, date: Date.now(), look: next.g.look, gear: next.g.gear }
     if (result.dead) addHall({ ...hall, fate: 'fell', by: foeName })
     if (next.emperor && !before.emperor) addHall({ ...hall, fate: 'emperor' })
     commit(next)
@@ -148,9 +148,9 @@ export function Gladiator({ win }: { win: WinState }) {
     body = (
       <CreatorScreen
         onBack={() => setScreen({ s: 'title' })}
-        onDone={(g: G, mode: Mode) => {
+        onDone={(g: G, mode: Mode, difficulty: Difficulty) => {
           setSlot(screen.slot)
-          const s = newSave(g, mode)
+          const s = newSave(g, mode, difficulty)
           saveRef.current = s
           setSave(s)
           saveSlot(screen.slot, s)
@@ -163,7 +163,7 @@ export function Gladiator({ win }: { win: WinState }) {
     const t = save.tournament
     const L = league(screen.kind === 'tournament' && t ? t.league : screen.foe.champion ?? save.league)
     const foeG = foeGladiator(save, screen.foe)
-    const skill = Math.min(1, SKILL[L.id] + (screen.kind === 'rival' ? 0.1 : screen.kind === 'champion' ? 0.15 : 0))
+    const skill = Math.max(0.2, Math.min(1.2, SKILL[L.id] + rules(save).skill + (screen.kind === 'rival' ? 0.1 : screen.kind === 'champion' ? 0.15 : 0)))
     const round = t ? ROUND_NAMES[t.rounds.length - 1] : ''
     const label = screen.kind === 'tournament' ? `${L.name} · Tournament ${round}` : screen.kind === 'champion' ? `${L.name} · Champion bout` : screen.kind === 'rival' ? `${L.name} · Grudge match` : `${L.name} · Exhibition`
     const { foe, kind } = screen

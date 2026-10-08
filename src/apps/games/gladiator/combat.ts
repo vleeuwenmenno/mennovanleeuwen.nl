@@ -112,6 +112,9 @@ export const ATTACKS: Record<AttackType, { name: string; base: number; dmg: numb
 
 export const attackCost = (x: Fighter, type: AttackType) => Math.round(ATTACKS[type].sta * x.d.weapon.cost)
 export const moveCost = (x: Fighter) => Math.round(3 + x.d.burden * 0.6)
+/** Backing off is slower and more tiring than pressing in, so you can't hit and run forever. */
+export const RETREAT = 0.55
+export const retreatCost = (x: Fighter) => moveCost(x) + 2
 export const spellCost = (x: Fighter, id: SpellId) => Math.round(spell(id).mana * (has(x.g, 'arcane') ? 0.8 : 1))
 export const TAUNT_COST = 5
 export const inReach = (fight: Fight, who: 0 | 1) => dist(fight) <= CONTACT + fight.f[who].d.weapon.reach + 2
@@ -143,7 +146,7 @@ export function blockers(fight: Fight, who: 0 | 1) {
   const close = dist(fight) <= CONTACT + 1
   const wallBehind = dir > 0 ? a.x <= ARENA_MIN + 1 : a.x >= ARENA_MAX - 1
   out.advance = close ? 'Already toe to toe' : a.sta < moveCost(a) ? 'Too tired' : null
-  out.retreat = wallBehind ? 'Back against the wall' : a.sta < moveCost(a) ? 'Too tired' : null
+  out.retreat = wallBehind ? 'Back against the wall' : a.sta < retreatCost(a) ? 'Too tired' : null
   for (const t of ['quick', 'normal', 'power'] as AttackType[]) out[t] = !inReach(fight, who) ? 'Out of reach' : a.sta < attackCost(a, t) ? 'Too tired' : null
   out.taunt = a.sta < TAUNT_COST ? 'Too tired' : null
   out.rest = null
@@ -226,13 +229,13 @@ export function act(fight: Fight, action: Action, r: Rand = Math.random) {
   switch (action.kind) {
     case 'advance':
     case 'retreat': {
-      const step = a.d.move * (statusOf(a, 'slowed') ? 0.5 : 1)
+      const step = a.d.move * (statusOf(a, 'slowed') ? 0.5 : 1) * (action.kind === 'retreat' ? RETREAT : 1)
       const from = a.x
       let to = from + (action.kind === 'advance' ? dir : -dir) * step
       if (action.kind === 'advance') to = dir > 0 ? Math.min(to, b.x - CONTACT) : Math.max(to, b.x + CONTACT)
       to = clamp(to, ARENA_MIN, ARENA_MAX)
       a.x = to
-      a.sta -= moveCost(a)
+      a.sta -= action.kind === 'retreat' ? retreatCost(a) : moveCost(a)
       if (action.kind === 'retreat') addFavour(fight, a, -3, r)
       emit({ t: 'move', who, from, to })
       break

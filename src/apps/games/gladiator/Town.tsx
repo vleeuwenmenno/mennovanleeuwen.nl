@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react'
-import { entrantName, foeGladiator, respecPrice, rivalLevel, trainPrice, tournamentFoe, unlocked, type Foe, type Save } from './career'
+import { entrantName, foeGladiator, respecPrice, rivalLevel, rules, trainPrice, tournamentFoe, unlocked, type Foe, type Save } from './career'
+import { DifficultyPicker } from './Menus'
 import { canWear, derive, equip, gearStats, rng, xpFor, type Gladiator } from './character'
 import {
   ARMOUR_SLOTS, BASE_STAT, ITEMS, item, league, LEAGUES, MATERIALS, MAX_POTIONS, PERKS, potionPrice, POTIONS, SLOT_NAMES, SPELLS, STATS, WEAPON_TYPES,
@@ -36,7 +37,10 @@ export function TopBar({ save, onMenu }: { save: Save; onMenu: () => void }) {
       </button>
       <div className="gl-top-name">
         <strong>{g.name}</strong>
-        <span>{g.title ?? (save.mode === 'hardcore' ? 'Hardcore gladiator' : 'Gladiator')}</span>
+        <span>
+          {g.title ?? 'Gladiator'} · {rules(save).name}
+          {save.mode === 'hardcore' ? ' · Hardcore' : ''}
+        </span>
       </div>
       <div className="gl-top-level" title={`${g.xp} / ${xpFor(g.level)} XP`}>
         <span>Lv {g.level}</span>
@@ -185,7 +189,7 @@ export function ArenaBoard({ save, onBack, onFight, onTournament, onLeague, onRe
                 {champ.name} {champ.title}
               </strong>
               <span>
-                Lv {champ.level} {ARCH_TEXT[champ.archetype]}
+                Lv {champG.level} {ARCH_TEXT[champ.archetype]}
               </span>
               <span className="gl-muted">{canChamp ? 'Accepts your challenge.' : 'Win a tournament here to earn a challenge.'}</span>
             </div>
@@ -538,6 +542,9 @@ export function Sheet({ save, update, onBack, sound }: { save: Save; update: Upd
               </div>
             </div>
           ))}
+          <h3>Difficulty</h3>
+          <DifficultyPicker value={save.difficulty ?? 'normal'} onPick={(difficulty) => (sound.ui(), update((s) => ({ ...s, difficulty })))} />
+          <p className="gl-muted gl-fine">Changes apply from your next fight. Bouts already on offer keep their levels.</p>
           <h3>Record</h3>
           <p>
             {save.record.wins} wins, {save.record.losses} losses. Tournaments: {LEAGUES.map((l) => `${l.name} ${save.tourneyWins[l.id]}`).join(', ')}.

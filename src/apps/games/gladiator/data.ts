@@ -288,6 +288,37 @@ export const LEAGUES: League[] = [
 ]
 export const league = (id: LeagueId) => LEAGUES.find((l) => l.id === id)!
 
+// --- Difficulty ----------------------------------------------------------------------------------
+
+export type Difficulty = 'easy' | 'normal' | 'hard' | 'legendary'
+export type DifficultyRules = {
+  name: string
+  text: string
+  /** Added to the computer's sharpness (0 erratic, 1 and above near-perfect). */
+  skill: number
+  /** Multiplies the stat points opponents have earned above the base. */
+  stats: number
+  /** Chance an opponent's piece of gear is a tier behind the best their level allows. */
+  lag: number
+  /** Level offsets of the three bouts on offer, from the warm-up to the tough draw. */
+  offers: [number, number, number]
+  /** Tournament entrants' level range around yours. */
+  field: [number, number]
+  /** Share of missing health the surgeon restores between tournament rounds. */
+  surgeon: number
+  /** Extra levels for league champions. */
+  champion: number
+  /** Gold and experience multiplier, so harder is worth it. */
+  reward: number
+}
+export const DIFFICULTIES: Record<Difficulty, DifficultyRules> = {
+  easy: { name: 'Easy', text: 'Forgiving opponents with hand-me-down gear.', skill: -0.1, stats: 0.9, lag: 0.85, offers: [-1, 0, 1], field: [-2, 1], surgeon: 0.5, champion: -2, reward: 0.85 },
+  normal: { name: 'Normal', text: 'Opponents who fight back and keep up with your kit.', skill: 0.15, stats: 1, lag: 0.5, offers: [0, 1, 2], field: [-1, 2], surgeon: 0.35, champion: 0, reward: 1 },
+  hard: { name: 'Hard', text: 'Sharp, stronger opponents in up-to-date gear. Better pay.', skill: 0.3, stats: 1.05, lag: 0.35, offers: [0, 1, 3], field: [0, 3], surgeon: 0.2, champion: 2, reward: 1.25 },
+  legendary: { name: 'Legendary', text: 'Everyone is stronger than you. No surgeon. Glory pays double... almost.', skill: 0.45, stats: 1.25, lag: 0, offers: [1, 2, 3], field: [1, 3], surgeon: 0, champion: 3, reward: 1.5 },
+}
+export const DIFFICULTY_IDS = Object.keys(DIFFICULTIES) as Difficulty[]
+
 // --- Names and looks -----------------------------------------------------------------------------
 
 export const FIRST_NAMES = [

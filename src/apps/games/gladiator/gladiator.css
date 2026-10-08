@@ -817,6 +817,12 @@
   background: #fff8e6;
   box-shadow: inset 0 0 0 2px rgba(200, 40, 30, 0.3);
 }
+.gl-difficulty {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
 .gl-modes {
   display: grid;
   grid-template-columns: 1fr 1fr;
