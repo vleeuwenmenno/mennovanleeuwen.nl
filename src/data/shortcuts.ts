@@ -9,7 +9,7 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
       ['Ctrl K', 'Spotlight: search, maths, units, currencies'],
       ['Esc', 'close menus, Spotlight, launcher'],
       ['Right-click', 'menus on desktop, icons, dock, files'],
-      ['Hover', 'focus and raise a window'],
+      ['Click a window', 'focus it and bring it forward'],
     ],
   },
   {
@@ -17,6 +17,11 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
     keys: [
       ['Double-click title', 'maximize / restore'],
       ['Drag title / edges', 'move / resize'],
+      ['Drag to left / right edge', 'snap to half the screen'],
+      ['Drag to a corner', 'snap to a quarter'],
+      ['Drag to top edge', 'maximize'],
+      ['Drag a snapped window', 'back to its old size'],
+      ['Hover bottom edge', 'show the dock'],
       ['Click dock icon', 'open, focus or minimize'],
       ['Right-click dock', 'new window, quit'],
       ['Drag dock icon', 'reorder the dock'],

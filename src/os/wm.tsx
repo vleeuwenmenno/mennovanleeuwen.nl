@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, type ReactNode } from 'react'
 
 export type AppId = 'terminal' | 'files' | 'viewer' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'trash'
 
@@ -15,7 +15,44 @@ export type WinState = {
   /** Bumped when an already-open app is asked to show something else (e.g. a project) */
   props: Record<string, string | undefined>
   openedAt: number
+  /** Set while the window is snapped to a half or quarter of the screen */
+  snap?: SnapZone
+  /** The geometry to go back to when a snapped window is dragged away */
+  restore?: Geometry
 }
+
+export type SnapZone = 'left' | 'right' | 'tl' | 'tr' | 'bl' | 'br'
+
+const GAP = 10 // Omarchy's gaps_out; windows next to each other get the same gap between them
+const BAR = 28
+
+/** Where a snapped window goes, for the current viewport. */
+export function snapRect(zone: SnapZone, vw = window.innerWidth, vh = window.innerHeight): Geometry {
+  const x0 = GAP
+  const y0 = BAR + GAP
+  const w = vw - 2 * GAP
+  const h = vh - BAR - 2 * GAP
+  const hw = Math.floor((w - GAP) / 2)
+  const hh = Math.floor((h - GAP) / 2)
+  const right = x0 + hw + GAP
+  const bottom = y0 + hh + GAP
+  switch (zone) {
+    case 'left':
+      return { x: x0, y: y0, w: hw, h }
+    case 'right':
+      return { x: right, y: y0, w: w - hw - GAP, h }
+    case 'tl':
+      return { x: x0, y: y0, w: hw, h: hh }
+    case 'tr':
+      return { x: right, y: y0, w: w - hw - GAP, h: hh }
+    case 'bl':
+      return { x: x0, y: bottom, w: hw, h: h - hh - GAP }
+    case 'br':
+      return { x: right, y: bottom, w: w - hw - GAP, h: h - hh - GAP }
+  }
+}
+
+export type GeometryPatch = Partial<Geometry> & { snap?: SnapZone; restore?: Geometry; maximized?: boolean }
 
 export type Geometry = { x: number; y: number; w: number; h: number }
 
@@ -28,7 +65,7 @@ type Action =
   | { type: 'focus'; pid: number }
   | { type: 'minimize'; pid: number }
   | { type: 'toggleMax'; pid: number }
-  | { type: 'setGeometry'; pid: number; geometry: Partial<Geometry> }
+  | { type: 'setGeometry'; pid: number; geometry: GeometryPatch }
   | { type: 'viewport'; width: number; height: number; layout: { app: AppId; geometry: Geometry }[] }
 
 /** `touched` flips once the visitor moves, resizes or opens something; until then a viewport
@@ -36,7 +73,6 @@ type Action =
  * last received focus; it falls back to the frontmost one when that window closes or minimizes. */
 type State = { windows: WinState[]; nextPid: number; topZ: number; touched: boolean; focused: number | null }
 
-export type FocusMode = 'hover' | 'click'
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -89,6 +125,7 @@ function reducer(state: State, action: Action): State {
       return {
         ...state,
         windows: state.windows.map((w) => {
+          if (w.snap) return { ...w, ...snapRect(w.snap, width, height) }
           const fresh = !state.touched && action.layout.find((l) => l.app === w.app)
           const g = fresh ? fresh.geometry : w
           const ww = Math.max(240, Math.min(g.w, width - 16))
@@ -108,17 +145,14 @@ type WM = {
   /** Always opens another window, except for single-instance apps. */
   openNew: (app: AppId, props?: WinState['props']) => void
   close: (pid: number) => void
-  /** Raises and focuses a window (on click, or on hover in 'hover' focus mode). */
+  /** Raises and focuses a window. */
   focus: (pid: number) => void
-  focusMode: FocusMode
-  setFocusMode: (mode: FocusMode) => void
   minimize: (pid: number) => void
   toggleMax: (pid: number) => void
-  setGeometry: (pid: number, geometry: Partial<Geometry>) => void
+  setGeometry: (pid: number, geometry: GeometryPatch) => void
 }
 
 const Ctx = createContext<WM | null>(null)
-const FOCUS_KEY = 'mvlos.focusMode'
 /** Files' trash view (see apps/Files.tsx). */
 const TRASH_PATH = 'trash://'
 
@@ -137,22 +171,6 @@ export function WindowManagerProvider({
     for (const w of init) s = reducer(s, { type: 'open', app: w.app, geometry: w.geometry, props: w.props })
     return { ...s, touched: false }
   })
-
-  const [focusMode, setFocusModeState] = useState<FocusMode>(() => {
-    try {
-      return localStorage.getItem(FOCUS_KEY) === 'click' ? 'click' : 'hover'
-    } catch {
-      return 'hover'
-    }
-  })
-  const setFocusMode = useCallback((mode: FocusMode) => {
-    setFocusModeState(mode)
-    try {
-      localStorage.setItem(FOCUS_KEY, mode)
-    } catch {
-      /* not persisted */
-    }
-  }, [])
 
   // "Trash" is a place, not an app: it opens in Files (whose trash:// view lists trashed items).
   const open = useCallback(
@@ -196,13 +214,11 @@ export function WindowManagerProvider({
       openNew,
       close: (pid) => dispatch({ type: 'close', pid }),
       focus: (pid) => dispatch({ type: 'focus', pid }),
-      focusMode,
-      setFocusMode,
       minimize: (pid) => dispatch({ type: 'minimize', pid }),
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
       setGeometry: (pid, geometry) => dispatch({ type: 'setGeometry', pid, geometry }),
     }
-  }, [state.windows, state.focused, open, openNew, focusMode, setFocusMode])
+  }, [state.windows, state.focused, open, openNew])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

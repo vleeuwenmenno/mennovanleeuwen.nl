@@ -4,6 +4,8 @@ import { APP_META } from './apps'
 import { Launchpad } from './Launchpad'
 import { setOverlay, toggleOverlay, useOverlay } from './overlays'
 import { Spotlight } from './Spotlight'
+import { useSnapPreview } from './snapPreview'
+import { dockAutohide } from './dockPrefs'
 import { ContextMenuHost, openContextMenu } from './ContextMenu'
 import { Desktop } from './Desktop'
 import { AppIcon } from './icons'
@@ -160,8 +162,41 @@ function saveOrder(order: AppId[]) {
   }
 }
 
+/**
+ * Auto-hide: the dock slides away and comes back when the pointer reaches the bottom edge (or
+ * rests on the dock). Touch screens have no hover, so there it always stays. It also shows for a
+ * moment after boot so visitors know it exists, and while the launcher is open.
+ */
+function useDockVisibility(pinned: boolean) {
+  const [autohide, setAutohide] = useState(dockAutohide.get)
+  const [hover, setHover] = useState(true)
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const touch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches
+
+  useEffect(() => {
+    const sync = () => setAutohide(dockAutohide.get())
+    window.addEventListener('mvlos:dock', sync)
+    hideTimer.current = setTimeout(() => setHover(false), 2500)
+    return () => {
+      window.removeEventListener('mvlos:dock', sync)
+      if (hideTimer.current) clearTimeout(hideTimer.current)
+    }
+  }, [])
+
+  const show = () => {
+    if (hideTimer.current) clearTimeout(hideTimer.current)
+    setHover(true)
+  }
+  const hideSoon = () => {
+    if (hideTimer.current) clearTimeout(hideTimer.current)
+    hideTimer.current = setTimeout(() => setHover(false), 450)
+  }
+  return { visible: !autohide || touch || pinned || hover, autohide: autohide && !touch, show, hideSoon }
+}
+
 function Dock() {
   const wm = useWM()
+  const overlay = useOverlay()
   const [order, setOrder] = useState<AppId[]>(loadOrder)
   const [dragging, setDragging] = useState<{ app: AppId; dx: number } | null>(null)
   const drag = useRef<{ app: AppId; startX: number; moved: boolean } | null>(null)
@@ -170,6 +205,7 @@ function Dock() {
   const orderRef = useRef(order)
   orderRef.current = order
   const suppressClick = useRef(false)
+  const dock = useDockVisibility(!!dragging || overlay === 'launchpad')
 
   // FLIP: icons that changed slot slide from where they were instead of jumping.
   useLayoutEffect(() => {
@@ -304,7 +340,15 @@ function Dock() {
   }
 
   return (
-    <nav className={`dock ${dragging ? 'is-reordering' : ''}`} aria-label="Dock">
+    <>
+    {dock.autohide && <div className="dock-hotzone" onPointerEnter={dock.show} onPointerLeave={dock.hideSoon} aria-hidden />}
+    <nav
+      className={`dock ${dragging ? 'is-reordering' : ''} ${dock.visible ? '' : 'is-hidden'}`}
+      aria-label="Dock"
+      onPointerEnter={dock.show}
+      onPointerLeave={() => !dragging && dock.hideSoon()}
+      onFocus={dock.show}
+    >
       <button className="dock-item" onClick={() => toggleOverlay('launchpad')} aria-label="All apps">
         <span className="app-icon lp-dock-icon" style={{ width: 48, height: 48 }}>
           {Array.from({ length: 9 }, (_, i) => (
@@ -318,7 +362,14 @@ function Dock() {
       <span className="dock-sep" />
       {appButton('trash')}
     </nav>
+    </>
   )
+}
+
+function SnapPreview() {
+  const g = useSnapPreview()
+  if (!g) return null
+  return <div className="snap-preview" style={{ left: g.x, top: g.y, width: g.w, height: g.h }} aria-hidden />
 }
 
 const BOOT = [
@@ -399,6 +450,7 @@ export function Shell() {
           </Window>
         ))}
       </main>
+      <SnapPreview />
       <Dock />
       {overlay === 'launchpad' && <Launchpad />}
       {overlay === 'spotlight' && <Spotlight />}

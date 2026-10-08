@@ -706,10 +706,20 @@ body.is-resizing * {
   display: none;
 }
 .window.is-max {
-  left: 8px !important;
-  top: calc(var(--top) + 8px) !important;
-  width: calc(100vw - 16px) !important;
-  height: calc(100vh - var(--top) - 104px) !important;
+  /* Full screen inside Omarchy's 10px gaps; the dock hides, so it does not reserve space. */
+  left: 10px !important;
+  top: calc(var(--top) + 10px) !important;
+  width: calc(100vw - 20px) !important;
+  height: calc(100vh - var(--top) - 20px) !important;
+}
+.snap-preview {
+  position: fixed;
+  z-index: 99990;
+  border: var(--border) solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  pointer-events: none;
+  transition: left 0.12s ease, top 0.12s ease, width 0.12s ease, height 0.12s ease;
+  animation: ctx-in 0.1s ease-out;
 }
 
 .titlebar {
@@ -3094,6 +3104,20 @@ button.fm-dd-row:hover {
   border: 1px solid var(--line-strong);
   box-shadow: 0 16px 36px -12px rgba(0, 0, 0, 0.45);
   max-width: calc(100vw - 16px);
+}
+.dock {
+  transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.dock.is-hidden {
+  transform: translate(-50%, calc(100% + 24px));
+}
+.dock-hotzone {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 6px;
+  z-index: 100001;
 }
 .dock-item {
   position: relative;
