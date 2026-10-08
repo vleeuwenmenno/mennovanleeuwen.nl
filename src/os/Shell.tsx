@@ -12,7 +12,7 @@ import { Desktop } from './Desktop'
 import { AppIcon } from './icons'
 import { ACCENTS, currentAccent, setAccent } from './theme'
 import { Window } from './Window'
-import { useWM, type AppId, type Geometry, type WinState } from './wm'
+import { SINGLE_INSTANCE, useWM, type AppId, type Geometry, type WinState } from './wm'
 
 export const APP_META: Record<AppId, { title: string; dock: string; size: [number, number]; chrome?: 'note'; render: (w: WinState) => ReactNode }> = {
   terminal: { title: 'menno@mvlos: ~', dock: 'Terminal', size: [760, 500], render: (w) => <Terminal win={w} /> },
@@ -49,12 +49,12 @@ export function placement(app: AppId, openCount: number): Geometry {
 }
 
 /** The opening layout: sticky note on the left, terminal beside it. */
-export function initialLayout(): { app: AppId; geometry: Geometry }[] {
+export function initialLayout(): { app: AppId; geometry: Geometry; props?: WinState['props'] }[] {
   const vw = window.innerWidth
   const vh = window.innerHeight
   if (vw < 720) {
     return [
-      { app: 'terminal', geometry: placement('terminal', 0) },
+      { app: 'terminal', geometry: placement('terminal', 0), props: { motd: '1' } },
       { app: 'notes', geometry: { x: 16, y: TOP + 16, w: vw - 32, h: 340 } },
     ]
   }
@@ -66,14 +66,14 @@ export function initialLayout(): { app: AppId; geometry: Geometry }[] {
     const gutter = vw >= 900 ? 124 : 24 // keep the desktop icons visible when there is room
     const termW = Math.min(760, Math.max(420, vw - noteW - 36 - gutter))
     return [
-      { app: 'terminal', geometry: { x: vw - termW - gutter, y: top, w: termW, h: termH } },
+      { app: 'terminal', geometry: { x: vw - termW - gutter, y: top, w: termW, h: termH }, props: { motd: '1' } },
       { app: 'notes', geometry: { x: 28, y: top + 30, w: noteW, h: 350 } },
     ]
   }
   const termW = 780
   const left = Math.round((vw - (noteW + 40 + termW)) / 2)
   return [
-    { app: 'terminal', geometry: { x: left + noteW + 40, y: top, w: termW, h: termH } },
+    { app: 'terminal', geometry: { x: left + noteW + 40, y: top, w: termW, h: termH }, props: { motd: '1' } },
     { app: 'notes', geometry: { x: left, y: top + 20, w: noteW, h: 350 } },
   ]
 }
@@ -149,24 +149,31 @@ function Dock() {
             key={app}
             className="dock-item"
             onClick={() => {
-              const w = wm.windows.find((x) => x.app === app)
-              if (w && w.pid === wm.focusedPid && !w.minimized) wm.minimize(w.pid)
+              const wins = wm.windows.filter((x) => x.app === app)
+              const focused = wins.find((x) => x.pid === wm.focusedPid && !x.minimized)
+              if (focused) wm.minimize(focused.pid)
               else wm.open(app)
             }}
             aria-label={APP_META[app].dock}
             onContextMenu={(e) => {
-              const w = wm.windows.find((x) => x.app === app)
+              const wins = wm.windows.filter((x) => x.app === app).sort((a, b) => a.pid - b.pid)
+              const multi = !SINGLE_INSTANCE.has(app)
               openContextMenu(e, [
-                { label: w ? 'Show' : 'Open', onSelect: () => wm.open(app) },
-                ...(w && !w.minimized ? [{ label: 'Minimize', onSelect: () => wm.minimize(w.pid) }] : []),
-                ...(app === 'terminal' ? [{ label: 'Run fastfetch', onSelect: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) }] : []),
-                ...(w ? [{ separator: true as const }, { label: 'Quit', danger: true, onSelect: () => wm.close(w.pid) }] : []),
+                ...wins.map((w) => ({ label: `${APP_META[w.app].dock} · pid ${w.pid}${w.minimized ? ' (minimized)' : ''}`, onSelect: () => wm.focus(w.pid) })),
+                ...(wins.length ? [{ separator: true as const }] : []),
+                wins.length && multi ? { label: 'New window', onSelect: () => wm.openNew(app) } : { label: wins.length ? 'Show' : 'Open', onSelect: () => wm.open(app) },
+                ...(wins.some((w) => !w.minimized) ? [{ label: wins.length > 1 ? 'Minimize all' : 'Minimize', onSelect: () => wins.forEach((w) => wm.minimize(w.pid)) }] : []),
+                ...(wins.length ? [{ separator: true as const }, { label: wins.length > 1 ? `Quit all ${wins.length}` : 'Quit', danger: true, onSelect: () => wins.forEach((w) => wm.close(w.pid)) }] : []),
               ])
             }}
           >
             <AppIcon app={app} />
             <span className="dock-label">{APP_META[app].dock}</span>
-            <span className={`dock-dot ${wm.windows.some((w) => w.app === app) ? 'is-on' : ''}`} />
+            <span className="dock-dots">
+              {Array.from({ length: Math.max(1, Math.min(3, wm.windows.filter((w) => w.app === app).length)) }, (_, n) => (
+                <span key={n} className={`dock-dot ${wm.windows.some((w) => w.app === app) ? 'is-on' : ''}`} />
+              ))}
+            </span>
           </button>
         ),
       )}

@@ -63,14 +63,19 @@ function loadHistory(): string[] {
 
 export function Terminal({ win }: { win: WinState }) {
   const wm = useWM()
-  const [entries, setEntries] = useState<Entry[]>(() => [
-    { id: nextId++, kind: 'out', text: fastfetch({ windows: wm.windows }) },
-    {
-      id: nextId++,
-      kind: 'out',
-      text: `\nWelcome to {c:accent}MvL OS{/}. Type {c:green}help{/} to see what works, or try {c:green}projects{/}, {c:green}recent{/}, {c:green}cat cv.md{/}.\n`,
-    },
-  ])
+  // Only the terminal that opens at boot greets the visitor; any terminal opened later starts clean.
+  const [entries, setEntries] = useState<Entry[]>(() =>
+    win.props.motd
+      ? [
+          { id: nextId++, kind: 'out', text: fastfetch({ windows: wm.windows }) },
+          {
+            id: nextId++,
+            kind: 'out',
+            text: `\nWelcome to {c:accent}MvL OS{/}. Type {c:green}help{/} to see what works, or try {c:green}projects{/}, {c:green}recent{/}, {c:green}cat cv.md{/}.\n`,
+          },
+        ]
+      : [],
+  )
   const [cwd, setCwd] = useState(HOME)
   const [value, setValue] = useState('')
   const [running, setRunning] = useState(false)
@@ -134,6 +139,7 @@ export function Terminal({ win }: { win: WinState }) {
       history: history.current,
       windows: windowsRef.current,
       openApp: wm.open,
+      openNewApp: wm.openNew,
       closeWindow: wm.close,
       clear: () => setEntries([]),
       exit: () => setTimeout(() => wm.close(win.pid), 120),

@@ -19,8 +19,11 @@ export type WinState = {
 
 export type Geometry = { x: number; y: number; w: number; h: number }
 
+/** Apps that only ever have one window; everything else can be opened again with "New window". */
+export const SINGLE_INSTANCE = new Set<AppId>(['notes', 'trash'])
+
 type Action =
-  | { type: 'open'; app: AppId; geometry: Geometry; props?: WinState['props'] }
+  | { type: 'open'; app: AppId; geometry: Geometry; props?: WinState['props']; newInstance?: boolean }
   | { type: 'close'; pid: number }
   | { type: 'focus'; pid: number }
   | { type: 'minimize'; pid: number }
@@ -35,7 +38,10 @@ type State = { windows: WinState[]; nextPid: number; topZ: number; touched: bool
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case 'open': {
-      const existing = state.windows.find((w) => w.app === action.app)
+      // Reuse the app's frontmost window unless a new one was asked for.
+      const existing = action.newInstance && !SINGLE_INSTANCE.has(action.app)
+        ? undefined
+        : state.windows.filter((w) => w.app === action.app).sort((a, b) => b.z - a.z)[0]
       const z = state.topZ + 1
       if (existing) {
         return {
@@ -92,7 +98,10 @@ function reducer(state: State, action: Action): State {
 type WM = {
   windows: WinState[]
   focusedPid: number | null
+  /** Focuses the app's frontmost window (passing it `props`), or opens one if none is open. */
   open: (app: AppId, props?: WinState['props']) => void
+  /** Always opens another window, except for single-instance apps. */
+  openNew: (app: AppId, props?: WinState['props']) => void
   close: (pid: number) => void
   focus: (pid: number) => void
   minimize: (pid: number) => void
@@ -108,19 +117,25 @@ export function WindowManagerProvider({
   placement,
 }: {
   children: ReactNode
-  initial: () => { app: AppId; geometry: Geometry }[]
+  initial: () => { app: AppId; geometry: Geometry; props?: WinState['props'] }[]
   placement: (app: AppId, openCount: number) => Geometry
 }) {
   const [state, dispatch] = useReducer(reducer, relayout, (make) => {
     const init = make()
     let s: State = { windows: [], nextPid: 100, topZ: 10, touched: false }
-    for (const w of init) s = reducer(s, { type: 'open', app: w.app, geometry: w.geometry })
+    for (const w of init) s = reducer(s, { type: 'open', app: w.app, geometry: w.geometry, props: w.props })
     return { ...s, touched: false }
   })
 
   const open = useCallback(
     (app: AppId, props?: WinState['props']) => {
       dispatch({ type: 'open', app, props, geometry: placement(app, state.windows.length) })
+    },
+    [placement, state.windows.length],
+  )
+  const openNew = useCallback(
+    (app: AppId, props?: WinState['props']) => {
+      dispatch({ type: 'open', app, props, newInstance: true, geometry: placement(app, state.windows.length) })
     },
     [placement, state.windows.length],
   )
@@ -147,13 +162,14 @@ export function WindowManagerProvider({
       windows: state.windows,
       focusedPid: top?.pid ?? null,
       open,
+      openNew,
       close: (pid) => dispatch({ type: 'close', pid }),
       focus: (pid) => dispatch({ type: 'focus', pid }),
       minimize: (pid) => dispatch({ type: 'minimize', pid }),
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
       setGeometry: (pid, geometry) => dispatch({ type: 'setGeometry', pid, geometry }),
     }
-  }, [state.windows, open])
+  }, [state.windows, open, openNew])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

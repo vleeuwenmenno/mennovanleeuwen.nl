@@ -25,6 +25,7 @@ export type Ctx = {
   history: string[]
   windows: WinState[]
   openApp: (app: AppId, props?: Record<string, string>) => void
+  openNewApp: (app: AppId, props?: Record<string, string>) => void
   closeWindow: (pid: number) => void
   clear: () => void
   exit: () => void
@@ -440,8 +441,14 @@ export const commands: Record<string, Command> = {
   exit: { desc: 'close this terminal', run: (ctx) => ctx.exit() },
   open: {
     desc: 'open an app, file or URL',
-    usage: 'open <app|file|url>',
+    usage: 'open [-n] <app|file|url>   (-n opens a new window)',
     run: (ctx) => {
+      if (ctx.args[0] === '-n') {
+        const app = APPS[ctx.args[1] ?? '']
+        if (!app) throw new CmdError(`open: -n needs an app name: ${Object.keys(APPS).join(', ')}`)
+        ctx.openNewApp(app)
+        return
+      }
       const target = ctx.args[0]
       if (!target) return `usage: open <app|file|url>\napps: ${Object.keys(APPS).filter((k, i, a) => a.findIndex((x) => APPS[x] === APPS[k]) === i).join(', ')}`
       if (/^https?:\/\//.test(target)) {

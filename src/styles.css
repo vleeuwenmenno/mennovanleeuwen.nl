@@ -1496,6 +1496,10 @@ body.is-resizing * {
   opacity: 1;
   transform: none;
 }
+.dock-dots {
+  display: flex;
+  gap: 3px;
+}
 .dock-dot {
   width: 4px;
   height: 4px;
