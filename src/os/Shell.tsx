@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useRecents } from '../data/recents'
 import { APP_META } from './apps'
+import { Launchpad } from './Launchpad'
+import { setOverlay, toggleOverlay, useOverlay } from './overlays'
+import { Spotlight } from './Spotlight'
 import { ContextMenuHost, openContextMenu } from './ContextMenu'
 import { Desktop } from './Desktop'
 import { AppIcon } from './icons'
@@ -72,7 +75,7 @@ function TopBar() {
   return (
     <header className="topbar">
       <div className="topbar-left">
-        <button className="logo" onClick={() => wm.open('cv')} title="About this Menno">
+        <button className="logo" onClick={() => toggleOverlay('launchpad')} title="All apps">
           <svg viewBox="0 0 64 64" width="16" height="16" aria-hidden>
             <path d="M14 46V18l18 16 18-16v28" fill="none" stroke="currentColor" strokeWidth="7" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
@@ -89,6 +92,13 @@ function TopBar() {
           ))}
       </div>
       <div className="topbar-right">
+        <button className="tb-search" onClick={() => toggleOverlay('spotlight')} title="Search (Ctrl+K)" aria-label="Search">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
+            <circle cx="11" cy="11" r="7" />
+            <path d="M20 20l-3.5-3.5" />
+          </svg>
+          <kbd>Ctrl K</kbd>
+        </button>
         <button className="status" onClick={() => wm.open('recents')} title="Recent activity">
           <span className={`live-dot ${recents.live ? 'is-live' : ''}`} />
           {recents.live ? 'GitHub live' : recents.status === 'loading' ? 'syncing' : 'offline'}
@@ -113,6 +123,17 @@ function Dock() {
   const wm = useWM()
   return (
     <nav className="dock" aria-label="Dock">
+      <button className="dock-item" onClick={() => toggleOverlay('launchpad')} aria-label="All apps">
+        <span className="app-icon lp-dock-icon" style={{ width: 48, height: 48 }}>
+          {Array.from({ length: 9 }, (_, i) => (
+            <span key={i} />
+          ))}
+        </span>
+        <span className="dock-label">All apps</span>
+        <span className="dock-dots">
+          <span className="dock-dot" />
+        </span>
+      </button>
       {DOCK.map((app, i) =>
         app === '|' ? (
           <span key={i} className="dock-sep" />
@@ -198,6 +219,19 @@ function shouldBoot() {
 export function Shell() {
   const wm = useWM()
   const [booting, setBooting] = useState(shouldBoot)
+  const overlay = useOverlay()
+
+  // Ctrl+K / Cmd+K opens Spotlight from anywhere, including inside the terminal.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        toggleOverlay('spotlight')
+      } else if (e.key === 'Escape' && overlay) setOverlay(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [overlay])
 
   return (
     <div className={`desktop ${booting ? 'is-booting' : ''}`}>
@@ -219,6 +253,8 @@ export function Shell() {
         ))}
       </main>
       <Dock />
+      {overlay === 'launchpad' && <Launchpad />}
+      {overlay === 'spotlight' && <Spotlight />}
       <ContextMenuHost />
       {booting && <Boot onDone={() => setBooting(false)} />}
     </div>
