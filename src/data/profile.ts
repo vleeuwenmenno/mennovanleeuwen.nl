@@ -48,6 +48,8 @@ export type Project = {
   accent: string
   /** GitHub "owner/name", used for live stars and activity */
   github?: string
+  /** git.mvl.sh repo (or "org/" prefix) whose activity belongs to this project */
+  forgejo?: string
 }
 
 export const projects: Project[] = [
@@ -115,8 +117,31 @@ export const projects: Project[] = [
     stack: ['Go', 'Starlark', 'gRPC', 'Protobuf'],
     url: 'https://pepper.mvl.sh/',
     repo: 'https://git.mvl.sh/pepper',
+    forgejo: 'pepper/',
     status: 'Active development',
     accent: '#ff6b5b',
+  },
+  {
+    slug: 'golinks',
+    name: 'Go Links',
+    tagline: 'Short, memorable go links, self-hosted at mvl.sh',
+    description:
+      'A self-hosted go-links service: give a long URL a short alias you can remember and share. ' +
+      'Everyone gets their own aliases, and private links stay behind revocable access tokens. ' +
+      'It runs at mvl.sh.',
+    highlights: [
+      'User-owned aliases with redirects through short slugs',
+      'Revocable access tokens for private links (/r/{slug}?token=…)',
+      'Turnstile-protected registration and SQLite-backed sessions',
+      'Password reset by email',
+      'Container images published from Gitea Actions on every release',
+    ],
+    stack: ['Rust', 'SQLite', 'Docker'],
+    url: 'https://mvl.sh/',
+    repo: 'https://git.mvl.sh/vleeuwenmenno/golinks',
+    forgejo: 'vleeuwenmenno/golinks',
+    status: 'Live',
+    accent: '#bb9af7',
   },
   {
     slug: 'omasoloist',

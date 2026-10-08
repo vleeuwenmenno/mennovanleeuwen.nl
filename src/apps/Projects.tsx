@@ -20,7 +20,7 @@ function Detail({ item, onBack }: { item: Item; onBack: () => void }) {
   const wm = useWM()
   const recents = useRecents()
   const d = item.data
-  const repoKey = item.kind === 'project' ? d.github ?? (d.slug === 'pepper' ? 'pepper/' : undefined) : d.github
+  const repoKey = item.kind === 'project' ? (item.data.github ?? item.data.forgejo) : item.data.github
   const activity = repoKey ? recents.items.filter((a) => a.repo.startsWith(repoKey)).slice(0, 5) : []
   const accent = item.data.accent
 

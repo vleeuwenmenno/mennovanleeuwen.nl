@@ -14,6 +14,7 @@ const GITHUB_USER = 'vleeuwenmenno'
 const GITHUB_RELEASE_REPOS = ['vleeuwenmenno/boltwarden', 'vleeuwenmenno/omasoloist']
 const FORGEJO = 'https://git.mvl.sh'
 const FORGEJO_ORGS = ['pepper']
+const FORGEJO_REPOS = ['vleeuwenmenno/golinks']
 
 const ghHeaders: Record<string, string> = { Accept: 'application/vnd.github+json', 'User-Agent': 'mennovanleeuwen.nl' }
 if (process.env.GITHUB_TOKEN) ghHeaders.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`
@@ -40,6 +41,9 @@ const lists = await Promise.all([
   attempt('github events', async () => normalizeGithubEvents(await json(`https://api.github.com/users/${GITHUB_USER}/events/public?per_page=100`, ghHeaders))),
   ...GITHUB_RELEASE_REPOS.map((repo) =>
     attempt(`${repo} releases`, async () => normalizeGithubReleases(repo, await json(`https://api.github.com/repos/${repo}/releases?per_page=10`, ghHeaders))),
+  ),
+  ...FORGEJO_REPOS.map((repo) =>
+    attempt(`${FORGEJO}/${repo}`, async () => normalizeForgejoFeed(FORGEJO, await json(`${FORGEJO}/api/v1/repos/${repo}/activities/feeds?limit=30`))),
   ),
   ...FORGEJO_ORGS.map((org) =>
     attempt(`${FORGEJO}/${org}`, async () => normalizeForgejoFeed(FORGEJO, await json(`${FORGEJO}/api/v1/orgs/${org}/activities/feeds?limit=50`))),
