@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { openSticky } from '../apps/Sticky'
 import { GAMES } from '../apps/games/Games'
+import { faviconOf, launch as launchLink, useLaunchers } from '../data/launchers'
+import { createNote } from '../data/notes'
 import { APP_META } from './apps'
 import { openContextMenu } from './ContextMenu'
 import { resetLayout } from './desktopStore'
@@ -11,9 +14,9 @@ import { SINGLE_INSTANCE, useWM, type AppId } from './wm'
 // The "All apps" launcher, laid out like Omarchy Spotlight: one search field, Applications and
 // Commands sections, a type label per row and the highlighted row's name in the accent colour.
 
-type Row = { key: string; section: 'Applications' | 'Games' | 'Commands'; name: string; detail?: string; kind: string; icon: ReactNode; run: () => void; runNew?: () => void }
+type Row = { key: string; section: 'Applications' | 'Launchers' | 'Games' | 'Commands'; name: string; detail?: string; kind: string; icon: ReactNode; run: () => void; runNew?: () => void }
 
-const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'contact', 'notes', 'keys', 'trash']
+const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'notebook', 'contact', 'notes', 'keys', 'settings', 'trash']
 
 export function Launchpad() {
   const wm = useWM()
@@ -22,6 +25,7 @@ export function Launchpad() {
   const input = useRef<HTMLInputElement>(null)
   const list = useRef<HTMLDivElement>(null)
   const close = () => setOverlay(null)
+  const launchers = useLaunchers()
 
   useEffect(() => input.current?.focus(), [])
 
@@ -36,6 +40,15 @@ export function Launchpad() {
       run: () => wm.open(app),
       runNew: SINGLE_INSTANCE.has(app) ? undefined : () => wm.openNew(app),
     }))
+    const links: Row[] = launchers.map((l) => ({
+      key: `launcher-${l.id}`,
+      section: 'Launchers',
+      name: l.label,
+      detail: l.url.replace(/^https?:\/\//, '').replace(/\/$/, ''),
+      kind: 'Link',
+      icon: l.glyph ? <span className="al-glyph">{l.glyph}</span> : <img className="al-fav" src={faviconOf(l.url)} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />,
+      run: () => launchLink(l),
+    }))
     const games: Row[] = GAMES.map((g) => ({
       key: `game-${g.id}`,
       section: 'Games',
@@ -47,6 +60,7 @@ export function Launchpad() {
     }))
     const dark = themeSettings().name && document.documentElement.dataset.mode === 'dark'
     const commands: Row[] = [
+      { key: 'cmd-note', section: 'Commands', name: 'New sticky note', detail: 'A note of your own on the desktop', kind: 'Command', icon: <span className="al-glyph">✎</span>, run: () => openSticky(wm, createNote().id) },
       { key: 'cmd-terminal', section: 'Commands', name: 'New terminal', detail: 'Open another shell', kind: 'Command', icon: <span className="al-glyph">›_</span>, run: () => wm.openNew('terminal') },
       { key: 'cmd-theme', section: 'Commands', name: dark ? 'Day mode' : 'Night mode', detail: 'Switch between the light and dark theme', kind: 'Command', icon: <span className="al-glyph">{dark ? '☀' : '☾'}</span>, run: toggleMode },
       { key: 'cmd-search', section: 'Commands', name: 'Search everything', detail: 'Files, status, projects (Ctrl+K)', kind: 'Command', icon: <span className="al-glyph">⌕</span>, run: () => setTimeout(() => setOverlay('spotlight'), 0) },
@@ -57,8 +71,8 @@ export function Launchpad() {
     const match = (r: Row) => !query || `${r.name} ${r.detail ?? ''} ${r.kind}`.toLowerCase().includes(query)
     // Name matches first, then description matches.
     const rank = (r: Row) => (!query ? 0 : r.name.toLowerCase().startsWith(query) ? 0 : r.name.toLowerCase().includes(query) ? 1 : 2)
-    return [...apps, ...games, ...commands].filter(match).sort((a, b) => (query ? rank(a) - rank(b) : 0))
-  }, [q, wm])
+    return [...apps, ...links, ...games, ...commands].filter(match).sort((a, b) => (query ? rank(a) - rank(b) : 0))
+  }, [q, wm, launchers])
 
   const sections = query(rows)
   const flat = sections.flatMap((s) => s.rows)
@@ -141,6 +155,6 @@ export function Launchpad() {
 }
 
 function query(rows: Row[]) {
-  const order: Row['section'][] = ['Applications', 'Games', 'Commands']
+  const order: Row['section'][] = ['Applications', 'Launchers', 'Games', 'Commands']
   return order.map((title) => ({ title, rows: rows.filter((r) => r.section === title) })).filter((s) => s.rows.length)
 }

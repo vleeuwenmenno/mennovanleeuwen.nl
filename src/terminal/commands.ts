@@ -55,6 +55,8 @@ const APPS: Record<string, AppId> = {
   zed: 'zed',
   editor: 'zed',
   trash: 'trash',
+  notebook: 'notebook',
+  settings: 'settings',
 }
 
 const APP_NAMES: Record<AppId, string> = {
@@ -70,6 +72,9 @@ const APP_NAMES: Record<AppId, string> = {
   games: 'arcade',
   zed: 'zed',
   trash: 'trash',
+  notebook: 'notebook',
+  sticky: 'sticky',
+  settings: 'settings',
 }
 
 // Scratch space: the only writable part of the filesystem, so `echo hi > /tmp/x` works.

@@ -1,8 +1,8 @@
-import { useSyncExternalStore } from 'react'
+import { synced } from './synced'
 
 // Desktop icon state shared by the Desktop and Files' Trash view: where each icon sits, what it is
 // called, and which icons are in the trash. Remembered per browser, so a visitor's tidy (or messy)
-// desktop survives a reload.
+// desktop survives a reload, and synced to the server for the signed-in owner.
 
 export type IconPos = { col: number; row: number }
 export type DesktopState = {
@@ -11,40 +11,12 @@ export type DesktopState = {
   trashed: string[]
 }
 
-const KEY = 'mvlos.desktop.v1'
 const empty: DesktopState = { positions: {}, names: {}, trashed: [] }
 
-function load(): DesktopState {
-  try {
-    const raw = localStorage.getItem(KEY)
-    return raw ? { ...empty, ...JSON.parse(raw) } : empty
-  } catch {
-    return empty
-  }
-}
+const store = synced<DesktopState>('desktop', empty, { legacyKey: 'mvlos.desktop.v1', normalize: (v) => ({ ...empty, ...(v as Partial<DesktopState>) }) })
 
-let state = load()
-const listeners = new Set<() => void>()
-
-export function updateDesktop(fn: (s: DesktopState) => DesktopState) {
-  state = fn(state)
-  try {
-    localStorage.setItem(KEY, JSON.stringify(state))
-  } catch {
-    /* not persisted */
-  }
-  listeners.forEach((l) => l())
-}
-
-export function useDesktop() {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l)
-      return () => listeners.delete(l)
-    },
-    () => state,
-  )
-}
+export const updateDesktop = (fn: (s: DesktopState) => DesktopState) => store.set(fn)
+export const useDesktop = store.use
 
 export const trashIcons = (ids: string[]) => updateDesktop((s) => ({ ...s, trashed: [...new Set([...s.trashed, ...ids])] }))
 export const restoreIcons = (ids: string[]) => updateDesktop((s) => ({ ...s, trashed: s.trashed.filter((t) => !ids.includes(t)) }))

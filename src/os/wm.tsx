@@ -1,7 +1,8 @@
 import { snapReserve } from './dockPrefs'
-import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
+import { synced } from './synced'
 
-export type AppId = 'terminal' | 'files' | 'viewer' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash'
+export type AppId = 'terminal' | 'files' | 'viewer' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'sticky' | 'settings'
 
 export type WinState = {
   pid: number
@@ -58,7 +59,7 @@ export type GeometryPatch = Partial<Geometry> & { snap?: SnapZone; restore?: Geo
 export type Geometry = { x: number; y: number; w: number; h: number }
 
 /** Apps that only ever have one window; everything else can be opened again with "New window". */
-export const SINGLE_INSTANCE = new Set<AppId>(['notes', 'keys', 'trash'])
+export const SINGLE_INSTANCE = new Set<AppId>(['notes', 'keys', 'trash', 'notebook', 'settings'])
 
 type Action =
   | { type: 'open'; app: AppId; geometry: Geometry; props?: WinState['props']; newInstance?: boolean }
@@ -69,6 +70,7 @@ type Action =
   | { type: 'setGeometry'; pid: number; geometry: GeometryPatch }
   | { type: 'viewport'; width: number; height: number; layout: { app: AppId; geometry: Geometry }[] }
   | { type: 'reset'; layout: { app: AppId; geometry: Geometry; props?: WinState['props'] }[] }
+  | { type: 'restore'; windows: SavedWindow[] }
 
 /** `touched` flips once the visitor moves, resizes or opens something; until then a viewport
  * change re-applies the opening layout instead of just clamping. `focused` is the window that
@@ -83,10 +85,57 @@ function fresh(layout: { app: AppId; geometry: Geometry; props?: WinState['props
   return { ...s, touched: false }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Saved layouts: which windows are open, where, and what they show. Phones and bigger screens
+// keep separate layouts, since one rarely fits the other.
+
+export type SavedWindow = Geometry & Pick<WinState, 'app' | 'minimized' | 'maximized' | 'snap' | 'restore' | 'props'>
+
+/** Props that only make sense once: commands to run, "open this now" stamps, placement hints. */
+const TRANSIENT_PROPS = new Set(['run', 't', 'under'])
+
+type LayoutStore = ReturnType<typeof synced<SavedWindow[] | null>>
+let layout: LayoutStore | null = null
+/** The saved layout for the kind of screen this page loaded on (null: the opening layout). It
+ * stays the same store when the window is resized, so a narrowed desktop doesn't overwrite the
+ * phone layout. */
+export function layoutStore(): LayoutStore {
+  layout ??= synced<SavedWindow[] | null>(`windows:${window.innerWidth < 720 ? 'mobile' : 'desktop'}`, null)
+  return layout
+}
+
+function serialize(windows: WinState[]): SavedWindow[] {
+  return windows
+    .slice()
+    .sort((a, b) => a.z - b.z)
+    .map((w) => ({
+      app: w.app,
+      x: Math.round(w.x),
+      y: Math.round(w.y),
+      w: Math.round(w.w),
+      h: Math.round(w.h),
+      minimized: w.minimized,
+      maximized: w.maximized,
+      snap: w.snap,
+      restore: w.restore,
+      props: Object.fromEntries(Object.entries(w.props).filter(([k, v]) => v !== undefined && !TRANSIENT_PROPS.has(k))),
+    }))
+}
+
+function restored(saved: SavedWindow[]): State {
+  let pid = 100
+  let z = 10
+  const windows: WinState[] = saved.map((w) => ({ ...w, props: { ...w.props }, pid: pid++, z: ++z, openedAt: Date.now() }))
+  const top = windows.filter((w) => !w.minimized).at(-1)
+  return { windows, nextPid: pid, topZ: z, touched: true, focused: top?.pid ?? null }
+}
+
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case 'reset':
       return fresh(action.layout)
+    case 'restore':
+      return restored(action.windows)
     case 'open': {
       // Reuse the app's frontmost window unless a new one was asked for.
       const existing = action.newInstance && !SINGLE_INSTANCE.has(action.app)
@@ -173,12 +222,47 @@ export function WindowManagerProvider({
   children,
   initial: relayout,
   placement,
+  isApp,
 }: {
   children: ReactNode
   initial: () => { app: AppId; geometry: Geometry; props?: WinState['props'] }[]
   placement: (app: AppId, openCount: number) => Geometry
+  /** Filters saved layouts down to apps that still exist. */
+  isApp: (app: string) => boolean
 }) {
-  const [state, dispatch] = useReducer(reducer, relayout, (make) => fresh(make()))
+  const usable = useCallback((saved: SavedWindow[] | null) => saved?.filter((w) => isApp(w.app)) ?? null, [isApp])
+  const [state, dispatch] = useReducer(reducer, null, () => {
+    const saved = usable(layoutStore().get())
+    return saved ? restored(saved) : fresh(relayout())
+  })
+
+  const stateRef = useRef(state)
+  stateRef.current = state
+
+  // Save the layout once the visitor has changed something; take a newer one from another device
+  // only while this tab hasn't changed anything since it last loaded or saved.
+  const lastSynced = useRef<string>(JSON.stringify(state.touched ? serialize(state.windows) : null))
+  useEffect(() => {
+    if (!state.touched) return
+    const t = setTimeout(() => {
+      const json = JSON.stringify(serialize(state.windows))
+      if (json === lastSynced.current) return
+      lastSynced.current = json
+      layoutStore().set(serialize(state.windows))
+    }, 400)
+    return () => clearTimeout(t)
+  }, [state.windows, state.touched])
+  useEffect(
+    () =>
+      layoutStore().onRemote((saved) => {
+        const current = JSON.stringify(serialize(stateRef.current.windows))
+        if (stateRef.current.touched && current !== lastSynced.current) return
+        const next = usable(saved)
+        lastSynced.current = JSON.stringify(next)
+        if (next) dispatch({ type: 'restore', windows: next })
+      }),
+    [usable],
+  )
 
   // "Trash" is a place, not an app: it opens in Files (whose trash:// view lists trashed items).
   const open = useCallback(
@@ -225,7 +309,11 @@ export function WindowManagerProvider({
       minimize: (pid) => dispatch({ type: 'minimize', pid }),
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
       setGeometry: (pid, geometry) => dispatch({ type: 'setGeometry', pid, geometry }),
-      reset: (empty) => dispatch({ type: 'reset', layout: empty ? [] : relayout() }),
+      reset: (empty) => {
+        dispatch({ type: 'reset', layout: empty ? [] : relayout() })
+        lastSynced.current = 'null'
+        layoutStore().set(null)
+      },
     }
   }, [state.windows, state.focused, open, openNew, relayout])
 

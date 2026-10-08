@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { openSticky } from '../apps/Sticky'
+import { faviconOf, launch, removeLauncher, updateLauncher, useLaunchers } from '../data/launchers'
+import { createNote } from '../data/notes'
 import { projects } from '../data/profile'
 import { HOME } from '../terminal/vfs'
 import { closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
@@ -17,7 +20,8 @@ export type DesktopIcon = {
   glyph: string
   /** A real logo, shown instead of the emoji glyph */
   image?: string
-  kind: 'file' | 'folder' | 'project'
+  /** `link`: a launcher of the visitor's own (src/data/launchers.ts) */
+  kind: 'file' | 'folder' | 'project' | 'link'
   path: string
   open: { app: AppId; props?: Record<string, string> }
   terminal: string
@@ -81,6 +85,11 @@ function layout(ids: string[], stored: Record<string, IconPos>): Record<string, 
   let row = 0
   for (const id of ids) {
     if (out[id]) continue
+    // A full grid (tiny window, many launchers) stacks the rest on the last spot instead of looping forever.
+    if (taken.size >= cols * rows) {
+      out[id] = { col, row }
+      continue
+    }
     while (taken.has(key({ col, row }))) {
       row++
       if (row >= rows) {
@@ -129,7 +138,20 @@ export function Desktop() {
   const offsetRef = useRef({ dx: 0, dy: 0 })
   const surface = useRef<HTMLDivElement>(null)
 
-  const visible = DESKTOP_ICONS.filter((i) => !desk.trashed.includes(i.id))
+  const launchers = useLaunchers()
+  const [broken, setBroken] = useState<Set<string>>(new Set())
+  const linkIcons = launchers.map<DesktopIcon>((l) => ({
+    id: `launcher:${l.id}`,
+    label: l.label,
+    glyph: l.glyph ?? '🔗',
+    image: l.glyph ? undefined : faviconOf(l.url),
+    kind: 'link',
+    path: l.url,
+    open: { app: 'settings', props: { section: 'launchers' } },
+    terminal: `curl -sI ${l.url}`,
+    url: l.url,
+  }))
+  const visible = [...DESKTOP_ICONS.filter((i) => !desk.trashed.includes(i.id)), ...linkIcons]
   const positions = useMemo(() => layout(visible.map((i) => i.id), desk.positions), [visible.map((i) => i.id).join(), desk.positions, viewport])
 
   useEffect(() => {
@@ -139,12 +161,20 @@ export function Desktop() {
   }, [])
 
   const label = (i: DesktopIcon) => desk.names[i.id] ?? i.label
-  const open = (i: DesktopIcon) => (i.kind === 'folder' ? wm.openNew : wm.open)(i.open.app, { ...i.open.props, t: String(Date.now()) })
+  const launcherId = (i: DesktopIcon | string) => (typeof i === 'string' ? i : i.id).replace(/^launcher:/, '')
+  const open = (i: DesktopIcon) => {
+    if (i.kind === 'link') return launcher(i) && launch(launcher(i)!)
+    ;(i.kind === 'folder' ? wm.openNew : wm.open)(i.open.app, { ...i.open.props, t: String(Date.now()) })
+  }
+  const launcher = (i: DesktopIcon) => launchers.find((l) => l.id === launcherId(i))
+  const newNote = () => openSticky(wm, createNote().id)
   const openInTerminal = (i: DesktopIcon) => wm.open('terminal', { run: i.terminal, t: String(Date.now()) })
   const selectedIcons = () => visible.filter((i) => selected.has(i.id))
 
   function moveToTrash(ids: string[]) {
-    trashIcons(ids)
+    // Launchers are just removed; the trash is for the built-in icons.
+    ids.filter((id) => id.startsWith('launcher:')).forEach((id) => removeLauncher(launcherId(id)))
+    trashIcons(ids.filter((id) => !id.startsWith('launcher:')))
     setSelected(new Set())
   }
 
@@ -258,6 +288,16 @@ export function Desktop() {
         { label: `Move ${ids.length} items to Trash`, shortcut: 'Del', danger: true, onSelect: () => moveToTrash(ids) },
       ]
     }
+    if (icon.kind === 'link')
+      return [
+        { label: 'Open ↗', shortcut: '↵', onSelect: () => open(icon) },
+        { label: 'Copy link', onSelect: () => navigator.clipboard?.writeText(icon.path).catch(() => {}) },
+        { separator: true },
+        { label: 'Rename', shortcut: 'F2', onSelect: () => setRenaming(icon.id) },
+        { label: 'Edit launchers…', onSelect: () => wm.open('settings', { section: 'launchers', t: String(Date.now()) }) },
+        { separator: true },
+        { label: 'Remove launcher', shortcut: 'Del', danger: true, onSelect: () => moveToTrash([icon.id]) },
+      ]
     return [
       { label: 'Open', shortcut: '↵', onSelect: () => open(icon) },
       { label: 'Open in Terminal', onSelect: () => openInTerminal(icon) },
@@ -276,6 +316,10 @@ export function Desktop() {
       { label: 'Open Terminal', onSelect: () => wm.open('terminal') },
       { label: 'Show activity', onSelect: () => wm.open('recents') },
       { label: 'About this system', onSelect: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) },
+      { separator: true },
+      { label: 'New sticky note', onSelect: newNote },
+      { label: 'New launcher…', onSelect: () => wm.open('settings', { section: 'launchers', t: String(Date.now()) }) },
+      { label: 'Notebook', onSelect: () => wm.open('notebook') },
       { separator: true },
       { label: 'Select all', shortcut: 'Ctrl A', onSelect: () => setSelected(new Set(visible.map((i) => i.id))) },
       { label: 'Clean up icons', onSelect: resetLayout },
@@ -326,7 +370,11 @@ export function Desktop() {
               openContextMenu(e, iconMenu(icon))
             }}
           >
-            {icon.image ? <img className="desk-img" src={icon.image} alt="" draggable={false} /> : <span className="desk-glyph">{icon.glyph}</span>}
+            {icon.image && !broken.has(icon.id) ? (
+              <img className={`desk-img ${icon.kind === 'link' ? 'is-favicon' : ''}`} src={icon.image} alt="" draggable={false} onError={() => setBroken((b) => new Set(b).add(icon.id))} />
+            ) : (
+              <span className="desk-glyph">{icon.glyph}</span>
+            )}
             {renaming === icon.id ? (
               <input
                 className="desk-rename"
@@ -341,7 +389,8 @@ export function Desktop() {
                 }}
                 onBlur={(e) => {
                   const v = e.currentTarget.value.trim().slice(0, 40)
-                  if (v && v !== label(icon)) updateDesktop((s) => ({ ...s, names: { ...s.names, [icon.id]: v } }))
+                  if (v && v !== label(icon) && icon.kind === 'link') updateLauncher(launcherId(icon), { label: v })
+                  else if (v && v !== label(icon)) updateDesktop((s) => ({ ...s, names: { ...s.names, [icon.id]: v } }))
                   setRenaming(null)
                 }}
               />
