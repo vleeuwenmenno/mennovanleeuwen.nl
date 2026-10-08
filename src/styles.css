@@ -3145,16 +3145,48 @@ button.fm-dd-row:hover {
   width: min(340px, calc(100vw - 20px));
 }
 .notice {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
+  position: relative;
   text-align: left;
   background: var(--bg);
   border: var(--border) solid var(--accent);
   color: var(--text);
   box-shadow: 0 12px 28px -14px rgba(0, 0, 0, 0.55);
   animation: notice-in 0.18s ease-out;
+}
+.notice-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 30px 12px 14px;
+  text-align: left;
+  color: inherit;
+}
+.notice-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.notice:hover .notice-close,
+.notice-close:focus-visible {
+  opacity: 1;
+}
+.notice-close:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+/* No hover on touch screens: keep the × visible. */
+@media (pointer: coarse) {
+  .notice-close {
+    opacity: 1;
+  }
 }
 .notice-icon {
   flex: none;
