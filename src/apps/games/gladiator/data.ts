@@ -18,7 +18,7 @@ export const STAT_KEYS = STATS.map((s) => s.key)
 
 /** Every stat starts here; creation hands out extra points, each level a few more. */
 export const BASE_STAT = 3
-export const CREATION_POINTS = 18
+export const CREATION_POINTS = 9
 export const POINTS_PER_LEVEL = 4
 export const MAX_LEVEL = 30
 

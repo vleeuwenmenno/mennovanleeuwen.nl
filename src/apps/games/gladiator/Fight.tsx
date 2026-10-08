@@ -8,7 +8,7 @@ import { act, attackCost, ATTACKS, blockers, choose, hitChance, inReach, newFigh
 import { POTIONS, spell, type PotionId } from './data'
 import { kitOf } from './render'
 import { IMPACT } from './rig'
-import type { GladiatorSound } from './sound'
+import { weaponSound, type GladiatorSound } from './sound'
 import { Bar } from './ui'
 
 // One bout in the arena. The rules engine decides each turn at once; this screen then plays the
@@ -124,7 +124,8 @@ export function FightScreen(p: Props) {
           scene.front = ev.who
           snd.grunt('effort', ev.who ? 0.92 : 1.05, pan(a.x))
         })
-        fx(() => snd.whoosh(ev.type === 'power' ? 1 : ev.type === 'normal' ? 0.6 : 0.35, pan(a.x)), Math.max(0, hit - 130))
+        const swingAt = { quick: 90, normal: 150, power: 230 }[ev.type]
+        fx(() => snd.swing(weaponSound(fight.f[ev.who].d.weaponItem?.weapon), ev.type, pan(a.x)), Math.max(0, hit - swingAt))
         return hit
       }
       case 'hit': {
@@ -138,17 +139,14 @@ export function FightScreen(p: Props) {
           if (ev.blocked) {
             b.puppet.play('block', 50)
             scene.sparks(pt.x, pt.y, -dir, 14)
-            snd.block(pan(b.x))
+            snd.strike(weaponSound(fight.f[ev.who].d.weaponItem?.weapon), ev.type, { armour: false, blocked: true, crit: false }, pan(b.x))
           } else {
             b.puppet.play('hit', 40)
             b.flash = 1
             scene.blood(pt.x, pt.y, dir, Math.min(26, 4 + ev.dmg * (ev.crit ? 1.4 : 0.8)))
             const armoured = !!(target.g.gear.body || target.g.gear.head)
-            if (armoured && Math.random() < 0.6) {
-              scene.sparks(pt.x, pt.y, -dir, 8)
-              snd.clang(ev.type === 'power' ? 0.9 : 0.5, pan(b.x))
-            }
-            snd.thud(ev.type === 'power' || ev.crit ? 1 : 0.55, pan(b.x))
+            if (armoured && Math.random() < 0.6) scene.sparks(pt.x, pt.y, -dir, 8)
+            snd.strike(weaponSound(fight.f[ev.who].d.weaponItem?.weapon), ev.type, { armour: armoured, blocked: false, crit: ev.crit }, pan(b.x))
             snd.grunt('pain', ev.who ? 1.05 : 0.95, pan(b.x))
           }
           scene.text(ev.crit ? `${ev.dmg}!` : String(ev.dmg), b.head.x, b.head.y - 30, ev.crit ? '#ffd23a' : ev.blocked ? '#d8d8d8' : '#ff5a4a', ev.crit ? 48 : 36)

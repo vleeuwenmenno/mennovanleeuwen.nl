@@ -91,11 +91,11 @@ export function HallScreen({ hall, onBack }: { hall: HallEntry[]; onBack: () => 
 }
 
 const PRESETS: { name: string; text: string; w: Partial<Stats> }[] = [
-  { name: 'Brute', text: 'Hits like a cart', w: { str: 7, vit: 5, end: 4, atk: 2 } },
-  { name: 'Duelist', text: 'Fast and precise', w: { atk: 6, agi: 6, str: 3, vit: 3 } },
-  { name: 'Tank', text: 'A wall with legs', w: { def: 7, vit: 6, str: 3, end: 2 } },
-  { name: 'Showman', text: 'The crowd’s darling', w: { cha: 7, agi: 4, atk: 4, vit: 3 } },
-  { name: 'Battlemage', text: 'Steel and fire', w: { mag: 8, vit: 4, atk: 3, agi: 3 } },
+  { name: 'Brute', text: 'Hits like a cart', w: { str: 4, vit: 2, end: 2, atk: 1 } },
+  { name: 'Duelist', text: 'Fast and precise', w: { atk: 3, agi: 3, str: 2, vit: 1 } },
+  { name: 'Tank', text: 'A wall with legs', w: { def: 4, vit: 3, str: 1, end: 1 } },
+  { name: 'Showman', text: 'The crowd’s darling', w: { cha: 4, agi: 2, atk: 2, vit: 1 } },
+  { name: 'Battlemage', text: 'Steel and fire', w: { mag: 5, vit: 2, atk: 1, agi: 1 } },
 ]
 
 function Swatches({ list, value, onPick, label }: { list: string[]; value: string; onPick: (c: string) => void; label: string }) {

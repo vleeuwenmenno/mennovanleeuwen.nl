@@ -7,15 +7,6 @@ const VOLUME_KEY = 'mvlos.gladiator.volume'
 const MUSIC_KEY = 'mvlos.gladiator.music'
 
 type Mode = [ratio: number, decay: number, amp: number]
-// A blade or helmet rings at inharmonic partials like a struck plate.
-const METAL: Mode[] = [
-  [1, 0.42, 1],
-  [2.32, 0.3, 0.7],
-  [4.25, 0.2, 0.55],
-  [6.63, 0.14, 0.4],
-  [9.38, 0.09, 0.3],
-  [12.1, 0.06, 0.2],
-]
 const WOOD: Mode[] = [
   [1, 0.05, 1],
   [2.1, 0.035, 0.6],
@@ -40,6 +31,46 @@ function modal(ctx: BaseAudioContext, f0: number, modes: Mode[], noise: number, 
   return buf
 }
 
+/**
+ * Steel hitting steel. Not a bell: a dense cluster of high, inharmonic partials that die within
+ * a few tens of milliseconds, in slightly detuned pairs so they beat and grind, a hard transient,
+ * a gritty scrape of noise, and only a faint high ring left at the end. Soft-clipped for bite.
+ */
+function clash(ctx: BaseAudioContext, len = 0.5) {
+  const sr = ctx.sampleRate
+  const n = Math.ceil(len * sr)
+  const buf = ctx.createBuffer(1, n, sr)
+  const d = buf.getChannelData(0)
+  for (let m = 0; m < 14; m++) {
+    const f = 1400 + Math.random() * 7000
+    const tau = m < 3 ? 0.12 + Math.random() * 0.1 : 0.015 + Math.random() * 0.05
+    const a = (m < 3 ? 0.35 : 0.8) * (0.6 + Math.random() * 0.4)
+    for (const det of [1, 1.004 + Math.random() * 0.006]) {
+      const w = 2 * Math.PI * f * det
+      const ph = Math.random() * 6.28
+      for (let i = 0; i < n; i++) {
+        const e = Math.exp(-i / sr / tau)
+        if (e < 0.001) break
+        d[i] += a * e * Math.sin(w * (i / sr) + ph)
+      }
+    }
+  }
+  // The hit itself, then the scrape: noise that thins out over ~120 ms.
+  let hp = 0
+  let prev = 0
+  for (let i = 0; i < n; i++) {
+    const t = i / sr
+    const x = Math.random() * 2 - 1
+    hp = 0.85 * (hp + x - prev) // a cheap high-pass keeps the noise bright
+    prev = x
+    d[i] += hp * (5 * Math.exp(-t / 0.004) + 1.1 * Math.exp(-t / 0.06) * (0.6 + 0.4 * Math.sin(t * 2 * Math.PI * 37)))
+  }
+  let peak = 0
+  for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(d[i]))
+  for (let i = 0; i < n; i++) d[i] = Math.tanh((d[i] / peak) * 2.2) * 0.85
+  return buf
+}
+
 /** A plucked string by Karplus-Strong: a burst of noise ringing round a damped delay line. */
 function pluck(ctx: BaseAudioContext, freq: number, len = 1.6) {
   const sr = ctx.sampleRate
@@ -58,6 +89,21 @@ function pluck(ctx: BaseAudioContext, freq: number, len = 1.6) {
     idx = next
   }
   return buf
+}
+
+/** How a weapon sounds: blades whistle, clubs and hammers roar, spears jab, axes chop. */
+export type WeaponSound = 'blade' | 'blunt' | 'thrust' | 'chop' | 'fist'
+export const weaponSound = (kind: string | null | undefined): WeaponSound =>
+  kind === 'gladius' || kind === 'greatsword' ? 'blade' : kind === 'mace' || kind === 'warhammer' ? 'blunt' : kind === 'axe' ? 'chop' : kind === 'dagger' || kind === 'spear' || kind === 'trident' ? 'thrust' : 'fist'
+
+// Swish shape per weapon family: filter sweep (start, peak, end in Hz), resonance, length (s),
+// loudness, an optional low "body" layer for heavy weapons, and the pitch a blade sings at.
+const SWINGS: Record<WeaponSound, { f0: number; peak: number; f1: number; q: number; dur: number; gain: number; body?: number; ring?: number }> = {
+  blade: { f0: 700, peak: 3800, f1: 1200, q: 4.5, dur: 0.26, gain: 0.45, ring: 2900 },
+  thrust: { f0: 1200, peak: 3200, f1: 1800, q: 3, dur: 0.15, gain: 0.4 },
+  chop: { f0: 400, peak: 2000, f1: 600, q: 2.5, dur: 0.3, gain: 0.5, body: 0.4 },
+  blunt: { f0: 220, peak: 1100, f1: 260, q: 1.8, dur: 0.38, gain: 0.55, body: 0.8 },
+  fist: { f0: 500, peak: 1400, f1: 700, q: 1.5, dur: 0.12, gain: 0.3 },
 }
 
 const NOTE = (semi: number) => 293.66 * Math.pow(2, semi / 12) // D4 based
@@ -173,7 +219,7 @@ export class GladiatorSound {
 
       this.clangs = []
       this.woods = []
-      for (let i = 0; i < 5; i++) this.clangs.push(modal(ctx, 620 + Math.random() * 380, METAL, 1.2, 0.7))
+      for (let i = 0; i < 6; i++) this.clangs.push(clash(ctx))
       for (let i = 0; i < 3; i++) this.woods.push(modal(ctx, 190 + Math.random() * 60, WOOD, 0.8, 0.18))
       for (const s of DORIAN) this.plucks.set(s, pluck(ctx, NOTE(s)))
 
@@ -265,12 +311,103 @@ export class GladiatorSound {
 
   // --- Combat ----------------------------------------------------------------------------------
 
-  /** A blade swishing through the air; `power` 0..1. */
-  whoosh(power = 0.5, pan = 0) {
+  /**
+   * Air rushing past a moving weapon: filtered noise whose pitch and loudness rise as the weapon
+   * comes through and fall as it passes, like a doppler swish.
+   */
+  private swish(at: number, dur: number, f0: number, peak: number, f1: number, q: number, gain: number, pan: number) {
+    const ctx = this.ctx!
+    const src = ctx.createBufferSource()
+    src.buffer = this.noise
+    const f = ctx.createBiquadFilter()
+    f.type = 'bandpass'
+    f.Q.value = q
+    const top = at + dur * 0.6
+    f.frequency.setValueAtTime(f0, at)
+    f.frequency.exponentialRampToValueAtTime(peak, top)
+    f.frequency.exponentialRampToValueAtTime(f1, at + dur)
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(0.0001, at)
+    g.gain.exponentialRampToValueAtTime(gain, top)
+    g.gain.exponentialRampToValueAtTime(0.0001, at + dur)
+    const p = ctx.createStereoPanner()
+    p.pan.value = pan
+    src.connect(f).connect(g).connect(p).connect(this.sfx!)
+    src.start(at, Math.random() * 1.5)
+    src.stop(at + dur + 0.05)
+  }
+
+  /** The swing of an attack, by weapon family and attack type. */
+  swing(kind: WeaponSound, type: 'quick' | 'normal' | 'power', pan = 0) {
     const ctx = this.ready()
     if (!ctx) return
     const t = ctx.currentTime
-    this.burst(t, 0.16 + power * 0.14, 'bandpass', 500, 2.2, 0.25 + power * 0.35, pan, 2400 + power * 1200)
+    // Quick attacks are short and bright, power attacks long, low and loud.
+    const k = type === 'quick' ? { dur: 0.6, pitch: 1.25, gain: 0.6 } : type === 'normal' ? { dur: 1, pitch: 1, gain: 0.85 } : { dur: 1.5, pitch: 0.75, gain: 1 }
+    const s = SWINGS[kind]
+    const g = s.gain * k.gain
+    this.swish(t, s.dur * k.dur, s.f0 * k.pitch, s.peak * k.pitch, s.f1 * k.pitch, s.q, g, pan)
+    if (s.body) this.swish(t, s.dur * k.dur * 1.1, 120, 380 * k.pitch, 90, 1.2, g * s.body, pan)
+    // A blade sings a little as it cuts the air.
+    if (s.ring) for (const r of [1, 1.51, 2.27]) this.tone(t + s.dur * k.dur * 0.45, 0.25, s.ring * r * k.pitch, s.ring * r * k.pitch * 0.98, 0.025 * k.gain, 'sine', undefined, 0.03)
+    // A heavy power swing gets a second, wider pass: the wind-up coming round.
+    if (type === 'power' && kind !== 'fist') this.swish(t + 0.05, s.dur * 1.2, s.f0 * 0.6, s.peak * 0.6, s.f1 * 0.6, s.q * 0.7, g * 0.5, pan)
+  }
+
+  /** A blow landing: on flesh, on armour, or on a shield, by weapon family. */
+  strike(kind: WeaponSound, type: 'quick' | 'normal' | 'power', on: { armour: boolean; blocked: boolean; crit: boolean }, pan = 0) {
+    const ctx = this.ready()
+    if (!ctx) return
+    const t = ctx.currentTime
+    const p = type === 'quick' ? 0.45 : type === 'normal' ? 0.7 : 1
+    if (on.blocked) {
+      // Caught on the shield: wood, then the boss rings; maces and hammers just batter it.
+      this.play(this.woods[Math.floor(Math.random() * this.woods.length)], 0.6 + p * 0.3, pan, kind === 'blunt' ? 0.75 : 0.95 + Math.random() * 0.15, 0, 0.35)
+      if (kind === 'blunt') this.tone(t, 0.2, 110, 50, 0.5 * p)
+      else this.clang(0.2 + p * 0.2, pan)
+      return
+    }
+    switch (kind) {
+      case 'blade':
+        // A cut: a sharp hiss of the edge, then the meat of it.
+        this.burst(t, 0.06 + p * 0.04, 'highpass', 2600, 0.8, 0.35 + p * 0.25, pan)
+        this.burst(t + 0.01, 0.12, 'bandpass', 900, 4, 0.25 + p * 0.2, pan, 350)
+        this.tone(t, 0.12, 140, 60, 0.25 + p * 0.3)
+        break
+      case 'thrust':
+        // A stab: short, tight and wet.
+        this.burst(t, 0.05, 'bandpass', 1500, 3, 0.35 + p * 0.2, pan, 700)
+        this.burst(t + 0.02, 0.1, 'bandpass', 600, 5, 0.2 + p * 0.2, pan, 250)
+        this.tone(t, 0.1, 180, 80, 0.3 + p * 0.25)
+        break
+      case 'blunt':
+        // A bludgeon: a deep thump with a crunch on top.
+        this.tone(t, 0.28, 95 + p * 20, 38, 0.7 + p * 0.3)
+        this.burst(t, 0.14, 'lowpass', 700, 0.9, 0.6 + p * 0.3, pan)
+        for (let i = 0; i < 3; i++) this.burst(t + 0.01 + i * 0.018, 0.025, 'bandpass', 2200 + Math.random() * 1500, 2, 0.18 * p, pan)
+        break
+      case 'chop':
+        // An axe: a woody thunk with bite.
+        this.tone(t, 0.16, 160, 70, 0.5 + p * 0.3)
+        this.burst(t, 0.08, 'bandpass', 1100, 2.5, 0.45 + p * 0.2, pan, 500)
+        this.burst(t, 0.04, 'highpass', 3200, 0.8, 0.2 + p * 0.15, pan)
+        break
+      case 'fist':
+        // A punch: a slap and a thump.
+        this.burst(t, 0.03, 'highpass', 1800, 0.8, 0.35 + p * 0.2, pan)
+        this.tone(t, 0.12, 130, 55, 0.45 + p * 0.3)
+        break
+    }
+    // Metal on metal when there's armour to hit, duller for clubs and fists.
+    if (on.armour && Math.random() < 0.7) {
+      if (kind === 'blunt' || kind === 'fist') this.play(this.clangs[Math.floor(Math.random() * this.clangs.length)], 0.25 + p * 0.2, pan, 0.55, 0, 0.3)
+      else this.clang(0.3 + p * 0.5, pan)
+    }
+    // A critical lands with a boom under it.
+    if (on.crit) {
+      this.tone(t, 0.45, 70, 32, 0.9)
+      this.burst(t, 0.25, 'lowpass', 400, 0.7, 0.5, pan)
+    }
   }
 
   /** Steel on steel. */
@@ -279,24 +416,6 @@ export class GladiatorSound {
     if (!ctx) return
     this.play(this.clangs[Math.floor(Math.random() * this.clangs.length)], 0.35 + power * 0.4, pan, 0.85 + Math.random() * 0.3, 0, 0.45)
     this.burst(ctx.currentTime, 0.05, 'highpass', 3000, 0.7, 0.25 * power, pan)
-  }
-
-  /** A blow landing on a body: a dull thump with a wet edge. */
-  thud(power = 0.6, pan = 0) {
-    const ctx = this.ready()
-    if (!ctx) return
-    const t = ctx.currentTime
-    this.tone(t, 0.18, 120 + power * 30, 45, 0.5 + power * 0.4)
-    this.burst(t, 0.09, 'lowpass', 900, 0.8, 0.5 + power * 0.3, pan)
-    this.burst(t + 0.01, 0.07, 'bandpass', 1400, 3, 0.18 + power * 0.2, pan, 500)
-  }
-
-  /** A blow caught on a shield. */
-  block(pan = 0) {
-    const ctx = this.ready()
-    if (!ctx) return
-    this.play(this.woods[Math.floor(Math.random() * this.woods.length)], 0.8, pan, 0.9 + Math.random() * 0.2, 0, 0.35)
-    this.clang(0.25, pan)
   }
 
   step(pan = 0) {
