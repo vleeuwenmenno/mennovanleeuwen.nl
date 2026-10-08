@@ -1,11 +1,9 @@
-# Runs the site in Docker.
-#   docker compose up -d                 pull the released image and start it (as on the server)
-#   docker compose up -d --build         build this checkout instead
-#   docker compose watch                 build this checkout and rebuild it whenever a file changes
-#   docker compose --profile dev up dev  Vite dev server: instant reload on every save
-# .env next to this file can set PORT (default 8080), DEV_PORT (default 5173), GITHUB_TOKEN
-# (optional, for `git log` in the terminal) and the sign-in settings: GITHUB_CLIENT_ID,
-# GITHUB_CLIENT_SECRET, ALLOWED_USERS, PUBLIC_URL, SESSION_SECRET (see README).
+# Runs the released site in Docker, the same way as on the server. For working on the site use
+# `pnpm dev` instead (instant reload); `docker compose up -d --build` is only for checking the
+# production image itself.
+# .env next to this file can set PORT (default 8080), GITHUB_TOKEN (optional, for `git log` in
+# the terminal) and the sign-in settings: GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, ALLOWED_USERS,
+# PUBLIC_URL, SESSION_SECRET (see README).
 services:
   site:
     image: ghcr.io/vleeuwenmenno/mennovanleeuwen.nl:latest
@@ -13,48 +11,16 @@ services:
     restart: unless-stopped
     ports:
       - "${PORT:-8080}:8080"
-    environment: &env
+    environment:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
       ALLOWED_USERS: ${ALLOWED_USERS:-vleeuwenmenno}
       PUBLIC_URL: ${PUBLIC_URL:-}
       SESSION_SECRET: ${SESSION_SECRET:-}
+    # Sign-in sessions, linked Gitea/Forgejo instances and synced notes.
     volumes:
       - site_data:/app/data
-    # `docker compose watch`: a production build, rebuilt and restarted when sources change.
-    develop:
-      watch:
-        - { action: rebuild, path: ./src }
-        - { action: rebuild, path: ./public }
-        - { action: rebuild, path: ./server }
-        - { action: rebuild, path: ./pwa }
-        - { action: rebuild, path: ./index.html }
-        - { action: rebuild, path: ./vite.config.ts }
-        - { action: rebuild, path: ./package.json }
-
-  # The checkout mounted into a Vite dev server: saves show up instantly (hot reload), and the
-  # live /api endpoints work as in production. node_modules stays inside the container.
-  dev:
-    profiles: [dev]
-    image: node:24-slim
-    working_dir: /app
-    command: sh -c "corepack enable && pnpm install --frozen-lockfile --store-dir /pnpm-store && pnpm dev --host 0.0.0.0 --port 5173 --strictPort"
-    ports:
-      - "${DEV_PORT:-5173}:5173"
-    environment:
-      <<: *env
-      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
-      DATA_DIR: /data
-      PUBLIC_URL: ${DEV_PUBLIC_URL:-}
-    volumes:
-      - .:/app
-      - dev_node_modules:/app/node_modules
-      - dev_pnpm_store:/pnpm-store # pnpm's package store, kept out of the checkout
-      - dev_data:/data
 
 volumes:
   site_data:
-  dev_data:
-  dev_node_modules:
-  dev_pnpm_store:

@@ -135,10 +135,8 @@ snapshot, builds the site, and pushes a multi-arch (amd64 + arm64) image to
 skip `latest`.
 
 Run it with [`compose.yml`](compose.yml), on a server or locally: `docker compose up -d` pulls
-the released image, `docker compose up -d --build` builds this checkout instead. For working on it in
-Docker, `docker compose --profile dev up dev` runs the Vite dev server on the mounted checkout
-(every save shows up instantly, on `DEV_PORT`, default 5173), and `docker compose watch` keeps a
-production build that rebuilds whenever a source file changes. Put
+the released image, `docker compose up -d --build` builds this checkout instead. For working on the site,
+use `pnpm dev`: it reloads instantly and serves the live `/api` endpoints too. Put
 `GITHUB_TOKEN=...` in a `.env` next to it (git-ignored) to give `git log` GitHub's signed-in rate
 limit; a fine-grained token with read-only access to public repositories is enough. `PORT=...` in the
 same file changes the host port (default 8080).
