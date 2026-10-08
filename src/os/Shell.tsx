@@ -554,6 +554,15 @@ export function Shell() {
   const power = usePower()
   const overlay = useOverlay()
 
+  // App shortcuts from the installed app's icon menu (manifest.webmanifest): /?open=terminal.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const app = params.get('open') as AppId | null
+    if (app && app in APP_META && app !== 'trash') wm.open(app)
+    if (params.has('open')) history.replaceState(null, '', location.pathname)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Fresh activity notifications start counting once the desktop is up.
   useEffect(() => {
     if (power.phase === 'up') startActivityAlerts()

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { forgejoActivity } from './server/activity.ts'
@@ -30,8 +32,25 @@ const liveApi = (): Plugin => {
   }
 }
 
+/**
+ * Builds dist/sw.js from pwa/sw.js with this build's files to precache and a version derived from
+ * them, so each release ships a new worker and installed copies are offered the update.
+ */
+const serviceWorker = (): Plugin => ({
+  name: 'mvlos-sw',
+  apply: 'build',
+  generateBundle(_, bundle) {
+    const built = Object.keys(bundle).filter((f) => !f.endsWith('.map') && f !== 'index.html').map((f) => `/${f}`)
+    const statics = ['/', '/favicon.svg', '/manifest.webmanifest', '/icons/app.svg', '/icons/app-192.png', '/icons/boltwarden.svg', '/recents.json', '/contributions.json']
+    const precache = [...statics, ...built]
+    const version = createHash('sha256').update(precache.join('\n')).digest('hex').slice(0, 12)
+    const source = readFileSync(new URL('./pwa/sw.js', import.meta.url), 'utf8').replace('__VERSION__', version).replace('__PRECACHE__', JSON.stringify(precache))
+    this.emitFile({ type: 'asset', fileName: 'sw.js', source })
+  },
+})
+
 export default defineConfig({
-  plugins: [react(), liveApi()],
+  plugins: [react(), liveApi(), serviceWorker()],
   // Listen on all interfaces so the dev site can be opened from a phone over Tailscale or LAN.
   server: { host: '0.0.0.0', allowedHosts: ['.ts.net'] },
   preview: { host: '0.0.0.0', allowedHosts: ['.ts.net'] },

@@ -69,6 +69,16 @@ on a text console on "tty1" instead (the same shell, without a window manager); 
 desktop. `reboot` and `shutdown` play the systemd
 shutdown log ([`src/os/Power.tsx`](src/os/Power.tsx)); a reboot starts from the opening layout again.
 
+## Installable app
+
+The site is a PWA: [`public/manifest.webmanifest`](public/manifest.webmanifest) makes it
+installable (full-window, with Terminal/CV/Games shortcuts on the icon), and a service worker
+built from [`pwa/sw.js`](pwa/sw.js) caches the app shell so it boots offline. The build stamps the
+worker with this release's files, so installed copies show an "update" notification after a
+release; clicking it restarts into the new version. Live data (`/api/*`, other sites) is never
+cached. The worker only registers in production builds; `.claude/launch.json` has a `prod`
+configuration that builds and serves one on port 4180.
+
 ## Releases and hosting
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) typechecks and builds every push to

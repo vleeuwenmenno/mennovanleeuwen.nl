@@ -1,6 +1,7 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "dev", "runtimeExecutable": "pnpm", "runtimeArgs": ["dev", "--port", "5173", "--strictPort"], "port": 5173 }
+    { "name": "dev", "runtimeExecutable": "pnpm", "runtimeArgs": ["dev", "--port", "5173", "--strictPort"], "port": 5173 },
+    { "name": "prod", "runtimeExecutable": "sh", "runtimeArgs": ["-c", "pnpm build && PORT=4180 node server/index.ts"], "port": 4180 }
   ]
 }
