@@ -54,6 +54,12 @@ read-only and in memory; only `/tmp` accepts writes (`echo hi > /tmp/x`), and th
 reload. Pipes, `;`, `&&`, `$VARS`, tab completion and history all work. `ps` and `kill` operate
 on the open windows.
 
+Real tools live in [`src/terminal/extra.ts`](src/terminal/extra.ts) and run from the visitor's
+browser: `curl`/`wget` (any site that allows cross-origin requests, e.g. `curl wttr.in/Amsterdam`,
+never the visitor's own network), `whois` (RDAP), `git log`/`git show` on the real repos,
+`htop`, `watch`, `cmatrix`, `df`/`free`/`nproc`/`lscpu`/`xrandr`/`ip` with the numbers the browser
+shares, `jq`, `sha*sum`/`md5sum`, `figlet` and `lolcat`.
+
 `pepper` ([`src/terminal/pepper.ts`](src/terminal/pepper.ts)) simulates the Pepper CLI against a
 pretend lab cluster (3 masters, 4 minions). Its grammar, outcome names and output layout follow
 the real CLI; the cluster, states and timings are invented, and applies only last for the session.
@@ -88,8 +94,9 @@ services:
 
 The container runs [`server/index.ts`](server/index.ts), a dependency-free Node server, as a
 non-root user on port 8080 (`PORT` changes it). It serves the built site, answers `/healthz`, serves
-`/api/activity` (git.mvl.sh's activity feeds, which browsers can't read cross-origin), and
-`/api/minecraft`: a live Server List Ping of the Minecraft server, cached for 10 seconds,
+`/api/activity` (git.mvl.sh's activity feeds, which browsers can't read cross-origin), 
+`/api/git/<owner>/<repo>/commits` (for `git log`, cached; set `GITHUB_TOKEN` to lift GitHub's
+anonymous limit of 60 requests an hour), and `/api/minecraft`: a live Server List Ping of the Minecraft server, cached for 10 seconds,
 so the status and join/leave notifications don't wait on public status APIs that cache for
 minutes. On a static host without that endpoint the site falls back to those APIs. `pnpm dev`
 and `pnpm preview` serve the endpoint too. Build the image locally with `docker build -t mvlos .`.

@@ -3,9 +3,11 @@ import { stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import { forgejoActivity } from './activity.ts'
+import { githubCommits } from './github.ts'
 import { minecraftStatus } from './minecraft.ts'
 
-// Serves the built site and two live endpoints: /api/minecraft and /api/activity (git.mvl.sh).
+// Serves the built site and live endpoints: /api/minecraft, /api/activity (git.mvl.sh) and
+// /api/git/<owner>/<repo>/commits (GitHub, cached).
 // No dependencies, just Node.
 
 const ROOT = join(import.meta.dirname, '..', 'dist')
@@ -61,6 +63,12 @@ createServer(async (req, res) => {
   if (path === '/api/minecraft' || path === '/api/activity') {
     const body = JSON.stringify(path === '/api/minecraft' ? await minecraftStatus() : { items: await forgejoActivity() })
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SECURITY }).end(req.method === 'HEAD' ? undefined : body)
+    return
+  }
+
+  if (path.startsWith('/api/git/')) {
+    const r = await githubCommits(path.slice('/api/git/'.length) + url.search)
+    res.writeHead(r.status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SECURITY }).end(req.method === 'HEAD' ? undefined : r.body)
     return
   }
 

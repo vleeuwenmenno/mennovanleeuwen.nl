@@ -3,8 +3,9 @@ import { countFor, levels, loadContributions } from '../data/contributions'
 import { fetchMinecraft, MC_ADDRESS } from '../data/minecraft'
 import { fetchStars, loadRecents, timeAgo } from '../data/recents'
 import type { AppId } from '../os/wm'
-import { lookupAddress, RECORD_TYPES, resolve } from './dns'
+import { lookupAddress, RECORD_TYPES, resolve, resolverFor } from './dns'
 import { pepper } from './pepper'
+import { extraCommands } from './extra'
 import { revealEmail } from '../data/email'
 import { SHORTCUTS } from '../data/shortcuts'
 import { GAME_CATALOG } from '../apps/games/catalog'
@@ -20,7 +21,7 @@ import { age, HOME, lookup, prettyPath, resolvePath, walk, type DirNode, type No
 //   {anim:sl}{/}          an animation component (only `sl` today)
 // Pipes and redirects receive the text with this markup stripped.
 
-export const strip = (s: string) => s.replace(/\{anim:[^}]*\}\{\/\}/g, '').replace(/\{(?:c|link):[^}]*\}|\{\/\}/g, '')
+export const strip = (s: string) => s.replace(/\{anim:[^}]*\}\{\/\}/g, '').replace(/\{(?:c|link|fg):[^}]*\}|\{\/\}/g, '')
 const c = (color: string, s: string) => `{c:${color}}${s}{/}`
 const link = (url: string, text = url) => `{link:${url}}${text}{/}`
 
@@ -171,11 +172,12 @@ export const commands: Record<string, Command> = {
     run: () => {
       const groups: [string, string[]][] = [
         ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'open', 'files']],
-        ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'heatmap', 'stars', 'contact']],
-        ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo', 'calc']],
-        ['Network', ['ping', 'dig', 'host', 'nslookup', 'minecraft']],
+        ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'git', 'heatmap', 'stars', 'contact']],
+        ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
+        ['Network', ['curl', 'wget', 'whois', 'ping', 'dig', 'host', 'nslookup', 'minecraft']],
+        ['Device', ['htop', 'df', 'free', 'nproc', 'lscpu', 'xrandr', 'ip', 'watch']],
         ['System', ['keys', 'ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'env', 'export', 'theme', 'tty', 'reboot', 'shutdown', 'clear', 'exit']],
-        ['Fun', ['games', 'fastfetch', 'fortune', 'cowsay', 'sl', 'sudo']],
+        ['Fun', ['games', 'fastfetch', 'fortune', 'cowsay', 'figlet', 'lolcat', 'cmatrix', 'sl', 'sudo']],
       ]
       return [
         ...groups.map(([g, cmds]) => `${c('accent', g.padEnd(9))} ${cmds.map((n) => c('green', n)).join('  ')}`),
@@ -536,16 +538,6 @@ export const commands: Record<string, Command> = {
         .join('\n')
     },
   },
-  'git': {
-    desc: 'only `git log` works here',
-    usage: 'git log',
-    run: (ctx) => {
-      if (ctx.args[0] === 'log') return commands.recent.run({ ...ctx, args: ctx.args.slice(1) })
-      if (ctx.args[0] === 'status') return 'On branch main\nnothing to commit, working tree clean (it is read-only)'
-      if (ctx.args[0] === 'push') return c('yellow', 'Everything is already pushed. That is the whole point of a CV.')
-      throw new CmdError(`git: '${ctx.args[0] ?? ''}' is not supported here. Try 'git log'.`)
-    },
-  },
   stars: {
     desc: 'live GitHub stars',
     run: async () => {
@@ -646,8 +638,6 @@ export const commands: Record<string, Command> = {
   nano: { desc: 'editor', hidden: true, run: () => 'nano: read-only filesystem. Try `echo text > /tmp/notes`.' },
   emacs: { desc: 'operating system', hidden: true, run: () => 'emacs: you already have an operating system open.' },
   ':q': { desc: 'quit vim', hidden: true, run: () => 'Freedom.' },
-  curl: { desc: 'no network', hidden: true, run: () => c('yellow', 'curl: outbound network is disabled in this sandbox. Try `recent` for live data.') },
-  wget: { desc: 'no network', hidden: true, run: (ctx) => commands.curl.run(ctx) },
   ssh: { desc: 'no', hidden: true, run: () => c('yellow', 'ssh: you are already inside the only machine here.') },
   ping: {
     desc: 'time HTTPS round trips to a host',
@@ -656,14 +646,16 @@ export const commands: Record<string, Command> = {
   },
   dig: {
     desc: 'DNS lookup (over HTTPS)',
-    usage: 'dig <name> [A|AAAA|MX|TXT|NS|CNAME|SOA|CAA] [+short]',
+    usage: 'dig [@server] [type] <name> [+short]   (type and name in any order)',
     run: async (ctx) => {
       const short = ctx.args.includes('+short')
-      const [name, type] = dnsArgs(ctx.args.filter((a) => a !== '+short'), 'dig')
-      const r = await resolve(name, type, ctx.signal)
+      const { name, type, server } = dnsArgs(ctx.args.filter((a) => a !== '+short'), 'dig')
+      const prefer = server ? resolverFor(server) : null
+      const r = await resolve(name, type, ctx.signal, prefer)
       if (short) return r.answers.filter((a) => a.type === type).map((a) => a.data).join('\n')
       return [
-        c('muted', `; <<>> DiG over HTTPS <<>> ${name} ${type}`),
+        c('muted', `; <<>> DiG over HTTPS <<>> ${server ? `@${server} ` : ''}${name} ${type}`),
+        ...(server && !prefer ? [c('yellow', `;; a browser can only reach DNS-over-HTTPS resolvers, so ${server} was not asked`)] : []),
         `;; status: ${r.status === 'NOERROR' ? c('green', r.status) : c('red', r.status)}, via ${r.resolver} in ${r.ms.toFixed(0)} ms`,
         '',
         ';; ANSWER SECTION:',
@@ -675,9 +667,10 @@ export const commands: Record<string, Command> = {
     desc: 'DNS lookup, short form',
     usage: 'host <name> [type]',
     run: async (ctx) => {
-      const [name, explicit] = dnsArgs(ctx.args, 'host')
-      const types = ctx.args[1] ? [explicit] : ['A', 'AAAA', 'MX']
-      const results = await Promise.all(types.map((t) => resolve(name, t, ctx.signal)))
+      const { name, type: explicit, typeGiven, server } = dnsArgs(ctx.args, 'host')
+      const types = typeGiven ? [explicit] : ['A', 'AAAA', 'MX']
+      const prefer = server ? resolverFor(server) : null
+      const results = await Promise.all(types.map((t) => resolve(name, t, ctx.signal, prefer)))
       if (results[0].status === 'NXDOMAIN') throw new CmdError(`Host ${name} not found: 3(NXDOMAIN)`)
       const verb: Record<string, string> = { A: 'has address', AAAA: 'has IPv6 address', MX: 'mail is handled by', CNAME: 'is an alias for', NS: 'name server', TXT: 'descriptive text' }
       const out = results.flatMap((r, i) => r.answers.filter((a) => a.type === types[i] || a.type === 'CNAME').map((a) => `${a.name} ${verb[a.type] ?? `has ${a.type} record`} ${a.data}`))
@@ -688,7 +681,7 @@ export const commands: Record<string, Command> = {
     desc: 'DNS lookup, nslookup style',
     usage: 'nslookup <name>',
     run: async (ctx) => {
-      const [name] = dnsArgs(ctx.args, 'nslookup')
+      const { name } = dnsArgs(ctx.args, 'nslookup')
       const [a, aaaa] = await Promise.all([resolve(name, 'A', ctx.signal), resolve(name, 'AAAA', ctx.signal)])
       if (a.status === 'NXDOMAIN') throw new CmdError(`** server can't find ${name}: NXDOMAIN`)
       const addrs = [...a.answers, ...aaaa.answers].filter((x) => x.type === 'A' || x.type === 'AAAA')
@@ -833,14 +826,35 @@ function power(ctx: Ctx, what: 'reboot' | 'power off') {
   setTimeout(what === 'reboot' ? reboot : shutdown, 500)
   return `Broadcast message from ${profile.handle}@mvlos on ${ctx.console ? 'tty1' : 'pts/0'}:\n\nThe system will ${what} now!`
 }
+// The real-network and device tools live in extra.ts.
+Object.assign(commands, extraCommands)
 
-function dnsArgs(args: string[], cmd: string): [string, string] {
-  const name = args[0]?.replace(/^[a-z]+:\/\//i, '').replace(/[/?#:].*$/, '').replace(/\.$/, '').toLowerCase()
-  if (!name) throw new CmdError(`usage: ${cmd} <name> [type]`)
-  if (!/^([a-z0-9_-]+\.)*[a-z0-9_-]+$/.test(name)) throw new CmdError(`${cmd}: '${args[0]}' is not a valid domain name`)
-  const type = (args[1] ?? 'A').toUpperCase()
-  if (!(type in RECORD_TYPES)) throw new CmdError(`${cmd}: unsupported record type '${args[1]}' (try ${Object.keys(RECORD_TYPES).join(', ')})`)
-  return [name, type]
+
+/**
+ * Arguments the way dig, host and nslookup take them: the name and record type in either order,
+ * `-t TYPE`, `-type=TYPE`, and a server as `@server` (dig) or a trailing address (host, nslookup).
+ */
+function dnsArgs(args: string[], cmd: string): { name: string; type: string; typeGiven: boolean; server?: string } {
+  let type: string | undefined
+  let server: string | undefined
+  const names: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    if (a.startsWith('@')) server = a.slice(1)
+    else if (a === '-t' || a === '-q' || a === '-type') type = (args[++i] ?? '').toUpperCase()
+    else if (/^-(type|query)=/i.test(a)) type = a.split('=')[1].toUpperCase()
+    else if (a.startsWith('+') || a.startsWith('-')) continue
+    else if (!type && a.toUpperCase() in RECORD_TYPES && !a.includes('.')) type = a.toUpperCase()
+    else names.push(a)
+  }
+  if (type && !(type in RECORD_TYPES)) throw new CmdError(`${cmd}: unsupported record type '${type}' (try ${Object.keys(RECORD_TYPES).join(', ')})`)
+  // host and nslookup take the server as a second name.
+  if (cmd !== 'dig' && names.length > 1 && !server) server = names.pop()
+  const name = names[0]?.replace(/^[a-z]+:\/\//i, '').replace(/[/?#:].*$/, '').replace(/\.$/, '').toLowerCase()
+  if (!name) throw new CmdError(`usage: ${cmd} [@server] [type] <name>`)
+  if (names.length > 1) throw new CmdError(`${cmd}: one name at a time (got ${names.join(', ')})`)
+  if (!/^([a-z0-9_-]+\.)*[a-z0-9_-]+$/.test(name)) throw new CmdError(`${cmd}: '${names[0]}' is not a valid domain name`)
+  return { name, type: type ?? 'A', typeGiven: !!type, server }
 }
 
 /** Resolves after `ms`, or immediately when the signal aborts (Ctrl+C). */
@@ -941,7 +955,7 @@ async function ping(ctx: Ctx): Promise<string> {
   return lines.join('\n')
 }
 
-function writeTmp(cwd: string, target: string, content: string, append: boolean) {
+export function writeTmp(cwd: string, target: string, content: string, append: boolean) {
   const abs = resolvePath(cwd, target)
   if (!abs.startsWith('/tmp/') || abs.slice(5).includes('/')) throw new CmdError(`${target}: Read-only file system (only /tmp is writable)`)
   const name = abs.slice(5)

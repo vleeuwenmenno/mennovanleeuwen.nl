@@ -32,6 +32,12 @@ export type Ctx = {
   print: (text: string) => void
   /** True when output goes to the screen rather than into a pipe or redirect. */
   tty: boolean
+  /** Redraws one block of output in place (htop, watch, cmatrix); null removes it again. */
+  live: (text: string | null) => void
+  /** Terminal size in characters, for full-screen programs. */
+  size: { cols: number; rows: number }
+  /** Receives keys typed while the command runs (q in htop); return true to swallow the key. */
+  onKey: (handler: ((key: string) => boolean) | null) => void
   /** Aborted by Ctrl+C. */
   signal: AbortSignal
 }

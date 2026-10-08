@@ -8,17 +8,28 @@ import { HOME, prettyPath } from '../terminal/vfs'
 
 type Entry = { id: number; kind: 'cmd'; cwd: string; text: string } | { id: number; kind: 'out'; text: string }
 
-const MARKUP = /\{(c|link|anim):([^}]*)\}([\s\S]*?)\{\/\}/g
+const MARKUP = /\{(c|link|anim|fg):([^}]*)\}([\s\S]*?)\{\/\}/g
+const COLORS = new Set(['green', 'red', 'yellow', 'blue', 'cyan', 'magenta', 'muted', 'accent', 'bold', 'heat1', 'heat2', 'heat3', 'heat4'])
 
-/** Renders the `{c:color}…{/}` / `{link:url}…{/}` markup produced by commands. */
+/**
+ * Renders the `{c:color}…{/}` / `{fg:#rrggbb}…{/}` / `{link:url}…{/}` markup produced by commands.
+ * Output can contain text from the network (curl), so every argument is checked: only known
+ * colours, hex colours, http(s) links and the one animation.
+ */
 function Markup({ text, onAnimationEnd }: { text: string; onAnimationEnd?: () => void }) {
   const parts: ReactNode[] = []
   let last = 0
   for (const m of text.matchAll(MARKUP)) {
     if (m.index! > last) parts.push(text.slice(last, m.index))
     const [, kind, arg, inner] = m
+    const valid = kind === 'c' ? COLORS.has(arg) : kind === 'fg' ? /^#[0-9a-f]{6}$/i.test(arg) : kind === 'link' ? /^https?:\/\//.test(arg) : arg === 'sl'
+    if (!valid) continue
     parts.push(
-      kind === 'anim' ? (
+      kind === 'fg' ? (
+        <span key={m.index} style={{ color: arg }}>
+          {inner}
+        </span>
+      ) : kind === 'anim' ? (
         <SlTrain key={m.index} onDone={onAnimationEnd} />
       ) : kind === 'link' ? (
         <a key={m.index} href={arg} target="_blank" rel="noopener noreferrer">
@@ -80,6 +91,8 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
   const [cwd, setCwd] = useState(HOME)
   const [value, setValue] = useState('')
   const [running, setRunning] = useState(false)
+  // A full-screen program (htop, cmatrix, watch) is drawing: no "working…" line under it.
+  const [drawing, setDrawing] = useState(false)
   // An animation (sl) holds the prompt until it finishes, like the real one.
   const [animating, setAnimating] = useState(false)
   const busy = running || animating
@@ -88,6 +101,7 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
   const env = useRef<Record<string, string>>({ USER: profile.handle, HOME, SHELL: '/bin/msh', TERM: 'xterm-mvlos', EDITOR: 'nvim', LANG: 'en_US.UTF-8' })
   const inputRef = useRef<HTMLInputElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const keyHandler = useRef<((key: string) => boolean) | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const windowsRef = useRef(wm.windows)
   windowsRef.current = wm.windows
@@ -145,6 +159,22 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
     }
 
     const print = (text: string) => setEntries((e) => [...e, { id: nextId++, kind: 'out', text }])
+    // One redrawable block per command line, for programs that update in place.
+    let liveId: number | null = null
+    const live = (text: string | null) => {
+      setDrawing(text !== null)
+      if (text === null) {
+        const id = liveId
+        liveId = null
+        if (id !== null) setEntries((e) => e.filter((x) => x.id !== id))
+      } else if (liveId === null) {
+        const id = (liveId = nextId++)
+        setEntries((e) => [...e, { id, kind: 'out', text }])
+      } else {
+        const id = liveId
+        setEntries((e) => e.map((x) => (x.id === id ? { ...x, text } : x)))
+      }
+    }
     abortRef.current = new AbortController()
     setRunning(true)
     const results = await runLine(trimmed, {
@@ -170,14 +200,39 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
         : undefined,
       setAccent,
       print,
+      live,
+      size: termSize(),
+      onKey: (h) => {
+        keyHandler.current = h
+      },
       signal: abortRef.current.signal,
     })
+    keyHandler.current = null
+    setDrawing(false)
     abortRef.current = null
     setRunning(false)
     if (results.some((r) => r.output.includes('{anim:'))) setAnimating(true)
   }
 
+  /** Columns and rows that fit, measured from the font. */
+  function termSize() {
+    const el = scrollRef.current
+    if (!el) return { cols: 80, rows: 24 }
+    const style = getComputedStyle(el)
+    const ctx2d = document.createElement('canvas').getContext('2d')!
+    ctx2d.font = `${style.fontSize} ${style.fontFamily}`
+    const charW = ctx2d.measureText('MMMMMMMMMM').width / 10 || 8
+    const lineH = parseFloat(style.lineHeight) || 20
+    const w = el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+    const h = el.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)
+    return { cols: Math.max(20, Math.floor(w / charW)), rows: Math.max(8, Math.floor(h / lineH) - 1) }
+  }
+
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (running && keyHandler.current && !e.ctrlKey && !e.metaKey && keyHandler.current(e.key)) {
+      e.preventDefault()
+      return
+    }
     if (e.key === 'Enter') {
       if (!busy) submit(value)
     } else if (e.key === 'Tab') {
@@ -240,7 +295,7 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
           )}
         </Fragment>
       ))}
-      {running && (
+      {running && !drawing && (
         <div className="t-line t-muted">
           <span className="spinner" /> working…
         </div>

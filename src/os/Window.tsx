@@ -124,6 +124,7 @@ export function Window({ win, title, chrome = 'default', className = '', childre
       role="dialog"
       aria-label={title}
       data-app={win.app}
+      data-pid={win.pid}
     >
       {chrome === 'default' ? (
         <header className="titlebar" onPointerDown={begin('move')} onDoubleClick={() => wm.toggleMax(win.pid)} {...handlers}>

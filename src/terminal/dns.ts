@@ -14,9 +14,16 @@ const STATUS: Record<number, string> = { 0: 'NOERROR', 1: 'FORMERR', 2: 'SERVFAI
 export type DnsAnswer = { name: string; type: string; ttl: number; data: string }
 export type DnsResult = { status: string; answers: DnsAnswer[]; resolver: string; ms: number }
 
-export async function resolve(name: string, type = 'A', signal?: AbortSignal): Promise<DnsResult> {
+/** Which resolver a dig-style `@server` means, when it is one the browser can reach. */
+export function resolverFor(server: string): 'cloudflare' | 'google' | null {
+  if (/^(1\.1\.1\.1|1\.0\.0\.1|cloudflare(-dns\.com)?|one\.one\.one\.one)$/i.test(server)) return 'cloudflare'
+  if (/^(8\.8\.8\.8|8\.8\.4\.4|google|dns\.google)$/i.test(server)) return 'google'
+  return null
+}
+
+export async function resolve(name: string, type = 'A', signal?: AbortSignal, prefer?: 'cloudflare' | 'google' | null): Promise<DnsResult> {
   let lastError: unknown
-  for (const url of RESOLVERS) {
+  for (const url of prefer === 'google' ? [...RESOLVERS].reverse() : RESOLVERS) {
     const t0 = performance.now()
     try {
       const res = await fetch(url(name, type), { headers: { accept: 'application/dns-json' }, signal })
