@@ -4,7 +4,7 @@ import { mergeActivity, normalizeGithubEvents, normalizeGithubReleases, type Act
 export type { Activity } from './normalize.ts'
 
 const GITHUB_USER = 'vleeuwenmenno'
-const RELEASE_REPOS = ['vleeuwenmenno/boltwarden']
+const RELEASE_REPOS = ['vleeuwenmenno/boltwarden', 'vleeuwenmenno/omasoloist']
 const CACHE_KEY = 'mvlos.recents.v1'
 const CACHE_TTL = 10 * 60 * 1000
 // Live refresh while the page is open: GitHub's events (20 requests an hour, well inside the
