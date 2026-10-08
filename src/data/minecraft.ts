@@ -115,7 +115,7 @@ function watch(st: McStatus, live = false) {
 
   const tell = (n: Parameters<typeof notify>[0]) => notifyOn && notify(n)
   if (prev.online !== st.online) {
-    tell({ title: st.online ? 'Minecraft server is up' : 'Minecraft server went offline', body: MC_ADDRESS })
+    tell({ title: st.online ? "Menno's Minecraft server is back online" : "Menno's Minecraft server went offline", body: MC_ADDRESS })
     if (!st.online) return
   }
   if (!st.online) return
@@ -127,15 +127,15 @@ function watch(st: McStatus, live = false) {
     if (live || n + 1 >= 2) left.push(name)
     else misses.set(name, n + 1) // missing once: keep watching
   }
-  const total = `${st.players.online}/${st.players.max} online`
-  if (joined.length > 2) tell({ title: `${joined.length} players joined`, body: total })
-  else joined.forEach((p) => tell({ title: `${p} joined the game`, body: total, icon: head(p) }))
-  if (left.length > 2) tell({ title: `${left.length} players left`, body: total })
-  else left.forEach((p) => tell({ title: `${p} left the game`, body: total, icon: head(p) }))
+  const total = `${st.players.online} of ${st.players.max} players online · ${MC_ADDRESS}`
+  if (joined.length > 2) tell({ title: `${joined.length} players joined Menno's Minecraft server`, body: total })
+  else joined.forEach((p) => tell({ title: `${p} joined Menno's Minecraft server`, body: total, icon: head(p) }))
+  if (left.length > 2) tell({ title: `${left.length} players left Menno's Minecraft server`, body: total })
+  else left.forEach((p) => tell({ title: `${p} left Menno's Minecraft server`, body: total, icon: head(p) }))
 
   // Servers that hide their player list still report a count.
   if (!st.players.list.length && !prev.misses.size && st.players.online !== prev.count) {
-    tell({ title: st.players.online > prev.count ? 'Someone joined the game' : 'Someone left the game', body: total })
+    tell({ title: `Someone ${st.players.online > prev.count ? 'joined' : 'left'} Menno's Minecraft server`, body: total })
   }
 }
 
