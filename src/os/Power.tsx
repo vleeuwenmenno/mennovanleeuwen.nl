@@ -13,7 +13,7 @@ const platform = typeof navigator !== 'undefined' ? navigator.platform || 'the w
 // [kind, text, delay before the line in ms]. Kernel lines fly by, systemd takes its time.
 type LogLine = ['k' | 'ok' | 'warn' | 'cancel' | 'start' | 'job' | 'info', string, number]
 const BOOT: LogLine[] = [
-  ['k', `[    0.000000] Linux version 6.42.0-mvl (menno@arch) (gcc 15.2.1) #1 SMP PREEMPT_DYNAMIC`, 0],
+  ['k', `[    0.000000] Linux version 6.42.0-mvl (menno@arch) (gcc 15.2.1) #1 SMP PREEMPT_DYNAMIC mvlos-${VERSION}`, 0],
   ['k', `[    0.000000] Command line: BOOT_IMAGE=/vmlinuz-mvl root=/dev/cv rw quiet splash=no`, 30],
   ['k', `[    0.000000] DMI: ${platform}, BIOS curiosity 1.0 19/09/1996`, 30],
   ['k', '[    0.004211] Memory: 30 years available, 0 wasted', 30],
@@ -26,7 +26,7 @@ const BOOT: LogLine[] = [
   ['k', '[    0.264113] EXT4-fs (nvme0n1p2): mounted filesystem /home/menno ro, for your safety', 30],
   ['k', '[    0.301772] Run /sbin/init as init process', 40],
   ['info', '', 60],
-  ['info', 'Welcome to MvL OS (Arch, Omarchy flavour)!', 120],
+  ['info', `Welcome to MvL OS ${VERSION} (Arch, Omarchy flavour)!`, 120],
   ['info', '', 60],
   ['ok', 'Created slice Slice /system/getty.', 70],
   ['ok', 'Reached target Local Encrypted Volumes.', 60],
