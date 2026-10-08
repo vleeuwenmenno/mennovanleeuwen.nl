@@ -655,6 +655,7 @@ async function ping(ctx: Ctx): Promise<string> {
   const out = (l: string) => (ctx.tty ? ctx.print(l) : lines.push(l))
   const times: number[] = []
   let sent = 0
+  let fastFails = 0
 
   out(`PING ${host} over HTTPS (browsers cannot send ICMP)`)
   for (let seq = 1; seq <= count && !ctx.signal.aborted; seq++) {
@@ -671,7 +672,9 @@ async function ping(ctx: Ctx): Promise<string> {
       out(`reply from ${host}: seq=${seq} time=${ms.toFixed(1)} ms${seq === 1 ? c('muted', '  (includes DNS + TLS setup)') : ''}`)
     } catch {
       if (ctx.signal.aborted) break
-      out(c('red', `no reply from ${host}: seq=${seq} ${performance.now() - t0 >= 3990 ? 'timed out' : 'connection failed'}`))
+      const ms = performance.now() - t0
+      if (ms < 3990) fastFails++
+      out(c('red', `no reply from ${host}: seq=${seq} ${ms >= 3990 ? 'timed out' : `connection failed after ${ms.toFixed(0)} ms`}`))
     } finally {
       clearTimeout(timer)
       ctx.signal.removeEventListener('abort', stop)
@@ -687,6 +690,10 @@ async function ping(ctx: Ctx): Promise<string> {
     const avg = times.reduce((a, b) => a + b, 0) / times.length
     out(`rtt min/avg/max = ${Math.min(...times).toFixed(1)}/${avg.toFixed(1)}/${Math.max(...times).toFixed(1)} ms`)
   }
+  // A request that fails without timing out never left the browser or found no server: usually a
+  // tracker blocker refusing the host, otherwise a DNS name that does not exist.
+  if (!times.length && fastFails === sent && sent)
+    out(c('muted', `Every request was refused right away. Either ${host} does not exist, or your browser or an extension (tracking protection, an ad blocker) blocks it from other sites.`))
   if (!times.length && sent) throw new CmdError(ctx.tty ? '' : lines.join('\n'))
   return lines.join('\n')
 }
