@@ -163,6 +163,14 @@ export function normalizeGithubReleases(repo: string, releases: Json[]): Activit
     }))
 }
 
+const FORGEJO_THREADS: Record<string, [ActivityKind, string, 'pulls' | 'issues']> = {
+  create_pull_request: ['pr', 'Opened', 'pulls'],
+  merge_pull_request: ['merge', 'Merged', 'pulls'],
+  close_pull_request: ['pr', 'Closed', 'pulls'],
+  create_issue: ['issue', 'Opened', 'issues'],
+  close_issue: ['issue', 'Closed', 'issues'],
+}
+
 export function normalizeForgejoFeed(base: string, feed: Json[]): Activity[] {
   const out: Activity[] = []
   for (const a of feed) {
@@ -195,6 +203,13 @@ export function normalizeForgejoFeed(base: string, feed: Json[]): Activity[] {
       })
     } else if (a.op_type === 'create_repo') {
       out.push({ id: `fj-${a.id}`, source: 'forgejo', kind: 'create', repo, title: `Created ${repo}`, url: repoUrl, date })
+    } else if (FORGEJO_THREADS[a.op_type]) {
+      // Pull request and issue events carry "number|title" as their content.
+      const [kind, verb, path] = FORGEJO_THREADS[a.op_type]
+      const [number, ...rest] = String(a.content ?? '').split('|')
+      if (!/^\d+$/.test(number)) continue
+      const noun = path === 'pulls' ? 'PR' : 'issue'
+      out.push({ id: `fj-${a.id}`, source: 'forgejo', kind, repo, title: `${verb} ${noun} #${number}`, detail: rest.join('|').trim() || undefined, url: `${repoUrl}/${path}/${number}`, date })
     }
   }
   return out
