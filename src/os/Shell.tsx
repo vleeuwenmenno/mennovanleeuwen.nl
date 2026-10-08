@@ -176,16 +176,33 @@ function saveOrder(order: AppId[]) {
   }
 }
 
+/** True below the phone breakpoint, kept in step with the viewport. */
+function useIsMobile() {
+  const [mobile, setMobile] = useState(isMobile)
+  useEffect(() => {
+    const sync = () => setMobile(isMobile())
+    window.addEventListener('resize', sync)
+    return () => window.removeEventListener('resize', sync)
+  }, [])
+  return mobile
+}
+
 /**
  * Dock visibility per the chosen mode. When it is hiding, it slides away and comes back when the
- * pointer reaches the bottom edge (or rests on the dock). Touch screens have no hover, so there it
- * always stays; it also stays while the launcher is open or icons are being dragged.
+ * pointer reaches the bottom edge (or rests on the dock). It also stays while the launcher is open
+ * or icons are being dragged.
+ *
+ * Phones have no room for it next to a window: it tucks away while any app window is open (sticky
+ * notes don't count) and comes back once they are all closed. A bar at the bottom brings it up;
+ * it goes again when a window opens or the screen is tapped elsewhere.
  */
-function useDockVisibility(pinned: boolean, anyMaximized: boolean) {
+function useDockVisibility(pinned: boolean, anyMaximized: boolean, appOpen: boolean, openKey: string) {
   const [mode, setMode] = useState<DockMode>(getDockMode)
   const [hover, setHover] = useState(false)
+  const [peek, setPeek] = useState(false)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const touch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches
+  const mobile = useIsMobile()
 
   useEffect(() => {
     const sync = () => setMode(getDockMode())
@@ -196,6 +213,24 @@ function useDockVisibility(pinned: boolean, anyMaximized: boolean) {
     }
   }, [])
 
+  // Opening or switching to a window puts a peeking dock away again.
+  useEffect(() => setPeek(false), [openKey])
+
+  // So does tapping anywhere outside it.
+  useEffect(() => {
+    if (!peek) return
+    const away = (e: PointerEvent) => {
+      if (!(e.target as Element).closest?.('.dock, .dock-handle, .ctx-menu')) setPeek(false)
+    }
+    window.addEventListener('pointerdown', away)
+    return () => window.removeEventListener('pointerdown', away)
+  }, [peek])
+
+  const tucked = mobile && appOpen
+  useEffect(() => {
+    document.documentElement.toggleAttribute('data-dock-tucked', tucked)
+  }, [tucked])
+
   const show = () => {
     if (hideTimer.current) clearTimeout(hideTimer.current)
     setHover(true)
@@ -204,8 +239,9 @@ function useDockVisibility(pinned: boolean, anyMaximized: boolean) {
     if (hideTimer.current) clearTimeout(hideTimer.current)
     hideTimer.current = setTimeout(() => setHover(false), 450)
   }
+  if (mobile) return { visible: !tucked || peek || pinned, autohide: false, tucked, peek: () => setPeek(true), mode, show() {}, hideSoon() {} }
   const hiding = !touch && (mode === 'hide' || (mode === 'maximized' && anyMaximized))
-  return { visible: !hiding || pinned || hover, autohide: hiding, mode, show, hideSoon }
+  return { visible: !hiding || pinned || hover, autohide: hiding, tucked: false, peek: () => setPeek(true), mode, show, hideSoon }
 }
 
 function Dock() {
@@ -223,7 +259,13 @@ function Dock() {
   const [moreOpen, setMoreOpen] = useState(false)
   const navRef = useRef<HTMLElement>(null)
   const firstRef = useRef<HTMLButtonElement>(null)
-  const dock = useDockVisibility(!!dragging || overlay === 'launchpad' || moreOpen, wm.windows.some((w) => w.maximized && !w.minimized))
+  const appWindows = wm.windows.filter((w) => !w.minimized && APP_META[w.app].chrome !== 'note')
+  const dock = useDockVisibility(
+    !!dragging || overlay === 'launchpad' || moreOpen,
+    wm.windows.some((w) => w.maximized && !w.minimized),
+    appWindows.length > 0,
+    `${appWindows.map((w) => w.pid).join()}|${wm.focusedPid}`,
+  )
 
   // How many apps fit between "All apps" and Trash. The rest go behind a "More" button, so the dock
   // never scrolls or runs off a phone screen. Every item is as wide as the "All apps" button.
@@ -400,6 +442,11 @@ function Dock() {
   return (
     <>
     {dock.autohide && <div className="dock-hotzone" onPointerEnter={dock.show} onPointerLeave={dock.hideSoon} aria-hidden />}
+    {dock.tucked && !dock.visible && (
+      <button className="dock-handle" onClick={dock.peek} aria-label="Show the dock">
+        <span />
+      </button>
+    )}
     <nav
       ref={navRef}
       className={`dock ${dragging ? 'is-reordering' : ''} ${dock.visible ? '' : 'is-hidden'}`}

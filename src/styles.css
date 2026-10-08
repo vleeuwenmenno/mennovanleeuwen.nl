@@ -3115,6 +3115,27 @@ button.fm-dd-row:hover {
 .dock.is-hidden {
   transform: translate(-50%, calc(100% + 24px));
 }
+/* Phones: the bar that brings a tucked-away dock back. */
+.dock-handle {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  z-index: 100001;
+  display: grid;
+  place-items: center;
+  width: 160px;
+  height: 28px;
+}
+.dock-handle span {
+  width: 120px;
+  height: 5px;
+  background: color-mix(in srgb, var(--text) 55%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--bg) 60%, transparent);
+}
+.dock-handle:active span {
+  background: var(--accent);
+}
 .dock-hotzone {
   position: fixed;
   left: 0;
@@ -3882,6 +3903,10 @@ kbd {
     top: calc(var(--top) + 6px) !important;
     width: calc(100vw - 12px) !important;
     height: calc(100dvh - var(--top) - 104px) !important;
+  }
+  /* With the dock tucked away, app windows reach down to the handle bar. */
+  :root[data-dock-tucked] .window:not(.chrome-note) {
+    height: calc(100dvh - var(--top) - 36px) !important;
   }
   .window.chrome-note {
     transform: rotate(-1deg);
