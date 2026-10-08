@@ -44,3 +44,7 @@ Commands live in [`src/terminal/commands.ts`](src/terminal/commands.ts). The fil
 read-only and in memory; only `/tmp` accepts writes (`echo hi > /tmp/x`), and those vanish on
 reload. Pipes, `;`, `&&`, `$VARS`, tab completion and history all work. `ps` and `kill` operate
 on the open windows.
+
+`pepper` ([`src/terminal/pepper.ts`](src/terminal/pepper.ts)) simulates the Pepper CLI against a
+pretend lab cluster (3 masters, 4 minions). Its grammar, outcome names and output layout follow
+the real CLI; the cluster, states and timings are invented, and applies only last for the session.

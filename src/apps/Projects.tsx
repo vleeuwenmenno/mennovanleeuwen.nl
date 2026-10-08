@@ -69,6 +69,11 @@ function Detail({ item, onBack }: { item: Item; onBack: () => void }) {
             Source ↗
           </a>
         )}
+        {d.slug === 'pepper' && (
+          <button className="btn" onClick={() => wm.openNew('terminal', { run: "pepper '*' state apply --test" })}>
+            Try the CLI
+          </button>
+        )}
         <button className="btn btn-ghost" onClick={() => wm.open('terminal', { run: `cat ~/${item.kind === 'project' ? 'projects' : 'contributions'}/${d.slug}/README.md` })}>
           Open in terminal
         </button>

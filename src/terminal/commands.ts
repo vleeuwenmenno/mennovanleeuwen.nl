@@ -2,8 +2,9 @@ import { contributions, headlines, profile, projects } from '../data/profile'
 import { countFor, levels, loadContributions } from '../data/contributions'
 import { fetchMinecraft, MC_ADDRESS } from '../data/minecraft'
 import { fetchStars, loadRecents, timeAgo } from '../data/recents'
-import type { AppId, WinState } from '../os/wm'
+import type { AppId } from '../os/wm'
 import { lookupAddress, RECORD_TYPES, resolve } from './dns'
+import { pepper } from './pepper'
 import { age, HOME, lookup, prettyPath, resolvePath, walk, type DirNode, type Node } from './vfs'
 
 // Output markup understood by the terminal renderer:
@@ -16,29 +17,8 @@ export const strip = (s: string) => s.replace(/\{anim:[^}]*\}\{\/\}/g, '').repla
 const c = (color: string, s: string) => `{c:${color}}${s}{/}`
 const link = (url: string, text = url) => `{link:${url}}${text}{/}`
 
-export class CmdError extends Error {}
-
-export type Ctx = {
-  args: string[]
-  stdin: string | null
-  cwd: string
-  setCwd: (path: string) => void
-  env: Record<string, string>
-  history: string[]
-  windows: WinState[]
-  openApp: (app: AppId, props?: Record<string, string>) => void
-  openNewApp: (app: AppId, props?: Record<string, string>) => void
-  closeWindow: (pid: number) => void
-  clear: () => void
-  exit: () => void
-  setAccent: (name: string) => boolean
-  /** Writes a line to the screen right away (for commands that stream, like ping). */
-  print: (text: string) => void
-  /** True when output goes to the screen rather than into a pipe or redirect. */
-  tty: boolean
-  /** Aborted by Ctrl+C. */
-  signal: AbortSignal
-}
+export { CmdError, type Ctx } from './types'
+import { CmdError, type Ctx } from './types'
 
 type Out = string | void
 type Command = { desc: string; usage?: string; hidden?: boolean; run: (ctx: Ctx) => Out | Promise<Out> }
@@ -177,7 +157,7 @@ export const commands: Record<string, Command> = {
     run: () => {
       const groups: [string, string[]][] = [
         ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'open']],
-        ['About me', ['whoami', 'cv', 'projects', 'contribs', 'recent', 'heatmap', 'stars', 'contact']],
+        ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'heatmap', 'stars', 'contact']],
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo']],
         ['Network', ['ping', 'dig', 'host', 'nslookup', 'minecraft']],
         ['System', ['ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'env', 'export', 'theme', 'clear', 'exit']],
@@ -744,6 +724,11 @@ export const commands: Record<string, Command> = {
   minesweeper: { desc: 'play minesweeper', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['minesweeper'] }) },
   '2048': { desc: 'play 2048', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['2048'] }) },
   breakout: { desc: 'play breakout', hidden: true, run: (ctx) => commands.games.run({ ...ctx, args: ['breakout'] }) },
+  pepper: {
+    desc: 'Pepper CLI against a simulated lab cluster',
+    usage: "pepper [--local | TARGET] COMMAND   (try: pepper --help)",
+    run: (ctx) => pepper(ctx),
+  },
   shutdown: { desc: 'power off', hidden: true, run: () => 'Shutting down... no. Close the tab like everyone else.' },
   reboot: {
     desc: 'reload the page',
@@ -1003,6 +988,7 @@ async function runPipeline(stmt: string, base: Base): Promise<RunResult> {
     }
     return { output: rendered, ok: true }
   } catch (err) {
+    if (err instanceof CmdError && err.raw) return { output: err.message, ok: false }
     const msg = err instanceof CmdError ? err.message : `msh: ${(err as Error).message}`
     return { output: msg ? c('red', msg) : '', ok: false }
   }

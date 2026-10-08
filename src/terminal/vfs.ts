@@ -35,6 +35,7 @@ function projectReadme(p: (typeof projects)[number]) {
     `Status: ${p.status}`,
     p.url ? `Site:   ${p.url}` : '',
     p.repo ? `Source: ${p.repo}` : '',
+    p.slug === 'pepper' ? "\nTry it right here: `pepper --help` or `pepper '*' state apply --test`" : '',
   ]
     .filter((l, i, a) => l !== '' || a[i - 1] !== '')
     .join('\n')
