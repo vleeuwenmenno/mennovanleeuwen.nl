@@ -1,8 +1,9 @@
 # Runs the released site in Docker, the same way as on the server. For working on the site use
 # `pnpm dev` instead (instant reload); `docker compose up -d --build` is only for checking the
 # production image itself.
-# .env next to this file can set PORT (default 8080) and GITHUB_TOKEN (optional, for `git log`
-# in the terminal).
+# .env next to this file can set PORT (default 8080), GITHUB_TOKEN (optional, for `git log` in
+# the terminal) and the sign-in settings: GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, ALLOWED_USERS,
+# PUBLIC_URL, SESSION_SECRET (see README).
 services:
   site:
     image: ghcr.io/vleeuwenmenno/mennovanleeuwen.nl:latest
@@ -12,3 +13,14 @@ services:
       - "${PORT:-8080}:8080"
     environment:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      ALLOWED_USERS: ${ALLOWED_USERS:-vleeuwenmenno}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+    # Sign-in sessions, linked Gitea/Forgejo instances and synced notes.
+    volumes:
+      - site_data:/app/data
+
+volumes:
+  site_data:

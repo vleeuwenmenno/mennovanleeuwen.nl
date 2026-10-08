@@ -881,7 +881,7 @@ function list(items: Item[], key: string): ReactNode {
   return items[0].ordered ? <ol key={key}>{out}</ol> : <ul key={key}>{out}</ul>
 }
 
-function MarkdownPreview({ text }: { text: string }) {
+export function MarkdownPreview({ text }: { text: string }) {
   const lines = text.split('\n')
   const out: ReactNode[] = []
   let i = 0

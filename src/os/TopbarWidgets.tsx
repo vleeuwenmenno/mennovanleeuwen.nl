@@ -3,6 +3,7 @@ import { profile } from '../data/profile'
 import { timeAgo } from '../data/recents'
 import { fetchMinecraft, MC_ADDRESS, MC_PORT, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
+import { signIn, signOut, useAccount } from './account'
 import { toggleOverlay } from './overlays'
 import { reboot, shutdown } from './powerState'
 import { useWM } from './wm'
@@ -281,6 +282,42 @@ function ReleaseStatus() {
   )
 }
 
+/** Who is signed in, or a way to sign in (only when this server offers it). */
+function AccountBlock({ close }: { close: () => void }) {
+  const wm = useWM()
+  const account = useAccount()
+  const settings = () => {
+    close()
+    wm.open('settings', { t: String(Date.now()) })
+  }
+  if (account.status === 'user' && account.user)
+    return (
+      <div className="sys-user">
+        {account.user.avatar && <img src={account.user.avatar} alt="" width={24} height={24} />}
+        <span>
+          Signed in as <strong>{account.user.login}</strong>
+        </span>
+        <button onClick={settings}>Settings</button>
+        <button
+          onClick={() => {
+            close()
+            void signOut()
+          }}
+        >
+          Sign out
+        </button>
+      </div>
+    )
+  if (account.status === 'anon')
+    return (
+      <div className="sys-user">
+        <span className="muted">Owner?</span>
+        <button onClick={signIn}>Sign in with GitHub</button>
+      </div>
+    )
+  return null
+}
+
 export function SystemMenu() {
   const wm = useWM()
   const built = new Date(BUILT)
@@ -329,6 +366,7 @@ export function SystemMenu() {
             <dt>Owner</dt>
             <dd>{profile.name}</dd>
           </dl>
+          <AccountBlock close={close} />
           <div className="sys-actions">
             <button
               onClick={() => {
@@ -337,6 +375,14 @@ export function SystemMenu() {
               }}
             >
               About this system
+            </button>
+            <button
+              onClick={() => {
+                close()
+                wm.open('settings', { t: String(Date.now()) })
+              }}
+            >
+              Settings
             </button>
             <button
               onClick={() => {

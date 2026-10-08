@@ -112,6 +112,36 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  notebook: {
+    bg: 'linear-gradient(160deg,#ffd27a,#e89a3c)',
+    fg: '#4a2603',
+    glyph: (
+      <>
+        <rect x="13" y="10" width="23" height="28" rx="2" />
+        <path d="M13 16h-3M13 24h-3M13 32h-3M19 17h11M19 23h11M19 29h7" />
+      </>
+    ),
+  },
+  sticky: {
+    bg: 'linear-gradient(160deg,#fff1a8,#fde27a)',
+    fg: '#6b4e00',
+    glyph: (
+      <>
+        <path d="M12 12h24v16l-8 8H12z" />
+        <path d="M28 36v-8h8" />
+      </>
+    ),
+  },
+  settings: {
+    bg: 'linear-gradient(160deg,#9aa5b8,#5a6478)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <circle cx="24" cy="24" r="5" />
+        <path d="M24 10v5M24 33v5M10 24h5M33 24h5M14 14l3.5 3.5M30.5 30.5L34 34M14 34l3.5-3.5M30.5 17.5L34 14" />
+      </>
+    ),
+  },
   trash: {
     bg: 'linear-gradient(160deg,#3a3f4f,#1d2029)',
     fg: '#c0c6d6',
@@ -137,6 +167,9 @@ const HUES: Record<AppId, string> = {
   contact: 'var(--magenta)',
   games: 'var(--cyan)',
   zed: 'var(--blue)',
+  notebook: 'var(--orange)',
+  sticky: 'var(--yellow)',
+  settings: 'var(--text)',
   trash: 'var(--muted)',
 }
 

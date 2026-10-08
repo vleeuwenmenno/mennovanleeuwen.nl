@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useStickyStyle } from '../data/notes'
 import { useRecents } from '../data/recents'
 import { APP_META } from './apps'
 import { Launchpad } from './Launchpad'
@@ -12,6 +13,8 @@ import { PowerScreens } from './Power'
 import { Notifications } from './Notifications'
 import { startActivityAlerts } from './activityAlerts'
 import { usePower } from './powerState'
+import { notify } from './notify'
+import { synced } from './synced'
 import { AppIcon } from './icons'
 import { appearanceMenu } from './appearanceMenu'
 import { toggleMode, useTheme } from './theme'
@@ -19,7 +22,7 @@ import { ClockWidget, MinecraftWidget, SystemMenu } from './TopbarWidgets'
 import { Window } from './Window'
 import { SINGLE_INSTANCE, useWM, type AppId, type Geometry, type WinState } from './wm'
 
-const DOCK: (AppId | '|')[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'notes', 'contact', '|', 'trash']
+const DOCK: (AppId | '|')[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'notes', 'notebook', 'contact', '|', 'trash']
 
 const TOP = 28
 const DOCK_SPACE = 96
@@ -150,27 +153,18 @@ function TopBar() {
   )
 }
 
-const DOCK_KEY = 'mvlos.dock.v1'
 const DEFAULT_ORDER = DOCK.filter((x): x is AppId => x !== '|' && x !== 'trash')
+/** The visitor's own dock order; empty means the default. */
+const dockOrder = synced<AppId[]>('dock', [], { legacyKey: 'mvlos.dock.v1', normalize: (v) => (Array.isArray(v) ? v : []) })
 
 /** Saved dock order, with apps added since it was saved appended and removed ones dropped. */
 function loadOrder(): AppId[] {
-  try {
-    const saved: AppId[] = JSON.parse(localStorage.getItem(DOCK_KEY) ?? '[]')
-    const known = saved.filter((a) => DEFAULT_ORDER.includes(a))
-    return [...known, ...DEFAULT_ORDER.filter((a) => !known.includes(a))]
-  } catch {
-    return DEFAULT_ORDER
-  }
+  const known = dockOrder.get().filter((a) => DEFAULT_ORDER.includes(a))
+  return [...known, ...DEFAULT_ORDER.filter((a) => !known.includes(a))]
 }
 
 function saveOrder(order: AppId[]) {
-  try {
-    if (order.join() === DEFAULT_ORDER.join()) localStorage.removeItem(DOCK_KEY)
-    else localStorage.setItem(DOCK_KEY, JSON.stringify(order))
-  } catch {
-    /* order just won't persist */
-  }
+  dockOrder.set(order.join() === DEFAULT_ORDER.join() ? [] : order)
 }
 
 /** True below the phone breakpoint, kept in step with the viewport. */
@@ -245,6 +239,7 @@ function Dock() {
   const wm = useWM()
   const overlay = useOverlay()
   const [order, setOrder] = useState<AppId[]>(loadOrder)
+  useEffect(() => dockOrder.onRemote(() => setOrder(loadOrder())), [])
   const [dragging, setDragging] = useState<{ app: AppId; dx: number } | null>(null)
   const drag = useRef<{ app: AppId; startX: number; moved: boolean } | null>(null)
   const items = useRef(new Map<AppId, HTMLElement>())
@@ -538,6 +533,24 @@ function DockMore({ apps, open, setOpen, onLaunch, running }: { apps: AppId[]; o
   )
 }
 
+/** A window with its app inside; stickies take their colour and tilt from their note. */
+function AppWindow({ w }: { w: WinState }) {
+  const style = useStickyStyle(w)
+  const meta = APP_META[w.app]
+  return (
+    <Window win={w} title={meta.title} chrome={meta.chrome} style={style}>
+      {meta.render(w)}
+    </Window>
+  )
+}
+
+const AUTH_NOTICES: Record<string, { title: string; body?: string }> = {
+  ok: { title: 'Signed in', body: 'Notes, launchers and layouts now sync. Spotlight searches your repositories too (try #123 or repo@branch).' },
+  denied: { title: 'Sign-in refused', body: 'That GitHub account is not allowed on this desktop.' },
+  error: { title: 'Sign-in failed', body: 'GitHub did not complete the sign-in. Try again.' },
+  off: { title: 'Sign-in is not set up', body: 'This server has no GitHub OAuth app configured.' },
+}
+
 function SnapPreview() {
   const g = useSnapPreview()
   if (!g) return null
@@ -554,7 +567,10 @@ export function Shell() {
     const params = new URLSearchParams(location.search)
     const app = params.get('open') as AppId | null
     if (app && app in APP_META && app !== 'trash') wm.open(app)
-    if (params.has('open')) history.replaceState(null, '', location.pathname)
+    // Back from GitHub's sign-in page: /?auth=ok|denied|error|off.
+    const auth = AUTH_NOTICES[params.get('auth') ?? '']
+    if (auth) setTimeout(() => notify(auth), 1200)
+    if (params.has('open') || params.has('auth')) history.replaceState(null, '', location.pathname)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -603,9 +619,7 @@ export function Shell() {
       <Desktop />
       <main className="windows">
         {wm.windows.map((w) => (
-          <Window key={w.pid} win={w} title={APP_META[w.app].title} chrome={APP_META[w.app].chrome}>
-            {APP_META[w.app].render(w)}
-          </Window>
+          <AppWindow key={w.pid} w={w} />
         ))}
       </main>
       <SnapPreview />

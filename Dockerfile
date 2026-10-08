@@ -23,7 +23,11 @@ WORKDIR /app
 ENV NODE_ENV=production PORT=8080 APP_VERSION=$APP_VERSION APP_COMMIT=$APP_COMMIT
 COPY --from=build /app/dist ./dist
 COPY server ./server
-COPY src/data/normalize.ts ./src/data/normalize.ts
+COPY src/data/normalize.ts src/data/code.ts ./src/data/
+# Sign-in sessions, linked instances and synced notes live here (a volume in compose.yml).
+RUN mkdir -p /app/data && chown node:node /app/data
+ENV DATA_DIR=/app/data
+VOLUME /app/data
 EXPOSE 8080
 USER node
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1

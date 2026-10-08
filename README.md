@@ -3,7 +3,8 @@
 My CV as a tiny operating system: a sticky note, a terminal that actually works, and a dock
 with apps for projects, contributions, recent activity, the CV itself and contact details.
 
-Built with Vite, React and TypeScript. No backend; everything runs in the browser.
+Built with Vite, React and TypeScript. The CV runs entirely in the browser; a small dependency-free
+Node server adds live status, GitHub sign-in for the owner and synced notes (see below).
 
 ## Develop
 
@@ -69,6 +70,49 @@ on a text console on "tty1" instead (the same shell, without a window manager); 
 desktop. `reboot` and `shutdown` play the systemd
 shutdown log ([`src/os/Power.tsx`](src/os/Power.tsx)); a reboot starts from the opening layout again.
 
+## Notes, launchers and sign-in (home page mode)
+
+Anyone can write notes and add launchers: **Notebook** (dock) lists every note in Markdown, and
+each one can sit on the desktop as a sticky (right-click the desktop → *New sticky note*). Stickies
+get a random tilt and colour, both changeable from the sticky's hover bar or menu. **Settings**
+(system menu) adds desktop launchers: a URL, a name and an optional emoji (otherwise the site's own
+favicon). Notes, launchers, desktop icons, the dock order and the open windows are kept per browser
+in localStorage ([`src/os/synced.ts`](src/os/synced.ts)), with one window layout for phones and one
+for bigger screens.
+
+Signing in with GitHub (system menu → *Sign in with GitHub*) syncs all of that through the server
+and turns Spotlight into a code search over GitHub and any linked Gitea/Forgejo instances
+([`server/search.ts`](server/search.ts)):
+
+| Query | Finds |
+|-------|-------|
+| `bolt` | your repositories (and from three letters, issues and PRs) |
+| `#123` | issue or PR 123 in the repos you pushed to last |
+| `repo#123`, `owner/repo#123` | that issue or PR, also outside your own repos |
+| `#text`, `repo#text`, `repo#` | issues and PRs matching text (half-typed words too), or a repo's open ones |
+| `repo@text`, `@text` | branches, with their last commit and pull request |
+
+Tab completes the highlighted result (`owner/repo`, then type `#` or `@`); Ctrl+Enter copies a
+clone command, link or branch name.
+
+Only GitHub logins in `ALLOWED_USERS` (default `vleeuwenmenno`) can sign in; everyone else keeps
+the CV. Gitea/Forgejo instances are linked in Settings with a personal access token (read access to
+repository, issue, user and organization). Tokens are stored encrypted (AES-256-GCM) in SQLite
+(`node:sqlite`, no extra dependency) under `DATA_DIR` (default `./data`, a volume in compose).
+
+Setup:
+
+1. Create a GitHub OAuth app (GitHub → Settings → Developer settings → OAuth Apps) with callback
+   URL `https://<your site>/api/auth/github/callback`. Local dev needs its own app with
+   `http://localhost:5173/api/auth/github/callback`.
+2. Put `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `.env`. Optional: `ALLOWED_USERS`
+   (comma-separated logins), `PUBLIC_URL` (when the reverse proxy doesn't send `Host` and
+   `X-Forwarded-Proto`), `SESSION_SECRET` (otherwise a random key is generated once into
+   `DATA_DIR/secret.key`), `GITHUB_SCOPES` (default `read:user repo read:org`; `repo` is what
+   lets Spotlight see private repositories).
+
+Without the OAuth settings, sign-in is simply off and everything else works as before.
+
 ## Installable app
 
 The site is a PWA: [`public/manifest.webmanifest`](public/manifest.webmanifest) makes it
@@ -98,7 +142,8 @@ limit; a fine-grained token with read-only access to public repositories is enou
 same file changes the host port (default 8080).
 
 The container runs [`server/index.ts`](server/index.ts), a dependency-free Node server, as a
-non-root user on port 8080 (`PORT` changes it). It serves the built site, answers `/healthz`, serves
+non-root user on port 8080 (`PORT` changes it). Its API routes live in
+[`server/api.ts`](server/api.ts), shared with `pnpm dev`. It serves the built site, answers `/healthz`, serves
 `/api/activity` (git.mvl.sh's activity feeds, which browsers can't read cross-origin), 
 `/api/git/<owner>/<repo>/commits` (for `git log`, cached; set `GITHUB_TOKEN` to lift GitHub's
 anonymous limit of 60 requests an hour), and `/api/minecraft`: a live Server List Ping of the Minecraft server, cached for 10 seconds,

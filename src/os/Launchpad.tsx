@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { openSticky } from '../apps/Sticky'
 import { GAME_CATALOG } from '../apps/games/catalog'
+import { faviconOf, launch as launchLink, useLaunchers } from '../data/launchers'
+import { createNote } from '../data/notes'
 import { contributions, profile, projects } from '../data/profile'
 import { APP_META } from './apps'
 import { appearanceMenu } from './appearanceMenu'
@@ -28,7 +31,7 @@ type Entry = {
   swatch?: string
 }
 
-const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'contact', 'notes', 'keys', 'trash']
+const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'notebook', 'contact', 'notes', 'keys', 'settings', 'trash']
 
 const stroke = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const
 const Icon = ({ children }: { children: ReactNode }) => (
@@ -40,6 +43,11 @@ const ICONS = {
   apps: (
     <Icon>
       <path d="M5 5h2v2H5zM11 5h2v2h-2zM17 5h2v2h-2zM5 11h2v2H5zM11 11h2v2h-2zM17 11h2v2h-2zM5 17h2v2H5zM11 17h2v2h-2zM17 17h2v2h-2z" />
+    </Icon>
+  ),
+  launchers: (
+    <Icon>
+      <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
     </Icon>
   ),
   games: (
@@ -97,6 +105,7 @@ export function Launchpad() {
   const input = useRef<HTMLInputElement>(null)
   const list = useRef<HTMLDivElement>(null)
   const close = () => setOverlay(null)
+  const launchers = useLaunchers()
 
   useEffect(() => input.current?.focus(), [])
 
@@ -113,6 +122,21 @@ export function Launchpad() {
             runNew: SINGLE_INSTANCE.has(app) ? undefined : () => wm.openNew(app),
           })),
       },
+      // Your own links (Settings → Launchers), when there are any.
+      ...(launchers.length
+        ? [
+            {
+              label: 'Launchers',
+              icon: ICONS.launchers,
+              children: () =>
+                launchers.map((l) => ({
+                  label: l.label,
+                  icon: l.glyph ? <span className="om-glyph">{l.glyph}</span> : <img className="al-fav" src={faviconOf(l.url)} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />,
+                  run: () => launchLink(l),
+                })),
+            },
+          ]
+        : []),
       {
         label: 'Games',
         icon: ICONS.games,
@@ -144,6 +168,8 @@ export function Launchpad() {
         icon: ICONS.setup,
         children: () => [
           { label: 'Dock', children: () => DOCK_MODES.map(([m, label]) => ({ label, checked: getDockMode() === m, run: () => setDockMode(m) })) },
+          { label: 'Settings', run: () => wm.open('settings') },
+          { label: 'New sticky note', run: () => openSticky(wm, createNote().id) },
           { label: 'Clean up desktop icons', run: resetLayout },
           { label: 'Show desktop', run: () => wm.windows.forEach((w) => wm.minimize(w.pid)) },
           { label: 'New terminal', run: () => wm.openNew('terminal') },
@@ -159,7 +185,7 @@ export function Launchpad() {
         ],
       },
     ],
-    [wm],
+    [wm, launchers],
   )
 
   const level = path.length ? path[path.length - 1].children!() : root

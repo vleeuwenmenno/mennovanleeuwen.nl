@@ -1,4 +1,4 @@
-import { useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { getDockMode, snapReserve } from './dockPrefs'
 import { setSnapPreview } from './snapPreview'
 import { snapRect, useWM, type Geometry, type SnapZone, type WinState } from './wm'
@@ -14,6 +14,8 @@ type Props = {
   title: string
   chrome?: 'default' | 'note'
   className?: string
+  /** Extra inline style, e.g. a sticky's colour and tilt as CSS variables */
+  style?: CSSProperties
   children: ReactNode
 }
 
@@ -39,7 +41,7 @@ function zoneAt(x: number, y: number): Target {
 
 const maxRect = (): Geometry => ({ x: 10, y: TOP_BAR + 10, w: window.innerWidth - 20, h: window.innerHeight - TOP_BAR - 20 - (getDockMode() === 'show' ? snapReserve() : 0) })
 
-export function Window({ win, title, chrome = 'default', className = '', children }: Props) {
+export function Window({ win, title, chrome = 'default', className = '', style, children }: Props) {
   const wm = useWM()
   const drag = useRef<Drag | null>(null)
   const target = useRef<Target>(null)
@@ -48,7 +50,7 @@ export function Window({ win, title, chrome = 'default', className = '', childre
 
   const begin = (mode: Drag['mode'], edge = '') => (e: ReactPointerEvent) => {
     if (e.button !== 0) return
-    if ((e.target as HTMLElement).closest('button, a, input')) return
+    if ((e.target as HTMLElement).closest('button, a, input, textarea')) return
     if (win.maximized && mode === 'resize') return
     e.preventDefault()
     wm.focus(win.pid)
@@ -119,7 +121,7 @@ export function Window({ win, title, chrome = 'default', className = '', childre
   return (
     <section
       className={`window chrome-${chrome} ${focused ? 'is-focused' : ''} ${win.maximized ? 'is-max' : ''} ${win.minimized ? 'is-min' : ''} ${win.snap ? 'is-snapped' : ''} ${className}`}
-      style={{ left: win.x, top: win.y, width: win.w, height: win.h, zIndex: win.z }}
+      style={{ ...style, left: win.x, top: win.y, width: win.w, height: win.h, zIndex: win.z }}
       onPointerDown={() => wm.focus(win.pid)}
       role="dialog"
       aria-label={title}
@@ -154,6 +156,8 @@ export function Window({ win, title, chrome = 'default', className = '', childre
           <div className="rz rz-sw" onPointerDown={begin('resize', 'sw')} {...handlers} />
         </>
       )}
+      {/* Stickies grow with their text; only their width is up to you. */}
+      {win.app === 'sticky' && <div className="rz rz-e" onPointerDown={begin('resize', 'e')} {...handlers} />}
     </section>
   )
 }

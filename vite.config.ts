@@ -1,30 +1,14 @@
 import { createHash } from 'node:crypto'
 import { execSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
-import { forgejoActivity } from './server/activity.ts'
-import { githubCommits } from './server/github.ts'
-import { minecraftStatus } from './server/minecraft.ts'
+import { handleApi } from './server/api.ts'
 
-/** /api/minecraft and /api/activity during `pnpm dev` and `pnpm preview`, like server/index.ts in production. */
+/** The /api routes during `pnpm dev` and `pnpm preview`, like server/index.ts in production. */
 const liveApi = (): Plugin => {
-  const handler = (req: { url?: string }, res: import('node:http').ServerResponse, next: () => void) => {
-    const path = req.url?.split('?')[0]
-    if (path?.startsWith('/api/git/')) {
-      githubCommits(req.url!.slice('/api/git/'.length)).then((r) => {
-        res.statusCode = r.status
-        res.setHeader('Content-Type', 'application/json')
-        res.end(r.body)
-      })
-      return
-    }
-    if (path !== '/api/minecraft' && path !== '/api/activity') return next()
-    ;(path === '/api/minecraft' ? minecraftStatus() : forgejoActivity().then((items) => ({ items }))).then((s) => {
-      res.setHeader('Content-Type', 'application/json')
-      res.setHeader('Cache-Control', 'no-store')
-      res.end(JSON.stringify(s))
-    })
+  const handler = (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, next: () => void) => {
+    handleApi(req, res).then((handled) => handled || next(), next)
   }
   return {
     name: 'live-api',
@@ -61,6 +45,9 @@ const git = (cmd: string) => {
 const pkgVersion = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version as string
 const appVersion = process.env.APP_VERSION?.replace(/^v/, '') || git('describe --tags --always --dirty').replace(/^v/, '') || `${pkgVersion}-dev`
 const appCommit = process.env.APP_COMMIT || git('rev-parse HEAD')
+
+// .env (GITHUB_TOKEN, GITHUB_CLIENT_ID, ...) for the /api routes in dev, as compose passes it in production.
+Object.assign(process.env, { ...loadEnv('development', process.cwd(), ''), ...process.env })
 
 export default defineConfig({
   plugins: [react(), liveApi(), serviceWorker()],

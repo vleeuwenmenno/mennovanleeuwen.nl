@@ -10,3 +10,4 @@ Dockerfile
 .env
 compose.yml
 .pnpm-store
+/data

@@ -2,13 +2,11 @@ import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
-import { forgejoActivity } from './activity.ts'
-import { githubCommits } from './github.ts'
-import { minecraftStatus } from './minecraft.ts'
+import { handleApi } from './api.ts'
+import { SECURITY } from './http.ts'
 
-// Serves the built site and live endpoints: /api/minecraft, /api/activity (git.mvl.sh) and
-// /api/git/<owner>/<repo>/commits (GitHub, cached).
-// No dependencies, just Node.
+// Serves the built site and the /api routes in server/api.ts: live status, GitHub sign-in,
+// synced desktop state and code search. No dependencies, just Node.
 
 const ROOT = join(import.meta.dirname, '..', 'dist')
 const PORT = Number(process.env.PORT ?? 80)
@@ -26,12 +24,6 @@ const TYPES: Record<string, string> = {
   '.woff2': 'font/woff2',
   '.txt': 'text/plain; charset=utf-8',
   '.webmanifest': 'application/manifest+json'
-}
-
-const SECURITY = {
-  'X-Content-Type-Options': 'nosniff',
-  'Referrer-Policy': 'strict-origin-when-cross-origin',
-  'X-Frame-Options': 'SAMEORIGIN',
 }
 
 /** Hashed bundles never change; data snapshots refresh per release; the page itself always revalidates. */
@@ -53,28 +45,14 @@ createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost')
   const path = url.pathname
 
+  if (await handleApi(req, res)) return
+
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, { Allow: 'GET, HEAD' }).end()
     return
   }
   if (path === '/healthz') {
     res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok\n')
-    return
-  }
-  if (path === '/api/minecraft' || path === '/api/activity') {
-    const body = JSON.stringify(path === '/api/minecraft' ? await minecraftStatus() : { items: await forgejoActivity() })
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SECURITY }).end(req.method === 'HEAD' ? undefined : body)
-    return
-  }
-
-  if (path === '/api/version') {
-    const body = JSON.stringify({ version: process.env.APP_VERSION || 'dev', commit: process.env.APP_COMMIT || null })
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SECURITY }).end(req.method === 'HEAD' ? undefined : body)
-    return
-  }
-  if (path.startsWith('/api/git/')) {
-    const r = await githubCommits(path.slice('/api/git/'.length) + url.search)
-    res.writeHead(r.status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SECURITY }).end(req.method === 'HEAD' ? undefined : r.body)
     return
   }
 
