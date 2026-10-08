@@ -39,16 +39,12 @@ export function placement(app: AppId, openCount: number): Geometry {
   }
 }
 
-/** The opening layout: sticky note on the left, terminal beside it. */
+/** The opening layout: sticky note on the left, terminal beside it (just the note on phones). */
 export function initialLayout(): { app: AppId; geometry: Geometry; props?: WinState['props'] }[] {
   const vw = window.innerWidth
   const vh = window.innerHeight
-  if (vw < 720) {
-    return [
-      { app: 'terminal', geometry: placement('terminal', 0), props: { motd: '1' } },
-      { app: 'notes', geometry: { x: 16, y: TOP + 16, w: vw - 32, h: 340 } },
-    ]
-  }
+  // Phones only have room for one thing: the headline note. The terminal is a tap away in the dock.
+  if (vw < 720) return [{ app: 'notes', geometry: { x: 16, y: TOP + 16, w: vw - 32, h: 340 } }]
   const noteW = 310
 
   // Big screens get a composed desk: notes on the left (shortcuts tucked under the headline
