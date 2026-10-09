@@ -18,8 +18,8 @@ import { Dialogs } from './Dialogs'
 import { FolderPicker } from './FolderPicker'
 import { initBackButton, setBackFocus } from './backButton'
 import { startActivityAlerts } from './activityAlerts'
-import { followLinkSettings } from '../data/links'
-import { usePower } from './powerState'
+import { followLinkSettings, linkSettings } from '../data/links'
+import { newTab, usePower } from './powerState'
 import { notify } from './notify'
 import { isDefaultDock, isLauncherId, resetDock, setDockOrder, unpinFromDock, useCanCustomizeDock, useDock, type DockId } from './dockItems'
 import { AppIcon } from './icons'
@@ -664,6 +664,8 @@ export function Shell() {
     const params = new URLSearchParams(location.search)
     const app = params.get('open') as AppId | null
     if (app && app in APP_META && app !== 'trash') wm.open(app)
+    // As the browser's new tab page, start in Spotlight, ready to type where to go.
+    else if (newTab && linkSettings().newTabPageSpotlight) setOverlay('spotlight')
     // Back from GitHub's sign-in page: /?auth=ok|denied|error|off.
     const auth = AUTH_NOTICES[params.get('auth') ?? ''] ?? GOOGLE_NOTICES[params.get('google') ?? '']
     if (auth) setTimeout(() => notify(auth), 1200)

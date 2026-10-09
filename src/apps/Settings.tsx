@@ -1219,9 +1219,12 @@ function SpotlightSettings() {
   )
 }
 
-/** Where web links open, and whether the browser's new tab page (/?newtab) always uses this tab. */
+/**
+ * Where web links open, and whether the browser's new tab page (/?newtab) always uses this tab
+ * and starts in Spotlight.
+ */
 function LinkSettingsPane() {
-  const { target, newTabPageSameTab } = useLinkSettings()
+  const { target, newTabPageSameTab, newTabPageSpotlight } = useLinkSettings()
   const account = useAccount()
   return (
     <>
@@ -1241,6 +1244,10 @@ function LinkSettingsPane() {
       <label className="set-check">
         <input type="checkbox" checked={newTabPageSameTab} onChange={(e) => setLinkSettings({ newTabPageSameTab: e.target.checked })} />
         As the browser's new tab page, always open links in this tab
+      </label>
+      <label className="set-check">
+        <input type="checkbox" checked={newTabPageSpotlight} onChange={(e) => setLinkSettings({ newTabPageSpotlight: e.target.checked })} />
+        As the browser's new tab page, start with Spotlight open
       </label>
       <p className="muted set-help">
         Covers Spotlight, the terminal's <code>open</code> and <code>go</code>, launchers and links in apps. Ctrl-click still opens a new tab. The new tab page is this site loaded as <code>/?newtab</code>.{' '}
@@ -1292,7 +1299,7 @@ const GROUPS: Pane[][] = [
   ],
   [
     { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal favourites favorites starred', blurb: 'What Spotlight shows when it opens, what it searches, and what it remembers.', render: () => <SpotlightSettings /> },
-    { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
+    { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page spotlight', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
     { id: 'notifications', label: 'Notifications', hue: 'var(--red)', icon: svg(<><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></>), keywords: 'notifications alerts minecraft activity', blurb: 'What may pop up in the corner of the desktop.', render: () => <Notifications /> },
     { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal spotlight suggestions mvl.sh token', blurb: "The golinks account that go <alias> follows, in Spotlight and the terminal.", render: () => <GoLinks /> },
   ],
