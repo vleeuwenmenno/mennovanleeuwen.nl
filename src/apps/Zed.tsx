@@ -871,9 +871,12 @@ function list(items: Item[], key: string): ReactNode {
     const item = items[i]
     const kids: Item[] = []
     while (items[i + 1] && items[i + 1].indent > indent) kids.push(items[++i])
+    // A task list item: "- [ ] todo" or "- [x] done".
+    const task = /^\[( |x|X)\]\s+(.*)$/.exec(item.text)
     out.push(
-      <li key={i}>
-        {rich(item.text, `${key}-${i}`)}
+      <li key={i} className={task ? `md-task ${task[1] !== ' ' ? 'is-done' : ''}` : undefined}>
+        {task && <input type="checkbox" checked={task[1] !== ' '} readOnly tabIndex={-1} aria-hidden />}
+        {rich(task ? task[2] : item.text, `${key}-${i}`)}
         {kids.length > 0 && list(kids, `${key}-${i}`)}
       </li>,
     )

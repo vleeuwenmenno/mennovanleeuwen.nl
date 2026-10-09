@@ -127,13 +127,27 @@ Setup:
 
 Without the OAuth settings, sign-in is simply off and everything else works as before.
 
+**Google Calendar** attaches to the GitHub sign-in (system menu or Settings → Calendar) for the
+Agenda widget: read-only access to your calendars, shared ones included, with Google's refresh
+token stored encrypted next to the Gitea tokens ([`server/google.ts`](server/google.ts)). It needs
+`GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from a Google Cloud OAuth client (type *Web
+application*) with the Calendar API enabled, the scope `calendar.readonly` (plus `openid` and
+`email`), and the redirect URI `https://<your site>/api/google/callback` (and
+`http://localhost:5173/api/google/callback` for development). Publish the consent screen to *In
+production*: in *Testing*, Google expires the access after seven days.
+
+The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests
+and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
+([`server/inbox.ts`](server/inbox.ts)), with the access sign-in and linking already give.
+
 ## Widgets
 
 Widgets sit on the desktop like sticky notes: no title bar, tape on top, a sway when dragged, a
 right-click menu. Add them from the desktop's menu (*Add widget*), All apps → Widgets or Spotlight.
-Today there are two: **Sticky note** (one of your notes) and **Weather** (now, the next hours and
-three days from [Open-Meteo](https://open-meteo.com), for the browser's location or a city you
-pick; your pick syncs, the browser's location stays on that device).
+Today there are four: **Sticky note** (one of your notes, with checklists you can tick),
+**Weather** (now, the next hours and three days from [Open-Meteo](https://open-meteo.com), for the
+browser's location or a city you pick; your pick syncs, the browser's location stays on that
+device), **Agenda** (Google Calendar, see below) and **Code inbox**.
 
 The framework lives in [`src/widgets`](src/widgets). A widget is one `WidgetDef`
 ([`types.ts`](src/widgets/types.ts)): a name, a glyph, a size, its component, and optional hooks

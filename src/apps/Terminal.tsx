@@ -137,6 +137,34 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
     }
   }, [onLogout])
 
+  // On the desktop, the same for the terminal in front: typing while nothing editable has focus
+  // (after clicking the desktop, or a new tab page that just loaded) goes to its prompt instead
+  // of Firefox's find as you type, and the prompt takes focus again when the page gets it back
+  // (from the address bar). Only printable keys, and only while this terminal is the front
+  // window, so a game in front keeps its keys and the desktop keeps Delete, F2, Enter.
+  const front = wm.focusedPid === win.pid
+  const frontRef = useRef(front)
+  frontRef.current = front
+  useEffect(() => {
+    if (onLogout || matchMedia('(pointer: coarse)').matches) return
+    const idle = () => {
+      const active = document.activeElement
+      return !active || active === document.body || !active.matches('input, textarea, select, [contenteditable="true"]')
+    }
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (!frontRef.current || e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey || !idle()) return
+      if (document.querySelector('.spotlight, .om-panel, .ctx-menu')) return // an overlay has the keys
+      inputRef.current?.focus({ preventScroll: true })
+    }
+    const onFocus = () => frontRef.current && idle() && inputRef.current?.focus({ preventScroll: true })
+    window.addEventListener('keydown', onKey, true)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.removeEventListener('keydown', onKey, true)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [onLogout])
+
   // A block cursor like Omarchy's terminals (solid when focused, hollow when not), drawn over the
   // input since a native caret can only be a thin line. Monospace, so a character is 1ch.
   const [caret, setCaret] = useState({ at: 0, scroll: 0, range: false, focused: false })

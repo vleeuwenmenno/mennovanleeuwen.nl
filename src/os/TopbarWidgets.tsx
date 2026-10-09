@@ -3,7 +3,7 @@ import { profile } from '../data/profile'
 import { timeAgo } from '../data/recents'
 import { fetchMinecraft, MC_ADDRESS, MC_PORT, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
-import { signIn, signOut, useAccount } from './account'
+import { connectGoogle, signIn, signOut, useAccount } from './account'
 import { openContextMenu, type MenuItem } from './ContextMenu'
 import { toggleOverlay } from './overlays'
 import { reboot, shutdown } from './powerState'
@@ -322,6 +322,21 @@ function AccountBlock({ close }: { close: () => void }) {
         >
           Sign out
         </button>
+        {account.googleEnabled && (
+          <div className="sys-attach">
+            <span aria-hidden>📅</span>
+            {account.google ? (
+              <span>
+                Calendar: <strong>{account.google.email}</strong>
+              </span>
+            ) : (
+              <>
+                <span className="muted">Google Calendar</span>
+                <button onClick={connectGoogle}>Connect</button>
+              </>
+            )}
+          </div>
+        )}
       </div>
     )
   if (account.status === 'anon')

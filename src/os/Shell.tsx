@@ -631,6 +631,14 @@ const AUTH_NOTICES: Record<string, { title: string; body?: string }> = {
   off: { title: 'Sign-in is not set up', body: 'This server has no GitHub OAuth app configured.' },
 }
 
+const GOOGLE_NOTICES: Record<string, { title: string; body?: string }> = {
+  ok: { title: 'Google Calendar connected', body: 'Add an Agenda widget from the desktop menu (Add widget) to see it.' },
+  denied: { title: 'Google Calendar not connected', body: 'Access was not granted.' },
+  error: { title: 'Google Calendar could not connect', body: 'Google did not complete it. Try again from Settings.' },
+  signin: { title: 'Sign in first', body: 'Google Calendar attaches to your GitHub sign-in.' },
+  off: { title: 'Google Calendar is not set up', body: 'This server has no Google OAuth client configured.' },
+}
+
 function SnapPreview() {
   const g = useSnapPreview()
   if (!g) return null
@@ -657,9 +665,9 @@ export function Shell() {
       wm.openNew('terminal')
     }
     // Back from GitHub's sign-in page: /?auth=ok|denied|error|off.
-    const auth = AUTH_NOTICES[params.get('auth') ?? '']
+    const auth = AUTH_NOTICES[params.get('auth') ?? ''] ?? GOOGLE_NOTICES[params.get('google') ?? '']
     if (auth) setTimeout(() => notify(auth), 1200)
-    if (params.has('open') || params.has('auth')) history.replaceState(null, '', location.pathname)
+    if (params.has('open') || params.has('auth') || params.has('google')) history.replaceState(null, '', location.pathname)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

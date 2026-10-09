@@ -4,10 +4,11 @@ import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 // The site's only persistent state: signed-in users, their sessions, linked Gitea/Forgejo
-// instances and synced desktop state (notes, window layout, launchers). One SQLite file in
-// DATA_DIR (default ./data), opened lazily so the CV site runs without it when login is off.
+// instances, a linked Google Calendar and synced desktop state (notes, window layout,
+// launchers). One SQLite file in DATA_DIR (default ./data), opened lazily so the CV site runs
+// without it when login is off.
 //
-// Access tokens (GitHub, Gitea) are encrypted at rest with AES-256-GCM. The key comes from
+// Access tokens (GitHub, Gitea, Google) are encrypted at rest with AES-256-GCM. The key comes from
 // SESSION_SECRET, or a random one generated once into DATA_DIR/secret.key.
 
 const DATA_DIR = resolve(process.env.DATA_DIR ?? 'data')
@@ -63,6 +64,14 @@ export function database(): DatabaseSync {
       value TEXT NOT NULL,
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (user_id, key)
+    );
+    CREATE TABLE IF NOT EXISTS google (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      email TEXT NOT NULL,
+      refresh_token TEXT NOT NULL,
+      access_token TEXT,
+      expires_at INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL
     );
   `)
   key = Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))

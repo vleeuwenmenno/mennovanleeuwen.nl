@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ENGINES, setSearchSettings, useSearchSettings, type EngineId } from '../data/searchEngine'
 import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
-import { linkForge, signIn, signOut, unlinkForge, useAccount } from '../os/account'
+import { api, connectGoogle, disconnectGoogle, linkForge, signIn, signOut, unlinkForge, useAccount } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
@@ -293,6 +293,61 @@ function Launchers() {
   )
 }
 
+type CalendarInfo = { id: string; name: string; color: string; primary: boolean; selected: boolean }
+
+/** Google Calendar, read-only, for the Agenda widget. */
+function CalendarSettings() {
+  const account = useAccount()
+  const [calendars, setCalendars] = useState<CalendarInfo[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const connected = account.status === 'user' && !!account.google
+  useEffect(() => {
+    if (!connected) return setCalendars(null)
+    api<CalendarInfo[]>('/api/calendar/calendars').then(setCalendars, (e: Error) => setError(e.message))
+  }, [connected])
+  if (account.status !== 'user') return <p className="muted">Sign in first to connect Google Calendar.</p>
+  if (!account.googleEnabled) return <p className="muted">Google Calendar isn't set up on this server (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, see the README).</p>
+  if (!account.google)
+    return (
+      <>
+        <p className="muted">Read-only access to your calendars, shared ones included, for the Agenda widget. It attaches to your GitHub sign-in; it is not a way to sign in.</p>
+        <button className="btn btn-primary" onClick={connectGoogle}>
+          Connect Google Calendar
+        </button>
+      </>
+    )
+  return (
+    <>
+      <div className="set-account">
+        <span className="set-glyph">📅</span>
+        <div>
+          <strong>{account.google.email}</strong>
+          <p className="muted">Read-only, stored encrypted on this server</p>
+        </div>
+        <span className="nb-spacer" />
+        <button className="btn btn-small" onClick={() => disconnectGoogle().catch((e: Error) => setError(e.message))}>
+          Disconnect
+        </button>
+      </div>
+      {error && <p className="t-red">{error}</p>}
+      {calendars && (
+        <ul className="set-list set-calendars">
+          {calendars.map((c) => (
+            <li key={c.id} className="set-row">
+              <span className="set-swatch" style={{ background: c.color }} />
+              <span className="set-row-text">
+                <strong>{c.name}</strong>
+                <span className="muted">{c.primary ? 'Your calendar' : c.selected ? 'Shown in Google Calendar' : 'Hidden in Google Calendar'}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="muted set-help">Each Agenda widget picks which of these it shows (right-click it). By default: the ones shown in Google Calendar.</p>
+    </>
+  )
+}
+
 /** Spotlight's web search: which engine, and whether to show its suggestions while typing. */
 function SearchSettings() {
   const { engine, suggestions } = useSearchSettings()
@@ -338,6 +393,10 @@ export function Settings({ win }: { win: WinState }) {
       <section id="set-launchers">
         <h3>Launchers</h3>
         <Launchers />
+      </section>
+      <section id="set-calendar">
+        <h3>Calendar</h3>
+        <CalendarSettings />
       </section>
       <section id="set-search">
         <h3>Search</h3>
