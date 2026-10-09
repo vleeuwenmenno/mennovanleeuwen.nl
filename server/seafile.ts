@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import type { User } from './auth.ts'
 import { database, decrypt, encrypt } from './db.ts'
 import { HttpError } from './http.ts'
@@ -89,7 +89,9 @@ export async function linkSeafile(user: User, body: { url?: string; username?: s
   const password = body.password
   if (!username || !password) throw new HttpError(400, 'Username and password are required')
 
-  const form = new URLSearchParams({ username, password, platform: 'web', device_id: randomUUID(), device_name: DEVICE_NAME, client_version: '', platform_version: '' })
+  // Seahub only makes device tokens for its own clients' platforms; a desktop one needs a 40-hex
+  // device id (a sync client's peer id). Empty versions would fail its validation, so they say what this is.
+  const form = new URLSearchParams({ username, password, platform: 'linux', device_id: randomBytes(20).toString('hex'), device_name: DEVICE_NAME, client_version: '1.0', platform_version: 'web' })
   const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' }
   if (body.otp?.trim()) headers['X-SEAFILE-OTP'] = body.otp.trim()
   const res = await call(url, '/api2/auth-token/', { method: 'POST', headers, body: form })
