@@ -1,4 +1,4 @@
-import { deviceNames, getFstab, isSeafileType, libraryNames, mounts, setFstab, whereIs } from '../data/mounts'
+import { getFstab, isSeafileType, libraryNames, mounts, setFstab, whereIs } from '../data/mounts'
 import { cachedDir, createFile, deleteItems, errorStatus, getLibraries, listDir, loadLibraries, mkdir as sfMkdir, parseSf, readText, renameItem, SF, sfPath, transferItems, writeText, type Entry } from '../data/seafile'
 import { getAccount } from '../os/account'
 import { writeTmp } from './commands'
@@ -87,42 +87,9 @@ function sfNode(sf: string, name: string, ro: boolean): Node | null {
   return cachedDir(sf)?.listing ? sfDir(sf, name, readOnly) : null
 }
 
-// --- the extra system files ----------------------------------------------------------------------
-
-function fstabNode(): FileNode {
-  const text = getFstab()
-  return { type: 'file', name: 'fstab', content: () => getFstab(), size: new TextEncoder().encode(text).length, ro: true }
-}
-
-const device = (name: string): FileNode => ({ type: 'file', name, content: () => '', size: 0, ro: true })
-
-/** /dev: the disk, its partitions, null and zero, and a node per Seafile library. */
-function devLookup(abs: string): Node | null {
-  const seafile: DirNode = {
-    type: 'dir',
-    name: 'seafile',
-    get children() {
-      return new Map([...deviceNames()].map(([, slug]) => [slug, device(slug)] as [string, Node]))
-    },
-  }
-  const dev: DirNode = { type: 'dir', name: 'dev', children: new Map<string, Node>([...['null', 'zero', 'random', 'urandom', 'nvme0n1', 'nvme0n1p1', 'nvme0n1p2'].map((n) => [n, device(n)] as [string, Node]), ['seafile', seafile]]) }
-  if (abs === '/dev') return dev
-  const parts = abs.split('/').filter(Boolean).slice(1)
-  let node: Node = dev
-  for (const p of parts) {
-    if (node.type !== 'dir') return null
-    const next: Node | undefined = node.children.get(p)
-    if (!next) return null
-    node = next
-  }
-  return node
-}
-
-/** Names a folder gains on top of its own: mount points right inside it, /dev, /etc/fstab. */
+/** Names a folder gains on top of its own: mount points right inside it. */
 function extraChildren(abs: string): Map<string, Node> {
   const out = new Map<string, Node>()
-  if (abs === '/') out.set('dev', devLookup('/dev')!)
-  if (abs === '/etc') out.set('fstab', fstabNode())
   for (const m of mounts()) {
     if (m.target === abs || parentOf(m.target) !== abs) continue
     const node = lookup(m.target)
@@ -133,9 +100,11 @@ function extraChildren(abs: string): Map<string, Node> {
 
 /** Looks a path up through the mounts. */
 export function lookup(abs: string): Node | null {
-  if (abs === '/etc/fstab') return fstabNode()
-  if (abs === '/dev' || abs.startsWith('/dev/')) return devLookup(abs)
   const w = whereIs(abs)
+  if (abs === '/etc/fstab' && w.kind === 'local') {
+    const node = siteLookup(abs) as FileNode
+    return { ...node, size: new TextEncoder().encode(node.content()).length, ro: true }
+  }
   let node: Node | null = w.kind === 'local' ? siteLookup(w.path) : w.kind === 'sf' ? sfNode(w.sf, abs === '/' ? '' : baseOf(abs), w.ro) : null
   // A mount point that only exists because something is mounted on it.
   if (!node && mounts().some((m) => m.target === abs)) node = { type: 'dir', name: baseOf(abs), children: new Map() }

@@ -19,6 +19,8 @@ export type FileNode = {
   sf?: string
   /** Read-only: a read-only library or mount */
   ro?: boolean
+  /** A program (the commands in /bin) */
+  exec?: boolean
 }
 export type DirNode = { type: 'dir'; name: string; children: Map<string, Node>; mtime?: number; sf?: string; ro?: boolean }
 export type Node = FileNode | DirNode
@@ -208,6 +210,46 @@ const homeNode = dir(profile.handle, [
   file('.plan', 'Ship Boltwarden 1.0.\nGet Pepper to a first stable release.\nSleep at some point.'),
 ])
 
+/**
+ * Files whose contents live elsewhere: /etc/fstab and the Seafile devices in /dev come from the
+ * mount table (data/mounts.ts fills these in), so Files, Zed and the terminal all see them.
+ */
+export const dynamic = { fstab: () => '', devices: (): string[] => [], commands: (): { name: string; desc: string }[] => [] }
+
+/** A size that looks like a binary's, the same every time for the same name. */
+const binarySize = (name: string) => {
+  let h = 7
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0
+  return 18_000 + (h % 160_000)
+}
+
+/** /bin: one program per command the shell knows (commands.ts fills dynamic.commands). */
+const binNode: DirNode = {
+  type: 'dir',
+  name: 'bin',
+  get children() {
+    return new Map(
+      dynamic.commands().map(({ name, desc }) => [name, { type: 'file', name, exec: true, size: binarySize(name), content: () => `\x7fELF\x02\x01\x01\n${name}: ${desc}\n(built into msh; run it as ${name})\n` }] as [string, Node]),
+    )
+  },
+}
+
+const device = (name: string): FileNode => ({ type: 'file', name, content: () => '', size: 0 })
+const devNode: DirNode = {
+  type: 'dir',
+  name: 'dev',
+  get children() {
+    const seafile: DirNode = {
+      type: 'dir',
+      name: 'seafile',
+      get children() {
+        return new Map(dynamic.devices().map((d) => [d, device(d)] as [string, Node]))
+      },
+    }
+    return new Map<string, Node>([...['null', 'zero', 'random', 'urandom', 'nvme0n1', 'nvme0n1p1', 'nvme0n1p2'].map((n) => [n, device(n)] as [string, Node]), ['seafile', seafile]])
+  },
+}
+
 export const root: DirNode = dir('', [
   dir('home', [homeNode]),
   // The site's own home, under a second name: with Seafile mounted on ~ (see /etc/fstab), this is
@@ -218,10 +260,12 @@ export const root: DirNode = dir('', [
     file('os-release', `NAME="MvL OS"\nPRETTY_NAME="MvL OS ${SHORT_VERSION} (Vaporwave Penguin)"\nVERSION_ID="${VERSION}"\nBUILD_ID="${COMMIT.slice(0, 7)}"\nID=mvlos\nID_LIKE=arch\nHOME_URL="https://mennovanleeuwen.nl"`),
     file('hostname', 'mvlos'),
     file('motd', 'Welcome to MvL OS. Nothing in here can hurt you, or me.'),
+    { type: 'file', name: 'fstab', content: () => dynamic.fstab() },
   ]),
+  devNode,
   dir('proc', [file('uptime', () => `${uptimeSeconds()}.00 0.00`), file('version', `MvL OS ${VERSION} (react 19, vite) #1 SMP PREEMPT_DYNAMIC ${BUILT}`)]),
   dir('tmp', []),
-  dir('bin', []),
+  binNode,
 ])
 
 /** Resolves a path against cwd, handling ~, ., .. and absolute paths. */

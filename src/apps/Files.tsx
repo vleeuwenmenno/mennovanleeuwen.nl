@@ -16,6 +16,7 @@ import { droppedFiles, hasOsFiles, pickAndUpload, uploadFiles } from '../data/up
 import { addBookmark, useSidebar } from '../data/filesSidebar'
 import { FilesSidebar, type SideSection } from './FilesSidebar'
 import { mounts, posixOf, useMounts, whereIs } from '../data/mounts'
+import { lookup as fsLookup } from '../terminal/fs'
 
 /** Quotes a path for a command line in the terminal. */
 const shq = (s: string) => (/^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
@@ -309,8 +310,20 @@ export function Files({ win }: { win: WinState }) {
         .map(toItem)
         .filter((x): x is Item => !!x)
     } else {
-      const node = lookup(path)
-      list = node?.type === 'dir' ? [...node.children.keys()].map((n) => toItem(`${path === '/' ? '' : path}/${n}`)).filter((x): x is Item => !!x) : []
+      // Through the mounts, like ls: a mount point lists as the folder mounted there (Seafile
+      // folders become Seafile items), and folders that exist only as mount points show up too.
+      const node = fsLookup(path)
+      const child = (n: string): Item | null => {
+        const p = `${path === '/' ? '' : path}/${n}`
+        const w = whereIs(p)
+        if (w.kind === 'sf') {
+          if (w.sf === SF) return { path: SF, name: n, node: null, kind: 'folder', size: 0, mtime: Date.now() }
+          const at = parseSf(w.sf)!
+          return { path: w.sf, name: n, node: null, kind: 'folder', size: 0, mtime: Date.now(), sf: { repo: at.repo, p: at.p } }
+        }
+        return toItem(w.kind === 'local' ? w.path : p) ?? (mounts().some((m) => m.target === p) ? { path: p, name: n, node: { type: 'dir', name: n, children: new Map() }, kind: 'folder', size: 0, mtime: Date.now() } : null)
+      }
+      list = node?.type === 'dir' ? [...node.children.keys()].map(child).filter((x): x is Item => !!x) : []
     }
     if (!prefs.hidden) list = list.filter((i) => !i.name.startsWith('.'))
     const byName = (a: Item, b: Item) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
@@ -346,6 +359,7 @@ export function Files({ win }: { win: WinState }) {
       setToast(item.trash === 'desktop' ? 'Put it back first (right-click → Put back).' : 'That file is a cautionary tale. It stays in the trash.')
       return
     }
+    if (item.path === SF) return navigate(SF)
     if (item.sf) return openSeafileItem(item, how)
     const node = item.node
     if (!node) return

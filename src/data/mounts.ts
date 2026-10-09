@@ -1,7 +1,7 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { getAccount, subscribeAccount } from '../os/account'
 import { synced } from '../os/synced'
-import { HOME } from '../terminal/vfs'
+import { dynamic, HOME } from '../terminal/vfs'
 import { getLibraries, getSeafilePrefsStored, loadLibraries, PLACES, primaryOf, SF, sfPath, parseSf, subscribeLibraries, type Library, type PlaceId } from './seafile'
 
 // /etc/fstab, and what is mounted: the one place that says where Seafile shows up. Files and the
@@ -85,6 +85,9 @@ const store = synced<string | null>('fstab', null, { normalize: (v) => (typeof v
 
 /** /etc/fstab as it is now. */
 export const getFstab = () => store.get() ?? generated()
+// The site's filesystem shows the same /etc/fstab and /dev/seafile/* (for Files and Zed too).
+dynamic.fstab = () => getFstab()
+dynamic.devices = () => [...deviceNames().values()]
 /** Replaces /etc/fstab (nano's save, Settings' edits). */
 export function setFstab(text: string) {
   store.set(text.endsWith('\n') ? text : `${text}\n`)
