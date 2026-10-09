@@ -186,6 +186,13 @@ picture and full screen; it hides while playing. Keys: Space or K, J and L, the 
 9, comma and full stop for single frames, < and > for speed. Seafile's thumbnails come through the
 server ([`server/seafile.ts`](server/seafile.ts)) for Files' grid and Preview's sidebar.
 
+Uploads go straight from the browser to Seafile's file server: drop files or whole folders from the
+computer on a Files window (a folder, its empty space or the sidebar) or on the desktop, or use
+*Upload files* / *Upload folder* in Files' menus. Three go at a time; a panel in the corner shows the
+lot's progress and time left and each file's own, with cancel, retry and *Show in Files*. Files of
+16 MB and up go in 8 MB chunks and carry on where they stopped after a retry. Names already in the
+folder ask first: replace (Seafile keeps the old version), keep both, or skip.
+
 The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests
 and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 ([`server/inbox.ts`](server/inbox.ts)), with the access sign-in and linking already give.

@@ -8,6 +8,7 @@ import { formatSize, HOME, KIND_LABEL, kindOfName, lookup, prettyPath, resolvePa
 import { createFile, deleteItems, download as sfDownload, DRAG_FILES, dropOp, getClipboard, getDragged, getLibrary, isInside, openSeafile, renameItem, setClipboard, setDragged, transferItems, useClipboard, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useUnlocks, type Library } from '../data/seafile'
 import { useAccount } from '../os/account'
 import { MEDIA_APP, thumbOf } from '../data/media'
+import { droppedFiles, hasOsFiles, pickAndUpload, uploadFiles } from '../data/uploads'
 import { addBookmark, useSidebar } from '../data/filesSidebar'
 import { FilesSidebar, type SideSection } from './FilesSidebar'
 
@@ -407,6 +408,15 @@ export function Files({ win }: { win: WinState }) {
   }
   /** Whether a drag can land in `into`; says so to the browser (and highlights it) when it can. */
   const acceptDrop = (e: React.DragEvent, into: string) => {
+    // Files from the computer upload into any Seafile folder you can write to.
+    if (!getDragged() && hasOsFiles(e.dataTransfer)) {
+      if (!canWrite(into)) return false
+      e.preventDefault()
+      e.stopPropagation()
+      e.dataTransfer.dropEffect = 'copy'
+      if (dropOn !== into) setDropOn(into)
+      return true
+    }
     const paths = getDragged()
     if (!paths || !e.dataTransfer.types.includes(DRAG_FILES) || !canWrite(into) || isInside(paths, into)) return false
     const op = dropOp(paths, into, e)
@@ -418,6 +428,14 @@ export function Files({ win }: { win: WinState }) {
     return true
   }
   const dropInto = (e: React.DragEvent, into: string) => {
+    if (!getDragged() && hasOsFiles(e.dataTransfer)) {
+      if (!acceptDrop(e, into)) return
+      setDropOn(null)
+      droppedFiles(e.dataTransfer)
+        .then((picked) => uploadFiles(picked, into))
+        .catch((err: Error) => setToast(err.message))
+      return
+    }
     const paths = getDragged()
     if (!paths || !acceptDrop(e, into)) return
     const op = dropOp(paths, into, e)
@@ -548,6 +566,8 @@ export function Files({ win }: { win: WinState }) {
       return [
         { label: 'New folder', disabled: !sfWritable, onSelect: newFolder },
         { label: 'New text file', disabled: !sfWritable, onSelect: newTextFile },
+        { label: 'Upload files…', disabled: !sfWritable, onSelect: () => pickAndUpload(path) },
+        { label: 'Upload folder…', disabled: !sfWritable, onSelect: () => pickAndUpload(path, true) },
         { label: clip ? `Paste ${named(clip.paths)}` : 'Paste', shortcut: 'Ctrl V', disabled: !clip || !sfWritable, onSelect: () => paste() },
         { label: 'Refresh', shortcut: 'F5', onSelect: () => refreshDirs(path) },
         { label: 'Add to bookmarks', disabled: path === SF || bookmarks.includes(path), onSelect: () => bookmark(path) },
@@ -905,7 +925,13 @@ export function Files({ win }: { win: WinState }) {
           onClick={(e) =>
             openContextMenu({ clientX: e.currentTarget.getBoundingClientRect().right - 220, clientY: e.currentTarget.getBoundingClientRect().bottom + 4, preventDefault() {}, stopPropagation() {} }, [
               { label: 'New window', onSelect: () => wm.openNew('files', { path }) },
-              ...(isSf(path) ? [{ label: 'New folder', disabled: !sfWritable, onSelect: newFolder }] : [{ label: 'New text file', disabled: !writable, onSelect: newFile }]),
+              ...(isSf(path)
+                ? [
+                    { label: 'New folder', disabled: !sfWritable, onSelect: newFolder },
+                    { label: 'Upload files…', disabled: !sfWritable, onSelect: () => pickAndUpload(path) },
+                    { label: 'Upload folder…', disabled: !sfWritable, onSelect: () => pickAndUpload(path, true) },
+                  ]
+                : [{ label: 'New text file', disabled: !writable, onSelect: newFile }]),
               { label: 'Open terminal here', disabled: path.includes('://'), onSelect: () => wm.openNew('terminal', { run: `cd ${prettyPath(path)} && ls`, t: String(Date.now()) }) },
               { separator: true },
               { label: 'Copy location', disabled: path.includes('://') && !isSf(path), onSelect: () => copyPath(path) },

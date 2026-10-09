@@ -4442,6 +4442,167 @@ button.fm-dd-row:hover {
   pointer-events: none;
 }
 
+/* ---------- Uploads ---------- */
+
+.up {
+  position: fixed;
+  right: 14px;
+  bottom: 96px;
+  z-index: 9000;
+  width: min(360px, calc(100vw - 28px));
+  display: flex;
+  flex-direction: column;
+  max-height: min(440px, calc(100vh - 160px));
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  box-shadow: 0 16px 40px -14px rgba(0, 0, 0, 0.55);
+  font-size: 12px;
+}
+.up-head {
+  display: flex;
+  align-items: center;
+}
+.up-fold {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  text-align: left;
+  color: var(--fg);
+}
+.up-caret {
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.up-caret.is-open {
+  transform: rotate(90deg);
+}
+.up-summary {
+  display: grid;
+  min-width: 0;
+}
+.up-summary > * {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.up-x {
+  padding: 0 12px;
+  font-size: 16px;
+  color: var(--muted);
+}
+.up-x:hover {
+  color: var(--fg);
+}
+.up-bar,
+.up-item-bar {
+  height: 3px;
+  background: var(--line);
+}
+.up-bar > div,
+.up-item-bar > div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+.up-bar > .is-failed {
+  background: var(--red);
+}
+.up-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+}
+.up-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  padding: 6px 10px;
+}
+.up-item + .up-item {
+  border-top: 1px solid var(--line);
+}
+.up-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.up-state {
+  grid-column: 1;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.up-item.is-failed .up-state {
+  color: var(--red);
+}
+.up-item.is-done .up-state {
+  color: var(--green);
+}
+.up-item-bar {
+  grid-column: 1;
+}
+.up-actions {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  align-self: center;
+  display: flex;
+  gap: 2px;
+}
+.up-actions button {
+  width: 24px;
+  height: 24px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.up-actions button:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.up-foot {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+}
+.up-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+.up-dialog {
+  width: min(420px, calc(100vw - 32px));
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  box-shadow: 0 20px 50px -14px rgba(0, 0, 0, 0.6);
+  font-size: 13px;
+}
+.up-dialog ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+.up-dialog p {
+  margin: 0;
+  font-size: 12px;
+}
+.up-dialog-actions {
+  display: flex;
+  gap: 6px;
+}
+
 /* ---------- Zed ---------- */
 
 .zed {

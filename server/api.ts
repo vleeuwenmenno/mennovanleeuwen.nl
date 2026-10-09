@@ -8,7 +8,7 @@ import { allCalendars, allEvents, createEvent, deleteEvent, updateEvent } from '
 import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, MAX_RANGE_DAYS, startGoogle } from './google.ts'
 import { inbox } from './inbox.ts'
 import { linkPreview } from './preview.ts'
-import { createFile, fileLink, thumbnail, libraries, removeItems, rename, transfer, linkSeafile, listDir, lock, mkdir, unlock, unlocked, removeOffice, seafileInfo, setOffice, unlinkSeafile } from './seafile.ts'
+import { createFile, fileLink, thumbnail, uploadedBytes, libraries, removeItems, rename, transfer, linkSeafile, listDir, lock, mkdir, unlock, unlocked, removeOffice, seafileInfo, setOffice, unlinkSeafile } from './seafile.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
 import { HttpError, json, readJson, redirect, sameOrigin, SECURITY } from './http.ts'
 import { minecraftOverview, minecraftStatus } from './minecraft.ts'
@@ -141,6 +141,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       res.writeHead(200, { 'Content-Type': t.type, 'Cache-Control': 'private, max-age=3600', ...SECURITY }).end(head ? undefined : t.body)
       return true
     }
+    if (path === '/api/seafile/uploaded' && read) return json(res, 200, await uploadedBytes(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('parent'), url.searchParams.get('name'))), true
     if (path === '/api/seafile/link' && read) return json(res, 200, await fileLink(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), url.searchParams.get('op'))), true
     if (path === '/api/seafile/unlock' && method === 'POST') return json(res, 200, await unlock(requireUser(req), await readJson(req, 8 * 1024))), true
     if (path === '/api/seafile/unlock' && read) return json(res, 200, unlocked(requireUser(req))), true

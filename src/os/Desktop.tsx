@@ -5,6 +5,7 @@ import { createNote } from '../data/notes'
 import { addWidgetItems } from '../widgets/registry'
 import { projects } from '../data/profile'
 import { HOME, kindOfName, type FileKind } from '../terminal/vfs'
+import { droppedFiles, hasOsFiles, uploadFiles } from '../data/uploads'
 import { deleteItems, download, DRAG_FILES, dropOp, getDragged, isInside, openSeafile, refreshDirs, renameItem, transferItems, useDir, useSeafileHome } from '../data/seafile'
 import { notify } from './notify'
 import { closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
@@ -362,6 +363,13 @@ export function Desktop() {
   // go) or onto a Seafile folder icon.
   const [dropIcon, setDropIcon] = useState<string | null>(null)
   const acceptFiles = (e: React.DragEvent, into: string | null | undefined) => {
+    // Files from the computer upload into the Desktop folder (or the folder icon they are let go on).
+    if (into && !getDragged() && hasOsFiles(e.dataTransfer)) {
+      e.preventDefault()
+      e.stopPropagation()
+      e.dataTransfer.dropEffect = 'copy'
+      return true
+    }
     const paths = getDragged()
     if (!into || !paths || !e.dataTransfer.types.includes(DRAG_FILES) || isInside(paths, into)) return false
     const op = dropOp(paths, into, e)
@@ -372,6 +380,30 @@ export function Desktop() {
     return true
   }
   function dropFiles(e: React.DragEvent, into: string) {
+    if (!getDragged() && hasOsFiles(e.dataTransfer)) {
+      if (!acceptFiles(e, into)) return
+      setDropIcon(null)
+      const at = { x: e.clientX - CELL_W / 2, y: e.clientY - 30 }
+      const onDesktop = into === sfDesktop
+      droppedFiles(e.dataTransfer)
+        .then((picked) => {
+          // Where they were let go: the top-level names land there, side by side.
+          if (onDesktop) {
+            const names = [...new Set(picked.map((p) => (p.rel ? p.rel.split('/')[0] : p.file.name)))]
+            const taken = new Set(visible.map((i) => key(positions[i.id])))
+            const next: Record<string, IconPos> = {}
+            names.forEach((n, k) => {
+              const cell = snap(at.x - k * CELL_W, at.y, taken)
+              taken.add(key(cell))
+              next[`sf:${n}`] = cell
+            })
+            updateDesktop((s) => ({ ...s, positions: { ...positions, ...s.positions, ...next } }))
+          }
+          return uploadFiles(picked, into)
+        })
+        .catch(failed('Could not upload it'))
+      return
+    }
     const paths = getDragged()
     if (!paths || !acceptFiles(e, into)) return
     setDropIcon(null)

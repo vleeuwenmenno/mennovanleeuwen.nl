@@ -391,3 +391,16 @@ export async function thumbnail(user: User, repo: unknown, path: unknown, size: 
   if (!res.ok || !type.startsWith('image/')) throw new HttpError(404, 'No thumbnail')
   return { type, body: Buffer.from(await res.arrayBuffer()) }
 }
+
+/** How much of a file a resumable upload has stored so far, to carry on from there. */
+export async function uploadedBytes(user: User, repo: unknown, parent: unknown, name: unknown): Promise<{ bytes: number }> {
+  const id = repoId(repo)
+  const dir = seafPath(parent)
+  const file = fileName(name)
+  await guard(user, id)
+  const res = await seafile<{ uploadedBytes?: number }>(user, `/api/v2.1/repos/${id}/file-uploaded-bytes/?parent_dir=${encodeURIComponent(dir)}&file_name=${encodeURIComponent(file)}`).catch((e) => {
+    if (e instanceof HttpError && e.status === 404) return { uploadedBytes: 0 }
+    throw e
+  })
+  return { bytes: Number(res.uploadedBytes) || 0 }
+}
