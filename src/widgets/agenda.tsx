@@ -1,4 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react'
+import { dayKey, eventsOn, eventTime, fetchEvents, startOfDay, type CalendarEvent } from '../data/calendar'
 import { api, connectGoogle, signIn, useAccount } from '../os/account'
 import type { MenuItem } from '../os/ContextMenu'
 import { useWindowMenu } from '../os/windowMenu'
@@ -14,7 +15,6 @@ type Config = { calendars: string[] | null; days: number; tilt: number }
 const DEFAULTS: Config = { calendars: null, days: 3, tilt: 0 }
 
 type CalendarInfo = { id: string; name: string; color: string; primary: boolean; selected: boolean }
-type CalendarEvent = { id: string; calendar: string; color: string; title: string; start: string; end: string; allDay: boolean; location?: string; url?: string; meet?: string }
 
 // Calendars change rarely; one list for every Agenda widget on the page.
 let calendarList: Promise<CalendarInfo[]> | null = null
@@ -28,9 +28,8 @@ function useEvents(config: Config, enabled: boolean) {
   useEffect(() => {
     if (!enabled) return
     let live = true
-    const params = new URLSearchParams({ days: String(config.days) })
-    if (config.calendars) params.set('calendars', config.calendars.join(','))
-    api<CalendarEvent[]>(`/api/calendar/events?${params}`).then(
+    const today = startOfDay(new Date())
+    fetchEvents(today, startOfDay(today, config.days), config.calendars, tick > 0).then(
       (e) => live && (setEvents(e), setError(null)),
       (e: Error) => live && setError(e.message),
     )
@@ -52,8 +51,6 @@ function useEvents(config: Config, enabled: boolean) {
   return { events, error }
 }
 
-const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-const time = (iso: string) => new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
 
 function dayLabel(key: string) {
   const today = new Date()
@@ -64,17 +61,12 @@ function dayLabel(key: string) {
 }
 
 /** Events by day; an all-day event spanning days shows on each of them in range. */
-function byDay(events: CalendarEvent[], days: number) {
-  const out = new Map<string, CalendarEvent[]>()
-  const start = new Date()
-  start.setHours(0, 0, 0, 0)
-  for (let i = 0; i < days; i++) out.set(dayKey(new Date(start.getTime() + i * 864e5)), [])
-  for (const e of events) {
-    if (e.allDay) {
-      for (const [key, list] of out) if (key >= e.start.slice(0, 10) && key < e.end.slice(0, 10)) list.push(e)
-    } else out.get(dayKey(new Date(e.start)))?.push(e)
-  }
-  return [...out]
+function byDay(events: CalendarEvent[], days: number): [string, CalendarEvent[]][] {
+  const today = startOfDay(new Date())
+  return Array.from({ length: days }, (_, i) => {
+    const key = dayKey(startOfDay(today, i))
+    return [key, eventsOn(events, key)]
+  })
 }
 
 export function Agenda({ id }: { win: WinState; id: string }) {
@@ -143,7 +135,7 @@ export function Agenda({ id }: { win: WinState; id: string }) {
               return (
                 <div key={e.id + key} className={`ag-event ${past ? 'is-past' : ''} ${live ? 'is-now' : ''}`} title={`${e.calendar}${e.location ? ` · ${e.location}` : ''}`}>
                   <span className="ag-dot" style={{ background: e.color }} />
-                  <span className="ag-time">{e.allDay ? 'all day' : time(e.start)}</span>
+                  <span className="ag-time">{eventTime(e)}</span>
                   <a className="ag-title" href={e.url} target="_blank" rel="noopener noreferrer">
                     {e.title}
                   </a>

@@ -3,8 +3,8 @@
 # production image itself.
 # .env next to this file can set PORT (default 8080), GITHUB_TOKEN (optional, for `git log` in
 # the terminal) and the sign-in settings: GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, ALLOWED_USERS,
-# PUBLIC_URL, SESSION_SECRET, and GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET for Google Calendar
-# (see README).
+# PUBLIC_URL, SESSION_SECRET, GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET for Google Calendar and
+# UPDOWN_API_KEY (updown.io's read-only key) for the Status widget (see README).
 services:
   site:
     image: ghcr.io/vleeuwenmenno/mennovanleeuwen.nl:latest
@@ -21,6 +21,7 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      UPDOWN_API_KEY: ${UPDOWN_API_KEY:-}
     # Sign-in sessions, linked Gitea/Forgejo instances and synced notes.
     volumes:
       - site_data:/app/data

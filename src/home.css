@@ -1270,3 +1270,196 @@ input.is-bad {
   font-size: 10.5px;
   opacity: 0.6;
 }
+
+/* ---------- The clock's calendar with Google Calendar ---------- */
+
+button.cal-day {
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+}
+button.cal-day.is-weekend {
+  color: var(--muted);
+}
+button.cal-day.is-today {
+  color: var(--on-accent);
+}
+button.cal-day:not(.is-today):hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+button.cal-day.is-picked:not(.is-today) {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.cal-dots {
+  position: absolute;
+  bottom: 1px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+}
+.cal-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 99px;
+}
+.cal-day.is-today .cal-dots span {
+  box-shadow: 0 0 0 1px var(--on-accent);
+}
+.cal-agenda {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.cal-agenda h4 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.cal-agenda p {
+  margin: 0;
+}
+.cal-event {
+  display: grid;
+  grid-template-columns: 8px 3.8em 1fr auto;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+}
+.cal-event a {
+  color: var(--fg-bright);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cal-event a:hover {
+  text-decoration: underline;
+}
+.cal-event-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Status widget (updown.io) ---------- */
+
+.st {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 14px 14px;
+  font-size: 12px;
+}
+.st-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: -6px;
+  font-size: 13px;
+}
+.st-head .sticky-btn {
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.window.widget:hover .st-head .sticky-btn {
+  opacity: 0.6;
+}
+.st-badge {
+  padding: 0 7px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+}
+.st-badge.is-up {
+  background: #3f9142;
+}
+.st-badge.is-down {
+  background: #c8323b;
+}
+.st-note {
+  margin: 0;
+  opacity: 0.8;
+}
+.st-note .link-btn {
+  color: inherit;
+}
+.st-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.st-check {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  column-gap: 8px;
+  padding: 4px 4px;
+  margin: 0 -4px;
+  color: inherit;
+  text-decoration: none;
+}
+.st-check:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+.st-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 99px;
+  background: #3f9142;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #3f9142 22%, transparent);
+}
+.st-check.is-down .st-dot {
+  background: #c8323b;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #c8323b 25%, transparent);
+  animation: st-pulse 1.4s ease-in-out infinite;
+}
+.st-check.is-paused .st-dot {
+  background: #9aa29a;
+  box-shadow: none;
+}
+@keyframes st-pulse {
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, #c8323b 0%, transparent);
+  }
+}
+.st-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.st-check.is-paused .st-name {
+  opacity: 0.55;
+}
+.st-nums {
+  display: flex;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.65;
+}
+.st-detail {
+  grid-column: 2 / -1;
+  font-size: 11px;
+  color: #b0262f;
+}
+.st-warn {
+  color: #9a6200;
+}
+
+/* Spotlight's "Add widget…" list: the way back, left of the search box. */
+.sp-back {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--line-strong);
+  color: var(--accent);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.sp-back:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}

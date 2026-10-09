@@ -144,16 +144,19 @@ export function listCalendars(user: User): Promise<CalendarInfo[]> {
   })
 }
 
-/** Events from now (from the start of today) for `days` days, from the given calendars (default: the selected ones). */
-export async function listEvents(user: User, ids: string[] | null, days: number): Promise<CalendarEvent[]> {
+/**
+ * Events between `range.from` and `range.to` (at most 45 days apart), from the given calendars
+ * (default: the ones shown in Google Calendar).
+ */
+export async function listEvents(user: User, ids: string[] | null, range: { from: Date; to: Date }): Promise<CalendarEvent[]> {
   const calendars = await listCalendars(user)
   const pick = ids?.length ? calendars.filter((c) => ids.includes(c.id)) : calendars.filter((c) => c.selected)
-  const from = new Date()
-  from.setHours(0, 0, 0, 0)
-  const to = new Date(from.getTime() + Math.min(14, Math.max(1, days)) * 864e5)
+  const from = range.from
+  const to = new Date(Math.min(range.to.getTime(), from.getTime() + 45 * 864e5))
+  if (!(to > from)) throw new HttpError(400, 'Bad date range')
   const lists = await Promise.all(
     pick.map((cal) =>
-      cached(`${user.id}|events|${cal.id}|${from.toISOString()}|${days}`, 2 * 60_000, async () => {
+      cached(`${user.id}|events|${cal.id}|${from.toISOString()}|${to.toISOString()}`, 2 * 60_000, async () => {
         const params = new URLSearchParams({ timeMin: from.toISOString(), timeMax: to.toISOString(), singleEvents: 'true', orderBy: 'startTime', maxResults: '50' })
         type Item = { id: string; status?: string; summary?: string; start: { date?: string; dateTime?: string }; end: { date?: string; dateTime?: string }; location?: string; htmlLink?: string; hangoutLink?: string }
         const d = await calendarApi<{ items: Item[] }>(user, `/calendars/${encodeURIComponent(cal.id)}/events?${params}`)

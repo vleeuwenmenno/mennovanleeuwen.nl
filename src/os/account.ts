@@ -13,9 +13,11 @@ export type Account = {
   /** Whether this server can link Google Calendar, and the linked account if any */
   googleEnabled: boolean
   google: { email: string } | null
+  /** Third-party services with a key on the server: updown.io's saved in Settings, set on the server, or none */
+  integrations: { updown: 'settings' | 'server' | null }
 }
 
-let account: Account = { status: 'loading', user: null, forges: [], googleEnabled: false, google: null }
+let account: Account = { status: 'loading', user: null, forges: [], googleEnabled: false, google: null, integrations: { updown: null } }
 const listeners = new Set<() => void>()
 
 const OWNER_HINT = 'mvlos.owner'
@@ -72,10 +74,10 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
 
 export async function loadAccount() {
   try {
-    const me = await api<{ authEnabled: boolean; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string } | null }>('/api/me')
-    set({ status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null })
+    const me = await api<{ authEnabled: boolean; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string } | null; integrations?: { updown: 'settings' | 'server' | null } }>('/api/me')
+    set({ status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, integrations: { updown: me.integrations?.updown ?? null } })
   } catch {
-    set({ status: 'off', user: null, forges: [], googleEnabled: false, google: null })
+    set({ status: 'off', user: null, forges: [], googleEnabled: false, google: null, integrations: { updown: null } })
   }
 }
 
@@ -83,7 +85,18 @@ export const signIn = () => location.assign('/api/auth/github/login')
 
 export async function signOut() {
   await api('/api/auth/logout', { method: 'POST' }).catch(() => {})
-  set({ status: 'anon', user: null, forges: [], googleEnabled: account.googleEnabled, google: null })
+  set({ status: 'anon', user: null, forges: [], googleEnabled: account.googleEnabled, google: null, integrations: { updown: null } })
+}
+
+/** updown.io's read-only API key, for the Status widget: checked by the server, then stored encrypted. */
+export async function setUpdownKey(key: string) {
+  await api('/api/integrations/updown', { method: 'PUT', json: { key } })
+  set({ ...account, integrations: { ...account.integrations, updown: 'settings' } })
+}
+
+export async function removeUpdownKey() {
+  await api('/api/integrations/updown', { method: 'DELETE' })
+  await loadAccount() // a key set on the server, if there is one, takes over again
 }
 
 /** Google Calendar, attached to the signed-in owner: off to Google's consent page and back. */

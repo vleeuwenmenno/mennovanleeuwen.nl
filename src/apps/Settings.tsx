@@ -3,7 +3,7 @@ import { ENGINES, setSearchSettings, useSearchSettings, type EngineId } from '..
 import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { MC_ADDRESS, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
-import { api, connectGoogle, disconnectGoogle, signIn, signOut, unlinkForge, useAccount } from '../os/account'
+import { api, connectGoogle, disconnectGoogle, removeUpdownKey, setUpdownKey, signIn, signOut, unlinkForge, useAccount } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
@@ -21,7 +21,7 @@ import { SyncLine } from './Notebook'
 // System settings, laid out like macOS: the account on top of a sidebar, one pane per topic.
 // Opened from the system menu, the desktop's right-click menu, Spotlight and the terminal;
 // props.section picks the pane (account, appearance, dock, launchers, search, notifications,
-// instances, calendar, golinks, sync, about).
+// instances, calendar, integrations, golinks, sync, about).
 
 const SignInFirst = ({ what }: { what: string }) => {
   const account = useAccount()
@@ -522,6 +522,67 @@ function Launchers() {
 
 type CalendarInfo = { id: string; name: string; color: string; primary: boolean; selected: boolean }
 
+/** Third-party services the widgets read from, with keys on the server: updown.io for Status. */
+function Integrations() {
+  const account = useAccount()
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  if (account.status !== 'user') return <p className="muted">Sign in first to connect services for widgets.</p>
+  const save = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await setUpdownKey(key)
+      setKey('')
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      <ul className="set-list">
+        <li className="set-row">
+          <img className="set-fav" src="https://updown.io/favicon.ico" alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
+          <span className="set-row-text">
+            <strong>updown.io</strong>
+            <span className="muted">
+              {account.integrations.updown === 'server' ? 'Connected with the key set on the server' : account.integrations.updown ? 'Connected · for the Status widget' : 'Uptime checks, for the Status widget'}
+            </span>
+          </span>
+          {account.integrations.updown === 'settings' && (
+            <button className="btn btn-small" onClick={() => removeUpdownKey().catch((e: Error) => setError(e.message))}>
+              Remove key
+            </button>
+          )}
+        </li>
+      </ul>
+      {!account.integrations.updown && (
+        <form className="set-form" onSubmit={save}>
+          <label>
+            <span>Read-only API key</span>
+            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="read-only API key" autoComplete="off" required />
+          </label>
+          <p className="muted set-help">
+            Use the <em>read-only</em> key from{' '}
+            <a href="https://updown.io/settings/edit" target="_blank" rel="noopener noreferrer">
+              updown.io → Settings → API
+            </a>
+            , not the super-powered one. It is checked once, then stored encrypted on this server.
+          </p>
+          <button className="btn btn-primary" disabled={busy}>
+            {busy ? 'Checking…' : 'Connect updown.io'}
+          </button>
+        </form>
+      )}
+      {error && <p className="t-red">{error}</p>}
+    </>
+  )
+}
+
 /** Google Calendar, read-only, for the Agenda widget. */
 function CalendarSettings() {
   const account = useAccount()
@@ -601,7 +662,7 @@ function SearchSettings() {
   )
 }
 
-type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'notifications' | 'instances' | 'calendar' | 'golinks' | 'sync' | 'about'
+type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'golinks' | 'sync' | 'about'
 type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; keywords: string; blurb: string; render: () => ReactNode }
 
 const svg = (d: ReactNode) => (
@@ -648,6 +709,7 @@ const GROUPS: Pane[][] = [
   [
     { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
     { id: 'calendar', label: 'Calendar', hue: 'var(--red)', icon: svg(<><rect x="4" y="5" width="16" height="15" /><path d="M4 10h16M9 3v4M15 3v4" /></>), keywords: 'calendar google agenda events', blurb: 'Google Calendar, read-only, for the Agenda widget.', render: () => <CalendarSettings /> },
+    { id: 'integrations', label: 'Integrations', hue: 'var(--green)', icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets', blurb: 'Services the widgets read from: updown.io for Status.', render: () => <Integrations /> },
   ],
   [
     { id: 'sync', label: 'Sync', hue: 'var(--green)', icon: svg(<><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3" /><path d="M18 3v4h-4M6 21v-4h4" /></>), keywords: 'sync devices cloud', blurb: 'What follows you between devices.', render: () => <SyncPane /> },
