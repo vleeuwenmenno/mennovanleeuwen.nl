@@ -5,6 +5,7 @@ import { setLinkSettings, useLinkSettings } from '../data/links'
 import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { MC_ADDRESS, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
+import { setSwing, useSwingPrefs } from '../os/swing'
 import { addCaldav, connectGoogle, disconnectGoogle, removeCaldav, removeUpdownKey, setUpdownKey, signIn, signOut, unlinkForge, useAccount, useLikelyOwner } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
@@ -101,6 +102,7 @@ function Account() {
 /** Light/dark mode, the Omarchy theme for each, and the accent. Kept in this browser. */
 function Appearance() {
   const t = useTheme()
+  const swing = useSwingPrefs()
   const modes: [Mode, string][] = [
     ['auto', 'Auto'],
     ['light', 'Light'],
@@ -148,6 +150,16 @@ function Appearance() {
       </SetGroup>
       <SetGroup title="Light theme">{grid(LIGHT_THEMES, t.light)}</SetGroup>
       <SetGroup title="Dark theme">{grid(DARK_THEMES, t.dark)}</SetGroup>
+      <SetGroup title="Motion">
+        <label className="set-check">
+          <input type="checkbox" checked={swing.icons} onChange={(e) => setSwing({ icons: e.target.checked })} />
+          Desktop icons wiggle while you drag them
+        </label>
+        <label className="set-check">
+          <input type="checkbox" checked={swing.notes} onChange={(e) => setSwing({ notes: e.target.checked })} />
+          Notes and widgets wiggle while you drag them
+        </label>
+      </SetGroup>
       <p className="muted set-help">The themes are Omarchy's own palettes. Saved in this browser.</p>
     </>
   )
@@ -832,7 +844,7 @@ function SyncPane() {
 // announced, then the outside services, then housekeeping.
 const GROUPS: Pane[][] = [
   [
-    { id: 'appearance', label: 'Appearance', hue: 'var(--blue)', icon: svg(<><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" /></>), keywords: 'theme dark light mode accent color omarchy', blurb: 'Light and dark mode, themes and the accent color.', render: () => <Appearance /> },
+    { id: 'appearance', label: 'Appearance', hue: 'var(--blue)', icon: svg(<><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" /></>), keywords: 'theme dark light mode accent color omarchy motion wiggle swing animation', blurb: 'Light and dark mode, themes, the accent color and motion.', render: () => <Appearance /> },
     { id: 'dock', label: 'Dock', hue: 'var(--cyan)', icon: svg(<><rect x="3" y="4" width="18" height="16" /><path d="M7 16h10" /></>), keywords: 'dock hide pin apps order', blurb: 'When the dock shows, and what is in it.', render: () => <DockSettings /> },
     { id: 'launchers', label: 'Launchers', hue: 'var(--magenta)', icon: svg(<><rect x="4" y="4" width="6" height="6" /><rect x="14" y="4" width="6" height="6" /><rect x="4" y="14" width="6" height="6" /><rect x="14" y="14" width="6" height="6" /></>), keywords: 'launchers links bookmarks desktop shortcuts', blurb: 'Links on the desktop, in All apps and in Spotlight.', render: () => <Launchers /> },
   ],
