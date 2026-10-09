@@ -1,3 +1,4 @@
+import { openLink } from './links'
 import { synced } from '../os/synced'
 
 // Desktop launchers of your own: a label, a URL and an optional emoji. They sit on the desktop
@@ -40,7 +41,7 @@ export const moveLauncher = (id: string, by: number) =>
     return next
   })
 
-export const launch = (l: Launcher) => window.open(l.url, '_blank', 'noopener')
+export const launch = (l: Launcher) => openLink(l.url)
 
 /** The site's own favicon, straight from it (no third-party favicon service sees the URL). */
 export const faviconOf = (url: string) => {

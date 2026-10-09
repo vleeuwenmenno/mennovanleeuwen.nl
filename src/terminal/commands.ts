@@ -13,6 +13,8 @@ import { loadRates, smartCalc } from '../os/smartcalc'
 import { THEMES as OMARCHY_THEMES } from '../os/omarchyThemes'
 import { ACCENTS, setMode, setTheme, themeLabel, themeSettings } from '../os/theme'
 import { reboot, shutdown } from '../os/powerState'
+import { openLink } from '../data/links'
+import { asWebAddress } from '../os/linkPreview'
 import { signedIn } from '../os/account'
 import { golinksSite, golinksTemplate, golinksUrl, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { age, fileKind, HOME, lookup, prettyPath, resolvePath, walk, type DirNode, type Node } from './vfs'
@@ -489,8 +491,8 @@ export const commands: Record<string, Command> = {
       }
       const target = ctx.args[0]
       if (!target) return `usage: open <app|file|url>\napps: ${Object.keys(APPS).filter((k, i, a) => a.findIndex((x) => APPS[x] === APPS[k]) === i).join(', ')}`
-      if (/^https?:\/\//.test(target)) {
-        window.open(target, '_blank', 'noopener')
+      if (/^https?:\/\//i.test(target)) {
+        openLink(target)
         return `Opening ${link(target)}`
       }
       if (APPS[target]) {
@@ -502,7 +504,7 @@ export const commands: Record<string, Command> = {
       const node = lookup(abs)
       if (node?.type === 'file' && node.open) {
         if (node.open.url) {
-          window.open(node.open.url, '_blank', 'noopener')
+          openLink(node.open.url)
           return `Opening ${link(node.open.url)}`
         }
         if (node.open.app) ctx.openApp(node.open.app as AppId, node.open.props)
@@ -520,6 +522,12 @@ export const commands: Record<string, Command> = {
         if (fileKind(node) === 'markdown') ctx.openApp('zed', { path: abs, view: 'preview', t: String(Date.now()) })
         else ctx.openNewApp('viewer', { path: abs })
         return
+      }
+      // Last, so files like README.md still open as files.
+      const url = asWebAddress(target)
+      if (url) {
+        openLink(url)
+        return `Opening ${link(url)}`
       }
       throw new CmdError(`open: ${target}: no app, file or URL by that name`)
     },
@@ -554,7 +562,7 @@ export const commands: Record<string, Command> = {
       }
       if (!template) throw new CmdError('go: no golinks account set. Run `go` to see how.')
       const url = golinksUrl(template, alias)
-      window.open(url, '_blank', 'noopener')
+      openLink(url)
       return `Opening ${link(url, `${golinksSite(template)}/r/${encodeURIComponent(alias)}`)}`
     },
   },

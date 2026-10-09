@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { openLink } from './links'
 import { synced } from '../os/synced'
 
 // Which web search engine Spotlight uses, and whether it shows that engine's suggestions while
@@ -24,7 +25,7 @@ const store = synced<SearchSettings>('search', DEFAULTS, {
 
 export const useSearchSettings = store.use
 export const setSearchSettings = (patch: Partial<SearchSettings>) => store.set((s) => ({ ...s, ...patch }))
-export const searchWeb = (q: string) => window.open(ENGINES[store.get().engine].search(q), '_blank', 'noopener')
+export const searchWeb = (q: string) => openLink(ENGINES[store.get().engine].search(q))
 
 const cache = new Map<string, string[]>()
 

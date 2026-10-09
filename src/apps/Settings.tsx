@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { isShown, setCalendarShown, useCalendarChoice, useCalendarList } from '../data/calendar'
 import { ENGINES, setSearchSettings, useSearchSettings, type EngineId } from '../data/searchEngine'
+import { setLinkSettings, useLinkSettings } from '../data/links'
 import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { MC_ADDRESS, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
@@ -764,7 +765,38 @@ function SearchSettings() {
   )
 }
 
-type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'golinks' | 'sync' | 'about'
+/** Where web links open, and whether the browser's new tab page (/?newtab) always uses this tab. */
+function LinkSettingsPane() {
+  const { target, newTabPageSameTab } = useLinkSettings()
+  const account = useAccount()
+  return (
+    <>
+      <div className="set-choices" role="radiogroup" aria-label="Open links in">
+        {(
+          [
+            ['new', 'A new tab'],
+            ['same', 'This tab'],
+          ] as const
+        ).map(([id, label]) => (
+          <label key={id} className={`set-choice ${target === id ? 'is-on' : ''}`}>
+            <input type="radio" name="link-target" checked={target === id} onChange={() => setLinkSettings({ target: id })} />
+            {label}
+          </label>
+        ))}
+      </div>
+      <label className="set-check">
+        <input type="checkbox" checked={newTabPageSameTab} onChange={(e) => setLinkSettings({ newTabPageSameTab: e.target.checked })} />
+        As the browser's new tab page, always open links in this tab
+      </label>
+      <p className="muted set-help">
+        Covers Spotlight, the terminal's <code>open</code> and <code>go</code>, launchers and links in apps. Ctrl-click still opens a new tab. The new tab page is this site loaded as <code>/?newtab</code>.{' '}
+        {account.status === 'user' ? 'Your choice syncs to your other devices.' : 'Saved in this browser.'}
+      </p>
+    </>
+  )
+}
+
+type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'golinks' | 'sync' | 'about'
 /** `owner`: only for the signed-in owner (accounts and services); visitors don't see it at all. */
 type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; keywords: string; blurb: string; owner?: true; render: () => ReactNode }
 
@@ -791,7 +823,7 @@ function SyncPane() {
           )}
         </li>
       </ul>
-      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, game high scores, the go links account and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. Without an account they stay in this browser.</p>
+      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, game high scores, the go links account and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. Without an account they stay in this browser.</p>
     </>
   )
 }
@@ -806,6 +838,7 @@ const GROUPS: Pane[][] = [
   ],
   [
     { id: 'search', label: 'Search', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google', blurb: "Spotlight's web search engine and its suggestions.", render: () => <SearchSettings /> },
+    { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
     { id: 'notifications', label: 'Notifications', hue: 'var(--red)', icon: svg(<><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></>), keywords: 'notifications alerts minecraft activity', blurb: 'What may pop up in the corner of the desktop.', render: () => <Notifications /> },
     { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal mvl.sh token', blurb: "The golinks account the terminal's go command follows.", render: () => <GoLinks /> },
   ],

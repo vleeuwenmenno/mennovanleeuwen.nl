@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { restoreIcons, useDesktop } from '../os/desktopStore'
 import { DESKTOP_ICONS } from '../os/Desktop'
 import { openContextMenu, type MenuItem } from '../os/ContextMenu'
+import { openLink } from '../data/links'
 import { useWM, type AppId, type WinState } from '../os/wm'
 import { formatSize, HOME, KIND_LABEL, lookup, prettyPath, resolvePath, stat, walk, type FileKind, type Node } from '../terminal/vfs'
 
@@ -233,7 +234,7 @@ export function Files({ win }: { win: WinState }) {
     if (how === 'terminal') return wm.openNew('terminal', { run: `cat ${prettyPath(item.path)}`, t: String(Date.now()) })
     if (how === 'viewer') return wm.openNew('viewer', { path: item.path })
     if (how === 'zed') return wm.open('zed', { path: item.path, view: 'preview', t: String(Date.now()) })
-    if (node.open?.url) return void window.open(node.open.url, '_blank', 'noopener')
+    if (node.open?.url) return void openLink(node.open.url)
     if (node.open?.app) return wm.open(node.open.app as AppId, { ...node.open.props, t: String(Date.now()) })
     if (item.kind === 'markdown') return openItem(item, 'zed')
     wm.openNew('viewer', { path: item.path })
@@ -469,7 +470,7 @@ export function Files({ win }: { win: WinState }) {
   }, [path])
 
   const place = (label: string, target: string, icon: string, extra?: ReactNode) => (
-    <button key={target + label} className={`fm-side-item ${path === target ? 'is-active' : ''}`} onClick={() => (target.startsWith('http') ? window.open(target, '_blank', 'noopener') : navigate(target))}>
+    <button key={target + label} className={`fm-side-item ${path === target ? 'is-active' : ''}`} onClick={() => (target.startsWith('http') ? openLink(target) : navigate(target))}>
       <span className="fm-side-icon">{icon}</span>
       <span className="fm-side-label">{label}</span>
       {extra}

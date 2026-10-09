@@ -76,7 +76,8 @@ Pressing P during the boot log lets the boot finish but stops short of the deskt
 on a text console on "tty1" instead (the same shell, without a window manager); `exit` starts the
 desktop. `/?newtab` is for using the site as a browser home or new tab page: it skips the boot log, closes
 the terminals the last tab left open, and starts with one fresh terminal in front of the rest of the
-saved desk. `reboot` and `shutdown` play the systemd
+saved desk. There, links (Spotlight, launchers, `open github.com`, `go`) replace the page like an
+address bar would; elsewhere they open in a new tab. Settings → Links changes both. `reboot` and `shutdown` play the systemd
 shutdown log ([`src/os/Power.tsx`](src/os/Power.tsx)); a reboot starts from the opening layout again.
 
 ## Notes, launchers and sign-in (home page mode)
@@ -86,7 +87,7 @@ each one can sit on the desktop as a sticky (right-click the desktop → *New st
 get a random tilt and colour, both changeable from the sticky's hover bar or menu. **Settings**
 (system menu, [`src/apps/Settings.tsx`](src/apps/Settings.tsx)) is laid out like macOS System
 Settings: the account on top of a sidebar, then one pane each for appearance (mode, Omarchy themes,
-accent), the dock, launchers, search, notifications, go links, code hosts, calendar, sync and about.
+accent), the dock, launchers, search, links, notifications, go links, code hosts, calendar, sync and about.
 Launchers are a URL, a name and an optional emoji (otherwise the site's own favicon). Notes, launchers, desktop icons, the dock order and the open windows are kept per browser
 in localStorage ([`src/os/synced.ts`](src/os/synced.ts)), with one window layout for phones and one
 for bigger screens.
