@@ -17,6 +17,7 @@ import { Files } from '../apps/Files'
 import { Viewer } from '../apps/Viewer'
 import { Preview, previewTitle } from '../apps/Preview'
 import { Player, playerTitle } from '../apps/Player'
+import { PdfViewer, pdfTitle } from '../apps/PdfViewer'
 import { Zed } from '../apps/Zed'
 import type { AppId, WinState } from './wm'
 
@@ -38,6 +39,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   zed: { title: 'Zed', dock: 'Zed', blurb: 'Edit Markdown and text files', size: [960, 620], render: (w) => <Zed win={w} /> },
   preview: { title: 'Preview', dock: 'Preview', blurb: 'Pictures: zoom, rotate, slideshow', size: [900, 620], titleOf: previewTitle, render: (w) => <Preview win={w} /> },
   player: { title: 'Player', dock: 'Player', blurb: 'Video and music', size: [800, 484], titleOf: playerTitle, render: (w) => <Player win={w} /> },
+  pdf: { title: 'PDF', dock: 'PDF', blurb: 'PDFs: pages, search, zoom', size: [860, 680], titleOf: pdfTitle, render: (w) => <PdfViewer win={w} /> },
   viewer: { title: 'Viewer', dock: 'Viewer', blurb: 'Open text files and images', size: [720, 560], render: (w) => <Viewer win={w} /> },
   notes: { title: 'Sticky note', dock: 'Note', blurb: 'Headlines on a sticky note', size: [310, 340], chrome: 'note', render: () => <Notes /> },
   keys: { title: 'Shortcuts', dock: 'Shortcuts', blurb: 'Every keyboard and mouse shortcut', size: [310, 320], chrome: 'note', render: (w) => <KeysNote win={w} /> },

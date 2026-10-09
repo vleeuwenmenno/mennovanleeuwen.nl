@@ -4157,6 +4157,248 @@ button.fm-dd-row:hover {
   transition: opacity 0.4s;
 }
 
+/* ---------- PDF ---------- */
+
+.pdf {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-dark);
+}
+.pdf-page {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  font-size: 12px;
+}
+.pdf-page input {
+  width: 42px;
+  padding: 2px 4px;
+  text-align: right;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  outline: 0;
+}
+.pdf-page input:focus,
+.pdf-find input:focus {
+  border-color: var(--accent);
+}
+.pdf-find {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 6px;
+  font-size: 11px;
+}
+.pdf-find input {
+  width: 170px;
+  padding: 3px 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  font-size: 12px;
+  outline: 0;
+}
+.pdf-find button {
+  width: 22px;
+  height: 22px;
+  color: var(--fg);
+}
+.pdf-find button:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.pdf-side {
+  flex: none;
+  width: 168px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  background: var(--bg);
+}
+.pdf-tabs {
+  flex: none;
+  display: flex;
+  border-bottom: 1px solid var(--line);
+}
+.pdf-tabs button {
+  flex: 1;
+  padding: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.pdf-tabs button.is-on {
+  color: var(--fg);
+  box-shadow: inset 0 -2px var(--accent);
+}
+.pdf-thumbs,
+.pdf-side > .pdf-outline {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.pdf-thumbs {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 10px 14px;
+}
+.pdf-thumb {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 4px;
+  font-size: 10.5px;
+  color: var(--muted);
+  border: 1px solid transparent;
+}
+.pdf-thumb canvas {
+  width: 100%;
+  height: auto;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+.pdf-thumb canvas.is-blank {
+  aspect-ratio: 1 / 1.3;
+}
+.pdf-thumb.is-current {
+  border-color: var(--accent);
+  color: var(--fg);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.pdf-outline {
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+  font-size: 12px;
+}
+.pdf-outline button {
+  display: block;
+  width: 100%;
+  padding: 3px 10px;
+  text-align: left;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--fg);
+}
+.pdf-outline button:hover {
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+.pdf-where {
+  flex: none;
+  margin: 0;
+  padding: 6px 10px;
+  border-top: 1px solid var(--line);
+  font-size: 10.5px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.pdf-scroll {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  outline: 0;
+}
+.pdf-pages {
+  position: relative;
+}
+.pdf-page-box {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #fff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+}
+.pdf-page-box canvas {
+  display: block;
+}
+.pdf-page-n {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #bbb;
+  font-size: 24px;
+}
+.pdf.is-night .pdf-page-box,
+.pdf.is-night .pdf-thumb canvas {
+  filter: invert(0.9) hue-rotate(180deg);
+}
+.pdf.is-full .pv-bar {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.pdf.is-full .pv-bar:hover,
+.pdf.is-full .pv-bar:focus-within {
+  opacity: 0.97;
+}
+/* pdf.js's text layer: the page's text, invisible over the drawing, to select and search. */
+.pdf .textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  line-height: 1;
+  text-align: initial;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  z-index: 0;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.pdf .textLayer span,
+.pdf .textLayer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text;
+}
+.pdf .textLayer > :not(.markedContent),
+.pdf .textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.pdf .textLayer .markedContent {
+  display: contents;
+}
+.pdf .textLayer mark {
+  position: static;
+  color: transparent;
+  border-radius: 2px;
+  background-color: rgb(255 200 0 / 0.4);
+}
+.pdf .textLayer mark.is-current {
+  background-color: rgb(255 110 0 / 0.6);
+  outline: 1px solid rgb(255 110 0);
+}
+.pdf .textLayer ::selection {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: transparent;
+}
+
 /* ---------- Player (video and audio) ---------- */
 
 .pl {

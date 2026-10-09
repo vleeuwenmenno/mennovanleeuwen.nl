@@ -314,9 +314,9 @@ export async function download(path: string) {
 
 /**
  * Opens a Seafile path the way Files and the desktop do: folders in Files, text and code in Zed,
- * pictures in Preview, video and audio in Player, PDFs in the Viewer; anything else downloads.
+ * pictures in Preview, video and audio in Player, PDFs in PDF; anything else downloads.
  */
-export function openSeafile(wm: Opener, path: string, opts: { dir?: boolean; how?: 'default' | 'zed' | 'viewer' | 'preview' | 'player' } = {}): Promise<void> {
+export function openSeafile(wm: Opener, path: string, opts: { dir?: boolean; how?: 'default' | 'zed' | 'viewer' | 'preview' | 'player' | 'pdf' } = {}): Promise<void> {
   const name = path.split('/').pop() ?? ''
   const kind: FileKind = kindOfName(name, opts.dir)
   const how = opts.how ?? 'default'
@@ -324,7 +324,8 @@ export function openSeafile(wm: Opener, path: string, opts: { dir?: boolean; how
   if (how === 'zed' || (how === 'default' && (kind === 'text' || kind === 'markdown'))) return Promise.resolve(wm.open('zed', { path, view: kind === 'markdown' ? 'preview' : undefined, t: String(Date.now()) }))
   if (how === 'preview' || (how === 'default' && kind === 'image')) return Promise.resolve(wm.openNew('preview', { path }))
   if (how === 'player' || (how === 'default' && (kind === 'video' || kind === 'audio'))) return Promise.resolve(wm.openNew('player', { path }))
-  if (how === 'viewer' || kind === 'pdf') return Promise.resolve(wm.openNew('viewer', { path }))
+  if (how === 'pdf' || (how === 'default' && kind === 'pdf')) return Promise.resolve(wm.openNew('pdf', { path }))
+  if (how === 'viewer') return Promise.resolve(wm.openNew('viewer', { path }))
   return download(path)
 }
 

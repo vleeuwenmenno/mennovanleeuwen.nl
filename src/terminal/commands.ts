@@ -75,6 +75,7 @@ const APP_NAMES: Record<AppId, string> = {
   viewer: 'viewer',
   preview: 'preview',
   player: 'player',
+  pdf: 'pdf',
   notes: 'sticky-notes',
   keys: 'shortcuts-note',
   projects: 'files',

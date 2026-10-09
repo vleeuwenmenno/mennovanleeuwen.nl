@@ -7,7 +7,7 @@ import { isSf, parseSf, sfPath, useDir, useFileLink } from './seafile'
 // which app opens what, the file's address, and the files next to it (for previous and next).
 
 /** The app that opens a kind of file by default, when it is not Zed or the Viewer. */
-export const MEDIA_APP: Partial<Record<FileKind, AppId>> = { image: 'preview', video: 'player', audio: 'player' }
+export const MEDIA_APP: Partial<Record<FileKind, AppId>> = { image: 'preview', video: 'player', audio: 'player', pdf: 'pdf' }
 
 /** The stand-ins for big files in the site's filesystem say why they will not play. */
 export const UNPLAYABLE: Partial<Record<FileKind, string>> = {

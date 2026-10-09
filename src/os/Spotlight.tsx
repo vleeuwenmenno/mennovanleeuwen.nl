@@ -480,7 +480,7 @@ export function Spotlight() {
 
     // Apps
     for (const app of Object.keys(APP_META) as AppId[]) {
-      if (app === 'viewer' || app === 'widget') continue // need a file, or are added as widgets
+      if (app === 'viewer' || app === 'widget' || app === 'pdf') continue // need a file, or are added as widgets
       if (app === 'linkforge') continue // a dialog of Settings
       if (app === 'mcserver') continue // the Minecraft server's status entry opens it
       if (app === 'calendar' && account.status !== 'user') continue // the owner's own calendars

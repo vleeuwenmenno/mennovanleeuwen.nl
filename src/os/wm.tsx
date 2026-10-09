@@ -2,7 +2,7 @@ import { snapReserve } from './dockPrefs'
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
 import { synced } from './synced'
 
-export type AppId = 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar'
+export type AppId = 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'pdf' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar'
 
 export type WinState = {
   pid: number

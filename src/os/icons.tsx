@@ -70,6 +70,16 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  pdf: {
+    bg: 'linear-gradient(160deg,#f7768e,#b3364f)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <path d="M14 9h14l7 7v23H14z" />
+        <path d="M28 9v7h7M19 25h11M19 30h11M19 20h5" />
+      </>
+    ),
+  },
   viewer: {
     bg: 'linear-gradient(160deg,#4fd1c5,#2c8f86)',
     fg: '#fff',
@@ -216,6 +226,7 @@ const HUES: Record<AppId, string> = {
   projects: 'var(--orange)',
   viewer: 'var(--cyan)',
   preview: 'var(--blue)',
+  pdf: 'var(--red)',
   player: 'var(--orange)',
   recents: 'var(--red)',
   cv: 'var(--text)',

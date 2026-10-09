@@ -201,6 +201,13 @@ next to the site's own icons; *Show the site's icons* (the desktop's menu, or Se
 Seafile's. Right-click the desktop for New (folder, text file, sticky note, widget, launcher),
 uploads and paste.
 
+PDFs open in **PDF**, on Mozilla's [pdf.js](https://mozilla.github.io/pdf.js/) (loaded only when a
+PDF opens, and left out of the offline cache): the pages one under the other in their own scrolling
+area, drawn as they come into view, with text to select and search (Ctrl+F marks every match;
+Enter and Shift+Enter go through them). A sidebar shows the pages or the table of contents; type a
+page number to go there; fit width, fit page, or zoom with Ctrl+wheel or a pinch towards the
+pointer; rotate (R), night mode, full screen (F) and download.
+
 The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests
 and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 ([`server/inbox.ts`](server/inbox.ts)), with the access sign-in and linking already give.
