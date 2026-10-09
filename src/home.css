@@ -695,3 +695,73 @@ input.is-bad {
 .wx-picker button:focus-visible {
   background: color-mix(in srgb, currentColor 12%, transparent);
 }
+
+/* ---------- Sticky checklists (the note as it reads, outside editing) ---------- */
+
+.sticky-view {
+  min-height: 120px;
+  font-family: var(--hand);
+  font-size: 22px;
+  line-height: 1.2;
+  cursor: text;
+  overflow-wrap: anywhere;
+}
+.sk-line {
+  min-height: 1.2em;
+  white-space: pre-wrap;
+}
+.sk-task,
+.sk-bullet {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35em;
+}
+.sk-box {
+  flex: none;
+  position: relative;
+  top: 0.12em;
+  width: 0.78em;
+  height: 0.78em;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 2px solid currentColor;
+  border-radius: 3px 4px 3px 5px;
+  transform: rotate(-3deg);
+  font-family: var(--hand);
+  font-size: 1em;
+  font-weight: 700;
+  line-height: 0;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.8;
+}
+.sk-box:hover {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.sk-task.is-done > span {
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+  opacity: 0.5;
+}
+.sk-heading {
+  font-weight: 700;
+  font-size: 1.15em;
+}
+
+/* Task lists in Markdown previews (Notebook, Zed). */
+.md-task {
+  list-style: none;
+  margin-left: -1.3em;
+}
+.md-task input {
+  margin: 0 0.5em 0 0;
+  vertical-align: -1px;
+  accent-color: var(--accent);
+  pointer-events: none;
+}
+.md-task.is-done {
+  opacity: 0.6;
+  text-decoration: line-through;
+}
