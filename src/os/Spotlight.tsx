@@ -480,7 +480,7 @@ export function Spotlight() {
 
     // Apps
     for (const app of Object.keys(APP_META) as AppId[]) {
-      if (app === 'viewer' || app === 'widget' || app === 'pdf' || app === 'office') continue // need a file, or are added as widgets
+      if (app === 'viewer' || app === 'widget' || app === 'pdf' || app === 'office' || app === 'archive') continue // need a file, or are added as widgets
       if (ALWAYS_NEW.has(app) && !account.seafile?.office) continue // OnlyOffice is not set up
       if (app === 'linkforge') continue // a dialog of Settings
       if (app === 'mcserver') continue // the Minecraft server's status entry opens it

@@ -4763,6 +4763,99 @@ button.fm-dd-row:hover {
   color: var(--muted);
 }
 
+/* ---------- Archive (ZIP) ---------- */
+
+.ar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+  background: var(--bg-dark);
+}
+.ar-crumbs {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+.ar-crumbs button {
+  padding: 2px 4px;
+  color: var(--fg);
+}
+.ar-crumbs button:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.ar-search {
+  width: 180px;
+  padding: 3px 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  font-size: 12px;
+  outline: 0;
+}
+.ar-search:focus {
+  border-color: var(--accent);
+}
+.ar-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  outline: 0;
+  font-size: 12px;
+}
+.ar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 90px 90px 60px 150px;
+  gap: 8px;
+  align-items: center;
+  padding: 3px 10px;
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+.ar-row > span:not(.ar-name) {
+  color: var(--muted);
+  text-align: right;
+  white-space: nowrap;
+}
+.ar-row:not(.ar-head):hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.ar-row.is-selected {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.ar-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.ar-head button {
+  text-align: right;
+  font-size: 11px;
+  color: var(--muted);
+}
+.ar-head button:first-child {
+  text-align: left;
+}
+.ar-head button.is-sorted {
+  color: var(--fg);
+}
+.ar-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ar-glyph {
+  margin-right: 6px;
+}
+
 /* ---------- Office (OnlyOffice) ---------- */
 
 .office {

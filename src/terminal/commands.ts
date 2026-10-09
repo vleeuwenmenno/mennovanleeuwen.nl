@@ -77,6 +77,7 @@ const APP_NAMES: Record<AppId, string> = {
   player: 'player',
   pdf: 'pdf',
   office: 'office',
+  archive: 'archive',
   newdoc: 'new-document',
   newsheet: 'new-spreadsheet',
   newslides: 'new-presentation',

@@ -19,6 +19,7 @@ import { Preview, previewTitle } from '../apps/Preview'
 import { Player, playerTitle } from '../apps/Player'
 import { PdfViewer, pdfTitle } from '../apps/PdfViewer'
 import { Office, officeTitle } from '../apps/Office'
+import { Archive, archiveTitle } from '../apps/Archive'
 import { Zed } from '../apps/Zed'
 import type { AppId, WinState } from './wm'
 
@@ -41,6 +42,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   preview: { title: 'Preview', dock: 'Preview', blurb: 'Pictures: zoom, rotate, slideshow', size: [900, 620], titleOf: previewTitle, render: (w) => <Preview win={w} /> },
   player: { title: 'Player', dock: 'Player', blurb: 'Video and music', size: [800, 484], titleOf: playerTitle, render: (w) => <Player win={w} /> },
   pdf: { title: 'PDF', dock: 'PDF', blurb: 'PDFs: pages, search, zoom', size: [860, 680], titleOf: pdfTitle, render: (w) => <PdfViewer win={w} /> },
+  archive: { title: 'Archive', dock: 'Archive', blurb: 'What is in a ZIP, without unpacking it', size: [820, 560], titleOf: archiveTitle, render: (w) => <Archive win={w} /> },
   office: { title: 'Office', dock: 'Office', blurb: 'Word, Excel and PowerPoint files, in OnlyOffice', size: [1100, 720], titleOf: officeTitle, render: (w) => <Office win={w} /> },
   newdoc: { title: 'New document', dock: 'New Document', blurb: 'A blank Word document in Seafile, to write in', size: [1100, 720], titleOf: officeTitle, render: (w) => <Office win={w} kind="docx" /> },
   newsheet: { title: 'New spreadsheet', dock: 'New Spreadsheet', blurb: 'A blank Excel spreadsheet in Seafile', size: [1100, 720], titleOf: officeTitle, render: (w) => <Office win={w} kind="xlsx" /> },

@@ -219,6 +219,11 @@ set `OFFICE_CALLBACK_ORIGIN` to an address it can reach. **New Document**, **New
 **New Presentation** make a blank file in Documents (or a folder picked with *New documents go here*)
 and open it; they are in Spotlight and All apps, and can go on the dock and the desktop.
 
+ZIP files open in **Archive**, browsed like folders without unpacking them: only the archive's table
+of contents is read ([`src/data/zip.ts`](src/data/zip.ts)), and from Seafile just the end of the file
+(a Range request), so a big one opens at once. Columns sort by name, size, packed size, how much was
+saved and date; the search looks through the whole archive. Unpacking comes later.
+
 Questions (delete this? empty the trash?) are the desktop's own dialogs, never the browser's.
 
 The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests
