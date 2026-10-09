@@ -180,7 +180,7 @@ export function Desktop() {
     terminal: `curl -sI ${l.url}`,
     url: l.url,
   }))
-  // With Seafile as home, the desktop is its Desktop folder (as in Files), plus your launchers.
+  // With Seafile as home, its Desktop folder (as in Files) joins the site's icons and your launchers.
   const { home: sfHome } = useSeafileHome()
   const sfDesktop = sfHome ? `${sfHome}/Desktop` : null
   const sfDir = useDir(sfDesktop, 15_000)
@@ -200,7 +200,7 @@ export function Desktop() {
       const kind = kindOfName(e.name, e.dir)
       return { id: `sf:${e.name}`, label: e.name, glyph: SF_GLYPH[kind] ?? '📄', kind: e.dir ? 'folder' : 'file', path: `${sfDesktop}/${e.name}`, open: { app: 'files' }, terminal: '', sf: { dir: e.dir } }
     })
-  const visible = sfDesktop ? [...sfIcons, ...linkIcons] : [...DESKTOP_ICONS.filter((i) => !desk.trashed.includes(i.id)), ...linkIcons]
+  const visible = [...DESKTOP_ICONS.filter((i) => !desk.trashed.includes(i.id)), ...sfIcons, ...linkIcons]
   const positions = useMemo(() => layout(visible.map((i) => i.id), desk.positions), [visible.map((i) => i.id).join(), desk.positions, viewport])
 
   useEffect(() => {
@@ -421,7 +421,7 @@ export function Desktop() {
       { separator: true },
       { label: 'Select all', shortcut: 'Ctrl A', onSelect: () => setSelected(new Set(visible.map((i) => i.id))) },
       { label: 'Clean up icons', onSelect: resetLayout },
-      ...(!sfDesktop && desk.trashed.length ? [{ label: `Put back ${desk.trashed.length} trashed item${desk.trashed.length === 1 ? '' : 's'}`, onSelect: () => restoreIcons(desk.trashed) }] : []),
+      ...(desk.trashed.length ? [{ label: `Put back ${desk.trashed.length} trashed item${desk.trashed.length === 1 ? '' : 's'}`, onSelect: () => restoreIcons(desk.trashed) }] : []),
       { separator: true },
       { label: 'Appearance', submenu: appearanceMenu() },
       { label: 'Dock', submenu: DOCK_MODES.map(([m, label]) => ({ label, checked: getDockMode() === m, onSelect: () => setDockMode(m) })) },
