@@ -175,6 +175,17 @@ headers, so it goes through the server; files themselves go straight between the
 Seafile's file server, with links the server hands out. The sidebar's sections and items can be
 dragged into another order and hidden (right-click, or *Customize sidebar*), synced like the dock.
 
+Pictures open in **Preview** and video and audio in **Player**, from Seafile or the site's own
+files. Preview fits the picture to the window and zooms with its buttons, the keys (+, −, 0 for
+actual size, 9 to fit), Ctrl+wheel or a pinch, towards the pointer; dragging or scrolling pans when
+zoomed in, and the page never scrolls. It rotates (R, L), goes through the folder's other pictures
+(arrow keys, or the thumbnail sidebar with S), shows an inspector (I), runs a slideshow (Space) and
+goes full screen (F). Player takes the video's shape when it opens and has QuickTime's floating bar:
+a timeline to hover and scrub with what is buffered, play and skip, volume, speed, loop, picture in
+picture and full screen; it hides while playing. Keys: Space or K, J and L, the arrows, M, F, 0 to
+9, comma and full stop for single frames, < and > for speed. Seafile's thumbnails come through the
+server ([`server/seafile.ts`](server/seafile.ts)) for Files' grid and Preview's sidebar.
+
 The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests
 and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 ([`server/inbox.ts`](server/inbox.ts)), with the access sign-in and linking already give.

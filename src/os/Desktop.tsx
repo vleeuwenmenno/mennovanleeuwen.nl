@@ -436,7 +436,15 @@ export function Desktop() {
         ...(icon.sf.dir
           ? []
           : [
-              { label: 'Open with', submenu: [{ label: 'Zed', onSelect: () => void openSeafile(wm, icon.path, { how: 'zed' }) }, { label: 'Viewer', onSelect: () => void openSeafile(wm, icon.path, { how: 'viewer' }) }] },
+              {
+                label: 'Open with',
+                submenu: [
+                  { label: 'Zed', onSelect: () => void openSeafile(wm, icon.path, { how: 'zed' }) },
+                  { label: 'Viewer', onSelect: () => void openSeafile(wm, icon.path, { how: 'viewer' }) },
+                  { label: 'Preview', onSelect: () => void openSeafile(wm, icon.path, { how: 'preview' }) },
+                  { label: 'Player', onSelect: () => void openSeafile(wm, icon.path, { how: 'player' }) },
+                ],
+              },
               { label: 'Download', onSelect: () => void download(icon.path).catch((e: Error) => notify({ title: 'Could not download it', body: e.message })) },
             ]),
         { label: 'Show in Files', onSelect: () => wm.openNew('files', { path: folder, select: icon.path }) },

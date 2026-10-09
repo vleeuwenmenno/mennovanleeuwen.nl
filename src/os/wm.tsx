@@ -2,7 +2,7 @@ import { snapReserve } from './dockPrefs'
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
 import { synced } from './synced'
 
-export type AppId = 'terminal' | 'files' | 'viewer' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar'
+export type AppId = 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar'
 
 export type WinState = {
   pid: number
@@ -68,6 +68,7 @@ type Action =
   | { type: 'minimize'; pid: number }
   | { type: 'toggleMax'; pid: number }
   | { type: 'setGeometry'; pid: number; geometry: GeometryPatch }
+  | { type: 'setProps'; pid: number; props: WinState['props'] }
   | { type: 'viewport'; width: number; height: number; layout: { app: AppId; geometry: Geometry }[] }
   | { type: 'reset'; layout: { app: AppId; geometry: Geometry; props?: WinState['props'] }[] }
   | { type: 'restore'; windows: SavedWindow[] }
@@ -87,7 +88,7 @@ type State = {
 }
 
 /** Actions that are the visitor's own doing (as opposed to a viewport change or a restore). */
-const USER_ACTIONS = new Set<Action['type']>(['open', 'close', 'focus', 'minimize', 'toggleMax', 'setGeometry'])
+const USER_ACTIONS = new Set<Action['type']>(['open', 'close', 'focus', 'minimize', 'toggleMax', 'setGeometry', 'setProps'])
 
 
 /** Opens the opening layout on an empty desk, as if nobody had touched it yet. */
@@ -211,6 +212,8 @@ function apply(state: State, action: Action): State {
       return { ...state, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, maximized: !w.maximized } : w)) }
     case 'setGeometry':
       return { ...state, touched: true, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, ...action.geometry } : w)) }
+    case 'setProps':
+      return { ...state, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, props: { ...w.props, ...action.props } } : w)) }
     case 'viewport': {
       const { width, height } = action
       return {
@@ -241,6 +244,8 @@ type WM = {
   minimize: (pid: number) => void
   toggleMax: (pid: number) => void
   setGeometry: (pid: number, geometry: GeometryPatch) => void
+  /** A window changing what it shows itself (Preview going to the next picture): its title and saved layout follow. */
+  setProps: (pid: number, props: WinState['props']) => void
   /** Closes everything and opens the opening layout again (after a reboot), or nothing at all. */
   reset: (empty?: boolean) => void
 }
@@ -340,6 +345,7 @@ export function WindowManagerProvider({
       minimize: (pid) => dispatch({ type: 'minimize', pid }),
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
       setGeometry: (pid, geometry) => dispatch({ type: 'setGeometry', pid, geometry }),
+      setProps: (pid, props) => dispatch({ type: 'setProps', pid, props }),
       reset: (empty) => {
         dispatch({ type: 'reset', layout: empty ? [] : relayout() })
         savedEdits.current = 0

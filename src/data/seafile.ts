@@ -164,6 +164,8 @@ function fetchDir(path: string) {
 /** Lists again: the folder itself, or everything under a library or path prefix. */
 export function refreshDirs(prefix: string) {
   for (const key of [...dirCache.keys()]) if (key === prefix || key.startsWith(prefix.endsWith('/') ? prefix : prefix + '/')) dirCache.delete(key)
+  // A download link is for the file as it was: anything changed in there gets new ones.
+  for (const key of [...downloads.keys()]) if (key === prefix || key.startsWith(prefix.endsWith('/') ? prefix : prefix + '/')) downloads.delete(key)
   emitDirs()
 }
 
@@ -194,8 +196,24 @@ export async function mkdir(path: string): Promise<string> {
 
 // --- files ---------------------------------------------------------------------------------------
 
+// Download links can be used again for an hour; kept for a few minutes so going back and forth
+// between pictures does not ask Seafile every time.
+const downloads = new Map<string, { at: number; url: Promise<string> }>()
+
 /** A link on Seafile's file server: download (reusable for an hour), upload into a folder, update a file. */
 export async function fileLink(path: string, op: 'download' | 'upload' | 'update'): Promise<string> {
+  if (op === 'download') {
+    const hit = downloads.get(path)
+    if (hit && Date.now() - hit.at < 5 * 60_000) return hit.url
+    const url = linkFor(path, op)
+    downloads.set(path, { at: Date.now(), url })
+    url.catch(() => downloads.delete(path))
+    return url
+  }
+  return linkFor(path, op)
+}
+
+async function linkFor(path: string, op: 'download' | 'upload' | 'update'): Promise<string> {
   const at = parseSf(path)!
   const { url } = await call<{ url: string }>(`/api/seafile/link?repo=${encodeURIComponent(at.repo)}&p=${encodeURIComponent(at.p)}&op=${op}`)
   return url
@@ -292,15 +310,17 @@ export async function download(path: string) {
 
 /**
  * Opens a Seafile path the way Files and the desktop do: folders in Files, text and code in Zed,
- * pictures, video, audio and PDFs in the Viewer; anything else downloads.
+ * pictures in Preview, video and audio in Player, PDFs in the Viewer; anything else downloads.
  */
-export function openSeafile(wm: Opener, path: string, opts: { dir?: boolean; how?: 'default' | 'zed' | 'viewer' } = {}): Promise<void> {
+export function openSeafile(wm: Opener, path: string, opts: { dir?: boolean; how?: 'default' | 'zed' | 'viewer' | 'preview' | 'player' } = {}): Promise<void> {
   const name = path.split('/').pop() ?? ''
   const kind: FileKind = kindOfName(name, opts.dir)
   const how = opts.how ?? 'default'
   if (kind === 'folder') return Promise.resolve(wm.openNew('files', { path }))
   if (how === 'zed' || (how === 'default' && (kind === 'text' || kind === 'markdown'))) return Promise.resolve(wm.open('zed', { path, view: kind === 'markdown' ? 'preview' : undefined, t: String(Date.now()) }))
-  if (how === 'viewer' || ['image', 'video', 'audio', 'pdf'].includes(kind)) return Promise.resolve(wm.openNew('viewer', { path }))
+  if (how === 'preview' || (how === 'default' && kind === 'image')) return Promise.resolve(wm.openNew('preview', { path }))
+  if (how === 'player' || (how === 'default' && (kind === 'video' || kind === 'audio'))) return Promise.resolve(wm.openNew('player', { path }))
+  if (how === 'viewer' || kind === 'pdf') return Promise.resolve(wm.openNew('viewer', { path }))
   return download(path)
 }
 

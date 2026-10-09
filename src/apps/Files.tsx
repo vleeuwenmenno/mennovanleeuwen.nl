@@ -7,6 +7,7 @@ import { useWM, type AppId, type WinState } from '../os/wm'
 import { formatSize, HOME, KIND_LABEL, kindOfName, lookup, prettyPath, resolvePath, stat, walk, type FileKind, type Node } from '../terminal/vfs'
 import { createFile, deleteItems, download as sfDownload, DRAG_FILES, dropOp, getClipboard, getDragged, getLibrary, isInside, openSeafile, renameItem, setClipboard, setDragged, transferItems, useClipboard, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useUnlocks, type Library } from '../data/seafile'
 import { useAccount } from '../os/account'
+import { MEDIA_APP, thumbOf } from '../data/media'
 import { addBookmark, useSidebar } from '../data/filesSidebar'
 import { FilesSidebar, type SideSection } from './FilesSidebar'
 
@@ -125,9 +126,15 @@ function FileIcon({ size, kind, name }: { size: number; kind: FileKind; name: st
 }
 
 function Thumb({ item, size, gallery = false, emblem }: { item: Item; size: number; gallery?: boolean; emblem?: string }) {
-  const src = useMemo(() => (item.node?.type === 'file' && item.kind === 'image' ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(item.node.content())}` : null), [item])
+  const [broken, setBroken] = useState(false)
+  // Seafile's pictures come as its thumbnails (not for encrypted libraries: those fall back to the icon).
+  const src = useMemo(
+    () => (item.kind !== 'image' ? null : item.sf ? (size >= 40 ? thumbOf(item.path, gallery ? 512 : 256) : null) : item.node?.type === 'file' ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(item.node.content())}` : null),
+    [item, size >= 40, gallery],
+  )
   // An explicit box: SVGs with only a viewBox have no dependable intrinsic size.
-  if (src) return <img className="fm-thumb" src={src} alt="" style={gallery ? undefined : { width: Math.round(size * 1.35), height: size }} draggable={false} />
+  if (src && !broken)
+    return <img className={`fm-thumb ${item.sf ? 'is-photo' : ''}`} src={src} alt="" loading="lazy" onError={() => setBroken(true)} style={gallery ? undefined : { width: Math.round(size * 1.35), height: size }} draggable={false} />
   if (item.kind === 'folder') return <FolderIcon size={size} emblem={emblem ?? SPECIAL_EMBLEMS[item.path]} />
   return <FileIcon size={size} kind={item.kind} name={item.name} />
 }
@@ -287,7 +294,7 @@ export function Files({ win }: { win: WinState }) {
 
   // --- actions ----------------------------------------------------------------------------------
 
-  const openItem = (item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' = 'default') => {
+  const openItem = (item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' | 'preview' | 'player' = 'default') => {
     if (item.trash) {
       setToast(item.trash === 'desktop' ? 'Put it back first (right-click → Put back).' : 'That file is a cautionary tale. It stays in the trash.')
       return
@@ -303,15 +310,16 @@ export function Files({ win }: { win: WinState }) {
     remember(item)
     if (how === 'terminal') return wm.openNew('terminal', { run: `cat ${prettyPath(item.path)}`, t: String(Date.now()) })
     if (how === 'viewer') return wm.openNew('viewer', { path: item.path })
+    if (how === 'preview' || how === 'player') return wm.openNew(how, { path: item.path })
     if (how === 'zed') return wm.open('zed', { path: item.path, view: 'preview', t: String(Date.now()) })
     if (node.open?.url) return void openLink(node.open.url)
     if (node.open?.app) return wm.open(node.open.app as AppId, { ...node.open.props, t: String(Date.now()) })
     if (item.kind === 'markdown') return openItem(item, 'zed')
-    wm.openNew('viewer', { path: item.path })
+    wm.openNew(MEDIA_APP[item.kind] ?? 'viewer', { path: item.path })
   }
 
   /** Seafile: folders open here, files as everywhere else (see openSeafile). */
-  function openSeafileItem(item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal') {
+  function openSeafileItem(item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' | 'preview' | 'player') {
     if (item.kind === 'folder') return navigate(item.path)
     remember(item)
     openSeafile(wm, item.path, { how: how === 'terminal' ? 'default' : how }).catch((e: Error) => setToast(e.message))
@@ -484,6 +492,8 @@ export function Files({ win }: { win: WinState }) {
                   { label: 'Default app', onSelect: () => openItem(item) },
                   { label: 'Zed', onSelect: () => openItem(item, 'zed') },
                   { label: 'Viewer', onSelect: () => openItem(item, 'viewer') },
+                  ...(item.kind === 'image' ? [{ label: 'Preview', onSelect: () => openItem(item, 'preview') }] : []),
+                  ...(item.kind === 'video' || item.kind === 'audio' ? [{ label: 'Player', onSelect: () => openItem(item, 'player') }] : []),
                 ],
               },
               { label: 'Download', onSelect: () => download(item) },
@@ -516,6 +526,8 @@ export function Files({ win }: { win: WinState }) {
                 { label: 'Default app', onSelect: () => openItem(item) },
                 { label: 'Zed', onSelect: () => openItem(item, 'zed') },
                 { label: 'Viewer', onSelect: () => openItem(item, 'viewer') },
+                ...(item.kind === 'image' ? [{ label: 'Preview', onSelect: () => openItem(item, 'preview') }] : []),
+                ...(item.kind === 'video' || item.kind === 'audio' ? [{ label: 'Player', onSelect: () => openItem(item, 'player') }] : []),
                 { label: 'Terminal (cat)', onSelect: () => openItem(item, 'terminal') },
               ],
             },

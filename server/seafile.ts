@@ -375,3 +375,19 @@ export async function transfer(user: User, body: { op?: string; from?: { repo?: 
   }
   throw new HttpError(504, `Seafile is still busy with the ${op}; look again in a minute`)
 }
+
+/**
+ * A picture's thumbnail (Seafile makes them; there are none for encrypted libraries), for Files'
+ * grid and the picture viewer's sidebar. Answers the image bytes and their type.
+ */
+export async function thumbnail(user: User, repo: unknown, path: unknown, size: unknown): Promise<{ type: string; body: Buffer }> {
+  const id = repoId(repo)
+  const p = seafPath(path)
+  const px = Math.min(1024, Math.max(48, Math.round(Number(size) || 256)))
+  await guard(user, id)
+  const link = linked(user)
+  const res = await call(link.url, `/api2/repos/${id}/thumbnail/?p=${encodeURIComponent(p)}&size=${px}`, { token: link.token, timeout: 20_000 })
+  const type = res.headers.get('content-type') ?? ''
+  if (!res.ok || !type.startsWith('image/')) throw new HttpError(404, 'No thumbnail')
+  return { type, body: Buffer.from(await res.arrayBuffer()) }
+}

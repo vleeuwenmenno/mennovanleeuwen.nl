@@ -13,7 +13,8 @@ import { countFor, useContributions } from '../data/contributions'
 import { fetchMinecraft, MC_ADDRESS, useMinecraft } from '../data/minecraft'
 import { contributions, profile, projects } from '../data/profile'
 import { timeAgo, useRecents } from '../data/recents'
-import { age, HOME, lookup, prettyPath, walk } from '../terminal/vfs'
+import { age, fileKind, HOME, lookup, prettyPath, walk } from '../terminal/vfs'
+import { MEDIA_APP } from '../data/media'
 import { signIn, useAccount } from './account'
 import { APP_META } from './apps'
 import { useCodeSearch } from './codeSearch'
@@ -620,7 +621,7 @@ export function Spotlight() {
           if (node.open?.url) openLink(node.open.url)
           else if (node.open?.app) wm.open(node.open.app as AppId, node.open.props)
           else if (name.endsWith('.md')) wm.open('zed', { path, view: 'preview', t: String(Date.now()) })
-          else wm.openNew('viewer', { path })
+          else wm.openNew(MEDIA_APP[fileKind(node)] ?? 'viewer', { path })
         },
         alt: { label: 'Open in terminal', run: () => term(`cat ${prettyPath(path)}`, true) },
         preview: () => <FilePreview path={path} />,

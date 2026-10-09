@@ -49,6 +49,27 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  preview: {
+    bg: 'linear-gradient(160deg,#7aa2f7,#3d59a1)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <rect x="10" y="12" width="28" height="24" rx="3" />
+        <path d="M10 31l8-8 6 6 4-4 10 9" />
+        <circle cx="31" cy="19" r="2.5" />
+      </>
+    ),
+  },
+  player: {
+    bg: 'linear-gradient(160deg,#3b3f52,#16171f)',
+    fg: '#e0af68',
+    glyph: (
+      <>
+        <circle cx="24" cy="24" r="13" />
+        <path d="M21 18l9 6-9 6z" fill="currentColor" />
+      </>
+    ),
+  },
   viewer: {
     bg: 'linear-gradient(160deg,#4fd1c5,#2c8f86)',
     fg: '#fff',
@@ -194,6 +215,8 @@ const HUES: Record<AppId, string> = {
   files: 'var(--blue)',
   projects: 'var(--orange)',
   viewer: 'var(--cyan)',
+  preview: 'var(--blue)',
+  player: 'var(--orange)',
   recents: 'var(--red)',
   cv: 'var(--text)',
   contact: 'var(--magenta)',
