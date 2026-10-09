@@ -212,7 +212,9 @@ export function Desktop() {
     .filter((e) => !e.name.startsWith('.'))
     .map<DesktopIcon>((e) => {
       const kind = kindOfName(e.name, e.dir)
-      return { id: `sf:${e.name}`, label: e.name, glyph: SF_GLYPH[kind] ?? '📄', kind: e.dir ? 'folder' : 'file', path: `${sfDesktop}/${e.name}`, open: { app: 'files' }, terminal: '', sf: { dir: e.dir } }
+      // Spreadsheets and presentations get their own picture; other Office files the document one.
+      const glyph = /\.(xlsx?|xlsm|ods|csv|numbers)$/i.test(e.name) ? '📊' : /\.(pptx?|ppsx|odp|key)$/i.test(e.name) ? '📽️' : (SF_GLYPH[kind] ?? '📄')
+      return { id: `sf:${e.name}`, label: e.name, glyph, kind: e.dir ? 'folder' : 'file', path: `${sfDesktop}/${e.name}`, open: { app: 'files' }, terminal: '', sf: { dir: e.dir } }
     })
   // The site's own icons stay unless switched off (then the desktop is just the Seafile Desktop folder and launchers).
   const siteShown = !sfHome || siteIcons
