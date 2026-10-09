@@ -7,6 +7,7 @@ import { addCaldav, listCaldav, removeCaldav } from './caldav.ts'
 import { allCalendars, allEvents } from './calendars.ts'
 import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, startGoogle } from './google.ts'
 import { inbox } from './inbox.ts'
+import { linkPreview } from './preview.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
 import { HttpError, json, readJson, redirect, sameOrigin, SECURITY } from './http.ts'
 import { minecraftOverview, minecraftStatus } from './minecraft.ts'
@@ -118,6 +119,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/integrations/updown' && method === 'PUT') return await setUpdownKey(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true
     if (path === '/api/integrations/updown' && method === 'DELETE') return removeUpdownKey(requireUser(req)), json(res, 200, { ok: true }), true
     if (path === '/api/updown' && read) return json(res, 200, await updownChecks(requireUser(req))), true
+    if (path === '/api/preview' && read) {
+      requireUser(req) // fetches other sites on request: the signed-in owner only
+      const res2 = await linkPreview(url.searchParams.get('url') ?? '')
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'private, max-age=3600', ...SECURITY }).end(JSON.stringify(res2))
+      return true
+    }
     if (path === '/api/inbox' && read) return json(res, 200, await inbox(requireUser(req), url.searchParams.has('fresh'))), true
 
     if (path === '/api/search' && read) return json(res, 200, await search(requireUser(req), url.searchParams.get('q') ?? '')), true

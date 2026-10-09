@@ -16,6 +16,7 @@ import { age, HOME, lookup, prettyPath, walk } from '../terminal/vfs'
 import { signIn, useAccount } from './account'
 import { APP_META } from './apps'
 import { useCodeSearch } from './codeSearch'
+import { asWebAddress, useLinkPreview, type LinkPreview } from './linkPreview'
 import { openContextMenu } from './ContextMenu'
 import { isDockableApp, linkDockId, pinLink, pinToDock, unpinFromDock, useCanCustomizeDock, useDock, type DockId } from './dockItems'
 import { revealEmail } from '../data/email'
@@ -156,6 +157,41 @@ function FilePreview({ path }: { path: string }) {
       <pre className="sp-file">{text.split('\n').slice(0, 24).join('\n')}</pre>
     </>
   )
+}
+
+/** "Go to example.com": the top hit whenever the query is a web address. */
+function goToRow(url: string, page: LinkPreview | null, open: (url: string) => void, copy: (text: string, label: string) => void): Result {
+  const shown = url.replace(/^https?:\/\//, '').replace(/\/$/, '')
+  const icon = page?.icon ?? (() => {
+    try {
+      return `${new URL(url).origin}/favicon.ico`
+    } catch {
+      return null
+    }
+  })()
+  return {
+    id: 'goto',
+    group: 'Top hit',
+    title: `Go to ${shown}`,
+    subtitle: page?.title ?? page?.description ?? 'Open in a new tab',
+    icon: (
+      <Glyph>
+        {icon ? <img className="sp-fav" src={icon} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} /> : '↗'}
+      </Glyph>
+    ),
+    run: () => open(url),
+    enterLabel: 'Go',
+    alt: { label: 'Copy link', run: () => copy(url, 'link') },
+    link: { label: page?.siteName ?? page?.host ?? shown, url },
+    preview: () => (
+      <div className="sp-page">
+        {page?.image && <img className="sp-page-image" src={page.image} alt="" onError={(e) => (e.currentTarget.style.display = 'none')} />}
+        <h4>{page?.title ?? shown}</h4>
+        {page?.description && <p>{page.description}</p>}
+        <p className="muted sp-small">{page?.url ?? url}</p>
+      </div>
+    ),
+  }
 }
 
 const ago = (iso?: string | null) => (iso ? timeAgo(iso) : '')
@@ -355,6 +391,8 @@ export function Spotlight() {
   const launchers = useLaunchers()
   const code = useCodeSearch(sub ? '' : q)
   const recentHits = useRecentHits()
+  const address = sub ? null : asWebAddress(q)
+  const page = useLinkPreview(address, account.status === 'user')
   const dock = useDock()
   const canPin = useCanCustomizeDock()
   const searchSettings = useSearchSettings()
@@ -672,6 +710,9 @@ export function Spotlight() {
 
     if (calc) out.push(calcRow(calc))
 
+    // A web address always leads: "Go to google.com", with what the page says about itself.
+    if (address) out.unshift(goToRow(address, page, openUrl, copy))
+
     // What you opened from Spotlight before, most used and recent first; right-click forgets one.
     const recentRow = (h: Hit): Result => {
       const r = codeRow(h, openUrl, copy)
@@ -769,7 +810,7 @@ export function Spotlight() {
       alt: { label: 'In a new terminal', run: () => term(q.trim(), true) },
     })
     return out
-  }, [q, all, calc, code, suggestions, engine, sub, wm, recentHits])
+  }, [q, all, calc, code, suggestions, engine, sub, wm, recentHits, address, page])
 
   useEffect(() => setActive(0), [q, sub])
   useEffect(() => {
