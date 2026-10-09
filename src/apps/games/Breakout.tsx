@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { WinState } from '../../os/wm'
-import { cssVar, useGameKeys, useHighScore } from './shared'
+import { cssVar, useGameKeys, useHighScore, useSharpCanvas } from './shared'
 
 const W = 480
 const H = 360
@@ -25,6 +25,7 @@ function makeBricks(): Brick[] {
 export function Breakout({ win }: { win: WinState }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const { best, submit } = useHighScore('breakout')
+  useSharpCanvas(canvas, W, H)
   const [hud, setHud] = useState({ score: 0, lives: 3, level: 1 })
   const [state, setState] = useState<'ready' | 'playing' | 'paused' | 'over' | 'cleared'>('ready')
   const [newBest, setNewBest] = useState(false)
@@ -174,7 +175,7 @@ export function Breakout({ win }: { win: WinState }) {
   }
 
   return (
-    <div className="game game-breakout">
+    <div className="game game-breakout game-fit">
       <div className="game-bar">
         <span>
           Score <strong>{hud.score}</strong>
