@@ -9,6 +9,7 @@ import { closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
 import { resetLayout, restoreIcons, trashIcons, updateDesktop, useDesktop, type IconPos } from './desktopStore'
 import { appearanceMenu } from './appearanceMenu'
 import { DOCK_MODES, getDockMode, setDockMode } from './dockPrefs'
+import { useSwing } from './swing'
 import { useWM, type AppId } from './wm'
 
 // A desktop that behaves like one: click to select, Ctrl/Shift-click to add, drag a marquee over
@@ -138,6 +139,11 @@ export function Desktop() {
   // Mirrors `offset` so pointerup sees the last move even if no render happened in between.
   const offsetRef = useRef({ dx: 0, dy: 0 })
   const surface = useRef<HTMLDivElement>(null)
+  // Dragged icons sway (--swing on the surface, used by the selected icons).
+  const swing = useSwing(surface, 'icons')
+  // Just dropped: icons already in their new cell, still drawn where they were let go, so they
+  // glide the last bit instead of jumping back to where they started.
+  const [settle, setSettle] = useState<Record<string, { dx: number; dy: number }> | null>(null)
 
   const launchers = useLaunchers()
   const [broken, setBroken] = useState<Set<string>>(new Set())
@@ -215,6 +221,8 @@ export function Desktop() {
     const dy = e.clientY - d.startY
     if (d.kind === 'icons') {
       if (!d.moved && Math.hypot(dx, dy) < 4) return
+      if (!d.moved) swing.start(e.clientX)
+      else swing.move(e.clientX)
       d.moved = true
       document.body.classList.add('is-dragging')
       offsetRef.current = { dx, dy }
@@ -235,6 +243,7 @@ export function Desktop() {
     const d = drag.current
     drag.current = null
     document.body.classList.remove('is-dragging')
+    swing.end()
     if (d?.kind === 'marquee') {
       setMarquee(null)
       return
@@ -249,17 +258,30 @@ export function Desktop() {
     const moving = new Set(d.ids)
     const taken = new Set(visible.filter((i) => !moving.has(i.id)).map((i) => key(positions[i.id])))
     const next: Record<string, IconPos> = {}
+    const from: Record<string, { dx: number; dy: number }> = {}
     for (const id of d.ids) {
       const p = toPx(positions[id])
-      const cell = snap(p.x + offsetRef.current.dx, p.y + offsetRef.current.dy, taken)
+      const x = p.x + offsetRef.current.dx
+      const y = p.y + offsetRef.current.dy
+      const cell = snap(x, y, taken)
       taken.add(key(cell))
       next[id] = cell
+      const to = toPx(cell)
+      from[id] = { dx: x - to.x, dy: y - to.y }
     }
     // Pin every icon so the ones that did not move stay put too.
     updateDesktop((s) => ({ ...s, positions: { ...positions, ...next } }))
     offsetRef.current = { dx: 0, dy: 0 }
     setOffset({ dx: 0, dy: 0 })
+    setSettle(from)
   }
+
+  // One frame drawn where they were dropped, then the offset eases to nothing (see .is-settling).
+  useEffect(() => {
+    if (!settle) return
+    let frame = requestAnimationFrame(() => (frame = requestAnimationFrame(() => setSettle(null))))
+    return () => cancelAnimationFrame(frame)
+  }, [settle])
 
   // --- keyboard ------------------------------------------------------------------------
 
@@ -352,11 +374,13 @@ export function Desktop() {
         const p = toPx(positions[icon.id])
         const isSel = selected.has(icon.id)
         const dragging = isSel && (offset.dx || offset.dy)
+        const landing = settle?.[icon.id]
+        const shift = dragging ? offset : landing
         return (
           <div
             key={icon.id}
-            className={`desk-icon ${isSel ? 'is-selected' : ''} ${dragging ? 'is-moving' : ''}`}
-            style={{ left: p.x, top: p.y, transform: dragging ? `translate(${offset.dx}px, ${offset.dy}px)` : undefined }}
+            className={`desk-icon ${isSel ? 'is-selected' : ''} ${dragging ? 'is-moving' : ''} ${landing ? 'is-settling' : ''}`}
+            style={{ left: p.x, top: p.y, transform: shift ? `translate(${shift.dx}px, ${shift.dy}px)` : undefined }}
             tabIndex={0}
             role="button"
             aria-label={label(icon)}

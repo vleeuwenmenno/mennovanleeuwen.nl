@@ -1,9 +1,10 @@
-import { useEffect, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { addWidgetItems } from '../widgets/registry'
 import { APP_META } from './apps'
 import { linkAt, linkMenu, openContextMenu, wantsNativeMenu, type MenuItem } from './ContextMenu'
 import { getDockMode, snapReserve } from './dockPrefs'
 import { setSnapPreview } from './snapPreview'
+import { useSwing } from './swing'
 import { WindowMenuContext } from './windowMenu'
 import { SINGLE_INSTANCE, snapRect, useWM, type Geometry, type SnapZone, type WinState } from './wm'
 
@@ -58,65 +59,7 @@ const SNAPS: [SnapZone, string][] = [
   ['br', 'Bottom right quarter'],
 ]
 
-/**
- * Notes hang from their tape: dragging one sways it like a pendulum, the faster the further, and
- * letting go lets it swing back and settle. A damped spring on one angle (--swing, in degrees),
- * written straight to the element so React doesn't re-render 60 times a second.
- */
-function useSwing(ref: { current: HTMLElement | null }) {
-  const s = useRef({ angle: 0, vel: 0, target: 0, lastX: 0, lastT: 0, dragging: false, frame: 0, prev: 0 })
-  const reduced = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
-
-  const step = (now: number) => {
-    const st = s.current
-    const dt = Math.min(0.05, (now - st.prev) / 1000 || 0.016)
-    st.prev = now
-    // While dragging, the push fades when the pointer stops; after letting go it is gone.
-    st.target = st.dragging ? st.target * Math.pow(0.02, dt) : 0
-    st.vel += (110 * (st.target - st.angle) - 7 * st.vel) * dt
-    st.angle += st.vel * dt
-    const el = ref.current
-    if (!st.dragging && Math.abs(st.angle) < 0.05 && Math.abs(st.vel) < 0.5) {
-      st.angle = st.vel = 0
-      st.frame = 0
-      el?.style.removeProperty('--swing')
-      el?.style.removeProperty('transition')
-      return
-    }
-    el?.style.setProperty('--swing', `${st.angle.toFixed(2)}deg`)
-    st.frame = requestAnimationFrame(step)
-  }
-  const run = () => {
-    if (s.current.frame) return
-    // Inline, not a class: React rewrites className on re-render. No transition fighting the frames.
-    ref.current?.style.setProperty('transition', 'none')
-    s.current.prev = performance.now()
-    s.current.frame = requestAnimationFrame(step)
-  }
-
-  useEffect(() => () => cancelAnimationFrame(s.current.frame), [])
-
-  return {
-    start(x: number) {
-      if (reduced) return
-      Object.assign(s.current, { dragging: true, lastX: x, lastT: performance.now() })
-      run()
-    },
-    move(x: number) {
-      const st = s.current
-      if (!st.dragging) return
-      const now = performance.now()
-      const v = (x - st.lastX) / Math.max(8, now - st.lastT) // px per ms
-      st.lastX = x
-      st.lastT = now
-      // Moving right leaves the bottom behind, to the left: a clockwise turn about the tape.
-      st.target = Math.max(-10, Math.min(10, st.target * 0.5 + v * 6))
-    },
-    end() {
-      s.current.dragging = false
-    },
-  }
-}
+const noSelect = (e: Event) => e.preventDefault()
 
 const maxRect = (): Geometry => ({ x: 10, y: TOP_BAR + 10, w: window.innerWidth - 20, h: window.innerHeight - TOP_BAR - 20 - (getDockMode() === 'show' ? snapReserve() : 0) })
 
@@ -127,7 +70,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
   const focused = wm.focusedPid === win.pid
   const canSnap = chrome === 'default' && window.innerWidth >= 720
   const sectionRef = useRef<HTMLElement>(null)
-  const swing = useSwing(sectionRef)
+  const swing = useSwing(sectionRef, 'notes')
 
   const begin = (mode: Drag['mode'], edge = '') => (e: ReactPointerEvent) => {
     if (e.button !== 0) return
@@ -139,6 +82,8 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     const el = e.currentTarget as HTMLElement
     el.setPointerCapture(e.pointerId)
     document.body.classList.add(mode === 'move' ? 'is-dragging' : 'is-resizing')
+    // No text gets selected on the way, whatever the browser does with the pointer.
+    document.addEventListener('selectstart', noSelect)
   }
 
   const onMove = (e: ReactPointerEvent) => {
@@ -190,6 +135,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     drag.current = null
     swing.end()
     document.body.classList.remove('is-dragging', 'is-resizing')
+    document.removeEventListener('selectstart', noSelect)
     setSnapPreview(null)
     const zone = target.current
     target.current = null

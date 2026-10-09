@@ -889,12 +889,21 @@ body.is-resizing * {
   cursor: default;
   user-select: none;
   touch-action: none;
-  transition: left 0.18s ease, top 0.18s ease;
+  transition: left 0.18s ease, top 0.18s ease, transform 0.18s ease;
 }
-.desk-icon.is-moving {
+.desk-icon.is-moving,
+.desk-icon.is-settling {
   transition: none;
   z-index: 2;
+}
+.desk-icon.is-moving {
   opacity: 0.85;
+}
+/* The sway while dragged (useSwing in src/os/swing.ts sets --swing on the desktop), hanging from
+   the top like the notes. Only the selected icons are the ones being dragged. */
+.desk-icon.is-selected {
+  rotate: var(--swing, 0deg);
+  transform-origin: 50% 0;
 }
 .desk-icon:hover {
   background: color-mix(in srgb, var(--fg) 8%, transparent);
@@ -1197,6 +1206,14 @@ body.is-resizing * {
   box-shadow: 0 22px 40px -18px rgba(0, 0, 0, 0.7), 0 2px 4px rgba(0, 0, 0, 0.2);
   overflow: visible;
   animation: note-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.3);
+  /* Notes and widgets sit on the desktop like objects: a stray drag across them selects nothing.
+     Their text fields (a sticky being edited, widget settings) stay selectable. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+.window.chrome-note :is(textarea, input, [contenteditable]) {
+  user-select: text;
+  -webkit-user-select: text;
 }
 @keyframes note-in {
   from {
