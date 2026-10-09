@@ -15,6 +15,8 @@ import { PowerScreens } from './Power'
 import { Notifications } from './Notifications'
 import { Uploads } from './Uploads'
 import { Dialogs } from './Dialogs'
+import { FolderPicker } from './FolderPicker'
+import { initBackButton, setBackFocus } from './backButton'
 import { startActivityAlerts } from './activityAlerts'
 import { followLinkSettings } from '../data/links'
 import { newTab, usePower } from './powerState'
@@ -655,6 +657,10 @@ export function Shell() {
   const power = usePower()
   const overlay = useOverlay()
 
+  // The mouse's Back and Forward buttons (and the browser's Back) work in the focused window.
+  useEffect(initBackButton, [])
+  useEffect(() => setBackFocus(wm.focusedPid), [wm.focusedPid])
+
   // App shortcuts from the installed app's icon menu (manifest.webmanifest): /?open=terminal.
   useEffect(() => {
     const params = new URLSearchParams(location.search)
@@ -733,6 +739,7 @@ export function Shell() {
       <Notifications />
       <Uploads />
       <Dialogs />
+      <FolderPicker />
       <PowerScreens />
     </div>
   )

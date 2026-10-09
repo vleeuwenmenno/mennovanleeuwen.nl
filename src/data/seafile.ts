@@ -43,12 +43,25 @@ export type SeafilePrefs = {
   officeFolder: string | null
   /** New Document, New Spreadsheet and New Presentation on the desktop too */
   officeDesktop: boolean
+  /** Places mapped to folders of your choosing (any library); unmapped ones are the same-named folder of the primary library */
+  places: Partial<Record<PlaceId, string>>
 }
 
-const prefs = synced<SeafilePrefs>('seafile', { home: true, primary: null, lockMinutes: 30, siteIcons: true, trash: true, officeFolder: null, officeDesktop: false }, {
+export type PlaceId = 'home' | 'desktop' | 'documents' | 'downloads' | 'music' | 'pictures' | 'videos'
+export const PLACES: { id: PlaceId; label: string; folder: string }[] = [
+  { id: 'home', label: 'Home', folder: '' },
+  { id: 'desktop', label: 'Desktop', folder: 'Desktop' },
+  { id: 'documents', label: 'Documents', folder: 'Documents' },
+  { id: 'downloads', label: 'Downloads', folder: 'Downloads' },
+  { id: 'music', label: 'Music', folder: 'Music' },
+  { id: 'pictures', label: 'Pictures', folder: 'Pictures' },
+  { id: 'videos', label: 'Videos', folder: 'Videos' },
+]
+
+const prefs = synced<SeafilePrefs>('seafile', { home: true, primary: null, lockMinutes: 30, siteIcons: true, trash: true, officeFolder: null, officeDesktop: false, places: {} }, {
   normalize: (v) => {
     const o = (v ?? {}) as Partial<SeafilePrefs>
-    return { home: o.home !== false, primary: typeof o.primary === 'string' ? o.primary : null, lockMinutes: [5, 15, 30, 55].includes(o.lockMinutes as number) ? (o.lockMinutes as number) : 30, siteIcons: o.siteIcons !== false, trash: o.trash !== false, officeFolder: typeof o.officeFolder === 'string' && o.officeFolder.startsWith(SF) ? o.officeFolder : null, officeDesktop: o.officeDesktop === true }
+    return { home: o.home !== false, primary: typeof o.primary === 'string' ? o.primary : null, lockMinutes: [5, 15, 30, 55].includes(o.lockMinutes as number) ? (o.lockMinutes as number) : 30, siteIcons: o.siteIcons !== false, trash: o.trash !== false, officeFolder: typeof o.officeFolder === 'string' && o.officeFolder.startsWith(SF) ? o.officeFolder : null, officeDesktop: o.officeDesktop === true, places: Object.fromEntries(Object.entries(o.places ?? {}).filter(([k, v]) => PLACES.some((p) => p.id === k) && typeof v === 'string' && v.startsWith(SF))) }
   },
 })
 export const useSeafilePrefs = prefs.use
@@ -117,13 +130,34 @@ export function primaryOf(libs: Library[] | null, primary: string | null): Libra
   return libs.find((l) => l.id === primary) ?? libs.find((l) => l.type === 'mine' && l.name === 'My Library') ?? libs.find((l) => l.type === 'mine') ?? libs[0]
 }
 
-/** Home in Seafile (seafile://<primary>), or null when Seafile is not home. */
-export function useSeafileHome(): { home: string | null; library: Library | null } {
+/**
+ * Home in Seafile (the primary library, or the folder Home is mapped to) and every place's folder,
+ * or nulls when Seafile is not home. A place nobody mapped is its same-named folder in the primary
+ * library (Home: the library itself).
+ */
+export function useSeafileHome(): { home: string | null; library: Library | null; places: Record<PlaceId, string> | null; mapped: Partial<Record<PlaceId, string>> } {
   const { libraries } = useLibraries()
   const p = useSeafilePrefs()
   const library = primaryOf(libraries, p.primary)
-  return { home: p.home && library ? sfPath(library.id) : null, library }
+  if (!p.home || !library) return { home: null, library, places: null, mapped: p.places }
+  const root = sfPath(library.id)
+  const places = Object.fromEntries(PLACES.map((pl) => [pl.id, p.places[pl.id] ?? (pl.folder ? `${root}/${pl.folder}` : root)])) as Record<PlaceId, string>
+  return { home: places.home, library, places, mapped: p.places }
 }
+
+/** The default folder of a place: the same-named folder in the primary library. */
+export const defaultPlace = (library: Library, id: PlaceId) => {
+  const folder = PLACES.find((p) => p.id === id)!.folder
+  return folder ? `${sfPath(library.id)}/${folder}` : sfPath(library.id)
+}
+
+export const setPlace = (id: PlaceId, path: string | null) =>
+  prefs.set((p) => {
+    const places = { ...p.places }
+    if (path) places[id] = path
+    else delete places[id]
+    return { ...p, places }
+  })
 
 export const libraryName = (repo: string) => libraries?.find((l) => l.id === repo)?.name ?? 'Seafile'
 export const getLibrary = (repo: string) => libraries?.find((l) => l.id === repo) ?? null
@@ -449,3 +483,17 @@ export async function restoreTrash(repo: string, commit: string, paths: string[]
 
 /** Empties a library's trash of what was deleted more than `days` ago (0: everything). Cannot be undone. */
 export const cleanTrash = (repo: string, days: number) => call('/api/seafile/trash/clean', { method: 'POST', json: { repo, days } })
+
+/** A share link to copy: the file's or folder's existing one, or a new one. */
+export async function shareLink(path: string): Promise<{ url: string; made: boolean }> {
+  const at = parseSf(path)!
+  return call('/api/seafile/share', { method: 'POST', json: { repo: at.repo, path: at.p } })
+}
+
+/** The same file or folder in Seafile's own web interface. */
+export function seafileWebUrl(path: string): string | null {
+  const base = getAccount().seafile?.url
+  const at = parseSf(path)
+  if (!base || !at) return null
+  return `${base}/library/${at.repo}/${encodeURIComponent(libraryName(at.repo))}${at.p === '/' ? '/' : at.p.split('/').map(encodeURIComponent).join('/')}`
+}

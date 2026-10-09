@@ -224,6 +224,16 @@ of contents is read ([`src/data/zip.ts`](src/data/zip.ts)), and from Seafile jus
 (a Range request), so a big one opens at once. Columns sort by name, size, packed size, how much was
 saved and date; the search looks through the whole archive. Unpacking comes later.
 
+Each of Files' places (Home, Desktop, Documents, Downloads, Music, Pictures, Videos) can be pointed
+at any folder of any library: right-click it → *Choose folder…*; a place left alone is the
+same-named folder of the primary library. The desktop follows Desktop, and new Office files go to
+Documents. Right-click a Seafile folder's empty space for New (folder, text file, document,
+spreadsheet, presentation), Upload, View, Sort, and Seafile (copy a share link, open it in
+Seafile's own web interface, the library's trash, lock now).
+
+The mouse's Back and Forward buttons, and the browser's own Back, go back in the focused window
+(Files a folder, Preview a picture, Archive up a folder) instead of leaving the site.
+
 Questions (delete this? empty the trash?) are the desktop's own dialogs, never the browser's.
 
 The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests

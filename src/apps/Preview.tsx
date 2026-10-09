@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { download, fileLink, isSf, libraryName, parseSf } from '../data/seafile'
 import { folderOf, nameOf, thumbOf, useMedia, useSiblings } from '../data/media'
 import { useWM, type WinState } from '../os/wm'
+import { useBackButton } from '../os/backButton'
 import { formatSize, prettyPath } from '../terminal/vfs'
 
 // Preview, for pictures, after macOS's: the picture fitted to the window, zoom (buttons, keys,
@@ -181,6 +182,8 @@ export function Preview({ win }: { win: WinState }) {
     },
     [siblings, index],
   )
+
+  useBackButton(win.pid, { back: () => go(-1), forward: () => go(1) })
 
   // The pictures either side load ahead, so the arrow keys feel instant.
   useEffect(() => {

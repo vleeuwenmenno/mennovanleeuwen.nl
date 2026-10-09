@@ -3,6 +3,7 @@ import { download, fileLink, isSf } from '../data/seafile'
 import { folderOf, nameOf, useMedia } from '../data/media'
 import { listFolder, METHODS, readZip, type ZipEntry, type ZipIndex } from '../data/zip'
 import { useWM, type WinState } from '../os/wm'
+import { useBackButton } from '../os/backButton'
 import { formatSize, kindOfName } from '../terminal/vfs'
 
 // Archive: what is in a ZIP, browsed like a folder, without unpacking it. Only the archive's table
@@ -93,6 +94,8 @@ export function Archive({ win }: { win: WinState }) {
     setSelected(folder)
     setFolder(parent)
   }
+
+  useBackButton(win.pid, { back: up })
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if ((e.target as HTMLElement).closest('input')) {

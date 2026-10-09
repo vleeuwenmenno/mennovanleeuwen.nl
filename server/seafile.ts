@@ -466,3 +466,15 @@ export async function cleanTrash(user: User, body: { repo?: string; days?: numbe
   await guard(user, id)
   await seafile(user, `/api/v2.1/repos/${id}/trash/`, { method: 'DELETE', body: new URLSearchParams({ keep_days: String(days) }) })
 }
+
+/** A share link for a file or folder: the one it already has, or a new one (no password, no expiry). */
+export async function shareLink(user: User, body: { repo?: string; path?: string }): Promise<{ url: string; made: boolean }> {
+  const id = repoId(body.repo)
+  const p = seafPath(body.path)
+  await guard(user, id)
+  const existing = await seafile<{ link: string; path: string }[]>(user, `/api/v2.1/share-links/?repo_id=${id}&path=${encodeURIComponent(p)}`).catch(() => [])
+  const same = existing.find((l) => l.path.replace(/\/$/, '') === p.replace(/\/$/, ''))
+  if (same) return { url: same.link, made: false }
+  const made = await seafile<{ link: string }>(user, '/api/v2.1/share-links/', jsonBody('POST', { repo_id: id, path: p }))
+  return { url: made.link, made: true }
+}

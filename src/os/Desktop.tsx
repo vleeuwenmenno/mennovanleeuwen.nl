@@ -184,7 +184,7 @@ export function Desktop() {
     url: l.url,
   }))
   // With Seafile as home, its Desktop folder (as in Files) joins the site's icons and your launchers.
-  const { home: sfHome } = useSeafileHome()
+  const { home: sfHome, places } = useSeafileHome()
   const { siteIcons, officeDesktop } = useSeafilePrefs()
   const account = useAccount()
   // New Document and friends, when OnlyOffice is set up and asked for on the desktop.
@@ -196,7 +196,7 @@ export function Desktop() {
           { id: 'office:pptx', label: 'New Presentation', glyph: '📽️', kind: 'file', path: 'New Presentation', open: { app: 'newslides' }, terminal: '' },
         ]
       : []
-  const sfDesktop = sfHome ? `${sfHome}/Desktop` : null
+  const sfDesktop = sfHome && places ? places.desktop : null
   const sfDir = useDir(sfDesktop, 15_000)
   useEffect(() => {
     if (!sfDesktop) return

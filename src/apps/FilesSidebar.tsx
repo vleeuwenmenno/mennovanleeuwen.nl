@@ -6,7 +6,7 @@ import { arrange, moveItem, moveSection, removeBookmark, resetSidebar, setHidden
 // Drag an item within its section, or a section by its heading, to move it. Right-click to hide
 // one; "Customize sidebar" shows the hidden ones again with a switch each.
 
-export type SideItem = { id: string; label: string; target: string; icon: string; extra?: ReactNode; bookmark?: boolean; title?: string }
+export type SideItem = { id: string; label: string; target: string; icon: string; extra?: ReactNode; bookmark?: boolean; title?: string; /** Its own entries at the top of its menu */ menu?: MenuItem[] }
 export type SideSection = { id: string; label: string; items: SideItem[] }
 
 const DRAG_TYPE = 'application/x-mvlos-sidebar'
@@ -117,6 +117,7 @@ export function FilesSidebar({
   ]
   const itemMenu = (section: SideSection, item: SideItem): MenuItem[] => [
     { label: 'Open', onSelect: () => onOpen(item.target) },
+    ...(item.menu ? [...item.menu, { separator: true } as MenuItem] : []),
     ...(item.bookmark ? [{ label: 'Remove bookmark', onSelect: () => removeBookmark(item.id) }] : [{ label: 'Hide from sidebar', onSelect: () => setHidden(`${section.id}:${item.id}`, true) }]),
     { separator: true },
     { label: 'Customize sidebar…', onSelect: () => setCustomizing(true) },

@@ -29,11 +29,11 @@ const CLEAN: [number, string][] = [
   [0, 'Everything'],
 ]
 
-export function SeafileTrash({ onOpenFolder, toast }: { onOpenFolder: (path: string) => void; toast: (text: string) => void }) {
+export function SeafileTrash({ repo: startRepo = null, onOpenFolder, toast }: { repo?: string | null; onOpenFolder: (path: string) => void; toast: (text: string) => void }) {
   const { libraries } = useLibraries()
   const { library: primary } = useSeafileHome()
   const writable = useMemo(() => (libraries ?? []).filter((l) => l.permission === 'rw'), [libraries])
-  const [repo, setRepo] = useState<string | null>(null)
+  const [repo, setRepo] = useState<string | null>(startRepo)
   const current = repo ?? primary?.id ?? writable[0]?.id ?? null
   const [items, setItems] = useState<TrashItem[] | null>(null)
   const [more, setMore] = useState<string | null>(null)

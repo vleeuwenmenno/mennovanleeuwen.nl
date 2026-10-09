@@ -5,7 +5,9 @@ import { openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { openLink } from '../data/links'
 import { useWM, type AppId, type WinState } from '../os/wm'
 import { formatSize, HOME, KIND_LABEL, kindOfName, lookup, prettyPath, resolvePath, stat, walk, type FileKind, type Node } from '../terminal/vfs'
-import { createFile, deleteItems, download as sfDownload, DRAG_FILES, dropOp, getClipboard, getDragged, getLibrary, isInside, openSeafile, renameItem, setClipboard, setDragged, transferItems, useClipboard, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useSeafilePrefs, setSeafilePrefs, useUnlocks, type Library } from '../data/seafile'
+import { createFile, deleteItems, download as sfDownload, DRAG_FILES, dropOp, getClipboard, getDragged, getLibrary, isInside, openSeafile, renameItem, setClipboard, setDragged, transferItems, useClipboard, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useSeafilePrefs, setSeafilePrefs, setPlace, PLACES, shareLink, seafileWebUrl, loadLibraries, useUnlocks, type Library, type PlaceId } from '../data/seafile'
+import { pickFolder } from '../os/FolderPicker'
+import { useBackButton } from '../os/backButton'
 import { SeafileTrash } from './SeafileTrash'
 import { ask } from '../os/Dialogs'
 import { useAccount } from '../os/account'
@@ -60,7 +62,6 @@ type Item = {
   sf?: { repo: string; p: string; library?: Library }
 }
 
-const PLACE_FOLDERS = ['Desktop', 'Documents', 'Downloads', 'Music', 'Pictures', 'Videos'] as const
 
 /** The folder above, for Seafile paths too (a library's parent is the list of libraries). */
 function parentOf(path: string): string {
@@ -156,7 +157,7 @@ export function Files({ win }: { win: WinState }) {
   const desk = useDesktop()
   const account = useAccount()
   const { libraries } = useLibraries()
-  const { home: sfHome, library: homeLibrary } = useSeafileHome()
+  const { home: sfHome, library: homeLibrary, places, mapped } = useSeafileHome()
   const home = sfHome ?? HOME
   const unlocks = useUnlocks()
   // With Seafile linked, the Trash is Seafile's (unless switched off in Settings).
@@ -180,6 +181,8 @@ export function Files({ win }: { win: WinState }) {
   /** The folder a drag would land in right now, highlighted */
   const [dropOn, setDropOn] = useState<string | null>(null)
   const clip = useClipboard()
+  /** Which library's trash the Trash view opens on (from a folder's Seafile menu) */
+  const [trashRepo, setTrashRepo] = useState<string | null>(null)
   const main = useRef<HTMLDivElement>(null)
   const tiles = useRef(new Map<string, HTMLElement>())
 
@@ -526,7 +529,7 @@ export function Files({ win }: { win: WinState }) {
               },
               { label: 'Download', onSelect: () => download(item) },
             ]),
-        ...(library?.encrypted && unlocks[library.id] > Date.now() ? [{ label: 'Lock now', onSelect: () => void lock(library.id).catch((e: Error) => setToast(e.message)) }] : []),
+        { label: 'Seafile', submenu: seafileMenu(item.path) },
         { separator: true },
         ...(library
           ? []
@@ -571,33 +574,96 @@ export function Files({ win }: { win: WinState }) {
     ]
   }
 
+  /** View, sorting and hidden files: the same in every folder. */
+  const viewMenu = (): MenuItem[] => [
+    { label: 'Select all', shortcut: 'Ctrl A', onSelect: () => setSelected(new Set(items.map((i) => i.path))) },
+    {
+      label: 'View',
+      submenu: [
+        ...(['list', 'grid', 'compact', 'gallery'] as View[]).map((v, i) => ({ label: v[0].toUpperCase() + v.slice(1), shortcut: `Ctrl ${i + 1}`, checked: prefs.view === v, onSelect: () => setPrefs({ view: v }) })),
+        { separator: true } as MenuItem,
+        { label: 'Show hidden files', checked: prefs.hidden, shortcut: 'Ctrl H', onSelect: () => setPrefs({ hidden: !prefs.hidden }) },
+        { label: 'Sidebar', checked: prefs.sidebar, onSelect: () => setPrefs({ sidebar: !prefs.sidebar }) },
+      ],
+    },
+    { label: 'Sort by', submenu: SORTS.map(([k, label]) => ({ label, checked: prefs.sort === k, onSelect: () => setPrefs({ sort: k }) })) },
+  ]
+
+  /** Seafile's own things for a file or folder: its share link, Seafile's web page for it, the library's trash. */
+  const seafileMenu = (target: string): MenuItem[] => {
+    const at = parseSf(target)!
+    const library = getLibrary(at.repo)
+    const web = seafileWebUrl(target)
+    return [
+      {
+        label: 'Copy share link',
+        onSelect: () =>
+          void shareLink(target)
+            .then(({ url, made }) => navigator.clipboard?.writeText(url).then(() => setToast(made ? `Made a share link and copied it: ${url}` : `Copied its share link: ${url}`)))
+            .catch((e: Error) => setToast(e.message)),
+      },
+      ...(web ? [{ label: 'Open in Seafile ↗', onSelect: () => void openLink(web) }] : []),
+      { label: `${library?.name ?? 'Library'}'s trash`, disabled: !sfTrash, onSelect: () => (setTrashRepo(at.repo), navigate(TRASH)) },
+      ...(library?.encrypted && unlocks[library.id] > Date.now() ? [{ label: 'Lock now', onSelect: () => void lock(library.id).catch((e: Error) => setToast(e.message)) }] : []),
+    ]
+  }
+
+  /** A new Office file in this folder, open in OnlyOffice straight away. */
+  const newOffice = (kind: 'docx' | 'xlsx' | 'pptx') =>
+    createFile(`${path}/${{ docx: 'Untitled document.docx', xlsx: 'Untitled spreadsheet.xlsx', pptx: 'Untitled presentation.pptx' }[kind]}`)
+      .then((made) => {
+        setSelected(new Set([made]))
+        wm.openNew('office', { path: made })
+      })
+      .catch((e: Error) => setToast(e.message))
+
   function backgroundMenu(): MenuItem[] {
     const special = path === RECENT || path === TRASH
-    if (isSf(path))
+    if (isSf(path) && path !== SF)
       return [
-        { label: 'New folder', disabled: !sfWritable, onSelect: newFolder },
-        { label: 'New text file', disabled: !sfWritable, onSelect: newTextFile },
-        { label: 'Upload files…', disabled: !sfWritable, onSelect: () => pickAndUpload(path) },
-        { label: 'Upload folder…', disabled: !sfWritable, onSelect: () => pickAndUpload(path, true) },
-        { label: clip ? `Paste ${named(clip.paths)}` : 'Paste', shortcut: 'Ctrl V', disabled: !clip || !sfWritable, onSelect: () => paste() },
-        { label: 'Refresh', shortcut: 'F5', onSelect: () => refreshDirs(path) },
-        { label: 'Add to bookmarks', disabled: path === SF || bookmarks.includes(path), onSelect: () => bookmark(path) },
+        {
+          label: 'New',
+          disabled: !sfWritable,
+          submenu: [
+            { label: 'Folder', onSelect: newFolder },
+            { label: 'Text file', onSelect: newTextFile },
+            ...(account.seafile?.office
+              ? [{ separator: true } as MenuItem, { label: 'Document', onSelect: () => void newOffice('docx') }, { label: 'Spreadsheet', onSelect: () => void newOffice('xlsx') }, { label: 'Presentation', onSelect: () => void newOffice('pptx') }]
+              : []),
+          ],
+        },
+        {
+          label: 'Upload',
+          disabled: !sfWritable,
+          submenu: [
+            { label: 'Files…', onSelect: () => pickAndUpload(path) },
+            { label: 'Folder…', onSelect: () => pickAndUpload(path, true) },
+          ],
+        },
+        ...(clip ? [{ label: `Paste ${named(clip.paths)}`, shortcut: 'Ctrl V', disabled: !sfWritable, onSelect: () => paste() }] : []),
         { separator: true },
-        { label: 'Select all', shortcut: 'Ctrl A', onSelect: () => setSelected(new Set(items.map((i) => i.path))) },
-        { label: 'Show hidden files', checked: prefs.hidden, shortcut: 'Ctrl H', onSelect: () => setPrefs({ hidden: !prefs.hidden }) },
-        { label: 'View', submenu: (['list', 'grid', 'compact', 'gallery'] as View[]).map((v) => ({ label: v[0].toUpperCase() + v.slice(1), checked: prefs.view === v, onSelect: () => setPrefs({ view: v }) })) },
-        { label: 'Sort by', submenu: SORTS.map(([k, label]) => ({ label, checked: prefs.sort === k, onSelect: () => setPrefs({ sort: k }) })) },
+        ...viewMenu(),
+        { label: 'Refresh', shortcut: 'F5', onSelect: () => refreshDirs(path) },
+        { separator: true },
+        { label: 'Seafile', submenu: seafileMenu(path) },
+        { label: 'Add to bookmarks', disabled: bookmarks.includes(path), onSelect: () => bookmark(path) },
+        { label: 'Properties', shortcut: 'Alt ↵', onSelect: () => setProps(currentFolderItem()) },
       ]
     return [
-      { label: 'New text file', disabled: !writable, onSelect: newFile },
-      { label: 'Open terminal here', disabled: special, onSelect: () => wm.openNew('terminal', { run: `cd ${prettyPath(path)} && ls`, t: String(Date.now()) }) },
-      { label: 'Add to bookmarks', disabled: special || bookmarks.includes(path), onSelect: () => bookmark(path) },
+      ...(writable ? [{ label: 'New text file', onSelect: newFile }] : []),
+      ...(path === SF ? [] : [{ label: 'Open terminal here', disabled: special, onSelect: () => wm.openNew('terminal', { run: `cd ${prettyPath(path)} && ls`, t: String(Date.now()) }) }]),
       { separator: true },
-      { label: 'Select all', shortcut: 'Ctrl A', onSelect: () => setSelected(new Set(items.map((i) => i.path))) },
-      { label: 'Show hidden files', checked: prefs.hidden, shortcut: 'Ctrl H', onSelect: () => setPrefs({ hidden: !prefs.hidden }) },
-      { label: 'View', submenu: (['list', 'grid', 'compact', 'gallery'] as View[]).map((v) => ({ label: v[0].toUpperCase() + v.slice(1), checked: prefs.view === v, onSelect: () => setPrefs({ view: v }) })) },
-      { label: 'Sort by', submenu: SORTS.map(([k, label]) => ({ label, checked: prefs.sort === k, onSelect: () => setPrefs({ sort: k }) })) },
+      ...viewMenu(),
+      ...(path === SF ? [{ label: 'Refresh', shortcut: 'F5', onSelect: () => void loadLibraries(true) }] : []),
+      ...(special || path === SF ? [] : [{ separator: true } as MenuItem, { label: 'Add to bookmarks', disabled: bookmarks.includes(path), onSelect: () => bookmark(path) }]),
     ]
+  }
+
+  /** The folder being looked at, as an item (for Properties). */
+  const currentFolderItem = (): Item => {
+    const at = parseSf(path)!
+    const library = at.p === '/' ? (getLibrary(at.repo) ?? undefined) : undefined
+    return { path, name: at.p === '/' ? libraryName(at.repo) : at.p.split('/').pop()!, node: null, kind: 'folder', size: 0, mtime: 0, sf: { repo: at.repo, p: at.p, library } }
   }
 
   // --- selection & keyboard -------------------------------------------------------------------
@@ -697,6 +763,9 @@ export function Files({ win }: { win: WinState }) {
     if (!atTop) navigate(parentOf(path))
   }
 
+  // The mouse's Back and Forward buttons go through this window's folders.
+  useBackButton(win.pid, { back: goBack, forward: goForward })
+
   // Rubber-band selection on empty space.
   const onMainPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 || (e.target as HTMLElement).closest('.fm-item, .fm-list-head')) return
@@ -767,12 +836,29 @@ export function Files({ win }: { win: WinState }) {
   const emblemOf = (item: Item): string | undefined => {
     if (!item.sf) return undefined
     if (item.sf.library) return item.sf.library.encrypted ? 'lock' : sfHome === item.path ? 'home' : undefined
-    if (sfHome && item.path === sfHome) return 'home'
-    const f = PLACE_FOLDERS.find((name) => item.path === `${sfHome}/${name}`)
-    return f ? f.toLowerCase() : undefined
+    const place = places && PLACES.find((p) => places[p.id] === item.path)
+    return place ? place.id : undefined
   }
 
   const openPlace = (target: string) => (target.startsWith('http') ? openLink(target) : navigate(target))
+
+  /** A place's own menu (with Seafile as home): which folder it is, chosen from any library. */
+  const placeMenu = (id: PlaceId): MenuItem[] | undefined => {
+    if (!places || !homeLibrary) return undefined
+    const label = PLACES.find((p) => p.id === id)!.label
+    return [
+      {
+        label: 'Choose folder…',
+        onSelect: () =>
+          void pickFolder({ title: `The folder for ${label}`, start: places[id] }).then((p) => {
+            if (!p) return
+            setPlace(id, p)
+            setToast(`${label} is now ${pretty(p)}`)
+          }),
+      },
+      { label: `Back to ${id === 'home' ? homeLibrary.name : `${homeLibrary.name}/${PLACES.find((p) => p.id === id)!.folder}`}`, disabled: !mapped[id], onSelect: () => setPlace(id, null) },
+    ]
+  }
 
   // The sidebar's sections; FilesSidebar puts them (and their items) in your order and hides what you hid.
   const sections: SideSection[] = [
@@ -780,14 +866,14 @@ export function Files({ win }: { win: WinState }) {
       id: 'places',
       label: 'Places',
       items: [
-        { id: 'home', label: 'Home', target: home, icon: '⌂' },
+        { id: 'home', label: 'Home', target: home, icon: '⌂', menu: placeMenu('home') },
         { id: 'recent', label: 'Recent', target: RECENT, icon: '↺' },
-        { id: 'desktop', label: 'Desktop', target: `${home}/Desktop`, icon: '▭' },
-        { id: 'documents', label: 'Documents', target: `${home}/Documents`, icon: '▤' },
-        { id: 'downloads', label: 'Downloads', target: `${home}/Downloads`, icon: '⤓' },
-        { id: 'music', label: 'Music', target: `${home}/Music`, icon: '♪' },
-        { id: 'pictures', label: 'Pictures', target: `${home}/Pictures`, icon: '▣' },
-        { id: 'videos', label: 'Videos', target: `${home}/Videos`, icon: '▶' },
+        { id: 'desktop', label: 'Desktop', target: places?.desktop ?? `${HOME}/Desktop`, icon: '▭', menu: placeMenu('desktop') },
+        { id: 'documents', label: 'Documents', target: places?.documents ?? `${HOME}/Documents`, icon: '▤', menu: placeMenu('documents') },
+        { id: 'downloads', label: 'Downloads', target: places?.downloads ?? `${HOME}/Downloads`, icon: '⤓', menu: placeMenu('downloads') },
+        { id: 'music', label: 'Music', target: places?.music ?? `${HOME}/Music`, icon: '♪', menu: placeMenu('music') },
+        { id: 'pictures', label: 'Pictures', target: places?.pictures ?? `${HOME}/Pictures`, icon: '▣', menu: placeMenu('pictures') },
+        { id: 'videos', label: 'Videos', target: places?.videos ?? `${HOME}/Videos`, icon: '▶', menu: placeMenu('videos') },
         ...(sfHome ? [{ id: 'site', label: 'Site home', target: HOME, icon: '⌂', title: 'The site’s own home folder' }] : []),
         { id: 'filesystem', label: 'Filesystem', target: '/', icon: '▭' },
       ],
@@ -1012,14 +1098,25 @@ export function Files({ win }: { win: WinState }) {
             <Unlock repo={parseSf(path)!.repo} />
           ) : isSf(path) && path !== SF && sfDir.error ? (
             <div className="fm-empty fm-sf-state">
-              {sfDir.status === 404 && PLACE_FOLDERS.some((f) => path === `${home}/${f}`) ? (
+              {sfDir.status === 404 && places && PLACES.some((p) => places[p.id] === path) ? (
                 <>
                   <p>
-                    {homeLibrary?.name ?? 'This library'} has no {path.split('/').pop()} folder yet.
+                    {libraryName(parseSf(path)!.repo)} has no {path.split('/').pop()} folder (any more).
                   </p>
-                  <button className="btn btn-small btn-primary" onClick={() => mkdir(path).then(() => refreshDirs(path)).catch((e: Error) => setToast(e.message))}>
-                    Create it
-                  </button>
+                  <span className="office-actions">
+                    <button className="btn btn-small btn-primary" onClick={() => mkdir(path).then(() => refreshDirs(path)).catch((e: Error) => setToast(e.message))}>
+                      Create it
+                    </button>
+                    <button
+                      className="btn btn-small"
+                      onClick={() => {
+                        const place = PLACES.find((p) => places[p.id] === path)!
+                        void pickFolder({ title: `The folder for ${place.label}` }).then((p) => p && (setPlace(place.id, p), navigate(p)))
+                      }}
+                    >
+                      Choose another…
+                    </button>
+                  </span>
                 </>
               ) : (
                 <>
@@ -1031,7 +1128,7 @@ export function Files({ win }: { win: WinState }) {
               )}
             </div>
           ) : null}
-          {path === TRASH && sfTrash && <SeafileTrash onOpenFolder={navigate} toast={setToast} />}
+          {path === TRASH && sfTrash && <SeafileTrash key={trashRepo ?? 'primary'} repo={trashRepo} onOpenFolder={navigate} toast={setToast} />}
           {items.map((item) => (
             <div
               key={item.path}

@@ -49,7 +49,7 @@ export function Office({ win, kind }: { win: WinState; kind?: NewKind }) {
   const wm = useWM()
   const account = useAccount()
   const office = account.seafile?.office
-  const { home, library } = useSeafileHome()
+  const { places, library } = useSeafileHome()
   const { officeFolder } = useSeafilePrefs()
   const path = win.props.path ?? ''
   const [error, setError] = useState<string | null>(null)
@@ -62,7 +62,7 @@ export function Office({ win, kind }: { win: WinState; kind?: NewKind }) {
   const making = useRef(false)
   useEffect(() => {
     if (!kind || path || !win.props.create || making.current || !office) return
-    const folder = officeFolder ?? (home ? `${home}/Documents` : library ? sfPath(library.id) : null)
+    const folder = officeFolder ?? places?.documents ?? (library ? sfPath(library.id) : null)
     if (!folder) return setError('Link Seafile first: new documents are made there.')
     making.current = true
     createFile(`${folder}/${UNTITLED[kind]}`)
@@ -70,7 +70,7 @@ export function Office({ win, kind }: { win: WinState; kind?: NewKind }) {
       .catch(() => (library ? createFile(`${sfPath(library.id)}/${UNTITLED[kind]}`) : Promise.reject(new Error('No folder to make it in'))))
       .then((made) => wm.setProps(win.pid, { path: made, create: undefined }))
       .catch((e: Error) => setError(`Could not make the file: ${e.message}`))
-  }, [kind, path, win.props.create, office, officeFolder, home, library])
+  }, [kind, path, win.props.create, office, officeFolder, places, library])
 
   // The editor, for this file.
   useEffect(() => {
