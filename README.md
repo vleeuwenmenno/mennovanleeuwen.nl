@@ -167,7 +167,8 @@ and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 
 Widgets sit on the desktop like sticky notes: no title bar, tape on top, a sway when dragged, a
 right-click menu, and no text selection (except a sticky being edited). Desktop icons sway when
-dragged too; Settings → Appearance → Motion turns either off. Add them from the desktop's menu (*Add widget*), All apps → Widgets or Spotlight.
+dragged too; Settings → Appearance → Motion turns either off. Several icons dragged at once gather
+in a pile under the pointer with a count badge, like Finder, and land as a block from the drop. Add them from the desktop's menu (*Add widget*), All apps → Widgets or Spotlight.
 Today there are five: **Sticky note** (one of your notes, with checklists you can tick),
 **Weather** (now, the next hours and three days from [Open-Meteo](https://open-meteo.com), for the
 browser's location or a city you pick; your pick syncs, the browser's location stays on that

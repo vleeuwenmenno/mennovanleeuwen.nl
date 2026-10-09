@@ -899,6 +899,30 @@ body.is-resizing * {
 .desk-icon.is-moving {
   opacity: 0.85;
 }
+/* The rest of a dragged selection flies in behind the grabbed icon, then trails it a little. */
+.desk-icon.is-piled {
+  transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.desk-icon.is-piled .desk-label {
+  opacity: 0;
+}
+/* How many icons are in the pile, on the top one, like Finder's red badge. */
+.desk-count {
+  position: absolute;
+  top: -4px;
+  right: 10px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: #e5484d;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
 /* The sway while dragged (useSwing in src/os/swing.ts sets --swing on the desktop), hanging from
    the top like the notes. Only the selected icons are the ones being dragged. */
 .desk-icon.is-selected {

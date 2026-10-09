@@ -105,6 +105,43 @@ function layout(ids: string[], stored: Record<string, IconPos>): Record<string, 
   return out
 }
 
+/**
+ * Several icons dragged at once gather in a pile under the pointer, like Finder's: the grabbed one
+ * on top, the rest fanned out a little behind it (k is the place in the pile, 0 on top).
+ */
+const pileOffset = (k: number) => {
+  const n = Math.min(k, 4)
+  return { x: n * 5, y: -n * 4, tilt: k ? (k % 2 ? 1 : -1) * Math.min(k, 3) * 2 : 0 }
+}
+
+/**
+ * Cells for a dropped pile: a block about as wide as it is tall, from the drop's cell rightwards
+ * and down (moved in to stay on screen), skipping taken cells. What doesn't fit goes to the
+ * nearest free cell.
+ */
+function pileCells(x: number, y: number, n: number, taken: Set<string>): IconPos[] {
+  const { cols, rows } = gridSize()
+  const w = Math.min(cols, Math.ceil(Math.sqrt(n)))
+  const h = Math.min(rows, Math.ceil(n / w) + 1)
+  // Columns count from the right, so "rightwards" is a lower col.
+  const c0 = Math.min(cols - 1, Math.max(w - 1, Math.round((rightX() - x) / CELL_W)))
+  const r0 = Math.min(rows - h, Math.max(0, Math.round((y - TOP) / CELL_H)))
+  const out: IconPos[] = []
+  for (let r = r0; r < r0 + h && out.length < n; r++)
+    for (let c = c0; c > c0 - w && out.length < n; c--) {
+      const p = { col: c, row: r }
+      if (taken.has(key(p))) continue
+      taken.add(key(p))
+      out.push(p)
+    }
+  while (out.length < n) {
+    const p = snap(x, y, taken)
+    taken.add(key(p))
+    out.push(p)
+  }
+  return out
+}
+
 /** Nearest free cell to a pixel position, spiralling outwards from the closest one. */
 function snap(x: number, y: number, taken: Set<string>): IconPos {
   const { cols, rows } = gridSize()
@@ -201,6 +238,8 @@ export function Desktop() {
       setSelected(new Set(ids))
     }
     if (additive && !selected.has(icon.id)) setSelected(new Set(ids))
+    // The grabbed icon first: it tops the pile and lands nearest the drop.
+    ids = [icon.id, ...ids.filter((id) => id !== icon.id)]
     drag.current = { kind: 'icons', startX: e.clientX, startY: e.clientY, ids, moved: false, clickedId: icon.id, additive }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   }
@@ -259,16 +298,19 @@ export function Desktop() {
     const taken = new Set(visible.filter((i) => !moving.has(i.id)).map((i) => key(positions[i.id])))
     const next: Record<string, IconPos> = {}
     const from: Record<string, { dx: number; dy: number }> = {}
-    for (const id of d.ids) {
-      const p = toPx(positions[id])
-      const x = p.x + offsetRef.current.dx
-      const y = p.y + offsetRef.current.dy
-      const cell = snap(x, y, taken)
-      taken.add(key(cell))
+    // A pile spreads out into a block from the drop, the grabbed icon first.
+    const top = toPx(positions[d.clickedId])
+    const drop = { x: top.x + offsetRef.current.dx, y: top.y + offsetRef.current.dy }
+    const cells = d.ids.length > 1 ? pileCells(drop.x, drop.y, d.ids.length, taken) : [snap(drop.x, drop.y, taken)]
+    d.ids.forEach((id, k) => {
+      const fan = d.ids.length > 1 ? pileOffset(k) : { x: 0, y: 0 }
+      const x = drop.x + fan.x
+      const y = drop.y + fan.y
+      const cell = cells[k]
       next[id] = cell
       const to = toPx(cell)
       from[id] = { dx: x - to.x, dy: y - to.y }
-    }
+    })
     // Pin every icon so the ones that did not move stay put too.
     updateDesktop((s) => ({ ...s, positions: { ...positions, ...next } }))
     offsetRef.current = { dx: 0, dy: 0 }
@@ -375,12 +417,21 @@ export function Desktop() {
         const isSel = selected.has(icon.id)
         const dragging = isSel && (offset.dx || offset.dy)
         const landing = settle?.[icon.id]
-        const shift = dragging ? offset : landing
+        const d = drag.current?.kind === 'icons' ? drag.current : null
+        const pile = dragging && d && d.ids.length > 1 ? d.ids : null
+        const k = pile ? pile.indexOf(icon.id) : 0
+        let transform: string | undefined
+        if (dragging && pile) {
+          const top = toPx(positions[pile[0]])
+          const fan = pileOffset(k)
+          transform = `translate(${top.x + offset.dx + fan.x - p.x}px, ${top.y + offset.dy + fan.y - p.y}px) rotate(${fan.tilt}deg)`
+        } else if (dragging) transform = `translate(${offset.dx}px, ${offset.dy}px)`
+        else if (landing) transform = `translate(${landing.dx}px, ${landing.dy}px)`
         return (
           <div
             key={icon.id}
-            className={`desk-icon ${isSel ? 'is-selected' : ''} ${dragging ? 'is-moving' : ''} ${landing ? 'is-settling' : ''}`}
-            style={{ left: p.x, top: p.y, transform: shift ? `translate(${shift.dx}px, ${shift.dy}px)` : undefined }}
+            className={`desk-icon ${isSel ? 'is-selected' : ''} ${dragging ? 'is-moving' : ''} ${pile && k > 0 ? 'is-piled' : ''} ${landing ? 'is-settling' : ''}`}
+            style={{ left: p.x, top: p.y, transform, zIndex: pile ? 3 + pile.length - k : undefined }}
             tabIndex={0}
             role="button"
             aria-label={label(icon)}
@@ -422,6 +473,11 @@ export function Desktop() {
               />
             ) : (
               <span className="desk-label">{label(icon)}</span>
+            )}
+            {pile && k === 0 && (
+              <span className="desk-count" aria-hidden>
+                {pile.length}
+              </span>
             )}
           </div>
         )
