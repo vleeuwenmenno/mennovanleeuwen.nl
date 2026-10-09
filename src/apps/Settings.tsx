@@ -6,7 +6,8 @@ import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateL
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { MC_ADDRESS, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
 import { setSwing, useSwingPrefs } from '../os/swing'
-import { addCaldav, api, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeUpdownKey, setOffice, setUpdownKey, signIn, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelyOwner } from '../os/account'
+import { loadLibraries, primaryOf, setSeafilePrefs, useLibraries, useSeafilePrefs } from '../data/seafile'
+import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeUpdownKey, setOffice, setUpdownKey, signIn, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelyOwner } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
@@ -606,17 +607,10 @@ function SeafileSettings() {
   const [office, setOfficeForm] = useState({ url: '', secret: '' })
   const [busy, setBusy] = useState<'link' | 'office' | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [libraries, setLibraries] = useState<number | null>(null)
-  useEffect(() => {
-    if (!seafile) return setLibraries(null)
-    let live = true
-    api<unknown[]>('/api/seafile/libraries')
-      .then((l) => live && setLibraries(l.length))
-      .catch((e: Error) => live && setError(e.message))
-    return () => {
-      live = false
-    }
-  }, [seafile?.url, seafile?.username])
+  const { libraries: libs, error: libsError } = useLibraries()
+  const libraries = libs?.length ?? null
+  const sfPrefs = useSeafilePrefs()
+  const primary = primaryOf(libs, sfPrefs.primary)
 
   const run = async (what: 'link' | 'office', fn: () => Promise<void>) => {
     setBusy(what)
@@ -679,6 +673,52 @@ function SeafileSettings() {
               </li>
             )}
           </ul>
+          <ul className="set-list">
+            <li className="set-row">
+              <span className="set-row-text">
+                <strong>Primary library</strong>
+                <span className="muted">Home in Files: its Desktop, Documents, Downloads, Music, Pictures and Videos folders</span>
+              </span>
+              <select className="set-select" value={primary?.id ?? ''} disabled={!libs?.length} onChange={(e) => setSeafilePrefs({ primary: e.target.value })} aria-label="Primary library">
+                {!libs && <option value="">Loading…</option>}
+                {libs?.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                    {l.encrypted ? ' 🔒' : ''}
+                    {l.type !== 'mine' && l.owner ? ` (${l.owner})` : ''}
+                  </option>
+                ))}
+              </select>
+            </li>
+            <li className="set-row">
+              <span className="set-row-text">
+                <strong>Use as home</strong>
+                <span className="muted">{sfPrefs.home ? `Files and the desktop use ${primary?.name ?? 'the primary library'}` : 'Off: home is the built-in one, Seafile is still under Libraries in Files'}</span>
+              </span>
+              <Toggle on={sfPrefs.home} onChange={(home) => setSeafilePrefs({ home })} label="Use the primary library as home" />
+            </li>
+            <li className="set-row">
+              <span className="set-row-text">
+                <strong>Encrypted libraries</strong>
+                <span className="muted">Ask for the password again after</span>
+              </span>
+              <select className="set-select" value={sfPrefs.lockMinutes} onChange={(e) => setSeafilePrefs({ lockMinutes: Number(e.target.value) })} aria-label="Lock encrypted libraries after">
+                {[5, 15, 30, 55].map((m) => (
+                  <option key={m} value={m}>
+                    {m} minutes
+                  </option>
+                ))}
+              </select>
+            </li>
+          </ul>
+          {libsError && (
+            <p className="t-red">
+              {libsError}{' '}
+              <button className="btn btn-small" onClick={() => loadLibraries(true)}>
+                Try again
+              </button>
+            </p>
+          )}
           {!seafile.office && (
             <form className="set-form" onSubmit={saveOffice}>
               <label>

@@ -4,10 +4,14 @@ import { DESKTOP_ICONS } from '../os/Desktop'
 import { openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { openLink } from '../data/links'
 import { useWM, type AppId, type WinState } from '../os/wm'
-import { formatSize, HOME, KIND_LABEL, lookup, prettyPath, resolvePath, stat, walk, type FileKind, type Node } from '../terminal/vfs'
+import { formatSize, HOME, KIND_LABEL, kindOfName, lookup, prettyPath, resolvePath, stat, walk, type FileKind, type Node } from '../terminal/vfs'
+import { fileLink, getLibrary, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useUnlocks, type Library } from '../data/seafile'
+import { useAccount } from '../os/account'
 
 // A file manager in the style of Omafile (the Omarchy file manager Menno contributes to), browsing
-// the same in-memory filesystem the terminal uses. Only /tmp is writable.
+// the same in-memory filesystem the terminal uses (only /tmp is writable there) and, for the
+// signed-in owner, Seafile: every library under Libraries, and the primary one as home when that
+// is switched on in Settings (seafile://<library>/<path>, see src/data/seafile.ts).
 
 type View = 'list' | 'grid' | 'compact' | 'gallery'
 type Sort = 'az' | 'za' | 'newest' | 'oldest' | 'largest' | 'smallest' | 'type'
@@ -27,17 +31,37 @@ function loadPrefs(): Prefs {
 }
 
 // Files opened from any Files window during this visit, newest first.
-const recent: string[] = []
-const remember = (path: string) => {
-  const i = recent.indexOf(path)
+const recent: Item[] = []
+const remember = (item: Item) => {
+  const i = recent.findIndex((r) => r.path === item.path)
   if (i >= 0) recent.splice(i, 1)
-  recent.unshift(path)
+  recent.unshift(item)
   recent.length = Math.min(recent.length, 30)
 }
 
 const JOKE_TRASH = ['kubernetes-for-my-blog.yaml', 'salt-states-v1/', 'electron-spotify-config.json', 'TODO-final-FINAL-v3.md', 'works-on-my-machine.iso']
 
-type Item = { path: string; name: string; node: Node | null; kind: FileKind; size: number; mtime: number; trash?: 'desktop' | 'joke'; desktopId?: string }
+type Item = {
+  path: string
+  name: string
+  node: Node | null
+  kind: FileKind
+  size: number
+  mtime: number
+  trash?: 'desktop' | 'joke'
+  desktopId?: string
+  /** A file or folder in Seafile (node is null), or a library at the top of Seafile */
+  sf?: { repo: string; p: string; library?: Library }
+}
+
+const PLACE_FOLDERS = ['Desktop', 'Documents', 'Downloads', 'Music', 'Pictures', 'Videos'] as const
+
+/** The folder above, for Seafile paths too (a library's parent is the list of libraries). */
+function parentOf(path: string): string {
+  const at = parseSf(path)
+  if (at) return path === SF ? SF : at.p === '/' ? SF : sfPath(at.repo, at.p.split('/').slice(0, -1).join('/') || '/')
+  return path.split('/').slice(0, -1).join('/') || '/'
+}
 
 const SPECIAL_EMBLEMS: Record<string, string> = {
   [HOME]: 'home',
@@ -64,6 +88,7 @@ const EMBLEM_PATHS: Record<string, ReactNode> = {
   videos: <path d="M24 23h16v12H24zM30 26v6l5-3z" />,
   games: <path d="M26 25h12a4 4 0 0 1 4 4 3 3 0 0 1-5.5 1.7L35 29h-6l-1.5 1.7A3 3 0 0 1 22 29a4 4 0 0 1 4-4zM27 27v3M25.5 28.5h3" />,
   code: <path d="M28 24l-5 5 5 5M36 24l5 5-5 5" />,
+  lock: <path d="M27 28h10v8H27zM29 28v-3a3 3 0 0 1 6 0v3" />,
 }
 
 function FolderIcon({ size, emblem }: { size: number; emblem?: string }) {
@@ -80,7 +105,7 @@ function FolderIcon({ size, emblem }: { size: number; emblem?: string }) {
   )
 }
 
-const KIND_COLOR: Partial<Record<FileKind, string>> = { markdown: 'var(--blue)', text: 'var(--muted)', link: 'var(--cyan)', game: 'var(--green)', audio: 'var(--magenta)', video: 'var(--red)', disc: 'var(--orange)', archive: 'var(--yellow)', package: 'var(--green)' }
+const KIND_COLOR: Partial<Record<FileKind, string>> = { markdown: 'var(--blue)', text: 'var(--muted)', link: 'var(--cyan)', game: 'var(--green)', audio: 'var(--magenta)', video: 'var(--red)', disc: 'var(--orange)', archive: 'var(--yellow)', package: 'var(--green)', pdf: 'var(--red)', document: 'var(--blue)' }
 
 function FileIcon({ size, kind, name }: { size: number; kind: FileKind; name: string }) {
   const ext = name.includes('.') ? name.split('.').pop()!.slice(0, 4).toUpperCase() : 'TXT'
@@ -97,11 +122,11 @@ function FileIcon({ size, kind, name }: { size: number; kind: FileKind; name: st
   )
 }
 
-function Thumb({ item, size, gallery = false }: { item: Item; size: number; gallery?: boolean }) {
+function Thumb({ item, size, gallery = false, emblem }: { item: Item; size: number; gallery?: boolean; emblem?: string }) {
   const src = useMemo(() => (item.node?.type === 'file' && item.kind === 'image' ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(item.node.content())}` : null), [item])
   // An explicit box: SVGs with only a viewBox have no dependable intrinsic size.
   if (src) return <img className="fm-thumb" src={src} alt="" style={gallery ? undefined : { width: Math.round(size * 1.35), height: size }} draggable={false} />
-  if (item.kind === 'folder') return <FolderIcon size={size} emblem={SPECIAL_EMBLEMS[item.path]} />
+  if (item.kind === 'folder') return <FolderIcon size={size} emblem={emblem ?? SPECIAL_EMBLEMS[item.path]} />
   return <FileIcon size={size} kind={item.kind} name={item.name} />
 }
 
@@ -117,8 +142,13 @@ function middleEllipsis(name: string, max: number) {
 export function Files({ win }: { win: WinState }) {
   const wm = useWM()
   const desk = useDesktop()
+  const account = useAccount()
+  const { libraries } = useLibraries()
+  const { home: sfHome, library: homeLibrary } = useSeafileHome()
+  const home = sfHome ?? HOME
+  const unlocks = useUnlocks()
   const [prefs, setPrefsState] = useState<Prefs>(loadPrefs)
-  const [path, setPath] = useState(win.props.path ?? HOME)
+  const [path, setPath] = useState(win.props.path ?? home)
   const [back, setBack] = useState<string[]>([])
   const [fwd, setFwd] = useState<string[]>([])
   const [selected, setSelected] = useState<Set<string>>(() => new Set(win.props.select ? [win.props.select] : []))
@@ -151,6 +181,21 @@ export function Files({ win }: { win: WinState }) {
     if (win.props.select) setSelected(new Set([win.props.select]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [win.props])
+  // Seafile as home is known once the libraries are in: a window that opened at home goes there.
+  const opened = useRef(!!win.props.path)
+  useEffect(() => {
+    if (sfHome && !opened.current && path === HOME) setPath(sfHome)
+    if (sfHome) opened.current = true
+  }, [sfHome])
+  // An unlocked library locks again on time: list it again then, which asks for the password.
+  useEffect(() => {
+    const next = Math.min(...Object.values(unlocks).filter((u) => u > Date.now()))
+    if (!isFinite(next)) return
+    const t = setTimeout(() => Object.keys(unlocks).forEach((repo) => unlocks[repo] <= Date.now() + 500 && refreshDirs(sfPath(repo))), next - Date.now() + 200)
+    return () => clearTimeout(t)
+  }, [unlocks])
+  const sfDir = useDir(isSf(path) && path !== SF ? path : null)
+
   useEffect(() => {
     if (!toast) return
     const t = setTimeout(() => setToast(null), 2600)
@@ -183,7 +228,16 @@ export function Files({ win }: { win: WinState }) {
       return { path: p, name: node.name, node, kind: st.kind, size: st.size, mtime: st.mtime }
     }
     let list: Item[]
-    if (path === RECENT) list = recent.map(toItem).filter((x): x is Item => !!x)
+    const at = parseSf(path)
+    if (path === SF)
+      list = (libraries ?? []).map((l) => ({ path: sfPath(l.id), name: l.name, node: null, kind: 'folder' as FileKind, size: 0, mtime: l.mtime, sf: { repo: l.id, p: '/', library: l } }))
+    else if (at) {
+      list = (sfDir.listing?.entries ?? []).map((e) => {
+        const p = `${at.p === '/' ? '' : at.p}/${e.name}`
+        return { path: sfPath(at.repo, p), name: e.name, node: null, kind: kindOfName(e.name, e.dir), size: e.size, mtime: e.mtime, sf: { repo: at.repo, p } }
+      })
+      if (search) list = list.filter((i) => i.name.toLowerCase().includes(search.toLowerCase()))
+    } else if (path === RECENT) list = recent.map((r) => (r.sf ? r : toItem(r.path))).filter((x): x is Item => !!x)
     else if (path === TRASH)
       list = [
         ...DESKTOP_ICONS.filter((i) => desk.trashed.includes(i.id)).map((i) => ({ path: `${TRASH}${i.id}`, name: desk.names[i.id] ?? i.label, node: lookup(resolvePath(HOME, i.path)), kind: i.kind === 'file' ? ('markdown' as FileKind) : ('folder' as FileKind), size: 0, mtime: Date.now(), trash: 'desktop' as const, desktopId: i.id })),
@@ -212,9 +266,17 @@ export function Files({ win }: { win: WinState }) {
     }
     // Folders stay on top, as in every file manager.
     return list.sort((a, b) => (a.kind === 'folder' ? 0 : 1) - (b.kind === 'folder' ? 0 : 1) || cmp[prefs.sort](a, b))
-  }, [path, search, prefs.hidden, prefs.sort, tick, desk.trashed, desk.names])
+  }, [path, search, prefs.hidden, prefs.sort, tick, desk.trashed, desk.names, libraries, sfDir.listing])
 
   const writable = path === '/tmp' || path.startsWith('/tmp/')
+  const sfWritable = isSf(path) && path !== SF && sfDir.listing?.perm === 'rw'
+  /** ~/Documents, Seafile › Photos/2024 or /etc: how a path reads in the path bar and dialogs. */
+  const pretty = (p: string) => {
+    if (sfHome && (p === sfHome || p.startsWith(sfHome + '/'))) return '~' + p.slice(sfHome.length)
+    const at = parseSf(p)
+    if (at) return p === SF ? 'Seafile' : `${libraryName(at.repo)}${at.p === '/' ? '' : at.p}`
+    return prettyPath(p)
+  }
 
   // --- actions ----------------------------------------------------------------------------------
 
@@ -223,6 +285,7 @@ export function Files({ win }: { win: WinState }) {
       setToast(item.trash === 'desktop' ? 'Put it back first (right-click → Put back).' : 'That file is a cautionary tale. It stays in the trash.')
       return
     }
+    if (item.sf) return openSeafile(item, how)
     const node = item.node
     if (!node) return
     if (node.type === 'dir') {
@@ -230,7 +293,7 @@ export function Files({ win }: { win: WinState }) {
       else navigate(item.path)
       return
     }
-    remember(item.path)
+    remember(item)
     if (how === 'terminal') return wm.openNew('terminal', { run: `cat ${prettyPath(item.path)}`, t: String(Date.now()) })
     if (how === 'viewer') return wm.openNew('viewer', { path: item.path })
     if (how === 'zed') return wm.open('zed', { path: item.path, view: 'preview', t: String(Date.now()) })
@@ -240,10 +303,41 @@ export function Files({ win }: { win: WinState }) {
     wm.openNew('viewer', { path: item.path })
   }
 
-  const readOnly = () => setToast('Read-only file system. Only /tmp is writable here.')
+  /** Seafile: folders open here, text and code in Zed, pictures, video, audio and PDFs in the Viewer, the rest downloads. */
+  function openSeafile(item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal') {
+    if (item.kind === 'folder') return navigate(item.path)
+    remember(item)
+    if (how === 'zed' || (how === 'default' && (item.kind === 'text' || item.kind === 'markdown'))) return wm.open('zed', { path: item.path, view: item.kind === 'markdown' ? 'preview' : undefined, t: String(Date.now()) })
+    if (how === 'viewer' || ['image', 'video', 'audio', 'pdf'].includes(item.kind)) return wm.openNew('viewer', { path: item.path })
+    download(item)
+  }
+
+  const download = (item: Item) =>
+    fileLink(item.path, 'download')
+      .then((url) => {
+        const a = document.createElement('a')
+        a.href = url
+        a.download = item.name
+        a.rel = 'noopener'
+        a.click()
+      })
+      .catch((e: Error) => setToast(e.message))
+
+  const newFolder = () => {
+    if (!sfWritable) return
+    const taken = new Set(items.map((i) => i.name))
+    let name = 'New folder'
+    for (let n = 2; taken.has(name); n++) name = `New folder ${n}`
+    mkdir(`${path}/${name}`)
+      .then((made) => setSelected(new Set([made])))
+      .catch((e: Error) => setToast(e.message))
+  }
+
+  const readOnly = () => setToast(isSf(path) ? 'Changing things in Seafile is coming next. Opening and downloading works.' : 'Read-only file system. Only /tmp is writable here.')
 
   const trashItems = (list: Item[]) => {
     if (!list.length) return
+    if (list.some((i) => i.sf)) return readOnly()
     if (!list.every((i) => i.path.startsWith('/tmp/'))) return readOnly()
     const tmp = lookup('/tmp')
     if (tmp?.type === 'dir') for (const i of list) tmp.children.delete(i.name)
@@ -265,7 +359,7 @@ export function Files({ win }: { win: WinState }) {
   }
 
   const bookmark = (p: string) => !prefs.bookmarks.includes(p) && setPrefs({ bookmarks: [...prefs.bookmarks, p] })
-  const copyPath = (p: string) => navigator.clipboard?.writeText(prettyPath(p)).then(() => setToast(`Copied ${prettyPath(p)}`)).catch(() => {})
+  const copyPath = (p: string) => navigator.clipboard?.writeText(pretty(p)).then(() => setToast(`Copied ${pretty(p)}`)).catch(() => {})
 
   const selectedItems = () => items.filter((i) => selected.has(i.path))
 
@@ -283,6 +377,30 @@ export function Files({ win }: { win: WinState }) {
       ]
     }
     const isDir = item.kind === 'folder'
+    if (item.sf) {
+      const library = item.sf.library
+      return [
+        { label: 'Open', shortcut: '↵', onSelect: () => openItem(item) },
+        ...(isDir
+          ? [{ label: 'Open in new window', onSelect: () => wm.openNew('files', { path: item.path }) }]
+          : [
+              {
+                label: 'Open with',
+                submenu: [
+                  { label: 'Default app', onSelect: () => openItem(item) },
+                  { label: 'Zed', onSelect: () => openItem(item, 'zed') },
+                  { label: 'Viewer', onSelect: () => openItem(item, 'viewer') },
+                ],
+              },
+              { label: 'Download', onSelect: () => download(item) },
+            ]),
+        ...(library?.encrypted && unlocks[library.id] > Date.now() ? [{ label: 'Lock now', onSelect: () => void lock(library.id).catch((e: Error) => setToast(e.message)) }] : []),
+        { separator: true },
+        { label: 'Copy path', onSelect: () => copyPath(item.path) },
+        ...(isDir ? [{ label: 'Add to bookmarks', disabled: prefs.bookmarks.includes(item.path), onSelect: () => bookmark(item.path) }] : []),
+        { label: 'Properties', shortcut: 'Alt ↵', onSelect: () => setProps(item) },
+      ]
+    }
     return [
       { label: 'Open', shortcut: '↵', onSelect: () => openItem(item) },
       ...(isDir
@@ -310,6 +428,17 @@ export function Files({ win }: { win: WinState }) {
 
   function backgroundMenu(): MenuItem[] {
     const special = path === RECENT || path === TRASH
+    if (isSf(path))
+      return [
+        { label: 'New folder', disabled: !sfWritable, onSelect: newFolder },
+        { label: 'Refresh', shortcut: 'F5', onSelect: () => refreshDirs(path) },
+        { label: 'Add to bookmarks', disabled: path === SF || prefs.bookmarks.includes(path), onSelect: () => bookmark(path) },
+        { separator: true },
+        { label: 'Select all', shortcut: 'Ctrl A', onSelect: () => setSelected(new Set(items.map((i) => i.path))) },
+        { label: 'Show hidden files', checked: prefs.hidden, shortcut: 'Ctrl H', onSelect: () => setPrefs({ hidden: !prefs.hidden }) },
+        { label: 'View', submenu: (['list', 'grid', 'compact', 'gallery'] as View[]).map((v) => ({ label: v[0].toUpperCase() + v.slice(1), checked: prefs.view === v, onSelect: () => setPrefs({ view: v }) })) },
+        { label: 'Sort by', submenu: SORTS.map(([k, label]) => ({ label, checked: prefs.sort === k, onSelect: () => setPrefs({ sort: k }) })) },
+      ]
     return [
       { label: 'New text file', disabled: !writable, onSelect: newFile },
       { label: 'Open terminal here', disabled: special, onSelect: () => wm.openNew('terminal', { run: `cd ${prettyPath(path)} && ls`, t: String(Date.now()) }) },
@@ -389,6 +518,7 @@ export function Files({ win }: { win: WinState }) {
     else if (e.altKey && e.key === 'Enter' && sel[0]) setProps(sel[0])
     else if (e.key === 'Enter' && sel.length) sel.forEach((i) => openItem(i))
     else if (e.key === 'Delete') trashItems(sel)
+    else if (e.key === 'F5' && isSf(path)) refreshDirs(path)
     else if (e.key === 'Escape') setSelected(new Set())
     else if (e.key.startsWith('Arrow')) moveSelection(e.key.slice(5).toLowerCase() as 'up', e.shiftKey)
     else return
@@ -409,9 +539,9 @@ export function Files({ win }: { win: WinState }) {
     setBack([...back, path])
     navigate(next, false)
   }
+  const atTop = path === '/' || path === RECENT || path === TRASH || path === SF
   const goUp = () => {
-    if (path === '/' || path === RECENT || path === TRASH) return
-    navigate(path.split('/').slice(0, -1).join('/') || '/')
+    if (!atTop) navigate(parentOf(path))
   }
 
   // Rubber-band selection on empty space.
@@ -457,6 +587,17 @@ export function Files({ win }: { win: WinState }) {
   const crumbs = useMemo(() => {
     if (path === RECENT) return [{ label: 'Recent', path: RECENT }]
     if (path === TRASH) return [{ label: 'Trash', path: TRASH }]
+    const at = parseSf(path)
+    if (at) {
+      const inSfHome = !!sfHome && (path === sfHome || path.startsWith(sfHome + '/'))
+      const out = inSfHome ? [{ label: '~', path: sfHome! }] : [{ label: 'Seafile', path: SF }, ...(path === SF ? [] : [{ label: libraryName(at.repo), path: sfPath(at.repo) }])]
+      let acc = ''
+      for (const part of at.p.split('/').filter(Boolean)) {
+        acc += '/' + part
+        out.push({ label: part, path: sfPath(at.repo, acc) })
+      }
+      return out
+    }
     const inHome = path === HOME || path.startsWith(HOME + '/')
     const rest = inHome ? path.slice(HOME.length) : path
     const parts = rest.split('/').filter(Boolean)
@@ -467,7 +608,16 @@ export function Files({ win }: { win: WinState }) {
       out.push({ label: part, path: acc })
     }
     return out
-  }, [path])
+  }, [path, sfHome, libraries])
+
+  /** Emblems on Seafile's home folders, and on libraries (home, or a padlock). */
+  const emblemOf = (item: Item): string | undefined => {
+    if (!item.sf) return undefined
+    if (item.sf.library) return item.sf.library.encrypted ? 'lock' : sfHome === item.path ? 'home' : undefined
+    if (sfHome && item.path === sfHome) return 'home'
+    const f = PLACE_FOLDERS.find((name) => item.path === `${sfHome}/${name}`)
+    return f ? f.toLowerCase() : undefined
+  }
 
   const place = (label: string, target: string, icon: string, extra?: ReactNode) => (
     <button key={target + label} className={`fm-side-item ${path === target ? 'is-active' : ''}`} onClick={() => (target.startsWith('http') ? openLink(target) : navigate(target))}>
@@ -486,7 +636,7 @@ export function Files({ win }: { win: WinState }) {
         <button className="fm-tool" onClick={goForward} disabled={!fwd.length} title="Forward (Alt+→)" aria-label="Forward">
           →
         </button>
-        <button className="fm-tool" onClick={goUp} disabled={path === '/' || path === RECENT || path === TRASH} title="Up (Alt+↑)" aria-label="Up">
+        <button className="fm-tool" onClick={goUp} disabled={atTop} title="Up (Alt+↑)" aria-label="Up">
           ↑
         </button>
         <div className="fm-path" onClick={() => search === null && !editingPath && setEditingPath(true)}>
@@ -495,7 +645,7 @@ export function Files({ win }: { win: WinState }) {
               className="fm-path-input"
               autoFocus
               value={search}
-              placeholder={`Search in ${prettyPath(path)}`}
+              placeholder={`Search in ${pretty(path)}`}
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Escape') {
@@ -509,17 +659,21 @@ export function Files({ win }: { win: WinState }) {
             <input
               className="fm-path-input"
               autoFocus
-              defaultValue={prettyPath(path)}
+              defaultValue={pretty(path)}
               onFocus={(e) => e.currentTarget.select()}
               onBlur={() => setEditingPath(false)}
               onKeyDown={(e) => {
                 e.stopPropagation()
                 if (e.key === 'Escape') setEditingPath(false)
                 if (e.key === 'Enter') {
-                  const target = resolvePath(path.includes('://') ? HOME : path, e.currentTarget.value)
+                  const value = e.currentTarget.value.trim()
+                  // ~ is Seafile's home when that is on; seafile://… is taken as it is.
+                  if (value.startsWith(SF)) return navigate(value.replace(/\/+$/, '') || SF)
+                  if (sfHome && (value === '~' || value.startsWith('~/'))) return navigate(sfHome + value.slice(1).replace(/\/+$/, ''))
+                  const target = resolvePath(path.includes('://') ? HOME : path, value)
                   const node = lookup(target)
                   if (node?.type === 'dir') navigate(target)
-                  else setToast(`${e.currentTarget.value}: no such folder`)
+                  else setToast(`${value}: no such folder`)
                 }
               }}
             />
@@ -574,11 +728,11 @@ export function Files({ win }: { win: WinState }) {
           onClick={(e) =>
             openContextMenu({ clientX: e.currentTarget.getBoundingClientRect().right - 220, clientY: e.currentTarget.getBoundingClientRect().bottom + 4, preventDefault() {}, stopPropagation() {} }, [
               { label: 'New window', onSelect: () => wm.openNew('files', { path }) },
-              { label: 'New text file', disabled: !writable, onSelect: newFile },
+              ...(isSf(path) ? [{ label: 'New folder', disabled: !sfWritable, onSelect: newFolder }] : [{ label: 'New text file', disabled: !writable, onSelect: newFile }]),
               { label: 'Open terminal here', disabled: path.includes('://'), onSelect: () => wm.openNew('terminal', { run: `cd ${prettyPath(path)} && ls`, t: String(Date.now()) }) },
               { separator: true },
-              { label: 'Copy location', disabled: path.includes('://'), onSelect: () => copyPath(path) },
-              { label: 'Add to bookmarks', disabled: path.includes('://') || prefs.bookmarks.includes(path), onSelect: () => bookmark(path) },
+              { label: 'Copy location', disabled: path.includes('://') && !isSf(path), onSelect: () => copyPath(path) },
+              { label: 'Add to bookmarks', disabled: (path.includes('://') && !isSf(path)) || path === SF || prefs.bookmarks.includes(path), onSelect: () => bookmark(path) },
               { separator: true },
               { label: 'Keyboard shortcuts', onSelect: () => setToast('Ctrl+1-4 views · Ctrl+H hidden · Ctrl+L path · Ctrl+F search · Alt+arrows navigate · Alt+Enter properties') },
             ])
@@ -592,20 +746,29 @@ export function Files({ win }: { win: WinState }) {
         {prefs.sidebar && (
           <nav className="fm-side">
             <p className="fm-side-head">Places</p>
-            {place('Home', HOME, '⌂')}
+            {place('Home', home, '⌂')}
             {place('Recent', RECENT, '↺')}
-            {place('Documents', `${HOME}/Documents`, '▤')}
-            {place('Downloads', `${HOME}/Downloads`, '⤓')}
-            {place('Music', `${HOME}/Music`, '♪')}
-            {place('Pictures', `${HOME}/Pictures`, '▣')}
-            {place('Videos', `${HOME}/Videos`, '▶')}
+            {place('Desktop', `${home}/Desktop`, '▭')}
+            {place('Documents', `${home}/Documents`, '▤')}
+            {place('Downloads', `${home}/Downloads`, '⤓')}
+            {place('Music', `${home}/Music`, '♪')}
+            {place('Pictures', `${home}/Pictures`, '▣')}
+            {place('Videos', `${home}/Videos`, '▶')}
+            {sfHome && place('Site home', HOME, '⌂')}
             {place('Filesystem', '/', '▭')}
+            {account.seafile && (
+              <>
+                <p className="fm-side-head">Seafile</p>
+                {place('All libraries', SF, '☁')}
+                {libraries?.map((l) => place(l.name, sfPath(l.id), l.encrypted ? (unlocks[l.id] > Date.now() ? '🔓' : '🔒') : l.id === homeLibrary?.id && sfHome ? '⌂' : '▤'))}
+              </>
+            )}
             <p className="fm-side-head">Bookmarks</p>
             {prefs.bookmarks
-              .filter((b) => lookup(b))
+              .filter((b) => (isSf(b) ? !!account.seafile : lookup(b)))
               .map((b) =>
                 place(
-                  b.split('/').pop()!.replace(/^./, (ch) => ch.toUpperCase()),
+                  isSf(b) && parseSf(b)!.p === '/' ? libraryName(parseSf(b)!.repo) : b.split('/').pop()!.replace(/^./, (ch) => ch.toUpperCase()),
                   b,
                   '⚲',
                   <span
@@ -661,6 +824,29 @@ export function Files({ win }: { win: WinState }) {
               ))}
             </div>
           )}
+          {isSf(path) && path !== SF && sfDir.status === 423 ? (
+            <Unlock repo={parseSf(path)!.repo} />
+          ) : isSf(path) && path !== SF && sfDir.error ? (
+            <div className="fm-empty fm-sf-state">
+              {sfDir.status === 404 && PLACE_FOLDERS.some((f) => path === `${home}/${f}`) ? (
+                <>
+                  <p>
+                    {homeLibrary?.name ?? 'This library'} has no {path.split('/').pop()} folder yet.
+                  </p>
+                  <button className="btn btn-small btn-primary" onClick={() => mkdir(path).then(() => refreshDirs(path)).catch((e: Error) => setToast(e.message))}>
+                    Create it
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p>{sfDir.status === 404 ? 'That folder is not there (any more).' : sfDir.error}</p>
+                  <button className="btn btn-small" onClick={sfDir.reload}>
+                    Try again
+                  </button>
+                </>
+              )}
+            </div>
+          ) : null}
           {items.map((item) => (
             <div
               key={item.path}
@@ -675,23 +861,26 @@ export function Files({ win }: { win: WinState }) {
                 if (!selected.has(item.path)) setSelected(new Set([item.path]))
                 openContextMenu(e, itemMenu(item))
               }}
-              title={search !== null ? prettyPath(item.path) : item.name}
+              title={search !== null ? pretty(item.path) : item.name}
             >
               <span className="fm-icon">
-                <Thumb item={item} size={iconSize} gallery={prefs.view === 'gallery'} />
+                <Thumb item={item} size={iconSize} gallery={prefs.view === 'gallery'} emblem={emblemOf(item)} />
               </span>
               <span className="fm-name">{prefs.view === 'grid' || prefs.view === 'gallery' ? middleEllipsis(item.name, captionChars) : item.name}</span>
               {prefs.view === 'list' && (
                 <>
-                  <span className="fm-col">{item.kind === 'folder' ? `${item.size} items` : formatSize(item.size)}</span>
+                  <span className="fm-col">{item.kind === 'folder' ? (item.sf ? (item.sf.library ? formatSize(item.sf.library.size) : '') : `${item.size} items`) : formatSize(item.size)}</span>
                   <span className="fm-col">{new Date(item.mtime).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
                   <span className="fm-col">{KIND_LABEL[item.kind]}</span>
                 </>
               )}
-              {search !== null && prefs.view !== 'list' && <span className="fm-where">{prettyPath(item.path.split('/').slice(0, -1).join('/') || '/')}</span>}
+              {search !== null && prefs.view !== 'list' && !item.sf && <span className="fm-where">{prettyPath(item.path.split('/').slice(0, -1).join('/') || '/')}</span>}
             </div>
           ))}
-          {!items.length && <p className="fm-empty">{search ? `Nothing matching “${search}” below ${prettyPath(path)}` : path === RECENT ? 'Files you open show up here.' : 'This folder is empty.'}</p>}
+          {!items.length && !(isSf(path) && (sfDir.error || sfDir.loading)) && (
+            <p className="fm-empty">{search ? `Nothing matching “${search}” in ${pretty(path)}` : path === RECENT ? 'Files you open show up here.' : path === SF ? (libraries ? 'No libraries.' : 'Loading libraries…') : 'This folder is empty.'}</p>
+          )}
+          {isSf(path) && sfDir.loading && !sfDir.listing && !items.length && <p className="fm-empty">Loading…</p>}
           {marquee && <div className="fm-marquee" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} />}
         </div>
       </div>
@@ -701,12 +890,13 @@ export function Files({ win }: { win: WinState }) {
           {items.length} item{items.length === 1 ? '' : 's'}
           {selected.size > 0 && ` · ${selected.size} selected${selectedSize ? ` (${formatSize(selectedSize)})` : ''}`}
           {writable && ' · writable'}
+          {isSf(path) && path !== SF && sfDir.listing && (sfDir.listing.perm === 'rw' ? ` · ${libraryName(parseSf(path)!.repo)}` : ` · ${libraryName(parseSf(path)!.repo)} (read-only)`)}
         </span>
         <span>View size {prefs.zoom}%</span>
       </footer>
 
       {toast && <div className="fm-toast">{toast}</div>}
-      {props && <Properties item={props} close={() => setProps(null)} />}
+      {props && <Properties item={props} close={() => setProps(null)} pretty={pretty} />}
     </div>
   )
 }
@@ -778,9 +968,19 @@ function ViewMenu({ prefs, setPrefs, close }: { prefs: Prefs; setPrefs: (p: Part
   )
 }
 
-function Properties({ item, close }: { item: Item; close: () => void }) {
+function Properties({ item, close, pretty }: { item: Item; close: () => void; pretty: (p: string) => string }) {
   const isTmp = item.path.startsWith('/tmp/')
-  const rows: [string, string][] = [
+  const library = item.sf && (item.sf.library ?? getLibrary(item.sf.repo))
+  const rows: [string, string][] = item.sf
+    ? [
+        ['Name', item.name],
+        ['Location', item.sf.library ? 'Seafile' : pretty(parentOf(item.path))],
+        ['Type', item.sf.library ? `Library${library?.encrypted ? ', encrypted' : ''}` : KIND_LABEL[item.kind]],
+        ...(item.kind !== 'folder' ? [['Size', `${formatSize(item.size)} (${item.size.toLocaleString('en-GB')} bytes)`] as [string, string]] : item.sf.library ? [['Size', formatSize(item.sf.library.size)] as [string, string]] : []),
+        ['Modified', item.mtime ? new Date(item.mtime).toLocaleString('en-GB') : '—'],
+        ...(library ? [['Library', `${library.name}${library.owner && library.type !== 'mine' ? ` (${library.owner})` : ''}`] as [string, string], ['Access', library.permission === 'rw' ? 'Read and write' : 'Read-only'] as [string, string]] : []),
+      ]
+    : [
     ['Name', item.name],
     ['Location', item.trash ? 'Trash' : prettyPath(item.path.split('/').slice(0, -1).join('/') || '/')],
     ['Type', KIND_LABEL[item.kind]],
@@ -788,7 +988,7 @@ function Properties({ item, close }: { item: Item; close: () => void }) {
     ['Modified', new Date(item.mtime).toLocaleString('en-GB')],
     ['Owner', 'menno (1000)'],
     ['Permissions', item.kind === 'folder' ? (isTmp ? 'drwxrwxrwt' : 'dr-xr-xr-x') : isTmp ? '-rw-rw-rw-' : '-r--r--r--'],
-  ]
+      ]
   return (
     <div className="fm-modal" onPointerDown={(e) => e.target === e.currentTarget && close()}>
       <div className="fm-dialog" role="dialog" aria-label={`${item.name} properties`} onKeyDown={(e) => e.key === 'Escape' && close()}>
@@ -814,3 +1014,32 @@ function Properties({ item, close }: { item: Item; close: () => void }) {
   )
 }
 
+
+/** An encrypted library: its password, once, for as long as Settings says (Seafile never sees it stored). */
+function Unlock({ repo }: { repo: string }) {
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    unlock(repo, password)
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setBusy(false))
+  }
+  return (
+    <form className="fm-unlock" onSubmit={submit} onPointerDown={(e) => e.stopPropagation()}>
+      <FolderIcon size={64} emblem="lock" />
+      <p>
+        <strong>{libraryName(repo)}</strong> is encrypted.
+      </p>
+      <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Library password" autoFocus autoComplete="off" required onKeyDown={(e) => e.stopPropagation()} />
+      <button className="btn btn-primary" disabled={busy}>
+        {busy ? 'Unlocking…' : 'Unlock'}
+      </button>
+      {error && <p className="t-red">{error}</p>}
+      <p className="muted">The password goes to Seafile and is not kept anywhere. It is asked again after the time set in Settings → Integrations.</p>
+    </form>
+  )
+}

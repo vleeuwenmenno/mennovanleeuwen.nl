@@ -752,6 +752,19 @@ input.is-bad {
 .set-help {
   font-size: 12px;
 }
+.set-select {
+  flex: none;
+  max-width: 45%;
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+}
+.set-select:focus {
+  border-color: var(--accent);
+  outline: 0;
+}
 
 @media (max-width: 719px) {
   .set-form label,
