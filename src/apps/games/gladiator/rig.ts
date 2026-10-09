@@ -36,7 +36,7 @@ const NUMERIC: (keyof Pose)[] = ['torso', 'head', 'armF', 'foreF', 'handF', 'arm
 export type Grip = 'slash' | 'thrust' | 'heavy' | 'fist'
 export function gripOf(kind: WeaponKind | null): Grip {
   if (!kind) return 'fist'
-  if (kind === 'spear' || kind === 'trident' || kind === 'dagger') return 'thrust'
+  if (kind === 'spear' || kind === 'trident' || kind === 'dagger' || kind === 'staff' || kind === 'wand') return 'thrust'
   if (kind === 'greatsword' || kind === 'warhammer') return 'heavy'
   return 'slash'
 }

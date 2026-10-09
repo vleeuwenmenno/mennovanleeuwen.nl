@@ -1,3 +1,5 @@
+import { MUSIC_LEVEL, startAmbience, type Ambience, type AmbiencePlace } from './ambience'
+
 // Gladiator sounds, all synthesised with Web Audio like Pool's: struck metal and wood, blows on
 // flesh, blade whooshes and grunts, a crowd that murmurs, cheers and boos, spells, coins and a
 // fanfare. Music too: war drums in the arena and a plucked lyre in town, generated as it plays.
@@ -71,6 +73,53 @@ function clash(ctx: BaseAudioContext, len = 0.5) {
   return buf
 }
 
+/**
+ * A hammer on an anvil, heard from across the forge. Not a bell: the hammer's dull thump, a hard
+ * metallic crack of noise and dense high partials gone within ~40 ms, and only a brief, high,
+ * slightly sour ring after it. Rolled off a little at the top, because it's in the next room.
+ */
+function anvilStrike(ctx: BaseAudioContext, len = 0.45) {
+  const sr = ctx.sampleRate
+  const n = Math.ceil(len * sr)
+  const buf = ctx.createBuffer(1, n, sr)
+  const d = buf.getChannelData(0)
+  const add = (f: number, tau: number, a: number) => {
+    const w = 2 * Math.PI * f
+    const ph = Math.random() * 6.28
+    for (let i = 0; i < n; i++) {
+      const e = Math.exp(-i / sr / tau)
+      if (e < 0.001) break
+      d[i] += a * e * Math.sin(w * (i / sr) + ph)
+    }
+  }
+  // The clank: many inharmonic partials that die almost at once.
+  for (let m = 0; m < 12; m++) add(1800 + Math.random() * 5200, 0.008 + Math.random() * 0.03, 0.6)
+  // The short ring, in a detuned pair so it sounds like struck steel, not a tuned bell.
+  const ring = 2900 + Math.random() * 500
+  add(ring, 0.11, 0.35)
+  add(ring * 1.007, 0.11, 0.3)
+  add(ring * 1.73, 0.06, 0.2)
+  // The hammer's weight.
+  add(140, 0.04, 0.9)
+  // The crack itself.
+  let prev = 0
+  for (let i = 0; i < n; i++) {
+    const x = Math.random() * 2 - 1
+    d[i] += (x - prev) * 1.6 * Math.exp(-i / sr / 0.006)
+    prev = x
+  }
+  // Soften the very top: distance.
+  let lp = 0
+  let peak = 0
+  for (let i = 0; i < n; i++) {
+    lp += 0.55 * (d[i] - lp)
+    d[i] = lp
+    peak = Math.max(peak, Math.abs(lp))
+  }
+  for (let i = 0; i < n; i++) d[i] = Math.tanh((d[i] / peak) * 1.8) * 0.85
+  return buf
+}
+
 /** A plucked string by Karplus-Strong: a burst of noise ringing round a damped delay line. */
 function pluck(ctx: BaseAudioContext, freq: number, len = 1.6) {
   const sr = ctx.sampleRate
@@ -94,7 +143,7 @@ function pluck(ctx: BaseAudioContext, freq: number, len = 1.6) {
 /** How a weapon sounds: blades whistle, clubs and hammers roar, spears jab, axes chop. */
 export type WeaponSound = 'blade' | 'blunt' | 'thrust' | 'chop' | 'fist'
 export const weaponSound = (kind: string | null | undefined): WeaponSound =>
-  kind === 'gladius' || kind === 'greatsword' ? 'blade' : kind === 'mace' || kind === 'warhammer' ? 'blunt' : kind === 'axe' ? 'chop' : kind === 'dagger' || kind === 'spear' || kind === 'trident' ? 'thrust' : 'fist'
+  kind === 'gladius' || kind === 'greatsword' ? 'blade' : kind === 'mace' || kind === 'warhammer' || kind === 'staff' || kind === 'scepter' ? 'blunt' : kind === 'axe' ? 'chop' : kind === 'dagger' || kind === 'spear' || kind === 'trident' || kind === 'wand' ? 'thrust' : 'fist'
 
 // Swish shape per weapon family: filter sweep (start, peak, end in Hz), resonance, length (s),
 // loudness, an optional low "body" layer for heavy weapons, and the pitch a blade sings at.
@@ -125,6 +174,11 @@ export class GladiatorSound {
   private crowdBase = 0.05
   private music: { kind: 'arena' | 'town'; timer: ReturnType<typeof setInterval>; next: number; step: number } | null = null
   private wantMusic: 'arena' | 'town' | null = null
+  private ambBus: GainNode | null = null
+  private amb: { place: AmbiencePlace; a: Ambience } | null = null
+  private wantAmb: AmbiencePlace | null = null
+  private anvils: AudioBuffer[] = []
+  private musicLevel = 1
   intensity = 0.3
   muted = false
   volume = 0.8
@@ -165,7 +219,33 @@ export class GladiatorSound {
   setMusic(on: boolean) {
     this.musicOn = on
     this.save(MUSIC_KEY, on ? '1' : '0')
-    if (this.musicBus && this.ctx) this.musicBus.gain.setTargetAtTime(on ? 0.5 : 0, this.ctx.currentTime, 0.1)
+    this.applyMusic()
+  }
+
+  private applyMusic() {
+    if (this.musicBus && this.ctx) this.musicBus.gain.setTargetAtTime(this.musicOn ? 0.5 * this.musicLevel : 0, this.ctx.currentTime, 0.4)
+  }
+
+  /** Crossfades to the background sound of `place`, or to silence. */
+  setAmbience(place: AmbiencePlace | null) {
+    this.wantAmb = place
+    this.musicLevel = place ? MUSIC_LEVEL[place] : 1
+    this.applyMusic()
+    const ctx = this.ctx
+    if (!ctx || !this.ambBus || !this.noise || !this.verb || !this.anvils.length) return
+    if (this.amb?.place === place) return
+    const t = ctx.currentTime
+    const old = this.amb
+    if (old) {
+      old.a.gain.gain.cancelScheduledValues(t)
+      old.a.gain.gain.setTargetAtTime(0, t, 0.4)
+      setTimeout(() => old.a.stop(), 2000)
+    }
+    this.amb = null
+    if (!place) return
+    const a = startAmbience({ ctx, noise: this.noise, verb: this.verb, woods: this.woods, clangs: this.clangs, anvils: this.anvils }, place, this.ambBus)
+    a.gain.gain.setTargetAtTime(1, t + 0.2, 0.5)
+    this.amb = { place, a }
   }
 
   private applyGain() {
@@ -188,8 +268,10 @@ export class GladiatorSound {
       this.sfx = ctx.createGain()
       this.sfx.connect(this.out)
       this.musicBus = ctx.createGain()
-      this.musicBus.gain.value = this.musicOn ? 0.5 : 0
+      this.musicBus.gain.value = this.musicOn ? 0.5 * this.musicLevel : 0
       this.musicBus.connect(this.out)
+      this.ambBus = ctx.createGain()
+      this.ambBus.connect(this.out)
 
       this.noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate)
       const d = this.noise.getChannelData(0)
@@ -221,6 +303,7 @@ export class GladiatorSound {
       this.woods = []
       for (let i = 0; i < 6; i++) this.clangs.push(clash(ctx))
       for (let i = 0; i < 3; i++) this.woods.push(modal(ctx, 190 + Math.random() * 60, WOOD, 0.8, 0.18))
+      this.anvils = [anvilStrike(ctx), anvilStrike(ctx), anvilStrike(ctx)]
       for (const s of DORIAN) this.plucks.set(s, pluck(ctx, NOTE(s)))
 
       // The crowd: noise through vowel-ish bands, its level drifting like a real murmur.
@@ -244,10 +327,13 @@ export class GladiatorSound {
     }
     if (this.ctx.state === 'suspended') void this.ctx.resume()
     if (this.wantMusic && !this.music) this.startMusic(this.wantMusic)
+    if (this.wantAmb && !this.amb) this.setAmbience(this.wantAmb)
   }
 
   dispose() {
     this.stopMusic()
+    this.amb?.a.stop()
+    this.amb = null
     void this.ctx?.close()
     this.ctx = null
   }

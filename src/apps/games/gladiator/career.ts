@@ -1,5 +1,6 @@
 import { ARCHETYPES, gearStats, has, makeOpponent, pick, randomLook, randomName, rng, xpFor, type Gladiator } from './character'
 import { simulate } from './combat'
+import { gladiatorStore, type GladiatorStore } from './saves'
 import { DIFFICULTIES, league, LEAGUES, MAX_LEVEL, PERK_LEVELS, POINTS_PER_LEVEL, type Archetype, type Difficulty, type LeagueId, type Look } from './data'
 
 // The career around the fights: what is saved, which fights are on offer, tournaments, rivals and
@@ -50,38 +51,20 @@ export type HallEntry = { name: string; level: number; mode: Mode; difficulty?: 
 
 export const rules = (s: Save) => DIFFICULTIES[s.difficulty ?? 'normal']
 
-const KEY = 'mvlos.gladiator.v1'
-type Store = { slots: (Save | null)[]; hall: HallEntry[] }
-export const SLOTS = 3
+export { SLOTS } from './saves'
 
-export function readStore(): Store {
-  try {
-    const s = JSON.parse(localStorage.getItem(KEY) ?? 'null') as Store | null
-    if (s && Array.isArray(s.slots)) return { slots: [...s.slots, null, null, null].slice(0, SLOTS), hall: s.hall ?? [] }
-  } catch {
-    /* fresh store */
-  }
-  return { slots: [null, null, null], hall: [] }
-}
-
-export function writeStore(s: Store) {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(s))
-  } catch {
-    /* the save just won't persist */
-  }
+/** A copy of the saves, safe to change. */
+export function readStore(): GladiatorStore {
+  const s = gladiatorStore.get()
+  return { slots: [...s.slots], hall: [...s.hall] }
 }
 
 export function saveSlot(i: number, save: Save | null) {
-  const s = readStore()
-  s.slots[i] = save ? { ...save, updated: Date.now() } : null
-  writeStore(s)
+  gladiatorStore.set((s) => ({ ...s, slots: s.slots.map((x, j) => (j === i ? (save ? { ...save, updated: save.updated || Date.now() } : null) : x)) }))
 }
 
 export function addHall(e: HallEntry) {
-  const s = readStore()
-  s.hall = [e, ...s.hall].slice(0, 30)
-  writeStore(s)
+  gladiatorStore.set((s) => ({ ...s, hall: [e, ...s.hall].slice(0, 30) }))
 }
 
 // --- Starting out --------------------------------------------------------------------------------
@@ -163,8 +146,9 @@ export function refreshOffers(save: Save, leagueId: LeagueId = save.league): Sav
     { label: 'Warm-up', d: o1 },
     { label: 'Even match', d: o2 },
     { label: 'Tough draw', d: o3 },
-  ].map(({ label, d }) => {
-    const level = lv(d + (r() < 0.3 ? 1 : 0))
+  ].map(({ label, d }, i) => {
+    // Only the tough draw is sometimes a level tougher still.
+    const level = lv(d + (i === 2 && r() < 0.3 ? 1 : 0))
     return { seed: Math.floor(r() * 1e9), level, archetype: pick(r, ARCHETYPES), label, purse: purseFor(level) }
   })
   const rivals = s.rivals.filter((rv) => {
@@ -308,5 +292,7 @@ export function settle(s: Save, foe: Foe, kind: FightKind, won: boolean, peakFav
   return { save, result: { won, gold, xp, fame, levels, notes, dead } }
 }
 
-export const trainPrice = (s: Save) => Math.round(60 * Math.pow(1.3, s.trained))
-export const respecPrice = (s: Save) => 40 + s.g.level * 30
+/** What something listed at `base` gold costs on this save's difficulty. */
+export const price = (s: Save, base: number) => Math.round(base * rules(s).prices)
+export const trainPrice = (s: Save) => price(s, 60 * Math.pow(1.3, s.trained))
+export const respecPrice = (s: Save) => price(s, 40 + s.g.level * 30)

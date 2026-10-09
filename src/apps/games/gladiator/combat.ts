@@ -115,7 +115,7 @@ export const moveCost = (x: Fighter) => Math.round(3 + x.d.burden * 0.6)
 /** Backing off is slower and more tiring than pressing in, so you can't hit and run forever. */
 export const RETREAT = 0.55
 export const retreatCost = (x: Fighter) => moveCost(x) + 2
-export const spellCost = (x: Fighter, id: SpellId) => Math.round(spell(id).mana * (has(x.g, 'arcane') ? 0.8 : 1))
+export const spellCost = (x: Fighter, id: SpellId) => Math.round(spell(id).mana * (has(x.g, 'arcane') ? 0.8 : 1) * (x.d.weapon.mana ?? 1))
 export const TAUNT_COST = 5
 export const inReach = (fight: Fight, who: 0 | 1) => dist(fight) <= CONTACT + fight.f[who].d.weapon.reach + 2
 
@@ -382,7 +382,7 @@ function cast(fight: Fight, who: 0 | 1, id: SpellId, r: Rand) {
   const sp = spell(id)
   a.mana -= spellCost(a, id)
   emit({ t: 'cast', who, spell: id })
-  const power = (sp.power + a.d.stats.mag * sp.perMag) * (0.85 + r() * 0.3) * (has(a.g, 'arcane') ? 1.15 : 1) * (statusOf(a, 'frenzy') ? 1.25 : 1)
+  const power = (sp.power + a.d.stats.mag * sp.perMag) * (0.85 + r() * 0.3) * (has(a.g, 'arcane') ? 1.15 : 1) * (a.d.weapon.spell ?? 1) * (statusOf(a, 'frenzy') ? 1.25 : 1)
 
   if (id === 'heal') {
     const heal = Math.min(a.d.maxHp - a.hp, Math.round(power))

@@ -2147,6 +2147,31 @@ body.is-resizing * {
 .games-title {
   font-weight: 600;
 }
+.games-full {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.games-full:hover {
+  color: var(--text);
+}
+/* A game "fullscreen" inside the OS: the panel covers the page, hiding the top bar, dock and
+   window frame. The game's window has its own stacking layer, so lift the whole window above the top bar and dock. */
+.window:has(.games-play.is-page-full) {
+  z-index: 100000 !important;
+  animation: none;
+}
+.games-play.is-page-full {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: var(--bg);
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
 .game {
   flex: 1;
   min-height: 0;
