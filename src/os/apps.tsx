@@ -5,6 +5,7 @@ import { Games } from '../apps/games/Games'
 import { KeysNote } from '../apps/KeysNote'
 import { Notebook } from '../apps/Notebook'
 import { Notes } from '../apps/Notes'
+import { McServer } from '../apps/McServer'
 import { Projects } from '../apps/Projects'
 import { Settings } from '../apps/Settings'
 import { WidgetHost } from '../widgets/registry'
@@ -40,6 +41,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   notebook: { title: 'Notebook', dock: 'Notebook', blurb: 'Your notes, in Markdown, on any device', size: [860, 560], render: (w) => <Notebook win={w} /> },
   // A desktop widget (props.kind, props.id): a sticky note, the weather... See src/widgets.
   widget: { title: 'Widget', dock: 'Widget', blurb: 'Notes, weather and more on the desktop', size: [280, 260], chrome: 'note', render: (w) => <WidgetHost win={w} /> },
+  mcserver: { title: 'Minecraft server', dock: 'Minecraft', blurb: 'Who is on, uptime and who played most', size: [760, 660], render: (w) => <McServer win={w} /> },
   settings: { title: 'Settings', dock: 'Settings', blurb: 'Account, code hosts, launchers and sync', size: [700, 600], render: (w) => <Settings win={w} /> },
   // Never rendered: the window manager opens Trash as a view in Files. Kept for the dock icon and name.
   trash: { title: 'Trash', dock: 'Trash', blurb: 'Trashed desktop items, in Files', size: [940, 600], render: () => null },

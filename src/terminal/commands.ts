@@ -59,6 +59,7 @@ const APPS: Record<string, AppId> = {
   trash: 'trash',
   notebook: 'notebook',
   settings: 'settings',
+  mcserver: 'mcserver',
 }
 
 const APP_NAMES: Record<AppId, string> = {
@@ -77,6 +78,7 @@ const APP_NAMES: Record<AppId, string> = {
   notebook: 'notebook',
   widget: 'widget',
   settings: 'settings',
+  mcserver: 'mc-status',
 }
 
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */
@@ -778,6 +780,7 @@ export const commands: Record<string, Command> = {
         `  address  ${c('green', MC_ADDRESS)}`,
         `  version  Java ${status.version ?? '?'}`,
         `  players  ${status.players.online}/${status.players.max}${status.players.list.length ? `: ${status.players.list.join(', ')}` : c('muted', ' (nobody mining right now)')}`,
+        c('muted', `  history  open mcserver`),
       ].join('\n')
     },
   },

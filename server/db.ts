@@ -4,9 +4,8 @@ import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 // The site's only persistent state: signed-in users, their sessions, linked Gitea/Forgejo
-// instances, a linked Google Calendar and synced desktop state (notes, window layout,
-// launchers). One SQLite file in DATA_DIR (default ./data), opened lazily so the CV site runs
-// without it when login is off.
+// instances, a linked Google Calendar, synced desktop state (notes, window layout, launchers) and
+// the Minecraft server's history. One SQLite file in DATA_DIR (default ./data), opened on first use.
 //
 // Access tokens (GitHub, Gitea, Google) are encrypted at rest with AES-256-GCM. The key comes from
 // SESSION_SECRET, or a random one generated once into DATA_DIR/secret.key.
@@ -73,6 +72,21 @@ export function database(): DatabaseSync {
       expires_at INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL
     );
+    -- The Minecraft server, pinged every 30 s (server/minecraft.ts): one row per ping, and one
+    -- per player visit, open (left_at NULL) while they are still on.
+    CREATE TABLE IF NOT EXISTS mc_samples (
+      at INTEGER PRIMARY KEY,
+      online INTEGER NOT NULL,
+      players INTEGER NOT NULL,
+      latency INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS mc_sessions (
+      id INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      joined_at INTEGER NOT NULL,
+      left_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS mc_sessions_open ON mc_sessions (left_at);
   `)
   key = Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())

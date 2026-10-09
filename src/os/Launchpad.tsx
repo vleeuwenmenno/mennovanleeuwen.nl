@@ -35,7 +35,7 @@ type Entry = {
   dockId?: DockId
 }
 
-const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'notebook', 'contact', 'notes', 'keys', 'settings', 'trash']
+const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'mcserver', 'notebook', 'contact', 'notes', 'keys', 'settings', 'trash']
 
 const stroke = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const
 const Icon = ({ children }: { children: ReactNode }) => (

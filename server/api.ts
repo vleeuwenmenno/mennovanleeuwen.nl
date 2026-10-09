@@ -6,7 +6,7 @@ import { githubCommits } from './github.ts'
 import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, listCalendars, listEvents, startGoogle } from './google.ts'
 import { inbox } from './inbox.ts'
 import { HttpError, json, readJson, redirect, sameOrigin, SECURITY } from './http.ts'
-import { minecraftStatus } from './minecraft.ts'
+import { minecraftOverview, minecraftStatus } from './minecraft.ts'
 import { search, clearSearchCache } from './search.ts'
 import { suggest } from './suggest.ts'
 import { readState, writeState } from './state.ts'
@@ -27,6 +27,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (read && (path === '/api/minecraft' || path === '/api/activity')) {
       const body = JSON.stringify(path === '/api/minecraft' ? await minecraftStatus() : { items: await forgejoActivity() })
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SECURITY }).end(head ? undefined : body)
+      return true
+    }
+    if (read && path === '/api/minecraft/overview') {
+      json(res, 200, await minecraftOverview(url.searchParams.get('range')))
       return true
     }
     if (read && path === '/api/suggest') {
