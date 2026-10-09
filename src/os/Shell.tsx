@@ -19,7 +19,7 @@ import { FolderPicker } from './FolderPicker'
 import { initBackButton, setBackFocus } from './backButton'
 import { startActivityAlerts } from './activityAlerts'
 import { followLinkSettings } from '../data/links'
-import { newTab, usePower } from './powerState'
+import { usePower } from './powerState'
 import { notify } from './notify'
 import { isDefaultDock, isLauncherId, resetDock, setDockOrder, unpinFromDock, useCanCustomizeDock, useDock, type DockId } from './dockItems'
 import { AppIcon } from './icons'
@@ -650,8 +650,6 @@ function SnapPreview() {
   return <div className="snap-preview" style={{ left: g.x, top: g.y, width: g.w, height: g.h }} aria-hidden />
 }
 
-let newTabOpened = false
-
 export function Shell() {
   const wm = useWM()
   const power = usePower()
@@ -666,13 +664,6 @@ export function Shell() {
     const params = new URLSearchParams(location.search)
     const app = params.get('open') as AppId | null
     if (app && app in APP_META && app !== 'trash') wm.open(app)
-    // New tab page: the rest of the desk as it was left, with one clean terminal in front. The
-    // previous tab's terminals are closed, so they don't pile up in the saved layout.
-    if (newTab && !newTabOpened) {
-      newTabOpened = true
-      for (const w of wm.windows) if (w.app === 'terminal') wm.close(w.pid)
-      wm.openNew('terminal')
-    }
     // Back from GitHub's sign-in page: /?auth=ok|denied|error|off.
     const auth = AUTH_NOTICES[params.get('auth') ?? ''] ?? GOOGLE_NOTICES[params.get('google') ?? '']
     if (auth) setTimeout(() => notify(auth), 1200)

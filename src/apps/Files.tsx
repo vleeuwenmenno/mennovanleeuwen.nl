@@ -114,9 +114,16 @@ function FolderIcon({ size, emblem }: { size: number; emblem?: string }) {
 
 const KIND_COLOR: Partial<Record<FileKind, string>> = { markdown: 'var(--blue)', text: 'var(--muted)', link: 'var(--cyan)', game: 'var(--green)', audio: 'var(--magenta)', video: 'var(--red)', disc: 'var(--orange)', archive: 'var(--yellow)', package: 'var(--green)', pdf: 'var(--red)', document: 'var(--blue)' }
 
+/** Office files in their own program's colour: spreadsheets green, presentations orange, documents blue. */
+const EXT_COLOR: Record<string, string> = {
+  xlsx: 'var(--green)', xls: 'var(--green)', xlsm: 'var(--green)', ods: 'var(--green)', csv: 'var(--green)', numbers: 'var(--green)',
+  pptx: 'var(--orange)', ppt: 'var(--orange)', ppsx: 'var(--orange)', odp: 'var(--orange)', key: 'var(--orange)',
+  docx: 'var(--blue)', doc: 'var(--blue)', odt: 'var(--blue)', rtf: 'var(--blue)', pages: 'var(--blue)',
+}
+
 function FileIcon({ size, kind, name }: { size: number; kind: FileKind; name: string }) {
   const ext = name.includes('.') ? name.split('.').pop()!.slice(0, 4).toUpperCase() : 'TXT'
-  const color = KIND_COLOR[kind] ?? 'var(--muted)'
+  const color = EXT_COLOR[ext.toLowerCase()] ?? KIND_COLOR[kind] ?? 'var(--muted)'
   return (
     <svg viewBox="0 0 48 60" width={size * 0.8} height={size} className="fm-file" aria-hidden>
       <path d="M6 2h26l12 12v42a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" fill="var(--bg-light)" stroke="color-mix(in srgb, var(--fg) 30%, transparent)" strokeWidth="1.5" />

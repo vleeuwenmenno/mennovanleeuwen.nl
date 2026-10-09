@@ -112,12 +112,15 @@ export function synced<T>(key: string, fallback: T, opts: { legacyKey?: string; 
   }
   stores.set(key, internal)
 
-  // Another tab saved: show the same value here.
+  // Another tab saved: show the same value here, and tell those following remote changes (the
+  // window manager moves its windows to match), or this tab's next save would undo that one.
   if (typeof window !== 'undefined')
     window.addEventListener('storage', (e) => {
       if (e.key !== storageKey(key)) return
+      const before = meta.value
       meta = readMeta(key, fallback, undefined, opts.normalize)
       emit()
+      if (JSON.stringify(meta.value) !== JSON.stringify(before)) remoteListeners.forEach((l) => l(meta.value))
     })
 
   return store

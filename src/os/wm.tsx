@@ -21,6 +21,12 @@ export type WinState = {
   snap?: SnapZone
   /** The geometry to go back to when a snapped window is dragged away */
   restore?: Geometry
+  /**
+   * Where and how big the window was put (by dragging, resizing or a saved layout), before
+   * fitting it to a smaller screen. Saved instead of the fitted geometry, so a visit from a small
+   * window does not shrink every window for good.
+   */
+  want?: Geometry
 }
 
 export type SnapZone = 'left' | 'right' | 'tl' | 'tr' | 'bl' | 'br'
@@ -132,10 +138,10 @@ function serialize(windows: WinState[]): SavedWindow[] {
     .sort((a, b) => a.z - b.z)
     .map((w) => ({
       app: w.app,
-      x: Math.round(w.x),
-      y: Math.round(w.y),
-      w: Math.round(w.w),
-      h: Math.round(w.h),
+      x: Math.round(w.want?.x ?? w.x),
+      y: Math.round(w.want?.y ?? w.y),
+      w: Math.round(w.want?.w ?? w.w),
+      h: Math.round(w.want?.h ?? w.h),
       minimized: w.minimized,
       maximized: w.maximized,
       snap: w.snap,
@@ -154,7 +160,8 @@ function restored(saved: SavedWindow[], current: WinState[] = []): State {
   const windows: WinState[] = saved.map((w) => {
     const i = unused.findIndex((u) => key(u) === key(w))
     const same = i >= 0 ? unused.splice(i, 1)[0] : null
-    return same ? { ...same, ...w, props: same.props, pid: same.pid, z: ++z } : { ...w, props: { ...w.props }, pid: pid++, z: ++z, openedAt: Date.now() }
+    const want = { x: w.x, y: w.y, w: w.w, h: w.h }
+    return same ? { ...same, ...w, want, props: same.props, pid: same.pid, z: ++z } : { ...w, want, props: { ...w.props }, pid: pid++, z: ++z, openedAt: Date.now() }
   })
   const top = windows.filter((w) => !w.minimized).at(-1)
   return { windows, nextPid: pid, topZ: z, touched: true, focused: top?.pid ?? null, edits: 0 }
@@ -214,7 +221,16 @@ function apply(state: State, action: Action): State {
     case 'toggleMax':
       return { ...state, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, maximized: !w.maximized } : w)) }
     case 'setGeometry':
-      return { ...state, touched: true, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, ...action.geometry } : w)) }
+      return {
+        ...state,
+        touched: true,
+        windows: state.windows.map((w) => {
+          if (w.pid !== action.pid) return w
+          const next = { ...w, ...action.geometry }
+          // Moved or resized by hand (not snapped or maximized): that is where it should be from now on.
+          return next.snap || next.maximized ? next : { ...next, want: { x: next.x, y: next.y, w: next.w, h: next.h } }
+        }),
+      }
     case 'setProps':
       return { ...state, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, props: { ...w.props, ...action.props } } : w)) }
     case 'viewport': {
@@ -224,10 +240,11 @@ function apply(state: State, action: Action): State {
         windows: state.windows.map((w) => {
           if (w.snap) return { ...w, ...snapRect(w.snap, width, height) }
           const fresh = !state.touched && action.layout.find((l) => l.app === w.app)
-          const g = fresh ? fresh.geometry : w
+          // Fitted from where it was put, not from an earlier fitting: a bigger screen gets it back as it was.
+          const g = fresh ? fresh.geometry : (w.want ?? w)
           const ww = Math.max(240, Math.min(g.w, width - 16))
           const hh = Math.max(160, Math.min(g.h, height - 140))
-          return { ...w, w: ww, h: hh, x: Math.min(Math.max(g.x, 8 - ww + 120), width - 120), y: Math.min(Math.max(g.y, 40), height - 80) }
+          return { ...w, want: fresh ? undefined : (w.want ?? { x: w.x, y: w.y, w: w.w, h: w.h }), w: ww, h: hh, x: Math.min(Math.max(g.x, 8 - ww + 120), width - 120), y: Math.min(Math.max(g.y, 40), height - 80) }
         }),
       }
     }
