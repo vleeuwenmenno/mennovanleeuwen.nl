@@ -112,6 +112,18 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  linkforge: {
+    bg: 'linear-gradient(160deg,#f5a65b,#d9622b)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <circle cx="16" cy="13" r="3" />
+        <circle cx="16" cy="35" r="3" />
+        <circle cx="32" cy="18" r="3" />
+        <path d="M16 16v16M32 21c0 7-9 6-16 11" />
+      </>
+    ),
+  },
   zed: {
     bg: 'linear-gradient(160deg,#3b4a6b,#151a26)',
     fg: '#8fb4ff',
@@ -177,6 +189,7 @@ const HUES: Record<AppId, string> = {
   contact: 'var(--magenta)',
   games: 'var(--cyan)',
   mcserver: 'var(--green)',
+  linkforge: 'var(--orange)',
   zed: 'var(--blue)',
   notebook: 'var(--orange)',
   widget: 'var(--yellow)',
