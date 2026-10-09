@@ -158,18 +158,19 @@ function linked(user: User): Link {
 export async function seafile<T>(user: User, path: string, init: RequestInit = {}): Promise<T> {
   const link = linked(user)
   const res = await call(link.url, path, { ...init, token: link.token })
-  if (res.status === 401 || res.status === 403) {
-    const message = await errorOf(res)
-    throw new HttpError(res.status === 401 ? 409 : 403, res.status === 401 ? 'Seafile no longer accepts the token: link it again in Settings' : message)
-  }
-  if (!res.ok) throw new HttpError(res.status === 404 ? 404 : 502, await errorOf(res))
-  return (await res.json()) as T
+  if (res.ok) return (await res.json()) as T
+  const message = await errorOf(res)
+  if (res.status === 401) throw new HttpError(409, 'Seafile no longer accepts the token: link it again in Settings')
+  // An encrypted library that is not unlocked (or no longer: Seafile forgets after an hour).
+  if (res.status === 440 || /encrypted|password/i.test(message)) throw new HttpError(423, 'Locked')
+  throw new HttpError(res.status === 403 || res.status === 404 ? res.status : 502, message)
 }
 
 type ApiRepo = { repo_id: string; repo_name: string; type: string; owner_email?: string; owner_name?: string; encrypted: boolean; permission: string; size: number; last_modified: string }
 
 export async function libraries(user: User): Promise<Library[]> {
   const { repos } = await seafile<{ repos: ApiRepo[] }>(user, '/api/v2.1/repos/?type=mine&type=shared&type=group&type=public')
+  for (const r of repos) encryptedRepos.set(`${user.id}:${r.repo_id}`, !!r.encrypted)
   const seen = new Set<string>()
   return repos
     .filter((r) => !seen.has(r.repo_id) && seen.add(r.repo_id))
@@ -183,4 +184,107 @@ export async function libraries(user: User): Promise<Library[]> {
       size: r.size ?? 0,
       mtime: Date.parse(r.last_modified) || 0,
     }))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Folders and files. Paths are Seafile's: absolute within the library ("/Documents/a.txt").
+
+const repoId = (v: unknown) => {
+  const id = String(v ?? '')
+  if (!/^[0-9a-f-]{36}$/i.test(id)) throw new HttpError(400, 'Bad library id')
+  return id
+}
+
+const seafPath = (v: unknown) => {
+  const p = String(v ?? '/')
+  if (!p.startsWith('/') || p.split('/').some((part) => part === '..') || p.includes('\0')) throw new HttpError(400, 'Bad path')
+  return p
+}
+
+export type Entry = { name: string; dir: boolean; size: number; mtime: number; id: string; locked?: boolean }
+type ApiDirent = { type: 'dir' | 'file'; name: string; id: string; size?: number; mtime: number; is_locked?: boolean }
+
+// Encrypted libraries. Seafile encrypts file contents only: their folders list fine without the
+// password, and Seafile keeps an unlocked library open for an hour after the password is given.
+// So the lock is kept here: an encrypted library shows nothing until it is unlocked, and only for
+// as long as asked for at unlock time (at most 55 minutes, inside Seafile's hour).
+
+const encryptedRepos = new Map<string, boolean>() // `${user}:${repo}`
+const unlockedUntil = new Map<string, number>()
+
+async function isEncrypted(user: User, id: string): Promise<boolean> {
+  const key = `${user.id}:${id}`
+  if (!encryptedRepos.has(key)) encryptedRepos.set(key, !!(await seafile<{ encrypted?: boolean }>(user, `/api/v2.1/repos/${id}/`)).encrypted)
+  return encryptedRepos.get(key)!
+}
+
+/** Throws 423 for an encrypted library that is locked (here; Seafile may still hold it open). */
+async function guard(user: User, id: string) {
+  if (!(await isEncrypted(user, id))) return
+  if ((unlockedUntil.get(`${user.id}:${id}`) ?? 0) > Date.now()) return
+  throw new HttpError(423, 'Locked')
+}
+
+/** Encrypted libraries unlocked right now, with when they lock again, for the Files app. */
+export const unlocked = (user: User) =>
+  Object.fromEntries(
+    [...unlockedUntil]
+      .filter(([k, until]) => k.startsWith(`${user.id}:`) && until > Date.now())
+      .map(([k, until]) => [k.slice(k.indexOf(':') + 1), until]),
+  )
+
+export const lock = (user: User, repo: unknown) => void unlockedUntil.delete(`${user.id}:${repoId(repo)}`)
+
+/** A folder's contents, and whether the account may change things in it. */
+export async function listDir(user: User, repo: unknown, path: unknown): Promise<{ perm: 'r' | 'rw'; entries: Entry[] }> {
+  const id = repoId(repo)
+  const p = seafPath(path)
+  await guard(user, id)
+  const body = await seafile<{ user_perm?: string; dirent_list: ApiDirent[] }>(user, `/api/v2.1/repos/${id}/dir/?p=${encodeURIComponent(p)}`)
+  return {
+    perm: body.user_perm === 'rw' ? 'rw' : 'r',
+    entries: body.dirent_list.map((d) => ({ name: d.name, dir: d.type === 'dir', size: d.size ?? 0, mtime: (d.mtime ?? 0) * 1000, id: d.id, ...(d.is_locked ? { locked: true } : {}) })),
+  }
+}
+
+/**
+ * A short-lived link on Seafile's file server, which the browser uses directly (it answers with
+ * CORS headers): download (reusable for an hour), upload into a folder, or update (overwrite) a file.
+ */
+export async function fileLink(user: User, repo: unknown, path: unknown, op: unknown): Promise<{ url: string }> {
+  const id = repoId(repo)
+  const p = seafPath(path)
+  const q = encodeURIComponent(p)
+  await guard(user, id)
+  if (op === 'download') return { url: await seafile<string>(user, `/api2/repos/${id}/file/?p=${q}&reuse=1`) }
+  if (op === 'upload') return { url: await seafile<string>(user, `/api2/repos/${id}/upload-link/?p=${q}`) }
+  if (op === 'update') return { url: await seafile<string>(user, `/api2/repos/${id}/update-link/?p=${q}`) }
+  throw new HttpError(400, 'Unknown link')
+}
+
+/** Unlocks an encrypted library for `minutes` (5 to 55). Answers when it locks again. */
+export async function unlock(user: User, body: { repo?: string; password?: string; minutes?: number }): Promise<{ until: number }> {
+  const id = repoId(body.repo)
+  if (!body.password) throw new HttpError(400, 'The password is required')
+  try {
+    await seafile(user, `/api/v2.1/repos/${id}/set-password/`, { method: 'POST', body: new URLSearchParams({ password: body.password }) })
+  } catch (e) {
+    if (e instanceof HttpError && (e.status === 423 || e.status === 502)) throw new HttpError(400, 'Wrong password')
+    throw e
+  }
+  encryptedRepos.set(`${user.id}:${id}`, true)
+  const until = Date.now() + Math.min(55, Math.max(5, Number(body.minutes) || 55)) * 60_000
+  unlockedUntil.set(`${user.id}:${id}`, until)
+  return { until }
+}
+
+/** A new folder; Seafile picks "name (1)" when the name is taken. Answers the folder's path. */
+export async function mkdir(user: User, body: { repo?: string; path?: string }): Promise<{ path: string }> {
+  const id = repoId(body.repo)
+  const p = seafPath(body.path)
+  if (p === '/') throw new HttpError(400, 'Bad path')
+  await guard(user, id)
+  const res = await seafile<{ obj_name?: string; parent_dir?: string } | string>(user, `/api/v2.1/repos/${id}/dir/?p=${encodeURIComponent(p)}`, { method: 'POST', body: new URLSearchParams({ operation: 'mkdir' }) })
+  const made = typeof res === 'object' && res.obj_name ? `${(res.parent_dir ?? '/').replace(/\/$/, '')}/${res.obj_name}` : p
+  return { path: made }
 }

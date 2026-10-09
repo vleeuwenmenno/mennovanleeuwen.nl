@@ -8,7 +8,7 @@ import { allCalendars, allEvents, createEvent, deleteEvent, updateEvent } from '
 import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, MAX_RANGE_DAYS, startGoogle } from './google.ts'
 import { inbox } from './inbox.ts'
 import { linkPreview } from './preview.ts'
-import { libraries, linkSeafile, removeOffice, seafileInfo, setOffice, unlinkSeafile } from './seafile.ts'
+import { fileLink, libraries, linkSeafile, listDir, lock, mkdir, unlock, unlocked, removeOffice, seafileInfo, setOffice, unlinkSeafile } from './seafile.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
 import { HttpError, json, readJson, redirect, sameOrigin, SECURITY } from './http.ts'
 import { minecraftOverview, minecraftStatus } from './minecraft.ts'
@@ -130,6 +130,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/integrations/onlyoffice' && method === 'PUT') return await setOffice(requireUser(req), await readJson(req, 8 * 1024)), json(res, 200, seafileInfo(requireUser(req))), true
     if (path === '/api/integrations/onlyoffice' && method === 'DELETE') return removeOffice(requireUser(req)), json(res, 200, seafileInfo(requireUser(req))), true
     if (path === '/api/seafile/libraries' && read) return json(res, 200, await libraries(requireUser(req))), true
+    if (path === '/api/seafile/dir' && read) return json(res, 200, await listDir(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'))), true
+    if (path === '/api/seafile/dir' && method === 'POST') return json(res, 200, await mkdir(requireUser(req), await readJson(req, 8 * 1024))), true
+    if (path === '/api/seafile/link' && read) return json(res, 200, await fileLink(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), url.searchParams.get('op'))), true
+    if (path === '/api/seafile/unlock' && method === 'POST') return json(res, 200, await unlock(requireUser(req), await readJson(req, 8 * 1024))), true
+    if (path === '/api/seafile/unlock' && read) return json(res, 200, unlocked(requireUser(req))), true
+    if (path === '/api/seafile/lock' && method === 'POST') return lock(requireUser(req), (await readJson<{ repo?: string }>(req, 1024)).repo), json(res, 200, { ok: true }), true
     if (path === '/api/updown' && read) return json(res, 200, await updownChecks(requireUser(req))), true
     if (path === '/api/preview' && read) {
       requireUser(req) // fetches other sites on request: the signed-in owner only
