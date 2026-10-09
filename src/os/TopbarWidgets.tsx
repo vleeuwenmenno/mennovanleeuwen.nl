@@ -3,6 +3,7 @@ import { profile } from '../data/profile'
 import { timeAgo } from '../data/recents'
 import { fetchMinecraft, MC_ADDRESS, MC_PORT, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
+import { dayKey, eventsOn, eventTime, fetchEvents, startOfDay, type CalendarEvent } from '../data/calendar'
 import { connectGoogle, signIn, signOut, useAccount } from './account'
 import { openContextMenu, type MenuItem } from './ContextMenu'
 import { toggleOverlay } from './overlays'
@@ -48,9 +49,71 @@ function isoWeek(d: Date) {
   return Math.ceil(((t.getTime() - yearStart.getTime()) / 864e5 + 1) / 7)
 }
 
+/** With Google Calendar connected: the viewed month's events, for dots and the day list. */
+function useMonthEvents(view: Date) {
+  const account = useAccount()
+  const connected = account.status === 'user' && !!account.google
+  const [events, setEvents] = useState<CalendarEvent[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!connected) return setEvents(null)
+    let live = true
+    setError(null)
+    // The grid's weeks can start in the month before; one range covers the month and its edges.
+    fetchEvents(startOfDay(view, -7), startOfDay(new Date(view.getFullYear(), view.getMonth() + 1, 1), 7)).then(
+      (e) => live && setEvents(e),
+      (e: Error) => live && (setEvents([]), setError(e.message)),
+    )
+    return () => {
+      live = false
+    }
+  }, [view, connected])
+  return { connected, events, error, account }
+}
+
+/** The selected day's appointments, under the month grid. */
+function DayAgenda({ day, events, error }: { day: Date; events: CalendarEvent[] | null; error: string | null }) {
+  const key = dayKey(day)
+  const list = events ? eventsOn(events, key) : null
+  const label = key === dayKey(new Date()) ? 'Today' : day.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
+  return (
+    <div className="cal-agenda">
+      <h4>{label}</h4>
+      {!list && <p className="muted">Opening your calendar…</p>}
+      {error && (
+        <p className="t-red">
+          {error}{' '}
+          {/connect again/.test(error) && (
+            <button className="link-btn" onClick={connectGoogle}>
+              Connect
+            </button>
+          )}
+        </p>
+      )}
+      {!error && list?.length === 0 && <p className="muted">Nothing planned</p>}
+      {list?.map((e) => (
+        <div key={e.id} className="cal-event" title={`${e.calendar}${e.location ? ` · ${e.location}` : ''}`}>
+          <span className="ag-dot" style={{ background: e.color }} />
+          <span className="cal-event-time">{eventTime(e)}</span>
+          <a href={e.url} target="_blank" rel="noopener noreferrer">
+            {e.title}
+          </a>
+          {e.meet && (
+            <a href={e.meet} target="_blank" rel="noopener noreferrer" title="Join the video call">
+              🎥
+            </a>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function Calendar() {
   const today = new Date()
   const [view, setView] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1))
+  const [picked, setPicked] = useState(() => startOfDay(today))
+  const { connected, events, error, account } = useMonthEvents(view)
   const first = new Date(view.getFullYear(), view.getMonth(), 1)
   const lead = (first.getDay() + 6) % 7 // Monday-first
   const daysInMonth = new Date(view.getFullYear(), view.getMonth() + 1, 0).getDate()
@@ -96,11 +159,25 @@ function Calendar() {
               <td className="cal-wk">{isoWeek(w.find(Boolean)!)}</td>
               {w.map((d, j) => (
                 <td key={j}>
-                  {d && (
-                    <span className={`cal-day ${isToday(d) ? 'is-today' : ''} ${j >= 5 ? 'is-weekend' : ''} ${isBirthday(d) ? 'is-bday' : ''}`} title={isBirthday(d) ? "Menno's birthday" : undefined}>
-                      {d.getDate()}
-                    </span>
-                  )}
+                  {d &&
+                    (connected ? (
+                      <button
+                        className={`cal-day ${isToday(d) ? 'is-today' : ''} ${j >= 5 ? 'is-weekend' : ''} ${isBirthday(d) ? 'is-bday' : ''} ${dayKey(d) === dayKey(picked) ? 'is-picked' : ''}`}
+                        title={isBirthday(d) ? "Menno's birthday" : undefined}
+                        onClick={() => setPicked(d)}
+                      >
+                        {d.getDate()}
+                        <span className="cal-dots" aria-hidden>
+                          {(events ? eventsOn(events, dayKey(d)) : []).slice(0, 3).map((e) => (
+                            <span key={e.id} style={{ background: e.color }} />
+                          ))}
+                        </span>
+                      </button>
+                    ) : (
+                      <span className={`cal-day ${isToday(d) ? 'is-today' : ''} ${j >= 5 ? 'is-weekend' : ''} ${isBirthday(d) ? 'is-bday' : ''}`} title={isBirthday(d) ? "Menno's birthday" : undefined}>
+                        {d.getDate()}
+                      </span>
+                    ))}
                 </td>
               ))}
             </tr>
@@ -108,8 +185,20 @@ function Calendar() {
         </tbody>
       </table>
       {!showingNow && (
-        <button className="cal-back" onClick={() => setView(new Date(today.getFullYear(), today.getMonth(), 1))}>
+        <button
+          className="cal-back"
+          onClick={() => {
+            setView(new Date(today.getFullYear(), today.getMonth(), 1))
+            setPicked(startOfDay(today))
+          }}
+        >
           Back to today
+        </button>
+      )}
+      {connected && <DayAgenda day={picked} events={events} error={error} />}
+      {!connected && account.status === 'user' && account.googleEnabled && (
+        <button className="cal-back" onClick={connectGoogle}>
+          📅 Connect Google Calendar for appointments
         </button>
       )}
     </div>

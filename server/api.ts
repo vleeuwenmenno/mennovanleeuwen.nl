@@ -94,8 +94,18 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/google' && method === 'DELETE') return await disconnectGoogle(requireUser(req)), json(res, 200, { ok: true }), true
     if (path === '/api/calendar/calendars' && read) return json(res, 200, await listCalendars(requireUser(req))), true
     if (path === '/api/calendar/events' && read) {
+      // ?from=&to= (ISO dates or times) for a range, or ?days=N from the start of today.
       const ids = url.searchParams.get('calendars')
-      return json(res, 200, await listEvents(requireUser(req), ids ? ids.split(',') : null, Number(url.searchParams.get('days') ?? 3))), true
+      const q = (k: string) => url.searchParams.get(k)
+      let from = new Date()
+      from.setHours(0, 0, 0, 0)
+      let to = new Date(from.getTime() + Math.min(14, Math.max(1, Number(q('days') ?? 3))) * 864e5)
+      if (q('from') && q('to')) {
+        from = new Date(q('from')!)
+        to = new Date(q('to')!)
+        if (isNaN(from.getTime()) || isNaN(to.getTime())) throw new HttpError(400, 'Bad date range')
+      }
+      return json(res, 200, await listEvents(requireUser(req), ids ? ids.split(',') : null, { from, to })), true
     }
     if (path === '/api/inbox' && read) return json(res, 200, await inbox(requireUser(req), url.searchParams.has('fresh'))), true
 
