@@ -9,7 +9,7 @@ import { POTIONS, spell, type PotionId } from './data'
 import { kitOf } from './render'
 import { IMPACT } from './rig'
 import { weaponSound, type GladiatorSound } from './sound'
-import { Bar } from './ui'
+import { Bar, Portrait } from './ui'
 
 // One bout in the arena. The rules engine decides each turn at once; this screen then plays the
 // events back on a timeline: swings, impacts, blood, numbers and crowd noise, bars updating when
@@ -34,6 +34,19 @@ type Props = {
 
 type Phase = 'intro' | 'player' | 'busy' | 'mercy' | 'over'
 type Hud = { snaps: [Snap, Snap]; phase: Phase; log: string[]; turn: 0 | 1 }
+
+/** A painted icon for an action, or its emoji until the picture has loaded (or if it can't). */
+function ActIcon({ id, glyph, flip }: { id: string; glyph: string; flip?: boolean }) {
+  const [state, setState] = useState<'loading' | 'ok' | 'missing'>('loading')
+  return (
+    <span className="gl-act-icon">
+      {state !== 'ok' && <i>{glyph}</i>}
+      {state !== 'missing' && (
+        <img src={`/games/gladiator/icons/${id}.webp`} alt="" draggable={false} onLoad={() => setState('ok')} onError={() => setState('missing')} style={state === 'ok' ? (flip ? { transform: 'scaleX(-1)' } : undefined) : { display: 'none' }} />
+      )}
+    </span>
+  )
+}
 
 const POTION_KEYS: Record<PotionId, string> = { health: 'h', stamina: 'j', mana: 'k' }
 const SPELL_KEYS = ['6', '7', '8', '9', '0', '-']
@@ -498,40 +511,67 @@ export function FightScreen(p: Props) {
   const fighterHud = (i: 0 | 1) => {
     const f = fight.f[i]
     const s = hud.snaps[i]
+    const turn = hud.turn === i && hud.phase !== 'intro' && hud.phase !== 'over'
     return (
-      <div className={`gl-hud-side ${i ? 'is-right' : ''} ${hud.turn === i && hud.phase !== 'intro' ? 'is-turn' : ''}`}>
-        <div className="gl-hud-name">
-          <strong>{f.g.name}</strong>
-          <span>Lv {f.g.level}</span>
+      <div className={`gl-plate ${i ? 'is-right' : ''} ${turn ? 'is-turn' : ''}`}>
+        <div className="gl-plate-face">
+          <Portrait look={f.g.look} gear={f.g.gear} focus={232} zoom={3.2} face={i ? -1 : 1} still />
         </div>
-        <Bar kind="hp" value={s.hp} max={f.d.maxHp} label={`${Math.ceil(s.hp)} / ${f.d.maxHp}`} />
-        <Bar kind="sta" value={s.sta} max={f.d.maxSta} label={`${Math.floor(s.sta)}`} />
-        {f.d.maxMana > 8 && f.g.spells.length > 0 && <Bar kind="mana" value={s.mana} max={f.d.maxMana} label={`${Math.floor(s.mana)}`} />}
-        <div className="gl-favour" title="Crowd favour: at full, a frenzy">
-          <Bar kind="favour" value={s.favour} max={100} />
-        </div>
-        <div className="gl-statuses">
-          {s.statuses.map((id) => (
-            <span key={id} className={`gl-status is-${id}`}>
-              {STATUS_NAMES[id]}
-            </span>
-          ))}
+        <div className="gl-plate-body">
+          <div className="gl-plate-name">
+            <strong>{f.g.name}</strong>
+            <span>Lv {f.g.level}</span>
+          </div>
+          <Bar kind="hp" value={s.hp} max={f.d.maxHp} label={`${Math.ceil(s.hp)} / ${f.d.maxHp}`} />
+          <div className="gl-plate-thin">
+            <Bar kind="sta" value={s.sta} max={f.d.maxSta} />
+            {f.d.maxMana > 8 && f.g.spells.length > 0 && <Bar kind="mana" value={s.mana} max={f.d.maxMana} />}
+          </div>
+          <div className="gl-favour" title="Crowd favour: at full, a frenzy">
+            <span>Crowd</span>
+            <Bar kind="favour" value={s.favour} max={100} />
+          </div>
+          {s.statuses.length > 0 && (
+            <div className="gl-statuses">
+              {s.statuses.map((id) => (
+                <span key={id} className={`gl-status is-${id}`}>
+                  {STATUS_NAMES[id]}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     )
   }
 
-  const attackBtn = (type: AttackType, key: string) => {
-    const ok = enabled(type)
-    const chance = Math.round(hitChance(fight, 0, type) * 100)
-    return (
-      <button className={`gl-act is-${type}`} disabled={!ok} onClick={() => doAction({ kind: 'attack', type })} title={why?.[type] ?? ATTACKS[type].text}>
-        <strong>{ATTACKS[type].name}</strong>
-        <small>{inReach(fight, 0) ? `${chance}% · ${attackCost(me, type)} sta` : 'out of reach'}</small>
-        <kbd>{key}</kbd>
-      </button>
-    )
+  const actBtn = (o: { id: string; icon: string; glyph: string; name: string; sub: string; key?: string; on: boolean; run: () => void; tip?: string; badge?: string; cls?: string; flip?: boolean }) => (
+    <button className={`gl-act ${o.cls ?? ''}`} disabled={!o.on} onClick={o.run} title={o.tip}>
+      <ActIcon id={o.icon} glyph={o.glyph} flip={o.flip} />
+      <strong>{o.name}</strong>
+      <small>{o.sub}</small>
+      {o.badge && <b className="gl-act-badge">{o.badge}</b>}
+      {o.key && <kbd>{o.key}</kbd>}
+    </button>
+  )
+  const attackBtn = (type: AttackType, key: string, icon: string, glyph: string) => {
+    const reach = inReach(fight, 0)
+    return actBtn({
+      id: type,
+      icon,
+      glyph,
+      name: ATTACKS[type].name,
+      sub: reach ? `${attackCost(me, type)} stamina` : 'out of reach',
+      badge: reach ? `${Math.round(hitChance(fight, 0, type) * 100)}%` : undefined,
+      key,
+      on: enabled(type),
+      run: () => doAction({ kind: 'attack', type }),
+      tip: why?.[type] ?? ATTACKS[type].text,
+      cls: `is-${type}`,
+    })
   }
+  const potionsLeft = POTIONS.reduce((a, x) => a + me.potions[x.id], 0)
+  const status = hud.phase === 'player' ? 'Your move' : hud.phase === 'busy' && hud.turn === 1 ? `${p.foe.name} is moving` : hud.phase === 'over' || hud.phase === 'mercy' ? 'The bout is over' : hud.phase === 'intro' ? 'Get ready' : '…'
 
   return (
     <div className="gl-fight">
@@ -539,8 +579,18 @@ export function FightScreen(p: Props) {
         <canvas ref={canvas} className="gl-canvas" />
         <div className="gl-hud">
           {fighterHud(0)}
-          <div className="gl-hud-mid">{p.label}</div>
+          <div className="gl-banner">
+            <span>{p.label}</span>
+            <em className={hud.phase === 'player' ? 'is-you' : ''}>{status}</em>
+          </div>
           {fighterHud(1)}
+        </div>
+        <div className="gl-log" aria-live="polite">
+          {hud.log.slice(-2).map((l, i, a) => (
+            <span key={hud.log.length - a.length + i} className={i === a.length - 1 ? 'is-new' : ''}>
+              {l}
+            </span>
+          ))}
         </div>
         {hud.phase === 'intro' && (
           <div className="gl-intro">
@@ -574,54 +624,26 @@ export function FightScreen(p: Props) {
           </div>
         )}
       </div>
-      <div className="gl-log" aria-live="polite">
-        {hud.log.slice(-2).map((l, i, a) => (
-          <span key={hud.log.length - a.length + i} className={i === a.length - 1 ? 'is-new' : ''}>
-            {l}
-          </span>
-        ))}
-      </div>
-      <div className={`gl-actions ${hud.phase === 'player' ? '' : 'is-waiting'}`}>
-        <button className="gl-act is-move" disabled={!enabled('retreat')} onClick={() => doAction({ kind: 'retreat' })} title={why?.retreat ?? 'Step back'}>
-          <strong>◀ Back</strong>
-          <small>
-            {Math.round(me.d.move * RETREAT)} · {retreatCost(me)} sta
-          </small>
-          <kbd>←</kbd>
-        </button>
-        <button className="gl-act is-move" disabled={!enabled('advance')} onClick={() => doAction({ kind: 'advance' })} title={why?.advance ?? 'Close in'}>
-          <strong>Advance ▶</strong>
-          <small>{Math.round(me.d.move)} · 3 sta</small>
-          <kbd>→</kbd>
-        </button>
-        {attackBtn('quick', '1')}
-        {attackBtn('normal', '2')}
-        {attackBtn('power', '3')}
-        <button className="gl-act is-taunt" disabled={!enabled('taunt')} onClick={() => doAction({ kind: 'taunt' })} title={why?.taunt ?? 'Win the crowd, rattle your foe'}>
-          <strong>Taunt</strong>
-          <small>crowd · 5 sta</small>
-          <kbd>T</kbd>
-        </button>
-        <button className="gl-act is-rest" disabled={!enabled('rest')} onClick={() => doAction({ kind: 'rest' })} title="Recover stamina; the crowd hates it">
-          <strong>Rest</strong>
-          <small>+stamina</small>
-          <kbd>R</kbd>
-        </button>
-        {me.g.spells.length > 0 && (
-          <button className={`gl-act is-magic ${menu === 'spells' ? 'is-open' : ''}`} disabled={hud.phase !== 'player'} onClick={() => setMenu(menu === 'spells' ? null : 'spells')}>
-            <strong>Magic</strong>
-            <small>{Math.floor(hud.snaps[0].mana)} mana</small>
-          </button>
-        )}
-        <button className={`gl-act is-potion ${menu === 'potions' ? 'is-open' : ''}`} disabled={hud.phase !== 'player' || POTIONS.every((x) => me.potions[x.id] <= 0)} onClick={() => setMenu(menu === 'potions' ? null : 'potions')}>
-          <strong>Potions</strong>
-          <small>{POTIONS.reduce((a, x) => a + me.potions[x.id], 0)} left</small>
-        </button>
-        <button className="gl-act is-yield" disabled={hud.phase !== 'player'} onClick={yieldFight} title={p.hardcore ? 'Ask the crowd for mercy' : 'Give up this fight'}>
-          <strong>Yield</strong>
-          <small>{p.hardcore ? 'beg mercy' : 'give up'}</small>
-        </button>
-      </div>
+      <div className={`gl-dock ${hud.phase === 'player' ? '' : 'is-waiting'}`}>
+        <div className="gl-dock-group">
+          {actBtn({ id: 'retreat', icon: 'act-step', glyph: '◀', flip: true, name: 'Back', sub: `${Math.round(me.d.move * RETREAT)} · ${retreatCost(me)} sta`, key: '←', on: enabled('retreat'), run: () => doAction({ kind: 'retreat' }), tip: why?.retreat ?? 'Step back' })}
+          {actBtn({ id: 'advance', icon: 'act-step', glyph: '▶', name: 'Advance', sub: `${Math.round(me.d.move)} · 3 sta`, key: '→', on: enabled('advance'), run: () => doAction({ kind: 'advance' }), tip: why?.advance ?? 'Close in' })}
+        </div>
+        <div className="gl-dock-group">
+          {attackBtn('quick', '1', 'act-quick', '🗡️')}
+          {attackBtn('normal', '2', 'act-strike', '⚔️')}
+          {attackBtn('power', '3', 'act-power', '🔨')}
+        </div>
+        <div className="gl-dock-group">
+          {actBtn({ id: 'taunt', icon: 'act-taunt', glyph: '🎭', name: 'Taunt', sub: 'crowd · 5 sta', key: 'T', on: enabled('taunt'), run: () => doAction({ kind: 'taunt' }), tip: why?.taunt ?? 'Win the crowd, rattle your foe', cls: 'is-taunt' })}
+          {actBtn({ id: 'rest', icon: 'act-rest', glyph: '💧', name: 'Rest', sub: '+stamina', key: 'R', on: enabled('rest'), run: () => doAction({ kind: 'rest' }), tip: 'Recover stamina; the crowd hates it' })}
+          {me.g.spells.length > 0 &&
+            actBtn({ id: 'magic', icon: 'mage', glyph: '✨', name: 'Magic', sub: `${Math.floor(hud.snaps[0].mana)} mana`, on: hud.phase === 'player', run: () => setMenu(menu === 'spells' ? null : 'spells'), cls: `is-magic ${menu === 'spells' ? 'is-open' : ''}` })}
+          {actBtn({ id: 'potions', icon: 'apothecary', glyph: '⚗️', name: 'Potions', sub: `${potionsLeft} left`, on: hud.phase === 'player' && potionsLeft > 0, run: () => setMenu(menu === 'potions' ? null : 'potions'), cls: menu === 'potions' ? 'is-open' : '' })}
+        </div>
+        <div className="gl-dock-group is-end">
+          {actBtn({ id: 'yield', icon: 'act-yield', glyph: '🏳️', name: 'Yield', sub: p.hardcore ? 'beg mercy' : 'give up', on: hud.phase === 'player', run: yieldFight, tip: p.hardcore ? 'Ask the crowd for mercy' : 'Give up this fight', cls: 'is-yield' })}
+        </div>
       {menu === 'spells' && (
         <div className="gl-submenu">
           {me.g.spells.map((id, i) => {
@@ -653,6 +675,7 @@ export function FightScreen(p: Props) {
           })}
         </div>
       )}
+      </div>
     </div>
   )
 }

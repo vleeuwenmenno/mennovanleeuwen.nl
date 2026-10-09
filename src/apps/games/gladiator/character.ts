@@ -149,7 +149,7 @@ const ARCH_WEAPONS: Record<Archetype, WeaponKind[]> = {
   duelist: ['gladius', 'dagger', 'gladius'],
   tank: ['mace', 'gladius'],
   showman: ['trident', 'gladius'],
-  mage: ['dagger', 'spear'],
+  mage: ['staff', 'wand', 'scepter'],
   spearman: ['spear', 'trident'],
 }
 const ARCH_PERKS: Record<Archetype, PerkId[]> = {
@@ -226,7 +226,7 @@ export function makeOpponent(level: number, archetype: Archetype, seed: number, 
     if (it) g.gear[slot] = it.id
   }
 
-  if (archetype === 'mage') g.spells = SPELLS.filter((s) => s.level <= level).map((s) => s.id)
+  if (archetype === 'mage') g.spells = SPELLS.filter((s) => s.level <= Math.max(level, 2)).map((s) => s.id)
   else if (level >= 6 && r() < 0.25) g.spells = ['fireball']
   const prefs = ARCH_PERKS[archetype]
   g.perks = prefs.slice(0, PERK_LEVELS.filter((l) => l <= level).length)
@@ -246,7 +246,7 @@ export function newGladiator(name: string, look: Look, stats: Stats): Gladiator 
     points: 0,
     gear: { weapon: 'weapon-gladius-0', feet: 'feet-0' },
     // A gift for magic shows early: a born caster starts with a spark of fire.
-    spells: stats.mag >= 8 ? ['fireball'] : [],
+    spells: stats.mag >= BASE_STAT + 3 ? ['fireball'] : [],
     perks: [],
     potions: { health: 1, stamina: 0, mana: 0 },
   }

@@ -93,6 +93,7 @@ export class ArenaScene {
   timeScale = 1
   hitstop = 0
   cam = { x: VIEW_W / 2, z: 1 }
+  private framed = false
   front = 0
   /** Extra zoom for previews outside the fight. */
   fixedCam: { x: number; z: number } | null = null
@@ -243,7 +244,9 @@ export class ArenaScene {
   draw(ctx: CanvasRenderingContext2D, width: number, height: number, now: number) {
     const [a, b] = this.actors
     // Scale by height, so a tall phone canvas shows less width rather than a thin strip.
-    const k = height / VIEW_H
+    // Fill the whole canvas: scale to its height, or to the backdrop's width when the window is
+    // wider than the painting, cropping a little sky rather than showing bars.
+    const k = Math.max(height / VIEW_H, width / BG_W)
     const visible = width / k
     let target = { x: VIEW_W / 2, z: 1 }
     if (this.fixedCam) target = this.fixedCam
@@ -252,7 +255,12 @@ export class ArenaScene {
       const lean = 1.32 - (d - 170) / 1100
       // Never so close that either fighter leaves the frame.
       const fit = visible / (d + 340)
-      target = { x: (a.x + b.x) / 2, z: Math.max(0.8, Math.min(1.32, Math.max(1, lean), fit)) }
+      target = { x: (a.x + b.x) / 2, z: Math.max(0.55, Math.min(1.32, Math.max(1, lean), fit)) }
+    }
+    if (!this.framed) {
+      // The first frame starts already framed; after that the camera eases.
+      this.cam = { ...target }
+      this.framed = true
     }
     this.cam.z += (target.z - this.cam.z) * 0.06
     this.cam.x += (target.x - this.cam.x) * 0.08
@@ -261,17 +269,29 @@ export class ArenaScene {
     const cx = Math.max(BG_X + half, Math.min(BG_X + BG_W - half, this.cam.x))
     const sx = this.shake ? rand(-this.shake, this.shake) : 0
     const sy = this.shake ? rand(-this.shake, this.shake) : 0
-    const groundScreen = GROUND + (z - 1) * 50
+    // The sand sits at the same share of the canvas height however it's shaped.
+    // On a tall (phone) canvas the sand sits a bit higher, keeping the fighters off the bottom edge.
+    const tall = height > width * 1.1
+    const groundPx = height * (tall ? 0.78 : GROUND / VIEW_H) + (z - 1) * 50 * k
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.fillStyle = '#2a1a0e'
     ctx.fillRect(0, 0, width, height)
-    ctx.setTransform(k * z, 0, 0, k * z, width / 2 + k * (sx - cx * z), k * (groundScreen - GROUND * z + sy))
+    ctx.setTransform(k * z, 0, 0, k * z, width / 2 + k * (sx - cx * z), groundPx + k * (sy - GROUND * z))
 
     // Backdrop.
     if (this.bg) {
       const h = (BG_W * this.bg.height) / this.bg.width
       const top = 470 - (FLOOR_LINE[this.bgName] ?? 0.62) * h
       ctx.drawImage(this.bg, BG_X, top, BG_W, h)
+      // Zoomed out on a tall screen the view can reach past the painting: continue it with mirrored
+      // copies above (more sky) and below (more sand), so the edges never show.
+      for (const edge of [top, top + h]) {
+        ctx.save()
+        ctx.translate(0, 2 * edge)
+        ctx.scale(1, -1)
+        ctx.drawImage(this.bg, BG_X, top, BG_W, h)
+        ctx.restore()
+      }
     } else {
       const g = ctx.createLinearGradient(0, 0, 0, VIEW_H)
       g.addColorStop(0, '#7ab4e0')

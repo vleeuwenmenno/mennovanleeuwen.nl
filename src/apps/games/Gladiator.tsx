@@ -7,6 +7,8 @@ import type { Gladiator as G } from './gladiator/character'
 import { league, LEAGUES, type Difficulty, type LeagueId } from './gladiator/data'
 import { FightScreen, type FightResultView } from './gladiator/Fight'
 import { CreatorScreen, HallScreen, TitleScreen } from './gladiator/Menus'
+import type { AmbiencePlace } from './gladiator/ambience'
+import { gladiatorStore } from './gladiator/saves'
 import { GladiatorSound } from './gladiator/sound'
 import { Apothecary, ArenaBoard, Bracket, GearShop, Hub, MageShop, PLACE_BG, Sheet, TopBar, Training, type Place } from './gladiator/Town'
 import { Gold } from './gladiator/ui'
@@ -23,6 +25,17 @@ type Screen =
   | { s: 'town'; place: Place }
   | { s: 'fight'; foe: Foe; kind: FightKind; key: number }
 
+const AMBIENCE: Record<Place, AmbiencePlace> = {
+  hub: 'town',
+  arena: 'arena',
+  tournament: 'arena',
+  forge: 'forge',
+  armoury: 'armoury',
+  mage: 'mage',
+  apothecary: 'apothecary',
+  training: 'training',
+  gladiator: 'training',
+}
 const SKILL: Record<LeagueId, number> = { pits: 0.45, city: 0.65, colosseum: 0.85 }
 const ROUND_NAMES = ['quarter-final', 'semi-final', 'final']
 
@@ -52,14 +65,40 @@ export function Gladiator({ win }: { win: WinState }) {
   const [audio, setAudio] = useState({ muted: snd.muted, music: snd.musicOn })
 
   useEffect(() => () => snd.dispose(), [snd])
+  // Saves arriving from another device (signed in): refresh the slots, and if the run being
+  // played was continued elsewhere more recently, pick it up, unless a bout is under way.
+  const screenRef = useRef(screen)
+  screenRef.current = screen
+  const slotRef = useRef(slot)
+  slotRef.current = slot
+  useEffect(
+    () =>
+      gladiatorStore.onRemote((s) => {
+        setStore(readStore())
+        const cur = saveRef.current
+        const theirs = s.slots[slotRef.current]
+        if (!cur || !theirs || screenRef.current.s === 'fight') return
+        if ((theirs.updated ?? 0) > (cur.updated ?? 0)) {
+          saveRef.current = theirs
+          setSave(theirs)
+        }
+      }),
+    [],
+  )
   useEffect(() => {
     if (screen.s !== 'fight') snd.startMusic('town')
   }, [screen.s, snd])
+  // Each place has its own background sound, crossfaded as you walk between them.
+  const place = screen.s === 'town' ? screen.place : null
+  useEffect(() => {
+    snd.setAmbience(screen.s === 'fight' ? null : place ? AMBIENCE[place] : screen.s === 'create' ? 'training' : 'title')
+  }, [screen.s, place, snd])
 
   const commit = (next: Save) => {
-    saveRef.current = next
-    setSave(next)
-    saveSlot(slot, next)
+    const stamped = { ...next, updated: Date.now() }
+    saveRef.current = stamped
+    setSave(stamped)
+    saveSlot(slot, stamped)
   }
   const update = (fn: (s: Save) => Save) => commit(fn(saveRef.current!))
   const go = (place: Place) => {
@@ -126,6 +165,7 @@ export function Gladiator({ win }: { win: WinState }) {
         slots={store.slots}
         hall={store.hall}
         onHall={() => setScreen({ s: 'hall' })}
+        onImported={() => setStore(readStore())}
         onNew={(i) => (snd.wake(), setScreen({ s: 'create', slot: i }))}
         onLoad={(i) => {
           snd.wake()
@@ -222,7 +262,7 @@ export function Gladiator({ win }: { win: WinState }) {
         inner = <Apothecary save={save} update={update} onBack={back} sound={sfx} />
         break
       case 'training':
-        inner = <Training save={save} update={update} onBack={back} sound={sfx} />
+        inner = <Training save={save} update={update} onBack={back} onSheet={() => go('gladiator')} sound={sfx} />
         break
       case 'gladiator':
         inner = <Sheet save={save} update={update} onBack={back} sound={sfx} />

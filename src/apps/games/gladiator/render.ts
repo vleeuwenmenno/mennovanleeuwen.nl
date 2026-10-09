@@ -46,9 +46,9 @@ export function kitOf(look: Look, gear: Partial<Record<Slot, string>>): Kit {
 }
 
 export const weaponKind = (kit: Kit): WeaponKind | null => kit.gear.weapon?.weapon ?? null
-const twoHanded = (k: WeaponKind | null) => k === 'greatsword' || k === 'warhammer' || k === 'trident'
+const twoHanded = (k: WeaponKind | null) => k === 'greatsword' || k === 'warhammer' || k === 'trident' || k === 'staff'
 /** Where along the weapon, behind the front hand, the back hand grips a two-handed weapon. */
-const SECOND_GRIP: Partial<Record<WeaponKind, number>> = { greatsword: 13, warhammer: 22, trident: 34 }
+const SECOND_GRIP: Partial<Record<WeaponKind, number>> = { greatsword: 13, warhammer: 22, trident: 34, staff: 30 }
 
 /** Solves the skeleton for a pose. Feet stay planted unless the pose floats free. */
 export function rig(p: Pose, kind: WeaponKind | null): Rigged {
@@ -938,7 +938,7 @@ function drawCape(ctx: CanvasRenderingContext2D, r: Rigged, tier: number, time: 
   }
 }
 
-function drawShield(ctx: CanvasRenderingContext2D, hand: P, foreAng: number, it: Item) {
+export function drawShield(ctx: CanvasRenderingContext2D, hand: P, foreAng: number, it: Item) {
   const m = MATERIALS[it.tier]
   ctx.save()
   ctx.translate(hand.x + 2, hand.y)
@@ -1004,6 +1004,8 @@ function drawShield(ctx: CanvasRenderingContext2D, hand: P, foreAng: number, it:
   ctx.restore()
 }
 
+const GEM_COLOURS = ['#8fd8ff', '#ff8a3a', '#7aff9a', '#b48cff', '#ffe07a', '#ff5ad0', '#6fd8ff']
+
 const WEAPON_METAL = [
   { base: '#9a7048', light: '#c09468', dark: '#6a4a2c' },
   { base: '#c0803a', light: '#efc07a', dark: '#7e4e1e' },
@@ -1052,6 +1054,21 @@ export function drawWeapon(ctx: CanvasRenderingContext2D, hand: P, ang: number, 
     ctx.beginPath()
     ctx.roundRect(-w / 2, y - 3, w, 6, 3)
     paint(ctx, it.tier >= 4 ? gold : mt.dark, 2)
+  }
+  // A casting gem in the tier's colour, glowing softly.
+  const gem = (x: number, y: number, r: number) => {
+    const c = GEM_COLOURS[it.tier]
+    ctx.save()
+    ctx.shadowColor = c
+    ctx.shadowBlur = 12
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    const g = ctx.createRadialGradient(x - r * 0.35, y - r * 0.35, r * 0.1, x, y, r)
+    g.addColorStop(0, '#ffffff')
+    g.addColorStop(0.35, c)
+    g.addColorStop(1, shade(c, -0.45))
+    paint(ctx, g, 1.6)
+    ctx.restore()
   }
   const pommel = (y: number) => {
     ctx.beginPath()
@@ -1139,6 +1156,53 @@ export function drawWeapon(ctx: CanvasRenderingContext2D, hand: P, ang: number, 
         paint(ctx, mt.base, 1.6)
       }
       break
+    case 'staff': {
+      // A long shaft with claws holding a glowing gem.
+      haft(42, -98, 4.6)
+      ctx.beginPath()
+      ctx.roundRect(-4, -100, 8, 6, 2)
+      paint(ctx, mt.base, 1.6)
+      for (const s of [-1, 1]) {
+        ctx.beginPath()
+        ctx.moveTo(s * 2, -100)
+        ctx.quadraticCurveTo(s * 13, -108, s * 6, -122)
+        ctx.lineWidth = 5
+        ctx.strokeStyle = OUTLINE
+        ctx.stroke()
+        ctx.lineWidth = 3
+        ctx.strokeStyle = mt.base
+        ctx.stroke()
+      }
+      gem(0, -111, 7.5)
+      break
+    }
+    case 'wand':
+      // A slim rod tipped with a small gem.
+      ctx.beginPath()
+      ctx.moveTo(-2.2, 10)
+      ctx.lineTo(-1.4, -34)
+      ctx.lineTo(1.4, -34)
+      ctx.lineTo(2.2, 10)
+      ctx.closePath()
+      paint(ctx, it.tier === 5 ? '#2a2430' : '#5a3a20', 1.8)
+      ctx.beginPath()
+      ctx.roundRect(-3, -2, 6, 8, 2)
+      paint(ctx, mt.base, 1.4)
+      gem(0, -38, 4.6)
+      break
+    case 'scepter':
+      // A short rod with a flanged metal head around a gem: half mace, half sceptre.
+      haft(13, -40, 4.4)
+      ctx.beginPath()
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2
+        const k = i % 2 ? 7 : 11
+        ctx.lineTo(Math.cos(a) * k, -48 + Math.sin(a) * k)
+      }
+      ctx.closePath()
+      paint(ctx, metal(ctx, MATERIALS[Math.min(6, it.tier)], -10, -58, 10, -38), 2)
+      gem(0, -48, 5)
+      break
   }
   if (it.tier === 6) {
     ctx.shadowColor = '#6fd8ff'
@@ -1168,7 +1232,7 @@ function drawPotion(ctx: CanvasRenderingContext2D, hand: P, colour: string) {
 /** Where the weapon's business end is, for sparks and spell origins. */
 export function tipOf(kit: Kit, pose: Pose): P {
   const r = rig(pose, weaponKind(kit))
-  const len = { dagger: 34, gladius: 56, axe: 70, mace: 54, spear: 128, trident: 118, greatsword: 96, warhammer: 76 }[weaponKind(kit) ?? 'dagger'] ?? 10
+  const len = { dagger: 34, gladius: 56, axe: 70, mace: 54, spear: 128, trident: 118, greatsword: 96, warhammer: 76, staff: 111, wand: 38, scepter: 48 }[weaponKind(kit) ?? 'dagger'] ?? 10
   return add(r.handF, dir(r.weaponAng), kit.gear.weapon ? len : 4)
 }
 

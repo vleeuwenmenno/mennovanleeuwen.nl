@@ -1,62 +1,180 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { signIn, useAccount } from '../../../os/account'
+import { pullAll, useSyncStatus } from '../../../os/synced'
 import type { Save, HallEntry, Mode } from './career'
 import { randomLook, randomName, type Gladiator, newGladiator } from './character'
 import { BASE_STAT, BEARDS, CREATION_POINTS, DIFFICULTIES, DIFFICULTY_IDS, emptyStats, HAIR_COLOURS, HAIR_STYLES, SKIN_TONES, STATS, TUNIC_COLOURS, type Difficulty, type Look, type StatKey, type Stats } from './data'
-import { Portrait } from './ui'
+import { applyImport, exportSaves, parseImport, type GladiatorStore } from './saves'
+import { Modal, Portrait } from './ui'
 
 // The title screen with its save slots, the character creator and the Hall of Fame.
 
-export function TitleScreen({ slots, hall, onLoad, onNew, onDelete, onHall }: { slots: (Save | null)[]; hall: HallEntry[]; onLoad: (i: number) => void; onNew: (i: number) => void; onDelete: (i: number) => void; onHall: () => void }) {
+/** Where the saves live: this browser only, or your account, with the last sync and a nudge. */
+function SyncPanel() {
+  const account = useAccount()
+  const sync = useSyncStatus()
+  if (account.status === 'loading') return null
+  if (account.status !== 'user')
+    return (
+      <div className="gl-sync">
+        <span className="gl-sync-dot is-local" />
+        <span>Saves stay in this browser.</span>
+        {account.status === 'anon' && (
+          <button className="gl-btn is-small" onClick={signIn}>
+            Sign in with GitHub to play anywhere
+          </button>
+        )}
+      </div>
+    )
+  const when = sync.at ? new Date(sync.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null
+  const text = sync.state === 'syncing' ? 'Syncing…' : sync.state === 'error' ? `Sync failed: ${sync.error ?? 'unknown error'}` : when ? `Synced at ${when}` : 'Synced'
+  return (
+    <div className="gl-sync">
+      {account.user?.avatar ? <img className="gl-sync-avatar" src={account.user.avatar} alt="" /> : <span className={`gl-sync-dot is-${sync.state}`} />}
+      <span>
+        Saves and high scores sync to <b>{account.user?.login}</b>. <span className={`gl-sync-state is-${sync.state}`}>{text}</span>
+      </span>
+      <button className="gl-btn is-small" disabled={sync.state === 'syncing'} onClick={() => void pullAll()}>
+        Sync now
+      </button>
+    </div>
+  )
+}
+
+export function TitleScreen({ slots, hall, onLoad, onNew, onDelete, onHall, onImported }: { slots: (Save | null)[]; hall: HallEntry[]; onLoad: (i: number) => void; onNew: (i: number) => void; onDelete: (i: number) => void; onHall: () => void; onImported: () => void }) {
   const [confirm, setConfirm] = useState<number | null>(null)
+  const [incoming, setIncoming] = useState<GladiatorStore | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const file = useRef<HTMLInputElement>(null)
+  const pick = async (f: File | undefined) => {
+    if (!f) return
+    try {
+      setIncoming(parseImport(await f.text()))
+      setError(null)
+    } catch (e) {
+      setError((e as Error).message)
+    }
+    if (file.current) file.current.value = ''
+  }
+  const finish = (how: 'merge' | 'replace') => {
+    if (!incoming) return
+    applyImport(incoming, how)
+    setIncoming(null)
+    onImported()
+  }
+  const any = slots.some(Boolean) || hall.length > 0
   return (
     <div className="gl-title">
       <h1 className="gl-logo">
         <span>Gladiator</span>
         <small>Swords · Sandals · Glory</small>
       </h1>
-      <div className="gl-slots">
-        {slots.map((s, i) => (
-          <div key={i} className={`gl-panel gl-slot ${s?.dead ? 'is-dead' : ''}`}>
-            {s ? (
-              <>
-                <Portrait look={s.g.look} gear={s.g.gear} zoom={2.2} still className="gl-slot-face" />
-                <div className="gl-slot-info">
-                  <strong>{s.g.name}</strong>
-                  <span>
-                    Level {s.g.level} · {s.record.wins}–{s.record.losses}
-                    {s.mode === 'hardcore' ? ' · Hardcore' : ''}
+      <SyncPanel />
+      <div className="gl-slot-cards">
+        {slots.map((s, i) =>
+          s ? (
+            <div key={i} className={`gl-card gl-slot-card ${s.dead ? 'is-dead' : ''}`}>
+              <span className="gl-card-ribbon">
+                {DIFFICULTIES[s.difficulty ?? 'normal'].name}
+                {s.mode === 'hardcore' ? ' · Hardcore' : ''}
+              </span>
+              <div className="gl-card-art">
+                <Portrait look={s.g.look} gear={s.g.gear} still={!!s.dead} />
+              </div>
+              <div className="gl-card-body">
+                <strong>{s.g.name}</strong>
+                <span className="gl-muted">{s.dead ? 'Fell in the arena' : s.g.title ?? 'Gladiator'}</span>
+                <div className="gl-chips">
+                  <span className="gl-chip">Level {s.g.level}</span>
+                  <span className="gl-chip">
+                    {s.record.wins}–{s.record.losses}
                   </span>
-                  <span className="gl-muted">{s.dead ? 'Fell in the arena' : s.g.title ?? 'Gladiator'}</span>
+                  <span className="gl-chip">★ {s.fame}</span>
                 </div>
-                <div className="gl-slot-btns">
-                  {!s.dead && (
-                    <button className="gl-btn is-primary" onClick={() => onLoad(i)}>
-                      Continue
-                    </button>
-                  )}
-                  {confirm === i ? (
+              </div>
+              <div className="gl-card-foot">
+                {confirm === i ? (
+                  <>
                     <button className="gl-btn is-danger" onClick={() => (onDelete(i), setConfirm(null))}>
-                      Really delete?
+                      Delete for good
                     </button>
-                  ) : (
-                    <button className="gl-btn is-quiet" onClick={() => setConfirm(i)}>
-                      Delete
+                    <button className="gl-btn is-quiet" onClick={() => setConfirm(null)}>
+                      Keep
                     </button>
-                  )}
-                </div>
-              </>
-            ) : (
-              <button className="gl-slot-new" onClick={() => onNew(i)}>
-                <strong>+ New gladiator</strong>
-                <span className="gl-muted">Empty slot {i + 1}</span>
-              </button>
-            )}
-          </div>
-        ))}
+                  </>
+                ) : (
+                  <>
+                    <button className="gl-btn is-quiet gl-slot-delete" onClick={() => setConfirm(i)} title="Delete this gladiator" aria-label={`Delete ${s.g.name}`}>
+                      🗑
+                    </button>
+                    {!s.dead && (
+                      <button className="gl-btn is-primary" onClick={() => onLoad(i)}>
+                        Continue
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          ) : (
+            <button key={i} className="gl-card gl-slot-empty" onClick={() => onNew(i)}>
+              <span className="gl-slot-plus">+</span>
+              <strong>New gladiator</strong>
+              <span className="gl-muted">Slot {i + 1} is free</span>
+            </button>
+          ),
+        )}
       </div>
-      <button className="gl-btn" onClick={onHall} disabled={!hall.length}>
-        Hall of Fame{hall.length ? ` (${hall.length})` : ''}
-      </button>
+      <div className="gl-title-actions">
+        <button className="gl-btn" onClick={onHall} disabled={!hall.length}>
+          🏛 Hall of Fame{hall.length ? ` (${hall.length})` : ''}
+        </button>
+        <button className="gl-btn" onClick={exportSaves} disabled={!any} title="Download every gladiator and the Hall of Fame as a file">
+          ⬇ Export saves
+        </button>
+        <button className="gl-btn" onClick={() => file.current?.click()} title="Load gladiators from an exported file">
+          ⬆ Import saves
+        </button>
+        <input ref={file} type="file" accept="application/json,.json" hidden onChange={(e) => void pick(e.target.files?.[0])} />
+      </div>
+      {error && (
+        <Modal onClose={() => setError(null)}>
+          <h2>Can’t import that</h2>
+          <p>{error}</p>
+          <div className="gl-modal-btns">
+            <button className="gl-btn is-primary" onClick={() => setError(null)}>
+              OK
+            </button>
+          </div>
+        </Modal>
+      )}
+      {incoming && (
+        <Modal onClose={() => setIncoming(null)}>
+          <h2>Import saves</h2>
+          <p>
+            This file holds{' '}
+            {incoming.slots.filter(Boolean).length
+              ? incoming.slots
+                  .filter((x): x is Save => !!x)
+                  .map((x) => `${x.g.name} (level ${x.g.level})`)
+                  .join(', ')
+              : 'no saved runs'}
+            {incoming.hall.length ? ` and ${incoming.hall.length} Hall of Fame ${incoming.hall.length === 1 ? 'entry' : 'entries'}` : ''}.
+          </p>
+          <p className="gl-muted">Merge keeps the most recently played run in each slot and everyone in the Hall of Fame. Replace makes your saves exactly the file.</p>
+          <div className="gl-modal-btns">
+            <button className="gl-btn is-quiet" onClick={() => setIncoming(null)}>
+              Cancel
+            </button>
+            <button className="gl-btn is-danger" onClick={() => finish('replace')}>
+              Replace all
+            </button>
+            <button className="gl-btn is-primary" onClick={() => finish('merge')}>
+              Merge
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
@@ -91,11 +209,11 @@ export function HallScreen({ hall, onBack }: { hall: HallEntry[]; onBack: () => 
 }
 
 const PRESETS: { name: string; text: string; w: Partial<Stats> }[] = [
-  { name: 'Brute', text: 'Hits like a cart', w: { str: 4, vit: 2, end: 2, atk: 1 } },
-  { name: 'Duelist', text: 'Fast and precise', w: { atk: 3, agi: 3, str: 2, vit: 1 } },
-  { name: 'Tank', text: 'A wall with legs', w: { def: 4, vit: 3, str: 1, end: 1 } },
-  { name: 'Showman', text: 'The crowd’s darling', w: { cha: 4, agi: 2, atk: 2, vit: 1 } },
-  { name: 'Battlemage', text: 'Steel and fire', w: { mag: 5, vit: 2, atk: 1, agi: 1 } },
+  { name: 'Brute', text: 'Hits like a cart', w: { str: 2, vit: 1, end: 1 } },
+  { name: 'Duelist', text: 'Fast and precise', w: { atk: 2, agi: 2 } },
+  { name: 'Tank', text: 'A wall with legs', w: { def: 2, vit: 2 } },
+  { name: 'Showman', text: 'The crowd’s darling', w: { cha: 2, agi: 1, atk: 1 } },
+  { name: 'Battlemage', text: 'Steel and fire', w: { mag: 3, vit: 1 } },
 ]
 
 function Swatches({ list, value, onPick, label }: { list: string[]; value: string; onPick: (c: string) => void; label: string }) {
@@ -132,7 +250,7 @@ export function DifficultyPicker({ value, onPick }: { value: Difficulty; onPick:
       </div>
       <span className="gl-muted">
         {DIFFICULTIES[value].text}
-        {DIFFICULTIES[value].reward !== 1 ? ` Rewards ×${DIFFICULTIES[value].reward}.` : ''}
+        {DIFFICULTIES[value].reward !== 1 ? ` Rewards ×${DIFFICULTIES[value].reward}, shop prices ×${DIFFICULTIES[value].prices}.` : ''}
       </span>
     </div>
   )

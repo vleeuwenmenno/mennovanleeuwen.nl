@@ -1,36 +1,36 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
+import { synced } from '../../os/synced'
 import { useWM, type WinState } from '../../os/wm'
 
-// Helpers shared by the games: per-browser high scores, keyboard input that only reaches the
-// focused window, and swipe gestures for phones.
+// Helpers shared by the games: high scores (in this browser, and on the server when signed in,
+// so they follow you between devices), keyboard input that only reaches the focused window, and
+// swipe gestures for phones.
 
-const KEY = 'mvlos.highscores.v1'
+/** Scores where less is better: times and shot counts. Everything else, more is better. */
+const LOWER_IS_BETTER = /^(minesweeper-|pool-solo-)/
+const better = (key: string, a: number, b: number) => (LOWER_IS_BETTER.test(key) ? Math.min(a, b) : Math.max(a, b))
 
-function readScores(): Record<string, number> {
-  try {
-    return JSON.parse(localStorage.getItem(KEY) ?? '{}')
-  } catch {
-    return {}
-  }
-}
+export const highScores = synced<Record<string, number>>('games:highscores', {}, {
+  legacyKey: 'mvlos.highscores.v1',
+  normalize: (v) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, number>) : {}),
+  // Two devices set records since they last synced: keep the better of each.
+  merge: (local, remote) => {
+    const out = { ...remote }
+    for (const [k, v] of Object.entries(local)) out[k] = k in out ? better(k, v, out[k]) : v
+    return out
+  },
+})
 
 /** High score for a game; `submit` keeps the best and reports whether it was beaten. */
 export function useHighScore(game: string, lowerIsBetter = false) {
-  const [best, setBest] = useState<number | null>(() => readScores()[game] ?? null)
-  useEffect(() => setBest(readScores()[game] ?? null), [game])
+  const all = highScores.use()
+  const best = all[game] ?? null
   const submit = useCallback((score: number) => {
-    const all = readScores()
-    const prev = all[game]
+    const prev = highScores.get()[game]
     if (!lowerIsBetter && score <= 0) return false
     const beaten = prev === undefined || (lowerIsBetter ? score < prev : score > prev)
     if (!beaten) return false
-    all[game] = score
-    try {
-      localStorage.setItem(KEY, JSON.stringify(all))
-    } catch {
-      /* best score just won't persist */
-    }
-    setBest(score)
+    highScores.set((s) => ({ ...s, [game]: score }))
     return true
   }, [game, lowerIsBetter])
   return { best, submit }

@@ -18,8 +18,8 @@ export const STAT_KEYS = STATS.map((s) => s.key)
 
 /** Every stat starts here; creation hands out extra points, each level a few more. */
 export const BASE_STAT = 3
-export const CREATION_POINTS = 9
-export const POINTS_PER_LEVEL = 4
+export const CREATION_POINTS = 4
+export const POINTS_PER_LEVEL = 3
 export const MAX_LEVEL = 30
 
 export const emptyStats = (v = 0): Stats => ({ str: v, atk: v, def: v, vit: v, agi: v, cha: v, end: v, mag: v })
@@ -88,7 +88,7 @@ export type ShieldShape = 'buckler' | 'parma' | 'scutum' | 'aspis'
 const SHIELD_SHAPES: ShieldShape[] = ['buckler', 'parma', 'scutum', 'scutum', 'aspis', 'scutum', 'aspis']
 const SHIELD_BLOCK = [0.07, 0.1, 0.14, 0.16, 0.18, 0.2, 0.23]
 
-export type WeaponKind = 'dagger' | 'gladius' | 'axe' | 'mace' | 'spear' | 'trident' | 'greatsword' | 'warhammer'
+export type WeaponKind = 'dagger' | 'gladius' | 'axe' | 'mace' | 'spear' | 'trident' | 'greatsword' | 'warhammer' | 'staff' | 'wand' | 'scepter'
 export type WeaponType = {
   kind: WeaponKind
   name: string
@@ -105,6 +105,9 @@ export type WeaponType = {
   strShare: number
   /** How much agility adds to damage: quick, light blades reward footwork. */
   finesse: number
+  /** Casters' weapons: spell power multiplier and mana cost multiplier. */
+  spell?: number
+  mana?: number
 }
 export const WEAPON_TYPES: WeaponType[] = [
   { kind: 'dagger', name: 'Pugio', reach: 28, dmg: [3, 5], acc: 8, crit: 0.08, cost: 0.7, stun: 0, twoHanded: false, thrust: true, strShare: 0.5, finesse: 0.6 },
@@ -115,6 +118,10 @@ export const WEAPON_TYPES: WeaponType[] = [
   { kind: 'trident', name: 'Trident', reach: 112, dmg: [5, 8], acc: 0, crit: 0.05, cost: 1.05, stun: 0, twoHanded: true, thrust: true, strShare: 1, finesse: 0.2 },
   { kind: 'greatsword', name: 'Greatsword', reach: 86, dmg: [8, 13], acc: -5, crit: 0.06, cost: 1.35, stun: 0.04, twoHanded: true, thrust: false, strShare: 1.4, finesse: 0 },
   { kind: 'warhammer', name: 'Warhammer', reach: 70, dmg: [9, 15], acc: -9, crit: 0.03, cost: 1.55, stun: 0.22, twoHanded: true, thrust: false, strShare: 1.6, finesse: 0 },
+  // For casters: weak in melee, but they feed the magic.
+  { kind: 'staff', name: 'Staff', reach: 92, dmg: [2, 4], acc: 0, crit: 0.02, cost: 0.9, stun: 0.03, twoHanded: true, thrust: true, strShare: 0.5, finesse: 0.1, spell: 1.25 },
+  { kind: 'wand', name: 'Wand', reach: 22, dmg: [1, 3], acc: 4, crit: 0.03, cost: 0.6, stun: 0, twoHanded: false, thrust: true, strShare: 0.3, finesse: 0.2, spell: 1.05, mana: 0.85 },
+  { kind: 'scepter', name: 'Scepter', reach: 44, dmg: [3, 6], acc: 2, crit: 0.03, cost: 0.95, stun: 0.08, twoHanded: false, thrust: false, strShare: 0.8, finesse: 0, spell: 1.15 },
 ]
 export const WEAPON_MATERIALS = ['Wooden', 'Bronze', 'Iron', 'Steel', 'Damascus', 'Imperial', 'Mythic']
 const WEAPON_SCALE = [1, 1.6, 2.3, 3.1, 4, 5, 6.2]
@@ -170,7 +177,7 @@ function makeWeapons(): Item[] {
   for (const w of WEAPON_TYPES) {
     for (let t = 0; t < WEAPON_MATERIALS.length; t++) {
       const k = WEAPON_SCALE[t]
-      const heavy = w.twoHanded ? 1.6 : w.strShare
+      const heavy = w.twoHanded && !w.spell ? 1.6 : w.strShare
       out.push({
         id: `weapon-${w.kind}-${t}`,
         slot: 'weapon',
@@ -181,7 +188,8 @@ function makeWeapons(): Item[] {
         armour: 0,
         weight: Math.round(heavy * (1 + t * 0.15) * 10) / 10,
         str: Math.round(t * 4.5 * w.strShare),
-        bonus: t >= 4 ? { atk: t - 3 } : {},
+        // Casters' weapons carry Magic (a staff the most); the best fighting steel sharpens aim.
+        bonus: w.spell ? { mag: t + (w.kind === 'staff' ? 2 : 1) } : t >= 4 ? { atk: t - 3 } : {},
         weapon: w.kind,
         dmg: [Math.round(w.dmg[0] * k), Math.round(w.dmg[1] * k)],
       })
@@ -310,12 +318,14 @@ export type DifficultyRules = {
   champion: number
   /** Gold and experience multiplier, so harder is worth it. */
   reward: number
+  /** Shop price multiplier: on harder settings good gear is a long-term goal, not a given. */
+  prices: number
 }
 export const DIFFICULTIES: Record<Difficulty, DifficultyRules> = {
-  easy: { name: 'Easy', text: 'Forgiving opponents with hand-me-down gear.', skill: -0.1, stats: 0.9, lag: 0.85, offers: [-1, 0, 1], field: [-2, 1], surgeon: 0.5, champion: -2, reward: 0.85 },
-  normal: { name: 'Normal', text: 'Opponents who fight back and keep up with your kit.', skill: 0.15, stats: 1, lag: 0.5, offers: [0, 1, 2], field: [-1, 2], surgeon: 0.35, champion: 0, reward: 1 },
-  hard: { name: 'Hard', text: 'Sharp, stronger opponents in up-to-date gear. Better pay.', skill: 0.3, stats: 1.05, lag: 0.35, offers: [0, 1, 3], field: [0, 3], surgeon: 0.2, champion: 2, reward: 1.25 },
-  legendary: { name: 'Legendary', text: 'Everyone is stronger than you. No surgeon. Glory pays double... almost.', skill: 0.45, stats: 1.25, lag: 0, offers: [1, 2, 3], field: [1, 3], surgeon: 0, champion: 3, reward: 1.5 },
+  easy: { name: 'Easy', text: 'Forgiving opponents with hand-me-down gear.', skill: -0.1, stats: 0.9, lag: 0.85, offers: [-1, 0, 1], field: [-2, 1], surgeon: 0.5, champion: -2, reward: 0.85, prices: 0.85 },
+  normal: { name: 'Normal', text: 'Opponents who fight back and keep up with your kit.', skill: 0.15, stats: 1, lag: 0.5, offers: [0, 1, 2], field: [-1, 2], surgeon: 0.35, champion: 0, reward: 1, prices: 1 },
+  hard: { name: 'Hard', text: 'Sharp, stronger opponents in up-to-date gear. Better pay.', skill: 0.3, stats: 1.05, lag: 0.35, offers: [0, 1, 3], field: [0, 3], surgeon: 0.2, champion: 2, reward: 1.25, prices: 1.5 },
+  legendary: { name: 'Legendary', text: 'Everyone is stronger than you. No surgeon. Glory pays double... almost.', skill: 0.45, stats: 1.25, lag: 0, offers: [1, 2, 3], field: [1, 3], surgeon: 0, champion: 3, reward: 1.5, prices: 2 },
 }
 export const DIFFICULTY_IDS = Object.keys(DIFFICULTIES) as Difficulty[]
 
