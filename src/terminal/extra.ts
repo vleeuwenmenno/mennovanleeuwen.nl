@@ -3,7 +3,8 @@ import { ansiToMarkup, plain, rainbow } from './ansi'
 import { md5, sha } from './hash'
 import { jq, JqError } from './jq'
 import { CmdError, type Ctx } from './types'
-import { age, lookup, resolvePath, walk } from './vfs'
+import { lookup } from './fs'
+import { age, lookup as siteLookup, resolvePath, walk as siteWalk } from './vfs'
 import { runLine, writeTmp } from './commands'
 
 // Real tools that work from the browser: curl/wget/whois against the live internet, git log on the
@@ -572,8 +573,8 @@ async function watch(ctx: Ctx): Promise<string> {
 async function df(ctx: Ctx): Promise<string> {
   const h = ctx.args.some((a) => /^-\w*h/.test(a))
   const fmt = (b: number) => (h ? human(b) : String(Math.ceil(b / 1024)))
-  const size = (path: string) => walk(path).reduce((sum, p) => {
-    const n = lookup(p)
+  const size = (path: string) => siteWalk(path).reduce((sum, p) => {
+    const n = siteLookup(p)
     return sum + (n?.type === 'file' ? new Blob([n.content()]).size : 0)
   }, 0)
   const rootBytes = size('/')

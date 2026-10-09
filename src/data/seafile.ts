@@ -3,11 +3,15 @@ import { api, getAccount, subscribeAccount, useAccount } from '../os/account'
 import { synced } from '../os/synced'
 import type { AppId, WinState } from '../os/wm'
 import { kindOfName, type FileKind } from '../terminal/vfs'
+import { seafileHome, setHomeMount, setPlaceMount, useMounts } from './mounts'
+
+export { useSeafileHome } from './mounts'
 
 // The linked Seafile account, for Files, Zed, the Viewer and the desktop (server/seafile.ts does
 // the talking). A Seafile path is seafile://<library id>/<path in the library>, so it travels in
-// window props like any other path. With "Use as home" on, the primary library is home: its
-// Desktop, Documents, Downloads... folders are the ones in Files' Places and on the desktop.
+// window props like any other path. Where Seafile shows up (home, the places, /mnt/seafile) is
+// /etc/fstab's to say (data/mounts.ts): "Use as home", the primary library and mapped places are
+// lines in it, so Files, the desktop and the terminal all agree.
 
 export const SF = 'seafile://'
 
@@ -64,9 +68,30 @@ const prefs = synced<SeafilePrefs>('seafile', { home: true, primary: null, lockM
     return { home: o.home !== false, primary: typeof o.primary === 'string' ? o.primary : null, lockMinutes: [5, 15, 30, 55].includes(o.lockMinutes as number) ? (o.lockMinutes as number) : 30, siteIcons: o.siteIcons !== false, trash: o.trash !== false, officeFolder: typeof o.officeFolder === 'string' && o.officeFolder.startsWith(SF) ? o.officeFolder : null, officeDesktop: o.officeDesktop === true, places: Object.fromEntries(Object.entries(o.places ?? {}).filter(([k, v]) => PLACES.some((p) => p.id === k) && typeof v === 'string' && v.startsWith(SF))) }
   },
 })
-export const useSeafilePrefs = prefs.use
-export const getSeafilePrefs = prefs.get
-export const setSeafilePrefs = (patch: Partial<SeafilePrefs>) => prefs.set((p) => ({ ...p, ...patch }))
+/** The settings as stored, before fstab has its say (fstab is written from these at first). */
+export const getSeafilePrefsStored = prefs.get
+
+/** The settings, with home and the primary library as fstab has them. */
+export function getSeafilePrefs(): SeafilePrefs {
+  const p = prefs.get()
+  const h = seafileHome()
+  return { ...p, home: !!h.home, primary: h.library?.id ?? p.primary, places: h.mapped }
+}
+export function useSeafilePrefs(): SeafilePrefs {
+  prefs.use()
+  useMounts()
+  return getSeafilePrefs()
+}
+/** Home and the primary library change fstab's home line; the rest are plain settings. */
+export function setSeafilePrefs(patch: Partial<SeafilePrefs>) {
+  const now = getSeafilePrefs()
+  prefs.set((p) => ({ ...p, ...patch }))
+  if ('home' in patch || 'primary' in patch) {
+    const home = patch.home ?? now.home
+    const primary = patch.primary ?? now.primary ?? primaryOf(libraries, null)?.id ?? null
+    setHomeMount(home ? primary : null)
+  }
+}
 
 // --- libraries -----------------------------------------------------------------------------------
 
@@ -75,6 +100,13 @@ let librariesError: string | null = null
 let librariesLoading: Promise<void> | null = null
 const libListeners = new Set<() => void>()
 const emitLibs = () => libListeners.forEach((l) => l())
+
+/** The libraries if loaded (null before, or without Seafile), for code outside React. */
+export const getLibraries = () => libraries
+export const subscribeLibraries = (l: () => void) => {
+  libListeners.add(l)
+  return () => libListeners.delete(l)
+}
 
 export function loadLibraries(fresh = false): Promise<void> {
   if (!getAccount().seafile) return Promise.resolve()
@@ -130,34 +162,14 @@ export function primaryOf(libs: Library[] | null, primary: string | null): Libra
   return libs.find((l) => l.id === primary) ?? libs.find((l) => l.type === 'mine' && l.name === 'My Library') ?? libs.find((l) => l.type === 'mine') ?? libs[0]
 }
 
-/**
- * Home in Seafile (the primary library, or the folder Home is mapped to) and every place's folder,
- * or nulls when Seafile is not home. A place nobody mapped is its same-named folder in the primary
- * library (Home: the library itself).
- */
-export function useSeafileHome(): { home: string | null; library: Library | null; places: Record<PlaceId, string> | null; mapped: Partial<Record<PlaceId, string>> } {
-  const { libraries } = useLibraries()
-  const p = useSeafilePrefs()
-  const library = primaryOf(libraries, p.primary)
-  if (!p.home || !library) return { home: null, library, places: null, mapped: p.places }
-  const root = sfPath(library.id)
-  const places = Object.fromEntries(PLACES.map((pl) => [pl.id, p.places[pl.id] ?? (pl.folder ? `${root}/${pl.folder}` : root)])) as Record<PlaceId, string>
-  return { home: places.home, library, places, mapped: p.places }
-}
-
 /** The default folder of a place: the same-named folder in the primary library. */
 export const defaultPlace = (library: Library, id: PlaceId) => {
   const folder = PLACES.find((p) => p.id === id)!.folder
   return folder ? `${sfPath(library.id)}/${folder}` : sfPath(library.id)
 }
 
-export const setPlace = (id: PlaceId, path: string | null) =>
-  prefs.set((p) => {
-    const places = { ...p.places }
-    if (path) places[id] = path
-    else delete places[id]
-    return { ...p, places }
-  })
+/** Maps a place onto a folder (a bind line in fstab), or back to home's own (null). */
+export const setPlace = (id: PlaceId, path: string | null) => setPlaceMount(id, path)
 
 export const libraryName = (repo: string) => libraries?.find((l) => l.id === repo)?.name ?? 'Seafile'
 export const getLibrary = (repo: string) => libraries?.find((l) => l.id === repo) ?? null
@@ -228,6 +240,36 @@ export function useDir(path: string | null, maxAge = 30_000): DirState & { reloa
   }, [path, hit, maxAge])
   return { listing: hit?.listing ?? null, error: hit?.error ?? null, status: hit?.status ?? null, loading: hit ? hit.loading : !!path && isSf(path), reload: () => path && fetchDir(path) }
 }
+
+/**
+ * A folder's listing for code that can wait (the terminal): from the cache while fresh, else
+ * asked for. Rejects with the status kept (423: an encrypted library that is locked).
+ */
+export async function listDir(path: string, maxAge = 30_000): Promise<Listing> {
+  const hit = dirCache.get(path)
+  if (hit?.listing && !hit.loading && Date.now() - hit.at < maxAge) return hit.listing
+  const at = parseSf(path)!
+  try {
+    const listing = await call<Listing>(`/api/seafile/dir?repo=${encodeURIComponent(at.repo)}&p=${encodeURIComponent(at.p)}`)
+    dirCache.set(path, { listing, error: null, status: null, loading: false, at: Date.now() })
+    return listing
+  } catch (e) {
+    const err = e as ApiError
+    dirCache.set(path, { listing: null, error: err.message, status: err.status ?? null, loading: false, at: Date.now() })
+    throw err
+  } finally {
+    emitDirs()
+  }
+}
+
+/** What the cache knows of a folder right now, without asking: its listing, or the failure (status). */
+export function cachedDir(path: string): { listing: Listing | null; status: number | null } | null {
+  const hit = dirCache.get(path)
+  return hit && !hit.loading ? { listing: hit.listing, status: hit.status } : null
+}
+
+/** The status a Seafile call failed with (423: locked), if it kept one. */
+export const errorStatus = (e: unknown): number | null => (e instanceof ApiError ? e.status : null)
 
 export async function mkdir(path: string): Promise<string> {
   const at = parseSf(path)!
@@ -318,6 +360,9 @@ export async function lock(repo: string) {
   emitUnlocks()
   refreshDirs(sfPath(repo))
 }
+
+/** When each unlocked library locks again, outside React. */
+export const getUnlocks = () => unlocks
 
 /** When each unlocked library locks again. */
 export function useUnlocks(): Record<string, number> {

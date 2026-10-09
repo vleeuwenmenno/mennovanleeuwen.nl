@@ -1,7 +1,8 @@
 import { profile } from '../data/profile'
 import { runLine, writeTmp, type Completion } from './commands'
 import { CmdError, type Ctx } from './types'
-import { HOME, lookup, resolvePath, stat, type DirNode, type Node } from './vfs'
+import { lookup, removePath, sfOf } from './fs'
+import { HOME, resolvePath, stat, type DirNode, type Node } from './vfs'
 
 // GNU find (findutils 4.10) and sharkdp's fd (10.2) over the in-memory filesystem: their options,
 // expression language, output formats, --help, --version and error messages, as close to the real
@@ -18,12 +19,13 @@ const c = (color: string, s: string) => `{c:${color}}${s}{/}`
 const DIR_SIZE = 4096
 
 const isUnderTmp = (abs: string) => abs.startsWith('/tmp/')
-const owner = (abs: string) => (abs === HOME || abs.startsWith(`${HOME}/`) || isUnderTmp(abs) ? profile.handle : 'root')
+const owner = (abs: string) => (abs === HOME || abs.startsWith(`${HOME}/`) || isUnderTmp(abs) || sfOf(abs) ? profile.handle : 'root')
 const idOf = (abs: string) => (owner(abs) === 'root' ? 0 : 1000)
 const isExecutable = (node: Node) => node.type === 'dir' || node.name.endsWith('.game')
 
 /** Read-only everywhere (0555 folders and runnable games, 0444 files), except /tmp. */
 function modeOf(abs: string, node: Node): number {
+  if (node.sf) return node.ro ? (node.type === 'dir' ? 0o555 : 0o444) : node.type === 'dir' ? 0o755 : 0o644
   if (abs === '/tmp') return 0o1777
   if (isUnderTmp(abs)) return 0o644
   return isExecutable(node) ? 0o555 : 0o444
@@ -41,7 +43,7 @@ const sizeOf = (abs: string, node: Node) => (node.type === 'dir' ? DIR_SIZE : st
 const allocated = (abs: string, node: Node) => Math.ceil(sizeOf(abs, node) / 4096) * 4096
 const mtimeOf = (abs: string, node: Node) => stat(abs, node).mtime
 const linksOf = (node: Node) => (node.type === 'dir' ? 2 + [...node.children.values()].filter((n) => n.type === 'dir').length : 1)
-const fsType = (abs: string) => (abs === '/proc' || abs.startsWith('/proc/') ? 'proc' : abs === '/tmp' || isUnderTmp(abs) ? 'tmpfs' : 'ext4')
+const fsType = (abs: string) => (sfOf(abs) ? 'fuse.seafile' : abs === '/proc' || abs.startsWith('/proc/') ? 'proc' : abs === '/tmp' || isUnderTmp(abs) ? 'tmpfs' : 'ext4')
 const isEmpty = (abs: string, node: Node) => (node.type === 'dir' ? node.children.size === 0 : sizeOf(abs, node) === 0)
 
 function inodeOf(abs: string) {
@@ -738,7 +740,7 @@ class FindParser {
       case '-readable':
         return test(() => true)
       case '-writable':
-        return test((e) => e.abs === '/tmp' || isUnderTmp(e.abs))
+        return test((e) => e.abs === '/tmp' || isUnderTmp(e.abs) || (!!e.node.sf && !e.node.ro))
       case '-executable':
         return test((e) => isExecutable(e.node))
       case '-links': {
@@ -790,19 +792,21 @@ class FindParser {
       }
       case '-delete':
         this.depthFirst = true
-        return action((e) => {
-          if (e.abs === '/tmp' || !isUnderTmp(e.abs)) {
-            st.out.push(`${c('red', `find: cannot delete '${e.shown}': Read-only file system`)}\n`)
+        return action(async (e) => {
+          const fail = (why: string) => {
+            st.out.push(`${c('red', `find: cannot delete '${e.shown}': ${why}`)}\n`)
             st.failed = true
             return false
           }
-          if (e.node.type === 'dir' && e.node.children.size) {
-            st.out.push(`${c('red', `find: cannot delete '${e.shown}': Directory not empty`)}\n`)
-            st.failed = true
-            return false
+          const node = lookup(e.abs)
+          if (e.abs === '/tmp' || (!isUnderTmp(e.abs) && !(node?.sf && !node.ro))) return fail('Read-only file system')
+          if (node?.type === 'dir' && node.children.size) return fail('Directory not empty')
+          try {
+            await removePath('/', e.abs, { recursive: false, force: true, dir: true })
+            return true
+          } catch (err) {
+            return fail((err as Error).message.replace(/^.*: /, ''))
           }
-          ;(lookup('/tmp') as DirNode).children.delete(e.node.name)
-          return true
         })
       case '-prune':
         return { ev: async () => ((st.prune = true), true), action: false }
@@ -866,7 +870,7 @@ class FindParser {
     const where = (e: Entry) => {
       if (!inDir) return { path: e.shown, cwd: st.ctx.cwd }
       const parent = e.abs === '/' ? '/' : e.abs.replace(/\/[^/]*$/, '') || '/'
-      return { path: e.abs === '/' ? '/' : `./${e.node.name}`, cwd: parent }
+      return { path: e.abs === '/' ? '/' : `./${e.abs.split('/').pop()}`, cwd: parent }
     }
     this.sawTest ??= pred
     if (batch) {
@@ -959,10 +963,13 @@ help       Explain the various -D options`
     if (!parser.depthFirst && here) await expr.ev(e)
     const pruned = st.prune && !parser.depthFirst
     if (e.node.type === 'dir' && e.depth < parser.maxdepth && !pruned)
-      for (const child of [...e.node.children.values()]) {
+      for (const name of [...e.node.children.keys()]) {
         if (st.quit) return
-        const abs = e.abs === '/' ? `/${child.name}` : `${e.abs}/${child.name}`
-        const shown = e.shown.endsWith('/') ? e.shown + child.name : `${e.shown}/${child.name}`
+        // Looked up again, so mount points (Seafile on ~, /mnt/seafile) show what is mounted there.
+        const abs = e.abs === '/' ? `/${name}` : `${e.abs}/${name}`
+        const child = lookup(abs)
+        if (!child) continue
+        const shown = e.shown.endsWith('/') ? e.shown + name : `${e.shown}/${name}`
         await visit({ abs, shown, node: child, depth: e.depth + 1, start: e.start })
       }
     if (parser.depthFirst && here && !st.quit) await expr.ev(e)
@@ -1567,11 +1574,13 @@ async function fd(ctx: Ctx): Promise<string> {
   const results: { abs: string; shown: string; node: Node }[] = []
   const walkDir = (dir: DirNode, abs: string, rel: string, prefix: string, depth: number, rules: { base: string; rules: ReturnType<typeof ignoreRules> }[]) => {
     const here = o.noIgnore ? rules : [...rules, { base: rel, rules: ignoreRules(dir) }]
-    for (const child of dir.children.values()) {
+    for (const name of dir.children.keys()) {
       if (results.length >= o.maxResults || ctx.signal.aborted) return
-      const childAbs = abs === '/' ? `/${child.name}` : `${abs}/${child.name}`
-      const childRel = rel ? `${rel}/${child.name}` : child.name
-      if (!o.hidden && child.name.startsWith('.')) continue
+      const childAbs = abs === '/' ? `/${name}` : `${abs}/${name}`
+      const child = lookup(childAbs)
+      if (!child) continue
+      const childRel = rel ? `${rel}/${name}` : name
+      if (!o.hidden && name.startsWith('.')) continue
       if (
         here.some(({ base, rules }) => {
           const local = base ? childRel.slice(base.length + 1) : childRel
@@ -1581,14 +1590,14 @@ async function fd(ctx: Ctx): Promise<string> {
         })
       )
         continue
-      if (excludes.some((x) => x.re.test(x.path ? childRel : child.name))) continue
+      if (excludes.some((x) => x.re.test(x.path ? childRel : name))) continue
       const d = depth + 1
-      const subject = o.fullPath ? childAbs : child.name
+      const subject = o.fullPath ? childAbs : name
       let match =
         d >= o.minDepth &&
         patterns.every((re) => re.test(subject)) &&
         typeOk(childAbs, child) &&
-        (!o.extensions.length || (child.type === 'file' && o.extensions.some((e) => child.name.toLowerCase().endsWith(`.${e}`)))) &&
+        (!o.extensions.length || (child.type === 'file' && o.extensions.some((e) => name.toLowerCase().endsWith(`.${e}`)))) &&
         (!o.sizes.length || (child.type === 'file' && o.sizes.every((f) => f(sizeOf(childAbs, child))))) &&
         (o.within === null || mtimeOf(childAbs, child) > o.within) &&
         (o.before === null || mtimeOf(childAbs, child) < o.before)

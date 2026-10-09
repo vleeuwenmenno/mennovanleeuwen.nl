@@ -197,6 +197,21 @@ headers, so it goes through the server; files themselves go straight between the
 Seafile's file server, with links the server hands out. The sidebar's sections and items can be
 dragged into another order and hidden (right-click, or *Customize sidebar*), synced like the dock.
 
+**/etc/fstab** decides where Seafile shows up, for Files and the terminal alike
+([`src/data/mounts.ts`](src/data/mounts.ts)). `seafile /mnt/seafile seafile` puts every library in a
+folder of its own, `UUID=<library id> /home/menno seafile` makes one home (Settings' *Use as home*
+and primary library write that line), and a bind line such as
+`/mnt/seafile/Photos/2024 /home/menno/Pictures none bind` maps a place somewhere else. Until anything
+edits it, the file is written from the older settings. The owner can `sudo nano /etc/fstab`, `sudo
+mount` and `sudo umount` (visitors are not in sudoers); Files' Home, places, breadcrumbs and Seafile
+section follow at once, and the site's own home is at `/srv/site` while Seafile is on `~`. In the
+terminal ([`src/terminal/fs.ts`](src/terminal/fs.ts)) `ls`, `cd`, `cat`, `grep -r`, `find`, `fd`,
+`tree`, `touch`, `mkdir`, `cp`, `mv`, `rm` (into Seafile's trash), `tee`, `>` and **nano**
+([`src/terminal/nano.ts`](src/terminal/nano.ts), GNU nano 8.2's keys on an alternate screen) work
+across the mounts; before a command runs, the Seafile folders and files it names are fetched.
+`mount`, `findmnt`, `lsblk -f` and `man fstab` describe the table, read-only libraries mount `ro`,
+and encrypted ones answer `Required key not available` until `fscrypt unlock` gets their password.
+
 Pictures open in **Preview** and video and audio in **Player**, from Seafile or the site's own
 files. Preview fits the picture to the window and zooms with its buttons, the keys (+, −, 0 for
 actual size, 9 to fit), Ctrl+wheel or a pinch, towards the pointer; dragging or scrolling pans when

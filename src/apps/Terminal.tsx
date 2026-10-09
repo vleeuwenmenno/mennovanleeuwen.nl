@@ -4,8 +4,9 @@ import { profile } from '../data/profile'
 import { setAccent } from '../os/theme'
 import { useWM, type WinState } from '../os/wm'
 import { complete, completions, fastfetch, runLine, type Completion } from '../terminal/commands'
+import { prepareFolder } from '../terminal/fs'
 import { SlTrain } from '../terminal/SlTrain'
-import { HOME, prettyPath } from '../terminal/vfs'
+import { HOME, prettyPath, resolvePath } from '../terminal/vfs'
 
 /** The query's letters in `name`, in order and case-insensitively, marked the way fzf does. */
 function Matched({ name, query }: { name: string; query: string }) {
@@ -28,10 +29,10 @@ function Matched({ name, query }: { name: string; query: string }) {
   )
 }
 
-type Entry = { id: number; kind: 'cmd'; cwd: string; text: string } | { id: number; kind: 'out'; text: string }
+type Entry = { id: number; kind: 'cmd'; cwd: string; text: string } | { id: number; kind: 'out'; text: string; alt?: boolean }
 
 const MARKUP = /\{(c|link|anim|fg):([^}]*)\}([\s\S]*?)\{\/\}/g
-const COLORS = new Set(['green', 'red', 'yellow', 'blue', 'cyan', 'magenta', 'muted', 'accent', 'bold', 'heat1', 'heat2', 'heat3', 'heat4'])
+const COLORS = new Set(['green', 'red', 'yellow', 'blue', 'cyan', 'magenta', 'muted', 'accent', 'bold', 'inverse', 'heat1', 'heat2', 'heat3', 'heat4'])
 
 /**
  * Renders the `{c:color}…{/}` / `{fg:#rrggbb}…{/}` / `{link:url}…{/}` markup produced by commands.
@@ -147,7 +148,10 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
   const env = useRef<Record<string, string>>({ USER: profile.handle, HOME, SHELL: '/bin/msh', TERM: 'xterm-mvlos', EDITOR: 'nvim', LANG: 'en_US.UTF-8' })
   const inputRef = useRef<HTMLInputElement>(null)
   const abortRef = useRef<AbortController | null>(null)
-  const keyHandler = useRef<((key: string) => boolean) | null>(null)
+  const keyHandler = useRef<((key: string, text?: string) => boolean) | null>(null)
+  const rawKeys = useRef(false)
+  // A full-screen program on the alternate screen (nano): the rest of the scrollback hides meanwhile.
+  const [alt, setAlt] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const windowsRef = useRef(wm.windows)
   windowsRef.current = wm.windows
@@ -284,18 +288,19 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
     const print = (text: string) => setEntries((e) => [...e, { id: nextId++, kind: 'out', text }])
     // One redrawable block per command line, for programs that update in place.
     let liveId: number | null = null
-    const live = (text: string | null) => {
+    const live = (text: string | null, opts?: { alt?: boolean }) => {
       setDrawing(text !== null)
+      setAlt(text !== null && !!opts?.alt)
       if (text === null) {
         const id = liveId
         liveId = null
         if (id !== null) setEntries((e) => e.filter((x) => x.id !== id))
       } else if (liveId === null) {
         const id = (liveId = nextId++)
-        setEntries((e) => [...e, { id, kind: 'out', text }])
+        setEntries((e) => [...e, { id, kind: 'out', text, alt: opts?.alt }])
       } else {
         const id = liveId
-        setEntries((e) => e.map((x) => (x.id === id ? { ...x, text } : x)))
+        setEntries((e) => e.map((x) => (x.id === id ? { ...x, text, alt: opts?.alt } : x)))
       }
     }
     abortRef.current = new AbortController()
@@ -325,13 +330,16 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
       print,
       live,
       size: termSize(),
-      onKey: (h) => {
+      onKey: (h, opts) => {
         keyHandler.current = h
+        rawKeys.current = !!h && !!opts?.raw
       },
       signal: abortRef.current.signal,
     })
     keyHandler.current = null
+    rawKeys.current = false
     setDrawing(false)
+    setAlt(false)
     abortRef.current = null
     setRunning(false)
     if (results.some((r) => r.output.includes('{anim:'))) setAnimating(true)
@@ -376,6 +384,17 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    // Raw programs (nano) get Ctrl+X as ^X and Alt+U as M-u, ahead of the shell and the desktop.
+    if (running && keyHandler.current && rawKeys.current) {
+      const k = e.key.length === 1 ? e.key : e.key
+      const token = e.ctrlKey && !e.altKey ? (e.key.length === 1 ? `^${k.toUpperCase()}` : `^${k}`) : e.altKey && !e.ctrlKey ? `M-${e.key.length === 1 ? k.toLowerCase() : k}` : k
+      if (e.metaKey || ['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return
+      if (keyHandler.current(token)) {
+        e.preventDefault()
+        e.stopPropagation()
+      }
+      return
+    }
     if (running && keyHandler.current && !e.ctrlKey && !e.metaKey && keyHandler.current(e.key)) {
       e.preventDefault()
       return
@@ -392,12 +411,18 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
         setPick(0)
         return
       }
-      const { line, items } = complete(value, cwd)
-      setValue(line)
-      if (items.length) {
-        setPicking({ before: completions(line, cwd).before })
-        setPick(0)
-      }
+      // A folder in Seafile is fetched first, so its names can be offered.
+      const word = /(\S*)$/.exec(value)![1]
+      const at = value
+      void prepareFolder(resolvePath(cwd, word.includes('/') ? word.slice(0, word.lastIndexOf('/') + 1) : '.')).then(() => {
+        if (inputRef.current?.value !== at) return
+        const { line, items } = complete(at, cwd)
+        setValue(line)
+        if (items.length) {
+          setPicking({ before: completions(line, cwd).before })
+          setPick(0)
+        }
+      })
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       const h = history.current
@@ -433,7 +458,7 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
 
   return (
     <div
-      className={`terminal ${onLogout ? 'is-console' : ''}`}
+      className={`terminal ${onLogout ? 'is-console' : ''} ${alt ? 'is-alt' : ''}`}
       ref={scrollRef}
       onMouseUp={() => {
         if (!window.getSelection()?.toString()) inputRef.current?.focus({ preventScroll: true })
@@ -447,7 +472,7 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
               {e.text}
             </div>
           ) : (
-            <pre className="t-out">
+            <pre className={`t-out ${e.alt ? 't-alt' : ''}`}>
               <Markup text={e.text} onAnimationEnd={() => setAnimating(false)} />
             </pre>
           )}
@@ -466,6 +491,11 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={onKeyDown}
+            onPaste={(e) => {
+              if (!running || !keyHandler.current || !rawKeys.current) return
+              e.preventDefault()
+              keyHandler.current('Paste', e.clipboardData.getData('text/plain'))
+            }}
             onKeyUp={syncCaret}
             onSelect={syncCaret}
             onFocus={syncCaret}
