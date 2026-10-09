@@ -18,9 +18,12 @@ import { openLink } from '../data/links'
 import { clearVisits, forgetVisit, visits, type Visit } from '../data/siteHistory'
 import { spotlightPrefs } from '../data/spotlightPrefs'
 import { asWebAddress } from '../os/linkPreview'
-import { signedIn } from '../os/account'
+import { getAccount, signedIn } from '../os/account'
 import { followGoLink, golinksSite, golinksTemplate, golinksUrl, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
-import { age, fileKind, HOME, lookup, prettyPath, resolvePath, walk, type DirNode, type Node } from './vfs'
+import { age, fileKind, HOME, lookup as siteLookup, prettyPath, resolvePath, type DirNode, type Node } from './vfs'
+import { lookup, makeDir, prepare, removePath, touchFile, transfer, walk, writeFile } from './fs'
+import { manPages, mountCommands } from './mount'
+import { nanoCommands } from './nano'
 import { MEDIA_APP } from '../data/media'
 
 // Output markup understood by the terminal renderer:
@@ -112,6 +115,7 @@ const APP_NAMES: Record<AppId, string> = {
 
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */
 function manPage(name: string) {
+  if (!commands[name] && manPages[name]) return `${c('bold', `${name.toUpperCase()}(${manPages[name].section})`)}\n\n${manPages[name].text}`
   const cmd = commands[name]
   if (cmd.man) return `${c('bold', `${name.toUpperCase()}(1)`)}\n\n${cmd.man}`
   return `${c('bold', name.toUpperCase())}\n  ${name} - ${cmd.desc}\n\n${c('bold', 'USAGE')}\n  ${cmd.usage ?? name}`
@@ -125,7 +129,7 @@ const H_IS_A_FLAG = new Set(['df', 'free'])
 const asksHelp = (name: string, args: string[]) => !OWN_HELP.has(name) && (args[0] === '--help' || (args[0] === '-h' && !H_IS_A_FLAG.has(name)))
 
 // Scratch space: the only writable part of the filesystem, so `echo hi > /tmp/x` works.
-const tmp = () => lookup('/tmp') as DirNode
+const tmp = () => siteLookup('/tmp') as DirNode
 
 function flags(args: string[]) {
   const set = new Set<string>()
@@ -222,18 +226,34 @@ function cowsay(text: string) {
 
 const KIND_ICON: Record<string, string> = { push: '↑', pr: '⇄', merge: '⑂', issue: '◎', release: '★', create: '+', star: '☆', comment: '…', fork: '⑂' }
 
+/** Quotes one argument for a command line run through the shell again (sudo, find -exec). */
+export const shellQuote = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
+
+/** mv and cp: one source onto a name, or several into a folder. */
+async function moveOrCopy(ctx: Ctx, op: 'move' | 'copy') {
+  const cmd = op === 'move' ? 'mv' : 'cp'
+  const f = flags(ctx.args)
+  if (!f.rest.length) throw new CmdError(`${cmd}: missing file operand\nTry '${cmd} --help' for more information.`)
+  if (f.rest.length === 1) throw new CmdError(`${cmd}: missing destination file operand after '${f.rest[0]}'\nTry '${cmd} --help' for more information.`)
+  const dest = f.rest[f.rest.length - 1]
+  const sources = f.rest.slice(0, -1)
+  if (sources.length > 1 && lookup(resolvePath(ctx.cwd, dest))?.type !== 'dir') throw new CmdError(`${cmd}: target '${dest}': Not a directory`)
+  for (const s of sources) await transfer(op, ctx.cwd, s, dest, f.has('r') || f.has('R') || f.has('a'))
+}
+
 export const commands: Record<string, Command> = {
   help: {
     desc: 'list commands',
     run: () => {
       const groups: [string, string[]][] = [
-        ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'fd', 'open', 'go', 'files']],
+        ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'fd', 'open', 'go', 'files', 'visited']],
         ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'git', 'heatmap', 'stars', 'contact']],
+        ['Files', ['nano', 'touch', 'mkdir', 'cp', 'mv', 'rm', 'tee', 'mount', 'umount', 'findmnt', 'lsblk', 'fscrypt']],
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
         ['Network', ['curl', 'wget', 'whois', 'ping', 'dig', 'host', 'nslookup', 'minecraft']],
         ['Device', ['htop', 'df', 'free', 'nproc', 'lscpu', 'xrandr', 'ip', 'watch']],
-        ['System', ['keys', 'ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'visited', 'env', 'export', 'theme', 'tty', 'reboot', 'shutdown', 'clear', 'exit']],
-        ['Fun', ['games', 'fastfetch', 'fortune', 'cowsay', 'figlet', 'lolcat', 'cmatrix', 'sl', 'sudo']],
+        ['System', ['keys', 'ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'sudo', 'env', 'export', 'theme', 'tty', 'reboot', 'shutdown', 'clear', 'exit']],
+        ['Fun', ['games', 'fastfetch', 'fortune', 'cowsay', 'figlet', 'lolcat', 'cmatrix', 'sl']],
       ]
       return [
         ...groups.map(([g, cmds]) => `${c('accent', g.padEnd(9))} ${cmds.map((n) => c('green', n)).join('  ')}`),
@@ -248,8 +268,9 @@ export const commands: Record<string, Command> = {
     usage: 'man <command>',
     run: ({ args }) => {
       if (!args[0]) throw new CmdError('What manual page do you want?')
-      if (!commands[args[0]]) throw new CmdError(`No manual entry for ${args[0]}`)
-      return manPage(args[0])
+      const page = /^\d$/.test(args[0]) ? args[1] : args[0]
+      if (!page || (!commands[page] && !manPages[page])) throw new CmdError(`No manual entry for ${page ?? args[0]}`)
+      return manPage(page)
     },
   },
   ls: {
@@ -266,8 +287,10 @@ export const commands: Record<string, Command> = {
       if (!f.has('l')) return kids.map(colorName).join('  ')
       return kids
         .map((k) => {
-          const size = k.type === 'file' ? k.content().length : 4096
-          return `${k.type === 'dir' ? 'dr-xr-xr-x' : '-r--r--r--'}  ${profile.handle}  ${String(size).padStart(5)}  ${colorName(k)}`
+          const size = k.type === 'file' ? (k.size ?? k.content().length) : 4096
+          const rw = (k.sf && !k.ro) || abs === '/tmp'
+          const perm = k.type === 'dir' ? (rw ? 'drwxr-xr-x' : 'dr-xr-xr-x') : rw ? '-rw-r--r--' : '-r--r--r--'
+          return `${perm}  ${profile.handle}  ${String(size).padStart(5)}  ${colorName(k)}`
         })
         .join('\n')
     },
@@ -409,30 +432,66 @@ export const commands: Record<string, Command> = {
   },
   echo: { desc: 'print arguments', usage: 'echo [text]', run: ({ args }) => args.join(' ') },
   touch: {
-    desc: 'create an empty file (in /tmp)',
-    usage: 'touch /tmp/<name>',
-    run: (ctx) => {
-      for (const a of ctx.args) writeTmp(ctx.cwd, a, '', true)
+    desc: 'create empty files (in /tmp or Seafile)',
+    usage: 'touch <file>...',
+    run: async (ctx) => {
+      const files = ctx.args.filter((a) => !a.startsWith('-'))
+      if (!files.length) throw new CmdError("touch: missing file operand\nTry 'touch --help' for more information.")
+      for (const a of files) await touchFile(ctx.cwd, a)
     },
   },
   mkdir: {
-    desc: 'not here',
-    hidden: true,
-    run: () => {
-      throw new CmdError('mkdir: /tmp is flat on purpose; files only')
+    desc: 'make folders (in Seafile)',
+    usage: 'mkdir [-p] <dir>...',
+    run: async (ctx) => {
+      const f = flags(ctx.args)
+      if (!f.rest.length) throw new CmdError("mkdir: missing operand\nTry 'mkdir --help' for more information.")
+      for (const a of f.rest) await makeDir(ctx.cwd, a, f.has('p'))
     },
   },
   rm: {
-    desc: 'remove files (only in /tmp)',
-    usage: 'rm /tmp/<name>',
-    run: (ctx) => {
+    desc: 'remove files (in /tmp, or Seafile: into its trash)',
+    usage: 'rm [-r] [-f] <path>...',
+    run: async (ctx) => {
       const f = flags(ctx.args)
-      if (f.has('r') && f.has('f')) return `${c('yellow', 'Nice try.')} The only thing getting deleted today is your expectations.`
-      for (const a of f.rest) {
-        const abs = resolvePath(ctx.cwd, a)
-        if (!abs.startsWith('/tmp/')) throw new CmdError(`rm: cannot remove '${a}': Read-only file system`)
-        if (!tmp().children.delete(abs.slice(5))) throw new CmdError(`rm: cannot remove '${a}': No such file or directory`)
+      // The site itself stays put, whatever the flags.
+      const precious = f.rest.some((a) => ['/', HOME, '/home', '/srv/site'].includes(resolvePath(ctx.cwd, a)))
+      if (f.has('r') && f.has('f') && (precious || !f.rest.length)) return `${c('yellow', 'Nice try.')} The only thing getting deleted today is your expectations.`
+      if (!f.rest.length) throw new CmdError("rm: missing operand\nTry 'rm --help' for more information.")
+      for (const a of f.rest) await removePath(ctx.cwd, a, { recursive: f.has('r') || f.has('R'), force: f.has('f'), dir: f.has('d') })
+    },
+  },
+  rmdir: {
+    desc: 'remove empty folders',
+    usage: 'rmdir <dir>...',
+    run: async (ctx) => {
+      if (!ctx.args.length) throw new CmdError("rmdir: missing operand\nTry 'rmdir --help' for more information.")
+      for (const a of ctx.args) {
+        const node = lookup(resolvePath(ctx.cwd, a))
+        if (node && node.type !== 'dir') throw new CmdError(`rmdir: failed to remove '${a}': Not a directory`)
+        if (node?.type === 'dir' && node.children.size) throw new CmdError(`rmdir: failed to remove '${a}': Directory not empty`)
+        await removePath(ctx.cwd, a, { recursive: false, force: false, dir: true })
       }
+    },
+  },
+  mv: {
+    desc: 'move or rename (in /tmp and Seafile)',
+    usage: 'mv <source>... <destination>',
+    run: async (ctx) => moveOrCopy(ctx, 'move'),
+  },
+  cp: {
+    desc: 'copy (into /tmp and Seafile)',
+    usage: 'cp [-r] <source>... <destination>',
+    run: async (ctx) => moveOrCopy(ctx, 'copy'),
+  },
+  tee: {
+    desc: 'copy input to files and the screen',
+    usage: 'tee [-a] <file>...',
+    run: async (ctx) => {
+      const f = flags(ctx.args)
+      const text = ctx.stdin ?? ''
+      for (const file of f.rest) await writeFile(ctx.cwd, file, text, f.has('a'), !!ctx.root, 'tee')
+      return text
     },
   },
   whoami: {
@@ -757,17 +816,25 @@ export const commands: Record<string, Command> = {
     run: () => '{anim:sl}{/}',
   },
   sudo: {
-    desc: 'become root',
-    run: ({ args }) => {
-      if (args.join(' ').startsWith('rm')) return `${c('red', 'sudo:')} absolutely not.`
+    desc: 'run a command as root',
+    usage: 'sudo <command>',
+    run: async (ctx) => {
+      const { args } = ctx
+      if (/^rm\s+-\w*[rR]\w*\s+(-\S+\s+)*\/(\s|$)/.test(args.join(' ') + ' ')) return `${c('red', 'sudo:')} absolutely not.`
       if (args[0] === 'make' && args.slice(1).join(' ') === 'me a sandwich') return 'Okay.'
-      return `[sudo] password for ${profile.handle}: \n${c('red', `${profile.handle} is not in the sudoers file. This incident will be reported.`)}`
+      // The signed-in owner may (it is their filesystem table); visitors are not in sudoers.
+      if (getAccount().status !== 'user') return `[sudo] password for ${profile.handle}: \n${c('red', `${profile.handle} is not in the sudoers file. This incident will be reported.`)}`
+      if (!args.length) return 'usage: sudo command'
+      if (['-i', '-s', 'su', 'bash', 'sh', 'msh'].includes(args[0])) throw new CmdError('sudo: no root shell here; put sudo in front of each command instead.')
+      const printed: string[] = []
+      const results = await runLine(args.map(shellQuote).join(' '), { ...ctx, root: true, print: ctx.tty ? ctx.print : (t) => void printed.push(t) })
+      if (results.some((r) => !r.ok)) throw new CmdError(printed.join('\n'), true)
+      return printed.join('\n')
     },
   },
   su: { desc: 'switch user', hidden: true, run: () => c('red', 'su: Authentication failure (there is no root here, only vibes)') },
   vim: { desc: 'editor', hidden: true, run: () => 'You are now trapped in vim. Just kidding: this filesystem is read-only. Type :q anyway, it helps.' },
   nvim: { desc: 'editor', hidden: true, run: (ctx) => commands.vim.run(ctx) },
-  nano: { desc: 'editor', hidden: true, run: () => 'nano: read-only filesystem. Try `echo text > /tmp/notes`.' },
   emacs: { desc: 'operating system', hidden: true, run: () => 'emacs: you already have an operating system open.' },
   ':q': { desc: 'quit vim', hidden: true, run: () => 'Freedom.' },
   ssh: { desc: 'no', hidden: true, run: () => c('yellow', 'ssh: you are already inside the only machine here.') },
@@ -956,7 +1023,7 @@ export const commands: Record<string, Command> = {
 }
 
 // The real-network and device tools live in extra.ts.
-Object.assign(commands, extraCommands, findCommands)
+Object.assign(commands, extraCommands, findCommands, mountCommands, nanoCommands)
 
 /** Shuts down or reboots the whole "machine" after the broadcast has had a moment on screen. */
 function power(ctx: Ctx, what: 'reboot' | 'power off') {
@@ -1228,12 +1295,14 @@ async function runPipeline(stmt: string, base: Base): Promise<RunResult> {
       const cmd = commands[name] ?? executable(name, base.cwd)
       if (!cmd) throw new CmdError(`msh: command not found: ${name}${name.length > 2 ? suggest(name) : ''}`)
       const tty = i === stages.length - 1 && !redirect
+      // Seafile behind the mounts: fetch what the command will look at, so it can read it at once.
+      if (commands[name] && !asksHelp(name, args)) await prepare(base.cwd, name, name === 'cd' && !args.length ? [HOME] : args)
       const out = commands[name] && asksHelp(name, args) ? manPage(name) : ((await cmd.run({ ...base, args, stdin, tty })) ?? '')
       rendered = out
       stdin = strip(out)
     }
     if (redirect) {
-      writeTmp(base.cwd, redirect.target, stdin ?? '', redirect.append)
+      await writeFile(base.cwd, redirect.target, stdin ?? '', redirect.append)
       return { output: '', ok: true }
     }
     return { output: rendered, ok: true }

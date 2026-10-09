@@ -15,8 +15,12 @@ export type FileNode = {
   /** Display size in bytes for files whose content is only a stand-in (an ISO, a FLAC). */
   size?: number
   mtime?: number
+  /** Where it really is, for files that live in Seafile (terminal/fs.ts) */
+  sf?: string
+  /** Read-only: a read-only library or mount */
+  ro?: boolean
 }
-export type DirNode = { type: 'dir'; name: string; children: Map<string, Node> }
+export type DirNode = { type: 'dir'; name: string; children: Map<string, Node>; mtime?: number; sf?: string; ro?: boolean }
 export type Node = FileNode | DirNode
 
 export const HOME = `/home/${profile.handle}`
@@ -186,26 +190,30 @@ const homeFolders: Node[] = [
   ]),
 ]
 
+const homeNode = dir(profile.handle, [
+  readmeNode,
+  cvNode,
+  projectsNode,
+  gamesNode,
+  contributionsNode,
+  ...homeFolders,
+  file('hobbies.txt', hobbies.map((h) => `${h.name}\n  ${h.note}${h.url ? `\n  ${h.url}` : ''}`).join('\n\n')),
+  file('headlines.txt', headlines.join('\n'), { app: 'notes' }),
+  file(
+    'contact.txt',
+    () => [`email     ${revealEmail()}`, ...profile.links.map((l) => `${l.label.toLowerCase().padEnd(10)}${l.url}`)].join('\n'),
+    { app: 'contact' },
+  ),
+  file('.bashrc', ['# not actually bash, but it reads like it', "alias ll='ls -la'", 'export EDITOR=nvim', 'export PAGER=cat'].join('\n')),
+  file('.plan', 'Ship Boltwarden 1.0.\nGet Pepper to a first stable release.\nSleep at some point.'),
+])
+
 export const root: DirNode = dir('', [
-  dir('home', [
-    dir(profile.handle, [
-      readmeNode,
-      cvNode,
-      projectsNode,
-      gamesNode,
-      contributionsNode,
-      ...homeFolders,
-      file('hobbies.txt', hobbies.map((h) => `${h.name}\n  ${h.note}${h.url ? `\n  ${h.url}` : ''}`).join('\n\n')),
-      file('headlines.txt', headlines.join('\n'), { app: 'notes' }),
-      file(
-        'contact.txt',
-        () => [`email     ${revealEmail()}`, ...profile.links.map((l) => `${l.label.toLowerCase().padEnd(10)}${l.url}`)].join('\n'),
-        { app: 'contact' },
-      ),
-      file('.bashrc', ['# not actually bash, but it reads like it', "alias ll='ls -la'", 'export EDITOR=nvim', 'export PAGER=cat'].join('\n')),
-      file('.plan', 'Ship Boltwarden 1.0.\nGet Pepper to a first stable release.\nSleep at some point.'),
-    ]),
-  ]),
+  dir('home', [homeNode]),
+  // The site's own home, under a second name: with Seafile mounted on ~ (see /etc/fstab), this is
+  // where cv.md and projects/ are.
+  dir('srv', [{ type: 'dir', name: 'site', children: homeNode.children }]),
+  dir('mnt', [dir('seafile', [])]),
   dir('etc', [
     file('os-release', `NAME="MvL OS"\nPRETTY_NAME="MvL OS ${SHORT_VERSION} (Vaporwave Penguin)"\nVERSION_ID="${VERSION}"\nBUILD_ID="${COMMIT.slice(0, 7)}"\nID=mvlos\nID_LIKE=arch\nHOME_URL="https://mennovanleeuwen.nl"`),
     file('hostname', 'mvlos'),

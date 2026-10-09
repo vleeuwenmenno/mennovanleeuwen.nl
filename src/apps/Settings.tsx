@@ -12,6 +12,7 @@ import { MC_ADDRESS, mcNotificationsOn, setMcNotifications, useMinecraft } from 
 import { setSwing, useSwingPrefs } from '../os/swing'
 import { ask } from '../os/Dialogs'
 import { libraryName, loadLibraries, primaryOf, setSeafilePrefs, useLibraries, useSeafilePrefs } from '../data/seafile'
+import { fstabEntries, isSeafileType, useMounts } from '../data/mounts'
 
 const libraryNameOf = (prefix: string) => libraryName(prefix.slice('seafile://'.length))
 import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeUpdownKey, setOffice, setUpdownKey, signIn, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelyOwner } from '../os/account'
@@ -686,6 +687,9 @@ function SeafileSettings() {
   const { libraries: libs, error: libsError } = useLibraries()
   const sfPrefs = useSeafilePrefs()
   const primary = primaryOf(libs, sfPrefs.primary)
+  const wm = useWM()
+  useMounts()
+  const sfLines = fstabEntries().filter((e) => isSeafileType(e) || e.options.includes('bind'))
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true)
@@ -777,6 +781,20 @@ function SeafileSettings() {
             <span className="muted">{sfPrefs.home ? `Files and the desktop use ${primary?.name ?? 'the primary library'}` : 'Off: home is the built-in one, Seafile is still in Files’ sidebar'}</span>
           </span>
           <Toggle on={sfPrefs.home} onChange={(home) => setSeafilePrefs({ home })} label="Use the primary library as home" />
+        </li>
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Mounts</strong>
+            <span className="muted">
+              {sfLines.length ? `${sfLines.length} Seafile line${sfLines.length === 1 ? '' : 's'} in /etc/fstab: ${sfLines.map((e) => e.target).join(', ')}` : 'No Seafile lines in /etc/fstab'}. Files and the terminal both follow it.
+            </span>
+          </span>
+          <button className="btn btn-small" onClick={() => wm.openNew('terminal', { run: 'findmnt', t: String(Date.now()) })}>
+            Show
+          </button>
+          <button className="btn btn-small" onClick={() => wm.openNew('terminal', { run: 'sudo nano /etc/fstab', t: String(Date.now()) })}>
+            Edit fstab
+          </button>
         </li>
         <li className={`set-row ${sfPrefs.home ? '' : 'is-off'}`}>
           <span className="set-row-text">
@@ -1277,7 +1295,7 @@ function SyncPane() {
           )}
         </li>
       </ul>
-      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, game high scores, the go links account, Spotlight's settings, favourites and history, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. Without an account they stay in this browser.</p>
+      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, game high scores, the go links account, Spotlight's settings, favourites and history, /etc/fstab, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. Without an account they stay in this browser.</p>
     </>
   )
 }

@@ -15,6 +15,10 @@ import { MEDIA_APP, thumbOf } from '../data/media'
 import { droppedFiles, hasOsFiles, pickAndUpload, uploadFiles } from '../data/uploads'
 import { addBookmark, useSidebar } from '../data/filesSidebar'
 import { FilesSidebar, type SideSection } from './FilesSidebar'
+import { mounts, posixOf, useMounts, whereIs } from '../data/mounts'
+
+/** Quotes a path for a command line in the terminal. */
+const shq = (s: string) => (/^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
 
 // A file manager in the style of Omafile (the Omarchy file manager Menno contributes to), browsing
 // the same in-memory filesystem the terminal uses (only /tmp is writable there) and, for the
@@ -166,13 +170,35 @@ export function Files({ win }: { win: WinState }) {
   const { libraries } = useLibraries()
   const { home: sfHome, library: homeLibrary, places, mapped } = useSeafileHome()
   const home = sfHome ?? HOME
+  // /etc/fstab leads: paths show and resolve the way the terminal has them (~/Documents,
+  // /mnt/seafile/Photos), while seafile:// paths stay the way Files reaches Seafile.
+  useMounts()
+  /** Where a filesystem path is for Files: a seafile:// path, or the site's own. */
+  const toInternal = (posix: string): string | null => {
+    const w = whereIs(posix)
+    return w.kind === 'sf' ? w.sf : w.kind === 'local' ? w.path : null
+  }
+  /** A path as the terminal shows it; the site's own home is /srv/site while Seafile is on ~. */
+  const toPosix = (p: string): string | null => {
+    if (isSf(p)) return p === SF ? (mounts().find((m) => m.source === 'seafile')?.target ?? null) : posixOf(p)
+    if (p === RECENT || p === TRASH || p.includes('://')) return null
+    if (sfHome && (p === HOME || p.startsWith(`${HOME}/`))) return `/srv/site${p.slice(HOME.length)}`
+    return p
+  }
+  /** A path handed to Files from elsewhere (Spotlight, the desktop): the site's own files stay the site's. */
+  const fromOutside = (p: string): string => {
+    if (isSf(p) || p === RECENT || p === TRASH || p.includes('://')) return p
+    const placeFolder = PLACES.some((pl) => p === (pl.folder ? `${HOME}/${pl.folder}` : HOME))
+    if (sfHome && !placeFolder && p.startsWith(`${HOME}/`) && lookup(p)) return `/srv/site${p.slice(HOME.length)}`
+    return toInternal(p) ?? p
+  }
   const unlocks = useUnlocks()
   // With Seafile linked, the Trash is Seafile's (unless switched off in Settings).
   const sfPrefs = useSeafilePrefs()
   const sfTrash = !!account.seafile && sfPrefs.trash
   const [prefs, setPrefsState] = useState<Prefs>(loadPrefs)
   const { bookmarks } = useSidebar()
-  const [path, setPath] = useState(win.props.path ?? home)
+  const [path, setPath] = useState(() => (win.props.path ? fromOutside(win.props.path) : home))
   const [back, setBack] = useState<string[]>([])
   const [fwd, setFwd] = useState<string[]>([])
   const [selected, setSelected] = useState<Set<string>>(() => new Set(win.props.select ? [win.props.select] : []))
@@ -207,7 +233,7 @@ export function Files({ win }: { win: WinState }) {
   // Re-read the filesystem when the window comes back to the front (the terminal may have written to /tmp).
   useEffect(() => setTick((t) => t + 1), [wm.focusedPid])
   useEffect(() => {
-    if (win.props.path) navigate(win.props.path, false)
+    if (win.props.path) navigate(fromOutside(win.props.path), false)
     if (win.props.select) setSelected(new Set([win.props.select]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [win.props])
@@ -233,7 +259,8 @@ export function Files({ win }: { win: WinState }) {
   }, [toast])
 
   const navigate = useCallback(
-    (to: string, record = true) => {
+    (target: string, record = true) => {
+      const to = isSf(target) || target === RECENT || target === TRASH || target.includes('://') || target.startsWith('/srv/site') ? target : (toInternal(target) ?? target)
       if (to === path) return
       if (record) {
         setBack((b) => [...b, path])
@@ -244,7 +271,8 @@ export function Files({ win }: { win: WinState }) {
       setSearch(null)
       setEditingPath(false)
     },
-    [path],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [path, sfHome],
   )
 
   // --- listing --------------------------------------------------------------------------------
@@ -303,6 +331,8 @@ export function Files({ win }: { win: WinState }) {
   const sfWritable = isSf(path) && path !== SF && sfDir.listing?.perm === 'rw'
   /** ~/Documents, Seafile › Photos/2024 or /etc: how a path reads in the path bar and dialogs. */
   const pretty = (p: string) => {
+    const posix = toPosix(p)
+    if (posix) return prettyPath(posix)
     if (sfHome && (p === sfHome || p.startsWith(sfHome + '/'))) return '~' + p.slice(sfHome.length)
     const at = parseSf(p)
     if (at) return p === SF ? 'Seafile' : `${libraryName(at.repo)}${at.p === '/' ? '' : at.p}`
@@ -320,12 +350,12 @@ export function Files({ win }: { win: WinState }) {
     const node = item.node
     if (!node) return
     if (node.type === 'dir') {
-      if (how === 'terminal') wm.openNew('terminal', { run: `cd ${prettyPath(item.path)} && ls`, t: String(Date.now()) })
+      if (how === 'terminal') wm.openNew('terminal', { run: `cd ${shq(prettyPath(toPosix(item.path) ?? item.path))} && ls`, t: String(Date.now()) })
       else navigate(item.path)
       return
     }
     remember(item)
-    if (how === 'terminal') return wm.openNew('terminal', { run: `cat ${prettyPath(item.path)}`, t: String(Date.now()) })
+    if (how === 'terminal') return wm.openNew('terminal', { run: `cat ${shq(prettyPath(toPosix(item.path) ?? item.path))}`, t: String(Date.now()) })
     if (how === 'viewer') return wm.openNew('viewer', { path: item.path })
     if (how === 'preview' || how === 'player' || how === 'pdf' || how === 'archive') return wm.openNew(how, { path: item.path })
     if (how === 'zed') return wm.open('zed', { path: item.path, view: 'preview', t: String(Date.now()) })
@@ -337,6 +367,8 @@ export function Files({ win }: { win: WinState }) {
 
   /** Seafile: folders open here, files as everywhere else (see openSeafile). */
   function openSeafileItem(item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' | 'preview' | 'player' | 'pdf' | 'office' | 'archive') {
+    const posix = toPosix(item.path)
+    if (how === 'terminal' && posix) return wm.openNew('terminal', { run: item.kind === 'folder' ? `cd ${shq(prettyPath(posix))} && ls` : `cat ${shq(prettyPath(posix))}`, t: String(Date.now()) })
     if (item.kind === 'folder') return navigate(item.path)
     remember(item)
     openSeafile(wm, item.path, { how: how === 'terminal' ? 'default' : how }).catch((e: Error) => setToast(e.message))
@@ -658,7 +690,7 @@ export function Files({ win }: { win: WinState }) {
       ]
     return [
       ...(writable ? [{ label: 'New text file', onSelect: newFile }] : []),
-      ...(path === SF ? [] : [{ label: 'Open terminal here', disabled: special, onSelect: () => wm.openNew('terminal', { run: `cd ${prettyPath(path)} && ls`, t: String(Date.now()) }) }]),
+      ...(toPosix(path) ? [{ label: 'Open terminal here', disabled: special, onSelect: () => wm.openNew('terminal', { run: `cd ${shq(prettyPath(toPosix(path)!))} && ls`, t: String(Date.now()) }) }] : []),
       { separator: true },
       ...viewMenu(),
       ...(path === SF ? [{ label: 'Refresh', shortcut: 'F5', onSelect: () => void loadLibraries(true) }] : []),
@@ -765,9 +797,12 @@ export function Files({ win }: { win: WinState }) {
     setBack([...back, path])
     navigate(next, false)
   }
-  const atTop = path === '/' || path === RECENT || path === TRASH || path === SF
+  const here = toPosix(path)
+  const atTop = here ? here === '/' : path === '/' || path === RECENT || path === TRASH || path === SF
   const goUp = () => {
-    if (!atTop) navigate(parentOf(path))
+    if (atTop) return
+    if (here) navigate(toInternal(here.replace(/\/[^/]*$/, '') || '/') ?? '/')
+    else navigate(parentOf(path))
   }
 
   // The mouse's Back and Forward buttons go through this window's folders.
@@ -816,6 +851,20 @@ export function Files({ win }: { win: WinState }) {
   const crumbs = useMemo(() => {
     if (path === RECENT) return [{ label: 'Recent', path: RECENT }]
     if (path === TRASH) return [{ label: 'Trash', path: TRASH }]
+    // Through the mounts: ~ › Documents, or / › mnt › seafile › Photos.
+    const posix = toPosix(path)
+    if (posix) {
+      const inHome = posix === HOME || posix.startsWith(`${HOME}/`)
+      const parts = (inHome ? posix.slice(HOME.length) : posix).split('/').filter(Boolean)
+      const out = [{ label: inHome ? '~' : '/', path: toInternal(inHome ? HOME : '/') ?? '/' }]
+      let acc = inHome ? HOME : ''
+      for (const part of parts) {
+        acc += `/${part}`
+        out.push({ label: part, path: toInternal(acc) ?? acc })
+      }
+      out[out.length - 1].path = path
+      return out
+    }
     const at = parseSf(path)
     if (at) {
       const inSfHome = !!sfHome && (path === sfHome || path.startsWith(sfHome + '/'))
@@ -837,7 +886,8 @@ export function Files({ win }: { win: WinState }) {
       out.push({ label: part, path: acc })
     }
     return out
-  }, [path, sfHome, libraries])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, sfHome, libraries, toPosix(path)])
 
   /** Emblems on Seafile's home folders, and on libraries (home, or a padlock). */
   const emblemOf = (item: Item): string | undefined => {
@@ -881,23 +931,24 @@ export function Files({ win }: { win: WinState }) {
         { id: 'music', label: 'Music', target: places?.music ?? `${HOME}/Music`, icon: '♪', menu: placeMenu('music') },
         { id: 'pictures', label: 'Pictures', target: places?.pictures ?? `${HOME}/Pictures`, icon: '▣', menu: placeMenu('pictures') },
         { id: 'videos', label: 'Videos', target: places?.videos ?? `${HOME}/Videos`, icon: '▶', menu: placeMenu('videos') },
-        ...(sfHome ? [{ id: 'site', label: 'Site home', target: HOME, icon: '⌂', title: 'The site’s own home folder' }] : []),
+        ...(sfHome ? [{ id: 'site', label: 'Site home', target: '/srv/site', icon: '⌂', title: 'The site’s own home folder, at /srv/site while Seafile is on ~' }] : []),
         { id: 'filesystem', label: 'Filesystem', target: '/', icon: '▭' },
       ],
     },
-    ...(account.seafile
+    // What fstab mounts: /mnt/seafile gives "All libraries"; a library shows if it is mounted anywhere.
+    ...(account.seafile && (libraries ?? []).some((l) => posixOf(sfPath(l.id)))
       ? [
           {
             id: 'seafile',
             label: 'Seafile',
             items: [
-              { id: 'all', label: 'All libraries', target: SF, icon: '☁' },
-              ...(libraries ?? []).map((l) => ({
+              ...(toPosix(SF) ? [{ id: 'all', label: 'All libraries', target: SF, icon: '☁', title: toPosix(SF)! }] : []),
+              ...(libraries ?? []).filter((l) => posixOf(sfPath(l.id))).map((l) => ({
                 id: l.id,
                 label: l.name,
                 target: sfPath(l.id),
                 icon: l.encrypted ? (unlocks[l.id] > Date.now() ? '🔓' : '🔒') : l.id === homeLibrary?.id && sfHome ? '⌂' : '▤',
-                title: `${l.name}${l.type !== 'mine' && l.owner ? `, from ${l.owner}` : ''}${l.permission === 'r' ? ' (read-only)' : ''}`,
+                title: `${l.name}${l.type !== 'mine' && l.owner ? `, from ${l.owner}` : ''}${l.permission === 'r' ? ' (read-only)' : ''} · ${posixOf(sfPath(l.id))}`,
               })),
             ],
           },
@@ -968,10 +1019,13 @@ export function Files({ win }: { win: WinState }) {
                 if (e.key === 'Escape') setEditingPath(false)
                 if (e.key === 'Enter') {
                   const value = e.currentTarget.value.trim()
-                  // ~ is Seafile's home when that is on; seafile://… is taken as it is.
+                  // A filesystem path goes where /etc/fstab says (~ is Seafile's home when that is
+                  // mounted); seafile://… is taken as it is.
                   if (value.startsWith(SF)) return navigate(value.replace(/\/+$/, '') || SF)
-                  if (sfHome && (value === '~' || value.startsWith('~/'))) return navigate(sfHome + value.slice(1).replace(/\/+$/, ''))
-                  const target = resolvePath(path.includes('://') ? HOME : path, value)
+                  const posix = resolvePath(toPosix(path) ?? HOME, value)
+                  const inside = toInternal(posix)
+                  if (inside && isSf(inside)) return navigate(inside)
+                  const target = inside ?? posix
                   const node = lookup(target)
                   if (node?.type === 'dir') navigate(target)
                   else setToast(`${value}: no such folder`)
@@ -1036,7 +1090,7 @@ export function Files({ win }: { win: WinState }) {
                     { label: 'Upload folder…', disabled: !sfWritable, onSelect: () => pickAndUpload(path, true) },
                   ]
                 : [{ label: 'New text file', disabled: !writable, onSelect: newFile }]),
-              { label: 'Open terminal here', disabled: path.includes('://'), onSelect: () => wm.openNew('terminal', { run: `cd ${prettyPath(path)} && ls`, t: String(Date.now()) }) },
+              { label: 'Open terminal here', disabled: !toPosix(path), onSelect: () => wm.openNew('terminal', { run: `cd ${shq(prettyPath(toPosix(path) ?? path))} && ls`, t: String(Date.now()) }) },
               { separator: true },
               { label: 'Copy location', disabled: path.includes('://') && !isSf(path), onSelect: () => copyPath(path) },
               { label: 'Add to bookmarks', disabled: (path.includes('://') && !isSf(path)) || path === SF || bookmarks.includes(path), onSelect: () => bookmark(path) },

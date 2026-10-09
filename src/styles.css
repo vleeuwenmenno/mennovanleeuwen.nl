@@ -1463,6 +1463,21 @@ body.is-resizing iframe {
   font-variant-ligatures: none;
   cursor: text;
 }
+/* The alternate screen (nano): only the program's block shows; the prompt stays focusable but out of sight. */
+.terminal.is-alt > :not(.t-alt):not(.t-input) {
+  display: none;
+}
+.terminal.is-alt .t-input {
+  position: absolute;
+  height: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+.t-inverse {
+  background: var(--fg);
+  color: var(--bg);
+}
 .t-out {
   margin: 0;
   font: inherit;

@@ -32,12 +32,19 @@ export type Ctx = {
   print: (text: string) => void
   /** True when output goes to the screen rather than into a pipe or redirect. */
   tty: boolean
+  /** Running as root (sudo, for the signed-in owner): may write /etc/fstab and mount */
+  root?: boolean
   /** Redraws one block of output in place (htop, watch, cmatrix); null removes it again. */
-  live: (text: string | null) => void
+  /** `alt`: the alternate screen, like nano's: only this block shows while it is up */
+  live: (text: string | null, opts?: { alt?: boolean }) => void
   /** Terminal size in characters, for full-screen programs. */
   size: { cols: number; rows: number }
   /** Receives keys typed while the command runs (q in htop); return true to swallow the key. */
-  onKey: (handler: ((key: string) => boolean) | null) => void
+  /**
+   * `raw` handlers also get Ctrl and Alt combinations (as ^X and M-x), F-keys (F1…F12) and pastes
+   * (key 'Paste', with the text), before the shell or the desktop sees them.
+   */
+  onKey: (handler: ((key: string, text?: string) => boolean) | null, opts?: { raw?: boolean }) => void
   /** Aborted by Ctrl+C. */
   signal: AbortSignal
 }
