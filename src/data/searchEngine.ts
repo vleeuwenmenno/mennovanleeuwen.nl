@@ -25,7 +25,10 @@ const store = synced<SearchSettings>('search', DEFAULTS, {
 
 export const useSearchSettings = store.use
 export const setSearchSettings = (patch: Partial<SearchSettings>) => store.set((s) => ({ ...s, ...patch }))
-export const searchWeb = (q: string) => openLink(ENGINES[store.get().engine].search(q))
+export const searchWeb = (q: string) => {
+  const engine = ENGINES[store.get().engine]
+  openLink(engine.search(q), { title: `“${q}” on ${engine.label}` })
+}
 
 const cache = new Map<string, string[]>()
 
