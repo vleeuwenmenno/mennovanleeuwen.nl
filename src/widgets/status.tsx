@@ -1,4 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react'
+import { openLink } from '../data/links'
 import { timeAgo } from '../data/recents'
 import { api, signIn, useAccount } from '../os/account'
 import type { MenuItem } from '../os/ContextMenu'
@@ -139,7 +140,7 @@ function useStatusFrame(id: string): CSSProperties {
 
 function useStatusMenu(id: string): MenuItem[] {
   const config = useWidgetConfig<Config>(id, DEFAULTS)
-  return [{ label: 'Open updown.io ↗', onSelect: () => window.open('https://updown.io/checks', '_blank', 'noopener') }, tiltMenu(id, config.tilt)]
+  return [{ label: 'Open updown.io ↗', onSelect: () => openLink('https://updown.io/checks') }, tiltMenu(id, config.tilt)]
 }
 
 export const statusWidget: WidgetDef = {

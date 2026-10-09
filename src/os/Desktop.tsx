@@ -8,6 +8,7 @@ import { HOME } from '../terminal/vfs'
 import { closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
 import { resetLayout, restoreIcons, trashIcons, updateDesktop, useDesktop, type IconPos } from './desktopStore'
 import { appearanceMenu } from './appearanceMenu'
+import { openLink } from '../data/links'
 import { DOCK_MODES, getDockMode, setDockMode } from './dockPrefs'
 import { useWM, type AppId } from './wm'
 
@@ -302,7 +303,7 @@ export function Desktop() {
     return [
       { label: 'Open', shortcut: '↵', onSelect: () => open(icon) },
       { label: 'Open in Terminal', onSelect: () => openInTerminal(icon) },
-      ...(icon.url ? [{ label: 'Visit website ↗', onSelect: () => window.open(icon.url, '_blank', 'noopener') }] : []),
+      ...(icon.url ? [{ label: 'Visit website ↗', onSelect: () => openLink(icon.url!) }] : []),
       { separator: true },
       { label: 'Copy path', onSelect: () => navigator.clipboard?.writeText(icon.path).catch(() => {}) },
       { label: 'Rename', shortcut: 'F2', onSelect: () => setRenaming(icon.id) },

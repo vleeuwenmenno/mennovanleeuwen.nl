@@ -18,6 +18,7 @@ import { APP_META } from './apps'
 import { useCodeSearch } from './codeSearch'
 import { asWebAddress, useLinkPreview, type LinkPreview } from './linkPreview'
 import { openContextMenu } from './ContextMenu'
+import { openLink } from '../data/links'
 import { isDockableApp, linkDockId, pinLink, pinToDock, unpinFromDock, useCanCustomizeDock, useDock, type DockId } from './dockItems'
 import { revealEmail } from '../data/email'
 import { cachedRates, loadRates, smartCalc, type CalcResult } from './smartcalc'
@@ -400,7 +401,6 @@ export function Spotlight() {
   const searchSettings = useSearchSettings()
   const engine = ENGINES[searchSettings.engine]
   const close = () => setOverlay(null)
-  const openUrl = (url: string) => window.open(url, '_blank', 'noopener')
 
   useEffect(() => {
     input.current?.focus()
@@ -538,7 +538,7 @@ export function Spotlight() {
         keywords: `${p.stack.join(' ')} project ${p.description}`,
         icon: <Glyph color={p.accent}>{p.name[0]}</Glyph>,
         run: () => wm.open('projects', { slug: p.slug }),
-        alt: p.url ? { label: 'Visit website', run: () => window.open(p.url, '_blank', 'noopener') } : undefined,
+        alt: p.url ? { label: 'Visit website', run: () => openLink(p.url!) } : undefined,
         preview: () => (
           <>
             <h4>{p.name}</h4>
@@ -559,7 +559,7 @@ export function Spotlight() {
         keywords: `${c.description} contribution open source omarchy`,
         icon: <Glyph color={c.accent}>{c.name[0]}</Glyph>,
         run: () => wm.open('projects', { slug: c.slug }),
-        alt: { label: 'Open repository', run: () => window.open(c.repo, '_blank', 'noopener') },
+        alt: { label: 'Open repository', run: () => openLink(c.repo) },
         preview: () => (
           <>
             <h4>{c.name}</h4>
@@ -612,7 +612,7 @@ export function Spotlight() {
         keywords: `file ${prettyPath(path)}`,
         icon: <Glyph>{name.endsWith('.url') ? '🔗' : name.endsWith('.md') ? '📝' : '📄'}</Glyph>,
         run: () => {
-          if (node.open?.url) window.open(node.open.url, '_blank', 'noopener')
+          if (node.open?.url) openLink(node.open.url)
           else if (node.open?.app) wm.open(node.open.app as AppId, node.open.props)
           else if (name.endsWith('.md')) wm.open('zed', { path, view: 'preview', t: String(Date.now()) })
           else wm.openNew('viewer', { path })
@@ -658,7 +658,7 @@ export function Spotlight() {
 
     // Links
     for (const l of profile.links)
-      out.push({ id: `link-${l.label}`, group: 'Links', title: l.label, subtitle: l.url.replace(/^https:\/\//, ''), keywords: 'link profile social', icon: <Glyph>↗</Glyph>, run: () => window.open(l.url, '_blank', 'noopener') })
+      out.push({ id: `link-${l.label}`, group: 'Links', title: l.label, subtitle: l.url.replace(/^https:\/\//, ''), keywords: 'link profile social', icon: <Glyph>↗</Glyph>, run: () => openLink(l.url) })
 
     return out
   }, [mc.status, recents.items, wm, account.status, notes, launchers])
@@ -714,11 +714,11 @@ export function Spotlight() {
     if (calc) out.push(calcRow(calc))
 
     // A web address always leads: "Go to google.com", with what the page says about itself.
-    if (address) out.unshift(goToRow(address, page, openUrl, copy))
+    if (address) out.unshift(goToRow(address, page, openLink, copy))
 
     // What you opened from Spotlight before, most used and recent first; right-click forgets one.
     const recentRow = (h: Hit): Result => {
-      const r = codeRow(h, openUrl, copy)
+      const r = codeRow(h, openLink, copy)
       return { ...r, id: `recent-${hitKey(h)}`, group: 'Recent', forget: () => forgetHit(h) }
     }
     const recentRanked = recentHits.slice().sort((a, b) => weight(b) - weight(a))
@@ -746,7 +746,7 @@ export function Spotlight() {
     const recentKeys = new Set(recentMatches.map((x) => hitKey(x.r.hit)))
 
     // Repositories, issues, PRs and branches from the owner's code hosts.
-    const codeRows = (code.result?.hits ?? []).filter((h) => !recentKeys.has(hitKey(h))).map((h) => codeRow(h, openUrl, copy))
+    const codeRows = (code.result?.hits ?? []).filter((h) => !recentKeys.has(hitKey(h))).map((h) => codeRow(h, openLink, copy))
     const codeStatus: Result[] = []
     // Searching and trouble only matter when the query is about code (#123, repo@branch).
     if (isCodeQuery(query) && code.loading && !codeRows.length) codeStatus.push({ id: 'code-loading', group: 'Code', title: 'Searching your code hosts…', icon: <Glyph>⌕</Glyph>, run: () => {} })

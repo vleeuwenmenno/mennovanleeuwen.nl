@@ -14,6 +14,7 @@ import { resetLayout } from './desktopStore'
 import { DOCK_MODES, getDockMode, setDockMode } from './dockPrefs'
 import { AppIcon } from './icons'
 import { setOverlay } from './overlays'
+import { openLink } from '../data/links'
 import { reboot, shutdown } from './powerState'
 import { SINGLE_INSTANCE, useWM, type AppId } from './wm'
 
@@ -105,7 +106,7 @@ const fromMenu = (items: MenuItem[]): Entry[] =>
     'separator' in m ? [] : [{ label: m.label, checked: m.checked, swatch: m.swatch, run: m.onSelect, children: m.submenu ? () => fromMenu(m.submenu!) : undefined }],
   )
 
-const link = (url: string) => () => window.open(url, '_blank', 'noopener')
+const link = (url: string) => () => openLink(url)
 
 export function Launchpad() {
   const wm = useWM()

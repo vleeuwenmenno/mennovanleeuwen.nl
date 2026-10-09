@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { openLink } from '../data/links'
 
 export type MenuItem =
   | { separator: true }
@@ -41,7 +42,7 @@ export function linkAt(target: EventTarget | null): string | null {
 }
 
 export const linkMenu = (href: string): MenuItem[] => [
-  { label: href.startsWith('mailto:') ? 'Write an email' : 'Open link ↗', onSelect: () => window.open(href, '_blank', 'noopener') },
+  { label: href.startsWith('mailto:') ? 'Write an email' : 'Open link ↗', onSelect: () => (href.startsWith('mailto:') ? window.open(href, '_blank', 'noopener') : openLink(href)) },
   { label: href.startsWith('mailto:') ? 'Copy address' : 'Copy link', onSelect: () => navigator.clipboard?.writeText(href.replace(/^mailto:/, '')).catch(() => {}) },
 ]
 

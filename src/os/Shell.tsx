@@ -14,6 +14,7 @@ import { Desktop } from './Desktop'
 import { PowerScreens } from './Power'
 import { Notifications } from './Notifications'
 import { startActivityAlerts } from './activityAlerts'
+import { followLinkSettings } from '../data/links'
 import { newTab, usePower } from './powerState'
 import { notify } from './notify'
 import { isDefaultDock, isLauncherId, resetDock, setDockOrder, unpinFromDock, useCanCustomizeDock, useDock, type DockId } from './dockItems'
@@ -675,6 +676,9 @@ export function Shell() {
   useEffect(() => {
     if (power.phase === 'up') startActivityAlerts()
   }, [power.phase])
+
+  // Links in apps open where Settings > Links says.
+  useEffect(followLinkSettings, [])
 
   // Notifications (and anything else outside React's tree) can ask for an app to open.
   useEffect(() => {

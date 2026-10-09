@@ -5,6 +5,7 @@ import { api, signIn, useAccount } from '../os/account'
 import type { MenuItem } from '../os/ContextMenu'
 import { useWindowMenu } from '../os/windowMenu'
 import type { WinState } from '../os/wm'
+import { openLink } from '../data/links'
 import { createWithTilt, setWidgetConfig, tiltMenu, useWidgetConfig } from './config'
 import type { WidgetDef } from './types'
 
@@ -139,7 +140,7 @@ function useInboxMenu(id: string): MenuItem[] {
         onSelect: () => setWidgetConfig(id, { hidden: config.hidden.includes(key) ? config.hidden.filter((k) => k !== key) : [...config.hidden, key] }),
       })),
     },
-    { label: 'Open GitHub notifications ↗', onSelect: () => window.open('https://github.com/notifications', '_blank', 'noopener') },
+    { label: 'Open GitHub notifications ↗', onSelect: () => openLink('https://github.com/notifications') },
     tiltMenu(id, config.tilt),
   ]
 }

@@ -17,6 +17,7 @@ import {
 import { connectGoogle, hasCalendar, signIn, useAccount } from '../../os/account'
 import { openContextMenu, type MenuItem } from '../../os/ContextMenu'
 import { synced } from '../../os/synced'
+import { openLink } from '../../data/links'
 import { useWM, type WinState } from '../../os/wm'
 import { draftFromEvent, draftFromRange, EventEditor, type Choose, type Draft } from './EventEditor'
 import { MonthView } from './MonthView'
@@ -212,8 +213,8 @@ export function CalendarApp({ win }: { win: WinState }) {
     const items: MenuItem[] = e
       ? [
           { label: e.editable ? 'Open' : 'Show details', onSelect: () => open(e) },
-          ...(e.meet ? [{ label: 'Join the call', onSelect: () => window.open(e.meet, '_blank', 'noopener') }] : []),
-          ...(e.url ? [{ label: 'Open in Google Calendar', onSelect: () => window.open(e.url, '_blank', 'noopener') }] : []),
+          ...(e.meet ? [{ label: 'Join the call', onSelect: () => openLink(e.meet!) }] : []),
+          ...(e.url ? [{ label: 'Open in Google Calendar', onSelect: () => openLink(e.url!) }] : []),
           ...(e.editable && !e.recurring && writable.length > 1
             ? [{ label: 'Move to', submenu: writable.map((c) => ({ label: c.name, swatch: c.color, checked: c.id === e.calendarId, disabled: c.id === e.calendarId, onSelect: () => moveTo(e, c) })) }]
             : []),
