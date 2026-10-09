@@ -6,8 +6,11 @@ import { useSyncExternalStore } from 'react'
 export type PowerPhase = 'boot' | 'up' | 'down' | 'off'
 type State = { phase: PowerPhase; /** What 'down' leads to. */ then: 'boot' | 'off'; /** Bumped per boot, to restart it. */ run: number }
 
+/** Loaded as the browser's home or new tab page (/?newtab): straight to a fresh terminal, no boot. */
+export const newTab = typeof location !== 'undefined' && new URLSearchParams(location.search).has('newtab')
+
 let state: State = {
-  phase: typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 'up' : 'boot',
+  phase: newTab || (typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches) ? 'up' : 'boot',
   then: 'boot',
   run: 0,
 }

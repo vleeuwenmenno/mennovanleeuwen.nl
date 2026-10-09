@@ -13,6 +13,8 @@ import { loadRates, smartCalc } from '../os/smartcalc'
 import { THEMES as OMARCHY_THEMES } from '../os/omarchyThemes'
 import { ACCENTS, setMode, setTheme, themeLabel, themeSettings } from '../os/theme'
 import { reboot, shutdown } from '../os/powerState'
+import { signedIn } from '../os/account'
+import { golinksSite, golinksTemplate, golinksUrl, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { age, fileKind, HOME, lookup, prettyPath, resolvePath, walk, type DirNode, type Node } from './vfs'
 
 // Output markup understood by the terminal renderer:
@@ -180,7 +182,7 @@ export const commands: Record<string, Command> = {
     desc: 'list commands',
     run: () => {
       const groups: [string, string[]][] = [
-        ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'open', 'files']],
+        ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'open', 'go', 'files']],
         ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'git', 'heatmap', 'stars', 'contact']],
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
         ['Network', ['curl', 'wget', 'whois', 'ping', 'dig', 'host', 'nslookup', 'minecraft']],
@@ -507,6 +509,39 @@ export const commands: Record<string, Command> = {
     },
   },
   'xdg-open': { desc: 'alias for open', hidden: true, run: (ctx) => commands.open.run(ctx) },
+  go: {
+    desc: 'follow a go link through your golinks account',
+    usage: 'go <alias>   |   go set <search url | token>   |   go unset   (go -- set follows an alias named set)',
+    run: ({ args }) => {
+      const template = golinksTemplate()
+      const where = signedIn() ? 'synced to your account' : 'saved in this browser'
+      if (args[0] === 'set') {
+        const next = parseGolinks(args.slice(1))
+        if (!next)
+          throw new CmdError('go set: expected your golinks search URL, e.g. https://mvl.sh/r/%s?token=… (or a site and a token, or just a token for mvl.sh)')
+        setGolinks(next)
+        return `${c('green', '✓')} golinks account ${where}: ${maskGolinks(next)}\nTry ${c('cyan', 'go <alias>')}.`
+      }
+      if (args[0] === 'unset') {
+        if (!template) return 'No golinks account set.'
+        setGolinks(null)
+        return `${c('green', '✓')} golinks account removed.`
+      }
+      const alias = (args[0] === '--' ? args.slice(1) : args).join(' ').trim()
+      if (!alias) {
+        if (!template)
+          return [
+            `No golinks account set. Make a token on ${link('https://mvl.sh/tokens')} (or your own ${link('https://git.mvl.sh/vleeuwenmenno/golinks', 'golinks')}),`,
+            `then paste its search URL: ${c('cyan', 'go set https://mvl.sh/r/%s?token=…')}`,
+          ].join('\n')
+        return [`Account: ${maskGolinks(template)} ${c('muted', `(${where})`)}`, `Aliases: ${link(`${golinksSite(template)}/aliases`)}`, `usage: ${commands.go.usage}`].join('\n')
+      }
+      if (!template) throw new CmdError('go: no golinks account set. Run `go` to see how.')
+      const url = golinksUrl(template, alias)
+      window.open(url, '_blank', 'noopener')
+      return `Opening ${link(url, `${golinksSite(template)}/r/${encodeURIComponent(alias)}`)}`
+    },
+  },
   cv: {
     desc: 'open my CV',
     run: (ctx) => {

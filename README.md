@@ -61,13 +61,22 @@ never the visitor's own network), `whois` (RDAP), `git log`/`git show` on the re
 `htop`, `watch`, `cmatrix`, `df`/`free`/`nproc`/`lscpu`/`xrandr`/`ip` with the numbers the browser
 shares, `jq`, `sha*sum`/`md5sum`, `figlet` and `lolcat`.
 
+`go <alias>` follows a link through the visitor's own [golinks](https://git.mvl.sh/vleeuwenmenno/golinks)
+account (by default on https://mvl.sh). `go set <search url>` saves the account once: the
+`…/r/%s?token=…` URL golinks shows after creating a token (a redirect URL for any alias, a site plus
+a token, or a bare mvl.sh token work too). It is kept in localStorage, and synced like notes when
+signed in ([`src/data/golinks.ts`](src/data/golinks.ts)). `go` alone shows the account, `go unset`
+forgets it.
+
 `pepper` ([`src/terminal/pepper.ts`](src/terminal/pepper.ts)) simulates the Pepper CLI against a
 pretend lab cluster (3 masters, 4 minions). Its grammar, outcome names and output layout follow
 the real CLI; the cluster, states and timings are invented, and applies only last for the session.
 
 Pressing P during the boot log lets the boot finish but stops short of the desktop, logging in
 on a text console on "tty1" instead (the same shell, without a window manager); `exit` starts the
-desktop. `reboot` and `shutdown` play the systemd
+desktop. `/?newtab` is for using the site as a browser home or new tab page: it skips the boot log, closes
+the terminals the last tab left open, and starts with one fresh terminal in front of the rest of the
+saved desk. `reboot` and `shutdown` play the systemd
 shutdown log ([`src/os/Power.tsx`](src/os/Power.tsx)); a reboot starts from the opening layout again.
 
 ## Notes, launchers and sign-in (home page mode)
