@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { CalendarApp } from '../apps/calendar/Calendar'
 import { Contact } from '../apps/Contact'
 import { Cv } from '../apps/Cv'
 import { Games } from '../apps/games/Games'
@@ -39,6 +40,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   cv: { title: 'cv.md — Viewer', dock: 'CV', blurb: 'The printable version of me', size: [760, 680], render: () => <Cv /> },
   contact: { title: 'New message', dock: 'Contact', blurb: 'Get in touch', size: [560, 500], render: () => <Contact /> },
   games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, Pool, Gladiator, Breakout', size: [720, 640], render: (w) => <Games win={w} /> },
+  calendar: { title: 'Calendar', dock: 'Calendar', blurb: 'Your Google and CalDAV calendars: plan, move and invite', size: [1000, 660], render: (w) => <CalendarApp win={w} /> },
   notebook: { title: 'Notebook', dock: 'Notebook', blurb: 'Your notes, in Markdown, on any device', size: [860, 560], render: (w) => <Notebook win={w} /> },
   // A desktop widget (props.kind, props.id): a sticky note, the weather... See src/widgets.
   widget: { title: 'Widget', dock: 'Widget', blurb: 'Notes, weather and more on the desktop', size: [280, 260], chrome: 'note', render: (w) => <WidgetHost win={w} /> },

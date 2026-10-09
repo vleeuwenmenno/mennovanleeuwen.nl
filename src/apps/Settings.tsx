@@ -582,7 +582,7 @@ function Integrations() {
   )
 }
 
-/** Google Calendar, read-only, for the Agenda widget. */
+/** Google Calendar and CalDAV accounts, for the Calendar app, the Agenda widget and the clock; and which calendars show. */
 function CalendarSettings() {
   const account = useAccount()
   const { calendars, errors } = useCalendarList()
@@ -599,16 +599,21 @@ function CalendarSettings() {
           <span className="set-glyph">📅</span>
           <div>
             <strong>{account.google.email}</strong>
-            <p className="muted">Read-only, stored encrypted on this server</p>
+            <p className="muted">{account.google.canWrite ? 'Can add and change events, stored encrypted on this server' : 'Read-only so far, stored encrypted on this server'}</p>
           </div>
           <span className="nb-spacer" />
+          {!account.google.canWrite && (
+            <button className="btn btn-small btn-primary" onClick={connectGoogle} title="Connect again, allowing the Calendar app to add and change events">
+              Allow editing
+            </button>
+          )}
           <button className="btn btn-small" onClick={() => disconnectGoogle().catch((e: Error) => setError(e.message))}>
             Disconnect
           </button>
         </div>
       ) : (
         <>
-          <p className="muted">Read-only access to your Google calendars, shared ones included. It attaches to your GitHub sign-in; it is not a way to sign in.</p>
+          <p className="muted">Your Google calendars, shared ones included, to see and (in the Calendar app) add and change events. It attaches to your GitHub sign-in; it is not a way to sign in.</p>
           <button className="btn btn-small" onClick={connectGoogle}>
             Connect Google Calendar
           </button>
@@ -646,13 +651,16 @@ function CalendarSettings() {
                 <span className="set-swatch" style={{ background: c.color }} />
                 <span className="set-row-text">
                   <strong>{c.name}</strong>
-                  <span className="muted">{c.source && c.source !== 'Google' ? c.source : c.primary ? 'Google · your calendar' : 'Google'}</span>
+                  <span className="muted">
+                    {c.source && c.source !== 'Google' ? c.source : c.primary ? 'Google · your calendar' : 'Google'}
+                    {c.writable === false && ' · read-only'}
+                  </span>
                 </span>
                 <Toggle on={isShown(c, picks)} onChange={(on) => setCalendarShown(c.id, on)} label={`Show ${c.name}`} />
               </li>
             ))}
           </ul>
-          <p className="muted set-help">Switched-on calendars show in the clock and in every Agenda widget, unless a widget picks its own (right-click it → Calendars). Until you switch them, Google calendars follow Google Calendar and the others are on.</p>
+          <p className="muted set-help">Switched-on calendars show in the Calendar app, the clock and every Agenda widget, unless a widget picks its own (right-click it → Calendars). Until you switch them, Google calendars follow Google Calendar and the others are on.</p>
         </>
       )}
     </>
@@ -714,10 +722,10 @@ function CaldavForm() {
             <a href="https://app.fastmail.com/settings/security/apps/new" target="_blank" rel="noopener noreferrer">
               Fastmail → Settings → Privacy &amp; Security → Connected apps
             </a>
-            : access <em>Calendars (CalDAV)</em>, <em>Read-only</em> ticked.
+            : access <em>Calendars (CalDAV)</em>. Leave <em>Read-only</em> unticked to add and change events from the Calendar app; adding the same account again replaces its app password.
           </>
         ) : (
-          'Use an app password (read-only if your server offers it).'
+          'Use an app password (a read-only one is enough to look, the Calendar app needs read-write to change things).'
         )}{' '}
         It is checked by finding your calendars, then stored encrypted on this server.
       </p>
@@ -801,7 +809,7 @@ const GROUPS: Pane[][] = [
   ],
   [
     { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
-    { id: 'calendar', label: 'Calendar', hue: 'var(--red)', icon: svg(<><rect x="4" y="5" width="16" height="15" /><path d="M4 10h16M9 3v4M15 3v4" /></>), keywords: 'calendar google agenda events caldav fastmail nextcloud icloud', blurb: 'Google Calendar and CalDAV (Fastmail…), read-only, for the Agenda widget and the clock.', render: () => <CalendarSettings /> },
+    { id: 'calendar', label: 'Calendar', hue: 'var(--red)', icon: svg(<><rect x="4" y="5" width="16" height="15" /><path d="M4 10h16M9 3v4M15 3v4" /></>), keywords: 'calendar google agenda events caldav fastmail nextcloud icloud', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock.', render: () => <CalendarSettings /> },
     { id: 'integrations', label: 'Integrations', hue: 'var(--green)', icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets', blurb: 'Services the widgets read from: updown.io for Status.', render: () => <Integrations /> },
   ],
   [

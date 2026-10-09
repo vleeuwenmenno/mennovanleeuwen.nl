@@ -1481,3 +1481,841 @@ button.cal-day.is-picked:not(.is-today) {
 .sp-page p {
   overflow-wrap: anywhere;
 }
+
+/* ---------- Calendar app (src/apps/calendar) ---------- */
+
+.cal-agenda h4 {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.cal-agenda h4 .link-btn {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+}
+
+.ca {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--panel-solid);
+  color: var(--text);
+  font-size: 12px;
+  outline: 0;
+}
+.ca-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.ca-heading {
+  min-width: 0;
+  margin: 0 4px;
+  overflow: hidden;
+  color: var(--fg-bright);
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ca-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  color: var(--fg);
+  font-size: 16px;
+  line-height: 1;
+}
+.ca-icon:hover,
+.ca-icon.is-on {
+  border-color: var(--line-strong);
+  background: var(--panel-2);
+}
+.ca-spin {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: ca-spin 0.8s linear infinite;
+}
+@keyframes ca-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.ca-views {
+  display: inline-flex;
+  border: 1px solid var(--line-strong);
+}
+.ca-views button {
+  padding: 4px 9px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.ca-views button + button {
+  border-left: 1px solid var(--line);
+}
+.ca-views button:hover {
+  color: var(--fg-bright);
+}
+.ca-views button.is-on {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.ca-problem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: var(--red);
+}
+.ca-problem .ca-x {
+  margin-left: auto;
+}
+.ca-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.ca-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.ca-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.ca-x {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+.ca-x:hover {
+  color: var(--fg-bright);
+}
+
+/* Sidebar: a month to get around, and the calendars to show. */
+.ca-side {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 14px;
+  width: 210px;
+  padding: 10px;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+}
+.ca-side-month-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+.ca-side-month-head strong {
+  flex: 1;
+  color: var(--fg-bright);
+}
+.ca-cals h4 {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.ca-cal {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 0;
+  cursor: pointer;
+}
+.ca-cal input {
+  margin: 0;
+}
+.ca-cal-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-bright);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ca-ro {
+  color: var(--muted);
+  font-size: 10px;
+}
+.ca-settings {
+  align-self: flex-start;
+  font-size: 11px;
+}
+
+/* Small months: the sidebar's, and twelve of them for the year. */
+.ca-mini-title {
+  padding: 0 0 4px;
+  color: var(--fg-bright);
+  font-size: 12px;
+  font-weight: 700;
+}
+.ca-mini-title:hover {
+  color: var(--accent);
+}
+.ca-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 1px;
+  text-align: center;
+}
+.ca-mini-dow {
+  padding: 2px 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+.ca-mini-day {
+  padding: 3px 0;
+  background: color-mix(in srgb, var(--c1, var(--accent)) var(--load, 0%), transparent);
+  color: var(--text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.ca-mini-day:hover {
+  outline: 1px solid var(--line-strong);
+}
+.ca-mini-day.is-other {
+  color: var(--muted);
+  opacity: 0.55;
+}
+.ca-mini-day.is-in {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.ca-mini-day.is-today {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+}
+.ca-year {
+  display: grid;
+  flex: 1;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  align-content: start;
+  gap: 18px 22px;
+  padding: 14px 16px;
+  overflow: auto;
+}
+.ca-year .ca-mini-day {
+  padding: 4px 0;
+}
+
+/* Day, 3 days, week: day heads, the all-day lane, then the hours. */
+.ca-tg {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.ca-tg-head,
+.ca-tg-allday {
+  display: flex;
+  overflow: hidden;
+  border-bottom: 1px solid var(--line);
+  scrollbar-gutter: stable;
+}
+.ca-gutter {
+  flex: none;
+  width: 52px;
+  padding: 5px 6px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: right;
+}
+.ca-tg-days {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+.ca-dayhead {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px 0 6px;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+}
+.ca-dayhead strong {
+  padding: 0 6px;
+  color: var(--fg-bright);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.ca-dayhead:hover strong {
+  text-decoration: underline;
+}
+.ca-dayhead.is-today strong {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.ca-lane {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  user-select: none;
+}
+.ca-lane-cells {
+  position: absolute;
+  inset: 0;
+  display: grid;
+}
+.ca-lane-cells span {
+  border-left: 1px solid var(--line);
+}
+.ca-lane-cells span.is-picked {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.ca-bar,
+.ca-ev,
+.ca-chip.is-allday {
+  background: color-mix(in srgb, var(--c) 30%, var(--panel-solid));
+  border-left: 3px solid var(--c);
+  color: var(--fg-bright);
+}
+.ca-bar {
+  position: absolute;
+  height: 19px;
+  padding: 0 6px;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 19px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: grab;
+}
+.ca-bar.cont-l {
+  border-left-style: dashed;
+}
+.ca-bar:hover,
+.ca-ev:hover,
+.ca-chip.is-allday:hover {
+  background: color-mix(in srgb, var(--c) 42%, var(--panel-solid));
+}
+.ca-tg-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.ca-tg-body {
+  position: relative;
+  display: flex;
+}
+.ca-hours {
+  position: relative;
+  flex: none;
+  width: 52px;
+}
+.ca-hours span {
+  position: absolute;
+  right: 6px;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.ca-cols {
+  position: relative;
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  background-image:
+    repeating-linear-gradient(to bottom, var(--line) 0 1px, transparent 1px 48px),
+    repeating-linear-gradient(to bottom, transparent 0 24px, color-mix(in srgb, var(--line) 45%, transparent) 24px 25px, transparent 25px 48px);
+  touch-action: pan-y;
+  user-select: none;
+}
+.ca-col {
+  position: relative;
+  border-left: 1px solid var(--line);
+}
+.ca-col.is-weekend {
+  background: color-mix(in srgb, var(--fg) 2.5%, transparent);
+}
+.ca-col.is-today {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.ca-ev {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  padding: 2px 5px;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px var(--panel-solid);
+  font-size: 11px;
+  line-height: 1.3;
+  cursor: grab;
+}
+.ca-ev:hover {
+  z-index: 2;
+}
+.ca-ev.is-short {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.ca-ev-title {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+.ca-ev:not(.is-tall) .ca-ev-title {
+  flex: none;
+  white-space: nowrap;
+}
+.ca-ev-time {
+  color: color-mix(in srgb, var(--fg-bright) 70%, transparent);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.ca-ev.is-past,
+.ca-chip.is-past {
+  opacity: 0.6;
+}
+.ca-ev.is-ro,
+.ca-bar.is-ro,
+.ca-chip.is-ro {
+  cursor: pointer;
+}
+.ca-ev.is-dragging,
+.ca-bar.is-dragging {
+  z-index: 5;
+  opacity: 0.9;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  cursor: grabbing;
+}
+.ca-ev-grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 7px;
+  cursor: ns-resize;
+}
+.ca-ev-grip::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  width: 16px;
+  height: 2px;
+  margin-left: -8px;
+  background: color-mix(in srgb, var(--fg-bright) 45%, transparent);
+  opacity: 0;
+}
+.ca-ev:hover .ca-ev-grip::after {
+  opacity: 1;
+}
+.ca-ghost {
+  position: absolute;
+  right: 3px;
+  left: 1px;
+  z-index: 4;
+  padding: 2px 5px;
+  border: 1px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: var(--fg-bright);
+  font-size: 11px;
+  pointer-events: none;
+}
+.ca-now {
+  position: absolute;
+  right: 0;
+  left: -1px;
+  z-index: 3;
+  height: 2px;
+  background: var(--red);
+  pointer-events: none;
+}
+.ca-now::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+}
+
+/* Month: six weeks of days with what's on them. */
+.ca-month {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.ca-month-head {
+  display: grid;
+  grid-template-columns: 28px repeat(7, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+.ca-month-head span {
+  padding: 4px 6px;
+}
+.ca-month-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.ca-wks {
+  display: grid;
+  grid-template-rows: repeat(6, minmax(0, 1fr));
+  width: 28px;
+}
+.ca-wk {
+  padding: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: center;
+}
+.ca-month-grid {
+  display: grid;
+  flex: 1;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-rows: repeat(6, minmax(0, 1fr));
+  min-width: 0;
+  touch-action: pan-y;
+  user-select: none;
+}
+.ca-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  padding: 2px 3px;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+}
+.ca-cell.is-weekend {
+  background: color-mix(in srgb, var(--fg) 2.5%, transparent);
+}
+.ca-cell.is-other {
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+}
+.ca-cell.is-other .ca-cell-day {
+  color: var(--muted);
+}
+.ca-cell.is-picked {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.ca-cell-day {
+  align-self: flex-start;
+  padding: 1px 5px;
+  color: var(--fg-bright);
+  font-size: 11px;
+  font-weight: 600;
+}
+.ca-cell-day:hover {
+  text-decoration: underline;
+}
+.ca-cell.is-today .ca-cell-day {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.ca-chip {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 4px;
+  overflow: hidden;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: grab;
+}
+.ca-chip:not(.is-allday)::before {
+  content: '';
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c);
+}
+.ca-chip:not(.is-allday):hover {
+  background: color-mix(in srgb, var(--c) 18%, transparent);
+}
+.ca-chip.is-dragging {
+  outline: 1px dashed var(--accent);
+}
+.ca-chip-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.ca-chip-title {
+  overflow: hidden;
+  color: var(--fg-bright);
+  text-overflow: ellipsis;
+}
+.ca-more {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: left;
+}
+.ca-more:hover {
+  color: var(--accent);
+}
+
+/* The event sheet, and "only this one or all of them?". */
+.ca-sheet-back {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.35);
+}
+.ca-sheet,
+.ca-ask {
+  border: 1px solid var(--line-strong);
+  background: var(--panel-solid);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+}
+.ca-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(470px, 100%);
+  max-height: 100%;
+  padding: 12px 14px;
+  overflow: auto;
+}
+.ca-sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ca-swatch {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+.ca-title-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line-strong);
+  outline: 0;
+  background: transparent;
+  color: var(--fg-bright);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+}
+.ca-title-input:focus {
+  border-bottom-color: var(--accent);
+}
+.ca-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.ca-field {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.ca-field > span:first-child {
+  color: var(--muted);
+  font-size: 11px;
+}
+.ca-field input:not([type='checkbox']),
+.ca-field select,
+.ca-field textarea,
+.ca-guests {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line-strong);
+  outline: 0;
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  font-size: 12px;
+}
+.ca-field input:not([type='checkbox']):focus,
+.ca-field select:focus,
+.ca-field textarea:focus,
+.ca-guests:focus-within {
+  border-color: var(--accent);
+}
+.ca-field input:disabled,
+.ca-field select:disabled,
+.ca-field textarea:disabled {
+  opacity: 0.75;
+}
+.ca-check input {
+  justify-self: start;
+  accent-color: var(--accent);
+}
+.ca-when {
+  display: flex;
+  gap: 6px;
+}
+.ca-when input[type='date'] {
+  flex: 1.4;
+}
+.ca-when input[type='time'] {
+  flex: 1;
+}
+.ca-notes {
+  align-items: start;
+}
+.ca-notes > span:first-child {
+  padding-top: 6px;
+}
+.ca-notes textarea {
+  min-height: 60px;
+  resize: vertical;
+}
+.ca-guests {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px 4px;
+}
+.ca-field .ca-guests input {
+  flex: 1;
+  min-width: 140px;
+  width: auto;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+}
+.ca-guest {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  font-size: 11px;
+}
+.ca-guest.is-accepted b {
+  color: var(--green);
+}
+.ca-guest.is-declined b {
+  color: var(--red);
+}
+.ca-guest.is-tentative b {
+  color: var(--yellow);
+}
+.ca-guest.is-needs-action b {
+  color: var(--muted);
+}
+.ca-guest button {
+  color: var(--muted);
+}
+.ca-guest button:hover {
+  color: var(--red);
+}
+.ca-sheet-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.ca-ask {
+  width: min(380px, 100%);
+  padding: 14px;
+}
+.ca-ask p {
+  margin: 0 0 12px;
+  color: var(--fg-bright);
+  line-height: 1.5;
+}
+.ca-ask-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* Not signed in, or nothing connected yet. */
+.ca-empty {
+  display: grid;
+  place-items: center;
+}
+.ca-empty-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 340px;
+  padding: 20px;
+  text-align: center;
+}
+.ca-empty-glyph {
+  font-size: 40px;
+}
+.ca-empty-box h3 {
+  margin: 0;
+  color: var(--fg-bright);
+}
+.ca-connect {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.ca.is-narrow .ca-toolbar {
+  gap: 4px;
+  padding: 6px 8px;
+}
+.ca.is-narrow .ca-heading {
+  flex-basis: 100%;
+  order: 10;
+  margin: 2px 0 0;
+}
+.ca.is-narrow .ca-gutter,
+.ca.is-narrow .ca-hours {
+  width: 40px;
+}
+.ca.is-narrow .ca-tg-allday .ca-gutter {
+  padding-right: 3px;
+  font-size: 9px;
+  white-space: nowrap;
+}

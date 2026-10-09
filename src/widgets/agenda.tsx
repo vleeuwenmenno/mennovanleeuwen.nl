@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react'
-import { dayKey, eventsOn, eventTime, fetchEvents, isShown, startOfDay, useCalendarChoice, useCalendarList, useShownCalendarIds, type CalendarEvent } from '../data/calendar'
+import { dayKey, eventsOn, eventTime, fetchEvents, isShown, startOfDay, useCalendarChoice, useCalendarList, useCalendarVersion, useShownCalendarIds, type CalendarEvent } from '../data/calendar'
 import { connectGoogle, hasCalendar, signIn, useAccount } from '../os/account'
 import type { MenuItem } from '../os/ContextMenu'
 import { useWindowMenu } from '../os/windowMenu'
@@ -20,6 +20,7 @@ function useEvents(config: Config, enabled: boolean) {
   const [tick, setTick] = useState(0)
   // Its own pick, or what Settings has switched on (known once the calendar list is in).
   const shown = useShownCalendarIds()
+  const version = useCalendarVersion()
   const ids = config.calendars ?? shown
   const key = `${ids?.join(',') ?? '…'}|${config.days}`
   useEffect(() => {
@@ -35,7 +36,7 @@ function useEvents(config: Config, enabled: boolean) {
       live = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, enabled, tick])
+  }, [key, enabled, tick, version])
   // Every five minutes, and when the tab comes back.
   useEffect(() => {
     const again = () => document.visibilityState === 'visible' && setTick((n) => n + 1)
@@ -163,6 +164,7 @@ function useAgendaFrame(id: string): CSSProperties {
 }
 
 function useAgendaMenu(id: string): MenuItem[] {
+  const wm = useWM()
   const config = useWidgetConfig<Config>(id, DEFAULTS)
   const list = useCalendarList().calendars ?? []
   const picks = useCalendarChoice()
@@ -183,7 +185,7 @@ function useAgendaMenu(id: string): MenuItem[] {
           },
         ]
       : []),
-    { label: 'Open Google Calendar ↗', onSelect: () => window.open('https://calendar.google.com', '_blank', 'noopener') },
+    { label: 'Open Calendar', onSelect: () => wm.open('calendar', { t: String(Date.now()) }) },
     tiltMenu(id, config.tilt),
   ]
 }

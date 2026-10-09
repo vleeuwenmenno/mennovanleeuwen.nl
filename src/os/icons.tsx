@@ -154,6 +154,16 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  calendar: {
+    bg: 'linear-gradient(180deg,#f7768e 0 30%,#fbfbf8 30% 100%)',
+    fg: '#2a2f3d',
+    glyph: (
+      <>
+        <rect x="11" y="12" width="26" height="25" rx="2" />
+        <path d="M17 9v6M31 9v6M11 19h26M17 25h3M23 25h3M29 25h2M17 31h3M23 31h3" />
+      </>
+    ),
+  },
   settings: {
     bg: 'linear-gradient(160deg,#9aa5b8,#5a6478)',
     fg: '#fff',
@@ -193,6 +203,7 @@ const HUES: Record<AppId, string> = {
   zed: 'var(--blue)',
   notebook: 'var(--orange)',
   widget: 'var(--yellow)',
+  calendar: 'var(--red)',
   settings: 'var(--text)',
   trash: 'var(--muted)',
 }

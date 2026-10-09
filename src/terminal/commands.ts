@@ -80,6 +80,7 @@ const APP_NAMES: Record<AppId, string> = {
   settings: 'settings',
   mcserver: 'mc-status',
   linkforge: 'link-forge',
+  calendar: 'calendar',
 }
 
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */
