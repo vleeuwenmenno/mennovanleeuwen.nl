@@ -5,7 +5,7 @@ import { signIn, useAccount } from '../os/account'
 import { openContextMenu } from '../os/ContextMenu'
 import { useSyncStatus } from '../os/synced'
 import { useWM, type WinState } from '../os/wm'
-import { closeStickies, noteMenu, openSticky } from './Sticky'
+import { closeStickies, noteMenu, openSticky, stickyOpen } from './Sticky'
 import { MarkdownPreview } from './Zed'
 
 // Every note in one place: search, write in Markdown, preview it, colour it, and put it on the
@@ -62,7 +62,7 @@ export function Notebook({ win }: { win: WinState }) {
       .sort((a, b) => b.updated - a.updated)
   }, [live, q, tab])
   const note = live.find((n) => n.id === selected && (tab === 'trash' ? n.deleted : !n.deleted)) ?? notes[0]
-  const onDesktop = (id: string) => wm.windows.some((w) => w.app === 'sticky' && w.props.id === id)
+  const onDesktop = (id: string) => stickyOpen(wm, id)
   const trashCount = live.filter((n) => n.deleted).length
 
   const add = () => {

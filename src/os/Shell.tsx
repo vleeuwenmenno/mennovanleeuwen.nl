@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { faviconOf, launch as launchLink, useLaunchers } from '../data/launchers'
-import { useStickyStyle } from '../data/notes'
+import { widgetDef } from '../widgets/registry'
+import type { WidgetDef } from '../widgets/types'
 import { useRecents } from '../data/recents'
 import { APP_META } from './apps'
 import { Launchpad } from './Launchpad'
@@ -599,13 +600,26 @@ function DockMore({
   )
 }
 
-/** A window with its app inside; stickies take their colour and tilt from their note. */
+/** A window with its app inside. */
 function AppWindow({ w }: { w: WinState }) {
-  const style = useStickyStyle(w)
   const meta = APP_META[w.app]
+  const def = w.app === 'widget' ? widgetDef(w.props.kind) : undefined
+  if (def && w.props.id) return <WidgetWindow w={w} def={def} id={w.props.id} />
   return (
-    <Window win={w} title={meta.title} chrome={meta.chrome} style={style}>
+    <Window win={w} title={meta.title} chrome={meta.chrome}>
       {meta.render(w)}
+    </Window>
+  )
+}
+
+/** A widget's window: its frame look, its menu items and its close label come from its definition. */
+function WidgetWindow({ w, def, id }: { w: WinState; def: WidgetDef; id: string }) {
+  const wm = useWM()
+  const style = def.useFrame?.(id)
+  const menuItems = def.useMenu?.(id, wm) ?? []
+  return (
+    <Window win={w} title={def.name} chrome="note" className={`widget widget-${def.kind}`} style={style} menuItems={menuItems} closeLabel={def.closeLabel} resizableWidth={def.resizable}>
+      {APP_META.widget.render(w)}
     </Window>
   )
 }

@@ -5,6 +5,7 @@ import { MarkdownPreview } from '../apps/Zed'
 import { isCodeQuery, type BranchHit, type Hit, type IssueHit, type RepoHit } from '../data/code'
 import { faviconOf, launch, useLaunchers } from '../data/launchers'
 import { createNote, noteTitle, NOTE_COLORS, useAllNotes } from '../data/notes'
+import { addWidget, widgetDefs } from '../widgets/registry'
 import { ENGINES, searchWeb, useSearchSettings, useSuggestions } from '../data/searchEngine'
 import { countFor, useContributions } from '../data/contributions'
 import { fetchMinecraft, MC_ADDRESS, useMinecraft } from '../data/minecraft'
@@ -420,7 +421,7 @@ export function Spotlight() {
 
     // Apps
     for (const app of Object.keys(APP_META) as AppId[]) {
-      if (app === 'viewer' || app === 'sticky') continue // need a file or a note to open
+      if (app === 'viewer' || app === 'widget') continue // need a file, or are added as widgets
       const meta = APP_META[app]
       const open = wm.windows.filter((w) => w.app === app).length
       out.push({
@@ -440,6 +441,7 @@ export function Spotlight() {
       out.push({ id: `act-${id}`, group: 'Actions', title, subtitle, keywords, icon: <Glyph>{glyph}</Glyph>, run })
     action('new-terminal', 'New terminal window', 'terminal shell new window launch console bash', () => wm.openNew('terminal'), '›_')
     action('new-note', 'New sticky note', 'note sticky new write memo todo', () => openSticky(wm, createNote().id), '✎')
+    for (const d of widgetDefs()) if (d.kind !== 'sticky') action(`widget-${d.kind}`, `Add widget: ${d.name}`, `widget add desktop ${d.name} ${d.blurb}`, () => addWidget(wm, d.kind), d.glyph, d.blurb)
     if (account.status === 'anon') action('sign-in', 'Sign in with GitHub', 'login sign in account github sync owner', signIn, '⎆', 'Sync notes and search your repositories')
     action('settings', 'Settings', 'settings preferences account launchers gitea forgejo token sync', () => wm.open('settings'), '⚙')
     action('minimize', 'Minimize all windows', 'minimize hide windows show desktop', () => wm.windows.forEach((w) => wm.minimize(w.pid)), '▁')

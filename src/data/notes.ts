@@ -1,9 +1,7 @@
-import type { CSSProperties } from 'react'
 import { synced } from '../os/synced'
-import type { WinState } from '../os/wm'
 
-// Notes of your own: each one can sit on the desktop as a sticky (a "sticky" window with
-// props.id) and is listed in the Notebook app. Kept per browser for visitors, synced for the
+// Notes of your own: each one can sit on the desktop as a sticky (the "sticky" widget, see
+// apps/Sticky.tsx) and is listed in the Notebook app. Kept per browser for visitors, synced for the
 // signed-in owner. Deleting leaves a tombstone so another device can't bring the note back
 // when the two merge.
 
@@ -80,14 +78,4 @@ export const purgeNote = (id: string) => store.set((all) => all.map((n) => (n.id
 export function noteTitle(n: Note) {
   const line = n.text.split('\n').find((l) => l.trim()) ?? ''
   return line.replace(/^\s*(#{1,6}\s+|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+)/, '').trim().slice(0, 80) || 'New note'
-}
-
-/** Colour and slant for a sticky window (undefined for every other window). */
-export function useStickyStyle(win: WinState): CSSProperties | undefined {
-  const all = store.use()
-  if (win.app !== 'sticky') return undefined
-  const note = all.find((n) => n.id === win.props.id)
-  if (!note) return undefined
-  const c = NOTE_COLORS[note.color]
-  return { ['--note-bg' as string]: c.bg, ['--note-fg' as string]: c.fg, ['--note-tilt' as string]: `${note.tilt}deg` }
 }

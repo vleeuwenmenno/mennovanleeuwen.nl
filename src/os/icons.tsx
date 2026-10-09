@@ -122,7 +122,7 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
-  sticky: {
+  widget: {
     bg: 'linear-gradient(160deg,#fff1a8,#fde27a)',
     fg: '#6b4e00',
     glyph: (
@@ -168,7 +168,7 @@ const HUES: Record<AppId, string> = {
   games: 'var(--cyan)',
   zed: 'var(--blue)',
   notebook: 'var(--orange)',
-  sticky: 'var(--yellow)',
+  widget: 'var(--yellow)',
   settings: 'var(--text)',
   trash: 'var(--muted)',
 }

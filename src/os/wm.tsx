@@ -2,7 +2,7 @@ import { snapReserve } from './dockPrefs'
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
 import { synced } from './synced'
 
-export type AppId = 'terminal' | 'files' | 'viewer' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'sticky' | 'settings'
+export type AppId = 'terminal' | 'files' | 'viewer' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings'
 
 export type WinState = {
   pid: number
@@ -102,6 +102,11 @@ function fresh(layout: { app: AppId; geometry: Geometry; props?: WinState['props
 // keep separate layouts, since one rarely fits the other.
 
 export type SavedWindow = Geometry & Pick<WinState, 'app' | 'minimized' | 'maximized' | 'snap' | 'restore' | 'props'>
+
+/** Saved layouts from before widgets: a sticky was its own app. */
+function migrate(w: SavedWindow): SavedWindow {
+  return (w.app as string) === 'sticky' ? { ...w, app: 'widget', props: { kind: 'sticky', id: w.props.id } } : w
+}
 
 /** Props that only make sense once: commands to run, "open this now" stamps, placement hints. */
 const TRANSIENT_PROPS = new Set(['run', 't', 'under'])
@@ -256,7 +261,7 @@ export function WindowManagerProvider({
   /** Filters saved layouts down to apps that still exist. */
   isApp: (app: string) => boolean
 }) {
-  const usable = useCallback((saved: SavedWindow[] | null) => saved?.filter((w) => isApp(w.app)) ?? null, [isApp])
+  const usable = useCallback((saved: SavedWindow[] | null) => saved?.map(migrate).filter((w) => isApp(w.app)) ?? null, [isApp])
   const [state, dispatch] = useReducer(reducer, null, () => {
     const saved = usable(layoutStore().get())
     return saved ? restored(saved) : fresh(relayout())

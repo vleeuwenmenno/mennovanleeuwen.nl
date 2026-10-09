@@ -73,7 +73,7 @@ const APP_NAMES: Record<AppId, string> = {
   zed: 'zed',
   trash: 'trash',
   notebook: 'notebook',
-  sticky: 'sticky',
+  widget: 'widget',
   settings: 'settings',
 }
 
