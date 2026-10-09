@@ -4,7 +4,7 @@ import { ENGINES, setSearchSettings, useSearchSettings, type EngineId } from '..
 import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { MC_ADDRESS, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
-import { addCaldav, connectGoogle, disconnectGoogle, removeCaldav, removeUpdownKey, setUpdownKey, signIn, signOut, unlinkForge, useAccount } from '../os/account'
+import { addCaldav, connectGoogle, disconnectGoogle, removeCaldav, removeUpdownKey, setUpdownKey, signIn, signOut, unlinkForge, useAccount, useLikelyOwner } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
@@ -22,7 +22,8 @@ import { SyncLine } from './Notebook'
 // System settings, laid out like macOS: the account on top of a sidebar, one pane per topic.
 // Opened from the system menu, the desktop's right-click menu, Spotlight and the terminal;
 // props.section picks the pane (account, appearance, dock, launchers, search, notifications,
-// instances, calendar, integrations, golinks, sync, about).
+// instances, calendar, integrations, golinks, sync, about). The account and service panes only show
+// for the signed-in owner.
 
 const SignInFirst = ({ what }: { what: string }) => {
   const account = useAccount()
@@ -52,9 +53,9 @@ function Account() {
       <div className="set-hero">
         <span className="set-hero-avatar is-guest">?</span>
         <strong>Guest</strong>
-        <p className="muted">Signing in syncs notes, window layouts and launchers between devices, and lets Spotlight search your repositories, issues, pull requests and branches.</p>
-        <button className="btn btn-primary" onClick={signIn}>
-          Sign in with GitHub
+        <p className="muted">Your notes, launchers and settings are saved in this browser.</p>
+        <button className="link-btn" onClick={signIn}>
+          Owner sign-in
         </button>
       </div>
     )
@@ -764,7 +765,8 @@ function SearchSettings() {
 }
 
 type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'golinks' | 'sync' | 'about'
-type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; keywords: string; blurb: string; render: () => ReactNode }
+/** `owner`: only for the signed-in owner (accounts and services); visitors don't see it at all. */
+type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; keywords: string; blurb: string; owner?: true; render: () => ReactNode }
 
 const svg = (d: ReactNode) => (
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -808,12 +810,12 @@ const GROUPS: Pane[][] = [
     { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal mvl.sh token', blurb: "The golinks account the terminal's go command follows.", render: () => <GoLinks /> },
   ],
   [
-    { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
-    { id: 'calendar', label: 'Calendar', hue: 'var(--red)', icon: svg(<><rect x="4" y="5" width="16" height="15" /><path d="M4 10h16M9 3v4M15 3v4" /></>), keywords: 'calendar google agenda events caldav fastmail nextcloud icloud', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock.', render: () => <CalendarSettings /> },
-    { id: 'integrations', label: 'Integrations', hue: 'var(--green)', icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets', blurb: 'Services the widgets read from: updown.io for Status.', render: () => <Integrations /> },
+    { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', owner: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
+    { id: 'calendar', label: 'Calendar', hue: 'var(--red)', owner: true, icon: svg(<><rect x="4" y="5" width="16" height="15" /><path d="M4 10h16M9 3v4M15 3v4" /></>), keywords: 'calendar google agenda events caldav fastmail nextcloud icloud', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock.', render: () => <CalendarSettings /> },
+    { id: 'integrations', label: 'Integrations', hue: 'var(--green)', owner: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets', blurb: 'Services the widgets read from: updown.io for Status.', render: () => <Integrations /> },
   ],
   [
-    { id: 'sync', label: 'Sync', hue: 'var(--green)', icon: svg(<><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3" /><path d="M18 3v4h-4M6 21v-4h4" /></>), keywords: 'sync devices cloud', blurb: 'What follows you between devices.', render: () => <SyncPane /> },
+    { id: 'sync', label: 'Sync', hue: 'var(--green)', owner: true, icon: svg(<><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3" /><path d="M18 3v4h-4M6 21v-4h4" /></>), keywords: 'sync devices cloud', blurb: 'What follows you between devices.', render: () => <SyncPane /> },
     { id: 'about', label: 'About', hue: 'var(--text)', icon: svg(<><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5v.5" /></>), keywords: 'about version update release build', blurb: 'Which version this is, and whether a newer one is out.', render: () => <About /> },
   ],
 ]
@@ -847,8 +849,14 @@ export function Settings({ win }: { win: WinState }) {
     setShowPane(true)
   }
   const q = query.trim().toLowerCase()
-  const groups = useMemo(() => (q ? [GROUPS.flat().filter((p) => `${p.label} ${p.keywords}`.toLowerCase().includes(q))] : GROUPS), [q])
-  const current = PANES.find((p) => p.id === pane)!
+  // Visitors only see what works without an account; the owner's panes would just say "sign in".
+  const owner = useLikelyOwner()
+  const groups = useMemo(() => {
+    const mine = GROUPS.map((g) => g.filter((p) => owner || !p.owner)).filter((g) => g.length)
+    return q ? [mine.flat().filter((p) => `${p.label} ${p.keywords}`.toLowerCase().includes(q))] : mine
+  }, [q, owner])
+  const asked = PANES.find((p) => p.id === pane)!
+  const current = asked.owner && !owner ? ACCOUNT_PANE : asked
   const u = account.user
 
   return (
@@ -863,18 +871,18 @@ export function Settings({ win }: { win: WinState }) {
           placeholder="Search"
           aria-label="Search settings"
         />
-        <button className={`set-profile ${pane === 'account' ? 'is-on' : ''}`} onClick={() => go('account')}>
+        <button className={`set-profile ${current.id === 'account' ? 'is-on' : ''}`} onClick={() => go('account')}>
           {u?.avatar ? <img src={u.avatar} alt="" /> : <span className="set-profile-blank">{u ? u.login[0].toUpperCase() : '?'}</span>}
           <span className="set-profile-text">
             <strong>{u ? (u.name ?? u.login) : 'Guest'}</strong>
-            <span className="muted">{u ? `@${u.login} · GitHub` : account.status === 'anon' ? 'Sign in to sync' : 'This browser only'}</span>
+            <span className="muted">{u ? `@${u.login} · GitHub` : 'This browser only'}</span>
           </span>
         </button>
         {groups.map((g, i) => (
           <ul key={i} className="set-nav">
             {g.map((p) => (
               <li key={p.id}>
-                <button className={pane === p.id ? 'is-on' : ''} onClick={() => go(p.id)} aria-current={pane === p.id ? 'page' : undefined}>
+                <button className={current.id === p.id ? 'is-on' : ''} onClick={() => go(p.id)} aria-current={current.id === p.id ? 'page' : undefined}>
                   <span className="set-tile" style={{ ['--hue' as string]: p.hue }}>
                     {p.icon}
                   </span>
