@@ -1,7 +1,8 @@
-import { ARCHETYPES, gearStats, has, makeOpponent, pick, randomLook, randomName, rng, xpFor, type Gladiator } from './character'
+import { ARCHETYPES, equip, gearStats, has, makeOpponent, pick, randomLook, randomName, rng, xpFor, type Gladiator } from './character'
 import { simulate } from './combat'
+import { addBag, marketPrice, newEstate, salvage, stockLeft, trade, type Bag, type Estate, type ResId } from './estate'
 import { gladiatorStore, type GladiatorStore } from './saves'
-import { DIFFICULTIES, league, LEAGUES, MAX_LEVEL, PERK_LEVELS, POINTS_PER_LEVEL, type Archetype, type Difficulty, type LeagueId, type Look } from './data'
+import { DIFFICULTIES, item, league, LEAGUES, weaponType, MAX_LEVEL, PERK_LEVELS, POINTS_PER_LEVEL, type Archetype, type Difficulty, type LeagueId, type Look } from './data'
 
 // The career around the fights: what is saved, which fights are on offer, tournaments, rivals and
 // what a win or a loss is worth.
@@ -25,6 +26,8 @@ export type Tournament = {
 
 export type Save = {
   version: 1
+  /** Materials, work sites, blueprints and the forge (see estate.ts). */
+  estate: Estate
   mode: Mode
   /** Missing in saves from before difficulty levels: those play on Normal. */
   difficulty?: Difficulty
@@ -85,6 +88,7 @@ export function newSave(g: Gladiator, mode: Mode, difficulty: Difficulty = 'norm
   }))
   const save: Save = {
     version: 1,
+    estate: newEstate(),
     mode,
     difficulty,
     g,
@@ -119,7 +123,7 @@ export function foeGladiator(s: Save, f: Foe): Gladiator {
   const hard = { statBoost: d.stats, lag: d.lag }
   if (f.champion) {
     const c = league(f.champion).champion
-    return makeOpponent(c.level + d.champion, c.archetype, c.seed, { name: c.name, title: c.title, gearBoost: 1, ...hard })
+    return makeOpponent(c.level + d.champion, c.archetype, c.seed, { name: c.name, title: c.title, gearBoost: 2, ...hard })
   }
   const rival = f.rival ? s.rivals.find((r) => r.id === f.rival) : undefined
   if (rival) return { ...makeOpponent(f.level, rival.archetype, rival.seed + f.level, { name: rival.name, look: rival.look, title: 'your rival', ...hard }), id: rival.id }
@@ -296,3 +300,52 @@ export function settle(s: Save, foe: Foe, kind: FightKind, won: boolean, peakFav
 export const price = (s: Save, base: number) => Math.round(base * rules(s).prices)
 export const trainPrice = (s: Save) => price(s, 60 * Math.pow(1.3, s.trained))
 export const respecPrice = (s: Save) => price(s, 40 + s.g.level * 30)
+
+// --- Crafting ------------------------------------------------------------------------------------
+
+/**
+ * Takes a finished piece off the bench and puts it on. What it replaces (a two-handed weapon also
+ * displaces the shield) is broken down for about a third of its materials.
+ */
+export function collectCraft(s: Save, craftId: string, now = Date.now()): Save {
+  const c = s.estate.crafting.find((x) => x.id === craftId)
+  const it = c && item(c.item)
+  if (!c || !it || c.end > now) return s
+  const old = [item(s.g.gear[it.slot])]
+  if (it.weapon && weaponType(it.weapon).twoHanded) old.push(item(s.g.gear.shield))
+  if (it.slot === 'shield') {
+    const w = item(s.g.gear.weapon)
+    if (w?.weapon && weaponType(w.weapon).twoHanded) old.push(w)
+  }
+  const back = old.reduce<Bag>((a, o) => addBag(a, salvage(o)), {})
+  return { ...s, g: equip(s.g, it), estate: { ...s.estate, crafting: s.estate.crafting.filter((x) => x.id !== craftId), res: addBag(s.estate.res, back) } }
+}
+
+/** What's missing for `need`, and what buying it at the market would cost (null if out of stock). */
+export function shortfall(s: Save, need: Bag, now = Date.now()) {
+  const missing: Bag = {}
+  let cost = 0
+  let possible = true
+  for (const [k, v] of Object.entries(need) as [ResId, number][]) {
+    const n = v - (s.estate.res[k] ?? 0)
+    if (n <= 0) continue
+    missing[k] = n
+    cost += marketPrice(k, rules(s).prices, now).buy * n
+    if (stockLeft(s.estate, k, now) < n) possible = false
+  }
+  return { missing, cost, possible: possible && Object.keys(missing).length > 0 }
+}
+
+export function buyMissing(s: Save, need: Bag, now = Date.now()): Save {
+  const { missing, cost, possible } = shortfall(s, need, now)
+  if (!possible || s.gold < cost) return s
+  let estate = s.estate
+  let gold = s.gold
+  for (const [k, n] of Object.entries(missing) as [ResId, number][]) {
+    const r = trade(estate, k, n, gold, rules(s).prices, now)
+    if (!r) return s
+    estate = r.estate
+    gold = r.coins
+  }
+  return { ...s, estate, gold }
+}

@@ -1,20 +1,22 @@
-import { useMemo, useState, type ReactNode } from 'react'
-import { entrantName, foeGladiator, price, purseFor, respecPrice, rivalLevel, rules, trainPrice, tournamentFoe, unlocked, type Foe, type Save } from './career'
+import { useMemo, useState } from 'react'
+import { buyMissing, collectCraft, entrantName, foeGladiator, price, purseFor, shortfall, respecPrice, rivalLevel, rules, trainPrice, tournamentFoe, unlocked, type Foe, type Save } from './career'
 import { simulate } from './combat'
 import { DifficultyPicker } from './Menus'
 import { canWear, derive, equip, gearStats, has, rng, xpFor, type Gladiator } from './character'
 import {
-  ARMOUR_SLOTS, BASE_STAT, ITEMS, item, league, LEAGUES, MATERIALS, MAX_POTIONS, PERK_LEVELS, PERKS, potionPrice, POTIONS, SLOT_NAMES, SPELLS, STATS, WEAPON_MATERIALS, WEAPON_TYPES,
+  tierStyle, ARMOUR_SLOTS, BASE_STAT, ITEMS, item, league, LEAGUES, MATERIALS, MAX_POTIONS, PERK_LEVELS, PERKS, potionPrice, POTIONS, SLOT_NAMES, SPELLS, STATS, WEAPON_MATERIALS, WEAPON_TYPES,
   type Item, type LeagueId, type PerkId, type PotionId, type Slot, type StatKey,
 } from './data'
+import { blueprintPrice, craftFee, craftTime, have, knowsBlueprint, prettyHours, recipe, slotsAt, startCraft } from './estate'
 import type { ClipName } from './rig'
-import { Bar, Gold, ItemArt, Modal, Portrait } from './ui'
+import { CardView, PerkDeck, PerkDraft } from './cards'
+import { BagView, Bar, CardIcon, Gold, ItemArt, PageHead, PlaceIcon, Portrait, useNow } from './ui'
 
 // The town between fights: the hub, the arena's notice board, the shops, the trainer, your
 // gladiator's sheet and the tournament bracket.
 
 type Update = (fn: (s: Save) => Save) => void
-export type Place = 'hub' | 'arena' | 'forge' | 'armoury' | 'mage' | 'apothecary' | 'training' | 'gladiator' | 'tournament'
+export type Place = 'hub' | 'arena' | 'forge' | 'armoury' | 'mage' | 'apothecary' | 'training' | 'gladiator' | 'tournament' | 'estate' | 'market'
 
 export const PLACE_BG: Record<Place, string> = {
   hub: 'town',
@@ -26,6 +28,8 @@ export const PLACE_BG: Record<Place, string> = {
   training: 'training',
   gladiator: 'training',
   tournament: 'arena-city',
+  estate: 'estate',
+  market: 'market',
 }
 
 const cap = (s: string) => s[0].toUpperCase() + s.slice(1)
@@ -61,27 +65,26 @@ export function TopBar({ save, onMenu }: { save: Save; onMenu: () => void }) {
 
 const PLACES: { id: Place; name: string; text: string; glyph: string }[] = [
   { id: 'arena', name: 'The Arena', text: 'Fights, tournaments, champions', glyph: '⚔️' },
-  { id: 'forge', name: 'Forge', text: 'Weapons from wood to legend', glyph: '🔨' },
-  { id: 'armoury', name: 'Armoury', text: 'Helmets, plate, shields, capes', glyph: '🛡️' },
+  { id: 'estate', name: 'Estate', text: 'Mines, woods and pastures that work while you rest', glyph: '🏡' },
+  { id: 'market', name: 'Market', text: 'Materials for gold, prices change daily', glyph: '⚖️' },
+  { id: 'forge', name: 'Forge', text: 'Blueprints and forging of weapons', glyph: '🔨' },
+  { id: 'armoury', name: 'Armoury', text: 'Blueprints and forging of armour', glyph: '🛡️' },
   { id: 'mage', name: 'Mage Tower', text: 'Spells for coin', glyph: '✨' },
   { id: 'apothecary', name: 'Apothecary', text: 'Potions for the fight', glyph: '⚗️' },
   { id: 'training', name: 'Training Yard', text: 'Buy extra training', glyph: '🎯' },
   { id: 'gladiator', name: 'Your Gladiator', text: 'Stats, perks, rivals', glyph: '🏛️' },
 ]
 
-/** A painted icon for a place in town, or its emoji until the picture has loaded (or if it can't). */
-function PlaceIcon({ id, glyph }: { id: string; glyph: string }) {
-  const [state, setState] = useState<'loading' | 'ok' | 'missing'>('loading')
-  return (
-    <span className="gl-place-icon">
-      {state !== 'ok' && <i>{glyph}</i>}
-      {state !== 'missing' && <img src={`/games/gladiator/icons/${id}.webp`} alt="" draggable={false} onLoad={() => setState('ok')} onError={() => setState('missing')} style={state === 'ok' ? undefined : { display: 'none' }} />}
-    </span>
-  )
-}
-
 export function Hub({ save, go }: { save: Save; go: (p: Place) => void }) {
+  const now = useNow(15000)
   const badge = save.g.points + save.pendingPerks
+  // Finished jobs and forgings waiting to be picked up.
+  const ready: Partial<Record<Place, number>> = {
+    gladiator: badge,
+    estate: save.estate.jobs.filter((j) => j.end <= now).length,
+    forge: save.estate.crafting.filter((c) => c.end <= now && item(c.item)?.slot === 'weapon').length,
+    armoury: save.estate.crafting.filter((c) => c.end <= now && item(c.item)?.slot !== 'weapon').length,
+  }
   return (
     <div className="gl-hub">
       <div className="gl-hub-hero">
@@ -100,22 +103,10 @@ export function Hub({ save, go }: { save: Save; go: (p: Place) => void }) {
             <PlaceIcon id={p.id} glyph={p.glyph} />
             <strong>{p.name}</strong>
             <span>{p.text}</span>
-            {p.id === 'gladiator' && badge > 0 && <b className="gl-badge">{badge}</b>}
+            {!!ready[p.id] && <b className="gl-badge">{ready[p.id]}</b>}
           </button>
         ))}
       </div>
-    </div>
-  )
-}
-
-function PageHead({ title, onBack, children }: { title: string; onBack: () => void; children?: ReactNode }) {
-  return (
-    <div className="gl-page-head">
-      <button className="gl-btn is-quiet" onClick={onBack}>
-        ← Town
-      </button>
-      <h2>{title}</h2>
-      {children}
     </div>
   )
 }
@@ -331,7 +322,10 @@ function Delta({ label, now, then, unit = '' }: { label: string; now: number; th
 
 const avgDamage = (d: ReturnType<typeof derive>) => (d.dmg[0] + d.dmg[1]) / 2 + d.dmgBonus
 
-export function GearShop({ save, update, kind, onBack, sound }: { save: Save; update: Update; kind: 'forge' | 'armoury'; onBack: () => void; sound: { coins: () => void; ui: () => void } }) {
+export function GearShop({ save, update, kind, onBack, sound }: { save: Save; update: Update; kind: 'forge' | 'armoury'; onBack: () => void; sound: { coins: () => void; ui: () => void; fanfare: () => void } }) {
+  const clock = useNow(1000)
+  const e = save.estate
+  const benches = slotsAt(e.levels.workshop)
   const tabs: string[] = kind === 'forge' ? WEAPON_TYPES.map((w) => w.kind) : ARMOUR_SLOTS
   const g = save.g
   const equippedTab = kind === 'forge' ? item(g.gear.weapon)?.weapon ?? tabs[0] : tabs[0]
@@ -347,17 +341,24 @@ export function GearShop({ save, update, kind, onBack, sound }: { save: Save; up
   }
   const now = derive(g)
   const then = sel ? derive(equip(g, sel)) : null
-  const tradeIn = (it: Item) => {
-    const old = [item(g.gear[it.slot])]
-    if (it.weapon && WEAPON_TYPES.find((w) => w.kind === it.weapon)!.twoHanded) old.push(item(g.gear.shield))
-    return old.reduce((a, o) => a + (o ? price(save, o.price * 0.4) : 0), 0)
-  }
   const blocker = (it: Item) => (it.slot === 'shield' && now.weapon.twoHanded && g.gear.weapon ? 'Your weapon needs both hands' : canWear(g, it))
-  const buy = (it: Item) => {
-    const cost = price(save, it.price) - tradeIn(it)
-    if (save.gold < cost || blocker(it)) return
+  const buyBlueprint = (it: Item) => {
+    const cost = price(save, blueprintPrice(it))
+    if (save.gold < cost) return
     sound.coins()
-    update((s) => ({ ...s, gold: s.gold - cost, g: equip(s.g, it) }))
+    update((s) => ({ ...s, gold: s.gold - cost, estate: { ...s.estate, blueprints: [...s.estate.blueprints, it.id] } }))
+  }
+  const forge = (it: Item) => {
+    const fee = price(save, craftFee(it))
+    if (save.gold < fee || blocker(it)) return
+    const next = startCraft(save.estate, it, Date.now())
+    if (!next) return
+    sound.coins()
+    update((s) => ({ ...s, gold: s.gold - fee, estate: next }))
+  }
+  const collect = (id: string) => {
+    sound.fanfare()
+    update((s) => collectCraft(s, id, Date.now()))
     setSel(null)
   }
   /** The headline gain of an item over what's worn now. */
@@ -401,6 +402,25 @@ export function GearShop({ save, update, kind, onBack, sound }: { save: Save; up
           )
         })}
       </div>
+      <div className="gl-benches">
+        <span>
+          🔨 Workshop benches: {e.crafting.length}/{benches} in use
+        </span>
+        {e.crafting.map((c) => {
+          const it = item(c.item)!
+          const done = c.end <= clock
+          return (
+            <span key={c.id} className={`gl-bench ${done ? 'is-done' : ''}`}>
+              {it.name}: {done ? 'ready' : prettyHours(c.end - clock)}
+              {done && (
+                <button className="gl-btn is-small is-primary" onClick={() => collect(c.id)}>
+                  Collect
+                </button>
+              )}
+            </span>
+          )
+        })}
+      </div>
       <div className="gl-shop-grid">
         <aside className="gl-poster gl-mirror">
           <span className="gl-poster-head">{sel ? 'Trying on' : 'The mirror'}</span>
@@ -422,12 +442,19 @@ export function GearShop({ save, update, kind, onBack, sound }: { save: Save; up
           {list.map((it) => {
             const owned = g.gear[it.slot] === it.id
             const why = blocker(it)
-            const cost = price(save, it.price) - tradeIn(it)
             const m = MATERIALS[it.tier]
             const up = owned ? null : gain(it)
+            const known = knowsBlueprint(e, it)
+            const need = recipe(it)
+            const enough = have(e, need)
+            const fee = price(save, craftFee(it))
+            const bp = price(save, blueprintPrice(it))
+            const busy = e.crafting.find((c) => c.item === it.id)
+            const short = known && !enough ? shortfall(save, need) : null
+            const time = craftTime(e, it)
             return (
               <div key={it.id} className={`gl-card gl-ware ${sel?.id === it.id ? 'is-sel' : ''} ${why ? 'is-locked' : ''} ${owned ? 'is-owned' : ''}`} onClick={() => setSel(sel?.id === it.id ? null : it)}>
-                <span className="gl-card-ribbon" style={{ background: `linear-gradient(180deg, ${m.light}, ${m.base} 45%, ${m.dark})`, color: it.tier === 3 || it.tier === 4 ? '#2a1a0e' : '#fff4dc' }}>
+                <span className="gl-card-ribbon" style={{ background: `linear-gradient(180deg, ${m.light}, ${m.base} 45%, ${m.dark})`, color: tierStyle(it.tier) === 3 || tierStyle(it.tier) === 4 ? '#2a1a0e' : '#fff4dc' }}>
                   {kind === 'forge' ? WEAPON_MATERIALS[it.tier] : m.name}
                 </span>
                 <div className="gl-card-art gl-ware-art">
@@ -442,18 +469,64 @@ export function GearShop({ save, update, kind, onBack, sound }: { save: Save; up
                       {Math.round(up.n)} {up.what}
                     </span>
                   )}
+                  {!owned && !busy && (
+                    <div className="gl-recipe">
+                      <BagView bag={need} have={known ? e.res : undefined} />
+                      <span className="gl-chip">⏱ {time ? prettyHours(time) : 'instant'}</span>
+                    </div>
+                  )}
+                  {busy && (
+                    <div className={`gl-job is-running ${busy.end <= clock ? 'is-done' : ''}`}>
+                      <div className="gl-job-head">
+                        <strong>On the anvil</strong>
+                        <span>{busy.end <= clock ? 'Ready!' : prettyHours(busy.end - clock)}</span>
+                      </div>
+                      <div className="gl-statbar">
+                        <span style={{ width: `${Math.min(100, ((clock - busy.start) / Math.max(1, busy.end - busy.start)) * 100)}%` }} />
+                      </div>
+                    </div>
+                  )}
                   {why && <span className="gl-req">{why}</span>}
                 </div>
-                <div className="gl-card-foot">
+                <div className="gl-card-foot" onClick={(ev) => ev.stopPropagation()}>
                   {owned ? (
                     <span className="gl-owned">Equipped</span>
-                  ) : (
+                  ) : busy ? (
+                    busy.end <= clock ? (
+                      <button className="gl-btn is-primary" onClick={() => collect(busy.id)}>
+                        Collect &amp; equip
+                      </button>
+                    ) : (
+                      <span className="gl-owned">Forging…</span>
+                    )
+                  ) : !known ? (
                     <>
                       <span className="gl-coin-badge">
-                        <Gold n={Math.max(0, cost)} />
+                        <Gold n={bp} />
                       </span>
-                      <button className="gl-btn is-primary" disabled={!!why || save.gold < cost} onClick={(e) => (e.stopPropagation(), buy(it))}>
-                        Buy
+                      <button className="gl-btn is-primary" disabled={save.gold < bp} onClick={() => buyBlueprint(it)} title="Buy the blueprint once, then forge from materials">
+                        <span className="gl-res">
+                          <PlaceIcon id="blueprint" glyph="📜" />
+                        </span>
+                        Blueprint
+                      </button>
+                    </>
+                  ) : short ? (
+                    <>
+                      <span className="gl-coin-badge" title="Buy what's missing at today's market prices">
+                        <Gold n={short.cost} />
+                      </span>
+                      <button className="gl-btn" disabled={!short.possible || save.gold < short.cost} title={short.possible ? 'Buy the missing materials at the market' : 'The market is out of something you need today'} onClick={() => (sound.coins(), update((s) => buyMissing(s, need, Date.now())))}>
+                        Buy missing
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="gl-coin-badge" title="The smith's fee">
+                        <Gold n={fee} />
+                      </span>
+                      <button className="gl-btn is-primary" disabled={!!why || save.gold < fee || e.crafting.length >= benches} title={e.crafting.length >= benches ? 'Every bench is busy' : undefined} onClick={() => forge(it)}>
+                        Forge
                       </button>
                     </>
                   )}
@@ -463,16 +536,10 @@ export function GearShop({ save, update, kind, onBack, sound }: { save: Save; up
           })}
         </section>
       </div>
-      <p className="gl-muted gl-fine gl-shop-note">Prices include trading in what you wear now{rules(save).prices !== 1 ? `, at ${rules(save).name} prices (×${rules(save).prices})` : ''}.</p>
-    </div>
-  )
-}
-
-/** A big painted icon for a card, glowing in `colour`, with an emoji until the picture loads. */
-function CardIcon({ id, glyph, colour }: { id: string; glyph: string; colour: string }) {
-  return (
-    <div className="gl-card-art gl-icon-art" style={{ ['--glow' as string]: colour }}>
-      <PlaceIcon id={id} glyph={glyph} />
+      <p className="gl-muted gl-fine gl-shop-note">
+        Buy a blueprint once, then forge from materials (from your estate or the market) for the smith's fee. What you replace is broken down for about a third of its materials.
+        {rules(save).prices !== 1 ? ` ${rules(save).name} prices (×${rules(save).prices}).` : ''}
+      </p>
     </div>
   )
 }
@@ -783,20 +850,6 @@ export function perkChoices(save: Save): PerkId[] {
     .map((x) => x.p.id)
 }
 
-const PERK_GLYPH: Record<PerkId, string> = {
-  riposte: '↩️',
-  cleave: '🪓',
-  showman: '🎭',
-  secondWind: '💨',
-  ironSkin: '🛡️',
-  fleetFoot: '👟',
-  bloodlust: '🩸',
-  arcane: '🔮',
-  thickSkull: '🪖',
-  executioner: '💀',
-  goldTongue: '🪙',
-}
-
 export function Sheet({ save, update, onBack, sound }: { save: Save; update: Update; onBack: () => void; sound: { ui: () => void; fanfare: () => void } }) {
   const g = save.g
   const d = derive(g)
@@ -807,6 +860,7 @@ export function Sheet({ save, update, onBack, sound }: { save: Save; update: Upd
     update((s) => ({ ...s, g: { ...s.g, points: s.g.points - 1, stats: { ...s.g.stats, [k]: s.g.stats[k] + 1 } } }))
   }
   const choices = save.pendingPerks > 0 ? perkChoices(save) : []
+  const [held, setHeld] = useState<{ id: PerkId; level: number } | null>(null)
   const cap = Math.max(12, ...STATS.map((x) => gs[x.key]))
   const nextPerk = PERK_LEVELS.find((l) => l > g.level)
   const tiles: [string, string][] = [
@@ -885,26 +939,10 @@ export function Sheet({ save, update, onBack, sound }: { save: Save; update: Upd
           </div>
           <div className="gl-panel">
             <h3>
-              Perks <span className="gl-points">{nextPerk ? `next at level ${nextPerk}` : 'all earned'}</span>
+              Perk cards <span className="gl-points">{nextPerk ? `next at level ${nextPerk}` : 'all earned'}</span>
             </h3>
-            {g.perks.length ? (
-              <div className="gl-perk-list">
-                {g.perks.map((id) => {
-                  const p = PERKS.find((x) => x.id === id)!
-                  return (
-                    <div key={id} className="gl-perk">
-                      <i>{PERK_GLYPH[id]}</i>
-                      <div>
-                        <strong>{p.name}</strong>
-                        <span className="gl-muted">{p.text}</span>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : (
-              <p className="gl-muted">A perk every five levels: pick one of three tricks from the doctore.</p>
-            )}
+            <PerkDeck perks={g.perks} onOpen={(id, level) => (sound.ui(), setHeld({ id, level }))} />
+            {!g.perks.length && <p className="gl-muted gl-fine">A card every five levels: the doctore deals three and you keep one.</p>}
             {g.spells.length > 0 && (
               <>
                 <h3>Spellbook</h3>
@@ -951,32 +989,17 @@ export function Sheet({ save, update, onBack, sound }: { save: Save; update: Upd
         </section>
       </div>
       {choices.length > 0 && (
-        <Modal>
-          <h2>Choose a perk</h2>
-          <p className="gl-muted">Level {g.level}: the doctore teaches you a trick.</p>
-          <div className="gl-perk-pick">
-            {choices.map((id) => {
-              const p = PERKS.find((x) => x.id === id)!
-              return (
-                <button
-                  key={id}
-                  className="gl-mode gl-perk"
-                  onClick={() => {
-                    sound.fanfare()
-                    update((s) => ({ ...s, pendingPerks: s.pendingPerks - 1, g: { ...s.g, perks: [...s.g.perks, id] } }))
-                  }}
-                >
-                  <i>{PERK_GLYPH[id]}</i>
-                  <div>
-                    <strong>{p.name}</strong>
-                    <span>{p.text}</span>
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-        </Modal>
+        <PerkDraft
+          key={g.perks.length}
+          choices={choices}
+          level={g.level}
+          onPick={(id) => {
+            sound.fanfare()
+            update((s) => ({ ...s, pendingPerks: s.pendingPerks - 1, g: { ...s.g, perks: [...s.g.perks, id] } }))
+          }}
+        />
       )}
+      {held && <CardView id={held.id} level={held.level} onClose={() => setHeld(null)} />}
     </div>
   )
 }

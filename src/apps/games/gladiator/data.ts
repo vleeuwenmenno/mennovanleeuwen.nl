@@ -40,38 +40,59 @@ export const SLOT_NAMES: Record<Slot, string> = {
   weapon: 'Weapon',
 }
 
-/** Seven tiers of material, from a farmhand's leather to gear the gods would envy. */
+/**
+ * Thirteen tiers of material, from a farmhand's leather to gear the gods would envy: seven main
+ * materials, with a half step between each (studded leather, bronze scale, iron mail...) so an
+ * upgrade is never far off. Half tiers are drawn in the shape of the tier below, in their own
+ * colours, with studs, scales or rings on top.
+ */
 export type Material = { name: string; level: number; base: string; light: string; dark: string; trim: string; glow?: string }
 export const MATERIALS: Material[] = [
   { name: 'Leather', level: 1, base: '#8a5a34', light: '#b07a4c', dark: '#5a381e', trim: '#3e2614' },
+  { name: 'Studded Leather', level: 2, base: '#7a4a2a', light: '#a06a40', dark: '#4a2c16', trim: '#c0803a' },
   { name: 'Bronze', level: 4, base: '#c0803a', light: '#e8b06a', dark: '#7e4e1e', trim: '#5a3612' },
+  { name: 'Bronze Scale', level: 6, base: '#b07030', light: '#dca060', dark: '#6e4218', trim: '#3e2614' },
   { name: 'Iron', level: 8, base: '#7c838c', light: '#a9b0b8', dark: '#4c5259', trim: '#33373c' },
+  { name: 'Iron Mail', level: 10, base: '#6a7078', light: '#959ca4', dark: '#3e4349', trim: '#c0803a' },
   { name: 'Steel', level: 12, base: '#b8c3cf', light: '#eef3f8', dark: '#77828e', trim: '#c8a24a' },
+  { name: 'Tempered Steel', level: 14, base: '#a4b4c6', light: '#e0ecf8', dark: '#5e6c7c', trim: '#3a6aa8' },
   { name: 'Gilded', level: 17, base: '#e2b53e', light: '#fff0a8', dark: '#a37514', trim: '#f4f1e6' },
+  { name: 'Gold-Chased', level: 19, base: '#d8a83a', light: '#ffe9a0', dark: '#946410', trim: '#b0263a' },
   { name: 'Imperial', level: 22, base: '#3a3442', light: '#6f6680', dark: '#1d1924', trim: '#e2b53e' },
+  { name: 'Praetorian', level: 25, base: '#4a2a3a', light: '#806078', dark: '#24141c', trim: '#e2b53e' },
   { name: 'Mythic', level: 27, base: '#2f5f74', light: '#8fe3ff', dark: '#173342', trim: '#e8f8ff', glow: '#6fd8ff' },
 ]
+export const TIERS = MATERIALS.length
+/** Which of the seven main materials a tier looks like: half tiers share the shape below them. */
+export const tierStyle = (t: number) => Math.floor(t / 2)
+export const isHalfTier = (t: number) => t % 2 === 1
+
+/** Stretches a per-main-material table to all thirteen tiers, half tiers halfway between. */
+function spread(values: number[], digits = 0) {
+  const k = 10 ** digits
+  return values.flatMap((v, i) => (i < values.length - 1 ? [v, Math.round(((v + values[i + 1]) / 2) * k) / k] : [v]))
+}
 
 /** Capes are cloth, so they have their own colours per tier. */
-export const CAPE_COLOURS = ['#7a6a52', '#9c3b2c', '#2f5a8a', '#3d7a44', '#b0263a', '#5c2a7a', '#e8eef5']
+export const CAPE_COLOURS = ['#7a6a52', '#b8ac90', '#9c3b2c', '#b8862c', '#2f5a8a', '#2a7a8a', '#3d7a44', '#2a5a2a', '#b0263a', '#d8a83a', '#5c2a7a', '#7a1a5a', '#e8eef5']
 
 const ARMOUR_NAMES: Record<Exclude<Slot, 'weapon'>, string[]> = {
-  head: ['Leather Cap', 'Bronze Crested Helm', 'Iron Galea', 'Steel Thraex Helm', 'Gilded Plumed Helm', 'Imperial Centurion Helm', 'Mythic Winged Helm'],
-  body: ['Leather Jerkin', 'Bronze Muscle Cuirass', 'Iron Segmented Plate', 'Steel Lorica', 'Gilded Cuirass', 'Imperial Cuirass', 'Mythic Aegis Plate'],
-  shoulders: ['Leather Pads', 'Bronze Pauldrons', 'Iron Manica Plates', 'Steel Pauldrons', 'Gilded Pauldrons', 'Imperial Spaulders', 'Mythic Pauldrons'],
-  arms: ['Leather Wraps', 'Bronze Bracers', 'Iron Vambraces', 'Steel Manicae', 'Gilded Bracers', 'Imperial Vambraces', 'Mythic Bracers'],
-  legs: ['Leather Shin Guards', 'Bronze Greaves', 'Iron Greaves', 'Steel Ocreae', 'Gilded Greaves', 'Imperial Greaves', 'Mythic Greaves'],
-  feet: ['Sandals', 'Bronze-Studded Caligae', 'Iron-Shod Boots', 'Steel Sabatons', 'Gilded Boots', 'Imperial Boots', 'Mythic Boots'],
-  cape: ['Wool Cloak', 'Red Sagum', 'Blue Paludamentum', 'Hunter’s Mantle', 'Champion’s Cape', 'Imperial Purple', 'Cloak of Stars'],
-  shield: ['Leather Buckler', 'Bronze Parma', 'Iron Scutum', 'Steel Scutum', 'Gilded Aspis', 'Imperial Scutum', 'Mythic Aegis'],
+  head: ['Leather Cap', 'Studded Leather Cap', 'Bronze Crested Helm', 'Bronze Scale Helm', 'Iron Galea', 'Iron Mail Coif', 'Steel Thraex Helm', 'Tempered Steel Helm', 'Gilded Plumed Helm', 'Gold-Chased Helm', 'Imperial Centurion Helm', 'Praetorian Helm', 'Mythic Winged Helm'],
+  body: ['Leather Jerkin', 'Studded Leather Jerkin', 'Bronze Muscle Cuirass', 'Bronze Scale Cuirass', 'Iron Segmented Plate', 'Iron Mail Hauberk', 'Steel Lorica', 'Tempered Steel Lorica', 'Gilded Cuirass', 'Gold-Chased Cuirass', 'Imperial Cuirass', 'Praetorian Cuirass', 'Mythic Aegis Plate'],
+  shoulders: ['Leather Pads', 'Studded Pads', 'Bronze Pauldrons', 'Bronze Scale Pauldrons', 'Iron Manica Plates', 'Iron Mail Mantle', 'Steel Pauldrons', 'Tempered Pauldrons', 'Gilded Pauldrons', 'Gold-Chased Pauldrons', 'Imperial Spaulders', 'Praetorian Spaulders', 'Mythic Pauldrons'],
+  arms: ['Leather Wraps', 'Studded Wraps', 'Bronze Bracers', 'Bronze Scale Bracers', 'Iron Vambraces', 'Iron Mail Sleeves', 'Steel Manicae', 'Tempered Manicae', 'Gilded Bracers', 'Gold-Chased Bracers', 'Imperial Vambraces', 'Praetorian Vambraces', 'Mythic Bracers'],
+  legs: ['Leather Shin Guards', 'Studded Shin Guards', 'Bronze Greaves', 'Bronze Scale Greaves', 'Iron Greaves', 'Iron Mail Chausses', 'Steel Ocreae', 'Tempered Greaves', 'Gilded Greaves', 'Gold-Chased Greaves', 'Imperial Greaves', 'Praetorian Greaves', 'Mythic Greaves'],
+  feet: ['Sandals', 'Hobnailed Sandals', 'Bronze-Studded Caligae', 'Bronze Scale Caligae', 'Iron-Shod Boots', 'Iron Mail Boots', 'Steel Sabatons', 'Tempered Sabatons', 'Gilded Boots', 'Gold-Chased Boots', 'Imperial Boots', 'Praetorian Boots', 'Mythic Boots'],
+  cape: ['Wool Cloak', 'Linen Cloak', 'Red Sagum', 'Ochre Sagum', 'Blue Paludamentum', 'Sea-Blue Mantle', 'Hunter’s Mantle', 'Forest Mantle', 'Champion’s Cape', 'Golden Cape', 'Imperial Purple', 'Senator’s Purple', 'Cloak of Stars'],
+  shield: ['Leather Buckler', 'Studded Buckler', 'Bronze Parma', 'Bronze Scale Parma', 'Iron Scutum', 'Iron-Rimmed Scutum', 'Steel Scutum', 'Tempered Scutum', 'Gilded Aspis', 'Gold-Chased Aspis', 'Imperial Scutum', 'Praetorian Scutum', 'Mythic Aegis'],
 }
 
 // How much of a tier's protection each slot carries, and its share of the weight.
 const SLOT_SHARE: Record<Exclude<Slot, 'weapon'>, number> = { head: 0.5, body: 1, shoulders: 0.35, arms: 0.3, legs: 0.4, feet: 0.3, cape: 0, shield: 0.6 }
-const TIER_ARMOUR = [4, 8, 13, 19, 26, 34, 44]
-const TIER_WEIGHT = [1, 2, 3.2, 3, 2.4, 2.2, 1.6]
-const TIER_PRICE = [18, 60, 170, 420, 950, 1900, 3800]
-const TIER_STR = [0, 5, 10, 15, 20, 26, 32]
+const TIER_ARMOUR = spread([4, 8, 13, 19, 26, 34, 44])
+const TIER_WEIGHT = spread([1, 2, 3.2, 3, 2.4, 2.2, 1.6], 1)
+const TIER_PRICE = spread([18, 60, 170, 420, 950, 1900, 3800])
+const TIER_STR = spread([0, 5, 10, 15, 20, 26, 32])
 // Higher tiers carry a stat bonus that depends on the slot.
 const SLOT_BONUS: Record<Exclude<Slot, 'weapon'>, StatKey[]> = {
   head: ['def'],
@@ -85,8 +106,8 @@ const SLOT_BONUS: Record<Exclude<Slot, 'weapon'>, StatKey[]> = {
 }
 
 export type ShieldShape = 'buckler' | 'parma' | 'scutum' | 'aspis'
-const SHIELD_SHAPES: ShieldShape[] = ['buckler', 'parma', 'scutum', 'scutum', 'aspis', 'scutum', 'aspis']
-const SHIELD_BLOCK = [0.07, 0.1, 0.14, 0.16, 0.18, 0.2, 0.23]
+const SHIELD_SHAPES: ShieldShape[] = (['buckler', 'parma', 'scutum', 'scutum', 'aspis', 'scutum', 'aspis'] as ShieldShape[]).flatMap((s, i, a) => (i < a.length - 1 ? [s, s] : [s]))
+const SHIELD_BLOCK = spread([0.07, 0.1, 0.14, 0.16, 0.18, 0.2, 0.23], 3)
 
 export type WeaponKind = 'dagger' | 'gladius' | 'axe' | 'mace' | 'spear' | 'trident' | 'greatsword' | 'warhammer' | 'staff' | 'wand' | 'scepter'
 export type WeaponType = {
@@ -123,9 +144,9 @@ export const WEAPON_TYPES: WeaponType[] = [
   { kind: 'wand', name: 'Wand', reach: 22, dmg: [1, 3], acc: 4, crit: 0.03, cost: 0.6, stun: 0, twoHanded: false, thrust: true, strShare: 0.3, finesse: 0.2, spell: 1.05, mana: 0.85 },
   { kind: 'scepter', name: 'Scepter', reach: 44, dmg: [3, 6], acc: 2, crit: 0.03, cost: 0.95, stun: 0.08, twoHanded: false, thrust: false, strShare: 0.8, finesse: 0, spell: 1.15 },
 ]
-export const WEAPON_MATERIALS = ['Wooden', 'Bronze', 'Iron', 'Steel', 'Damascus', 'Imperial', 'Mythic']
-const WEAPON_SCALE = [1, 1.6, 2.3, 3.1, 4, 5, 6.2]
-const WEAPON_PRICE = [10, 50, 150, 380, 880, 1800, 3600]
+export const WEAPON_MATERIALS = ['Wooden', 'Ironwood', 'Bronze', 'Hardened Bronze', 'Iron', 'Wrought Iron', 'Steel', 'Tempered Steel', 'Damascus', 'Etched Damascus', 'Imperial', 'Praetorian', 'Mythic']
+const WEAPON_SCALE = spread([1, 1.6, 2.3, 3.1, 4, 5, 6.2], 2)
+const WEAPON_PRICE = spread([10, 50, 150, 380, 880, 1800, 3600])
 
 export type Item = {
   id: string
@@ -151,7 +172,9 @@ function makeArmour(): Item[] {
       const share = SLOT_SHARE[slot]
       const bonus: Partial<Stats> = {}
       const keys = SLOT_BONUS[slot]
-      const amount = slot === 'cape' ? t + 1 : t - 2
+      // Stat bonuses grow with the main material; half tiers sit between.
+      const tb = t / 2
+      const amount = Math.floor(slot === 'cape' ? tb + 1 : tb - 2)
       if (amount > 0) keys.forEach((k, i) => (bonus[k] = i === 0 ? amount : Math.max(0, amount - 3)))
       for (const k of Object.keys(bonus) as StatKey[]) if (!bonus[k]) delete bonus[k]
       out.push({
@@ -186,10 +209,10 @@ function makeWeapons(): Item[] {
         level: MATERIALS[t].level,
         price: Math.round(WEAPON_PRICE[t] * (0.6 + 0.4 * heavy)),
         armour: 0,
-        weight: Math.round(heavy * (1 + t * 0.15) * 10) / 10,
-        str: Math.round(t * 4.5 * w.strShare),
+        weight: Math.round(heavy * (1 + (t / 2) * 0.15) * 10) / 10,
+        str: Math.round((t / 2) * 4.5 * w.strShare),
         // Casters' weapons carry Magic (a staff the most); the best fighting steel sharpens aim.
-        bonus: w.spell ? { mag: t + (w.kind === 'staff' ? 2 : 1) } : t >= 4 ? { atk: t - 3 } : {},
+        bonus: w.spell ? { mag: Math.floor(t / 2) + (w.kind === 'staff' ? 2 : 1) } : t >= 8 ? { atk: Math.floor(t / 2) - 3 } : {},
         weapon: w.kind,
         dmg: [Math.round(w.dmg[0] * k), Math.round(w.dmg[1] * k)],
       })

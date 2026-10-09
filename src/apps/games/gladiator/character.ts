@@ -212,7 +212,8 @@ export function makeOpponent(level: number, archetype: Archetype, seed: number, 
   // Arena regulars kit out about as fast as a player can afford to: on easier settings, often a
   // tier or two behind.
   const lag = opts.lag ?? 0.5
-  const tierFor = () => Math.max(0, Math.min(MATERIALS.length - 1, best + boost - (r() < lag ? 1 : 0) - (r() < lag / 3 ? 1 : 0)))
+  // Steps are half tiers, so a whole tier behind is two.
+  const tierFor = () => Math.max(0, Math.min(MATERIALS.length - 1, best + boost - (r() < lag ? 2 : 0) - (r() < lag / 3 ? 1 : 0)))
   const weapon = [...ITEMS].reverse().find((i) => i.weapon === kind && i.tier <= tierFor() && i.str <= stats.str + 2)
   if (weapon) g.gear.weapon = weapon.id
   const twoHanded = weaponType(kind).twoHanded

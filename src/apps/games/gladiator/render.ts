@@ -1,4 +1,4 @@
-import { CAPE_COLOURS, item, MATERIALS, type Item, type Look, type Slot, type WeaponKind } from './data'
+import { CAPE_COLOURS, isHalfTier, item, MATERIALS, tierStyle, type Item, type Look, type Slot, type WeaponKind } from './data'
 import { BONES, type Face, type Pose } from './rig'
 
 // Draws a gladiator: limbs as outlined, tapered capsules like a cutout puppet, a profile face,
@@ -276,7 +276,7 @@ function drawLeg(ctx: CanvasRenderingContext2D, hip: P, knee: P, ankle: P, footA
   ctx.quadraticCurveTo(BONES.foot + 3, 5, BONES.foot, 0)
   ctx.quadraticCurveTo(BONES.foot - 8, -5, 2, -6)
   ctx.closePath()
-  if (feet && feet.tier > 0) {
+  if (feet && tierStyle(feet.tier) > 0) {
     const m = MATERIALS[feet.tier]
     paint(ctx, back ? m.dark : m.base)
     ctx.beginPath()
@@ -305,7 +305,7 @@ function drawLeg(ctx: CanvasRenderingContext2D, hip: P, knee: P, ankle: P, footA
     }
   }
   ctx.restore()
-  if (feet && feet.tier === 0) {
+  if (feet && tierStyle(feet.tier) === 0) {
     // Sandal laces criss-cross up the ankle.
     ctx.strokeStyle = '#5a381e'
     ctx.lineWidth = 1.6
@@ -318,7 +318,7 @@ function drawLeg(ctx: CanvasRenderingContext2D, hip: P, knee: P, ankle: P, footA
       ctx.lineTo(ankle.x + up.x * t1 + 5 * b, ankle.y + up.y * t1)
     }
     ctx.stroke()
-  } else if (feet && feet.tier > 0) {
+  } else if (feet && tierStyle(feet.tier) > 0) {
     // The boot's shaft up to mid-calf.
     const m = MATERIALS[feet.tier]
     const top = { x: ankle.x + (knee.x - ankle.x) * 0.38, y: ankle.y + (knee.y - ankle.y) * 0.38 }
@@ -380,7 +380,7 @@ function drawArm(ctx: CanvasRenderingContext2D, sh: P, elbow: P, hand: P, skin: 
     ctx.ellipse(0, 2, 13 * b, 10, 0, Math.PI, 0)
     ctx.closePath()
     paint(ctx, back ? m.dark : metal(ctx, m, -12, -6, 12, 6))
-    if (m.trim && sh2.tier >= 3) {
+    if (m.trim && tierStyle(sh2.tier) >= 3) {
       ctx.beginPath()
       ctx.ellipse(0, 2, 13 * b, 10, 0, Math.PI, 0)
       ctx.strokeStyle = m.trim
@@ -471,13 +471,14 @@ function drawTorso(ctx: CanvasRenderingContext2D, r: Rigged, look: Look, b: numb
     ctx.fillRect(Math.min(top.x, lo.x) - 60, Math.min(top.y, lo.y) - 60, 120 + Math.abs(top.x - lo.x), 120 + Math.abs(top.y - lo.y))
     ctx.strokeStyle = m.dark
     ctx.lineWidth = 1.6
-    if (body.tier === 0) {
+    const style = tierStyle(body.tier)
+    if (style === 0) {
       // Stitched leather.
       ctx.setLineDash([3, 3])
       line([[14 * b, 64], [16 * b, 30], [10 * b, 8]])
       line([[-12 * b, 62], [-13 * b, 10]])
       ctx.setLineDash([])
-    } else if (body.tier === 2 || body.tier === 3 || body.tier === 5) {
+    } else if (style === 2 || style === 3 || style === 5) {
       // Segmented plates.
       for (let u = 14; u < 64; u += 10) line([[-20 * b, u], [22 * b, u + 2]])
       ctx.strokeStyle = m.trim
@@ -491,6 +492,7 @@ function drawTorso(ctx: CanvasRenderingContext2D, r: Rigged, look: Look, b: numb
       ctx.strokeStyle = m.light
       line([[16 * b, 56], [8 * b, 60]])
     }
+    if (isHalfTier(body.tier)) halfTierPattern(ctx, style, m, pt, b)
     if (m.glow) {
       ctx.strokeStyle = m.glow
       ctx.shadowColor = m.glow
@@ -544,7 +546,7 @@ function drawSkirt(ctx: CanvasRenderingContext2D, r: Rigged, look: Look, kit: Ki
   }
   // Pteruges: leather strips hanging below a cuirass.
   const body = kit.gear.body
-  if (body && body.tier > 0) {
+  if (body && tierStyle(body.tier) > 0) {
     const m = MATERIALS[body.tier]
     for (let i = 0; i < 6; i++) {
       const vv = -14 + i * 6
@@ -801,8 +803,9 @@ function drawHair(ctx: CanvasRenderingContext2D, look: Look) {
   }
 }
 
-function drawHelmet(ctx: CanvasRenderingContext2D, tier: number, time: number) {
-  const m = MATERIALS[tier]
+function drawHelmet(ctx: CanvasRenderingContext2D, t: number, time: number) {
+  const m = MATERIALS[t]
+  const tier = tierStyle(t)
   const fill = metal(ctx, m, 10, -26, -10, 10)
   // Crests and plumes first, so the dome overlaps their base.
   if (tier === 1 || tier === 3) {
@@ -875,6 +878,15 @@ function drawHelmet(ctx: CanvasRenderingContext2D, tier: number, time: number) {
       ctx.fill()
     }
   }
+  if (isHalfTier(t)) {
+    // A half tier: a row of studs along the brow.
+    ctx.fillStyle = m.trim
+    for (let x = -18; x <= 18; x += 6) {
+      ctx.beginPath()
+      ctx.arc(x, -8 - Math.abs(x) * 0.06, 1.4, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }
   if (tier === 6) {
     // Wings.
     const flap = Math.sin(time / 400) * 4
@@ -926,7 +938,7 @@ function drawCape(ctx: CanvasRenderingContext2D, r: Rigged, tier: number, time: 
   g.addColorStop(0, shade(c, -0.25))
   g.addColorStop(1, c)
   paint(ctx, g)
-  if (tier === 6) {
+  if (tier === MATERIALS.length - 1) {
     // Stars on the cloak of stars.
     ctx.fillStyle = '#6fd8ff'
     for (let i = 0; i < 6; i++) {
@@ -945,7 +957,10 @@ export function drawShield(ctx: CanvasRenderingContext2D, hand: P, foreAng: numb
   ctx.rotate(Math.max(-0.4, Math.min(0.4, (foreAng - 90) * D * 0.25)))
   // Face-on, squashed sideways to suggest it is angled towards the opponent.
   ctx.scale(0.62, 1)
-  const face = it.tier === 0 ? '#8a5a34' : it.tier === 1 ? '#a8342a' : it.tier === 2 ? '#8a2a22' : it.tier === 3 ? '#2f4f8a' : it.tier === 4 ? '#e2b53e' : it.tier === 5 ? '#4a2a5a' : '#2f5f74'
+  const st = tierStyle(it.tier)
+  const faces = ['#8a5a34', '#a8342a', '#8a2a22', '#2f4f8a', '#e2b53e', '#4a2a5a', '#2f5f74']
+  // Half tiers: the same shield in a deeper shade.
+  const face = isHalfTier(it.tier) ? shade(faces[st], -0.22) : faces[st]
   ctx.beginPath()
   const shape = it.shape ?? 'parma'
   if (shape === 'buckler') ctx.arc(0, 0, 17, 0, Math.PI * 2)
@@ -961,7 +976,7 @@ export function drawShield(ctx: CanvasRenderingContext2D, hand: P, foreAng: numb
   ctx.strokeStyle = OUTLINE
   ctx.stroke()
   // Emblem: wings for the scutum, a star for round shields.
-  ctx.fillStyle = it.tier >= 4 ? m.trim : m.light
+  ctx.fillStyle = st >= 4 ? m.trim : m.light
   if (shape === 'scutum') {
     for (const s of [-1, 1]) {
       ctx.beginPath()
@@ -1004,6 +1019,56 @@ export function drawShield(ctx: CanvasRenderingContext2D, hand: P, foreAng: numb
   ctx.restore()
 }
 
+function mixHex(a: string, b: string) {
+  const x = hexToRgb(a)
+  const y = hexToRgb(b)
+  return `rgb(${x.map((v, i) => Math.round((v + y[i]) / 2)).join(',')})`
+}
+const mixMetal = (a: (typeof WEAPON_METAL)[number], b: (typeof WEAPON_METAL)[number]) => ({ base: mixHex(a.base, b.base), light: mixHex(a.light, b.light), dark: mixHex(a.dark, b.dark) })
+
+/**
+ * What sets a half tier apart on the chest: studs on leather, overlapping scales on bronze, rings
+ * of mail on iron, bluing bands on steel, chased lines on gold, a trimmed border on imperial.
+ */
+function halfTierPattern(ctx: CanvasRenderingContext2D, style: number, m: (typeof MATERIALS)[number], pt: (v: number, u: number) => P, b: number) {
+  ctx.save()
+  if (style === 0 || style === 5) {
+    ctx.fillStyle = m.trim
+    for (let u = 16; u <= 64; u += 12)
+      for (let v = -12; v <= 16; v += 9) {
+        const p = pt(v * b, u + (v % 2 ? 4 : 0))
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, 1.7, 0, Math.PI * 2)
+        ctx.fill()
+      }
+  } else if (style === 1 || style === 2) {
+    // Scales (bronze) or rings (iron): little arcs in staggered rows.
+    ctx.strokeStyle = style === 1 ? m.dark : m.light
+    ctx.lineWidth = 1.1
+    for (let u = 12; u <= 70; u += 6)
+      for (let v = -16; v <= 20; v += 6) {
+        const p = pt((v + (u % 12 ? 3 : 0)) * b, u)
+        ctx.beginPath()
+        if (style === 1) ctx.arc(p.x, p.y, 3, 0.1 * Math.PI, 0.9 * Math.PI)
+        else ctx.arc(p.x, p.y, 2.2, 0, Math.PI * 2)
+        ctx.stroke()
+      }
+  } else {
+    // Bands of bluing or engraving across the plates.
+    ctx.strokeStyle = m.trim
+    ctx.lineWidth = 1.6
+    for (let u = 20; u <= 60; u += 20) {
+      const a = pt(-18 * b, u)
+      const z = pt(20 * b, u + 3)
+      ctx.beginPath()
+      ctx.moveTo(a.x, a.y)
+      ctx.quadraticCurveTo((a.x + z.x) / 2, (a.y + z.y) / 2 - 3, z.x, z.y)
+      ctx.stroke()
+    }
+  }
+  ctx.restore()
+}
+
 const GEM_COLOURS = ['#8fd8ff', '#ff8a3a', '#7aff9a', '#b48cff', '#ffe07a', '#ff5ad0', '#6fd8ff']
 
 const WEAPON_METAL = [
@@ -1019,7 +1084,9 @@ const WEAPON_METAL = [
 /** Draws a weapon held at `hand`, the blade pointing along `ang` (degrees, 0 = up). */
 export function drawWeapon(ctx: CanvasRenderingContext2D, hand: P, ang: number, it: Item) {
   const kind = it.weapon!
-  const mt = WEAPON_METAL[it.tier]
+  const st = tierStyle(it.tier)
+  // Half tiers sit between two metals.
+  const mt = isHalfTier(it.tier) ? mixMetal(WEAPON_METAL[st], WEAPON_METAL[st + 1]) : WEAPON_METAL[st]
   const wood = '#6e4424'
   const gold = '#e2b53e'
   ctx.save()
@@ -1048,16 +1115,16 @@ export function drawWeapon(ctx: CanvasRenderingContext2D, hand: P, ang: number, 
   const haft = (y0: number, y1: number, w = 4.4) => {
     ctx.beginPath()
     ctx.roundRect(-w / 2, y1, w, y0 - y1, w / 2)
-    paint(ctx, it.tier === 5 ? '#2a2430' : wood, 2)
+    paint(ctx, st === 5 ? '#2a2430' : wood, 2)
   }
   const guard = (y: number, w: number) => {
     ctx.beginPath()
     ctx.roundRect(-w / 2, y - 3, w, 6, 3)
-    paint(ctx, it.tier >= 4 ? gold : mt.dark, 2)
+    paint(ctx, st >= 4 ? gold : mt.dark, 2)
   }
   // A casting gem in the tier's colour, glowing softly.
   const gem = (x: number, y: number, r: number) => {
-    const c = GEM_COLOURS[it.tier]
+    const c = GEM_COLOURS[st]
     ctx.save()
     ctx.shadowColor = c
     ctx.shadowBlur = 12
@@ -1073,7 +1140,7 @@ export function drawWeapon(ctx: CanvasRenderingContext2D, hand: P, ang: number, 
   const pommel = (y: number) => {
     ctx.beginPath()
     ctx.arc(0, y, 3.8, 0, Math.PI * 2)
-    paint(ctx, it.tier >= 4 ? gold : mt.dark, 1.8)
+    paint(ctx, st >= 4 ? gold : mt.dark, 1.8)
   }
   switch (kind) {
     case 'dagger':
@@ -1102,7 +1169,7 @@ export function drawWeapon(ctx: CanvasRenderingContext2D, hand: P, ang: number, 
       ctx.quadraticCurveTo(30, -62, 22, -44)
       ctx.quadraticCurveTo(14, -50, 2, -48)
       ctx.closePath()
-      paint(ctx, metal(ctx, MATERIALS[Math.min(6, it.tier)], 2, -70, 26, -48), 2)
+      paint(ctx, metal(ctx, MATERIALS[it.tier], 2, -70, 26, -48), 2)
       ctx.beginPath()
       ctx.moveTo(-2, -60)
       ctx.lineTo(-10, -56)
@@ -1118,13 +1185,13 @@ export function drawWeapon(ctx: CanvasRenderingContext2D, hand: P, ang: number, 
         ctx.lineTo(Math.cos(a) * k, -54 + Math.sin(a) * k)
       }
       ctx.closePath()
-      paint(ctx, metal(ctx, MATERIALS[Math.min(6, it.tier)], -10, -64, 10, -44), 2)
+      paint(ctx, metal(ctx, MATERIALS[it.tier], -10, -64, 10, -44), 2)
       break
     case 'warhammer':
       haft(26, -66, 5)
       ctx.beginPath()
       ctx.roundRect(-8, -84, 30, 20, 3)
-      paint(ctx, metal(ctx, MATERIALS[Math.min(6, it.tier)], -8, -84, 22, -64), 2.2)
+      paint(ctx, metal(ctx, MATERIALS[it.tier], -8, -84, 22, -64), 2.2)
       ctx.beginPath()
       ctx.moveTo(-8, -80)
       ctx.lineTo(-22, -74)
@@ -1138,7 +1205,7 @@ export function drawWeapon(ctx: CanvasRenderingContext2D, hand: P, ang: number, 
       ctx.quadraticCurveTo(8, -118, 3.5, -104)
       ctx.lineTo(-3.5, -104)
       ctx.quadraticCurveTo(-8, -118, 0, -132)
-      paint(ctx, metal(ctx, MATERIALS[Math.min(6, it.tier)], -6, -130, 6, -104), 2)
+      paint(ctx, metal(ctx, MATERIALS[it.tier], -6, -130, 6, -104), 2)
       break
     case 'trident':
       haft(50, -92, 4)
@@ -1184,7 +1251,7 @@ export function drawWeapon(ctx: CanvasRenderingContext2D, hand: P, ang: number, 
       ctx.lineTo(1.4, -34)
       ctx.lineTo(2.2, 10)
       ctx.closePath()
-      paint(ctx, it.tier === 5 ? '#2a2430' : '#5a3a20', 1.8)
+      paint(ctx, st === 5 ? '#2a2430' : '#5a3a20', 1.8)
       ctx.beginPath()
       ctx.roundRect(-3, -2, 6, 8, 2)
       paint(ctx, mt.base, 1.4)
@@ -1200,11 +1267,11 @@ export function drawWeapon(ctx: CanvasRenderingContext2D, hand: P, ang: number, 
         ctx.lineTo(Math.cos(a) * k, -48 + Math.sin(a) * k)
       }
       ctx.closePath()
-      paint(ctx, metal(ctx, MATERIALS[Math.min(6, it.tier)], -10, -58, 10, -38), 2)
+      paint(ctx, metal(ctx, MATERIALS[it.tier], -10, -58, 10, -38), 2)
       gem(0, -48, 5)
       break
   }
-  if (it.tier === 6) {
+  if (st === 6) {
     ctx.shadowColor = '#6fd8ff'
     ctx.shadowBlur = 16
     ctx.strokeStyle = 'rgba(140,230,255,0.7)'

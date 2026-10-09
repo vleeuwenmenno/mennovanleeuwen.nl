@@ -2,10 +2,10 @@
 // filtered noise or drones, plus little events on random timers (a bird, a hammer on the anvil,
 // a bubble). One place plays at a time; GladiatorSound crossfades between them.
 
-export type AmbiencePlace = 'title' | 'town' | 'arena' | 'forge' | 'armoury' | 'mage' | 'apothecary' | 'training'
+export type AmbiencePlace = 'title' | 'town' | 'arena' | 'forge' | 'armoury' | 'mage' | 'apothecary' | 'training' | 'estate' | 'market'
 
 /** How loud the music plays over each place: quieter where the place itself is the show. */
-export const MUSIC_LEVEL: Record<AmbiencePlace, number> = { title: 1, town: 1, arena: 0.8, forge: 0.55, armoury: 0.9, mage: 0.5, apothecary: 0.9, training: 0.85 }
+export const MUSIC_LEVEL: Record<AmbiencePlace, number> = { title: 1, town: 1, arena: 0.8, forge: 0.55, armoury: 0.9, mage: 0.5, apothecary: 0.9, training: 0.85, estate: 0.9, market: 0.9 }
 
 export type AmbienceKit = { ctx: AudioContext; noise: AudioBuffer; verb: GainNode; woods: AudioBuffer[]; clangs: AudioBuffer[]; anvils: AudioBuffer[] }
 export type Ambience = { gain: GainNode; stop: () => void }
@@ -135,6 +135,25 @@ export function startAmbience(kit: AmbienceKit, place: AmbiencePlace, out: Audio
       wind(0.08)
       every(0.4, 1.2, (at) => crackle(at, 0.05))
       every(9, 18, (at) => burst(at, 2.2, 'lowpass', 300, 0.7, 0.14, 700))
+      break
+    case 'estate':
+      // Out in the country: wind in the trees, birds, and from the hill the mine's pickaxes.
+      wind(0.07)
+      bed('highpass', 3000, 0.7, 0.008, 0.8, 1.2)
+      every(1.2, 4, (at) => bird(at))
+      every(3, 7, (at) => {
+        const hits = 2 + Math.floor(rand(0, 3))
+        for (let i = 0; i < hits; i++) sample(kit.anvils[Math.floor(Math.random() * kit.anvils.length)], at + i * rand(0.7, 1), 0.025, rand(0.6, 0.75))
+      })
+      every(8, 16, (at) => sample(kit.woods[Math.floor(Math.random() * kit.woods.length)], at, 0.06, rand(0.7, 0.9)))
+      break
+    case 'market':
+      // The forum on market day: haggling all round, coins changing hands.
+      crowd(0.08)
+      every(1.5, 4, (at) => {
+        for (let i = 0; i < 3; i++) tone(at + i * rand(0.05, 0.09), 0.18, rand(2300, 3200), rand(2300, 3200), 0.02, 'sine', 0.002)
+      })
+      every(5, 11, (at) => bird(at, 0.015))
       break
     case 'town':
       // Market chatter, a fountain, birds, now and then a cart.

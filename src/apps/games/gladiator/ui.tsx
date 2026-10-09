@@ -1,4 +1,5 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { resource, RESOURCES, type Bag, type Estate, type ResId } from './estate'
 import { MATERIALS, type Item, type Look, type Slot, type WeaponKind } from './data'
 import { drawFighter, drawShield, drawWeapon, kitOf, weaponKind, type Kit } from './render'
 import { Puppet, gripOf, type ClipName } from './rig'
@@ -158,6 +159,16 @@ export function ItemArt({ it, look, className }: { it: Item; look: Look; classNa
   return <canvas ref={ref} className={`gl-portrait ${className ?? ''}`} />
 }
 
+/** The current time, refreshed every `ms`: for countdowns. */
+export function useNow(ms = 1000) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), ms)
+    return () => clearInterval(t)
+  }, [ms])
+  return now
+}
+
 export function Bar({ value, max, kind, label }: { value: number; max: number; kind: 'hp' | 'sta' | 'mana' | 'xp' | 'favour'; label?: ReactNode }) {
   const pct = Math.max(0, Math.min(100, (value / Math.max(1, max)) * 100))
   return (
@@ -177,10 +188,104 @@ export const Gold = ({ n }: { n: number }) => (
 
 export const tierColour = (it: Item) => MATERIALS[it.tier].base
 
+/**
+ * Pins an overlay to the part of the game that's in view. The game scrolls inside `.gl-root`, so
+ * `inset: 0` alone would cover its top, wherever the page is scrolled to; this also holds the
+ * page still underneath while the overlay is open.
+ */
+export function useOverlay<T extends HTMLElement>() {
+  const ref = useRef<T>(null)
+  useLayoutEffect(() => {
+    const el = ref.current
+    const root = el?.closest<HTMLElement>('.gl-root')
+    if (!el || !root) return
+    const was = root.style.overflow
+    el.style.top = `${root.scrollTop}px`
+    el.style.bottom = 'auto'
+    el.style.height = `${root.clientHeight}px`
+    root.style.overflow = 'hidden'
+    return () => {
+      root.style.overflow = was
+    }
+  }, [])
+  return ref
+}
+
 export function Modal({ children, onClose, wide }: { children: ReactNode; onClose?: () => void; wide?: boolean }) {
+  const ref = useOverlay<HTMLDivElement>()
   return (
-    <div className="gl-modal" onPointerDown={(e) => e.target === e.currentTarget && onClose?.()}>
+    <div ref={ref} className="gl-modal" onPointerDown={(e) => e.target === e.currentTarget && onClose?.()}>
       <div className={`gl-panel gl-modal-box ${wide ? 'is-wide' : ''}`}>{children}</div>
+    </div>
+  )
+}
+
+/** A painted icon for a place in town, or its emoji until the picture has loaded (or if it can't). */
+export function PlaceIcon({ id, glyph }: { id: string; glyph: string }) {
+  const [state, setState] = useState<'loading' | 'ok' | 'missing'>('loading')
+  return (
+    <span className="gl-place-icon">
+      {state !== 'ok' && <i>{glyph}</i>}
+      {state !== 'missing' && <img src={`/games/gladiator/icons/${id}.webp`} alt="" draggable={false} onLoad={() => setState('ok')} onError={() => setState('missing')} style={state === 'ok' ? undefined : { display: 'none' }} />}
+    </span>
+  )
+}
+
+export function PageHead({ title, onBack, children }: { title: string; onBack: () => void; children?: ReactNode }) {
+  return (
+    <div className="gl-page-head">
+      <button className="gl-btn is-quiet" onClick={onBack}>
+        ← Town
+      </button>
+      <h2>{title}</h2>
+      {children}
+    </div>
+  )
+}
+
+/** A big painted icon for a card, glowing in `colour`, with an emoji until the picture loads. */
+export function CardIcon({ id, glyph, colour }: { id: string; glyph: string; colour: string }) {
+  return (
+    <div className="gl-card-art gl-icon-art" style={{ ['--glow' as string]: colour }}>
+      <PlaceIcon id={id} glyph={glyph} />
+    </div>
+  )
+}
+
+/** One material: its painted icon and a number, red when there isn't enough. */
+export function Res({ id, n, need }: { id: ResId; n?: number; need?: number }) {
+  const r = resource(id)
+  const short = need !== undefined && (n ?? 0) < need
+  return (
+    <span className={`gl-res ${short ? 'is-short' : ''}`} title={r.name}>
+      <PlaceIcon id={`res-${id}`} glyph={r.glyph} />
+      {need !== undefined ? (
+        <b>
+          {n ?? 0}/{need}
+        </b>
+      ) : (
+        <b>{n ?? 0}</b>
+      )}
+    </span>
+  )
+}
+
+/** A list of materials, with what you hold against what's needed. */
+export function BagView({ bag, have }: { bag: Bag; have?: Bag }) {
+  return (
+    <span className="gl-bag">
+      {(Object.keys(bag) as ResId[]).map((k) => (have ? <Res key={k} id={k} n={have[k]} need={bag[k]} /> : <Res key={k} id={k} n={bag[k]} />))}
+    </span>
+  )
+}
+
+/** Everything in the storehouse, in one strip. */
+export function Storehouse({ estate }: { estate: Estate }) {
+  return (
+    <div className="gl-storehouse" aria-label="Storehouse">
+      {RESOURCES.map((r) => (
+        <Res key={r.id} id={r.id} n={estate.res[r.id]} />
+      ))}
     </div>
   )
 }
