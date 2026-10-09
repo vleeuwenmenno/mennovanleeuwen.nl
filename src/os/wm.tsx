@@ -2,7 +2,7 @@ import { snapReserve } from './dockPrefs'
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
 import { synced } from './synced'
 
-export type AppId = 'terminal' | 'files' | 'viewer' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver'
+export type AppId = 'terminal' | 'files' | 'viewer' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge'
 
 export type WinState = {
   pid: number
@@ -59,7 +59,7 @@ export type GeometryPatch = Partial<Geometry> & { snap?: SnapZone; restore?: Geo
 export type Geometry = { x: number; y: number; w: number; h: number }
 
 /** Apps that only ever have one window; everything else can be opened again with "New window". */
-export const SINGLE_INSTANCE = new Set<AppId>(['notes', 'keys', 'trash', 'notebook', 'settings', 'mcserver'])
+export const SINGLE_INSTANCE = new Set<AppId>(['notes', 'keys', 'trash', 'notebook', 'settings', 'mcserver', 'linkforge'])
 
 type Action =
   | { type: 'open'; app: AppId; geometry: Geometry; props?: WinState['props']; newInstance?: boolean }

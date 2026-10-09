@@ -79,6 +79,7 @@ const APP_NAMES: Record<AppId, string> = {
   widget: 'widget',
   settings: 'settings',
   mcserver: 'mc-status',
+  linkforge: 'link-forge',
 }
 
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */

@@ -428,6 +428,7 @@ export function Spotlight() {
     // Apps
     for (const app of Object.keys(APP_META) as AppId[]) {
       if (app === 'viewer' || app === 'widget') continue // need a file, or are added as widgets
+      if (app === 'linkforge') continue // a dialog of Settings
       if (app === 'mcserver') continue // the Minecraft server's status entry opens it
       const meta = APP_META[app]
       const open = wm.windows.filter((w) => w.app === app).length

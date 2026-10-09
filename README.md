@@ -84,8 +84,10 @@ shutdown log ([`src/os/Power.tsx`](src/os/Power.tsx)); a reboot starts from the 
 Anyone can write notes and add launchers: **Notebook** (dock) lists every note in Markdown, and
 each one can sit on the desktop as a sticky (right-click the desktop → *New sticky note*). Stickies
 get a random tilt and colour, both changeable from the sticky's hover bar or menu. **Settings**
-(system menu) adds desktop launchers: a URL, a name and an optional emoji (otherwise the site's own
-favicon). Notes, launchers, desktop icons, the dock order and the open windows are kept per browser
+(system menu, [`src/apps/Settings.tsx`](src/apps/Settings.tsx)) is laid out like macOS System
+Settings: the account on top of a sidebar, then one pane each for appearance (mode, Omarchy themes,
+accent), the dock, launchers, search, notifications, go links, code hosts, calendar, sync and about.
+Launchers are a URL, a name and an optional emoji (otherwise the site's own favicon). Notes, launchers, desktop icons, the dock order and the open windows are kept per browser
 in localStorage ([`src/os/synced.ts`](src/os/synced.ts)), with one window layout for phones and one
 for bigger screens.
 
@@ -110,7 +112,7 @@ Spotlight or All apps to pin it. Settings → Dock lists what was taken off, to 
 restores the default dock. Everyone can still drag dock icons to reorder them.
 
 Only GitHub logins in `ALLOWED_USERS` (default `vleeuwenmenno`) can sign in; everyone else keeps
-the CV. Gitea/Forgejo instances are linked in Settings with a personal access token (read access to
+the CV. Gitea/Forgejo instances are linked from Settings → Code hosts, in a window of their own, with a personal access token (read access to
 repository, issue, user and organization). Tokens are stored encrypted (AES-256-GCM) in SQLite
 (`node:sqlite`, no extra dependency) under `DATA_DIR` (default `./data`, a volume in compose).
 
