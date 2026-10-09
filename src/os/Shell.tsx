@@ -95,8 +95,30 @@ function TopBar() {
   const recents = useRecents()
   const theme = useTheme()
   const ordered = wm.windows.slice().sort((a, b) => a.pid - b.pid)
+  // The bar's own menu, for its background and anything on it without a menu of its own.
+  const barMenu = (): MenuItem[] => [
+    { label: 'Search…', shortcut: 'Ctrl K', onSelect: () => toggleOverlay('spotlight') },
+    { label: 'All apps', onSelect: () => toggleOverlay('launchpad') },
+    { label: 'Show desktop', disabled: !wm.windows.some((w) => !w.minimized), onSelect: () => wm.windows.forEach((w) => wm.minimize(w.pid)) },
+    { separator: true },
+    { label: 'Appearance', submenu: appearanceMenu() },
+    { label: 'Dock', submenu: DOCK_MODES.map(([m, label]) => ({ label, checked: getDockMode() === m, onSelect: () => setDockMode(m) })) },
+    { separator: true },
+    { label: 'Settings', onSelect: () => wm.open('settings', { t: String(Date.now()) }) },
+    { label: 'About this system', onSelect: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) },
+  ]
+  // A workspace number stands for its window.
+  const workspaceMenu = (w: WinState): MenuItem[] => [
+    { label: `${APP_META[w.app].dock} · pid ${w.pid}`, disabled: true },
+    { separator: true },
+    w.minimized || w.pid !== wm.focusedPid ? { label: 'Show', onSelect: () => wm.focus(w.pid) } : { label: 'Minimize', onSelect: () => wm.minimize(w.pid) },
+    ...(APP_META[w.app].chrome !== 'note' ? [{ label: w.maximized ? 'Restore size' : 'Maximize', onSelect: () => (wm.focus(w.pid), wm.toggleMax(w.pid)) }] : []),
+    { separator: true },
+    ...(wm.windows.length > 1 ? [{ label: 'Close other windows', onSelect: () => wm.windows.filter((x) => x.pid !== w.pid).forEach((x) => wm.close(x.pid)) }] : []),
+    { label: 'Close', danger: true, onSelect: () => wm.close(w.pid) },
+  ]
   return (
-    <header className="topbar">
+    <header className="topbar" onContextMenu={(e) => openContextMenu(e, barMenu())}>
       <div className="topbar-left">
         <SystemMenu />
         {/* One numbered "workspace" per window, like the Omarchy bar. */}
@@ -106,6 +128,7 @@ function TopBar() {
               key={w.pid}
               className={`ws ${w.pid === wm.focusedPid && !w.minimized ? 'is-active' : ''} ${w.minimized ? 'is-min' : ''}`}
               onClick={() => (w.pid === wm.focusedPid && !w.minimized ? wm.minimize(w.pid) : wm.focus(w.pid))}
+              onContextMenu={(e) => openContextMenu(e, workspaceMenu(w))}
               title={`${APP_META[w.app].dock}${w.minimized ? ' (minimized)' : ''}`}
             >
               {i + 1}
@@ -400,13 +423,14 @@ function Dock() {
     else wm.open(app)
   }
 
-  // Shared tail of every dock item's menu: take it off, restore the default dock, dock behaviour.
-  const dockMenu = (id: DockId) => [
-    ...(canCustomize && id !== 'trash' ? [{ separator: true as const }, { label: 'Remove from dock', onSelect: () => unpinFromDock(id) }] : []),
-    ...(!isDefaultDock() ? [{ separator: true as const }, { label: canCustomize ? 'Restore default dock' : 'Reset dock order', onSelect: resetDock }] : []),
+  // An item's own menu ends with taking it off the dock (signed in); the dock's settings live on
+  // the dock itself (right-click its background, edges or separators).
+  const removeItem = (id: DockId): MenuItem[] => (canCustomize && id !== 'trash' ? [{ separator: true }, { label: 'Remove from dock', onSelect: () => unpinFromDock(id) }] : [])
+  const dockSettingsMenu = (): MenuItem[] => [
+    { label: 'Show the dock', submenu: DOCK_MODES.map(([m, label]) => ({ label, checked: getDockMode() === m, onSelect: () => setDockMode(m) })) },
+    { separator: true },
     ...(canCustomize ? [{ label: 'Customize dock…', onSelect: () => wm.open('settings', { section: 'dock', t: String(Date.now()) }) }] : []),
-    { separator: true as const },
-    { label: 'Dock', submenu: DOCK_MODES.map(([m, label]) => ({ label, checked: getDockMode() === m, onSelect: () => setDockMode(m) })) },
+    { label: canCustomize ? 'Restore default dock' : 'Reset dock order', disabled: isDefaultDock(), onSelect: resetDock },
   ]
 
   const itemMenu = (id: DockId) => {
@@ -416,7 +440,7 @@ function Dock() {
         { label: 'Open ↗', onSelect: () => launchLink(l) },
         { label: 'Copy link', onSelect: () => navigator.clipboard?.writeText(l.url).catch(() => {}) },
         { label: 'Edit launchers…', onSelect: () => wm.open('settings', { section: 'launchers', t: String(Date.now()) }) },
-        ...dockMenu(id),
+        ...removeItem(id),
       ]
     const app = id as AppId
     const wins = wm.windows.filter((x) => x.app === app).sort((a, b) => a.pid - b.pid)
@@ -426,7 +450,7 @@ function Dock() {
       ...(wins.length ? [{ separator: true as const }] : []),
       wins.length && multi ? { label: 'New window', onSelect: () => wm.openNew(app) } : { label: wins.length ? 'Show' : 'Open', onSelect: () => wm.open(app) },
       ...(wins.some((w) => !w.minimized) ? [{ label: wins.length > 1 ? 'Minimize all' : 'Minimize', onSelect: () => wins.forEach((w) => wm.minimize(w.pid)) }] : []),
-      ...dockMenu(id),
+      ...removeItem(id),
       ...(wins.length ? [{ separator: true as const }, { label: wins.length > 1 ? `Quit all ${wins.length}` : 'Quit', danger: true, onSelect: () => wins.forEach((w) => wm.close(w.pid)) }] : []),
     ]
   }
@@ -479,6 +503,9 @@ function Dock() {
       onPointerEnter={dock.show}
       onPointerLeave={() => !dragging && dock.hideSoon()}
       onFocus={dock.show}
+      // Items with a menu of their own stop the event; everything else (background, separators,
+      // All apps, More) gets the dock's settings.
+      onContextMenu={(e) => openContextMenu(e, dockSettingsMenu())}
     >
       <button ref={firstRef} className="dock-item" onClick={() => toggleOverlay('launchpad')} aria-label="All apps">
         <span className="app-icon is-tone lp-dock-icon" style={{ width: 48, height: 48 }}>

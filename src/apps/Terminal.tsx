@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { profile } from '../data/profile'
 import { setAccent } from '../os/theme'
 import { useWM, type WinState } from '../os/wm'
@@ -115,6 +115,40 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
   useEffect(() => {
     if (onLogout && !matchMedia('(pointer: coarse)').matches) inputRef.current?.focus({ preventScroll: true })
   }, [onLogout])
+
+  // The text console owns the whole screen: a click anywhere puts the caret back on the prompt,
+  // and typing with nothing focused goes to the prompt instead of the browser (Firefox's find as
+  // you type opened its search bar).
+  useEffect(() => {
+    if (!onLogout) return
+    const focusPrompt = () => inputRef.current?.focus({ preventScroll: true })
+    const onUp = () => !window.getSelection()?.toString() && focusPrompt()
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      const active = document.activeElement
+      if (active === inputRef.current || active?.matches('input, textarea, [contenteditable="true"]')) return
+      if (e.ctrlKey || e.metaKey) return // copying a selection, browser shortcuts
+      focusPrompt()
+    }
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('keydown', onKey, true)
+    return () => {
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('keydown', onKey, true)
+    }
+  }, [onLogout])
+
+  // A block cursor like Omarchy's terminals (solid when focused, hollow when not), drawn over the
+  // input since a native caret can only be a thin line. Monospace, so a character is 1ch.
+  const [caret, setCaret] = useState({ at: 0, scroll: 0, range: false, focused: false })
+  const syncCaret = () => {
+    const el = inputRef.current
+    if (!el) return
+    const start = el.selectionStart ?? el.value.length
+    const end = el.selectionEnd ?? start
+    const at = el.selectionDirection === 'backward' ? start : end
+    setCaret({ at, scroll: el.scrollLeft, range: start !== end, focused: document.activeElement === el })
+  }
+  useLayoutEffect(syncCaret, [value])
 
   // A phone keyboard opening shrinks the visible area: keep the prompt above it.
   useEffect(() => {
@@ -317,18 +351,30 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
       )}
       <label className={`t-line t-input ${busy ? 'is-busy' : ''}`} hidden={animating}>
         <Prompt cwd={cwd} />
-        <input
-          ref={inputRef}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={onKeyDown}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoComplete="off"
-          autoCorrect="off"
-          aria-label="Terminal input"
-          enterKeyHint="send"
-        />
+        <span className="t-field">
+          <input
+            ref={inputRef}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={onKeyDown}
+            onKeyUp={syncCaret}
+            onSelect={syncCaret}
+            onFocus={syncCaret}
+            onBlur={syncCaret}
+            onScroll={syncCaret}
+            spellCheck={false}
+            autoCapitalize="off"
+            autoComplete="off"
+            autoCorrect="off"
+            aria-label="Terminal input"
+            enterKeyHint="send"
+          />
+          {!caret.range && (
+            <span className={`t-cursor ${caret.focused ? 'is-focused' : ''}`} style={{ left: `calc(${caret.at}ch - ${caret.scroll}px)` }} aria-hidden>
+              {value[caret.at] ?? ' '}
+            </span>
+          )}
+        </span>
       </label>
       <div className="t-quick" aria-label="Quick commands">
         {QUICK.map((q) => (

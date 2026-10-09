@@ -6,6 +6,7 @@ import { githubCommits } from './github.ts'
 import { HttpError, json, readJson, sameOrigin, SECURITY } from './http.ts'
 import { minecraftStatus } from './minecraft.ts'
 import { search, clearSearchCache } from './search.ts'
+import { suggest } from './suggest.ts'
 import { readState, writeState } from './state.ts'
 
 // Every /api route, shared by the production server (server/index.ts) and Vite's dev and
@@ -24,6 +25,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (read && (path === '/api/minecraft' || path === '/api/activity')) {
       const body = JSON.stringify(path === '/api/minecraft' ? await minecraftStatus() : { items: await forgejoActivity() })
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SECURITY }).end(head ? undefined : body)
+      return true
+    }
+    if (read && path === '/api/suggest') {
+      json(res, 200, { suggestions: await suggest(url.searchParams.get('engine') ?? '', url.searchParams.get('q') ?? '') })
       return true
     }
     if (read && path === '/api/version') {

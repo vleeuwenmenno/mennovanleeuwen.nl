@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { APP_META } from './os/apps'
 import { loadAccount } from './os/account'
+import { installContextMenuFallback } from './os/ContextMenu'
 import { initialLayout, placement, Shell } from './os/Shell'
 import { applyDockReserve } from './os/dockPrefs'
 import { registerServiceWorker } from './os/pwa'
@@ -17,6 +18,7 @@ applyDockReserve()
 registerServiceWorker()
 trackVisualViewport()
 startSync()
+installContextMenuFallback()
 void loadAccount()
 
 const isApp = (app: string) => app in APP_META && app !== 'trash'

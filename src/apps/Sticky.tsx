@@ -81,6 +81,8 @@ export function Sticky({ win }: { win: WinState }) {
       e,
       noteMenu(note, [
         { separator: true },
+        { label: 'Copy text', disabled: !note.text.trim(), onSelect: () => navigator.clipboard?.writeText(note.text).catch(() => {}) },
+        { separator: true },
         { label: 'Open in Notebook', onSelect: () => wm.open('notebook', { id: note.id, t: String(Date.now()) }) },
         { label: 'Take off the desktop', onSelect: () => wm.close(win.pid) },
         { separator: true },
@@ -108,6 +110,12 @@ export function Sticky({ win }: { win: WinState }) {
         placeholder="Write something…"
         spellCheck
         onChange={(e) => updateNote(note.id, { text: e.target.value })}
+        // The note's menu, unless text is selected (then the browser's, to copy it or fix spelling).
+        onContextMenu={(e) => {
+          const el = e.currentTarget
+          if (el.selectionStart !== el.selectionEnd) return e.stopPropagation()
+          menu(e)
+        }}
         onKeyDown={(e) => e.key === 'Escape' && e.currentTarget.blur()}
       />
     </div>

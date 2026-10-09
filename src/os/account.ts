@@ -11,9 +11,30 @@ export type Account = { status: 'loading' | 'off' | 'anon' | 'user'; user: Accou
 let account: Account = { status: 'loading', user: null, forges: [] }
 const listeners = new Set<() => void>()
 
+const OWNER_HINT = 'mvlos.owner'
+
 function set(next: Account) {
   account = next
+  // Remembered so the next visit knows before /api/me answers (the boot is quicker for the owner).
+  try {
+    if (next.status === 'user') localStorage.setItem(OWNER_HINT, '1')
+    else if (next.status === 'anon' || next.status === 'off') localStorage.removeItem(OWNER_HINT)
+  } catch {
+    /* no storage: the quick boot just starts once /api/me answers */
+  }
   listeners.forEach((l) => l())
+}
+
+/** Signed in, or (while that is still being checked) signed in on the last visit. */
+export function useLikelyOwner() {
+  const { status } = useAccount()
+  if (status === 'user') return true
+  if (status !== 'loading') return false
+  try {
+    return localStorage.getItem(OWNER_HINT) === '1'
+  } catch {
+    return false
+  }
 }
 
 export const getAccount = () => account

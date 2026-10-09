@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { ENGINES, setSearchSettings, useSearchSettings, type EngineId } from '../data/searchEngine'
 import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { linkForge, signIn, signOut, unlinkForge, useAccount } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
@@ -292,6 +293,32 @@ function Launchers() {
   )
 }
 
+/** Spotlight's web search: which engine, and whether to show its suggestions while typing. */
+function SearchSettings() {
+  const { engine, suggestions } = useSearchSettings()
+  const account = useAccount()
+  return (
+    <>
+      <div className="set-choices" role="radiogroup" aria-label="Search engine">
+        {(Object.keys(ENGINES) as EngineId[]).map((id) => (
+          <label key={id} className={`set-choice ${engine === id ? 'is-on' : ''}`}>
+            <input type="radio" name="search-engine" checked={engine === id} onChange={() => setSearchSettings({ engine: id })} />
+            {ENGINES[id].label}
+          </label>
+        ))}
+      </div>
+      <label className="set-check">
+        <input type="checkbox" checked={suggestions} onChange={(e) => setSearchSettings({ suggestions: e.target.checked })} />
+        Show {ENGINES[engine].label}'s suggestions in Spotlight
+      </label>
+      <p className="muted set-help">
+        Suggestions send what you type to {ENGINES[engine].label} through this site's server.{' '}
+        {account.status === 'user' ? 'Your choice syncs to your other devices.' : 'Saved in this browser.'}
+      </p>
+    </>
+  )
+}
+
 export function Settings({ win }: { win: WinState }) {
   const account = useAccount()
   const root = useRef<HTMLDivElement>(null)
@@ -311,6 +338,10 @@ export function Settings({ win }: { win: WinState }) {
       <section id="set-launchers">
         <h3>Launchers</h3>
         <Launchers />
+      </section>
+      <section id="set-search">
+        <h3>Search</h3>
+        <SearchSettings />
       </section>
       <section id="set-dock">
         <h3>Dock</h3>

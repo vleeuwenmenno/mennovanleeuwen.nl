@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '../apps/Terminal'
 import { profile } from '../data/profile'
+import { useLikelyOwner } from './account'
 import { bootDone, finishShutdown, powerOn, usePower } from './powerState'
 import type { WinState } from './wm'
 import { VERSION } from '../version'
@@ -60,7 +61,7 @@ const XORG_CANCELLED: LogLine = ['cancel', 'Cancelled X.Org Server: boot to a sh
 
 // The graphical session: the end of a normal boot, or what `exit` starts from the text console.
 const GUI: LogLine[] = [
-  ['ok', 'Started X.Org Server.', 1500],
+  ['ok', 'Started X.Org Server.', 900],
   ['start', 'Starting Hyprland compositor (react-wm)...', 140],
   ['ok', 'Started Hyprland compositor (react-wm).', 320],
   ['ok', 'Reached target Graphical Interface.', 200],
@@ -174,8 +175,10 @@ function useFollow(dep: unknown) {
 // The text console is a terminal without a window around it.
 const CONSOLE_WIN: WinState = { pid: -1, app: 'terminal', x: 0, y: 0, w: 0, h: 0, z: 0, minimized: false, maximized: false, props: {}, openedAt: 0 }
 
-// The boot log's line delays are written short; this stretches them to a readable pace.
-const BOOT_PACE = 1.15
+// Scales every boot log delay, so the whole boot speeds up or slows down without changing its rhythm.
+// The signed-in owner has seen it before: theirs flies by in about a second.
+const BOOT_PACE = 0.88
+const OWNER_PACE = 0.2
 
 const MODIFIERS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'OS', 'CapsLock', 'NumLock', 'Fn', 'Dead', 'Unidentified', ''])
 
@@ -186,7 +189,8 @@ function Boot() {
   const [resumed, setResumed] = useState(false)
   const [leaving, setLeaving] = useState(false)
   const main = useMemo(() => [...BOOT, XORG_JOB, ...(wantConsole ? consoleLines() : GUI)], [wantConsole])
-  const [n, mainDone] = useLog(main, false, BOOT_PACE)
+  const quick = useLikelyOwner()
+  const [n, mainDone] = useLog(main, false, quick ? OWNER_PACE : BOOT_PACE)
   const [g, guiDone] = useLog(STARTX, !resumed)
   const consoleOpen = wantConsole && mainDone
   const finished = wantConsole ? resumed && guiDone : mainDone
@@ -194,9 +198,9 @@ function Boot() {
 
   useEffect(() => {
     if (!finished) return
-    const t = setTimeout(() => setLeaving(true), 450)
+    const t = setTimeout(() => setLeaving(true), quick ? 100 : 300)
     return () => clearTimeout(t)
-  }, [finished])
+  }, [finished, quick])
 
   useEffect(() => {
     if (!leaving) return

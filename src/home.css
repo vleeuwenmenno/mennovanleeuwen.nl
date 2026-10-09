@@ -7,7 +7,7 @@
 .window.chrome-note[data-app='sticky'] {
   background: var(--note-bg, linear-gradient(175deg, #fff1a8 0%, #fde27a 100%));
   color: var(--note-fg, #3b2f05);
-  transform: rotate(var(--note-tilt, -2deg));
+  transform: rotate(calc(var(--note-tilt, -2deg) + var(--swing, 0deg)));
   transition: transform 0.25s cubic-bezier(0.2, 0.9, 0.3, 1.2), background 0.2s;
 }
 .window.chrome-note[data-app='sticky'] .note-close {
@@ -518,4 +518,41 @@ input.is-bad {
   align-items: center;
   gap: 6px;
   margin-bottom: 10px;
+}
+
+/* ---------- Settings: search engine ---------- */
+
+.set-choices {
+  display: inline-flex;
+  border: 1px solid var(--line-strong);
+  margin-bottom: 10px;
+}
+.set-choice {
+  position: relative;
+  padding: 4px 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.set-choice input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.set-choice.is-on {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.set-choice:focus-within {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.set-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+.set-check input {
+  accent-color: var(--accent);
 }

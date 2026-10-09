@@ -4,12 +4,13 @@ import { timeAgo } from '../data/recents'
 import { fetchMinecraft, MC_ADDRESS, MC_PORT, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
 import { signIn, signOut, useAccount } from './account'
+import { openContextMenu, type MenuItem } from './ContextMenu'
 import { toggleOverlay } from './overlays'
 import { reboot, shutdown } from './powerState'
 import { useWM } from './wm'
 
 /** A top-bar button with a dropdown panel that closes on outside click or Escape. */
-function TopbarPopover({ label, className = '', title, children }: { label: ReactNode; className?: string; title: string; children: (close: () => void) => ReactNode }) {
+function TopbarPopover({ label, className = '', title, children, menu }: { label: ReactNode; className?: string; title: string; children: (close: () => void) => ReactNode; /** Right-click */ menu?: () => MenuItem[] }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -25,7 +26,7 @@ function TopbarPopover({ label, className = '', title, children }: { label: Reac
   }, [open])
   return (
     <div className={`tb-pop ${className}`} ref={ref}>
-      <button className={`tb-btn ${open ? 'is-open' : ''}`} onClick={() => setOpen((o) => !o)} title={title} aria-expanded={open}>
+      <button className={`tb-btn ${open ? 'is-open' : ''}`} onClick={() => setOpen((o) => !o)} title={title} aria-expanded={open} onContextMenu={menu && ((e) => openContextMenu(e, menu()))}>
         {label}
       </button>
       {open && <div className="tb-panel">{children(() => setOpen(false))}</div>}
@@ -131,6 +132,15 @@ export function ClockWidget() {
     <TopbarPopover
       className="tb-clock"
       title={now.toLocaleDateString('en-GB', { dateStyle: 'full' })}
+      menu={() => {
+        const at = new Date()
+        const copy = (text: string) => navigator.clipboard?.writeText(text).catch(() => {})
+        return [
+          { label: 'Copy date', onSelect: () => copy(at.toLocaleDateString('en-GB', { dateStyle: 'long' })) },
+          { label: 'Copy time', onSelect: () => copy(at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })) },
+          { label: 'Copy ISO timestamp', onSelect: () => copy(at.toISOString()) },
+        ]
+      }}
       label={
         <span className="clock">
           <span className="clock-date">{now.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</span>
@@ -162,6 +172,12 @@ export function MinecraftWidget() {
     <TopbarPopover
       className="tb-mc"
       title="Minecraft server status"
+      menu={() => [
+        { label: `Copy address (${MC_ADDRESS})`, onSelect: () => navigator.clipboard?.writeText(MC_ADDRESS).catch(() => {}) },
+        { label: 'Refresh status', onSelect: () => fetchMinecraft(true) },
+        { separator: true },
+        { label: 'Notify when players join', checked: mcNotificationsOn(), onSelect: () => setMcNotifications(!mcNotificationsOn()) },
+      ]}
       label={
         <span className="mc-label">
           <Pickaxe />
