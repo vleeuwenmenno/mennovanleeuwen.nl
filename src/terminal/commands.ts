@@ -79,6 +79,19 @@ const APP_NAMES: Record<AppId, string> = {
   settings: 'settings',
 }
 
+/** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */
+function manPage(name: string) {
+  const cmd = commands[name]
+  return `${c('bold', name.toUpperCase())}\n  ${name} - ${cmd.desc}\n\n${c('bold', 'USAGE')}\n  ${cmd.usage ?? name}`
+}
+
+/** Commands that print their own help for --help and -h. */
+const OWN_HELP = new Set(['curl', 'git', 'pepper'])
+/** Commands where -h means something else (human-readable sizes); --help still works. */
+const H_IS_A_FLAG = new Set(['df', 'free'])
+
+const asksHelp = (name: string, args: string[]) => !OWN_HELP.has(name) && (args[0] === '--help' || (args[0] === '-h' && !H_IS_A_FLAG.has(name)))
+
 // Scratch space: the only writable part of the filesystem, so `echo hi > /tmp/x` works.
 const tmp = () => lookup('/tmp') as DirNode
 
@@ -203,9 +216,8 @@ export const commands: Record<string, Command> = {
     usage: 'man <command>',
     run: ({ args }) => {
       if (!args[0]) throw new CmdError('What manual page do you want?')
-      const cmd = commands[args[0]]
-      if (!cmd) throw new CmdError(`No manual entry for ${args[0]}`)
-      return `${c('bold', args[0].toUpperCase())}\n  ${args[0]} - ${cmd.desc}\n\n${c('bold', 'USAGE')}\n  ${cmd.usage ?? args[0]}`
+      if (!commands[args[0]]) throw new CmdError(`No manual entry for ${args[0]}`)
+      return manPage(args[0])
     },
   },
   ls: {
@@ -1131,7 +1143,7 @@ async function runPipeline(stmt: string, base: Base): Promise<RunResult> {
       const cmd = commands[name] ?? executable(name, base.cwd)
       if (!cmd) throw new CmdError(`msh: command not found: ${name}${name.length > 2 ? suggest(name) : ''}`)
       const tty = i === stages.length - 1 && !redirect
-      const out = (await cmd.run({ ...base, args, stdin, tty })) ?? ''
+      const out = commands[name] && asksHelp(name, args) ? manPage(name) : ((await cmd.run({ ...base, args, stdin, tty })) ?? '')
       rendered = out
       stdin = strip(out)
     }
