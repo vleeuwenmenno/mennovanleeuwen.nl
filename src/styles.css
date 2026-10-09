@@ -2510,8 +2510,37 @@ body.is-resizing * {
   max-width: 480px;
   touch-action: none;
 }
-.game-snake .game-stage {
-  max-width: 400px;
+/* Arcade games that grow with the window, keeping their shape. --fit-w is the widest the board
+   can be in the room left after the bar and controls (--chrome tall). A custom property is
+   resolved where it is used, so its cq units measure the game panel's content box. */
+.game-fit {
+  container-type: size;
+  justify-content: safe center;
+  --chrome: 40px;
+  --fit-w: max(240px, min(100cqw, (100cqh - var(--chrome)) * var(--aspect)));
+}
+.game-fit > * {
+  flex-shrink: 0;
+}
+.game-fit .game-stage,
+.game-fit .game-bar {
+  max-width: none;
+  width: var(--fit-w);
+}
+.game-breakout {
+  --aspect: 4 / 3;
+}
+.game-snake {
+  --aspect: 1;
+}
+.game-pacman {
+  --aspect: 19 / 21;
+}
+@media (pointer: coarse) {
+  .game-snake,
+  .game-pacman {
+    --chrome: 180px;
+  }
 }
 .game-canvas {
   display: block;
@@ -2700,25 +2729,29 @@ body.is-resizing * {
 .mc-joke .actions {
   margin-top: 14px;
 }
-/* Tetris */
+/* Tetris: the board's height sets everything; the hold/next panel beside it scales along. */
+.game-tetris {
+  --board-h: max(240px, min(100cqh - var(--chrome), (100cqw - 10px) * 3 / 2));
+}
+.game-tetris .game-bar {
+  width: max(var(--board-h) * 2 / 3 + 10px, min(100cqw, 360px));
+}
 .tetris-wrap {
   display: flex;
   gap: 10px;
   align-items: flex-start;
   justify-content: center;
 }
-.tetris-stage {
+.game-tetris .tetris-stage {
   width: auto;
-  max-width: none;
 }
 .tetris-stage .game-canvas {
   width: auto;
-  height: min(440px, calc(100dvh - 330px));
-  aspect-ratio: 1 / 2;
+  height: var(--board-h);
 }
 .tetris-side {
-  width: 80px;
-  height: 300px;
+  width: auto;
+  height: calc(var(--board-h) * 300 / 480);
 }
 /* Pool: the table grows to whatever the window leaves after the bar and the hint, at the
    table's own aspect ratio. */
@@ -3118,17 +3151,14 @@ body.is-resizing * {
     height: 64px;
     font-size: 22px;
   }
-  .tetris-stage .game-canvas {
-    height: min(600px, calc(100dvh - 380px));
+  .game-tetris {
+    --chrome: 215px;
   }
   .tetris-stage .game-canvas {
     touch-action: none;
   }
 }
 /* Pac-Man */
-.pac-stage {
-  max-width: 380px;
-}
 .pac-lives {
   display: inline-flex;
   gap: 4px;
@@ -3139,7 +3169,19 @@ body.is-resizing * {
   border-radius: 99px;
   background: conic-gradient(from 120deg, transparent 0 60deg, #f6c453 60deg);
 }
-/* Minesweeper */
+/* Minesweeper: cells grow until the grid fills the room under the bar and the counters. */
+.game-mines {
+  --chrome: 132px;
+  --cell: max(18px, min((100cqw + 2px) / var(--cols) - 2px, (100cqh - var(--chrome) + 2px) / var(--rows) - 2px));
+}
+@media (pointer: coarse) {
+  .game-mines {
+    --chrome: 165px;
+  }
+}
+.game-mines .game-bar {
+  width: min(100cqw, max(280px, var(--cols) * (var(--cell) + 2px) - 2px));
+}
 .mines-panel {
   display: flex;
   align-items: center;
@@ -3171,13 +3213,9 @@ body.is-resizing * {
   overflow: auto;
 }
 .mines-grid {
-  --cell: 30px;
   display: grid;
   gap: 2px;
   user-select: none;
-}
-.game-mines:has(.mines-grid[style*='16']) .mines-grid {
-  --cell: 24px;
 }
 .mine {
   width: var(--cell);

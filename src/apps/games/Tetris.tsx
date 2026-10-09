@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WinState } from '../../os/wm'
-import { useGameKeys, useHighScore, usePress } from './shared'
+import { useGameKeys, useHighScore, usePress, useSharpCanvas } from './shared'
 
 const COLS = 10
 const ROWS = 20
 const CELL = 24
+// The hold and next panel beside the board.
+const SIDE_W = 80
+const SIDE_H = 300
 
 type Kind = 'I' | 'O' | 'T' | 'S' | 'Z' | 'J' | 'L'
 type Piece = { kind: Kind; rot: number; x: number; y: number }
@@ -218,7 +221,7 @@ export function Tetris({ win }: { win: WinState }) {
     const ctx = c.getContext('2d')!
     const s = g.current
     ctx.fillStyle = '#0d1016'
-    ctx.fillRect(0, 0, c.width, c.height)
+    ctx.fillRect(0, 0, COLS * CELL, ROWS * CELL)
     ctx.strokeStyle = 'rgba(255,255,255,0.035)'
     for (let x = 1; x < COLS; x++) {
       ctx.beginPath()
@@ -249,7 +252,7 @@ export function Tetris({ win }: { win: WinState }) {
     const sc = side.current
     if (!sc) return
     const sctx = sc.getContext('2d')!
-    sctx.clearRect(0, 0, sc.width, sc.height)
+    sctx.clearRect(0, 0, SIDE_W, SIDE_H)
     const mini = (kind: Kind | null, oy: number, label: string) => {
       sctx.fillStyle = '#8a91a5'
       sctx.font = '11px "Space Grotesk", sans-serif'
@@ -266,6 +269,8 @@ export function Tetris({ win }: { win: WinState }) {
     mini(s.hold, 22, 'HOLD')
     s.queue.slice(0, 3).forEach((k, i) => mini(k, 104 + i * 62, i === 0 ? 'NEXT' : ''))
   }, [])
+  useSharpCanvas(canvas, COLS * CELL, ROWS * CELL, draw)
+  useSharpCanvas(side, SIDE_W, SIDE_H, draw)
 
   useEffect(() => {
     draw()
@@ -292,7 +297,7 @@ export function Tetris({ win }: { win: WinState }) {
   }, [state, draw])
 
   return (
-    <div className="game game-tetris">
+    <div className="game game-tetris game-fit">
       <div className="game-bar">
         <span>
           Score <strong>{hud.score}</strong>
@@ -318,7 +323,7 @@ export function Tetris({ win }: { win: WinState }) {
             </button>
           )}
         </div>
-        <canvas ref={side} width={80} height={300} className="tetris-side" />
+        <canvas ref={side} width={SIDE_W} height={SIDE_H} className="tetris-side" />
       </div>
       <div className="touch-pad tetris-pad">
         <button {...press(() => act('hold'))}>Hold</button>

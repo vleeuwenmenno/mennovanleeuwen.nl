@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WinState } from '../../os/wm'
-import { keyToDir, swipeHandlers, useGameKeys, usePress, useHighScore, type Dir } from './shared'
+import { keyToDir, swipeHandlers, useGameKeys, usePress, useHighScore, useSharpCanvas, type Dir } from './shared'
 
 // An original maze in the spirit of the arcade game. # wall, . pellet, o power pellet,
 // - ghost-house door, G ghost house, P start. Row 9 wraps around as a tunnel.
@@ -142,7 +142,7 @@ export function PacMan({ win }: { win: WinState }) {
     const ctx = c.getContext('2d')!
     const s = g.current
     ctx.fillStyle = '#07090f'
-    ctx.fillRect(0, 0, c.width, c.height)
+    ctx.fillRect(0, 0, W * T, H * T)
 
     // Walls: filled tiles with an outline wherever they face a corridor.
     for (let y = 0; y < H; y++)
@@ -226,6 +226,7 @@ export function PacMan({ win }: { win: WinState }) {
       }
     }
   }, [state])
+  useSharpCanvas(canvas, W * T, H * T, draw)
 
   useEffect(() => {
     let raf = 0
@@ -393,7 +394,7 @@ export function PacMan({ win }: { win: WinState }) {
   }, [state])
 
   return (
-    <div className="game game-pacman">
+    <div className="game game-pacman game-fit">
       <div className="game-bar">
         <span>
           Score <strong>{hud.score}</strong>

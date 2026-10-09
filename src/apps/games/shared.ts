@@ -135,3 +135,32 @@ export function usePress() {
 
 /** Reads a CSS custom property so canvas games follow the accent color. */
 export const cssVar = (name: string, el: Element = document.documentElement) => getComputedStyle(el).getPropertyValue(name).trim()
+
+/**
+ * Keeps a canvas's pixels matched to its size on screen, so a game drawn at a fixed logical size
+ * stays sharp when the window grows. Drawing code keeps working in `w` x `h`; the context is
+ * scaled to fit. Resizing clears the canvas, so `redraw` repaints games that only draw on a tick.
+ */
+export function useSharpCanvas(ref: React.RefObject<HTMLCanvasElement | null>, w: number, h: number, redraw?: () => void) {
+  const again = useRef(redraw)
+  again.current = redraw
+  useEffect(() => {
+    const c = ref.current
+    if (!c) return
+    c.style.aspectRatio = `${w} / ${h}`
+    const fit = () => {
+      const dpr = Math.min(2, window.devicePixelRatio || 1)
+      const pw = Math.max(w, Math.round(c.clientWidth * dpr))
+      const ph = Math.round((pw * h) / w)
+      if (c.width === pw && c.height === ph) return
+      c.width = pw
+      c.height = ph
+      c.getContext('2d')!.setTransform(pw / w, 0, 0, ph / h, 0, 0)
+      again.current?.()
+    }
+    fit()
+    const ro = new ResizeObserver(fit)
+    ro.observe(c)
+    return () => ro.disconnect()
+  }, [ref, w, h])
+}

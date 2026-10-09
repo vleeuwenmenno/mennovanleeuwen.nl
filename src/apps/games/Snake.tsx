@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WinState } from '../../os/wm'
-import { cssVar, keyToDir, swipeHandlers, useGameKeys, usePress, useHighScore, type Dir } from './shared'
+import { cssVar, keyToDir, swipeHandlers, useGameKeys, usePress, useHighScore, useSharpCanvas, type Dir } from './shared'
 
 const N = 20
+const SIZE = 400
 type P = { x: number; y: number }
 const DELTA: Record<Dir, P> = { up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 } }
 const OPPOSITE: Record<Dir, Dir> = { up: 'down', down: 'up', left: 'right', right: 'left' }
@@ -56,7 +57,7 @@ export function Snake({ win }: { win: WinState }) {
     const c = canvas.current
     if (!c) return
     const ctx = c.getContext('2d')!
-    const size = c.width
+    const size = SIZE
     const cell = size / N
     ctx.fillStyle = '#0d1016'
     ctx.fillRect(0, 0, size, size)
@@ -78,6 +79,7 @@ export function Snake({ win }: { win: WinState }) {
     })
     ctx.globalAlpha = 1
   }, [])
+  useSharpCanvas(canvas, SIZE, SIZE, draw)
 
   useEffect(() => {
     draw()
@@ -106,7 +108,7 @@ export function Snake({ win }: { win: WinState }) {
   }, [state, score, draw, submit])
 
   return (
-    <div className="game game-snake">
+    <div className="game game-snake game-fit">
       <div className="game-bar">
         <span>
           Score <strong>{score}</strong>
@@ -114,7 +116,7 @@ export function Snake({ win }: { win: WinState }) {
         <span className="muted">Best {best ?? '—'}</span>
       </div>
       <div className="game-stage" {...swipeHandlers(steer)}>
-        <canvas ref={canvas} width={400} height={400} className="game-canvas" />
+        <canvas ref={canvas} width={SIZE} height={SIZE} className="game-canvas" />
         {state !== 'playing' && (
           <button className="game-overlay" onClick={() => (state === 'paused' ? setState('playing') : reset())}>
             <strong>{state === 'over' ? (newBest ? 'New high score!' : 'Game over') : state === 'paused' ? 'Paused' : 'Snake'}</strong>

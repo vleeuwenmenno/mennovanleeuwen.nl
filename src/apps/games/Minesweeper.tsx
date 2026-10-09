@@ -123,7 +123,7 @@ export function Minesweeper({ win }: { win: WinState }) {
   const face = status === 'lost' ? '😵' : status === 'won' ? '😎' : '🙂'
 
   return (
-    <div className="game game-mines">
+    <div className="game game-mines game-fit" style={{ ['--cols' as string]: w, ['--rows' as string]: h }}>
       <div className="game-bar">
         <div className="seg seg-small">
           {(Object.keys(LEVELS) as Level[]).map((lv) => (
