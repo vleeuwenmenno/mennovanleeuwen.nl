@@ -49,7 +49,8 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
   {
     area: 'Terminal',
     keys: [
-      ['Tab', 'complete commands and paths'],
+      ['Tab', 'complete commands, paths and go links; again to cycle'],
+      ['→ / ↵', 'put the picked completion on the line'],
       ['↑ ↓', 'history'],
       ['Ctrl C', 'cancel the line or stop ping'],
       ['Ctrl L', 'clear the screen'],
@@ -89,6 +90,9 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
       ['↑ ↓', 'move'],
       ['↵', 'open, or copy a result'],
       ['Ctrl ↵', 'new window / second action'],
+      ['Ctrl K', 'in Spotlight: all actions for the result (or right-click it)'],
+      ['Ctrl D', 'in Spotlight: add to or remove from favourites'],
+      ['Tab', 'in Spotlight: complete the search box'],
     ],
   },
   {

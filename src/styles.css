@@ -1481,15 +1481,23 @@ body.is-resizing iframe {
 .t-input[hidden] {
   display: none;
 }
-/* The go links picker under the prompt (Tab after `go <alias>`), drawn like fzf. */
+/* The Tab picker under the prompt (go links, commands, files), drawn like fzf. */
 .t-picker {
   margin: 2px 0 4px;
+}
+.t-pick-list {
+  max-height: 18em;
+  overflow-y: auto;
 }
 .t-pick {
   display: grid;
   grid-template-columns: 2ch var(--name-w, 12ch) 1fr;
   cursor: pointer;
   white-space: pre;
+}
+.t-pick-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .t-pick.is-on {
   background: color-mix(in srgb, var(--fg) 10%, transparent);
@@ -6403,6 +6411,7 @@ kbd {
   background: color-mix(in srgb, var(--bg) 35%, transparent);
 }
 .spotlight {
+  position: relative;
   width: min(760px, 100%);
   max-height: min(560px, 76vh);
   display: flex;
@@ -6507,11 +6516,6 @@ kbd {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.sp-enter {
-  flex: none;
-  font-size: 11.5px;
-  color: var(--accent);
 }
 .sp-preview {
   border-left: 1px solid var(--line);
@@ -6651,8 +6655,97 @@ kbd {
   margin-right: 3px;
 }
 .sp-flash {
-  margin-left: auto;
   color: var(--green);
+}
+/* Right of the footer: the highlighted result's main action, and the actions panel (Ctrl+K). */
+.sp-foot-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sp-foot-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  color: var(--muted);
+}
+.sp-foot-btn kbd {
+  margin: 0;
+}
+.sp-foot-btn:hover,
+.sp-foot-btn.is-on {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.sp-foot-btn strong {
+  color: var(--fg);
+  font-weight: 500;
+}
+.sp-foot-sep {
+  width: 1px;
+  height: 14px;
+  background: var(--line);
+}
+/* The actions panel: over the bottom right of Spotlight, drawn like its result list. */
+.sp-actions {
+  position: absolute;
+  right: 10px;
+  bottom: 44px;
+  z-index: 2;
+  width: min(320px, calc(100% - 20px));
+  max-height: 60%;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: 0 18px 44px -14px rgba(0, 0, 0, 0.6);
+  animation: sp-in 0.1s ease-out;
+}
+.sp-actions-title {
+  margin: 4px 8px 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sp-action {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  text-align: left;
+  font-size: 13px;
+}
+.sp-action-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sp-action.is-active {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.sp-action.is-active .sp-action-label {
+  color: var(--accent);
+}
+.sp-action.is-danger .sp-action-label {
+  color: var(--red);
+}
+.sp-keys {
+  flex: none;
+  display: flex;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
 }
 @media (max-width: 719px) {
   .sp-main {
@@ -6661,6 +6754,9 @@ kbd {
   .sp-preview,
   .sp-foot {
     display: none;
+  }
+  .sp-actions {
+    bottom: 10px;
   }
   .spotlight-backdrop {
     padding-top: 48px;

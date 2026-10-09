@@ -6,6 +6,7 @@ import type { AppId } from '../os/wm'
 import { lookupAddress, RECORD_TYPES, resolve, resolverFor } from './dns'
 import { pepper } from './pepper'
 import { extraCommands } from './extra'
+import { findCommands } from './find'
 import { revealEmail } from '../data/email'
 import { SHORTCUTS } from '../data/shortcuts'
 import { GAME_CATALOG } from '../apps/games/catalog'
@@ -37,7 +38,16 @@ import { CmdError, type Ctx } from './types'
 import { BUILT, VERSION } from '../version'
 
 type Out = string | void
-type Command = { desc: string; usage?: string; hidden?: boolean; run: (ctx: Ctx) => Out | Promise<Out> }
+type Command = {
+  desc: string
+  usage?: string
+  hidden?: boolean
+  /** A full manual page for `man`, instead of the description and usage */
+  man?: string
+  run: (ctx: Ctx) => Out | Promise<Out>
+  /** Tab completion for its arguments: what `word` could become, given the arguments before it */
+  complete?: (args: string[], word: string) => Completion[]
+}
 
 const APPS: Record<string, AppId> = {
   terminal: 'terminal',
@@ -103,11 +113,12 @@ const APP_NAMES: Record<AppId, string> = {
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */
 function manPage(name: string) {
   const cmd = commands[name]
+  if (cmd.man) return `${c('bold', `${name.toUpperCase()}(1)`)}\n\n${cmd.man}`
   return `${c('bold', name.toUpperCase())}\n  ${name} - ${cmd.desc}\n\n${c('bold', 'USAGE')}\n  ${cmd.usage ?? name}`
 }
 
 /** Commands that print their own help for --help and -h. */
-const OWN_HELP = new Set(['curl', 'git', 'pepper'])
+const OWN_HELP = new Set(['curl', 'git', 'pepper', 'find', 'fd'])
 /** Commands where -h means something else (human-readable sizes); --help still works. */
 const H_IS_A_FLAG = new Set(['df', 'free'])
 
@@ -216,7 +227,7 @@ export const commands: Record<string, Command> = {
     desc: 'list commands',
     run: () => {
       const groups: [string, string[]][] = [
-        ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'open', 'go', 'files']],
+        ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'fd', 'open', 'go', 'files']],
         ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'git', 'heatmap', 'stars', 'contact']],
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
         ['Network', ['curl', 'wget', 'whois', 'ping', 'dig', 'host', 'nslookup', 'minecraft']],
@@ -394,22 +405,6 @@ export const commands: Record<string, Command> = {
       const node = lookup(abs)
       if (!node || node.type !== 'dir') throw new CmdError(`tree: ${ctx.args[0] ?? '.'}: not a directory`)
       return [c('blue', prettyPath(abs)), ...treeLines(node)].join('\n')
-    },
-  },
-  find: {
-    desc: 'find files by name',
-    usage: 'find [path] [-name pattern]',
-    run: (ctx) => {
-      const nameIdx = ctx.args.indexOf('-name')
-      const pattern = nameIdx >= 0 ? ctx.args[nameIdx + 1] : null
-      const start = ctx.args.find((a, i) => !a.startsWith('-') && i !== nameIdx + 1) ?? '.'
-      const abs = resolvePath(ctx.cwd, start)
-      if (!lookup(abs)) throw new CmdError(`find: '${start}': No such file or directory`)
-      const re = pattern ? new RegExp('^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$') : null
-      return walk(abs)
-        .filter((p) => !re || re.test(p.split('/').pop() ?? ''))
-        .map((p) => (start.startsWith('/') ? p : './' + p.slice(abs.length + 1)).replace(/^\.\/$/, '.'))
-        .join('\n')
     },
   },
   echo: { desc: 'print arguments', usage: 'echo [text]', run: ({ args }) => args.join(' ') },
@@ -961,7 +956,7 @@ export const commands: Record<string, Command> = {
 }
 
 // The real-network and device tools live in extra.ts.
-Object.assign(commands, extraCommands)
+Object.assign(commands, extraCommands, findCommands)
 
 /** Shuts down or reboots the whole "machine" after the broadcast has had a moment on screen. */
 function power(ctx: Ctx, what: 'reboot' | 'power off') {
@@ -1116,6 +1111,7 @@ function tokenize(line: string, env: Record<string, string>): string[] {
     const ch = line[i]
     if (quote) {
       if (ch === quote) quote = null
+      else if (ch === '\\' && quote === '"' && /["\\$`]/.test(line[i + 1] ?? '')) cur += line[++i]
       else if (ch === '$' && quote === '"') {
         const m = /^\$(\w+|\{\w+\})/.exec(line.slice(i))
         if (m) {
@@ -1125,6 +1121,10 @@ function tokenize(line: string, env: Record<string, string>): string[] {
       } else cur += ch
     } else if (ch === '"' || ch === "'") {
       quote = ch
+      has = true
+    } else if (ch === '\\' && i + 1 < line.length) {
+      // A backslash keeps the next character as it is: find's \; and spaces in names.
+      cur += line[++i]
       has = true
     } else if (/\s/.test(ch)) {
       if (cur || has) out.push(cur)
@@ -1151,6 +1151,10 @@ function splitTop(line: string, sep: RegExp, seps: string[] = []): string[] {
   let quote: string | null = null
   for (let i = 0; i < line.length; i++) {
     const ch = line[i]
+    if (ch === '\\' && quote !== "'" && i + 1 < line.length) {
+      cur += ch + line[++i]
+      continue
+    }
     if (quote) {
       if (ch === quote) quote = null
       cur += ch
@@ -1274,37 +1278,47 @@ function levenshtein(a: string, b: string) {
   return d[a.length][b.length]
 }
 
-/** Tab completion: commands for the first word, paths (and app names after `open`) for the rest. */
-export function complete(line: string, cwd: string): { line: string; options: string[] } {
-  const m = /^(.*?)(\S*)$/.exec(line)!
-  const [, before, word] = m
+/** One thing Tab can put on the line: `value` replaces the word being typed, `label` is what the picker shows. */
+export type Completion = { value: string; label: string; hint?: string }
+
+/** What Tab could complete the last word of `line` to: commands for the first word, paths (and app
+ * names after `open`) for the rest. `before` is the line up to that word. */
+export function completions(line: string, cwd: string): { before: string; word: string; items: Completion[] } {
+  const [, before, word] = /^(.*?)(\S*)$/.exec(line)!
   const isFirst = !before.trim() || /(\||;|&&)\s*$/.test(before)
-  let candidates: string[]
-  if (isFirst && !word.includes('/')) {
-    candidates = Object.keys(commands).filter((k) => !commands[k].hidden && k.startsWith(word))
-  } else {
-    const slash = word.lastIndexOf('/')
-    const dirPart = slash >= 0 ? word.slice(0, slash + 1) : ''
-    const namePart = word.slice(slash + 1)
-    const dirNode = lookup(resolvePath(cwd, dirPart || '.'))
-    candidates =
-      dirNode?.type === 'dir'
-        ? [...dirNode.children.values()]
-            .filter((n) => n.name.startsWith(namePart) && (namePart.startsWith('.') || !n.name.startsWith('.')))
-            // As a command (`./te<Tab>`), only folders and things that run.
-            .filter((n) => !isFirst || n.type === 'dir' || n.name.endsWith('.game'))
-            .map((n) => dirPart + n.name + (n.type === 'dir' ? '/' : ''))
-        : []
-    if (/^\s*open\s+$/.test(before) && !dirPart) candidates.push(...Object.keys(APPS).filter((a) => a.startsWith(word) && !candidates.includes(a)))
+  // Commands that know their own arguments (find's tests, fd's options) answer first.
+  const [name, ...args] = before.split(/\||;|&&/).pop()!.trim().split(/\s+/)
+  const own = !isFirst && commands[name]?.complete?.(args, word)
+  if (own && own.length) return { before, word, items: own }
+  if (isFirst && !word.includes('/'))
+    return { before, word, items: Object.keys(commands).filter((k) => !commands[k].hidden && k.startsWith(word)).map((k) => ({ value: k, label: k, hint: commands[k].desc })) }
+  const slash = word.lastIndexOf('/')
+  const dirPart = slash >= 0 ? word.slice(0, slash + 1) : ''
+  const namePart = word.slice(slash + 1)
+  const dirNode = lookup(resolvePath(cwd, dirPart || '.'))
+  const items: Completion[] =
+    dirNode?.type === 'dir'
+      ? [...dirNode.children.values()]
+          .filter((n) => n.name.startsWith(namePart) && (namePart.startsWith('.') || !n.name.startsWith('.')))
+          // As a command (`./te<Tab>`), only folders and things that run.
+          .filter((n) => !isFirst || n.type === 'dir' || n.name.endsWith('.game'))
+          .map((n) => (n.type === 'dir' ? { value: `${dirPart}${n.name}/`, label: `${n.name}/`, hint: 'folder' } : { value: dirPart + n.name, label: n.name, hint: fileKind(n) }))
+      : []
+  if (/^\s*open\s+$/.test(before) && !dirPart) items.push(...Object.keys(APPS).filter((a) => a.startsWith(word) && !items.some((i) => i.value === a)).map((a) => ({ value: a, label: a, hint: 'app' })))
+  return { before, word, items }
+}
+
+/** Tab: one match completes the word; several complete what they share, and come back to pick from. */
+export function complete(line: string, cwd: string): { line: string; items: Completion[] } {
+  const { before, word, items } = completions(line, cwd)
+  if (items.length === 1) {
+    const done = items[0].value
+    return { line: before + done + (done.endsWith('/') ? '' : ' '), items: [] }
   }
-  if (candidates.length === 1) {
-    const done = candidates[0]
-    return { line: before + done + (done.endsWith('/') ? '' : ' '), options: [] }
+  if (items.length > 1) {
+    let prefix = items[0].value
+    for (const { value } of items) while (!value.startsWith(prefix)) prefix = prefix.slice(0, -1)
+    return { line: before + (prefix.length > word.length ? prefix : word), items }
   }
-  if (candidates.length > 1) {
-    let prefix = candidates[0]
-    for (const cand of candidates) while (!cand.startsWith(prefix)) prefix = prefix.slice(0, -1)
-    return { line: before + (prefix.length > word.length ? prefix : word), options: candidates.map((x) => x.split('/').filter(Boolean).pop()! + (x.endsWith('/') ? '/' : '')) }
-  }
-  return { line, options: [] }
+  return { line, items: [] }
 }
