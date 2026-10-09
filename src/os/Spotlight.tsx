@@ -372,9 +372,9 @@ export function Spotlight() {
       subtitle: mc.status ? (mc.status.online ? `Online · ${mc.status.players.online}/${mc.status.players.max} players` : 'Offline') : 'Checking…',
       keywords: 'mc minecraft server status players cloud.mvl.sh stardebris game',
       icon: <Glyph color="linear-gradient(160deg,#5d9b3a,#3b6b25)">⛏</Glyph>,
-      run: () => copy(MC_ADDRESS, MC_ADDRESS),
-      enterLabel: 'Copy address',
-      alt: { label: 'Refresh', run: () => fetchMinecraft(true) },
+      run: () => wm.open('mcserver', { t: String(Date.now()) }),
+      enterLabel: 'Open overview',
+      alt: { label: 'Copy address', run: () => copy(MC_ADDRESS, MC_ADDRESS) },
       preview: () => <McPreview />,
     })
     out.push({
@@ -422,6 +422,7 @@ export function Spotlight() {
     // Apps
     for (const app of Object.keys(APP_META) as AppId[]) {
       if (app === 'viewer' || app === 'widget') continue // need a file, or are added as widgets
+      if (app === 'mcserver') continue // the Minecraft server's status entry opens it
       const meta = APP_META[app]
       const open = wm.windows.filter((w) => w.app === app).length
       out.push({
@@ -742,7 +743,7 @@ export function Spotlight() {
   const currentPin = pinFor(current)
   const execute = (r: Result | undefined, alt: boolean) => {
     if (!r) return
-    const keepOpen = r.id === 'calc' || (r.id.startsWith('code-') && r.id !== 'code-signin' && !r.id.startsWith('code-err-')) || r.id === 'status-mc' || r.id.startsWith('act-email') || r.id.startsWith('accent-') || r.id.startsWith('theme-')
+    const keepOpen = r.id === 'calc' || (r.id.startsWith('code-') && r.id !== 'code-signin' && !r.id.startsWith('code-err-')) || (r.id === 'status-mc' && alt) || r.id.startsWith('act-email') || r.id.startsWith('accent-') || r.id.startsWith('theme-')
     ;(alt && r.alt ? r.alt.run : r.run)()
     if (!keepOpen) close()
   }

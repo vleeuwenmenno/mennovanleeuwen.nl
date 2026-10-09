@@ -3,6 +3,7 @@ import { stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import { handleApi } from './api.ts'
+import { startMinecraftWatch } from './minecraft.ts'
 import { SECURITY } from './http.ts'
 
 // Serves the built site and the /api routes in server/api.ts: live status, GitHub sign-in,
@@ -75,4 +76,7 @@ createServer(async (req, res) => {
   })
   if (req.method === 'HEAD') res.end()
   else createReadStream(found.full).pipe(res)
-}).listen(PORT, () => console.log(`MvL OS on :${PORT}`))
+}).listen(PORT, () => {
+  console.log(`MvL OS on :${PORT}`)
+  startMinecraftWatch()
+})

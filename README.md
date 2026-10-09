@@ -194,3 +194,12 @@ anonymous limit of 60 requests an hour), and `/api/minecraft`: a live Server Lis
 so the status and join/leave notifications don't wait on public status APIs that cache for
 minutes. On a static host without that endpoint the site falls back to those APIs. `pnpm dev`
 and `pnpm preview` serve the endpoint too. Build the image locally with `docker build -t mvlos .`.
+
+While it runs, the server also pings the Minecraft server every 30 seconds
+([`server/minecraft.ts`](server/minecraft.ts)) and keeps 30 days of it in SQLite under `DATA_DIR`: online or
+not, the player count, the ping time, and each player's visits (from the names the ping lists).
+`/api/minecraft/overview?range=24h|7d|30d` turns that into the **Minecraft server** window: uptime,
+players over time with the server's availability underneath, who is on and since when, recent
+visits and who played most. Open it from Spotlight (Enter on the Minecraft entry), the
+*Overview* button in the top bar's Minecraft popup, or `open mcserver`. `MC_WATCH=off` stops the
+pinger; the window then shows the live status only.

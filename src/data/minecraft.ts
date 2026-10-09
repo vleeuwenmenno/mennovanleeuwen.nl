@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { notify } from '../os/notify'
 
 // Status of the Minecraft server Menno hosts. Browsers cannot open a raw TCP connection to
@@ -22,6 +22,8 @@ export type McStatus = {
   motd?: string
   players: { online: number; max: number; list: string[] }
   icon?: string
+  /** Milliseconds for the site's server to get an answer (only from /api/minecraft). */
+  latency?: number
   checkedAt: number
 }
 
@@ -182,4 +184,50 @@ function startPolling() {
   polling = true
   fetchMinecraft()
   setInterval(() => document.visibilityState === 'visible' && fetchMinecraft(true), REFRESH_MS)
+}
+
+// ---------------------------------------------------------------------------------------------
+// History, for the Minecraft server window: the site's server pings every 30 s and keeps 30 days
+// (server/minecraft.ts). Only there; on a static host the window shows the live status alone.
+
+export type McRange = '24h' | '7d' | '30d'
+export type McOverview = {
+  status: McStatus
+  tracking: boolean
+  trackedSince: number | null
+  stateSince: number | null
+  uptime: { day: number | null; week: number | null; month: number | null }
+  latency: number | null
+  peak: { players: number; at: number } | null
+  range: McRange
+  buckets: { from: number; to: number; peak: number | null; avg: number | null; uptime: number | null }[]
+  online: { name: string; since: number }[]
+  recent: { name: string; joinedAt: number; leftAt: number | null }[]
+  top: { name: string; ms: number; visits: number; lastSeen: number | null }[]
+}
+
+/** The overview for `range`, refreshed every 30 s while shown. `missing` when the endpoint isn't there. */
+export function useMcOverview(range: McRange) {
+  const [state, setState] = useState<{ data: McOverview | null; missing: boolean; loading: boolean }>({ data: null, missing: false, loading: true })
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const ctl = new AbortController()
+    setState((s) => ({ ...s, loading: true }))
+    fetch(`/api/minecraft/overview?range=${range}`, { signal: ctl.signal })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((data: McOverview) => {
+        if (!Array.isArray(data?.buckets)) throw new Error('no overview endpoint')
+        setState({ data, missing: false, loading: false })
+      })
+      .catch((e: Error) => e.name !== 'AbortError' && setState((s) => ({ data: s.data, missing: !s.data, loading: false })))
+    // A hidden tab waits until it is looked at again.
+    const bump = () => setTick((n) => n + 1)
+    const t = setTimeout(() => (document.visibilityState === 'visible' ? bump() : document.addEventListener('visibilitychange', bump, { once: true })), REFRESH_MS)
+    return () => {
+      ctl.abort()
+      clearTimeout(t)
+      document.removeEventListener('visibilitychange', bump)
+    }
+  }, [range, tick])
+  return { ...state, refresh: () => setTick((n) => n + 1) }
 }

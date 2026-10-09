@@ -589,6 +589,273 @@ body.is-resizing * {
   color: var(--accent);
   font-size: 12px;
 }
+.mc-foot-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Minecraft server window (src/apps/McServer.tsx) */
+.mcs {
+  outline: none;
+  height: 100%;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 13px;
+}
+.mcs h2 {
+  margin: 0;
+  font-size: 19px;
+  letter-spacing: -0.01em;
+}
+.mcs h3 {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mcs-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.mcs-title {
+  flex: 1;
+  min-width: 200px;
+}
+.mcs-title p {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+}
+.mcs-addr {
+  margin: 0;
+  gap: 12px;
+}
+.mcs-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+.mcs-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 11.5px;
+}
+.mcs-stat strong {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--fg-bright);
+  font-variant-numeric: tabular-nums;
+}
+.mcs-note {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--line-strong);
+  font-size: 12.5px;
+}
+.mcs-card {
+  padding: 12px 14px 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.mcs-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.mcs-card-head h3 {
+  margin: 0;
+}
+.mcs-chart-empty {
+  display: grid;
+  place-items: center;
+  height: 140px;
+  font-size: 12.5px;
+}
+.mcs-plot {
+  position: relative;
+  padding-left: 22px;
+}
+.mcs-axis {
+  position: absolute;
+  left: 0;
+  width: 16px;
+  text-align: right;
+  font-size: 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.mcs-axis-top {
+  top: -6px;
+}
+.mcs-axis-zero {
+  top: 114px;
+}
+.mcs-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 120px;
+  border-top: 1px dashed var(--line);
+  border-bottom: 1px solid var(--line-strong);
+}
+.mcs-col {
+  position: relative;
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+}
+.mcs-col.is-hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.mcs-bar {
+  display: block;
+  width: 100%;
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--accent);
+}
+.mcs-col.is-hover .mcs-bar {
+  background: color-mix(in srgb, var(--accent) 80%, var(--fg-bright));
+}
+.mcs-strip {
+  display: flex;
+  gap: 2px;
+  margin-top: 4px;
+}
+.mcs-strip span,
+.mcs-legend i {
+  flex: 1;
+  height: 6px;
+  background: var(--line);
+}
+.mcs-strip .is-up,
+.mcs-legend .is-up {
+  background: var(--green);
+}
+.mcs-strip .is-partial,
+.mcs-legend .is-partial {
+  background: var(--yellow);
+}
+.mcs-strip .is-down,
+.mcs-legend .is-down {
+  background: var(--red);
+}
+.mcs-strip span.is-hover {
+  outline: 1px solid var(--fg-bright);
+}
+.mcs-tip {
+  position: absolute;
+  top: 8px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 170px;
+  padding: 7px 9px;
+  background: var(--panel-solid);
+  border: 1px solid var(--line-strong);
+  font-size: 11.5px;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(10px);
+}
+.mcs-tip[data-side='left'] {
+  transform: translateX(calc(-100% - 10px));
+}
+.mcs-x {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  padding-left: 22px;
+  font-size: 10.5px;
+}
+.mcs-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.mcs-legend i {
+  flex: none;
+  width: 10px;
+  margin-left: 6px;
+}
+.mcs-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 18px;
+}
+.mcs-cols section > h3:not(:first-child) {
+  margin-top: 16px;
+}
+.mcs-people {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.mcs-people li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  min-width: 0;
+}
+.mcs-people li img {
+  image-rendering: pixelated;
+  flex: none;
+}
+.mcs-people li > span:nth-of-type(1) {
+  font-family: var(--mono);
+}
+.mcs-people li > span.muted {
+  margin-left: auto;
+  font-size: 11.5px;
+  text-align: right;
+}
+.mcs-top {
+  counter-reset: top;
+}
+.mcs-top li::before {
+  counter-increment: top;
+  content: counter(top);
+  width: 14px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.mcs .mc-empty {
+  margin: 0;
+}
+.mcs-foot {
+  margin-top: auto;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.mcs-foot label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .clock {
   font-size: 12px;
   font-weight: 600;

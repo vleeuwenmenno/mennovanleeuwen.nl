@@ -165,6 +165,7 @@ function Pickaxe() {
 }
 
 export function MinecraftWidget() {
+  const wm = useWM()
   const { status, error, loading } = useMinecraft()
   const [copied, setCopied] = useState(false)
   const online = status?.online
@@ -173,6 +174,7 @@ export function MinecraftWidget() {
       className="tb-mc"
       title="Minecraft server status"
       menu={() => [
+        { label: 'Open overview', onSelect: () => wm.open('mcserver', { t: String(Date.now()) }) },
         { label: `Copy address (${MC_ADDRESS})`, onSelect: () => navigator.clipboard?.writeText(MC_ADDRESS).catch(() => {}) },
         { label: 'Refresh status', onSelect: () => fetchMinecraft(true) },
         { separator: true },
@@ -186,7 +188,7 @@ export function MinecraftWidget() {
         </span>
       }
     >
-      {() => (
+      {(close) => (
         <div className="mc">
           <div className="mc-head">
             {status?.icon ? <img src={status.icon} alt="" className="mc-icon" /> : <span className="mc-icon mc-icon-blank">⛏</span>}
@@ -242,9 +244,20 @@ export function MinecraftWidget() {
           </label>
           <footer className="mc-foot muted">
             <span>Port {MC_PORT} · {status ? `checked ${timeAgo(new Date(status.checkedAt).toISOString())}` : ''}</span>
-            <button className="mc-refresh" onClick={() => fetchMinecraft(true)} disabled={loading}>
-              {loading ? 'Checking…' : 'Refresh'}
-            </button>
+            <span className="mc-foot-actions">
+              <button className="mc-refresh" onClick={() => fetchMinecraft(true)} disabled={loading}>
+                {loading ? 'Checking…' : 'Refresh'}
+              </button>
+              <button
+                className="btn btn-small"
+                onClick={() => {
+                  wm.open('mcserver', { t: String(Date.now()) })
+                  close()
+                }}
+              >
+                Overview
+              </button>
+            </span>
           </footer>
         </div>
       )}

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { handleApi } from './server/api.ts'
+import { startMinecraftWatch } from './server/minecraft.ts'
 
 /** The /api routes during `pnpm dev` and `pnpm preview`, like server/index.ts in production. */
 const liveApi = (): Plugin => {
@@ -12,8 +13,14 @@ const liveApi = (): Plugin => {
   }
   return {
     name: 'live-api',
-    configureServer: (server) => void server.middlewares.use(handler),
-    configurePreviewServer: (server) => void server.middlewares.use(handler),
+    configureServer: (server) => {
+      server.middlewares.use(handler)
+      startMinecraftWatch()
+    },
+    configurePreviewServer: (server) => {
+      server.middlewares.use(handler)
+      startMinecraftWatch()
+    },
   }
 }
 
