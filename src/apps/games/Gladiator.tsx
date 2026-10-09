@@ -9,6 +9,7 @@ import { FightScreen, type FightResultView } from './gladiator/Fight'
 import { CreatorScreen, HallScreen, TitleScreen } from './gladiator/Menus'
 import type { AmbiencePlace } from './gladiator/ambience'
 import { gladiatorStore } from './gladiator/saves'
+import { EstateScreen, MarketScreen } from './gladiator/Estate'
 import { GladiatorSound } from './gladiator/sound'
 import { Apothecary, ArenaBoard, Bracket, GearShop, Hub, MageShop, PLACE_BG, Sheet, TopBar, Training, type Place } from './gladiator/Town'
 import { Gold } from './gladiator/ui'
@@ -35,6 +36,8 @@ const AMBIENCE: Record<Place, AmbiencePlace> = {
   apothecary: 'apothecary',
   training: 'training',
   gladiator: 'training',
+  estate: 'estate',
+  market: 'market',
 }
 const SKILL: Record<LeagueId, number> = { pits: 0.45, city: 0.65, colosseum: 0.85 }
 const ROUND_NAMES = ['quarter-final', 'semi-final', 'final']
@@ -261,6 +264,12 @@ export function Gladiator({ win }: { win: WinState }) {
       case 'apothecary':
         inner = <Apothecary save={save} update={update} onBack={back} sound={sfx} />
         break
+      case 'estate':
+        inner = <EstateScreen save={save} update={update} onBack={back} sound={sfx} />
+        break
+      case 'market':
+        inner = <MarketScreen save={save} update={update} onBack={back} sound={sfx} />
+        break
       case 'training':
         inner = <Training save={save} update={update} onBack={back} onSheet={() => go('gladiator')} sound={sfx} />
         break
@@ -311,7 +320,7 @@ export function Gladiator({ win }: { win: WinState }) {
   return (
     <div
       className={`gl-root ${screen.s === 'fight' ? 'is-fight' : ''}`}
-      style={bg ? { backgroundImage: `url(/games/gladiator/${bg}.webp)` } : undefined}
+      style={bg ? { backgroundImage: `url(/games/gladiator/${bg}.webp), url(/games/gladiator/town.webp)` } : undefined}
       onPointerDown={() => snd.wake()}
     >
       <div className="gl-audio">
