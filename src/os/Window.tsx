@@ -1,10 +1,10 @@
 import { useEffect, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { openSticky } from '../apps/Sticky'
-import { createNote } from '../data/notes'
+import { addWidgetItems } from '../widgets/registry'
 import { APP_META } from './apps'
 import { linkAt, linkMenu, openContextMenu, wantsNativeMenu, type MenuItem } from './ContextMenu'
 import { getDockMode, snapReserve } from './dockPrefs'
 import { setSnapPreview } from './snapPreview'
+import { WindowMenuContext } from './windowMenu'
 import { SINGLE_INSTANCE, snapRect, useWM, type Geometry, type SnapZone, type WinState } from './wm'
 
 const TOP_BAR = 28
@@ -20,6 +20,12 @@ type Props = {
   className?: string
   /** Extra inline style, e.g. a sticky's colour and tilt as CSS variables */
   style?: CSSProperties
+  /** The app's own items, shown first in the window menu (a widget's settings) */
+  menuItems?: MenuItem[]
+  /** What "Close" is called in the menu ("Take off the desktop") */
+  closeLabel?: string
+  /** A width handle on a note-style window (widgets) */
+  resizableWidth?: boolean
   children: ReactNode
 }
 
@@ -114,7 +120,7 @@ function useSwing(ref: { current: HTMLElement | null }) {
 
 const maxRect = (): Geometry => ({ x: 10, y: TOP_BAR + 10, w: window.innerWidth - 20, h: window.innerHeight - TOP_BAR - 20 - (getDockMode() === 'show' ? snapReserve() : 0) })
 
-export function Window({ win, title, chrome = 'default', className = '', style, children }: Props) {
+export function Window({ win, title, chrome = 'default', className = '', style, menuItems = [], closeLabel = 'Close', resizableWidth = false, children }: Props) {
   const wm = useWM()
   const drag = useRef<Drag | null>(null)
   const target = useRef<Target>(null)
@@ -213,7 +219,8 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
   }
   const windowMenu = (): MenuItem[] => {
     const others = wm.windows.filter((w) => w.pid !== win.pid)
-    const siblings = others.filter((w) => w.app === win.app)
+    // For widgets, only the same kind (all weather widgets, not every widget).
+    const siblings = others.filter((w) => w.app === win.app && w.props.kind === win.props.kind)
     return [
       { label: 'Minimize', onSelect: () => wm.minimize(win.pid) },
       ...(chrome === 'default'
@@ -223,17 +230,18 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
           ]
         : []),
       { label: 'Center on screen', onSelect: center },
-      ...(chrome === 'note' ? [{ label: 'New sticky note', onSelect: () => openSticky(wm, createNote().id) }] : []),
-      ...(!SINGLE_INSTANCE.has(win.app) && win.app !== 'sticky' ? [{ separator: true as const }, { label: 'New window', onSelect: () => wm.openNew(win.app) }] : []),
+      ...(chrome === 'note' ? [{ label: 'Add widget', submenu: addWidgetItems(wm) }] : []),
+      ...(!SINGLE_INSTANCE.has(win.app) && win.app !== 'widget' ? [{ separator: true as const }, { label: 'New window', onSelect: () => wm.openNew(win.app) }] : []),
       { separator: true },
-      ...(siblings.length ? [{ label: `Close all ${siblings.length + 1} ${APP_META[win.app].dock} windows`, onSelect: () => [win, ...siblings].forEach((w) => wm.close(w.pid)) }] : []),
+      ...(siblings.length ? [{ label: `Close all ${siblings.length + 1} ${win.app === 'widget' ? `${title} widgets` : `${APP_META[win.app].dock} windows`}`, onSelect: () => [win, ...siblings].forEach((w) => wm.close(w.pid)) }] : []),
       ...(others.length ? [{ label: 'Close other windows', onSelect: () => others.forEach((w) => wm.close(w.pid)) }] : []),
-      { label: 'Close', danger: true, onSelect: () => wm.close(win.pid) },
+      { label: closeLabel, danger: true, onSelect: () => wm.close(win.pid) },
     ]
   }
   const onMenu = (e: React.MouseEvent, before: MenuItem[] = []) => {
     wm.focus(win.pid)
-    openContextMenu(e, [...before, ...windowMenu()])
+    const own = menuItems.length ? [...menuItems, { separator: true as const }] : []
+    openContextMenu(e, [...before, ...own, ...windowMenu()])
   }
   // Inside the window, wherever the app has no menu of its own: links get theirs, text fields and
   // selections keep the browser's, the rest gets the window menu.
@@ -273,7 +281,9 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
           </button>
         </div>
       )}
-      <div className="window-body">{children}</div>
+      <div className="window-body">
+        <WindowMenuContext.Provider value={(e) => onMenu(e)}>{children}</WindowMenuContext.Provider>
+      </div>
       {chrome === 'default' && !win.maximized && (
         <>
           <div className="rz rz-e" onPointerDown={begin('resize', 'e')} {...handlers} />
@@ -284,7 +294,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
         </>
       )}
       {/* Stickies grow with their text; only their width is up to you. */}
-      {win.app === 'sticky' && <div className="rz rz-e" onPointerDown={begin('resize', 'e')} {...handlers} />}
+      {resizableWidth && <div className="rz rz-e" onPointerDown={begin('resize', 'e')} {...handlers} />}
     </section>
   )
 }

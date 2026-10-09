@@ -2,20 +2,24 @@
    launchers), the account block in the system menu and Spotlight's code results. Kept apart from
    styles.css; same tokens, same Omarchy look. */
 
-/* ---------- Your own sticky notes ---------- */
+/* ---------- Widgets (src/widgets): the note-style frame they all share ---------- */
 
-.window.chrome-note[data-app='sticky'] {
-  background: var(--note-bg, linear-gradient(175deg, #fff1a8 0%, #fde27a 100%));
-  color: var(--note-fg, #3b2f05);
-  transform: rotate(calc(var(--note-tilt, -2deg) + var(--swing, 0deg)));
-  transition: transform 0.25s cubic-bezier(0.2, 0.9, 0.3, 1.2), background 0.2s;
+/* Each widget sets --widget-bg, --widget-fg and --widget-tilt for its look (see useFrame). */
+.window.chrome-note.widget {
+  background: var(--widget-bg, linear-gradient(175deg, #fff1a8 0%, #fde27a 100%));
+  color: var(--widget-fg, #3b2f05);
+  transform: rotate(calc(var(--widget-tilt, -2deg) + var(--swing, 0deg)));
+  transition: transform 0.25s cubic-bezier(0.2, 0.9, 0.3, 1.2), background 0.4s;
 }
-.window.chrome-note[data-app='sticky'] .note-close {
-  color: color-mix(in srgb, var(--note-fg, #3b2f05) 55%, transparent);
+.window.chrome-note.widget .note-close {
+  color: color-mix(in srgb, var(--widget-fg, #3b2f05) 55%, transparent);
 }
-.window.chrome-note[data-app='sticky'] .rz-e {
+.window.chrome-note.widget .rz-e {
   right: -4px;
 }
+
+/* ---------- Sticky notes ---------- */
+
 .sticky {
   display: flex;
   flex-direction: column;
@@ -29,7 +33,7 @@
   opacity: 0;
   transition: opacity 0.15s;
 }
-.window.chrome-note[data-app='sticky']:hover .sticky-tools,
+.window.widget:hover .sticky-tools,
 .sticky-tools:focus-within {
   opacity: 1;
 }
@@ -555,4 +559,139 @@ input.is-bad {
 }
 .set-check input {
   accent-color: var(--accent);
+}
+
+/* ---------- Weather widget ---------- */
+
+.wx {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 16px 16px;
+  font-size: 12px;
+}
+.wx-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: -6px;
+}
+.wx-head .sticky-btn {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.wx-head .sticky-btn:first-of-type {
+  margin-left: auto;
+}
+.window.widget:hover .wx-head .sticky-btn,
+.wx-head .sticky-btn:focus-visible {
+  opacity: 0.6;
+}
+.wx-place {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+  font-size: 13px;
+  color: inherit;
+  text-align: left;
+}
+.wx-place:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.wx-now {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: 10px;
+}
+.wx-icon {
+  font-size: 40px;
+  line-height: 1;
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.18));
+}
+.wx-temp {
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+.wx-desc {
+  display: grid;
+  font-weight: 600;
+  font-size: 13px;
+}
+.wx-desc span {
+  font-weight: 400;
+  font-size: 11px;
+  opacity: 0.75;
+}
+.wx-hours,
+.wx-days {
+  list-style: none;
+  margin: 0;
+  padding: 8px 0 0;
+  border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+}
+.wx-hours {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  text-align: center;
+}
+.wx-hours li {
+  display: grid;
+  gap: 2px;
+}
+.wx-hours li span:first-child {
+  opacity: 0.7;
+  font-size: 10.5px;
+}
+.wx-days li {
+  display: grid;
+  grid-template-columns: 3.5em 1.8em 1fr;
+  align-items: center;
+  padding: 1px 0;
+}
+.wx-days li span:last-child {
+  text-align: right;
+  font-weight: 600;
+}
+.wx-min {
+  font-weight: 400;
+  opacity: 0.6;
+}
+.wx-note {
+  margin: 4px 0 6px;
+  opacity: 0.8;
+}
+.wx-note .link-btn {
+  color: inherit;
+}
+.wx-picker input {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  background: color-mix(in srgb, #fff 55%, transparent);
+  color: #1d2733;
+  font: inherit;
+  outline: 0;
+}
+.wx-picker ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.wx-picker button {
+  width: 100%;
+  padding: 4px 6px;
+  text-align: left;
+  color: inherit;
+}
+.wx-picker button:hover,
+.wx-picker button:focus-visible {
+  background: color-mix(in srgb, currentColor 12%, transparent);
 }

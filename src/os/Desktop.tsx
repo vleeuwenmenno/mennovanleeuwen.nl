@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerE
 import { openSticky } from '../apps/Sticky'
 import { faviconOf, launch, removeLauncher, updateLauncher, useLaunchers } from '../data/launchers'
 import { createNote } from '../data/notes'
+import { addWidgetItems } from '../widgets/registry'
 import { projects } from '../data/profile'
 import { HOME } from '../terminal/vfs'
 import { closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
@@ -318,6 +319,7 @@ export function Desktop() {
       { label: 'About this system', onSelect: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) },
       { separator: true },
       { label: 'New sticky note', onSelect: newNote },
+      { label: 'Add widget', submenu: addWidgetItems(wm) },
       { label: 'New launcher…', onSelect: () => wm.open('settings', { section: 'launchers', t: String(Date.now()) }) },
       { label: 'Notebook', onSelect: () => wm.open('notebook') },
       { separator: true },

@@ -1,28 +1,19 @@
-import { useEffect, useLayoutEffect, useRef, type MouseEvent } from 'react'
-import { getNote, NOTE_COLORS, randomTilt, trashNote, updateNote, useAllNotes, type Note, type NoteColor } from '../data/notes'
-import { openContextMenu, type MenuItem } from '../os/ContextMenu'
+import { useEffect, useLayoutEffect, useRef, type CSSProperties } from 'react'
+import { createNote, getNote, NOTE_COLORS, randomTilt, trashNote, updateNote, useAllNotes, type Note, type NoteColor } from '../data/notes'
+import type { MenuItem } from '../os/ContextMenu'
+import { useWindowMenu } from '../os/windowMenu'
 import { useWM, type WinState } from '../os/wm'
+import { TILTS } from '../widgets/config'
+import type { WidgetDef, WM } from '../widgets/types'
+import { closeWidget, openWidget, widgetWindows } from '../widgets/windows'
 
-type WM = ReturnType<typeof useWM>
+// The sticky note widget: one of your notes (src/data/notes.ts) on the desktop. Its colour and
+// tilt belong to the note, so the Notebook and every device show the same.
 
 /** Shows a note on the desktop: focuses its sticky if one is open, otherwise opens one. */
-export function openSticky(wm: WM, id: string) {
-  const open = wm.windows.find((w) => w.app === 'sticky' && w.props.id === id)
-  if (open) wm.focus(open.pid)
-  else wm.openNew('sticky', { id })
-}
-
-export function closeStickies(wm: WM, id: string) {
-  wm.windows.filter((w) => w.app === 'sticky' && w.props.id === id).forEach((w) => wm.close(w.pid))
-}
-
-const TILTS: [string, number][] = [
-  ['Straight', 0],
-  ['A little left', -2],
-  ['A little right', 2],
-  ['Far left', -4.5],
-  ['Far right', 4.5],
-]
+export const openSticky = (wm: WM, id: string) => openWidget(wm, 'sticky', id)
+export const closeStickies = (wm: WM, id: string) => closeWidget(wm, 'sticky', id)
+export const stickyOpen = (wm: WM, id: string) => widgetWindows(wm, 'sticky', id).length > 0
 
 /** Colour and slant choices, shared by the sticky's menu and the Notebook. */
 export function noteMenu(note: Note, extra: MenuItem[] = []): MenuItem[] {
@@ -45,6 +36,7 @@ export function noteMenu(note: Note, extra: MenuItem[] = []): MenuItem[] {
 
 export function Sticky({ win }: { win: WinState }) {
   const wm = useWM()
+  const windowMenu = useWindowMenu()
   const all = useAllNotes()
   const note = all.find((n) => n.id === win.props.id && !n.deleted && !n.purged)
   const text = useRef<HTMLTextAreaElement>(null)
@@ -76,19 +68,8 @@ export function Sticky({ win }: { win: WinState }) {
 
   if (!note) return null
 
-  const menu = (e: MouseEvent) =>
-    openContextMenu(
-      e,
-      noteMenu(note, [
-        { separator: true },
-        { label: 'Copy text', disabled: !note.text.trim(), onSelect: () => navigator.clipboard?.writeText(note.text).catch(() => {}) },
-        { separator: true },
-        { label: 'Open in Notebook', onSelect: () => wm.open('notebook', { id: note.id, t: String(Date.now()) }) },
-        { label: 'Take off the desktop', onSelect: () => wm.close(win.pid) },
-        { separator: true },
-        { label: 'Delete note', danger: true, onSelect: () => trashNote(note.id) },
-      ]),
-    )
+  // The whole widget menu (the note's items, then the window's), from its toolbar and its text.
+  const menu = windowMenu
 
   return (
     <div className="sticky">
@@ -120,4 +101,36 @@ export function Sticky({ win }: { win: WinState }) {
       />
     </div>
   )
+}
+
+function useStickyFrame(id: string): CSSProperties | undefined {
+  const note = useAllNotes().find((n) => n.id === id)
+  if (!note) return undefined
+  const c = NOTE_COLORS[note.color]
+  return { ['--widget-bg' as string]: c.bg, ['--widget-fg' as string]: c.fg, ['--widget-tilt' as string]: `${note.tilt}deg` }
+}
+
+function useStickyMenu(id: string, wm: WM): MenuItem[] {
+  const note = useAllNotes().find((n) => n.id === id)
+  if (!note) return []
+  return noteMenu(note, [
+    { separator: true },
+    { label: 'Copy text', disabled: !note.text.trim(), onSelect: () => navigator.clipboard?.writeText(note.text).catch(() => {}) },
+    { label: 'Open in Notebook', onSelect: () => wm.open('notebook', { id: note.id, t: String(Date.now()) }) },
+    { label: 'Delete note', danger: true, onSelect: () => trashNote(note.id) },
+  ])
+}
+
+export const stickyWidget: WidgetDef = {
+  kind: 'sticky',
+  name: 'Sticky note',
+  blurb: 'A note of your own on the desktop',
+  glyph: '✎',
+  size: [260, 240],
+  resizable: true,
+  closeLabel: 'Take off the desktop',
+  Component: ({ win }) => <Sticky win={win} />,
+  useFrame: useStickyFrame,
+  useMenu: useStickyMenu,
+  create: () => createNote().id,
 }

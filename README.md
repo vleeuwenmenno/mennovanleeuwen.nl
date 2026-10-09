@@ -118,6 +118,22 @@ Setup:
 
 Without the OAuth settings, sign-in is simply off and everything else works as before.
 
+## Widgets
+
+Widgets sit on the desktop like sticky notes: no title bar, tape on top, a sway when dragged, a
+right-click menu. Add them from the desktop's menu (*Add widget*), All apps → Widgets or Spotlight.
+Today there are two: **Sticky note** (one of your notes) and **Weather** (now, the next hours and
+three days from [Open-Meteo](https://open-meteo.com), for the browser's location or a city you
+pick; your pick syncs, the browser's location stays on that device).
+
+The framework lives in [`src/widgets`](src/widgets). A widget is one `WidgetDef`
+([`types.ts`](src/widgets/types.ts)): a name, a glyph, a size, its component, and optional hooks
+for its frame colours and tilt (`useFrame`), its own menu items (`useMenu`) and how a new one is
+made (`create`). List it in [`registry.tsx`](src/widgets/registry.tsx) and it gets the frame,
+dragging, the menus and an *Add widget* entry everywhere. Per-widget settings go through
+[`config.ts`](src/widgets/config.ts) (`useWidgetConfig` / `setWidgetConfig`), which syncs like
+notes; where a widget sits is part of the synced window layout.
+
 ## Installable app
 
 The site is a PWA: [`public/manifest.webmanifest`](public/manifest.webmanifest) makes it

@@ -3,6 +3,7 @@ import { openSticky } from '../apps/Sticky'
 import { GAME_CATALOG } from '../apps/games/catalog'
 import { faviconOf, launch as launchLink, useLaunchers } from '../data/launchers'
 import { createNote } from '../data/notes'
+import { addWidget, widgetDefs } from '../widgets/registry'
 import { contributions, profile, projects } from '../data/profile'
 import { APP_META } from './apps'
 import { appearanceMenu } from './appearanceMenu'
@@ -51,6 +52,11 @@ const ICONS = {
   launchers: (
     <Icon>
       <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+    </Icon>
+  ),
+  widgets: (
+    <Icon>
+      <path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM16.5 13v7M13 16.5h7" />
     </Icon>
   ),
   games: (
@@ -144,6 +150,11 @@ export function Launchpad() {
             },
           ]
         : []),
+      {
+        label: 'Widgets',
+        icon: ICONS.widgets,
+        children: () => widgetDefs().map((d) => ({ label: d.name, icon: <span className="om-glyph">{d.glyph}</span>, run: () => addWidget(wm, d.kind) })),
+      },
       {
         label: 'Games',
         icon: ICONS.games,
