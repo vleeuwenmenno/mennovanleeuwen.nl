@@ -15,7 +15,7 @@ import { MEDIA_APP, thumbOf } from '../data/media'
 import { droppedFiles, hasOsFiles, pickAndUpload, uploadFiles } from '../data/uploads'
 import { addBookmark, useSidebar } from '../data/filesSidebar'
 import { FilesSidebar, type SideSection } from './FilesSidebar'
-import { mounts, posixOf, useMounts, whereIs } from '../data/mounts'
+import { libraryNames, mounts, posixOf, useMounts, whereIs } from '../data/mounts'
 import { lookup as fsLookup } from '../terminal/fs'
 
 /** Quotes a path for a command line in the terminal. */
@@ -65,6 +65,8 @@ type Item = {
   desktopId?: string
   /** A file or folder in Seafile (node is null), or a library at the top of Seafile */
   sf?: { repo: string; p: string; library?: Library }
+  /** Its path in the filesystem as reached from here (/mnt/seafile/My Library rather than ~) */
+  posix?: string
 }
 
 
@@ -181,6 +183,10 @@ export function Files({ win }: { win: WinState }) {
   }
   /** A path as the terminal shows it; the site's own home is /srv/site while Seafile is on ~. */
   const toPosix = (p: string): string | null => {
+    if (p === path && posixHere) {
+      const w = whereIs(posixHere)
+      if ((w.kind === 'sf' && w.sf === p) || (w.kind === 'local' && w.path === p)) return posixHere
+    }
     if (isSf(p)) return p === SF ? (mounts().find((m) => m.source === 'seafile')?.target ?? null) : posixOf(p)
     if (p === RECENT || p === TRASH || p.includes('://')) return null
     if (sfHome && (p === HOME || p.startsWith(`${HOME}/`))) return `/srv/site${p.slice(HOME.length)}`
@@ -200,6 +206,8 @@ export function Files({ win }: { win: WinState }) {
   const [prefs, setPrefsState] = useState<Prefs>(loadPrefs)
   const { bookmarks } = useSidebar()
   const [path, setPath] = useState(() => (win.props.path ? fromOutside(win.props.path) : home))
+  // The way in: a library is both ~ and /mnt/seafile/My Library, and Files stays on the one you took.
+  const [posixHere, setPosixHere] = useState<string | null>(null)
   const [back, setBack] = useState<string[]>([])
   const [fwd, setFwd] = useState<string[]>([])
   const [selected, setSelected] = useState<Set<string>>(() => new Set(win.props.select ? [win.props.select] : []))
@@ -260,20 +268,24 @@ export function Files({ win }: { win: WinState }) {
   }, [toast])
 
   const navigate = useCallback(
-    (target: string, record = true) => {
-      const to = isSf(target) || target === RECENT || target === TRASH || target.includes('://') || target.startsWith('/srv/site') ? target : (toInternal(target) ?? target)
-      if (to === path) return
+    (target: string, record = true, posix?: string) => {
+      const special = isSf(target) || target === RECENT || target === TRASH || target.includes('://')
+      const to = special || target.startsWith('/srv/site') ? target : (toInternal(target) ?? target)
+      const via = posix ?? (special ? null : target)
+      if (to === path && via === posixHere) return
       if (record) {
-        setBack((b) => [...b, path])
+        // History keeps the filesystem path where there is one, so Back returns the same way.
+        setBack((b) => [...b, toPosix(path) ?? path])
         setFwd([])
       }
       setPath(to)
+      setPosixHere(via)
       setSelected(new Set())
       setSearch(null)
       setEditingPath(false)
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [path, sfHome],
+    [path, sfHome, posixHere],
   )
 
   // --- listing --------------------------------------------------------------------------------
@@ -288,12 +300,15 @@ export function Files({ win }: { win: WinState }) {
     }
     let list: Item[]
     const at = parseSf(path)
-    if (path === SF)
-      list = (libraries ?? []).map((l) => ({ path: sfPath(l.id), name: l.name, node: null, kind: 'folder' as FileKind, size: 0, mtime: l.mtime, sf: { repo: l.id, p: '/', library: l } }))
-    else if (at) {
+    const base = toPosix(path)
+    const under = (name: string) => (base ? `${base === '/' ? '' : base}/${name}` : undefined)
+    if (path === SF) {
+      const names = libraryNames(libraries)
+      list = (libraries ?? []).map((l) => ({ path: sfPath(l.id), name: l.name, node: null, kind: 'folder' as FileKind, size: 0, mtime: l.mtime, sf: { repo: l.id, p: '/', library: l }, posix: under(names.get(l.id) ?? l.name) }))
+    } else if (at) {
       list = (sfDir.listing?.entries ?? []).map((e) => {
         const p = `${at.p === '/' ? '' : at.p}/${e.name}`
-        return { path: sfPath(at.repo, p), name: e.name, node: null, kind: kindOfName(e.name, e.dir), size: e.size, mtime: e.mtime, sf: { repo: at.repo, p } }
+        return { path: sfPath(at.repo, p), name: e.name, node: null, kind: kindOfName(e.name, e.dir), size: e.size, mtime: e.mtime, sf: { repo: at.repo, p }, posix: under(e.name) }
       })
       if (search) list = list.filter((i) => i.name.toLowerCase().includes(search.toLowerCase()))
     } else if (path === RECENT) list = recent.map((r) => (r.sf ? r : toItem(r.path))).filter((x): x is Item => !!x)
@@ -317,9 +332,9 @@ export function Files({ win }: { win: WinState }) {
         const p = `${path === '/' ? '' : path}/${n}`
         const w = whereIs(p)
         if (w.kind === 'sf') {
-          if (w.sf === SF) return { path: SF, name: n, node: null, kind: 'folder', size: 0, mtime: Date.now() }
+          if (w.sf === SF) return { path: SF, name: n, node: null, kind: 'folder', size: 0, mtime: Date.now(), posix: p }
           const at = parseSf(w.sf)!
-          return { path: w.sf, name: n, node: null, kind: 'folder', size: 0, mtime: Date.now(), sf: { repo: at.repo, p: at.p } }
+          return { path: w.sf, name: n, node: null, kind: 'folder', size: 0, mtime: Date.now(), sf: { repo: at.repo, p: at.p }, posix: p }
         }
         return toItem(w.kind === 'local' ? w.path : p) ?? (mounts().some((m) => m.target === p) ? { path: p, name: n, node: { type: 'dir', name: n, children: new Map() }, kind: 'folder', size: 0, mtime: Date.now() } : null)
       }
@@ -338,7 +353,8 @@ export function Files({ win }: { win: WinState }) {
     }
     // Folders stay on top, as in every file manager.
     return list.sort((a, b) => (a.kind === 'folder' ? 0 : 1) - (b.kind === 'folder' ? 0 : 1) || cmp[prefs.sort](a, b))
-  }, [path, search, prefs.hidden, prefs.sort, tick, desk.trashed, desk.names, libraries, sfDir.listing])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, search, prefs.hidden, prefs.sort, tick, desk.trashed, desk.names, libraries, sfDir.listing, posixHere])
 
   const writable = path === '/tmp' || path.startsWith('/tmp/')
   const sfWritable = isSf(path) && path !== SF && sfDir.listing?.perm === 'rw'
@@ -359,7 +375,7 @@ export function Files({ win }: { win: WinState }) {
       setToast(item.trash === 'desktop' ? 'Put it back first (right-click → Put back).' : 'That file is a cautionary tale. It stays in the trash.')
       return
     }
-    if (item.path === SF) return navigate(SF)
+    if (item.path === SF) return navigate(SF, true, item.posix)
     if (item.sf) return openSeafileItem(item, how)
     const node = item.node
     if (!node) return
@@ -383,7 +399,7 @@ export function Files({ win }: { win: WinState }) {
   function openSeafileItem(item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' | 'preview' | 'player' | 'pdf' | 'office' | 'archive') {
     const posix = toPosix(item.path)
     if (how === 'terminal' && posix) return wm.openNew('terminal', { run: item.kind === 'folder' ? `cd ${shq(prettyPath(posix))} && ls` : `cat ${shq(prettyPath(posix))}`, t: String(Date.now()) })
-    if (item.kind === 'folder') return navigate(item.path)
+    if (item.kind === 'folder') return navigate(item.path, true, item.posix)
     remember(item)
     openSeafile(wm, item.path, { how: how === 'terminal' ? 'default' : how }).catch((e: Error) => setToast(e.message))
   }
@@ -801,21 +817,21 @@ export function Files({ win }: { win: WinState }) {
     const prev = back[back.length - 1]
     if (prev === undefined) return
     setBack(back.slice(0, -1))
-    setFwd([path, ...fwd])
+    setFwd([toPosix(path) ?? path, ...fwd])
     navigate(prev, false)
   }
   const goForward = () => {
     const next = fwd[0]
     if (next === undefined) return
     setFwd(fwd.slice(1))
-    setBack([...back, path])
+    setBack([...back, toPosix(path) ?? path])
     navigate(next, false)
   }
   const here = toPosix(path)
   const atTop = here ? here === '/' : path === '/' || path === RECENT || path === TRASH || path === SF
   const goUp = () => {
     if (atTop) return
-    if (here) navigate(toInternal(here.replace(/\/[^/]*$/, '') || '/') ?? '/')
+    if (here) navigate(here.replace(/\/[^/]*$/, '') || '/')
     else navigate(parentOf(path))
   }
 
@@ -870,11 +886,11 @@ export function Files({ win }: { win: WinState }) {
     if (posix) {
       const inHome = posix === HOME || posix.startsWith(`${HOME}/`)
       const parts = (inHome ? posix.slice(HOME.length) : posix).split('/').filter(Boolean)
-      const out = [{ label: inHome ? '~' : '/', path: toInternal(inHome ? HOME : '/') ?? '/' }]
+      const out: { label: string; path: string; posix?: string }[] = [{ label: inHome ? '~' : '/', path: toInternal(inHome ? HOME : '/') ?? '/', posix: inHome ? HOME : '/' }]
       let acc = inHome ? HOME : ''
       for (const part of parts) {
         acc += `/${part}`
-        out.push({ label: part, path: toInternal(acc) ?? acc })
+        out.push({ label: part, path: toInternal(acc) ?? acc, posix: acc })
       }
       out[out.length - 1].path = path
       return out
@@ -1038,7 +1054,7 @@ export function Files({ win }: { win: WinState }) {
                   if (value.startsWith(SF)) return navigate(value.replace(/\/+$/, '') || SF)
                   const posix = resolvePath(toPosix(path) ?? HOME, value)
                   const inside = toInternal(posix)
-                  if (inside && isSf(inside)) return navigate(inside)
+                  if (inside && isSf(inside)) return navigate(inside, true, posix)
                   const target = inside ?? posix
                   const node = lookup(target)
                   if (node?.type === 'dir') navigate(target)
@@ -1054,7 +1070,7 @@ export function Files({ win }: { win: WinState }) {
                   className="fm-crumb"
                   onClick={(e) => {
                     e.stopPropagation()
-                    navigate(c.path)
+                    navigate(c.path, true, 'posix' in c ? c.posix : undefined)
                   }}
                 >
                   {c.label}

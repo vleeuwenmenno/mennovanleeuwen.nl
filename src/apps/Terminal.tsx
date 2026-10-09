@@ -3,7 +3,7 @@ import { useGoSuggestionState, useGolinksTemplate } from '../data/golinks'
 import { profile } from '../data/profile'
 import { setAccent } from '../os/theme'
 import { useWM, type WinState } from '../os/wm'
-import { complete, completions, fastfetch, runLine, type Completion } from '../terminal/commands'
+import { complete, completions, escapeArg, fastfetch, runLine, WORD_RE, type Completion } from '../terminal/commands'
 import { prepareFolder } from '../terminal/fs'
 import { SlTrain } from '../terminal/SlTrain'
 import { HOME, prettyPath, resolvePath } from '../terminal/vfs'
@@ -134,7 +134,7 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
   const comp = useMemo(() => (picking && !goMode ? completions(value, cwd) : null), [picking, goMode, value, cwd])
   const choices: Completion[] = goMode ? go.list.map((g) => ({ value: g.name, label: g.name, hint: g.target.replace(/^https?:\/\//, '').replace(/\/$/, '') })) : (comp?.items ?? [])
   const typed = goMode ? goWord! : (comp?.word.split('/').pop() ?? '')
-  const lastWord = /(\S*)$/.exec(value)![1]
+  const lastWord = WORD_RE.exec(value)![1]
   useEffect(() => setPick(0), [lastWord])
   // Moving on to another word, or nothing left to pick from, closes it.
   useEffect(() => {
@@ -364,7 +364,7 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
     const chosen = choices[i]
     setPicking(null)
     if (!chosen) return run && submit(value)
-    const line = value.replace(/\S*$/, chosen.value)
+    const line = value.slice(0, value.length - WORD_RE.exec(value)![1].length) + (goMode ? chosen.value : escapeArg(chosen.value))
     if (run) submit(line)
     else setValue(chosen.value.endsWith('/') ? line : `${line} `)
     inputRef.current?.focus({ preventScroll: true })
@@ -412,7 +412,7 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
         return
       }
       // A folder in Seafile is fetched first, so its names can be offered.
-      const word = /(\S*)$/.exec(value)![1]
+      const word = WORD_RE.exec(value)![1].replace(/\\(.)/g, '$1')
       const at = value
       void prepareFolder(resolvePath(cwd, word.includes('/') ? word.slice(0, word.lastIndexOf('/') + 1) : '.')).then(() => {
         if (inputRef.current?.value !== at) return
