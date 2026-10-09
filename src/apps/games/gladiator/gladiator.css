@@ -1396,6 +1396,10 @@
 .gl-res .gl-place-icon i {
   font-size: 14px;
 }
+.gl-btn .gl-res {
+  vertical-align: middle;
+  margin: -4px 2px -4px 0;
+}
 .gl-res.is-short b {
   color: var(--gl-red);
 }

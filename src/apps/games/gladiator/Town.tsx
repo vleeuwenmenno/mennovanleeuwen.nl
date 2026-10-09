@@ -504,7 +504,10 @@ export function GearShop({ save, update, kind, onBack, sound }: { save: Save; up
                         <Gold n={bp} />
                       </span>
                       <button className="gl-btn is-primary" disabled={save.gold < bp} onClick={() => buyBlueprint(it)} title="Buy the blueprint once, then forge from materials">
-                        📜 Blueprint
+                        <span className="gl-res">
+                          <PlaceIcon id="blueprint" glyph="📜" />
+                        </span>
+                        Blueprint
                       </button>
                     </>
                   ) : short ? (
