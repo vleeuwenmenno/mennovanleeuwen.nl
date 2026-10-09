@@ -1,9 +1,9 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useGoSuggestionState, useGolinksTemplate } from '../data/golinks'
 import { profile } from '../data/profile'
 import { setAccent } from '../os/theme'
 import { useWM, type WinState } from '../os/wm'
-import { complete, fastfetch, runLine } from '../terminal/commands'
+import { complete, completions, fastfetch, runLine, type Completion } from '../terminal/commands'
 import { SlTrain } from '../terminal/SlTrain'
 import { HOME, prettyPath } from '../terminal/vfs'
 
@@ -119,17 +119,29 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
   const [animating, setAnimating] = useState(false)
   const busy = running || animating
 
-  // Tab after `go <alias>` opens a picker of your go links, like fzf: it narrows as you type,
-  // ↑/↓ (or Ctrl+P/N) move, Tab puts the alias on the line, Enter runs it, Esc closes.
+  // Tab opens a picker, like fzf: after `go <alias>` your go links, otherwise the commands, files
+  // and folders the word could become (once there is more than one). It narrows as you type; Tab
+  // and ↓ (Shift+Tab and ↑, Ctrl+N/P) cycle, → puts the pick on the line, Enter does too (and
+  // follows a go link), Esc closes.
   const goWord = /^\s*go\s+(\S*)$/.exec(value)?.[1] ?? null
   const goTemplate = useGolinksTemplate()
-  const [picking, setPicking] = useState(false)
+  const goMode = goWord !== null && !!goTemplate
+  // The picker belongs to the word it opened on: `before` is the line up to it.
+  const [picking, setPicking] = useState<{ before: string } | null>(null)
   const [pick, setPick] = useState(0)
-  const go = useGoSuggestionState(goTemplate, goWord ?? '', picking && goWord !== null)
+  const go = useGoSuggestionState(goTemplate, goWord ?? '', !!picking && goMode)
+  const comp = useMemo(() => (picking && !goMode ? completions(value, cwd) : null), [picking, goMode, value, cwd])
+  const choices: Completion[] = goMode ? go.list.map((g) => ({ value: g.name, label: g.name, hint: g.target.replace(/^https?:\/\//, '').replace(/\/$/, '') })) : (comp?.items ?? [])
+  const typed = goMode ? goWord! : (comp?.word.split('/').pop() ?? '')
+  const lastWord = /(\S*)$/.exec(value)![1]
+  useEffect(() => setPick(0), [lastWord])
+  // Moving on to another word, or nothing left to pick from, closes it.
   useEffect(() => {
-    if (goWord === null) setPicking(false)
-    setPick(0)
-  }, [goWord])
+    if (picking && comp && (comp.before !== picking.before || !comp.items.length)) setPicking(null)
+  }, [picking, comp])
+  useEffect(() => {
+    scrollRef.current?.querySelector('.t-pick.is-on')?.scrollIntoView({ block: 'nearest' })
+  }, [pick])
   const history = useRef<string[]>(loadHistory())
   const histIdx = useRef<number | null>(null)
   const env = useRef<Record<string, string>>({ USER: profile.handle, HOME, SHELL: '/bin/msh', TERM: 'xterm-mvlos', EDITOR: 'nvim', LANG: 'en_US.UTF-8' })
@@ -144,7 +156,7 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
     // The console grows inside the boot screen, which does the scrolling.
     if (onLogout) scrollRef.current?.scrollIntoView({ block: 'end' })
-  }, [entries, busy, onLogout, picking, go.list.length])
+  }, [entries, busy, onLogout, picking, choices.length])
 
   useEffect(() => {
     if (onLogout && !matchMedia('(pointer: coarse)').matches) inputRef.current?.focus({ preventScroll: true })
@@ -339,25 +351,25 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
     return { cols: Math.max(20, Math.floor(w / charW)), rows: Math.max(8, Math.floor(h / lineH) - 1) }
   }
 
-  /** Puts the picked alias on the line; `run` also runs it. */
+  /** Puts the pick on the line; `run` also runs it (go links only). */
   function choose(i: number, run: boolean) {
-    const chosen = go.list[i]
-    setPicking(false)
+    const chosen = choices[i]
+    setPicking(null)
     if (!chosen) return run && submit(value)
-    const line = value.replace(/\S*$/, chosen.name)
+    const line = value.replace(/\S*$/, chosen.value)
     if (run) submit(line)
-    else setValue(`${line} `)
+    else setValue(chosen.value.endsWith('/') ? line : `${line} `)
     inputRef.current?.focus({ preventScroll: true })
   }
 
-  /** Keys while the go links picker is open; true when the picker used the key. */
+  /** Keys while the picker is open; true when the picker used the key. */
   function onPickerKey(e: KeyboardEvent<HTMLInputElement>) {
-    const n = go.list.length
+    const n = choices.length
     const k = e.key.toLowerCase()
-    if (e.key === 'ArrowDown' || (e.ctrlKey && k === 'n')) setPick((i) => (n ? (i + 1) % n : 0))
-    else if (e.key === 'ArrowUp' || (e.ctrlKey && k === 'p')) setPick((i) => (n ? (i - 1 + n) % n : 0))
-    else if (e.key === 'Escape' || (e.ctrlKey && k === 'c' && !window.getSelection()?.toString())) setPicking(false)
-    else if (e.key === 'Tab' || e.key === 'Enter') choose(pick, e.key === 'Enter')
+    if ((e.key === 'Tab' && !e.shiftKey) || e.key === 'ArrowDown' || (e.ctrlKey && k === 'n')) setPick((i) => (n ? (i + 1) % n : 0))
+    else if (e.key === 'Tab' || e.key === 'ArrowUp' || (e.ctrlKey && k === 'p')) setPick((i) => (n ? (i - 1 + n) % n : 0))
+    else if (e.key === 'Escape' || (e.ctrlKey && k === 'c' && !window.getSelection()?.toString())) setPicking(null)
+    else if (e.key === 'ArrowRight' || e.key === 'Enter') choose(pick, e.key === 'Enter' && goMode)
     else return false
     e.preventDefault()
     return true
@@ -373,14 +385,19 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
       if (!busy) submit(value)
     } else if (e.key === 'Tab') {
       e.preventDefault()
-      if (goWord !== null && goTemplate && !busy) {
-        setPicking(true)
+      if (busy) return
+      if (goMode) {
+        // Never a real line, so leaving `go <alias>` closes the go links picker.
+        setPicking({ before: '\0go' })
         setPick(0)
         return
       }
-      const { line, options } = complete(value, cwd)
+      const { line, items } = complete(value, cwd)
       setValue(line)
-      if (options.length) setEntries((x) => [...x, { id: nextId++, kind: 'cmd', cwd, text: value }, { id: nextId++, kind: 'out', text: options.join('  ') }])
+      if (items.length) {
+        setPicking({ before: completions(line, cwd).before })
+        setPick(0)
+      }
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       const h = history.current
@@ -468,27 +485,29 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
           )}
         </span>
       </label>
-      {picking && goWord !== null && !busy && (
-        <div className="t-picker" role="listbox" aria-label="Go links" style={{ ['--name-w' as string]: `${Math.max(4, ...go.list.map((g) => g.name.length)) + 2}ch` }}>
-          {go.list.map((g, i) => (
-            <div
-              key={g.name}
-              role="option"
-              aria-selected={i === pick}
-              className={`t-pick ${i === pick ? 'is-on' : ''}`}
-              onMouseDown={(e) => e.preventDefault()}
-              onMouseEnter={() => setPick(i)}
-              onClick={() => choose(i, false)}
-            >
-              <span className="t-pick-mark">{i === pick ? '>' : ' '}</span>
-              <span className="t-pick-name">
-                <Matched name={g.name} query={goWord} />
-              </span>
-              <span className="t-pick-target">{g.target.replace(/^https?:\/\//, '').replace(/\/$/, '')}</span>
-            </div>
-          ))}
+      {picking && (goMode || choices.length > 0) && !busy && (
+        <div className="t-picker" role="listbox" aria-label={goMode ? 'Go links' : 'Completions'} style={{ ['--name-w' as string]: `${Math.min(28, Math.max(4, ...choices.map((c) => c.label.length))) + 2}ch` }}>
+          <div className="t-pick-list">
+            {choices.map((c, i) => (
+              <div
+                key={c.value}
+                role="option"
+                aria-selected={i === pick}
+                className={`t-pick ${i === pick ? 'is-on' : ''}`}
+                onMouseDown={(e) => e.preventDefault()}
+                onMouseEnter={() => setPick(i)}
+                onClick={() => choose(i, false)}
+              >
+                <span className="t-pick-mark">{i === pick ? '>' : ' '}</span>
+                <span className="t-pick-name">
+                  <Matched name={c.label} query={typed} />
+                </span>
+                <span className="t-pick-target">{c.hint}</span>
+              </div>
+            ))}
+          </div>
           <div className="t-pick-info">
-            {go.ready ? `${go.list.length || 'no'} matching ${go.list.length === 1 ? 'alias' : 'aliases'}` : 'searching…'} · ↑↓ move · tab insert · enter go · esc close
+            {goMode && !go.ready ? 'searching…' : `${choices.length || 'no'} ${goMode ? (choices.length === 1 ? 'matching alias' : 'matching aliases') : choices.length === 1 ? 'match' : 'matches'}`} · tab ↑↓ cycle · → insert · enter {goMode ? 'go' : 'insert'} · esc close
           </div>
         </div>
       )}

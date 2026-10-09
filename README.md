@@ -61,13 +61,21 @@ never the visitor's own network), `whois` (RDAP), `git log`/`git show` on the re
 `htop`, `watch`, `cmatrix`, `df`/`free`/`nproc`/`lscpu`/`xrandr`/`ip` with the numbers the browser
 shares, `jq`, `sha*sum`/`md5sum`, `figlet` and `lolcat`.
 
+`find` and `fd` ([`src/terminal/find.ts`](src/terminal/find.ts)) follow GNU findutils 4.10 and fd 10.2
+over the site's filesystem: find's whole expression language (tests, `-printf`, `-ls`, `-exec … ;`
+and `{} +`, `-ok`, `-prune`, `-delete` in /tmp, operators and its warnings and errors), fd's options
+(smart case, globs, `-e`, `-t`, `-S`, `--changed-within`, `-x`/`-X`, `--format`, `-l`, ignore files),
+and both tools' `--help`, `--version` and `man` pages. Tab completes their options.
+
 `go <alias>` follows a link through the visitor's own [golinks](https://git.mvl.sh/vleeuwenmenno/golinks)
 account (by default on https://mvl.sh). `go set <search url>` saves the account once: the
 `…/r/%s?token=…` URL golinks shows after creating a token (a redirect URL for any alias, a site plus
 a token, or a bare mvl.sh token work too). It is kept in localStorage, and synced like notes when
 signed in ([`src/data/golinks.ts`](src/data/golinks.ts)). `go` alone shows the account, `go unset`
-forgets it. Tab after `go ` opens a picker of your aliases under the prompt, like fzf: it narrows as
-you type, ↑/↓ (or Ctrl+P/N) move, Tab puts the alias on the line, Enter runs it, Esc closes it.
+forgets it. Tab after `go ` opens a picker of your aliases under the prompt, like fzf, and Tab on
+any other word with more than one match opens the same picker for commands, files and folders. It
+narrows as you type; Tab and ↓ (Shift+Tab and ↑, Ctrl+N/P) cycle, → puts the pick on the line,
+Enter does too (and follows a go link), Esc closes it.
 Spotlight takes `go <alias>` too, and lists matching aliases as you type (the most used
 ones after a bare `go `) from the golinks server's `/suggest`, asked straight from the browser so
 the token never passes through this site's server.
@@ -98,7 +106,9 @@ web or runs it in a terminal, the preview pane, and the web search engine. Recen
 are the pages opened from MvL OS itself (Spotlight, launchers, `open`, `go`, links in apps), since a page
 can't read the browser's history ([`src/data/siteHistory.ts`](src/data/siteHistory.ts)); go links are
 kept by alias, never with their token, and the history can be switched off or cleared there.
-Right-click a Spotlight result → *Add to favourites* to keep it at the top of the empty box
+Ctrl+K in Spotlight (or right-clicking a result, the menu key, Shift+F10) opens an actions panel
+for the highlighted result, listing everything it can do with the keys for each. *Add to
+favourites* there (or Ctrl+D) keeps it at the top of the empty box
 ([`src/data/spotlightFavourites.ts`](src/data/spotlightFavourites.ts)); Settings → Spotlight reorders
 them. The terminal's `visited` lists the same history (`visited <text>`, `visited open <#>`,
 `visited forget <#>`, `visited clear`).

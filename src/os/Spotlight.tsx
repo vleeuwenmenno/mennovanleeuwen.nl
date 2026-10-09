@@ -22,7 +22,6 @@ import { signIn, useAccount } from './account'
 import { APP_META } from './apps'
 import { useCodeSearch } from './codeSearch'
 import { asWebAddress, useLinkPreview, type LinkPreview } from './linkPreview'
-import { openContextMenu } from './ContextMenu'
 import { openLink } from '../data/links'
 import { isDockableApp, linkDockId, pinLink, pinToDock, unpinFromDock, useCanCustomizeDock, useDock, type DockId } from './dockItems'
 import { revealEmail } from '../data/email'
@@ -38,6 +37,9 @@ import { ALWAYS_NEW, SINGLE_INSTANCE, useWM, type AppId } from './wm'
 // terminal commands, with a preview of the highlighted result on the right.
 
 type Group = 'Top hit' | 'Favourites' | 'Go links' | 'Recent' | 'Recently visited' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Widgets' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Web' | 'Fallback'
+
+/** One entry in Spotlight's actions panel (Ctrl+K, right-click). */
+type SpAction = { id: string; label: string; keys: string[]; run: () => void; danger?: boolean }
 
 type Result = {
   id: string
@@ -452,6 +454,10 @@ export function Spotlight() {
     setQ('')
   }
   const [active, setActive] = useState(0)
+  // The actions panel (Ctrl+K, right-click) for one result: its id, and the highlighted action.
+  const [menu, setMenu] = useState<{ id: string; at: number } | null>(null)
+  // A result to keep highlighted when the list reorders under it (starring moves it up).
+  const follow = useRef<string | null>(null)
   const [flash, setFlash] = useState<string | null>(null)
   const input = useRef<HTMLInputElement>(null)
   const list = useRef<HTMLDivElement>(null)
@@ -980,10 +986,19 @@ export function Spotlight() {
     return out
   }, [q, all, calc, code, suggestions, engine, sub, wm, recentHits, visits, prefs, favourites, favouriteKeys, address, page, goAlias, goTemplate, goSuggestions])
 
-  useEffect(() => setActive(0), [q, sub])
+  useEffect(() => {
+    setActive(0)
+    setMenu(null)
+  }, [q, sub])
   useEffect(() => {
     list.current?.querySelector('.sp-item.is-active')?.scrollIntoView({ block: 'nearest' })
   }, [active])
+  useEffect(() => {
+    if (!follow.current) return
+    const i = results.findIndex((r) => r.id === follow.current)
+    follow.current = null
+    if (i >= 0) setActive(i)
+  }, [results])
   useEffect(() => {
     if (!flash) return
     const t = setTimeout(() => setFlash(null), 1400)
@@ -1023,6 +1038,39 @@ export function Spotlight() {
     if (!keepOpen) close()
   }
 
+  const toggleFavourite = (r: Result | undefined) => {
+    const fav = r && favouriteOf(r)
+    if (!fav) return
+    const starred = favouriteKeys.has(favouriteKey(fav))
+    follow.current = r!.id
+    if (starred) removeFavourite(favouriteKey(fav))
+    else addFavourite(fav)
+    setFlash(starred ? 'Removed from favourites' : 'Added to favourites')
+  }
+
+  /** Everything that can be done with `r`, with the keys that do it without this panel. */
+  const actionsFor = (r: Result): SpAction[] => {
+    const out: SpAction[] = [{ id: 'open', label: r.enterLabel ?? 'Open', keys: ['↵'], run: () => execute(r, false) }]
+    if (r.alt) out.push({ id: 'alt', label: r.alt.label, keys: ['Ctrl', '↵'], run: () => execute(r, true) })
+    if (r.complete) out.push({ id: 'complete', label: `Complete to “${r.complete}”`, keys: ['Tab'], run: () => setQ(r.complete!) })
+    const fav = favouriteOf(r)
+    if (fav) out.push({ id: 'fav', label: favouriteKeys.has(favouriteKey(fav)) ? 'Remove from favourites' : 'Add to favourites', keys: ['Ctrl', 'D'], run: () => toggleFavourite(r) })
+    const pin = pinFor(r)
+    if (pin) out.push({ id: 'pin', label: pin.pinned ? 'Remove from dock' : 'Pin to dock', keys: ['Shift', '↵'], run: () => togglePin(r) })
+    if (r.forget) out.push({ id: 'forget', label: 'Forget', keys: ['Shift', 'Del'], run: r.forget, danger: true })
+    return out
+  }
+  const menuTarget = menu ? results.find((r) => r.id === menu.id) : undefined
+  const menuActions = menuTarget ? actionsFor(menuTarget) : []
+  const openMenu = (r: Result | undefined) => r && setMenu({ id: r.id, at: 0 })
+  const runAction = (a: SpAction | undefined) => {
+    setMenu(null)
+    a?.run()
+    input.current?.focus()
+  }
+  /** Ctrl+K (or the menu key, Shift+F10) opens the panel; again closes it. */
+  const isMenuKey = (e: { key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') || e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')
+
   let lastGroup: Group | null = null
 
   return (
@@ -1031,9 +1079,28 @@ export function Spotlight() {
         className="spotlight"
         role="dialog"
         aria-label="Spotlight search"
+        onPointerDown={(e) => menu && !(e.target as Element).closest('.sp-actions') && setMenu(null)}
         onKeyDown={(e) => {
+          // The actions panel takes the arrows, Enter and Esc while it is open. Stopping Ctrl+K
+          // here keeps it from reaching the desktop, where it would close Spotlight.
+          if (menuTarget) {
+            const n = menuActions.length
+            if (e.key === 'Escape' || isMenuKey(e)) {
+              e.stopPropagation()
+              setMenu(null)
+            } else if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) setMenu((m) => m && { ...m, at: (m.at + 1) % n })
+            else if (e.key === 'ArrowUp' || e.key === 'Tab') setMenu((m) => m && { ...m, at: (m.at - 1 + n) % n })
+            else if (e.key === 'Enter') runAction(menuActions[menu!.at])
+            else return
+            e.preventDefault()
+            return
+          }
+          if (isMenuKey(e) && current) {
+            e.stopPropagation()
+            openMenu(current)
+          } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd' && current && favouriteOf(current)) toggleFavourite(current)
           // In a sub-list, Esc (or Backspace in an empty box) goes back instead of closing.
-          if (e.key === 'Escape' && sub) {
+          else if (e.key === 'Escape' && sub) {
             e.stopPropagation()
             openSub(null)
           } else if (e.key === 'Backspace' && sub && !q) openSub(null)
@@ -1080,17 +1147,12 @@ export function Spotlight() {
                   <button className={`sp-item ${i === active ? 'is-active' : ''}`} role="option" aria-selected={i === active} onPointerMove={() => setActive(i)}
                     onClick={(e) => execute(r, e.ctrlKey || e.metaKey)}
                     onContextMenu={(e) => {
-                      const pin = pinFor(r)
-                      const fav = favouriteOf(r)
-                      const starred = fav && favouriteKeys.has(favouriteKey(fav))
-                      openContextMenu(e, [
-                        { label: r.enterLabel ?? 'Open', onSelect: () => execute(r, false) },
-                        ...(r.alt ? [{ label: r.alt.label, onSelect: () => execute(r, true) }] : []),
-                        ...(pin || fav ? [{ separator: true as const }] : []),
-                        ...(fav ? [{ label: starred ? 'Remove from favourites' : 'Add to favourites', onSelect: () => (starred ? removeFavourite(favouriteKey(fav)) : addFavourite(fav)) }] : []),
-                        ...(pin ? [{ label: pin.pinned ? 'Remove from dock' : 'Pin to dock', onSelect: () => togglePin(r) }] : []),
-                        ...(r.forget ? [{ separator: true as const }, { label: 'Forget', shortcut: 'Shift Del', onSelect: r.forget }] : []),
-                      ])
+                      // Shift+right-click keeps the browser's own menu.
+                      if (e.shiftKey) return e.stopPropagation()
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setActive(i)
+                      openMenu(r)
                     }}
                   >
                     {r.icon}
@@ -1098,7 +1160,6 @@ export function Spotlight() {
                       <span className="sp-title">{r.title}</span>
                       {r.subtitle && <span className="sp-sub">{r.subtitle}</span>}
                     </span>
-                    {i === active && <span className="sp-enter">{r.enterLabel ?? 'Open'} ↵</span>}
                   </button>
                 </div>
               )
@@ -1106,38 +1167,44 @@ export function Spotlight() {
           </div>
           {prefs.preview && <aside className="sp-preview">{current?.preview ? current.preview() : current ? <DefaultPreview r={current} /> : null}</aside>}
         </div>
+        {menuTarget && (
+          <div className="sp-actions" role="menu" aria-label={`Actions for ${menuTarget.title}`}>
+            <p className="sp-actions-title">{menuTarget.title}</p>
+            {menuActions.map((a, i) => (
+              <button key={a.id} role="menuitem" className={`sp-action ${i === menu!.at ? 'is-active' : ''} ${a.danger ? 'is-danger' : ''}`} onPointerMove={() => i !== menu!.at && setMenu({ ...menu!, at: i })} onClick={() => runAction(a)}>
+                <span className="sp-action-label">{a.label}</span>
+                <span className="sp-keys">
+                  {a.keys.map((k) => (
+                    <kbd key={k}>{k}</kbd>
+                  ))}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
         <footer className="sp-foot">
-          <span>
-            <kbd>↑</kbd>
-            <kbd>↓</kbd> navigate
-          </span>
-          <span>
-            <kbd>↵</kbd> {current?.enterLabel ?? 'open'}
-          </span>
-          {current?.complete && (
+          {flash ? (
+            <span className="sp-flash">{flash}</span>
+          ) : (
             <span>
-              <kbd>tab</kbd> complete
+              <kbd>↑</kbd>
+              <kbd>↓</kbd> navigate
             </span>
           )}
-          {current?.alt && (
-            <span>
-              <kbd>ctrl</kbd>
-              <kbd>↵</kbd> {current.alt.label.toLowerCase()}
+          {current && (
+            <span className="sp-foot-actions">
+              <button className="sp-foot-btn" onClick={() => execute(current, false)}>
+                <strong>{current.enterLabel ?? 'Open'}</strong>
+                <kbd>↵</kbd>
+              </button>
+              <span className="sp-foot-sep" aria-hidden />
+              <button className={`sp-foot-btn ${menuTarget ? 'is-on' : ''}`} onClick={() => (menuTarget ? setMenu(null) : openMenu(current))}>
+                Actions
+                <kbd>ctrl</kbd>
+                <kbd>K</kbd>
+              </button>
             </span>
           )}
-          {current?.forget && (
-            <span>
-              <kbd>shift</kbd>
-              <kbd>del</kbd> forget
-            </span>
-          )}
-          {currentPin && (
-            <span>
-              <kbd>shift</kbd>
-              <kbd>↵</kbd> {currentPin.pinned ? 'unpin' : 'pin to dock'}
-            </span>
-          )}
-          {flash && <span className="sp-flash">{flash}</span>}
         </footer>
       </div>
     </div>
