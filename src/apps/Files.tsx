@@ -7,6 +7,8 @@ import { useWM, type AppId, type WinState } from '../os/wm'
 import { formatSize, HOME, KIND_LABEL, kindOfName, lookup, prettyPath, resolvePath, stat, walk, type FileKind, type Node } from '../terminal/vfs'
 import { fileLink, getLibrary, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useUnlocks, type Library } from '../data/seafile'
 import { useAccount } from '../os/account'
+import { addBookmark, useSidebar } from '../data/filesSidebar'
+import { FilesSidebar, type SideSection } from './FilesSidebar'
 
 // A file manager in the style of Omafile (the Omarchy file manager Menno contributes to), browsing
 // the same in-memory filesystem the terminal uses (only /tmp is writable there) and, for the
@@ -15,10 +17,10 @@ import { useAccount } from '../os/account'
 
 type View = 'list' | 'grid' | 'compact' | 'gallery'
 type Sort = 'az' | 'za' | 'newest' | 'oldest' | 'largest' | 'smallest' | 'type'
-type Prefs = { view: View; zoom: number; sort: Sort; hidden: boolean; sidebar: boolean; bookmarks: string[] }
+type Prefs = { view: View; zoom: number; sort: Sort; hidden: boolean; sidebar: boolean }
 
 const PREFS_KEY = 'mvlos.files.v1'
-const DEFAULT_PREFS: Prefs = { view: 'grid', zoom: 100, sort: 'az', hidden: false, sidebar: true, bookmarks: [`${HOME}/projects`, `${HOME}/games`, `${HOME}/contributions`] }
+const DEFAULT_PREFS: Prefs = { view: 'grid', zoom: 100, sort: 'az', hidden: false, sidebar: true }
 const RECENT = 'recent://'
 const TRASH = 'trash://'
 
@@ -148,6 +150,7 @@ export function Files({ win }: { win: WinState }) {
   const home = sfHome ?? HOME
   const unlocks = useUnlocks()
   const [prefs, setPrefsState] = useState<Prefs>(loadPrefs)
+  const { bookmarks } = useSidebar()
   const [path, setPath] = useState(win.props.path ?? home)
   const [back, setBack] = useState<string[]>([])
   const [fwd, setFwd] = useState<string[]>([])
@@ -358,7 +361,7 @@ export function Files({ win }: { win: WinState }) {
     setSelected(new Set([`/tmp/${name}`]))
   }
 
-  const bookmark = (p: string) => !prefs.bookmarks.includes(p) && setPrefs({ bookmarks: [...prefs.bookmarks, p] })
+  const bookmark = (p: string) => addBookmark(p)
   const copyPath = (p: string) => navigator.clipboard?.writeText(pretty(p)).then(() => setToast(`Copied ${pretty(p)}`)).catch(() => {})
 
   const selectedItems = () => items.filter((i) => selected.has(i.path))
@@ -397,7 +400,7 @@ export function Files({ win }: { win: WinState }) {
         ...(library?.encrypted && unlocks[library.id] > Date.now() ? [{ label: 'Lock now', onSelect: () => void lock(library.id).catch((e: Error) => setToast(e.message)) }] : []),
         { separator: true },
         { label: 'Copy path', onSelect: () => copyPath(item.path) },
-        ...(isDir ? [{ label: 'Add to bookmarks', disabled: prefs.bookmarks.includes(item.path), onSelect: () => bookmark(item.path) }] : []),
+        ...(isDir ? [{ label: 'Add to bookmarks', disabled: bookmarks.includes(item.path), onSelect: () => bookmark(item.path) }] : []),
         { label: 'Properties', shortcut: 'Alt ↵', onSelect: () => setProps(item) },
       ]
     }
@@ -419,7 +422,7 @@ export function Files({ win }: { win: WinState }) {
       { label: 'Open in terminal', onSelect: () => openItem(item, 'terminal') },
       { separator: true },
       { label: 'Copy path', onSelect: () => copyPath(item.path) },
-      ...(isDir ? [{ label: 'Add to bookmarks', disabled: prefs.bookmarks.includes(item.path), onSelect: () => bookmark(item.path) }] : []),
+      ...(isDir ? [{ label: 'Add to bookmarks', disabled: bookmarks.includes(item.path), onSelect: () => bookmark(item.path) }] : []),
       { label: 'Properties', shortcut: 'Alt ↵', onSelect: () => setProps(item) },
       { separator: true },
       { label: 'Move to Trash', shortcut: 'Del', danger: true, onSelect: () => trashItems([item]) },
@@ -432,7 +435,7 @@ export function Files({ win }: { win: WinState }) {
       return [
         { label: 'New folder', disabled: !sfWritable, onSelect: newFolder },
         { label: 'Refresh', shortcut: 'F5', onSelect: () => refreshDirs(path) },
-        { label: 'Add to bookmarks', disabled: path === SF || prefs.bookmarks.includes(path), onSelect: () => bookmark(path) },
+        { label: 'Add to bookmarks', disabled: path === SF || bookmarks.includes(path), onSelect: () => bookmark(path) },
         { separator: true },
         { label: 'Select all', shortcut: 'Ctrl A', onSelect: () => setSelected(new Set(items.map((i) => i.path))) },
         { label: 'Show hidden files', checked: prefs.hidden, shortcut: 'Ctrl H', onSelect: () => setPrefs({ hidden: !prefs.hidden }) },
@@ -442,7 +445,7 @@ export function Files({ win }: { win: WinState }) {
     return [
       { label: 'New text file', disabled: !writable, onSelect: newFile },
       { label: 'Open terminal here', disabled: special, onSelect: () => wm.openNew('terminal', { run: `cd ${prettyPath(path)} && ls`, t: String(Date.now()) }) },
-      { label: 'Add to bookmarks', disabled: special || prefs.bookmarks.includes(path), onSelect: () => bookmark(path) },
+      { label: 'Add to bookmarks', disabled: special || bookmarks.includes(path), onSelect: () => bookmark(path) },
       { separator: true },
       { label: 'Select all', shortcut: 'Ctrl A', onSelect: () => setSelected(new Set(items.map((i) => i.path))) },
       { label: 'Show hidden files', checked: prefs.hidden, shortcut: 'Ctrl H', onSelect: () => setPrefs({ hidden: !prefs.hidden }) },
@@ -619,13 +622,68 @@ export function Files({ win }: { win: WinState }) {
     return f ? f.toLowerCase() : undefined
   }
 
-  const place = (label: string, target: string, icon: string, extra?: ReactNode) => (
-    <button key={target + label} className={`fm-side-item ${path === target ? 'is-active' : ''}`} onClick={() => (target.startsWith('http') ? openLink(target) : navigate(target))}>
-      <span className="fm-side-icon">{icon}</span>
-      <span className="fm-side-label">{label}</span>
-      {extra}
-    </button>
-  )
+  const openPlace = (target: string) => (target.startsWith('http') ? openLink(target) : navigate(target))
+
+  // The sidebar's sections; FilesSidebar puts them (and their items) in your order and hides what you hid.
+  const sections: SideSection[] = [
+    {
+      id: 'places',
+      label: 'Places',
+      items: [
+        { id: 'home', label: 'Home', target: home, icon: '⌂' },
+        { id: 'recent', label: 'Recent', target: RECENT, icon: '↺' },
+        { id: 'desktop', label: 'Desktop', target: `${home}/Desktop`, icon: '▭' },
+        { id: 'documents', label: 'Documents', target: `${home}/Documents`, icon: '▤' },
+        { id: 'downloads', label: 'Downloads', target: `${home}/Downloads`, icon: '⤓' },
+        { id: 'music', label: 'Music', target: `${home}/Music`, icon: '♪' },
+        { id: 'pictures', label: 'Pictures', target: `${home}/Pictures`, icon: '▣' },
+        { id: 'videos', label: 'Videos', target: `${home}/Videos`, icon: '▶' },
+        ...(sfHome ? [{ id: 'site', label: 'Site home', target: HOME, icon: '⌂', title: 'The site’s own home folder' }] : []),
+        { id: 'filesystem', label: 'Filesystem', target: '/', icon: '▭' },
+      ],
+    },
+    ...(account.seafile
+      ? [
+          {
+            id: 'seafile',
+            label: 'Seafile',
+            items: [
+              { id: 'all', label: 'All libraries', target: SF, icon: '☁' },
+              ...(libraries ?? []).map((l) => ({
+                id: l.id,
+                label: l.name,
+                target: sfPath(l.id),
+                icon: l.encrypted ? (unlocks[l.id] > Date.now() ? '🔓' : '🔒') : l.id === homeLibrary?.id && sfHome ? '⌂' : '▤',
+                title: `${l.name}${l.type !== 'mine' && l.owner ? `, from ${l.owner}` : ''}${l.permission === 'r' ? ' (read-only)' : ''}`,
+              })),
+            ],
+          },
+        ]
+      : []),
+    {
+      id: 'bookmarks',
+      label: 'Bookmarks',
+      items: bookmarks
+        .filter((b) => (isSf(b) ? !!account.seafile : lookup(b)))
+        .map((b) => ({ id: b, label: isSf(b) && parseSf(b)!.p === '/' ? libraryName(parseSf(b)!.repo) : b.split('/').pop()!.replace(/^./, (ch) => ch.toUpperCase()), target: b, icon: '⚲', bookmark: true, title: pretty(b) })),
+    },
+    {
+      id: 'drives',
+      label: 'Drives',
+      items: [
+        { id: 'nvme0n1', label: 'nvme0n1 (read-only)', target: '/', icon: '⛁' },
+        { id: 'tmpfs', label: 'tmpfs', target: '/tmp', icon: '⛁' },
+      ],
+    },
+    {
+      id: 'network',
+      label: 'Network',
+      items: [
+        { id: 'git.mvl.sh', label: 'git.mvl.sh', target: 'https://git.mvl.sh/vleeuwenmenno', icon: '⇄' },
+        { id: 'github.com', label: 'github.com', target: 'https://github.com/vleeuwenmenno', icon: '⇄' },
+      ],
+    },
+  ]
 
   return (
     <div className="fm" onKeyDown={onKeyDown}>
@@ -732,7 +790,7 @@ export function Files({ win }: { win: WinState }) {
               { label: 'Open terminal here', disabled: path.includes('://'), onSelect: () => wm.openNew('terminal', { run: `cd ${prettyPath(path)} && ls`, t: String(Date.now()) }) },
               { separator: true },
               { label: 'Copy location', disabled: path.includes('://') && !isSf(path), onSelect: () => copyPath(path) },
-              { label: 'Add to bookmarks', disabled: (path.includes('://') && !isSf(path)) || path === SF || prefs.bookmarks.includes(path), onSelect: () => bookmark(path) },
+              { label: 'Add to bookmarks', disabled: (path.includes('://') && !isSf(path)) || path === SF || bookmarks.includes(path), onSelect: () => bookmark(path) },
               { separator: true },
               { label: 'Keyboard shortcuts', onSelect: () => setToast('Ctrl+1-4 views · Ctrl+H hidden · Ctrl+L path · Ctrl+F search · Alt+arrows navigate · Alt+Enter properties') },
             ])
@@ -744,55 +802,18 @@ export function Files({ win }: { win: WinState }) {
 
       <div className="fm-body">
         {prefs.sidebar && (
-          <nav className="fm-side">
-            <p className="fm-side-head">Places</p>
-            {place('Home', home, '⌂')}
-            {place('Recent', RECENT, '↺')}
-            {place('Desktop', `${home}/Desktop`, '▭')}
-            {place('Documents', `${home}/Documents`, '▤')}
-            {place('Downloads', `${home}/Downloads`, '⤓')}
-            {place('Music', `${home}/Music`, '♪')}
-            {place('Pictures', `${home}/Pictures`, '▣')}
-            {place('Videos', `${home}/Videos`, '▶')}
-            {sfHome && place('Site home', HOME, '⌂')}
-            {place('Filesystem', '/', '▭')}
-            {account.seafile && (
-              <>
-                <p className="fm-side-head">Seafile</p>
-                {place('All libraries', SF, '☁')}
-                {libraries?.map((l) => place(l.name, sfPath(l.id), l.encrypted ? (unlocks[l.id] > Date.now() ? '🔓' : '🔒') : l.id === homeLibrary?.id && sfHome ? '⌂' : '▤'))}
-              </>
-            )}
-            <p className="fm-side-head">Bookmarks</p>
-            {prefs.bookmarks
-              .filter((b) => (isSf(b) ? !!account.seafile : lookup(b)))
-              .map((b) =>
-                place(
-                  isSf(b) && parseSf(b)!.p === '/' ? libraryName(parseSf(b)!.repo) : b.split('/').pop()!.replace(/^./, (ch) => ch.toUpperCase()),
-                  b,
-                  '⚲',
-                  <span
-                    className="fm-side-x"
-                    role="button"
-                    aria-label="Remove bookmark"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setPrefs({ bookmarks: prefs.bookmarks.filter((x) => x !== b) })
-                    }}
-                  >
-                    ×
-                  </span>,
-                ),
-              )}
-            <p className="fm-side-head">Drives</p>
-            {place('nvme0n1 (read-only)', '/', '⛁')}
-            {place('tmpfs', '/tmp', '⛁')}
-            <p className="fm-side-head">Network</p>
-            {place('git.mvl.sh', 'https://git.mvl.sh/vleeuwenmenno', '⇄')}
-            {place('github.com', 'https://github.com/vleeuwenmenno', '⇄')}
-            <div className="fm-side-gap" />
-            {place('Trash', TRASH, '🗑', <span className="fm-side-count">{trashCount}</span>)}
-          </nav>
+          <FilesSidebar
+            sections={sections}
+            active={path}
+            onOpen={openPlace}
+            footer={
+              <button className={`fm-side-item ${path === TRASH ? 'is-active' : ''}`} onClick={() => navigate(TRASH)}>
+                <span className="fm-side-icon">🗑</span>
+                <span className="fm-side-label">Trash</span>
+                <span className="fm-side-count">{trashCount}</span>
+              </button>
+            }
+          />
         )}
 
         <div

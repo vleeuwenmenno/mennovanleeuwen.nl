@@ -3351,9 +3351,7 @@ body.is-resizing * {
   font-size: 11px;
   color: var(--muted);
 }
-.fm-side-head:first-child {
-  margin-top: 4px;
-}
+
 .fm-side-item {
   display: flex;
   align-items: center;
@@ -3395,6 +3393,77 @@ body.is-resizing * {
 .fm-side-gap {
   flex: 1;
   min-height: 12px;
+}
+/* Arranging the sidebar: drag headings and items, a line shows where they land. */
+.fm-side-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: grab;
+}
+.fm-side-head > span:first-child {
+  flex: 1;
+}
+.fm-side-section:first-of-type .fm-side-head,
+.fm-side-custom + .fm-side-section .fm-side-head {
+  margin-top: 4px;
+}
+.fm-side-item[draggable] {
+  width: 100%;
+}
+.fm-side-drop {
+  height: 2px;
+  margin: 0 8px;
+  background: var(--accent);
+}
+.fm-side .is-dragging {
+  opacity: 0.4;
+}
+.fm-side .is-off {
+  opacity: 0.45;
+}
+.fm-side-custom {
+  display: grid;
+  gap: 6px;
+  margin: 2px 6px 4px;
+  padding: 8px;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px dashed var(--line-strong);
+}
+.fm-side-custom .btn {
+  justify-self: start;
+}
+.fm-side-reset {
+  margin-top: 10px;
+  color: var(--muted);
+}
+.fm-side-switch {
+  flex: none;
+  position: relative;
+  width: 24px;
+  height: 13px;
+  border-radius: 7px;
+  background: var(--line-strong);
+  cursor: pointer;
+}
+.fm-side-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--fg);
+  transition: transform 0.15s;
+}
+.fm-side-switch.is-on {
+  background: var(--accent);
+}
+.fm-side-switch.is-on::after {
+  transform: translateX(11px);
+  background: var(--on-accent, #fff);
 }
 .fm-main {
   position: relative;
