@@ -14,6 +14,8 @@ import { THEMES as OMARCHY_THEMES } from '../os/omarchyThemes'
 import { ACCENTS, setMode, setTheme, themeLabel, themeSettings } from '../os/theme'
 import { reboot, shutdown } from '../os/powerState'
 import { openLink } from '../data/links'
+import { clearVisits, forgetVisit, visits, type Visit } from '../data/siteHistory'
+import { spotlightPrefs } from '../data/spotlightPrefs'
 import { asWebAddress } from '../os/linkPreview'
 import { signedIn } from '../os/account'
 import { followGoLink, golinksSite, golinksTemplate, golinksUrl, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
@@ -219,7 +221,7 @@ export const commands: Record<string, Command> = {
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
         ['Network', ['curl', 'wget', 'whois', 'ping', 'dig', 'host', 'nslookup', 'minecraft']],
         ['Device', ['htop', 'df', 'free', 'nproc', 'lscpu', 'xrandr', 'ip', 'watch']],
-        ['System', ['keys', 'ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'env', 'export', 'theme', 'tty', 'reboot', 'shutdown', 'clear', 'exit']],
+        ['System', ['keys', 'ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'visited', 'env', 'export', 'theme', 'tty', 'reboot', 'shutdown', 'clear', 'exit']],
         ['Fun', ['games', 'fastfetch', 'fortune', 'cowsay', 'figlet', 'lolcat', 'cmatrix', 'sl', 'sudo']],
       ]
       return [
@@ -463,6 +465,59 @@ export const commands: Record<string, Command> = {
     run: () => `${new Date().toTimeString().slice(0, 8)} up ${fmtUptime()},  1 user,  load average: coffee, coffee, coffee`,
   },
   history: { desc: 'command history', run: ({ history }) => history.map((h, i) => `${String(i + 1).padStart(4)}  ${h}`).join('\n') },
+  visited: {
+    desc: 'websites opened from MvL OS, newest first',
+    usage: 'visited [text] [-n N]   |   visited open <#>   |   visited forget <#>   |   visited clear',
+    run: ({ args }) => {
+      // Numbers count from the newest in the whole list, so they stay the same when filtering.
+      const all = visits()
+      const pick = (arg: string | undefined, cmd: string): Visit => {
+        const v = all[Number(arg) - 1]
+        if (!arg || !/^\d+$/.test(arg) || !v) throw new CmdError(`visited ${cmd}: no entry ${arg ?? ''}; run \`visited\` for the numbers`)
+        return v
+      }
+      const shown = (v: Visit) => (v.url.startsWith('go:') ? `go/${v.url.slice(3)}` : v.url.replace(/^https?:\/\//, ''))
+      if (args[0] === 'open') {
+        const v = pick(args[1], 'open')
+        if (v.url.startsWith('go:')) {
+          const template = golinksTemplate()
+          if (!template) throw new CmdError('visited open: no golinks account set. Run `go` to see how.')
+          followGoLink(template, v.url.slice(3))
+        } else openLink(v.url, { title: v.title })
+        return `Opening ${shown(v)}`
+      }
+      if (args[0] === 'forget') {
+        const v = pick(args[1], 'forget')
+        forgetVisit(v.url)
+        return `${c('green', '✓')} forgot ${shown(v)}`
+      }
+      if (args[0] === 'clear') {
+        clearVisits()
+        return `${c('green', '✓')} forgot ${all.length} website${all.length === 1 ? '' : 's'}`
+      }
+      const n = args.indexOf('-n')
+      const limit = n >= 0 ? Number(args[n + 1]) : 20
+      if (n >= 0 && !(limit > 0)) throw new CmdError('visited: -n needs a number')
+      const text = args.filter((_, i) => n < 0 || (i !== n && i !== n + 1)).join(' ').toLowerCase()
+      const rows = all
+        .map((v, i) => ({ v, i }))
+        .filter(({ v }) => !text || `${v.title ?? ''} ${v.url}`.toLowerCase().includes(text))
+        .slice(0, limit)
+      const off = spotlightPrefs().history ? '' : `\n${c('muted', 'Not remembering new ones: Settings → Spotlight → History.')}`
+      if (!rows.length) return (all.length ? `Nothing visited matches “${text}”.` : 'Nothing visited yet. Websites opened from Spotlight, launchers, open and go show up here.') + off
+      return (
+        rows
+          .map(({ v, i }) => {
+            const where = v.url.startsWith('go:') ? c('cyan', shown(v)) : link(v.url, shown(v))
+            const title = v.title && v.title !== shown(v) ? `${v.title}  ` : ''
+            return `${c('muted', String(i + 1).padStart(3))}  ${c('muted', timeAgo(new Date(v.at).toISOString()).padStart(8))}  ${title}${where}`
+          })
+          .join('\n') +
+        `\n${c('muted', 'visited open <#> opens one, visited forget <#> forgets it.')}` +
+        off
+      )
+    },
+  },
   env: { desc: 'environment variables', run: ({ env }) => Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n') },
   export: {
     desc: 'set an environment variable',

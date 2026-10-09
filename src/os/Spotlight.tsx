@@ -10,6 +10,7 @@ import { addWidget, widgetDefs } from '../widgets/registry'
 import { ENGINES, searchWeb, useSearchSettings, useSuggestions } from '../data/searchEngine'
 import { followGoLink, golinksSite, golinksUrl, useGoSuggestions, useGolinksTemplate } from '../data/golinks'
 import { forgetVisit, useVisits, type Visit } from '../data/siteHistory'
+import { addFavourite, favouriteKey, removeFavourite, useFavourites, type Favourite } from '../data/spotlightFavourites'
 import { useSpotlightPrefs, type Category } from '../data/spotlightPrefs'
 import { countFor, useContributions } from '../data/contributions'
 import { fetchMinecraft, MC_ADDRESS, useMinecraft } from '../data/minecraft'
@@ -36,7 +37,7 @@ import { ALWAYS_NEW, SINGLE_INSTANCE, useWM, type AppId } from './wm'
 // Ctrl+K: one search box for apps, files, projects, games, live status, quick actions, maths and
 // terminal commands, with a preview of the highlighted result on the right.
 
-type Group = 'Top hit' | 'Go links' | 'Recent' | 'Recently visited' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Widgets' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Web' | 'Fallback'
+type Group = 'Top hit' | 'Favourites' | 'Go links' | 'Recent' | 'Recently visited' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Widgets' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Web' | 'Fallback'
 
 type Result = {
   id: string
@@ -215,10 +216,12 @@ function SitePreview({ v }: { v: Visit }) {
       <h4>{page?.title ?? v.title ?? shortUrl(v.url)}</h4>
       {page?.description && <p>{page.description}</p>}
       <p className="muted sp-small">{v.url}</p>
-      <p className="muted sp-small">
-        Last opened {timeAgo(new Date(v.at).toISOString())}
-        {v.count > 1 ? ` · ${v.count} times` : ''}
-      </p>
+      {v.at > 0 && (
+        <p className="muted sp-small">
+          Last opened {timeAgo(new Date(v.at).toISOString())}
+          {v.count > 1 ? ` · ${v.count} times` : ''}
+        </p>
+      )}
     </div>
   )
 }
@@ -465,6 +468,7 @@ export function Spotlight() {
   const recentHits = useRecentHits()
   const visits = useVisits()
   const prefs = useSpotlightPrefs()
+  const favourites = useFavourites()
   const address = sub ? null : asWebAddress(q)
   const page = useLinkPreview(address, account.status === 'user')
   const dock = useDock()
@@ -817,6 +821,27 @@ export function Spotlight() {
     return out
   }
 
+  /** What starring `r` keeps: its address for web pages and go links, its id for the rest. */
+  const favouriteOf = (r: Result): Favourite | null => {
+    if (r.id.startsWith('visit-')) return { kind: 'site', url: r.id.slice('visit-'.length), title: r.title }
+    if (r.complete?.startsWith('go ') && r.id.startsWith('go-')) return { kind: 'site', url: `go:${r.complete.slice(3)}`, title: r.title }
+    if (r.link) return { kind: 'site', url: r.link.url.replace(/#.*$/, '').replace(/\/$/, ''), title: r.id === 'goto' ? r.link.label : r.title }
+    if (all.some((x) => x.id === r.id)) return { kind: 'result', id: r.id, title: r.title }
+    return null
+  }
+  const favouriteKeys = useMemo(() => new Set(favourites.map(favouriteKey)), [favourites])
+
+  /** A favourite as a row, or null when what it points at is gone (a deleted note). */
+  const favouriteRow = (f: Favourite): Result | null => {
+    if (f.kind === 'result') {
+      const r = all.find((x) => x.id === f.id)
+      return r ? { ...r, group: 'Favourites' } : null
+    }
+    const v = visits.find((x) => x.url === f.url) ?? { url: f.url, title: f.title, at: 0, count: 0 }
+    const r = visitRow({ ...v, title: v.title ?? f.title }, goTemplate, copy)
+    return { ...r, group: 'Favourites', subtitle: f.url.startsWith('go:') ? 'Go link' : shortUrl(f.url), forget: undefined }
+  }
+
   const results = useMemo(() => {
     const query = q.trim().toLowerCase()
     const out: Result[] = []
@@ -842,17 +867,20 @@ export function Spotlight() {
     const recentRanked = recentHits.slice().sort((a, b) => weight(b) - weight(a))
 
     if (!query) {
-      // Empty box: what Settings → Spotlight asks for, in this order.
-      const { start } = prefs
+      // Empty box: what Settings → Spotlight asks for, in this order. Something shown twice
+      // (a favourite that is also a recent website) stays in the first place it appears.
+      const { start, recentCount } = prefs
       const status = new Set(['status-mc', 'status-activity', 'status-contrib'])
       const apps = new Set(['act-new-terminal', 'app-projects', 'app-cv', 'app-games', 'app-terminal'])
+      const seen = new Set<string>()
       return [
         ...out,
-        ...(start.sites ? visits.slice(0, 5).map((v) => visitRow(v, goTemplate, copy)) : []),
+        ...(start.favourites ? favourites.map(favouriteRow).filter((r): r is Result => !!r) : []),
+        ...(start.sites ? visits.filter((v) => !favouriteKeys.has(`site:${v.url}`)).slice(0, recentCount).map((v) => visitRow(v, goTemplate, copy)) : []),
         ...(start.status ? all.filter((r) => status.has(r.id)) : []),
         ...(start.apps ? all.filter((r) => apps.has(r.id)) : []),
-        ...(start.code ? recentRanked.slice(0, 4).map((r) => recentRow(r.hit)) : []),
-      ]
+        ...(start.code ? recentRanked.slice(0, recentCount).map((r) => recentRow(r.hit)) : []),
+      ].filter((r) => !seen.has(r.id) && !!seen.add(r.id))
     }
 
     // Remembered things matching the query: instant, no request to GitHub.
@@ -950,7 +978,7 @@ export function Spotlight() {
     else out.push(first)
     out.push(second)
     return out
-  }, [q, all, calc, code, suggestions, engine, sub, wm, recentHits, visits, prefs, address, page, goAlias, goTemplate, goSuggestions])
+  }, [q, all, calc, code, suggestions, engine, sub, wm, recentHits, visits, prefs, favourites, favouriteKeys, address, page, goAlias, goTemplate, goSuggestions])
 
   useEffect(() => setActive(0), [q, sub])
   useEffect(() => {
@@ -1053,10 +1081,14 @@ export function Spotlight() {
                     onClick={(e) => execute(r, e.ctrlKey || e.metaKey)}
                     onContextMenu={(e) => {
                       const pin = pinFor(r)
+                      const fav = favouriteOf(r)
+                      const starred = fav && favouriteKeys.has(favouriteKey(fav))
                       openContextMenu(e, [
                         { label: r.enterLabel ?? 'Open', onSelect: () => execute(r, false) },
                         ...(r.alt ? [{ label: r.alt.label, onSelect: () => execute(r, true) }] : []),
-                        ...(pin ? [{ separator: true as const }, { label: pin.pinned ? 'Remove from dock' : 'Pin to dock', onSelect: () => togglePin(r) }] : []),
+                        ...(pin || fav ? [{ separator: true as const }] : []),
+                        ...(fav ? [{ label: starred ? 'Remove from favourites' : 'Add to favourites', onSelect: () => (starred ? removeFavourite(favouriteKey(fav)) : addFavourite(fav)) }] : []),
+                        ...(pin ? [{ label: pin.pinned ? 'Remove from dock' : 'Pin to dock', onSelect: () => togglePin(r) }] : []),
                         ...(r.forget ? [{ separator: true as const }, { label: 'Forget', shortcut: 'Shift Del', onSelect: r.forget }] : []),
                       ])
                     }}

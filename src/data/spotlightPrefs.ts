@@ -5,13 +5,17 @@ import { synced } from '../os/synced'
 // open. Kept in this browser; synced when signed in, like notes.
 
 /** What the empty box shows, in this order. */
-export type StartSection = 'sites' | 'status' | 'apps' | 'code'
+export type StartSection = 'favourites' | 'sites' | 'status' | 'apps' | 'code'
 export const START_SECTIONS: [StartSection, string, string][] = [
+  ['favourites', 'Favourites', 'What you starred: right-click a result → Add to favourites'],
   ['sites', 'Recently visited websites', 'The last pages you opened from here'],
   ['status', 'Status', 'The Minecraft server, latest activity and contributions'],
   ['apps', 'Apps and actions', 'Terminal, Projects, CV and Games'],
   ['code', 'Repositories and issues', 'The ones you open most, once signed in'],
 ]
+
+/** How many recently visited websites, and repositories and issues, the empty box shows. */
+export const RECENT_COUNTS = [3, 5, 8, 12] as const
 
 /** Kinds of results that can be left out of what you type. */
 export type Category = 'sites' | 'status' | 'projects' | 'games' | 'files'
@@ -31,15 +35,18 @@ export type SpotlightPrefs = {
   include: Record<Category, boolean>
   fallback: Fallback
   preview: boolean
+  /** Recent items of each kind in the empty box, one of RECENT_COUNTS */
+  recentCount: number
   /** Remember websites opened from MvL OS */
   history: boolean
 }
 
 const DEFAULTS: SpotlightPrefs = {
-  start: { sites: true, status: true, apps: true, code: true },
+  start: { favourites: true, sites: true, status: true, apps: true, code: true },
   include: { sites: true, status: true, projects: true, games: true, files: true },
   fallback: 'web',
   preview: true,
+  recentCount: 5,
   history: true,
 }
 
@@ -56,6 +63,7 @@ const store = synced<SpotlightPrefs>('spotlight', DEFAULTS, {
       include: flags(DEFAULTS.include, s.include),
       fallback: s.fallback === 'terminal' ? 'terminal' : 'web',
       preview: s.preview !== false,
+      recentCount: (RECENT_COUNTS as readonly number[]).includes(s.recentCount) ? s.recentCount : DEFAULTS.recentCount,
       history: s.history !== false,
     }
   },

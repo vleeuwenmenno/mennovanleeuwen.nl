@@ -4,7 +4,8 @@ import { ENGINES, setSearchSettings, useSearchSettings, type EngineId } from '..
 import { setLinkSettings, useLinkSettings } from '../data/links'
 import { clearVisits, useVisits } from '../data/siteHistory'
 import { clearHits, useRecentHits } from '../data/spotlightRecent'
-import { CATEGORIES, setInclude, setSpotlightPrefs, setStart, START_SECTIONS, useSpotlightPrefs, type Fallback } from '../data/spotlightPrefs'
+import { favouriteKey, moveFavourite, removeFavourite, useFavourites } from '../data/spotlightFavourites'
+import { CATEGORIES, RECENT_COUNTS, setInclude, setSpotlightPrefs, setStart, START_SECTIONS, useSpotlightPrefs, type Fallback } from '../data/spotlightPrefs'
 import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { MC_ADDRESS, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
@@ -1071,6 +1072,43 @@ function CaldavForm() {
   )
 }
 
+/** Spotlight's favourites: reorder or remove; they are added from Spotlight's right-click menu. */
+function SpotlightFavourites() {
+  const favourites = useFavourites()
+  return (
+    <SetGroup title="Favourites">
+      {favourites.length > 0 ? (
+        <ul className="set-list">
+          {favourites.map((f, i) => {
+            const key = favouriteKey(f)
+            const go = f.kind === 'site' && f.url.startsWith('go:')
+            return (
+              <li key={key} className="set-row">
+                {f.kind === 'site' && !go ? <img className="set-fav" src={faviconOf(f.url)} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} /> : <span className="set-glyph">{go ? '↪' : '★'}</span>}
+                <span className="set-row-text">
+                  <strong>{f.title}</strong>
+                  <span className="muted">{f.kind === 'result' ? 'In MvL OS' : go ? 'Go link' : f.url.replace(/^https?:\/\//, '')}</span>
+                </span>
+                <button className="btn btn-small btn-ghost" disabled={i === 0} onClick={() => moveFavourite(key, -1)} aria-label="Move up">
+                  ↑
+                </button>
+                <button className="btn btn-small btn-ghost" disabled={i === favourites.length - 1} onClick={() => moveFavourite(key, 1)} aria-label="Move down">
+                  ↓
+                </button>
+                <button className="btn btn-small" onClick={() => removeFavourite(key)}>
+                  Remove
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      ) : (
+        <p className="muted">None yet. Right-click anything in Spotlight (an app, a note, a website you visited) and choose Add to favourites.</p>
+      )}
+    </SetGroup>
+  )
+}
+
 /** How Spotlight behaves: the empty box, what it searches, the web search, Enter's fallback, history. */
 function SpotlightSettings() {
   const { engine, suggestions } = useSearchSettings()
@@ -1095,6 +1133,17 @@ function SpotlightSettings() {
         ))}
         <p className="muted set-help">With everything off, Spotlight opens as an empty search box.</p>
       </SetGroup>
+      <SetGroup title="Recent items of each kind">
+        <div className="seg set-seg" role="radiogroup" aria-label="Recent items of each kind">
+          {RECENT_COUNTS.map((n) => (
+            <button key={n} role="radio" aria-checked={prefs.recentCount === n} className={prefs.recentCount === n ? 'is-active' : ''} onClick={() => setSpotlightPrefs({ recentCount: n })}>
+              {n}
+            </button>
+          ))}
+        </div>
+        <p className="muted set-help">How many recently visited websites, and repositories and issues, an empty Spotlight lists.</p>
+      </SetGroup>
+      <SpotlightFavourites />
       <SetGroup title="While you type, include">
         {CATEGORIES.map(([id, label]) => (
           <label key={id} className="set-check">
@@ -1228,7 +1277,7 @@ function SyncPane() {
           )}
         </li>
       </ul>
-      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, game high scores, the go links account, Spotlight's settings and history, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. Without an account they stay in this browser.</p>
+      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, game high scores, the go links account, Spotlight's settings, favourites and history, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. Without an account they stay in this browser.</p>
     </>
   )
 }
@@ -1242,7 +1291,7 @@ const GROUPS: Pane[][] = [
     { id: 'launchers', label: 'Launchers', hue: 'var(--magenta)', icon: svg(<><rect x="4" y="4" width="6" height="6" /><rect x="14" y="4" width="6" height="6" /><rect x="4" y="14" width="6" height="6" /><rect x="14" y="14" width="6" height="6" /></>), keywords: 'launchers links bookmarks desktop shortcuts', blurb: 'Links on the desktop, in All apps and in Spotlight.', render: () => <Launchers /> },
   ],
   [
-    { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal', blurb: 'What Spotlight shows when it opens, what it searches, and what it remembers.', render: () => <SpotlightSettings /> },
+    { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal favourites favorites starred', blurb: 'What Spotlight shows when it opens, what it searches, and what it remembers.', render: () => <SpotlightSettings /> },
     { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
     { id: 'notifications', label: 'Notifications', hue: 'var(--red)', icon: svg(<><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></>), keywords: 'notifications alerts minecraft activity', blurb: 'What may pop up in the corner of the desktop.', render: () => <Notifications /> },
     { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal spotlight suggestions mvl.sh token', blurb: "The golinks account that go <alias> follows, in Spotlight and the terminal.", render: () => <GoLinks /> },
