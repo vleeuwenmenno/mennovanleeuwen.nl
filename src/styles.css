@@ -4887,6 +4887,29 @@ button.fm-dd-row:hover {
   display: flex;
   gap: 6px;
 }
+.office-frame.has-note {
+  top: 30px;
+}
+.office-note {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  color: var(--bg-dark);
+  background: var(--yellow);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.office-note button {
+  margin-left: auto;
+  color: inherit;
+  font-size: 15px;
+}
 /* The document did not come in: what the document server can reach. */
 .office-check {
   position: absolute;

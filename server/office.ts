@@ -63,7 +63,7 @@ function unseal(sealed: string): Ticket {
   return t
 }
 
-export type OfficeConfig = { api: string; config: Record<string, unknown> }
+export type OfficeConfig = { api: string; config: Record<string, unknown>; /** Where OnlyOffice sends saves, when it cannot reach it (this computer) */ unreachableCallback: string | null }
 
 /**
  * The editor for a file in Seafile: the document server's api.js and the signed settings to start
@@ -117,7 +117,8 @@ export async function officeConfig(req: IncomingMessage, user: User, repo: strin
     },
   }
   config.token = signJwt(config, office.secret)
-  return { api: `${office.url}/web-apps/apps/api/documents/api.js`, config }
+  const local = /^https?:\/\/(localhost|127\.|\[::1\]|[^/]+\.localhost)/.test(origin)
+  return { api: `${office.url}/web-apps/apps/api/documents/api.js`, config, unreachableCallback: local && canEdit ? origin : null }
 }
 
 // --- saving -----------------------------------------------------------------------------------

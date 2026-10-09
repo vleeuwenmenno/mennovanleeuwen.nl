@@ -67,6 +67,8 @@ export function Office({ win, kind }: { win: WinState; kind?: NewKind }) {
   /** The document itself is in (not just the editor) */
   const [loaded, setLoaded] = useState(false)
   const [slow, setSlow] = useState(false)
+  /** This site's address when OnlyOffice cannot call back to it (a dev server): saving will not work */
+  const [noSave, setNoSave] = useState<string | null>(null)
   const [check, setCheck] = useState<{ busy: boolean; result?: { api: string; download: string; downloadOk: boolean; callback: string; callbackOk: boolean }; error?: string } | null>(null)
   const holder = useRef<HTMLDivElement>(null)
   const root = useRef<HTMLDivElement>(null)
@@ -100,8 +102,9 @@ export function Office({ win, kind }: { win: WinState; kind?: NewKind }) {
     const slowTimer = setTimeout(() => live && setSlow(true), 15_000)
     const dark = THEMES[resolvedThemeName()]?.mode !== 'light'
     const mobile = (root.current?.clientWidth ?? 800) < 560
-    api<{ api: string; config: Record<string, unknown> }>(`/api/office/config?repo=${encodeURIComponent(at.repo)}&p=${encodeURIComponent(at.p)}&theme=${dark ? 'dark' : 'light'}${mobile ? '&mobile' : ''}`)
-      .then(async ({ api: src, config }) => {
+    api<{ api: string; config: Record<string, unknown>; unreachableCallback: string | null }>(`/api/office/config?repo=${encodeURIComponent(at.repo)}&p=${encodeURIComponent(at.p)}&theme=${dark ? 'dark' : 'light'}${mobile ? '&mobile' : ''}`)
+      .then(async ({ api: src, config, unreachableCallback }) => {
+        setNoSave(unreachableCallback)
         await loadApi(src)
         if (!live || !holder.current || !window.DocsAPI) return
         // OnlyOffice swaps this element for its frame: one React does not look after.
@@ -173,7 +176,15 @@ export function Office({ win, kind }: { win: WinState; kind?: NewKind }) {
     )
   return (
     <div ref={root} className="office">
-      <div ref={holder} className="office-frame" />
+      <div ref={holder} className={`office-frame ${noSave ? 'has-note' : ''}`} />
+      {noSave && (
+        <div className="office-note">
+          Changes cannot be saved from {noSave}: OnlyOffice saves by calling back to this site, and it cannot reach this computer. Set OFFICE_CALLBACK_ORIGIN to an address it reaches, or edit on the deployed site.
+          <button onClick={() => setNoSave(null)} aria-label="Hide">
+            ×
+          </button>
+        </div>
+      )}
       {slow && !loaded && !error && (
         <div className="office-check">
           {!check ? (
