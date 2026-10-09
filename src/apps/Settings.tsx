@@ -592,7 +592,10 @@ function CalendarSettings() {
   const signature = `${account.google?.email ?? ''}|${account.caldav.map((c) => c.id).join(',')}`
   useEffect(() => {
     if (!connected) return setCalendars(null)
-    api<(CalendarInfo & { source?: string })[]>('/api/calendar/calendars').then(setCalendars, (e: Error) => setError(e.message))
+    api<{ calendars: (CalendarInfo & { source?: string })[]; errors: string[] }>('/api/calendar/calendars').then(
+      (r) => (setCalendars(r.calendars), setError(r.errors.join(' · ') || null)),
+      (e: Error) => setError(e.message),
+    )
   }, [connected, signature])
   if (account.status !== 'user') return <SignInFirst what="connect a calendar" />
   return (

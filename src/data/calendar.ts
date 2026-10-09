@@ -7,7 +7,10 @@ import { api } from '../os/account'
 export type CalendarEvent = { id: string; calendar: string; color: string; title: string; start: string; end: string; allDay: boolean; location?: string; url?: string; meet?: string }
 
 const CACHE_MS = 2 * 60_000
-const cache = new Map<string, { at: number; value: Promise<CalendarEvent[]> }>()
+/** Events, and per-source problems (an expired Google link, a refused app password) to show beside them. */
+export type CalendarEvents = { events: CalendarEvent[]; errors: string[] }
+
+const cache = new Map<string, { at: number; value: Promise<CalendarEvents> }>()
 
 /** Local midnight of `d`, `plus` days later. */
 export const startOfDay = (d: Date, plus = 0) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + plus)
@@ -16,13 +19,13 @@ export const startOfDay = (d: Date, plus = 0) => new Date(d.getFullYear(), d.get
 export const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
 /** Events from `from` up to `to`, from the given calendars (default: those shown in Google Calendar). */
-export function fetchEvents(from: Date, to: Date, calendars: string[] | null = null, fresh = false): Promise<CalendarEvent[]> {
+export function fetchEvents(from: Date, to: Date, calendars: string[] | null = null, fresh = false): Promise<CalendarEvents> {
   const params = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() })
   if (calendars) params.set('calendars', calendars.join(','))
   const key = params.toString()
   const hit = cache.get(key)
   if (!fresh && hit && Date.now() - hit.at < CACHE_MS) return hit.value
-  const value = api<CalendarEvent[]>(`/api/calendar/events?${key}`)
+  const value = api<CalendarEvents>(`/api/calendar/events?${key}`)
   cache.set(key, { at: Date.now(), value })
   value.catch(() => cache.delete(key))
   return value

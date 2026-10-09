@@ -61,7 +61,7 @@ function useMonthEvents(view: Date) {
     setError(null)
     // The grid's weeks can start in the month before; one range covers the month and its edges.
     fetchEvents(startOfDay(view, -7), startOfDay(new Date(view.getFullYear(), view.getMonth() + 1, 1), 7)).then(
-      (e) => live && setEvents(e),
+      (r) => live && (setEvents(r.events), setError(r.errors.join(' · ') || null)),
       (e: Error) => live && (setEvents([]), setError(e.message)),
     )
     return () => {

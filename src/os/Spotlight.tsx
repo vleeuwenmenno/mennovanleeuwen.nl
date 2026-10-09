@@ -50,6 +50,8 @@ type Result = {
   complete?: string
   /** A web page this result can be pinned to the dock as (repositories) */
   link?: { label: string; url: string }
+  /** Remembered results: drops it from what Spotlight remembers (right-click, or Shift+Delete) */
+  forget?: () => void
 }
 
 const Glyph = ({ children, color = 'var(--panel-2)' }: { children: ReactNode; color?: string }) => (
@@ -716,7 +718,7 @@ export function Spotlight() {
     // What you opened from Spotlight before, most used and recent first; right-click forgets one.
     const recentRow = (h: Hit): Result => {
       const r = codeRow(h, openUrl, copy)
-      return { ...r, id: `recent-${hitKey(h)}`, group: 'Recent', alt: r.alt ?? { label: 'Forget', run: () => forgetHit(h) } }
+      return { ...r, id: `recent-${hitKey(h)}`, group: 'Recent', forget: () => forgetHit(h) }
     }
     const recentRanked = recentHits.slice().sort((a, b) => weight(b) - weight(a))
 
@@ -875,6 +877,7 @@ export function Spotlight() {
           else if (e.key === 'Enter' && e.shiftKey && currentPin) togglePin(current)
           else if (e.key === 'Enter') execute(current, e.ctrlKey || e.metaKey)
           else if (e.key === 'Tab' && current?.complete && !e.shiftKey) setQ(current.complete)
+          else if (e.key === 'Delete' && e.shiftKey && current?.forget) current.forget()
           else return
           e.preventDefault()
         }}
@@ -916,6 +919,7 @@ export function Spotlight() {
                         { label: r.enterLabel ?? 'Open', onSelect: () => execute(r, false) },
                         ...(r.alt ? [{ label: r.alt.label, onSelect: () => execute(r, true) }] : []),
                         ...(pin ? [{ separator: true as const }, { label: pin.pinned ? 'Remove from dock' : 'Pin to dock', onSelect: () => togglePin(r) }] : []),
+                        ...(r.forget ? [{ separator: true as const }, { label: 'Forget', shortcut: 'Shift Del', onSelect: r.forget }] : []),
                       ])
                     }}
                   >
@@ -949,6 +953,12 @@ export function Spotlight() {
             <span>
               <kbd>ctrl</kbd>
               <kbd>↵</kbd> {current.alt.label.toLowerCase()}
+            </span>
+          )}
+          {current?.forget && (
+            <span>
+              <kbd>shift</kbd>
+              <kbd>del</kbd> forget
             </span>
           )}
           {currentPin && (

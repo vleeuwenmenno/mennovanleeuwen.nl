@@ -217,8 +217,9 @@ async function issueByNumber(src: Source, repo: string, n: number): Promise<Issu
 
 /** Issue and pull request searches, cached a couple of minutes per query (the search API is the
  * scarce one). */
-function searchIssues(src: Source, text: string, repo?: string): Promise<IssueHit[]> {
-  return cached(`${src.login}|${src.id}|issues|${repo ?? ''}|${text.toLowerCase()}`, ISSUE_SEARCH_TTL, () => searchIssuesLive(src, text, repo))
+function searchIssues(user: User, src: Source, text: string, repo?: string): Promise<IssueHit[]> {
+  // Keyed by user first, so clearSearchCache (on linking or unlinking an instance) clears these too.
+  return cached(`${user.id}|${src.id}|issues|${repo ?? ''}|${text.toLowerCase()}`, ISSUE_SEARCH_TTL, () => searchIssuesLive(src, text, repo))
 }
 
 async function searchIssuesLive(src: Source, text: string, repo?: string): Promise<IssueHit[]> {
@@ -251,7 +252,7 @@ function recentIssues(user: User, src: Source, repo: string): Promise<IssueHit[]
 async function issuesInRepos(user: User, targets: { src: Source; repo: RepoHit }[], text: string, errors: string[]): Promise<IssueHit[]> {
   const q = text.toLowerCase()
   const [searched, recent] = await Promise.all([
-    each(targets, ({ src, repo }) => searchIssues(src, text, repo.fullName), errors),
+    each(targets, ({ src, repo }) => searchIssues(user, src, text, repo.fullName), errors),
     text ? each(targets, ({ src, repo }) => recentIssues(user, src, repo.fullName).then((l) => l.filter((i) => i.title.toLowerCase().includes(q))), errors) : Promise.resolve([] as IssueHit[]),
   ])
   const seen = new Set<string>()
@@ -344,7 +345,7 @@ export async function search(user: User, raw: string): Promise<SearchResponse> {
     // Short, name-like text also searches issues and pull requests; a sentence ("where to download
     // more RAM?") is a web search, and #text searches issues on purpose.
     const sentence = q.split(/\s+/).length > 2 || /[?!]$/.test(q)
-    const issues = q.length >= 3 && !sentence ? await each(all, (src) => searchIssues(src, query.text), errors) : []
+    const issues = q.length >= 3 && !sentence ? await each(all, (src) => searchIssues(user, src, query.text), errors) : []
     hits = [...repos, ...issues.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 8)]
   } else if (query.mode === 'number') {
     const targets = query.repo ? await resolveRepo(user, all, query.repo, errors) : await recentRepos(user, all, 8, errors)
@@ -356,7 +357,7 @@ export async function search(user: User, raw: string): Promise<SearchResponse> {
       hits = await issuesInRepos(user, await resolveRepo(user, all, query.repo, errors), query.text, errors)
     } else {
       // Everywhere: the search APIs, plus half-typed matches in the repos pushed to most recently.
-      const [found, recent] = await Promise.all([each(all, (src) => searchIssues(src, query.text), errors), query.text ? recentRepos(user, all, 4, errors).then((t) => issuesInRepos(user, t, query.text, errors)) : []])
+      const [found, recent] = await Promise.all([each(all, (src) => searchIssues(user, src, query.text), errors), query.text ? recentRepos(user, all, 4, errors).then((t) => issuesInRepos(user, t, query.text, errors)) : []])
       const seen = new Set<string>()
       hits = [...found, ...recent].filter((i) => {
         const k = `${i.source}|${(i as IssueHit).repo.toLowerCase()}|${(i as IssueHit).number}`

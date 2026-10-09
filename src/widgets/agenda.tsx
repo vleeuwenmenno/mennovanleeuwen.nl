@@ -21,7 +21,7 @@ type CalendarInfo = { id: string; name: string; color: string; primary: boolean;
 let calendarList: { signature: string; value: Promise<CalendarInfo[]> } | null = null
 function calendars(signature: string) {
   if (calendarList?.signature !== signature) {
-    const value = api<CalendarInfo[]>('/api/calendar/calendars')
+    const value = api<{ calendars: CalendarInfo[] }>('/api/calendar/calendars').then((r) => r.calendars)
     calendarList = { signature, value }
     value.catch(() => (calendarList = null))
   }
@@ -38,7 +38,8 @@ function useEvents(config: Config, enabled: boolean) {
     let live = true
     const today = startOfDay(new Date())
     fetchEvents(today, startOfDay(today, config.days), config.calendars, tick > 0).then(
-      (e) => live && (setEvents(e), setError(null)),
+      // Events from what works, and what didn't (named after the account) beside them.
+      (r) => live && (setEvents(r.events), setError(r.errors.join(' · ') || null)),
       (e: Error) => live && setError(e.message),
     )
     return () => {
