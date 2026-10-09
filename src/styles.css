@@ -4966,6 +4966,9 @@ kbd {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;
 }
+.sp-main.no-preview {
+  grid-template-columns: minmax(0, 1fr);
+}
 .sp-results {
   overflow: auto;
   padding: 6px;

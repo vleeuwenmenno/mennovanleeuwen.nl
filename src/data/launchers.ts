@@ -41,7 +41,7 @@ export const moveLauncher = (id: string, by: number) =>
     return next
   })
 
-export const launch = (l: Launcher) => openLink(l.url)
+export const launch = (l: Launcher) => openLink(l.url, { title: l.label })
 
 /** The site's own favicon, straight from it (no third-party favicon service sees the URL). */
 export const faviconOf = (url: string) => {

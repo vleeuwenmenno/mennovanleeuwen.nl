@@ -16,7 +16,7 @@ import { reboot, shutdown } from '../os/powerState'
 import { openLink } from '../data/links'
 import { asWebAddress } from '../os/linkPreview'
 import { signedIn } from '../os/account'
-import { golinksSite, golinksTemplate, golinksUrl, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
+import { followGoLink, golinksSite, golinksTemplate, golinksUrl, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { age, fileKind, HOME, lookup, prettyPath, resolvePath, walk, type DirNode, type Node } from './vfs'
 
 // Output markup understood by the terminal renderer:
@@ -562,7 +562,7 @@ export const commands: Record<string, Command> = {
       }
       if (!template) throw new CmdError('go: no golinks account set. Run `go` to see how.')
       const url = golinksUrl(template, alias)
-      openLink(url)
+      followGoLink(template, alias)
       return `Opening ${link(url, `${golinksSite(template)}/r/${encodeURIComponent(alias)}`)}`
     },
   },

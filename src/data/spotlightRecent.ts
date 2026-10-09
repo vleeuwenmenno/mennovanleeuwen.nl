@@ -25,6 +25,8 @@ export function rememberHit(hit: Hit) {
   })
 }
 
+export const clearHits = () => store.set([])
+
 export const forgetHit = (hit: Hit) => store.set((all) => all.filter((r) => hitKey(r.hit) !== hitKey(hit)))
 
 /** How much a remembered hit counts: how often, fading over a couple of weeks. */
