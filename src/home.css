@@ -1463,3 +1463,8 @@ button.cal-day.is-picked:not(.is-today) {
 .sp-back:hover {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
+.ag-connect {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

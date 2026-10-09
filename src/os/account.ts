@@ -5,6 +5,7 @@ import { useSyncExternalStore } from 'react'
 // on a static host).
 
 export type ForgeInfo = { id: number; label: string; baseUrl: string; username: string }
+export type CaldavInfo = { id: number; label: string; url: string; username: string }
 export type AccountUser = { login: string; name: string | null; avatar: string | null }
 export type Account = {
   status: 'loading' | 'off' | 'anon' | 'user'
@@ -13,11 +14,13 @@ export type Account = {
   /** Whether this server can link Google Calendar, and the linked account if any */
   googleEnabled: boolean
   google: { email: string } | null
+  /** CalDAV accounts (Fastmail, Nextcloud...) for calendars */
+  caldav: CaldavInfo[]
   /** Third-party services with a key on the server: updown.io's saved in Settings, set on the server, or none */
   integrations: { updown: 'settings' | 'server' | null }
 }
 
-let account: Account = { status: 'loading', user: null, forges: [], googleEnabled: false, google: null, integrations: { updown: null } }
+let account: Account = { status: 'loading', user: null, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null } }
 const listeners = new Set<() => void>()
 
 const OWNER_HINT = 'mvlos.owner'
@@ -74,10 +77,10 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
 
 export async function loadAccount() {
   try {
-    const me = await api<{ authEnabled: boolean; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string } | null; integrations?: { updown: 'settings' | 'server' | null } }>('/api/me')
-    set({ status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, integrations: { updown: me.integrations?.updown ?? null } })
+    const me = await api<{ authEnabled: boolean; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null } }>('/api/me')
+    set({ status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null } })
   } catch {
-    set({ status: 'off', user: null, forges: [], googleEnabled: false, google: null, integrations: { updown: null } })
+    set({ status: 'off', user: null, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null } })
   }
 }
 
@@ -85,7 +88,7 @@ export const signIn = () => location.assign('/api/auth/github/login')
 
 export async function signOut() {
   await api('/api/auth/logout', { method: 'POST' }).catch(() => {})
-  set({ status: 'anon', user: null, forges: [], googleEnabled: account.googleEnabled, google: null, integrations: { updown: null } })
+  set({ status: 'anon', user: null, forges: [], googleEnabled: account.googleEnabled, google: null, caldav: [], integrations: { updown: null } })
 }
 
 /** updown.io's read-only API key, for the Status widget: checked by the server, then stored encrypted. */
@@ -97,6 +100,20 @@ export async function setUpdownKey(key: string) {
 export async function removeUpdownKey() {
   await api('/api/integrations/updown', { method: 'DELETE' })
   await loadAccount() // a key set on the server, if there is one, takes over again
+}
+
+/** Whether any calendar is connected (Google or CalDAV), for the Agenda widget and the clock. */
+export const hasCalendar = (a: Account) => a.status === 'user' && (!!a.google || a.caldav.length > 0)
+
+/** A CalDAV account: the server finds its calendars first, then stores the app password encrypted. */
+export async function addCaldav(input: { url: string; username: string; password: string; label?: string }) {
+  const info = await api<CaldavInfo>('/api/caldav', { method: 'POST', json: input })
+  set({ ...account, caldav: [...account.caldav, info] })
+}
+
+export async function removeCaldav(id: number) {
+  await api(`/api/caldav/${id}`, { method: 'DELETE' })
+  set({ ...account, caldav: account.caldav.filter((c) => c.id !== id) })
 }
 
 /** Google Calendar, attached to the signed-in owner: off to Google's consent page and back. */

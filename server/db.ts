@@ -7,8 +7,9 @@ import { DatabaseSync } from 'node:sqlite'
 // instances, a linked Google Calendar, synced desktop state (notes, window layout, launchers) and
 // the Minecraft server's history. One SQLite file in DATA_DIR (default ./data), opened on first use.
 //
-// Access tokens (GitHub, Gitea, Google, updown.io) are encrypted at rest with AES-256-GCM. The key comes from
-// SESSION_SECRET, or a random one generated once into DATA_DIR/secret.key.
+// Access tokens and passwords (GitHub, Gitea, Google, CalDAV, updown.io) are encrypted at rest
+// with AES-256-GCM. The key comes from SESSION_SECRET, or a random one generated once into
+// DATA_DIR/secret.key.
 
 const DATA_DIR = resolve(process.env.DATA_DIR ?? 'data')
 
@@ -70,6 +71,15 @@ export function database(): DatabaseSync {
       secret TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       PRIMARY KEY (user_id, name)
+    );
+    CREATE TABLE IF NOT EXISTS caldav (
+      id INTEGER PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      label TEXT NOT NULL,
+      base_url TEXT NOT NULL,
+      username TEXT NOT NULL,
+      password TEXT NOT NULL,
+      created_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS google (
       user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
