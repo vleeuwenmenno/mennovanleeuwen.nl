@@ -144,6 +144,7 @@ async function call<T>(path: string, init: RequestInit & { json?: unknown } = {}
   const { json, ...rest } = init
   const res = await fetch(path, { ...rest, credentials: 'same-origin', headers: json !== undefined ? { 'Content-Type': 'application/json' } : undefined, body: json !== undefined ? JSON.stringify(json) : rest.body })
   const body = await res.json().catch(() => null)
+  if (res.status === 423) throw new ApiError(423, 'That library is locked: open it in Files and give its password first')
   if (!res.ok) throw new ApiError(res.status, body?.error ?? `Request failed (${res.status})`)
   return body as T
 }
@@ -302,3 +303,96 @@ export function openSeafile(wm: Opener, path: string, opts: { dir?: boolean; how
   if (how === 'viewer' || ['image', 'video', 'audio', 'pdf'].includes(kind)) return Promise.resolve(wm.openNew('viewer', { path }))
   return download(path)
 }
+
+// --- changing things -----------------------------------------------------------------------------
+
+const parentPath = (path: string) => {
+  const at = parseSf(path)!
+  return sfPath(at.repo, at.p.split('/').slice(0, -1).join('/') || '/')
+}
+
+/** Renames a file or folder; answers its new path. */
+export async function renameItem(path: string, name: string, dir: boolean): Promise<string> {
+  const at = parseSf(path)!
+  const { path: made } = await call<{ path: string }>('/api/seafile/rename', { method: 'POST', json: { repo: at.repo, path: at.p, dir, name } })
+  refreshDirs(parentPath(path))
+  if (dir) refreshDirs(path)
+  return sfPath(at.repo, made)
+}
+
+/** A new empty file (Office files get Seafile's blank template); answers its path. */
+export async function createFile(path: string): Promise<string> {
+  const at = parseSf(path)!
+  const { path: made } = await call<{ path: string }>('/api/seafile/file', { method: 'POST', json: { repo: at.repo, path: at.p } })
+  refreshDirs(parentPath(path))
+  return sfPath(at.repo, made)
+}
+
+/** Groups paths by the folder they are in: Seafile's batch calls work per folder. */
+function byFolder(paths: string[]) {
+  const groups = new Map<string, { repo: string; parent: string; names: string[] }>()
+  for (const path of paths) {
+    const at = parseSf(path)
+    if (!at || at.p === '/') continue
+    const parent = at.p.split('/').slice(0, -1).join('/') || '/'
+    const key = `${at.repo}:${parent}`
+    if (!groups.has(key)) groups.set(key, { repo: at.repo, parent, names: [] })
+    groups.get(key)!.names.push(at.p.split('/').pop()!)
+  }
+  return [...groups.values()]
+}
+
+/** Deletes files and folders (into the library's trash on Seafile, where they can be restored). */
+export async function deleteItems(paths: string[]) {
+  for (const g of byFolder(paths)) {
+    await call('/api/seafile/delete', { method: 'POST', json: g })
+    refreshDirs(sfPath(g.repo, g.parent))
+  }
+  for (const p of paths) refreshDirs(p)
+}
+
+/** Moves or copies into a folder; taken names get " (1)". */
+export async function transferItems(op: 'move' | 'copy', paths: string[], into: string) {
+  const to = parseSf(into)!
+  for (const g of byFolder(paths)) {
+    await call('/api/seafile/transfer', { method: 'POST', json: { op, from: { repo: g.repo, parent: g.parent }, names: g.names, to: { repo: to.repo, parent: to.p } } })
+    refreshDirs(sfPath(g.repo, g.parent))
+  }
+  refreshDirs(into)
+  if (op === 'move') for (const p of paths) refreshDirs(p)
+}
+
+/** Move within a library, copy into another one (as file managers do); Ctrl copies, Shift moves. */
+export function dropOp(paths: string[], into: string, keys: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }): 'move' | 'copy' {
+  if (keys.ctrlKey || keys.metaKey) return 'copy'
+  if (keys.shiftKey) return 'move'
+  const repo = parseSf(into)?.repo
+  return paths.every((p) => parseSf(p)?.repo === repo) ? 'move' : 'copy'
+}
+
+/** Whether `into` is one of `paths` or inside one (a folder cannot go into itself). */
+export const isInside = (paths: string[], into: string) => paths.some((p) => into === p || into.startsWith(p + '/'))
+
+// Cut, copy and paste, shared by every Files window and the desktop.
+let clipboard: { op: 'move' | 'copy'; paths: string[] } | null = null
+const clipListeners = new Set<() => void>()
+export function setClipboard(next: typeof clipboard) {
+  clipboard = next
+  clipListeners.forEach((l) => l())
+}
+export const getClipboard = () => clipboard
+export const useClipboard = () =>
+  useSyncExternalStore(
+    (l) => {
+      clipListeners.add(l)
+      return () => clipListeners.delete(l)
+    },
+    () => clipboard,
+  )
+
+// Files dragged between Files windows and the desktop. The paths ride along in the drag's data;
+// they are kept here too, because a dragover cannot read the data, only its type.
+export const DRAG_FILES = 'application/x-mvlos-seafile'
+let dragged: string[] | null = null
+export const setDragged = (paths: string[] | null) => void (dragged = paths)
+export const getDragged = () => dragged

@@ -5,7 +5,7 @@ import { createNote } from '../data/notes'
 import { addWidgetItems } from '../widgets/registry'
 import { projects } from '../data/profile'
 import { HOME, kindOfName, type FileKind } from '../terminal/vfs'
-import { download, openSeafile, refreshDirs, useDir, useSeafileHome } from '../data/seafile'
+import { deleteItems, download, DRAG_FILES, dropOp, getDragged, isInside, openSeafile, refreshDirs, renameItem, transferItems, useDir, useSeafileHome } from '../data/seafile'
 import { notify } from './notify'
 import { closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
 import { resetLayout, restoreIcons, trashIcons, updateDesktop, useDesktop, type IconPos } from './desktopStore'
@@ -221,9 +221,15 @@ export function Desktop() {
   const openInTerminal = (i: DesktopIcon) => wm.open('terminal', { run: i.terminal, t: String(Date.now()) })
   const selectedIcons = () => visible.filter((i) => selected.has(i.id))
 
+  const sfPathOf = (id: string) => visible.find((i) => i.id === id)?.path
+  const failed = (title: string) => (e: Error) => notify({ title, body: e.message })
+
   function moveToTrash(ids: string[]) {
-    if (ids.some((id) => id.startsWith('sf:'))) {
-      notify({ title: 'Not yet', body: 'Deleting from Seafile comes with the next part of the Files work.' })
+    // Seafile's own files and folders are deleted there (into the library's trash), after asking.
+    const sfPaths = ids.filter((id) => id.startsWith('sf:')).map(sfPathOf).filter((p): p is string => !!p)
+    if (sfPaths.length) {
+      const what = sfPaths.length === 1 ? sfPaths[0].split('/').pop() : `${sfPaths.length} items`
+      if (confirm(`Delete ${what} from Seafile? It goes to the library's trash there, where it can be restored.`)) deleteItems(sfPaths).catch(failed('Could not delete it'))
       ids = ids.filter((id) => !id.startsWith('sf:'))
     }
     // Launchers are just removed; the trash is for the built-in icons.
@@ -288,7 +294,24 @@ export function Desktop() {
     }
   }
 
-  function onPointerUp() {
+  /**
+   * Seafile icons let go over a Seafile folder (in a Files window, its sidebar, or a folder icon
+   * here): they move or copy into it. Answers whether they did.
+   */
+  function dropOnFolder(d: { ids: string[] }, e: ReactPointerEvent): boolean {
+    const paths = d.ids.filter((id) => id.startsWith('sf:')).map(sfPathOf).filter((p): p is string => !!p)
+    if (!paths.length) return false
+    const target = document
+      .elementsFromPoint(e.clientX, e.clientY)
+      .map((el) => el.closest<HTMLElement>('[data-sf-drop]')?.dataset.sfDrop)
+      .find((p) => p && !paths.includes(p))
+    if (!target || isInside(paths, target) || (sfDesktop && target === sfDesktop)) return false
+    const op = dropOp(paths, target, e)
+    transferItems(op, paths, target).catch(failed(op === 'move' ? 'Could not move it' : 'Could not copy it'))
+    return true
+  }
+
+  function onPointerUp(e?: ReactPointerEvent) {
     const d = drag.current
     drag.current = null
     document.body.classList.remove('is-dragging')
@@ -298,6 +321,11 @@ export function Desktop() {
       return
     }
     if (!d) return
+    if (d.moved && e && dropOnFolder(d, e)) {
+      offsetRef.current = { dx: 0, dy: 0 }
+      setOffset({ dx: 0, dy: 0 })
+      return
+    }
     if (!d.moved) {
       // A plain click on an already-selected icon narrows the selection to it; Ctrl-click toggles.
       if (d.additive && selected.has(d.clickedId) && d.ids.length > 1) setSelected(new Set([...selected].filter((s) => s !== d.clickedId)))
@@ -330,6 +358,42 @@ export function Desktop() {
     setSettle(from)
   }
 
+  // Files dragged from a Files window: onto the desktop (its Desktop folder, where they are let
+  // go) or onto a Seafile folder icon.
+  const [dropIcon, setDropIcon] = useState<string | null>(null)
+  const acceptFiles = (e: React.DragEvent, into: string | null | undefined) => {
+    const paths = getDragged()
+    if (!into || !paths || !e.dataTransfer.types.includes(DRAG_FILES) || isInside(paths, into)) return false
+    const op = dropOp(paths, into, e)
+    if (op === 'move' && paths.every((p) => p.split('/').slice(0, -1).join('/') === into)) return false
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = op
+    return true
+  }
+  function dropFiles(e: React.DragEvent, into: string) {
+    const paths = getDragged()
+    if (!paths || !acceptFiles(e, into)) return
+    setDropIcon(null)
+    const op = dropOp(paths, into, e)
+    const onDesktop = into === sfDesktop
+    const at = { x: e.clientX - CELL_W / 2, y: e.clientY - 30 }
+    transferItems(op, paths, into)
+      .then(() => {
+        if (!onDesktop) return
+        // They land where they were let go, side by side.
+        const taken = new Set(visible.map((i) => key(positions[i.id])))
+        const next: Record<string, IconPos> = {}
+        paths.forEach((p, k) => {
+          const cell = snap(at.x - k * CELL_W, at.y, taken)
+          taken.add(key(cell))
+          next[`sf:${p.split('/').pop()}`] = cell
+        })
+        updateDesktop((s) => ({ ...s, positions: { ...positions, ...s.positions, ...next } }))
+      })
+      .catch(failed(op === 'move' ? 'Could not move it' : 'Could not copy it'))
+  }
+
   // One frame drawn where they were dropped, then the offset eases to nothing (see .is-settling).
   useEffect(() => {
     if (!settle) return
@@ -344,7 +408,7 @@ export function Desktop() {
     const sel = selectedIcons()
     if (e.key === 'Enter' && sel.length) sel.forEach(open)
     else if ((e.key === 'Delete' || e.key === 'Backspace') && sel.length) moveToTrash(sel.map((i) => i.id))
-    else if (e.key === 'F2' && sel.length === 1 && !sel[0].sf) setRenaming(sel[0].id)
+    else if (e.key === 'F2' && sel.length === 1) setRenaming(sel[0].id)
     else if (e.key === 'Escape') setSelected(new Set())
     else if (e.key.toLowerCase() === 'a' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault()
@@ -376,6 +440,9 @@ export function Desktop() {
               { label: 'Download', onSelect: () => void download(icon.path).catch((e: Error) => notify({ title: 'Could not download it', body: e.message })) },
             ]),
         { label: 'Show in Files', onSelect: () => wm.openNew('files', { path: folder, select: icon.path }) },
+        { separator: true },
+        { label: 'Rename', shortcut: 'F2', onSelect: () => setRenaming(icon.id) },
+        { label: 'Delete', shortcut: 'Del', danger: true, onSelect: () => moveToTrash([icon.id]) },
       ]
     }
     if (icon.kind === 'link')
@@ -436,8 +503,11 @@ export function Desktop() {
       onPointerDown={onSurfacePointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      onPointerCancel={() => onPointerUp()}
       onKeyDown={onKeyDown}
+      onDragEnter={(e) => acceptFiles(e, sfDesktop)}
+      onDragOver={(e) => acceptFiles(e, sfDesktop)}
+      onDrop={(e) => sfDesktop && dropFiles(e, sfDesktop)}
       onContextMenu={(e) => {
         if (e.target !== surface.current) return
         setSelected(new Set())
@@ -462,7 +532,12 @@ export function Desktop() {
         return (
           <div
             key={icon.id}
-            className={`desk-icon ${isSel ? 'is-selected' : ''} ${dragging ? 'is-moving' : ''} ${pile && k > 0 ? 'is-piled' : ''} ${landing ? 'is-settling' : ''}`}
+            className={`desk-icon ${isSel ? 'is-selected' : ''} ${dragging ? 'is-moving' : ''} ${pile && k > 0 ? 'is-piled' : ''} ${landing ? 'is-settling' : ''} ${dropIcon === icon.id ? 'is-drop' : ''}`}
+            data-sf-drop={icon.sf?.dir ? icon.path : undefined}
+            onDragEnter={icon.sf?.dir ? (e) => acceptFiles(e, icon.path) && setDropIcon(icon.id) : undefined}
+            onDragOver={icon.sf?.dir ? (e) => acceptFiles(e, icon.path) && dropIcon !== icon.id && setDropIcon(icon.id) : undefined}
+            onDragLeave={icon.sf?.dir ? () => dropIcon === icon.id && setDropIcon(null) : undefined}
+            onDrop={icon.sf?.dir ? (e) => dropFiles(e, icon.path) : undefined}
             style={{ left: p.x, top: p.y, transform, zIndex: pile ? 3 + pile.length - k : undefined }}
             tabIndex={0}
             role="button"
@@ -498,7 +573,16 @@ export function Desktop() {
                 }}
                 onBlur={(e) => {
                   const v = e.currentTarget.value.trim().slice(0, 40)
-                  if (v && v !== label(icon) && icon.kind === 'link') updateLauncher(launcherId(icon), { label: v })
+                  if (v && v !== label(icon) && icon.sf) {
+                    // A Seafile file is renamed there; its place on the desktop goes with it.
+                    const sf = icon.sf
+                    renameItem(icon.path, v, sf.dir)
+                      .then((made) => {
+                        const id = `sf:${made.split('/').pop()}`
+                        updateDesktop((s) => ({ ...s, positions: { ...s.positions, [id]: s.positions[icon.id] ?? positions[icon.id] } }))
+                      })
+                      .catch(failed('Could not rename it'))
+                  } else if (v && v !== label(icon) && icon.kind === 'link') updateLauncher(launcherId(icon), { label: v })
                   else if (v && v !== label(icon)) updateDesktop((s) => ({ ...s, names: { ...s.names, [icon.id]: v } }))
                   setRenaming(null)
                 }}

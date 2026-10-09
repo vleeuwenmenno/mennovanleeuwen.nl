@@ -925,6 +925,10 @@ body.is-resizing * {
 }
 /* The sway while dragged (useSwing in src/os/swing.ts sets --swing on the desktop), hanging from
    the top like the notes. Only the selected icons are the ones being dragged. */
+.desk-icon.is-drop {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  outline: 1px solid var(--accent);
+}
 .desk-icon.is-selected {
   rotate: var(--swing, 0deg);
   transform-origin: 50% 0;
@@ -3623,6 +3627,35 @@ body.is-resizing * {
   padding: 40px 20px;
   text-align: center;
   color: var(--muted);
+}
+/* Dragging files: where they would land, and files cut for pasting. */
+.fm-item.is-drop,
+.fm-side-item.is-drop {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.fm-main.is-drop {
+  outline: 2px dashed color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: -6px;
+}
+.fm-item.is-cut {
+  opacity: 0.5;
+}
+.fm-rename {
+  width: 100%;
+  min-width: 0;
+  padding: 1px 4px;
+  border: 1px solid var(--accent);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  text-align: center;
+  outline: 0;
+}
+.fm-view-list .fm-rename,
+.fm-view-compact .fm-rename {
+  text-align: left;
 }
 .fm-sf-state {
   display: grid;

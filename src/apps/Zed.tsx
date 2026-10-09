@@ -104,7 +104,7 @@ export function Zed({ win }: { win: WinState }) {
     setBuffers((bs) => ({ ...bs, [path]: { text: '', saved: '', loading: true } }))
     readText(path)
       .then((t) => setBuffers((now) => ({ ...now, [path]: { text: t, saved: t } })))
-      .catch((e: Error) => setBuffers((now) => ({ ...now, [path]: { text: '', saved: '', error: e.message === 'Locked' ? 'The library is locked: unlock it in Files, then open the file again.' : `Could not open it: ${e.message}` } })))
+      .catch((e: Error) => setBuffers((now) => ({ ...now, [path]: { text: '', saved: '', error: `Could not open it: ${e.message}` } })))
   }
 
   const openSearch = () => {

@@ -290,3 +290,88 @@ export async function mkdir(user: User, body: { repo?: string; path?: string }):
   const made = typeof res === 'object' && res.obj_name ? `${(res.parent_dir ?? '/').replace(/\/$/, '')}/${res.obj_name}` : p
   return { path: made }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Changing things
+
+const fileName = (v: unknown) => {
+  const name = String(v ?? '').trim()
+  if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\0') || name.length > 255) throw new HttpError(400, 'That name will not do')
+  return name
+}
+const names = (v: unknown) => {
+  if (!Array.isArray(v) || !v.length || v.length > 1000) throw new HttpError(400, 'Nothing to do')
+  return v.map(fileName)
+}
+const form = (fields: Record<string, string>) => ({ method: 'POST', body: new URLSearchParams(fields) })
+const jsonBody = (method: string, body: unknown) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+const parentOf = (p: string) => p.split('/').slice(0, -1).join('/') || '/'
+
+/** Renames a file or folder in place. Answers its new path. */
+export async function rename(user: User, body: { repo?: string; path?: string; dir?: boolean; name?: string }): Promise<{ path: string }> {
+  const id = repoId(body.repo)
+  const p = seafPath(body.path)
+  if (p === '/') throw new HttpError(400, 'Bad path')
+  const name = fileName(body.name)
+  await guard(user, id)
+  const res = await seafile<{ obj_name?: string }>(user, `/api/v2.1/repos/${id}/${body.dir ? 'dir' : 'file'}/?p=${encodeURIComponent(p)}`, form({ operation: 'rename', newname: name }))
+  return { path: `${parentOf(p) === '/' ? '' : parentOf(p)}/${res.obj_name ?? name}` }
+}
+
+/** An empty file (Office files get Seafile's blank template). Answers its path, renamed if the name was taken. */
+export async function createFile(user: User, body: { repo?: string; path?: string }): Promise<{ path: string }> {
+  const id = repoId(body.repo)
+  const p = seafPath(body.path)
+  fileName(p.split('/').pop())
+  await guard(user, id)
+  const res = await seafile<{ obj_name?: string; parent_dir?: string }>(user, `/api/v2.1/repos/${id}/file/?p=${encodeURIComponent(p)}`, form({ operation: 'create' }))
+  const dir = res.parent_dir ?? parentOf(p)
+  return { path: res.obj_name ? `${dir === '/' ? '' : dir.replace(/\/$/, '')}/${res.obj_name}` : p }
+}
+
+/** Deletes files and folders in one folder (into the library's own trash on Seafile). */
+export async function removeItems(user: User, body: { repo?: string; parent?: string; names?: string[] }) {
+  const id = repoId(body.repo)
+  const parent = seafPath(body.parent)
+  const dirents = names(body.names)
+  await guard(user, id)
+  await seafile(user, '/api/v2.1/repos/batch-delete-item/', jsonBody('DELETE', { repo_id: id, parent_dir: parent, dirents }))
+}
+
+/**
+ * Moves or copies files and folders from one folder to another, in the same library or another
+ * one. Names that are taken get " (1)" from Seafile. Between libraries Seafile works in the
+ * background: this waits for it (up to two minutes) so the caller can list both folders again.
+ */
+export async function transfer(user: User, body: { op?: string; from?: { repo?: string; parent?: string }; names?: string[]; to?: { repo?: string; parent?: string } }) {
+  const op = body.op === 'copy' ? 'copy' : body.op === 'move' ? 'move' : null
+  if (!op) throw new HttpError(400, 'Move or copy?')
+  const src = repoId(body.from?.repo)
+  const srcParent = seafPath(body.from?.parent)
+  const dst = repoId(body.to?.repo)
+  const dstParent = seafPath(body.to?.parent)
+  const dirents = names(body.names)
+  if (src === dst) {
+    if (op === 'move' && srcParent === dstParent) return
+    // A folder into itself, or into a folder inside it.
+    for (const n of dirents) {
+      const moved = `${srcParent === '/' ? '' : srcParent}/${n}`
+      if (dstParent === moved || dstParent.startsWith(moved + '/')) throw new HttpError(400, `${n} cannot go inside itself`)
+    }
+  }
+  await guard(user, src)
+  if (dst !== src) await guard(user, dst)
+  const payload = { src_repo_id: src, src_parent_dir: srcParent, src_dirents: dirents, dst_repo_id: dst, dst_parent_dir: dstParent }
+  if (src === dst) return void (await seafile(user, `/api/v2.1/repos/sync-batch-${op}-item/`, jsonBody('POST', payload)))
+  const { task_id } = await seafile<{ task_id?: string }>(user, `/api/v2.1/repos/async-batch-${op}-item/`, jsonBody('POST', payload))
+  if (!task_id) return
+  const until = Date.now() + 120_000
+  while (Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 700))
+    const p = await seafile<{ done?: boolean; failed?: boolean; failed_reason?: string; canceled?: boolean }>(user, `/api/v2.1/query-copy-move-progress/?task_id=${encodeURIComponent(task_id)}`)
+    if (p.failed) throw new HttpError(502, p.failed_reason || `Seafile could not ${op} that`)
+    if (p.canceled) throw new HttpError(409, `The ${op} was canceled`)
+    if (p.done) return
+  }
+  throw new HttpError(504, `Seafile is still busy with the ${op}; look again in a minute`)
+}

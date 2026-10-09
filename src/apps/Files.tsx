@@ -5,7 +5,7 @@ import { openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { openLink } from '../data/links'
 import { useWM, type AppId, type WinState } from '../os/wm'
 import { formatSize, HOME, KIND_LABEL, kindOfName, lookup, prettyPath, resolvePath, stat, walk, type FileKind, type Node } from '../terminal/vfs'
-import { download as sfDownload, getLibrary, openSeafile, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useUnlocks, type Library } from '../data/seafile'
+import { createFile, deleteItems, download as sfDownload, DRAG_FILES, dropOp, getClipboard, getDragged, getLibrary, isInside, openSeafile, renameItem, setClipboard, setDragged, transferItems, useClipboard, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useUnlocks, type Library } from '../data/seafile'
 import { useAccount } from '../os/account'
 import { addBookmark, useSidebar } from '../data/filesSidebar'
 import { FilesSidebar, type SideSection } from './FilesSidebar'
@@ -163,6 +163,10 @@ export function Files({ win }: { win: WinState }) {
   const [toast, setToast] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  const [renaming, setRenaming] = useState<string | null>(null)
+  /** The folder a drag would land in right now, highlighted */
+  const [dropOn, setDropOn] = useState<string | null>(null)
+  const clip = useClipboard()
   const main = useRef<HTMLDivElement>(null)
   const tiles = useRef(new Map<string, HTMLElement>())
 
@@ -315,21 +319,109 @@ export function Files({ win }: { win: WinState }) {
 
   const download = (item: Item) => sfDownload(item.path).catch((e: Error) => setToast(e.message))
 
+  // --- changing things in Seafile ------------------------------------------------------------
+
+  /** Whether the account may change things in that Seafile folder (its library's permission). */
+  const canWrite = (folder: string) => isSf(folder) && folder !== SF && getLibrary(parseSf(folder)!.repo)?.permission === 'rw'
+  const named = (paths: string[]) => (paths.length === 1 ? (paths[0].split('/').pop() ?? '') : `${paths.length} items`)
+  /** Runs a change, saying what it is doing and then what it did. */
+  const busy = (doing: string, done: string, work: Promise<unknown>) => {
+    setToast(doing)
+    return work.then(() => setToast(done)).catch((e: Error) => setToast(e.message))
+  }
+  /** Seafile files and folders among these (not libraries themselves). */
+  const sfOnly = (list: Item[]) => list.filter((i) => i.sf && !i.sf.library).map((i) => i.path)
+
   const newFolder = () => {
     if (!sfWritable) return
     const taken = new Set(items.map((i) => i.name))
     let name = 'New folder'
     for (let n = 2; taken.has(name); n++) name = `New folder ${n}`
     mkdir(`${path}/${name}`)
+      .then((made) => {
+        setSelected(new Set([made]))
+        setRenaming(made)
+      })
+      .catch((e: Error) => setToast(e.message))
+  }
+
+  const newTextFile = () => {
+    if (!sfWritable) return
+    createFile(`${path}/untitled.txt`)
+      .then((made) => {
+        setSelected(new Set([made]))
+        setRenaming(made)
+      })
+      .catch((e: Error) => setToast(e.message))
+  }
+
+  const commitRename = (item: Item, value: string) => {
+    setRenaming(null)
+    const name = value.trim()
+    if (!name || name === item.name) return
+    if (name.includes('/')) return setToast('A name cannot have a / in it')
+    renameItem(item.path, name, item.kind === 'folder')
       .then((made) => setSelected(new Set([made])))
       .catch((e: Error) => setToast(e.message))
   }
 
-  const readOnly = () => setToast(isSf(path) ? 'Changing things in Seafile is coming next. Opening and downloading works.' : 'Read-only file system. Only /tmp is writable here.')
+  const deleteSf = (paths: string[]) => {
+    if (!paths.length) return
+    if (!confirm(`Delete ${named(paths)}? ${paths.length === 1 ? 'It goes' : 'They go'} to the library's trash on Seafile, where you can restore ${paths.length === 1 ? 'it' : 'them'}.`)) return
+    setSelected(new Set())
+    busy(`Deleting ${named(paths)}…`, `Deleted ${named(paths)}`, deleteItems(paths))
+  }
+
+  const cut = (paths: string[]) => paths.length && (setClipboard({ op: 'move', paths }), setToast(`Cut ${named(paths)}: paste it somewhere with Ctrl+V`))
+  const copy = (paths: string[]) => paths.length && (setClipboard({ op: 'copy', paths }), setToast(`Copied ${named(paths)}`))
+  const paste = (into = path) => {
+    const c = getClipboard()
+    if (!c || !canWrite(into)) return
+    if (isInside(c.paths, into)) return setToast('A folder cannot go inside itself')
+    busy(`${c.op === 'move' ? 'Moving' : 'Copying'} ${named(c.paths)}…`, `${c.op === 'move' ? 'Moved' : 'Copied'} ${named(c.paths)}`, transferItems(c.op, c.paths, into)).then(() => c.op === 'move' && setClipboard(null))
+  }
+
+  // Dragging: files and folders go onto folders, a folder's empty space, the sidebar, other
+  // Files windows and the desktop. Within a library they move, into another one they copy.
+  const dragStart = (e: React.DragEvent, item: Item) => {
+    const list = selected.has(item.path) ? selectedItems() : [item]
+    const paths = sfOnly(list)
+    if (!paths.length || renaming) return e.preventDefault()
+    if (!selected.has(item.path)) setSelected(new Set([item.path]))
+    e.dataTransfer.setData(DRAG_FILES, JSON.stringify(paths))
+    e.dataTransfer.setData('text/plain', paths.map(pretty).join('\n'))
+    e.dataTransfer.effectAllowed = 'copyMove'
+    setDragged(paths)
+  }
+  const dragEnd = () => {
+    setDragged(null)
+    setDropOn(null)
+  }
+  /** Whether a drag can land in `into`; says so to the browser (and highlights it) when it can. */
+  const acceptDrop = (e: React.DragEvent, into: string) => {
+    const paths = getDragged()
+    if (!paths || !e.dataTransfer.types.includes(DRAG_FILES) || !canWrite(into) || isInside(paths, into)) return false
+    const op = dropOp(paths, into, e)
+    if (op === 'move' && paths.every((p) => parentOf(p) === into)) return false
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = op
+    if (dropOn !== into) setDropOn(into)
+    return true
+  }
+  const dropInto = (e: React.DragEvent, into: string) => {
+    const paths = getDragged()
+    if (!paths || !acceptDrop(e, into)) return
+    const op = dropOp(paths, into, e)
+    dragEnd()
+    busy(`${op === 'move' ? 'Moving' : 'Copying'} ${named(paths)}…`, `${op === 'move' ? 'Moved' : 'Copied'} ${named(paths)} to ${pretty(into)}`, transferItems(op, paths, into))
+  }
+
+  const readOnly = () => setToast(isSf(path) ? `${libraryName(parseSf(path)!.repo)} is read-only for you` : 'Read-only file system. Only /tmp is writable here.')
 
   const trashItems = (list: Item[]) => {
     if (!list.length) return
-    if (list.some((i) => i.sf)) return readOnly()
+    if (list.some((i) => i.sf)) return deleteSf(sfOnly(list))
     if (!list.every((i) => i.path.startsWith('/tmp/'))) return readOnly()
     const tmp = lookup('/tmp')
     if (tmp?.type === 'dir') for (const i of list) tmp.children.delete(i.name)
@@ -362,6 +454,16 @@ export function Files({ win }: { win: WinState }) {
     if (item.trash === 'joke') return [{ label: 'Restore', disabled: true }, { label: 'Properties', onSelect: () => setProps(item) }]
     if (many) {
       const sel = selectedItems()
+      const sfPaths = sfOnly(sel)
+      if (sfPaths.length)
+        return [
+          { label: `Open ${sel.length} items`, onSelect: () => sel.forEach((i) => openItem(i)) },
+          { separator: true },
+          { label: `Cut ${sfPaths.length} items`, shortcut: 'Ctrl X', onSelect: () => cut(sfPaths) },
+          { label: `Copy ${sfPaths.length} items`, shortcut: 'Ctrl C', onSelect: () => copy(sfPaths) },
+          { separator: true },
+          { label: `Delete ${sfPaths.length} items`, shortcut: 'Del', danger: true, disabled: !sfWritable, onSelect: () => deleteSf(sfPaths) },
+        ]
       return [
         { label: `Open ${sel.length} items`, onSelect: () => sel.forEach((i) => openItem(i)) },
         { separator: true },
@@ -388,9 +490,19 @@ export function Files({ win }: { win: WinState }) {
             ]),
         ...(library?.encrypted && unlocks[library.id] > Date.now() ? [{ label: 'Lock now', onSelect: () => void lock(library.id).catch((e: Error) => setToast(e.message)) }] : []),
         { separator: true },
+        ...(library
+          ? []
+          : [
+              { label: 'Cut', shortcut: 'Ctrl X', onSelect: () => cut([item.path]) },
+              { label: 'Copy', shortcut: 'Ctrl C', onSelect: () => copy([item.path]) },
+            ]),
+        ...(isDir && clip ? [{ label: `Paste into ${item.name}`, disabled: !canWrite(item.path), onSelect: () => paste(item.path) }] : []),
+        ...(library ? [] : [{ label: 'Rename', shortcut: 'F2', disabled: !canWrite(parentOf(item.path)), onSelect: () => setRenaming(item.path) }]),
+        { separator: true },
         { label: 'Copy path', onSelect: () => copyPath(item.path) },
         ...(isDir ? [{ label: 'Add to bookmarks', disabled: bookmarks.includes(item.path), onSelect: () => bookmark(item.path) }] : []),
         { label: 'Properties', shortcut: 'Alt ↵', onSelect: () => setProps(item) },
+        ...(library ? [] : [{ separator: true } as MenuItem, { label: 'Delete', shortcut: 'Del', danger: true, disabled: !canWrite(parentOf(item.path)), onSelect: () => deleteSf([item.path]) }]),
       ]
     }
     return [
@@ -423,6 +535,8 @@ export function Files({ win }: { win: WinState }) {
     if (isSf(path))
       return [
         { label: 'New folder', disabled: !sfWritable, onSelect: newFolder },
+        { label: 'New text file', disabled: !sfWritable, onSelect: newTextFile },
+        { label: clip ? `Paste ${named(clip.paths)}` : 'Paste', shortcut: 'Ctrl V', disabled: !clip || !sfWritable, onSelect: () => paste() },
         { label: 'Refresh', shortcut: 'F5', onSelect: () => refreshDirs(path) },
         { label: 'Add to bookmarks', disabled: path === SF || bookmarks.includes(path), onSelect: () => bookmark(path) },
         { separator: true },
@@ -497,7 +611,11 @@ export function Files({ win }: { win: WinState }) {
     if ((e.target as HTMLElement).closest('input')) return
     const ctrl = e.ctrlKey || e.metaKey
     const sel = selectedItems()
-    if (ctrl && ['1', '2', '3', '4'].includes(e.key)) setPrefs({ view: (['list', 'grid', 'compact', 'gallery'] as View[])[Number(e.key) - 1] })
+    if (ctrl && isSf(path) && e.key.toLowerCase() === 'c' && sfOnly(sel).length) copy(sfOnly(sel))
+    else if (ctrl && isSf(path) && e.key.toLowerCase() === 'x' && sfOnly(sel).length) cut(sfOnly(sel))
+    else if (ctrl && isSf(path) && e.key.toLowerCase() === 'v') paste()
+    else if (e.key === 'F2' && sel.length === 1 && sfOnly(sel).length && sfWritable) setRenaming(sel[0].path)
+    else if (ctrl && ['1', '2', '3', '4'].includes(e.key)) setPrefs({ view: (['list', 'grid', 'compact', 'gallery'] as View[])[Number(e.key) - 1] })
     else if (ctrl && e.key.toLowerCase() === 'h') setPrefs({ hidden: !prefs.hidden })
     else if (ctrl && e.key.toLowerCase() === 'a') setSelected(new Set(items.map((i) => i.path)))
     else if (ctrl && e.key.toLowerCase() === 'l') setEditingPath(true)
@@ -795,6 +913,8 @@ export function Files({ win }: { win: WinState }) {
             sections={sections}
             active={path}
             onOpen={openPlace}
+            acceptFiles={acceptDrop}
+            dropFiles={dropInto}
             footer={
               <button className={`fm-side-item ${path === TRASH ? 'is-active' : ''}`} onClick={() => navigate(TRASH)}>
                 <span className="fm-side-icon">🗑</span>
@@ -806,7 +926,12 @@ export function Files({ win }: { win: WinState }) {
         )}
 
         <div
-          className={`fm-main fm-view-${prefs.view}`}
+          className={`fm-main fm-view-${prefs.view} ${dropOn === path ? 'is-drop' : ''}`}
+          data-sf-drop={canWrite(path) ? path : undefined}
+          onDragEnter={(e) => acceptDrop(e, path)}
+          onDragOver={(e) => acceptDrop(e, path)}
+          onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as globalThis.Node | null) && setDropOn(null)}
+          onDrop={(e) => dropInto(e, path)}
           ref={main}
           tabIndex={0}
           onPointerDown={onMainPointerDown}
@@ -864,9 +989,21 @@ export function Files({ win }: { win: WinState }) {
                 if (el) tiles.current.set(item.path, el)
                 else tiles.current.delete(item.path)
               }}
-              className={`fm-item ${selected.has(item.path) ? 'is-selected' : ''} ${item.name.startsWith('.') ? 'is-hidden' : ''}`}
+              className={`fm-item ${selected.has(item.path) ? 'is-selected' : ''} ${item.name.startsWith('.') ? 'is-hidden' : ''} ${dropOn === item.path ? 'is-drop' : ''} ${clip?.op === 'move' && clip.paths.includes(item.path) ? 'is-cut' : ''}`}
+              draggable={!!item.sf && !item.sf.library && renaming !== item.path}
+              onDragStart={(e) => dragStart(e, item)}
+              onDragEnd={dragEnd}
+              {...(item.sf && item.kind === 'folder'
+                ? {
+                    'data-sf-drop': canWrite(item.path) ? item.path : undefined,
+                    onDragEnter: (e: React.DragEvent) => acceptDrop(e, item.path),
+                    onDragOver: (e: React.DragEvent) => acceptDrop(e, item.path),
+                    onDragLeave: (e: React.DragEvent) => !e.currentTarget.contains(e.relatedTarget as globalThis.Node | null) && dropOn === item.path && setDropOn(path),
+                    onDrop: (e: React.DragEvent) => dropInto(e, item.path),
+                  }
+                : {})}
               onClick={(e) => clickItem(e, item)}
-              onDoubleClick={() => openItem(item)}
+              onDoubleClick={() => renaming !== item.path && openItem(item)}
               onContextMenu={(e) => {
                 if (!selected.has(item.path)) setSelected(new Set([item.path]))
                 openContextMenu(e, itemMenu(item))
@@ -876,7 +1013,33 @@ export function Files({ win }: { win: WinState }) {
               <span className="fm-icon">
                 <Thumb item={item} size={iconSize} gallery={prefs.view === 'gallery'} emblem={emblemOf(item)} />
               </span>
-              <span className="fm-name">{prefs.view === 'grid' || prefs.view === 'gallery' ? middleEllipsis(item.name, captionChars) : item.name}</span>
+              {renaming === item.path ? (
+                <input
+                  className="fm-rename"
+                  defaultValue={item.name}
+                  autoFocus
+                  spellCheck={false}
+                  aria-label={`New name for ${item.name}`}
+                  // The name without its extension is selected, as in every file manager.
+                  onFocus={(e) => {
+                    const dot = item.kind === 'folder' ? -1 : item.name.lastIndexOf('.')
+                    e.currentTarget.setSelectionRange(0, dot > 0 ? dot : item.name.length)
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    e.stopPropagation()
+                    if (e.key === 'Enter') e.currentTarget.blur()
+                    if (e.key === 'Escape') {
+                      e.currentTarget.value = item.name
+                      e.currentTarget.blur()
+                    }
+                  }}
+                  onBlur={(e) => commitRename(item, e.currentTarget.value)}
+                />
+              ) : (
+                <span className="fm-name">{prefs.view === 'grid' || prefs.view === 'gallery' ? middleEllipsis(item.name, captionChars) : item.name}</span>
+              )}
               {prefs.view === 'list' && (
                 <>
                   <span className="fm-col">{item.kind === 'folder' ? (item.sf ? (item.sf.library ? formatSize(item.sf.library.size) : '') : `${item.size} items`) : formatSize(item.size)}</span>
@@ -898,7 +1061,7 @@ export function Files({ win }: { win: WinState }) {
       <footer className="fm-status">
         <span>
           {items.length} item{items.length === 1 ? '' : 's'}
-          {selected.size > 0 && ` · ${selected.size} selected${selectedSize ? ` (${formatSize(selectedSize)})` : ''}`}
+          {selectedItems().length > 0 && ` · ${selectedItems().length} selected${selectedSize ? ` (${formatSize(selectedSize)})` : ''}`}
           {writable && ' · writable'}
           {isSf(path) && path !== SF && sfDir.listing && (sfDir.listing.perm === 'rw' ? ` · ${libraryName(parseSf(path)!.repo)}` : ` · ${libraryName(parseSf(path)!.repo)} (read-only)`)}
         </span>
