@@ -299,14 +299,27 @@ export function WindowManagerProvider({
   // newer layout from another device replaces this one unless there is an unsaved change here;
   // the synced store has already checked that it really is newer than what this tab saved.
   const savedEdits = useRef(0)
+  const saveNow = useCallback(() => {
+    if (stateRef.current.edits === savedEdits.current) return
+    savedEdits.current = stateRef.current.edits
+    layoutStore().set(serialize(stateRef.current.windows))
+  }, [])
   useEffect(() => {
     if (state.edits === savedEdits.current) return
-    const t = setTimeout(() => {
-      savedEdits.current = stateRef.current.edits
-      layoutStore().set(serialize(stateRef.current.windows))
-    }, 400)
+    const t = setTimeout(saveNow, 400)
     return () => clearTimeout(t)
-  }, [state.edits])
+  }, [state.edits, saveNow])
+  // Closing the tab (or switching away) right after closing a window must not lose that: save
+  // straight away. Capturing, so it runs before the synced stores send their last saves.
+  useEffect(() => {
+    const onHide = () => document.visibilityState === 'hidden' && saveNow()
+    document.addEventListener('visibilitychange', onHide, true)
+    window.addEventListener('pagehide', saveNow, true)
+    return () => {
+      document.removeEventListener('visibilitychange', onHide, true)
+      window.removeEventListener('pagehide', saveNow, true)
+    }
+  }, [saveNow])
   useEffect(
     () =>
       layoutStore().onRemote((saved) => {
