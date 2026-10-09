@@ -4,7 +4,9 @@ import { faviconOf, launch, removeLauncher, updateLauncher, useLaunchers } from 
 import { createNote } from '../data/notes'
 import { addWidgetItems } from '../widgets/registry'
 import { projects } from '../data/profile'
-import { HOME } from '../terminal/vfs'
+import { HOME, kindOfName, type FileKind } from '../terminal/vfs'
+import { download, openSeafile, refreshDirs, useDir, useSeafileHome } from '../data/seafile'
+import { notify } from './notify'
 import { closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
 import { resetLayout, restoreIcons, trashIcons, updateDesktop, useDesktop, type IconPos } from './desktopStore'
 import { appearanceMenu } from './appearanceMenu'
@@ -29,7 +31,12 @@ export type DesktopIcon = {
   open: { app: AppId; props?: Record<string, string> }
   terminal: string
   url?: string
+  /** A file or folder in Seafile's Desktop folder (with Seafile as home): path is its seafile:// path */
+  sf?: { dir: boolean }
 }
+
+/** Emoji for what is in the Seafile Desktop folder, by kind. */
+const SF_GLYPH: Partial<Record<FileKind, string>> = { folder: '📁', image: '🖼️', markdown: '📝', text: '📄', pdf: '📕', document: '📃', audio: '🎵', video: '🎬', archive: '🗜️', disc: '💿', link: '🔗' }
 
 // Order is the default layout, top to bottom: folders, projects, then files. Folders and projects
 // get capitalized names like apps; files keep their real file names.
@@ -173,7 +180,27 @@ export function Desktop() {
     terminal: `curl -sI ${l.url}`,
     url: l.url,
   }))
-  const visible = [...DESKTOP_ICONS.filter((i) => !desk.trashed.includes(i.id)), ...linkIcons]
+  // With Seafile as home, the desktop is its Desktop folder (as in Files), plus your launchers.
+  const { home: sfHome } = useSeafileHome()
+  const sfDesktop = sfHome ? `${sfHome}/Desktop` : null
+  const sfDir = useDir(sfDesktop, 15_000)
+  useEffect(() => {
+    if (!sfDesktop) return
+    const again = () => document.visibilityState === 'visible' && refreshDirs(sfDesktop)
+    const t = setInterval(again, 60_000)
+    window.addEventListener('focus', again)
+    return () => {
+      clearInterval(t)
+      window.removeEventListener('focus', again)
+    }
+  }, [sfDesktop])
+  const sfIcons = (sfDir.listing?.entries ?? [])
+    .filter((e) => !e.name.startsWith('.'))
+    .map<DesktopIcon>((e) => {
+      const kind = kindOfName(e.name, e.dir)
+      return { id: `sf:${e.name}`, label: e.name, glyph: SF_GLYPH[kind] ?? '📄', kind: e.dir ? 'folder' : 'file', path: `${sfDesktop}/${e.name}`, open: { app: 'files' }, terminal: '', sf: { dir: e.dir } }
+    })
+  const visible = sfDesktop ? [...sfIcons, ...linkIcons] : [...DESKTOP_ICONS.filter((i) => !desk.trashed.includes(i.id)), ...linkIcons]
   const positions = useMemo(() => layout(visible.map((i) => i.id), desk.positions), [visible.map((i) => i.id).join(), desk.positions, viewport])
 
   useEffect(() => {
@@ -185,6 +212,7 @@ export function Desktop() {
   const label = (i: DesktopIcon) => desk.names[i.id] ?? i.label
   const launcherId = (i: DesktopIcon | string) => (typeof i === 'string' ? i : i.id).replace(/^launcher:/, '')
   const open = (i: DesktopIcon) => {
+    if (i.sf) return void openSeafile(wm, i.path, { dir: i.sf.dir }).catch((e: Error) => notify({ title: 'Could not open it', body: e.message }))
     if (i.kind === 'link') return launcher(i) && launch(launcher(i)!)
     ;(i.kind === 'folder' ? wm.openNew : wm.open)(i.open.app, { ...i.open.props, t: String(Date.now()) })
   }
@@ -194,6 +222,10 @@ export function Desktop() {
   const selectedIcons = () => visible.filter((i) => selected.has(i.id))
 
   function moveToTrash(ids: string[]) {
+    if (ids.some((id) => id.startsWith('sf:'))) {
+      notify({ title: 'Not yet', body: 'Deleting from Seafile comes with the next part of the Files work.' })
+      ids = ids.filter((id) => !id.startsWith('sf:'))
+    }
     // Launchers are just removed; the trash is for the built-in icons.
     ids.filter((id) => id.startsWith('launcher:')).forEach((id) => removeLauncher(launcherId(id)))
     trashIcons(ids.filter((id) => !id.startsWith('launcher:')))
@@ -312,7 +344,7 @@ export function Desktop() {
     const sel = selectedIcons()
     if (e.key === 'Enter' && sel.length) sel.forEach(open)
     else if ((e.key === 'Delete' || e.key === 'Backspace') && sel.length) moveToTrash(sel.map((i) => i.id))
-    else if (e.key === 'F2' && sel.length === 1) setRenaming(sel[0].id)
+    else if (e.key === 'F2' && sel.length === 1 && !sel[0].sf) setRenaming(sel[0].id)
     else if (e.key === 'Escape') setSelected(new Set())
     else if (e.key.toLowerCase() === 'a' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault()
@@ -331,6 +363,19 @@ export function Desktop() {
         { label: `Open ${ids.length} items`, onSelect: () => selectedIcons().forEach(open) },
         { separator: true },
         { label: `Move ${ids.length} items to Trash`, shortcut: 'Del', danger: true, onSelect: () => moveToTrash(ids) },
+      ]
+    }
+    if (icon.sf) {
+      const folder = icon.path.split('/').slice(0, -1).join('/')
+      return [
+        { label: 'Open', shortcut: '↵', onSelect: () => open(icon) },
+        ...(icon.sf.dir
+          ? []
+          : [
+              { label: 'Open with', submenu: [{ label: 'Zed', onSelect: () => void openSeafile(wm, icon.path, { how: 'zed' }) }, { label: 'Viewer', onSelect: () => void openSeafile(wm, icon.path, { how: 'viewer' }) }] },
+              { label: 'Download', onSelect: () => void download(icon.path).catch((e: Error) => notify({ title: 'Could not download it', body: e.message })) },
+            ]),
+        { label: 'Show in Files', onSelect: () => wm.openNew('files', { path: folder, select: icon.path }) },
       ]
     }
     if (icon.kind === 'link')
@@ -358,6 +403,13 @@ export function Desktop() {
 
   function desktopMenu(): MenuItem[] {
     return [
+      ...(sfDesktop
+        ? [
+            { label: 'Open Desktop folder', onSelect: () => wm.openNew('files', { path: sfDesktop }) },
+            { label: 'Refresh', onSelect: () => refreshDirs(sfDesktop) },
+            { separator: true } as MenuItem,
+          ]
+        : []),
       { label: 'Open Terminal', onSelect: () => wm.open('terminal') },
       { label: 'Show activity', onSelect: () => wm.open('recents') },
       { label: 'About this system', onSelect: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) },
@@ -369,7 +421,7 @@ export function Desktop() {
       { separator: true },
       { label: 'Select all', shortcut: 'Ctrl A', onSelect: () => setSelected(new Set(visible.map((i) => i.id))) },
       { label: 'Clean up icons', onSelect: resetLayout },
-      ...(desk.trashed.length ? [{ label: `Put back ${desk.trashed.length} trashed item${desk.trashed.length === 1 ? '' : 's'}`, onSelect: () => restoreIcons(desk.trashed) }] : []),
+      ...(!sfDesktop && desk.trashed.length ? [{ label: `Put back ${desk.trashed.length} trashed item${desk.trashed.length === 1 ? '' : 's'}`, onSelect: () => restoreIcons(desk.trashed) }] : []),
       { separator: true },
       { label: 'Appearance', submenu: appearanceMenu() },
       { label: 'Dock', submenu: DOCK_MODES.map(([m, label]) => ({ label, checked: getDockMode() === m, onSelect: () => setDockMode(m) })) },

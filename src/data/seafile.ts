@@ -1,6 +1,8 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { api, getAccount, subscribeAccount, useAccount } from '../os/account'
 import { synced } from '../os/synced'
+import type { AppId, WinState } from '../os/wm'
+import { kindOfName, type FileKind } from '../terminal/vfs'
 
 // The linked Seafile account, for Files, Zed, the Viewer and the desktop (server/seafile.ts does
 // the talking). A Seafile path is seafile://<library id>/<path in the library>, so it travels in
@@ -272,4 +274,31 @@ export async function loadUnlocks() {
   if (!getAccount().seafile) return
   unlocks = await call<Record<string, number>>('/api/seafile/unlock').catch(() => unlocks)
   emitUnlocks()
+}
+
+// --- opening -------------------------------------------------------------------------------------
+
+type Opener = { open: (app: AppId, props?: WinState['props']) => void; openNew: (app: AppId, props?: WinState['props']) => void }
+
+/** Saves a file from Seafile through the browser's own download. */
+export async function download(path: string) {
+  const a = document.createElement('a')
+  a.href = await fileLink(path, 'download')
+  a.download = path.split('/').pop() ?? ''
+  a.rel = 'noopener'
+  a.click()
+}
+
+/**
+ * Opens a Seafile path the way Files and the desktop do: folders in Files, text and code in Zed,
+ * pictures, video, audio and PDFs in the Viewer; anything else downloads.
+ */
+export function openSeafile(wm: Opener, path: string, opts: { dir?: boolean; how?: 'default' | 'zed' | 'viewer' } = {}): Promise<void> {
+  const name = path.split('/').pop() ?? ''
+  const kind: FileKind = kindOfName(name, opts.dir)
+  const how = opts.how ?? 'default'
+  if (kind === 'folder') return Promise.resolve(wm.openNew('files', { path }))
+  if (how === 'zed' || (how === 'default' && (kind === 'text' || kind === 'markdown'))) return Promise.resolve(wm.open('zed', { path, view: kind === 'markdown' ? 'preview' : undefined, t: String(Date.now()) }))
+  if (how === 'viewer' || ['image', 'video', 'audio', 'pdf'].includes(kind)) return Promise.resolve(wm.openNew('viewer', { path }))
+  return download(path)
 }

@@ -5,7 +5,7 @@ import { openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { openLink } from '../data/links'
 import { useWM, type AppId, type WinState } from '../os/wm'
 import { formatSize, HOME, KIND_LABEL, kindOfName, lookup, prettyPath, resolvePath, stat, walk, type FileKind, type Node } from '../terminal/vfs'
-import { fileLink, getLibrary, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useUnlocks, type Library } from '../data/seafile'
+import { download as sfDownload, getLibrary, openSeafile, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useUnlocks, type Library } from '../data/seafile'
 import { useAccount } from '../os/account'
 import { addBookmark, useSidebar } from '../data/filesSidebar'
 import { FilesSidebar, type SideSection } from './FilesSidebar'
@@ -288,7 +288,7 @@ export function Files({ win }: { win: WinState }) {
       setToast(item.trash === 'desktop' ? 'Put it back first (right-click → Put back).' : 'That file is a cautionary tale. It stays in the trash.')
       return
     }
-    if (item.sf) return openSeafile(item, how)
+    if (item.sf) return openSeafileItem(item, how)
     const node = item.node
     if (!node) return
     if (node.type === 'dir') {
@@ -306,25 +306,14 @@ export function Files({ win }: { win: WinState }) {
     wm.openNew('viewer', { path: item.path })
   }
 
-  /** Seafile: folders open here, text and code in Zed, pictures, video, audio and PDFs in the Viewer, the rest downloads. */
-  function openSeafile(item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal') {
+  /** Seafile: folders open here, files as everywhere else (see openSeafile). */
+  function openSeafileItem(item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal') {
     if (item.kind === 'folder') return navigate(item.path)
     remember(item)
-    if (how === 'zed' || (how === 'default' && (item.kind === 'text' || item.kind === 'markdown'))) return wm.open('zed', { path: item.path, view: item.kind === 'markdown' ? 'preview' : undefined, t: String(Date.now()) })
-    if (how === 'viewer' || ['image', 'video', 'audio', 'pdf'].includes(item.kind)) return wm.openNew('viewer', { path: item.path })
-    download(item)
+    openSeafile(wm, item.path, { how: how === 'terminal' ? 'default' : how }).catch((e: Error) => setToast(e.message))
   }
 
-  const download = (item: Item) =>
-    fileLink(item.path, 'download')
-      .then((url) => {
-        const a = document.createElement('a')
-        a.href = url
-        a.download = item.name
-        a.rel = 'noopener'
-        a.click()
-      })
-      .catch((e: Error) => setToast(e.message))
+  const download = (item: Item) => sfDownload(item.path).catch((e: Error) => setToast(e.message))
 
   const newFolder = () => {
     if (!sfWritable) return
