@@ -107,40 +107,17 @@ function layout(ids: string[], stored: Record<string, IconPos>): Record<string, 
 }
 
 /**
- * Several icons dragged at once gather in a pile under the pointer, like Finder's: the grabbed one
- * on top, the rest fanned out a little behind it (k is the place in the pile, 0 on top).
+ * Several icons dragged at once gather in a pile under the pointer, like Finder's, the grabbed one
+ * on top. The pile is their arrangement shrunk: each icon sits off the grabbed one in the
+ * direction it really is, a quarter as far (and no further than PILE_REACH), so you can see the
+ * shape they will fan back out into. `dx`/`dy` is how far the icon is from the grabbed one; `k`
+ * is its place in the pile, 0 on top.
  */
-const pileOffset = (k: number) => {
-  const n = Math.min(k, 4)
-  return { x: n * 5, y: -n * 4, tilt: k ? (k % 2 ? 1 : -1) * Math.min(k, 3) * 2 : 0 }
-}
-
-/**
- * Cells for a dropped pile: a block about as wide as it is tall, from the drop's cell rightwards
- * and down (moved in to stay on screen), skipping taken cells. What doesn't fit goes to the
- * nearest free cell.
- */
-function pileCells(x: number, y: number, n: number, taken: Set<string>): IconPos[] {
-  const { cols, rows } = gridSize()
-  const w = Math.min(cols, Math.ceil(Math.sqrt(n)))
-  const h = Math.min(rows, Math.ceil(n / w) + 1)
-  // Columns count from the right, so "rightwards" is a lower col.
-  const c0 = Math.min(cols - 1, Math.max(w - 1, Math.round((rightX() - x) / CELL_W)))
-  const r0 = Math.min(rows - h, Math.max(0, Math.round((y - TOP) / CELL_H)))
-  const out: IconPos[] = []
-  for (let r = r0; r < r0 + h && out.length < n; r++)
-    for (let c = c0; c > c0 - w && out.length < n; c--) {
-      const p = { col: c, row: r }
-      if (taken.has(key(p))) continue
-      taken.add(key(p))
-      out.push(p)
-    }
-  while (out.length < n) {
-    const p = snap(x, y, taken)
-    taken.add(key(p))
-    out.push(p)
-  }
-  return out
+const PILE_SCALE = 0.25
+const PILE_REACH = 52
+const pileOffset = (dx: number, dy: number, k: number) => {
+  const shrink = (v: number) => Math.max(-PILE_REACH, Math.min(PILE_REACH, v * PILE_SCALE))
+  return { x: shrink(dx), y: shrink(dy), tilt: k ? (k % 2 ? 1 : -1) * 1.5 : 0 }
 }
 
 /** Nearest free cell to a pixel position, spiralling outwards from the closest one. */
@@ -299,18 +276,20 @@ export function Desktop() {
     const taken = new Set(visible.filter((i) => !moving.has(i.id)).map((i) => key(positions[i.id])))
     const next: Record<string, IconPos> = {}
     const from: Record<string, { dx: number; dy: number }> = {}
-    // A pile spreads out into a block from the drop, the grabbed icon first.
+    // Each icon lands where it was before the drag, moved by as much as the pointer moved, so a
+    // pile fans back out into the shape it had. The grabbed icon goes first, so it gets the cell
+    // under the pointer; a cell already taken sends an icon to the nearest free one.
     const top = toPx(positions[d.clickedId])
     const drop = { x: top.x + offsetRef.current.dx, y: top.y + offsetRef.current.dy }
-    const cells = d.ids.length > 1 ? pileCells(drop.x, drop.y, d.ids.length, taken) : [snap(drop.x, drop.y, taken)]
     d.ids.forEach((id, k) => {
-      const fan = d.ids.length > 1 ? pileOffset(k) : { x: 0, y: 0 }
-      const x = drop.x + fan.x
-      const y = drop.y + fan.y
-      const cell = cells[k]
+      const p = toPx(positions[id])
+      const cell = snap(p.x + offsetRef.current.dx, p.y + offsetRef.current.dy, taken)
+      taken.add(key(cell))
       next[id] = cell
+      // It glides out from where it sat in the pile.
+      const fan = d.ids.length > 1 ? pileOffset(p.x - top.x, p.y - top.y, k) : { x: 0, y: 0 }
       const to = toPx(cell)
-      from[id] = { dx: x - to.x, dy: y - to.y }
+      from[id] = { dx: drop.x + fan.x - to.x, dy: drop.y + fan.y - to.y }
     })
     // Pin every icon so the ones that did not move stay put too.
     updateDesktop((s) => ({ ...s, positions: { ...positions, ...next } }))
@@ -424,7 +403,7 @@ export function Desktop() {
         let transform: string | undefined
         if (dragging && pile) {
           const top = toPx(positions[pile[0]])
-          const fan = pileOffset(k)
+          const fan = pileOffset(p.x - top.x, p.y - top.y, k)
           transform = `translate(${top.x + offset.dx + fan.x - p.x}px, ${top.y + offset.dy + fan.y - p.y}px) rotate(${fan.tilt}deg)`
         } else if (dragging) transform = `translate(${offset.dx}px, ${offset.dy}px)`
         else if (landing) transform = `translate(${landing.dx}px, ${landing.dy}px)`
