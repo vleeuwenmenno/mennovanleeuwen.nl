@@ -22,6 +22,7 @@ import { getAccount, signedIn } from '../os/account'
 import { followGoLink, golinksSite, golinksTemplate, golinksUrl, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { age, dynamic, fileKind, HOME, lookup as siteLookup, prettyPath, resolvePath, type DirNode, type Node } from './vfs'
 import { lookup, makeDir, prepare, removePath, touchFile, transfer, walk, writeFile } from './fs'
+import { openSeafile } from '../data/seafile'
 import { manPages, mountCommands } from './mount'
 import { nanoCommands } from './nano'
 import { MEDIA_APP } from '../data/media'
@@ -158,12 +159,53 @@ function input(ctx: Ctx, files: string[], cmd: string): string {
 
 const lines = (s: string) => (s === '' ? [] : s.replace(/\n$/, '').split('\n'))
 
+/** A name the way ls shows it on a terminal: quoted when it has spaces or shell characters. */
+function quoteName(name: string) {
+  if (/^[\w.+,:@%=^~/-]+$/.test(name)) return name
+  return name.includes("'") ? `"${name.replace(/(["\\$`])/g, '\\$1')}"` : `'${name}'`
+}
+
+/** What ls prints for a name (without colour): quoted if need be, folders with a slash. */
+const plainName = (node: Node) => quoteName(node.name) + (node.type === 'dir' ? '/' : '')
+
 function colorName(node: Node) {
-  if (node.type === 'dir') return c('blue', node.name + '/')
-  if (node.type === 'file' && (node.exec || node.name.endsWith('.game'))) return c('green', node.name)
-  if (node.name.endsWith('.url')) return c('cyan', node.name)
-  if (node.name.startsWith('.')) return c('muted', node.name)
-  return node.name
+  const name = quoteName(node.name)
+  if (node.type === 'dir') return c('blue', name + '/')
+  if (node.type === 'file' && (node.exec || node.name.endsWith('.game'))) return c('green', name)
+  if (node.name.endsWith('.url')) return c('cyan', name)
+  if (node.name.startsWith('.')) return c('muted', name)
+  return name
+}
+
+/**
+ * ls's columns: as many as fit the terminal, filled top to bottom, never breaking a name. Names
+ * line up when some are quoted (the others get a space in front), as GNU ls does.
+ */
+function lsColumns(nodes: Node[], width: number): string {
+  if (!nodes.length) return ''
+  const quoted = nodes.some((n) => quoteName(n.name) !== n.name)
+  const items = nodes.map((n) => {
+    const lead = quoted && quoteName(n.name) === n.name ? ' ' : ''
+    return { text: lead + colorName(n), width: lead.length + plainName(n).length }
+  })
+  for (let cols = Math.min(items.length, Math.max(1, Math.floor(width / 3))); cols >= 1; cols--) {
+    const rows = Math.ceil(items.length / cols)
+    const widths = Array.from({ length: cols }, (_, col) => Math.max(0, ...items.slice(col * rows, col * rows + rows).map((i) => i.width)))
+    if (cols > 1 && widths.reduce((a, w) => a + w + 2, -2) > width) continue
+    const lines: string[] = []
+    for (let r = 0; r < rows; r++) {
+      const cells: string[] = []
+      for (let col = 0; col < cols; col++) {
+        const item = items[col * rows + r]
+        if (!item) continue
+        const last = col === cols - 1 || !items[(col + 1) * rows + r]
+        cells.push(last ? item.text : item.text + ' '.repeat(widths[col] - item.width + 2))
+      }
+      lines.push(cells.join(''))
+    }
+    return lines.join('\n')
+  }
+  return items.map((i) => i.text).join('\n')
 }
 
 function treeLines(node: DirNode, prefix = ''): string[] {
@@ -283,10 +325,10 @@ export const commands: Record<string, Command> = {
       const abs = resolvePath(ctx.cwd, target)
       const node = lookup(abs)
       if (!node) throw new CmdError(`ls: cannot access '${target}': No such file or directory`)
-      if (node.type === 'file') return colorName(node)
-      const kids = [...node.children.values()].filter((n) => f.has('a') || !n.name.startsWith('.'))
-      // One per line into a pipe (ls | wc -l), side by side on the screen.
-      if (!f.has('l')) return kids.map(colorName).join(ctx.tty ? '  ' : '\n')
+      if (node.type === 'file') return ctx.tty ? colorName(node) : node.name
+      const kids = [...node.children.values()].filter((n) => f.has('a') || !n.name.startsWith('.')).sort((a, b) => a.name.localeCompare(b.name, 'en'))
+      // Into a pipe: bare names, one per line (ls | wc -l). On the screen: columns.
+      if (!f.has('l')) return ctx.tty ? lsColumns(kids, ctx.size.cols) : kids.map((k) => k.name).join('\n')
       return kids
         .map((k) => {
           const size = k.type === 'file' ? (k.size ?? k.content().length) : 4096
@@ -608,7 +650,7 @@ export const commands: Record<string, Command> = {
   open: {
     desc: 'open an app, file or URL',
     usage: 'open [-n] <app|file|url>   (-n opens a new window)',
-    run: (ctx) => {
+    run: async (ctx) => {
       if (ctx.args[0] === '-n') {
         const app = APPS[ctx.args[1] ?? '']
         if (!app) throw new CmdError(`open: -n needs an app name: ${Object.keys(APPS).join(', ')}`)
@@ -628,6 +670,11 @@ export const commands: Record<string, Command> = {
       const slug = target.replace(/\/$/, '').split('/').pop() ?? ''
       const abs = resolvePath(ctx.cwd, target)
       const node = lookup(abs)
+      // A file in Seafile opens the way Files would open it (PDF, Preview, Zed…).
+      if (node?.type === 'file' && node.sf) {
+        await openSeafile({ open: (app, props) => ctx.openApp(app, props as Record<string, string>), openNew: (app, props) => ctx.openNewApp(app, props as Record<string, string>) }, node.sf)
+        return
+      }
       if (node?.type === 'file' && node.open) {
         if (node.open.url) {
           openLink(node.open.url)
@@ -1361,13 +1408,21 @@ function levenshtein(a: string, b: string) {
   return d[a.length][b.length]
 }
 
+/** The word being typed at the end of a line: backslash-escaped spaces (My\ Library) stay in it. */
+export const WORD_RE = /((?:\\.|[^\s\\])*)$/
+/** A name as one shell word: spaces and shell characters get a backslash (My\ Library). */
+export const escapeArg = (s: string) => s.replace(/([\s\\'"$`&|;<>()])/g, '\\$1')
+const unescapeArg = (s: string) => s.replace(/\\(.)/g, '$1')
+
 /** One thing Tab can put on the line: `value` replaces the word being typed, `label` is what the picker shows. */
 export type Completion = { value: string; label: string; hint?: string }
 
 /** What Tab could complete the last word of `line` to: commands for the first word, paths (and app
  * names after `open`) for the rest. `before` is the line up to that word. */
 export function completions(line: string, cwd: string): { before: string; word: string; items: Completion[] } {
-  const [, before, word] = /^(.*?)(\S*)$/.exec(line)!
+  const raw = WORD_RE.exec(line)![1]
+  const before = line.slice(0, line.length - raw.length)
+  const word = unescapeArg(raw)
   const isFirst = !before.trim() || /(\||;|&&)\s*$/.test(before)
   // Commands that know their own arguments (find's tests, fd's options) answer first.
   const [name, ...args] = before.split(/\||;|&&/).pop()!.trim().split(/\s+/)
@@ -1396,12 +1451,12 @@ export function complete(line: string, cwd: string): { line: string; items: Comp
   const { before, word, items } = completions(line, cwd)
   if (items.length === 1) {
     const done = items[0].value
-    return { line: before + done + (done.endsWith('/') ? '' : ' '), items: [] }
+    return { line: before + escapeArg(done) + (done.endsWith('/') ? '' : ' '), items: [] }
   }
   if (items.length > 1) {
     let prefix = items[0].value
     for (const { value } of items) while (!value.startsWith(prefix)) prefix = prefix.slice(0, -1)
-    return { line: before + (prefix.length > word.length ? prefix : word), items }
+    return { line: before + escapeArg(prefix.length > word.length ? prefix : word), items }
   }
   return { line, items: [] }
 }
