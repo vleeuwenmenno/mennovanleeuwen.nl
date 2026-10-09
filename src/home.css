@@ -519,3 +519,40 @@ input.is-bad {
   gap: 6px;
   margin-bottom: 10px;
 }
+
+/* ---------- Settings: search engine ---------- */
+
+.set-choices {
+  display: inline-flex;
+  border: 1px solid var(--line-strong);
+  margin-bottom: 10px;
+}
+.set-choice {
+  position: relative;
+  padding: 4px 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.set-choice input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.set-choice.is-on {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.set-choice:focus-within {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.set-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+.set-check input {
+  accent-color: var(--accent);
+}

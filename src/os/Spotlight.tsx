@@ -5,6 +5,7 @@ import { MarkdownPreview } from '../apps/Zed'
 import { isCodeQuery, type BranchHit, type Hit, type IssueHit, type RepoHit } from '../data/code'
 import { faviconOf, launch, useLaunchers } from '../data/launchers'
 import { createNote, noteTitle, NOTE_COLORS, useAllNotes } from '../data/notes'
+import { ENGINES, searchWeb, useSearchSettings, useSuggestions } from '../data/searchEngine'
 import { countFor, useContributions } from '../data/contributions'
 import { fetchMinecraft, MC_ADDRESS, useMinecraft } from '../data/minecraft'
 import { contributions, profile, projects } from '../data/profile'
@@ -27,7 +28,7 @@ import { SINGLE_INSTANCE, useWM, type AppId } from './wm'
 // Ctrl+K: one search box for apps, files, projects, games, live status, quick actions, maths and
 // terminal commands, with a preview of the highlighted result on the right.
 
-type Group = 'Top hit' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Fallback'
+type Group = 'Top hit' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Web' | 'Fallback'
 
 type Result = {
   id: string
@@ -342,6 +343,8 @@ export function Spotlight() {
   const code = useCodeSearch(q)
   const dock = useDock()
   const canPin = useCanCustomizeDock()
+  const searchSettings = useSearchSettings()
+  const engine = ENGINES[searchSettings.engine]
   const close = () => setOverlay(null)
   const openUrl = (url: string) => window.open(url, '_blank', 'noopener')
 
@@ -594,6 +597,8 @@ export function Spotlight() {
   // Calculator, units and currencies. Exchange rates load the first time a currency appears.
   const [rates, setRates] = useState(cachedRates)
   const calc = useMemo(() => smartCalc(q, rates), [q, rates])
+  // The search engine's suggestions, for plain text (not maths, #123 or repo@branch).
+  const suggestions = useSuggestions(q, !calc && !isCodeQuery(q))
   useEffect(() => {
     if (calc?.kind === 'pending') loadRates().then((r) => r && setRates(r))
   }, [calc?.kind])
@@ -668,6 +673,17 @@ export function Spotlight() {
       if (g === 'Apps') out.push(...codeRows.filter((r) => r.id !== out[0]?.id), ...codeStatus)
     }
 
+    for (const sug of suggestions.filter((x) => x.toLowerCase() !== q.trim().toLowerCase()).slice(0, 5))
+      out.push({
+        id: `web-${sug}`,
+        group: 'Web',
+        title: sug,
+        subtitle: `Search ${engine.label}`,
+        icon: <Glyph>⌕</Glyph>,
+        run: () => searchWeb(sug),
+        enterLabel: 'Search',
+        complete: sug,
+      })
     out.push({
       id: 'run',
       group: 'Fallback',
@@ -679,12 +695,12 @@ export function Spotlight() {
     out.push({
       id: 'web',
       group: 'Fallback',
-      title: `Search the web for “${q.trim()}”`,
+      title: `Search ${engine.label} for “${q.trim()}”`,
       icon: <Glyph>🔍</Glyph>,
-      run: () => window.open(`https://duckduckgo.com/?q=${encodeURIComponent(q.trim())}`, '_blank', 'noopener'),
+      run: () => searchWeb(q.trim()),
     })
     return out
-  }, [q, all, calc, code])
+  }, [q, all, calc, code, suggestions, engine])
 
   useEffect(() => setActive(0), [q])
   useEffect(() => {
