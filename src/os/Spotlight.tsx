@@ -29,7 +29,7 @@ import { SINGLE_INSTANCE, useWM, type AppId } from './wm'
 // Ctrl+K: one search box for apps, files, projects, games, live status, quick actions, maths and
 // terminal commands, with a preview of the highlighted result on the right.
 
-type Group = 'Top hit' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Web' | 'Fallback'
+type Group = 'Top hit' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Widgets' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Web' | 'Fallback'
 
 type Result = {
   id: string
@@ -442,7 +442,9 @@ export function Spotlight() {
       out.push({ id: `act-${id}`, group: 'Actions', title, subtitle, keywords, icon: <Glyph>{glyph}</Glyph>, run })
     action('new-terminal', 'New terminal window', 'terminal shell new window launch console bash', () => wm.openNew('terminal'), '›_')
     action('new-note', 'New sticky note', 'note sticky new write memo todo', () => openSticky(wm, createNote().id), '✎')
-    for (const d of widgetDefs()) if (d.kind !== 'sticky') action(`widget-${d.kind}`, `Add widget: ${d.name}`, `widget add desktop ${d.name} ${d.blurb}`, () => addWidget(wm, d.kind), d.glyph, d.blurb)
+    // Every widget, in a group of their own so "widget" lists them all.
+    for (const d of widgetDefs())
+      out.push({ id: `widget-${d.kind}`, group: 'Widgets', title: `Add widget: ${d.name}`, subtitle: d.blurb, keywords: `widget widgets add new desktop ${d.name} ${d.blurb}`, icon: <Glyph>{d.glyph}</Glyph>, run: () => addWidget(wm, d.kind) })
     if (account.status === 'anon') action('sign-in', 'Sign in with GitHub', 'login sign in account github sync owner', signIn, '⎆', 'Sync notes and search your repositories')
     action('settings', 'Settings', 'settings preferences account launchers gitea forgejo token sync', () => wm.open('settings'), '⚙')
     action('minimize', 'Minimize all windows', 'minimize hide windows show desktop', () => wm.windows.forEach((w) => wm.minimize(w.pid)), '▁')
@@ -667,13 +669,13 @@ export function Spotlight() {
       .sort((a, b) => b.s - a.s)
 
     // The single best match leads, then everything else grouped.
-    const order: Group[] = ['Status', 'Apps', 'Repositories', 'Issues & PRs', 'Branches', 'Notes', 'Actions', 'Projects', 'Games', 'Files', 'Links']
+    const order: Group[] = ['Status', 'Apps', 'Widgets', 'Repositories', 'Issues & PRs', 'Branches', 'Notes', 'Actions', 'Projects', 'Games', 'Files', 'Links']
     const [top, ...rest] = scored
     if (top && !out.length) out.push({ ...top.r, group: 'Top hit' })
     else if (top) rest.unshift(top)
     for (const g of order) {
       out.push(...rest.filter((x) => x.r.group === g).slice(0, g === 'Files' ? 6 : 5).map((x) => x.r))
-      if (g === 'Apps') out.push(...codeRows.filter((r) => r.id !== out[0]?.id), ...codeStatus)
+      if (g === 'Widgets') out.push(...codeRows.filter((r) => r.id !== out[0]?.id), ...codeStatus)
     }
 
     for (const sug of suggestions.filter((x) => x.toLowerCase() !== q.trim().toLowerCase()).slice(0, 5))
