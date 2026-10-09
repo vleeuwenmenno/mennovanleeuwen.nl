@@ -4,8 +4,8 @@ import { authEnabled, currentUser, finishLogin, logout, requireUser, startLogin 
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { addCaldav, listCaldav, removeCaldav } from './caldav.ts'
-import { allCalendars, allEvents } from './calendars.ts'
-import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, startGoogle } from './google.ts'
+import { allCalendars, allEvents, createEvent, deleteEvent, updateEvent } from './calendars.ts'
+import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, MAX_RANGE_DAYS, startGoogle } from './google.ts'
 import { inbox } from './inbox.ts'
 import { linkPreview } from './preview.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
@@ -112,10 +112,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       if (q('from') && q('to')) {
         from = new Date(q('from')!)
         to = new Date(q('to')!)
-        if (isNaN(from.getTime()) || isNaN(to.getTime())) throw new HttpError(400, 'Bad date range')
+        if (isNaN(from.getTime()) || isNaN(to.getTime()) || to <= from || to.getTime() - from.getTime() > MAX_RANGE_DAYS * 864e5) throw new HttpError(400, 'Bad date range')
       }
       return json(res, 200, await allEvents(requireUser(req), ids ? ids.split(',') : null, { from, to })), true
     }
+    // The Calendar app's changes: { calendar, event } to add, { ref, event, calendar?, all? } to change, { ref, all? } to delete.
+    if (path === '/api/calendar/events' && method === 'POST') return await createEvent(requireUser(req), await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true
+    if (path === '/api/calendar/events' && method === 'PATCH') return await updateEvent(requireUser(req), await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true
+    if (path === '/api/calendar/events' && method === 'DELETE') return await deleteEvent(requireUser(req), await readJson(req, 8 * 1024)), json(res, 200, { ok: true }), true
     if (path === '/api/integrations/updown' && method === 'PUT') return await setUpdownKey(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true
     if (path === '/api/integrations/updown' && method === 'DELETE') return removeUpdownKey(requireUser(req)), json(res, 200, { ok: true }), true
     if (path === '/api/updown' && read) return json(res, 200, await updownChecks(requireUser(req))), true

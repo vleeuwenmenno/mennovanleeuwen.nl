@@ -1,43 +1,33 @@
 import { useEffect, useState, type CSSProperties } from 'react'
-import { dayKey, eventsOn, eventTime, fetchEvents, startOfDay, type CalendarEvent } from '../data/calendar'
-import { api, connectGoogle, hasCalendar, signIn, useAccount } from '../os/account'
+import { dayKey, eventsOn, eventTime, fetchEvents, isShown, startOfDay, useCalendarChoice, useCalendarList, useCalendarVersion, useShownCalendarIds, type CalendarEvent } from '../data/calendar'
+import { connectGoogle, hasCalendar, signIn, useAccount } from '../os/account'
 import type { MenuItem } from '../os/ContextMenu'
 import { useWindowMenu } from '../os/windowMenu'
 import { useWM, type WinState } from '../os/wm'
 import { createWithTilt, setWidgetConfig, tiltMenu, useWidgetConfig } from './config'
 import type { WidgetDef } from './types'
 
-// The Agenda widget: today and the coming days from Google Calendar (server/google.ts), across
-// the calendars you pick, shared ones included. Owner only: it needs the GitHub sign-in with a
-// Google Calendar attached (system menu or Settings).
+// The Agenda widget: today and the coming days from Google Calendar and CalDAV accounts
+// (server/calendars.ts): the calendars switched on in Settings, or its own pick. Owner only: it
+// needs the GitHub sign-in with a calendar connected (Settings → Calendar).
 
 type Config = { calendars: string[] | null; days: number; tilt: number }
 const DEFAULTS: Config = { calendars: null, days: 3, tilt: 0 }
-
-type CalendarInfo = { id: string; name: string; color: string; primary: boolean; selected: boolean; source?: string }
-
-// Calendars change rarely; one list for every Agenda widget on the page.
-// Asked again when the connected accounts change (`signature`).
-let calendarList: { signature: string; value: Promise<CalendarInfo[]> } | null = null
-function calendars(signature: string) {
-  if (calendarList?.signature !== signature) {
-    const value = api<{ calendars: CalendarInfo[] }>('/api/calendar/calendars').then((r) => r.calendars)
-    calendarList = { signature, value }
-    value.catch(() => (calendarList = null))
-  }
-  return calendarList.value
-}
 
 function useEvents(config: Config, enabled: boolean) {
   const [events, setEvents] = useState<CalendarEvent[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
-  const key = `${config.calendars?.join(',') ?? ''}|${config.days}`
+  // Its own pick, or what Settings has switched on (known once the calendar list is in).
+  const shown = useShownCalendarIds()
+  const version = useCalendarVersion()
+  const ids = config.calendars ?? shown
+  const key = `${ids?.join(',') ?? '…'}|${config.days}`
   useEffect(() => {
-    if (!enabled) return
+    if (!enabled || !ids) return
     let live = true
     const today = startOfDay(new Date())
-    fetchEvents(today, startOfDay(today, config.days), config.calendars, tick > 0).then(
+    fetchEvents(today, startOfDay(today, config.days), ids, tick > 0).then(
       // Events from what works, and what didn't (named after the account) beside them.
       (r) => live && (setEvents(r.events), setError(r.errors.join(' · ') || null)),
       (e: Error) => live && setError(e.message),
@@ -46,7 +36,7 @@ function useEvents(config: Config, enabled: boolean) {
       live = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, enabled, tick])
+  }, [key, enabled, tick, version])
   // Every five minutes, and when the tab comes back.
   useEffect(() => {
     const again = () => document.visibilityState === 'visible' && setTick((n) => n + 1)
@@ -174,15 +164,11 @@ function useAgendaFrame(id: string): CSSProperties {
 }
 
 function useAgendaMenu(id: string): MenuItem[] {
+  const wm = useWM()
   const config = useWidgetConfig<Config>(id, DEFAULTS)
-  const account = useAccount()
-  const [list, setList] = useState<CalendarInfo[]>([])
-  const signature = `${account.google?.email ?? ''}|${account.caldav.map((c) => c.id).join(',')}`
-  useEffect(() => {
-    if (hasCalendar(account)) calendars(signature).then(setList, () => {})
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signature])
-  const chosen = config.calendars ?? list.filter((c) => c.selected).map((c) => c.id)
+  const list = useCalendarList().calendars ?? []
+  const picks = useCalendarChoice()
+  const chosen = config.calendars ?? list.filter((c) => isShown(c, picks)).map((c) => c.id)
   const multiSource = new Set(list.map((c) => c.source)).size > 1
   const toggle = (cid: string) => setWidgetConfig(id, { calendars: chosen.includes(cid) ? chosen.filter((x) => x !== cid) : [...chosen, cid] })
   return [
@@ -194,12 +180,12 @@ function useAgendaMenu(id: string): MenuItem[] {
             submenu: [
               ...list.map((c) => ({ label: multiSource ? `${c.name} · ${c.source}` : c.name, swatch: c.color, checked: chosen.includes(c.id), onSelect: () => toggle(c.id) })),
               { separator: true as const },
-              { label: 'The default ones', checked: config.calendars === null, onSelect: () => setWidgetConfig(id, { calendars: null }) },
+              { label: 'As in Settings', checked: config.calendars === null, onSelect: () => setWidgetConfig(id, { calendars: null }) },
             ],
           },
         ]
       : []),
-    { label: 'Open Google Calendar ↗', onSelect: () => window.open('https://calendar.google.com', '_blank', 'noopener') },
+    { label: 'Open Calendar', onSelect: () => wm.open('calendar', { t: String(Date.now()) }) },
     tiltMenu(id, config.tilt),
   ]
 }
@@ -207,7 +193,7 @@ function useAgendaMenu(id: string): MenuItem[] {
 export const agendaWidget: WidgetDef = {
   kind: 'agenda',
   name: 'Agenda',
-  blurb: 'Today and the coming days from Google Calendar',
+  blurb: 'Today and the coming days from Google Calendar, Fastmail and other CalDAV',
   glyph: '📅',
   size: [300, 320],
   resizable: true,

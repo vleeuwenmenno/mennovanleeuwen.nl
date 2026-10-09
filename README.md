@@ -130,19 +130,29 @@ Setup:
 Without the OAuth settings, sign-in is simply off and everything else works as before.
 
 **Google Calendar** attaches to the GitHub sign-in (system menu or Settings → Calendar) for the
-Agenda widget: read-only access to your calendars, shared ones included, with Google's refresh
-token stored encrypted next to the Gitea tokens ([`server/google.ts`](server/google.ts)). It needs
-`GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from a Google Cloud OAuth client (type *Web
-application*) with the Calendar API enabled, the scope `calendar.readonly` (plus `openid` and
-`email`), and the redirect URI `https://<your site>/api/google/callback` (and
+Calendar app, the Agenda widget and the clock: your calendars, shared ones included, with Google's
+refresh token stored encrypted next to the Gitea tokens ([`server/google.ts`](server/google.ts)). It
+needs `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from a Google Cloud OAuth client (type *Web
+application*) with the Calendar API enabled, the scopes `calendar.readonly` and `calendar.events`
+(plus `openid` and `email`), and the redirect URI `https://<your site>/api/google/callback` (and
 `http://localhost:5173/api/google/callback` for development). Publish the consent screen to *In
-production*: in *Testing*, Google expires the access after seven days.
+production*: in *Testing*, Google expires the access after seven days. Accounts connected before
+the Calendar app stay read-only until connected again (Settings → Calendar → *Allow editing*).
 
 **CalDAV** calendars (Fastmail, Nextcloud, iCloud and others) work next to Google: Settings →
 Calendar → add an account with its server URL (Fastmail's is filled in), username and an app
-password (read-only is enough), stored encrypted ([`server/caldav.ts`](server/caldav.ts)). The
-calendars are found from the URL, and events are fetched by date range with the server
-expanding repeating events, so the Agenda widget and the clock show both sources together.
+password, stored encrypted ([`server/caldav.ts`](server/caldav.ts)). Read-only is enough to look;
+the Calendar app needs read-write to change things (adding the same account again replaces its
+password). The calendars are found from the URL, and events are fetched by date range with the
+server expanding repeating events, so everything shows both sources together.
+
+The **Calendar** app ([`src/apps/calendar`](src/apps/calendar)) shows the switched-on calendars by
+day, three days, week, month or year. Drag on an empty spot to make an event, drag an event to
+move it, drag its bottom edge to change its length; open one to change its title, time, place,
+notes, calendar and guests (invited by email by Google or the CalDAV server). For one occurrence
+of a repeating event it asks whether the change is for that one or the whole series. Changes go
+through [`server/calendars.ts`](server/calendars.ts): Google's API, or the event's own iCalendar
+text on the CalDAV server, written back with its ETag so other apps' properties stay.
 
 The **Status** widget shows your [updown.io](https://updown.io) checks: up or down, uptime, the
 last day's response time and certificates that expire within two weeks
@@ -160,7 +170,7 @@ right-click menu. Add them from the desktop's menu (*Add widget*), All apps → 
 Today there are five: **Sticky note** (one of your notes, with checklists you can tick),
 **Weather** (now, the next hours and three days from [Open-Meteo](https://open-meteo.com), for the
 browser's location or a city you pick; your pick syncs, the browser's location stays on that
-device), **Agenda** (Google Calendar, see below), **Code inbox** and **Status** (updown.io).
+device), **Agenda** (Google Calendar and CalDAV, see above), **Code inbox** and **Status** (updown.io).
 
 The framework lives in [`src/widgets`](src/widgets). A widget is one `WidgetDef`
 ([`types.ts`](src/widgets/types.ts)): a name, a glyph, a size, its component, and optional hooks

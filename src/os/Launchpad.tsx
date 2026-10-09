@@ -5,6 +5,7 @@ import { faviconOf, launch as launchLink, useLaunchers } from '../data/launchers
 import { createNote } from '../data/notes'
 import { addWidget, widgetDefs } from '../widgets/registry'
 import { contributions, profile, projects } from '../data/profile'
+import { signedIn } from './account'
 import { APP_META } from './apps'
 import { appearanceMenu } from './appearanceMenu'
 import { openContextMenu, type MenuItem } from './ContextMenu'
@@ -35,7 +36,7 @@ type Entry = {
   dockId?: DockId
 }
 
-const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'mcserver', 'notebook', 'contact', 'notes', 'keys', 'settings', 'trash']
+const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'mcserver', 'notebook', 'calendar', 'contact', 'notes', 'keys', 'settings', 'trash']
 
 const stroke = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const
 const Icon = ({ children }: { children: ReactNode }) => (
@@ -126,7 +127,8 @@ export function Launchpad() {
         label: 'Apps',
         icon: ICONS.apps,
         children: () =>
-          APP_ORDER.filter((a) => APP_META[a]).map((app) => ({
+          // The Calendar app only means something to the signed-in owner.
+          APP_ORDER.filter((a) => APP_META[a] && (a !== 'calendar' || signedIn())).map((app) => ({
             label: APP_META[app].dock,
             icon: <AppIcon app={app} size={16} tone />,
             run: () => wm.open(app),

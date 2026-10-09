@@ -105,6 +105,8 @@ export function database(): DatabaseSync {
     );
     CREATE INDEX IF NOT EXISTS mc_sessions_open ON mc_sessions (left_at);
   `)
+  // Added later: the scopes Google granted (editing needs calendar.events).
+  if (!(db.prepare('PRAGMA table_info(google)').all() as { name: string }[]).some((c) => c.name === 'scopes')) db.exec('ALTER TABLE google ADD COLUMN scopes TEXT')
   key = Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())
   return db

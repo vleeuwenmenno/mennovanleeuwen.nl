@@ -477,6 +477,7 @@ export function Spotlight() {
       if (app === 'viewer' || app === 'widget') continue // need a file, or are added as widgets
       if (app === 'linkforge') continue // a dialog of Settings
       if (app === 'mcserver') continue // the Minecraft server's status entry opens it
+      if (app === 'calendar' && account.status !== 'user') continue // the owner's own calendars
       const meta = APP_META[app]
       const open = wm.windows.filter((w) => w.app === app).length
       out.push({

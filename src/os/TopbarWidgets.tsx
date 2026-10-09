@@ -3,7 +3,7 @@ import { profile } from '../data/profile'
 import { timeAgo } from '../data/recents'
 import { fetchMinecraft, MC_ADDRESS, MC_PORT, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
-import { dayKey, eventsOn, eventTime, fetchEvents, startOfDay, type CalendarEvent } from '../data/calendar'
+import { dayKey, eventsOn, eventTime, fetchEvents, startOfDay, useCalendarVersion, useShownCalendarIds, type CalendarEvent } from '../data/calendar'
 import { connectGoogle, hasCalendar, signIn, signOut, useAccount } from './account'
 import { openContextMenu, type MenuItem } from './ContextMenu'
 import { toggleOverlay } from './overlays'
@@ -53,6 +53,8 @@ function isoWeek(d: Date) {
 function useMonthEvents(view: Date) {
   const account = useAccount()
   const connected = hasCalendar(account)
+  const shown = useShownCalendarIds()
+  const version = useCalendarVersion()
   const [events, setEvents] = useState<CalendarEvent[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
@@ -60,25 +62,40 @@ function useMonthEvents(view: Date) {
     let live = true
     setError(null)
     // The grid's weeks can start in the month before; one range covers the month and its edges.
-    fetchEvents(startOfDay(view, -7), startOfDay(new Date(view.getFullYear(), view.getMonth() + 1, 1), 7)).then(
+    // The calendars switched on in Settings (once the list is known).
+    if (!shown) return
+    fetchEvents(startOfDay(view, -7), startOfDay(new Date(view.getFullYear(), view.getMonth() + 1, 1), 7), shown).then(
       (r) => live && (setEvents(r.events), setError(r.errors.join(' · ') || null)),
       (e: Error) => live && (setEvents([]), setError(e.message)),
     )
     return () => {
       live = false
     }
-  }, [view, connected])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, connected, shown?.join(','), version])
   return { connected, events, error, account }
 }
 
 /** The selected day's appointments, under the month grid. */
-function DayAgenda({ day, events, error }: { day: Date; events: CalendarEvent[] | null; error: string | null }) {
+function DayAgenda({ day, events, error, close }: { day: Date; events: CalendarEvent[] | null; error: string | null; close: () => void }) {
+  const wm = useWM()
   const key = dayKey(day)
   const list = events ? eventsOn(events, key) : null
   const label = key === dayKey(new Date()) ? 'Today' : day.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
   return (
     <div className="cal-agenda">
-      <h4>{label}</h4>
+      <h4>
+        {label}
+        <button
+          className="link-btn"
+          onClick={() => {
+            close()
+            wm.open('calendar', { date: key, view: 'day', t: String(Date.now()) })
+          }}
+        >
+          Open in Calendar
+        </button>
+      </h4>
       {!list && <p className="muted">Opening your calendar…</p>}
       {error && (
         <p className="t-red">
@@ -109,7 +126,7 @@ function DayAgenda({ day, events, error }: { day: Date; events: CalendarEvent[] 
   )
 }
 
-function Calendar() {
+function Calendar({ close }: { close: () => void }) {
   const today = new Date()
   const [view, setView] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1))
   const [picked, setPicked] = useState(() => startOfDay(today))
@@ -195,7 +212,7 @@ function Calendar() {
           Back to today
         </button>
       )}
-      {connected && <DayAgenda day={picked} events={events} error={error} />}
+      {connected && <DayAgenda day={picked} events={events} error={error} close={close} />}
       {!connected && account.status === 'user' && account.googleEnabled && (
         <button className="cal-back" onClick={connectGoogle}>
           📅 Connect Google Calendar for appointments
@@ -237,7 +254,7 @@ export function ClockWidget() {
         </span>
       }
     >
-      {() => <Calendar />}
+      {(close) => <Calendar close={close} />}
     </TopbarPopover>
   )
 }

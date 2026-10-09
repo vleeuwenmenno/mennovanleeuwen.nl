@@ -13,7 +13,7 @@ export type Account = {
   forges: ForgeInfo[]
   /** Whether this server can link Google Calendar, and the linked account if any */
   googleEnabled: boolean
-  google: { email: string } | null
+  google: { email: string; canWrite?: boolean } | null
   /** CalDAV accounts (Fastmail, Nextcloud...) for calendars */
   caldav: CaldavInfo[]
   /** Third-party services with a key on the server: updown.io's saved in Settings, set on the server, or none */
@@ -77,7 +77,7 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
 
 export async function loadAccount() {
   try {
-    const me = await api<{ authEnabled: boolean; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null } }>('/api/me')
+    const me = await api<{ authEnabled: boolean; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string; canWrite?: boolean } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null } }>('/api/me')
     set({ status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null } })
   } catch {
     set({ status: 'off', user: null, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null } })
