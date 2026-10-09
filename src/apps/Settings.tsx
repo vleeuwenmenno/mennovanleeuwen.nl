@@ -537,12 +537,91 @@ function Launchers() {
 }
 
 /** Third-party services the widgets read from, with keys on the server: updown.io for Status. */
+type IntegrationId = 'updown' | 'seafile' | 'onlyoffice'
+
+/** Third-party services, one row each; a row opens that service's own settings. */
 function Integrations() {
+  const account = useAccount()
+  const [open, setOpen] = useState<IntegrationId | null>(null)
+  const { libraries } = useLibraries()
+  if (account.status !== 'user') return <p className="muted">Sign in first to connect services for widgets and Files.</p>
+  const seafile = account.seafile
+  const host = (url: string) => url.replace(/^https?:\/\//, '')
+
+  const rows: { id: IntegrationId; name: string; icon: ReactNode; status: string; on: boolean; disabled?: boolean }[] = [
+    {
+      id: 'updown',
+      name: 'updown.io',
+      icon: <img className="set-fav" src="https://updown.io/favicon.ico" alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />,
+      status: account.integrations.updown === 'server' ? 'Connected with the key set on the server' : account.integrations.updown ? 'Connected · for the Status widget' : 'Uptime checks, for the Status widget',
+      on: !!account.integrations.updown,
+    },
+    {
+      id: 'seafile',
+      name: 'Seafile',
+      icon: seafile ? <Fav src={`${seafile.url}/media/favicons/favicon.png`} glyph="☁" /> : <span className="set-glyph">☁</span>,
+      status: seafile ? `${seafile.username} · ${host(seafile.url)}${libraries ? ` · ${libraries.length} ${libraries.length === 1 ? 'library' : 'libraries'}` : ''}` : 'Your libraries in Files and on the desktop',
+      on: !!seafile,
+    },
+    {
+      id: 'onlyoffice',
+      name: 'OnlyOffice',
+      icon: <span className="set-glyph">📝</span>,
+      status: seafile?.office ? `${host(seafile.office.url)} · for Word, Excel and PowerPoint files` : seafile ? 'Edit Office files in a window, with the server Seafile uses' : 'Link Seafile first',
+      on: !!seafile?.office,
+      disabled: !seafile,
+    },
+  ]
+
+  const current = rows.find((r) => r.id === open && !r.disabled)
+  if (current)
+    return (
+      <>
+        <button className="set-up" onClick={() => setOpen(null)}>
+          ‹ Integrations
+        </button>
+        <div className="set-detail-head">
+          {current.icon}
+          <strong>{current.name}</strong>
+          {current.on && <span className="set-badge">Connected</span>}
+        </div>
+        {current.id === 'updown' ? <UpdownSettings /> : current.id === 'seafile' ? <SeafileSettings /> : <OfficeSettings />}
+      </>
+    )
+
+  return (
+    <ul className="set-list">
+      {rows.map((r) => (
+        <li key={r.id} className="set-row set-row-link">
+          <button disabled={r.disabled} onClick={() => setOpen(r.id)} aria-label={`${r.name} settings`}>
+            {r.icon}
+            <span className="set-row-text">
+              <strong>{r.name}</strong>
+              <span className="muted">{r.status}</span>
+            </span>
+            {r.on && <span className="set-dot" title="Connected" />}
+            <span className="set-chevron" aria-hidden>
+              ›
+            </span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** A service's own icon, or a glyph when it does not load. */
+function Fav({ src, glyph }: { src: string; glyph: string }) {
+  const [broken, setBroken] = useState(false)
+  return broken ? <span className="set-glyph">{glyph}</span> : <img className="set-fav" src={src} alt="" onError={() => setBroken(true)} />
+}
+
+/** updown.io's read-only API key, for the Status widget. */
+function UpdownSettings() {
   const account = useAccount()
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  if (account.status !== 'user') return <p className="muted">Sign in first to connect services for widgets.</p>
   const save = async (e: FormEvent) => {
     e.preventDefault()
     setBusy(true)
@@ -558,23 +637,15 @@ function Integrations() {
   }
   return (
     <>
-      <ul className="set-list">
-        <li className="set-row">
-          <img className="set-fav" src="https://updown.io/favicon.ico" alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
-          <span className="set-row-text">
-            <strong>updown.io</strong>
-            <span className="muted">
-              {account.integrations.updown === 'server' ? 'Connected with the key set on the server' : account.integrations.updown ? 'Connected · for the Status widget' : 'Uptime checks, for the Status widget'}
-            </span>
-          </span>
-          {account.integrations.updown === 'settings' && (
-            <button className="btn btn-small" onClick={() => removeUpdownKey().catch((e: Error) => setError(e.message))}>
-              Remove key
-            </button>
-          )}
-        </li>
-      </ul>
-      {!account.integrations.updown && (
+      {account.integrations.updown === 'server' && <p className="muted">Connected with UPDOWN_API_KEY from the server's environment. A key saved here would be used instead.</p>}
+      {account.integrations.updown === 'settings' ? (
+        <>
+          <p className="muted">Connected with a read-only key saved here, stored encrypted on this server. The Status widget shows your checks.</p>
+          <button className="btn btn-small" onClick={() => removeUpdownKey().catch((e: Error) => setError(e.message))}>
+            Remove key
+          </button>
+        </>
+      ) : (
         <form className="set-form" onSubmit={save}>
           <label>
             <span>Read-only API key</span>
@@ -593,181 +664,197 @@ function Integrations() {
         </form>
       )}
       {error && <p className="t-red">{error}</p>}
-      <SeafileSettings />
     </>
   )
 }
 
-/** Seafile for the Files app, and the OnlyOffice server it uses for Office files. */
+/** Seafile for Files and the desktop: linking, the primary library and home, encrypted libraries. */
 function SeafileSettings() {
   const account = useAccount()
   const seafile = account.seafile
   const [form, setForm] = useState({ url: '', username: '', password: '', otp: '' })
   const [askOtp, setAskOtp] = useState(false)
-  const [office, setOfficeForm] = useState({ url: '', secret: '' })
-  const [busy, setBusy] = useState<'link' | 'office' | null>(null)
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { libraries: libs, error: libsError } = useLibraries()
-  const libraries = libs?.length ?? null
   const sfPrefs = useSeafilePrefs()
   const primary = primaryOf(libs, sfPrefs.primary)
 
-  const run = async (what: 'link' | 'office', fn: () => Promise<void>) => {
-    setBusy(what)
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true)
     setError(null)
     try {
       await fn()
     } catch (err) {
       setError((err as Error).message)
     } finally {
-      setBusy(null)
+      setBusy(false)
     }
   }
   const link = (e: FormEvent) => {
     e.preventDefault()
-    run('link', async () => {
+    run(async () => {
       if ((await linkSeafile(form)) === 'otp') return setAskOtp(true)
       setForm({ url: '', username: '', password: '', otp: '' })
       setAskOtp(false)
     })
   }
-  const saveOffice = (e: FormEvent) => {
-    e.preventDefault()
-    run('office', async () => {
-      await setOffice(office)
-      setOfficeForm({ url: '', secret: '' })
-    })
-  }
-  const host = (url: string) => url.replace(/^https?:\/\//, '')
+
+  if (!seafile)
+    return (
+      <form className="set-form" onSubmit={link}>
+        <label>
+          <span>Server URL</span>
+          <input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://seafile.example.com" required spellCheck={false} autoComplete="off" />
+        </label>
+        <label>
+          <span>Email or username</span>
+          <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="you@example.com" required spellCheck={false} autoComplete="off" />
+        </label>
+        <label>
+          <span>Password</span>
+          <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="password" required autoComplete="off" />
+        </label>
+        {askOtp && (
+          <label>
+            <span>2FA code</span>
+            <input value={form.otp} onChange={(e) => setForm({ ...form, otp: e.target.value })} placeholder="123456" inputMode="numeric" autoComplete="one-time-code" required autoFocus />
+          </label>
+        )}
+        <p className="muted set-help">
+          Your libraries in Files. The password is used once to sign in and is not kept: this server stores only the token Seafile hands out, encrypted. It shows in Seafile under <em>Settings → Devices</em> as {`"mennovanleeuwen.nl"`}, where you can revoke it.
+        </p>
+        {error && <p className="t-red">{error}</p>}
+        <button className="btn btn-primary" disabled={busy}>
+          {busy ? 'Signing in…' : askOtp ? 'Verify and link' : 'Link Seafile'}
+        </button>
+      </form>
+    )
 
   return (
     <>
-      <h4 className="set-subhead">Seafile</h4>
-      {seafile ? (
-        <>
-          <ul className="set-list">
-            <li className="set-row">
-              <img className="set-fav" src={`${seafile.url}/media/favicons/favicon.png`} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
-              <span className="set-row-text">
-                <strong>{seafile.name || seafile.username}</strong>
-                <span className="muted">
-                  {seafile.username} · {host(seafile.url)}
-                  {seafile.version && ` · Seafile ${seafile.version}`}
-                  {libraries !== null && ` · ${libraries} ${libraries === 1 ? 'library' : 'libraries'}`}
-                </span>
-              </span>
-              <button className="btn btn-small" onClick={() => run('link', unlinkSeafile)}>
-                Unlink
-              </button>
-            </li>
-            {seafile.office && (
-              <li className="set-row">
-                <span className="set-glyph">📝</span>
-                <span className="set-row-text">
-                  <strong>OnlyOffice</strong>
-                  <span className="muted">{host(seafile.office.url)} · for Word, Excel and PowerPoint files</span>
-                </span>
-                <button className="btn btn-small" onClick={() => run('office', removeOffice)}>
-                  Remove
-                </button>
-              </li>
-            )}
-          </ul>
-          <ul className="set-list">
-            <li className="set-row">
-              <span className="set-row-text">
-                <strong>Primary library</strong>
-                <span className="muted">Home in Files: its Desktop, Documents, Downloads, Music, Pictures and Videos folders</span>
-              </span>
-              <select className="set-select" value={primary?.id ?? ''} disabled={!libs?.length} onChange={(e) => setSeafilePrefs({ primary: e.target.value })} aria-label="Primary library">
-                {!libs && <option value="">Loading…</option>}
-                {libs?.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.name}
-                    {l.encrypted ? ' 🔒' : ''}
-                    {l.type !== 'mine' && l.owner ? ` (${l.owner})` : ''}
-                  </option>
-                ))}
-              </select>
-            </li>
-            <li className="set-row">
-              <span className="set-row-text">
-                <strong>Use as home</strong>
-                <span className="muted">{sfPrefs.home ? `Files and the desktop use ${primary?.name ?? 'the primary library'}` : 'Off: home is the built-in one, Seafile is still under Libraries in Files'}</span>
-              </span>
-              <Toggle on={sfPrefs.home} onChange={(home) => setSeafilePrefs({ home })} label="Use the primary library as home" />
-            </li>
-            <li className="set-row">
-              <span className="set-row-text">
-                <strong>Encrypted libraries</strong>
-                <span className="muted">Ask for the password again after</span>
-              </span>
-              <select className="set-select" value={sfPrefs.lockMinutes} onChange={(e) => setSeafilePrefs({ lockMinutes: Number(e.target.value) })} aria-label="Lock encrypted libraries after">
-                {[5, 15, 30, 55].map((m) => (
-                  <option key={m} value={m}>
-                    {m} minutes
-                  </option>
-                ))}
-              </select>
-            </li>
-          </ul>
-          {libsError && (
-            <p className="t-red">
-              {libsError}{' '}
-              <button className="btn btn-small" onClick={() => loadLibraries(true)}>
-                Try again
-              </button>
-            </p>
-          )}
-          {!seafile.office && (
-            <form className="set-form" onSubmit={saveOffice}>
-              <label>
-                <span>OnlyOffice URL</span>
-                <input value={office.url} onChange={(e) => setOfficeForm({ ...office, url: e.target.value })} placeholder="https://office.example.com" required spellCheck={false} autoComplete="off" />
-              </label>
-              <label>
-                <span>JWT secret</span>
-                <input type="password" value={office.secret} onChange={(e) => setOfficeForm({ ...office, secret: e.target.value })} placeholder="ONLYOFFICE_JWT_SECRET" required autoComplete="off" />
-              </label>
-              <p className="muted set-help">
-                Optional: the document server Seafile opens Office files with, to edit them in a window here. The secret is <em>ONLYOFFICE_JWT_SECRET</em> from Seafile's <em>.env</em> (or <em>seahub_settings.py</em>). The URL is checked by loading its editor, then both are stored encrypted on this server.
-              </p>
-              <button className="btn btn-primary" disabled={busy === 'office'}>
-                {busy === 'office' ? 'Checking…' : 'Add OnlyOffice'}
-              </button>
-            </form>
-          )}
-        </>
-      ) : (
-        <form className="set-form" onSubmit={link}>
-          <label>
-            <span>Server URL</span>
-            <input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://seafile.example.com" required spellCheck={false} autoComplete="off" />
-          </label>
-          <label>
-            <span>Email or username</span>
-            <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="you@example.com" required spellCheck={false} autoComplete="off" />
-          </label>
-          <label>
-            <span>Password</span>
-            <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="password" required autoComplete="off" />
-          </label>
-          {askOtp && (
-            <label>
-              <span>2FA code</span>
-              <input value={form.otp} onChange={(e) => setForm({ ...form, otp: e.target.value })} placeholder="123456" inputMode="numeric" autoComplete="one-time-code" required autoFocus />
-            </label>
-          )}
-          <p className="muted set-help">
-            Your libraries in Files. The password is used once to sign in and is not kept: this server stores only the token Seafile hands out, encrypted. It shows in Seafile under <em>Settings → Devices</em> as {`"mennovanleeuwen.nl"`}, where you can revoke it.
-          </p>
-          <button className="btn btn-primary" disabled={busy === 'link'}>
-            {busy === 'link' ? 'Signing in…' : askOtp ? 'Verify and link' : 'Link Seafile'}
+      <ul className="set-list">
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>{seafile.name || seafile.username}</strong>
+            <span className="muted">
+              {seafile.username} · {seafile.url.replace(/^https?:\/\//, '')}
+              {seafile.version && ` · Seafile ${seafile.version}`}
+            </span>
+          </span>
+          <button className="btn btn-small" disabled={busy} onClick={() => confirm('Unlink Seafile? Files and the desktop stop showing it, and this device is signed out on Seafile.') && run(unlinkSeafile)}>
+            Unlink
           </button>
-        </form>
+        </li>
+      </ul>
+      <ul className="set-list">
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Primary library</strong>
+            <span className="muted">Home in Files: its Desktop, Documents, Downloads, Music, Pictures and Videos folders</span>
+          </span>
+          <select className="set-select" value={primary?.id ?? ''} disabled={!libs?.length} onChange={(e) => setSeafilePrefs({ primary: e.target.value })} aria-label="Primary library">
+            {!libs && <option value="">Loading…</option>}
+            {libs?.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name}
+                {l.encrypted ? ' 🔒' : ''}
+                {l.type !== 'mine' && l.owner ? ` (${l.owner})` : ''}
+              </option>
+            ))}
+          </select>
+        </li>
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Use as home</strong>
+            <span className="muted">{sfPrefs.home ? `Files and the desktop use ${primary?.name ?? 'the primary library'}` : 'Off: home is the built-in one, Seafile is still in Files’ sidebar'}</span>
+          </span>
+          <Toggle on={sfPrefs.home} onChange={(home) => setSeafilePrefs({ home })} label="Use the primary library as home" />
+        </li>
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Encrypted libraries</strong>
+            <span className="muted">Ask for the password again after</span>
+          </span>
+          <select className="set-select" value={sfPrefs.lockMinutes} onChange={(e) => setSeafilePrefs({ lockMinutes: Number(e.target.value) })} aria-label="Lock encrypted libraries after">
+            {[5, 15, 30, 55].map((m) => (
+              <option key={m} value={m}>
+                {m} minutes
+              </option>
+            ))}
+          </select>
+        </li>
+      </ul>
+      {libsError && (
+        <p className="t-red">
+          {libsError}{' '}
+          <button className="btn btn-small" onClick={() => loadLibraries(true)}>
+            Try again
+          </button>
+        </p>
       )}
       {error && <p className="t-red">{error}</p>}
     </>
+  )
+}
+
+/** The OnlyOffice document server Seafile uses, for editing Office files in a window. */
+function OfficeSettings() {
+  const account = useAccount()
+  const office = account.seafile?.office
+  const [form, setForm] = useState({ url: '', secret: '' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await fn()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  if (office)
+    return (
+      <>
+        <p className="muted">
+          Using {office.url.replace(/^https?:\/\//, '')}, with its JWT secret stored encrypted on this server.
+        </p>
+        <button className="btn btn-small" disabled={busy} onClick={() => run(removeOffice)}>
+          Remove
+        </button>
+        {error && <p className="t-red">{error}</p>}
+      </>
+    )
+  return (
+    <form
+      className="set-form"
+      onSubmit={(e) => {
+        e.preventDefault()
+        run(async () => {
+          await setOffice(form)
+          setForm({ url: '', secret: '' })
+        })
+      }}
+    >
+      <label>
+        <span>OnlyOffice URL</span>
+        <input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://office.example.com" required spellCheck={false} autoComplete="off" />
+      </label>
+      <label>
+        <span>JWT secret</span>
+        <input type="password" value={form.secret} onChange={(e) => setForm({ ...form, secret: e.target.value })} placeholder="ONLYOFFICE_JWT_SECRET" required autoComplete="off" />
+      </label>
+      <p className="muted set-help">
+        The document server Seafile opens Office files with, to edit them in a window here. The secret is <em>ONLYOFFICE_JWT_SECRET</em> from Seafile's <em>.env</em> (or <em>seahub_settings.py</em>). The URL is checked by loading its editor, then both are stored encrypted on this server.
+      </p>
+      {error && <p className="t-red">{error}</p>}
+      <button className="btn btn-primary" disabled={busy}>
+        {busy ? 'Checking…' : 'Add OnlyOffice'}
+      </button>
+    </form>
   )
 }
 
