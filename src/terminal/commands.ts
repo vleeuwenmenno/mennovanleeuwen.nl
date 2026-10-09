@@ -535,7 +535,7 @@ export const commands: Record<string, Command> = {
   'xdg-open': { desc: 'alias for open', hidden: true, run: (ctx) => commands.open.run(ctx) },
   go: {
     desc: 'follow a go link through your golinks account',
-    usage: 'go <alias>   |   go set <search url | token>   |   go unset   (go -- set follows an alias named set)',
+    usage: 'go <alias>   |   go set <search url | token>   |   go unset   (go -- set follows an alias named set; Tab after go lists your aliases)',
     run: ({ args }) => {
       const template = golinksTemplate()
       const where = signedIn() ? 'synced to your account' : 'saved in this browser'

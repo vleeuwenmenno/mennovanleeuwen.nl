@@ -72,6 +72,11 @@ const cache = new Map<string, GoSuggestion[]>()
  * origin, and the token never passes through this site's server. Empty `q` lists the most used.
  */
 export function useGoSuggestions(template: string | null, q: string, enabled: boolean): GoSuggestion[] {
+  return useGoSuggestionState(template, q, enabled).list
+}
+
+/** The same, plus whether the list is the answer for this `q` yet (not the previous one's). */
+export function useGoSuggestionState(template: string | null, q: string, enabled: boolean): { list: GoSuggestion[]; ready: boolean } {
   const query = q.trim()
   const on = enabled && !!template
   const key = `${template}|${query.toLowerCase()}`
@@ -102,5 +107,5 @@ export function useGoSuggestions(template: string | null, q: string, enabled: bo
   }, [on, key, template, query])
 
   // The previous query's aliases stay until the new ones land, so the list doesn't flicker.
-  return on ? result.list : []
+  return on ? { list: result.list, ready: result.key === key } : { list: [], ready: false }
 }
