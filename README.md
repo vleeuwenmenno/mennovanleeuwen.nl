@@ -162,6 +162,19 @@ last day's response time and certificates that expire within two weeks
 ([`server/updown.ts`](server/updown.ts)). It uses updown's *read-only* API key, from
 `UPDOWN_API_KEY` on the server or saved in Settings → Integrations (stored encrypted).
 
+**Seafile** comes into Files: Settings → Integrations links one account with its URL, username
+and password (and a 2FA code if it has one). The password is used once; the server keeps only the
+token Seafile hands out, encrypted, which shows up in Seafile's Devices as the site
+([`server/seafile.ts`](server/seafile.ts)). Every library is under Seafile in Files' sidebar. The
+primary library (My Library unless you pick another) is home unless you switch that off: Places'
+Desktop, Documents, Downloads and so on are its folders, and the desktop shows its Desktop folder.
+Text, code and config open in Zed and save back with Ctrl+S; pictures, video, audio and PDFs open in
+the Viewer; the rest downloads. Encrypted libraries ask for their password in the window and lock
+again after the minutes set in Settings (the password is never stored). Seahub's API sends no CORS
+headers, so it goes through the server; files themselves go straight between the browser and
+Seafile's file server, with links the server hands out. The sidebar's sections and items can be
+dragged into another order and hidden (right-click, or *Customize sidebar*), synced like the dock.
+
 The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests
 and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 ([`server/inbox.ts`](server/inbox.ts)), with the access sign-in and linking already give.
