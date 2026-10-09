@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { resource, RESOURCES, type Bag, type Estate, type ResId } from './estate'
 import { MATERIALS, type Item, type Look, type Slot, type WeaponKind } from './data'
 import { drawFighter, drawShield, drawWeapon, kitOf, weaponKind, type Kit } from './render'
@@ -188,9 +188,33 @@ export const Gold = ({ n }: { n: number }) => (
 
 export const tierColour = (it: Item) => MATERIALS[it.tier].base
 
+/**
+ * Pins an overlay to the part of the game that's in view. The game scrolls inside `.gl-root`, so
+ * `inset: 0` alone would cover its top, wherever the page is scrolled to; this also holds the
+ * page still underneath while the overlay is open.
+ */
+export function useOverlay<T extends HTMLElement>() {
+  const ref = useRef<T>(null)
+  useLayoutEffect(() => {
+    const el = ref.current
+    const root = el?.closest<HTMLElement>('.gl-root')
+    if (!el || !root) return
+    const was = root.style.overflow
+    el.style.top = `${root.scrollTop}px`
+    el.style.bottom = 'auto'
+    el.style.height = `${root.clientHeight}px`
+    root.style.overflow = 'hidden'
+    return () => {
+      root.style.overflow = was
+    }
+  }, [])
+  return ref
+}
+
 export function Modal({ children, onClose, wide }: { children: ReactNode; onClose?: () => void; wide?: boolean }) {
+  const ref = useOverlay<HTMLDivElement>()
   return (
-    <div className="gl-modal" onPointerDown={(e) => e.target === e.currentTarget && onClose?.()}>
+    <div ref={ref} className="gl-modal" onPointerDown={(e) => e.target === e.currentTarget && onClose?.()}>
       <div className={`gl-panel gl-modal-box ${wide ? 'is-wide' : ''}`}>{children}</div>
     </div>
   )

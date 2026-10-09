@@ -9,7 +9,8 @@ import {
 } from './data'
 import { blueprintPrice, craftFee, craftTime, have, knowsBlueprint, prettyHours, recipe, slotsAt, startCraft } from './estate'
 import type { ClipName } from './rig'
-import { BagView, Bar, CardIcon, Gold, ItemArt, Modal, PageHead, PlaceIcon, Portrait, useNow } from './ui'
+import { CardView, PerkDeck, PerkDraft } from './cards'
+import { BagView, Bar, CardIcon, Gold, ItemArt, PageHead, PlaceIcon, Portrait, useNow } from './ui'
 
 // The town between fights: the hub, the arena's notice board, the shops, the trainer, your
 // gladiator's sheet and the tournament bracket.
@@ -849,20 +850,6 @@ export function perkChoices(save: Save): PerkId[] {
     .map((x) => x.p.id)
 }
 
-const PERK_GLYPH: Record<PerkId, string> = {
-  riposte: '↩️',
-  cleave: '🪓',
-  showman: '🎭',
-  secondWind: '💨',
-  ironSkin: '🛡️',
-  fleetFoot: '👟',
-  bloodlust: '🩸',
-  arcane: '🔮',
-  thickSkull: '🪖',
-  executioner: '💀',
-  goldTongue: '🪙',
-}
-
 export function Sheet({ save, update, onBack, sound }: { save: Save; update: Update; onBack: () => void; sound: { ui: () => void; fanfare: () => void } }) {
   const g = save.g
   const d = derive(g)
@@ -873,6 +860,7 @@ export function Sheet({ save, update, onBack, sound }: { save: Save; update: Upd
     update((s) => ({ ...s, g: { ...s.g, points: s.g.points - 1, stats: { ...s.g.stats, [k]: s.g.stats[k] + 1 } } }))
   }
   const choices = save.pendingPerks > 0 ? perkChoices(save) : []
+  const [held, setHeld] = useState<{ id: PerkId; level: number } | null>(null)
   const cap = Math.max(12, ...STATS.map((x) => gs[x.key]))
   const nextPerk = PERK_LEVELS.find((l) => l > g.level)
   const tiles: [string, string][] = [
@@ -951,26 +939,10 @@ export function Sheet({ save, update, onBack, sound }: { save: Save; update: Upd
           </div>
           <div className="gl-panel">
             <h3>
-              Perks <span className="gl-points">{nextPerk ? `next at level ${nextPerk}` : 'all earned'}</span>
+              Perk cards <span className="gl-points">{nextPerk ? `next at level ${nextPerk}` : 'all earned'}</span>
             </h3>
-            {g.perks.length ? (
-              <div className="gl-perk-list">
-                {g.perks.map((id) => {
-                  const p = PERKS.find((x) => x.id === id)!
-                  return (
-                    <div key={id} className="gl-perk">
-                      <i>{PERK_GLYPH[id]}</i>
-                      <div>
-                        <strong>{p.name}</strong>
-                        <span className="gl-muted">{p.text}</span>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : (
-              <p className="gl-muted">A perk every five levels: pick one of three tricks from the doctore.</p>
-            )}
+            <PerkDeck perks={g.perks} onOpen={(id, level) => (sound.ui(), setHeld({ id, level }))} />
+            {!g.perks.length && <p className="gl-muted gl-fine">A card every five levels: the doctore deals three and you keep one.</p>}
             {g.spells.length > 0 && (
               <>
                 <h3>Spellbook</h3>
@@ -1017,32 +989,17 @@ export function Sheet({ save, update, onBack, sound }: { save: Save; update: Upd
         </section>
       </div>
       {choices.length > 0 && (
-        <Modal>
-          <h2>Choose a perk</h2>
-          <p className="gl-muted">Level {g.level}: the doctore teaches you a trick.</p>
-          <div className="gl-perk-pick">
-            {choices.map((id) => {
-              const p = PERKS.find((x) => x.id === id)!
-              return (
-                <button
-                  key={id}
-                  className="gl-mode gl-perk"
-                  onClick={() => {
-                    sound.fanfare()
-                    update((s) => ({ ...s, pendingPerks: s.pendingPerks - 1, g: { ...s.g, perks: [...s.g.perks, id] } }))
-                  }}
-                >
-                  <i>{PERK_GLYPH[id]}</i>
-                  <div>
-                    <strong>{p.name}</strong>
-                    <span>{p.text}</span>
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-        </Modal>
+        <PerkDraft
+          key={g.perks.length}
+          choices={choices}
+          level={g.level}
+          onPick={(id) => {
+            sound.fanfare()
+            update((s) => ({ ...s, pendingPerks: s.pendingPerks - 1, g: { ...s.g, perks: [...s.g.perks, id] } }))
+          }}
+        />
       )}
+      {held && <CardView id={held.id} level={held.level} onClose={() => setHeld(null)} />}
     </div>
   )
 }
