@@ -243,21 +243,31 @@ export function lookup(path: string): Node | null {
 
 export const prettyPath = (path: string) => (path === HOME ? '~' : path.startsWith(HOME + '/') ? '~' + path.slice(HOME.length) : path)
 
-export type FileKind = 'folder' | 'image' | 'text' | 'markdown' | 'link' | 'game' | 'audio' | 'video' | 'disc' | 'archive' | 'package' | 'file'
+export type FileKind = 'folder' | 'image' | 'text' | 'markdown' | 'link' | 'game' | 'audio' | 'video' | 'disc' | 'archive' | 'package' | 'pdf' | 'document' | 'file'
 
-export function fileKind(node: Node): FileKind {
-  if (node.type === 'dir') return 'folder'
-  const ext = node.name.includes('.') ? node.name.split('.').pop()!.toLowerCase() : ''
-  if (['svg', 'png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) return 'image'
-  if (ext === 'md') return 'markdown'
+export const fileKind = (node: Node): FileKind => kindOfName(node.name, node.type === 'dir')
+
+/** Text, source code, scripts and config: what Zed opens. */
+const TEXT_EXTS = new Set(
+  'txt conf cfg ini toml yaml yml json jsonc json5 xml csv tsv log env properties sh bash zsh fish ps1 bat cmd ts tsx js jsx mjs cjs css scss sass less html htm vue svelte py rb go rs c h cc cpp hpp cs java kt kts swift php pl lua r sql graphql proto dockerfile makefile mk cmake gradle nix tf hcl lock gitignore gitattributes editorconfig diff patch rst tex org adoc srt vtt'.split(' '),
+)
+
+/** A file's kind from its name alone (for files that are not in this filesystem, like Seafile's). */
+export function kindOfName(name: string, dir = false): FileKind {
+  if (dir) return 'folder'
+  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : ''
+  if (['svg', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'ico'].includes(ext)) return 'image'
+  if (['md', 'markdown'].includes(ext)) return 'markdown'
   if (ext === 'url') return 'link'
   if (ext === 'game') return 'game'
-  if (['flac', 'mp3', 'ogg', 'wav'].includes(ext)) return 'audio'
-  if (['mp4', 'mkv', 'webm'].includes(ext)) return 'video'
+  if (['flac', 'mp3', 'ogg', 'oga', 'opus', 'wav', 'm4a', 'aac'].includes(ext)) return 'audio'
+  if (['mp4', 'mkv', 'webm', 'mov', 'm4v', 'ogv'].includes(ext)) return 'video'
   if (ext === 'iso') return 'disc'
-  if (['tar', 'gz', 'zip', 'xz'].includes(ext)) return 'archive'
+  if (['tar', 'gz', 'tgz', 'zip', 'xz', 'bz2', 'zst', '7z', 'rar'].includes(ext)) return 'archive'
   if (ext === 'appimage') return 'package'
-  if (['txt', 'conf', ''].includes(ext) || node.name.startsWith('.')) return 'text'
+  if (ext === 'pdf') return 'pdf'
+  if (['doc', 'docx', 'odt', 'rtf', 'pages', 'xls', 'xlsx', 'ods', 'numbers', 'ppt', 'pptx', 'odp', 'key'].includes(ext)) return 'document'
+  if (ext === '' || TEXT_EXTS.has(ext) || name.startsWith('.') || /^(Dockerfile|Makefile|Caddyfile|Justfile|Procfile|LICENSE|README)$/i.test(name)) return 'text'
   return 'file'
 }
 
@@ -273,6 +283,8 @@ export const KIND_LABEL: Record<FileKind, string> = {
   disc: 'Disc image',
   archive: 'Archive',
   package: 'AppImage',
+  pdf: 'PDF',
+  document: 'Document',
   file: 'File',
 }
 

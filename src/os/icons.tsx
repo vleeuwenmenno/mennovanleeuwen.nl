@@ -49,6 +49,87 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  preview: {
+    bg: 'linear-gradient(160deg,#7aa2f7,#3d59a1)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <rect x="10" y="12" width="28" height="24" rx="3" />
+        <path d="M10 31l8-8 6 6 4-4 10 9" />
+        <circle cx="31" cy="19" r="2.5" />
+      </>
+    ),
+  },
+  player: {
+    bg: 'linear-gradient(160deg,#3b3f52,#16171f)',
+    fg: '#e0af68',
+    glyph: (
+      <>
+        <circle cx="24" cy="24" r="13" />
+        <path d="M21 18l9 6-9 6z" fill="currentColor" />
+      </>
+    ),
+  },
+  archive: {
+    bg: 'linear-gradient(160deg,#e0af68,#9a6b1f)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <rect x="11" y="14" width="26" height="22" rx="2" />
+        <path d="M11 20h26M24 14v6M22 25h4M22 29h4" />
+      </>
+    ),
+  },
+  office: {
+    bg: 'linear-gradient(160deg,#7aa2f7,#2f4a8a)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <path d="M14 9h14l7 7v23H14z" />
+        <path d="M28 9v7h7M19 22h11M19 27h11M19 32h7" />
+      </>
+    ),
+  },
+  newdoc: {
+    bg: 'linear-gradient(160deg,#4a8cf7,#1f4fb8)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <path d="M13 9h15l7 7v23H13z" />
+        <path d="M17 21l3 11 3-8 3 8 3-11" />
+      </>
+    ),
+  },
+  newsheet: {
+    bg: 'linear-gradient(160deg,#3fb27f,#1d6d4a)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <path d="M13 9h15l7 7v23H13z" />
+        <path d="M17 21h14v12H17zM17 27h14M24 21v12" />
+      </>
+    ),
+  },
+  newslides: {
+    bg: 'linear-gradient(160deg,#f2994a,#c0571a)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <path d="M13 9h15l7 7v23H13z" />
+        <path d="M17 20h14v10H17zM24 30v4M21 34h6" />
+      </>
+    ),
+  },
+  pdf: {
+    bg: 'linear-gradient(160deg,#f7768e,#b3364f)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <path d="M14 9h14l7 7v23H14z" />
+        <path d="M28 9v7h7M19 25h11M19 30h11M19 20h5" />
+      </>
+    ),
+  },
   viewer: {
     bg: 'linear-gradient(160deg,#4fd1c5,#2c8f86)',
     fg: '#fff',
@@ -194,6 +275,14 @@ const HUES: Record<AppId, string> = {
   files: 'var(--blue)',
   projects: 'var(--orange)',
   viewer: 'var(--cyan)',
+  preview: 'var(--blue)',
+  pdf: 'var(--red)',
+  office: 'var(--blue)',
+  archive: 'var(--yellow)',
+  newdoc: 'var(--blue)',
+  newsheet: 'var(--green)',
+  newslides: 'var(--orange)',
+  player: 'var(--orange)',
   recents: 'var(--red)',
   cv: 'var(--text)',
   contact: 'var(--magenta)',

@@ -32,7 +32,10 @@ const serviceWorker = (): Plugin => ({
   name: 'mvlos-sw',
   apply: 'build',
   generateBundle(_, bundle) {
-    const built = Object.keys(bundle).filter((f) => !f.endsWith('.map') && f !== 'index.html').map((f) => `/${f}`)
+    // pdf.js (1.7 MB) only loads when the owner opens a PDF: not something every visitor should download.
+    const built = Object.keys(bundle)
+      .filter((f) => !f.endsWith('.map') && f !== 'index.html' && !/(^|\/)pdf(\.worker\.min)?[-.]/.test(f))
+      .map((f) => `/${f}`)
     const statics = ['/', '/favicon.svg', '/manifest.webmanifest', '/icons/app.svg', '/icons/app-192.png', '/icons/boltwarden.svg', '/recents.json', '/contributions.json']
     const precache = [...statics, ...built]
     const version = createHash('sha256').update(precache.join('\n')).digest('hex').slice(0, 12)

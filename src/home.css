@@ -752,6 +752,77 @@ input.is-bad {
 .set-help {
   font-size: 12px;
 }
+.set-row.is-off {
+  opacity: 0.5;
+}
+.set-row-link {
+  padding: 0;
+}
+.set-row-link > button {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+.set-row-link > button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.set-row-link > button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.set-chevron {
+  flex: none;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+.set-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+}
+.set-up {
+  margin: 0 0 10px;
+  padding: 0;
+  color: var(--accent);
+}
+.set-up:hover {
+  text-decoration: underline;
+}
+.set-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+.set-badge {
+  padding: 1px 6px;
+  font-size: 11px;
+  color: var(--green);
+  border: 1px solid color-mix(in srgb, var(--green) 50%, transparent);
+}
+.set-select {
+  flex: none;
+  max-width: 45%;
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+}
+.set-select:focus {
+  border-color: var(--accent);
+  outline: 0;
+}
 
 @media (max-width: 719px) {
   .set-form label,

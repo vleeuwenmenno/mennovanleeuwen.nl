@@ -5,7 +5,7 @@ import { faviconOf, launch as launchLink, useLaunchers } from '../data/launchers
 import { createNote } from '../data/notes'
 import { addWidget, widgetDefs } from '../widgets/registry'
 import { contributions, profile, projects } from '../data/profile'
-import { signedIn } from './account'
+import { getAccount, signedIn } from './account'
 import { APP_META } from './apps'
 import { appearanceMenu } from './appearanceMenu'
 import { openContextMenu, type MenuItem } from './ContextMenu'
@@ -16,7 +16,7 @@ import { AppIcon } from './icons'
 import { setOverlay } from './overlays'
 import { openLink } from '../data/links'
 import { reboot, shutdown } from './powerState'
-import { SINGLE_INSTANCE, useWM, type AppId } from './wm'
+import { ALWAYS_NEW, SINGLE_INSTANCE, useWM, type AppId } from './wm'
 
 // The "All apps" launcher, modelled on Omarchy's menu (Super + Alt + Space): a small "Go…" list
 // of categories that open into submenus. Typing searches every entry at once. Ctrl+K's
@@ -37,7 +37,7 @@ type Entry = {
   dockId?: DockId
 }
 
-const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'mcserver', 'notebook', 'calendar', 'contact', 'notes', 'keys', 'settings', 'trash']
+const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'preview', 'player', 'newdoc', 'newsheet', 'newslides', 'projects', 'recents', 'cv', 'games', 'mcserver', 'notebook', 'calendar', 'contact', 'notes', 'keys', 'settings', 'trash']
 
 const stroke = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const
 const Icon = ({ children }: { children: ReactNode }) => (
@@ -129,7 +129,7 @@ export function Launchpad() {
         icon: ICONS.apps,
         children: () =>
           // The Calendar app only means something to the signed-in owner.
-          APP_ORDER.filter((a) => APP_META[a] && (a !== 'calendar' || signedIn())).map((app) => ({
+          APP_ORDER.filter((a) => APP_META[a] && (a !== 'calendar' || signedIn()) && (!ALWAYS_NEW.has(a) || !!getAccount().seafile?.office)).map((app) => ({
             label: APP_META[app].dock,
             icon: <AppIcon app={app} size={16} tone />,
             run: () => wm.open(app),

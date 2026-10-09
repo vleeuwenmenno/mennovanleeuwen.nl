@@ -15,7 +15,8 @@ import { countFor, useContributions } from '../data/contributions'
 import { fetchMinecraft, MC_ADDRESS, useMinecraft } from '../data/minecraft'
 import { contributions, profile, projects } from '../data/profile'
 import { timeAgo, useRecents } from '../data/recents'
-import { age, HOME, lookup, prettyPath, walk } from '../terminal/vfs'
+import { age, fileKind, HOME, lookup, prettyPath, walk } from '../terminal/vfs'
+import { MEDIA_APP } from '../data/media'
 import { signIn, useAccount } from './account'
 import { APP_META } from './apps'
 import { useCodeSearch } from './codeSearch'
@@ -30,7 +31,7 @@ import { AppIcon } from './icons'
 import { setOverlay } from './overlays'
 import { THEMES } from './omarchyThemes'
 import { ACCENTS, setAccent, setMode, setTheme, themeLabel, themeSettings } from './theme'
-import { SINGLE_INSTANCE, useWM, type AppId } from './wm'
+import { ALWAYS_NEW, SINGLE_INSTANCE, useWM, type AppId } from './wm'
 
 // Ctrl+K: one search box for apps, files, projects, games, live status, quick actions, maths and
 // terminal commands, with a preview of the highlighted result on the right.
@@ -544,7 +545,8 @@ export function Spotlight() {
 
     // Apps
     for (const app of Object.keys(APP_META) as AppId[]) {
-      if (app === 'viewer' || app === 'widget') continue // need a file, or are added as widgets
+      if (app === 'viewer' || app === 'widget' || app === 'pdf' || app === 'office' || app === 'archive') continue // need a file, or are added as widgets
+      if (ALWAYS_NEW.has(app) && !account.seafile?.office) continue // OnlyOffice is not set up
       if (app === 'linkforge') continue // a dialog of Settings
       if (app === 'mcserver') continue // the Minecraft server's status entry opens it
       if (app === 'calendar' && account.status !== 'user') continue // the owner's own calendars
@@ -685,7 +687,7 @@ export function Spotlight() {
           if (node.open?.url) openLink(node.open.url)
           else if (node.open?.app) wm.open(node.open.app as AppId, node.open.props)
           else if (name.endsWith('.md')) wm.open('zed', { path, view: 'preview', t: String(Date.now()) })
-          else wm.openNew('viewer', { path })
+          else wm.openNew(MEDIA_APP[fileKind(node)] ?? 'viewer', { path })
         },
         alt: { label: 'Open in terminal', run: () => term(`cat ${prettyPath(path)}`, true) },
         preview: () => <FilePreview path={path} />,

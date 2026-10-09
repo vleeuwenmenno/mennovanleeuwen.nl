@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useWM, type WinState } from '../os/wm'
-import { fileKind, HOME, KIND_LABEL, lookup, prettyPath, walk, type DirNode, type Node } from '../terminal/vfs'
+import { fileKind, HOME, KIND_LABEL, kindOfName, lookup, prettyPath, walk, type DirNode, type Node } from '../terminal/vfs'
+import { isSf, libraryName, parseSf, readText, writeText } from '../data/seafile'
+import { ask } from '../os/Dialogs'
 
 // A small Zed: a project panel on the left, tabs, and an editor with line numbers, a current-line
 // highlight and Markdown highlighting, plus a Markdown preview, find (Ctrl+F), project search
@@ -13,12 +15,18 @@ const LINE = 20 // px; the gutter, the highlight layers and the textarea share i
 const PAD = 12 // px above the first line
 const SEARCH = 'search://' // the project search tab
 
-type Buffer = { text: string; saved: string }
+/** loading: a Seafile file on its way in; error: it could not be read (nothing to save over it). */
+type Buffer = { text: string; saved: string; loading?: boolean; error?: string }
 type View = 'edit' | 'preview' | 'split'
 type Jump = { path: string; line: number; col: number; len: number }
 
 const join = (dir: string, name: string) => `${dir === '/' ? '' : dir}/${name}`
 const base = (path: string) => (path === '/' ? '/' : path.split('/').pop()!)
+/** Where a file is, for tabs and the status bar: Seafile files by library. */
+const where = (path: string) => {
+  const at = parseSf(path)
+  return at ? `${libraryName(at.repo)}${at.p}` : prettyPath(path)
+}
 const isMarkdown = (path: string) => /\.md$/i.test(path)
 
 function read(path: string) {
@@ -80,14 +88,24 @@ export function Zed({ win }: { win: WinState }) {
 
   const openFile = (path: string, at?: Omit<Jump, 'path'>) => {
     setTabs((ts) => (ts.includes(path) ? ts : [...ts, path]))
-    setBuffers((bs) => (bs[path] ? bs : { ...bs, [path]: { text: read(path), saved: read(path) } }))
+    if (isSf(path)) loadSeafile(path)
+    else setBuffers((bs) => (bs[path] ? bs : { ...bs, [path]: { text: read(path), saved: read(path) } }))
     setActive(path)
     setCursor({ line: at?.line ?? 0, col: at?.col ?? 0 })
     if (at) {
       setViews((v) => (v[path] === 'preview' ? { ...v, [path]: 'edit' } : v))
       setJump({ path, ...at })
     }
-    reveal(path)
+    if (!isSf(path)) reveal(path)
+  }
+
+  /** A Seafile file comes in from its file server; an open tab keeps what is typed in it. */
+  const loadSeafile = (path: string) => {
+    if (buffers[path] && !buffers[path].error) return
+    setBuffers((bs) => ({ ...bs, [path]: { text: '', saved: '', loading: true } }))
+    readText(path)
+      .then((t) => setBuffers((now) => ({ ...now, [path]: { text: t, saved: t } })))
+      .catch((e: Error) => setBuffers((now) => ({ ...now, [path]: { text: '', saved: '', error: `Could not open it: ${e.message}` } })))
   }
 
   const openSearch = () => {
@@ -172,9 +190,9 @@ export function Zed({ win }: { win: WinState }) {
     requestAnimationFrame(() => findInput.current?.select())
   }
 
-  const close = (path: string) => {
+  const close = async (path: string) => {
     const b = buffers[path]
-    if (b && b.text !== b.saved && !confirm(`${base(path)} has unsaved changes. Close anyway?`)) return
+    if (b && b.text !== b.saved && !(await ask({ title: `Close ${base(path)}?`, body: 'It has changes that are not saved. Closing it loses them.', confirm: 'Close without saving', danger: true }))) return
     const i = tabs.indexOf(path)
     const rest = tabs.filter((x) => x !== path)
     setTabs(rest)
@@ -187,6 +205,19 @@ export function Zed({ win }: { win: WinState }) {
 
   const save = () => {
     if (!buf || !active) return
+    if (isSf(active)) {
+      if (buf.loading || buf.error) return
+      const path = active
+      const text = buf.text
+      setStatus(`Saving ${where(path)}…`)
+      writeText(path, text)
+        .then(() => {
+          setBuffers((bs) => (bs[path] ? { ...bs, [path]: { ...bs[path], saved: text } } : bs))
+          setStatus(`Saved ${where(path)} to Seafile`)
+        })
+        .catch((e: Error) => setStatus(`Not saved: ${e.message}`))
+      return
+    }
     if (!write(active, buf.text)) return setStatus('Read-only file system. Only /tmp is writable.')
     setBuffers((bs) => ({ ...bs, [active]: { ...bs[active], saved: bs[active].text } }))
     setStatus(`Saved ${prettyPath(active)}`)
@@ -258,7 +289,7 @@ export function Zed({ win }: { win: WinState }) {
 
   const lines = buf ? buf.text.split('\n') : []
   const node = buf && active ? lookup(active) : null
-  const kind = node ? fileKind(node) : buf ? (markdown ? 'markdown' : 'text') : null
+  const kind = node ? fileKind(node) : active && isSf(active) ? kindOfName(base(active)) : buf ? (markdown ? 'markdown' : 'text') : null
   const heading = markdown && buf ? lines.slice(0, cursor.line + 1).reverse().find((l) => /^#{1,6}\s/.test(l)) : undefined
 
   // Shortcuts work whenever this window is focused, also before anything inside it has focus,
@@ -346,7 +377,7 @@ export function Zed({ win }: { win: WinState }) {
                     className={`zed-tab ${t === active ? 'is-active' : ''}`}
                     onClick={() => setActive(t)}
                     onAuxClick={(e) => e.button === 1 && close(t)}
-                    title={t === SEARCH ? 'Project search' : prettyPath(t)}
+                    title={t === SEARCH ? 'Project search' : where(t)}
                   >
                     {t === SEARCH ? <span className="zed-tab-icon">⌕</span> : <FileDot name={t} />}
                     <span className={views[t] === 'preview' ? 'zed-tab-preview' : ''}>{t === SEARCH ? `Search${query ? `: ${query}` : ''}` : views[t] === 'preview' ? `Preview ${base(t)}` : base(t)}</span>
@@ -476,7 +507,9 @@ export function Zed({ win }: { win: WinState }) {
                         spellCheck={false}
                         autoCapitalize="off"
                         autoComplete="off"
-                        aria-label={`Editing ${prettyPath(active)}`}
+                        aria-label={`Editing ${where(active)}`}
+                        readOnly={!!buf.loading || !!buf.error}
+                        placeholder={buf.loading ? 'Loading from Seafile…' : buf.error}
                         onChange={(e) => {
                           edit(e.target.value)
                           track()
@@ -503,7 +536,7 @@ export function Zed({ win }: { win: WinState }) {
       </div>
 
       <footer className="zed-status">
-        <span className="zed-status-msg">{status ?? (buf && active ? `${prettyPath(active)}${buf.text !== buf.saved ? ' •' : ''}` : prettyPath(root))}</span>
+        <span className="zed-status-msg">{status ?? (buf && active ? `${where(active)}${buf.text !== buf.saved ? ' •' : ''}` : prettyPath(root))}</span>
         <span className="spacer" />
         {buf && active && (
           <>
@@ -511,7 +544,7 @@ export function Zed({ win }: { win: WinState }) {
               {cursor.line + 1}:{cursor.col + 1}
             </span>
             <span>{kind === 'markdown' ? 'Markdown' : kind && KIND_LABEL[kind] !== 'Text' ? KIND_LABEL[kind] : 'Plain Text'}</span>
-            <span>{active.startsWith('/tmp/') ? 'UTF-8' : 'read-only'}</span>
+            <span>{active.startsWith('/tmp/') ? 'UTF-8' : isSf(active) ? 'Seafile' : 'read-only'}</span>
           </>
         )}
         <button className="zed-status-btn" onClick={() => wm.openNew('terminal', { run: `cd ${prettyPath(root)}`, t: String(Date.now()) })} title="Open a terminal in this project">

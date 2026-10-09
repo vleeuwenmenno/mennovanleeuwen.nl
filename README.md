@@ -170,6 +170,80 @@ last day's response time and certificates that expire within two weeks
 ([`server/updown.ts`](server/updown.ts)). It uses updown's *read-only* API key, from
 `UPDOWN_API_KEY` on the server or saved in Settings → Integrations (stored encrypted).
 
+**Seafile** comes into Files: Settings → Integrations links one account with its URL, username
+and password (and a 2FA code if it has one). The password is used once; the server keeps only the
+token Seafile hands out, encrypted, which shows up in Seafile's Devices as the site
+([`server/seafile.ts`](server/seafile.ts)). Every library is under Seafile in Files' sidebar. The
+primary library (My Library unless you pick another) is home unless you switch that off: Places'
+Desktop, Documents, Downloads and so on are its folders, and the desktop shows its Desktop folder.
+Text, code and config open in Zed and save back with Ctrl+S; pictures, video, audio and PDFs open in
+the Viewer; the rest downloads. Encrypted libraries ask for their password in the window and lock
+again after the minutes set in Settings (the password is never stored). Seahub's API sends no CORS
+headers, so it goes through the server; files themselves go straight between the browser and
+Seafile's file server, with links the server hands out. The sidebar's sections and items can be
+dragged into another order and hidden (right-click, or *Customize sidebar*), synced like the dock.
+
+Pictures open in **Preview** and video and audio in **Player**, from Seafile or the site's own
+files. Preview fits the picture to the window and zooms with its buttons, the keys (+, −, 0 for
+actual size, 9 to fit), Ctrl+wheel or a pinch, towards the pointer; dragging or scrolling pans when
+zoomed in, and the page never scrolls. It rotates (R, L), goes through the folder's other pictures
+(arrow keys, or the thumbnail sidebar with S), shows an inspector (I), runs a slideshow (Space) and
+goes full screen (F). Player takes the video's shape when it opens and has QuickTime's floating bar:
+a timeline to hover and scrub with what is buffered, play and skip, volume, speed, loop, picture in
+picture and full screen; it hides while playing. Keys: Space or K, J and L, the arrows, M, F, 0 to
+9, comma and full stop for single frames, < and > for speed. Seafile's thumbnails come through the
+server ([`server/seafile.ts`](server/seafile.ts)) for Files' grid and Preview's sidebar.
+
+Uploads go straight from the browser to Seafile's file server: drop files or whole folders from the
+computer on a Files window (a folder, its empty space or the sidebar) or on the desktop, or use
+*Upload files* / *Upload folder* in Files' menus. Three go at a time; a panel in the corner shows the
+lot's progress and time left and each file's own, with cancel, retry and *Show in Files*. Files of
+16 MB and up go in 8 MB chunks and carry on where they stopped after a retry. Names already in the
+folder ask first: replace (Seafile keeps the old version), keep both, or skip.
+
+With Seafile linked, Files' **Trash** is Seafile's (Settings → Integrations → Seafile can switch
+that off): each library's own trash, from its history. Restore one item or several at once, open a
+deleted folder and restore from inside it, and empty the trash of what is older than 3, 7 or 30
+days, or all of it. With Seafile as home, the desktop shows the Desktop folder's files and folders
+next to the site's own icons; *Show the site's icons* (the desktop's menu, or Settings) leaves just
+Seafile's. Right-click the desktop for New (folder, text file, sticky note, widget, launcher),
+uploads and paste.
+
+PDFs open in **PDF**, on Mozilla's [pdf.js](https://mozilla.github.io/pdf.js/) (loaded only when a
+PDF opens, and left out of the offline cache): the pages one under the other in their own scrolling
+area, drawn as they come into view, with text to select and search (Ctrl+F marks every match;
+Enter and Shift+Enter go through them). A sidebar shows the pages or the table of contents; type a
+page number to go there; fit width, fit page, or zoom with Ctrl+wheel or a pinch towards the
+pointer; rotate (R), night mode, full screen (F) and download.
+
+With **OnlyOffice** added (Settings → Integrations → OnlyOffice: the document server Seafile uses
+and its `ONLYOFFICE_JWT_SECRET`), Word, Excel and PowerPoint files (and OpenDocument, CSV, RTF) open
+in OnlyOffice's editor in a window; read-only libraries and old formats open to view. The server
+signs the editor's settings like Seahub does and takes OnlyOffice's saves at
+`/api/office/callback` ([`server/office.ts`](server/office.ts)): a sealed ticket says which file,
+OnlyOffice's signature is checked, and the new version goes into Seafile (its history keeps the old
+one). The document server must reach that callback: on a public site it does by itself; elsewhere
+set `OFFICE_CALLBACK_ORIGIN` to an address it can reach. **New Document**, **New Spreadsheet** and
+**New Presentation** make a blank file in Documents (or a folder picked with *New documents go here*)
+and open it; they are in Spotlight and All apps, and can go on the dock and the desktop.
+
+ZIP files open in **Archive**, browsed like folders without unpacking them: only the archive's table
+of contents is read ([`src/data/zip.ts`](src/data/zip.ts)), and from Seafile just the end of the file
+(a Range request), so a big one opens at once. Columns sort by name, size, packed size, how much was
+saved and date; the search looks through the whole archive. Unpacking comes later.
+
+Each of Files' places (Home, Desktop, Documents, Downloads, Music, Pictures, Videos) can be pointed
+at any folder of any library: right-click it → *Choose folder…*; a place left alone is the
+same-named folder of the primary library. The desktop follows Desktop, and new Office files go to
+Documents. Right-click a Seafile folder's empty space for New (folder, text file, document,
+spreadsheet, presentation), Upload, View, Sort, and Seafile (copy a share link, open it in
+Seafile's own web interface, the library's trash, lock now).
+
+The mouse's Back and Forward buttons, and the browser's own Back, go back in the focused window
+(Files a folder, Preview a picture, Archive up a folder) instead of leaving the site.
+
+Questions (delete this? empty the trash?) are the desktop's own dialogs, never the browser's.
+
 The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests
 and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 ([`server/inbox.ts`](server/inbox.ts)), with the access sign-in and linking already give.

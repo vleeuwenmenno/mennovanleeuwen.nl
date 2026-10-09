@@ -18,6 +18,7 @@ import { asWebAddress } from '../os/linkPreview'
 import { signedIn } from '../os/account'
 import { followGoLink, golinksSite, golinksTemplate, golinksUrl, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { age, fileKind, HOME, lookup, prettyPath, resolvePath, walk, type DirNode, type Node } from './vfs'
+import { MEDIA_APP } from '../data/media'
 
 // Output markup understood by the terminal renderer:
 //   {c:green}text{/}      colored span (green, red, yellow, blue, cyan, magenta, muted, accent, bold)
@@ -58,6 +59,10 @@ const APPS: Record<string, AppId> = {
   arcade: 'games',
   zed: 'zed',
   editor: 'zed',
+  preview: 'preview',
+  photos: 'preview',
+  player: 'player',
+  video: 'player',
   trash: 'trash',
   notebook: 'notebook',
   settings: 'settings',
@@ -68,6 +73,14 @@ const APP_NAMES: Record<AppId, string> = {
   terminal: 'terminal',
   files: 'files',
   viewer: 'viewer',
+  preview: 'preview',
+  player: 'player',
+  pdf: 'pdf',
+  office: 'office',
+  archive: 'archive',
+  newdoc: 'new-document',
+  newsheet: 'new-spreadsheet',
+  newslides: 'new-presentation',
   notes: 'sticky-notes',
   keys: 'shortcuts-note',
   projects: 'files',
@@ -520,7 +533,7 @@ export const commands: Record<string, Command> = {
       }
       if (node?.type === 'file') {
         if (fileKind(node) === 'markdown') ctx.openApp('zed', { path: abs, view: 'preview', t: String(Date.now()) })
-        else ctx.openNewApp('viewer', { path: abs })
+        else ctx.openNewApp(MEDIA_APP[fileKind(node)] ?? 'viewer', { path: abs })
         return
       }
       // Last, so files like README.md still open as files.
