@@ -92,12 +92,16 @@ get a random tilt and colour, both changeable from the sticky's hover bar or men
 (system menu, [`src/apps/Settings.tsx`](src/apps/Settings.tsx)) is laid out like macOS System
 Settings: the account on top of a sidebar, then one pane each for appearance (mode, Omarchy themes,
 accent), the dock, launchers, search, links, notifications, go links, code hosts, calendar, sync and about.
-Settings → Spotlight picks what the empty Spotlight shows (recently visited websites, status, apps,
-your repositories), which kinds of results it searches, whether Enter on an unmatched query searches the
+Settings → Spotlight picks what the empty Spotlight shows (favourites, recently visited websites,
+status, apps, your repositories) and how many recent items of each, which kinds of results it searches, whether Enter on an unmatched query searches the
 web or runs it in a terminal, the preview pane, and the web search engine. Recently visited websites
 are the pages opened from MvL OS itself (Spotlight, launchers, `open`, `go`, links in apps), since a page
 can't read the browser's history ([`src/data/siteHistory.ts`](src/data/siteHistory.ts)); go links are
 kept by alias, never with their token, and the history can be switched off or cleared there.
+Right-click a Spotlight result → *Add to favourites* to keep it at the top of the empty box
+([`src/data/spotlightFavourites.ts`](src/data/spotlightFavourites.ts)); Settings → Spotlight reorders
+them. The terminal's `visited` lists the same history (`visited <text>`, `visited open <#>`,
+`visited forget <#>`, `visited clear`).
 Launchers are a URL, a name and an optional emoji (otherwise the site's own favicon). Notes, launchers, desktop icons, the dock order and the open windows are kept per browser
 in localStorage ([`src/os/synced.ts`](src/os/synced.ts)), with one window layout for phones and one
 for bigger screens.

@@ -24,6 +24,7 @@ const store = synced<Visit[]>('site-history', [], {
 })
 
 export const useVisits = store.use
+export const visits = store.get
 
 /** One entry per page: no fragment, no trailing slash. */
 const clean = (url: string) => url.replace(/#.*$/, '').replace(/\/$/, '')
