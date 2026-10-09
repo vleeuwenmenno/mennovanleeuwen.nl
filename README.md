@@ -66,7 +66,9 @@ account (by default on https://mvl.sh). `go set <search url>` saves the account 
 `…/r/%s?token=…` URL golinks shows after creating a token (a redirect URL for any alias, a site plus
 a token, or a bare mvl.sh token work too). It is kept in localStorage, and synced like notes when
 signed in ([`src/data/golinks.ts`](src/data/golinks.ts)). `go` alone shows the account, `go unset`
-forgets it. Spotlight takes `go <alias>` too, and lists matching aliases as you type (the most used
+forgets it. Tab after `go ` opens a picker of your aliases under the prompt, like fzf: it narrows as
+you type, ↑/↓ (or Ctrl+P/N) move, Tab puts the alias on the line, Enter runs it, Esc closes it.
+Spotlight takes `go <alias>` too, and lists matching aliases as you type (the most used
 ones after a bare `go `) from the golinks server's `/suggest`, asked straight from the browser so
 the token never passes through this site's server.
 
