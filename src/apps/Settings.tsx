@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { isShown, setCalendarShown, useCalendarChoice, useCalendarList } from '../data/calendar'
 import { ENGINES, setSearchSettings, useSearchSettings, type EngineId } from '../data/searchEngine'
 import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { MC_ADDRESS, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
-import { addCaldav, api, connectGoogle, disconnectGoogle, hasCalendar, removeCaldav, removeUpdownKey, setUpdownKey, signIn, signOut, unlinkForge, useAccount } from '../os/account'
+import { addCaldav, connectGoogle, disconnectGoogle, removeCaldav, removeUpdownKey, setUpdownKey, signIn, signOut, unlinkForge, useAccount } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
@@ -520,8 +521,6 @@ function Launchers() {
   )
 }
 
-type CalendarInfo = { id: string; name: string; color: string; primary: boolean; selected: boolean }
-
 /** Third-party services the widgets read from, with keys on the server: updown.io for Status. */
 function Integrations() {
   const account = useAccount()
@@ -586,17 +585,9 @@ function Integrations() {
 /** Google Calendar, read-only, for the Agenda widget. */
 function CalendarSettings() {
   const account = useAccount()
-  const [calendars, setCalendars] = useState<(CalendarInfo & { source?: string })[] | null>(null)
+  const { calendars, errors } = useCalendarList()
+  const picks = useCalendarChoice()
   const [error, setError] = useState<string | null>(null)
-  const connected = hasCalendar(account)
-  const signature = `${account.google?.email ?? ''}|${account.caldav.map((c) => c.id).join(',')}`
-  useEffect(() => {
-    if (!connected) return setCalendars(null)
-    api<{ calendars: (CalendarInfo & { source?: string })[]; errors: string[] }>('/api/calendar/calendars').then(
-      (r) => (setCalendars(r.calendars), setError(r.errors.join(' · ') || null)),
-      (e: Error) => setError(e.message),
-    )
-  }, [connected, signature])
   if (account.status !== 'user') return <SignInFirst what="connect a calendar" />
   return (
     <>
@@ -645,7 +636,7 @@ function CalendarSettings() {
       )}
       <CaldavForm />
 
-      {error && <p className="t-red">{error}</p>}
+      {(error || errors.length > 0) && <p className="t-red">{[error, ...errors].filter(Boolean).join(' · ')}</p>}
       {calendars && calendars.length > 0 && (
         <>
           <h4 className="set-subhead">Your calendars</h4>
@@ -655,12 +646,13 @@ function CalendarSettings() {
                 <span className="set-swatch" style={{ background: c.color }} />
                 <span className="set-row-text">
                   <strong>{c.name}</strong>
-                  <span className="muted">{c.source && c.source !== 'Google' ? c.source : c.primary ? 'Google · your calendar' : c.selected ? 'Google · shown in Google Calendar' : 'Google · hidden in Google Calendar'}</span>
+                  <span className="muted">{c.source && c.source !== 'Google' ? c.source : c.primary ? 'Google · your calendar' : 'Google'}</span>
                 </span>
+                <Toggle on={isShown(c, picks)} onChange={(on) => setCalendarShown(c.id, on)} label={`Show ${c.name}`} />
               </li>
             ))}
           </ul>
-          <p className="muted set-help">Each Agenda widget picks which of these it shows (right-click it). By default: all CalDAV calendars, and the ones shown in Google Calendar.</p>
+          <p className="muted set-help">Switched-on calendars show in the clock and in every Agenda widget, unless a widget picks its own (right-click it → Calendars). Until you switch them, Google calendars follow Google Calendar and the others are on.</p>
         </>
       )}
     </>
