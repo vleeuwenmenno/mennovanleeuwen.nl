@@ -711,6 +711,18 @@ export function Spotlight() {
         enterLabel: 'Search',
         complete: sug,
       })
+    const web: Result = {
+      id: 'web',
+      group: 'Fallback',
+      title: `Search ${engine.label} for “${q.trim()}”`,
+      icon: <Glyph>🔍</Glyph>,
+      run: () => searchWeb(q.trim()),
+      enterLabel: 'Search',
+    }
+    // Nothing of your own matched: Enter searches exactly what you typed. The engine's
+    // suggestions follow it, one arrow down away.
+    if (!out.length || out[0].group === 'Web') out.unshift({ ...web, group: 'Top hit' })
+    else out.push(web)
     out.push({
       id: 'run',
       group: 'Fallback',
@@ -718,13 +730,6 @@ export function Spotlight() {
       icon: <Glyph>›_</Glyph>,
       run: () => term(q.trim()),
       alt: { label: 'In a new terminal', run: () => term(q.trim(), true) },
-    })
-    out.push({
-      id: 'web',
-      group: 'Fallback',
-      title: `Search ${engine.label} for “${q.trim()}”`,
-      icon: <Glyph>🔍</Glyph>,
-      run: () => searchWeb(q.trim()),
     })
     return out
   }, [q, all, calc, code, suggestions, engine, sub, wm])
