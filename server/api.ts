@@ -9,7 +9,7 @@ import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, MAX_RANGE
 import { inbox } from './inbox.ts'
 import { linkPreview } from './preview.ts'
 import { cleanTrash, shareLink, createFile, fileLink, restore, thumbnail, trash, trashDir, uploadedBytes, libraries, removeItems, rename, transfer, linkSeafile, listDir, lock, mkdir, unlock, unlocked, removeOffice, seafileInfo, setOffice, unlinkSeafile } from './seafile.ts'
-import { officeCallback, officeConfig } from './office.ts'
+import { officeCallback, officeCheck, officeConfig } from './office.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
 import { HttpError, json, readJson, redirect, sameOrigin, SECURITY } from './http.ts'
 import { minecraftOverview, minecraftStatus } from './minecraft.ts'
@@ -134,6 +134,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/integrations/seafile' && method === 'DELETE') return await unlinkSeafile(requireUser(req)), json(res, 200, { ok: true }), true
     if (path === '/api/integrations/onlyoffice' && method === 'PUT') return await setOffice(requireUser(req), await readJson(req, 8 * 1024)), json(res, 200, seafileInfo(requireUser(req))), true
     if (path === '/api/integrations/onlyoffice' && method === 'DELETE') return removeOffice(requireUser(req)), json(res, 200, seafileInfo(requireUser(req))), true
+    if (path === '/api/office/check' && read) return json(res, 200, await officeCheck(req, requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'))), true
     if (path === '/api/office/config' && read) return json(res, 200, await officeConfig(req, requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), { theme: url.searchParams.get('theme'), mobile: url.searchParams.has('mobile') })), true
     if (path === '/api/seafile/libraries' && read) return json(res, 200, await libraries(requireUser(req))), true
     if (path === '/api/seafile/dir' && read) return json(res, 200, await listDir(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'))), true

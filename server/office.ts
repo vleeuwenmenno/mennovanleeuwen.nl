@@ -144,6 +144,7 @@ export async function officeCallback(req: IncomingMessage, sealed: string | null
   if (body.token) data = verifyJwt<Callback>(body.token, office.secret)
   else if (header) data = verifyJwt<{ payload: Callback }>(header, office.secret).payload
   else throw new HttpError(403, 'Unsigned callback')
+  noteCallback(user.id, data.status ?? 0)
 
   if (data.status !== 2 && data.status !== 6) {
     if (data.status === 3 || data.status === 7) console.error(`OnlyOffice could not save ${ticket.p} (status ${data.status})`)
@@ -171,4 +172,76 @@ async function saveVersion(user: User, repo: string, path: string, from: string)
   form.append('file', blob, path.split('/').pop())
   const up = await fetch(`${link}?ret-json=1`, { method: 'POST', body: form, signal: AbortSignal.timeout(120_000) })
   if (!up.ok) throw new Error(`Seafile answered ${up.status}: ${(await up.text()).slice(0, 200)}`)
+}
+
+// --- what the document server can reach ------------------------------------------------------
+
+/** When OnlyOffice last called back, per user: never means it cannot reach this site. */
+const heard = new Map<number, { at: number; status: number }>()
+export const noteCallback = (user: number, status: number) => heard.set(user, { at: Date.now(), status })
+
+const CONVERT_ERRORS: Record<string, string> = {
+  '-1': 'an unknown error on the document server',
+  '-2': 'it timed out fetching or converting the file',
+  '-3': 'it could not convert the file',
+  '-4': 'it could not download the file from Seafile (DNS, firewall, TLS, or a private address it refuses)',
+  '-5': 'the file has a password',
+  '-6': 'its database had a problem',
+  '-7': 'the request was not right',
+  '-8': 'it refused the JWT signature (the secret here and ONLYOFFICE_JWT_SECRET differ)',
+}
+
+export type OfficeCheck = { api: string; download: string; downloadOk: boolean; callback: string; callbackOk: boolean; seafileUrl: string }
+
+/**
+ * Asks the document server to fetch this very file (by converting it to PDF), which is what the
+ * editor does first: its answer says whether it can reach Seafile's file server. And whether
+ * OnlyOffice has ever called back here, which saving needs.
+ */
+export async function officeCheck(req: IncomingMessage, user: User, repo: string | null, path: string | null): Promise<OfficeCheck> {
+  const office = officeServer(user)
+  if (!office) throw new HttpError(409, 'OnlyOffice is not set up')
+  const id = String(repo ?? '')
+  const p = String(path ?? '')
+  const name = p.split('/').pop() ?? 'file'
+  const ext = name.split('.').pop()!.toLowerCase()
+
+  const apiRes = await fetch(`${office.url}/web-apps/apps/api/documents/api.js`, { signal: AbortSignal.timeout(10_000) }).catch(() => null)
+  const api = apiRes?.ok ? `This server reaches ${office.url}.` : `This server cannot reach ${office.url}${apiRes ? ` (it answered ${apiRes.status})` : ''}; the browser might still.`
+
+  const { url } = await fileLink(user, id, p, 'download')
+  const host = new URL(url).origin
+  const payload = { async: false, filetype: ext, key: `check-${Date.now().toString(36)}`, outputtype: 'pdf', title: name, url }
+  let download = ''
+  let downloadOk = false
+  for (const endpoint of ['/converter', '/ConvertService.ashx']) {
+    const res = await fetch(`${office.url}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Bearer ${signJwt({ payload }, office.secret)}` },
+      body: JSON.stringify({ ...payload, token: signJwt(payload, office.secret) }),
+      signal: AbortSignal.timeout(60_000),
+    }).catch((e: Error) => e)
+    if (res instanceof Error) {
+      download = `Could not ask the document server (${res.message}).`
+      continue
+    }
+    if (res.status === 404) continue
+    const body = (await res.json().catch(() => null)) as { error?: number; endConvert?: boolean } | null
+    if (body?.error) download = `The document server tried to fetch the file from ${host}, but ${CONVERT_ERRORS[String(body.error)] ?? `error ${body.error}`}.`
+    else if (body?.endConvert) {
+      downloadOk = true
+      download = `The document server fetched the file from ${host} and read it.`
+    } else download = `The document server answered ${res.status} without a result.`
+    break
+  }
+
+  const origin = process.env.OFFICE_CALLBACK_ORIGIN?.replace(/\/+$/, '') || publicOrigin(req)
+  const last = heard.get(user.id)
+  const local = /^https?:\/\/(localhost|127\.|\[::1\]|[^/]+\.localhost)/.test(origin)
+  const callback = last
+    ? `OnlyOffice last called back ${Math.round((Date.now() - last.at) / 1000)} s ago (status ${last.status}), so saving can work.`
+    : local
+      ? `OnlyOffice has not called back to ${origin}, and cannot: that is this computer. Saving needs an address it reaches (OFFICE_CALLBACK_ORIGIN, or the deployed site).`
+      : `OnlyOffice has not called back to ${origin} yet (it does once a document opens). If it never does, it cannot reach this site.`
+  return { api, download, downloadOk, callback, callbackOk: !!last, seafileUrl: host }
 }

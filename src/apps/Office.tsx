@@ -64,6 +64,10 @@ export function Office({ win, kind }: { win: WinState; kind?: NewKind }) {
   const [error, setError] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
   const [dirty, setDirty] = useState(false)
+  /** The document itself is in (not just the editor) */
+  const [loaded, setLoaded] = useState(false)
+  const [slow, setSlow] = useState(false)
+  const [check, setCheck] = useState<{ busy: boolean; result?: { api: string; download: string; downloadOk: boolean; callback: string; callbackOk: boolean }; error?: string } | null>(null)
   const holder = useRef<HTMLDivElement>(null)
   const root = useRef<HTMLDivElement>(null)
 
@@ -90,6 +94,10 @@ export function Office({ win, kind }: { win: WinState; kind?: NewKind }) {
     let live = true
     setError(null)
     setReady(false)
+    setLoaded(false)
+    setSlow(false)
+    setCheck(null)
+    const slowTimer = setTimeout(() => live && setSlow(true), 15_000)
     const dark = THEMES[resolvedThemeName()]?.mode !== 'light'
     const mobile = (root.current?.clientWidth ?? 800) < 560
     api<{ api: string; config: Record<string, unknown> }>(`/api/office/config?repo=${encodeURIComponent(at.repo)}&p=${encodeURIComponent(at.p)}&theme=${dark ? 'dark' : 'light'}${mobile ? '&mobile' : ''}`)
@@ -107,6 +115,7 @@ export function Office({ win, kind }: { win: WinState; kind?: NewKind }) {
           width: '100%',
           height: '100%',
           events: {
+            onDocumentReady: () => live && setLoaded(true),
             onWarning: (e: { data?: { warningDescription?: string } }) => e.data?.warningDescription && console.warn('OnlyOffice:', e.data.warningDescription),
             onDocumentStateChange: (e: { data: boolean }) => live && setDirty(e.data),
             onError: (e: { data?: { errorCode?: number; errorDescription?: string } }) => live && setError(`${e.data?.errorDescription ?? 'The editor ran into a problem'}${e.data?.errorCode ? ` (OnlyOffice error ${e.data.errorCode})` : ''}`),
@@ -117,6 +126,7 @@ export function Office({ win, kind }: { win: WinState; kind?: NewKind }) {
       .catch((e: Error) => live && setError(e.message))
     return () => {
       live = false
+      clearTimeout(slowTimer)
       try {
         editor?.destroyEditor()
       } catch {
@@ -141,6 +151,15 @@ export function Office({ win, kind }: { win: WinState; kind?: NewKind }) {
     if (path) wm.setProps(win.pid, { unsaved: dirty ? '1' : undefined })
   }, [dirty])
 
+  const runCheck = () => {
+    const a = parseSf(path)
+    if (!a) return
+    setCheck({ busy: true })
+    api<{ api: string; download: string; downloadOk: boolean; callback: string; callbackOk: boolean }>(`/api/office/check?repo=${encodeURIComponent(a.repo)}&p=${encodeURIComponent(a.p)}`)
+      .then((result) => setCheck({ busy: false, result }))
+      .catch((e: Error) => setCheck({ busy: false, error: e.message }))
+  }
+
   const at = parseSf(path)
   if (!office)
     return (
@@ -155,6 +174,33 @@ export function Office({ win, kind }: { win: WinState; kind?: NewKind }) {
   return (
     <div ref={root} className="office">
       <div ref={holder} className="office-frame" />
+      {slow && !loaded && !error && (
+        <div className="office-check">
+          {!check ? (
+            <>
+              <span>Still loading? OnlyOffice may not be able to fetch the file from Seafile.</span>
+              <button className="btn btn-small" onClick={runCheck}>
+                Check what it can reach
+              </button>
+              <button className="btn btn-small" onClick={() => setSlow(false)} aria-label="Hide">
+                ×
+              </button>
+            </>
+          ) : check.busy ? (
+            <span>Asking the document server to fetch {nameOf(path)}… (up to a minute)</span>
+          ) : check.error ? (
+            <span className="t-red">{check.error}</span>
+          ) : (
+            check.result && (
+              <ul>
+                <li className={check.result.downloadOk ? 't-green' : 't-red'}>{check.result.downloadOk ? '✓' : '✗'} {check.result.download}</li>
+                <li className={check.result.callbackOk ? 't-green' : ''}>{check.result.callbackOk ? '✓' : '•'} {check.result.callback}</li>
+                <li className="muted">• {check.result.api}</li>
+              </ul>
+            )
+          )}
+        </div>
+      )}
       {(!ready || error) && (
         <div className="office-empty">
           {error ? (

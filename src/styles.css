@@ -4887,6 +4887,32 @@ button.fm-dd-row:hover {
   display: flex;
   gap: 6px;
 }
+/* The document did not come in: what the document server can reach. */
+.office-check {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+}
+.office-check > span:first-child {
+  flex: 1;
+}
+.office-check ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
 
 /* ---------- Dialogs: the desktop's own confirm ---------- */
 
