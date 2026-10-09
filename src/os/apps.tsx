@@ -5,6 +5,7 @@ import { Games } from '../apps/games/Games'
 import { KeysNote } from '../apps/KeysNote'
 import { Notebook } from '../apps/Notebook'
 import { Notes } from '../apps/Notes'
+import { LinkForge } from '../apps/LinkForge'
 import { McServer } from '../apps/McServer'
 import { Projects } from '../apps/Projects'
 import { Settings } from '../apps/Settings'
@@ -42,7 +43,9 @@ export const APP_META: Record<AppId, AppMeta> = {
   // A desktop widget (props.kind, props.id): a sticky note, the weather... See src/widgets.
   widget: { title: 'Widget', dock: 'Widget', blurb: 'Notes, weather and more on the desktop', size: [280, 260], chrome: 'note', render: (w) => <WidgetHost win={w} /> },
   mcserver: { title: 'Minecraft server', dock: 'Minecraft', blurb: 'Who is on, uptime and who played most', size: [760, 660], render: (w) => <McServer win={w} /> },
-  settings: { title: 'Settings', dock: 'Settings', blurb: 'Account, code hosts, launchers and sync', size: [700, 600], render: (w) => <Settings win={w} /> },
+  // Opened from Settings → Code hosts; not listed anywhere else.
+  linkforge: { title: 'Link a code host', dock: 'Link a code host', blurb: 'Link a Gitea or Forgejo instance', size: [520, 470], render: (w) => <LinkForge win={w} /> },
+  settings: { title: 'Settings', dock: 'Settings', blurb: 'Appearance, dock, launchers, code hosts and more', size: [860, 620], render: (w) => <Settings win={w} /> },
   // Never rendered: the window manager opens Trash as a view in Files. Kept for the dock icon and name.
   trash: { title: 'Trash', dock: 'Trash', blurb: 'Trashed desktop items, in Files', size: [940, 600], render: () => null },
 }

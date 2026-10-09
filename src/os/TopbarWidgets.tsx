@@ -286,7 +286,7 @@ function compareVersions(a: string, b: string) {
   return 0
 }
 
-function ReleaseStatus() {
+export function ReleaseStatus() {
   const [latest, setLatest] = useState<string | null | undefined>(undefined)
   useEffect(() => {
     let live = true
