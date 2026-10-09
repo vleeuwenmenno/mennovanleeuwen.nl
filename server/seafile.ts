@@ -404,3 +404,62 @@ export async function uploadedBytes(user: User, repo: unknown, parent: unknown, 
   })
   return { bytes: Number(res.uploadedBytes) || 0 }
 }
+
+// ---------------------------------------------------------------------------------------------
+// A library's trash: what was deleted (Seafile keeps it in the library's history), restoring,
+// what was in a deleted folder, and emptying it of what is older than so many days.
+
+export type TrashItem = { name: string; parent: string; dir: boolean; size: number; deleted: number; commit: string }
+type ApiTrash = { parent_dir: string; obj_name: string; deleted_time: string; commit_id: string; is_dir: boolean; size: number | '' }
+
+const commitId = (v: unknown) => {
+  const c = String(v ?? '')
+  if (!/^[0-9a-f]{40}$/.test(c)) throw new HttpError(400, 'Bad commit')
+  return c
+}
+
+/** What was deleted in a library (or a folder of it), newest first; `more` pages on with `scan`. */
+export async function trash(user: User, repo: unknown, path: unknown, scan: unknown): Promise<{ items: TrashItem[]; more: boolean; scan: string | null }> {
+  const id = repoId(repo)
+  const p = seafPath(path ?? '/')
+  await guard(user, id)
+  const q = new URLSearchParams({ path: p, show_days: '0' })
+  if (typeof scan === 'string' && scan) q.set('scan_stat', scan)
+  const body = await seafile<{ data: ApiTrash[]; more: boolean; scan_stat: string | null }>(user, `/api/v2.1/repos/${id}/trash/?${q}`)
+  return {
+    items: body.data.map((t) => ({ name: t.obj_name, parent: t.parent_dir, dir: t.is_dir, size: Number(t.size) || 0, deleted: Date.parse(t.deleted_time) || 0, commit: t.commit_id })),
+    more: !!body.more,
+    scan: body.scan_stat ?? null,
+  }
+}
+
+/** Puts deleted files and folders back where they were (all from one deletion, by its commit). */
+export async function restore(user: User, body: { repo?: string; commit?: string; paths?: string[] }): Promise<{ restored: string[]; failed: { path: string; error: string }[] }> {
+  const id = repoId(body.repo)
+  const commit = commitId(body.commit)
+  if (!Array.isArray(body.paths) || !body.paths.length || body.paths.length > 500) throw new HttpError(400, 'Nothing to restore')
+  const paths = body.paths.map(seafPath)
+  await guard(user, id)
+  const form = new URLSearchParams({ commit_id: commit })
+  for (const p of paths) form.append('path', p)
+  const res = await seafile<{ success: { path: string }[]; failed: { path: string; error_msg?: string }[] }>(user, `/api/v2.1/repos/${id}/trash/revert-dirents/`, { method: 'POST', body: form })
+  return { restored: res.success.map((s) => s.path), failed: res.failed.map((f) => ({ path: f.path, error: f.error_msg ?? 'Could not restore it' })) }
+}
+
+/** What was in a deleted folder, as it was when it went. */
+export async function trashDir(user: User, repo: unknown, commit: unknown, path: unknown): Promise<Entry[]> {
+  const id = repoId(repo)
+  const c = commitId(commit)
+  const p = seafPath(path)
+  await guard(user, id)
+  const body = await seafile<{ dirent_list: { type: string; name: string; size?: number }[] }>(user, `/api/v2.1/repos/${id}/commits/${c}/dir/?path=${encodeURIComponent(p)}`)
+  return body.dirent_list.map((d) => ({ name: d.name, dir: d.type === 'dir', size: d.size ?? 0, mtime: 0, id: '' }))
+}
+
+/** Empties the trash of what was deleted more than `days` ago (0: all of it). For good. */
+export async function cleanTrash(user: User, body: { repo?: string; days?: number }) {
+  const id = repoId(body.repo)
+  const days = Math.max(0, Math.min(3650, Math.round(Number(body.days) || 0)))
+  await guard(user, id)
+  await seafile(user, `/api/v2.1/repos/${id}/trash/`, { method: 'DELETE', body: new URLSearchParams({ keep_days: String(days) }) })
+}

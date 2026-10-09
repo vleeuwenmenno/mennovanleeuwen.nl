@@ -5,7 +5,8 @@ import { openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { openLink } from '../data/links'
 import { useWM, type AppId, type WinState } from '../os/wm'
 import { formatSize, HOME, KIND_LABEL, kindOfName, lookup, prettyPath, resolvePath, stat, walk, type FileKind, type Node } from '../terminal/vfs'
-import { createFile, deleteItems, download as sfDownload, DRAG_FILES, dropOp, getClipboard, getDragged, getLibrary, isInside, openSeafile, renameItem, setClipboard, setDragged, transferItems, useClipboard, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useUnlocks, type Library } from '../data/seafile'
+import { createFile, deleteItems, download as sfDownload, DRAG_FILES, dropOp, getClipboard, getDragged, getLibrary, isInside, openSeafile, renameItem, setClipboard, setDragged, transferItems, useClipboard, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useSeafilePrefs, useUnlocks, type Library } from '../data/seafile'
+import { SeafileTrash } from './SeafileTrash'
 import { useAccount } from '../os/account'
 import { MEDIA_APP, thumbOf } from '../data/media'
 import { droppedFiles, hasOsFiles, pickAndUpload, uploadFiles } from '../data/uploads'
@@ -157,6 +158,9 @@ export function Files({ win }: { win: WinState }) {
   const { home: sfHome, library: homeLibrary } = useSeafileHome()
   const home = sfHome ?? HOME
   const unlocks = useUnlocks()
+  // With Seafile linked, the Trash is Seafile's (unless switched off in Settings).
+  const sfPrefs = useSeafilePrefs()
+  const sfTrash = !!account.seafile && sfPrefs.trash
   const [prefs, setPrefsState] = useState<Prefs>(loadPrefs)
   const { bookmarks } = useSidebar()
   const [path, setPath] = useState(win.props.path ?? home)
@@ -253,6 +257,7 @@ export function Files({ win }: { win: WinState }) {
       })
       if (search) list = list.filter((i) => i.name.toLowerCase().includes(search.toLowerCase()))
     } else if (path === RECENT) list = recent.map((r) => (r.sf ? r : toItem(r.path))).filter((x): x is Item => !!x)
+    else if (path === TRASH && sfTrash) list = []
     else if (path === TRASH)
       list = [
         ...DESKTOP_ICONS.filter((i) => desk.trashed.includes(i.id)).map((i) => ({ path: `${TRASH}${i.id}`, name: desk.names[i.id] ?? i.label, node: lookup(resolvePath(HOME, i.path)), kind: i.kind === 'file' ? ('markdown' as FileKind) : ('folder' as FileKind), size: 0, mtime: Date.now(), trash: 'desktop' as const, desktopId: i.id })),
@@ -724,7 +729,7 @@ export function Files({ win }: { win: WinState }) {
   const tileWidth = Math.round((prefs.view === 'gallery' ? 210 : 128) * z)
   const captionChars = Math.max(10, Math.floor((tileWidth - 12) / 7.4) * 2)
   const selectedSize = selectedItems().reduce((a, i) => a + (i.kind === 'folder' ? 0 : i.size), 0)
-  const trashCount = desk.trashed.length + JOKE_TRASH.length
+  const trashCount = sfTrash ? null : desk.trashed.length + JOKE_TRASH.length
 
   const crumbs = useMemo(() => {
     if (path === RECENT) return [{ label: 'Recent', path: RECENT }]
@@ -957,7 +962,7 @@ export function Files({ win }: { win: WinState }) {
               <button className={`fm-side-item ${path === TRASH ? 'is-active' : ''}`} onClick={() => navigate(TRASH)}>
                 <span className="fm-side-icon">🗑</span>
                 <span className="fm-side-label">Trash</span>
-                <span className="fm-side-count">{trashCount}</span>
+                {trashCount !== null && <span className="fm-side-count">{trashCount}</span>}
               </button>
             }
           />
@@ -1020,6 +1025,7 @@ export function Files({ win }: { win: WinState }) {
               )}
             </div>
           ) : null}
+          {path === TRASH && sfTrash && <SeafileTrash onOpenFolder={navigate} toast={setToast} />}
           {items.map((item) => (
             <div
               key={item.path}
@@ -1088,7 +1094,7 @@ export function Files({ win }: { win: WinState }) {
               {search !== null && prefs.view !== 'list' && !item.sf && <span className="fm-where">{prettyPath(item.path.split('/').slice(0, -1).join('/') || '/')}</span>}
             </div>
           ))}
-          {!items.length && !(isSf(path) && (sfDir.error || sfDir.loading)) && (
+          {!items.length && !(isSf(path) && (sfDir.error || sfDir.loading)) && !(path === TRASH && sfTrash) && (
             <p className="fm-empty">{search ? `Nothing matching “${search}” in ${pretty(path)}` : path === RECENT ? 'Files you open show up here.' : path === SF ? (libraries ? 'No libraries.' : 'Loading libraries…') : 'This folder is empty.'}</p>
           )}
           {isSf(path) && sfDir.loading && !sfDir.listing && !items.length && <p className="fm-empty">Loading…</p>}

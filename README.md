@@ -193,6 +193,14 @@ lot's progress and time left and each file's own, with cancel, retry and *Show i
 16 MB and up go in 8 MB chunks and carry on where they stopped after a retry. Names already in the
 folder ask first: replace (Seafile keeps the old version), keep both, or skip.
 
+With Seafile linked, Files' **Trash** is Seafile's (Settings → Integrations → Seafile can switch
+that off): each library's own trash, from its history. Restore one item or several at once, open a
+deleted folder and restore from inside it, and empty the trash of what is older than 3, 7 or 30
+days, or all of it. With Seafile as home, the desktop shows the Desktop folder's files and folders
+next to the site's own icons; *Show the site's icons* (the desktop's menu, or Settings) leaves just
+Seafile's. Right-click the desktop for New (folder, text file, sticky note, widget, launcher),
+uploads and paste.
+
 The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests
 and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 ([`server/inbox.ts`](server/inbox.ts)), with the access sign-in and linking already give.

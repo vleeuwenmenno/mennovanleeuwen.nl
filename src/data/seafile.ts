@@ -35,12 +35,16 @@ export type SeafilePrefs = {
   primary: string | null
   /** Minutes an encrypted library stays unlocked before its password is asked again */
   lockMinutes: number
+  /** With Seafile as home: the site's own desktop icons next to the Seafile Desktop folder's (off: only Seafile's) */
+  siteIcons: boolean
+  /** Files' Trash is Seafile's (each library's own), instead of the site's pretend one */
+  trash: boolean
 }
 
-const prefs = synced<SeafilePrefs>('seafile', { home: true, primary: null, lockMinutes: 30 }, {
+const prefs = synced<SeafilePrefs>('seafile', { home: true, primary: null, lockMinutes: 30, siteIcons: true, trash: true }, {
   normalize: (v) => {
     const o = (v ?? {}) as Partial<SeafilePrefs>
-    return { home: o.home !== false, primary: typeof o.primary === 'string' ? o.primary : null, lockMinutes: [5, 15, 30, 55].includes(o.lockMinutes as number) ? (o.lockMinutes as number) : 30 }
+    return { home: o.home !== false, primary: typeof o.primary === 'string' ? o.primary : null, lockMinutes: [5, 15, 30, 55].includes(o.lockMinutes as number) ? (o.lockMinutes as number) : 30, siteIcons: o.siteIcons !== false, trash: o.trash !== false }
   },
 })
 export const useSeafilePrefs = prefs.use
@@ -416,3 +420,25 @@ export const DRAG_FILES = 'application/x-mvlos-seafile'
 let dragged: string[] | null = null
 export const setDragged = (paths: string[] | null) => void (dragged = paths)
 export const getDragged = () => dragged
+
+// --- trash ---------------------------------------------------------------------------------------
+
+export type TrashItem = { name: string; parent: string; dir: boolean; size: number; deleted: number; commit: string }
+
+/** A page of a library's trash, newest first; pass `scan` from the last page for the next. */
+export const listTrash = (repo: string, scan: string | null = null) =>
+  call<{ items: TrashItem[]; more: boolean; scan: string | null }>(`/api/seafile/trash?repo=${encodeURIComponent(repo)}&p=%2F${scan ? `&scan=${encodeURIComponent(scan)}` : ''}`)
+
+/** What was in a deleted folder when it went. */
+export const listTrashDir = (repo: string, commit: string, path: string) =>
+  call<Entry[]>(`/api/seafile/trash?repo=${encodeURIComponent(repo)}&commit=${encodeURIComponent(commit)}&p=${encodeURIComponent(path)}`)
+
+/** Puts deleted things back where they were; lists their folders again. */
+export async function restoreTrash(repo: string, commit: string, paths: string[]) {
+  const res = await call<{ restored: string[]; failed: { path: string; error: string }[] }>('/api/seafile/trash/restore', { method: 'POST', json: { repo, commit, paths } })
+  for (const p of res.restored) refreshDirs(sfPath(repo, p.split('/').slice(0, -1).join('/') || '/'))
+  return res
+}
+
+/** Empties a library's trash of what was deleted more than `days` ago (0: everything). Cannot be undone. */
+export const cleanTrash = (repo: string, days: number) => call('/api/seafile/trash/clean', { method: 'POST', json: { repo, days } })

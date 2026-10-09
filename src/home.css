@@ -752,6 +752,9 @@ input.is-bad {
 .set-help {
   font-size: 12px;
 }
+.set-row.is-off {
+  opacity: 0.5;
+}
 .set-row-link {
   padding: 0;
 }

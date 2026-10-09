@@ -771,6 +771,20 @@ function SeafileSettings() {
           </span>
           <Toggle on={sfPrefs.home} onChange={(home) => setSeafilePrefs({ home })} label="Use the primary library as home" />
         </li>
+        <li className={`set-row ${sfPrefs.home ? '' : 'is-off'}`}>
+          <span className="set-row-text">
+            <strong>Site icons on the desktop</strong>
+            <span className="muted">{sfPrefs.siteIcons ? 'Next to the Desktop folder’s files and folders' : 'Off: the desktop is the Desktop folder (and your launchers)'}</span>
+          </span>
+          <Toggle on={sfPrefs.siteIcons} onChange={(siteIcons) => sfPrefs.home && setSeafilePrefs({ siteIcons })} label="Show the site's icons on the desktop" />
+        </li>
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Seafile's trash in Files</strong>
+            <span className="muted">{sfPrefs.trash ? 'Trash shows what was deleted in your libraries, to restore or empty' : 'Off: Trash is the site’s own'}</span>
+          </span>
+          <Toggle on={sfPrefs.trash} onChange={(trash) => setSeafilePrefs({ trash })} label="Show Seafile's trash in Files" />
+        </li>
         <li className="set-row">
           <span className="set-row-text">
             <strong>Encrypted libraries</strong>

@@ -5,8 +5,8 @@ import { createNote } from '../data/notes'
 import { addWidgetItems } from '../widgets/registry'
 import { projects } from '../data/profile'
 import { HOME, kindOfName, type FileKind } from '../terminal/vfs'
-import { droppedFiles, hasOsFiles, uploadFiles } from '../data/uploads'
-import { deleteItems, download, DRAG_FILES, dropOp, getDragged, isInside, openSeafile, refreshDirs, renameItem, transferItems, useDir, useSeafileHome } from '../data/seafile'
+import { droppedFiles, hasOsFiles, pickAndUpload, uploadFiles } from '../data/uploads'
+import { createFile, getClipboard, mkdir, setClipboard, deleteItems, download, DRAG_FILES, dropOp, getDragged, isInside, openSeafile, refreshDirs, renameItem, setSeafilePrefs, transferItems, useDir, useSeafileHome, useSeafilePrefs } from '../data/seafile'
 import { notify } from './notify'
 import { closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
 import { resetLayout, restoreIcons, trashIcons, updateDesktop, useDesktop, type IconPos } from './desktopStore'
@@ -183,6 +183,7 @@ export function Desktop() {
   }))
   // With Seafile as home, its Desktop folder (as in Files) joins the site's icons and your launchers.
   const { home: sfHome } = useSeafileHome()
+  const { siteIcons } = useSeafilePrefs()
   const sfDesktop = sfHome ? `${sfHome}/Desktop` : null
   const sfDir = useDir(sfDesktop, 15_000)
   useEffect(() => {
@@ -201,7 +202,9 @@ export function Desktop() {
       const kind = kindOfName(e.name, e.dir)
       return { id: `sf:${e.name}`, label: e.name, glyph: SF_GLYPH[kind] ?? '📄', kind: e.dir ? 'folder' : 'file', path: `${sfDesktop}/${e.name}`, open: { app: 'files' }, terminal: '', sf: { dir: e.dir } }
     })
-  const visible = [...DESKTOP_ICONS.filter((i) => !desk.trashed.includes(i.id)), ...sfIcons, ...linkIcons]
+  // The site's own icons stay unless switched off (then the desktop is just the Seafile Desktop folder and launchers).
+  const siteShown = !sfHome || siteIcons
+  const visible = [...(siteShown ? DESKTOP_ICONS.filter((i) => !desk.trashed.includes(i.id)) : []), ...sfIcons, ...linkIcons]
   const positions = useMemo(() => layout(visible.map((i) => i.id), desk.positions), [visible.map((i) => i.id).join(), desk.positions, viewport])
 
   useEffect(() => {
@@ -508,28 +511,62 @@ export function Desktop() {
     ]
   }
 
-  function desktopMenu(): MenuItem[] {
+  /** A new Seafile folder or file where the desktop was right-clicked, named straight away. */
+  function createHere(kind: 'folder' | 'file', at: { x: number; y: number }) {
+    if (!sfDesktop) return
+    const taken = new Set(sfIcons.map((i) => i.label))
+    const base = kind === 'folder' ? 'New folder' : 'untitled.txt'
+    let name = base
+    for (let n = 2; taken.has(name); n++) name = kind === 'folder' ? `New folder ${n}` : `untitled-${n}.txt`
+    const cell = snap(at.x - CELL_W / 2, at.y - 30, new Set(visible.map((i) => key(positions[i.id]))))
+    ;(kind === 'folder' ? mkdir(`${sfDesktop}/${name}`) : createFile(`${sfDesktop}/${name}`))
+      .then((made) => {
+        const id = `sf:${made.split('/').pop()}`
+        updateDesktop((s) => ({ ...s, positions: { ...s.positions, [id]: cell } }))
+        setSelected(new Set([id]))
+        setRenaming(id)
+      })
+      .catch(failed(kind === 'folder' ? 'Could not make the folder' : 'Could not make the file'))
+  }
+
+  function desktopMenu(at: { x: number; y: number }): MenuItem[] {
+    const clip = getClipboard()
     return [
+      {
+        label: 'New',
+        submenu: [
+          ...(sfDesktop
+            ? [{ label: 'Folder', onSelect: () => createHere('folder', at) }, { label: 'Text file', onSelect: () => createHere('file', at) }, { separator: true } as MenuItem]
+            : []),
+          { label: 'Sticky note', onSelect: newNote },
+          { label: 'Widget', submenu: addWidgetItems(wm) },
+          { label: 'Launcher…', onSelect: () => wm.open('settings', { section: 'launchers', t: String(Date.now()) }) },
+        ],
+      },
       ...(sfDesktop
         ? [
-            { label: 'Open Desktop folder', onSelect: () => wm.openNew('files', { path: sfDesktop }) },
-            { label: 'Refresh', onSelect: () => refreshDirs(sfDesktop) },
-            { separator: true } as MenuItem,
+            { label: 'Upload files…', onSelect: () => pickAndUpload(sfDesktop) },
+            { label: 'Upload folder…', onSelect: () => pickAndUpload(sfDesktop, true) },
+            ...(clip ? [{ label: `Paste ${clip.paths.length === 1 ? clip.paths[0].split('/').pop() : `${clip.paths.length} items`}`, onSelect: () => void transferItems(clip.op, clip.paths, sfDesktop).then(() => clip.op === 'move' && setClipboard(null)).catch(failed('Could not paste')) }] : []),
+            { label: 'Show in Files', onSelect: () => wm.openNew('files', { path: sfDesktop }) },
           ]
         : []),
-      { label: 'Open Terminal', onSelect: () => wm.open('terminal') },
-      { label: 'Show activity', onSelect: () => wm.open('recents') },
-      { label: 'About this system', onSelect: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) },
-      { separator: true },
-      { label: 'New sticky note', onSelect: newNote },
-      { label: 'Add widget', submenu: addWidgetItems(wm) },
-      { label: 'New launcher…', onSelect: () => wm.open('settings', { section: 'launchers', t: String(Date.now()) }) },
-      { label: 'Notebook', onSelect: () => wm.open('notebook') },
       { separator: true },
       { label: 'Select all', shortcut: 'Ctrl A', onSelect: () => setSelected(new Set(visible.map((i) => i.id))) },
       { label: 'Clean up icons', onSelect: resetLayout },
-      ...(desk.trashed.length ? [{ label: `Put back ${desk.trashed.length} trashed item${desk.trashed.length === 1 ? '' : 's'}`, onSelect: () => restoreIcons(desk.trashed) }] : []),
+      ...(sfDesktop ? [{ label: 'Show the site’s icons', checked: siteIcons, onSelect: () => setSeafilePrefs({ siteIcons: !siteIcons }) }, { label: 'Refresh', onSelect: () => refreshDirs(sfDesktop) }] : []),
+      ...(desk.trashed.length && siteShown ? [{ label: `Put back ${desk.trashed.length} trashed icon${desk.trashed.length === 1 ? '' : 's'}`, onSelect: () => restoreIcons(desk.trashed) }] : []),
       { separator: true },
+      {
+        label: 'Open',
+        submenu: [
+          { label: 'Terminal', onSelect: () => wm.open('terminal') },
+          { label: 'Files', onSelect: () => wm.openNew('files') },
+          { label: 'Notebook', onSelect: () => wm.open('notebook') },
+          { label: 'Activity', onSelect: () => wm.open('recents') },
+          { label: 'About this system', onSelect: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) },
+        ],
+      },
       { label: 'Appearance', submenu: appearanceMenu() },
       { label: 'Dock', submenu: DOCK_MODES.map(([m, label]) => ({ label, checked: getDockMode() === m, onSelect: () => setDockMode(m) })) },
     ]
@@ -551,7 +588,7 @@ export function Desktop() {
       onContextMenu={(e) => {
         if (e.target !== surface.current) return
         setSelected(new Set())
-        openContextMenu(e, desktopMenu())
+        openContextMenu(e, desktopMenu({ x: e.clientX, y: e.clientY }))
       }}
     >
       {visible.map((icon) => {

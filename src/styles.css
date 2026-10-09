@@ -4442,6 +4442,80 @@ button.fm-dd-row:hover {
   pointer-events: none;
 }
 
+/* ---------- Seafile's trash, in Files ---------- */
+
+.st {
+  grid-column: 1 / -1;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 2px 4px 12px;
+}
+.st-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.st-bar .set-select {
+  max-width: 220px;
+}
+.st-crumb button,
+.st-link {
+  padding: 0;
+  color: var(--accent);
+}
+.st-crumb button:hover,
+.st-link:hover {
+  text-decoration: underline;
+}
+.st-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+}
+.st-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+}
+.st-row + .st-row {
+  border-top: 1px solid var(--line);
+}
+.st-row.is-selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.st-list .st-row:not(:has(input)) {
+  grid-template-columns: auto 1fr auto auto;
+}
+.st-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.st-meta {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.st-actions {
+  display: flex;
+  gap: 4px;
+}
+.st-note {
+  padding: 8px;
+  margin: 0;
+  font-size: 12px;
+}
+.st-head {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 /* ---------- Uploads ---------- */
 
 .up {
