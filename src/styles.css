@@ -1481,6 +1481,35 @@ body.is-resizing iframe {
 .t-input[hidden] {
   display: none;
 }
+/* The go links picker under the prompt (Tab after `go <alias>`), drawn like fzf. */
+.t-picker {
+  margin: 2px 0 4px;
+}
+.t-pick {
+  display: grid;
+  grid-template-columns: 2ch var(--name-w, 12ch) 1fr;
+  cursor: pointer;
+  white-space: pre;
+}
+.t-pick.is-on {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+}
+.t-pick-mark {
+  color: var(--accent);
+  font-weight: 700;
+}
+.t-pick-hit {
+  color: var(--green);
+}
+.t-pick-target {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+.t-pick-info {
+  color: var(--muted);
+  white-space: pre-wrap;
+}
 .t-field {
   position: relative;
   display: flex;
@@ -6415,6 +6444,9 @@ kbd {
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;
+}
+.sp-main.no-preview {
+  grid-template-columns: minmax(0, 1fr);
 }
 .sp-results {
   overflow: auto;

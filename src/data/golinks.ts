@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { synced } from '../os/synced'
+import { openLink } from './links'
+import { rememberVisit } from './siteHistory'
 
 // The visitor's go-links account (https://git.mvl.sh/vleeuwenmenno/golinks), for the terminal's
 // `go` command and Spotlight's `go <alias>`. Stored as the browser-search URL golinks hands out, `https://mvl.sh/r/%s?token=…`,
@@ -41,6 +43,12 @@ export function parseGolinks(args: string[]): string | null {
 /** Where `alias` goes, through the saved account. */
 export const golinksUrl = (template: string, alias: string) => template.replace('%s', encodeURIComponent(alias))
 
+/** Opens a go link; it is remembered by its alias, so the token stays out of the history. */
+export function followGoLink(template: string, alias: string) {
+  openLink(golinksUrl(template, alias), { remember: false })
+  rememberVisit(`go:${alias}`, `go/${alias}`)
+}
+
 /** The template with most of the token hidden, for printing. */
 export const maskGolinks = (template: string) => template.replace(/token=([^&]{4})[^&]*/, (_, head: string) => `token=${head}…`)
 
@@ -72,6 +80,11 @@ const cache = new Map<string, GoSuggestion[]>()
  * origin, and the token never passes through this site's server. Empty `q` lists the most used.
  */
 export function useGoSuggestions(template: string | null, q: string, enabled: boolean): GoSuggestion[] {
+  return useGoSuggestionState(template, q, enabled).list
+}
+
+/** The same, plus whether the list is the answer for this `q` yet (not the previous one's). */
+export function useGoSuggestionState(template: string | null, q: string, enabled: boolean): { list: GoSuggestion[]; ready: boolean } {
   const query = q.trim()
   const on = enabled && !!template
   const key = `${template}|${query.toLowerCase()}`
@@ -102,5 +115,5 @@ export function useGoSuggestions(template: string | null, q: string, enabled: bo
   }, [on, key, template, query])
 
   // The previous query's aliases stay until the new ones land, so the list doesn't flicker.
-  return on ? result.list : []
+  return on ? { list: result.list, ready: result.key === key } : { list: [], ready: false }
 }

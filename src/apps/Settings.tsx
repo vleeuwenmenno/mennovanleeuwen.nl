@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { isShown, setCalendarShown, useCalendarChoice, useCalendarList } from '../data/calendar'
 import { ENGINES, setSearchSettings, useSearchSettings, type EngineId } from '../data/searchEngine'
 import { setLinkSettings, useLinkSettings } from '../data/links'
+import { clearVisits, useVisits } from '../data/siteHistory'
+import { clearHits, useRecentHits } from '../data/spotlightRecent'
+import { CATEGORIES, setInclude, setSpotlightPrefs, setStart, START_SECTIONS, useSpotlightPrefs, type Fallback } from '../data/spotlightPrefs'
 import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { MC_ADDRESS, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
@@ -27,7 +30,7 @@ import { SyncLine } from './Notebook'
 
 // System settings, laid out like macOS: the account on top of a sidebar, one pane per topic.
 // Opened from the system menu, the desktop's right-click menu, Spotlight and the terminal;
-// props.section picks the pane (account, appearance, dock, launchers, search, notifications,
+// props.section picks the pane (account, appearance, dock, launchers, search (Spotlight), notifications,
 // instances, calendar, integrations, golinks, sync, about). The account and service panes only show
 // for the signed-in owner.
 
@@ -1068,12 +1071,85 @@ function CaldavForm() {
   )
 }
 
-/** Spotlight's web search: which engine, and whether to show its suggestions while typing. */
-function SearchSettings() {
+/** How Spotlight behaves: the empty box, what it searches, the web search, Enter's fallback, history. */
+function SpotlightSettings() {
   const { engine, suggestions } = useSearchSettings()
+  const prefs = useSpotlightPrefs()
+  const visits = useVisits()
+  const hits = useRecentHits()
   const account = useAccount()
+  const fallbacks: [Fallback, string][] = [
+    ['web', `Searches ${ENGINES[engine].label}`],
+    ['terminal', 'Runs it in a terminal'],
+  ]
   return (
     <>
+      <SetGroup title="When Spotlight opens, show">
+        {START_SECTIONS.map(([id, label, hint]) => (
+          <label key={id} className="set-check">
+            <input type="checkbox" checked={prefs.start[id]} onChange={(e) => setStart(id, e.target.checked)} />
+            <span>
+              {label} <span className="muted">· {hint}</span>
+            </span>
+          </label>
+        ))}
+        <p className="muted set-help">With everything off, Spotlight opens as an empty search box.</p>
+      </SetGroup>
+      <SetGroup title="While you type, include">
+        {CATEGORIES.map(([id, label]) => (
+          <label key={id} className="set-check">
+            <input type="checkbox" checked={prefs.include[id]} onChange={(e) => setInclude(id, e.target.checked)} />
+            {label}
+          </label>
+        ))}
+        <p className="muted set-help">Apps, actions, notes, launchers and your repositories are always searched.</p>
+      </SetGroup>
+      <SetGroup title="When nothing of yours matches, Enter">
+        <div className="set-radios" role="radiogroup" aria-label="When nothing matches">
+          {fallbacks.map(([id, label]) => (
+            <label key={id} className={`set-choice ${prefs.fallback === id ? 'is-on' : ''}`}>
+              <input type="radio" name="spotlight-fallback" checked={prefs.fallback === id} onChange={() => setSpotlightPrefs({ fallback: id })} />
+              {label}
+            </label>
+          ))}
+        </div>
+      </SetGroup>
+      <SetGroup title="Preview">
+        <label className="set-check">
+          <input type="checkbox" checked={prefs.preview} onChange={(e) => setSpotlightPrefs({ preview: e.target.checked })} />
+          Show a preview of the highlighted result
+        </label>
+      </SetGroup>
+      <SetGroup title="History">
+        <label className="set-check">
+          <input type="checkbox" checked={prefs.history} onChange={(e) => setSpotlightPrefs({ history: e.target.checked })} />
+          Remember websites I open from MvL OS
+        </label>
+        <ul className="set-list">
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>Websites</strong>
+              <span className="muted">{visits.length ? `${visits.length} remembered` : 'None remembered'}</span>
+            </span>
+            <button className="btn btn-small" disabled={!visits.length} onClick={clearVisits}>
+              Clear
+            </button>
+          </li>
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>Repositories and issues</strong>
+              <span className="muted">{hits.length ? `${hits.length} remembered` : 'None remembered'}</span>
+            </span>
+            <button className="btn btn-small" disabled={!hits.length} onClick={clearHits}>
+              Clear
+            </button>
+          </li>
+        </ul>
+        <p className="muted set-help">
+          Browsers don't let a web page read their own history, so this only knows what you opened from here: Spotlight, launchers, the terminal and links in apps. Right-click a result in Spotlight (or Shift+Delete) to forget just that one.
+        </p>
+      </SetGroup>
+      <h4 className="set-subhead">Web search</h4>
       <div className="set-choices" role="radiogroup" aria-label="Search engine">
         {(Object.keys(ENGINES) as EngineId[]).map((id) => (
           <label key={id} className={`set-choice ${engine === id ? 'is-on' : ''}`}>
@@ -1088,7 +1164,7 @@ function SearchSettings() {
       </label>
       <p className="muted set-help">
         Suggestions send what you type to {ENGINES[engine].label} through this site's server.{' '}
-        {account.status === 'user' ? 'Your choice syncs to your other devices.' : 'Saved in this browser.'}
+        {account.status === 'user' ? 'These settings and the history sync to your other devices.' : 'Saved in this browser.'}
       </p>
     </>
   )
@@ -1152,7 +1228,7 @@ function SyncPane() {
           )}
         </li>
       </ul>
-      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, game high scores, the go links account and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. Without an account they stay in this browser.</p>
+      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, game high scores, the go links account, Spotlight's settings and history, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. Without an account they stay in this browser.</p>
     </>
   )
 }
@@ -1166,7 +1242,7 @@ const GROUPS: Pane[][] = [
     { id: 'launchers', label: 'Launchers', hue: 'var(--magenta)', icon: svg(<><rect x="4" y="4" width="6" height="6" /><rect x="14" y="4" width="6" height="6" /><rect x="4" y="14" width="6" height="6" /><rect x="14" y="14" width="6" height="6" /></>), keywords: 'launchers links bookmarks desktop shortcuts', blurb: 'Links on the desktop, in All apps and in Spotlight.', render: () => <Launchers /> },
   ],
   [
-    { id: 'search', label: 'Search', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google', blurb: "Spotlight's web search engine and its suggestions.", render: () => <SearchSettings /> },
+    { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal', blurb: 'What Spotlight shows when it opens, what it searches, and what it remembers.', render: () => <SpotlightSettings /> },
     { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
     { id: 'notifications', label: 'Notifications', hue: 'var(--red)', icon: svg(<><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></>), keywords: 'notifications alerts minecraft activity', blurb: 'What may pop up in the corner of the desktop.', render: () => <Notifications /> },
     { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal spotlight suggestions mvl.sh token', blurb: "The golinks account that go <alias> follows, in Spotlight and the terminal.", render: () => <GoLinks /> },

@@ -8,7 +8,9 @@ import { faviconOf, launch, useLaunchers } from '../data/launchers'
 import { createNote, noteTitle, NOTE_COLORS, useAllNotes } from '../data/notes'
 import { addWidget, widgetDefs } from '../widgets/registry'
 import { ENGINES, searchWeb, useSearchSettings, useSuggestions } from '../data/searchEngine'
-import { golinksSite, golinksUrl, useGoSuggestions, useGolinksTemplate } from '../data/golinks'
+import { followGoLink, golinksSite, golinksUrl, useGoSuggestions, useGolinksTemplate } from '../data/golinks'
+import { forgetVisit, useVisits, type Visit } from '../data/siteHistory'
+import { useSpotlightPrefs, type Category } from '../data/spotlightPrefs'
 import { countFor, useContributions } from '../data/contributions'
 import { fetchMinecraft, MC_ADDRESS, useMinecraft } from '../data/minecraft'
 import { contributions, profile, projects } from '../data/profile'
@@ -34,7 +36,7 @@ import { ALWAYS_NEW, SINGLE_INSTANCE, useWM, type AppId } from './wm'
 // Ctrl+K: one search box for apps, files, projects, games, live status, quick actions, maths and
 // terminal commands, with a preview of the highlighted result on the right.
 
-type Group = 'Top hit' | 'Go links' | 'Recent' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Widgets' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Web' | 'Fallback'
+type Group = 'Top hit' | 'Go links' | 'Recent' | 'Recently visited' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Widgets' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Web' | 'Fallback'
 
 type Result = {
   id: string
@@ -201,6 +203,66 @@ function goToRow(url: string, page: LinkPreview | null, open: (url: string) => v
 
 const ago = (iso?: string | null) => (iso ? timeAgo(iso) : '')
 
+const shortUrl = (url: string) => url.replace(/^https?:\/\//, '').replace(/\/$/, '')
+
+/** A remembered website, with what the page says about itself (signed in, like Go to). */
+function SitePreview({ v }: { v: Visit }) {
+  const account = useAccount()
+  const page = useLinkPreview(v.url, account.status === 'user')
+  return (
+    <div className="sp-page">
+      {page?.image && <img className="sp-page-image" src={page.image} alt="" onError={(e) => (e.currentTarget.style.display = 'none')} />}
+      <h4>{page?.title ?? v.title ?? shortUrl(v.url)}</h4>
+      {page?.description && <p>{page.description}</p>}
+      <p className="muted sp-small">{v.url}</p>
+      <p className="muted sp-small">
+        Last opened {timeAgo(new Date(v.at).toISOString())}
+        {v.count > 1 ? ` · ${v.count} times` : ''}
+      </p>
+    </div>
+  )
+}
+
+/** A website or go link opened before; right-click or Shift+Delete forgets it. */
+function visitRow(v: Visit, goTemplate: string | null, copy: (text: string, label: string) => void): Result {
+  const when = timeAgo(new Date(v.at).toISOString())
+  const forget = () => forgetVisit(v.url)
+  if (v.url.startsWith('go:')) {
+    const alias = v.url.slice(3)
+    return {
+      id: `visit-${v.url}`,
+      group: 'Recently visited',
+      title: `go/${alias}`,
+      subtitle: `Go link · ${when}`,
+      icon: <Glyph>↪</Glyph>,
+      run: () => goTemplate && followGoLink(goTemplate, alias),
+      enterLabel: 'Go',
+      complete: `go ${alias}`,
+      forget,
+    }
+  }
+  return {
+    id: `visit-${v.url}`,
+    group: 'Recently visited',
+    title: v.title ?? shortUrl(v.url),
+    subtitle: v.title ? `${shortUrl(v.url)} · ${when}` : when,
+    icon: (
+      <Glyph>
+        <img className="sp-fav" src={faviconOf(v.url)} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
+      </Glyph>
+    ),
+    run: () => openLink(v.url, { title: v.title }),
+    enterLabel: 'Go',
+    alt: { label: 'Copy link', run: () => copy(v.url, 'link') },
+    link: { label: v.title ?? shortUrl(v.url), url: v.url },
+    preview: () => <SitePreview v={v} />,
+    forget,
+  }
+}
+
+/** Which setting leaves a group out of what you type. */
+const CATEGORY_OF: Partial<Record<Group, Category>> = { 'Recently visited': 'sites', Status: 'status', Projects: 'projects', Games: 'games', Files: 'files' }
+
 function StateBadge({ state, draft }: { state: IssueHit['state']; draft?: boolean }) {
   const label = draft && state === 'open' ? 'draft' : state
   return <span className={`sp-state is-${label}`}>{label}</span>
@@ -329,11 +391,12 @@ function BranchPreview({ b }: { b: BranchHit }) {
   )
 }
 
-function codeRow(h: Hit, openUrl: (url: string) => void, copy: (text: string, label: string) => void): Result {
-  // Opening something remembers it, so it comes back first next time.
+function codeRow(h: Hit, copy: (text: string, label: string) => void): Result {
+  // Opening something remembers it, so it comes back first next time (here, not in the
+  // websites history: the Recent group already has it).
   const open = (url: string) => {
     rememberHit(h)
-    openUrl(url)
+    openLink(url, { remember: false })
   }
   if (h.kind === 'repo')
     return {
@@ -400,6 +463,8 @@ export function Spotlight() {
   const goSuggestions = useGoSuggestions(goTemplate, goAlias ?? '', goAlias !== null)
   const code = useCodeSearch(sub || goAlias !== null ? '' : q)
   const recentHits = useRecentHits()
+  const visits = useVisits()
+  const prefs = useSpotlightPrefs()
   const address = sub ? null : asWebAddress(q)
   const page = useLinkPreview(address, account.status === 'user')
   const dock = useDock()
@@ -731,7 +796,7 @@ export function Spotlight() {
         title: `go/${name}`,
         subtitle: target ? target.replace(/^https?:\/\//, '').replace(/\/$/, '') : `Through ${site}`,
         icon: <Glyph>↪</Glyph>,
-        run: () => openLink(url),
+        run: () => followGoLink(goTemplate, name),
         enterLabel: 'Go',
         complete: `go ${name}`,
         alt: { label: 'Copy link', run: () => copy(url, 'link') },
@@ -767,19 +832,27 @@ export function Spotlight() {
     if (calc) out.push(calcRow(calc))
 
     // A web address always leads: "Go to google.com", with what the page says about itself.
-    if (address) out.unshift(goToRow(address, page, openLink, copy))
+    if (address) out.unshift(goToRow(address, page, (url) => openLink(url, { title: page?.title ?? undefined }), copy))
 
     // What you opened from Spotlight before, most used and recent first; right-click forgets one.
     const recentRow = (h: Hit): Result => {
-      const r = codeRow(h, openLink, copy)
+      const r = codeRow(h, copy)
       return { ...r, id: `recent-${hitKey(h)}`, group: 'Recent', forget: () => forgetHit(h) }
     }
     const recentRanked = recentHits.slice().sort((a, b) => weight(b) - weight(a))
 
     if (!query) {
-      // Empty box: status first, then the common things, then what you open most.
-      const pick = new Set(['status-mc', 'status-activity', 'status-contrib', 'act-new-terminal', 'app-projects', 'app-cv', 'app-games', 'app-terminal'])
-      return [...out, ...all.filter((r) => pick.has(r.id)), ...recentRanked.slice(0, 4).map((r) => recentRow(r.hit))]
+      // Empty box: what Settings → Spotlight asks for, in this order.
+      const { start } = prefs
+      const status = new Set(['status-mc', 'status-activity', 'status-contrib'])
+      const apps = new Set(['act-new-terminal', 'app-projects', 'app-cv', 'app-games', 'app-terminal'])
+      return [
+        ...out,
+        ...(start.sites ? visits.slice(0, 5).map((v) => visitRow(v, goTemplate, copy)) : []),
+        ...(start.status ? all.filter((r) => status.has(r.id)) : []),
+        ...(start.apps ? all.filter((r) => apps.has(r.id)) : []),
+        ...(start.code ? recentRanked.slice(0, 4).map((r) => recentRow(r.hit)) : []),
+      ]
     }
 
     // Remembered things matching the query: instant, no request to GitHub.
@@ -799,7 +872,7 @@ export function Spotlight() {
     const recentKeys = new Set(recentMatches.map((x) => hitKey(x.r.hit)))
 
     // Repositories, issues, PRs and branches from the owner's code hosts.
-    const codeRows = (code.result?.hits ?? []).filter((h) => !recentKeys.has(hitKey(h))).map((h) => codeRow(h, openLink, copy))
+    const codeRows = (code.result?.hits ?? []).filter((h) => !recentKeys.has(hitKey(h))).map((h) => codeRow(h, copy))
     const codeStatus: Result[] = []
     // Searching and trouble only matter when the query is about code (#123, repo@branch).
     if (isCodeQuery(query) && code.loading && !codeRows.length) codeStatus.push({ id: 'code-loading', group: 'Code', title: 'Searching your code hosts…', icon: <Glyph>⌕</Glyph>, run: () => {} })
@@ -813,13 +886,22 @@ export function Spotlight() {
       return [...out, ...(first ? [{ ...first, group: 'Top hit' as Group }] : []), ...more, ...codeStatus]
     }
 
+    // Websites opened before, by title or address; a little ahead when opened lately or often.
+    const visited = prefs.include.sites
+      ? visits.map((v, i) => {
+          const r = visitRow(v, goTemplate, copy)
+          return { r, s: Math.max(score(r.title, query, true), score(shortUrl(v.url), query) * 0.9) * (1 + Math.log2(1 + v.count) / 20 - i / 400) }
+        })
+      : []
     const scored = all
+      .filter((r) => !CATEGORY_OF[r.group] || prefs.include[CATEGORY_OF[r.group]!])
       .map((r) => ({ r, s: Math.max(score(r.title, query, true) * 1.2, score(r.keywords ?? '', query) * 0.8, score(r.subtitle ?? '', query) * 0.6) }))
+      .concat(visited)
       .filter((x) => x.s > 0)
       .sort((a, b) => b.s - a.s)
 
     // The single best match leads, then everything else grouped.
-    const order: Group[] = ['Recent', 'Status', 'Apps', 'Widgets', 'Repositories', 'Issues & PRs', 'Branches', 'Notes', 'Actions', 'Projects', 'Games', 'Files', 'Links']
+    const order: Group[] = ['Recent', 'Recently visited', 'Status', 'Apps', 'Widgets', 'Repositories', 'Issues & PRs', 'Branches', 'Notes', 'Actions', 'Projects', 'Games', 'Files', 'Links']
     const [top, ...rest] = scored
     const recentRows = recentMatches.map((x) => recentRow(x.r.hit))
     // A remembered thing that matches well beats an app name that matches about as well.
@@ -830,7 +912,7 @@ export function Spotlight() {
     else if (top) rest.unshift(top)
     rest.unshift(...recentRows.map((r) => ({ r, s: 0 })))
     for (const g of order) {
-      out.push(...rest.filter((x) => x.r.group === g).slice(0, g === 'Files' ? 6 : 5).map((x) => x.r))
+      out.push(...rest.filter((x) => x.r.group === g).slice(0, g === 'Files' ? 6 : g === 'Recently visited' ? 3 : 5).map((x) => x.r))
       if (g === 'Widgets') out.push(...codeRows.filter((r) => r.id !== out[0]?.id), ...codeStatus)
     }
 
@@ -853,20 +935,22 @@ export function Spotlight() {
       run: () => searchWeb(q.trim()),
       enterLabel: 'Search',
     }
-    // Nothing of your own matched: Enter searches exactly what you typed. The engine's
-    // suggestions follow it, one arrow down away.
-    if (!out.length || out[0].group === 'Web') out.unshift({ ...web, group: 'Top hit' })
-    else out.push(web)
-    out.push({
+    const runIt: Result = {
       id: 'run',
       group: 'Fallback',
       title: `Run “${q.trim()}” in a terminal`,
       icon: <Glyph>›_</Glyph>,
       run: () => term(q.trim()),
       alt: { label: 'In a new terminal', run: () => term(q.trim(), true) },
-    })
+    }
+    // Nothing of your own matched: Enter searches exactly what you typed (or runs it, as
+    // Settings → Spotlight says). The engine's suggestions follow it, one arrow down away.
+    const [first, second] = prefs.fallback === 'terminal' ? [runIt, web] : [web, runIt]
+    if (!out.length || out[0].group === 'Web') out.unshift({ ...first, group: 'Top hit' })
+    else out.push(first)
+    out.push(second)
     return out
-  }, [q, all, calc, code, suggestions, engine, sub, wm, recentHits, address, page, goAlias, goTemplate, goSuggestions])
+  }, [q, all, calc, code, suggestions, engine, sub, wm, recentHits, visits, prefs, address, page, goAlias, goTemplate, goSuggestions])
 
   useEffect(() => setActive(0), [q, sub])
   useEffect(() => {
@@ -957,7 +1041,7 @@ export function Spotlight() {
           />
           <kbd>esc</kbd>
         </div>
-        <div className="sp-main">
+        <div className={`sp-main ${prefs.preview ? '' : 'no-preview'}`}>
           <div className="sp-results" ref={list} role="listbox">
             {results.map((r, i) => {
               const header = r.group !== lastGroup && r.group !== 'Fallback' ? r.group : r.group === 'Fallback' && lastGroup !== 'Fallback' ? 'More' : null
@@ -988,7 +1072,7 @@ export function Spotlight() {
               )
             })}
           </div>
-          <aside className="sp-preview">{current?.preview ? current.preview() : current ? <DefaultPreview r={current} /> : null}</aside>
+          {prefs.preview && <aside className="sp-preview">{current?.preview ? current.preview() : current ? <DefaultPreview r={current} /> : null}</aside>}
         </div>
         <footer className="sp-foot">
           <span>

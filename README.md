@@ -66,7 +66,9 @@ account (by default on https://mvl.sh). `go set <search url>` saves the account 
 `…/r/%s?token=…` URL golinks shows after creating a token (a redirect URL for any alias, a site plus
 a token, or a bare mvl.sh token work too). It is kept in localStorage, and synced like notes when
 signed in ([`src/data/golinks.ts`](src/data/golinks.ts)). `go` alone shows the account, `go unset`
-forgets it. Spotlight takes `go <alias>` too, and lists matching aliases as you type (the most used
+forgets it. Tab after `go ` opens a picker of your aliases under the prompt, like fzf: it narrows as
+you type, ↑/↓ (or Ctrl+P/N) move, Tab puts the alias on the line, Enter runs it, Esc closes it.
+Spotlight takes `go <alias>` too, and lists matching aliases as you type (the most used
 ones after a bare `go `) from the golinks server's `/suggest`, asked straight from the browser so
 the token never passes through this site's server.
 
@@ -90,6 +92,12 @@ get a random tilt and colour, both changeable from the sticky's hover bar or men
 (system menu, [`src/apps/Settings.tsx`](src/apps/Settings.tsx)) is laid out like macOS System
 Settings: the account on top of a sidebar, then one pane each for appearance (mode, Omarchy themes,
 accent), the dock, launchers, search, links, notifications, go links, code hosts, calendar, sync and about.
+Settings → Spotlight picks what the empty Spotlight shows (recently visited websites, status, apps,
+your repositories), which kinds of results it searches, whether Enter on an unmatched query searches the
+web or runs it in a terminal, the preview pane, and the web search engine. Recently visited websites
+are the pages opened from MvL OS itself (Spotlight, launchers, `open`, `go`, links in apps), since a page
+can't read the browser's history ([`src/data/siteHistory.ts`](src/data/siteHistory.ts)); go links are
+kept by alias, never with their token, and the history can be switched off or cleared there.
 Launchers are a URL, a name and an optional emoji (otherwise the site's own favicon). Notes, launchers, desktop icons, the dock order and the open windows are kept per browser
 in localStorage ([`src/os/synced.ts`](src/os/synced.ts)), with one window layout for phones and one
 for bigger screens.
