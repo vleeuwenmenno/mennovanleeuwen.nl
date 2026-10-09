@@ -24,7 +24,7 @@ export type Synced<T> = {
 
 type Internal = Synced<unknown> & {
   meta: () => Meta<unknown>
-  adopt: (r: Remote, dirty?: boolean) => void
+  adopt: (r: Remote, dirty?: boolean, notify?: boolean) => void
   pushed: (updatedAt: number, sent: unknown) => void
   reset: () => void
   merge?: (local: unknown, remote: unknown) => unknown
@@ -87,11 +87,11 @@ export function synced<T>(key: string, fallback: T, opts: { legacyKey?: string; 
   const internal: Internal = {
     ...(store as Synced<unknown>),
     meta: () => meta,
-    adopt(r, dirty = false) {
+    adopt(r, dirty = false, notify = true) {
       meta = { value: normalize(r.value), base: r.updatedAt, dirty }
       save()
       emit()
-      remoteListeners.forEach((l) => l(meta.value))
+      if (notify) remoteListeners.forEach((l) => l(meta.value))
     },
     pushed(updatedAt, sent) {
       // Still dirty if it changed while the request was out.
@@ -180,7 +180,8 @@ function reconcile(s: Internal, remote: Remote | undefined) {
       // Both changed: keep both sides' edits and save the result on top of the server's version.
       const merged = s.merge(local.value, remote.value)
       const differs = JSON.stringify(merged) !== JSON.stringify(remote.value)
-      s.adopt({ value: merged, updatedAt: remote.updatedAt }, differs)
+      // Nothing new to show when the merge kept this tab's own value.
+      s.adopt({ value: merged, updatedAt: remote.updatedAt }, differs, merged !== local.value)
       if (differs) void push(s.key)
     } else s.adopt(remote)
   } else if (local.dirty) void push(s.key)
@@ -215,10 +216,14 @@ export function startSync() {
     }
     was = now
   })
-  // Coming back to the tab (another device may have changed things).
+  // Coming back to the tab, and every 30 s while it's in view: another device may have changed
+  // things (one small GET of every key).
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && Date.now() - lastPull > 20_000) void pullAll()
   })
+  setInterval(() => {
+    if (document.visibilityState === 'visible' && Date.now() - lastPull > 25_000) void pullAll()
+  }, 30_000)
   // Leaving: send pending saves right away.
   window.addEventListener('pagehide', () => {
     if (getAccount().status !== 'user') return
