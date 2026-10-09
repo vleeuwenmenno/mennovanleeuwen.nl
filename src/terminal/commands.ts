@@ -20,7 +20,7 @@ import { spotlightPrefs } from '../data/spotlightPrefs'
 import { asWebAddress } from '../os/linkPreview'
 import { getAccount, signedIn } from '../os/account'
 import { followGoLink, golinksSite, golinksTemplate, golinksUrl, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
-import { age, fileKind, HOME, lookup as siteLookup, prettyPath, resolvePath, type DirNode, type Node } from './vfs'
+import { age, dynamic, fileKind, HOME, lookup as siteLookup, prettyPath, resolvePath, type DirNode, type Node } from './vfs'
 import { lookup, makeDir, prepare, removePath, touchFile, transfer, walk, writeFile } from './fs'
 import { manPages, mountCommands } from './mount'
 import { nanoCommands } from './nano'
@@ -160,6 +160,7 @@ const lines = (s: string) => (s === '' ? [] : s.replace(/\n$/, '').split('\n'))
 
 function colorName(node: Node) {
   if (node.type === 'dir') return c('blue', node.name + '/')
+  if (node.type === 'file' && (node.exec || node.name.endsWith('.game'))) return c('green', node.name)
   if (node.name.endsWith('.url')) return c('cyan', node.name)
   if (node.name.startsWith('.')) return c('muted', node.name)
   return node.name
@@ -284,13 +285,16 @@ export const commands: Record<string, Command> = {
       if (!node) throw new CmdError(`ls: cannot access '${target}': No such file or directory`)
       if (node.type === 'file') return colorName(node)
       const kids = [...node.children.values()].filter((n) => f.has('a') || !n.name.startsWith('.'))
-      if (!f.has('l')) return kids.map(colorName).join('  ')
+      // One per line into a pipe (ls | wc -l), side by side on the screen.
+      if (!f.has('l')) return kids.map(colorName).join(ctx.tty ? '  ' : '\n')
       return kids
         .map((k) => {
           const size = k.type === 'file' ? (k.size ?? k.content().length) : 4096
           const rw = (k.sf && !k.ro) || abs === '/tmp'
-          const perm = k.type === 'dir' ? (rw ? 'drwxr-xr-x' : 'dr-xr-xr-x') : rw ? '-rw-r--r--' : '-r--r--r--'
-          return `${perm}  ${profile.handle}  ${String(size).padStart(5)}  ${colorName(k)}`
+          const perm = k.type === 'dir' ? (rw ? 'drwxr-xr-x' : 'dr-xr-xr-x') : k.exec ? '-r-xr-xr-x' : rw ? '-rw-r--r--' : '-r--r--r--'
+          const kAbs = `${abs === '/' ? '' : abs}/${k.name}`
+          const owner = k.sf || kAbs.startsWith(`${HOME}/`) || kAbs.startsWith('/srv/site/') || kAbs.startsWith('/tmp/') ? profile.handle : 'root'
+          return `${perm}  ${owner.padEnd(Math.max(profile.handle.length, 4))}  ${String(size).padStart(6)}  ${colorName(k)}`
         })
         .join('\n')
     },
@@ -1024,6 +1028,12 @@ export const commands: Record<string, Command> = {
 
 // The real-network and device tools live in extra.ts.
 Object.assign(commands, extraCommands, findCommands, mountCommands, nanoCommands)
+// /bin lists them all, like a real one (hidden easter eggs included; not the odd names like :q).
+dynamic.commands = () =>
+  Object.keys(commands)
+    .filter((k) => /^[a-z0-9][\w.+-]*$/i.test(k))
+    .sort()
+    .map((name) => ({ name, desc: commands[name].desc }))
 
 /** Shuts down or reboots the whole "machine" after the broadcast has had a moment on screen. */
 function power(ctx: Ctx, what: 'reboot' | 'power off') {
@@ -1295,9 +1305,11 @@ async function runPipeline(stmt: string, base: Base): Promise<RunResult> {
       const cmd = commands[name] ?? executable(name, base.cwd)
       if (!cmd) throw new CmdError(`msh: command not found: ${name}${name.length > 2 ? suggest(name) : ''}`)
       const tty = i === stages.length - 1 && !redirect
+      // /bin/ls is ls.
+      const known = commands[name] ? name : (Object.keys(commands).find((k) => commands[k] === cmd) ?? null)
       // Seafile behind the mounts: fetch what the command will look at, so it can read it at once.
-      if (commands[name] && !asksHelp(name, args)) await prepare(base.cwd, name, name === 'cd' && !args.length ? [HOME] : args)
-      const out = commands[name] && asksHelp(name, args) ? manPage(name) : ((await cmd.run({ ...base, args, stdin, tty })) ?? '')
+      if (known && !asksHelp(known, args)) await prepare(base.cwd, known, known === 'cd' && !args.length ? [HOME] : args)
+      const out = known && asksHelp(known, args) ? manPage(known) : ((await cmd.run({ ...base, args, stdin, tty })) ?? '')
       rendered = out
       stdin = strip(out)
     }
@@ -1329,6 +1341,8 @@ function executable(name: string, cwd: string): Command | undefined {
   const node = lookup(resolvePath(cwd, name))
   if (!node) return local ? { desc: '', run: () => { throw new CmdError(`msh: no such file or directory: ${name}`) } } : undefined
   if (node.type === 'dir') return { desc: '', run: () => { throw new CmdError(`msh: is a directory: ${name}`) } }
+  // /bin/ls and friends: the command itself.
+  if (node.exec && commands[node.name]) return commands[node.name]
   const game = node.open?.app === 'games' ? node.open.props?.game : undefined
   if (game) return { desc: 'play a game', run: (ctx) => launchGame(ctx, game) }
   return { desc: '', run: () => { throw new CmdError(`msh: permission denied: ${name}`) } }
