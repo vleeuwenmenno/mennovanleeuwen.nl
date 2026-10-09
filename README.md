@@ -66,7 +66,9 @@ account (by default on https://mvl.sh). `go set <search url>` saves the account 
 `…/r/%s?token=…` URL golinks shows after creating a token (a redirect URL for any alias, a site plus
 a token, or a bare mvl.sh token work too). It is kept in localStorage, and synced like notes when
 signed in ([`src/data/golinks.ts`](src/data/golinks.ts)). `go` alone shows the account, `go unset`
-forgets it.
+forgets it. Spotlight takes `go <alias>` too, and lists matching aliases as you type (the most used
+ones after a bare `go `) from the golinks server's `/suggest`, asked straight from the browser so
+the token never passes through this site's server.
 
 `pepper` ([`src/terminal/pepper.ts`](src/terminal/pepper.ts)) simulates the Pepper CLI against a
 pretend lab cluster (3 masters, 4 minions). Its grammar, outcome names and output layout follow

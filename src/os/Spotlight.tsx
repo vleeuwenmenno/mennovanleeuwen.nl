@@ -8,6 +8,7 @@ import { faviconOf, launch, useLaunchers } from '../data/launchers'
 import { createNote, noteTitle, NOTE_COLORS, useAllNotes } from '../data/notes'
 import { addWidget, widgetDefs } from '../widgets/registry'
 import { ENGINES, searchWeb, useSearchSettings, useSuggestions } from '../data/searchEngine'
+import { golinksSite, golinksUrl, useGoSuggestions, useGolinksTemplate } from '../data/golinks'
 import { countFor, useContributions } from '../data/contributions'
 import { fetchMinecraft, MC_ADDRESS, useMinecraft } from '../data/minecraft'
 import { contributions, profile, projects } from '../data/profile'
@@ -32,7 +33,7 @@ import { SINGLE_INSTANCE, useWM, type AppId } from './wm'
 // Ctrl+K: one search box for apps, files, projects, games, live status, quick actions, maths and
 // terminal commands, with a preview of the highlighted result on the right.
 
-type Group = 'Top hit' | 'Recent' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Widgets' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Web' | 'Fallback'
+type Group = 'Top hit' | 'Go links' | 'Recent' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Widgets' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Web' | 'Fallback'
 
 type Result = {
   id: string
@@ -392,7 +393,11 @@ export function Spotlight() {
   const account = useAccount()
   const notes = useAllNotes()
   const launchers = useLaunchers()
-  const code = useCodeSearch(sub ? '' : q)
+  // "go <alias>": the go links account, like the terminal's go command, with its suggestions.
+  const goAlias = sub || !/^go\s/i.test(q) ? null : q.replace(/^go\s+/i, '').trim()
+  const goTemplate = useGolinksTemplate()
+  const goSuggestions = useGoSuggestions(goTemplate, goAlias ?? '', goAlias !== null)
+  const code = useCodeSearch(sub || goAlias !== null ? '' : q)
   const recentHits = useRecentHits()
   const address = sub ? null : asWebAddress(q)
   const page = useLinkPreview(address, account.status === 'user')
@@ -667,7 +672,7 @@ export function Spotlight() {
   const [rates, setRates] = useState(cachedRates)
   const calc = useMemo(() => (sub ? null : smartCalc(q, rates)), [q, rates, sub])
   // The search engine's suggestions, for plain text (not maths, #123 or repo@branch).
-  const suggestions = useSuggestions(q, !sub && !calc && !isCodeQuery(q))
+  const suggestions = useSuggestions(q, !sub && !calc && !isCodeQuery(q) && goAlias === null)
   useEffect(() => {
     if (calc?.kind === 'pending') loadRates().then((r) => r && setRates(r))
   }, [calc?.kind])
@@ -701,6 +706,50 @@ export function Spotlight() {
     }
   }
 
+  /** Spotlight's `go` mode: the typed alias first, then the golinks server's suggestions. */
+  const goRows = (alias: string): Result[] => {
+    if (!goTemplate)
+      return [
+        {
+          id: 'go-setup',
+          group: 'Top hit',
+          title: 'Set up go links',
+          subtitle: 'Paste your golinks search URL, and go <alias> works here and in the terminal',
+          icon: <Glyph>↪</Glyph>,
+          run: () => wm.open('settings', { section: 'golinks' }),
+          enterLabel: 'Open',
+        },
+      ]
+    const site = golinksSite(goTemplate).replace(/^https?:\/\//, '')
+    const row = (name: string, target: string | undefined, group: Group): Result => {
+      const url = golinksUrl(goTemplate, name)
+      return {
+        id: `go-${name}`,
+        group,
+        title: `go/${name}`,
+        subtitle: target ? target.replace(/^https?:\/\//, '').replace(/\/$/, '') : `Through ${site}`,
+        icon: <Glyph>↪</Glyph>,
+        run: () => openLink(url),
+        enterLabel: 'Go',
+        complete: `go ${name}`,
+        alt: { label: 'Copy link', run: () => copy(url, 'link') },
+      }
+    }
+    const out: Result[] = []
+    if (alias) out.push(row(alias, goSuggestions.find((g) => g.name === alias)?.target, 'Top hit'))
+    for (const g of goSuggestions) if (g.name !== alias) out.push(row(g.name, g.target, 'Go links'))
+    if (alias)
+      out.push({
+        id: 'run',
+        group: 'Fallback',
+        title: `Run “go ${alias}” in a terminal`,
+        icon: <Glyph>›_</Glyph>,
+        run: () => term(`go ${alias}`),
+        alt: { label: 'In a new terminal', run: () => term(`go ${alias}`, true) },
+      })
+    return out
+  }
+
   const results = useMemo(() => {
     const query = q.trim().toLowerCase()
     const out: Result[] = []
@@ -710,6 +759,8 @@ export function Spotlight() {
       return widgetDefs()
         .filter((d) => !query || `${d.name} ${d.blurb}`.toLowerCase().includes(query))
         .map<Result>((d) => ({ id: `widget-${d.kind}`, group: 'Widgets', title: d.name, subtitle: d.blurb, icon: <Glyph>{d.glyph}</Glyph>, run: () => addWidget(wm, d.kind), enterLabel: 'Add' }))
+
+    if (goAlias !== null) return goRows(goAlias)
 
     if (calc) out.push(calcRow(calc))
 
@@ -813,7 +864,7 @@ export function Spotlight() {
       alt: { label: 'In a new terminal', run: () => term(q.trim(), true) },
     })
     return out
-  }, [q, all, calc, code, suggestions, engine, sub, wm, recentHits, address, page])
+  }, [q, all, calc, code, suggestions, engine, sub, wm, recentHits, address, page, goAlias, goTemplate, goSuggestions])
 
   useEffect(() => setActive(0), [q, sub])
   useEffect(() => {

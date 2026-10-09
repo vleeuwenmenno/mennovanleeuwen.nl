@@ -1,7 +1,8 @@
+import { useEffect, useState } from 'react'
 import { synced } from '../os/synced'
 
 // The visitor's go-links account (https://git.mvl.sh/vleeuwenmenno/golinks), for the terminal's
-// `go` command. Stored as the browser-search URL golinks hands out, `https://mvl.sh/r/%s?token=…`,
+// `go` command and Spotlight's `go <alias>`. Stored as the browser-search URL golinks hands out, `https://mvl.sh/r/%s?token=…`,
 // with %s where the alias goes. Kept in this browser; synced when signed in, like notes.
 
 export const GOLINKS_HOME = 'https://mvl.sh'
@@ -11,6 +12,7 @@ const store = synced<string | null>('golinks', null, {
 })
 
 export const golinksTemplate = store.get
+export const useGolinksTemplate = store.use
 
 export const setGolinks = (template: string | null) => store.set(template)
 
@@ -50,4 +52,55 @@ export const golinksSite = (template: string) => {
   } catch {
     return GOLINKS_HOME
   }
+}
+
+const golinksToken = (template: string) => {
+  try {
+    return new URL(template.replace('%s', 'x')).searchParams.get('token') ?? ''
+  } catch {
+    return ''
+  }
+}
+
+export type GoSuggestion = { name: string; target: string }
+
+const cache = new Map<string, GoSuggestion[]>()
+
+/**
+ * Aliases matching what is typed, from the golinks server's /suggest (OpenSearch suggestions:
+ * `[query, names, targets, urls]`). Asked straight from the browser: the endpoint allows any
+ * origin, and the token never passes through this site's server. Empty `q` lists the most used.
+ */
+export function useGoSuggestions(template: string | null, q: string, enabled: boolean): GoSuggestion[] {
+  const query = q.trim()
+  const on = enabled && !!template
+  const key = `${template}|${query.toLowerCase()}`
+  const [result, setResult] = useState<{ key: string; list: GoSuggestion[] }>({ key: '', list: [] })
+
+  useEffect(() => {
+    if (!on || !template) return
+    if (cache.has(key)) return setResult({ key, list: cache.get(key)! })
+    const token = golinksToken(template)
+    const url = `${golinksSite(template)}/suggest?q=${encodeURIComponent(query)}&token=${encodeURIComponent(token)}`
+    const ctl = new AbortController()
+    const t = setTimeout(() => {
+      fetch(url, { signal: ctl.signal })
+        .then((r) => (r.ok ? r.json() : []))
+        .then((body: unknown) => {
+          const [, names, targets] = Array.isArray(body) ? (body as [unknown, unknown, unknown]) : []
+          const list = Array.isArray(names) ? names.filter((n): n is string => typeof n === 'string').map((name, i) => ({ name, target: Array.isArray(targets) && typeof targets[i] === 'string' ? targets[i] : '' })) : []
+          cache.set(key, list)
+          if (cache.size > 200) cache.delete(cache.keys().next().value!)
+          setResult({ key, list })
+        })
+        .catch(() => {})
+    }, 120)
+    return () => {
+      clearTimeout(t)
+      ctl.abort()
+    }
+  }, [on, key, template, query])
+
+  // The previous query's aliases stay until the new ones land, so the list doesn't flicker.
+  return on ? result.list : []
 }

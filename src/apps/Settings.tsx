@@ -242,7 +242,7 @@ function GoLinks() {
       </form>
       {error && <p className="t-red">That is not a golinks search URL (…/r/%s?token=…), or a token.</p>}
       <p className="muted set-help">
-        Then <code>go &lt;alias&gt;</code> in the terminal opens that link. {account.status === 'user' ? 'Synced to your account.' : 'Saved in this browser.'}
+        Then <code>go &lt;alias&gt;</code> in Spotlight or the terminal opens that link; Spotlight suggests your aliases as you type. {account.status === 'user' ? 'Synced to your account.' : 'Saved in this browser.'}
       </p>
     </>
   )
@@ -840,7 +840,7 @@ const GROUPS: Pane[][] = [
     { id: 'search', label: 'Search', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google', blurb: "Spotlight's web search engine and its suggestions.", render: () => <SearchSettings /> },
     { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
     { id: 'notifications', label: 'Notifications', hue: 'var(--red)', icon: svg(<><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></>), keywords: 'notifications alerts minecraft activity', blurb: 'What may pop up in the corner of the desktop.', render: () => <Notifications /> },
-    { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal mvl.sh token', blurb: "The golinks account the terminal's go command follows.", render: () => <GoLinks /> },
+    { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal spotlight suggestions mvl.sh token', blurb: "The golinks account that go <alias> follows, in Spotlight and the terminal.", render: () => <GoLinks /> },
   ],
   [
     { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', owner: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
