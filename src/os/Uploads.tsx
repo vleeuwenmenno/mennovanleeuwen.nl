@@ -1,16 +1,15 @@
 import { useEffect, useState } from 'react'
-import { cancelAll, cancelUpload, clearFinished, retryFailed, retryUpload, targetName, useConflict, useUploads, type Upload } from '../data/uploads'
+import { cancelAll, cancelUpload, clearFinished, retryFailed, retryUpload, targetName, useUploads, type Upload } from '../data/uploads'
 import { formatSize } from '../terminal/vfs'
 import { formatTime } from '../data/media'
 import { useWM } from './wm'
 
 // The uploads panel, bottom right while anything uploads: the whole lot's progress and time left,
 // and each file with its own bar and what happened to it (cancel, retry, show in Files). Folded
-// down it is one line. Plus the question when names are already there.
+// down it is one line.
 
 export function Uploads() {
   const uploads = useUploads()
-  const conflict = useConflict()
   const wm = useWM()
   const [folded, setFolded] = useState(false)
   const [hidden, setHidden] = useState(false)
@@ -34,7 +33,6 @@ export function Uploads() {
 
   return (
     <>
-      {conflict && <ConflictDialog names={conflict.names} where={targetName(conflict.target)} answer={conflict.resolve} />}
       {uploads.length > 0 && !hidden && (
         <section className={`up ${folded ? 'is-folded' : ''}`} aria-label="Uploads">
           <header className="up-head">
@@ -127,45 +125,5 @@ export function Uploads() {
         </section>
       )}
     </>
-  )
-}
-
-function ConflictDialog({ names, where, answer }: { names: string[]; where: string; answer: (c: 'replace' | 'keep' | 'skip' | 'cancel') => void }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && answer('cancel')
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [answer])
-  const one = names.length === 1
-  return (
-    <div className="up-modal" onPointerDown={(e) => e.target === e.currentTarget && answer('cancel')}>
-      <div className="up-dialog" role="alertdialog" aria-label="Files already there">
-        <strong>{one ? `“${names[0]}” is already in ${where}` : `${names.length} files are already in ${where}`}</strong>
-        {!one && (
-          <ul>
-            {names.slice(0, 6).map((n) => (
-              <li key={n}>{n}</li>
-            ))}
-            {names.length > 6 && <li className="muted">and {names.length - 6} more</li>}
-          </ul>
-        )}
-        <p className="muted">Replace {one ? 'it' : 'them'} (Seafile keeps the old version in its history), keep both (the new {one ? 'one gets' : 'ones get'} “(1)”), or leave {one ? 'it' : 'them'} out?</p>
-        <div className="up-dialog-actions">
-          <button className="btn btn-small" onClick={() => answer('cancel')}>
-            Cancel
-          </button>
-          <span className="spacer" />
-          <button className="btn btn-small" onClick={() => answer('skip')}>
-            Skip
-          </button>
-          <button className="btn btn-small" onClick={() => answer('keep')}>
-            Keep both
-          </button>
-          <button className="btn btn-small btn-primary" autoFocus onClick={() => answer('replace')}>
-            Replace
-          </button>
-        </div>
-      </div>
-    </div>
   )
 }

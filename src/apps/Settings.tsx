@@ -6,7 +6,10 @@ import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateL
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { MC_ADDRESS, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
 import { setSwing, useSwingPrefs } from '../os/swing'
-import { loadLibraries, primaryOf, setSeafilePrefs, useLibraries, useSeafilePrefs } from '../data/seafile'
+import { ask } from '../os/Dialogs'
+import { libraryName, loadLibraries, primaryOf, setSeafilePrefs, useLibraries, useSeafilePrefs } from '../data/seafile'
+
+const libraryNameOf = (prefix: string) => libraryName(prefix.slice('seafile://'.length))
 import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeUpdownKey, setOffice, setUpdownKey, signIn, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelyOwner } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
@@ -742,7 +745,7 @@ function SeafileSettings() {
               {seafile.version && ` · Seafile ${seafile.version}`}
             </span>
           </span>
-          <button className="btn btn-small" disabled={busy} onClick={() => confirm('Unlink Seafile? Files and the desktop stop showing it, and this device is signed out on Seafile.') && run(unlinkSeafile)}>
+          <button className="btn btn-small" disabled={busy} onClick={async () => (await ask({ title: 'Unlink Seafile?', body: 'Files and the desktop stop showing it, and this device is signed out on Seafile. Nothing in Seafile is deleted.', confirm: 'Unlink', danger: true })) && run(unlinkSeafile)}>
             Unlink
           </button>
         </li>
@@ -816,6 +819,8 @@ function SeafileSettings() {
 function OfficeSettings() {
   const account = useAccount()
   const office = account.seafile?.office
+  const dock = useDock()
+  const sfPrefs = useSeafilePrefs()
   const [form, setForm] = useState({ url: '', secret: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -833,12 +838,48 @@ function OfficeSettings() {
   if (office)
     return (
       <>
-        <p className="muted">
-          Using {office.url.replace(/^https?:\/\//, '')}, with its JWT secret stored encrypted on this server.
-        </p>
-        <button className="btn btn-small" disabled={busy} onClick={() => run(removeOffice)}>
-          Remove
-        </button>
+        <ul className="set-list">
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>{office.url.replace(/^https?:\/\//, '')}</strong>
+              <span className="muted">Word, Excel and PowerPoint files open in it; the JWT secret is stored encrypted here</span>
+            </span>
+            <button className="btn btn-small" disabled={busy} onClick={async () => (await ask({ title: 'Remove OnlyOffice?', body: 'Office files download again instead of opening here. Nothing in Seafile changes.', confirm: 'Remove', danger: true })) && run(removeOffice)}>
+              Remove
+            </button>
+          </li>
+        </ul>
+        <ul className="set-list">
+          {(['newdoc', 'newsheet', 'newslides'] as const).map((app) => (
+            <li key={app} className="set-row">
+              <AppIcon app={app} size={22} />
+              <span className="set-row-text">
+                <strong>{APP_META[app].dock}</strong>
+                <span className="muted">In Spotlight and All apps{dock.includes(app) ? ', on the dock' : ''}</span>
+              </span>
+              <Toggle on={dock.includes(app)} onChange={(on) => (on ? pinToDock(app) : unpinFromDock(app))} label={`${APP_META[app].dock} on the dock`} />
+            </li>
+          ))}
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>On the desktop</strong>
+              <span className="muted">New Document, New Spreadsheet and New Presentation as desktop icons</span>
+            </span>
+            <Toggle on={sfPrefs.officeDesktop} onChange={(officeDesktop) => setSeafilePrefs({ officeDesktop })} label="New document icons on the desktop" />
+          </li>
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>New files go to</strong>
+              <span className="muted">{sfPrefs.officeFolder ? sfPrefs.officeFolder.replace(/^seafile:\/\/[^/]+/, (m) => libraryNameOf(m)) : 'Documents in your home library'}</span>
+            </span>
+            {sfPrefs.officeFolder && (
+              <button className="btn btn-small" onClick={() => setSeafilePrefs({ officeFolder: null })}>
+                Back to Documents
+              </button>
+            )}
+          </li>
+        </ul>
+        <p className="muted set-help">Pick another folder from Files: right-click it → New documents go here.</p>
         {error && <p className="t-red">{error}</p>}
       </>
     )

@@ -39,12 +39,16 @@ export type SeafilePrefs = {
   siteIcons: boolean
   /** Files' Trash is Seafile's (each library's own), instead of the site's pretend one */
   trash: boolean
+  /** Where New Document and friends make their files; null: Documents in home */
+  officeFolder: string | null
+  /** New Document, New Spreadsheet and New Presentation on the desktop too */
+  officeDesktop: boolean
 }
 
-const prefs = synced<SeafilePrefs>('seafile', { home: true, primary: null, lockMinutes: 30, siteIcons: true, trash: true }, {
+const prefs = synced<SeafilePrefs>('seafile', { home: true, primary: null, lockMinutes: 30, siteIcons: true, trash: true, officeFolder: null, officeDesktop: false }, {
   normalize: (v) => {
     const o = (v ?? {}) as Partial<SeafilePrefs>
-    return { home: o.home !== false, primary: typeof o.primary === 'string' ? o.primary : null, lockMinutes: [5, 15, 30, 55].includes(o.lockMinutes as number) ? (o.lockMinutes as number) : 30, siteIcons: o.siteIcons !== false, trash: o.trash !== false }
+    return { home: o.home !== false, primary: typeof o.primary === 'string' ? o.primary : null, lockMinutes: [5, 15, 30, 55].includes(o.lockMinutes as number) ? (o.lockMinutes as number) : 30, siteIcons: o.siteIcons !== false, trash: o.trash !== false, officeFolder: typeof o.officeFolder === 'string' && o.officeFolder.startsWith(SF) ? o.officeFolder : null, officeDesktop: o.officeDesktop === true }
   },
 })
 export const useSeafilePrefs = prefs.use
@@ -316,7 +320,7 @@ export async function download(path: string) {
  * Opens a Seafile path the way Files and the desktop do: folders in Files, text and code in Zed,
  * pictures in Preview, video and audio in Player, PDFs in PDF; anything else downloads.
  */
-export function openSeafile(wm: Opener, path: string, opts: { dir?: boolean; how?: 'default' | 'zed' | 'viewer' | 'preview' | 'player' | 'pdf' } = {}): Promise<void> {
+export function openSeafile(wm: Opener, path: string, opts: { dir?: boolean; how?: 'default' | 'zed' | 'viewer' | 'preview' | 'player' | 'pdf' | 'office' } = {}): Promise<void> {
   const name = path.split('/').pop() ?? ''
   const kind: FileKind = kindOfName(name, opts.dir)
   const how = opts.how ?? 'default'
@@ -325,6 +329,7 @@ export function openSeafile(wm: Opener, path: string, opts: { dir?: boolean; how
   if (how === 'preview' || (how === 'default' && kind === 'image')) return Promise.resolve(wm.openNew('preview', { path }))
   if (how === 'player' || (how === 'default' && (kind === 'video' || kind === 'audio'))) return Promise.resolve(wm.openNew('player', { path }))
   if (how === 'pdf' || (how === 'default' && kind === 'pdf')) return Promise.resolve(wm.openNew('pdf', { path }))
+  if (how === 'office' || (how === 'default' && kind === 'document' && getAccount().seafile?.office)) return Promise.resolve(wm.openNew('office', { path }))
   if (how === 'viewer') return Promise.resolve(wm.openNew('viewer', { path }))
   return download(path)
 }

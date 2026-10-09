@@ -14,6 +14,7 @@ import { Desktop } from './Desktop'
 import { PowerScreens } from './Power'
 import { Notifications } from './Notifications'
 import { Uploads } from './Uploads'
+import { Dialogs } from './Dialogs'
 import { startActivityAlerts } from './activityAlerts'
 import { followLinkSettings } from '../data/links'
 import { newTab, usePower } from './powerState'
@@ -731,6 +732,7 @@ export function Shell() {
       <ContextMenuHost />
       <Notifications />
       <Uploads />
+      <Dialogs />
       <PowerScreens />
     </div>
   )

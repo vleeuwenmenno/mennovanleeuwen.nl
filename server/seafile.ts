@@ -145,6 +145,9 @@ export async function setOffice(user: User, body: { url?: string; secret?: strin
 
 export const removeOffice = (user: User) => void remove(user, OFFICE)
 
+/** The OnlyOffice server and its JWT secret, for server/office.ts; null when not set up. */
+export const officeServer = (user: User): Office | null => (read<Link>(user, NAME) ? read<Office>(user, OFFICE) : null)
+
 // ---------------------------------------------------------------------------------------------
 // The API, for the Files app
 

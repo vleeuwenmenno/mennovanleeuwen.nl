@@ -5,8 +5,9 @@ import { openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { openLink } from '../data/links'
 import { useWM, type AppId, type WinState } from '../os/wm'
 import { formatSize, HOME, KIND_LABEL, kindOfName, lookup, prettyPath, resolvePath, stat, walk, type FileKind, type Node } from '../terminal/vfs'
-import { createFile, deleteItems, download as sfDownload, DRAG_FILES, dropOp, getClipboard, getDragged, getLibrary, isInside, openSeafile, renameItem, setClipboard, setDragged, transferItems, useClipboard, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useSeafilePrefs, useUnlocks, type Library } from '../data/seafile'
+import { createFile, deleteItems, download as sfDownload, DRAG_FILES, dropOp, getClipboard, getDragged, getLibrary, isInside, openSeafile, renameItem, setClipboard, setDragged, transferItems, useClipboard, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useSeafilePrefs, setSeafilePrefs, useUnlocks, type Library } from '../data/seafile'
 import { SeafileTrash } from './SeafileTrash'
+import { ask } from '../os/Dialogs'
 import { useAccount } from '../os/account'
 import { MEDIA_APP, thumbOf } from '../data/media'
 import { droppedFiles, hasOsFiles, pickAndUpload, uploadFiles } from '../data/uploads'
@@ -300,7 +301,7 @@ export function Files({ win }: { win: WinState }) {
 
   // --- actions ----------------------------------------------------------------------------------
 
-  const openItem = (item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' | 'preview' | 'player' | 'pdf' = 'default') => {
+  const openItem = (item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' | 'preview' | 'player' | 'pdf' | 'office' = 'default') => {
     if (item.trash) {
       setToast(item.trash === 'desktop' ? 'Put it back first (right-click → Put back).' : 'That file is a cautionary tale. It stays in the trash.')
       return
@@ -325,7 +326,7 @@ export function Files({ win }: { win: WinState }) {
   }
 
   /** Seafile: folders open here, files as everywhere else (see openSeafile). */
-  function openSeafileItem(item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' | 'preview' | 'player' | 'pdf') {
+  function openSeafileItem(item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' | 'preview' | 'player' | 'pdf' | 'office') {
     if (item.kind === 'folder') return navigate(item.path)
     remember(item)
     openSeafile(wm, item.path, { how: how === 'terminal' ? 'default' : how }).catch((e: Error) => setToast(e.message))
@@ -379,9 +380,10 @@ export function Files({ win }: { win: WinState }) {
       .catch((e: Error) => setToast(e.message))
   }
 
-  const deleteSf = (paths: string[]) => {
+  const deleteSf = async (paths: string[]) => {
     if (!paths.length) return
-    if (!confirm(`Delete ${named(paths)}? ${paths.length === 1 ? 'It goes' : 'They go'} to the library's trash on Seafile, where you can restore ${paths.length === 1 ? 'it' : 'them'}.`)) return
+    const one = paths.length === 1
+    if (!(await ask({ title: `Delete ${named(paths)}?`, body: `${one ? 'It goes' : 'They go'} to the library's trash on Seafile, where you can restore ${one ? 'it' : 'them'} (Files → Trash).`, confirm: 'Delete', danger: true }))) return
     setSelected(new Set())
     busy(`Deleting ${named(paths)}…`, `Deleted ${named(paths)}`, deleteItems(paths))
   }
@@ -493,7 +495,7 @@ export function Files({ win }: { win: WinState }) {
           { label: `Cut ${sfPaths.length} items`, shortcut: 'Ctrl X', onSelect: () => cut(sfPaths) },
           { label: `Copy ${sfPaths.length} items`, shortcut: 'Ctrl C', onSelect: () => copy(sfPaths) },
           { separator: true },
-          { label: `Delete ${sfPaths.length} items`, shortcut: 'Del', danger: true, disabled: !sfWritable, onSelect: () => deleteSf(sfPaths) },
+          { label: `Delete ${sfPaths.length} items`, shortcut: 'Del', danger: true, disabled: !sfWritable, onSelect: () => void deleteSf(sfPaths) },
         ]
       return [
         { label: `Open ${sel.length} items`, onSelect: () => sel.forEach((i) => openItem(i)) },
@@ -518,6 +520,7 @@ export function Files({ win }: { win: WinState }) {
                   ...(item.kind === 'image' ? [{ label: 'Preview', onSelect: () => openItem(item, 'preview') }] : []),
                   ...(item.kind === 'video' || item.kind === 'audio' ? [{ label: 'Player', onSelect: () => openItem(item, 'player') }] : []),
                   ...(item.kind === 'pdf' ? [{ label: 'PDF', onSelect: () => openItem(item, 'pdf') }] : []),
+                  ...((item.kind === 'document' || /\.(csv|txt|rtf)$/i.test(item.name)) && account.seafile?.office ? [{ label: 'Office (OnlyOffice)', onSelect: () => openItem(item, 'office') }] : []),
                 ],
               },
               { label: 'Download', onSelect: () => download(item) },
@@ -531,12 +534,13 @@ export function Files({ win }: { win: WinState }) {
               { label: 'Copy', shortcut: 'Ctrl C', onSelect: () => copy([item.path]) },
             ]),
         ...(isDir && clip ? [{ label: `Paste into ${item.name}`, disabled: !canWrite(item.path), onSelect: () => paste(item.path) }] : []),
+        ...(isDir && account.seafile?.office && canWrite(item.path) ? [{ label: 'New documents go here', checked: sfPrefs.officeFolder === item.path, onSelect: () => setSeafilePrefs({ officeFolder: item.path }) }] : []),
         ...(library ? [] : [{ label: 'Rename', shortcut: 'F2', disabled: !canWrite(parentOf(item.path)), onSelect: () => setRenaming(item.path) }]),
         { separator: true },
         { label: 'Copy path', onSelect: () => copyPath(item.path) },
         ...(isDir ? [{ label: 'Add to bookmarks', disabled: bookmarks.includes(item.path), onSelect: () => bookmark(item.path) }] : []),
         { label: 'Properties', shortcut: 'Alt ↵', onSelect: () => setProps(item) },
-        ...(library ? [] : [{ separator: true } as MenuItem, { label: 'Delete', shortcut: 'Del', danger: true, disabled: !canWrite(parentOf(item.path)), onSelect: () => deleteSf([item.path]) }]),
+        ...(library ? [] : [{ separator: true } as MenuItem, { label: 'Delete', shortcut: 'Del', danger: true, disabled: !canWrite(parentOf(item.path)), onSelect: () => void deleteSf([item.path]) }]),
       ]
     }
     return [

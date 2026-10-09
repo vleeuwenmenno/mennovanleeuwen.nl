@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { cleanTrash, listTrash, listTrashDir, restoreTrash, sfPath, useLibraries, useSeafileHome, type Entry, type TrashItem } from '../data/seafile'
 import { openContextMenu } from '../os/ContextMenu'
+import { ask } from '../os/Dialogs'
 import { DESKTOP_ICONS } from '../os/Desktop'
 import { restoreIcons, useDesktop } from '../os/desktopStore'
 import { formatSize, kindOfName } from '../terminal/vfs'
@@ -98,11 +99,16 @@ export function SeafileTrash({ onOpenFolder, toast }: { onOpenFolder: (path: str
     if (!open) load()
   }
 
-  const clean = (days: number) => {
+  const clean = async (days: number) => {
     if (!current) return
     const name = writable.find((l) => l.id === current)?.name ?? 'this library'
-    const what = days ? `everything in ${name}'s trash deleted more than ${days} days ago` : `everything in ${name}'s trash`
-    if (!confirm(`Delete ${what} for good? This cannot be undone.`)) return
+    const ok = await ask({
+      title: days ? `Empty what is older than ${days} days?` : `Empty ${name}'s trash?`,
+      body: days ? `Everything in ${name}'s trash that was deleted more than ${days} days ago is removed for good. This cannot be undone.` : `Everything in it is removed for good. This cannot be undone.`,
+      confirm: 'Empty',
+      danger: true,
+    })
+    if (!ok) return
     cleanTrash(current, days)
       .then(() => {
         toast(days ? `Emptied what is older than ${days} days` : 'Emptied the trash')
@@ -142,7 +148,7 @@ export function SeafileTrash({ onOpenFolder, toast }: { onOpenFolder: (path: str
           </button>
         )}
         {!open && (
-          <button className="btn btn-small" onClick={(e) => openContextMenu({ clientX: e.currentTarget.getBoundingClientRect().left, clientY: e.currentTarget.getBoundingClientRect().bottom + 4, preventDefault() {}, stopPropagation() {} }, CLEAN.map(([days, label]) => ({ label, danger: days === 0, onSelect: () => clean(days) })))} disabled={!items?.length}>
+          <button className="btn btn-small" onClick={(e) => openContextMenu({ clientX: e.currentTarget.getBoundingClientRect().left, clientY: e.currentTarget.getBoundingClientRect().bottom + 4, preventDefault() {}, stopPropagation() {} }, CLEAN.map(([days, label]) => ({ label, danger: days === 0, onSelect: () => void clean(days) })))} disabled={!items?.length}>
             Empty trash ▾
           </button>
         )}

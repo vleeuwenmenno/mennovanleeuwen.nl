@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { notify } from '../os/notify'
+import { choose } from '../os/Dialogs'
 import { fileLink, getLibrary, libraryName, parseSf, refreshDirs, type Listing } from './seafile'
 
 // Uploads into Seafile: files and whole folders, from the computer (dropped on Files or the
@@ -31,10 +32,7 @@ export type Upload = {
   speed: number
 }
 
-export type Conflict = { target: string; names: string[]; resolve: (choice: 'replace' | 'keep' | 'skip' | 'cancel') => void }
-
 let uploads: Upload[] = []
-let conflict: Conflict | null = null
 const listeners = new Set<() => void>()
 const emit = () => listeners.forEach((l) => l())
 const subscribe = (l: () => void) => {
@@ -47,7 +45,6 @@ const update = (id: string, patch: Partial<Upload>) => {
 }
 
 export const useUploads = () => useSyncExternalStore(subscribe, () => uploads)
-export const useConflict = () => useSyncExternalStore(subscribe, () => conflict)
 
 const running = new Map<string, XMLHttpRequest>()
 const links = new Map<string, { at: number; url: Promise<string> }>()
@@ -67,6 +64,7 @@ const folderOf = (u: Upload) => (u.rel ? `${u.target}/${u.rel}` : u.target)
 // --- starting --------------------------------------------------------------------------------
 
 export type Picked = { file: File; rel: string }
+type Choice = 'replace' | 'keep' | 'skip' | 'cancel'
 
 /**
  * Uploads files into a Seafile folder. `rel` puts a file in folders inside it (made as needed),
@@ -86,20 +84,20 @@ export async function uploadFiles(picked: Picked[], target: string) {
     /* ask nothing, Seafile keeps both */
   }
   const clashes = picked.filter((p) => !p.rel && existing.has(p.file.name)).map((p) => p.file.name)
-  let choice: 'replace' | 'keep' | 'skip' | 'cancel' = 'keep'
+  let choice = 'keep' as Choice
   if (clashes.length) {
-    choice = await new Promise((resolve) => {
-      conflict = {
-        target,
-        names: clashes,
-        resolve: (c) => {
-          conflict = null
-          emit()
-          resolve(c)
-        },
-      }
-      emit()
-    })
+    const one = clashes.length === 1
+    const where = at.p === '/' ? libraryName(at.repo) : at.p.split('/').pop()
+    choice = ((await choose({
+      title: one ? `“${clashes[0]}” is already in ${where}` : `${clashes.length} files are already in ${where}`,
+      body: `${one ? '' : `${clashes.slice(0, 5).join(', ')}${clashes.length > 5 ? ` and ${clashes.length - 5} more` : ''}. `}Replace ${one ? 'it' : 'them'} (Seafile keeps the old version in its history), keep both (the new ${one ? 'one gets' : 'ones get'} “(1)”), or leave ${one ? 'it' : 'them'} out?`,
+      buttons: [
+        { id: 'cancel', label: 'Cancel' },
+        { id: 'skip', label: 'Skip' },
+        { id: 'keep', label: 'Keep both' },
+        { id: 'replace', label: 'Replace', primary: true },
+      ],
+    })) ?? 'cancel') as Choice
     if (choice === 'cancel') return
   }
 

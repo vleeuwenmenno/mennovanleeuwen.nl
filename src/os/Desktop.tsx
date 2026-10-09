@@ -8,6 +8,8 @@ import { HOME, kindOfName, type FileKind } from '../terminal/vfs'
 import { droppedFiles, hasOsFiles, pickAndUpload, uploadFiles } from '../data/uploads'
 import { createFile, getClipboard, mkdir, setClipboard, deleteItems, download, DRAG_FILES, dropOp, getDragged, isInside, openSeafile, refreshDirs, renameItem, setSeafilePrefs, transferItems, useDir, useSeafileHome, useSeafilePrefs } from '../data/seafile'
 import { notify } from './notify'
+import { useAccount } from './account'
+import { ask } from './Dialogs'
 import { closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
 import { resetLayout, restoreIcons, trashIcons, updateDesktop, useDesktop, type IconPos } from './desktopStore'
 import { appearanceMenu } from './appearanceMenu'
@@ -183,7 +185,17 @@ export function Desktop() {
   }))
   // With Seafile as home, its Desktop folder (as in Files) joins the site's icons and your launchers.
   const { home: sfHome } = useSeafileHome()
-  const { siteIcons } = useSeafilePrefs()
+  const { siteIcons, officeDesktop } = useSeafilePrefs()
+  const account = useAccount()
+  // New Document and friends, when OnlyOffice is set up and asked for on the desktop.
+  const officeIcons: DesktopIcon[] =
+    officeDesktop && account.seafile?.office
+      ? [
+          { id: 'office:docx', label: 'New Document', glyph: '📝', kind: 'file', path: 'New Document', open: { app: 'newdoc' }, terminal: '' },
+          { id: 'office:xlsx', label: 'New Spreadsheet', glyph: '📊', kind: 'file', path: 'New Spreadsheet', open: { app: 'newsheet' }, terminal: '' },
+          { id: 'office:pptx', label: 'New Presentation', glyph: '📽️', kind: 'file', path: 'New Presentation', open: { app: 'newslides' }, terminal: '' },
+        ]
+      : []
   const sfDesktop = sfHome ? `${sfHome}/Desktop` : null
   const sfDir = useDir(sfDesktop, 15_000)
   useEffect(() => {
@@ -204,7 +216,7 @@ export function Desktop() {
     })
   // The site's own icons stay unless switched off (then the desktop is just the Seafile Desktop folder and launchers).
   const siteShown = !sfHome || siteIcons
-  const visible = [...(siteShown ? DESKTOP_ICONS.filter((i) => !desk.trashed.includes(i.id)) : []), ...sfIcons, ...linkIcons]
+  const visible = [...(siteShown ? DESKTOP_ICONS.filter((i) => !desk.trashed.includes(i.id)) : []), ...sfIcons, ...officeIcons, ...linkIcons]
   const positions = useMemo(() => layout(visible.map((i) => i.id), desk.positions), [visible.map((i) => i.id).join(), desk.positions, viewport])
 
   useEffect(() => {
@@ -229,11 +241,18 @@ export function Desktop() {
   const failed = (title: string) => (e: Error) => notify({ title, body: e.message })
 
   function moveToTrash(ids: string[]) {
+    // New Document and friends just leave the desktop (Settings → Integrations → OnlyOffice brings them back).
+    if (ids.some((id) => id.startsWith('office:'))) {
+      setSeafilePrefs({ officeDesktop: false })
+      ids = ids.filter((id) => !id.startsWith('office:'))
+    }
     // Seafile's own files and folders are deleted there (into the library's trash), after asking.
     const sfPaths = ids.filter((id) => id.startsWith('sf:')).map(sfPathOf).filter((p): p is string => !!p)
     if (sfPaths.length) {
       const what = sfPaths.length === 1 ? sfPaths[0].split('/').pop() : `${sfPaths.length} items`
-      if (confirm(`Delete ${what} from Seafile? It goes to the library's trash there, where it can be restored.`)) deleteItems(sfPaths).catch(failed('Could not delete it'))
+      void ask({ title: `Delete ${what}?`, body: `It goes to the library's trash on Seafile, where it can be restored (Files → Trash).`, confirm: 'Delete', danger: true }).then((ok) => {
+        if (ok) deleteItems(sfPaths).catch(failed('Could not delete it'))
+      })
       ids = ids.filter((id) => !id.startsWith('sf:'))
     }
     // Launchers are just removed; the trash is for the built-in icons.
@@ -478,6 +497,7 @@ export function Desktop() {
                   { label: 'Viewer', onSelect: () => void openSeafile(wm, icon.path, { how: 'viewer' }) },
                   { label: 'Preview', onSelect: () => void openSeafile(wm, icon.path, { how: 'preview' }) },
                   { label: 'Player', onSelect: () => void openSeafile(wm, icon.path, { how: 'player' }) },
+                  { label: 'Office', onSelect: () => void openSeafile(wm, icon.path, { how: 'office' }) },
                 ],
               },
               { label: 'Download', onSelect: () => void download(icon.path).catch((e: Error) => notify({ title: 'Could not download it', body: e.message })) },
@@ -488,6 +508,12 @@ export function Desktop() {
         { label: 'Delete', shortcut: 'Del', danger: true, onSelect: () => moveToTrash([icon.id]) },
       ]
     }
+    if (icon.id.startsWith('office:'))
+      return [
+        { label: `${icon.label}`, shortcut: '↵', onSelect: () => open(icon) },
+        { separator: true },
+        { label: 'Remove from desktop', onSelect: () => moveToTrash([icon.id]) },
+      ]
     if (icon.kind === 'link')
       return [
         { label: 'Open ↗', shortcut: '↵', onSelect: () => open(icon) },

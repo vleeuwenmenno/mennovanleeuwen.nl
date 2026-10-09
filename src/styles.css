@@ -93,6 +93,11 @@ body.is-resizing,
 body.is-resizing * {
   user-select: none;
 }
+/* An app's frame (OnlyOffice) would swallow the pointer mid-drag. */
+body.is-dragging iframe,
+body.is-resizing iframe {
+  pointer-events: none;
+}
 
 /* ---------- Desktop & wallpaper ---------- */
 
@@ -4758,6 +4763,98 @@ button.fm-dd-row:hover {
   color: var(--muted);
 }
 
+/* ---------- Office (OnlyOffice) ---------- */
+
+.office {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-dark);
+}
+.office-frame,
+.office-frame > iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.office-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+  background: var(--bg-dark);
+}
+.office-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* ---------- Dialogs: the desktop's own confirm ---------- */
+
+.dlg-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9800;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.35);
+  animation: dlg-fade 0.12s ease-out;
+}
+.dlg {
+  width: min(420px, calc(100vw - 32px));
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  box-shadow: 0 20px 50px -14px rgba(0, 0, 0, 0.6);
+  font-size: 13px;
+  animation: dlg-pop 0.14s ease-out;
+}
+.dlg-title {
+  font-size: 14px;
+  color: var(--fg-bright);
+}
+.dlg-body {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.dlg-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 4px;
+}
+.dlg-actions .dlg-first {
+  margin-right: auto;
+}
+.btn.btn-danger {
+  color: #fff;
+  border-color: var(--red);
+  background: var(--red);
+}
+.btn.btn-danger:hover {
+  filter: brightness(1.1);
+}
+@keyframes dlg-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes dlg-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
 /* ---------- Uploads ---------- */
 
 .up {
@@ -4886,37 +4983,6 @@ button.fm-dd-row:hover {
   gap: 6px;
   padding: 8px 10px;
   border-top: 1px solid var(--line);
-}
-.up-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 9500;
-  display: grid;
-  place-items: center;
-  background: rgba(0, 0, 0, 0.35);
-}
-.up-dialog {
-  width: min(420px, calc(100vw - 32px));
-  display: grid;
-  gap: 10px;
-  padding: 18px;
-  border: 1px solid var(--line-strong);
-  background: var(--bg);
-  box-shadow: 0 20px 50px -14px rgba(0, 0, 0, 0.6);
-  font-size: 13px;
-}
-.up-dialog ul {
-  margin: 0;
-  padding-left: 18px;
-  font-size: 12px;
-}
-.up-dialog p {
-  margin: 0;
-  font-size: 12px;
-}
-.up-dialog-actions {
-  display: flex;
-  gap: 6px;
 }
 
 /* ---------- Zed ---------- */

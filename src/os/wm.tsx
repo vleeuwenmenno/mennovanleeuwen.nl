@@ -2,7 +2,7 @@ import { snapReserve } from './dockPrefs'
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
 import { synced } from './synced'
 
-export type AppId = 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'pdf' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar'
+export type AppId = 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'pdf' | 'office' | 'newdoc' | 'newsheet' | 'newslides' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar'
 
 export type WinState = {
   pid: number
@@ -61,6 +61,9 @@ export type Geometry = { x: number; y: number; w: number; h: number }
 /** Apps that only ever have one window; everything else can be opened again with "New window". */
 export const SINGLE_INSTANCE = new Set<AppId>(['notes', 'keys', 'trash', 'notebook', 'settings', 'mcserver', 'linkforge'])
 
+/** Apps where opening always means a new one (New Document makes a new file each time); `create` says it is fresh. */
+export const ALWAYS_NEW = new Set<AppId>(['newdoc', 'newsheet', 'newslides'])
+
 type Action =
   | { type: 'open'; app: AppId; geometry: Geometry; props?: WinState['props']; newInstance?: boolean }
   | { type: 'close'; pid: number }
@@ -110,7 +113,7 @@ function migrate(w: SavedWindow): SavedWindow {
 }
 
 /** Props that only make sense once: commands to run, "open this now" stamps, placement hints. */
-const TRANSIENT_PROPS = new Set(['run', 't', 'under'])
+const TRANSIENT_PROPS = new Set(['run', 't', 'under', 'create', 'unsaved'])
 
 type LayoutStore = ReturnType<typeof synced<SavedWindow[] | null>>
 let layout: LayoutStore | null = null
@@ -304,6 +307,7 @@ export function WindowManagerProvider({
   const open = useCallback(
     (app: AppId, props?: WinState['props']) => {
       if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH, t: String(Date.now()) }, geometry: placement('files', state.windows.length) })
+      if (ALWAYS_NEW.has(app)) return dispatch({ type: 'open', app, props: { ...props, create: String(Date.now()) }, newInstance: true, geometry: placement(app, state.windows.length) })
       dispatch({ type: 'open', app, props, geometry: placement(app, state.windows.length) })
     },
     [placement, state.windows.length],
@@ -311,7 +315,7 @@ export function WindowManagerProvider({
   const openNew = useCallback(
     (app: AppId, props?: WinState['props']) => {
       if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH }, newInstance: true, geometry: placement('files', state.windows.length) })
-      dispatch({ type: 'open', app, props, newInstance: true, geometry: placement(app, state.windows.length) })
+      dispatch({ type: 'open', app, props: ALWAYS_NEW.has(app) ? { ...props, create: String(Date.now()) } : props, newInstance: true, geometry: placement(app, state.windows.length) })
     },
     [placement, state.windows.length],
   )

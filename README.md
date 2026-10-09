@@ -208,6 +208,19 @@ Enter and Shift+Enter go through them). A sidebar shows the pages or the table o
 page number to go there; fit width, fit page, or zoom with Ctrl+wheel or a pinch towards the
 pointer; rotate (R), night mode, full screen (F) and download.
 
+With **OnlyOffice** added (Settings → Integrations → OnlyOffice: the document server Seafile uses
+and its `ONLYOFFICE_JWT_SECRET`), Word, Excel and PowerPoint files (and OpenDocument, CSV, RTF) open
+in OnlyOffice's editor in a window; read-only libraries and old formats open to view. The server
+signs the editor's settings like Seahub does and takes OnlyOffice's saves at
+`/api/office/callback` ([`server/office.ts`](server/office.ts)): a sealed ticket says which file,
+OnlyOffice's signature is checked, and the new version goes into Seafile (its history keeps the old
+one). The document server must reach that callback: on a public site it does by itself; elsewhere
+set `OFFICE_CALLBACK_ORIGIN` to an address it can reach. **New Document**, **New Spreadsheet** and
+**New Presentation** make a blank file in Documents (or a folder picked with *New documents go here*)
+and open it; they are in Spotlight and All apps, and can go on the dock and the desktop.
+
+Questions (delete this? empty the trash?) are the desktop's own dialogs, never the browser's.
+
 The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests
 and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 ([`server/inbox.ts`](server/inbox.ts)), with the access sign-in and linking already give.

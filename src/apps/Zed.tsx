@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNod
 import { useWM, type WinState } from '../os/wm'
 import { fileKind, HOME, KIND_LABEL, kindOfName, lookup, prettyPath, walk, type DirNode, type Node } from '../terminal/vfs'
 import { isSf, libraryName, parseSf, readText, writeText } from '../data/seafile'
+import { ask } from '../os/Dialogs'
 
 // A small Zed: a project panel on the left, tabs, and an editor with line numbers, a current-line
 // highlight and Markdown highlighting, plus a Markdown preview, find (Ctrl+F), project search
@@ -189,9 +190,9 @@ export function Zed({ win }: { win: WinState }) {
     requestAnimationFrame(() => findInput.current?.select())
   }
 
-  const close = (path: string) => {
+  const close = async (path: string) => {
     const b = buffers[path]
-    if (b && b.text !== b.saved && !confirm(`${base(path)} has unsaved changes. Close anyway?`)) return
+    if (b && b.text !== b.saved && !(await ask({ title: `Close ${base(path)}?`, body: 'It has changes that are not saved. Closing it loses them.', confirm: 'Close without saving', danger: true }))) return
     const i = tabs.indexOf(path)
     const rest = tabs.filter((x) => x !== path)
     setTabs(rest)
