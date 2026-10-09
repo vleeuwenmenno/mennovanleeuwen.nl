@@ -8,7 +8,8 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
     keys: [
       ['Ctrl K', 'Spotlight: search, maths, units, currencies'],
       ['Esc', 'close menus, Spotlight, launcher'],
-      ['Right-click', 'menus on desktop, icons, dock, files'],
+      ['Right-click', 'a menu almost anywhere: windows, notes, dock, bar'],
+      ['Shift right-click', "the browser's own menu"],
       ['Click a window', 'focus it and bring it forward'],
     ],
   },
@@ -23,7 +24,7 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
       ['Drag a snapped window', 'back to its old size'],
       ['Hover bottom edge', 'show a hidden dock'],
       ['Click dock icon', 'open, focus or minimize'],
-      ['Right-click dock', 'new window, quit'],
+      ['Right-click dock', 'dock settings; on an icon, its windows'],
       ['Drag dock icon', 'reorder the dock'],
     ],
   },

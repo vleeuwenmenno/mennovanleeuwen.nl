@@ -14,10 +14,48 @@ const set = (m: OpenMenu) => {
   listeners.forEach((l) => l())
 }
 
-export function openContextMenu(e: { clientX: number; clientY: number; preventDefault: () => void; stopPropagation: () => void }, items: MenuItem[]) {
+type MenuEvent = { clientX: number; clientY: number; shiftKey?: boolean; target?: EventTarget | null; preventDefault: () => void; stopPropagation: () => void }
+
+/** Shift+right-click always gets the browser's own menu, as an escape hatch. */
+export function openContextMenu(e: MenuEvent, items: MenuItem[]) {
+  if (e.shiftKey) return e.stopPropagation()
   e.preventDefault()
   e.stopPropagation()
   set({ x: e.clientX, y: e.clientY, items })
+}
+
+/** Where the browser's menu is the useful one: text fields (paste, spelling), selected text
+ * (copy), and anything holding Shift. */
+export function wantsNativeMenu(e: { shiftKey?: boolean; target?: EventTarget | null }): boolean {
+  if (e.shiftKey) return true
+  const el = e.target instanceof Element ? e.target : null
+  if (el?.closest('input:not([type=checkbox]):not([type=radio]):not([type=range]), textarea, [contenteditable="true"]')) return true
+  const sel = window.getSelection()
+  return !!sel && !sel.isCollapsed && !!sel.toString().trim() && !!el && sel.containsNode(el, true)
+}
+
+/** The link under the pointer, if any (only real web links). */
+export function linkAt(target: EventTarget | null): string | null {
+  const a = target instanceof Element ? target.closest<HTMLAnchorElement>('a[href]') : null
+  return a && /^https?:|^mailto:/.test(a.href) ? a.href : null
+}
+
+export const linkMenu = (href: string): MenuItem[] => [
+  { label: href.startsWith('mailto:') ? 'Write an email' : 'Open link ↗', onSelect: () => window.open(href, '_blank', 'noopener') },
+  { label: href.startsWith('mailto:') ? 'Copy address' : 'Copy link', onSelect: () => navigator.clipboard?.writeText(href.replace(/^mailto:/, '')).catch(() => {}) },
+]
+
+/**
+ * The last word on right-clicks nobody handled: links get a small menu, text fields and selections
+ * keep the browser's, everything else gets nothing (instead of "View Page Source" on a desktop).
+ */
+export function installContextMenuFallback() {
+  window.addEventListener('contextmenu', (e) => {
+    if (e.defaultPrevented || wantsNativeMenu(e)) return
+    const href = linkAt(e.target)
+    if (href) openContextMenu(e, linkMenu(href))
+    else e.preventDefault()
+  })
 }
 
 export const closeContextMenu = () => set(null)

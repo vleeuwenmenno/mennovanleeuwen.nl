@@ -7,7 +7,7 @@
 .window.chrome-note[data-app='sticky'] {
   background: var(--note-bg, linear-gradient(175deg, #fff1a8 0%, #fde27a 100%));
   color: var(--note-fg, #3b2f05);
-  transform: rotate(var(--note-tilt, -2deg));
+  transform: rotate(calc(var(--note-tilt, -2deg) + var(--swing, 0deg)));
   transition: transform 0.25s cubic-bezier(0.2, 0.9, 0.3, 1.2), background 0.2s;
 }
 .window.chrome-note[data-app='sticky'] .note-close {
