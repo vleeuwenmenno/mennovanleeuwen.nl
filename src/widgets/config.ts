@@ -1,3 +1,4 @@
+import type { MenuItem } from '../os/ContextMenu'
 import { synced } from '../os/synced'
 
 // Per-widget settings (a weather widget's place and units, any widget's tilt), keyed by the
@@ -39,3 +40,22 @@ export const TILTS: [string, number][] = [
   ['Far left', -4.5],
   ['Far right', 4.5],
 ]
+
+/** The "Tilt ›" menu for a widget that keeps its tilt in its config. */
+export function tiltMenu(id: string, current: number): MenuItem {
+  return {
+    label: 'Tilt',
+    submenu: [
+      ...TILTS.map(([label, tilt]) => ({ label, checked: current === tilt, onSelect: () => setWidgetConfig(id, { tilt }) })),
+      { separator: true as const },
+      { label: 'Random', onSelect: () => setWidgetConfig(id, { tilt: randomTilt() }) },
+    ],
+  }
+}
+
+/** The usual way to make a widget whose settings start with a random tilt. */
+export function createWithTilt() {
+  const id = crypto.randomUUID().slice(0, 8)
+  setWidgetConfig(id, { tilt: randomTilt() })
+  return id
+}

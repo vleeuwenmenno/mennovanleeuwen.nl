@@ -3,7 +3,9 @@ import { forgejoActivity } from './activity.ts'
 import { authEnabled, currentUser, finishLogin, logout, requireUser, startLogin } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
-import { HttpError, json, readJson, sameOrigin, SECURITY } from './http.ts'
+import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, listCalendars, listEvents, startGoogle } from './google.ts'
+import { inbox } from './inbox.ts'
+import { HttpError, json, readJson, redirect, sameOrigin, SECURITY } from './http.ts'
 import { minecraftStatus } from './minecraft.ts'
 import { search, clearSearchCache } from './search.ts'
 import { suggest } from './suggest.ts'
@@ -50,9 +52,18 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         authEnabled: authEnabled(),
         user: user && { login: user.login, name: user.name, avatar: user.avatar },
         forges: user ? listForges(user) : [],
+        googleEnabled: googleEnabled(),
+        google: user ? googleAccount(user) : null,
       })
       return true
     }
+
+    // Google Calendar, attached to the signed-in owner (server/google.ts).
+    if (read && path === '/api/google/connect') {
+      if (!currentUser(req)) return redirect(res, '/?google=signin'), true
+      return startGoogle(req, res), true
+    }
+    if (read && path === '/api/google/callback') return await finishGoogle(req, res, url, currentUser(req)), true
 
     // Everything below changes something or reads private data.
     if (!read && !sameOrigin(req)) throw new HttpError(403, 'Cross-site request')
@@ -75,6 +86,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       clearSearchCache(user)
       return json(res, 200, { ok: true }), true
     }
+
+    if (path === '/api/google' && method === 'DELETE') return await disconnectGoogle(requireUser(req)), json(res, 200, { ok: true }), true
+    if (path === '/api/calendar/calendars' && read) return json(res, 200, await listCalendars(requireUser(req))), true
+    if (path === '/api/calendar/events' && read) {
+      const ids = url.searchParams.get('calendars')
+      return json(res, 200, await listEvents(requireUser(req), ids ? ids.split(',') : null, Number(url.searchParams.get('days') ?? 3))), true
+    }
+    if (path === '/api/inbox' && read) return json(res, 200, await inbox(requireUser(req), url.searchParams.has('fresh'))), true
 
     if (path === '/api/search' && read) return json(res, 200, await search(requireUser(req), url.searchParams.get('q') ?? '')), true
 

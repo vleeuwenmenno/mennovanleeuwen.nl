@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { MenuItem } from '../os/ContextMenu'
 import { useWindowMenu } from '../os/windowMenu'
 import type { WinState } from '../os/wm'
-import { randomTilt, setWidgetConfig, TILTS, useWidgetConfig } from './config'
+import { createWithTilt, setWidgetConfig, tiltMenu, useWidgetConfig } from './config'
 import type { WidgetDef } from './types'
 
 // The weather widget: now, the next hours and the next days for one place, from Open-Meteo (free,
@@ -311,14 +311,7 @@ function useWeatherMenu(id: string): MenuItem[] {
   return [
     ...(config.place ? [{ label: 'Use my location instead', onSelect: () => setWidgetConfig(id, { place: null }) }] : []),
     { label: 'Units', submenu: [{ label: 'Celsius, km/h', checked: config.units === 'c', onSelect: () => setWidgetConfig(id, { units: 'c' }) }, { label: 'Fahrenheit, mph', checked: config.units === 'f', onSelect: () => setWidgetConfig(id, { units: 'f' }) }] },
-    {
-      label: 'Tilt',
-      submenu: [
-        ...TILTS.map(([label, tilt]) => ({ label, checked: config.tilt === tilt, onSelect: () => setWidgetConfig(id, { tilt }) })),
-        { separator: true as const },
-        { label: 'Random', onSelect: () => setWidgetConfig(id, { tilt: randomTilt() }) },
-      ],
-    },
+    tiltMenu(id, config.tilt),
   ]
 }
 
@@ -332,9 +325,5 @@ export const weatherWidget: WidgetDef = {
   Component: Weather,
   useFrame: useWeatherFrame,
   useMenu: useWeatherMenu,
-  create: () => {
-    const id = crypto.randomUUID().slice(0, 8)
-    setWidgetConfig(id, { tilt: randomTilt() })
-    return id
-  },
+  create: createWithTilt,
 }

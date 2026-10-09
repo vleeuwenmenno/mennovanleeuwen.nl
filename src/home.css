@@ -765,3 +765,154 @@ input.is-bad {
   opacity: 0.6;
   text-decoration: line-through;
 }
+
+/* ---------- Google Calendar (system menu row, Settings) ---------- */
+
+.sys-attach {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+}
+.set-swatch {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 99px;
+}
+
+/* ---------- Agenda and Code inbox widgets ---------- */
+
+.ag,
+.ib {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 14px 14px;
+  font-size: 12px;
+}
+.ag-head,
+.ib-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: -6px;
+  font-size: 13px;
+}
+.ag-head .sticky-btn:first-of-type,
+.ib-head .sticky-btn:first-of-type {
+  margin-left: auto;
+}
+.ag-head .sticky-btn,
+.ib-head .sticky-btn {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.window.widget:hover .ag-head .sticky-btn,
+.window.widget:hover .ib-head .sticky-btn {
+  opacity: 0.6;
+}
+.ag-note,
+.ib-note {
+  margin: 0;
+  opacity: 0.8;
+}
+.ag-note .link-btn,
+.ib-note .link-btn {
+  color: inherit;
+}
+.ag .btn {
+  align-self: flex-start;
+  color: inherit;
+}
+.ag-day h4,
+.ib-section h4 {
+  margin: 0 0 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.6;
+}
+.ib-section h4 span {
+  opacity: 0.8;
+}
+.ag-empty,
+.ib-empty {
+  margin: 0;
+  opacity: 0.5;
+  font-style: italic;
+}
+.ag-event {
+  display: grid;
+  grid-template-columns: 8px 3.8em 1fr auto;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+}
+.ag-event.is-past {
+  opacity: 0.45;
+}
+.ag-event.is-now .ag-title {
+  font-weight: 700;
+}
+.ag-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 99px;
+  align-self: center;
+}
+.ag-time {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+.ag-title,
+.ag-meet {
+  color: inherit;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ag-title:hover {
+  text-decoration: underline;
+}
+.ib-count {
+  min-width: 1.6em;
+  padding: 0 5px;
+  border-radius: 99px;
+  background: #1b2638;
+  color: #e6ecf5;
+  font-size: 11px;
+  text-align: center;
+}
+.ib-item {
+  display: flex;
+  gap: 6px;
+  padding: 3px 4px;
+  margin: 0 -4px;
+  color: inherit;
+  text-decoration: none;
+}
+.ib-item:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+.ib-kind {
+  flex: none;
+  opacity: 0.6;
+}
+.ib-text {
+  display: grid;
+  min-width: 0;
+}
+.ib-title,
+.ib-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ib-meta {
+  font-size: 10.5px;
+  opacity: 0.6;
+}

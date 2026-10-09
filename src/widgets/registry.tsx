@@ -3,6 +3,8 @@ import { stickyWidget } from '../apps/Sticky'
 import type { MenuItem } from '../os/ContextMenu'
 import { useWM, type WinState } from '../os/wm'
 import type { WidgetDef, WM } from './types'
+import { agendaWidget } from './agenda'
+import { inboxWidget } from './inbox'
 import { weatherWidget } from './weather'
 import { openWidget } from './windows'
 
@@ -11,7 +13,7 @@ import { openWidget } from './windows'
 // dragging, its menu and synced settings.
 
 export function widgetDefs(): WidgetDef[] {
-  return [stickyWidget, weatherWidget]
+  return [stickyWidget, weatherWidget, agendaWidget, inboxWidget]
 }
 
 export const widgetDef = (kind: string | undefined) => widgetDefs().find((d) => d.kind === kind)

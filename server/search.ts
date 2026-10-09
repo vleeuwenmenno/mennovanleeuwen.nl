@@ -32,7 +32,7 @@ export function clearSearchCache(user: User) {
 // API shapes, only the fields used
 
 type GhRepo = { full_name: string; html_url: string; description: string | null; private: boolean; fork: boolean; archived: boolean; stargazers_count?: number; stars_count?: number; open_issues_count: number; language: string | null; default_branch: string; pushed_at?: string | null; updated_at?: string; clone_url: string; ssh_url?: string }
-type ApiIssue = {
+export type ApiIssue = {
   number: number
   title: string
   state: string
@@ -52,7 +52,7 @@ type ApiPull = { number: number; title: string; state: string; html_url: string;
 type ApiBranch = { name: string; protected?: boolean; commit: { sha?: string; id?: string; message?: string; timestamp?: string } }
 
 /** Some endpoints answer an error object instead of a list (e.g. pulls on a repo without them). */
-const list = <T>(x: unknown): T[] => (Array.isArray(x) ? (x as T[]) : [])
+export const list = <T>(x: unknown): T[] => (Array.isArray(x) ? (x as T[]) : [])
 const excerpt = (s: string | null | undefined) => (s ?? '').replace(/<!--[\s\S]*?-->/g, '').trim().slice(0, 600)
 const labels = (l?: { name: string; color: string }[]): Label[] => (l ?? []).map((x) => ({ name: x.name, color: x.color.startsWith('#') ? x.color : `#${x.color}` }))
 const isDraft = (title: string, draft?: boolean) => draft ?? /^\s*(\[?wip\]?|draft)[:\s]/i.test(title)
@@ -81,7 +81,7 @@ function prState(p: { state: string; merged_at?: string | null; merged?: boolean
   return p.merged || p.merged_at ? 'merged' : p.state === 'open' ? 'open' : 'closed'
 }
 
-function toIssue(src: Source, i: ApiIssue, repo?: string, pull?: ApiPull | null): IssueHit {
+export function toIssue(src: Source, i: ApiIssue, repo?: string, pull?: ApiPull | null): IssueHit {
   const full = repo ?? i.repository?.full_name ?? i.repository_url?.split('/repos/')[1] ?? ''
   const pr = !!i.pull_request
   return {

@@ -6,9 +6,16 @@ import { useSyncExternalStore } from 'react'
 
 export type ForgeInfo = { id: number; label: string; baseUrl: string; username: string }
 export type AccountUser = { login: string; name: string | null; avatar: string | null }
-export type Account = { status: 'loading' | 'off' | 'anon' | 'user'; user: AccountUser | null; forges: ForgeInfo[] }
+export type Account = {
+  status: 'loading' | 'off' | 'anon' | 'user'
+  user: AccountUser | null
+  forges: ForgeInfo[]
+  /** Whether this server can link Google Calendar, and the linked account if any */
+  googleEnabled: boolean
+  google: { email: string } | null
+}
 
-let account: Account = { status: 'loading', user: null, forges: [] }
+let account: Account = { status: 'loading', user: null, forges: [], googleEnabled: false, google: null }
 const listeners = new Set<() => void>()
 
 const OWNER_HINT = 'mvlos.owner'
@@ -65,10 +72,10 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
 
 export async function loadAccount() {
   try {
-    const me = await api<{ authEnabled: boolean; user: AccountUser | null; forges: ForgeInfo[] }>('/api/me')
-    set({ status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, forges: me.forges })
+    const me = await api<{ authEnabled: boolean; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string } | null }>('/api/me')
+    set({ status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null })
   } catch {
-    set({ status: 'off', user: null, forges: [] })
+    set({ status: 'off', user: null, forges: [], googleEnabled: false, google: null })
   }
 }
 
@@ -76,7 +83,15 @@ export const signIn = () => location.assign('/api/auth/github/login')
 
 export async function signOut() {
   await api('/api/auth/logout', { method: 'POST' }).catch(() => {})
-  set({ status: 'anon', user: null, forges: [] })
+  set({ status: 'anon', user: null, forges: [], googleEnabled: account.googleEnabled, google: null })
+}
+
+/** Google Calendar, attached to the signed-in owner: off to Google's consent page and back. */
+export const connectGoogle = () => location.assign('/api/google/connect')
+
+export async function disconnectGoogle() {
+  await api('/api/google', { method: 'DELETE' })
+  set({ ...account, google: null })
 }
 
 export async function linkForge(input: { baseUrl: string; token: string; label?: string }) {
