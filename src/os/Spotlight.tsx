@@ -332,6 +332,12 @@ function codeRow(h: Hit, open: (url: string) => void, copy: (text: string, label
 export function Spotlight() {
   const wm = useWM()
   const [q, setQ] = useState('')
+  // A list opened inside Spotlight (Add widget…); the search box then filters that list.
+  const [sub, setSub] = useState<'widgets' | null>(null)
+  const openSub = (s: 'widgets' | null) => {
+    setSub(s)
+    setQ('')
+  }
   const [active, setActive] = useState(0)
   const [flash, setFlash] = useState<string | null>(null)
   const input = useRef<HTMLInputElement>(null)
@@ -341,7 +347,7 @@ export function Spotlight() {
   const account = useAccount()
   const notes = useAllNotes()
   const launchers = useLaunchers()
-  const code = useCodeSearch(q)
+  const code = useCodeSearch(sub ? '' : q)
   const dock = useDock()
   const canPin = useCanCustomizeDock()
   const searchSettings = useSearchSettings()
@@ -442,9 +448,18 @@ export function Spotlight() {
       out.push({ id: `act-${id}`, group: 'Actions', title, subtitle, keywords, icon: <Glyph>{glyph}</Glyph>, run })
     action('new-terminal', 'New terminal window', 'terminal shell new window launch console bash', () => wm.openNew('terminal'), '›_')
     action('new-note', 'New sticky note', 'note sticky new write memo todo', () => openSticky(wm, createNote().id), '✎')
-    // Every widget, in a group of their own so "widget" lists them all.
-    for (const d of widgetDefs())
-      out.push({ id: `widget-${d.kind}`, group: 'Widgets', title: `Add widget: ${d.name}`, subtitle: d.blurb, keywords: `widget widgets add new desktop ${d.name} ${d.blurb}`, icon: <Glyph>{d.glyph}</Glyph>, run: () => addWidget(wm, d.kind) })
+    // One row that opens the list of widgets inside Spotlight.
+    const defs = widgetDefs()
+    out.push({
+      id: 'sub-widgets',
+      group: 'Widgets',
+      title: 'Add widget…',
+      subtitle: defs.map((d) => d.name).join(', '),
+      keywords: `widget widgets add new desktop ${defs.map((d) => `${d.name} ${d.blurb}`).join(' ')}`,
+      icon: <Glyph>▦</Glyph>,
+      run: () => openSub('widgets'),
+      enterLabel: 'Choose',
+    })
     if (account.status === 'anon') action('sign-in', 'Sign in with GitHub', 'login sign in account github sync owner', signIn, '⎆', 'Sync notes and search your repositories')
     action('settings', 'Settings', 'settings preferences account launchers gitea forgejo token sync', () => wm.open('settings'), '⚙')
     action('minimize', 'Minimize all windows', 'minimize hide windows show desktop', () => wm.windows.forEach((w) => wm.minimize(w.pid)), '▁')
@@ -601,9 +616,9 @@ export function Spotlight() {
 
   // Calculator, units and currencies. Exchange rates load the first time a currency appears.
   const [rates, setRates] = useState(cachedRates)
-  const calc = useMemo(() => smartCalc(q, rates), [q, rates])
+  const calc = useMemo(() => (sub ? null : smartCalc(q, rates)), [q, rates, sub])
   // The search engine's suggestions, for plain text (not maths, #123 or repo@branch).
-  const suggestions = useSuggestions(q, !calc && !isCodeQuery(q))
+  const suggestions = useSuggestions(q, !sub && !calc && !isCodeQuery(q))
   useEffect(() => {
     if (calc?.kind === 'pending') loadRates().then((r) => r && setRates(r))
   }, [calc?.kind])
@@ -640,6 +655,12 @@ export function Spotlight() {
   const results = useMemo(() => {
     const query = q.trim().toLowerCase()
     const out: Result[] = []
+
+    // Inside "Add widget…": just the widgets, filtered by what is typed.
+    if (sub === 'widgets')
+      return widgetDefs()
+        .filter((d) => !query || `${d.name} ${d.blurb}`.toLowerCase().includes(query))
+        .map<Result>((d) => ({ id: `widget-${d.kind}`, group: 'Widgets', title: d.name, subtitle: d.blurb, icon: <Glyph>{d.glyph}</Glyph>, run: () => addWidget(wm, d.kind), enterLabel: 'Add' }))
 
     if (calc) out.push(calcRow(calc))
 
@@ -705,9 +726,9 @@ export function Spotlight() {
       run: () => searchWeb(q.trim()),
     })
     return out
-  }, [q, all, calc, code, suggestions, engine])
+  }, [q, all, calc, code, suggestions, engine, sub, wm])
 
-  useEffect(() => setActive(0), [q])
+  useEffect(() => setActive(0), [q, sub])
   useEffect(() => {
     list.current?.querySelector('.sp-item.is-active')?.scrollIntoView({ block: 'nearest' })
   }, [active])
@@ -745,7 +766,7 @@ export function Spotlight() {
   const currentPin = pinFor(current)
   const execute = (r: Result | undefined, alt: boolean) => {
     if (!r) return
-    const keepOpen = r.id === 'calc' || (r.id.startsWith('code-') && r.id !== 'code-signin' && !r.id.startsWith('code-err-')) || (r.id === 'status-mc' && alt) || r.id.startsWith('act-email') || r.id.startsWith('accent-') || r.id.startsWith('theme-')
+    const keepOpen = r.id.startsWith('sub-') || r.id === 'calc' || (r.id.startsWith('code-') && r.id !== 'code-signin' && !r.id.startsWith('code-err-')) || (r.id === 'status-mc' && alt) || r.id.startsWith('act-email') || r.id.startsWith('accent-') || r.id.startsWith('theme-')
     ;(alt && r.alt ? r.alt.run : r.run)()
     if (!keepOpen) close()
   }
@@ -759,7 +780,12 @@ export function Spotlight() {
         role="dialog"
         aria-label="Spotlight search"
         onKeyDown={(e) => {
-          if (e.key === 'Escape') close()
+          // In a sub-list, Esc (or Backspace in an empty box) goes back instead of closing.
+          if (e.key === 'Escape' && sub) {
+            e.stopPropagation()
+            openSub(null)
+          } else if (e.key === 'Backspace' && sub && !q) openSub(null)
+          else if (e.key === 'Escape') close()
           else if (e.key === 'ArrowDown') setActive((a) => Math.min(results.length - 1, a + 1))
           else if (e.key === 'ArrowUp') setActive((a) => Math.max(0, a - 1))
           else if (e.key === 'Enter' && e.shiftKey && currentPin) togglePin(current)
@@ -774,11 +800,16 @@ export function Spotlight() {
             <circle cx="11" cy="11" r="7" />
             <path d="M20 20l-3.5-3.5" />
           </svg>
+          {sub && (
+            <button className="sp-back" onClick={() => (openSub(null), input.current?.focus())} aria-label="Back">
+              ‹ Add widget
+            </button>
+          )}
           <input
             ref={input}
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder={account.status === 'user' ? 'Search apps, notes, repos… or #123, repo#text, repo@branch' : 'Search apps, files, status… or try 5 ft in cm, €20 to USD, 1 TB in GiB'}
+            placeholder={sub ? 'Which widget?' : account.status === 'user' ? 'Search apps, notes, repos… or #123, repo#text, repo@branch' : 'Search apps, files, status… or try 5 ft in cm, €20 to USD, 1 TB in GiB'}
             aria-label="Search"
             spellCheck={false}
             autoComplete="off"

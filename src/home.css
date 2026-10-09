@@ -1096,3 +1096,16 @@ button.cal-day.is-picked:not(.is-today) {
 .st-warn {
   color: #9a6200;
 }
+
+/* Spotlight's "Add widget…" list: the way back, left of the search box. */
+.sp-back {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--line-strong);
+  color: var(--accent);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.sp-back:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
