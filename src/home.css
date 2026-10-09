@@ -989,3 +989,110 @@ button.cal-day.is-picked:not(.is-today) {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------- Status widget (updown.io) ---------- */
+
+.st {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 14px 14px;
+  font-size: 12px;
+}
+.st-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: -6px;
+  font-size: 13px;
+}
+.st-head .sticky-btn {
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.window.widget:hover .st-head .sticky-btn {
+  opacity: 0.6;
+}
+.st-badge {
+  padding: 0 7px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+}
+.st-badge.is-up {
+  background: #3f9142;
+}
+.st-badge.is-down {
+  background: #c8323b;
+}
+.st-note {
+  margin: 0;
+  opacity: 0.8;
+}
+.st-note .link-btn {
+  color: inherit;
+}
+.st-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.st-check {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  column-gap: 8px;
+  padding: 4px 4px;
+  margin: 0 -4px;
+  color: inherit;
+  text-decoration: none;
+}
+.st-check:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+.st-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 99px;
+  background: #3f9142;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #3f9142 22%, transparent);
+}
+.st-check.is-down .st-dot {
+  background: #c8323b;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #c8323b 25%, transparent);
+  animation: st-pulse 1.4s ease-in-out infinite;
+}
+.st-check.is-paused .st-dot {
+  background: #9aa29a;
+  box-shadow: none;
+}
+@keyframes st-pulse {
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, #c8323b 0%, transparent);
+  }
+}
+.st-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.st-check.is-paused .st-name {
+  opacity: 0.55;
+}
+.st-nums {
+  display: flex;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.65;
+}
+.st-detail {
+  grid-column: 2 / -1;
+  font-size: 11px;
+  color: #b0262f;
+}
+.st-warn {
+  color: #9a6200;
+}

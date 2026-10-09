@@ -5,6 +5,7 @@ import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, listCalendars, listEvents, startGoogle } from './google.ts'
 import { inbox } from './inbox.ts'
+import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
 import { HttpError, json, readJson, redirect, sameOrigin, SECURITY } from './http.ts'
 import { minecraftOverview, minecraftStatus } from './minecraft.ts'
 import { search, clearSearchCache } from './search.ts'
@@ -58,6 +59,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         forges: user ? listForges(user) : [],
         googleEnabled: googleEnabled(),
         google: user ? googleAccount(user) : null,
+        integrations: { updown: user ? updownSource(user) : null },
       })
       return true
     }
@@ -107,6 +109,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       }
       return json(res, 200, await listEvents(requireUser(req), ids ? ids.split(',') : null, { from, to })), true
     }
+    if (path === '/api/integrations/updown' && method === 'PUT') return await setUpdownKey(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true
+    if (path === '/api/integrations/updown' && method === 'DELETE') return removeUpdownKey(requireUser(req)), json(res, 200, { ok: true }), true
+    if (path === '/api/updown' && read) return json(res, 200, await updownChecks(requireUser(req))), true
     if (path === '/api/inbox' && read) return json(res, 200, await inbox(requireUser(req), url.searchParams.has('fresh'))), true
 
     if (path === '/api/search' && read) return json(res, 200, await search(requireUser(req), url.searchParams.get('q') ?? '')), true

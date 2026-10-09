@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ENGINES, setSearchSettings, useSearchSettings, type EngineId } from '../data/searchEngine'
 import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
-import { api, connectGoogle, disconnectGoogle, linkForge, signIn, signOut, unlinkForge, useAccount } from '../os/account'
+import { api, connectGoogle, disconnectGoogle, linkForge, removeUpdownKey, setUpdownKey, signIn, signOut, unlinkForge, useAccount } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
@@ -293,6 +293,67 @@ function Launchers() {
   )
 }
 
+/** Third-party services the widgets read from, with keys stored on the server. */
+function Integrations() {
+  const account = useAccount()
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  if (account.status !== 'user') return <p className="muted">Sign in first to connect services for widgets.</p>
+  const save = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await setUpdownKey(key)
+      setKey('')
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      <ul className="set-list">
+        <li className="set-row">
+          <img className="set-fav" src="https://updown.io/favicon.ico" alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
+          <span className="set-row-text">
+            <strong>updown.io</strong>
+            <span className="muted">
+              {account.integrations.updown === 'server' ? 'Connected with the key set on the server' : account.integrations.updown ? 'Connected · for the Status widget' : 'Uptime checks, for the Status widget'}
+            </span>
+          </span>
+          {account.integrations.updown === 'settings' && (
+            <button className="btn btn-small" onClick={() => removeUpdownKey().catch((e: Error) => setError(e.message))}>
+              Remove key
+            </button>
+          )}
+        </li>
+      </ul>
+      {!account.integrations.updown && (
+        <form className="set-form" onSubmit={save}>
+          <label>
+            <span>Read-only API key</span>
+            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="read-only API key" autoComplete="off" required />
+          </label>
+          <p className="muted set-help">
+            Use the <em>read-only</em> key from{' '}
+            <a href="https://updown.io/settings/edit" target="_blank" rel="noopener noreferrer">
+              updown.io → Settings → API
+            </a>
+            , not the super-powered one. It is checked once, then stored encrypted on this server.
+          </p>
+          <button className="btn btn-primary" disabled={busy}>
+            {busy ? 'Checking…' : 'Connect updown.io'}
+          </button>
+        </form>
+      )}
+      {error && <p className="t-red">{error}</p>}
+    </>
+  )
+}
+
 type CalendarInfo = { id: string; name: string; color: string; primary: boolean; selected: boolean }
 
 /** Google Calendar, read-only, for the Agenda widget. */
@@ -397,6 +458,10 @@ export function Settings({ win }: { win: WinState }) {
       <section id="set-calendar">
         <h3>Calendar</h3>
         <CalendarSettings />
+      </section>
+      <section id="set-integrations">
+        <h3>Integrations</h3>
+        <Integrations />
       </section>
       <section id="set-search">
         <h3>Search</h3>
