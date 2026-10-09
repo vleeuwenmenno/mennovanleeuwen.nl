@@ -29,12 +29,21 @@ const scripts = new Map<string, Promise<void>>()
 function loadApi(src: string): Promise<void> {
   let p = scripts.get(src)
   if (!p) {
+    const host = new URL(src).origin
     p = new Promise<void>((resolve, reject) => {
       const s = document.createElement('script')
       s.src = src
       s.async = true
-      s.onload = () => (window.DocsAPI ? resolve() : reject(new Error('The document server sent no editor')))
-      s.onerror = () => reject(new Error('The document server did not answer'))
+      const late = setTimeout(() => reject(new Error(`${host} did not send its editor within 20 seconds. Is it reachable from this browser (over HTTPS when this site is)?`)), 20_000)
+      s.onload = () => {
+        clearTimeout(late)
+        if (window.DocsAPI) resolve()
+        else reject(new Error(`${host} answered, but not with OnlyOffice's editor (api.js)`))
+      }
+      s.onerror = () => {
+        clearTimeout(late)
+        reject(new Error(`${host} did not answer (blocked, offline, or http on an https page)`))
+      }
       document.head.append(s)
     })
     p.catch(() => scripts.delete(src))
@@ -91,14 +100,16 @@ export function Office({ win, kind }: { win: WinState; kind?: NewKind }) {
         const mount = document.createElement('div')
         mount.id = `office-${win.pid}-${Date.now()}`
         holder.current.replaceChildren(mount)
+        // OnlyOffice shows its own progress and its own errors in its frame from here on.
+        setReady(true)
         editor = new window.DocsAPI.DocEditor(mount.id, {
           ...config,
           width: '100%',
           height: '100%',
           events: {
-            onAppReady: () => live && setReady(true),
+            onWarning: (e: { data?: { warningDescription?: string } }) => e.data?.warningDescription && console.warn('OnlyOffice:', e.data.warningDescription),
             onDocumentStateChange: (e: { data: boolean }) => live && setDirty(e.data),
-            onError: (e: { data?: { errorDescription?: string } }) => live && setError(e.data?.errorDescription ?? 'The editor ran into a problem'),
+            onError: (e: { data?: { errorCode?: number; errorDescription?: string } }) => live && setError(`${e.data?.errorDescription ?? 'The editor ran into a problem'}${e.data?.errorCode ? ` (OnlyOffice error ${e.data.errorCode})` : ''}`),
             onRequestClose: () => wm.close(win.pid),
           },
         })
