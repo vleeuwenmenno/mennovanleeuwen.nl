@@ -1,9 +1,9 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { dayKey, eventsOn, eventTime, fetchEvents, startOfDay, type CalendarEvent } from '../data/calendar'
-import { api, connectGoogle, signIn, useAccount } from '../os/account'
+import { api, connectGoogle, hasCalendar, signIn, useAccount } from '../os/account'
 import type { MenuItem } from '../os/ContextMenu'
 import { useWindowMenu } from '../os/windowMenu'
-import type { WinState } from '../os/wm'
+import { useWM, type WinState } from '../os/wm'
 import { createWithTilt, setWidgetConfig, tiltMenu, useWidgetConfig } from './config'
 import type { WidgetDef } from './types'
 
@@ -14,11 +14,19 @@ import type { WidgetDef } from './types'
 type Config = { calendars: string[] | null; days: number; tilt: number }
 const DEFAULTS: Config = { calendars: null, days: 3, tilt: 0 }
 
-type CalendarInfo = { id: string; name: string; color: string; primary: boolean; selected: boolean }
+type CalendarInfo = { id: string; name: string; color: string; primary: boolean; selected: boolean; source?: string }
 
 // Calendars change rarely; one list for every Agenda widget on the page.
-let calendarList: Promise<CalendarInfo[]> | null = null
-const calendars = () => (calendarList ??= api<CalendarInfo[]>('/api/calendar/calendars').catch((e) => ((calendarList = null), Promise.reject(e))))
+// Asked again when the connected accounts change (`signature`).
+let calendarList: { signature: string; value: Promise<CalendarInfo[]> } | null = null
+function calendars(signature: string) {
+  if (calendarList?.signature !== signature) {
+    const value = api<{ calendars: CalendarInfo[] }>('/api/calendar/calendars').then((r) => r.calendars)
+    calendarList = { signature, value }
+    value.catch(() => (calendarList = null))
+  }
+  return calendarList.value
+}
 
 function useEvents(config: Config, enabled: boolean) {
   const [events, setEvents] = useState<CalendarEvent[] | null>(null)
@@ -30,7 +38,8 @@ function useEvents(config: Config, enabled: boolean) {
     let live = true
     const today = startOfDay(new Date())
     fetchEvents(today, startOfDay(today, config.days), config.calendars, tick > 0).then(
-      (e) => live && (setEvents(e), setError(null)),
+      // Events from what works, and what didn't (named after the account) beside them.
+      (r) => live && (setEvents(r.events), setError(r.errors.join(' · ') || null)),
       (e: Error) => live && setError(e.message),
     )
     return () => {
@@ -72,9 +81,10 @@ function byDay(events: CalendarEvent[], days: number): [string, CalendarEvent[]]
 export function Agenda({ id }: { win: WinState; id: string }) {
   const account = useAccount()
   const config = useWidgetConfig<Config>(id, DEFAULTS)
-  const connected = account.status === 'user' && !!account.google
+  const connected = hasCalendar(account)
   const { events, error } = useEvents(config, connected)
   const windowMenu = useWindowMenu()
+  const wm = useWM()
   const [, setNow] = useState(0)
   // Keep "now" fresh so past events dim on time.
   useEffect(() => {
@@ -105,16 +115,21 @@ export function Agenda({ id }: { win: WinState; id: string }) {
         </p>
       </div>
     )
-  if (!account.google)
+  if (!connected)
     return (
       <div className="ag">
         {head}
-        <p className="ag-note">{account.googleEnabled ? 'Connect Google Calendar to see what is coming up.' : 'Google Calendar is not set up on this server.'}</p>
-        {account.googleEnabled && (
-          <button className="btn btn-small" onClick={connectGoogle}>
-            📅 Connect Google Calendar
+        <p className="ag-note">Connect a calendar (Google, or Fastmail and other CalDAV) to see what is coming up.</p>
+        <div className="ag-connect">
+          {account.googleEnabled && (
+            <button className="btn btn-small" onClick={connectGoogle}>
+              📅 Google Calendar
+            </button>
+          )}
+          <button className="btn btn-small" onClick={() => wm.open('settings', { section: 'calendar', t: String(Date.now()) })}>
+            🗓 Fastmail / CalDAV
           </button>
-        )}
+        </div>
       </div>
     )
 
@@ -162,10 +177,13 @@ function useAgendaMenu(id: string): MenuItem[] {
   const config = useWidgetConfig<Config>(id, DEFAULTS)
   const account = useAccount()
   const [list, setList] = useState<CalendarInfo[]>([])
+  const signature = `${account.google?.email ?? ''}|${account.caldav.map((c) => c.id).join(',')}`
   useEffect(() => {
-    if (account.google) calendars().then(setList, () => {})
-  }, [account.google])
+    if (hasCalendar(account)) calendars(signature).then(setList, () => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature])
   const chosen = config.calendars ?? list.filter((c) => c.selected).map((c) => c.id)
+  const multiSource = new Set(list.map((c) => c.source)).size > 1
   const toggle = (cid: string) => setWidgetConfig(id, { calendars: chosen.includes(cid) ? chosen.filter((x) => x !== cid) : [...chosen, cid] })
   return [
     { label: 'Show', submenu: ([[1, 'Today'], [3, 'Three days'], [7, 'A week']] as const).map(([days, label]) => ({ label, checked: config.days === days, onSelect: () => setWidgetConfig(id, { days }) })) },
@@ -174,9 +192,9 @@ function useAgendaMenu(id: string): MenuItem[] {
           {
             label: 'Calendars',
             submenu: [
-              ...list.map((c) => ({ label: c.name, swatch: c.color, checked: chosen.includes(c.id), onSelect: () => toggle(c.id) })),
+              ...list.map((c) => ({ label: multiSource ? `${c.name} · ${c.source}` : c.name, swatch: c.color, checked: chosen.includes(c.id), onSelect: () => toggle(c.id) })),
               { separator: true as const },
-              { label: 'As in Google Calendar', checked: config.calendars === null, onSelect: () => setWidgetConfig(id, { calendars: null }) },
+              { label: 'The default ones', checked: config.calendars === null, onSelect: () => setWidgetConfig(id, { calendars: null }) },
             ],
           },
         ]

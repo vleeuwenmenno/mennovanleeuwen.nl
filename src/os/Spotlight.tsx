@@ -3,6 +3,7 @@ import { GAMES } from '../apps/games/Games'
 import { openSticky } from '../apps/Sticky'
 import { MarkdownPreview } from '../apps/Zed'
 import { isCodeQuery, type BranchHit, type Hit, type IssueHit, type RepoHit } from '../data/code'
+import { forgetHit, hitKey, rememberHit, useRecentHits, weight } from '../data/spotlightRecent'
 import { faviconOf, launch, useLaunchers } from '../data/launchers'
 import { createNote, noteTitle, NOTE_COLORS, useAllNotes } from '../data/notes'
 import { addWidget, widgetDefs } from '../widgets/registry'
@@ -15,6 +16,7 @@ import { age, HOME, lookup, prettyPath, walk } from '../terminal/vfs'
 import { signIn, useAccount } from './account'
 import { APP_META } from './apps'
 import { useCodeSearch } from './codeSearch'
+import { asWebAddress, useLinkPreview, type LinkPreview } from './linkPreview'
 import { openContextMenu } from './ContextMenu'
 import { isDockableApp, linkDockId, pinLink, pinToDock, unpinFromDock, useCanCustomizeDock, useDock, type DockId } from './dockItems'
 import { revealEmail } from '../data/email'
@@ -29,7 +31,7 @@ import { SINGLE_INSTANCE, useWM, type AppId } from './wm'
 // Ctrl+K: one search box for apps, files, projects, games, live status, quick actions, maths and
 // terminal commands, with a preview of the highlighted result on the right.
 
-type Group = 'Top hit' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Widgets' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Web' | 'Fallback'
+type Group = 'Top hit' | 'Recent' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Widgets' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Web' | 'Fallback'
 
 type Result = {
   id: string
@@ -48,6 +50,8 @@ type Result = {
   complete?: string
   /** A web page this result can be pinned to the dock as (repositories) */
   link?: { label: string; url: string }
+  /** Remembered results: drops it from what Spotlight remembers (right-click, or Shift+Delete) */
+  forget?: () => void
 }
 
 const Glyph = ({ children, color = 'var(--panel-2)' }: { children: ReactNode; color?: string }) => (
@@ -155,6 +159,41 @@ function FilePreview({ path }: { path: string }) {
       <pre className="sp-file">{text.split('\n').slice(0, 24).join('\n')}</pre>
     </>
   )
+}
+
+/** "Go to example.com": the top hit whenever the query is a web address. */
+function goToRow(url: string, page: LinkPreview | null, open: (url: string) => void, copy: (text: string, label: string) => void): Result {
+  const shown = url.replace(/^https?:\/\//, '').replace(/\/$/, '')
+  const icon = page?.icon ?? (() => {
+    try {
+      return `${new URL(url).origin}/favicon.ico`
+    } catch {
+      return null
+    }
+  })()
+  return {
+    id: 'goto',
+    group: 'Top hit',
+    title: `Go to ${shown}`,
+    subtitle: page?.title ?? page?.description ?? 'Open in a new tab',
+    icon: (
+      <Glyph>
+        {icon ? <img className="sp-fav" src={icon} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} /> : '↗'}
+      </Glyph>
+    ),
+    run: () => open(url),
+    enterLabel: 'Go',
+    alt: { label: 'Copy link', run: () => copy(url, 'link') },
+    link: { label: page?.siteName ?? page?.host ?? shown, url },
+    preview: () => (
+      <div className="sp-page">
+        {page?.image && <img className="sp-page-image" src={page.image} alt="" onError={(e) => (e.currentTarget.style.display = 'none')} />}
+        <h4>{page?.title ?? shown}</h4>
+        {page?.description && <p>{page.description}</p>}
+        <p className="muted sp-small">{page?.url ?? url}</p>
+      </div>
+    ),
+  }
 }
 
 const ago = (iso?: string | null) => (iso ? timeAgo(iso) : '')
@@ -287,7 +326,12 @@ function BranchPreview({ b }: { b: BranchHit }) {
   )
 }
 
-function codeRow(h: Hit, open: (url: string) => void, copy: (text: string, label: string) => void): Result {
+function codeRow(h: Hit, openUrl: (url: string) => void, copy: (text: string, label: string) => void): Result {
+  // Opening something remembers it, so it comes back first next time.
+  const open = (url: string) => {
+    rememberHit(h)
+    openUrl(url)
+  }
   if (h.kind === 'repo')
     return {
       id: `repo-${h.source}-${h.fullName}`,
@@ -348,6 +392,9 @@ export function Spotlight() {
   const notes = useAllNotes()
   const launchers = useLaunchers()
   const code = useCodeSearch(sub ? '' : q)
+  const recentHits = useRecentHits()
+  const address = sub ? null : asWebAddress(q)
+  const page = useLinkPreview(address, account.status === 'user')
   const dock = useDock()
   const canPin = useCanCustomizeDock()
   const searchSettings = useSearchSettings()
@@ -665,18 +712,45 @@ export function Spotlight() {
 
     if (calc) out.push(calcRow(calc))
 
+    // A web address always leads: "Go to google.com", with what the page says about itself.
+    if (address) out.unshift(goToRow(address, page, openUrl, copy))
+
+    // What you opened from Spotlight before, most used and recent first; right-click forgets one.
+    const recentRow = (h: Hit): Result => {
+      const r = codeRow(h, openUrl, copy)
+      return { ...r, id: `recent-${hitKey(h)}`, group: 'Recent', forget: () => forgetHit(h) }
+    }
+    const recentRanked = recentHits.slice().sort((a, b) => weight(b) - weight(a))
+
     if (!query) {
-      // Empty box: status first, then the common things.
+      // Empty box: status first, then the common things, then what you open most.
       const pick = new Set(['status-mc', 'status-activity', 'status-contrib', 'act-new-terminal', 'app-projects', 'app-cv', 'app-games', 'app-terminal'])
-      return [...out, ...all.filter((r) => pick.has(r.id))]
+      return [...out, ...all.filter((r) => pick.has(r.id)), ...recentRanked.slice(0, 4).map((r) => recentRow(r.hit))]
     }
 
+    // Remembered things matching the query: instant, no request to GitHub.
+    const recentMatches = isCodeQuery(query)
+      ? []
+      : recentRanked
+          .map((r) => {
+            const h = r.hit
+            const text = h.kind === 'repo' ? h.fullName : h.kind === 'branch' ? `${h.repo}@${h.name}` : `${h.repo}#${h.number} ${h.title}`
+            const match = Math.max(score(text.split('/').pop() ?? text, query, true) * 1.3, score(text, query))
+            // It has to match first; how often you open it only orders the matches.
+            return { r, s: match > 0 ? match + weight(r) * 10 : 0 }
+          })
+          .filter((x) => x.s > 0)
+          .sort((a, b) => b.s - a.s)
+          .slice(0, 4)
+    const recentKeys = new Set(recentMatches.map((x) => hitKey(x.r.hit)))
+
     // Repositories, issues, PRs and branches from the owner's code hosts.
-    const codeRows = (code.result?.hits ?? []).map((h) => codeRow(h, openUrl, copy))
+    const codeRows = (code.result?.hits ?? []).filter((h) => !recentKeys.has(hitKey(h))).map((h) => codeRow(h, openUrl, copy))
     const codeStatus: Result[] = []
-    if (code.loading && !codeRows.length) codeStatus.push({ id: 'code-loading', group: 'Code', title: 'Searching your code hosts…', icon: <Glyph>⌕</Glyph>, run: () => {} })
-    if (code.error) codeStatus.push({ id: 'code-error', group: 'Code', title: `Code search failed: ${code.error}`, icon: <Glyph>!</Glyph>, run: () => {} })
-    for (const e of code.result?.errors ?? []) codeStatus.push({ id: `code-err-${e}`, group: 'Code', title: e, subtitle: 'Some results may be missing', icon: <Glyph>!</Glyph>, run: () => wm.open('settings', { section: 'instances' }) })
+    // Searching and trouble only matter when the query is about code (#123, repo@branch).
+    if (isCodeQuery(query) && code.loading && !codeRows.length) codeStatus.push({ id: 'code-loading', group: 'Code', title: 'Searching your code hosts…', icon: <Glyph>⌕</Glyph>, run: () => {} })
+    if (isCodeQuery(query) && code.error) codeStatus.push({ id: 'code-error', group: 'Code', title: `Code search failed: ${code.error}`, icon: <Glyph>!</Glyph>, run: () => {} })
+    for (const e of isCodeQuery(query) ? (code.result?.errors ?? []) : []) codeStatus.push({ id: `code-err-${e}`, group: 'Code', title: e, subtitle: 'Some results may be missing', icon: <Glyph>!</Glyph>, run: () => wm.open('settings', { section: 'instances' }) })
     if (isCodeQuery(query)) {
       // #123, repo#123, repo@branch: only code results make sense.
       if (account.status === 'anon') codeStatus.push({ id: 'code-signin', group: 'Code', title: 'Sign in to search repositories, issues and branches', icon: <Glyph>⎆</Glyph>, run: signIn })
@@ -691,10 +765,16 @@ export function Spotlight() {
       .sort((a, b) => b.s - a.s)
 
     // The single best match leads, then everything else grouped.
-    const order: Group[] = ['Status', 'Apps', 'Widgets', 'Repositories', 'Issues & PRs', 'Branches', 'Notes', 'Actions', 'Projects', 'Games', 'Files', 'Links']
+    const order: Group[] = ['Recent', 'Status', 'Apps', 'Widgets', 'Repositories', 'Issues & PRs', 'Branches', 'Notes', 'Actions', 'Projects', 'Games', 'Files', 'Links']
     const [top, ...rest] = scored
-    if (top && !out.length) out.push({ ...top.r, group: 'Top hit' })
+    const recentRows = recentMatches.map((x) => recentRow(x.r.hit))
+    // A remembered thing that matches well beats an app name that matches about as well.
+    if (recentMatches[0] && !out.length && (!top || recentMatches[0].s >= top.s)) {
+      out.push({ ...recentRows.shift()!, group: 'Top hit' })
+      if (top) rest.unshift(top)
+    } else if (top && !out.length) out.push({ ...top.r, group: 'Top hit' })
     else if (top) rest.unshift(top)
+    rest.unshift(...recentRows.map((r) => ({ r, s: 0 })))
     for (const g of order) {
       out.push(...rest.filter((x) => x.r.group === g).slice(0, g === 'Files' ? 6 : 5).map((x) => x.r))
       if (g === 'Widgets') out.push(...codeRows.filter((r) => r.id !== out[0]?.id), ...codeStatus)
@@ -732,7 +812,7 @@ export function Spotlight() {
       alt: { label: 'In a new terminal', run: () => term(q.trim(), true) },
     })
     return out
-  }, [q, all, calc, code, suggestions, engine, sub, wm])
+  }, [q, all, calc, code, suggestions, engine, sub, wm, recentHits, address, page])
 
   useEffect(() => setActive(0), [q, sub])
   useEffect(() => {
@@ -797,6 +877,7 @@ export function Spotlight() {
           else if (e.key === 'Enter' && e.shiftKey && currentPin) togglePin(current)
           else if (e.key === 'Enter') execute(current, e.ctrlKey || e.metaKey)
           else if (e.key === 'Tab' && current?.complete && !e.shiftKey) setQ(current.complete)
+          else if (e.key === 'Delete' && e.shiftKey && current?.forget) current.forget()
           else return
           e.preventDefault()
         }}
@@ -838,6 +919,7 @@ export function Spotlight() {
                         { label: r.enterLabel ?? 'Open', onSelect: () => execute(r, false) },
                         ...(r.alt ? [{ label: r.alt.label, onSelect: () => execute(r, true) }] : []),
                         ...(pin ? [{ separator: true as const }, { label: pin.pinned ? 'Remove from dock' : 'Pin to dock', onSelect: () => togglePin(r) }] : []),
+                        ...(r.forget ? [{ separator: true as const }, { label: 'Forget', shortcut: 'Shift Del', onSelect: r.forget }] : []),
                       ])
                     }}
                   >
@@ -871,6 +953,12 @@ export function Spotlight() {
             <span>
               <kbd>ctrl</kbd>
               <kbd>↵</kbd> {current.alt.label.toLowerCase()}
+            </span>
+          )}
+          {current?.forget && (
+            <span>
+              <kbd>shift</kbd>
+              <kbd>del</kbd> forget
             </span>
           )}
           {currentPin && (

@@ -3,7 +3,7 @@ import { ENGINES, setSearchSettings, useSearchSettings, type EngineId } from '..
 import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { MC_ADDRESS, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
-import { api, connectGoogle, disconnectGoogle, removeUpdownKey, setUpdownKey, signIn, signOut, unlinkForge, useAccount } from '../os/account'
+import { addCaldav, api, connectGoogle, disconnectGoogle, hasCalendar, removeCaldav, removeUpdownKey, setUpdownKey, signIn, signOut, unlinkForge, useAccount } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
@@ -586,53 +586,154 @@ function Integrations() {
 /** Google Calendar, read-only, for the Agenda widget. */
 function CalendarSettings() {
   const account = useAccount()
-  const [calendars, setCalendars] = useState<CalendarInfo[] | null>(null)
+  const [calendars, setCalendars] = useState<(CalendarInfo & { source?: string })[] | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const connected = account.status === 'user' && !!account.google
+  const connected = hasCalendar(account)
+  const signature = `${account.google?.email ?? ''}|${account.caldav.map((c) => c.id).join(',')}`
   useEffect(() => {
     if (!connected) return setCalendars(null)
-    api<CalendarInfo[]>('/api/calendar/calendars').then(setCalendars, (e: Error) => setError(e.message))
-  }, [connected])
-  if (account.status !== 'user') return <SignInFirst what="connect Google Calendar" />
-  if (!account.googleEnabled) return <p className="muted">Google Calendar isn't set up on this server (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, see the README).</p>
-  if (!account.google)
-    return (
-      <>
-        <p className="muted">Read-only access to your calendars, shared ones included, for the Agenda widget. It attaches to your GitHub sign-in; it is not a way to sign in.</p>
-        <button className="btn btn-primary" onClick={connectGoogle}>
-          Connect Google Calendar
-        </button>
-      </>
+    api<{ calendars: (CalendarInfo & { source?: string })[]; errors: string[] }>('/api/calendar/calendars').then(
+      (r) => (setCalendars(r.calendars), setError(r.errors.join(' · ') || null)),
+      (e: Error) => setError(e.message),
     )
+  }, [connected, signature])
+  if (account.status !== 'user') return <SignInFirst what="connect a calendar" />
   return (
     <>
-      <div className="set-account">
-        <span className="set-glyph">📅</span>
-        <div>
-          <strong>{account.google.email}</strong>
-          <p className="muted">Read-only, stored encrypted on this server</p>
+      <h4 className="set-subhead">Google Calendar</h4>
+      {!account.googleEnabled ? (
+        <p className="muted">Not set up on this server (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, see the README).</p>
+      ) : account.google ? (
+        <div className="set-account">
+          <span className="set-glyph">📅</span>
+          <div>
+            <strong>{account.google.email}</strong>
+            <p className="muted">Read-only, stored encrypted on this server</p>
+          </div>
+          <span className="nb-spacer" />
+          <button className="btn btn-small" onClick={() => disconnectGoogle().catch((e: Error) => setError(e.message))}>
+            Disconnect
+          </button>
         </div>
-        <span className="nb-spacer" />
-        <button className="btn btn-small" onClick={() => disconnectGoogle().catch((e: Error) => setError(e.message))}>
-          Disconnect
-        </button>
-      </div>
-      {error && <p className="t-red">{error}</p>}
-      {calendars && (
-        <ul className="set-list set-calendars">
-          {calendars.map((c) => (
+      ) : (
+        <>
+          <p className="muted">Read-only access to your Google calendars, shared ones included. It attaches to your GitHub sign-in; it is not a way to sign in.</p>
+          <button className="btn btn-small" onClick={connectGoogle}>
+            Connect Google Calendar
+          </button>
+        </>
+      )}
+
+      <h4 className="set-subhead">CalDAV (Fastmail, Nextcloud, iCloud…)</h4>
+      {account.caldav.length > 0 && (
+        <ul className="set-list">
+          {account.caldav.map((c) => (
             <li key={c.id} className="set-row">
-              <span className="set-swatch" style={{ background: c.color }} />
+              <span className="set-glyph">🗓</span>
               <span className="set-row-text">
-                <strong>{c.name}</strong>
-                <span className="muted">{c.primary ? 'Your calendar' : c.selected ? 'Shown in Google Calendar' : 'Hidden in Google Calendar'}</span>
+                <strong>{c.label}</strong>
+                <span className="muted">
+                  {c.username} · {c.url.replace(/^https?:\/\//, '')}
+                </span>
               </span>
+              <button className="btn btn-small" onClick={() => removeCaldav(c.id).catch((e: Error) => setError(e.message))}>
+                Remove
+              </button>
             </li>
           ))}
         </ul>
       )}
-      <p className="muted set-help">Each Agenda widget picks which of these it shows (right-click it). By default: the ones shown in Google Calendar.</p>
+      <CaldavForm />
+
+      {error && <p className="t-red">{error}</p>}
+      {calendars && calendars.length > 0 && (
+        <>
+          <h4 className="set-subhead">Your calendars</h4>
+          <ul className="set-list set-calendars">
+            {calendars.map((c) => (
+              <li key={c.id} className="set-row">
+                <span className="set-swatch" style={{ background: c.color }} />
+                <span className="set-row-text">
+                  <strong>{c.name}</strong>
+                  <span className="muted">{c.source && c.source !== 'Google' ? c.source : c.primary ? 'Google · your calendar' : c.selected ? 'Google · shown in Google Calendar' : 'Google · hidden in Google Calendar'}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="muted set-help">Each Agenda widget picks which of these it shows (right-click it). By default: all CalDAV calendars, and the ones shown in Google Calendar.</p>
+        </>
+      )}
     </>
+  )
+}
+
+/** Adding a CalDAV account: Fastmail by default, any CalDAV server otherwise. */
+function CaldavForm() {
+  const [provider, setProvider] = useState<'fastmail' | 'other'>('fastmail')
+  const [form, setForm] = useState({ url: '', username: '', password: '', label: '' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await addCaldav({ ...form, url: provider === 'fastmail' ? 'https://caldav.fastmail.com/dav/' : form.url, label: form.label || (provider === 'fastmail' ? 'Fastmail' : '') })
+      setForm({ url: '', username: '', password: '', label: '' })
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <form className="set-form" onSubmit={submit}>
+      <div className="set-choices" role="radiogroup" aria-label="CalDAV provider">
+        {(
+          [
+            ['fastmail', 'Fastmail'],
+            ['other', 'Other CalDAV'],
+          ] as const
+        ).map(([id, label]) => (
+          <label key={id} className={`set-choice ${provider === id ? 'is-on' : ''}`}>
+            <input type="radio" name="caldav-provider" checked={provider === id} onChange={() => setProvider(id)} />
+            {label}
+          </label>
+        ))}
+      </div>
+      {provider === 'other' && (
+        <label>
+          <span>Server URL</span>
+          <input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://cloud.example.com/remote.php/dav/" required spellCheck={false} autoComplete="off" />
+        </label>
+      )}
+      <label>
+        <span>Username</span>
+        <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder={provider === 'fastmail' ? 'you@fastmail.com' : 'username'} required spellCheck={false} autoComplete="off" />
+      </label>
+      <label>
+        <span>App password</span>
+        <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="app password" required autoComplete="off" />
+      </label>
+      <p className="muted set-help">
+        {provider === 'fastmail' ? (
+          <>
+            Make one in{' '}
+            <a href="https://app.fastmail.com/settings/security/apps/new" target="_blank" rel="noopener noreferrer">
+              Fastmail → Settings → Privacy &amp; Security → Connected apps
+            </a>
+            : access <em>Calendars (CalDAV)</em>, <em>Read-only</em> ticked.
+          </>
+        ) : (
+          'Use an app password (read-only if your server offers it).'
+        )}{' '}
+        It is checked by finding your calendars, then stored encrypted on this server.
+      </p>
+      {error && <p className="t-red">{error}</p>}
+      <button className="btn btn-primary" disabled={busy}>
+        {busy ? 'Finding your calendars…' : `Add ${provider === 'fastmail' ? 'Fastmail' : 'CalDAV account'}`}
+      </button>
+    </form>
   )
 }
 
@@ -708,7 +809,7 @@ const GROUPS: Pane[][] = [
   ],
   [
     { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
-    { id: 'calendar', label: 'Calendar', hue: 'var(--red)', icon: svg(<><rect x="4" y="5" width="16" height="15" /><path d="M4 10h16M9 3v4M15 3v4" /></>), keywords: 'calendar google agenda events', blurb: 'Google Calendar, read-only, for the Agenda widget.', render: () => <CalendarSettings /> },
+    { id: 'calendar', label: 'Calendar', hue: 'var(--red)', icon: svg(<><rect x="4" y="5" width="16" height="15" /><path d="M4 10h16M9 3v4M15 3v4" /></>), keywords: 'calendar google agenda events caldav fastmail nextcloud icloud', blurb: 'Google Calendar and CalDAV (Fastmail…), read-only, for the Agenda widget and the clock.', render: () => <CalendarSettings /> },
     { id: 'integrations', label: 'Integrations', hue: 'var(--green)', icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets', blurb: 'Services the widgets read from: updown.io for Status.', render: () => <Integrations /> },
   ],
   [

@@ -3,8 +3,11 @@ import { forgejoActivity } from './activity.ts'
 import { authEnabled, currentUser, finishLogin, logout, requireUser, startLogin } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
-import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, listCalendars, listEvents, startGoogle } from './google.ts'
+import { addCaldav, listCaldav, removeCaldav } from './caldav.ts'
+import { allCalendars, allEvents } from './calendars.ts'
+import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, startGoogle } from './google.ts'
 import { inbox } from './inbox.ts'
+import { linkPreview } from './preview.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
 import { HttpError, json, readJson, redirect, sameOrigin, SECURITY } from './http.ts'
 import { minecraftOverview, minecraftStatus } from './minecraft.ts'
@@ -59,6 +62,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         forges: user ? listForges(user) : [],
         googleEnabled: googleEnabled(),
         google: user ? googleAccount(user) : null,
+        caldav: user ? listCaldav(user) : [],
         integrations: { updown: user ? updownSource(user) : null },
       })
       return true
@@ -94,7 +98,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
 
     if (path === '/api/google' && method === 'DELETE') return await disconnectGoogle(requireUser(req)), json(res, 200, { ok: true }), true
-    if (path === '/api/calendar/calendars' && read) return json(res, 200, await listCalendars(requireUser(req))), true
+    if (path === '/api/caldav' && method === 'POST') return json(res, 200, await addCaldav(requireUser(req), await readJson(req, 8 * 1024))), true
+    const caldavId = /^\/api\/caldav\/(\d+)$/.exec(path)?.[1]
+    if (caldavId && method === 'DELETE') return removeCaldav(requireUser(req), Number(caldavId)), json(res, 200, { ok: true }), true
+    if (path === '/api/calendar/calendars' && read) return json(res, 200, await allCalendars(requireUser(req))), true
     if (path === '/api/calendar/events' && read) {
       // ?from=&to= (ISO dates or times) for a range, or ?days=N from the start of today.
       const ids = url.searchParams.get('calendars')
@@ -107,11 +114,17 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         to = new Date(q('to')!)
         if (isNaN(from.getTime()) || isNaN(to.getTime())) throw new HttpError(400, 'Bad date range')
       }
-      return json(res, 200, await listEvents(requireUser(req), ids ? ids.split(',') : null, { from, to })), true
+      return json(res, 200, await allEvents(requireUser(req), ids ? ids.split(',') : null, { from, to })), true
     }
     if (path === '/api/integrations/updown' && method === 'PUT') return await setUpdownKey(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true
     if (path === '/api/integrations/updown' && method === 'DELETE') return removeUpdownKey(requireUser(req)), json(res, 200, { ok: true }), true
     if (path === '/api/updown' && read) return json(res, 200, await updownChecks(requireUser(req))), true
+    if (path === '/api/preview' && read) {
+      requireUser(req) // fetches other sites on request: the signed-in owner only
+      const res2 = await linkPreview(url.searchParams.get('url') ?? '')
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'private, max-age=3600', ...SECURITY }).end(JSON.stringify(res2))
+      return true
+    }
     if (path === '/api/inbox' && read) return json(res, 200, await inbox(requireUser(req), url.searchParams.has('fresh'))), true
 
     if (path === '/api/search' && read) return json(res, 200, await search(requireUser(req), url.searchParams.get('q') ?? '')), true

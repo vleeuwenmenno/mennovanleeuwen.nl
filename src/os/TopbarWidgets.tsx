@@ -4,7 +4,7 @@ import { timeAgo } from '../data/recents'
 import { fetchMinecraft, MC_ADDRESS, MC_PORT, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
 import { dayKey, eventsOn, eventTime, fetchEvents, startOfDay, type CalendarEvent } from '../data/calendar'
-import { connectGoogle, signIn, signOut, useAccount } from './account'
+import { connectGoogle, hasCalendar, signIn, signOut, useAccount } from './account'
 import { openContextMenu, type MenuItem } from './ContextMenu'
 import { toggleOverlay } from './overlays'
 import { reboot, shutdown } from './powerState'
@@ -49,10 +49,10 @@ function isoWeek(d: Date) {
   return Math.ceil(((t.getTime() - yearStart.getTime()) / 864e5 + 1) / 7)
 }
 
-/** With Google Calendar connected: the viewed month's events, for dots and the day list. */
+/** With a calendar connected (Google or CalDAV): the viewed month's events, for dots and the day list. */
 function useMonthEvents(view: Date) {
   const account = useAccount()
-  const connected = account.status === 'user' && !!account.google
+  const connected = hasCalendar(account)
   const [events, setEvents] = useState<CalendarEvent[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
@@ -61,7 +61,7 @@ function useMonthEvents(view: Date) {
     setError(null)
     // The grid's weeks can start in the month before; one range covers the month and its edges.
     fetchEvents(startOfDay(view, -7), startOfDay(new Date(view.getFullYear(), view.getMonth() + 1, 1), 7)).then(
-      (e) => live && setEvents(e),
+      (r) => live && (setEvents(r.events), setError(r.errors.join(' · ') || null)),
       (e: Error) => live && (setEvents([]), setError(e.message)),
     )
     return () => {

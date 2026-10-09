@@ -138,6 +138,12 @@ application*) with the Calendar API enabled, the scope `calendar.readonly` (plus
 `http://localhost:5173/api/google/callback` for development). Publish the consent screen to *In
 production*: in *Testing*, Google expires the access after seven days.
 
+**CalDAV** calendars (Fastmail, Nextcloud, iCloud and others) work next to Google: Settings →
+Calendar → add an account with its server URL (Fastmail's is filled in), username and an app
+password (read-only is enough), stored encrypted ([`server/caldav.ts`](server/caldav.ts)). The
+calendars are found from the URL, and events are fetched by date range with the server
+expanding repeating events, so the Agenda widget and the clock show both sources together.
+
 The **Status** widget shows your [updown.io](https://updown.io) checks: up or down, uptime, the
 last day's response time and certificates that expire within two weeks
 ([`server/updown.ts`](server/updown.ts)). It uses updown's *read-only* API key, from

@@ -1463,3 +1463,21 @@ button.cal-day.is-picked:not(.is-today) {
 .sp-back:hover {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
+.ag-connect {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Spotlight's "Go to example.com" preview. */
+.sp-page-image {
+  display: block;
+  width: 100%;
+  max-height: 160px;
+  object-fit: cover;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+}
+.sp-page p {
+  overflow-wrap: anywhere;
+}
