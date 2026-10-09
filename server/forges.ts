@@ -22,13 +22,30 @@ export type ForgeInfo = { id: number; label: string; baseUrl: string; username: 
 
 const TIMEOUT = 8000
 
+// When a host says "rate limited", stop asking it until the limit resets instead of failing on
+// every keystroke. GitHub limits its search API (30 a minute) apart from the rest, so search and
+// other requests are tracked separately, per token.
+const blockedUntil = new Map<string, number>()
+const limitKey = (url: string, headers: Record<string, string>) => `${new URL(url).host}|${url.includes('/search/') ? 'search' : 'core'}|${headers.Authorization ?? ''}`
+
 async function get<T>(url: string, headers: Record<string, string>, label: string): Promise<T | null> {
+  const key = limitKey(url, headers)
+  const until = blockedUntil.get(key) ?? 0
+  if (until > Date.now()) throw new HttpError(429, `${label} rate limit, back in ${Math.ceil((until - Date.now()) / 1000)} s`)
   const res = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'mvlos', ...headers }, signal: AbortSignal.timeout(TIMEOUT) }).catch(() => {
     throw new HttpError(502, `${label} did not answer`)
   })
   if (res.status === 404) return null
   if (res.status === 401) throw new HttpError(502, `${label} rejected the token`)
-  if (res.status === 403 || res.status === 429) throw new HttpError(502, `${label} rate limit or permission error`)
+  if (res.status === 403 || res.status === 429) {
+    const reset = Number(res.headers.get('x-ratelimit-reset')) * 1000
+    const retry = Number(res.headers.get('retry-after')) * 1000
+    if (res.status === 429 || res.headers.get('x-ratelimit-remaining') === '0' || retry) {
+      blockedUntil.set(key, retry ? Date.now() + retry : reset > Date.now() ? reset : Date.now() + 60_000)
+      throw new HttpError(429, `${label} rate limit, back in ${Math.ceil(((blockedUntil.get(key) ?? 0) - Date.now()) / 1000)} s`)
+    }
+    throw new HttpError(502, `${label} refused (no permission)`)
+  }
   if (!res.ok) throw new HttpError(502, `${label} answered ${res.status}`)
   return (await res.json()) as T
 }

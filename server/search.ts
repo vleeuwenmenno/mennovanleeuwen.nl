@@ -8,9 +8,31 @@ import { sources, type Source } from './forges.ts'
 // cached per user for a few minutes, so typing doesn't hammer the APIs; lookups by number and
 // text searches go out live.
 
-const REPO_TTL = 5 * 60_000
+// Repositories rarely come or go: lists are kept 30 minutes, and served stale (refreshed in the
+// background) after that, so typing never waits on them.
+const REPO_TTL = 30 * 60_000
+const ISSUE_SEARCH_TTL = 2 * 60_000
 const LIST_TTL = 2 * 60_000
 const cache = new Map<string, { at: number; ttl: number; value: Promise<unknown> }>()
+
+const settled = new WeakSet<Promise<unknown>>()
+
+/** Like cached(), but past `ttl` the old value is still answered while a fresh one loads. */
+function cachedStale<T>(key: string, ttl: number, load: () => Promise<T>): Promise<T> {
+  const hit = cache.get(key)
+  if (hit && Date.now() - hit.at >= hit.ttl && settled.has(hit.value)) {
+    hit.at = Date.now() // one refresh at a time
+    const fresh = load()
+    fresh.then(() => {
+      settled.add(fresh)
+      cache.set(key, { at: Date.now(), ttl, value: fresh })
+    }, () => {})
+    return hit.value as Promise<T>
+  }
+  const value = cached(key, ttl, load)
+  value.then(() => settled.add(value), () => {})
+  return value
+}
 
 function cached<T>(key: string, ttl: number, load: () => Promise<T>): Promise<T> {
   const hit = cache.get(key)
@@ -120,7 +142,7 @@ async function pages<T>(src: Source, path: (page: number) => string, per: number
 
 /** Every repository the user owns, collaborates on or reaches through an organisation. */
 function repoList(user: User, src: Source): Promise<RepoHit[]> {
-  return cached(`${user.id}|${src.id}|repos`, REPO_TTL, async () => {
+  return cachedStale(`${user.id}|${src.id}|repos`, REPO_TTL, async () => {
     let raw: GhRepo[]
     if (src.kind === 'github') {
       raw = await pages<GhRepo>(src, (p) => `/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member&page=${p}`, 100, 5)
@@ -193,7 +215,13 @@ async function issueByNumber(src: Source, repo: string, n: number): Promise<Issu
   return toIssue(src, issue, repo, pull)
 }
 
-async function searchIssues(src: Source, text: string, repo?: string): Promise<IssueHit[]> {
+/** Issue and pull request searches, cached a couple of minutes per query (the search API is the
+ * scarce one). */
+function searchIssues(src: Source, text: string, repo?: string): Promise<IssueHit[]> {
+  return cached(`${src.login}|${src.id}|issues|${repo ?? ''}|${text.toLowerCase()}`, ISSUE_SEARCH_TTL, () => searchIssuesLive(src, text, repo))
+}
+
+async function searchIssuesLive(src: Source, text: string, repo?: string): Promise<IssueHit[]> {
   if (src.kind === 'github') {
     if (repo && !text) {
       return list<ApiIssue>(await src.api(`/repos/${repo}/issues?state=open&sort=updated&per_page=10`)).map((i) => toIssue(src, i, repo))
@@ -313,7 +341,10 @@ export async function search(user: User, raw: string): Promise<SearchResponse> {
       .sort((a, b) => b.s - a.s || (b.r.pushedAt ?? '').localeCompare(a.r.pushedAt ?? ''))
       .slice(0, 8)
       .map((x) => x.r)
-    const issues = q.length >= 3 ? await each(all, (src) => searchIssues(src, query.text), errors) : []
+    // Short, name-like text also searches issues and pull requests; a sentence ("where to download
+    // more RAM?") is a web search, and #text searches issues on purpose.
+    const sentence = q.split(/\s+/).length > 2 || /[?!]$/.test(q)
+    const issues = q.length >= 3 && !sentence ? await each(all, (src) => searchIssues(src, query.text), errors) : []
     hits = [...repos, ...issues.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 8)]
   } else if (query.mode === 'number') {
     const targets = query.repo ? await resolveRepo(user, all, query.repo, errors) : await recentRepos(user, all, 8, errors)
