@@ -6,7 +6,7 @@ import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateL
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { MC_ADDRESS, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
 import { setSwing, useSwingPrefs } from '../os/swing'
-import { addCaldav, connectGoogle, disconnectGoogle, removeCaldav, removeUpdownKey, setUpdownKey, signIn, signOut, unlinkForge, useAccount, useLikelyOwner } from '../os/account'
+import { addCaldav, api, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeUpdownKey, setOffice, setUpdownKey, signIn, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelyOwner } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
@@ -592,6 +592,141 @@ function Integrations() {
         </form>
       )}
       {error && <p className="t-red">{error}</p>}
+      <SeafileSettings />
+    </>
+  )
+}
+
+/** Seafile for the Files app, and the OnlyOffice server it uses for Office files. */
+function SeafileSettings() {
+  const account = useAccount()
+  const seafile = account.seafile
+  const [form, setForm] = useState({ url: '', username: '', password: '', otp: '' })
+  const [askOtp, setAskOtp] = useState(false)
+  const [office, setOfficeForm] = useState({ url: '', secret: '' })
+  const [busy, setBusy] = useState<'link' | 'office' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [libraries, setLibraries] = useState<number | null>(null)
+  useEffect(() => {
+    if (!seafile) return setLibraries(null)
+    let live = true
+    api<unknown[]>('/api/seafile/libraries')
+      .then((l) => live && setLibraries(l.length))
+      .catch((e: Error) => live && setError(e.message))
+    return () => {
+      live = false
+    }
+  }, [seafile?.url, seafile?.username])
+
+  const run = async (what: 'link' | 'office', fn: () => Promise<void>) => {
+    setBusy(what)
+    setError(null)
+    try {
+      await fn()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(null)
+    }
+  }
+  const link = (e: FormEvent) => {
+    e.preventDefault()
+    run('link', async () => {
+      if ((await linkSeafile(form)) === 'otp') return setAskOtp(true)
+      setForm({ url: '', username: '', password: '', otp: '' })
+      setAskOtp(false)
+    })
+  }
+  const saveOffice = (e: FormEvent) => {
+    e.preventDefault()
+    run('office', async () => {
+      await setOffice(office)
+      setOfficeForm({ url: '', secret: '' })
+    })
+  }
+  const host = (url: string) => url.replace(/^https?:\/\//, '')
+
+  return (
+    <>
+      <h4 className="set-subhead">Seafile</h4>
+      {seafile ? (
+        <>
+          <ul className="set-list">
+            <li className="set-row">
+              <img className="set-fav" src={`${seafile.url}/media/favicons/favicon.png`} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
+              <span className="set-row-text">
+                <strong>{seafile.name || seafile.username}</strong>
+                <span className="muted">
+                  {seafile.username} · {host(seafile.url)}
+                  {seafile.version && ` · Seafile ${seafile.version}`}
+                  {libraries !== null && ` · ${libraries} ${libraries === 1 ? 'library' : 'libraries'}`}
+                </span>
+              </span>
+              <button className="btn btn-small" onClick={() => run('link', unlinkSeafile)}>
+                Unlink
+              </button>
+            </li>
+            {seafile.office && (
+              <li className="set-row">
+                <span className="set-glyph">📝</span>
+                <span className="set-row-text">
+                  <strong>OnlyOffice</strong>
+                  <span className="muted">{host(seafile.office.url)} · for Word, Excel and PowerPoint files</span>
+                </span>
+                <button className="btn btn-small" onClick={() => run('office', removeOffice)}>
+                  Remove
+                </button>
+              </li>
+            )}
+          </ul>
+          {!seafile.office && (
+            <form className="set-form" onSubmit={saveOffice}>
+              <label>
+                <span>OnlyOffice URL</span>
+                <input value={office.url} onChange={(e) => setOfficeForm({ ...office, url: e.target.value })} placeholder="https://office.example.com" required spellCheck={false} autoComplete="off" />
+              </label>
+              <label>
+                <span>JWT secret</span>
+                <input type="password" value={office.secret} onChange={(e) => setOfficeForm({ ...office, secret: e.target.value })} placeholder="ONLYOFFICE_JWT_SECRET" required autoComplete="off" />
+              </label>
+              <p className="muted set-help">
+                Optional: the document server Seafile opens Office files with, to edit them in a window here. The secret is <em>ONLYOFFICE_JWT_SECRET</em> from Seafile's <em>.env</em> (or <em>seahub_settings.py</em>). The URL is checked by loading its editor, then both are stored encrypted on this server.
+              </p>
+              <button className="btn btn-primary" disabled={busy === 'office'}>
+                {busy === 'office' ? 'Checking…' : 'Add OnlyOffice'}
+              </button>
+            </form>
+          )}
+        </>
+      ) : (
+        <form className="set-form" onSubmit={link}>
+          <label>
+            <span>Server URL</span>
+            <input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://seafile.example.com" required spellCheck={false} autoComplete="off" />
+          </label>
+          <label>
+            <span>Email or username</span>
+            <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="you@example.com" required spellCheck={false} autoComplete="off" />
+          </label>
+          <label>
+            <span>Password</span>
+            <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="password" required autoComplete="off" />
+          </label>
+          {askOtp && (
+            <label>
+              <span>2FA code</span>
+              <input value={form.otp} onChange={(e) => setForm({ ...form, otp: e.target.value })} placeholder="123456" inputMode="numeric" autoComplete="one-time-code" required autoFocus />
+            </label>
+          )}
+          <p className="muted set-help">
+            Your libraries in Files. The password is used once to sign in and is not kept: this server stores only the token Seafile hands out, encrypted. It shows in Seafile under <em>Settings → Devices</em> as {`"mennovanleeuwen.nl"`}, where you can revoke it.
+          </p>
+          <button className="btn btn-primary" disabled={busy === 'link'}>
+            {busy === 'link' ? 'Signing in…' : askOtp ? 'Verify and link' : 'Link Seafile'}
+          </button>
+        </form>
+      )}
+      {error && <p className="t-red">{error}</p>}
     </>
   )
 }
@@ -857,7 +992,7 @@ const GROUPS: Pane[][] = [
   [
     { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', owner: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
     { id: 'calendar', label: 'Calendar', hue: 'var(--red)', owner: true, icon: svg(<><rect x="4" y="5" width="16" height="15" /><path d="M4 10h16M9 3v4M15 3v4" /></>), keywords: 'calendar google agenda events caldav fastmail nextcloud icloud', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock.', render: () => <CalendarSettings /> },
-    { id: 'integrations', label: 'Integrations', hue: 'var(--green)', owner: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets', blurb: 'Services the widgets read from: updown.io for Status.', render: () => <Integrations /> },
+    { id: 'integrations', label: 'Integrations', hue: 'var(--green)', owner: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents', blurb: 'Services the widgets and Files read from: updown.io for Status, Seafile and OnlyOffice.', render: () => <Integrations /> },
   ],
   [
     { id: 'sync', label: 'Sync', hue: 'var(--green)', owner: true, icon: svg(<><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3" /><path d="M18 3v4h-4M6 21v-4h4" /></>), keywords: 'sync devices cloud', blurb: 'What follows you between devices.', render: () => <SyncPane /> },
