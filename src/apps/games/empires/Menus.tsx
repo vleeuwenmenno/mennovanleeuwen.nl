@@ -610,6 +610,37 @@ const AMOUNTS: [Amount, string][] = [
   ['many', 'Many'],
 ]
 
+/** A map's size class by its area, and its dimensions in thousands of units. */
+function mapSize(m: MapDef) {
+  const area = (m.w * m.h) / 1e6
+  const cls = area < 30 ? 'Small' : area < 50 ? 'Medium' : 'Large'
+  return { cls, dims: `${(m.w / 1000).toFixed(1)}k × ${(m.h / 1000).toFixed(1)}k` }
+}
+
+/** A map in the picker: preview, size, what's on it, and its description. */
+function MapCard({ m, title, blurb, on, onPick }: { m: MapDef; title: string; blurb: string; on: boolean; onPick: () => void }) {
+  const size = mapSize(m)
+  const terrain = [m.fields.length && 'asteroid fields', m.nebulas.length && 'nebulas'].filter(Boolean).join(' and ')
+  return (
+    <button className={`ew-mapcard ${on ? 'is-on' : ''}`} onClick={onPick} aria-pressed={on}>
+      <MapPreview map={m} className="is-thumb" />
+      <span className="ew-mapcard-head">
+        <strong>{title}</strong>
+        <em title={`${size.dims} units`}>{size.cls}</em>
+      </span>
+      <span className="ew-mapcard-stats">
+        <b>{m.spawns.length} players</b>
+        <span>{size.dims}</span>
+        <span>{m.ore.length} ore</span>
+        <span>{m.beacons.length} beacons</span>
+        {m.wrecks.length > 0 && <span>{m.wrecks.length} wrecks</span>}
+      </span>
+      {terrain && <small className="ew-mapcard-terrain">With {terrain}</small>}
+      <small className="ew-mapcard-blurb">{blurb}</small>
+    </button>
+  )
+}
+
 /** What the marks on the preview are: only the kinds this map has. */
 function MapLegend({ map }: { map: MapDef }) {
   const items: [string, string][] = [
@@ -822,7 +853,7 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
           </div>
           <MapLegend map={map} />
           <p className="ew-muted">
-            {map.blurb} <span className="ew-small">{map.spawns.length} spawns · {map.beacons.length} beacons · {map.ore.length} ore.</span>
+            {map.blurb} <span className="ew-small">{mapSize(map).cls} map ({mapSize(map).dims}) · {map.spawns.length} spawns · {map.beacons.length} beacons · {map.ore.length} ore.</span>
           </p>
           {isGen && (
             <GenControls
@@ -837,24 +868,18 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
         </Frame>
       </div>
       {picker && (
-        <Modal title="Choose a map" onClose={() => setPicker(false)} wide>
+        <Modal title="Choose a map" onClose={() => setPicker(false)} wide className="ew-mappicker-modal">
           <div className="ew-mappicker">
             {MAPS.map((m) => (
-              <button key={m.id} className={`ew-mapcard ${!isGen && m.id === map.id ? 'is-on' : ''}`} onClick={() => pickMap(m)} aria-pressed={!isGen && m.id === map.id}>
-                <MapPreview map={m} className="is-thumb" />
-                <span>
-                  <strong>{m.name}</strong>
-                  <small>{m.spawns.length} players · {m.ore.length} ore</small>
-                </span>
-              </button>
+              <MapCard key={m.id} m={m} title={m.name} blurb={m.blurb} on={!isGen && m.id === map.id} onPick={() => pickMap(m)} />
             ))}
-            <button className={`ew-mapcard ${isGen ? 'is-on' : ''}`} onClick={() => pickMap(generated, GENERATED)} aria-pressed={isGen}>
-              <MapPreview map={generated} className="is-thumb" />
-              <span>
-                <strong>Generated</strong>
-                <small>Your own rules and seed</small>
-              </span>
-            </button>
+            <MapCard
+              m={generated}
+              title="Generated"
+              blurb={`Built from your own rules and seed (now: ${generated.name}, seed ${setup.gen.seed}). Change them under the map after picking it.`}
+              on={isGen}
+              onPick={() => pickMap(generated, GENERATED)}
+            />
           </div>
         </Modal>
       )}
