@@ -19,6 +19,8 @@ import { libraryNames, mounts, posixOf, useMounts, whereIs } from '../data/mount
 import { lookup as fsLookup } from '../terminal/fs'
 import { isArchive } from '../data/archive'
 import { besideArchive, extract, getZipDrag, setZipDrag, zipDragName } from '../data/extract'
+import { useEdgeSwipe } from '../os/useEdgeSwipe'
+import { useMediaQuery } from '../os/useMediaQuery'
 
 /** Quotes a path for a command line in the terminal. */
 const shq = (s: string) => (/^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
@@ -214,6 +216,17 @@ export function Files({ win }: { win: WinState }) {
   const [fwd, setFwd] = useState<string[]>([])
   const [selected, setSelected] = useState<Set<string>>(() => new Set(win.props.select ? [win.props.select] : []))
   const [anchor, setAnchor] = useState<string | null>(null)
+  // Phones and tablets: a double tap opens (browsers there don't reliably send dblclick), and
+  // once something is selected every item gets a checkbox to add it or take it out.
+  const touch = useMediaQuery('(pointer: coarse)')
+  const narrow = useMediaQuery('(max-width: 719px)')
+  const pointer = useRef<string>('mouse')
+  const lastTap = useRef<{ path: string; at: number } | null>(null)
+  // On a phone the sidebar is a drawer over the list, opened with the sidebar button or a swipe in
+  // from the left edge (and swiped away again).
+  const [drawer, setDrawer] = useState(false)
+  const fmRoot = useRef<HTMLDivElement>(null)
+  useEdgeSwipe(fmRoot, { enabled: narrow, open: drawer, onOpen: () => setDrawer(true), onClose: () => setDrawer(false) })
   const [editingPath, setEditingPath] = useState(false)
   const [search, setSearch] = useState<string | null>(null)
   const [menu, setMenu] = useState<'view' | null>(null)
@@ -766,6 +779,14 @@ export function Files({ win }: { win: WinState }) {
 
   const clickItem = (e: React.MouseEvent, item: Item) => {
     e.stopPropagation()
+    if (pointer.current !== 'mouse') {
+      const tap = lastTap.current
+      lastTap.current = { path: item.path, at: Date.now() }
+      if (tap && tap.path === item.path && Date.now() - tap.at < 450 && renaming !== item.path) {
+        lastTap.current = null
+        return openItem(item)
+      }
+    }
     if (e.shiftKey && anchor) {
       const a = items.findIndex((i) => i.path === anchor)
       const b = items.findIndex((i) => i.path === item.path)
@@ -868,6 +889,8 @@ export function Files({ win }: { win: WinState }) {
   // Rubber-band selection on empty space.
   const onMainPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 || (e.target as HTMLElement).closest('.fm-item, .fm-list-head')) return
+    // A finger on empty space scrolls the list; it only clears the selection.
+    if (e.pointerType === 'touch') return setSelected(new Set())
     const box = main.current!.getBoundingClientRect()
     const start = { x: e.clientX - box.left + main.current!.scrollLeft, y: e.clientY - box.top + main.current!.scrollTop }
     const base = e.ctrlKey || e.metaKey ? new Set(selected) : new Set<string>()
@@ -1037,7 +1060,7 @@ export function Files({ win }: { win: WinState }) {
   ]
 
   return (
-    <div className="fm" onKeyDown={onKeyDown}>
+    <div className="fm" ref={fmRoot} onKeyDown={onKeyDown}>
       <div className="fm-toolbar">
         <button className="fm-tool" onClick={goBack} disabled={!back.length} title="Back (Alt+←)" aria-label="Back">
           ←
@@ -1130,8 +1153,17 @@ export function Files({ win }: { win: WinState }) {
           </button>
           {menu === 'view' && <ViewMenu prefs={prefs} setPrefs={setPrefs} close={() => setMenu(null)} />}
         </div>
-        <button className={`fm-tool ${prefs.sidebar ? '' : 'is-off'}`} onClick={() => setPrefs({ sidebar: !prefs.sidebar })} title="Toggle sidebar" aria-label="Toggle sidebar">
-          ↔
+        <button
+          className={`fm-tool ${(narrow ? drawer : prefs.sidebar) ? '' : 'is-off'}`}
+          onClick={() => (narrow ? setDrawer((d) => !d) : setPrefs({ sidebar: !prefs.sidebar }))}
+          title={narrow ? 'Places (or swipe in from the left)' : 'Show or hide the sidebar'}
+          aria-label={narrow ? 'Show places' : 'Toggle sidebar'}
+          aria-expanded={narrow ? drawer : undefined}
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+            <rect x="3" y="4" width="18" height="16" />
+            <path d="M9 4v16" />
+          </svg>
         </button>
         <button
           className="fm-tool"
@@ -1160,16 +1192,17 @@ export function Files({ win }: { win: WinState }) {
         </button>
       </div>
 
-      <div className="fm-body">
-        {prefs.sidebar && (
+      <div className={`fm-body ${narrow && drawer ? 'has-drawer' : ''}`}>
+        {narrow && drawer && <div className="fm-scrim" onPointerDown={() => setDrawer(false)} aria-hidden />}
+        {(narrow ? drawer : prefs.sidebar) && (
           <FilesSidebar
             sections={sections}
             active={path}
-            onOpen={openPlace}
+            onOpen={(target) => (setDrawer(false), openPlace(target))}
             acceptFiles={acceptDrop}
             dropFiles={dropInto}
             footer={
-              <button className={`fm-side-item ${path === TRASH ? 'is-active' : ''}`} onClick={() => navigate(TRASH)}>
+              <button className={`fm-side-item ${path === TRASH ? 'is-active' : ''}`} onClick={() => (setDrawer(false), navigate(TRASH))}>
                 <span className="fm-side-icon">🗑</span>
                 <span className="fm-side-label">Trash</span>
                 {trashCount !== null && <span className="fm-side-count">{trashCount}</span>}
@@ -1179,7 +1212,7 @@ export function Files({ win }: { win: WinState }) {
         )}
 
         <div
-          className={`fm-main fm-view-${prefs.view} ${dropOn === path ? 'is-drop' : ''}`}
+          className={`fm-main fm-view-${prefs.view} ${dropOn === path ? 'is-drop' : ''} ${touch && selected.size > 0 ? 'has-checks' : ''}`}
           data-sf-drop={canWrite(path) ? path : undefined}
           onDragEnter={(e) => acceptDrop(e, path)}
           onDragOver={(e) => acceptDrop(e, path)}
@@ -1267,14 +1300,34 @@ export function Files({ win }: { win: WinState }) {
                     onDrop: (e: React.DragEvent) => dropInto(e, item.path),
                   }
                 : {})}
+              onPointerDown={(e) => (pointer.current = e.pointerType)}
               onClick={(e) => clickItem(e, item)}
-              onDoubleClick={() => renaming !== item.path && openItem(item)}
+              // Touch opens on its own double tap (clickItem); this is the mouse's.
+              onDoubleClick={() => pointer.current === 'mouse' && renaming !== item.path && openItem(item)}
               onContextMenu={(e) => {
                 if (!selected.has(item.path)) setSelected(new Set([item.path]))
                 openContextMenu(e, itemMenu(item))
               }}
               title={search !== null ? pretty(item.path) : item.name}
             >
+              {touch && selected.size > 0 && (
+                <span
+                  className={`fm-check ${selected.has(item.path) ? 'is-on' : ''}`}
+                  role="checkbox"
+                  aria-checked={selected.has(item.path)}
+                  aria-label={`Select ${item.name}`}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    lastTap.current = null
+                    const next = new Set(selected)
+                    if (next.has(item.path)) next.delete(item.path)
+                    else next.add(item.path)
+                    setSelected(next)
+                    setAnchor(item.path)
+                  }}
+                />
+              )}
               <span className="fm-icon">
                 <Thumb item={item} size={iconSize} gallery={prefs.view === 'gallery'} emblem={emblemOf(item)} />
               </span>

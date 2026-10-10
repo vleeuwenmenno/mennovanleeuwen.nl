@@ -109,9 +109,6 @@ function TopBar() {
     { label: 'All apps', onSelect: () => toggleOverlay('launchpad') },
     { label: 'Show desktop', disabled: !wm.windows.some((w) => !w.minimized), onSelect: () => wm.windows.forEach((w) => wm.minimize(w.pid)) },
     { separator: true },
-    { label: 'Appearance', submenu: appearanceMenu() },
-    { label: 'Dock', submenu: DOCK_MODES.map(([m, label]) => ({ label, checked: getDockMode() === m, onSelect: () => setDockMode(m) })) },
-    { separator: true },
     { label: 'Settings', onSelect: () => wm.open('settings', { t: String(Date.now()) }) },
     { label: 'About this system', onSelect: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) },
   ]
@@ -658,6 +655,16 @@ export function Shell() {
   const power = usePower()
   const overlay = useOverlay()
 
+  // Phones: app windows are full-screen sheets, and the notes (sticky widgets too) go one under
+  // the other down a desktop that scrolls when they don't fit (styles.css). A note brought to
+  // the front, or just added, scrolls into view.
+  const mobile = useIsMobile()
+  useEffect(() => {
+    if (!mobile || wm.focusedPid === null) return
+    const el = document.querySelector(`.window.chrome-note[data-pid="${wm.focusedPid}"]`)
+    el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [mobile, wm.focusedPid])
+
   // The mouse's Back and Forward buttons (and the browser's Back) work in the focused window.
   useEffect(initBackButton, [])
   useEffect(() => setBackFocus(wm.focusedPid), [wm.focusedPid])
@@ -729,12 +736,16 @@ export function Shell() {
         </div>
       </div>
       <TopBar />
-      <Desktop />
-      <main className="windows">
-        {wm.windows.map((w) => (
-          <AppWindow key={w.pid} w={w} />
-        ))}
-      </main>
+      {/* Icons and windows. On phones this layer scrolls down when windows reach below the
+          screen; the top bar, the dock and the wallpaper stay where they are. */}
+      <div className="desk-scroll">
+        <Desktop />
+        <main className="windows">
+          {wm.windows.map((w) => (
+            <AppWindow key={w.pid} w={w} />
+          ))}
+        </main>
+      </div>
       <SnapPreview />
       <Dock />
       {overlay === 'launchpad' && <Launchpad />}

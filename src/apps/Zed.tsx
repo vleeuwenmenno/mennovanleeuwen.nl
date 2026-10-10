@@ -8,6 +8,9 @@ import { droppedFiles, hasOsFiles, uploadFiles } from '../data/uploads'
 import { openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { openLink } from '../data/links'
 import { ask } from '../os/Dialogs'
+import { Terminal } from './Terminal'
+import { useEdgeSwipe } from '../os/useEdgeSwipe'
+import { useMediaQuery } from '../os/useMediaQuery'
 
 // A small Zed: a project panel on the left, tabs, and an editor with line numbers, a current-line
 // highlight and Markdown highlighting, plus a Markdown preview, find (Ctrl+F), project search
@@ -136,6 +139,49 @@ export function Zed({ win }: { win: WinState }) {
   const [cursor, setCursor] = useState({ line: 0, col: 0 })
   const [status, setStatus] = useState<string | null>(null)
   const [panel, setPanel] = useState(true)
+  // On a phone the project panel is a drawer over the editor: the button at the bottom left, or a
+  // swipe in from the left edge (and away again).
+  const narrow = useMediaQuery('(max-width: 719px)')
+  const [drawer, setDrawer] = useState(false)
+  const showPanel = narrow ? drawer : panel
+  const togglePanel = () => (narrow ? setDrawer((d) => !d) : setPanel((p) => !p))
+
+  // The terminal panel under the editor, as in Zed: terminals in tabs, each starting in the project.
+  // Hidden ones keep running (and their scrollback); closing a tab ends it.
+  const [terms, setTerms] = useState<number[]>([])
+  const [termOn, setTermOn] = useState<number | null>(null)
+  const [dock, setDock] = useState(false)
+  const [dockH, setDockH] = useState(240)
+  const nextTerm = useRef(1)
+  const newTerm = () => {
+    const id = nextTerm.current++
+    setTerms((ts) => [...ts, id])
+    setTermOn(id)
+    setDock(true)
+  }
+  const toggleDock = () => (terms.length ? setDock((d) => !d) : newTerm())
+  const closeTerm = (id: number) =>
+    setTerms((ts) => {
+      const left = ts.filter((t) => t !== id)
+      setTermOn((on) => (on === id ? (left[left.length - 1] ?? null) : on))
+      if (!left.length) setDock(false)
+      return left
+    })
+  /** Dragging the panel's top edge: taller or shorter, leaving the editor some room. */
+  const resizeDock = (e: React.PointerEvent) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startH = dockH
+    const room = (rootEl.current?.querySelector('.zed-main')?.clientHeight ?? 600) - 120
+    const move = (ev: PointerEvent) => setDockH(Math.round(Math.max(100, Math.min(room, startH - (ev.clientY - startY)))))
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+  const termWin = useMemo(() => ({ ...win, props: {} }), [win])
   const [picker, setPicker] = useState<'project' | 'files' | null>(null)
   const [find, setFind] = useState<{ query: string; index: number } | null>(null)
   const [query, setQuery] = useState('') // project search
@@ -149,6 +195,7 @@ export function Zed({ win }: { win: WinState }) {
   const text = useRef<HTMLTextAreaElement>(null)
   const editor = useRef<HTMLDivElement>(null)
   const rootEl = useRef<HTMLDivElement>(null)
+  useEdgeSwipe(rootEl, { enabled: narrow, open: drawer, onOpen: () => setDrawer(true), onClose: () => setDrawer(false) })
   const findInput = useRef<HTMLInputElement>(null)
 
   const reveal = (path: string) =>
@@ -192,6 +239,7 @@ export function Zed({ win }: { win: WinState }) {
     const node = lookup(path)
     if (sf && node?.type === 'file' && (node.size ?? 0) > MAX_TEXT) return setStatus(`${base(path)} is too big to edit here`)
     openFile(path)
+    setDrawer(false)
   }
 
   const openSearch = () => {
@@ -628,7 +676,10 @@ export function Zed({ win }: { win: WinState }) {
       setPicker('project')
     } else if (mod && key === 'b') {
       handled()
-      setPanel((p) => !p)
+      togglePanel()
+    } else if (e.ctrlKey && key === '`') {
+      handled()
+      toggleDock()
     } else if (e.altKey && key === 'w' && active) {
       handled()
       close(active)
@@ -707,8 +758,9 @@ export function Zed({ win }: { win: WinState }) {
         />
       )}
 
-      <div className="zed-body">
-        {panel && (
+      <div className={`zed-body ${narrow && drawer ? 'has-drawer' : ''}`}>
+        {narrow && drawer && <div className="zed-scrim" onPointerDown={() => setDrawer(false)} aria-hidden />}
+        {showPanel && (
           <nav
             className={`zed-panel ${dropOn === root ? 'is-drop' : ''}`}
             aria-label="Project"
@@ -891,10 +943,52 @@ export function Zed({ win }: { win: WinState }) {
           ) : (
             <Welcome root={root} onOpen={openFile} onProject={() => setPicker('project')} />
           )}
+          {terms.length > 0 && (
+            <div className="zed-dock" style={{ height: dockH, display: dock ? undefined : 'none' }}>
+              <div className="zed-dock-grip" onPointerDown={resizeDock} role="separator" aria-orientation="horizontal" aria-label="Resize the terminal panel" />
+              <div className="zed-dock-tabs" role="tablist" aria-label="Terminals">
+                {terms.map((id) => (
+                  <div key={id} role="tab" aria-selected={id === termOn} className={`zed-tab ${id === termOn ? 'is-active' : ''}`} onClick={() => setTermOn(id)} onAuxClick={(e) => e.button === 1 && closeTerm(id)} title={`Terminal ${id} · ${prettyPath(root)}`}>
+                    <span className="zed-tab-icon">❯</span>
+                    <span>Terminal {id}</span>
+                    <button
+                      className="zed-tab-x"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        closeTerm(id)
+                      }}
+                      aria-label={`Close terminal ${id}`}
+                      title="Close (or type exit)"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+                <button className="zed-dock-btn" onClick={newTerm} title="New terminal" aria-label="New terminal">
+                  +
+                </button>
+                <span className="spacer" />
+                <button className="zed-dock-btn" onClick={() => setDock(false)} title="Hide the terminal panel (Ctrl+`)" aria-label="Hide the terminal panel">
+                  ⌄
+                </button>
+              </div>
+              {terms.map((id) => (
+                <div key={id} className="zed-dock-term" style={{ display: id === termOn ? undefined : 'none' }}>
+                  <Terminal win={termWin} embedded={{ cwd: root, onExit: () => closeTerm(id) }} />
+                </div>
+              ))}
+            </div>
+          )}
         </section>
       </div>
 
       <footer className="zed-status">
+        <button className={`zed-status-btn zed-status-icon ${showPanel ? 'is-on' : ''}`} onClick={togglePanel} title={`${showPanel ? 'Hide' : 'Show'} the project panel (Ctrl+B${narrow ? ', or swipe in from the left' : ''})`} aria-label="Toggle project panel" aria-pressed={showPanel}>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+            <rect x="3" y="4" width="18" height="16" />
+            <path d="M9 4v16" />
+          </svg>
+        </button>
         <span className="zed-status-msg">{status ?? (buf && active ? `${where(active)}${buf.text !== buf.saved ? ' •' : ''}` : prettyPath(root))}</span>
         <span className="spacer" />
         {buf && active && (
@@ -906,8 +1000,11 @@ export function Zed({ win }: { win: WinState }) {
             <span>{place?.ro ? 'read-only' : place?.sf ? 'Seafile' : 'UTF-8'}</span>
           </>
         )}
-        <button className="zed-status-btn" onClick={() => wm.openNew('terminal', { run: `cd ${prettyPath(root)}`, t: String(Date.now()) })} title="Open a terminal in this project">
-          ⌨
+        <button className={`zed-status-btn zed-status-icon ${dock ? 'is-on' : ''}`} onClick={toggleDock} title={`${dock ? 'Hide' : 'Show'} the terminal (Ctrl+\`)`} aria-label="Toggle terminal panel" aria-pressed={dock}>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <rect x="3" y="4" width="18" height="16" />
+            <path d="M7 9l3 3-3 3M12 15h5" />
+          </svg>
         </button>
       </footer>
     </div>

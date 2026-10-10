@@ -243,12 +243,46 @@ function apply(state: State, action: Action): State {
           const fresh = !state.touched && action.layout.find((l) => l.app === w.app)
           // Fitted from where it was put, not from an earlier fitting: a bigger screen gets it back as it was.
           const g = fresh ? fresh.geometry : (w.want ?? w)
+          if (NOTE_APPS.has(w.app) && !w.maximized) return { ...w, want: fresh ? undefined : (w.want ?? { x: w.x, y: w.y, w: w.w, h: w.h }), ...fitNote(g, width, height, drawnHeights.get(w.pid)) }
           const ww = Math.max(240, Math.min(g.w, width - 16))
           const hh = Math.max(160, Math.min(g.h, height - 140))
           return { ...w, want: fresh ? undefined : (w.want ?? { x: w.x, y: w.y, w: w.w, h: w.h }), w: ww, h: hh, x: Math.min(Math.max(g.x, 8 - ww + 120), width - 120), y: Math.min(Math.max(g.y, 40), height - 80) }
         }),
       }
     }
+  }
+}
+
+/** Notes (the headline note, the shortcuts, sticky and other widgets): the windows with note chrome. */
+export const NOTE_APPS = new Set<AppId>(['notes', 'keys', 'widget'])
+/** How tall each note is drawn (pid → px): a long note runs on below its box (Window.tsx measures it). */
+const drawnHeights = new Map<number, number>()
+export const drawnHeight = (pid: number) => drawnHeights.get(pid)
+export function setDrawnHeight(pid: number, h: number | null) {
+  if (h === null) drawnHeights.delete(pid)
+  else drawnHeights.set(pid, h)
+}
+
+/** Room around a note: notes hang at a slant of up to 3.5°, which takes their corners ~12px out. */
+const NOTE_MARGIN = 16
+const NOTE_TOP = 28 + NOTE_MARGIN
+
+/**
+ * Where a note goes on a screen of this size: never hanging off an edge, made smaller when the
+ * screen is smaller than the note. Phones scroll the desktop down, so there a note only has to
+ * fit across and below the top bar.
+ */
+export function fitNote(g: Geometry, width: number, height: number, drawn = g.h): Geometry {
+  const phone = width < 720
+  const w = Math.max(160, Math.min(g.w, width - 2 * NOTE_MARGIN))
+  const h = phone ? g.h : Math.max(140, Math.min(g.h, height - NOTE_TOP - NOTE_MARGIN))
+  // Kept clear of the bottom by what shows, which can be more than its box.
+  const shown = Math.max(h, drawn)
+  return {
+    w,
+    h,
+    x: Math.max(NOTE_MARGIN, Math.min(g.x, width - w - NOTE_MARGIN)),
+    y: phone ? Math.max(g.y, NOTE_TOP) : Math.max(NOTE_TOP, Math.min(g.y, height - shown - NOTE_MARGIN)),
   }
 }
 
@@ -269,6 +303,8 @@ type WM = {
   setProps: (pid: number, props: WinState['props']) => void
   /** Closes everything and opens the opening layout again (after a reboot), or nothing at all. */
   reset: (empty?: boolean) => void
+  /** Fits the windows to the screen again (a note that turned out taller than its box). */
+  refit: () => void
 }
 
 const Ctx = createContext<WM | null>(null)
@@ -410,6 +446,7 @@ export function WindowManagerProvider({
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
       setGeometry: (pid, geometry) => dispatch({ type: 'setGeometry', pid, geometry }),
       setProps: (pid, props) => dispatch({ type: 'setProps', pid, props }),
+      refit: () => dispatch({ type: 'viewport', width: window.innerWidth, height: window.innerHeight, layout: relayout() }),
       reset: (empty) => {
         dispatch({ type: 'reset', layout: empty ? [] : relayout() })
         savedEdits.current = 0

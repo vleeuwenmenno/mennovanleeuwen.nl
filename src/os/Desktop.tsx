@@ -12,9 +12,7 @@ import { useAccount } from './account'
 import { ask } from './Dialogs'
 import { closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
 import { resetLayout, restoreIcons, trashIcons, updateDesktop, useDesktop, type IconPos } from './desktopStore'
-import { appearanceMenu } from './appearanceMenu'
 import { openLink } from '../data/links'
-import { DOCK_MODES, getDockMode, setDockMode } from './dockPrefs'
 import { useSwing } from './swing'
 import { useWM, type AppId } from './wm'
 import { extract, getZipDrag, setZipDrag, zipDragName } from '../data/extract'
@@ -608,8 +606,6 @@ export function Desktop() {
           { label: 'About this system', onSelect: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) },
         ],
       },
-      { label: 'Appearance', submenu: appearanceMenu() },
-      { label: 'Dock', submenu: DOCK_MODES.map(([m, label]) => ({ label, checked: getDockMode() === m, onSelect: () => setDockMode(m) })) },
     ]
   }
 

@@ -133,7 +133,11 @@ function loadHistory(): string[] {
 }
 
 /** `onLogout` makes this the detached text console reached by pausing the boot, rather than a window. */
-export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => void }) {
+/** Inside another app (Zed's terminal panel): where it starts, and what `exit` does. It never takes
+ * the keyboard on its own there, since the app around it has its own fields. */
+export type EmbeddedTerminal = { cwd: string; onExit: () => void }
+
+export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?: () => void; embedded?: EmbeddedTerminal }) {
   const wm = useWM()
   // Only the terminal that opens at boot greets the visitor; any terminal opened later starts clean.
   const [entries, setEntries] = useState<Entry[]>(() =>
@@ -148,7 +152,7 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
         ]
       : [],
   )
-  const [cwd, setCwd] = useState(HOME)
+  const [cwd, setCwd] = useState(embedded?.cwd ?? HOME)
   const [value, setValue] = useState('')
   const [running, setRunning] = useState(false)
   // A full-screen program (htop, cmatrix, watch) is drawing: no "working…" line under it.
@@ -232,7 +236,7 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
   // of Firefox's find as you type, and the prompt takes focus again when the page gets it back
   // (from the address bar). Only printable keys, and only while this terminal is the front
   // window, so a game in front keeps its keys and the desktop keeps Delete, F2, Enter.
-  const front = wm.focusedPid === win.pid
+  const front = !embedded && wm.focusedPid === win.pid
   const frontRef = useRef(front)
   frontRef.current = front
   useEffect(() => {
@@ -285,7 +289,7 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
 
   // Focus the prompt whenever this window comes to the front (not on touch, where it pops the keyboard).
   useEffect(() => {
-    if (wm.focusedPid !== win.pid || matchMedia('(pointer: coarse)').matches) return
+    if (embedded || wm.focusedPid !== win.pid || matchMedia('(pointer: coarse)').matches) return
     // Hover focus must not pull the caret out of something else being typed in (Spotlight, a rename).
     const active = document.activeElement
     if (active && active !== document.body && !active.closest('.window')) return
@@ -303,7 +307,7 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
   }, [win.props])
 
   useEffect(() => {
-    if (!animating && wm.focusedPid === win.pid && !matchMedia('(pointer: coarse)').matches) inputRef.current?.focus({ preventScroll: true })
+    if (!embedded && !animating && wm.focusedPid === win.pid && !matchMedia('(pointer: coarse)').matches) inputRef.current?.focus({ preventScroll: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [animating])
 
@@ -355,7 +359,7 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
       openNewApp: wm.openNew,
       closeWindow: wm.close,
       clear: () => setEntries([]),
-      exit: () => setTimeout(() => (onLogout ? onLogout() : wm.close(win.pid)), 120),
+      exit: () => setTimeout(() => (onLogout ? onLogout() : embedded ? embedded.onExit() : wm.close(win.pid)), 120),
       console: !!onLogout,
       startx: onLogout
         ? (launch) => {

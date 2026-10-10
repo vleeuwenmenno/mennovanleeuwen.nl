@@ -819,7 +819,7 @@ async function xrandr(ctx: Ctx): Promise<string> {
   const cs = getComputedStyle(probe)
   const inset = `top ${cs.paddingTop} · bottom ${cs.paddingBottom} · left ${cs.paddingLeft} · right ${cs.paddingRight}`
   probe.remove()
-  const standalone = (navigator as Navigator & { standalone?: boolean }).standalone === true || matchMedia('(display-mode: standalone)').matches
+  const standalone = (navigator as Navigator & { standalone?: boolean }).standalone === true || matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches
   const desk = document.querySelector('.desktop')?.getBoundingClientRect()
   return [
     `Screen 0: minimum 320 x 200, current ${w} x ${h}, maximum 16384 x 16384`,
