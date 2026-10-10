@@ -17,6 +17,7 @@ import { openLink } from '../data/links'
 import { DOCK_MODES, getDockMode, setDockMode } from './dockPrefs'
 import { useSwing } from './swing'
 import { useWM, type AppId } from './wm'
+import { extract, getZipDrag, setZipDrag, zipDragName } from '../data/extract'
 
 // A desktop that behaves like one: click to select, Ctrl/Shift-click to add, drag a marquee over
 // empty space, drag icons around (they snap to a grid), double-click or Enter to open, F2 to
@@ -389,8 +390,9 @@ export function Desktop() {
   // go) or onto a Seafile folder icon.
   const [dropIcon, setDropIcon] = useState<string | null>(null)
   const acceptFiles = (e: React.DragEvent, into: string | null | undefined) => {
-    // Files from the computer upload into the Desktop folder (or the folder icon they are let go on).
-    if (into && !getDragged() && hasOsFiles(e.dataTransfer)) {
+    // Files from the computer upload into the Desktop folder (or the folder icon they are let go
+    // on), and rows from Archive unpack there.
+    if (into && (getZipDrag(e) || (!getDragged() && hasOsFiles(e.dataTransfer)))) {
       e.preventDefault()
       e.stopPropagation()
       e.dataTransfer.dropEffect = 'copy'
@@ -406,6 +408,14 @@ export function Desktop() {
     return true
   }
   function dropFiles(e: React.DragEvent, into: string) {
+    const fromZip = getZipDrag(e)
+    if (fromZip) {
+      if (!acceptFiles(e, into)) return
+      setDropIcon(null)
+      setZipDrag(null)
+      void extract(fromZip.zip, into, { entries: fromZip.entries, base: fromZip.base, clash: 'keep' }).catch(failed(`Could not unpack ${zipDragName(fromZip)}`))
+      return
+    }
     if (!getDragged() && hasOsFiles(e.dataTransfer)) {
       if (!acceptFiles(e, into)) return
       setDropIcon(null)

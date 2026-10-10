@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { besideArchive, cancelExtract, dismissExtract, extract, useExtractJobs, type Clash } from '../data/extract'
+import { besideArchive, cancelExtract, dismissExtract, DRAG_ZIP, extract, setZipDrag, useExtractJobs, type Clash } from '../data/extract'
 import { posixOf } from '../data/mounts'
 import { download, getLibrary, isSf, libraryName, parseSf, useLibraries } from '../data/seafile'
 import { pickFolder } from '../os/FolderPicker'
@@ -17,7 +17,8 @@ import { FileIcon, FolderIcon } from './Files'
 // right-click has the menu, folders open with a double-click or Enter, Back/Forward/Up go through
 // the folders, the columns sort, and the search looks through the whole archive. Extract unpacks
 // everything, or what is selected, into a Seafile folder; the server does it (data/extract.ts,
-// server/unzip.ts). A single file can also be saved straight from the archive (unpacked here).
+// server/unzip.ts). Rows dragged by their name onto a folder in Files (or the desktop) unpack
+// there. A single file can also be saved straight from the archive (unpacked here).
 
 type Sort = 'name' | 'size' | 'packed' | 'ratio' | 'date'
 type Row = { name: string; path: string; dir: boolean; size: number; packed: number; mtime: number; count?: number; entry?: ZipEntry }
@@ -355,10 +356,33 @@ export function Archive({ win }: { win: WinState }) {
     if (r) tiles.current.get(r.path)?.scrollIntoView({ block: 'nearest' })
   }, [at])
 
-  // Rubber-band selection (Ctrl adds to what is selected). Rows cannot be dragged anywhere, so it
-  // starts on a row as well as on empty space, as in a details view; a click without moving is a click.
+  /** Dragging rows by their name out to a folder in Files or on the desktop, which unpacks them there. */
+  const dragStart = (e: React.DragEvent, r: Row) => {
+    const paths = selected.has(r.path) ? selectedRows().map((x) => x.path) : [r.path]
+    if (!selected.has(r.path)) {
+      setSelected(new Set([r.path]))
+      setAnchor(r.path)
+      setCursor(r.path)
+    }
+    e.dataTransfer.setData(DRAG_ZIP, JSON.stringify(paths))
+    e.dataTransfer.setData('text/plain', paths.join('\n'))
+    e.dataTransfer.effectAllowed = 'copy'
+    if (paths.length > 1) {
+      // One label for many rows, rather than the one row under the pointer.
+      const ghost = document.createElement('div')
+      ghost.className = 'ar-ghost'
+      ghost.textContent = `${paths.length} items`
+      document.body.append(ghost)
+      e.dataTransfer.setDragImage(ghost, -10, -10)
+      setTimeout(() => ghost.remove())
+    }
+    setZipDrag({ zip: path, entries: paths, base: base() })
+  }
+
+  // Rubber-band selection (Ctrl adds to what is selected). It starts on a row as well as on empty
+  // space, as in a details view, except on a row's name, which drags; a click without moving is a click.
   const onListPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0 || (e.target as HTMLElement).closest('.ar-head')) return
+    if (e.button !== 0 || (e.target as HTMLElement).closest('.ar-head, .ar-label')) return
     const el = list.current!
     const box = el.getBoundingClientRect()
     // Not on the scrollbar.
@@ -531,9 +555,11 @@ export function Archive({ win }: { win: WinState }) {
                 title={r.path}
               >
                 <span className="ar-name">
-                  <span className="ar-glyph">{r.dir ? <FolderIcon size={16} /> : <FileIcon size={16} kind={kindOfName(r.name)} name={r.name} />}</span>
-                  {r.name}
-                  {r.entry?.encrypted && <span title="Encrypted">🔒</span>}
+                  <span className="ar-label" draggable onDragStart={(e) => dragStart(e, r)} onDragEnd={() => setZipDrag(null)}>
+                    <span className="ar-glyph">{r.dir ? <FolderIcon size={16} /> : <FileIcon size={16} kind={kindOfName(r.name)} name={r.name} />}</span>
+                    {r.name}
+                    {r.entry?.encrypted && <span title="Encrypted">🔒</span>}
+                  </span>
                 </span>
                 <span>{r.dir ? `${r.count} ${r.count === 1 ? 'file' : 'files'}` : formatSize(r.size)}</span>
                 <span>{r.dir ? formatSize(r.size) : formatSize(r.packed)}</span>

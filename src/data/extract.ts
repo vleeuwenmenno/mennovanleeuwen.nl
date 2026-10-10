@@ -111,3 +111,15 @@ export function dismissExtract(id: string) {
   jobs = jobs.filter((j) => j.id !== id)
   emit()
 }
+
+// Rows dragged out of Archive unpack where they are let go: a Seafile folder in Files, its
+// sidebar, or the desktop. The rows ride along here, because a dragover can only read a drag's
+// types, not its data.
+export const DRAG_ZIP = 'application/x-mvlos-zip'
+export type ZipDrag = { zip: string; entries: string[]; base: string }
+let zipDrag: ZipDrag | null = null
+export const setZipDrag = (d: ZipDrag | null) => void (zipDrag = d)
+/** The archive rows this drag carries, if it is one. */
+export const getZipDrag = (e: { dataTransfer: DataTransfer }) => (zipDrag && e.dataTransfer.types.includes(DRAG_ZIP) ? zipDrag : null)
+/** "3 items from mods.zip", "config.toml" */
+export const zipDragName = (d: ZipDrag) => (d.entries.length === 1 ? d.entries[0].split('/').pop()! : `${d.entries.length} items from ${d.zip.split('/').pop()}`)
