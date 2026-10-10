@@ -30,6 +30,20 @@ const keyBytes = (b64: string) => Uint8Array.from(atob(b64.replace(/-/g, '+').re
 /** A name to tell devices apart, from the browser. */
 const deviceName = () => `${isIos() ? 'iOS' : /Android/.test(navigator.userAgent) ? 'Android' : navigator.platform || 'Browser'}${installed() ? ' app' : ''}`
 
+/**
+ * Why the browser could not subscribe, in words to act on. "Registration failed - push service
+ * error" (an AbortError) is Chromium failing to reach its push service: Brave has it off until
+ * its "Use Google services for push messaging" setting is on, and Chromium builds without
+ * Google's services (ungoogled-chromium and the like) have none at all.
+ */
+async function whyNoPush(e: Error): Promise<string> {
+  if (e.name !== 'AbortError' && !/push service/i.test(e.message)) return e.message
+  const brave = (navigator as Navigator & { brave?: { isBrave: () => Promise<boolean> } }).brave
+  if (brave && (await brave.isBrave().catch(() => false)))
+    return 'Brave has push turned off: open brave://settings/privacy, turn on "Use Google services for push messaging", restart Brave and try again'
+  return "This browser could not reach its push service (Chromium builds without Google's services have none). Chrome, Edge, Firefox and the installed phone app can"
+}
+
 /** Subscribes this browser and tells the server (again). */
 async function register(reg: ServiceWorkerRegistration) {
   const { publicKey } = await api<{ publicKey: string }>('/api/push/key')
@@ -40,7 +54,9 @@ async function register(reg: ServiceWorkerRegistration) {
     await sub.unsubscribe().catch(() => {})
     sub = null
   }
-  sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) })
+  sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) }).catch(async (e: Error) => {
+    throw new Error(await whyNoPush(e))
+  })
   await api('/api/push/subscription', { method: 'POST', json: { subscription: sub.toJSON(), device: deviceName() } })
 }
 

@@ -3799,3 +3799,9 @@ button.cal-day.is-picked:not(.is-today) {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* A hint long enough to need two lines (Settings → Notifications, push on this device). */
+.set-row-text > .set-row-wrap {
+  white-space: normal;
+  overflow: visible;
+}

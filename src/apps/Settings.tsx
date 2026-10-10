@@ -223,7 +223,8 @@ function PushRow() {
     <li className="set-row">
       <span className="set-row-text">
         <strong>Push notifications on this device</strong>
-        <span className="muted">{note ?? (state ? text[state] : 'Checking…')}</span>
+        {/* Wraps: the iPhone steps, or what to do about a browser without push, take a sentence or two. */}
+        <span className="muted set-row-wrap">{note ?? (state ? text[state] : 'Checking…')}</span>
       </span>
       {state === 'on' && (
         <>
