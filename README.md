@@ -259,7 +259,18 @@ and open it; they are in Spotlight and All apps, and can go on the dock and the 
 ZIP files open in **Archive**, browsed like folders without unpacking them: only the archive's table
 of contents is read ([`src/data/zip.ts`](src/data/zip.ts)), and from Seafile just the end of the file
 (a Range request), so a big one opens at once. Columns sort by name, size, packed size, how much was
-saved and date; the search looks through the whole archive. Unpacking comes later.
+saved and date; the search looks through the whole archive. Ranges go through the site's server
+(`/api/seafile/raw`): Seafile's file server sends no CORS headers on 206 answers.
+
+**Extract** unpacks everything, or the rows picked with Ctrl/Shift+click, into a Seafile folder (a
+folder named after the archive, next to it, unless you choose another), with *keep both*, *replace*
+or *skip* for names already there; Files' menu has *Extract here* and *Extract to…* on ZIPs. The
+server does the work ([`server/unzip.ts`](server/unzip.ts)): it reads only the chosen files' bytes
+from Seafile, never the whole archive, unpacks each to a temporary file, checks its CRC and size,
+and uploads it (Seafile's upload makes the folders). Stored and deflated files unpack;
+password-protected entries and other methods are reported and left out. The terminal's `unzip`
+does the same with Info-ZIP's options and output (`-l`, `-v`, `-p`, `-z`, `-d`, `-x`, `-o`, `-n`,
+and its `replace …? [y]es, [n]o, [A]ll, [N]one, [r]ename` question).
 
 Each of Files' places (Home, Desktop, Documents, Downloads, Music, Pictures, Videos) can be pointed
 at any folder of any library: right-click it → *Choose folder…*; a place left alone is the

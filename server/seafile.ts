@@ -194,13 +194,13 @@ export async function libraries(user: User): Promise<Library[]> {
 // ---------------------------------------------------------------------------------------------
 // Folders and files. Paths are Seafile's: absolute within the library ("/Documents/a.txt").
 
-const repoId = (v: unknown) => {
+export const repoId = (v: unknown) => {
   const id = String(v ?? '')
   if (!/^[0-9a-f-]{36}$/i.test(id)) throw new HttpError(400, 'Bad library id')
   return id
 }
 
-const seafPath = (v: unknown) => {
+export const seafPath = (v: unknown) => {
   const p = String(v ?? '/')
   if (!p.startsWith('/') || p.split('/').some((part) => part === '..') || p.includes('\0')) throw new HttpError(400, 'Bad path')
   return p
@@ -224,7 +224,7 @@ async function isEncrypted(user: User, id: string): Promise<boolean> {
 }
 
 /** Throws 423 for an encrypted library that is locked (here; Seafile may still hold it open). */
-async function guard(user: User, id: string) {
+export async function guard(user: User, id: string) {
   if (!(await isEncrypted(user, id))) return
   if ((unlockedUntil.get(`${user.id}:${id}`) ?? 0) > Date.now()) return
   throw new HttpError(423, 'Locked')

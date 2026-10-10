@@ -10,6 +10,7 @@ import { inbox } from './inbox.ts'
 import { linkPreview } from './preview.ts'
 import { cleanTrash, shareLink, createFile, fileLink, rangeRead, restore, thumbnail, trash, trashDir, uploadedBytes, libraries, removeItems, rename, transfer, linkSeafile, listDir, lock, mkdir, unlock, unlocked, removeOffice, seafileInfo, setOffice, unlinkSeafile } from './seafile.ts'
 import { officeCallback, officeCheck, officeConfig } from './office.ts'
+import { cancelExtract, extractStatus, startExtract } from './unzip.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
 import { HttpError, json, readJson, redirect, sameOrigin, SECURITY } from './http.ts'
 import { minecraftOverview, minecraftStatus } from './minecraft.ts'
@@ -156,6 +157,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/seafile/trash/clean' && method === 'POST') return await cleanTrash(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true
     if (path === '/api/seafile/share' && method === 'POST') return json(res, 200, await shareLink(requireUser(req), await readJson(req, 4096))), true
     if (path === '/api/seafile/uploaded' && read) return json(res, 200, await uploadedBytes(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('parent'), url.searchParams.get('name'))), true
+    // Unpacking ZIPs into Seafile (server/unzip.ts): start a job, ask how it goes, cancel it.
+    if (path === '/api/seafile/extract' && method === 'POST') return json(res, 200, await startExtract(requireUser(req), await readJson(req, 4 * 1024 * 1024))), true
+    if (path === '/api/seafile/extract' && read) return json(res, 200, extractStatus(requireUser(req), url.searchParams.get('id'), url.searchParams.get('since'))), true
+    if (path === '/api/seafile/extract' && method === 'DELETE') return cancelExtract(requireUser(req), url.searchParams.get('id')), json(res, 200, { ok: true }), true
     // Byte ranges of a file, for the ZIP viewer (Seafile's file server sends no CORS headers on 206).
     if (path === '/api/seafile/raw' && read) {
       const range = req.headers.range

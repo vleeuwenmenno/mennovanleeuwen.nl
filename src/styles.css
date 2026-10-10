@@ -4880,6 +4880,52 @@ button.fm-dd-row:hover {
 .ar-row.is-selected {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
+.ar-row.is-cursor {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+/* Extract…: where to, and what to do with names already there. */
+.ar-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg));
+  font-size: 12.5px;
+}
+.ar-panel strong {
+  font-weight: 600;
+  word-break: break-all;
+}
+.ar-clash {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ar-clash .set-choice {
+  padding: 2px 8px;
+}
+.ar-job {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ar-bar {
+  width: 90px;
+  height: 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  overflow: hidden;
+  flex: none;
+}
+.ar-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s;
+}
 .ar-head {
   position: sticky;
   top: 0;
