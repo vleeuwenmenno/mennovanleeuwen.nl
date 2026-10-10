@@ -11,8 +11,9 @@ import { Pool } from './Pool'
 import { Snake } from './Snake'
 import { Tetris } from './Tetris'
 
-// Gladiator is big (art, rules, sound), so it loads only when picked.
+// Gladiator and Empires At War are big (art, rules, sound), so they load only when picked.
 const Gladiator = lazy(() => import('./Gladiator').then((m) => ({ default: m.Gladiator })))
+const EmpiresAtWar = lazy(() => import('./EmpiresAtWar').then((m) => ({ default: m.EmpiresAtWar })))
 
 const COMPONENTS: Record<string, ComponentType<{ win: WinState }>> = {
   'tetris': Tetris,
@@ -23,6 +24,7 @@ const COMPONENTS: Record<string, ComponentType<{ win: WinState }>> = {
   'breakout': Breakout,
   'pool': Pool,
   'gladiator': Gladiator,
+  'empires': EmpiresAtWar,
 }
 
 export const GAMES = GAME_CATALOG.map((g) => ({ ...g, component: COMPONENTS[g.id] }))
@@ -32,6 +34,7 @@ function readBest(id: string) {
     const all = highScores.get()
     if (id === 'minesweeper') return all['minesweeper-easy'] !== undefined ? `${all['minesweeper-easy']}s` : null
     if (id === 'minecraft') return 'touch grass'
+    if (id === 'empires') return all.empires !== undefined ? `${all.empires} ${all.empires === 1 ? 'victory' : 'victories'}` : null
     if (id === 'pool') return all.pool !== undefined ? `${all.pool} ${all.pool === 1 ? 'win' : 'wins'}` : null
     if (id === 'gladiator') {
       const top = bestGladiatorLevel()

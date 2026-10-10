@@ -1,0 +1,968 @@
+import {
+  ABILITIES, BASE_POP, BEACON_INCOME, BEACON_POP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
+  STATION_LEVEL_BONUS, UNIT, UPGRADES, accuracy, dims, effect, isShip, unitOf, type AbilityId, type FactionId, type Tier, type UnitType, type Weapon, type WeaponKind,
+} from './data'
+
+// The battle itself, with no DOM: ships, orders, steering, guns, shields and hardpoints, the
+// economy and capture beacons. The game screen and the headless balance sims both drive it by
+// calling `tick` at a fixed step and reading `events` for sound and effects.
+
+export const STEP = 1 / 30
+export type Owner = 0 | 1
+export const other = (o: Owner): Owner => (o === 0 ? 1 : 0)
+
+export type Order =
+  | { k: 'idle' }
+  /** `attack`: attack-move, engaging whatever turns up on the way. `speed` keeps a group together. */
+  | { k: 'move'; x: number; y: number; attack: boolean; speed: number }
+  /** `hp`: the hardpoint to aim at, or -1 for the ship as a whole. */
+  | { k: 'attack'; id: number; hp: number }
+
+export type Gun = { w: Weapon; hp: number; cd: number; burst: number; burstT: number; target: number; aim: number }
+
+export type Unit = {
+  id: number
+  t: UnitType
+  owner: Owner
+  x: number
+  y: number
+  a: number
+  v: number
+  hull: number
+  hullMax: number
+  shield: number
+  hps: { hp: number; max: number }[]
+  guns: Gun[]
+  order: Order
+  /** Idle ships drift back here after chasing something. */
+  ax: number
+  ay: number
+  squad: number
+  /** Fighters launched by a carrier stay with it. */
+  parent: number
+  target: number
+  retarget: number
+  lastHit: number
+  /** Shield shimmer: time of the last shield hit and where it came from. */
+  shieldHit: number
+  hitAngle: number
+  abilityCd: number
+  abilityOn: number
+  slow: number
+  hangarT: number
+  /** Seconds left on construction (mining platforms). */
+  building: number
+  node: number
+  dead: boolean
+  /** Visible to each player, refreshed a few times a second. */
+  seen: [boolean, boolean]
+  born: number
+  kills: number
+}
+
+export type QueueItem = { unit: string; left: number; total: number }
+export type Player = {
+  faction: FactionId
+  credits: number
+  income: number
+  incomeMul: number
+  level: number
+  station: number
+  queue: QueueItem[]
+  upgrade: { left: number; total: number } | null
+  rally: { x: number; y: number }
+  pop: number
+  popCap: number
+  lastAlarm: number
+  stats: { built: number; lost: number; killed: number; earned: number }
+}
+export type OreNode = { id: number; x: number; y: number; r: number; rot: number; mine: number }
+export type Beacon = { id: number; x: number; y: number; owner: Owner | -1; progress: number }
+export type Rock = { x: number; y: number; r: number; rot: number; spin: number; kind: number }
+export type Shot = {
+  x: number; y: number; vx: number; vy: number; left: number; kind: WeaponKind; owner: Owner; target: number; hp: number; dmg: number; hit: boolean; sx: number; sy: number; age: number; from: number
+}
+
+export type SimEvent =
+  | { k: 'fire'; kind: WeaponKind; x: number; y: number; owner: Owner }
+  | { k: 'hit'; kind: WeaponKind; x: number; y: number; shield: boolean; owner: Owner }
+  | { k: 'boom'; x: number; y: number; tier: Tier; owner: Owner; size: number }
+  | { k: 'hpdown'; x: number; y: number; owner: Owner; what: string }
+  | { k: 'built'; owner: Owner; unit: string; x: number; y: number }
+  | { k: 'beacon'; owner: Owner | -1; prev: Owner | -1; x: number; y: number }
+  | { k: 'alarm'; owner: Owner; x: number; y: number; what: string }
+  | { k: 'level'; owner: Owner; level: number }
+  | { k: 'ability'; owner: Owner; id: AbilityId; x: number; y: number }
+  | { k: 'launch'; owner: Owner; x: number; y: number }
+
+export type World = {
+  w: number
+  h: number
+  time: number
+  units: Unit[]
+  byId: Map<number, Unit>
+  players: [Player, Player]
+  nodes: OreNode[]
+  beacons: Beacon[]
+  rocks: Rock[]
+  shots: Shot[]
+  events: SimEvent[]
+  nextId: number
+  winner: Owner | -1
+  grid: Map<number, Unit[]>
+  seenT: number
+}
+
+// --- Helpers ----------------------------------------------------------------------------------------
+
+const TAU = Math.PI * 2
+const wrap = (a: number) => ((a + Math.PI) % TAU + TAU) % TAU - Math.PI
+const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v)
+const d2 = (ax: number, ay: number, bx: number, by: number) => (ax - bx) ** 2 + (ay - by) ** 2
+
+function rng(seed: number) {
+  let s = seed >>> 0
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0
+    let t = s
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+/** Rough body radius, for spacing, clicking and collisions. */
+export const radius = (t: UnitType) => {
+  const [w, h] = dims(t)
+  return (w + h) * 0.25
+}
+
+/** World position of a point on the sprite's 0-10 grid. */
+export function shipPoint(u: Unit, gx: number, gy: number) {
+  const [w, h] = dims(u.t)
+  const side = (gx / 10 - 0.5) * w
+  const fwd = (0.5 - gy / 10) * h
+  const c = Math.cos(u.a)
+  const s = Math.sin(u.a)
+  return { x: u.x + c * fwd - s * side, y: u.y + s * fwd + c * side }
+}
+export const hpPos = (u: Unit, i: number) => shipPoint(u, u.t.hardpoints[i].x, u.t.hardpoints[i].y)
+const alive = (u: Unit, i: number) => u.hps[i].hp > 0
+
+function share(u: Unit, kind: string) {
+  const all = u.t.hardpoints.map((h, i) => (h.kind === kind ? i : -1)).filter((i) => i >= 0)
+  if (!all.length) return 1
+  return all.filter((i) => alive(u, i)).length / all.length
+}
+export const shieldMax = (u: Unit) => u.t.shield * share(u, 'shield')
+export const speedOf = (u: Unit) => u.t.speed * (0.25 + 0.75 * share(u, 'engine')) * (u.slow > 0 ? 0.33 : 1)
+const hangarsUp = (u: Unit) => u.t.hardpoints.some((h, i) => h.kind === 'hangar' && alive(u, i))
+export const building = (u: Unit) => u.building > 0
+
+/** Damage per second a type deals to each tier: for picking targets. */
+const DPS = new Map<string, Record<string, number>>()
+function dpsVs(t: UnitType, tier: Tier) {
+  let row = DPS.get(t.id)
+  if (!row) {
+    row = {}
+    const ws = [...t.weapons, ...t.hardpoints.flatMap((h) => (h.weapon ? [h.weapon] : []))]
+    for (const tr of ['fighter', 'gunship', 'frigate', 'cruiser', 'capital', 'station', 'mine'] as Tier[])
+      row[tr] = ws.reduce((s, w) => s + (w.damage * (w.burst ?? 1) * effect(w.kind, tr) * accuracy(w.kind, tr)) / w.cooldown, 0)
+    DPS.set(t.id, row)
+  }
+  return row[tier]
+}
+/** The range a ship closes to before it stops and fights. */
+function fightRange(t: UnitType) {
+  const ws = [...t.weapons, ...t.hardpoints.flatMap((h) => (h.weapon ? [h.weapon] : []))]
+  if (!ws.length) return 0
+  const best = ws.reduce((a, b) => (b.damage / b.cooldown > a.damage / a.cooldown ? b : a))
+  return best.range
+}
+
+// --- Setup -----------------------------------------------------------------------------------------
+
+export const MAP_W = 5600
+export const MAP_H = 3400
+
+export function spawn(w: World, id: string, owner: Owner, x: number, y: number, a: number, squad = 0): Unit {
+  const t = UNIT[id]
+  const lvl = t.tier === 'station' ? w.players[owner].level : 1
+  const hullMax = t.hull * (1 + STATION_LEVEL_BONUS * (lvl - 1))
+  const u: Unit = {
+    id: w.nextId++, t, owner, x, y, a, v: 0, hull: hullMax, hullMax, shield: t.shield,
+    hps: t.hardpoints.map((h) => ({ hp: h.hp, max: h.hp })),
+    guns: [...t.weapons.map((wp) => ({ w: wp, hp: -1 })), ...t.hardpoints.flatMap((h, i) => (h.weapon ? [{ w: h.weapon, hp: i }] : []))].map((g) => ({
+      ...g, cd: Math.random() * g.w.cooldown, burst: 0, burstT: 0, target: 0, aim: 0,
+    })),
+    order: { k: 'idle' }, ax: x, ay: y, squad, parent: 0, target: 0, retarget: Math.random() * 0.5, lastHit: -99, shieldHit: -99, hitAngle: 0,
+    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, seen: [owner === 0, owner === 1], born: w.time, kills: 0,
+  }
+  w.units.push(u)
+  w.byId.set(u.id, u)
+  return u
+}
+
+let squadSeq = 1
+/** A whole order's worth: one ship, or a squadron of fighters in a loose vee. */
+export function spawnGroup(w: World, id: string, owner: Owner, x: number, y: number, a: number) {
+  const t = UNIT[id]
+  const squad = t.squad > 1 ? squadSeq++ : 0
+  const out: Unit[] = []
+  for (let i = 0; i < t.squad; i++) {
+    const row = Math.ceil(i / 2)
+    const side = i === 0 ? 0 : i % 2 ? -1 : 1
+    const back = row * 26
+    const off = side * row * 24
+    out.push(spawn(w, id, owner, x - Math.cos(a) * back - Math.sin(a) * off, y - Math.sin(a) * back + Math.cos(a) * off, a, squad))
+  }
+  return out
+}
+
+export function newWorld(f0: FactionId, f1: FactionId, opts: { seed?: number; incomeMul?: [number, number] } = {}): World {
+  const r = rng(opts.seed ?? Math.floor(Math.random() * 1e9))
+  const W = MAP_W
+  const H = MAP_H
+  const player = (faction: FactionId, o: Owner): Player => ({
+    faction, credits: START_CREDITS, income: 0, incomeMul: opts.incomeMul?.[o] ?? 1, level: 1, station: 0, queue: [], upgrade: null,
+    rally: { x: o === 0 ? 1250 : W - 1250, y: H / 2 }, pop: 0, popCap: BASE_POP, lastAlarm: -99, stats: { built: 0, lost: 0, killed: 0, earned: 0 },
+  })
+  const w: World = {
+    w: W, h: H, time: 0, units: [], byId: new Map(), players: [player(f0, 0), player(f1, 1)], nodes: [], beacons: [], rocks: [], shots: [], events: [],
+    nextId: 1, winner: -1, grid: new Map(), seenT: 0,
+  }
+  // Ore: three per side, mirrored, and two in the contested middle.
+  const half = [
+    [1150, 640],
+    [1150, H - 640],
+    [2050, H / 2 - 520],
+  ]
+  let nid = 0
+  for (const [x, y] of half) {
+    w.nodes.push({ id: nid++, x, y, r: 75, rot: r() * TAU, mine: 0 })
+    w.nodes.push({ id: nid++, x: W - x, y: H - y, r: 75, rot: r() * TAU, mine: 0 })
+  }
+  w.nodes.push({ id: nid++, x: W / 2 - 160, y: H / 2 - 950, r: 75, rot: r() * TAU, mine: 0 })
+  w.nodes.push({ id: nid++, x: W / 2 + 160, y: H / 2 + 950, r: 75, rot: r() * TAU, mine: 0 })
+  w.beacons = [
+    { id: 0, x: W / 2, y: 430, owner: -1, progress: 0 },
+    { id: 1, x: W / 2, y: H / 2, owner: -1, progress: 0 },
+    { id: 2, x: W / 2, y: H - 430, owner: -1, progress: 0 },
+  ]
+  // Asteroid fields, mirrored through the centre so neither side gets the better lanes.
+  const keepClear = [
+    ...w.nodes.map((n) => [n.x, n.y, 260]),
+    ...w.beacons.map((b) => [b.x, b.y, 330]),
+    [650, H / 2, 700],
+    [W - 650, H / 2, 700],
+  ]
+  let tries = 0
+  while (w.rocks.length < 44 && tries++ < 2000) {
+    const cx = 300 + r() * (W / 2 - 300)
+    const cy = 200 + r() * (H - 400)
+    const rad = 30 + r() ** 2 * 110
+    if (keepClear.some(([x, y, c]) => d2(cx, cy, x, y) < (c + rad) ** 2)) continue
+    if (Math.abs(cy - H / 2) < 260 && cx > 900) continue // keep the centre lane open
+    if (w.rocks.some((k) => d2(cx, cy, k.x, k.y) < (k.r + rad + 40) ** 2)) continue
+    const kind = r() < 0.5 ? 0 : 1
+    const rot = r() * TAU
+    const spin = (r() - 0.5) * 0.1
+    w.rocks.push({ x: cx, y: cy, r: rad, rot, spin, kind }, { x: W - cx, y: H - cy, r: rad, rot: rot + Math.PI, spin, kind })
+  }
+  // Stations, a starting patrol, and a mining platform already drilling the nearest ore.
+  for (const o of [0, 1] as Owner[]) {
+    const f = w.players[o].faction
+    const sx = o === 0 ? 650 : W - 650
+    const face = o === 0 ? 0 : Math.PI
+    const st = spawn(w, unitOf(f, 'station').id, o, sx, H / 2, face - Math.PI / 2)
+    w.players[o].station = st.id
+    const dir = o === 0 ? 1 : -1
+    spawnGroup(w, unitOf(f, 'fighter').id, o, sx + dir * 420, H / 2 - 120, face)
+    spawn(w, unitOf(f, 'gunship').id, o, sx + dir * 380, H / 2 + 140, face)
+    spawn(w, unitOf(f, 'gunship').id, o, sx + dir * 470, H / 2 + 230, face)
+    const node = w.nodes.filter((n) => (o === 0 ? n.x < W / 2 : n.x > W / 2)).sort((a, b) => d2(a.x, a.y, sx, H / 2) - d2(b.x, b.y, sx, H / 2))[0]
+    const m = spawn(w, unitOf(f, 'mine').id, o, node.x, node.y, node.rot)
+    m.node = node.id
+    node.mine = m.id
+  }
+  refreshPlayers(w)
+  return w
+}
+
+// --- Orders ------------------------------------------------------------------------------------------
+
+const commandable = (u: Unit | undefined, owner: Owner): u is Unit => !!u && !u.dead && u.owner === owner && isShip(u.t)
+
+/** Move a group, keeping its shape (squeezed if it's spread out) and the pace of its slowest ship. */
+export function cmdMove(w: World, owner: Owner, ids: number[], x: number, y: number, attack = false) {
+  const us = ids.map((i) => w.byId.get(i)).filter((u) => commandable(u, owner))
+  if (!us.length) return
+  const cx = us.reduce((s, u) => s + u.x, 0) / us.length
+  const cy = us.reduce((s, u) => s + u.y, 0) / us.length
+  const spread = Math.max(1, ...us.map((u) => Math.hypot(u.x - cx, u.y - cy)))
+  const fit = Math.min(1, (90 + Math.sqrt(us.length) * 70) / spread)
+  const pace = us.length > 1 ? Math.min(...us.map((u) => speedOf(u))) : Infinity
+  for (const u of us) {
+    const tx = clamp(x + (u.x - cx) * fit, 40, w.w - 40)
+    const ty = clamp(y + (u.y - cy) * fit, 40, w.h - 40)
+    u.order = { k: 'move', x: tx, y: ty, attack, speed: pace }
+    u.target = 0
+    u.parent = 0
+  }
+}
+
+export function cmdAttack(w: World, owner: Owner, ids: number[], target: number, hp = -1) {
+  const t = w.byId.get(target)
+  if (!t || t.dead || t.owner === owner) return
+  for (const i of ids) {
+    const u = w.byId.get(i)
+    if (!commandable(u, owner)) continue
+    u.order = { k: 'attack', id: target, hp: hp >= 0 && hp < t.hps.length ? hp : -1 }
+    u.target = target
+    u.parent = 0
+  }
+}
+
+export function cmdStop(w: World, owner: Owner, ids: number[]) {
+  for (const i of ids) {
+    const u = w.byId.get(i)
+    if (!commandable(u, owner)) continue
+    u.order = { k: 'idle' }
+    u.ax = u.x
+    u.ay = u.y
+    u.target = 0
+  }
+}
+
+/** Which of a group's ships can fire their ability now. */
+export function cmdAbility(w: World, owner: Owner, ids: number[]) {
+  let used = 0
+  for (const i of ids) {
+    const u = w.byId.get(i)
+    if (!u || u.dead || u.owner !== owner || !u.t.ability || u.abilityCd > 0) continue
+    const ab = ABILITIES[u.t.ability]
+    u.abilityCd = ab.cooldown
+    u.abilityOn = ab.duration
+    if (u.t.ability === 'shieldBoost') u.shield = Math.min(shieldMax(u), u.shield + shieldMax(u) * 0.5)
+    if (u.t.ability === 'tractor')
+      for (const e of w.units) if (!e.dead && e.owner !== owner && isShip(e.t) && d2(e.x, e.y, u.x, u.y) < ab.range! ** 2) e.slow = ab.duration
+    if (u.t.ability === 'launchSwarm') for (let k = 0; k < 2; k++) launch(w, u, true)
+    w.events.push({ k: 'ability', owner, id: u.t.ability, x: u.x, y: u.y })
+    used++
+  }
+  return used
+}
+
+export function cmdRally(w: World, owner: Owner, x: number, y: number) {
+  w.players[owner].rally = { x: clamp(x, 40, w.w - 40), y: clamp(y, 40, w.h - 40) }
+}
+
+const queuedPop = (p: Player) => p.queue.reduce((s, q) => s + UNIT[q.unit].pop, 0)
+const capitals = (w: World, o: Owner) =>
+  w.units.filter((u) => !u.dead && u.owner === o && u.t.tier === 'capital').length + w.players[o].queue.filter((q) => UNIT[q.unit].tier === 'capital').length
+
+/** Why a ship can't be ordered right now, or null if it can. */
+export function cantBuild(w: World, owner: Owner, id: string): string | null {
+  const p = w.players[owner]
+  const t = UNIT[id]
+  if (!w.byId.get(p.station) || w.byId.get(p.station)!.dead) return 'No station'
+  if (t.level > p.level) return `Needs station level ${t.level}`
+  if (t.tier === 'capital' && capitals(w, owner) >= MAX_CAPITALS) return 'One flagship at a time'
+  if (p.queue.length >= MAX_QUEUE) return 'Queue full'
+  if (p.pop + queuedPop(p) + t.pop > p.popCap) return 'Fleet at its limit: capture beacons or upgrade the station'
+  if (p.credits < t.cost) return 'Not enough credits'
+  return null
+}
+
+export function cmdBuild(w: World, owner: Owner, id: string) {
+  const why = cantBuild(w, owner, id)
+  if (why) return why
+  const p = w.players[owner]
+  const t = UNIT[id]
+  p.credits -= t.cost
+  p.queue.push({ unit: id, left: t.build, total: t.build })
+  return null
+}
+
+export function cmdCancel(w: World, owner: Owner, index: number) {
+  const p = w.players[owner]
+  const q = p.queue[index]
+  if (!q) return
+  p.credits += UNIT[q.unit].cost
+  p.queue.splice(index, 1)
+}
+
+export function cantUpgrade(w: World, owner: Owner): string | null {
+  const p = w.players[owner]
+  if (p.level >= MAX_LEVEL) return 'Fully upgraded'
+  if (p.upgrade) return 'Upgrade under way'
+  if (p.credits < UPGRADES[p.level + 1]!.cost) return 'Not enough credits'
+  return null
+}
+
+export function cmdUpgrade(w: World, owner: Owner) {
+  const why = cantUpgrade(w, owner)
+  if (why) return why
+  const p = w.players[owner]
+  const up = UPGRADES[p.level + 1]!
+  p.credits -= up.cost
+  p.upgrade = { left: up.time, total: up.time }
+  return null
+}
+
+export function cancelUpgrade(w: World, owner: Owner) {
+  const p = w.players[owner]
+  if (!p.upgrade) return
+  p.credits += UPGRADES[p.level + 1]!.cost
+  p.upgrade = null
+}
+
+export function cantMine(w: World, owner: Owner, node: number): string | null {
+  const n = w.nodes[node]
+  const p = w.players[owner]
+  if (!n) return 'No ore there'
+  if (n.mine) return 'Already taken'
+  const t = unitOf(p.faction, 'mine')
+  if (p.credits < t.cost) return 'Not enough credits'
+  // Enemy warships parked on the ore stop construction.
+  if (w.units.some((u) => !u.dead && u.owner !== owner && isShip(u.t) && u.t.tier !== 'fighter' && d2(u.x, u.y, n.x, n.y) < 500 ** 2)) return 'Enemy ships are guarding it'
+  return null
+}
+
+export function cmdMine(w: World, owner: Owner, node: number) {
+  const why = cantMine(w, owner, node)
+  if (why) return why
+  const p = w.players[owner]
+  const n = w.nodes[node]
+  const t = unitOf(p.faction, 'mine')
+  p.credits -= t.cost
+  const m = spawn(w, t.id, owner, n.x, n.y, n.rot)
+  m.building = t.build
+  m.hull = m.hullMax * 0.25
+  m.node = n.id
+  n.mine = m.id
+  return null
+}
+
+// --- Simulation -----------------------------------------------------------------------------------
+
+const CELL = 320
+const key = (cx: number, cy: number) => cx + cy * 1000
+
+function buildGrid(w: World) {
+  w.grid.clear()
+  for (const u of w.units) {
+    if (u.dead) continue
+    const k = key(Math.floor(u.x / CELL), Math.floor(u.y / CELL))
+    let c = w.grid.get(k)
+    if (!c) w.grid.set(k, (c = []))
+    c.push(u)
+  }
+}
+
+export function near(w: World, x: number, y: number, r: number, fn: (u: Unit, dd: number) => void) {
+  const x0 = Math.floor((x - r) / CELL)
+  const x1 = Math.floor((x + r) / CELL)
+  const y0 = Math.floor((y - r) / CELL)
+  const y1 = Math.floor((y + r) / CELL)
+  const rr = r * r
+  for (let cy = y0; cy <= y1; cy++)
+    for (let cx = x0; cx <= x1; cx++) {
+      const c = w.grid.get(key(cx, cy))
+      if (!c) continue
+      for (const u of c) {
+        if (u.dead) continue
+        const dd = d2(u.x, u.y, x, y)
+        if (dd <= rr) fn(u, dd)
+      }
+    }
+}
+
+function refreshPlayers(w: World) {
+  for (const o of [0, 1] as Owner[]) {
+    const p = w.players[o]
+    let pop = 0
+    let mines = 0
+    for (const u of w.units) {
+      if (u.dead || u.owner !== o) continue
+      if (!u.parent) pop += u.t.pop / u.t.squad
+      if (u.t.tier === 'mine' && !building(u)) mines++
+    }
+    const beacons = w.beacons.filter((b) => b.owner === o).length
+    p.pop = Math.round(pop)
+    p.popCap = BASE_POP + (p.level - 1) * POP_PER_LEVEL + beacons * BEACON_POP
+    p.income = (STATION_INCOME[p.level] + mines * MINE_INCOME + beacons * BEACON_INCOME) * p.incomeMul
+  }
+}
+
+function launch(w: World, carrier: Unit, extra = false) {
+  const c = carrier.t.carrier
+  if (!c || !hangarsUp(carrier)) return
+  if (!extra) {
+    const out = new Set(w.units.filter((u) => !u.dead && u.parent === carrier.id).map((u) => u.squad))
+    if (out.size >= c.max) return
+  }
+  const bays = carrier.t.hardpoints.map((h, i) => (h.kind === 'hangar' && alive(carrier, i) ? i : -1)).filter((i) => i >= 0)
+  const bay = hpPos(carrier, bays[Math.floor(Math.random() * bays.length)])
+  for (const f of spawnGroup(w, c.unit, carrier.owner, bay.x, bay.y, carrier.a)) {
+    f.parent = carrier.id
+    f.v = f.t.speed * 0.6
+  }
+  w.events.push({ k: 'launch', owner: carrier.owner, x: bay.x, y: bay.y })
+}
+
+function kill(w: World, u: Unit, by: Owner | -1) {
+  if (u.dead) return
+  u.dead = true
+  w.events.push({ k: 'boom', x: u.x, y: u.y, tier: u.t.tier, owner: u.owner, size: u.t.size })
+  w.players[u.owner].stats.lost++
+  if (by !== -1) w.players[by].stats.killed++
+  if (u.t.tier === 'mine' && u.node >= 0) w.nodes[u.node].mine = 0
+  if (u.t.tier === 'station' && w.winner === -1) w.winner = other(u.owner)
+}
+
+function alarm(w: World, u: Unit) {
+  const p = w.players[u.owner]
+  if (w.time - p.lastAlarm < 20) return
+  if (u.t.tier !== 'station' && u.t.tier !== 'mine' && u.t.tier !== 'capital') return
+  p.lastAlarm = w.time
+  w.events.push({ k: 'alarm', owner: u.owner, x: u.x, y: u.y, what: u.t.name })
+}
+
+/** One bolt landing. Shields soak it first (missiles slip most of it past), then the hardpoint it
+ * was aimed at takes it, with half spilling into the hull; or the hull takes it all. */
+export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: number, fromX: number, fromY: number, by: Owner, shooter = 0) {
+  if (u.dead) return
+  u.lastHit = w.time
+  alarm(w, u)
+  let rest = dmg
+  if (u.shield > 0) {
+    const onShield = kind === 'missile' ? dmg * 0.35 : dmg
+    const soaked = Math.min(u.shield, onShield)
+    u.shield -= soaked
+    rest -= soaked
+    u.shieldHit = w.time
+    u.hitAngle = Math.atan2(fromY - u.y, fromX - u.x)
+  }
+  if (rest <= 0) return
+  if (hp >= 0 && alive(u, hp)) {
+    const h = u.hps[hp]
+    h.hp -= rest
+    u.hull -= rest * 0.5
+    if (h.hp <= 0) {
+      h.hp = 0
+      const p = hpPos(u, hp)
+      const kindName = u.t.hardpoints[hp].kind
+      w.events.push({ k: 'hpdown', x: p.x, y: p.y, owner: u.owner, what: kindName })
+      if (kindName === 'shield') u.shield = Math.min(u.shield, shieldMax(u))
+    }
+  } else u.hull -= rest
+  if (u.hull <= 0) {
+    u.hull = 0
+    kill(w, u, by)
+    const killer = w.byId.get(shooter)
+    if (killer && !killer.dead) killer.kills++
+  }
+}
+
+function valid(w: World, id: number, owner: Owner) {
+  const t = w.byId.get(id)
+  return t && !t.dead && t.owner !== owner && t.seen[owner] ? t : undefined
+}
+
+/** The best thing for a ship to shoot within `r`: what its guns hurt most, nearest first. */
+function pickTarget(w: World, u: Unit, r: number) {
+  let best: Unit | undefined
+  let score = 0
+  near(w, u.x, u.y, r, (e, dd) => {
+    if (e.owner === u.owner || !e.seen[u.owner]) return
+    const s = (dpsVs(u.t, e.t.tier) + 0.01) / (Math.sqrt(dd) + 250) * (e.t.tier === 'mine' ? 0.6 : 1)
+    if (s > score) {
+      score = s
+      best = e
+    }
+  })
+  return best
+}
+
+function steer(u: Unit, tx: number, ty: number, want: number, dt: number, inPlace = false) {
+  const turn = u.t.turn * (u.slow > 0 ? 0.5 : 1)
+  const ang = Math.atan2(ty - u.y, tx - u.x)
+  const diff = wrap(ang - u.a)
+  u.a = wrap(u.a + clamp(diff, -turn * dt, turn * dt))
+  // Big ships slow right down to turn; fighters bank through it.
+  const fighter = u.t.tier === 'fighter'
+  const align = fighter ? 0.55 + 0.45 * Math.max(0, Math.cos(diff)) : Math.max(inPlace ? 0 : 0.15, Math.cos(diff))
+  const target = want * align
+  const acc = u.t.speed * (fighter ? 1.6 : 0.6)
+  u.v += clamp(target - u.v, -acc * dt * 1.5, acc * dt)
+}
+
+function moveUnit(w: World, u: Unit, dt: number) {
+  const t = u.t
+  if (!isShip(t) || building(u)) return
+  const max = speedOf(u)
+  const fighter = t.tier === 'fighter'
+  const parent = u.parent ? w.byId.get(u.parent) : undefined
+  if (u.parent && (!parent || parent.dead)) u.parent = 0
+  if (parent && u.order.k === 'idle') {
+    u.ax = parent.x
+    u.ay = parent.y
+  }
+
+  // Who are we fighting? Explicit attack orders stick; otherwise look around now and then.
+  u.retarget -= dt
+  if (u.order.k === 'attack') {
+    const tgt = valid(w, u.order.id, u.owner)
+    if (!tgt) {
+      u.order = { k: 'idle' }
+      u.ax = u.x
+      u.ay = u.y
+    } else u.target = tgt.id
+  } else if (u.retarget <= 0) {
+    u.retarget = 0.4 + Math.random() * 0.3
+    const engage = u.order.k === 'idle' || (u.order.k === 'move' && u.order.attack)
+    const cur = valid(w, u.target, u.owner)
+    const leash = fighter ? 1100 : 700
+    if (!engage) u.target = 0
+    else if (cur && d2(cur.x, cur.y, u.ax, u.ay) < leash ** 2 && d2(cur.x, cur.y, u.x, u.y) < (t.sensor * 1.1) ** 2) u.target = cur.id
+    else u.target = pickTarget(w, u, Math.min(t.sensor, fighter ? 900 : 800))?.id ?? 0
+  }
+  const tgt = u.target ? w.byId.get(u.target) : undefined
+
+  const fighting = !!tgt && !tgt.dead && (u.order.k !== 'move' || u.order.attack)
+  if (fighting) {
+    const e = tgt!
+    if (fighter) {
+      // Dogfight: chase with a little lead, overshoot, loop back round.
+      const lead = Math.hypot(e.x - u.x, e.y - u.y) / 700
+      const ex = e.x + Math.cos(e.a) * e.v * lead
+      const ey = e.y + Math.sin(e.a) * e.v * lead
+      const close = d2(u.x, u.y, e.x, e.y) < (radius(e.t) + 45) ** 2
+      if (close) steer(u, u.x + Math.cos(u.a) * 100, u.y + Math.sin(u.a) * 100, max, dt)
+      else steer(u, ex + ((u.id % 7) - 3) * 8, ey + ((u.id % 5) - 2) * 8, max, dt)
+    } else {
+      // Close to fighting range, then hold there and swing round to face the enemy.
+      // Brake in time to stop at range rather than ramming them.
+      const want = fightRange(t) * 0.8 + radius(e.t) * 0.5
+      const dist = Math.hypot(e.x - u.x, e.y - u.y)
+      const brake = Math.sqrt(2 * t.speed * 0.9 * Math.max(0, dist - want))
+      steer(u, e.x, e.y, dist > want ? Math.min(max, brake) : 0, dt, dist <= want)
+    }
+  } else if (u.order.k === 'move') {
+    const o = u.order
+    const dist = Math.hypot(o.x - u.x, o.y - u.y)
+    const pace = Math.min(max, o.speed)
+    if (dist < (fighter ? 60 : 24 + radius(t) * 0.2)) {
+      u.order = { k: 'idle' }
+      u.ax = o.x
+      u.ay = o.y
+    } else steer(u, o.x, o.y, fighter ? pace : Math.min(pace, dist * 0.9 + 12), dt)
+  } else {
+    // Idle: fighters circle their spot, everything else drifts back to it and waits.
+    const dist = Math.hypot(u.ax - u.x, u.ay - u.y)
+    if (fighter) {
+      const ang = w.time * 0.9 + u.id
+      const r = 70 + (u.id % 4) * 18
+      steer(u, u.ax + Math.cos(ang) * r, u.ay + Math.sin(ang) * r, max * 0.65, dt)
+    } else if (dist > 30 + radius(t) * 0.3) steer(u, u.ax, u.ay, Math.min(max, dist * 0.8 + 10), dt)
+    else u.v = Math.max(0, u.v - t.speed * dt)
+  }
+
+  u.x += Math.cos(u.a) * u.v * dt
+  u.y += Math.sin(u.a) * u.v * dt
+
+  // Keep clear of rocks, structures and each other (fighters only dodge the big stuff).
+  const r0 = radius(t)
+  for (const k of w.rocks) {
+    const min = k.r + r0 * 0.7
+    const dd = d2(u.x, u.y, k.x, k.y)
+    if (dd < min * min) {
+      const d = Math.sqrt(dd) || 1
+      u.x = k.x + ((u.x - k.x) / d) * min
+      u.y = k.y + ((u.y - k.y) / d) * min
+    }
+  }
+  if (!fighter)
+    near(w, u.x, u.y, r0 + 240, (o, dd) => {
+      if (o === u || o.t.tier === 'fighter') return
+      const min = (r0 + radius(o.t)) * 0.75
+      if (dd >= min * min) return
+      // Each of the pair moves part of the overlap away per tick; a structure doesn't budge, so the ship takes all of it.
+      const d = Math.sqrt(dd) || 1
+      const push = (min - d) * Math.min(1, 4 * dt) * (isShip(o.t) ? 1 : 2.5)
+      const nx = d > 1 ? (u.x - o.x) / d : Math.cos(u.id)
+      const ny = d > 1 ? (u.y - o.y) / d : Math.sin(u.id)
+      u.x += nx * push
+      u.y += ny * push
+    })
+  u.x = clamp(u.x, 20, w.w - 20)
+  u.y = clamp(u.y, 20, w.h - 20)
+}
+
+const BOLT_SPEED: Record<WeaponKind, number> = { laser: 1100, flak: 1250, turbo: 850, missile: 480 }
+
+function fire(w: World, u: Unit, g: Gun, e: Unit) {
+  const from = g.hp >= 0 ? hpPos(u, g.hp) : u.t.tier === 'fighter' ? { x: u.x + Math.cos(u.a) * 10, y: u.y + Math.sin(u.a) * 10 } : shipPoint(u, 3 + Math.random() * 4, 2 + Math.random() * 6)
+  // Aim: the hardpoint we were told to hit, or (for heavy guns) whatever hardpoint faces us.
+  let hp = -1
+  const forced = u.order.k === 'attack' && u.order.id === e.id ? u.order.hp : -1
+  if (forced >= 0 && alive(e, forced)) hp = forced
+  else if (e.hps.length && Math.random() < 0.6) {
+    let bd = Infinity
+    e.hps.forEach((h, i) => {
+      if (h.hp <= 0) return
+      const p = hpPos(e, i)
+      const dd = d2(p.x, p.y, from.x, from.y)
+      if (dd < bd) {
+        bd = dd
+        hp = i
+      }
+    })
+  }
+  const aim = hp >= 0 ? hpPos(e, hp) : { x: e.x + (Math.random() - 0.5) * radius(e.t) * 0.8, y: e.y + (Math.random() - 0.5) * radius(e.t) * 0.8 }
+  const speed = BOLT_SPEED[g.w.kind]
+  let t = Math.hypot(aim.x - from.x, aim.y - from.y) / speed
+  let ax = aim.x + Math.cos(e.a) * e.v * t
+  let ay = aim.y + Math.sin(e.a) * e.v * t
+  const hit = Math.random() < accuracy(g.w.kind, e.t.tier) * (e.slow > 0 ? 1.2 : 1)
+  if (!hit) {
+    const off = radius(e.t) * (0.8 + Math.random()) + 20
+    const side = Math.random() < 0.5 ? -1 : 1
+    const ang = Math.atan2(ay - from.y, ax - from.x) + side * Math.PI / 2
+    ax += Math.cos(ang) * off
+    ay += Math.sin(ang) * off
+  }
+  t = Math.hypot(ax - from.x, ay - from.y) / speed
+  const p = w.players[u.owner]
+  let dmg = g.w.damage * effect(g.w.kind, e.t.tier)
+  if (u.t.tier === 'station') dmg *= 1 + STATION_LEVEL_BONUS * (p.level - 1)
+  if (u.abilityOn > 0 && u.t.ability === 'broadside' && g.w.kind === 'turbo') dmg *= 1.6
+  w.shots.push({
+    x: from.x, y: from.y, vx: (ax - from.x) / Math.max(t, 0.001), vy: (ay - from.y) / Math.max(t, 0.001), left: hit ? t : t * 1.6,
+    kind: g.w.kind, owner: u.owner, target: e.id, hp, dmg, hit, sx: from.x, sy: from.y, age: 0, from: u.id,
+  })
+  w.events.push({ k: 'fire', kind: g.w.kind, x: from.x, y: from.y, owner: u.owner })
+}
+
+function shoot(w: World, u: Unit, dt: number) {
+  if (building(u) || !u.guns.length) return
+  const primary = u.target ? w.byId.get(u.target) : undefined
+  for (const g of u.guns) {
+    if (g.hp >= 0 && !alive(u, g.hp)) continue
+    g.cd -= dt
+    if (g.burst > 0) {
+      g.burstT -= dt
+      if (g.burstT <= 0) {
+        const e = valid(w, g.target, u.owner)
+        if (e) fire(w, u, g, e)
+        g.burst--
+        g.burstT = 0.11
+      }
+      continue
+    }
+    if (g.cd > 0) continue
+    const from = g.hp >= 0 ? hpPos(u, g.hp) : u
+    const inReach = (e: Unit) => {
+      const rr = g.w.range + radius(e.t) * 0.5
+      if (d2(e.x, e.y, from.x, from.y) > rr * rr) return false
+      if (g.w.arc && Math.abs(wrap(Math.atan2(e.y - u.y, e.x - u.x) - u.a)) > g.w.arc) return false
+      return true
+    }
+    let e: Unit | undefined
+    if (primary && !primary.dead && primary.seen[u.owner] && effect(g.w.kind, primary.t.tier) >= 0.3 && inReach(primary)) e = primary
+    else {
+      let score = 0
+      near(w, from.x, from.y, g.w.range + 200, (o, dd) => {
+        if (o.owner === u.owner || !o.seen[u.owner] || !inReach(o)) return
+        const s = (effect(g.w.kind, o.t.tier) * accuracy(g.w.kind, o.t.tier)) / (Math.sqrt(dd) + 200)
+        if (s > score) {
+          score = s
+          e = o
+        }
+      })
+    }
+    if (!e) {
+      g.cd = 0.15
+      continue
+    }
+    g.target = e.id
+    g.aim = Math.atan2(e.y - from.y, e.x - from.x)
+    fire(w, u, g, e)
+    const barrage = u.abilityOn > 0 && u.t.ability === 'flakBarrage' && g.w.kind === 'flak' ? 0.5 : 1
+    g.cd = g.w.cooldown * barrage * (0.9 + Math.random() * 0.2)
+    g.burst = (g.w.burst ?? 1) - 1
+    g.burstT = 0.11
+  }
+}
+
+function moveShots(w: World, dt: number) {
+  const keep: Shot[] = []
+  for (const s of w.shots) {
+    s.age += dt
+    // Missiles home in; bolts fly straight.
+    if (s.kind === 'missile' && s.hit) {
+      const e = w.byId.get(s.target)
+      if (e && !e.dead) {
+        const sp = Math.hypot(s.vx, s.vy)
+        const ang = Math.atan2(e.y - s.y, e.x - s.x)
+        const cur = Math.atan2(s.vy, s.vx)
+        const na = cur + clamp(wrap(ang - cur), -3 * dt, 3 * dt)
+        s.vx = Math.cos(na) * sp
+        s.vy = Math.sin(na) * sp
+        s.left = Math.max(s.left, Math.hypot(e.x - s.x, e.y - s.y) / sp)
+      }
+    }
+    s.x += s.vx * dt
+    s.y += s.vy * dt
+    s.left -= dt
+    if (s.left > 0 && s.age < 4) {
+      keep.push(s)
+      continue
+    }
+    if (!s.hit) continue
+    const e = w.byId.get(s.target)
+    if (!e || e.dead) continue
+    const shielded = e.shield > 0
+    damage(w, e, s.dmg, s.kind, s.hp, s.sx, s.sy, s.owner, s.from)
+    w.events.push({ k: 'hit', kind: s.kind, x: s.x, y: s.y, shield: shielded && s.kind !== 'missile', owner: e.owner })
+  }
+  w.shots = keep
+}
+
+function economy(w: World, dt: number) {
+  for (const o of [0, 1] as Owner[]) {
+    const p = w.players[o]
+    const st = w.byId.get(p.station)
+    if (!st || st.dead) continue
+    p.credits += p.income * dt
+    p.stats.earned += p.income * dt
+    if (p.upgrade) {
+      p.upgrade.left -= dt
+      if (p.upgrade.left <= 0) {
+        p.upgrade = null
+        p.level++
+        const grow = (1 + STATION_LEVEL_BONUS * (p.level - 1)) / (1 + STATION_LEVEL_BONUS * (p.level - 2))
+        st.hullMax *= grow
+        st.hull *= grow
+        w.events.push({ k: 'level', owner: o, level: p.level })
+      }
+    }
+    const q = p.queue[0]
+    if (q) {
+      q.left -= dt * (hangarsUp(st) ? 1 : 0.5)
+      if (q.left <= 0) {
+        p.queue.shift()
+        const bay = st.t.hardpoints.findIndex((h) => h.kind === 'hangar')
+        const from = bay >= 0 ? hpPos(st, bay) : st
+        const a = Math.atan2(p.rally.y - from.y, p.rally.x - from.x)
+        const group = spawnGroup(w, q.unit, o, from.x, from.y, a)
+        for (const u of group) u.v = u.t.speed * 0.5
+        cmdMove(w, o, group.map((u) => u.id), p.rally.x, p.rally.y, true)
+        p.stats.built++
+        w.events.push({ k: 'built', owner: o, unit: q.unit, x: from.x, y: from.y })
+      }
+    }
+  }
+}
+
+function beacons(w: World, dt: number) {
+  for (const b of w.beacons) {
+    const power = [0, 0]
+    near(w, b.x, b.y, 320, (u) => {
+      if (!isShip(u.t)) return
+      power[u.owner] += u.t.tier === 'fighter' ? 0.25 : 1
+    })
+    const prev = b.owner
+    // -1 is fully player 0's, +1 fully player 1's.
+    if (power[0] > 0 && power[1] === 0) b.progress -= (dt / 14) * Math.min(2, Math.sqrt(power[0]))
+    else if (power[1] > 0 && power[0] === 0) b.progress += (dt / 14) * Math.min(2, Math.sqrt(power[1]))
+    else if (power[0] === 0 && power[1] === 0) {
+      const home = b.owner === 0 ? -1 : b.owner === 1 ? 1 : 0
+      b.progress += clamp(home - b.progress, -dt / 40, dt / 40)
+    }
+    b.progress = clamp(b.progress, -1, 1)
+    if (b.owner === 0 && b.progress >= 0) b.owner = -1
+    if (b.owner === 1 && b.progress <= 0) b.owner = -1
+    if (b.owner === -1 && b.progress <= -1) b.owner = 0
+    if (b.owner === -1 && b.progress >= 1) b.owner = 1
+    if (b.owner !== prev) w.events.push({ k: 'beacon', owner: b.owner, prev, x: b.x, y: b.y })
+  }
+}
+
+function sight(w: World) {
+  const eyes: [Unit[], Unit[]] = [[], []]
+  for (const u of w.units) if (!u.dead) eyes[u.owner].push(u)
+  for (const u of w.units) {
+    if (u.dead) continue
+    const o = other(u.owner)
+    u.seen[u.owner] = true
+    // Big structures are always on the map: everyone knows where the stations are.
+    if (u.t.tier === 'station') {
+      u.seen[o] = true
+      continue
+    }
+    let s = false
+    for (const e of eyes[o]) {
+      const r = e.t.sensor * (building(e) ? 0.5 : 1)
+      if (d2(u.x, u.y, e.x, e.y) < r * r) {
+        s = true
+        break
+      }
+    }
+    u.seen[o] = s
+  }
+}
+
+export function tick(w: World, dt = STEP) {
+  if (w.winner !== -1) return
+  w.time += dt
+  buildGrid(w)
+  w.seenT -= dt
+  if (w.seenT <= 0) {
+    w.seenT = 0.25
+    sight(w)
+    refreshPlayers(w)
+  }
+  economy(w, dt)
+  beacons(w, dt)
+  for (const u of w.units) {
+    if (u.dead) continue
+    if (u.building > 0) {
+      u.building -= dt
+      u.hull = Math.min(u.hullMax, u.hull + (u.hullMax * 0.75 * dt) / u.t.build)
+      if (u.building <= 0) {
+        u.building = 0
+        w.events.push({ k: 'built', owner: u.owner, unit: u.t.id, x: u.x, y: u.y })
+      }
+      continue
+    }
+    if (u.abilityCd > 0) u.abilityCd -= dt
+    if (u.abilityOn > 0) {
+      u.abilityOn -= dt
+      if (u.t.ability === 'repairSwarm') u.hull = Math.min(u.hullMax, u.hull + u.hullMax * 0.03 * dt)
+    }
+    if (u.slow > 0) u.slow -= dt
+    // Shields recharge, faster once out of the fight for a few seconds.
+    const smax = shieldMax(u)
+    if (u.shield < smax) u.shield = Math.min(smax, u.shield + u.t.regen * dt * (w.time - u.lastHit > 6 ? 2 : 1))
+    if (u.t.carrier) {
+      u.hangarT += dt
+      if (u.hangarT >= u.t.carrier.every) {
+        u.hangarT = 0
+        launch(w, u)
+      }
+    }
+    moveUnit(w, u, dt)
+    shoot(w, u, dt)
+  }
+  moveShots(w, dt)
+  if (w.units.some((u) => u.dead)) {
+    for (const u of w.units) if (u.dead) w.byId.delete(u.id)
+    w.units = w.units.filter((u) => !u.dead)
+  }
+  for (const r of w.rocks) r.rot += r.spin * dt
+}
+
+/** Ships a player owns, for selection helpers and the AI. */
+export const fleet = (w: World, o: Owner) => w.units.filter((u) => !u.dead && u.owner === o && isShip(u.t))
