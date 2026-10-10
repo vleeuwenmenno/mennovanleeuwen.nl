@@ -9,7 +9,7 @@ import { HP_NAME } from './empires/icons'
 import { Renderer, relColor, type Camera, type View } from './empires/render'
 import { inRect, type Pt } from './empires/maps'
 import {
-  STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdHold, cmdMove, cmdPatrol, cmdRally, cmdResearch, RANKS, autoStart, cmdLine, cmdSite, lineGroups, spreadAlong, cmdStop, foes, hpPos, newWorld, startProblem, tick, type Owner, type SimEvent,
+  STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdHold, cmdMove, cmdPatrol, cmdRally, cmdResearch, RANKS, autoStart, closedLoop, cmdLine, cmdSite, lineGroups, spreadAlong, cmdStop, foes, hpPos, newWorld, startProblem, tick, type Owner, type SimEvent,
   type Unit, type World,
 } from './empires/sim'
 import { EmpiresSound, type OrderKind } from './empires/sound'
@@ -152,7 +152,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   const speed = useRef(1)
   const paused = useRef(false)
   const lastAlarm = useRef<{ x: number; y: number; t: number } | null>(null)
-  const drag = useRef<{ x0: number; y0: number; box: boolean; pan: boolean; moved: boolean; cx: number; cy: number; button: number } | null>(null)
+  const drag = useRef<{ x0: number; y0: number; box: boolean; pan: boolean; moved: boolean; cx: number; cy: number; button: number; attack?: boolean } | null>(null)
   const touches = useRef(new Map<number, { x: number; y: number }>())
   const pinch = useRef<{ d: number; zoom: number } | null>(null)
   const lastClick = useRef({ t: 0, id: 0 })
@@ -551,7 +551,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       // Effects and sound.
       renderer.current.consume(events, w, me)
       for (const e of events) {
-        if (e.k === 'fire') sound.fire(e.kind, where(e.x, e.y), w.players[e.owner].faction)
+        if (e.k === 'fire') sound.fire(e.kind, where(e.x, e.y), w.players[e.owner].faction, e.light)
         else if (e.k === 'hit') sound.hit(e.shield, e.kind === 'turbo' || e.kind === 'missile', where(e.x, e.y))
         else if (e.k === 'boom') sound.boom(e.size, where(e.x, e.y))
         else if (e.k === 'shieldsDown') sound.shieldsDown(where(e.x, e.y))
@@ -617,7 +617,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         node: selected.current.size ? -1 : pickedNode.current,
         hoverNode: h.node,
         hoverWreck: h.wreck,
-        line: line.current && drag.current?.moved ? { path: line.current, spots: spreadAlong(line.current, lineGroups(w, me, mySelection().filter((u) => isShip(u.t)).map((u) => u.id)).length) } : null,
+        line: line.current && drag.current?.moved ? { attack: !!drag.current.attack, ring: closedLoop(line.current), path: line.current, spots: spreadAlong(line.current, lineGroups(w, me, mySelection().filter((u) => isShip(u.t)).map((u) => u.id)).length) } : null,
         areas: deploying.current ? seats.map((s, i) => ({ r: s.area, color: relColor(w, me, i), label: s.name, mine: i === me })) : undefined,
         ghost: deploying.current && mouse.current.inside ? ghostAt(mouse.current.x, mouse.current.y) : null,
         showRally: mySelection().some((u) => u.t.tier === 'station'),
@@ -786,7 +786,8 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       // A right-click orders on release; dragging first draws a line to spread the ships along.
       if (mode.current !== 'normal') setMode('normal')
       else {
-        drag.current = { x0: p.x, y0: p.y, box: false, pan: false, moved: false, cx: 0, cy: 0, button: 2 }
+        // Ctrl draws an attack-move line instead.
+        drag.current = { x0: p.x, y0: p.y, box: false, pan: false, moved: false, cx: 0, cy: 0, button: 2, attack: e.ctrlKey || e.metaKey }
         line.current = [toWorld(p.x, p.y)]
       }
       return
@@ -862,9 +863,9 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       line.current = null
       const ids = mySelection().filter((u) => isShip(u.t)).map((u) => u.id)
       if (d.moved && ln && ln.length > 1 && ids.length) {
-        cmdLine(world.current, me, ids, ln)
-        for (const q of spreadAlong(ln, lineGroups(world.current, me, ids).length)) renderer.current.ping(q.x, q.y, '#7dffa0')
-        say('move')
+        cmdLine(world.current, me, ids, ln, d.attack)
+        for (const q of spreadAlong(ln, lineGroups(world.current, me, ids).length)) renderer.current.ping(q.x, q.y, d.attack ? '#ffaa5a' : '#7dffa0')
+        say(d.attack ? 'attackMove' : 'move')
       } else command(d.x0, d.y0, false)
       return
     }

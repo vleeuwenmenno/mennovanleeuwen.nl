@@ -128,7 +128,7 @@ export type Shot = {
 }
 
 export type SimEvent =
-  | { k: 'fire'; kind: WeaponKind; x: number; y: number; owner: Owner }
+  | { k: 'fire'; kind: WeaponKind; x: number; y: number; owner: Owner; light: boolean }
   | { k: 'hit'; kind: WeaponKind; x: number; y: number; shield: boolean; owner: Owner }
   | { k: 'boom'; x: number; y: number; tier: Tier; owner: Owner; size: number }
   | { k: 'hpdown'; x: number; y: number; owner: Owner; what: string }
@@ -452,8 +452,21 @@ export function cmdMove(w: World, owner: Owner, ids: number[], x: number, y: num
   formation(w, owner, ids, x, y, (u, tx, ty, speed) => (u.order = { k: 'move', x: tx, y: ty, attack, speed }))
 }
 
-/** `n` spots spread evenly along a drawn line, from one end to the other (one ship: the middle). */
+/** A drawn line that comes back round to where it started: ships spread round it as a ring. */
+export function closedLoop(path: Pt[]) {
+  if (path.length < 4) return false
+  let len = 0
+  for (let i = 1; i < path.length; i++) len += Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y)
+  const a = path[0]
+  const b = path[path.length - 1]
+  return len > 500 && Math.hypot(b.x - a.x, b.y - a.y) < Math.max(160, len * 0.15)
+}
+
+/** `n` spots spread evenly along a drawn line, from one end to the other (one ship: the middle),
+ * or evenly round it when it's a closed loop. */
 export function spreadAlong(path: Pt[], n: number): Pt[] {
+  const ring = closedLoop(path)
+  if (ring) path = [...path, path[0]]
   const cum = [0]
   for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y))
   const total = cum[cum.length - 1]
@@ -464,7 +477,7 @@ export function spreadAlong(path: Pt[], n: number): Pt[] {
     const t = clamp((d - cum[i - 1]) / seg, 0, 1)
     return { x: path[i - 1].x + (path[i].x - path[i - 1].x) * t, y: path[i - 1].y + (path[i].y - path[i - 1].y) * t }
   }
-  return Array.from({ length: n }, (_, i) => at(n === 1 ? total / 2 : (total * i) / (n - 1)))
+  return Array.from({ length: n }, (_, i) => at(ring ? (total * i) / n : n === 1 ? total / 2 : (total * i) / (n - 1)))
 }
 
 /** What gets one spot on a line: each ship, except that a fighter squadron shares one. */
@@ -486,13 +499,32 @@ export function lineGroups(w: World, owner: Owner, ids: number[]): Unit[][] {
 export function cmdLine(w: World, owner: Owner, ids: number[], path: Pt[], attack = false) {
   const groups = lineGroups(w, owner, ids)
   if (!groups.length || path.length < 2) return
-  const spots = spreadAlong(path, groups.length)
+  let spots = spreadAlong(path, groups.length)
   const a = path[0]
   const b = path[path.length - 1]
   const dx = b.x - a.x
   const dy = b.y - a.y
   const mid = (g: Unit[]) => ({ x: g.reduce((s, u) => s + u.x, 0) / g.length, y: g.reduce((s, u) => s + u.y, 0) / g.length })
-  const order = groups.map((g) => ({ g, c: mid(g) })).sort((p, q) => (p.c.x - q.c.x) * dx + (p.c.y - q.c.y) * dy)
+  let order = groups.map((g) => ({ g, c: mid(g) })).sort((p, q) => (p.c.x - q.c.x) * dx + (p.c.y - q.c.y) * dy)
+  if (closedLoop(path)) {
+    // Round a ring: ships in order of their bearing from its middle, spots likewise, turned to
+    // whichever start makes the shortest trip overall.
+    const cx = spots.reduce((s, p) => s + p.x, 0) / spots.length
+    const cy = spots.reduce((s, p) => s + p.y, 0) / spots.length
+    const bearing = (p: Pt) => Math.atan2(p.y - cy, p.x - cx)
+    order = groups.map((g) => ({ g, c: mid(g) })).sort((p, q) => bearing(p.c) - bearing(q.c))
+    const round = [...spots].sort((p, q) => bearing(p) - bearing(q))
+    let best = 0
+    let bestD = Infinity
+    for (let k = 0; k < round.length; k++) {
+      const d = order.reduce((s, o, i) => s + Math.hypot(o.c.x - round[(i + k) % round.length].x, o.c.y - round[(i + k) % round.length].y), 0)
+      if (d < bestD) {
+        bestD = d
+        best = k
+      }
+    }
+    spots = order.map((_, i) => round[(i + best) % round.length])
+  }
   const all = groups.flat()
   // A line keeps the pace of its slowest ship, like any group.
   const pace = all.length > 1 ? Math.min(...all.map((u) => speedOf(u))) : Infinity
@@ -1158,7 +1190,7 @@ function fire(w: World, u: Unit, g: Gun, e: Unit) {
     x: from.x, y: from.y, vx: (ax - from.x) / Math.max(t, 0.001), vy: (ay - from.y) / Math.max(t, 0.001), left: hit ? t : t * 1.6,
     kind: g.w.kind, owner: u.owner, target: e.id, hp, dmg, hit, sx: from.x, sy: from.y, age: 0, from: u.id,
   })
-  w.events.push({ k: 'fire', kind: g.w.kind, x: from.x, y: from.y, owner: u.owner })
+  w.events.push({ k: 'fire', kind: g.w.kind, x: from.x, y: from.y, owner: u.owner, light: u.t.tier === 'fighter' })
 }
 
 function shoot(w: World, u: Unit, dt: number) {

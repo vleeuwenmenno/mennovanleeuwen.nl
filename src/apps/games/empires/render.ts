@@ -40,7 +40,7 @@ export type View = {
   /** The wreck under the pointer, or 0. */
   hoverWreck: number
   /** A move line being drawn with the right button, and where each ship (or squadron) would go. */
-  line?: { path: { x: number; y: number }[]; spots: { x: number; y: number }[] } | null
+  line?: { path: { x: number; y: number }[]; spots: { x: number; y: number }[]; attack: boolean; ring: boolean } | null
   /** Before the battle starts: every player's start area, and where our station would go. */
   areas?: { r: Rect; color: string; label: string; mine: boolean }[]
   ghost?: { x: number; y: number; ok: boolean } | null
@@ -616,15 +616,20 @@ export class Renderer {
     }
 
     // A move line being drawn: the stroke, and a marker where each ship will end up.
+    // Green to move, orange to attack-move; a closed loop shows closed, as the ring it'll make.
     if (view.line) {
-      ctx.strokeStyle = 'rgba(125,255,160,0.7)'
+      const col = view.line.attack ? '#ffaa5a' : '#7dffa0'
+      ctx.strokeStyle = col
+      ctx.globalAlpha = 0.75
       ctx.lineWidth = 2.5 / z
       ctx.lineJoin = 'round'
       ctx.lineCap = 'round'
       ctx.beginPath()
       view.line.path.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)))
+      if (view.line.ring) ctx.closePath()
       ctx.stroke()
-      ctx.fillStyle = '#7dffa0'
+      ctx.globalAlpha = 1
+      ctx.fillStyle = col
       for (const q of view.line.spots) {
         ctx.beginPath()
         ctx.arc(q.x, q.y, 6 / z, 0, TAU)

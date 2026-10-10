@@ -126,19 +126,73 @@ const noise = () => Math.random() * 2 - 1
 
 type Recipe = (sr: number, r: Rnd) => Float32Array
 
-/** A blaster bolt: a bright zap that falls in pitch, through a resonant filter that falls with it. */
+/** The film's blaster trick: Ben Burtt struck a steel guy-wire, and the twang reached the
+ * microphone highs first, lows after, as a falling "pew" that rang on. A click sent down a long
+ * chain of all-pass filters does the same (each stage holds the lows back a little longer than the
+ * highs), and fed back round a short loop it rings like the wire. `stages` and `a` set how long the
+ * fall takes, `loop` how quickly it repeats, `fb` how long it rings. */
+function wire(sr: number, secs: number, o: { stages: number; a: number; loop: number; fb: number; hiss?: number }) {
+  const n = Math.ceil(secs * sr)
+  const out = new Float32Array(n)
+  const xs = new Float64Array(o.stages)
+  const ys = new Float64Array(o.stages)
+  const L = Math.max(1, Math.round(o.loop * sr))
+  const burst = Math.ceil(0.002 * sr)
+  for (let i = 0; i < n; i++) {
+    let x = (i === 0 ? 1 : 0) + (i < burst ? noise() * (o.hiss ?? 0) * (1 - i / burst) : 0) + (i >= L ? out[i - L] * o.fb : 0)
+    for (let k = 0; k < o.stages; k++) {
+      const y = -o.a * x + xs[k] + o.a * ys[k]
+      xs[k] = x
+      ys[k] = y
+      x = y
+    }
+    out[i] = x
+  }
+  // To a peak of 1, so the recipes can mix it by ear.
+  let peak = 0
+  for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(out[i]))
+  for (let i = 0; i < n; i++) out[i] /= peak || 1
+  return out
+}
+
+/** A starfighter's laser cannon: small and quick, a light "pew" with the wire's ring on it, kept
+ * out of the shrill top end. Droid fighters are buzzier. */
+const fighterBlaster = (droid: boolean): Recipe => (sr, r) => {
+  const ring = wire(sr, 0.17, { stages: 110, a: 0.9, loop: 0.026 + r() * 0.006, fb: 0.32, hiss: 0.3 })
+  const o1 = new Osc(r())
+  const o2 = new Osc(r())
+  const lp = new Svf()
+  const hp = new Svf()
+  const f0 = (droid ? 1100 : 1300) * (0.94 + r() * 0.12)
+  const f1 = droid ? 360 : 420
+  return render(sr, 0.17, (t, i) => {
+    const fr = glide(f0, f1, t, 0.06)
+    const tone = droid ? o1.sqr(fr, sr) * 0.5 + o2.sqr(fr * 1.01, sr) * 0.3 : o1.sin(fr, sr) * 0.7 + o2.tri(fr * 2, sr) * 0.25
+    const v = ring[i] * 0.8 * ad(t, 0.0005, 0.05) + tone * 0.7 * ad(t, 0.001, 0.028)
+    // Below 2.4 kHz (2 kHz for the buzzier droids) and above 280 Hz: bright enough to cut
+    // through, light, never piercing.
+    const low = lp.run(v, droid ? 2000 : 2400, 0.7, sr).low
+    return soft((low - hp.run(low, 280, 0.9, sr).low) * 1.3)
+  })
+}
+
+/** A warship's laser cannon: a fuller zap that falls in pitch through a resonant filter, with a
+ * slower, deeper ring of the wire under it. */
 const blaster = (droid: boolean): Recipe => (sr, r) => {
+  const ring = wire(sr, 0.26, { stages: 200, a: 0.93, loop: 0.042 + r() * 0.008, fb: 0.38, hiss: 0.2 })
   const o1 = new Osc(r())
   const o2 = new Osc(r())
   const f = new Svf()
+  const lp = new Svf()
   const f0 = (droid ? 1000 : 1250) * (0.92 + r() * 0.16)
   const f1 = droid ? 170 : 230
-  return render(sr, 0.2, (t) => {
+  return render(sr, 0.26, (t, i) => {
     const fr = glide(f0, f1, t, 0.16)
     const tone = droid ? o1.sqr(fr, sr) * 0.6 + o2.sqr(fr * 1.012, sr) * 0.4 : o1.saw(fr, sr) * 0.7 + o2.sin(fr * 2, sr) * 0.3
     const cut = glide(3200, 600, t, 0.16)
-    const v = f.run(tone + noise() * 0.08, cut, 0.35, sr).band * 1.8 + f.low * 0.4
-    return soft(v * 1.4) * ad(t, 0.002, droid ? 0.05 : 0.06)
+    const zap = (f.run(tone + noise() * 0.08, cut, 0.35, sr).band * 1.8 + f.low * 0.4) * ad(t, 0.002, droid ? 0.05 : 0.06)
+    const v = zap * 1.4 + ring[i] * 0.45 * ad(t, 0.001, 0.07)
+    return soft(lp.run(v, 2800, 0.7, sr).low)
   })
 }
 
@@ -149,13 +203,17 @@ const turbolaser: Recipe = (sr, r) => {
   const b = new Osc()
   const fz = new Svf()
   const fn = new Svf()
+  const lp = new Svf()
   const f0 = 760 * (0.9 + r() * 0.2)
-  return render(sr, 0.7, (t) => {
+  // A big, slow wire under it: the long ringing "pkoww" of a capital ship's battery.
+  const ring = wire(sr, 0.7, { stages: 260, a: 0.95, loop: 0.065 + r() * 0.01, fb: 0.45, hiss: 0.2 })
+  return render(sr, 0.7, (t, i) => {
     const fr = glide(f0, 70, t, 0.32)
     const zap = fz.run(z.saw(fr, sr) + z2.saw(fr * 1.505, sr) * 0.5, glide(2600, 260, t, 0.3), 0.5, sr).band * ad(t, 0.002, 0.12)
     const thump = b.sin(glide(140, 38, t, 0.4), sr) * ad(t, 0.004, 0.2)
     const hiss = fn.run(noise(), glide(6000, 400, t, 0.25), 0.8, sr).low * ad(t, 0.001, 0.07)
-    return soft(zap * 1.6 + thump * 1.3 + hiss * 0.6)
+    const twang = lp.run(ring[i], 1800, 0.8, sr).low * 0.8 * ad(t, 0.002, 0.16)
+    return soft(zap * 1.5 + thump * 1.3 + hiss * 0.5 + twang)
   })
 }
 
@@ -738,7 +796,7 @@ export class EmpiresSound {
   async warm(faction: FactionId) {
     if (!this.ctx) return
     const jobs: [string, Recipe, number][] = [
-      ['laser-republic', blaster(false), 4], ['laser-droid', blaster(true), 4], ['turbo', turbolaser, 4], ['flak', flak, 4], ['missile', missile, 3],
+      ['pew-republic', fighterBlaster(false), 4], ['pew-droid', fighterBlaster(true), 4], ['laser-republic', blaster(false), 4], ['laser-droid', blaster(true), 4], ['turbo', turbolaser, 4], ['flak', flak, 4], ['missile', missile, 3],
       ['shield', shieldHit, 4], ['hull', metal(false), 4], ['hull-heavy', metal(true), 4],
       ['boom0', explosion(0), 3], ['boom1', explosion(1), 3], ['boom2', explosion(2), 2],
       ['hpdown', hardpointDown, 3], ['shdown', shieldsDown, 3], ['launch', launch, 3],
@@ -755,11 +813,14 @@ export class EmpiresSound {
 
   // --- Battle ------------------------------------------------------------------------------------------
 
-  fire(kind: WeaponKind, where: Where, faction: FactionId) {
+  /** `light`: a fighter's guns, smaller and quieter than a warship's. */
+  fire(kind: WeaponKind, where: Where, faction: FactionId, light = false) {
     if (!this.ready()) return
-    this.feel(kind === 'turbo' ? 0.4 : 0.1, where)
+    this.feel(kind === 'turbo' ? 0.4 : light ? 0.05 : 0.1, where)
     if (where.gain < 0.03) return
-    if (kind === 'laser' && this.allow('laser', 3)) this.play(`laser-${faction}`, blaster(faction === 'droid'), { where, gain: 0.55, takes: 4 })
+    if (kind === 'laser' && light) {
+      if (this.allow('pew', 4)) this.play(`pew-${faction}`, fighterBlaster(faction === 'droid'), { where, gain: 0.32, takes: 4 })
+    } else if (kind === 'laser' && this.allow('laser', 3)) this.play(`laser-${faction}`, blaster(faction === 'droid'), { where, gain: 0.5, takes: 4 })
     else if (kind === 'turbo' && this.allow('turbo', 3, 0.1)) this.play('turbo', turbolaser, { where, gain: 0.8, rate: faction === 'droid' ? 0.92 : 1, takes: 4 })
     else if (kind === 'flak' && this.allow('flak', 3)) this.play('flak', flak, { where, gain: 0.55, takes: 4 })
     else if (kind === 'missile' && this.allow('missile', 2, 0.15)) this.play('missile', missile, { where, gain: 0.6 })
