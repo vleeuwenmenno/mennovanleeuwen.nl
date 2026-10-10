@@ -3,8 +3,7 @@ import type { WinState } from '../../os/wm'
 import { DIFFICULTY, newBrain, think, type Brain } from './empires/ai'
 import { FACTIONS, TECH, UNIT, UNITS, buildable, dims, isShip, type HardpointKind } from './empires/data'
 import { DetailPanel, Frame, SelectionPanel, TacticalMap, TopBar, type Command, type Hud, type MapFilter, type Mode } from './empires/Hud'
-import { HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, slotName, type Setup } from './empires/Menus'
-import { MAP } from './empires/maps'
+import { HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupMap, slotName, type Setup } from './empires/Menus'
 import { actionFor, getSettings, keyName, useSettings } from './empires/settings'
 import { HP_NAME } from './empires/icons'
 import { Renderer, type Camera, type View } from './empires/render'
@@ -97,7 +96,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   const world = useRef<World>(null as unknown as World)
   if (!world.current)
     world.current = newWorld(
-      MAP[setup.map],
+      setupMap(setup),
       seats.map((s) => ({ faction: s.faction, team: s.team, spawn: s.spawn, incomeMul: s.kind === 'ai' ? DIFFICULTY[s.difficulty].income : 1 })),
       { credits: setup.credits },
     )
@@ -146,7 +145,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   mapFilterRef.current = mapFilter
   // A name for the battlefield, for the top bar.
   // The battlefield's name for the top bar, and who's fighting whom for the map header ("2 v 2").
-  const sector = MAP[setup.map].name
+  const sector = world.current.map.name
   const sides = `${seats.filter((x) => x.team === myTeam).length} v ${seats.filter((x) => x.team !== myTeam).length}`
   const focused = useIsFocused(win)
   const focusedRef = useRef(focused)
