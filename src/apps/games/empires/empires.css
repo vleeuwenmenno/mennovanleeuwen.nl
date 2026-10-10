@@ -491,14 +491,16 @@
   flex: none;
   width: 320px;
 }
-/* The details panel is as wide as what it shows, centred between the other two, and scrolls once
-   it runs out of room. */
+/* The details panel is as wide as what it shows, right next to the map, and scrolls once it runs
+   out of room. The selection panel stays at the right edge. */
 .ew-detail {
   flex: 0 1 auto;
   min-width: 0;
   max-height: 100%;
   align-self: flex-end;
-  margin: 0 auto;
+}
+.ew-selframe {
+  margin-left: auto;
 }
 .ew-detail .ew-frame-in {
   height: auto;
