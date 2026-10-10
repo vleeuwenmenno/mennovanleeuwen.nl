@@ -127,12 +127,12 @@ const blaster = (droid: boolean): Recipe => (sr, r) => {
   const o1 = new Osc(r())
   const o2 = new Osc(r())
   const f = new Svf()
-  const f0 = (droid ? 1500 : 1900) * (0.92 + r() * 0.16)
+  const f0 = (droid ? 1000 : 1250) * (0.92 + r() * 0.16)
   const f1 = droid ? 170 : 230
   return render(sr, 0.2, (t) => {
     const fr = glide(f0, f1, t, 0.16)
     const tone = droid ? o1.sqr(fr, sr) * 0.6 + o2.sqr(fr * 1.012, sr) * 0.4 : o1.saw(fr, sr) * 0.7 + o2.sin(fr * 2, sr) * 0.3
-    const cut = glide(5200, 700, t, 0.16)
+    const cut = glide(3200, 600, t, 0.16)
     const v = f.run(tone + noise() * 0.08, cut, 0.35, sr).band * 1.8 + f.low * 0.4
     return soft(v * 1.4) * ad(t, 0.002, droid ? 0.05 : 0.06)
   })
@@ -148,7 +148,7 @@ const turbolaser: Recipe = (sr, r) => {
   const f0 = 760 * (0.9 + r() * 0.2)
   return render(sr, 0.7, (t) => {
     const fr = glide(f0, 70, t, 0.32)
-    const zap = fz.run(z.saw(fr, sr) + z2.saw(fr * 1.505, sr) * 0.5, glide(3800, 300, t, 0.3), 0.5, sr).band * ad(t, 0.002, 0.12)
+    const zap = fz.run(z.saw(fr, sr) + z2.saw(fr * 1.505, sr) * 0.5, glide(2600, 260, t, 0.3), 0.5, sr).band * ad(t, 0.002, 0.12)
     const thump = b.sin(glide(140, 38, t, 0.4), sr) * ad(t, 0.004, 0.2)
     const hiss = fn.run(noise(), glide(6000, 400, t, 0.25), 0.8, sr).low * ad(t, 0.001, 0.07)
     return soft(zap * 1.6 + thump * 1.3 + hiss * 0.6)
@@ -183,19 +183,19 @@ const missile: Recipe = (sr, r) => {
 /** A bolt splashing on shields: glassy partials, a tremble, and a fizz. */
 const shieldHit: Recipe = (sr, r) => {
   const os = [new Osc(), new Osc(), new Osc()]
-  const fr = [1700, 2550, 3400].map((f) => f * (0.9 + r() * 0.2))
+  const fr = [880, 1320, 1760].map((f) => f * (0.9 + r() * 0.2))
   const bp = new Svf()
   return render(sr, 0.4, (t) => {
     const trem = 0.75 + 0.25 * Math.sin(TAU * 38 * t)
     const ring = os.reduce((s, o, k) => s + o.sin(fr[k] * (1 + 0.004 * Math.sin(TAU * 7 * t)), sr) * Math.exp(-t / (0.16 - k * 0.04)), 0)
-    const fizz = bp.run(noise(), 5200, 0.6, sr).band * ad(t, 0.001, 0.04)
+    const fizz = bp.run(noise(), 2800, 0.6, sr).band * ad(t, 0.001, 0.04)
     return ring * trem * 0.6 + fizz
   })
 }
 
 /** Metal struck: inharmonic partials ringing out, lower and longer for heavy hits. */
 const metal = (heavy: boolean): Recipe => (sr, r) => {
-  const base = heavy ? [210, 395, 660, 1090, 1610] : [780, 1330, 2190, 3420, 4800]
+  const base = heavy ? [210, 395, 660, 1090, 1610] : [520, 890, 1460, 2280, 3150]
   const os = base.map(() => new Osc(r()))
   const fr = base.map((f) => f * (0.94 + r() * 0.12))
   const lp = new Svf()
@@ -248,10 +248,10 @@ const shieldsDown: Recipe = (sr) => {
   const o2 = new Osc()
   const bp = new Svf()
   return render(sr, 0.9, (t) => {
-    const fr = glide(1100, 70, t, 0.7)
+    const fr = glide(700, 60, t, 0.7)
     const stutter = 0.6 + 0.4 * Math.sign(Math.sin(TAU * glide(30, 8, t, 0.7) * t))
     const tone = (o.sin(fr, sr) + o2.saw(fr * 0.5, sr) * 0.3) * stutter * ad(t, 0.01, 0.4)
-    const fizz = bp.run(noise(), 4000, 0.5, sr).band * ad(t - 0.5, 0.02, 0.15)
+    const fizz = bp.run(noise(), 2600, 0.5, sr).band * ad(t - 0.5, 0.02, 0.15)
     return tone + fizz * 0.6
   })
 }
@@ -263,8 +263,8 @@ const launch: Recipe = (sr, r) => {
   const lp = new Svf()
   return render(sr, 0.7, (t) => {
     const env = Math.sin(Math.PI * Math.min(1, t / 0.6)) ** 2
-    const whine = lp.run(o.saw(glide(260, 900 + r() * 200, t, 0.5), sr), 2400, 0.5, sr).low
-    const air = bp.run(noise(), glide(700, 2400, t, 0.35), 0.5, sr).band
+    const whine = lp.run(o.saw(glide(200, 600 + r() * 120, t, 0.5), sr), 1800, 0.5, sr).low
+    const air = bp.run(noise(), glide(500, 1600, t, 0.35), 0.5, sr).band
     return (whine * 0.5 + air) * env
   })
 }
@@ -282,8 +282,8 @@ function radio(sr: number, data: Float32Array, squelch = true) {
     let x = i >= pre && i - pre < data.length ? data[i - pre] : 0
     // Squelch: a short burst of static before and after the message.
     if (squelch && (i < pre || i - pre >= data.length)) x += noise() * 0.25 * Math.exp(-((i < pre ? pre - i : i - pre - data.length) / sr) / 0.012)
-    hp.run(x, 380, 0.7, sr)
-    const y = f.run(hp.high, 3200, 0.6, sr).low
+    hp.run(x, 260, 0.7, sr)
+    const y = f.run(hp.high, 2400, 0.6, sr).low
     out[i] = soft(y * 2.2) * (1 + 0.04 * Math.sin(TAU * 50 * t))
   }
   return out
@@ -310,7 +310,7 @@ function melody(sr: number, base: number, notes: [number, number][], wave: 'sin'
 }
 
 /** Droid chatter: a burst of quick, random bleeps from a pentatonic scale, slightly bit-crushed. */
-function chatter(sr: number, r: Rnd, count: number, contour: number, base = 640) {
+function chatter(sr: number, r: Rnd, count: number, contour: number, base = 380) {
   const scale = [0, 3, 5, 7, 10, 12, 15]
   const notes: [number, number][] = []
   for (let i = 0; i < count; i++) {
@@ -331,7 +331,7 @@ const ack = (kind: OrderKind | 'select', faction: FactionId, tier: Tier = 'friga
   if (faction === 'droid') {
     const contour = { select: 0, move: 1, attack: -1, attackMove: -0.5, patrol: 0.5, hold: 0, stop: -1, rally: 1, target: 1.5 }[kind]
     const count = kind === 'select' ? 3 + Math.floor(r() * 3) : 4 + Math.floor(r() * 3)
-    return radio(sr, chatter(sr, r, count, contour, 600 * semi(shift)), false)
+    return radio(sr, chatter(sr, r, count, contour, 360 * semi(shift)), false)
   }
   const tunes: Record<OrderKind | 'select', [number, number][]> = {
     select: [[7, 0.05], [12, 0.07]],
@@ -344,7 +344,7 @@ const ack = (kind: OrderKind | 'select', faction: FactionId, tier: Tier = 'friga
     rally: [[12, 0.05], [19, 0.1]],
     target: [[12, 0.03], [12, 0.03], [12, 0.03], [19, 0.12]],
   }
-  const base = 880 * semi(shift)
+  const base = 466 * semi(shift)
   const wave = kind === 'attack' || kind === 'target' ? 'sqr' : 'tri'
   const msg = melody(sr, base, tunes[kind], wave)
   // Flagships and stations add a low bridge tone under the beeps.
@@ -359,14 +359,14 @@ const ack = (kind: OrderKind | 'select', faction: FactionId, tier: Tier = 'friga
 /** A soft tactile click for buttons. */
 const click: Recipe = (sr, r) => {
   const o = new Osc()
-  const f = 1800 + r() * 300
+  const f = 900 + r() * 150
   return render(sr, 0.04, (t) => o.sin(glide(f, f * 0.6, t, 0.03), sr) * ad(t, 0.001, 0.01) + noise() * ad(t, 0.0002, 0.002) * 0.3)
 }
 
 /** Arming a command: a little rising tick. */
 const arm: Recipe = (sr) => {
   const o = new Osc()
-  return render(sr, 0.08, (t) => o.tri(glide(900, 1700, t, 0.05), sr) * ad(t, 0.002, 0.03))
+  return render(sr, 0.08, (t) => o.tri(glide(480, 860, t, 0.05), sr) * ad(t, 0.002, 0.03))
 }
 
 /** Denied: two low, dull blips. */
@@ -382,14 +382,14 @@ const denied: Recipe = (sr) => {
 
 /** Something clunks into the build queue: a relay, a latch, a confirm beep. */
 const queue = (cancel: boolean): Recipe => (sr, r) => {
-  const beep = melody(sr, 1320, cancel ? [[0, 0.04], [-5, 0.06]] : [[0, 0.04], [5, 0.06]], 'sin')
+  const beep = melody(sr, 660, cancel ? [[0, 0.04], [-5, 0.06]] : [[0, 0.04], [5, 0.06]], 'sin')
   return layers(sr, [{ data: metal(true)(sr, r), gain: 0.35 }, { data: click(sr, r), gain: 0.5, at: 0.02 }, { data: beep, gain: 0.5, at: cancel ? 0 : 0.06 }])
 }
 
 /** Data streaming into the research lab: a quick climbing arpeggio. */
 const researchStart: Recipe = (sr) => {
   const notes: [number, number][] = [0, 4, 7, 11, 14, 19].map((n) => [n, 0.035])
-  return melody(sr, 660, notes, 'sin', 0.006)
+  return melody(sr, 330, notes, 'sin', 0.006)
 }
 
 /** A bell-like chord: for research done and similar good news. */
@@ -400,7 +400,7 @@ function bells(sr: number, root: number, chord: number[], len: number, stagger =
       const lt = t - k * stagger
       if (lt < 0) return s
       const f = root * semi(n)
-      return s + (os[k][0].sin(f, sr) + os[k][1].sin(f * 2.76, sr) * 0.25) * ad(lt, 0.003, len * 0.35)
+      return s + (os[k][0].sin(f, sr) + os[k][1].sin(f * 2.76, sr) * 0.12) * ad(lt, 0.003, len * 0.35)
     }, 0),
   )
 }
@@ -451,13 +451,13 @@ const drillUp: Recipe = (sr) => {
   const o = new Osc()
   const f = new Svf()
   const spin = render(sr, 1.1, (t) => f.run(o.saw(glide(40, 160, t, 0.8), sr) + noise() * 0.3, 900, 0.6, sr).low * Math.min(1, t / 0.2) * ad(t - 0.6, 0.01, 0.3))
-  return layers(sr, [{ data: spin }, { data: bells(sr, 1320, [0, 7], 0.5, 0.05), gain: 0.4, at: 0.7 }])
+  return layers(sr, [{ data: spin }, { data: bells(sr, 660, [0, 7], 0.5, 0.05), gain: 0.4, at: 0.7 }])
 }
 
 /** A defense platform's guns charging up. */
 const weaponsOnline: Recipe = (sr, r) => {
   const o = new Osc()
-  const whine = render(sr, 0.8, (t) => o.sin(glide(200, 1800, t, 0.6), sr) * Math.min(1, t / 0.3) * ad(t - 0.6, 0.005, 0.08))
+  const whine = render(sr, 0.8, (t) => o.sin(glide(150, 900, t, 0.6), sr) * Math.min(1, t / 0.3) * ad(t - 0.6, 0.005, 0.08))
   return layers(sr, [{ data: whine, gain: 0.6 }, { data: metal(true)(sr, r), gain: 0.7, at: 0.62 }, { data: turbolaser(sr, r), gain: 0.4, at: 0.66 }])
 }
 
@@ -466,8 +466,8 @@ const scan: Recipe = (sr) => {
   const o = new Osc()
   const p = new Osc()
   return render(sr, 0.9, (t) => {
-    const sweep = o.sin(glide(380, 2400, t, 0.4), sr) * (0.6 + 0.4 * Math.sin(TAU * 24 * t)) * ad(t, 0.02, 0.18) * (t < 0.45 ? 1 : 0)
-    const ping = p.sin(1760, sr) * ad(t - 0.42, 0.002, 0.2) + p.sin(1760 * 2, sr) * 0.2 * ad(t - 0.42, 0.002, 0.08)
+    const sweep = o.sin(glide(280, 1300, t, 0.4), sr) * (0.6 + 0.4 * Math.sin(TAU * 24 * t)) * ad(t, 0.02, 0.18) * (t < 0.45 ? 1 : 0)
+    const ping = p.sin(880, sr) * ad(t - 0.42, 0.002, 0.2) + p.sin(880 * 2, sr) * 0.1 * ad(t - 0.42, 0.002, 0.08)
     return sweep * 0.6 + ping
   })
 }
@@ -479,9 +479,9 @@ const klaxon = (station: boolean): Recipe => (sr) => {
   const reps = station ? 4 : 2
   return render(sr, reps * 0.36, (t) => {
     const phase = t % 0.36
-    const fr = phase < 0.18 ? (station ? 520 : 760) : station ? 390 : 600
+    const fr = phase < 0.18 ? (station ? 440 : 560) : station ? 330 : 440
     const on = phase % 0.18 < 0.16 ? 1 : 0
-    return soft(f.run(o.sqr(fr, sr) + o.saw(fr * 1.5, sr) * 0.3, 2200, 0.5, sr).low * 1.6) * on * 0.8
+    return soft(f.run(o.sqr(fr, sr) + o.saw(fr * 1.5, sr) * 0.3, 1500, 0.5, sr).low * 1.6) * on * 0.8
   })
 }
 
@@ -498,21 +498,21 @@ const tape = (down: boolean): Recipe => (sr) => {
 /** A menu sliding open or shut. */
 const swoosh = (open: boolean): Recipe => (sr) => {
   const bp = new Svf()
-  return render(sr, 0.25, (t) => bp.run(noise(), open ? glide(600, 3000, t, 0.2) : glide(3000, 600, t, 0.2), 0.4, sr).band * Math.sin(Math.PI * Math.min(1, t / 0.22)) ** 2)
+  return render(sr, 0.25, (t) => bp.run(noise(), open ? glide(400, 1800, t, 0.2) : glide(1800, 400, t, 0.2), 0.4, sr).band * Math.sin(Math.PI * Math.min(1, t / 0.22)) ** 2)
 }
 
 const abilitySound = (id: AbilityId): Recipe => (sr, r) => {
   if (id === 'shieldBoost') {
-    const shimmer = bells(sr, 880, [0, 4, 7, 12, 16], 1.0, 0.04)
+    const shimmer = bells(sr, 440, [0, 4, 7, 12, 16], 1.0, 0.04)
     return layers(sr, [{ data: shimmer }, { data: swoosh(true)(sr, r), gain: 0.6 }])
   }
   if (id === 'flakBarrage') {
     const o = new Osc()
-    const charge = render(sr, 0.35, (t) => o.saw(glide(300, 1600, t, 0.35), sr) * Math.min(1, t / 0.3) * 0.5)
+    const charge = render(sr, 0.35, (t) => o.saw(glide(220, 900, t, 0.35), sr) * Math.min(1, t / 0.3) * 0.5)
     return layers(sr, [{ data: charge }, ...Array.from({ length: 8 }, (_, k) => ({ data: flak(sr, r), at: 0.32 + k * 0.07, gain: 0.7 }))])
   }
   if (id === 'repairSwarm') {
-    const chirps = Array.from({ length: 6 }, (_, k) => ({ data: chatter(sr, r, 3, 1, 900), at: k * 0.14, gain: 0.5 }))
+    const chirps = Array.from({ length: 6 }, (_, k) => ({ data: chatter(sr, r, 3, 1, 520), at: k * 0.14, gain: 0.5 }))
     return layers(sr, [...chirps, { data: metal(false)(sr, r), at: 0.2, gain: 0.4 }, { data: metal(false)(sr, r), at: 0.55, gain: 0.4 }])
   }
   if (id === 'tractor') {
@@ -607,9 +607,15 @@ export class EmpiresSound {
       this.verb = ctx.createGain()
       this.verb.gain.value = 0.22
       this.verb.connect(conv).connect(this.master)
+      // A gentle treble cut on everything: no piercing highs.
+      const shelf = ctx.createBiquadFilter()
+      shelf.type = 'highshelf'
+      shelf.frequency.value = 5000
+      shelf.gain.value = -6
+      shelf.connect(this.master)
       for (const b of ['sfx', 'ui', 'amb'] as Bus[]) {
         const g = ctx.createGain()
-        g.connect(this.master)
+        g.connect(shelf)
         this.buses[b] = g
       }
       this.applyVolume()
@@ -821,7 +827,7 @@ export class EmpiresSound {
     this.ui('research', researchStart, 0.4, 1)
   }
   researchDone() {
-    this.ui('research-done', (sr) => bells(sr, 660, [0, 4, 7, 11, 14], 1.4), 0.55, 1)
+    this.ui('research-done', (sr) => bells(sr, 392, [0, 4, 7, 11, 14], 1.4), 0.55, 1)
   }
   shipReady(faction: FactionId, tier: Tier) {
     if (this.ready() && this.allow('ready', 1, 0.3)) this.play(`ready-${faction}-${tier}`, shipReady(faction, tier), { bus: 'ui', gain: 0.65 * UI_LEVEL, verb: 0.2, takes: 2 })
@@ -836,7 +842,7 @@ export class EmpiresSound {
     this.ui('scan', scan, 0.5, 1)
   }
   capture(ours: boolean) {
-    this.ui(ours ? 'beacon-won' : 'beacon-lost', (sr) => (ours ? bells(sr, 784, [0, 7, 12, 16], 1.1, 0.07) : bells(sr, 523, [7, 3, 0, -5], 1.1, 0.09)), 0.55, 1)
+    this.ui(ours ? 'beacon-won' : 'beacon-lost', (sr) => (ours ? bells(sr, 440, [0, 7, 12, 16], 1.1, 0.07) : bells(sr, 311, [7, 3, 0, -5], 1.1, 0.09)), 0.55, 1)
   }
   levelUp() {
     this.ui('levelup', (sr) => brass(sr, 196, [[[0, 4, 7], 0.22], [[2, 5, 9], 0.22], [[4, 7, 12], 0.7]], 0.6), 0.55, 1)
