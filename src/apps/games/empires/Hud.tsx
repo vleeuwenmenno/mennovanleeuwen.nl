@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import {
-  ABILITIES, FACTIONS, LEVEL_UP, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
+  ABILITIES, FACTIONS, LEVEL_UP, ROLES, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
   type UnitType,
 } from './data'
 import { HP_COLOR, HP_ICON, HP_NAME } from './icons'
@@ -15,6 +15,10 @@ import { RANKS, RANK_BONUS, building, cantBuild, cantResearch, cantSite, researc
 // (TechTree.tsx); the tiles here only show a ship type's own upgrades.
 
 export type Hud = {
+  /** Control groups that still have ships: their key, size, and the sprite of the biggest. */
+  groups: { key: string; count: number; sprite: string }[]
+  /** Our warships with nothing to do. */
+  idle: number
   credits: number
   income: number
   pop: number
@@ -281,7 +285,8 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
 
 // --- Tactical map -----------------------------------------------------------------------------------
 
-export function TacticalMap({ canvas, sides, filter, onFilter, onStation, onAlert, onIdle, onArmy, onPointer }: {
+export function TacticalMap({ canvas, sides, filter, onFilter, onStation, onAlert, onIdle, onArmy, onPointer, idle }: {
+  idle: number
   canvas: React.RefObject<HTMLCanvasElement | null>
   /** Who's fighting whom: "1 v 1", "2 v 2". */
   sides: string
@@ -305,7 +310,10 @@ export function TacticalMap({ canvas, sides, filter, onFilter, onStation, onAler
         <div className="ew-maptools">
           <button onClick={onStation} title="Select the station (H)" aria-label="Station"><Icon name="target" size={17} /></button>
           <button onClick={onAlert} title="Jump to the last alert (Space)" aria-label="Last alert"><Icon name="radar" size={17} /></button>
-          <button onClick={onIdle} title="Select idle ships (I)" aria-label="Idle ships"><Icon name="idle" size={17} /></button>
+          <button className="ew-badged" onClick={onIdle} title={`Select idle ships (I): ${idle} idle`} aria-label="Idle ships">
+            <Icon name="idle" size={17} />
+            {idle > 0 && <em>{idle}</em>}
+          </button>
           <button onClick={onArmy} title="Select every warship (Ctrl+A)" aria-label="All ships"><Icon name="army" size={17} /></button>
         </div>
         <canvas ref={canvas} className="ew-mini" onPointerDown={onPointer} onPointerMove={(e) => e.buttons === 1 && onPointer(e)} />
@@ -578,7 +586,7 @@ function ShipCard({ t, why, level, queued, onBuild, onUnqueue }: {
         e.preventDefault()
         onUnqueue(t.id)
       }}
-      title={`${t.name}${t.squad > 1 ? ` (squadron of ${t.squad})` : ''}\n${t.blurb}\nFleet size ${t.pop}. Click to build, Shift-click for five, right-click to remove one.${why ? `\n\n${why}` : ''}`}
+      title={`${t.name}${t.squad > 1 ? ` (squadron of ${t.squad})` : ''}\n${t.blurb}${countersText(t)}\nFleet size ${t.pop}. Click to build, Shift-click for five, right-click to remove one.${why ? `\n\n${why}` : ''}`}
     >
       <img src={spriteUrl(t.sprite)} alt="" />
       <strong>{t.name}</strong>
@@ -588,6 +596,23 @@ function ShipCard({ t, why, level, queued, onBuild, onUnqueue }: {
       {queued > 0 && <span className="ew-qbadge">{queued}</span>}
     </button>
   )
+}
+
+/** "Strong against cruisers, flagships · weak against gunships": the counter loop at a glance. */
+function Counters({ t }: { t: UnitType }) {
+  const r = ROLES[t.tier]
+  if (!r) return null
+  return (
+    <span className="ew-counters">
+      <b>{r.role}</b>
+      <span className="is-strong">Strong vs {r.strong.join(', ')}</span>
+      <span className="is-weak">Weak vs {r.weak.join(', ')}</span>
+    </span>
+  )
+}
+const countersText = (t: UnitType) => {
+  const r = ROLES[t.tier]
+  return r ? `\n${r.role}. Strong against ${r.strong.join(', ')}; weak against ${r.weak.join(', ')}.` : ''
 }
 
 function orderText(w: World, u: Unit) {
@@ -625,6 +650,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
           {mine && <span className="ew-muted ew-small ew-orders">{orderText(w, u)}{u.kills > 0 ? ` · ${u.kills} kills` : ''}</span>}
         </header>
         <span className="ew-muted ew-small">{t.blurb}</span>
+        <Counters t={t} />
         <Vitals u={u} squad={squad} />
         {u.hps.length > 0 && <HpSummary u={u} />}
         {mine && techsFor(t.id).length > 0 && (
@@ -687,7 +713,9 @@ const COMMANDS: { id: Command; label: string; icon: IconName; key: string }[] = 
   { id: 'rally', label: 'Rally point', icon: 'rally', key: 'Y' },
 ]
 
-export function SelectionPanel({ sel, me, mode, onCommand, onPick }: {
+export function SelectionPanel({ sel, me, mode, onCommand, onPick, groups, onGroup }: {
+  groups: Hud['groups']
+  onGroup: (key: string) => void
   sel: Unit[]
   me: Owner
   mode: Mode
@@ -719,6 +747,17 @@ export function SelectionPanel({ sel, me, mode, onCommand, onPick }: {
   const enabled = (c: Command) => (c === 'rally' ? station : ships.length > 0)
   return (
     <Frame className="ew-selframe" title="Selected units" aside={<b className="ew-selcount">{sel.length || ''}</b>}>
+      {groups.length > 0 && (
+        <div className="ew-groups" aria-label="Control groups">
+          {groups.map((g) => (
+            <button key={g.key} onClick={() => onGroup(g.key)} title={`Group ${g.key}: ${g.count} ships (press ${g.key}, twice to look)`}>
+              <b>{g.key}</b>
+              {g.sprite && <img src={spriteUrl(g.sprite)} alt="" />}
+              <small>{g.count}</small>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="ew-seltiles">
         {shown.map((g) => {
           const u = g[0]

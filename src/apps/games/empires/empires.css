@@ -1041,6 +1041,22 @@ span.ew-teamtag {
   letter-spacing: 0.04em;
   color: var(--ew-head);
 }
+.ew-counters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11.5px;
+}
+.ew-counters b {
+  font-weight: 600;
+  color: var(--ew-head);
+}
+.ew-counters .is-strong {
+  color: #9fe8b4;
+}
+.ew-counters .is-weak {
+  color: #ffb3aa;
+}
 .ew-rank {
   font-family: var(--ew-display);
   font-size: 10.5px;
@@ -1766,6 +1782,46 @@ span.ew-teamtag {
 .ew-selcount {
   font-family: var(--ew-display);
   color: var(--ew-head);
+}
+.ew-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.ew-deck .ew-groups button {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px 1px 4px;
+  font-size: 11px;
+}
+.ew-groups b {
+  font-family: var(--ew-display);
+  color: var(--ew-gold);
+}
+.ew-groups img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+.ew-groups small {
+  color: var(--ew-muted);
+}
+.ew-deck .ew-badged {
+  position: relative;
+}
+.ew-badged em {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: #f2c14a;
+  color: #1a1206;
+  font: 700 9.5px/15px system-ui;
+  font-style: normal;
 }
 .ew-seltiles {
   display: flex;

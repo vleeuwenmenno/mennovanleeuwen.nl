@@ -81,9 +81,19 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
 
 type Toast = { id: number; text: string; tone: 'good' | 'bad' | 'info'; t: number }
 
-function snapshot(w: World, me: Owner, sel: Set<number>): Hud {
+function snapshot(w: World, me: Owner, sel: Set<number>, groups: Map<string, number[]>): Hud {
   const p = w.players[me]
+  const RANKED: Tier[] = ['fighter', 'gunship', 'frigate', 'cruiser', 'capital']
   return {
+    groups: [...groups.entries()]
+      .map(([key, ids]) => {
+        const us = ids.map((i) => w.byId.get(i)).filter((u): u is Unit => !!u && !u.dead)
+        const lead = us.reduce<Unit | null>((b, u) => (!b || RANKED.indexOf(u.t.tier) > RANKED.indexOf(b.t.tier) ? u : b), null)
+        return { key, count: us.length, sprite: lead?.t.sprite ?? '' }
+      })
+      .filter((g) => g.count)
+      .sort((a, b) => a.key.localeCompare(b.key)),
+    idle: w.units.filter((u) => u.owner === me && isShip(u.t) && !u.parent && u.order.k === 'idle' && !u.target && !u.hold).length,
     credits: p.credits, income: p.income, pop: p.pop, popCap: p.popCap, level: p.level,
     queue: p.queue.map((q) => ({ ...q })), research: p.research.map((r) => ({ ...r })), techs: [...p.techs], time: w.time, sel: [...sel], winner: w.winner,
     beacons: w.beacons.filter((b) => b.owner === p.team).length, beaconsAll: w.beacons.length, mines: w.units.filter((u) => u.owner === me && u.t.tier === 'mine').length,
@@ -134,7 +144,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   const canvas = useRef<HTMLCanvasElement>(null)
   const mini = useRef<HTMLCanvasElement>(null)
   const [ready, setReady] = useState(false)
-  const [hud, setHud] = useState<Hud>(() => snapshot(world.current, me, selected.current))
+  const [hud, setHud] = useState<Hud>(() => snapshot(world.current, me, selected.current, groups.current))
   const [toasts, setToasts] = useState<Toast[]>([])
   const [ui, setUi] = useState({ paused: false, speed: 1, mode: 'normal' as Mode, menu: false, panel: null as 'settings' | 'keys' | 'howto' | null, tree: false })
   /** Whether the game was paused before a menu opened (menus pause it, closing them restores that). */
@@ -356,6 +366,18 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     if (idle.length) sound.select(myFaction, voice())
     else sound.error()
   }
+  /** Select a control group; asking for the one already selected looks at it. */
+  const recallGroup = (k: string) => {
+    const w = world.current
+    const ids = (groups.current.get(k) ?? []).filter((i) => w.byId.get(i))
+    if (!ids.length) return
+    const again = ids.length === selected.current.size && ids.every((i) => selected.current.has(i))
+    select(ids)
+    if (again) {
+      const us = ids.map((i) => w.byId.get(i)!)
+      centerOn(us.reduce((s, u) => s + u.x, 0) / us.length, us.reduce((s, u) => s + u.y, 0) / us.length)
+    } else sound.select(myFaction, voice())
+  }
   const selectArmy = () => {
     select(world.current.units.filter((u) => u.owner === me && isShip(u.t)).map((u) => u.id))
     if (mySelection().length) sound.select(myFaction, voice())
@@ -556,7 +578,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       hudT -= dt
       if (hudT <= 0 || (w.winner !== -1 && !ended)) {
         hudT = 0.15
-        setHud(snapshot(w, me, selected.current))
+        setHud(snapshot(w, me, selected.current, groups.current))
         if (w.winner !== -1 && !ended) {
           ended = true
           sound.stopDrone()
@@ -593,7 +615,6 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     const down = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.closest?.('input, textarea, select')) return
       const k = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase()
-      const w = world.current
       const keymap = settingsRef.current.keys
       if ((uiRef.current.menu || uiRef.current.panel) && k !== 'escape') return
       const action = !e.ctrlKey && !e.metaKey && !e.altKey ? actionFor(keymap, k) : undefined
@@ -615,17 +636,8 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         return
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return
-      if (/^[1-9]$/.test(k)) {
-        const ids = (groups.current.get(k) ?? []).filter((i) => w.byId.get(i))
-        if (ids.length) {
-          const again = ids.length === selected.current.size && ids.every((i) => selected.current.has(i))
-          select(ids)
-          if (again) {
-            const us = ids.map((i) => w.byId.get(i)!)
-            centerOn(us.reduce((s, u) => s + u.x, 0) / us.length, us.reduce((s, u) => s + u.y, 0) / us.length)
-          }
-        }
-      } else if (k === 'escape') {
+      if (/^[1-9]$/.test(k)) recallGroup(k)
+      else if (k === 'escape') {
         // Esc backs out of whatever is open, one step at a time, and finally opens the menu.
         if (uiRef.current.menu || uiRef.current.panel) closeMenu()
         else if (uiRef.current.tree) setTree(false)
@@ -935,7 +947,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
 
       <div className="ew-dock">
         <TacticalMap canvas={mini} sides={sides} filter={mapFilter} onFilter={setMapFilter} onPointer={onMini}
-          onStation={selectStation} onIdle={selectIdle} onArmy={selectArmy}
+          onStation={selectStation} onIdle={selectIdle} onArmy={selectArmy} idle={hud.idle}
           onAlert={() => (lastAlarm.current ? centerOn(lastAlarm.current.x, lastAlarm.current.y) : toast('No alerts yet', 'info'))}
         />
         <DetailPanel w={w} me={me} sel={sel} hud={hud} faction={myFaction}
@@ -952,7 +964,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
           node={hud.sel.length || pickedNode.current < 0 ? null : w.nodes[pickedNode.current]}
           onStation={selectStation}
         />
-        <SelectionPanel sel={sel} me={me} mode={ui.mode} onCommand={runCommand}
+        <SelectionPanel sel={sel} me={me} mode={ui.mode} onCommand={runCommand} groups={hud.groups} onGroup={recallGroup}
           onPick={(id, shift) => {
             const ids = withSquads([id])
             if (shift) for (const i of ids) selected.current.delete(i)

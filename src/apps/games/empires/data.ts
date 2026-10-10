@@ -231,6 +231,17 @@ export const UNITS: UnitType[] = [
   },
 ]
 
+/** What each class is for, and the counter loop players need to learn: fighters beat big ships,
+ * gunships beat fighters, frigates beat gunships, cruisers beat frigates. */
+export const ROLES: Partial<Record<Tier, { role: string; strong: string[]; weak: string[] }>> = {
+  fighter: { role: 'Strike craft', strong: ['cruisers', 'flagships'], weak: ['gunships', 'frigates'] },
+  gunship: { role: 'Fighter hunter', strong: ['fighters'], weak: ['frigates', 'cruisers'] },
+  frigate: { role: 'Escort', strong: ['gunships', 'fighters'], weak: ['cruisers'] },
+  cruiser: { role: 'Line warship', strong: ['frigates', 'stations'], weak: ['fighters'] },
+  capital: { role: 'Flagship', strong: ['frigates', 'cruisers', 'stations'], weak: ['fighter swarms'] },
+  defense: { role: 'Gun emplacement', strong: ['gunships', 'frigates'], weak: ['cruisers', 'flagships'] },
+}
+
 export const UNIT: Record<string, UnitType> = Object.fromEntries(UNITS.map((u) => [u.id, u]))
 export const SHIP_TIERS: Tier[] = ['fighter', 'gunship', 'frigate', 'cruiser', 'capital']
 export const unitOf = (faction: FactionId, tier: Tier) => UNIT[`${faction === 'republic' ? 'r' : 'd'}-${tier}`]
