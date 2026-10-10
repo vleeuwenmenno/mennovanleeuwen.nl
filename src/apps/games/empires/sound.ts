@@ -236,14 +236,41 @@ const flak: Recipe = (sr, r) => {
   })
 }
 
-/** A missile leaving its pod: a thump, then a rising, fading whoosh. */
+/** A missile or torpedo leaving its tube: a soft "thoonk" and a short, falling spit of exhaust
+ * that's gone in a quarter of a second (a long rising hiss read as a whoosh over everything). */
 const missile: Recipe = (sr, r) => {
   const bp = new Svf()
   const o = new Osc()
-  return render(sr, 0.75, (t) => {
-    const thump = o.sin(glide(160, 60, t, 0.08), sr) * ad(t, 0.002, 0.05)
-    const whoosh = bp.run(noise(), glide(500, 2800 + r() * 600, t, 0.55), 0.35, sr).band * ad(t, 0.06, 0.25)
-    return thump * 1.1 + whoosh * 1.6
+  const hp = new Svf()
+  const f = 1300 + r() * 300
+  return render(sr, 0.25, (t) => {
+    const thoonk = o.sin(glide(150, 70, t, 0.05), sr) * ad(t, 0.002, 0.04)
+    const spit = bp.run(noise(), glide(f, 500, t, 0.15), 0.8, sr).band * ad(t, 0.004, 0.05)
+    const v = thoonk * 0.35 + spit * 1.4
+    return soft(v - hp.run(v, 90, 0.8, sr).low)
+  })
+}
+
+/** A bolt striking a hull: a short, dull crunch with a spit of sparks. No ringing partials (those
+ * read as glass); a heavy hit adds a low thump under it. */
+const impact = (heavy: boolean): Recipe => (sr, r) => {
+  const len = heavy ? 0.2 : 0.09
+  const lp = new Svf()
+  const bp = new Svf()
+  const hp = new Svf()
+  const o = new Osc()
+  const snaps = Array.from({ length: heavy ? 14 : 7 }, () => [r() ** 1.5 * (heavy ? 0.08 : 0.04), 0.4 + r() * 0.6] as const)
+  return render(sr, len, (t) => {
+    let crackle = 0
+    for (const [at, g] of snaps) {
+      const d = t - at
+      if (d >= 0 && d < 0.002) crackle += noise() * g * (1 - d / 0.002)
+    }
+    const crunch = lp.run(noise(), heavy ? 900 : 1300, 0.6, sr).low * ad(t, 0.0005, heavy ? 0.045 : 0.016)
+    const sparks = bp.run(crackle, 1700, 1.2, sr).band * ad(t, 0, heavy ? 0.05 : 0.025)
+    const thump = o.sin(glide(heavy ? 100 : 160, heavy ? 42 : 90, t, 0.05), sr) * ad(t, 0.002, heavy ? 0.07 : 0.015)
+    const v = crunch * 1.4 + sparks * 0.9 + (heavy ? thump * 1.1 : 0)
+    return soft(v - hp.run(v, heavy ? 60 : 140, 0.8, sr).low)
   })
 }
 
@@ -291,7 +318,7 @@ const metal = (heavy: boolean): Recipe => (sr, r) => {
  * ring of the wire) and secondary blasts rolling on. Capital ships groan as they break up. Size 0
  * is a fighter, 1 a frigate or cruiser, 2 a capital ship. */
 const explosion = (size: 0 | 1 | 2): Recipe => (sr, r) => {
-  const len = [0.8, 1.9, 3.6][size]
+  const len = [0.5, 1.9, 3.6][size]
   const body = new Svf()
   const crk = new Svf()
   const sub = new Osc()
@@ -306,9 +333,10 @@ const explosion = (size: 0 | 1 | 2): Recipe => (sr, r) => {
   const f1 = [48, 34, 26][size]
   return render(sr, len, (t, i) => {
     const crack = crk.run(noise(), 1800, 0.8, sr).high * ad(t, 0.0005, 0.012)
-    let env = ad(t, 0.003, [0.16, 0.38, 0.75][size])
+    let env = ad(t, 0.003, [0.07, 0.38, 0.75][size])
     for (const s of secondary) env += 0.7 * ad(t - s, 0.01, 0.35)
-    const roar = body.run(noise(), glide([2400, 1900, 1500][size], [170, 120, 80][size], t, len * 0.6), 0.6, sr).low * env
+    // A fighter's darkens fast and is over, or the falling roar reads as a whoosh.
+    const roar = body.run(noise(), glide([1800, 1900, 1500][size], [300, 120, 80][size], t, [0.08, len * 0.6, len * 0.6][size]), 0.6, sr).low * env
     // The "thoom": fast pitch drop, the punch of it.
     const thoom = sub.sin(glide(f0, f1, t, [0.06, 0.25, 0.4][size]), sr) * ad(t, 0.004, [0.08, 0.3, 0.6][size])
     let debris = 0
@@ -322,7 +350,7 @@ const explosion = (size: 0 | 1 | 2): Recipe => (sr, r) => {
       size === 2
         ? groanF.run(groanO.saw(glide(62, 34, t, len) * (1 + 0.03 * Math.sin(TAU * 1.7 * t)), sr), glide(420, 140, t, len), 1.2, sr).low * ad(t - 0.4, 0.5, 1.1)
         : 0
-    return soft(crack * 0.6 + roar * [1.9, 1.6, 1.6][size] + thoom * [0.55, 1.5, 1.9][size] + debris * 0.45 + plates * [0, 0.9, 1.1][size] + groan * 0.9)
+    return soft(crack * 0.6 + roar * [1.6, 1.6, 1.6][size] + thoom * [0.55, 1.5, 1.9][size] + debris * [0.7, 0.45, 0.45][size] + plates * [0, 0.9, 1.1][size] + groan * 0.9)
   })
 }
 
@@ -830,7 +858,7 @@ export class EmpiresSound {
     if (!this.ctx) return
     const jobs: [string, Recipe, number][] = [
       ['pew-republic', fighterBlaster(false), 4], ['pew-droid', fighterBlaster(true), 4], ['laser-republic', blaster(false), 4], ['laser-droid', blaster(true), 4], ['turbo', turbolaser, 4], ['flak', flak, 4], ['missile', missile, 3],
-      ['shield', shieldHit, 4], ['hull', metal(false), 4], ['hull-heavy', metal(true), 4],
+      ['shield', shieldHit, 4], ['hull', impact(false), 4], ['hull-heavy', impact(true), 4],
       ['boom0', explosion(0), 3], ['boom1', explosion(1), 3], ['boom2', explosion(2), 2],
       ['hpdown', hardpointDown, 3], ['shdown', shieldsDown, 3], ['launch', launch, 3],
       ['click', click, 3], ['arm', arm, 2], ['queue', queue(false), 2], ['unqueue', queue(true), 2], ['construct', construct, 2],
@@ -864,7 +892,7 @@ export class EmpiresSound {
     if (!this.ready() || where.gain < 0.03) return
     if (shield) {
       if (this.allow('shield', 2, 0.1)) this.play('shield', shieldHit, { where, gain: 0.12, takes: 4 })
-    } else if (this.allow('hull', heavy ? 3 : 2, 0.1)) this.play(heavy ? 'hull-heavy' : 'hull', metal(heavy), { where, gain: heavy ? 0.7 : 0.4, takes: 4 })
+    } else if (this.allow('hull', heavy ? 3 : 2, 0.1)) this.play(heavy ? 'hull-heavy' : 'hull', impact(heavy), { where, gain: heavy ? 0.6 : 0.3, verb: 0.15, takes: 4 })
   }
 
   /** Size is the ship's size in world units: fighters ~30, capital ships ~380. */
