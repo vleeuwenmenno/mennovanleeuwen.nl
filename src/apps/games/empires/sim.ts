@@ -19,6 +19,18 @@ export const teamOf = (w: World, o: Owner) => w.players[o].team
 /** Whether player `o`'s team can see unit `u`. */
 export const sees = (w: World, o: Owner, u: Unit) => u.seen[w.players[o].team]
 
+/**
+ * How a ship answers enemies when it isn't told what to attack (after Beyond All Reason):
+ * - hold: never leaves its spot or its path; shoots whatever comes within reach of its guns.
+ * - maneuver: fires back and gives chase, but only so far (a leash) from where the fight started,
+ *   then comes back or carries on with its orders. Stops it being lured into a stronger fleet.
+ * - roam: chases anything it can see, as far as it goes.
+ */
+export type Stance = 'hold' | 'maneuver' | 'roam'
+export const STANCES: Stance[] = ['hold', 'maneuver', 'roam']
+/** How far Maneuver ships chase from where a fight started. */
+export const LEASH = { fighter: 1100, ship: 800 }
+
 export type Order =
   | { k: 'idle' }
   /** `attack`: attack-move, engaging whatever turns up on the way. `speed` keeps a group together. */
@@ -78,8 +90,13 @@ export type Unit = {
   /** Veterancy: 0 green, 1 veteran, 2 elite, 3 ace. */
   rank: number
   mods: Mods
-  /** Hold position: fight from where it stands, never chase. */
-  hold: boolean
+  /** How it answers enemies: see Stance. Kept until changed, whatever the orders. */
+  stance: Stance
+  /** Where the current fight started: Maneuver ships give chase only so far from here. */
+  gx: number
+  gy: number
+  /** Who shot at it last, so it can answer fire from beyond its usual look. */
+  hitBy: number
   /** Inside a nebula: no shields, short sensors. Refreshed every tick. */
   nebula: boolean
   /** Orders given with Shift, taken one at a time once the current one is done. */
@@ -270,7 +287,7 @@ export function spawn(w: World, id: string, owner: Owner, x: number, y: number, 
       ...g, cd: Math.random() * g.w.cooldown, burst: 0, burstT: 0, target: 0, aim: 0,
     })),
     order: { k: 'idle' }, ax: x, ay: y, squad, parent: 0, target: 0, retarget: Math.random() * 0.5, lastHit: -99, shieldHit: -99, shieldOut: -99, hitAngle: 0,
-    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, hold: false, nebula: false, route: null, queue: [], mending: [], breakOff: false,
+    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, stance: 'maneuver', gx: x, gy: y, hitBy: 0, nebula: false, route: null, queue: [], mending: [], breakOff: false,
     seen: Array.from({ length: w.teams }, (_, t) => t === w.players[owner].team),
   }
   w.units.push(u)
@@ -451,7 +468,6 @@ function issue(u: Unit, o: Order, queued = false) {
   u.queue = []
   u.target = o.k === 'attack' ? o.id : 0
   u.parent = 0
-  u.hold = false
 }
 
 /** Where a ship will be once its current and queued orders are done: where a queued patrol starts. */
@@ -591,17 +607,14 @@ export function cmdPatrol(w: World, owner: Owner, ids: number[], x: number, y: n
   })
 }
 
-/** Stop where they are and stay there, shooting whatever comes into range. */
-export function cmdHold(w: World, owner: Owner, ids: number[]) {
+/** Set how the ships answer enemies (see Stance). */
+export function cmdStance(w: World, owner: Owner, ids: number[], stance: Stance) {
   for (const i of ids) {
     const u = w.byId.get(i)
     if (!commandable(u, owner)) continue
-    u.order = { k: 'idle' }
-    u.queue = []
-    u.ax = u.x
-    u.ay = u.y
-    u.target = 0
-    u.hold = true
+    u.stance = stance
+    // Holding drops a chase at once; the others pick their fights again on the next look round.
+    if (stance === 'hold' && u.order.k !== 'attack') u.target = 0
   }
 }
 
@@ -624,7 +637,6 @@ export function cmdStop(w: World, owner: Owner, ids: number[]) {
     u.ax = u.x
     u.ay = u.y
     u.target = 0
-    u.hold = false
   }
 }
 
@@ -951,6 +963,7 @@ function alarm(w: World, u: Unit) {
 export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: number, fromX: number, fromY: number, by: Owner, shooter = 0) {
   if (u.dead) return
   u.lastHit = w.time
+  if (shooter) u.hitBy = shooter
   alarm(w, u)
   let rest = dmg
   if (u.shield > 0) {
@@ -1000,11 +1013,11 @@ function valid(w: World, id: number, owner: Owner) {
 }
 
 /** The best thing for a ship to shoot within `r`: what its guns hurt most, nearest first. */
-function pickTarget(w: World, u: Unit, r: number) {
+function pickTarget(w: World, u: Unit, r: number, ok: (e: Unit) => boolean = () => true) {
   let best: Unit | undefined
   let score = 0
   near(w, u.x, u.y, r, (e, dd) => {
-    if (!foes(w, e.owner, u.owner) || !sees(w, u.owner, e)) return
+    if (!foes(w, e.owner, u.owner) || !sees(w, u.owner, e) || !ok(e)) return
     // Ion ships go for shields that are still up.
     const ionPick = u.t.kind === 'ion' ? (e.shield > 0 ? 1.6 : 0.25) : 1
     const s = (dpsVs(u.t, e.t.tier) + 0.01) / (Math.sqrt(dd) + 250) * (e.t.tier === 'mine' ? 0.6 : 1) * ionPick
@@ -1105,16 +1118,31 @@ function moveUnit(w: World, u: Unit, dt: number) {
     u.retarget = 0.4 + Math.random() * 0.3
     const engage = u.order.k === 'idle' || u.order.k === 'patrol' || (u.order.k === 'move' && u.order.attack)
     const cur = valid(w, u.target, u.owner)
-    // Holding ships only look as far as their guns reach (fighters a little further).
-    const look = u.hold ? (fighter ? 450 : fightRange(t) * u.mods.range + 100) : Math.min(sensorOf(u), fighter ? 900 : 800)
-    const leash = u.hold ? look : fighter ? 1100 : 700
+    const hold = u.stance === 'hold'
+    const roam = u.stance === 'roam'
+    // Holding ships only look as far as their guns reach (fighters a little further); roamers as
+    // far as they can see.
+    const look = hold ? (fighter ? 450 : fightRange(t) * u.mods.range + 100) : roam ? sensorOf(u) : Math.min(sensorOf(u), fighter ? 900 : 800)
+    const leash = hold ? look : roam ? Infinity : fighter ? LEASH.fighter : LEASH.ship
+    // A fight is measured from where it started: an idle ship's post, or the spot on its way
+    // where it turned to fight.
+    if (!cur) {
+      u.gx = u.order.k === 'idle' ? u.ax : u.x
+      u.gy = u.order.k === 'idle' ? u.ay : u.y
+    }
+    const inLeash = (e: Unit) => leash === Infinity || d2(e.x, e.y, u.gx, u.gy) < leash ** 2
     if (!engage) u.target = 0
-    else if (cur && d2(cur.x, cur.y, u.ax, u.ay) < leash ** 2 && d2(cur.x, cur.y, u.x, u.y) < (sensorOf(u) * 1.1) ** 2) u.target = cur.id
-    else u.target = pickTarget(w, u, look)?.id ?? 0
+    else if (cur && inLeash(cur) && d2(cur.x, cur.y, u.x, u.y) < (sensorOf(u) * 1.1) ** 2) u.target = cur.id
+    else {
+      // Answer whoever is shooting at us, if they're within the leash; else the best target near.
+      const shooter = !hold && w.time - u.lastHit < 3 ? valid(w, u.hitBy, u.owner) : undefined
+      u.target = (shooter && inLeash(shooter) ? shooter : pickTarget(w, u, look, inLeash))?.id ?? 0
+    }
   }
   const tgt = u.target ? w.byId.get(u.target) : undefined
 
-  const fighting = !!tgt && !tgt.dead && (u.order.k !== 'move' || u.order.attack)
+  // Holding ships on the move keep going, guns firing at whatever they pass.
+  const fighting = !!tgt && !tgt.dead && (u.order.k !== 'move' || (u.order.attack && u.stance !== 'hold'))
   if (fighting) {
     const e = tgt!
     if (fighter && e.t.tier !== 'fighter') {
@@ -1134,7 +1162,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
       const close = d2(u.x, u.y, e.x, e.y) < (radius(e.t) + 45) ** 2
       if (close) steer(u, u.x + Math.cos(u.a) * 100, u.y + Math.sin(u.a) * 100, max, dt)
       else steer(u, ex + ((u.id % 7) - 3) * 8, ey + ((u.id % 5) - 2) * 8, max, dt)
-    } else if (u.hold) {
+    } else if (u.stance === 'hold') {
       steer(u, e.x, e.y, 0, dt, true)
     } else {
       // Close to fighting range, then hold there and swing round to face the enemy.

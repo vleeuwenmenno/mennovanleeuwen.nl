@@ -19,7 +19,7 @@ export const ACTIONS: { id: Action; label: string; group: string }[] = [
   { id: 'attack', label: 'Attack move', group: 'Commands' },
   { id: 'stop', label: 'Stop', group: 'Commands' },
   { id: 'patrol', label: 'Patrol', group: 'Commands' },
-  { id: 'hold', label: 'Hold position', group: 'Commands' },
+  { id: 'hold', label: 'Cycle stance (hold, maneuver, roam)', group: 'Commands' },
   { id: 'rally', label: 'Rally point', group: 'Commands' },
   { id: 'ability', label: 'Use ability', group: 'Commands' },
   { id: 'station', label: 'Select station', group: 'Selection' },

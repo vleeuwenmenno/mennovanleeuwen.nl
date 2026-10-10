@@ -347,7 +347,7 @@ export function HowToPlay() {
         <li>Park warships next to a wreck to strip it for credits, as long as no enemy ships are there. Destroyed frigates, cruisers and flagships leave wrecks too.</li>
       </ul>
       <p className="ew-muted ew-small">
-        Commands: {k('move')} move, {k('attack')} attack move, {k('patrol')} patrol, {k('hold')} hold, {k('stop')} stop, {k('ability')} ability, {k('rally')} rally point. Camera: {k('panUp')}
+        Commands: {k('move')} move, {k('attack')} attack move, {k('patrol')} patrol, {k('hold')} stance (hold, maneuver, roam), {k('stop')} stop, {k('ability')} ability, {k('rally')} rally point. Camera: {k('panUp')}
         {k('panLeft')}
         {k('panDown')}
         {k('panRight')} or arrows, wheel to zoom. Ctrl+1–9 sets a control group. {k('pause')} pauses, Esc opens the menu.

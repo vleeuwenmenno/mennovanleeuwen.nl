@@ -2,14 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, newBrain, think, type Brain } from './empires/ai'
 import { FACTIONS, TECH, UNIT, UNITS, buildable, dims, isShip, type HardpointKind, type Tier } from './empires/data'
-import { DetailPanel, Frame, SelectionPanel, TacticalMap, TopBar, type Command, type Hud, type MapFilter, type Mode } from './empires/Hud'
+import { DetailPanel, Frame, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type MapFilter, type Mode } from './empires/Hud'
 import { HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type Setup } from './empires/Menus'
 import { actionFor, getSettings, keyName, useSettings } from './empires/settings'
 import { HP_NAME } from './empires/icons'
 import { Renderer, relColor, type Camera, type View } from './empires/render'
 import { inRect, type Pt } from './empires/maps'
 import {
-  STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdHold, cmdMove, cmdPatrol, cmdRally, cmdResearch, RANKS, autoStart, closedLoop, cmdLine, cmdSite, lineGroups, spreadAlong, cmdStop, foes, hpPos, newWorld, startProblem, tick, type Owner, type SimEvent,
+  STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdStance, cmdMove, cmdPatrol, cmdRally, cmdResearch, RANKS, autoStart, closedLoop, cmdLine, cmdSite, lineGroups, spreadAlong, cmdStop, foes, hpPos, newWorld, startProblem, tick, type Owner, type SimEvent,
   type Unit, type World,
 } from './empires/sim'
 import { EmpiresSound, type OrderKind } from './empires/sound'
@@ -96,7 +96,7 @@ function snapshot(w: World, me: Owner, sel: Set<number>, groups: Map<string, num
       })
       .filter((g) => g.count)
       .sort((a, b) => a.key.localeCompare(b.key)),
-    idle: w.units.filter((u) => u.owner === me && isShip(u.t) && !u.parent && u.order.k === 'idle' && !u.target && !u.hold).length,
+    idle: w.units.filter((u) => u.owner === me && isShip(u.t) && !u.parent && u.order.k === 'idle' && !u.target && u.stance !== 'hold').length,
     credits: p.credits, income: p.income, pop: p.pop, popCap: p.popCap, level: p.level,
     queue: p.queue.map((q) => ({ ...q })), research: p.research.map((r) => ({ ...r })), techs: [...p.techs], time: w.time, sel: [...sel], winner: w.winner,
     beacons: w.beacons.filter((b) => b.owner === p.team).length, beaconsAll: w.beacons.length, mines: w.units.filter((u) => u.owner === me && u.t.tier === 'mine').length,
@@ -322,9 +322,14 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       cmdStop(w, me, ids)
       say('stop')
     } else if (c === 'hold') {
-      if (!mySelection().some((u) => isShip(u.t))) return sound.error()
-      cmdHold(w, me, ids)
+      // Cycle the stance: from the selection's own, or Maneuver's next if they're mixed.
+      const ships = mySelection().filter((u) => isShip(u.t))
+      if (!ships.length) return sound.error()
+      const now = ships.every((u) => u.stance === ships[0].stance) ? ships[0].stance : 'roam'
+      const next = nextStance(now)
+      cmdStance(w, me, ids, next)
       say('hold')
+      toast(`Stance: ${STANCE_INFO[next].label}, ${STANCE_INFO[next].blurb}`, 'info')
     } else if (c === 'ability') useAbility()
     else {
       if (c === 'rally' ? !mySelection().some((u) => u.t.tier === 'station') : !mySelection().some((u) => isShip(u.t))) return sound.error()

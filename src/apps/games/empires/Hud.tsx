@@ -6,7 +6,7 @@ import {
 import { HP_COLOR, HP_ICON, HP_NAME } from './icons'
 import { spriteUrl } from './render'
 import { keyName, useSettings } from './settings'
-import { RANKS, RANK_BONUS, SHIELD_REBOOT, building, cantBuild, cantResearch, cantSite, researchCost, researchLock, shieldFull, shieldMax, techBonus, type OreNode, type Owner, type ResearchItem, type Unit, type World } from './sim'
+import { RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, cantResearch, cantSite, researchCost, researchLock, shieldFull, shieldMax, techBonus, type OreNode, type Owner, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard, research and game speed; and along the bottom the tactical map, a details panel for
@@ -59,6 +59,7 @@ const ICONS = {
   stop: 'M6 6h12v12H6z',
   patrol: 'M4 12a8 8 0 0 1 14-5.3 M20 12a8 8 0 0 1-14 5.3 M18 2.5v4.5h-4.5 M6 21.5V17h4.5',
   hold: 'M12 2.5l7.5 3v5.5c0 4.8-3.2 8.6-7.5 10.5c-4.3-1.9-7.5-5.7-7.5-10.5V5.5z',
+  roam: 'M12 12L5 5 M12 12l7-7 M12 12l-7 7 M12 12l7 7 M5 9.5V5h4.5 M19 9.5V5h-4.5 M5 14.5V19h4.5 M19 14.5V19h-4.5',
   rally: 'M6 21V3 M6 4h11l-2.5 4l2.5 4H6',
   ability: 'M13 2L4.5 13.5H11L10 22l8.5-11.5H12z',
   target: 'M12 12m-8 0a8 8 0 1 0 16 0a8 8 0 1 0 -16 0 M12 12m-3 0a3 3 0 1 0 6 0a3 3 0 1 0 -6 0 M12 1v4 M12 19v4 M1 12h4 M19 12h4',
@@ -628,7 +629,7 @@ function orderText(w: World, u: Unit) {
   }
   const t = u.target ? w.byId.get(u.target) : undefined
   if (t) return `Engaging ${t.t.name}`
-  return u.hold ? 'Holding position' : 'Idle'
+  return u.stance === 'hold' ? 'Holding position' : 'Idle'
 }
 
 function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
@@ -706,6 +707,15 @@ function GroupDetail(p: DetailProps) {
 
 // --- Selected units and commands ----------------------------------------------------------------------
 
+/** The three stances, as the stance button shows them. */
+export const STANCE_INFO: Record<Stance, { label: string; icon: IconName; blurb: string }> = {
+  hold: { label: 'Hold position', icon: 'hold', blurb: 'never chases: fires at whatever comes within reach' },
+  maneuver: { label: 'Maneuver', icon: 'patrol', blurb: 'fires back and gives chase a little way, then comes back' },
+  roam: { label: 'Roam', icon: 'roam', blurb: 'chases anything it sees, however far' },
+}
+/** The stance after this one, for the button and its key. */
+export const nextStance = (s: Stance) => STANCES[(STANCES.indexOf(s) + 1) % STANCES.length]
+
 const COMMANDS: { id: Command; label: string; icon: IconName; key: string }[] = [
   { id: 'move', label: 'Move', icon: 'move', key: 'M' },
   { id: 'attack', label: 'Attack move', icon: 'attack', key: 'R' },
@@ -745,7 +755,8 @@ export function SelectionPanel({ sel, me, mode, onCommand, onPick, groups, onGro
   const withAb = ships.filter((u) => u.t.ability)
   const ready = withAb.filter((u) => u.abilityCd <= 0)
   const ab = withAb[0]?.t.ability ? ABILITIES[withAb[0].t.ability] : null
-  const holding = ships.length > 0 && ships.every((u) => u.hold)
+  // The stance button shows the selection's stance (if they share one) and cycles to the next.
+  const stance = ships.length && ships.every((u) => u.stance === ships[0].stance) ? ships[0].stance : null
   const enabled = (c: Command) => (c === 'rally' ? station : ships.length > 0)
   return (
     <Frame className="ew-selframe" title="Selected units" aside={<b className="ew-selcount">{sel.length || ''}</b>}>
@@ -776,19 +787,20 @@ export function SelectionPanel({ sel, me, mode, onCommand, onPick, groups, onGro
         {!sel.length && <span className="ew-muted ew-small">Nothing selected</span>}
       </div>
       <div className="ew-cmdgrid">
-        {COMMANDS.map((c) => (
-          <button
-            key={c.id}
-            className={`ew-cmdbtn ${mode === c.id || (c.id === 'hold' && holding) ? 'is-on' : ''}`}
-            disabled={!enabled(c.id)}
-            onClick={() => onCommand(c.id)}
-            title={`${c.label} (${c.key})`}
-          >
-            <Icon name={c.icon} size={20} />
-            <span>{c.label}</span>
-            <kbd>{c.key}</kbd>
-          </button>
-        ))}
+        {COMMANDS.map((c) => {
+          const st = c.id === 'hold' ? STANCE_INFO[stance ?? 'maneuver'] : null
+          const label = st ? (ships.length && !stance ? 'Mixed stance' : st.label) : c.label
+          const title = st
+            ? `Stance: ${label}${stance ? `, ${st.blurb}` : ''}. Click (${c.key}) for ${STANCE_INFO[nextStance(stance ?? 'roam')].label}.`
+            : `${c.label} (${c.key})`
+          return (
+            <button key={c.id} className={`ew-cmdbtn ${mode === c.id ? 'is-on' : ''} ${st ? 'ew-stancebtn' : ''}`} disabled={!enabled(c.id)} onClick={() => onCommand(c.id)} title={title}>
+              <Icon name={st ? st.icon : c.icon} size={20} />
+              <span>{label}</span>
+              <kbd>{c.key}</kbd>
+            </button>
+          )
+        })}
         {ab && (
           <button className="ew-cmdbtn ew-abilitybtn" disabled={!ready.length} onClick={() => onCommand('ability')} title={`${ab.blurb} (Q)`}>
             <Icon name="ability" size={18} />
