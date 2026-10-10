@@ -23,6 +23,8 @@ import './empires/empires.css'
 // empires/sim.ts and is drawn by empires/render.ts.
 
 const SPRITES = [...new Set(UNITS.map((u) => u.sprite))]
+/** Closest the camera zooms in. */
+const MAX_ZOOM = 1.6
 
 /** Orbitron for the HUD headings, loaded only once the game is opened. */
 function useDisplayFont() {
@@ -182,12 +184,15 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     const c = cam.current
     return { x: c.x + (sx - vw / 2) / c.zoom, y: c.y + (sy - vh / 2) / c.zoom }
   }
+  const minZoom = () => {
+    const { vw, vh } = view()
+    return Math.min(vw / world.current.w, vh / world.current.h) * 0.9
+  }
   const clampCam = () => {
     const c = cam.current
     const { vw, vh } = view()
     const w = world.current
-    const minZ = Math.min(vw / w.w, vh / w.h) * 0.9
-    c.zoom = Math.max(minZ, Math.min(1.6, c.zoom))
+    c.zoom = Math.max(minZoom(), Math.min(MAX_ZOOM, c.zoom))
     const hw = vw / 2 / c.zoom
     const hh = vh / 2 / c.zoom
     // The camera may run well past the map's edge, so ships in a corner can be brought clear of
@@ -507,6 +512,18 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         if (mouse.current.y > vh - e) cm.y += pan
       }
       clampCam()
+      const zg = zoomGoal.current
+      if (zg) {
+        // Close most of the gap each frame (about 90% in a tenth of a second), in log space so
+        // zooming in and out feel the same.
+        const before = cm.zoom
+        zoomBy(Math.pow(zg.z / cm.zoom, 1 - Math.exp(-dt * 22)), zg.sx, zg.sy)
+        // Done, or held at the zoom limits: stop chasing.
+        if (Math.abs(Math.log(zg.z / cm.zoom)) < 0.002 || cm.zoom === before) {
+          if (cm.zoom !== before) zoomBy(zg.z / cm.zoom, zg.sx, zg.sy)
+          zoomGoal.current = null
+        }
+      }
 
       // Effects and sound.
       renderer.current.consume(events, w, me)
@@ -665,8 +682,8 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       else if (action === 'focus') {
         const us = mySelection()
         if (us.length) centerOn(us.reduce((s, u) => s + u.x, 0) / us.length, us.reduce((s, u) => s + u.y, 0) / us.length)
-      } else if (action === 'zoomIn' || k === '+') zoomBy(1.2)
-      else if (action === 'zoomOut' || k === '_') zoomBy(1 / 1.2)
+      } else if (action === 'zoomIn' || k === '+') zoomTo(1.2)
+      else if (action === 'zoomOut' || k === '_') zoomTo(1 / 1.2)
       else return
       e.preventDefault()
     }
@@ -680,6 +697,15 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focused])
 
+  /** Where a wheel or key zoom is heading: the frame loop eases towards it, around the point that
+   * was under the pointer, so wheel notches don't show as jumps. */
+  const zoomGoal = useRef<{ z: number; sx: number; sy: number } | null>(null)
+  const zoomTo = (f: number, sx?: number, sy?: number) => {
+    const { vw, vh } = view()
+    const from = zoomGoal.current?.z ?? cam.current.zoom
+    // Kept inside the limits, so turning the wheel back answers at once.
+    zoomGoal.current = { z: Math.max(minZoom(), Math.min(MAX_ZOOM, from * f)), sx: sx ?? vw / 2, sy: sy ?? vh / 2 }
+  }
   const zoomBy = (f: number, sx?: number, sy?: number) => {
     const { vw, vh } = view()
     const px = sx ?? vw / 2
@@ -745,6 +771,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         const [a, b] = [...touches.current.values()]
         const d = Math.hypot(a.x - b.x, a.y - b.y)
         const target = (pinch.current.zoom * d) / Math.max(10, pinch.current.d)
+        zoomGoal.current = null
         zoomBy(target / cam.current.zoom, (a.x + b.x) / 2, (a.y + b.y) / 2)
         return
       }
@@ -832,7 +859,9 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
 
   const onWheel = (e: React.WheelEvent) => {
     const p = local(e)
-    zoomBy(Math.exp(-e.deltaY * 0.0015), p.x, p.y)
+    // Lines or pages (some mice) rather than pixels: scale to about one notch's worth.
+    const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY
+    zoomTo(Math.exp(-dy * 0.0015), p.x, p.y)
   }
 
   // Wheel needs a non-passive listener to stop the window from scrolling.
