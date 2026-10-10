@@ -481,19 +481,29 @@ export function researchCost(p: Player, id: string) {
   return t ? { cost: t.cost, time: t.time } : null
 }
 
+/**
+ * What rules a piece of research out regardless of credits and queue space: it's done, or the
+ * station level or a prerequisite is missing. The tech tree shows these as locked.
+ */
+export function researchLock(p: Player, id: string): string | null {
+  if (id === LEVEL_UP) return p.level >= MAX_LEVEL ? 'Fully upgraded' : null
+  const t = TECH[id]
+  if (!t || t.faction !== p.faction) return 'Unknown research'
+  if (p.techs.includes(id)) return 'Already researched'
+  if (t.level > p.level) return `Needs station level ${t.level}`
+  // A prerequisite already in the queue is enough: the queue runs in order, so it finishes first.
+  const missing = (t.requires ?? []).filter((r) => !p.techs.includes(r) && !p.research.some((q) => q.id === r))
+  if (missing.length) return `Needs ${missing.map((r) => TECH[r].name).join(' and ')} first`
+  return null
+}
+
 /** Why something can't be researched right now, or null if it can. */
 export function cantResearch(w: World, owner: Owner, id: string): string | null {
   const p = w.players[owner]
   const st = w.byId.get(p.station)
   if (!st || st.dead) return 'No station'
-  if (id === LEVEL_UP) {
-    if (p.level >= MAX_LEVEL) return 'Fully upgraded'
-  } else {
-    const t = TECH[id]
-    if (!t || t.faction !== p.faction) return 'Unknown research'
-    if (p.techs.includes(id)) return 'Already researched'
-    if (t.level > p.level) return `Needs station level ${t.level}`
-  }
+  const lock = researchLock(p, id)
+  if (lock) return lock
   if (p.research.some((r) => r.id === id)) return 'Already in the queue'
   if (p.research.length >= MAX_RESEARCH) return 'Research queue full'
   if (p.credits < researchCost(p, id)!.cost) return 'Not enough credits'
@@ -516,6 +526,12 @@ export function cmdCancelResearch(w: World, owner: Owner, index: number) {
   if (!r) return
   p.credits += r.id === LEVEL_UP ? UPGRADES[p.level + 1]!.cost : TECH[r.id].cost
   p.research.splice(index, 1)
+  // Whatever was queued on the strength of it can never start now: cancel and refund that too.
+  // Back to front, so a cascade only ever removes entries we've already looked at.
+  for (let i = p.research.length - 1; i >= index; i--) {
+    const q = p.research[i]
+    if (q && q.id !== LEVEL_UP && TECH[q.id].requires?.includes(r.id)) cmdCancelResearch(w, owner, i)
+  }
 }
 
 /** Research is done: apply it to every ship of that type already flying. */
