@@ -1,6 +1,6 @@
 import { FACTIONS, SURVEY_RADIUS, dims, isShip, type HardpointKind, type Tier } from './data'
 import { HP_COLOR, HP_ICON, HP_NAME } from './icons'
-import { rng, type MapDef, type Nebula, type Patch } from './maps'
+import { rng, type MapDef, type Nebula, type Patch, type Rect } from './maps'
 import { building, foes, hpPos, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 
 // Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, nebulas
@@ -39,6 +39,9 @@ export type View = {
   hoverNode: number
   /** The wreck under the pointer, or 0. */
   hoverWreck: number
+  /** Before the battle starts: every player's start area, and where our station would go. */
+  areas?: { r: Rect; color: string; label: string; mine: boolean }[]
+  ghost?: { x: number; y: number; ok: boolean } | null
   showRally: boolean
 }
 
@@ -463,6 +466,44 @@ export class Renderer {
     ctx.setLineDash([])
 
     this.drawTerrain(ctx, w, z, onScreen)
+
+    // Picking start positions: each player's area, ours brighter, and the station's footprint
+    // under the pointer (red where it can't go).
+    if (view.areas) {
+      for (const a of view.areas) {
+        ctx.fillStyle = a.color
+        ctx.globalAlpha = a.mine ? 0.1 : 0.05
+        ctx.fillRect(a.r.x, a.r.y, a.r.w, a.r.h)
+        ctx.globalAlpha = a.mine ? 0.9 : 0.5
+        ctx.strokeStyle = a.color
+        ctx.lineWidth = (a.mine ? 3 : 2) / z
+        ctx.setLineDash(a.mine ? [] : [16 / z, 12 / z])
+        ctx.strokeRect(a.r.x, a.r.y, a.r.w, a.r.h)
+        ctx.setLineDash([])
+        ctx.fillStyle = a.color
+        ctx.font = `700 ${13 / z}px system-ui, sans-serif`
+        ctx.textBaseline = 'top'
+        ctx.fillText(a.label, a.r.x + 10 / z, a.r.y + 8 / z)
+        ctx.textBaseline = 'alphabetic'
+      }
+      ctx.globalAlpha = 1
+      const g = view.ghost
+      if (g) {
+        ctx.strokeStyle = g.ok ? '#7dffa0' : '#ff5a50'
+        ctx.fillStyle = g.ok ? 'rgba(125,255,160,0.12)' : 'rgba(255,90,80,0.12)'
+        ctx.lineWidth = 2 / z
+        ctx.beginPath()
+        ctx.arc(g.x, g.y, 260, 0, TAU)
+        ctx.fill()
+        ctx.stroke()
+        ctx.beginPath()
+        ctx.moveTo(g.x - 60, g.y)
+        ctx.lineTo(g.x + 60, g.y)
+        ctx.moveTo(g.x, g.y - 60)
+        ctx.lineTo(g.x, g.y + 60)
+        ctx.stroke()
+      }
+    }
 
     // Beacons, with their capture ring.
     for (const b of w.beacons) {

@@ -92,6 +92,8 @@ export type Player = {
   team: number
   /** Which of the map's spawn points this player started at. */
   spawn: number
+  /** Where the station was placed: the spawn point, or a spot picked in the start area. */
+  start: Pt
   /** Still has a station. */
   alive: boolean
   credits: number
@@ -283,7 +285,46 @@ export function spawnGroup(w: World, id: string, owner: Owner, x: number, y: num
 }
 
 /** One player at the start of a battle. */
-export type Seat = { faction: FactionId; team: number; spawn: number; incomeMul?: number }
+/** `at` is where the station goes; the map's spawn point when left out. */
+export type Seat = { faction: FactionId; team: number; spawn: number; incomeMul?: number; at?: Pt }
+
+/** Why a station can't start at (x, y), or null when it can: it needs open space, clear of rocks,
+ * fields, ore, beacons, wrecks and the other stations (`others`). Rocks don't depend on where
+ * stations start, so any world on the map will do for checking. */
+export function startProblem(w: World, x: number, y: number, others: Pt[]): string | null {
+  if (x < 350 || y < 350 || x > w.w - 350 || y > w.h - 350) return 'Too close to the edge of the map'
+  if (others.some((o) => d2(x, y, o.x, o.y) < 1400 ** 2)) return 'Too close to another station'
+  if (w.rocks.some((k) => d2(x, y, k.x, k.y) < (k.r + 380) ** 2)) return 'Too close to the rocks'
+  if (inside(w.map.fields, x, y, 300)) return 'Inside an asteroid field'
+  if (w.nodes.some((n) => d2(x, y, n.x, n.y) < 450 ** 2)) return 'Too close to an ore asteroid'
+  if (w.beacons.some((b) => d2(x, y, b.x, b.y) < 500 ** 2)) return 'Too close to a beacon'
+  if (w.wrecks.some((h) => d2(x, y, h.x, h.y) < (h.size * 0.6 + 300) ** 2)) return 'Too close to a wreck'
+  return null
+}
+
+/** Where an AI (or a player who doesn't pick) starts in its area: the map's spawn point when it's
+ * in the area and free, otherwise the open spot with the most ore within reach. */
+export function autoStart(w: World, area: { x: number; y: number; w: number; h: number }, spawnAt: Pt, others: Pt[]): Pt {
+  const inArea = (p: Pt) => p.x >= area.x && p.y >= area.y && p.x <= area.x + area.w && p.y <= area.y + area.h
+  if (inArea(spawnAt) && !startProblem(w, spawnAt.x, spawnAt.y, others)) return { ...spawnAt }
+  const mid = { x: area.x + area.w / 2, y: area.y + area.h / 2 }
+  const diag = Math.hypot(area.w, area.h) || 1
+  let best: Pt | null = null
+  let bestScore = -Infinity
+  const N = 14
+  for (let i = 0; i <= N; i++)
+    for (let j = 0; j <= N; j++) {
+      const p = { x: area.x + (area.w * i) / N, y: area.y + (area.h * j) / N }
+      if (startProblem(w, p.x, p.y, others)) continue
+      const ore = w.nodes.reduce((sum, n) => sum + Math.exp(-Math.hypot(n.x - p.x, n.y - p.y) / 1100), 0)
+      const score = ore - (Math.hypot(p.x - mid.x, p.y - mid.y) / diag) * 0.6
+      if (score > bestScore) {
+        bestScore = score
+        best = p
+      }
+    }
+  return best ?? mid
+}
 
 export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; credits?: number } = {}): World {
   const r = rng(opts.seed ?? map.seed)
@@ -296,10 +337,10 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
     nextId: 1, winner: -1, grid: new Map(), seenT: 0, nav: new Map(),
   }
   w.players = seats.map((s) => {
-    const sp = map.spawns[s.spawn]
+    const sp = s.at ?? map.spawns[s.spawn]
     const d = Math.hypot(c.x - sp.x, c.y - sp.y) || 1
     return {
-      faction: s.faction, team: s.team, spawn: s.spawn, alive: true, credits: opts.credits ?? START_CREDITS, income: 0, incomeMul: s.incomeMul ?? 1, level: 1, station: 0,
+      faction: s.faction, team: s.team, spawn: s.spawn, start: { x: sp.x, y: sp.y }, alive: true, credits: opts.credits ?? START_CREDITS, income: 0, incomeMul: s.incomeMul ?? 1, level: 1, station: 0,
       queue: [], research: [], techs: [], rally: { x: sp.x + ((c.x - sp.x) / d) * 600, y: sp.y + ((c.y - sp.y) / d) * 600 }, pop: 0, popCap: BASE_POP, lastAlarm: -99,
       stats: { built: 0, lost: 0, killed: 0, earned: 0 },
     }
@@ -348,7 +389,7 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
   // Stations, facing the middle, and a starting patrol in front of each. Ore has to be surveyed
   // before anything is built on it.
   w.players.forEach((p, o) => {
-    const sp = map.spawns[p.spawn]
+    const sp = p.start
     const face = Math.atan2(c.y - sp.y, c.x - sp.x)
     const fx = Math.cos(face)
     const fy = Math.sin(face)

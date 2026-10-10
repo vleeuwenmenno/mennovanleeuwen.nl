@@ -37,6 +37,18 @@ export type Wreckage = Pt & { value: number }
 /** Whether a point is inside any of the patches (grown by `pad`). */
 export const inside = (ps: Patch[], x: number, y: number, pad = 0) => ps.some((p) => (x - p.x) ** 2 + (y - p.y) ** 2 < (p.r + pad) ** 2)
 
+/** A start area: where a player may put their station, chosen before the battle starts. */
+export type Rect = { x: number; y: number; w: number; h: number }
+export const inRect = (r: Rect, x: number, y: number) => x >= r.x && y >= r.y && x <= r.x + r.w && y <= r.y + r.h
+/** A spawn's own start area when nobody has drawn one: a square round it, inside the map. */
+export function defaultArea(map: MapDef, i: number): Rect {
+  const sp = map.spawns[i]
+  const size = Math.min(1500, map.w * 0.4, map.h * 0.45)
+  const x = Math.max(0, Math.min(map.w - size, sp.x - size / 2))
+  const y = Math.max(0, Math.min(map.h - size, sp.y - size / 2))
+  return { x, y, w: size, h: size }
+}
+
 /** A small seeded random generator (mulberry32): the same seed always gives the same numbers. */
 export function rng(seed: number) {
   let s = seed >>> 0

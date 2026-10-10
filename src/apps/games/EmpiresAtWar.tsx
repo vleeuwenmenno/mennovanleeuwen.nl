@@ -3,12 +3,13 @@ import type { WinState } from '../../os/wm'
 import { DIFFICULTY, newBrain, think, type Brain } from './empires/ai'
 import { FACTIONS, TECH, UNIT, UNITS, buildable, dims, isShip, type HardpointKind, type Tier } from './empires/data'
 import { DetailPanel, Frame, SelectionPanel, TacticalMap, TopBar, type Command, type Hud, type MapFilter, type Mode } from './empires/Hud'
-import { HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupMap, slotName, type Setup } from './empires/Menus'
+import { HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type Setup } from './empires/Menus'
 import { actionFor, getSettings, keyName, useSettings } from './empires/settings'
 import { HP_NAME } from './empires/icons'
-import { Renderer, type Camera, type View } from './empires/render'
+import { Renderer, relColor, type Camera, type View } from './empires/render'
+import { inRect, type Pt } from './empires/maps'
 import {
-  STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdHold, cmdMove, cmdPatrol, cmdRally, cmdResearch, RANKS, cmdSite, cmdStop, foes, hpPos, newWorld, tick, type Owner, type SimEvent,
+  STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdHold, cmdMove, cmdPatrol, cmdRally, cmdResearch, RANKS, autoStart, cmdSite, cmdStop, foes, hpPos, newWorld, startProblem, tick, type Owner, type SimEvent,
   type Unit, type World,
 } from './empires/sim'
 import { EmpiresSound, type OrderKind } from './empires/sound'
@@ -104,15 +105,29 @@ function snapshot(w: World, me: Owner, sel: Set<number>, groups: Map<string, num
 
 function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: Setup; sound: EmpiresSound; onExit: () => void; onAgain: () => void }) {
   // Players are the open slots, in spawn order; we're the one marked 'you'.
-  const [seats] = useState(() => setup.slots.map((s, i) => ({ ...s, spawn: i, name: slotName(s, i) })).filter((s) => s.kind !== 'closed'))
+  const [map] = useState(() => setupMap(setup))
+  const [seats] = useState(() => {
+    const areas = setupAreas(setup, map)
+    return setup.slots.map((s, i) => ({ ...s, spawn: i, name: slotName(s, i), area: areas[i] })).filter((s) => s.kind !== 'closed')
+  })
   const me: Owner = seats.findIndex((s) => s.kind === 'you')
   const world = useRef<World>(null as unknown as World)
-  if (!world.current)
-    world.current = newWorld(
-      setupMap(setup),
-      seats.map((s) => ({ faction: s.faction, team: s.team, spawn: s.spawn, incomeMul: s.kind === 'ai' ? DIFFICULTY[s.difficulty].income : 1 })),
+  const makeWorld = (at: Pt[]) =>
+    newWorld(
+      map,
+      seats.map((s, i) => ({ faction: s.faction, team: s.team, spawn: s.spawn, at: at[i], incomeMul: s.kind === 'ai' ? DIFFICULTY[s.difficulty].income : 1 })),
       { credits: setup.credits },
     )
+  /** Where each station starts. Everyone gets a sensible spot in their area to begin with; the
+   * player may move theirs before the battle starts. */
+  const starts = useRef<Pt[]>([])
+  if (!world.current) {
+    const base = makeWorld(seats.map((s) => map.spawns[s.spawn]))
+    for (const s of seats) starts.current.push(autoStart(base, s.area, map.spawns[s.spawn], starts.current))
+    world.current = makeWorld(starts.current)
+  }
+  /** Before the battle: time stands still while the player picks where to start. */
+  const deploying = useRef(true)
   const myTeam = world.current.players[me].team
   const myFaction = world.current.players[me].faction
   const brains = useRef<Brain[]>(seats.map((s, i) => (s.kind === 'ai' ? newBrain(i, s.difficulty) : null)).filter((b): b is Brain => !!b))
@@ -123,7 +138,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   if (!renderer.current) renderer.current = new Renderer(SPRITES)
   const w0 = world.current
   const st0 = w0.byId.get(w0.players[me].station)!
-  const cam = useRef<Camera>({ x: st0.x + 500, y: st0.y, zoom: 0.5 })
+  const cam = useRef<Camera>({ x: st0.x, y: st0.y, zoom: 0.4 })
   // Dev builds expose the battle for poking at from the console.
   if (import.meta.env.DEV) (window as unknown as { __ew: unknown }).__ew = { world: world.current, brains: brains.current, cam: cam.current }
   const selected = useRef(new Set<number>())
@@ -148,7 +163,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   const [ready, setReady] = useState(false)
   const [hud, setHud] = useState<Hud>(() => snapshot(world.current, me, selected.current, groups.current))
   const [toasts, setToasts] = useState<Toast[]>([])
-  const [ui, setUi] = useState({ paused: false, speed: 1, mode: 'normal' as Mode, menu: false, panel: null as 'settings' | 'keys' | 'howto' | null, tree: false })
+  const [ui, setUi] = useState({ paused: false, speed: 1, mode: 'normal' as Mode, menu: false, panel: null as 'settings' | 'keys' | 'howto' | null, tree: false, deploy: true })
   /** Whether the game was paused before a menu opened (menus pause it, closing them restores that). */
   const pausedBefore = useRef(false)
   const uiRef = useRef(ui)
@@ -467,6 +482,12 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       clampCam()
     }
     fit()
+    // Picking a start: frame our whole start area.
+    if (deploying.current) {
+      const a = seats[me].area
+      Object.assign(cam.current, { x: a.x + a.w / 2, y: a.y + a.h / 2, zoom: Math.min(c.clientWidth / a.w, (c.clientHeight - 240) / a.h) * 0.85 })
+      clampCam()
+    }
     const ro = new ResizeObserver(fit)
     ro.observe(c)
     ro.observe(m)
@@ -481,7 +502,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       last = now
       const w = world.current
       const events: SimEvent[] = []
-      if (!paused.current && w.winner === -1) {
+      if (!paused.current && !deploying.current && w.winner === -1) {
         acc += dt * speed.current
         let steps = 0
         while (acc >= STEP && steps < 12) {
@@ -594,6 +615,8 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         node: selected.current.size ? -1 : pickedNode.current,
         hoverNode: h.node,
         hoverWreck: h.wreck,
+        areas: deploying.current ? seats.map((s, i) => ({ r: s.area, color: relColor(w, me, i), label: s.name, mine: i === me })) : undefined,
+        ghost: deploying.current && mouse.current.inside ? ghostAt(mouse.current.x, mouse.current.y) : null,
         showRally: mySelection().some((u) => u.t.tier === 'station'),
       }
       renderer.current.draw(ctx, w, cm, vw, vh, v, dt * (paused.current ? 0 : speed.current))
@@ -642,6 +665,10 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       const k = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase()
       const keymap = settingsRef.current.keys
       if ((uiRef.current.menu || uiRef.current.panel) && k !== 'escape') return
+      if (deploying.current && k === 'enter') {
+        beginBattle()
+        return
+      }
       const action = !e.ctrlKey && !e.metaKey && !e.altKey ? actionFor(keymap, k) : undefined
       // Panning keys are held, not pressed.
       if (k.startsWith('arrow') || action === 'panUp' || action === 'panDown' || action === 'panLeft' || action === 'panRight') {
@@ -748,6 +775,10 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       e.preventDefault()
       return
     }
+    if (deploying.current) {
+      if (e.button === 0) placeStart(p.x, p.y)
+      return
+    }
     if (e.button === 2) {
       if (mode.current !== 'normal') setMode('normal')
       else command(p.x, p.y, false)
@@ -797,6 +828,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       if (touches.current.size < 2) pinch.current = null
       drag.current = null
       if (!d || d.moved) return
+      if (deploying.current) return placeStart(p.x, p.y)
       // A tap.
       const { unit, node } = pick(p.x, p.y)
       if (unit && unit.owner === me) select([unit.id])
@@ -893,6 +925,38 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     }
     centerOn(x, y)
     if (e.type === 'pointerdown') (e.target as Element).setPointerCapture(e.pointerId)
+  }
+
+  /** The station's footprint under the pointer while picking a start, and whether it can go there. */
+  const ghostAt = (sx: number, sy: number) => {
+    const at = toWorld(sx, sy)
+    const s = seats[me]
+    const ok = inRect(s.area, at.x, at.y) && !startProblem(world.current, at.x, at.y, starts.current.filter((_, i) => i !== me))
+    return { ...at, ok }
+  }
+  /** Move our station (and starting ships) to a spot in our start area. */
+  const placeStart = (sx: number, sy: number) => {
+    const at = toWorld(sx, sy)
+    const why = inRect(seats[me].area, at.x, at.y) ? startProblem(world.current, at.x, at.y, starts.current.filter((_, i) => i !== me)) : 'Pick a spot inside your start area'
+    if (why) {
+      sound.error()
+      toast(why, 'bad')
+      return
+    }
+    starts.current[me] = at
+    world.current = makeWorld(starts.current)
+    selected.current.clear()
+    groups.current.clear()
+    sound.click()
+  }
+  const beginBattle = () => {
+    if (!deploying.current) return
+    deploying.current = false
+    setUi((u) => ({ ...u, deploy: false }))
+    sound.menu(false)
+    const st = world.current.byId.get(world.current.players[me].station)
+    if (st) centerOn(st.x + 250, st.y + 120)
+    toast('Battle stations!', 'good')
   }
 
   const togglePause = () => {
@@ -1011,7 +1075,17 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         />
       </div>
 
-      {ui.paused && !ui.menu && !ui.panel && hud.winner === -1 && (
+      {ui.deploy && !ui.menu && !ui.panel && (
+        <div className="ew-pausebox ew-deploybox">
+          <Frame title="Choose your start">
+            <p>Click inside your start area (the bright box) to place your station. Everyone else picks inside theirs.</p>
+            <button className="ew-go" onClick={beginBattle}>
+              Start battle (Enter)
+            </button>
+          </Frame>
+        </div>
+      )}
+      {ui.paused && !ui.deploy && !ui.menu && !ui.panel && hud.winner === -1 && (
         <div className="ew-pausebox">
           <Frame title="Paused">
             <p>The battle is on hold. You can still look around and give orders.</p>

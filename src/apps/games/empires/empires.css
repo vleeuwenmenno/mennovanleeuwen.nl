@@ -281,7 +281,8 @@
   background: rgba(20, 32, 60, 0.8);
 }
 
-/* Lobby: maps on the left, the chosen map in the middle, players on the right. */
+/* Lobby: the players as a wide table on the left, the map with its start areas on the right; other
+   maps open in a picker. */
 .ew-lobby {
   display: flex;
   flex-direction: column;
@@ -304,7 +305,7 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) minmax(360px, 460px);
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
   gap: 10px;
   padding: 10px 16px 16px;
 }
@@ -410,36 +411,128 @@
   border-radius: 50%;
   background: radial-gradient(hsla(170, 70%, 58%, 0.6), hsla(170, 70%, 50%, 0.1));
 }
-.ew-slotlist {
+.ew-slottable {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
+/* One row per spawn, in columns: number, who, faction, side, AI level. */
 .ew-slotrow {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 26px minmax(76px, 104px) minmax(0, 1fr) 84px minmax(92px, 118px);
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   padding: 6px 8px;
   border-radius: 6px;
   background: rgba(20, 32, 60, 0.55);
   border: 1px solid var(--ew-cell-line);
 }
+.ew-slotrow.is-head {
+  padding: 0 8px;
+  background: none;
+  border: none;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ew-muted);
+}
+.ew-slotrow.is-active {
+  border-color: rgba(183, 154, 98, 0.75);
+  box-shadow: inset 3px 0 0 var(--ew-gold);
+}
 .ew-slotrow.is-closed {
   opacity: 0.6;
 }
+.ew-slotopen {
+  grid-column: 3 / -1;
+}
+.ew-deck .ew-spawnno,
 .ew-spawnno {
   width: 22px;
   height: 22px;
+  padding: 0;
   border-radius: 50%;
+  border: none;
   display: grid;
   place-items: center;
   font: 700 12px system-ui;
   color: #050813;
   flex: none;
 }
+.ew-deck button.ew-spawnno:hover:not(:disabled) {
+  outline: 2px solid var(--ew-gold);
+  outline-offset: 1px;
+}
 .ew-slotwho {
-  width: 80px;
+  width: 100%;
+  min-width: 0;
+}
+.ew-slotrow > select,
+.ew-slotrow > .ew-teamtag {
+  min-width: 0;
+  white-space: nowrap;
+  text-align: center;
+}
+.ew-slotrow .ew-factionseg {
+  display: flex;
+  min-width: 0;
+}
+.ew-slotrow .ew-factionseg button {
+  flex: 1;
+  min-width: 0;
+}
+.ew-slotrow .ew-factionseg span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Not much room: emblems only (the name is in the tooltip). */
+@container (max-width: 1240px) {
+  .ew-slotrow .ew-factionseg span {
+    display: none;
+  }
+  .ew-deck .ew-slotrow .ew-factionseg button {
+    justify-content: center;
+    padding: 3px 6px;
+  }
+}
+/* Small text buttons, as in frame headers. */
+.ew-deck .ew-chip {
+  padding: 3px 10px;
+  font-size: 11.5px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.ew-mappreview.is-editable {
+  cursor: crosshair;
+  touch-action: none;
+}
+.ew-areahint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #c4d0e4;
+}
+.ew-areahint .ew-dot {
+  margin-right: 6px;
+}
+.ew-mappicker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+.ew-deck .ew-mappicker .ew-mapcard {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.ew-mappicker .ew-mappreview.is-thumb {
+  width: 100%;
+  height: 92px;
+}
+.ew-deploybox {
+  width: min(400px, calc(100% - 32px));
 }
 strong.ew-slotwho {
   font-family: var(--ew-display);
@@ -462,8 +555,8 @@ strong.ew-slotwho {
   padding: 3px 8px 3px 4px;
 }
 .ew-factionseg img {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
 }
 .ew-deck .ew-teamtag {
   padding: 3px 10px;

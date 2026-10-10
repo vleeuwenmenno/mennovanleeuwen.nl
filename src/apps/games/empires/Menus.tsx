@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DIFFICULTY, type Difficulty } from './ai'
 import { FACTIONS, type FactionId } from './data'
 import { Frame, Icon } from './Hud'
-import { DEFAULT_RULES, GENERATED, MAP, MAPS, MAX_BEACONS, MAX_SEED, cleanRules, generateMap, type Amount, type MapDef, type MapRules } from './maps'
+import { DEFAULT_RULES, GENERATED, MAP, MAPS, MAX_BEACONS, MAX_SEED, cleanRules, defaultArea, generateMap, type Amount, type MapDef, type MapRules, type Rect } from './maps'
 import { ALLY, ENEMY, OWN, drawTerrainOverview, relColor } from './render'
 import { ACTIONS, RESERVED, bindKey, keyName, keyOf, resetKeys, setSettings, useSettings, type Action, type Settings } from './settings'
 import { newWorld, type Owner, type World } from './sim'
@@ -14,11 +14,15 @@ import type { Bus, EmpiresSound } from './sound'
 export type SlotKind = 'you' | 'ai' | 'closed'
 /** One spawn point in the lobby: who plays there, as what, on which side. Team 0 is yours. */
 export type Slot = { kind: SlotKind; faction: FactionId; team: 0 | 1; difficulty: Difficulty }
-/** `map` is a fixed map's id, or GENERATED to build one from `gen`. */
-export type Setup = { map: string; slots: Slot[]; credits: number; gen: MapRules }
+/** `map` is a fixed map's id, or GENERATED to build one from `gen`. `areas` are the start areas
+ * drawn in the lobby, by slot; a slot without one starts round its spawn point. */
+export type Setup = { map: string; slots: Slot[]; credits: number; gen: MapRules; areas: (Rect | null)[] }
 
 const SETUP_KEY = 'mvlos.empires.lobby'
 export const CREDIT_STEPS = [500, 1000, 1600, 2500, 4000, 6000, 10000]
+
+/** Each slot's start area: the one drawn in the lobby, or a square round its spawn point. */
+export const setupAreas = (s: Setup, map: MapDef): Rect[] => map.spawns.map((_, i) => s.areas[i] ?? defaultArea(map, i))
 
 /** The map a setup plays on. */
 export const setupMap = (s: Setup): MapDef => (s.map === GENERATED ? generateMap(s.gen) : (MAP[s.map] ?? MAPS[0]))
@@ -44,14 +48,18 @@ function lastSetup(): Setup {
     const slots = Array.isArray(v?.slots) ? v.slots.filter(ok) : []
     if (slots[0]) slots[0] = { ...slots[0], kind: 'you', team: 0 }
     const credits = typeof v?.credits === 'number' && CREDIT_STEPS.includes(v.credits) ? v.credits : 1600
+    const isRect = (r: unknown): r is Rect =>
+      !!r && typeof r === 'object' && (['x', 'y', 'w', 'h'] as const).every((k) => Number.isFinite((r as Rect)[k])) && (r as Rect).w > 0 && (r as Rect).h > 0
+    const areas = Array.isArray(v?.areas) ? v.areas.slice(0, map.spawns.length).map((r) => (isRect(r) ? r : null)) : []
     return {
+      areas,
       map: v?.map === GENERATED ? GENERATED : map.id,
       slots: slotsFor(map, slots.slice(0, map.spawns.length)).map((s, i) => (i ? { ...s, kind: s.kind === 'you' ? 'ai' : s.kind } : s)),
       credits,
       gen,
     }
   } catch {
-    return { map: MAPS[0].id, slots: slotsFor(MAPS[0]), credits: 1600, gen: { ...DEFAULT_RULES } }
+    return { map: MAPS[0].id, slots: slotsFor(MAPS[0]), credits: 1600, gen: { ...DEFAULT_RULES }, areas: [] }
   }
 }
 
@@ -325,6 +333,7 @@ export function HowToPlay() {
     <div className="ew-form ew-howto">
       <ul>
         <li>Destroy every enemy station. A side is out when its stations are gone.</li>
+        <li>In the lobby, drag on the map to draw where each player may start. Before the battle, click inside your area to place your station, then start.</li>
         <li>Drag to select ships. Right-click to move, or to attack what's under the cursor.</li>
         <li>Park ships at glowing ore for a few seconds to survey it, then click it to build a mining platform (credits) or a defense platform (guns).</li>
         <li>Hold ships near a beacon to capture it: more income and a bigger fleet for your whole team.</li>
@@ -400,11 +409,24 @@ export function MainMenu({ sound, victories, onPlay }: { sound: EmpiresSound; vi
 const slotColor = (s: Slot) => (s.kind === 'closed' ? '#5a6478' : s.kind === 'you' ? OWN : s.team === 0 ? ALLY : ENEMY)
 
 /** The map from above: nebulas, asteroid fields, rocks, ore, beacons, and the spawns numbered and
- * coloured by slot. */
-function MapPreview({ map, slots, className = '' }: { map: MapDef; slots?: Slot[]; className?: string }) {
+ * coloured by slot. Given start areas, it shows them too, and with `onArea` they can be redrawn:
+ * drag out a box for the active slot, or click inside an area to make that slot the active one. */
+function MapPreview({ map, slots, areas, active = -1, onArea, onPick, className = '' }: {
+  map: MapDef
+  slots?: Slot[]
+  areas?: Rect[]
+  active?: number
+  onArea?: (r: Rect) => void
+  onPick?: (i: number) => void
+  className?: string
+}) {
   const ref = useRef<HTMLCanvasElement>(null)
   // The real map, with dummy players, for its asteroid layout (maps are seeded, so it matches).
   const [world] = useState(() => new Map<string, ReturnType<typeof newWorld>>())
+  /** Screen to map units, from the last draw; and the box being dragged out, in map units. */
+  const frame = useRef({ s: 1, ox: 0, oy: 0 })
+  const drag = useRef<{ x0: number; y0: number; x1: number; y1: number; moved: boolean } | null>(null)
+  const redraw = useRef(() => {})
   useEffect(() => {
     const c = ref.current
     if (!c) return
@@ -425,6 +447,7 @@ function MapPreview({ map, slots, className = '' }: { map: MapDef; slots?: Slot[
       const s = Math.min(cw / map.w, ch / map.h)
       const ox = (cw - map.w * s) / 2
       const oy = (ch - map.h * s) / 2
+      frame.current = { s, ox, oy }
       g.clearRect(0, 0, cw, ch)
       g.fillStyle = '#050813'
       g.fillRect(ox, oy, map.w * s, map.h * s)
@@ -458,11 +481,39 @@ function MapPreview({ map, slots, className = '' }: { map: MapDef; slots?: Slot[
         g.arc(ox + b.x * s, oy + b.y * s, 5, 0, Math.PI * 2)
         g.stroke()
       }
+      // Start areas, under the spawn markers; the active one solid, the box being drawn on top.
+      areas?.forEach((a, i) => {
+        const slot = slots?.[i]
+        if (!slot || slot.kind === 'closed') return
+        const col = slotColor(slot)
+        g.fillStyle = col
+        g.globalAlpha = i === active ? 0.2 : 0.1
+        g.fillRect(ox + a.x * s, oy + a.y * s, a.w * s, a.h * s)
+        g.globalAlpha = i === active ? 1 : 0.6
+        g.strokeStyle = col
+        g.lineWidth = i === active ? 2 : 1
+        g.setLineDash(i === active ? [] : [5, 4])
+        g.strokeRect(ox + a.x * s + 0.5, oy + a.y * s + 0.5, a.w * s - 1, a.h * s - 1)
+        g.setLineDash([])
+        g.globalAlpha = 1
+      })
+      const d = drag.current
+      if (d?.moved && active >= 0 && slots?.[active]) {
+        g.strokeStyle = slotColor(slots[active])
+        g.lineWidth = 2
+        g.setLineDash([6, 4])
+        g.strokeRect(ox + Math.min(d.x0, d.x1) * s, oy + Math.min(d.y0, d.y1) * s, Math.abs(d.x1 - d.x0) * s, Math.abs(d.y1 - d.y0) * s)
+        g.setLineDash([])
+      }
       const big = cw > 260
       map.spawns.forEach((p, i) => {
         const slot = slots?.[i]
-        const x = ox + p.x * s
-        const y = oy + p.y * s
+        if (areas && slot?.kind === 'closed') return
+        // With areas, the marker sits at the spawn when it's inside the area, else mid-area.
+        const a = areas?.[i]
+        const at = !a || (p.x >= a.x && p.y >= a.y && p.x <= a.x + a.w && p.y <= a.y + a.h) ? p : { x: a.x + a.w / 2, y: a.y + a.h / 2 }
+        const x = ox + at.x * s
+        const y = oy + at.y * s
         const r = big ? 11 : 6
         g.fillStyle = slot ? slotColor(slot) : '#c8d4ee'
         g.globalAlpha = slot?.kind === 'closed' ? 0.5 : 1
@@ -482,14 +533,68 @@ function MapPreview({ map, slots, className = '' }: { map: MapDef; slots?: Slot[
       g.lineWidth = 1
       g.strokeRect(ox + 0.5, oy + 0.5, map.w * s - 1, map.h * s - 1)
     }
+    redraw.current = draw
     draw()
     const ro = new ResizeObserver(draw)
     ro.observe(c)
     return () => ro.disconnect()
-  }, [map, slots, world])
-  // Shaped like the map, so the panel doesn't carry empty bands above and below it.
-  return <canvas ref={ref} className={`ew-mappreview ${className}`} style={className ? undefined : { aspectRatio: `${map.w} / ${map.h}` }} />
+  }, [map, slots, world, areas, active])
+  const toMap = (e: React.PointerEvent) => {
+    const b = ref.current!.getBoundingClientRect()
+    const { s, ox, oy } = frame.current
+    return { x: Math.max(0, Math.min(map.w, (e.clientX - b.left - ox) / s)), y: Math.max(0, Math.min(map.h, (e.clientY - b.top - oy) / s)) }
+  }
+  const editable = !!onArea
+  return (
+    <canvas
+      ref={ref}
+      className={`ew-mappreview ${editable ? 'is-editable' : ''} ${className}`}
+      // Shaped like the map, so the panel doesn't carry empty bands above and below it.
+      style={className ? undefined : { aspectRatio: `${map.w} / ${map.h}` }}
+      onPointerDown={
+        editable
+          ? (e) => {
+              const p = toMap(e)
+              ;(e.target as Element).setPointerCapture(e.pointerId)
+              drag.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y, moved: false }
+            }
+          : undefined
+      }
+      onPointerMove={
+        editable
+          ? (e) => {
+              const d = drag.current
+              if (!d) return
+              const p = toMap(e)
+              d.x1 = p.x
+              d.y1 = p.y
+              if (Math.abs(d.x1 - d.x0) * frame.current.s > 6 || Math.abs(d.y1 - d.y0) * frame.current.s > 6) d.moved = true
+              redraw.current()
+            }
+          : undefined
+      }
+      onPointerUp={
+        editable
+          ? () => {
+              const d = drag.current
+              drag.current = null
+              if (!d) return
+              const r = { x: Math.min(d.x0, d.x1), y: Math.min(d.y0, d.y1), w: Math.abs(d.x1 - d.x0), h: Math.abs(d.y1 - d.y0) }
+              // A real box sets the active slot's area; a click picks whose area is under it.
+              if (d.moved && r.w >= MIN_AREA && r.h >= MIN_AREA) onArea!(r)
+              else if (!d.moved) {
+                const hit = areas?.findIndex((a, i) => slots?.[i]?.kind !== 'closed' && d.x0 >= a.x && d.y0 >= a.y && d.x0 <= a.x + a.w && d.y0 <= a.y + a.h) ?? -1
+                if (hit >= 0) onPick?.(hit)
+              } else redraw.current()
+            }
+          : undefined
+      }
+    />
+  )
 }
+
+/** The smallest start area that can be drawn, in map units: room for a station and its fleet. */
+const MIN_AREA = 700
 
 const AMOUNTS: [Amount, string][] = [
   ['none', 'None'],
@@ -577,26 +682,40 @@ function GenControls({ rules, onChange, onReroll }: { rules: MapRules; onChange:
 
 export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack: () => void; onLaunch: (s: Setup) => void }) {
   const [setup, setSetup] = useState(lastSetup)
+  const [picker, setPicker] = useState(false)
+  /** Whose start area a drag on the map redraws. */
+  const [active, setActive] = useState(0)
   const generated = useMemo(() => generateMap(setup.gen), [setup.gen])
   const isGen = setup.map === GENERATED
   const map = isGen ? generated : (MAP[setup.map] ?? MAPS[0])
+  const areas = useMemo(() => setupAreas(setup, map), [setup, map])
   const update = (next: Setup) => {
     setSetup(next)
     saveSetup(next)
   }
   const setSlot = (i: number, patch: Partial<Slot>) => update({ ...setup, slots: setup.slots.map((s, j) => (j === i ? { ...s, ...patch } : s)) })
+  // A different map starts from its own areas.
   const pickMap = (m: MapDef, id = m.id) => {
     sound.click()
-    update({ ...setup, map: id, slots: slotsFor(m, setup.slots.slice(0, m.spawns.length)) })
+    setActive(0)
+    setPicker(false)
+    update({ ...setup, map: id, areas: [], slots: slotsFor(m, setup.slots.slice(0, m.spawns.length)) })
   }
   const setRules = (patch: Partial<MapRules>) => {
     const gen = cleanRules({ ...setup.gen, ...patch })
     const m = generateMap(gen)
-    update({ ...setup, gen, slots: isGen ? slotsFor(m, setup.slots.slice(0, m.spawns.length)) : setup.slots })
+    update({ ...setup, gen, areas: isGen ? [] : setup.areas, slots: isGen ? slotsFor(m, setup.slots.slice(0, m.spawns.length)) : setup.slots })
+  }
+  const setArea = (r: Rect) => {
+    sound.click()
+    const next = map.spawns.map((_, i) => setup.areas[i] ?? null)
+    next[active] = r
+    update({ ...setup, areas: next })
   }
   const enemies = setup.slots.filter((s) => s.kind === 'ai' && s.team === 1).length
   const allies = setup.slots.filter((s) => s.kind === 'ai' && s.team === 0).length
   const step = Math.max(0, CREDIT_STEPS.indexOf(setup.credits))
+  const act = setup.slots[active]?.kind === 'closed' ? 0 : active
   return (
     <div className="ew-root ew-deck ew-lobby" style={{ backgroundImage: 'url(/games/empires/world/title.webp)' }} onContextMenu={noMenu}>
       <header className="ew-lobby-head">
@@ -604,46 +723,28 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
         <h2>Skirmish</h2>
       </header>
       <div className="ew-lobby-grid">
-        <Frame title="Map" className="ew-lobby-maps">
-          <div className="ew-maplist">
-            {MAPS.map((m) => (
-              <button key={m.id} className={`ew-mapcard ${!isGen && m.id === map.id ? 'is-on' : ''}`} onClick={() => pickMap(m)} aria-pressed={!isGen && m.id === map.id}>
-                <MapPreview map={m} className="is-thumb" />
-                <span>
-                  <strong>{m.name}</strong>
-                  <small>{m.spawns.length} players</small>
-                </span>
-              </button>
-            ))}
-            <button className={`ew-mapcard ${isGen ? 'is-on' : ''}`} onClick={() => pickMap(generated, GENERATED)} aria-pressed={isGen}>
-              <MapPreview map={generated} className="is-thumb" />
-              <span>
-                <strong>Generated</strong>
-                <small>{generated.spawns.length} players · seed {setup.gen.seed}</small>
-              </span>
-            </button>
-          </div>
-        </Frame>
-        <Frame title={map.name} className="ew-lobby-preview" aside={<span className="ew-muted ew-small">{map.spawns.length} spawns · {map.beacons.length} beacons · {map.ore.length} ore</span>}>
-          <MapPreview map={map} slots={setup.slots} />
-          <MapLegend map={map} />
-          <p className="ew-muted">{map.blurb}</p>
-          {isGen && (
-            <GenControls
-              rules={setup.gen}
-              onChange={setRules}
-              onReroll={() => {
-                sound.click()
-                setRules({ seed: Math.floor(Math.random() * (MAX_SEED + 1)) })
-              }}
-            />
-          )}
-        </Frame>
-        <Frame title="Players" className="ew-lobby-slots">
-          <div className="ew-slotlist">
+        <Frame title="Players" className="ew-lobby-slots" aside={<span className="ew-muted ew-small">{map.spawns.length} spawns</span>}>
+          <div className="ew-slottable" role="table" aria-label="Players">
+            <div className="ew-slotrow is-head" role="row">
+              <span />
+              <span>Player</span>
+              <span>Faction</span>
+              <span>Side</span>
+              <span>AI level</span>
+            </div>
             {setup.slots.map((s, i) => (
-              <div key={i} className={`ew-slotrow ${s.kind === 'closed' ? 'is-closed' : ''}`}>
-                <span className="ew-spawnno" style={{ background: slotColor(s) }}>{i + 1}</span>
+              <div key={i} role="row" className={`ew-slotrow ${s.kind === 'closed' ? 'is-closed' : ''} ${i === act ? 'is-active' : ''}`}>
+                <button
+                  className="ew-spawnno"
+                  style={{ background: slotColor(s) }}
+                  disabled={s.kind === 'closed'}
+                  onClick={() => (sound.click(), setActive(i))}
+                  title="Draw this player's start area on the map"
+                  aria-label={`Spawn ${i + 1}: draw its start area`}
+                  aria-pressed={i === act}
+                >
+                  {i + 1}
+                </button>
                 {s.kind === 'you' ? (
                   <strong className="ew-slotwho">You</strong>
                 ) : (
@@ -652,13 +753,15 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
                     <option value="closed">Closed</option>
                   </select>
                 )}
-                {s.kind !== 'closed' && (
+                {s.kind === 'closed' ? (
+                  <span className="ew-muted ew-small ew-slotopen">Open this spawn for a bigger battle</span>
+                ) : (
                   <>
                     <div className="ew-seg ew-factionseg" role="group" aria-label="Faction">
                       {(['republic', 'droid'] as FactionId[]).map((f) => (
                         <button key={f} className={s.faction === f ? 'is-on' : ''} onClick={() => setSlot(i, { faction: f })} title={FACTIONS[f].long} aria-pressed={s.faction === f}>
                           <img src={`/games/empires/world/emblem-${f}.webp`} alt="" />
-                          {FACTIONS[f].name}
+                          <span>{FACTIONS[f].name}</span>
                         </button>
                       ))}
                     </div>
@@ -669,22 +772,21 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
                         {s.team === 0 ? 'Ally' : 'Enemy'}
                       </button>
                     )}
-                    {s.kind === 'ai' && (
+                    {s.kind === 'ai' ? (
                       <select value={s.difficulty} onChange={(e) => setSlot(i, { difficulty: e.target.value as Difficulty })} aria-label="Difficulty" title={DIFFICULTY[s.difficulty].blurb}>
                         {(Object.keys(DIFFICULTY) as Difficulty[]).map((d) => (
                           <option key={d} value={d}>{DIFFICULTY[d].name}</option>
                         ))}
                       </select>
+                    ) : (
+                      <span />
                     )}
                   </>
                 )}
               </div>
             ))}
           </div>
-          <p className="ew-muted ew-small">
-            {setup.slots.length > 2 ? 'Open more spawns for bigger battles: allies fight beside you, enemies against you. ' : ''}
-            {DIFFICULTY[setup.slots.find((s) => s.kind === 'ai' && s.team === 1)?.difficulty ?? 'easy'].blurb}
-          </p>
+          <p className="ew-muted ew-small">{DIFFICULTY[setup.slots.find((s) => s.kind === 'ai' && s.team === 1)?.difficulty ?? 'easy'].blurb}</p>
           <h5>Starting credits</h5>
           <label className="ew-range">
             <input type="range" min={0} max={CREDIT_STEPS.length - 1} step={1} value={step} onChange={(e) => update({ ...setup, credits: CREDIT_STEPS[Number(e.target.value)] })} aria-label="Starting credits" />
@@ -699,7 +801,55 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
             </button>
           </div>
         </Frame>
+        <Frame title={map.name} className="ew-lobby-preview" aside={<button className="ew-chip" onClick={() => (sound.click(), setPicker(true))}>Change map</button>}>
+          <MapPreview map={map} slots={setup.slots} areas={areas} active={act} onArea={setArea} onPick={(i) => (sound.click(), setActive(i))} />
+          <div className="ew-areahint">
+            <span className="ew-small">
+              <i className="ew-dot" style={{ background: slotColor(setup.slots[act]) }} />
+              Drag on the map to draw the start area for <b>{slotName(setup.slots[act], act)}</b>. Click an area, or a number on the left, to switch.
+            </span>
+            <button className="ew-chip" disabled={!setup.areas.some(Boolean)} onClick={() => (sound.click(), update({ ...setup, areas: [] }))}>
+              Reset areas
+            </button>
+          </div>
+          <MapLegend map={map} />
+          <p className="ew-muted">
+            {map.blurb} <span className="ew-small">{map.spawns.length} spawns · {map.beacons.length} beacons · {map.ore.length} ore.</span>
+          </p>
+          {isGen && (
+            <GenControls
+              rules={setup.gen}
+              onChange={setRules}
+              onReroll={() => {
+                sound.click()
+                setRules({ seed: Math.floor(Math.random() * (MAX_SEED + 1)) })
+              }}
+            />
+          )}
+        </Frame>
       </div>
+      {picker && (
+        <Modal title="Choose a map" onClose={() => setPicker(false)} wide>
+          <div className="ew-mappicker">
+            {MAPS.map((m) => (
+              <button key={m.id} className={`ew-mapcard ${!isGen && m.id === map.id ? 'is-on' : ''}`} onClick={() => pickMap(m)} aria-pressed={!isGen && m.id === map.id}>
+                <MapPreview map={m} className="is-thumb" />
+                <span>
+                  <strong>{m.name}</strong>
+                  <small>{m.spawns.length} players · {m.ore.length} ore</small>
+                </span>
+              </button>
+            ))}
+            <button className={`ew-mapcard ${isGen ? 'is-on' : ''}`} onClick={() => pickMap(generated, GENERATED)} aria-pressed={isGen}>
+              <MapPreview map={generated} className="is-thumb" />
+              <span>
+                <strong>Generated</strong>
+                <small>Your own rules and seed</small>
+              </span>
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
