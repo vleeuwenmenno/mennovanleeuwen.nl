@@ -235,6 +235,16 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  agents: {
+    bg: 'linear-gradient(160deg,#9d7cd8,#4b3a8c)',
+    fg: '#f4efff',
+    glyph: (
+      <>
+        <path d="M24 9l2.6 7.4L34 19l-7.4 2.6L24 29l-2.6-7.4L14 19l7.4-2.6z" />
+        <path d="M34 29l1.3 3.7L39 34l-3.7 1.3L34 39l-1.3-3.7L29 34l3.7-1.3zM13 31l1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1z" />
+      </>
+    ),
+  },
   calendar: {
     bg: 'linear-gradient(180deg,#f7768e 0 30%,#fbfbf8 30% 100%)',
     fg: '#2a2f3d',
@@ -293,6 +303,7 @@ const HUES: Record<AppId, string> = {
   notebook: 'var(--orange)',
   widget: 'var(--yellow)',
   calendar: 'var(--red)',
+  agents: 'var(--magenta)',
   settings: 'var(--text)',
   trash: 'var(--muted)',
 }

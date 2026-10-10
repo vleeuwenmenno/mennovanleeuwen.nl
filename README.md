@@ -309,6 +309,39 @@ The mouse's Back and Forward buttons, and the browser's own Back, go back in the
 
 Questions (delete this? empty the trash?) are the desktop's own dialogs, never the browser's.
 
+**Agents** is a research assistant on [Ollama Cloud](https://docs.ollama.com/cloud), for the
+signed-in owner ([`server/agents.ts`](server/agents.ts), [`src/apps/Agents.tsx`](src/apps/Agents.tsx)).
+Add an API key from ollama.com in Settings → Integrations (stored encrypted), or set
+`OLLAMA_API_KEY` on the server. Each thread is *Quick* (a search or two, a short answer) or *Deep*
+(searches from several angles, reads the sources with web fetch, and writes a structured answer
+with citations), on any of Ollama's cloud models that can call tools. Turns run on the server and
+stream to the window, with the model's thinking folded under each reply; Stop ends one. The
+composer holds the mode, the model, which tools the thread may use, a context-window ring (tap it
+for what fills the window) and attachments: text files, PDFs (their text, read in the browser with
+pdf.js) and pictures, from Seafile, this computer, a drop or a paste. Its tools: web search
+(Ollama's own by default; Settings → Agents → Web search switches it to SearXNG, Brave Search, Kagi,
+Tavily or any JSON search API described by a URL template, headers and result paths, with keys
+stored encrypted, see [`server/websearch.ts`](server/websearch.ts)) and Ollama's web fetch, your notes, your code hosts, Seafile (list, search by name, read), Seafile
+changes (each one waits for *Allow* in the window, since a page the agent read could have asked
+for it), `update_todos` (a plan for long jobs, shown as "3/12" over the composer; while items are
+open a turn may run up to 150 rounds, and it keeps going on the server when the window closes, until
+Stop) and `remember`/`update_memory`. Memory is the owner's (every thread) or a project's (that
+project's threads), filed by the agent under category paths such as People/Family or Work/Tools;
+the Memory view shows it as a tree to search, add to, edit, move and forget. Projects group threads
+in the sidebar: drag them into order, drag threads into or out of them, fold them; threads in and
+out of projects can be pinned. The agent can manage projects too (list, create, rename, move the
+thread), asking first. When it needs a decision or details it asks with `ask_user`: a small form in
+the conversation (choice, multiple choice, yes or no, text, number, rating, date, or text to read;
+several questions at once), and its turn waits for the answers. Each question type is one renderer
+in `FIELDS` ([`src/apps/Agents.tsx`](src/apps/Agents.tsx)) and an unknown type falls back to a text
+field, so new types can be added one at a time. Threads get a title from a small model, can be renamed (with a
+suggestion), archived and deleted, and the sidebar folds to a rail.
+Settings → Agents (also the app's ⚙) picks the model for Quick, Deep and titles, what a new thread
+starts with, and shows the system prompt: `~/AGENTS.md`, your own from Seafile when Seafile is
+home, otherwise a read-only built-in one ([`src/data/agentsPrompt.ts`](src/data/agentsPrompt.ts)).
+Spotlight takes questions too: *Ask Agents* is under the web search, and a `?` in front makes it
+the top hit. `OLLAMA_URL` points it at a stand-in for ollama.com when testing.
+
 The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests
 and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 ([`server/inbox.ts`](server/inbox.ts)), with the access sign-in and linking already give.

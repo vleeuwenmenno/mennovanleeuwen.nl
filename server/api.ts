@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { forgejoActivity } from './activity.ts'
+import { handleWebSearchApi } from './websearch.ts'
+import { addMemory, agentsPrompt, answer, approve, automaticModels, createProject, deleteProject, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, suggestTitle, deleteMemory, deleteThread, getThread, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { authEnabled, currentUser, finishLogin, logout, requireUser, startLogin } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
@@ -66,7 +68,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         googleEnabled: googleEnabled(),
         google: user ? googleAccount(user) : null,
         caldav: user ? listCaldav(user) : [],
-        integrations: { updown: user ? updownSource(user) : null },
+        integrations: { updown: user ? updownSource(user) : null, ollama: user ? ollamaSource(user) : null },
         seafile: user ? seafileInfo(user) : null,
       })
       return true
@@ -193,6 +195,43 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/seafile/unlock' && read) return json(res, 200, unlocked(requireUser(req))), true
     if (path === '/api/seafile/lock' && method === 'POST') return lock(requireUser(req), (await readJson<{ repo?: string }>(req, 1024)).repo), json(res, 200, { ok: true }), true
     if (path === '/api/updown' && read) return json(res, 200, await updownChecks(requireUser(req))), true
+
+    // The Agents app (server/agents.ts): Ollama Cloud's key, threads, a turn (streamed) and memory.
+    if (path === '/api/integrations/ollama' && method === 'PUT') return await setOllamaKey(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true
+    if (path === '/api/integrations/ollama' && method === 'DELETE') return removeOllamaKey(requireUser(req)), json(res, 200, { ok: true }), true
+    if (path === '/api/agents/defaults' && read) return requireUser(req), json(res, 200, await automaticModels()), true
+    if (path === '/api/agents/models' && read) return requireUser(req), json(res, 200, await agentModels()), true
+    if (path === '/api/agents/threads' && read) return json(res, 200, listThreads(requireUser(req), url.searchParams.get('archived') === '1')), true
+    if (path === '/api/agents/threads' && method === 'POST') return json(res, 200, await createThread(requireUser(req), await readJson(req, 4096))), true
+    const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/stop|\/approve|\/answer|\/title|\/context)?$/.exec(path)
+    if (agentThread) {
+      const [, tid, sub] = agentThread
+      if (!sub && read) return json(res, 200, getThread(requireUser(req), tid)), true
+      if (!sub && method === 'PATCH') return json(res, 200, await updateThread(requireUser(req), tid, await readJson(req, 4096))), true
+      if (!sub && method === 'DELETE') return deleteThread(requireUser(req), tid), json(res, 200, { ok: true }), true
+      if (sub === '/messages' && method === 'POST') {
+        const user = requireUser(req)
+        return await runTurn(res, user, tid, await readJson(req, 16 * 1024 * 1024)), true
+      }
+      if (sub === '/stop' && method === 'POST') return stopThread(requireUser(req), tid), json(res, 200, { ok: true }), true
+      if (sub === '/title' && method === 'POST') return json(res, 200, await suggestTitle(requireUser(req), tid)), true
+      if (sub === '/context' && read) return json(res, 200, await contextOf(requireUser(req), tid)), true
+      if (sub === '/answer' && method === 'POST') return answer(requireUser(req), tid, await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true
+      if (sub === '/approve' && method === 'POST') return approve(requireUser(req), tid, await readJson(req, 1024)), json(res, 200, { ok: true }), true
+    }
+    if (path === '/api/agents/prompt' && read) return json(res, 200, await agentsPrompt(requireUser(req), url.searchParams.has('fresh'))), true
+    if (path.startsWith('/api/agents/websearch') && (await handleWebSearchApi(req, res, url, method, requireUser(req)))) return true
+    if (path === '/api/agents/projects' && read) return json(res, 200, listProjects(requireUser(req))), true
+    if (path === '/api/agents/projects' && method === 'POST') return json(res, 200, createProject(requireUser(req), await readJson(req, 4096))), true
+    if (path === '/api/agents/projects/order' && method === 'PUT') return json(res, 200, orderProjects(requireUser(req), await readJson(req, 16 * 1024))), true
+    const projectId = /^\/api\/agents\/projects\/(\d+)$/.exec(path)?.[1]
+    if (projectId && method === 'PATCH') return json(res, 200, renameProject(requireUser(req), projectId, await readJson(req, 4096))), true
+    if (projectId && method === 'DELETE') return deleteProject(requireUser(req), projectId), json(res, 200, { ok: true }), true
+    if (path === '/api/agents/memories' && method === 'POST') return json(res, 200, addMemory(requireUser(req), await readJson(req, 8192))), true
+    if (path === '/api/agents/memories' && read) return json(res, 200, listMemories(requireUser(req))), true
+    const memoryId = /^\/api\/agents\/memories\/(\d+)$/.exec(path)?.[1]
+    if (memoryId && method === 'PATCH') return json(res, 200, updateMemory(requireUser(req), memoryId, await readJson(req, 8192))), true
+    if (memoryId && method === 'DELETE') return deleteMemory(requireUser(req), Number(memoryId)), json(res, 200, { ok: true }), true
     if (path === '/api/preview' && read) {
       requireUser(req) // fetches other sites on request: the signed-in owner only
       const res2 = await linkPreview(url.searchParams.get('url') ?? '')

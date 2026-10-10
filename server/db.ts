@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite'
 // instances, a linked Google Calendar, synced desktop state (notes, window layout, launchers) and
 // the Minecraft server's history. One SQLite file in DATA_DIR (default ./data), opened on first use.
 //
-// Access tokens and passwords (GitHub, Gitea, Google, CalDAV, updown.io) are encrypted at rest
+// Access tokens and passwords (GitHub, Gitea, Google, CalDAV, updown.io, Ollama) are encrypted at rest
 // with AES-256-GCM. The key comes from SESSION_SECRET, or a random one generated once into
 // DATA_DIR/secret.key.
 
@@ -104,9 +104,62 @@ export function database(): DatabaseSync {
       left_at INTEGER
     );
     CREATE INDEX IF NOT EXISTS mc_sessions_open ON mc_sessions (left_at);
+    -- The Agents app (server/agents.ts): threads with their messages, and what the agent was asked
+    -- to remember about the owner across threads.
+    CREATE TABLE IF NOT EXISTS agent_threads (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      model TEXT NOT NULL,
+      archived INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS agent_threads_user ON agent_threads (user_id, updated_at);
+    CREATE TABLE IF NOT EXISTS agent_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      thread_id TEXT NOT NULL REFERENCES agent_threads(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      thinking TEXT,
+      tool_calls TEXT,
+      tool_name TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS agent_messages_thread ON agent_messages (thread_id, id);
+    CREATE TABLE IF NOT EXISTS agent_memories (
+      id INTEGER PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      text TEXT NOT NULL,
+      thread_id TEXT,
+      created_at INTEGER NOT NULL
+    );
   `)
   // Added later: the scopes Google granted (editing needs calendar.events).
   if (!(db.prepare('PRAGMA table_info(google)').all() as { name: string }[]).some((c) => c.name === 'scopes')) db.exec('ALTER TABLE google ADD COLUMN scopes TEXT')
+  // Added later: which tool groups a thread may use (JSON; null for all), and files attached to a message.
+  if (!(db.prepare('PRAGMA table_info(agent_threads)').all() as { name: string }[]).some((c) => c.name === 'tools')) db.exec('ALTER TABLE agent_threads ADD COLUMN tools TEXT')
+  if (!(db.prepare('PRAGMA table_info(agent_messages)').all() as { name: string }[]).some((c) => c.name === 'attachments')) db.exec('ALTER TABLE agent_messages ADD COLUMN attachments TEXT')
+  // Added later: projects (threads grouped in the sidebar, with a memory of their own), pinned
+  // threads, and memories sorted by scope (the owner, or one project) and category ("People/Friends").
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_projects (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    sort INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  )`)
+  const cols = (t: string) => (db!.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).map((c) => c.name)
+  if (!cols('agent_threads').includes('project_id')) db.exec('ALTER TABLE agent_threads ADD COLUMN project_id INTEGER')
+  if (!cols('agent_threads').includes('pinned')) db.exec('ALTER TABLE agent_threads ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0')
+  if (!cols('agent_memories').includes('project_id')) db.exec('ALTER TABLE agent_memories ADD COLUMN project_id INTEGER')
+  if (!cols('agent_memories').includes('category')) db.exec("ALTER TABLE agent_memories ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+  if (!cols('agent_memories').includes('updated_at')) db.exec('ALTER TABLE agent_memories ADD COLUMN updated_at INTEGER')
+  // A thread's todo list, for long jobs: the agent keeps it up to date, the window shows it.
+  if (!cols('agent_threads').includes('todos')) db.exec('ALTER TABLE agent_threads ADD COLUMN todos TEXT')
+  // Added later: how many tokens a thread's last reply took up in the model's context.
+  if (!(db.prepare('PRAGMA table_info(agent_threads)').all() as { name: string }[]).some((c) => c.name === 'context_tokens')) db.exec('ALTER TABLE agent_threads ADD COLUMN context_tokens INTEGER')
   key = Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())
   return db

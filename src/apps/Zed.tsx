@@ -884,7 +884,9 @@ function rich(s: string, key: string): ReactNode[] {
     else if (m[3]) out.push(<em key={k}>{rich(t.slice(1, -1), k)}</em>)
     else if (m[4]) {
       const [, label, href] = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(t)!
-      out.push(<a key={k} href={href} target="_blank" rel="noopener noreferrer">{rich(label, k)}</a>)
+      // Only web and mail links: Markdown here can come from elsewhere (the Agents app's answers).
+      if (/^(https?:|mailto:|\/|#)/i.test(href.trim())) out.push(<a key={k} href={href} target="_blank" rel="noopener noreferrer">{rich(label, k)}</a>)
+      else out.push(<span key={k}>{rich(label, k)}</span>)
     } else out.push(<a key={k} href={t} target="_blank" rel="noopener noreferrer">{t}</a>)
     last = m.index + t.length
   }

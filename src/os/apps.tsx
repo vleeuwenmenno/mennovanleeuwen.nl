@@ -21,6 +21,7 @@ import { PdfViewer, pdfTitle } from '../apps/PdfViewer'
 import { Office, officeTitle } from '../apps/Office'
 import { Archive, archiveTitle } from '../apps/Archive'
 import { Zed } from '../apps/Zed'
+import { Agents } from '../apps/Agents'
 import type { AppId, WinState } from './wm'
 
 export type AppMeta = {
@@ -56,6 +57,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   contact: { title: 'New message', dock: 'Contact', blurb: 'Get in touch', size: [560, 500], render: () => <Contact /> },
   games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, Pool, Gladiator, Breakout', size: [720, 640], render: (w) => <Games win={w} /> },
   calendar: { title: 'Calendar', dock: 'Calendar', blurb: 'Your Google and CalDAV calendars: plan, move and invite', size: [1000, 660], render: (w) => <CalendarApp win={w} /> },
+  agents: { title: 'Agents', dock: 'Agents', blurb: 'Research assistant: quick answers or deep research, with memory', size: [920, 640], render: (w) => <Agents win={w} /> },
   notebook: { title: 'Notebook', dock: 'Notebook', blurb: 'Your notes, in Markdown, on any device', size: [860, 560], render: (w) => <Notebook win={w} /> },
   // A desktop widget (props.kind, props.id): a sticky note, the weather... See src/widgets.
   widget: { title: 'Widget', dock: 'Widget', blurb: 'Notes, weather and more on the desktop', size: [280, 260], chrome: 'note', render: (w) => <WidgetHost win={w} /> },

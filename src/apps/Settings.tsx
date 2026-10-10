@@ -11,11 +11,12 @@ import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } f
 import { MC_ADDRESS, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
 import { setSwing, useSwingPrefs } from '../os/swing'
 import { ask } from '../os/Dialogs'
+import { Select } from '../os/Select'
 import { libraryName, loadLibraries, primaryOf, setSeafilePrefs, useLibraries, useSeafilePrefs } from '../data/seafile'
 import { fstabEntries, isSeafileType, useMounts } from '../data/mounts'
 
 const libraryNameOf = (prefix: string) => libraryName(prefix.slice('seafile://'.length))
-import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeUpdownKey, setOffice, setUpdownKey, signIn, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelyOwner } from '../os/account'
+import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, signIn, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelyOwner } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
@@ -26,6 +27,7 @@ import { pullAll } from '../os/synced'
 import { ACCENTS, DARK_THEMES, LIGHT_THEMES, setAccent, setMode, setTheme, themeLabel, useTheme, type Mode } from '../os/theme'
 import { ReleaseStatus } from '../os/TopbarWidgets'
 import { useWM, type WinState } from '../os/wm'
+import { AgentsSettings } from './AgentsSettings'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
 import { BranchGlyph } from './LinkForge'
 import { SyncLine } from './Notebook'
@@ -545,7 +547,7 @@ function Launchers() {
 }
 
 /** Third-party services the widgets read from, with keys on the server: updown.io for Status. */
-type IntegrationId = 'updown' | 'seafile' | 'onlyoffice'
+type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice'
 
 /** Third-party services, one row each; a row opens that service's own settings. */
 function Integrations() {
@@ -563,6 +565,13 @@ function Integrations() {
       icon: <img className="set-fav" src="https://updown.io/favicon.ico" alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />,
       status: account.integrations.updown === 'server' ? 'Connected with the key set on the server' : account.integrations.updown ? 'Connected · for the Status widget' : 'Uptime checks, for the Status widget',
       on: !!account.integrations.updown,
+    },
+    {
+      id: 'ollama',
+      name: 'Ollama Cloud',
+      icon: <Fav src="https://ollama.com/public/icon-64x64.png" glyph="🦙" />,
+      status: account.integrations.ollama === 'server' ? 'Connected with the key set on the server' : account.integrations.ollama ? 'Connected · for Agents' : 'Models and web search, for the Agents app',
+      on: !!account.integrations.ollama,
     },
     {
       id: 'seafile',
@@ -593,7 +602,7 @@ function Integrations() {
           <strong>{current.name}</strong>
           {current.on && <span className="set-badge">Connected</span>}
         </div>
-        {current.id === 'updown' ? <UpdownSettings /> : current.id === 'seafile' ? <SeafileSettings /> : <OfficeSettings />}
+        {current.id === 'updown' ? <UpdownSettings /> : current.id === 'ollama' ? <OllamaSettings /> : current.id === 'seafile' ? <SeafileSettings /> : <OfficeSettings />}
       </>
     )
 
@@ -668,6 +677,64 @@ function UpdownSettings() {
           </p>
           <button className="btn btn-primary" disabled={busy}>
             {busy ? 'Checking…' : 'Connect updown.io'}
+          </button>
+        </form>
+      )}
+      {error && <p className="t-red">{error}</p>}
+    </>
+  )
+}
+
+/** Ollama Cloud's API key, for the Agents app: its models, web search and web fetch. */
+function OllamaSettings() {
+  const account = useAccount()
+  const wm = useWM()
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const save = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await setOllamaKey(key)
+      setKey('')
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      {account.integrations.ollama === 'server' && <p className="muted">Connected with OLLAMA_API_KEY from the server's environment. A key saved here would be used instead.</p>}
+      {account.integrations.ollama === 'settings' ? (
+        <>
+          <p className="muted">Connected with a key saved here, stored encrypted on this server. Agents uses it for the models, web search and reading pages; usage counts against your Ollama plan.</p>
+          <div className="set-actions">
+            <button className="btn btn-small btn-primary" onClick={() => wm.open('agents')}>
+              Open Agents
+            </button>
+            <button className="btn btn-small" onClick={() => removeOllamaKey().catch((e: Error) => setError(e.message))}>
+              Remove key
+            </button>
+          </div>
+        </>
+      ) : (
+        <form className="set-form" onSubmit={save}>
+          <label>
+            <span>API key</span>
+            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Ollama API key" autoComplete="off" required />
+          </label>
+          <p className="muted set-help">
+            Make one at{' '}
+            <a href="https://ollama.com/settings/keys" target="_blank" rel="noopener noreferrer">
+              ollama.com → Settings → Keys
+            </a>
+            . It is checked once, then stored encrypted on this server and only used from here.
+          </p>
+          <button className="btn btn-primary" disabled={busy}>
+            {busy ? 'Checking…' : 'Connect Ollama Cloud'}
           </button>
         </form>
       )}
@@ -764,16 +831,15 @@ function SeafileSettings() {
             <strong>Primary library</strong>
             <span className="muted">Home in Files: its Desktop, Documents, Downloads, Music, Pictures and Videos folders</span>
           </span>
-          <select className="set-select" value={primary?.id ?? ''} disabled={!libs?.length} onChange={(e) => setSeafilePrefs({ primary: e.target.value })} aria-label="Primary library">
-            {!libs && <option value="">Loading…</option>}
-            {libs?.map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.name}
-                {l.encrypted ? ' 🔒' : ''}
-                {l.type !== 'mine' && l.owner ? ` (${l.owner})` : ''}
-              </option>
-            ))}
-          </select>
+          <Select
+            className="set-select"
+            value={primary?.id ?? ''}
+            disabled={!libs?.length}
+            onChange={(primary) => setSeafilePrefs({ primary })}
+            aria-label="Primary library"
+            placeholder={libs ? undefined : 'Loading…'}
+            options={(libs ?? []).map((l) => ({ value: l.id, label: `${l.name}${l.encrypted ? ' 🔒' : ''}${l.type !== 'mine' && l.owner ? ` (${l.owner})` : ''}` }))}
+          />
         </li>
         <li className="set-row">
           <span className="set-row-text">
@@ -815,13 +881,13 @@ function SeafileSettings() {
             <strong>Encrypted libraries</strong>
             <span className="muted">Ask for the password again after</span>
           </span>
-          <select className="set-select" value={sfPrefs.lockMinutes} onChange={(e) => setSeafilePrefs({ lockMinutes: Number(e.target.value) })} aria-label="Lock encrypted libraries after">
-            {[5, 15, 30, 55].map((m) => (
-              <option key={m} value={m}>
-                {m} minutes
-              </option>
-            ))}
-          </select>
+          <Select
+            className="set-select"
+            value={sfPrefs.lockMinutes}
+            onChange={(lockMinutes) => setSeafilePrefs({ lockMinutes })}
+            aria-label="Lock encrypted libraries after"
+            options={[5, 15, 30, 55].map((m) => ({ value: m, label: `${m} minutes` }))}
+          />
         </li>
       </ul>
       {libsError && (
@@ -1275,7 +1341,7 @@ function LinkSettingsPane() {
   )
 }
 
-type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'golinks' | 'sync' | 'about'
+type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'agents' | 'golinks' | 'sync' | 'about'
 /** `owner`: only for the signed-in owner (accounts and services); visitors don't see it at all. */
 type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; keywords: string; blurb: string; owner?: true; render: () => ReactNode }
 
@@ -1324,7 +1390,8 @@ const GROUPS: Pane[][] = [
   [
     { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', owner: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
     { id: 'calendar', label: 'Calendar', hue: 'var(--red)', owner: true, icon: svg(<><rect x="4" y="5" width="16" height="15" /><path d="M4 10h16M9 3v4M15 3v4" /></>), keywords: 'calendar google agenda events caldav fastmail nextcloud icloud', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock.', render: () => <CalendarSettings /> },
-    { id: 'integrations', label: 'Integrations', hue: 'var(--green)', owner: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents', blurb: 'Services the widgets and Files read from: updown.io for Status, Seafile and OnlyOffice.', render: () => <Integrations /> },
+    { id: 'integrations', label: 'Integrations', hue: 'var(--green)', owner: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models', blurb: 'Services the widgets, Files and Agents use: updown.io for Status, Ollama Cloud, Seafile and OnlyOffice.', render: () => <Integrations /> },
+    { id: 'agents', label: 'Agents', hue: 'var(--magenta)', owner: true, icon: svg(<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 16l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" />), keywords: 'agents ai assistant ollama models quick deep research title thread system prompt agents.md tools memory', blurb: 'The Agents app: its models, what a new thread starts with, and its system prompt.', render: () => <AgentsSettings /> },
   ],
   [
     { id: 'sync', label: 'Sync', hue: 'var(--green)', owner: true, icon: svg(<><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3" /><path d="M18 3v4h-4M6 21v-4h4" /></>), keywords: 'sync devices cloud', blurb: 'What follows you between devices.', render: () => <SyncPane /> },
