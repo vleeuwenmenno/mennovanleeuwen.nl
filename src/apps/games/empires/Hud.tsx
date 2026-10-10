@@ -6,7 +6,7 @@ import {
 import { HP_COLOR, HP_ICON, HP_NAME } from './icons'
 import { spriteUrl } from './render'
 import { keyName, useSettings } from './settings'
-import { RANKS, RANK_BONUS, building, cantBuild, cantResearch, cantSite, researchCost, researchLock, shieldFull, shieldMax, techBonus, type OreNode, type Owner, type ResearchItem, type Unit, type World } from './sim'
+import { RANKS, RANK_BONUS, SHIELD_REBOOT, building, cantBuild, cantResearch, cantSite, researchCost, researchLock, shieldFull, shieldMax, techBonus, type OreNode, type Owner, type ResearchItem, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard, research and game speed; and along the bottom the tactical map, a details panel for
@@ -161,7 +161,8 @@ function HpSummary({ u }: { u: Unit }) {
   )
 }
 
-function Vitals({ u, squad = [u] }: { u: Unit; squad?: Unit[] }) {
+function Vitals({ u, squad = [u], now }: { u: Unit; squad?: Unit[]; now: number }) {
+  const reboot = SHIELD_REBOOT - (now - u.shieldOut)
   const t = u.t
   const hull = squad.reduce((s, x) => s + x.hull, 0)
   const max = squad.reduce((s, x) => s + x.hullMax, 0)
@@ -183,6 +184,7 @@ function Vitals({ u, squad = [u] }: { u: Unit; squad?: Unit[] }) {
         </>
       )}
       {u.nebula && <p className="ew-terrain-note">In a nebula: shields down, sensors at half range</p>}
+      {!u.nebula && t.shield > 0 && reboot > 0 && <p className="ew-terrain-note">Shields failed: back online in {Math.ceil(reboot)} s</p>}
     </div>
   )
 }
@@ -499,7 +501,7 @@ function StationDetail(p: DetailProps & { st: Unit }) {
           <small className="ew-muted">Production station</small>
           <Pips level={hud.level} />
         </div>
-        <Vitals u={st} />
+        <Vitals u={st} now={w.time} />
         <HpSummary u={st} />
       </div>
       <div className="ew-detail-main">
@@ -651,7 +653,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
         </header>
         <span className="ew-muted ew-small">{t.blurb}</span>
         <Counters t={t} />
-        <Vitals u={u} squad={squad} />
+        <Vitals u={u} squad={squad} now={w.time} />
         {u.hps.length > 0 && <HpSummary u={u} />}
         {mine && techsFor(t.id).length > 0 && (
           <div className="ew-unittech">

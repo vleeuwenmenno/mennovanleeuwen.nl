@@ -58,6 +58,8 @@ export type Unit = {
   lastHit: number
   /** Shield shimmer: time of the last shield hit and where it came from. */
   shieldHit: number
+  /** When the shields last failed: they stay down for SHIELD_REBOOT seconds before recharging. */
+  shieldOut: number
   hitAngle: number
   abilityCd: number
   abilityOn: number
@@ -122,6 +124,8 @@ export type Rock = { x: number; y: number; r: number; rot: number; spin: number;
 export type Wreck = { id: number; x: number; y: number; value: number; left: number; sprite: string; size: number; rot: number; decay: number; team: number }
 /** How close (from the hulk's centre) a ship must park to salvage, and credits a second per ship (up to three). */
 export const SALVAGE_RANGE = 240
+/** Seconds failed shields stay down before they start to recharge. */
+export const SHIELD_REBOOT = 5
 export const SALVAGE_RATE = 30
 export type Shot = {
   x: number; y: number; vx: number; vy: number; left: number; kind: WeaponKind; owner: Owner; target: number; hp: number; dmg: number; hit: boolean; sx: number; sy: number; age: number; from: number
@@ -259,7 +263,7 @@ export function spawn(w: World, id: string, owner: Owner, x: number, y: number, 
     guns: [...t.weapons.map((wp) => ({ w: wp, hp: -1 })), ...t.hardpoints.flatMap((h, i) => (h.weapon ? [{ w: h.weapon, hp: i }] : []))].map((g) => ({
       ...g, cd: Math.random() * g.w.cooldown, burst: 0, burstT: 0, target: 0, aim: 0,
     })),
-    order: { k: 'idle' }, ax: x, ay: y, squad, parent: 0, target: 0, retarget: Math.random() * 0.5, lastHit: -99, shieldHit: -99, hitAngle: 0,
+    order: { k: 'idle' }, ax: x, ay: y, squad, parent: 0, target: 0, retarget: Math.random() * 0.5, lastHit: -99, shieldHit: -99, shieldOut: -99, hitAngle: 0,
     abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, hold: false, nebula: false, route: null,
     seen: Array.from({ length: w.teams }, (_, t) => t === w.players[owner].team),
   }
@@ -911,9 +915,12 @@ export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: num
     const onShield = kind === 'missile' ? dmg * 0.35 : dmg
     const soaked = Math.min(u.shield, onShield)
     u.shield -= soaked
-    // Shields of a warship giving out are worth hearing.
-    if (u.shield <= 0 && (u.t.tier === 'frigate' || u.t.tier === 'cruiser' || u.t.tier === 'capital' || u.t.tier === 'station' || u.t.tier === 'defense'))
-      w.events.push({ k: 'shieldsDown', owner: u.owner, x: u.x, y: u.y })
+    if (u.shield <= 0) {
+      u.shieldOut = w.time
+      // Shields of a warship giving out are worth hearing.
+      if (u.t.tier === 'frigate' || u.t.tier === 'cruiser' || u.t.tier === 'capital' || u.t.tier === 'station' || u.t.tier === 'defense')
+        w.events.push({ k: 'shieldsDown', owner: u.owner, x: u.x, y: u.y })
+    }
     rest -= soaked
     u.shieldHit = w.time
     u.hitAngle = Math.atan2(fromY - u.y, fromX - u.x)
@@ -1485,8 +1492,9 @@ export function tick(w: World, dt = STEP) {
       if (u.t.ability === 'repairSwarm') u.hull = Math.min(u.hullMax, u.hull + u.hullMax * 0.03 * dt)
     }
     if (u.slow > 0) u.slow -= dt
-    // Shields recharge, faster once out of the fight for a few seconds; terrain can stop that.
-    if (!terrain(w, u, dt)) {
+    // Shields recharge, faster once out of the fight for a few seconds; terrain can stop that, and
+    // failed shields take a few seconds to come back at all, rather than flickering on and off.
+    if (!terrain(w, u, dt) && w.time - u.shieldOut >= SHIELD_REBOOT) {
       const smax = shieldMax(u)
       if (u.shield < smax) u.shield = Math.min(smax, u.shield + u.t.regen * u.mods.regen * (1 + RANK_BONUS * u.rank) * dt * (w.time - u.lastHit > 6 ? 2 : 1))
     }

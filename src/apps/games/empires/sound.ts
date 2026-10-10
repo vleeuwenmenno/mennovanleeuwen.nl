@@ -857,7 +857,7 @@ export class EmpiresSound {
   hit(shield: boolean, heavy: boolean, where: Where) {
     if (!this.ready() || where.gain < 0.03) return
     if (shield) {
-      if (this.allow('shield', 2, 0.1)) this.play('shield', shieldHit, { where, gain: 0.45, takes: 4 })
+      if (this.allow('shield', 2, 0.1)) this.play('shield', shieldHit, { where, gain: 0.12, takes: 4 })
     } else if (this.allow('hull', heavy ? 3 : 2, 0.1)) this.play(heavy ? 'hull-heavy' : 'hull', metal(heavy), { where, gain: heavy ? 0.7 : 0.4, takes: 4 })
   }
 
@@ -876,7 +876,7 @@ export class EmpiresSound {
   }
 
   shieldsDown(where: Where) {
-    if (this.ready() && where.gain > 0.05 && this.allow('shdown', 1, 0.3)) this.play('shdown', shieldsDown, { where, gain: 0.6 })
+    if (this.ready() && where.gain > 0.05 && this.allow('shdown', 1, 0.3)) this.play('shdown', shieldsDown, { where, gain: 0.35 })
   }
 
   launch(where: Where) {
