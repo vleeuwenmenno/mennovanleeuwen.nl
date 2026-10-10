@@ -305,7 +305,7 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
   gap: 10px;
   padding: 10px 16px 16px;
 }
@@ -353,7 +353,8 @@
   flex: none;
 }
 .ew-lobby-preview .ew-mappreview {
-  flex: 0 1 auto;
+  /* Full width at the map's own shape; with the generator open the panel scrolls instead. */
+  flex: none;
   min-height: 120px;
 }
 .ew-lobby-preview p {
@@ -419,7 +420,7 @@
 /* One row per spawn, in columns: number, who, faction, side, AI level. */
 .ew-slotrow {
   display: grid;
-  grid-template-columns: 26px minmax(76px, 104px) minmax(0, 1fr) 84px minmax(92px, 118px);
+  grid-template-columns: 26px minmax(60px, 96px) minmax(76px, 1fr) 78px minmax(84px, 112px);
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
@@ -2231,30 +2232,84 @@ span.ew-teamtag {
 }
 
 /* The map generator's rules under the lobby preview: two columns of compact rows when there's room. */
-.ew-genrules {
+/* The map generator: a seed panel, then the rules in three labelled groups. */
+.ew-gen {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 2px 18px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
 }
-.ew-genrules .ew-row {
-  min-height: 28px;
-}
-.ew-seed {
+.ew-gen > section,
+.ew-genseed {
   display: flex;
-  gap: 4px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 6px;
+  background: rgba(20, 32, 60, 0.45);
+  border: 1px solid var(--ew-cell-line);
 }
-.ew-deck .ew-seed input {
-  width: 84px;
+.ew-genseed {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+}
+.ew-genseed small {
+  flex: 1 1 200px;
+  align-self: center;
+}
+.ew-gen h6 {
+  margin: 0;
+  font-family: var(--ew-display);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ew-gold);
+}
+.ew-genfield {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: #c4d0e4;
+}
+.ew-genfield .ew-seg {
+  display: flex;
+}
+.ew-genfield .ew-seg button {
+  flex: 1;
+}
+.ew-deck .ew-genfield select {
+  width: 100%;
+}
+.ew-deck .ew-genseed input {
+  width: 110px;
   font: inherit;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
+  font-size: 13px;
   color: var(--ew-text);
   background: var(--ew-cell);
   border: 1px solid var(--ew-cell-line);
   border-radius: 5px;
-  padding: 4px 6px;
+  padding: 5px 8px;
+  font-variant-numeric: tabular-nums;
 }
-.ew-deck .ew-seed button {
-  padding: 4px 10px;
-  font-size: 12px;
+.ew-deck .ew-genroll {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(180deg, var(--ew-active-hi), var(--ew-active));
+  border-color: #8fbaff;
+}
+.ew-chips {
+  display: flex;
+  gap: 6px;
+}
+.ew-deck .ew-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }

@@ -666,55 +666,55 @@ function MapLegend({ map }: { map: MapDef }) {
 
 /** The generator's rules: compact rows under the map preview, which redraws as they change. */
 function GenControls({ rules, onChange, onReroll }: { rules: MapRules; onChange: (patch: Partial<MapRules>) => void; onReroll: () => void }) {
+  // One labelled control: the label above, so every group reads top to bottom.
+  const field = (label: string, control: ReactNode) => (
+    <label className="ew-genfield">
+      <span>{label}</span>
+      {control}
+    </label>
+  )
   return (
-    <div className="ew-genrules">
-      <div className="ew-row">
-        <span>Players</span>
-        <Seg<2 | 3 | 4> label="Players" value={rules.players} options={[[2, '2'], [3, '3'], [4, '4']]} onChange={(v) => onChange({ players: v })} />
-      </div>
-      <div className="ew-row">
-        <span>Size</span>
-        <Seg label="Size" value={rules.size} options={[['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']]} onChange={(v) => onChange({ size: v })} />
-      </div>
-      <div className="ew-row">
-        <span>Ore</span>
-        <Seg label="Ore" value={rules.resources} options={[['scarce', 'Scarce'], ['normal', 'Normal'], ['rich', 'Rich']]} onChange={(v) => onChange({ resources: v })} />
-      </div>
-      <div className="ew-row">
-        <span>Beacons</span>
-        <select value={String(rules.beacons)} onChange={(e) => onChange({ beacons: e.target.value === 'auto' ? 'auto' : Number(e.target.value) })} aria-label="Beacons">
-          <option value="auto">Auto</option>
-          {Array.from({ length: MAX_BEACONS + 1 }, (_, i) => (
-            <option key={i} value={i}>{i}</option>
-          ))}
-        </select>
-      </div>
-      <div className="ew-row">
-        <span>Asteroid fields</span>
-        <Seg label="Asteroid fields" value={rules.asteroidFields} options={AMOUNTS} onChange={(v) => onChange({ asteroidFields: v })} />
-      </div>
-      <div className="ew-row">
-        <span>Nebulas</span>
-        <Seg label="Nebulas" value={rules.nebulas} options={AMOUNTS} onChange={(v) => onChange({ nebulas: v })} />
-      </div>
-      <div className="ew-row">
-        <span>Wrecks</span>
-        <Seg label="Wrecks" value={rules.wrecks} options={AMOUNTS} onChange={(v) => onChange({ wrecks: v })} />
-      </div>
-      <div className="ew-row">
-        <span>Seed</span>
-        <span className="ew-seed">
+    <div className="ew-gen">
+      <div className="ew-genseed">
+        {field(
+          'Seed',
           <input
             type="number"
             min={0}
             max={MAX_SEED}
             value={rules.seed}
             onChange={(e) => onChange({ seed: Math.min(MAX_SEED, Math.max(0, Math.floor(Number(e.target.value)) || 0)) })}
-            aria-label="Seed"
-          />
-          <button onClick={onReroll} title="A new random seed">Reroll</button>
-        </span>
+          />,
+        )}
+        <button className="ew-genroll" onClick={onReroll} title="Roll a new random seed: a different map with the same rules">
+          <Icon name="dice" size={18} /> New seed
+        </button>
+        <small className="ew-muted">The same seed and rules always build the same map, so a seed can be shared.</small>
       </div>
+      <section>
+        <h6>Layout</h6>
+        {field('Players', <Seg<2 | 3 | 4> label="Players" value={rules.players} options={[[2, '2'], [3, '3'], [4, '4']]} onChange={(v) => onChange({ players: v })} />)}
+        {field('Size', <Seg label="Size" value={rules.size} options={[['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']]} onChange={(v) => onChange({ size: v })} />)}
+      </section>
+      <section>
+        <h6>Resources</h6>
+        {field('Ore', <Seg label="Ore" value={rules.resources} options={[['scarce', 'Scarce'], ['normal', 'Normal'], ['rich', 'Rich']]} onChange={(v) => onChange({ resources: v })} />)}
+        {field(
+          'Beacons',
+          <select value={String(rules.beacons)} onChange={(e) => onChange({ beacons: e.target.value === 'auto' ? 'auto' : Number(e.target.value) })}>
+            <option value="auto">Auto (one more than players)</option>
+            {Array.from({ length: MAX_BEACONS + 1 }, (_, i) => (
+              <option key={i} value={i}>{i}</option>
+            ))}
+          </select>,
+        )}
+        {field('Wrecks', <Seg label="Wrecks" value={rules.wrecks} options={AMOUNTS} onChange={(v) => onChange({ wrecks: v })} />)}
+      </section>
+      <section>
+        <h6>Terrain</h6>
+        {field('Asteroid fields', <Seg label="Asteroid fields" value={rules.asteroidFields} options={AMOUNTS} onChange={(v) => onChange({ asteroidFields: v })} />)}
+        {field('Nebulas', <Seg label="Nebulas" value={rules.nebulas} options={AMOUNTS} onChange={(v) => onChange({ nebulas: v })} />)}
+      </section>
     </div>
   )
 }
@@ -840,7 +840,16 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
             </button>
           </div>
         </Frame>
-        <Frame title={map.name} className="ew-lobby-preview" aside={<button className="ew-chip" onClick={() => (sound.click(), setPicker(true))}>Change map</button>}>
+        <Frame title={map.name} className="ew-lobby-preview" aside={
+            <span className="ew-chips">
+              {isGen && (
+                <button className="ew-chip" onClick={() => (sound.click(), setRules({ seed: Math.floor(Math.random() * (MAX_SEED + 1)) }))} title="A different map with the same rules">
+                  <Icon name="dice" size={13} /> New seed
+                </button>
+              )}
+              <button className="ew-chip" onClick={() => (sound.click(), setPicker(true))}>Change map</button>
+            </span>
+          }>
           <MapPreview map={map} slots={setup.slots} areas={areas} active={act} onArea={setArea} onPick={(i) => (sound.click(), setActive(i))} />
           <div className="ew-areahint">
             <span className="ew-small">
