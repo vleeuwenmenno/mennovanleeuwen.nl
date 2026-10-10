@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { download, fileLink, isSf } from '../data/seafile'
+import { download, isSf, parseSf } from '../data/seafile'
 import { folderOf, nameOf, useMedia } from '../data/media'
 import { listFolder, METHODS, readZip, type ZipEntry, type ZipIndex } from '../data/zip'
 import { useWM, type WinState } from '../os/wm'
@@ -38,8 +38,9 @@ export function Archive({ win }: { win: WinState }) {
     setIndex(null)
     setError(null)
     setFolder('')
-    fileLink(path, 'download')
-      .then((url) => readZip(url, media.size ?? undefined))
+    // Ranges go through the site's server: Seafile's file server sends no CORS headers on them.
+    const at = parseSf(path)!
+    readZip(`/api/seafile/raw?repo=${encodeURIComponent(at.repo)}&p=${encodeURIComponent(at.p)}`, media.size ?? undefined)
       .then((i) => live && setIndex(i))
       .catch((e: Error) => live && setError(e.message))
     return () => {

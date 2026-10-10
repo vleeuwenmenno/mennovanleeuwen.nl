@@ -395,6 +395,29 @@ export async function thumbnail(user: User, repo: unknown, path: unknown, size: 
   return { type, body: Buffer.from(await res.arrayBuffer()) }
 }
 
+/** The most one range read may ask for (a ZIP's table of contents is rarely more than a few MB). */
+const MAX_RANGE = 32 * 1024 * 1024
+
+/**
+ * A byte range of a file, read through this server: Seafile's file server leaves its CORS headers
+ * off 206 answers, so a page cannot read ranges from it directly (the ZIP viewer needs them).
+ * Only single ranges, at most MAX_RANGE, so no whole file streams through here.
+ */
+export async function rangeRead(user: User, repo: unknown, path: unknown, range: string | undefined): Promise<{ type: string; contentRange: string; body: Buffer }> {
+  const m = /^bytes=(?:(\d+)-(\d+)|-(\d+))$/.exec(range ?? '')
+  if (!m) throw new HttpError(416, 'Ask for one byte range (Range: bytes=from-to or bytes=-n)')
+  const span = m[3] ? Number(m[3]) : Number(m[2]) - Number(m[1]) + 1
+  if (!(span > 0) || span > MAX_RANGE) throw new HttpError(416, `Ranges go up to ${MAX_RANGE / 1024 / 1024} MB`)
+  const { url } = await fileLink(user, repo, path, 'download')
+  const res = await fetch(url, { headers: { Range: range! }, redirect: 'follow', signal: AbortSignal.timeout(60_000) }).catch(() => null)
+  if (!res) throw new HttpError(502, 'Seafile\'s file server did not answer')
+  if (res.status !== 206) {
+    await res.body?.cancel().catch(() => {})
+    throw new HttpError(res.status === 416 ? 416 : 502, `Seafile's file server answered ${res.status} to a range`)
+  }
+  return { type: res.headers.get('content-type') ?? 'application/octet-stream', contentRange: res.headers.get('content-range') ?? '', body: Buffer.from(await res.arrayBuffer()) }
+}
+
 /** How much of a file a resumable upload has stored so far, to carry on from there. */
 export async function uploadedBytes(user: User, repo: unknown, parent: unknown, name: unknown): Promise<{ bytes: number }> {
   const id = repoId(repo)
