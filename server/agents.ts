@@ -195,11 +195,11 @@ function checkAttachments(v: unknown): Attachment[] {
 // --- threads -----------------------------------------------------------------------------------
 
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; projectId: number | null; pinned: boolean; todos: Todo[]; /** A title is being thought of */ titling: boolean; /** Tokens the last reply took up in the model's context, as Ollama counted them */ contextTokens: number | null; /** Tool groups it may use */ tools: ToolGroup[] }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; projectId: number | null; pinned: boolean; todos: Todo[]; /** A title is being thought of */ titling: boolean; /** Tokens the last reply took up in the model's context, as Ollama counted them */ contextTokens: number | null; /** Tool groups it may use */ tools: ToolGroup[]; /** Asked from Spotlight and not continued in the app yet */ quick: boolean }
 export type ToolCall = { name: string; arguments: Record<string, unknown> }
 export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; createdAt: number }
 
-type ThreadRow = { id: string; title: string; mode: string; model: string; archived: number; created_at: number; updated_at: number; context_tokens: number | null; tools: string | null; project_id: number | null; pinned: number; todos: string | null }
+type ThreadRow = { id: string; title: string; mode: string; model: string; archived: number; created_at: number; updated_at: number; context_tokens: number | null; tools: string | null; project_id: number | null; pinned: number; todos: string | null; quick: number }
 type MessageRow = { id: number; role: string; content: string; thinking: string | null; tool_calls: string | null; tool_name: string | null; attachments: string | null; created_at: number }
 
 const NEW_TITLE = 'New thread'
@@ -212,7 +212,7 @@ export type PendingApproval = Omit<Pending, 'resolve'>
 const pending = new Map<string, Pending[]>() // by thread
 const APPROVAL_WAIT = 15 * 60_000
 
-const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: (r.tools ? toolGroups(JSON.parse(r.tools)) : null) ?? [...TOOL_GROUPS] })
+const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: (r.tools ? toolGroups(JSON.parse(r.tools)) : null) ?? [...TOOL_GROUPS], quick: !!r.quick })
 const toMessage = (r: MessageRow): AgentMessage => ({
   id: r.id,
   role: r.role as AgentMessage['role'],
@@ -296,11 +296,44 @@ export function deleteProject(user: User, id: unknown) {
 }
 
 export function listThreads(user: User, archived: boolean): Thread[] {
-  const rows = database().prepare('SELECT * FROM agent_threads WHERE user_id = ? AND archived = ? ORDER BY updated_at DESC LIMIT 500').all(user.id, archived ? 1 : 0) as ThreadRow[]
+  const rows = database().prepare('SELECT * FROM agent_threads WHERE user_id = ? AND archived = ? AND quick = 0 ORDER BY updated_at DESC LIMIT 500').all(user.id, archived ? 1 : 0) as ThreadRow[]
   return rows.map(toThread)
 }
 
-export async function createThread(user: User, body: { mode?: string; model?: string; tools?: unknown; projectId?: unknown }): Promise<Thread> {
+/** How long Spotlight keeps a quick answer that was not continued in the app (Settings → Spotlight). */
+const QUICK_KEEP: Record<string, number> = { '1h': 3600_000, '1d': 864e5, '1w': 7 * 864e5, '30d': 30 * 864e5 }
+const quickKeep = (user: User): number | null => {
+  const v = (readState(user).spotlight?.value ?? {}) as { answersKeep?: unknown }
+  return v.answersKeep === 'never' ? null : (QUICK_KEEP[String(v.answersKeep)] ?? QUICK_KEEP['1d'])
+}
+
+export type QuickAnswer = { thread: Thread; question: string; answer: string }
+
+/** Spotlight's recent answers, newest first; the ones older than the owner keeps them are deleted first. */
+export function listQuick(user: User): QuickAnswer[] {
+  const keep = quickKeep(user)
+  if (keep !== null) {
+    const old = database().prepare('SELECT id FROM agent_threads WHERE user_id = ? AND quick = 1 AND updated_at < ?').all(user.id, Date.now() - keep) as { id: string }[]
+    for (const { id } of old) if (!running.has(id)) database().prepare('DELETE FROM agent_threads WHERE id = ?').run(id)
+  }
+  const rows = database().prepare('SELECT * FROM agent_threads WHERE user_id = ? AND quick = 1 ORDER BY updated_at DESC LIMIT 100').all(user.id) as ThreadRow[]
+  return rows.map((r) => {
+    const messages = messagesOf(r.id)
+    return {
+      thread: toThread(r),
+      question: messages.find((m) => m.role === 'user')?.content ?? '',
+      answer: messages.filter((m) => m.role === 'assistant' && m.content.trim()).map((m) => m.content.trim()).join('\n\n'),
+    }
+  })
+}
+
+/** Forgets every quick answer that is not answering right now. */
+export function clearQuick(user: User) {
+  const rows = database().prepare('SELECT id FROM agent_threads WHERE user_id = ? AND quick = 1').all(user.id) as { id: string }[]
+  for (const { id } of rows) if (!running.has(id)) database().prepare('DELETE FROM agent_threads WHERE id = ?').run(id)
+}
+
+export async function createThread(user: User, body: { mode?: string; model?: string; tools?: unknown; projectId?: unknown; quick?: unknown }): Promise<Thread> {
   const mode = modeOf(body.mode)
   const project = projectRef(user, body.projectId)
   const model = body.model ? modelName(body.model) : await defaultModel(mode, user)
@@ -308,8 +341,8 @@ export async function createThread(user: User, body: { mode?: string; model?: st
   const now = Date.now()
   const id = randomUUID()
   database()
-    .prepare('INSERT INTO agent_threads (id, user_id, title, mode, model, archived, created_at, updated_at, tools, project_id) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)')
-    .run(id, user.id, NEW_TITLE, mode, model, now, now, tools ? JSON.stringify(tools) : null, project)
+    .prepare('INSERT INTO agent_threads (id, user_id, title, mode, model, archived, created_at, updated_at, tools, project_id, quick) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)')
+    .run(id, user.id, NEW_TITLE, mode, model, now, now, tools ? JSON.stringify(tools) : null, project, body.quick === true ? 1 : 0)
   return toThread(ownThread(user, id))
 }
 
@@ -345,8 +378,11 @@ export function answer(user: User, id: string, body: { callId?: string; answers?
   p.resolve(answers)
 }
 
-/** Renames, archives or unarchives, pins, moves to a project, or switches the mode, model or tools. */
-export async function updateThread(user: User, id: string, body: { title?: string; archived?: boolean; mode?: string; model?: string; tools?: unknown; pinned?: boolean; projectId?: unknown }): Promise<Thread> {
+/**
+ * Renames, archives or unarchives, pins, moves to a project, or switches the mode, model or tools.
+ * `quick: false` takes a quick answer from Spotlight into the app (there is no way back).
+ */
+export async function updateThread(user: User, id: string, body: { title?: string; archived?: boolean; mode?: string; model?: string; tools?: unknown; pinned?: boolean; projectId?: unknown; quick?: boolean }): Promise<Thread> {
   const row = ownThread(user, id)
   const title = body.title === undefined ? row.title : String(body.title).trim().slice(0, 120) || row.title
   const archived = body.archived === undefined ? row.archived : body.archived ? 1 : 0
@@ -356,7 +392,8 @@ export async function updateThread(user: User, id: string, body: { title?: strin
   const tools = body.tools === undefined ? row.tools : JSON.stringify(toolGroups(body.tools) ?? [...TOOL_GROUPS])
   const pinned = body.pinned === undefined ? row.pinned : body.pinned ? 1 : 0
   const project = body.projectId === undefined ? row.project_id : projectRef(user, body.projectId)
-  database().prepare('UPDATE agent_threads SET title = ?, archived = ?, mode = ?, model = ?, tools = ?, pinned = ?, project_id = ? WHERE id = ?').run(title, archived, mode, model, tools, pinned, project, row.id)
+  const quick = body.quick === false ? 0 : row.quick
+  database().prepare('UPDATE agent_threads SET title = ?, archived = ?, mode = ?, model = ?, tools = ?, pinned = ?, project_id = ?, quick = ? WHERE id = ?').run(title, archived, mode, model, tools, pinned, project, quick, row.id)
   return toThread(ownThread(user, row.id))
 }
 

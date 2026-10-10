@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
-import { addMemory, agentsPrompt, answer, approve, automaticModels, createProject, deleteProject, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, suggestTitle, deleteMemory, deleteThread, getThread, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
+import { addMemory, agentsPrompt, answer, approve, automaticModels, createProject, deleteProject, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, deleteMemory, deleteThread, getThread, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { authEnabled, currentUser, finishLogin, logout, requireUser, startLogin } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
@@ -202,6 +202,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/agents/defaults' && read) return requireUser(req), json(res, 200, await automaticModels()), true
     if (path === '/api/agents/models' && read) return requireUser(req), json(res, 200, await agentModels()), true
     if (path === '/api/agents/threads' && read) return json(res, 200, listThreads(requireUser(req), url.searchParams.get('archived') === '1')), true
+    if (path === '/api/agents/quick' && read) return json(res, 200, listQuick(requireUser(req))), true
+    if (path === '/api/agents/quick' && method === 'DELETE') return clearQuick(requireUser(req)), json(res, 200, { ok: true }), true
     if (path === '/api/agents/threads' && method === 'POST') return json(res, 200, await createThread(requireUser(req), await readJson(req, 4096))), true
     const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/stop|\/approve|\/answer|\/title|\/context)?$/.exec(path)
     if (agentThread) {

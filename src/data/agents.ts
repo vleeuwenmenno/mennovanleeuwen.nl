@@ -7,7 +7,7 @@ import { synced } from '../os/synced'
 export type Mode = 'quick' | 'deep'
 /** A step in the agent's plan for a long job. */
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[] }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean }
 /** A group of threads in the sidebar, with a memory of its own. */
 export type Project = { id: number; name: string; sort: number; createdAt: number }
 export type ToolCall = { name: string; arguments: Record<string, unknown> }
@@ -75,14 +75,18 @@ export type TurnEvent =
   | { type: 'done' }
 
 export const listThreads = (archived: boolean) => api<Thread[]>(`/api/agents/threads${archived ? '?archived=1' : ''}`)
-export const createThread = (input: { mode: Mode; model?: string; tools?: ToolGroup[]; projectId?: number | null }) => api<Thread>('/api/agents/threads', { method: 'POST', json: input })
+export const createThread = (input: { mode: Mode; model?: string; tools?: ToolGroup[]; projectId?: number | null; quick?: boolean }) => api<Thread>('/api/agents/threads', { method: 'POST', json: input })
 export const getThread = (id: string) => api<{ thread: Thread; messages: AgentMessage[]; pending: PendingApproval[] }>(`/api/agents/threads/${id}`)
 export const answerForm = (id: string, callId: string, answers: Record<string, unknown> | null) =>
   api(`/api/agents/threads/${id}/answer`, { method: 'POST', json: answers ? { callId, answers } : { callId, skip: true } })
 export const answerApproval = (id: string, callId: string, allow: boolean) => api(`/api/agents/threads/${id}/approve`, { method: 'POST', json: { callId, allow } })
-export const updateThread = (id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'mode' | 'model' | 'tools' | 'pinned' | 'projectId'>>) => api<Thread>(`/api/agents/threads/${id}`, { method: 'PATCH', json: patch })
+export const updateThread = (id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'mode' | 'model' | 'tools' | 'pinned' | 'projectId' | 'quick'>>) => api<Thread>(`/api/agents/threads/${id}`, { method: 'PATCH', json: patch })
 export const deleteThread = (id: string) => api(`/api/agents/threads/${id}`, { method: 'DELETE' })
 export const stopThread = (id: string) => api(`/api/agents/threads/${id}/stop`, { method: 'POST' })
+/** Quick answers asked from Spotlight and not continued in the app, newest first (expired ones pruned). */
+export type QuickAnswerInfo = { thread: Thread; question: string; answer: string }
+export const listQuick = () => api<QuickAnswerInfo[]>('/api/agents/quick')
+export const clearQuick = () => api('/api/agents/quick', { method: 'DELETE' })
 export const suggestTitle = (id: string) => api<{ title: string | null }>(`/api/agents/threads/${id}/title`, { method: 'POST' })
 
 export type ContextPart = { label: string; tokens: number }

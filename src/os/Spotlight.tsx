@@ -29,6 +29,8 @@ import { cachedRates, loadRates, smartCalc, type CalcResult } from './smartcalc'
 import { resetLayout } from './desktopStore'
 import { AppIcon } from './icons'
 import { setOverlay } from './overlays'
+import { answerText, QuickAnswerView, useQuickAnswer } from './SpotlightAnswer'
+import type { QuickAnswerInfo } from '../data/agents'
 import { THEMES } from './omarchyThemes'
 import { ACCENTS, setAccent, setMode, setTheme, themeLabel, themeSettings } from './theme'
 import { ALWAYS_NEW, SINGLE_INSTANCE, useWM, type AppId } from './wm'
@@ -36,7 +38,7 @@ import { ALWAYS_NEW, SINGLE_INSTANCE, useWM, type AppId } from './wm'
 // Ctrl+K: one search box for apps, files, projects, games, live status, quick actions, maths and
 // terminal commands, with a preview of the highlighted result on the right.
 
-type Group = 'Top hit' | 'Favourites' | 'Go links' | 'Recent' | 'Recently visited' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Widgets' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Web' | 'Fallback'
+type Group = 'Top hit' | 'Favourites' | 'Go links' | 'Answers' | 'Recent' | 'Recently visited' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Widgets' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Web' | 'Fallback'
 
 /** One entry in Spotlight's actions panel (Ctrl+K, right-click). */
 type SpAction = { id: string; label: string; keys: string[]; run: () => void; danger?: boolean }
@@ -266,7 +268,7 @@ function visitRow(v: Visit, goTemplate: string | null, copy: (text: string, labe
 }
 
 /** Which setting leaves a group out of what you type. */
-const CATEGORY_OF: Partial<Record<Group, Category>> = { 'Recently visited': 'sites', Status: 'status', Projects: 'projects', Games: 'games', Files: 'files' }
+const CATEGORY_OF: Partial<Record<Group, Category>> = { Answers: 'answers', 'Recently visited': 'sites', Status: 'status', Projects: 'projects', Games: 'games', Files: 'files' }
 
 function StateBadge({ state, draft }: { state: IssueHit['state']; draft?: boolean }) {
   const label = draft && state === 'open' ? 'draft' : state
@@ -482,6 +484,12 @@ export function Spotlight() {
   const searchSettings = useSearchSettings()
   const engine = ENGINES[searchSettings.engine]
   const close = () => setOverlay(null)
+  // A question for the Agents app, answered here; Ctrl+K continues it in the Agents window.
+  const quick = useQuickAnswer(account.status === 'user' && !!account.integrations.ollama)
+  const adopt = () => {
+    void quick.adopt()
+    close()
+  }
 
   useEffect(() => {
     input.current?.focus()
@@ -828,6 +836,27 @@ export function Spotlight() {
     return out
   }
 
+  /** A quick answer asked from here before: Enter shows it again, the side action continues it in Agents. */
+  const answerRow = (a: QuickAnswerInfo): Result => {
+    const firstLine = (t: string) => t.split('\n').find((l) => l.trim())?.replace(/[#*_`>]/g, '').trim() ?? ''
+    return {
+      id: `answer-${a.thread.id}`,
+      group: 'Answers',
+      title: firstLine(a.question) || a.thread.title,
+      subtitle: [a.thread.running ? 'Answering…' : timeAgo(new Date(a.thread.updatedAt).toISOString()), firstLine(a.answer).slice(0, 120)].filter(Boolean).join(' · '),
+      icon: <AppIcon app="agents" size={28} />,
+      run: () => quick.show(a),
+      enterLabel: 'Show answer',
+      alt: { label: 'Continue in Agents', run: () => void quick.adopt(a.thread.id) },
+      preview: () => (
+        <div className="zed-preview sp-note">
+          <MarkdownPreview text={a.answer || (a.thread.running ? '_Still answering…_' : '_No answer came back._')} />
+        </div>
+      ),
+      forget: () => quick.forget(a.thread.id),
+    }
+  }
+
   /** What starring `r` keeps: its address for web pages and go links, its id for the rest. */
   const favouriteOf = (r: Result): Favourite | null => {
     if (r.id.startsWith('visit-')) return { kind: 'site', url: r.id.slice('visit-'.length), title: r.title }
@@ -883,6 +912,7 @@ export function Spotlight() {
       return [
         ...out,
         ...(start.favourites ? favourites.map(favouriteRow).filter((r): r is Result => !!r) : []),
+        ...(start.answers ? quick.recent.slice(0, recentCount).map(answerRow) : []),
         ...(start.sites ? visits.filter((v) => !favouriteKeys.has(`site:${v.url}`)).slice(0, recentCount).map((v) => visitRow(v, goTemplate, copy)) : []),
         ...(start.status ? all.filter((r) => status.has(r.id)) : []),
         ...(start.apps ? all.filter((r) => apps.has(r.id)) : []),
@@ -928,15 +958,17 @@ export function Spotlight() {
           return { r, s: Math.max(score(r.title, query, true), score(shortUrl(v.url), query) * 0.9) * (1 + Math.log2(1 + v.count) / 20 - i / 400) }
         })
       : []
+    // Quick answers, by question first and then by what the answer says.
+    const answered = prefs.include.answers ? quick.recent.map((a) => ({ r: answerRow(a), s: Math.max(score(a.question, query, true), score(a.answer, query) * 0.5) })) : []
     const scored = all
       .filter((r) => !CATEGORY_OF[r.group] || prefs.include[CATEGORY_OF[r.group]!])
       .map((r) => ({ r, s: Math.max(score(r.title, query, true) * 1.2, score(r.keywords ?? '', query) * 0.8, score(r.subtitle ?? '', query) * 0.6) }))
-      .concat(visited)
+      .concat(visited, answered)
       .filter((x) => x.s > 0)
       .sort((a, b) => b.s - a.s)
 
     // The single best match leads, then everything else grouped.
-    const order: Group[] = ['Recent', 'Recently visited', 'Status', 'Apps', 'Widgets', 'Repositories', 'Issues & PRs', 'Branches', 'Notes', 'Actions', 'Projects', 'Games', 'Files', 'Links']
+    const order: Group[] = ['Recent', 'Answers', 'Recently visited', 'Status', 'Apps', 'Widgets', 'Repositories', 'Issues & PRs', 'Branches', 'Notes', 'Actions', 'Projects', 'Games', 'Files', 'Links']
     const [top, ...rest] = scored
     const recentRows = recentMatches.map((x) => recentRow(x.r.hit))
     // A remembered thing that matches well beats an app name that matches about as well.
@@ -990,9 +1022,9 @@ export function Spotlight() {
             id: 'agent',
             group: 'Fallback',
             title: `Ask Agents “${question}”`,
-            subtitle: 'A quick answer · the side action does deep research',
+            subtitle: 'Answered here; Ctrl+K then continues in Agents · the side action does deep research',
             icon: <AppIcon app="agents" size={28} />,
-            run: () => wm.open('agents', { ask: question, mode: 'quick', t: String(Date.now()) }),
+            run: () => quick.ask(question),
             enterLabel: 'Ask',
             alt: { label: 'Deep research', run: () => wm.open('agents', { ask: question, mode: 'deep', t: String(Date.now()) }) },
           }
@@ -1005,7 +1037,7 @@ export function Spotlight() {
     out.push(second)
     if (agent && !asking) out.push(agent)
     return out
-  }, [q, all, calc, code, suggestions, engine, sub, wm, recentHits, visits, prefs, favourites, favouriteKeys, address, page, goAlias, goTemplate, goSuggestions, account])
+  }, [q, all, calc, code, suggestions, engine, sub, wm, recentHits, visits, prefs, favourites, favouriteKeys, address, page, goAlias, goTemplate, goSuggestions, account, quick.ask, quick.recent, quick.show, quick.adopt, quick.forget])
 
   useEffect(() => {
     setActive(0)
@@ -1054,7 +1086,7 @@ export function Spotlight() {
   const currentPin = pinFor(current)
   const execute = (r: Result | undefined, alt: boolean) => {
     if (!r) return
-    const keepOpen = r.id.startsWith('sub-') || r.id === 'calc' || (r.id.startsWith('code-') && r.id !== 'code-signin' && !r.id.startsWith('code-err-')) || (r.id === 'status-mc' && alt) || r.id.startsWith('act-email') || r.id.startsWith('accent-') || r.id.startsWith('theme-')
+    const keepOpen = r.id.startsWith('sub-') || r.id === 'calc' || ((r.id === 'agent' || r.id.startsWith('answer-')) && !alt) || (r.id.startsWith('code-') && r.id !== 'code-signin' && !r.id.startsWith('code-err-')) || (r.id === 'status-mc' && alt) || r.id.startsWith('act-email') || r.id.startsWith('accent-') || r.id.startsWith('theme-')
     ;(alt && r.alt ? r.alt.run : r.run)()
     if (!keepOpen) close()
   }
@@ -1102,6 +1134,21 @@ export function Spotlight() {
         aria-label="Spotlight search"
         onPointerDown={(e) => menu && !(e.target as Element).closest('.sp-actions') && setMenu(null)}
         onKeyDown={(e) => {
+          // A quick answer: Ctrl+K continues it in Agents, Enter copies it, Esc goes back to the results.
+          if (quick.answer) {
+            if (isMenuKey(e)) {
+              e.stopPropagation()
+              adopt()
+            } else if (e.key === 'Escape') {
+              e.stopPropagation()
+              quick.clear()
+            } else if (e.key === 'Enter') {
+              const text = answerText(quick.answer)
+              if (text) copy(text, 'answer')
+            } else return
+            e.preventDefault()
+            return
+          }
           // The actions panel takes the arrows, Enter and Esc while it is open. Stopping Ctrl+K
           // here keeps it from reaching the desktop, where it would close Spotlight.
           if (menuTarget) {
@@ -1149,7 +1196,10 @@ export function Spotlight() {
           <input
             ref={input}
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={(e) => {
+              if (quick.answer) quick.clear()
+              setQ(e.target.value)
+            }}
             placeholder={sub ? 'Which widget?' : account.status === 'user' ? 'Search apps, notes, repos… or #123, repo#text, repo@branch' : 'Search apps, files, status… or try 5 ft in cm, €20 to USD, 1 TB in GiB'}
             aria-label="Search"
             spellCheck={false}
@@ -1157,6 +1207,9 @@ export function Spotlight() {
           />
           <kbd>esc</kbd>
         </div>
+        {quick.answer ? (
+          <QuickAnswerView answer={quick.answer} onAdopt={adopt} />
+        ) : (
         <div className={`sp-main ${prefs.preview ? '' : 'no-preview'}`}>
           <div className="sp-results" ref={list} role="listbox">
             {results.map((r, i) => {
@@ -1188,6 +1241,7 @@ export function Spotlight() {
           </div>
           {prefs.preview && <aside className="sp-preview">{current?.preview ? current.preview() : current ? <DefaultPreview r={current} /> : null}</aside>}
         </div>
+        )}
         {menuTarget && (
           <div className="sp-actions" role="menu" aria-label={`Actions for ${menuTarget.title}`}>
             <p className="sp-actions-title">{menuTarget.title}</p>
@@ -1206,13 +1260,30 @@ export function Spotlight() {
         <footer className="sp-foot">
           {flash ? (
             <span className="sp-flash">{flash}</span>
+          ) : quick.answer ? (
+            <span>
+              <kbd>esc</kbd> back
+            </span>
           ) : (
             <span>
               <kbd>↑</kbd>
               <kbd>↓</kbd> navigate
             </span>
           )}
-          {current && (
+          {quick.answer ? (
+            <span className="sp-foot-actions">
+              <button className="sp-foot-btn" onClick={() => copy(answerText(quick.answer!), 'answer')} disabled={!answerText(quick.answer)}>
+                <strong>Copy</strong>
+                <kbd>↵</kbd>
+              </button>
+              <span className="sp-foot-sep" aria-hidden />
+              <button className="sp-foot-btn" onClick={adopt}>
+                Continue in Agents
+                <kbd>ctrl</kbd>
+                <kbd>K</kbd>
+              </button>
+            </span>
+          ) : current && (
             <span className="sp-foot-actions">
               <button className="sp-foot-btn" onClick={() => execute(current, false)}>
                 <strong>{current.enterLabel ?? 'Open'}</strong>

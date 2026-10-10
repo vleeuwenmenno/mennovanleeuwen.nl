@@ -142,6 +142,16 @@ function AgentsApp({ win }: { win: WinState }) {
     open(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [win.props.t])
+  // Spotlight's Continue in Agents: the quick answer's thread, opened (props.thread with a new t).
+  useEffect(() => {
+    const { thread: id, t } = win.props
+    if (!id || !t || consumed.current === t) return
+    consumed.current = t
+    setArchived(false)
+    if (id !== selected) open(id)
+    refresh()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [win.props.t])
   const [listError, setListError] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [renamingProject, setRenamingProject] = useState<number | null>(null)
@@ -356,7 +366,7 @@ function AgentsApp({ win }: { win: WinState }) {
   }
 
   const row = (t: Thread) => (
-    <li key={t.id}>
+    <li key={t.id} className="agt-row">
       {renaming === t.id ? (
         <div className="agt-item is-active">
           <RenameBox thread={t} onSave={(title) => rename(t, title)} onCancel={() => setRenaming(null)} />
@@ -379,6 +389,11 @@ function AgentsApp({ win }: { win: WinState }) {
             </span>
           )}
           <span className="agt-item-when">{t.running ? '…' : shortWhen(t.updatedAt)}</span>
+        </button>
+      )}
+      {renaming !== t.id && (
+        <button className="agt-icon agt-mini agt-item-more" onClick={(e) => openMenuAt(e.currentTarget, menu(t))} title="More" aria-label={`${t.title}: more`}>
+          <Icon name="more" size={13} />
         </button>
       )}
     </li>

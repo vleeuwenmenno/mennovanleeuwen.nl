@@ -1140,6 +1140,25 @@ textarea.agt-q-input {
   font-size: 11px;
   color: var(--muted);
 }
+/* A thread's menu, on the right of its row while the pointer is over it (in place of the time). */
+.agt-row {
+  position: relative;
+}
+.agt-item-more {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  visibility: hidden;
+}
+.agt-row:hover .agt-item-more,
+.agt-row:focus-within .agt-item-more {
+  visibility: visible;
+}
+.agt-row:hover .agt-item-when,
+.agt-row:focus-within .agt-item-when {
+  visibility: hidden;
+}
 .agt-dot-mode {
   flex: none;
   width: 6px;

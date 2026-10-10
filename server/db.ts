@@ -158,6 +158,8 @@ export function database(): DatabaseSync {
   if (!cols('agent_memories').includes('updated_at')) db.exec('ALTER TABLE agent_memories ADD COLUMN updated_at INTEGER')
   // A thread's todo list, for long jobs: the agent keeps it up to date, the window shows it.
   if (!cols('agent_threads').includes('todos')) db.exec('ALTER TABLE agent_threads ADD COLUMN todos TEXT')
+  // A quick answer asked from Spotlight: kept out of the Agents app until it is continued there.
+  if (!cols('agent_threads').includes('quick')) db.exec('ALTER TABLE agent_threads ADD COLUMN quick INTEGER NOT NULL DEFAULT 0')
   // Added later: how many tokens a thread's last reply took up in the model's context.
   if (!(db.prepare('PRAGMA table_info(agent_threads)').all() as { name: string }[]).some((c) => c.name === 'context_tokens')) db.exec('ALTER TABLE agent_threads ADD COLUMN context_tokens INTEGER')
   key = Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))

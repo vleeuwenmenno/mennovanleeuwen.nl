@@ -6737,6 +6737,48 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* A quick answer from the Agents app, in place of the results. */
+.sp-answer {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 18px 18px;
+  font-size: 14px;
+}
+.sp-answer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.sp-answer-head .app-icon {
+  flex: none;
+  border-radius: 6px;
+}
+.sp-answer-q {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sp-answer-head .btn {
+  flex: none;
+}
+.sp-answer-steps {
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.sp-answer-steps li::before {
+  content: '› ';
+}
+.sp-answer-note {
+  margin: 10px 0 0;
+  font-size: 13px;
+}
 .sp-preview {
   border-left: 1px solid var(--line);
   padding: 16px;

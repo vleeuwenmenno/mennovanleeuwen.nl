@@ -5,7 +5,8 @@ import { setLinkSettings, useLinkSettings } from '../data/links'
 import { clearVisits, useVisits } from '../data/siteHistory'
 import { clearHits, useRecentHits } from '../data/spotlightRecent'
 import { favouriteKey, moveFavourite, removeFavourite, useFavourites } from '../data/spotlightFavourites'
-import { CATEGORIES, RECENT_COUNTS, setInclude, setSpotlightPrefs, setStart, START_SECTIONS, useSpotlightPrefs, type Fallback } from '../data/spotlightPrefs'
+import { ANSWERS_KEEP, CATEGORIES, RECENT_COUNTS, setInclude, setSpotlightPrefs, setStart, START_SECTIONS, useSpotlightPrefs, type Fallback } from '../data/spotlightPrefs'
+import { clearQuick } from '../data/agents'
 import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { MC_ADDRESS, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
@@ -1200,6 +1201,14 @@ function SpotlightSettings() {
   const visits = useVisits()
   const hits = useRecentHits()
   const account = useAccount()
+  // Quick answers come from the Agents app: only for the owner, with an Ollama key.
+  const agents = account.status === 'user' && !!account.integrations.ollama
+  const [cleared, setCleared] = useState(false)
+  const clearAnswers = async () => {
+    if (!(await ask({ title: 'Forget every quick answer?', body: 'Answers you continued in Agents stay there.', confirm: 'Forget all', danger: true }))) return
+    await clearQuick().catch(() => {})
+    setCleared(true)
+  }
   const fallbacks: [Fallback, string][] = [
     ['web', `Searches ${ENGINES[engine].label}`],
     ['terminal', 'Runs it in a terminal'],
@@ -1207,7 +1216,7 @@ function SpotlightSettings() {
   return (
     <>
       <SetGroup title="When Spotlight opens, show">
-        {START_SECTIONS.map(([id, label, hint]) => (
+        {START_SECTIONS.filter(([id]) => agents || id !== 'answers').map(([id, label, hint]) => (
           <label key={id} className="set-check">
             <input type="checkbox" checked={prefs.start[id]} onChange={(e) => setStart(id, e.target.checked)} />
             <span>
@@ -1225,11 +1234,28 @@ function SpotlightSettings() {
             </button>
           ))}
         </div>
-        <p className="muted set-help">How many recently visited websites, and repositories and issues, an empty Spotlight lists.</p>
+        <p className="muted set-help">How many recent answers, recently visited websites, and repositories and issues an empty Spotlight lists.</p>
       </SetGroup>
+      {agents && (
+        <SetGroup title="Keep quick answers for">
+          <div className="seg set-seg" role="radiogroup" aria-label="Keep quick answers for">
+            {ANSWERS_KEEP.map(([id, label]) => (
+              <button key={id} role="radio" aria-checked={prefs.answersKeep === id} className={prefs.answersKeep === id ? 'is-active' : ''} onClick={() => setSpotlightPrefs({ answersKeep: id })}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="muted set-help">
+            Questions you ask Agents from Spotlight (start with <code>?</code>) are answered there and listed under Recent answers, until this long after their last reply. Continue one in Agents (Ctrl+K) to keep it; forget one by hand with right-click or Shift+Delete.
+          </p>
+          <button className="btn btn-small" disabled={cleared} onClick={() => void clearAnswers()}>
+            {cleared ? 'Forgotten' : 'Forget all quick answers'}
+          </button>
+        </SetGroup>
+      )}
       <SpotlightFavourites />
       <SetGroup title="While you type, include">
-        {CATEGORIES.map(([id, label]) => (
+        {CATEGORIES.filter(([id]) => agents || id !== 'answers').map(([id, label]) => (
           <label key={id} className="set-check">
             <input type="checkbox" checked={prefs.include[id]} onChange={(e) => setInclude(id, e.target.checked)} />
             {label}

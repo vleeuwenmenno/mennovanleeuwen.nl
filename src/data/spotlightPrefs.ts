@@ -5,9 +5,10 @@ import { synced } from '../os/synced'
 // open. Kept in this browser; synced when signed in, like notes.
 
 /** What the empty box shows, in this order. */
-export type StartSection = 'favourites' | 'sites' | 'status' | 'apps' | 'code'
+export type StartSection = 'favourites' | 'answers' | 'sites' | 'status' | 'apps' | 'code'
 export const START_SECTIONS: [StartSection, string, string][] = [
   ['favourites', 'Favourites', 'What you starred: right-click a result → Add to favourites'],
+  ['answers', 'Recent answers', 'Questions you asked Agents from here'],
   ['sites', 'Recently visited websites', 'The last pages you opened from here'],
   ['status', 'Status', 'The Minecraft server, latest activity and contributions'],
   ['apps', 'Apps and actions', 'Terminal, Projects, CV and Games'],
@@ -18,13 +19,24 @@ export const START_SECTIONS: [StartSection, string, string][] = [
 export const RECENT_COUNTS = [3, 5, 8, 12] as const
 
 /** Kinds of results that can be left out of what you type. */
-export type Category = 'sites' | 'status' | 'projects' | 'games' | 'files'
+export type Category = 'answers' | 'sites' | 'status' | 'projects' | 'games' | 'files'
 export const CATEGORIES: [Category, string][] = [
+  ['answers', 'Recent answers'],
   ['sites', 'Recently visited websites'],
   ['status', 'Status'],
   ['projects', 'Projects'],
   ['games', 'Games'],
   ['files', 'Files'],
+]
+
+/** How long a quick answer from Agents stays in Spotlight when it is not continued in the app. */
+export type AnswersKeep = '1h' | '1d' | '1w' | '30d' | 'never'
+export const ANSWERS_KEEP: [AnswersKeep, string][] = [
+  ['1h', '1 hour'],
+  ['1d', '1 day'],
+  ['1w', '1 week'],
+  ['30d', '30 days'],
+  ['never', 'Until removed'],
 ]
 
 /** Enter when nothing of yours matches. */
@@ -39,15 +51,18 @@ export type SpotlightPrefs = {
   recentCount: number
   /** Remember websites opened from MvL OS */
   history: boolean
+  /** Quick answers are deleted this long after their last message (read by the server) */
+  answersKeep: AnswersKeep
 }
 
 const DEFAULTS: SpotlightPrefs = {
-  start: { favourites: true, sites: true, status: true, apps: true, code: true },
-  include: { sites: true, status: true, projects: true, games: true, files: true },
+  start: { favourites: true, answers: true, sites: true, status: true, apps: true, code: true },
+  include: { answers: true, sites: true, status: true, projects: true, games: true, files: true },
   fallback: 'web',
   preview: true,
   recentCount: 5,
   history: true,
+  answersKeep: '1d',
 }
 
 const flags = <K extends string>(defaults: Record<K, boolean>, v: unknown): Record<K, boolean> => {
@@ -65,6 +80,7 @@ const store = synced<SpotlightPrefs>('spotlight', DEFAULTS, {
       preview: s.preview !== false,
       recentCount: (RECENT_COUNTS as readonly number[]).includes(s.recentCount) ? s.recentCount : DEFAULTS.recentCount,
       history: s.history !== false,
+      answersKeep: ANSWERS_KEEP.some(([k]) => k === s.answersKeep) ? s.answersKeep : DEFAULTS.answersKeep,
     }
   },
 })
