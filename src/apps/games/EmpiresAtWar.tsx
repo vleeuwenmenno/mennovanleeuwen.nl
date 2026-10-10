@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, newBrain, think, type Brain, type Difficulty } from './empires/ai'
-import { ABILITIES, FACTIONS, MAX_LEVEL, UNIT, UNITS, UPGRADES, buildable, dims, isShip, unitOf, type FactionId, type HardpointKind, type UnitType } from './empires/data'
+import { FACTIONS, TECH, UNIT, UNITS, buildable, dims, isShip, unitOf, type FactionId, type HardpointKind } from './empires/data'
+import { CommandCard, Help, Result, TopBar, type Hud, type Mode } from './empires/Hud'
+import { HP_NAME } from './empires/icons'
 import { Renderer, spriteUrl, type Camera, type View } from './empires/render'
 import {
-  STEP, building, cancelUpgrade, cantBuild, cantMine, cantUpgrade, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdMine, cmdMove, cmdRally, cmdStop, cmdUpgrade, hpPos, newWorld,
-  other, shieldMax, tick, type Owner, type SimEvent, type Unit, type World,
+  STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdMine, cmdMove, cmdRally, cmdResearch, cmdStop, hpPos, newWorld, tick, type Owner, type SimEvent,
+  type Unit, type World,
 } from './empires/sim'
 import { EmpiresSound } from './empires/sound'
 import { useHighScore, useIsFocused } from './shared'
@@ -18,9 +20,6 @@ import './empires/empires.css'
 // empires/sim.ts and is drawn by empires/render.ts.
 
 const SPRITES = [...new Set(UNITS.map((u) => u.sprite))]
-const HP_NAME: Record<HardpointKind, string> = { turret: 'Turbolaser', shield: 'Shield generator', engine: 'Engines', hangar: 'Hangar' }
-const fmt = (n: number) => Math.floor(n).toLocaleString('en-US')
-const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
 
 /** Orbitron for the HUD headings, loaded only once the game is opened. */
 function useDisplayFont() {
@@ -107,11 +106,11 @@ function Title({ onStart }: { onStart: (s: Setup) => void }) {
           <li>Drag to select ships. Right-click to move or attack.</li>
           <li>Build mining platforms on the glowing ore for credits.</li>
           <li>Hold ships near a beacon to capture it: more income, bigger fleet.</li>
-          <li>Upgrade your station to unlock frigates, cruisers and a flagship.</li>
+          <li>Select your station to build ships and research upgrades, including station levels that unlock frigates, cruisers and a flagship.</li>
           <li>Big ships have hardpoints. Hover one, right-click a marker to target it.</li>
         </ul>
         <p className="ew-muted ew-small">
-          Keys: A attack-move · S stop · Q ability · H station · Ctrl+1–9 groups · Arrows pan · Wheel zoom · P pause
+          Keys: WASD pan · R attack-move · X stop · Q ability · H station · I idle ships · Ctrl+1–9 groups · Wheel zoom · P pause
         </p>
       </div>
     </div>
@@ -121,27 +120,12 @@ function Title({ onStart }: { onStart: (s: Setup) => void }) {
 // --- Battle ---------------------------------------------------------------------------------------
 
 type Toast = { id: number; text: string; tone: 'good' | 'bad' | 'info'; t: number }
-type Hud = {
-  credits: number
-  income: number
-  pop: number
-  popCap: number
-  level: number
-  upgrade: { left: number; total: number } | null
-  queue: { unit: string; left: number; total: number }[]
-  time: number
-  sel: number[]
-  winner: Owner | -1
-  beacons: number
-  mines: number
-}
-type Mode = 'normal' | 'attack' | 'mine'
 
 function snapshot(w: World, me: Owner, sel: Set<number>): Hud {
   const p = w.players[me]
   return {
-    credits: p.credits, income: p.income, pop: p.pop, popCap: p.popCap, level: p.level, upgrade: p.upgrade && { ...p.upgrade },
-    queue: p.queue.map((q) => ({ ...q })), time: w.time, sel: [...sel], winner: w.winner,
+    credits: p.credits, income: p.income, pop: p.pop, popCap: p.popCap, level: p.level,
+    queue: p.queue.map((q) => ({ ...q })), research: p.research.map((r) => ({ ...r })), techs: [...p.techs], time: w.time, sel: [...sel], winner: w.winner,
     beacons: w.beacons.filter((b) => b.owner === me).length, mines: w.units.filter((u) => u.owner === me && u.t.tier === 'mine').length,
   }
 }
@@ -167,7 +151,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   const keys = useRef(new Set<string>())
   const speed = useRef(1)
   const paused = useRef(false)
-  const lastAlarm = useRef<{ x: number; y: number } | null>(null)
+  const lastAlarm = useRef<{ x: number; y: number; t: number } | null>(null)
   const drag = useRef<{ x0: number; y0: number; box: boolean; pan: boolean; moved: boolean; cx: number; cy: number; button: number } | null>(null)
   const touches = useRef(new Map<number, { x: number; y: number }>())
   const pinch = useRef<{ d: number; zoom: number } | null>(null)
@@ -296,6 +280,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     }
     if (unit && unit.owner !== me) {
       cmdAttack(w, me, ships.map((u) => u.id), unit.id, hp)
+
       renderer.current.ping(unit.x, unit.y, '#ff5a50')
       sound.order(true)
       if (hp >= 0) toast(`Targeting ${HP_NAME[unit.t.hardpoints[hp].kind].toLowerCase()}`, 'info')
@@ -323,9 +308,20 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     cam.current.y = y
     clampCam()
   }
-  const goHome = () => {
+  /** Select the station (where ships are built) and look at it. */
+  const selectStation = () => {
     const st = world.current.byId.get(world.current.players[me].station)
-    if (st) centerOn(st.x + 300, st.y)
+    if (!st) return
+    select([st.id])
+    centerOn(st.x + 250, st.y + 120)
+    sound.click()
+  }
+  const selectIdle = () => {
+    const idle = world.current.units.filter((u) => u.owner === me && isShip(u.t) && !u.parent && u.order.k === 'idle' && !u.target)
+    select(idle.map((u) => u.id))
+    if (idle.length) centerOn(idle.reduce((s, u) => s + u.x, 0) / idle.length, idle.reduce((s, u) => s + u.y, 0) / idle.length)
+    else toast('No idle ships', 'info')
+    sound.click()
   }
   const selectArmy = () => {
     select(world.current.units.filter((u) => u.owner === me && isShip(u.t)).map((u) => u.id))
@@ -337,16 +333,33 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     else if (mySelection().some((u) => u.t.ability)) sound.error()
   }
 
-  const build = (id: string) => {
+  const build = (id: string, times = 1) => {
     sound.unlock()
-    const why = cmdBuild(world.current, me, id)
-    if (why) {
+    let why: string | null = null
+    let n = 0
+    for (let i = 0; i < times; i++) {
+      why = cmdBuild(world.current, me, id)
+      if (why) break
+      n++
+    }
+    if (!n && why) {
       toast(why, 'bad')
       sound.error()
     } else sound.click()
   }
-  const upgrade = () => {
-    const why = cmdUpgrade(world.current, me)
+  /** Right-click on a ship card: drop the last one of that type from the queue. */
+  const unqueue = (id: string) => {
+    const q = world.current.players[me].queue
+    for (let i = q.length - 1; i >= 0; i--)
+      if (q[i].unit === id) {
+        cmdCancel(world.current, me, i)
+        sound.click()
+        return
+      }
+  }
+  const research = (id: string) => {
+    sound.unlock()
+    const why = cmdResearch(world.current, me, id)
     if (why) {
       toast(why, 'bad')
       sound.error()
@@ -419,10 +432,10 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       const { vw, vh } = { vw: c.clientWidth, vh: c.clientHeight }
       const pan = (900 / cm.zoom) * dt
       const k = keys.current
-      if (k.has('ArrowLeft')) cm.x -= pan
-      if (k.has('ArrowRight')) cm.x += pan
-      if (k.has('ArrowUp')) cm.y -= pan
-      if (k.has('ArrowDown')) cm.y += pan
+      if (k.has('ArrowLeft') || k.has('a')) cm.x -= pan
+      if (k.has('ArrowRight') || k.has('d')) cm.x += pan
+      if (k.has('ArrowUp') || k.has('w')) cm.y -= pan
+      if (k.has('ArrowDown') || k.has('s')) cm.y += pan
       const full = !!root.current?.closest('.is-page-full')
       if (full && mouse.current.inside) {
         const e = 8
@@ -456,8 +469,11 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
           }
         } else if (e.k === 'alarm' && e.owner === me) {
           sound.alarm()
-          lastAlarm.current = { x: e.x, y: e.y }
+          lastAlarm.current = { x: e.x, y: e.y, t: w.time }
           toast(`${e.what} under attack! (Space to look)`, 'bad')
+        } else if (e.k === 'tech' && e.owner === me) {
+          sound.built()
+          toast(`Research complete: ${TECH[e.id].name}`, 'good')
         } else if (e.k === 'level' && e.owner === me) {
           sound.fanfare()
           const unlocked = buildable(setup.faction).filter((t) => t.level === e.level).map((t) => t.name)
@@ -479,7 +495,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         showRally: mySelection().some((u) => u.t.tier === 'station'),
       }
       renderer.current.draw(ctx, w, cm, vw, vh, v, dt * (paused.current ? 0 : speed.current))
-      renderer.current.minimap(mctx, w, me, cm, vw, vh, m.clientWidth, m.clientHeight)
+      renderer.current.minimap(mctx, w, me, cm, vw, vh, m.clientWidth, m.clientHeight, lastAlarm.current)
 
       hudT -= dt
       if (hudT <= 0 || (w.winner !== -1 && !ended)) {
@@ -520,9 +536,9 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     }
     const down = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.closest?.('input, textarea')) return
-      const k = e.key
+      const k = e.key.length === 1 ? e.key.toLowerCase() : e.key
       const w = world.current
-      if (k.startsWith('Arrow')) {
+      if (k.startsWith('Arrow') || (!e.ctrlKey && !e.metaKey && !e.altKey && 'wasd'.includes(k) && k.length === 1)) {
         keys.current.add(k)
         e.preventDefault()
         return
@@ -533,7 +549,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         e.preventDefault()
         return
       }
-      if (e.ctrlKey && (k === 'a' || k === 'A')) {
+      if (e.ctrlKey && k === 'a') {
         selectArmy()
         e.preventDefault()
         return
@@ -549,17 +565,18 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
             centerOn(us.reduce((s, u) => s + u.x, 0) / us.length, us.reduce((s, u) => s + u.y, 0) / us.length)
           }
         }
-      } else if (k === 'a' || k === 'A') setMode(mode.current === 'attack' ? 'normal' : 'attack')
-      else if (k === 's' || k === 'S') cmdStop(w, me, mySelection().map((u) => u.id))
-      else if (k === 'q' || k === 'Q') useAbility()
-      else if (k === 'h' || k === 'H' || k === 'Home') goHome()
-      else if (k === 'm' || k === 'M') setMode(mode.current === 'mine' ? 'normal' : 'mine')
+      } else if (k === 'r') setMode(mode.current === 'attack' ? 'normal' : 'attack')
+      else if (k === 'x') cmdStop(w, me, mySelection().map((u) => u.id))
+      else if (k === 'q') useAbility()
+      else if (k === 'h' || k === 'Home') selectStation()
+      else if (k === 'i') selectIdle()
+      else if (k === 'm') setMode(mode.current === 'mine' ? 'normal' : 'mine')
       else if (k === ' ') {
         if (lastAlarm.current) centerOn(lastAlarm.current.x, lastAlarm.current.y)
-      } else if (k === 'p' || k === 'P') {
+      } else if (k === 'p') {
         paused.current = !paused.current
         setUi((u) => ({ ...u, paused: paused.current }))
-      } else if (k === 'f' || k === 'F') {
+      } else if (k === 'f') {
         const us = mySelection()
         if (us.length) centerOn(us.reduce((s, u) => s + u.x, 0) / us.length, us.reduce((s, u) => s + u.y, 0) / us.length)
       } else if (k === '+' || k === '=') zoomBy(1.2)
@@ -570,7 +587,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       } else return
       e.preventDefault()
     }
-    const up = (e: KeyboardEvent) => keys.current.delete(e.key)
+    const up = (e: KeyboardEvent) => keys.current.delete(e.key.length === 1 ? e.key.toLowerCase() : e.key)
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
     return () => {
@@ -664,7 +681,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       }
     }
     const h = pick(p.x, p.y)
-    hover.current = { unit: h.unit?.id ?? 0, hp: h.unit && h.unit.owner !== me ? h.hp : -1, node: h.node }
+    hover.current = { unit: h.unit?.id ?? 0, hp: h.hp, node: h.node }
   }
 
   const onPointerUp = (e: React.PointerEvent) => {
@@ -792,11 +809,14 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={() => ((drag.current = null), touches.current.clear(), (pinch.current = null))}
-        onPointerLeave={() => (mouse.current.inside = false)}
+        onPointerLeave={() => {
+          mouse.current.inside = false
+          hover.current = { unit: 0, hp: -1, node: -1 }
+        }}
         onWheel={onWheel}
       />
 
-      <TopBar hud={hud} faction={setup.faction} ui={ui} onPause={togglePause} onSpeed={setSpeed} onMenu={() => setUi((u) => ({ ...u, menu: !u.menu }))}
+      <TopBar hud={hud} faction={setup.faction} ui={ui} onShipyard={selectStation} onPause={togglePause} onSpeed={setSpeed} onMenu={() => setUi((u) => ({ ...u, menu: !u.menu }))}
         onMute={() => {
           sound.setMuted(!sound.muted)
           setUi((u) => ({ ...u, muted: sound.muted }))
@@ -819,22 +839,32 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
 
       <div className="ew-dock">
         <div className="ew-panel ew-minipanel">
+          <div className="ew-minihead">
+            <span>Tactical map</span>
+            <span className="ew-muted">{FACTIONS[setup.faction].name} · {FACTIONS[enemyFaction].name}</span>
+          </div>
           <canvas ref={mini} className="ew-mini" onPointerDown={onMini} onPointerMove={(e) => e.buttons === 1 && onMini(e)} />
           <div className="ew-minibtns">
             <button onClick={selectArmy} title="Select every warship (Ctrl+A)">All ships</button>
-            <button onClick={goHome} title="Jump to the station (H)">Station</button>
+            <button onClick={selectIdle} title="Select ships with nothing to do (I)">Idle</button>
+            <button onClick={selectStation} title="Select the station to build ships and research (H)">Station</button>
           </div>
         </div>
-        <Selection sel={sel} me={me} onAbility={useAbility} onStop={() => cmdStop(w, me, mySelection().map((u) => u.id))}
+        <CommandCard w={w} me={me} sel={sel} hud={hud} faction={setup.faction} mode={ui.mode}
+          onAbility={useAbility}
+          onStop={() => cmdStop(w, me, mySelection().map((u) => u.id))}
           onAttackMode={() => setMode('attack')}
           onOnly={(id, drop) => {
             const keep = sel.filter((u) => (drop ? u.t.id !== id : u.t.id === id)).map((u) => u.id)
             selected.current = new Set(keep)
           }}
-        />
-        <BuildPanel w={w} hud={hud} faction={setup.faction} mode={ui.mode} onBuild={build} onUpgrade={upgrade} onCancel={(i) => cmdCancel(w, me, i)}
-          onCancelUpgrade={() => cancelUpgrade(w, me)}
+          onBuild={build}
+          onUnqueue={unqueue}
+          onCancel={(i) => cmdCancel(w, me, i)}
+          onResearch={research}
+          onCancelResearch={(i) => cmdCancelResearch(w, me, i)}
           onMine={() => setMode(mode.current === 'mine' ? 'normal' : 'mine')}
+          onStation={selectStation}
         />
       </div>
 
@@ -861,277 +891,3 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     </div>
   )
 }
-
-// --- HUD pieces -----------------------------------------------------------------------------------
-
-function TopBar({ hud, faction, ui, onPause, onSpeed, onMenu, onMute, onHelp }: {
-  hud: Hud; faction: FactionId; ui: { paused: boolean; speed: number; muted: boolean }; onPause: () => void; onSpeed: (s: number) => void; onMenu: () => void; onMute: () => void; onHelp: () => void
-}) {
-  return (
-    <div className="ew-top">
-      <span className="ew-badge">{FACTIONS[faction].name}</span>
-      <span className="ew-stat" title="Credits (income per minute)">
-        <b>{fmt(hud.credits)}</b> <small>cr · +{fmt(hud.income * 60)}/min</small>
-      </span>
-      <span className={`ew-stat ${hud.pop >= hud.popCap ? 'is-full' : ''}`} title="Fleet size / capacity. Capture beacons and upgrade the station for more.">
-        Fleet <b>{hud.pop}</b>/{hud.popCap}
-      </span>
-      <span className="ew-stat ew-hide-narrow" title="Mining platforms and beacons held">
-        Ore <b>{hud.mines}</b> · Beacons <b>{hud.beacons}</b>/3
-      </span>
-      <span className="ew-stat ew-hide-narrow">{clock(hud.time)}</span>
-      <span className="ew-top-right">
-        <span className="ew-speed" role="group" aria-label="Game speed">
-          {[1, 2, 3].map((s) => (
-            <button key={s} className={ui.speed === s ? 'is-on' : ''} onClick={() => onSpeed(s)}>
-              {s}×
-            </button>
-          ))}
-        </span>
-        <button onClick={onPause} title="Pause (P)">{ui.paused ? '▶' : '❚❚'}</button>
-        <button onClick={onMute} title="Sound">{ui.muted ? '🔇' : '🔊'}</button>
-        <button onClick={onHelp} title="Controls">?</button>
-        <button onClick={onMenu} title="Menu">☰</button>
-      </span>
-    </div>
-  )
-}
-
-function Bar({ value, max, kind }: { value: number; max: number; kind: 'hull' | 'shield' | 'hp' }) {
-  const f = max > 0 ? Math.max(0, Math.min(1, value / max)) : 0
-  return (
-    <span className={`ew-bar is-${kind} ${kind === 'hull' && f < 0.3 ? 'is-low' : ''}`}>
-      <i style={{ width: `${f * 100}%` }} />
-    </span>
-  )
-}
-
-function Selection({ sel, me, onAbility, onStop, onAttackMode, onOnly }: {
-  sel: Unit[]; me: Owner; onAbility: () => void; onStop: () => void; onAttackMode: () => void; onOnly: (id: string, drop: boolean) => void
-}) {
-  if (!sel.length)
-    return (
-      <div className="ew-panel ew-sel is-empty">
-        <p>Drag across your ships to select them, then right-click to move or attack.</p>
-        <p className="ew-muted ew-small">Tap a ship on touch screens, then tap where it should go.</p>
-      </div>
-    )
-  const mine = sel[0].owner === me
-  if (sel.length === 1 || (sel.every((u) => u.t.id === sel[0].t.id) && sel[0].t.squad > 1 && sel.length <= sel[0].t.squad)) {
-    const u = sel[0]
-    const t = u.t
-    const ab = t.ability ? ABILITIES[t.ability] : null
-    const squad = sel.length > 1
-    return (
-      <div className={`ew-panel ew-sel ${mine ? '' : 'is-enemy'}`}>
-        <div className="ew-sel-head">
-          <img src={spriteUrl(t.sprite)} alt="" className="ew-portrait" />
-          <div>
-            <strong>{t.name}{squad ? ` ×${sel.length}` : ''}</strong>
-            <span className="ew-muted ew-small">{mine ? t.blurb : `Enemy ${t.tier}. ${t.blurb}`}</span>
-            <div className="ew-bars">
-              <span>Hull</span>
-              <Bar value={squad ? sel.reduce((s, x) => s + x.hull, 0) : u.hull} max={squad ? sel.length * u.hullMax : u.hullMax} kind="hull" />
-              <small>{fmt(u.hull)}</small>
-              {t.shield > 0 && (
-                <>
-                  <span>Shield</span>
-                  <Bar value={u.shield} max={t.shield} kind="shield" />
-                  <small>{fmt(u.shield)}{shieldMax(u) < t.shield ? ' (damaged)' : ''}</small>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-        {u.hps.length > 0 && (
-          <div className="ew-hps">
-            {t.hardpoints.map((h, i) => (
-              <span key={i} className={`ew-hp is-${h.kind} ${u.hps[i].hp <= 0 ? 'is-dead' : ''}`} title={`${HP_NAME[h.kind]}: ${fmt(u.hps[i].hp)}/${fmt(u.hps[i].max)}`}>
-                <em>{HP_NAME[h.kind]}</em>
-                <Bar value={u.hps[i].hp} max={u.hps[i].max} kind="hp" />
-              </span>
-            ))}
-          </div>
-        )}
-        {!mine && u.hps.length > 0 && <p className="ew-muted ew-small">Select your ships, hover this one and right-click a marker to target a hardpoint.</p>}
-        {mine && isShip(t) && (
-          <div className="ew-actions">
-            <button onClick={onAttackMode} title="Attack-move (A)">Attack-move</button>
-            <button onClick={onStop} title="Stop (S)">Stop</button>
-            {ab && (
-              <button className="ew-ability" disabled={u.abilityCd > 0} onClick={onAbility} title={`${ab.blurb} (Q)`}>
-                {ab.name}
-                {u.abilityCd > 0 ? ` · ${Math.ceil(u.abilityCd)}s` : ''}
-              </button>
-            )}
-            {u.kills > 0 && <span className="ew-muted ew-small">{u.kills} kills</span>}
-          </div>
-        )}
-        {mine && building(u) && <p className="ew-muted ew-small">Under construction: {Math.ceil(u.building)} s</p>}
-        {mine && t.tier === 'station' && <p className="ew-muted ew-small">Right-click to set where new ships gather.</p>}
-      </div>
-    )
-  }
-  // Several kinds: a row per type.
-  const types = new Map<string, Unit[]>()
-  for (const u of sel) types.set(u.t.id, [...(types.get(u.t.id) ?? []), u])
-  const ready = sel.filter((u) => u.t.ability && u.abilityCd <= 0).length
-  const withAb = sel.filter((u) => u.t.ability).length
-  return (
-    <div className="ew-panel ew-sel">
-      <div className="ew-group">
-        {[...types.values()].map((us) => {
-          const t = us[0].t
-          const hull = us.reduce((s, u) => s + u.hull, 0) / us.reduce((s, u) => s + u.hullMax, 0)
-          return (
-            <button key={t.id} className="ew-group-item" onClick={(e) => onOnly(t.id, e.shiftKey)} title={`${t.name}: click to keep only these, Shift-click to drop them`}>
-              <img src={spriteUrl(t.sprite)} alt="" />
-              <b>{us.length}</b>
-              <Bar value={hull} max={1} kind="hull" />
-            </button>
-          )
-        })}
-      </div>
-      <div className="ew-actions">
-        <span className="ew-muted ew-small">{sel.length} ships</span>
-        <button onClick={onAttackMode} title="Attack-move (A)">Attack-move</button>
-        <button onClick={onStop} title="Stop (S)">Stop</button>
-        {withAb > 0 && (
-          <button className="ew-ability" disabled={!ready} onClick={onAbility} title="Every selected ship that can fires its ability (Q)">
-            Abilities ({ready}/{withAb})
-          </button>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function BuildPanel({ w, hud, faction, mode, onBuild, onUpgrade, onCancel, onCancelUpgrade, onMine }: {
-  w: World; hud: Hud; faction: FactionId; mode: Mode; onBuild: (id: string) => void; onUpgrade: () => void; onCancel: (i: number) => void; onCancelUpgrade: () => void; onMine: () => void
-}) {
-  const me: Owner = 0
-  const ships = buildable(faction)
-  const mine = unitOf(faction, 'mine')
-  const next = hud.level < MAX_LEVEL ? UPGRADES[hud.level + 1] : null
-  const freeOre = w.nodes.filter((n) => !n.mine).length
-  const [hovered, setHovered] = useState<UnitType | 'upgrade' | null>(null)
-  const info = hovered === 'upgrade' ? null : hovered
-  return (
-    <div className="ew-panel ew-build">
-      <div className="ew-queue">
-        {hud.upgrade && (
-          <button className="ew-q is-upgrade" onClick={onCancelUpgrade} title="Station upgrade: click to cancel and refund">
-            <span>Lv{hud.level + 1}</span>
-            <i style={{ width: `${(1 - hud.upgrade.left / hud.upgrade.total) * 100}%` }} />
-          </button>
-        )}
-        {hud.queue.map((q, i) => (
-          <button key={i} className="ew-q" onClick={() => onCancel(i)} title={`${UNIT[q.unit].name}: click to cancel and refund`}>
-            <img src={spriteUrl(UNIT[q.unit].sprite)} alt="" />
-            {i === 0 && <i style={{ width: `${(1 - q.left / q.total) * 100}%` }} />}
-          </button>
-        ))}
-        {!hud.queue.length && !hud.upgrade && <span className="ew-muted ew-small">Shipyard idle</span>}
-      </div>
-      <div className="ew-buildgrid">
-        {ships.map((t) => {
-          const why = cantBuild(w, me, t.id)
-          const locked = t.level > hud.level
-          return (
-            <button key={t.id} className={`ew-buildbtn ${locked ? 'is-locked' : why ? 'is-off' : ''}`} onClick={() => onBuild(t.id)} onMouseEnter={() => setHovered(t)} onMouseLeave={() => setHovered(null)}
-              title={`${t.name} (${t.cost} cr)${why ? `\n${why}` : ''}\n${t.blurb}`}
-            >
-              <img src={spriteUrl(t.sprite)} alt="" />
-              <span>{locked ? `Lv${t.level}` : t.cost}</span>
-            </button>
-          )
-        })}
-        <button className={`ew-buildbtn ${mode === 'mine' ? 'is-active' : ''} ${cantMine(w, me, w.nodes.find((n) => !n.mine)?.id ?? -1) === 'Not enough credits' || !freeOre ? 'is-off' : ''}`}
-          onClick={onMine} onMouseEnter={() => setHovered(mine)} onMouseLeave={() => setHovered(null)} title={`${mine.name} (${mine.cost} cr): then click a free ore asteroid (M)`}
-        >
-          <img src={spriteUrl(mine.sprite)} alt="" />
-          <span>{mine.cost}</span>
-        </button>
-        <button className={`ew-buildbtn ew-upbtn ${cantUpgrade(w, me) ? 'is-off' : ''}`} onClick={onUpgrade} onMouseEnter={() => setHovered('upgrade')} onMouseLeave={() => setHovered(null)}
-          title={next ? `Upgrade station to level ${hud.level + 1} (${next.cost} cr, ${next.time} s)` : 'Station fully upgraded'}
-          disabled={!next}
-        >
-          <b>{next ? `Lv${hud.level + 1}` : 'Max'}</b>
-          <span>{next ? next.cost : ''}</span>
-        </button>
-      </div>
-      <div className="ew-buildinfo">
-        {info ? (
-          <>
-            <strong>{info.name}</strong> <span className="ew-muted">{info.cost} cr · {info.build}s{info.pop ? ` · fleet ${info.pop}` : ''}</span>
-            <span className="ew-small">{cantBuild(w, me, info.id) && info.tier !== 'mine' ? cantBuild(w, me, info.id) : info.blurb}</span>
-          </>
-        ) : hovered === 'upgrade' ? (
-          <>
-            <strong>Station level {hud.level + 1}</strong>
-            <span className="ew-small">{next ? `${next.cost} cr. More hull, stronger guns, +4 fleet capacity and ${buildable(faction).filter((t) => t.level === hud.level + 1).map((t) => t.name).join(', ') || 'income'}.` : 'Fully upgraded.'}</span>
-          </>
-        ) : (
-          <span className="ew-muted ew-small">Station level {hud.level}. Hover a ship for details.</span>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function Help({ onClose }: { onClose: () => void }) {
-  return (
-    <div className="ew-overlay" onClick={onClose}>
-      <div className="ew-card ew-help" onClick={(e) => e.stopPropagation()}>
-        <h2>Controls</h2>
-        <dl>
-          <dt>Left-drag</dt><dd>Select ships</dd>
-          <dt>Click / Shift-click</dt><dd>Select / add to selection; double-click selects that type on screen</dd>
-          <dt>Right-click</dt><dd>Move, or attack what's under the cursor. On a hardpoint marker: target it</dd>
-          <dt>A, then click</dt><dd>Attack-move</dd>
-          <dt>S · Q</dt><dd>Stop · use ability</dd>
-          <dt>Ctrl+1–9 · 1–9</dt><dd>Set group · select group (twice to jump to it)</dd>
-          <dt>Arrows · middle-drag · wheel</dt><dd>Pan · pan · zoom</dd>
-          <dt>H · Space · F</dt><dd>Station · last alert · selection</dd>
-          <dt>M</dt><dd>Place a mining platform</dd>
-          <dt>P</dt><dd>Pause</dd>
-          <dt>Touch</dt><dd>Drag to pan, pinch to zoom, tap a ship then tap where to go</dd>
-        </dl>
-        <h3>Tips</h3>
-        <ul>
-          <li>Flak shreds fighters; turbolasers can't track them. Mix your fleet.</li>
-          <li>Missiles and torpedoes go through shields. Destroyed shield generators stop shields recharging.</li>
-          <li>Engines down: the ship crawls. Hangars down: no more fighters.</li>
-        </ul>
-        <button className="ew-go" onClick={onClose}>Got it</button>
-      </div>
-    </div>
-  )
-}
-
-function Result({ w, me, won, difficulty, onAgain, onExit }: { w: World; me: Owner; won: boolean; difficulty: Difficulty; onAgain: () => void; onExit: () => void }) {
-  const p = w.players[me]
-  const e = w.players[other(me)]
-  return (
-    <div className="ew-overlay">
-      <div className={`ew-card ew-result ${won ? 'is-won' : 'is-lost'}`}>
-        <h2>{won ? 'Victory' : 'Defeat'}</h2>
-        <p className="ew-muted">
-          {won ? `The ${FACTIONS[e.faction].name} station is destroyed.` : `Our station has fallen.`} {clock(w.time)} against the {DIFFICULTY[difficulty].name.toLowerCase()}.
-        </p>
-        <table>
-          <tbody>
-            <tr><th /><th>Us</th><th>Them</th></tr>
-            <tr><td>Ships built</td><td>{p.stats.built}</td><td>{e.stats.built}</td></tr>
-            <tr><td>Kills</td><td>{p.stats.killed}</td><td>{e.stats.killed}</td></tr>
-            <tr><td>Losses</td><td>{p.stats.lost}</td><td>{e.stats.lost}</td></tr>
-            <tr><td>Credits earned</td><td>{fmt(p.stats.earned)}</td><td>{fmt(e.stats.earned)}</td></tr>
-          </tbody>
-        </table>
-        <button className="ew-go" onClick={onAgain}>Fight again</button>
-        <button onClick={onExit}>Back to title</button>
-      </div>
-    </div>
-  )
-}
-

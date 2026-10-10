@@ -1,6 +1,7 @@
 import {
-  ABILITIES, BASE_POP, BEACON_INCOME, BEACON_POP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
-  STATION_LEVEL_BONUS, UNIT, UPGRADES, accuracy, dims, effect, isShip, unitOf, type AbilityId, type FactionId, type Tier, type UnitType, type Weapon, type WeaponKind,
+  ABILITIES, BASE_POP, BEACON_INCOME, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
+  STATION_LEVEL_BONUS, TECH, UNIT, UPGRADES, accuracy, dims, effect, isShip, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
+  type WeaponKind,
 } from './data'
 
 // The battle itself, with no DOM: ships, orders, steering, guns, shields and hardpoints, the
@@ -17,6 +18,9 @@ export type Order =
   | { k: 'move'; x: number; y: number; attack: boolean; speed: number }
   /** `hp`: the hardpoint to aim at, or -1 for the ship as a whole. */
   | { k: 'attack'; id: number; hp: number }
+
+/** Research multipliers for one ship, 1 meaning unchanged. */
+export type Mods = { hull: number; shield: number; regen: number; damage: number; speed: number; cooldown: number; range: number }
 
 export type Gun = { w: Weapon; hp: number; cd: number; burst: number; burstT: number; target: number; aim: number }
 
@@ -58,9 +62,12 @@ export type Unit = {
   seen: [boolean, boolean]
   born: number
   kills: number
+  mods: Mods
 }
 
 export type QueueItem = { unit: string; left: number; total: number }
+/** Research in progress: a tech id, or LEVEL_UP for the next station level. */
+export type ResearchItem = { id: string; left: number; total: number }
 export type Player = {
   faction: FactionId
   credits: number
@@ -69,7 +76,8 @@ export type Player = {
   level: number
   station: number
   queue: QueueItem[]
-  upgrade: { left: number; total: number } | null
+  research: ResearchItem[]
+  techs: string[]
   rally: { x: number; y: number }
   pop: number
   popCap: number
@@ -92,6 +100,7 @@ export type SimEvent =
   | { k: 'beacon'; owner: Owner | -1; prev: Owner | -1; x: number; y: number }
   | { k: 'alarm'; owner: Owner; x: number; y: number; what: string }
   | { k: 'level'; owner: Owner; level: number }
+  | { k: 'tech'; owner: Owner; id: string }
   | { k: 'ability'; owner: Owner; id: AbilityId; x: number; y: number }
   | { k: 'launch'; owner: Owner; x: number; y: number }
 
@@ -154,8 +163,26 @@ function share(u: Unit, kind: string) {
   if (!all.length) return 1
   return all.filter((i) => alive(u, i)).length / all.length
 }
-export const shieldMax = (u: Unit) => u.t.shield * share(u, 'shield')
-export const speedOf = (u: Unit) => u.t.speed * (0.25 + 0.75 * share(u, 'engine')) * (u.slow > 0 ? 0.33 : 1)
+/** Shields with every generator up. */
+export const shieldFull = (u: Unit) => u.t.shield * u.mods.shield
+export const shieldMax = (u: Unit) => shieldFull(u) * share(u, 'shield')
+export const speedOf = (u: Unit) => u.t.speed * u.mods.speed * (0.25 + 0.75 * share(u, 'engine')) * (u.slow > 0 ? 0.33 : 1)
+
+/** Everything a player has researched for one unit type (or for its station), added up. */
+export function techBonus(p: Player, unitId: string): TechEffect {
+  const out: TechEffect = {}
+  for (const id of p.techs) {
+    const t = TECH[id]
+    if (t?.for !== unitId) continue
+    for (const [k, v] of Object.entries(t.effect) as [keyof TechEffect, number][]) out[k] = (out[k] ?? 0) + v
+  }
+  return out
+}
+function modsFor(p: Player, t: UnitType): Mods {
+  const e = techBonus(p, t.id)
+  return { hull: 1 + (e.hull ?? 0), shield: 1 + (e.shield ?? 0), regen: 1 + (e.regen ?? 0), damage: 1 + (e.damage ?? 0), speed: 1 + (e.speed ?? 0), cooldown: 1 + (e.cooldown ?? 0), range: 1 + (e.range ?? 0) }
+}
+const stationOf = (p: Player) => unitOf(p.faction, 'station').id
 const hangarsUp = (u: Unit) => u.t.hardpoints.some((h, i) => h.kind === 'hangar' && alive(u, i))
 export const building = (u: Unit) => u.building > 0
 
@@ -188,9 +215,10 @@ export const MAP_H = 3400
 export function spawn(w: World, id: string, owner: Owner, x: number, y: number, a: number, squad = 0): Unit {
   const t = UNIT[id]
   const lvl = t.tier === 'station' ? w.players[owner].level : 1
-  const hullMax = t.hull * (1 + STATION_LEVEL_BONUS * (lvl - 1))
+  const mods = modsFor(w.players[owner], t)
+  const hullMax = t.hull * (1 + STATION_LEVEL_BONUS * (lvl - 1)) * mods.hull
   const u: Unit = {
-    id: w.nextId++, t, owner, x, y, a, v: 0, hull: hullMax, hullMax, shield: t.shield,
+    id: w.nextId++, t, owner, x, y, a, v: 0, hull: hullMax, hullMax, shield: t.shield * mods.shield, mods,
     hps: t.hardpoints.map((h) => ({ hp: h.hp, max: h.hp })),
     guns: [...t.weapons.map((wp) => ({ w: wp, hp: -1 })), ...t.hardpoints.flatMap((h, i) => (h.weapon ? [{ w: h.weapon, hp: i }] : []))].map((g) => ({
       ...g, cd: Math.random() * g.w.cooldown, burst: 0, burstT: 0, target: 0, aim: 0,
@@ -224,7 +252,7 @@ export function newWorld(f0: FactionId, f1: FactionId, opts: { seed?: number; in
   const W = MAP_W
   const H = MAP_H
   const player = (faction: FactionId, o: Owner): Player => ({
-    faction, credits: START_CREDITS, income: 0, incomeMul: opts.incomeMul?.[o] ?? 1, level: 1, station: 0, queue: [], upgrade: null,
+    faction, credits: START_CREDITS, income: 0, incomeMul: opts.incomeMul?.[o] ?? 1, level: 1, station: 0, queue: [], research: [], techs: [],
     rally: { x: o === 0 ? 1250 : W - 1250, y: H / 2 }, pop: 0, popCap: BASE_POP, lastAlarm: -99, stats: { built: 0, lost: 0, killed: 0, earned: 0 },
   })
   const w: World = {
@@ -380,7 +408,8 @@ export function cmdBuild(w: World, owner: Owner, id: string) {
   const p = w.players[owner]
   const t = UNIT[id]
   p.credits -= t.cost
-  p.queue.push({ unit: id, left: t.build, total: t.build })
+  const time = t.build * (1 + (techBonus(p, id).build ?? 0))
+  p.queue.push({ unit: id, left: time, total: time })
   return null
 }
 
@@ -392,29 +421,66 @@ export function cmdCancel(w: World, owner: Owner, index: number) {
   p.queue.splice(index, 1)
 }
 
-export function cantUpgrade(w: World, owner: Owner): string | null {
+/** What a piece of research (or the next station level) costs. */
+export function researchCost(p: Player, id: string) {
+  if (id === LEVEL_UP) return UPGRADES[p.level + 1] ?? null
+  const t = TECH[id]
+  return t ? { cost: t.cost, time: t.time } : null
+}
+
+/** Why something can't be researched right now, or null if it can. */
+export function cantResearch(w: World, owner: Owner, id: string): string | null {
   const p = w.players[owner]
-  if (p.level >= MAX_LEVEL) return 'Fully upgraded'
-  if (p.upgrade) return 'Upgrade under way'
-  if (p.credits < UPGRADES[p.level + 1]!.cost) return 'Not enough credits'
+  const st = w.byId.get(p.station)
+  if (!st || st.dead) return 'No station'
+  if (id === LEVEL_UP) {
+    if (p.level >= MAX_LEVEL) return 'Fully upgraded'
+  } else {
+    const t = TECH[id]
+    if (!t || t.faction !== p.faction) return 'Unknown research'
+    if (p.techs.includes(id)) return 'Already researched'
+    if (t.level > p.level) return `Needs station level ${t.level}`
+  }
+  if (p.research.some((r) => r.id === id)) return 'Already in the queue'
+  if (p.research.length >= MAX_RESEARCH) return 'Research queue full'
+  if (p.credits < researchCost(p, id)!.cost) return 'Not enough credits'
   return null
 }
 
-export function cmdUpgrade(w: World, owner: Owner) {
-  const why = cantUpgrade(w, owner)
+export function cmdResearch(w: World, owner: Owner, id: string) {
+  const why = cantResearch(w, owner, id)
   if (why) return why
   const p = w.players[owner]
-  const up = UPGRADES[p.level + 1]!
-  p.credits -= up.cost
-  p.upgrade = { left: up.time, total: up.time }
+  const c = researchCost(p, id)!
+  p.credits -= c.cost
+  p.research.push({ id, left: c.time, total: c.time })
   return null
 }
 
-export function cancelUpgrade(w: World, owner: Owner) {
+export function cmdCancelResearch(w: World, owner: Owner, index: number) {
   const p = w.players[owner]
-  if (!p.upgrade) return
-  p.credits += UPGRADES[p.level + 1]!.cost
-  p.upgrade = null
+  const r = p.research[index]
+  if (!r) return
+  p.credits += r.id === LEVEL_UP ? UPGRADES[p.level + 1]!.cost : TECH[r.id].cost
+  p.research.splice(index, 1)
+}
+
+/** Research is done: apply it to every ship of that type already flying. */
+function finishResearch(w: World, o: Owner, id: string) {
+  const p = w.players[o]
+  p.techs.push(id)
+  const forId = TECH[id].for
+  for (const u of w.units) {
+    if (u.dead || u.owner !== o || u.t.id !== forId) continue
+    const next = modsFor(p, u.t)
+    const grow = next.hull / u.mods.hull
+    const shields = next.shield / u.mods.shield
+    u.hullMax *= grow
+    u.hull *= grow
+    u.mods = next
+    u.shield = Math.min(shieldMax(u), u.shield * shields)
+  }
+  w.events.push({ k: 'tech', owner: o, id })
 }
 
 export function cantMine(w: World, owner: Owner, node: number): string | null {
@@ -491,7 +557,8 @@ function refreshPlayers(w: World) {
     const beacons = w.beacons.filter((b) => b.owner === o).length
     p.pop = Math.round(pop)
     p.popCap = BASE_POP + (p.level - 1) * POP_PER_LEVEL + beacons * BEACON_POP
-    p.income = (STATION_INCOME[p.level] + mines * MINE_INCOME + beacons * BEACON_INCOME) * p.incomeMul
+    const ore = MINE_INCOME * (1 + (techBonus(p, stationOf(p)).mines ?? 0))
+    p.income = (STATION_INCOME[p.level] + mines * ore + beacons * BEACON_INCOME) * p.incomeMul
   }
 }
 
@@ -500,7 +567,7 @@ function launch(w: World, carrier: Unit, extra = false) {
   if (!c || !hangarsUp(carrier)) return
   if (!extra) {
     const out = new Set(w.units.filter((u) => !u.dead && u.parent === carrier.id).map((u) => u.squad))
-    if (out.size >= c.max) return
+    if (out.size >= c.max + (techBonus(w.players[carrier.owner], carrier.t.id).hangar ?? 0)) return
   }
   const bays = carrier.t.hardpoints.map((h, i) => (h.kind === 'hangar' && alive(carrier, i) ? i : -1)).filter((i) => i >= 0)
   const bay = hpPos(carrier, bays[Math.floor(Math.random() * bays.length)])
@@ -644,7 +711,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
     } else {
       // Close to fighting range, then hold there and swing round to face the enemy.
       // Brake in time to stop at range rather than ramming them.
-      const want = fightRange(t) * 0.8 + radius(e.t) * 0.5
+      const want = fightRange(t) * u.mods.range * 0.8 + radius(e.t) * 0.5
       const dist = Math.hypot(e.x - u.x, e.y - u.y)
       const brake = Math.sqrt(2 * t.speed * 0.9 * Math.max(0, dist - want))
       steer(u, e.x, e.y, dist > want ? Math.min(max, brake) : 0, dt, dist <= want)
@@ -738,6 +805,7 @@ function fire(w: World, u: Unit, g: Gun, e: Unit) {
   let dmg = g.w.damage * effect(g.w.kind, e.t.tier)
   if (u.t.tier === 'station') dmg *= 1 + STATION_LEVEL_BONUS * (p.level - 1)
   if (u.abilityOn > 0 && u.t.ability === 'broadside' && g.w.kind === 'turbo') dmg *= 1.6
+  dmg *= u.mods.damage
   w.shots.push({
     x: from.x, y: from.y, vx: (ax - from.x) / Math.max(t, 0.001), vy: (ay - from.y) / Math.max(t, 0.001), left: hit ? t : t * 1.6,
     kind: g.w.kind, owner: u.owner, target: e.id, hp, dmg, hit, sx: from.x, sy: from.y, age: 0, from: u.id,
@@ -764,7 +832,7 @@ function shoot(w: World, u: Unit, dt: number) {
     if (g.cd > 0) continue
     const from = g.hp >= 0 ? hpPos(u, g.hp) : u
     const inReach = (e: Unit) => {
-      const rr = g.w.range + radius(e.t) * 0.5
+      const rr = g.w.range * u.mods.range + radius(e.t) * 0.5
       if (d2(e.x, e.y, from.x, from.y) > rr * rr) return false
       if (g.w.arc && Math.abs(wrap(Math.atan2(e.y - u.y, e.x - u.x) - u.a)) > g.w.arc) return false
       return true
@@ -790,7 +858,7 @@ function shoot(w: World, u: Unit, dt: number) {
     g.aim = Math.atan2(e.y - from.y, e.x - from.x)
     fire(w, u, g, e)
     const barrage = u.abilityOn > 0 && u.t.ability === 'flakBarrage' && g.w.kind === 'flak' ? 0.5 : 1
-    g.cd = g.w.cooldown * barrage * (0.9 + Math.random() * 0.2)
+    g.cd = g.w.cooldown * barrage * u.mods.cooldown * (0.9 + Math.random() * 0.2)
     g.burst = (g.w.burst ?? 1) - 1
     g.burstT = 0.11
   }
@@ -837,17 +905,26 @@ function economy(w: World, dt: number) {
     if (!st || st.dead) continue
     p.credits += p.income * dt
     p.stats.earned += p.income * dt
-    if (p.upgrade) {
-      p.upgrade.left -= dt
-      if (p.upgrade.left <= 0) {
-        p.upgrade = null
-        p.level++
-        const grow = (1 + STATION_LEVEL_BONUS * (p.level - 1)) / (1 + STATION_LEVEL_BONUS * (p.level - 2))
-        st.hullMax *= grow
-        st.hull *= grow
-        w.events.push({ k: 'level', owner: o, level: p.level })
+    const r = p.research[0]
+    if (r) {
+      r.left -= dt
+      if (r.left <= 0) {
+        p.research.shift()
+        if (r.id === LEVEL_UP) {
+          p.level++
+          const grow = (1 + STATION_LEVEL_BONUS * (p.level - 1)) / (1 + STATION_LEVEL_BONUS * (p.level - 2))
+          st.hullMax *= grow
+          st.hull *= grow
+          w.events.push({ k: 'level', owner: o, level: p.level })
+        } else finishResearch(w, o, r.id)
       }
     }
+    // Repair docks mend our ships parked near the station.
+    const repair = techBonus(p, st.t.id).repair
+    if (repair)
+      near(w, st.x, st.y, 900, (u) => {
+        if (u.owner === o && isShip(u.t) && u.hull < u.hullMax) u.hull = Math.min(u.hullMax, u.hull + u.hullMax * repair * dt)
+      })
     const q = p.queue[0]
     if (q) {
       q.left -= dt * (hangarsUp(st) ? 1 : 0.5)
@@ -945,10 +1022,10 @@ export function tick(w: World, dt = STEP) {
     if (u.slow > 0) u.slow -= dt
     // Shields recharge, faster once out of the fight for a few seconds.
     const smax = shieldMax(u)
-    if (u.shield < smax) u.shield = Math.min(smax, u.shield + u.t.regen * dt * (w.time - u.lastHit > 6 ? 2 : 1))
+    if (u.shield < smax) u.shield = Math.min(smax, u.shield + u.t.regen * u.mods.regen * dt * (w.time - u.lastHit > 6 ? 2 : 1))
     if (u.t.carrier) {
       u.hangarT += dt
-      if (u.hangarT >= u.t.carrier.every) {
+      if (u.hangarT >= u.t.carrier.every * (techBonus(w.players[u.owner], u.t.id).hangar ? 0.7 : 1)) {
         u.hangarT = 0
         launch(w, u)
       }

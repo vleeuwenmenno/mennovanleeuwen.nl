@@ -1,5 +1,5 @@
-import { ABILITIES, MAX_LEVEL, UPGRADES, buildable, isShip, type Tier } from './data'
-import { cantBuild, cmdAbility, cmdAttack, cmdBuild, cmdMine, cmdMove, cmdRally, cmdUpgrade, fleet, near, other, shieldMax, type Owner, type Unit, type World } from './sim'
+import { ABILITIES, LEVEL_UP, MAX_LEVEL, UPGRADES, buildable, isShip, techsFor, unitOf, type Tier } from './data'
+import { cantBuild, cantResearch, cmdAbility, cmdAttack, cmdBuild, cmdMine, cmdMove, cmdRally, cmdResearch, fleet, near, other, shieldMax, type Owner, type Unit, type World } from './sim'
 
 // The enemy admiral. Every second or two it looks at the battle and decides: claim ore, upgrade
 // the station, queue ships that counter what it has seen, defend what's under attack, grab
@@ -89,8 +89,21 @@ export function think(w: World, b: Brain, dt: number) {
 
   // Station upgrades once there's a fleet to protect the investment: save for them first.
   const next = UPGRADES[p.level + 1]
-  const upgradeDue = p.level < MAX_LEVEL && !p.upgrade && !!next && armyValue >= p.level * 700 && w.time > p.level * 140
-  if (upgradeDue && p.credits >= next!.cost) cmdUpgrade(w, o)
+  const leveling = p.research.some((r) => r.id === LEVEL_UP)
+  const upgradeDue = p.level < MAX_LEVEL && !leveling && !!next && armyValue >= p.level * 700 && w.time > p.level * 140
+  if (upgradeDue && p.credits >= next!.cost) cmdResearch(w, o, LEVEL_UP)
+
+  // Research for what we fly most, once the yard is busy and there's money to spare.
+  if (!upgradeDue && p.queue.length >= 2 && p.research.length === 0 && p.credits > (b.diff === 'hard' ? 600 : 1000)) {
+    const counts = new Map<string, number>()
+    for (const u of army) counts.set(u.t.id, (counts.get(u.t.id) ?? 0) + 1 / u.t.squad)
+    const options = [...counts.entries()]
+      .filter(([, n]) => n >= 2)
+      .flatMap(([id]) => techsFor(id))
+      .concat(techsFor(unitOf(p.faction, 'station').id))
+      .filter((t) => !cantResearch(w, o, t.id))
+    if (options.length) cmdResearch(w, o, options[Math.floor(Math.random() * options.length)].id)
+  }
 
   // Keep two orders in the yard, saving up for the one we picked rather than buying whatever's cheap.
   if (p.queue.length < 2 && !upgradeDue) {

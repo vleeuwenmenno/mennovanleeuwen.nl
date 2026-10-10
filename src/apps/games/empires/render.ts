@@ -1,5 +1,6 @@
 import { FACTIONS, dims, isShip, type HardpointKind, type Tier } from './data'
-import { building, hpPos, radius, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
+import { HP_COLOR, HP_ICON, HP_NAME } from './icons'
+import { building, hpPos, radius, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 
 // Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, ore,
 // rocks and beacons, the ships (generated sprites rotated in code, with engine glow, shield
@@ -31,7 +32,12 @@ type Pending = { at: number; x: number; y: number; size: number; final: boolean 
 type Ping = { x: number; y: number; t: number; color: string }
 
 const TIER_ORDER: Record<Tier, number> = { station: 0, mine: 1, capital: 2, cruiser: 3, frigate: 4, gunship: 5, fighter: 6 }
-const HP_COLOR: Record<HardpointKind, string> = { turret: '#ffb347', shield: '#59c8ff', engine: '#ffe066', hangar: '#7dffa0' }
+const ICON_PATH = new Map<HardpointKind, Path2D>()
+const iconPath = (k: HardpointKind) => {
+  let p = ICON_PATH.get(k)
+  if (!p) ICON_PATH.set(k, (p = new Path2D(HP_ICON[k])))
+  return p
+}
 
 function load(src: string) {
   const img = new Image()
@@ -555,6 +561,45 @@ export class Renderer {
       ctx.fillRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0))
       ctx.strokeRect(Math.min(x0, x1) + 0.5, Math.min(y0, y1) + 0.5, Math.abs(x1 - x0), Math.abs(y1 - y0))
     }
+
+    // Hover label: a hardpoint's name and health, or the ship's name.
+    const hu = view.hover ? w.byId.get(view.hover) : undefined
+    if (hu && (hu.owner === view.me || hu.seen[view.me]) && !view.box) {
+      const hp = view.hoverHp >= 0 && hu.t.size * z > 90 ? view.hoverHp : -1
+      const at = hp >= 0 ? hpPos(hu, hp) : { x: hu.x, y: hu.y - Math.max(...dims(hu.t)) * 0.5 }
+      const sx = (at.x - cam.x) * z + vw / 2
+      const sy = (at.y - cam.y) * z + vh / 2 - (hp >= 0 ? 18 : 22)
+      const kind = hp >= 0 ? hu.t.hardpoints[hp].kind : null
+      const st = hp >= 0 ? hu.hps[hp] : null
+      const title = kind ? HP_NAME[kind] : `${hu.owner === view.me ? '' : 'Enemy '}${hu.t.name}`
+      const sub = st ? (st.hp > 0 ? `${Math.ceil(st.hp)} / ${st.max}` : 'Destroyed') : `Hull ${Math.round((hu.hull / hu.hullMax) * 100)}%${hu.t.shield ? ` · Shield ${Math.round((hu.shield / shieldFull(hu)) * 100)}%` : ''}`
+      ctx.font = '600 12px system-ui, sans-serif'
+      const tw = Math.max(ctx.measureText(title).width, (ctx.font = '11px system-ui, sans-serif', ctx.measureText(sub).width)) + 20
+      const th = st ? 40 : 34
+      const bx = Math.min(vw - tw - 6, Math.max(6, sx - tw / 2))
+      const by = Math.max(46, sy - th)
+      ctx.fillStyle = 'rgba(6,10,22,0.9)'
+      ctx.strokeStyle = kind ? HP_COLOR[kind] : hu.owner === view.me ? 'rgba(125,255,160,0.6)' : 'rgba(255,90,80,0.6)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.roundRect(bx, by, tw, th, 6)
+      ctx.fill()
+      ctx.stroke()
+      ctx.fillStyle = '#e8eef8'
+      ctx.font = '600 12px system-ui, sans-serif'
+      ctx.textBaseline = 'top'
+      ctx.fillText(title, bx + 10, by + 6)
+      ctx.fillStyle = '#9fb0c8'
+      ctx.font = '11px system-ui, sans-serif'
+      ctx.fillText(sub, bx + 10, by + 21)
+      if (st && st.hp > 0) {
+        ctx.fillStyle = 'rgba(255,255,255,0.12)'
+        ctx.fillRect(bx + 10, by + th - 7, tw - 20, 3)
+        ctx.fillStyle = HP_COLOR[kind!]
+        ctx.fillRect(bx + 10, by + th - 7, (tw - 20) * (st.hp / st.max), 3)
+      }
+      ctx.textBaseline = 'alphabetic'
+    }
   }
 
   private drawSprite(ctx: CanvasRenderingContext2D, name: string, x: number, y: number, rot: number, size: number, z: number, alpha = 1) {
@@ -647,40 +692,47 @@ export class Renderer {
       ctx.stroke()
     }
 
-    // Hardpoint markers on selected or hovered warships, once they're big enough to read.
+    // Hardpoint markers on selected or hovered warships, once they're big enough to read: a dark
+    // disc with the part's icon, ringed in its colour as far round as its health goes.
     if ((sel || hov) && u.hps.length && t.size * z > 90) {
       t.hardpoints.forEach((h, i) => {
         const p = hpPos(u, i)
         const st = u.hps[i]
-        const r = Math.max(5 / z, t.size * 0.028)
         const hi = hov && view.hoverHp === i
-        ctx.lineWidth = (hi ? 3 : 1.8) / z
+        const r = Math.max(9 / z, t.size * 0.032) * (hi ? 1.25 : 1)
+        ctx.fillStyle = st.hp <= 0 ? 'rgba(60,8,8,0.8)' : 'rgba(6,10,22,0.78)'
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+        ctx.fill()
+        // The icon: drawn on its 24-unit grid, scaled to fit inside the disc.
+        ctx.save()
+        ctx.translate(p.x, p.y)
+        const k2 = (r * 1.25) / 24
+        ctx.scale(k2, k2)
+        ctx.translate(-12, -12)
+        ctx.strokeStyle = st.hp <= 0 ? 'rgba(255,120,110,0.7)' : 'rgba(235,242,255,0.92)'
+        ctx.lineWidth = 2.2
+        ctx.lineCap = 'round'
+        ctx.lineJoin = 'round'
+        ctx.stroke(iconPath(h.kind))
+        ctx.restore()
+        ctx.lineWidth = (hi ? 2.6 : 1.8) / z
         if (st.hp <= 0) {
-          ctx.strokeStyle = 'rgba(255,80,70,0.8)'
+          ctx.strokeStyle = 'rgba(255,80,70,0.9)'
           ctx.beginPath()
-          ctx.moveTo(p.x - r, p.y - r)
-          ctx.lineTo(p.x + r, p.y + r)
-          ctx.moveTo(p.x + r, p.y - r)
-          ctx.lineTo(p.x - r, p.y + r)
+          ctx.moveTo(p.x - r * 0.75, p.y - r * 0.75)
+          ctx.lineTo(p.x + r * 0.75, p.y + r * 0.75)
           ctx.stroke()
           return
         }
-        ctx.strokeStyle = 'rgba(0,0,0,0.6)'
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)'
         ctx.beginPath()
-        ctx.arc(p.x, p.y, r + 2 / z, 0, Math.PI * 2)
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
         ctx.stroke()
         ctx.strokeStyle = HP_COLOR[h.kind]
         ctx.beginPath()
         ctx.arc(p.x, p.y, r, -Math.PI / 2, -Math.PI / 2 + (st.hp / st.max) * Math.PI * 2)
         ctx.stroke()
-        if (hi) {
-          ctx.fillStyle = HP_COLOR[h.kind]
-          ctx.globalAlpha = 0.3
-          ctx.beginPath()
-          ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
-          ctx.fill()
-          ctx.globalAlpha = 1
-        }
       })
     }
 
@@ -697,8 +749,8 @@ export class Renderer {
       ctx.fillRect(bx, by, bw * hf, bh)
       if (t.shield) {
         ctx.fillStyle = '#59c8ff'
-        ctx.fillRect(bx, by + bh + 1 / z, (bw * u.shield) / Math.max(1, t.shield), bh)
-        const cap = shieldMax(u) / t.shield
+        ctx.fillRect(bx, by + bh + 1 / z, (bw * u.shield) / Math.max(1, shieldFull(u)), bh)
+        const cap = shieldMax(u) / shieldFull(u)
         if (cap < 1) {
           ctx.fillStyle = 'rgba(255,80,70,0.5)'
           ctx.fillRect(bx + bw * cap, by + bh + 1 / z, bw * (1 - cap), bh)
@@ -707,42 +759,150 @@ export class Renderer {
     }
   }
 
-  /** The minimap: ore, beacons, ships as dots, and the camera's view as a box. */
-  minimap(ctx: CanvasRenderingContext2D, w: World, me: Owner, cam: Camera, vw: number, vh: number, mw: number, mh: number) {
+  /** The minimap: the nebula behind, what our ships can see, ore, beacons, ships, stations, the
+   * last alert, and the camera's view as a bracketed box. */
+  minimap(ctx: CanvasRenderingContext2D, w: World, me: Owner, cam: Camera, vw: number, vh: number, mw: number, mh: number, alarm: { x: number; y: number; t: number } | null) {
     const s = Math.min(mw / w.w, mh / w.h)
     const ox = (mw - w.w * s) / 2
     const oy = (mh - w.h * s) / 2
+    const X = (x: number) => ox + x * s
+    const Y = (y: number) => oy + y * s
     ctx.clearRect(0, 0, mw, mh)
-    ctx.fillStyle = 'rgba(6,10,22,0.92)'
+    ctx.fillStyle = '#03050c'
     ctx.fillRect(0, 0, mw, mh)
-    ctx.fillStyle = 'rgba(120,130,150,0.35)'
-    for (const r of w.rocks) {
+    const bg = this.imgs.get('backdrop')
+    if (bg?.complete && bg.naturalWidth) {
+      ctx.globalAlpha = 0.55
+      ctx.drawImage(bg, ox, oy, w.w * s, w.h * s)
+      ctx.globalAlpha = 1
+    }
+    // What we can see, lit up; the rest stays dim.
+    ctx.fillStyle = 'rgba(2,4,12,0.45)'
+    ctx.fillRect(ox, oy, w.w * s, w.h * s)
+    ctx.globalCompositeOperation = 'lighter'
+    ctx.fillStyle = 'rgba(70,110,170,0.09)'
+    for (const u of w.units) {
+      if (u.owner !== me) continue
       ctx.beginPath()
-      ctx.arc(ox + r.x * s, oy + r.y * s, Math.max(1, r.r * s), 0, Math.PI * 2)
+      ctx.arc(X(u.x), Y(u.y), u.t.sensor * s, 0, Math.PI * 2)
       ctx.fill()
     }
-    for (const n of w.nodes) {
-      ctx.fillStyle = '#4fe3d8'
-      ctx.fillRect(ox + n.x * s - 2, oy + n.y * s - 2, 4, 4)
-    }
-    for (const b of w.beacons) {
-      ctx.strokeStyle = b.owner === -1 ? '#c8d0e0' : FACTIONS[w.players[b.owner].faction].color
-      ctx.lineWidth = 1.5
+    ctx.globalCompositeOperation = 'source-over'
+    // A faint grid.
+    ctx.strokeStyle = 'rgba(140,180,240,0.07)'
+    ctx.lineWidth = 1
+    for (let gx = 700; gx < w.w; gx += 700) {
       ctx.beginPath()
-      ctx.arc(ox + b.x * s, oy + b.y * s, 4, 0, Math.PI * 2)
+      ctx.moveTo(X(gx), oy)
+      ctx.lineTo(X(gx), oy + w.h * s)
       ctx.stroke()
     }
+    for (let gy = 680; gy < w.h; gy += 680) {
+      ctx.beginPath()
+      ctx.moveTo(ox, Y(gy))
+      ctx.lineTo(ox + w.w * s, Y(gy))
+      ctx.stroke()
+    }
+    ctx.fillStyle = 'rgba(150,150,165,0.4)'
+    for (const r of w.rocks) {
+      ctx.beginPath()
+      ctx.arc(X(r.x), Y(r.y), Math.max(1, r.r * s * 0.8), 0, Math.PI * 2)
+      ctx.fill()
+    }
+    // Ore: small crystals.
+    for (const n of w.nodes) {
+      const x = X(n.x)
+      const y = Y(n.y)
+      ctx.fillStyle = '#4fe3d8'
+      ctx.beginPath()
+      ctx.moveTo(x, y - 4)
+      ctx.lineTo(x + 3, y)
+      ctx.lineTo(x, y + 4)
+      ctx.lineTo(x - 3, y)
+      ctx.closePath()
+      ctx.fill()
+    }
+    // Beacons: a ring, filled when held, with capture progress.
+    for (const b of w.beacons) {
+      const x = X(b.x)
+      const y = Y(b.y)
+      const col = b.owner === -1 ? '#c8d0e0' : b.owner === me ? '#7dffa0' : '#ff5a50'
+      ctx.strokeStyle = col
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.arc(x, y, 5, 0, Math.PI * 2)
+      ctx.stroke()
+      if (b.owner !== -1) {
+        ctx.fillStyle = col
+        ctx.globalAlpha = 0.35
+        ctx.fill()
+        ctx.globalAlpha = 1
+      }
+      if (b.progress !== 0 && Math.abs(b.progress) < 1) {
+        ctx.strokeStyle = (b.progress < 0 ? 0 : 1) === me ? '#7dffa0' : '#ff5a50'
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.arc(x, y, 8, -Math.PI / 2, -Math.PI / 2 + Math.abs(b.progress) * Math.PI * 2)
+        ctx.stroke()
+      }
+    }
+    // Ships as dots sized by class; mines and stations as framed squares.
     for (const u of w.units) {
       if (u.owner !== me && !u.seen[me]) continue
-      ctx.fillStyle = u.owner === me ? '#7dffa0' : '#ff5a50'
-      const big = u.t.tier === 'station' ? 6 : u.t.tier === 'capital' || u.t.tier === 'mine' ? 4 : u.t.tier === 'fighter' ? 1.5 : 2.5
-      ctx.fillRect(ox + u.x * s - big / 2, oy + u.y * s - big / 2, big, big)
+      const col = u.owner === me ? '#7dffa0' : '#ff5a50'
+      const x = X(u.x)
+      const y = Y(u.y)
+      if (u.t.tier === 'station' || u.t.tier === 'mine') {
+        const r = u.t.tier === 'station' ? 6 : 3.5
+        ctx.fillStyle = 'rgba(0,0,0,0.6)'
+        ctx.fillRect(x - r - 1, y - r - 1, r * 2 + 2, r * 2 + 2)
+        ctx.strokeStyle = col
+        ctx.lineWidth = 1.5
+        ctx.strokeRect(x - r, y - r, r * 2, r * 2)
+        if (u.t.tier === 'station') {
+          ctx.fillStyle = FACTIONS[u.t.faction].color
+          ctx.fillRect(x - 2.5, y - 2.5, 5, 5)
+        }
+        continue
+      }
+      const big = u.t.tier === 'capital' ? 3.5 : u.t.tier === 'cruiser' ? 2.8 : u.t.tier === 'frigate' ? 2.3 : u.t.tier === 'gunship' ? 1.8 : 1.1
+      ctx.fillStyle = col
+      ctx.beginPath()
+      ctx.arc(x, y, big, 0, Math.PI * 2)
+      ctx.fill()
     }
-    ctx.strokeStyle = 'rgba(255,255,255,0.8)'
+    // The last alert pulses for a few seconds.
+    if (alarm && w.time - alarm.t < 6) {
+      const k = ((w.time - alarm.t) % 1.2) / 1.2
+      ctx.strokeStyle = `rgba(255,90,80,${1 - k})`
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.arc(X(alarm.x), Y(alarm.y), 4 + k * 14, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+    // The camera's view, with corner brackets.
+    const ww = (vw / cam.zoom) * s
+    const wh = (vh / cam.zoom) * s
+    const x0 = X(cam.x) - ww / 2
+    const y0 = Y(cam.y) - wh / 2
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)'
     ctx.lineWidth = 1
-    const ww = vw / cam.zoom
-    const wh = vh / cam.zoom
-    ctx.strokeRect(ox + (cam.x - ww / 2) * s, oy + (cam.y - wh / 2) * s, ww * s, wh * s)
+    ctx.strokeRect(x0, y0, ww, wh)
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = 2
+    const c = Math.min(8, ww / 3, wh / 3)
+    for (const [cx, cy, dx, dy] of [
+      [x0, y0, 1, 1],
+      [x0 + ww, y0, -1, 1],
+      [x0, y0 + wh, 1, -1],
+      [x0 + ww, y0 + wh, -1, -1],
+    ]) {
+      ctx.beginPath()
+      ctx.moveTo(cx + dx * c, cy)
+      ctx.lineTo(cx, cy)
+      ctx.lineTo(cx, cy + dy * c)
+      ctx.stroke()
+    }
     return { s, ox, oy }
   }
 }
