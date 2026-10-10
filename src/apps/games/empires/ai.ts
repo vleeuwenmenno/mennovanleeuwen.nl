@@ -230,7 +230,9 @@ export function think(w: World, b: Brain, dt: number) {
   const calm = w.time < D.calm
   // Ore nearer to us than to any enemy station, so allies don't race each other for it.
   const ore = w.nodes.filter((n) => !n.site && n.owner !== team && (!calm || n.owner === -1) && mineToTake(n))
-  const wanted = [...ore, ...w.beacons.filter((bc) => bc.owner !== team && (!calm || bc.owner === -1))]
+  // Wrecks on our side of the map are free credits for a parked scout.
+  const hulks = w.wrecks.filter((h) => h.left > 200 && h.team !== team && mineToTake(h))
+  const wanted = [...ore, ...hulks, ...w.beacons.filter((bc) => bc.owner !== team && (!calm || bc.owner === -1))]
     .filter((g) => threatAt(w, o, g.x, g.y) < scoutValue * 0.9)
     .sort((a, c) => d2(a, st) - d2(c, st))
   for (const s of scouts) {

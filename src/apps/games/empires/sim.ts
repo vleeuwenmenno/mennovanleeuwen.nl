@@ -112,6 +112,12 @@ export type Claimable = { owner: number; claim: number; progress: number }
 export type OreNode = { id: number; x: number; y: number; r: number; rot: number; site: number } & Claimable
 export type Beacon = { id: number; x: number; y: number } & Claimable
 export type Rock = { x: number; y: number; r: number; rot: number; spin: number; kind: number }
+/** A derelict hulk to strip for credits. `left` counts down as it's salvaged; battle wrecks also
+ * drift off after `decay` seconds. `team` is who's salvaging it right now (-1 for nobody). */
+export type Wreck = { id: number; x: number; y: number; value: number; left: number; sprite: string; size: number; rot: number; decay: number; team: number }
+/** How close (from the hulk's centre) a ship must park to salvage, and credits a second per ship (up to three). */
+export const SALVAGE_RANGE = 240
+export const SALVAGE_RATE = 30
 export type Shot = {
   x: number; y: number; vx: number; vy: number; left: number; kind: WeaponKind; owner: Owner; target: number; hp: number; dmg: number; hit: boolean; sx: number; sy: number; age: number; from: number
 }
@@ -132,6 +138,7 @@ export type SimEvent =
   | { k: 'ability'; owner: Owner; id: AbilityId; x: number; y: number }
   | { k: 'launch'; owner: Owner; x: number; y: number }
   | { k: 'shieldsDown'; owner: Owner; x: number; y: number }
+  | { k: 'salvaged'; owner: Owner; value: number; x: number; y: number }
   | { k: 'rankUp'; owner: Owner; unit: number; rank: number; x: number; y: number }
 
 export type World = {
@@ -146,6 +153,7 @@ export type World = {
   nodes: OreNode[]
   beacons: Beacon[]
   rocks: Rock[]
+  wrecks: Wreck[]
   shots: Shot[]
   events: SimEvent[]
   nextId: number
@@ -279,7 +287,7 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
   const c = { x: W / 2, y: H / 2 }
   const teams = Math.max(...seats.map((s) => s.team)) + 1
   const w: World = {
-    w: W, h: H, time: 0, units: [], byId: new Map(), players: [], teams, map, nodes: [], beacons: [], rocks: [], shots: [], events: [],
+    w: W, h: H, time: 0, units: [], byId: new Map(), players: [], teams, map, nodes: [], beacons: [], rocks: [], wrecks: [], shots: [], events: [],
     nextId: 1, winner: -1, grid: new Map(), seenT: 0,
   }
   w.players = seats.map((s) => {
@@ -297,7 +305,13 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
   // Scattered rocks: each one is copied to every side by the map's symmetry, so nobody gets the
   // better lanes. They keep clear of stations, ore, beacons, asteroid fields and the lanes into the
   // middle.
-  const keepClear = [...w.nodes.map((n) => [n.x, n.y, 260]), ...w.beacons.map((b) => [b.x, b.y, 330]), ...map.spawns.map((p) => [p.x, p.y, 700])]
+  // Map wrecks: the big hulks of earlier battles, Republic or droid as the seed falls.
+  w.wrecks = map.wrecks.map((h, i) => {
+    const big = h.value >= 900
+    const side = r() < 0.5 ? 'republic' : 'droid'
+    return { id: i + 1, x: h.x, y: h.y, value: h.value, left: h.value, sprite: `${side}-${big ? 'capital' : 'cruiser'}`, size: big ? 340 : 220, rot: r() * TAU, decay: Infinity, team: -1 }
+  })
+  const keepClear = [...w.wrecks.map((h) => [h.x, h.y, h.size * 0.6]), ...w.nodes.map((n) => [n.x, n.y, 260]), ...w.beacons.map((b) => [b.x, b.y, 330]), ...map.spawns.map((p) => [p.x, p.y, 700])]
   const inLane = (x: number, y: number, rad: number) =>
     map.spawns.some((p) => {
       // Distance from the point to the segment between this spawn and the centre.
@@ -649,6 +663,42 @@ function launch(w: World, carrier: Unit, extra = false) {
   w.events.push({ k: 'launch', owner: carrier.owner, x: bay.x, y: bay.y })
 }
 
+let wreckSeq = 1000
+/** Warships leave a hulk worth part of their cost, for whoever holds the field to strip. */
+function leaveWreck(w: World, u: Unit) {
+  if (u.t.tier !== 'frigate' && u.t.tier !== 'cruiser' && u.t.tier !== 'capital') return
+  const value = Math.round((u.t.cost * 0.3) / 10) * 10
+  w.wrecks.push({ id: wreckSeq++, x: u.x, y: u.y, value, left: value, sprite: u.t.sprite, size: u.t.size, rot: u.a + Math.PI / 2, decay: 180, team: -1 })
+}
+
+/**
+ * Salvage: non-fighter ships parked by a hulk strip it, the credits going to whoever's ships are
+ * there; contested hulks give nothing. Battle wrecks drift away after a while.
+ */
+function salvage(w: World, dt: number) {
+  for (const h of w.wrecks) {
+    h.decay -= dt
+    const crews = new Map<Owner, number>()
+    const teams = new Set<number>()
+    near(w, h.x, h.y, SALVAGE_RANGE + h.size * 0.25, (u) => {
+      if (!isShip(u.t) || u.t.tier === 'fighter') return
+      crews.set(u.owner, (crews.get(u.owner) ?? 0) + 1)
+      teams.add(w.players[u.owner].team)
+    })
+    h.team = teams.size === 1 ? [...teams][0] : -1
+    if (h.team === -1) continue
+    for (const [o, n] of crews) {
+      const take = Math.min(h.left, SALVAGE_RATE * Math.min(3, n) * dt)
+      if (take <= 0) break
+      h.left -= take
+      w.players[o].credits += take
+      w.players[o].stats.earned += take
+      if (h.left <= 0) w.events.push({ k: 'salvaged', owner: o, value: h.value, x: h.x, y: h.y })
+    }
+  }
+  if (w.wrecks.some((h) => h.left <= 0 || h.decay <= 0)) w.wrecks = w.wrecks.filter((h) => h.left > 0 && h.decay > 0)
+}
+
 function kill(w: World, u: Unit, by: Owner | -1) {
   if (u.dead) return
   u.dead = true
@@ -656,6 +706,7 @@ function kill(w: World, u: Unit, by: Owner | -1) {
   w.players[u.owner].stats.lost++
   if (by !== -1) w.players[by].stats.killed++
   if (u.node >= 0 && w.nodes[u.node].site === u.id) w.nodes[u.node].site = 0
+  leaveWreck(w, u)
   if (u.t.tier === 'station') {
     // A player whose station falls is out; the last team with a station standing wins.
     w.players[u.owner].alive = false
@@ -1200,6 +1251,7 @@ export function tick(w: World, dt = STEP) {
   economy(w, dt)
   beacons(w, dt)
   survey(w, dt)
+  salvage(w, dt)
   for (const u of w.units) {
     if (u.dead) continue
     if (u.building > 0) {

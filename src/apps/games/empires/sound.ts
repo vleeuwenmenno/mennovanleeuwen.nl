@@ -845,6 +845,10 @@ export class EmpiresSound {
   capture(ours: boolean) {
     this.ui(ours ? 'beacon-won' : 'beacon-lost', (sr) => (ours ? bells(sr, 440, [0, 7, 12, 16], 1.1, 0.07) : bells(sr, 311, [7, 3, 0, -5], 1.1, 0.09)), 0.55, 1)
   }
+  /** A wreck stripped bare: a last clang and the tally chime. */
+  salvaged() {
+    if (this.ready() && this.allow('salvaged', 1, 0.5)) this.ui('salvaged', (sr) => layers(sr, [{ data: metal(true)(sr, Math.random), gain: 0.5 }, { data: bells(sr, 330, [0, 7, 12], 0.7, 0.06), at: 0.12, gain: 0.6 }]), 0.5, 1)
+  }
   /** A ship ranked up: a short rising chime. */
   promoted() {
     if (this.ready() && this.allow('promoted', 1, 0.5)) this.ui('promoted', (sr) => bells(sr, 392, [0, 4, 7, 12], 0.8, 0.05), 0.5, 1)

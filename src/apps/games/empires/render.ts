@@ -362,6 +362,19 @@ export class Renderer {
     this.smokeT -= dt
     if (this.smokeT <= 0) {
       this.smokeT = 0.12
+      // Crews cutting into a hulk throw sparks.
+      for (const h of w.wrecks) {
+        if (h.team === -1 || Math.random() > 0.55) continue
+        const a = Math.random() * Math.PI * 2
+        const d = Math.random() * h.size * 0.3
+        const x = h.x + Math.cos(a) * d
+        const y = h.y + Math.sin(a) * d
+        for (let i = 0; i < 3; i++) {
+          const b = Math.random() * Math.PI * 2
+          const v = 30 + Math.random() * 90
+          this.add({ kind: 'spark', x, y, vx: Math.cos(b) * v, vy: Math.sin(b) * v, life: 0.3 + Math.random() * 0.3, size: 1.2, color: '#ffd27a' })
+        }
+      }
       for (const u of w.units) {
         if (!isShip(u.t) && u.t.tier !== 'station') continue
         u.hps.forEach((h, i) => {
@@ -474,6 +487,33 @@ export class Renderer {
         ctx.arc(b.x, b.y, 95, -Math.PI / 2, -Math.PI / 2 + b.progress * Math.PI * 2)
         ctx.stroke()
       }
+    }
+
+    // Wrecks: dimmed hulks turning slowly, ringed by what's left to salvage.
+    const myTeamW = w.players[view.me].team
+    for (const h of w.wrecks) {
+      if (!onScreen(h.x, h.y, h.size)) continue
+      const fade = Math.min(1, h.decay / 20)
+      ctx.filter = 'brightness(0.42) saturate(0.35) sepia(0.25)'
+      this.drawSprite(ctx, h.sprite, h.x, h.y, h.rot + this.clock * 0.012 * (h.id % 2 ? 1 : -1), h.size, z, 0.95 * fade)
+      ctx.filter = 'none'
+      const rr = h.size * 0.55 + 20
+      ctx.globalAlpha = fade
+      ctx.strokeStyle = h.team === myTeamW ? '#f2c14a' : 'rgba(242,193,74,0.4)'
+      ctx.lineWidth = (h.team === -1 ? 1.5 : 3) / z
+      ctx.setLineDash(h.team === -1 ? [6 / z, 8 / z] : [])
+      ctx.beginPath()
+      ctx.arc(h.x, h.y, rr, -Math.PI / 2, -Math.PI / 2 + (h.left / h.value) * Math.PI * 2)
+      ctx.stroke()
+      ctx.setLineDash([])
+      if (z > 0.3) {
+        ctx.fillStyle = '#f2c14a'
+        ctx.font = `600 ${12 / z}px system-ui, sans-serif`
+        ctx.textAlign = 'center'
+        ctx.fillText(`${Math.ceil(h.left)} cr`, h.x, h.y - rr - 6 / z)
+        ctx.textAlign = 'start'
+      }
+      ctx.globalAlpha = 1
     }
 
     // Ore, with its survey ring: dashed while unclaimed, in the holder's colour once surveyed, and
@@ -1059,6 +1099,9 @@ export class Renderer {
       ctx.arc(X(r.x), Y(r.y), Math.max(1, r.r * s * 0.8), 0, Math.PI * 2)
       ctx.fill()
     }
+    // Wrecks: small amber squares.
+    ctx.fillStyle = '#f2c14a'
+    for (const h of w.wrecks) ctx.fillRect(X(h.x) - 2, Y(h.y) - 2, 4, 4)
     // Ore: small crystals.
     for (const n of w.nodes) {
       const x = X(n.x)

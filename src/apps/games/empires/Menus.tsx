@@ -326,6 +326,7 @@ export function HowToPlay() {
         <li>Big ships have hardpoints. Hover one and right-click a marker to target it: knock out shield generators first.</li>
         <li>Fighters beat cruisers and flagships, gunships beat fighters, frigates beat gunships, cruisers beat frigates.</li>
         <li>Asteroid fields wear down frigates, cruisers and flagships flying through them (fighters and gunships dodge the rocks). Nebulas knock out shields and halve sensor range.</li>
+        <li>Park warships next to a wreck to strip it for credits, as long as no enemy ships are there. Destroyed frigates, cruisers and flagships leave wrecks too.</li>
       </ul>
       <p className="ew-muted ew-small">
         Commands: {k('move')} move, {k('attack')} attack move, {k('patrol')} patrol, {k('hold')} hold, {k('stop')} stop, {k('ability')} ability, {k('rally')} rally point. Camera: {k('panUp')}
@@ -431,6 +432,8 @@ function MapPreview({ map, slots, className = '' }: { map: MapDef; slots?: Slot[
         g.arc(ox + r.x * s, oy + r.y * s, Math.max(1, r.r * s * 0.8), 0, Math.PI * 2)
         g.fill()
       }
+      g.fillStyle = '#f2c14a'
+      for (const h of map.wrecks) g.fillRect(ox + h.x * s - 2.5, oy + h.y * s - 2.5, 5, 5)
       g.fillStyle = '#4fe3d8'
       for (const n of map.ore) {
         const x = ox + n.x * s
@@ -519,6 +522,10 @@ function GenControls({ rules, onChange, onReroll }: { rules: MapRules; onChange:
       <div className="ew-row">
         <span>Nebulas</span>
         <Seg label="Nebulas" value={rules.nebulas} options={AMOUNTS} onChange={(v) => onChange({ nebulas: v })} />
+      </div>
+      <div className="ew-row">
+        <span>Wrecks</span>
+        <Seg label="Wrecks" value={rules.wrecks} options={AMOUNTS} onChange={(v) => onChange({ wrecks: v })} />
       </div>
       <div className="ew-row">
         <span>Seed</span>

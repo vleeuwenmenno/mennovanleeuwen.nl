@@ -29,7 +29,10 @@ export type MapDef = {
   fields: Patch[]
   /** Gas clouds that knock out shields and halve sensor range for ships inside. */
   nebulas: Nebula[]
+  /** Derelict hulks: park ships next to one to strip it for credits. */
+  wrecks: Wreckage[]
 }
+export type Wreckage = Pt & { value: number }
 
 /** Whether a point is inside any of the patches (grown by `pad`). */
 export const inside = (ps: Patch[], x: number, y: number, pad = 0) => ps.some((p) => (x - p.x) ** 2 + (y - p.y) ** 2 < (p.r + pad) ** 2)
@@ -69,6 +72,8 @@ const copies = (m: Shape, p: Pt) => mirrored(m, p).filter((q, i, all) => all.fin
 
 const all = (m: Shape, pts: Pt[]) => pts.flatMap((p) => copies(m, p))
 /** Terrain patches given as [x, y, r], copied to every side. */
+/** Wrecks at each of these points, copied to every side; [x, y, credits]. */
+const hulks = (m: Shape, ps: [number, number, number][]): Wreckage[] => ps.flatMap(([x, y, value]) => copies(m, { x, y }).map((p) => ({ ...p, value })))
 const patches = (m: Shape, ps: [number, number, number][]): Patch[] => ps.flatMap(([x, y, r]) => copies(m, { x, y }).map((p) => ({ ...p, r })))
 const clouds = (m: Shape, hue: number, ps: [number, number, number][]): Nebula[] => patches(m, ps).map((p) => ({ ...p, hue }))
 
@@ -109,6 +114,7 @@ export const MAPS: MapDef[] = [
     ],
     rocks: 44,
     seed: 1107,
+    wrecks: hulks(kessar, [[2200, 2550, 900]]),
     fields: patches(kessar, [
       [1900, 2350, 260],
       [2110, 2480, 180],
@@ -134,6 +140,7 @@ export const MAPS: MapDef[] = [
     beacons: [tc, ...all(trinity, [rot({ x: tc.x, y: tc.y - 1350 }, tc, Math.PI / 3)])],
     rocks: 66,
     seed: 2311,
+    wrecks: hulks(trinity, [[tc.x + 760, 1950, 800]]),
     fields: [],
     nebulas: clouds(trinity, 285, [[tc.x, tc.y, 380]]),
   },
@@ -160,6 +167,7 @@ export const MAPS: MapDef[] = [
     ],
     rocks: 72,
     seed: 3719,
+    wrecks: hulks(vanth, [[1950, 2000, 700]]),
     fields: patches(vanth, [
       [2580, 700, 230],
       [2420, 820, 150],
@@ -185,6 +193,7 @@ export const MAPS: MapDef[] = [
     ]),
     rocks: 26,
     seed: 4421,
+    wrecks: hulks(cinder, [[1650, 2250, 1000]]),
     fields: [],
     nebulas: clouds(cinder, 18, [
       [cinder.w / 2, cinder.h / 2, 420],
@@ -210,6 +219,7 @@ export const MAPS: MapDef[] = [
     ],
     rocks: 56,
     seed: 5153,
+    wrecks: hulks(reefs, [[2350, 1450, 700]]),
     fields: patches(reefs, [
       [1900, 1400, 280],
       [2110, 1240, 200],
@@ -236,6 +246,7 @@ export const MAPS: MapDef[] = [
     beacons: [sc, ...all(shroud, [rot({ x: sc.x, y: sc.y - 1300 }, sc, Math.PI / 3)])],
     rocks: 60,
     seed: 6007,
+    wrecks: hulks(shroud, [[3000 + 650, 1750, 800]]),
     fields: patches(shroud, [
       [4377, 1034, 250],
       [4560, 1180, 160],
@@ -267,13 +278,15 @@ export type MapRules = {
   beacons: number | 'auto'
   asteroidFields: Amount
   nebulas: Amount
+  /** Derelicts to salvage. */
+  wrecks: Amount
 }
 
 /** The lobby's map id for the generator; the rules travel alongside it. */
 export const GENERATED = 'generated'
 export const MAX_SEED = 999999
 export const MAX_BEACONS = 9
-export const DEFAULT_RULES: MapRules = { seed: 1, players: 2, size: 'medium', resources: 'normal', beacons: 'auto', asteroidFields: 'few', nebulas: 'few' }
+export const DEFAULT_RULES: MapRules = { seed: 1, players: 2, size: 'medium', resources: 'normal', beacons: 'auto', asteroidFields: 'few', nebulas: 'few', wrecks: 'few' }
 
 const pick = <T,>(v: unknown, ok: readonly T[], fallback: T): T => (ok.includes(v as T) ? (v as T) : fallback)
 /** Rules read back from storage, with anything missing or broken replaced by the default. */
@@ -290,6 +303,7 @@ export function cleanRules(v: unknown): MapRules {
     beacons,
     asteroidFields: pick(r.asteroidFields, ['none', 'few', 'many'] as const, d.asteroidFields),
     nebulas: pick(r.nebulas, ['none', 'few', 'many'] as const, d.nebulas),
+    wrecks: pick(r.wrecks, ['none', 'few', 'many'] as const, d.wrecks),
   }
 }
 
@@ -452,12 +466,36 @@ export function generateMap(rules: MapRules): MapDef {
     placed.every((q) => dist(p, q) > p.r + q.r + 150 * k),
   ).flat()
 
+  // Wrecks: one or two per player out in the open, worth a detour for a scout.
+  const rw = stream(6)
+  const wrecks: Wreckage[] = []
+  const hulkCount = R.wrecks === 'none' ? 0 : R.wrecks === 'few' ? 1 : 2
+  for (let g = 0; g < hulkCount; g++) {
+    for (let i = 0; i < 400; i++) {
+      const p = { x: 300 + rw() * (w - 600), y: 300 + rw() * (h - 600) }
+      const set = copies(m, p)
+      const ok = set.every(
+        (q) =>
+          inBounds(q, 200) &&
+          spawns.every((s) => dist(q, s) > 1000) &&
+          ore.every((o) => dist(q, o) > 320) &&
+          beacons.every((b) => dist(q, b) > 380) &&
+          fields.every((f) => dist(q, f) > f.r + 120) &&
+          wrecks.every((x) => dist(q, x) > 700),
+      ) && set.every((q, k) => set.every((o, j) => j === k || dist(q, o) > 600))
+      if (!ok) continue
+      const value = Math.round((500 + rw() * 700) / 50) * 50
+      wrecks.push(...set.map((q) => ({ ...q, value })))
+      break
+    }
+  }
+
   const nm = rng(Math.imul(R.seed + 17, 0x9e3779b1))
   const name = `${NAME_A[Math.floor(nm() * NAME_A.length)]} ${NAME_B[Math.floor(nm() * NAME_B.length)]}`
   const sizeName = { small: 'Small', medium: 'Medium', large: 'Large' }[R.size]
   const oreName = { scarce: 'scarce', normal: 'steady', rich: 'rich' }[R.resources]
   return {
-    id: `gen-${n}-${R.size}-${R.resources}-${R.beacons}-${R.asteroidFields}-${R.nebulas}-${R.seed}`,
+    id: `gen-${n}-${R.size}-${R.resources}-${R.beacons}-${R.asteroidFields}-${R.nebulas}-${R.wrecks}-${R.seed}`,
     name,
     blurb: `${sizeName} generated map for ${n} players with ${oreName} ore. Seed ${R.seed}.`,
     w, h, sym, spawns, ore, beacons,
@@ -465,5 +503,6 @@ export function generateMap(rules: MapRules): MapDef {
     seed: R.seed,
     fields,
     nebulas,
+    wrecks,
   }
 }

@@ -542,6 +542,9 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
             sound.surveyed()
             toast('Ore surveyed: click it to build a mining or defense platform', 'good')
           } else if (e.prev === myTeam) toast(e.owner === -1 ? 'An unused ore claim has lapsed' : 'We lost the claim on an ore asteroid', 'bad')
+        } else if (e.k === 'salvaged' && e.owner === me) {
+          sound.salvaged()
+          toast(`Wreck salvaged: +${Math.round(e.value)} credits in all`, 'good')
         } else if (e.k === 'rankUp' && e.owner === me) {
           const u = w.byId.get(e.unit)
           sound.promoted()
