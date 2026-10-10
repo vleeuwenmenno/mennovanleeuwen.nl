@@ -452,6 +452,62 @@ export function cmdMove(w: World, owner: Owner, ids: number[], x: number, y: num
   formation(w, owner, ids, x, y, (u, tx, ty, speed) => (u.order = { k: 'move', x: tx, y: ty, attack, speed }))
 }
 
+/** `n` spots spread evenly along a drawn line, from one end to the other (one ship: the middle). */
+export function spreadAlong(path: Pt[], n: number): Pt[] {
+  const cum = [0]
+  for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y))
+  const total = cum[cum.length - 1]
+  const at = (d: number): Pt => {
+    let i = 1
+    while (i < path.length - 1 && cum[i] < d) i++
+    const seg = cum[i] - cum[i - 1] || 1
+    const t = clamp((d - cum[i - 1]) / seg, 0, 1)
+    return { x: path[i - 1].x + (path[i].x - path[i - 1].x) * t, y: path[i - 1].y + (path[i].y - path[i - 1].y) * t }
+  }
+  return Array.from({ length: n }, (_, i) => at(n === 1 ? total / 2 : (total * i) / (n - 1)))
+}
+
+/** What gets one spot on a line: each ship, except that a fighter squadron shares one. */
+export function lineGroups(w: World, owner: Owner, ids: number[]): Unit[][] {
+  const groups = new Map<string, Unit[]>()
+  for (const i of ids) {
+    const u = w.byId.get(i)
+    if (!commandable(u, owner)) continue
+    const k = u.squad ? `s${u.squad}` : `u${u.id}`
+    const g = groups.get(k)
+    if (g) g.push(u)
+    else groups.set(k, [u])
+  }
+  return [...groups.values()]
+}
+
+/** Spread ships evenly along a line the player drew. Spots are handed out in the order the ships
+ * stand across the line, so they don't cross each other's paths getting there. */
+export function cmdLine(w: World, owner: Owner, ids: number[], path: Pt[], attack = false) {
+  const groups = lineGroups(w, owner, ids)
+  if (!groups.length || path.length < 2) return
+  const spots = spreadAlong(path, groups.length)
+  const a = path[0]
+  const b = path[path.length - 1]
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const mid = (g: Unit[]) => ({ x: g.reduce((s, u) => s + u.x, 0) / g.length, y: g.reduce((s, u) => s + u.y, 0) / g.length })
+  const order = groups.map((g) => ({ g, c: mid(g) })).sort((p, q) => (p.c.x - q.c.x) * dx + (p.c.y - q.c.y) * dy)
+  const all = groups.flat()
+  // A line keeps the pace of its slowest ship, like any group.
+  const pace = all.length > 1 ? Math.min(...all.map((u) => speedOf(u))) : Infinity
+  order.forEach(({ g, c }, i) => {
+    for (const u of g) {
+      // Squadron members keep their shape round the spot, a little tighter.
+      const p = offRocks(w, u, clamp(spots[i].x + (u.x - c.x) * 0.6, 40, w.w - 40), clamp(spots[i].y + (u.y - c.y) * 0.6, 40, w.h - 40))
+      u.order = { k: 'move', x: p.x, y: p.y, attack, speed: pace }
+      u.target = 0
+      u.parent = 0
+      u.hold = false
+    }
+  })
+}
+
 export function cmdPatrol(w: World, owner: Owner, ids: number[], x: number, y: number) {
   formation(w, owner, ids, x, y, (u, tx, ty, speed) => (u.order = { k: 'patrol', x: tx, y: ty, bx: u.x, by: u.y, speed }))
 }

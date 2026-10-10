@@ -9,7 +9,7 @@ import { HP_NAME } from './empires/icons'
 import { Renderer, relColor, type Camera, type View } from './empires/render'
 import { inRect, type Pt } from './empires/maps'
 import {
-  STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdHold, cmdMove, cmdPatrol, cmdRally, cmdResearch, RANKS, autoStart, cmdSite, cmdStop, foes, hpPos, newWorld, startProblem, tick, type Owner, type SimEvent,
+  STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdHold, cmdMove, cmdPatrol, cmdRally, cmdResearch, RANKS, autoStart, cmdLine, cmdSite, lineGroups, spreadAlong, cmdStop, foes, hpPos, newWorld, startProblem, tick, type Owner, type SimEvent,
   type Unit, type World,
 } from './empires/sim'
 import { EmpiresSound, type OrderKind } from './empires/sound'
@@ -156,6 +156,8 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   const touches = useRef(new Map<number, { x: number; y: number }>())
   const pinch = useRef<{ d: number; zoom: number } | null>(null)
   const lastClick = useRef({ t: 0, id: 0 })
+  /** A line being drawn with the right button, in map units: ships spread along it on release. */
+  const line = useRef<Pt[] | null>(null)
 
   const root = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -615,6 +617,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         node: selected.current.size ? -1 : pickedNode.current,
         hoverNode: h.node,
         hoverWreck: h.wreck,
+        line: line.current && drag.current?.moved ? { path: line.current, spots: spreadAlong(line.current, lineGroups(w, me, mySelection().filter((u) => isShip(u.t)).map((u) => u.id)).length) } : null,
         areas: deploying.current ? seats.map((s, i) => ({ r: s.area, color: relColor(w, me, i), label: s.name, mine: i === me })) : undefined,
         ghost: deploying.current && mouse.current.inside ? ghostAt(mouse.current.x, mouse.current.y) : null,
         showRally: mySelection().some((u) => u.t.tier === 'station'),
@@ -780,8 +783,12 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       return
     }
     if (e.button === 2) {
+      // A right-click orders on release; dragging first draws a line to spread the ships along.
       if (mode.current !== 'normal') setMode('normal')
-      else command(p.x, p.y, false)
+      else {
+        drag.current = { x0: p.x, y0: p.y, box: false, pan: false, moved: false, cx: 0, cy: 0, button: 2 }
+        line.current = [toWorld(p.x, p.y)]
+      }
       return
     }
     if (mode.current !== 'normal') {
@@ -810,6 +817,12 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     const d = drag.current
     if (d) {
       if (Math.hypot(p.x - d.x0, p.y - d.y0) > 6) d.moved = true
+      const ln = line.current
+      if (d.button === 2 && d.moved && ln) {
+        const q = toWorld(p.x, p.y)
+        const last = ln[ln.length - 1]
+        if (Math.hypot(q.x - last.x, q.y - last.y) * cam.current.zoom > 6) ln.push(q)
+      }
       if (d.pan && d.moved) {
         cam.current.x = d.cx - (p.x - d.x0) / cam.current.zoom
         cam.current.y = d.cy - (p.y - d.y0) / cam.current.zoom
@@ -844,6 +857,17 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       return
     }
     drag.current = null
+    if (d?.button === 2) {
+      const ln = line.current
+      line.current = null
+      const ids = mySelection().filter((u) => isShip(u.t)).map((u) => u.id)
+      if (d.moved && ln && ln.length > 1 && ids.length) {
+        cmdLine(world.current, me, ids, ln)
+        for (const q of spreadAlong(ln, lineGroups(world.current, me, ids).length)) renderer.current.ping(q.x, q.y, '#7dffa0')
+        say('move')
+      } else command(d.x0, d.y0, false)
+      return
+    }
     if (!d || !d.box) return
     const w = world.current
     if (d.moved) {
@@ -1015,7 +1039,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerCancel={() => ((drag.current = null), touches.current.clear(), (pinch.current = null))}
+        onPointerCancel={() => ((drag.current = null), (line.current = null), touches.current.clear(), (pinch.current = null))}
         onPointerLeave={() => {
           mouse.current.inside = false
           hover.current = { unit: 0, hp: -1, node: -1, wreck: 0 }

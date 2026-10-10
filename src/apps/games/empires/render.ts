@@ -39,6 +39,8 @@ export type View = {
   hoverNode: number
   /** The wreck under the pointer, or 0. */
   hoverWreck: number
+  /** A move line being drawn with the right button, and where each ship (or squadron) would go. */
+  line?: { path: { x: number; y: number }[]; spots: { x: number; y: number }[] } | null
   /** Before the battle starts: every player's start area, and where our station would go. */
   areas?: { r: Rect; color: string; label: string; mine: boolean }[]
   ghost?: { x: number; y: number; ok: boolean } | null
@@ -611,6 +613,23 @@ export class Renderer {
     for (const r of w.rocks) {
       if (!onScreen(r.x, r.y, r.r * 1.6)) continue
       this.drawSprite(ctx, r.kind ? 'asteroid-2' : 'asteroid-1', r.x, r.y, r.rot, r.r * 2.3, z)
+    }
+
+    // A move line being drawn: the stroke, and a marker where each ship will end up.
+    if (view.line) {
+      ctx.strokeStyle = 'rgba(125,255,160,0.7)'
+      ctx.lineWidth = 2.5 / z
+      ctx.lineJoin = 'round'
+      ctx.lineCap = 'round'
+      ctx.beginPath()
+      view.line.path.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)))
+      ctx.stroke()
+      ctx.fillStyle = '#7dffa0'
+      for (const q of view.line.spots) {
+        ctx.beginPath()
+        ctx.arc(q.x, q.y, 6 / z, 0, TAU)
+        ctx.fill()
+      }
     }
 
     // Rally point and order lines for the selection.

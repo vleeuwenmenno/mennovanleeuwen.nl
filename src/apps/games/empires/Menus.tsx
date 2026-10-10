@@ -334,7 +334,7 @@ export function HowToPlay() {
       <ul>
         <li>Destroy every enemy station. A side is out when its stations are gone.</li>
         <li>In the lobby, drag on the map to draw where each player may start. Before the battle, click inside your area to place your station, then start.</li>
-        <li>Drag to select ships. Right-click to move, or to attack what's under the cursor.</li>
+        <li>Drag to select ships. Right-click to move, or to attack what's under the cursor. Hold the right button and draw a line to spread the ships evenly along it.</li>
         <li>Park ships at glowing ore for a few seconds to survey it, then click it to build a mining platform (credits) or a defense platform (guns).</li>
         <li>Hold ships near a beacon to capture it: more income and a bigger fleet for your whole team.</li>
         <li>Select your station ({k('station')}) to build ships. Open the tech tree ({k('techTree')}) to research upgrades, including station levels that unlock frigates, cruisers and a flagship. The battle carries on while it's open.</li>
