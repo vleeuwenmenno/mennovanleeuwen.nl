@@ -5,3 +5,6 @@ dist
 .env
 .pnpm-store
 /data
+# The server keeps its database and key in ./data relative to where it runs; never commit one.
+data/mvlos.db
+data/secret.key
