@@ -369,12 +369,15 @@ export class ArenaScene {
       ctx.fillRect(0, 0, width, height)
       ctx.globalAlpha = 1
     }
-    // Vignette.
-    const v = ctx.createRadialGradient(width / 2, height * 0.55, height * 0.45, width / 2, height * 0.55, width * 0.75)
+    // Vignette: an ellipse the shape of the view, so a tall phone screen darkens its edges softly
+    // instead of showing a hard circle (a round gradient can't fit both a wide and a tall view).
+    ctx.setTransform(width / 2, 0, 0, height / 2, width / 2, height * 0.55)
+    const v = ctx.createRadialGradient(0, 0, 0.55, 0, 0, 1.35)
     v.addColorStop(0, 'rgba(0,0,0,0)')
     v.addColorStop(1, 'rgba(20,8,0,0.45)')
     ctx.fillStyle = v
-    ctx.fillRect(0, 0, width, height)
+    ctx.fillRect(-1, -1.1, 2, 2)
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
   }
 
   private drawActor(ctx: CanvasRenderingContext2D, ac: Actor, now: number) {
