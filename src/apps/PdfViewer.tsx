@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
+import { pdfjs } from '../data/pdfjs'
 import { download, fileLink, isSf, libraryName, parseSf } from '../data/seafile'
 import { folderOf, nameOf } from '../data/media'
 import { useWM, type WinState } from '../os/wm'
@@ -22,15 +23,6 @@ const MIN = 0.25
 const MAX = 6
 const PREFS = 'mvlos.pdf'
 
-let lib: Promise<typeof import('pdfjs-dist')> | null = null
-/** pdf.js and its worker, fetched the first time a PDF opens. */
-function pdfjs() {
-  lib ??= Promise.all([import('pdfjs-dist'), import('pdfjs-dist/build/pdf.worker.min.mjs?url')]).then(([m, worker]) => {
-    m.GlobalWorkerOptions.workerSrc = worker.default
-    return m
-  })
-  return lib
-}
 
 function loadPrefs(): { sidebar: boolean; night: boolean } {
   try {

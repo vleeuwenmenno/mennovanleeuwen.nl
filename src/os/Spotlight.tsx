@@ -560,6 +560,7 @@ export function Spotlight() {
       if (app === 'linkforge') continue // a dialog of Settings
       if (app === 'mcserver') continue // the Minecraft server's status entry opens it
       if (app === 'calendar' && account.status !== 'user') continue // the owner's own calendars
+      if (app === 'agents' && account.status !== 'user') continue // runs on the owner's Ollama key
       const meta = APP_META[app]
       const open = wm.windows.filter((w) => w.app === app).length
       out.push({
@@ -980,11 +981,31 @@ export function Spotlight() {
     // Nothing of your own matched: Enter searches exactly what you typed (or runs it, as
     // Settings → Spotlight says). The engine's suggestions follow it, one arrow down away.
     const [first, second] = prefs.fallback === 'terminal' ? [runIt, web] : [web, runIt]
-    if (!out.length || out[0].group === 'Web') out.unshift({ ...first, group: 'Top hit' })
+    // The owner's research agent (the Agents app) takes the question too; "?" in front makes it
+    // the top hit.
+    const question = q.trim().replace(/^\?\s*/, '')
+    const agent: Result | null =
+      account.status === 'user' && account.integrations.ollama && question
+        ? {
+            id: 'agent',
+            group: 'Fallback',
+            title: `Ask Agents “${question}”`,
+            subtitle: 'A quick answer · the side action does deep research',
+            icon: <AppIcon app="agents" size={28} />,
+            run: () => wm.open('agents', { ask: question, mode: 'quick', t: String(Date.now()) }),
+            enterLabel: 'Ask',
+            alt: { label: 'Deep research', run: () => wm.open('agents', { ask: question, mode: 'deep', t: String(Date.now()) }) },
+          }
+        : null
+    const asking = !!agent && q.trim().startsWith('?')
+    if (agent && asking) out.unshift({ ...agent, group: 'Top hit' })
+    else if (!out.length || out[0].group === 'Web') out.unshift({ ...first, group: 'Top hit' })
     else out.push(first)
+    if (asking) out.push(first)
     out.push(second)
+    if (agent && !asking) out.push(agent)
     return out
-  }, [q, all, calc, code, suggestions, engine, sub, wm, recentHits, visits, prefs, favourites, favouriteKeys, address, page, goAlias, goTemplate, goSuggestions])
+  }, [q, all, calc, code, suggestions, engine, sub, wm, recentHits, visits, prefs, favourites, favouriteKeys, address, page, goAlias, goTemplate, goSuggestions, account])
 
   useEffect(() => {
     setActive(0)

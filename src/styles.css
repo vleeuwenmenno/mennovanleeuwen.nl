@@ -1043,6 +1043,15 @@ body.is-resizing iframe {
 .ctx-label {
   flex: 1;
 }
+.ctx-two small {
+  display: block;
+  max-width: 300px;
+  margin-top: 1px;
+  font-size: 11px;
+  line-height: 1.35;
+  opacity: 0.62;
+  white-space: normal;
+}
 .ctx-shortcut,
 .ctx-arrow {
   font-family: var(--mono);
@@ -1064,6 +1073,56 @@ body.is-resizing iframe {
   height: 1px;
   margin: 5px 8px;
   background: var(--line);
+}
+.ctx-item:focus-visible {
+  outline: 0;
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+}
+
+/* ---------- Select (a dropdown that opens the menu above) ---------- */
+
+/* Looks like a .set-select field, so it can stand in for a native select anywhere. */
+.ui-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  text-align: left;
+}
+.ui-select:focus {
+  border-color: var(--accent);
+  outline: 0;
+}
+.ui-select:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.ui-select-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-select-chev {
+  flex: none;
+  color: var(--muted);
+}
+/* In the calendar's event sheet, match its full-width fields. */
+.ca-field .ui-select {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+.ca-field .ui-select:disabled {
+  opacity: 0.75;
 }
 
 /* ---------- Windows ---------- */
@@ -7300,4 +7359,68 @@ kbd {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
+}
+
+/* ---------- Agents settings: web search ---------- */
+
+/* Fields with more than one control (a menu, header rows, three paths) line up with the
+   .set-form labels around them, without being labels that would all focus their first input. */
+.ws-form {
+  margin-bottom: 8px;
+}
+.ws-field {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  align-items: center;
+  gap: 10px;
+}
+.ws-field > span {
+  color: var(--muted);
+}
+.ws-form textarea {
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  font-family: var(--mono, monospace);
+  resize: vertical;
+  outline: 0;
+}
+.ws-form textarea:focus {
+  border-color: var(--accent);
+}
+.ws-method {
+  justify-self: start;
+}
+.ws-rows {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.ws-row {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.ws-row > button {
+  flex: none;
+}
+.ws-add {
+  justify-self: start;
+}
+.ws-notice {
+  align-self: center;
+}
+.ws-test {
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+@media (max-width: 719px) {
+  .ws-field {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
 }

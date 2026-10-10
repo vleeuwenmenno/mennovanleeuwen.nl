@@ -37,7 +37,7 @@ type Entry = {
   dockId?: DockId
 }
 
-const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'preview', 'player', 'newdoc', 'newsheet', 'newslides', 'projects', 'recents', 'cv', 'games', 'mcserver', 'notebook', 'calendar', 'contact', 'notes', 'keys', 'settings', 'trash']
+const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'preview', 'player', 'newdoc', 'newsheet', 'newslides', 'projects', 'recents', 'cv', 'games', 'mcserver', 'notebook', 'calendar', 'agents', 'contact', 'notes', 'keys', 'settings', 'trash']
 
 const stroke = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const
 const Icon = ({ children }: { children: ReactNode }) => (
@@ -128,8 +128,8 @@ export function Launchpad() {
         label: 'Apps',
         icon: ICONS.apps,
         children: () =>
-          // The Calendar app only means something to the signed-in owner.
-          APP_ORDER.filter((a) => APP_META[a] && (a !== 'calendar' || signedIn()) && (!ALWAYS_NEW.has(a) || !!getAccount().seafile?.office)).map((app) => ({
+          // The Calendar and Agents apps only mean something to the signed-in owner.
+          APP_ORDER.filter((a) => APP_META[a] && ((a !== 'calendar' && a !== 'agents') || signedIn()) && (!ALWAYS_NEW.has(a) || !!getAccount().seafile?.office)).map((app) => ({
             label: APP_META[app].dock,
             icon: <AppIcon app={app} size={16} tone />,
             run: () => wm.open(app),

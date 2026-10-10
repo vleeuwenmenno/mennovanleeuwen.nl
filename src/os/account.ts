@@ -18,12 +18,12 @@ export type Account = {
   google: { email: string; canWrite?: boolean } | null
   /** CalDAV accounts (Fastmail, Nextcloud...) for calendars */
   caldav: CaldavInfo[]
-  /** Third-party services with a key on the server: updown.io's saved in Settings, set on the server, or none */
-  integrations: { updown: 'settings' | 'server' | null }
+  /** Third-party services with a key on the server: saved in Settings, set on the server, or none */
+  integrations: { updown: 'settings' | 'server' | null; ollama: 'settings' | 'server' | null }
   seafile: SeafileInfo | null
 }
 
-let account: Account = { status: 'loading', user: null, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null }, seafile: null }
+let account: Account = { status: 'loading', user: null, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null }
 const listeners = new Set<() => void>()
 
 const OWNER_HINT = 'mvlos.owner'
@@ -80,10 +80,10 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
 
 export async function loadAccount() {
   try {
-    const me = await api<{ authEnabled: boolean; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string; canWrite?: boolean } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null }; seafile?: SeafileInfo | null }>('/api/me')
-    set({ status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null }, seafile: me.seafile ?? null })
+    const me = await api<{ authEnabled: boolean; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string; canWrite?: boolean } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null; ollama?: 'settings' | 'server' | null }; seafile?: SeafileInfo | null }>('/api/me')
+    set({ status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null, ollama: me.integrations?.ollama ?? null }, seafile: me.seafile ?? null })
   } catch {
-    set({ status: 'off', user: null, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null }, seafile: null })
+    set({ status: 'off', user: null, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
   }
 }
 
@@ -91,7 +91,7 @@ export const signIn = () => location.assign('/api/auth/github/login')
 
 export async function signOut() {
   await api('/api/auth/logout', { method: 'POST' }).catch(() => {})
-  set({ status: 'anon', user: null, forges: [], googleEnabled: account.googleEnabled, google: null, caldav: [], integrations: { updown: null }, seafile: null })
+  set({ status: 'anon', user: null, forges: [], googleEnabled: account.googleEnabled, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
 }
 
 /** updown.io's read-only API key, for the Status widget: checked by the server, then stored encrypted. */
@@ -103,6 +103,17 @@ export async function setUpdownKey(key: string) {
 export async function removeUpdownKey() {
   await api('/api/integrations/updown', { method: 'DELETE' })
   await loadAccount() // a key set on the server, if there is one, takes over again
+}
+
+/** Ollama Cloud's API key, for the Agents app: checked by the server, then stored encrypted. */
+export async function setOllamaKey(key: string) {
+  await api('/api/integrations/ollama', { method: 'PUT', json: { key } })
+  set({ ...account, integrations: { ...account.integrations, ollama: 'settings' } })
+}
+
+export async function removeOllamaKey() {
+  await api('/api/integrations/ollama', { method: 'DELETE' })
+  await loadAccount()
 }
 
 /** Whether any calendar is connected (Google or CalDAV), for the Agenda widget and the clock. */

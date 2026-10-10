@@ -283,6 +283,1358 @@
   }
 }
 
+/* ---------- Agents ---------- */
+
+/* Same sidebar as the Notebook (.nb), with the conversation and a composer on the right. */
+/* Narrower than about a phone, it shows one side at a time (.is-list or .is-chat), whatever the
+   viewport: a small window on a desktop behaves like the app on a phone. */
+.nb.agt {
+  container-type: inline-size;
+  grid-template-columns: minmax(200px, 270px) 1fr;
+  grid-template-rows: minmax(0, 1fr);
+}
+.nb.agt > .nb-side {
+  border-right: 1px solid var(--line);
+  border-bottom: 0;
+}
+.agt-back {
+  display: none;
+}
+.agt-toolbar {
+  flex-wrap: nowrap;
+}
+.agt-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-bright);
+  font-weight: 600;
+  text-align: left;
+}
+.agt-title-input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--accent);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  font-weight: 600;
+  outline: 0;
+}
+.agt-model {
+  max-width: 170px;
+  padding: 2px 4px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+}
+.agt-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.agt-empty {
+  margin: auto;
+  max-width: 420px;
+  text-align: center;
+}
+.agt-user {
+  align-self: flex-end;
+  max-width: min(78%, 640px);
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--fg-bright);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.agt-answer {
+  overflow: visible;
+  padding: 0;
+  max-width: 760px;
+  overflow-wrap: anywhere;
+}
+.agt-think,
+.agt-tool {
+  max-width: 760px;
+  border-left: 2px solid var(--line-strong);
+  padding: 2px 0 2px 10px;
+  font-size: 12px;
+}
+.agt-think summary,
+.agt-tool summary {
+  cursor: pointer;
+  list-style: none;
+}
+.agt-think {
+  border-left-color: transparent;
+  padding-left: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.agt-think summary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+}
+.agt-think summary:hover {
+  color: var(--fg);
+}
+.agt-think-chevron {
+  display: inline-block;
+  width: 0.8em;
+  transition: transform 0.15s;
+}
+.agt-think[open] .agt-think-chevron {
+  transform: rotate(90deg);
+}
+.agt-think.is-live summary {
+  animation: agt-pulse 1.4s ease-in-out infinite;
+}
+.agt-think-latest {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+  opacity: 0.8;
+}
+.agt-think[open] .agt-think-latest {
+  display: none;
+}
+@keyframes agt-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agt-think.is-live summary {
+    animation: none;
+  }
+}
+.agt-think summary::-webkit-details-marker,
+.agt-tool summary::-webkit-details-marker {
+  display: none;
+}
+.agt-think p {
+  margin: 4px 0 2px 1.2em;
+  padding-left: 8px;
+  border-left: 2px solid var(--line-strong);
+  white-space: pre-wrap;
+  color: var(--muted);
+  line-height: 1.55;
+}
+.agt-tool {
+  border-left-color: var(--cyan);
+}
+.agt-tool.is-failed {
+  border-left-color: var(--red);
+}
+.agt-tool-icon {
+  display: inline-block;
+  width: 1.4em;
+  color: var(--cyan);
+}
+.agt-tool.is-failed .agt-tool-icon {
+  color: var(--red);
+}
+.agt-tool-label {
+  color: var(--fg-bright);
+}
+.agt-tool-body {
+  margin: 6px 0 2px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 8px;
+  background: var(--bg-dark);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.agt-hits {
+  margin: 6px 0 2px;
+  padding-left: 1.4em;
+}
+.agt-hits li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agt-wait {
+  margin: 0;
+}
+.agt-error {
+  margin: 0;
+}
+.agt-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 12px 12px;
+}
+.agt-composer.is-drop {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
+/* Mode, model, tools and the context meter, under the message box. */
+.agt-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.agt-files li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agt-files li button {
+  padding: 0 4px;
+  color: var(--muted);
+}
+.agt-files li button:hover {
+  color: var(--red);
+}
+.agt-files.is-sent {
+  margin-top: 6px;
+}
+.agt-files.is-sent li {
+  padding-right: 8px;
+  background: transparent;
+}
+.agt-warn {
+  margin: 0;
+  color: var(--yellow);
+  font-size: 11px;
+}
+.fp-list button.is-chosen {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--fg-bright);
+}
+.agt-composer textarea {
+  flex: 1;
+  min-width: 0;
+  max-height: 180px;
+  resize: vertical;
+  padding: 7px 9px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  outline: 0;
+}
+.agt-composer textarea:focus {
+  border-color: var(--accent);
+}
+.set-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* A title being thought of: Matrix glyphs in one line, then the title decoding into place. */
+.agt-matrix.is-pending {
+  color: var(--green);
+  letter-spacing: 0.04em;
+  text-shadow: 0 0 6px color-mix(in srgb, var(--green) 45%, transparent);
+}
+.agt-rename {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.agt-rename input {
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--accent);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  font-weight: 600;
+  outline: 0;
+}
+.agt-suggest {
+  align-self: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border: 1px dashed var(--line-strong);
+  color: var(--muted);
+  font-size: 11px;
+  text-align: left;
+}
+.agt-suggest:not(:disabled):hover {
+  border-color: var(--accent);
+  color: var(--fg-bright);
+}
+.agt-ctx-panel {
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 12px;
+}
+.agt-ctx-head {
+  margin: 0 0 8px;
+}
+.agt-ctx-bar {
+  display: flex;
+  height: 8px;
+  background: var(--line);
+  overflow: hidden;
+}
+.agt-ctx-bar span {
+  min-width: 2px;
+}
+.agt-ctx-parts {
+  list-style: none;
+  margin: 8px 0 6px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 3px 16px;
+}
+.agt-ctx-parts li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.agt-ctx-parts li > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agt-ctx-swatch {
+  flex: none;
+  width: 8px;
+  height: 8px;
+}
+.agt-ctx-note {
+  margin: 0;
+  font-size: 11px;
+}
+.agt-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  vertical-align: middle;
+}
+.agt-dot.is-on {
+  background: var(--green);
+}
+.agt-prompt-box {
+  margin: -4px 0 16px;
+  font-size: 12px;
+}
+.agt-prompt-box summary {
+  cursor: pointer;
+}
+.agt-prompt {
+  margin: 10px 0 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 10px;
+  background: var(--bg-dark);
+  border: 1px solid var(--line);
+  white-space: pre-wrap;
+  font-size: 11px;
+  color: var(--text);
+}
+
+/* Agents settings, by category: a sidebar of its own in the Agents window, tabs in Settings. */
+.agt-settings-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.agt-set {
+  flex: 1;
+  min-width: 0;
+}
+.agt-set.is-sidebar {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  min-height: 0;
+}
+.agt-set-nav button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  color: var(--muted);
+  text-align: left;
+  white-space: nowrap;
+}
+.agt-set-nav button:hover {
+  color: var(--fg-bright);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.agt-set.is-sidebar .agt-set-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 8px;
+  border-right: 1px solid var(--line);
+  background: var(--panel-2);
+  overflow-y: auto;
+}
+.agt-set.is-sidebar .agt-set-nav button.is-on {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--fg-bright);
+}
+.agt-set.is-sidebar .agt-set-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 22px 28px;
+}
+.agt-set-body > * {
+  max-width: 680px;
+}
+.agt-set-title {
+  margin: 0 0 4px;
+  color: var(--fg-bright);
+  font-size: 15px;
+}
+.agt-set-title + .set-help {
+  margin-bottom: 14px;
+}
+.agt-set.is-tabs .agt-set-nav {
+  display: flex;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.agt-set.is-tabs .agt-set-nav button {
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+}
+.agt-set.is-tabs .agt-set-nav button.is-on {
+  border-bottom-color: var(--accent);
+  color: var(--fg-bright);
+}
+.agt-set.is-tabs .agt-set-title {
+  display: none;
+}
+
+/* A form the agent asks (ask_user): one block per question, drawn by its type. */
+.agt-tool.agt-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 640px;
+  padding: 8px 0 10px 12px;
+  border-left-color: var(--accent);
+  font-size: 12.5px;
+}
+.agt-form-title {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  color: var(--fg-bright);
+}
+.agt-form .agt-tool-icon {
+  color: var(--accent);
+}
+.agt-form-intro {
+  overflow: visible;
+  padding: 0;
+  font-size: 12.5px;
+}
+.agt-q {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.agt-q-label {
+  margin: 0;
+  color: var(--fg-bright);
+  font-weight: 600;
+}
+.agt-q-hint {
+  margin: -2px 0 0;
+  font-size: 11.5px;
+}
+.agt-q-options {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.agt-q-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-dark);
+  color: var(--fg);
+  text-align: left;
+}
+.agt-q-opt:hover {
+  border-color: var(--line-strong);
+  color: var(--fg-bright);
+}
+.agt-q-opt.is-on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-dark));
+  color: var(--fg-bright);
+}
+.agt-q-mark {
+  flex: none;
+  width: 1em;
+  color: var(--accent);
+  text-align: center;
+}
+.agt-q-mark.is-box {
+  width: 13px;
+  height: 13px;
+  margin-top: 2px;
+  border: 1px solid var(--line-strong);
+  font-size: 10px;
+  line-height: 11px;
+}
+.agt-q-opt.is-on .agt-q-mark.is-box {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.agt-q-opt-text small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+.agt-q-other input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--fg-bright);
+  font: inherit;
+}
+.agt-q-input {
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  outline: 0;
+}
+.agt-q-input:focus {
+  border-color: var(--accent);
+}
+textarea.agt-q-input {
+  resize: vertical;
+}
+.agt-q-number {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.agt-q-number .agt-q-input {
+  width: 120px;
+}
+.agt-q-date {
+  width: 180px;
+  color-scheme: dark light;
+}
+.agt-q-yesno {
+  display: flex;
+  gap: 6px;
+}
+.agt-q-scale {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+}
+.agt-q-scale-row {
+  display: inline-flex;
+  border: 1px solid var(--line-strong);
+}
+.agt-q-scale-row button {
+  min-width: 28px;
+  padding: 4px 6px;
+  color: var(--fg);
+}
+.agt-q-scale-row button + button {
+  border-left: 1px solid var(--line);
+}
+.agt-q-scale-row button:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.agt-q-scale-row button.is-on {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.agt-form-actions {
+  display: flex;
+  gap: 6px;
+}
+.agt-answers {
+  margin: 6px 0 2px;
+  display: grid;
+  gap: 3px;
+}
+.agt-answers div {
+  display: grid;
+  grid-template-columns: minmax(120px, 40%) 1fr;
+  gap: 10px;
+}
+.agt-answers dt {
+  color: var(--muted);
+}
+.agt-answers dd {
+  margin: 0;
+  color: var(--fg-bright);
+}
+
+/* A change the agent wants to make, waiting for the owner. */
+.agt-tool.is-asking {
+  border-left-color: var(--yellow);
+  padding: 6px 0 6px 10px;
+}
+.agt-tool.is-asking .agt-tool-icon {
+  color: var(--yellow);
+}
+.agt-ask-title {
+  margin: 0;
+}
+.agt-ask-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+@container (max-width: 620px) {
+  .agt-set.is-sidebar {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .agt-set.is-sidebar .agt-set-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 6px 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .agt-set.is-sidebar .agt-set-body {
+    padding: 14px;
+  }
+  .agt.is-chat > .nb-side,
+  .agt.is-list > .nb-main {
+    display: none;
+  }
+  .agt > .nb-side,
+  .agt > .nb-main {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    border-right: 0;
+  }
+  .agt-back {
+    display: inline-flex;
+  }
+  .agt-toolbar {
+    flex-wrap: wrap;
+    gap: 6px 8px;
+  }
+  /* The back button and title on the first row, the mode, model and menu on the second. */
+  .agt-title,
+  .agt-title-input {
+    flex: 1 1 70%;
+  }
+  .agt-toolbar .nb-spacer {
+    display: none;
+  }
+  .agt-model {
+    max-width: 140px;
+  }
+  .agt-scroll {
+    padding: 12px;
+  }
+  .agt-user {
+    max-width: 88%;
+  }
+  .agt-composer {
+    padding: 8px;
+  }
+}
+/* Phones zoom into inputs under 16px. */
+@media (pointer: coarse) {
+  .agt-composer textarea,
+  .agt .nb-search input {
+    font-size: 16px;
+  }
+  .agt-tool summary,
+  .agt-think summary {
+    padding: 4px 0;
+  }
+}
+
+/* The sidebar: a new-thread button, search, threads by day in one line each, and a footer for
+   the archive, memory and settings. Folded, it is a rail of icons. */
+.nb.agt.is-rail {
+  grid-template-columns: 46px 1fr;
+}
+.agt-svg {
+  flex: none;
+  display: block;
+}
+.agt-grow {
+  flex: 1;
+}
+.agt-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  color: var(--muted);
+}
+.agt-icon:hover:not(:disabled),
+.agt-icon.is-on {
+  color: var(--fg-bright);
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+}
+.agt-icon.is-accent {
+  color: var(--on-accent);
+  background: var(--accent);
+}
+.agt-icon.is-accent:hover {
+  color: var(--on-accent);
+  background: color-mix(in srgb, var(--accent) 85%, var(--fg));
+}
+.agt-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0;
+  border-right: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.agt-side-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px 6px 10px;
+}
+.agt-side-head .agt-search {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.agt-search-clear {
+  flex: none;
+  display: inline-flex;
+  padding: 2px;
+  color: var(--muted);
+}
+.agt-search-clear:hover {
+  color: var(--fg-bright);
+}
+.agt-side-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px 6px 6px;
+  color: var(--fg-bright);
+}
+.agt-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 10px 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-dark);
+  color: var(--muted);
+}
+.agt-search:focus-within {
+  border-color: var(--accent);
+}
+.agt-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--fg-bright);
+  font: inherit;
+}
+.agt-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 6px 8px;
+}
+.agt-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.agt-group {
+  margin: 12px 6px 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.agt-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  text-align: left;
+  color: var(--fg);
+}
+.agt-item:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.agt-item.is-active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--fg-bright);
+}
+.agt-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agt-item-when {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+.agt-dot-mode {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--cyan);
+}
+.agt-dot-mode.is-deep {
+  background: var(--magenta);
+}
+.agt-dot-mode.is-running {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
+  animation: agt-pulse 1.2s ease-in-out infinite;
+}
+.agt-list-empty {
+  margin: 0;
+  padding: 16px 8px;
+}
+.agt-side-foot {
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border-top: 1px solid var(--line);
+}
+.agt-side-foot button {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.agt-side-foot button:hover,
+.agt-side-foot button.is-on {
+  color: var(--fg-bright);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+/* The composer: one box holding the attachments, the message and a row of small controls. */
+.agt-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 6px 6px 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  cursor: text;
+}
+.agt-box:focus-within {
+  border-color: var(--accent);
+}
+.agt-box textarea {
+  width: 100%;
+  min-height: 22px;
+  max-height: 220px;
+  padding: 2px 4px 2px 0;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  color: var(--fg-bright);
+  font: inherit;
+  line-height: 1.5;
+}
+.agt-box-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: -4px;
+  cursor: default;
+}
+.agt-box-bar .agt-icon {
+  width: 28px;
+  height: 28px;
+}
+.agt-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  min-width: 0;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.agt-pill:hover:not(:disabled) {
+  color: var(--fg-bright);
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+}
+.agt-count {
+  min-width: 16px;
+  padding: 0 4px;
+  background: color-mix(in srgb, var(--fg) 14%, transparent);
+  color: var(--fg-bright);
+  font-size: 10.5px;
+  text-align: center;
+}
+.agt-pill.is-limited .agt-count {
+  background: var(--yellow);
+  color: var(--bg);
+}
+.agt-model-pill {
+  max-width: 190px;
+}
+.agt-model-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agt-ring {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+}
+.agt-ring-track,
+.agt-ring-fill {
+  fill: none;
+  stroke-width: 2.5;
+}
+.agt-ring-track {
+  stroke: var(--line-strong);
+}
+.agt-ring-fill {
+  stroke: var(--accent);
+}
+.agt-ring.is-full .agt-ring-fill {
+  stroke: var(--red);
+}
+.agt-ring:hover .agt-ring-track,
+.agt-ring.is-on .agt-ring-track {
+  stroke: var(--muted);
+}
+.agt-send {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 28px;
+  margin-left: 4px;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.agt-send:disabled {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  color: var(--muted);
+  cursor: default;
+}
+.agt-send.is-stop {
+  background: var(--fg-bright);
+  color: var(--bg);
+}
+.agt-box .agt-files li {
+  background: var(--panel-2);
+}
+.agt-empty-title {
+  color: var(--fg-bright);
+  font-size: 15px;
+  font-weight: 600;
+}
+/* Projects in the sidebar: a folding block each, draggable to reorder, a drop target for threads. */
+.agt-group-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-right: 0;
+}
+.agt-icon.agt-mini {
+  width: 22px;
+  height: 22px;
+}
+.agt-day {
+  margin: 8px 8px 2px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+  opacity: 0.8;
+}
+.agt-hint {
+  margin: 2px 8px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  list-style: none;
+}
+.agt-project {
+  margin-bottom: 2px;
+  border: 1px solid transparent;
+}
+.agt-project.is-drop,
+.agt-drop-loose.is-drop {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.agt-project.is-dragged {
+  opacity: 0.45;
+}
+.agt-project-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 2px;
+}
+.agt-project-head:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.agt-project-head .agt-mini {
+  visibility: hidden;
+}
+.agt-project-head:hover .agt-mini,
+.agt-project-head:focus-within .agt-mini {
+  visibility: visible;
+}
+.agt-project-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 4px 5px 4px;
+  color: var(--fg-bright);
+  font-weight: 600;
+  text-align: left;
+}
+.agt-project-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agt-project-count {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.agt-chev {
+  display: inline-flex;
+  color: var(--muted);
+  transition: transform 0.12s;
+}
+.agt-chev.is-folded {
+  transform: rotate(-90deg);
+}
+.agt-chev.is-up {
+  transform: rotate(180deg);
+}
+.agt-project-threads {
+  padding-left: 10px !important;
+}
+.agt-pin {
+  flex: none;
+  display: inline-flex;
+  color: var(--accent);
+}
+.agt-inline-name {
+  flex: 1;
+  min-width: 0;
+  margin: 2px 0;
+  padding: 4px 6px;
+  border: 1px solid var(--accent);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  outline: 0;
+}
+.agt-list > section > .agt-inline-name {
+  width: calc(100% - 12px);
+  margin: 2px 6px 6px;
+}
+.agt-drop-loose {
+  border: 1px solid transparent;
+  min-height: 40px;
+}
+.agt-crumb {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.agt-crumb::after {
+  content: ' ›';
+}
+
+/* The memory: a tree of categories, each memory a row to edit or forget. */
+.agt-scroll.agt-memory-view {
+  display: block;
+  padding: 14px 20px 24px;
+}
+.agt-memory-view > * {
+  max-width: 760px;
+}
+.agt-mem-help {
+  margin: 0 0 10px;
+}
+.agt-mem-search {
+  margin: 0 0 12px;
+}
+.agt-cat {
+  margin: 2px 0;
+}
+.agt-cat > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  list-style: none;
+  cursor: pointer;
+  color: var(--fg-bright);
+  font-weight: 600;
+}
+.agt-cat > summary::-webkit-details-marker {
+  display: none;
+}
+.agt-cat:not([open]) > summary .agt-chev {
+  transform: rotate(-90deg);
+}
+.agt-cat-body {
+  margin-left: 7px;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+}
+.agt-mem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 6px;
+  color: var(--fg);
+}
+.agt-mem:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.agt-mem-text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.45;
+}
+.agt-mem-actions {
+  display: flex;
+  visibility: hidden;
+}
+.agt-mem:hover .agt-mem-actions,
+.agt-mem:focus-within .agt-mem-actions {
+  visibility: visible;
+}
+.agt-mem-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 10px;
+  padding: 8px;
+  border: 1px solid var(--accent);
+  background: var(--bg-dark);
+}
+.agt-mem-form textarea,
+.agt-mem-form input {
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  color: var(--fg-bright);
+  font: inherit;
+  outline: 0;
+  resize: vertical;
+}
+.agt-mem-form textarea:focus,
+.agt-mem-form input:focus {
+  border-color: var(--accent);
+}
+.agt-mem-form-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.agt-mem-form-row input {
+  flex: 1;
+  min-width: 160px;
+}
+.agt-mem-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.agt-mem-cats button {
+  padding: 1px 6px;
+  border: 1px dashed var(--line-strong);
+  color: var(--muted);
+  font-size: 11px;
+}
+.agt-mem-cats button:hover {
+  border-color: var(--accent);
+  color: var(--fg-bright);
+}
+
+/* The agent's plan for a long job: a thin bar over the composer, the list when tapped. */
+.agt-todos {
+  margin: 0 12px;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  background: var(--panel-2);
+}
+.agt-todo-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 10px;
+  font-size: 12px;
+  text-align: left;
+}
+.agt-todo-bar:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.agt-todo-count {
+  flex: none;
+  color: var(--fg-bright);
+  font-weight: 600;
+}
+.agt-todo-track {
+  flex: none;
+  width: 48px;
+  height: 4px;
+  background: var(--line);
+}
+.agt-todo-track span {
+  display: block;
+  height: 100%;
+  background: var(--green);
+}
+.agt-todo-now {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.agt-todo-list {
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 8px 10px 6px;
+  list-style: none;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.agt-todo-list li {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+  line-height: 1.4;
+}
+.agt-todo-list li.is-done {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.agt-todo-list li.is-active {
+  color: var(--fg-bright);
+}
+.agt-todo-mark {
+  flex: none;
+  width: 1em;
+  color: var(--muted);
+  text-align: center;
+}
+.is-done .agt-todo-mark {
+  color: var(--green);
+}
+.is-active .agt-todo-mark {
+  color: var(--accent);
+}
+.agt-todo-mark.is-live {
+  animation: agt-pulse 1.2s ease-in-out infinite;
+}
+
+/* Narrow: the pills keep their icons. */
+@container (max-width: 460px) {
+  .agt-pill-label {
+    display: none;
+  }
+  .agt-model-pill {
+    max-width: 120px;
+  }
+}
+
 /* ---------- Settings ---------- */
 
 /* A sidebar (profile on top, grouped panes) beside the pane, like macOS System Settings. In a

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { cleanTrash, historyDays, listTrash, listTrashDir, restoreTrash, setHistoryDays, sfPath, useLibraries, useSeafileHome, type Entry, type TrashItem } from '../data/seafile'
 import { openContextMenu } from '../os/ContextMenu'
 import { ask } from '../os/Dialogs'
+import { Select } from '../os/Select'
 import { DESKTOP_ICONS } from '../os/Desktop'
 import { restoreIcons, useDesktop } from '../os/desktopStore'
 import { formatSize, kindOfName } from '../terminal/vfs'
@@ -174,26 +175,19 @@ export function SeafileTrash({ repo: startRepo = null, onOpenFolder, toast }: { 
   return (
     <div className="st">
       <div className="st-bar">
-        <select className="set-select" value={current ?? ''} onChange={(e) => setRepo(e.target.value)} aria-label="Library">
-          {writable.map((l) => (
-            <option key={l.id} value={l.id}>
-              {l.name}
-              {l.encrypted ? ' 🔒' : ''}
-            </option>
-          ))}
-        </select>
+        <Select className="set-select" value={current ?? ''} onChange={setRepo} aria-label="Library" options={writable.map((l) => ({ value: l.id, label: `${l.name}${l.encrypted ? ' 🔒' : ''}` }))} />
         {!open && keep !== undefined && (
           <label className="st-keep">
             Keep deleted
-            <select className="set-select" value={keep ?? ''} disabled={keep === null} onChange={(e) => void changeKeep(Number(e.target.value))} aria-label="How long this library keeps deleted things">
-              {keep === null && <option value="">…</option>}
-              {keep !== null && !KEEP.some(([d]) => d === keep) && <option value={keep}>{keepLabel(keep)}</option>}
-              {KEEP.map(([d, label]) => (
-                <option key={d} value={d}>
-                  {label}
-                </option>
-              ))}
-            </select>
+            <Select
+              className="set-select"
+              value={keep}
+              disabled={keep === null}
+              onChange={(d) => void changeKeep(d)}
+              aria-label="How long this library keeps deleted things"
+              placeholder="…"
+              options={[...(keep !== null && !KEEP.some(([d]) => d === keep) ? [{ value: keep, label: keepLabel(keep) }] : []), ...KEEP.map(([d, label]) => ({ value: d, label }))]}
+            />
           </label>
         )}
         {open && (
