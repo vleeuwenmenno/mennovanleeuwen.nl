@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import type { WinState } from '../../os/wm'
-import { DIFFICULTY, newBrain, think, type Brain, type Difficulty } from './empires/ai'
-import { FACTIONS, TECH, UNIT, UNITS, buildable, dims, isShip, unitOf, type FactionId, type HardpointKind } from './empires/data'
-import { DetailPanel, Help, Result, SelectionPanel, Settings, TacticalMap, TopBar, type Command, type Hud, type MapFilter, type Mode } from './empires/Hud'
+import { DIFFICULTY, newBrain, think, type Brain } from './empires/ai'
+import { FACTIONS, TECH, UNIT, UNITS, buildable, dims, isShip, type HardpointKind } from './empires/data'
+import { DetailPanel, Frame, SelectionPanel, TacticalMap, TopBar, type Command, type Hud, type MapFilter, type Mode } from './empires/Hud'
+import { HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, slotName, type Setup } from './empires/Menus'
+import { MAP } from './empires/maps'
+import { actionFor, getSettings, keyName, useSettings } from './empires/settings'
 import { HP_NAME } from './empires/icons'
-import { Renderer, spriteUrl, type Camera, type View } from './empires/render'
+import { Renderer, type Camera, type View } from './empires/render'
 import {
-  STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdHold, cmdMove, cmdPatrol, cmdRally, cmdResearch, cmdSite, cmdStop, hpPos, newWorld, tick, type Owner, type SimEvent,
+  STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdHold, cmdMove, cmdPatrol, cmdRally, cmdResearch, cmdSite, cmdStop, foes, hpPos, newWorld, tick, type Owner, type SimEvent,
   type Unit, type World,
 } from './empires/sim'
 import { EmpiresSound } from './empires/sound'
@@ -33,25 +36,6 @@ function useDisplayFont() {
   }, [])
 }
 
-type Setup = { faction: FactionId; difficulty: Difficulty; credits: number }
-
-const SETUP_KEY = 'mvlos.empires.setup'
-const CREDIT_STEPS = [500, 1000, 1600, 2500, 4000, 6000, 10000]
-/** The last choices on the title screen, remembered in this browser. */
-function lastSetup(): Setup {
-  const base: Setup = { faction: 'republic', difficulty: 'easy', credits: 1600 }
-  try {
-    const v = JSON.parse(localStorage.getItem(SETUP_KEY) ?? 'null') as Partial<Setup> | null
-    return {
-      faction: v?.faction === 'droid' ? 'droid' : 'republic',
-      difficulty: v?.difficulty && v.difficulty in DIFFICULTY ? v.difficulty : base.difficulty,
-      credits: typeof v?.credits === 'number' && v.credits >= 500 && v.credits <= 10000 ? v.credits : base.credits,
-    }
-  } catch {
-    return base
-  }
-}
-
 /** Right-click gives orders here, so it must not open the browser's or the window's menu. */
 const noMenu = (e: React.MouseEvent) => {
   e.preventDefault()
@@ -60,95 +44,36 @@ const noMenu = (e: React.MouseEvent) => {
 
 export function EmpiresAtWar({ win }: { win: WinState }) {
   useDisplayFont()
+  const [screen, setScreen] = useState<'menu' | 'lobby' | 'battle'>('menu')
   const [setup, setSetup] = useState<Setup | null>(null)
   const [round, setRound] = useState(0)
+  const { best } = useHighScore('empires')
   const sound = useRef<EmpiresSound>(null as unknown as EmpiresSound)
   if (!sound.current) sound.current = new EmpiresSound()
   useEffect(() => () => sound.current.dispose(), [])
 
-  if (!setup) return <Title onStart={(s) => (sound.current.unlock(), sound.current.click(), setSetup(s))} />
+  if (screen === 'menu') return <MainMenu sound={sound.current} victories={best ?? 0} onPlay={() => setScreen('lobby')} />
+  if (screen === 'lobby' || !setup)
+    return (
+      <Lobby
+        sound={sound.current}
+        onBack={() => setScreen('menu')}
+        onLaunch={(s) => {
+          setSetup(s)
+          setRound((r) => r + 1)
+          setScreen('battle')
+        }}
+      />
+    )
   return (
     <Battle
       key={round}
       win={win}
       setup={setup}
       sound={sound.current}
-      onExit={() => setSetup(null)}
+      onExit={() => setScreen('lobby')}
       onAgain={() => setRound((r) => r + 1)}
     />
-  )
-}
-
-// --- Title ----------------------------------------------------------------------------------------
-
-function Title({ onStart }: { onStart: (s: Setup) => void }) {
-  const [init] = useState(lastSetup)
-  const [faction, setFaction] = useState<FactionId>(init.faction)
-  const [difficulty, setDifficulty] = useState<Difficulty>(init.difficulty)
-  const [credits, setCredits] = useState(init.credits)
-  const { best } = useHighScore('empires')
-  const start = () => {
-    const s = { faction, difficulty, credits }
-    try {
-      localStorage.setItem(SETUP_KEY, JSON.stringify(s))
-    } catch {
-      // Private mode: start anyway.
-    }
-    onStart(s)
-  }
-  const step = Math.max(0, CREDIT_STEPS.indexOf(credits))
-  return (
-    <div className="ew-root ew-title" style={{ backgroundImage: 'url(/games/empires/world/title.webp)' }} onContextMenu={noMenu}>
-      <div className="ew-title-panel">
-        <h1>
-          Empires <span>at</span> War
-        </h1>
-        <p className="ew-tagline">A war in the stars, fought one fleet at a time.</p>
-        <h3>Choose your side</h3>
-        <div className="ew-sides">
-          {(['republic', 'droid'] as FactionId[]).map((f) => (
-            <button key={f} className={`ew-side ew-side-${f} ${faction === f ? 'is-on' : ''}`} onClick={() => setFaction(f)} aria-pressed={faction === f}>
-              <img src={spriteUrl(unitOf(f, 'capital').sprite)} alt="" />
-              <strong>{FACTIONS[f].long}</strong>
-              <span>{FACTIONS[f].blurb}</span>
-            </button>
-          ))}
-        </div>
-        <h3>Enemy admiral</h3>
-        <div className="ew-seg">
-          {(Object.keys(DIFFICULTY) as Difficulty[]).map((d) => (
-            <button key={d} className={difficulty === d ? 'is-on' : ''} onClick={() => setDifficulty(d)} title={DIFFICULTY[d].blurb}>
-              {DIFFICULTY[d].name}
-            </button>
-          ))}
-        </div>
-        <p className="ew-muted">{DIFFICULTY[difficulty].blurb}</p>
-        <h3>Starting credits</h3>
-        <label className="ew-range">
-          <input type="range" min={0} max={CREDIT_STEPS.length - 1} step={1} value={step} onChange={(e) => setCredits(CREDIT_STEPS[Number(e.target.value)])} aria-label="Starting credits" />
-          <b>{credits.toLocaleString('en-US')}</b>
-        </label>
-        <p className="ew-muted ew-small">Both sides start with this much. More means a faster start with bigger opening fleets.</p>
-        <button className="ew-go" onClick={start}>
-          Launch battle
-        </button>
-        <p className="ew-muted ew-small">Victories: {best ?? 0}</p>
-      </div>
-      <div className="ew-title-help">
-        <h3>How to play</h3>
-        <ul>
-          <li>Destroy the enemy station. Protect yours.</li>
-          <li>Drag to select ships. Right-click to move or attack.</li>
-          <li>Park ships at glowing ore to survey it, then click it to build a mining or defense platform.</li>
-          <li>Hold ships near a beacon to capture it: more income, bigger fleet.</li>
-          <li>Select your station to build ships and research upgrades, including station levels that unlock frigates, cruisers and a flagship.</li>
-          <li>Big ships have hardpoints. Hover one, right-click a marker to target it.</li>
-        </ul>
-        <p className="ew-muted ew-small">
-          Keys: WASD pan · M move · R attack-move · T patrol · X stop · G hold · Q ability · H station · I idle ships · Ctrl+1–9 groups · Wheel zoom · P pause
-        </p>
-      </div>
-    </div>
   )
 }
 
@@ -161,23 +86,34 @@ function snapshot(w: World, me: Owner, sel: Set<number>): Hud {
   return {
     credits: p.credits, income: p.income, pop: p.pop, popCap: p.popCap, level: p.level,
     queue: p.queue.map((q) => ({ ...q })), research: p.research.map((r) => ({ ...r })), techs: [...p.techs], time: w.time, sel: [...sel], winner: w.winner,
-    beacons: w.beacons.filter((b) => b.owner === me).length, mines: w.units.filter((u) => u.owner === me && u.t.tier === 'mine').length,
+    beacons: w.beacons.filter((b) => b.owner === p.team).length, beaconsAll: w.beacons.length, mines: w.units.filter((u) => u.owner === me && u.t.tier === 'mine').length,
   }
 }
 
 function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: Setup; sound: EmpiresSound; onExit: () => void; onAgain: () => void }) {
-  const me: Owner = 0
-  const enemyFaction: FactionId = setup.faction === 'republic' ? 'droid' : 'republic'
+  // Players are the open slots, in spawn order; we're the one marked 'you'.
+  const [seats] = useState(() => setup.slots.map((s, i) => ({ ...s, spawn: i, name: slotName(s, i) })).filter((s) => s.kind !== 'closed'))
+  const me: Owner = seats.findIndex((s) => s.kind === 'you')
   const world = useRef<World>(null as unknown as World)
-  if (!world.current) world.current = newWorld(setup.faction, enemyFaction, { incomeMul: [1, DIFFICULTY[setup.difficulty].income], credits: setup.credits })
-  const brain = useRef<Brain>(newBrain(1, setup.difficulty))
+  if (!world.current)
+    world.current = newWorld(
+      MAP[setup.map],
+      seats.map((s) => ({ faction: s.faction, team: s.team, spawn: s.spawn, incomeMul: s.kind === 'ai' ? DIFFICULTY[s.difficulty].income : 1 })),
+      { credits: setup.credits },
+    )
+  const myTeam = world.current.players[me].team
+  const myFaction = world.current.players[me].faction
+  const brains = useRef<Brain[]>(seats.map((s, i) => (s.kind === 'ai' ? newBrain(i, s.difficulty) : null)).filter((b): b is Brain => !!b))
+  const settings = useSettings()
+  const settingsRef = useRef(settings)
+  settingsRef.current = settings
   const renderer = useRef<Renderer>(null as unknown as Renderer)
   if (!renderer.current) renderer.current = new Renderer(SPRITES)
   const w0 = world.current
   const st0 = w0.byId.get(w0.players[me].station)!
   const cam = useRef<Camera>({ x: st0.x + 500, y: st0.y, zoom: 0.5 })
   // Dev builds expose the battle for poking at from the console.
-  if (import.meta.env.DEV) (window as unknown as { __ew: unknown }).__ew = { world: world.current, brain: brain.current, cam: cam.current }
+  if (import.meta.env.DEV) (window as unknown as { __ew: unknown }).__ew = { world: world.current, brains: brains.current, cam: cam.current }
   const selected = useRef(new Set<number>())
   const groups = useRef(new Map<string, number[]>())
   const mode = useRef<Mode>('normal')
@@ -200,15 +136,18 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   const [ready, setReady] = useState(false)
   const [hud, setHud] = useState<Hud>(() => snapshot(world.current, me, selected.current))
   const [toasts, setToasts] = useState<Toast[]>([])
-  const [ui, setUi] = useState({ paused: false, speed: 1, mode: 'normal' as Mode, help: false, muted: sound.muted, volume: sound.volume, menu: false, settings: false })
+  const [ui, setUi] = useState({ paused: false, speed: 1, mode: 'normal' as Mode, menu: false, panel: null as 'settings' | 'keys' | 'howto' | null })
+  /** Whether the game was paused before a menu opened (menus pause it, closing them restores that). */
+  const pausedBefore = useRef(false)
+  const uiRef = useRef(ui)
+  uiRef.current = ui
   const [mapFilter, setMapFilter] = useState<MapFilter>('all')
   const mapFilterRef = useRef(mapFilter)
   mapFilterRef.current = mapFilter
   // A name for the battlefield, for the top bar.
-  const [sector] = useState(() => {
-    const names = ['Kessar Belt', 'Vanth Reach', 'Oru Drift', 'Talos Rift', 'Myrr Expanse', 'Sable Verge']
-    return `${names[Math.floor(Math.random() * names.length)]} · Sector ${1 + Math.floor(Math.random() * 9)}-${10 + Math.floor(Math.random() * 89)}`
-  })
+  // The battlefield's name for the top bar, and who's fighting whom for the map header ("2 v 2").
+  const sector = MAP[setup.map].name
+  const sides = `${seats.filter((x) => x.team === myTeam).length} v ${seats.filter((x) => x.team !== myTeam).length}`
   const focused = useIsFocused(win)
   const focusedRef = useRef(focused)
   focusedRef.current = focused
@@ -217,7 +156,9 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   bestRef.current = best
   const toastId = useRef(1)
 
-  const toast = (text: string, tone: Toast['tone'] = 'info') => setToasts((ts) => [...ts.slice(-3), { id: toastId.current++, text, tone, t: performance.now() }])
+  const toast = (text: string, tone: Toast['tone'] = 'info') =>
+    (tone === 'bad' || getSettings().toasts) &&
+    setToasts((ts) => [...ts.slice(-3), { id: toastId.current++, text, tone, t: performance.now() }])
   const setMode = (m: Mode) => {
     mode.current = m
     setUi((u) => ({ ...u, mode: m }))
@@ -274,7 +215,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     let best: Unit | undefined
     let bestScore = Infinity
     for (const u of w.units) {
-      if (u.owner !== me && !u.seen[me]) continue
+      if (!u.seen[myTeam]) continue
       const [uw, uh] = dims(u.t)
       const minR = 12 / z
       // Point into the ship's own frame for an oriented box test.
@@ -361,7 +302,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       }
       return
     }
-    if (unit && unit.owner !== me) {
+    if (unit && foes(w, unit.owner, me)) {
       cmdAttack(w, me, ships.map((u) => u.id), unit.id, hp)
 
       renderer.current.ping(unit.x, unit.y, '#ff5a50')
@@ -503,7 +444,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         acc += dt * speed.current
         let steps = 0
         while (acc >= STEP && steps < 12) {
-          think(w, brain.current, STEP)
+          for (const b of brains.current) think(w, b, STEP)
           tick(w)
           events.push(...w.events)
           w.events.length = 0
@@ -514,14 +455,15 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       // Camera: arrow keys, and screen edges when the game fills the page.
       const cm = cam.current
       const { vw, vh } = { vw: c.clientWidth, vh: c.clientHeight }
-      const pan = (900 / cm.zoom) * dt
+      const set = settingsRef.current
+      const pan = ((900 * set.cameraSpeed) / cm.zoom) * dt
       const k = keys.current
-      if (k.has('ArrowLeft') || k.has('a')) cm.x -= pan
-      if (k.has('ArrowRight') || k.has('d')) cm.x += pan
-      if (k.has('ArrowUp') || k.has('w')) cm.y -= pan
-      if (k.has('ArrowDown') || k.has('s')) cm.y += pan
-      const full = !!root.current?.closest('.is-page-full')
-      if (full && mouse.current.inside) {
+      if (k.has('arrowleft') || k.has(set.keys.panLeft)) cm.x -= pan
+      if (k.has('arrowright') || k.has(set.keys.panRight)) cm.x += pan
+      if (k.has('arrowup') || k.has(set.keys.panUp)) cm.y -= pan
+      if (k.has('arrowdown') || k.has(set.keys.panDown)) cm.y += pan
+      const edge = set.edgeScroll === 'always' || (set.edgeScroll === 'fullscreen' && !!root.current?.closest('.is-page-full'))
+      if (edge && mouse.current.inside) {
         const e = 8
         if (mouse.current.x < e) cm.x -= pan
         if (mouse.current.x > vw - e) cm.x += pan
@@ -543,11 +485,14 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
           const t = UNIT[e.unit]
           sound.built()
           toast(t.tier === 'mine' ? `${t.name} is drilling` : t.tier === 'defense' ? `${t.name} online` : `${t.name}${t.squad > 1 ? ' squadron' : ''} ready`, 'good')
+        } else if (e.k === 'out') {
+          if (e.owner === me) toast('Our station has fallen', 'bad')
+          else toast(`${seats[e.owner].name} has been eliminated`, foes(w, e.owner, me) ? 'good' : 'bad')
         } else if (e.k === 'beacon') {
-          if (e.owner === me) {
+          if (e.owner === myTeam) {
             sound.capture(true)
             toast('Beacon captured: +6 fleet capacity', 'good')
-          } else if (e.prev === me) {
+          } else if (e.prev === myTeam) {
             sound.capture(false)
             toast('We lost a beacon', 'bad')
           }
@@ -556,16 +501,16 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
           lastAlarm.current = { x: e.x, y: e.y, t: w.time }
           toast(`${e.what} under attack! (Space to look)`, 'bad')
         } else if (e.k === 'survey') {
-          if (e.owner === me) {
+          if (e.owner === myTeam && e.prev !== myTeam) {
             sound.capture(true)
             toast('Ore surveyed: click it to build a mining or defense platform', 'good')
-          } else if (e.prev === me) toast('We lost the claim on an ore asteroid', 'bad')
+          } else if (e.prev === myTeam) toast('We lost the claim on an ore asteroid', 'bad')
         } else if (e.k === 'tech' && e.owner === me) {
           sound.built()
           toast(`Research complete: ${TECH[e.id].name}`, 'good')
         } else if (e.k === 'level' && e.owner === me) {
           sound.fanfare()
-          const unlocked = buildable(setup.faction).filter((t) => t.level === e.level).map((t) => t.name)
+          const unlocked = buildable(myFaction).filter((t) => t.level === e.level).map((t) => t.name)
           toast(`Station level ${e.level}${unlocked.length ? `: ${unlocked.join(', ')} unlocked` : ''}`, 'good')
         }
       }
@@ -575,6 +520,8 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       const h = hover.current
       const v: View = {
         me,
+        bars: settingsRef.current.bars,
+        rings: settingsRef.current.rings,
         selected: selected.current,
         hover: h.unit,
         hoverHp: h.hp,
@@ -593,7 +540,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         if (w.winner !== -1 && !ended) {
           ended = true
           sound.stopDrone()
-          if (w.winner === me) {
+          if (w.winner === myTeam) {
             sound.fanfare()
             submit((bestRef.current ?? 0) + 1)
           } else sound.defeat()
@@ -624,10 +571,14 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       return
     }
     const down = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.closest?.('input, textarea')) return
-      const k = e.key.length === 1 ? e.key.toLowerCase() : e.key
+      if ((e.target as HTMLElement)?.closest?.('input, textarea, select')) return
+      const k = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase()
       const w = world.current
-      if (k.startsWith('Arrow') || (!e.ctrlKey && !e.metaKey && !e.altKey && 'wasd'.includes(k) && k.length === 1)) {
+      const keymap = settingsRef.current.keys
+      if ((uiRef.current.menu || uiRef.current.panel) && k !== 'escape') return
+      const action = !e.ctrlKey && !e.metaKey && !e.altKey ? actionFor(keymap, k) : undefined
+      // Panning keys are held, not pressed.
+      if (k.startsWith('arrow') || action === 'panUp' || action === 'panDown' || action === 'panLeft' || action === 'panRight') {
         keys.current.add(k)
         e.preventDefault()
         return
@@ -654,35 +605,30 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
             centerOn(us.reduce((s, u) => s + u.x, 0) / us.length, us.reduce((s, u) => s + u.y, 0) / us.length)
           }
         }
-      } else if (k === 'r') runCommand('attack')
-      else if (k === 'm') runCommand('move')
-      else if (k === 't') runCommand('patrol')
-      else if (k === 'y') runCommand('rally')
-      else if (k === 'g') runCommand('hold')
-      else if (k === 'x') runCommand('stop')
-      else if (k === 'q') useAbility()
-      else if (k === 'h' || k === 'Home') selectStation()
-      else if (k === 'i') selectIdle()
-      else if (k === ' ') {
-        if (lastAlarm.current) centerOn(lastAlarm.current.x, lastAlarm.current.y)
-      } else if (k === 'p') {
-        paused.current = !paused.current
-        setUi((u) => ({ ...u, paused: paused.current }))
-      } else if (k === 'f') {
-        const us = mySelection()
-        if (us.length) centerOn(us.reduce((s, u) => s + u.x, 0) / us.length, us.reduce((s, u) => s + u.y, 0) / us.length)
-      } else if (k === '+' || k === '=') zoomBy(1.2)
-      else if (k === '-' || k === '_') zoomBy(1 / 1.2)
-      else if (k === 'Escape') {
-        if (mode.current !== 'normal') setMode('normal')
-        else {
+      } else if (k === 'escape') {
+        // Esc backs out of whatever is open, one step at a time, and finally opens the menu.
+        if (uiRef.current.menu || uiRef.current.panel) closeMenu()
+        else if (mode.current !== 'normal') setMode('normal')
+        else if (selected.current.size || pickedNode.current >= 0) {
           selected.current.clear()
           pickedNode.current = -1
-        }
-      } else return
+        } else openMenu()
+      } else if (action === 'attack' || action === 'move' || action === 'patrol' || action === 'rally' || action === 'hold' || action === 'stop') runCommand(action)
+      else if (action === 'ability') useAbility()
+      else if (action === 'station' || k === 'home') selectStation()
+      else if (action === 'idle') selectIdle()
+      else if (action === 'alert') {
+        if (lastAlarm.current) centerOn(lastAlarm.current.x, lastAlarm.current.y)
+      } else if (action === 'pause') togglePause()
+      else if (action === 'focus') {
+        const us = mySelection()
+        if (us.length) centerOn(us.reduce((s, u) => s + u.x, 0) / us.length, us.reduce((s, u) => s + u.y, 0) / us.length)
+      } else if (action === 'zoomIn' || k === '+') zoomBy(1.2)
+      else if (action === 'zoomOut' || k === '_') zoomBy(1 / 1.2)
+      else return
       e.preventDefault()
     }
-    const up = (e: KeyboardEvent) => keys.current.delete(e.key.length === 1 ? e.key.toLowerCase() : e.key)
+    const up = (e: KeyboardEvent) => keys.current.delete(e.key.toLowerCase())
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
     return () => {
@@ -788,7 +734,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       else if (mode.current !== 'normal') {
         modeClick(p.x, p.y, mode.current)
         setMode('normal')
-      } else if (mySelection().length && (!unit || unit.owner !== me)) command(p.x, p.y, false)
+      } else if (mySelection().length && (!unit || foes(w0, unit.owner, me))) command(p.x, p.y, false)
       else if (unit) select([unit.id])
       else {
         selected.current.clear()
@@ -877,7 +823,24 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
 
   const togglePause = () => {
     paused.current = !paused.current
-    setUi((u) => ({ ...u, paused: paused.current, menu: false }))
+    setUi((u) => ({ ...u, paused: paused.current }))
+  }
+  // The battle menu and the settings panels pause the game while they're open.
+  const openMenu = (panel: 'settings' | 'keys' | 'howto' | null = null) => {
+    sound.click()
+    setUi((u) => {
+      if (!u.menu && !u.panel) pausedBefore.current = paused.current
+      paused.current = true
+      return { ...u, paused: true, menu: panel ? u.menu : true, panel }
+    })
+  }
+  const closeMenu = () => {
+    setUi((u) => {
+      // Closing a panel opened from the menu goes back to the menu.
+      if (u.panel && u.menu) return { ...u, panel: null }
+      paused.current = pausedBefore.current
+      return { ...u, menu: false, panel: null, paused: paused.current }
+    })
   }
   const setSpeed = (s: number) => {
     speed.current = s
@@ -885,17 +848,17 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   }
 
   const w = world.current
-  const fac = FACTIONS[setup.faction]
+  const fac = FACTIONS[myFaction]
   if (!ready)
     return (
-      <div className="ew-root ew-loading" onContextMenu={noMenu}>
+      <div className="ew-root ew-deck ew-loading" onContextMenu={noMenu}>
         <p>Charting the system…</p>
       </div>
     )
 
   const sel = hud.sel.map((i) => w.byId.get(i)).filter((u): u is Unit => !!u)
   return (
-    <div className={`ew-root ew-battle ew-${setup.faction}`} ref={root} style={{ ['--ew-accent' as string]: fac.color }} onContextMenu={noMenu}>
+    <div className={`ew-root ew-deck ew-battle ew-${myFaction}`} ref={root} style={{ ['--ew-accent' as string]: fac.color }} onContextMenu={noMenu}>
       <canvas
         ref={canvas}
         className={`ew-canvas ${ui.mode !== 'normal' ? 'is-targeting' : ''}`}
@@ -910,12 +873,12 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         onWheel={onWheel}
       />
 
-      <TopBar hud={hud} faction={setup.faction} sector={sector} ui={ui} onShipyard={selectStation} onPause={togglePause} onSpeed={setSpeed}
-        onMenu={() => setUi((u) => ({ ...u, menu: !u.menu, settings: false }))}
-        onSettings={() => setUi((u) => ({ ...u, settings: !u.settings }))}
+      <TopBar hud={hud} faction={myFaction} sector={sector} ui={ui} onShipyard={selectStation} onPause={togglePause} onSpeed={setSpeed}
+        onMenu={() => (ui.menu ? closeMenu() : openMenu())}
+        onSettings={() => openMenu('settings')}
       />
 
-      <div className="ew-toasts" aria-live="polite">
+      <div className={`ew-toasts ${ui.paused && !ui.menu && !ui.panel ? 'is-low' : ''}`} aria-live="polite">
         {toasts.map((t) => (
           <div key={t.id} className={`ew-toast is-${t.tone}`}>
             {t.text}
@@ -933,11 +896,11 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       )}
 
       <div className="ew-dock">
-        <TacticalMap canvas={mini} faction={setup.faction} enemy={enemyFaction} filter={mapFilter} onFilter={setMapFilter} onPointer={onMini}
+        <TacticalMap canvas={mini} sides={sides} filter={mapFilter} onFilter={setMapFilter} onPointer={onMini}
           onStation={selectStation} onIdle={selectIdle} onArmy={selectArmy}
           onAlert={() => (lastAlarm.current ? centerOn(lastAlarm.current.x, lastAlarm.current.y) : toast('No alerts yet', 'info'))}
         />
-        <DetailPanel w={w} me={me} sel={sel} hud={hud} faction={setup.faction}
+        <DetailPanel w={w} me={me} sel={sel} hud={hud} faction={myFaction}
           onOnly={(id, drop) => {
             const keep = sel.filter((u) => (drop ? u.t.id !== id : u.t.id === id)).map((u) => u.id)
             selected.current = new Set(keep)
@@ -961,40 +924,44 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         />
       </div>
 
-      {ui.settings && (
-        <Settings volume={ui.volume} muted={ui.muted}
-          onVolume={(v) => {
-            sound.setVolume(v)
-            setUi((u) => ({ ...u, volume: v }))
-          }}
-          onMute={() => {
-            sound.setMuted(!sound.muted)
-            setUi((u) => ({ ...u, muted: sound.muted }))
-          }}
-          onHelp={() => setUi((u) => ({ ...u, help: true, settings: false }))}
-          onClose={() => setUi((u) => ({ ...u, settings: false }))}
-        />
-      )}
-      {ui.paused && hud.winner === -1 && !ui.menu && (
-        <div className="ew-overlay" onClick={togglePause}>
-          <div className="ew-card">
-            <h2>Paused</h2>
-            <p className="ew-muted">Click or press P to resume.</p>
-          </div>
+      {ui.paused && !ui.menu && !ui.panel && hud.winner === -1 && (
+        <div className="ew-pausebox">
+          <Frame title="Paused">
+            <p>The battle is on hold. You can still look around and give orders.</p>
+            <button className="ew-go" onClick={togglePause}>
+              Resume ({keyName(settings.keys.pause)})
+            </button>
+          </Frame>
         </div>
       )}
-      {ui.menu && hud.winner === -1 && (
-        <div className="ew-overlay">
-          <div className="ew-card">
-            <h2>Battle menu</h2>
-            <button className="ew-go" onClick={() => setUi((u) => ({ ...u, menu: false }))}>Resume</button>
-            <button onClick={onAgain}>Restart battle</button>
-            <button onClick={onExit}>Retreat to title</button>
+      {ui.menu && !ui.panel && hud.winner === -1 && (
+        <Modal title="Battle menu" onClose={closeMenu}>
+          <div className="ew-menu-list">
+            <button className="ew-menu-btn is-primary" onClick={closeMenu}>Resume</button>
+            <button className="ew-menu-btn" onClick={() => openMenu('settings')}>Settings</button>
+            <button className="ew-menu-btn" onClick={() => openMenu('keys')}>Keybinds</button>
+            <button className="ew-menu-btn" onClick={() => openMenu('howto')}>How to play</button>
+            <button className="ew-menu-btn" onClick={onAgain}>Restart battle</button>
+            <button className="ew-menu-btn is-danger" onClick={onExit}>Leave to the lobby</button>
           </div>
-        </div>
+        </Modal>
       )}
-      {ui.help && <Help onClose={() => setUi((u) => ({ ...u, help: false }))} />}
-      {hud.winner !== -1 && <Result w={w} me={me} won={hud.winner === me} difficulty={setup.difficulty} onAgain={onAgain} onExit={onExit} />}
+      {ui.panel === 'settings' && (
+        <Modal title="Settings" onClose={closeMenu}>
+          <SettingsPanel sound={sound} />
+        </Modal>
+      )}
+      {ui.panel === 'keys' && (
+        <Modal title="Keybinds" onClose={closeMenu} wide>
+          <KeybindsPanel />
+        </Modal>
+      )}
+      {ui.panel === 'howto' && (
+        <Modal title="How to play" onClose={closeMenu}>
+          <HowToPlay />
+        </Modal>
+      )}
+      {hud.winner !== -1 && <Result w={w} me={me} names={seats.map((s) => s.name)} won={hud.winner === myTeam} onAgain={onAgain} onExit={onExit} />}
     </div>
   )
 }

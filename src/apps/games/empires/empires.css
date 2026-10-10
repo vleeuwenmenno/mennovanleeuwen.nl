@@ -62,8 +62,8 @@
   margin: 0;
 }
 .ew-go {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--ew-accent) 75%, #fff 10%), color-mix(in srgb, var(--ew-accent) 55%, #000)) !important;
-  border-color: color-mix(in srgb, var(--ew-accent) 80%, #fff) !important;
+  background: linear-gradient(180deg, #5b9bff, #2f6fd6) !important;
+  border-color: #8fbaff !important;
   color: #fff !important;
   font-family: var(--ew-display) !important;
   letter-spacing: 0.08em;
@@ -71,132 +71,7 @@
   text-transform: uppercase;
 }
 
-/* --- Title ------------------------------------------------------------------------------------- */
-
-.ew-title {
-  display: flex;
-  gap: 24px;
-  justify-content: space-between;
-  align-items: flex-start;
-  padding: 22px;
-  background-size: cover;
-  background-position: center;
-  overflow: auto;
-  --ew-accent: #e0453c;
-}
-.ew-title::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, rgba(3, 5, 12, 0.92) 0%, rgba(3, 5, 12, 0.7) 45%, rgba(3, 5, 12, 0.15) 100%);
-  pointer-events: none;
-}
-.ew-title-panel,
-.ew-title-help {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.ew-title-panel {
-  max-width: 470px;
-}
-.ew-title h1 {
-  font-size: clamp(28px, 6cqi, 46px);
-  font-weight: 900;
-  line-height: 1;
-  text-transform: uppercase;
-  color: #fff;
-  text-shadow: 0 2px 18px rgba(90, 170, 255, 0.45);
-}
-.ew-title h1 span {
-  font-size: 0.5em;
-  vertical-align: middle;
-  color: var(--ew-gold);
-}
-.ew-tagline {
-  margin: 0 0 6px;
-  color: #b8c6dc;
-}
-.ew-title h3 {
-  font-size: 12px;
-  color: var(--ew-muted);
-  text-transform: uppercase;
-  margin-top: 6px;
-}
-.ew-sides {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-.ew-side {
-  display: flex !important;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 5px;
-  text-align: left;
-  padding: 10px !important;
-  background: rgba(10, 16, 32, 0.8) !important;
-  min-height: 170px;
-}
-.ew-side img {
-  height: 74px;
-  align-self: center;
-  transform: rotate(90deg);
-  margin: 10px 0;
-  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.6));
-}
-.ew-side strong {
-  font-family: var(--ew-display);
-  font-size: 12.5px;
-  letter-spacing: 0.04em;
-}
-.ew-side span {
-  font-size: 12px;
-  color: var(--ew-muted);
-}
-.ew-side-republic.is-on {
-  border-color: #e0453c !important;
-  box-shadow: 0 0 0 1px #e0453c, 0 0 22px rgba(224, 69, 60, 0.35);
-}
-.ew-side-droid.is-on {
-  border-color: #a070ff !important;
-  box-shadow: 0 0 0 1px #a070ff, 0 0 22px rgba(160, 112, 255, 0.35);
-}
-.ew-seg {
-  display: flex;
-  gap: 6px;
-}
-.ew-seg button {
-  flex: 1;
-}
-.ew-title .ew-go {
-  margin-top: 8px;
-  align-self: flex-start;
-}
-.ew-title-help {
-  max-width: 330px;
-  padding: 14px 16px;
-  background: rgba(6, 10, 22, 0.78);
-  border: 1px solid var(--ew-line);
-  border-radius: 10px;
-  backdrop-filter: blur(6px);
-}
-.ew-title-help ul {
-  margin: 0;
-  padding-left: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-@container (max-width: 760px) {
-  .ew-title {
-    flex-direction: column;
-  }
-  .ew-title-help {
-    max-width: 470px;
-  }
-}
+/* --- Menus: main menu, lobby, modals ---------------------------------------------------------- */
 
 .ew-loading {
   display: grid;
@@ -205,10 +80,420 @@
   letter-spacing: 0.1em;
   color: var(--ew-muted);
 }
+.ew-menu,
+.ew-lobby {
+  background-size: cover;
+  background-position: center;
+}
+.ew-menu::before,
+.ew-lobby::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(3, 5, 12, 0.94) 0%, rgba(3, 5, 12, 0.72) 42%, rgba(3, 5, 12, 0.25) 100%);
+  pointer-events: none;
+}
+.ew-lobby::before {
+  background: rgba(3, 5, 12, 0.78);
+}
+.ew-menu-col {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(380px, calc(100% - 40px));
+  padding: clamp(20px, 7cqi, 64px) 0 20px clamp(20px, 6cqi, 72px);
+}
+.ew-logo {
+  font-size: clamp(30px, 6cqi, 52px);
+  font-weight: 900;
+  line-height: 1;
+  text-transform: uppercase;
+  color: #fff;
+  text-shadow: 0 2px 18px rgba(90, 170, 255, 0.45);
+}
+.ew-logo span {
+  font-size: 0.45em;
+  vertical-align: middle;
+  color: var(--ew-gold);
+}
+.ew-tagline {
+  margin: 0 0 6px;
+  color: #b8c6dc;
+}
+.ew-menu-frame .ew-frame-in,
+.ew-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.ew-menu-frame .ew-frame-in {
+  padding: 14px;
+}
+.ew-menu-list.is-row {
+  flex-direction: row;
+  margin-top: 6px;
+}
+.ew-deck .ew-menu-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 16px;
+  font-family: var(--ew-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ew-head);
+  text-align: left;
+}
+.ew-deck .ew-menu-btn.is-primary {
+  background: linear-gradient(180deg, var(--ew-active-hi), var(--ew-active));
+  border-color: #8fbaff;
+  color: #fff;
+}
+.ew-deck .ew-menu-btn.is-danger {
+  color: #ffc4be;
+  border-color: rgba(255, 106, 94, 0.4);
+}
+.ew-menu-list.is-row .ew-menu-btn {
+  flex: 1;
+  justify-content: center;
+}
+
+.ew-modal-back {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(2, 4, 10, 0.55);
+}
+.ew-modal {
+  width: min(460px, 100%);
+  max-height: 100%;
+  display: flex;
+}
+.ew-modal.is-wide {
+  width: min(720px, 100%);
+}
+.ew-modal > .ew-frame {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.ew-modal .ew-frame-in {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px 16px;
+}
+.ew-deck .ew-close {
+  padding: 0 7px;
+  line-height: 20px;
+  color: var(--ew-muted);
+}
+.ew-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ew-form h5,
+.ew-lobby h5 {
+  margin: 6px 0 0;
+  font-family: var(--ew-display);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ew-head);
+}
+.ew-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 30px;
+}
+.ew-row > span:first-child {
+  color: #c4d0e4;
+}
+.ew-seg {
+  display: flex;
+  gap: 3px;
+}
+.ew-deck .ew-seg button {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.ew-keys {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 4px 22px;
+}
+.ew-deck .ew-keycap {
+  min-width: 64px;
+  padding: 4px 10px;
+  font-family: var(--ew-display);
+  font-size: 12px;
+  text-align: center;
+}
+.ew-form-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+.ew-howto ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ew-howto kbd,
+.ew-pausebox kbd {
+  font-family: var(--ew-display);
+  font-size: 10.5px;
+  padding: 1px 5px;
+  margin: 0 1px;
+  border: 1px solid var(--ew-cell-line);
+  border-radius: 4px;
+  background: rgba(20, 32, 60, 0.8);
+}
+
+/* Lobby: maps on the left, the chosen map in the middle, players on the right. */
+.ew-lobby {
+  display: flex;
+  flex-direction: column;
+}
+.ew-lobby-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px 4px;
+}
+.ew-lobby-head h2 {
+  font-size: 20px;
+  color: var(--ew-head);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+.ew-lobby-grid {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) minmax(360px, 460px);
+  gap: 10px;
+  padding: 10px 16px 16px;
+}
+.ew-lobby-grid > .ew-frame {
+  min-height: 0;
+}
+.ew-lobby-grid .ew-frame-in {
+  overflow: auto;
+}
+.ew-maplist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ew-deck .ew-mapcard {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+  text-align: left;
+}
+.ew-mapcard span {
+  display: flex;
+  flex-direction: column;
+}
+.ew-mapcard strong {
+  font-size: 12.5px;
+}
+.ew-mapcard small {
+  color: var(--ew-muted);
+}
+.ew-mapcard.is-on small {
+  color: #dce8ff;
+}
+.ew-mappreview {
+  display: block;
+  width: 100%;
+  flex: 1;
+  min-height: 160px;
+}
+.ew-mappreview.is-thumb {
+  width: 64px;
+  height: 46px;
+  min-height: 0;
+  flex: none;
+}
+.ew-lobby-preview p {
+  margin: 0;
+}
+.ew-slotlist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ew-slotrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(20, 32, 60, 0.55);
+  border: 1px solid var(--ew-cell-line);
+}
+.ew-slotrow.is-closed {
+  opacity: 0.6;
+}
+.ew-spawnno {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font: 700 12px system-ui;
+  color: #050813;
+  flex: none;
+}
+.ew-slotwho {
+  width: 80px;
+}
+strong.ew-slotwho {
+  font-family: var(--ew-display);
+  font-size: 12.5px;
+  color: var(--ew-head);
+}
+.ew-deck select {
+  font: inherit;
+  font-size: 12px;
+  color: var(--ew-text);
+  background: var(--ew-cell);
+  border: 1px solid var(--ew-cell-line);
+  border-radius: 5px;
+  padding: 4px 6px;
+}
+.ew-deck .ew-factionseg button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 3px 4px;
+}
+.ew-factionseg img {
+  width: 18px;
+  height: 18px;
+}
+.ew-deck .ew-teamtag {
+  padding: 3px 10px;
+  font-size: 11.5px;
+  border-radius: 10px;
+}
+span.ew-teamtag {
+  padding: 3px 10px;
+  font-size: 11.5px;
+  border-radius: 10px;
+}
+.ew-teamtag.is-own {
+  background: rgba(125, 255, 160, 0.15);
+  color: #b8ffcb;
+  border: 1px solid rgba(125, 255, 160, 0.4);
+}
+.ew-deck .ew-teamtag.is-ally {
+  background: rgba(91, 155, 255, 0.18);
+  color: #c4dcff;
+  border-color: rgba(91, 155, 255, 0.55);
+}
+.ew-deck .ew-teamtag.is-enemy {
+  background: rgba(255, 90, 80, 0.15);
+  color: #ffc4be;
+  border-color: rgba(255, 90, 80, 0.5);
+}
+.ew-launch {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 10px;
+}
+
+/* Pause: a small panel at the top, the battle stays visible behind it. */
+.ew-pausebox {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(340px, calc(100% - 32px));
+  z-index: 4;
+  text-align: center;
+}
+.ew-pausebox p {
+  margin: 0;
+  color: #c4d0e4;
+}
+.ew-pausebox .ew-go {
+  align-self: center;
+}
+
+.ew-result h2 {
+  font-size: 30px;
+}
+.ew-result.is-won h2 {
+  color: var(--ew-gold);
+}
+.ew-result.is-lost h2 {
+  color: var(--ew-bad);
+}
+.ew-result p {
+  margin: 0;
+}
+.ew-result table {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.ew-result td,
+.ew-result th {
+  padding: 4px 10px 4px 0;
+  text-align: right;
+}
+.ew-result td:first-child,
+.ew-result th:first-child {
+  text-align: left;
+}
+.ew-result th {
+  color: var(--ew-muted);
+  font-weight: 500;
+}
+.ew-result tr.is-out td:first-child {
+  text-decoration: line-through;
+  color: var(--ew-muted);
+}
+.ew-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 7px;
+}
+@container (max-width: 900px) {
+  .ew-lobby-grid {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+  .ew-lobby-preview .ew-mappreview {
+    min-height: 200px;
+  }
+}
 
 /* --- Battle ------------------------------------------------------------------------------------ */
 
-.ew-battle {
+.ew-deck {
   /* Command-deck palette: deep navy glass inside bronze rims, blue for what's active. */
   --ew-rim-hi: #b79a62;
   --ew-rim: #6f5a36;
@@ -289,16 +574,16 @@
   color: var(--ew-head);
   white-space: nowrap;
 }
-.ew-battle button {
+.ew-deck button {
   background: var(--ew-cell);
   border: 1px solid var(--ew-cell-line);
   border-radius: 5px;
 }
-.ew-battle button:hover:not(:disabled) {
+.ew-deck button:hover:not(:disabled) {
   border-color: rgba(140, 180, 255, 0.55);
   background: rgba(30, 48, 90, 0.9);
 }
-.ew-battle button.is-on {
+.ew-deck button.is-on {
   background: linear-gradient(180deg, var(--ew-active-hi), var(--ew-active));
   border-color: #8fbaff;
   color: #fff;
@@ -367,7 +652,7 @@
   color: #c8d4ee;
   margin-left: 6px;
 }
-.ew-battle .ew-yardchip {
+.ew-deck .ew-yardchip {
   position: relative;
   border-radius: 0;
   background: linear-gradient(180deg, rgba(18, 28, 54, 0.98), rgba(8, 13, 28, 0.98));
@@ -408,12 +693,12 @@
   gap: 3px;
   padding: 0 10px;
 }
-.ew-battle .ew-speed button {
+.ew-deck .ew-speed button {
   padding: 3px 11px;
   font-family: var(--ew-display);
   font-size: 12px;
 }
-.ew-battle .ew-top-btn {
+.ew-deck .ew-top-btn {
   border-radius: 0;
   padding: 0 12px;
   color: var(--ew-head);
@@ -431,6 +716,9 @@
   gap: 4px;
   pointer-events: none;
   z-index: 3;
+}
+.ew-toasts.is-low {
+  top: 170px;
 }
 .ew-toast {
   padding: 5px 14px;
@@ -517,7 +805,7 @@
   flex-direction: column;
   gap: 4px;
 }
-.ew-battle .ew-maptools button {
+.ew-deck .ew-maptools button {
   width: 32px;
   height: 32px;
   padding: 0;
@@ -539,7 +827,7 @@
   display: flex;
   gap: 3px;
 }
-.ew-battle .ew-mapfilters button {
+.ew-deck .ew-mapfilters button {
   flex: 1;
   display: flex;
   align-items: center;
@@ -735,7 +1023,7 @@
 .ew-orders {
   margin-left: auto;
 }
-.ew-battle .ew-tag {
+.ew-deck .ew-tag {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -745,7 +1033,7 @@
   background: rgba(125, 255, 160, 0.12);
   color: #b8ffcb;
 }
-.ew-battle .ew-tag.is-enemy {
+.ew-deck .ew-tag.is-enemy {
   background: rgba(255, 90, 80, 0.15);
   color: #ffc4be;
 }
@@ -795,7 +1083,7 @@
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 5px;
 }
-.ew-battle .ew-fleetrow {
+.ew-deck .ew-fleetrow {
   display: grid;
   grid-template-columns: 34px 1fr auto;
   grid-template-rows: auto 6px;
@@ -830,7 +1118,7 @@
   gap: 4px;
   margin-right: auto;
 }
-.ew-battle .ew-tabs button {
+.ew-deck .ew-tabs button {
   font-family: var(--ew-display);
   font-size: 11.5px;
   font-weight: 700;
@@ -854,7 +1142,7 @@
   color: var(--ew-muted);
   margin-right: 4px;
 }
-.ew-battle .ew-slot {
+.ew-deck .ew-slot {
   position: relative;
   width: 28px;
   height: 28px;
@@ -912,7 +1200,7 @@
   display: flex;
   gap: 6px;
 }
-.ew-battle .ew-shipcard {
+.ew-deck .ew-shipcard {
   position: relative;
   flex: none;
   width: 100px;
@@ -926,7 +1214,7 @@
   text-align: center;
   background: linear-gradient(180deg, rgba(26, 40, 74, 0.95), rgba(12, 18, 36, 0.95));
 }
-.ew-battle .ew-shipcard:hover:not(:disabled) {
+.ew-deck .ew-shipcard:hover:not(:disabled) {
   background: linear-gradient(180deg, rgba(40, 62, 110, 0.98), rgba(16, 24, 48, 0.98));
 }
 .ew-shipcard img {
@@ -1004,7 +1292,7 @@
   gap: 8px;
   flex-wrap: wrap;
 }
-.ew-battle .ew-sitecard {
+.ew-deck .ew-sitecard {
   width: 150px;
   aspect-ratio: auto;
 }
@@ -1053,7 +1341,7 @@
   object-fit: contain;
   flex: none;
 }
-.ew-battle .ew-tech {
+.ew-deck .ew-tech {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -1076,7 +1364,7 @@
   font-size: 10px;
   color: var(--ew-gold);
 }
-.ew-battle .ew-tech.is-done {
+.ew-deck .ew-tech.is-done {
   opacity: 1;
   border-color: rgba(125, 255, 160, 0.45);
   background: rgba(30, 80, 50, 0.35);
@@ -1084,7 +1372,7 @@
 .ew-tech.is-done span {
   color: var(--ew-good);
 }
-.ew-battle .ew-tech.is-busy {
+.ew-deck .ew-tech.is-busy {
   border-color: var(--ew-good);
 }
 .ew-tech.is-busy span {
@@ -1111,7 +1399,7 @@
   gap: 4px;
   min-height: 52px;
 }
-.ew-battle .ew-seltile {
+.ew-deck .ew-seltile {
   position: relative;
   width: 46px;
   height: 52px;
@@ -1139,7 +1427,7 @@
   width: 100%;
   height: 3px;
 }
-.ew-battle .ew-seltile.is-enemy {
+.ew-deck .ew-seltile.is-enemy {
   border-color: rgba(255, 106, 94, 0.5);
 }
 .ew-selmore {
@@ -1153,7 +1441,7 @@
   gap: 5px;
   margin-top: auto;
 }
-.ew-battle .ew-cmdbtn {
+.ew-deck .ew-cmdbtn {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -1175,7 +1463,7 @@
 .ew-cmdbtn:disabled {
   opacity: 0.35;
 }
-.ew-battle .ew-abilitybtn {
+.ew-deck .ew-abilitybtn {
   grid-column: 1 / -1;
   flex-direction: row;
   justify-content: center;
@@ -1199,7 +1487,7 @@
   display: flex;
   gap: 6px;
 }
-.ew-battle .ew-popover-row button {
+.ew-deck .ew-popover-row button {
   flex: 1;
   display: flex;
   align-items: center;
@@ -1223,78 +1511,6 @@
   font-size: 13px;
   color: var(--ew-gold);
 }
-
-.ew-overlay {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: rgba(2, 4, 10, 0.6);
-  z-index: 5;
-}
-.ew-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 260px;
-  max-width: min(520px, 92%);
-  max-height: 90%;
-  overflow: auto;
-  padding: 18px 20px;
-  background: rgba(8, 13, 28, 0.95);
-  border: 1px solid var(--ew-line);
-  border-radius: 12px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-}
-.ew-card h2 {
-  font-size: 20px;
-}
-.ew-card p {
-  margin: 0;
-}
-.ew-result.is-won h2 {
-  color: var(--ew-gold);
-  font-size: 30px;
-}
-.ew-result.is-lost h2 {
-  color: var(--ew-bad);
-  font-size: 30px;
-}
-.ew-result table {
-  border-collapse: collapse;
-  margin: 4px 0;
-}
-.ew-result td,
-.ew-result th {
-  padding: 3px 10px 3px 0;
-  text-align: left;
-}
-.ew-result th {
-  color: var(--ew-muted);
-  font-weight: 500;
-}
-.ew-help dl {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 4px 12px;
-  margin: 0;
-}
-.ew-help dt {
-  color: var(--ew-gold);
-  white-space: nowrap;
-}
-.ew-help dd {
-  margin: 0;
-}
-.ew-help ul {
-  margin: 0;
-  padding-left: 18px;
-}
-.ew-help h3 {
-  font-size: 13px;
-  margin-top: 4px;
-}
-
 
 /* Narrower windows: slimmer side panels, then fewer details; phones lose the map. */
 @container (max-width: 1180px) {

@@ -1,6 +1,6 @@
 import { FACTIONS, SURVEY_RADIUS, dims, isShip, type HardpointKind, type Tier } from './data'
 import { HP_COLOR, HP_ICON, HP_NAME } from './icons'
-import { building, hpPos, radius, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
+import { building, foes, hpPos, radius, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 
 // Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, ore,
 // rocks and beacons, the ships (generated sprites rotated in code, with engine glow, shield
@@ -12,8 +12,22 @@ export const spriteUrl = (name: string) => `${BASE}${/^(mine|defense)-/.test(nam
 const WORLD_SPRITES = ['asteroid-1', 'asteroid-2', 'asteroid-ore', 'beacon', 'backdrop']
 
 export type Camera = { x: number; y: number; zoom: number }
+
+// Colours relative to the viewer: us, our allies, everyone else.
+export const OWN = '#7dffa0'
+export const ALLY = '#5b9bff'
+export const ENEMY = '#ff5a50'
+/** A player's colour as the viewer sees it. */
+export const relColor = (w: World, me: Owner, o: Owner) => (o === me ? OWN : w.players[o].team === w.players[me].team ? ALLY : ENEMY)
+/** A team's colour as the viewer sees it (beacons and ore belong to teams). */
+const teamColor = (w: World, me: Owner, team: number) => (team === w.players[me].team ? OWN : ENEMY)
+
 export type View = {
   me: Owner
+  /** Health bars: on damaged ships (the default), always, or only on selected and hovered ones. */
+  bars: 'damaged' | 'always' | 'selected'
+  /** A faint ring under every ship in its relative colour, to tell allies from enemies. */
+  rings: boolean
   selected: Set<number>
   hover: number
   hoverHp: number
@@ -178,7 +192,8 @@ export class Renderer {
   /** Turns the sim's events into effects. Only what the viewer can see makes sparks. */
   consume(events: SimEvent[], w: World, me: Owner) {
     const seen = (x: number, y: number) => {
-      for (const u of w.units) if (u.owner === me && (u.x - x) ** 2 + (u.y - y) ** 2 < u.t.sensor ** 2) return true
+      const team = w.players[me].team
+      for (const u of w.units) if (w.players[u.owner].team === team && (u.x - x) ** 2 + (u.y - y) ** 2 < u.t.sensor ** 2) return true
       return false
     }
     for (const e of events) {
@@ -196,7 +211,7 @@ export class Renderer {
           if (e.kind === 'turbo' || e.kind === 'missile') this.add({ kind: 'fire', x: e.x, y: e.y, life: 0.35, size: 6, grow: 22, color: '#ff8a3a' })
         }
       } else if (e.k === 'boom') {
-        if (!seen(e.x, e.y) && e.owner !== me) continue
+        if (!seen(e.x, e.y)) continue
         const color = e.owner === undefined ? '#888' : w.players[e.owner].faction === 'republic' ? '#d8d2c8' : '#c8b48c'
         if (e.tier === 'fighter' || e.tier === 'gunship') {
           this.blast(e.x, e.y, e.size * 1.2)
@@ -314,7 +329,7 @@ export class Renderer {
     // Beacons, with their capture ring.
     for (const b of w.beacons) {
       if (!onScreen(b.x, b.y, 400)) continue
-      const col = b.owner === -1 ? 'rgba(200,210,230,0.5)' : FACTIONS[w.players[b.owner].faction].color
+      const col = b.owner === -1 ? 'rgba(200,210,230,0.5)' : teamColor(w, view.me, b.owner)
       ctx.strokeStyle = col
       ctx.globalAlpha = 0.35
       ctx.lineWidth = 2 / z
@@ -337,12 +352,11 @@ export class Renderer {
       ctx.globalAlpha = 1
       ctx.globalCompositeOperation = 'source-over'
       this.drawSprite(ctx, 'beacon', b.x, b.y, this.clock * 0.15 + b.id, 170, z)
-      if (b.progress !== 0) {
-        const o: Owner = b.progress < 0 ? 0 : 1
-        ctx.strokeStyle = FACTIONS[w.players[o].faction].color
+      if (b.progress > 0 && b.claim >= 0) {
+        ctx.strokeStyle = teamColor(w, view.me, b.claim)
         ctx.lineWidth = 7 / Math.max(z, 0.4)
         ctx.beginPath()
-        ctx.arc(b.x, b.y, 95, -Math.PI / 2, -Math.PI / 2 + Math.abs(b.progress) * Math.PI * 2)
+        ctx.arc(b.x, b.y, 95, -Math.PI / 2, -Math.PI / 2 + b.progress * Math.PI * 2)
         ctx.stroke()
       }
     }
@@ -351,7 +365,8 @@ export class Renderer {
     // an arc for a survey under way.
     for (const n of w.nodes) {
       if (!onScreen(n.x, n.y, SURVEY_RADIUS + 40)) continue
-      const mineCol = n.owner === -1 ? 'rgba(170,230,255,0.35)' : n.owner === view.me ? 'rgba(125,255,160,0.55)' : 'rgba(255,90,80,0.55)'
+      const mine = n.owner === w.players[view.me].team
+      const mineCol = n.owner === -1 ? 'rgba(170,230,255,0.35)' : mine ? 'rgba(125,255,160,0.55)' : 'rgba(255,90,80,0.55)'
       if (!n.site) {
         ctx.strokeStyle = mineCol
         ctx.lineWidth = 1.5 / z
@@ -360,13 +375,11 @@ export class Renderer {
         ctx.arc(n.x, n.y, SURVEY_RADIUS, 0, Math.PI * 2)
         ctx.stroke()
         ctx.setLineDash([])
-        const goingTo: Owner = n.progress < 0 ? 0 : 1
-        const full = (n.owner === 0 && n.progress <= -1) || (n.owner === 1 && n.progress >= 1)
-        if (n.progress !== 0 && !full) {
-          ctx.strokeStyle = goingTo === view.me ? '#7dffa0' : '#ff5a50'
+        if (n.progress > 0 && n.progress < 1 && n.claim >= 0) {
+          ctx.strokeStyle = teamColor(w, view.me, n.claim)
           ctx.lineWidth = 6 / Math.max(z, 0.4)
           ctx.beginPath()
-          ctx.arc(n.x, n.y, 112, -Math.PI / 2, -Math.PI / 2 + Math.abs(n.progress) * Math.PI * 2)
+          ctx.arc(n.x, n.y, 112, -Math.PI / 2, -Math.PI / 2 + n.progress * Math.PI * 2)
           ctx.stroke()
         }
       }
@@ -440,7 +453,8 @@ export class Renderer {
     }
 
     // Ships and stations, big ones first so fighters fly over them.
-    const shown = w.units.filter((u) => (u.owner === view.me || u.seen[view.me]) && onScreen(u.x, u.y, u.t.size))
+    const myTeam = w.players[view.me].team
+    const shown = w.units.filter((u) => u.seen[myTeam] && onScreen(u.x, u.y, u.t.size))
     shown.sort((a, b) => TIER_ORDER[a.t.tier] - TIER_ORDER[b.t.tier])
     for (const u of shown) this.drawUnit(ctx, u, w, z, view)
 
@@ -571,7 +585,7 @@ export class Renderer {
     f.fillRect(0, 0, fw, fh)
     f.globalCompositeOperation = 'destination-out'
     for (const u of w.units) {
-      if (u.owner !== view.me) continue
+      if (w.players[u.owner].team !== w.players[view.me].team) continue
       const r = (u.t.sensor * (building(u) ? 0.5 : 1) * z) / fs
       const sx = ((u.x - cam.x) * z + vw / 2) / fs
       const sy = ((u.y - cam.y) * z + vh / 2) / fs
@@ -593,14 +607,15 @@ export class Renderer {
 
     // Hover label: a hardpoint's name and health, or the ship's name.
     const hu = view.hover ? w.byId.get(view.hover) : undefined
-    if (hu && (hu.owner === view.me || hu.seen[view.me]) && !view.box) {
+    if (hu && hu.seen[w.players[view.me].team] && !view.box) {
       const hp = view.hoverHp >= 0 && hu.t.size * z > 90 ? view.hoverHp : -1
       const at = hp >= 0 ? hpPos(hu, hp) : { x: hu.x, y: hu.y - Math.max(...dims(hu.t)) * 0.5 }
       const sx = (at.x - cam.x) * z + vw / 2
       const sy = (at.y - cam.y) * z + vh / 2 - (hp >= 0 ? 18 : 22)
       const kind = hp >= 0 ? hu.t.hardpoints[hp].kind : null
       const st = hp >= 0 ? hu.hps[hp] : null
-      const title = kind ? HP_NAME[kind] : `${hu.owner === view.me ? '' : 'Enemy '}${hu.t.name}`
+      const rel = relColor(w, view.me, hu.owner)
+      const title = kind ? HP_NAME[kind] : `${rel === OWN ? '' : rel === ALLY ? 'Allied ' : 'Enemy '}${hu.t.name}`
       const sub = st ? (st.hp > 0 ? `${Math.ceil(st.hp)} / ${st.max}` : 'Destroyed') : `Hull ${Math.round((hu.hull / hu.hullMax) * 100)}%${hu.t.shield ? ` · Shield ${Math.round((hu.shield / shieldFull(hu)) * 100)}%` : ''}`
       ctx.font = '600 12px system-ui, sans-serif'
       const tw = Math.max(ctx.measureText(title).width, (ctx.font = '11px system-ui, sans-serif', ctx.measureText(sub).width)) + 20
@@ -608,7 +623,7 @@ export class Renderer {
       const bx = Math.min(vw - tw - 6, Math.max(6, sx - tw / 2))
       const by = Math.max(46, sy - th)
       ctx.fillStyle = 'rgba(6,10,22,0.9)'
-      ctx.strokeStyle = kind ? HP_COLOR[kind] : hu.owner === view.me ? 'rgba(125,255,160,0.6)' : 'rgba(255,90,80,0.6)'
+      ctx.strokeStyle = kind ? HP_COLOR[kind] : rel
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.roundRect(bx, by, tw, th, 6)
@@ -655,7 +670,7 @@ export class Renderer {
     const [sw, sh] = dims(t)
     const sel = view.selected.has(u.id)
     const hov = view.hover === u.id
-    const enemy = u.owner !== view.me
+    const rel = relColor(w, view.me, u.owner)
 
     // Engine glow, stronger at speed.
     if (t.engines.length && isShip(t)) {
@@ -679,9 +694,22 @@ export class Renderer {
       ctx.globalCompositeOperation = 'source-over'
     }
 
+    // Team ring: a faint ellipse in the relative colour, so allies and enemies of the same faction
+    // can be told apart.
+    if (view.rings && !sel && !hov) {
+      ctx.strokeStyle = rel
+      ctx.globalAlpha = t.tier === 'fighter' ? 0.35 : 0.28
+      ctx.lineWidth = Math.max(1 / z, 1.2)
+      ctx.beginPath()
+      const rr = Math.max(sw, sh) * 0.5 * k + 2 / z
+      ctx.ellipse(u.x, u.y, rr, rr * 0.92, 0, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.globalAlpha = 1
+    }
+
     // Selection ring underneath.
     if (sel || hov) {
-      ctx.strokeStyle = enemy ? '#ff5a50' : '#7dffa0'
+      ctx.strokeStyle = rel
       ctx.globalAlpha = sel ? 0.9 : 0.5
       ctx.lineWidth = 1.6 / z
       ctx.beginPath()
@@ -765,8 +793,9 @@ export class Renderer {
       })
     }
 
-    // Health and shield bars: selected, hovered, or recently hit.
-    if ((sel || hov || w.time - u.lastHit < 3) && !(t.tier === 'fighter' && !sel && !hov && z < 0.6)) {
+    // Health and shield bars: selected and hovered ships, plus recently hit ones (or every one).
+    const barsOn = sel || hov || (view.bars === 'always' ? isShip(t) || u.hull < u.hullMax : view.bars === 'damaged' && w.time - u.lastHit < 3)
+    if (barsOn && !(t.tier === 'fighter' && !sel && !hov && z < 0.6)) {
       const bw = Math.max(26 / z, Math.min(sw, sh) * 0.8 * k)
       const bh = 3.2 / z
       const by = u.y - Math.max(sw, sh) * 0.55 * k - 10 / z
@@ -814,7 +843,7 @@ export class Renderer {
     ctx.globalCompositeOperation = 'lighter'
     ctx.fillStyle = 'rgba(70,110,170,0.09)'
     for (const u of w.units) {
-      if (u.owner !== me) continue
+      if (w.players[u.owner].team !== w.players[me].team) continue
       ctx.beginPath()
       ctx.arc(X(u.x), Y(u.y), u.t.sensor * s, 0, Math.PI * 2)
       ctx.fill()
@@ -845,7 +874,7 @@ export class Renderer {
     for (const n of w.nodes) {
       const x = X(n.x)
       const y = Y(n.y)
-      ctx.fillStyle = n.owner === -1 ? '#4fe3d8' : n.owner === me ? '#7dffa0' : '#ff5a50'
+      ctx.fillStyle = n.owner === -1 ? '#4fe3d8' : teamColor(w, me, n.owner)
       ctx.beginPath()
       ctx.moveTo(x, y - 4)
       ctx.lineTo(x + 3, y)
@@ -858,7 +887,7 @@ export class Renderer {
     for (const b of w.beacons) {
       const x = X(b.x)
       const y = Y(b.y)
-      const col = b.owner === -1 ? '#c8d0e0' : b.owner === me ? '#7dffa0' : '#ff5a50'
+      const col = b.owner === -1 ? '#c8d0e0' : teamColor(w, me, b.owner)
       ctx.strokeStyle = col
       ctx.lineWidth = 1.5
       ctx.beginPath()
@@ -870,22 +899,22 @@ export class Renderer {
         ctx.fill()
         ctx.globalAlpha = 1
       }
-      if (b.progress !== 0 && Math.abs(b.progress) < 1) {
-        ctx.strokeStyle = (b.progress < 0 ? 0 : 1) === me ? '#7dffa0' : '#ff5a50'
+      if (b.progress > 0 && b.progress < 1 && b.claim >= 0) {
+        ctx.strokeStyle = teamColor(w, me, b.claim)
         ctx.lineWidth = 2
         ctx.beginPath()
-        ctx.arc(x, y, 8, -Math.PI / 2, -Math.PI / 2 + Math.abs(b.progress) * Math.PI * 2)
+        ctx.arc(x, y, 8, -Math.PI / 2, -Math.PI / 2 + b.progress * Math.PI * 2)
         ctx.stroke()
       }
     }
     // Ships as dots sized by class; mines and stations as framed squares.
     for (const u of w.units) {
-      if (u.owner !== me && !u.seen[me]) continue
+      if (!u.seen[w.players[me].team]) continue
       // The filter tabs under the map.
       if (filter === 'ships' && !isShip(u.t)) continue
       if (filter === 'stations' && isShip(u.t)) continue
-      if (filter === 'enemies' && u.owner === me) continue
-      const col = u.owner === me ? '#7dffa0' : '#ff5a50'
+      if (filter === 'enemies' && !foes(w, u.owner, me)) continue
+      const col = relColor(w, me, u.owner)
       const x = X(u.x)
       const y = Y(u.y)
       if (u.t.tier === 'station' || u.t.tier === 'mine' || u.t.tier === 'defense') {

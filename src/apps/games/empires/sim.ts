@@ -1,3 +1,4 @@
+import { mirrored, type MapDef } from './maps'
 import {
   ABILITIES, BASE_POP, BEACON_INCOME, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   STATION_LEVEL_BONUS, SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UPGRADES, accuracy, dims, effect, isShip, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
@@ -9,8 +10,13 @@ import {
 // calling `tick` at a fixed step and reading `events` for sound and effects.
 
 export const STEP = 1 / 30
-export type Owner = 0 | 1
-export const other = (o: Owner): Owner => (o === 0 ? 1 : 0)
+/** A player's index in `world.players`. Players on the same team share vision and win together. */
+export type Owner = number
+/** Whether two players are on opposite sides. */
+export const foes = (w: World, a: Owner, b: Owner) => w.players[a].team !== w.players[b].team
+export const teamOf = (w: World, o: Owner) => w.players[o].team
+/** Whether player `o`'s team can see unit `u`. */
+export const sees = (w: World, o: Owner, u: Unit) => u.seen[w.players[o].team]
 
 export type Order =
   | { k: 'idle' }
@@ -60,8 +66,8 @@ export type Unit = {
   building: number
   node: number
   dead: boolean
-  /** Visible to each player, refreshed a few times a second. */
-  seen: [boolean, boolean]
+  /** Visible to each team, refreshed a few times a second. */
+  seen: boolean[]
   born: number
   kills: number
   mods: Mods
@@ -74,6 +80,11 @@ export type QueueItem = { unit: string; left: number; total: number }
 export type ResearchItem = { id: string; left: number; total: number }
 export type Player = {
   faction: FactionId
+  team: number
+  /** Which of the map's spawn points this player started at. */
+  spawn: number
+  /** Still has a station. */
+  alive: boolean
   credits: number
   income: number
   incomeMul: number
@@ -88,10 +99,12 @@ export type Player = {
   lastAlarm: number
   stats: { built: number; lost: number; killed: number; earned: number }
 }
-/** An ore asteroid. `site` is the structure on it (0 if none); `owner` is who surveyed it, and
- * `progress` runs from -1 (fully player 0's) to 1 (fully player 1's), like a beacon. */
-export type OreNode = { id: number; x: number; y: number; r: number; rot: number; site: number; owner: Owner | -1; progress: number }
-export type Beacon = { id: number; x: number; y: number; owner: Owner | -1; progress: number }
+/** Something teams take by parking ships at it. `owner` is the team holding it (-1 for nobody);
+ * `claim` is the team the progress bar (0 to 1) belongs to. */
+export type Claimable = { owner: number; claim: number; progress: number }
+/** An ore asteroid. `site` is the structure on it (0 if none); `owner` is the team that surveyed it. */
+export type OreNode = { id: number; x: number; y: number; r: number; rot: number; site: number } & Claimable
+export type Beacon = { id: number; x: number; y: number } & Claimable
 export type Rock = { x: number; y: number; r: number; rot: number; spin: number; kind: number }
 export type Shot = {
   x: number; y: number; vx: number; vy: number; left: number; kind: WeaponKind; owner: Owner; target: number; hp: number; dmg: number; hit: boolean; sx: number; sy: number; age: number; from: number
@@ -103,8 +116,10 @@ export type SimEvent =
   | { k: 'boom'; x: number; y: number; tier: Tier; owner: Owner; size: number }
   | { k: 'hpdown'; x: number; y: number; owner: Owner; what: string }
   | { k: 'built'; owner: Owner; unit: string; x: number; y: number }
-  | { k: 'beacon'; owner: Owner | -1; prev: Owner | -1; x: number; y: number }
-  | { k: 'survey'; owner: Owner | -1; prev: Owner | -1; node: number; x: number; y: number }
+  /** `owner` and `prev` are teams here. */
+  | { k: 'beacon'; owner: number; prev: number; x: number; y: number }
+  | { k: 'survey'; owner: number; prev: number; node: number; x: number; y: number }
+  | { k: 'out'; owner: Owner }
   | { k: 'alarm'; owner: Owner; x: number; y: number; what: string }
   | { k: 'level'; owner: Owner; level: number }
   | { k: 'tech'; owner: Owner; id: string }
@@ -117,14 +132,17 @@ export type World = {
   time: number
   units: Unit[]
   byId: Map<number, Unit>
-  players: [Player, Player]
+  players: Player[]
+  teams: number
+  map: MapDef
   nodes: OreNode[]
   beacons: Beacon[]
   rocks: Rock[]
   shots: Shot[]
   events: SimEvent[]
   nextId: number
-  winner: Owner | -1
+  /** The winning team, or -1 while the battle goes on. */
+  winner: number
   grid: Map<number, Unit[]>
   seenT: number
 }
@@ -216,9 +234,6 @@ function fightRange(t: UnitType) {
 
 // --- Setup -----------------------------------------------------------------------------------------
 
-export const MAP_W = 5600
-export const MAP_H = 3400
-
 export function spawn(w: World, id: string, owner: Owner, x: number, y: number, a: number, squad = 0): Unit {
   const t = UNIT[id]
   const lvl = t.tier === 'station' ? w.players[owner].level : 1
@@ -231,7 +246,8 @@ export function spawn(w: World, id: string, owner: Owner, x: number, y: number, 
       ...g, cd: Math.random() * g.w.cooldown, burst: 0, burstT: 0, target: 0, aim: 0,
     })),
     order: { k: 'idle' }, ax: x, ay: y, squad, parent: 0, target: 0, retarget: Math.random() * 0.5, lastHit: -99, shieldHit: -99, hitAngle: 0,
-    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, seen: [owner === 0, owner === 1], born: w.time, kills: 0, hold: false,
+    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, hold: false,
+    seen: Array.from({ length: w.teams }, (_, t) => t === w.players[owner].team),
   }
   w.units.push(u)
   w.byId.set(u.id, u)
@@ -254,68 +270,78 @@ export function spawnGroup(w: World, id: string, owner: Owner, x: number, y: num
   return out
 }
 
-export function newWorld(f0: FactionId, f1: FactionId, opts: { seed?: number; incomeMul?: [number, number]; credits?: number } = {}): World {
-  const r = rng(opts.seed ?? Math.floor(Math.random() * 1e9))
-  const W = MAP_W
-  const H = MAP_H
-  const player = (faction: FactionId, o: Owner): Player => ({
-    faction, credits: opts.credits ?? START_CREDITS, income: 0, incomeMul: opts.incomeMul?.[o] ?? 1, level: 1, station: 0, queue: [], research: [], techs: [],
-    rally: { x: o === 0 ? 1250 : W - 1250, y: H / 2 }, pop: 0, popCap: BASE_POP, lastAlarm: -99, stats: { built: 0, lost: 0, killed: 0, earned: 0 },
-  })
+/** One player at the start of a battle. */
+export type Seat = { faction: FactionId; team: number; spawn: number; incomeMul?: number }
+
+export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; credits?: number } = {}): World {
+  const r = rng(opts.seed ?? map.seed)
+  const W = map.w
+  const H = map.h
+  const c = { x: W / 2, y: H / 2 }
+  const teams = Math.max(...seats.map((s) => s.team)) + 1
   const w: World = {
-    w: W, h: H, time: 0, units: [], byId: new Map(), players: [player(f0, 0), player(f1, 1)], nodes: [], beacons: [], rocks: [], shots: [], events: [],
+    w: W, h: H, time: 0, units: [], byId: new Map(), players: [], teams, map, nodes: [], beacons: [], rocks: [], shots: [], events: [],
     nextId: 1, winner: -1, grid: new Map(), seenT: 0,
   }
-  // Ore: three per side, mirrored, and two in the contested middle.
-  const half = [
-    [1150, 640],
-    [1150, H - 640],
-    [2050, H / 2 - 520],
-  ]
-  let nid = 0
-  for (const [x, y] of half) {
-    w.nodes.push({ id: nid++, x, y, r: 75, rot: r() * TAU, site: 0, owner: -1, progress: 0 })
-    w.nodes.push({ id: nid++, x: W - x, y: H - y, r: 75, rot: r() * TAU, site: 0, owner: -1, progress: 0 })
-  }
-  w.nodes.push({ id: nid++, x: W / 2 - 160, y: H / 2 - 950, r: 75, rot: r() * TAU, site: 0, owner: -1, progress: 0 })
-  w.nodes.push({ id: nid++, x: W / 2 + 160, y: H / 2 + 950, r: 75, rot: r() * TAU, site: 0, owner: -1, progress: 0 })
-  w.beacons = [
-    { id: 0, x: W / 2, y: 430, owner: -1, progress: 0 },
-    { id: 1, x: W / 2, y: H / 2, owner: -1, progress: 0 },
-    { id: 2, x: W / 2, y: H - 430, owner: -1, progress: 0 },
-  ]
-  // Asteroid fields, mirrored through the centre so neither side gets the better lanes.
-  const keepClear = [
-    ...w.nodes.map((n) => [n.x, n.y, 260]),
-    ...w.beacons.map((b) => [b.x, b.y, 330]),
-    [650, H / 2, 700],
-    [W - 650, H / 2, 700],
-  ]
+  w.players = seats.map((s) => {
+    const sp = map.spawns[s.spawn]
+    const d = Math.hypot(c.x - sp.x, c.y - sp.y) || 1
+    return {
+      faction: s.faction, team: s.team, spawn: s.spawn, alive: true, credits: opts.credits ?? START_CREDITS, income: 0, incomeMul: s.incomeMul ?? 1, level: 1, station: 0,
+      queue: [], research: [], techs: [], rally: { x: sp.x + ((c.x - sp.x) / d) * 600, y: sp.y + ((c.y - sp.y) / d) * 600 }, pop: 0, popCap: BASE_POP, lastAlarm: -99,
+      stats: { built: 0, lost: 0, killed: 0, earned: 0 },
+    }
+  })
+  const claim = { owner: -1, claim: -1, progress: 0 }
+  w.nodes = map.ore.map((p, id) => ({ id, x: p.x, y: p.y, r: 75, rot: r() * TAU, site: 0, ...claim }))
+  w.beacons = map.beacons.map((p, id) => ({ id, x: p.x, y: p.y, ...claim }))
+  // Asteroid fields: each one is copied to every side by the map's symmetry, so nobody gets the
+  // better lanes. They keep clear of stations, ore, beacons and the lanes into the middle.
+  const keepClear = [...w.nodes.map((n) => [n.x, n.y, 260]), ...w.beacons.map((b) => [b.x, b.y, 330]), ...map.spawns.map((p) => [p.x, p.y, 700])]
+  const inLane = (x: number, y: number, rad: number) =>
+    map.spawns.some((p) => {
+      // Distance from the point to the segment between this spawn and the centre.
+      const vx = c.x - p.x
+      const vy = c.y - p.y
+      const t = clamp(((x - p.x) * vx + (y - p.y) * vy) / (vx * vx + vy * vy), 0, 1)
+      return d2(x, y, p.x + vx * t, p.y + vy * t) < (240 + rad) ** 2
+    })
   let tries = 0
-  while (w.rocks.length < 44 && tries++ < 2000) {
-    const cx = 300 + r() * (W / 2 - 300)
+  while (w.rocks.length < map.rocks && tries++ < 4000) {
+    const cx = 250 + r() * (W - 500)
     const cy = 200 + r() * (H - 400)
     const rad = 30 + r() ** 2 * 110
-    if (keepClear.some(([x, y, c]) => d2(cx, cy, x, y) < (c + rad) ** 2)) continue
-    if (Math.abs(cy - H / 2) < 260 && cx > 900) continue // keep the centre lane open
-    if (w.rocks.some((k) => d2(cx, cy, k.x, k.y) < (k.r + rad + 40) ** 2)) continue
+    const copies = mirrored(map, { x: cx, y: cy })
+    const ok = copies.every(
+      (p) =>
+        p.x > 150 && p.y > 150 && p.x < W - 150 && p.y < H - 150 &&
+        !keepClear.some(([x, y, cc]) => d2(p.x, p.y, x, y) < (cc + rad) ** 2) &&
+        !inLane(p.x, p.y, rad) &&
+        !w.rocks.some((k) => d2(p.x, p.y, k.x, k.y) < (k.r + rad + 40) ** 2),
+    )
+    if (!ok) continue
     const kind = r() < 0.5 ? 0 : 1
     const rot = r() * TAU
     const spin = (r() - 0.5) * 0.1
-    w.rocks.push({ x: cx, y: cy, r: rad, rot, spin, kind }, { x: W - cx, y: H - cy, r: rad, rot: rot + Math.PI, spin, kind })
+    copies.forEach((p, i) => w.rocks.push({ x: p.x, y: p.y, r: rad, rot: rot + i * 2.1, spin, kind }))
   }
-  // Stations and a starting patrol. Ore has to be surveyed before anything is built on it.
-  for (const o of [0, 1] as Owner[]) {
-    const f = w.players[o].faction
-    const sx = o === 0 ? 650 : W - 650
-    const face = o === 0 ? 0 : Math.PI
-    const st = spawn(w, unitOf(f, 'station').id, o, sx, H / 2, face - Math.PI / 2)
-    w.players[o].station = st.id
-    const dir = o === 0 ? 1 : -1
-    spawnGroup(w, unitOf(f, 'fighter').id, o, sx + dir * 420, H / 2 - 120, face)
-    spawn(w, unitOf(f, 'gunship').id, o, sx + dir * 380, H / 2 + 140, face)
-    spawn(w, unitOf(f, 'gunship').id, o, sx + dir * 470, H / 2 + 230, face)
-  }
+  // Stations, facing the middle, and a starting patrol in front of each. Ore has to be surveyed
+  // before anything is built on it.
+  w.players.forEach((p, o) => {
+    const sp = map.spawns[p.spawn]
+    const face = Math.atan2(c.y - sp.y, c.x - sp.x)
+    const fx = Math.cos(face)
+    const fy = Math.sin(face)
+    const at = (ahead: number, side: number) => ({ x: sp.x + fx * ahead - fy * side, y: sp.y + fy * ahead + fx * side })
+    const st = spawn(w, unitOf(p.faction, 'station').id, o, sp.x, sp.y, face - Math.PI / 2)
+    p.station = st.id
+    const f1 = at(420, -120)
+    const g1 = at(380, 140)
+    const g2 = at(470, 230)
+    spawnGroup(w, unitOf(p.faction, 'fighter').id, o, f1.x, f1.y, face)
+    spawn(w, unitOf(p.faction, 'gunship').id, o, g1.x, g1.y, face)
+    spawn(w, unitOf(p.faction, 'gunship').id, o, g2.x, g2.y, face)
+  })
   refreshPlayers(w)
   return w
 }
@@ -365,7 +391,7 @@ export function cmdHold(w: World, owner: Owner, ids: number[]) {
 
 export function cmdAttack(w: World, owner: Owner, ids: number[], target: number, hp = -1) {
   const t = w.byId.get(target)
-  if (!t || t.dead || t.owner === owner) return
+  if (!t || t.dead || !foes(w, t.owner, owner)) return
   for (const i of ids) {
     const u = w.byId.get(i)
     if (!commandable(u, owner)) continue
@@ -399,7 +425,7 @@ export function cmdAbility(w: World, owner: Owner, ids: number[]) {
     u.abilityOn = ab.duration
     if (u.t.ability === 'shieldBoost') u.shield = Math.min(shieldMax(u), u.shield + shieldMax(u) * 0.5)
     if (u.t.ability === 'tractor')
-      for (const e of w.units) if (!e.dead && e.owner !== owner && isShip(e.t) && d2(e.x, e.y, u.x, u.y) < ab.range! ** 2) e.slow = ab.duration
+      for (const e of w.units) if (!e.dead && foes(w, e.owner, owner) && isShip(e.t) && d2(e.x, e.y, u.x, u.y) < ab.range! ** 2) e.slow = ab.duration
     if (u.t.ability === 'launchSwarm') for (let k = 0; k < 2; k++) launch(w, u, true)
     w.events.push({ k: 'ability', owner, id: u.t.ability, x: u.x, y: u.y })
     used++
@@ -515,8 +541,8 @@ export function cantSite(w: World, owner: Owner, node: number, tier: 'mine' | 'd
   const p = w.players[owner]
   if (!n) return 'No ore there'
   if (n.site) return 'Something is already built here'
-  if (n.owner !== owner) return 'Survey it first: keep ships near it for a few seconds'
-  if (w.units.some((u) => !u.dead && u.owner !== owner && isShip(u.t) && u.t.tier !== 'fighter' && d2(u.x, u.y, n.x, n.y) < SURVEY_RADIUS ** 2)) return 'Enemy ships are in the way'
+  if (n.owner !== p.team) return 'Survey it first: keep ships near it for a few seconds'
+  if (w.units.some((u) => !u.dead && foes(w, u.owner, owner) && isShip(u.t) && u.t.tier !== 'fighter' && d2(u.x, u.y, n.x, n.y) < SURVEY_RADIUS ** 2)) return 'Enemy ships are in the way'
   if (p.credits < unitOf(p.faction, tier).cost) return 'Not enough credits'
   return null
 }
@@ -572,7 +598,7 @@ export function near(w: World, x: number, y: number, r: number, fn: (u: Unit, dd
 }
 
 function refreshPlayers(w: World) {
-  for (const o of [0, 1] as Owner[]) {
+  for (let o = 0; o < w.players.length; o++) {
     const p = w.players[o]
     let pop = 0
     let mines = 0
@@ -581,7 +607,7 @@ function refreshPlayers(w: World) {
       if (!u.parent) pop += u.t.pop / u.t.squad
       if (u.t.tier === 'mine' && !building(u)) mines++
     }
-    const beacons = w.beacons.filter((b) => b.owner === o).length
+    const beacons = w.beacons.filter((b) => b.owner === p.team).length
     p.pop = Math.round(pop)
     p.popCap = BASE_POP + (p.level - 1) * POP_PER_LEVEL + beacons * BEACON_POP
     const ore = MINE_INCOME * (1 + (techBonus(p, stationOf(p)).mines ?? 0))
@@ -612,7 +638,13 @@ function kill(w: World, u: Unit, by: Owner | -1) {
   w.players[u.owner].stats.lost++
   if (by !== -1) w.players[by].stats.killed++
   if (u.node >= 0 && w.nodes[u.node].site === u.id) w.nodes[u.node].site = 0
-  if (u.t.tier === 'station' && w.winner === -1) w.winner = other(u.owner)
+  if (u.t.tier === 'station') {
+    // A player whose station falls is out; the last team with a station standing wins.
+    w.players[u.owner].alive = false
+    w.events.push({ k: 'out', owner: u.owner })
+    const standing = new Set(w.players.filter((p) => p.alive).map((p) => p.team))
+    if (standing.size === 1 && w.winner === -1) w.winner = [...standing][0]
+  }
 }
 
 function alarm(w: World, u: Unit) {
@@ -661,7 +693,7 @@ export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: num
 
 function valid(w: World, id: number, owner: Owner) {
   const t = w.byId.get(id)
-  return t && !t.dead && t.owner !== owner && t.seen[owner] ? t : undefined
+  return t && !t.dead && foes(w, t.owner, owner) && sees(w, owner, t) ? t : undefined
 }
 
 /** The best thing for a ship to shoot within `r`: what its guns hurt most, nearest first. */
@@ -669,7 +701,7 @@ function pickTarget(w: World, u: Unit, r: number) {
   let best: Unit | undefined
   let score = 0
   near(w, u.x, u.y, r, (e, dd) => {
-    if (e.owner === u.owner || !e.seen[u.owner]) return
+    if (!foes(w, e.owner, u.owner) || !sees(w, u.owner, e)) return
     const s = (dpsVs(u.t, e.t.tier) + 0.01) / (Math.sqrt(dd) + 250) * (e.t.tier === 'mine' ? 0.6 : 1)
     if (s > score) {
       score = s
@@ -872,11 +904,11 @@ function shoot(w: World, u: Unit, dt: number) {
       return true
     }
     let e: Unit | undefined
-    if (primary && !primary.dead && primary.seen[u.owner] && effect(g.w.kind, primary.t.tier) >= 0.3 && inReach(primary)) e = primary
+    if (primary && !primary.dead && foes(w, primary.owner, u.owner) && sees(w, u.owner, primary) && effect(g.w.kind, primary.t.tier) >= 0.3 && inReach(primary)) e = primary
     else {
       let score = 0
       near(w, from.x, from.y, g.w.range + 200, (o, dd) => {
-        if (o.owner === u.owner || !o.seen[u.owner] || !inReach(o)) return
+        if (!foes(w, o.owner, u.owner) || !sees(w, u.owner, o) || !inReach(o)) return
         const s = (effect(g.w.kind, o.t.tier) * accuracy(g.w.kind, o.t.tier)) / (Math.sqrt(dd) + 200)
         if (s > score) {
           score = s
@@ -933,7 +965,7 @@ function moveShots(w: World, dt: number) {
 }
 
 function economy(w: World, dt: number) {
-  for (const o of [0, 1] as Owner[]) {
+  for (let o = 0; o < w.players.length; o++) {
     const p = w.players[o]
     const st = w.byId.get(p.station)
     if (!st || st.dead) continue
@@ -977,27 +1009,45 @@ function economy(w: World, dt: number) {
   }
 }
 
+/**
+ * Taking a beacon or surveying ore. With ships of one team alone near it, that team's progress
+ * fills up and it becomes theirs; a spot someone else holds (or half-claimed) has to be wound back
+ * to nothing first. Contested spots freeze; abandoned ones drift back to whoever holds them.
+ * Returns the previous owner when the owner changed.
+ */
+function claim(c: Claimable, power: number[], rate: number, drift: number): number | null {
+  const present = power.map((p, t) => (p > 0 ? t : -1)).filter((t) => t >= 0)
+  const prev = c.owner
+  if (present.length === 1) {
+    const t = present[0]
+    const step = rate * Math.min(2, Math.sqrt(power[t]))
+    if ((c.owner !== -1 && c.owner !== t) || (c.claim !== t && c.progress > 0)) {
+      c.progress = Math.max(0, c.progress - step)
+      if (c.progress === 0) {
+        c.owner = -1
+        c.claim = t
+      }
+    } else {
+      c.claim = t
+      c.progress = Math.min(1, c.progress + step)
+      if (c.progress === 1) c.owner = t
+    }
+  } else if (present.length === 0) {
+    const home = c.owner !== -1 ? 1 : 0
+    if (c.owner !== -1) c.claim = c.owner
+    c.progress += clamp(home - c.progress, -drift, drift)
+  }
+  return c.owner !== prev ? prev : null
+}
+
 function beacons(w: World, dt: number) {
   for (const b of w.beacons) {
-    const power = [0, 0]
+    const power = new Array(w.teams).fill(0)
     near(w, b.x, b.y, 320, (u) => {
-      if (!isShip(u.t)) return
-      power[u.owner] += u.t.tier === 'fighter' ? 0.25 : 1
+      if (isShip(u.t)) power[w.players[u.owner].team] += u.t.tier === 'fighter' ? 0.25 : 1
     })
-    const prev = b.owner
-    // -1 is fully player 0's, +1 fully player 1's.
-    if (power[0] > 0 && power[1] === 0) b.progress -= (dt / 14) * Math.min(2, Math.sqrt(power[0]))
-    else if (power[1] > 0 && power[0] === 0) b.progress += (dt / 14) * Math.min(2, Math.sqrt(power[1]))
-    else if (power[0] === 0 && power[1] === 0) {
-      const home = b.owner === 0 ? -1 : b.owner === 1 ? 1 : 0
-      b.progress += clamp(home - b.progress, -dt / 40, dt / 40)
-    }
-    b.progress = clamp(b.progress, -1, 1)
-    if (b.owner === 0 && b.progress >= 0) b.owner = -1
-    if (b.owner === 1 && b.progress <= 0) b.owner = -1
-    if (b.owner === -1 && b.progress <= -1) b.owner = 0
-    if (b.owner === -1 && b.progress >= 1) b.owner = 1
-    if (b.owner !== prev) w.events.push({ k: 'beacon', owner: b.owner, prev, x: b.x, y: b.y })
+    const prev = claim(b, power, dt / 14, dt / 40)
+    if (prev !== null) w.events.push({ k: 'beacon', owner: b.owner, prev, x: b.x, y: b.y })
   }
 }
 
@@ -1006,48 +1056,38 @@ function beacons(w: World, dt: number) {
 function survey(w: World, dt: number) {
   for (const n of w.nodes) {
     if (n.site) continue
-    const here = [false, false]
+    const power = new Array(w.teams).fill(0)
     near(w, n.x, n.y, SURVEY_RADIUS, (u) => {
-      if (isShip(u.t)) here[u.owner] = true
+      if (isShip(u.t)) power[w.players[u.owner].team] = 1
     })
-    const prev = n.owner
-    const rate = dt / SURVEY_TIME
-    if (here[0] && !here[1]) n.progress -= rate
-    else if (here[1] && !here[0]) n.progress += rate
-    else if (!here[0] && !here[1]) {
-      const home = n.owner === 0 ? -1 : n.owner === 1 ? 1 : 0
-      n.progress += clamp(home - n.progress, -dt / 30, dt / 30)
-    }
-    n.progress = clamp(n.progress, -1, 1)
-    if (n.owner === 0 && n.progress >= 0) n.owner = -1
-    if (n.owner === 1 && n.progress <= 0) n.owner = -1
-    if (n.owner === -1 && n.progress <= -1) n.owner = 0
-    if (n.owner === -1 && n.progress >= 1) n.owner = 1
-    if (n.owner !== prev) w.events.push({ k: 'survey', owner: n.owner, prev, node: n.id, x: n.x, y: n.y })
+    const prev = claim(n, power, dt / SURVEY_TIME, dt / 30)
+    if (prev !== null) w.events.push({ k: 'survey', owner: n.owner, prev, node: n.id, x: n.x, y: n.y })
   }
 }
 
+/** What each team can see: anything within sensor range of one of its ships or structures. */
 function sight(w: World) {
-  const eyes: [Unit[], Unit[]] = [[], []]
-  for (const u of w.units) if (!u.dead) eyes[u.owner].push(u)
+  const eyes: Unit[][] = Array.from({ length: w.teams }, () => [])
+  for (const u of w.units) if (!u.dead) eyes[w.players[u.owner].team].push(u)
   for (const u of w.units) {
     if (u.dead) continue
-    const o = other(u.owner)
-    u.seen[u.owner] = true
-    // Big structures are always on the map: everyone knows where the stations are.
-    if (u.t.tier === 'station') {
-      u.seen[o] = true
-      continue
-    }
-    let s = false
-    for (const e of eyes[o]) {
-      const r = e.t.sensor * (building(e) ? 0.5 : 1)
-      if (d2(u.x, u.y, e.x, e.y) < r * r) {
-        s = true
-        break
+    const own = w.players[u.owner].team
+    for (let t = 0; t < w.teams; t++) {
+      // Stations are always on the map: everyone knows where they are.
+      if (t === own || u.t.tier === 'station') {
+        u.seen[t] = true
+        continue
       }
+      let s = false
+      for (const e of eyes[t]) {
+        const r = e.t.sensor * (building(e) ? 0.5 : 1)
+        if (d2(u.x, u.y, e.x, e.y) < r * r) {
+          s = true
+          break
+        }
+      }
+      u.seen[t] = s
     }
-    u.seen[o] = s
   }
 }
 

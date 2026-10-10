@@ -1,12 +1,11 @@
 import { useState, type ReactNode } from 'react'
-import { DIFFICULTY, type Difficulty } from './ai'
 import {
   ABILITIES, FACTIONS, LEVEL_UP, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
   type UnitType,
 } from './data'
 import { HP_COLOR, HP_ICON, HP_NAME } from './icons'
 import { spriteUrl } from './render'
-import { building, cantBuild, cantResearch, cantSite, other, researchCost, shieldFull, shieldMax, techBonus, type OreNode, type Owner, type ResearchItem, type Unit, type World } from './sim'
+import { building, cantBuild, cantResearch, cantSite, researchCost, shieldFull, shieldMax, techBonus, type OreNode, type Owner, type ResearchItem, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard and game speed; and along the bottom the tactical map, a details panel for whatever is
@@ -26,6 +25,7 @@ export type Hud = {
   sel: number[]
   winner: Owner | -1
   beacons: number
+  beaconsAll: number
   mines: number
 }
 /** What a left-click on the battlefield does: select, or carry out a command picked from the grid. */
@@ -217,7 +217,7 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
         <b>{hud.mines}</b>
         <span className="ew-beacon"><Icon name="beacon" size={17} /></span>
         <b>{hud.beacons}</b>
-        <small>/ 3</small>
+        <small>/ {hud.beaconsAll}</small>
       </div>
       <button className={`ew-top-cell ew-yardchip ${q ? 'is-busy' : ''}`} onClick={onShipyard} title="Select the station to build and research (H)">
         <Icon name="yard" size={18} />
@@ -260,10 +260,10 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
 
 // --- Tactical map -----------------------------------------------------------------------------------
 
-export function TacticalMap({ canvas, faction, enemy, filter, onFilter, onStation, onAlert, onIdle, onArmy, onPointer }: {
+export function TacticalMap({ canvas, sides, filter, onFilter, onStation, onAlert, onIdle, onArmy, onPointer }: {
   canvas: React.RefObject<HTMLCanvasElement | null>
-  faction: FactionId
-  enemy: FactionId
+  /** Who's fighting whom: "1 v 1", "2 v 2". */
+  sides: string
   filter: MapFilter
   onFilter: (f: MapFilter) => void
   onStation: () => void
@@ -279,7 +279,7 @@ export function TacticalMap({ canvas, faction, enemy, filter, onFilter, onStatio
     ['enemies', 'Enemies'],
   ]
   return (
-    <Frame className="ew-mapframe" title="Tactical map" aside={<span className="ew-muted ew-small">{FACTIONS[faction].name} · {FACTIONS[enemy].name}</span>}>
+    <Frame className="ew-mapframe" title="Tactical map" aside={<span className="ew-muted ew-small">{sides}</span>}>
       <div className="ew-mapbody">
         <div className="ew-maptools">
           <button onClick={onStation} title="Select the station (H)" aria-label="Station"><Icon name="target" size={17} /></button>
@@ -566,8 +566,9 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
   const { u, squad, me, w } = p
   const t = u.t
   const mine = u.owner === me
+  const ally = !mine && w.players[u.owner].team === w.players[me].team
   return (
-    <Frame className={`ew-detail is-unit ${mine ? '' : 'is-enemy'}`}>
+    <Frame className={`ew-detail is-unit ${mine ? '' : ally ? 'is-ally' : 'is-enemy'}`}>
       <div className="ew-detail-side">
         {u.hps.length ? <Schematic u={u} size={104} /> : <img className="ew-portrait" src={spriteUrl(t.sprite)} alt="" />}
       </div>
@@ -577,7 +578,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
             {t.name}
             {squad.length > 1 ? ` ×${squad.length}` : ''}
           </strong>
-          <span className={`ew-tag ${mine ? '' : 'is-enemy'}`}>{mine ? t.tier : `enemy ${t.tier}`}</span>
+          <span className={`ew-tag ${mine ? '' : ally ? 'is-ally' : 'is-enemy'}`}>{mine ? t.tier : `${ally ? 'allied' : 'enemy'} ${t.tier}`}</span>
           {mine && <span className="ew-muted ew-small ew-orders">{orderText(w, u)}{u.kills > 0 ? ` · ${u.kills} kills` : ''}</span>}
         </header>
         <span className="ew-muted ew-small">{t.blurb}</span>
@@ -591,7 +592,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
             ))}
           </div>
         )}
-        {!mine && u.hps.length > 0 && <span className="ew-muted ew-small">Select your ships, hover this one and right-click a marker to target that hardpoint.</span>}
+        {!mine && !ally && u.hps.length > 0 && <span className="ew-muted ew-small">Select your ships, hover this one and right-click a marker to target that hardpoint.</span>}
       </div>
     </Frame>
   )
@@ -712,93 +713,5 @@ export function SelectionPanel({ sel, me, mode, onCommand, onPick }: {
         )}
       </div>
     </Frame>
-  )
-}
-
-// --- Overlays ---------------------------------------------------------------------------------------
-
-export function Settings({ volume, muted, onVolume, onMute, onHelp, onClose }: {
-  volume: number; muted: boolean; onVolume: (v: number) => void; onMute: () => void; onHelp: () => void; onClose: () => void
-}) {
-  return (
-    <div className="ew-popover-back" onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()}>
-        <Frame className="ew-popover" title="Settings">
-          <label className="ew-range">
-            <span>Volume</span>
-            <input type="range" min={0} max={1} step={0.05} value={volume} onChange={(e) => onVolume(Number(e.target.value))} />
-            <b>{Math.round(volume * 100)}%</b>
-          </label>
-          <div className="ew-popover-row">
-            <button onClick={onMute}>
-              <Icon name={muted ? 'mute' : 'sound'} /> {muted ? 'Sound off' : 'Sound on'}
-            </button>
-            <button onClick={onHelp}>
-              <Icon name="help" /> Controls
-            </button>
-          </div>
-        </Frame>
-      </div>
-    </div>
-  )
-}
-
-// --- ---------------------------------------------------------------------------------------
-
-export function Help({ onClose }: { onClose: () => void }) {
-  return (
-    <div className="ew-overlay" onClick={onClose}>
-      <div className="ew-card ew-help" onClick={(e) => e.stopPropagation()}>
-        <h2>Controls</h2>
-        <dl>
-          <dt>WASD · arrows</dt><dd>Move the camera (also middle-drag; wheel zooms)</dd>
-          <dt>Left-drag</dt><dd>Select ships</dd>
-          <dt>Click / Shift-click</dt><dd>Select / add; double-click selects that type on screen</dd>
-          <dt>Right-click</dt><dd>Move, or attack what's under the cursor. On a hardpoint marker: target it</dd>
-          <dt>M · R · T, then click</dt><dd>Move · attack-move · patrol (also from the command grid)</dd>
-          <dt>X · G · Q</dt><dd>Stop · hold position · use ability</dd>
-          <dt>Y, then click</dt><dd>Set the station's rally point (station selected)</dd>
-          <dt>H</dt><dd>Select the station (its shipyard builds ships)</dd>
-          <dt>Ctrl+1–9 · 1–9</dt><dd>Set group · select group (twice to jump to it)</dd>
-          <dt>Space · F</dt><dd>Jump to the last alert · to the selection</dd>
-          <dt>P</dt><dd>Pause</dd>
-          <dt>Ore</dt><dd>Keep ships at an ore asteroid to survey it; click it to build a mining or defense platform</dd>
-          <dt>Touch</dt><dd>Drag to pan, pinch to zoom, tap a ship then tap where it should go</dd>
-        </dl>
-        <h3>Tips</h3>
-        <ul>
-          <li>Flak shreds fighters; turbolasers can't track them. Fighter torpedoes wreck cruisers and flagships.</li>
-          <li>Missiles and torpedoes slip through shields. Destroyed shield generators cap the shields.</li>
-          <li>Engines down: the ship crawls. Hangars down: no more fighters, and the shipyard slows.</li>
-        </ul>
-        <button className="ew-go" onClick={onClose}>Got it</button>
-      </div>
-    </div>
-  )
-}
-
-export function Result({ w, me, won, difficulty, onAgain, onExit }: { w: World; me: Owner; won: boolean; difficulty: Difficulty; onAgain: () => void; onExit: () => void }) {
-  const p = w.players[me]
-  const e = w.players[other(me)]
-  return (
-    <div className="ew-overlay">
-      <div className={`ew-card ew-result ${won ? 'is-won' : 'is-lost'}`}>
-        <h2>{won ? 'Victory' : 'Defeat'}</h2>
-        <p className="ew-muted">
-          {won ? `The ${FACTIONS[e.faction].name} station is destroyed.` : `Our station has fallen.`} {clock(w.time)} against the {DIFFICULTY[difficulty].name.toLowerCase()}.
-        </p>
-        <table>
-          <tbody>
-            <tr><th /><th>Us</th><th>Them</th></tr>
-            <tr><td>Ships built</td><td>{p.stats.built}</td><td>{e.stats.built}</td></tr>
-            <tr><td>Kills</td><td>{p.stats.killed}</td><td>{e.stats.killed}</td></tr>
-            <tr><td>Losses</td><td>{p.stats.lost}</td><td>{e.stats.lost}</td></tr>
-            <tr><td>Credits earned</td><td>{fmt(p.stats.earned)}</td><td>{fmt(e.stats.earned)}</td></tr>
-          </tbody>
-        </table>
-        <button className="ew-go" onClick={onAgain}>Fight again</button>
-        <button onClick={onExit}>Back to title</button>
-      </div>
-    </div>
   )
 }
