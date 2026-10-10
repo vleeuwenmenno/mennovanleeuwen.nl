@@ -271,6 +271,17 @@ type WM = {
 }
 
 const Ctx = createContext<WM | null>(null)
+
+/**
+ * Windows that want a say before they close (Agents while a thread is answering): the guard
+ * answers whether to close after all. Set by the window itself, removed when it unmounts.
+ */
+const closeGuards = new Map<number, () => Promise<boolean> | boolean>()
+const asking = new Set<number>()
+export function setCloseGuard(pid: number, guard: (() => Promise<boolean> | boolean) | null) {
+  if (guard) closeGuards.set(pid, guard)
+  else closeGuards.delete(pid)
+}
 /** Files' trash view (see apps/Files.tsx). */
 const TRASH_PATH = 'trash://'
 
@@ -374,7 +385,17 @@ export function WindowManagerProvider({
       focusedPid: focused,
       open,
       openNew,
-      close: (pid) => dispatch({ type: 'close', pid }),
+      close: (pid) => {
+        const guard = closeGuards.get(pid)
+        if (!guard) return dispatch({ type: 'close', pid })
+        if (asking.has(pid)) return // its question is already on screen
+        asking.add(pid)
+        Promise.resolve()
+          .then(guard)
+          .catch(() => true)
+          .then((ok) => ok && dispatch({ type: 'close', pid }))
+          .finally(() => asking.delete(pid))
+      },
       focus: (pid) => dispatch({ type: 'focus', pid }),
       minimize: (pid) => dispatch({ type: 'minimize', pid }),
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),

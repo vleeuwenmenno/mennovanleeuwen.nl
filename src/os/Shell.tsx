@@ -18,6 +18,7 @@ import { Dialogs } from './Dialogs'
 import { FolderPicker } from './FolderPicker'
 import { initBackButton, setBackFocus } from './backButton'
 import { startActivityAlerts } from './activityAlerts'
+import { startAgentWatch } from './agentWatch'
 import { followLinkSettings, linkSettings } from '../data/links'
 import { newTab, usePower } from './powerState'
 import { notify } from './notify'
@@ -663,7 +664,10 @@ export function Shell() {
   useEffect(() => {
     const params = new URLSearchParams(location.search)
     const app = params.get('open') as AppId | null
-    if (app && app in APP_META && app !== 'trash') wm.open(app)
+    // A system notification about an Agents answer opens its thread: /?open=agents&thread=<id>.
+    const thread = params.get('thread')
+    if (app === 'agents' && thread && /^[0-9a-f-]{36}$/.test(thread)) wm.open('agents', { thread, t: String(Date.now()) })
+    else if (app && app in APP_META && app !== 'trash') wm.open(app)
     // As the browser's new tab page, start in Spotlight, ready to type where to go.
     else if (newTab && linkSettings().newTabPageSpotlight) setOverlay('spotlight')
     // Back from GitHub's sign-in page: /?auth=ok|denied|error|off.
@@ -675,15 +679,20 @@ export function Shell() {
 
   // Fresh activity notifications start counting once the desktop is up.
   useEffect(() => {
-    if (power.phase === 'up') startActivityAlerts()
+    if (power.phase === 'up') startActivityAlerts(), startAgentWatch()
   }, [power.phase])
 
   // Links in apps open where Settings > Links says.
   useEffect(followLinkSettings, [])
 
-  // Notifications (and anything else outside React's tree) can ask for an app to open.
+  // Notifications (and anything else outside React's tree) can ask for an app to open, by its id
+  // or as { app, props }.
   useEffect(() => {
-    const onOpen = (e: Event) => wm.open((e as CustomEvent<AppId>).detail)
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent<AppId | { app: AppId; props?: WinState['props'] }>).detail
+      if (typeof d === 'string') wm.open(d)
+      else wm.open(d.app, d.props)
+    }
     window.addEventListener('mvlos:open', onOpen)
     return () => window.removeEventListener('mvlos:open', onOpen)
   }, [wm.open])

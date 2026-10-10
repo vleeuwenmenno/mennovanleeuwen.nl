@@ -1419,7 +1419,11 @@ function list(items: Item[], key: string): ReactNode {
   return items[0].ordered ? <ol key={key}>{out}</ol> : <ul key={key}>{out}</ul>
 }
 
-export function MarkdownPreview({ text }: { text: string }) {
+/**
+ * Markdown as React nodes. `breaks` keeps a paragraph's line breaks and spacing, like a chat
+ * message (the Agents app's own messages); otherwise its lines join into one, as Markdown does.
+ */
+export function MarkdownPreview({ text, breaks = false }: { text: string; breaks?: boolean }) {
   const lines = text.split('\n')
   const out: ReactNode[] = []
   let i = 0
@@ -1453,7 +1457,7 @@ export function MarkdownPreview({ text }: { text: string }) {
     if (/^\s*>/.test(line)) {
       const body: string[] = []
       while (i < lines.length && /^\s*>/.test(lines[i])) body.push(lines[i++].replace(/^\s*>\s?/, ''))
-      out.push(<blockquote key={key}><MarkdownPreview text={body.join('\n')} /></blockquote>)
+      out.push(<blockquote key={key}><MarkdownPreview text={body.join('\n')} breaks={breaks} /></blockquote>)
       continue
     }
     if (LIST.test(line)) {
@@ -1469,8 +1473,8 @@ export function MarkdownPreview({ text }: { text: string }) {
       continue
     }
     const para: string[] = []
-    while (i < lines.length && lines[i].trim() && (!para.length || !BLOCK_START.test(lines[i]))) para.push(lines[i++].trim())
-    out.push(<p key={key}>{rich(para.join(' '), key)}</p>)
+    while (i < lines.length && lines[i].trim() && (!para.length || !BLOCK_START.test(lines[i]))) para.push(breaks ? lines[i++].trimEnd() : lines[i++].trim())
+    out.push(<p key={key} className={breaks ? 'md-breaks' : undefined}>{rich(para.join(breaks ? '\n' : ' '), key)}</p>)
   }
   return <>{out}</>
 }

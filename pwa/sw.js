@@ -27,6 +27,21 @@ self.addEventListener('activate', (event) => {
   )
 })
 
+// A notification about an Agents answer (src/os/agentWatch.ts): to the open tab, which opens the
+// thread, or a new window on it when none is open.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const thread = event.notification.data?.thread
+  if (typeof thread !== 'string') return
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      const tab = list.find((c) => new URL(c.url).origin === self.location.origin)
+      if (tab) return tab.focus().then(() => tab.postMessage({ openThread: thread }))
+      return self.clients.openWindow(`/?open=agents&thread=${encodeURIComponent(thread)}`)
+    }),
+  )
+})
+
 // The page asks the waiting worker to take over when the visitor accepts the update.
 self.addEventListener('message', (event) => {
   if (event.data === 'skip-waiting') self.skipWaiting()

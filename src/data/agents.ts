@@ -73,6 +73,8 @@ export type TurnEvent =
   | { type: 'thread'; thread: Thread }
   | { type: 'error'; error: string }
   | { type: 'done' }
+  /** First on a follow stream: the thread as it is, with the reply being written so far (null when not running) */
+  | { type: 'snapshot'; thread: Thread; messages: AgentMessage[]; pending: PendingApproval[]; live: { content: string; thinking: string } | null }
 
 export const listThreads = (archived: boolean) => api<Thread[]>(`/api/agents/threads${archived ? '?archived=1' : ''}`)
 export const createThread = (input: { mode: Mode; model?: string; tools?: ToolGroup[]; projectId?: number | null; quick?: boolean }) => api<Thread>('/api/agents/threads', { method: 'POST', json: input })
@@ -169,6 +171,18 @@ export async function sendMessage(id: string, text: string, attachments: Attachm
     body: JSON.stringify({ text, attachments }),
     signal,
   })
+  await readEvents(res, onEvent)
+}
+
+/**
+ * Joins a turn this window did not start (opened again while it runs, or another tab): a snapshot
+ * with the reply written so far, then its events live. Resolves when the turn ends.
+ */
+export async function followThread(id: string, onEvent: (e: TurnEvent) => void, signal: AbortSignal) {
+  await readEvents(await fetch(`/api/agents/threads/${id}/follow`, { credentials: 'same-origin', signal }), onEvent)
+}
+
+async function readEvents(res: Response, onEvent: (e: TurnEvent) => void) {
   if (!res.ok || !res.body) {
     const body = await res.json().catch(() => null)
     throw new Error(body?.error ?? `Request failed (${res.status})`)

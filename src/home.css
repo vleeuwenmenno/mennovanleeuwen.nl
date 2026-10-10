@@ -347,13 +347,30 @@
 }
 .agt-user {
   align-self: flex-end;
+  min-width: 0;
   max-width: min(78%, 640px);
   padding: 8px 12px;
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
   color: var(--fg-bright);
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+/* The owner's message as Markdown: line breaks kept, code blocks scroll sideways in the bubble. */
+.agt-user-text {
+  overflow: visible;
+  padding: 0;
+  color: inherit;
+  line-height: 1.5;
+}
+.agt-user-text > :last-child {
+  margin-bottom: 0;
+}
+.agt-user-text pre {
+  max-width: 100%;
+  overflow-wrap: normal;
+}
+.zed-preview p.md-breaks {
+  white-space: pre-wrap;
 }
 .agt-answer {
   overflow: visible;
@@ -530,21 +547,6 @@
 .fp-list button.is-chosen {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--fg-bright);
-}
-.agt-composer textarea {
-  flex: 1;
-  min-width: 0;
-  max-height: 180px;
-  resize: vertical;
-  padding: 7px 9px;
-  border: 1px solid var(--line-strong);
-  background: var(--bg-dark);
-  color: var(--fg-bright);
-  font: inherit;
-  outline: 0;
-}
-.agt-composer textarea:focus {
-  border-color: var(--accent);
 }
 .set-actions {
   display: flex;
@@ -1209,9 +1211,11 @@ textarea.agt-q-input {
   border-color: var(--accent);
 }
 .agt-box textarea {
+  /* Grows with the message up to four lines (the window sets its height), then scrolls. */
+  flex: none;
   width: 100%;
   min-height: 22px;
-  max-height: 220px;
+  max-height: calc(4 * 1.5em + 4px);
   padding: 2px 4px 2px 0;
   border: 0;
   outline: 0;

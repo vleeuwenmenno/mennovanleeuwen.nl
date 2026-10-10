@@ -6,6 +6,7 @@ import { getWebSearch, PROVIDERS, resetWebSearch, saveWebSearch, testWebSearch, 
 import { getLibraries, parseSf, useLibraries } from '../data/seafile'
 import { useAccount } from '../os/account'
 import { Select } from '../os/Select'
+import { allowNotifications, notificationState } from '../os/agentWatch'
 import { useWM } from '../os/wm'
 import { writeFile } from '../terminal/fs'
 import { HOME } from '../terminal/vfs'
@@ -85,6 +86,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
   const [memories, setMemories] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [notifications, setNotifications] = useState(notificationState)
   usePromptLocation()
   // Fresh each time the pane opens or the file is made, so an edit or upload shows at once.
   const load = useCallback(() => getPrompt(true).then(setPrompt, (e: Error) => setError(e.message)), [])
@@ -167,6 +169,29 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
           <button className="btn btn-small" onClick={() => open('agents', { tab: 'memory' })}>
             Show
           </button>
+        </li>
+      </ul>
+
+      <h4 className="set-subhead">Notifications</h4>
+      <ul className="set-list">
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>System notifications</strong>
+            <span className="muted">
+              {notifications === 'granted'
+                ? 'On in this browser: an answer that comes in while MvL OS is in the background shows up there too'
+                : notifications === 'denied'
+                  ? 'Blocked in this browser: allow notifications for this site in its settings to get them'
+                  : notifications === 'unsupported'
+                    ? 'This browser has none; answers still show in MvL OS'
+                    : 'Answers always show in MvL OS; allow these to hear about them while MvL OS is in the background'}
+            </span>
+          </span>
+          {notifications === 'default' && (
+            <button className="btn btn-small" onClick={() => void allowNotifications().then(setNotifications)}>
+              Allow…
+            </button>
+          )}
         </li>
       </ul>
       </>

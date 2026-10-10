@@ -27,6 +27,7 @@ import {
   getThread,
   listMemories,
   listThreads,
+  followThread,
   sendMessage,
   agentSettings,
   setAgentSettings,
@@ -42,6 +43,7 @@ import {
   type Mode,
   type ModelInfo,
   type PendingApproval,
+  type TurnEvent,
   type Thread,
   type ToolCall,
 } from '../data/agents'
@@ -51,8 +53,9 @@ import { Select } from '../os/Select'
 import { signIn, useAccount } from '../os/account'
 import { fieldMenu, linkAt, linkMenu, openContextMenu, openMenuAt, selectionIn, tidyMenu, type MenuItem } from '../os/ContextMenu'
 import { searchWeb } from '../data/searchEngine'
-import { ask } from '../os/Dialogs'
-import { useWM, type WinState } from '../os/wm'
+import { ask, choose } from '../os/Dialogs'
+import { setCloseGuard, useWM, type WinState } from '../os/wm'
+import { allowNotifications, setOnScreen, watchThreads } from '../os/agentWatch'
 import { AgentsSettings, usePromptLocation } from './AgentsSettings'
 import { MarkdownPreview } from './Zed'
 
@@ -171,18 +174,56 @@ function AgentsApp({ win }: { win: WinState }) {
 
   usePromptLocation()
 
+  // The thread this window shows, while it is the focused window: its answer needs no notification.
+  const focused = wm.focusedPid === win.pid
+  useEffect(() => {
+    setOnScreen(focused ? selected : null)
+    return () => setOnScreen(null)
+  }, [focused, selected])
+
+  // Closing while threads are answering: stop them, or let them go on on the server (they are
+  // announced when done, and found again here later).
+  useEffect(() => {
+    setCloseGuard(win.pid, async () => {
+      const busy = (await listThreads(false).catch(() => [] as Thread[])).filter((t) => t.running)
+      if (!busy.length) return true
+      const choice = await choose({
+        title: busy.length === 1 ? `“${busy[0].title}” is still answering` : `${busy.length} threads are still answering`,
+        body: 'They can keep going on the server while Agents is closed, even with this tab closed, and you get a notification when an answer is in. Or stop them now.',
+        buttons: [
+          { id: 'cancel', label: 'Cancel' },
+          { id: 'stop', label: busy.length === 1 ? 'Stop and close' : 'Stop all and close', danger: true },
+          { id: 'keep', label: 'Keep running', primary: true },
+        ],
+      })
+      if (choice === 'stop') {
+        await Promise.all(busy.map((t) => stopThread(t.id).catch(() => {})))
+        return true
+      }
+      if (choice !== 'keep') return false
+      watchThreads(busy)
+      // The click on Keep running lets the browser ask about its own notifications, once.
+      void allowNotifications()
+      return true
+    })
+    return () => setCloseGuard(win.pid, null)
+  }, [win.pid])
+
   const refresh = useCallback(() => {
     listThreads(archived).then(
-      (list) => (setThreads(list), setListError(null)),
+      // Running ones are announced when done, if that happens while their answer is not on screen.
+      (list) => (setThreads(list), setListError(null), watchThreads(list)),
       (e: Error) => setListError(e.message),
     )
     listProjects().then(setProjects, () => {})
   }, [archived])
   useEffect(refresh, [refresh])
-  // Titles being thought of arrive a moment after the answer starts: look again until they are in.
+  // Titles being thought of arrive a moment after the answer starts, and threads answering in the
+  // background finish on their own: look again until the titles are in and nothing is running.
   useEffect(() => {
-    if (!threads.some((t) => t.titling)) return
-    const timer = setTimeout(refresh, 1500)
+    const titling = threads.some((t) => t.titling)
+    if (!titling && !threads.some((t) => t.running)) return
+    const timer = setTimeout(refresh, titling ? 1500 : 3000)
     return () => clearTimeout(timer)
   }, [threads, refresh])
   const rename = (t: Thread, title: string) => {
@@ -885,12 +926,53 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     setThread((t) => (t && t.id === listThread.id && (t.title !== listThread.title || t.titling !== listThread.titling) ? { ...t, title: listThread.title, titling: listThread.titling } : t))
   }, [listThread?.title, listThread?.titling])
 
-  // Answering in another window or tab: look again every few seconds until it is done.
+  // What a turn streams, whether this window started it or joined it later.
+  const onEvent = (e: TurnEvent) => {
+    if (e.type === 'snapshot') {
+      setThread(e.thread)
+      setMessages(e.messages)
+      setApprovals(e.pending)
+      setLive(e.live)
+    } else if (e.type === 'delta') setLive((l) => ({ content: (l?.content ?? '') + (e.content ?? ''), thinking: (l?.thinking ?? '') + (e.thinking ?? '') }))
+    else if (e.type === 'approval') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'approval' }])
+    else if (e.type === 'question') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'question', form: e.form }])
+    else if (e.type === 'answered' || e.type === 'approved') setApprovals((a) => a.filter((x) => x.callId !== e.callId))
+    else if (e.type === 'message') {
+      setMessages((ms) => [...ms, e.message])
+      if (e.message.role === 'assistant') setLive({ content: '', thinking: '' })
+    } else if (e.type === 'thread') {
+      setThread(e.thread)
+      onChanged()
+    } else if (e.type === 'error') setError(e.error)
+  }
+
+  // Answering, but not from this window (opened again later, or another tab): join the turn and
+  // follow it live. When the stream ends, the saved thread says whether it is really done; a
+  // broken stream to a turn still running joins again.
+  const [rejoin, setRejoin] = useState(0)
   useEffect(() => {
     if (!id || busy || !thread?.running) return
-    const t = setInterval(() => getThread(id).then((r) => (setThread(r.thread), setMessages(r.messages), setApprovals(r.pending), !r.thread.running && onChanged()), () => {}), 2500)
-    return () => clearInterval(t)
-  }, [id, busy, thread?.running, onChanged])
+    const ctl = new AbortController()
+    followThread(id, onEvent, ctl.signal)
+      .catch(() => {})
+      .finally(() => {
+        if (ctl.signal.aborted) return
+        getThread(id).then(
+          (r) => {
+            if (ctl.signal.aborted) return
+            setThread(r.thread)
+            setMessages(r.messages)
+            setApprovals(r.pending)
+            setLive(null)
+            onChanged()
+            if (r.thread.running) setTimeout(() => setRejoin((n) => n + 1), 2000)
+          },
+          () => setTimeout(() => setRejoin((n) => n + 1), 5000),
+        )
+      })
+    return () => ctl.abort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, busy, thread?.running, rejoin])
 
   // Follow the answer as it grows, unless scrolled up to read.
   useEffect(() => {
@@ -935,26 +1017,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       setLive({ content: '', thinking: '' })
       const ctl = new AbortController()
       abort.current = ctl
-      await sendMessage(
-        target.id,
-        message,
-        attached,
-        (e) => {
-          if (e.type === 'delta') setLive((l) => ({ content: (l?.content ?? '') + (e.content ?? ''), thinking: (l?.thinking ?? '') + (e.thinking ?? '') }))
-          else if (e.type === 'approval') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'approval' }])
-          else if (e.type === 'question') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'question', form: e.form }])
-          else if (e.type === 'answered') setApprovals((a) => a.filter((x) => x.callId !== e.callId))
-          else if (e.type === 'approved') setApprovals((a) => a.filter((x) => x.callId !== e.callId))
-          else if (e.type === 'message') {
-            setMessages((ms) => [...ms, e.message])
-            if (e.message.role === 'assistant') setLive({ content: '', thinking: '' })
-          } else if (e.type === 'thread') {
-            setThread(e.thread)
-            onChanged()
-          } else if (e.type === 'error') setError(e.error)
-        },
-        ctl.signal,
-      )
+      await sendMessage(target.id, message, attached, onEvent, ctl.signal)
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
         setError((e as Error).message)
@@ -1097,12 +1160,13 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     )
   }
 
-  // The message box grows with what is typed, up to a point, and shrinks again once sent.
+  // The message box grows with what is typed, up to its CSS max-height (four lines), and shrinks
+  // again once sent.
   useLayoutEffect(() => {
     const el = input.current
     if (!el) return
     el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 220)}px`
+    el.style.height = `${el.scrollHeight}px`
   }, [text])
 
   const answering = busy || !!thread?.running
@@ -1235,7 +1299,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           </div>
         )}
         <Messages messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} />
-        {live && <LiveReply live={live} />}
+        {live ? <LiveReply live={live} /> : answering && <p className="agt-wait muted">Working…</p>}
         {error && <p className="agt-error t-red">{error}</p>}
       </div>
 
@@ -1284,7 +1348,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault()
-                void send()
+                // Ctrl+Enter always sends, also from inside a code block.
+                if (e.ctrlKey || e.metaKey || !codeBlockEnter(e.currentTarget)) void send()
               }
             }}
             onPaste={(e) => {
@@ -1353,7 +1418,11 @@ function Messages({ messages, answering, approvals, onDecide, onAnswer }: { mess
     if (m.role === 'user') {
       out.push(
         <div key={m.id} className="agt-user" data-msg={m.id}>
-          {m.content}
+          {m.content && (
+            <div className="zed-preview agt-user-text">
+              <MarkdownPreview text={m.content} breaks />
+            </div>
+          )}
           {!!m.attachments?.length && (
             <ul className="agt-files is-sent">
               {m.attachments.map((f, i) => (
@@ -1424,6 +1493,36 @@ function LiveReply({ live }: { live: Live }) {
       )}
     </>
   )
+}
+
+/**
+ * Enter in the message box while writing a code block: on a line that opens one (``` or ```lang)
+ * it adds the closing ``` and puts the cursor between the two; inside a block it is a new line.
+ * Answers false when Enter should send. Typed with insertText, so Ctrl+Z takes it back.
+ */
+function codeBlockEnter(el: HTMLTextAreaElement): boolean {
+  const FENCE = /^\s*```/
+  const pos = el.selectionStart
+  const before = el.value.slice(0, pos).split('\n')
+  const line = before.pop() ?? ''
+  const open = before.filter((l) => FENCE.test(l)).length % 2 === 1
+  const insert = (text: string, cursorBack = 0) => {
+    if (!document.execCommand('insertText', false, text)) el.setRangeText(text, el.selectionStart, el.selectionEnd, 'end')
+    if (cursorBack) el.setSelectionRange(el.selectionStart - cursorBack, el.selectionStart - cursorBack)
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+  if (!open && /^\s*```[\w+#.-]*\s*$/.test(line) && el.selectionEnd === pos) {
+    // The rest of the line goes inside; a block that is closed further down already is left alone.
+    const after = el.value.slice(pos).split('\n').slice(1)
+    if (after.some((l) => FENCE.test(l))) insert('\n')
+    else insert('\n\n```', 4)
+    return true
+  }
+  if (open) {
+    insert('\n')
+    return true
+  }
+  return false
 }
 
 type SearchHit = { title: string; url: string; snippet?: string }

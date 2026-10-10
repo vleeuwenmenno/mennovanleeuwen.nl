@@ -210,6 +210,10 @@ const titling = new Set<string>()
 type Pending = { callId: string; messageId: number; index: number; kind: 'approval' | 'question'; form?: Form; resolve: (answer: unknown) => void }
 export type PendingApproval = Omit<Pending, 'resolve'>
 const pending = new Map<string, Pending[]>() // by thread
+/** Windows following a turn they did not start (opened again, another tab), by thread. */
+const followers = new Map<string, Set<{ send: (e: TurnEvent) => void; close: () => void }>>()
+/** The reply a running turn is writing now, which is only saved once the model finishes it. */
+const partial = new Map<string, { content: string; thinking: string }>()
 const APPROVAL_WAIT = 15 * 60_000
 
 const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: (r.tools ? toolGroups(JSON.parse(r.tools)) : null) ?? [...TOOL_GROUPS], quick: !!r.quick })
@@ -1257,6 +1261,8 @@ export type TurnEvent =
   | { type: 'thread'; thread: Thread }
   | { type: 'error'; error: string }
   | { type: 'done' }
+  /** First on a follow stream: the thread as it is, with the reply being written so far (null when not running) */
+  | { type: 'snapshot'; thread: Thread; messages: AgentMessage[]; pending: PendingApproval[]; live: { content: string; thinking: string } | null }
 
 /**
  * Adds the owner's message and answers it, streaming JSON lines (TurnEvent) to the response. The
@@ -1278,7 +1284,15 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
   // The turn goes on when the window closes (a long job can take a while); only Stop ends it, and
   // the window picks it up again from the saved messages.
-  const send = (e: TurnEvent) => void (!res.writableEnded && !res.destroyed && res.write(`${JSON.stringify(e)}\n`))
+  partial.set(row.id, { content: '', thinking: '' })
+  const send = (e: TurnEvent) => {
+    // Kept for windows that start following halfway through a reply.
+    const p = partial.get(row.id)
+    if (p && e.type === 'delta') (p.content += e.content ?? ''), (p.thinking += e.thinking ?? '')
+    else if (p && e.type === 'message' && e.message.role === 'assistant') (p.content = ''), (p.thinking = '')
+    if (!res.writableEnded && !res.destroyed) res.write(`${JSON.stringify(e)}\n`)
+    for (const f of followers.get(row.id) ?? []) f.send(e)
+  }
 
   try {
     send({ type: 'message', message: addMessage(row.id, { role: 'user', content: text }, files) })
@@ -1349,9 +1363,34 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
     } else send({ type: 'done' })
   } finally {
     running.delete(row.id)
+    partial.delete(row.id)
     // Gone when it was deleted while answering.
     const after = database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(row.id) as ThreadRow | undefined
     if (after) send({ type: 'thread', thread: toThread(after) })
     res.end()
+    for (const f of followers.get(row.id) ?? []) f.close()
+    followers.delete(row.id)
   }
+}
+
+/**
+ * Joins a running turn from a window that did not start it (opened again later, another tab): the
+ * thread as it is now, the reply being written so far, then the turn's events as they happen,
+ * until it ends. A thread that is not answering gets its snapshot and the end straight away.
+ */
+export function followThread(res: ServerResponse, user: User, id: string) {
+  const row = ownThread(user, id)
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  const send = (e: TurnEvent) => void (!res.writableEnded && !res.destroyed && res.write(`${JSON.stringify(e)}\n`))
+  const { thread, messages, pending: waiting } = getThread(user, row.id)
+  const live = partial.get(row.id)
+  send({ type: 'snapshot', thread, messages, pending: waiting, live: live ? { ...live } : null })
+  if (!running.has(row.id)) return void res.end()
+  const follower = { send, close: () => res.end() }
+  const set = followers.get(row.id) ?? new Set()
+  followers.set(row.id, set.add(follower))
+  res.on('close', () => {
+    set.delete(follower)
+    if (!set.size && followers.get(row.id) === set) followers.delete(row.id)
+  })
 }
