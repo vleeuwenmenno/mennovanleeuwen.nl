@@ -4,20 +4,25 @@ import { rememberVisit } from './siteHistory'
 
 // Where web links open: in a new browser tab (the default) or in this one. Loaded as the browser's
 // new tab page (/?newtab), links can be made to always replace it, whatever the setting, so the
-// page acts like an address bar. Kept in this browser; synced when signed in, like notes.
+// page acts like an address bar, and it can start with Spotlight open for quick navigation. Kept in this browser; synced when signed in, like notes.
 
 export type LinkTarget = 'new' | 'same'
-export type LinkSettings = { target: LinkTarget; newTabPageSameTab: boolean }
-const DEFAULTS: LinkSettings = { target: 'new', newTabPageSameTab: true }
+export type LinkSettings = { target: LinkTarget; newTabPageSameTab: boolean; newTabPageSpotlight: boolean }
+const DEFAULTS: LinkSettings = { target: 'new', newTabPageSameTab: true, newTabPageSpotlight: true }
 
 const store = synced<LinkSettings>('links', DEFAULTS, {
   normalize: (v) => {
     const s = { ...DEFAULTS, ...(v as Partial<LinkSettings>) }
-    return { target: s.target === 'same' ? 'same' : 'new', newTabPageSameTab: s.newTabPageSameTab !== false }
+    return {
+      target: s.target === 'same' ? 'same' : 'new',
+      newTabPageSameTab: s.newTabPageSameTab !== false,
+      newTabPageSpotlight: s.newTabPageSpotlight !== false,
+    }
   },
 })
 
 export const useLinkSettings = store.use
+export const linkSettings = store.get
 export const setLinkSettings = (patch: Partial<LinkSettings>) => store.set((s) => ({ ...s, ...patch }))
 
 /** Whether a web link opens in this tab right now. */
