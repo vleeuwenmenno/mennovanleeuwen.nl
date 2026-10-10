@@ -1564,10 +1564,28 @@ textarea.agt-q-input {
 
 /* The agent's plan for a long job: a thin bar over the composer, the list when tapped. */
 .agt-todos {
+  position: relative;
   margin: 0 12px;
   border: 1px solid var(--line);
   border-bottom: 0;
   background: var(--panel-2);
+}
+/* Sits at the bar's end, after the chevron, which moves in to make room. */
+.agt-todos .agt-todo-bar {
+  padding-right: 34px;
+}
+.agt-todo-dismiss {
+  position: absolute;
+  right: 4px;
+  bottom: 2px;
+  width: 24px;
+  height: 22px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+}
+.agt-todo-dismiss:hover {
+  color: var(--red);
 }
 .agt-todo-bar {
   display: flex;

@@ -1,5 +1,6 @@
 import { api } from '../os/account'
 import { synced } from '../os/synced'
+import { getNote } from './notes'
 
 // The Agents app's side of server/agents.ts: threads, a turn streamed as JSON lines, memory and
 // the models Ollama Cloud offers. The shapes match the server's.
@@ -20,7 +21,7 @@ export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool'; co
 export type ToolGroup = 'web' | 'notes' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects'
 export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile?: boolean }[] = [
   { id: 'web', name: 'Web', detail: 'Search the web and read pages' },
-  { id: 'notes', name: 'Notes', detail: 'Search your notes' },
+  { id: 'notes', name: 'Notes', detail: 'Search and make notes; changing or deleting one asks you first' },
   { id: 'code', name: 'Code hosts', detail: 'Repositories, issues and pull requests' },
   { id: 'seafile', name: 'Seafile', detail: 'Find and read files', seafile: true },
   { id: 'seafile_write', name: 'Seafile changes', detail: 'Folders, writing, renaming, moving, deleting; asks you first', seafile: true },
@@ -82,7 +83,8 @@ export const getThread = (id: string) => api<{ thread: Thread; messages: AgentMe
 export const answerForm = (id: string, callId: string, answers: Record<string, unknown> | null) =>
   api(`/api/agents/threads/${id}/answer`, { method: 'POST', json: answers ? { callId, answers } : { callId, skip: true } })
 export const answerApproval = (id: string, callId: string, allow: boolean) => api(`/api/agents/threads/${id}/approve`, { method: 'POST', json: { callId, allow } })
-export const updateThread = (id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'mode' | 'model' | 'tools' | 'pinned' | 'projectId' | 'quick'>>) => api<Thread>(`/api/agents/threads/${id}`, { method: 'PATCH', json: patch })
+/** `todos: null` dismisses the thread's plan (for the agent too). */
+export const updateThread = (id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'mode' | 'model' | 'tools' | 'pinned' | 'projectId' | 'quick'>> & { todos?: null }) => api<Thread>(`/api/agents/threads/${id}`, { method: 'PATCH', json: patch })
 export const deleteThread = (id: string) => api(`/api/agents/threads/${id}`, { method: 'DELETE' })
 export const stopThread = (id: string) => api(`/api/agents/threads/${id}/stop`, { method: 'POST' })
 /** Quick answers asked from Spotlight and not continued in the app, newest first (expired ones pruned). */
@@ -206,6 +208,9 @@ async function readEvents(res: Response, onEvent: (e: TurnEvent) => void) {
 
 const size = (n: number) => (n < 1024 ? `${n} bytes` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`)
 
+/** A note's first line, without Markdown's marks, for a tool card. */
+const noteName = (text: string) => (text.split('\n').find((l) => l.trim()) ?? '').replace(/^\s*(#{1,6}\s+|[-*+]\s+)/, '').trim().slice(0, 60)
+
 /** What a tool call did, in a few words, for its card. */
 export function toolLabel(call: ToolCall): string {
   const a = call.arguments ?? {}
@@ -236,7 +241,13 @@ export function toolLabel(call: ToolCall): string {
       return `Updated the plan: ${items.filter((t) => t.status === 'done').length}/${items.length} done`
     }
     case 'search_notes':
-      return `Searched notes for “${s('query')}”`
+      return s('query') ? `Searched notes for “${s('query')}”` : 'Looked at your latest notes'
+    case 'create_note':
+      return `Made the note “${noteName(s('text'))}”`
+    case 'update_note':
+      return `${a.append === true ? 'Add to' : 'Change'} the note “${noteName(getNote(s('id'))?.text ?? '') || 'a note'}”`
+    case 'delete_note':
+      return `Move the note “${noteName(getNote(s('id'))?.text ?? '') || 'a note'}” to the trash`
     case 'search_code':
       return `Searched code for “${s('query')}”`
     case 'seafile_list':

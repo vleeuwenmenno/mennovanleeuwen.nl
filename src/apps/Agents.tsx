@@ -55,6 +55,8 @@ import { fieldMenu, linkAt, linkMenu, openContextMenu, openMenuAt, selectionIn, 
 import { searchWeb } from '../data/searchEngine'
 import { ask, choose } from '../os/Dialogs'
 import { setCloseGuard, useWM, type WinState } from '../os/wm'
+import { pullAll } from '../os/synced'
+import { mayTakeFocus } from '../os/overlays'
 import { allowNotifications, setOnScreen, watchThreads } from '../os/agentWatch'
 import { AgentsSettings, usePromptLocation } from './AgentsSettings'
 import { MarkdownPreview } from './Zed'
@@ -830,7 +832,7 @@ function MemoryForm({ memory, scope, projects, categories, onSave, onCancel }: {
 }
 
 /** The agent's plan for a long job: "3/12" with the step it is on; tap for the whole list. */
-function TodoChip({ todos, running }: { todos: Todo[]; running: boolean }) {
+function TodoChip({ todos, running, onDismiss }: { todos: Todo[]; running: boolean; onDismiss: () => void }) {
   const [open, setOpen] = useState(false)
   const done = todos.filter((t) => t.status === 'done').length
   const active = todos.find((t) => t.status === 'active') ?? todos.find((t) => t.status === 'pending')
@@ -859,6 +861,9 @@ function TodoChip({ todos, running }: { todos: Todo[]; running: boolean }) {
         <span className={`agt-chev ${open ? '' : 'is-up'}`}>
           <Icon name="chevron" size={12} />
         </span>
+      </button>
+      <button type="button" className="agt-todo-dismiss" onClick={onDismiss} aria-label="Dismiss the plan" title="Dismiss the plan (the agent forgets it too)">
+        ×
       </button>
     </div>
   )
@@ -917,7 +922,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   }, [id])
   useEffect(() => {
     agentModels().then(setModels, () => {})
-    input.current?.focus()
+    if (mayTakeFocus()) input.current?.focus()
     return () => abort.current?.abort()
   }, [])
 
@@ -939,6 +944,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     else if (e.type === 'answered' || e.type === 'approved') setApprovals((a) => a.filter((x) => x.callId !== e.callId))
     else if (e.type === 'message') {
       setMessages((ms) => [...ms, e.message])
+      // The agent changed the Notebook on the server: fetch it now rather than at the next sync.
+      if (e.message.role === 'tool' && /^(create|update|delete)_note$/.test(e.message.toolName ?? '')) void pullAll()
       if (e.message.role === 'assistant') setLive({ content: '', thinking: '' })
     } else if (e.type === 'thread') {
       setThread(e.thread)
@@ -1303,7 +1310,13 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         {error && <p className="agt-error t-red">{error}</p>}
       </div>
 
-      {!!thread?.todos.length && <TodoChip todos={thread.todos} running={answering} />}
+      {!!thread?.todos.length && (
+        <TodoChip
+          todos={thread.todos}
+          running={answering}
+          onDismiss={() => void updateThread(thread.id, { todos: null }).then((t) => (setThread(t), onChanged()), (e: Error) => setError(e.message))}
+        />
+      )}
       {thread && ctxOpen && <ContextPanel id={thread.id} version={messages.length} />}
       <form
         className={`agt-composer ${dragOver ? 'is-drop' : ''}`}
@@ -1547,6 +1560,7 @@ function ToolCard({ tag, call, result, pending, approval }: { tag: string; call:
           <span className="agt-tool-label">{toolLabel(call)}</span>
         </p>
         {call.name === 'seafile_write' && typeof call.arguments.content === 'string' && <pre className="agt-tool-body">{call.arguments.content.slice(0, 4000)}</pre>}
+        {call.name === 'update_note' && typeof call.arguments.text === 'string' && <pre className="agt-tool-body">{call.arguments.text.slice(0, 4000)}</pre>}
         <div className="agt-ask-actions">
           <button className="btn btn-small btn-primary" onClick={() => approval(true)}>
             Allow

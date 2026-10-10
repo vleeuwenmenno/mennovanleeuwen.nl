@@ -5937,6 +5937,44 @@ button.fm-dd-row:hover {
   background: none;
   color: var(--text);
 }
+/* A code block and its Copy button, which shows on hover (always on touch screens). */
+.zed-preview .md-code {
+  position: relative;
+  margin: 0 0 0.9em;
+}
+.zed-preview .md-code pre {
+  margin: 0;
+}
+.md-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.md-code:hover .md-copy,
+.md-copy:focus-visible,
+.md-copy.is-done {
+  opacity: 1;
+}
+.md-copy:hover {
+  color: var(--fg-bright);
+  border-color: var(--accent);
+}
+.md-copy.is-done {
+  color: var(--green);
+}
+@media (pointer: coarse) {
+  .md-copy {
+    opacity: 1;
+  }
+}
 .zed-preview blockquote {
   padding: 0 0 0 12px;
   border-left: 3px solid var(--line-strong);

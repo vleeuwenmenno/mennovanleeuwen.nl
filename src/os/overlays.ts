@@ -13,6 +13,10 @@ export function setOverlay(o: Overlay) {
   listeners.forEach((l) => l())
 }
 
+/** Whether a window may take the keyboard on its own (when it opens): not while Spotlight or the
+ * launcher is up, which a window restored at start-up (?newtab) would otherwise type into. */
+export const mayTakeFocus = () => current === null
+
 export const toggleOverlay = (o: Exclude<Overlay, null>) => setOverlay(current === o ? null : o)
 
 export function useOverlay() {

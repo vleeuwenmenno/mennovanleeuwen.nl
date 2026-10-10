@@ -1419,6 +1419,32 @@ function list(items: Item[], key: string): ReactNode {
   return items[0].ordered ? <ol key={key}>{out}</ol> : <ul key={key}>{out}</ul>
 }
 
+/** A fenced code block, with a button that copies it. */
+function CodeBlock({ lang, code }: { lang: string; code: string }) {
+  const [copied, setCopied] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(timer.current), [])
+  const copy = () =>
+    void navigator.clipboard?.writeText(code).then(
+      () => {
+        setCopied(true)
+        clearTimeout(timer.current)
+        timer.current = setTimeout(() => setCopied(false), 1500)
+      },
+      () => {},
+    )
+  return (
+    <div className="md-code">
+      <pre data-lang={lang || undefined}>
+        <code>{code}</code>
+      </pre>
+      <button type="button" className={`md-copy ${copied ? 'is-done' : ''}`} onClick={copy} title="Copy the code" aria-label={copied ? 'Copied' : 'Copy the code'}>
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </div>
+  )
+}
+
 /**
  * Markdown as React nodes. `breaks` keeps a paragraph's line breaks and spacing, like a chat
  * message (the Agents app's own messages); otherwise its lines join into one, as Markdown does.
@@ -1439,7 +1465,7 @@ export function MarkdownPreview({ text, breaks = false }: { text: string; breaks
       const body: string[] = []
       while (++i < lines.length && !/^\s*```/.test(lines[i])) body.push(lines[i])
       i++
-      out.push(<pre key={key} data-lang={lang || undefined}><code>{body.join('\n')}</code></pre>)
+      out.push(<CodeBlock key={key} lang={lang} code={body.join('\n')} />)
       continue
     }
     const h = /^(#{1,6})\s+(.*)$/.exec(line)
