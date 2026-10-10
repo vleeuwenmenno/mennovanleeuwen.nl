@@ -338,36 +338,6 @@ const flyby = (droid: boolean): Recipe => (sr, r) => {
   })
 }
 
-/** Big ships' engines under the battle, as one seamless loop the game fades with how many warships
- * are under way on screen: a deep two-note thrum beating slowly, and the hiss of their thrust. */
-function engineLoop(sr: number) {
-  const secs = 4
-  const n = secs * sr
-  // A little extra rendered past the end and crossfaded into the start, so the join is seamless.
-  const x = Math.round(0.25 * sr)
-  const out = new Float32Array(n + x)
-  const lp = new Svf()
-  const hs = new Svf()
-  const o1 = new Osc()
-  const o2 = new Osc()
-  // Frequencies with whole cycles in the loop, so it joins up without a click.
-  const fa = 165 / secs
-  const fb = 246 / secs
-  for (let i = 0; i < n + x; i++) {
-    const t = i / sr
-    const beat = 0.75 + 0.25 * Math.sin((TAU * 2 * t) / secs)
-    const thrum = lp.run(o1.saw(fa, sr) + o2.saw(fb, sr) * 0.7, 220, 0.9, sr).low * beat
-    const hiss = hs.run(noise(), 420, 0.6, sr).band * (0.8 + 0.2 * Math.sin((TAU * 3 * t) / secs))
-    out[i] = thrum + hiss * 0.12
-  }
-  for (let i = 0; i < x; i++) out[i] = out[i] * (i / x) + out[n + i] * (1 - i / x)
-  const loop = out.subarray(0, n)
-  let peak = 0
-  for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(loop[i]))
-  for (let i = 0; i < n; i++) loop[i] *= 0.9 / (peak || 1)
-  return loop
-}
-
 /** A hardpoint wrecked: a heavy clang, a burst, and electrical sputtering. */
 const hardpointDown: Recipe = (sr, r) => {
   const zap = new Osc()
@@ -700,7 +670,6 @@ export class EmpiresSound {
   private ackSrc: AudioBufferSourceNode | null = null
   private drone: { stop: () => void } | null = null
   private rumble: GainNode | null = null
-  private engineGain: GainNode | null = null
   private heat = 0
   muted: boolean
   volume: number
@@ -937,13 +906,6 @@ export class EmpiresSound {
     if (this.ready() && where.gain > 0.2 && this.allow('flyby', 1, 0.7)) this.play(`flyby-${faction}`, flyby(faction === 'droid'), { where, gain: 0.45, sweep, verb: 0.3, takes: 3 })
   }
 
-  /** Call every frame with how much warship is under way on screen (0 for none): the engine bed
-   * swells and fades with it. */
-  engines(level: number) {
-    if (!this.engineGain || !this.ctx) return
-    this.engineGain.gain.setTargetAtTime(Math.min(0.32, level * 0.06), this.ctx.currentTime, 0.6)
-  }
-
   launch(where: Where) {
     if (this.ready() && where.gain > 0.05 && this.allow('launch', 2, 0.2)) this.play('launch', launch, { where, gain: 0.5 })
   }
@@ -1125,24 +1087,13 @@ export class EmpiresSound {
     rumble.gain.value = 0
     this.rumble = rumble
     rb.connect(rf).connect(rumble).connect(out)
-    // Warships' engines: on the battle bus, silent until ships are under way on screen.
-    const eb = ctx.createBuffer(1, 4 * ctx.sampleRate, ctx.sampleRate)
-    eb.getChannelData(0).set(engineLoop(ctx.sampleRate))
-    const eng = ctx.createBufferSource()
-    eng.buffer = eb
-    eng.loop = true
-    const engineGain = ctx.createGain()
-    engineGain.gain.value = 0
-    this.engineGain = engineGain
-    eng.connect(engineGain).connect(this.buses.sfx!)
-    eng.start()
     wind.start()
     wl.start()
     rb.start()
     this.drone = {
       stop: () => {
         const t = ctx.currentTime
-        for (const node of [g, wg, rumble, engineGain]) {
+        for (const node of [g, wg, rumble]) {
           node.gain.cancelScheduledValues(t)
           node.gain.setValueAtTime(node.gain.value, t)
           node.gain.linearRampToValueAtTime(0, t + 0.6)
@@ -1151,9 +1102,6 @@ export class EmpiresSound {
           for (const o of [...oscs, lfo, wl]) o.stop()
           wind.stop()
           rb.stop()
-          eng.stop()
-          engineGain.disconnect()
-          if (this.engineGain === engineGain) this.engineGain = null
           g.disconnect()
           wg.disconnect()
           rumble.disconnect()

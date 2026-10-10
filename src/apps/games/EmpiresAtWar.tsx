@@ -551,10 +551,9 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         }
       }
 
-      // Engines: warships under way on screen hum, and now and then a fighter races past.
+      // Now and then a fighter races past the middle of the view.
       if (!paused.current && !deploying.current) {
         const myTeamNow = w.players[me].team
-        let level = 0
         flyT -= dt
         let pass: { u: Unit; d: number } | null = null
         for (const u of w.units) {
@@ -562,12 +561,10 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
           const sx = (u.x - cm.x) * cm.zoom
           const sy = (u.y - cm.y) * cm.zoom
           if (Math.abs(sx) > vw / 2 || Math.abs(sy) > vh / 2) continue
-          if (u.t.tier === 'fighter') {
-            const d = Math.hypot(sx, sy) / Math.max(vw, vh)
-            if (flyT <= 0 && d < 0.3 && (flown.get(u.id) ?? -99) < w.time - 6 && (!pass || d < pass.d)) pass = { u, d }
-          } else if (u.t.tier !== 'gunship') level += ({ frigate: 0.6, cruiser: 1, capital: 1.8 } as Record<string, number>)[u.t.tier] ?? 0
+          if (u.t.tier !== 'fighter') continue
+          const d = Math.hypot(sx, sy) / Math.max(vw, vh)
+          if (flyT <= 0 && d < 0.3 && (flown.get(u.id) ?? -99) < w.time - 6 && (!pass || d < pass.d)) pass = { u, d }
         }
-        sound.engines(level * Math.min(1, cm.zoom * 1.6))
         if (flyT <= 0) {
           flyT = 0.35
           if (pass && Math.random() < 0.35) {
@@ -576,7 +573,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
             sound.flyby(w.players[pass.u.owner].faction, where(pass.u.x, pass.u.y), Math.cos(pass.u.a) * 0.8)
           }
         }
-      } else sound.engines(0)
+      }
 
       // Effects and sound.
       renderer.current.consume(events, w, me)
