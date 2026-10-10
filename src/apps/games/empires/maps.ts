@@ -43,7 +43,7 @@ export const inRect = (r: Rect, x: number, y: number) => x >= r.x && y >= r.y &&
 /** A spawn's own start area when nobody has drawn one: a square round it, inside the map. */
 export function defaultArea(map: MapDef, i: number): Rect {
   const sp = map.spawns[i]
-  const size = Math.min(1500, map.w * 0.4, map.h * 0.45)
+  const size = Math.min(2600, map.w * 0.38, map.h * 0.5)
   const x = Math.max(0, Math.min(map.w - size, sp.x - size / 2))
   const y = Math.max(0, Math.min(map.h - size, sp.y - size / 2))
   return { x, y, w: size, h: size }
@@ -100,7 +100,30 @@ const shroud = { w: 6000, h: 6000, sym: 'tri' as const }
 const tc = { x: trinity.w / 2, y: trinity.h / 2 }
 const sc = { x: shroud.w / 2, y: shroud.h / 2 }
 
-export const MAPS: MapDef[] = [
+/** How far every map is spread out from how it was drawn: positions and terrain grow, while ore,
+ * beacons, wrecks and stations keep their size, so there's more open space between them and
+ * fleets take longer to get anywhere. */
+export const SPREAD = 1.35
+
+/** A map spread out by `k` (see SPREAD). Scattered rocks grow in number to keep their density. */
+export function spread(m: MapDef, k = SPREAD): MapDef {
+  const p = <T extends Pt>(q: T): T => ({ ...q, x: q.x * k, y: q.y * k })
+  const patch = <T extends Patch>(q: T): T => ({ ...p(q), r: q.r * k })
+  return {
+    ...m,
+    w: Math.round(m.w * k),
+    h: Math.round(m.h * k),
+    spawns: m.spawns.map(p),
+    ore: m.ore.map(p),
+    beacons: m.beacons.map(p),
+    wrecks: m.wrecks.map(p),
+    fields: m.fields.map(patch),
+    nebulas: m.nebulas.map(patch),
+    rocks: Math.round(m.rocks * k * k),
+  }
+}
+
+export const MAPS: MapDef[] = ([
   {
     id: 'kessar',
     name: 'Kessar Belt',
@@ -271,7 +294,7 @@ export const MAPS: MapDef[] = [
       ]),
     ],
   },
-]
+] as MapDef[]).map((m) => spread(m))
 
 export const MAP: Record<string, MapDef> = Object.fromEntries(MAPS.map((m) => [m.id, m]))
 
@@ -506,7 +529,7 @@ export function generateMap(rules: MapRules): MapDef {
   const name = `${NAME_A[Math.floor(nm() * NAME_A.length)]} ${NAME_B[Math.floor(nm() * NAME_B.length)]}`
   const sizeName = { small: 'Small', medium: 'Medium', large: 'Large' }[R.size]
   const oreName = { scarce: 'scarce', normal: 'steady', rich: 'rich' }[R.resources]
-  return {
+  return spread({
     id: `gen-${n}-${R.size}-${R.resources}-${R.beacons}-${R.asteroidFields}-${R.nebulas}-${R.wrecks}-${R.seed}`,
     name,
     blurb: `${sizeName} generated map for ${n} players with ${oreName} ore. Seed ${R.seed}.`,
@@ -516,5 +539,5 @@ export function generateMap(rules: MapRules): MapDef {
     fields,
     nebulas,
     wrecks,
-  }
+  })
 }

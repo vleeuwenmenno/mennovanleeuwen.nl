@@ -157,20 +157,20 @@ export const UNITS: UnitType[] = [
   },
   {
     id: 'r-frigate', faction: 'republic', tier: 'frigate', name: 'Warden frigate', blurb: 'Escort bristling with point defence. Fighters melt around it.',
-    sprite: 'republic-frigate', aspect: 0.652, size: 130, hull: 950, shield: 650, regen: 14, speed: 100, turn: 1.0, pop: 3, cost: 820, build: 22, level: 2, squad: 1, sensor: 1000,
+    sprite: 'republic-frigate', aspect: 0.652, size: 130, hull: 950, shield: 650, regen: 14, speed: 76, turn: 1.0, pop: 3, cost: 820, build: 22, level: 2, squad: 1, sensor: 1000,
     weapons: [flak(6, 340, 0.3, 2), flak(6, 340, 0.3, 2), turbo(28, 560, 2.2, 1)], hardpoints: [], engines: [[3.9, 9.7], [5, 9.8], [6.1, 9.7]],
     ability: 'flakBarrage',
   },
   {
     id: 'r-cruiser', faction: 'republic', tier: 'cruiser', name: 'Paladin cruiser', blurb: 'Line warship with heavy turbolasers. Knock out its shield bulbs first.',
-    sprite: 'republic-cruiser', aspect: 0.375, size: 220, hull: 2300, shield: 1500, regen: 24, speed: 68, turn: 0.6, pop: 5, cost: 1650, build: 34, level: 3, squad: 1, sensor: 1200,
+    sprite: 'republic-cruiser', aspect: 0.375, size: 220, hull: 2300, shield: 1500, regen: 24, speed: 52, turn: 0.6, pop: 5, cost: 1650, build: 34, level: 3, squad: 1, sensor: 1200,
     weapons: [flak(6, 320, 0.4)],
     hardpoints: [P('turret', 5, 2.6, 520, turbo(44)), P('turret', 5, 4.5, 520, turbo(44)), P('shield', 1, 5.6, 460), P('shield', 9, 5.6, 460), P('engine', 2.2, 9.3, 420), P('engine', 7.6, 9.3, 420)],
     engines: [[2.2, 9.5], [7.6, 9.5]], ability: 'shieldBoost',
   },
   {
     id: 'r-capital', faction: 'republic', tier: 'capital', name: 'Sovereign dreadnought', blurb: 'Dagger-hulled flagship. Turbolaser batteries and its own fighter wing.',
-    sprite: 'republic-capital', aspect: 0.627, size: 380, hull: 5400, shield: 3600, regen: 40, speed: 44, turn: 0.33, pop: 10, cost: 4200, build: 70, level: 4, squad: 1, sensor: 1500,
+    sprite: 'republic-capital', aspect: 0.627, size: 380, hull: 5400, shield: 3600, regen: 40, speed: 34, turn: 0.33, pop: 10, cost: 4200, build: 70, level: 4, squad: 1, sensor: 1500,
     weapons: [flak(6, 340, 0.45), flak(6, 340, 0.45)],
     hardpoints: [
       P('turret', 3.5, 3.6, 720, turbo(58, 760)), P('turret', 6.4, 3.6, 720, turbo(58, 760)), P('turret', 3.1, 5.4, 720, turbo(58, 760)), P('turret', 6.8, 5.4, 720, turbo(58, 760)),
@@ -219,26 +219,26 @@ export const UNITS: UnitType[] = [
   },
   {
     id: 'd-ion', faction: 'droid', tier: 'frigate', kind: 'ion', name: 'Disruptor frigate', blurb: 'One huge ion cannon that tears down shields in a few shots, leaving the hull open to everything else. Barely scratches bare armour.',
-    sprite: 'droid-ion', aspect: 0.435, size: 140, hull: 900, shield: 380, regen: 9, speed: 92, turn: 0.95, pop: 3, cost: 780, build: 22, level: 2, squad: 1, sensor: 1000,
+    sprite: 'droid-ion', aspect: 0.435, size: 140, hull: 900, shield: 380, regen: 9, speed: 70, turn: 0.95, pop: 3, cost: 780, build: 22, level: 2, squad: 1, sensor: 1000,
     weapons: [ion(70), flak(5, 300, 0.4)], hardpoints: [], engines: [[2.8, 9.5], [7.2, 9.5]],
     role: { role: 'Shield breaker', strong: ['shielded warships', 'stations'], weak: ['fighters', 'unshielded ships'] },
   },
   {
     id: 'd-frigate', faction: 'droid', tier: 'frigate', name: 'Scarab frigate', blurb: 'Armoured shell, prong cannons and repair droids.',
-    sprite: 'droid-frigate', aspect: 0.493, size: 135, hull: 1150, shield: 450, regen: 10, speed: 95, turn: 1.0, pop: 3, cost: 760, build: 21, level: 2, squad: 1, sensor: 950,
+    sprite: 'droid-frigate', aspect: 0.493, size: 135, hull: 1150, shield: 450, regen: 10, speed: 72, turn: 1.0, pop: 3, cost: 760, build: 21, level: 2, squad: 1, sensor: 950,
     weapons: [flak(6, 320, 0.33, 2), turbo(20, 520, 1.4, 1), turbo(20, 520, 1.4, 1)], hardpoints: [], engines: [[3.9, 9.6], [5, 9.7], [6.1, 9.6]],
     ability: 'repairSwarm',
   },
   {
     id: 'd-cruiser', faction: 'droid', tier: 'cruiser', name: 'Manta cruiser', blurb: 'Wide-winged gunline with prong cannons and a tractor projector that pins ships in place.',
-    sprite: 'droid-cruiser', aspect: 1.542, size: 260, hull: 2700, shield: 1100, regen: 18, speed: 64, turn: 0.55, pop: 5, cost: 1550, build: 33, level: 3, squad: 1, sensor: 1200,
+    sprite: 'droid-cruiser', aspect: 1.542, size: 260, hull: 2700, shield: 1100, regen: 18, speed: 49, turn: 0.55, pop: 5, cost: 1550, build: 33, level: 3, squad: 1, sensor: 1200,
     weapons: [turbo(12, 480, 1.2, 1), turbo(12, 480, 1.2, 1)],
     hardpoints: [P('turret', 1, 8.1, 560, turbo(40)), P('turret', 9, 8.1, 560, turbo(40)), P('shield', 2.9, 4.9, 440), P('shield', 7.1, 4.9, 440), P('engine', 4.5, 9.2, 420), P('engine', 5.5, 9.2, 420)],
     engines: [[4.5, 9.45], [5.5, 9.45]], ability: 'tractor',
   },
   {
     id: 'd-capital', faction: 'droid', tier: 'capital', name: 'Hive carrier', blurb: 'A flying droid factory. Its hangar arms never stop launching.',
-    sprite: 'droid-capital', aspect: 0.764, size: 380, hull: 6200, shield: 2800, regen: 32, speed: 40, turn: 0.32, pop: 10, cost: 4000, build: 68, level: 4, squad: 1, sensor: 1500,
+    sprite: 'droid-capital', aspect: 0.764, size: 380, hull: 6200, shield: 2800, regen: 32, speed: 31, turn: 0.32, pop: 10, cost: 4000, build: 68, level: 4, squad: 1, sensor: 1500,
     weapons: [flak(6, 340, 0.45), flak(6, 340, 0.45)],
     hardpoints: [
       P('turret', 4.1, 6.3, 680, turbo(52, 720)), P('turret', 5.9, 6.3, 680, turbo(52, 720)), P('turret', 4.2, 7.6, 680, turbo(52, 720)), P('turret', 5.8, 7.6, 680, turbo(52, 720)),

@@ -126,8 +126,10 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     for (const s of seats) starts.current.push(autoStart(base, s.area, map.spawns[s.spawn], starts.current))
     world.current = makeWorld(starts.current)
   }
-  /** Before the battle: time stands still while the player picks where to start. */
+  /** Before the battle: time stands still while the player picks where to start. Our station
+   * isn't placed (or shown) until they've clicked a spot. */
   const deploying = useRef(true)
+  const placed = useRef(false)
   const myTeam = world.current.players[me].team
   const myFaction = world.current.players[me].faction
   const brains = useRef<Brain[]>(seats.map((s, i) => (s.kind === 'ai' ? newBrain(i, s.difficulty) : null)).filter((b): b is Brain => !!b))
@@ -165,7 +167,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   const [ready, setReady] = useState(false)
   const [hud, setHud] = useState<Hud>(() => snapshot(world.current, me, selected.current, groups.current))
   const [toasts, setToasts] = useState<Toast[]>([])
-  const [ui, setUi] = useState({ paused: false, speed: 1, mode: 'normal' as Mode, menu: false, panel: null as 'settings' | 'keys' | 'howto' | null, tree: false, deploy: true })
+  const [ui, setUi] = useState({ paused: false, speed: 1, mode: 'normal' as Mode, menu: false, panel: null as 'settings' | 'keys' | 'howto' | null, tree: false, deploy: true, placed: false })
   /** Whether the game was paused before a menu opened (menus pause it, closing them restores that). */
   const pausedBefore = useRef(false)
   const uiRef = useRef(ui)
@@ -626,11 +628,12 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         line: line.current && drag.current?.moved ? { attack: !!drag.current.attack, ring: closedLoop(line.current), path: line.current, spots: spreadAlong(line.current, lineGroups(w, me, mySelection().filter((u) => isShip(u.t)).map((u) => u.id)).length) } : null,
         areas: deploying.current ? seats.map((s, i) => ({ r: s.area, color: relColor(w, me, i), label: s.name, mine: i === me })) : undefined,
         ghost: deploying.current && mouse.current.inside ? ghostAt(mouse.current.x, mouse.current.y) : null,
+        hideOwner: deploying.current && !placed.current ? me : -1,
         showRally: mySelection().some((u) => u.t.tier === 'station'),
       }
       renderer.current.draw(ctx, w, cm, vw, vh, v, dt * (paused.current ? 0 : speed.current))
       sound.ambience(paused.current ? 0 : dt)
-      renderer.current.minimap(mctx, w, me, cm, vw, vh, m.clientWidth, m.clientHeight, lastAlarm.current, mapFilterRef.current)
+      renderer.current.minimap(mctx, w, me, cm, vw, vh, m.clientWidth, m.clientHeight, lastAlarm.current, mapFilterRef.current, deploying.current && !placed.current ? me : -1)
 
       hudT -= dt
       if (hudT <= 0 || (w.winner !== -1 && !ended)) {
@@ -976,12 +979,21 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     }
     starts.current[me] = at
     world.current = makeWorld(starts.current)
+    if (!placed.current) {
+      placed.current = true
+      setUi((u) => ({ ...u, placed: true }))
+    }
     selected.current.clear()
     groups.current.clear()
     sound.click()
   }
   const beginBattle = () => {
     if (!deploying.current) return
+    if (!placed.current) {
+      sound.error()
+      toast('Click inside your start area to place your station first', 'bad')
+      return
+    }
     deploying.current = false
     setUi((u) => ({ ...u, deploy: false }))
     sound.menu(false)
@@ -1109,8 +1121,12 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       {ui.deploy && !ui.menu && !ui.panel && (
         <div className="ew-pausebox ew-deploybox">
           <Frame title="Choose your start">
-            <p>Click inside your start area (the bright box) to place your station. Everyone else picks inside theirs.</p>
-            <button className="ew-go" onClick={beginBattle}>
+            <p>
+              {ui.placed
+                ? 'Click again to move your station, or start when you are ready.'
+                : 'Click inside your start area (the bright box) to place your station. Everyone else picks inside theirs.'}
+            </p>
+            <button className="ew-go" onClick={beginBattle} disabled={!ui.placed}>
               Start battle (Enter)
             </button>
           </Frame>

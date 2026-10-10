@@ -44,6 +44,8 @@ export type View = {
   /** Before the battle starts: every player's start area, and where our station would go. */
   areas?: { r: Rect; color: string; label: string; mine: boolean }[]
   ghost?: { x: number; y: number; ok: boolean } | null
+  /** A player whose ships aren't drawn yet: ours, until we've picked where to start. */
+  hideOwner?: number
   showRally: boolean
 }
 
@@ -744,7 +746,7 @@ export class Renderer {
 
     // Ships and stations, big ones first so fighters fly over them.
     const myTeam = w.players[view.me].team
-    const shown = w.units.filter((u) => u.seen[myTeam] && onScreen(u.x, u.y, u.t.size))
+    const shown = w.units.filter((u) => u.seen[myTeam] && u.owner !== view.hideOwner && onScreen(u.x, u.y, u.t.size))
     shown.sort((a, b) => TIER_ORDER[a.t.tier] - TIER_ORDER[b.t.tier])
     for (const u of shown) this.drawUnit(ctx, u, w, z, view)
 
@@ -1235,6 +1237,8 @@ export class Renderer {
   minimap(
     ctx: CanvasRenderingContext2D, w: World, me: Owner, cam: Camera, vw: number, vh: number, mw: number, mh: number, alarm: { x: number; y: number; t: number } | null,
     filter: 'all' | 'ships' | 'stations' | 'enemies' = 'all',
+    /** A player whose ships aren't shown yet (ours, before we've picked where to start). */
+    hide = -1,
   ) {
     const s = Math.min(mw / w.w, mh / w.h)
     const ox = (mw - w.w * s) / 2
@@ -1256,6 +1260,7 @@ export class Renderer {
     ctx.globalCompositeOperation = 'lighter'
     ctx.fillStyle = 'rgba(70,110,170,0.09)'
     for (const u of w.units) {
+      if (u.owner === hide) continue
       if (w.players[u.owner].team !== w.players[me].team) continue
       ctx.beginPath()
       ctx.arc(X(u.x), Y(u.y), sensorOf(u) * s, 0, Math.PI * 2)
@@ -1326,6 +1331,7 @@ export class Renderer {
     }
     // Ships as dots sized by class; mines and stations as framed squares.
     for (const u of w.units) {
+      if (u.owner === hide) continue
       if (!u.seen[w.players[me].team]) continue
       // The filter tabs under the map.
       if (filter === 'ships' && !isShip(u.t)) continue
