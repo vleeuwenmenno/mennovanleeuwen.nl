@@ -156,6 +156,26 @@
   color: #ffc4be;
   border-color: rgba(255, 106, 94, 0.4);
 }
+/* A mode that isn't built yet: shown, dimmed, with a "coming soon" tag. */
+.ew-deck .ew-menu-btn.is-soon {
+  opacity: 0.55;
+  cursor: not-allowed;
+  filter: grayscale(0.6);
+}
+.ew-soon {
+  margin-left: auto;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid rgba(242, 193, 74, 0.45);
+  color: var(--ew-gold);
+  font: 600 9.5px/1.3 system-ui, sans-serif;
+  font-style: normal;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.ew-menu-frame .ew-frame-head {
+  margin-bottom: 2px;
+}
 .ew-menu-list.is-row .ew-menu-btn {
   flex: 1;
   justify-content: center;
@@ -742,6 +762,24 @@ span.ew-teamtag {
 .ew-canvas.is-targeting {
   cursor: crosshair;
 }
+/* Order modes: each order its own cursor and colour, so the next click's meaning is plain: attack a crosshair, move arrows pointing in, patrol
+   two looping arrows, guard a shield, rally a flag (its pole's foot is the spot). */
+.ew-canvas.is-mode-attack {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cg stroke='%23000' stroke-width='4' opacity='0.75'%3E%3Ccircle cx='16' cy='16' r='8'/%3E%3Cpath d='M16 2v7M16 23v7M2 16h7M23 16h7'/%3E%3C/g%3E%3Cg stroke='%23ff5a50' stroke-width='2'%3E%3Ccircle cx='16' cy='16' r='8'/%3E%3Cpath d='M16 2v7M16 23v7M2 16h7M23 16h7'/%3E%3C/g%3E%3C/g%3E%3Ccircle cx='16' cy='16' r='1.6' fill='%23ff5a50' stroke='%23000' stroke-width='0.8'/%3E%3C/svg%3E") 16 16, crosshair;
+}
+.ew-canvas.is-mode-move {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cg stroke='%23000' stroke-width='4' opacity='0.75'%3E%3Cpath d='M16 3v6M13 6.5l3 3 3-3M16 29v-6M13 25.5l3-3 3 3M3 16h6M6.5 13l3 3-3 3M29 16h-6M25.5 13l-3 3 3 3'/%3E%3C/g%3E%3Cg stroke='%237dffa0' stroke-width='2'%3E%3Cpath d='M16 3v6M13 6.5l3 3 3-3M16 29v-6M13 25.5l3-3 3 3M3 16h6M6.5 13l3 3-3 3M29 16h-6M25.5 13l-3 3 3 3'/%3E%3C/g%3E%3C/g%3E%3Ccircle cx='16' cy='16' r='1.6' fill='%237dffa0' stroke='%23000' stroke-width='0.8'/%3E%3C/svg%3E") 16 16, crosshair;
+}
+.ew-canvas.is-mode-patrol {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cg stroke='%23000' stroke-width='4' opacity='0.75'%3E%3Cpath d='M6 13a10 10 0 0 1 17-5M26 19a10 10 0 0 1-17 5'/%3E%3Cpath d='M23 3.5v4.8h-4.8M9 28.5v-4.8h4.8'/%3E%3C/g%3E%3Cg stroke='%238fd0ff' stroke-width='2'%3E%3Cpath d='M6 13a10 10 0 0 1 17-5M26 19a10 10 0 0 1-17 5'/%3E%3Cpath d='M23 3.5v4.8h-4.8M9 28.5v-4.8h4.8'/%3E%3C/g%3E%3C/g%3E%3Ccircle cx='16' cy='16' r='1.6' fill='%238fd0ff' stroke='%23000' stroke-width='0.8'/%3E%3C/svg%3E") 16 16, crosshair;
+}
+.ew-canvas.is-mode-guard {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cg stroke='%23000' stroke-width='4' opacity='0.75'%3E%3Cpath d='M16 4l9 3.5v7c0 6-4 10-9 12.5-5-2.5-9-6.5-9-12.5v-7z'/%3E%3C/g%3E%3Cg stroke='%235fe6d0' stroke-width='2'%3E%3Cpath d='M16 4l9 3.5v7c0 6-4 10-9 12.5-5-2.5-9-6.5-9-12.5v-7z'/%3E%3C/g%3E%3C/g%3E%3Ccircle cx='16' cy='16' r='1.6' fill='%235fe6d0' stroke='%23000' stroke-width='0.8'/%3E%3C/svg%3E") 16 16, crosshair;
+}
+.ew-canvas.is-mode-rally {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cg stroke='%23000' stroke-width='4' opacity='0.75'%3E%3Cpath d='M6 29V4M6 5h15l-3.5 5 3.5 5H6'/%3E%3C/g%3E%3Cg stroke='%23f2c14a' stroke-width='2'%3E%3Cpath d='M6 29V4M6 5h15l-3.5 5 3.5 5H6'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E") 6 29, crosshair;
+}
+
 .ew-icon {
   flex: none;
   display: block;
@@ -932,34 +970,64 @@ span.ew-teamtag {
 .ew-toasts {
   position: absolute;
   top: 56px;
-  left: 50%;
-  transform: translateX(-50%);
+  right: 10px;
+  width: min(340px, calc(100% - 20px));
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 4px;
+  align-items: flex-end;
+  gap: 5px;
   pointer-events: none;
   /* Above the tech tree too: it doesn't pause the battle, and its own errors show here. */
   z-index: 7;
 }
-.ew-toasts.is-low {
-  top: 170px;
+/* Messages: small panels like the HUD's own (the tactical map and such), in plain text. */
+.ew-toast.ew-frame {
+  --cut: 7px;
+  max-width: 100%;
+  pointer-events: auto;
+  animation: ew-in-right 0.2s ease-out;
 }
-.ew-toast {
-  padding: 5px 14px;
-  border-radius: 14px;
-  background: var(--ew-glass);
-  border: 1px solid var(--ew-line);
+.ew-toast .ew-frame-in {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 12px;
   font-size: 12.5px;
-  animation: ew-in 0.2s ease-out;
+  line-height: 1.35;
+  color: var(--ew-text);
 }
-.ew-toast.is-good {
-  border-color: rgba(125, 255, 160, 0.5);
-  color: #c8ffd6;
+.ew-toast .ew-frame-in > span {
+  flex: 1;
 }
-.ew-toast.is-bad {
-  border-color: rgba(255, 106, 94, 0.6);
-  color: #ffd0cb;
+.ew-deck .ew-toast-x {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ew-muted);
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.ew-toast:hover .ew-toast-x,
+.ew-toast-x:focus-visible {
+  opacity: 1;
+}
+.ew-deck .ew-toast-x:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+@keyframes ew-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
 }
 @keyframes ew-in {
   from {
@@ -997,8 +1065,8 @@ span.ew-teamtag {
 }
 
 .ew-mapframe {
-  flex: none;
-  width: 330px;
+  width: 363px;
+  height: 264px;
 }
 .ew-selframe {
   flex: none;
@@ -1498,7 +1566,8 @@ span.ew-teamtag {
 .ew-deck .ew-shipcard:hover:not(:disabled) {
   background: linear-gradient(180deg, rgba(40, 62, 110, 0.98), rgba(16, 24, 48, 0.98));
 }
-.ew-shipcard img {
+.ew-shipcard img,
+.ew-shipcard .ew-art {
   grid-column: 1 / -1;
   justify-self: center;
   align-self: center;
@@ -1533,11 +1602,28 @@ span.ew-teamtag {
   color: #b9c8e0;
   justify-self: end;
 }
-.ew-shipcard.is-off {
+/* Can't build it right now (credits, fleet size): greyed out, but still readable. */
+.ew-deck .ew-shipcard.is-off {
+  opacity: 0.5;
+  filter: grayscale(0.85);
+  background: rgba(20, 24, 32, 0.6);
+  border-color: rgba(140, 150, 170, 0.18);
+}
+.ew-deck .ew-shipcard.is-off:hover {
+  opacity: 0.7;
+}
+/* Above the station's level (shown only with the setting): darker still. */
+.ew-deck .ew-shipcard.is-locked {
+  opacity: 0.38;
+  filter: grayscale(1);
+  background: rgba(14, 16, 22, 0.7);
+  border-color: rgba(140, 150, 170, 0.12);
+}
+.ew-deck .ew-shipcard.is-locked:hover {
   opacity: 0.55;
 }
 .ew-shipcard.is-locked img {
-  filter: grayscale(1) brightness(0.45);
+  filter: brightness(0.5);
 }
 .ew-shipcard.is-locked .ew-cost,
 .ew-shipcard.is-locked .ew-time {
@@ -1577,7 +1663,8 @@ span.ew-teamtag {
   width: 150px;
   aspect-ratio: auto;
 }
-.ew-sitecard img {
+.ew-sitecard img,
+.ew-sitecard .ew-art {
   height: 50px;
 }
 .ew-sitecard small {
@@ -2081,8 +2168,8 @@ span.ew-teamtag {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 7px 4px 6px;
+  gap: 2px;
+  padding: 5px 4px 4px;
   font-size: 11.5px;
   color: #d6e2f5;
 }
@@ -2099,9 +2186,6 @@ span.ew-teamtag {
   opacity: 0.35;
 }
 .ew-deck .ew-abilitybtn {
-  grid-column: 1 / -1;
-  flex-direction: row;
-  justify-content: center;
   color: #ffe6a0;
   border-color: rgba(242, 193, 74, 0.5);
 }
@@ -2150,7 +2234,7 @@ span.ew-teamtag {
 /* Narrower windows: slimmer side panels, then fewer details; phones lose the map. */
 @container (max-width: 1180px) {
   .ew-mapframe {
-    width: 270px;
+    width: 297px;
   }
   .ew-mapframe .ew-frame-head span,
   .is-station .ew-bars small {
@@ -2181,7 +2265,7 @@ span.ew-teamtag {
     height: 236px;
   }
   .ew-mapframe {
-    width: 220px;
+    width: 242px;
   }
   .ew-selframe {
     width: 210px;
@@ -2211,8 +2295,7 @@ span.ew-teamtag {
   .ew-selframe {
     width: 150px;
   }
-  .ew-speed,
-  .ew-clock {
+  .ew-clockval {
     display: none;
   }
   .ew-detail-side {
@@ -2312,4 +2395,2399 @@ span.ew-teamtag {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+/* The fleet inventory: ships built at the station wait there, dragged out of its tray onto the
+   battlefield; the small jump button on a shipyard card builds one that jumps in at the station. */
+.ew-shipwrap {
+  position: relative;
+  flex: none;
+}
+.ew-deck .ew-reservebtn {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--ew-accent);
+  background: rgba(6, 12, 28, 0.85);
+  border: 1px solid color-mix(in srgb, var(--ew-accent) 55%, transparent);
+}
+.ew-deck .ew-reservebtn:hover:not(.is-off) {
+  background: color-mix(in srgb, var(--ew-accent) 28%, rgba(6, 12, 28, 0.9));
+  color: #fff;
+}
+.ew-deck .ew-reservebtn.is-off {
+  opacity: 0.4;
+}
+.ew-deck .ew-slot.is-jump {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ew-accent) 70%, transparent);
+}
+.ew-reservechip b {
+  min-width: 1.2em;
+  text-align: center;
+}
+.ew-reservechip:not(.is-busy) b {
+  color: var(--ew-muted);
+}
+.ew-float.ew-reserve {
+  max-width: min(520px, calc(100% - 24px));
+}
+.ew-reserve .ew-frame-in {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px 10px;
+}
+.ew-reserve-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ew-deck .ew-reserve-tile {
+  position: relative;
+  width: 88px;
+  padding: 6px 4px 5px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.ew-deck .ew-reserve-tile:active {
+  cursor: grabbing;
+}
+.ew-reserve-tile img {
+  width: 46px;
+  height: 46px;
+  object-fit: contain;
+  pointer-events: none;
+}
+.ew-reserve-tile span {
+  font-size: 10.5px;
+  line-height: 1.15;
+  text-align: center;
+}
+.ew-reserve-tile b {
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  font: 700 11px system-ui;
+  color: var(--ew-good);
+}
+
+/* A hull with its modules (ShipArt): an inline SVG sized like the image it stands in for. */
+.ew-art {
+  display: block;
+  overflow: visible;
+}
+.ew-schem .ew-art {
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.6));
+}
+.ew-art image.is-dead {
+  filter: brightness(0.3) sepia(0.6);
+}
+.ew-siteopts {
+  flex-wrap: wrap;
+}
+.ew-deck .ew-sitecard {
+  width: 128px;
+}
+
+/* A structure's repair button, and its progress while the crew works. */
+.ew-deck .ew-repair {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  padding: 3px 9px;
+  font-size: 11.5px;
+  border-radius: 6px;
+  color: var(--ew-good);
+  border: 1px solid color-mix(in srgb, var(--ew-good) 45%, transparent);
+  background: rgba(10, 30, 20, 0.6);
+}
+.ew-deck .ew-repair.is-off {
+  opacity: 0.5;
+}
+.ew-repair.is-busy i {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--ew-good);
+}
+
+/* Hyperspace retreat: under the command grid, lit while drives are charging. */
+.ew-deck .ew-retreatbtn {
+  color: var(--ew-accent);
+}
+.ew-cmdbtn > span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.ew-deck .ew-retreatbtn.is-on {
+  color: #fff;
+  background: color-mix(in srgb, var(--ew-accent) 30%, rgba(8, 14, 30, 0.9));
+  animation: ew-charge 0.8s ease-in-out infinite alternate;
+}
+@keyframes ew-charge {
+  to {
+    box-shadow: 0 0 12px color-mix(in srgb, var(--ew-accent) 70%, transparent);
+  }
+}
+
+/* The unit card's small retreat button, at the end of its header. */
+.ew-deck .ew-retreaticon {
+  margin-left: auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--ew-accent);
+  border: 1px solid color-mix(in srgb, var(--ew-accent) 50%, transparent);
+  background: rgba(8, 14, 30, 0.7);
+}
+.ew-deck .ew-retreaticon:hover {
+  color: #fff;
+  background: color-mix(in srgb, var(--ew-accent) 25%, rgba(8, 14, 30, 0.9));
+}
+.ew-deck .ew-retreaticon.is-on {
+  color: #fff;
+  background: color-mix(in srgb, var(--ew-accent) 30%, rgba(8, 14, 30, 0.9));
+  animation: ew-charge 0.8s ease-in-out infinite alternate;
+}
+.ew-retreaticon b {
+  font-weight: 600;
+}
+/* After the order text, which already takes the free space. */
+.ew-deck .ew-orders + .ew-retreaticon {
+  margin-left: 0;
+}
+
+/* The game's tooltips (Tips): a small panel in the HUD's style instead of the browser's box. */
+.ew-tip {
+  position: absolute;
+  z-index: 60;
+  max-width: 320px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--ew-line);
+  border-left: 2px solid var(--ew-accent);
+  background: rgba(6, 10, 22, 0.96);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+  color: var(--ew-text);
+  font: 12px/1.45 system-ui, sans-serif;
+  white-space: pre-line;
+  pointer-events: none;
+}
+
+/* The top bar's time cell: pause and play, the clock, and the speed (which cycles). */
+.ew-timectl {
+  gap: 2px;
+  padding: 0 14px;
+}
+.ew-deck .ew-timectl button {
+  display: grid;
+  place-items: center;
+  min-width: 30px;
+  height: 26px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ew-head);
+}
+.ew-deck .ew-timectl button:hover {
+  background: rgba(120, 170, 230, 0.16);
+}
+.ew-clockval {
+  min-width: 44px;
+  text-align: center;
+  font-family: var(--ew-display);
+  font-size: 15px;
+}
+.ew-timectl.is-paused .ew-clockval {
+  color: var(--ew-gold);
+  animation: ew-blink 1s steps(2, start) infinite;
+}
+@keyframes ew-blink {
+  to {
+    opacity: 0.45;
+  }
+}
+.ew-deck .ew-timectl .ew-speedbtn {
+  font-family: var(--ew-display);
+  font-size: 12px;
+  color: var(--ew-accent);
+  border: 1px solid color-mix(in srgb, var(--ew-accent) 40%, transparent);
+}
+
+/* The battle menu. */
+.ew-modal.ew-battlemenu {
+  width: min(420px, 100%);
+}
+.ew-battlemenu .ew-frame-in {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px 16px;
+}
+.ew-bm-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.ew-bm-head img {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+}
+.ew-bm-head div {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ew-bm-head strong {
+  font-family: var(--ew-display);
+  font-size: 15px;
+  letter-spacing: 0.06em;
+  color: var(--ew-head);
+}
+.ew-bm-head small {
+  font-size: 11.5px;
+}
+.ew-bm-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin: 0;
+}
+.ew-bm-stats div {
+  padding: 6px 4px;
+  text-align: center;
+  border-radius: 6px;
+  background: rgba(20, 32, 60, 0.6);
+  border: 1px solid var(--ew-line);
+}
+.ew-bm-stats dt {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ew-muted);
+}
+.ew-bm-stats dd {
+  margin: 2px 0 0;
+  font-family: var(--ew-display);
+  font-size: 15px;
+}
+.ew-deck .ew-bm-resume {
+  justify-content: center;
+  padding: 13px 16px;
+  font-size: 14px;
+}
+.ew-bm-quick {
+  display: flex;
+  gap: 6px;
+}
+.ew-deck .ew-bm-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 6px;
+  font-size: 12px;
+  color: var(--ew-muted);
+}
+.ew-deck .ew-bm-toggle.is-on {
+  color: var(--ew-head);
+  border-color: color-mix(in srgb, var(--ew-accent) 60%, transparent);
+  background: color-mix(in srgb, var(--ew-accent) 18%, rgba(20, 30, 56, 0.9));
+}
+.ew-bm-speed {
+  flex: 1.3;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--ew-line);
+  background: rgba(20, 30, 56, 0.6);
+  color: var(--ew-muted);
+}
+.ew-deck .ew-bm-speed button {
+  flex: 1;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--ew-display);
+  font-size: 12px;
+}
+.ew-deck .ew-bm-speed button.is-on {
+  color: #fff;
+  background: color-mix(in srgb, var(--ew-accent) 35%, transparent);
+}
+.ew-bm-panels,
+.ew-bm-danger {
+  display: grid;
+  gap: 6px;
+}
+.ew-bm-panels {
+  grid-template-columns: repeat(3, 1fr);
+}
+.ew-bm-danger {
+  grid-template-columns: 1fr 1fr;
+  padding-top: 10px;
+  border-top: 1px solid var(--ew-line);
+}
+.ew-deck .ew-bm-panels .ew-menu-btn,
+.ew-deck .ew-bm-danger .ew-menu-btn {
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 8px;
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+}
+.ew-bm-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 106, 94, 0.45);
+  background: rgba(60, 12, 12, 0.45);
+  font-size: 12.5px;
+}
+.ew-bm-confirm div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.ew-deck .ew-bm-confirm .ew-menu-btn {
+  justify-content: center;
+  padding: 8px;
+}
+
+/* The faction cell opens the fleet inventory: a badge counts the ships waiting, and hovering
+   shows what they are. */
+.ew-factionwrap {
+  position: relative;
+  display: flex;
+}
+.ew-deck .ew-top-faction {
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+.ew-deck .ew-top-faction:hover {
+  background: linear-gradient(180deg, rgba(30, 46, 84, 0.98), rgba(12, 20, 40, 0.98));
+}
+.ew-emblem {
+  position: relative;
+  display: grid;
+}
+.ew-emblem em {
+  position: absolute;
+  right: -7px;
+  bottom: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--ew-good);
+  color: #062010;
+  font: 700 10px/16px system-ui;
+  font-style: normal;
+  text-align: center;
+  box-shadow: 0 0 0 2px #10182c;
+}
+.ew-tip.ew-fleettip {
+  top: calc(100% + 8px);
+  left: 0;
+  width: max-content;
+  max-width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  white-space: normal;
+}
+.ew-fleettip-ships {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ew-fleettip-ships > span {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px 2px 2px;
+  border-radius: 5px;
+  background: rgba(20, 32, 60, 0.7);
+}
+.ew-fleettip-ships img {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+}
+
+/* The shipyard and research as icon buttons on the right of the top bar. */
+.ew-deck .ew-jobbtn {
+  position: relative;
+  overflow: hidden;
+  padding: 0 14px;
+  color: var(--ew-muted);
+}
+.ew-deck .ew-jobbtn.is-busy {
+  color: var(--ew-head);
+}
+.ew-deck .ew-jobbtn:hover {
+  color: #fff;
+}
+.ew-jobbtn em {
+  position: absolute;
+  top: 3px;
+  right: 7px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--ew-accent);
+  color: #061020;
+  font: 700 9.5px/14px system-ui;
+  font-style: normal;
+  text-align: center;
+}
+.ew-jobbtn i {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 4px;
+  height: 2px;
+  background: var(--ew-good);
+  transform-origin: left;
+}
+
+/* Floating panels (the fleet inventory, the economy): dragged by their title bar. */
+.ew-float {
+  position: absolute;
+  z-index: 6;
+}
+.ew-float-head {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  align-items: center;
+}
+.ew-float-head:active {
+  cursor: grabbing;
+}
+.ew-deck .ew-creditcell {
+  cursor: pointer;
+  color: inherit;
+}
+.ew-deck .ew-creditcell:hover {
+  background: linear-gradient(180deg, rgba(30, 46, 84, 0.98), rgba(12, 20, 40, 0.98));
+}
+
+/* The economy panel. */
+.ew-float.ew-econ {
+  width: min(400px, calc(100% - 24px));
+  max-height: calc(100% - 300px);
+  display: flex;
+}
+.ew-econ > .ew-frame {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.ew-econ .ew-frame-in {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px 12px;
+}
+.ew-econ h5 {
+  margin: 4px 0 0;
+  font-family: var(--ew-display);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ew-muted);
+}
+.ew-econ-top {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.ew-econ-top > div {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(20, 32, 60, 0.6);
+  border: 1px solid var(--ew-line);
+}
+.ew-econ-top b {
+  font-family: var(--ew-display);
+  font-size: 16px;
+}
+.ew-econ-top b small {
+  font-size: 10px;
+}
+.ew-refund {
+  color: #c890ff;
+}
+.ew-spent {
+  color: #ffb4a8;
+}
+.ew-econ-stack {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+}
+.ew-econ-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ew-econ-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+}
+.ew-econ-row > span:first-child {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ew-econ-row i,
+.ew-econ-log i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  margin-right: 3px;
+}
+.ew-econ-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+.ew-econ-bar b {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+.ew-econ-row > b {
+  min-width: 46px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.ew-econ-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.ew-econ-cols .ew-econ-row {
+  grid-template-columns: minmax(0, 1fr) 40px auto;
+}
+.ew-econ-chart svg {
+  display: block;
+  width: 100%;
+  height: 110px;
+  border-radius: 6px;
+  background: rgba(8, 14, 30, 0.7);
+  border: 1px solid var(--ew-line);
+}
+.ew-econ-chart.is-empty {
+  padding: 18px 8px;
+  text-align: center;
+  border-radius: 6px;
+  border: 1px dashed var(--ew-line);
+}
+.ew-econ-grid {
+  stroke: rgba(160, 200, 255, 0.08);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.ew-econ-area {
+  fill: rgba(242, 193, 74, 0.14);
+}
+.ew-econ-credits {
+  fill: none;
+  stroke: #f2c14a;
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+}
+.ew-econ-income {
+  fill: none;
+  stroke: #7dffa0;
+  stroke-width: 1.4;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+.ew-econ-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 4px;
+  font-size: 10.5px;
+}
+.ew-econ-legend i {
+  display: inline-block;
+  width: 12px;
+  height: 3px;
+  vertical-align: middle;
+  margin-right: 3px;
+}
+.ew-econ-legend i.is-credits {
+  background: #f2c14a;
+}
+.ew-econ-legend i.is-income {
+  background: #7dffa0;
+}
+.ew-econ-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11.5px;
+}
+.ew-econ-log li {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.ew-econ-log li:nth-child(odd) {
+  background: rgba(255, 255, 255, 0.03);
+}
+.ew-econ-log li > span:nth-child(2) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ew-econ-log b {
+  font-variant-numeric: tabular-nums;
+}
+/* Three rows of commands: a little smaller, so they fit under the selected ships. */
+.ew-cmdgrid {
+  gap: 4px;
+}
+.ew-cmdbtn > svg {
+  width: 18px;
+  height: 18px;
+}
+/* The selection panel is as tall as what it holds: at least the dock, growing upward past it when
+   the selection, control groups and three rows of commands need the room. */
+.ew-selframe {
+  align-self: flex-end;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.ew-selframe .ew-frame-in {
+  flex: 1;
+  height: auto;
+}
+
+/* A mining platform's own upgrades, on its card. */
+.ew-siteupg {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ew-siteupg > div {
+  display: flex;
+  gap: 6px;
+}
+.ew-deck .ew-siteupg-btn {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 2px 8px;
+  min-width: 150px;
+  padding: 5px 9px;
+  text-align: left;
+  font-size: 11.5px;
+}
+.ew-siteupg-btn strong {
+  font-weight: 600;
+}
+.ew-siteupg-btn small {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--ew-gold);
+}
+.ew-siteupg-btn .ew-pips {
+  margin: 0;
+}
+.ew-siteupg-btn .ew-pips i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+}
+.ew-siteupg-btn .ew-pips i.is-on {
+  background: var(--ew-good);
+}
+.ew-deck .ew-siteupg-btn.is-off {
+  opacity: 0.55;
+}
+.ew-deck .ew-siteupg-btn.is-done small {
+  color: var(--ew-good);
+}
+.ew-siteupg-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--ew-good);
+  transform-origin: left;
+}
+.ew-siteupg > div {
+  flex-wrap: wrap;
+}
+.ew-deck .ew-siteupg-btn {
+  min-width: 132px;
+}
+
+/* The tactical map floats (Floating): 10% bigger than it was in the dock, its frame filling it. */
+.ew-float.ew-mapframe {
+  z-index: 3;
+  display: flex;
+}
+.ew-mapframe > .ew-frame {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.ew-mapframe > .ew-frame > .ew-frame-in {
+  flex: 1;
+  min-height: 0;
+}
+.ew-mapsides {
+  margin-left: auto;
+}
+
+/* The bottom of the battle screen: a shade under the floating panels (they used to sit in a dock). */
+.ew-dockshade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 252px;
+  background: linear-gradient(180deg, transparent, rgba(4, 6, 14, 0.55) 30%);
+  pointer-events: none;
+  z-index: 2;
+}
+.ew-float.is-bare {
+  z-index: 3;
+}
+.ew-float.is-moved {
+  z-index: 4;
+}
+/* The unit card: as tall as it needs, up to the old dock's height, scrolling past that. */
+.ew-detailfloat {
+  display: flex;
+  max-height: 240px;
+  max-width: calc(100% - 340px);
+}
+.ew-detailfloat > .ew-detail {
+  max-height: 240px;
+}
+/* The selection: at least the old dock's height, growing upward when it needs to. */
+.ew-selfloat {
+  display: flex;
+}
+.ew-selfloat > .ew-selframe {
+  min-height: 240px;
+}
+
+/* The battle menu's window layouts. */
+.ew-bm-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--ew-line);
+}
+.ew-bm-layout header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ew-bm-layout h5 {
+  flex: 1;
+  margin: 0;
+  font-family: var(--ew-display);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ew-muted);
+}
+.ew-deck .ew-bm-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  border-radius: 6px;
+}
+.ew-deck .ew-bm-mini.is-primary {
+  color: #fff;
+  border-color: color-mix(in srgb, var(--ew-accent) 60%, transparent);
+  background: color-mix(in srgb, var(--ew-accent) 25%, rgba(20, 30, 56, 0.9));
+}
+.ew-deck .ew-bm-mini.is-x {
+  padding: 4px 8px;
+  color: var(--ew-muted);
+}
+.ew-bm-name {
+  display: flex;
+  gap: 6px;
+}
+.ew-bm-name input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--ew-line);
+  background: rgba(6, 10, 22, 0.8);
+  color: var(--ew-text);
+  font: inherit;
+  font-size: 12px;
+}
+.ew-bm-layout ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 130px;
+  overflow-y: auto;
+}
+.ew-bm-layout li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  background: rgba(20, 32, 60, 0.45);
+  font-size: 12.5px;
+}
+.ew-bm-layout li > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-deck .ew-bm-star {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ew-muted);
+  font-size: 15px;
+}
+.ew-deck .ew-bm-star.is-on {
+  color: var(--ew-gold);
+}
+
+/* The ore card's four options in one row: compact cards (picture, name, price and time, and two
+   lines on what it's for), so nothing wraps out of the card's height. */
+.ew-siteopts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.ew-deck .ew-sitecard {
+  width: auto;
+  min-width: 0;
+  padding: 5px 6px 6px;
+  gap: 2px 4px;
+}
+.ew-sitecard img,
+.ew-sitecard .ew-art {
+  height: 40px;
+}
+.ew-sitecard strong {
+  grid-column: 1 / -1;
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ew-sitecard .ew-cost {
+  grid-column: 1 / -1;
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+  font-size: 10.5px;
+}
+.ew-sitecard small {
+  font-size: 10px;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* --- The shipyard: a page toggle on the left, dense cards in two rows that scroll sideways, and
+   the build queue docked on top of the window as holograms. --- */
+.ew-detailfloat {
+  max-height: none;
+}
+.ew-detailfloat .ew-detail {
+  max-height: 240px;
+}
+.ew-stationwrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+}
+.ew-stationwrap > .ew-detail {
+  align-self: stretch;
+}
+.ew-yardbody {
+  display: flex;
+  gap: 8px;
+  min-height: 0;
+  min-width: 0;
+}
+.ew-yardtabs {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ew-deck .ew-yardtabs button {
+  position: relative;
+  width: 70px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 5px 4px;
+  font-size: 10.5px;
+  color: var(--ew-muted);
+}
+.ew-deck .ew-yardtabs button.is-on {
+  color: var(--ew-head);
+  border-color: color-mix(in srgb, var(--ew-accent) 60%, transparent);
+  background: color-mix(in srgb, var(--ew-accent) 18%, rgba(20, 30, 56, 0.9));
+}
+.ew-yardtabs em {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  font-style: normal;
+  font-size: 9.5px;
+  opacity: 0.7;
+}
+.ew-yard {
+  display: grid;
+  grid-template-rows: repeat(2, 64px);
+  grid-auto-flow: column;
+  grid-auto-columns: 88px;
+  gap: 4px;
+  min-width: 0;
+  max-width: calc(8 * 88px + 7 * 4px);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 170, 230, 0.35) transparent;
+}
+.ew-yard .ew-shipwrap {
+  display: flex;
+}
+.ew-deck .ew-yard .ew-shipcard {
+  width: 88px;
+  height: 64px;
+  aspect-ratio: auto;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 26px auto auto;
+  align-items: center;
+  gap: 1px 2px;
+  padding: 3px 4px 3px;
+}
+.ew-yard .ew-shipcard .ew-art,
+.ew-yard .ew-shipcard img {
+  height: 26px;
+}
+.ew-yard .ew-shipcard strong {
+  grid-column: 1 / -1;
+  font-size: 10px;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ew-yard .ew-shipcard .ew-cost,
+.ew-yard .ew-shipcard .ew-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+.ew-yard .ew-shipcard .ew-cost {
+  justify-self: start;
+}
+.ew-yard .ew-lock {
+  top: 3px;
+  left: auto;
+  right: 3px;
+  transform: none;
+  padding: 0 4px;
+  font-size: 9px;
+}
+.ew-yard .ew-qbadge {
+  top: auto;
+  bottom: 22px;
+  right: 3px;
+  min-width: 14px;
+  height: 14px;
+  font-size: 9px;
+  line-height: 14px;
+}
+.ew-deck .ew-yard .ew-reservebtn {
+  left: 3px;
+  top: 3px;
+  width: 17px;
+  height: 17px;
+  border-radius: 4px;
+}
+.ew-yard .ew-reservebtn svg {
+  width: 11px;
+  height: 11px;
+}
+
+
+
+/* A structure's focus fire, on its card. */
+.ew-focus {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+}
+.ew-focus > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.ew-deck .ew-focus-x {
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 16px;
+}
+.ew-focus-pick {
+  color: #ffb4a8;
+}
+
+/* Square ship cards: picture, a name on up to two lines, price and time on one small line. */
+.ew-yard {
+  grid-template-rows: repeat(2, 84px);
+  grid-auto-columns: 84px;
+  max-width: calc(8 * 84px + 7 * 4px);
+}
+.ew-deck .ew-yard .ew-shipcard {
+  width: 84px;
+  height: 84px;
+  grid-template-columns: 1fr;
+  grid-template-rows: 32px 1fr auto;
+  justify-items: center;
+  gap: 1px;
+  padding: 4px 4px 3px;
+}
+.ew-yard .ew-shipcard .ew-art,
+.ew-yard .ew-shipcard img {
+  height: 32px;
+}
+.ew-yard .ew-shipcard strong {
+  align-self: center;
+  max-width: 100%;
+  font-size: 9.5px;
+  line-height: 1.15;
+  text-align: center;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ew-yard .ew-shipcard .ew-cost,
+.ew-yard .ew-shipcard .ew-time {
+  grid-row: 3;
+  font-size: 9px;
+}
+.ew-yard .ew-shipcard .ew-cost {
+  justify-self: start;
+}
+.ew-yard .ew-shipcard .ew-time {
+  justify-self: end;
+}
+.ew-yard .ew-shipcard .ew-cost svg,
+.ew-yard .ew-shipcard .ew-time svg {
+  width: 9px;
+  height: 9px;
+}
+.ew-yard .ew-qbadge {
+  bottom: auto;
+  top: 3px;
+  right: 3px;
+}
+.ew-yard .ew-lock + .ew-qbadge {
+  top: 18px;
+}
+
+/* The build queue: holo projectors standing on the window's top edge, no panel round them. */
+.ew-buildq {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin: 0 0 -5px 26px;
+  height: 74px;
+  pointer-events: none;
+  position: relative;
+  z-index: 1;
+}
+.ew-deck .ew-holo {
+  position: relative;
+  width: 50px;
+  height: 74px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.ew-holo.is-off {
+  height: 12px;
+  align-self: flex-end;
+}
+/* The projector: a round lens on a squat base. */
+.ew-holo-base {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 30px;
+  height: 9px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 50% 40%, #9feeff 0 18%, #2c4a66 22%, #16243a 60%, #0a121e 100%);
+  box-shadow: 0 0 0 1px rgba(183, 154, 98, 0.55), 0 2px 4px rgba(0, 0, 0, 0.6);
+}
+.ew-holo.is-off .ew-holo-base {
+  background: radial-gradient(ellipse at 50% 40%, #3a4b5c 0 18%, #1c2a3c 24%, #0f1826 70%, #090f18 100%);
+}
+/* The beam: a V of light opening upward from the lens. */
+.ew-holo-beam {
+  position: absolute;
+  left: 50%;
+  bottom: 5px;
+  width: 50px;
+  height: 66px;
+  transform: translateX(-50%);
+  clip-path: polygon(50% 100%, 0 0, 100% 0);
+  background: linear-gradient(0deg, rgba(120, 230, 255, 0.42), rgba(120, 230, 255, 0.06) 85%, transparent);
+  opacity: 0.55;
+}
+.ew-holo.is-building .ew-holo-beam {
+  opacity: 1;
+  animation: ew-beam 2.6s ease-in-out infinite;
+}
+@keyframes ew-beam {
+  50% {
+    opacity: 0.8;
+  }
+}
+/* The ship in the beam: a faint whole, and over it the part already built, lit. */
+.ew-holo-ship {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  width: 34px;
+  height: 44px;
+  transform: translateX(-50%);
+}
+.ew-holo-ship img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: grayscale(1) sepia(1) hue-rotate(155deg) saturate(3.5) brightness(1.3);
+}
+.ew-holo-ship img.is-dim {
+  opacity: 0.28;
+}
+.ew-holo-ship img.is-lit {
+  opacity: 0.95;
+  filter: grayscale(1) sepia(1) hue-rotate(155deg) saturate(4) brightness(1.6) drop-shadow(0 0 3px rgba(110, 230, 255, 0.9));
+}
+.ew-holo-ship::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, rgba(10, 20, 40, 0.35) 0 1px, transparent 1px 3px);
+  animation: ew-holo-scan 2.4s linear infinite;
+  pointer-events: none;
+}
+.ew-holo:hover .ew-holo-ship img {
+  filter: grayscale(1) sepia(1) hue-rotate(-20deg) saturate(4) brightness(1.3);
+}
+.ew-holo > em {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  font: 600 9.5px system-ui;
+  font-style: normal;
+  color: #bff6ff;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.9);
+}
+.ew-holo > svg {
+  position: absolute;
+  top: 1px;
+  left: 0;
+  color: rgba(140, 230, 255, 0.9);
+}
+.ew-holo-more {
+  align-self: center;
+  font-size: 11px;
+  color: #bff6ff;
+  pointer-events: auto;
+}
+@keyframes ew-holo-scan {
+  to {
+    background-position: 0 -6px;
+  }
+}
+
+/* The unit card: a long hover on a ship (on the battlefield, in the shipyard or in the selection)
+   shows what it is, what it beats and loses to, its numbers and its price. */
+.ew-tip.is-unit {
+  width: 300px;
+  max-width: calc(100% - 12px);
+  padding: 9px 11px 8px;
+  white-space: normal;
+}
+.ew-intel {
+  display: grid;
+  gap: 6px;
+}
+.ew-intel header {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  gap: 9px;
+  align-items: center;
+}
+.ew-intel header .ew-art {
+  width: 52px;
+  height: 52px;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.6));
+}
+.ew-intel header div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+.ew-intel header strong {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: #fff;
+}
+.ew-intel header small {
+  color: var(--ew-muted);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+.ew-intel header em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 600;
+  color: #7dffa0;
+}
+.ew-intel.is-ally header em {
+  color: #5b9bff;
+}
+.ew-intel.is-enemy header em {
+  color: #ff6a5a;
+}
+.ew-intel p {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: #c4d0e4;
+}
+.ew-intel-vs {
+  display: grid;
+  gap: 2px;
+  font-size: 11.5px;
+}
+.ew-intel-vs b {
+  font-weight: 650;
+  margin-right: 3px;
+}
+.ew-intel-vs .is-strong {
+  color: #9fe8b4;
+}
+.ew-intel-vs .is-weak {
+  color: #ffb3aa;
+}
+.ew-intel-stats {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 12px;
+  padding: 5px 0;
+  border-block: 1px solid rgba(255, 255, 255, 0.08);
+}
+.ew-intel-stats div {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+}
+.ew-intel-stats dt {
+  color: var(--ew-muted);
+}
+.ew-intel-stats dd {
+  margin: 0;
+  color: var(--ew-text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ew-intel-fire {
+  display: grid;
+  gap: 2px;
+}
+.ew-intel-fire div {
+  display: grid;
+  grid-template-columns: 66px 1fr 30px;
+  gap: 6px;
+  align-items: center;
+  font-size: 10.5px;
+  color: var(--ew-muted);
+}
+.ew-intel-fire i {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.ew-intel-fire i b {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #ff9a4a, #ffd36a);
+}
+.ew-intel-fire em {
+  font-style: normal;
+  text-align: right;
+  color: var(--ew-text);
+  font-variant-numeric: tabular-nums;
+}
+.ew-intel-ab b {
+  color: var(--ew-gold);
+  font-weight: 600;
+}
+.ew-intel footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+.ew-intel footer .ew-time {
+  justify-self: auto;
+}
+.ew-intel-lv {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--ew-muted);
+}
+.ew-intel-note {
+  white-space: pre-line;
+  padding-top: 5px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 11px !important;
+  color: var(--ew-muted) !important;
+}
+.ew-intel-h {
+  margin-bottom: -3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ew-muted);
+}
+
+/* --- Galactic conquest ------------------------------------------------------------------------------- */
+
+/* Setup: options on the left, the galaxy's map on the right. */
+.ew-gsetup {
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.ew-gsetup-frame {
+  position: relative;
+  width: min(980px, 100%);
+  max-height: 100%;
+}
+.ew-gsetup-frame .ew-frame-in {
+  padding: 14px;
+}
+.ew-gsetup-body {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+@container (max-width: 700px) {
+  .ew-gsetup-body {
+    grid-template-columns: 1fr;
+  }
+}
+.ew-gsetup-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ew-gsetup-opts p {
+  margin: -2px 0 2px;
+}
+.ew-gsetup-preview {
+  aspect-ratio: 1000 / 660;
+  border: 1px solid var(--ew-line);
+  border-radius: 8px;
+  background: radial-gradient(ellipse at 50% 50%, rgba(60, 80, 140, 0.25), transparent 70%), #03050c;
+  overflow: hidden;
+}
+.ew-gseed {
+  display: inline-flex;
+  gap: 4px;
+}
+.ew-gseed input {
+  width: 96px;
+  font: inherit;
+  color: inherit;
+  background: var(--ew-bg-2);
+  border: 1px solid var(--ew-line);
+  border-radius: 6px;
+  padding: 3px 7px;
+}
+
+/* The campaign screen: the bar on top, the map filling the rest. */
+.ew-galaxy {
+  display: flex;
+  flex-direction: column;
+  background: url(/games/empires/world/backdrop.webp) center / cover, #03050c;
+}
+
+.ew-gview {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: radial-gradient(ellipse at 50% 50%, rgba(40, 60, 120, 0.22), transparent 70%), rgba(3, 5, 12, 0.55);
+}
+.ew-gsvg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.ew-glane {
+  stroke: rgba(140, 180, 240, 0.28);
+  stroke-width: 1.4;
+}
+.ew-groute {
+  fill: none;
+  stroke: var(--ew-good);
+  stroke-width: 1.6;
+  stroke-dasharray: 5 4;
+  animation: ew-route 0.8s linear infinite;
+}
+@keyframes ew-route {
+  to {
+    stroke-dashoffset: -9;
+  }
+}
+.ew-gsys {
+  cursor: pointer;
+}
+.ew-gsys:hover circle:first-of-type {
+  fill: rgba(140, 190, 255, 0.12);
+}
+.ew-gname {
+  fill: #c9d6ee;
+  font: 600 10.5px system-ui, sans-serif;
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.8);
+  stroke-width: 3px;
+  pointer-events: none;
+}
+.ew-gsvg.is-mini .ew-gname {
+  display: none;
+}
+.ew-gbattle {
+  fill: none;
+  stroke: #ff5a50;
+  stroke-width: 2;
+  animation: ew-pulse-ring 1s ease-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@keyframes ew-pulse-ring {
+  from {
+    opacity: 1;
+    transform: scale(0.7);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+.ew-gfleet {
+  cursor: pointer;
+}
+.ew-gfleet text,
+.ew-sfleet text {
+  fill: #fff;
+  font: 700 9px system-ui, sans-serif;
+  text-anchor: middle;
+  pointer-events: none;
+}
+.ew-gfleet.is-moving text {
+  paint-order: stroke;
+  stroke: #000;
+  stroke-width: 2.5px;
+}
+.ew-gfleet.is-sel rect,
+.ew-gfleet.is-sel path {
+  stroke: #fff;
+  stroke-width: 1.6;
+}
+.ew-sfleet {
+  cursor: pointer;
+}
+.ew-sfleet text {
+  font-size: 11px;
+}
+.ew-sfleet.is-sel rect {
+  stroke: #fff;
+  stroke-width: 2.2;
+}
+
+/* Inside a system. */
+.ew-sorbit {
+  fill: none;
+  stroke: rgba(150, 190, 255, 0.16);
+  stroke-width: 1.2;
+}
+.ew-splanet {
+  cursor: pointer;
+}
+.ew-splanet image {
+  filter: drop-shadow(0 0 10px rgba(0, 0, 0, 0.6));
+}
+.ew-splanet:hover > .ew-sring,
+.ew-splanet.is-sel > .ew-sring {
+  stroke: #fff;
+  stroke-width: 3;
+}
+.ew-spname {
+  fill: #dbe6f8;
+  font: 600 13px system-ui, sans-serif;
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.85);
+  stroke-width: 3px;
+  pointer-events: none;
+}
+.ew-slv {
+  fill: #fff;
+  font: 700 11px system-ui, sans-serif;
+  text-anchor: middle;
+}
+.ew-sbusy {
+  fill: var(--ew-gold);
+  animation: ew-blink 1s ease-in-out infinite alternate;
+}
+@keyframes ew-blink {
+  to {
+    opacity: 0.3;
+  }
+}
+
+/* Our fleets, bottom left. */
+.ew-gfleets {
+  width: 230px;
+}
+.ew-gfleets ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 200px;
+  overflow: auto;
+  display: grid;
+  gap: 3px;
+}
+.ew-deck .ew-gfleets li button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 26px 1fr auto;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 7px;
+  text-align: left;
+  font-size: 12px;
+}
+.ew-gfleets li span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-gfleets li small {
+  color: var(--ew-muted);
+}
+
+/* The panel on the right: a planet or a fleet. */
+.ew-gpanel {
+  width: min(330px, calc(100% - 16px));
+}
+.ew-gpanel .ew-frame-in {
+  gap: 8px;
+  overflow: auto;
+}
+.ew-gpanel p {
+  margin: 0;
+}
+.ew-gships {
+  display: grid;
+  gap: 3px;
+}
+.ew-gship {
+  display: grid;
+  grid-template-columns: 34px 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.ew-gship .ew-art {
+  width: 34px;
+  height: 26px;
+}
+.ew-gship span {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-gship b {
+  font-variant-numeric: tabular-nums;
+}
+.ew-gstep {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.ew-deck .ew-gstep button {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  line-height: 1;
+}
+.ew-gstep em {
+  min-width: 18px;
+  text-align: center;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  color: var(--ew-good);
+}
+.ew-ghint {
+  font-size: 11.5px;
+  color: #b9c9e2;
+  padding: 5px 8px;
+  border-left: 2px solid var(--ew-accent);
+  background: rgba(255, 255, 255, 0.04);
+}
+.ew-gp-fleets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ew-deck .ew-gp-fleets button {
+  font-size: 11.5px;
+}
+
+/* The battle prompt. */
+.ew-gb-sides {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 10px;
+  align-items: start;
+}
+@container (max-width: 640px) {
+  .ew-gb-sides {
+    grid-template-columns: 1fr;
+  }
+}
+.ew-gb-side {
+  border-top: 2px solid;
+  padding-top: 6px;
+  display: grid;
+  gap: 6px;
+}
+.ew-gb-side h5 {
+  margin: 0;
+  font-family: var(--ew-display);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.ew-gb-side p {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ew-gb-vs {
+  align-self: center;
+  font-family: var(--ew-display);
+  color: var(--ew-muted);
+}
+.ew-gb-odds {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 10px;
+  font-size: 12px;
+}
+.ew-gb-odds i {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 106, 94, 0.45);
+  overflow: hidden;
+}
+.ew-gb-odds i b {
+  display: block;
+  height: 100%;
+  background: var(--ew-good);
+}
+.ew-gb-odds em {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The map's zoom buttons. */
+.ew-gzoom {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ew-deck .ew-gzoom button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  line-height: 1;
+}
+.ew-gview {
+  touch-action: none;
+}
+/* The selection box, as in a battle. */
+.ew-gbox {
+  position: absolute;
+  border: 1px solid rgba(125, 255, 160, 0.9);
+  background: rgba(125, 255, 160, 0.08);
+  pointer-events: none;
+}
+.ew-gmulti {
+  display: grid;
+  gap: 3px;
+  max-height: 160px;
+  overflow: auto;
+}
+.ew-deck .ew-gmulti button {
+  display: grid;
+  grid-template-columns: 26px 1fr auto;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 7px;
+  text-align: left;
+  font-size: 12px;
+}
+.ew-gmulti small {
+  color: var(--ew-muted);
+}
+.ew-gname.is-big {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  fill: #e4edff;
+}
+.ew-gfleet.is-orbit text {
+  font-size: 11px;
+}
+.ew-gfleet.is-sel rect {
+  stroke: #fff;
+  stroke-width: 2.2;
+}
+
+/* A payday floats up out of the credits. */
+.ew-gpaid {
+  position: absolute;
+  left: 34px;
+  top: 4px;
+  font-style: normal;
+  font-weight: 700;
+  color: var(--ew-good);
+  text-shadow: 0 1px 4px #000;
+  pointer-events: none;
+  animation: ew-paid 1.6s ease-out forwards;
+}
+@keyframes ew-paid {
+  0% {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  15% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-14px);
+  }
+}
+
+/* The week: six bars, one a day, filling from the bottom. */
+.ew-gclock {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 4px;
+}
+.ew-gclock b {
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+.ew-gdays {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 20px;
+}
+.ew-gdays i {
+  position: relative;
+  width: 7px;
+  height: 100%;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(160, 200, 255, 0.25);
+  overflow: hidden;
+}
+.ew-gdays em {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(180deg, #ffe08a, var(--ew-gold));
+}
+.ew-gdays i.is-now {
+  border-color: var(--ew-gold);
+  box-shadow: 0 0 6px rgba(242, 193, 74, 0.45);
+}
+.ew-gp-look {
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+/* The economy window. */
+.ew-gecon {
+  width: min(600px, calc(100% - 16px));
+}
+.ew-gecon .ew-frame-in {
+  gap: 10px;
+  max-height: min(72vh, 680px);
+  overflow: auto;
+}
+.ew-gecon-sum {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.ew-gecon-sum div {
+  display: grid;
+  gap: 1px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(120, 170, 230, 0.14);
+}
+.ew-gecon-sum small {
+  color: var(--ew-muted);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.ew-gecon-sum b {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+.ew-gecon .is-good {
+  color: var(--ew-good);
+}
+.ew-gecon .is-bad {
+  color: var(--ew-bad);
+}
+.ew-gold {
+  color: var(--ew-gold);
+}
+.ew-gchart svg {
+  display: block;
+  width: 100%;
+  height: 120px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+}
+.ew-gchart.is-empty {
+  padding: 22px;
+  text-align: center;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+}
+.ew-gchart-pay {
+  fill: rgba(125, 255, 160, 0.35);
+}
+.ew-gchart-credits {
+  fill: none;
+  stroke: var(--ew-gold);
+  stroke-width: 2;
+}
+.ew-gchart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 4px;
+  font-size: 11px;
+}
+.ew-gchart-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 3px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+.ew-gchart-legend .is-credits {
+  background: var(--ew-gold);
+}
+.ew-gchart-legend .is-pay {
+  height: 8px;
+  background: rgba(125, 255, 160, 0.5);
+}
+.ew-gecon-tabs,
+.ew-gecon-sort {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.ew-deck .ew-gecon-sort button {
+  padding: 2px 8px;
+  font-size: 11.5px;
+}
+.ew-gecon-list {
+  display: grid;
+  gap: 3px;
+}
+.ew-deck .ew-gecon-row {
+  display: grid;
+  grid-template-columns: 30px 1fr auto 64px 64px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(120, 170, 230, 0.12);
+}
+.ew-gecon-row img {
+  width: 30px;
+  height: 30px;
+}
+.ew-gecon-name {
+  display: grid;
+  min-width: 0;
+}
+.ew-gecon-name small {
+  color: var(--ew-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-gecon-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.ew-gecon-row .ew-gecon-num:not(.ew-muted) {
+  color: var(--ew-good);
+}
+.ew-deck .ew-gecon-row.is-best {
+  border-color: rgba(242, 193, 74, 0.5);
+  background: rgba(242, 193, 74, 0.07);
+}
+.ew-deck .ew-gecon-row.is-worst {
+  opacity: 0.75;
+}
+.ew-gecon-tag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ew-muted);
+  border: 1px solid rgba(160, 180, 210, 0.3);
+}
+.ew-gecon-tag.is-best {
+  color: var(--ew-gold);
+  border-color: rgba(242, 193, 74, 0.5);
+}
+.ew-gecon-tag.is-bad {
+  color: var(--ew-bad);
+  border-color: rgba(255, 106, 94, 0.5);
+}
+.ew-gecon-tags {
+  display: inline-flex;
+  gap: 4px;
+}
+.ew-gecon-bars {
+  display: grid;
+  gap: 4px;
+}
+.ew-gecon-bars > div,
+.ew-deck .ew-gecon-bars > button {
+  display: grid;
+  grid-template-columns: 26px minmax(120px, 1.2fr) 2fr 96px;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  text-align: left;
+}
+.ew-gecon-bars img {
+  width: 26px;
+  height: 26px;
+}
+.ew-gecon-star {
+  width: 12px;
+  height: 12px;
+  margin: 0 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 8px currentColor;
+}
+.ew-gecon-bars > * > i:not(.ew-gecon-star) {
+  height: 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+.ew-gecon-bars i b {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #4fd384, var(--ew-good));
+}
+.ew-gecon-bars em {
+  font-style: normal;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ew-good);
+}
+.ew-gecon-ledger {
+  display: grid;
+  gap: 2px;
+}
+.ew-gecon-ledger div {
+  display: grid;
+  grid-template-columns: 52px 1fr auto;
+  gap: 8px;
+  padding: 3px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+}
+.ew-gecon-ledger b {
+  font-variant-numeric: tabular-nums;
+}
+.ew-gecon-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 11.5px;
+}
+@container (max-width: 560px) {
+  .ew-gecon-sum {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .ew-deck .ew-gecon-row {
+    grid-template-columns: 30px 1fr auto 56px;
+  }
+  .ew-deck .ew-gecon-row .ew-gecon-num.ew-muted,
+  .ew-deck .ew-gecon-row .ew-gecon-tags {
+    display: none;
+  }
+}
+
+/* The galaxy minimap: the battle's tactical map, drawn in SVG. */
+.ew-gmini {
+  background: radial-gradient(ellipse at 50% 50%, rgba(40, 60, 120, 0.3), transparent 75%), #03050c;
+}
+.ew-gmini-view {
+  fill: rgba(255, 255, 255, 0.05);
+  stroke: #fff;
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.ew-gmapframe .ew-mapfilters .is-fleets i {
+  background: #5b9bff;
+}
+.ew-gmapframe .ew-mapfilters .is-planets i {
+  background: #4fe3d8;
+}
+
+/* The planet dock, beside the galaxy map: the skirmish's station panel for a planet. */
+.ew-gdock {
+  max-width: calc(100% - 381px);
+}
+@container (max-width: 760px) {
+  .ew-gdock {
+    max-width: calc(100% - 12px);
+  }
+}
+.ew-gplanet .ew-detail-side {
+  width: 168px;
+  align-items: center;
+}
+.ew-gplanet .ew-gp-look img {
+  width: 92px;
+  height: 92px;
+  display: block;
+  filter: drop-shadow(0 0 10px rgba(0, 0, 0, 0.6));
+}
+.ew-gp-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+}
+.ew-gp-line b {
+  color: var(--ew-good);
+}
+.ew-gplanet .ew-yardhead {
+  gap: 8px;
+}
+.ew-gplanet .ew-yardhead .ew-close {
+  margin-left: auto;
+}
+.ew-deck .ew-gp-up {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  font-size: 12px;
+  color: var(--ew-gold);
+  border-color: rgba(242, 193, 74, 0.45);
+}
+.ew-deck .ew-gp-up.is-off {
+  opacity: 0.5;
+  filter: grayscale(0.8);
+}
+.ew-gp-note {
+  margin: 0;
+  max-width: 420px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #b9c9e2;
+}
+
+/* The galaxy's top bar is the battle's, in the page flow above the map. */
+.ew-galaxy .ew-gtop {
+  position: relative;
+  flex: none;
+}
+.ew-gtop .ew-creditcell {
+  position: relative;
+  overflow: visible;
+}
+.ew-gtop .ew-top-faction.is-on {
+  background: rgba(255, 220, 150, 0.08);
+}
+.ew-bad {
+  color: var(--ew-bad);
+}
+.ew-timectl .ew-gclock {
+  padding: 0 6px;
+}
+
+/* Saves: the name of the latest one on Continue, the load list, and naming a save. */
+.ew-ghome-sub {
+  margin-left: auto;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: 500 11px/1.3 system-ui, sans-serif;
+  font-style: normal;
+  letter-spacing: 0;
+  text-transform: none;
+  opacity: 0.8;
+}
+.ew-gsetup-frame.is-narrow {
+  width: min(640px, 100%);
+}
+.ew-saves {
+  display: grid;
+  gap: 5px;
+  max-height: min(60vh, 520px);
+  overflow: auto;
+  margin-bottom: 10px;
+}
+.ew-save {
+  display: grid;
+  grid-template-columns: 34px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(120, 170, 230, 0.16);
+}
+.ew-save.is-current {
+  border-color: rgba(125, 255, 160, 0.4);
+}
+.ew-save img {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+}
+.ew-save-info {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.ew-save-info b {
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-save-info small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-save-btns,
+.ew-save-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ew-save-name {
+  min-width: 0;
+}
+.ew-save-name input,
+.ew-gname-in,
+.ew-saveas input {
+  min-width: 0;
+  flex: 1;
+  font: inherit;
+  color: inherit;
+  background: var(--ew-bg-2);
+  border: 1px solid var(--ew-line);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+.ew-gname-in {
+  width: 220px;
+}
+.ew-saveas {
+  display: grid;
+  gap: 8px;
+  min-width: min(420px, 80vw);
+}
+.ew-saveas p {
+  margin: 0;
+}
+
+/* Blockades: a barrier ring round the system in the blockading side's colour, dashed and slowly
+   turning, thicker and red-tinged when it's against us. */
+.ew-gblock circle {
+  stroke-width: 2.5;
+  stroke-dasharray: 7 5;
+  opacity: 0.9;
+  animation: ew-route 1.6s linear infinite;
+}
+.ew-gblock.is-theirs circle {
+  stroke-width: 3.5;
+  filter: drop-shadow(0 0 4px rgba(255, 90, 80, 0.6));
+}
+.ew-gblock.is-ours circle {
+  filter: drop-shadow(0 0 4px rgba(125, 255, 160, 0.45));
+}
+.ew-gp-block {
+  font-weight: 600;
 }

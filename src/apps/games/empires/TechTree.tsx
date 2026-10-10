@@ -108,14 +108,14 @@ function ResearchQueue({ hud, onCancel }: { hud: Hud; onCancel: (index: number) 
               <strong>{researchName(r.id, hud.level)}</strong>
               <small>{i === 0 ? `${Math.ceil(r.left)}s left` : `Starts in ${Math.ceil(starts)}s`}</small>
             </span>
-            <button className="ew-close" onClick={() => onCancel(i)} title="Cancel and refund" aria-label={`Cancel ${researchName(r.id, hud.level)}`}>
+            <button className="ew-close" onClick={() => onCancel(i)} data-tip="Cancel and refund" aria-label={`Cancel ${researchName(r.id, hud.level)}`}>
               ✕
             </button>
             {i === 0 && <i style={{ width: `${(1 - r.left / r.total) * 100}%` }} />}
           </div>
         )
       })}
-      <span className="ew-tt-credits" title="Credits">
+      <span className="ew-tt-credits" data-tip="Credits">
         <Icon name="credits" size={16} />
         {fmt(hud.credits)}
       </span>
@@ -213,7 +213,7 @@ function Tile({ n, s, hud, faction, col, lane, onResearch, onCancel }: {
           e.preventDefault()
           if (queued) onCancel(s.slot)
         }}
-        title={`${name}\n${blurb}${s.why && s.status !== 'done' && !queued ? `\n\n${s.why}` : ''}`}
+        data-tip={`${name}\n${blurb}${s.why && s.status !== 'done' && !queued ? `\n\n${s.why}` : ''}`}
       >
         <TechIcon id={n.id} size={52} progress={s.progress} status={s.status} />
         <span className="ew-tnode-text">
@@ -238,7 +238,7 @@ function Tile({ n, s, hud, faction, col, lane, onResearch, onCancel }: {
         {s.status === 'busy' && <i className="ew-tnode-bar" style={{ width: `${s.progress * 100}%` }} />}
       </button>
       {queued && (
-        <button className="ew-tnode-x" onClick={() => onCancel(s.slot)} title="Cancel and refund" aria-label={`Cancel ${name}`}>
+        <button className="ew-tnode-x" onClick={() => onCancel(s.slot)} data-tip="Cancel and refund" aria-label={`Cancel ${name}`}>
           ✕
         </button>
       )}

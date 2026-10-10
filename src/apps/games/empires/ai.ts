@@ -1,6 +1,6 @@
-import { ABILITIES, LEVEL_UP, MAX_LEVEL, UPGRADES, buildable, isShip, techsFor, unitOf, type Tier } from './data'
+import { ABILITIES, LEVEL_UP, MAX_LEVEL, UNIT, UPGRADES, buildable, isShip, techsFor, unitOf, type Tier } from './data'
 import { inside } from './maps'
-import { cantBuild, cantResearch, cmdAbility, cmdAttack, cmdBuild, cmdMove, cmdRally, cmdResearch, cmdSite, fleet, foes, near, sees, shieldMax, type Owner, type Unit, type World } from './sim'
+import { canRetreat, cantBuild, cantRepair, cantResearch, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdDeploy, cmdMove, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, fleet, foes, near, sees, shieldMax, type Owner, type Unit, type World } from './sim'
 
 // The enemy admiral. Every second or two it looks at the battle and decides: claim ore, upgrade
 // the station, queue ships that counter what it has seen, defend what's under attack, grab
@@ -162,8 +162,24 @@ export function think(w: World, b: Brain, dt: number) {
   // Surveyed ore with nothing on it is money left on the table: save for a mine before more ships.
   const savingForMine = !!ours[0] && mines < D.mines
   if (ours[0]) {
-    if (mines < D.mines && p.credits >= 500) cmdSite(w, o, ours[0].id, 'mine')
-    else if (D.defenses && mines >= Math.min(3, D.mines) && p.credits >= 650 + 600) cmdSite(w, o, ours[0].id, 'defense')
+    if (mines < D.mines && p.credits >= 500) cmdSite(w, o, ours[0].id, unitOf(p.faction, 'mine').id)
+    else if (D.defenses && mines >= Math.min(3, D.mines) && p.credits >= 700 + 600) cmdSite(w, o, ours[0].id, defenseFor(w, o))
+  }
+
+  // Spare money deepens the drills: a mining platform pays its upgrades back within minutes.
+  if (p.credits > 1400) {
+    const site = w.units.find((u) => u.owner === o && !u.dead && u.t.tier === 'mine' && !cantUpgradeSite(w, o, u, 'yield'))
+    if (site) cmdUpgradeSite(w, o, site.id, 'yield')
+  }
+  // Richer still, platforms get shield generators.
+  if (p.credits > 1900) {
+    const site = w.units.find((u) => u.owner === o && !u.dead && u.t.tier === 'mine' && !cantUpgradeSite(w, o, u, 'shield'))
+    if (site) cmdUpgradeSite(w, o, site.id, 'shield')
+  }
+  // Badly damaged structures get a repair crew when there's money to spare.
+  for (const u of w.units) {
+    if (u.owner !== o || u.dead || (u.t.tier !== 'station' && u.t.tier !== 'mine' && u.t.tier !== 'defense')) continue
+    if (u.hull < u.hullMax * 0.6 || u.hps.some((h) => h.hp <= 0)) if (!cantRepair(w, o, u) && p.credits > 900) cmdRepair(w, o, u.id)
   }
 
   const army = fleet(w, o).filter((u) => !u.parent)
@@ -315,5 +331,85 @@ export function think(w: World, b: Brain, dt: number) {
       }
     }
     if (u.order.k === 'idle' || (u.order.k === 'move' && d2(u.order, goal) > 400 ** 2)) cmdMove(w, o, [u.id], goal.x + (Math.random() - 0.5) * 300, goal.y + (Math.random() - 0.5) * 300, true)
+  }
+}
+
+/** The defense platform to build against what the enemy has been flying: flak against a swarm
+ * of strike craft, heavy guns against warships, else the balanced one. */
+function defenseFor(w: World, o: Owner): string {
+  const p = w.players[o]
+  let small = 0
+  let big = 0
+  for (const u of w.units) {
+    if (u.dead || !foes(w, u.owner, o) || !sees(w, o, u) || !isShip(u.t)) continue
+    if (u.t.tier === 'fighter' || u.t.tier === 'gunship') small += u.t.pop / u.t.squad
+    else big += u.t.pop
+  }
+  const id = small > big * 1.6 ? 'defense-flak' : big > small * 1.6 ? 'defense-gun' : 'defense'
+  return `${p.faction === 'republic' ? 'r' : 'd'}-${id}`
+}
+
+// --- Fleet battles ---------------------------------------------------------------------------------
+
+/**
+ * The admiral in a galactic conquest fleet battle: no economy, only the fleet. It keeps the field
+ * topped up from the ships waiting in orbit, sends idle ships at the nearest enemy (the side holding
+ * the planet waits by its station until the attackers come close), fires abilities, and an attacker
+ * that is clearly losing pulls its fleet out rather than lose it all.
+ */
+export function fleetThink(w: World, b: Brain, dt: number) {
+  b.t -= dt
+  const f = w.fleet
+  if (!f || b.t > 0 || w.winner !== -1) return
+  const D = DIFFICULTY[b.diff]
+  b.t = Math.min(1.5, D.think) * (0.8 + Math.random() * 0.4)
+  const o = b.o
+  const p = w.players[o]
+  const mine = fleet(w, o).filter((u) => !u.parent && u.retreat <= 0)
+  const st = w.byId.get(p.station)
+  const holder = !!st && !st.dead
+  const entry = f.entry[o]
+  const mid = { x: w.w / 2, y: w.h / 2 }
+
+  // Reinforcements: keep the field at the battle's fleet size.
+  let onField = mine.reduce((s, u) => s + u.t.pop / u.t.squad, 0) + w.arrivals.filter((a) => a.owner === o).reduce((s, a) => s + UNIT[a.unit].pop, 0)
+  for (const id of [...p.reserve].sort((a, c) => UNIT[c].pop - UNIT[a].pop)) {
+    if (onField + UNIT[id].pop > f.cap && onField > 0) continue
+    const toMid = Math.atan2(mid.y - entry.y, mid.x - entry.x)
+    for (let i = 0; i < 12; i++) {
+      const a = toMid + (Math.random() - 0.5) * 1.8
+      const d = 200 + Math.random() * (entry.r - 350)
+      if (!cmdDeploy(w, o, id, entry.x + Math.cos(a) * d, entry.y + Math.sin(a) * d, toMid)) {
+        onField += UNIT[id].pop
+        break
+      }
+    }
+  }
+
+  // The enemy, as far as we can see; or where they came in, if we can't see any.
+  const foesSeen = w.units.filter((u) => !u.dead && foes(w, u.owner, o) && sees(w, o, u) && u.retreat <= 0)
+  const theirValue = value(foesSeen.filter((u) => isShip(u.t))) + w.players.filter((_, i) => foes(w, i, o)).reduce((s, q) => s + q.reserve.reduce((v, id) => v + UNIT[id].cost, 0), 0)
+  const ourValue = value(mine) + p.reserve.reduce((v, id) => v + UNIT[id].cost, 0)
+  // A beaten attacker jumps out: whatever escapes goes back to its fleet.
+  if (!holder && b.diff !== 'veryEasy' && w.time > 30 && ourValue < theirValue * 0.3) {
+    const out = mine.filter(canRetreat)
+    if (out.length) cmdRetreat(w, o, out.map((u) => u.id))
+    p.reserve.length = 0
+    return
+  }
+  const nearest = (u: Unit) => foesSeen.reduce<Unit | null>((best, e) => (!best || d2(e, u) < d2(best, u) ? e : best), null)
+  const enemyEntry = f.entry.find((_, i) => foes(w, i, o)) ?? mid
+  for (const u of mine) {
+    const busy = u.order.k !== 'idle' || u.target
+    if (D.abilities && u.t.ability && u.abilityCd <= 0 && threatAt(w, o, u.x, u.y, 700) > 0) cmdAbility(w, o, [u.id])
+    if (busy) continue
+    const e = nearest(u)
+    if (holder) {
+      // Hold the line by the station until they come within reach of it.
+      if (e && d2(e, st!) < 2600 ** 2) cmdMove(w, o, [u.id], e.x, e.y, true)
+      continue
+    }
+    if (e) cmdMove(w, o, [u.id], e.x, e.y, true)
+    else cmdMove(w, o, [u.id], enemyEntry.x, enemyEntry.y, true)
   }
 }

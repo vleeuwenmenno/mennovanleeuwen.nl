@@ -1,4 +1,5 @@
 import type { AbilityId, FactionId, Tier, WeaponKind } from './data'
+import { RETREAT_TIME, WARP_RESERVE, WARP_YARD } from './sim'
 
 // Empires At War sounds, all synthesised: no audio files. Each sound is rendered once, in a few
 // slightly different takes, into a sample (small DSP below: oscillators, envelopes, a resonant
@@ -94,7 +95,11 @@ const soft = (x: number) => Math.tanh(x)
 function render(sr: number, secs: number, fn: (t: number, i: number) => number) {
   const n = Math.ceil(secs * sr)
   const out = new Float32Array(n)
-  for (let i = 0; i < n; i++) out[i] = fn(i / sr, i)
+  // A sample that isn't a number would silence everything sharing its bus (the reverb with it): drop it.
+  for (let i = 0; i < n; i++) {
+    const v = fn(i / sr, i)
+    out[i] = Number.isFinite(v) ? v : 0
+  }
   // Normalise, and fade the last few ms so nothing clicks.
   let peak = 0
   for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(out[i]))
@@ -409,6 +414,52 @@ const launch: Recipe = (sr, r) => {
   })
 }
 
+/**
+ * A jump starting: a low hum winding up, with a shimmer rising on top, lasting exactly as long as
+ * the jump so it swells right into the arrival, then hands over to it in a short fade rather than
+ * stopping dead (a sound cut off mid-wave clicks).
+ */
+const warpCharge = (len: number): Recipe => (sr, r) => {
+  const a = new Osc()
+  const b = new Osc()
+  const lp = new Svf()
+  const bp = new Svf()
+  const tail = 0.12
+  return render(sr, len + tail, (t) => {
+    const rise = Math.min(1, t / len)
+    const env = rise * rise * (3 - 2 * rise) * (t > len ? Math.cos(((t - len) / tail) * Math.PI * 0.5) ** 2 : 1)
+    const hum = lp.run(a.saw(glide(55, 150 + r() * 20, t, len), sr) + b.saw(glide(56.5, 152, t, len), sr), glide(300, 1400, t, len), 0.7, sr).low
+    // A narrow band (low damping): Svf's q is damping, and a high one blows the filter up once the
+    // sweep climbs past a few kHz.
+    const shimmer = bp.run(noise(), glide(900, 6000, t, len), 0.25, sr).band * 0.3
+    return (hum * 0.45 + shimmer * 0.35) * env
+  })
+}
+
+/** A ship dropping out of hyperspace: a tearing whoosh falling from high to low, a crack, and a
+ * deep thump as the mass arrives. Bigger ships fall lower and boom longer. */
+const warpArrive = (big: boolean): Recipe => (sr, r) => {
+  const o = new Osc()
+  const lp = new Svf()
+  const bp = new Svf()
+  const len = big ? 2.2 : 1.4
+  const low = big ? 38 : 60
+  // Every part fades in over a few milliseconds and the end tapers to silence: a sound that starts or
+  // stops at full level pops.
+  const fadeIn = (t: number, secs: number) => {
+    const k = Math.min(1, t / secs)
+    return k * k * (3 - 2 * k)
+  }
+  return render(sr, len, (t) => {
+    const end = Math.min(1, (len - t) / 0.3)
+    const whoosh = bp.run(noise(), glide(6500, 260, t, 0.32), 0.9, sr).band * Math.exp(-t * 6) * fadeIn(t, 0.04)
+    const tone = lp.run(o.saw(glide(1900 + r() * 200, low, t, 0.28), sr), glide(3000, 180, t, 0.4), 0.6, sr).low * Math.exp(-t * (big ? 2.6 : 3.6)) * fadeIn(t, 0.02)
+    const crack = noise() * Math.exp(-t * 45) * fadeIn(t, 0.006)
+    const thump = Math.sin(TAU * glide(low * 1.6, low * 0.7, t, 0.5) * t) * Math.exp(-t * (big ? 2.2 : 4)) * fadeIn(t, 0.012)
+    return soft((whoosh * 0.9 + tone * 0.55 + crack * 0.3 + thump * 0.9) * 1.1) * end
+  })
+}
+
 // Interface and crew -----------------------------------------------------------------------------------
 
 /** A radio: band-limited and a little crunchy, like a comm channel. */
@@ -430,7 +481,9 @@ function radio(sr: number, data: Float32Array, squelch = true) {
 }
 
 /** Notes in sequence: [semitones above base, seconds]. `wave` picks the timbre. */
-function melody(sr: number, base: number, notes: [number, number][], wave: 'sin' | 'sqr' | 'tri' | 'saw', gap = 0.012) {
+/** A line of notes: [semitones above `base`, seconds]. `soft` fades each note in and out slowly,
+ * for a hum rather than a ping. */
+function melody(sr: number, base: number, notes: [number, number][], wave: 'sin' | 'sqr' | 'tri' | 'saw', gap = 0.012, soft = false) {
   const total = notes.reduce((s, [, d]) => s + d + gap, 0)
   const o = new Osc()
   let k = 0
@@ -444,23 +497,26 @@ function melody(sr: number, base: number, notes: [number, number][], wave: 'sin'
     const [n, d] = notes[k]
     const lt = t - start
     if (lt > d) return 0
-    const env = Math.min(1, lt / 0.004) * Math.min(1, (d - lt) / 0.008)
+    const env = Math.min(1, lt / (soft ? 0.02 : 0.004)) * Math.min(1, (d - lt) / (soft ? 0.04 : 0.008))
     return o[wave](base * semi(n), sr) * env
   })
 }
 
 /** Droid chatter: a burst of quick, random bleeps from a pentatonic scale, slightly bit-crushed. */
 function chatter(sr: number, r: Rnd, count: number, contour: number, base = 380) {
-  const scale = [0, 3, 5, 7, 10, 12, 15]
+  // A narrow, low range of soft, rounded notes: still droid chatter, but murmured rather than
+  // beeped, so hearing it a hundred times a battle doesn't grate.
+  const scale = [0, 2, 3, 5, 7]
   const notes: [number, number][] = []
   for (let i = 0; i < count; i++) {
-    const drift = Math.round(contour * (i / Math.max(1, count - 1)) * 4)
-    notes.push([scale[Math.floor(r() * scale.length)] + drift, 0.028 + r() * 0.03])
+    const drift = Math.round(contour * (i / Math.max(1, count - 1)) * 2)
+    notes.push([scale[Math.floor(r() * scale.length)] + drift, 0.045 + r() * 0.035])
   }
-  const m = melody(sr, base, notes, 'sqr', 0.008)
-  // Sample-and-hold at a low rate for that robotic edge.
-  const hold = Math.max(1, Math.floor(sr / 9000))
-  for (let i = 0; i < m.length; i++) if (i % hold) m[i] = m[i - (i % hold)]
+  const m = melody(sr, base, notes, 'tri', 0.01, true)
+  // A gentle low-pass takes the edge off the triangle.
+  let y = 0
+  const k = 1 - Math.exp((-2 * Math.PI * 1400) / sr)
+  for (let i = 0; i < m.length; i++) m[i] = y += (m[i] - y) * k
   return m
 }
 
@@ -470,8 +526,8 @@ const ack = (kind: OrderKind | 'select', faction: FactionId, tier: Tier = 'friga
   const shift = { fighter: 4, gunship: 2, frigate: 0, cruiser: -2, capital: -4, station: -5, mine: 0, defense: 0 }[tier]
   if (faction === 'droid') {
     const contour = { select: 0, move: 1, attack: -1, attackMove: -0.5, patrol: 0.5, hold: 0, stop: -1, rally: 1, target: 1.5 }[kind]
-    const count = kind === 'select' ? 3 + Math.floor(r() * 3) : 4 + Math.floor(r() * 3)
-    return radio(sr, chatter(sr, r, count, contour, 360 * semi(shift)), false)
+    const count = kind === 'select' ? 2 + Math.floor(r() * 2) : 3 + Math.floor(r() * 2)
+    return radio(sr, chatter(sr, r, count, contour, 262 * semi(shift)), false)
   }
   const tunes: Record<OrderKind | 'select', [number, number][]> = {
     select: [[7, 0.05], [12, 0.07]],
@@ -484,9 +540,10 @@ const ack = (kind: OrderKind | 'select', faction: FactionId, tier: Tier = 'friga
     rally: [[12, 0.05], [19, 0.1]],
     target: [[12, 0.03], [12, 0.03], [12, 0.03], [19, 0.12]],
   }
-  const base = 466 * semi(shift)
-  const wave = kind === 'attack' || kind === 'target' ? 'sqr' : 'tri'
-  const msg = melody(sr, base, tunes[kind], wave)
+  // Answered softly (a low sine, notes eased in and out) so they don't ping over the battle; a
+  // selection a touch higher than an order, so the two still sound different.
+  const base = (kind === 'select' ? 415 : 392) * semi(shift)
+  const msg = melody(sr, base, tunes[kind], 'sin', 0.012, true)
   // Flagships and stations add a low bridge tone under the beeps.
   if (tier === 'capital' || tier === 'station') {
     const o = new Osc()
@@ -837,7 +894,9 @@ export class EmpiresSound {
 
   /** At most `max` of one kind of sound per `window` seconds. */
   private allow(kind: string, max: number, window = 0.08) {
-    const now = this.ctx!.currentTime
+    // No sound yet (nothing clicked since the page loaded): nothing to play.
+    if (!this.ctx) return false
+    const now = this.ctx.currentTime
     const list = (this.recent.get(kind) ?? []).filter((t) => now - t < window)
     if (list.length >= max) return false
     list.push(now)
@@ -892,6 +951,9 @@ export class EmpiresSound {
       ['shield', shieldHit, 4], ['hull', impact(false), 4], ['hull-heavy', impact(true), 4],
       ['boom0', explosion(0), 3], ['boom1', explosion(1), 3], ['boom2', explosion(2), 2],
       ['hpdown', hardpointDown, 3], ['shdown', shieldsDown, 3], ['launch', launch, 3],
+      // Jumps: rendered ahead, so the first one in a battle doesn't stall a frame and come in late.
+      [`warp-${Math.round(WARP_YARD * 10)}`, warpCharge(WARP_YARD), 2], [`warp-${Math.round(WARP_RESERVE * 10)}`, warpCharge(WARP_RESERVE), 2], ['arrive', warpArrive(false), 2], ['arriveBig', warpArrive(true), 2],
+      ...Object.values(RETREAT_TIME).map((secs): [string, Recipe, number] => [`warp-${Math.round(secs * 10)}`, warpCharge(secs), 1]),
       ['click', click, 3], ['arm', arm, 2], ['queue', queue(false), 2], ['unqueue', queue(true), 2], ['construct', construct, 2],
       ...(['fighter', 'gunship', 'frigate', 'cruiser', 'capital', 'station'] as Tier[]).map((t): [string, Recipe, number] => [`sel-${faction}-${t}`, ack('select', faction, t), 4]),
       ...(['move', 'attack', 'attackMove'] as OrderKind[]).map((k): [string, Recipe, number] => [`ord-${k}-${faction}-frigate`, ack(k, faction, 'frigate'), 4]),
@@ -937,6 +999,20 @@ export class EmpiresSound {
     this.play(`boom${cls}`, explosion(cls), { where, gain: [0.6, 0.85, 1][cls], verb: 0.5, takes: cls === 2 ? 2 : 3 })
   }
 
+  /** A jump starting somewhere we can see or hear; it winds up for `secs`, until the ship drops out. */
+  warp(where: Where, secs: number) {
+    const name = `warp-${Math.round(secs * 10)}`
+    if (this.ready() && where.gain > 0.05 && this.allow('warp', 2, 0.3)) this.play(name, warpCharge(secs), { where, gain: 0.175, verb: 0.3, takes: 2 })
+  }
+
+  /** A ship dropping out of hyperspace. */
+  arrive(where: Where, size: number) {
+    if (!this.ready()) return
+    const big = size > 200
+    this.feel(big ? 2.5 : 1, where)
+    if (where.gain > 0.03 && this.allow(big ? 'arriveBig' : 'arrive', 3, 0.1)) this.play(big ? 'arriveBig' : 'arrive', warpArrive(big), { where, gain: big ? 0.45 : 0.35, verb: 0.5, takes: 2 })
+  }
+
   hardpointDown(where: Where) {
     if (this.ready() && where.gain > 0.03 && this.allow('hpdown', 2, 0.2)) this.play('hpdown', hardpointDown, { where, gain: 0.8 })
   }
@@ -956,22 +1032,22 @@ export class EmpiresSound {
   // --- Crew and interface ---------------------------------------------------------------------------------
 
   /** A crew answering, over the radio. A new answer cuts off the last one. */
-  private say(name: string, recipe: Recipe) {
+  private say(name: string, recipe: Recipe, gain = 0.6) {
     if (!this.ready()) return
     try {
       this.ackSrc?.stop()
     } catch {
       // Already over.
     }
-    this.ackSrc = this.play(name, recipe, { bus: 'voice', gain: 0.6 * UI_LEVEL, verb: 0.15, takes: 4 })
+    this.ackSrc = this.play(name, recipe, { bus: 'voice', gain: gain * UI_LEVEL, verb: 0.15, takes: 4 })
   }
 
   select(faction: FactionId, tier: Tier) {
-    if (this.allow('select', 1, 0.12)) this.say(`sel-${faction}-${tier}`, ack('select', faction, tier))
+    if (this.allow('select', 1, 0.12)) this.say(`sel-${faction}-${tier}`, ack('select', faction, tier), 0.4)
   }
 
   order(kind: OrderKind, faction: FactionId, tier: Tier = 'frigate') {
-    if (this.ready() && this.allow('order', 1, 0.1)) this.say(`ord-${kind}-${faction}-${tier}`, ack(kind, faction, tier))
+    if (this.ready() && this.allow('order', 1, 0.1)) this.say(`ord-${kind}-${faction}-${tier}`, ack(kind, faction, tier), 0.36)
   }
 
   private ui(name: string, recipe: Recipe, gain = 0.6, takes = 2) {
@@ -1067,7 +1143,7 @@ export class EmpiresSound {
     this.rumble.gain.setTargetAtTime(Math.min(0.5, this.heat * 0.12), this.ctx.currentTime, 0.4)
   }
 
-  /** The hum of a ship's bridge in deep space, a slow wind of static, and the far-off battle rumble. */
+  /** The hum of a ship's bridge in deep space, and the far-off battle rumble. */
   startDrone() {
     if (!this.ctx || this.drone) return
     const ctx = this.ctx
@@ -1093,26 +1169,12 @@ export class EmpiresSound {
     })
     f.connect(g).connect(this.buses.music!)
     lfo.start()
-    // Static wind and the battle rumble both come from a looping noise sample.
+    // The battle rumble comes from a looping noise sample, deep-filtered. (There used to be a
+    // "static wind" too, a swept band of the same noise; it whooshed, and went.)
     const n = ctx.sampleRate * 3
     const nb = ctx.createBuffer(1, n, ctx.sampleRate)
     const d = nb.getChannelData(0)
     for (let i = 0; i < n; i++) d[i] = noise()
-    const wind = ctx.createBufferSource()
-    wind.buffer = nb
-    wind.loop = true
-    const wf = ctx.createBiquadFilter()
-    wf.type = 'bandpass'
-    wf.Q.value = 2
-    wf.frequency.value = 900
-    const wl = ctx.createOscillator()
-    wl.frequency.value = 0.045
-    const wlg = ctx.createGain()
-    wlg.gain.value = 500
-    wl.connect(wlg).connect(wf.frequency)
-    const wg = ctx.createGain()
-    wg.gain.value = 0.025
-    wind.connect(wf).connect(wg).connect(out)
     const rb = ctx.createBufferSource()
     rb.buffer = nb
     rb.loop = true
@@ -1126,23 +1188,19 @@ export class EmpiresSound {
     rumble.gain.value = 0
     this.rumble = rumble
     rb.connect(rf).connect(rumble).connect(out)
-    wind.start()
-    wl.start()
     rb.start()
     this.drone = {
       stop: () => {
         const t = ctx.currentTime
-        for (const node of [g, wg, rumble]) {
+        for (const node of [g, rumble]) {
           node.gain.cancelScheduledValues(t)
           node.gain.setValueAtTime(node.gain.value, t)
           node.gain.linearRampToValueAtTime(0, t + 0.6)
         }
         setTimeout(() => {
-          for (const o of [...oscs, lfo, wl]) o.stop()
-          wind.stop()
+          for (const o of [...oscs, lfo]) o.stop()
           rb.stop()
           g.disconnect()
-          wg.disconnect()
           rumble.disconnect()
           if (this.rumble === rumble) this.rumble = null
         }, 800)

@@ -1,8 +1,8 @@
 import { inside, mirrored, rng, type MapDef, type Pt } from './maps'
 import { clearLine, findPath, navGrid, type NavGrid } from './nav'
 import {
-  ABILITIES, BASE_POP, BEACON_INCOME, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
-  STATION_LEVEL_BONUS, SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UPGRADES, accuracy, dims, effect, isShip, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
+  ABILITIES, ARMOR_BONUS, BASE_POP, mineType, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
+  SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind,
 } from './data'
 
@@ -11,6 +11,8 @@ import {
 // calling `tick` at a fixed step and reading `events` for sound and effects.
 
 export const STEP = 1 / 30
+/** Fleet size each side starts a fleet battle with on the field; the rest waits in orbit. */
+export const FLEET_CAP = 40
 /** A player's index in `world.players`. Players on the same team share vision and win together. */
 export type Owner = number
 /** Whether two players are on opposite sides. */
@@ -34,16 +36,24 @@ export const LEASH = { fighter: 1100, ship: 800 }
 export type Order =
   | { k: 'idle' }
   /** `attack`: attack-move, engaging whatever turns up on the way. `speed` keeps a group together. */
-  | { k: 'move'; x: number; y: number; attack: boolean; speed: number }
+  | { k: 'move'; x: number; y: number; attack: boolean; speed: number; /** The heading to turn to on arrival (right-drag), in radians. */ face?: number }
   /** Back and forth between (x, y), where it is heading, and (bx, by), fighting what it meets. */
-  | { k: 'patrol'; x: number; y: number; bx: number; by: number; speed: number }
+  /** Back and forth: heading for (x, y), then (bx, by), swapping at each end. `sx, sy` and `ex, ey`
+   * are where the patrol was ordered from and to, which stay put, for showing its start and end. */
+  | { k: 'patrol'; x: number; y: number; bx: number; by: number; speed: number; sx?: number; sy?: number; ex?: number; ey?: number }
   /** `hp`: the hardpoint to aim at, or -1 for the ship as a whole. */
   | { k: 'attack'; id: number; hp: number }
+  /** Attack everything inside the circle at (x, y), the ships sharing out the targets between them. */
+  | { k: 'area'; x: number; y: number; r: number }
+  /** Stay with a friendly ship or structure and fight off whatever comes near it. */
+  | { k: 'guard'; id: number }
 
 /** Research multipliers for one ship, 1 meaning unchanged. */
 export type Mods = { hull: number; shield: number; regen: number; damage: number; speed: number; cooldown: number; range: number }
 
-export type Gun = { w: Weapon; hp: number; cd: number; burst: number; burstT: number; target: number; aim: number }
+/** A gun: its weapon, the hardpoint it sits on (-1 for the hull), reload, and what it shoots at.
+ * `focus` is a target this one gun was told to fire on first. */
+export type Gun = { w: Weapon; hp: number; cd: number; burst: number; burstT: number; target: number; aim: number; focus: number }
 
 export type Unit = {
   id: number
@@ -106,10 +116,26 @@ export type Unit = {
   /** Strike craft on a strafing run: pulling away after a pass, until far enough out to turn. */
   breakOff: boolean
   /** Waypoints round the rocks to where the ship is going (x, y), found when it set off. */
-  route: { x: number; y: number; pts: Pt[] } | null
+  route: { x: number; y: number; pts: Pt[]; obs: { x: number; y: number; r: number }[] } | null
+  /** The heading an idle ship turns to at its spot, from a move given one; null to stay as it is. */
+  face: number | null
+  /** Seconds left on a structure's repair, 0 when none is under way. */
+  repair: number
+  /** Seconds until a retreating warship jumps out, 0 when it isn't retreating. */
+  retreat: number
+  /** A structure's focus: the enemy all its guns fire on first, while they can reach and hurt it. */
+  focus: number
+  /** This structure's own upgrades, by id: levels bought (mining platforms; lost with it). */
+  upg: Partial<Record<SiteUpgradeId, number>>
+  /** The upgrade being fitted, and seconds left. */
+  upgrading: { id: SiteUpgradeId; left: number; total: number } | null
 }
 
-export type QueueItem = { unit: string; left: number; total: number }
+/** A ship being built. `reserve`: it goes to the fleet reserve when done instead of jumping in. */
+export type QueueItem = { unit: string; left: number; total: number; reserve?: boolean }
+/** A ship on its way in from hyperspace: it drops out at (x, y), facing `a`, once the clock
+ * reaches `at`. `rally`: a new ship from the shipyard, sent on to the rally point. */
+export type Arrival = { unit: string; owner: Owner; x: number; y: number; a: number; at: number; rally: boolean }
 /** Research in progress: a tech id, or LEVEL_UP for the next station level. */
 export type ResearchItem = { id: string; left: number; total: number }
 export type Player = {
@@ -127,6 +153,8 @@ export type Player = {
   level: number
   station: number
   queue: QueueItem[]
+  /** Ships bought and waiting in hyperspace, to be called in anywhere the fleet can see. */
+  reserve: string[]
   research: ResearchItem[]
   techs: string[]
   rally: { x: number; y: number }
@@ -134,6 +162,45 @@ export type Player = {
   popCap: number
   lastAlarm: number
   stats: { built: number; lost: number; killed: number; earned: number }
+  /** Where the income comes from right now, in credits a second (together, `income`). */
+  incomeParts: Record<'station' | 'mines' | 'beacons', number>
+  /** Credits earned this battle, by source. */
+  earnedBy: Record<EarnSource, number>
+  /** Credits spent this battle, by what on (refunded cancellations taken off again). */
+  spentBy: Record<SpendKind, number>
+  /** The latest purchases and one-off payouts, newest last (the last LEDGER_SIZE). */
+  ledger: LedgerEntry[]
+  /** Refunds from retreated ships, paid once their time comes. */
+  refunds: { at: number; amount: number; unit: string }[]
+  /** Credits and income every HISTORY_STEP seconds, for the economy chart. */
+  history: { t: number; credits: number; income: number }[]
+  /** Fleet battles: ships that jumped out alive, back to the fleet they came from. */
+  escaped: string[]
+}
+export type EarnSource = 'station' | 'mines' | 'beacons' | 'salvage' | 'refunds'
+export type SpendKind = 'ships' | 'research' | 'structures' | 'repairs'
+/** One line in the economy log: + for money in, - for money out. */
+export type LedgerEntry = { t: number; amount: number; what: string; kind: SpendKind | 'salvage' | 'refund' | 'cancel' }
+const LEDGER_SIZE = 40
+export const HISTORY_STEP = 5
+/** Seconds after a retreated ship jumps out before its refund arrives. */
+export const REFUND_DELAY = 15
+
+function note(w: World, p: Player, amount: number, kind: LedgerEntry['kind'], what: string) {
+  p.ledger.push({ t: w.time, amount, kind, what })
+  if (p.ledger.length > LEDGER_SIZE) p.ledger.shift()
+}
+/** Pay for something: taken off the credits, counted under its kind, and logged. */
+function spend(w: World, p: Player, amount: number, kind: SpendKind, what: string) {
+  p.credits -= amount
+  p.spentBy[kind] += amount
+  note(w, p, -amount, kind, what)
+}
+/** Money back for something cancelled before it was done. */
+function giveBack(w: World, p: Player, amount: number, kind: SpendKind, what: string) {
+  p.credits += amount
+  p.spentBy[kind] -= amount
+  note(w, p, amount, 'cancel', what)
 }
 /** Something teams take by parking ships at it. `owner` is the team holding it (-1 for nobody);
  * `claim` is the team the progress bar (0 to 1) belongs to. */
@@ -172,6 +239,22 @@ export type SimEvent =
   | { k: 'shieldsDown'; owner: Owner; x: number; y: number }
   | { k: 'salvaged'; owner: Owner; value: number; x: number; y: number }
   | { k: 'rankUp'; owner: Owner; unit: number; rank: number; x: number; y: number }
+  /** A jump started: the ship drops out at (x, y) after `delay` seconds. */
+  | { k: 'warp'; owner: Owner; unit: string; x: number; y: number; a: number; delay: number }
+  /** It dropped out; `field`: into an asteroid field, and took the damage. */
+  | { k: 'arrived'; owner: Owner; unit: string; x: number; y: number; a: number; field: boolean }
+  /** A ship finished for the reserve. */
+  | { k: 'reserved'; owner: Owner; unit: string }
+  /** A platform finished fitting an upgrade. */
+  | { k: 'upgraded'; owner: Owner; unit: number; id: SiteUpgradeId; level: number }
+  /** A structure's repair crew finished. */
+  | { k: 'repaired'; owner: Owner; unit: number; x: number; y: number }
+  /** A warship started charging its drive to retreat; it jumps out after `secs`. */
+  | { k: 'retreating'; owner: Owner; unit: string; x: number; y: number; secs: number }
+  /** A retreated ship's refund arrived. */
+  | { k: 'refunded'; owner: Owner; unit: string; amount: number }
+  /** It jumped out; `refund` credits follow in REFUND_DELAY seconds. */
+  | { k: 'retreated'; owner: Owner; unit: string; x: number; y: number; a: number; refund: number }
 
 export type World = {
   w: number
@@ -193,8 +276,22 @@ export type World = {
   winner: number
   grid: Map<number, Unit[]>
   seenT: number
-  /** Path finding grids, one per ship size. */
-  nav: Map<number, NavGrid>
+  /** Path finding grids, one per ship size and set of fields and nebulas to keep out of. */
+  nav: Map<string, NavGrid>
+  /** Ships jumping in, oldest first. */
+  arrivals: Arrival[]
+  /** A galactic conquest fleet battle: no mining or building, only the fleets (and the defender's
+   * station). A side is beaten once it has nothing left on the field or waiting in orbit. */
+  fleet?: FleetRules
+}
+export type FleetRules = {
+  /** Where each player's reinforcements may jump in, whether or not the fleet can see it. */
+  entry: { x: number; y: number; r: number }[]
+  /** Fleet size the battle starts with on the field; the rest waits in orbit. */
+  cap: number
+  /** The team that holds the planet: it keeps it if both sides are wiped out. */
+  holder: number
+  endT: number
 }
 
 // --- Helpers ----------------------------------------------------------------------------------------
@@ -253,15 +350,15 @@ const hangarsUp = (u: Unit) => u.t.hardpoints.some((h, i) => h.kind === 'hangar'
 export const building = (u: Unit) => u.building > 0
 
 /** Damage per second a type deals to each tier: for picking targets. */
-const DPS = new Map<string, Record<string, number>>()
-function dpsVs(t: UnitType, tier: Tier) {
-  let row = DPS.get(t.id)
+const DPS = new WeakMap<UnitType, Record<string, number>>()
+export function dpsVs(t: UnitType, tier: Tier) {
+  let row = DPS.get(t)
   if (!row) {
     row = {}
     const ws = [...t.weapons, ...t.hardpoints.flatMap((h) => (h.weapon ? [h.weapon] : []))]
     for (const tr of ['fighter', 'gunship', 'frigate', 'cruiser', 'capital', 'station', 'mine', 'defense'] as Tier[])
       row[tr] = ws.reduce((s, w) => s + (w.damage * (w.burst ?? 1) * effect(w.kind, tr) * accuracy(w.kind, tr)) / w.cooldown, 0)
-    DPS.set(t.id, row)
+    DPS.set(t, row)
   }
   return row[tier]
 }
@@ -275,19 +372,23 @@ function fightRange(t: UnitType) {
 
 // --- Setup -----------------------------------------------------------------------------------------
 
+/** A unit's guns: its own weapons, then one per armed hardpoint. */
+const gunsOf = (t: UnitType): Gun[] =>
+  [...t.weapons.map((wp) => ({ w: wp, hp: -1 })), ...t.hardpoints.flatMap((h, i) => (h.weapon ? [{ w: h.weapon, hp: i }] : []))].map((g) => ({
+    ...g, cd: Math.random() * g.w.cooldown, burst: 0, burstT: 0, target: 0, aim: 0, focus: 0,
+  }))
+
 export function spawn(w: World, id: string, owner: Owner, x: number, y: number, a: number, squad = 0): Unit {
-  const t = UNIT[id]
-  const lvl = t.tier === 'station' ? w.players[owner].level : 1
-  const mods = modsFor(w.players[owner], t)
-  const hullMax = t.hull * (1 + STATION_LEVEL_BONUS * (lvl - 1)) * mods.hull
+  const p = w.players[owner]
+  const t = UNIT[id].tier === 'station' ? stationType(p.faction, p.level, p.techs) : UNIT[id]
+  const mods = modsFor(p, t)
+  const hullMax = t.hull * mods.hull
   const u: Unit = {
     id: w.nextId++, t, owner, x, y, a, v: 0, hull: hullMax, hullMax, shield: t.shield * mods.shield, mods,
     hps: t.hardpoints.map((h) => ({ hp: h.hp, max: h.hp })),
-    guns: [...t.weapons.map((wp) => ({ w: wp, hp: -1 })), ...t.hardpoints.flatMap((h, i) => (h.weapon ? [{ w: h.weapon, hp: i }] : []))].map((g) => ({
-      ...g, cd: Math.random() * g.w.cooldown, burst: 0, burstT: 0, target: 0, aim: 0,
-    })),
+    guns: gunsOf(t),
     order: { k: 'idle' }, ax: x, ay: y, squad, parent: 0, target: 0, retarget: Math.random() * 0.5, lastHit: -99, shieldHit: -99, shieldOut: -99, hitAngle: 0,
-    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, stance: 'maneuver', gx: x, gy: y, hitBy: 0, nebula: false, route: null, queue: [], mending: [], breakOff: false,
+    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, stance: 'maneuver', gx: x, gy: y, hitBy: 0, nebula: false, route: null, queue: [], mending: [], breakOff: false, face: null, repair: 0, retreat: 0, focus: 0, upg: {}, upgrading: null,
     seen: Array.from({ length: w.teams }, (_, t) => t === w.players[owner].team),
   }
   w.units.push(u)
@@ -353,7 +454,7 @@ export function autoStart(w: World, area: { x: number; y: number; w: number; h: 
   return best ?? mid
 }
 
-export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; credits?: number } = {}): World {
+export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; credits?: number; fleet?: boolean } = {}): World {
   const r = rng(opts.seed ?? map.seed)
   const W = map.w
   const H = map.h
@@ -361,15 +462,22 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
   const teams = Math.max(...seats.map((s) => s.team)) + 1
   const w: World = {
     w: W, h: H, time: 0, units: [], byId: new Map(), players: [], teams, map, nodes: [], beacons: [], rocks: [], wrecks: [], shots: [], events: [],
-    nextId: 1, winner: -1, grid: new Map(), seenT: 0, nav: new Map(),
+    nextId: 1, winner: -1, grid: new Map(), seenT: 0, nav: new Map(), arrivals: [],
   }
   w.players = seats.map((s) => {
     const sp = s.at ?? map.spawns[s.spawn]
     const d = Math.hypot(c.x - sp.x, c.y - sp.y) || 1
     return {
       faction: s.faction, team: s.team, spawn: s.spawn, start: { x: sp.x, y: sp.y }, alive: true, credits: opts.credits ?? START_CREDITS, income: 0, incomeMul: s.incomeMul ?? 1, level: 1, station: 0,
-      queue: [], research: [], techs: [], rally: { x: sp.x + ((c.x - sp.x) / d) * 600, y: sp.y + ((c.y - sp.y) / d) * 600 }, pop: 0, popCap: BASE_POP, lastAlarm: -99,
+      queue: [], reserve: [], research: [], techs: [], rally: { x: sp.x + ((c.x - sp.x) / d) * 600, y: sp.y + ((c.y - sp.y) / d) * 600 }, pop: 0, popCap: BASE_POP, lastAlarm: -99,
       stats: { built: 0, lost: 0, killed: 0, earned: 0 },
+      incomeParts: { station: 0, mines: 0, beacons: 0 },
+      earnedBy: { station: 0, mines: 0, beacons: 0, salvage: 0, refunds: 0 },
+      spentBy: { ships: 0, research: 0, structures: 0, repairs: 0 },
+      ledger: [],
+      refunds: [],
+      history: [],
+      escaped: [],
     }
   })
   const claim = { owner: -1, claim: -1, progress: 0 }
@@ -415,7 +523,7 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
   }
   // Stations, facing the middle, and a starting patrol in front of each. Ore has to be surveyed
   // before anything is built on it.
-  w.players.forEach((p, o) => {
+  if (!opts.fleet) w.players.forEach((p, o) => {
     const sp = p.start
     const face = Math.atan2(c.y - sp.y, c.x - sp.x)
     const fx = Math.cos(face)
@@ -436,7 +544,8 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
 
 // --- Orders ------------------------------------------------------------------------------------------
 
-const commandable = (u: Unit | undefined, owner: Owner): u is Unit => !!u && !u.dead && u.owner === owner && isShip(u.t)
+/** A ship that takes orders: ours, and not spooling up to jump out. */
+const commandable = (u: Unit | undefined, owner: Owner): u is Unit => !!u && !u.dead && u.owner === owner && isShip(u.t) && u.retreat <= 0
 
 /** Spread a group's destinations around (x, y), keeping its shape (squeezed if it's spread out). */
 /** A spot a ship can actually reach: moved out to the edge of any rock it falls inside. */
@@ -468,12 +577,17 @@ function issue(u: Unit, o: Order, queued = false) {
   u.queue = []
   u.target = o.k === 'attack' ? o.id : 0
   u.parent = 0
+  u.face = null
 }
 
 /** Where a ship will be once its current and queued orders are done: where a queued patrol starts. */
 export function lastStop(w: World, u: Unit): Pt {
   for (const o of [...u.queue].reverse().concat(u.order)) {
-    if (o.k === 'move' || o.k === 'patrol') return { x: o.x, y: o.y }
+    if (o.k === 'move' || o.k === 'patrol' || o.k === 'area') return { x: o.x, y: o.y }
+    if (o.k === 'guard') {
+      const t = w.byId.get(o.id)
+      if (t && !t.dead) return { x: t.x, y: t.y }
+    }
     if (o.k === 'attack') {
       const t = w.byId.get(o.id)
       if (t && !t.dead) return { x: t.x, y: t.y }
@@ -483,7 +597,7 @@ export function lastStop(w: World, u: Unit): Pt {
 }
 
 /** The current order is done: on to the next queued one, or wait at (x, y). */
-function nextOrder(u: Unit, x: number, y: number) {
+function nextOrder(u: Unit, x: number, y: number, face: number | null = null) {
   const o = u.queue.shift()
   if (o) {
     u.order = o
@@ -493,6 +607,7 @@ function nextOrder(u: Unit, x: number, y: number) {
   u.order = { k: 'idle' }
   u.ax = x
   u.ay = y
+  u.face = face
 }
 
 function formation(w: World, owner: Owner, ids: number[], x: number, y: number, give: (u: Unit, tx: number, ty: number, pace: number) => void) {
@@ -556,11 +671,48 @@ export function lineGroups(w: World, owner: Owner, ids: number[]): Unit[][] {
   return [...groups.values()]
 }
 
-/** Spread ships evenly along a line the player drew. Spots are handed out in the order the ships
- * stand across the line, so they don't cross each other's paths getting there. */
-export function cmdLine(w: World, owner: Owner, ids: number[], path: Pt[], attack = false, queued = false) {
+/**
+ * Spots for a squadron round (x, y), facing `heading`: the first in front, the rest paired off in
+ * a vee behind it, centred on (x, y), `gap` apart.
+ */
+export function veeSpots(n: number, x: number, y: number, heading: number, gap: number): Pt[] {
+  const fx = Math.cos(heading)
+  const fy = Math.sin(heading)
+  const off = Array.from({ length: n }, (_, i) => {
+    const row = Math.ceil(i / 2)
+    const side = i === 0 ? 0 : i % 2 ? -1 : 1
+    return { back: row * gap * 0.75, lat: side * row * gap }
+  })
+  const mb = off.reduce((s, o) => s + o.back, 0) / n
+  return off.map((o) => ({ x: x - fx * (o.back - mb) - fy * o.lat, y: y - fy * (o.back - mb) + fx * o.lat }))
+}
+const squadGap = (u: Unit) => radius(u.t) * 2 + 18
+
+/** Where each ship of a group goes: one ship to the spot, a squadron to its own places in a vee
+ * round it, each fighter to the place on its own side so their paths don't cross. */
+function groupSpots(w: World, g: Unit[], x: number, y: number, heading: number): { u: Unit; x: number; y: number }[] {
+  if (g.length === 1) {
+    const p = offRocks(w, g[0], clamp(x, 40, w.w - 40), clamp(y, 40, w.h - 40))
+    return [{ u: g[0], x: p.x, y: p.y }]
+  }
+  const lat = (p: Pt) => -Math.sin(heading) * p.x + Math.cos(heading) * p.y
+  const spots = veeSpots(g.length, x, y, heading, squadGap(g[0]))
+  const ships = [...g].sort((a, b) => lat(a) - lat(b))
+  const places = spots.map((p, i) => ({ p, i })).sort((a, b) => lat(a.p) - lat(b.p))
+  return ships.map((u, i) => {
+    const p = offRocks(w, u, clamp(places[i].p.x, 40, w.w - 40), clamp(places[i].p.y, 40, w.h - 40))
+    return { u, x: p.x, y: p.y }
+  })
+}
+
+/**
+ * Where each ship goes for a line the player drew: groups (a ship, or a squadron) spread evenly
+ * along it, handed out in the order they stand across it so they don't cross each other's paths,
+ * and round it when it's a closed loop. The order preview draws these same spots.
+ */
+export function lineTargets(w: World, owner: Owner, ids: number[], path: Pt[]): { u: Unit; x: number; y: number }[] {
   const groups = lineGroups(w, owner, ids)
-  if (!groups.length || path.length < 2) return
+  if (!groups.length || path.length < 2) return []
   let spots = spreadAlong(path, groups.length)
   const a = path[0]
   const b = path[path.length - 1]
@@ -587,24 +739,139 @@ export function cmdLine(w: World, owner: Owner, ids: number[], path: Pt[], attac
     }
     spots = order.map((_, i) => round[(i + best) % round.length])
   }
-  const all = groups.flat()
+  // A squadron's vee points the way it flies there.
+  return order.flatMap(({ g, c }, i) => groupSpots(w, g, spots[i].x, spots[i].y, Math.atan2(spots[i].y - c.y, spots[i].x - c.x)))
+}
+
+/** Spread ships evenly along a line the player drew (see lineTargets). */
+export function cmdLine(w: World, owner: Owner, ids: number[], path: Pt[], attack = false, queued = false) {
+  const targets = lineTargets(w, owner, ids, path)
   // A line keeps the pace of its slowest ship, like any group.
-  const pace = all.length > 1 ? Math.min(...all.map((u) => speedOf(u))) : Infinity
-  order.forEach(({ g, c }, i) => {
-    for (const u of g) {
-      // Squadron members keep their shape round the spot, a little tighter.
-      const p = offRocks(w, u, clamp(spots[i].x + (u.x - c.x) * 0.6, 40, w.w - 40), clamp(spots[i].y + (u.y - c.y) * 0.6, 40, w.h - 40))
-      issue(u, { k: 'move', x: p.x, y: p.y, attack, speed: pace }, queued)
-    }
+  const pace = targets.length > 1 ? Math.min(...targets.map((p) => speedOf(p.u))) : Infinity
+  for (const p of targets) issue(p.u, { k: 'move', x: p.x, y: p.y, attack, speed: pace }, queued)
+}
+
+/**
+ * Where ships go for a move that ends facing `face`: one ship or squadron straight to the spot (a
+ * squadron's vee turned that way); a bigger selection keeps its formation, turned as a whole so
+ * its front faces that way.
+ */
+export function faceTargets(w: World, owner: Owner, ids: number[], x: number, y: number, face: number) {
+  const groups = lineGroups(w, owner, ids)
+  if (groups.length <= 1) return groups.flatMap((g) => groupSpots(w, g, x, y, face))
+  const all = groups.flat()
+  const cx = all.reduce((s, u) => s + u.x, 0) / all.length
+  const cy = all.reduce((s, u) => s + u.y, 0) / all.length
+  const spread = Math.max(1, ...all.map((u) => Math.hypot(u.x - cx, u.y - cy)))
+  const fit = Math.min(1, (90 + Math.sqrt(all.length) * 70) / spread)
+  // Turned from the way it would fly there to the way it should face.
+  const turn = face - Math.atan2(y - cy, x - cx)
+  const c = Math.cos(turn)
+  const sn = Math.sin(turn)
+  return groups.flatMap((g) => {
+    const gx = (g.reduce((s, u) => s + u.x, 0) / g.length - cx) * fit
+    const gy = (g.reduce((s, u) => s + u.y, 0) / g.length - cy) * fit
+    return groupSpots(w, g, x + gx * c - gy * sn, y + gx * sn + gy * c, face)
   })
+}
+
+/** Move to (x, y) and turn to `face` there: what dragging with the right button does for one ship
+ * or one squadron. */
+export function cmdFace(w: World, owner: Owner, ids: number[], x: number, y: number, face: number, attack = false, queued = false) {
+  const targets = faceTargets(w, owner, ids, x, y, face)
+  const pace = targets.length > 1 ? Math.min(...targets.map((p) => speedOf(p.u))) : Infinity
+  for (const p of targets) issue(p.u, { k: 'move', x: p.x, y: p.y, attack, speed: pace, face }, queued)
 }
 
 export function cmdPatrol(w: World, owner: Owner, ids: number[], x: number, y: number, queued = false) {
   formation(w, owner, ids, x, y, (u, tx, ty, speed) => {
     // A queued patrol runs between where the earlier orders leave the ship and here.
     const from = queued ? lastStop(w, u) : u
-    issue(u, { k: 'patrol', x: tx, y: ty, bx: from.x, by: from.y, speed }, queued)
+    issue(u, { k: 'patrol', x: tx, y: ty, bx: from.x, by: from.y, speed, sx: from.x, sy: from.y, ex: tx, ey: ty }, queued)
   })
+}
+
+/** Whether an enemy is inside an area order's circle (any part of its hull counts). */
+const inArea = (o: { x: number; y: number; r: number }, e: Unit) => d2(e.x, e.y, o.x, o.y) < (o.r + radius(e.t) * 0.5) ** 2
+
+/**
+ * The target a ship takes under an area order: the enemy in the circle its guns hurt most, made
+ * less attractive by the firepower already on it from the rest of the order, measured against how
+ * much it can take. So the ships spread over the targets in proportion instead of all piling onto
+ * one, and a ship that's already on a target keeps it unless something is clearly better.
+ */
+function areaTarget(w: World, u: Unit, o: { x: number; y: number; r: number }, cur: Unit | undefined): Unit | undefined {
+  const onIt = new Map<number, number>()
+  for (const m of w.units) {
+    if (m === u || m.dead || m.owner !== u.owner || m.order.k !== 'area' || !m.target) continue
+    const e = w.byId.get(m.target)
+    if (e) onIt.set(e.id, (onIt.get(e.id) ?? 0) + dpsVs(m.t, e.t.tier))
+  }
+  let best: Unit | undefined
+  let score = 0
+  for (const e of w.units) {
+    if (e.dead || !foes(w, e.owner, u.owner) || !sees(w, u.owner, e) || !inArea(o, e)) continue
+    const mine = dpsVs(u.t, e.t.tier)
+    if (mine <= 0) continue
+    // Seconds the target would last against what's already on it: the longer, the more it needs us.
+    const toughness = e.hull + e.shield + 1
+    const covered = (onIt.get(e.id) ?? 0) / toughness
+    const near = 1 / (1 + Math.hypot(e.x - u.x, e.y - u.y) / 1500)
+    const sc = (mine / (1 + covered * 30)) * near * (e === cur ? 1.25 : 1)
+    if (sc > score) {
+      score = sc
+      best = e
+    }
+  }
+  return best
+}
+
+/** Attack everything inside the circle at (x, y): every selected ship takes a share of the targets. */
+export function cmdArea(w: World, owner: Owner, ids: number[], x: number, y: number, r: number, queued = false) {
+  for (const id of ids) {
+    const u = w.byId.get(id)
+    if (commandable(u, owner)) issue(u, { k: 'area', x, y, r }, queued)
+  }
+}
+
+/** Structures that can be told what to fire on: ours, armed, built. */
+const focusable = (u: Unit | undefined, owner: Owner): u is Unit => !!u && !u.dead && u.owner === owner && !isShip(u.t) && !building(u) && u.guns.length > 0
+
+/**
+ * Tell structures what to fire on first: every gun, or with `hp` just the gun on that hardpoint of
+ * the one structure. Guns that can't reach or can't hurt it keep choosing for themselves. A target
+ * of 0 clears the focus.
+ */
+export function cmdFocus(w: World, owner: Owner, ids: number[], target: number, hp = -1, force = false): string | null {
+  if (target && !valid(w, target, owner, force)) return 'Pick an enemy we can see'
+  const structures = ids.map((i) => w.byId.get(i)).filter((u) => focusable(u, owner) && u!.id !== target) as Unit[]
+  if (!structures.length) return 'Nothing selected has guns to aim'
+  if (hp >= 0) {
+    const g = structures[0].guns.find((x) => x.hp === hp)
+    if (!g) return 'That part has no gun'
+    g.focus = target
+    return null
+  }
+  for (const u of structures) {
+    u.focus = target
+    // A new order for the whole structure overrides what single guns were told.
+    for (const g of u.guns) g.focus = 0
+  }
+  return null
+}
+
+/** Guard a friendly ship or structure: the ships stay with it and fight off what comes near. */
+export function cmdGuard(w: World, owner: Owner, ids: number[], id: number): string | null {
+  const g = w.byId.get(id)
+  if (!g || g.dead || foes(w, g.owner, owner)) return 'Pick one of our ships or structures to guard'
+  let n = 0
+  for (const i of ids) {
+    const u = w.byId.get(i)
+    if (u === g || !commandable(u, owner)) continue
+    issue(u, { k: 'guard', id })
+    n++
+  }
+  return n ? null : 'Nothing selected can guard'
 }
 
 /** Set how the ships answer enemies (see Stance). */
@@ -618,18 +885,30 @@ export function cmdStance(w: World, owner: Owner, ids: number[], stance: Stance)
   }
 }
 
-export function cmdAttack(w: World, owner: Owner, ids: number[], target: number, hp = -1, queued = false) {
+/** Attack one target. `force` allows one of our own (the attack key or button, never a plain right-click). */
+export function cmdAttack(w: World, owner: Owner, ids: number[], target: number, hp = -1, queued = false, force = false) {
   const t = w.byId.get(target)
-  if (!t || t.dead || !foes(w, t.owner, owner)) return
+  if (!t || t.dead || !(foes(w, t.owner, owner) || force)) return
   for (const i of ids) {
     const u = w.byId.get(i)
-    if (!commandable(u, owner)) continue
+    if (u === t || !commandable(u, owner)) continue
     issue(u, { k: 'attack', id: target, hp: hp >= 0 && hp < t.hps.length ? hp : -1 }, queued)
   }
 }
 
 export function cmdStop(w: World, owner: Owner, ids: number[]) {
   for (const i of ids) {
+    // Structures stop by dropping their focus: every gun picks its own targets again.
+    const st = w.byId.get(i)
+    if (focusable(st, owner)) {
+      st.focus = 0
+      for (const g of st.guns) {
+        g.focus = 0
+        g.target = 0
+        g.burst = 0
+      }
+      continue
+    }
     const u = w.byId.get(i)
     if (!commandable(u, owner)) continue
     u.order = { k: 'idle' }
@@ -637,6 +916,10 @@ export function cmdStop(w: World, owner: Owner, ids: number[]) {
     u.ax = u.x
     u.ay = u.y
     u.target = 0
+    for (const g of u.guns) {
+      g.target = 0
+      g.burst = 0
+    }
   }
 }
 
@@ -665,12 +948,201 @@ export function cmdRally(w: World, owner: Owner, x: number, y: number) {
 
 const queuedPop = (p: Player) => p.queue.reduce((s, q) => s + UNIT[q.unit].pop, 0)
 const capitals = (w: World, o: Owner) =>
-  w.units.filter((u) => !u.dead && u.owner === o && u.t.tier === 'capital').length + w.players[o].queue.filter((q) => UNIT[q.unit].tier === 'capital').length
+  w.units.filter((u) => !u.dead && u.owner === o && u.t.tier === 'capital').length +
+  [...w.players[o].queue.map((q) => q.unit), ...w.players[o].reserve, ...w.arrivals.filter((a) => a.owner === o).map((a) => a.unit)].filter((id) => UNIT[id].tier === 'capital').length
+
+/** How much of its income a mining platform brings in, from its working drill rigs and silo. */
+export function mineOutput(u: Unit) {
+  const parts = u.hps.length ? u.t.hardpoints.reduce((s, h, i) => s + (u.hps[i].hp > 0 ? (h.kind === 'drill' ? 0.4 : h.kind === 'refinery' ? 0.2 : 0) : 0), 0) : 1
+  return parts * (1 + YIELD_PER_LEVEL * (u.upg.yield ?? 0))
+}
+
+// --- Platform upgrades --------------------------------------------------------------------------------
+
+/** The next level of an upgrade for this structure: its price and time, or null when it's done. */
+export function siteUpgradeNext(u: Unit, id: SiteUpgradeId) {
+  const up = SITE_UPGRADES.find((x) => x.id === id)!
+  const have = u.upg[id] ?? 0
+  return have >= up.levels ? null : { level: have + 1, cost: up.cost[have], time: up.time }
+}
+
+export function cantUpgradeSite(w: World, owner: Owner, u: Unit | undefined, id: SiteUpgradeId): string | null {
+  if (!u || u.dead || u.owner !== owner || u.t.tier !== 'mine') return 'Only our mining platforms take these upgrades'
+  if (building(u)) return 'Still under construction'
+  if (u.upgrading) return 'Already fitting an upgrade'
+  const next = siteUpgradeNext(u, id)
+  if (!next) return 'Fully upgraded'
+  if (w.players[owner].credits < next.cost) return 'Not enough credits'
+  return null
+}
+
+/** Fit an upgrade to one mining platform: paid now, done after its time. */
+export function cmdUpgradeSite(w: World, owner: Owner, unitId: number, id: SiteUpgradeId): string | null {
+  const u = w.byId.get(unitId)
+  const why = cantUpgradeSite(w, owner, u, id)
+  if (why) return why
+  const next = siteUpgradeNext(u!, id)!
+  const up = SITE_UPGRADES.find((x) => x.id === id)!
+  spend(w, w.players[owner], next.cost, 'structures', `${up.name}${up.levels > 1 ? ` ${next.level}` : ''}: ${u!.t.name}`)
+  u!.upgrading = { id, left: next.time, total: next.time }
+  return null
+}
+
+function siteUpgrades(w: World, dt: number) {
+  for (const u of w.units) {
+    if (u.dead || !u.upgrading) continue
+    u.upgrading.left -= dt
+    if (u.upgrading.left > 0) continue
+    const id = u.upgrading.id
+    u.upgrading = null
+    u.upg[id] = (u.upg[id] ?? 0) + 1
+    if (id === 'shield') {
+      // The dome goes on (as tough as the platform's armour makes it); the shields charge from empty.
+      retype(u, mineType(u.t.faction, true), u.upg.armor ? 1 + ARMOR_BONUS : 1)
+      u.shield = 0
+    }
+    if (id === 'armor') {
+      // The extra plating arrives whole: hull and every part grow, damage stays as it was.
+      const k = 1 + ARMOR_BONUS
+      u.hull += u.hullMax * (k - 1)
+      u.hullMax *= k
+      for (const h of u.hps) {
+        h.hp += h.max * (k - 1)
+        h.max *= k
+      }
+    }
+    w.events.push({ k: 'upgraded', owner: u.owner, unit: u.id, id, level: u.upg[id]! })
+  }
+}
+
+// --- Repairs ---------------------------------------------------------------------------------------
+
+/** Seconds a repair crew takes to make a structure whole again. */
+export const REPAIR_TIME = 20
+const REPAIRABLE: Tier[] = ['station', 'mine', 'defense']
+/** What a structure is worth when working out a repair's price (the station has no build cost). */
+const worth = (u: Unit) => u.t.cost || 2500
+
+/** How much of a unit is missing: hull and every module, as a share of the whole. */
+function wear(u: Unit) {
+  const max = u.hullMax + u.hps.reduce((s, h) => s + h.max, 0)
+  const has = u.hull + u.hps.reduce((s, h) => s + Math.max(0, h.hp), 0)
+  return max > 0 ? Math.max(0, 1 - has / max) : 0
+}
+/** Credits to repair a structure: 60% of its worth for what's missing. */
+export const repairCost = (u: Unit) => Math.ceil(worth(u) * wear(u) * 0.6)
+
+export function cantRepair(w: World, owner: Owner, u: Unit | undefined): string | null {
+  if (!u || u.dead || u.owner !== owner) return 'Not ours'
+  if (!REPAIRABLE.includes(u.t.tier)) return 'Only structures can be repaired here'
+  if (building(u)) return 'Still under construction'
+  if (u.repair > 0) return 'Already being repaired'
+  if (wear(u) < 0.005) return 'Nothing to repair'
+  if (w.players[owner].credits < repairCost(u)) return 'Not enough credits'
+  return null
+}
+
+/** Send a repair crew: it mends the hull and every module, rebuilding the ones shot off, over
+ * REPAIR_TIME seconds, under fire or not. */
+export function cmdRepair(w: World, owner: Owner, id: number): string | null {
+  const u = w.byId.get(id)
+  const why = cantRepair(w, owner, u)
+  if (why) return why
+  spend(w, w.players[owner], repairCost(u!), 'repairs', `Repairs: ${u!.t.name}`)
+  u!.repair = REPAIR_TIME
+  return null
+}
+
+function repairs(w: World, dt: number) {
+  for (const u of w.units) {
+    if (u.dead || u.repair <= 0) continue
+    u.repair -= dt
+    const k = dt / REPAIR_TIME
+    u.hull = Math.min(u.hullMax, u.hull + u.hullMax * k)
+    u.hps.forEach((h) => (h.hp = Math.min(h.max, h.hp + h.max * k)))
+    if (u.repair <= 0 || wear(u) < 0.001) {
+      // Done: whatever rounding left over is made good.
+      u.repair = 0
+      u.hull = u.hullMax
+      for (const h of u.hps) h.hp = h.max
+      w.events.push({ k: 'repaired', owner: u.owner, unit: u.id, x: u.x, y: u.y })
+    }
+  }
+}
+
+// --- Retreat --------------------------------------------------------------------------------------
+
+/** Seconds a warship's hyperspace drive takes to charge for a retreat, by class. */
+export const RETREAT_TIME: Partial<Record<Tier, number>> = { gunship: 6, frigate: 8, cruiser: 10, capital: 12 }
+/** What a retreat pays back: this share of the ship's cost at full health, less as it's damaged. */
+export const RETREAT_REFUND = 0.5
+
+export const canRetreat = (u: Unit) => !u.dead && isShip(u.t) && !u.parent && RETREAT_TIME[u.t.tier] !== undefined
+/** Credits a ship would bring back by retreating now: half its cost, times its hull's health, and
+ * up to a further 30% off for modules shot off or damaged. A wreck limping out brings back next to
+ * nothing. */
+export function retreatRefund(u: Unit) {
+  const max = u.hps.reduce((s, h) => s + h.max, 0)
+  const modules = max ? u.hps.reduce((s, h) => s + Math.max(0, h.hp), 0) / max : 1
+  return Math.round((u.t.cost / u.t.squad) * RETREAT_REFUND * (u.hull / u.hullMax) * (0.7 + 0.3 * modules))
+}
+
+/**
+ * Retreat: the selected gunships and bigger charge their hyperspace drives, holding still while
+ * they do (their guns keep firing), then jump out and pay back part of their cost, freeing their
+ * fleet space. If every one of them is already charging, the retreat is called off.
+ */
+export function cmdRetreat(w: World, owner: Owner, ids: number[]) {
+  const ships = ids.map((i) => w.byId.get(i)).filter((u): u is Unit => !!u && u.owner === owner && canRetreat(u))
+  if (!ships.length) return 'Fighters and bombers can\'t retreat: they have no hyperspace drive'
+  if (ships.every((u) => u.retreat > 0)) {
+    for (const u of ships) u.retreat = 0
+    return null
+  }
+  for (const u of ships) {
+    if (u.retreat > 0) continue
+    u.retreat = RETREAT_TIME[u.t.tier]!
+    u.order = { k: 'idle' }
+    u.queue = []
+    u.ax = u.x
+    u.ay = u.y
+    w.events.push({ k: 'retreating', owner, unit: u.t.id, x: u.x, y: u.y, secs: u.retreat })
+  }
+  return null
+}
+
+/** A charging warship: it slows to a stop and fires at what it can; when the drive is ready it's
+ * gone, with its refund paid. No wreck, no kill for anyone. */
+function retreating(w: World, u: Unit, dt: number) {
+  u.retreat -= dt
+  u.v = Math.max(0, u.v - u.t.speed * 0.8 * dt)
+  if (u.retreat > 0) return
+  u.retreat = 0
+  const p = w.players[u.owner]
+  // In a fleet battle the ship itself is saved: it rejoins its fleet.
+  const refund = w.fleet ? 0 : retreatRefund(u)
+  if (w.fleet) p.escaped.push(u.t.id)
+  if (refund > 0) p.refunds.push({ at: w.time + REFUND_DELAY, amount: refund, unit: u.t.id })
+  u.dead = true
+  w.events.push({ k: 'retreated', owner: u.owner, unit: u.t.id, x: u.x, y: u.y, a: u.a, refund })
+}
+
+/** Strike craft launch from the station's hangar; everything bigger is built in the yards and
+ * comes in from hyperspace. */
+export const fromHangar = (t: UnitType) => t.tier === 'fighter'
+/** Seconds from a jump starting to the ship dropping out: from the shipyard, and called in from
+ * the reserve (a longer trip, and the warning the enemy gets). */
+export const WARP_YARD = 1.6
+export const WARP_RESERVE = 2.4
+/** Share of its hull a ship loses dropping out inside an asteroid field (its shields go too). */
+export const FIELD_DAMAGE = 0.4
 
 /** Why a ship can't be ordered right now, or null if it can. */
-export function cantBuild(w: World, owner: Owner, id: string): string | null {
+export function cantBuild(w: World, owner: Owner, id: string, reserve = false): string | null {
   const p = w.players[owner]
   const t = UNIT[id]
+  if (w.fleet) return 'No shipyard work during a fleet battle'
+  if (reserve && fromHangar(t)) return 'Strike craft launch from the hangar'
   if (!w.byId.get(p.station) || w.byId.get(p.station)!.dead) return 'No station'
   if (t.level > p.level) return `Needs station level ${t.level}`
   if (t.tier === 'capital' && capitals(w, owner) >= MAX_CAPITALS) return 'One flagship at a time'
@@ -680,22 +1152,118 @@ export function cantBuild(w: World, owner: Owner, id: string): string | null {
   return null
 }
 
-export function cmdBuild(w: World, owner: Owner, id: string) {
-  const why = cantBuild(w, owner, id)
+/** Order a ship: it jumps in next to the station when done, or with `reserve` waits in the fleet
+ * reserve until called in. */
+export function cmdBuild(w: World, owner: Owner, id: string, reserve = false) {
+  const why = cantBuild(w, owner, id, reserve)
   if (why) return why
   const p = w.players[owner]
   const t = UNIT[id]
-  p.credits -= t.cost
+  spend(w, p, t.cost, 'ships', t.name)
   const time = t.build * (1 + (techBonus(p, id).build ?? 0))
-  p.queue.push({ unit: id, left: time, total: time })
+  p.queue.push({ unit: id, left: time, total: time, ...(reserve ? { reserve: true } : {}) })
   return null
+}
+
+/** Whether a team can see a point: any of its ships or structures has it in sensor range. */
+export function canSee(w: World, team: number, x: number, y: number) {
+  return w.units.some((u) => !u.dead && w.players[u.owner].team === team && d2(u.x, u.y, x, y) < sensorOf(u) ** 2)
+}
+
+/**
+ * Why a ship can't jump in at (x, y), or null when it can: it must be on the map, somewhere our
+ * fleet can see, and clear of rocks, ore, other ships and structures, and other ships jumping in.
+ * Asteroid fields and nebulas are allowed (a field costs hull on arrival).
+ */
+export function cantWarp(w: World, owner: Owner, id: string, x: number, y: number): string | null {
+  const t = UNIT[id]
+  const r = radius(t)
+  if (x < r + 40 || y < r + 40 || x > w.w - r - 40 || y > w.h - r - 40) return 'Off the map'
+  const entry = w.fleet?.entry[owner]
+  const atEntry = !!entry && d2(x, y, entry.x, entry.y) < entry.r ** 2
+  if (!atEntry && !canSee(w, w.players[owner].team, x, y)) return w.fleet ? 'Out of sight: ships jump in where the fleet can see, or at our entry point' : 'Out of sight: ships can only jump in where the fleet can see'
+  if (w.rocks.some((k) => d2(x, y, k.x, k.y) < (k.r + r) ** 2)) return 'An asteroid is in the way'
+  if (w.nodes.some((n) => d2(x, y, n.x, n.y) < (n.r + r) ** 2)) return 'An ore asteroid is in the way'
+  if (w.units.some((u) => !u.dead && u.t.tier !== 'fighter' && d2(x, y, u.x, u.y) < ((radius(u.t) + r) * 0.85) ** 2)) return 'Something is in the way'
+  if (w.arrivals.some((a) => d2(x, y, a.x, a.y) < (radius(UNIT[a.unit]) + r) ** 2)) return 'Another ship is jumping in there'
+  return null
+}
+
+function warpIn(w: World, owner: Owner, unit: string, x: number, y: number, a: number, delay: number, rally: boolean) {
+  w.arrivals.push({ unit, owner, x, y, a, at: w.time + delay, rally })
+  w.events.push({ k: 'warp', owner, unit, x, y, a, delay })
+}
+
+/** Call a ship in from the reserve to (x, y), facing `a`. */
+export function cmdDeploy(w: World, owner: Owner, id: string, x: number, y: number, a: number): string | null {
+  const p = w.players[owner]
+  const i = p.reserve.indexOf(id)
+  if (i < 0) return 'None of those in reserve'
+  const why = cantWarp(w, owner, id, x, y)
+  if (why) return why
+  p.reserve.splice(i, 1)
+  warpIn(w, owner, id, x, y, a, WARP_RESERVE, false)
+  return null
+}
+
+/** Where a new ship from the shipyard drops out: beside the station, towards the rally point, on
+ * the first clear spot round it. */
+function yardSpot(w: World, o: Owner, st: Unit, id: string) {
+  const p = w.players[o]
+  const t = UNIT[id]
+  const toward = Math.atan2(p.rally.y - st.y, p.rally.x - st.x)
+  const reach = radius(st.t) + radius(t) + 70
+  for (let ring = 0; ring < 4; ring++)
+    for (const off of [0, 0.45, -0.45, 0.9, -0.9, 1.4, -1.4, 2, -2, 2.6, -2.6, Math.PI]) {
+      const ang = toward + off
+      const d = reach + ring * radius(t) * 1.6
+      const x = st.x + Math.cos(ang) * d
+      const y = st.y + Math.sin(ang) * d
+      const blocked =
+        w.rocks.some((k) => d2(x, y, k.x, k.y) < (k.r + radius(t)) ** 2) ||
+        w.units.some((u) => !u.dead && u !== st && u.t.tier !== 'fighter' && d2(x, y, u.x, u.y) < (radius(u.t) + radius(t)) ** 2) ||
+        w.arrivals.some((a) => d2(x, y, a.x, a.y) < (radius(UNIT[a.unit]) + radius(t)) ** 2)
+      if (!blocked) return { x: clamp(x, 60, w.w - 60), y: clamp(y, 60, w.h - 60), a: toward }
+    }
+  return { x: st.x + Math.cos(toward) * reach, y: st.y + Math.sin(toward) * reach, a: toward }
+}
+
+/** Ships whose jump is done drop out of hyperspace; into an asteroid field, they pay for it. */
+function arrivals(w: World) {
+  if (!w.arrivals.length) return
+  const keep: Arrival[] = []
+  for (const a of w.arrivals) {
+    if (a.at > w.time) {
+      keep.push(a)
+      continue
+    }
+    const p = w.players[a.owner]
+    if (!p.alive) continue
+    const field = inside(w.map.fields, a.x, a.y)
+    const group = spawnGroup(w, a.unit, a.owner, a.x, a.y, a.a)
+    for (const u of group) {
+      u.v = u.t.speed * 0.6
+      if (field) {
+        u.hull = Math.max(1, u.hull - u.hullMax * FIELD_DAMAGE)
+        u.shield = 0
+        u.shieldOut = w.time
+        u.lastHit = w.time
+      }
+    }
+    if (a.rally) {
+      cmdMove(w, a.owner, group.map((u) => u.id), p.rally.x, p.rally.y, true)
+      w.events.push({ k: 'built', owner: a.owner, unit: a.unit, x: a.x, y: a.y })
+    }
+    w.events.push({ k: 'arrived', owner: a.owner, unit: a.unit, x: a.x, y: a.y, a: a.a, field })
+  }
+  w.arrivals = keep
 }
 
 export function cmdCancel(w: World, owner: Owner, index: number) {
   const p = w.players[owner]
   const q = p.queue[index]
   if (!q) return
-  p.credits += UNIT[q.unit].cost
+  giveBack(w, p, UNIT[q.unit].cost, 'ships', `Cancelled: ${UNIT[q.unit].name}`)
   p.queue.splice(index, 1)
 }
 
@@ -740,7 +1308,7 @@ export function cmdResearch(w: World, owner: Owner, id: string) {
   if (why) return why
   const p = w.players[owner]
   const c = researchCost(p, id)!
-  p.credits -= c.cost
+  spend(w, p, c.cost, 'research', id === LEVEL_UP ? `Station level ${p.level + 1}` : TECH[id].name)
   p.research.push({ id, left: c.time, total: c.time })
   return null
 }
@@ -749,7 +1317,7 @@ export function cmdCancelResearch(w: World, owner: Owner, index: number) {
   const p = w.players[owner]
   const r = p.research[index]
   if (!r) return
-  p.credits += r.id === LEVEL_UP ? UPGRADES[p.level + 1]!.cost : TECH[r.id].cost
+  giveBack(w, p, r.id === LEVEL_UP ? UPGRADES[p.level + 1]!.cost : TECH[r.id].cost, 'research', `Cancelled: ${r.id === LEVEL_UP ? `Station level ${p.level + 1}` : TECH[r.id].name}`)
   p.research.splice(index, 1)
   // Whatever was queued on the strength of it can never start now: cancel and refund that too.
   // Back to front, so a cascade only ever removes entries we've already looked at.
@@ -760,6 +1328,43 @@ export function cmdCancelResearch(w: World, owner: Owner, index: number) {
 }
 
 /** Research is done: apply it to every ship of that type already flying. */
+/**
+ * Rebuilds a station for its owner's level and research: the stage it has reached and the modules
+ * built so far. Modules it already had keep their damage and reload; new ones arrive whole, and so
+ * does the extra hull.
+ */
+function restation(w: World, u: Unit) {
+  const p = w.players[u.owner]
+  const t = stationType(p.faction, p.level, p.techs)
+  if (t === u.t) return
+  retype(u, t)
+  const max = t.hull * u.mods.hull
+  u.hull += max - u.hullMax
+  u.hullMax = max
+  u.shield = Math.min(u.shield, shieldMax(u))
+}
+
+/** Swap a unit to another form of its type (a grown station, a platform with a part added): parts
+ * it already had, matched by key, keep their damage and reload; new ones arrive whole, scaled by
+ * `scale` (a platform's armour). Its hull is left to the caller. */
+function retype(u: Unit, t: UnitType, scale = 1) {
+  const old = new Map(u.t.hardpoints.map((h, i) => [h.key, i]))
+  const hps = t.hardpoints.map((h) => {
+    const i = old.get(h.key)
+    return i === undefined ? { hp: h.hp * scale, max: h.hp * scale } : u.hps[i]
+  })
+  const guns = gunsOf(t).map((g) => {
+    const i = old.get(t.hardpoints[g.hp]?.key)
+    const had = i === undefined ? undefined : u.guns.find((x) => x.hp === i)
+    return had ? { ...had, hp: g.hp } : g
+  })
+  u.t = t
+  u.hps = hps
+  u.guns = guns
+}
+/** Whether a station module of this kind stands: research that built one only helps while it does. */
+export const moduleUp = (u: Unit | undefined, kind: string) => !!u && !u.dead && u.t.hardpoints.some((h, i) => h.kind === kind && u.hps[i].hp > 0)
+
 function finishResearch(w: World, o: Owner, id: string) {
   const p = w.players[o]
   p.techs.push(id)
@@ -773,12 +1378,13 @@ function finishResearch(w: World, o: Owner, id: string) {
     u.hull *= grow
     u.mods = next
     u.shield = Math.min(shieldMax(u), u.shield * shields)
+    if (u.t.tier === 'station') restation(w, u)
   }
   w.events.push({ k: 'tech', owner: o, id })
 }
 
-/** Why a structure (mining or defense platform) can't go on this ore, or null if it can. */
-export function cantSite(w: World, owner: Owner, node: number, tier: 'mine' | 'defense'): string | null {
+/** Why a structure (a mining or defense platform, by type id) can't go on this ore, or null if it can. */
+export function cantSite(w: World, owner: Owner, node: number, id: string): string | null {
   const n = w.nodes[node]
   const p = w.players[owner]
   if (!n) return 'No ore there'
@@ -786,18 +1392,20 @@ export function cantSite(w: World, owner: Owner, node: number, tier: 'mine' | 'd
   if (n.owner !== p.team) return 'Survey it first: keep ships near it for a few seconds'
   // Only enemies we can see stop us: the check must not give away ships hidden in the fog.
   if (w.units.some((u) => !u.dead && foes(w, u.owner, owner) && sees(w, owner, u) && isShip(u.t) && u.t.tier !== 'fighter' && d2(u.x, u.y, n.x, n.y) < SURVEY_RADIUS ** 2)) return 'Enemy ships are in the way'
-  if (p.credits < unitOf(p.faction, tier).cost) return 'Not enough credits'
+  const t = UNIT[id]
+  if (!t || t.faction !== p.faction || (t.tier !== 'mine' && t.tier !== 'defense')) return 'That can\'t be built on ore'
+  if (p.credits < t.cost) return 'Not enough credits'
   return null
 }
 
-export function cmdSite(w: World, owner: Owner, node: number, tier: 'mine' | 'defense') {
-  const why = cantSite(w, owner, node, tier)
+export function cmdSite(w: World, owner: Owner, node: number, id: string) {
+  const why = cantSite(w, owner, node, id)
   if (why) return why
   const p = w.players[owner]
   const n = w.nodes[node]
-  const t = unitOf(p.faction, tier)
-  p.credits -= t.cost
-  const m = spawn(w, t.id, owner, n.x, n.y, tier === 'mine' ? n.rot : 0)
+  const t = UNIT[id]
+  spend(w, p, t.cost, 'structures', t.name)
+  const m = spawn(w, t.id, owner, n.x, n.y, t.tier === 'mine' ? n.rot : 0)
   m.building = t.build
   m.hull = m.hullMax * 0.25
   m.shield = 0
@@ -844,17 +1452,21 @@ function refreshPlayers(w: World) {
   for (let o = 0; o < w.players.length; o++) {
     const p = w.players[o]
     let pop = 0
+    // Mining platforms, counted by their working parts: each drill rig 40%, the silo 20%.
     let mines = 0
     for (const u of w.units) {
       if (u.dead || u.owner !== o) continue
       if (!u.parent) pop += u.t.pop / u.t.squad
-      if (u.t.tier === 'mine' && !building(u)) mines++
+      if (u.t.tier === 'mine' && !building(u)) mines += mineOutput(u)
     }
+    for (const id of p.reserve) pop += UNIT[id].pop
+    for (const a of w.arrivals) if (a.owner === o) pop += UNIT[a.unit].pop
     const beacons = w.beacons.filter((b) => b.owner === p.team).length
     p.pop = Math.round(pop)
     p.popCap = BASE_POP + (p.level - 1) * POP_PER_LEVEL + beacons * BEACON_POP
-    const ore = MINE_INCOME * (1 + (techBonus(p, stationOf(p)).mines ?? 0))
-    p.income = (STATION_INCOME[p.level] + mines * ore + beacons * BEACON_INCOME) * p.incomeMul
+    const ore = MINE_INCOME * (1 + (moduleUp(w.byId.get(p.station), 'refinery') ? (techBonus(p, stationOf(p)).mines ?? 0) : 0))
+    p.incomeParts = { station: STATION_INCOME[p.level] * p.incomeMul, mines: mines * ore * p.incomeMul, beacons: beacons * BEACON_INCOME * p.incomeMul }
+    p.income = p.incomeParts.station + p.incomeParts.mines + p.incomeParts.beacons
   }
 }
 
@@ -902,9 +1514,14 @@ function salvage(w: World, dt: number) {
       const take = Math.min(h.left, SALVAGE_RATE * Math.min(3, n) * dt)
       if (take <= 0) break
       h.left -= take
-      w.players[o].credits += take
-      w.players[o].stats.earned += take
-      if (h.left <= 0) w.events.push({ k: 'salvaged', owner: o, value: h.value, x: h.x, y: h.y })
+      const p = w.players[o]
+      p.credits += take
+      p.stats.earned += take
+      p.earnedBy.salvage += take
+      if (h.left <= 0) {
+        note(w, p, h.value, 'salvage', 'Wreck salvaged')
+        w.events.push({ k: 'salvaged', owner: o, value: h.value, x: h.x, y: h.y })
+      }
     }
   }
   if (w.wrecks.some((h) => h.left <= 0 || h.decay <= 0)) w.wrecks = w.wrecks.filter((h) => h.left > 0 && h.decay > 0)
@@ -918,7 +1535,7 @@ function kill(w: World, u: Unit, by: Owner | -1) {
   if (by !== -1) w.players[by].stats.killed++
   if (u.node >= 0 && w.nodes[u.node].site === u.id) w.nodes[u.node].site = 0
   leaveWreck(w, u)
-  if (u.t.tier === 'station') {
+  if (u.t.tier === 'station' && !w.fleet) {
     // A player whose station falls is out; the last team with a station standing wins.
     w.players[u.owner].alive = false
     w.events.push({ k: 'out', owner: u.owner })
@@ -962,9 +1579,13 @@ function alarm(w: World, u: Unit) {
  * was aimed at takes it, with half spilling into the hull; or the hull takes it all. */
 export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: number, fromX: number, fromY: number, by: Owner, shooter = 0) {
   if (u.dead) return
-  u.lastHit = w.time
-  if (shooter) u.hitBy = shooter
-  alarm(w, u)
+  // Shot by our own side (on orders): no alarm, and nobody to shoot back at.
+  const own = !foes(w, by, u.owner)
+  if (!own) {
+    u.lastHit = w.time
+    if (shooter) u.hitBy = shooter
+    alarm(w, u)
+  }
   let rest = dmg
   if (u.shield > 0) {
     // Missiles slip most of it past the shields; ion bites twice as deep into them.
@@ -998,8 +1619,9 @@ export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: num
   } else u.hull -= rest
   if (u.hull <= 0) {
     u.hull = 0
-    kill(w, u, by)
-    const killer = w.byId.get(shooter)
+    // Our own side's kills don't count, and earn no experience.
+    kill(w, u, own ? -1 : by)
+    const killer = own ? undefined : w.byId.get(shooter)
     if (killer && !killer.dead) {
       killer.kills++
       gainXp(w, killer, u.t.cost / u.t.squad)
@@ -1007,9 +1629,11 @@ export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: num
   }
 }
 
-function valid(w: World, id: number, owner: Owner) {
+/** A target worth shooting at: an enemy we can see, or with `friendly`, one of our own (only
+ * ever on an explicit order: friendly fire never happens by itself). */
+function valid(w: World, id: number, owner: Owner, friendly = false) {
   const t = w.byId.get(id)
-  return t && !t.dead && foes(w, t.owner, owner) && sees(w, owner, t) ? t : undefined
+  return t && !t.dead && (foes(w, t.owner, owner) || friendly) && sees(w, owner, t) ? t : undefined
 }
 
 /** The best thing for a ship to shoot within `r`: what its guns hurt most, nearest first. */
@@ -1080,19 +1704,28 @@ function detour(w: World, u: Unit, tx: number, ty: number) {
   return { x: best.x - uy * s * R, y: best.y + ux * s * R }
 }
 
-/** Where to head for next on the way to (tx, ty): the next waypoint round the rocks, found once
- * per destination and dropped as each one comes into view. */
+/**
+ * Where to head for next on the way to (tx, ty): the next waypoint round the rocks, found once per
+ * destination and dropped as each one comes into view. Asteroid fields and nebulas are steered
+ * round too, as if they were rocks, except one the ship was sent into (its destination is inside)
+ * or is in already: going through one has to be asked for.
+ */
 function waypoint(w: World, u: Unit, tx: number, ty: number): Pt {
-  if (!w.rocks.length || u.t.tier === 'fighter') return { x: tx, y: ty }
+  const patches = [...w.map.fields, ...w.map.nebulas]
+  if ((!w.rocks.length && !patches.length) || u.t.tier === 'fighter') return { x: tx, y: ty }
   // Sized to 20-unit steps so similar ships share a grid.
   const clear = Math.ceil((radius(u.t) * 0.7 + 20) / 20) * 20
   if (!u.route || u.route.x !== tx || u.route.y !== ty) {
-    let g = w.nav.get(clear)
-    if (!g) w.nav.set(clear, (g = navGrid(w.rocks, w.w, w.h, clear)))
-    u.route = { x: tx, y: ty, pts: findPath(g, w.rocks, clear, u.x, u.y, tx, ty) }
+    const within = (p: { x: number; y: number; r: number }, x: number, y: number) => (x - p.x) ** 2 + (y - p.y) ** 2 < p.r ** 2
+    const keepOut = patches.map((p, i) => (within(p, tx, ty) || within(p, u.x, u.y) ? -1 : i)).filter((i) => i >= 0)
+    const obs = [...w.rocks, ...keepOut.map((i) => patches[i])]
+    const key = `${clear}:${keepOut.join(',')}`
+    let g = w.nav.get(key)
+    if (!g) w.nav.set(key, (g = navGrid(obs, w.w, w.h, clear)))
+    u.route = { x: tx, y: ty, pts: findPath(g, obs, clear, u.x, u.y, tx, ty), obs }
   }
-  const pts = u.route.pts
-  while (pts.length > 1 && (d2(u.x, u.y, pts[0].x, pts[0].y) < 60 ** 2 || clearLine(w.rocks, u.x, u.y, pts[1].x, pts[1].y, clear))) pts.shift()
+  const { pts, obs } = u.route
+  while (pts.length > 1 && (d2(u.x, u.y, pts[0].x, pts[0].y) < 60 ** 2 || clearLine(obs, u.x, u.y, pts[1].x, pts[1].y, clear))) pts.shift()
   return pts.length ? pts[0] : { x: tx, y: ty }
 }
 
@@ -1107,16 +1740,35 @@ function moveUnit(w: World, u: Unit, dt: number) {
     u.ax = parent.x
     u.ay = parent.y
   }
+  if (u.order.k === 'guard') {
+    const g = w.byId.get(u.order.id)
+    if (!g || g.dead || foes(w, g.owner, u.owner)) nextOrder(u, u.x, u.y)
+    else {
+      // Each guard keeps its own place round it, just outside its hull.
+      const ang = u.id * 2.39996
+      const d = radius(g.t) + radius(t) + 60
+      u.ax = g.x + Math.cos(ang) * d
+      u.ay = g.y + Math.sin(ang) * d
+    }
+  }
 
   // Who are we fighting? Explicit attack orders stick; otherwise look around now and then.
   u.retarget -= dt
   if (u.order.k === 'attack') {
-    const tgt = valid(w, u.order.id, u.owner)
+    const tgt = valid(w, u.order.id, u.owner, true)
     if (!tgt) nextOrder(u, u.x, u.y)
     else u.target = tgt.id
+  } else if (u.order.k === 'area') {
+    const o = u.order
+    const cur = valid(w, u.target, u.owner)
+    if (!cur || !inArea(o, cur) || u.retarget <= 0) {
+      u.retarget = 0.8 + Math.random() * 0.4
+      u.target = areaTarget(w, u, o, cur)?.id ?? 0
+    }
   } else if (u.retarget <= 0) {
     u.retarget = 0.4 + Math.random() * 0.3
-    const engage = u.order.k === 'idle' || u.order.k === 'patrol' || (u.order.k === 'move' && u.order.attack)
+    const guarding = u.order.k === 'guard'
+    const engage = u.order.k === 'idle' || guarding || u.order.k === 'patrol' || (u.order.k === 'move' && u.order.attack)
     const cur = valid(w, u.target, u.owner)
     const hold = u.stance === 'hold'
     const roam = u.stance === 'roam'
@@ -1127,8 +1779,8 @@ function moveUnit(w: World, u: Unit, dt: number) {
     // A fight is measured from where it started: an idle ship's post, or the spot on its way
     // where it turned to fight.
     if (!cur) {
-      u.gx = u.order.k === 'idle' ? u.ax : u.x
-      u.gy = u.order.k === 'idle' ? u.ay : u.y
+      u.gx = u.order.k === 'idle' || guarding ? u.ax : u.x
+      u.gy = u.order.k === 'idle' || guarding ? u.ay : u.y
     }
     const inLeash = (e: Unit) => leash === Infinity || d2(e.x, e.y, u.gx, u.gy) < leash ** 2
     if (!engage) u.target = 0
@@ -1162,7 +1814,8 @@ function moveUnit(w: World, u: Unit, dt: number) {
       const close = d2(u.x, u.y, e.x, e.y) < (radius(e.t) + 45) ** 2
       if (close) steer(u, u.x + Math.cos(u.a) * 100, u.y + Math.sin(u.a) * 100, max, dt)
       else steer(u, ex + ((u.id % 7) - 3) * 8, ey + ((u.id % 5) - 2) * 8, max, dt)
-    } else if (u.stance === 'hold') {
+    } else if (u.stance === 'hold' && u.order.k !== 'area') {
+      // An area attack was an order to go in: holding ships only hold otherwise.
       steer(u, e.x, e.y, 0, dt, true)
     } else {
       // Close to fighting range, then hold there and swing round to face the enemy.
@@ -1173,13 +1826,24 @@ function moveUnit(w: World, u: Unit, dt: number) {
       const p = dist > want ? detour(w, u, e.x, e.y) : e
       steer(u, p.x, p.y, dist > want ? Math.min(max, brake) : 0, dt, dist <= want)
     }
+  } else if (u.order.k === 'area') {
+    // Nothing to shoot: done once the circle is in sight (or reached) and empty; until then, close in.
+    const o = u.order
+    const dist = Math.hypot(o.x - u.x, o.y - u.y)
+    const clear = !w.units.some((e) => !e.dead && foes(w, e.owner, u.owner) && sees(w, u.owner, e) && inArea(o, e))
+    if (clear && (dist < o.r * 0.8 || canSee(w, w.players[u.owner].team, o.x, o.y))) nextOrder(u, u.x, u.y)
+    else if (dist > o.r * 0.5) {
+      const wp = waypoint(w, u, o.x, o.y)
+      const p = detour(w, u, wp.x, wp.y)
+      steer(u, p.x, p.y, fighter ? max : Math.min(max, dist * 0.9 + 12), dt)
+    } else u.v = Math.max(0, u.v - t.speed * dt)
   } else if (u.order.k === 'move' || u.order.k === 'patrol') {
     const o = u.order
     const dist = Math.hypot(o.x - u.x, o.y - u.y)
     const pace = Math.min(max, o.speed)
     if (dist < (fighter ? 60 : 24 + radius(t) * 0.2)) {
       if (o.k === 'patrol') u.order = { ...o, x: o.bx, y: o.by, bx: o.x, by: o.y }
-      else nextOrder(u, o.x, o.y)
+      else nextOrder(u, o.x, o.y, o.face ?? null)
     } else {
       const wp = waypoint(w, u, o.x, o.y)
       const p = detour(w, u, wp.x, wp.y)
@@ -1196,8 +1860,10 @@ function moveUnit(w: World, u: Unit, dt: number) {
       const wp = waypoint(w, u, u.ax, u.ay)
       const p = detour(w, u, wp.x, wp.y)
       steer(u, p.x, p.y, Math.min(max, dist * 0.8 + 10), dt)
-    }
-    else u.v = Math.max(0, u.v - t.speed * dt)
+    } else if (u.face !== null && Math.abs(wrap(u.face - u.a)) > 0.01) {
+      // Swing round in place to the heading it was told to arrive with.
+      steer(u, u.x + Math.cos(u.face) * 100, u.y + Math.sin(u.face) * 100, 0, dt, true)
+    } else u.v = Math.max(0, u.v - t.speed * dt)
   }
 
   u.x += Math.cos(u.a) * u.v * dt
@@ -1265,11 +1931,9 @@ function fire(w: World, u: Unit, g: Gun, e: Unit) {
     ay += Math.sin(ang) * off
   }
   t = Math.hypot(ax - from.x, ay - from.y) / speed
-  const p = w.players[u.owner]
   let dmg = g.w.damage * effect(g.w.kind, e.t.tier)
-  if (u.t.tier === 'station') dmg *= 1 + STATION_LEVEL_BONUS * (p.level - 1)
   if (u.abilityOn > 0 && u.t.ability === 'broadside' && g.w.kind === 'turbo') dmg *= 1.6
-  dmg *= u.mods.damage * (1 + RANK_BONUS * u.rank)
+  dmg *= (u.t.tier === 'station' && !moduleUp(u, 'sensor') ? 1 : u.mods.damage) * (1 + RANK_BONUS * u.rank)
   w.shots.push({
     x: from.x, y: from.y, vx: (ax - from.x) / Math.max(t, 0.001), vy: (ay - from.y) / Math.max(t, 0.001), left: hit ? t : t * 1.6,
     kind: g.w.kind, owner: u.owner, target: e.id, hp, dmg, hit, sx: from.x, sy: from.y, age: 0, from: u.id,
@@ -1279,14 +1943,16 @@ function fire(w: World, u: Unit, g: Gun, e: Unit) {
 
 function shoot(w: World, u: Unit, dt: number) {
   if (building(u) || !u.guns.length) return
-  const primary = u.target ? w.byId.get(u.target) : undefined
+  // A structure's focus, while it's still there to shoot at; else the ship's own target.
+  if (u.focus && !valid(w, u.focus, u.owner, true)) u.focus = 0
+  const primary = u.focus ? w.byId.get(u.focus) : u.target ? w.byId.get(u.target) : undefined
   for (const g of u.guns) {
     if (g.hp >= 0 && !alive(u, g.hp)) continue
     g.cd -= dt
     if (g.burst > 0) {
       g.burstT -= dt
       if (g.burstT <= 0) {
-        const e = valid(w, g.target, u.owner)
+        const e = valid(w, g.target, u.owner, true)
         if (e) fire(w, u, g, e)
         g.burst--
         g.burstT = 0.11
@@ -1301,20 +1967,39 @@ function shoot(w: World, u: Unit, dt: number) {
       if (g.w.arc && Math.abs(wrap(Math.atan2(e.y - u.y, e.x - u.x) - u.a)) > g.w.arc) return false
       return true
     }
-    let e: Unit | undefined
-    if (primary && !primary.dead && foes(w, primary.owner, u.owner) && sees(w, u.owner, primary) && effect(g.w.kind, primary.t.tier) >= 0.3 && inReach(primary)) e = primary
-    else {
+    // First this gun's own focus, then the structure's (or the ship's target): each only while it
+    // can reach it and its weapon can hurt it, so a heavy gun told to focus a cruiser doesn't waste
+    // shots on fighters, and flak keeps working on the fighters meanwhile.
+    // A structure-wide focus is only taken up by guns that are good against it (flak doesn't turn
+    // from fighters to plink at a frigate); a gun aimed on its own, or a ship's target, by any gun
+    // that does real damage.
+    if (g.focus && !valid(w, g.focus, u.owner, true)) g.focus = 0
+    // One of our own only when it was ordered: this gun's or the structure's focus, or an attack order.
+    const ordered = (o: Unit) => o.id === g.focus || o.id === u.focus || (u.order.k === 'attack' && u.order.id === o.id)
+    const usable = (o: Unit | undefined, need = 0.3) => !!o && !o.dead && (foes(w, o.owner, u.owner) || ordered(o)) && sees(w, u.owner, o) && effect(g.w.kind, o.t.tier) >= need && inReach(o)
+    const own = g.focus ? w.byId.get(g.focus) : undefined
+    let e: Unit | undefined = usable(own) ? own : usable(primary, u.focus ? 0.5 : 0.3) ? primary : undefined
+    if (!e) {
+      // Left to itself, a gun picks what its weapon is made for (flak the small craft, heavy guns
+      // the warships), nearer first, and leans towards finishing off what's already hurt and
+      // answering whatever is shooting at us.
       let score = 0
       near(w, from.x, from.y, g.w.range + 200, (o, dd) => {
         if (!foes(w, o.owner, u.owner) || !sees(w, u.owner, o) || !inReach(o)) return
-        const s = (effect(g.w.kind, o.t.tier) * accuracy(g.w.kind, o.t.tier)) / (Math.sqrt(dd) + 200)
+        const hurt = 1 - o.hull / Math.max(1, o.hullMax)
+        const threat = o.target === u.id || u.hitBy === o.id ? 1.5 : 1
+        const s = ((effect(g.w.kind, o.t.tier) * accuracy(g.w.kind, o.t.tier)) / (Math.sqrt(dd) + 200)) * (1 + 0.6 * hurt) * threat
         if (s > score) {
           score = s
           e = o
         }
       })
+      // Nothing it's good against nearby: then the focus after all, if it can do anything to it.
+      if (!e && u.focus && usable(primary)) e = primary
     }
     if (!e) {
+      // Nothing to shoot: the gun lets go of its last target, so its turret goes back to scanning.
+      g.target = 0
       g.cd = 0.15
       continue
     }
@@ -1369,6 +2054,20 @@ function economy(w: World, dt: number) {
     if (!st || st.dead) continue
     p.credits += p.income * dt
     p.stats.earned += p.income * dt
+    p.earnedBy.station += p.incomeParts.station * dt
+    p.earnedBy.mines += p.incomeParts.mines * dt
+    p.earnedBy.beacons += p.incomeParts.beacons * dt
+    // Refunds from retreated ships come in once their time is up.
+    while (p.refunds.length && p.refunds[0].at <= w.time) {
+      const r = p.refunds.shift()!
+      p.credits += r.amount
+      p.stats.earned += r.amount
+      p.earnedBy.refunds += r.amount
+      note(w, p, r.amount, 'refund', `Retreat refund: ${UNIT[r.unit].name}`)
+      w.events.push({ k: 'refunded', owner: o, unit: r.unit, amount: r.amount })
+    }
+    // A point for the economy chart every few seconds.
+    if (!p.history.length || w.time - p.history[p.history.length - 1].t >= HISTORY_STEP) p.history.push({ t: w.time, credits: p.credits, income: p.income })
     const r = p.research[0]
     if (r) {
       r.left -= dt
@@ -1376,15 +2075,13 @@ function economy(w: World, dt: number) {
         p.research.shift()
         if (r.id === LEVEL_UP) {
           p.level++
-          const grow = (1 + STATION_LEVEL_BONUS * (p.level - 1)) / (1 + STATION_LEVEL_BONUS * (p.level - 2))
-          st.hullMax *= grow
-          st.hull *= grow
+          restation(w, st)
           w.events.push({ k: 'level', owner: o, level: p.level })
         } else finishResearch(w, o, r.id)
       }
     }
     // Repair docks mend our ships parked near the station.
-    const repair = techBonus(p, st.t.id).repair
+    const repair = moduleUp(st, 'dock') ? techBonus(p, st.t.id).repair : 0
     if (repair)
       near(w, st.x, st.y, 900, (u) => {
         if (u.owner === o && isShip(u.t) && u.hull < u.hullMax) u.hull = Math.min(u.hullMax, u.hull + u.hullMax * repair * dt)
@@ -1394,14 +2091,22 @@ function economy(w: World, dt: number) {
       q.left -= dt * (hangarsUp(st) ? 1 : 0.5)
       if (q.left <= 0) {
         p.queue.shift()
-        const bay = st.t.hardpoints.findIndex((h) => h.kind === 'hangar')
-        const from = bay >= 0 ? hpPos(st, bay) : st
-        const a = Math.atan2(p.rally.y - from.y, p.rally.x - from.x)
-        const group = spawnGroup(w, q.unit, o, from.x, from.y, a)
-        for (const u of group) u.v = u.t.speed * 0.5
-        cmdMove(w, o, group.map((u) => u.id), p.rally.x, p.rally.y, true)
         p.stats.built++
-        w.events.push({ k: 'built', owner: o, unit: q.unit, x: from.x, y: from.y })
+        if (fromHangar(UNIT[q.unit])) {
+          const bay = st.t.hardpoints.findIndex((h) => h.kind === 'hangar')
+          const from = bay >= 0 ? hpPos(st, bay) : st
+          const a = Math.atan2(p.rally.y - from.y, p.rally.x - from.x)
+          const group = spawnGroup(w, q.unit, o, from.x, from.y, a)
+          for (const u of group) u.v = u.t.speed * 0.5
+          cmdMove(w, o, group.map((u) => u.id), p.rally.x, p.rally.y, true)
+          w.events.push({ k: 'built', owner: o, unit: q.unit, x: from.x, y: from.y })
+        } else if (q.reserve) {
+          p.reserve.push(q.unit)
+          w.events.push({ k: 'reserved', owner: o, unit: q.unit })
+        } else {
+          const at = yardSpot(w, o, st, q.unit)
+          warpIn(w, o, q.unit, at.x, at.y, at.a, WARP_YARD, true)
+        }
       }
     }
   }
@@ -1570,6 +2275,9 @@ export function tick(w: World, dt = STEP) {
     refreshPlayers(w)
   }
   economy(w, dt)
+  arrivals(w)
+  repairs(w, dt)
+  siteUpgrades(w, dt)
   beacons(w, dt)
   survey(w, dt)
   salvage(w, dt)
@@ -1604,6 +2312,11 @@ export function tick(w: World, dt = STEP) {
         launch(w, u)
       }
     }
+    if (u.retreat > 0) {
+      retreating(w, u, dt)
+      if (!u.dead) shoot(w, u, dt)
+      continue
+    }
     moveUnit(w, u, dt)
     shoot(w, u, dt)
   }
@@ -1613,6 +2326,78 @@ export function tick(w: World, dt = STEP) {
     w.units = w.units.filter((u) => !u.dead)
   }
   for (const r of w.rocks) r.rot += r.spin * dt
+  if (w.fleet) fleetEnd(w, dt)
+}
+
+/** A fleet battle is over when at most one team still has anything: ships or structures on the
+ * field, ships jumping in, or ships waiting in orbit. Ships only jumping out don't count. */
+function fleetEnd(w: World, dt: number) {
+  const f = w.fleet!
+  f.endT -= dt
+  if (f.endT > 0) return
+  f.endT = 0.5
+  const standing = new Set<number>()
+  for (const u of w.units) if (!u.dead && u.retreat <= 0 && !u.parent) standing.add(w.players[u.owner].team)
+  for (const a of w.arrivals) standing.add(w.players[a.owner].team)
+  w.players.forEach((p) => p.reserve.length && standing.add(p.team))
+  if (standing.size <= 1) w.winner = standing.size ? [...standing][0] : f.holder
+}
+
+/** One side of a fleet battle: its ships (type ids; a fighter id is a whole squadron), and for the
+ * side holding the planet, its station's level (0: none). */
+export type FleetSide = { faction: FactionId; team: number; ships: string[]; station?: number; techs?: string[] }
+
+/**
+ * A galactic conquest battle over a planet. The first side holds it: its station (if any) sits at
+ * the first spawn with its fleet in front; the other fleets drop out of hyperspace at the other
+ * spawns. Each side starts with up to `cap` fleet size on the field, biggest ships first, and the
+ * rest waits in orbit to be called in from the reserve.
+ */
+export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: number; cap?: number } = {}): World {
+  const w = newWorld(map, sides.map((s, i) => ({ faction: s.faction, team: s.team, spawn: i, incomeMul: 0 })), { seed: opts.seed, credits: 0, fleet: true })
+  const cap = opts.cap ?? FLEET_CAP
+  const c = { x: w.w / 2, y: w.h / 2 }
+  w.fleet = { entry: sides.map((_, i) => ({ x: map.spawns[i].x, y: map.spawns[i].y, r: 1300 })), cap, holder: sides[0].team, endT: 3 }
+  sides.forEach((s, o) => {
+    const p = w.players[o]
+    p.techs = [...(s.techs ?? [])]
+    const sp = map.spawns[o]
+    const face = Math.atan2(c.y - sp.y, c.x - sp.x)
+    if (o === 0 && s.station) {
+      p.level = s.station
+      const st = spawn(w, unitOf(p.faction, 'station').id, o, sp.x, sp.y, face - Math.PI / 2)
+      p.station = st.id
+    }
+    // Biggest first onto the field, up to the cap; the rest waits in orbit.
+    const order = [...s.ships].sort((a, b) => UNIT[b].pop - UNIT[a].pop)
+    let used = 0
+    const field: string[] = []
+    for (const id of order) {
+      if (used + UNIT[id].pop <= cap || !field.length) {
+        field.push(id)
+        used += UNIT[id].pop
+      } else p.reserve.push(id)
+    }
+    // A loose block facing the middle: rows across, big ships in the middle rows.
+    const fx = Math.cos(face)
+    const fy = Math.sin(face)
+    const ahead = o === 0 && s.station ? 650 : 0
+    const perRow = 5
+    field.forEach((id, i) => {
+      const row = Math.floor(i / perRow)
+      const col = (i % perRow) - (Math.min(perRow, field.length - row * perRow) - 1) / 2
+      const gap = Math.max(170, radius(UNIT[id]) * 2.4)
+      const x = sp.x + fx * (ahead - row * 260) - fy * col * gap
+      const y = sp.y + fy * (ahead - row * 260) + fx * col * gap
+      // The holder is already there; the others arrive from hyperspace, a few at a time.
+      if (o === 0) {
+        const g = spawnGroup(w, id, o, x, y, face)
+        for (const u of g) u.stance = 'maneuver'
+      } else warpIn(w, o, id, x, y, face, 1 + i * 0.25, false)
+    })
+  })
+  refreshPlayers(w)
+  return w
 }
 
 /** Ships a player owns, for selection helpers and the AI. */

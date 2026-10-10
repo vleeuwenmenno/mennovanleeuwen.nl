@@ -192,7 +192,8 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
   // Inside the window, wherever the app has no menu of its own: links get theirs, text fields and
   // selections keep the browser's, the rest gets the window menu.
   const onBodyMenu = (e: React.MouseEvent) => {
-    if (wantsNativeMenu(e)) return
+    // The app used the right-click itself (a game's orders, its own menu).
+    if (e.defaultPrevented || wantsNativeMenu(e)) return
     const href = linkAt(e.target)
     onMenu(e, href ? [...linkMenu(href), { separator: true }] : [])
   }

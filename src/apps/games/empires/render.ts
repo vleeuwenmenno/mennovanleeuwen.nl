@@ -1,7 +1,7 @@
-import { FACTIONS, SURVEY_RADIUS, dims, isShip, type HardpointKind, type Tier } from './data'
-import { HP_COLOR, HP_ICON, HP_NAME } from './icons'
-import { rng, type MapDef, type Nebula, type Patch, type Rect } from './maps'
-import { building, foes, hpPos, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
+import { FACTIONS, SURVEY_RADIUS, UNIT, dims, isShip, moduleSprite, type HardpointKind, type Tier } from './data'
+import { HP_COLOR, HP_ICON, hpName } from './icons'
+import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
+import { RETREAT_TIME, building, foes, hpPos, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 
 // Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, nebulas
 // and asteroid fields, ore, rocks and beacons, the ships (generated sprites rotated in code, with engine glow, shield
@@ -9,7 +9,20 @@ import { building, foes, hpPos, radius, SALVAGE_RANGE, sensorOf, shieldFull, shi
 // minimap is drawn here too.
 
 const BASE = '/games/empires/'
-export const spriteUrl = (name: string) => `${BASE}${/^(mine|defense)-/.test(name) ? 'world' : 'ships'}/${name}.webp`
+export const spriteUrl = (name: string) =>
+  name.startsWith('mod-') ? `${BASE}modules/${name.slice(4)}.webp` : `${BASE}${/^(mine|defense)-/.test(name) ? 'world' : 'ships'}/${name}.webp`
+/** The order icons on map tags, the same shapes as the order cursors (32 px boxes). Made on first
+ * use: Path2D only exists in a browser. */
+const TAG_PATHS = {
+  patrol: 'M6 13a10 10 0 0 1 17-5M26 19a10 10 0 0 1-17 5M23 3.5v4.8h-4.8M9 28.5v-4.8h4.8',
+  guard: 'M16 4l9 3.5v7c0 6-4 10-9 12.5-5-2.5-9-6.5-9-12.5v-7z',
+}
+const tagIcons = new Map<string, Path2D>()
+const tagIcon = (k: keyof typeof TAG_PATHS) => {
+  let p = tagIcons.get(k)
+  if (!p) tagIcons.set(k, (p = new Path2D(TAG_PATHS[k])))
+  return p
+}
 const WORLD_SPRITES = ['asteroid-1', 'asteroid-2', 'asteroid-ore', 'beacon', 'backdrop']
 
 export type Camera = { x: number; y: number; zoom: number }
@@ -29,6 +42,10 @@ export type View = {
   bars: 'damaged' | 'always' | 'selected'
   /** A faint ring under every ship in its relative colour, to tell allies from enemies. */
   rings: boolean
+  /** The fog grid overlay (F2): where our sight ends, cell by cell. */
+  fogGrid?: boolean
+  /** A structure's gun picked by clicking it, ringed. */
+  turretPick?: { unit: number; hp: number } | null
   selected: Set<number>
   hover: number
   hoverHp: number
@@ -40,10 +57,22 @@ export type View = {
   /** The wreck under the pointer, or 0. */
   hoverWreck: number
   /** A move line being drawn with the right button, and where each ship (or squadron) would go. */
-  line?: { path: { x: number; y: number }[]; spots: { x: number; y: number }[]; attack: boolean; ring: boolean } | null
+  /** A right-drag being made: the drawn line (or, for one ship or squadron, where it goes and an
+   * arrow the way it will face), and one spot per ship. */
+  line?: {
+    path: { x: number; y: number }[]
+    spots: { x: number; y: number }[]
+    attack: boolean
+    ring: boolean
+    face?: number | null
+    /** A Shift-drag: the circle to attack in, and the enemies inside it now. */
+    area?: { x: number; y: number; r: number; targets: { x: number; y: number; r: number }[] } | null
+  } | null
   /** Before the battle starts: every player's start area, and where our station would go. */
   areas?: { r: Rect; color: string; label: string; mine: boolean }[]
   ghost?: { x: number; y: number; ok: boolean } | null
+  /** A ship being dragged out of the reserve: where it would drop out, and whether it can. */
+  warpGhost?: { sprite: string; x: number; y: number; a: number; size: number; ok: boolean; why: string | null; field: boolean } | null
   /** A player whose ships aren't drawn yet: ours, until we've picked where to start. */
   hideOwner?: number
   showRally: boolean
@@ -164,6 +193,11 @@ export function drawTerrainOverview(g: CanvasRenderingContext2D, map: MapDef, ox
   })
 }
 type Ping = { x: number; y: number; t: number; color: string }
+/** A ship jumping in, on the renderer's clock: charging from `start`, dropping out at `at`. */
+type Warp = { x: number; y: number; a: number; size: number; sprite: string; glow: string; start: number; at: number }
+/** Seconds of the streak in before a ship drops out, and of the glow it leaves after. */
+const STREAK = 0.32
+const AFTER = 1.1
 
 const TIER_ORDER: Record<Tier, number> = { station: 0, mine: 1, defense: 1, capital: 2, cruiser: 3, frigate: 4, gunship: 5, fighter: 6 }
 const ICON_PATH = new Map<HardpointKind, Path2D>()
@@ -228,6 +262,12 @@ export class Renderer {
   private clock = 0
   private smokeT = 0
   private terrain: TerrainArt | null = null
+  /** Where each turret points, eased towards its target: by unit id * 64 + hardpoint. */
+  private aims = new Map<number, number>()
+  private warps: Warp[] = []
+  /** Ships jumping out, on the renderer's clock from when they went. */
+  private departs: Omit<Warp, 'at'>[] = []
+  private dark = new Map<string, HTMLCanvasElement>()
 
   constructor(sprites: string[]) {
     for (const s of sprites) this.imgs.set(s, load(spriteUrl(s)))
@@ -347,6 +387,20 @@ export class Renderer {
           this.pending.push({ at: this.clock + n * 0.17, x: e.x, y: e.y, size: e.size, final: true })
           this.debris(e.x, e.y, e.size, color)
         }
+      } else if (e.k === 'warp') {
+        if (e.owner !== me && !seen(e.x, e.y)) continue
+        const t = UNIT[e.unit]
+        this.warps.push({ x: e.x, y: e.y, a: e.a, size: t.size, sprite: t.sprite, glow: FACTIONS[t.faction].glow, start: this.clock, at: this.clock + e.delay })
+      } else if (e.k === 'retreated') {
+        if (e.owner !== me && !seen(e.x, e.y)) continue
+        const t = UNIT[e.unit]
+        const glow = FACTIONS[t.faction].glow
+        this.departs.push({ x: e.x, y: e.y, a: e.a, size: t.size, sprite: t.sprite, glow, start: this.clock })
+        this.add({ kind: 'flash', x: e.x, y: e.y, life: 0.3, size: t.size * 0.7, grow: t.size * 0.4, color: glow })
+        this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.6, size: t.size * 0.3, grow: t.size * 1.8, color: '#e8f6ff' })
+      } else if (e.k === 'arrived') {
+        if (e.owner !== me && !seen(e.x, e.y)) continue
+        this.arrival(e.x, e.y, e.a, UNIT[e.unit].size, FACTIONS[UNIT[e.unit].faction].glow, e.field)
       } else if (e.k === 'rankUp') {
         this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.8, size: 20, grow: 90, color: '#f2c14a' })
       } else if (e.k === 'hpdown') {
@@ -385,7 +439,6 @@ export class Renderer {
         }
       }
       for (const u of w.units) {
-        if (!isShip(u.t) && u.t.tier !== 'station') continue
         u.hps.forEach((h, i) => {
           if (h.hp > 0 || Math.random() > 0.5) return
           const p = hpPos(u, i)
@@ -444,6 +497,34 @@ export class Renderer {
       ctx.fillRect(cam.x * par - ext, cam.y * par - ext, ext * 2, ext * 2)
       ctx.restore()
     })
+
+    // A fleet battle's planet: huge and far off, sliding slower than the battle.
+    const pl = w.map.planet
+    if (pl) {
+      const key = `planet-${pl.kind}`
+      if (!this.imgs.has(key)) this.imgs.set(key, load(`${BASE}planets/${pl.kind}.webp`))
+      const img = this.imgs.get(key)!
+      if (img.complete && img.naturalWidth) {
+        const par = 0.3
+        const sc = 0.5 + z * 0.3
+        const x = vw / 2 + (pl.x - cam.x) * par * sc
+        const y = vh / 2 + (pl.y - cam.y) * par * sc
+        const rad = pl.r * sc
+        // Dimmed, so the ships in front of it stay easy to read.
+        ctx.globalAlpha = 0.62
+        ctx.drawImage(img, x - rad, y - rad, rad * 2, rad * 2)
+        // Its night side fades into space.
+        const shade = ctx.createRadialGradient(x - rad * 0.35, y - rad * 0.35, rad * 0.2, x, y, rad * 1.05)
+        shade.addColorStop(0, 'rgba(4,6,13,0.2)')
+        shade.addColorStop(0.75, 'rgba(4,6,13,0.4)')
+        shade.addColorStop(1, 'rgba(4,6,13,0.75)')
+        ctx.fillStyle = shade
+        ctx.beginPath()
+        ctx.arc(x, y, rad, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.globalAlpha = 1
+      }
+    }
 
     // The world.
     ctx.translate(vw / 2, vh / 2)
@@ -619,7 +700,33 @@ export class Renderer {
 
     // A move line being drawn: the stroke, and a marker where each ship will end up.
     // Green to move, orange to attack-move; a closed loop shows closed, as the ring it'll make.
-    if (view.line) {
+    if (view.line?.area) {
+      // The circle being drawn, filled faintly, each enemy inside it marked.
+      const a = view.line.area
+      ctx.strokeStyle = '#ff5a50'
+      ctx.fillStyle = 'rgba(255,90,80,0.07)'
+      ctx.lineWidth = 2.5 / z
+      ctx.setLineDash([14 / z, 9 / z])
+      ctx.lineDashOffset = -this.clock * 40 / z
+      ctx.beginPath()
+      ctx.arc(a.x, a.y, a.r, 0, TAU)
+      ctx.fill()
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.lineWidth = 1.5 / z
+      ctx.beginPath()
+      ctx.moveTo(a.x - 10 / z, a.y)
+      ctx.lineTo(a.x + 10 / z, a.y)
+      ctx.moveTo(a.x, a.y - 10 / z)
+      ctx.lineTo(a.x, a.y + 10 / z)
+      ctx.stroke()
+      ctx.strokeStyle = 'rgba(255,120,100,0.9)'
+      for (const t of a.targets) {
+        ctx.beginPath()
+        ctx.arc(t.x, t.y, Math.max(8 / z, t.r), 0, TAU)
+        ctx.stroke()
+      }
+    } else if (view.line) {
       const col = view.line.attack ? '#ffaa5a' : '#7dffa0'
       ctx.strokeStyle = col
       ctx.globalAlpha = 0.75
@@ -627,14 +734,29 @@ export class Renderer {
       ctx.lineJoin = 'round'
       ctx.lineCap = 'round'
       ctx.beginPath()
-      view.line.path.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)))
+      const face = view.line.face
+      if (face != null) {
+        // The facing arrow: from where it goes, as long as the drag, with a head.
+        const a = view.line.path[0]
+        const b = view.line.path[view.line.path.length - 1]
+        const len = Math.max(40 / z, Math.hypot(b.x - a.x, b.y - a.y))
+        const tx = a.x + Math.cos(face) * len
+        const ty = a.y + Math.sin(face) * len
+        const head = Math.min(len * 0.4, 18 / z)
+        ctx.moveTo(a.x, a.y)
+        ctx.lineTo(tx, ty)
+        ctx.moveTo(tx - Math.cos(face - 0.5) * head, ty - Math.sin(face - 0.5) * head)
+        ctx.lineTo(tx, ty)
+        ctx.lineTo(tx - Math.cos(face + 0.5) * head, ty - Math.sin(face + 0.5) * head)
+      } else view.line.path.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)))
       if (view.line.ring) ctx.closePath()
       ctx.stroke()
       ctx.globalAlpha = 1
       ctx.fillStyle = col
+      // One dot per ship: a squadron shows each fighter's place.
       for (const q of view.line.spots) {
         ctx.beginPath()
-        ctx.arc(q.x, q.y, 6 / z, 0, TAU)
+        ctx.arc(q.x, q.y, 4.5 / z, 0, TAU)
         ctx.fill()
       }
     }
@@ -663,28 +785,127 @@ export class Renderer {
       ctx.fillRect(p.rally.x - 1.5, p.rally.y - 46, 3, 46)
     }
     ctx.lineWidth = 1.5 / z
+    /** Selected ships' patrols: where they start and end, labelled once for the lot. */
+    const patrolEnds: { s: Pt; e: Pt }[] = []
     for (const id of view.selected) {
       const u = w.byId.get(id)
       if (!u || u.owner !== view.me) continue
+      // A structure's focus fire: a line from it to its focus, and from each gun with its own.
+      if (!isShip(u.t)) {
+        ctx.setLineDash([5 / z, 5 / z])
+        ctx.strokeStyle = 'rgba(255,90,80,0.45)'
+        const f = u.focus ? w.byId.get(u.focus) : undefined
+        if (f && !f.dead) {
+          ctx.beginPath()
+          ctx.moveTo(u.x, u.y)
+          ctx.lineTo(f.x, f.y)
+          ctx.stroke()
+        }
+        for (const g of u.guns) {
+          const e = g.focus ? w.byId.get(g.focus) : undefined
+          if (!e || e.dead || g.hp < 0) continue
+          const p = hpPos(u, g.hp)
+          ctx.beginPath()
+          ctx.moveTo(p.x, p.y)
+          ctx.lineTo(e.x, e.y)
+          ctx.stroke()
+        }
+        ctx.setLineDash([])
+      }
       const o = u.order
       if (o.k === 'patrol') {
-        ctx.strokeStyle = 'rgba(143,208,255,0.35)'
+        const start = { x: o.sx ?? o.bx, y: o.sy ?? o.by }
+        const end = { x: o.ex ?? o.x, y: o.ey ?? o.y }
+        patrolEnds.push({ s: start, e: end })
+        // The beat, dashes flowing the way the ship is heading now.
+        ctx.strokeStyle = 'rgba(143,208,255,0.5)'
+        ctx.lineWidth = 2 / z
         ctx.setLineDash([10 / z, 8 / z])
+        ctx.lineDashOffset = (-this.clock * 30) / z
         ctx.beginPath()
         ctx.moveTo(o.bx, o.by)
         ctx.lineTo(o.x, o.y)
         ctx.stroke()
         ctx.setLineDash([])
+        ctx.lineDashOffset = 0
+        ctx.lineWidth = 1.5 / z
+        // Start: a hollow ring; end: a filled ring. The end it's heading for now pulses.
+        const pulse = 1 + 0.25 * Math.sin(this.clock * 5)
+        for (const [p, isEnd] of [[start, false], [end, true]] as const) {
+          const heading = Math.abs(p.x - o.x) < 1 && Math.abs(p.y - o.y) < 1
+          ctx.strokeStyle = 'rgba(143,208,255,0.9)'
+          ctx.fillStyle = isEnd ? 'rgba(143,208,255,0.85)' : 'rgba(6,10,22,0.7)'
+          ctx.beginPath()
+          ctx.arc(p.x, p.y, 6 / z, 0, TAU)
+          ctx.fill()
+          ctx.stroke()
+          if (heading) {
+            ctx.strokeStyle = 'rgba(143,208,255,0.55)'
+            ctx.beginPath()
+            ctx.arc(p.x, p.y, (12 * pulse) / z, 0, TAU)
+            ctx.stroke()
+          }
+        }
+        // An arrowhead halfway, pointing where it's going.
+        const mx = (o.bx + o.x) / 2
+        const my = (o.by + o.y) / 2
+        const a = Math.atan2(o.y - o.by, o.x - o.bx)
+        ctx.fillStyle = 'rgba(143,208,255,0.85)'
+        ctx.beginPath()
+        ctx.moveTo(mx + (Math.cos(a) * 9) / z, my + (Math.sin(a) * 9) / z)
+        ctx.lineTo(mx + (Math.cos(a + 2.5) * 8) / z, my + (Math.sin(a + 2.5) * 8) / z)
+        ctx.lineTo(mx + (Math.cos(a - 2.5) * 8) / z, my + (Math.sin(a - 2.5) * 8) / z)
+        ctx.fill()
       } else if (o.k === 'move') {
         ctx.strokeStyle = o.attack ? 'rgba(255,170,90,0.35)' : 'rgba(125,255,160,0.3)'
         ctx.lineWidth = 1.5 / z
         ctx.beginPath()
-        ctx.moveTo(u.x, u.y)
-        // Follow the way round the rocks when there is one.
+        // Follow the way round the rocks (and fields and nebulas) when there is one, as a smooth
+        // curve rather than corners: each waypoint pulls the line towards it, the line passing
+        // halfway between them.
         const route = u.route && u.route.x === o.x && u.route.y === o.y ? u.route.pts : []
-        for (const pt of route) ctx.lineTo(pt.x, pt.y)
+        const pts = [{ x: u.x, y: u.y }, ...route.filter((pt) => pt.x !== o.x || pt.y !== o.y), { x: o.x, y: o.y }]
+        ctx.moveTo(pts[0].x, pts[0].y)
+        for (let i = 1; i < pts.length - 1; i++) ctx.quadraticCurveTo(pts[i].x, pts[i].y, (pts[i].x + pts[i + 1].x) / 2, (pts[i].y + pts[i + 1].y) / 2)
         ctx.lineTo(o.x, o.y)
         ctx.stroke()
+        // Its own spot, and a tick the way it will face there.
+        ctx.fillStyle = ctx.strokeStyle
+        ctx.beginPath()
+        ctx.arc(o.x, o.y, 3.5 / z, 0, TAU)
+        ctx.fill()
+        if (o.face !== undefined) {
+          ctx.beginPath()
+          ctx.moveTo(o.x, o.y)
+          ctx.lineTo(o.x + (Math.cos(o.face) * 16) / z, o.y + (Math.sin(o.face) * 16) / z)
+          ctx.stroke()
+        }
+      } else if (o.k === 'guard') {
+        const g = w.byId.get(o.id)
+        if (g && !g.dead) {
+          ctx.strokeStyle = 'rgba(125,255,160,0.35)'
+          ctx.setLineDash([6 / z, 6 / z])
+          ctx.beginPath()
+          ctx.moveTo(u.x, u.y)
+          ctx.lineTo(g.x, g.y)
+          ctx.stroke()
+          ctx.setLineDash([])
+        }
+      } else if (o.k === 'area') {
+        ctx.strokeStyle = 'rgba(255,90,80,0.28)'
+        ctx.setLineDash([12 / z, 9 / z])
+        ctx.beginPath()
+        ctx.arc(o.x, o.y, o.r, 0, TAU)
+        ctx.stroke()
+        ctx.setLineDash([])
+        const t = u.target ? w.byId.get(u.target) : undefined
+        if (t && !t.dead) {
+          ctx.strokeStyle = 'rgba(255,90,80,0.4)'
+          ctx.beginPath()
+          ctx.moveTo(u.x, u.y)
+          ctx.lineTo(t.x, t.y)
+          ctx.stroke()
+        }
       } else if (o.k === 'attack') {
         const t = w.byId.get(o.id)
         if (t) {
@@ -699,7 +920,7 @@ export class Renderer {
       // Shift-queued orders: dashed legs on from the current one, a dot at each stop.
       if (u.queue.length) {
         const spot = (q: typeof o) => {
-          if (q.k === 'move' || q.k === 'patrol') return { x: q.x, y: q.y }
+          if (q.k === 'move' || q.k === 'patrol' || q.k === 'area') return { x: q.x, y: q.y }
           if (q.k === 'attack') return w.byId.get(q.id) ?? null
           return null
         }
@@ -708,7 +929,7 @@ export class Renderer {
         for (const q of u.queue) {
           const to = spot(q)
           if (!to) continue
-          const col = q.k === 'attack' ? '255,90,80' : q.k === 'patrol' ? '143,208,255' : q.k === 'move' && q.attack ? '255,170,90' : '125,255,160'
+          const col = q.k === 'attack' || q.k === 'area' ? '255,90,80' : q.k === 'patrol' ? '143,208,255' : q.k === 'move' && q.attack ? '255,170,90' : '125,255,160'
           ctx.strokeStyle = `rgba(${col},0.3)`
           ctx.beginPath()
           ctx.moveTo(from.x, from.y)
@@ -722,6 +943,32 @@ export class Renderer {
         }
         ctx.setLineDash([])
       }
+    }
+
+    // Tags (drawn last, over the ships and structures, so a station can't hide one; under a hull's
+    // furthest corner, however it's turned): "Patrol" at both ends of the selection's patrols (at the middle of its starts, and of
+    // its ends), "Guarding" under a ship our selection guards, and "Guarded by" under a selected
+    // ship others are guarding.
+    const tags: Parameters<Renderer['tag']>[] = []
+    if (patrolEnds.length) {
+      const mid = (ps: Pt[]) => ({ x: ps.reduce((v, p) => v + p.x, 0) / ps.length, y: ps.reduce((v, p) => v + p.y, 0) / ps.length })
+      tags.push([ctx, mid(patrolEnds.map((p) => p.s)), 12, 'Patrol', 'patrol', '143,208,255', z])
+      tags.push([ctx, mid(patrolEnds.map((p) => p.e)), 12, 'Patrol', 'patrol', '143,208,255', z])
+    }
+    const guarded = new Map<number, number>()
+    for (const id of view.selected) {
+      const u = w.byId.get(id)
+      if (u && u.owner === view.me && u.order.k === 'guard') guarded.set(u.order.id, (guarded.get(u.order.id) ?? 0) + 1)
+    }
+    for (const [id] of guarded) {
+      const g = w.byId.get(id)
+      if (g && !g.dead) tags.push([ctx, g, Math.hypot(...dims(g.t)) * 0.5 * z + 10, 'Guarding', 'guard', '95,230,208', z])
+    }
+    for (const id of view.selected) {
+      const u = w.byId.get(id)
+      if (!u || u.owner !== view.me || guarded.has(id)) continue
+      const by = w.units.filter((m) => !m.dead && m.owner === view.me && m.order.k === 'guard' && m.order.id === id && !m.parent).length
+      if (by) tags.push([ctx, u, Math.hypot(...dims(u.t)) * 0.5 * z + 10, `Guarded by ${by}`, 'guard', '95,230,208', z])
     }
 
     // Support ships' repair beams: a faint green tether to each ship being patched, pulsing.
@@ -749,6 +996,22 @@ export class Renderer {
     const shown = w.units.filter((u) => u.seen[myTeam] && u.owner !== view.hideOwner && onScreen(u.x, u.y, u.t.size))
     shown.sort((a, b) => TIER_ORDER[a.t.tier] - TIER_ORDER[b.t.tier])
     for (const u of shown) this.drawUnit(ctx, u, w, z, view)
+    this.drawWarps(ctx, z)
+    this.drawDeparts(ctx, z)
+    for (const t of tags) this.tag(...t)
+    if (view.warpGhost) this.drawWarpGhost(ctx, view.warpGhost, z)
+    // The gun picked on one of our structures: a pulsing ring round it.
+    const tp = view.turretPick ? w.byId.get(view.turretPick.unit) : undefined
+    if (tp && !tp.dead && view.turretPick) {
+      const h = tp.t.hardpoints[view.turretPick.hp]
+      const p = hpPos(tp, view.turretPick.hp)
+      const r = Math.max(10 / z, (h.s ?? 0.05) * tp.t.size * 0.6) * (1 + 0.08 * Math.sin(this.clock * 6))
+      ctx.strokeStyle = '#ff8a70'
+      ctx.lineWidth = 2 / z
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, r, 0, TAU)
+      ctx.stroke()
+    }
 
     // Bolts.
     ctx.globalCompositeOperation = 'lighter'
@@ -905,6 +1168,7 @@ export class Renderer {
     }
     ctx.imageSmoothingEnabled = true
     ctx.drawImage(this.fog, 0, 0, fw * fs, fh * fs)
+    if (view.fogGrid) this.drawFogGrid(ctx, w, cam, vw, vh, view.me)
 
     // Drag box.
     if (view.box) {
@@ -923,10 +1187,10 @@ export class Renderer {
       const at = hp >= 0 ? hpPos(hu, hp) : { x: hu.x, y: hu.y - Math.max(...dims(hu.t)) * 0.5 }
       const sx = (at.x - cam.x) * z + vw / 2
       const sy = (at.y - cam.y) * z + vh / 2 - (hp >= 0 ? 18 : 22)
-      const kind = hp >= 0 ? hu.t.hardpoints[hp].kind : null
+      const part = hp >= 0 ? hu.t.hardpoints[hp] : null
       const st = hp >= 0 ? hu.hps[hp] : null
       const rel = relColor(w, view.me, hu.owner)
-      const title = kind ? HP_NAME[kind] : `${rel === OWN ? '' : rel === ALLY ? 'Allied ' : 'Enemy '}${hu.t.name}`
+      const title = part ? hpName(part) : `${rel === OWN ? '' : rel === ALLY ? 'Allied ' : 'Enemy '}${hu.t.name}`
       const sub = st ? (st.hp > 0 ? `${Math.ceil(st.hp)} / ${st.max}` : 'Destroyed') : `Hull ${Math.round((hu.hull / hu.hullMax) * 100)}%${hu.t.shield ? ` · Shield ${Math.round((hu.shield / shieldFull(hu)) * 100)}%` : ''}`
       ctx.font = '600 12px system-ui, sans-serif'
       const tw = Math.max(ctx.measureText(title).width, (ctx.font = '11px system-ui, sans-serif', ctx.measureText(sub).width)) + 20
@@ -934,7 +1198,7 @@ export class Renderer {
       const bx = Math.min(vw - tw - 6, Math.max(6, sx - tw / 2))
       const by = Math.max(46, sy - th)
       ctx.fillStyle = 'rgba(6,10,22,0.9)'
-      ctx.strokeStyle = kind ? HP_COLOR[kind] : rel
+      ctx.strokeStyle = part ? HP_COLOR[part.kind] : rel
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.roundRect(bx, by, tw, th, 6)
@@ -950,7 +1214,7 @@ export class Renderer {
       if (st && st.hp > 0) {
         ctx.fillStyle = 'rgba(255,255,255,0.12)'
         ctx.fillRect(bx + 10, by + th - 7, tw - 20, 3)
-        ctx.fillStyle = HP_COLOR[kind!]
+        ctx.fillStyle = HP_COLOR[part!.kind]
         ctx.fillRect(bx + 10, by + th - 7, (tw - 20) * (st.hp / st.max), 3)
       }
       ctx.textBaseline = 'alphabetic'
@@ -1060,6 +1324,429 @@ export class Renderer {
     ctx.restore()
   }
 
+  /** The flash of a ship dropping out of hyperspace: a white burst, a shockwave, a spray of sparks
+   * thrown forward, and in an asteroid field shattered rock and fire. */
+  private arrival(x: number, y: number, a: number, size: number, glow: string, field: boolean) {
+    this.add({ kind: 'flash', x, y, life: 0.35, size: size * 0.9, grow: size * 0.6, color: glow })
+    this.add({ kind: 'ring', x, y, life: 0.7, size: size * 0.35, grow: size * 2.4, color: '#e8f6ff' })
+    this.add({ kind: 'ring', x, y, life: 1.1, size: size * 0.2, grow: size * 1.4, color: glow })
+    const n = Math.round(14 + size / 12)
+    for (let i = 0; i < n; i++) {
+      // Most of the energy carries on the way the ship was going.
+      const b = a + (Math.random() - 0.5) * (Math.random() < 0.7 ? 0.9 : Math.PI * 2)
+      const v = 120 + Math.random() * (260 + size)
+      this.add({ kind: 'spark', x, y, vx: Math.cos(b) * v, vy: Math.sin(b) * v, life: 0.3 + Math.random() * 0.5, size: 1.4 + Math.random() * 1.6, color: Math.random() < 0.5 ? '#ffffff' : glow })
+    }
+    if (field) {
+      for (let i = 0; i < 4; i++) this.pending.push({ at: this.clock + i * 0.08, x: x + (Math.random() - 0.5) * size * 0.6, y: y + (Math.random() - 0.5) * size * 0.6, size: size * 0.35, final: false })
+      this.debris(x, y, size * 1.4, '#7a6a5a')
+    }
+  }
+
+  /**
+   * Ships on their way in from hyperspace. While the jump charges, light gathers where the ship will
+   * be: a swirling glow, its outline flickering in, and streaks reaching out behind it along the way
+   * it comes. Then it streaks in, stretched long, and snaps to a stop; a fading trail stays behind.
+   */
+  private drawWarps(ctx: CanvasRenderingContext2D, z: number) {
+    const now = this.clock
+    this.warps = this.warps.filter((v) => now < v.at + AFTER)
+    if (!this.warps.length) return
+    ctx.save()
+    for (const v of this.warps) {
+      const dx = Math.cos(v.a)
+      const dy = Math.sin(v.a)
+      const charge = Math.min(1, Math.max(0, (now - v.start) / Math.max(0.01, v.at - STREAK - v.start)))
+      ctx.globalCompositeOperation = 'lighter'
+      if (now < v.at) {
+        // The gathering glow, pulsing faster as it builds.
+        const pulse = 0.85 + 0.15 * Math.sin(now * (8 + charge * 22))
+        const r = v.size * (0.25 + charge * 0.45) * pulse
+        const g = ctx.createRadialGradient(v.x, v.y, 0, v.x, v.y, r)
+        g.addColorStop(0, `rgba(255,255,255,${0.35 + charge * 0.5})`)
+        g.addColorStop(0.3, v.glow)
+        g.addColorStop(1, 'rgba(0,0,0,0)')
+        ctx.globalAlpha = 0.35 + charge * 0.5
+        ctx.fillStyle = g
+        ctx.beginPath()
+        ctx.arc(v.x, v.y, r, 0, TAU)
+        ctx.fill()
+        // Two broken rings turning against each other, closing in.
+        ctx.strokeStyle = v.glow
+        ctx.lineWidth = Math.max(1.2 / z, v.size * 0.012)
+        for (const dir of [1, -1]) {
+          const rr = v.size * (0.75 - charge * 0.25) * (dir > 0 ? 1 : 0.82)
+          ctx.globalAlpha = charge * 0.7
+          ctx.setLineDash([rr * 0.5, rr * 0.35])
+          ctx.lineDashOffset = now * rr * 1.5 * dir
+          ctx.beginPath()
+          ctx.arc(v.x, v.y, rr, 0, TAU)
+          ctx.stroke()
+        }
+        ctx.setLineDash([])
+        // Its outline flickering into being.
+        this.drawSprite(ctx, v.sprite, v.x, v.y, v.a + Math.PI / 2, v.size, z, (0.08 + charge * 0.22) * (0.6 + 0.4 * Math.random()))
+        // Streaks of light reaching back along the way it comes.
+        const len = v.size * (2 + charge * 7)
+        for (let i = 0; i < 9; i++) {
+          const side = ((i * 37) % 9) / 8 - 0.5
+          const off = side * v.size * 0.8
+          const ox = -dy * off
+          const oy = dx * off
+          const l = len * (0.4 + ((i * 53) % 7) / 10)
+          const lg = ctx.createLinearGradient(v.x + ox, v.y + oy, v.x + ox - dx * l, v.y + oy - dy * l)
+          lg.addColorStop(0, `rgba(230,245,255,${0.5 * charge})`)
+          lg.addColorStop(1, 'rgba(0,0,0,0)')
+          ctx.strokeStyle = lg
+          ctx.globalAlpha = 1
+          ctx.lineWidth = Math.max(1 / z, v.size * 0.01)
+          ctx.beginPath()
+          ctx.moveTo(v.x + ox, v.y + oy)
+          ctx.lineTo(v.x + ox - dx * l, v.y + oy - dy * l)
+          ctx.stroke()
+        }
+        // The streak in: the ship rushing in from far back, stretched long, slowing to a stop.
+        const p = (now - (v.at - STREAK)) / STREAK
+        if (p > 0) {
+          const k = (1 - p) ** 2
+          const cx = v.x - dx * v.size * 9 * k
+          const cy = v.y - dy * v.size * 9 * k
+          const stretch = 1 + 7 * k
+          const img = this.sprite(v.sprite, v.size * z * (window.devicePixelRatio || 1))
+          if (img) {
+            const nw = img instanceof HTMLImageElement ? img.naturalWidth : img.width
+            const nh = img instanceof HTMLImageElement ? img.naturalHeight : img.height
+            const sc = v.size / Math.max(nw, nh)
+            ctx.save()
+            ctx.translate(cx, cy)
+            ctx.rotate(v.a + Math.PI / 2)
+            ctx.scale(1 - 0.35 * k, stretch)
+            ctx.globalAlpha = 0.9
+            ctx.drawImage(img, (-nw * sc) / 2, (-nh * sc) / 2, nw * sc, nh * sc)
+            ctx.restore()
+          }
+          // The bright wake it pulls behind it.
+          const wl = ctx.createLinearGradient(cx, cy, cx - dx * v.size * 12, cy - dy * v.size * 12)
+          wl.addColorStop(0, 'rgba(255,255,255,0.95)')
+          wl.addColorStop(0.15, v.glow)
+          wl.addColorStop(1, 'rgba(0,0,0,0)')
+          ctx.strokeStyle = wl
+          ctx.lineWidth = Math.max(2 / z, v.size * 0.07)
+          ctx.globalAlpha = 1
+          ctx.beginPath()
+          ctx.moveTo(cx, cy)
+          ctx.lineTo(cx - dx * v.size * 12, cy - dy * v.size * 12)
+          ctx.stroke()
+        }
+      } else {
+        // After: the wake fading behind it, and a glare across the spot.
+        const q = (now - v.at) / AFTER
+        const fade = (1 - q) ** 2
+        const wl = ctx.createLinearGradient(v.x, v.y, v.x - dx * v.size * 10, v.y - dy * v.size * 10)
+        wl.addColorStop(0, `rgba(255,255,255,${0.6 * fade})`)
+        wl.addColorStop(0.2, v.glow)
+        wl.addColorStop(1, 'rgba(0,0,0,0)')
+        ctx.strokeStyle = wl
+        ctx.globalAlpha = fade
+        ctx.lineWidth = Math.max(1.5 / z, v.size * 0.05 * (1 - q * 0.5))
+        ctx.beginPath()
+        ctx.moveTo(v.x - dx * v.size * 0.3, v.y - dy * v.size * 0.3)
+        ctx.lineTo(v.x - dx * v.size * 10, v.y - dy * v.size * 10)
+        ctx.stroke()
+        const glare = v.size * (1.6 + q * 1.4)
+        const gg = ctx.createLinearGradient(v.x + dy * glare, v.y - dx * glare, v.x - dy * glare, v.y + dx * glare)
+        gg.addColorStop(0, 'rgba(0,0,0,0)')
+        gg.addColorStop(0.5, `rgba(235,248,255,${0.8 * fade})`)
+        gg.addColorStop(1, 'rgba(0,0,0,0)')
+        ctx.strokeStyle = gg
+        ctx.lineWidth = Math.max(1 / z, v.size * 0.02)
+        ctx.beginPath()
+        ctx.moveTo(v.x + dy * glare, v.y - dx * glare)
+        ctx.lineTo(v.x - dy * glare, v.y + dx * glare)
+        ctx.stroke()
+      }
+    }
+    ctx.restore()
+  }
+
+  /**
+   * A warship charging its drive to retreat: light gathering round it, rings tightening, and an arc
+   * filling as the drive charges.
+   */
+  private drawCharge(ctx: CanvasRenderingContext2D, u: Unit, z: number) {
+    const total = RETREAT_TIME[u.t.tier] ?? 10
+    const k = Math.min(1, Math.max(0, 1 - u.retreat / total))
+    const glow = FACTIONS[u.t.faction].glow
+    const size = u.t.size
+    ctx.save()
+    ctx.globalCompositeOperation = 'lighter'
+    const pulse = 0.85 + 0.15 * Math.sin(this.clock * (6 + k * 20))
+    const g = ctx.createRadialGradient(u.x, u.y, size * 0.2, u.x, u.y, size * 0.75)
+    g.addColorStop(0, 'rgba(0,0,0,0)')
+    g.addColorStop(0.6, glow)
+    g.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.globalAlpha = (0.1 + k * 0.35) * pulse
+    ctx.fillStyle = g
+    ctx.beginPath()
+    ctx.arc(u.x, u.y, size * 0.75, 0, TAU)
+    ctx.fill()
+    ctx.strokeStyle = glow
+    ctx.lineWidth = Math.max(1.2 / z, size * 0.01)
+    for (const dir of [1, -1]) {
+      const rr = size * (0.8 - k * 0.2) * (dir > 0 ? 1 : 0.88)
+      ctx.globalAlpha = 0.3 + k * 0.5
+      ctx.setLineDash([rr * 0.45, rr * 0.3])
+      ctx.lineDashOffset = this.clock * rr * (1 + k * 2) * dir
+      ctx.beginPath()
+      ctx.arc(u.x, u.y, rr, 0, TAU)
+      ctx.stroke()
+    }
+    ctx.setLineDash([])
+    // How far along the charge is.
+    ctx.globalAlpha = 0.9
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = Math.max(2 / z, size * 0.012)
+    ctx.beginPath()
+    ctx.arc(u.x, u.y, size * 0.9, -Math.PI / 2, -Math.PI / 2 + k * TAU)
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  /** Ships jumping out: stretched long and gone ahead in a streak, a wake fading behind them. */
+  private drawDeparts(ctx: CanvasRenderingContext2D, z: number) {
+    const now = this.clock
+    this.departs = this.departs.filter((v) => now < v.start + AFTER)
+    if (!this.departs.length) return
+    ctx.save()
+    ctx.globalCompositeOperation = 'lighter'
+    for (const v of this.departs) {
+      const dx = Math.cos(v.a)
+      const dy = Math.sin(v.a)
+      const q = (now - v.start) / AFTER
+      const p = Math.min(1, (now - v.start) / STREAK)
+      const cx = v.x + dx * v.size * 10 * p * p
+      const cy = v.y + dy * v.size * 10 * p * p
+      if (p < 1) {
+        const img = this.sprite(v.sprite, v.size * z * (window.devicePixelRatio || 1))
+        if (img) {
+          const nw = img instanceof HTMLImageElement ? img.naturalWidth : img.width
+          const nh = img instanceof HTMLImageElement ? img.naturalHeight : img.height
+          const sc = v.size / Math.max(nw, nh)
+          ctx.save()
+          ctx.translate(cx, cy)
+          ctx.rotate(v.a + Math.PI / 2)
+          ctx.scale(1 - 0.35 * p, 1 + 7 * p)
+          ctx.globalAlpha = 1 - p * 0.6
+          ctx.drawImage(img, (-nw * sc) / 2, (-nh * sc) / 2, nw * sc, nh * sc)
+          ctx.restore()
+        }
+      }
+      // The wake from where it was to where it went, fading.
+      const fade = (1 - q) ** 2
+      const wl = ctx.createLinearGradient(v.x, v.y, cx, cy)
+      wl.addColorStop(0, 'rgba(0,0,0,0)')
+      wl.addColorStop(0.7, v.glow)
+      wl.addColorStop(1, `rgba(255,255,255,${0.9 * fade})`)
+      ctx.strokeStyle = wl
+      ctx.globalAlpha = fade
+      ctx.lineWidth = Math.max(1.5 / z, v.size * 0.06 * (1 - q * 0.5))
+      ctx.beginPath()
+      ctx.moveTo(v.x, v.y)
+      ctx.lineTo(cx, cy)
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
+  /**
+   * The fog grid (F2): the map cut into cells, each shaded by whether our team can see its middle,
+   * the cells out of sight hatched, and a bright stepped line along the edge between the two, so
+   * it's plain where sight ends. Cells grow as the camera pulls back.
+   */
+  private drawFogGrid(ctx: CanvasRenderingContext2D, w: World, cam: Camera, vw: number, vh: number, me: Owner) {
+    const z = cam.zoom
+    const cell = [100, 200, 400, 800].find((c) => c * z >= 26) ?? 800
+    const x0 = Math.max(0, Math.floor((cam.x - vw / 2 / z) / cell))
+    const y0 = Math.max(0, Math.floor((cam.y - vh / 2 / z) / cell))
+    const x1 = Math.min(Math.ceil(w.w / cell), Math.ceil((cam.x + vw / 2 / z) / cell))
+    const y1 = Math.min(Math.ceil(w.h / cell), Math.ceil((cam.y + vh / 2 / z) / cell))
+    const cols = x1 - x0
+    const rows = y1 - y0
+    if (cols <= 0 || rows <= 0 || cols * rows > 20000) return
+    const team = w.players[me].team
+    const eyes = w.units.filter((u) => !u.dead && w.players[u.owner].team === team).map((u) => ({ x: u.x, y: u.y, r2: sensorOf(u) ** 2 }))
+    const seen = new Uint8Array(cols * rows)
+    for (let j = 0; j < rows; j++)
+      for (let i = 0; i < cols; i++) {
+        const cx = (x0 + i + 0.5) * cell
+        const cy = (y0 + j + 0.5) * cell
+        seen[j * cols + i] = eyes.some((e) => (e.x - cx) ** 2 + (e.y - cy) ** 2 < e.r2) ? 1 : 0
+      }
+    const sx = (x: number) => (x - cam.x) * z + vw / 2
+    const sy = (y: number) => (y - cam.y) * z + vh / 2
+    const px = cell * z
+    ctx.save()
+    // Out of sight: darker, with a faint hatch.
+    ctx.fillStyle = 'rgba(255,80,60,0.07)'
+    ctx.strokeStyle = 'rgba(255,110,90,0.12)'
+    ctx.lineWidth = 1
+    for (let j = 0; j < rows; j++)
+      for (let i = 0; i < cols; i++) {
+        if (seen[j * cols + i]) continue
+        const x = sx((x0 + i) * cell)
+        const y = sy((y0 + j) * cell)
+        ctx.fillRect(x, y, px, px)
+        ctx.beginPath()
+        for (let d = 8; d < px * 2; d += 12) {
+          ctx.moveTo(x + Math.max(0, d - px), y + Math.min(px, d))
+          ctx.lineTo(x + Math.min(px, d), y + Math.max(0, d - px))
+        }
+        ctx.stroke()
+      }
+    // The grid itself, faint.
+    ctx.strokeStyle = 'rgba(160,200,255,0.12)'
+    ctx.beginPath()
+    for (let i = 0; i <= cols; i++) {
+      ctx.moveTo(Math.round(sx((x0 + i) * cell)) + 0.5, sy(y0 * cell))
+      ctx.lineTo(Math.round(sx((x0 + i) * cell)) + 0.5, sy(y1 * cell))
+    }
+    for (let j = 0; j <= rows; j++) {
+      ctx.moveTo(sx(x0 * cell), Math.round(sy((y0 + j) * cell)) + 0.5)
+      ctx.lineTo(sx(x1 * cell), Math.round(sy((y0 + j) * cell)) + 0.5)
+    }
+    ctx.stroke()
+    // Where sight ends: every cell edge between a seen cell and an unseen one.
+    ctx.strokeStyle = 'rgba(125,240,255,0.85)'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    for (let j = 0; j < rows; j++)
+      for (let i = 0; i < cols; i++) {
+        const v = seen[j * cols + i]
+        if (i + 1 < cols && seen[j * cols + i + 1] !== v) {
+          const x = sx((x0 + i + 1) * cell)
+          ctx.moveTo(x, sy((y0 + j) * cell))
+          ctx.lineTo(x, sy((y0 + j + 1) * cell))
+        }
+        if (j + 1 < rows && seen[(j + 1) * cols + i] !== v) {
+          const y = sy((y0 + j + 1) * cell)
+          ctx.moveTo(sx((x0 + i) * cell), y)
+          ctx.lineTo(sx((x0 + i + 1) * cell), y)
+        }
+      }
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  /** A ship being dragged from the reserve: its ghost where it would arrive, ringed green where it
+   * can, red where it can't (with why), amber over an asteroid field. */
+  private drawWarpGhost(ctx: CanvasRenderingContext2D, g: NonNullable<View['warpGhost']>, z: number) {
+    const col = !g.ok ? '#ff5a50' : g.field ? '#ffaa5a' : '#7dffa0'
+    const r = g.size * 0.6
+    ctx.save()
+    ctx.fillStyle = !g.ok ? 'rgba(255,90,80,0.08)' : g.field ? 'rgba(255,170,90,0.1)' : 'rgba(125,255,160,0.08)'
+    ctx.strokeStyle = col
+    ctx.lineWidth = 2 / z
+    ctx.setLineDash([10 / z, 7 / z])
+    ctx.lineDashOffset = -this.clock * 30 / z
+    ctx.beginPath()
+    ctx.arc(g.x, g.y, r, 0, TAU)
+    ctx.fill()
+    ctx.stroke()
+    ctx.setLineDash([])
+    // Which way it will face.
+    ctx.beginPath()
+    ctx.moveTo(g.x + Math.cos(g.a) * r, g.y + Math.sin(g.a) * r)
+    ctx.lineTo(g.x + Math.cos(g.a) * (r + 22 / z), g.y + Math.sin(g.a) * (r + 22 / z))
+    ctx.stroke()
+    ctx.restore()
+    this.drawSprite(ctx, g.sprite, g.x, g.y, g.a + Math.PI / 2, g.size, z, g.ok ? 0.55 : 0.3)
+    const label = !g.ok ? g.why : g.field ? `Asteroid field: arrives badly damaged` : null
+    if (label) {
+      ctx.save()
+      ctx.font = `600 ${12 / z}px system-ui, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.fillStyle = 'rgba(6,10,22,0.85)'
+      const tw = ctx.measureText(label).width + 14 / z
+      ctx.fillRect(g.x - tw / 2, g.y + r + 8 / z, tw, 20 / z)
+      ctx.fillStyle = col
+      ctx.textBaseline = 'middle'
+      ctx.fillText(label, g.x, g.y + r + 18 / z)
+      ctx.restore()
+    }
+  }
+
+  /** A sprite with its colour knocked out to a burnt dark, for a module that was shot off. */
+  private burnt(name: string) {
+    let c = this.dark.get(name)
+    if (c) return c
+    const img = this.imgs.get(name)
+    if (!img || !img.complete || !img.naturalWidth) return null
+    c = document.createElement('canvas')
+    c.width = img.naturalWidth
+    c.height = img.naturalHeight
+    const g = c.getContext('2d')!
+    g.drawImage(img, 0, 0)
+    g.globalCompositeOperation = 'source-atop'
+    g.fillStyle = 'rgba(22,16,14,0.72)'
+    g.fillRect(0, 0, c.width, c.height)
+    this.dark.set(name, c)
+    return c
+  }
+
+  /**
+   * Every module on a hull: guns, shield generators, hangars and station parts, each its own sprite
+   * on its socket. Guns turn towards what they shoot at and ease back along the hull; a module that
+   * was shot off shows as a burnt wreck.
+   */
+  private drawModules(ctx: CanvasRenderingContext2D, u: Unit, w: World, z: number) {
+    const t = u.t
+    const ahead = u.a + Math.PI / 2
+    // Faded with the hull while it's still being built.
+    const fade = building(u) ? 0.55 : 1
+    for (let i = 0; i < t.hardpoints.length; i++) {
+      const h = t.hardpoints[i]
+      if (!h.art) continue
+      const size = (h.s ?? 0.05) * t.size
+      if (size * z < 2) continue
+      const p = hpPos(u, i)
+      const dead = u.hps[i].hp <= 0
+      let rot = ahead
+      if (h.weapon) {
+        const key = u.id * 64 + i
+        const g = dead ? undefined : u.guns.find((x) => x.hp === i)
+        const e = g?.target ? w.byId.get(g.target) : undefined
+        // With nothing to shoot, a gun crew scans: slowly sweeping to and fro, each gun on its own
+        // rhythm. A station's or platform's guns look all round; a ship's keep roughly ahead.
+        const fixed = !isShip(t)
+        const seed = (u.id * 13 + i * 7) % 17
+        const sweep = this.clock * (0.18 + (seed % 5) * 0.03) + seed
+        const scan = fixed ? ahead + Math.sin(sweep) * Math.PI + Math.sin(sweep * 0.37) * 0.8 : ahead + Math.sin(sweep) * 0.9
+        const want = e && !e.dead && Math.hypot(e.x - p.x, e.y - p.y) < g!.w.range * 1.3 ? Math.atan2(e.y - p.y, e.x - p.x) + Math.PI / 2 : scan
+        const cur = this.aims.get(key) ?? want
+        const d = ((want - cur + Math.PI * 3) % (Math.PI * 2)) - Math.PI
+        rot = dead ? cur : cur + d * 0.12
+        this.aims.set(key, rot)
+      }
+      if (!dead) {
+        this.drawSprite(ctx, moduleSprite(t.faction, h.art), p.x, p.y, rot, size, z, fade)
+        continue
+      }
+      // The Republic's turrets have a wreck of their own; everything else is burnt where it stands.
+      if (h.weapon && t.faction === 'republic') {
+        this.drawSprite(ctx, moduleSprite('republic', 'wreck'), p.x, p.y, rot, size, z)
+        continue
+      }
+      const img = this.burnt(moduleSprite(t.faction, h.art))
+      if (!img) continue
+      const k = size / Math.max(img.width, img.height)
+      ctx.save()
+      ctx.translate(p.x, p.y)
+      ctx.rotate(rot)
+      ctx.drawImage(img, (-img.width * k) / 2, (-img.height * k) / 2, img.width * k, img.height * k)
+      ctx.restore()
+    }
+  }
+
   private drawUnit(ctx: CanvasRenderingContext2D, u: Unit, w: World, z: number, view: View) {
     const t = u.t
     const fac = FACTIONS[t.faction]
@@ -1077,7 +1764,11 @@ export class Renderer {
       ctx.globalCompositeOperation = 'lighter'
       const thrust = 0.35 + 0.65 * Math.min(1, u.v / Math.max(1, t.speed))
       const flick = 0.85 + Math.random() * 0.15
+      const engines = t.hardpoints.flatMap((h, i) => (h.kind === 'engine' ? [i] : []))
       for (const [gx, gy] of t.engines) {
+        // A glow belongs to the nearest engine hardpoint and goes dark with it.
+        const near = engines.reduce((a, b) => (Math.hypot(t.hardpoints[b].x - gx, t.hardpoints[b].y - gy) < Math.hypot(t.hardpoints[a].x - gx, t.hardpoints[a].y - gy) ? b : a), engines[0] ?? -1)
+        if (near >= 0 && u.hps[near].hp <= 0) continue
         const p = shipPoint(u, gx, gy)
         const ex = u.x + (p.x - u.x) * k
         const ey = u.y + (p.y - u.y) * k
@@ -1119,6 +1810,8 @@ export class Renderer {
     }
 
     this.drawSprite(ctx, t.sprite, u.x, u.y, u.a + Math.PI / 2, size, z, building(u) ? 0.55 : 1)
+    if (t.hardpoints.some((h) => h.art)) this.drawModules(ctx, u, w, z)
+    if (u.retreat > 0) this.drawCharge(ctx, u, z)
 
     // Shield shimmer on the side that was hit.
     const since = w.time - u.shieldHit
@@ -1150,7 +1843,8 @@ export class Renderer {
     }
 
     // Hardpoint markers on selected or hovered warships, once they're big enough to read: a dark
-    // disc with the part's icon, ringed in its colour as far round as its health goes.
+    // disc with the part's icon, ringed in its colour as far round as its health goes, centred on
+    // the part.
     if ((sel || hov) && u.hps.length && t.size * z > 90) {
       t.hardpoints.forEach((h, i) => {
         const p = hpPos(u, i)
@@ -1230,6 +1924,39 @@ export class Renderer {
         }
       }
     }
+  }
+
+  /** A small tag under a spot on the map: an order's icon and a word or two, at a fixed size on
+   * screen, `below` pixels under it. */
+  tag(ctx: CanvasRenderingContext2D, at: Pt, below: number, text: string, icon: 'patrol' | 'guard', rgb: string, z: number) {
+    ctx.save()
+    ctx.translate(at.x, at.y)
+    ctx.scale(1 / z, 1 / z)
+    ctx.font = '600 11px system-ui, sans-serif'
+    const tw = ctx.measureText(text).width + 30
+    const y = below
+    ctx.fillStyle = 'rgba(6,10,22,0.86)'
+    ctx.strokeStyle = `rgba(${rgb},0.75)`
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.roundRect(-tw / 2, y, tw, 20, 5)
+    ctx.fill()
+    ctx.stroke()
+    // The order's icon, as on its cursor, drawn into a 13 px square.
+    ctx.save()
+    ctx.translate(-tw / 2 + 5, y + 3.5)
+    ctx.scale(13 / 32, 13 / 32)
+    ctx.strokeStyle = `rgb(${rgb})`
+    ctx.lineWidth = 3.4
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.stroke(tagIcon(icon))
+    ctx.restore()
+    ctx.fillStyle = '#dbeaff'
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(text, -tw / 2 + 23, y + 10.5)
+    ctx.restore()
   }
 
   /** The minimap: the backdrop behind, what our ships can see, nebulas and asteroid fields, ore, beacons, ships, stations, the

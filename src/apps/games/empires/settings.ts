@@ -5,8 +5,8 @@ import { useSyncExternalStore } from 'react'
 
 export type Action =
   | 'panUp' | 'panDown' | 'panLeft' | 'panRight' | 'zoomIn' | 'zoomOut'
-  | 'move' | 'attack' | 'stop' | 'patrol' | 'hold' | 'rally' | 'ability'
-  | 'station' | 'idle' | 'focus' | 'alert' | 'techTree' | 'pause'
+  | 'move' | 'attack' | 'stop' | 'patrol' | 'hold' | 'rally' | 'ability' | 'retreat' | 'guard'
+  | 'station' | 'idle' | 'focus' | 'alert' | 'techTree' | 'pause' | 'fogGrid'
 
 export const ACTIONS: { id: Action; label: string; group: string }[] = [
   { id: 'panUp', label: 'Camera up', group: 'Camera' },
@@ -22,18 +22,31 @@ export const ACTIONS: { id: Action; label: string; group: string }[] = [
   { id: 'hold', label: 'Cycle stance (hold, maneuver, roam)', group: 'Commands' },
   { id: 'rally', label: 'Rally point', group: 'Commands' },
   { id: 'ability', label: 'Use ability', group: 'Commands' },
+  { id: 'retreat', label: 'Hyperspace retreat (gunships and up)', group: 'Commands' },
+  { id: 'guard', label: 'Guard a ship or structure', group: 'Commands' },
   { id: 'station', label: 'Select station', group: 'Selection' },
   { id: 'idle', label: 'Select idle ships', group: 'Selection' },
   { id: 'focus', label: 'Look at selection', group: 'Selection' },
   { id: 'alert', label: 'Look at last alert', group: 'Selection' },
   { id: 'techTree', label: 'Tech tree', group: 'Game' },
+  { id: 'fogGrid', label: 'Fog of war grid', group: 'Game' },
   { id: 'pause', label: 'Pause', group: 'Game' },
 ]
 
+// The orders used most sit around WASD, so the left hand never leaves it: Q stop, E attack move,
+// R patrol, F ability.
 export const DEFAULT_KEYS: Record<Action, string> = {
   panUp: 'w', panDown: 's', panLeft: 'a', panRight: 'd', zoomIn: '=', zoomOut: '-',
-  move: 'm', attack: 'r', stop: 'x', patrol: 't', hold: 'g', rally: 'y', ability: 'q',
-  station: 'h', idle: 'i', focus: 'f', alert: ' ', techTree: 'k', pause: 'p',
+  move: 'm', attack: 'e', stop: 'q', patrol: 'r', hold: 'g', rally: 'y', ability: 'f', retreat: 'j', guard: 'v',
+  station: 'h', idle: 'i', focus: 'c', alert: ' ', techTree: 'k', pause: 'p', fogGrid: 'f2',
+}
+
+/** The defaults before they moved next to WASD. Saved keys that still match them all move along;
+ * a layout someone changed by hand is theirs and stays. */
+const OLD_KEYS: Partial<Record<Action, string>> = { attack: 'r', stop: 'x', patrol: 't', ability: 'q', focus: 'f' }
+function migrateKeys(keys: Record<Action, string>): Record<Action, string> {
+  const moved = Object.keys(OLD_KEYS) as Action[]
+  return moved.every((a) => keys[a] === OLD_KEYS[a]) ? { ...keys, ...Object.fromEntries(moved.map((a) => [a, DEFAULT_KEYS[a]])) } : keys
 }
 
 /** Keys that can't be bound: they already mean something everywhere in the game. */
@@ -54,11 +67,15 @@ export type Settings = {
   rings: boolean
   /** Toast messages for builds, captures and research. */
   toasts: boolean
+  /** The fog of war grid overlay: where sight ends, cell by cell. */
+  fogGrid: boolean
+  /** Ships the station isn't upgraded enough for still show in the shipyard, greyed out. */
+  lockedShips: boolean
   keys: Record<Action, string>
 }
 
 const KEY = 'mvlos.empires.settings'
-const DEFAULTS: Settings = { cameraSpeed: 1, edgeScroll: 'fullscreen', bars: 'damaged', rings: true, toasts: true, keys: { ...DEFAULT_KEYS } }
+const DEFAULTS: Settings = { cameraSpeed: 1, edgeScroll: 'fullscreen', bars: 'damaged', rings: true, toasts: true, fogGrid: false, lockedShips: true, keys: { ...DEFAULT_KEYS } }
 
 function read(): Settings {
   try {
@@ -70,7 +87,9 @@ function read(): Settings {
       bars: v.bars === 'always' || v.bars === 'selected' ? v.bars : 'damaged',
       rings: v.rings !== false,
       toasts: v.toasts !== false,
-      keys: { ...DEFAULT_KEYS, ...(v.keys && typeof v.keys === 'object' ? v.keys : {}) },
+      fogGrid: v.fogGrid === true,
+      lockedShips: v.lockedShips !== false,
+      keys: migrateKeys({ ...DEFAULT_KEYS, ...(v.keys && typeof v.keys === 'object' ? v.keys : {}) }),
     }
   } catch {
     return DEFAULTS

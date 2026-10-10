@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DIFFICULTY, type Difficulty } from './ai'
 import { FACTIONS, type FactionId } from './data'
-import { Frame, Icon } from './Hud'
+import { Frame, Icon, Tips } from './Hud'
+import { battleLayout, type LayoutStore } from './layout'
 import { DEFAULT_RULES, GENERATED, MAP, MAPS, MAX_BEACONS, MAX_SEED, cleanRules, defaultArea, generateMap, type Amount, type MapDef, type MapRules, type Rect } from './maps'
 import { ALLY, ENEMY, OWN, drawTerrainOverview, relColor } from './render'
 import { ACTIONS, RESERVED, bindKey, keyName, keyOf, resetKeys, setSettings, useSettings, type Action, type Settings } from './settings'
@@ -109,6 +110,160 @@ export function Modal({ title, onClose, children, wide, className = '' }: { titl
         </Frame>
       </div>
     </div>
+  )
+}
+
+/**
+ * The battle menu (Esc), with the battle paused behind it: where you are and how it's going, a big
+ * Resume, quick switches for sound, speed and the fog grid, the panels, and restarting or leaving,
+ * which each ask once more before they throw the battle away.
+ */
+export function BattleMenu({ w, me, sound, speed, onSpeed, onResume, onPanel, onRestart, onExit, campaign = false }: {
+  w: World
+  me: Owner
+  sound: EmpiresSound
+  speed: number
+  onSpeed: (s: number) => void
+  onResume: () => void
+  onPanel: (panel: 'settings' | 'keys' | 'howto') => void
+  /** Left out in a campaign battle: it can't be fought again. */
+  onRestart?: () => void
+  onExit: () => void
+  /** A galactic conquest battle: leaving means pulling the fleet out. */
+  campaign?: boolean
+}) {
+  const s = useSettings()
+  const [muted, setMuted] = useState(sound.muted)
+  const [confirm, setConfirm] = useState<'restart' | 'exit' | null>(null)
+  const p = w.players[me]
+  const fac = FACTIONS[p.faction]
+  const mins = `${Math.floor(w.time / 60)}:${String(Math.floor(w.time % 60)).padStart(2, '0')}`
+  return (
+    <div className="ew-modal-back" onClick={onResume}>
+      <div className="ew-modal ew-battlemenu" onClick={(e) => e.stopPropagation()}>
+        <Frame>
+          <header className="ew-bm-head">
+            <img src={`/games/empires/world/emblem-${p.faction}.webp`} alt="" />
+            <div>
+              <strong>{w.map.name}</strong>
+              <small className="ew-muted">{fac.long} · {mins} · battle paused</small>
+            </div>
+            <button className="ew-close" onClick={onResume} aria-label="Close the menu">✕</button>
+          </header>
+          <dl className="ew-bm-stats">
+            <div><dt>Built</dt><dd>{p.stats.built}</dd></div>
+            <div><dt>Destroyed</dt><dd>{p.stats.killed}</dd></div>
+            <div><dt>Lost</dt><dd>{p.stats.lost}</dd></div>
+            <div><dt>Earned</dt><dd>{Math.round(p.stats.earned).toLocaleString('en-US')}</dd></div>
+          </dl>
+          <button className="ew-menu-btn is-primary ew-bm-resume" onClick={onResume}>
+            <Icon name="play" size={16} /> Resume
+          </button>
+          <div className="ew-bm-quick">
+            <button className={`ew-bm-toggle ${muted ? '' : 'is-on'}`} onClick={() => (sound.setMuted(!muted), setMuted(!muted))} data-tip={muted ? 'Sound is off: click to turn it on' : 'Sound is on: click to mute'}>
+              <Icon name={muted ? 'mute' : 'sound'} size={16} /> Sound
+            </button>
+            <div className="ew-bm-speed" role="group" aria-label="Game speed">
+              <Icon name="speed" size={15} />
+              {[1, 2, 3].map((x) => (
+                <button key={x} className={speed === x ? 'is-on' : ''} onClick={() => onSpeed(x)} aria-pressed={speed === x}>
+                  {x}×
+                </button>
+              ))}
+            </div>
+            <button className={`ew-bm-toggle ${s.fogGrid ? 'is-on' : ''}`} onClick={() => setSettings({ fogGrid: !s.fogGrid })} data-tip={`Fog of war grid (${keyName(s.keys.fogGrid)})`}>
+              <Icon name="grid" size={16} /> Fog grid
+            </button>
+          </div>
+          <div className="ew-bm-panels">
+            <button className="ew-menu-btn" onClick={() => onPanel('settings')}><Icon name="gear" size={16} /> Settings</button>
+            <button className="ew-menu-btn" onClick={() => onPanel('keys')}><Icon name="keys" size={16} /> Keybinds</button>
+            <button className="ew-menu-btn" onClick={() => onPanel('howto')}><Icon name="help" size={16} /> How to play</button>
+          </div>
+          <LayoutSection />
+          {confirm ? (
+            <div className="ew-bm-confirm" role="alertdialog" aria-label="Are you sure?">
+              <span>
+                {confirm === 'restart' ? 'Restart this battle from the beginning? It can\'t be picked up again.'
+                  : campaign ? 'Pull our fleet out of this battle? Every ship still here jumps back to the galaxy, and the enemy keeps the field.'
+                  : 'Leave this battle for the lobby? It can\'t be picked up again.'}
+              </span>
+              <div>
+                <button className="ew-menu-btn is-danger" onClick={confirm === 'restart' ? onRestart : onExit}>{confirm === 'restart' ? 'Restart' : campaign ? 'Retreat' : 'Leave'}</button>
+                <button className="ew-menu-btn" onClick={() => setConfirm(null)}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div className="ew-bm-danger">
+              {onRestart && <button className="ew-menu-btn" onClick={() => setConfirm('restart')}><Icon name="restart" size={16} /> Restart battle</button>}
+              <button className="ew-menu-btn is-danger" onClick={() => setConfirm('exit')}><Icon name="exit" size={16} /> {campaign ? 'Retreat to the galaxy' : 'Leave to lobby'}</button>
+            </div>
+          )}
+        </Frame>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The windows' layout, in the battle menu: put everything back, save the arrangement under a name,
+ * and load, delete or start every battle with a saved one.
+ */
+/** Saving, loading and resetting where the windows are: a battle's, or (`campaign`) the galaxy map's. */
+export function LayoutSection({ store = battleLayout, campaign = false }: { store?: LayoutStore; campaign?: boolean }) {
+  store.useLayoutVersion()
+  const { layoutMoved, resetLayout, saveLayout, loadLayout, deleteLayout, setStartLayout } = store
+  const [naming, setNaming] = useState<string | null>(null)
+  const names = store.savedLayouts()
+  const start = store.startLayout()
+  const save = () => {
+    const name = (naming ?? '').trim().slice(0, 30)
+    if (!name) return
+    saveLayout(name)
+    setNaming(null)
+  }
+  return (
+    <section className="ew-bm-layout">
+      <header>
+        <h5>Window layout</h5>
+        <button className="ew-bm-mini" onClick={resetLayout} disabled={!layoutMoved()} data-tip="Put every window back in its default spot">
+          <Icon name="restart" size={13} /> Reset
+        </button>
+        <button className="ew-bm-mini" onClick={() => setNaming(naming === null ? `Layout ${names.length + 1}` : null)} data-tip="Save where the windows are now, to load again later">
+          <Icon name="keys" size={13} /> Save…
+        </button>
+      </header>
+      {naming !== null && (
+        <form className="ew-bm-name" onSubmit={(e) => (e.preventDefault(), save())}>
+          <input autoFocus value={naming} maxLength={30} onChange={(e) => setNaming(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), setNaming(null))} aria-label="Layout name" />
+          <button className="ew-bm-mini is-primary" type="submit" disabled={!naming.trim()}>{names.includes(naming.trim()) ? 'Replace' : 'Save'}</button>
+          <button className="ew-bm-mini" type="button" onClick={() => setNaming(null)}>Cancel</button>
+        </form>
+      )}
+      {names.length > 0 ? (
+        <ul>
+          {names.map((n) => (
+            <li key={n}>
+              {!campaign && (
+                <button className={`ew-bm-star ${start === n ? 'is-on' : ''}`} onClick={() => setStartLayout(start === n ? null : n)} aria-pressed={start === n}
+                  data-tip={start === n ? 'New battles start with this layout: click to start with the defaults instead' : 'Start every new battle with this layout'}>
+                  {start === n ? '★' : '☆'}
+                </button>
+              )}
+              <span>{n}</span>
+              <button className="ew-bm-mini" onClick={() => loadLayout(n)}>Load</button>
+              <button className="ew-bm-mini is-x" onClick={() => deleteLayout(n)} aria-label={`Delete the layout ${n}`} data-tip="Delete this layout">×</button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <small className="ew-muted">
+          {campaign
+            ? 'Drag the galaxy map, the planet dock, the fleets and the economy where you like them; they stay there. Save the layout here to load it again later.'
+            : 'Drag the map, unit card, selection and other windows where you like them, then save the layout here. It lasts for this battle; a saved one can be loaded again, or starred to start every battle with.'}
+        </small>
+      )}
+    </section>
   )
 }
 
@@ -285,6 +440,11 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
         <span>Messages</span>
         <Seg label="Messages" value={s.toasts} options={[[true, 'All'], [false, 'Alerts only']]} onChange={(v) => set({ toasts: v })} />
       </div>
+      <h5>Shipyard</h5>
+      <div className="ew-row">
+        <span>Ships the station isn't upgraded for</span>
+        <Seg label="Locked ships" value={s.lockedShips} options={[[false, 'Hide'], [true, 'Show greyed out']]} onChange={(v) => set({ lockedShips: v })} />
+      </div>
       <h5>Sound test</h5>
       {testing ? <SoundTest sound={sound} /> : <button className="ew-soundtest-open" onClick={() => (sound.unlock(), setTesting(true))}>Play every sound in the game…</button>}
     </div>
@@ -342,7 +502,14 @@ export function HowToPlay() {
       <ul>
         <li>Destroy every enemy station. A side is out when its stations are gone.</li>
         <li>In the lobby, drag on the map to draw where each player may start. Before the battle, click inside your area to place your station, then start.</li>
-        <li>Drag to select ships. Right-click to move, or to attack what's under the cursor. Hold the right button and draw a line to spread the ships evenly along it, or draw a loop to ring them round it. Hold Ctrl as you draw to attack-move. Hold Shift with any order to queue it after the ones the ships already have.</li>
+        <li>Drag to select ships. Right-click to move, or to attack what's under the cursor. Hold the right button and draw a line to spread the ships evenly along it, or draw a loop to ring them round it. Hold Ctrl as you draw to attack-move. Hold Shift with a click order to queue it after the ones the ships already have.</li>
+        <li>With one ship or squadron selected, right-drag from where it should go towards where it should face; hold Alt to do that with the whole selection, which keeps its formation. Shift and right-drag draws a circle: every enemy inside it gets attacked, the targets shared out between your ships.</li>
+        <li>Ships built at the station (other than fighters and bombers) wait in the fleet inventory: click your faction's emblem at the top left to open it, and drag one to any spot your fleet can see to call it in from hyperspace. The small jump button on a shipyard card sends one straight to the station instead.</li>
+        <li>Click your credits for the economy: income by source, a chart over the battle, what you've earned and spent, and the latest purchases. The economy and fleet inventory panels can be dragged by their title bars.</li>
+        <li>Ships steer round asteroid fields and nebulas on their own; click inside one to send them in.</li>
+        <li>Select a mining platform to upgrade it: Deeper drills (twice) for more credits, Armour plating, and a Shield generator, since platforms start without shields. Upgrades belong to that platform: lose it and a new one starts from scratch. Every platform has a small flak turret that can just about hold off one fighter squadron.</li>
+        <li>Guard ({k('guard')}), then click one of your ships or structures: the selection stays with it and fights off whatever comes near.</li>
+        <li>Gunships and bigger can retreat into hyperspace ({k('retreat')}): the drive charges for 6 to 12 seconds while the ship holds still and keeps firing, then it jumps out, freeing its fleet space; 15 seconds later up to half its cost comes back, less the more damaged it was. Destroyed before it jumps, it's lost.</li>
         <li>Park ships at glowing ore for a few seconds to survey it, then click it to build a mining platform (credits) or a defense platform (guns).</li>
         <li>Hold ships near a beacon to capture it: more income and a bigger fleet for your whole team.</li>
         <li>Select your station ({k('station')}) to build ships. Open the tech tree ({k('techTree')}) to research upgrades, including station levels that unlock frigates, cruisers and a flagship. The battle carries on while it's open.</li>
@@ -363,23 +530,106 @@ export function HowToPlay() {
 
 // --- Main menu ------------------------------------------------------------------------------------------
 
-export function MainMenu({ sound, victories, onPlay }: { sound: EmpiresSound; victories: number; onPlay: () => void }) {
+export type MenuScreen = 'main' | 'single' | 'multi' | 'conquest'
+export function MainMenu({ sound, victories, onPlay, onConquest, latest, saves = 0, initial = 'main' }: {
+  sound: EmpiresSound
+  victories: number
+  onPlay: () => void
+  /** Galactic conquest: carry on with the latest save, pick one to load, or set up a new one. */
+  onConquest: (how: 'continue' | 'load' | 'new') => void
+  /** The latest save ("name, week 3"), and how many there are. */
+  latest?: string
+  saves?: number
+  initial?: MenuScreen
+}) {
   const [panel, setPanel] = useState<'settings' | 'keys' | 'howto' | null>(null)
+  // The menu goes one level deep: single player or multiplayer, then the modes each one has.
+  const [screen, setScreen] = useState<MenuScreen>(initial)
   const click = (fn: () => void) => () => {
     sound.unlock()
     sound.click()
     fn()
   }
+  // Esc steps back out of a sub-menu.
+  useEffect(() => {
+    if (screen === 'main' || panel) return
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      sound.click()
+      setScreen(screen === 'conquest' ? 'single' : 'main')
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [screen, panel, sound])
+  /** A choice that isn't there yet (not built, or nothing to pick): dimmed, with a tag saying why. */
+  const soon = (label: string, icon: Parameters<typeof Icon>[0]['name'], tip: string, tag = 'Coming soon') => (
+    <button className="ew-menu-btn is-soon" aria-disabled="true" onClick={() => (sound.unlock(), sound.error())} data-tip={tip}>
+      <Icon name={icon} size={20} /> {label}
+      <em className="ew-soon">{tag}</em>
+    </button>
+  )
   return (
     <div className="ew-root ew-deck ew-menu" style={{ backgroundImage: 'url(/games/empires/world/title.webp)' }} onContextMenu={noMenu}>
+      <Tips />
       <div className="ew-menu-col">
         <h1 className="ew-logo">
           Empires <span>at</span> War
         </h1>
         <p className="ew-tagline">A war in the stars, fought one fleet at a time.</p>
-        <Frame className="ew-menu-frame">
-          <button className="ew-menu-btn is-primary" onClick={click(onPlay)}>
-            <Icon name="attack" size={20} /> Skirmish
+        {screen === 'single' && (
+          <Frame className="ew-menu-frame" title="Single player">
+            <button className="ew-menu-btn is-primary" onClick={click(onPlay)} data-tip="One battle against the AI, on a map and with the sides you pick.">
+              <Icon name="attack" size={20} /> Skirmish
+            </button>
+            <button className="ew-menu-btn" onClick={click(() => setScreen('conquest'))} data-tip="A campaign across a galaxy of star systems: take planets, build fleets, and fight for every orbit.">
+              <Icon name="radar" size={20} /> Galactic conquest
+            </button>
+            <button className="ew-menu-btn" onClick={click(() => setScreen('main'))}>
+              <Icon name="back" size={20} /> Back
+            </button>
+          </Frame>
+        )}
+        {screen === 'conquest' && (
+          <Frame className="ew-menu-frame" title="Galactic conquest">
+            {latest ? (
+              <button className="ew-menu-btn is-primary" onClick={click(() => onConquest('continue'))} data-tip={`Carry on with the latest save: ${latest}`}>
+                <Icon name="play" size={20} /> Continue
+                <em className="ew-ghome-sub">{latest}</em>
+              </button>
+            ) : (
+              soon('Continue', 'play', 'No saved campaign yet: start a new game', 'No saves')
+            )}
+            {saves > 0 ? (
+              <button className="ew-menu-btn" onClick={click(() => onConquest('load'))} data-tip={`${saves} saved campaign${saves === 1 ? '' : 's'}: load, rename or delete them`}>
+                <Icon name="keys" size={20} /> Load game
+                <em className="ew-ghome-sub">{saves}</em>
+              </button>
+            ) : (
+              soon('Load game', 'keys', 'No saved campaigns yet', 'No saves')
+            )}
+            <button className={`ew-menu-btn ${latest ? '' : 'is-primary'}`} onClick={click(() => onConquest('new'))} data-tip="Pick a galaxy, its length, your side and the enemy admiral">
+              <Icon name="radar" size={20} /> New game
+            </button>
+            <button className="ew-menu-btn" onClick={click(() => setScreen('single'))}>
+              <Icon name="back" size={20} /> Back
+            </button>
+          </Frame>
+        )}
+        {screen === 'multi' && (
+          <Frame className="ew-menu-frame" title="Multiplayer">
+            {soon('Skirmish', 'attack', 'Battles against other players. Not built yet.')}
+            <button className="ew-menu-btn" onClick={click(() => setScreen('main'))}>
+              <Icon name="back" size={20} /> Back
+            </button>
+          </Frame>
+        )}
+        {screen === 'main' && <Frame className="ew-menu-frame">
+          <button className="ew-menu-btn is-primary" onClick={click(() => setScreen('single'))}>
+            <Icon name="fleet" size={20} /> Single player
+          </button>
+          <button className="ew-menu-btn" onClick={click(() => setScreen('multi'))}>
+            <Icon name="army" size={20} /> Multiplayer
           </button>
           <button className="ew-menu-btn" onClick={click(() => setPanel('settings'))}>
             <Icon name="gear" size={20} /> Settings
@@ -390,7 +640,7 @@ export function MainMenu({ sound, victories, onPlay }: { sound: EmpiresSound; vi
           <button className="ew-menu-btn" onClick={click(() => setPanel('howto'))}>
             <Icon name="help" size={20} /> How to play
           </button>
-        </Frame>
+        </Frame>}
         <p className="ew-muted ew-small">Victories: {victories}</p>
       </div>
       {panel === 'settings' && (
@@ -626,7 +876,7 @@ function MapCard({ m, title, blurb, on, onPick }: { m: MapDef; title: string; bl
       <MapPreview map={m} className="is-thumb" />
       <span className="ew-mapcard-head">
         <strong>{title}</strong>
-        <em title={`${size.dims} units`}>{size.cls}</em>
+        <em data-tip={`${size.dims} units`}>{size.cls}</em>
       </span>
       <span className="ew-mapcard-stats">
         <b>{m.spawns.length} players</b>
@@ -686,7 +936,7 @@ function GenControls({ rules, onChange, onReroll }: { rules: MapRules; onChange:
             onChange={(e) => onChange({ seed: Math.min(MAX_SEED, Math.max(0, Math.floor(Number(e.target.value)) || 0)) })}
           />,
         )}
-        <button className="ew-genroll" onClick={onReroll} title="Roll a new random seed: a different map with the same rules">
+        <button className="ew-genroll" onClick={onReroll} data-tip="Roll a new random seed: a different map with the same rules">
           <Icon name="dice" size={18} /> New seed
         </button>
         <small className="ew-muted">The same seed and rules always build the same map, so a seed can be shared.</small>
@@ -757,6 +1007,7 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
   const act = setup.slots[active]?.kind === 'closed' ? 0 : active
   return (
     <div className="ew-root ew-deck ew-lobby" style={{ backgroundImage: 'url(/games/empires/world/title.webp)' }} onContextMenu={noMenu}>
+      <Tips />
       <header className="ew-lobby-head">
         <button onClick={() => (sound.click(), onBack())}>← Main menu</button>
         <h2>Skirmish</h2>
@@ -778,7 +1029,7 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
                   style={{ background: slotColor(s) }}
                   disabled={s.kind === 'closed'}
                   onClick={() => (sound.click(), setActive(i))}
-                  title="Draw this player's start area on the map"
+                  data-tip="Draw this player's start area on the map"
                   aria-label={`Spawn ${i + 1}: draw its start area`}
                   aria-pressed={i === act}
                 >
@@ -798,7 +1049,7 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
                   <>
                     <div className="ew-seg ew-factionseg" role="group" aria-label="Faction">
                       {(['republic', 'droid'] as FactionId[]).map((f) => (
-                        <button key={f} className={s.faction === f ? 'is-on' : ''} onClick={() => setSlot(i, { faction: f })} title={FACTIONS[f].long} aria-pressed={s.faction === f}>
+                        <button key={f} className={s.faction === f ? 'is-on' : ''} onClick={() => setSlot(i, { faction: f })} data-tip={FACTIONS[f].long} aria-pressed={s.faction === f}>
                           <img src={`/games/empires/world/emblem-${f}.webp`} alt="" />
                           <span>{FACTIONS[f].name}</span>
                         </button>
@@ -807,12 +1058,12 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
                     {s.kind === 'you' ? (
                       <span className="ew-teamtag is-own">Your team</span>
                     ) : (
-                      <button className={`ew-teamtag ${s.team === 0 ? 'is-ally' : 'is-enemy'}`} onClick={() => setSlot(i, { team: s.team === 0 ? 1 : 0 })} title="Click to switch sides">
+                      <button className={`ew-teamtag ${s.team === 0 ? 'is-ally' : 'is-enemy'}`} onClick={() => setSlot(i, { team: s.team === 0 ? 1 : 0 })} data-tip="Click to switch sides">
                         {s.team === 0 ? 'Ally' : 'Enemy'}
                       </button>
                     )}
                     {s.kind === 'ai' ? (
-                      <select value={s.difficulty} onChange={(e) => setSlot(i, { difficulty: e.target.value as Difficulty })} aria-label="Difficulty" title={DIFFICULTY[s.difficulty].blurb}>
+                      <select value={s.difficulty} onChange={(e) => setSlot(i, { difficulty: e.target.value as Difficulty })} aria-label="Difficulty" data-tip={DIFFICULTY[s.difficulty].blurb}>
                         {(Object.keys(DIFFICULTY) as Difficulty[]).map((d) => (
                           <option key={d} value={d}>{DIFFICULTY[d].name}</option>
                         ))}
@@ -843,7 +1094,7 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
         <Frame title={map.name} className="ew-lobby-preview" aside={
             <span className="ew-chips">
               {isGen && (
-                <button className="ew-chip" onClick={() => (sound.click(), setRules({ seed: Math.floor(Math.random() * (MAX_SEED + 1)) }))} title="A different map with the same rules">
+                <button className="ew-chip" onClick={() => (sound.click(), setRules({ seed: Math.floor(Math.random() * (MAX_SEED + 1)) }))} data-tip="A different map with the same rules">
                   <Icon name="dice" size={13} /> New seed
                 </button>
               )}
@@ -901,14 +1152,17 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
 const fmt = (n: number) => Math.floor(n).toLocaleString('en-US')
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
 
-export function Result({ w, me, names, won, onAgain, onExit }: { w: World; me: Owner; names: string[]; won: boolean; onAgain: () => void; onExit: () => void }) {
+export function Result({ w, me, names, won, onAgain, onExit, campaign = false }: { w: World; me: Owner; names: string[]; won: boolean; onAgain: () => void; onExit: () => void; campaign?: boolean }) {
   const order = w.players.map((p, i) => ({ p, i })).sort((a, b) => (a.p.team === w.players[me].team ? 0 : 1) - (b.p.team === w.players[me].team ? 0 : 1))
   return (
     <div className="ew-modal-back">
       <div className={`ew-modal ew-result ${won ? 'is-won' : 'is-lost'}`}>
         <Frame title={won ? 'Victory' : 'Defeat'} aside={<span className="ew-muted ew-small">{clock(w.time)} · {w.map.name}</span>}>
           <h2>{won ? 'Victory' : 'Defeat'}</h2>
-          <p className="ew-muted">{won ? 'Every enemy station is destroyed.' : 'Our side has no stations left.'}</p>
+          <p className="ew-muted">
+            {campaign ? (won ? 'The enemy is destroyed or driven off. Our survivors hold the orbit.' : 'Our fleet is gone from this battle. Ships that jumped out are back in the galaxy.')
+              : won ? 'Every enemy station is destroyed.' : 'Our side has no stations left.'}
+          </p>
           <table>
             <thead>
               <tr>
@@ -935,8 +1189,14 @@ export function Result({ w, me, names, won, onAgain, onExit }: { w: World; me: O
             </tbody>
           </table>
           <div className="ew-menu-list is-row">
-            <button className="ew-menu-btn is-primary" onClick={onAgain}>Fight again</button>
-            <button className="ew-menu-btn" onClick={onExit}>Back to the lobby</button>
+            {campaign ? (
+              <button className="ew-menu-btn is-primary" onClick={onExit}>Return to the galaxy</button>
+            ) : (
+              <>
+                <button className="ew-menu-btn is-primary" onClick={onAgain}>Fight again</button>
+                <button className="ew-menu-btn" onClick={onExit}>Back to the lobby</button>
+              </>
+            )}
           </div>
         </Frame>
       </div>

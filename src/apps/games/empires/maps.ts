@@ -31,6 +31,8 @@ export type MapDef = {
   nebulas: Nebula[]
   /** Derelict hulks: park ships next to one to strip it for credits. */
   wrecks: Wreckage[]
+  /** A fleet battle's planet, drawn far behind the battle (kind names its art in planets/). */
+  planet?: { kind: string; x: number; y: number; r: number }
 }
 export type Wreckage = Pt & { value: number }
 

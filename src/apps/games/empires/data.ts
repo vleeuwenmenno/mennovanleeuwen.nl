@@ -4,11 +4,17 @@
 // Sprites face up (nose at the top). Points on a ship (hardpoints, engine glows) are given on a
 // 0-10 grid over the trimmed sprite, x from the left edge and y from the nose, which is how they
 // were measured off the art.
+//
+// Frigates and everything bigger are clean hulls with empty sockets: every gun, shield generator,
+// hangar and station module is a hardpoint drawn as its own sprite (public/games/empires/modules),
+// so what a ship shows is exactly what it has. Engines stay part of the hull.
 
 export type FactionId = 'republic' | 'droid'
 export type Tier = 'fighter' | 'gunship' | 'frigate' | 'cruiser' | 'capital' | 'station' | 'mine' | 'defense'
 export type WeaponKind = 'laser' | 'flak' | 'turbo' | 'missile' | 'ion'
-export type HardpointKind = 'turret' | 'shield' | 'engine' | 'hangar'
+export type HardpointKind = 'turret' | 'shield' | 'engine' | 'hangar' | 'refinery' | 'dock' | 'sensor' | 'drill'
+/** A module's sprite: modules/<faction>-<art>.webp. */
+export type ModuleArt = 'turbo' | 'flak' | 'ion' | 'shield' | 'hangar' | 'refinery' | 'dock' | 'sensor' | 'drill'
 export type AbilityId = 'flakBarrage' | 'repairSwarm' | 'shieldBoost' | 'tractor' | 'broadside' | 'launchSwarm'
 
 export type Weapon = {
@@ -23,7 +29,12 @@ export type Weapon = {
   arc?: number
 }
 
-export type Hardpoint = { kind: HardpointKind; x: number; y: number; hp: number; weapon?: Weapon }
+/**
+ * A part of a ship that can be shot off. `art` is the module sprite drawn on it and `s` its size as
+ * a share of the ship's longest side; engines have no art of their own. `key` names a station
+ * module, so it keeps its damage while the station grows around it.
+ */
+export type Hardpoint = { kind: HardpointKind; x: number; y: number; hp: number; weapon?: Weapon; art?: ModuleArt; s?: number; key?: string }
 
 export type UnitType = {
   id: string
@@ -129,8 +140,220 @@ const torpedo = (damage: number, range = 280, cooldown = 7): Weapon => ({ kind: 
 const ion = (damage: number, range = 620, cooldown = 2.4): Weapon => ({ kind: 'ion', damage, range, cooldown, burst: 1 })
 
 const P = (kind: HardpointKind, x: number, y: number, hp: number, weapon?: Weapon): Hardpoint => ({ kind, x, y, hp, weapon })
+/** A module with its own sprite, `s` as a share of the ship's longest side. */
+const M = (kind: HardpointKind, art: ModuleArt, x: number, y: number, s: number, hp: number, weapon?: Weapon): Hardpoint => ({ kind, art, x, y, s, hp, weapon })
+const gun = (art: 'turbo' | 'flak' | 'ion', x: number, y: number, s: number, hp: number, weapon: Weapon) => M('turret', art, x, y, s, hp, weapon)
 
-export const UNITS: UnitType[] = [
+// --- Toughness ----------------------------------------------------------------------------------------
+
+/** Everything is this much tougher than the numbers written below: hull, shields and every module.
+ * One dial for how long fights last; damage and shield recharge are left as they are. */
+export const TOUGHNESS = 1.15
+const toughen = (t: UnitType): UnitType => ({
+  ...t,
+  hull: Math.round(t.hull * TOUGHNESS),
+  shield: Math.round(t.shield * TOUGHNESS),
+  hardpoints: t.hardpoints.map((h) => ({ ...h, hp: Math.round(h.hp * TOUGHNESS) })),
+})
+
+// --- Platforms on the ore ---------------------------------------------------------------------------
+
+/**
+ * The sockets on a faction's platform hulls, on the 0-10 grid. A defense deck has a big socket in
+ * the middle, four at its corners and two small ones at its sides; a mining deck two drill wells
+ * and a small socket in the middle.
+ */
+const DECKS: Record<FactionId, { centre: [number, number]; corners: [number, number][]; sides: [number, number][]; wells: [number, number][]; core: [number, number]; pd: [number, number]; pad: [number, number] }> = {
+  republic: { centre: [5, 5], corners: [[2.5, 2.6], [7.5, 2.6], [2.5, 7.4], [7.5, 7.4]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.9, 5.2], [8.1, 5.2]], core: [5, 5.2], pd: [5, 8.3], pad: [5, 1.5] },
+  droid: { centre: [5, 5.1], corners: [[2.6, 3], [7.4, 3], [2.6, 7.3], [7.4, 7.3]], sides: [[0.9, 5], [9.1, 5]], wells: [[1.8, 5], [8.2, 5]], core: [5, 5], pd: [5, 7.9], pad: [5, 1.6] },
+}
+/**
+ * A mining platform's point defence: one small flak turret, enough that one squadron of the other
+ * side's fighters attacking it has about an even chance; nothing a warship would notice. Tuned per
+ * faction in headless duels, because the two squadrons take flak very differently: five fragile
+ * droid fighters fall to it far faster than three shielded Republic ones.
+ */
+export const MINE_FLAK: Record<FactionId, Weapon> = { republic: flak(1.1, 320, 0.4), droid: flak(1.87, 320, 0.4) }
+
+/** Mining platforms: two drill rigs and an ore silo, and a small point-defence turret. Each drill
+ * earns 40% of the platform's income and the silo 20%; shot-off parts earn nothing until repaired.
+ * They come without shields: the Shield generator upgrade fits a dome on the landing pad. */
+function minePlatform(faction: FactionId, shielded = false): UnitType {
+  const d = DECKS[faction]
+  return {
+    id: faction === 'republic' ? 'r-mine' : 'd-mine', faction, tier: 'mine', name: faction === 'republic' ? 'Mining platform' : 'Ore harvester',
+    blurb: 'Drills an ore asteroid for credits: two drill rigs and an ore silo, each worth part of the income while it works, and a small flak turret that can hold off a fighter squadron.',
+    sprite: `mine-${faction}`, aspect: faction === 'republic' ? 1.051 : 1.092, size: 120, hull: 1000, shield: shielded ? 600 : 0, regen: shielded ? 10 : 0, speed: 0, turn: 0, pop: 0, cost: 500, build: 24, level: 1, squad: 1, sensor: 600,
+    weapons: [],
+    hardpoints: [
+      { ...M('drill', 'drill', d.wells[0][0], d.wells[0][1], 0.3, 400), key: 'drill1' },
+      { ...M('drill', 'drill', d.wells[1][0], d.wells[1][1], 0.3, 400), key: 'drill2' },
+      { ...M('refinery', 'refinery', d.core[0], d.core[1], 0.1, 300), key: 'silo' },
+      { ...gun('flak', d.pd[0], d.pd[1], 0.11, 250, MINE_FLAK[faction]), key: 'pd' },
+      ...(shielded ? [{ ...M('shield', 'shield', d.pad[0], d.pad[1], 0.17, 350), key: 'shield' }] : []),
+    ],
+    engines: [],
+  }
+}
+
+/** The three defense platforms, each the same deck with different guns on it: flak against
+ * fighters, heavy cannons against warships, or a little of both for a little less. */
+type DefenseKind = 'balanced' | 'flak' | 'gun'
+function defensePlatform(faction: FactionId, kind: DefenseKind): UnitType {
+  const d = DECKS[faction]
+  const r = faction === 'republic'
+  const [c, tl, tr, bl, br] = [d.centre, ...d.corners]
+  const base = {
+    faction, tier: 'defense' as const, sprite: `defense-${faction}`, aspect: r ? 1.002 : 1.01, size: 130, speed: 0, turn: 0, pop: 0, level: 1, squad: 1, sensor: 1000, weapons: [], engines: [] as [number, number][],
+  }
+  const turboAt = (p: [number, number], big: boolean, w: Weapon) => gun('turbo', p[0], p[1], big ? 0.33 : 0.17, big ? 650 : 450, w)
+  const flakAt = (p: [number, number], small: boolean, w: Weapon) => gun('flak', p[0], p[1], small ? 0.09 : 0.125, small ? 220 : 300, w)
+  const shieldAt = (p: [number, number], big: boolean) => M('shield', 'shield', p[0], p[1], big ? 0.2 : 0.125, big ? 700 : 450)
+  if (kind === 'flak')
+    return {
+      ...base, id: r ? 'r-defense-flak' : 'd-defense-flak', name: 'Flak platform', blurb: 'Six point-defence turrets that shred fighters and bombers. Barely scratches a warship. No income.',
+      hull: r ? 1800 : 2000, shield: r ? 1100 : 800, regen: r ? 16 : 12, cost: 650, build: 30,
+      hardpoints: [shieldAt(c, true), ...[tl, tr, bl, br].map((p) => flakAt(p, false, flak(7, 420, 0.3))), ...d.sides.map((p) => flakAt(p, true, flak(6, 400, 0.35)))],
+      role: { role: 'Anti-fighter', strong: ['fighters', 'bombers', 'gunships'], weak: ['frigates', 'cruisers', 'flagships'] },
+    }
+  if (kind === 'gun')
+    return {
+      ...base, id: r ? 'r-defense-gun' : 'd-defense-gun', name: 'Gun platform', blurb: 'A heavy turbolaser and two lighter ones that outrange warships. Fighters slip under its guns. No income.',
+      hull: r ? 2400 : 2700, shield: r ? 1300 : 1000, regen: r ? 18 : 14, cost: 700, build: 32,
+      hardpoints: [turboAt(c, true, turbo(55, 850, 2.2, 2)), turboAt(bl, false, turbo(30, 760, 2, 2)), turboAt(br, false, turbo(30, 760, 2, 2)), shieldAt(tl, false), shieldAt(tr, false)],
+      role: { role: 'Anti-warship', strong: ['frigates', 'cruisers', 'flagships'], weak: ['fighters', 'bombers'] },
+    }
+  return {
+    ...base, id: r ? 'r-defense' : 'd-defense', name: 'Defense platform', blurb: 'A turbolaser for warships and flak for fighters: covers both, a little weaker than the specialists. No income.',
+    hull: r ? 2000 : 2300, shield: r ? 1200 : 900, regen: r ? 18 : 14, cost: 650, build: 30,
+    hardpoints: [turboAt(c, true, turbo(30, 720, 2, 2)), flakAt(tl, false, flak(7, 380, 0.35)), flakAt(tr, false, flak(7, 380, 0.35)), shieldAt(bl, false), shieldAt(br, false)],
+  }
+}
+
+// --- Stations ---------------------------------------------------------------------------------------
+
+/**
+ * A station grows with its level: a small core at level 1, a hub at 2, arms at 3 and the full
+ * structure at 4, each stage its own sprite (ships/<faction>-station-<level>.webp). All four were
+ * cut from one picture, so they share a frame: `box` is where a stage's sprite sits in it and
+ * modules are placed in its pixels. A module appears at its `level`, or once its `tech` is
+ * researched, and keeps its place (and damage) as the station grows around it.
+ */
+type StationModule = { key: string; kind: HardpointKind; art: ModuleArt; x: number; y: number; s: number; hp: number; weapon?: Weapon; level?: number; tech?: string }
+type StationPlan = {
+  id: string
+  name: string
+  blurb: string
+  /** World units per frame pixel. */
+  perPx: number
+  regen: number
+  stages: { box: [number, number, number, number]; hull: number; shield: number }[]
+  modules: StationModule[]
+}
+
+const stationGun = (art: 'turbo' | 'flak') => (art === 'turbo' ? turbo(48, 800) : flak(7, 380, 0.35))
+const sGun = (key: string, art: 'turbo' | 'flak', x: number, y: number, level: number): StationModule =>
+  ({ key, kind: 'turret', art, x, y, s: art === 'turbo' ? 110 : 90, hp: art === 'turbo' ? 900 : 500, weapon: stationGun(art), level })
+const sPart = (key: string, kind: HardpointKind, art: ModuleArt, x: number, y: number, s: number, hp: number, at: { level?: number; tech?: string }): StationModule => ({ key, kind, art, x, y, s, hp, ...at })
+
+export const STATIONS: Record<FactionId, StationPlan> = {
+  republic: {
+    id: 'r-station',
+    name: 'Bastion station',
+    blurb: 'Your shipyard and command post. It starts as a small core and grows with every upgrade. Lose it and the battle is lost.',
+    perPx: 460 / 1196,
+    regen: 22,
+    stages: [
+      { box: [419, 417, 834, 833], hull: 6000, shield: 0 },
+      { box: [278, 276, 975, 974], hull: 7000, shield: 2400 },
+      { box: [135, 60, 1118, 1190], hull: 8000, shield: 3600 },
+      { box: [44, 27, 1209, 1223], hull: 9000, shield: 4500 },
+    ],
+    modules: [
+      sGun('t1', 'turbo', 738, 720, 1),
+      sPart('h1', 'hangar', 'hangar', 512, 720, 120, 1200, { level: 1 }),
+      sPart('sensor', 'sensor', 'sensor', 512, 465, 100, 700, { tech: 'r-st-guns' }),
+      sPart('refinery', 'refinery', 'refinery', 738, 465, 110, 700, { tech: 'r-st-ore' }),
+      sPart('s1', 'shield', 'shield', 626, 300, 100, 1100, { level: 2 }),
+      sGun('t2', 'turbo', 330, 615, 2),
+      sGun('f1', 'flak', 925, 615, 2),
+      sPart('dock', 'dock', 'dock', 626, 915, 120, 700, { level: 2, tech: 'r-st-dock' }),
+      sGun('t3', 'turbo', 552, 117, 3),
+      sGun('t4', 'turbo', 700, 1083, 3),
+      sPart('s2', 'shield', 'shield', 700, 117, 95, 1100, { level: 3 }),
+      sGun('f2', 'flak', 552, 1083, 3),
+      sGun('t5', 'turbo', 242, 352, 4),
+      sGun('t6', 'turbo', 1008, 352, 4),
+      sGun('t7', 'turbo', 242, 858, 4),
+      sGun('t8', 'turbo', 1012, 858, 4),
+      sGun('f3', 'flak', 368, 224, 4),
+      sGun('f4', 'flak', 884, 224, 4),
+    ],
+  },
+  droid: {
+    id: 'd-station',
+    name: 'Foundry station',
+    blurb: 'The droid foundry. It starts as a small core and grows with every upgrade. Lose it and the battle is lost.',
+    perPx: 460 / 1148,
+    regen: 20,
+    stages: [
+      { box: [410, 308, 846, 876], hull: 6400, shield: 0 },
+      { box: [209, 111, 1047, 1073], hull: 7500, shield: 2100 },
+      { box: [104, 15, 1152, 1169], hull: 8600, shield: 3200 },
+      { box: [88, 18, 1168, 1166], hull: 9600, shield: 4000 },
+    ],
+    modules: [
+      sGun('t1', 'turbo', 764, 701, 1),
+      sPart('h1', 'hangar', 'hangar', 483, 701, 120, 1200, { level: 1 }),
+      sPart('sensor', 'sensor', 'sensor', 628, 457, 100, 700, { tech: 'd-st-guns' }),
+      sPart('refinery', 'refinery', 'refinery', 628, 781, 110, 700, { tech: 'd-st-ore' }),
+      sPart('s1', 'shield', 'shield', 628, 592, 110, 1100, { level: 2 }),
+      sGun('t2', 'turbo', 477, 558, 2),
+      sGun('f1', 'flak', 769, 558, 2),
+      sPart('dock', 'dock', 'dock', 628, 872, 120, 700, { level: 2, tech: 'd-st-dock' }),
+      sGun('t3', 'turbo', 155, 370, 3),
+      sGun('t4', 'turbo', 1100, 370, 3),
+      sPart('s2', 'shield', 'shield', 628, 1055, 95, 1100, { level: 3 }),
+      sGun('f2', 'flak', 628, 135, 3),
+      sGun('t5', 'turbo', 148, 825, 4),
+      sGun('t6', 'turbo', 1110, 825, 4),
+      sGun('t7', 'turbo', 398, 993, 4),
+      sGun('t8', 'turbo', 855, 993, 4),
+      sGun('f3', 'flak', 400, 240, 4),
+      sGun('f4', 'flak', 852, 240, 4),
+    ],
+  },
+}
+
+const stationCache = new Map<string, UnitType>()
+/** A station as it stands at `level` with `techs` researched: its stage's sprite, size and hull, and
+ * the modules built so far. The same id at every stage, so research and orders still find it. */
+export function stationType(faction: FactionId, level: number, techs: readonly string[]): UnitType {
+  const plan = STATIONS[faction]
+  const lv = Math.max(1, Math.min(plan.stages.length, level))
+  const mods = plan.modules.filter((m) => (m.level ?? 1) <= lv && (!m.tech || techs.includes(m.tech)))
+  const id = `${faction}:${lv}:${mods.map((m) => m.key).join(',')}`
+  const hit = stationCache.get(id)
+  if (hit) return hit
+  const st = plan.stages[lv - 1]
+  const [x0, y0, x1, y1] = st.box
+  const w = x1 - x0
+  const h = y1 - y0
+  const long = Math.max(w, h)
+  const t: UnitType = {
+    id: plan.id, faction, tier: 'station', name: plan.name, blurb: plan.blurb, sprite: `${faction}-station-${lv}`, aspect: w / h, size: long * plan.perPx,
+    hull: st.hull, shield: st.shield, regen: plan.regen, speed: 0, turn: 0, pop: 0, cost: 0, build: 0, level: 0, squad: 1, sensor: 1600,
+    weapons: [],
+    hardpoints: mods.map((m) => ({ kind: m.kind, art: m.art, key: m.key, hp: m.hp, weapon: m.weapon, x: ((m.x - x0) / w) * 10, y: ((m.y - y0) / h) * 10, s: m.s / long })),
+    engines: [],
+  }
+  const tough = toughen(t)
+  stationCache.set(id, tough)
+  return tough
+}
+
+/** Every unit as written, before TOUGHNESS. */
+const WRITTEN: UnitType[] = [
   // --- Republic ---------------------------------------------------------------------------------
   {
     id: 'r-fighter', faction: 'republic', tier: 'fighter', name: 'Lance interceptor', blurb: 'Clone fighters, three to a squadron. Lasers for dogfights, proton torpedoes that slip through capital shields.',
@@ -157,48 +380,42 @@ export const UNITS: UnitType[] = [
   },
   {
     id: 'r-frigate', faction: 'republic', tier: 'frigate', name: 'Warden frigate', blurb: 'Escort bristling with point defence. Fighters melt around it.',
-    sprite: 'republic-frigate', aspect: 0.652, size: 130, hull: 950, shield: 650, regen: 14, speed: 76, turn: 1.0, pop: 3, cost: 820, build: 22, level: 2, squad: 1, sensor: 1000,
-    weapons: [flak(6, 340, 0.3, 2), flak(6, 340, 0.3, 2), turbo(28, 560, 2.2, 1)], hardpoints: [], engines: [[3.9, 9.7], [5, 9.8], [6.1, 9.7]],
+    sprite: 'republic-frigate', aspect: 0.671, size: 130, hull: 950, shield: 650, regen: 14, speed: 76, turn: 1.0, pop: 3, cost: 820, build: 22, level: 2, squad: 1, sensor: 1000,
+    weapons: [],
+    hardpoints: [
+      gun('flak', 3.51, 3.11, 0.075, 160, flak(6, 340, 0.3)), gun('flak', 6.49, 3.11, 0.075, 160, flak(6, 340, 0.3)), gun('flak', 2.73, 4.89, 0.075, 160, flak(6, 340, 0.3)),
+      gun('flak', 7.27, 4.89, 0.075, 160, flak(6, 340, 0.3)), gun('turbo', 2.48, 7.26, 0.105, 300, turbo(28, 560, 2.2, 1)), M('shield', 'shield', 7.52, 7.26, 0.098, 320),
+    ],
+    engines: [[3.64, 9.44], [5, 9.5], [6.42, 9.44]],
     ability: 'flakBarrage',
   },
   {
     id: 'r-cruiser', faction: 'republic', tier: 'cruiser', name: 'Paladin cruiser', blurb: 'Line warship with heavy turbolasers. Knock out its shield bulbs first.',
-    sprite: 'republic-cruiser', aspect: 0.375, size: 220, hull: 2300, shield: 1500, regen: 24, speed: 52, turn: 0.6, pop: 5, cost: 1650, build: 34, level: 3, squad: 1, sensor: 1200,
-    weapons: [flak(6, 320, 0.4)],
-    hardpoints: [P('turret', 5, 2.6, 520, turbo(44)), P('turret', 5, 4.5, 520, turbo(44)), P('shield', 1, 5.6, 460), P('shield', 9, 5.6, 460), P('engine', 2.2, 9.3, 420), P('engine', 7.6, 9.3, 420)],
-    engines: [[2.2, 9.5], [7.6, 9.5]], ability: 'shieldBoost',
+    sprite: 'republic-cruiser', aspect: 0.376, size: 220, hull: 2300, shield: 1500, regen: 24, speed: 52, turn: 0.6, pop: 5, cost: 1650, build: 34, level: 3, squad: 1, sensor: 1200,
+    weapons: [],
+    hardpoints: [
+      gun('turbo', 5, 1.8, 0.083, 300, turbo(22)), gun('turbo', 5, 2.7, 0.083, 300, turbo(22)), gun('turbo', 5, 3.4, 0.083, 300, turbo(22)), gun('turbo', 5, 4.4, 0.083, 300, turbo(22)),
+      gun('flak', 5, 5.4, 0.068, 200, flak(6, 320, 0.8)), gun('flak', 5, 6.9, 0.068, 200, flak(6, 320, 0.8)),
+      M('shield', 'shield', 1.7, 5.6, 0.128, 460), M('shield', 'shield', 8.3, 5.6, 0.128, 460), P('engine', 2.46, 9.4, 420), P('engine', 7.54, 9.4, 420),
+    ],
+    engines: [[2.46, 9.6], [7.54, 9.6]], ability: 'shieldBoost',
   },
   {
     id: 'r-capital', faction: 'republic', tier: 'capital', name: 'Sovereign dreadnought', blurb: 'Dagger-hulled flagship. Turbolaser batteries and its own fighter wing.',
-    sprite: 'republic-capital', aspect: 0.627, size: 380, hull: 5400, shield: 3600, regen: 40, speed: 34, turn: 0.33, pop: 10, cost: 4200, build: 70, level: 4, squad: 1, sensor: 1500,
-    weapons: [flak(6, 340, 0.45), flak(6, 340, 0.45)],
+    sprite: 'republic-capital', aspect: 0.629, size: 380, hull: 5400, shield: 3600, regen: 40, speed: 34, turn: 0.33, pop: 10, cost: 4200, build: 70, level: 4, squad: 1, sensor: 1500,
+    weapons: [],
     hardpoints: [
-      P('turret', 3.5, 3.6, 720, turbo(58, 760)), P('turret', 6.4, 3.6, 720, turbo(58, 760)), P('turret', 3.1, 5.4, 720, turbo(58, 760)), P('turret', 6.8, 5.4, 720, turbo(58, 760)),
-      P('shield', 2.1, 8, 820), P('shield', 7.9, 8, 820), P('engine', 5, 9.2, 950), P('hangar', 5, 4.2, 760),
+      gun('turbo', 3.65, 3.95, 0.09, 720, turbo(58, 760)), gun('turbo', 6.35, 3.95, 0.09, 720, turbo(58, 760)), gun('turbo', 3.25, 5.7, 0.09, 720, turbo(58, 760)), gun('turbo', 6.75, 5.7, 0.09, 720, turbo(58, 760)),
+      gun('flak', 3.9, 3.3, 0.068, 300, flak(6, 340, 0.9)), gun('flak', 6.1, 3.3, 0.068, 300, flak(6, 340, 0.9)), gun('flak', 3.4, 4.8, 0.068, 300, flak(6, 340, 0.9)), gun('flak', 6.6, 4.8, 0.068, 300, flak(6, 340, 0.9)),
+      M('shield', 'shield', 2.75, 8.15, 0.15, 820), M('shield', 'shield', 7.25, 8.15, 0.15, 820), P('engine', 5, 9.2, 950), M('hangar', 'hangar', 5, 4.4, 0.135, 760),
     ],
-    engines: [[2.6, 9.45], [3.6, 9.55], [4.9, 9.65], [6.1, 9.55], [7.2, 9.45]], ability: 'broadside', carrier: { unit: 'r-fighter', every: 28, max: 2 },
+    engines: [[2.69, 9.44], [3.75, 9.55], [4.95, 9.72], [6.22, 9.55], [7.28, 9.44]], ability: 'broadside', carrier: { unit: 'r-fighter', every: 28, max: 2 },
   },
-  {
-    id: 'r-station', faction: 'republic', tier: 'station', name: 'Bastion station', blurb: 'Your shipyard and command post. Lose it and the battle is lost.',
-    sprite: 'republic-station', aspect: 0.97, size: 440, hull: 7200, shield: 4500, regen: 22, speed: 0, turn: 0, pop: 0, cost: 0, build: 0, level: 0, squad: 1, sensor: 1600,
-    weapons: [flak(7, 380, 0.3, 2), flak(7, 380, 0.3, 2)],
-    hardpoints: [
-      P('turret', 2.6, 1.5, 900, turbo(48, 800)), P('turret', 7.4, 1.5, 900, turbo(48, 800)), P('turret', 0.9, 4.2, 900, turbo(48, 800)),
-      P('turret', 9.1, 4.2, 900, turbo(48, 800)), P('turret', 2.6, 8.2, 900, turbo(48, 800)), P('turret', 7.4, 8.2, 900, turbo(48, 800)),
-      P('shield', 4, 3.7, 1100), P('shield', 6, 5.9, 1100), P('hangar', 8.9, 5, 1200),
-    ],
-    engines: [],
-  },
-  {
-    id: 'r-mine', faction: 'republic', tier: 'mine', name: 'Mining platform', blurb: 'Drills an ore asteroid for credits.',
-    sprite: 'mine-republic', aspect: 0.953, size: 120, hull: 1000, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, cost: 500, build: 24, level: 1, squad: 1, sensor: 600,
-    weapons: [], hardpoints: [], engines: [],
-  },
-  {
-    id: 'r-defense', faction: 'republic', tier: 'defense', name: 'Defense platform', blurb: 'A gun emplacement on the ore: turbolasers for warships, flak for fighters. No income.',
-    sprite: 'defense-republic', aspect: 0.969, size: 130, hull: 2000, shield: 1200, regen: 18, speed: 0, turn: 0, pop: 0, cost: 650, build: 30, level: 1, squad: 1, sensor: 1000,
-    weapons: [turbo(32, 720, 2, 2), flak(7, 380, 0.3, 2)], hardpoints: [], engines: [],
-  },
+  stationType('republic', 1, []),
+  minePlatform('republic'),
+  defensePlatform('republic', 'balanced'),
+  defensePlatform('republic', 'flak'),
+  defensePlatform('republic', 'gun'),
 
   // --- Droid Confederacy ------------------------------------------------------------------------
   {
@@ -219,55 +436,56 @@ export const UNITS: UnitType[] = [
   },
   {
     id: 'd-ion', faction: 'droid', tier: 'frigate', kind: 'ion', name: 'Disruptor frigate', blurb: 'One huge ion cannon that tears down shields in a few shots, leaving the hull open to everything else. Barely scratches bare armour.',
-    sprite: 'droid-ion', aspect: 0.435, size: 140, hull: 900, shield: 380, regen: 9, speed: 70, turn: 0.95, pop: 3, cost: 780, build: 22, level: 2, squad: 1, sensor: 1000,
-    weapons: [ion(70), flak(5, 300, 0.4)], hardpoints: [], engines: [[2.8, 9.5], [7.2, 9.5]],
+    sprite: 'droid-ion', aspect: 0.227, size: 140, hull: 900, shield: 380, regen: 9, speed: 70, turn: 0.95, pop: 3, cost: 780, build: 22, level: 2, squad: 1, sensor: 1000,
+    weapons: [],
+    hardpoints: [gun('ion', 5, 2.4, 0.165, 320, ion(70)), M('shield', 'shield', 5, 4.2, 0.105, 280), gun('flak', 5, 6.0, 0.09, 160, flak(5, 300, 0.4))],
+    engines: [[2.35, 9.33], [7.5, 9.33]],
     role: { role: 'Shield breaker', strong: ['shielded warships', 'stations'], weak: ['fighters', 'unshielded ships'] },
   },
   {
     id: 'd-frigate', faction: 'droid', tier: 'frigate', name: 'Scarab frigate', blurb: 'Armoured shell, prong cannons and repair droids.',
-    sprite: 'droid-frigate', aspect: 0.493, size: 135, hull: 1150, shield: 450, regen: 10, speed: 72, turn: 1.0, pop: 3, cost: 760, build: 21, level: 2, squad: 1, sensor: 950,
-    weapons: [flak(6, 320, 0.33, 2), turbo(20, 520, 1.4, 1), turbo(20, 520, 1.4, 1)], hardpoints: [], engines: [[3.9, 9.6], [5, 9.7], [6.1, 9.6]],
+    sprite: 'droid-frigate', aspect: 0.422, size: 135, hull: 1150, shield: 450, regen: 10, speed: 72, turn: 1.0, pop: 3, cost: 760, build: 21, level: 2, squad: 1, sensor: 950,
+    weapons: [],
+    hardpoints: [
+      gun('turbo', 3.8, 1.3, 0.09, 260, turbo(20, 520, 1.4, 1)), gun('turbo', 6.2, 1.3, 0.09, 260, turbo(20, 520, 1.4, 1)), M('shield', 'shield', 5, 2.65, 0.09, 300),
+      gun('flak', 3.04, 6.73, 0.075, 160, flak(6, 320, 0.33)), gun('flak', 6.96, 6.73, 0.075, 160, flak(6, 320, 0.33)),
+    ],
+    engines: [[2.84, 9.39], [4.95, 9.6], [7.0, 9.39]],
     ability: 'repairSwarm',
   },
   {
     id: 'd-cruiser', faction: 'droid', tier: 'cruiser', name: 'Manta cruiser', blurb: 'Wide-winged gunline with prong cannons and a tractor projector that pins ships in place.',
-    sprite: 'droid-cruiser', aspect: 1.542, size: 260, hull: 2700, shield: 1100, regen: 18, speed: 49, turn: 0.55, pop: 5, cost: 1550, build: 33, level: 3, squad: 1, sensor: 1200,
-    weapons: [turbo(12, 480, 1.2, 1), turbo(12, 480, 1.2, 1)],
-    hardpoints: [P('turret', 1, 8.1, 560, turbo(40)), P('turret', 9, 8.1, 560, turbo(40)), P('shield', 2.9, 4.9, 440), P('shield', 7.1, 4.9, 440), P('engine', 4.5, 9.2, 420), P('engine', 5.5, 9.2, 420)],
-    engines: [[4.5, 9.45], [5.5, 9.45]], ability: 'tractor',
+    sprite: 'droid-cruiser', aspect: 1.508, size: 260, hull: 2700, shield: 1100, regen: 18, speed: 49, turn: 0.55, pop: 5, cost: 1550, build: 33, level: 3, squad: 1, sensor: 1200,
+    weapons: [],
+    hardpoints: [
+      gun('turbo', 0.83, 6.45, 0.09, 560, turbo(40)), gun('turbo', 9.17, 6.45, 0.09, 560, turbo(40)), gun('flak', 2.33, 3.94, 0.075, 220, turbo(12, 480, 1.2, 1)), gun('flak', 7.67, 3.94, 0.075, 220, turbo(12, 480, 1.2, 1)),
+      M('shield', 'shield', 1.58, 5.03, 0.083, 440), M('shield', 'shield', 8.42, 5.03, 0.083, 440), P('engine', 4.47, 9.3, 420), P('engine', 5.52, 9.3, 420),
+    ],
+    engines: [[4.47, 9.55], [5.52, 9.55]], ability: 'tractor',
   },
   {
     id: 'd-capital', faction: 'droid', tier: 'capital', name: 'Hive carrier', blurb: 'A flying droid factory. Its hangar arms never stop launching.',
-    sprite: 'droid-capital', aspect: 0.764, size: 380, hull: 6200, shield: 2800, regen: 32, speed: 31, turn: 0.32, pop: 10, cost: 4000, build: 68, level: 4, squad: 1, sensor: 1500,
-    weapons: [flak(6, 340, 0.45), flak(6, 340, 0.45)],
+    sprite: 'droid-capital', aspect: 0.742, size: 380, hull: 6200, shield: 2800, regen: 32, speed: 31, turn: 0.32, pop: 10, cost: 4000, build: 68, level: 4, squad: 1, sensor: 1500,
+    weapons: [],
     hardpoints: [
-      P('turret', 4.1, 6.3, 680, turbo(52, 720)), P('turret', 5.9, 6.3, 680, turbo(52, 720)), P('turret', 4.2, 7.6, 680, turbo(52, 720)), P('turret', 5.8, 7.6, 680, turbo(52, 720)),
-      P('shield', 3.3, 4.9, 760), P('shield', 6.7, 4.9, 760), P('engine', 5, 9.1, 950), P('hangar', 1.7, 3.5, 720), P('hangar', 8.3, 3.5, 720),
+      gun('turbo', 4.12, 5.17, 0.09, 680, turbo(52, 720)), gun('turbo', 5.88, 5.17, 0.09, 680, turbo(52, 720)), gun('turbo', 4.12, 6.72, 0.09, 680, turbo(52, 720)), gun('turbo', 5.88, 6.72, 0.09, 680, turbo(52, 720)),
+      gun('flak', 2.72, 1.31, 0.068, 280, flak(6, 340, 0.9)), gun('flak', 7.28, 1.31, 0.068, 280, flak(6, 340, 0.9)), gun('flak', 1.25, 3.33, 0.068, 280, flak(6, 340, 0.9)), gun('flak', 8.75, 3.33, 0.068, 280, flak(6, 340, 0.9)),
+      M('shield', 'shield', 3.97, 4.33, 0.098, 760), M('shield', 'shield', 6.03, 4.33, 0.098, 760), P('engine', 5, 9.1, 950), M('hangar', 'hangar', 3.0, 2.9, 0.135, 720), M('hangar', 'hangar', 7.0, 2.9, 0.135, 720),
     ],
-    engines: [[3.6, 9.2], [4.4, 9.6], [5.6, 9.6], [6.4, 9.2]], ability: 'launchSwarm', carrier: { unit: 'd-fighter', every: 20, max: 3 },
+    engines: [[3.67, 9.44], [4.52, 9.72], [5.43, 9.72], [6.31, 9.44]], ability: 'launchSwarm', carrier: { unit: 'd-fighter', every: 20, max: 3 },
   },
-  {
-    id: 'd-station', faction: 'droid', tier: 'station', name: 'Foundry station', blurb: 'The droid foundry. Lose it and the battle is lost.',
-    sprite: 'droid-station', aspect: 1.03, size: 440, hull: 7700, shield: 4000, regen: 20, speed: 0, turn: 0, pop: 0, cost: 0, build: 0, level: 0, squad: 1, sensor: 1600,
-    weapons: [flak(7, 380, 0.3, 2), flak(7, 380, 0.3, 2)],
-    hardpoints: [
-      P('turret', 0.6, 2.8, 900, turbo(48, 800)), P('turret', 9.4, 2.8, 900, turbo(48, 800)), P('turret', 0.6, 7.2, 900, turbo(48, 800)),
-      P('turret', 9.4, 7.2, 900, turbo(48, 800)), P('turret', 5, 0.6, 900, turbo(48, 800)), P('turret', 5, 9.4, 900, turbo(48, 800)),
-      P('shield', 3.3, 3.5, 1100), P('shield', 6.7, 6.5, 1100), P('hangar', 8, 5.2, 1200),
-    ],
-    engines: [],
-  },
-  {
-    id: 'd-mine', faction: 'droid', tier: 'mine', name: 'Ore harvester', blurb: 'Drills an ore asteroid for credits.',
-    sprite: 'mine-droid', aspect: 1.026, size: 120, hull: 1000, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, cost: 500, build: 24, level: 1, squad: 1, sensor: 600,
-    weapons: [], hardpoints: [], engines: [],
-  },
-  {
-    id: 'd-defense', faction: 'droid', tier: 'defense', name: 'Defense platform', blurb: 'A gun emplacement on the ore: heavy cannons and blaster arms. No income.',
-    sprite: 'defense-droid', aspect: 1.115, size: 130, hull: 2300, shield: 900, regen: 14, speed: 0, turn: 0, pop: 0, cost: 650, build: 30, level: 1, squad: 1, sensor: 1000,
-    weapons: [turbo(32, 720, 2, 2), flak(7, 380, 0.3, 2)], hardpoints: [], engines: [],
-  },
+  stationType('droid', 1, []),
+  minePlatform('droid'),
+  defensePlatform('droid', 'balanced'),
+  defensePlatform('droid', 'flak'),
+  defensePlatform('droid', 'gun'),
 ]
+/** Every unit, toughened (stations come out of stationType that way already). */
+export const UNITS: UnitType[] = WRITTEN.map((u) => (u.tier === 'station' ? u : toughen(u)))
+
+const SHIELDED_MINE: Record<FactionId, UnitType> = { republic: toughen(minePlatform('republic', true)), droid: toughen(minePlatform('droid', true)) }
+/** A faction's mining platform as built, or with its Shield generator fitted. */
+export const mineType = (faction: FactionId, shielded: boolean) => (shielded ? SHIELDED_MINE[faction] : UNITS.find((u) => u.faction === faction && u.tier === 'mine')!)
 
 /** What each class is for, and the counter loop players need to learn: fighters beat big ships,
  * gunships beat fighters, frigates beat gunships, cruisers beat frigates. */
@@ -281,6 +499,18 @@ export const ROLES: Partial<Record<Tier, { role: string; strong: string[]; weak:
 }
 
 export const UNIT: Record<string, UnitType> = Object.fromEntries(UNITS.map((u) => [u.id, u]))
+const MODULE_ART: ModuleArt[] = ['turbo', 'flak', 'ion', 'shield', 'hangar', 'refinery', 'dock', 'sensor', 'drill']
+/** A module's sprite name; a shot-off Republic turret has a wreck of its own. */
+export const moduleSprite = (faction: FactionId, art: ModuleArt | 'wreck') => `mod-${faction}-${art}`
+/** Every sprite a battle can draw. */
+export const ALL_SPRITES = [
+  ...new Set([
+    ...UNITS.map((u) => u.sprite),
+    ...(['republic', 'droid'] as const).flatMap((f) => [1, 2, 3, 4].map((l) => `${f}-station-${l}`)),
+    ...(['republic', 'droid'] as const).flatMap((f) => MODULE_ART.filter((a) => f === 'droid' || a !== 'ion').map((a) => moduleSprite(f, a))),
+    moduleSprite('republic', 'wreck'),
+  ]),
+]
 export const SHIP_TIERS: Tier[] = ['fighter', 'gunship', 'frigate', 'cruiser', 'capital']
 export const unitOf = (faction: FactionId, tier: Tier) => UNIT[`${faction === 'republic' ? 'r' : 'd'}-${tier}`]
 /** The ships a faction can order from its station: by the station level they need, then cost. */
@@ -289,8 +519,9 @@ export const buildable = (faction: FactionId) =>
 /** A ship's job and counters: its own, or its tier's. */
 export const roleOf = (t: UnitType) => t.role ?? ROLES[t.tier]
 export const isShip = (t: UnitType) => t.tier !== 'station' && t.tier !== 'mine' && t.tier !== 'defense'
-/** What can go on a surveyed ore asteroid, one structure each. */
-export const SITE_TIERS: Tier[] = ['mine', 'defense']
+/** What can go on a surveyed ore asteroid, one structure each: the mining platform, then the
+ * defense platforms (balanced first). */
+export const siteOptions = (faction: FactionId) => UNITS.filter((u) => u.faction === faction && (u.tier === 'mine' || u.tier === 'defense'))
 
 /** World size of a sprite: [width, height]. */
 export function dims(t: UnitType): [number, number] {
@@ -305,7 +536,23 @@ export const SURVEY_TIME = 8
 export const SURVEY_RADIUS = 380
 /** Credits per second from the station, by level. */
 export const STATION_INCOME = [0, 6, 7, 8, 9]
-export const MINE_INCOME = 4.5
+/** Credits a second from a mining platform before its upgrades (see SITE_UPGRADES). */
+export const MINE_INCOME = 3.8
+
+/**
+ * Upgrades bought for one mining platform, kept by that platform only: lose it and a new one starts
+ * from nothing. `cost` and `time` are per level.
+ */
+export type SiteUpgradeId = 'yield' | 'armor' | 'shield'
+export type SiteUpgrade = { id: SiteUpgradeId; name: string; blurb: string; levels: number; cost: number[]; time: number }
+export const SITE_UPGRADES: SiteUpgrade[] = [
+  { id: 'yield', name: 'Deeper drills', blurb: 'This platform mines 30% more per level.', levels: 2, cost: [400, 550], time: 25 },
+  { id: 'armor', name: 'Armour plating', blurb: 'This platform and its parts take 50% more punishment.', levels: 1, cost: [450], time: 25 },
+  { id: 'shield', name: 'Shield generator', blurb: 'Fits a shield dome: this platform gets shields that recharge (until the dome is shot off).', levels: 1, cost: [500], time: 30 },
+]
+/** Output per Deeper drills level, and hull and module health from Armour plating. */
+export const YIELD_PER_LEVEL = 0.3
+export const ARMOR_BONUS = 0.5
 export const BEACON_INCOME = 1.5
 export const BASE_POP = 16
 export const POP_PER_LEVEL = 4
@@ -331,9 +578,9 @@ const tech = (faction: FactionId, forId: string, id: string, name: string, blurb
 // list, so the tree can be laid out in one pass.
 export const TECHS: Tech[] = [
   // Republic
-  tech('republic', 'r-station', 'r-st-guns', 'Turbolaser emplacements', 'Station turbolasers hit 25% harder.', 700, 45, 1, { damage: 0.25 }),
-  tech('republic', 'r-station', 'r-st-ore', 'Advanced refineries', 'Mining platforms bring in 25% more credits.', 600, 40, 1, { mines: 0.25 }),
-  tech('republic', 'r-station', 'r-st-dock', 'Repair docks', 'Our ships near the station repair 2% of their hull a second.', 800, 45, 2, { repair: 0.02 }, ['r-st-guns']),
+  tech('republic', 'r-station', 'r-st-guns', 'Turbolaser emplacements', 'A targeting array on the station: its turbolasers hit 25% harder while the array stands.', 700, 45, 1, { damage: 0.25 }),
+  tech('republic', 'r-station', 'r-st-ore', 'Advanced refineries', 'A refinery on the station: mining platforms bring in 25% more credits while it stands.', 600, 40, 1, { mines: 0.25 }),
+  tech('republic', 'r-station', 'r-st-dock', 'Repair docks', 'A repair dock on the station: our ships near it repair 2% of their hull a second while it stands.', 800, 45, 2, { repair: 0.02 }, ['r-st-guns']),
   tech('republic', 'r-fighter', 'r-fi-hull', 'Reinforced hulls', 'Lance interceptors get 25% more hull.', 400, 30, 1, { hull: 0.25 }),
   tech('republic', 'r-fighter', 'r-fi-torp', 'Proton payload', 'Lasers and torpedoes deal 25% more damage.', 500, 35, 2, { damage: 0.25 }, ['r-fi-hull']),
   tech('republic', 'r-gunship', 'r-gs-flak', 'Flak tracking', 'Halberd guns deal 20% more damage.', 450, 30, 1, { damage: 0.2 }),
@@ -347,9 +594,9 @@ export const TECHS: Tech[] = [
   tech('republic', 'r-capital', 'r-ca-range', 'Fleet targeting array', 'Sovereign guns reach 15% further.', 1200, 60, 4, { range: 0.15 }),
   tech('republic', 'r-capital', 'r-ca-bulbs', 'Reinforced shield bulbs', 'Sovereign shields 30% stronger, recharging faster.', 1200, 60, 4, { shield: 0.3, regen: 0.3 }, ['r-ca-range']),
   // Droid Confederacy
-  tech('droid', 'd-station', 'd-st-guns', 'Foundry cannons', 'Station turbolasers hit 25% harder.', 700, 45, 1, { damage: 0.25 }),
-  tech('droid', 'd-station', 'd-st-ore', 'Ore processors', 'Harvesters bring in 25% more credits.', 600, 40, 1, { mines: 0.25 }),
-  tech('droid', 'd-station', 'd-st-dock', 'Repair crews', 'Our ships near the station repair 2% of their hull a second.', 800, 45, 2, { repair: 0.02 }, ['d-st-guns']),
+  tech('droid', 'd-station', 'd-st-guns', 'Foundry cannons', 'A sensor eye on the station: its cannons hit 25% harder while the eye stands.', 700, 45, 1, { damage: 0.25 }),
+  tech('droid', 'd-station', 'd-st-ore', 'Ore processors', 'An ore processor on the station: harvesters bring in 25% more credits while it stands.', 600, 40, 1, { mines: 0.25 }),
+  tech('droid', 'd-station', 'd-st-dock', 'Repair crews', 'A repair crane on the station: our ships near it repair 2% of their hull a second while it stands.', 800, 45, 2, { repair: 0.02 }, ['d-st-guns']),
   tech('droid', 'd-fighter', 'd-fi-line', 'Assembly lines', 'Mantis squadrons build 30% faster.', 400, 30, 1, { build: -0.3 }),
   tech('droid', 'd-fighter', 'd-fi-guns', 'Overcharged blasters', 'Lasers and torpedoes deal 25% more damage.', 450, 35, 2, { damage: 0.25 }, ['d-fi-line']),
   tech('droid', 'd-gunship', 'd-gs-shell', 'Armoured shell', 'Tridents get 25% more hull.', 450, 30, 1, { hull: 0.25 }),
@@ -372,6 +619,4 @@ export const LEVEL_UP = 'level'
 /** Station upgrades: cost and seconds to reach each level (index = the new level). */
 export const UPGRADES: ({ cost: number; time: number } | null)[] = [null, null, { cost: 1100, time: 40 }, { cost: 1900, time: 55 }, { cost: 3200, time: 75 }]
 export const MAX_LEVEL = 4
-/** Hull and turret damage bonus per station level above 1. */
-export const STATION_LEVEL_BONUS = 0.15
 export const MAX_CAPITALS = 1
