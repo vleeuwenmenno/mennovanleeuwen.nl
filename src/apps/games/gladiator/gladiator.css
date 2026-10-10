@@ -226,7 +226,7 @@
   right: 10px;
   z-index: 30;
   display: flex;
-  gap: 4px;
+  gap: 8px;
 }
 .gl-root.is-fight .gl-audio {
   top: 78px;
@@ -269,7 +269,7 @@
   /* The bar can't query its own width, so its spacing follows the game's. */
   .gl-root .gl-topbar {
     gap: 5px;
-    padding-right: 72px;
+    padding-right: 76px;
   }
 }
 
@@ -3988,6 +3988,297 @@ button.gl-deck-slot:hover {
     scroll-snap-align: center;
   }
 }
+/* --- Narrow windows and phones: town pages ------------------------------------------------------ */
+/* The game is a container (.gl-root), so all of this follows the game's width, not the screen's. */
+
+/* The top bar's round buttons stay small to fit, but take a thumb-sized press around them. */
+.gl-top-menu,
+.gl-top-more > .gl-top-alert,
+.gl-audio button {
+  position: relative;
+}
+.gl-top-menu::after,
+.gl-top-more > .gl-top-alert::after,
+.gl-audio button::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+}
+/* In town the sound buttons sit in the top bar, so page heads can use the full width. */
+.gl-root:has(> .gl-topbar) .gl-page-head {
+  padding-right: 0;
+}
+/* Buttons big enough for a thumb: on a touch screen at any size, and in any narrow window. */
+@media (pointer: coarse) {
+  .gl-btn:not(.is-small) {
+    min-height: 40px;
+  }
+  .gl-seg button,
+  .gl-tabs button {
+    min-height: 40px;
+    padding-inline: 12px;
+  }
+  .gl-statrow-head button {
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+  }
+}
+@container (max-width: 560px) {
+  .gl-btn:not(.is-small) {
+    min-height: 40px;
+  }
+  .gl-seg button,
+  .gl-tabs button {
+    min-height: 40px;
+    padding-inline: 12px;
+  }
+  .gl-statrow-head button {
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+  }
+}
+
+/* The Arena once the champion drops below the bouts: shorter league tiles, and each bout a
+   compact card (the fighter small on the left, his numbers and the purse beside him), two a row
+   on a phone held sideways and one a row upright. The champion's poster becomes the same kind of
+   row. */
+@container (max-width: 860px) {
+  .gl-league {
+    min-height: 72px;
+  }
+  .gl-league em {
+    display: none;
+  }
+  .gl-arena .gl-cards {
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 8px;
+  }
+  .gl-arena .gl-card {
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr);
+    grid-template-rows: auto 1fr auto;
+  }
+  .gl-arena .gl-card:hover {
+    transform: none;
+  }
+  .gl-arena .gl-card-ribbon {
+    grid-column: 2;
+    justify-self: start;
+    margin: 8px 10px 0;
+    padding: 1px 8px;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+  }
+  .gl-arena .gl-card-art {
+    grid-column: 1;
+    grid-row: 1 / -1;
+    height: auto;
+    min-height: 130px;
+    margin: 6px 0 6px 6px;
+  }
+  .gl-arena .gl-card-body {
+    grid-column: 2;
+    min-width: 0;
+    padding: 4px 10px 0;
+  }
+  .gl-arena .gl-card-body strong,
+  .gl-arena .gl-card-body > .gl-muted {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .gl-arena .gl-card-body strong {
+    font-size: 14px;
+  }
+  .gl-arena .gl-card-body > .gl-muted {
+    font-size: 11px;
+  }
+  .gl-arena .gl-vs-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+  }
+  .gl-arena .gl-vs {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    text-align: center;
+    line-height: 1.2;
+  }
+  .gl-arena .gl-vs span {
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .gl-arena .gl-vs i {
+    font-size: 10px;
+    text-align: center;
+  }
+  .gl-arena .gl-card-foot {
+    grid-column: 2;
+    padding: 6px 10px 8px;
+  }
+  .gl-arena .gl-card-foot .gl-btn,
+  .gl-arena .gl-poster-foot .gl-btn {
+    min-height: 40px;
+    padding-inline: 18px;
+  }
+  .gl-arena-side .gl-poster {
+    position: static;
+    display: grid;
+    grid-template-columns: 104px minmax(0, 1fr);
+    column-gap: 12px;
+    row-gap: 4px;
+    align-items: center;
+    justify-items: start;
+    text-align: left;
+    padding: 0 12px 12px 0;
+  }
+  .gl-arena-side .gl-poster > * {
+    grid-column: 2;
+    min-width: 0;
+    margin-left: 0;
+    margin-right: 0;
+  }
+  .gl-arena-side .gl-poster .gl-poster-head {
+    grid-column: 1 / -1;
+    justify-self: center;
+    margin-bottom: 4px;
+  }
+  .gl-arena-side .gl-poster .gl-poster-art {
+    grid-column: 1;
+    grid-row: 2 / span 6;
+    align-self: stretch;
+    justify-self: stretch;
+    height: auto;
+    min-height: 150px;
+    margin: 0 0 0 10px;
+  }
+  .gl-arena-side .gl-poster .gl-danger,
+  .gl-arena-side .gl-poster .gl-poster-foot {
+    justify-self: stretch;
+    padding: 0;
+  }
+  .gl-arena-side .gl-poster .gl-poster-foot {
+    padding-top: 4px;
+  }
+  .gl-arena-side .gl-poster .gl-fine {
+    margin: 0;
+  }
+}
+
+/* Your Gladiator: one column, the portrait card shrunk to a header row above the stats. */
+@container (max-width: 720px) {
+  .gl-me,
+  .gl-me-side {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .gl-me-poster {
+    position: static;
+    display: grid;
+    grid-template-columns: 104px minmax(0, 1fr);
+    column-gap: 12px;
+    row-gap: 4px;
+    align-items: center;
+    justify-items: start;
+    text-align: left;
+    padding: 0 12px 12px 0;
+  }
+  .gl-me-poster > * {
+    grid-column: 2;
+    min-width: 0;
+    margin-left: 0;
+    margin-right: 0;
+  }
+  .gl-me-poster .gl-poster-head {
+    grid-column: 1 / -1;
+    justify-self: center;
+    margin-bottom: 4px;
+  }
+  .gl-me-poster .gl-poster-art {
+    grid-column: 1;
+    grid-row: 2 / span 6;
+    align-self: stretch;
+    justify-self: stretch;
+    height: auto;
+    min-height: 150px;
+    margin: 0 0 0 10px;
+  }
+  .gl-me-poster .gl-me-level,
+  .gl-me-poster .gl-me-chips {
+    justify-self: stretch;
+    padding: 0;
+  }
+  .gl-me-poster .gl-me-chips {
+    justify-content: flex-start;
+  }
+}
+
+@container (max-width: 560px) {
+  /* Page heads: one line, the title cut short rather than wrapped beside the Town button. */
+  .gl-page-head {
+    gap: 8px;
+  }
+  .gl-page-head h2 {
+    min-width: 0;
+    font-size: 18px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .gl-page {
+    padding: 10px 10px 14px;
+  }
+  /* Six full-size card backs would fill two screens: three a row. */
+  .gl-deck {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .gl-tiles {
+    gap: 4px;
+  }
+  .gl-tile {
+    padding: 6px 2px;
+  }
+  .gl-tile b {
+    font-size: 14px;
+  }
+  .gl-tile span {
+    font-size: 9px;
+    letter-spacing: 0.02em;
+  }
+
+  /* The Arena: the leagues as three slim rows, the selected one lit. */
+  .gl-leagues {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+  .gl-league {
+    min-height: 46px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 6px 12px;
+    background-position: center 40%;
+  }
+  .gl-league-shade {
+    background: linear-gradient(90deg, rgba(20, 8, 0, 0.85), rgba(20, 8, 0, 0.45));
+  }
+  .gl-league strong {
+    flex: none;
+    font-size: 15px;
+  }
+  .gl-league span:not(.gl-league-shade) {
+    margin-left: auto;
+    font-size: 11px;
+    text-align: right;
+  }
+  .gl-league:hover:not(:disabled) {
+    transform: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .gl-flip,
   .gl-draft-slot,
