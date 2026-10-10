@@ -745,8 +745,19 @@
 }
 .ew-yard {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr)) 6px minmax(0, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
+}
+.ew-siteopts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ew-sitecard {
+  width: 170px;
+}
+.ew-sitecard img {
+  height: 56px;
 }
 .ew-yard-sep {
   border-left: 1px solid var(--ew-line);
@@ -1038,7 +1049,18 @@
   .ew-yard {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-  .ew-yard-sep {
+  .ew-siteopts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ew-sitecard {
+  width: 170px;
+}
+.ew-sitecard img {
+  height: 56px;
+}
+.ew-yard-sep {
     display: none;
   }
 }

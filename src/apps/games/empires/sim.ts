@@ -1,6 +1,6 @@
 import {
   ABILITIES, BASE_POP, BEACON_INCOME, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
-  STATION_LEVEL_BONUS, TECH, UNIT, UPGRADES, accuracy, dims, effect, isShip, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
+  STATION_LEVEL_BONUS, SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UPGRADES, accuracy, dims, effect, isShip, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind,
 } from './data'
 
@@ -84,7 +84,9 @@ export type Player = {
   lastAlarm: number
   stats: { built: number; lost: number; killed: number; earned: number }
 }
-export type OreNode = { id: number; x: number; y: number; r: number; rot: number; mine: number }
+/** An ore asteroid. `site` is the structure on it (0 if none); `owner` is who surveyed it, and
+ * `progress` runs from -1 (fully player 0's) to 1 (fully player 1's), like a beacon. */
+export type OreNode = { id: number; x: number; y: number; r: number; rot: number; site: number; owner: Owner | -1; progress: number }
 export type Beacon = { id: number; x: number; y: number; owner: Owner | -1; progress: number }
 export type Rock = { x: number; y: number; r: number; rot: number; spin: number; kind: number }
 export type Shot = {
@@ -98,6 +100,7 @@ export type SimEvent =
   | { k: 'hpdown'; x: number; y: number; owner: Owner; what: string }
   | { k: 'built'; owner: Owner; unit: string; x: number; y: number }
   | { k: 'beacon'; owner: Owner | -1; prev: Owner | -1; x: number; y: number }
+  | { k: 'survey'; owner: Owner | -1; prev: Owner | -1; node: number; x: number; y: number }
   | { k: 'alarm'; owner: Owner; x: number; y: number; what: string }
   | { k: 'level'; owner: Owner; level: number }
   | { k: 'tech'; owner: Owner; id: string }
@@ -193,7 +196,7 @@ function dpsVs(t: UnitType, tier: Tier) {
   if (!row) {
     row = {}
     const ws = [...t.weapons, ...t.hardpoints.flatMap((h) => (h.weapon ? [h.weapon] : []))]
-    for (const tr of ['fighter', 'gunship', 'frigate', 'cruiser', 'capital', 'station', 'mine'] as Tier[])
+    for (const tr of ['fighter', 'gunship', 'frigate', 'cruiser', 'capital', 'station', 'mine', 'defense'] as Tier[])
       row[tr] = ws.reduce((s, w) => s + (w.damage * (w.burst ?? 1) * effect(w.kind, tr) * accuracy(w.kind, tr)) / w.cooldown, 0)
     DPS.set(t.id, row)
   }
@@ -267,11 +270,11 @@ export function newWorld(f0: FactionId, f1: FactionId, opts: { seed?: number; in
   ]
   let nid = 0
   for (const [x, y] of half) {
-    w.nodes.push({ id: nid++, x, y, r: 75, rot: r() * TAU, mine: 0 })
-    w.nodes.push({ id: nid++, x: W - x, y: H - y, r: 75, rot: r() * TAU, mine: 0 })
+    w.nodes.push({ id: nid++, x, y, r: 75, rot: r() * TAU, site: 0, owner: -1, progress: 0 })
+    w.nodes.push({ id: nid++, x: W - x, y: H - y, r: 75, rot: r() * TAU, site: 0, owner: -1, progress: 0 })
   }
-  w.nodes.push({ id: nid++, x: W / 2 - 160, y: H / 2 - 950, r: 75, rot: r() * TAU, mine: 0 })
-  w.nodes.push({ id: nid++, x: W / 2 + 160, y: H / 2 + 950, r: 75, rot: r() * TAU, mine: 0 })
+  w.nodes.push({ id: nid++, x: W / 2 - 160, y: H / 2 - 950, r: 75, rot: r() * TAU, site: 0, owner: -1, progress: 0 })
+  w.nodes.push({ id: nid++, x: W / 2 + 160, y: H / 2 + 950, r: 75, rot: r() * TAU, site: 0, owner: -1, progress: 0 })
   w.beacons = [
     { id: 0, x: W / 2, y: 430, owner: -1, progress: 0 },
     { id: 1, x: W / 2, y: H / 2, owner: -1, progress: 0 },
@@ -297,7 +300,7 @@ export function newWorld(f0: FactionId, f1: FactionId, opts: { seed?: number; in
     const spin = (r() - 0.5) * 0.1
     w.rocks.push({ x: cx, y: cy, r: rad, rot, spin, kind }, { x: W - cx, y: H - cy, r: rad, rot: rot + Math.PI, spin, kind })
   }
-  // Stations, a starting patrol, and a mining platform already drilling the nearest ore.
+  // Stations and a starting patrol. Ore has to be surveyed before anything is built on it.
   for (const o of [0, 1] as Owner[]) {
     const f = w.players[o].faction
     const sx = o === 0 ? 650 : W - 650
@@ -308,10 +311,6 @@ export function newWorld(f0: FactionId, f1: FactionId, opts: { seed?: number; in
     spawnGroup(w, unitOf(f, 'fighter').id, o, sx + dir * 420, H / 2 - 120, face)
     spawn(w, unitOf(f, 'gunship').id, o, sx + dir * 380, H / 2 + 140, face)
     spawn(w, unitOf(f, 'gunship').id, o, sx + dir * 470, H / 2 + 230, face)
-    const node = w.nodes.filter((n) => (o === 0 ? n.x < W / 2 : n.x > W / 2)).sort((a, b) => d2(a.x, a.y, sx, H / 2) - d2(b.x, b.y, sx, H / 2))[0]
-    const m = spawn(w, unitOf(f, 'mine').id, o, node.x, node.y, node.rot)
-    m.node = node.id
-    node.mine = m.id
   }
   refreshPlayers(w)
   return w
@@ -483,30 +482,31 @@ function finishResearch(w: World, o: Owner, id: string) {
   w.events.push({ k: 'tech', owner: o, id })
 }
 
-export function cantMine(w: World, owner: Owner, node: number): string | null {
+/** Why a structure (mining or defense platform) can't go on this ore, or null if it can. */
+export function cantSite(w: World, owner: Owner, node: number, tier: 'mine' | 'defense'): string | null {
   const n = w.nodes[node]
   const p = w.players[owner]
   if (!n) return 'No ore there'
-  if (n.mine) return 'Already taken'
-  const t = unitOf(p.faction, 'mine')
-  if (p.credits < t.cost) return 'Not enough credits'
-  // Enemy warships parked on the ore stop construction.
-  if (w.units.some((u) => !u.dead && u.owner !== owner && isShip(u.t) && u.t.tier !== 'fighter' && d2(u.x, u.y, n.x, n.y) < 500 ** 2)) return 'Enemy ships are guarding it'
+  if (n.site) return 'Something is already built here'
+  if (n.owner !== owner) return 'Survey it first: keep ships near it for a few seconds'
+  if (w.units.some((u) => !u.dead && u.owner !== owner && isShip(u.t) && u.t.tier !== 'fighter' && d2(u.x, u.y, n.x, n.y) < SURVEY_RADIUS ** 2)) return 'Enemy ships are in the way'
+  if (p.credits < unitOf(p.faction, tier).cost) return 'Not enough credits'
   return null
 }
 
-export function cmdMine(w: World, owner: Owner, node: number) {
-  const why = cantMine(w, owner, node)
+export function cmdSite(w: World, owner: Owner, node: number, tier: 'mine' | 'defense') {
+  const why = cantSite(w, owner, node, tier)
   if (why) return why
   const p = w.players[owner]
   const n = w.nodes[node]
-  const t = unitOf(p.faction, 'mine')
+  const t = unitOf(p.faction, tier)
   p.credits -= t.cost
-  const m = spawn(w, t.id, owner, n.x, n.y, n.rot)
+  const m = spawn(w, t.id, owner, n.x, n.y, tier === 'mine' ? n.rot : 0)
   m.building = t.build
   m.hull = m.hullMax * 0.25
+  m.shield = 0
   m.node = n.id
-  n.mine = m.id
+  n.site = m.id
   return null
 }
 
@@ -584,14 +584,14 @@ function kill(w: World, u: Unit, by: Owner | -1) {
   w.events.push({ k: 'boom', x: u.x, y: u.y, tier: u.t.tier, owner: u.owner, size: u.t.size })
   w.players[u.owner].stats.lost++
   if (by !== -1) w.players[by].stats.killed++
-  if (u.t.tier === 'mine' && u.node >= 0) w.nodes[u.node].mine = 0
+  if (u.node >= 0 && w.nodes[u.node].site === u.id) w.nodes[u.node].site = 0
   if (u.t.tier === 'station' && w.winner === -1) w.winner = other(u.owner)
 }
 
 function alarm(w: World, u: Unit) {
   const p = w.players[u.owner]
   if (w.time - p.lastAlarm < 20) return
-  if (u.t.tier !== 'station' && u.t.tier !== 'mine' && u.t.tier !== 'capital') return
+  if (u.t.tier !== 'station' && u.t.tier !== 'mine' && u.t.tier !== 'defense' && u.t.tier !== 'capital') return
   p.lastAlarm = w.time
   w.events.push({ k: 'alarm', owner: u.owner, x: u.x, y: u.y, what: u.t.name })
 }
@@ -967,6 +967,32 @@ function beacons(w: World, dt: number) {
   }
 }
 
+/** Surveying ore: our ships near an empty asteroid, with no enemy ships there, claim it in
+ * SURVEY_TIME seconds; taking one from the enemy means undoing their claim first. */
+function survey(w: World, dt: number) {
+  for (const n of w.nodes) {
+    if (n.site) continue
+    const here = [false, false]
+    near(w, n.x, n.y, SURVEY_RADIUS, (u) => {
+      if (isShip(u.t)) here[u.owner] = true
+    })
+    const prev = n.owner
+    const rate = dt / SURVEY_TIME
+    if (here[0] && !here[1]) n.progress -= rate
+    else if (here[1] && !here[0]) n.progress += rate
+    else if (!here[0] && !here[1]) {
+      const home = n.owner === 0 ? -1 : n.owner === 1 ? 1 : 0
+      n.progress += clamp(home - n.progress, -dt / 30, dt / 30)
+    }
+    n.progress = clamp(n.progress, -1, 1)
+    if (n.owner === 0 && n.progress >= 0) n.owner = -1
+    if (n.owner === 1 && n.progress <= 0) n.owner = -1
+    if (n.owner === -1 && n.progress <= -1) n.owner = 0
+    if (n.owner === -1 && n.progress >= 1) n.owner = 1
+    if (n.owner !== prev) w.events.push({ k: 'survey', owner: n.owner, prev, node: n.id, x: n.x, y: n.y })
+  }
+}
+
 function sight(w: World) {
   const eyes: [Unit[], Unit[]] = [[], []]
   for (const u of w.units) if (!u.dead) eyes[u.owner].push(u)
@@ -1003,6 +1029,7 @@ export function tick(w: World, dt = STEP) {
   }
   economy(w, dt)
   beacons(w, dt)
+  survey(w, dt)
   for (const u of w.units) {
     if (u.dead) continue
     if (u.building > 0) {

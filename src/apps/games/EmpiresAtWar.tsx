@@ -6,7 +6,7 @@ import { CommandCard, Help, Result, TopBar, type Hud, type Mode } from './empire
 import { HP_NAME } from './empires/icons'
 import { Renderer, spriteUrl, type Camera, type View } from './empires/render'
 import {
-  STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdMine, cmdMove, cmdRally, cmdResearch, cmdStop, hpPos, newWorld, tick, type Owner, type SimEvent,
+  STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdMove, cmdRally, cmdResearch, cmdSite, cmdStop, hpPos, newWorld, tick, type Owner, type SimEvent,
   type Unit, type World,
 } from './empires/sim'
 import { EmpiresSound } from './empires/sound'
@@ -104,7 +104,7 @@ function Title({ onStart }: { onStart: (s: Setup) => void }) {
         <ul>
           <li>Destroy the enemy station. Protect yours.</li>
           <li>Drag to select ships. Right-click to move or attack.</li>
-          <li>Build mining platforms on the glowing ore for credits.</li>
+          <li>Park ships at glowing ore to survey it, then click it to build a mining or defense platform.</li>
           <li>Hold ships near a beacon to capture it: more income, bigger fleet.</li>
           <li>Select your station to build ships and research upgrades, including station levels that unlock frigates, cruisers and a flagship.</li>
           <li>Big ships have hardpoints. Hover one, right-click a marker to target it.</li>
@@ -146,6 +146,8 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   const selected = useRef(new Set<number>())
   const groups = useRef(new Map<string, number[]>())
   const mode = useRef<Mode>('normal')
+  /** An ore asteroid picked with nothing else selected: the command card offers to build on it. */
+  const pickedNode = useRef(-1)
   const hover = useRef({ unit: 0, hp: -1, node: -1 })
   const mouse = useRef({ x: -1, y: -1, inside: false })
   const keys = useRef(new Set<string>())
@@ -216,6 +218,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   }
   const select = (ids: number[], add = false) => {
     if (!add) selected.current.clear()
+    if (ids.length) pickedNode.current = -1
     for (const id of withSquads(ids)) selected.current.add(id)
   }
   const mySelection = () => [...selected.current].map((i) => world.current.byId.get(i)).filter((u): u is Unit => !!u && u.owner === me)
@@ -291,16 +294,17 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     }
   }
 
-  const placeMine = (node: number) => {
-    const why = cmdMine(world.current, me, node)
+  const buildSite = (node: number, tier: 'mine' | 'defense') => {
+    sound.unlock()
+    const why = cmdSite(world.current, me, node, tier)
     if (why) {
       toast(why, 'bad')
       sound.error()
-      return false
+      return
     }
     sound.click()
-    setMode('normal')
-    return true
+    // Select what's going up, so its construction shows in the card.
+    select([world.current.nodes[node].site])
   }
 
   const centerOn = (x: number, y: number) => {
@@ -458,7 +462,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         } else if (e.k === 'built' && e.owner === me) {
           const t = UNIT[e.unit]
           sound.built()
-          toast(t.tier === 'mine' ? `${t.name} is drilling` : `${t.name}${t.squad > 1 ? ' squadron' : ''} ready`, 'good')
+          toast(t.tier === 'mine' ? `${t.name} is drilling` : t.tier === 'defense' ? `${t.name} online` : `${t.name}${t.squad > 1 ? ' squadron' : ''} ready`, 'good')
         } else if (e.k === 'beacon') {
           if (e.owner === me) {
             sound.capture(true)
@@ -471,6 +475,11 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
           sound.alarm()
           lastAlarm.current = { x: e.x, y: e.y, t: w.time }
           toast(`${e.what} under attack! (Space to look)`, 'bad')
+        } else if (e.k === 'survey') {
+          if (e.owner === me) {
+            sound.capture(true)
+            toast('Ore surveyed: click it to build a mining or defense platform', 'good')
+          } else if (e.prev === me) toast('We lost the claim on an ore asteroid', 'bad')
         } else if (e.k === 'tech' && e.owner === me) {
           sound.built()
           toast(`Research complete: ${TECH[e.id].name}`, 'good')
@@ -490,7 +499,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         hover: h.unit,
         hoverHp: h.hp,
         box: drag.current?.box && drag.current.moved ? { x0: drag.current.x0, y0: drag.current.y0, x1: mouse.current.x, y1: mouse.current.y } : null,
-        placingMine: mode.current === 'mine',
+        node: selected.current.size ? -1 : pickedNode.current,
         hoverNode: h.node,
         showRally: mySelection().some((u) => u.t.tier === 'station'),
       }
@@ -570,7 +579,6 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       else if (k === 'q') useAbility()
       else if (k === 'h' || k === 'Home') selectStation()
       else if (k === 'i') selectIdle()
-      else if (k === 'm') setMode(mode.current === 'mine' ? 'normal' : 'mine')
       else if (k === ' ') {
         if (lastAlarm.current) centerOn(lastAlarm.current.x, lastAlarm.current.y)
       } else if (k === 'p') {
@@ -583,7 +591,10 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       else if (k === '-' || k === '_') zoomBy(1 / 1.2)
       else if (k === 'Escape') {
         if (mode.current !== 'normal') setMode('normal')
-        else selected.current.clear()
+        else {
+          selected.current.clear()
+          pickedNode.current = -1
+        }
       } else return
       e.preventDefault()
     }
@@ -649,12 +660,6 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       setMode('normal')
       return
     }
-    if (mode.current === 'mine') {
-      const { node } = pick(p.x, p.y)
-      if (node >= 0) placeMine(node)
-      else setMode('normal')
-      return
-    }
     drag.current = { x0: p.x, y0: p.y, box: true, pan: false, moved: false, cx: 0, cy: 0, button: 0 }
   }
 
@@ -693,19 +698,16 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       drag.current = null
       if (!d || d.moved) return
       // A tap.
-      if (mode.current === 'mine') {
-        const { node } = pick(p.x, p.y)
-        if (node >= 0) placeMine(node)
-        else setMode('normal')
-        return
-      }
-      const { unit } = pick(p.x, p.y)
+      const { unit, node } = pick(p.x, p.y)
       if (unit && unit.owner === me) select([unit.id])
       else if (mySelection().length && (mode.current === 'attack' || !unit || unit.owner !== me)) {
         command(p.x, p.y, mode.current === 'attack')
         setMode('normal')
       } else if (unit) select([unit.id])
-      else selected.current.clear()
+      else {
+        selected.current.clear()
+        pickedNode.current = node
+      }
       return
     }
     drag.current = null
@@ -721,9 +723,14 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       if (ids.length) sound.click()
       return
     }
-    const { unit } = pick(p.x, p.y)
+    const { unit, node } = pick(p.x, p.y)
     if (!unit) {
-      if (!e.shiftKey) selected.current.clear()
+      if (!e.shiftKey) {
+        selected.current.clear()
+        // Clicking ore (with nothing on it to select) opens its build card.
+        pickedNode.current = node
+        if (node >= 0) sound.click()
+      }
       return
     }
     const now = performance.now()
@@ -833,7 +840,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       </div>
       {ui.mode !== 'normal' && (
         <div className="ew-modehint">
-          {ui.mode === 'attack' ? 'Attack-move: click where to go. Ships fight whatever they meet.' : 'Pick a free ore asteroid for the mining platform.'} <kbd>Esc</kbd> to cancel
+          Attack-move: click where to go. Ships fight whatever they meet. <kbd>Esc</kbd> to cancel
         </div>
       )}
 
@@ -863,7 +870,8 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
           onCancel={(i) => cmdCancel(w, me, i)}
           onResearch={research}
           onCancelResearch={(i) => cmdCancelResearch(w, me, i)}
-          onMine={() => setMode(mode.current === 'mine' ? 'normal' : 'mine')}
+          onSite={buildSite}
+          node={hud.sel.length || pickedNode.current < 0 ? null : w.nodes[pickedNode.current]}
           onStation={selectStation}
         />
       </div>

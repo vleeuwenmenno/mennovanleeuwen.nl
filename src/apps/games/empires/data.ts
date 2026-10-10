@@ -6,7 +6,7 @@
 // were measured off the art.
 
 export type FactionId = 'republic' | 'droid'
-export type Tier = 'fighter' | 'gunship' | 'frigate' | 'cruiser' | 'capital' | 'station' | 'mine'
+export type Tier = 'fighter' | 'gunship' | 'frigate' | 'cruiser' | 'capital' | 'station' | 'mine' | 'defense'
 export type WeaponKind = 'laser' | 'flak' | 'turbo' | 'missile'
 export type HardpointKind = 'turret' | 'shield' | 'engine' | 'hangar'
 export type AbilityId = 'flakBarrage' | 'repairSwarm' | 'shieldBoost' | 'tractor' | 'broadside' | 'launchSwarm'
@@ -93,17 +93,17 @@ export const FACTIONS: Record<FactionId, { name: string; long: string; blurb: st
 // Damage against each kind of target. Fighter guns barely scratch big hulls, flak shreds small
 // craft, turbolasers are too slow to track fighters, missiles go through shields (see sim).
 const VS: Record<WeaponKind, Record<Tier, number>> = {
-  laser: { fighter: 1, gunship: 0.9, frigate: 0.35, cruiser: 0.25, capital: 0.2, station: 0.2, mine: 0.4 },
-  flak: { fighter: 2.2, gunship: 1.4, frigate: 0.3, cruiser: 0.2, capital: 0.15, station: 0.15, mine: 0.3 },
-  turbo: { fighter: 0.5, gunship: 0.7, frigate: 1, cruiser: 1, capital: 1, station: 1, mine: 1 },
-  missile: { fighter: 0.25, gunship: 0.6, frigate: 1.1, cruiser: 1, capital: 0.9, station: 0.8, mine: 1 },
+  laser: { fighter: 1, gunship: 0.9, frigate: 0.35, cruiser: 0.25, capital: 0.2, station: 0.2, mine: 0.4, defense: 0.25 },
+  flak: { fighter: 2.2, gunship: 1.4, frigate: 0.3, cruiser: 0.2, capital: 0.15, station: 0.15, mine: 0.3, defense: 0.2 },
+  turbo: { fighter: 0.5, gunship: 0.7, frigate: 1, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1 },
+  missile: { fighter: 0.25, gunship: 0.6, frigate: 1.1, cruiser: 1, capital: 0.9, station: 0.8, mine: 1, defense: 1 },
 }
 /** Chance a shot connects: big guns can't follow fighters. */
 const ACCURACY: Record<WeaponKind, Record<Tier, number>> = {
-  laser: { fighter: 0.55, gunship: 0.7, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1 },
-  flak: { fighter: 0.75, gunship: 0.8, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1 },
-  turbo: { fighter: 0.15, gunship: 0.35, frigate: 0.85, cruiser: 0.95, capital: 1, station: 1, mine: 1 },
-  missile: { fighter: 0.3, gunship: 0.7, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1 },
+  laser: { fighter: 0.55, gunship: 0.7, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1 },
+  flak: { fighter: 0.75, gunship: 0.8, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1 },
+  turbo: { fighter: 0.15, gunship: 0.35, frigate: 0.85, cruiser: 0.95, capital: 1, station: 1, mine: 1, defense: 0.95 },
+  missile: { fighter: 0.3, gunship: 0.7, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1 },
 }
 export const effect = (w: WeaponKind, t: Tier) => VS[w][t]
 export const accuracy = (w: WeaponKind, t: Tier) => ACCURACY[w][t]
@@ -168,6 +168,11 @@ export const UNITS: UnitType[] = [
     sprite: 'mine-republic', aspect: 0.953, size: 120, hull: 1000, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, cost: 500, build: 24, level: 1, squad: 1, sensor: 600,
     weapons: [], hardpoints: [], engines: [],
   },
+  {
+    id: 'r-defense', faction: 'republic', tier: 'defense', name: 'Defense platform', blurb: 'A gun emplacement on the ore: turbolasers for warships, flak for fighters. No income.',
+    sprite: 'defense-republic', aspect: 0.969, size: 130, hull: 2000, shield: 1200, regen: 18, speed: 0, turn: 0, pop: 0, cost: 650, build: 30, level: 1, squad: 1, sensor: 1000,
+    weapons: [turbo(32, 720, 2, 2), flak(7, 380, 0.3, 2)], hardpoints: [], engines: [],
+  },
 
   // --- Droid Confederacy ------------------------------------------------------------------------
   {
@@ -177,7 +182,7 @@ export const UNITS: UnitType[] = [
   },
   {
     id: 'd-gunship', faction: 'droid', tier: 'gunship', name: 'Trident gunship', blurb: 'Three blaster arms that tear through fighters.',
-    sprite: 'droid-gunship', aspect: 1.067, size: 64, hull: 365, shield: 80, regen: 5, speed: 165, turn: 2.6, pop: 2, cost: 400, build: 13, level: 1, squad: 1, sensor: 780,
+    sprite: 'droid-gunship', aspect: 1.067, size: 64, hull: 395, shield: 80, regen: 5, speed: 165, turn: 2.6, pop: 2, cost: 400, build: 13, level: 1, squad: 1, sensor: 780,
     weapons: [flak(6, 290, 0.28), laser(12, 320, 1)], hardpoints: [], engines: [[5, 6.6]],
   },
   {
@@ -219,6 +224,11 @@ export const UNITS: UnitType[] = [
     sprite: 'mine-droid', aspect: 1.026, size: 120, hull: 1000, shield: 0, regen: 0, speed: 0, turn: 0, pop: 0, cost: 500, build: 24, level: 1, squad: 1, sensor: 600,
     weapons: [], hardpoints: [], engines: [],
   },
+  {
+    id: 'd-defense', faction: 'droid', tier: 'defense', name: 'Defense platform', blurb: 'A gun emplacement on the ore: heavy cannons and blaster arms. No income.',
+    sprite: 'defense-droid', aspect: 1.115, size: 130, hull: 2300, shield: 900, regen: 14, speed: 0, turn: 0, pop: 0, cost: 650, build: 30, level: 1, squad: 1, sensor: 1000,
+    weapons: [turbo(32, 720, 2, 2), flak(7, 380, 0.3, 2)], hardpoints: [], engines: [],
+  },
 ]
 
 export const UNIT: Record<string, UnitType> = Object.fromEntries(UNITS.map((u) => [u.id, u]))
@@ -226,7 +236,9 @@ export const SHIP_TIERS: Tier[] = ['fighter', 'gunship', 'frigate', 'cruiser', '
 export const unitOf = (faction: FactionId, tier: Tier) => UNIT[`${faction === 'republic' ? 'r' : 'd'}-${tier}`]
 /** The ships a faction can order from its station, cheapest first. */
 export const buildable = (faction: FactionId) => SHIP_TIERS.map((t) => unitOf(faction, t))
-export const isShip = (t: UnitType) => t.tier !== 'station' && t.tier !== 'mine'
+export const isShip = (t: UnitType) => t.tier !== 'station' && t.tier !== 'mine' && t.tier !== 'defense'
+/** What can go on a surveyed ore asteroid, one structure each. */
+export const SITE_TIERS: Tier[] = ['mine', 'defense']
 
 /** World size of a sprite: [width, height]. */
 export function dims(t: UnitType): [number, number] {
@@ -236,6 +248,9 @@ export function dims(t: UnitType): [number, number] {
 // --- Economy ----------------------------------------------------------------------------------------
 
 export const START_CREDITS = 1600
+/** Ore must be surveyed before anything is built on it: ships nearby, unopposed, for this long. */
+export const SURVEY_TIME = 8
+export const SURVEY_RADIUS = 380
 /** Credits per second from the station, by level. */
 export const STATION_INCOME = [0, 6, 7, 8, 9]
 export const MINE_INCOME = 4.5

@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { DIFFICULTY, type Difficulty } from './ai'
-import { ABILITIES, FACTIONS, LEVEL_UP, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind, type UnitType } from './data'
+import { ABILITIES, FACTIONS, LEVEL_UP, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind, type UnitType } from './data'
 import { HP_COLOR, HP_ICON, HP_NAME } from './icons'
 import { spriteUrl } from './render'
-import { building, cantBuild, cantResearch, other, researchCost, shieldFull, shieldMax, type Owner, type ResearchItem, type Unit, type World } from './sim'
+import { building, cantBuild, cantResearch, cantSite, other, researchCost, shieldFull, shieldMax, techBonus, type OreNode, type Owner, type ResearchItem, type Unit, type World } from './sim'
 
 // The battle HUD: the top bar, the command card for whatever is selected (the station's shipyard
 // lives there, so building is something you do at the station), and the overlays.
@@ -23,7 +23,7 @@ export type Hud = {
   beacons: number
   mines: number
 }
-export type Mode = 'normal' | 'attack' | 'mine'
+export type Mode = 'normal' | 'attack'
 
 export const fmt = (n: number) => Math.floor(n).toLocaleString('en-US')
 export const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
@@ -189,17 +189,20 @@ type CardProps = {
   onCancel: (index: number) => void
   onResearch: (id: string) => void
   onCancelResearch: (index: number) => void
-  onMine: () => void
+  onSite: (node: number, tier: 'mine' | 'defense') => void
   onStation: () => void
+  /** The ore asteroid clicked on, if no ships are selected. */
+  node: OreNode | null
 }
 
 export function CommandCard(p: CardProps) {
   const { sel, me } = p
+  if (!sel.length && p.node) return <OreCard {...p} n={p.node} />
   if (!sel.length)
     return (
       <div className="ew-panel ew-cmd is-empty">
         <p>
-          Drag across your ships to command them. Select your <button className="ew-link" onClick={p.onStation}>station</button> (H) to build.
+          Drag across your ships to command them. Select your <button className="ew-link" onClick={p.onStation}>station</button> (H) to build, or click surveyed ore to build on it.
         </p>
       </div>
     )
@@ -276,8 +279,6 @@ function StationCard(p: CardProps & { st: Unit }) {
   const { w, me, st, hud, faction } = p
   const [tab, setTab] = useState<'yard' | 'research'>('yard')
   const ships = buildable(faction)
-  const mine = unitOf(faction, 'mine')
-  const freeOre = w.nodes.filter((n) => !n.mine).length
   const queued = (id: string) => hud.queue.filter((q) => q.unit === id).length
   const groups = [st.t, ...ships]
   return (
@@ -316,14 +317,6 @@ function StationCard(p: CardProps & { st: Unit }) {
             {ships.map((t) => (
               <ShipCard key={t.id} t={t} why={cantBuild(w, me, t.id)} level={hud.level} queued={queued(t.id)} onBuild={p.onBuild} onUnqueue={p.onUnqueue} />
             ))}
-            <span className="ew-yard-sep" />
-            <button className={`ew-shipcard is-util ${p.mode === 'mine' ? 'is-active' : ''} ${hud.credits < mine.cost || !freeOre ? 'is-off' : ''}`} onClick={p.onMine}
-              title={`${mine.blurb} Click, then pick a free ore asteroid (M). ${freeOre} free.`}
-            >
-              <img src={spriteUrl(mine.sprite)} alt="" />
-              <strong>Mining platform</strong>
-              <span className="ew-cost">{mine.cost}<small> · {mine.build}s</small></span>
-            </button>
           </div>
         ) : (
           <div className="ew-research">
@@ -342,8 +335,62 @@ function StationCard(p: CardProps & { st: Unit }) {
           </div>
         )}
         <p className="ew-muted ew-small ew-yardhint">
-          {tab === 'yard' ? 'Click to build, Shift-click for five, right-click to remove one. Right-click the map to set the rally point.' : 'Research upgrades every ship of that type, the ones already flying too.'}
+          {tab === 'yard' ? 'Click to build, Shift-click for five, right-click to remove one. Right-click the map to set the rally point. Mining and defense platforms are built on surveyed ore.' : 'Research upgrades every ship of that type, the ones already flying too.'}
         </p>
+      </div>
+    </div>
+  )
+}
+
+/** An ore asteroid: who has surveyed it, and what we can build on it. */
+function OreCard(p: CardProps & { n: OreNode }) {
+  const { w, me, n, faction } = p
+  const mine = unitOf(faction, 'mine')
+  const defense = unitOf(faction, 'defense')
+  const site = n.site ? w.byId.get(n.site) : undefined
+  const ours = n.owner === me
+  const theirs = n.owner !== -1 && n.owner !== me
+  const toward = n.progress === 0 ? -1 : n.progress < 0 ? 0 : 1
+  const pct = Math.round(Math.abs(n.progress) * 100)
+  const ore = MINE_INCOME * (1 + (techBonus(w.players[me], unitOf(faction, 'station').id).mines ?? 0))
+  const status = site
+    ? `${site.owner === me ? 'Our' : 'Enemy'} ${site.t.name.toLowerCase()}${building(site) ? ' (under construction)' : ''}`
+    : ours
+      ? 'Surveyed by us: ready to build on.'
+      : theirs
+        ? `Surveyed by the enemy. Keep ships here to take it over${toward === me ? ` (${100 - pct}% to neutral)` : ''}.`
+        : pct > 0
+          ? `Survey under way: ${pct}%${toward === me ? '' : ' (enemy)'}.`
+          : `Unsurveyed. Keep ships within the ring for ${SURVEY_TIME} s, with no enemies there, to claim it.`
+  const option = (t: UnitType, tier: 'mine' | 'defense', text: string) => {
+    const why = cantSite(w, me, n.id, tier)
+    return (
+      <button className={`ew-shipcard ew-sitecard ${why ? 'is-off' : ''}`} onClick={() => p.onSite(n.id, tier)} title={`${t.name}\n${t.blurb}${why ? `\n\n${why}` : ''}`}>
+        <img src={spriteUrl(t.sprite)} alt="" />
+        <strong>{t.name}</strong>
+        <span className="ew-cost">{t.cost}<small> · {t.build}s</small></span>
+        <span className="ew-muted ew-small">{text}</span>
+      </button>
+    )
+  }
+  return (
+    <div className="ew-panel ew-cmd is-ore">
+      <div className="ew-cmd-side">
+        <img className="ew-portrait" src="/games/empires/world/asteroid-ore.webp" alt="" />
+      </div>
+      <div className="ew-cmd-main">
+        <header className="ew-unithead">
+          <strong>Ore asteroid</strong>
+          <span className={`ew-tag ${theirs ? 'is-enemy' : ''}`}>{ours ? 'ours' : theirs ? 'enemy' : 'unclaimed'}</span>
+        </header>
+        <span className="ew-muted ew-small">{status}</span>
+        {!site && pct > 0 && pct < 100 && <Bar value={pct} max={100} kind="shield" />}
+        {!site && (
+          <div className="ew-siteopts">
+            {option(mine, 'mine', `+${fmt(ore * 60)} credits a minute`)}
+            {option(defense, 'defense', 'Guards this spot and the space around it')}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -496,7 +543,8 @@ export function Help({ onClose }: { onClose: () => void }) {
           <dt>H</dt><dd>Select the station (its shipyard builds ships)</dd>
           <dt>Ctrl+1–9 · 1–9</dt><dd>Set group · select group (twice to jump to it)</dd>
           <dt>Space · F</dt><dd>Jump to the last alert · to the selection</dd>
-          <dt>M · P</dt><dd>Place a mining platform · pause</dd>
+          <dt>P</dt><dd>Pause</dd>
+          <dt>Ore</dt><dd>Keep ships at an ore asteroid to survey it; click it to build a mining or defense platform</dd>
           <dt>Touch</dt><dd>Drag to pan, pinch to zoom, tap a ship then tap where it should go</dd>
         </dl>
         <h3>Tips</h3>

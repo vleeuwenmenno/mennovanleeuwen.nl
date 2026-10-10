@@ -1,4 +1,4 @@
-import { FACTIONS, dims, isShip, type HardpointKind, type Tier } from './data'
+import { FACTIONS, SURVEY_RADIUS, dims, isShip, type HardpointKind, type Tier } from './data'
 import { HP_COLOR, HP_ICON, HP_NAME } from './icons'
 import { building, hpPos, radius, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 
@@ -8,7 +8,7 @@ import { building, hpPos, radius, shieldFull, shieldMax, shipPoint, type Owner, 
 // minimap is drawn here too.
 
 const BASE = '/games/empires/'
-export const spriteUrl = (name: string) => `${BASE}${name.startsWith('mine-') ? 'world' : 'ships'}/${name}.webp`
+export const spriteUrl = (name: string) => `${BASE}${/^(mine|defense)-/.test(name) ? 'world' : 'ships'}/${name}.webp`
 const WORLD_SPRITES = ['asteroid-1', 'asteroid-2', 'asteroid-ore', 'beacon', 'backdrop']
 
 export type Camera = { x: number; y: number; zoom: number }
@@ -19,7 +19,8 @@ export type View = {
   hoverHp: number
   /** Screen-space drag rectangle. */
   box: { x0: number; y0: number; x1: number; y1: number } | null
-  placingMine: boolean
+  /** The ore asteroid clicked on, or -1. */
+  node: number
   hoverNode: number
   showRally: boolean
 }
@@ -31,7 +32,7 @@ type Particle = {
 type Pending = { at: number; x: number; y: number; size: number; final: boolean }
 type Ping = { x: number; y: number; t: number; color: string }
 
-const TIER_ORDER: Record<Tier, number> = { station: 0, mine: 1, capital: 2, cruiser: 3, frigate: 4, gunship: 5, fighter: 6 }
+const TIER_ORDER: Record<Tier, number> = { station: 0, mine: 1, defense: 1, capital: 2, cruiser: 3, frigate: 4, gunship: 5, fighter: 6 }
 const ICON_PATH = new Map<HardpointKind, Path2D>()
 const iconPath = (k: HardpointKind) => {
   let p = ICON_PATH.get(k)
@@ -346,14 +347,34 @@ export class Renderer {
       }
     }
 
-    // Ore, and the rocks around it.
+    // Ore, with its survey ring: dashed while unclaimed, in the holder's colour once surveyed, and
+    // an arc for a survey under way.
     for (const n of w.nodes) {
-      if (!onScreen(n.x, n.y, 200)) continue
-      if (view.placingMine && !n.mine) {
-        ctx.strokeStyle = view.hoverNode === n.id ? '#7dffa0' : 'rgba(125,255,160,0.5)'
-        ctx.lineWidth = (view.hoverNode === n.id ? 4 : 2) / z
+      if (!onScreen(n.x, n.y, SURVEY_RADIUS + 40)) continue
+      const mineCol = n.owner === -1 ? 'rgba(170,230,255,0.35)' : n.owner === view.me ? 'rgba(125,255,160,0.55)' : 'rgba(255,90,80,0.55)'
+      if (!n.site) {
+        ctx.strokeStyle = mineCol
+        ctx.lineWidth = 1.5 / z
+        ctx.setLineDash(n.owner === -1 ? [10 / z, 12 / z] : [])
         ctx.beginPath()
-        ctx.arc(n.x, n.y, 120 + Math.sin(this.clock * 4) * 6, 0, Math.PI * 2)
+        ctx.arc(n.x, n.y, SURVEY_RADIUS, 0, Math.PI * 2)
+        ctx.stroke()
+        ctx.setLineDash([])
+        const goingTo: Owner = n.progress < 0 ? 0 : 1
+        const full = (n.owner === 0 && n.progress <= -1) || (n.owner === 1 && n.progress >= 1)
+        if (n.progress !== 0 && !full) {
+          ctx.strokeStyle = goingTo === view.me ? '#7dffa0' : '#ff5a50'
+          ctx.lineWidth = 6 / Math.max(z, 0.4)
+          ctx.beginPath()
+          ctx.arc(n.x, n.y, 112, -Math.PI / 2, -Math.PI / 2 + Math.abs(n.progress) * Math.PI * 2)
+          ctx.stroke()
+        }
+      }
+      if (view.node === n.id || view.hoverNode === n.id) {
+        ctx.strokeStyle = view.node === n.id ? '#7dffa0' : 'rgba(125,255,160,0.5)'
+        ctx.lineWidth = (view.node === n.id ? 3 : 2) / z
+        ctx.beginPath()
+        ctx.arc(n.x, n.y, 128 + Math.sin(this.clock * 4) * 5, 0, Math.PI * 2)
         ctx.stroke()
       }
       this.drawSprite(ctx, 'asteroid-ore', n.x, n.y, n.rot, 170, z)
@@ -813,7 +834,7 @@ export class Renderer {
     for (const n of w.nodes) {
       const x = X(n.x)
       const y = Y(n.y)
-      ctx.fillStyle = '#4fe3d8'
+      ctx.fillStyle = n.owner === -1 ? '#4fe3d8' : n.owner === me ? '#7dffa0' : '#ff5a50'
       ctx.beginPath()
       ctx.moveTo(x, y - 4)
       ctx.lineTo(x + 3, y)
@@ -852,8 +873,8 @@ export class Renderer {
       const col = u.owner === me ? '#7dffa0' : '#ff5a50'
       const x = X(u.x)
       const y = Y(u.y)
-      if (u.t.tier === 'station' || u.t.tier === 'mine') {
-        const r = u.t.tier === 'station' ? 6 : 3.5
+      if (u.t.tier === 'station' || u.t.tier === 'mine' || u.t.tier === 'defense') {
+        const r = u.t.tier === 'station' ? 6 : u.t.tier === 'defense' ? 4 : 3.5
         ctx.fillStyle = 'rgba(0,0,0,0.6)'
         ctx.fillRect(x - r - 1, y - r - 1, r * 2 + 2, r * 2 + 2)
         ctx.strokeStyle = col

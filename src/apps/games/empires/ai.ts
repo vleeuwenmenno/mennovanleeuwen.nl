@@ -1,5 +1,5 @@
 import { ABILITIES, LEVEL_UP, MAX_LEVEL, UPGRADES, buildable, isShip, techsFor, unitOf, type Tier } from './data'
-import { cantBuild, cantResearch, cmdAbility, cmdAttack, cmdBuild, cmdMine, cmdMove, cmdRally, cmdResearch, fleet, near, other, shieldMax, type Owner, type Unit, type World } from './sim'
+import { cantBuild, cantResearch, cmdAbility, cmdAttack, cmdBuild, cmdMove, cmdRally, cmdResearch, cmdSite, fleet, near, other, shieldMax, type Owner, type Unit, type World } from './sim'
 
 // The enemy admiral. Every second or two it looks at the battle and decides: claim ore, upgrade
 // the station, queue ships that counter what it has seen, defend what's under attack, grab
@@ -75,13 +75,15 @@ export function think(w: World, b: Brain, dt: number) {
   const toward = enemySt ? Math.sign(enemySt.x - st.x) || 1 : 1
   cmdRally(w, o, st.x + toward * 520, st.y)
 
-  // Ore first: the nearest free asteroids on our half and in the middle.
+  // Ore first: build on what we've surveyed, nearest the station first. Once the economy is up,
+  // spare surveyed ore gets a defense platform instead.
   const mines = w.units.filter((u) => u.owner === o && u.t.tier === 'mine').length
-  if (mines < D.mines && p.credits >= 500 + (p.queue.length ? 0 : 150)) {
-    const free = w.nodes
-      .filter((n) => !n.mine && (!enemySt || d2(n, st) < d2(n, enemySt) * 1.05))
-      .sort((a, c) => d2(a, st) - d2(c, st))
-    if (free[0]) cmdMine(w, o, free[0].id)
+  const ours = w.nodes.filter((n) => n.owner === o && !n.site).sort((a, c) => d2(a, st) - d2(c, st))
+  // Surveyed ore with nothing on it is money left on the table: save for a mine before more ships.
+  const savingForMine = !!ours[0] && mines < D.mines
+  if (ours[0]) {
+    if (mines < D.mines && p.credits >= 500) cmdSite(w, o, ours[0].id, 'mine')
+    else if (mines >= Math.min(3, D.mines) && p.credits >= 650 + 600) cmdSite(w, o, ours[0].id, 'defense')
   }
 
   const army = fleet(w, o).filter((u) => !u.parent)
@@ -106,7 +108,7 @@ export function think(w: World, b: Brain, dt: number) {
   }
 
   // Keep two orders in the yard, saving up for the one we picked rather than buying whatever's cheap.
-  if (p.queue.length < 2 && !upgradeDue) {
+  if (p.queue.length < (savingForMine ? 1 : 2) && !upgradeDue && !(savingForMine && p.credits < 500)) {
     if (b.want && cantBuild(w, o, b.want) && cantBuild(w, o, b.want) !== 'Not enough credits') b.want = null
     b.want ??= pickShip(w, b)
     if (b.want && !cmdBuild(w, o, b.want)) b.want = null
@@ -123,7 +125,7 @@ export function think(w: World, b: Brain, dt: number) {
   }
 
   // Defend: anything hitting our station or mines gets the whole home fleet.
-  const assets = w.units.filter((u) => u.owner === o && (u.t.tier === 'station' || u.t.tier === 'mine'))
+  const assets = w.units.filter((u) => u.owner === o && (u.t.tier === 'station' || u.t.tier === 'mine' || u.t.tier === 'defense'))
   let threat: Unit | undefined
   for (const a of assets) {
     const foes = visibleEnemies(w, o, a.x, a.y, 1000)
@@ -144,17 +146,28 @@ export function think(w: World, b: Brain, dt: number) {
     const spare = army.find((u) => (u.t.tier === 'gunship' || u.t.tier === 'frigate') && !b.scouts.has(u.id))
     if (spare) b.scouts.add(spare.id)
   }
+  // Early on, before there are spare warships, the starting fighters do the surveying.
+  if (!b.attacking && b.scouts.size < 2 && w.time < 240) {
+    const f = army.find((u) => u.t.tier === 'fighter' && !b.scouts.has(u.id))
+    if (f) for (const id of army.filter((u) => u.squad && u.squad === f.squad).map((u) => u.id)) b.scouts.add(id)
+  }
   // They pick beacons they can hold, and come home from fights they'd lose.
   const scouts = [...b.scouts].map((id) => w.byId.get(id)!)
   const scoutValue = value(scouts)
-  const wanted = w.beacons.filter((bc) => bc.owner !== o && threatAt(w, o, bc.x, bc.y) < scoutValue * 0.9).sort((a, c) => d2(a, st) - d2(c, st))
+  // Unsurveyed ore on our half comes first, then beacons.
+  const ore = w.nodes.filter((n) => !n.site && n.owner !== o && (!enemySt || d2(n, st) < d2(n, enemySt) * 1.05))
+  const wanted = [...ore, ...w.beacons.filter((bc) => bc.owner !== o)]
+    .filter((g) => threatAt(w, o, g.x, g.y) < scoutValue * 0.9)
+    .sort((a, c) => d2(a, st) - d2(c, st))
   for (const s of scouts) {
     if (threatAt(w, o, s.x, s.y, 700) > scoutValue * 1.3 && d2(s, st) > 1500 ** 2) {
       cmdMove(w, o, [s.id], p.rally.x, p.rally.y)
       continue
     }
-    const goal = wanted[0]
-    if (goal && s.order.k === 'idle') cmdMove(w, o, [s.id], goal.x + (Math.random() - 0.5) * 200, goal.y + (Math.random() - 0.5) * 200, true)
+    // Each scout (or squadron) takes a different goal.
+    const slot = [...new Set(scouts.map((x) => x.squad || x.id))].indexOf(s.squad || s.id)
+    const goal = wanted[slot % Math.max(1, wanted.length)]
+    if (goal && s.order.k === 'idle') cmdMove(w, o, [s.id], goal.x + (Math.random() - 0.5) * 160, goal.y + (Math.random() - 0.5) * 160, true)
   }
 
   // Attack waves.
@@ -181,7 +194,7 @@ export function think(w: World, b: Brain, dt: number) {
   // Pick a goal: enemy mines nearest our fleet, then beacons, then the station.
   const c = { x: cxm, y: cym }
   const targets = [
-    ...w.units.filter((u) => u.owner !== o && u.t.tier === 'mine' && u.seen[o]),
+    ...w.units.filter((u) => u.owner !== o && (u.t.tier === 'mine' || u.t.tier === 'defense') && u.seen[o]),
     ...w.beacons.filter((bc) => bc.owner === other(o)),
   ].sort((a, z) => d2(a, c) - d2(z, c))
   const goal = targets[0] ?? enemySt
