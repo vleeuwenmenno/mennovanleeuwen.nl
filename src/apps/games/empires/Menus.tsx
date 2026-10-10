@@ -3,7 +3,7 @@ import { DIFFICULTY, type Difficulty } from './ai'
 import { FACTIONS, type FactionId } from './data'
 import { Frame, Icon } from './Hud'
 import { MAP, MAPS, type MapDef } from './maps'
-import { ALLY, ENEMY, OWN, relColor } from './render'
+import { ALLY, ENEMY, OWN, drawTerrainOverview, relColor } from './render'
 import { ACTIONS, RESERVED, bindKey, keyName, keyOf, resetKeys, setSettings, useSettings, type Action, type Settings } from './settings'
 import { newWorld, type Owner, type World } from './sim'
 import type { EmpiresSound } from './sound'
@@ -194,6 +194,7 @@ export function HowToPlay() {
         <li>Select your station ({k('station')}) to build ships and research upgrades, including station levels that unlock frigates, cruisers and a flagship.</li>
         <li>Big ships have hardpoints. Hover one and right-click a marker to target it: knock out shield generators first.</li>
         <li>Fighters beat cruisers and flagships, gunships beat fighters, frigates beat gunships, cruisers beat frigates.</li>
+        <li>Asteroid fields wear down frigates, cruisers and flagships flying through them (fighters and gunships dodge the rocks). Nebulas knock out shields and halve sensor range.</li>
       </ul>
       <p className="ew-muted ew-small">
         Commands: {k('move')} move, {k('attack')} attack move, {k('patrol')} patrol, {k('hold')} hold, {k('stop')} stop, {k('ability')} ability, {k('rally')} rally point. Camera: {k('panUp')}
@@ -260,7 +261,8 @@ export function MainMenu({ sound, victories, onPlay }: { sound: EmpiresSound; vi
 
 const slotColor = (s: Slot) => (s.kind === 'closed' ? '#5a6478' : s.kind === 'you' ? OWN : s.team === 0 ? ALLY : ENEMY)
 
-/** The map from above: asteroid fields, ore, beacons, and the spawns numbered and coloured by slot. */
+/** The map from above: nebulas, asteroid fields, rocks, ore, beacons, and the spawns numbered and
+ * coloured by slot. */
 function MapPreview({ map, slots, className = '' }: { map: MapDef; slots?: Slot[]; className?: string }) {
   const ref = useRef<HTMLCanvasElement>(null)
   // The real map, with dummy players, for its asteroid layout (maps are seeded, so it matches).
@@ -287,6 +289,7 @@ function MapPreview({ map, slots, className = '' }: { map: MapDef; slots?: Slot[
       g.strokeStyle = 'rgba(140,180,240,0.08)'
       for (let x = 700; x < map.w; x += 700) g.strokeRect(ox + x * s, oy, 0, map.h * s)
       for (let y = 700; y < map.h; y += 700) g.strokeRect(ox, oy + y * s, map.w * s, 0)
+      drawTerrainOverview(g, map, ox, oy, s)
       g.fillStyle = 'rgba(150,150,165,0.45)'
       for (const r of w!.rocks) {
         g.beginPath()

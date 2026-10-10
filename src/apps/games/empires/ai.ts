@@ -1,4 +1,5 @@
 import { ABILITIES, LEVEL_UP, MAX_LEVEL, UPGRADES, buildable, isShip, techsFor, unitOf, type Tier } from './data'
+import { inside } from './maps'
 import { cantBuild, cantResearch, cmdAbility, cmdAttack, cmdBuild, cmdMove, cmdRally, cmdResearch, cmdSite, fleet, foes, near, sees, shieldMax, type Owner, type Unit, type World } from './sim'
 
 // The enemy admiral. Every second or two it looks at the battle and decides: claim ore, upgrade
@@ -61,6 +62,26 @@ function visibleEnemies(w: World, o: Owner, x: number, y: number, r: number) {
   return out
 }
 
+/**
+ * A spot near (x, y) at about the same distance from the station, clear of nebulas and asteroid
+ * fields: a fleet gathering inside a nebula would sit there without shields and half blind, and
+ * one in a field would grind on rocks every time it shuffles about. The map is no secret, so this
+ * doesn't peek at anything the player can't see.
+ */
+function clearSpot(w: World, st: Unit, x: number, y: number) {
+  const bad = (px: number, py: number) => inside(w.map.nebulas, px, py, 250) || inside(w.map.fields, px, py, 200)
+  if (!bad(x, y)) return { x, y }
+  const a0 = Math.atan2(y - st.y, x - st.x)
+  const d0 = Math.hypot(x - st.x, y - st.y)
+  for (const d of [d0, d0 * 0.7, d0 * 1.4])
+    for (const da of [0.35, -0.35, 0.7, -0.7, 1.05, -1.05, 1.4, -1.4]) {
+      const px = Math.min(w.w - 80, Math.max(80, st.x + Math.cos(a0 + da) * d))
+      const py = Math.min(w.h - 80, Math.max(80, st.y + Math.sin(a0 + da) * d))
+      if (!bad(px, py)) return { x: px, y: py }
+    }
+  return { x, y }
+}
+
 /** What the enemy has (that we can see) around a spot. */
 const threatAt = (w: World, o: Owner, x: number, y: number, r = 900) => value(visibleEnemies(w, o, x, y, r))
 
@@ -110,10 +131,12 @@ export function think(w: World, b: Brain, dt: number) {
     .map((q) => w.byId.get(q.station))
     .filter((u): u is Unit => !!u && !u.dead)
     .sort((a, c) => d2(a, st) - d2(c, st))[0]
-  // Rally in front of the station, towards the nearest enemy (or the middle of the map).
+  // Rally in front of the station, towards the nearest enemy (or the middle of the map), out of
+  // any nebula or asteroid field.
   const aim = enemySt ?? { x: w.w / 2, y: w.h / 2 }
   const ad = Math.hypot(aim.x - st.x, aim.y - st.y) || 1
-  cmdRally(w, o, st.x + ((aim.x - st.x) / ad) * 560, st.y + ((aim.y - st.y) / ad) * 560)
+  const rally = clearSpot(w, st, st.x + ((aim.x - st.x) / ad) * 560, st.y + ((aim.y - st.y) / ad) * 560)
+  cmdRally(w, o, rally.x, rally.y)
 
   // Ore first: build on what we've surveyed, nearest the station first. Once the economy is up,
   // spare surveyed ore gets a defense platform instead.
@@ -160,7 +183,8 @@ export function think(w: World, b: Brain, dt: number) {
     const foes = visibleEnemies(w, o, u.x, u.y, ABILITIES[u.t.ability].range ?? 650)
     if (!foes.length) continue
     const ok =
-      u.t.ability === 'shieldBoost' ? u.shield < shieldMax(u) * 0.4 : u.t.ability === 'repairSwarm' ? u.hull < u.hullMax * 0.65 : u.t.ability === 'flakBarrage' ? foes.some((f) => f.t.tier === 'fighter') : true
+      // A nebula would drain a boost straight away.
+      u.t.ability === 'shieldBoost' ? u.shield < shieldMax(u) * 0.4 && !u.nebula : u.t.ability === 'repairSwarm' ? u.hull < u.hullMax * 0.65 : u.t.ability === 'flakBarrage' ? foes.some((f) => f.t.tier === 'fighter') : true
     if (ok) cmdAbility(w, o, [u.id])
   }
 

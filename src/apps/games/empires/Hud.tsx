@@ -175,6 +175,7 @@ function Vitals({ u, squad = [u] }: { u: Unit; squad?: Unit[] }) {
           </small>
         </>
       )}
+      {u.nebula && <p className="ew-terrain-note">In a nebula: shields down, sensors at half range</p>}
     </div>
   )
 }

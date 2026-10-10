@@ -1590,3 +1590,11 @@ span.ew-teamtag {
     display: none;
   }
 }
+
+/* Under a ship's shield bar while it sits in a nebula. */
+.ew-terrain-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 11px;
+  color: #d9b8ff;
+}
