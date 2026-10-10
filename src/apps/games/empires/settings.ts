@@ -6,7 +6,7 @@ import { useSyncExternalStore } from 'react'
 export type Action =
   | 'panUp' | 'panDown' | 'panLeft' | 'panRight' | 'zoomIn' | 'zoomOut'
   | 'move' | 'attack' | 'stop' | 'patrol' | 'hold' | 'rally' | 'ability'
-  | 'station' | 'idle' | 'focus' | 'alert' | 'pause'
+  | 'station' | 'idle' | 'focus' | 'alert' | 'techTree' | 'pause'
 
 export const ACTIONS: { id: Action; label: string; group: string }[] = [
   { id: 'panUp', label: 'Camera up', group: 'Camera' },
@@ -26,13 +26,14 @@ export const ACTIONS: { id: Action; label: string; group: string }[] = [
   { id: 'idle', label: 'Select idle ships', group: 'Selection' },
   { id: 'focus', label: 'Look at selection', group: 'Selection' },
   { id: 'alert', label: 'Look at last alert', group: 'Selection' },
+  { id: 'techTree', label: 'Tech tree', group: 'Game' },
   { id: 'pause', label: 'Pause', group: 'Game' },
 ]
 
 export const DEFAULT_KEYS: Record<Action, string> = {
   panUp: 'w', panDown: 's', panLeft: 'a', panRight: 'd', zoomIn: '=', zoomOut: '-',
   move: 'm', attack: 'r', stop: 'x', patrol: 't', hold: 'g', rally: 'y', ability: 'q',
-  station: 'h', idle: 'i', focus: 'f', alert: ' ', pause: 'p',
+  station: 'h', idle: 'i', focus: 'f', alert: ' ', techTree: 'k', pause: 'p',
 }
 
 /** Keys that can't be bound: they already mean something everywhere in the game. */

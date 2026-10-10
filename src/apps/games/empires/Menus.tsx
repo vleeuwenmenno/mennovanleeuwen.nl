@@ -76,10 +76,10 @@ function Seg<T extends string | number | boolean>({ value, options, onChange, la
 }
 
 /** A centred panel over a dimmed background; clicking outside closes it. */
-export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+export function Modal({ title, onClose, children, wide, className = '' }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean; className?: string }) {
   return (
     <div className="ew-modal-back" onClick={onClose}>
-      <div className={`ew-modal ${wide ? 'is-wide' : ''}`} onClick={(e) => e.stopPropagation()}>
+      <div className={`ew-modal ${wide ? 'is-wide' : ''} ${className}`} onClick={(e) => e.stopPropagation()}>
         <Frame title={title} aside={<button className="ew-close" onClick={onClose} aria-label="Close">✕</button>}>
           {children}
         </Frame>
@@ -191,7 +191,7 @@ export function HowToPlay() {
         <li>Drag to select ships. Right-click to move, or to attack what's under the cursor.</li>
         <li>Park ships at glowing ore for a few seconds to survey it, then click it to build a mining platform (credits) or a defense platform (guns).</li>
         <li>Hold ships near a beacon to capture it: more income and a bigger fleet for your whole team.</li>
-        <li>Select your station ({k('station')}) to build ships and research upgrades, including station levels that unlock frigates, cruisers and a flagship.</li>
+        <li>Select your station ({k('station')}) to build ships. Open the tech tree ({k('techTree')}) to research upgrades, including station levels that unlock frigates, cruisers and a flagship. The battle carries on while it's open.</li>
         <li>Big ships have hardpoints. Hover one and right-click a marker to target it: knock out shield generators first.</li>
         <li>Fighters beat cruisers and flagships, gunships beat fighters, frigates beat gunships, cruisers beat frigates.</li>
       </ul>

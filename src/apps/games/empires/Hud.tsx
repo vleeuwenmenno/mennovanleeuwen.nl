@@ -1,16 +1,18 @@
-import { useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import {
   ABILITIES, FACTIONS, LEVEL_UP, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
   type UnitType,
 } from './data'
 import { HP_COLOR, HP_ICON, HP_NAME } from './icons'
 import { spriteUrl } from './render'
-import { building, cantBuild, cantResearch, cantSite, researchCost, shieldFull, shieldMax, techBonus, type OreNode, type Owner, type ResearchItem, type Unit, type World } from './sim'
+import { keyName, useSettings } from './settings'
+import { building, cantBuild, cantResearch, cantSite, researchCost, researchLock, shieldFull, shieldMax, techBonus, type OreNode, type Owner, type ResearchItem, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
-// shipyard and game speed; and along the bottom the tactical map, a details panel for whatever is
-// selected (the station's shipyard and research live there, so building happens at the station),
-// and the selected units with their command grid.
+// shipyard, research and game speed; and along the bottom the tactical map, a details panel for
+// whatever is selected (the station's shipyard lives there, so building happens at the station),
+// and the selected units with their command grid. Research has its own screen, the tech tree
+// (TechTree.tsx); the tiles here only show a ship type's own upgrades.
 
 export type Hud = {
   credits: number
@@ -63,6 +65,7 @@ const ICONS = {
   sound: 'M4 9.5h4l5-4.5v14l-5-4.5H4z M16.5 8.5a5 5 0 0 1 0 7 M19 6a8.5 8.5 0 0 1 0 12',
   mute: 'M4 9.5h4l5-4.5v14l-5-4.5H4z M16.5 9.5l5 5 M21.5 9.5l-5 5',
   time: 'M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0 M12 7v5h4',
+  tree: 'M3.5 9.5h5v5h-5z M15.5 3.5h5v5h-5z M15.5 15.5h5v5h-5z M8.5 12H12 M12 6v12 M12 6h3.5 M12 18h3.5',
 } as const
 export type IconName = keyof typeof ICONS
 
@@ -181,7 +184,7 @@ function Vitals({ u, squad = [u] }: { u: Unit; squad?: Unit[] }) {
 
 // --- Top bar ----------------------------------------------------------------------------------------
 
-export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onSettings, onShipyard }: {
+export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onSettings, onShipyard, onTechTree }: {
   hud: Hud
   faction: FactionId
   sector: string
@@ -191,8 +194,11 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
   onMenu: () => void
   onSettings: () => void
   onShipyard: () => void
+  onTechTree: () => void
 }) {
   const q = hud.queue[0]
+  const r = hud.research[0]
+  const { keys } = useSettings()
   return (
     <div className="ew-top">
       <div className="ew-top-cell ew-top-faction">
@@ -219,7 +225,7 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
         <b>{hud.beacons}</b>
         <small>/ {hud.beaconsAll}</small>
       </div>
-      <button className={`ew-top-cell ew-yardchip ${q ? 'is-busy' : ''}`} onClick={onShipyard} title="Select the station to build and research (H)">
+      <button className={`ew-top-cell ew-yardchip ${q ? 'is-busy' : ''}`} onClick={onShipyard} title="Select the station to build ships (H)">
         <Icon name="yard" size={18} />
         {q ? (
           <>
@@ -231,6 +237,20 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
           </>
         ) : (
           <span>Shipyard idle</span>
+        )}
+      </button>
+      <button className={`ew-top-cell ew-yardchip ew-labchip ${r ? 'is-busy' : ''}`} onClick={onTechTree} title={`Tech tree (${keyName(keys.techTree)})`}>
+        <Icon name="tree" size={18} />
+        {r ? (
+          <>
+            <img src={techIconUrl(r.id)} alt="" />
+            <span>{researchName(r.id, hud.level)}</span>
+            <b>{Math.ceil(r.left)}s</b>
+            {hud.research.length > 1 && <small>+{hud.research.length - 1}</small>}
+            <i style={{ width: `${(1 - r.left / r.total) * 100}%` }} />
+          </>
+        ) : (
+          <span>Research idle</span>
         )}
       </button>
       <div className="ew-top-right">
@@ -314,7 +334,7 @@ type DetailProps = {
   onUnqueue: (id: string) => void
   onCancel: (index: number) => void
   onResearch: (id: string) => void
-  onCancelResearch: (index: number) => void
+  onTechTree: () => void
   onSite: (node: number, tier: 'mine' | 'defense') => void
   onStation: () => void
   /** The ore asteroid clicked on, if no ships are selected. */
@@ -332,7 +352,7 @@ export function DetailPanel(p: DetailProps) {
             <strong>No selection.</strong> Drag across your ships to command them.
           </p>
           <p className="ew-muted">
-            Select your <button className="ew-link" onClick={p.onStation}>station</button> (H) to build ships and research upgrades. Park ships at glowing ore to survey it, then click it to build.
+            Select your <button className="ew-link" onClick={p.onStation}>station</button> (H) to build ships, or open the <button className="ew-link" onClick={p.onTechTree}>tech tree</button> for upgrades. Park ships at glowing ore to survey it, then click it to build.
           </p>
         </div>
       </Frame>
@@ -377,38 +397,88 @@ function Slots({ label, size, items, onCancel }: { label: string; size: number; 
   )
 }
 
-const researchName = (id: string, level: number) => (id === LEVEL_UP ? `Station level ${level + 1}` : TECH[id].name)
+export const researchName = (id: string, level: number) => (id === LEVEL_UP ? `Station level ${level + 1}` : TECH[id].name)
 
-/** One piece of research: done, under way, locked, or ready to buy. */
-function TechTile({ id, w, me, hud, onResearch }: { id: string; w: World; me: Owner; hud: Hud; onResearch: (id: string) => void }) {
-  const level = id === LEVEL_UP
-  const t = level ? null : TECH[id]
-  const done = !level && hud.techs.includes(id)
-  const maxed = level && hud.level >= MAX_LEVEL
-  const busy = hud.research.find((r) => r.id === id)
+/** The generated icon for a piece of research; every station level shares one. */
+export const techIconUrl = (id: string) => `/games/empires/tech/${id === LEVEL_UP ? 'level' : id}.webp`
+
+/** What reaching a station level brings, for its tile in the tech tree. */
+export function levelBlurb(faction: FactionId, level: number) {
+  const unlocks = buildable(faction).filter((u) => u.level === level)
+  return `More hull and firepower for the station, +4 fleet capacity${unlocks.length ? `, unlocks the ${unlocks.map((u) => u.name).join(', ')}` : ''}.`
+}
+
+export type TechStatus = 'done' | 'busy' | 'queued' | 'ready' | 'poor' | 'locked'
+/**
+ * Where one piece of research stands: done, under way (first in the queue), waiting in the queue,
+ * ready to buy, held back by credits or a full queue ('poor'), or locked by the station level or
+ * a prerequisite. `why` says what's in the way; `slot` is its place in the queue.
+ */
+export function techState(w: World, me: Owner, hud: Hud, id: string): { status: TechStatus; why: string | null; slot: number; progress: number; left: number } {
+  const slot = hud.research.findIndex((r) => r.id === id)
+  const r = hud.research[slot]
+  const done = id === LEVEL_UP ? hud.level >= MAX_LEVEL : hud.techs.includes(id)
+  const lock = researchLock(w.players[me], id)
   const why = cantResearch(w, me, id)
-  const locked = !!t && t.level > hud.level
+  const status: TechStatus = done ? 'done' : slot === 0 ? 'busy' : slot > 0 ? 'queued' : lock || why === 'No station' ? 'locked' : why ? 'poor' : 'ready'
+  return { status, why: lock ?? why, slot, progress: r ? 1 - r.left / r.total : 0, left: r ? r.left : 0 }
+}
+
+/** A research icon in a ring that fills as the research runs. */
+export function TechIcon({ id, size = 40, progress = 0, status }: { id: string; size?: number; progress?: number; status?: TechStatus }) {
+  return (
+    <span className={`ew-techicon ${status ? `is-${status}` : ''}`} style={{ width: size, height: size, ['--p' as string]: `${progress * 360}deg` }}>
+      <img src={techIconUrl(id)} alt="" />
+    </span>
+  )
+}
+
+/** One piece of research as a compact tile: icon, name and where it stands. Click to research. */
+function TechTile({ id, w, me, hud, onResearch }: { id: string; w: World; me: Owner; hud: Hud; onResearch: (id: string) => void }) {
+  const s = techState(w, me, hud, id)
   const cost = researchCost(w.players[me], id)
-  const unlocks = level ? buildable(w.players[me].faction).filter((u) => u.level === hud.level + 1) : []
-  const blurb = level
-    ? `More hull and firepower for the station, +4 fleet capacity${unlocks.length ? `, unlocks the ${unlocks.map((u) => u.name).join(', ')}` : ''}.`
-    : t!.blurb
+  const blurb = id === LEVEL_UP ? levelBlurb(w.players[me].faction, hud.level + 1) : TECH[id].blurb
+  const line =
+    s.status === 'done' ? '✓ Researched'
+      : s.status === 'busy' ? `${Math.ceil(s.left)}s left`
+        : s.status === 'queued' ? `Queued, #${s.slot + 1}`
+          : s.status === 'locked' && id !== LEVEL_UP && TECH[id].level > hud.level ? `Station Lv${TECH[id].level}`
+            : s.status === 'locked' ? 'Locked'
+              : cost ? `${cost.cost} · ${cost.time}s` : ''
   return (
     <button
-      className={`ew-tech ${done || maxed ? 'is-done' : busy ? 'is-busy' : locked ? 'is-locked' : why ? 'is-off' : ''}`}
+      className={`ew-tech is-${s.status}`}
       onClick={() => onResearch(id)}
-      disabled={done || maxed}
-      title={`${researchName(id, hud.level)}\n${blurb}${!done && why && !busy ? `\n\n${why}` : ''}`}
+      disabled={s.status === 'done'}
+      title={`${researchName(id, hud.level)}\n${blurb}${s.why && s.status !== 'done' && s.status !== 'busy' && s.status !== 'queued' ? `\n\n${s.why}` : ''}`}
     >
-      <strong>{maxed ? 'Station maxed' : researchName(id, hud.level)}</strong>
-      <span>{done ? '✓ Researched' : maxed ? '✓' : busy ? `${Math.ceil(busy.left)}s…` : locked ? `Station Lv${t!.level}` : cost ? `${cost.cost} · ${cost.time}s` : ''}</span>
+      <TechIcon id={id} size={30} progress={s.progress} status={s.status} />
+      <strong>{researchName(id, hud.level)}</strong>
+      <span>{line}</span>
+    </button>
+  )
+}
+
+/** Opens the tech tree, showing what's being researched and how far along it is. */
+function TechTreeButton({ hud, onOpen }: { hud: Hud; onOpen: () => void }) {
+  const r = hud.research[0]
+  const { keys } = useSettings()
+  return (
+    <button className={`ew-treebtn ${r ? 'is-busy' : ''}`} onClick={onOpen} title={`Open the tech tree to research upgrades (${keyName(keys.techTree)})`}>
+      {r ? <TechIcon id={r.id} size={30} progress={1 - r.left / r.total} status="busy" /> : <Icon name="tree" size={22} />}
+      <span>
+        <strong>Tech tree</strong>
+        <small>{r ? `${researchName(r.id, hud.level)}, ${Math.ceil(r.left)}s` : 'Nothing researching'}</small>
+      </span>
+      <b>{hud.research.length}/{MAX_RESEARCH}</b>
+      <kbd>{keyName(keys.techTree)}</kbd>
+      {r && <i style={{ width: `${(1 - r.left / r.total) * 100}%` }} />}
     </button>
   )
 }
 
 function StationDetail(p: DetailProps & { st: Unit }) {
   const { w, me, st, hud, faction } = p
-  const [tab, setTab] = useState<'yard' | 'research'>('yard')
   const ships = buildable(faction)
   const queued = (id: string) => hud.queue.filter((q) => q.unit === id).length
   return (
@@ -425,46 +495,17 @@ function StationDetail(p: DetailProps & { st: Unit }) {
       </div>
       <div className="ew-detail-main">
         <header className="ew-yardhead">
-          <div className="ew-tabs" role="tablist">
-            <button role="tab" aria-selected={tab === 'yard'} className={tab === 'yard' ? 'is-on' : ''} onClick={() => setTab('yard')}>Shipyard</button>
-            <button role="tab" aria-selected={tab === 'research'} className={tab === 'research' ? 'is-on' : ''} onClick={() => setTab('research')}>
-              Research{hud.research.length ? ` (${hud.research.length})` : ''}
-            </button>
-          </div>
-          <div className="ew-queues">
-            <Slots label={`Build queue (${hud.queue.length}/${MAX_QUEUE})`} size={MAX_QUEUE} onCancel={p.onCancel}
-              items={hud.queue.map((q) => ({ icon: <img src={spriteUrl(UNIT[q.unit].sprite)} alt="" />, name: UNIT[q.unit].name, left: q.left, total: q.total }))}
-            />
-            <Slots label={`Research (${hud.research.length}/${MAX_RESEARCH})`} size={MAX_RESEARCH} onCancel={p.onCancelResearch}
-              items={hud.research.map((r) => ({
-                icon: r.id === LEVEL_UP ? <b className="ew-slot-lvl">Lv{hud.level + 1}</b> : <img src={spriteUrl(UNIT[TECH[r.id].for].sprite)} alt="" />,
-                name: researchName(r.id, hud.level), left: r.left, total: r.total,
-              }))}
-            />
-          </div>
+          <h5 className="ew-yardtitle">Shipyard</h5>
+          <TechTreeButton hud={hud} onOpen={p.onTechTree} />
         </header>
-        {tab === 'yard' ? (
-          <div className="ew-yard">
-            {ships.map((t) => (
-              <ShipCard key={t.id} t={t} why={cantBuild(w, me, t.id)} level={hud.level} queued={queued(t.id)} onBuild={p.onBuild} onUnqueue={p.onUnqueue} />
-            ))}
-          </div>
-        ) : (
-          <div className="ew-research">
-            {[st.t, ...ships].map((t) => (
-              <div key={t.id} className={`ew-techgroup ${t.tier === 'station' ? 'is-station' : ''}`}>
-                <span className="ew-techhead" title={t.name}>
-                  <img src={spriteUrl(t.sprite)} alt="" />
-                  {t.tier === 'station' ? 'Station' : t.name.split(' ')[0]}
-                </span>
-                {t.tier === 'station' && <TechTile id={LEVEL_UP} w={w} me={me} hud={hud} onResearch={p.onResearch} />}
-                {techsFor(t.id).map((x) => (
-                  <TechTile key={x.id} id={x.id} w={w} me={me} hud={hud} onResearch={p.onResearch} />
-                ))}
-              </div>
-            ))}
-          </div>
-        )}
+        <Slots label={`Build queue ${hud.queue.length}/${MAX_QUEUE}`} size={MAX_QUEUE} onCancel={p.onCancel}
+          items={hud.queue.map((q) => ({ icon: <img src={spriteUrl(UNIT[q.unit].sprite)} alt="" />, name: UNIT[q.unit].name, left: q.left, total: q.total }))}
+        />
+        <div className="ew-yard">
+          {ships.map((t) => (
+            <ShipCard key={t.id} t={t} why={cantBuild(w, me, t.id)} level={hud.level} queued={queued(t.id)} onBuild={p.onBuild} onUnqueue={p.onUnqueue} />
+          ))}
+        </div>
       </div>
     </Frame>
   )
@@ -590,6 +631,10 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
             {techsFor(t.id).map((x) => (
               <TechTile key={x.id} id={x.id} w={w} me={me} hud={p.hud} onResearch={p.onResearch} />
             ))}
+            <button className="ew-unittree" onClick={p.onTechTree} title="Open the tech tree">
+              <Icon name="tree" size={15} />
+              Tech tree
+            </button>
           </div>
         )}
         {!mine && !ally && u.hps.length > 0 && <span className="ew-muted ew-small">Select your ships, hover this one and right-click a marker to target that hardpoint.</span>}

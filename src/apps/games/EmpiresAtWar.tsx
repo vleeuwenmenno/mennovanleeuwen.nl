@@ -13,6 +13,7 @@ import {
   type Unit, type World,
 } from './empires/sim'
 import { EmpiresSound } from './empires/sound'
+import { TechTree } from './empires/TechTree'
 import { useHighScore, useIsFocused } from './shared'
 import './empires/empires.css'
 
@@ -136,7 +137,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   const [ready, setReady] = useState(false)
   const [hud, setHud] = useState<Hud>(() => snapshot(world.current, me, selected.current))
   const [toasts, setToasts] = useState<Toast[]>([])
-  const [ui, setUi] = useState({ paused: false, speed: 1, mode: 'normal' as Mode, menu: false, panel: null as 'settings' | 'keys' | 'howto' | null })
+  const [ui, setUi] = useState({ paused: false, speed: 1, mode: 'normal' as Mode, menu: false, panel: null as 'settings' | 'keys' | 'howto' | null, tree: false })
   /** Whether the game was paused before a menu opened (menus pause it, closing them restores that). */
   const pausedBefore = useRef(false)
   const uiRef = useRef(ui)
@@ -608,6 +609,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       } else if (k === 'escape') {
         // Esc backs out of whatever is open, one step at a time, and finally opens the menu.
         if (uiRef.current.menu || uiRef.current.panel) closeMenu()
+        else if (uiRef.current.tree) setTree(false)
         else if (mode.current !== 'normal') setMode('normal')
         else if (selected.current.size || pickedNode.current >= 0) {
           selected.current.clear()
@@ -619,7 +621,8 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       else if (action === 'idle') selectIdle()
       else if (action === 'alert') {
         if (lastAlarm.current) centerOn(lastAlarm.current.x, lastAlarm.current.y)
-      } else if (action === 'pause') togglePause()
+      } else if (action === 'techTree') setTree(!uiRef.current.tree)
+      else if (action === 'pause') togglePause()
       else if (action === 'focus') {
         const us = mySelection()
         if (us.length) centerOn(us.reduce((s, u) => s + u.x, 0) / us.length, us.reduce((s, u) => s + u.y, 0) / us.length)
@@ -842,6 +845,15 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       return { ...u, menu: false, panel: null, paused: paused.current }
     })
   }
+  // The tech tree is an RTS research screen, not a menu: the battle keeps running behind it.
+  const setTree = (open: boolean) => {
+    if (open !== uiRef.current.tree) sound.click()
+    setUi((u) => ({ ...u, tree: open }))
+  }
+  const cancelResearch = (i: number) => {
+    cmdCancelResearch(world.current, me, i)
+    sound.click()
+  }
   const setSpeed = (s: number) => {
     speed.current = s
     setUi((u) => ({ ...u, speed: s }))
@@ -876,6 +888,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       <TopBar hud={hud} faction={myFaction} sector={sector} ui={ui} onShipyard={selectStation} onPause={togglePause} onSpeed={setSpeed}
         onMenu={() => (ui.menu ? closeMenu() : openMenu())}
         onSettings={() => openMenu('settings')}
+        onTechTree={() => setTree(!ui.tree)}
       />
 
       <div className={`ew-toasts ${ui.paused && !ui.menu && !ui.panel ? 'is-low' : ''}`} aria-live="polite">
@@ -909,7 +922,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
           onUnqueue={unqueue}
           onCancel={(i) => cmdCancel(w, me, i)}
           onResearch={research}
-          onCancelResearch={(i) => cmdCancelResearch(w, me, i)}
+          onTechTree={() => setTree(true)}
           onSite={buildSite}
           node={hud.sel.length || pickedNode.current < 0 ? null : w.nodes[pickedNode.current]}
           onStation={selectStation}
@@ -934,6 +947,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
           </Frame>
         </div>
       )}
+      {ui.tree && hud.winner === -1 && <TechTree w={w} me={me} hud={hud} onResearch={research} onCancel={cancelResearch} onClose={() => setTree(false)} />}
       {ui.menu && !ui.panel && hud.winner === -1 && (
         <Modal title="Battle menu" onClose={closeMenu}>
           <div className="ew-menu-list">
