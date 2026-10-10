@@ -1472,9 +1472,14 @@ function ToolCard({ tag, call, result, pending, approval }: { tag: string; call:
         <ul className="agt-hits">
           {hits.map((h) => (
             <li key={h.url}>
-              <a href={h.url} target="_blank" rel="noopener noreferrer">
-                {h.title || h.url}
-              </a>
+              {/* Results come from a search provider: only web links are links. */}
+              {/^https?:\/\//i.test(h.url) ? (
+                <a href={h.url} target="_blank" rel="noopener noreferrer">
+                  {h.title || h.url}
+                </a>
+              ) : (
+                <span>{h.title || h.url}</span>
+              )}
               <span className="muted"> {h.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}</span>
             </li>
           ))}

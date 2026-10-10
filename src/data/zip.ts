@@ -120,7 +120,9 @@ export async function readZip(url: string, knownSize?: number): Promise<ZipIndex
     cdOffset = u64(rv, 48)
   }
 
-  // The table of contents itself: from what is already here, or one more range.
+  // The table of contents itself: from what is already here, or one more range. Its size comes
+  // from the file, so it is checked before it is fetched (100,000 entries fit in far less).
+  if (cdSize > 64 * 1024 * 1024 || cdOffset + cdSize > size) throw new ZipError('The table of contents is damaged (it claims to be bigger than it can be)')
   let cd: Uint8Array
   if (whole) cd = whole.subarray(cdOffset, cdOffset + cdSize)
   else if (cdOffset >= tailStart) cd = tailData.subarray(cdOffset - tailStart, cdOffset - tailStart + cdSize)

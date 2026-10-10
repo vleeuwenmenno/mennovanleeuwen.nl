@@ -15,7 +15,7 @@ import { cleanTrash, history, quota, setHistory, shareLink, createFile, fileLink
 import { officeCallback, officeCheck, officeConfig } from './office.ts'
 import { archiveFile, cancelExtract, extractStatus, listArchive, startExtract } from './unzip.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
-import { HttpError, json, readJson, redirect, sameOrigin, SECURITY } from './http.ts'
+import { HttpError, json, readJson, redirect, sameOrigin, SECURITY, UNTRUSTED } from './http.ts'
 import { minecraftOverview, minecraftStatus } from './minecraft.ts'
 import { search, clearSearchCache } from './search.ts'
 import { suggest } from './suggest.ts'
@@ -188,14 +188,16 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/seafile/raw' && read) {
       const range = req.headers.range
       const r = await rangeRead(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), typeof range === 'string' ? range : undefined)
-      res.writeHead(206, { 'Content-Type': r.type, 'Content-Range': r.contentRange, 'Content-Length': String(r.body.length), 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY }).end(head ? undefined : r.body)
+      res.writeHead(206, { 'Content-Type': 'application/octet-stream', 'Content-Range': r.contentRange, 'Content-Length': String(r.body.length), 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : r.body)
       return true
     }
     // A whole file, piped with whatever range the browser asks for (the music player).
     if (path === '/api/seafile/stream' && read) {
       const range = req.headers.range
       const r = await streamFile(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), typeof range === 'string' ? range : undefined)
-      const headers: Record<string, string> = { 'Content-Type': r.headers.get('content-type') ?? 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY }
+      // Only media types pass: an HTML or SVG file served from this origin would run as the site.
+      const type = r.headers.get('content-type') ?? ''
+      const headers: Record<string, string> = { 'Content-Type': /^(audio|video)\//i.test(type) ? type : 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY, ...UNTRUSTED }
       for (const h of ['content-length', 'content-range']) {
         const v = r.headers.get(h)
         if (v) headers[h.replace(/(^|-)\w/g, (c) => c.toUpperCase())] = v

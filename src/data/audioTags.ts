@@ -44,7 +44,17 @@ export function readTags(path: string): Promise<AudioTags> {
 
 async function load(path: string): Promise<AudioTags> {
   let head = await bytes(path, 0, HEAD - 1)
-  if (ascii(head, 0, 4) === 'fLaC') return flac(head, async (n) => (head = n > head.length && n <= MAX_HEAD ? await bytes(path, 0, n - 1) : head))
+  // FLAC asks for more as it walks its blocks: the head at least doubles each time, so a file of
+  // many tiny blocks takes a few requests, not one per block. A short answer is the end of the file.
+  let ended = head.length < HEAD
+  const more = async (n: number) => {
+    if (ended || n <= head.length || n > MAX_HEAD) return head
+    const want = Math.min(MAX_HEAD, Math.max(n, head.length * 2))
+    head = await bytes(path, 0, want - 1)
+    ended = head.length < want
+    return head
+  }
+  if (ascii(head, 0, 4) === 'fLaC') return flac(head, more)
   if (ascii(head, 0, 3) === 'ID3') {
     const size = 10 + synchsafe(head, 6)
     if (size > head.length && size <= MAX_HEAD) head = await bytes(path, 0, size + 4095)
@@ -110,8 +120,12 @@ function apic(f: Uint8Array, v2: boolean): string | undefined {
     i++
   }
   if (i >= f.length) return undefined
-  return URL.createObjectURL(new Blob([f.slice(i)], { type: mime.includes('/') ? mime : `image/${mime.toLowerCase()}` }))
+  return URL.createObjectURL(new Blob([f.slice(i)], { type: imageType(mime.includes('/') ? mime : `image/${mime}`) }))
 }
+
+/** The file names its picture's type, and a blob: URL has this site's origin: only plain pictures,
+ * never HTML or SVG, which would run as the site if the URL were ever opened. */
+const imageType = (mime: string) => (/^image\/(jpeg|jpg|png|gif|webp|bmp|avif)$/i.test(mime.trim()) ? mime.trim().toLowerCase().replace('jpg', 'jpeg') : 'image/jpeg')
 
 const MPEG_RATES = [
   [11025, 12000, 8000], // 2.5
@@ -199,5 +213,5 @@ function picture(b: Uint8Array): string | undefined {
   const len = be32(b, i)
   i += 4
   if (i + len > b.length) return undefined
-  return URL.createObjectURL(new Blob([b.slice(i, i + len)], { type: mime || 'image/jpeg' }))
+  return URL.createObjectURL(new Blob([b.slice(i, i + len)], { type: imageType(mime) }))
 }
