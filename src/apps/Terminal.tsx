@@ -1,6 +1,8 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { useGoSuggestionState, useGolinksTemplate } from '../data/golinks'
 import { profile } from '../data/profile'
+import { linkAt, linkMenu, openContextMenu, type MenuItem } from '../os/ContextMenu'
+import { notify } from '../os/notify'
 import { setAccent } from '../os/theme'
 import { useWM, type WinState } from '../os/wm'
 import { complete, completions, escapeArg, fastfetch, runLine, WORD_RE, type Completion } from '../terminal/commands'
@@ -83,6 +85,41 @@ function Prompt({ cwd }: { cwd: string }) {
 
 let nextId = 1
 
+// Text size, shared by every terminal window and kept across visits, like a terminal's config.
+const FONT_KEY = 'mvlos.terminal.fontSize'
+const FONT_DEFAULT = 13
+const FONT_MIN = 9
+const FONT_MAX = 28
+const FONT_PRESETS = [11, 12, 13, 14, 16, 18, 20, 24]
+const fontListeners = new Set<() => void>()
+let fontSize = (() => {
+  try {
+    const v = Number(localStorage.getItem(FONT_KEY))
+    return v >= FONT_MIN && v <= FONT_MAX ? v : FONT_DEFAULT
+  } catch {
+    return FONT_DEFAULT
+  }
+})()
+
+function setFontSize(size: number) {
+  fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, size))
+  try {
+    localStorage.setItem(FONT_KEY, String(fontSize))
+  } catch {
+    /* not persisted */
+  }
+  fontListeners.forEach((l) => l())
+}
+
+const useFontSize = () =>
+  useSyncExternalStore(
+    (l) => {
+      fontListeners.add(l)
+      return () => fontListeners.delete(l)
+    },
+    () => fontSize,
+  )
+
 // Phones have no Tab key and typing is slow, so touch devices get one-tap commands.
 const QUICK = ['help', 'projects', 'recent 8', 'cat cv.md', 'ping boltwarden.org', 'sl', 'fastfetch', 'fortune | cowsay']
 const HISTORY_KEY = 'mvlos.history'
@@ -119,6 +156,9 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
   // An animation (sl) holds the prompt until it finishes, like the real one.
   const [animating, setAnimating] = useState(false)
   const busy = running || animating
+  // Read-only: the scrollback can still be read, selected and copied, but nothing gets typed or run.
+  const [readOnly, setReadOnly] = useState(false)
+  const size = useFontSize()
 
   // Tab opens a picker, like fzf: after `go <alias>` your go links, otherwise the commands, files
   // and folders the word could become (once there is more than one). It narrows as you type; Tab
@@ -384,6 +424,18 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    // Text size, like Alacritty and Ghostty: Ctrl + / − / 0 while the terminal has the keys.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !onLogout && ['=', '+', '-', '_', '0'].includes(e.key)) {
+      e.preventDefault()
+      setFontSize(e.key === '0' ? FONT_DEFAULT : fontSize + (e.key === '-' || e.key === '_' ? -1 : 1))
+      return
+    }
+    if (readOnly) {
+      // Copying a selection and moving around the line still work; nothing else does.
+      if ((e.ctrlKey || e.metaKey) && ['c', 'a'].includes(e.key.toLowerCase())) return
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Shift', 'Control', 'Meta', 'Alt'].includes(e.key)) e.preventDefault()
+      return
+    }
     // Raw programs (nano) get Ctrl+X as ^X and Alt+U as M-u, ahead of the shell and the desktop.
     if (running && keyHandler.current && rawKeys.current) {
       const k = e.key.length === 1 ? e.key : e.key
@@ -456,12 +508,94 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
     }
   }
 
+  /** What a copy would take: the selected part of the prompt line, else the selected scrollback. */
+  function selectedText() {
+    const el = inputRef.current
+    if (el && document.activeElement === el && el.selectionStart !== el.selectionEnd) return el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? 0)
+    const sel = window.getSelection()
+    return sel && !sel.isCollapsed && scrollRef.current && sel.containsNode(scrollRef.current, true) ? sel.toString() : ''
+  }
+
+  async function paste() {
+    let text: string
+    try {
+      text = await navigator.clipboard.readText()
+    } catch {
+      notify({ title: 'Could not paste', body: 'The browser did not allow reading the clipboard. Ctrl+V still works.' })
+      return
+    }
+    if (!text) return
+    if (running && keyHandler.current && rawKeys.current) {
+      keyHandler.current('Paste', text)
+      return
+    }
+    // One line, like the browser does when pasting into a single-line field.
+    const flat = text.replace(/\s*\r?\n\s*/g, ' ').trimEnd()
+    const el = inputRef.current
+    const start = el?.selectionStart ?? value.length
+    const end = el?.selectionEnd ?? value.length
+    setValue(value.slice(0, start) + flat + value.slice(end))
+    requestAnimationFrame(() => {
+      el?.focus({ preventScroll: true })
+      el?.setSelectionRange(start + flat.length, start + flat.length)
+      syncCaret()
+    })
+  }
+
+  /** Selects the whole scrollback, prompt line included. */
+  function selectAll() {
+    const root = scrollRef.current
+    const line = root?.querySelector('.t-input')
+    if (!root || !line) return
+    inputRef.current?.blur()
+    const range = document.createRange()
+    range.setStart(root, 0)
+    range.setEndAfter(line)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+  }
+
+  function onMenu(e: MouseEvent) {
+    // Shift+right-click keeps the browser's menu (openContextMenu lets it through).
+    const href = linkAt(e.target)
+    const text = selectedText()
+    const items: MenuItem[] = [
+      ...(href ? [...linkMenu(href), { separator: true as const }] : []),
+      { label: 'Copy', shortcut: 'Ctrl C', disabled: !text, onSelect: () => void navigator.clipboard?.writeText(text).catch(() => {}) },
+      { label: 'Paste', shortcut: 'Ctrl V', disabled: readOnly || animating, onSelect: () => void paste() },
+      { label: 'Select all', onSelect: selectAll },
+      { separator: true },
+      { label: 'Clear', shortcut: 'Ctrl L', disabled: alt || readOnly, onSelect: () => setEntries([]) },
+      ...(running ? [{ label: 'Stop command', shortcut: 'Ctrl C', disabled: readOnly, onSelect: () => abortRef.current?.abort() }] : []),
+      { separator: true },
+      { label: 'Read-only', checked: readOnly, onSelect: () => setReadOnly((r) => !r) },
+      ...(onLogout
+        ? []
+        : [
+            {
+              label: 'Text size',
+              submenu: [
+                { label: 'Larger', shortcut: 'Ctrl +', disabled: size >= FONT_MAX, onSelect: () => setFontSize(size + 1) },
+                { label: 'Smaller', shortcut: 'Ctrl −', disabled: size <= FONT_MIN, onSelect: () => setFontSize(size - 1) },
+                { label: 'Default', shortcut: 'Ctrl 0', disabled: size === FONT_DEFAULT, onSelect: () => setFontSize(FONT_DEFAULT) },
+                { separator: true as const },
+                ...FONT_PRESETS.map((px) => ({ label: `${px} px`, checked: size === px, onSelect: () => setFontSize(px) })),
+              ],
+            },
+          ]),
+    ]
+    openContextMenu(e, items)
+  }
+
   return (
     <div
-      className={`terminal ${onLogout ? 'is-console' : ''} ${alt ? 'is-alt' : ''}`}
+      className={`terminal ${onLogout ? 'is-console' : ''} ${alt ? 'is-alt' : ''} ${readOnly ? 'is-readonly' : ''}`}
       ref={scrollRef}
-      onMouseUp={() => {
-        if (!window.getSelection()?.toString()) inputRef.current?.focus({ preventScroll: true })
+      style={onLogout ? undefined : { fontSize: size }}
+      onContextMenu={onMenu}
+      onMouseUp={(e) => {
+        if (e.button === 0 && !window.getSelection()?.toString()) inputRef.current?.focus({ preventScroll: true })
       }}
     >
       {entries.map((e) => (
@@ -491,7 +625,9 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={onKeyDown}
+            readOnly={readOnly}
             onPaste={(e) => {
+              if (readOnly) return e.preventDefault()
               if (!running || !keyHandler.current || !rawKeys.current) return
               e.preventDefault()
               keyHandler.current('Paste', e.clipboardData.getData('text/plain'))
@@ -509,11 +645,12 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
             enterKeyHint="send"
           />
           {!caret.range && (
-            <span className={`t-cursor ${caret.focused ? 'is-focused' : ''}`} style={{ left: `calc(${caret.at}ch - ${caret.scroll}px)` }} aria-hidden>
+            <span className={`t-cursor ${caret.focused && !readOnly ? 'is-focused' : ''}`} style={{ left: `calc(${caret.at}ch - ${caret.scroll}px)` }} aria-hidden>
               {value[caret.at] ?? ' '}
             </span>
           )}
         </span>
+        {readOnly && <span className="t-readonly">read-only</span>}
       </label>
       {picking && (goMode || choices.length > 0) && !busy && (
         <div className="t-picker" role="listbox" aria-label={goMode ? 'Go links' : 'Completions'} style={{ ['--name-w' as string]: `${Math.min(28, Math.max(4, ...choices.map((c) => c.label.length))) + 2}ch` }}>
@@ -543,7 +680,7 @@ export function Terminal({ win, onLogout }: { win: WinState; onLogout?: () => vo
       )}
       <div className="t-quick" aria-label="Quick commands">
         {QUICK.map((q) => (
-          <button key={q} disabled={busy} onClick={() => submit(q)}>
+          <button key={q} disabled={busy || readOnly} onClick={() => submit(q)}>
             {q}
           </button>
         ))}

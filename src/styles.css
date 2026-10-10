@@ -1606,6 +1606,12 @@ body.is-resizing iframe {
 .t-input.is-busy .prompt {
   opacity: 0.4;
 }
+.t-readonly {
+  flex: none;
+  margin-left: 1ch;
+  color: var(--muted);
+  font-size: 0.85em;
+}
 .t-green {
   color: var(--green);
 }
