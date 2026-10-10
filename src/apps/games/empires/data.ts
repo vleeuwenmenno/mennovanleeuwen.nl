@@ -263,42 +263,49 @@ export const MAX_QUEUE = 6
 
 /** What a piece of research changes, as fractions: hull 0.25 is +25% hull, cooldown -0.15 fires 15% faster. */
 export type TechEffect = Partial<Record<'hull' | 'shield' | 'regen' | 'damage' | 'speed' | 'cooldown' | 'range' | 'build' | 'hangar' | 'repair' | 'mines', number>>
-/** `for` is the unit type it upgrades, or the station (which also covers the economy). */
-export type Tech = { id: string; faction: FactionId; for: string; name: string; blurb: string; cost: number; time: number; level: number; effect: TechEffect }
+/**
+ * `for` is the unit type it upgrades, or the station (which also covers the economy). `requires`
+ * lists research that has to come first, on top of the station level: that is what makes it a
+ * tree rather than a shopping list.
+ */
+export type Tech = { id: string; faction: FactionId; for: string; name: string; blurb: string; cost: number; time: number; level: number; effect: TechEffect; requires?: string[] }
 
-const tech = (faction: FactionId, forId: string, id: string, name: string, blurb: string, cost: number, time: number, level: number, effect: TechEffect): Tech => ({
-  id, faction, for: forId, name, blurb, cost, time, level, effect,
+const tech = (faction: FactionId, forId: string, id: string, name: string, blurb: string, cost: number, time: number, level: number, effect: TechEffect, requires?: string[]): Tech => ({
+  id, faction, for: forId, name, blurb, cost, time, level, effect, requires,
 })
 
+// Each ship's second upgrade builds on its first. The repair docks need the station's guns: a dock
+// is only worth having where the station can cover it. Prerequisites always come earlier in this
+// list, so the tree can be laid out in one pass.
 export const TECHS: Tech[] = [
   // Republic
   tech('republic', 'r-station', 'r-st-guns', 'Turbolaser emplacements', 'Station turbolasers hit 25% harder.', 700, 45, 1, { damage: 0.25 }),
   tech('republic', 'r-station', 'r-st-ore', 'Advanced refineries', 'Mining platforms bring in 25% more credits.', 600, 40, 1, { mines: 0.25 }),
-  tech('republic', 'r-station', 'r-st-dock', 'Repair docks', 'Our ships near the station repair 2% of their hull a second.', 800, 45, 2, { repair: 0.02 }),
+  tech('republic', 'r-station', 'r-st-dock', 'Repair docks', 'Our ships near the station repair 2% of their hull a second.', 800, 45, 2, { repair: 0.02 }, ['r-st-guns']),
   tech('republic', 'r-fighter', 'r-fi-hull', 'Reinforced hulls', 'Lance interceptors get 25% more hull.', 400, 30, 1, { hull: 0.25 }),
-  tech('republic', 'r-fighter', 'r-fi-torp', 'Proton payload', 'Lasers and torpedoes deal 25% more damage.', 500, 35, 2, { damage: 0.25 }),
+  tech('republic', 'r-fighter', 'r-fi-torp', 'Proton payload', 'Lasers and torpedoes deal 25% more damage.', 500, 35, 2, { damage: 0.25 }, ['r-fi-hull']),
   tech('republic', 'r-gunship', 'r-gs-flak', 'Flak tracking', 'Halberd guns deal 20% more damage.', 450, 30, 1, { damage: 0.2 }),
-  tech('republic', 'r-gunship', 'r-gs-burn', 'Afterburners', 'Halberds fly 20% faster.', 350, 25, 1, { speed: 0.2 }),
+  tech('republic', 'r-gunship', 'r-gs-burn', 'Afterburners', 'Halberds fly 20% faster.', 350, 25, 1, { speed: 0.2 }, ['r-gs-flak']),
   tech('republic', 'r-frigate', 'r-fr-shield', 'Deflector upgrade', 'Warden shields 30% stronger, recharging faster.', 600, 40, 2, { shield: 0.3, regen: 0.3 }),
-  tech('republic', 'r-frigate', 'r-fr-pd', 'Point-defence computers', 'Warden guns fire 15% faster.', 650, 40, 2, { cooldown: -0.15 }),
+  tech('republic', 'r-frigate', 'r-fr-pd', 'Point-defence computers', 'Warden guns fire 15% faster.', 650, 40, 2, { cooldown: -0.15 }, ['r-fr-shield']),
   tech('republic', 'r-cruiser', 'r-cr-cap', 'Heavy capacitors', 'Paladin turbolasers deal 20% more damage.', 900, 50, 3, { damage: 0.2 }),
-  tech('republic', 'r-cruiser', 'r-cr-armour', 'Armour plating', 'Paladins get 25% more hull.', 800, 45, 3, { hull: 0.25 }),
+  tech('republic', 'r-cruiser', 'r-cr-armour', 'Armour plating', 'Paladins get 25% more hull.', 800, 45, 3, { hull: 0.25 }, ['r-cr-cap']),
   tech('republic', 'r-capital', 'r-ca-range', 'Fleet targeting array', 'Sovereign guns reach 15% further.', 1200, 60, 4, { range: 0.15 }),
-  tech('republic', 'r-capital', 'r-ca-bulbs', 'Reinforced shield bulbs', 'Sovereign shields 30% stronger, recharging faster.', 1200, 60, 4, { shield: 0.3, regen: 0.3 }),
+  tech('republic', 'r-capital', 'r-ca-bulbs', 'Reinforced shield bulbs', 'Sovereign shields 30% stronger, recharging faster.', 1200, 60, 4, { shield: 0.3, regen: 0.3 }, ['r-ca-range']),
   // Droid Confederacy
   tech('droid', 'd-station', 'd-st-guns', 'Foundry cannons', 'Station turbolasers hit 25% harder.', 700, 45, 1, { damage: 0.25 }),
   tech('droid', 'd-station', 'd-st-ore', 'Ore processors', 'Harvesters bring in 25% more credits.', 600, 40, 1, { mines: 0.25 }),
-  tech('droid', 'd-station', 'd-st-dock', 'Repair crews', 'Our ships near the station repair 2% of their hull a second.', 800, 45, 2, { repair: 0.02 }),
+  tech('droid', 'd-station', 'd-st-dock', 'Repair crews', 'Our ships near the station repair 2% of their hull a second.', 800, 45, 2, { repair: 0.02 }, ['d-st-guns']),
   tech('droid', 'd-fighter', 'd-fi-line', 'Assembly lines', 'Mantis squadrons build 30% faster.', 400, 30, 1, { build: -0.3 }),
-  tech('droid', 'd-fighter', 'd-fi-guns', 'Overcharged blasters', 'Lasers and torpedoes deal 25% more damage.', 450, 35, 2, { damage: 0.25 }),
+  tech('droid', 'd-fighter', 'd-fi-guns', 'Overcharged blasters', 'Lasers and torpedoes deal 25% more damage.', 450, 35, 2, { damage: 0.25 }, ['d-fi-line']),
   tech('droid', 'd-gunship', 'd-gs-shell', 'Armoured shell', 'Tridents get 25% more hull.', 450, 30, 1, { hull: 0.25 }),
-  tech('droid', 'd-gunship', 'd-gs-cycle', 'Rapid cyclers', 'Trident guns fire 15% faster.', 450, 30, 1, { cooldown: -0.15 }),
+  tech('droid', 'd-gunship', 'd-gs-cycle', 'Rapid cyclers', 'Trident guns fire 15% faster.', 450, 30, 1, { cooldown: -0.15 }, ['d-gs-shell']),
   tech('droid', 'd-frigate', 'd-fr-plate', 'Shell plating', 'Scarabs get 25% more hull.', 600, 40, 2, { hull: 0.25 }),
-  tech('droid', 'd-frigate', 'd-fr-prong', 'Prong amplifiers', 'Scarab cannons deal 20% more damage.', 650, 40, 2, { damage: 0.2 }),
+  tech('droid', 'd-frigate', 'd-fr-prong', 'Prong amplifiers', 'Scarab cannons deal 20% more damage.', 650, 40, 2, { damage: 0.2 }, ['d-fr-plate']),
   tech('droid', 'd-cruiser', 'd-cr-ray', 'Ray shielding', 'Manta shields 30% stronger, recharging faster.', 800, 45, 3, { shield: 0.3, regen: 0.3 }),
-  tech('droid', 'd-cruiser', 'd-cr-thrust', 'Thruster refit', 'Mantas fly 20% faster.', 700, 40, 3, { speed: 0.2 }),
+  tech('droid', 'd-cruiser', 'd-cr-thrust', 'Thruster refit', 'Mantas fly 20% faster.', 700, 40, 3, { speed: 0.2 }, ['d-cr-ray']),
   tech('droid', 'd-capital', 'd-ca-hangar', 'Expanded hangars', 'Hive carriers launch faster and keep one more squadron out.', 1200, 60, 4, { hangar: 1 }),
-  tech('droid', 'd-capital', 'd-ca-armour', 'Hive armour', 'Hive carriers get 25% more hull.', 1200, 60, 4, { hull: 0.25 }),
+  tech('droid', 'd-capital', 'd-ca-armour', 'Hive armour', 'Hive carriers get 25% more hull.', 1200, 60, 4, { hull: 0.25 }, ['d-ca-hangar']),
 ]
 export const TECH: Record<string, Tech> = Object.fromEntries(TECHS.map((t) => [t.id, t]))
 export const techsFor = (unitId: string) => TECHS.filter((t) => t.for === unitId)
