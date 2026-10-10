@@ -294,7 +294,8 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   const say = (kind: OrderKind) => sound.order(kind, myFaction, voice())
 
   /** A click with a command from the grid (or its key) armed: move, attack-move, patrol or rally. */
-  const modeClick = (sx: number, sy: number, m: Mode) => {
+  /** `queued` (Shift): after the orders the ships already have, rather than instead of them. */
+  const modeClick = (sx: number, sy: number, m: Mode, queued = false) => {
     const w = world.current
     const { at } = pick(sx, sy)
     const ids = mySelection().map((u) => u.id)
@@ -302,12 +303,12 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       cmdRally(w, me, at.x, at.y)
       renderer.current.ping(at.x, at.y, '#7dffa0')
     } else if (m === 'patrol') {
-      cmdPatrol(w, me, ids, at.x, at.y)
+      cmdPatrol(w, me, ids, at.x, at.y, queued)
       renderer.current.ping(at.x, at.y, '#8fd0ff')
     } else if (m === 'move') {
-      cmdMove(w, me, ids, at.x, at.y)
+      cmdMove(w, me, ids, at.x, at.y, false, queued)
       renderer.current.ping(at.x, at.y, '#7dffa0')
-    } else return command(sx, sy, true)
+    } else return command(sx, sy, true, queued)
     say(m === 'rally' ? 'rally' : m === 'patrol' ? 'patrol' : 'move')
   }
 
@@ -332,7 +333,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     }
   }
 
-  const command = (sx: number, sy: number, attackMove: boolean) => {
+  const command = (sx: number, sy: number, attackMove: boolean, queued = false) => {
     const w = world.current
     const { unit, hp, at } = pick(sx, sy)
     const ships = mySelection().filter((u) => isShip(u.t))
@@ -346,13 +347,13 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       return
     }
     if (unit && foes(w, unit.owner, me)) {
-      cmdAttack(w, me, ships.map((u) => u.id), unit.id, hp)
+      cmdAttack(w, me, ships.map((u) => u.id), unit.id, hp, queued)
 
       renderer.current.ping(unit.x, unit.y, '#ff5a50')
       say(hp >= 0 ? 'target' : 'attack')
       if (hp >= 0) toast(`Targeting ${HP_NAME[unit.t.hardpoints[hp].kind].toLowerCase()}`, 'info')
     } else {
-      cmdMove(w, me, ships.map((u) => u.id), at.x, at.y, attackMove)
+      cmdMove(w, me, ships.map((u) => u.id), at.x, at.y, attackMove, queued)
       renderer.current.ping(at.x, at.y, attackMove ? '#ffaa5a' : '#7dffa0')
       say(attackMove ? 'attackMove' : 'move')
     }
@@ -793,8 +794,8 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       return
     }
     if (mode.current !== 'normal') {
-      modeClick(p.x, p.y, mode.current)
-      // Shift keeps the command armed for more clicks.
+      modeClick(p.x, p.y, mode.current, e.shiftKey)
+      // Shift keeps the command armed for more clicks, each queued after the last.
       if (!e.shiftKey) setMode('normal')
       return
     }
@@ -863,10 +864,10 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       line.current = null
       const ids = mySelection().filter((u) => isShip(u.t)).map((u) => u.id)
       if (d.moved && ln && ln.length > 1 && ids.length) {
-        cmdLine(world.current, me, ids, ln, d.attack)
+        cmdLine(world.current, me, ids, ln, d.attack, e.shiftKey)
         for (const q of spreadAlong(ln, lineGroups(world.current, me, ids).length)) renderer.current.ping(q.x, q.y, d.attack ? '#ffaa5a' : '#7dffa0')
         say(d.attack ? 'attackMove' : 'move')
-      } else command(d.x0, d.y0, false)
+      } else command(d.x0, d.y0, false, e.shiftKey)
       return
     }
     if (!d || !d.box) return

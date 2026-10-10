@@ -82,6 +82,8 @@ export type Unit = {
   hold: boolean
   /** Inside a nebula: no shields, short sensors. Refreshed every tick. */
   nebula: boolean
+  /** Orders given with Shift, taken one at a time once the current one is done. */
+  queue: Order[]
   /** Waypoints round the rocks to where the ship is going (x, y), found when it set off. */
   route: { x: number; y: number; pts: Pt[] } | null
 }
@@ -264,7 +266,7 @@ export function spawn(w: World, id: string, owner: Owner, x: number, y: number, 
       ...g, cd: Math.random() * g.w.cooldown, burst: 0, burstT: 0, target: 0, aim: 0,
     })),
     order: { k: 'idle' }, ax: x, ay: y, squad, parent: 0, target: 0, retarget: Math.random() * 0.5, lastHit: -99, shieldHit: -99, shieldOut: -99, hitAngle: 0,
-    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, hold: false, nebula: false, route: null,
+    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, hold: false, nebula: false, route: null, queue: [],
     seen: Array.from({ length: w.teams }, (_, t) => t === w.players[owner].team),
   }
   w.units.push(u)
@@ -434,6 +436,45 @@ function offRocks(w: World, u: Unit, x: number, y: number): Pt {
   return { x: clamp(x, 40, w.w - 40), y: clamp(y, 40, w.h - 40) }
 }
 
+/** Give a ship an order now, or, queued, after the ones it already has (straight away if it has
+ * none). An order given now drops anything queued. */
+function issue(u: Unit, o: Order, queued = false) {
+  if (queued && (u.order.k !== 'idle' || u.queue.length)) {
+    u.queue.push(o)
+    return
+  }
+  u.order = o
+  u.queue = []
+  u.target = o.k === 'attack' ? o.id : 0
+  u.parent = 0
+  u.hold = false
+}
+
+/** Where a ship will be once its current and queued orders are done: where a queued patrol starts. */
+export function lastStop(w: World, u: Unit): Pt {
+  for (const o of [...u.queue].reverse().concat(u.order)) {
+    if (o.k === 'move' || o.k === 'patrol') return { x: o.x, y: o.y }
+    if (o.k === 'attack') {
+      const t = w.byId.get(o.id)
+      if (t && !t.dead) return { x: t.x, y: t.y }
+    }
+  }
+  return { x: u.x, y: u.y }
+}
+
+/** The current order is done: on to the next queued one, or wait at (x, y). */
+function nextOrder(u: Unit, x: number, y: number) {
+  const o = u.queue.shift()
+  if (o) {
+    u.order = o
+    u.target = o.k === 'attack' ? o.id : 0
+    return
+  }
+  u.order = { k: 'idle' }
+  u.ax = x
+  u.ay = y
+}
+
 function formation(w: World, owner: Owner, ids: number[], x: number, y: number, give: (u: Unit, tx: number, ty: number, pace: number) => void) {
   const us = ids.map((i) => w.byId.get(i)).filter((u) => commandable(u, owner))
   if (!us.length) return
@@ -446,14 +487,11 @@ function formation(w: World, owner: Owner, ids: number[], x: number, y: number, 
   for (const u of us) {
     const p = offRocks(w, u, clamp(x + (u.x - cx) * fit, 40, w.w - 40), clamp(y + (u.y - cy) * fit, 40, w.h - 40))
     give(u, p.x, p.y, pace)
-    u.target = 0
-    u.parent = 0
-    u.hold = false
   }
 }
 
-export function cmdMove(w: World, owner: Owner, ids: number[], x: number, y: number, attack = false) {
-  formation(w, owner, ids, x, y, (u, tx, ty, speed) => (u.order = { k: 'move', x: tx, y: ty, attack, speed }))
+export function cmdMove(w: World, owner: Owner, ids: number[], x: number, y: number, attack = false, queued = false) {
+  formation(w, owner, ids, x, y, (u, tx, ty, speed) => issue(u, { k: 'move', x: tx, y: ty, attack, speed }, queued))
 }
 
 /** A drawn line that comes back round to where it started: ships spread round it as a ring. */
@@ -500,7 +538,7 @@ export function lineGroups(w: World, owner: Owner, ids: number[]): Unit[][] {
 
 /** Spread ships evenly along a line the player drew. Spots are handed out in the order the ships
  * stand across the line, so they don't cross each other's paths getting there. */
-export function cmdLine(w: World, owner: Owner, ids: number[], path: Pt[], attack = false) {
+export function cmdLine(w: World, owner: Owner, ids: number[], path: Pt[], attack = false, queued = false) {
   const groups = lineGroups(w, owner, ids)
   if (!groups.length || path.length < 2) return
   let spots = spreadAlong(path, groups.length)
@@ -536,16 +574,17 @@ export function cmdLine(w: World, owner: Owner, ids: number[], path: Pt[], attac
     for (const u of g) {
       // Squadron members keep their shape round the spot, a little tighter.
       const p = offRocks(w, u, clamp(spots[i].x + (u.x - c.x) * 0.6, 40, w.w - 40), clamp(spots[i].y + (u.y - c.y) * 0.6, 40, w.h - 40))
-      u.order = { k: 'move', x: p.x, y: p.y, attack, speed: pace }
-      u.target = 0
-      u.parent = 0
-      u.hold = false
+      issue(u, { k: 'move', x: p.x, y: p.y, attack, speed: pace }, queued)
     }
   })
 }
 
-export function cmdPatrol(w: World, owner: Owner, ids: number[], x: number, y: number) {
-  formation(w, owner, ids, x, y, (u, tx, ty, speed) => (u.order = { k: 'patrol', x: tx, y: ty, bx: u.x, by: u.y, speed }))
+export function cmdPatrol(w: World, owner: Owner, ids: number[], x: number, y: number, queued = false) {
+  formation(w, owner, ids, x, y, (u, tx, ty, speed) => {
+    // A queued patrol runs between where the earlier orders leave the ship and here.
+    const from = queued ? lastStop(w, u) : u
+    issue(u, { k: 'patrol', x: tx, y: ty, bx: from.x, by: from.y, speed }, queued)
+  })
 }
 
 /** Stop where they are and stay there, shooting whatever comes into range. */
@@ -554,6 +593,7 @@ export function cmdHold(w: World, owner: Owner, ids: number[]) {
     const u = w.byId.get(i)
     if (!commandable(u, owner)) continue
     u.order = { k: 'idle' }
+    u.queue = []
     u.ax = u.x
     u.ay = u.y
     u.target = 0
@@ -561,16 +601,13 @@ export function cmdHold(w: World, owner: Owner, ids: number[]) {
   }
 }
 
-export function cmdAttack(w: World, owner: Owner, ids: number[], target: number, hp = -1) {
+export function cmdAttack(w: World, owner: Owner, ids: number[], target: number, hp = -1, queued = false) {
   const t = w.byId.get(target)
   if (!t || t.dead || !foes(w, t.owner, owner)) return
   for (const i of ids) {
     const u = w.byId.get(i)
     if (!commandable(u, owner)) continue
-    u.order = { k: 'attack', id: target, hp: hp >= 0 && hp < t.hps.length ? hp : -1 }
-    u.target = target
-    u.parent = 0
-    u.hold = false
+    issue(u, { k: 'attack', id: target, hp: hp >= 0 && hp < t.hps.length ? hp : -1 }, queued)
   }
 }
 
@@ -579,6 +616,7 @@ export function cmdStop(w: World, owner: Owner, ids: number[]) {
     const u = w.byId.get(i)
     if (!commandable(u, owner)) continue
     u.order = { k: 'idle' }
+    u.queue = []
     u.ax = u.x
     u.ay = u.y
     u.target = 0
@@ -1052,11 +1090,8 @@ function moveUnit(w: World, u: Unit, dt: number) {
   u.retarget -= dt
   if (u.order.k === 'attack') {
     const tgt = valid(w, u.order.id, u.owner)
-    if (!tgt) {
-      u.order = { k: 'idle' }
-      u.ax = u.x
-      u.ay = u.y
-    } else u.target = tgt.id
+    if (!tgt) nextOrder(u, u.x, u.y)
+    else u.target = tgt.id
   } else if (u.retarget <= 0) {
     u.retarget = 0.4 + Math.random() * 0.3
     const engage = u.order.k === 'idle' || u.order.k === 'patrol' || (u.order.k === 'move' && u.order.attack)
@@ -1098,11 +1133,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
     const pace = Math.min(max, o.speed)
     if (dist < (fighter ? 60 : 24 + radius(t) * 0.2)) {
       if (o.k === 'patrol') u.order = { ...o, x: o.bx, y: o.by, bx: o.x, by: o.y }
-      else {
-        u.order = { k: 'idle' }
-        u.ax = o.x
-        u.ay = o.y
-      }
+      else nextOrder(u, o.x, o.y)
     } else {
       const wp = waypoint(w, u, o.x, o.y)
       const p = detour(w, u, wp.x, wp.y)

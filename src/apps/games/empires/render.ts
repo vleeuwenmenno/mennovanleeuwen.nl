@@ -675,6 +675,7 @@ export class Renderer {
         ctx.setLineDash([])
       } else if (o.k === 'move') {
         ctx.strokeStyle = o.attack ? 'rgba(255,170,90,0.35)' : 'rgba(125,255,160,0.3)'
+        ctx.lineWidth = 1.5 / z
         ctx.beginPath()
         ctx.moveTo(u.x, u.y)
         // Follow the way round the rocks when there is one.
@@ -692,6 +693,32 @@ export class Renderer {
           ctx.lineTo(at.x, at.y)
           ctx.stroke()
         }
+      }
+      // Shift-queued orders: dashed legs on from the current one, a dot at each stop.
+      if (u.queue.length) {
+        const spot = (q: typeof o) => {
+          if (q.k === 'move' || q.k === 'patrol') return { x: q.x, y: q.y }
+          if (q.k === 'attack') return w.byId.get(q.id) ?? null
+          return null
+        }
+        let from = spot(o) ?? u
+        ctx.setLineDash([8 / z, 8 / z])
+        for (const q of u.queue) {
+          const to = spot(q)
+          if (!to) continue
+          const col = q.k === 'attack' ? '255,90,80' : q.k === 'patrol' ? '143,208,255' : q.k === 'move' && q.attack ? '255,170,90' : '125,255,160'
+          ctx.strokeStyle = `rgba(${col},0.3)`
+          ctx.beginPath()
+          ctx.moveTo(from.x, from.y)
+          ctx.lineTo(to.x, to.y)
+          ctx.stroke()
+          ctx.fillStyle = `rgba(${col},0.7)`
+          ctx.beginPath()
+          ctx.arc(to.x, to.y, 5 / z, 0, TAU)
+          ctx.fill()
+          from = to
+        }
+        ctx.setLineDash([])
       }
     }
 
