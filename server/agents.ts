@@ -93,7 +93,11 @@ let modelCache: { at: number; ttl: number; value: Promise<ModelInfo[]> } | null 
 export function models(): Promise<ModelInfo[]> {
   if (modelCache && Date.now() - modelCache.at < modelCache.ttl) return modelCache.value
   const value = (async () => {
-    const tags = await fetch(`${OLLAMA}/api/tags`, { signal: AbortSignal.timeout(10_000) }).then((r) => (r.ok ? (r.json() as Promise<{ models?: { name: string }[] }>) : null))
+    const tags = await fetch(`${OLLAMA}/api/tags`, { signal: AbortSignal.timeout(10_000) })
+      .then((r) => (r.ok ? (r.json() as Promise<{ models?: { name: string }[] }>) : null))
+      .catch(() => {
+        throw new HttpError(502, 'Ollama did not answer')
+      })
     const names = (tags?.models ?? []).map((m) => m.name)
     if (!names.length) throw new HttpError(502, 'Ollama sent no models')
     const shown = await Promise.all(
