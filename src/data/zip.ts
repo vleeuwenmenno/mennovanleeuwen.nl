@@ -197,3 +197,21 @@ export function listFolder(index: ZipIndex, folder: string): { folders: { name: 
 }
 
 export const METHODS: Record<number, string> = { 0: 'Stored', 8: 'Deflated', 9: 'Deflate64', 12: 'BZIP2', 14: 'LZMA', 93: 'Zstandard', 95: 'XZ', 99: 'AES' }
+
+/**
+ * One file's bytes, unpacked: `range` fetches from..to (inclusive) of the archive. Stored and
+ * deflated files only, as nearly every ZIP has them; the others (and encrypted ones) throw.
+ */
+export async function readEntry(e: ZipEntry, range: (from: number, to: number) => Promise<Uint8Array>): Promise<Uint8Array> {
+  if (e.encrypted) throw new ZipError('password-protected')
+  if (e.method !== 0 && e.method !== 8) throw new ZipError(`unsupported compression method ${METHODS[e.method] ?? e.method}`)
+  if (!e.compressed) return new Uint8Array(0)
+  // The local header repeats the name and has its own extra field, so its length is read first.
+  const head = await range(e.offset, e.offset + 29)
+  const v = new DataView(head.buffer, head.byteOffset, head.byteLength)
+  const start = e.offset + 30 + v.getUint16(26, true) + v.getUint16(28, true)
+  const data = await range(start, start + e.compressed - 1)
+  if (e.method === 0) return data
+  const stream = new Blob([data as BlobPart]).stream().pipeThrough(new DecompressionStream('deflate-raw'))
+  return new Uint8Array(await new Response(stream).arrayBuffer())
+}

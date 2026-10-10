@@ -1,6 +1,6 @@
 import { extract, type Clash } from '../data/extract'
 import { listDir, parseSf, sfPath } from '../data/seafile'
-import { readZip, type ZipEntry, type ZipIndex } from '../data/zip'
+import { readEntry, readZip, type ZipEntry, type ZipIndex } from '../data/zip'
 import { lookup, sfOf } from './fs'
 import { CmdError, type Ctx } from './types'
 import { resolvePath } from './vfs'
@@ -116,17 +116,8 @@ async function bytes(sf: string, from: number, to: number): Promise<Uint8Array> 
 
 /** One file's contents, unpacked here (for -p). */
 async function contents(sf: string, e: ZipEntry): Promise<string> {
-  if (e.encrypted) throw new Error('password-protected')
-  if (e.method !== 0 && e.method !== 8) throw new Error(`unsupported compression method ${e.method}`)
   if (e.compressed > 32 * 1024 * 1024) throw new Error('too big to print here')
-  if (!e.compressed) return ''
-  const head = await bytes(sf, e.offset, e.offset + 29)
-  const v = new DataView(head.buffer, head.byteOffset, head.byteLength)
-  const start = e.offset + 30 + v.getUint16(26, true) + v.getUint16(28, true)
-  const data = await bytes(sf, start, start + e.compressed - 1)
-  if (e.method === 0) return new TextDecoder().decode(data)
-  const stream = new Blob([data as BlobPart]).stream().pipeThrough(new DecompressionStream('deflate-raw'))
-  return new TextDecoder().decode(await new Response(stream).arrayBuffer())
+  return new TextDecoder().decode(await readEntry(e, (from, to) => bytes(sf, from, to)))
 }
 
 /** One key from the person at the terminal (Ctrl+C gives null). */
