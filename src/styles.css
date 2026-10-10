@@ -55,8 +55,6 @@ html {
 }
 
 body {
-  position: fixed;
-  inset: 0;
   background: var(--bg);
   color: var(--text);
   font-family: var(--ui);
@@ -176,7 +174,9 @@ body.is-resizing iframe {
 /* ---------- Top bar ---------- */
 
 .topbar {
-  position: absolute;
+  /* iOS 27 samples fixed/sticky headers for the native status-area background.
+     An absolute header inside the fixed desktop does not provide its own color. */
+  position: fixed;
   inset: 0 0 auto 0;
   height: var(--top);
   z-index: 100000;
@@ -7029,10 +7029,23 @@ kbd {
     bottom: 10px;
   }
   .spotlight-backdrop {
-    padding-top: 48px;
+    top: var(--vvt, 0px);
+    bottom: auto;
+    height: var(--vvh, 100dvh);
+    padding-top: calc(var(--top) + 12px);
+    padding-bottom: calc(12px + var(--sab));
+  }
+  .spotlight {
+    max-height: 100%;
+  }
+  .sp-input {
+    flex: none;
+  }
+  :root.keyboard-open .spotlight-backdrop {
+    padding-bottom: 12px;
   }
   .launchpad {
-    padding-top: 50px;
+    padding-top: calc(var(--top) + 12px);
   }
   .lp-grid {
     grid-template-columns: repeat(4, 1fr);
