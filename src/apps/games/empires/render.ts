@@ -106,12 +106,12 @@ function terrainArt(map: MapDef): TerrainArt {
   const rocks: FieldRock[] = []
   map.fields.forEach((f, i) => {
     const r = rng(map.seed * 17 + i * 613)
-    const count = Math.round(Math.min(130, Math.max(14, (f.r * f.r) / 2600)))
+    const count = Math.round(Math.min(180, Math.max(20, (f.r * f.r) / 1700)))
     for (let k = 0; k < count; k++) {
       const a = r() * TAU
       const d = Math.sqrt(r()) * (f.r - 12)
       rocks.push({
-        x: f.x + Math.cos(a) * d, y: f.y + Math.sin(a) * d, size: 8 + r() ** 2.2 * 34, rot: r() * TAU, spin: (r() - 0.5) * 0.8, kind: r() < 0.5 ? 0 : 1,
+        x: f.x + Math.cos(a) * d, y: f.y + Math.sin(a) * d, size: 10 + r() ** 2 * 40, rot: r() * TAU, spin: (r() - 0.5) * 0.8, kind: r() < 0.5 ? 0 : 1,
         orbit: 6 + r() * 26, phase: r() * TAU, speed: (0.04 + r() * 0.1) * (r() < 0.5 ? -1 : 1),
       })
     }
@@ -777,13 +777,19 @@ export class Renderer {
     for (const f of art.fields) {
       if (!onScreen(f.x, f.y, f.r)) continue
       const grd = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r)
-      grd.addColorStop(0, 'rgba(160,140,112,0.16)')
-      grd.addColorStop(0.8, 'rgba(150,130,105,0.1)')
-      grd.addColorStop(1, 'rgba(140,120,100,0)')
+      grd.addColorStop(0, 'rgba(170,148,116,0.26)')
+      grd.addColorStop(0.75, 'rgba(160,138,108,0.18)')
+      grd.addColorStop(1, 'rgba(150,128,100,0.04)')
       ctx.fillStyle = grd
       ctx.beginPath()
       ctx.arc(f.x, f.y, f.r, 0, TAU)
       ctx.fill()
+      // A dashed hazard ring marks where the rocks start to scrape big hulls.
+      ctx.strokeStyle = 'rgba(232,180,96,0.4)'
+      ctx.lineWidth = 2 / z
+      ctx.setLineDash([14 / z, 10 / z])
+      ctx.stroke()
+      ctx.setLineDash([])
     }
     if (!art.rocks.length) return
     const dpr = window.devicePixelRatio || 1
