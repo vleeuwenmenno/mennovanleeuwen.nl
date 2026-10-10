@@ -5470,6 +5470,63 @@ button.fm-dd-row:hover {
   font-weight: 700;
   color: var(--fg-bright);
 }
+.zed-panel:focus-within {
+  outline: none;
+}
+.zed-row.is-selected:not(.is-active) {
+  background: color-mix(in srgb, var(--selection) 55%, transparent);
+}
+/* Dragging: where it would land, and entries cut for pasting. */
+.zed-row.is-drop {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.zed-panel.is-drop {
+  outline: 2px dashed color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: -4px;
+}
+.zed-row.is-cut {
+  opacity: 0.5;
+}
+.zed-naming,
+.zed-naming:hover {
+  cursor: default;
+  background: var(--panel-2);
+}
+.zed-name-input {
+  flex: 1;
+  min-width: 0;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--accent);
+  background: var(--bg);
+  color: var(--fg-bright);
+  font: inherit;
+  outline: 0;
+}
+.zed-note {
+  display: flex;
+  align-items: center;
+  min-height: 22px;
+  padding-right: 8px;
+  color: var(--muted);
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.zed-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.zed-link:hover {
+  text-decoration: underline;
+}
 .zed-caret {
   width: 10px;
   color: var(--muted);

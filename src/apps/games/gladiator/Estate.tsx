@@ -31,6 +31,7 @@ export function EstateScreen({ save, update, onBack, sound }: { save: Save; upda
   const now = useNow(1000)
   const e = live(save.estate, now)
   const [sel, setSel] = useState<Sel>(null)
+  const [pop, setPop] = useState<'info' | 'store' | null>(null)
   const ready = e.jobs.filter((j) => j.end <= now)
   const rents = pendingRents(e, now)
   const rank = rankOf(e)
@@ -67,8 +68,132 @@ export function EstateScreen({ save, update, onBack, sound }: { save: Save; upda
     update((s) => ({ ...s, gold: r.coins, estate: r.estate }))
   }
 
+  const toggle = (p: 'info' | 'store') => (sound.ui(), setPop(pop === p ? null : p))
+  const rankPct = rank.next ? Math.min(100, ((rank.points - rank.from) / (rank.next - rank.from)) * 100) : 100
+  const rankLine = rank.next ? (
+    <>
+      {rank.points}/{rank.next} to <b>{rank.nextName}</b>
+    </>
+  ) : (
+    <>{rank.points} levels: the highest rank</>
+  )
+
+  // On a small screen (or a small window) the page's rows give way to a heads-up display floating
+  // over the map: back and title at the top left, status badges at the top right, each opening a
+  // popover with the detail. Both are rendered; container queries in estate.css pick one.
+  const hud = (
+    <div className="es-hud">
+      <div className="es-hud-title">
+        <button className="es-hud-btn es-back" onClick={onBack} aria-label="Back to town">
+          ←
+        </button>
+        <button className="es-hud-name" onClick={() => toggle('info')} aria-expanded={pop === 'info'} aria-label={`Estate, rank ${rank.rank}: ${rank.name}. Show details`}>
+          <strong>Estate</strong>
+          <small>
+            Rank {rank.rank} · {rank.name}
+          </small>
+        </button>
+      </div>
+      <div className="es-hud-badges">
+        {ready.length > 0 && (
+          <button className="es-hud-btn is-ready" onClick={collect} aria-label={`Collect ${ready.length} finished ${ready.length === 1 ? 'job' : 'jobs'}`}>
+            <span className="es-hud-tick">✔</span>
+            <b>{ready.length}</b>
+          </button>
+        )}
+        <button className={`es-hud-btn ${rents.coins >= 1 ? 'is-rents' : ''}`} onClick={() => (rents.coins >= 1 ? takeRents() : toggle('info'))} aria-label={rents.coins >= 1 ? `Collect ${rents.coins} coins of rents` : `Rents: ${rents.rate} coins an hour`}>
+          <PlaceIcon id="es-rents" glyph="💰" />
+          <b>{rents.coins}</b>
+        </button>
+        <button className="es-hud-btn" onClick={() => toggle('info')} aria-expanded={pop === 'info'} aria-label={`Builders ${e.works.length} of ${1 + b.builders} busy, spare crews ${crew.free} of ${crew.spare} free. Show details`}>
+          <PlaceIcon id="es-works" glyph="🏗️" />
+          <b>
+            {e.works.length}/{1 + b.builders}
+          </b>
+        </button>
+        <button className="es-hud-btn" onClick={() => toggle('store')} aria-expanded={pop === 'store'} aria-label="Storehouse">
+          <PlaceIcon id="bld-storehouse" glyph="📦" />
+        </button>
+      </div>
+      {pop === 'info' && (
+        <div className="es-pop gl-panel" role="dialog" aria-label="Estate details">
+          <button className="es-close" onClick={() => setPop(null)} aria-label="Close">
+            ×
+          </button>
+          <h4>
+            Rank {rank.rank} · {rank.name}
+          </h4>
+          <div className="es-pop-rank">
+            <span>{rankLine}</span>
+            <span className="gl-statbar">
+              <span style={{ width: `${rankPct}%` }} />
+            </span>
+          </div>
+          <div className="es-pop-row">
+            <PlaceIcon id="es-rents" glyph="💰" />
+            <span>
+              <b>Rents</b> <Gold n={rents.coins} />
+              <small>
+                {rents.rate} an hour, up to {rents.cap} hours{rents.full ? ' · strongbox full' : ''}
+              </small>
+            </span>
+            <button className="gl-btn is-small is-primary" disabled={rents.coins < 1} onClick={takeRents}>
+              Collect
+            </button>
+          </div>
+          {ready.length > 0 && (
+            <div className="es-pop-row">
+              <span className="es-hud-tick">✔</span>
+              <span>
+                <b>
+                  {ready.length} finished {ready.length === 1 ? 'job' : 'jobs'}
+                </b>
+              </span>
+              <button className="gl-btn is-small is-primary" onClick={collect}>
+                Collect
+              </button>
+            </div>
+          )}
+          <div className="es-pop-row">
+            <PlaceIcon id="es-works" glyph="🏗️" />
+            <span>
+              <b>
+                Builders {e.works.length}/{1 + b.builders}
+              </b>
+              {e.works.map((w) => (
+                <small key={w.id}>
+                  {w.building ? building(w.building).name : (plotDef(w.target)?.name ?? SITES.find((x) => x.id === w.target)?.name ?? w.target)}
+                  {w.kind === 'clear' ? ' (clearing)' : w.kind === 'upgrade' ? ` to level ${w.to}` : ''}: {w.end <= now ? 'done' : prettyHours(w.end - now)}
+                </small>
+              ))}
+              {!e.works.length && <small>Every builder is free.</small>}
+            </span>
+          </div>
+          <div className="es-pop-row">
+            <PlaceIcon id="es-crews" glyph="👷" />
+            <span>
+              <b>
+                Spare crews {crew.free}/{crew.spare}
+              </b>
+              <small>{crew.spare ? 'They take a job at any site or building whose own crews are busy.' : "Workers' quarters bring spare crews."}</small>
+            </span>
+          </div>
+        </div>
+      )}
+      {pop === 'store' && (
+        <div className="es-pop gl-panel" role="dialog" aria-label="Storehouse">
+          <button className="es-close" onClick={() => setPop(null)} aria-label="Close">
+            ×
+          </button>
+          <h4>Storehouse</h4>
+          <Storehouse estate={e} names />
+        </div>
+      )}
+    </div>
+  )
+
   return (
-    <div className="gl-page es-page">
+    <div className={`gl-page es-page ${sel ? 'has-panel' : ''}`}>
       <PageHead title="Estate" onBack={onBack}>
         <span className="es-rankchip" title={`${rank.points} levels built`}>
           <PlaceIcon id="es-rank" glyph="🏅" />
@@ -81,52 +206,46 @@ export function EstateScreen({ save, update, onBack, sound }: { save: Save; upda
         </span>
       </PageHead>
       <div className="es-top">
-      <div className="es-bar">
-        {ready.length > 0 && (
-          <button className="gl-btn is-primary" onClick={collect}>
-            Collect {ready.length} finished {ready.length === 1 ? 'job' : 'jobs'}
+        <div className="es-bar">
+          {ready.length > 0 && (
+            <button className="gl-btn is-primary" onClick={collect}>
+              Collect {ready.length} finished {ready.length === 1 ? 'job' : 'jobs'}
+            </button>
+          )}
+          <button className="gl-btn es-rents" disabled={rents.coins < 1} onClick={takeRents} title={`${rents.rate} coins an hour, piling up for at most ${rents.cap} hours`}>
+            <PlaceIcon id="es-rents" glyph="💰" />
+            <span>
+              Rents <Gold n={rents.coins} />
+              <small>
+                {rents.rate}/h{rents.full ? ' · strongbox full' : ''}
+              </small>
+            </span>
           </button>
-        )}
-        <button className="gl-btn es-rents" disabled={rents.coins < 1} onClick={takeRents} title={`${rents.rate} coins an hour, piling up for at most ${rents.cap} hours`}>
-          <PlaceIcon id="es-rents" glyph="💰" />
-          <span>
-            Rents <Gold n={rents.coins} />
-            <small>
-              {rents.rate}/h{rents.full ? ' · strongbox full' : ''}
-            </small>
+          <span className="es-stat">
+            <PlaceIcon id="es-works" glyph="🏗️" />
+            <span>
+              Builders <b>{e.works.length}/{1 + b.builders}</b>
+            </span>
           </span>
-        </button>
-        <span className="es-stat">
-          <PlaceIcon id="es-works" glyph="🏗️" />
-          <span>
-            Builders <b>{e.works.length}/{1 + b.builders}</b>
+          <span className="es-stat">
+            <PlaceIcon id="es-crews" glyph="👷" />
+            <span>
+              Spare crews <b>{crew.free}/{crew.spare}</b>
+            </span>
           </span>
-        </span>
-        <span className="es-stat">
-          <PlaceIcon id="es-crews" glyph="👷" />
-          <span>
-            Spare crews <b>{crew.free}/{crew.spare}</b>
+          <span className="es-stat es-rankbar">
+            <span>{rankLine}</span>
+            <span className="gl-statbar">
+              <span style={{ width: `${rankPct}%` }} />
+            </span>
           </span>
-        </span>
-        <span className="es-stat es-rankbar">
-          <span>
-            {rank.next ? (
-              <>
-                {rank.points}/{rank.next} to <b>{rank.nextName}</b>
-              </>
-            ) : (
-              <>{rank.points} levels: the highest rank</>
-            )}
-          </span>
-          <span className="gl-statbar">
-            <span style={{ width: `${rank.next ? Math.min(100, ((rank.points - rank.from) / (rank.next - rank.from)) * 100) : 100}%` }} />
-          </span>
-        </span>
-      </div>
-      <Storehouse estate={e} />
+        </div>
+        <Storehouse estate={e} />
       </div>
       <div className={`es-body ${sel ? 'has-panel' : ''}`}>
-        <EstateMap e={e} now={now} sel={sel} onSel={(s) => (sound.ui(), setSel(s))} />
+        <EstateMap e={e} now={now} sel={sel} onSel={(s) => (sound.ui(), setPop(null), setSel(s))}>
+          {hud}
+        </EstateMap>
         {sel && (
           <aside className="es-panel gl-panel" aria-label="Details">
             <button className="es-close" onClick={() => setSel(null)} aria-label="Close">
@@ -146,11 +265,13 @@ export function EstateScreen({ save, update, onBack, sound }: { save: Save; upda
 
 // --- The map -------------------------------------------------------------------------------------
 
-const ZOOMS = [1, 1.4, 1.9]
+// Zoom 1 fits the whole map in the frame; each step in or out is half as much again.
+const MAX_ZOOM = 4
+const STEP = 1.5
 
-function EstateMap({ e, now, sel, onSel }: { e: Estate; now: number; sel: Sel; onSel: (s: Sel) => void }) {
+function EstateMap({ e, now, sel, onSel, children }: { e: Estate; now: number; sel: Sel; onSel: (s: Sel) => void; children?: ReactNode }) {
   const view = useRef<HTMLDivElement>(null)
-  const [zoom, setZoom] = useState(0)
+  const [zoom, setZoom] = useState(1)
   const keep = useRef<{ x: number; y: number } | null>(null)
   const drag = useRef<{ x: number; y: number; sx: number; sy: number; moved: boolean } | null>(null)
   const { rank } = rankOf(e)
@@ -159,7 +280,7 @@ function EstateMap({ e, now, sel, onSel }: { e: Estate; now: number; sel: Sel; o
   const zoomTo = (z: number) => {
     const v = view.current
     if (v) keep.current = { x: (v.scrollLeft + v.clientWidth / 2) / v.scrollWidth, y: (v.scrollTop + v.clientHeight / 2) / v.scrollHeight }
-    setZoom(Math.max(0, Math.min(ZOOMS.length - 1, z)))
+    setZoom(Math.max(1, Math.min(MAX_ZOOM, z)))
   }
   useLayoutEffect(() => {
     const v = view.current
@@ -169,23 +290,44 @@ function EstateMap({ e, now, sel, onSel }: { e: Estate; now: number; sel: Sel; o
     v.scrollTop = k.y * v.scrollHeight - v.clientHeight / 2
     keep.current = null
   }, [zoom])
-  // On a phone the map is wider than the screen: start looking at its middle.
+  // In a small frame the whole map would be tiny: open zoomed in until it fills the frame (so
+  // markers are big enough to tap), looking at the middle. The minus and fit buttons show it all.
   useLayoutEffect(() => {
     const v = view.current
-    if (v) v.scrollLeft = (v.scrollWidth - v.clientWidth) / 2
+    if (!v) return
+    const hud = v.parentElement?.querySelector<HTMLElement>('.es-hud')
+    if (hud && getComputedStyle(hud).display !== 'none') {
+      const cs = getComputedStyle(v)
+      const w = v.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+      const h = v.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)
+      const fill = Math.max(w, h * 1.5) / Math.min(w, h * 1.5)
+      keep.current = { x: 0.5, y: 0.5 }
+      setZoom(Math.max(1, Math.min(3, fill)))
+    }
   }, [])
 
-  // Bring the picked marker into view: centred beside a drawer, or near the top above a sheet.
+  // Bring the picked marker into the part of the map that isn't covered: below the heads-up
+  // display, above a bottom sheet, or left of a drawer laid over the map.
   const selKey = sel ? `${sel.kind}:${sel.id}` : ''
   useEffect(() => {
     const v = view.current
     const m = v?.querySelector<HTMLElement>('.es-marker.is-sel')
     if (!v || !m) return
-    const sheet = !!v.closest('.es-body')?.querySelector('.es-panel') && v.closest('.es-page')!.clientWidth <= 760
     const vr = v.getBoundingClientRect()
+    let top = vr.top
+    let bottom = vr.bottom
+    let right = vr.right
+    const hud = v.parentElement?.querySelector<HTMLElement>('.es-hud')
+    if (hud && getComputedStyle(hud).display !== 'none') top = Math.max(top, hud.getBoundingClientRect().bottom)
+    const panel = v.closest('.es-body')?.querySelector<HTMLElement>('.es-panel')
+    if (panel && getComputedStyle(panel).position === 'absolute') {
+      const pr = panel.getBoundingClientRect()
+      if (pr.top > vr.top + 20) bottom = Math.min(bottom, pr.top)
+      else right = Math.min(right, pr.left)
+    }
     const mr = m.getBoundingClientRect()
-    const x = v.scrollLeft + (mr.left + mr.width / 2 - vr.left) - v.clientWidth / 2
-    const y = v.scrollTop + (mr.top + mr.height / 2 - vr.top) - (sheet ? v.clientHeight * 0.14 : v.clientHeight / 2)
+    const x = v.scrollLeft + (mr.left + mr.width / 2) - (vr.left + right) / 2
+    const y = v.scrollTop + (mr.top + mr.height / 2) - (top + bottom) / 2
     v.scrollTo({ left: x, top: y })
   }, [selKey])
 
@@ -219,7 +361,7 @@ function EstateMap({ e, now, sel, onSel }: { e: Estate; now: number; sel: Sel; o
   return (
     <div className="es-mapbox">
       <div ref={view} className="es-view" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerLeave={() => (drag.current = null)}>
-        <div className="es-map" style={{ ['--zoom' as string]: ZOOMS[zoom] }} onClick={(ev) => ev.target === ev.currentTarget && onSel(null)}>
+        <div className="es-map" style={{ ['--zoom' as string]: zoom }} onClick={(ev) => ev.target === ev.currentTarget && onSel(null)}>
           <img className="es-map-img" src="/games/gladiator/estate-map.webp" alt="" draggable={false} />
           {SITES.map((s) => {
             const busy = jobsAt(e, s.id)
@@ -264,12 +406,16 @@ function EstateMap({ e, now, sel, onSel }: { e: Estate; now: number; sel: Sel; o
           })}
         </div>
       </div>
+      {children}
       <div className="es-zoom">
-        <button className="gl-btn is-quiet" onClick={() => zoomTo(zoom + 1)} disabled={zoom >= ZOOMS.length - 1} aria-label="Zoom in">
+        <button className="es-zoom-btn" onClick={() => zoomTo(zoom * STEP)} disabled={zoom >= MAX_ZOOM - 0.01} aria-label="Zoom in">
           +
         </button>
-        <button className="gl-btn is-quiet" onClick={() => zoomTo(zoom - 1)} disabled={zoom <= 0} aria-label="Zoom out">
+        <button className="es-zoom-btn" onClick={() => zoomTo(zoom / STEP)} disabled={zoom <= 1.01} aria-label="Zoom out">
           −
+        </button>
+        <button className="es-zoom-btn is-fit" onClick={() => zoomTo(1)} disabled={zoom <= 1.01} aria-label="Show the whole estate" title="Show the whole estate">
+          ⤢
         </button>
       </div>
     </div>
