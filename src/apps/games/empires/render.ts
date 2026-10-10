@@ -338,6 +338,8 @@ export class Renderer {
           this.pending.push({ at: this.clock + n * 0.17, x: e.x, y: e.y, size: e.size, final: true })
           this.debris(e.x, e.y, e.size, color)
         }
+      } else if (e.k === 'rankUp') {
+        this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.8, size: 20, grow: 90, color: '#f2c14a' })
       } else if (e.k === 'hpdown') {
         this.blast(e.x, e.y, 34)
       } else if (e.k === 'built' || e.k === 'launch') {
@@ -973,6 +975,21 @@ export class Renderer {
       const bx = u.x - bw / 2
       ctx.fillStyle = 'rgba(0,0,0,0.6)'
       ctx.fillRect(bx - 1 / z, by - 1 / z, bw + 2 / z, bh * (t.shield ? 2 : 1) + 3 / z)
+      // Veterancy: a gold chevron per rank, just left of the bar.
+      if (u.rank > 0) {
+        ctx.strokeStyle = '#f2c14a'
+        ctx.lineWidth = 1.6 / z
+        const cw = 5 / z
+        for (let i = 0; i < u.rank; i++) {
+          const cx = bx - 5 / z - cw / 2
+          const cy = by + bh * (t.shield ? 1 : 0.5) - (i - (u.rank - 1) / 2) * 3.4 / z
+          ctx.beginPath()
+          ctx.moveTo(cx - cw / 2, cy + cw * 0.35)
+          ctx.lineTo(cx, cy - cw * 0.15)
+          ctx.lineTo(cx + cw / 2, cy + cw * 0.35)
+          ctx.stroke()
+        }
+      }
       const hf = u.hull / u.hullMax
       ctx.fillStyle = hf > 0.6 ? '#6fe08a' : hf > 0.3 ? '#f2c14a' : '#ff5a50'
       ctx.fillRect(bx, by, bw * hf, bh)

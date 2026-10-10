@@ -70,6 +70,10 @@ export type Unit = {
   seen: boolean[]
   born: number
   kills: number
+  /** Credits' worth of enemies destroyed: experience. */
+  xp: number
+  /** Veterancy: 0 green, 1 veteran, 2 elite, 3 ace. */
+  rank: number
   mods: Mods
   /** Hold position: fight from where it stands, never chase. */
   hold: boolean
@@ -128,6 +132,7 @@ export type SimEvent =
   | { k: 'ability'; owner: Owner; id: AbilityId; x: number; y: number }
   | { k: 'launch'; owner: Owner; x: number; y: number }
   | { k: 'shieldsDown'; owner: Owner; x: number; y: number }
+  | { k: 'rankUp'; owner: Owner; unit: number; rank: number; x: number; y: number }
 
 export type World = {
   w: number
@@ -240,7 +245,7 @@ export function spawn(w: World, id: string, owner: Owner, x: number, y: number, 
       ...g, cd: Math.random() * g.w.cooldown, burst: 0, burstT: 0, target: 0, aim: 0,
     })),
     order: { k: 'idle' }, ax: x, ay: y, squad, parent: 0, target: 0, retarget: Math.random() * 0.5, lastHit: -99, shieldHit: -99, hitAngle: 0,
-    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, hold: false, nebula: false,
+    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, hold: false, nebula: false,
     seen: Array.from({ length: w.teams }, (_, t) => t === w.players[owner].team),
   }
   w.units.push(u)
@@ -660,6 +665,29 @@ function kill(w: World, u: Unit, by: Owner | -1) {
   }
 }
 
+// --- Veterancy --------------------------------------------------------------------------------------
+
+export const RANKS = ['Recruit', 'Veteran', 'Elite', 'Ace'] as const
+/** Experience needed for each rank, as multiples of the ship's own cost. */
+const RANK_AT = [0, 1, 3, 6]
+/** Damage, hull and shield recharge gained per rank. */
+export const RANK_BONUS = 0.1
+
+/** A ship that destroys enemies worth its own cost becomes a veteran; three times, elite; six, an ace.
+ * Each rank adds damage and hull (the extra hull arrives repaired) and faster shields. */
+function gainXp(w: World, u: Unit, amount: number) {
+  if (!isShip(u.t)) return
+  u.xp += amount
+  const own = u.t.cost / u.t.squad
+  while (u.rank < 3 && u.xp >= own * RANK_AT[u.rank + 1]) {
+    u.rank++
+    const grow = (1 + RANK_BONUS * u.rank) / (1 + RANK_BONUS * (u.rank - 1))
+    u.hullMax *= grow
+    u.hull = Math.min(u.hullMax, u.hull * grow + u.hullMax * 0.1)
+    w.events.push({ k: 'rankUp', owner: u.owner, unit: u.id, rank: u.rank, x: u.x, y: u.y })
+  }
+}
+
 function alarm(w: World, u: Unit) {
   const p = w.players[u.owner]
   if (w.time - p.lastAlarm < 20) return
@@ -703,7 +731,10 @@ export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: num
     u.hull = 0
     kill(w, u, by)
     const killer = w.byId.get(shooter)
-    if (killer && !killer.dead) killer.kills++
+    if (killer && !killer.dead) {
+      killer.kills++
+      gainXp(w, killer, u.t.cost / u.t.squad)
+    }
   }
 }
 
@@ -887,7 +918,7 @@ function fire(w: World, u: Unit, g: Gun, e: Unit) {
   let dmg = g.w.damage * effect(g.w.kind, e.t.tier)
   if (u.t.tier === 'station') dmg *= 1 + STATION_LEVEL_BONUS * (p.level - 1)
   if (u.abilityOn > 0 && u.t.ability === 'broadside' && g.w.kind === 'turbo') dmg *= 1.6
-  dmg *= u.mods.damage
+  dmg *= u.mods.damage * (1 + RANK_BONUS * u.rank)
   w.shots.push({
     x: from.x, y: from.y, vx: (ax - from.x) / Math.max(t, 0.001), vy: (ay - from.y) / Math.max(t, 0.001), left: hit ? t : t * 1.6,
     kind: g.w.kind, owner: u.owner, target: e.id, hp, dmg, hit, sx: from.x, sy: from.y, age: 0, from: u.id,
@@ -1189,7 +1220,7 @@ export function tick(w: World, dt = STEP) {
     // Shields recharge, faster once out of the fight for a few seconds; terrain can stop that.
     if (!terrain(w, u, dt)) {
       const smax = shieldMax(u)
-      if (u.shield < smax) u.shield = Math.min(smax, u.shield + u.t.regen * u.mods.regen * dt * (w.time - u.lastHit > 6 ? 2 : 1))
+      if (u.shield < smax) u.shield = Math.min(smax, u.shield + u.t.regen * u.mods.regen * (1 + RANK_BONUS * u.rank) * dt * (w.time - u.lastHit > 6 ? 2 : 1))
     }
     if (u.t.carrier) {
       u.hangarT += dt

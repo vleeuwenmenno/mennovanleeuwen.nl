@@ -845,6 +845,10 @@ export class EmpiresSound {
   capture(ours: boolean) {
     this.ui(ours ? 'beacon-won' : 'beacon-lost', (sr) => (ours ? bells(sr, 440, [0, 7, 12, 16], 1.1, 0.07) : bells(sr, 311, [7, 3, 0, -5], 1.1, 0.09)), 0.55, 1)
   }
+  /** A ship ranked up: a short rising chime. */
+  promoted() {
+    if (this.ready() && this.allow('promoted', 1, 0.5)) this.ui('promoted', (sr) => bells(sr, 392, [0, 4, 7, 12], 0.8, 0.05), 0.5, 1)
+  }
   levelUp() {
     this.ui('levelup', (sr) => brass(sr, 196, [[[0, 4, 7], 0.22], [[2, 5, 9], 0.22], [[4, 7, 12], 0.7]], 0.6), 0.55, 1)
   }

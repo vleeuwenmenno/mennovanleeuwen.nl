@@ -8,7 +8,7 @@ import { actionFor, getSettings, keyName, useSettings } from './empires/settings
 import { HP_NAME } from './empires/icons'
 import { Renderer, type Camera, type View } from './empires/render'
 import {
-  STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdHold, cmdMove, cmdPatrol, cmdRally, cmdResearch, cmdSite, cmdStop, foes, hpPos, newWorld, tick, type Owner, type SimEvent,
+  STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdHold, cmdMove, cmdPatrol, cmdRally, cmdResearch, RANKS, cmdSite, cmdStop, foes, hpPos, newWorld, tick, type Owner, type SimEvent,
   type Unit, type World,
 } from './empires/sim'
 import { EmpiresSound, type OrderKind } from './empires/sound'
@@ -520,6 +520,10 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
             sound.surveyed()
             toast('Ore surveyed: click it to build a mining or defense platform', 'good')
           } else if (e.prev === myTeam) toast(e.owner === -1 ? 'An unused ore claim has lapsed' : 'We lost the claim on an ore asteroid', 'bad')
+        } else if (e.k === 'rankUp' && e.owner === me) {
+          const u = w.byId.get(e.unit)
+          sound.promoted()
+          if (u && u.t.tier !== 'fighter') toast(`${u.t.name} promoted: ${RANKS[e.rank]}`, 'good')
         } else if (e.k === 'tech' && e.owner === me) {
           sound.researchDone()
           toast(`Research complete: ${TECH[e.id].name}`, 'good')

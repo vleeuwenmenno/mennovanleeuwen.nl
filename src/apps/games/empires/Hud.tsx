@@ -6,7 +6,7 @@ import {
 import { HP_COLOR, HP_ICON, HP_NAME } from './icons'
 import { spriteUrl } from './render'
 import { keyName, useSettings } from './settings'
-import { building, cantBuild, cantResearch, cantSite, researchCost, researchLock, shieldFull, shieldMax, techBonus, type OreNode, type Owner, type ResearchItem, type Unit, type World } from './sim'
+import { RANKS, RANK_BONUS, building, cantBuild, cantResearch, cantSite, researchCost, researchLock, shieldFull, shieldMax, techBonus, type OreNode, type Owner, type ResearchItem, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard, research and game speed; and along the bottom the tactical map, a details panel for
@@ -621,6 +621,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
             {squad.length > 1 ? ` ×${squad.length}` : ''}
           </strong>
           <span className={`ew-tag ${mine ? '' : ally ? 'is-ally' : 'is-enemy'}`}>{mine ? t.tier : `${ally ? 'allied' : 'enemy'} ${t.tier}`}</span>
+          {u.rank > 0 && <span className="ew-rank" title={`${RANKS[u.rank]}: +${Math.round(RANK_BONUS * u.rank * 100)}% damage, hull and shield recharge`}>{'⌃'.repeat(u.rank)} {RANKS[u.rank]}</span>}
           {mine && <span className="ew-muted ew-small ew-orders">{orderText(w, u)}{u.kills > 0 ? ` · ${u.kills} kills` : ''}</span>}
         </header>
         <span className="ew-muted ew-small">{t.blurb}</span>

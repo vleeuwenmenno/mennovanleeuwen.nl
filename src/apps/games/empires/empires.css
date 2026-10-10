@@ -1041,6 +1041,12 @@ span.ew-teamtag {
   letter-spacing: 0.04em;
   color: var(--ew-head);
 }
+.ew-rank {
+  font-family: var(--ew-display);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: var(--ew-gold);
+}
 .ew-orders {
   margin-left: auto;
 }
