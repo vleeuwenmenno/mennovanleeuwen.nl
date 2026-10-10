@@ -124,7 +124,7 @@ function manPage(name: string) {
 }
 
 /** Commands that print their own help for --help and -h. */
-const OWN_HELP = new Set(['curl', 'git', 'pepper', 'find', 'fd', 'unzip'])
+const OWN_HELP = new Set(['curl', 'git', 'pepper', 'find', 'fd', 'unzip', 'du'])
 /** Commands where -h means something else (human-readable sizes); --help still works. */
 const H_IS_A_FLAG = new Set(['df', 'free'])
 
@@ -295,7 +295,7 @@ export const commands: Record<string, Command> = {
         ['Files', ['nano', 'touch', 'mkdir', 'cp', 'mv', 'rm', 'tee', 'unzip', 'mount', 'umount', 'findmnt', 'lsblk', 'fscrypt']],
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
         ['Network', ['curl', 'wget', 'whois', 'ping', 'dig', 'host', 'nslookup', 'minecraft']],
-        ['Device', ['htop', 'df', 'free', 'nproc', 'lscpu', 'xrandr', 'ip', 'watch']],
+        ['Device', ['htop', 'df', 'du', 'free', 'nproc', 'lscpu', 'xrandr', 'ip', 'watch']],
         ['System', ['keys', 'ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'sudo', 'env', 'export', 'theme', 'tty', 'reboot', 'shutdown', 'clear', 'exit']],
         ['Fun', ['games', 'fastfetch', 'fortune', 'cowsay', 'figlet', 'lolcat', 'cmatrix', 'sl']],
       ]
