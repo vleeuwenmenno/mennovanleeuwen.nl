@@ -490,6 +490,24 @@ export async function cleanTrash(user: User, body: { repo?: string; days?: numbe
   await seafile(user, `/api/v2.1/repos/${id}/trash/`, { method: 'DELETE', body: new URLSearchParams({ keep_days: String(days) }) })
 }
 
+/**
+ * How long a library keeps its history, which is also how long deleted things stay in its trash:
+ * days, -1 for ever, 0 for not at all (then a delete is for good). Only its owner can see or change it.
+ */
+export async function history(user: User, repo: unknown): Promise<{ days: number }> {
+  const id = repoId(repo)
+  const res = await seafile<{ keep_days: number }>(user, `/api2/repos/${id}/history-limit/`)
+  return { days: Number(res.keep_days) }
+}
+
+export async function setHistory(user: User, body: { repo?: string; days?: number }): Promise<{ days: number }> {
+  const id = repoId(body.repo)
+  const days = Math.round(Number(body.days))
+  if (!Number.isFinite(days) || days < -1 || days > 36500) throw new HttpError(400, 'Bad number of days')
+  const res = await seafile<{ keep_days: number }>(user, `/api2/repos/${id}/history-limit/`, { method: 'PUT', body: new URLSearchParams({ keep_days: String(days) }) })
+  return { days: Number(res.keep_days ?? days) }
+}
+
 /** A share link for a file or folder: the one it already has, or a new one (no password, no expiry). */
 export async function shareLink(user: User, body: { repo?: string; path?: string }): Promise<{ url: string; made: boolean }> {
   const id = repoId(body.repo)

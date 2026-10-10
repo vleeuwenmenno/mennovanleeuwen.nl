@@ -8,7 +8,7 @@ import { allCalendars, allEvents, createEvent, deleteEvent, updateEvent } from '
 import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, MAX_RANGE_DAYS, startGoogle } from './google.ts'
 import { inbox } from './inbox.ts'
 import { linkPreview } from './preview.ts'
-import { cleanTrash, shareLink, createFile, fileLink, rangeRead, restore, thumbnail, trash, trashDir, uploadedBytes, libraries, removeItems, rename, transfer, linkSeafile, listDir, lock, mkdir, unlock, unlocked, removeOffice, seafileInfo, setOffice, unlinkSeafile } from './seafile.ts'
+import { cleanTrash, history, setHistory, shareLink, createFile, fileLink, rangeRead, restore, thumbnail, trash, trashDir, uploadedBytes, libraries, removeItems, rename, transfer, linkSeafile, listDir, lock, mkdir, unlock, unlocked, removeOffice, seafileInfo, setOffice, unlinkSeafile } from './seafile.ts'
 import { officeCallback, officeCheck, officeConfig } from './office.ts'
 import { cancelExtract, extractStatus, startExtract } from './unzip.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
@@ -155,6 +155,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
     if (path === '/api/seafile/trash/restore' && method === 'POST') return json(res, 200, await restore(requireUser(req), await readJson(req, 256 * 1024))), true
     if (path === '/api/seafile/trash/clean' && method === 'POST') return await cleanTrash(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true
+    if (path === '/api/seafile/history' && read) return json(res, 200, await history(requireUser(req), url.searchParams.get('repo'))), true
+    if (path === '/api/seafile/history' && method === 'POST') return json(res, 200, await setHistory(requireUser(req), await readJson(req, 4096))), true
     if (path === '/api/seafile/share' && method === 'POST') return json(res, 200, await shareLink(requireUser(req), await readJson(req, 4096))), true
     if (path === '/api/seafile/uploaded' && read) return json(res, 200, await uploadedBytes(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('parent'), url.searchParams.get('name'))), true
     // Unpacking ZIPs into Seafile (server/unzip.ts): start a job, ask how it goes, cancel it.

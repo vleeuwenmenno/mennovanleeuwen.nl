@@ -206,8 +206,9 @@ edits it, the file is written from the older settings. The owner can `sudo nano 
 mount` and `sudo umount` (visitors are not in sudoers); Files' Home, places, breadcrumbs and Seafile
 section follow at once, and the site's own home is at `/srv/site` while Seafile is on `~`. In the
 terminal ([`src/terminal/fs.ts`](src/terminal/fs.ts)) `ls`, `cd`, `cat`, `grep -r`, `find`, `fd`,
-`tree`, `touch`, `mkdir`, `cp`, `mv`, `rm` (into Seafile's trash), `tee`, `>` and **nano**
-([`src/terminal/nano.ts`](src/terminal/nano.ts), GNU nano 8.2's keys on an alternate screen) work
+`tree`, `touch`, `mkdir`, `cp`, `mv`, `rm` (into Seafile's trash; in a library without history it
+asks first, unless `-f`), `tee`, `>` and **nano** ([`src/terminal/nano.ts`](src/terminal/nano.ts),
+GNU nano 8.2's keys on an alternate screen) work
 across the mounts; before a command runs, the Seafile folders and files it names are fetched.
 `mount`, `findmnt`, `lsblk -f` and `man fstab` describe the table, read-only libraries mount `ro`,
 and encrypted ones answer `Required key not available` until `fscrypt unlock` gets their password.
@@ -233,7 +234,9 @@ folder ask first: replace (Seafile keeps the old version), keep both, or skip.
 With Seafile linked, Files' **Trash** is Seafile's (Settings → Integrations → Seafile can switch
 that off): each library's own trash, from its history. Restore one item or several at once, open a
 deleted folder and restore from inside it, and empty the trash of what is older than 3, 7 or 30
-days, or all of it. With Seafile as home, the desktop shows the Desktop folder's files and folders
+days, or all of it. *Keep deleted* sets how long the library keeps its history (7 days to forever,
+or not at all); a library without history has an empty trash, and deleting from it says it is for
+good. With Seafile as home, the desktop shows the Desktop folder's files and folders
 next to the site's own icons; *Show the site's icons* (the desktop's menu, or Settings) leaves just
 Seafile's. Right-click the desktop for New (folder, text file, sticky note, widget, launcher),
 uploads and paste.

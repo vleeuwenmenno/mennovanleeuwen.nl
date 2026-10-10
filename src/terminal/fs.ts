@@ -1,5 +1,5 @@
 import { getFstab, isSeafileType, libraryNames, mounts, setFstab, whereIs } from '../data/mounts'
-import { cachedDir, createFile, deleteItems, errorStatus, getLibraries, listDir, loadLibraries, mkdir as sfMkdir, parseSf, readText, renameItem, SF, sfPath, transferItems, writeText, type Entry } from '../data/seafile'
+import { cachedDir, createFile, deleteItems, errorStatus, getLibraries, historyDays, listDir, loadLibraries, mkdir as sfMkdir, parseSf, readText, renameItem, SF, sfPath, transferItems, writeText, type Entry } from '../data/seafile'
 import { getAccount } from '../os/account'
 import { writeTmp } from './commands'
 import { CmdError } from './types'
@@ -335,8 +335,11 @@ export async function touchFile(cwd: string, arg: string) {
   await listDir(sfParent(sf)!, 0).catch(() => {})
 }
 
-/** rm: Seafile puts what it deletes in the library's trash, so this one is forgiving. */
-export async function removePath(cwd: string, arg: string, opts: { recursive: boolean; force: boolean; dir: boolean }) {
+/**
+ * rm: Seafile puts what it deletes in the library's trash, so this one is forgiving. Except in a
+ * library that keeps no history: there it is gone for good, so `ask` (rm without -f) gets a say.
+ */
+export async function removePath(cwd: string, arg: string, opts: { recursive: boolean; force: boolean; dir: boolean; ask?: (question: string) => Promise<boolean> }) {
   const abs = resolvePath(cwd, arg)
   const node = lookup(abs)
   if (!node) {
@@ -351,6 +354,13 @@ export async function removePath(cwd: string, arg: string, opts: { recursive: bo
   const w = whereIs(abs)
   if (w.kind === 'sf' && parseSf(w.sf)?.p === '/') throw err(`rm: cannot remove '${arg}': Device or resource busy`)
   const sf = writable(abs, arg, 'rm: cannot remove')
+  if (opts.ask && !opts.force) {
+    const repo = parseSf(sf)!.repo
+    if ((await historyDays(repo).catch(() => null)) === 0) {
+      const name = getLibraries()?.find((l) => l.id === repo)?.name ?? 'this library'
+      if (!(await opts.ask(`rm: ${name} keeps no history: remove '${arg}' for good? [y/N]`))) return
+    }
+  }
   await deleteItems([sf])
   texts.delete(sf)
   await listDir(sfParent(sf)!, 0).catch(() => {})
