@@ -16,13 +16,17 @@ export type SlotKind = 'you' | 'ai' | 'closed'
 export type Slot = { kind: SlotKind; faction: FactionId; team: 0 | 1; difficulty: Difficulty }
 /** `map` is a fixed map's id, or GENERATED to build one from `gen`. `areas` are the start areas
  * drawn in the lobby, by slot; a slot without one starts round its spawn point. */
-export type Setup = { map: string; slots: Slot[]; credits: number; gen: MapRules; areas: (Rect | null)[] }
+export type Setup = { map: string; slots: Slot[]; credits: number; gen: MapRules; areas: (Rect | null)[]; areasFor?: string }
+
+/** Which map, at which size, start areas were drawn for: areas saved for anything else (another
+ * map, or this one before it was resized) are dropped rather than landing in the wrong place. */
+const areaKey = (map: MapDef) => `${map.id}:${map.w}x${map.h}`
 
 const SETUP_KEY = 'mvlos.empires.lobby'
 export const CREDIT_STEPS = [500, 1000, 1600, 2500, 4000, 6000, 10000]
 
 /** Each slot's start area: the one drawn in the lobby, or a square round its spawn point. */
-export const setupAreas = (s: Setup, map: MapDef): Rect[] => map.spawns.map((_, i) => s.areas[i] ?? defaultArea(map, i))
+export const setupAreas = (s: Setup, map: MapDef): Rect[] => map.spawns.map((_, i) => (s.areasFor === areaKey(map) ? s.areas[i] : null) ?? defaultArea(map, i))
 
 /** The map a setup plays on. */
 export const setupMap = (s: Setup): MapDef => (s.map === GENERATED ? generateMap(s.gen) : (MAP[s.map] ?? MAPS[0]))
@@ -50,9 +54,10 @@ function lastSetup(): Setup {
     const credits = typeof v?.credits === 'number' && CREDIT_STEPS.includes(v.credits) ? v.credits : 1600
     const isRect = (r: unknown): r is Rect =>
       !!r && typeof r === 'object' && (['x', 'y', 'w', 'h'] as const).every((k) => Number.isFinite((r as Rect)[k])) && (r as Rect).w > 0 && (r as Rect).h > 0
-    const areas = Array.isArray(v?.areas) ? v.areas.slice(0, map.spawns.length).map((r) => (isRect(r) ? r : null)) : []
+    const areas = Array.isArray(v?.areas) && v.areasFor === areaKey(map) ? v.areas.slice(0, map.spawns.length).map((r) => (isRect(r) ? r : null)) : []
     return {
       areas,
+      areasFor: areaKey(map),
       map: v?.map === GENERATED ? GENERATED : map.id,
       slots: slotsFor(map, slots.slice(0, map.spawns.length)).map((s, i) => (i ? { ...s, kind: s.kind === 'you' ? 'ai' : s.kind } : s)),
       credits,
@@ -711,9 +716,9 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
   }
   const setArea = (r: Rect) => {
     sound.click()
-    const next = map.spawns.map((_, i) => setup.areas[i] ?? null)
+    const next = map.spawns.map((_, i) => (setup.areasFor === areaKey(map) ? setup.areas[i] : null) ?? null)
     next[active] = r
-    update({ ...setup, areas: next })
+    update({ ...setup, areas: next, areasFor: areaKey(map) })
   }
   const enemies = setup.slots.filter((s) => s.kind === 'ai' && s.team === 1).length
   const allies = setup.slots.filter((s) => s.kind === 'ai' && s.team === 0).length
