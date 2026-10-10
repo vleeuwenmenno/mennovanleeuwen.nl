@@ -425,12 +425,14 @@ async function run(job: Job, user: User, archive: Opened, plan: { e: ZipEntry; r
   }
 }
 
-/** A job's progress; `since` leaves out the finished files the caller has seen already. */
+/** A job's progress; `since` leaves out the finished files the caller has seen already. `count`
+ * is that cursor (folders made count too); `files` is how many of the `total` files are through
+ * (unpacked, skipped or failed), for a progress line. */
 export function extractStatus(user: User, id: unknown, since: unknown) {
   const job = jobs.get(String(id))
   if (!job || job.user !== user.id) throw new HttpError(404, 'No such job')
   const from = Math.max(0, Number(since) || 0)
-  return { id: job.id, state: job.state, error: job.error, total: job.total, totalBytes: job.totalBytes, bytes: job.bytes, current: job.current, count: job.done.length, done: job.done.slice(from), errors: job.errors, into: job.into }
+  return { id: job.id, state: job.state, error: job.error, total: job.total, totalBytes: job.totalBytes, bytes: job.bytes, current: job.current, count: job.done.length, files: job.done.filter((d) => d.how !== 'creating').length + job.errors.length, done: job.done.slice(from), errors: job.errors, into: job.into }
 }
 
 export function cancelExtract(user: User, id: unknown) {
