@@ -4891,6 +4891,10 @@ button.fm-dd-row:hover {
   user-select: none;
   -webkit-user-select: none;
 }
+/* A tar has no per-file compression: no Packed and Saved columns. */
+.ar.is-tar .ar-row {
+  grid-template-columns: minmax(0, 1fr) 90px 150px;
+}
 .ar-row > span:not(.ar-name) {
   color: var(--muted);
   text-align: right;

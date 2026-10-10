@@ -19,9 +19,15 @@ export type ZipEntry = {
   offset: number
   /** CRC-32 of the unpacked data, to check an unpacked file against */
   crc: number
+  /** Tar only: where a link points (a link is listed, not unpacked) */
+  link?: string
+  /** Tar only: permission bits, and owner/group as the archive names them */
+  mode?: number
+  owner?: string
 }
 
-export type ZipIndex = { entries: ZipEntry[]; size: number; comment: string; zip64: boolean }
+/** What an archive holds. Tar archives (data/tar.ts) come in the same shape, as stored entries. */
+export type ZipIndex = { entries: ZipEntry[]; size: number; comment: string; zip64: boolean; format?: 'zip' | 'tar' | 'tgz' }
 
 const EOCD = 0x06054b50
 const EOCD64 = 0x06064b50
@@ -171,7 +177,7 @@ export async function readZip(url: string, knownSize?: number): Promise<ZipIndex
     })
     o += 46 + nameLen + extraLen + commentLen
   }
-  return { entries, size, comment, zip64 }
+  return { entries, size, comment, zip64, format: 'zip' }
 }
 
 /** What is directly in a folder of the archive ('' is the top), folders made up from paths too. */

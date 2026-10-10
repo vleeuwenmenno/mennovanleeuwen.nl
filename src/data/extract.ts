@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { notify } from '../os/notify'
+import { archiveStem } from './archive'
 import { parseSf, refreshDirs, sfPath } from './seafile'
 
 // Unpacking ZIPs from Seafile into Seafile. The server does the work (server/unzip.ts: only the
@@ -44,11 +45,11 @@ async function call<T>(url: string, init: RequestInit & { json?: unknown } = {})
   return body as T
 }
 
-/** The default destination: a folder next to the archive, named after it ("mods" for mods.zip). */
+/** The default destination: a folder next to the archive, named after it ("mods" for mods.zip or mods.tar.gz). */
 export function besideArchive(zip: string): string {
   const at = parseSf(zip)!
   const parent = at.p.split('/').slice(0, -1).join('/') || '/'
-  const stem = at.p.split('/').pop()!.replace(/\.zip$/i, '') || 'archive'
+  const stem = archiveStem(at.p.split('/').pop()!) || 'archive'
   return sfPath(at.repo, `${parent === '/' ? '' : parent}/${stem}`)
 }
 

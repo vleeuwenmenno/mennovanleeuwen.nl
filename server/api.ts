@@ -10,7 +10,7 @@ import { inbox } from './inbox.ts'
 import { linkPreview } from './preview.ts'
 import { cleanTrash, history, quota, setHistory, shareLink, createFile, fileLink, rangeRead, restore, thumbnail, trash, trashDir, uploadedBytes, libraries, removeItems, rename, transfer, linkSeafile, listDir, lock, mkdir, unlock, unlocked, removeOffice, seafileInfo, setOffice, unlinkSeafile } from './seafile.ts'
 import { officeCallback, officeCheck, officeConfig } from './office.ts'
-import { cancelExtract, extractStatus, startExtract } from './unzip.ts'
+import { archiveFile, cancelExtract, extractStatus, listArchive, startExtract } from './unzip.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
 import { HttpError, json, readJson, redirect, sameOrigin, SECURITY } from './http.ts'
 import { minecraftOverview, minecraftStatus } from './minecraft.ts'
@@ -160,7 +160,24 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/seafile/history' && method === 'POST') return json(res, 200, await setHistory(requireUser(req), await readJson(req, 4096))), true
     if (path === '/api/seafile/share' && method === 'POST') return json(res, 200, await shareLink(requireUser(req), await readJson(req, 4096))), true
     if (path === '/api/seafile/uploaded' && read) return json(res, 200, await uploadedBytes(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('parent'), url.searchParams.get('name'))), true
-    // Unpacking ZIPs into Seafile (server/unzip.ts): start a job, ask how it goes, cancel it.
+    // Archives in Seafile (server/unzip.ts): what one holds, one file from a tar, and unpacking
+    // (start a job, ask how it goes, cancel it).
+    if (path === '/api/seafile/archive' && read) return json(res, 200, await listArchive(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'))), true
+    if (path === '/api/seafile/archive/file' && read) {
+      const f = await archiveFile(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), url.searchParams.get('entry'))
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': String(f.size),
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+        'Cache-Control': 'private, no-store',
+        ...SECURITY,
+      })
+      if (head) return f.body.destroy(), res.end(), true
+      f.body.on('error', () => res.destroy())
+      res.on('close', () => f.body.destroy())
+      f.body.pipe(res)
+      return true
+    }
     if (path === '/api/seafile/extract' && method === 'POST') return json(res, 200, await startExtract(requireUser(req), await readJson(req, 4 * 1024 * 1024))), true
     if (path === '/api/seafile/extract' && read) return json(res, 200, extractStatus(requireUser(req), url.searchParams.get('id'), url.searchParams.get('since'))), true
     if (path === '/api/seafile/extract' && method === 'DELETE') return cancelExtract(requireUser(req), url.searchParams.get('id')), json(res, 200, { ok: true }), true
