@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { download, isSf, parseSf } from '../data/seafile'
+import { besideArchive, cancelExtract, dismissExtract, extract, useExtractJobs, type Clash } from '../data/extract'
+import { posixOf } from '../data/mounts'
+import { download, isSf, libraryName, parseSf } from '../data/seafile'
+import { pickFolder } from '../os/FolderPicker'
 import { folderOf, nameOf, useMedia } from '../data/media'
 import { listFolder, METHODS, readZip, type ZipEntry, type ZipIndex } from '../data/zip'
 import { useWM, type WinState } from '../os/wm'
 import { useBackButton } from '../os/backButton'
-import { formatSize, kindOfName } from '../terminal/vfs'
+import { formatSize, kindOfName, prettyPath } from '../terminal/vfs'
 
 // Archive: what is in a ZIP, browsed like a folder, without unpacking it. Only the archive's table
 // of contents is read (from Seafile, just the end of the file), so even a big one opens at once.
 // Folders open with a double-click or Enter, Backspace goes up, the columns sort, and the search
-// looks through the whole archive. Unpacking comes later.
+// looks through the whole archive. Extract unpacks everything, or what is selected (Ctrl/Shift+
+// click, Ctrl+A), into a Seafile folder; the server does it (data/extract.ts, server/unzip.ts).
 
 type Sort = 'name' | 'size' | 'packed' | 'ratio' | 'date'
 type Row = { name: string; path: string; dir: boolean; size: number; packed: number; mtime: number; count?: number; entry?: ZipEntry }
@@ -28,6 +32,11 @@ export function Archive({ win }: { win: WinState }) {
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<{ by: Sort; desc: boolean }>({ by: 'name', desc: false })
   const [selected, setSelected] = useState<string | null>(null)
+  // Rows picked for unpacking (the cursor is `selected`).
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [panel, setPanel] = useState<{ into: string; clash: Clash } | null>(null)
+  const jobs = useExtractJobs().filter((j) => j.zip === path)
+  const job = jobs[jobs.length - 1]
   const list = useRef<HTMLDivElement>(null)
   const root = useRef<HTMLDivElement>(null)
 
@@ -88,6 +97,35 @@ export function Archive({ win }: { win: WinState }) {
     setFolder(r.path)
     setQuery('')
     setSelected(null)
+    setPicked(new Set())
+  }
+  /** Click: just this row; Ctrl: add or take off; Shift: everything from the last click. */
+  const pick = (r: Row, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => {
+    if (e.shiftKey && selected) {
+      const a = rows.findIndex((x) => x.path === selected)
+      const b = rows.findIndex((x) => x.path === r.path)
+      setPicked(new Set(rows.slice(Math.min(a, b), Math.max(a, b) + 1).map((x) => x.path)))
+      return
+    }
+    setSelected(r.path)
+    if (e.ctrlKey || e.metaKey) {
+      const next = new Set(picked)
+      if (next.has(r.path)) next.delete(r.path)
+      else next.add(r.path)
+      setPicked(next)
+    } else setPicked(new Set([r.path]))
+  }
+  const where = (sf: string) => {
+    const px = posixOf(sf)
+    if (px) return prettyPath(px)
+    const at = parseSf(sf)!
+    return `${libraryName(at.repo)}${at.p === '/' ? '' : at.p}`
+  }
+  const startExtract = () => {
+    if (!panel) return
+    const entries = picked.size ? [...picked] : undefined
+    setPanel(null)
+    void extract(path, panel.into, { entries, base: query ? '' : folder, clash: panel.clash }).catch((e: Error) => setError(e.message))
   }
   const up = () => {
     if (!folder) return
@@ -104,8 +142,12 @@ export function Archive({ win }: { win: WinState }) {
       return
     }
     const i = rows.findIndex((r) => r.path === selected)
-    if (e.key === 'ArrowDown') setSelected(rows[Math.min(rows.length - 1, i + 1)]?.path ?? null)
-    else if (e.key === 'ArrowUp') setSelected(rows[Math.max(0, i - 1)]?.path ?? null)
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      const next = rows[e.key === 'ArrowDown' ? Math.min(rows.length - 1, i + 1) : Math.max(0, i - 1)]
+      setSelected(next?.path ?? null)
+      setPicked(next ? new Set([next.path]) : new Set())
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') setPicked(new Set(rows.map((r) => r.path)))
+    else if (e.key === 'Escape') setPicked(new Set())
     else if (e.key === 'Enter' && i >= 0) enter(rows[i])
     else if (e.key === 'Backspace' || (e.altKey && e.key === 'ArrowUp')) up()
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') root.current?.querySelector<HTMLInputElement>('.ar-search')?.focus()
@@ -113,7 +155,7 @@ export function Archive({ win }: { win: WinState }) {
     e.preventDefault()
   }
   useEffect(() => {
-    list.current?.querySelector('.is-selected')?.scrollIntoView({ block: 'nearest' })
+    list.current?.querySelector('.is-cursor')?.scrollIntoView({ block: 'nearest' })
   }, [selected])
 
   const files = index?.entries.filter((e) => !e.dir) ?? []
@@ -146,6 +188,9 @@ export function Archive({ win }: { win: WinState }) {
         </span>
         <span className="spacer" />
         <input className="ar-search" placeholder="Search the archive" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search the archive" />
+        <button className="btn btn-small" disabled={!index} onClick={() => setPanel(panel ? null : { into: besideArchive(path), clash: 'keep' })}>
+          {picked.size ? `Extract ${picked.size}…` : 'Extract all…'}
+        </button>
         <button className="btn btn-small" onClick={() => wm.openNew('files', { path: folderOf(path), select: path })}>
           Show in Files
         </button>
@@ -168,6 +213,38 @@ export function Archive({ win }: { win: WinState }) {
         <div className="pv-loading">Reading {media.name}…</div>
       ) : (
         <>
+          {panel && (
+            <div className="ar-panel">
+              <span>
+                Extract {picked.size ? `${picked.size} selected` : 'everything'} into <strong>{where(panel.into)}</strong>
+              </span>
+              <button className="btn btn-small" onClick={() => void pickFolder({ title: 'Extract into', start: panel.into }).then((p) => p && setPanel({ ...panel, into: p }))}>
+                Change…
+              </button>
+              <span className="ar-clash" role="radiogroup" aria-label="When a file is already there">
+                <span className="muted">Already there:</span>
+                {(
+                  [
+                    ['keep', 'Keep both'],
+                    ['replace', 'Replace'],
+                    ['skip', 'Skip'],
+                  ] as const
+                ).map(([id, label]) => (
+                  <label key={id} className={`set-choice ${panel.clash === id ? 'is-on' : ''}`}>
+                    <input type="radio" name={`clash-${win.pid}`} checked={panel.clash === id} onChange={() => setPanel({ ...panel, clash: id })} />
+                    {label}
+                  </label>
+                ))}
+              </span>
+              <span className="spacer" />
+              <button className="btn btn-small" onClick={() => setPanel(null)}>
+                Cancel
+              </button>
+              <button className="btn btn-small btn-primary" onClick={startExtract}>
+                Extract
+              </button>
+            </div>
+          )}
           <div className="ar-list" ref={list} tabIndex={0}>
             <div className="ar-row ar-head">
               {head('name', query ? 'Path' : 'Name')}
@@ -177,7 +254,7 @@ export function Archive({ win }: { win: WinState }) {
               {head('date', 'Modified')}
             </div>
             {rows.map((r) => (
-              <div key={r.path} className={`ar-row ${r.path === selected ? 'is-selected' : ''}`} onClick={() => setSelected(r.path)} onDoubleClick={() => enter(r)} title={r.path}>
+              <div key={r.path} className={`ar-row ${picked.has(r.path) ? 'is-selected' : ''} ${r.path === selected ? 'is-cursor' : ''}`} onClick={(e) => pick(r, e)} onDoubleClick={() => enter(r)} title={r.path}>
                 <span className="ar-name">
                   <span className="ar-glyph">{r.dir ? GLYPH.folder : (GLYPH[kindOfName(r.name)] ?? '📄')}</span>
                   {r.name}
@@ -197,7 +274,35 @@ export function Archive({ win }: { win: WinState }) {
                 ? `${chosen.entry.path} · ${formatSize(chosen.entry.size)} · ${METHODS[chosen.entry.method] ?? `method ${chosen.entry.method}`}${chosen.entry.encrypted ? ' · encrypted' : ''}${chosen.entry.comment ? ` · ${chosen.entry.comment}` : ''}`
                 : `${files.length} files in ${folders} folders · ${formatSize(unpacked)} unpacked · ${formatSize(index.size)} on disk${unpacked ? ` (${Math.max(0, Math.round((1 - packed / unpacked) * 100))}% smaller)` : ''}${index.zip64 ? ' · ZIP64' : ''}`}
             </span>
-            <span className="muted">Viewing only</span>
+            {job ? (
+              <span className="ar-job">
+                {job.status.state === 'running' ? (
+                  <>
+                    <span className="ar-bar" aria-hidden>
+                      <i style={{ width: `${job.status.totalBytes ? Math.round((job.status.bytes / job.status.totalBytes) * 100) : 0}%` }} />
+                    </span>
+                    Unpacking {job.status.count} of {job.status.total}
+                    {job.status.current ? ` · ${job.status.current.split('/').pop()}` : ''}
+                    <button className="link-btn" onClick={() => void cancelExtract(job.id)}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {job.status.state === 'done' ? `Unpacked into ${where(job.into)}` : job.status.state === 'cancelled' ? 'Stopped' : `Failed: ${job.status.error}`}
+                    {job.status.errors.length > 0 && <span title={job.status.errors.map((e) => `${e.path}: ${e.error}`).join('\n')}> · {job.status.errors.length} left out</span>}
+                    <button className="link-btn" onClick={() => wm.openNew('files', { path: job.into })}>
+                      Show
+                    </button>
+                    <button className="link-btn" onClick={() => dismissExtract(job.id)} aria-label="Dismiss">
+                      ✕
+                    </button>
+                  </>
+                )}
+              </span>
+            ) : (
+              <span className="muted">{picked.size ? `${picked.size} selected` : 'Click, Ctrl+click or Shift+click to pick what to extract'}</span>
+            )}
           </footer>
         </>
       )}

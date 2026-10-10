@@ -17,6 +17,7 @@ import { addBookmark, useSidebar } from '../data/filesSidebar'
 import { FilesSidebar, type SideSection } from './FilesSidebar'
 import { libraryNames, mounts, posixOf, useMounts, whereIs } from '../data/mounts'
 import { lookup as fsLookup } from '../terminal/fs'
+import { besideArchive, extract } from '../data/extract'
 
 /** Quotes a path for a command line in the terminal. */
 const shq = (s: string) => (/^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
@@ -405,6 +406,10 @@ export function Files({ win }: { win: WinState }) {
   }
 
   const download = (item: Item) => sfDownload(item.path).catch((e: Error) => setToast(e.message))
+  const unpack = (zip: string, into: string) => {
+    setToast(`Unpacking ${zip.split('/').pop()}…`)
+    void extract(zip, into, { clash: 'keep' }).catch((e: Error) => setToast(e.message))
+  }
 
   // --- changing things in Seafile ------------------------------------------------------------
 
@@ -596,6 +601,14 @@ export function Files({ win }: { win: WinState }) {
                   ...((item.kind === 'document' || /\.(csv|txt|rtf)$/i.test(item.name)) && account.seafile?.office ? [{ label: 'Office (OnlyOffice)', onSelect: () => openItem(item, 'office') }] : []),
                 ],
               },
+              // ZIPs unpack on the server, into a folder named after them or one you pick.
+              ...(/\.zip$/i.test(item.name)
+                ? [
+                    { separator: true } as MenuItem,
+                    { label: 'Extract here', disabled: !canWrite(parentOf(item.path)), onSelect: () => unpack(item.path, besideArchive(item.path)) },
+                    { label: 'Extract to…', onSelect: () => void pickFolder({ title: `Extract ${item.name} into`, start: parentOf(item.path) }).then((to) => to && unpack(item.path, to)) },
+                  ]
+                : []),
               { label: 'Download', onSelect: () => download(item) },
             ]),
         { label: 'Seafile', submenu: seafileMenu(item.path) },

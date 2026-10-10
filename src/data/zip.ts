@@ -2,6 +2,7 @@
 // end of the file) is all that is read. From a server that answers Range requests (Seafile's file
 // server does) only the last bytes are fetched, so a big archive opens at once; otherwise the
 // whole file is fetched (up to a limit). ZIP64 (over 4 GB, or over 65535 entries) is read too.
+// The server reads it too, to unpack (server/unzip.ts), so it stays free of browser-only APIs.
 
 export type ZipEntry = {
   /** The full path inside the archive, without a trailing slash for folders */
@@ -14,6 +15,10 @@ export type ZipEntry = {
   method: number
   encrypted: boolean
   comment: string
+  /** Where its local header starts in the archive (its data follows that header) */
+  offset: number
+  /** CRC-32 of the unpacked data, to check an unpacked file against */
+  crc: number
 }
 
 export type ZipIndex = { entries: ZipEntry[]; size: number; comment: string; zip64: boolean }
@@ -124,16 +129,18 @@ export async function readZip(url: string, knownSize?: number): Promise<ZipIndex
     const method = u16(cv, o + 10)
     const time = u16(cv, o + 12)
     const date = u16(cv, o + 14)
+    const crc = u32(cv, o + 16)
     let compressed = u32(cv, o + 20)
     let size = u32(cv, o + 24)
+    let offset = u32(cv, o + 42)
     const nameLen = u16(cv, o + 28)
     const extraLen = u16(cv, o + 30)
     const commentLen = u16(cv, o + 32)
     const external = u32(cv, o + 38)
     const raw = cd.subarray(o + 46, o + 46 + nameLen)
     const name = (flags & 0x800 ? utf8 : cp437).decode(raw)
-    // ZIP64 sizes live in the extra field when the plain ones are all ones.
-    if (compressed === 0xffffffff || size === 0xffffffff) {
+    // ZIP64 sizes (and the offset) live in the extra field when the plain ones are all ones.
+    if (compressed === 0xffffffff || size === 0xffffffff || offset === 0xffffffff) {
       let e = o + 46 + nameLen
       const end = e + extraLen
       while (e + 4 <= end) {
@@ -142,7 +149,8 @@ export async function readZip(url: string, knownSize?: number): Promise<ZipIndex
         if (id === 1) {
           let p = e + 4
           if (size === 0xffffffff) (size = u64(cv, p)), (p += 8)
-          if (compressed === 0xffffffff) compressed = u64(cv, p)
+          if (compressed === 0xffffffff) (compressed = u64(cv, p)), (p += 8)
+          if (offset === 0xffffffff) offset = u64(cv, p)
           break
         }
         e += 4 + len
@@ -158,6 +166,8 @@ export async function readZip(url: string, knownSize?: number): Promise<ZipIndex
       method,
       encrypted: !!(flags & 1),
       comment: commentLen ? utf8.decode(cd.subarray(o + 46 + nameLen + extraLen, o + 46 + nameLen + extraLen + commentLen)) : '',
+      offset,
+      crc,
     })
     o += 46 + nameLen + extraLen + commentLen
   }
