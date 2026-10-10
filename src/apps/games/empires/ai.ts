@@ -47,9 +47,9 @@ export const DIFFICULTY: Record<Difficulty, Level> = {
   },
 }
 
-export type Brain = { o: Owner; diff: Difficulty; t: number; wave: number; attacking: boolean; peak: number; scouts: Set<number>; want: string | null }
+export type Brain = { o: Owner; diff: Difficulty; t: number; wave: number; attacking: boolean; peak: number; scouts: Set<number>; want: string | null; lastWave: number }
 
-export const newBrain = (o: Owner, diff: Difficulty): Brain => ({ o, diff, t: 2, wave: DIFFICULTY[diff].wave, attacking: false, peak: 0, scouts: new Set(), want: null })
+export const newBrain = (o: Owner, diff: Difficulty): Brain => ({ o, diff, t: 2, wave: DIFFICULTY[diff].wave, attacking: false, peak: 0, scouts: new Set(), want: null, lastWave: 0 })
 
 const value = (us: Unit[]) => us.reduce((s, u) => s + (u.t.cost / u.t.squad) * (0.3 + 0.7 * (u.hull / u.hullMax)), 0)
 const d2 = (a: { x: number; y: number }, b: { x: number; y: number }) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2
@@ -141,7 +141,14 @@ export function think(w: World, b: Brain, dt: number) {
   // Ore first: build on what we've surveyed, nearest the station first. Once the economy is up,
   // spare surveyed ore gets a defense platform instead.
   const mines = w.units.filter((u) => u.owner === o && u.t.tier === 'mine').length
-  const ours = w.nodes.filter((n) => n.owner === team && !n.site).sort((a, c) => d2(a, st) - d2(c, st))
+  // Ore counts as ours to take when it's nearer to us than to any enemy station, and nearer to us
+  // than to an ally's, so allies don't take each other's.
+  const enemyStations = w.players.filter((q) => q.alive && q.team !== team).map((q) => w.byId.get(q.station)).filter((u): u is Unit => !!u)
+  const allyStations = w.players.filter((q) => q.alive && q.team === team && q !== p).map((q) => w.byId.get(q.station)).filter((u): u is Unit => !!u)
+  const nearerUs = (n: { x: number; y: number }) => allyStations.every((a) => d2(n, st) <= d2(n, a))
+  const mineToTake = (n: { x: number; y: number }) => enemyStations.every((e) => d2(n, st) < d2(n, e) * 1.05) && nearerUs(n)
+  // Build on our team's claims nearest us; an ally's own patch is theirs (unless they're gone).
+  const ours = w.nodes.filter((n) => n.owner === team && !n.site && nearerUs(n)).sort((a, c) => d2(a, st) - d2(c, st))
   // Surveyed ore with nothing on it is money left on the table: save for a mine before more ships.
   const savingForMine = !!ours[0] && mines < D.mines
   if (ours[0]) {
@@ -222,9 +229,6 @@ export function think(w: World, b: Brain, dt: number) {
   // While calm, only neutral ones: nothing the player already holds.
   const calm = w.time < D.calm
   // Ore nearer to us than to any enemy station, so allies don't race each other for it.
-  const enemyStations = w.players.filter((q) => q.alive && q.team !== team).map((q) => w.byId.get(q.station)).filter((u): u is Unit => !!u)
-  const allyStations = w.players.filter((q) => q.alive && q.team === team && q !== p).map((q) => w.byId.get(q.station)).filter((u): u is Unit => !!u)
-  const mineToTake = (n: { x: number; y: number }) => enemyStations.every((e) => d2(n, st) < d2(n, e) * 1.05) && allyStations.every((a) => d2(n, st) <= d2(n, a))
   const ore = w.nodes.filter((n) => !n.site && n.owner !== team && (!calm || n.owner === -1) && mineToTake(n))
   const wanted = [...ore, ...w.beacons.filter((bc) => bc.owner !== team && (!calm || bc.owner === -1))]
     .filter((g) => threatAt(w, o, g.x, g.y) < scoutValue * 0.9)
@@ -243,8 +247,21 @@ export function think(w: World, b: Brain, dt: number) {
   // Attack waves.
   const main = army.filter((u) => !b.scouts.has(u.id))
   const mainValue = value(main)
-  if (!b.attacking && !calm && (mainValue >= b.wave || p.pop >= p.popCap - 2)) {
+  // Waves go out once the fleet is big enough, or the yard is full, or (so poor maps don't stall)
+  // after four quiet minutes with at least half a wave ready.
+  const restless = w.time - Math.max(b.lastWave, D.calm) > 240 && mainValue >= b.wave * 0.5
+  // An ally already pushing into enemy space: go with them rather than one wave at a time.
+  const pushing: Unit[] = []
+  for (const u of w.units) {
+    if (u.dead || u.owner === o || foes(w, u.owner, o) || !isShip(u.t) || u.order.k !== 'move' || !u.order.attack) continue
+    const home = w.byId.get(w.players[u.owner].station)
+    if (home && d2(u, home) > 2200 ** 2) pushing.push(u)
+  }
+  const push = value(pushing) > 1200 ? { x: pushing.reduce((s, u) => s + u.x, 0) / pushing.length, y: pushing.reduce((s, u) => s + u.y, 0) / pushing.length } : null
+  const joinAlly = !!push && mainValue >= b.wave * 0.3
+  if (!b.attacking && !calm && (mainValue >= b.wave || p.pop >= p.popCap - 2 || restless || joinAlly)) {
     b.attacking = true
+    b.lastWave = w.time
     b.peak = mainValue
   }
   const cxm = main.reduce((s, u) => s + u.x, 0) / Math.max(1, main.length)
@@ -252,7 +269,7 @@ export function think(w: World, b: Brain, dt: number) {
   const outgunned = threatAt(w, o, cxm, cym, 1100) > mainValue * 1.5 && d2({ x: cxm, y: cym }, st) > 1800 ** 2
   if (b.attacking && (mainValue < b.peak * 0.35 || outgunned)) {
     b.attacking = false
-    b.wave = Math.min(14000, b.wave * 1.3)
+    b.wave = Math.min(9000, b.wave * 1.15)
     cmdMove(w, o, main.map((u) => u.id), p.rally.x, p.rally.y)
     return
   }
@@ -261,8 +278,8 @@ export function think(w: World, b: Brain, dt: number) {
     if (loose.length) cmdMove(w, o, loose.map((u) => u.id), p.rally.x, p.rally.y)
     return
   }
-  // Pick a goal: enemy mines nearest our fleet, then beacons, then the station.
-  const c = { x: cxm, y: cym }
+  // Pick a goal: enemy mines nearest our fleet (or the ally we're backing up), then beacons, then the station.
+  const c = push ?? { x: cxm, y: cym }
   const targets = [
     ...w.units.filter((u) => foes(w, u.owner, o) && (u.t.tier === 'mine' || u.t.tier === 'defense') && sees(w, o, u)),
     ...w.beacons.filter((bc) => bc.owner !== -1 && bc.owner !== team),

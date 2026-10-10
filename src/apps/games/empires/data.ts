@@ -154,7 +154,7 @@ export const UNITS: UnitType[] = [
   },
   {
     id: 'r-station', faction: 'republic', tier: 'station', name: 'Bastion station', blurb: 'Your shipyard and command post. Lose it and the battle is lost.',
-    sprite: 'republic-station', aspect: 0.97, size: 440, hull: 9000, shield: 4500, regen: 30, speed: 0, turn: 0, pop: 0, cost: 0, build: 0, level: 0, squad: 1, sensor: 1600,
+    sprite: 'republic-station', aspect: 0.97, size: 440, hull: 7200, shield: 4500, regen: 22, speed: 0, turn: 0, pop: 0, cost: 0, build: 0, level: 0, squad: 1, sensor: 1600,
     weapons: [flak(7, 380, 0.3, 2), flak(7, 380, 0.3, 2)],
     hardpoints: [
       P('turret', 2.6, 1.5, 900, turbo(48, 800)), P('turret', 7.4, 1.5, 900, turbo(48, 800)), P('turret', 0.9, 4.2, 900, turbo(48, 800)),
@@ -210,7 +210,7 @@ export const UNITS: UnitType[] = [
   },
   {
     id: 'd-station', faction: 'droid', tier: 'station', name: 'Foundry station', blurb: 'The droid foundry. Lose it and the battle is lost.',
-    sprite: 'droid-station', aspect: 1.03, size: 440, hull: 9600, shield: 4000, regen: 28, speed: 0, turn: 0, pop: 0, cost: 0, build: 0, level: 0, squad: 1, sensor: 1600,
+    sprite: 'droid-station', aspect: 1.03, size: 440, hull: 7700, shield: 4000, regen: 20, speed: 0, turn: 0, pop: 0, cost: 0, build: 0, level: 0, squad: 1, sensor: 1600,
     weapons: [flak(7, 380, 0.3, 2), flak(7, 380, 0.3, 2)],
     hardpoints: [
       P('turret', 0.6, 2.8, 900, turbo(48, 800)), P('turret', 9.4, 2.8, 900, turbo(48, 800)), P('turret', 0.6, 7.2, 900, turbo(48, 800)),
