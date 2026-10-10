@@ -129,7 +129,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   const mode = useRef<Mode>('normal')
   /** An ore asteroid picked with nothing else selected: the command card offers to build on it. */
   const pickedNode = useRef(-1)
-  const hover = useRef({ unit: 0, hp: -1, node: -1 })
+  const hover = useRef({ unit: 0, hp: -1, node: -1, wreck: 0 })
   const mouse = useRef({ x: -1, y: -1, inside: false })
   const keys = useRef(new Set<string>())
   const speed = useRef(1)
@@ -259,7 +259,8 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     }
     let node = -1
     for (const n of w.nodes) if (Math.hypot(n.x - p.x, n.y - p.y) < 130) node = n.id
-    return { unit: best, hp, node, at: p }
+    const wreck = w.wrecks.find((h) => Math.hypot(h.x - p.x, h.y - p.y) < h.size * 0.55 + 20)?.id ?? 0
+    return { unit: best, hp, node, wreck, at: p }
   }
 
   /** Who answers an order on the radio: the biggest ship in the selection. */
@@ -572,6 +573,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         box: drag.current?.box && drag.current.moved ? { x0: drag.current.x0, y0: drag.current.y0, x1: mouse.current.x, y1: mouse.current.y } : null,
         node: selected.current.size ? -1 : pickedNode.current,
         hoverNode: h.node,
+        hoverWreck: h.wreck,
         showRally: mySelection().some((u) => u.t.tier === 'station'),
       }
       renderer.current.draw(ctx, w, cm, vw, vh, v, dt * (paused.current ? 0 : speed.current))
@@ -754,7 +756,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       }
     }
     const h = pick(p.x, p.y)
-    hover.current = { unit: h.unit?.id ?? 0, hp: h.hp, node: h.node }
+    hover.current = { unit: h.unit?.id ?? 0, hp: h.hp, node: h.node, wreck: h.wreck }
   }
 
   const onPointerUp = (e: React.PointerEvent) => {
@@ -920,7 +922,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         onPointerCancel={() => ((drag.current = null), touches.current.clear(), (pinch.current = null))}
         onPointerLeave={() => {
           mouse.current.inside = false
-          hover.current = { unit: 0, hp: -1, node: -1 }
+          hover.current = { unit: 0, hp: -1, node: -1, wreck: 0 }
         }}
         onWheel={onWheel}
       />

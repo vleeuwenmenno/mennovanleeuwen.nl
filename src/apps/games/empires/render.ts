@@ -1,7 +1,7 @@
 import { FACTIONS, SURVEY_RADIUS, dims, isShip, type HardpointKind, type Tier } from './data'
 import { HP_COLOR, HP_ICON, HP_NAME } from './icons'
 import { rng, type MapDef, type Nebula, type Patch } from './maps'
-import { building, foes, hpPos, radius, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
+import { building, foes, hpPos, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 
 // Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, nebulas
 // and asteroid fields, ore, rocks and beacons, the ships (generated sprites rotated in code, with engine glow, shield
@@ -37,6 +37,8 @@ export type View = {
   /** The ore asteroid clicked on, or -1. */
   node: number
   hoverNode: number
+  /** The wreck under the pointer, or 0. */
+  hoverWreck: number
   showRally: boolean
 }
 
@@ -506,7 +508,17 @@ export class Renderer {
       ctx.arc(h.x, h.y, rr, -Math.PI / 2, -Math.PI / 2 + (h.left / h.value) * Math.PI * 2)
       ctx.stroke()
       ctx.setLineDash([])
-      if (z > 0.3) {
+      // Hovered: show how close ships have to come to strip it.
+      if (view.hoverWreck === h.id) {
+        ctx.strokeStyle = 'rgba(242,193,74,0.3)'
+        ctx.lineWidth = 1.5 / z
+        ctx.setLineDash([10 / z, 10 / z])
+        ctx.beginPath()
+        ctx.arc(h.x, h.y, SALVAGE_RANGE + h.size * 0.25, 0, TAU)
+        ctx.stroke()
+        ctx.setLineDash([])
+      }
+      if (z > 0.3 && view.hoverWreck !== h.id) {
         ctx.fillStyle = '#f2c14a'
         ctx.font = `600 ${12 / z}px system-ui, sans-serif`
         ctx.textAlign = 'center'
@@ -800,6 +812,37 @@ export class Renderer {
         ctx.fillStyle = HP_COLOR[kind!]
         ctx.fillRect(bx + 10, by + th - 7, (tw - 20) * (st.hp / st.max), 3)
       }
+      ctx.textBaseline = 'alphabetic'
+    }
+
+    // Hover label for a wreck: what's left on it and who's stripping it.
+    const hw = !hu && view.hoverWreck && !view.box ? w.wrecks.find((h) => h.id === view.hoverWreck) : undefined
+    if (hw) {
+      const myTeam = w.players[view.me].team
+      const title = hw.decay === Infinity ? 'Derelict hulk' : 'Battle wreck'
+      const who = hw.team === -1 ? 'Park warships beside it to salvage' : hw.team === myTeam ? 'Your crews are salvaging' : 'Enemy crews are salvaging'
+      const sub = `${Math.ceil(hw.left)} of ${hw.value} cr · ${who}`
+      const sx = (hw.x - cam.x) * z + vw / 2
+      const sy = (hw.y - hw.size * 0.55 - 20 - cam.y) * z + vh / 2 - 22
+      ctx.font = '600 12px system-ui, sans-serif'
+      const tw = Math.max(ctx.measureText(title).width, (ctx.font = '11px system-ui, sans-serif', ctx.measureText(sub).width)) + 20
+      const th = 34
+      const bx = Math.min(vw - tw - 6, Math.max(6, sx - tw / 2))
+      const by = Math.max(46, sy - th)
+      ctx.fillStyle = 'rgba(6,10,22,0.9)'
+      ctx.strokeStyle = '#f2c14a'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.roundRect(bx, by, tw, th, 6)
+      ctx.fill()
+      ctx.stroke()
+      ctx.textBaseline = 'top'
+      ctx.fillStyle = '#e8eef8'
+      ctx.font = '600 12px system-ui, sans-serif'
+      ctx.fillText(title, bx + 10, by + 6)
+      ctx.fillStyle = '#9fb0c8'
+      ctx.font = '11px system-ui, sans-serif'
+      ctx.fillText(sub, bx + 10, by + 21)
       ctx.textBaseline = 'alphabetic'
     }
   }

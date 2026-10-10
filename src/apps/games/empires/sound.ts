@@ -951,16 +951,19 @@ export class EmpiresSound {
     const rf = ctx.createBiquadFilter()
     rf.type = 'lowpass'
     rf.frequency.value = 160
-    this.rumble = ctx.createGain()
-    this.rumble.gain.value = 0
-    rb.connect(rf).connect(this.rumble).connect(out)
+    // Kept locally too: a drone stopped just before the next one starts must not take the new
+    // drone's rumble down with it.
+    const rumble = ctx.createGain()
+    rumble.gain.value = 0
+    this.rumble = rumble
+    rb.connect(rf).connect(rumble).connect(out)
     wind.start()
     wl.start()
     rb.start()
     this.drone = {
       stop: () => {
         const t = ctx.currentTime
-        for (const node of [g, wg, this.rumble!]) {
+        for (const node of [g, wg, rumble]) {
           node.gain.cancelScheduledValues(t)
           node.gain.setValueAtTime(node.gain.value, t)
           node.gain.linearRampToValueAtTime(0, t + 0.6)
@@ -971,8 +974,8 @@ export class EmpiresSound {
           rb.stop()
           g.disconnect()
           wg.disconnect()
-          this.rumble?.disconnect()
-          this.rumble = null
+          rumble.disconnect()
+          if (this.rumble === rumble) this.rumble = null
         }, 800)
       },
     }
