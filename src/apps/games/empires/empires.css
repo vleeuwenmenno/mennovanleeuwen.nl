@@ -114,7 +114,7 @@
   vertical-align: middle;
   color: var(--ew-gold);
 }
-.ew-tag {
+.ew-tagline {
   margin: 0 0 6px;
   color: #b8c6dc;
 }
@@ -208,6 +208,19 @@
 
 /* --- Battle ------------------------------------------------------------------------------------ */
 
+.ew-battle {
+  /* Command-deck palette: deep navy glass inside bronze rims, blue for what's active. */
+  --ew-rim-hi: #b79a62;
+  --ew-rim: #6f5a36;
+  --ew-rim-lo: #2b2214;
+  --ew-glass: rgba(9, 15, 30, 0.94);
+  --ew-glass-2: rgba(16, 26, 50, 0.95);
+  --ew-cell: rgba(20, 32, 60, 0.85);
+  --ew-cell-line: rgba(110, 150, 220, 0.22);
+  --ew-active: #2f6fd6;
+  --ew-active-hi: #5b9bff;
+  --ew-head: #e9dcb6;
+}
 .ew-canvas {
   position: absolute;
   inset: 0;
@@ -220,87 +233,160 @@
 .ew-canvas.is-targeting {
   cursor: crosshair;
 }
-.ew-panel {
-  background: var(--ew-bg);
-  border: 1px solid var(--ew-line);
-  border-radius: 8px;
-  backdrop-filter: blur(6px);
-  padding: 7px;
-  pointer-events: auto;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+.ew-icon {
+  flex: none;
+  display: block;
+}
+.ew-gold {
+  color: var(--ew-gold);
+}
+.ew-good {
+  color: var(--ew-good);
+}
+.ew-big {
+  font-family: var(--ew-display);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
+/* Frames: a bronze rim with clipped corners around a dark glass panel. */
+.ew-frame {
+  --cut: 12px;
+  position: relative;
+  padding: 2px;
+  pointer-events: auto;
+  background: linear-gradient(180deg, var(--ew-rim-hi), var(--ew-rim) 35%, var(--ew-rim-lo));
+  clip-path: polygon(var(--cut) 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, var(--cut) 100%, 0 calc(100% - var(--cut)), 0 var(--cut));
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.45));
+}
+.ew-frame-in {
+  --cut-in: calc(var(--cut) - 1.5px);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px 12px 10px;
+  background: linear-gradient(180deg, var(--ew-glass-2), var(--ew-glass));
+  box-shadow: inset 0 1px 0 rgba(255, 228, 170, 0.14), inset 0 0 30px rgba(40, 80, 160, 0.12);
+  clip-path: polygon(var(--cut-in) 0, calc(100% - var(--cut-in)) 0, 100% var(--cut-in), 100% calc(100% - var(--cut-in)), calc(100% - var(--cut-in)) 100%, var(--cut-in) 100%, 0 calc(100% - var(--cut-in)), 0 var(--cut-in));
+}
+.ew-frame-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(183, 154, 98, 0.28);
+}
+.ew-frame-head h4 {
+  margin: 0;
+  font-family: var(--ew-display);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ew-head);
+  white-space: nowrap;
+}
+.ew-battle button {
+  background: var(--ew-cell);
+  border: 1px solid var(--ew-cell-line);
+  border-radius: 5px;
+}
+.ew-battle button:hover:not(:disabled) {
+  border-color: rgba(140, 180, 255, 0.55);
+  background: rgba(30, 48, 90, 0.9);
+}
+.ew-battle button.is-on {
+  background: linear-gradient(180deg, var(--ew-active-hi), var(--ew-active));
+  border-color: #8fbaff;
+  color: #fff;
+  box-shadow: 0 0 12px rgba(80, 140, 255, 0.35);
+}
+
+/* --- Top bar --- */
 .ew-top {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 5px 8px;
-  background: linear-gradient(rgba(4, 7, 16, 0.92), rgba(4, 7, 16, 0.7));
-  border-bottom: 1px solid var(--ew-line);
+  align-items: stretch;
+  gap: 4px;
+  padding: 4px 6px;
+  background: linear-gradient(180deg, #3d3220, #1b160d);
+  border-bottom: 2px solid var(--ew-rim);
+  box-shadow: 0 1px 0 rgba(255, 220, 150, 0.15) inset, 0 6px 16px rgba(0, 0, 0, 0.5);
   white-space: nowrap;
-  z-index: 2;
+  z-index: 3;
 }
-.ew-badge {
-  font-family: var(--ew-display);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  padding: 2px 8px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--ew-accent) 35%, transparent);
-  border: 1px solid var(--ew-accent);
+.ew-top-cell {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  min-height: 38px;
+  background: linear-gradient(180deg, rgba(18, 28, 54, 0.98), rgba(8, 13, 28, 0.98));
+  border: 1px solid rgba(183, 154, 98, 0.35);
+  clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 8px 100%, 0 50%);
+  font-size: 12.5px;
 }
-.ew-stat b {
-  font-family: var(--ew-display);
-  color: var(--ew-gold);
-  font-size: 13px;
-}
-.ew-stat small {
+.ew-top-cell small {
   color: var(--ew-muted);
+  font-size: 11.5px;
 }
-.ew-stat.is-full b {
+.ew-top-cell.is-full .ew-big {
   color: var(--ew-bad);
 }
-.ew-top-right {
-  margin-left: auto;
-  display: flex;
-  gap: 4px;
-  align-items: center;
+.ew-top-faction {
+  padding-left: 8px;
+  padding-right: 18px;
 }
-.ew-top-right button {
-  padding: 2px 8px;
-  min-width: 28px;
-}
-.ew-speed {
-  display: flex;
-  gap: 2px;
-  margin-right: 4px;
-}
-
-.ew-yardchip {
-  position: relative;
-  display: inline-flex !important;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 9px !important;
-  overflow: hidden;
-  font-size: 12px;
-}
-.ew-yardchip:not(.is-busy) {
-  color: var(--ew-muted) !important;
-}
-.ew-yardchip img {
-  width: 18px;
-  height: 18px;
+.ew-top-faction img {
+  width: 30px;
+  height: 30px;
   object-fit: contain;
 }
-.ew-yardchip small {
+.ew-top-faction div {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.ew-top-faction strong {
+  font-family: var(--ew-display);
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ew-head);
+}
+.ew-ore {
+  color: #4fe3d8;
+}
+.ew-beacon {
+  color: #c8d4ee;
+  margin-left: 6px;
+}
+.ew-battle .ew-yardchip {
+  position: relative;
+  border-radius: 0;
+  background: linear-gradient(180deg, rgba(18, 28, 54, 0.98), rgba(8, 13, 28, 0.98));
+  border: 1px solid rgba(183, 154, 98, 0.35);
+  overflow: hidden;
+  min-width: 0;
   color: var(--ew-muted);
+}
+.ew-yardchip.is-busy {
+  color: var(--ew-text);
+}
+.ew-yardchip img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+.ew-yardchip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .ew-yardchip i {
   position: absolute;
@@ -309,10 +395,34 @@
   height: 2px;
   background: var(--ew-good);
 }
+.ew-top-right {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+.ew-clock b {
+  font-family: var(--ew-display);
+  font-size: 15px;
+}
+.ew-speed {
+  gap: 3px;
+  padding: 0 10px;
+}
+.ew-battle .ew-speed button {
+  padding: 3px 11px;
+  font-family: var(--ew-display);
+  font-size: 12px;
+}
+.ew-battle .ew-top-btn {
+  border-radius: 0;
+  padding: 0 12px;
+  color: var(--ew-head);
+}
 
+/* --- Toasts and hints --- */
 .ew-toasts {
   position: absolute;
-  top: 40px;
+  top: 56px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -320,12 +430,12 @@
   align-items: center;
   gap: 4px;
   pointer-events: none;
-  z-index: 2;
+  z-index: 3;
 }
 .ew-toast {
-  padding: 4px 12px;
+  padding: 5px 14px;
   border-radius: 14px;
-  background: var(--ew-bg);
+  background: var(--ew-glass);
   border: 1px solid var(--ew-line);
   font-size: 12.5px;
   animation: ew-in 0.2s ease-out;
@@ -346,90 +456,102 @@
 }
 .ew-modehint {
   position: absolute;
-  top: 40px;
+  top: 56px;
   right: 10px;
-  max-width: 260px;
-  padding: 6px 10px;
+  max-width: 280px;
+  padding: 7px 11px;
   border-radius: 8px;
-  background: rgba(60, 30, 10, 0.85);
-  border: 1px solid rgba(255, 170, 90, 0.6);
+  background: rgba(14, 30, 64, 0.92);
+  border: 1px solid var(--ew-active-hi);
   font-size: 12px;
-  z-index: 2;
+  z-index: 3;
 }
 
-/* The dock: minimap on the left, the command card centred in the space that's left. The card has
-   a fixed maximum width so wide screens don't stretch it into a thin strip. */
+/* --- Dock: tactical map | details | selection --- */
 .ew-dock {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 8px;
+  display: grid;
+  grid-template-columns: 330px minmax(0, 1fr) 320px;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px;
+  height: 252px;
+  background: linear-gradient(180deg, transparent, rgba(4, 6, 14, 0.55) 30%);
   pointer-events: none;
   z-index: 2;
 }
-.ew-minipanel {
-  flex: none;
-  width: 300px;
-  padding: 6px;
-}
-.ew-minihead {
+
+.ew-mapbody {
+  flex: 1;
+  min-height: 0;
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 8px;
-  padding: 0 2px 5px;
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
+  gap: 6px;
 }
-.ew-minihead span:first-child {
-  font-family: var(--ew-display);
-  font-size: 10.5px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+.ew-maptools {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ew-battle .ew-maptools button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
   color: #b9c8e0;
 }
 .ew-mini {
-  width: 100%;
-  aspect-ratio: 5600 / 3400;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
   display: block;
-  border-radius: 5px;
-  border: 1px solid rgba(120, 170, 230, 0.35);
-  box-shadow: inset 0 0 18px rgba(0, 0, 0, 0.6);
+  border-radius: 4px;
+  border: 1px solid rgba(110, 150, 220, 0.3);
   cursor: pointer;
   touch-action: none;
 }
-.ew-minibtns {
+.ew-mapfilters {
   display: flex;
-  gap: 4px;
-  margin-top: 6px;
+  gap: 3px;
 }
-.ew-minibtns button {
+.ew-battle .ew-mapfilters button {
   flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   padding: 3px 4px;
   font-size: 11.5px;
 }
+.ew-mapfilters i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.ew-mapfilters .is-ships i {
+  background: #5b9bff;
+}
+.ew-mapfilters .is-stations i {
+  background: #4fe3d8;
+}
+.ew-mapfilters .is-enemies i {
+  background: var(--ew-bad);
+}
 
-.ew-cmd {
-  flex: 0 1 860px;
-  margin: 0 auto;
-  min-width: 0;
-  display: flex;
-  gap: 12px;
-  padding: 10px 12px;
-  max-height: 310px;
-  overflow: auto;
+.ew-detail .ew-frame-in {
+  flex-direction: row;
+  gap: 14px;
 }
-.ew-cmd.is-empty {
-  flex-basis: 520px;
-  padding: 9px 14px;
+.ew-detail.is-empty .ew-frame-in {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
 }
-.ew-cmd.is-empty p {
-  margin: 0;
+.ew-empty p {
+  margin: 4px 0;
 }
 .ew-link {
   background: none !important;
@@ -437,42 +559,51 @@
   padding: 0 !important;
   color: var(--ew-gold) !important;
   text-decoration: underline;
+  box-shadow: none !important;
 }
-.ew-cmd.is-enemy {
-  border-color: rgba(255, 106, 94, 0.5);
+.ew-detail.is-enemy {
+  --ew-rim-hi: #c27a6a;
+  --ew-rim: #7a3a30;
 }
-.ew-cmd-side {
+.ew-detail-side {
   flex: none;
+  width: 196px;
   display: flex;
-  gap: 10px;
-  align-items: flex-start;
-}
-.is-station .ew-cmd-side {
   flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding-right: 14px;
+  border-right: 1px solid rgba(183, 154, 98, 0.22);
+  overflow: hidden;
+}
+.is-unit .ew-detail-side,
+.is-ore .ew-detail-side {
+  width: auto;
   align-items: center;
-  width: 176px;
-  padding-right: 12px;
-  border-right: 1px solid var(--ew-line);
+  justify-content: center;
+}
+.is-station .ew-detail-side .ew-schem-box {
+  align-self: center;
 }
 .ew-side-info {
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  gap: 4px;
-  width: 100%;
+  align-items: center;
+  gap: 2px;
 }
-.ew-side-info > strong {
+.ew-side-info strong {
   font-family: var(--ew-display);
-  font-size: 12px;
+  font-size: 13px;
   letter-spacing: 0.05em;
-  text-align: center;
+  color: var(--ew-head);
 }
-.ew-cmd-main {
+.ew-detail-main {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
+  overflow: auto;
 }
 
 /* Schematic: the sprite with its hardpoints in place. */
@@ -481,7 +612,7 @@
   place-items: center;
   flex: none;
   border-radius: 8px;
-  background: radial-gradient(circle, rgba(80, 130, 220, 0.18), transparent 70%);
+  background: radial-gradient(circle, rgba(80, 130, 220, 0.2), transparent 70%);
 }
 .ew-schem {
   position: relative;
@@ -513,9 +644,10 @@
   display: flex;
   justify-content: center;
   gap: 4px;
+  margin-top: 2px;
 }
 .ew-pips i {
-  width: 14px;
+  width: 16px;
   height: 5px;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.14);
@@ -532,13 +664,13 @@
 .ew-hpchip {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 1px 6px 1px 4px;
-  border-radius: 10px;
-  font-size: 11px;
+  gap: 4px;
+  padding: 2px 8px 2px 5px;
+  border-radius: 5px;
+  font-size: 11.5px;
   color: var(--c);
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid color-mix(in srgb, var(--c) 40%, transparent);
+  background: rgba(20, 32, 60, 0.8);
+  border: 1px solid color-mix(in srgb, var(--c) 35%, transparent);
 }
 .ew-hpchip svg {
   color: #e8eef8;
@@ -550,78 +682,72 @@
   color: var(--ew-bad);
   border-color: var(--ew-bad);
 }
-
 .ew-portrait {
-  width: 76px;
-  height: 76px;
+  width: 96px;
+  height: 96px;
   object-fit: contain;
-  flex: none;
   background: radial-gradient(circle, rgba(80, 120, 200, 0.25), transparent 70%);
   border-radius: 8px;
 }
 .ew-unithead {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 4px 8px;
 }
 .ew-unithead strong {
   font-family: var(--ew-display);
-  font-size: 13px;
+  font-size: 14px;
   letter-spacing: 0.04em;
+  color: var(--ew-head);
 }
-.ew-tag {
+.ew-orders {
+  margin-left: auto;
+}
+.ew-battle .ew-tag {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  padding: 0 6px;
+  padding: 1px 7px;
+  margin: 0;
   border-radius: 8px;
   background: rgba(125, 255, 160, 0.12);
   color: #b8ffcb;
 }
-.ew-tag.is-enemy {
+.ew-battle .ew-tag.is-enemy {
   background: rgba(255, 90, 80, 0.15);
   color: #ffc4be;
 }
 .ew-bars {
   display: grid;
   grid-template-columns: auto 1fr auto;
-  gap: 3px 6px;
+  gap: 4px 8px;
   align-items: center;
-  font-size: 11px;
-  color: var(--ew-muted);
+  font-size: 11.5px;
+  color: #b9c8e0;
+}
+.ew-bars small {
+  color: var(--ew-text);
+  font-variant-numeric: tabular-nums;
 }
 .ew-bar {
   display: block;
-  height: 6px;
-  min-width: 50px;
-  border-radius: 3px;
+  height: 7px;
+  min-width: 40px;
+  border-radius: 4px;
   background: rgba(255, 255, 255, 0.1);
   overflow: hidden;
 }
 .ew-bar i {
   display: block;
   height: 100%;
-  background: #6fe08a;
+  background: linear-gradient(90deg, #39c46a, #6fe08a);
 }
 .ew-bar.is-low i {
   background: var(--ew-bad);
 }
 .ew-bar.is-shield i {
-  background: #59c8ff;
-}
-.ew-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  align-items: center;
-}
-.ew-actions button {
-  padding: 3px 9px;
-  font-size: 12px;
-}
-.ew-ability:not(:disabled) {
-  border-color: var(--ew-gold) !important;
-  color: #ffe6a0 !important;
+  background: linear-gradient(90deg, #2f8fe0, #59c8ff);
 }
 .ew-unittech {
   display: flex;
@@ -630,47 +756,55 @@
   gap: 5px;
 }
 .ew-unittech .ew-tech {
-  width: 168px;
+  width: 170px;
 }
-.ew-group {
-  display: flex;
-  flex-wrap: wrap;
+.ew-fleet {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 5px;
 }
-.ew-group-item {
-  display: flex !important;
-  flex-direction: column;
+.ew-battle .ew-fleetrow {
+  display: grid;
+  grid-template-columns: 34px 1fr auto;
+  grid-template-rows: auto 6px;
   align-items: center;
-  gap: 2px;
-  width: 64px;
-  padding: 4px !important;
+  gap: 2px 8px;
+  padding: 4px 8px;
+  text-align: left;
 }
-.ew-group-item img {
-  width: 42px;
-  height: 42px;
+.ew-fleetrow img {
+  grid-row: span 2;
+  width: 34px;
+  height: 34px;
   object-fit: contain;
 }
-.ew-group-item b {
-  font-size: 11.5px;
+.ew-fleetrow strong {
+  font-size: 12px;
 }
-.ew-group-item .ew-bar {
-  min-width: 0;
-  width: 100%;
-  height: 3px;
+.ew-fleetrow .ew-bar {
+  grid-column: 2 / 4;
+  height: 4px;
 }
 
-/* Station: tabs, the two queues, and the shipyard or research below. */
+/* Station: tabs, queues, shipyard cards and research. */
 .ew-yardhead {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px 14px;
 }
 .ew-tabs {
   display: flex;
-  gap: 2px;
+  gap: 4px;
   margin-right: auto;
-  align-self: flex-start;
+}
+.ew-battle .ew-tabs button {
+  font-family: var(--ew-display);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 6px 16px;
 }
 .ew-queues {
   display: flex;
@@ -678,40 +812,39 @@
   align-items: flex-end;
   gap: 3px;
 }
-.ew-tabs button {
-  font-family: var(--ew-display);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 4px 10px;
-  border-radius: 6px 6px 2px 2px;
-}
 .ew-slots {
   display: flex;
   align-items: center;
   gap: 3px;
 }
 .ew-slots-label {
-  min-width: 58px;
-  text-align: right;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 10.5px;
   color: var(--ew-muted);
-  margin-right: 3px;
+  margin-right: 4px;
 }
-.ew-slot {
+.ew-battle .ew-slot {
   position: relative;
-  width: 30px;
-  height: 30px;
-  padding: 0 !important;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   overflow: hidden;
-  display: grid !important;
+  display: grid;
   place-items: center;
 }
 .ew-slot.is-empty {
-  border: 1px dashed rgba(120, 170, 230, 0.25);
-  border-radius: 6px;
+  border: 1px solid var(--ew-cell-line);
+  border-radius: 5px;
+  background: rgba(20, 32, 60, 0.5);
+  position: relative;
+}
+.ew-slot.is-empty::after {
+  content: '+';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(140, 170, 220, 0.4);
+  font-size: 14px;
 }
 .ew-slot img {
   width: 100%;
@@ -747,57 +880,57 @@
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
+  flex: 1;
+  min-height: 0;
 }
-.ew-siteopts {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.ew-sitecard {
-  width: 170px;
-}
-.ew-sitecard img {
-  height: 56px;
-}
-.ew-yard-sep {
-  border-left: 1px solid var(--ew-line);
-  margin: 6px 2px;
-}
-.ew-shipcard {
+.ew-battle .ew-shipcard {
   position: relative;
-  display: flex !important;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 5px 4px 4px !important;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: 1fr auto auto;
+  align-items: end;
+  gap: 2px 4px;
+  padding: 6px 8px;
   min-width: 0;
-  background: linear-gradient(180deg, rgba(30, 44, 80, 0.9), rgba(14, 20, 40, 0.9)) !important;
-  text-align: center;
+  text-align: left;
+  background: linear-gradient(180deg, rgba(26, 40, 74, 0.95), rgba(12, 18, 36, 0.95));
 }
-.ew-shipcard:hover:not(:disabled) {
-  background: linear-gradient(180deg, rgba(44, 64, 112, 0.95), rgba(18, 26, 52, 0.95)) !important;
+.ew-battle .ew-shipcard:hover:not(:disabled) {
+  background: linear-gradient(180deg, rgba(40, 62, 110, 0.98), rgba(16, 24, 48, 0.98));
 }
 .ew-shipcard img {
+  grid-column: 1 / -1;
+  justify-self: center;
+  align-self: center;
   width: 100%;
-  height: 50px;
+  height: 52px;
   object-fit: contain;
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.6));
 }
 .ew-shipcard strong {
-  font-size: 10.5px;
+  grid-column: 1 / -1;
+  font-size: 11.5px;
+  font-weight: 600;
   line-height: 1.2;
   min-height: 2.4em;
   display: flex;
+  align-items: flex-end;
+}
+.ew-cost,
+.ew-time {
+  display: inline-flex;
   align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .ew-cost {
-  font-size: 11px;
   color: var(--ew-gold);
-  white-space: nowrap;
 }
-.ew-cost small {
-  color: var(--ew-muted);
-  font-size: 9.5px;
+.ew-time {
+  color: #b9c8e0;
+  justify-self: end;
 }
 .ew-shipcard.is-off {
   opacity: 0.55;
@@ -805,43 +938,57 @@
 .ew-shipcard.is-locked img {
   filter: grayscale(1) brightness(0.45);
 }
-.ew-shipcard.is-locked .ew-cost {
+.ew-shipcard.is-locked .ew-cost,
+.ew-shipcard.is-locked .ew-time {
   visibility: hidden;
 }
 .ew-lock {
   position: absolute;
   left: 50%;
-  top: 22px;
+  top: 24px;
   transform: translateX(-50%);
   white-space: nowrap;
-  font-size: 9.5px;
-  padding: 1px 5px;
+  font-size: 10px;
+  padding: 1px 6px;
   border-radius: 6px;
-  background: rgba(0, 0, 0, 0.75);
+  background: rgba(0, 0, 0, 0.8);
   color: var(--ew-gold);
   border: 1px solid rgba(242, 193, 74, 0.45);
 }
 .ew-qbadge {
   position: absolute;
-  top: 3px;
-  right: 3px;
-  min-width: 16px;
-  height: 16px;
-  border-radius: 8px;
+  top: 4px;
+  right: 4px;
+  min-width: 17px;
+  height: 17px;
+  border-radius: 9px;
   background: var(--ew-good);
   color: #062010;
-  font: 700 10px/16px system-ui;
+  font: 700 10px/17px system-ui;
+  text-align: center;
 }
-.ew-shipcard.is-active {
-  border-color: var(--ew-good) !important;
-  box-shadow: 0 0 0 1px var(--ew-good);
+.ew-siteopts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ew-battle .ew-sitecard {
+  width: 190px;
+}
+.ew-sitecard small {
+  grid-column: 1 / -1;
 }
 
-/* Research: a column per unit type, a tile per upgrade. */
 .ew-research {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
+}
+.ew-techgroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 .ew-techgroup.is-station {
   grid-column: 1 / -1;
@@ -854,12 +1001,6 @@
 }
 .ew-techgroup.is-station .ew-tech {
   flex: 1;
-}
-.ew-techgroup {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
 }
 .ew-techhead {
   display: flex;
@@ -876,12 +1017,12 @@
   object-fit: contain;
   flex: none;
 }
-.ew-tech {
-  display: flex !important;
+.ew-battle .ew-tech {
+  display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 0;
-  padding: 3px 6px !important;
+  padding: 3px 7px;
   text-align: left;
   min-width: 0;
 }
@@ -899,16 +1040,16 @@
   font-size: 10px;
   color: var(--ew-gold);
 }
-.ew-tech.is-done {
-  opacity: 1 !important;
-  border-color: rgba(125, 255, 160, 0.45) !important;
-  background: rgba(30, 80, 50, 0.35) !important;
+.ew-battle .ew-tech.is-done {
+  opacity: 1;
+  border-color: rgba(125, 255, 160, 0.45);
+  background: rgba(30, 80, 50, 0.35);
 }
 .ew-tech.is-done span {
   color: var(--ew-good);
 }
-.ew-tech.is-busy {
-  border-color: var(--ew-good) !important;
+.ew-battle .ew-tech.is-busy {
+  border-color: var(--ew-good);
 }
 .ew-tech.is-busy span {
   color: #fff;
@@ -921,8 +1062,130 @@
 .ew-tech.is-off {
   opacity: 0.6;
 }
-.ew-yardhint {
-  margin: 0;
+
+/* Selected units and the command grid. */
+.ew-selcount {
+  font-family: var(--ew-display);
+  color: var(--ew-head);
+}
+.ew-seltiles {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 4px;
+  min-height: 52px;
+}
+.ew-battle .ew-seltile {
+  position: relative;
+  width: 46px;
+  height: 52px;
+  padding: 3px 3px 5px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+}
+.ew-seltile img {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+}
+.ew-seltile em {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  font: 600 10px system-ui;
+  font-style: normal;
+  color: #fff;
+}
+.ew-seltile .ew-bar {
+  min-width: 0;
+  width: 100%;
+  height: 3px;
+}
+.ew-battle .ew-seltile.is-enemy {
+  border-color: rgba(255, 106, 94, 0.5);
+}
+.ew-selmore {
+  align-self: center;
+  font-size: 12px;
+  color: var(--ew-muted);
+}
+.ew-cmdgrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+  margin-top: auto;
+}
+.ew-battle .ew-cmdbtn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 4px 6px;
+  font-size: 11.5px;
+  color: #d6e2f5;
+}
+.ew-cmdbtn kbd {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  border: none;
+  padding: 0;
+  font-size: 9.5px;
+  color: var(--ew-muted);
+}
+.ew-cmdbtn:disabled {
+  opacity: 0.35;
+}
+.ew-battle .ew-abilitybtn {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  justify-content: center;
+  color: #ffe6a0;
+  border-color: rgba(242, 193, 74, 0.5);
+}
+
+/* Settings popover, under the gear. */
+.ew-popover-back {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+}
+.ew-popover-back > div {
+  position: absolute;
+  top: 52px;
+  right: 54px;
+  width: 280px;
+}
+.ew-popover-row {
+  display: flex;
+  gap: 6px;
+}
+.ew-battle .ew-popover-row button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px;
+}
+.ew-range {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ew-range input {
+  flex: 1;
+  accent-color: var(--ew-active-hi);
+}
+.ew-range b {
+  min-width: 52px;
+  text-align: right;
+  font-family: var(--ew-display);
+  font-size: 13px;
+  color: var(--ew-gold);
 }
 
 .ew-overlay {
@@ -996,33 +1259,40 @@
   margin-top: 4px;
 }
 
-/* Smaller windows: a tighter dock; phones: no minimap. */
-@container (max-width: 980px) {
-  .ew-minipanel {
-    width: 220px;
+
+/* Narrower windows: slimmer side panels, then fewer details; phones lose the map. */
+@container (max-width: 1180px) {
+  .ew-dock {
+    grid-template-columns: 270px minmax(0, 1fr) 260px;
   }
   .ew-hide-narrow {
     display: none;
   }
-  .is-station .ew-cmd-side {
-    width: 128px;
+  .ew-detail-side {
+    width: 160px;
   }
-  .ew-shipcard img {
-    height: 36px;
-  }
-  .ew-yardhint {
-    display: none;
+  .ew-cmdbtn span {
+    font-size: 10.5px;
   }
 }
-@container (max-width: 760px) {
-  .ew-minipanel {
-    width: 170px;
+@container (max-width: 940px) {
+  .ew-dock {
+    grid-template-columns: 220px minmax(0, 1fr) 210px;
+    height: 236px;
   }
-  .ew-minihead span:last-child {
+  .is-station .ew-detail-side {
     display: none;
   }
-  .is-station .ew-cmd-side {
+  .ew-top-faction div,
+  .ew-yardchip span,
+  .ew-top-cell small {
     display: none;
+  }
+  .ew-cmdbtn span {
+    display: none;
+  }
+  .ew-shipcard img {
+    height: 38px;
   }
   .ew-research {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1030,37 +1300,25 @@
   .ew-techgroup.is-station {
     flex-wrap: wrap;
   }
-  .ew-shipcard strong {
-    font-size: 9.5px;
-  }
 }
-@container (max-width: 600px) {
-  .ew-minipanel {
+@container (max-width: 680px) {
+  .ew-dock {
+    grid-template-columns: minmax(0, 1fr) 150px;
+  }
+  .ew-mapframe {
     display: none;
   }
-  .ew-top {
-    gap: 8px;
-  }
-  .ew-badge,
   .ew-speed,
-  .ew-slots-label {
+  .ew-clock {
     display: none;
   }
   .ew-yard {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-  .ew-siteopts {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.ew-sitecard {
-  width: 170px;
-}
-.ew-sitecard img {
-  height: 56px;
-}
-.ew-yard-sep {
+  .ew-detail-side {
+    display: none;
+  }
+  .ew-seltiles {
     display: none;
   }
 }

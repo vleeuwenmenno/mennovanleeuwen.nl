@@ -16,6 +16,8 @@ export type Order =
   | { k: 'idle' }
   /** `attack`: attack-move, engaging whatever turns up on the way. `speed` keeps a group together. */
   | { k: 'move'; x: number; y: number; attack: boolean; speed: number }
+  /** Back and forth between (x, y), where it is heading, and (bx, by), fighting what it meets. */
+  | { k: 'patrol'; x: number; y: number; bx: number; by: number; speed: number }
   /** `hp`: the hardpoint to aim at, or -1 for the ship as a whole. */
   | { k: 'attack'; id: number; hp: number }
 
@@ -63,6 +65,8 @@ export type Unit = {
   born: number
   kills: number
   mods: Mods
+  /** Hold position: fight from where it stands, never chase. */
+  hold: boolean
 }
 
 export type QueueItem = { unit: string; left: number; total: number }
@@ -227,7 +231,7 @@ export function spawn(w: World, id: string, owner: Owner, x: number, y: number, 
       ...g, cd: Math.random() * g.w.cooldown, burst: 0, burstT: 0, target: 0, aim: 0,
     })),
     order: { k: 'idle' }, ax: x, ay: y, squad, parent: 0, target: 0, retarget: Math.random() * 0.5, lastHit: -99, shieldHit: -99, hitAngle: 0,
-    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, seen: [owner === 0, owner === 1], born: w.time, kills: 0,
+    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, seen: [owner === 0, owner === 1], born: w.time, kills: 0, hold: false,
   }
   w.units.push(u)
   w.byId.set(u.id, u)
@@ -250,12 +254,12 @@ export function spawnGroup(w: World, id: string, owner: Owner, x: number, y: num
   return out
 }
 
-export function newWorld(f0: FactionId, f1: FactionId, opts: { seed?: number; incomeMul?: [number, number] } = {}): World {
+export function newWorld(f0: FactionId, f1: FactionId, opts: { seed?: number; incomeMul?: [number, number]; credits?: number } = {}): World {
   const r = rng(opts.seed ?? Math.floor(Math.random() * 1e9))
   const W = MAP_W
   const H = MAP_H
   const player = (faction: FactionId, o: Owner): Player => ({
-    faction, credits: START_CREDITS, income: 0, incomeMul: opts.incomeMul?.[o] ?? 1, level: 1, station: 0, queue: [], research: [], techs: [],
+    faction, credits: opts.credits ?? START_CREDITS, income: 0, incomeMul: opts.incomeMul?.[o] ?? 1, level: 1, station: 0, queue: [], research: [], techs: [],
     rally: { x: o === 0 ? 1250 : W - 1250, y: H / 2 }, pop: 0, popCap: BASE_POP, lastAlarm: -99, stats: { built: 0, lost: 0, killed: 0, earned: 0 },
   })
   const w: World = {
@@ -320,21 +324,42 @@ export function newWorld(f0: FactionId, f1: FactionId, opts: { seed?: number; in
 
 const commandable = (u: Unit | undefined, owner: Owner): u is Unit => !!u && !u.dead && u.owner === owner && isShip(u.t)
 
-/** Move a group, keeping its shape (squeezed if it's spread out) and the pace of its slowest ship. */
-export function cmdMove(w: World, owner: Owner, ids: number[], x: number, y: number, attack = false) {
+/** Spread a group's destinations around (x, y), keeping its shape (squeezed if it's spread out). */
+function formation(w: World, owner: Owner, ids: number[], x: number, y: number, give: (u: Unit, tx: number, ty: number, pace: number) => void) {
   const us = ids.map((i) => w.byId.get(i)).filter((u) => commandable(u, owner))
   if (!us.length) return
   const cx = us.reduce((s, u) => s + u.x, 0) / us.length
   const cy = us.reduce((s, u) => s + u.y, 0) / us.length
   const spread = Math.max(1, ...us.map((u) => Math.hypot(u.x - cx, u.y - cy)))
   const fit = Math.min(1, (90 + Math.sqrt(us.length) * 70) / spread)
+  // A group keeps the pace of its slowest ship.
   const pace = us.length > 1 ? Math.min(...us.map((u) => speedOf(u))) : Infinity
   for (const u of us) {
-    const tx = clamp(x + (u.x - cx) * fit, 40, w.w - 40)
-    const ty = clamp(y + (u.y - cy) * fit, 40, w.h - 40)
-    u.order = { k: 'move', x: tx, y: ty, attack, speed: pace }
+    give(u, clamp(x + (u.x - cx) * fit, 40, w.w - 40), clamp(y + (u.y - cy) * fit, 40, w.h - 40), pace)
     u.target = 0
     u.parent = 0
+    u.hold = false
+  }
+}
+
+export function cmdMove(w: World, owner: Owner, ids: number[], x: number, y: number, attack = false) {
+  formation(w, owner, ids, x, y, (u, tx, ty, speed) => (u.order = { k: 'move', x: tx, y: ty, attack, speed }))
+}
+
+export function cmdPatrol(w: World, owner: Owner, ids: number[], x: number, y: number) {
+  formation(w, owner, ids, x, y, (u, tx, ty, speed) => (u.order = { k: 'patrol', x: tx, y: ty, bx: u.x, by: u.y, speed }))
+}
+
+/** Stop where they are and stay there, shooting whatever comes into range. */
+export function cmdHold(w: World, owner: Owner, ids: number[]) {
+  for (const i of ids) {
+    const u = w.byId.get(i)
+    if (!commandable(u, owner)) continue
+    u.order = { k: 'idle' }
+    u.ax = u.x
+    u.ay = u.y
+    u.target = 0
+    u.hold = true
   }
 }
 
@@ -347,6 +372,7 @@ export function cmdAttack(w: World, owner: Owner, ids: number[], target: number,
     u.order = { k: 'attack', id: target, hp: hp >= 0 && hp < t.hps.length ? hp : -1 }
     u.target = target
     u.parent = 0
+    u.hold = false
   }
 }
 
@@ -358,6 +384,7 @@ export function cmdStop(w: World, owner: Owner, ids: number[]) {
     u.ax = u.x
     u.ay = u.y
     u.target = 0
+    u.hold = false
   }
 }
 
@@ -688,12 +715,14 @@ function moveUnit(w: World, u: Unit, dt: number) {
     } else u.target = tgt.id
   } else if (u.retarget <= 0) {
     u.retarget = 0.4 + Math.random() * 0.3
-    const engage = u.order.k === 'idle' || (u.order.k === 'move' && u.order.attack)
+    const engage = u.order.k === 'idle' || u.order.k === 'patrol' || (u.order.k === 'move' && u.order.attack)
     const cur = valid(w, u.target, u.owner)
-    const leash = fighter ? 1100 : 700
+    // Holding ships only look as far as their guns reach (fighters a little further).
+    const look = u.hold ? (fighter ? 450 : fightRange(t) * u.mods.range + 100) : Math.min(t.sensor, fighter ? 900 : 800)
+    const leash = u.hold ? look : fighter ? 1100 : 700
     if (!engage) u.target = 0
     else if (cur && d2(cur.x, cur.y, u.ax, u.ay) < leash ** 2 && d2(cur.x, cur.y, u.x, u.y) < (t.sensor * 1.1) ** 2) u.target = cur.id
-    else u.target = pickTarget(w, u, Math.min(t.sensor, fighter ? 900 : 800))?.id ?? 0
+    else u.target = pickTarget(w, u, look)?.id ?? 0
   }
   const tgt = u.target ? w.byId.get(u.target) : undefined
 
@@ -708,6 +737,8 @@ function moveUnit(w: World, u: Unit, dt: number) {
       const close = d2(u.x, u.y, e.x, e.y) < (radius(e.t) + 45) ** 2
       if (close) steer(u, u.x + Math.cos(u.a) * 100, u.y + Math.sin(u.a) * 100, max, dt)
       else steer(u, ex + ((u.id % 7) - 3) * 8, ey + ((u.id % 5) - 2) * 8, max, dt)
+    } else if (u.hold) {
+      steer(u, e.x, e.y, 0, dt, true)
     } else {
       // Close to fighting range, then hold there and swing round to face the enemy.
       // Brake in time to stop at range rather than ramming them.
@@ -716,14 +747,17 @@ function moveUnit(w: World, u: Unit, dt: number) {
       const brake = Math.sqrt(2 * t.speed * 0.9 * Math.max(0, dist - want))
       steer(u, e.x, e.y, dist > want ? Math.min(max, brake) : 0, dt, dist <= want)
     }
-  } else if (u.order.k === 'move') {
+  } else if (u.order.k === 'move' || u.order.k === 'patrol') {
     const o = u.order
     const dist = Math.hypot(o.x - u.x, o.y - u.y)
     const pace = Math.min(max, o.speed)
     if (dist < (fighter ? 60 : 24 + radius(t) * 0.2)) {
-      u.order = { k: 'idle' }
-      u.ax = o.x
-      u.ay = o.y
+      if (o.k === 'patrol') u.order = { ...o, x: o.bx, y: o.by, bx: o.x, by: o.y }
+      else {
+        u.order = { k: 'idle' }
+        u.ax = o.x
+        u.ay = o.y
+      }
     } else steer(u, o.x, o.y, fighter ? pace : Math.min(pace, dist * 0.9 + 12), dt)
   } else {
     // Idle: fighters circle their spot, everything else drifts back to it and waits.

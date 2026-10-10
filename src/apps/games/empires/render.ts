@@ -412,7 +412,15 @@ export class Renderer {
       const u = w.byId.get(id)
       if (!u || u.owner !== view.me) continue
       const o = u.order
-      if (o.k === 'move') {
+      if (o.k === 'patrol') {
+        ctx.strokeStyle = 'rgba(143,208,255,0.35)'
+        ctx.setLineDash([10 / z, 8 / z])
+        ctx.beginPath()
+        ctx.moveTo(o.bx, o.by)
+        ctx.lineTo(o.x, o.y)
+        ctx.stroke()
+        ctx.setLineDash([])
+      } else if (o.k === 'move') {
         ctx.strokeStyle = o.attack ? 'rgba(255,170,90,0.35)' : 'rgba(125,255,160,0.3)'
         ctx.beginPath()
         ctx.moveTo(u.x, u.y)
@@ -782,7 +790,10 @@ export class Renderer {
 
   /** The minimap: the nebula behind, what our ships can see, ore, beacons, ships, stations, the
    * last alert, and the camera's view as a bracketed box. */
-  minimap(ctx: CanvasRenderingContext2D, w: World, me: Owner, cam: Camera, vw: number, vh: number, mw: number, mh: number, alarm: { x: number; y: number; t: number } | null) {
+  minimap(
+    ctx: CanvasRenderingContext2D, w: World, me: Owner, cam: Camera, vw: number, vh: number, mw: number, mh: number, alarm: { x: number; y: number; t: number } | null,
+    filter: 'all' | 'ships' | 'stations' | 'enemies' = 'all',
+  ) {
     const s = Math.min(mw / w.w, mh / w.h)
     const ox = (mw - w.w * s) / 2
     const oy = (mh - w.h * s) / 2
@@ -870,6 +881,10 @@ export class Renderer {
     // Ships as dots sized by class; mines and stations as framed squares.
     for (const u of w.units) {
       if (u.owner !== me && !u.seen[me]) continue
+      // The filter tabs under the map.
+      if (filter === 'ships' && !isShip(u.t)) continue
+      if (filter === 'stations' && isShip(u.t)) continue
+      if (filter === 'enemies' && u.owner === me) continue
       const col = u.owner === me ? '#7dffa0' : '#ff5a50'
       const x = X(u.x)
       const y = Y(u.y)

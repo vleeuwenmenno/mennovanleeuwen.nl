@@ -6,12 +6,44 @@ import { cantBuild, cantResearch, cmdAbility, cmdAttack, cmdBuild, cmdMove, cmdR
 // beacons, and once the fleet is big enough, go after the player's mines and station. The
 // headless sims run one on each side.
 
-export type Difficulty = 'easy' | 'normal' | 'hard'
+export type Difficulty = 'veryEasy' | 'easy' | 'medium' | 'hard'
 
-export const DIFFICULTY: Record<Difficulty, { name: string; blurb: string; income: number; think: number; wave: number; mines: number; focus: boolean }> = {
-  easy: { name: 'Cadet', blurb: 'Slow to react, attacks late, ignores hardpoints.', income: 0.8, think: 2.6, wave: 3200, mines: 3, focus: false },
-  normal: { name: 'Commander', blurb: 'A fair fight.', income: 1, think: 1.5, wave: 2500, mines: 4, focus: true },
-  hard: { name: 'Admiral', blurb: 'Quick, greedy and it goes for your shield generators.', income: 1.25, think: 0.8, wave: 2000, mines: 5, focus: true },
+type Level = {
+  name: string
+  blurb: string
+  /** Income multiplier. */
+  income: number
+  /** Seconds between decisions. */
+  think: number
+  /** Fleet value it waits for before its first attack. */
+  wave: number
+  mines: number
+  /** Aims heavy guns at shield generators. */
+  focus: boolean
+  /** Seconds before it attacks anything of ours; its scouts only take neutral ore and beacons until then. */
+  calm: number
+  research: boolean
+  abilities: boolean
+  defenses: boolean
+}
+
+export const DIFFICULTY: Record<Difficulty, Level> = {
+  veryEasy: {
+    name: 'Very easy', blurb: 'A sleepy recruit: earns little, never researches, and leaves you alone for the first ten minutes.',
+    income: 0.55, think: 3.5, wave: 5000, mines: 2, focus: false, calm: 600, research: false, abilities: false, defenses: false,
+  },
+  easy: {
+    name: 'Easy', blurb: 'Slow to react and slow to grow. No attacks for the first six minutes.',
+    income: 0.68, think: 3, wave: 4200, mines: 3, focus: false, calm: 360, research: true, abilities: false, defenses: false,
+  },
+  medium: {
+    name: 'Medium', blurb: 'A fair fight. It leaves you about two and a half minutes to settle in.',
+    income: 1, think: 1.5, wave: 2500, mines: 4, focus: true, calm: 150, research: true, abilities: true, defenses: true,
+  },
+  hard: {
+    name: 'Hard', blurb: 'Quick, greedy, aggressive from the start, and it goes for your shield generators.',
+    income: 1.25, think: 0.8, wave: 2000, mines: 5, focus: true, calm: 0, research: true, abilities: true, defenses: true,
+  },
 }
 
 export type Brain = { o: Owner; diff: Difficulty; t: number; wave: number; attacking: boolean; peak: number; scouts: Set<number>; want: string | null }
@@ -29,10 +61,10 @@ function visibleEnemies(w: World, o: Owner, x: number, y: number, r: number) {
   return out
 }
 
-/** What to save up for next: weighted towards ships that counter what we've seen. */
 /** What the enemy has (that we can see) around a spot. */
 const threatAt = (w: World, o: Owner, x: number, y: number, r = 900) => value(visibleEnemies(w, o, x, y, r))
 
+/** What to save up for next: weighted towards ships that counter what we've seen. */
 function pickShip(w: World, b: Brain): string | null {
   const p = w.players[b.o]
   const seen = w.units.filter((u) => u.owner !== b.o && u.seen[b.o] && isShip(u.t))
@@ -83,7 +115,7 @@ export function think(w: World, b: Brain, dt: number) {
   const savingForMine = !!ours[0] && mines < D.mines
   if (ours[0]) {
     if (mines < D.mines && p.credits >= 500) cmdSite(w, o, ours[0].id, 'mine')
-    else if (mines >= Math.min(3, D.mines) && p.credits >= 650 + 600) cmdSite(w, o, ours[0].id, 'defense')
+    else if (D.defenses && mines >= Math.min(3, D.mines) && p.credits >= 650 + 600) cmdSite(w, o, ours[0].id, 'defense')
   }
 
   const army = fleet(w, o).filter((u) => !u.parent)
@@ -96,7 +128,7 @@ export function think(w: World, b: Brain, dt: number) {
   if (upgradeDue && p.credits >= next!.cost) cmdResearch(w, o, LEVEL_UP)
 
   // Research for what we fly most, once the yard is busy and there's money to spare.
-  if (!upgradeDue && p.queue.length >= 2 && p.research.length === 0 && p.credits > (b.diff === 'hard' ? 600 : 1000)) {
+  if (D.research && !upgradeDue && p.queue.length >= 2 && p.research.length === 0 && p.credits > (b.diff === 'hard' ? 600 : 1000)) {
     const counts = new Map<string, number>()
     for (const u of army) counts.set(u.t.id, (counts.get(u.t.id) ?? 0) + 1 / u.t.squad)
     const options = [...counts.entries()]
@@ -116,7 +148,7 @@ export function think(w: World, b: Brain, dt: number) {
 
   // Abilities, when they'd help.
   for (const u of army) {
-    if (!u.t.ability || u.abilityCd > 0) continue
+    if (!D.abilities || !u.t.ability || u.abilityCd > 0) continue
     const foes = visibleEnemies(w, o, u.x, u.y, ABILITIES[u.t.ability].range ?? 650)
     if (!foes.length) continue
     const ok =
@@ -155,8 +187,10 @@ export function think(w: World, b: Brain, dt: number) {
   const scouts = [...b.scouts].map((id) => w.byId.get(id)!)
   const scoutValue = value(scouts)
   // Unsurveyed ore on our half comes first, then beacons.
-  const ore = w.nodes.filter((n) => !n.site && n.owner !== o && (!enemySt || d2(n, st) < d2(n, enemySt) * 1.05))
-  const wanted = [...ore, ...w.beacons.filter((bc) => bc.owner !== o)]
+  // While calm, only neutral ones: nothing the player already holds.
+  const calm = w.time < D.calm
+  const ore = w.nodes.filter((n) => !n.site && n.owner !== o && (!calm || n.owner === -1) && (!enemySt || d2(n, st) < d2(n, enemySt) * 1.05))
+  const wanted = [...ore, ...w.beacons.filter((bc) => bc.owner !== o && (!calm || bc.owner === -1))]
     .filter((g) => threatAt(w, o, g.x, g.y) < scoutValue * 0.9)
     .sort((a, c) => d2(a, st) - d2(c, st))
   for (const s of scouts) {
@@ -167,13 +201,13 @@ export function think(w: World, b: Brain, dt: number) {
     // Each scout (or squadron) takes a different goal.
     const slot = [...new Set(scouts.map((x) => x.squad || x.id))].indexOf(s.squad || s.id)
     const goal = wanted[slot % Math.max(1, wanted.length)]
-    if (goal && s.order.k === 'idle') cmdMove(w, o, [s.id], goal.x + (Math.random() - 0.5) * 160, goal.y + (Math.random() - 0.5) * 160, true)
+    if (goal && s.order.k === 'idle') cmdMove(w, o, [s.id], goal.x + (Math.random() - 0.5) * 160, goal.y + (Math.random() - 0.5) * 160, !calm)
   }
 
   // Attack waves.
   const main = army.filter((u) => !b.scouts.has(u.id))
   const mainValue = value(main)
-  if (!b.attacking && (mainValue >= b.wave || p.pop >= p.popCap - 2)) {
+  if (!b.attacking && !calm && (mainValue >= b.wave || p.pop >= p.popCap - 2)) {
     b.attacking = true
     b.peak = mainValue
   }
