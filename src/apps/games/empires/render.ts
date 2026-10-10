@@ -317,7 +317,19 @@ export class Renderer {
       ctx.stroke()
       ctx.setLineDash([])
       ctx.globalAlpha = 1
-      this.drawSprite(ctx, 'beacon', b.x, b.y, this.clock * 0.15 + b.id, 130, z)
+      // A pulsing glow in the holder's colour, so beacons stand out when zoomed out.
+      const glow = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, 150)
+      glow.addColorStop(0, b.owner === -1 ? '#c8d4ee' : col)
+      glow.addColorStop(1, 'rgba(0,0,0,0)')
+      ctx.globalCompositeOperation = 'lighter'
+      ctx.globalAlpha = 0.28 + Math.sin(this.clock * 2 + b.id) * 0.08
+      ctx.fillStyle = glow
+      ctx.beginPath()
+      ctx.arc(b.x, b.y, 150, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.globalAlpha = 1
+      ctx.globalCompositeOperation = 'source-over'
+      this.drawSprite(ctx, 'beacon', b.x, b.y, this.clock * 0.15 + b.id, 170, z)
       if (b.progress !== 0) {
         const o: Owner = b.progress < 0 ? 0 : 1
         ctx.strokeStyle = FACTIONS[w.players[o].faction].color
