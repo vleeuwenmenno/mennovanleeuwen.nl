@@ -121,6 +121,7 @@ function SoundTest({ sound }: { sound: EmpiresSound }) {
       ['Turbolaser', () => sound.fire('turbo', at, 'republic')],
       ['Flak', () => sound.fire('flak', at, 'republic')],
       ['Missile', () => sound.fire('missile', at, 'republic')],
+      ['Ion cannon', () => sound.fire('ion', at, 'droid')],
     ]],
     ['Hits and damage', [
       ['Shield hit', () => sound.hit(true, false, at)],

@@ -222,6 +222,23 @@ const turbolaser: Recipe = (sr, r) => {
   })
 }
 
+/** An ion cannon: a deep electric "vwomm" that wobbles as it falls, over a crackle of discharge.
+ * Over in half a second. */
+const ionShot: Recipe = (sr, r) => {
+  const o1 = new Osc(r())
+  const o2 = new Osc(r())
+  const lp = new Svf()
+  const bp = new Svf()
+  const f0 = 230 * (0.92 + r() * 0.16)
+  return render(sr, 0.45, (t) => {
+    const fr = glide(f0, 70, t, 0.32)
+    const wob = 1 + 0.3 * Math.sin(TAU * 26 * t)
+    const tone = lp.run(o1.saw(fr, sr) + o2.sqr(fr * 1.01, sr) * 0.5, glide(1400, 280, t, 0.3), 1.6, sr).low * wob * ad(t, 0.004, 0.15)
+    const crackle = bp.run(noise() * (r() < 0.08 ? 1 : 0.15), 1700, 1.2, sr).band * ad(t, 0.001, 0.09)
+    return soft(tone * 1.5 + crackle * 0.8)
+  })
+}
+
 /** Flak: a sharp crack and a short thud. */
 const flak: Recipe = (sr, r) => {
   const hp = new Svf()
@@ -857,7 +874,7 @@ export class EmpiresSound {
   async warm(faction: FactionId) {
     if (!this.ctx) return
     const jobs: [string, Recipe, number][] = [
-      ['pew-republic', fighterBlaster(false), 4], ['pew-droid', fighterBlaster(true), 4], ['laser-republic', blaster(false), 4], ['laser-droid', blaster(true), 4], ['turbo', turbolaser, 4], ['flak', flak, 4], ['missile', missile, 3],
+      ['pew-republic', fighterBlaster(false), 4], ['pew-droid', fighterBlaster(true), 4], ['laser-republic', blaster(false), 4], ['laser-droid', blaster(true), 4], ['turbo', turbolaser, 4], ['flak', flak, 4], ['missile', missile, 3], ['ion', ionShot, 3],
       ['shield', shieldHit, 4], ['hull', impact(false), 4], ['hull-heavy', impact(true), 4],
       ['boom0', explosion(0), 3], ['boom1', explosion(1), 3], ['boom2', explosion(2), 2],
       ['hpdown', hardpointDown, 3], ['shdown', shieldsDown, 3], ['launch', launch, 3],
@@ -886,6 +903,7 @@ export class EmpiresSound {
     else if (kind === 'turbo' && this.allow('turbo', 3, 0.1)) this.play('turbo', turbolaser, { where, gain: 0.8, rate: faction === 'droid' ? 0.92 : 1, takes: 4 })
     else if (kind === 'flak' && this.allow('flak', 3)) this.play('flak', flak, { where, gain: 0.55, takes: 4 })
     else if (kind === 'missile' && this.allow('missile', 2, 0.15)) this.play('missile', missile, { where, gain: 0.6 })
+    else if (kind === 'ion' && this.allow('ion', 2, 0.15)) this.play('ion', ionShot, { where, gain: 0.55, takes: 3 })
   }
 
   hit(shield: boolean, heavy: boolean, where: Where) {

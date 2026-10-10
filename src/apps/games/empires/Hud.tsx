@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import {
-  ABILITIES, FACTIONS, LEVEL_UP, ROLES, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
+  ABILITIES, FACTIONS, LEVEL_UP, roleOf, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
   type UnitType,
 } from './data'
 import { HP_COLOR, HP_ICON, HP_NAME } from './icons'
@@ -602,7 +602,7 @@ function ShipCard({ t, why, level, queued, onBuild, onUnqueue }: {
 
 /** "Strong against cruisers, flagships · weak against gunships": the counter loop at a glance. */
 function Counters({ t }: { t: UnitType }) {
-  const r = ROLES[t.tier]
+  const r = roleOf(t)
   if (!r) return null
   return (
     <span className="ew-counters">
@@ -613,7 +613,7 @@ function Counters({ t }: { t: UnitType }) {
   )
 }
 const countersText = (t: UnitType) => {
-  const r = ROLES[t.tier]
+  const r = roleOf(t)
   return r ? `\n${r.role}. Strong against ${r.strong.join(', ')}; weak against ${r.weak.join(', ')}.` : ''
 }
 

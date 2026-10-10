@@ -7,7 +7,7 @@
 
 export type FactionId = 'republic' | 'droid'
 export type Tier = 'fighter' | 'gunship' | 'frigate' | 'cruiser' | 'capital' | 'station' | 'mine' | 'defense'
-export type WeaponKind = 'laser' | 'flak' | 'turbo' | 'missile'
+export type WeaponKind = 'laser' | 'flak' | 'turbo' | 'missile' | 'ion'
 export type HardpointKind = 'turret' | 'shield' | 'engine' | 'hangar'
 export type AbilityId = 'flakBarrage' | 'repairSwarm' | 'shieldBoost' | 'tractor' | 'broadside' | 'launchSwarm'
 
@@ -58,6 +58,13 @@ export type UnitType = {
   ability?: AbilityId
   /** Carriers launch fighter squadrons from their hangars on their own. */
   carrier?: { unit: string; every: number; max: number }
+  /** What sets it apart from the other ships of its tier: bombers go for big hulls, support ships
+   * mend the fleet, ion ships strip shields. Steers the AI and the target picking. */
+  kind?: 'bomber' | 'support' | 'ion'
+  /** Repairs allied ships within `range`: `repair` hull points a second each, up to `max` ships. */
+  support?: { range: number; repair: number; max: number }
+  /** Its job and counters, when they differ from its tier's (see ROLES). */
+  role?: { role: string; strong: string[]; weak: string[] }
 }
 
 export type Ability = { name: string; blurb: string; cooldown: number; duration: number; range?: number }
@@ -97,6 +104,8 @@ const VS: Record<WeaponKind, Record<Tier, number>> = {
   flak: { fighter: 2.2, gunship: 1.4, frigate: 0.3, cruiser: 0.2, capital: 0.15, station: 0.15, mine: 0.3, defense: 0.2 },
   turbo: { fighter: 0.5, gunship: 0.7, frigate: 1, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1 },
   missile: { fighter: 0.25, gunship: 0.6, frigate: 1.1, cruiser: 1, capital: 0.9, station: 0.8, mine: 1, defense: 1 },
+  // Against shields; ion barely touches a hull (see the sim's damage).
+  ion: { fighter: 0.3, gunship: 0.8, frigate: 1.2, cruiser: 1.3, capital: 1.3, station: 1.2, mine: 0.5, defense: 1.2 },
 }
 /** Chance a shot connects: big guns can't follow fighters. */
 const ACCURACY: Record<WeaponKind, Record<Tier, number>> = {
@@ -104,6 +113,7 @@ const ACCURACY: Record<WeaponKind, Record<Tier, number>> = {
   flak: { fighter: 0.75, gunship: 0.8, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1 },
   turbo: { fighter: 0.15, gunship: 0.35, frigate: 0.85, cruiser: 0.95, capital: 1, station: 1, mine: 1, defense: 0.95 },
   missile: { fighter: 0.3, gunship: 0.7, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1 },
+  ion: { fighter: 0.15, gunship: 0.45, frigate: 0.9, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1 },
 }
 export const effect = (w: WeaponKind, t: Tier) => VS[w][t]
 export const accuracy = (w: WeaponKind, t: Tier) => ACCURACY[w][t]
@@ -114,6 +124,9 @@ const turbo = (damage: number, range = 650, cooldown = 2.2, burst = 2): Weapon =
 const missile = (damage: number, range = 420, cooldown = 4): Weapon => ({ kind: 'missile', damage, range, cooldown, burst: 2, arc: 0.6 })
 /** Fighters' proton torpedoes: slow to reload, useless against other fighters, deadly to big hulls. */
 const torpedo = (damage: number, range = 280, cooldown = 7): Weapon => ({ kind: 'missile', damage, range, cooldown, burst: 2, arc: 0.4 })
+
+/** An ion cannon: a slow, heavy bolt that tears down shields and does next to nothing to a hull. */
+const ion = (damage: number, range = 620, cooldown = 2.4): Weapon => ({ kind: 'ion', damage, range, cooldown, burst: 1 })
 
 const P = (kind: HardpointKind, x: number, y: number, hp: number, weapon?: Weapon): Hardpoint => ({ kind, x, y, hp, weapon })
 
@@ -128,6 +141,19 @@ export const UNITS: UnitType[] = [
     id: 'r-gunship', faction: 'republic', tier: 'gunship', name: 'Halberd gunship', blurb: 'Ball-turret flak against fighters, missile pods that punch through shields.',
     sprite: 'republic-gunship', aspect: 0.715, size: 64, hull: 300, shield: 120, regen: 6, speed: 175, turn: 2.6, pop: 2, cost: 400, build: 14, level: 1, squad: 1, sensor: 800,
     weapons: [flak(7, 300, 0.3), missile(34)], hardpoints: [], engines: [[3.6, 9.6], [4.6, 9.7], [5.5, 9.7], [6.4, 9.6]],
+  },
+  {
+    id: 'r-bomber', faction: 'republic', tier: 'fighter', kind: 'bomber', name: 'Hammer bomber', blurb: 'Armoured bombers, two to a squadron. Heavy proton bombs for capital ships and stations; easy prey for fighters.',
+    sprite: 'republic-bomber', aspect: 0.715, size: 42, hull: 150, shield: 40, regen: 3, speed: 165, turn: 2.6, pop: 2, cost: 450, build: 16, level: 2, squad: 2, sensor: 650,
+    weapons: [laser(5, 220, 0.6), torpedo(75, 240, 6)], hardpoints: [], engines: [[3.6, 9.6], [6.4, 9.6]],
+    role: { role: 'Bomber', strong: ['cruisers', 'flagships', 'stations'], weak: ['fighters', 'gunships', 'frigates'] },
+  },
+  {
+    id: 'r-corvette', faction: 'republic', tier: 'gunship', kind: 'support', name: 'Mercy corvette', blurb: 'Repair tender: its work crews patch up the hulls of nearby ships. Lightly armed; keep it behind the line.',
+    sprite: 'republic-corvette', aspect: 0.652, size: 86, hull: 520, shield: 260, regen: 8, speed: 135, turn: 1.8, pop: 2, cost: 550, build: 18, level: 2, squad: 1, sensor: 900,
+    weapons: [flak(5, 280, 0.4)], hardpoints: [], engines: [[4, 9.6], [6, 9.6]],
+    support: { range: 520, repair: 16, max: 6 },
+    role: { role: 'Repair tender', strong: ['long fights'], weak: ['fighters', 'anything that catches it alone'] },
   },
   {
     id: 'r-frigate', faction: 'republic', tier: 'frigate', name: 'Warden frigate', blurb: 'Escort bristling with point defence. Fighters melt around it.',
@@ -184,6 +210,18 @@ export const UNITS: UnitType[] = [
     id: 'd-gunship', faction: 'droid', tier: 'gunship', name: 'Trident gunship', blurb: 'Three blaster arms that tear through fighters.',
     sprite: 'droid-gunship', aspect: 1.067, size: 64, hull: 395, shield: 80, regen: 5, speed: 165, turn: 2.6, pop: 2, cost: 400, build: 13, level: 1, squad: 1, sensor: 780,
     weapons: [flak(6, 290, 0.28), laser(12, 320, 1)], hardpoints: [], engines: [[5, 6.6]],
+  },
+  {
+    id: 'd-bomber', faction: 'droid', tier: 'fighter', kind: 'bomber', name: 'Locust bomber', blurb: 'Droid bombers, three to a squadron. Cheap, fragile, and their bomb pods wreck big hulls.',
+    sprite: 'droid-bomber', aspect: 0.963, size: 36, hull: 85, shield: 0, regen: 0, speed: 185, turn: 3, pop: 2, cost: 400, build: 13, level: 2, squad: 3, sensor: 620,
+    weapons: [laser(4, 220, 0.6), torpedo(48, 230, 6)], hardpoints: [], engines: [[5, 9]],
+    role: { role: 'Bomber', strong: ['cruisers', 'flagships', 'stations'], weak: ['fighters', 'gunships', 'frigates'] },
+  },
+  {
+    id: 'd-ion', faction: 'droid', tier: 'frigate', kind: 'ion', name: 'Disruptor frigate', blurb: 'One huge ion cannon that tears down shields in a few shots, leaving the hull open to everything else. Barely scratches bare armour.',
+    sprite: 'droid-ion', aspect: 0.493, size: 140, hull: 900, shield: 380, regen: 9, speed: 92, turn: 0.95, pop: 3, cost: 780, build: 22, level: 2, squad: 1, sensor: 1000,
+    weapons: [ion(70), flak(5, 300, 0.4)], hardpoints: [], engines: [[4.2, 9.6], [5.8, 9.6]],
+    role: { role: 'Shield breaker', strong: ['shielded warships', 'stations'], weak: ['fighters', 'unshielded ships'] },
   },
   {
     id: 'd-frigate', faction: 'droid', tier: 'frigate', name: 'Scarab frigate', blurb: 'Armoured shell, prong cannons and repair droids.',
@@ -245,8 +283,11 @@ export const ROLES: Partial<Record<Tier, { role: string; strong: string[]; weak:
 export const UNIT: Record<string, UnitType> = Object.fromEntries(UNITS.map((u) => [u.id, u]))
 export const SHIP_TIERS: Tier[] = ['fighter', 'gunship', 'frigate', 'cruiser', 'capital']
 export const unitOf = (faction: FactionId, tier: Tier) => UNIT[`${faction === 'republic' ? 'r' : 'd'}-${tier}`]
-/** The ships a faction can order from its station, cheapest first. */
-export const buildable = (faction: FactionId) => SHIP_TIERS.map((t) => unitOf(faction, t))
+/** The ships a faction can order from its station: by the station level they need, then cost. */
+export const buildable = (faction: FactionId) =>
+  UNITS.filter((u) => u.faction === faction && SHIP_TIERS.includes(u.tier)).sort((a, b) => a.level - b.level || a.cost - b.cost)
+/** A ship's job and counters: its own, or its tier's. */
+export const roleOf = (t: UnitType) => t.role ?? ROLES[t.tier]
 export const isShip = (t: UnitType) => t.tier !== 'station' && t.tier !== 'mine' && t.tier !== 'defense'
 /** What can go on a surveyed ore asteroid, one structure each. */
 export const SITE_TIERS: Tier[] = ['mine', 'defense']
@@ -297,6 +338,8 @@ export const TECHS: Tech[] = [
   tech('republic', 'r-fighter', 'r-fi-torp', 'Proton payload', 'Lasers and torpedoes deal 25% more damage.', 500, 35, 2, { damage: 0.25 }, ['r-fi-hull']),
   tech('republic', 'r-gunship', 'r-gs-flak', 'Flak tracking', 'Halberd guns deal 20% more damage.', 450, 30, 1, { damage: 0.2 }),
   tech('republic', 'r-gunship', 'r-gs-burn', 'Afterburners', 'Halberds fly 20% faster.', 350, 25, 1, { speed: 0.2 }, ['r-gs-flak']),
+  tech('republic', 'r-bomber', 'r-bo-payload', 'Heavy payload', 'Hammer bombs deal 25% more damage.', 550, 35, 2, { damage: 0.25 }),
+  tech('republic', 'r-corvette', 'r-co-crews', 'Veteran work crews', 'Mercy corvettes repair 40% faster.', 600, 40, 2, { repair: 0.4 }),
   tech('republic', 'r-frigate', 'r-fr-shield', 'Deflector upgrade', 'Warden shields 30% stronger, recharging faster.', 600, 40, 2, { shield: 0.3, regen: 0.3 }),
   tech('republic', 'r-frigate', 'r-fr-pd', 'Point-defence computers', 'Warden guns fire 15% faster.', 650, 40, 2, { cooldown: -0.15 }, ['r-fr-shield']),
   tech('republic', 'r-cruiser', 'r-cr-cap', 'Heavy capacitors', 'Paladin turbolasers deal 20% more damage.', 900, 50, 3, { damage: 0.2 }),
@@ -311,6 +354,8 @@ export const TECHS: Tech[] = [
   tech('droid', 'd-fighter', 'd-fi-guns', 'Overcharged blasters', 'Lasers and torpedoes deal 25% more damage.', 450, 35, 2, { damage: 0.25 }, ['d-fi-line']),
   tech('droid', 'd-gunship', 'd-gs-shell', 'Armoured shell', 'Tridents get 25% more hull.', 450, 30, 1, { hull: 0.25 }),
   tech('droid', 'd-gunship', 'd-gs-cycle', 'Rapid cyclers', 'Trident guns fire 15% faster.', 450, 30, 1, { cooldown: -0.15 }, ['d-gs-shell']),
+  tech('droid', 'd-bomber', 'd-bo-pods', 'Overloaded pods', 'Locust bombs deal 25% more damage.', 500, 35, 2, { damage: 0.25 }),
+  tech('droid', 'd-ion', 'd-io-coils', 'Supercooled coils', 'Disruptor ion cannons fire 20% faster.', 700, 40, 2, { cooldown: -0.2 }),
   tech('droid', 'd-frigate', 'd-fr-plate', 'Shell plating', 'Scarabs get 25% more hull.', 600, 40, 2, { hull: 0.25 }),
   tech('droid', 'd-frigate', 'd-fr-prong', 'Prong amplifiers', 'Scarab cannons deal 20% more damage.', 650, 40, 2, { damage: 0.2 }, ['d-fr-plate']),
   tech('droid', 'd-cruiser', 'd-cr-ray', 'Ray shielding', 'Manta shields 30% stronger, recharging faster.', 800, 45, 3, { shield: 0.3, regen: 0.3 }),

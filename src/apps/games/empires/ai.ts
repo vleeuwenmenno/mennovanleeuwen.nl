@@ -89,8 +89,9 @@ const threatAt = (w: World, o: Owner, x: number, y: number, r = 900) => value(vi
 function pickShip(w: World, b: Brain): string | null {
   const p = w.players[b.o]
   const seen = w.units.filter((u) => foes(w, u.owner, b.o) && sees(w, b.o, u) && isShip(u.t))
-  const small = seen.filter((u) => u.t.tier === 'fighter' || u.t.tier === 'gunship').length
-  const big = seen.length - small
+  // A squadron counts once: five droid fighters are one threat, not five.
+  const small = seen.filter((u) => u.t.tier === 'fighter' || u.t.tier === 'gunship').reduce((n, u) => n + 1 / u.t.squad, 0)
+  const big = seen.filter((u) => u.t.tier !== 'fighter' && u.t.tier !== 'gunship').length
   const weights: Partial<Record<Tier, number>> = { fighter: 2, gunship: 3, frigate: 3.5, cruiser: 3, capital: 6 }
   if (small > big * 3) {
     weights.gunship! *= 2
@@ -106,10 +107,19 @@ function pickShip(w: World, b: Brain): string | null {
     return !why || why === 'Not enough credits'
   })
   if (!options.length) return null
-  const total = options.reduce((s, t) => s + (weights[t.tier] ?? 1), 0)
+  // Specialists by what they're for: bombers and ion ships once there are big shielded hulls to
+  // break, a repair tender once there's a fleet worth mending (and not a second one too early).
+  const army = fleet(w, b.o).filter((u) => !u.parent)
+  const tenders = army.filter((u) => u.t.kind === 'support').length
+  const weight = (t: (typeof options)[number]) =>
+    t.kind === 'bomber' ? 0.6 + Math.min(3, big * 0.5)
+      : t.kind === 'ion' ? (big >= 2 ? 2.4 : 0.5)
+        : t.kind === 'support' ? (army.length >= 6 && tenders < 1 + army.length / 10 ? 1.8 : 0.1)
+          : (weights[t.tier] ?? 1)
+  const total = options.reduce((s, t) => s + weight(t), 0)
   let r = Math.random() * total
   for (const t of options) {
-    r -= weights[t.tier] ?? 1
+    r -= weight(t)
     if (r <= 0) return t.id
   }
   return options[options.length - 1].id

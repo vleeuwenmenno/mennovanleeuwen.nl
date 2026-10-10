@@ -722,6 +722,26 @@ export class Renderer {
       }
     }
 
+    // Support ships' repair beams: a faint green tether to each ship being patched, pulsing.
+    const myTeamB = w.players[view.me].team
+    ctx.lineWidth = 2 / z
+    for (const u of w.units) {
+      if (!u.mending.length || !u.seen[myTeamB]) continue
+      for (const id of u.mending) {
+        const o = w.byId.get(id)
+        if (!o || !onScreen((u.x + o.x) / 2, (u.y + o.y) / 2, 600)) continue
+        ctx.strokeStyle = `rgba(125,255,160,${0.25 + 0.15 * Math.sin(this.clock * 6 + id)})`
+        ctx.setLineDash([6 / z, 10 / z])
+        ctx.lineDashOffset = -this.clock * 40 / z
+        ctx.beginPath()
+        ctx.moveTo(u.x, u.y)
+        ctx.lineTo(o.x, o.y)
+        ctx.stroke()
+      }
+    }
+    ctx.setLineDash([])
+    ctx.lineDashOffset = 0
+
     // Ships and stations, big ones first so fighters fly over them.
     const myTeam = w.players[view.me].team
     const shown = w.units.filter((u) => u.seen[myTeam] && onScreen(u.x, u.y, u.t.size))
@@ -747,6 +767,25 @@ export class Renderer {
         ctx.fillStyle = '#fff4d0'
         ctx.beginPath()
         ctx.arc(s.x, s.y, 3, 0, Math.PI * 2)
+        ctx.fill()
+        continue
+      }
+      // Ion: a fat, pale-blue ball of crackling charge with a short fading tail.
+      if (s.kind === 'ion') {
+        const r = Math.max(2 / z, 9)
+        ctx.strokeStyle = 'rgba(150,225,255,0.35)'
+        ctx.lineWidth = r * 1.4
+        ctx.beginPath()
+        ctx.moveTo(s.x, s.y)
+        ctx.lineTo(s.x - dx * 34, s.y - dy * 34)
+        ctx.stroke()
+        const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, r * 1.6)
+        g.addColorStop(0, '#ffffff')
+        g.addColorStop(0.35, 'rgba(170,235,255,0.95)')
+        g.addColorStop(1, 'rgba(90,180,255,0)')
+        ctx.fillStyle = g
+        ctx.beginPath()
+        ctx.arc(s.x, s.y, r * 1.6, 0, Math.PI * 2)
         ctx.fill()
         continue
       }

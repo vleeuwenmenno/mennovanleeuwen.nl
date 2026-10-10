@@ -84,6 +84,10 @@ export type Unit = {
   nebula: boolean
   /** Orders given with Shift, taken one at a time once the current one is done. */
   queue: Order[]
+  /** Support ships: the ships they're repairing right now, for the repair beams. */
+  mending: number[]
+  /** Strike craft on a strafing run: pulling away after a pass, until far enough out to turn. */
+  breakOff: boolean
   /** Waypoints round the rocks to where the ship is going (x, y), found when it set off. */
   route: { x: number; y: number; pts: Pt[] } | null
 }
@@ -127,7 +131,7 @@ export type Wreck = { id: number; x: number; y: number; value: number; left: num
 /** How close (from the hulk's centre) a ship must park to salvage, and credits a second per ship (up to three). */
 export const SALVAGE_RANGE = 240
 /** Seconds failed shields stay down before they start to recharge. */
-export const SHIELD_REBOOT = 5
+export const SHIELD_REBOOT = 2
 export const SALVAGE_RATE = 30
 export type Shot = {
   x: number; y: number; vx: number; vy: number; left: number; kind: WeaponKind; owner: Owner; target: number; hp: number; dmg: number; hit: boolean; sx: number; sy: number; age: number; from: number
@@ -266,7 +270,7 @@ export function spawn(w: World, id: string, owner: Owner, x: number, y: number, 
       ...g, cd: Math.random() * g.w.cooldown, burst: 0, burstT: 0, target: 0, aim: 0,
     })),
     order: { k: 'idle' }, ax: x, ay: y, squad, parent: 0, target: 0, retarget: Math.random() * 0.5, lastHit: -99, shieldHit: -99, shieldOut: -99, hitAngle: 0,
-    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, hold: false, nebula: false, route: null, queue: [],
+    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, hold: false, nebula: false, route: null, queue: [], mending: [], breakOff: false,
     seen: Array.from({ length: w.teams }, (_, t) => t === w.players[owner].team),
   }
   w.units.push(u)
@@ -950,7 +954,8 @@ export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: num
   alarm(w, u)
   let rest = dmg
   if (u.shield > 0) {
-    const onShield = kind === 'missile' ? dmg * 0.35 : dmg
+    // Missiles slip most of it past the shields; ion bites twice as deep into them.
+    const onShield = kind === 'missile' ? dmg * 0.35 : kind === 'ion' ? dmg * 2 : dmg
     const soaked = Math.min(u.shield, onShield)
     u.shield -= soaked
     if (u.shield <= 0) {
@@ -959,10 +964,12 @@ export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: num
       if (u.t.tier === 'frigate' || u.t.tier === 'cruiser' || u.t.tier === 'capital' || u.t.tier === 'station' || u.t.tier === 'defense')
         w.events.push({ k: 'shieldsDown', owner: u.owner, x: u.x, y: u.y })
     }
-    rest -= soaked
+    rest -= kind === 'ion' ? soaked / 2 : soaked
     u.shieldHit = w.time
     u.hitAngle = Math.atan2(fromY - u.y, fromX - u.x)
   }
+  // Ion does next to nothing to bare armour.
+  if (kind === 'ion') rest *= 0.1
   if (rest <= 0) return
   if (hp >= 0 && alive(u, hp)) {
     const h = u.hps[hp]
@@ -998,7 +1005,9 @@ function pickTarget(w: World, u: Unit, r: number) {
   let score = 0
   near(w, u.x, u.y, r, (e, dd) => {
     if (!foes(w, e.owner, u.owner) || !sees(w, u.owner, e)) return
-    const s = (dpsVs(u.t, e.t.tier) + 0.01) / (Math.sqrt(dd) + 250) * (e.t.tier === 'mine' ? 0.6 : 1)
+    // Ion ships go for shields that are still up.
+    const ionPick = u.t.kind === 'ion' ? (e.shield > 0 ? 1.6 : 0.25) : 1
+    const s = (dpsVs(u.t, e.t.tier) + 0.01) / (Math.sqrt(dd) + 250) * (e.t.tier === 'mine' ? 0.6 : 1) * ionPick
     if (s > score) {
       score = s
       best = e
@@ -1108,7 +1117,16 @@ function moveUnit(w: World, u: Unit, dt: number) {
   const fighting = !!tgt && !tgt.dead && (u.order.k !== 'move' || u.order.attack)
   if (fighting) {
     const e = tgt!
-    if (fighter) {
+    if (fighter && e.t.tier !== 'fighter') {
+      // Strafing runs on anything bigger: dive in guns-first, pull away past the hull, and fly out
+      // far enough to turn round and line up again before coming back into range.
+      const dist = Math.hypot(e.x - u.x, e.y - u.y)
+      const r = radius(e.t)
+      if (dist < r + 50) u.breakOff = true
+      else if (dist > r + 320) u.breakOff = false
+      if (u.breakOff) steer(u, u.x + Math.cos(u.a) * 100 + ((u.id % 5) - 2) * 20, u.y + Math.sin(u.a) * 100, max, dt)
+      else steer(u, e.x + ((u.id % 7) - 3) * 6, e.y + ((u.id % 5) - 2) * 6, max, dt)
+    } else if (fighter) {
       // Dogfight: chase with a little lead, overshoot, loop back round.
       const lead = Math.hypot(e.x - u.x, e.y - u.y) / 700
       const ex = e.x + Math.cos(e.a) * e.v * lead
@@ -1185,7 +1203,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
   u.y = clamp(u.y, 20, w.h - 20)
 }
 
-const BOLT_SPEED: Record<WeaponKind, number> = { laser: 1100, flak: 1250, turbo: 850, missile: 480 }
+const BOLT_SPEED: Record<WeaponKind, number> = { laser: 1100, flak: 1250, turbo: 850, missile: 480, ion: 700 }
 
 function fire(w: World, u: Unit, g: Gun, e: Unit) {
   const from = g.hp >= 0 ? hpPos(u, g.hp) : u.t.tier === 'fighter' ? { x: u.x + Math.cos(u.a) * 10, y: u.y + Math.sin(u.a) * 10 } : shipPoint(u, 3 + Math.random() * 4, 2 + Math.random() * 6)
@@ -1476,6 +1494,27 @@ const CLUMSY: Partial<Record<Tier, true>> = { frigate: true, cruiser: true, capi
  * hull. Neither counts as being attacked, so no alarms and no kill credit. Returns true while the
  * terrain keeps the shields from recharging.
  */
+/** Support ships patch up the hulls of damaged allied ships near them, the most damaged first. */
+function tenders(w: World, dt: number) {
+  for (const u of w.units) {
+    const sp = u.t.support
+    if (!sp || u.dead) continue
+    u.mending = []
+    if (building(u)) continue
+    const team = w.players[u.owner].team
+    const hurt: Unit[] = []
+    near(w, u.x, u.y, sp.range, (o) => {
+      if (o !== u && !o.dead && isShip(o.t) && w.players[o.owner].team === team && o.hull < o.hullMax) hurt.push(o)
+    })
+    hurt.sort((a, b) => a.hull / a.hullMax - b.hull / b.hullMax)
+    const rate = sp.repair * (1 + (techBonus(w.players[u.owner], u.t.id).repair ?? 0)) * dt
+    for (const o of hurt.slice(0, sp.max)) {
+      o.hull = Math.min(o.hullMax, o.hull + rate)
+      u.mending.push(o.id)
+    }
+  }
+}
+
 function terrain(w: World, u: Unit, dt: number) {
   const ship = isShip(u.t)
   u.nebula = ship && w.map.nebulas.length > 0 && inside(w.map.nebulas, u.x, u.y)
@@ -1506,6 +1545,7 @@ export function tick(w: World, dt = STEP) {
   beacons(w, dt)
   survey(w, dt)
   salvage(w, dt)
+  tenders(w, dt)
   for (const u of w.units) {
     if (u.dead) continue
     if (u.building > 0) {
