@@ -206,6 +206,7 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
   const [vol, setVol] = useState(sound.volume)
   const [muted, setMuted] = useState(sound.muted)
   const [mix, setMix] = useState(sound.mix)
+  const [music, setMusic] = useState(sound.music)
   const [testing, setTesting] = useState(false)
   const set = (next: Partial<Settings>) => setSettings(next)
   return (
@@ -224,6 +225,7 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
           ['voice', 'Unit responses'],
           ['ui', 'Interface and alerts'],
           ['amb', 'Ambience'],
+          ['music', 'Music'],
         ] as [Bus, string][]
       ).map(([bus, label]) => (
         <label key={bus} className="ew-row">
@@ -237,6 +239,10 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
       <div className="ew-row">
         <span>Sound</span>
         <Seg label="Sound effects" value={!muted} options={[[true, 'On'], [false, 'Off']]} onChange={(on) => (sound.setMuted(!on), setMuted(!on))} />
+      </div>
+      <div className="ew-row">
+        <span>Music</span>
+        <Seg label="Music" value={music} options={[[true, 'On'], [false, 'Off']]} onChange={(on) => (sound.setMusic(on), setMusic(on))} />
       </div>
       <h5>Camera</h5>
       <label className="ew-row">

@@ -448,7 +448,15 @@ export class Renderer {
     const bottom = cam.y + vh / 2 / z + 300
     const onScreen = (x: number, y: number, r = 0) => x + r > left && x - r < right && y + r > top && y - r < bottom
 
-    ctx.strokeStyle = 'rgba(140,170,220,0.18)'
+    // Past the map's edge (the camera may run out there): dim, so the edge reads at a glance.
+    if (left < 0 || top < 0 || right > w.w || bottom > w.h) {
+      ctx.fillStyle = 'rgba(2,4,10,0.5)'
+      ctx.beginPath()
+      ctx.rect(left, top, right - left, bottom - top)
+      ctx.rect(0, 0, w.w, w.h)
+      ctx.fill('evenodd')
+    }
+    ctx.strokeStyle = 'rgba(140,170,220,0.3)'
     ctx.lineWidth = 2 / z
     ctx.setLineDash([24 / z, 18 / z])
     ctx.strokeRect(0, 0, w.w, w.h)

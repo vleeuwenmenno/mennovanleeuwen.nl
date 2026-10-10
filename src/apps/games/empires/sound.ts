@@ -12,10 +12,13 @@ import type { AbilityId, FactionId, Tier, WeaponKind } from './data'
 const VOLUME_KEY = 'mvlos.empires.volume'
 const MUTE_KEY = 'mvlos.empires.muted'
 const MIX_KEY = 'mvlos.empires.mix'
+const MUSIC_KEY = 'mvlos.empires.music'
 
 export type Where = { pan: number; gain: number }
-/** Battle sounds, crews answering (and abilities), interface and alerts, ambience: each has its own volume. */
-export type Bus = 'sfx' | 'voice' | 'ui' | 'amb'
+/** Battle sounds, crews answering (and abilities), interface and alerts, ambience (wind and the
+ * far-off battle) and music (the bridge's low chord): each has its own volume. */
+export type Bus = 'sfx' | 'voice' | 'ui' | 'amb' | 'music'
+const BUSES: Bus[] = ['sfx', 'voice', 'ui', 'amb', 'music']
 export type OrderKind = 'move' | 'attack' | 'attackMove' | 'patrol' | 'hold' | 'stop' | 'rally' | 'target'
 
 // --- DSP ------------------------------------------------------------------------------------------------
@@ -566,23 +569,28 @@ export class EmpiresSound {
   muted: boolean
   volume: number
   mix: Mix
+  /** The music can be switched off on its own, keeping its volume for when it comes back. */
+  music: boolean
 
   constructor() {
     let m = false
     let v = 0.7
-    let mix: Mix = { sfx: 1, voice: 0.9, ui: 0.9, amb: 0.7 }
+    let mix: Mix = { sfx: 1, voice: 0.9, ui: 0.9, amb: 0.7, music: 0.7 }
+    let music = true
     try {
       m = localStorage.getItem(MUTE_KEY) === '1'
       const raw = localStorage.getItem(VOLUME_KEY)
       if (raw) v = Math.min(1, Math.max(0, Number(raw)))
       const mx = JSON.parse(localStorage.getItem(MIX_KEY) ?? 'null') as Partial<Mix> | null
       if (mx) mix = { ...mix, ...mx }
+      music = localStorage.getItem(MUSIC_KEY) !== '0'
     } catch {
       // Private mode: defaults.
     }
     this.muted = m
     this.volume = v
     this.mix = mix
+    this.music = music
   }
 
   /** Browsers only allow audio after a click or key press. */
@@ -614,7 +622,7 @@ export class EmpiresSound {
       shelf.frequency.value = 5000
       shelf.gain.value = -6
       shelf.connect(this.master)
-      for (const b of ['sfx', 'voice', 'ui', 'amb'] as Bus[]) {
+      for (const b of BUSES) {
         const g = ctx.createGain()
         g.connect(shelf)
         this.buses[b] = g
@@ -626,7 +634,7 @@ export class EmpiresSound {
 
   private applyVolume() {
     if (this.master) this.master.gain.value = this.muted ? 0 : this.volume * 0.8
-    for (const b of ['sfx', 'voice', 'ui', 'amb'] as Bus[]) if (this.buses[b]) this.buses[b]!.gain.value = this.mix[b]
+    for (const b of BUSES) if (this.buses[b]) this.buses[b]!.gain.value = b === 'music' && !this.music ? 0 : this.mix[b]
   }
 
   setMuted(m: boolean) {
@@ -638,6 +646,12 @@ export class EmpiresSound {
   setVolume(v: number) {
     this.volume = v
     this.save(VOLUME_KEY, String(v))
+    this.applyVolume()
+  }
+
+  setMusic(on: boolean) {
+    this.music = on
+    this.save(MUSIC_KEY, on ? '1' : '0')
     this.applyVolume()
   }
 
@@ -922,7 +936,7 @@ export class EmpiresSound {
       o.start()
       return o
     })
-    f.connect(g).connect(out)
+    f.connect(g).connect(this.buses.music!)
     lfo.start()
     // Static wind and the battle rumble both come from a looping noise sample.
     const n = ctx.sampleRate * 3

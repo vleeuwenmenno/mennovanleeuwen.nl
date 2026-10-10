@@ -190,8 +190,11 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     c.zoom = Math.max(minZ, Math.min(1.6, c.zoom))
     const hw = vw / 2 / c.zoom
     const hh = vh / 2 / c.zoom
-    c.x = hw * 2 >= w.w ? w.w / 2 : Math.max(hw - 150, Math.min(w.w - hw + 150, c.x))
-    c.y = hh * 2 >= w.h ? w.h / 2 : Math.max(hh - 150, Math.min(w.h - hh + 150, c.y))
+    // The camera may run well past the map's edge, so ships in a corner can be brought clear of
+    // the HUD (more room at the bottom, where the panels are), zoomed out as well as in.
+    const fit = (v: number, lo: number, hi: number, mid: number) => (lo > hi ? mid : Math.max(lo, Math.min(hi, v)))
+    c.x = fit(c.x, hw - (vw * 0.35) / c.zoom, w.w - hw + (vw * 0.35) / c.zoom, w.w / 2)
+    c.y = fit(c.y, hh - (vh * 0.3) / c.zoom, w.h - hh + (vh * 0.5) / c.zoom, w.h / 2)
   }
   const where = (x: number, y: number) => {
     const { vw, vh } = view()
