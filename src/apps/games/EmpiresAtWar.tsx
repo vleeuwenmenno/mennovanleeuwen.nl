@@ -869,12 +869,12 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   }
   // The tech tree is an RTS research screen, not a menu: the battle keeps running behind it.
   const setTree = (open: boolean) => {
-    if (open !== uiRef.current.tree) sound.click()
+    if (open !== uiRef.current.tree) sound.menu(open)
     setUi((u) => ({ ...u, tree: open }))
   }
   const cancelResearch = (i: number) => {
     cmdCancelResearch(world.current, me, i)
-    sound.click()
+    sound.unqueued()
   }
   const setSpeed = (s: number) => {
     speed.current = s
