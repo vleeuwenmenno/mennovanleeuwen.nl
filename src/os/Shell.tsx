@@ -19,6 +19,7 @@ import { FolderPicker } from './FolderPicker'
 import { initBackButton, setBackFocus } from './backButton'
 import { startActivityAlerts } from './activityAlerts'
 import { startAgentWatch } from './agentWatch'
+import { NotificationCenter } from './NotificationCenter'
 import { followLinkSettings, linkSettings } from '../data/links'
 import { newTab, usePower } from './powerState'
 import { notify } from './notify'
@@ -177,6 +178,7 @@ function TopBar() {
             </svg>
           )}
         </button>
+        <NotificationCenter />
       </div>
     </header>
   )

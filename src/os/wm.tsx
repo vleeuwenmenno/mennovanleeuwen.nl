@@ -1,6 +1,7 @@
 import { snapReserve } from './dockPrefs'
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
 import { synced } from './synced'
+import { startupPrefs } from './startup'
 
 export type AppId = 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'pdf' | 'archive' | 'office' | 'newdoc' | 'newsheet' | 'newslides' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar' | 'agents' | 'amp'
 
@@ -299,7 +300,10 @@ export function WindowManagerProvider({
 }) {
   const usable = useCallback((saved: SavedWindow[] | null) => saved?.map(migrate).filter((w) => isApp(w.app)) ?? null, [isApp])
   const [state, dispatch] = useReducer(reducer, null, () => {
-    const saved = usable(layoutStore().get())
+    // Settings → Windows: last time's windows, the welcome windows, or an empty desktop.
+    const start = startupPrefs().windows
+    if (start === 'empty') return fresh([])
+    const saved = start === 'last' ? usable(layoutStore().get()) : null
     return saved ? restored(saved) : fresh(relayout())
   })
 
@@ -312,6 +316,9 @@ export function WindowManagerProvider({
   const savedEdits = useRef(0)
   const saveNow = useCallback(() => {
     if (stateRef.current.edits === savedEdits.current) return
+    // Starting with the welcome windows or nothing: the layout saved before stays as it was, for
+    // when Last windows is chosen again (and other devices keep theirs).
+    if (startupPrefs().windows !== 'last') return
     savedEdits.current = stateRef.current.edits
     layoutStore().set(serialize(stateRef.current.windows))
   }, [])
@@ -335,6 +342,8 @@ export function WindowManagerProvider({
     () =>
       layoutStore().onRemote((saved) => {
         if (stateRef.current.edits !== savedEdits.current) return
+        // Starting fresh each time means not taking another device's windows either.
+        if (startupPrefs().windows !== 'last') return
         const next = usable(saved)
         if (next) {
           savedEdits.current = 0

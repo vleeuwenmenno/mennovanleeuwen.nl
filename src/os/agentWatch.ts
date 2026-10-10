@@ -60,7 +60,7 @@ function announce(id: string, title: string, answer: string) {
   if (!away && onScreen === id) return
   const body = firstLine(answer)
   // Sticky while away, so it is still there when coming back to the tab.
-  notify({ title: `Agents answered: ${title}`, body, sticky: away, onClick: () => openThread(id) })
+  notify({ title: `Agents answered: ${title}`, body, sticky: away, source: 'agents.answer', action: { app: 'agents', props: { thread: id } } })
   if (away) void systemNotification(id, `Agents answered: ${title}`, body)
 }
 

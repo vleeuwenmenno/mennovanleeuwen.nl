@@ -1,4 +1,4 @@
-import { dismiss, useNotices } from './notify'
+import { dismiss, openNotice, useNotices } from './notify'
 
 /**
  * The notification stack. Clicking one runs its action, if it has one, and dismisses it; the ×
@@ -21,10 +21,7 @@ export function Notifications() {
         >
           <button
             className="notice-main"
-            onClick={() => {
-              n.onClick?.()
-              dismiss(n.id)
-            }}
+            onClick={() => openNotice(n)}
           >
             {n.icon && <img src={n.icon} alt="" width={32} height={32} className="notice-icon" />}
             <span className="notice-text">

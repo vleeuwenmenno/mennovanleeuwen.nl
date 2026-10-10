@@ -2143,6 +2143,17 @@ input.is-bad {
 .set-row.is-off {
   opacity: 0.5;
 }
+/* A kind of notification under its app (Settings → Notifications), folded out with Choose…. */
+.set-row-sub {
+  padding-left: 44px;
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+}
+.set-row-stack {
+  flex-wrap: wrap;
+}
+.set-row-stack .seg {
+  flex-basis: 100%;
+}
 .set-row-link {
   padding: 0;
 }

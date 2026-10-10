@@ -9,7 +9,6 @@ import { ANSWERS_KEEP, CATEGORIES, RECENT_COUNTS, setInclude, setSpotlightPrefs,
 import { clearQuick } from '../data/agents'
 import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
-import { MC_ADDRESS, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
 import { setSwing, useSwingPrefs } from '../os/swing'
 import { ask } from '../os/Dialogs'
 import { Select } from '../os/Select'
@@ -23,6 +22,10 @@ import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
 import { DOCK_MODES, getDockMode, setDockMode, type DockMode } from '../os/dockPrefs'
 import { AppIcon } from '../os/icons'
+import { setStartupPrefs, START_WINDOWS, useStartupPrefs } from '../os/startup'
+import { clearEntries, pruneEntries, useEntries } from '../os/notify'
+import { ACTIVITY_WINDOWS, isOff, KEEP, setNotifyPrefs, setOn, useNotifyPrefs, visibleSources, type NotifySource as NotifySourceDef } from '../os/notifyPrefs'
+import { allowNotifications, notificationState } from '../os/agentWatch'
 import { THEMES } from '../os/omarchyThemes'
 import { pullAll } from '../os/synced'
 import { ACCENTS, DARK_THEMES, LIGHT_THEMES, setAccent, setMode, setTheme, themeLabel, useTheme, type Mode } from '../os/theme'
@@ -188,26 +191,142 @@ function useDockMode(): DockMode {
 }
 
 function Notifications() {
-  useMinecraft() // re-renders when the toggle changes
+  const prefs = useNotifyPrefs()
+  const account = useAccount()
+  const entries = useEntries()
+  const [browser, setBrowser] = useState(notificationState)
+  const owner = account.status === 'user'
   return (
     <>
-      <ul className="set-list">
-        <li className="set-row">
-          <span className="set-row-text">
-            <strong>Minecraft server</strong>
-            <span className="muted">When players join or leave {MC_ADDRESS}, or it goes down or comes back</span>
-          </span>
-          <Toggle on={mcNotificationsOn()} onChange={setMcNotifications} label="Minecraft notifications" />
-        </li>
-        <li className="set-row">
-          <span className="set-row-text">
-            <strong>Activity</strong>
-            <span className="muted">New pushes, releases and pull requests from the last 15 minutes, once per visit</span>
-          </span>
-          <span className="muted">Always on</span>
-        </li>
-      </ul>
-      <p className="muted set-help">Notifications show in the top right corner of the desktop and only while this page is open.</p>
+      <SetGroup title="Pop-ups">
+        <ul className="set-list">
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>Show pop-ups</strong>
+              <span className="muted">Off is do not disturb: they still collect behind the bell</span>
+            </span>
+            <Toggle on={prefs.popups} onChange={(on) => setNotifyPrefs({ popups: on })} label="Show pop-ups" />
+          </li>
+          {owner && (
+            <li className="set-row">
+              <span className="set-row-text">
+                <strong>System notifications</strong>
+                <span className="muted">
+                  {browser === 'granted'
+                    ? 'On: Agents answers in the background show up there too'
+                    : browser === 'denied'
+                      ? "Blocked in the browser's settings for this site"
+                      : browser === 'unsupported'
+                        ? 'This browser has none'
+                        : "The browser's own, for Agents answers in the background"}
+                </span>
+              </span>
+              {browser === 'default' && (
+                <button className="btn btn-small" onClick={() => void allowNotifications().then(setBrowser)}>
+                  Allow…
+                </button>
+              )}
+            </li>
+          )}
+        </ul>
+      </SetGroup>
+
+      <SetGroup title="Notification center">
+        <div className="seg set-seg" role="radiogroup" aria-label="Keep notifications for">
+          {KEEP.map(([id, label]) => (
+            <button key={id} role="radio" aria-checked={prefs.keep === id} className={prefs.keep === id ? 'is-active' : ''} onClick={() => (setNotifyPrefs({ keep: id }), pruneEntries())}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="muted set-help">How long the bell in the top bar keeps a notification. They are kept on this device only; pop-ups that are only feedback (a failed paste, an update to restart into) are never kept.</p>
+        <ul className="set-list">
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>Remove once opened</strong>
+              <span className="muted">Opening one also takes it off the list</span>
+            </span>
+            <Toggle on={prefs.removeOnOpen} onChange={(on) => setNotifyPrefs({ removeOnOpen: on })} label="Remove notifications once opened" />
+          </li>
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>{entries.length ? `${entries.length} kept now` : 'Nothing kept now'}</strong>
+              <span className="muted">{entries.filter((e) => !e.read).length} not read yet</span>
+            </span>
+            <button className="btn btn-small" disabled={!entries.length} onClick={clearEntries}>
+              Clear all
+            </button>
+          </li>
+        </ul>
+      </SetGroup>
+
+      <SetGroup title="Apps">
+        <ul className="set-list">
+          {visibleSources(owner).map((src) => (
+            <NotifySourceRows key={src.app} src={src} />
+          ))}
+        </ul>
+        <p className="muted set-help">Notifications arrive while this page is open (Agents answers also after it was closed, once it is open again). Right-click one in the list to turn its kind off.</p>
+      </SetGroup>
+    </>
+  )
+}
+
+/**
+ * One app in Settings → Notifications: a switch for all of it, and for an app with several kinds
+ * of notification, a fold-out list to pick single kinds (and, for Activity, how recent).
+ */
+function NotifySourceRows({ src }: { src: NotifySourceDef }) {
+  const prefs = useNotifyPrefs()
+  const [open, setOpenRows] = useState(false)
+  const appOn = !isOff(prefs, src.app)
+  const kindOn = (id: string) => appOn && !isOff(prefs, `${src.app}.${id}`)
+  const single = src.kinds.length === 1
+  const on = src.kinds.filter((k) => kindOn(k.id)).length
+  const summary = single ? src.kinds[0].hint : !appOn ? 'Off' : on === src.kinds.length ? `All ${src.kinds.length} kinds` : on ? `${on} of ${src.kinds.length} kinds: ${src.kinds.filter((k) => kindOn(k.id)).map((k) => k.label.toLowerCase()).join(', ')}` : 'No kinds chosen'
+  return (
+    <>
+      <li className="set-row">
+        {src.icon ? <AppIcon app={src.icon} size={22} tone /> : <span className="set-glyph">M</span>}
+        <span className="set-row-text">
+          <strong>{src.label}</strong>
+          <span className="muted">{summary}</span>
+        </span>
+        {!single && (
+          <button className="btn btn-small set-fold" onClick={() => setOpenRows((o) => !o)} aria-expanded={open} disabled={!appOn}>
+            {open && appOn ? 'Done' : 'Choose…'}
+          </button>
+        )}
+        <Toggle on={appOn} onChange={(v) => setOn(src.app, v)} label={`${src.label} notifications`} />
+      </li>
+      {open && appOn && (
+        <>
+          {src.kinds.map((k) => (
+            <li key={k.id} className="set-row set-row-sub">
+              <span className="set-row-text">
+                <strong>{k.label}</strong>
+                <span className="muted">{k.hint}</span>
+              </span>
+              <Toggle on={kindOn(k.id)} onChange={(v) => setOn(`${src.app}.${k.id}`, v)} label={`${src.label}: ${k.label}`} />
+            </li>
+          ))}
+          {src.app === 'activity' && (
+            <li className="set-row set-row-sub set-row-stack">
+              <span className="set-row-text">
+                <strong>How recent</strong>
+                <span className="muted">Older activity stays quiet when MvL OS opens</span>
+              </span>
+              <div className="seg set-seg" role="radiogroup" aria-label="Notify about activity from the last">
+                {ACTIVITY_WINDOWS.map(([id, label]) => (
+                  <button key={id} role="radio" aria-checked={prefs.activityWindow === id} className={prefs.activityWindow === id ? 'is-active' : ''} onClick={() => setNotifyPrefs({ activityWindow: id })}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </li>
+          )}
+        </>
+      )}
     </>
   )
 }
@@ -1333,6 +1452,42 @@ function SpotlightSettings() {
  * Where web links open, and whether the browser's new tab page (/?newtab) always uses this tab
  * and starts in Spotlight.
  */
+/** Settings → Windows: what the desktop shows when MvL OS opens again. */
+function WindowsSettings() {
+  const { windows } = useStartupPrefs()
+  const wm = useWM()
+  return (
+    <>
+      <SetGroup title="When MvL OS opens">
+        <div className="seg set-seg" role="radiogroup" aria-label="When MvL OS opens">
+          {START_WINDOWS.map(([id, label]) => (
+            <button key={id} role="radio" aria-checked={windows === id} className={windows === id ? 'is-active' : ''} onClick={() => setStartupPrefs({ windows: id })}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="muted set-help">
+          {START_WINDOWS.find(([id]) => id === windows)?.[2]}. This counts for a new tab, a reload and the installed app starting again.
+          {windows !== 'last' && " While this is chosen, MvL OS doesn't save which windows are open."}
+        </p>
+      </SetGroup>
+      <SetGroup title="Right now">
+        <ul className="set-list">
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>Start over</strong>
+              <span className="muted">Close every window and open the welcome windows</span>
+            </span>
+            <button className="btn btn-small" onClick={() => wm.reset()}>
+              Start over
+            </button>
+          </li>
+        </ul>
+      </SetGroup>
+    </>
+  )
+}
+
 function LinkSettingsPane() {
   const { target, newTabPageSameTab, newTabPageSpotlight } = useLinkSettings()
   const account = useAccount()
@@ -1367,7 +1522,7 @@ function LinkSettingsPane() {
   )
 }
 
-type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'agents' | 'golinks' | 'sync' | 'about'
+type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'agents' | 'golinks' | 'sync' | 'about'
 /** `owner`: only for the signed-in owner (accounts and services); visitors don't see it at all. */
 type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; keywords: string; blurb: string; owner?: true; render: () => ReactNode }
 
@@ -1394,7 +1549,7 @@ function SyncPane() {
           )}
         </li>
       </ul>
-      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, game high scores, the go links account, Spotlight's settings, favourites and history, /etc/fstab, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. Without an account they stay in this browser.</p>
+      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, game high scores, the go links account, Spotlight's settings, favourites and history, notification settings, what opens at the start, /etc/fstab, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. Without an account they stay in this browser.</p>
     </>
   )
 }
@@ -1409,8 +1564,9 @@ const GROUPS: Pane[][] = [
   ],
   [
     { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal favourites favorites starred', blurb: 'What Spotlight shows when it opens, what it searches, and what it remembers.', render: () => <SpotlightSettings /> },
+    { id: 'windows', label: 'Windows', hue: 'var(--yellow)', icon: svg(<><rect x="3" y="5" width="12" height="10" /><rect x="9" y="9" width="12" height="10" /></>), keywords: 'windows restore reopen startup start open last session layout tabs welcome empty desktop reset start over', blurb: 'What the desktop shows when MvL OS opens again.', render: () => <WindowsSettings /> },
     { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page spotlight', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
-    { id: 'notifications', label: 'Notifications', hue: 'var(--red)', icon: svg(<><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></>), keywords: 'notifications alerts minecraft activity', blurb: 'What may pop up in the corner of the desktop.', render: () => <Notifications /> },
+    { id: 'notifications', label: 'Notifications', hue: 'var(--red)', icon: svg(<><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></>), keywords: 'notifications alerts notification center bell pop-ups do not disturb dnd keep history clear minecraft activity agents uploads unpacking updates system browser', blurb: 'Pop-ups, the notification center, and which apps may notify.', render: () => <Notifications /> },
     { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal spotlight suggestions mvl.sh token', blurb: "The golinks account that go <alias> follows, in Spotlight and the terminal.", render: () => <GoLinks /> },
   ],
   [
