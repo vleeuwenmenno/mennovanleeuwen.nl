@@ -17,7 +17,7 @@ import { addBookmark, useSidebar } from '../data/filesSidebar'
 import { FilesSidebar, type SideSection } from './FilesSidebar'
 import { libraryNames, mounts, posixOf, useMounts, whereIs } from '../data/mounts'
 import { lookup as fsLookup } from '../terminal/fs'
-import { besideArchive, extract } from '../data/extract'
+import { besideArchive, extract, getZipDrag, setZipDrag, zipDragName } from '../data/extract'
 
 /** Quotes a path for a command line in the terminal. */
 const shq = (s: string) => (/^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
@@ -492,8 +492,9 @@ export function Files({ win }: { win: WinState }) {
   }
   /** Whether a drag can land in `into`; says so to the browser (and highlights it) when it can. */
   const acceptDrop = (e: React.DragEvent, into: string) => {
-    // Files from the computer upload into any Seafile folder you can write to.
-    if (!getDragged() && hasOsFiles(e.dataTransfer)) {
+    // Files from the computer upload into any Seafile folder you can write to, and rows from
+    // Archive unpack there.
+    if (getZipDrag(e) || (!getDragged() && hasOsFiles(e.dataTransfer))) {
       if (!canWrite(into)) return false
       e.preventDefault()
       e.stopPropagation()
@@ -512,6 +513,15 @@ export function Files({ win }: { win: WinState }) {
     return true
   }
   const dropInto = (e: React.DragEvent, into: string) => {
+    const fromZip = getZipDrag(e)
+    if (fromZip) {
+      if (!acceptDrop(e, into)) return
+      setDropOn(null)
+      setZipDrag(null)
+      setToast(`Unpacking ${zipDragName(fromZip)}…`)
+      void extract(fromZip.zip, into, { entries: fromZip.entries, base: fromZip.base, clash: 'keep' }).catch((err: Error) => setToast(err.message))
+      return
+    }
     if (!getDragged() && hasOsFiles(e.dataTransfer)) {
       if (!acceptDrop(e, into)) return
       setDropOn(null)

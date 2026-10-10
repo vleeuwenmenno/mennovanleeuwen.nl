@@ -268,6 +268,8 @@ Files: click, Ctrl/Shift+click, Shift+arrows, Ctrl+A or a rubber band select; Ba
 (Alt+arrows, Backspace, the mouse's buttons) go through its folders; right-click has the menu
 (*Extract here*, *Extract to…*, *Copy path*, *Properties*; on empty space, sorting and the archive's
 own). A double-click opens a folder or saves a file to your computer, unpacked in the browser.
+Rows dragged by their name onto a Seafile folder (in Files, its sidebar, or on the desktop) unpack
+there; dragging elsewhere on a row draws the rubber band.
 
 **Extract** unpacks everything, or the selected rows, into a Seafile folder (a
 folder named after the archive, next to it, unless you choose another), with *keep both*, *replace*

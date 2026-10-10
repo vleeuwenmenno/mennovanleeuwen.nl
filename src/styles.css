@@ -4972,6 +4972,19 @@ button.fm-dd-row:hover {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+.ar-label {
+  -webkit-user-drag: element;
+}
+/* What a drag of several rows looks like (made for the moment the drag starts). */
+.ar-ghost {
+  position: fixed;
+  top: -100px;
+  left: 0;
+  padding: 4px 10px;
+  background: var(--accent);
+  color: var(--on-accent, #fff);
+  font-size: 12px;
+}
 .ar-glyph {
   display: inline-flex;
   width: 16px;
