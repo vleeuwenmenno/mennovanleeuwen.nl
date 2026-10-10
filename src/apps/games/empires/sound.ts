@@ -528,6 +528,10 @@ const abilitySound = (id: AbilityId): Recipe => (sr, r) => {
   return layers(sr, Array.from({ length: 4 }, (_, k) => ({ data: launch(sr, r), at: k * 0.12, gain: 0.8 })))
 }
 
+/** Crew answers, interface sounds and abilities play at half the level they were first tuned at:
+ * heard on every click, they were too loud next to the battle. */
+const UI_LEVEL = 0.5
+
 // --- Engine ---------------------------------------------------------------------------------------------
 
 type Mix = Record<Bus, number>
@@ -770,7 +774,7 @@ export class EmpiresSound {
   }
 
   ability(id: AbilityId, where?: Where) {
-    if (this.ready()) this.play(`ab-${id}`, abilitySound(id), { where, gain: 0.8, takes: 2 })
+    if (this.ready()) this.play(`ab-${id}`, abilitySound(id), { where, gain: 0.8 * UI_LEVEL, takes: 2 })
   }
 
   // --- Crew and interface ---------------------------------------------------------------------------------
@@ -783,7 +787,7 @@ export class EmpiresSound {
     } catch {
       // Already over.
     }
-    this.ackSrc = this.play(name, recipe, { bus: 'ui', gain: 0.6, verb: 0.15, takes: 4 })
+    this.ackSrc = this.play(name, recipe, { bus: 'ui', gain: 0.6 * UI_LEVEL, verb: 0.15, takes: 4 })
   }
 
   select(faction: FactionId, tier: Tier) {
@@ -795,7 +799,7 @@ export class EmpiresSound {
   }
 
   private ui(name: string, recipe: Recipe, gain = 0.6, takes = 2) {
-    if (this.ready()) this.play(name, recipe, { bus: 'ui', gain, verb: 0.12, takes })
+    if (this.ready()) this.play(name, recipe, { bus: 'ui', gain: gain * UI_LEVEL, verb: 0.12, takes })
   }
 
   click() {
@@ -820,7 +824,7 @@ export class EmpiresSound {
     this.ui('research-done', (sr) => bells(sr, 660, [0, 4, 7, 11, 14], 1.4), 0.55, 1)
   }
   shipReady(faction: FactionId, tier: Tier) {
-    if (this.ready() && this.allow('ready', 1, 0.3)) this.play(`ready-${faction}-${tier}`, shipReady(faction, tier), { bus: 'ui', gain: 0.65, verb: 0.2, takes: 2 })
+    if (this.ready() && this.allow('ready', 1, 0.3)) this.play(`ready-${faction}-${tier}`, shipReady(faction, tier), { bus: 'ui', gain: 0.65 * UI_LEVEL, verb: 0.2, takes: 2 })
   }
   constructing() {
     this.ui('construct', construct, 0.5)
