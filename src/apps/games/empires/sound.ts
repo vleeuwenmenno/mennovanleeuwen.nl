@@ -321,36 +321,6 @@ const explosion = (size: 0 | 1 | 2): Recipe => (sr, r) => {
   })
 }
 
-/** A starfighter flying past: its engine high as it comes and low as it goes (Doppler), loudest
- * as it passes, in a rush of air. Republic engines roar; droid fighters scream, a little like the
- * film's fighters, kept low enough not to pierce. */
-const flyby = (droid: boolean): Recipe => (sr, r) => {
-  const len = 1.2
-  const pass = 0.5 + r() * 0.1
-  const o1 = new Osc(r())
-  const o2 = new Osc(r())
-  const tone = new Svf()
-  const air = new Svf()
-  const base = (droid ? 330 : 120) * (0.92 + r() * 0.16)
-  return render(sr, len, (t) => {
-    const x = (t - pass) / 0.16
-    const doppler = 1.18 - 0.36 * (0.5 + 0.5 * Math.tanh(x * 1.6))
-    const near = 1 / (1 + x * x)
-    const fr = base * doppler
-    let v: number
-    if (droid) {
-      const vib = 1 + 0.02 * Math.sin(TAU * 9 * t)
-      const raw = o1.saw(fr * vib, sr) * 0.6 + o2.sqr(fr * 1.5 * vib, sr) * 0.25
-      v = tone.run(raw + noise() * 0.3, 1000 * doppler, 2.2, sr).band
-    } else {
-      const raw = o1.saw(fr, sr) * 0.6 + o2.saw(fr * 1.498, sr) * 0.4
-      v = tone.run(raw, 650 * doppler, 1.1, sr).low
-    }
-    const rush = air.run(noise(), 900 * doppler, 0.7, sr).band
-    return soft((v * 1.2 + rush * (droid ? 0.5 : 0.9)) * near * 1.4)
-  })
-}
-
 /** A hardpoint wrecked: a heavy clang, a burst, and electrical sputtering. */
 const hardpointDown: Recipe = (sr, r) => {
   const zap = new Osc()
@@ -376,18 +346,16 @@ const shieldsDown: Recipe = (sr) => {
   })
 }
 
-/** Fighters out of a hangar: engines spooling up and away, in a gust of air. */
+/** Fighters out of a hangar: an engine whine rising past, in a gust of air. */
 const launch: Recipe = (sr, r) => {
   const o = new Osc()
-  const o2 = new Osc()
   const bp = new Svf()
   const lp = new Svf()
-  return render(sr, 0.8, (t) => {
-    const env = Math.sin(Math.PI * Math.min(1, t / 0.7)) ** 2
-    const fr = glide(90, 240 + r() * 40, t, 0.5)
-    const roar = lp.run(o.saw(fr, sr) + o2.saw(fr * 1.498, sr) * 0.4, glide(400, 1100, t, 0.5), 1, sr).low
-    const air = bp.run(noise(), glide(400, 1300, t, 0.4), 0.6, sr).band
-    return (roar * 0.8 + air * 0.8) * env
+  return render(sr, 0.7, (t) => {
+    const env = Math.sin(Math.PI * Math.min(1, t / 0.6)) ** 2
+    const whine = lp.run(o.saw(glide(200, 600 + r() * 120, t, 0.5), sr), 1800, 0.5, sr).low
+    const air = bp.run(noise(), glide(500, 1600, t, 0.35), 0.5, sr).band
+    return (whine * 0.5 + air) * env
   })
 }
 
@@ -818,8 +786,7 @@ export class EmpiresSound {
   }
 
   /** Play one take: panned, and further away, quieter, darker and wetter. */
-  /** `sweep`: how far the sound pans across while it plays (a fly-by crossing the screen). */
-  private play(name: string, recipe: Recipe, o: { bus?: Bus; gain?: number; where?: Where; rate?: number; verb?: number; takes?: number; sweep?: number } = {}) {
+  private play(name: string, recipe: Recipe, o: { bus?: Bus; gain?: number; where?: Where; rate?: number; verb?: number; takes?: number } = {}) {
     const ctx = this.ctx!
     const list = this.takes(name, recipe, o.takes)
     const src = ctx.createBufferSource()
@@ -834,9 +801,7 @@ export class EmpiresSound {
       lp.type = 'lowpass'
       lp.frequency.value = 700 + 17000 * near * near
       const p = ctx.createStereoPanner()
-      const pan = (v: number) => Math.max(-1, Math.min(1, v))
-      p.pan.value = pan(o.where.pan - (o.sweep ?? 0) / 2)
-      if (o.sweep) p.pan.linearRampToValueAtTime(pan(o.where.pan + o.sweep / 2), ctx.currentTime + src.buffer.duration)
+      p.pan.value = Math.max(-1, Math.min(1, o.where.pan))
       g.connect(lp).connect(p)
       tail = p
     }
@@ -862,7 +827,7 @@ export class EmpiresSound {
       ['pew-republic', fighterBlaster(false), 4], ['pew-droid', fighterBlaster(true), 4], ['laser-republic', blaster(false), 4], ['laser-droid', blaster(true), 4], ['turbo', turbolaser, 4], ['flak', flak, 4], ['missile', missile, 3],
       ['shield', shieldHit, 4], ['hull', metal(false), 4], ['hull-heavy', metal(true), 4],
       ['boom0', explosion(0), 3], ['boom1', explosion(1), 3], ['boom2', explosion(2), 2],
-      ['hpdown', hardpointDown, 3], ['shdown', shieldsDown, 3], ['launch', launch, 3], ['flyby-republic', flyby(false), 3], ['flyby-droid', flyby(true), 3],
+      ['hpdown', hardpointDown, 3], ['shdown', shieldsDown, 3], ['launch', launch, 3],
       ['click', click, 3], ['arm', arm, 2], ['queue', queue(false), 2], ['unqueue', queue(true), 2], ['construct', construct, 2],
       ...(['fighter', 'gunship', 'frigate', 'cruiser', 'capital', 'station'] as Tier[]).map((t): [string, Recipe, number] => [`sel-${faction}-${t}`, ack('select', faction, t), 4]),
       ...(['move', 'attack', 'attackMove'] as OrderKind[]).map((k): [string, Recipe, number] => [`ord-${k}-${faction}-frigate`, ack(k, faction, 'frigate'), 4]),
@@ -912,11 +877,6 @@ export class EmpiresSound {
 
   shieldsDown(where: Where) {
     if (this.ready() && where.gain > 0.05 && this.allow('shdown', 1, 0.3)) this.play('shdown', shieldsDown, { where, gain: 0.6 })
-  }
-
-  /** A fighter racing past near the middle of the view; `sweep` pans it the way it's flying. */
-  flyby(faction: FactionId, where: Where, sweep: number) {
-    if (this.ready() && where.gain > 0.2 && this.allow('flyby', 1, 0.7)) this.play(`flyby-${faction}`, flyby(faction === 'droid'), { where, gain: 0.45, sweep, verb: 0.3, takes: 3 })
   }
 
   launch(where: Where) {

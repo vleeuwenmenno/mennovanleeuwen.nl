@@ -499,9 +499,6 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     let acc = 0
     let hudT = 0
     let ended = false
-    let flyT = 0
-    /** When each fighter last flew past the camera, so one doesn't keep doing it. */
-    const flown = new Map<number, number>()
     const loop = (now: number) => {
       const dt = Math.min(0.1, (now - last) / 1000)
       last = now
@@ -548,30 +545,6 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         if (Math.abs(Math.log(zg.z / cm.zoom)) < 0.002 || cm.zoom === before) {
           if (cm.zoom !== before) zoomBy(zg.z / cm.zoom, zg.sx, zg.sy)
           zoomGoal.current = null
-        }
-      }
-
-      // Now and then a fighter races past the middle of the view.
-      if (!paused.current && !deploying.current) {
-        const myTeamNow = w.players[me].team
-        flyT -= dt
-        let pass: { u: Unit; d: number } | null = null
-        for (const u of w.units) {
-          if (!isShip(u.t) || !u.seen[myTeamNow] || u.v < u.t.speed * 0.4) continue
-          const sx = (u.x - cm.x) * cm.zoom
-          const sy = (u.y - cm.y) * cm.zoom
-          if (Math.abs(sx) > vw / 2 || Math.abs(sy) > vh / 2) continue
-          if (u.t.tier !== 'fighter') continue
-          const d = Math.hypot(sx, sy) / Math.max(vw, vh)
-          if (flyT <= 0 && d < 0.3 && (flown.get(u.id) ?? -99) < w.time - 6 && (!pass || d < pass.d)) pass = { u, d }
-        }
-        if (flyT <= 0) {
-          flyT = 0.35
-          if (pass && Math.random() < 0.35) {
-            flown.set(pass.u.id, w.time)
-            // Pan it the way it's flying across the screen.
-            sound.flyby(w.players[pass.u.owner].faction, where(pass.u.x, pass.u.y), Math.cos(pass.u.a) * 0.8)
-          }
         }
       }
 
