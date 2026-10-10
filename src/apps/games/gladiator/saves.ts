@@ -1,6 +1,6 @@
 import { synced } from '../../../os/synced'
 import type { HallEntry, Save } from './career'
-import { estateFor } from './estate'
+import { estateFor, fixEstate } from './estate'
 
 // Gladiator's save slots and Hall of Fame, kept like the desktop's notes: in this browser, and
 // signed in, on the server too (see os/synced.ts), so a run can continue on another device.
@@ -34,6 +34,8 @@ function normalize(v: unknown): GladiatorStore {
     if (old) save = { ...save, g: { ...save.g, gear: retier(save.g.gear) } }
     // Saves from before the estate get one, stocked for how far they've come.
     if (!save.estate) save = { ...save, estate: estateFor(save.g.level, save.g.gear) }
+    // And estates from before the map get its plots, building works and rents, empty.
+    else save = { ...save, estate: fixEstate(save.estate) }
     return save
   })
   const hall = (Array.isArray(s.hall) ? s.hall.filter((h) => h && typeof h.name === 'string' && h.look) : []).map((h) => (old ? { ...h, gear: retier(h.gear) } : h))

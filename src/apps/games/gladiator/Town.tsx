@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { buyMissing, collectCraft, entrantName, foeGladiator, price, purseFor, shortfall, respecPrice, rivalLevel, rules, trainPrice, tournamentFoe, unlocked, type Foe, type Save } from './career'
 import { simulate } from './combat'
 import { DifficultyPicker } from './Menus'
@@ -7,7 +7,7 @@ import {
   tierStyle, ARMOUR_SLOTS, BASE_STAT, ITEMS, item, league, LEAGUES, MATERIALS, MAX_POTIONS, PERK_LEVELS, PERKS, potionPrice, POTIONS, SLOT_NAMES, SPELLS, STATS, WEAPON_MATERIALS, WEAPON_TYPES,
   type Item, type LeagueId, type PerkId, type PotionId, type Slot, type StatKey,
 } from './data'
-import { blueprintPrice, craftFee, craftTime, have, knowsBlueprint, prettyHours, recipe, slotsAt, startCraft } from './estate'
+import { blueprintPrice, craftFee, craftTime, have, knowsBlueprint, prettyHours, recipe, benches as benchCount, startCraft } from './estate'
 import type { ClipName } from './rig'
 import { CardView, PerkDeck, PerkDraft } from './cards'
 import { BagView, Bar, CardIcon, Gold, ItemArt, PageHead, PlaceIcon, Portrait, useNow } from './ui'
@@ -34,79 +34,188 @@ export const PLACE_BG: Record<Place, string> = {
 
 const cap = (s: string) => s[0].toUpperCase() + s.slice(1)
 
-export function TopBar({ save, onMenu }: { save: Save; onMenu: () => void }) {
+/** Time left as the top bar shows it: "40m", "3h", "3h 5m". */
+const shortTime = (ms: number) => {
+  const m = Math.max(1, Math.ceil(ms / 60000))
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ''}`
+}
+
+/** Things that run on the clock (estate jobs, forgings): how many are done, how many still busy and when the next one finishes. */
+function tally<T extends { end: number }>(list: T[], now: number) {
+  const done = list.filter((x) => x.end <= now)
+  const busy = list.filter((x) => x.end > now)
+  return { done, busy, next: Math.min(...busy.map((x) => x.end)) }
+}
+
+type Reminder = { key: string; icon: string; n?: number; label: string; hint: string; hot: boolean; to: Place }
+
+/** A clickable reminder in the top bar: lit when something waits for you, quiet while it's still running. */
+function Alert({ r, onClick }: { r: Reminder; onClick: () => void }) {
+  return (
+    <button className={`gl-top-alert ${r.hot ? 'is-hot' : ''}`} onClick={onClick} title={r.hint} aria-label={r.hint}>
+      <img src={`/games/gladiator/icons/${r.icon}.webp`} alt="" draggable={false} />
+      {!!r.n && <b>{r.n}</b>}
+      <span>{r.label}</span>
+    </button>
+  )
+}
+
+/** What waits in town, most pressing first. */
+function reminders(save: Save, now: number): Reminder[] {
+  const out: Reminder[] = []
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+  const t = save.tournament
+  if (t && !t.out && tournamentFoe(t)) out.push({ key: 'bout', icon: 'tournament', label: 'Next bout', hint: `${league(t.league).name} tournament: your next bout awaits`, hot: true, to: 'tournament' })
+  const spend = save.g.points + save.pendingPerks
+  if (spend > 0) out.push({ key: 'spend', icon: 'gladiator', n: spend, label: 'to spend', hint: `${plural(spend, 'point')} or perks to spend`, hot: true, to: 'gladiator' })
+  const jobs = tally(save.estate.jobs, now)
+  if (jobs.done.length) out.push({ key: 'jobs', icon: 'estate', n: jobs.done.length, label: 'ready', hint: `Estate: ${plural(jobs.done.length, 'job')} ready to collect`, hot: true, to: 'estate' })
+  else if (jobs.busy.length) out.push({ key: 'jobs', icon: 'estate', label: shortTime(jobs.next - now), hint: `Estate: ${jobs.busy.length} at work, the next is done in ${prettyHours(jobs.next - now)}`, hot: false, to: 'estate' })
+  // A finished weapon is picked up at the forge, anything else at the armoury.
+  const forgeOf = (c: { item: string }) => (item(c.item)?.slot !== 'weapon' ? 'armoury' : 'forge')
+  const forging = tally(save.estate.crafting, now)
+  if (forging.done.length) out.push({ key: 'forge', icon: 'forge', n: forging.done.length, label: 'forged', hint: `${plural(forging.done.length, 'forging')} done`, hot: true, to: forgeOf(forging.done[0]) })
+  else if (forging.busy.length) out.push({ key: 'forge', icon: 'forge', label: shortTime(forging.next - now), hint: `Forging ${forging.busy.length}, the next is done in ${prettyHours(forging.next - now)}`, hot: false, to: forgeOf(forging.busy[0]) })
+  return out
+}
+
+export function TopBar({ save, onMenu, go }: { save: Save; onMenu: () => void; go: (p: Place) => void }) {
   const g = save.g
+  const now = useNow(15000)
+  const need = xpFor(g.level)
+  const list = reminders(save, now)
+  const hot = list.filter((r) => r.hot).length
+  const [open, setOpen] = useState(false)
+  const more = useRef<HTMLDivElement>(null)
+  // The list closes on any press outside it.
+  useEffect(() => {
+    if (!open) return
+    const close = (e: PointerEvent) => !more.current?.contains(e.target as Node) && setOpen(false)
+    window.addEventListener('pointerdown', close)
+    return () => window.removeEventListener('pointerdown', close)
+  }, [open])
   return (
     <div className="gl-topbar">
-      <button className="gl-btn is-quiet is-small" onClick={onMenu} title="Save and return to the title screen">
+      <button className="gl-top-menu" onClick={onMenu} title="Save and return to the title screen" aria-label="Menu">
         ☰
       </button>
-      <div className="gl-top-name">
+      <button className="gl-top-medal" onClick={() => go('gladiator')} title={`Level ${g.level}: your gladiator's sheet`} aria-label="Your gladiator">
+        <span className="gl-top-face">
+          <Portrait look={g.look} gear={g.gear} zoom={2.8} focus={208} still />
+        </span>
+        <b>{g.level}</b>
+      </button>
+      <div className="gl-top-who">
         <strong>{g.name}</strong>
         <span>
-          {g.title ?? 'Gladiator'} · {rules(save).name}
-          {save.mode === 'hardcore' ? ' · Hardcore' : ''}
+          {/* First, so the tag survives when the line is cut short. */}
+          {save.mode === 'hardcore' && <em>Hardcore</em>}
+          {g.title ?? 'Gladiator'} · {league(save.league).name} · {rules(save).name}
+        </span>
+        <div className="gl-top-xp">
+          <Bar kind="xp" value={g.xp} max={need} label={`${g.xp} / ${need} XP`} />
+        </div>
+      </div>
+      {/* Wide, every reminder has its own pill; narrow (CSS swaps them), one button opens the list. */}
+      <div className="gl-top-alerts">
+        {list.map((r) => (
+          <Alert key={r.key} r={r} onClick={() => go(r.to)} />
+        ))}
+      </div>
+      {list.length > 0 && (
+        <div ref={more} className="gl-top-more">
+          <button className={`gl-top-alert ${hot ? 'is-hot' : ''}`} onClick={() => setOpen(!open)} aria-expanded={open} title={list.map((r) => r.hint).join('\n')} aria-label={`${list.length} reminders`}>
+            <img src={`/games/gladiator/icons/${list[0].icon}.webp`} alt="" draggable={false} />
+            {list.length > 1 || hot ? <b>{list.length}</b> : null}
+          </button>
+          {open && (
+            <div className="gl-top-more-list">
+              {list.map((r) => (
+                <Alert key={r.key} r={r} onClick={() => (setOpen(false), go(r.to))} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      <div className="gl-top-purse">
+        <span className="gl-top-stat is-gold" title="Gold">
+          <img src="/games/gladiator/icons/res-gold.webp" alt="" draggable={false} />
+          {save.gold.toLocaleString()}
+        </span>
+        <span className="gl-top-stat is-fame" title="Fame">
+          <img src="/games/gladiator/icons/fame.webp" alt="" draggable={false} />
+          {save.fame.toLocaleString()}
+        </span>
+        <span className="gl-top-stat is-record" title={`${save.record.wins} won, ${save.record.losses} lost`}>
+          <b>{save.record.wins}</b>
+          <i>W</i>
+          <b className="is-lost">{save.record.losses}</b>
+          <i>L</i>
         </span>
       </div>
-      <div className="gl-top-level" title={`${g.xp} / ${xpFor(g.level)} XP`}>
-        <span>Lv {g.level}</span>
-        <Bar kind="xp" value={g.xp} max={xpFor(g.level)} />
-      </div>
-      <Gold n={save.gold} />
-      <span className="gl-fame" title="Fame">
-        ★ {save.fame}
-      </span>
-      <span className="gl-record" title="Wins and losses">
-        {save.record.wins}–{save.record.losses}
-      </span>
     </div>
   )
 }
 
 const PLACES: { id: Place; name: string; text: string; glyph: string }[] = [
   { id: 'arena', name: 'The Arena', text: 'Fights, tournaments, champions', glyph: '⚔️' },
-  { id: 'estate', name: 'Estate', text: 'Mines, woods and pastures that work while you rest', glyph: '🏡' },
-  { id: 'market', name: 'Market', text: 'Materials for gold, prices change daily', glyph: '⚖️' },
-  { id: 'forge', name: 'Forge', text: 'Blueprints and forging of weapons', glyph: '🔨' },
-  { id: 'armoury', name: 'Armoury', text: 'Blueprints and forging of armour', glyph: '🛡️' },
+  { id: 'estate', name: 'Estate', text: 'Mines, woods and pastures', glyph: '🏡' },
+  { id: 'market', name: 'Market', text: 'Materials, daily prices', glyph: '⚖️' },
+  { id: 'forge', name: 'Forge', text: 'Weapon blueprints and forging', glyph: '🔨' },
+  { id: 'armoury', name: 'Armoury', text: 'Armour blueprints and forging', glyph: '🛡️' },
   { id: 'mage', name: 'Mage Tower', text: 'Spells for coin', glyph: '✨' },
   { id: 'apothecary', name: 'Apothecary', text: 'Potions for the fight', glyph: '⚗️' },
   { id: 'training', name: 'Training Yard', text: 'Buy extra training', glyph: '🎯' },
   { id: 'gladiator', name: 'Your Gladiator', text: 'Stats, perks, rivals', glyph: '🏛️' },
 ]
 
+const ROUND_NAME = ['Quarter-final', 'Semi-final', 'Final']
+
 export function Hub({ save, go }: { save: Save; go: (p: Place) => void }) {
   const now = useNow(15000)
-  const badge = save.g.points + save.pendingPerks
-  // Finished jobs and forgings waiting to be picked up.
+  // Finished jobs and forgings waiting to be picked up, and points waiting to be spent.
   const ready: Partial<Record<Place, number>> = {
-    gladiator: badge,
+    gladiator: save.g.points + save.pendingPerks,
     estate: save.estate.jobs.filter((j) => j.end <= now).length,
     forge: save.estate.crafting.filter((c) => c.end <= now && item(c.item)?.slot === 'weapon').length,
     armoury: save.estate.crafting.filter((c) => c.end <= now && item(c.item)?.slot !== 'weapon').length,
   }
+  const t = save.tournament
+  const bout = t && !t.out ? tournamentFoe(t) : null
   return (
     <div className="gl-hub">
-      <div className="gl-hub-hero">
-        <Portrait look={save.g.look} gear={save.g.gear} clip={save.record.wins ? 'victory' : 'guard'} zoom={0.8} />
-      </div>
-      <div className="gl-hub-places">
-        {save.tournament && !save.tournament.out && tournamentFoe(save.tournament) && (
-          <button className="gl-place is-hot" onClick={() => go('tournament')}>
-            <PlaceIcon id="tournament" glyph="🏆" />
-            <strong>Tournament in progress</strong>
-            <span>{league(save.tournament.league).name}: your next bout awaits</span>
+      <div className="gl-hub-stage">
+        <div className="gl-hub-hero">
+          <Portrait look={save.g.look} gear={save.g.gear} clip={save.record.wins ? 'victory' : 'guard'} zoom={0.8} />
+        </div>
+        {t && bout && (
+          <button className="gl-hub-notice" onClick={() => go('tournament')}>
+            <img src="/games/gladiator/icons/tournament.webp" alt="" draggable={false} />
+            <span className="gl-hub-notice-text">
+              <small>{league(t.league).name} tournament</small>
+              <strong>Your next bout awaits</strong>
+              <span>
+                {ROUND_NAME[t.rounds.length - 1] ?? 'Next round'} against {entrantName(save, t, bout.id)}
+              </span>
+            </span>
+            <em>To the bracket</em>
           </button>
         )}
+      </div>
+      <nav className="gl-hub-dock" aria-label="Places in town">
         {PLACES.map((p) => (
-          <button key={p.id} className="gl-place" onClick={() => go(p.id)}>
+          <button key={p.id} className={`gl-place ${ready[p.id] ? 'is-ready' : ''}`} onClick={() => go(p.id)} title={p.text}>
             <PlaceIcon id={p.id} glyph={p.glyph} />
             <strong>{p.name}</strong>
-            <span>{p.text}</span>
-            {!!ready[p.id] && <b className="gl-badge">{ready[p.id]}</b>}
+            <span className="gl-place-text">{p.text}</span>
+            {!!ready[p.id] && (
+              <b className="gl-badge" aria-label={`${ready[p.id]} waiting`}>
+                {ready[p.id]}
+              </b>
+            )}
           </button>
         ))}
-      </div>
+      </nav>
     </div>
   )
 }
@@ -320,12 +429,36 @@ function Delta({ label, now, then, unit = '' }: { label: string; now: number; th
   )
 }
 
+/**
+ * A shop card's action: the label on top and the price beneath it, inside the one button, so a
+ * long label and a big price never fight for a narrow card's width. `note` says, in plain sight,
+ * what the price is for or why the button can't be pressed.
+ */
+function BuyButton({ label, icon, cost, note, quiet, disabled, onClick }: { label: string; icon?: React.ReactNode; cost?: number; note?: string; quiet?: boolean; disabled?: boolean; onClick: () => void }) {
+  return (
+    <>
+      {note && <span className="gl-buy-note">{note}</span>}
+      <button className={`gl-btn gl-buy ${quiet ? '' : 'is-primary'}`} disabled={disabled} onClick={onClick}>
+        <span className="gl-buy-label">
+          {icon && <span className="gl-buy-icon">{icon}</span>}
+          {label}
+        </span>
+        {cost !== undefined && (
+          <span className="gl-buy-cost">
+            <Gold n={cost} />
+          </span>
+        )}
+      </button>
+    </>
+  )
+}
+
 const avgDamage = (d: ReturnType<typeof derive>) => (d.dmg[0] + d.dmg[1]) / 2 + d.dmgBonus
 
 export function GearShop({ save, update, kind, onBack, sound }: { save: Save; update: Update; kind: 'forge' | 'armoury'; onBack: () => void; sound: { coins: () => void; ui: () => void; fanfare: () => void } }) {
   const clock = useNow(1000)
   const e = save.estate
-  const benches = slotsAt(e.levels.workshop)
+  const benches = benchCount(e)
   const tabs: string[] = kind === 'forge' ? WEAPON_TYPES.map((w) => w.kind) : ARMOUR_SLOTS
   const g = save.g
   const equippedTab = kind === 'forge' ? item(g.gear.weapon)?.weapon ?? tabs[0] : tabs[0]
@@ -397,29 +530,42 @@ export function GearShop({ save, update, kind, onBack, sound }: { save: Save; up
               <ItemArt it={tabArt(t)} look={g.look} className="gl-cat-art" />
               <strong>{kind === 'forge' ? WEAPON_TYPES.find((w) => w.kind === t)!.name : SLOT_NAMES[t as Slot]}</strong>
               <span>{tabText(t)}</span>
-              {worn && kind === 'forge' && <em>wielded</em>}
+              {worn && kind === 'forge' && <em>In hand</em>}
             </button>
           )
         })}
       </div>
-      <div className="gl-benches">
-        <span>
-          🔨 Workshop benches: {e.crafting.length}/{benches} in use
+      <div className="gl-workshop">
+        <span className="gl-workshop-head">
+          <PlaceIcon id="site-workshop" glyph="🔨" />
+          <span>
+            <strong>Workshop</strong>
+            <small>
+              {e.crafting.length} of {benches} {benches === 1 ? 'bench' : 'benches'} in use
+            </small>
+          </span>
         </span>
         {e.crafting.map((c) => {
           const it = item(c.item)!
           const done = c.end <= clock
           return (
-            <span key={c.id} className={`gl-bench ${done ? 'is-done' : ''}`}>
-              {it.name}: {done ? 'ready' : prettyHours(c.end - clock)}
+            <span key={c.id} className={`gl-workshop-job ${done ? 'is-done' : ''}`}>
+              <span>
+                <strong>{it.name}</strong>
+                <small>{done ? 'Ready to collect' : `${prettyHours(c.end - clock)} to go`}</small>
+              </span>
               {done && (
-                <button className="gl-btn is-small is-primary" onClick={() => collect(c.id)}>
+                <button className="gl-btn is-primary" onClick={() => collect(c.id)}>
                   Collect
                 </button>
               )}
             </span>
           )
         })}
+        <p className="gl-workshop-hint">
+          Buy a blueprint once, then forge from materials (from your estate or the market) for the smith's fee. What you replace is broken down for about a third of its materials.
+          {rules(save).prices !== 1 ? ` ${rules(save).name} prices (×${rules(save).prices}).` : ''}
+        </p>
       </div>
       <div className="gl-shop-grid">
         <aside className="gl-poster gl-mirror">
@@ -488,47 +634,41 @@ export function GearShop({ save, update, kind, onBack, sound }: { save: Save; up
                   )}
                   {why && <span className="gl-req">{why}</span>}
                 </div>
-                <div className="gl-card-foot" onClick={(ev) => ev.stopPropagation()}>
+                <div className="gl-card-foot gl-ware-foot" onClick={(ev) => ev.stopPropagation()}>
                   {owned ? (
-                    <span className="gl-owned">Equipped</span>
+                    <span className="gl-ware-state is-owned">✓ Equipped</span>
                   ) : busy ? (
                     busy.end <= clock ? (
-                      <button className="gl-btn is-primary" onClick={() => collect(busy.id)}>
-                        Collect &amp; equip
-                      </button>
+                      <BuyButton label="Collect & equip" onClick={() => collect(busy.id)} />
                     ) : (
-                      <span className="gl-owned">Forging…</span>
+                      <span className="gl-ware-state">🔨 On the anvil</span>
                     )
                   ) : !known ? (
-                    <>
-                      <span className="gl-coin-badge">
-                        <Gold n={bp} />
-                      </span>
-                      <button className="gl-btn is-primary" disabled={save.gold < bp} onClick={() => buyBlueprint(it)} title="Buy the blueprint once, then forge from materials">
-                        <span className="gl-res">
-                          <PlaceIcon id="blueprint" glyph="📜" />
-                        </span>
-                        Blueprint
-                      </button>
-                    </>
+                    <BuyButton
+                      label="Blueprint"
+                      icon={<PlaceIcon id="blueprint" glyph="📜" />}
+                      cost={bp}
+                      note={save.gold < bp ? 'Not enough gold' : undefined}
+                      disabled={save.gold < bp}
+                      onClick={() => buyBlueprint(it)}
+                    />
                   ) : short ? (
-                    <>
-                      <span className="gl-coin-badge" title="Buy what's missing at today's market prices">
-                        <Gold n={short.cost} />
-                      </span>
-                      <button className="gl-btn" disabled={!short.possible || save.gold < short.cost} title={short.possible ? 'Buy the missing materials at the market' : 'The market is out of something you need today'} onClick={() => (sound.coins(), update((s) => buyMissing(s, need, Date.now())))}>
-                        Buy missing
-                      </button>
-                    </>
+                    <BuyButton
+                      label="Buy missing"
+                      cost={short.cost}
+                      quiet
+                      note={!short.possible ? 'The market is sold out today' : save.gold < short.cost ? 'Not enough gold' : 'Materials at market prices'}
+                      disabled={!short.possible || save.gold < short.cost}
+                      onClick={() => (sound.coins(), update((s) => buyMissing(s, need, Date.now())))}
+                    />
                   ) : (
-                    <>
-                      <span className="gl-coin-badge" title="The smith's fee">
-                        <Gold n={fee} />
-                      </span>
-                      <button className="gl-btn is-primary" disabled={!!why || save.gold < fee || e.crafting.length >= benches} title={e.crafting.length >= benches ? 'Every bench is busy' : undefined} onClick={() => forge(it)}>
-                        Forge
-                      </button>
-                    </>
+                    <BuyButton
+                      label="Forge"
+                      cost={fee}
+                      note={why ? undefined : e.crafting.length >= benches ? 'Every bench is busy' : save.gold < fee ? 'Not enough gold' : undefined}
+                      disabled={!!why || save.gold < fee || e.crafting.length >= benches}
+                      onClick={() => forge(it)}
+                    />
                   )}
                 </div>
               </div>
@@ -536,10 +676,6 @@ export function GearShop({ save, update, kind, onBack, sound }: { save: Save; up
           })}
         </section>
       </div>
-      <p className="gl-muted gl-fine gl-shop-note">
-        Buy a blueprint once, then forge from materials (from your estate or the market) for the smith's fee. What you replace is broken down for about a third of its materials.
-        {rules(save).prices !== 1 ? ` ${rules(save).name} prices (×${rules(save).prices}).` : ''}
-      </p>
     </div>
   )
 }
@@ -611,18 +747,17 @@ export function MageShop({ save, update, onBack, sound }: { save: Save; update: 
                   </div>
                   {why && <span className="gl-req">{why}</span>}
                 </div>
-                <div className="gl-card-foot">
+                <div className="gl-card-foot gl-ware-foot">
                   {owned ? (
-                    <span className="gl-owned">In your spellbook</span>
+                    <span className="gl-ware-state is-owned">✓ In your spellbook</span>
                   ) : (
-                    <>
-                      <span className="gl-coin-badge">
-                        <Gold n={cost} />
-                      </span>
-                      <button className="gl-btn is-primary" disabled={!!why || save.gold < cost} onClick={() => (sound.coins(), update((s) => ({ ...s, gold: s.gold - price(s, sp.price), g: { ...s.g, spells: [...s.g.spells, sp.id] } })))}>
-                        Learn
-                      </button>
-                    </>
+                    <BuyButton
+                      label="Learn"
+                      cost={cost}
+                      note={!why && save.gold < cost ? 'Not enough gold' : undefined}
+                      disabled={!!why || save.gold < cost}
+                      onClick={() => (sound.coins(), update((s) => ({ ...s, gold: s.gold - price(s, sp.price), g: { ...s.g, spells: [...s.g.spells, sp.id] } })))}
+                    />
                   )}
                 </div>
               </div>
@@ -688,13 +823,14 @@ export function Apothecary({ save, update, onBack, sound }: { save: Save; update
                     </span>
                   </div>
                 </div>
-                <div className="gl-card-foot">
-                  <span className="gl-coin-badge">
-                    <Gold n={cost} />
-                  </span>
-                  <button className="gl-btn is-primary" disabled={full || save.gold < cost} title={full ? 'Your belt is full' : undefined} onClick={() => (sound.coins(), update((s) => ({ ...s, gold: s.gold - cost, g: { ...s.g, potions: { ...s.g.potions, [p.id]: s.g.potions[p.id] + 1 } } })))}>
-                    {full ? 'Full' : 'Buy'}
-                  </button>
+                <div className="gl-card-foot gl-ware-foot">
+                  <BuyButton
+                    label="Buy"
+                    cost={cost}
+                    note={full ? 'Your belt is full' : save.gold < cost ? 'Not enough gold' : undefined}
+                    disabled={full || save.gold < cost}
+                    onClick={() => (sound.coins(), update((s) => ({ ...s, gold: s.gold - cost, g: { ...s.g, potions: { ...s.g.potions, [p.id]: s.g.potions[p.id] + 1 } } })))}
+                  />
                 </div>
               </div>
             )
@@ -1006,52 +1142,149 @@ export function Sheet({ save, update, onBack, sound }: { save: Save; update: Upd
 
 // --- Tournament bracket --------------------------------------------------------------------------
 
+const ROUND_NAMES = ['Quarter-finals', 'Semi-finals', 'Final']
+
+type Entrant = { name: string; sub: string; look: Gladiator['look']; gear: Gladiator['gear']; rival: boolean }
+
+/** A face in a bronze ring, or a question mark while the slot is still open. */
+function Medallion({ who }: { who?: Entrant }) {
+  return <span className="gl-medal">{who ? <Portrait look={who.look} gear={who.gear} focus={232} zoom={3.2} face={-1} still /> : <i>?</i>}</span>
+}
+
+function BracketSlot({ id, who, state }: { id?: string; who?: Entrant; state: string }) {
+  return (
+    <div className={`gl-entrant ${state} ${id === 'you' ? 'is-you' : ''}`}>
+      <div className="gl-entrant-plate" title={who?.name}>
+        <Medallion who={who} />
+        <span className="gl-entrant-name">
+          <strong>{who ? who.name : 'To be decided'}</strong>
+          {who && (
+            <small>
+              {id === 'you' ? <em className="gl-tag is-you">You</em> : who.rival ? <em className="gl-tag">Rival</em> : null}
+              {who.sub}
+            </small>
+          )}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 export function Bracket({ save, onBack, onFight, onClaim }: { save: Save; onBack: () => void; onFight: () => void; onClaim: () => void }) {
   const t = save.tournament!
   const L = league(t.league)
   const next = tournamentFoe(t)
-  const champion = t.rounds[t.rounds.length - 1].length === 1 ? t.rounds[t.rounds.length - 1][0] : null
-  const names = ['Quarter-finals', 'Semi-finals', 'Final', 'Champion']
+  const last = t.rounds[t.rounds.length - 1]
+  const champion = last.length === 1 ? last[0] : null
+  const now = Math.min(t.rounds.length - 1, 2)
+  // Every entrant's name, line and looks, worked out once rather than per slot.
+  const who = useMemo(() => {
+    const out: Record<string, Entrant> = {}
+    for (const [id, e] of Object.entries(t.entrants)) {
+      if (e === 'you') out[id] = { name: save.g.name, sub: `Lv ${save.g.level} ${(save.g.archetype && ARCH_TEXT[save.g.archetype]) || 'Gladiator'}`, look: save.g.look, gear: save.g.gear, rival: false }
+      else {
+        const f = foeGladiator(save, e)
+        out[id] = { name: f.name, sub: `Lv ${e.level} ${ARCH_TEXT[e.archetype]}`, look: f.look, gear: f.gear, rival: !!e.rival }
+      }
+    }
+    return out
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t.entrants, save.g, save.rivals, save.difficulty])
+  const foe = next ? who[next.id] : undefined
+  const hp = Math.round(t.hp * 100)
+
   return (
-    <div className="gl-page">
+    <div className="gl-page gl-tourney">
       <PageHead title={`${L.name} Tournament`} onBack={onBack} />
-      <div className="gl-bracket">
-        {[0, 1, 2, 3].map((ri) => {
-          const round = t.rounds[ri]
-          return (
-            <div key={ri} className="gl-round">
-              <h4>{names[ri]}</h4>
-              {round
-                ? round.map((id, i) => (
-                    <div key={id + i} className={`gl-entrant ${id === 'you' ? 'is-you' : ''} ${t.rounds[ri + 1] && !t.rounds[ri + 1].includes(id) ? 'is-out' : ''}`}>
-                      {entrantName(save, t, id)}
-                      {id !== 'you' && (t.entrants[id] as Foe).rival ? <small> rival</small> : null}
-                    </div>
-                  ))
-                : Array.from({ length: [8, 4, 2, 1][ri] }, (_, i) => (
-                    <div key={i} className="gl-entrant is-tbd">
-                      ?
-                    </div>
-                  ))}
+      <div className="gl-panel gl-bracket-panel">
+        <div className={`gl-bout ${champion === 'you' ? 'is-won' : t.out ? 'is-out' : ''}`}>
+          {next && foe ? (
+            <>
+              <Medallion who={foe} />
+              <div className="gl-bout-text">
+                <span className="gl-bout-kicker">Your {ROUND_NAMES[now].toLowerCase().replace(/s$/, '')} bout</span>
+                <strong>
+                  {foe.name}
+                  {foe.rival && <em className="gl-tag">Rival</em>}
+                </strong>
+                <span className="gl-muted">{foe.sub}</span>
+              </div>
+              <div className="gl-bout-hp">
+                <span>Your health</span>
+                <Bar kind="hp" value={hp} max={100} label={`${hp}%`} />
+                <small className="gl-muted">{hp < 100 ? 'Carried over from the last bout' : 'Fresh for the bout'}</small>
+              </div>
+              <button className="gl-btn is-primary is-big gl-bout-go" onClick={onFight}>
+                ⚔ Fight
+              </button>
+            </>
+          ) : champion === 'you' ? (
+            <>
+              <span className="gl-bout-cup">
+                <PlaceIcon id="tournament" glyph="🏆" />
+              </span>
+              <div className="gl-bout-text">
+                <span className="gl-bout-kicker">Victory</span>
+                <strong>You are champion of the {L.name}!</strong>
+                <span className="gl-muted">The crowd is on its feet. Collect your prize.</span>
+              </div>
+              <button className="gl-btn is-primary is-big gl-bout-go" onClick={onClaim}>
+                Claim <Gold n={L.prize} />
+              </button>
+            </>
+          ) : (
+            <>
+              <Medallion who={who.you} />
+              <div className="gl-bout-text">
+                <span className="gl-bout-kicker">Knocked out</span>
+                <strong>Your tournament ends in the {ROUND_NAMES[Math.min(t.rounds.length - 2, 2)]?.toLowerCase() ?? 'arena'}</strong>
+                <span className="gl-muted">Train up and try again: the entry fee is gone, but the experience is yours.</span>
+              </div>
+              <button className="gl-btn is-big gl-bout-go" onClick={onClaim}>
+                Leave
+              </button>
+            </>
+          )}
+        </div>
+        <div className="gl-bracket">
+          {ROUND_NAMES.map((name, ri) => {
+            const round = t.rounds[ri]
+            const won = t.rounds[ri + 1]
+            return (
+              <section key={ri} className={`gl-round ${ri === now && !champion && !t.out ? 'is-now' : ''}`}>
+                <h4>{name}</h4>
+                <div className="gl-round-body">
+                  {Array.from({ length: 4 >> ri }, (_, m) => {
+                    const pair = [round?.[2 * m], round?.[2 * m + 1]]
+                    const winner = won?.[m]
+                    const live = !winner && !t.out && pair.includes('you')
+                    return (
+                      <div key={m} className={`gl-match ${winner ? 'is-decided' : ''} ${winner === 'you' ? 'is-yours' : ''} ${live ? 'is-live' : ''}`}>
+                        {live && <span className="gl-match-flag">Your bout</span>}
+                        {pair.map((id, k) => (
+                          <BracketSlot key={k} id={id} who={id ? who[id] : undefined} state={!id ? 'is-tbd' : !winner ? '' : winner === id ? 'is-won' : 'is-out'} />
+                        ))}
+                      </div>
+                    )
+                  })}
+                </div>
+              </section>
+            )
+          })}
+          <section className="gl-round is-champ">
+            <h4>Champion</h4>
+            <div className="gl-round-body">
+              <div className={`gl-champ ${champion ? 'is-crowned' : ''} ${champion === 'you' ? 'is-you' : ''}`}>
+                <PlaceIcon id="tournament" glyph="🏆" />
+                <Medallion who={champion ? who[champion] : undefined} />
+                <strong>{champion ? who[champion].name : 'Who will it be?'}</strong>
+                <span className="gl-champ-prize">
+                  Prize <Gold n={L.prize} />
+                </span>
+              </div>
             </div>
-          )
-        })}
-      </div>
-      <div className="gl-bracket-foot">
-        <span>Health carried into the next bout: {Math.round(t.hp * 100)}%</span>
-        {next ? (
-          <button className="gl-btn is-primary is-big" onClick={onFight}>
-            Fight {entrantName(save, t, next.id)}
-          </button>
-        ) : champion === 'you' ? (
-          <button className="gl-btn is-primary is-big" onClick={onClaim}>
-            Claim the prize: <Gold n={L.prize} />
-          </button>
-        ) : (
-          <button className="gl-btn is-big" onClick={onClaim}>
-            {t.out ? 'Knocked out. Leave the tournament' : 'Leave'}
-          </button>
-        )}
+          </section>
+        </div>
       </div>
     </div>
   )

@@ -234,14 +234,43 @@
   transform: translateX(50%);
 }
 .gl-audio button {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  border: 1.5px solid rgba(0, 0, 0, 0.5);
-  background: rgba(246, 231, 196, 0.85);
+  border: 2px solid #3a220e;
+  background: radial-gradient(circle at 40% 30%, #f8e2a8, #c89a58 55%, #7a4e1a);
+  color: #2a1a0e;
   cursor: pointer;
   font-size: 14px;
   line-height: 1;
+  box-shadow: inset 0 1px 0 rgba(255, 244, 210, 0.8), 0 2px 0 #1a0d06, 0 3px 6px rgba(0, 0, 0, 0.35);
+}
+.gl-audio button:hover {
+  filter: brightness(1.12);
+}
+.gl-audio button:active {
+  transform: translateY(2px);
+  box-shadow: inset 0 1px 0 rgba(255, 244, 210, 0.6);
+}
+/* In town the buttons sit in the top bar's right end, which leaves room for them. */
+.gl-root:has(> .gl-topbar) .gl-audio {
+  top: 14px;
+}
+@container (max-width: 480px) {
+  .gl-root:has(> .gl-topbar) .gl-audio {
+    top: 16px;
+    right: 8px;
+  }
+  .gl-root:has(> .gl-topbar) .gl-audio button {
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
+  }
+  /* The bar can't query its own width, so its spacing follows the game's. */
+  .gl-root .gl-topbar {
+    gap: 5px;
+    padding-right: 72px;
+  }
 }
 
 /* --- Title ------------------------------------------------------------------------------------- */
@@ -450,103 +479,521 @@
   max-width: 760px;
 }
 
+/* The top bar: a bronze-trimmed strip of dark wood with the gladiator's medallion, XP, purse and
+   reminders of what waits in town. It is a container of its own so it can drop the less
+   important bits as the window narrows instead of wrapping. */
 .gl-topbar {
+  container: gl-top / inline-size;
+  position: relative;
+  z-index: 2;
+  flex: none;
   display: flex;
   align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  padding: 6px 80px 6px 10px;
-  background: linear-gradient(180deg, rgba(42, 22, 8, 0.92), rgba(42, 22, 8, 0.78));
+  gap: 12px;
+  min-height: 60px;
+  padding: 6px 92px 6px 10px;
   color: #fbe8c4;
-  border-bottom: 2px solid var(--gl-bronze);
+  background:
+    radial-gradient(circle, #f2cf86 0 1.4px, #7a4e1a 2px, transparent 2.6px) 14px calc(100% - 1px) / 36px 6px repeat-x,
+    linear-gradient(180deg, rgba(255, 220, 160, 0.14), transparent 45%),
+    linear-gradient(180deg, #4e2e14, #321c0a 70%, #26150a);
+  border-bottom: 3px solid var(--gl-bronze);
+  box-shadow: inset 0 -1px 0 #5a3a14, 0 1px 0 #1a0d06, 0 4px 12px rgba(0, 0, 0, 0.45);
 }
-.gl-top-name {
+.gl-top-menu {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  border: 2px solid #3a220e;
+  background: linear-gradient(180deg, #f0cf8a, #b07a34 55%, #7a4e1a);
+  color: #2a1a0e;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 244, 210, 0.8), 0 2px 0 #1a0d06;
+}
+.gl-top-menu:hover,
+.gl-top-alert:hover {
+  filter: brightness(1.12);
+}
+.gl-top-menu:active {
+  transform: translateY(2px);
+  box-shadow: inset 0 1px 0 rgba(255, 244, 210, 0.6);
+}
+/* The medallion: the gladiator's face in a bronze ring, the level on a red seal. */
+.gl-top-medal {
+  position: relative;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+}
+.gl-top-face {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 30%, #b0723a, #6a3a18 60%, #3a1e0a);
+  box-shadow: 0 0 0 2px #e2b05a, 0 0 0 4px #3a220e, inset 0 2px 6px rgba(0, 0, 0, 0.45), 0 3px 6px rgba(0, 0, 0, 0.5);
+  transition: box-shadow 0.15s;
+}
+.gl-top-medal:hover .gl-top-face {
+  box-shadow: 0 0 0 2px #ffdc8a, 0 0 0 4px #3a220e, inset 0 2px 6px rgba(0, 0, 0, 0.45), 0 0 14px rgba(255, 200, 90, 0.7);
+}
+.gl-top-medal b {
+  position: absolute;
+  right: -7px;
+  bottom: -5px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  font-family: var(--gl-display);
+  font-size: 12px;
+  color: #fff4dc;
+  background: linear-gradient(180deg, #c8382a, #7a1812);
+  border: 2px solid #e2b05a;
+  box-shadow: 0 2px 3px rgba(0, 0, 0, 0.5);
+}
+/* The name takes whatever room is left (up to a point), so it gives way before the pills do. */
+.gl-top-who {
+  flex: 1 1 0;
+  max-width: 300px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
+  gap: 2px;
   line-height: 1.15;
-  min-width: 0;
 }
-.gl-top-name strong {
+.gl-top-who strong,
+.gl-top-who > span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gl-top-who strong {
   font-family: var(--gl-display);
   font-size: 15px;
+  letter-spacing: 0.04em;
+  color: #ffe6a8;
+  text-shadow: 0 1px 0 #000;
 }
-.gl-top-name span {
+.gl-top-who > span {
   font-size: 11px;
-  opacity: 0.8;
+  color: #e3c898;
 }
-.gl-top-level {
+.gl-top-who > span em {
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--gl-red);
+  color: #fff;
+  font-style: normal;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.gl-top-xp .gl-bar {
+  height: 13px;
+  margin-top: 2px;
+  box-shadow: 0 0 0 1px rgba(226, 176, 90, 0.45);
+}
+.gl-top-xp .gl-bar > em {
+  font-size: 9px;
+  letter-spacing: 0.03em;
+}
+/* Reminders: lit and pulsing when something waits, a quiet countdown while it's still running. */
+/* The pills give way rather than push into the purse: the row may shrink and clips what can't
+   fit (the padding keeps the glow of a lit pill inside the clip). */
+.gl-top-alerts {
+  flex: 0 1 auto;
+  min-width: 0;
   display: flex;
-  align-items: center;
   gap: 6px;
-  min-width: 120px;
+  margin: -6px 0 -6px auto;
+  padding: 6px 4px;
+  overflow: hidden;
 }
-.gl-top-level .gl-bar {
-  width: 90px;
-  height: 8px;
+/* One button standing in for the pills on narrow bars; it opens them as a list. */
+.gl-top-more {
+  position: relative;
+  flex: none;
+  display: none;
+  margin: 0 4px 0 auto;
 }
-.gl-fame,
-.gl-record {
+.gl-top-more-list {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: -4px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  border: 2px solid var(--gl-bronze);
+  background: linear-gradient(180deg, #4e2e14, #26150a);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.55);
+}
+.gl-top-more-list .gl-top-alert {
+  justify-content: flex-start;
+}
+.gl-top-alert {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  padding: 0 10px 0 3px;
+  border-radius: 17px;
+  border: 1.5px solid rgba(226, 176, 90, 0.4);
+  background: rgba(0, 0, 0, 0.3);
+  color: #e3c898;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.gl-top-alert img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.6));
+}
+.gl-top-alert b {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: var(--gl-red);
+  color: #fff4dc;
+  font-size: 11px;
+  font-family: system-ui, sans-serif;
+}
+.gl-top-alert.is-hot {
+  border-color: var(--gl-gold);
+  background: linear-gradient(180deg, rgba(168, 40, 30, 0.6), rgba(90, 14, 8, 0.6));
+  color: #fff4dc;
+  animation: gl-top-glow 2.4s ease-in-out infinite;
+}
+@keyframes gl-top-glow {
+  50% {
+    box-shadow: 0 0 10px rgba(255, 200, 90, 0.65);
+  }
+}
+/* The purse: gold, fame and the record on little parchment plates. */
+.gl-top-purse {
+  flex: none;
+  display: flex;
+  gap: 6px;
+}
+.gl-top-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 10px 0 4px;
+  border-radius: 6px;
+  border: 1.5px solid #3a220e;
+  background: linear-gradient(180deg, #f8ebcc, #dcc08c);
+  color: var(--gl-ink);
+  font-family: var(--gl-display);
   font-weight: 700;
+  font-size: 13px;
+  white-space: nowrap;
+  box-shadow: inset 0 1px 0 rgba(255, 252, 235, 0.9), 0 2px 0 #1a0d06;
+}
+.gl-top-stat img {
+  width: 28px;
+  height: 28px;
+  margin: -4px 0;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.45));
+}
+.gl-top-stat.is-record {
+  gap: 1px;
+  padding: 0 9px;
+}
+.gl-top-stat.is-record b {
+  color: #2e6a1a;
+}
+.gl-top-stat.is-record b.is-lost {
+  color: var(--gl-red);
+}
+.gl-top-stat.is-record i {
+  margin-right: 5px;
+  font-style: normal;
+  font-size: 10px;
+  color: var(--gl-ink-soft);
+}
+.gl-top-stat.is-record i:last-child {
+  margin-right: 0;
+}
+/* Narrower: the pills drop their words, the record goes, then the pills fold into one button
+   that opens them as a list; on a phone fame goes too and the name may take two lines. */
+/* (Widths are of the bar's content box, inside the room kept for the sound buttons.) */
+@container gl-top (max-width: 1000px) {
+  .gl-top-alerts .gl-top-alert {
+    padding-right: 3px;
+  }
+  .gl-top-alerts .gl-top-alert span {
+    display: none;
+  }
+}
+@container gl-top (max-width: 900px) {
+  .gl-top-stat.is-record {
+    display: none;
+  }
+}
+@container gl-top (max-width: 640px) {
+  .gl-top-alerts {
+    display: none;
+  }
+  .gl-top-more {
+    display: block;
+  }
+  .gl-top-more > .gl-top-alert {
+    width: 34px;
+    padding: 0;
+    justify-content: center;
+  }
+  .gl-top-more > .gl-top-alert b {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    min-width: 16px;
+    height: 16px;
+    font-size: 10px;
+  }
+}
+@container gl-top (max-width: 480px) {
+  .gl-top-stat.is-fame,
+  .gl-top-who > span {
+    display: none;
+  }
+  .gl-top-menu {
+    width: 30px;
+    height: 30px;
+  }
+  .gl-top-medal {
+    width: 42px;
+    height: 42px;
+  }
+  .gl-top-who strong {
+    font-size: 11.5px;
+    letter-spacing: 0;
+    line-height: 1.1;
+    white-space: normal;
+    overflow-wrap: break-word;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .gl-top-xp .gl-bar > em {
+    font-size: 8px;
+    letter-spacing: 0;
+  }
+  .gl-top-more > .gl-top-alert {
+    width: 30px;
+    height: 30px;
+  }
+  .gl-top-more > .gl-top-alert img {
+    width: 24px;
+    height: 24px;
+  }
+  .gl-top-stat {
+    font-size: 12px;
+    padding-right: 7px;
+  }
+  .gl-top-stat img {
+    width: 24px;
+    height: 24px;
+  }
 }
 
 /* --- Hub --------------------------------------------------------------------------------------- */
 
+/* The town square: the gladiator on the left of the stage, any tournament notice on the right,
+   and every place in town on one bronze-railed dock along the bottom. */
 .gl-hub {
+  container: gl-hub / inline-size;
   flex: 1;
-  display: grid;
-  grid-template-columns: minmax(150px, 0.8fr) 2fr;
-  gap: 12px;
-  padding: 12px 16px 16px;
-  align-items: end;
-}
-.gl-hub-hero {
-  align-self: stretch;
-  min-height: 240px;
+  min-height: 0;
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
+}
+.gl-hub-stage {
+  flex: 1;
+  min-height: 190px;
+  display: grid;
+  grid-template-columns: clamp(140px, 24%, 340px) 1fr;
+  grid-template-rows: 1fr;
+  align-items: end;
+  gap: 16px;
+  /* Lined up with the plaques on the dock below. */
+  padding: 12px max(24px, calc((100% - 1480px) / 2)) 0;
+}
+/* The gladiator stands on the dock, as tall as the stage allows; the canvas keeps the figure's
+   proportions and may spill past its column into the empty square rather than crop a raised arm. */
+.gl-hub-hero {
+  position: relative;
+  align-self: stretch;
+  min-height: 0;
   filter: drop-shadow(0 10px 10px rgba(0, 0, 0, 0.45));
 }
 .gl-hub-hero .gl-portrait {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: auto;
   height: 100%;
-  max-height: 620px;
+  max-height: 560px;
+  aspect-ratio: 3 / 4;
 }
-.gl-hub-places {
+/* The tournament notice: a parchment bill pinned up in the square, not a shouting red slab. */
+.gl-hub-notice {
+  justify-self: end;
+  margin-bottom: 16px;
+  max-width: 480px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 10px 10px;
+  text-align: left;
+  color: var(--gl-ink);
+  cursor: pointer;
+  border: 2px solid #3a220e;
+  border-left: 6px solid var(--gl-red);
+  border-radius: 8px;
+  background: radial-gradient(120% 120% at 30% 0%, #fff8e1, #ecd6aa 60%, #d9bc86);
+  box-shadow: inset 0 0 0 2px rgba(255, 236, 190, 0.75), 0 8px 20px rgba(0, 0, 0, 0.45);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.gl-hub-notice:hover {
+  transform: translateY(-3px);
+  box-shadow: inset 0 0 0 2px rgba(255, 236, 190, 0.85), 0 10px 24px rgba(0, 0, 0, 0.5), 0 0 18px rgba(255, 200, 90, 0.5);
+}
+.gl-hub-notice img {
+  flex: none;
+  width: 58px;
+  height: 58px;
+  object-fit: contain;
+  filter: drop-shadow(0 3px 3px rgba(0, 0, 0, 0.45));
+}
+.gl-hub-notice-text {
+  min-width: 0;
+  line-height: 1.2;
+}
+.gl-hub-notice-text > * {
+  display: block;
+}
+.gl-hub-notice-text small {
+  font-family: var(--gl-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gl-red-2);
+}
+.gl-hub-notice-text strong {
+  margin: 1px 0 2px;
+  font-family: var(--gl-display);
+  font-size: 17px;
+  color: #3a1a08;
+}
+.gl-hub-notice-text span {
+  font-size: 12px;
+  color: var(--gl-ink-soft);
+}
+.gl-hub-notice em {
+  flex: none;
+  padding: 7px 12px;
+  border-radius: 5px;
+  border: 1.5px solid #5a0e08;
+  background: linear-gradient(180deg, #c8382a, #8e1e14);
+  color: #fff4dc;
+  font-family: var(--gl-display);
+  font-style: normal;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  box-shadow: 0 2px 0 #5a0e08;
+}
+/* The dock: a dark wooden beam with a riveted bronze rail, edge to edge; the plaques on it stay
+   at a sensible width on very wide windows. */
+.gl-hub-dock {
+  flex: none;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
-  gap: 10px;
-  align-content: end;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 8px;
+  padding: 14px max(12px, calc((100% - 1480px) / 2)) calc(12px + env(safe-area-inset-bottom));
+  background:
+    radial-gradient(circle, #f2cf86 0 1.4px, #7a4e1a 2px, transparent 2.6px) 18px 2px / 36px 6px repeat-x,
+    linear-gradient(180deg, rgba(255, 220, 160, 0.14), transparent 35%),
+    linear-gradient(180deg, #5a3618, #3e2410 55%, #2a180a);
+  border-top: 3px solid var(--gl-bronze);
+  box-shadow: inset 0 1px 0 #f2cf86, 0 -1px 0 #3a220e, 0 -6px 16px rgba(0, 0, 0, 0.35);
 }
 /* A bronze-rimmed plaque: the painted icon on a dark dish, the name engraved below. */
 .gl-place {
   position: relative;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 10px 8px 9px;
+  padding: 10px 6px 9px;
   text-align: center;
   color: var(--gl-ink);
   cursor: pointer;
-  border: 2px solid #5a3a14;
-  border-radius: 10px;
-  background:
-    radial-gradient(120% 80% at 50% 0%, rgba(255, 248, 225, 0.95), rgba(236, 214, 170, 0.95) 60%, rgba(214, 184, 128, 0.96));
+  border: 2px solid #2a1606;
+  border-radius: 8px;
+  background: radial-gradient(120% 90% at 50% 0%, #fff8e1, #ecd6aa 60%, #d6b880);
   box-shadow:
-    inset 0 0 0 2px rgba(255, 236, 190, 0.7),
+    inset 0 0 0 2px rgba(255, 236, 190, 0.75),
     inset 0 0 0 4px rgba(176, 122, 52, 0.55),
-    0 6px 14px rgba(20, 10, 0, 0.4);
+    0 3px 0 #1a0d06,
+    0 6px 12px rgba(0, 0, 0, 0.35);
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 .gl-place:hover {
-  transform: translateY(-4px);
+  transform: translateY(-5px);
   box-shadow:
-    inset 0 0 0 2px rgba(255, 236, 190, 0.8),
-    inset 0 0 0 4px rgba(226, 172, 72, 0.8),
-    0 10px 22px rgba(20, 10, 0, 0.5),
-    0 0 18px rgba(255, 200, 90, 0.45);
+    inset 0 0 0 2px rgba(255, 236, 190, 0.85),
+    inset 0 0 0 4px rgba(226, 172, 72, 0.85),
+    0 8px 0 -3px #1a0d06,
+    0 12px 22px rgba(0, 0, 0, 0.45),
+    0 0 18px rgba(255, 200, 90, 0.5);
 }
 .gl-place:active {
-  transform: translateY(-1px);
+  transform: translateY(1px);
+  box-shadow: inset 0 0 0 2px rgba(255, 236, 190, 0.75), inset 0 0 0 4px rgba(176, 122, 52, 0.55), 0 1px 0 #1a0d06;
+}
+.gl-place:focus-visible,
+.gl-hub-notice:focus-visible {
+  outline: 3px solid var(--gl-gold);
+  outline-offset: 2px;
+}
+/* Something waits there: a gold ring around the plaque as well as the seal. */
+.gl-place.is-ready {
+  border-color: #7a4e1a;
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 236, 190, 0.75),
+    inset 0 0 0 4px rgba(226, 172, 72, 0.85),
+    0 3px 0 #1a0d06,
+    0 0 0 2px var(--gl-gold),
+    0 0 16px rgba(255, 196, 80, 0.6);
 }
 .gl-place-icon {
   position: relative;
@@ -574,57 +1021,163 @@
   font-style: normal;
   font-size: 34px;
 }
+.gl-place .gl-place-icon {
+  flex: none;
+  width: 64px;
+  height: 64px;
+}
+.gl-place .gl-place-icon img {
+  width: 78px;
+  height: 78px;
+  margin-top: -12px;
+}
 .gl-place strong {
   font-family: var(--gl-display);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.15;
   color: #3a1a08;
 }
-.gl-place span {
+.gl-place-text {
   font-size: 11px;
   line-height: 1.3;
   color: var(--gl-ink-soft);
 }
-.gl-place.is-hot {
-  grid-column: 1 / -1;
-  flex-direction: row;
-  justify-content: center;
-  gap: 14px;
-  text-align: left;
-  background: linear-gradient(180deg, #c8382a, #8e1e14);
-  color: #fff4dc;
-  border-color: #5a0e08;
-  box-shadow: inset 0 0 0 2px rgba(255, 200, 160, 0.4), 0 6px 14px rgba(20, 10, 0, 0.4);
-}
-.gl-place.is-hot .gl-place-icon {
-  width: 56px;
-  height: 56px;
-  margin: 0;
-}
-.gl-place.is-hot .gl-place-icon img {
-  width: 68px;
-  height: 68px;
-  margin-top: -10px;
-}
-.gl-place.is-hot strong {
-  color: #fff4dc;
-}
-.gl-place.is-hot span {
-  color: #ffe0c0;
-}
+/* A red wax seal with the count, pressed into the plaque's corner. */
 .gl-badge {
   position: absolute;
-  top: -7px;
-  right: -7px;
+  top: 4px;
+  right: 4px;
   min-width: 22px;
   height: 22px;
+  padding: 0 5px;
   border-radius: 11px;
   display: grid;
   place-items: center;
-  background: var(--gl-red);
-  color: #fff;
+  background: radial-gradient(circle at 35% 30%, #e0503a, #a8281e 55%, #6a120c);
+  color: #fff4dc;
+  font-family: system-ui, sans-serif;
   font-size: 12px;
-  border: 2px solid #fff4dc;
+  border: 1.5px solid #f2cf86;
+  box-shadow: 0 2px 3px rgba(0, 0, 0, 0.45);
+}
+@container gl-hub (max-width: 1250px) {
+  .gl-place-text {
+    display: none;
+  }
+  .gl-place .gl-place-icon {
+    width: 56px;
+    height: 56px;
+  }
+  .gl-place .gl-place-icon img {
+    width: 68px;
+    height: 68px;
+    margin-top: -10px;
+  }
+}
+@container gl-hub (max-width: 900px) {
+  .gl-hub-stage {
+    gap: 10px;
+    padding: 8px 12px 0;
+  }
+  .gl-hub-dock {
+    gap: 5px;
+    padding: 12px 8px calc(8px + env(safe-area-inset-bottom));
+  }
+  .gl-place {
+    padding: 7px 3px 7px;
+  }
+  .gl-place .gl-place-icon {
+    width: 44px;
+    height: 44px;
+    margin-bottom: 3px;
+  }
+  .gl-place .gl-place-icon img {
+    width: 54px;
+    height: 54px;
+    margin-top: -8px;
+  }
+  .gl-place strong {
+    font-size: 11px;
+    letter-spacing: 0;
+  }
+  .gl-badge {
+    top: 2px;
+    right: 2px;
+    min-width: 18px;
+    height: 18px;
+    font-size: 11px;
+  }
+  .gl-hub-notice {
+    margin-bottom: 10px;
+    gap: 10px;
+  }
+  .gl-hub-notice img {
+    width: 44px;
+    height: 44px;
+  }
+  .gl-hub-notice-text strong {
+    font-size: 15px;
+  }
+}
+/* A phone held upright: the notice across the top, the gladiator centred below it, and the
+   places as a three-by-three grid of wide buttons. */
+@container gl-hub (max-width: 600px) {
+  .gl-hub-stage {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .gl-hub-notice {
+    grid-row: 1;
+    justify-self: stretch;
+    align-self: start;
+    max-width: none;
+    margin: 0;
+  }
+  .gl-hub-hero {
+    grid-row: 2;
+  }
+  .gl-hub-hero .gl-portrait {
+    left: 50%;
+    transform: translateX(-50%);
+  }
+  .gl-hub-notice em {
+    display: none;
+  }
+  .gl-hub-dock {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .gl-place {
+    min-height: 64px;
+    padding: 8px 4px 7px;
+  }
+  .gl-place:hover {
+    transform: none;
+  }
+  .gl-place .gl-place-icon {
+    width: 40px;
+    height: 40px;
+  }
+  .gl-place .gl-place-icon img {
+    width: 50px;
+    height: 50px;
+    margin-top: -8px;
+  }
+}
+/* A phone on its side: little height to spare, so slimmer plaques. */
+@media (max-height: 480px) {
+  .gl-hub-stage {
+    min-height: 150px;
+  }
+  .gl-place .gl-place-icon {
+    width: 36px;
+    height: 36px;
+  }
+  .gl-place .gl-place-icon img {
+    width: 44px;
+    height: 44px;
+    margin-top: -6px;
+  }
 }
 
 /* --- Arena board ------------------------------------------------------------------------------- */
@@ -973,15 +1526,94 @@
   text-align: center;
 }
 .gl-cat em {
-  position: absolute;
-  top: 4px;
-  right: 6px;
+  margin-top: 3px;
+  padding: 1px 7px;
+  border-radius: 8px;
   font-style: normal;
-  font-size: 9px;
+  font-size: 9.5px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #2f6a1a;
+  white-space: nowrap;
+  color: #fff4dc;
+  background: #2f6a1a;
   font-weight: 700;
+}
+
+/* The workshop: benches in use, what's on them, and how forging works, on parchment so it reads
+   over the busy backdrop. */
+.gl-workshop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 2px solid #5a3a14;
+  background: linear-gradient(180deg, rgba(250, 240, 214, 0.96), rgba(232, 214, 176, 0.96));
+  box-shadow: inset 0 0 0 2px rgba(255, 236, 190, 0.6), 0 5px 12px rgba(20, 10, 0, 0.35);
+}
+.gl-workshop-head,
+.gl-workshop-job {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.gl-workshop-head > span,
+.gl-workshop-job > span {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+.gl-workshop-head strong {
+  font-family: var(--gl-display);
+  font-size: 14px;
+  color: var(--gl-red-2);
+}
+.gl-workshop small {
+  font-size: 12px;
+  color: var(--gl-ink-soft);
+}
+.gl-workshop-head .gl-place-icon {
+  width: 40px;
+  height: 40px;
+  margin: 0;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.6), 0 0 0 2px #b07a34, 0 0 0 3px #5a3a14;
+}
+.gl-workshop-head .gl-place-icon img {
+  width: 46px;
+  height: 46px;
+  margin-top: -6px;
+}
+.gl-workshop-head .gl-place-icon i {
+  font-size: 20px;
+}
+.gl-workshop-job {
+  padding: 4px 6px 4px 12px;
+  min-height: 44px;
+  border-radius: 10px;
+  border: 1px solid rgba(122, 78, 26, 0.35);
+  background: rgba(90, 58, 20, 0.1);
+}
+.gl-workshop-job strong {
+  font-size: 13px;
+}
+.gl-workshop-job.is-done {
+  border-color: #2a6a1a;
+  background: rgba(106, 208, 74, 0.2);
+}
+.gl-workshop-job.is-done small {
+  color: #2a6a1a;
+  font-weight: 700;
+}
+.gl-workshop-job .gl-btn {
+  min-height: 36px;
+}
+.gl-workshop-hint {
+  flex: 1 1 320px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--gl-ink-soft);
 }
 
 /* The mirror and the wares. */
@@ -1030,6 +1662,107 @@
 .gl-gain {
   font-weight: 700;
   font-size: 12px;
+}
+
+.gl-ware .gl-job-head strong {
+  font-size: 12.5px;
+}
+
+/* A ware's foot: an optional note, then one full-width button with the price inside it. */
+.gl-ware-foot {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 4px;
+  padding-top: 6px;
+}
+.gl-buy-note {
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
+  color: var(--gl-ink-soft);
+}
+.gl-buy {
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  min-height: 48px;
+  padding: 5px 8px;
+}
+.gl-buy-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  max-width: 100%;
+  font-size: 13px;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.gl-buy-icon .gl-place-icon {
+  width: 20px;
+  height: 20px;
+  margin: -3px 0;
+  background: none;
+  box-shadow: none;
+}
+.gl-buy-icon .gl-place-icon img {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+}
+.gl-buy-icon .gl-place-icon i {
+  font-size: 13px;
+}
+.gl-buy-cost {
+  font-family: var(--gl-body);
+  font-size: 12px;
+  letter-spacing: 0;
+}
+.gl-buy-cost .gl-gold i {
+  width: 11px;
+  height: 11px;
+}
+.gl-buy.is-primary .gl-buy-cost {
+  color: #ffe6a8;
+}
+.gl-ware-state {
+  display: grid;
+  place-items: center;
+  min-height: 48px;
+  border-radius: 6px;
+  border: 1.5px dashed rgba(122, 78, 26, 0.45);
+  font-family: var(--gl-display);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--gl-ink-soft);
+}
+.gl-ware-state.is-owned {
+  border: 1.5px solid rgba(42, 106, 26, 0.55);
+  background: rgba(106, 208, 74, 0.18);
+  color: #2a6a1a;
+}
+
+/* Narrow windows and phones: the categories become one row to swipe through rather than a wall
+   of tiles above the wares. */
+@container (max-width: 720px) {
+  .gl-cats {
+    flex: none;
+    grid-auto-flow: column;
+    grid-template-columns: none;
+    grid-auto-columns: 100px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    padding: 4px 2px 8px;
+    margin: -4px -2px 0;
+  }
+  .gl-cat {
+    scroll-snap-align: start;
+  }
+  .gl-cat:hover {
+    transform: none;
+  }
 }
 /* Spell and potion cards: the painted icon floating in a glow of its own colour. */
 .gl-icon-art {
@@ -1123,11 +1856,6 @@
 .gl-mirror > .gl-bar {
   align-self: stretch;
   margin: 2px 12px 6px;
-}
-
-.gl-shop-note {
-  color: #fff2d8;
-  text-shadow: 0 1px 3px #000;
 }
 
 .gl-tabs {
@@ -1404,34 +2132,48 @@
   align-items: center;
   gap: 2px 8px;
 }
+/* The storehouse: every material, grouped; tap it for the names. */
 .gl-storehouse {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 12px;
-  padding: 6px 12px;
+  align-items: center;
+  gap: 4px 0;
+  padding: 4px 6px;
   border-radius: 10px;
   background: rgba(246, 234, 206, 0.92);
   border: 2px solid #5a3a14;
   box-shadow: inset 0 0 0 2px rgba(255, 236, 190, 0.6);
+  color: var(--gl-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.gl-store-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  padding: 0 10px;
+}
+.gl-store-group + .gl-store-group {
+  border-left: 1.5px solid rgba(122, 78, 26, 0.35);
+}
+.gl-store-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 28px;
+}
+.gl-store-item em {
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--gl-ink-soft);
+}
+.gl-storehouse.is-open .gl-store-group {
+  gap: 2px 14px;
 }
 .gl-storehouse .gl-res {
   font-size: 13px;
-}
-.gl-sites {
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-}
-.gl-site .gl-icon-art {
-  height: 96px;
-}
-.gl-site .gl-icon-art .gl-place-icon,
-.gl-site .gl-icon-art .gl-place-icon img {
-  width: 84px;
-  height: 84px;
-}
-.gl-joblist {
-  display: grid;
-  gap: 4px;
-  margin-top: 4px;
 }
 .gl-job {
   display: grid;
@@ -1476,16 +2218,6 @@ button.gl-job:disabled {
   color: #2a6a1a;
   font-weight: 700;
 }
-.gl-site-foot {
-  flex-wrap: wrap;
-}
-.gl-upcost {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 8px;
-  font-size: 12px;
-}
 .gl-trade-rows {
   display: grid;
   gap: 6px;
@@ -1502,29 +2234,6 @@ button.gl-job:disabled {
   align-items: center;
   gap: 4px;
   font-size: 13px;
-}
-.gl-benches {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 12px;
-  padding: 6px 12px;
-  border-radius: 10px;
-  font-size: 12.5px;
-  color: #fff2d8;
-  background: rgba(24, 12, 4, 0.75);
-  border: 1px solid rgba(176, 122, 52, 0.6);
-}
-.gl-bench {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.08);
-}
-.gl-bench.is-done {
-  background: rgba(106, 208, 74, 0.25);
 }
 .gl-recipe {
   display: flex;
@@ -1797,62 +2506,505 @@ button.gl-job:disabled {
   background: linear-gradient(180deg, #fff1c4, #e8c46a);
 }
 
-.gl-bracket {
+/* The bracket sits on one parchment panel: the next bout on top, then the rounds left to right,
+   each slot exactly halfway between the two that feed it, so the connector lines meet. */
+.gl-bracket-panel {
+  --gap: 44px;
+  --line: rgba(122, 78, 26, 0.55);
+  --win: #c8952a;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 14px 18px 18px;
+}
+
+/* A bronze ring holding a face. */
+.gl-medal {
+  flex: none;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: radial-gradient(circle at 50% 35%, #8a5a2c, #3a220e 75%);
+  box-shadow: 0 0 0 2px var(--gl-bronze), 0 0 0 3px #5a3a14;
+}
+.gl-medal i {
+  font-style: normal;
+  font-family: var(--gl-display);
+  font-weight: 700;
+  color: rgba(255, 236, 190, 0.6);
+}
+.gl-tag {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #fff4dc;
+  background: var(--gl-red-2);
+}
+.gl-tag.is-you {
+  background: var(--gl-bronze-2);
+}
+
+/* The next bout: who, how healthy you are, and the button. */
+.gl-bout {
+  display: flex;
   align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 2px solid #5a3a14;
+  background: linear-gradient(180deg, rgba(60, 30, 10, 0.92), rgba(36, 18, 6, 0.92));
+  box-shadow: inset 0 0 0 2px rgba(176, 122, 52, 0.45);
+  color: #fbe8c4;
+}
+.gl-bout > .gl-medal {
+  width: 58px;
+  height: 58px;
+  box-shadow: 0 0 0 3px var(--gl-red), 0 0 0 5px #3a0a06;
+}
+.gl-bout.is-out > .gl-medal {
+  filter: grayscale(0.9);
+  box-shadow: 0 0 0 3px #6a5038, 0 0 0 5px #2a1a0e;
+}
+.gl-bout-cup .gl-place-icon {
+  width: 58px;
+  height: 58px;
+  margin: 0;
+}
+.gl-bout-cup .gl-place-icon img {
+  width: 70px;
+  height: 70px;
+  margin-top: -10px;
+}
+.gl-bout-text {
+  flex: 1 1 200px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.gl-bout-kicker {
+  font-family: var(--gl-display);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gl-gold);
+}
+.gl-bout-text strong {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-family: var(--gl-display);
+  font-size: 19px;
+  line-height: 1.2;
+  color: #fff4dc;
+}
+.gl-bout .gl-muted {
+  color: rgba(251, 232, 196, 0.75);
+  font-size: 12.5px;
+}
+.gl-bout-hp {
+  flex: 0 1 220px;
+  min-width: 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+.gl-bout-hp .gl-bar {
+  height: 16px;
+}
+.gl-bout-hp .gl-bar > em {
+  font-size: 11px;
+}
+.gl-bout-hp .gl-muted {
+  font-size: 11px;
+}
+.gl-bout-go {
+  flex: none;
+  min-height: 46px;
+}
+.gl-bout.is-won {
+  background: linear-gradient(180deg, rgba(110, 70, 14, 0.94), rgba(60, 34, 6, 0.94));
+  box-shadow: inset 0 0 0 2px rgba(242, 193, 74, 0.6), 0 0 18px rgba(242, 193, 74, 0.35);
+}
+
+/* The rounds. */
+.gl-bracket {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(140px, 0.8fr);
+  column-gap: var(--gap);
 }
 .gl-round {
   display: flex;
   flex-direction: column;
-  justify-content: space-around;
-  gap: 6px;
-  height: 100%;
+  min-width: 0;
 }
 .gl-round h4 {
-  margin: 0;
+  margin: 0 0 6px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid rgba(122, 78, 26, 0.35);
   font-family: var(--gl-display);
-  color: #fff2d8;
-  text-shadow: 0 2px 0 #3a1a04, 0 0 8px #000;
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--gl-ink-soft);
   text-align: center;
 }
+.gl-round.is-now h4,
+.gl-round.is-champ h4 {
+  color: var(--gl-red-2);
+}
+.gl-round-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 416px;
+}
+.gl-match {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
 .gl-entrant {
-  background: rgba(246, 234, 206, 0.95);
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 3px 0;
+}
+.gl-entrant-plate {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 4px 8px 4px 5px;
+  border-radius: 22px 8px 8px 22px;
   border: 1.5px solid var(--gl-bronze-2);
-  border-radius: 4px;
-  padding: 5px 8px;
-  font-size: 12px;
+  background: linear-gradient(180deg, #fff8e4, #ecd6aa);
+  box-shadow: 0 2px 4px rgba(40, 20, 4, 0.25);
+}
+.gl-entrant-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.gl-entrant-name strong,
+.gl-entrant-name small {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.gl-entrant small {
-  color: var(--gl-red);
-  font-weight: 700;
+.gl-entrant-name strong {
+  font-size: 13px;
 }
-.gl-entrant.is-you {
-  background: #c8382a;
+.gl-entrant-name small {
+  font-size: 11px;
+  color: var(--gl-ink-soft);
+}
+.gl-entrant-name .gl-tag {
+  margin-right: 5px;
+  padding: 0 5px;
+  font-size: 9px;
+  vertical-align: 1px;
+}
+.gl-entrant.is-you .gl-entrant-plate {
+  border-color: #5a0e08;
+  background: linear-gradient(180deg, #c8382a, #8e1e14);
   color: #fff4dc;
-  font-weight: 700;
 }
-.gl-entrant.is-out {
-  opacity: 0.45;
+.gl-entrant.is-you .gl-entrant-name small {
+  color: rgba(255, 244, 220, 0.8);
+}
+.gl-entrant.is-won .gl-entrant-plate {
+  box-shadow: 0 0 0 2px var(--win), 0 2px 6px rgba(40, 20, 4, 0.3);
+}
+.gl-entrant.is-out .gl-entrant-plate {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+.gl-entrant.is-out .gl-entrant-name strong {
   text-decoration: line-through;
 }
-.gl-entrant.is-tbd {
-  opacity: 0.5;
+.gl-entrant.is-tbd .gl-entrant-plate {
+  background: rgba(255, 248, 228, 0.35);
+  border-style: dashed;
+  box-shadow: none;
+  color: var(--gl-ink-soft);
+}
+.gl-entrant.is-tbd .gl-entrant-name strong {
+  font-weight: 400;
+  font-style: italic;
+}
+.gl-entrant.is-tbd .gl-medal {
+  background: rgba(90, 58, 20, 0.25);
+  box-shadow: 0 0 0 2px rgba(122, 78, 26, 0.4);
+}
+.gl-match.is-live {
+  margin: 4px -6px;
+  padding: 0 6px;
+  border-radius: 12px;
+  background: rgba(200, 56, 42, 0.12);
+  box-shadow: inset 0 0 0 1.5px rgba(200, 56, 42, 0.55);
+}
+.gl-match-flag {
+  position: absolute;
+  z-index: 2;
+  top: -9px;
+  left: 14px;
+  padding: 1px 8px;
+  border-radius: 8px;
+  font-family: var(--gl-display);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #fff4dc;
+  background: var(--gl-red);
+  pointer-events: none;
+}
+
+/* Connectors: each slot draws its arm to the pair's midpoint, the pair a stub on to the next round.
+   The winner's arm and the stub go gold once the bout is settled. */
+.gl-entrant::after,
+.gl-match::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  border: 0 solid var(--line);
+}
+.gl-entrant::after {
+  left: 100%;
+  width: calc(var(--gap) / 2);
+  border-right-width: 2px;
+}
+.gl-entrant:first-of-type::after {
+  top: 50%;
+  bottom: 0;
+  border-top-width: 2px;
+  border-top-right-radius: 8px;
+}
+.gl-entrant:last-of-type::after {
+  top: 0;
+  bottom: 50%;
+  border-bottom-width: 2px;
+  border-bottom-right-radius: 8px;
+}
+.gl-match::after {
+  top: 50%;
+  left: calc(100% + var(--gap) / 2);
+  width: calc(var(--gap) / 2);
+  border-top-width: 2px;
+}
+.gl-match.is-live::after {
+  left: calc(100% + var(--gap) / 2 - 6px);
+}
+.gl-entrant.is-won::after,
+.gl-match.is-decided::after {
+  border-color: var(--win);
+  z-index: 1;
+}
+.gl-entrant.is-won::after {
+  border-width: 3px 3px 0 0;
+}
+.gl-entrant.is-won:last-of-type::after {
+  border-width: 0 3px 3px 0;
+}
+.gl-match.is-decided::after {
+  border-top-width: 3px;
+}
+/* Your own road through the bracket stays red. */
+.gl-entrant.is-you.is-won::after,
+.gl-match.is-yours::after {
+  border-color: var(--gl-red);
+}
+
+/* The champion's laurel: the cup, a face in a gold ring, and the prize. */
+.gl-round.is-champ .gl-round-body {
+  justify-content: center;
+}
+.gl-champ {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 8px 14px;
+  border-radius: 14px;
+  border: 2px solid #8a6410;
+  background: radial-gradient(120% 80% at 50% 0%, #fff6d6, #f0d48a 60%, #d8a848);
+  box-shadow: inset 0 0 0 2px rgba(255, 236, 170, 0.9), 0 6px 14px rgba(20, 10, 0, 0.3);
   text-align: center;
 }
-.gl-bracket-foot {
-  display: flex;
+.gl-champ .gl-place-icon {
+  width: 64px;
+  height: 64px;
+  margin: 0;
+  background: none;
+  box-shadow: none;
+}
+.gl-champ .gl-place-icon img {
+  width: 76px;
+  height: 76px;
+  margin: 0;
+}
+.gl-champ .gl-place-icon i {
+  font-size: 40px;
+}
+.gl-champ > .gl-medal {
+  width: 56px;
+  height: 56px;
+  margin-top: -2px;
+  box-shadow: 0 0 0 3px var(--gl-gold), 0 0 0 5px #8a6410, 0 0 0 7px rgba(47, 106, 26, 0.55);
+}
+.gl-champ strong {
+  font-family: var(--gl-display);
+  font-size: 14px;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.gl-champ:not(.is-crowned) strong {
+  font-style: italic;
+  font-weight: 400;
+  color: var(--gl-ink-soft);
+}
+.gl-champ:not(.is-crowned) .gl-place-icon {
+  filter: saturate(0.4) opacity(0.75);
+}
+.gl-champ.is-crowned {
+  box-shadow: inset 0 0 0 2px rgba(255, 236, 170, 0.9), 0 0 0 3px rgba(242, 193, 74, 0.55), 0 0 24px rgba(242, 193, 74, 0.5);
+}
+.gl-champ-prize {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  background: rgba(246, 234, 206, 0.92);
-  border-radius: 6px;
-  padding: 8px 12px;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--gl-ink-soft);
+}
+
+/* Wide windows: the panel grows, so the plates, faces and names grow with it. */
+@container (min-width: 1300px) {
+  .gl-bracket-panel {
+    --gap: 56px;
+  }
+  .gl-round h4 {
+    font-size: 15px;
+  }
+  .gl-entrant-plate {
+    min-height: 54px;
+    gap: 11px;
+    padding: 5px 12px 5px 6px;
+    border-radius: 28px 10px 10px 28px;
+  }
+  .gl-entrant .gl-medal {
+    width: 44px;
+    height: 44px;
+  }
+  .gl-entrant-name strong {
+    font-size: 16px;
+  }
+  .gl-entrant-name small {
+    font-size: 13px;
+  }
+  .gl-entrant-name .gl-tag {
+    font-size: 10px;
+  }
+  .gl-match-flag {
+    font-size: 11px;
+    top: -10px;
+  }
+  .gl-champ strong {
+    font-size: 17px;
+  }
+  .gl-champ-prize {
+    font-size: 14px;
+  }
+}
+
+@container (max-width: 1000px) {
+  .gl-bracket-panel {
+    --gap: 26px;
+  }
+}
+
+/* Narrow windows and phones: the rounds stack, each bout its own little card, no connectors. */
+@container (max-width: 680px) {
+  .gl-bracket-panel {
+    padding: 10px;
+  }
+  .gl-bout {
+    gap: 10px;
+    padding: 10px;
+  }
+  .gl-bout-text strong {
+    font-size: 16px;
+  }
+  .gl-bout-hp {
+    flex: 1 1 100%;
+    order: 3;
+  }
+  .gl-bout-go {
+    flex: 1 1 100%;
+    order: 4;
+  }
+  .gl-bracket {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .gl-round-body {
+    min-height: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 8px;
+  }
+  .gl-round h4 {
+    text-align: left;
+  }
+  .gl-match {
+    padding: 4px 6px;
+    border-radius: 12px;
+    border: 1px solid rgba(122, 78, 26, 0.35);
+    background: rgba(255, 248, 228, 0.4);
+  }
+  .gl-match.is-live {
+    margin: 0;
+    padding-top: 10px;
+  }
+  .gl-entrant::after,
+  .gl-match::after {
+    display: none;
+  }
+  .gl-round.is-champ .gl-round-body {
+    display: flex;
+  }
+  .gl-champ {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    text-align: left;
+  }
 }
 
 /* --- Fight ------------------------------------------------------------------------------------- */
@@ -2374,15 +3526,9 @@ button.gl-job:disabled {
   }
 }
 @container (max-width: 720px) {
-  .gl-hub,
   .gl-shop-grid,
   .gl-creator-grid {
     grid-template-columns: 1fr;
-  }
-  .gl-hub-hero {
-    height: 220px;
-    min-height: 0;
-    align-self: auto;
   }
   .gl-mirror {
     position: static;
@@ -2428,11 +3574,9 @@ button.gl-job:disabled {
     grid-template-columns: repeat(2, 1fr);
     gap: 8px;
   }
-  .gl-sites {
-    grid-template-columns: 1fr;
-  }
+  /* The category strip already scrolls sideways (see Shops); here the tiles just slim down. */
   .gl-cats {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-auto-columns: 84px;
     gap: 6px;
   }
   .gl-cat {
@@ -2446,7 +3590,8 @@ button.gl-job:disabled {
     font-size: 11px;
   }
   .gl-cat em {
-    display: none;
+    font-size: 8.5px;
+    padding: 0 5px;
   }
   .gl-mirror .gl-poster-art {
     height: 150px !important;
@@ -2463,13 +3608,6 @@ button.gl-job:disabled {
   }
   .gl-card-art {
     height: 130px;
-  }
-  .gl-topbar {
-    gap: 8px;
-    padding-right: 76px;
-  }
-  .gl-top-level .gl-bar {
-    width: 56px;
   }
   /* On a phone the arena takes every pixel above the buttons; the camera zooms out to fit. */
   .gl-dock {
@@ -2545,9 +3683,6 @@ button.gl-job:disabled {
     width: 26px;
     height: 26px;
     font-size: 12px;
-  }
-  .gl-bracket {
-    grid-template-columns: repeat(2, 1fr);
   }
   .gl-modes {
     grid-template-columns: 1fr;
