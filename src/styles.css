@@ -4759,6 +4759,13 @@ button.fm-dd-row:hover {
 .st-bar .set-select {
   max-width: 220px;
 }
+.st-keep {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
 .st-crumb button,
 .st-link {
   padding: 0;

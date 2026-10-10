@@ -6,7 +6,7 @@ import { addWidgetItems } from '../widgets/registry'
 import { projects } from '../data/profile'
 import { HOME, kindOfName, type FileKind } from '../terminal/vfs'
 import { droppedFiles, hasOsFiles, pickAndUpload, uploadFiles } from '../data/uploads'
-import { createFile, getClipboard, mkdir, setClipboard, deleteItems, download, DRAG_FILES, dropOp, getDragged, isInside, openSeafile, refreshDirs, renameItem, setSeafilePrefs, transferItems, useDir, useSeafileHome, useSeafilePrefs } from '../data/seafile'
+import { createFile, getClipboard, mkdir, setClipboard, deleteItems, deleteNote, download, DRAG_FILES, dropOp, getDragged, isInside, openSeafile, refreshDirs, renameItem, setSeafilePrefs, transferItems, useDir, useSeafileHome, useSeafilePrefs } from '../data/seafile'
 import { notify } from './notify'
 import { useAccount } from './account'
 import { ask } from './Dialogs'
@@ -252,9 +252,11 @@ export function Desktop() {
     const sfPaths = ids.filter((id) => id.startsWith('sf:')).map(sfPathOf).filter((p): p is string => !!p)
     if (sfPaths.length) {
       const what = sfPaths.length === 1 ? sfPaths[0].split('/').pop() : `${sfPaths.length} items`
-      void ask({ title: `Delete ${what}?`, body: `It goes to the library's trash on Seafile, where it can be restored (Files → Trash).`, confirm: 'Delete', danger: true }).then((ok) => {
-        if (ok) deleteItems(sfPaths).catch(failed('Could not delete it'))
-      })
+      void deleteNote(sfPaths)
+        .then((note) => ask({ title: note.final ? `Delete ${what} for good?` : `Delete ${what}?`, body: note.body, confirm: 'Delete', danger: true }))
+        .then((ok) => {
+          if (ok) deleteItems(sfPaths).catch(failed('Could not delete it'))
+        })
       ids = ids.filter((id) => !id.startsWith('sf:'))
     }
     // Launchers are just removed; the trash is for the built-in icons.

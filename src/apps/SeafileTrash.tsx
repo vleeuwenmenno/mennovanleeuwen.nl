@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { cleanTrash, listTrash, listTrashDir, restoreTrash, sfPath, useLibraries, useSeafileHome, type Entry, type TrashItem } from '../data/seafile'
+import { cleanTrash, historyDays, listTrash, listTrashDir, restoreTrash, setHistoryDays, sfPath, useLibraries, useSeafileHome, type Entry, type TrashItem } from '../data/seafile'
 import { openContextMenu } from '../os/ContextMenu'
 import { ask } from '../os/Dialogs'
 import { DESKTOP_ICONS } from '../os/Desktop'
@@ -9,7 +9,8 @@ import { formatSize, kindOfName } from '../terminal/vfs'
 // Files' Trash with Seafile: each library's own trash, as Seafile keeps it (from the library's
 // history). Pick the library, restore what was deleted (one by one or several at once), look
 // inside a deleted folder and restore from it, and empty the trash of what is older than a few
-// days, or all of it. Desktop icons of the site that were put in the trash are listed too.
+// days, or all of it. How long the library keeps history (so how long its trash keeps things) is
+// set here too. Desktop icons of the site that were put in the trash are listed too.
 
 type Open = { item: TrashItem; path: string } | null
 
@@ -21,6 +22,19 @@ const ago = (t: number) => {
   if (s < 86400 * 30) return `${Math.round(s / 86400)} days ago`
   return new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
 }
+
+/** How long a library keeps history: Seafile's keep_days (-1 for ever, 0 not at all). */
+const KEEP: [number, string][] = [
+  [-1, 'Forever'],
+  [365, '1 year'],
+  [90, '90 days'],
+  [30, '30 days'],
+  [7, '7 days'],
+  [0, 'Not at all'],
+]
+const keepLabel = (days: number) => KEEP.find(([d]) => d === days)?.[1] ?? `${days} days`
+/** Longer is bigger; "forever" is the longest. */
+const span = (days: number) => (days < 0 ? Infinity : days)
 
 const CLEAN: [number, string][] = [
   [30, 'Older than 30 days'],
@@ -42,6 +56,8 @@ export function SeafileTrash({ repo: startRepo = null, onOpenFolder, toast }: { 
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [open, setOpen] = useState<Open>(null)
   const [inside, setInside] = useState<Entry[] | null>(null)
+  /** The library's history in days; null while asking, undefined when it cannot be known (not its owner). */
+  const [keep, setKeep] = useState<number | null | undefined>(null)
   const desk = useDesktop()
   const trashedIcons = DESKTOP_ICONS.filter((i) => desk.trashed.includes(i.id))
 
@@ -69,6 +85,36 @@ export function SeafileTrash({ repo: startRepo = null, onOpenFolder, toast }: { 
     setOpen(null)
     load()
   }, [load])
+
+  useEffect(() => {
+    if (!current) return
+    let live = true
+    setKeep(null)
+    historyDays(current)
+      .then((d) => live && setKeep(d))
+      .catch(() => live && setKeep(undefined))
+    return () => void (live = false)
+  }, [current])
+
+  const changeKeep = async (days: number) => {
+    if (!current || keep == null || days === keep) return
+    const name = writable.find((l) => l.id === current)?.name ?? 'this library'
+    if (keep !== 0 && span(days) < span(keep)) {
+      const ok = await ask(
+        days === 0
+          ? { title: `Turn off history for ${name}?`, body: `Its trash and file history are removed for good, and from then on whatever is deleted from ${name} is gone for good. This cannot be undone.`, confirm: 'Turn off', danger: true }
+          : { title: `Keep deleted things for ${keepLabel(days)}?`, body: `What was deleted from ${name} more than ${keepLabel(days)} ago leaves the trash for good. This cannot be undone.`, confirm: 'Change', danger: true },
+      )
+      if (!ok) return
+    }
+    setHistoryDays(current, days)
+      .then((d) => {
+        setKeep(d)
+        toast(d === 0 ? `${name} keeps no history now` : `${name} keeps deleted things ${d < 0 ? 'forever' : `for ${keepLabel(d)}`}`)
+        load()
+      })
+      .catch((e: Error) => toast(e.message))
+  }
 
   useEffect(() => {
     if (!open || !current) return setInside(null)
@@ -136,6 +182,20 @@ export function SeafileTrash({ repo: startRepo = null, onOpenFolder, toast }: { 
             </option>
           ))}
         </select>
+        {!open && keep !== undefined && (
+          <label className="st-keep">
+            Keep deleted
+            <select className="set-select" value={keep ?? ''} disabled={keep === null} onChange={(e) => void changeKeep(Number(e.target.value))} aria-label="How long this library keeps deleted things">
+              {keep === null && <option value="">…</option>}
+              {keep !== null && !KEEP.some(([d]) => d === keep) && <option value={keep}>{keepLabel(keep)}</option>}
+              {KEEP.map(([d, label]) => (
+                <option key={d} value={d}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {open && (
           <span className="st-crumb">
             <button onClick={() => setOpen(null)}>Trash</button> › {open.path}
@@ -159,6 +219,8 @@ export function SeafileTrash({ repo: startRepo = null, onOpenFolder, toast }: { 
 
       {error && <p className="t-red st-note">{error === 'That library is locked: open it in Files and give its password first' ? `${error}.` : error}</p>}
 
+      {!open && keep === 0 && <p className="t-red st-note">This library keeps no history: whatever is deleted from it is gone for good, and its trash stays empty. Pick how long to keep deleted things above.</p>}
+
       {open ? (
         <ul className="st-list">
           {inside === null && <li className="st-note muted">Loading…</li>}
@@ -181,7 +243,7 @@ export function SeafileTrash({ repo: startRepo = null, onOpenFolder, toast }: { 
           ))}
           {inside?.length === 0 && <li className="st-note muted">It was empty.</li>}
         </ul>
-      ) : (
+      ) : keep === 0 && items?.length === 0 ? null : (
         <ul className="st-list">
           {items === null && !error && <li className="st-note muted">Loading the trash…</li>}
           {items?.map((t) => (

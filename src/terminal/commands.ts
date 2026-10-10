@@ -497,7 +497,7 @@ export const commands: Record<string, Command> = {
     },
   },
   rm: {
-    desc: 'remove files (in /tmp, or Seafile: into its trash)',
+    desc: 'remove files (in /tmp, or Seafile: into its trash; asks first where there is none)',
     usage: 'rm [-r] [-f] <path>...',
     run: async (ctx) => {
       const f = flags(ctx.args)
@@ -505,7 +505,21 @@ export const commands: Record<string, Command> = {
       const precious = f.rest.some((a) => ['/', HOME, '/home', '/srv/site'].includes(resolvePath(ctx.cwd, a)))
       if (f.has('r') && f.has('f') && (precious || !f.rest.length)) return `${c('yellow', 'Nice try.')} The only thing getting deleted today is your expectations.`
       if (!f.rest.length) throw new CmdError("rm: missing operand\nTry 'rm --help' for more information.")
-      for (const a of f.rest) await removePath(ctx.cwd, a, { recursive: f.has('r') || f.has('R'), force: f.has('f'), dir: f.has('d') })
+      const ask = (question: string) => {
+        ctx.print(question)
+        return new Promise<boolean>((resolve) => {
+          const done = (yes: boolean) => {
+            ctx.onKey(null)
+            resolve(yes)
+          }
+          ctx.signal.addEventListener('abort', () => done(false), { once: true })
+          ctx.onKey((k) => {
+            if (k.length === 1 || k === 'Enter' || k === 'Escape') done(k === 'y' || k === 'Y')
+            return true
+          })
+        })
+      }
+      for (const a of f.rest) await removePath(ctx.cwd, a, { recursive: f.has('r') || f.has('R'), force: f.has('f'), dir: f.has('d'), ask })
     },
   },
   rmdir: {

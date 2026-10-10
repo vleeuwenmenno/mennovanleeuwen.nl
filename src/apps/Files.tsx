@@ -5,7 +5,7 @@ import { openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { openLink } from '../data/links'
 import { useWM, type AppId, type WinState } from '../os/wm'
 import { formatSize, HOME, KIND_LABEL, kindOfName, lookup, prettyPath, resolvePath, stat, walk, type FileKind, type Node } from '../terminal/vfs'
-import { createFile, deleteItems, download as sfDownload, DRAG_FILES, dropOp, getClipboard, getDragged, getLibrary, isInside, openSeafile, renameItem, setClipboard, setDragged, transferItems, useClipboard, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useSeafilePrefs, setSeafilePrefs, setPlace, PLACES, shareLink, seafileWebUrl, loadLibraries, useUnlocks, type Library, type PlaceId } from '../data/seafile'
+import { createFile, deleteItems, deleteNote, download as sfDownload, DRAG_FILES, dropOp, getClipboard, getDragged, getLibrary, isInside, openSeafile, renameItem, setClipboard, setDragged, transferItems, useClipboard, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useSeafilePrefs, setSeafilePrefs, setPlace, PLACES, shareLink, seafileWebUrl, loadLibraries, useUnlocks, type Library, type PlaceId } from '../data/seafile'
 import { pickFolder } from '../os/FolderPicker'
 import { useBackButton } from '../os/backButton'
 import { SeafileTrash } from './SeafileTrash'
@@ -459,8 +459,8 @@ export function Files({ win }: { win: WinState }) {
 
   const deleteSf = async (paths: string[]) => {
     if (!paths.length) return
-    const one = paths.length === 1
-    if (!(await ask({ title: `Delete ${named(paths)}?`, body: `${one ? 'It goes' : 'They go'} to the library's trash on Seafile, where you can restore ${one ? 'it' : 'them'} (Files → Trash).`, confirm: 'Delete', danger: true }))) return
+    const note = await deleteNote(paths)
+    if (!(await ask({ title: note.final ? `Delete ${named(paths)} for good?` : `Delete ${named(paths)}?`, body: note.body, confirm: 'Delete', danger: true }))) return
     setSelected(new Set())
     busy(`Deleting ${named(paths)}…`, `Deleted ${named(paths)}`, deleteItems(paths))
   }

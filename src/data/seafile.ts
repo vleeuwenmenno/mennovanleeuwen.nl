@@ -529,6 +529,40 @@ export async function restoreTrash(repo: string, commit: string, paths: string[]
 /** Empties a library's trash of what was deleted more than `days` ago (0: everything). Cannot be undone. */
 export const cleanTrash = (repo: string, days: number) => call('/api/seafile/trash/clean', { method: 'POST', json: { repo, days } })
 
+// How long a library keeps its history, which is how long its trash keeps things: days, -1 for
+// ever, 0 for not at all (a delete is then for good). Remembered for a minute, as it is asked
+// before every delete.
+
+const histories = new Map<string, { days: Promise<number>; at: number }>()
+
+export function historyDays(repo: string): Promise<number> {
+  const known = histories.get(repo)
+  if (known && Date.now() - known.at < 60_000) return known.days
+  const days = call<{ days: number }>(`/api/seafile/history?repo=${encodeURIComponent(repo)}`).then((r) => r.days)
+  days.catch(() => histories.delete(repo))
+  histories.set(repo, { days, at: Date.now() })
+  return days
+}
+
+export async function setHistoryDays(repo: string, days: number): Promise<number> {
+  const res = await call<{ days: number }>('/api/seafile/history', { method: 'POST', json: { repo, days } })
+  histories.set(repo, { days: Promise.resolve(res.days), at: Date.now() })
+  return res.days
+}
+
+/** What a delete confirmation says: the trash, or (in a library without history) that it is for good. */
+export async function deleteNote(paths: string[]): Promise<{ body: string; final: boolean }> {
+  const one = paths.length === 1
+  const repos = [...new Set(paths.map((p) => parseSf(p)?.repo).filter((r): r is string => !!r))]
+  const days = await Promise.all(repos.map((r) => historyDays(r).catch(() => null)))
+  const none = repos.filter((_, i) => days[i] === 0)
+  if (none.length) {
+    const names = none.map((r) => libraries?.find((l) => l.id === r)?.name ?? 'This library').join(' and ')
+    return { final: true, body: `${names} keeps no history, so ${one ? 'it is' : 'they are'} deleted for good. This cannot be undone. (Files → Trash can turn history on.)` }
+  }
+  return { final: false, body: `${one ? 'It goes' : 'They go'} to the library's trash on Seafile, where you can restore ${one ? 'it' : 'them'} (Files → Trash).` }
+}
+
 /** A share link to copy: the file's or folder's existing one, or a new one. */
 export async function shareLink(path: string): Promise<{ url: string; made: boolean }> {
   const at = parseSf(path)!
