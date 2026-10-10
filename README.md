@@ -59,7 +59,10 @@ Real tools live in [`src/terminal/extra.ts`](src/terminal/extra.ts) and run from
 browser: `curl`/`wget` (any site that allows cross-origin requests, e.g. `curl wttr.in/Amsterdam`,
 never the visitor's own network), `whois` (RDAP), `git log`/`git show` on the real repos,
 `htop`, `watch`, `cmatrix`, `df`/`free`/`nproc`/`lscpu`/`xrandr`/`ip` with the numbers the browser
-shares, `jq`, `sha*sum`/`md5sum`, `figlet` and `lolcat`.
+shares, `jq`, `sha*sum`/`md5sum`, `figlet` and `lolcat`. With Seafile linked, `df` also lists its
+mounts: the account's quota and usage (`/api/seafile/quota`), and each library's own size next to
+what is left of the quota; `du` (`-a`, `-s`, `-c`, `-d`, `-h`, `-x`) adds up folders through the
+mounts, Seafile's included.
 
 `find` and `fd` ([`src/terminal/find.ts`](src/terminal/find.ts)) follow GNU findutils 4.10 and fd 10.2
 over the site's filesystem: find's whole expression language (tests, `-printf`, `-ls`, `-exec … ;`

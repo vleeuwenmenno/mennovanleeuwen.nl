@@ -563,6 +563,9 @@ export async function deleteNote(paths: string[]): Promise<{ body: string; final
   return { final: false, body: `${one ? 'It goes' : 'They go'} to the library's trash on Seafile, where you can restore ${one ? 'it' : 'them'} (Files → Trash).` }
 }
 
+/** The account's storage: what its own libraries take, and its quota (null: none). */
+export const getQuota = () => call<{ used: number; total: number | null }>('/api/seafile/quota')
+
 /** A share link to copy: the file's or folder's existing one, or a new one. */
 export async function shareLink(path: string): Promise<{ url: string; made: boolean }> {
   const at = parseSf(path)!

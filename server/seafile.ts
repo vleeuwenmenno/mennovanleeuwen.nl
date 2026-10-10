@@ -494,6 +494,14 @@ export async function cleanTrash(user: User, body: { repo?: string; days?: numbe
  * How long a library keeps its history, which is also how long deleted things stay in its trash:
  * days, -1 for ever, 0 for not at all (then a delete is for good). Only its owner can see or change it.
  */
+/** The account's storage: what its own libraries take, and its quota (null: no quota, which
+ * Seafile sends as a negative number). */
+export async function quota(user: User): Promise<{ used: number; total: number | null }> {
+  const info = await seafile<{ usage?: number; total?: number }>(user, '/api2/account/info/')
+  const total = Number(info.total)
+  return { used: Number(info.usage) || 0, total: Number.isFinite(total) && total >= 0 ? total : null }
+}
+
 export async function history(user: User, repo: unknown): Promise<{ days: number }> {
   const id = repoId(repo)
   const res = await seafile<{ keep_days: number }>(user, `/api2/repos/${id}/history-limit/`)

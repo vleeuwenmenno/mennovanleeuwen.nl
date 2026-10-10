@@ -4,8 +4,11 @@ import { md5, sha } from './hash'
 import { jq, JqError } from './jq'
 import { CmdError, type Ctx } from './types'
 import { lookup } from './fs'
-import { age, lookup as siteLookup, resolvePath, walk as siteWalk } from './vfs'
+import { age, lookup as siteLookup, resolvePath, walk as siteWalk, type Node } from './vfs'
 import { runLine, writeTmp } from './commands'
+import { deviceNames, isBind, isSeafileType, mounts, whereIs } from '../data/mounts'
+import { cachedDir, getLibraries, getQuota, loadLibraries, parseSf, SF } from '../data/seafile'
+import { getAccount } from '../os/account'
 
 // Real tools that work from the browser: curl/wget/whois against the live internet, git log on the
 // real repos, htop and friends with real numbers from this device, jq, checksums, cmatrix, figlet.
@@ -572,7 +575,7 @@ async function watch(ctx: Ctx): Promise<string> {
 
 async function df(ctx: Ctx): Promise<string> {
   const h = ctx.args.some((a) => /^-\w*h/.test(a))
-  const fmt = (b: number) => (h ? human(b) : String(Math.ceil(b / 1024)))
+  const fmt = (b: number | null) => (b === null ? '-' : h ? human(b) : String(Math.ceil(b / 1024)))
   const size = (path: string) => siteWalk(path).reduce((sum, p) => {
     const n = siteLookup(p)
     return sum + (n?.type === 'file' ? new Blob([n.content()]).size : 0)
@@ -580,14 +583,167 @@ async function df(ctx: Ctx): Promise<string> {
   const rootBytes = size('/')
   const tmpBytes = size('/tmp')
   const est = await navigator.storage?.estimate?.().catch(() => null)
-  const rows: [string, number, number, string][] = [
-    ['vfs', rootBytes, rootBytes, '/'],
-    ['tmpfs', Math.max(tmpBytes, 1024 * 1024), tmpBytes, '/tmp'],
+  // Size and Avail are null where there is no limit (or none known): df shows a dash.
+  type Row = { fs: string; size: number | null; used: number; avail: number | null; mount: string }
+  const rows: Row[] = [
+    { fs: 'vfs', size: rootBytes, used: rootBytes, avail: 0, mount: '/' },
+    { fs: 'tmpfs', size: Math.max(tmpBytes, 1024 * 1024), used: tmpBytes, avail: Math.max(tmpBytes, 1024 * 1024) - tmpBytes, mount: '/tmp' },
   ]
-  if (est?.quota) rows.push(['browser-storage', est.quota, est.usage ?? 0, '/var/lib/browser'])
-  const head = `Filesystem      ${h ? ' Size' : '1K-blocks'}  ${h ? ' Used' : '     Used'} ${h ? 'Avail' : 'Available'} Use% Mounted on`
-  const body = rows.map(([fs, total, used, mount]) => `${fs.padEnd(15)} ${fmt(total).padStart(h ? 5 : 9)}  ${fmt(used).padStart(h ? 5 : 9)} ${fmt(Math.max(0, total - used)).padStart(h ? 5 : 9)} ${String(Math.round((used / total) * 100) || 0).padStart(3)}% ${mount}`)
-  return [head, ...body, '', c('muted', est?.quota ? 'browser-storage is the real quota and usage this browser gives the site.' : 'This browser does not report its storage quota.')].join('\n')
+  if (est?.quota) rows.push({ fs: 'browser-storage', size: est.quota, used: est.usage ?? 0, avail: Math.max(0, est.quota - (est.usage ?? 0)), mount: '/var/lib/browser' })
+
+  // Seafile: the account mount has the account's quota and usage; a library has its own size,
+  // and (when it is yours) what is left of the quota, which all your libraries share, as datasets
+  // share a pool. Libraries shared with you count toward their owner's quota, not yours.
+  const notes: string[] = []
+  if (getAccount().seafile) {
+    if (!getLibraries()) await loadLibraries()
+    const quota = await getQuota().catch(() => null)
+    const libs = getLibraries() ?? []
+    const devs = deviceNames(libs)
+    const left = quota?.total != null ? Math.max(0, quota.total - quota.used) : null
+    let shared = false
+    for (const m of mounts()) {
+      if (!isSeafileType(m) && !isBind(m)) continue
+      const w = whereIs(m.target)
+      if (w.kind !== 'sf') continue
+      const repo = parseSf(w.sf)!.repo
+      if (!repo) {
+        rows.push({ fs: 'seafile', size: quota?.total ?? null, used: quota?.used ?? 0, avail: left, mount: m.target })
+        continue
+      }
+      const lib = libs.find((l) => l.id === repo)
+      if (!lib) continue
+      const mine = lib.type === 'mine'
+      shared ||= !mine
+      rows.push({ fs: `/dev/seafile/${devs.get(repo)}`, size: mine && left !== null ? lib.size + left : null, used: lib.size, avail: mine ? left : null, mount: m.target })
+    }
+    if (rows.some((r) => r.fs === 'seafile' || r.fs.startsWith('/dev/seafile/')))
+      notes.push(
+        !quota
+          ? 'Seafile did not say what your quota is.'
+          : quota.total === null
+            ? `Your Seafile account has no quota; your libraries take ${human(quota.used)}.`
+            : `Seafile: your libraries take ${human(quota.used)} of your ${human(quota.total)} quota, and share what is left.`,
+      )
+    if (shared) notes.push('Libraries shared with you count toward their owner\'s quota, so theirs show no size.')
+  }
+
+  const w = Math.max(15, ...rows.map((r) => r.fs.length))
+  const n = h ? 5 : 9
+  const head = `${'Filesystem'.padEnd(w)} ${(h ? 'Size' : '1K-blocks').padStart(n)}  ${'Used'.padStart(n)} ${(h ? 'Avail' : 'Available').padStart(n)} Use% Mounted on`
+  const body = rows.map((r) => {
+    const use = r.size === null ? '-' : `${r.size ? Math.ceil((r.used / r.size) * 100) : 0}%`
+    return `${r.fs.padEnd(w)} ${fmt(r.size).padStart(n)}  ${fmt(r.used).padStart(n)} ${fmt(r.avail).padStart(n)} ${use.padStart(4)} ${r.mount}`
+  })
+  notes.unshift(est?.quota ? 'browser-storage is the real quota and usage this browser gives the site.' : 'This browser does not report its storage quota.')
+  return [head, ...body, '', ...notes.map((t) => c('muted', t))].join('\n')
+}
+
+const DU_HELP = `Usage: du [OPTION]... [FILE]...
+Summarize device usage of the set of FILEs, recursively for directories.
+
+  -a, --all             write counts for all files, not just directories
+  -b, --bytes           print sizes in bytes
+  -c, --total           produce a grand total
+  -d, --max-depth=N     print the total for a directory only if it is N or
+                          fewer levels below the command line argument
+  -h, --human-readable  print sizes in human readable format (e.g., 1K 234M 2G)
+  -k                    like --block-size=1K (the default)
+  -m                    like --block-size=1M
+  -s, --summarize       display only a total for each argument
+  -x, --one-file-system  skip directories on different file systems
+      --help            display this help and exit
+
+Sizes are the files' own (apparent) sizes; Seafile's are what Seafile reports.`
+
+/** du: what folders take, through the mounts, Seafile included (prepare() fetched its trees). */
+function du(ctx: Ctx): string {
+  let all = false
+  let total = false
+  let summarize = false
+  let oneFs = false
+  let unit: 'k' | 'm' | 'b' | 'h' = 'k'
+  let depth = Infinity
+  const files: string[] = []
+  const args = ctx.args.slice()
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    if (a === '--help') return DU_HELP
+    if (a === '--') {
+      files.push(...args.slice(i + 1))
+      break
+    }
+    const long: Record<string, () => void> = { '--all': () => (all = true), '--total': () => (total = true), '--summarize': () => (summarize = true), '--one-file-system': () => (oneFs = true), '--human-readable': () => (unit = 'h'), '--bytes': () => (unit = 'b'), '--apparent-size': () => {} }
+    if (long[a]) {
+      long[a]()
+      continue
+    }
+    const max = /^--max-depth=(.*)$/.exec(a)
+    if (max || a === '-d' || /^-d\d+$/.test(a)) {
+      const v = max ? max[1] : a === '-d' ? args[++i] : a.slice(2)
+      if (v === undefined || !/^\d+$/.test(v)) throw new CmdError(`du: invalid maximum depth '${v ?? ''}'\nTry 'du --help' for more information.`)
+      depth = Number(v)
+      continue
+    }
+    if (/^-[a-zA-Z]+$/.test(a)) {
+      for (const ch of a.slice(1)) {
+        if (ch === 'a') all = true
+        else if (ch === 'c') total = true
+        else if (ch === 's') summarize = true
+        else if (ch === 'x') oneFs = true
+        else if (ch === 'h') unit = 'h'
+        else if (ch === 'b') unit = 'b'
+        else if (ch === 'k') unit = 'k'
+        else if (ch === 'm') unit = 'm'
+        else throw new CmdError(`du: invalid option -- '${ch}'\nTry 'du --help' for more information.`)
+      }
+      continue
+    }
+    files.push(a)
+  }
+  if (summarize && all) throw new CmdError("du: cannot both summarize and show all entries\nTry 'du --help' for more information.")
+  if (summarize) depth = 0
+
+  const fmt = (b: number) => (unit === 'h' ? human(b) : unit === 'b' ? String(b) : String(Math.ceil(b / (unit === 'm' ? 1024 * 1024 : 1024))))
+  const isMount = (abs: string) => mounts().some((m) => m.target === abs)
+  const out: string[] = []
+  const errors: string[] = []
+  // Seafile folders prepare() did not get to (it stops after a few hundred per library).
+  let unread = 0
+  let grand = 0
+
+  /** Its size, printing it (and what is in it) as deep as asked; children before their folder. */
+  const visit = (abs: string, shown: string, level: number, node: Node, top: boolean): number => {
+    if (node.type === 'file') {
+      const bytes = node.size ?? new Blob([node.content()]).size
+      if (top || (all && level <= depth)) out.push(`${fmt(bytes)}\t${shown}`)
+      return bytes
+    }
+    if (node.sf && node.sf !== SF && !cachedDir(node.sf)?.listing) unread++
+    let sum = 0
+    for (const [name, child] of node.children) {
+      const childAbs = abs === '/' ? `/${name}` : `${abs}/${name}`
+      if (oneFs && isMount(childAbs)) continue
+      const real = lookup(childAbs) ?? child
+      sum += visit(childAbs, shown === '/' ? `/${name}` : `${shown}/${name}`, level + 1, real, false)
+    }
+    if (level <= depth) out.push(`${fmt(sum)}\t${shown}`)
+    return sum
+  }
+
+  for (const f of files.length ? files : ['.']) {
+    const abs = resolvePath(ctx.cwd, f)
+    const node = lookup(abs)
+    if (!node) {
+      errors.push(`du: cannot access '${f}': No such file or directory`)
+      continue
+    }
+    grand += visit(abs, f.length > 1 ? f.replace(/\/+$/, '') : f, 0, node, true)
+  }
+  if (total) out.push(`${fmt(grand)}\ttotal`)
+  if (unread) errors.push(`du: ${unread} Seafile folder${unread === 1 ? ' was' : 's were'} not read (too many to fetch); the totals above them are too low`)
+  if (errors.length && !out.length) throw new CmdError(errors.join('\n'))
+  return [...out, ...errors.map((e) => c('red', e))].join('\n')
 }
 
 function free(ctx: Ctx): string {
@@ -771,7 +927,8 @@ export const extraCommands: Record<string, Command> = {
   btop: { desc: 'alias for htop', hidden: true, run: (ctx) => htop(ctx, 'btop') },
   cmatrix: { desc: 'follow the white rabbit', run: cmatrix },
   watch: { desc: 'rerun a command every few seconds', usage: 'watch [-n secs] <command>', run: watch },
-  df: { desc: 'disk usage, including your real browser storage', usage: 'df [-h]', run: df },
+  df: { desc: 'disk usage, with your real browser storage and Seafile quota', usage: 'df [-h]', run: df },
+  du: { desc: 'what folders take, Seafile included', usage: 'du [-ahscx] [-d N] [path]...', run: du },
   free: { desc: 'memory: device and this page', usage: 'free [-h|-m|-g]', run: free },
   nproc: { desc: 'number of CPU cores', run: () => String(navigator.hardwareConcurrency || 1) },
   lscpu: { desc: 'CPU details your browser shares', run: lscpu },
