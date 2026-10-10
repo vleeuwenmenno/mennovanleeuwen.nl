@@ -106,7 +106,7 @@ const EMBLEM_PATHS: Record<string, ReactNode> = {
   lock: <path d="M27 28h10v8H27zM29 28v-3a3 3 0 0 1 6 0v3" />,
 }
 
-function FolderIcon({ size, emblem }: { size: number; emblem?: string }) {
+export function FolderIcon({ size, emblem }: { size: number; emblem?: string }) {
   return (
     <svg viewBox="0 0 64 56" width={size} height={size * 0.875} className="fm-folder" aria-hidden>
       <path d="M4 10a4 4 0 0 1 4-4h14l6 6h28a4 4 0 0 1 4 4v4H4z" fill="var(--accent)" opacity="0.7" />
@@ -129,7 +129,7 @@ const EXT_COLOR: Record<string, string> = {
   docx: 'var(--blue)', doc: 'var(--blue)', odt: 'var(--blue)', rtf: 'var(--blue)', pages: 'var(--blue)',
 }
 
-function FileIcon({ size, kind, name }: { size: number; kind: FileKind; name: string }) {
+export function FileIcon({ size, kind, name }: { size: number; kind: FileKind; name: string }) {
   const ext = name.includes('.') ? name.split('.').pop()!.slice(0, 4).toUpperCase() : 'TXT'
   const color = EXT_COLOR[ext.toLowerCase()] ?? KIND_COLOR[kind] ?? 'var(--muted)'
   return (

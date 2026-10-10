@@ -4853,6 +4853,7 @@ button.fm-dd-row:hover {
   border-color: var(--accent);
 }
 .ar-list {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -4868,6 +4869,9 @@ button.fm-dd-row:hover {
   padding: 3px 10px;
   font-variant-numeric: tabular-nums;
   cursor: default;
+  /* A file manager's rows, not text: dragging selects rows (the rubber band), never words. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .ar-row > span:not(.ar-name) {
   color: var(--muted);
@@ -4951,7 +4955,11 @@ button.fm-dd-row:hover {
   text-overflow: ellipsis;
 }
 .ar-glyph {
+  display: inline-flex;
+  width: 16px;
+  justify-content: center;
   margin-right: 6px;
+  vertical-align: -3px;
 }
 
 /* ---------- Office (OnlyOffice) ---------- */

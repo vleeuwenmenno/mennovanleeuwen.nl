@@ -260,9 +260,13 @@ ZIP files open in **Archive**, browsed like folders without unpacking them: only
 of contents is read ([`src/data/zip.ts`](src/data/zip.ts)), and from Seafile just the end of the file
 (a Range request), so a big one opens at once. Columns sort by name, size, packed size, how much was
 saved and date; the search looks through the whole archive. Ranges go through the site's server
-(`/api/seafile/raw`): Seafile's file server sends no CORS headers on 206 answers.
+(`/api/seafile/raw`): Seafile's file server sends no CORS headers on 206 answers. It handles like
+Files: click, Ctrl/Shift+click, Shift+arrows, Ctrl+A or a rubber band select; Back, Forward and Up
+(Alt+arrows, Backspace, the mouse's buttons) go through its folders; right-click has the menu
+(*Extract here*, *Extract to…*, *Copy path*, *Properties*; on empty space, sorting and the archive's
+own). A double-click opens a folder or saves a file to your computer, unpacked in the browser.
 
-**Extract** unpacks everything, or the rows picked with Ctrl/Shift+click, into a Seafile folder (a
+**Extract** unpacks everything, or the selected rows, into a Seafile folder (a
 folder named after the archive, next to it, unless you choose another), with *keep both*, *replace*
 or *skip* for names already there; Files' menu has *Extract here* and *Extract to…* on ZIPs. The
 server does the work ([`server/unzip.ts`](server/unzip.ts)): it reads only the chosen files' bytes
