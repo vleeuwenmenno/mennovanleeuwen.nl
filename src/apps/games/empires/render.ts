@@ -592,6 +592,9 @@ export class Renderer {
         ctx.strokeStyle = o.attack ? 'rgba(255,170,90,0.35)' : 'rgba(125,255,160,0.3)'
         ctx.beginPath()
         ctx.moveTo(u.x, u.y)
+        // Follow the way round the rocks when there is one.
+        const route = u.route && u.route.x === o.x && u.route.y === o.y ? u.route.pts : []
+        for (const pt of route) ctx.lineTo(pt.x, pt.y)
         ctx.lineTo(o.x, o.y)
         ctx.stroke()
       } else if (o.k === 'attack') {

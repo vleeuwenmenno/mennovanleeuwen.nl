@@ -1,4 +1,5 @@
-import { inside, mirrored, rng, type MapDef } from './maps'
+import { inside, mirrored, rng, type MapDef, type Pt } from './maps'
+import { clearLine, findPath, navGrid, type NavGrid } from './nav'
 import {
   ABILITIES, BASE_POP, BEACON_INCOME, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   STATION_LEVEL_BONUS, SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UPGRADES, accuracy, dims, effect, isShip, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
@@ -79,6 +80,8 @@ export type Unit = {
   hold: boolean
   /** Inside a nebula: no shields, short sensors. Refreshed every tick. */
   nebula: boolean
+  /** Waypoints round the rocks to where the ship is going (x, y), found when it set off. */
+  route: { x: number; y: number; pts: Pt[] } | null
 }
 
 export type QueueItem = { unit: string; left: number; total: number }
@@ -161,6 +164,8 @@ export type World = {
   winner: number
   grid: Map<number, Unit[]>
   seenT: number
+  /** Path finding grids, one per ship size. */
+  nav: Map<number, NavGrid>
 }
 
 // --- Helpers ----------------------------------------------------------------------------------------
@@ -253,7 +258,7 @@ export function spawn(w: World, id: string, owner: Owner, x: number, y: number, 
       ...g, cd: Math.random() * g.w.cooldown, burst: 0, burstT: 0, target: 0, aim: 0,
     })),
     order: { k: 'idle' }, ax: x, ay: y, squad, parent: 0, target: 0, retarget: Math.random() * 0.5, lastHit: -99, shieldHit: -99, hitAngle: 0,
-    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, hold: false, nebula: false,
+    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, hold: false, nebula: false, route: null,
     seen: Array.from({ length: w.teams }, (_, t) => t === w.players[owner].team),
   }
   w.units.push(u)
@@ -288,7 +293,7 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
   const teams = Math.max(...seats.map((s) => s.team)) + 1
   const w: World = {
     w: W, h: H, time: 0, units: [], byId: new Map(), players: [], teams, map, nodes: [], beacons: [], rocks: [], wrecks: [], shots: [], events: [],
-    nextId: 1, winner: -1, grid: new Map(), seenT: 0,
+    nextId: 1, winner: -1, grid: new Map(), seenT: 0, nav: new Map(),
   }
   w.players = seats.map((s) => {
     const sp = map.spawns[s.spawn]
@@ -366,6 +371,24 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
 const commandable = (u: Unit | undefined, owner: Owner): u is Unit => !!u && !u.dead && u.owner === owner && isShip(u.t)
 
 /** Spread a group's destinations around (x, y), keeping its shape (squeezed if it's spread out). */
+/** A spot a ship can actually reach: moved out to the edge of any rock it falls inside. */
+function offRocks(w: World, u: Unit, x: number, y: number): Pt {
+  if (u.t.tier === 'fighter') return { x, y }
+  const clear = radius(u.t) * 0.7 + 10
+  for (const k of w.rocks) {
+    const R = k.r + clear
+    const dd = d2(x, y, k.x, k.y)
+    if (dd >= R * R) continue
+    const d = Math.sqrt(dd)
+    // Dead centre: come out on the side the ship is coming from.
+    const nx = d > 1 ? (x - k.x) / d : (u.x - k.x) / (Math.hypot(u.x - k.x, u.y - k.y) || 1)
+    const ny = d > 1 ? (y - k.y) / d : (u.y - k.y) / (Math.hypot(u.x - k.x, u.y - k.y) || 1)
+    x = k.x + nx * R
+    y = k.y + ny * R
+  }
+  return { x: clamp(x, 40, w.w - 40), y: clamp(y, 40, w.h - 40) }
+}
+
 function formation(w: World, owner: Owner, ids: number[], x: number, y: number, give: (u: Unit, tx: number, ty: number, pace: number) => void) {
   const us = ids.map((i) => w.byId.get(i)).filter((u) => commandable(u, owner))
   if (!us.length) return
@@ -376,7 +399,8 @@ function formation(w: World, owner: Owner, ids: number[], x: number, y: number, 
   // A group keeps the pace of its slowest ship.
   const pace = us.length > 1 ? Math.min(...us.map((u) => speedOf(u))) : Infinity
   for (const u of us) {
-    give(u, clamp(x + (u.x - cx) * fit, 40, w.w - 40), clamp(y + (u.y - cy) * fit, 40, w.h - 40), pace)
+    const p = offRocks(w, u, clamp(x + (u.x - cx) * fit, 40, w.w - 40), clamp(y + (u.y - cy) * fit, 40, w.h - 40))
+    give(u, p.x, p.y, pace)
     u.target = 0
     u.parent = 0
     u.hold = false
@@ -822,6 +846,60 @@ function steer(u: Unit, tx: number, ty: number, want: number, dt: number, inPlac
   u.v += clamp(target - u.v, -acc * dt * 1.5, acc * dt)
 }
 
+/** Where to head for on the way to (tx, ty): straight there, or round the first rock in the way,
+ * on whichever side of it the ship already is. Without this, a ship aimed through the middle of
+ * a big rock is pushed straight back out and sits there. */
+function detour(w: World, u: Unit, tx: number, ty: number) {
+  const dx = tx - u.x
+  const dy = ty - u.y
+  const len = Math.hypot(dx, dy)
+  if (len < 1) return { x: tx, y: ty }
+  const ux = dx / len
+  const uy = dy / len
+  const clear = radius(u.t) * 0.7 + 30
+  let best: Rock | undefined
+  let first = Infinity
+  let side = 0
+  for (const k of w.rocks) {
+    const rx = k.x - u.x
+    const ry = k.y - u.y
+    const along = rx * ux + ry * uy
+    const R = k.r + clear
+    if (along < -R * 0.2 || along - R > len) continue
+    const off = rx * uy - ry * ux
+    if (Math.abs(off) >= R || along >= first) continue
+    first = along
+    best = k
+    side = off
+  }
+  if (!best) return { x: tx, y: ty }
+  // Pass on our side of the rock: perpendicular to our line, a little beyond the rock's edge.
+  // Dead centre, pick a side by id.
+  let s = Math.abs(side) > 4 ? Math.sign(side) : u.id % 2 ? 1 : -1
+  const R = best.r + clear + 40
+  // No room between the rock and the map's edge: go round the other way.
+  const px = best.x - uy * s * R
+  const py = best.y + ux * s * R
+  if (px < clear || py < clear || px > w.w - clear || py > w.h - clear) s = -s
+  return { x: best.x - uy * s * R, y: best.y + ux * s * R }
+}
+
+/** Where to head for next on the way to (tx, ty): the next waypoint round the rocks, found once
+ * per destination and dropped as each one comes into view. */
+function waypoint(w: World, u: Unit, tx: number, ty: number): Pt {
+  if (!w.rocks.length || u.t.tier === 'fighter') return { x: tx, y: ty }
+  // Sized to 20-unit steps so similar ships share a grid.
+  const clear = Math.ceil((radius(u.t) * 0.7 + 20) / 20) * 20
+  if (!u.route || u.route.x !== tx || u.route.y !== ty) {
+    let g = w.nav.get(clear)
+    if (!g) w.nav.set(clear, (g = navGrid(w.rocks, w.w, w.h, clear)))
+    u.route = { x: tx, y: ty, pts: findPath(g, w.rocks, clear, u.x, u.y, tx, ty) }
+  }
+  const pts = u.route.pts
+  while (pts.length > 1 && (d2(u.x, u.y, pts[0].x, pts[0].y) < 60 ** 2 || clearLine(w.rocks, u.x, u.y, pts[1].x, pts[1].y, clear))) pts.shift()
+  return pts.length ? pts[0] : { x: tx, y: ty }
+}
+
 function moveUnit(w: World, u: Unit, dt: number) {
   const t = u.t
   if (!isShip(t) || building(u)) return
@@ -875,7 +953,8 @@ function moveUnit(w: World, u: Unit, dt: number) {
       const want = fightRange(t) * u.mods.range * 0.8 + radius(e.t) * 0.5
       const dist = Math.hypot(e.x - u.x, e.y - u.y)
       const brake = Math.sqrt(2 * t.speed * 0.9 * Math.max(0, dist - want))
-      steer(u, e.x, e.y, dist > want ? Math.min(max, brake) : 0, dt, dist <= want)
+      const p = dist > want ? detour(w, u, e.x, e.y) : e
+      steer(u, p.x, p.y, dist > want ? Math.min(max, brake) : 0, dt, dist <= want)
     }
   } else if (u.order.k === 'move' || u.order.k === 'patrol') {
     const o = u.order
@@ -888,7 +967,11 @@ function moveUnit(w: World, u: Unit, dt: number) {
         u.ax = o.x
         u.ay = o.y
       }
-    } else steer(u, o.x, o.y, fighter ? pace : Math.min(pace, dist * 0.9 + 12), dt)
+    } else {
+      const wp = waypoint(w, u, o.x, o.y)
+      const p = detour(w, u, wp.x, wp.y)
+      steer(u, p.x, p.y, fighter ? pace : Math.min(pace, dist * 0.9 + 12), dt)
+    }
   } else {
     // Idle: fighters circle their spot, everything else drifts back to it and waits.
     const dist = Math.hypot(u.ax - u.x, u.ay - u.y)
@@ -896,7 +979,11 @@ function moveUnit(w: World, u: Unit, dt: number) {
       const ang = w.time * 0.9 + u.id
       const r = 70 + (u.id % 4) * 18
       steer(u, u.ax + Math.cos(ang) * r, u.ay + Math.sin(ang) * r, max * 0.65, dt)
-    } else if (dist > 30 + radius(t) * 0.3) steer(u, u.ax, u.ay, Math.min(max, dist * 0.8 + 10), dt)
+    } else if (dist > 30 + radius(t) * 0.3) {
+      const wp = waypoint(w, u, u.ax, u.ay)
+      const p = detour(w, u, wp.x, wp.y)
+      steer(u, p.x, p.y, Math.min(max, dist * 0.8 + 10), dt)
+    }
     else u.v = Math.max(0, u.v - t.speed * dt)
   }
 
