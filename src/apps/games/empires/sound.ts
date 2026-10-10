@@ -242,16 +242,28 @@ const missile: Recipe = (sr, r) => {
   })
 }
 
-/** A bolt splashing on shields: glassy partials, a tremble, and a fizz. */
+/** A bolt splashing on a deflector shield: an electric crackle that sizzles down, over a soft,
+ * shimmering hum of the field taking the hit. Airy, with nothing low or knocking in it. */
 const shieldHit: Recipe = (sr, r) => {
-  const os = [new Osc(), new Osc(), new Osc()]
-  const fr = [880, 1320, 1760].map((f) => f * (0.9 + r() * 0.2))
   const bp = new Svf()
-  return render(sr, 0.4, (t) => {
-    const trem = 0.75 + 0.25 * Math.sin(TAU * 38 * t)
-    const ring = os.reduce((s, o, k) => s + o.sin(fr[k] * (1 + 0.004 * Math.sin(TAU * 7 * t)), sr) * Math.exp(-t / (0.16 - k * 0.04)), 0)
-    const fizz = bp.run(noise(), 2800, 0.6, sr).band * ad(t, 0.001, 0.04)
-    return ring * trem * 0.6 + fizz
+  const hp = new Svf()
+  const o1 = new Osc(r())
+  const o2 = new Osc(r())
+  const f = (520 + r() * 80) | 0
+  // Sparks: a few dozen tiny snaps, thinning out.
+  const snaps = Array.from({ length: 28 }, () => [r() ** 1.8 * 0.22, 0.4 + r() * 0.6] as const)
+  return render(sr, 0.3, (t) => {
+    let crackle = 0
+    for (const [at, g] of snaps) {
+      const d = t - at
+      if (d >= 0 && d < 0.003) crackle += noise() * g * (1 - d / 0.003)
+    }
+    const sizzle = bp.run(noise() * 0.5 + crackle, glide(2200, 900, t, 0.2), 1.4, sr).band
+    const vib = 1 + 0.012 * Math.sin(TAU * 23 * t)
+    const hum = (o1.sin(f * vib, sr) + o2.sin(f * 1.505 * vib, sr) * 0.5) * ad(t, 0.012, 0.09)
+    const v = sizzle * ad(t, 0.001, 0.07) * 1.6 + hum * 0.35
+    // Off the bottom: below 350 Hz a hit starts to knock.
+    return soft(v - hp.run(v, 350, 0.8, sr).low)
   })
 }
 
@@ -284,7 +296,8 @@ const explosion = (size: 0 | 1 | 2): Recipe => (sr, r) => {
   const pops = Array.from({ length: [10, 22, 40][size] }, () => [r() * len * 0.8, 0.3 + r() * 0.7] as const)
   const secondary = size === 2 ? [0.35 + r() * 0.2, 0.8 + r() * 0.3, 1.3 + r() * 0.4] : size === 1 ? [0.3 + r() * 0.2] : []
   const shear = size ? wire(sr, len, { stages: 160, a: 0.96, loop: 0.08 + r() * 0.03, fb: 0.55, hiss: 0.4 }) : null
-  const f0 = [190, 130, 95][size] * (0.9 + r() * 0.2)
+  // A fighter's is a soft, airy pop: a quick thump without much pitch to it, or it reads as a knock.
+  const f0 = [120, 130, 95][size] * (0.9 + r() * 0.2)
   const f1 = [48, 34, 26][size]
   return render(sr, len, (t, i) => {
     const crack = crk.run(noise(), 1800, 0.8, sr).high * ad(t, 0.0005, 0.012)
@@ -292,7 +305,7 @@ const explosion = (size: 0 | 1 | 2): Recipe => (sr, r) => {
     for (const s of secondary) env += 0.7 * ad(t - s, 0.01, 0.35)
     const roar = body.run(noise(), glide([2400, 1900, 1500][size], [170, 120, 80][size], t, len * 0.6), 0.6, sr).low * env
     // The "thoom": fast pitch drop, the punch of it.
-    const thoom = sub.sin(glide(f0, f1, t, [0.12, 0.25, 0.4][size]), sr) * ad(t, 0.002, [0.13, 0.3, 0.6][size])
+    const thoom = sub.sin(glide(f0, f1, t, [0.06, 0.25, 0.4][size]), sr) * ad(t, 0.004, [0.08, 0.3, 0.6][size])
     let debris = 0
     for (const [at, g] of pops) {
       const d = t - at
@@ -304,7 +317,7 @@ const explosion = (size: 0 | 1 | 2): Recipe => (sr, r) => {
       size === 2
         ? groanF.run(groanO.saw(glide(62, 34, t, len) * (1 + 0.03 * Math.sin(TAU * 1.7 * t)), sr), glide(420, 140, t, len), 1.2, sr).low * ad(t - 0.4, 0.5, 1.1)
         : 0
-    return soft(crack * 0.6 + roar * 1.6 + thoom * [1.2, 1.5, 1.9][size] + debris * 0.45 + plates * [0, 0.9, 1.1][size] + groan * 0.9)
+    return soft(crack * 0.6 + roar * [1.9, 1.6, 1.6][size] + thoom * [0.55, 1.5, 1.9][size] + debris * 0.45 + plates * [0, 0.9, 1.1][size] + groan * 0.9)
   })
 }
 
