@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type { ServerResponse } from 'node:http'
-import type { User } from './auth.ts'
+import { serverKey, type User } from './auth.ts'
 import { database, decrypt, encrypt } from './db.ts'
 import { HttpError, SECURITY } from './http.ts'
 import { search as codeSearch } from './search.ts'
+import { guardedFetch } from './egress.ts'
 import { fileLink, libraries, listDir, mkdir, removeItems, rename, seafile, seafileInfo, transfer, type Library } from './seafile.ts'
 import { readState, writeState } from './state.ts'
 import { webSearch } from './websearch.ts'
@@ -32,12 +33,12 @@ const NAME = 'ollama'
 
 function storedKey(user: User): string | null {
   const row = database().prepare('SELECT secret FROM integrations WHERE user_id = ? AND name = ?').get(user.id, NAME) as { secret: string } | undefined
-  return row ? decrypt(row.secret) : process.env.OLLAMA_API_KEY?.trim() || null
+  return row ? decrypt(row.secret) : serverKey(user, 'OLLAMA_API_KEY')
 }
 
-/** Where the key comes from, for Settings: saved there, or the server's environment. */
+/** Where the key comes from, for Settings: saved there, or (admins only) the server's environment. */
 export const ollamaSource = (user: User): 'settings' | 'server' | null =>
-  database().prepare('SELECT 1 FROM integrations WHERE user_id = ? AND name = ?').get(user.id, NAME) ? 'settings' : process.env.OLLAMA_API_KEY?.trim() ? 'server' : null
+  database().prepare('SELECT 1 FROM integrations WHERE user_id = ? AND name = ?').get(user.id, NAME) ? 'settings' : serverKey(user, 'OLLAMA_API_KEY') ? 'server' : null
 
 /** Checks the key with Ollama (which costs nothing), then stores it encrypted. */
 export async function setOllamaKey(user: User, body: { key?: string }) {
@@ -453,7 +454,7 @@ export function agentsPrompt(user: User, fresh = false): Promise<PromptInfo> {
   const value = (async (): Promise<PromptInfo> => {
     try {
       const { url } = await fileLink(user, promptFile.repo, promptFile.path, 'download')
-      const res = await fetch(url, { signal: AbortSignal.timeout(10_000) })
+      const res = await guardedFetch(user, url, { signal: AbortSignal.timeout(10_000) })
       if (res.status === 404) return { ...builtin, missing: true }
       if (!res.ok) throw new Error(`Seafile answered ${res.status}`)
       const text = (await res.text()).slice(0, 64 * 1024)
@@ -1024,7 +1025,7 @@ async function writeFile(user: User, repo: string, path: string, content: string
   form.append('parent_dir', dir)
   form.append('replace', existing ? '1' : '0')
   form.append('file', new Blob([content], { type: 'text/plain' }), name)
-  const res = await fetch(`${url}?ret-json=1`, { method: 'POST', body: form, signal })
+  const res = await guardedFetch(user, `${url}?ret-json=1`, { method: 'POST', body: form, signal })
   if (!res.ok) throw new Error(`Seafile answered ${res.status}: ${(await res.text()).slice(0, 200)}`)
   return { written: absPath(path), bytes: Buffer.byteLength(content), replaced: !!existing }
 }
@@ -1175,7 +1176,7 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
       case 'seafile_read': {
         const repo = await libraryId(user, argString(args, 'library'))
         const { url } = await fileLink(user, repo, absPath(argString(args, 'path')), 'download')
-        const res = await fetch(url, { signal: limit })
+        const res = await guardedFetch(user, url, { signal: limit })
         if (!res.ok) throw new Error(`Seafile answered ${res.status}`)
         if (Number(res.headers.get('content-length')) > 4 * 1024 * 1024) throw new Error('That file is too big to read here (over 4 MB)')
         const bytes = Buffer.from(await res.arrayBuffer())

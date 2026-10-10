@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { User } from './auth.ts'
+import { serverKey, type User } from './auth.ts'
+import { guardedFetch, rethrowEgress } from './egress.ts'
 import { database, decrypt, encrypt } from './db.ts'
 import { HttpError, json, readJson } from './http.ts'
 
@@ -127,7 +128,7 @@ export function viewSettings(s: Settings): WebSearchView {
 /** The Ollama key, read the same way server/agents.ts does: saved in Settings, else the server's. */
 function ollamaKeyOf(user: User): string {
   const row = database().prepare('SELECT secret FROM integrations WHERE user_id = ? AND name = ?').get(user.id, 'ollama') as { secret: string } | undefined
-  return row ? decrypt(row.secret) : process.env.OLLAMA_API_KEY?.trim() || ''
+  return row ? decrypt(row.secret) : serverKey(user, 'OLLAMA_API_KEY') || ''
 }
 
 // --- validation --------------------------------------------------------------------------------
@@ -314,7 +315,7 @@ const hostOf = (url: string) => {
 }
 
 /** Sends a request and reads its JSON, with failures turned into messages the window and the agent can use. */
-async function call(provider: Provider, req: SearchRequest, signal: AbortSignal): Promise<unknown> {
+async function call(user: User, provider: Provider, req: SearchRequest, signal: AbortSignal): Promise<unknown> {
   const label = LABEL[provider]
   // A timeout is reported as one; the agent being stopped is passed on as it is.
   const aborted = (e: unknown): never => {
@@ -323,9 +324,11 @@ async function call(provider: Provider, req: SearchRequest, signal: AbortSignal)
   }
   let res: Response
   try {
-    res = await fetch(req.url, { ...req.init, signal })
+    // SearXNG and custom APIs live wherever the user says: public addresses only (server/egress.ts).
+    res = provider === 'searxng' || provider === 'custom' ? await guardedFetch(user, req.url, { ...req.init, signal }) : await fetch(req.url, { ...req.init, signal })
   } catch (e) {
     if (signal.aborted) aborted(e)
+    rethrowEgress(e)
     // The host only: a custom URL can hold a key in its query.
     throw new HttpError(502, `${label} could not be reached at ${hostOf(req.url)}`)
   }
@@ -431,16 +434,16 @@ export function finish(results: SearchResult[], max: number): SearchResult[] {
     .map((r) => ({ title: r.title || r.url, url: r.url, snippet: r.snippet.length > SNIPPET_CHARS ? `${r.snippet.slice(0, SNIPPET_CHARS)}…` : r.snippet }))
 }
 
-/** A search with the given settings. Exported for the tests; the agent goes through webSearch. */
-export async function searchWith(s: Settings, ollamaKey: string, query: string, max: number, signal: AbortSignal): Promise<{ provider: string; results: SearchResult[] }> {
+/** A search with the given settings, for `user`. The agent goes through webSearch. */
+export async function searchWith(user: User, s: Settings, ollamaKey: string, query: string, max: number, signal: AbortSignal): Promise<{ provider: string; results: SearchResult[] }> {
   const n = Math.min(10, Math.max(1, Math.round(max) || 5))
-  const body = await call(s.provider, buildRequest(s, ollamaKey, query, n), signal)
+  const body = await call(user, s.provider, buildRequest(s, ollamaKey, query, n), signal)
   return { provider: s.provider, results: finish(parse(s, body), n) }
 }
 
 /** The agent's web_search: the configured provider, or Ollama's search when nothing is set up. */
 export async function webSearch(user: User, ollamaKey: string, query: string, max: number, signal: AbortSignal): Promise<{ provider: string; results: SearchResult[] }> {
-  return searchWith(loadSettings(user), ollamaKey, query, max, signal)
+  return searchWith(user, loadSettings(user), ollamaKey, query, max, signal)
 }
 
 // --- routes ------------------------------------------------------------------------------------
@@ -469,7 +472,7 @@ export async function handleWebSearchApi(req: IncomingMessage, res: ServerRespon
     const stored = loadSettings(user)
     const s = body.settings ? mergeSettings(stored, body.settings) : stored
     const started = Date.now()
-    const found = await searchWith(s, ollamaKeyOf(user), query, 5, AbortSignal.timeout(20_000))
+    const found = await searchWith(user, s, ollamaKeyOf(user), query, 5, AbortSignal.timeout(20_000))
     return json(res, 200, { ...found, ms: Date.now() - started }), true
   }
   return false

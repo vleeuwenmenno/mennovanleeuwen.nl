@@ -14,7 +14,7 @@ import { Desktop } from './Desktop'
 import { PowerScreens } from './Power'
 import { Notifications } from './Notifications'
 import { Uploads } from './Uploads'
-import { Dialogs } from './Dialogs'
+import { Dialogs, tell } from './Dialogs'
 import { FolderPicker } from './FolderPicker'
 import { initBackButton, setBackFocus } from './backButton'
 import { startActivityAlerts } from './activityAlerts'
@@ -632,9 +632,15 @@ function WidgetWindow({ w, def, id }: { w: WinState; def: WidgetDef; id: string 
 
 const AUTH_NOTICES: Record<string, { title: string; body?: string }> = {
   ok: { title: 'Signed in', body: 'Notes, launchers and layouts now sync. Spotlight searches your repositories too (try #123 or repo@branch).' },
-  denied: { title: 'Sign-in refused', body: 'That GitHub account is not allowed on this desktop.' },
   error: { title: 'Sign-in failed', body: 'GitHub did not complete the sign-in. Try again.' },
   off: { title: 'Sign-in is not set up', body: 'This server has no GitHub OAuth app configured.' },
+}
+
+/** Sign-ins the server turned away (server/auth.ts finishLogin), shown as a dialog. */
+const REFUSED: Record<string, (reason: string | null) => { title: string; body: string }> = {
+  full: () => ({ title: "We're full", body: 'MvL OS has room for a limited number of accounts, and they are all taken. Your GitHub account was not added. Try again later; you can keep using this desktop as a guest.' }),
+  closed: () => ({ title: 'Sign-up is closed', body: 'New accounts are not being made right now. Your GitHub account was not added; you can keep using this desktop as a guest.' }),
+  banned: (reason) => ({ title: 'This account is blocked', body: reason ? `The admin blocked this account: ${reason.slice(0, 200)}` : 'The admin blocked this account from signing in.' }),
 }
 
 const GOOGLE_NOTICES: Record<string, { title: string; body?: string }> = {
@@ -681,9 +687,12 @@ export function Shell() {
     // As the browser's new tab page, start in Spotlight, ready to type where to go.
     else if (newTab && linkSettings().newTabPageSpotlight) setOverlay('spotlight')
     // Back from GitHub's sign-in page: /?auth=ok|denied|error|off.
+    const refused = REFUSED[params.get('auth') ?? '']
     const auth = AUTH_NOTICES[params.get('auth') ?? ''] ?? GOOGLE_NOTICES[params.get('google') ?? '']
-    if (auth) setTimeout(() => notify(auth), 1200)
-    if (params.has('open') || params.has('auth') || params.has('google')) history.replaceState(null, '', location.pathname)
+    // A refused sign-up is worth more than a toast: the account was not made.
+    if (refused) setTimeout(() => void tell(refused(params.get('reason'))), 1200)
+    else if (auth) setTimeout(() => notify(auth), 1200)
+    if (params.has('open') || params.has('auth') || params.has('google') || params.has('reason')) history.replaceState(null, '', location.pathname)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

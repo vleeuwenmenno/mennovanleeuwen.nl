@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-// The site's only persistent state: signed-in users, their sessions, linked Gitea/Forgejo
+// The site's only persistent state: users, their sessions, linked Gitea/Forgejo
 // instances, a linked Google Calendar, synced desktop state (notes, window layout, launchers) and
 // the Minecraft server's history. One SQLite file in DATA_DIR (default ./data), opened on first use.
 //
@@ -169,6 +169,13 @@ export function database(): DatabaseSync {
   )`)
   // A quick answer asked from Spotlight: kept out of the Agents app until it is continued there.
   if (!cols('agent_threads').includes('quick')) db.exec('ALTER TABLE agent_threads ADD COLUMN quick INTEGER NOT NULL DEFAULT 0')
+  // Added later: open sign-up. When someone was last seen, whether (and why) they were banned, and
+  // the GitHub scopes their token has; app-wide settings the admin changes (registration, the cap).
+  if (!cols('users').includes('last_seen_at')) db.exec('ALTER TABLE users ADD COLUMN last_seen_at INTEGER')
+  if (!cols('users').includes('banned_at')) db.exec('ALTER TABLE users ADD COLUMN banned_at INTEGER')
+  if (!cols('users').includes('ban_reason')) db.exec('ALTER TABLE users ADD COLUMN ban_reason TEXT')
+  if (!cols('users').includes('github_scopes')) db.exec('ALTER TABLE users ADD COLUMN github_scopes TEXT')
+  db.exec('CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
   // Added later: how many tokens a thread's last reply took up in the model's context.
   if (!(db.prepare('PRAGMA table_info(agent_threads)').all() as { name: string }[]).some((c) => c.name === 'context_tokens')) db.exec('ALTER TABLE agent_threads ADD COLUMN context_tokens INTEGER')
   key = Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
@@ -194,3 +201,13 @@ export function decrypt(sealed: string): string {
 }
 
 export const sha256 = (s: string) => createHash('sha256').update(s).digest('hex')
+
+/** An app-wide setting the admin changed (server/admin.ts), or null when it was never set. */
+export function appSetting(name: string): string | null {
+  const row = database().prepare('SELECT value FROM app_settings WHERE key = ?').get(name) as { value: string } | undefined
+  return row?.value ?? null
+}
+
+export function setAppSetting(name: string, value: string) {
+  database().prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value').run(name, value)
+}

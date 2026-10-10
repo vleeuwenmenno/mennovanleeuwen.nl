@@ -16,7 +16,7 @@ import { libraryName, loadLibraries, primaryOf, setSeafilePrefs, useLibraries, u
 import { fstabEntries, isSeafileType, useMounts } from '../data/mounts'
 
 const libraryNameOf = (prefix: string) => libraryName(prefix.slice('seafile://'.length))
-import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, signIn, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelyOwner } from '../os/account'
+import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, hasRepoScope, signIn, signInWithRepos, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelyOwner } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
@@ -71,8 +71,15 @@ function Account() {
         <span className="set-hero-avatar is-guest">?</span>
         <strong>Guest</strong>
         <p className="muted">Your notes, launchers and settings are saved in this browser.</p>
-        <button className="link-btn" onClick={signIn}>
-          Owner sign-in
+        {account.registration && !account.registration.open ? (
+          <p className="muted">Sign-up is closed right now. Existing accounts can still sign in.</p>
+        ) : account.registration?.full ? (
+          <p className="muted">We're full: every account is taken. Existing accounts can still sign in.</p>
+        ) : (
+          <p className="muted">Sign in with GitHub for your own desktop: notes, layouts and integrations that follow you between devices.</p>
+        )}
+        <button className="btn btn-primary" onClick={signIn}>
+          Sign in with GitHub
         </button>
       </div>
     )
@@ -492,8 +499,14 @@ function Instances() {
           <span className="set-glyph">⌥</span>
           <span className="set-row-text">
             <strong>GitHub</strong>
-            <span className="muted">@{account.user!.login} · from your sign-in</span>
+            <span className="muted">
+              @{account.user!.login} · {hasRepoScope(account.user) ? 'public and private repositories' : 'public repositories only'}
+            </span>
           </span>
+          {/* Sign-in only asks GitHub for the profile; private repositories take the broad `repo` scope. */}
+          <button className="btn btn-small" onClick={() => signInWithRepos(!hasRepoScope(account.user))}>
+            {hasRepoScope(account.user) ? 'Public only' : 'Allow private'}
+          </button>
         </li>
         {account.forges.map((f) => (
           <li key={f.id} className="set-row">
@@ -515,6 +528,7 @@ function Instances() {
         Link an instance…
       </button>
       <p className="muted set-help">Gitea and Forgejo instances are linked with a personal access token. Spotlight then searches their repositories, issues, pull requests and branches too.</p>
+      <p className="muted set-help">Private GitHub repositories need GitHub's <code>repo</code> scope, which also allows writing to them (GitHub has no read-only version). Turning it off again may need the app removed under GitHub → Settings → Applications.</p>
     </>
   )
 }

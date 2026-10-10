@@ -3,7 +3,7 @@ import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
 import { addMemory, agentsPrompt, answer, approve, automaticModels, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, deleteMemory, deleteThread, getThread, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
-import { authEnabled, currentUser, finishLogin, logout, requireUser, startLogin } from './auth.ts'
+import { authEnabled, currentUser, finishLogin, logout, registration, requireUser, startLogin } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { addCaldav, listCaldav, removeCaldav } from './caldav.ts'
@@ -59,13 +59,15 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
 
     // Sign-in.
-    if (read && path === '/api/auth/github/login') return startLogin(req, res), true
+    if (read && path === '/api/auth/github/login') return startLogin(req, res, url), true
     if (read && path === '/api/auth/github/callback') return await finishLogin(req, res, url), true
     if (read && path === '/api/me') {
       const user = currentUser(req)
       json(res, 200, {
         authEnabled: authEnabled(),
-        user: user && { login: user.login, name: user.name, avatar: user.avatar },
+        // Whether a new account could sign up now (the sign-in button says so before GitHub does).
+        registration: authEnabled() ? (({ open, full }) => ({ open, full }))(registration()) : null,
+        user: user && { id: user.id, login: user.login, name: user.name, avatar: user.avatar, admin: user.admin, githubScopes: user.githubScopes },
         forges: user ? listForges(user) : [],
         googleEnabled: googleEnabled(),
         google: user ? googleAccount(user) : null,

@@ -1,4 +1,4 @@
-import type { User } from './auth.ts'
+import { serverKey, type User } from './auth.ts'
 import { database, decrypt, encrypt } from './db.ts'
 import { HttpError } from './http.ts'
 
@@ -52,12 +52,12 @@ async function get<T>(path: string, key: string): Promise<T> {
 
 function storedKey(user: User): string | null {
   const row = database().prepare('SELECT secret FROM integrations WHERE user_id = ? AND name = ?').get(user.id, NAME) as { secret: string } | undefined
-  return row ? decrypt(row.secret) : process.env.UPDOWN_API_KEY?.trim() || null
+  return row ? decrypt(row.secret) : serverKey(user, 'UPDOWN_API_KEY')
 }
 
-/** Where the key comes from, for Settings: saved there, or the server's environment. */
+/** Where the key comes from, for Settings: saved there, or (admins only) the server's environment. */
 export const updownSource = (user: User): 'settings' | 'server' | null =>
-  database().prepare('SELECT 1 FROM integrations WHERE user_id = ? AND name = ?').get(user.id, NAME) ? 'settings' : process.env.UPDOWN_API_KEY?.trim() ? 'server' : null
+  database().prepare('SELECT 1 FROM integrations WHERE user_id = ? AND name = ?').get(user.id, NAME) ? 'settings' : serverKey(user, 'UPDOWN_API_KEY') ? 'server' : null
 
 /** Checks the key against updown.io, then stores it. */
 export async function setUpdownKey(user: User, body: { key?: string }) {

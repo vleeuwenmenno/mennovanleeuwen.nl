@@ -11,6 +11,7 @@ import { readTar, scanTar, TarError } from '../src/data/tar.ts'
 import { METHODS, readZip, type ZipEntry, type ZipIndex } from '../src/data/zip.ts'
 import type { User } from './auth.ts'
 import { HttpError } from './http.ts'
+import { guardedFetch } from './egress.ts'
 import { fileLink, guard, listDir, mkdir, repoId, seafPath } from './seafile.ts'
 
 // Unpacking an archive that is in Seafile into a Seafile folder, here on the server. Each chosen
@@ -66,8 +67,8 @@ function safeRel(path: string): string | null {
 }
 
 /** One byte range of the archive. */
-async function range(url: string, from: number, to: number, signal?: AbortSignal): Promise<Response> {
-  const res = await fetch(url, { headers: { Range: `bytes=${from}-${to}` }, signal })
+async function range(user: User, url: string, from: number, to: number, signal?: AbortSignal): Promise<Response> {
+  const res = await guardedFetch(user, url, { headers: { Range: `bytes=${from}-${to}` }, signal })
   if (res.status !== 206) {
     await res.body?.cancel().catch(() => {})
     throw new Error(`Seafile's file server answered ${res.status} to a range`)
@@ -76,8 +77,8 @@ async function range(url: string, from: number, to: number, signal?: AbortSignal
 }
 
 /** The whole archive, as a stream (for gzipped tars). */
-async function whole(url: string, signal?: AbortSignal): Promise<Readable> {
-  const res = await fetch(url, { signal })
+async function whole(user: User, url: string, signal?: AbortSignal): Promise<Readable> {
+  const res = await guardedFetch(user, url, { signal })
   if (!res.ok || !res.body) {
     await res.body?.cancel().catch(() => {})
     throw new Error(`Seafile's file server answered ${res.status}`)
@@ -87,13 +88,13 @@ async function whole(url: string, signal?: AbortSignal): Promise<Readable> {
 
 /** A gzipped tar's contents, unzipped as they come. A failed or stopped download ends the
  * unzipped stream with its error (pipe() alone would leave it unhandled, which ends the process). */
-async function tgzStream(url: string, signal?: AbortSignal): Promise<Readable> {
-  return streamPipeline(await whole(url, signal), createGunzip(), () => {})
+async function tgzStream(user: User, url: string, signal?: AbortSignal): Promise<Readable> {
+  return streamPipeline(await whole(user, url, signal), createGunzip(), () => {})
 }
 
 /** Where a file's data starts: after its local header, whose name and extra lengths can differ. */
-async function dataStart(url: string, e: ZipEntry, signal: AbortSignal): Promise<number> {
-  const head = new Uint8Array(await (await range(url, e.offset, e.offset + 29, signal)).arrayBuffer())
+async function dataStart(user: User, url: string, e: ZipEntry, signal: AbortSignal): Promise<number> {
+  const head = new Uint8Array(await (await range(user, url, e.offset, e.offset + 29, signal)).arrayBuffer())
   const v = new DataView(head.buffer)
   if (v.getUint32(0, true) !== 0x04034b50) throw new Error('its local header is damaged')
   return e.offset + 30 + v.getUint16(26, true) + v.getUint16(28, true)
@@ -101,7 +102,8 @@ async function dataStart(url: string, e: ZipEntry, signal: AbortSignal): Promise
 
 // --- reading archives ----------------------------------------------------------------------------
 
-type Opened = { repo: string; path: string; format: ArchiveFormat; url: string; size: number; id: string }
+/** `user` opened it: the download link is only fetched where egress allows (server/egress.ts). */
+type Opened = { user: User; repo: string; path: string; format: ArchiveFormat; url: string; size: number; id: string }
 
 /** An archive in Seafile: its format (by name), size, content id and a download link. */
 async function openArchive(user: User, repo: string, path: string): Promise<Opened> {
@@ -114,15 +116,15 @@ async function openArchive(user: User, repo: string, path: string): Promise<Open
   if (!entry) throw new HttpError(404, 'No such archive')
   if (format === 'tgz' && entry.size > MAX_TGZ) throw new HttpError(413, `A gzipped tar has to be read through whole, so only up to ${MAX_TGZ / 1024 ** 3} GB are opened here`)
   const { url } = await fileLink(user, repo, path, 'download')
-  return { repo, path, format, url, size: entry.size, id: entry.id }
+  return { user, repo, path, format, url, size: entry.size, id: entry.id }
 }
 
 async function readIndex(a: Opened): Promise<ZipIndex> {
   try {
     if (a.format === 'zip') return await readZip(a.url, a.size)
-    if (a.format === 'tar') return await readTar(async (from, to) => new Uint8Array(await (await range(a.url, from, to)).arrayBuffer()), a.size)
+    if (a.format === 'tar') return await readTar(async (from, to) => new Uint8Array(await (await range(a.user, a.url, from, to)).arrayBuffer()), a.size)
     const entries: ZipEntry[] = []
-    await scanTar(await tgzStream(a.url), (e) => void entries.push(e), { maxBytes: MAX_TGZ_UNPACKED })
+    await scanTar(await tgzStream(a.user, a.url), (e) => void entries.push(e), { maxBytes: MAX_TGZ_UNPACKED })
     return { entries, size: a.size, comment: '', zip64: false, format: 'tgz' }
   } catch (e) {
     // zlib says "incorrect header check" for a .tgz that is not gzipped.
@@ -164,7 +166,7 @@ export async function archiveFile(user: User, repo: unknown, path: unknown, entr
   const name = want.split('/').pop()!
   if (a.format === 'tar') {
     if (!e.size) return { name, size: 0, body: Readable.from([]) }
-    const res = await range(a.url, e.offset, e.offset + e.size - 1)
+    const res = await range(a.user, a.url, e.offset, e.offset + e.size - 1)
     return { name, size: e.size, body: Readable.fromWeb(res.body as WebStream<Uint8Array>) }
   }
   // Gzipped: read through up to the file, send it on, and stop there.
@@ -173,7 +175,7 @@ export async function archiveFile(user: User, repo: unknown, path: unknown, entr
   const done = new Error('done')
   void (async () => {
     await scanTar(
-      await tgzStream(a.url, stop.signal),
+      await tgzStream(a.user, a.url, stop.signal),
       async (x, data) => {
         if (x.path !== want || x.dir) return
         for await (const chunk of data) if (!out.write(chunk)) await new Promise((r) => out.once('drain', r))
@@ -317,7 +319,7 @@ async function run(job: Job, user: User, archive: Opened, plan: { e: ZipEntry; r
       form.append('parent_dir', job.into.path)
       if (at.dir) form.append('relative_path', at.dir)
       if (at.replace) form.append('replace', '1')
-      return fetch(`${link}?ret-json=1`, { method: 'POST', body: form, signal })
+      return guardedFetch(user, `${link}?ret-json=1`, { method: 'POST', body: form, signal })
     }
     let res = await post(await uploadLink())
     if (res.status === 403 || res.status === 401) res = await post(await uploadLink(true))
@@ -335,11 +337,11 @@ async function run(job: Job, user: User, archive: Opened, plan: { e: ZipEntry; r
     try {
       const t = checker(e)
       if (format === 'tar' && e.size > 0) {
-        const res = await range(url, e.offset, e.offset + e.size - 1, signal)
+        const res = await range(user, url, e.offset, e.offset + e.size - 1, signal)
         await pipeline(Readable.fromWeb(res.body as WebStream<Uint8Array>), t.stream, createWriteStream(file), { signal })
       } else if (format === 'zip' && e.compressed > 0) {
-        const start = await dataStart(url, e, signal)
-        const res = await range(url, start, start + e.compressed - 1, signal)
+        const start = await dataStart(user, url, e, signal)
+        const res = await range(user, url, start, start + e.compressed - 1, signal)
         const source = Readable.fromWeb(res.body as WebStream<Uint8Array>)
         if (e.method === 8) await pipeline(source, createInflateRaw(), t.stream, createWriteStream(file), { signal })
         else await pipeline(source, t.stream, createWriteStream(file), { signal })
@@ -360,7 +362,7 @@ async function run(job: Job, user: User, archive: Opened, plan: { e: ZipEntry; r
       if (!signal.aborted) job.errors.push({ path: rel, error: err.message })
     }
     await scanTar(
-      await tgzStream(url, signal),
+      await tgzStream(user, url, signal),
       async (e, data) => {
         if (signal.aborted) throw new Error('cancelled')
         const item = wanted.get(e.path)

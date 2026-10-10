@@ -8,10 +8,13 @@ export type ForgeInfo = { id: number; label: string; baseUrl: string; username: 
 export type CaldavInfo = { id: number; label: string; url: string; username: string }
 /** The linked Seafile account (one), and the OnlyOffice server it uses if added. Never the token or secret. */
 export type SeafileInfo = { url: string; username: string; name: string | null; version: string | null; office: { url: string } | null }
-export type AccountUser = { login: string; name: string | null; avatar: string | null }
+export type AccountUser = { id: number; login: string; name: string | null; avatar: string | null; admin: boolean; githubScopes: string[] }
+/** Whether a new GitHub account could sign up now (null: sign-in is off). */
+export type Registration = { open: boolean; full: boolean }
 export type Account = {
   status: 'loading' | 'off' | 'anon' | 'user'
   user: AccountUser | null
+  registration: Registration | null
   forges: ForgeInfo[]
   /** Whether this server can link Google Calendar, and the linked account if any */
   googleEnabled: boolean
@@ -23,7 +26,7 @@ export type Account = {
   seafile: SeafileInfo | null
 }
 
-let account: Account = { status: 'loading', user: null, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null }
+let account: Account = { status: 'loading', user: null, registration: null, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null }
 const listeners = new Set<() => void>()
 
 const OWNER_HINT = 'mvlos.owner'
@@ -80,18 +83,24 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
 
 export async function loadAccount() {
   try {
-    const me = await api<{ authEnabled: boolean; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string; canWrite?: boolean } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null; ollama?: 'settings' | 'server' | null }; seafile?: SeafileInfo | null }>('/api/me')
-    set({ status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null, ollama: me.integrations?.ollama ?? null }, seafile: me.seafile ?? null })
+    const me = await api<{ authEnabled: boolean; registration?: Registration | null; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string; canWrite?: boolean } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null; ollama?: 'settings' | 'server' | null }; seafile?: SeafileInfo | null }>('/api/me')
+    set({ status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, registration: me.registration ?? null, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null, ollama: me.integrations?.ollama ?? null }, seafile: me.seafile ?? null })
   } catch {
-    set({ status: 'off', user: null, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
+    set({ status: 'off', user: null, registration: null, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
   }
 }
 
 export const signIn = () => location.assign('/api/auth/github/login')
 
+/** Signs in again, asking GitHub for private repositories too (remembered for later sign-ins), or no longer asking. */
+export const signInWithRepos = (repo: boolean) => location.assign(`/api/auth/github/login?repo=${repo ? 1 : 0}`)
+
+/** Whether GitHub gave this account's token access to private repositories. */
+export const hasRepoScope = (u: AccountUser | null) => !!u?.githubScopes.includes('repo')
+
 export async function signOut() {
   await api('/api/auth/logout', { method: 'POST' }).catch(() => {})
-  set({ status: 'anon', user: null, forges: [], googleEnabled: account.googleEnabled, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
+  set({ status: 'anon', user: null, registration: account.registration, forges: [], googleEnabled: account.googleEnabled, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
 }
 
 /** updown.io's read-only API key, for the Status widget: checked by the server, then stored encrypted. */

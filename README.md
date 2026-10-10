@@ -139,8 +139,22 @@ dock icon to remove it, and right-click (or Shift+Enter) an app, launcher or rep
 Spotlight or All apps to pin it. Settings → Dock lists what was taken off, to add it back, and
 restores the default dock. Everyone can still drag dock icons to reorder them.
 
-Only GitHub logins in `ALLOWED_USERS` (default `vleeuwenmenno`) can sign in; everyone else keeps
-the CV. Gitea/Forgejo instances are linked from Settings → Code hosts, in a window of their own, with a personal access token (read access to
+Anyone with a GitHub account can sign up for a desktop of their own, up to `MAX_USERS` accounts
+(default 100). Over the cap, or with sign-up closed, a new account gets a "We're full" (or
+"Sign-up is closed") dialog instead; existing accounts and admins can always sign in. Logins in
+`ADMIN_USERS` (default `vleeuwenmenno`) are admins: Settings → Users lists the accounts (counts and
+sizes only, never their contents), bans, signs out and deletes them, and opens or closes sign-up.
+Keys set on the server (`OLLAMA_API_KEY`, `UPDOWN_API_KEY`) are only used for admins; everyone
+else saves their own in Settings → Integrations.
+
+Users choose the addresses of their Gitea, CalDAV, Seafile, OnlyOffice and search servers, so the
+server only reaches public addresses for them, also after redirects
+([`server/egress.ts`](server/egress.ts)); admins may use internal ones. A host whose DNS answer
+changes between that check and the request can still get through, so in production also keep the
+container away from private networks, e.g. with a rule in Docker's `DOCKER-USER` chain:
+`iptables -I DOCKER-USER -s <site container subnet> -d 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16 -j DROP`.
+
+Gitea/Forgejo instances are linked from Settings → Code hosts, in a window of their own, with a personal access token (read access to
 repository, issue, user and organization). Tokens are stored encrypted (AES-256-GCM) in SQLite
 (`node:sqlite`, no extra dependency) under `DATA_DIR` (default `./data`, a volume in compose).
 
@@ -149,12 +163,12 @@ Setup:
 1. Create a GitHub OAuth app (GitHub → Settings → Developer settings → OAuth Apps) with callback
    URL `https://<your site>/api/auth/github/callback`. Local dev needs its own app with
    `http://localhost:5173/api/auth/github/callback`.
-2. Put `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `.env`. Optional: `ALLOWED_USERS`
-   (comma-separated logins), `PUBLIC_URL` (the site's
+2. Put `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `.env`. Optional: `ADMIN_USERS`
+   (comma-separated logins), `MAX_USERS` (the starting cap; Settings → Users changes it), `PUBLIC_URL` (the site's
    address, e.g. `https://mennovanleeuwen.nl`; set it in production, since without it the server
    takes `Host` and `X-Forwarded-*` from each request, and logs a warning at startup), `SESSION_SECRET` (otherwise a random key is generated once into
-   `DATA_DIR/secret.key`), `GITHUB_SCOPES` (default `read:user repo read:org`; `repo` is what
-   lets Spotlight see private repositories).
+   `DATA_DIR/secret.key`), `GITHUB_SCOPES` (what "Allow private" in Settings → Code hosts asks
+   for, default `read:user repo read:org`; sign-in itself only asks for `read:user`).
 
 Without the OAuth settings, sign-in is simply off and everything else works as before.
 
