@@ -155,24 +155,29 @@ function wire(sr: number, secs: number, o: { stages: number; a: number; loop: nu
   return out
 }
 
-/** A starfighter's laser cannon: small and quick, a light "pew" with the wire's ring on it, kept
- * out of the shrill top end. Droid fighters are buzzier. */
+/** A starfighter's laser cannon, after the film's TIE fighters: a short, gritty, overdriven zap
+ * that drops in pitch at once and stops, with no ring or tail. Kept between 300 Hz and 2.4 kHz so it
+ * bites without being shrill. Droid fighters' are a little lower and buzzier. */
 const fighterBlaster = (droid: boolean): Recipe => (sr, r) => {
-  const ring = wire(sr, 0.17, { stages: 110, a: 0.9, loop: 0.026 + r() * 0.006, fb: 0.32, hiss: 0.3 })
+  // One fall of the wire, without the loop that made it ring on.
+  const chirp = wire(sr, 0.08, { stages: 70, a: 0.88, loop: 1, fb: 0 })
   const o1 = new Osc(r())
   const o2 = new Osc(r())
+  const bp = new Svf()
   const lp = new Svf()
   const hp = new Svf()
-  const f0 = (droid ? 1100 : 1300) * (0.94 + r() * 0.12)
-  const f1 = droid ? 360 : 420
-  return render(sr, 0.17, (t, i) => {
-    const fr = glide(f0, f1, t, 0.06)
-    const tone = droid ? o1.sqr(fr, sr) * 0.5 + o2.sqr(fr * 1.01, sr) * 0.3 : o1.sin(fr, sr) * 0.7 + o2.tri(fr * 2, sr) * 0.25
-    const v = ring[i] * 0.8 * ad(t, 0.0005, 0.05) + tone * 0.7 * ad(t, 0.001, 0.028)
-    // Below 2.4 kHz (2 kHz for the buzzier droids) and above 280 Hz: bright enough to cut
-    // through, light, never piercing.
-    const low = lp.run(v, droid ? 2000 : 2400, 0.7, sr).low
-    return soft((low - hp.run(low, 280, 0.9, sr).low) * 1.3)
+  const f0 = (droid ? 1250 : 1500) * (0.94 + r() * 0.12)
+  const f1 = droid ? 300 : 360
+  return render(sr, 0.08, (t, i) => {
+    const fr = glide(f0, f1, t, 0.045)
+    // A saw and a square a fifth under it, for the snarl.
+    const raw = o1.saw(fr, sr) * 0.7 + o2.sqr(fr * (droid ? 0.5 : 0.667), sr) * (droid ? 0.5 : 0.35)
+    const zap = bp.run(raw + noise() * 0.25, glide(2200, 650, t, 0.05), 0.9, sr).band
+    const v = (zap * 1.3 + chirp[i] * 0.5) * ad(t, 0.0004, 0.02)
+    // Overdriven for grit, then held between 300 Hz and 2.4 kHz.
+    const hot = soft(v * 3.2)
+    const low = lp.run(hot, droid ? 2000 : 2400, 0.7, sr).low
+    return low - hp.run(low, 300, 0.9, sr).low
   })
 }
 
@@ -847,7 +852,8 @@ export class EmpiresSound {
     this.feel(kind === 'turbo' ? 0.4 : light ? 0.05 : 0.1, where)
     if (where.gain < 0.03) return
     if (kind === 'laser' && light) {
-      if (this.allow('pew', 4)) this.play(`pew-${faction}`, fighterBlaster(faction === 'droid'), { where, gain: 0.32, takes: 4 })
+      // Dry: reverb would draw the snap out into a whoosh.
+      if (this.allow('pew', 4)) this.play(`pew-${faction}`, fighterBlaster(faction === 'droid'), { where, gain: 0.32, verb: 0.08, takes: 4 })
     } else if (kind === 'laser' && this.allow('laser', 3)) this.play(`laser-${faction}`, blaster(faction === 'droid'), { where, gain: 0.5, takes: 4 })
     else if (kind === 'turbo' && this.allow('turbo', 3, 0.1)) this.play('turbo', turbolaser, { where, gain: 0.8, rate: faction === 'droid' ? 0.92 : 1, takes: 4 })
     else if (kind === 'flak' && this.allow('flak', 3)) this.play('flak', flak, { where, gain: 0.55, takes: 4 })
