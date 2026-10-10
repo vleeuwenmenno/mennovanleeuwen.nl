@@ -1,4 +1,4 @@
-import { mirrored, type MapDef } from './maps'
+import { inside, mirrored, rng, type MapDef } from './maps'
 import {
   ABILITIES, BASE_POP, BEACON_INCOME, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   STATION_LEVEL_BONUS, SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UPGRADES, accuracy, dims, effect, isShip, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
@@ -73,6 +73,8 @@ export type Unit = {
   mods: Mods
   /** Hold position: fight from where it stands, never chase. */
   hold: boolean
+  /** Inside a nebula: no shields, short sensors. Refreshed every tick. */
+  nebula: boolean
 }
 
 export type QueueItem = { unit: string; left: number; total: number }
@@ -155,17 +157,6 @@ const wrap = (a: number) => ((a + Math.PI) % TAU + TAU) % TAU - Math.PI
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v)
 const d2 = (ax: number, ay: number, bx: number, by: number) => (ax - bx) ** 2 + (ay - by) ** 2
 
-function rng(seed: number) {
-  let s = seed >>> 0
-  return () => {
-    s = (s + 0x6d2b79f5) >>> 0
-    let t = s
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-
 /** Rough body radius, for spacing, clicking and collisions. */
 export const radius = (t: UnitType) => {
   const [w, h] = dims(t)
@@ -192,6 +183,8 @@ function share(u: Unit, kind: string) {
 /** Shields with every generator up. */
 export const shieldFull = (u: Unit) => u.t.shield * u.mods.shield
 export const shieldMax = (u: Unit) => shieldFull(u) * share(u, 'shield')
+/** How far a unit sees: half as far while building or inside a nebula. */
+export const sensorOf = (u: Unit) => u.t.sensor * (u.building > 0 ? 0.5 : 1) * (u.nebula ? NEBULA_SENSOR : 1)
 export const speedOf = (u: Unit) => u.t.speed * u.mods.speed * (0.25 + 0.75 * share(u, 'engine')) * (u.slow > 0 ? 0.33 : 1)
 
 /** Everything a player has researched for one unit type (or for its station), added up. */
@@ -247,7 +240,7 @@ export function spawn(w: World, id: string, owner: Owner, x: number, y: number, 
       ...g, cd: Math.random() * g.w.cooldown, burst: 0, burstT: 0, target: 0, aim: 0,
     })),
     order: { k: 'idle' }, ax: x, ay: y, squad, parent: 0, target: 0, retarget: Math.random() * 0.5, lastHit: -99, shieldHit: -99, hitAngle: 0,
-    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, hold: false,
+    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, hold: false, nebula: false,
     seen: Array.from({ length: w.teams }, (_, t) => t === w.players[owner].team),
   }
   w.units.push(u)
@@ -296,8 +289,9 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
   const claim = { owner: -1, claim: -1, progress: 0 }
   w.nodes = map.ore.map((p, id) => ({ id, x: p.x, y: p.y, r: 75, rot: r() * TAU, site: 0, ...claim }))
   w.beacons = map.beacons.map((p, id) => ({ id, x: p.x, y: p.y, ...claim }))
-  // Asteroid fields: each one is copied to every side by the map's symmetry, so nobody gets the
-  // better lanes. They keep clear of stations, ore, beacons and the lanes into the middle.
+  // Scattered rocks: each one is copied to every side by the map's symmetry, so nobody gets the
+  // better lanes. They keep clear of stations, ore, beacons, asteroid fields and the lanes into the
+  // middle.
   const keepClear = [...w.nodes.map((n) => [n.x, n.y, 260]), ...w.beacons.map((b) => [b.x, b.y, 330]), ...map.spawns.map((p) => [p.x, p.y, 700])]
   const inLane = (x: number, y: number, rad: number) =>
     map.spawns.some((p) => {
@@ -318,6 +312,7 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
         p.x > 150 && p.y > 150 && p.x < W - 150 && p.y < H - 150 &&
         !keepClear.some(([x, y, cc]) => d2(p.x, p.y, x, y) < (cc + rad) ** 2) &&
         !inLane(p.x, p.y, rad) &&
+        !inside(map.fields, p.x, p.y, rad + 60) &&
         !w.rocks.some((k) => d2(p.x, p.y, k.x, k.y) < (k.r + rad + 40) ** 2),
     )
     if (!ok) continue
@@ -771,10 +766,10 @@ function moveUnit(w: World, u: Unit, dt: number) {
     const engage = u.order.k === 'idle' || u.order.k === 'patrol' || (u.order.k === 'move' && u.order.attack)
     const cur = valid(w, u.target, u.owner)
     // Holding ships only look as far as their guns reach (fighters a little further).
-    const look = u.hold ? (fighter ? 450 : fightRange(t) * u.mods.range + 100) : Math.min(t.sensor, fighter ? 900 : 800)
+    const look = u.hold ? (fighter ? 450 : fightRange(t) * u.mods.range + 100) : Math.min(sensorOf(u), fighter ? 900 : 800)
     const leash = u.hold ? look : fighter ? 1100 : 700
     if (!engage) u.target = 0
-    else if (cur && d2(cur.x, cur.y, u.ax, u.ay) < leash ** 2 && d2(cur.x, cur.y, u.x, u.y) < (t.sensor * 1.1) ** 2) u.target = cur.id
+    else if (cur && d2(cur.x, cur.y, u.ax, u.ay) < leash ** 2 && d2(cur.x, cur.y, u.x, u.y) < (sensorOf(u) * 1.1) ** 2) u.target = cur.id
     else u.target = pickTarget(w, u, look)?.id ?? 0
   }
   const tgt = u.target ? w.byId.get(u.target) : undefined
@@ -1111,7 +1106,7 @@ function sight(w: World) {
       }
       let s = false
       for (const e of eyes[t]) {
-        const r = e.t.sensor * (building(e) ? 0.5 : 1)
+        const r = sensorOf(e)
         if (d2(u.x, u.y, e.x, e.y) < r * r) {
           s = true
           break
@@ -1120,6 +1115,45 @@ function sight(w: World) {
       u.seen[t] = s
     }
   }
+}
+
+// --- Terrain ---------------------------------------------------------------------------------------
+
+/** Sensor range inside a nebula, as a share of the normal range. */
+export const NEBULA_SENSOR = 0.5
+/** Shields bleed away this share of their full strength per second inside a nebula. */
+const NEBULA_DRAIN = 1.5
+/** Below this speed a ship is drifting, not ploughing through rocks. */
+const FIELD_MIN_SPEED = 10
+/** Share of a ship's full shields that rocks knock off per 1000 units flown through a field. A
+ * capital crossing a typical field (about 800 units) loses around an eighth of its shields. */
+const FIELD_WEAR = 0.15
+/** Rocks scrape hulls but never finish a ship off: they stop at this share of the hull. */
+const FIELD_HULL_FLOOR = 0.15
+/** Only big ships are too clumsy to dodge the rocks; fighters and gunships weave through. */
+const CLUMSY: Partial<Record<Tier, true>> = { frigate: true, cruiser: true, capital: true }
+
+/**
+ * Nebulas and asteroid fields acting on one unit this tick. A nebula drains the shields and keeps
+ * them down (and `sensorOf` halves the sensors while `nebula` is set). A big ship moving through
+ * an asteroid field takes a steady patter of hits, more the faster it goes: shields first, then
+ * hull. Neither counts as being attacked, so no alarms and no kill credit. Returns true while the
+ * terrain keeps the shields from recharging.
+ */
+function terrain(w: World, u: Unit, dt: number) {
+  const ship = isShip(u.t)
+  u.nebula = ship && w.map.nebulas.length > 0 && inside(w.map.nebulas, u.x, u.y)
+  if (u.nebula) {
+    u.shield = Math.max(0, u.shield - shieldFull(u) * NEBULA_DRAIN * dt)
+    return true
+  }
+  if (!CLUMSY[u.t.tier] || u.v < FIELD_MIN_SPEED || !w.map.fields.length || !inside(w.map.fields, u.x, u.y)) return false
+  let wear = FIELD_WEAR * (shieldFull(u) || u.hullMax * 0.5) * (u.v / 1000) * dt
+  const soaked = Math.min(u.shield, wear)
+  u.shield -= soaked
+  wear -= soaked
+  if (wear > 0) u.hull = Math.max(Math.min(u.hull, u.hullMax * FIELD_HULL_FLOOR), u.hull - wear)
+  return true
 }
 
 export function tick(w: World, dt = STEP) {
@@ -1152,9 +1186,11 @@ export function tick(w: World, dt = STEP) {
       if (u.t.ability === 'repairSwarm') u.hull = Math.min(u.hullMax, u.hull + u.hullMax * 0.03 * dt)
     }
     if (u.slow > 0) u.slow -= dt
-    // Shields recharge, faster once out of the fight for a few seconds.
-    const smax = shieldMax(u)
-    if (u.shield < smax) u.shield = Math.min(smax, u.shield + u.t.regen * u.mods.regen * dt * (w.time - u.lastHit > 6 ? 2 : 1))
+    // Shields recharge, faster once out of the fight for a few seconds; terrain can stop that.
+    if (!terrain(w, u, dt)) {
+      const smax = shieldMax(u)
+      if (u.shield < smax) u.shield = Math.min(smax, u.shield + u.t.regen * u.mods.regen * dt * (w.time - u.lastHit > 6 ? 2 : 1))
+    }
     if (u.t.carrier) {
       u.hangarT += dt
       if (u.hangarT >= u.t.carrier.every * (techBonus(w.players[u.owner], u.t.id).hangar ? 0.7 : 1)) {

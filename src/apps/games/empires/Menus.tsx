@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DIFFICULTY, type Difficulty } from './ai'
 import { FACTIONS, type FactionId } from './data'
 import { Frame, Icon } from './Hud'
-import { MAP, MAPS, type MapDef } from './maps'
-import { ALLY, ENEMY, OWN, relColor } from './render'
+import { DEFAULT_RULES, GENERATED, MAP, MAPS, MAX_BEACONS, MAX_SEED, cleanRules, generateMap, type Amount, type MapDef, type MapRules } from './maps'
+import { ALLY, ENEMY, OWN, drawTerrainOverview, relColor } from './render'
 import { ACTIONS, RESERVED, bindKey, keyName, keyOf, resetKeys, setSettings, useSettings, type Action, type Settings } from './settings'
 import { newWorld, type Owner, type World } from './sim'
 import type { Bus, EmpiresSound } from './sound'
@@ -14,10 +14,14 @@ import type { Bus, EmpiresSound } from './sound'
 export type SlotKind = 'you' | 'ai' | 'closed'
 /** One spawn point in the lobby: who plays there, as what, on which side. Team 0 is yours. */
 export type Slot = { kind: SlotKind; faction: FactionId; team: 0 | 1; difficulty: Difficulty }
-export type Setup = { map: string; slots: Slot[]; credits: number }
+/** `map` is a fixed map's id, or GENERATED to build one from `gen`. */
+export type Setup = { map: string; slots: Slot[]; credits: number; gen: MapRules }
 
 const SETUP_KEY = 'mvlos.empires.lobby'
 export const CREDIT_STEPS = [500, 1000, 1600, 2500, 4000, 6000, 10000]
+
+/** The map a setup plays on. */
+export const setupMap = (s: Setup): MapDef => (s.map === GENERATED ? generateMap(s.gen) : (MAP[s.map] ?? MAPS[0]))
 
 /** Slots for a map, keeping what was chosen before where the spawn still exists. */
 function slotsFor(map: MapDef, prev: Slot[] = []): Slot[] {
@@ -32,15 +36,22 @@ function slotsFor(map: MapDef, prev: Slot[] = []): Slot[] {
 function lastSetup(): Setup {
   try {
     const v = JSON.parse(localStorage.getItem(SETUP_KEY) ?? 'null') as Partial<Setup> | null
-    const map = v?.map && MAP[v.map] ? MAP[v.map] : MAPS[0]
+    // Setups saved before the generator existed have no rules: they get the defaults.
+    const gen = cleanRules(v?.gen)
+    const map = v?.map === GENERATED ? generateMap(gen) : v?.map && MAP[v.map] ? MAP[v.map] : MAPS[0]
     const ok = (s: Partial<Slot>): s is Slot =>
       !!s && (s.kind === 'ai' || s.kind === 'closed' || s.kind === 'you') && (s.faction === 'republic' || s.faction === 'droid') && (s.team === 0 || s.team === 1) && !!s.difficulty && s.difficulty in DIFFICULTY
     const slots = Array.isArray(v?.slots) ? v.slots.filter(ok) : []
     if (slots[0]) slots[0] = { ...slots[0], kind: 'you', team: 0 }
     const credits = typeof v?.credits === 'number' && CREDIT_STEPS.includes(v.credits) ? v.credits : 1600
-    return { map: map.id, slots: slotsFor(map, slots.slice(0, map.spawns.length)).map((s, i) => (i ? { ...s, kind: s.kind === 'you' ? 'ai' : s.kind } : s)), credits }
+    return {
+      map: v?.map === GENERATED ? GENERATED : map.id,
+      slots: slotsFor(map, slots.slice(0, map.spawns.length)).map((s, i) => (i ? { ...s, kind: s.kind === 'you' ? 'ai' : s.kind } : s)),
+      credits,
+      gen,
+    }
   } catch {
-    return { map: MAPS[0].id, slots: slotsFor(MAPS[0]), credits: 1600 }
+    return { map: MAPS[0].id, slots: slotsFor(MAPS[0]), credits: 1600, gen: { ...DEFAULT_RULES } }
   }
 }
 
@@ -314,6 +325,7 @@ export function HowToPlay() {
         <li>Select your station ({k('station')}) to build ships. Open the tech tree ({k('techTree')}) to research upgrades, including station levels that unlock frigates, cruisers and a flagship. The battle carries on while it's open.</li>
         <li>Big ships have hardpoints. Hover one and right-click a marker to target it: knock out shield generators first.</li>
         <li>Fighters beat cruisers and flagships, gunships beat fighters, frigates beat gunships, cruisers beat frigates.</li>
+        <li>Asteroid fields wear down frigates, cruisers and flagships flying through them (fighters and gunships dodge the rocks). Nebulas knock out shields and halve sensor range.</li>
       </ul>
       <p className="ew-muted ew-small">
         Commands: {k('move')} move, {k('attack')} attack move, {k('patrol')} patrol, {k('hold')} hold, {k('stop')} stop, {k('ability')} ability, {k('rally')} rally point. Camera: {k('panUp')}
@@ -380,7 +392,8 @@ export function MainMenu({ sound, victories, onPlay }: { sound: EmpiresSound; vi
 
 const slotColor = (s: Slot) => (s.kind === 'closed' ? '#5a6478' : s.kind === 'you' ? OWN : s.team === 0 ? ALLY : ENEMY)
 
-/** The map from above: asteroid fields, ore, beacons, and the spawns numbered and coloured by slot. */
+/** The map from above: nebulas, asteroid fields, rocks, ore, beacons, and the spawns numbered and
+ * coloured by slot. */
 function MapPreview({ map, slots, className = '' }: { map: MapDef; slots?: Slot[]; className?: string }) {
   const ref = useRef<HTMLCanvasElement>(null)
   // The real map, with dummy players, for its asteroid layout (maps are seeded, so it matches).
@@ -389,7 +402,11 @@ function MapPreview({ map, slots, className = '' }: { map: MapDef; slots?: Slot[
     const c = ref.current
     if (!c) return
     let w = world.get(map.id)
-    if (!w) world.set(map.id, (w = newWorld(map, map.spawns.map((_, i) => ({ faction: 'republic', team: i, spawn: i })))))
+    if (!w) {
+      // Rerolling a generated map makes a new one each time: keep only the last few.
+      if (world.size > 12) world.clear()
+      world.set(map.id, (w = newWorld(map, map.spawns.map((_, i) => ({ faction: 'republic', team: i, spawn: i })))))
+    }
     const draw = () => {
       const dpr = Math.min(2, window.devicePixelRatio || 1)
       const cw = c.clientWidth
@@ -407,6 +424,7 @@ function MapPreview({ map, slots, className = '' }: { map: MapDef; slots?: Slot[
       g.strokeStyle = 'rgba(140,180,240,0.08)'
       for (let x = 700; x < map.w; x += 700) g.strokeRect(ox + x * s, oy, 0, map.h * s)
       for (let y = 700; y < map.h; y += 700) g.strokeRect(ox, oy + y * s, map.w * s, 0)
+      drawTerrainOverview(g, map, ox, oy, s)
       g.fillStyle = 'rgba(150,150,165,0.45)'
       for (const r of w!.rocks) {
         g.beginPath()
@@ -463,17 +481,81 @@ function MapPreview({ map, slots, className = '' }: { map: MapDef; slots?: Slot[
   return <canvas ref={ref} className={`ew-mappreview ${className}`} />
 }
 
+const AMOUNTS: [Amount, string][] = [
+  ['none', 'None'],
+  ['few', 'Few'],
+  ['many', 'Many'],
+]
+
+/** The generator's rules: compact rows under the map preview, which redraws as they change. */
+function GenControls({ rules, onChange, onReroll }: { rules: MapRules; onChange: (patch: Partial<MapRules>) => void; onReroll: () => void }) {
+  return (
+    <div className="ew-genrules">
+      <div className="ew-row">
+        <span>Players</span>
+        <Seg<2 | 3 | 4> label="Players" value={rules.players} options={[[2, '2'], [3, '3'], [4, '4']]} onChange={(v) => onChange({ players: v })} />
+      </div>
+      <div className="ew-row">
+        <span>Size</span>
+        <Seg label="Size" value={rules.size} options={[['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']]} onChange={(v) => onChange({ size: v })} />
+      </div>
+      <div className="ew-row">
+        <span>Ore</span>
+        <Seg label="Ore" value={rules.resources} options={[['scarce', 'Scarce'], ['normal', 'Normal'], ['rich', 'Rich']]} onChange={(v) => onChange({ resources: v })} />
+      </div>
+      <div className="ew-row">
+        <span>Beacons</span>
+        <select value={String(rules.beacons)} onChange={(e) => onChange({ beacons: e.target.value === 'auto' ? 'auto' : Number(e.target.value) })} aria-label="Beacons">
+          <option value="auto">Auto</option>
+          {Array.from({ length: MAX_BEACONS + 1 }, (_, i) => (
+            <option key={i} value={i}>{i}</option>
+          ))}
+        </select>
+      </div>
+      <div className="ew-row">
+        <span>Asteroid fields</span>
+        <Seg label="Asteroid fields" value={rules.asteroidFields} options={AMOUNTS} onChange={(v) => onChange({ asteroidFields: v })} />
+      </div>
+      <div className="ew-row">
+        <span>Nebulas</span>
+        <Seg label="Nebulas" value={rules.nebulas} options={AMOUNTS} onChange={(v) => onChange({ nebulas: v })} />
+      </div>
+      <div className="ew-row">
+        <span>Seed</span>
+        <span className="ew-seed">
+          <input
+            type="number"
+            min={0}
+            max={MAX_SEED}
+            value={rules.seed}
+            onChange={(e) => onChange({ seed: Math.min(MAX_SEED, Math.max(0, Math.floor(Number(e.target.value)) || 0)) })}
+            aria-label="Seed"
+          />
+          <button onClick={onReroll} title="A new random seed">Reroll</button>
+        </span>
+      </div>
+    </div>
+  )
+}
+
 export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack: () => void; onLaunch: (s: Setup) => void }) {
   const [setup, setSetup] = useState(lastSetup)
-  const map = MAP[setup.map]
+  const generated = useMemo(() => generateMap(setup.gen), [setup.gen])
+  const isGen = setup.map === GENERATED
+  const map = isGen ? generated : (MAP[setup.map] ?? MAPS[0])
   const update = (next: Setup) => {
     setSetup(next)
     saveSetup(next)
   }
   const setSlot = (i: number, patch: Partial<Slot>) => update({ ...setup, slots: setup.slots.map((s, j) => (j === i ? { ...s, ...patch } : s)) })
-  const pickMap = (m: MapDef) => {
+  const pickMap = (m: MapDef, id = m.id) => {
     sound.click()
-    update({ ...setup, map: m.id, slots: slotsFor(m, setup.slots.slice(0, m.spawns.length)) })
+    update({ ...setup, map: id, slots: slotsFor(m, setup.slots.slice(0, m.spawns.length)) })
+  }
+  const setRules = (patch: Partial<MapRules>) => {
+    const gen = cleanRules({ ...setup.gen, ...patch })
+    const m = generateMap(gen)
+    update({ ...setup, gen, slots: isGen ? slotsFor(m, setup.slots.slice(0, m.spawns.length)) : setup.slots })
   }
   const enemies = setup.slots.filter((s) => s.kind === 'ai' && s.team === 1).length
   const allies = setup.slots.filter((s) => s.kind === 'ai' && s.team === 0).length
@@ -488,7 +570,7 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
         <Frame title="Map" className="ew-lobby-maps">
           <div className="ew-maplist">
             {MAPS.map((m) => (
-              <button key={m.id} className={`ew-mapcard ${m.id === map.id ? 'is-on' : ''}`} onClick={() => pickMap(m)} aria-pressed={m.id === map.id}>
+              <button key={m.id} className={`ew-mapcard ${!isGen && m.id === map.id ? 'is-on' : ''}`} onClick={() => pickMap(m)} aria-pressed={!isGen && m.id === map.id}>
                 <MapPreview map={m} className="is-thumb" />
                 <span>
                   <strong>{m.name}</strong>
@@ -496,11 +578,28 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
                 </span>
               </button>
             ))}
+            <button className={`ew-mapcard ${isGen ? 'is-on' : ''}`} onClick={() => pickMap(generated, GENERATED)} aria-pressed={isGen}>
+              <MapPreview map={generated} className="is-thumb" />
+              <span>
+                <strong>Generated</strong>
+                <small>{generated.spawns.length} players · seed {setup.gen.seed}</small>
+              </span>
+            </button>
           </div>
         </Frame>
         <Frame title={map.name} className="ew-lobby-preview" aside={<span className="ew-muted ew-small">{map.spawns.length} spawns · {map.beacons.length} beacons · {map.ore.length} ore</span>}>
           <MapPreview map={map} slots={setup.slots} />
           <p className="ew-muted">{map.blurb}</p>
+          {isGen && (
+            <GenControls
+              rules={setup.gen}
+              onChange={setRules}
+              onReroll={() => {
+                sound.click()
+                setRules({ seed: Math.floor(Math.random() * (MAX_SEED + 1)) })
+              }}
+            />
+          )}
         </Frame>
         <Frame title="Players" className="ew-lobby-slots">
           <div className="ew-slotlist">

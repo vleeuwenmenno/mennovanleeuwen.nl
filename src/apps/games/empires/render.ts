@@ -1,9 +1,10 @@
 import { FACTIONS, SURVEY_RADIUS, dims, isShip, type HardpointKind, type Tier } from './data'
 import { HP_COLOR, HP_ICON, HP_NAME } from './icons'
-import { building, foes, hpPos, radius, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
+import { rng, type MapDef, type Nebula, type Patch } from './maps'
+import { building, foes, hpPos, radius, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 
-// Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, ore,
-// rocks and beacons, the ships (generated sprites rotated in code, with engine glow, shield
+// Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, nebulas
+// and asteroid fields, ore, rocks and beacons, the ships (generated sprites rotated in code, with engine glow, shield
 // shimmer and hardpoint markers), laser bolts, explosions and smoke, then fog of war on top. The
 // minimap is drawn here too.
 
@@ -44,6 +45,115 @@ type Particle = {
   x: number; y: number; vx: number; vy: number; life: number; max: number; size: number; grow: number; color: string; rot: number; vr: number
 }
 type Pending = { at: number; x: number; y: number; size: number; final: boolean }
+/** One small rock in an asteroid field, circling slowly round its spot as it tumbles. */
+type FieldRock = { x: number; y: number; size: number; rot: number; spin: number; kind: number; orbit: number; phase: number; speed: number }
+/** One layer of a nebula: a pre-painted cloud, turned slowly so the gas seems to churn. */
+type CloudLayer = { img: HTMLCanvasElement; x: number; y: number; r: number; spin: number; add: boolean; phase: number }
+type TerrainArt = { map: MapDef; clouds: CloudLayer[]; rocks: FieldRock[]; fields: Patch[] }
+
+const TAU = Math.PI * 2
+
+/**
+ * A nebula patch painted once into a small canvas (a quarter of world size; it's soft anyway):
+ * dozens of overlapping coloured puffs, a few bright wisps, a few darker gaps, then faded out
+ * towards the patch's edge, where its effect on ships ends.
+ */
+function cloudCanvas(n: Nebula, seed: number, bright: boolean) {
+  const k = 0.25
+  const R = n.r * 1.08
+  const size = Math.max(8, Math.ceil(R * 2 * k))
+  const c = document.createElement('canvas')
+  c.width = c.height = size
+  const g = c.getContext('2d')!
+  const r = rng(seed)
+  const mid = size / 2
+  const puff = (d: number, rad: number, color: (hue: number) => [string, string]) => {
+    const a = r() * TAU
+    const dd = Math.sqrt(r()) * d
+    const x = mid + Math.cos(a) * dd
+    const y = mid + Math.sin(a) * dd
+    const pr = rad * (0.6 + r() * 0.8)
+    const [c0, c1] = color(n.hue + (r() - 0.5) * 44)
+    const grd = g.createRadialGradient(x, y, 0, x, y, pr)
+    grd.addColorStop(0, c0)
+    grd.addColorStop(1, c1)
+    g.fillStyle = grd
+    g.fillRect(x - pr, y - pr, pr * 2, pr * 2)
+  }
+  const nr = n.r * k
+  for (let i = 0; i < (bright ? 14 : 30); i++)
+    puff(nr * 0.75, nr * (bright ? 0.22 : 0.4), (h) => [`hsla(${h},78%,${48 + r() * 18}%,${(bright ? 0.1 : 0.17) + r() * 0.12})`, `hsla(${h},78%,40%,0)`])
+  g.globalCompositeOperation = 'lighter'
+  for (let i = 0; i < (bright ? 8 : 4); i++) puff(nr * 0.6, nr * 0.15, (h) => [`hsla(${h},95%,75%,${0.06 + r() * 0.08})`, `hsla(${h},95%,70%,0)`])
+  g.globalCompositeOperation = 'destination-out'
+  for (let i = 0; i < 5; i++) puff(nr * 0.8, nr * 0.18, () => [`rgba(0,0,0,${0.2 + r() * 0.2})`, 'rgba(0,0,0,0)'])
+  g.globalCompositeOperation = 'destination-in'
+  const edge = g.createRadialGradient(mid, mid, nr * 0.5, mid, mid, R * k)
+  edge.addColorStop(0, 'rgba(0,0,0,1)')
+  edge.addColorStop(1, 'rgba(0,0,0,0)')
+  g.fillStyle = edge
+  g.fillRect(0, 0, size, size)
+  return c
+}
+
+function terrainArt(map: MapDef): TerrainArt {
+  const clouds: CloudLayer[] = []
+  map.nebulas.forEach((n, i) => {
+    const seed = map.seed * 31 + i * 977
+    clouds.push({ img: cloudCanvas(n, seed, false), x: n.x, y: n.y, r: n.r * 1.08, spin: 0.006 + (i % 3) * 0.002, add: false, phase: i })
+    clouds.push({ img: cloudCanvas(n, seed + 1, true), x: n.x, y: n.y, r: n.r * 1.08, spin: -0.011, add: true, phase: i + 2 })
+  })
+  const rocks: FieldRock[] = []
+  map.fields.forEach((f, i) => {
+    const r = rng(map.seed * 17 + i * 613)
+    const count = Math.round(Math.min(130, Math.max(14, (f.r * f.r) / 2600)))
+    for (let k = 0; k < count; k++) {
+      const a = r() * TAU
+      const d = Math.sqrt(r()) * (f.r - 12)
+      rocks.push({
+        x: f.x + Math.cos(a) * d, y: f.y + Math.sin(a) * d, size: 8 + r() ** 2.2 * 34, rot: r() * TAU, spin: (r() - 0.5) * 0.8, kind: r() < 0.5 ? 0 : 1,
+        orbit: 6 + r() * 26, phase: r() * TAU, speed: (0.04 + r() * 0.1) * (r() < 0.5 ? -1 : 1),
+      })
+    }
+  })
+  return { map, clouds, rocks, fields: map.fields }
+}
+
+/** Nebulas and asteroid fields from above, for the minimap and the lobby's map previews: tinted
+ * clouds, and dusty patches speckled with rocks. */
+export function drawTerrainOverview(g: CanvasRenderingContext2D, map: MapDef, ox: number, oy: number, s: number) {
+  for (const n of map.nebulas) {
+    const x = ox + n.x * s
+    const y = oy + n.y * s
+    const r = n.r * s
+    const grd = g.createRadialGradient(x, y, 0, x, y, r)
+    grd.addColorStop(0, `hsla(${n.hue},70%,58%,0.34)`)
+    grd.addColorStop(0.7, `hsla(${n.hue},70%,52%,0.22)`)
+    grd.addColorStop(1, `hsla(${n.hue},70%,50%,0)`)
+    g.fillStyle = grd
+    g.beginPath()
+    g.arc(x, y, r, 0, TAU)
+    g.fill()
+  }
+  map.fields.forEach((f, i) => {
+    const x = ox + f.x * s
+    const y = oy + f.y * s
+    const r = f.r * s
+    g.fillStyle = 'rgba(175,150,115,0.2)'
+    g.beginPath()
+    g.arc(x, y, r, 0, TAU)
+    g.fill()
+    const rr = rng(i * 131 + 7)
+    g.fillStyle = 'rgba(205,185,150,0.75)'
+    const dots = Math.round(Math.min(26, Math.max(3, r * 0.9)))
+    for (let k = 0; k < dots; k++) {
+      const a = rr() * TAU
+      const d = Math.sqrt(rr()) * r * 0.92
+      const z = rr() < 0.25 ? 1.3 : 0.8
+      g.fillRect(x + Math.cos(a) * d - z / 2, y + Math.sin(a) * d - z / 2, z, z)
+    }
+  })
+}
 type Ping = { x: number; y: number; t: number; color: string }
 
 const TIER_ORDER: Record<Tier, number> = { station: 0, mine: 1, defense: 1, capital: 2, cruiser: 3, frigate: 4, gunship: 5, fighter: 6 }
@@ -108,6 +218,7 @@ export class Renderer {
   private patterns: (CanvasPattern | null)[] = []
   private clock = 0
   private smokeT = 0
+  private terrain: TerrainArt | null = null
 
   constructor(sprites: string[]) {
     for (const s of sprites) this.imgs.set(s, load(spriteUrl(s)))
@@ -193,7 +304,7 @@ export class Renderer {
   consume(events: SimEvent[], w: World, me: Owner) {
     const seen = (x: number, y: number) => {
       const team = w.players[me].team
-      for (const u of w.units) if (w.players[u.owner].team === team && (u.x - x) ** 2 + (u.y - y) ** 2 < u.t.sensor ** 2) return true
+      for (const u of w.units) if (w.players[u.owner].team === team && (u.x - x) ** 2 + (u.y - y) ** 2 < sensorOf(u) ** 2) return true
       return false
     }
     for (const e of events) {
@@ -325,6 +436,8 @@ export class Renderer {
     ctx.setLineDash([24 / z, 18 / z])
     ctx.strokeRect(0, 0, w.w, w.h)
     ctx.setLineDash([])
+
+    this.drawTerrain(ctx, w, z, onScreen)
 
     // Beacons, with their capture ring.
     for (const b of w.beacons) {
@@ -586,7 +699,7 @@ export class Renderer {
     f.globalCompositeOperation = 'destination-out'
     for (const u of w.units) {
       if (w.players[u.owner].team !== w.players[view.me].team) continue
-      const r = (u.t.sensor * (building(u) ? 0.5 : 1) * z) / fs
+      const r = (sensorOf(u) * z) / fs
       const sx = ((u.x - cam.x) * z + vw / 2) / fs
       const sy = ((u.y - cam.y) * z + vh / 2) / fs
       if (sx + r < 0 || sy + r < 0 || sx - r > fw || sy - r > fh) continue
@@ -644,6 +757,58 @@ export class Renderer {
       }
       ctx.textBaseline = 'alphabetic'
     }
+  }
+
+  /** Nebulas, then asteroid fields: under everything else, so ore, beacons and ships sit on top. */
+  private drawTerrain(ctx: CanvasRenderingContext2D, w: World, z: number, onScreen: (x: number, y: number, r?: number) => boolean) {
+    if (this.terrain?.map !== w.map) this.terrain = terrainArt(w.map)
+    const art = this.terrain
+    for (const c of art.clouds) {
+      if (!onScreen(c.x, c.y, c.r)) continue
+      ctx.save()
+      ctx.translate(c.x, c.y)
+      ctx.rotate(this.clock * c.spin + c.phase)
+      ctx.globalCompositeOperation = c.add ? 'lighter' : 'source-over'
+      ctx.globalAlpha = (c.add ? 0.55 : 0.9) + Math.sin(this.clock * 0.35 + c.phase) * 0.08
+      ctx.drawImage(c.img, -c.r, -c.r, c.r * 2, c.r * 2)
+      ctx.restore()
+    }
+    // Dust first, then the rocks drifting through it.
+    for (const f of art.fields) {
+      if (!onScreen(f.x, f.y, f.r)) continue
+      const grd = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r)
+      grd.addColorStop(0, 'rgba(160,140,112,0.16)')
+      grd.addColorStop(0.8, 'rgba(150,130,105,0.1)')
+      grd.addColorStop(1, 'rgba(140,120,100,0)')
+      ctx.fillStyle = grd
+      ctx.beginPath()
+      ctx.arc(f.x, f.y, f.r, 0, TAU)
+      ctx.fill()
+    }
+    if (!art.rocks.length) return
+    const dpr = window.devicePixelRatio || 1
+    const imgs = [this.sprite('asteroid-1', 40 * z * dpr), this.sprite('asteroid-2', 40 * z * dpr)]
+    // Zoomed far out, the smallest rocks would be specks: skip them and let the dust carry it.
+    const minSize = 3 / z
+    for (const k of art.rocks) {
+      if (k.size < minSize) continue
+      const a = k.phase + this.clock * k.speed
+      const x = k.x + Math.cos(a) * k.orbit
+      const y = k.y + Math.sin(a) * k.orbit
+      if (!onScreen(x, y, k.size)) continue
+      const img = imgs[k.kind]
+      if (!img) continue
+      const nw = img instanceof HTMLImageElement ? img.naturalWidth : img.width
+      const nh = img instanceof HTMLImageElement ? img.naturalHeight : img.height
+      const s = k.size / Math.max(nw, nh)
+      ctx.save()
+      ctx.translate(x, y)
+      ctx.rotate(k.rot + this.clock * k.spin)
+      ctx.globalAlpha = 0.92
+      ctx.drawImage(img, (-nw * s) / 2, (-nh * s) / 2, nw * s, nh * s)
+      ctx.restore()
+    }
+    ctx.globalAlpha = 1
   }
 
   private drawSprite(ctx: CanvasRenderingContext2D, name: string, x: number, y: number, rot: number, size: number, z: number, alpha = 1) {
@@ -817,7 +982,7 @@ export class Renderer {
     }
   }
 
-  /** The minimap: the nebula behind, what our ships can see, ore, beacons, ships, stations, the
+  /** The minimap: the backdrop behind, what our ships can see, nebulas and asteroid fields, ore, beacons, ships, stations, the
    * last alert, and the camera's view as a bracketed box. */
   minimap(
     ctx: CanvasRenderingContext2D, w: World, me: Owner, cam: Camera, vw: number, vh: number, mw: number, mh: number, alarm: { x: number; y: number; t: number } | null,
@@ -845,7 +1010,7 @@ export class Renderer {
     for (const u of w.units) {
       if (w.players[u.owner].team !== w.players[me].team) continue
       ctx.beginPath()
-      ctx.arc(X(u.x), Y(u.y), u.t.sensor * s, 0, Math.PI * 2)
+      ctx.arc(X(u.x), Y(u.y), sensorOf(u) * s, 0, Math.PI * 2)
       ctx.fill()
     }
     ctx.globalCompositeOperation = 'source-over'
@@ -864,6 +1029,7 @@ export class Renderer {
       ctx.lineTo(ox + w.w * s, Y(gy))
       ctx.stroke()
     }
+    drawTerrainOverview(ctx, w.map, ox, oy, s)
     ctx.fillStyle = 'rgba(150,150,165,0.4)'
     for (const r of w.rocks) {
       ctx.beginPath()
