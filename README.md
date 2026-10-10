@@ -147,8 +147,9 @@ Setup:
    URL `https://<your site>/api/auth/github/callback`. Local dev needs its own app with
    `http://localhost:5173/api/auth/github/callback`.
 2. Put `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `.env`. Optional: `ALLOWED_USERS`
-   (comma-separated logins), `PUBLIC_URL` (when the reverse proxy doesn't send `Host` and
-   `X-Forwarded-Proto`), `SESSION_SECRET` (otherwise a random key is generated once into
+   (comma-separated logins), `PUBLIC_URL` (the site's
+   address, e.g. `https://mennovanleeuwen.nl`; set it in production, since without it the server
+   takes `Host` and `X-Forwarded-*` from each request, and logs a warning at startup), `SESSION_SECRET` (otherwise a random key is generated once into
    `DATA_DIR/secret.key`), `GITHUB_SCOPES` (default `read:user repo read:org`; `repo` is what
    lets Spotlight see private repositories).
 

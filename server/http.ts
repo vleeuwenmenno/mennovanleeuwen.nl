@@ -46,13 +46,21 @@ export function cookies(req: IncomingMessage): Record<string, string> {
   const out: Record<string, string> = {}
   for (const part of (req.headers.cookie ?? '').split(';')) {
     const i = part.indexOf('=')
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim())
+    if (i <= 0) continue
+    const raw = part.slice(i + 1).trim()
+    // A malformed escape (a stray "%") is kept as sent rather than failing the whole request.
+    try {
+      out[part.slice(0, i).trim()] = decodeURIComponent(raw)
+    } catch {
+      out[part.slice(0, i).trim()] = raw
+    }
   }
   return out
 }
 
 /** The origin visitors use, for OAuth redirects and the Secure cookie flag. PUBLIC_URL wins;
- * otherwise the Host header and X-Forwarded-Proto from the reverse proxy. */
+ * otherwise the Host header and X-Forwarded-Proto from the reverse proxy. Set PUBLIC_URL in
+ * production: without it, whoever reaches the server directly chooses these headers. */
 export function publicOrigin(req: IncomingMessage): string {
   if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/+$/, '')
   const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim() || 'http'

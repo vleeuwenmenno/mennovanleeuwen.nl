@@ -17,6 +17,8 @@ services:
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
       ALLOWED_USERS: ${ALLOWED_USERS:-vleeuwenmenno}
+      # The site's public address (https://mennovanleeuwen.nl). Set it: without it the server
+      # trusts each request's Host and X-Forwarded-* headers for OAuth redirects and cookies.
       PUBLIC_URL: ${PUBLIC_URL:-}
       SESSION_SECRET: ${SESSION_SECRET:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
