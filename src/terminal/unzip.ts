@@ -76,7 +76,7 @@ ${c('bold', 'SEE ALSO')}
        Files and the Archive app (Extract…), which do the same.`
 
 /** unzip's wildcards: * ? [...], with * crossing slashes. */
-function pattern(p: string, ci: boolean): RegExp {
+export function pattern(p: string, ci: boolean): RegExp {
   let re = ''
   for (let i = 0; i < p.length; i++) {
     const ch = p[i]

@@ -17,6 +17,7 @@ import { addBookmark, useSidebar } from '../data/filesSidebar'
 import { FilesSidebar, type SideSection } from './FilesSidebar'
 import { libraryNames, mounts, posixOf, useMounts, whereIs } from '../data/mounts'
 import { lookup as fsLookup } from '../terminal/fs'
+import { isArchive } from '../data/archive'
 import { besideArchive, extract, getZipDrag, setZipDrag, zipDragName } from '../data/extract'
 
 /** Quotes a path for a command line in the terminal. */
@@ -607,12 +608,12 @@ export function Files({ win }: { win: WinState }) {
                   ...(item.kind === 'image' ? [{ label: 'Preview', onSelect: () => openItem(item, 'preview') }] : []),
                   ...(item.kind === 'video' || item.kind === 'audio' ? [{ label: 'Player', onSelect: () => openItem(item, 'player') }] : []),
                   ...(item.kind === 'pdf' ? [{ label: 'PDF', onSelect: () => openItem(item, 'pdf') }] : []),
-                  ...(/\.zip$/i.test(item.name) ? [{ label: 'Archive', onSelect: () => openItem(item, 'archive') }] : []),
+                  ...(isArchive(item.name) ? [{ label: 'Archive', onSelect: () => openItem(item, 'archive') }] : []),
                   ...((item.kind === 'document' || /\.(csv|txt|rtf)$/i.test(item.name)) && account.seafile?.office ? [{ label: 'Office (OnlyOffice)', onSelect: () => openItem(item, 'office') }] : []),
                 ],
               },
-              // ZIPs unpack on the server, into a folder named after them or one you pick.
-              ...(/\.zip$/i.test(item.name)
+              // Archives unpack on the server, into a folder named after them or one you pick.
+              ...(isArchive(item.name)
                 ? [
                     { separator: true } as MenuItem,
                     { label: 'Extract here', disabled: !canWrite(parentOf(item.path)), onSelect: () => unpack(item.path, besideArchive(item.path)) },

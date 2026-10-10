@@ -5,15 +5,17 @@ import { download, getLibrary, isSf, libraryName, parseSf, useLibraries } from '
 import { pickFolder } from '../os/FolderPicker'
 import { openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { folderOf, nameOf, useMedia } from '../data/media'
+import { archiveFormat, FORMAT_LABEL } from '../data/archive'
 import { listFolder, METHODS, readEntry, readZip, type ZipEntry, type ZipIndex } from '../data/zip'
 import { useWM, type WinState } from '../os/wm'
 import { useBackButton } from '../os/backButton'
 import { formatSize, KIND_LABEL, kindOfName, prettyPath } from '../terminal/vfs'
 import { FileIcon, FolderIcon } from './Files'
 
-// Archive: what is in a ZIP, browsed like a folder in Files, without unpacking it. Only the
-// archive's table of contents is read (from Seafile, just the end of the file), so even a big one
-// opens at once. It works as Files does: click, Ctrl/Shift+click, a rubber band or Ctrl+A select,
+// Archive: what is in a ZIP or a tar (plain or gzipped), browsed like a folder in Files, without
+// unpacking it. Of a ZIP only the table of contents is read (from Seafile, just the end of the
+// file), so even a big one opens at once; a tar is listed by the server, header to header, and a
+// gzipped one read through (data/tar.ts, server/unzip.ts). It works as Files does: click, Ctrl/Shift+click, a rubber band or Ctrl+A select,
 // right-click has the menu, folders open with a double-click or Enter, Back/Forward/Up go through
 // the folders, the columns sort, and the search looks through the whole archive. Extract unpacks
 // everything, or what is selected, into a Seafile folder; the server does it (data/extract.ts,
@@ -35,6 +37,8 @@ const SAVE_LIMIT = 512 * 1024 * 1024
 
 const when = (ms: number) => (ms ? new Date(ms).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '')
 const saved = (r: { size: number; packed: number }) => `${Math.max(0, Math.round((1 - r.packed / r.size) * 100))}%`
+/** rwxr-xr-x */
+const perms = (mode: number) => [6, 3, 0].map((s) => ['r', 'w', 'x'].map((ch, i) => ((mode >> s) & (4 >> i) ? ch : '-')).join('')).join('')
 
 export const archiveTitle = (w: WinState) => (w.props.path ? nameOf(w.props.path) : 'Archive')
 
@@ -68,10 +72,13 @@ export function Archive({ win }: { win: WinState }) {
   const tiles = useRef(new Map<string, HTMLElement>())
   /** Set while a rubber band that began on a row is drawn, so letting go is not also a click. */
   const banding = useRef(false)
-  const rawUrl = useMemo(() => {
+  const format = archiveFormat(media.name) ?? 'zip'
+  const zip = format === 'zip'
+  const archiveQuery = useMemo(() => {
     const at = parseSf(path)
-    return at ? `/api/seafile/raw?repo=${encodeURIComponent(at.repo)}&p=${encodeURIComponent(at.p)}` : ''
+    return at ? `repo=${encodeURIComponent(at.repo)}&p=${encodeURIComponent(at.p)}` : ''
   }, [path])
+  const rawUrl = `/api/seafile/raw?${archiveQuery}`
 
   useEffect(() => {
     if (!isSf(path)) return
@@ -82,8 +89,16 @@ export function Archive({ win }: { win: WinState }) {
     setFolder('')
     setBack([])
     setFwd([])
-    // Ranges go through the site's server: Seafile's file server sends no CORS headers on them.
-    readZip(rawUrl, media.size ?? undefined)
+    // A ZIP is read here, with ranges through the site's server (Seafile's file server sends no
+    // CORS headers on them); a tar by the server, which can read a gzipped one through.
+    const read = zip
+      ? readZip(rawUrl, media.size ?? undefined)
+      : fetch(`/api/seafile/archive?${archiveQuery}`, { credentials: 'same-origin' }).then(async (res) => {
+          const body = await res.json().catch(() => null)
+          if (!res.ok) throw new Error(body?.error ?? `The server answered ${res.status}`)
+          return body as ZipIndex
+        })
+    read
       .then((i) => live && setIndex(i))
       .catch((e: Error) => live && setError(e.message))
     return () => {
@@ -191,6 +206,16 @@ export function Archive({ win }: { win: WinState }) {
   const save = async (r: Row) => {
     const e = r.entry
     if (!e) return
+    if (e.link !== undefined) return setToast(`${r.name.split('/').pop()} is a link (to ${e.link}), not a file`)
+    // A tar's file comes from the server, as a download (a gzipped one read through up to it).
+    if (!zip) {
+      const a = document.createElement('a')
+      a.href = `/api/seafile/archive/file?${archiveQuery}&entry=${encodeURIComponent(e.path)}`
+      a.download = e.path.split('/').pop() ?? 'file'
+      a.click()
+      if (format === 'tgz') setToast(`Reading ${media.name} through to ${a.download}…`)
+      return
+    }
     if (e.size > SAVE_LIMIT) return setToast(`${r.name.split('/').pop()} is too big to save on its own (${formatSize(e.size)}); extract it instead`)
     setToast(`Unpacking ${r.name.split('/').pop()}…`)
     try {
@@ -241,7 +266,7 @@ export function Archive({ win }: { win: WinState }) {
       ]
     }
     return [
-      r.dir ? { label: 'Open', shortcut: '↵', onSelect: () => go(r.path) } : { label: 'Save to computer', shortcut: '↵', disabled: r.entry?.encrypted, onSelect: () => void save(r) },
+      r.dir ? { label: 'Open', shortcut: '↵', onSelect: () => go(r.path) } : { label: 'Save to computer', shortcut: '↵', disabled: r.entry?.encrypted || r.entry?.link !== undefined, onSelect: () => void save(r) },
       { separator: true },
       ...extractItems([r.path], ''),
       { separator: true },
@@ -253,7 +278,7 @@ export function Archive({ win }: { win: WinState }) {
   function backgroundMenu(): MenuItem[] {
     return [
       { label: 'Select all', shortcut: 'Ctrl A', disabled: !rows.length, onSelect: selectAll },
-      { label: 'Sort by', submenu: SORTS.map(([by, label]) => ({ label, checked: sort.by === by, onSelect: () => setSort({ by, desc: by !== 'name' }) })) },
+      { label: 'Sort by', submenu: SORTS.filter(([by]) => zip || (by !== 'packed' && by !== 'ratio')).map(([by, label]) => ({ label, checked: sort.by === by, onSelect: () => setSort({ by, desc: by !== 'name' }) })) },
       ...(folder ? [{ label: 'Up', shortcut: 'Backspace', onSelect: goUp }] : []),
       { separator: true },
       { label: 'Extract all here', disabled: !index || !canWrite(folderOf(path)), onSelect: () => unpack(undefined, besideArchive(path)) },
@@ -437,7 +462,7 @@ export function Archive({ win }: { win: WinState }) {
   )
 
   return (
-    <div ref={root} className="ar" onKeyDown={onKeyDown}>
+    <div ref={root} className={`ar ${zip ? '' : 'is-tar'}`} onKeyDown={onKeyDown}>
       <div className="pv-bar">
         <button className="fm-tool" onClick={goBack} disabled={!back.length} title="Back (Alt+←)" aria-label="Back">
           ←
@@ -481,7 +506,7 @@ export function Archive({ win }: { win: WinState }) {
           <p className="muted">{error}</p>
         </div>
       ) : !index ? (
-        <div className="pv-loading">Reading {media.name}…</div>
+        <div className="pv-loading">{format === 'tgz' ? `Reading ${media.name} through (a gzipped tar has no table of contents)…` : `Reading ${media.name}…`}</div>
       ) : (
         <>
           {panel && (
@@ -530,8 +555,8 @@ export function Archive({ win }: { win: WinState }) {
             <div className="ar-row ar-head">
               {head('name', query ? 'Path' : 'Name')}
               {head('size', 'Size')}
-              {head('packed', 'Packed')}
-              {head('ratio', 'Saved')}
+              {zip && head('packed', 'Packed')}
+              {zip && head('ratio', 'Saved')}
               {head('date', 'Modified')}
             </div>
             {rows.map((r) => (
@@ -559,11 +584,12 @@ export function Archive({ win }: { win: WinState }) {
                     <span className="ar-glyph">{r.dir ? <FolderIcon size={16} /> : <FileIcon size={16} kind={kindOfName(r.name)} name={r.name} />}</span>
                     {r.name}
                     {r.entry?.encrypted && <span title="Encrypted">🔒</span>}
+                    {r.entry?.link !== undefined && <span className="muted"> → {r.entry.link}</span>}
                   </span>
                 </span>
                 <span>{r.dir ? `${r.count} ${r.count === 1 ? 'file' : 'files'}` : formatSize(r.size)}</span>
-                <span>{r.dir ? formatSize(r.size) : formatSize(r.packed)}</span>
-                <span>{r.dir || !r.size ? '' : saved(r)}</span>
+                {zip && <span>{r.dir ? formatSize(r.size) : formatSize(r.packed)}</span>}
+                {zip && <span>{r.dir || !r.size ? '' : saved(r)}</span>}
                 <span>{when(r.mtime)}</span>
               </div>
             ))}
@@ -573,10 +599,12 @@ export function Archive({ win }: { win: WinState }) {
           <footer className="fm-status">
             <span>
               {one?.entry
-                ? `${one.entry.path} · ${formatSize(one.entry.size)} · ${METHODS[one.entry.method] ?? `method ${one.entry.method}`}${one.entry.encrypted ? ' · encrypted' : ''}${one.entry.comment ? ` · ${one.entry.comment}` : ''}`
+                ? zip
+                  ? `${one.entry.path} · ${formatSize(one.entry.size)} · ${METHODS[one.entry.method] ?? `method ${one.entry.method}`}${one.entry.encrypted ? ' · encrypted' : ''}${one.entry.comment ? ` · ${one.entry.comment}` : ''}`
+                  : `${one.entry.path} · ${one.entry.link !== undefined ? `link to ${one.entry.link}` : formatSize(one.entry.size)}${one.entry.mode !== undefined ? ` · ${perms(one.entry.mode)} ${one.entry.owner ?? ''}` : ''}`
                 : sel.length
                   ? `${sel.length} selected · ${formatSize(selSize)}`
-                  : `${files.length} files in ${folders} folders · ${formatSize(unpacked)} unpacked · ${formatSize(index.size)} on disk${unpacked ? ` (${Math.max(0, Math.round((1 - packed / unpacked) * 100))}% smaller)` : ''}${index.zip64 ? ' · ZIP64' : ''}`}
+                  : `${files.length} files in ${folders} folders · ${formatSize(unpacked)} unpacked · ${formatSize(index.size)} on disk${unpacked && format !== 'tar' ? ` (${Math.max(0, Math.round((1 - (zip ? packed : index.size) / unpacked) * 100))}% smaller)` : ''}${index.zip64 ? ' · ZIP64' : ''}`}
             </span>
             {job && (
               <span className="ar-job">
@@ -625,10 +653,10 @@ function Properties({ row, index, name, location, close }: { row: Row | 'archive
       ? [
           ['Name', name],
           ['Location', location],
-          ['Type', `ZIP archive${index.zip64 ? ' (ZIP64)' : ''}`],
+          ['Type', `${FORMAT_LABEL[index.format ?? 'zip']}${index.zip64 ? ' (ZIP64)' : ''}`],
           ['Size', `${formatSize(index.size)} (${index.size.toLocaleString('en-GB')} bytes)`],
           ['Contents', `${files.length.toLocaleString('en-GB')} files, ${formatSize(unpacked)} unpacked`],
-          ['Saved', unpacked ? saved({ size: unpacked, packed }) : '—'],
+          ...(index.format !== 'tar' ? [['Saved', unpacked ? saved({ size: unpacked, packed: index.format === 'tgz' ? index.size : packed }) : '—'] as [string, string]] : []),
           ...(index.comment ? [['Comment', index.comment] as [string, string]] : []),
         ]
       : [
@@ -640,12 +668,20 @@ function Properties({ row, index, name, location, close }: { row: Row | 'archive
                 ['Contents', `${row.count} ${row.count === 1 ? 'file' : 'files'}`] as [string, string],
                 ['Size', `${formatSize(row.size)} unpacked`] as [string, string],
               ]
-            : [
-                ['Size', `${formatSize(row.size)} (${row.size.toLocaleString('en-GB')} bytes)`] as [string, string],
-                ['Packed', `${formatSize(row.packed)}${row.size ? `, ${saved(row)} smaller` : ''}`] as [string, string],
-                ['Method', `${METHODS[row.entry!.method] ?? `method ${row.entry!.method}`}${row.entry!.encrypted ? ', encrypted' : ''}`] as [string, string],
-                ['CRC-32', row.entry!.crc.toString(16).padStart(8, '0')] as [string, string],
-              ]),
+            : row.entry?.link !== undefined
+              ? [['Link to', row.entry.link] as [string, string]]
+              : index.format === 'tar' || index.format === 'tgz'
+                ? [
+                    ['Size', `${formatSize(row.size)} (${row.size.toLocaleString('en-GB')} bytes)`] as [string, string],
+                    ...(row.entry?.mode !== undefined ? [['Permissions', `${perms(row.entry.mode)} (${row.entry.mode.toString(8).padStart(4, '0')})`] as [string, string]] : []),
+                    ...(row.entry?.owner ? [['Owner', row.entry.owner] as [string, string]] : []),
+                  ]
+                : [
+                    ['Size', `${formatSize(row.size)} (${row.size.toLocaleString('en-GB')} bytes)`] as [string, string],
+                    ['Packed', `${formatSize(row.packed)}${row.size ? `, ${saved(row)} smaller` : ''}`] as [string, string],
+                    ['Method', `${METHODS[row.entry!.method] ?? `method ${row.entry!.method}`}${row.entry!.encrypted ? ', encrypted' : ''}`] as [string, string],
+                    ['CRC-32', row.entry!.crc.toString(16).padStart(8, '0')] as [string, string],
+                  ]),
           ['Modified', row.mtime ? new Date(row.mtime).toLocaleString('en-GB') : '—'],
           ...(row.entry?.comment ? [['Comment', row.entry.comment] as [string, string]] : []),
         ]

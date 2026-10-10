@@ -25,6 +25,7 @@ import { lookup, makeDir, prepare, removePath, touchFile, transfer, walk, writeF
 import { openSeafile } from '../data/seafile'
 import { manPages, mountCommands } from './mount'
 import { nanoCommands } from './nano'
+import { tarCommands } from './tar'
 import { unzipCommands } from './unzip'
 import { MEDIA_APP } from '../data/media'
 
@@ -124,7 +125,7 @@ function manPage(name: string) {
 }
 
 /** Commands that print their own help for --help and -h. */
-const OWN_HELP = new Set(['curl', 'git', 'pepper', 'find', 'fd', 'unzip', 'du'])
+const OWN_HELP = new Set(['curl', 'git', 'pepper', 'find', 'fd', 'unzip', 'tar', 'du'])
 /** Commands where -h means something else (human-readable sizes); --help still works. */
 const H_IS_A_FLAG = new Set(['df', 'free'])
 
@@ -292,7 +293,7 @@ export const commands: Record<string, Command> = {
       const groups: [string, string[]][] = [
         ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'fd', 'open', 'go', 'files', 'visited']],
         ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'git', 'heatmap', 'stars', 'contact']],
-        ['Files', ['nano', 'touch', 'mkdir', 'cp', 'mv', 'rm', 'tee', 'unzip', 'mount', 'umount', 'findmnt', 'lsblk', 'fscrypt']],
+        ['Files', ['nano', 'touch', 'mkdir', 'cp', 'mv', 'rm', 'tee', 'unzip', 'tar', 'mount', 'umount', 'findmnt', 'lsblk', 'fscrypt']],
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
         ['Network', ['curl', 'wget', 'whois', 'ping', 'dig', 'host', 'nslookup', 'minecraft']],
         ['Device', ['htop', 'df', 'du', 'free', 'nproc', 'lscpu', 'xrandr', 'ip', 'watch']],
@@ -1089,7 +1090,7 @@ export const commands: Record<string, Command> = {
 }
 
 // The real-network and device tools live in extra.ts.
-Object.assign(commands, extraCommands, findCommands, mountCommands, nanoCommands, unzipCommands)
+Object.assign(commands, extraCommands, findCommands, mountCommands, nanoCommands, unzipCommands, tarCommands)
 // /bin lists them all, like a real one (hidden easter eggs included; not the odd names like :q).
 dynamic.commands = () =>
   Object.keys(commands)

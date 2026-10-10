@@ -275,15 +275,27 @@ own). A double-click opens a folder or saves a file to your computer, unpacked i
 Rows dragged by their name onto a Seafile folder (in Files, its sidebar, or on the desktop) unpack
 there; dragging elsewhere on a row draws the rubber band.
 
+Tar archives open there too, plain (`.tar`) or gzipped (`.tar.gz`, `.tgz`), read by our own code
+([`src/data/tar.ts`](src/data/tar.ts): ustar, GNU long names, pax headers) and Node's zlib, never
+by a native archiver. Tar has no table of contents, so the server lists one
+(`/api/seafile/archive`): a plain tar header to header with Range requests, skipping the data in
+between (a few reads, however big it is); a gzipped one only by reading it through from the start,
+streamed and never stored, so only up to 2 GB packed and 64 GB unpacked. Listings are kept for ten
+minutes. A file is saved from a tar through `/api/seafile/archive/file`; links are listed, not
+unpacked. Bzip2, xz, 7z and rar are left out on purpose: they would need native code (with a
+history of security holes) or whole downloads.
+
 **Extract** unpacks everything, or the selected rows, into a Seafile folder (a
 folder named after the archive, next to it, unless you choose another), with *keep both*, *replace*
-or *skip* for names already there; Files' menu has *Extract here* and *Extract to…* on ZIPs. The
+or *skip* for names already there; Files' menu has *Extract here* and *Extract to…* on archives. The
 server does the work ([`server/unzip.ts`](server/unzip.ts)): it reads only the chosen files' bytes
-from Seafile, never the whole archive, unpacks each to a temporary file, checks its CRC and size,
+from Seafile (a gzipped tar: once through), unpacks each to a temporary file, checks its size (and a
+ZIP's CRC; paths with `..` are refused, and a file that grows past its stated size is stopped),
 and uploads it (Seafile's upload makes the folders). Stored and deflated files unpack;
 password-protected entries and other methods are reported and left out. The terminal's `unzip`
 does the same with Info-ZIP's options and output (`-l`, `-v`, `-p`, `-z`, `-d`, `-x`, `-o`, `-n`,
-and its `replace …? [y]es, [n]o, [A]ll, [N]one, [r]ename` question).
+and its `replace …? [y]es, [n]o, [A]ll, [N]one, [r]ename` question); `tar` lists and unpacks tars the GNU tar
+way (`tar -tvf`, `tar xzf a.tgz -C out member`, `-k`, `-O`).
 
 Each of Files' places (Home, Desktop, Documents, Downloads, Music, Pictures, Videos) can be pointed
 at any folder of any library: right-click it → *Choose folder…*; a place left alone is the
