@@ -2541,6 +2541,11 @@ body.is-resizing iframe {
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
 }
+/* The dock shares the window's z-index and comes later in the page, so it would still sit on
+   top of the game unless auto-hide already put it away (as it does for a maximized window). */
+body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
+  visibility: hidden;
+}
 .game {
   flex: 1;
   min-height: 0;
