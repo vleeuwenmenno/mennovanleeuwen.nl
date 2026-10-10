@@ -511,6 +511,7 @@ export function Desktop() {
                   { label: 'Viewer', onSelect: () => void openSeafile(wm, icon.path, { how: 'viewer' }) },
                   { label: 'Preview', onSelect: () => void openSeafile(wm, icon.path, { how: 'preview' }) },
                   { label: 'Player', onSelect: () => void openSeafile(wm, icon.path, { how: 'player' }) },
+                  { label: 'Omamp', onSelect: () => void openSeafile(wm, icon.path, { how: 'amp' }) },
                   { label: 'Office', onSelect: () => void openSeafile(wm, icon.path, { how: 'office' }) },
                 ],
               },

@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
 import { addMemory, agentsPrompt, answer, approve, automaticModels, createProject, deleteProject, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, deleteMemory, deleteThread, getThread, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
@@ -10,7 +11,7 @@ import { allCalendars, allEvents, createEvent, deleteEvent, updateEvent } from '
 import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, MAX_RANGE_DAYS, startGoogle } from './google.ts'
 import { inbox } from './inbox.ts'
 import { linkPreview } from './preview.ts'
-import { cleanTrash, history, quota, setHistory, shareLink, createFile, fileLink, rangeRead, restore, thumbnail, trash, trashDir, uploadedBytes, libraries, removeItems, rename, transfer, linkSeafile, listDir, lock, mkdir, unlock, unlocked, removeOffice, seafileInfo, setOffice, unlinkSeafile } from './seafile.ts'
+import { cleanTrash, history, quota, setHistory, shareLink, createFile, fileLink, rangeRead, restore, streamFile, thumbnail, trash, trashDir, uploadedBytes, libraries, removeItems, rename, transfer, linkSeafile, listDir, lock, mkdir, unlock, unlocked, removeOffice, seafileInfo, setOffice, unlinkSeafile } from './seafile.ts'
 import { officeCallback, officeCheck, officeConfig } from './office.ts'
 import { archiveFile, cancelExtract, extractStatus, listArchive, startExtract } from './unzip.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
@@ -188,6 +189,27 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       const range = req.headers.range
       const r = await rangeRead(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), typeof range === 'string' ? range : undefined)
       res.writeHead(206, { 'Content-Type': r.type, 'Content-Range': r.contentRange, 'Content-Length': String(r.body.length), 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY }).end(head ? undefined : r.body)
+      return true
+    }
+    // A whole file, piped with whatever range the browser asks for (the music player).
+    if (path === '/api/seafile/stream' && read) {
+      const range = req.headers.range
+      const r = await streamFile(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), typeof range === 'string' ? range : undefined)
+      const headers: Record<string, string> = { 'Content-Type': r.headers.get('content-type') ?? 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY }
+      for (const h of ['content-length', 'content-range']) {
+        const v = r.headers.get(h)
+        if (v) headers[h.replace(/(^|-)\w/g, (c) => c.toUpperCase())] = v
+      }
+      res.writeHead(r.status, headers)
+      if (head || !r.body) {
+        await r.body?.cancel().catch(() => {})
+        res.end()
+        return true
+      }
+      const body = Readable.fromWeb(r.body as import('node:stream/web').ReadableStream)
+      res.on('close', () => body.destroy())
+      body.on('error', () => res.destroy())
+      body.pipe(res)
       return true
     }
     if (path === '/api/seafile/link' && read) return json(res, 200, await fileLink(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), url.searchParams.get('op'))), true

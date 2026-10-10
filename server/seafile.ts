@@ -418,6 +418,23 @@ export async function rangeRead(user: User, repo: unknown, path: unknown, range:
   return { type: res.headers.get('content-type') ?? 'application/octet-stream', contentRange: res.headers.get('content-range') ?? '', body: Buffer.from(await res.arrayBuffer()) }
 }
 
+/**
+ * A file streamed through this server, for the music player: the browser asks for open ranges
+ * while it plays, and the page's audio graph (the spectrum, the equalizer) only hears media
+ * from its own origin. The answer is piped, never held in memory.
+ */
+export async function streamFile(user: User, repo: unknown, path: unknown, range: string | undefined): Promise<Response> {
+  if (range !== undefined && !/^bytes=(\d+-\d*|-\d+)$/.test(range)) throw new HttpError(416, 'Ask for one byte range')
+  const { url } = await fileLink(user, repo, path, 'download')
+  const res = await fetch(url, { headers: range ? { Range: range } : {}, redirect: 'follow' }).catch(() => null)
+  if (!res) throw new HttpError(502, 'Seafile\'s file server did not answer')
+  if (res.status !== 200 && res.status !== 206) {
+    await res.body?.cancel().catch(() => {})
+    throw new HttpError(res.status === 416 ? 416 : 502, `Seafile's file server answered ${res.status}`)
+  }
+  return res
+}
+
 /** How much of a file a resumable upload has stored so far, to carry on from there. */
 export async function uploadedBytes(user: User, repo: unknown, parent: unknown, name: unknown): Promise<{ bytes: number }> {
   const id = repoId(repo)

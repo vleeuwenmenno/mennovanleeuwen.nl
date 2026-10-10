@@ -70,6 +70,16 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  amp: {
+    bg: 'linear-gradient(160deg,#2a2f3d,#0e0e14)',
+    fg: '#9ece6a',
+    glyph: (
+      <>
+        <path d="M12 34V26M17 34V20M22 34V14M27 34V22M32 34V17M37 34V28" />
+        <path d="M10 37h29" />
+      </>
+    ),
+  },
   archive: {
     bg: 'linear-gradient(160deg,#e0af68,#9a6b1f)',
     fg: '#fff',
@@ -293,6 +303,7 @@ const HUES: Record<AppId, string> = {
   newsheet: 'var(--green)',
   newslides: 'var(--orange)',
   player: 'var(--orange)',
+  amp: 'var(--green)',
   recents: 'var(--red)',
   cv: 'var(--text)',
   contact: 'var(--magenta)',

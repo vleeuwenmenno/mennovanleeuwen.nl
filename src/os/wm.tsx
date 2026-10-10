@@ -2,7 +2,7 @@ import { snapReserve } from './dockPrefs'
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
 import { synced } from './synced'
 
-export type AppId = 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'pdf' | 'archive' | 'office' | 'newdoc' | 'newsheet' | 'newslides' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar' | 'agents'
+export type AppId = 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'pdf' | 'archive' | 'office' | 'newdoc' | 'newsheet' | 'newslides' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar' | 'agents' | 'amp'
 
 export type WinState = {
   pid: number
@@ -65,7 +65,7 @@ export type GeometryPatch = Partial<Geometry> & { snap?: SnapZone; restore?: Geo
 export type Geometry = { x: number; y: number; w: number; h: number }
 
 /** Apps that only ever have one window; everything else can be opened again with "New window". */
-export const SINGLE_INSTANCE = new Set<AppId>(['notes', 'keys', 'trash', 'notebook', 'settings', 'mcserver', 'linkforge'])
+export const SINGLE_INSTANCE = new Set<AppId>(['amp', 'notes', 'keys', 'trash', 'notebook', 'settings', 'mcserver', 'linkforge'])
 
 /** Apps where opening always means a new one (New Document makes a new file each time); `create` says it is fresh. */
 export const ALWAYS_NEW = new Set<AppId>(['newdoc', 'newsheet', 'newslides'])

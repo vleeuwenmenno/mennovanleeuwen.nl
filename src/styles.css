@@ -7466,3 +7466,502 @@ kbd {
     gap: 2px;
   }
 }
+
+/* --- Omamp: Winamp's player, equalizer and playlist, in the Omarchy palette ------------------ */
+.amp {
+  --lcd: color-mix(in srgb, var(--bg-darker) 88%, #000);
+  --lcd-text: var(--green);
+  --lcd-glow: 0 0 6px color-mix(in srgb, var(--green) 55%, transparent);
+  --key: var(--bg-light);
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  overflow: hidden;
+  outline: 0;
+  background: var(--bg-dark);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  user-select: none;
+}
+.amp-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 0 8px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+}
+.amp-pl {
+  flex: 1 1 0;
+  min-height: 110px;
+}
+.amp.no-pl .amp-panel:last-child {
+  flex: 1;
+}
+.amp-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 18px;
+  margin: 0 -8px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-dark);
+}
+.amp-groove {
+  flex: 1;
+  height: 7px;
+  background: repeating-linear-gradient(to bottom, var(--line-strong) 0 1px, transparent 1px 3px);
+}
+.amp-strip-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--fg-bright);
+}
+.amp-strip-x {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  line-height: 10px;
+  cursor: pointer;
+}
+.amp-strip-x:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+.amp-lcd {
+  border: 1px solid var(--line-strong);
+  background: var(--lcd);
+  color: var(--lcd-text);
+  text-shadow: var(--lcd-glow);
+  box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.55);
+}
+.amp-top {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.amp-clock {
+  position: relative;
+  flex: 0 0 132px;
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  grid-template-rows: auto 1fr;
+  gap: 2px 4px;
+  padding: 5px 6px 4px;
+  cursor: pointer;
+}
+.amp-state {
+  align-self: center;
+  font-size: 10px;
+  text-align: center;
+}
+.amp-state.is-pause,
+.amp-state.is-stop {
+  color: var(--yellow);
+  text-shadow: none;
+}
+.amp-state.is-error {
+  color: var(--red);
+}
+.amp-time {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  white-space: pre;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.amp-time.is-blink {
+  animation: amp-blink 1s steps(1) infinite;
+}
+@keyframes amp-blink {
+  50% {
+    opacity: 0.15;
+  }
+}
+.amp-vis {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 30px;
+  min-height: 0;
+}
+.amp-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.amp-marquee {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.amp-marquee-box {
+  width: 100%;
+  overflow: hidden;
+  white-space: pre;
+}
+.amp-marquee-box > span {
+  display: inline-block;
+}
+.amp-marquee-box.is-scrolling > span {
+  animation: amp-scroll linear infinite;
+}
+@keyframes amp-scroll {
+  to {
+    transform: translateX(-50%);
+  }
+}
+.amp-specs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.amp-small {
+  padding: 2px 6px;
+  font-size: 10px;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--lcd-text) 70%, var(--muted));
+}
+.amp-small b {
+  color: var(--lcd-text);
+  font-variant-numeric: tabular-nums;
+}
+.amp-tag {
+  padding: 1px 5px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.amp-led {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: color-mix(in srgb, var(--muted) 60%, transparent);
+}
+.amp-led.is-on {
+  color: var(--lcd-text);
+  text-shadow: var(--lcd-glow);
+}
+.amp-sliders {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.amp-range {
+  display: flex;
+  align-items: center;
+}
+.amp-vol {
+  flex: 1 1 90px;
+  min-width: 50px;
+}
+.amp-bal {
+  flex: 0 1 46px;
+  min-width: 34px;
+}
+.amp-range input,
+.amp-band input {
+  width: 100%;
+  height: 8px;
+  margin: 0;
+  appearance: none;
+  border: 1px solid var(--line-strong);
+  background: var(--lcd);
+  outline: 0;
+  cursor: pointer;
+}
+.amp-vol input {
+  background: linear-gradient(to right, color-mix(in srgb, var(--green) 30%, transparent), color-mix(in srgb, var(--yellow) 55%, transparent) 70%, color-mix(in srgb, var(--red) 75%, transparent)) 0 0 / var(--v) 100% no-repeat, var(--lcd);
+}
+.amp-bal input {
+  background: linear-gradient(to right, transparent calc(50% - 1px), var(--line-strong) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)), var(--lcd);
+}
+.amp-range input::-webkit-slider-thumb,
+.amp-band input::-webkit-slider-thumb {
+  appearance: none;
+  width: 10px;
+  height: 12px;
+  border: 1px solid var(--bg-darker);
+  background: var(--fg-bright);
+}
+.amp-range input::-moz-range-thumb,
+.amp-band input::-moz-range-thumb {
+  width: 8px;
+  height: 10px;
+  border: 1px solid var(--bg-darker);
+  border-radius: 0;
+  background: var(--fg-bright);
+}
+.amp-range input:focus-visible,
+.amp-band input:focus-visible {
+  border-color: var(--accent);
+}
+.amp-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--line-strong);
+  border-bottom-color: var(--bg-darker);
+  border-right-color: var(--bg-darker);
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--key) 100%, var(--fg) 6%), var(--key));
+  color: var(--fg);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.amp-key:hover {
+  color: var(--fg-bright);
+  border-color: var(--accent);
+}
+.amp-key:active {
+  border-color: var(--bg-darker);
+  border-bottom-color: var(--line-strong);
+  border-right-color: var(--line-strong);
+  background: var(--bg-dark);
+  transform: translateY(1px);
+}
+.amp-key:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.amp-btn {
+  width: 34px;
+  height: 24px;
+  padding: 0;
+}
+.amp-btn.is-active {
+  color: var(--accent);
+}
+.amp-eject {
+  margin-left: 6px;
+}
+.amp-dot {
+  width: 5px;
+  height: 5px;
+  background: color-mix(in srgb, var(--muted) 50%, transparent);
+}
+.amp-toggle.is-on .amp-dot {
+  background: var(--green);
+  box-shadow: 0 0 5px var(--green);
+}
+.amp-seek {
+  position: relative;
+  height: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--lcd);
+  cursor: pointer;
+  touch-action: none;
+}
+.amp-seek.is-off {
+  cursor: default;
+  opacity: 0.6;
+}
+.amp-seek-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: color-mix(in srgb, var(--yellow) 55%, transparent);
+}
+.amp-seek-knob {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 24px;
+  transform: translateX(-50%);
+  border: 1px solid var(--bg-darker);
+  background: linear-gradient(to bottom, var(--fg-bright), var(--fg));
+}
+.amp-seek-knob::after {
+  content: '';
+  position: absolute;
+  inset: 3px 10px;
+  border-left: 1px solid var(--bg-dark);
+  border-right: 1px solid var(--bg-dark);
+}
+.amp-seek.is-off .amp-seek-knob {
+  display: none;
+}
+.amp-transport {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.amp-eq-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.amp-curve {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+}
+.amp-curve polyline {
+  fill: none;
+  stroke: var(--lcd-text);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.amp-curve-pre {
+  stroke: var(--yellow);
+  stroke-dasharray: 2 3;
+  vector-effect: non-scaling-stroke;
+}
+.amp-curve.is-off polyline {
+  stroke: var(--muted);
+}
+.amp-presets {
+  min-width: 112px;
+}
+.amp-eq-bands {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 92px;
+}
+.amp-eq-bands.is-off {
+  opacity: 0.55;
+}
+.amp-band {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.amp-band input {
+  flex: 1 1 0;
+  width: 10px;
+  height: 0;
+  min-height: 0;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  background: linear-gradient(to top, color-mix(in srgb, var(--green) 45%, transparent) 0 var(--v), transparent var(--v)), var(--lcd);
+}
+.amp-band input::-webkit-slider-thumb {
+  width: 14px;
+  height: 7px;
+}
+.amp-band input::-moz-range-thumb {
+  width: 12px;
+  height: 5px;
+}
+.amp-band span {
+  font-size: 9px;
+  color: var(--muted);
+}
+.amp-band:first-child {
+  flex: 1.4;
+}
+.amp-band:first-child input {
+  background: linear-gradient(to top, color-mix(in srgb, var(--yellow) 45%, transparent) 0 var(--v), transparent var(--v)), var(--lcd);
+}
+.amp-eq-scale {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding-bottom: 15px;
+  margin-right: 4px;
+  font-size: 8px;
+  color: var(--muted);
+  text-align: right;
+}
+.amp-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 3px 0;
+  overflow: auto;
+  list-style: none;
+  font-size: 12px;
+  overscroll-behavior: contain;
+}
+.amp-list li {
+  display: flex;
+  gap: 6px;
+  padding: 1px 8px;
+  cursor: default;
+  white-space: nowrap;
+}
+.amp-list li.is-selected {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.amp-list li.is-current {
+  color: var(--fg-bright);
+  text-shadow: 0 0 6px color-mix(in srgb, var(--fg-bright) 50%, transparent);
+}
+.amp-list .amp-empty {
+  color: var(--muted);
+  text-shadow: none;
+  white-space: normal;
+}
+.amp-n {
+  flex: 0 0 auto;
+  min-width: 22px;
+  text-align: right;
+  opacity: 0.8;
+}
+.amp-t {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.amp-d {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+.amp-pl-foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.amp-album {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 10px;
+}
+@media (max-width: 480px) {
+  .amp-clock {
+    flex-basis: 112px;
+  }
+  .amp-time {
+    font-size: 22px;
+  }
+  .amp-led {
+    display: none;
+  }
+}

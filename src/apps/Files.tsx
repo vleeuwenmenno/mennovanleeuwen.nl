@@ -372,7 +372,7 @@ export function Files({ win }: { win: WinState }) {
 
   // --- actions ----------------------------------------------------------------------------------
 
-  const openItem = (item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' | 'preview' | 'player' | 'pdf' | 'office' | 'archive' = 'default') => {
+  const openItem = (item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' | 'preview' | 'player' | 'amp' | 'pdf' | 'office' | 'archive' = 'default') => {
     if (item.trash) {
       setToast(item.trash === 'desktop' ? 'Put it back first (right-click → Put back).' : 'That file is a cautionary tale. It stays in the trash.')
       return
@@ -390,6 +390,7 @@ export function Files({ win }: { win: WinState }) {
     if (how === 'terminal') return wm.openNew('terminal', { run: `cat ${shq(prettyPath(toPosix(item.path) ?? item.path))}`, t: String(Date.now()) })
     if (how === 'viewer') return wm.openNew('viewer', { path: item.path })
     if (how === 'preview' || how === 'player' || how === 'pdf' || how === 'archive') return wm.openNew(how, { path: item.path })
+    if (how === 'amp') return wm.openNew('amp', { path: item.path, t: String(Date.now()) })
     if (how === 'zed') return wm.open('zed', { path: item.path, view: 'preview', t: String(Date.now()) })
     if (node.open?.url) return void openLink(node.open.url)
     if (node.open?.app) return wm.open(node.open.app as AppId, { ...node.open.props, t: String(Date.now()) })
@@ -398,7 +399,7 @@ export function Files({ win }: { win: WinState }) {
   }
 
   /** Seafile: folders open here, files as everywhere else (see openSeafile). */
-  function openSeafileItem(item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' | 'preview' | 'player' | 'pdf' | 'office' | 'archive') {
+  function openSeafileItem(item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' | 'preview' | 'player' | 'amp' | 'pdf' | 'office' | 'archive') {
     const posix = toPosix(item.path)
     if (how === 'terminal' && posix) return wm.openNew('terminal', { run: item.kind === 'folder' ? `cd ${shq(prettyPath(posix))} && ls` : `cat ${shq(prettyPath(posix))}`, t: String(Date.now()) })
     if (item.kind === 'folder') return navigate(item.path, true, item.posix)
@@ -606,6 +607,7 @@ export function Files({ win }: { win: WinState }) {
                   { label: 'Zed', onSelect: () => openItem(item, 'zed') },
                   { label: 'Viewer', onSelect: () => openItem(item, 'viewer') },
                   ...(item.kind === 'image' ? [{ label: 'Preview', onSelect: () => openItem(item, 'preview') }] : []),
+                  ...(item.kind === 'audio' ? [{ label: 'Omamp', onSelect: () => openItem(item, 'amp') }] : []),
                   ...(item.kind === 'video' || item.kind === 'audio' ? [{ label: 'Player', onSelect: () => openItem(item, 'player') }] : []),
                   ...(item.kind === 'pdf' ? [{ label: 'PDF', onSelect: () => openItem(item, 'pdf') }] : []),
                   ...(isArchive(item.name) ? [{ label: 'Archive', onSelect: () => openItem(item, 'archive') }] : []),
@@ -652,7 +654,8 @@ export function Files({ win }: { win: WinState }) {
                 { label: 'Zed', onSelect: () => openItem(item, 'zed') },
                 { label: 'Viewer', onSelect: () => openItem(item, 'viewer') },
                 ...(item.kind === 'image' ? [{ label: 'Preview', onSelect: () => openItem(item, 'preview') }] : []),
-                ...(item.kind === 'video' || item.kind === 'audio' ? [{ label: 'Player', onSelect: () => openItem(item, 'player') }] : []),
+                ...(item.kind === 'audio' ? [{ label: 'Omamp', onSelect: () => openItem(item, 'amp') }] : []),
+                  ...(item.kind === 'video' || item.kind === 'audio' ? [{ label: 'Player', onSelect: () => openItem(item, 'player') }] : []),
                 { label: 'Terminal (cat)', onSelect: () => openItem(item, 'terminal') },
               ],
             },

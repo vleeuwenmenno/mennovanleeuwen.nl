@@ -17,6 +17,7 @@ import { Files } from '../apps/Files'
 import { Viewer } from '../apps/Viewer'
 import { Preview, previewTitle } from '../apps/Preview'
 import { Player, playerTitle } from '../apps/Player'
+import { Amp, ampTitle } from '../apps/Amp'
 import { PdfViewer, pdfTitle } from '../apps/PdfViewer'
 import { Office, officeTitle } from '../apps/Office'
 import { Archive, archiveTitle } from '../apps/Archive'
@@ -41,7 +42,8 @@ export const APP_META: Record<AppId, AppMeta> = {
   files: { title: 'Files', dock: 'Files', blurb: 'Browse the filesystem', size: [940, 600], render: (w) => <Files win={w} /> },
   zed: { title: 'Zed', dock: 'Zed', blurb: 'Edit Markdown and text files', size: [960, 620], render: (w) => <Zed win={w} /> },
   preview: { title: 'Preview', dock: 'Preview', blurb: 'Pictures: zoom, rotate, slideshow', size: [900, 620], titleOf: previewTitle, render: (w) => <Preview win={w} /> },
-  player: { title: 'Player', dock: 'Player', blurb: 'Video and music', size: [800, 484], titleOf: playerTitle, render: (w) => <Player win={w} /> },
+  player: { title: 'Player', dock: 'Player', blurb: 'Video', size: [800, 484], titleOf: playerTitle, render: (w) => <Player win={w} /> },
+  amp: { title: 'Omamp', dock: 'Omamp', blurb: 'Music: MP3, FLAC and more, with an equalizer and a playlist', size: [500, 660], titleOf: ampTitle, render: (w) => <Amp win={w} /> },
   pdf: { title: 'PDF', dock: 'PDF', blurb: 'PDFs: pages, search, zoom', size: [860, 680], titleOf: pdfTitle, render: (w) => <PdfViewer win={w} /> },
   archive: { title: 'Archive', dock: 'Archive', blurb: 'What is in a ZIP, without unpacking it', size: [820, 560], titleOf: archiveTitle, render: (w) => <Archive win={w} /> },
   office: { title: 'Office', dock: 'Office', blurb: 'Word, Excel and PowerPoint files, in OnlyOffice', size: [1100, 720], titleOf: officeTitle, render: (w) => <Office win={w} /> },
