@@ -6,7 +6,7 @@ import { MAP, MAPS, type MapDef } from './maps'
 import { ALLY, ENEMY, OWN, relColor } from './render'
 import { ACTIONS, RESERVED, bindKey, keyName, keyOf, resetKeys, setSettings, useSettings, type Action, type Settings } from './settings'
 import { newWorld, type Owner, type World } from './sim'
-import type { EmpiresSound } from './sound'
+import type { Bus, EmpiresSound } from './sound'
 
 // Everything outside a battle: the main menu, the skirmish lobby (map, players, teams), and the
 // settings and key bindings, which the battle's own menu opens too.
@@ -90,23 +90,140 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
 
 // --- Settings and keys ----------------------------------------------------------------------------------
 
+/** Every sound in the game on a button, to audition them. */
+function SoundTest({ sound }: { sound: EmpiresSound }) {
+  const at = { pan: 0, gain: 1 }
+  const groups: [string, [string, () => void][]][] = [
+    ['Weapons', [
+      ['Blaster (Republic)', () => sound.fire('laser', at, 'republic')],
+      ['Blaster (droid)', () => sound.fire('laser', at, 'droid')],
+      ['Turbolaser', () => sound.fire('turbo', at, 'republic')],
+      ['Flak', () => sound.fire('flak', at, 'republic')],
+      ['Missile', () => sound.fire('missile', at, 'republic')],
+    ]],
+    ['Hits and damage', [
+      ['Shield hit', () => sound.hit(true, false, at)],
+      ['Hull hit', () => sound.hit(false, false, at)],
+      ['Heavy hull hit', () => sound.hit(false, true, at)],
+      ['Shields down', () => sound.shieldsDown(at)],
+      ['Hardpoint destroyed', () => sound.hardpointDown(at)],
+      ['Fighter explodes', () => sound.boom(30, at)],
+      ['Frigate explodes', () => sound.boom(130, at)],
+      ['Capital explodes', () => sound.boom(380, at)],
+      ['Fighters launch', () => sound.launch(at)],
+    ]],
+    ['Republic crew', [
+      ['Select fighter', () => sound.select('republic', 'fighter')],
+      ['Select cruiser', () => sound.select('republic', 'cruiser')],
+      ['Select flagship', () => sound.select('republic', 'capital')],
+      ['Move', () => sound.order('move', 'republic')],
+      ['Attack', () => sound.order('attack', 'republic')],
+      ['Attack move', () => sound.order('attackMove', 'republic')],
+      ['Patrol', () => sound.order('patrol', 'republic')],
+      ['Hold', () => sound.order('hold', 'republic')],
+      ['Stop', () => sound.order('stop', 'republic')],
+      ['Rally', () => sound.order('rally', 'republic', 'station')],
+      ['Target hardpoint', () => sound.order('target', 'republic')],
+    ]],
+    ['Droid crew', [
+      ['Select fighter', () => sound.select('droid', 'fighter')],
+      ['Select flagship', () => sound.select('droid', 'capital')],
+      ['Move', () => sound.order('move', 'droid')],
+      ['Attack', () => sound.order('attack', 'droid')],
+      ['Hold', () => sound.order('hold', 'droid')],
+      ['Target hardpoint', () => sound.order('target', 'droid')],
+    ]],
+    ['Station and economy', [
+      ['Queue ship', () => sound.queued()],
+      ['Cancel ship', () => sound.unqueued()],
+      ['Ship ready', () => sound.shipReady('republic', 'frigate')],
+      ['Flagship ready', () => sound.shipReady('republic', 'capital')],
+      ['Research started', () => sound.researchStarted()],
+      ['Research done', () => sound.researchDone()],
+      ['Station level up', () => sound.levelUp()],
+      ['Construction', () => sound.constructing()],
+      ['Mine online', () => sound.structureDone('mine')],
+      ['Defense online', () => sound.structureDone('defense')],
+      ['Ore surveyed', () => sound.surveyed()],
+      ['Beacon taken', () => sound.capture(true)],
+      ['Beacon lost', () => sound.capture(false)],
+    ]],
+    ['Abilities', [
+      ['Shield boost', () => sound.ability('shieldBoost')],
+      ['Flak barrage', () => sound.ability('flakBarrage')],
+      ['Repair swarm', () => sound.ability('repairSwarm')],
+      ['Tractor lock', () => sound.ability('tractor')],
+      ['Full broadside', () => sound.ability('broadside')],
+      ['Launch swarm', () => sound.ability('launchSwarm')],
+    ]],
+    ['Alerts and interface', [
+      ['Under attack', () => sound.alarm(false)],
+      ['Station under attack', () => sound.alarm(true)],
+      ['Ally eliminated', () => sound.eliminated(true)],
+      ['Enemy eliminated', () => sound.eliminated(false)],
+      ['Command armed', () => sound.arm()],
+      ['Click', () => sound.click()],
+      ['Denied', () => sound.error()],
+      ['Menu open', () => sound.menu(true)],
+      ['Menu close', () => sound.menu(false)],
+      ['Pause', () => sound.pause(true)],
+      ['Resume', () => sound.pause(false)],
+      ['Victory', () => sound.victory()],
+      ['Defeat', () => sound.defeat()],
+    ]],
+  ]
+  return (
+    <div className="ew-soundtest">
+      {groups.map(([g, items]) => (
+        <section key={g}>
+          <h5>{g}</h5>
+          <div className="ew-soundgrid">
+            {items.map(([label, play]) => (
+              <button key={label} onClick={() => (sound.unlock(), play())}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  )
+}
+
 export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
   const s = useSettings()
   const [vol, setVol] = useState(sound.volume)
   const [muted, setMuted] = useState(sound.muted)
+  const [mix, setMix] = useState(sound.mix)
+  const [testing, setTesting] = useState(false)
   const set = (next: Partial<Settings>) => setSettings(next)
   return (
     <div className="ew-form">
       <h5>Sound</h5>
       <label className="ew-row">
-        <span>Volume</span>
+        <span>Master volume</span>
         <span className="ew-range">
           <input type="range" min={0} max={1} step={0.05} value={vol} onChange={(e) => (sound.setVolume(Number(e.target.value)), setVol(Number(e.target.value)))} />
           <b>{Math.round(vol * 100)}%</b>
         </span>
       </label>
+      {(
+        [
+          ['sfx', 'Battle'],
+          ['ui', 'Crew and interface'],
+          ['amb', 'Ambience'],
+        ] as [Bus, string][]
+      ).map(([bus, label]) => (
+        <label key={bus} className="ew-row">
+          <span>{label}</span>
+          <span className="ew-range">
+            <input type="range" min={0} max={1} step={0.05} value={mix[bus]} onChange={(e) => (sound.setMix(bus, Number(e.target.value)), setMix({ ...sound.mix }))} />
+            <b>{Math.round(mix[bus] * 100)}%</b>
+          </span>
+        </label>
+      ))}
       <div className="ew-row">
-        <span>Sound effects</span>
+        <span>Sound</span>
         <Seg label="Sound effects" value={!muted} options={[[true, 'On'], [false, 'Off']]} onChange={(on) => (sound.setMuted(!on), setMuted(!on))} />
       </div>
       <h5>Camera</h5>
@@ -134,6 +251,8 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
         <span>Messages</span>
         <Seg label="Messages" value={s.toasts} options={[[true, 'All'], [false, 'Alerts only']]} onChange={(v) => set({ toasts: v })} />
       </div>
+      <h5>Sound test</h5>
+      {testing ? <SoundTest sound={sound} /> : <button className="ew-soundtest-open" onClick={() => (sound.unlock(), setTesting(true))}>Play every sound in the game…</button>}
     </div>
   )
 }

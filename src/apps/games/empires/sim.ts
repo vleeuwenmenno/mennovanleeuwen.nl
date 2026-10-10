@@ -125,6 +125,7 @@ export type SimEvent =
   | { k: 'tech'; owner: Owner; id: string }
   | { k: 'ability'; owner: Owner; id: AbilityId; x: number; y: number }
   | { k: 'launch'; owner: Owner; x: number; y: number }
+  | { k: 'shieldsDown'; owner: Owner; x: number; y: number }
 
 export type World = {
   w: number
@@ -666,6 +667,9 @@ export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: num
     const onShield = kind === 'missile' ? dmg * 0.35 : dmg
     const soaked = Math.min(u.shield, onShield)
     u.shield -= soaked
+    // Shields of a warship giving out are worth hearing.
+    if (u.shield <= 0 && (u.t.tier === 'frigate' || u.t.tier === 'cruiser' || u.t.tier === 'capital' || u.t.tier === 'station' || u.t.tier === 'defense'))
+      w.events.push({ k: 'shieldsDown', owner: u.owner, x: u.x, y: u.y })
     rest -= soaked
     u.shieldHit = w.time
     u.hitAngle = Math.atan2(fromY - u.y, fromX - u.x)
@@ -1015,7 +1019,7 @@ function economy(w: World, dt: number) {
  * to nothing first. Contested spots freeze; abandoned ones drift back to whoever holds them.
  * Returns the previous owner when the owner changed.
  */
-function claim(c: Claimable, power: number[], rate: number, drift: number): number | null {
+function claim(c: Claimable, power: number[], rate: number, drift: number, lapse = false): number | null {
   const present = power.map((p, t) => (p > 0 ? t : -1)).filter((t) => t >= 0)
   const prev = c.owner
   if (present.length === 1) {
@@ -1033,9 +1037,15 @@ function claim(c: Claimable, power: number[], rate: number, drift: number): numb
       if (c.progress === 1) c.owner = t
     }
   } else if (present.length === 0) {
-    const home = c.owner !== -1 ? 1 : 0
-    if (c.owner !== -1) c.claim = c.owner
-    c.progress += clamp(home - c.progress, -drift, drift)
+    if (lapse) {
+      // A claim nobody builds on or guards fades away, back to open ore.
+      c.progress = Math.max(0, c.progress - drift)
+      if (c.progress === 0) c.owner = -1
+    } else {
+      const home = c.owner !== -1 ? 1 : 0
+      if (c.owner !== -1) c.claim = c.owner
+      c.progress += clamp(home - c.progress, -drift, drift)
+    }
   }
   return c.owner !== prev ? prev : null
 }
@@ -1051,6 +1061,9 @@ function beacons(w: World, dt: number) {
   }
 }
 
+/** Seconds for an unguarded, unbuilt ore claim to fade back to open ore. */
+export const CLAIM_LAPSE = 90
+
 /** Surveying ore: our ships near an empty asteroid, with no enemy ships there, claim it in
  * SURVEY_TIME seconds; taking one from the enemy means undoing their claim first. */
 function survey(w: World, dt: number) {
@@ -1060,7 +1073,8 @@ function survey(w: World, dt: number) {
     near(w, n.x, n.y, SURVEY_RADIUS, (u) => {
       if (isShip(u.t)) power[w.players[u.owner].team] = 1
     })
-    const prev = claim(n, power, dt / SURVEY_TIME, dt / 30)
+    // An empty claim lapses in about a minute and a half without ships nearby.
+    const prev = claim(n, power, dt / SURVEY_TIME, dt / CLAIM_LAPSE, true)
     if (prev !== null) w.events.push({ k: 'survey', owner: n.owner, prev, node: n.id, x: n.x, y: n.y })
   }
 }

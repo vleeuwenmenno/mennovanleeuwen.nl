@@ -226,6 +226,23 @@
   padding: 4px 10px;
   font-size: 12px;
 }
+.ew-soundtest {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ew-soundgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  gap: 4px;
+  margin-top: 4px;
+}
+.ew-deck .ew-soundgrid button,
+.ew-deck .ew-soundtest-open {
+  padding: 4px 8px;
+  font-size: 11.5px;
+  text-align: left;
+}
 .ew-keys {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));

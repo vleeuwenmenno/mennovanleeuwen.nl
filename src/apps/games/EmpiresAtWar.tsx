@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, newBrain, think, type Brain } from './empires/ai'
-import { FACTIONS, TECH, UNIT, UNITS, buildable, dims, isShip, type HardpointKind } from './empires/data'
+import { FACTIONS, TECH, UNIT, UNITS, buildable, dims, isShip, type HardpointKind, type Tier } from './empires/data'
 import { DetailPanel, Frame, SelectionPanel, TacticalMap, TopBar, type Command, type Hud, type MapFilter, type Mode } from './empires/Hud'
 import { HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, slotName, type Setup } from './empires/Menus'
 import { MAP } from './empires/maps'
@@ -12,7 +12,7 @@ import {
   STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdHold, cmdMove, cmdPatrol, cmdRally, cmdResearch, cmdSite, cmdStop, foes, hpPos, newWorld, tick, type Owner, type SimEvent,
   type Unit, type World,
 } from './empires/sim'
-import { EmpiresSound } from './empires/sound'
+import { EmpiresSound, type OrderKind } from './empires/sound'
 import { useHighScore, useIsFocused } from './shared'
 import './empires/empires.css'
 
@@ -252,6 +252,11 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     return { unit: best, hp, node, at: p }
   }
 
+  /** Who answers an order on the radio: the biggest ship in the selection. */
+  const RANK: Tier[] = ['station', 'fighter', 'gunship', 'frigate', 'cruiser', 'capital']
+  const voice = (): Tier => mySelection().reduce<Tier>((best, u) => (RANK.indexOf(u.t.tier) > RANK.indexOf(best) ? u.t.tier : best), 'station')
+  const say = (kind: OrderKind) => sound.order(kind, myFaction, voice())
+
   /** A click with a command from the grid (or its key) armed: move, attack-move, patrol or rally. */
   const modeClick = (sx: number, sy: number, m: Mode) => {
     const w = world.current
@@ -267,7 +272,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       cmdMove(w, me, ids, at.x, at.y)
       renderer.current.ping(at.x, at.y, '#7dffa0')
     } else return command(sx, sy, true)
-    sound.order(false)
+    say(m === 'rally' ? 'rally' : m === 'patrol' ? 'patrol' : 'move')
   }
 
   /** The command grid (and its keys). Point-and-click ones arm a mode; the rest act at once. */
@@ -276,16 +281,18 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     const ids = mySelection().map((u) => u.id)
     sound.unlock()
     if (c === 'stop') {
+      if (!mySelection().some((u) => isShip(u.t))) return sound.error()
       cmdStop(w, me, ids)
-      sound.click()
+      say('stop')
     } else if (c === 'hold') {
+      if (!mySelection().some((u) => isShip(u.t))) return sound.error()
       cmdHold(w, me, ids)
-      sound.click()
+      say('hold')
     } else if (c === 'ability') useAbility()
     else {
       if (c === 'rally' ? !mySelection().some((u) => u.t.tier === 'station') : !mySelection().some((u) => isShip(u.t))) return sound.error()
       setMode(mode.current === c ? 'normal' : c)
-      sound.click()
+      sound.arm()
     }
   }
 
@@ -298,7 +305,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       if (stationSel) {
         cmdRally(w, me, at.x, at.y)
         renderer.current.ping(at.x, at.y, '#7dffa0')
-        sound.order()
+        say('rally')
       }
       return
     }
@@ -306,12 +313,12 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       cmdAttack(w, me, ships.map((u) => u.id), unit.id, hp)
 
       renderer.current.ping(unit.x, unit.y, '#ff5a50')
-      sound.order(true)
+      say(hp >= 0 ? 'target' : 'attack')
       if (hp >= 0) toast(`Targeting ${HP_NAME[unit.t.hardpoints[hp].kind].toLowerCase()}`, 'info')
     } else {
       cmdMove(w, me, ships.map((u) => u.id), at.x, at.y, attackMove)
       renderer.current.ping(at.x, at.y, attackMove ? '#ffaa5a' : '#7dffa0')
-      sound.order(attackMove)
+      say(attackMove ? 'attackMove' : 'move')
     }
   }
 
@@ -323,7 +330,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       sound.error()
       return
     }
-    sound.click()
+    sound.constructing()
     // Select what's going up, so its construction shows in the card.
     select([world.current.nodes[node].site])
   }
@@ -339,22 +346,24 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     if (!st) return
     select([st.id])
     centerOn(st.x + 250, st.y + 120)
-    sound.click()
+    sound.select(myFaction, 'station')
   }
   const selectIdle = () => {
     const idle = world.current.units.filter((u) => u.owner === me && isShip(u.t) && !u.parent && u.order.k === 'idle' && !u.target)
     select(idle.map((u) => u.id))
     if (idle.length) centerOn(idle.reduce((s, u) => s + u.x, 0) / idle.length, idle.reduce((s, u) => s + u.y, 0) / idle.length)
     else toast('No idle ships', 'info')
-    sound.click()
+    if (idle.length) sound.select(myFaction, voice())
+    else sound.error()
   }
   const selectArmy = () => {
     select(world.current.units.filter((u) => u.owner === me && isShip(u.t)).map((u) => u.id))
-    sound.click()
+    if (mySelection().length) sound.select(myFaction, voice())
   }
   const useAbility = () => {
+    const ready = mySelection().filter((u) => u.t.ability && u.abilityCd <= 0)
     const n = cmdAbility(world.current, me, mySelection().map((u) => u.id))
-    if (n) sound.ability()
+    if (n) for (const id of new Set(ready.map((u) => u.t.ability!))) sound.ability(id)
     else if (mySelection().some((u) => u.t.ability)) sound.error()
   }
 
@@ -370,7 +379,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     if (!n && why) {
       toast(why, 'bad')
       sound.error()
-    } else sound.click()
+    } else sound.queued()
   }
   /** Right-click on a ship card: drop the last one of that type from the queue. */
   const unqueue = (id: string) => {
@@ -378,7 +387,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     for (let i = q.length - 1; i >= 0; i--)
       if (q[i].unit === id) {
         cmdCancel(world.current, me, i)
-        sound.click()
+        sound.unqueued()
         return
       }
   }
@@ -388,13 +397,14 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     if (why) {
       toast(why, 'bad')
       sound.error()
-    } else sound.click()
+    } else sound.researchStarted()
   }
 
   // Load the art, then start.
   useEffect(() => {
     let live = true
-    void renderer.current.ready().then(() => live && setReady(true))
+    sound.unlock()
+    void Promise.all([renderer.current.ready(), sound.warm(myFaction)]).then(() => live && setReady(true))
     return () => {
       live = false
     }
@@ -475,17 +485,22 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       // Effects and sound.
       renderer.current.consume(events, w, me)
       for (const e of events) {
-        if (e.k === 'fire') sound.fire(e.kind, where(e.x, e.y), w.players[e.owner].faction === 'droid')
+        if (e.k === 'fire') sound.fire(e.kind, where(e.x, e.y), w.players[e.owner].faction)
         else if (e.k === 'hit') sound.hit(e.shield, e.kind === 'turbo' || e.kind === 'missile', where(e.x, e.y))
         else if (e.k === 'boom') sound.boom(e.size, where(e.x, e.y))
+        else if (e.k === 'shieldsDown') sound.shieldsDown(where(e.x, e.y))
+        else if (e.k === 'launch') sound.launch(where(e.x, e.y))
+        else if (e.k === 'ability' && e.owner !== me) sound.ability(e.id, where(e.x, e.y))
         else if (e.k === 'hpdown') {
-          sound.boom(60, where(e.x, e.y))
+          sound.hardpointDown(where(e.x, e.y))
           if (e.owner === me) toast(`${HP_NAME[e.what as HardpointKind]} destroyed on one of our ships`, 'bad')
         } else if (e.k === 'built' && e.owner === me) {
           const t = UNIT[e.unit]
-          sound.built()
+          if (t.tier === 'mine' || t.tier === 'defense') sound.structureDone(t.tier)
+          else sound.shipReady(myFaction, t.tier)
           toast(t.tier === 'mine' ? `${t.name} is drilling` : t.tier === 'defense' ? `${t.name} online` : `${t.name}${t.squad > 1 ? ' squadron' : ''} ready`, 'good')
         } else if (e.k === 'out') {
+          sound.eliminated(!foes(w, e.owner, me))
           if (e.owner === me) toast('Our station has fallen', 'bad')
           else toast(`${seats[e.owner].name} has been eliminated`, foes(w, e.owner, me) ? 'good' : 'bad')
         } else if (e.k === 'beacon') {
@@ -497,19 +512,19 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
             toast('We lost a beacon', 'bad')
           }
         } else if (e.k === 'alarm' && e.owner === me) {
-          sound.alarm()
+          sound.alarm(e.what.endsWith('station'))
           lastAlarm.current = { x: e.x, y: e.y, t: w.time }
           toast(`${e.what} under attack! (Space to look)`, 'bad')
         } else if (e.k === 'survey') {
           if (e.owner === myTeam && e.prev !== myTeam) {
-            sound.capture(true)
+            sound.surveyed()
             toast('Ore surveyed: click it to build a mining or defense platform', 'good')
-          } else if (e.prev === myTeam) toast('We lost the claim on an ore asteroid', 'bad')
+          } else if (e.prev === myTeam) toast(e.owner === -1 ? 'An unused ore claim has lapsed' : 'We lost the claim on an ore asteroid', 'bad')
         } else if (e.k === 'tech' && e.owner === me) {
-          sound.built()
+          sound.researchDone()
           toast(`Research complete: ${TECH[e.id].name}`, 'good')
         } else if (e.k === 'level' && e.owner === me) {
-          sound.fanfare()
+          sound.levelUp()
           const unlocked = buildable(myFaction).filter((t) => t.level === e.level).map((t) => t.name)
           toast(`Station level ${e.level}${unlocked.length ? `: ${unlocked.join(', ')} unlocked` : ''}`, 'good')
         }
@@ -531,6 +546,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         showRally: mySelection().some((u) => u.t.tier === 'station'),
       }
       renderer.current.draw(ctx, w, cm, vw, vh, v, dt * (paused.current ? 0 : speed.current))
+      sound.ambience(paused.current ? 0 : dt)
       renderer.current.minimap(mctx, w, me, cm, vw, vh, m.clientWidth, m.clientHeight, lastAlarm.current, mapFilterRef.current)
 
       hudT -= dt
@@ -541,7 +557,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
           ended = true
           sound.stopDrone()
           if (w.winner === myTeam) {
-            sound.fanfare()
+            sound.victory()
             submit((bestRef.current ?? 0) + 1)
           } else sound.defeat()
         }
@@ -752,7 +768,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       let ids = w.units.filter((u) => inBox(u) && isShip(u.t)).map((u) => u.id)
       if (!ids.length) ids = w.units.filter(inBox).map((u) => u.id)
       select(ids, e.shiftKey)
-      if (ids.length) sound.click()
+      if (mySelection().length) sound.select(myFaction, voice())
       return
     }
     const { unit, node } = pick(p.x, p.y)
@@ -771,6 +787,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     if (unit.owner !== me) {
       selected.current.clear()
       selected.current.add(unit.id)
+      sound.click()
       return
     }
     if (dbl) {
@@ -782,7 +799,9 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     } else if (e.shiftKey && selected.current.has(unit.id)) {
       for (const id of withSquads([unit.id])) selected.current.delete(id)
     } else select([unit.id], e.shiftKey)
-    sound.click()
+    // The crew of what we just picked answers (structures just click).
+    if (isShip(unit.t) || unit.t.tier === 'station') sound.select(myFaction, unit.t.tier)
+    else sound.click()
   }
 
   const onWheel = (e: React.WheelEvent) => {
@@ -813,7 +832,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
       if (ships.length) {
         if (mode.current === 'patrol') cmdPatrol(w, me, ships.map((u) => u.id), x, y)
         else cmdMove(w, me, ships.map((u) => u.id), x, y, mode.current === 'attack')
-        sound.order()
+        say(mode.current === 'patrol' ? 'patrol' : mode.current === 'attack' ? 'attackMove' : 'move')
       }
       return
     }
@@ -823,11 +842,13 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
 
   const togglePause = () => {
     paused.current = !paused.current
+    sound.pause(paused.current)
     setUi((u) => ({ ...u, paused: paused.current }))
   }
   // The battle menu and the settings panels pause the game while they're open.
   const openMenu = (panel: 'settings' | 'keys' | 'howto' | null = null) => {
-    sound.click()
+    if (panel) sound.click()
+    else sound.menu(true)
     setUi((u) => {
       if (!u.menu && !u.panel) pausedBefore.current = paused.current
       paused.current = true
@@ -835,6 +856,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
     })
   }
   const closeMenu = () => {
+    sound.menu(false)
     setUi((u) => {
       // Closing a panel opened from the menu goes back to the menu.
       if (u.panel && u.menu) return { ...u, panel: null }
