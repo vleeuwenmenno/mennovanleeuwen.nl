@@ -543,7 +543,8 @@ export function cantSite(w: World, owner: Owner, node: number, tier: 'mine' | 'd
   if (!n) return 'No ore there'
   if (n.site) return 'Something is already built here'
   if (n.owner !== p.team) return 'Survey it first: keep ships near it for a few seconds'
-  if (w.units.some((u) => !u.dead && foes(w, u.owner, owner) && isShip(u.t) && u.t.tier !== 'fighter' && d2(u.x, u.y, n.x, n.y) < SURVEY_RADIUS ** 2)) return 'Enemy ships are in the way'
+  // Only enemies we can see stop us: the check must not give away ships hidden in the fog.
+  if (w.units.some((u) => !u.dead && foes(w, u.owner, owner) && sees(w, owner, u) && isShip(u.t) && u.t.tier !== 'fighter' && d2(u.x, u.y, n.x, n.y) < SURVEY_RADIUS ** 2)) return 'Enemy ships are in the way'
   if (p.credits < unitOf(p.faction, tier).cost) return 'Not enough credits'
   return null
 }

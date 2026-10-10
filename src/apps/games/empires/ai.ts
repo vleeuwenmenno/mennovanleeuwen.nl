@@ -250,7 +250,8 @@ export function think(w: World, b: Brain, dt: number) {
     // Heavy ships aim for shield generators, then turrets.
     if (D.focus && u.target && (u.t.tier === 'cruiser' || u.t.tier === 'capital' || u.t.tier === 'frigate')) {
       const e = w.byId.get(u.target)
-      if (e && e.hps.length) {
+      // Only aim at hardpoints of a ship we can actually see right now.
+      if (e && e.hps.length && sees(w, o, e)) {
         const gen = e.t.hardpoints.findIndex((h, i) => h.kind === 'shield' && e.hps[i].hp > 0)
         const gun = e.t.hardpoints.findIndex((h, i) => h.kind === 'turret' && e.hps[i].hp > 0)
         const hp = gen >= 0 ? gen : gun
