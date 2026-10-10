@@ -145,13 +145,13 @@ export const UNITS: UnitType[] = [
   {
     id: 'r-bomber', faction: 'republic', tier: 'fighter', kind: 'bomber', name: 'Hammer bomber', blurb: 'Armoured bombers, two to a squadron. Heavy proton bombs for capital ships and stations; easy prey for fighters.',
     sprite: 'republic-bomber', aspect: 0.715, size: 42, hull: 150, shield: 40, regen: 3, speed: 165, turn: 2.6, pop: 2, cost: 450, build: 16, level: 2, squad: 2, sensor: 650,
-    weapons: [laser(5, 220, 0.6), torpedo(75, 240, 6)], hardpoints: [], engines: [[3.6, 9.6], [6.4, 9.6]],
+    weapons: [laser(5, 220, 0.6), torpedo(75, 240, 6)], hardpoints: [], engines: [[3.3, 9.6], [6.8, 9.6]],
     role: { role: 'Bomber', strong: ['cruisers', 'flagships', 'stations'], weak: ['fighters', 'gunships', 'frigates'] },
   },
   {
     id: 'r-corvette', faction: 'republic', tier: 'gunship', kind: 'support', name: 'Mercy corvette', blurb: 'Repair tender: its work crews patch up the hulls of nearby ships. Lightly armed; keep it behind the line.',
-    sprite: 'republic-corvette', aspect: 0.652, size: 86, hull: 520, shield: 260, regen: 8, speed: 135, turn: 1.8, pop: 2, cost: 550, build: 18, level: 2, squad: 1, sensor: 900,
-    weapons: [flak(5, 280, 0.4)], hardpoints: [], engines: [[4, 9.6], [6, 9.6]],
+    sprite: 'republic-corvette', aspect: 0.653, size: 86, hull: 520, shield: 260, regen: 8, speed: 135, turn: 1.8, pop: 2, cost: 550, build: 18, level: 2, squad: 1, sensor: 900,
+    weapons: [flak(5, 280, 0.4)], hardpoints: [], engines: [[3.5, 9.4], [5, 9.5], [6.6, 9.4]],
     support: { range: 520, repair: 16, max: 6 },
     role: { role: 'Repair tender', strong: ['long fights'], weak: ['fighters', 'anything that catches it alone'] },
   },
@@ -213,14 +213,14 @@ export const UNITS: UnitType[] = [
   },
   {
     id: 'd-bomber', faction: 'droid', tier: 'fighter', kind: 'bomber', name: 'Locust bomber', blurb: 'Droid bombers, three to a squadron. Cheap, fragile, and their bomb pods wreck big hulls.',
-    sprite: 'droid-bomber', aspect: 0.963, size: 36, hull: 85, shield: 0, regen: 0, speed: 185, turn: 3, pop: 2, cost: 400, build: 13, level: 2, squad: 3, sensor: 620,
-    weapons: [laser(4, 220, 0.6), torpedo(48, 230, 6)], hardpoints: [], engines: [[5, 9]],
+    sprite: 'droid-bomber', aspect: 0.96, size: 36, hull: 85, shield: 0, regen: 0, speed: 185, turn: 3, pop: 2, cost: 400, build: 13, level: 2, squad: 3, sensor: 620,
+    weapons: [laser(4, 220, 0.6), torpedo(48, 230, 6)], hardpoints: [], engines: [[5, 8.6]],
     role: { role: 'Bomber', strong: ['cruisers', 'flagships', 'stations'], weak: ['fighters', 'gunships', 'frigates'] },
   },
   {
     id: 'd-ion', faction: 'droid', tier: 'frigate', kind: 'ion', name: 'Disruptor frigate', blurb: 'One huge ion cannon that tears down shields in a few shots, leaving the hull open to everything else. Barely scratches bare armour.',
-    sprite: 'droid-ion', aspect: 0.493, size: 140, hull: 900, shield: 380, regen: 9, speed: 92, turn: 0.95, pop: 3, cost: 780, build: 22, level: 2, squad: 1, sensor: 1000,
-    weapons: [ion(70), flak(5, 300, 0.4)], hardpoints: [], engines: [[4.2, 9.6], [5.8, 9.6]],
+    sprite: 'droid-ion', aspect: 0.435, size: 140, hull: 900, shield: 380, regen: 9, speed: 92, turn: 0.95, pop: 3, cost: 780, build: 22, level: 2, squad: 1, sensor: 1000,
+    weapons: [ion(70), flak(5, 300, 0.4)], hardpoints: [], engines: [[2.8, 9.5], [7.2, 9.5]],
     role: { role: 'Shield breaker', strong: ['shielded warships', 'stations'], weak: ['fighters', 'unshielded ships'] },
   },
   {
