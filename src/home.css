@@ -988,12 +988,7 @@ textarea.agt-q-input {
     padding: 8px;
   }
 }
-/* Phones zoom into inputs under 16px. */
 @media (pointer: coarse) {
-  .agt-composer textarea,
-  .agt .nb-search input {
-    font-size: 16px;
-  }
   .agt-tool summary,
   .agt-think summary {
     padding: 4px 0;

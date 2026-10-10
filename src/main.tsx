@@ -12,6 +12,7 @@ import { initTheme } from './os/theme'
 import { WindowManagerProvider } from './os/wm'
 import './styles.css'
 import './home.css'
+import './mobile.css'
 
 initTheme()
 applyDockReserve()

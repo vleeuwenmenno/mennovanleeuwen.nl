@@ -14,6 +14,9 @@ export function trackVisualViewport() {
   const apply = () => {
     cancelAnimationFrame(raf)
     raf = requestAnimationFrame(() => {
+      // Pinch zoom also shrinks the visual viewport. Let the browser magnify the
+      // existing layout instead of treating it as a keyboard and resizing windows.
+      if (Math.abs(vv.scale - 1) > 0.01) return
       root.style.setProperty('--vvh', `${Math.round(vv.height)}px`)
       root.style.setProperty('--vvt', `${Math.round(vv.offsetTop)}px`)
       const open = window.innerHeight - vv.height > 120
@@ -21,8 +24,9 @@ export function trackVisualViewport() {
         root.classList.toggle('keyboard-open', open)
         window.dispatchEvent(new Event('mvlos:keyboard'))
       }
-      // Keep whatever is being typed into in view once the layout has caught up.
-      if (open) (document.activeElement as HTMLElement | null)?.scrollIntoView?.({ block: 'nearest' })
+      // Do not scroll the document here: iOS already reveals the focused control.
+      // scrollIntoView on every viewport scroll can pan the whole shell and expose
+      // an empty strip below it while the keyboard animates.
     })
   }
   vv.addEventListener('resize', apply)

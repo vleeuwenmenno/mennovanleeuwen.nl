@@ -48,7 +48,15 @@ body,
   margin: 0;
 }
 
+html {
+  background: var(--bg);
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body {
+  position: fixed;
+  inset: 0;
   background: var(--bg);
   color: var(--text);
   font-family: var(--ui);
@@ -104,7 +112,7 @@ body.is-resizing iframe {
 .desktop {
   position: fixed;
   inset: 0 0 auto 0;
-  height: 100%;
+  height: 100dvh;
   /* clip, not hidden: hidden still lets focus changes scroll the desktop sideways */
   overflow: clip;
 }
@@ -7256,7 +7264,7 @@ kbd {
     display: none;
   }
   /* With the dock tucked away, app windows reach down to the handle bar. */
-  :root[data-dock-tucked] .window:not(.chrome-note) {
+  :root[data-dock-tucked]:not(.keyboard-open) .window:not(.chrome-note) {
     height: calc(100dvh - var(--top) - 36px - var(--sab)) !important;
   }
   .window.chrome-note {
