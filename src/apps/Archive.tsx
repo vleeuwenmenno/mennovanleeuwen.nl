@@ -613,7 +613,7 @@ export function Archive({ win }: { win: WinState }) {
                     <span className="ar-bar" aria-hidden>
                       <i style={{ width: `${job.status.totalBytes ? Math.round((job.status.bytes / job.status.totalBytes) * 100) : 0}%` }} />
                     </span>
-                    Unpacking {job.status.count} of {job.status.total}
+                    Unpacking {Math.min(job.status.files ?? job.status.count, job.status.total)} of {job.status.total}
                     {job.status.current ? ` · ${job.status.current.split('/').pop()}` : ''}
                     <button className="link-btn" onClick={() => void cancelExtract(job.id)}>
                       Cancel

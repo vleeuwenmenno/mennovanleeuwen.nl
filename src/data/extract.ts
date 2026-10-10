@@ -17,7 +17,10 @@ export type Status = {
   totalBytes: number
   bytes: number
   current: string | null
+  /** How far `done` has got (folders made too): the cursor for polling */
   count: number
+  /** Files through so far (unpacked, skipped or failed), out of `total`; older servers leave it out */
+  files?: number
   done: Done[]
   errors: { path: string; error: string }[]
   into: { repo: string; path: string }
@@ -74,7 +77,7 @@ export async function extract(zip: string, into: string, opts: ExtractOptions, o
   const t = parseSf(into)!
   const { id } = await call<{ id: string }>('/api/seafile/extract', { method: 'POST', json: { repo: z.repo, path: z.p, into: { repo: t.repo, path: t.p }, entries: opts.entries, base: opts.base, clash: opts.clash, decisions: opts.decisions } })
   const archive = z.p.split('/').pop()!
-  const job: ExtractJob = { id, archive, zip, into, status: { id, state: 'running', error: null, total: 0, totalBytes: 0, bytes: 0, current: null, count: 0, done: [], errors: [], into: { repo: t.repo, path: t.p } } }
+  const job: ExtractJob = { id, archive, zip, into, status: { id, state: 'running', error: null, total: 0, totalBytes: 0, bytes: 0, current: null, count: 0, files: 0, done: [], errors: [], into: { repo: t.repo, path: t.p } } }
   jobs = [...jobs, job]
   emit()
   signal?.addEventListener('abort', () => void cancelExtract(id), { once: true })
