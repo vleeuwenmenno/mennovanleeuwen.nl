@@ -1,15 +1,24 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { useWM, type WinState } from '../os/wm'
-import { fileKind, HOME, KIND_LABEL, kindOfName, lookup, prettyPath, walk, type DirNode, type Node } from '../terminal/vfs'
-import { isSf, libraryName, parseSf, readText, writeText } from '../data/seafile'
+import { fileKind, HOME, KIND_LABEL, kindOfName, lookup as siteLookup, prettyPath, type DirNode, type Node } from '../terminal/vfs'
+import { lookup, makeDir, MAX_TEXT, prepare, removePath, touchFile, transfer, walk } from '../terminal/fs'
+import { cachedDir, deleteNote, DRAG_FILES, dropOp, getClipboard, getDragged, getLibrary, isInside, isSf, libraryName, openSeafile, parseSf, readText, seafileWebUrl, setClipboard, setDragged, SF, sfPath, shareLink, transferItems, useClipboard, useDir, writeText } from '../data/seafile'
+import { mounts, posixOf, useMounts, whereIs } from '../data/mounts'
+import { droppedFiles, hasOsFiles, uploadFiles } from '../data/uploads'
+import { openContextMenu, type MenuItem } from '../os/ContextMenu'
+import { openLink } from '../data/links'
 import { ask } from '../os/Dialogs'
 
 // A small Zed: a project panel on the left, tabs, and an editor with line numbers, a current-line
 // highlight and Markdown highlighting, plus a Markdown preview, find (Ctrl+F), project search
-// (Ctrl+Shift+F) and file finder (Ctrl+P). Markdown opened from elsewhere starts in the preview. Every file can be edited, but only /tmp is writable,
-// so Ctrl+S saves there and politely refuses everywhere else. Opening another file while Zed is
-// open adds a tab to the frontmost window, as the real one does. The project is the home folder
-// until another one is picked from the project name in the title bar.
+// (Ctrl+Shift+F) and file finder (Ctrl+P). Markdown opened from elsewhere starts in the preview.
+// The project panel sees the filesystem the way the terminal does, through /etc/fstab, so a
+// Seafile library on ~ or under /mnt/seafile is there to browse and edit: Ctrl+S saves back to
+// Seafile. The site's own files are read-only, except /tmp. Right-clicking the panel creates,
+// renames, deletes, cuts, copies and pastes, and entries drag onto folders, as in Files (and the
+// clipboard and drags are the same ones Files and the desktop use). Opening another file while
+// Zed is open adds a tab to the frontmost window, as the real one does. The project is the home
+// folder until another one is picked from the project name in the title bar.
 
 const LINE = 20 // px; the gutter, the highlight layers and the textarea share it
 const PAD = 12 // px above the first line
@@ -19,29 +28,85 @@ const SEARCH = 'search://' // the project search tab
 type Buffer = { text: string; saved: string; loading?: boolean; error?: string }
 type View = 'edit' | 'preview' | 'split'
 type Jump = { path: string; line: number; col: number; len: number }
+/** A name being typed in the project panel: a rename, or a new file or folder in `dir`. */
+type Pending = { kind: 'rename'; path: string } | { kind: 'file' | 'folder'; dir: string }
 
 const join = (dir: string, name: string) => `${dir === '/' ? '' : dir}/${name}`
 const base = (path: string) => (path === '/' ? '/' : path.split('/').pop()!)
-/** Where a file is, for tabs and the status bar: Seafile files by library. */
+const parentOf = (path: string) => path.replace(/\/[^/]*$/, '') || '/'
+const inside = (path: string, dir: string) => path === dir || path.startsWith(`${dir}/`)
+/** Quotes a path for a command line in the terminal. */
+const shq = (s: string) => (/^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
+/** Where a file is, for tabs and the status bar: Seafile files without a mount by library. */
 const where = (path: string) => {
   const at = parseSf(path)
   return at ? `${libraryName(at.repo)}${at.p}` : prettyPath(path)
 }
 const isMarkdown = (path: string) => /\.md$/i.test(path)
+/** Kinds Zed edits when they are clicked in the panel; pictures, PDFs and such open in their own app. */
+const TEXTUAL = new Set(['text', 'markdown', 'link', 'file'])
 
 function read(path: string) {
   const node = lookup(path)
   return node?.type === 'file' ? node.content() : ''
 }
 
-/** Writes a file in /tmp, the only writable directory. Returns false anywhere else. */
+/** Writes a file in /tmp, the only writable directory of the site's own. Returns false anywhere else. */
 function write(path: string, text: string) {
   const m = /^\/tmp\/([^/]+)$/.exec(path)
-  const tmp = lookup('/tmp') as DirNode | null
+  const tmp = siteLookup('/tmp') as DirNode | null
   if (!m || !tmp) return false
   tmp.children.set(m[1], { type: 'file', name: m[1], content: () => text, mtime: Date.now() })
   return true
 }
+
+/** Where a file really is: its Seafile path (null for the site's own files), and whether it is read-only. */
+function locate(path: string): { sf: string | null; ro: boolean } {
+  if (isSf(path)) return { sf: path, ro: getLibrary(parseSf(path)!.repo)?.permission === 'r' }
+  const w = whereIs(path)
+  if (w.kind === 'sf') return w.sf === SF ? { sf: null, ro: true } : { sf: w.sf, ro: w.ro }
+  if (w.kind === 'missing') return { sf: null, ro: true }
+  return { sf: null, ro: !/^\/tmp\/[^/]+$/.test(path) }
+}
+
+/** Whether files and folders can be made and removed in a folder: /tmp, or Seafile you may write to. */
+function canWriteIn(dir: string) {
+  if (dir === '/tmp') return true
+  const w = whereIs(dir)
+  return w.kind === 'sf' && w.sf !== SF && !w.ro && cachedDir(w.sf)?.listing?.perm !== 'r'
+}
+
+/** Mount points (a library on ~, /mnt/seafile and the libraries in it) stay where they are. */
+function isMount(path: string) {
+  if (mounts().some((m) => m.target === path)) return true
+  const w = whereIs(path)
+  return w.kind === 'sf' && (w.sf === SF || parseSf(w.sf)!.p === '/')
+}
+
+const canChange = (path: string) => path !== '/' && !isMount(path) && canWriteIn(parentOf(path))
+
+/** The Seafile path to cut, copy or drag for an entry: Seafile files and folders only. */
+function clipOf(path: string) {
+  const sf = locate(path).sf
+  return sf && !isMount(path) ? sf : null
+}
+
+const sfParentOf = (sf: string) => {
+  const at = parseSf(sf)!
+  return sfPath(at.repo, at.p.split('/').slice(0, -1).join('/') || '/')
+}
+
+/** A path handed to Zed from elsewhere: Seafile paths by where they are mounted, and the site's own files where they are now. */
+function normalize(path: string) {
+  if (isSf(path)) return posixOf(path) ?? path
+  if (lookup(path)) return path
+  // With Seafile on ~, the desktop's cv.md and README.md are the site's, under /srv/site.
+  if (path.startsWith(`${HOME}/`) && whereIs(HOME).kind === 'sf' && siteLookup(path)) return `/srv/site${path.slice(HOME.length)}`
+  return path
+}
+
+/** Command errors read "touch: cannot touch 'x': Read-only file system"; the last part says it. */
+const reason = (e: Error) => (/^[\w-]+: /.test(e.message) ? e.message.split(': ').pop()! : e.message)
 
 /** Files worth searching: text, not the stand-ins for ISOs, music and pictures. */
 function searchable(path: string) {
@@ -60,6 +125,8 @@ function matchesIn(text: string, query: string) {
 
 export function Zed({ win }: { win: WinState }) {
   const wm = useWM()
+  // Follows /etc/fstab and the libraries, so the panel changes when Seafile mounts or unmounts.
+  useMounts()
   const [root, setRoot] = useState(() => win.props.root ?? HOME)
   const [tabs, setTabs] = useState<string[]>([])
   const [buffers, setBuffers] = useState<Record<string, Buffer>>({})
@@ -73,6 +140,12 @@ export function Zed({ win }: { win: WinState }) {
   const [find, setFind] = useState<{ query: string; index: number } | null>(null)
   const [query, setQuery] = useState('') // project search
   const [jump, setJump] = useState<Jump | null>(null)
+  // The project panel: the selected entry, a name being typed, and where a drag would land.
+  const [sel, setSel] = useState<string | null>(null)
+  const [pending, setPending] = useState<Pending | null>(null)
+  const [dropOn, setDropOn] = useState<string | null>(null)
+  const [, setTick] = useState(0) // /tmp changes in place; this draws the panel again
+  const clip = useClipboard()
   const text = useRef<HTMLTextAreaElement>(null)
   const editor = useRef<HTMLDivElement>(null)
   const rootEl = useRef<HTMLDivElement>(null)
@@ -86,9 +159,12 @@ export function Zed({ win }: { win: WinState }) {
       return next
     })
 
-  const openFile = (path: string, at?: Omit<Jump, 'path'>) => {
+  /** Opens a file in a tab (or focuses its tab); answers the path it is open under. */
+  const openFile = (raw: string, at?: Omit<Jump, 'path'>) => {
+    const path = normalize(raw)
     setTabs((ts) => (ts.includes(path) ? ts : [...ts, path]))
-    if (isSf(path)) loadSeafile(path)
+    const { sf } = locate(path)
+    if (sf) loadSeafile(path, sf)
     else setBuffers((bs) => (bs[path] ? bs : { ...bs, [path]: { text: read(path), saved: read(path) } }))
     setActive(path)
     setCursor({ line: at?.line ?? 0, col: at?.col ?? 0 })
@@ -97,15 +173,25 @@ export function Zed({ win }: { win: WinState }) {
       setJump({ path, ...at })
     }
     if (!isSf(path)) reveal(path)
+    return path
   }
 
   /** A Seafile file comes in from its file server; an open tab keeps what is typed in it. */
-  const loadSeafile = (path: string) => {
+  const loadSeafile = (path: string, sf: string) => {
     if (buffers[path] && !buffers[path].error) return
     setBuffers((bs) => ({ ...bs, [path]: { text: '', saved: '', loading: true } }))
-    readText(path)
+    readText(sf)
       .then((t) => setBuffers((now) => ({ ...now, [path]: { text: t, saved: t } })))
       .catch((e: Error) => setBuffers((now) => ({ ...now, [path]: { text: '', saved: '', error: `Could not open it: ${e.message}` } })))
+  }
+
+  /** A click in the panel: text in a tab, Seafile pictures, PDFs and the like in their own app. */
+  const openFromPanel = (path: string) => {
+    const { sf } = locate(path)
+    if (sf && !TEXTUAL.has(kindOfName(base(path)))) return void openSeafile(wm, sf).catch((e: Error) => setStatus(e.message))
+    const node = lookup(path)
+    if (sf && node?.type === 'file' && (node.size ?? 0) > MAX_TEXT) return setStatus(`${base(path)} is too big to edit here`)
+    openFile(path)
   }
 
   const openSearch = () => {
@@ -116,11 +202,15 @@ export function Zed({ win }: { win: WinState }) {
   // `open README.md`, Files and Spotlight hand us a path (and a fresh `t` so the same path focuses
   // again). Markdown opened from outside Zed starts in the preview (`view: 'preview'`).
   useEffect(() => {
-    const path = win.props.path
-    if (!path) return
-    openFile(path)
+    if (!win.props.path) return
+    const path = openFile(win.props.path)
     if (win.props.view === 'preview' && isMarkdown(path)) setViews((v) => ({ ...v, [path]: 'preview' }))
   }, [win.props.path, win.props.t])
+
+  // A tab closed from outside (its file deleted): the one before it takes over.
+  useEffect(() => {
+    if (active && !tabs.includes(active)) setActive(tabs[tabs.length - 1] ?? null)
+  }, [tabs, active])
 
   // Focusing the window puts the caret back in the editor, as clicking into Zed does.
   useEffect(() => {
@@ -142,16 +232,18 @@ export function Zed({ win }: { win: WinState }) {
     else if (top + LINE * 2 > view.scrollTop + view.clientHeight) view.scrollTop = top + LINE * 3 - view.clientHeight
   }
 
-  // A jump from project search: select the match once its editor has rendered.
+  // A jump from project search: select the match once its editor has rendered (and a Seafile
+  // file has come in).
+  const jumpLoading = !!jump && !!buffers[jump.path]?.loading
   useEffect(() => {
-    if (!jump || jump.path !== active || !text.current) return
+    if (!jump || jump.path !== active || !text.current || jumpLoading) return
     const lines = text.current.value.split('\n')
     const start = lines.slice(0, jump.line).reduce((n, l) => n + l.length + 1, 0) + jump.col
     text.current.focus({ preventScroll: true })
     text.current.setSelectionRange(start, start + jump.len)
     scrollToLine(jump.line)
     setJump(null)
-  }, [jump, active])
+  }, [jump, active, jumpLoading])
 
   const buf = active && active !== SEARCH ? buffers[active] : null
   const view: View = (active && views[active]) || 'edit'
@@ -205,12 +297,14 @@ export function Zed({ win }: { win: WinState }) {
 
   const save = () => {
     if (!buf || !active) return
-    if (isSf(active)) {
+    const { sf, ro } = locate(active)
+    if (sf) {
       if (buf.loading || buf.error) return
+      if (ro) return setStatus(`Not saved: ${libraryName(parseSf(sf)!.repo)} is read-only for you`)
       const path = active
       const text = buf.text
       setStatus(`Saving ${where(path)}…`)
-      writeText(path, text)
+      writeText(sf, text)
         .then(() => {
           setBuffers((bs) => (bs[path] ? { ...bs, [path]: { ...bs[path], saved: text } } : bs))
           setStatus(`Saved ${where(path)} to Seafile`)
@@ -218,9 +312,276 @@ export function Zed({ win }: { win: WinState }) {
         .catch((e: Error) => setStatus(`Not saved: ${e.message}`))
       return
     }
-    if (!write(active, buf.text)) return setStatus('Read-only file system. Only /tmp is writable.')
+    if (!write(active, buf.text)) return setStatus('Read-only file system. Only /tmp and Seafile are writable.')
     setBuffers((bs) => ({ ...bs, [active]: { ...bs[active], saved: bs[active].text } }))
     setStatus(`Saved ${prettyPath(active)}`)
+  }
+
+  // --- project panel: changing files ------------------------------------------------------------
+
+  /** Open tabs (and everything keyed by path) follow a file or folder that moved. */
+  const rekey = (from: string, to: string) => {
+    const move = (p: string) => (p === from ? to : p.startsWith(`${from}/`) ? to + p.slice(from.length) : p)
+    const moveKeys = <T,>(o: Record<string, T>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [move(k), v]))
+    setTabs((ts) => ts.map(move))
+    setActive((a) => a && move(a))
+    setSel((s) => s && move(s))
+    setBuffers(moveKeys)
+    setViews(moveKeys)
+    setExpanded((o) => new Set([...o].map(move)))
+  }
+
+  /** Tabs of something deleted close (the dialog said their changes go too). */
+  const forget = (path: string) => {
+    const keep = <T,>(o: Record<string, T>) => Object.fromEntries(Object.entries(o).filter(([k]) => !inside(k, path)))
+    setTabs((ts) => ts.filter((t) => !inside(t, path)))
+    setBuffers(keep)
+    setViews(keep)
+    setSel((s) => (s && inside(s, path) ? parentOf(path) : s))
+  }
+
+  const startNew = (dir: string, kind: 'file' | 'folder') => {
+    setExpanded((o) => new Set([...o, dir]))
+    setPending({ kind, dir })
+  }
+
+  const finishPending = async (typed: string | null) => {
+    const p = pending
+    setPending(null)
+    const name = typed?.trim() ?? ''
+    if (!p || !name) return
+    if (p.kind === 'rename') return renameTo(p.path, name)
+    if (name.includes('/')) return setStatus('A name cannot have a / in it')
+    const abs = join(p.dir, name)
+    if (lookup(abs)) return setStatus(`${name} already exists`)
+    try {
+      if (p.kind === 'folder') await makeDir('/', abs, false)
+      else await touchFile('/', abs)
+      setTick((t) => t + 1)
+      setSel(abs)
+      if (p.kind === 'file') openFile(abs)
+    } catch (e) {
+      setStatus(`Could not create ${name}: ${reason(e as Error)}`)
+    }
+  }
+
+  const renameTo = async (path: string, name: string) => {
+    if (name === base(path)) return
+    if (name.includes('/')) return setStatus('A name cannot have a / in it')
+    const dest = join(parentOf(path), name)
+    if (lookup(dest)) return setStatus(`${name} already exists`)
+    setStatus(`Renaming ${base(path)}…`)
+    try {
+      await transfer('move', '/', path, dest, true)
+      rekey(path, dest)
+      setStatus(`Renamed to ${name}`)
+    } catch (e) {
+      setStatus(`Could not rename ${base(path)}: ${reason(e as Error)}`)
+    }
+    setTick((t) => t + 1)
+  }
+
+  const remove = async (path: string) => {
+    const name = base(path)
+    const { sf } = locate(path)
+    const unsaved = tabs.some((t) => inside(t, path) && buffers[t] && buffers[t].text !== buffers[t].saved)
+    const note = sf ? await deleteNote([sf]) : { final: true, body: 'It was only ever in memory.' }
+    const body = unsaved ? `${note.body} Changes not saved in its open tabs are lost too.` : note.body
+    if (!(await ask({ title: note.final ? `Delete ${name} for good?` : `Delete ${name}?`, body, confirm: 'Delete', danger: true }))) return
+    setStatus(`Deleting ${name}…`)
+    try {
+      await removePath('/', path, { recursive: true, force: true, dir: false })
+      forget(path)
+      setStatus(`Deleted ${name}`)
+    } catch (e) {
+      setStatus(`Could not delete ${name}: ${reason(e as Error)}`)
+    }
+    setTick((t) => t + 1)
+  }
+
+  const cutOrCopy = (op: 'move' | 'copy', path: string) => {
+    const sf = clipOf(path)
+    if (!sf || (op === 'move' && !canChange(path))) return
+    setClipboard({ op, paths: [sf] })
+    setStatus(op === 'move' ? `Cut ${base(path)}: paste it into a folder with Ctrl+V` : `Copied ${base(path)}`)
+  }
+
+  /** The Seafile folder the clipboard can be pasted into, or null. */
+  const pasteInto = (dir: string) => {
+    const c = getClipboard()
+    const w = whereIs(dir)
+    if (!c || w.kind !== 'sf' || !canWriteIn(dir) || isInside(c.paths, w.sf)) return null
+    if (c.op === 'move' && c.paths.every((p) => sfParentOf(p) === w.sf)) return null
+    return w.sf
+  }
+
+  /** Moves or copies Seafile paths into a folder of the panel; open tabs follow what moved. */
+  const carry = async (op: 'move' | 'copy', paths: string[], dir: string, into: string) => {
+    const what = paths.length === 1 ? base(paths[0]) : `${paths.length} items`
+    const moved = op === 'move' ? paths.map((p) => [posixOf(p), join(dir, base(p))] as const) : []
+    setStatus(`${op === 'move' ? 'Moving' : 'Copying'} ${what}…`)
+    try {
+      await transferItems(op, paths, into)
+      for (const [from, to] of moved) if (from) rekey(from, to)
+      setStatus(`${op === 'move' ? 'Moved' : 'Copied'} ${what} to ${prettyPath(dir)}`)
+      return true
+    } catch (e) {
+      setStatus((e as Error).message)
+      return false
+    }
+  }
+
+  const paste = async (dir: string) => {
+    const c = getClipboard()
+    const into = pasteInto(dir)
+    if (!c || !into) return
+    if ((await carry(c.op, c.paths, dir, into)) && c.op === 'move') setClipboard(null)
+  }
+
+  const revealInFiles = (path: string) => {
+    const parent = whereIs(parentOf(path))
+    wm.openNew('files', { path: parent.kind === 'sf' ? parent.sf : parentOf(path), select: locate(path).sf ?? path })
+  }
+
+  const copyText = (value: string) =>
+    navigator.clipboard
+      ?.writeText(value)
+      .then(() => setStatus(`Copied ${value}`))
+      .catch(() => {})
+
+  const relative = (path: string) => (path === root ? '.' : inside(path, root) ? path.slice(root === '/' ? 1 : root.length + 1) : path)
+
+  function entryMenu(path: string, isDir: boolean, isRoot = false): MenuItem[] {
+    const dir = isDir ? path : parentOf(path)
+    const { sf } = locate(path)
+    const changeable = !isRoot && canChange(path)
+    const clippable = !isRoot && !!clipOf(path)
+    const web = sf ? seafileWebUrl(sf) : null
+    return [
+      { label: 'New File', disabled: !canWriteIn(dir), onSelect: () => startNew(dir, 'file') },
+      { label: 'New Folder', disabled: !canWriteIn(dir) || dir === '/tmp', onSelect: () => startNew(dir, 'folder') },
+      { separator: true },
+      ...(isDir ? [] : [{ label: 'Open', onSelect: () => openFromPanel(path) }]),
+      { label: 'Reveal in Files', onSelect: () => revealInFiles(path) },
+      { label: 'Open in Terminal', onSelect: () => wm.openNew('terminal', { run: `cd ${shq(prettyPath(dir))}`, t: String(Date.now()) }) },
+      ...(sf
+        ? [
+            {
+              label: 'Seafile',
+              submenu: [
+                { label: 'Copy share link', onSelect: () => void shareLink(sf).then(({ url }) => copyText(url), (e: Error) => setStatus(e.message)) },
+                ...(web ? [{ label: 'Open in Seafile ↗', onSelect: () => void openLink(web) }] : []),
+              ],
+            },
+          ]
+        : []),
+      { separator: true },
+      ...(isRoot
+        ? []
+        : [
+            { label: 'Cut', shortcut: 'Ctrl X', disabled: !clippable || !changeable, onSelect: () => cutOrCopy('move', path) },
+            { label: 'Copy', shortcut: 'Ctrl C', disabled: !clippable, onSelect: () => cutOrCopy('copy', path) },
+          ]),
+      { label: 'Paste', shortcut: 'Ctrl V', disabled: !pasteInto(dir), onSelect: () => void paste(dir) },
+      { separator: true },
+      { label: 'Copy Path', onSelect: () => copyText(path) },
+      { label: 'Copy Relative Path', onSelect: () => copyText(relative(path)) },
+      ...(isRoot
+        ? []
+        : [
+            { separator: true } as MenuItem,
+            { label: 'Rename', shortcut: 'F2', disabled: !changeable, onSelect: () => setPending({ kind: 'rename', path }) },
+            { label: 'Delete', shortcut: 'Del', danger: true, disabled: !changeable, onSelect: () => void remove(path) },
+          ]),
+    ]
+  }
+
+  const onPanelKey = (e: KeyboardEvent<HTMLElement>) => {
+    if ((e.target as HTMLElement).closest('input') || !sel) return
+    const mod = e.ctrlKey || e.metaKey
+    const key = e.key.toLowerCase()
+    const dir = lookup(sel)?.type === 'dir' ? sel : parentOf(sel)
+    if (e.key === 'F2' && canChange(sel)) setPending({ kind: 'rename', path: sel })
+    else if ((e.key === 'Delete' || (mod && e.key === 'Backspace')) && canChange(sel)) void remove(sel)
+    else if (mod && key === 'c' && !e.altKey) cutOrCopy('copy', sel)
+    else if (mod && key === 'x') cutOrCopy('move', sel)
+    else if (mod && key === 'v') void paste(dir)
+    else return
+    e.preventDefault()
+    e.stopPropagation()
+  }
+
+  // Dragging: Seafile entries onto folders here, into Files and onto the desktop; from there (and
+  // from the computer, which uploads) into folders here. Within a library they move, else copy.
+  const dragStart = (e: DragEvent, path: string) => {
+    const sf = clipOf(path)
+    if (!sf || pending) return e.preventDefault()
+    e.dataTransfer.setData(DRAG_FILES, JSON.stringify([sf]))
+    e.dataTransfer.setData('text/plain', prettyPath(path))
+    e.dataTransfer.effectAllowed = 'copyMove'
+    setDragged([sf])
+    setSel(path)
+  }
+  const dragEnd = () => {
+    setDragged(null)
+    setDropOn(null)
+  }
+  /** Whether a drag can land in `dir`; says so to the browser (and highlights it) when it can. */
+  const acceptDrop = (e: DragEvent, dir: string): string | null => {
+    e.stopPropagation()
+    const w = whereIs(dir)
+    const ok = (effect: 'copy' | 'move') => {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = effect
+      if (dropOn !== dir) setDropOn(dir)
+      return w.kind === 'sf' ? w.sf : null
+    }
+    if (w.kind !== 'sf' || !canWriteIn(dir)) return null
+    if (!getDragged() && hasOsFiles(e.dataTransfer)) return ok('copy')
+    const paths = getDragged()
+    if (!paths || !e.dataTransfer.types.includes(DRAG_FILES) || isInside(paths, w.sf)) return null
+    const op = dropOp(paths, w.sf, e)
+    if (op === 'move' && paths.every((p) => sfParentOf(p) === w.sf)) return null
+    return ok(op)
+  }
+  const dropInto = (e: DragEvent, dir: string) => {
+    const into = acceptDrop(e, dir)
+    setDropOn(null)
+    if (!into) return
+    if (!getDragged() && hasOsFiles(e.dataTransfer)) {
+      droppedFiles(e.dataTransfer)
+        .then((picked) => uploadFiles(picked, into))
+        .catch((err: Error) => setStatus(err.message))
+      return
+    }
+    const paths = getDragged()!
+    const op = dropOp(paths, into, e)
+    dragEnd()
+    void carry(op, paths, dir, into)
+  }
+
+  const tree: TreeCtx = {
+    open: expanded,
+    active,
+    sel,
+    dropOn,
+    cut: clip?.op === 'move' ? clip.paths : [],
+    pending,
+    onToggle: (p) =>
+      setExpanded((o) => {
+        const next = new Set(o)
+        if (!next.delete(p)) next.add(p)
+        return next
+      }),
+    onOpen: openFromPanel,
+    onSelect: setSel,
+    onMenu: (e, p, isDir, isRoot) => openContextMenu(e, entryMenu(p, isDir, isRoot)),
+    onPendingDone: (name) => void finishPending(name),
+    onDragStart: dragStart,
+    onDragEnd: dragEnd,
+    onDragOver: acceptDrop,
+    onDrop: dropInto,
+    onLocked: (sf) => wm.openNew('files', { path: sf }),
   }
 
   const edit = (value: string) => active && setBuffers((bs) => ({ ...bs, [active]: { ...bs[active], text: value } }))
@@ -291,6 +652,7 @@ export function Zed({ win }: { win: WinState }) {
   const node = buf && active ? lookup(active) : null
   const kind = node ? fileKind(node) : active && isSf(active) ? kindOfName(base(active)) : buf ? (markdown ? 'markdown' : 'text') : null
   const heading = markdown && buf ? lines.slice(0, cursor.line + 1).reverse().find((l) => /^#{1,6}\s/.test(l)) : undefined
+  const place = buf && active ? locate(active) : null
 
   // Shortcuts work whenever this window is focused, also before anything inside it has focus,
   // but leave typing in another app's field (Spotlight, say) alone.
@@ -315,6 +677,7 @@ export function Zed({ win }: { win: WinState }) {
   const pickProject = (dir: string) => {
     setRoot(dir)
     setExpanded(new Set([dir]))
+    setSel(null)
     closePicker()
     setStatus(`Opened ${prettyPath(dir)}`)
   }
@@ -346,21 +709,17 @@ export function Zed({ win }: { win: WinState }) {
 
       <div className="zed-body">
         {panel && (
-          <nav className="zed-panel" aria-label="Project">
-            <Tree
-              dir={root}
-              depth={0}
-              open={expanded}
-              active={active}
-              onToggle={(p) =>
-                setExpanded((o) => {
-                  const next = new Set(o)
-                  if (!next.delete(p)) next.add(p)
-                  return next
-                })
-              }
-              onOpen={(p) => openFile(p)}
-            />
+          <nav
+            className={`zed-panel ${dropOn === root ? 'is-drop' : ''}`}
+            aria-label="Project"
+            onKeyDown={onPanelKey}
+            onContextMenu={(e) => openContextMenu(e, entryMenu(root, true, true))}
+            onDragEnter={(e) => acceptDrop(e, root)}
+            onDragOver={(e) => acceptDrop(e, root)}
+            onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Element | null) && setDropOn(null)}
+            onDrop={(e) => dropInto(e, root)}
+          >
+            <Tree dir={root} depth={0} ctx={tree} />
           </nav>
         )}
 
@@ -544,7 +903,7 @@ export function Zed({ win }: { win: WinState }) {
               {cursor.line + 1}:{cursor.col + 1}
             </span>
             <span>{kind === 'markdown' ? 'Markdown' : kind && KIND_LABEL[kind] !== 'Text' ? KIND_LABEL[kind] : 'Plain Text'}</span>
-            <span>{active.startsWith('/tmp/') ? 'UTF-8' : isSf(active) ? 'Seafile' : 'read-only'}</span>
+            <span>{place?.ro ? 'read-only' : place?.sf ? 'Seafile' : 'UTF-8'}</span>
           </>
         )}
         <button className="zed-status-btn" onClick={() => wm.openNew('terminal', { run: `cd ${prettyPath(root)}`, t: String(Date.now()) })} title="Open a terminal in this project">
@@ -555,49 +914,167 @@ export function Zed({ win }: { win: WinState }) {
   )
 }
 
+
 // --- Project panel -------------------------------------------------------------------------------
 
-function Tree({ dir, depth, open, active, onToggle, onOpen }: { dir: string; depth: number; open: Set<string>; active: string | null; onToggle: (p: string) => void; onOpen: (p: string) => void }) {
+type TreeCtx = {
+  open: Set<string>
+  active: string | null
+  sel: string | null
+  dropOn: string | null
+  /** Seafile paths cut for pasting, shown faded */
+  cut: string[]
+  pending: Pending | null
+  onToggle: (p: string) => void
+  onOpen: (p: string) => void
+  onSelect: (p: string) => void
+  onMenu: (e: MouseEvent, p: string, isDir: boolean, isRoot?: boolean) => void
+  onPendingDone: (name: string | null) => void
+  onDragStart: (e: DragEvent, p: string) => void
+  onDragEnd: () => void
+  onDragOver: (e: DragEvent, dir: string) => void
+  onDrop: (e: DragEvent, dir: string) => void
+  onLocked: (sf: string) => void
+}
+
+const indent = (depth: number) => 8 + depth * 12
+
+/** A folder of the project panel, through the mounts: Seafile folders are listed when opened. */
+function Tree({ dir, depth, ctx }: { dir: string; depth: number; ctx: TreeCtx }) {
+  const open = ctx.open.has(dir)
+  const w = whereIs(dir)
+  const sf = w.kind === 'sf' && w.sf !== SF ? w.sf : null
+  const listing = useDir(open ? sf : null)
   const node = lookup(dir)
-  const children = useMemo(() => {
-    if (node?.type !== 'dir') return []
-    return [...node.children.values()].sort((a, b) => (a.type === 'dir' ? 0 : 1) - (b.type === 'dir' ? 0 : 1) || a.name.localeCompare(b.name))
-  }, [node, open])
+  const children = node?.type === 'dir' ? [...node.children.values()].sort((a, b) => (a.type === 'dir' ? 0 : 1) - (b.type === 'dir' ? 0 : 1) || a.name.localeCompare(b.name)) : []
   const self = depth === 0
+  const { pending } = ctx
+  const adding = pending && pending.kind !== 'rename' && pending.dir === dir ? pending : null
+  const note = (text: ReactNode) => (
+    <li className="zed-note" style={{ paddingLeft: indent(depth + 1) + 16 }}>
+      {text}
+    </li>
+  )
+  const dropHandlers = (target: string) => ({
+    onDragEnter: (e: DragEvent) => ctx.onDragOver(e, target),
+    onDragOver: (e: DragEvent) => ctx.onDragOver(e, target),
+    onDrop: (e: DragEvent) => ctx.onDrop(e, target),
+  })
   return (
     <ul className="zed-tree" role={self ? 'tree' : 'group'}>
       {self && (
         <li>
-          <button className="zed-row zed-root" onClick={() => onToggle(dir)}>
-            <span className="zed-caret">{open.has(dir) ? '▾' : '▸'}</span>
+          <button className={`zed-row zed-root ${ctx.dropOn === dir ? 'is-drop' : ''}`} onClick={() => ctx.onToggle(dir)} onContextMenu={(e) => ctx.onMenu(e, dir, true, true)} {...dropHandlers(dir)}>
+            <span className="zed-caret">{open ? '▾' : '▸'}</span>
             {base(dir)}
           </button>
         </li>
       )}
-      {open.has(dir) &&
-        children.map((c: Node) => {
-          const path = join(dir, c.name)
-          const pad = { paddingLeft: 8 + (depth + 1) * 12 }
-          if (c.type === 'dir')
+      {open && (
+        <>
+          {adding && (
+            <li>
+              <NameInput initial="" folder={adding.kind === 'folder'} pad={indent(depth + 1)} onDone={ctx.onPendingDone} />
+            </li>
+          )}
+          {w.kind === 'missing' && note(w.loading ? 'Loading…' : 'Not connected')}
+          {sf &&
+            !listing.listing &&
+            (listing.status === 423 ? (
+              note(
+                <button className="zed-link" onClick={() => ctx.onLocked(sf)}>
+                  Locked: unlock it in Files
+                </button>,
+              )
+            ) : listing.error ? (
+              note(listing.error)
+            ) : listing.loading ? (
+              note('Loading…')
+            ) : null)}
+          {children.map((c: Node) => {
+            const path = join(dir, c.name)
+            const isDir = c.type === 'dir'
+            const pad = indent(depth + 1)
+            if (pending?.kind === 'rename' && pending.path === path)
+              return (
+                <li key={path}>
+                  <NameInput initial={c.name} folder={isDir} pad={pad} onDone={ctx.onPendingDone} />
+                </li>
+              )
+            const cut = !!c.sf && ctx.cut.includes(c.sf)
+            const cls = `zed-row ${path === ctx.active ? 'is-active' : ''} ${path === ctx.sel ? 'is-selected' : ''} ${ctx.dropOn === path ? 'is-drop' : ''} ${cut ? 'is-cut' : ''}`
             return (
               <li key={path}>
-                <button className="zed-row" style={pad} onClick={() => onToggle(path)}>
-                  <span className="zed-caret">{open.has(path) ? '▾' : '▸'}</span>
+                <button
+                  className={cls}
+                  style={{ paddingLeft: pad }}
+                  draggable={!!c.sf}
+                  onClick={() => {
+                    ctx.onSelect(path)
+                    if (isDir) ctx.onToggle(path)
+                    else ctx.onOpen(path)
+                  }}
+                  onContextMenu={(e) => {
+                    ctx.onSelect(path)
+                    ctx.onMenu(e, path, isDir)
+                  }}
+                  onDragStart={(e) => ctx.onDragStart(e, path)}
+                  onDragEnd={ctx.onDragEnd}
+                  {...dropHandlers(isDir ? path : dir)}
+                >
+                  {isDir ? <span className="zed-caret">{ctx.open.has(path) ? '▾' : '▸'}</span> : <FileDot name={c.name} />}
                   {c.name}
                 </button>
-                {open.has(path) && <Tree dir={path} depth={depth + 1} open={open} active={active} onToggle={onToggle} onOpen={onOpen} />}
+                {isDir && ctx.open.has(path) && <Tree dir={path} depth={depth + 1} ctx={ctx} />}
               </li>
             )
-          return (
-            <li key={path}>
-              <button className={`zed-row ${path === active ? 'is-active' : ''}`} style={pad} onClick={() => onOpen(path)}>
-                <FileDot name={c.name} />
-                {c.name}
-              </button>
-            </li>
-          )
-        })}
+          })}
+        </>
+      )}
     </ul>
+  )
+}
+
+/** The name field of a rename or a new entry: Enter or leaving it commits, Escape cancels. */
+function NameInput({ initial, folder, pad, onDone }: { initial: string; folder: boolean; pad: number; onDone: (name: string | null) => void }) {
+  const ref = useRef<HTMLInputElement>(null)
+  const done = useRef(false)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.focus()
+    // The name without its extension, as Zed selects it.
+    const dot = folder ? -1 : initial.lastIndexOf('.')
+    el.setSelectionRange(0, dot > 0 ? dot : initial.length)
+  }, [])
+  const finish = (name: string | null) => {
+    if (done.current) return
+    done.current = true
+    onDone(name)
+  }
+  return (
+    <div className="zed-row zed-naming" style={{ paddingLeft: pad }}>
+      {folder ? <span className="zed-caret">▸</span> : <FileDot name={initial} />}
+      <input
+        ref={ref}
+        className="zed-name-input"
+        defaultValue={initial}
+        spellCheck={false}
+        autoComplete="off"
+        aria-label={initial ? `Rename ${initial}` : `New ${folder ? 'folder' : 'file'} name`}
+        onKeyDown={(e) => {
+          e.stopPropagation()
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            finish(e.currentTarget.value)
+          } else if (e.key === 'Escape') {
+            e.preventDefault()
+            finish(null)
+          }
+        }}
+        onBlur={(e) => finish(e.currentTarget.value)}
+      />
+    </div>
   )
 }
 
@@ -682,7 +1159,9 @@ function recentProjects() {
     const n = lookup(dir)
     return n?.type === 'dir' ? [...n.children.values()].filter((c) => c.type === 'dir').map((c) => join(dir, c.name)) : []
   }
-  return [HOME, ...kids(`${HOME}/projects`), ...kids(`${HOME}/contributions`), `${HOME}/games`, '/etc', '/tmp', '/'].filter((p) => lookup(p)?.type === 'dir')
+  // With Seafile on ~, the site's own home is /srv/site; every library is under /mnt/seafile.
+  const site = whereIs(HOME).kind === 'sf' ? ['/srv/site'] : []
+  return [HOME, ...kids(`${HOME}/projects`), ...kids(`${HOME}/contributions`), `${HOME}/games`, ...site, ...kids('/mnt/seafile'), '/etc', '/tmp', '/'].filter((p) => lookup(p)?.type === 'dir')
 }
 
 function ProjectPicker({ root, onPick, onClose }: { root: string; onPick: (dir: string) => void; onClose: () => void }) {
@@ -693,7 +1172,7 @@ function ProjectPicker({ root, onPick, onClose }: { root: string; onPick: (dir: 
     const pick = (p: string, section: string): PickItem => ({ id: `${section}:${p}`, label: base(p), detail: prettyPath(p), section, checked: p === root, run: () => onPick(p) })
     if (q || all) {
       const dirs = walk('/').filter((p) => lookup(p)?.type === 'dir')
-      return dirs.filter((p) => !q || prettyPath(p).toLowerCase().includes(q)).slice(0, 60).map((p) => pick(p, 'Folders'))
+      return dirs.filter((p) => !q || `${prettyPath(p)}\n${p}`.toLowerCase().includes(q)).slice(0, 60).map((p) => pick(p, 'Folders'))
     }
     return [
       pick(root, 'This Window'),
@@ -702,6 +1181,25 @@ function ProjectPicker({ root, onPick, onClose }: { root: string; onPick: (dir: 
     ]
   }, [query, all, root, onPick])
   return <Palette className="is-project" placeholder="Search projects…" items={items} query={query} setQuery={setQuery} onClose={onClose} />
+}
+
+/**
+ * Fetches what is in Seafile under a folder, for the file finder (`find`, names) and project
+ * search (`grep`, names and text), as far as the terminal's limits go. True once it is in.
+ */
+function useFetched(root: string, cmd: 'find' | 'grep', on = true) {
+  const [done, setDone] = useState<string | null>(null)
+  useEffect(() => {
+    if (!on) return
+    let live = true
+    prepare(root, cmd, cmd === 'grep' ? ['-r', root] : [root])
+      .catch(() => {})
+      .finally(() => live && setDone(`${cmd}:${root}`))
+    return () => {
+      live = false
+    }
+  }, [root, cmd, on])
+  return done === `${cmd}:${root}`
 }
 
 /** Fuzzy match: every character of the query, in order. */
@@ -713,6 +1211,7 @@ const fuzzy = (hay: string, q: string) => {
 
 function FileFinder({ root, onPick, onClose }: { root: string; onPick: (p: string) => void; onClose: () => void }) {
   const [query, setQuery] = useState('')
+  const fetched = useFetched(root, 'find')
   const items = useMemo<PickItem[]>(() => {
     const q = query.toLowerCase().replace(/\s+/g, '')
     const files = walk(root).filter((p) => lookup(p)?.type === 'file')
@@ -722,13 +1221,14 @@ function FileFinder({ root, onPick, onClose }: { root: string; onPick: (p: strin
       .sort((a, b) => Number(!base(a).toLowerCase().includes(q)) - Number(!base(b).toLowerCase().includes(q)) || rel(a).length - rel(b).length)
       .slice(0, 80)
       .map((p) => ({ id: p, label: base(p), detail: rel(p).split('/').slice(0, -1).join('/'), run: () => onPick(p) }))
-  }, [query, root, onPick])
+  }, [query, root, onPick, fetched])
   return <Palette className="is-files" placeholder="Search files by name…" items={items} query={query} setQuery={setQuery} onClose={onClose} />
 }
 
 // --- Project search ------------------------------------------------------------------------------
 
 function ProjectSearch({ root, query, setQuery, onOpen }: { root: string; query: string; setQuery: (q: string) => void; onOpen: (p: string, at: Omit<Jump, 'path'>) => void }) {
+  const fetched = useFetched(root, 'grep', query.length >= 2)
   const results = useMemo(() => {
     if (query.length < 2) return []
     const q = query.toLowerCase()
@@ -748,7 +1248,7 @@ function ProjectSearch({ root, query, setQuery, onOpen }: { root: string; query:
       }
     }
     return out
-  }, [query, root])
+  }, [query, root, fetched])
   const count = results.reduce((n, r) => n + r.hits.length, 0)
   const rel = (p: string) => (root === '/' ? p.slice(1) : p.slice(root.length + 1))
 
@@ -756,7 +1256,7 @@ function ProjectSearch({ root, query, setQuery, onOpen }: { root: string; query:
     <div className="zed-search">
       <div className="zed-search-bar">
         <input className="zed-find-input" autoFocus value={query} placeholder={`Search ${prettyPath(root)}…`} spellCheck={false} onChange={(e) => setQuery(e.target.value)} />
-        <span className="zed-find-count">{query.length < 2 ? '' : count ? `${count} result${count === 1 ? '' : 's'} in ${results.length} file${results.length === 1 ? '' : 's'}` : 'No results'}</span>
+        <span className="zed-find-count">{query.length < 2 ? '' : count ? `${count} result${count === 1 ? '' : 's'} in ${results.length} file${results.length === 1 ? '' : 's'}${fetched ? '' : '…'}` : fetched ? 'No results' : 'Searching…'}</span>
       </div>
       <div className="zed-search-results">
         {query.length < 2 && <p className="muted zed-search-hint">Search every file in {prettyPath(root)}. Click a result to jump to it.</p>}
@@ -810,7 +1310,7 @@ function Welcome({ root, onOpen, onProject }: { root: string; onOpen: (p: string
           Open another project…
         </button>
       </div>
-      <p className="muted zed-keys">Ctrl+P file · Ctrl+F find · Ctrl+Shift+F search project · Ctrl+Shift+V preview · Ctrl+S save (in /tmp)</p>
+      <p className="muted zed-keys">Ctrl+P file · Ctrl+F find · Ctrl+Shift+F search project · Ctrl+Shift+V preview · Ctrl+S save</p>
     </div>
   )
 }
