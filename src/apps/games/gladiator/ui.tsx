@@ -279,12 +279,33 @@ export function BagView({ bag, have }: { bag: Bag; have?: Bag }) {
   )
 }
 
-/** Everything in the storehouse, in one strip. */
+/**
+ * Everything in the storehouse, in one strip: gear materials, building materials and trade goods.
+ * Tapping it opens a list with names, since icons alone don't say much on a touch screen.
+ */
 export function Storehouse({ estate }: { estate: Estate }) {
+  const [open, setOpen] = useState(false)
+  const groups = (['gear', 'build', 'goods'] as const).map((k) => RESOURCES.filter((r) => r.kind === k))
   return (
-    <div className="gl-storehouse" aria-label="Storehouse">
-      {RESOURCES.map((r) => (
-        <Res key={r.id} id={r.id} n={estate.res[r.id]} />
+    <div
+      className={`gl-storehouse ${open ? 'is-open' : ''}`}
+      role="button"
+      tabIndex={0}
+      aria-label="Storehouse"
+      aria-expanded={open}
+      onClick={() => setOpen(!open)}
+      onKeyDown={(ev) => (ev.key === 'Enter' || ev.key === ' ') && (ev.preventDefault(), setOpen(!open))}
+      title={open ? 'Show icons only' : 'Show names'}
+    >
+      {groups.map((g, i) => (
+        <span key={i} className="gl-store-group">
+          {g.map((r) => (
+            <span key={r.id} className="gl-store-item">
+              <Res id={r.id} n={estate.res[r.id]} />
+              {open && <em>{r.name}</em>}
+            </span>
+          ))}
+        </span>
       ))}
     </div>
   )

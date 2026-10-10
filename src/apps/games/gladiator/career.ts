@@ -1,6 +1,6 @@
 import { ARCHETYPES, equip, gearStats, has, makeOpponent, pick, randomLook, randomName, rng, xpFor, type Gladiator } from './character'
 import { simulate } from './combat'
-import { addBag, marketPrice, newEstate, salvage, stockLeft, trade, type Bag, type Estate, type ResId } from './estate'
+import { addBag, bonuses, finishWorks, fixEstate, marketPrice, newEstate, salvage, stockLeft, trade, type Bag, type Estate, type ResId } from './estate'
 import { gladiatorStore, type GladiatorStore } from './saves'
 import { DIFFICULTIES, item, league, LEAGUES, weaponType, MAX_LEVEL, PERK_LEVELS, POINTS_PER_LEVEL, type Archetype, type Difficulty, type LeagueId, type Look } from './data'
 
@@ -53,6 +53,9 @@ export type Save = {
 export type HallEntry = { name: string; level: number; mode: Mode; difficulty?: Difficulty; fate: 'fell' | 'emperor' | 'retired'; wins: number; losses: number; fame: number; date: number; look: Look; gear: Gladiator['gear']; by?: string }
 
 export const rules = (s: Save) => DIFFICULTIES[s.difficulty ?? 'normal']
+
+/** What the estate's buildings add, as things stand right now (finished construction included). */
+export const estateBonus = (s: Save) => bonuses(finishWorks(fixEstate(s.estate)))
 
 export { SLOTS } from './saves'
 
@@ -205,8 +208,9 @@ export function advanceTournament(s: Save, t: Tournament, youWon: boolean, hpLef
     if (a === 'you' || b === 'you') next.push(youWon ? 'you' : a === 'you' ? b : a)
     else next.push(simulate(foeGladiator(s, t.entrants[a] as Foe), foeGladiator(s, t.entrants[b] as Foe)) === 0 ? a : b)
   }
-  // Between rounds the surgeon patches up a third of what's missing.
-  return { ...t, rounds: [...t.rounds, next], hp: Math.min(1, hpLeft + (1 - hpLeft) * rules(s).surgeon), out: !youWon }
+  // Between rounds the surgeon patches up a third of what's missing, a little more with a bathhouse
+  // at home (but where there's no surgeon at all, baths don't make one).
+  return { ...t, rounds: [...t.rounds, next], hp: Math.min(1, hpLeft + (1 - hpLeft) * (rules(s).surgeon && rules(s).surgeon + estateBonus(s).surgeon)), out: !youWon }
 }
 
 export function entrantName(s: Save, t: Tournament, id: string) {
@@ -237,15 +241,17 @@ export function settle(s: Save, foe: Foe, kind: FightKind, won: boolean, peakFav
   const tongue = has(g, 'goldTongue') ? 1.25 : 1
   const ratio = Math.max(0.4, Math.min(2, Math.pow(foe.level / g.level, 1.1)))
   const reward = rules(s).reward
-  let xp = Math.round((18 + 14 * foe.level) * ratio * (kind === 'champion' ? 2 : 1) * reward)
+  // The estate's shrine, villa and so on: a few percent at most (see CAPS in estate.ts).
+  const bonus = estateBonus(s)
+  let xp = Math.round((18 + 14 * foe.level) * ratio * (kind === 'champion' ? 2 : 1) * reward * (1 + bonus.xp))
   let gold = 0
   let fame = 0
   let save: Save = { ...s, record: { ...s.record } }
   let dead = false
 
   if (won) {
-    gold = Math.round(purseFor(foe.level, kind) * (1 + cha * 0.01) * crowd * tongue * reward)
-    fame = Math.round((1 + foe.level / 3) * (kind === 'champion' ? 6 : kind === 'rival' ? 2 : 1) * tongue)
+    gold = Math.round(purseFor(foe.level, kind) * (1 + cha * 0.01) * crowd * tongue * reward * (1 + bonus.purse))
+    fame = Math.round((1 + foe.level / 3) * (kind === 'champion' ? 6 : kind === 'rival' ? 2 : 1) * tongue * (1 + bonus.fame))
     save.record.wins++
     if (peakFavour >= 80) notes.push('The crowd loved you: bigger purse.')
   } else {
@@ -298,8 +304,8 @@ export function settle(s: Save, foe: Foe, kind: FightKind, won: boolean, peakFav
 
 /** What something listed at `base` gold costs on this save's difficulty. */
 export const price = (s: Save, base: number) => Math.round(base * rules(s).prices)
-export const trainPrice = (s: Save) => price(s, 60 * Math.pow(1.3, s.trained))
-export const respecPrice = (s: Save) => price(s, 40 + s.g.level * 30)
+export const trainPrice = (s: Save) => price(s, 60 * Math.pow(1.3, s.trained) * (1 - estateBonus(s).train))
+export const respecPrice = (s: Save) => price(s, (40 + s.g.level * 30) * (1 - estateBonus(s).respec))
 
 // --- Crafting ------------------------------------------------------------------------------------
 
@@ -317,7 +323,8 @@ export function collectCraft(s: Save, craftId: string, now = Date.now()): Save {
     const w = item(s.g.gear.weapon)
     if (w?.weapon && weaponType(w.weapon).twoHanded) old.push(w)
   }
-  const back = old.reduce<Bag>((a, o) => addBag(a, salvage(o)), {})
+  const extra = estateBonus(s).salvage
+  const back = old.reduce<Bag>((a, o) => addBag(a, salvage(o, extra)), {})
   return { ...s, g: equip(s.g, it), estate: { ...s.estate, crafting: s.estate.crafting.filter((x) => x.id !== craftId), res: addBag(s.estate.res, back) } }
 }
 
@@ -330,7 +337,7 @@ export function shortfall(s: Save, need: Bag, now = Date.now()) {
     const n = v - (s.estate.res[k] ?? 0)
     if (n <= 0) continue
     missing[k] = n
-    cost += marketPrice(k, rules(s).prices, now).buy * n
+    cost += marketPrice(k, rules(s).prices, now, s.estate).buy * n
     if (stockLeft(s.estate, k, now) < n) possible = false
   }
   return { missing, cost, possible: possible && Object.keys(missing).length > 0 }

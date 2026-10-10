@@ -1,0 +1,783 @@
+/* The estate: a painted map of the grounds with markers for the sites and plots, and a panel for
+   whatever is picked (beside the map, or a sheet from the bottom when the window is narrow).
+   Scoped under .gl-root like the rest of the game. */
+
+.gl-root .es-page {
+  container: es / inline-size;
+  gap: 8px;
+}
+
+/* --- The bar under the heading: collect, rents, builders, crews, rank ----------------------- */
+
+.gl-root .es-rankchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 12px 2px 4px;
+  border-radius: 16px;
+  background: rgba(246, 231, 196, 0.94);
+  border: 1.5px solid var(--gl-bronze-2);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.gl-root .es-rankchip b {
+  font-family: var(--gl-display);
+  color: var(--gl-red-2);
+}
+.gl-root .es-rankchip .gl-place-icon,
+.gl-root .es-stat .gl-place-icon,
+.gl-root .es-rents .gl-place-icon {
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  background: none;
+  box-shadow: none;
+}
+.gl-root .es-rankchip .gl-place-icon img,
+.gl-root .es-stat .gl-place-icon img,
+.gl-root .es-rents .gl-place-icon img {
+  width: 32px;
+  height: 32px;
+  margin: 0;
+}
+.gl-root .es-rankchip .gl-place-icon i,
+.gl-root .es-stat .gl-place-icon i,
+.gl-root .es-rents .gl-place-icon i {
+  font-size: 18px;
+}
+.gl-root .es-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.gl-root .es-bar > .gl-btn {
+  min-height: 40px;
+}
+.gl-root .es-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 2px 12px 2px 6px;
+  border-radius: 10px;
+  background: rgba(246, 234, 206, 0.92);
+  border: 1.5px solid #5a3a14;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.gl-root .es-rents {
+  padding: 2px 12px 2px 6px;
+  text-align: left;
+}
+.gl-root .es-rents > span:last-child {
+  display: inline-flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+.gl-root .es-rents small {
+  font-family: var(--gl-body);
+  font-weight: 400;
+  font-size: 11px;
+  opacity: 0.8;
+}
+.gl-root .es-rankbar {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 3px;
+  padding: 4px 12px;
+  min-width: 170px;
+}
+.gl-root .es-rankbar .gl-statbar {
+  height: 6px;
+}
+
+/* --- The map ---------------------------------------------------------------------------------- */
+
+.gl-root .es-body {
+  flex: 1;
+  min-height: 300px;
+  display: flex;
+  gap: 10px;
+  position: relative;
+}
+.gl-root .es-mapbox {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 3px solid #5a3a14;
+  background: #2a1a0c;
+  box-shadow: inset 0 0 0 2px rgba(255, 236, 190, 0.35), 0 6px 18px rgba(20, 10, 0, 0.4);
+}
+/* Where the map doesn't reach the frame's edges, a blurred, darkened copy of it carries on. */
+.gl-root .es-mapbox::before {
+  content: '';
+  position: absolute;
+  inset: -30px;
+  background: url(/games/gladiator/estate-map.webp) center / cover;
+  filter: blur(18px) brightness(0.5) saturate(0.8);
+}
+.gl-root .es-view {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: auto;
+  display: flex;
+  container-type: size;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  cursor: grab;
+}
+.gl-root .es-view:active {
+  cursor: grabbing;
+}
+/* Fits the frame at the first zoom, but never shrinks below what a finger can use: a phone
+   scrolls around a map wider than its screen instead. */
+.gl-root .es-map {
+  position: relative;
+  box-shadow: 0 0 30px 6px rgba(0, 0, 0, 0.55);
+  flex: none;
+  margin: auto;
+  width: calc(max(860px, min(100cqw, 150cqh)) * var(--zoom, 1));
+  aspect-ratio: 3 / 2;
+}
+.gl-root .es-map-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}
+.gl-root .es-zoom {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 3;
+}
+.gl-root .es-zoom .gl-btn {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  font-size: 20px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+/* A marker: a round medallion on the spot, the name on a dark tag under it. The medallion's
+   centre sits on the spot itself. */
+.gl-root .es-marker {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transform: translate(-50%, -25px);
+  -webkit-tap-highlight-color: transparent;
+}
+.gl-root .es-marker:hover,
+.gl-root .es-marker.is-sel {
+  z-index: 2;
+}
+.gl-root .es-pin {
+  position: relative;
+  display: grid;
+}
+.gl-root .es-marker .gl-place-icon {
+  width: 50px;
+  height: 50px;
+  margin: 0;
+  box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.6), 0 0 0 3px #b07a34, 0 0 0 5px #5a3a14, 0 4px 10px rgba(0, 0, 0, 0.5);
+  transition: box-shadow 0.2s, transform 0.15s;
+}
+.gl-root .es-marker .gl-place-icon img {
+  width: 60px;
+  height: 60px;
+  margin-top: -8px;
+}
+.gl-root .es-marker .gl-place-icon i {
+  font-size: 24px;
+}
+.gl-root .es-marker:hover .gl-place-icon {
+  transform: translateY(-2px);
+}
+.gl-root .es-marker.is-site .gl-place-icon {
+  width: 58px;
+  height: 58px;
+}
+.gl-root .es-marker.is-site .gl-place-icon img {
+  width: 70px;
+  height: 70px;
+  margin-top: -10px;
+}
+.gl-root .es-marker.is-sel .gl-place-icon {
+  box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.6), 0 0 0 3px #f2c14a, 0 0 0 6px #a8281e, 0 0 18px 6px rgba(242, 193, 74, 0.8);
+}
+/* Empty and overgrown plots are quieter: a dashed ring on the ground. */
+.gl-root .es-marker.is-empty .gl-place-icon,
+.gl-root .es-marker.is-rubble .gl-place-icon,
+.gl-root .es-marker.is-locked .gl-place-icon {
+  width: 44px;
+  height: 44px;
+  background: rgba(40, 24, 8, 0.45);
+  box-shadow: 0 0 0 2px rgba(255, 240, 200, 0.85), 0 3px 8px rgba(0, 0, 0, 0.4);
+  outline: 2px dashed rgba(255, 240, 200, 0.85);
+  outline-offset: 3px;
+}
+.gl-root .es-marker.is-empty .gl-place-icon img,
+.gl-root .es-marker.is-rubble .gl-place-icon img,
+.gl-root .es-marker.is-locked .gl-place-icon img {
+  width: 48px;
+  height: 48px;
+  margin-top: -4px;
+}
+.gl-root .es-marker.is-locked .gl-place-icon img {
+  filter: grayscale(0.8) brightness(0.8);
+}
+.gl-root .es-marker.is-locked {
+  opacity: 0.8;
+}
+.gl-root .es-marker.is-works .gl-place-icon img {
+  filter: sepia(0.6) brightness(0.9) drop-shadow(0 3px 3px rgba(0, 0, 0, 0.5));
+  opacity: 0.85;
+}
+.gl-root .es-marker.is-sel.is-empty .gl-place-icon,
+.gl-root .es-marker.is-sel.is-rubble .gl-place-icon,
+.gl-root .es-marker.is-sel.is-locked .gl-place-icon {
+  outline-color: #f2c14a;
+  box-shadow: 0 0 0 2px #a8281e, 0 0 16px 5px rgba(242, 193, 74, 0.8);
+}
+.gl-root .es-marker.is-ready .gl-place-icon {
+  animation: es-ready 1.6s ease-in-out infinite;
+}
+@keyframes es-ready {
+  50% {
+    box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.6), 0 0 0 3px #6ad04a, 0 0 0 5px #2a6a1a, 0 0 16px 6px rgba(106, 208, 74, 0.7);
+  }
+}
+.gl-root .es-marker .gl-badge {
+  top: -6px;
+  right: -8px;
+  background: radial-gradient(circle at 35% 30%, #8ae06a, #2a8a1a 55%, #14500c);
+}
+.gl-root .es-lvl {
+  position: absolute;
+  right: -6px;
+  bottom: -4px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  font: 700 11px/1 system-ui, sans-serif;
+  font-style: normal;
+  color: #2a1a0e;
+  background: radial-gradient(circle at 35% 30%, #fff2a8, #e2b53e 55%, #8a6410);
+  border: 1.5px solid #5a3a14;
+}
+.gl-root .es-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 130px;
+  padding: 1px 8px 2px;
+  border-radius: 8px;
+  background: rgba(36, 20, 8, 0.84);
+  color: #fff2d8;
+  line-height: 1.15;
+  white-space: nowrap;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+}
+.gl-root .es-label strong {
+  font-family: var(--gl-display);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+}
+.gl-root .es-label small {
+  font-family: system-ui, sans-serif;
+  font-size: 10px;
+  color: #f2d48a;
+}
+.gl-root .es-label small.is-idle {
+  color: #c8b89a;
+}
+.gl-root .es-marker.is-empty .es-label,
+.gl-root .es-marker.is-rubble .es-label,
+.gl-root .es-marker.is-locked .es-label {
+  background: rgba(36, 20, 8, 0.66);
+}
+.gl-root .es-marker.is-empty .es-label strong::before {
+  content: '+ ';
+}
+
+/* --- The panel -------------------------------------------------------------------------------- */
+
+.gl-root .es-panel {
+  position: relative;
+  flex: none;
+  width: 390px;
+  max-width: 45%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 14px 18px;
+  border-radius: 10px;
+}
+.gl-root .es-close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: none;
+  font-size: 26px;
+  line-height: 1;
+  color: var(--gl-ink-soft);
+  cursor: pointer;
+  z-index: 1;
+}
+.gl-root .es-close:hover {
+  color: var(--gl-red);
+}
+.gl-root .es-head {
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  gap: 12px;
+  align-items: center;
+  padding-right: 30px;
+}
+.gl-root .es-head .gl-card-art {
+  width: 76px;
+  height: 76px;
+  margin: 0;
+  border-radius: 10px;
+}
+.gl-root .es-head .gl-icon-art .gl-place-icon,
+.gl-root .es-head .gl-icon-art .gl-place-icon img {
+  width: 70px;
+  height: 70px;
+}
+.gl-root .es-head h3 {
+  margin: 0 0 2px;
+  font-size: 18px;
+}
+.gl-root .es-head > div > .gl-muted {
+  font-size: 12.5px;
+}
+.gl-root .es-text {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+.gl-root .es-sec {
+  display: grid;
+  gap: 6px;
+}
+.gl-root .es-sec h4 {
+  margin: 0;
+  font-family: var(--gl-display);
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  color: var(--gl-red-2);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.gl-root .es-sec h4 .gl-muted {
+  font-family: var(--gl-body);
+  font-size: 12px;
+  letter-spacing: 0;
+}
+.gl-root .es-next {
+  padding-top: 10px;
+  border-top: 1px solid rgba(122, 78, 26, 0.35);
+}
+.gl-root .es-lines {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.gl-root .es-lines li::marker {
+  color: var(--gl-bronze);
+}
+.gl-root .es-panel .gl-btn {
+  min-height: 40px;
+}
+.gl-root .es-panel .gl-btn.is-small {
+  min-width: 64px;
+}
+.gl-root .es-panel .gl-req {
+  font-size: 12px;
+}
+
+/* Jobs: one row each, what it gives on the left, time and the button on the right. */
+.gl-root .es-jobs {
+  display: grid;
+  gap: 6px;
+}
+.gl-root .es-job {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(122, 78, 26, 0.35);
+  background: rgba(255, 250, 235, 0.7);
+}
+.gl-root .es-job.is-locked {
+  opacity: 0.6;
+  background: rgba(90, 58, 20, 0.06);
+}
+.gl-root .es-job-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.gl-root .es-job-main strong {
+  font-size: 13.5px;
+}
+.gl-root .es-job-side {
+  flex: none;
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  text-align: right;
+}
+.gl-root .es-time {
+  font: 11px system-ui, sans-serif;
+  color: var(--gl-ink-soft);
+}
+.gl-root .es-uses {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--gl-ink-soft);
+}
+
+/* The road ahead: a pip per level. */
+.gl-root .es-path {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.gl-root .es-path li {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font: 700 11px system-ui, sans-serif;
+  color: var(--gl-ink-soft);
+  background: rgba(90, 58, 20, 0.1);
+  border: 1.5px solid rgba(90, 58, 20, 0.3);
+}
+.gl-root .es-path li.is-done {
+  color: #2a1a0e;
+  background: radial-gradient(circle at 35% 30%, #fff2a8, #e2b53e 55%, #b07a34);
+  border-color: #5a3a14;
+}
+.gl-root .es-path li.is-next {
+  border: 2px dashed var(--gl-red);
+  color: var(--gl-red-2);
+}
+.gl-root .es-path li.is-fork {
+  border-radius: 6px;
+  font-size: 15px;
+}
+.gl-root .es-forkpick {
+  display: grid;
+  gap: 6px;
+}
+.gl-root .es-fork {
+  display: grid;
+  gap: 2px;
+  min-height: 44px;
+  padding: 8px 10px;
+  text-align: left;
+  border-radius: 8px;
+  border: 2px solid rgba(122, 78, 26, 0.4);
+  background: rgba(255, 250, 235, 0.75);
+  color: var(--gl-ink);
+  font: inherit;
+  cursor: pointer;
+}
+.gl-root .es-fork strong {
+  font-family: var(--gl-display);
+  font-size: 13px;
+}
+.gl-root .es-fork span {
+  font-size: 12px;
+  color: var(--gl-ink-soft);
+}
+.gl-root .es-fork.is-on {
+  border-color: var(--gl-red);
+  background: #fff6dd;
+  box-shadow: 0 0 0 3px rgba(168, 40, 30, 0.2);
+}
+.gl-root .es-fork.is-on strong::before {
+  content: '✔ ';
+  color: var(--gl-red);
+}
+.gl-root .es-cost {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.gl-root .es-cost .gl-coin-badge.is-short {
+  color: var(--gl-red);
+}
+.gl-root .es-act {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.gl-root .es-demolish {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(122, 78, 26, 0.25);
+}
+
+/* What an empty plot can take. */
+.gl-root .es-catalogue {
+  display: grid;
+  gap: 8px;
+}
+.gl-root .es-build {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1.5px solid rgba(122, 78, 26, 0.4);
+  background: rgba(255, 250, 235, 0.65);
+}
+.gl-root .es-build.is-taken {
+  opacity: 0.6;
+}
+.gl-root .es-build p {
+  margin: 0;
+  font-size: 13px;
+}
+.gl-root .es-build .es-forks {
+  font-size: 12px;
+}
+.gl-root .es-build-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.gl-root .es-build-head > div {
+  display: grid;
+}
+.gl-root .es-build-head .gl-muted {
+  font-size: 12px;
+}
+.gl-root .es-build-head .gl-place-icon {
+  flex: none;
+  width: 48px;
+  height: 48px;
+  margin: 0;
+}
+.gl-root .es-build-head .gl-place-icon img {
+  width: 58px;
+  height: 58px;
+  margin-top: -8px;
+}
+.gl-root .es-fits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.gl-root .es-fit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px 2px 2px;
+  border-radius: 14px;
+  background: rgba(90, 58, 20, 0.1);
+  font-size: 12px;
+}
+.gl-root .es-fit .gl-place-icon {
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  background: none;
+  box-shadow: none;
+}
+.gl-root .es-fit .gl-place-icon img {
+  width: 30px;
+  height: 30px;
+  margin: 0;
+}
+
+/* --- Narrow windows: the panel rises from the bottom over the map -------------------------- */
+
+@container es (max-width: 760px) {
+  .gl-root .es-body {
+    min-height: 400px;
+  }
+  /* Everything above the map keeps to one line each and scrolls sideways, so the map gets the
+     screen. The coins are in the top bar already. */
+  .gl-root .es-page .gl-page-head .gl-coin-badge {
+    display: none;
+  }
+  .gl-root .es-bar,
+  .gl-root .es-page .gl-storehouse {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin: 0 -16px;
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .gl-root .es-bar > * {
+    flex: none;
+  }
+  .gl-root .es-page .gl-storehouse {
+    margin: 0;
+    padding: 2px 4px;
+    min-height: 40px;
+  }
+  .gl-root .es-page .gl-page-head .gl-btn {
+    min-height: 40px;
+  }
+  .gl-root .es-page .gl-store-group {
+    flex-wrap: nowrap;
+  }
+  .gl-root .es-rankbar {
+    min-width: 150px;
+  }
+  .gl-root .es-panel {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5;
+    width: auto;
+    max-width: none;
+    max-height: 72%;
+    border-radius: 14px 14px 0 0;
+    box-shadow: 0 -8px 24px rgba(20, 10, 0, 0.5), inset 0 0 0 2px rgba(255, 240, 200, 0.6);
+    padding-top: 18px;
+  }
+  .gl-root .es-view {
+    scrollbar-width: none;
+  }
+  /* Room to scroll the map up above the sheet, so whatever is picked can be seen. */
+  .gl-root .es-body.has-panel .es-map {
+    margin-bottom: 70cqh;
+  }
+  .gl-root .es-panel::before {
+    content: '';
+    position: absolute;
+    top: 6px;
+    left: 50%;
+    width: 44px;
+    height: 4px;
+    margin-left: -22px;
+    border-radius: 2px;
+    background: rgba(90, 58, 20, 0.35);
+  }
+  .gl-root .es-head {
+    grid-template-columns: 60px 1fr;
+  }
+  .gl-root .es-head .gl-card-art {
+    width: 60px;
+    height: 60px;
+  }
+  .gl-root .es-head .gl-icon-art .gl-place-icon,
+  .gl-root .es-head .gl-icon-art .gl-place-icon img {
+    width: 56px;
+    height: 56px;
+  }
+}
+
+/* --- Short screens (a phone on its side): the bar and the storehouse share one scrolling row ---- */
+
+.gl-root .es-top {
+  display: contents;
+}
+@media (max-height: 520px) {
+  .gl-root .es-page {
+    gap: 6px;
+    padding-top: 6px;
+  }
+  .gl-root .es-page .gl-page-head .gl-coin-badge {
+    display: none;
+  }
+  .gl-root .es-top {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin: 0 -16px;
+    padding: 0 16px;
+  }
+  .gl-root .es-top > *,
+  .gl-root .es-top .es-bar > * {
+    flex: none;
+  }
+  .gl-root .es-top .es-bar,
+  .gl-root .es-top .gl-storehouse,
+  .gl-root .es-top .gl-store-group {
+    flex-wrap: nowrap;
+    overflow: visible;
+    margin: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  .gl-root .es-top .es-bar {
+    padding: 0;
+  }
+  .gl-root .es-top .gl-storehouse {
+    min-height: 40px;
+  }
+  .gl-root .es-body {
+    min-height: 230px;
+  }
+  .gl-root .es-view {
+    scrollbar-width: none;
+  }
+}
+
+/* --- The market's groups -------------------------------------------------------------------- */
+
+.gl-root .es-market-group {
+  display: grid;
+  gap: 8px;
+}
+.gl-root .es-market-head {
+  margin: 4px 0 0;
+  font-family: var(--gl-display);
+  font-size: 16px;
+  color: #fff2d8;
+  text-shadow: 0 2px 0 #3a1a04, 0 0 10px rgba(0, 0, 0, 0.7);
+}

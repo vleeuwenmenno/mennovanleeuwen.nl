@@ -311,7 +311,7 @@ export function Gladiator({ win }: { win: WinState }) {
     }
     body = (
       <>
-        <TopBar save={save} onMenu={toTitle} />
+        <TopBar save={save} onMenu={toTitle} go={go} />
         {inner}
       </>
     )
