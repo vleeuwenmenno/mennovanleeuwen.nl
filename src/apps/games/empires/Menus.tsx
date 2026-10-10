@@ -481,7 +481,8 @@ function MapPreview({ map, slots, className = '' }: { map: MapDef; slots?: Slot[
     ro.observe(c)
     return () => ro.disconnect()
   }, [map, slots, world])
-  return <canvas ref={ref} className={`ew-mappreview ${className}`} />
+  // Shaped like the map, so the panel doesn't carry empty bands above and below it.
+  return <canvas ref={ref} className={`ew-mappreview ${className}`} style={className ? undefined : { aspectRatio: `${map.w} / ${map.h}` }} />
 }
 
 const AMOUNTS: [Amount, string][] = [
@@ -489,6 +490,29 @@ const AMOUNTS: [Amount, string][] = [
   ['few', 'Few'],
   ['many', 'Many'],
 ]
+
+/** What the marks on the preview are: only the kinds this map has. */
+function MapLegend({ map }: { map: MapDef }) {
+  const items: [string, string][] = [
+    ['spawn', 'Spawn'],
+    ['ore', 'Ore'],
+    ['beacon', 'Beacon'],
+    ...(map.wrecks.length ? ([['wreck', 'Wreck']] as [string, string][]) : []),
+    ['rock', 'Rocks'],
+    ...(map.fields.length ? ([['field', 'Asteroid field']] as [string, string][]) : []),
+    ...(map.nebulas.length ? ([['nebula', 'Nebula']] as [string, string][]) : []),
+  ]
+  return (
+    <ul className="ew-legend">
+      {items.map(([k, label]) => (
+        <li key={k}>
+          <i className={`is-${k}`} />
+          {label}
+        </li>
+      ))}
+    </ul>
+  )
+}
 
 /** The generator's rules: compact rows under the map preview, which redraws as they change. */
 function GenControls({ rules, onChange, onReroll }: { rules: MapRules; onChange: (patch: Partial<MapRules>) => void; onReroll: () => void }) {
@@ -596,6 +620,7 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
         </Frame>
         <Frame title={map.name} className="ew-lobby-preview" aside={<span className="ew-muted ew-small">{map.spawns.length} spawns · {map.beacons.length} beacons · {map.ore.length} ore</span>}>
           <MapPreview map={map} slots={setup.slots} />
+          <MapLegend map={map} />
           <p className="ew-muted">{map.blurb}</p>
           {isGen && (
             <GenControls

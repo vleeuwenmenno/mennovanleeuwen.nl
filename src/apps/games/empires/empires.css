@@ -351,8 +351,64 @@
   min-height: 0;
   flex: none;
 }
+.ew-lobby-preview .ew-mappreview {
+  flex: 0 1 auto;
+  min-height: 120px;
+}
 .ew-lobby-preview p {
   margin: 0;
+}
+/* Key to the preview's marks, drawn to match it. */
+.ew-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 11px;
+  color: var(--ew-muted);
+}
+.ew-legend li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.ew-legend i {
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+.ew-legend .is-spawn {
+  border-radius: 50%;
+  background: #c8d4ee;
+}
+.ew-legend .is-ore {
+  background: #4fe3d8;
+  transform: rotate(45deg) scale(0.8, 1);
+}
+.ew-legend .is-beacon {
+  border-radius: 50%;
+  border: 1.5px solid #c8d4ee;
+}
+.ew-legend .is-wreck {
+  width: 6px;
+  height: 6px;
+  background: #f2c14a;
+}
+.ew-legend .is-rock {
+  border-radius: 50%;
+  background: rgba(150, 150, 165, 0.6);
+}
+.ew-legend .is-field {
+  width: 12px;
+  border-radius: 50%;
+  background: rgba(205, 185, 150, 0.5);
+}
+.ew-legend .is-nebula {
+  width: 12px;
+  border-radius: 50%;
+  background: radial-gradient(hsla(170, 70%, 58%, 0.6), hsla(170, 70%, 50%, 0.1));
 }
 .ew-slotlist {
   display: flex;
