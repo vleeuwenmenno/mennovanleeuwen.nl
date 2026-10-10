@@ -36,6 +36,12 @@ function useDisplayFont() {
 
 type Setup = { faction: FactionId; difficulty: Difficulty }
 
+/** Right-click gives orders here, so it must not open the browser's or the window's menu. */
+const noMenu = (e: React.MouseEvent) => {
+  e.preventDefault()
+  e.stopPropagation()
+}
+
 export function EmpiresAtWar({ win }: { win: WinState }) {
   useDisplayFont()
   const [setup, setSetup] = useState<Setup | null>(null)
@@ -64,7 +70,7 @@ function Title({ onStart }: { onStart: (s: Setup) => void }) {
   const [difficulty, setDifficulty] = useState<Difficulty>('normal')
   const { best } = useHighScore('empires')
   return (
-    <div className="ew-root ew-title" style={{ backgroundImage: 'url(/games/empires/world/title.webp)' }}>
+    <div className="ew-root ew-title" style={{ backgroundImage: 'url(/games/empires/world/title.webp)' }} onContextMenu={noMenu}>
       <div className="ew-title-panel">
         <h1>
           Empires <span>at</span> War
@@ -771,14 +777,14 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
   const fac = FACTIONS[setup.faction]
   if (!ready)
     return (
-      <div className="ew-root ew-loading">
+      <div className="ew-root ew-loading" onContextMenu={noMenu}>
         <p>Charting the system…</p>
       </div>
     )
 
   const sel = hud.sel.map((i) => w.byId.get(i)).filter((u): u is Unit => !!u)
   return (
-    <div className={`ew-root ew-battle ew-${setup.faction}`} ref={root} style={{ ['--ew-accent' as string]: fac.color }}>
+    <div className={`ew-root ew-battle ew-${setup.faction}`} ref={root} style={{ ['--ew-accent' as string]: fac.color }} onContextMenu={noMenu}>
       <canvas
         ref={canvas}
         className={`ew-canvas ${ui.mode !== 'normal' ? 'is-targeting' : ''}`}
@@ -788,7 +794,6 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
         onPointerCancel={() => ((drag.current = null), touches.current.clear(), (pinch.current = null))}
         onPointerLeave={() => (mouse.current.inside = false)}
         onWheel={onWheel}
-        onContextMenu={(e) => e.preventDefault()}
       />
 
       <TopBar hud={hud} faction={setup.faction} ui={ui} onPause={togglePause} onSpeed={setSpeed} onMenu={() => setUi((u) => ({ ...u, menu: !u.menu }))}
@@ -814,7 +819,7 @@ function Battle({ win, setup, sound, onExit, onAgain }: { win: WinState; setup: 
 
       <div className="ew-dock">
         <div className="ew-panel ew-minipanel">
-          <canvas ref={mini} className="ew-mini" onPointerDown={onMini} onPointerMove={(e) => e.buttons === 1 && onMini(e)} onContextMenu={(e) => e.preventDefault()} />
+          <canvas ref={mini} className="ew-mini" onPointerDown={onMini} onPointerMove={(e) => e.buttons === 1 && onMini(e)} />
           <div className="ew-minibtns">
             <button onClick={selectArmy} title="Select every warship (Ctrl+A)">All ships</button>
             <button onClick={goHome} title="Jump to the station (H)">Station</button>
