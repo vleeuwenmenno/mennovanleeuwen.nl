@@ -1561,6 +1561,12 @@ function ToolCard({ tag, call, result, pending, approval }: { tag: string; call:
         </p>
         {call.name === 'seafile_write' && typeof call.arguments.content === 'string' && <pre className="agt-tool-body">{call.arguments.content.slice(0, 4000)}</pre>}
         {call.name === 'update_note' && typeof call.arguments.text === 'string' && <pre className="agt-tool-body">{call.arguments.text.slice(0, 4000)}</pre>}
+        {call.name === 'web_fetch' && typeof call.arguments.url === 'string' && (
+          <>
+            <p className="muted agt-ask-why">This address did not come from your messages, a search result or a page it read. Allow it only if it looks right: an address can carry what the agent knows to someone else's site.</p>
+            <pre className="agt-tool-body agt-ask-url">{call.arguments.url.slice(0, 2000)}</pre>
+          </>
+        )}
         <div className="agt-ask-actions">
           <button className="btn btn-small btn-primary" onClick={() => approval(true)}>
             Allow

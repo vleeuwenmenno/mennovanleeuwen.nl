@@ -27,17 +27,54 @@ self.addEventListener('activate', (event) => {
   )
 })
 
-// A notification about an Agents answer (src/os/agentWatch.ts): to the open tab, which opens the
-// thread, or a new window on it when none is open.
+// Web Push from the server (server/webpush.ts): an Agents answer or question while MvL OS is
+// closed or in the background. Every push shows a notification: iOS stops delivering to apps that
+// don't, and Chrome shows a generic one of its own instead.
+self.addEventListener('push', (event) => {
+  let msg = {}
+  try {
+    msg = event.data ? event.data.json() : {}
+  } catch {
+    msg = { title: 'MvL OS', body: event.data?.text() }
+  }
+  event.waitUntil(
+    self.registration.showNotification(msg.title || 'MvL OS', {
+      body: msg.body || '',
+      tag: msg.tag,
+      icon: '/icons/app-192.png',
+      badge: '/icons/app-192.png',
+      data: { thread: msg.thread, url: msg.url },
+    }),
+  )
+})
+
+// The browser replaced the subscription (it expired, or keys rotated): subscribe again and tell
+// the server, with the same server key.
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil(
+    (async () => {
+      const { publicKey } = await fetch('/api/push/key', { credentials: 'same-origin' }).then((r) => r.json())
+      const key = Uint8Array.from(atob(publicKey.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0))
+      const sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key })
+      await fetch('/api/push/subscription', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscription: sub.toJSON() }) })
+    })().catch(() => {}),
+  )
+})
+
+// A notification clicked: an Agents thread (src/os/agentWatch.ts, or a push) goes to the open tab,
+// which opens it, or a new window on it; anything else opens its address, or just MvL OS.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const thread = event.notification.data?.thread
-  if (typeof thread !== 'string') return
+  const { thread, url } = event.notification.data || {}
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       const tab = list.find((c) => new URL(c.url).origin === self.location.origin)
-      if (tab) return tab.focus().then(() => tab.postMessage({ openThread: thread }))
-      return self.clients.openWindow(`/?open=agents&thread=${encodeURIComponent(thread)}`)
+      if (typeof thread === 'string') {
+        if (tab) return tab.focus().then(() => tab.postMessage({ openThread: thread }))
+        return self.clients.openWindow(`/?open=agents&thread=${encodeURIComponent(thread)}`)
+      }
+      if (tab) return tab.focus()
+      return self.clients.openWindow(typeof url === 'string' && url.startsWith('/') ? url : '/')
     }),
   )
 })

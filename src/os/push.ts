@@ -1,0 +1,97 @@
+import { api, signedIn, subscribeAccount } from './account'
+
+// Web Push on this device (server/webpush.ts): Agents answers and questions arrive as system
+// notifications even when MvL OS is closed. It needs the service worker (production builds) and,
+// on iPhone and iPad, MvL OS added to the Home Screen and opened from there (iOS 16.4 and later).
+
+const FLAG = 'mvlos.push'
+
+export type PushState = 'on' | 'off' | 'denied' | 'install' | 'unsupported'
+
+const isIos = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+const installed = () => matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches || (navigator as Navigator & { standalone?: boolean }).standalone === true
+
+/** The service worker, when there is one (none in development, or where it was blocked). */
+async function registration(): Promise<ServiceWorkerRegistration | null> {
+  if (!('serviceWorker' in navigator)) return null
+  return (await navigator.serviceWorker.getRegistration().catch(() => undefined)) ?? null
+}
+
+/** Whether push is on here, could be, or why not. */
+export async function pushState(): Promise<PushState> {
+  if (!('PushManager' in window) || !('Notification' in window)) return isIos() && !installed() ? 'install' : 'unsupported'
+  const reg = await registration()
+  if (!reg) return 'unsupported'
+  if (Notification.permission === 'denied') return 'denied'
+  return (await reg.pushManager.getSubscription()) && Notification.permission === 'granted' ? 'on' : 'off'
+}
+
+const keyBytes = (b64: string) => Uint8Array.from(atob(b64.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0))
+/** A name to tell devices apart, from the browser. */
+const deviceName = () => `${isIos() ? 'iOS' : /Android/.test(navigator.userAgent) ? 'Android' : navigator.platform || 'Browser'}${installed() ? ' app' : ''}`
+
+/** Subscribes this browser and tells the server (again). */
+async function register(reg: ServiceWorkerRegistration) {
+  const { publicKey } = await api<{ publicKey: string }>('/api/push/key')
+  let sub = await reg.pushManager.getSubscription()
+  // Made with another server key (the server's keys were replaced): start again.
+  const current = sub?.options.applicationServerKey ? btoa(String.fromCharCode(...new Uint8Array(sub.options.applicationServerKey))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') : null
+  if (sub && current && current !== publicKey) {
+    await sub.unsubscribe().catch(() => {})
+    sub = null
+  }
+  sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) })
+  await api('/api/push/subscription', { method: 'POST', json: { subscription: sub.toJSON(), device: deviceName() } })
+}
+
+/** Turns push on: asks for permission (call it from a click), subscribes, tells the server. */
+export async function enablePush(): Promise<PushState> {
+  const reg = await registration()
+  if (!reg || !('PushManager' in window)) return pushState()
+  const permission = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission
+  if (permission !== 'granted') return pushState()
+  await register(reg)
+  try {
+    localStorage.setItem(FLAG, 'on')
+  } catch {
+    /* only the refresh on the next visit needs it */
+  }
+  return 'on'
+}
+
+export async function disablePush(): Promise<PushState> {
+  try {
+    localStorage.removeItem(FLAG)
+  } catch {
+    /* nothing to forget */
+  }
+  const sub = await (await registration())?.pushManager.getSubscription()
+  if (sub) {
+    await api('/api/push/subscription', { method: 'DELETE', json: { endpoint: sub.endpoint } }).catch(() => {})
+    await sub.unsubscribe().catch(() => {})
+  }
+  return pushState()
+}
+
+export const sendTestPush = () => api<{ sent: number; failed: number }>('/api/push/test', { method: 'POST', json: {} })
+
+let started = false
+
+/** Once signed in: the subscription is sent again on every visit, so the server always has it. */
+export function startPush() {
+  if (started) return
+  started = true
+  const refresh = async () => {
+    if (!signedIn() || typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+    let on = false
+    try {
+      on = localStorage.getItem(FLAG) === 'on'
+    } catch {
+      /* treated as off */
+    }
+    const reg = on ? await registration() : null
+    if (reg && 'PushManager' in window) await register(reg).catch(() => {})
+  }
+  void refresh()
+  subscribeAccount(() => void refresh())
+}

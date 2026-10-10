@@ -342,6 +342,23 @@ home, otherwise a read-only built-in one ([`src/data/agentsPrompt.ts`](src/data/
 Spotlight takes questions too: *Ask Agents* is under the web search, and a `?` in front makes it
 the top hit. `OLLAMA_URL` points it at a stand-in for ollama.com when testing.
 
+Web fetch reads an address straight away only when it came from outside the model: your own
+messages, search results, or the links of a page it already read, exactly as given. Any other
+address waits for *Allow*, shown in full, while the thread holds anything private (memories, notes,
+code, Seafile, attachments): a page could otherwise talk the agent into "reading"
+`https://someone.example/?d=<your notes>`.
+
+**Push notifications** ([`server/webpush.ts`](server/webpush.ts), [`src/os/push.ts`](src/os/push.ts)):
+Settings → Notifications → *Push notifications on this device* subscribes the browser, or the
+installed app (on iPhone and iPad from iOS 16.4, once MvL OS is added to the Home Screen and opened
+from there). When an Agents answer is in, or the agent waits for an *Allow* or a form, and no
+window is watching that thread, the server sends it as Web Push (VAPID, RFC 8292; encrypted per
+RFC 8291, checked by `pnpm check:push` against the RFC's example), with no dependencies. Tapping
+it opens the thread. The server's keys are `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`, or generated
+once into `DATA_DIR/vapid.json` (keep it: new keys mean every device has to turn push on again);
+`VAPID_SUBJECT` (a `mailto:` or `https:` address) defaults to `PUBLIC_URL`. Subscriptions are only
+accepted for the browsers' push services (Google, Mozilla, Apple, Microsoft).
+
 The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests
 and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 ([`server/inbox.ts`](server/inbox.ts)), with the access sign-in and linking already give.

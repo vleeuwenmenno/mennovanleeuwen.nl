@@ -1,6 +1,7 @@
 import { getThread, listThreads, type Thread } from '../data/agents'
 import { subscribeAccount, signedIn } from './account'
 import { notify } from './notify'
+import { enablePush } from './push'
 
 // Agents threads answering in the background (the window closed, another thread on screen, the
 // tab hidden): watched from here, outside any window, and announced when their answer is in. The
@@ -84,6 +85,9 @@ export const notificationState = (): NotificationPermission | 'unsupported' => (
 /** Asks the browser once (it only shows its prompt after a click). */
 export async function allowNotifications(): Promise<NotificationPermission | 'unsupported'> {
   if (!('Notification' in window)) return 'unsupported'
+  if (Notification.permission === 'denied') return 'denied'
+  // Push too, where there is a service worker: then answers also arrive with MvL OS closed.
+  await enablePush().catch(() => null)
   if (Notification.permission !== 'default') return Notification.permission
   return Notification.requestPermission().catch(() => Notification.permission)
 }

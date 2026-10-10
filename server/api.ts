@@ -16,6 +16,7 @@ import { officeCallback, officeCheck, officeConfig } from './office.ts'
 import { archiveFile, cancelExtract, extractStatus, listArchive, startExtract } from './unzip.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
 import { HttpError, json, readJson, redirect, sameOrigin, SECURITY, UNTRUSTED } from './http.ts'
+import { pushPublicKey, pushToUser, subscribe, unsubscribe } from './webpush.ts'
 import { minecraftOverview, minecraftStatus } from './minecraft.ts'
 import { search, clearSearchCache } from './search.ts'
 import { suggest } from './suggest.ts'
@@ -259,6 +260,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     const memoryId = /^\/api\/agents\/memories\/(\d+)$/.exec(path)?.[1]
     if (memoryId && method === 'PATCH') return json(res, 200, updateMemory(requireUser(req), memoryId, await readJson(req, 8192))), true
     if (memoryId && method === 'DELETE') return deleteMemory(requireUser(req), Number(memoryId)), json(res, 200, { ok: true }), true
+    // Web Push (server/webpush.ts): the server's public key, this browser's subscription, a test.
+    if (path === '/api/push/key' && read) return requireUser(req), json(res, 200, pushPublicKey()), true
+    if (path === '/api/push/subscription' && method === 'POST') return json(res, 200, subscribe(requireUser(req), await readJson(req, 8 * 1024))), true
+    if (path === '/api/push/subscription' && method === 'DELETE') return json(res, 200, unsubscribe(requireUser(req), await readJson(req, 8 * 1024))), true
+    if (path === '/api/push/test' && method === 'POST') return json(res, 200, await pushToUser(requireUser(req), { title: 'MvL OS', body: 'Push notifications work on this device.', tag: 'push-test', url: '/' })), true
     if (path === '/api/preview' && read) {
       requireUser(req) // fetches other sites on request: the signed-in owner only
       const res2 = await linkPreview(url.searchParams.get('url') ?? '')

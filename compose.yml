@@ -26,6 +26,11 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       UPDOWN_API_KEY: ${UPDOWN_API_KEY:-}
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+      # Web Push for Agents answers (server/webpush.ts). Optional: without them the keys are made
+      # once into the data volume. VAPID_SUBJECT defaults to PUBLIC_URL.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
     # Sign-in sessions, linked Gitea/Forgejo instances and synced notes.
     volumes:
       - site_data:/app/data

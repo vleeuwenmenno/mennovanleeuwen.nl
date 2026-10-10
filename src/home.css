@@ -3789,3 +3789,13 @@ button.cal-day.is-picked:not(.is-today) {
   font-size: 9px;
   white-space: nowrap;
 }
+
+/* An address the agent wants to read that it was not given (server/agents.ts, fetchNeedsOwner). */
+.agt-ask-why {
+  margin: 4px 0 6px;
+  font-size: 12px;
+}
+.agt-ask-url {
+  white-space: pre-wrap;
+  word-break: break-all;
+}

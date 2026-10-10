@@ -25,7 +25,7 @@ import { AppIcon } from '../os/icons'
 import { setStartupPrefs, START_WINDOWS, useStartupPrefs } from '../os/startup'
 import { clearEntries, pruneEntries, useEntries } from '../os/notify'
 import { ACTIVITY_WINDOWS, isOff, KEEP, setNotifyPrefs, setOn, useNotifyPrefs, visibleSources, type NotifySource as NotifySourceDef } from '../os/notifyPrefs'
-import { allowNotifications, notificationState } from '../os/agentWatch'
+import { disablePush, enablePush, pushState, sendTestPush, type PushState } from '../os/push'
 import { THEMES } from '../os/omarchyThemes'
 import { pullAll } from '../os/synced'
 import { ACCENTS, DARK_THEMES, LIGHT_THEMES, setAccent, setMode, setTheme, themeLabel, useTheme, type Mode } from '../os/theme'
@@ -190,11 +190,64 @@ function useDockMode(): DockMode {
   return mode
 }
 
+/**
+ * Push on this device (src/os/push.ts): Agents answers and questions as system notifications, also
+ * with MvL OS closed. iPhone and iPad only have it in the app added to the Home Screen.
+ */
+function PushRow() {
+  const [state, setState] = useState<PushState | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+  useEffect(() => void pushState().then(setState), [])
+  const run = (job: () => Promise<PushState>) => {
+    setBusy(true)
+    setNote(null)
+    job()
+      .then(setState, (e: Error) => setNote(e.message))
+      .finally(() => setBusy(false))
+  }
+  const test = () => {
+    setBusy(true)
+    sendTestPush()
+      .then((r) => setNote(r.sent ? `Sent to ${r.sent} device${r.sent === 1 ? '' : 's'}: it should show in a moment.` : 'No device took it: turn push off and on again here.'), (e: Error) => setNote(e.message))
+      .finally(() => setBusy(false))
+  }
+  const text: Record<PushState, string> = {
+    on: 'On: Agents answers and questions reach this device, also with MvL OS closed',
+    off: 'Agents answers and questions as notifications on this device, also with MvL OS closed',
+    denied: "Blocked: allow notifications for this site in the browser's (or the phone's) settings",
+    install: 'On iPhone and iPad: Share → Add to Home Screen, open MvL OS from there, and turn this on in it',
+    unsupported: 'Not in this browser',
+  }
+  return (
+    <li className="set-row">
+      <span className="set-row-text">
+        <strong>Push notifications on this device</strong>
+        <span className="muted">{note ?? (state ? text[state] : 'Checking…')}</span>
+      </span>
+      {state === 'on' && (
+        <>
+          <button className="btn btn-small" disabled={busy} onClick={test}>
+            Send a test
+          </button>
+          <button className="btn btn-small" disabled={busy} onClick={() => run(disablePush)}>
+            Turn off
+          </button>
+        </>
+      )}
+      {state === 'off' && (
+        <button className="btn btn-small" disabled={busy} onClick={() => run(enablePush)}>
+          Turn on
+        </button>
+      )}
+    </li>
+  )
+}
+
 function Notifications() {
   const prefs = useNotifyPrefs()
   const account = useAccount()
   const entries = useEntries()
-  const [browser, setBrowser] = useState(notificationState)
   const owner = account.status === 'user'
   return (
     <>
@@ -207,27 +260,7 @@ function Notifications() {
             </span>
             <Toggle on={prefs.popups} onChange={(on) => setNotifyPrefs({ popups: on })} label="Show pop-ups" />
           </li>
-          {owner && (
-            <li className="set-row">
-              <span className="set-row-text">
-                <strong>System notifications</strong>
-                <span className="muted">
-                  {browser === 'granted'
-                    ? 'On: Agents answers in the background show up there too'
-                    : browser === 'denied'
-                      ? "Blocked in the browser's settings for this site"
-                      : browser === 'unsupported'
-                        ? 'This browser has none'
-                        : "The browser's own, for Agents answers in the background"}
-                </span>
-              </span>
-              {browser === 'default' && (
-                <button className="btn btn-small" onClick={() => void allowNotifications().then(setBrowser)}>
-                  Allow…
-                </button>
-              )}
-            </li>
-          )}
+          {owner && <PushRow />}
         </ul>
       </SetGroup>
 
