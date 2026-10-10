@@ -269,28 +269,103 @@ const metal = (heavy: boolean): Recipe => (sr, r) => {
   })
 }
 
-/** An explosion: a crack, a roaring body that darkens, a sub thump, crackling debris, and for big
- * ones, secondary blasts rolling on. Size 0 is a fighter, 1 a frigate, 2 a capital ship. */
+/** An explosion in the film's manner: a deep "thoom" whose pitch drops away under a dark roar
+ * (no fizz on top), crackling debris, and for bigger ships the hull's plates shearing (a slow, low
+ * ring of the wire) and secondary blasts rolling on. Capital ships groan as they break up. Size 0
+ * is a fighter, 1 a frigate or cruiser, 2 a capital ship. */
 const explosion = (size: 0 | 1 | 2): Recipe => (sr, r) => {
-  const len = [0.9, 1.8, 3.4][size]
+  const len = [0.8, 1.9, 3.6][size]
   const body = new Svf()
   const crk = new Svf()
   const sub = new Osc()
+  const groanO = new Osc()
+  const groanF = new Svf()
+  const ringLp = new Svf()
   const pops = Array.from({ length: [10, 22, 40][size] }, () => [r() * len * 0.8, 0.3 + r() * 0.7] as const)
   const secondary = size === 2 ? [0.35 + r() * 0.2, 0.8 + r() * 0.3, 1.3 + r() * 0.4] : size === 1 ? [0.3 + r() * 0.2] : []
-  return render(sr, len, (t) => {
-    const crack = crk.run(noise(), 3000, 0.7, sr).high * ad(t, 0.0005, 0.02)
-    let env = ad(t, 0.004, [0.18, 0.4, 0.8][size])
+  const shear = size ? wire(sr, len, { stages: 160, a: 0.96, loop: 0.08 + r() * 0.03, fb: 0.55, hiss: 0.4 }) : null
+  const f0 = [190, 130, 95][size] * (0.9 + r() * 0.2)
+  const f1 = [48, 34, 26][size]
+  return render(sr, len, (t, i) => {
+    const crack = crk.run(noise(), 1800, 0.8, sr).high * ad(t, 0.0005, 0.012)
+    let env = ad(t, 0.003, [0.16, 0.38, 0.75][size])
     for (const s of secondary) env += 0.7 * ad(t - s, 0.01, 0.35)
-    const roar = body.run(noise(), glide([3200, 2400, 1800][size], [220, 140, 90][size], t, len * 0.7), 0.5, sr).low * env
-    const thump = sub.sin(glide([120, 80, 60][size], [40, 30, 24][size], t, 0.5), sr) * ad(t, 0.005, [0.15, 0.3, 0.6][size])
+    const roar = body.run(noise(), glide([2400, 1900, 1500][size], [170, 120, 80][size], t, len * 0.6), 0.6, sr).low * env
+    // The "thoom": fast pitch drop, the punch of it.
+    const thoom = sub.sin(glide(f0, f1, t, [0.12, 0.25, 0.4][size]), sr) * ad(t, 0.002, [0.13, 0.3, 0.6][size])
     let debris = 0
     for (const [at, g] of pops) {
       const d = t - at
       if (d >= 0 && d < 0.012) debris += noise() * g * (1 - d / 0.012)
     }
-    return soft(crack * 0.9 + roar * 1.8 + thump * [1, 1.3, 1.7][size] + debris * 0.5)
+    const plates = shear ? ringLp.run(shear[i], 900, 0.8, sr).low * ad(t, 0.02, len * 0.3) : 0
+    // A dying capital ship's hull groans: a low, wavering tone sinking through a closing filter.
+    const groan =
+      size === 2
+        ? groanF.run(groanO.saw(glide(62, 34, t, len) * (1 + 0.03 * Math.sin(TAU * 1.7 * t)), sr), glide(420, 140, t, len), 1.2, sr).low * ad(t - 0.4, 0.5, 1.1)
+        : 0
+    return soft(crack * 0.6 + roar * 1.6 + thoom * [1.2, 1.5, 1.9][size] + debris * 0.45 + plates * [0, 0.9, 1.1][size] + groan * 0.9)
   })
+}
+
+/** A starfighter flying past: its engine high as it comes and low as it goes (Doppler), loudest
+ * as it passes, in a rush of air. Republic engines roar; droid fighters scream, a little like the
+ * film's fighters, kept low enough not to pierce. */
+const flyby = (droid: boolean): Recipe => (sr, r) => {
+  const len = 1.2
+  const pass = 0.5 + r() * 0.1
+  const o1 = new Osc(r())
+  const o2 = new Osc(r())
+  const tone = new Svf()
+  const air = new Svf()
+  const base = (droid ? 330 : 120) * (0.92 + r() * 0.16)
+  return render(sr, len, (t) => {
+    const x = (t - pass) / 0.16
+    const doppler = 1.18 - 0.36 * (0.5 + 0.5 * Math.tanh(x * 1.6))
+    const near = 1 / (1 + x * x)
+    const fr = base * doppler
+    let v: number
+    if (droid) {
+      const vib = 1 + 0.02 * Math.sin(TAU * 9 * t)
+      const raw = o1.saw(fr * vib, sr) * 0.6 + o2.sqr(fr * 1.5 * vib, sr) * 0.25
+      v = tone.run(raw + noise() * 0.3, 1000 * doppler, 2.2, sr).band
+    } else {
+      const raw = o1.saw(fr, sr) * 0.6 + o2.saw(fr * 1.498, sr) * 0.4
+      v = tone.run(raw, 650 * doppler, 1.1, sr).low
+    }
+    const rush = air.run(noise(), 900 * doppler, 0.7, sr).band
+    return soft((v * 1.2 + rush * (droid ? 0.5 : 0.9)) * near * 1.4)
+  })
+}
+
+/** Big ships' engines under the battle, as one seamless loop the game fades with how many warships
+ * are under way on screen: a deep two-note thrum beating slowly, and the hiss of their thrust. */
+function engineLoop(sr: number) {
+  const secs = 4
+  const n = secs * sr
+  // A little extra rendered past the end and crossfaded into the start, so the join is seamless.
+  const x = Math.round(0.25 * sr)
+  const out = new Float32Array(n + x)
+  const lp = new Svf()
+  const hs = new Svf()
+  const o1 = new Osc()
+  const o2 = new Osc()
+  // Frequencies with whole cycles in the loop, so it joins up without a click.
+  const fa = 165 / secs
+  const fb = 246 / secs
+  for (let i = 0; i < n + x; i++) {
+    const t = i / sr
+    const beat = 0.75 + 0.25 * Math.sin((TAU * 2 * t) / secs)
+    const thrum = lp.run(o1.saw(fa, sr) + o2.saw(fb, sr) * 0.7, 220, 0.9, sr).low * beat
+    const hiss = hs.run(noise(), 420, 0.6, sr).band * (0.8 + 0.2 * Math.sin((TAU * 3 * t) / secs))
+    out[i] = thrum + hiss * 0.12
+  }
+  for (let i = 0; i < x; i++) out[i] = out[i] * (i / x) + out[n + i] * (1 - i / x)
+  const loop = out.subarray(0, n)
+  let peak = 0
+  for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(loop[i]))
+  for (let i = 0; i < n; i++) loop[i] *= 0.9 / (peak || 1)
+  return loop
 }
 
 /** A hardpoint wrecked: a heavy clang, a burst, and electrical sputtering. */
@@ -318,16 +393,18 @@ const shieldsDown: Recipe = (sr) => {
   })
 }
 
-/** Fighters out of a hangar: an engine whine rising past, in a gust of air. */
+/** Fighters out of a hangar: engines spooling up and away, in a gust of air. */
 const launch: Recipe = (sr, r) => {
   const o = new Osc()
+  const o2 = new Osc()
   const bp = new Svf()
   const lp = new Svf()
-  return render(sr, 0.7, (t) => {
-    const env = Math.sin(Math.PI * Math.min(1, t / 0.6)) ** 2
-    const whine = lp.run(o.saw(glide(200, 600 + r() * 120, t, 0.5), sr), 1800, 0.5, sr).low
-    const air = bp.run(noise(), glide(500, 1600, t, 0.35), 0.5, sr).band
-    return (whine * 0.5 + air) * env
+  return render(sr, 0.8, (t) => {
+    const env = Math.sin(Math.PI * Math.min(1, t / 0.7)) ** 2
+    const fr = glide(90, 240 + r() * 40, t, 0.5)
+    const roar = lp.run(o.saw(fr, sr) + o2.saw(fr * 1.498, sr) * 0.4, glide(400, 1100, t, 0.5), 1, sr).low
+    const air = bp.run(noise(), glide(400, 1300, t, 0.4), 0.6, sr).band
+    return (roar * 0.8 + air * 0.8) * env
   })
 }
 
@@ -623,6 +700,7 @@ export class EmpiresSound {
   private ackSrc: AudioBufferSourceNode | null = null
   private drone: { stop: () => void } | null = null
   private rumble: GainNode | null = null
+  private engineGain: GainNode | null = null
   private heat = 0
   muted: boolean
   volume: number
@@ -758,7 +836,8 @@ export class EmpiresSound {
   }
 
   /** Play one take: panned, and further away, quieter, darker and wetter. */
-  private play(name: string, recipe: Recipe, o: { bus?: Bus; gain?: number; where?: Where; rate?: number; verb?: number; takes?: number } = {}) {
+  /** `sweep`: how far the sound pans across while it plays (a fly-by crossing the screen). */
+  private play(name: string, recipe: Recipe, o: { bus?: Bus; gain?: number; where?: Where; rate?: number; verb?: number; takes?: number; sweep?: number } = {}) {
     const ctx = this.ctx!
     const list = this.takes(name, recipe, o.takes)
     const src = ctx.createBufferSource()
@@ -773,7 +852,9 @@ export class EmpiresSound {
       lp.type = 'lowpass'
       lp.frequency.value = 700 + 17000 * near * near
       const p = ctx.createStereoPanner()
-      p.pan.value = Math.max(-1, Math.min(1, o.where.pan))
+      const pan = (v: number) => Math.max(-1, Math.min(1, v))
+      p.pan.value = pan(o.where.pan - (o.sweep ?? 0) / 2)
+      if (o.sweep) p.pan.linearRampToValueAtTime(pan(o.where.pan + o.sweep / 2), ctx.currentTime + src.buffer.duration)
       g.connect(lp).connect(p)
       tail = p
     }
@@ -799,7 +880,7 @@ export class EmpiresSound {
       ['pew-republic', fighterBlaster(false), 4], ['pew-droid', fighterBlaster(true), 4], ['laser-republic', blaster(false), 4], ['laser-droid', blaster(true), 4], ['turbo', turbolaser, 4], ['flak', flak, 4], ['missile', missile, 3],
       ['shield', shieldHit, 4], ['hull', metal(false), 4], ['hull-heavy', metal(true), 4],
       ['boom0', explosion(0), 3], ['boom1', explosion(1), 3], ['boom2', explosion(2), 2],
-      ['hpdown', hardpointDown, 3], ['shdown', shieldsDown, 3], ['launch', launch, 3],
+      ['hpdown', hardpointDown, 3], ['shdown', shieldsDown, 3], ['launch', launch, 3], ['flyby-republic', flyby(false), 3], ['flyby-droid', flyby(true), 3],
       ['click', click, 3], ['arm', arm, 2], ['queue', queue(false), 2], ['unqueue', queue(true), 2], ['construct', construct, 2],
       ...(['fighter', 'gunship', 'frigate', 'cruiser', 'capital', 'station'] as Tier[]).map((t): [string, Recipe, number] => [`sel-${faction}-${t}`, ack('select', faction, t), 4]),
       ...(['move', 'attack', 'attackMove'] as OrderKind[]).map((k): [string, Recipe, number] => [`ord-${k}-${faction}-frigate`, ack(k, faction, 'frigate'), 4]),
@@ -849,6 +930,18 @@ export class EmpiresSound {
 
   shieldsDown(where: Where) {
     if (this.ready() && where.gain > 0.05 && this.allow('shdown', 1, 0.3)) this.play('shdown', shieldsDown, { where, gain: 0.6 })
+  }
+
+  /** A fighter racing past near the middle of the view; `sweep` pans it the way it's flying. */
+  flyby(faction: FactionId, where: Where, sweep: number) {
+    if (this.ready() && where.gain > 0.2 && this.allow('flyby', 1, 0.7)) this.play(`flyby-${faction}`, flyby(faction === 'droid'), { where, gain: 0.45, sweep, verb: 0.3, takes: 3 })
+  }
+
+  /** Call every frame with how much warship is under way on screen (0 for none): the engine bed
+   * swells and fades with it. */
+  engines(level: number) {
+    if (!this.engineGain || !this.ctx) return
+    this.engineGain.gain.setTargetAtTime(Math.min(0.32, level * 0.06), this.ctx.currentTime, 0.6)
   }
 
   launch(where: Where) {
@@ -1032,13 +1125,24 @@ export class EmpiresSound {
     rumble.gain.value = 0
     this.rumble = rumble
     rb.connect(rf).connect(rumble).connect(out)
+    // Warships' engines: on the battle bus, silent until ships are under way on screen.
+    const eb = ctx.createBuffer(1, 4 * ctx.sampleRate, ctx.sampleRate)
+    eb.getChannelData(0).set(engineLoop(ctx.sampleRate))
+    const eng = ctx.createBufferSource()
+    eng.buffer = eb
+    eng.loop = true
+    const engineGain = ctx.createGain()
+    engineGain.gain.value = 0
+    this.engineGain = engineGain
+    eng.connect(engineGain).connect(this.buses.sfx!)
+    eng.start()
     wind.start()
     wl.start()
     rb.start()
     this.drone = {
       stop: () => {
         const t = ctx.currentTime
-        for (const node of [g, wg, rumble]) {
+        for (const node of [g, wg, rumble, engineGain]) {
           node.gain.cancelScheduledValues(t)
           node.gain.setValueAtTime(node.gain.value, t)
           node.gain.linearRampToValueAtTime(0, t + 0.6)
@@ -1047,6 +1151,9 @@ export class EmpiresSound {
           for (const o of [...oscs, lfo, wl]) o.stop()
           wind.stop()
           rb.stop()
+          eng.stop()
+          engineGain.disconnect()
+          if (this.engineGain === engineGain) this.engineGain = null
           g.disconnect()
           wg.disconnect()
           rumble.disconnect()
