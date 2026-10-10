@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { notify } from '../os/notify'
+import { setOn, sourceOn } from '../os/notifyPrefs'
 
 // Status of the Minecraft server Menno hosts. Browsers cannot open a raw TCP connection to
 // port 25565, so the site's own server pings it (server/minecraft.ts, served at /api/minecraft).
@@ -86,22 +87,11 @@ function fromPublicApis(get: (url: string) => Promise<Json>): Promise<State> {
 // Join, leave and up/down notifications. The first answer is the baseline. A live answer from the
 // server itself is trusted at once; with the public APIs a player only counts as gone after two
 // polls in a row without them, since their caches can briefly disagree.
-const NOTIFY_KEY = 'mvlos.mc.notify'
-let notifyOn = (() => {
-  try {
-    return localStorage.getItem(NOTIFY_KEY) !== 'off'
-  } catch {
-    return true
-  }
-})()
-export const mcNotificationsOn = () => notifyOn
+// Switched on and off with the other notifications (Settings → Notifications, src/os/notifyPrefs.ts).
+export const mcNotificationsOn = () => sourceOn('minecraft.players') || sourceOn('minecraft.status')
 export function setMcNotifications(on: boolean) {
-  notifyOn = on
-  try {
-    localStorage.setItem(NOTIFY_KEY, on ? 'on' : 'off')
-  } catch {
-    /* preference just won't persist */
-  }
+  setOn('minecraft', on)
+  if (on) setOn('minecraft.players', true), setOn('minecraft.status', true)
   listeners.forEach((l) => l())
 }
 
@@ -115,9 +105,9 @@ function watch(st: McStatus, live = false) {
   for (const name of st.players.list) misses.set(name, 0)
   if (!prev) return
 
-  const tell = (n: Parameters<typeof notify>[0]) => notifyOn && notify(n)
+  const tell = (n: Parameters<typeof notify>[0]) => notify({ source: 'minecraft.players', action: { app: 'mcserver' }, ...n })
   if (prev.online !== st.online) {
-    tell({ title: st.online ? "Menno's Minecraft server is back online" : "Menno's Minecraft server went offline", body: MC_ADDRESS })
+    tell({ title: st.online ? "Menno's Minecraft server is back online" : "Menno's Minecraft server went offline", body: MC_ADDRESS, source: 'minecraft.status' })
     if (!st.online) return
   }
   if (!st.online) return

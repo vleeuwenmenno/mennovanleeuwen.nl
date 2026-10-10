@@ -81,8 +81,13 @@ const APPS: Record<string, AppId> = {
   photos: 'preview',
   player: 'player',
   video: 'player',
+  amp: 'amp',
+  omamp: 'amp',
+  winamp: 'amp',
+  music: 'amp',
   trash: 'trash',
   notebook: 'notebook',
+  agents: 'agents',
   settings: 'settings',
   mcserver: 'mcserver',
 }
@@ -93,6 +98,7 @@ const APP_NAMES: Record<AppId, string> = {
   viewer: 'viewer',
   preview: 'preview',
   player: 'player',
+  amp: 'omamp',
   pdf: 'pdf',
   office: 'office',
   archive: 'archive',
@@ -114,6 +120,7 @@ const APP_NAMES: Record<AppId, string> = {
   mcserver: 'mc-status',
   linkforge: 'link-forge',
   calendar: 'calendar',
+  agents: 'agents',
 }
 
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */

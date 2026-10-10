@@ -1,0 +1,12 @@
+/* iOS zooms focused controls with text smaller than 16px. Keep this invariant across
+   app styles (including lazy-loaded games), without disabling accessibility zoom. */
+@media (any-pointer: coarse) {
+  input,
+  textarea,
+  select,
+  [contenteditable=''],
+  [contenteditable='true'],
+  [contenteditable='plaintext-only'] {
+    font-size: max(16px, 1em) !important;
+  }
+}

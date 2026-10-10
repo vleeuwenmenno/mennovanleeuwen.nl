@@ -8,6 +8,12 @@ export const SECURITY = {
   'X-Frame-Options': 'SAMEORIGIN',
 }
 
+/** For file bytes passed through from Seafile: never rendered as a page of this site, even when
+ * opened directly (a shared library's HTML or SVG would otherwise run with the owner's session). */
+export const UNTRUSTED = {
+  'Content-Security-Policy': "default-src 'none'; sandbox",
+}
+
 export function json(res: ServerResponse, status: number, body: unknown, headers: Record<string, string | string[]> = {}) {
   res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SECURITY, ...headers }).end(JSON.stringify(body))
 }

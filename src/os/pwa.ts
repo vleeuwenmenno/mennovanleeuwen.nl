@@ -18,6 +18,9 @@ export function registerServiceWorker() {
         title: 'MvL OS has an update',
         body: 'Click to restart into the new version',
         sticky: true,
+        // Restarts into the worker waiting now: stale after a reload, so not kept.
+        source: 'system.update',
+        transient: true,
         onClick: () => worker.postMessage('skip-waiting'),
       })
     if (reg.waiting && navigator.serviceWorker.controller) offer(reg.waiting)

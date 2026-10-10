@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { createEvent, dayKey, deleteEvent, setLastCalendar, updateEvent, type CalendarEvent, type CalendarInfo, type EventInput } from '../../data/calendar'
 import { connectGoogle } from '../../os/account'
+import { Select } from '../../os/Select'
 import { addDays, hhmm, parseDay, span } from './time'
 
 // A new event, or one to look at and change: title, calendar, when, where, who and notes. Guests
@@ -221,14 +222,15 @@ export function EventEditor({ event, initial, calendars, googleCanWrite, choose,
           <label className="ca-field">
             <span>Calendar</span>
             {selectable.length ? (
-              <select value={d.calendarId} onChange={(e) => set({ calendarId: e.target.value })} disabled={!!event?.recurring}>
-                {!calendar?.writable && !event && <option value="">Pick a calendar…</option>}
-                {selectable.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} · {c.source ?? 'Google'}
-                  </option>
-                ))}
-              </select>
+              <Select
+                value={d.calendarId}
+                onChange={(calendarId) => set({ calendarId })}
+                disabled={!!event?.recurring}
+                options={[
+                  ...(!calendar?.writable && !event ? [{ value: '', label: 'Pick a calendar…' }] : []),
+                  ...selectable.map((c) => ({ value: c.id, label: `${c.name} · ${c.source ?? 'Google'}` })),
+                ]}
+              />
             ) : (
               <em className="muted">{event ? `${event.calendar}` : 'None you can add to yet (see below)'}</em>
             )}

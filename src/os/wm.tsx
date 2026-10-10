@@ -1,8 +1,9 @@
 import { snapReserve } from './dockPrefs'
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
 import { synced } from './synced'
+import { startupPrefs } from './startup'
 
-export type AppId = 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'pdf' | 'archive' | 'office' | 'newdoc' | 'newsheet' | 'newslides' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar'
+export type AppId = 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'pdf' | 'archive' | 'office' | 'newdoc' | 'newsheet' | 'newslides' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar' | 'agents' | 'amp'
 
 export type WinState = {
   pid: number
@@ -65,7 +66,7 @@ export type GeometryPatch = Partial<Geometry> & { snap?: SnapZone; restore?: Geo
 export type Geometry = { x: number; y: number; w: number; h: number }
 
 /** Apps that only ever have one window; everything else can be opened again with "New window". */
-export const SINGLE_INSTANCE = new Set<AppId>(['notes', 'keys', 'trash', 'notebook', 'settings', 'mcserver', 'linkforge'])
+export const SINGLE_INSTANCE = new Set<AppId>(['amp', 'notes', 'keys', 'trash', 'notebook', 'settings', 'mcserver', 'linkforge'])
 
 /** Apps where opening always means a new one (New Document makes a new file each time); `create` says it is fresh. */
 export const ALWAYS_NEW = new Set<AppId>(['newdoc', 'newsheet', 'newslides'])
@@ -242,12 +243,46 @@ function apply(state: State, action: Action): State {
           const fresh = !state.touched && action.layout.find((l) => l.app === w.app)
           // Fitted from where it was put, not from an earlier fitting: a bigger screen gets it back as it was.
           const g = fresh ? fresh.geometry : (w.want ?? w)
+          if (NOTE_APPS.has(w.app) && !w.maximized) return { ...w, want: fresh ? undefined : (w.want ?? { x: w.x, y: w.y, w: w.w, h: w.h }), ...fitNote(g, width, height, drawnHeights.get(w.pid)) }
           const ww = Math.max(240, Math.min(g.w, width - 16))
           const hh = Math.max(160, Math.min(g.h, height - 140))
           return { ...w, want: fresh ? undefined : (w.want ?? { x: w.x, y: w.y, w: w.w, h: w.h }), w: ww, h: hh, x: Math.min(Math.max(g.x, 8 - ww + 120), width - 120), y: Math.min(Math.max(g.y, 40), height - 80) }
         }),
       }
     }
+  }
+}
+
+/** Notes (the headline note, the shortcuts, sticky and other widgets): the windows with note chrome. */
+export const NOTE_APPS = new Set<AppId>(['notes', 'keys', 'widget'])
+/** How tall each note is drawn (pid → px): a long note runs on below its box (Window.tsx measures it). */
+const drawnHeights = new Map<number, number>()
+export const drawnHeight = (pid: number) => drawnHeights.get(pid)
+export function setDrawnHeight(pid: number, h: number | null) {
+  if (h === null) drawnHeights.delete(pid)
+  else drawnHeights.set(pid, h)
+}
+
+/** Room around a note: notes hang at a slant of up to 3.5°, which takes their corners ~12px out. */
+const NOTE_MARGIN = 16
+const NOTE_TOP = 28 + NOTE_MARGIN
+
+/**
+ * Where a note goes on a screen of this size: never hanging off an edge, made smaller when the
+ * screen is smaller than the note. Phones scroll the desktop down, so there a note only has to
+ * fit across and below the top bar.
+ */
+export function fitNote(g: Geometry, width: number, height: number, drawn = g.h): Geometry {
+  const phone = width < 720
+  const w = Math.max(160, Math.min(g.w, width - 2 * NOTE_MARGIN))
+  const h = phone ? g.h : Math.max(140, Math.min(g.h, height - NOTE_TOP - NOTE_MARGIN))
+  // Kept clear of the bottom by what shows, which can be more than its box.
+  const shown = Math.max(h, drawn)
+  return {
+    w,
+    h,
+    x: Math.max(NOTE_MARGIN, Math.min(g.x, width - w - NOTE_MARGIN)),
+    y: phone ? Math.max(g.y, NOTE_TOP) : Math.max(NOTE_TOP, Math.min(g.y, height - shown - NOTE_MARGIN)),
   }
 }
 
@@ -268,9 +303,22 @@ type WM = {
   setProps: (pid: number, props: WinState['props']) => void
   /** Closes everything and opens the opening layout again (after a reboot), or nothing at all. */
   reset: (empty?: boolean) => void
+  /** Fits the windows to the screen again (a note that turned out taller than its box). */
+  refit: () => void
 }
 
 const Ctx = createContext<WM | null>(null)
+
+/**
+ * Windows that want a say before they close (Agents while a thread is answering): the guard
+ * answers whether to close after all. Set by the window itself, removed when it unmounts.
+ */
+const closeGuards = new Map<number, () => Promise<boolean> | boolean>()
+const asking = new Set<number>()
+export function setCloseGuard(pid: number, guard: (() => Promise<boolean> | boolean) | null) {
+  if (guard) closeGuards.set(pid, guard)
+  else closeGuards.delete(pid)
+}
 /** Files' trash view (see apps/Files.tsx). */
 const TRASH_PATH = 'trash://'
 
@@ -288,7 +336,10 @@ export function WindowManagerProvider({
 }) {
   const usable = useCallback((saved: SavedWindow[] | null) => saved?.map(migrate).filter((w) => isApp(w.app)) ?? null, [isApp])
   const [state, dispatch] = useReducer(reducer, null, () => {
-    const saved = usable(layoutStore().get())
+    // Settings → Windows: last time's windows, the welcome windows, or an empty desktop.
+    const start = startupPrefs().windows
+    if (start === 'empty') return fresh([])
+    const saved = start === 'last' ? usable(layoutStore().get()) : null
     return saved ? restored(saved) : fresh(relayout())
   })
 
@@ -301,6 +352,9 @@ export function WindowManagerProvider({
   const savedEdits = useRef(0)
   const saveNow = useCallback(() => {
     if (stateRef.current.edits === savedEdits.current) return
+    // Starting with the welcome windows or nothing: the layout saved before stays as it was, for
+    // when Last windows is chosen again (and other devices keep theirs).
+    if (startupPrefs().windows !== 'last') return
     savedEdits.current = stateRef.current.edits
     layoutStore().set(serialize(stateRef.current.windows))
   }, [])
@@ -324,6 +378,8 @@ export function WindowManagerProvider({
     () =>
       layoutStore().onRemote((saved) => {
         if (stateRef.current.edits !== savedEdits.current) return
+        // Starting fresh each time means not taking another device's windows either.
+        if (startupPrefs().windows !== 'last') return
         const next = usable(saved)
         if (next) {
           savedEdits.current = 0
@@ -374,12 +430,23 @@ export function WindowManagerProvider({
       focusedPid: focused,
       open,
       openNew,
-      close: (pid) => dispatch({ type: 'close', pid }),
+      close: (pid) => {
+        const guard = closeGuards.get(pid)
+        if (!guard) return dispatch({ type: 'close', pid })
+        if (asking.has(pid)) return // its question is already on screen
+        asking.add(pid)
+        Promise.resolve()
+          .then(guard)
+          .catch(() => true)
+          .then((ok) => ok && dispatch({ type: 'close', pid }))
+          .finally(() => asking.delete(pid))
+      },
       focus: (pid) => dispatch({ type: 'focus', pid }),
       minimize: (pid) => dispatch({ type: 'minimize', pid }),
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
       setGeometry: (pid, geometry) => dispatch({ type: 'setGeometry', pid, geometry }),
       setProps: (pid, props) => dispatch({ type: 'setProps', pid, props }),
+      refit: () => dispatch({ type: 'viewport', width: window.innerWidth, height: window.innerHeight, layout: relayout() }),
       reset: (empty) => {
         dispatch({ type: 'reset', layout: empty ? [] : relayout() })
         savedEdits.current = 0

@@ -73,7 +73,7 @@ type Choice = 'replace' | 'keep' | 'skip' | 'cancel'
 export async function uploadFiles(picked: Picked[], target: string) {
   const at = parseSf(target)
   if (!at || !picked.length) return
-  if (getLibrary(at.repo)?.permission === 'r') return notify({ title: 'Read-only', body: `${libraryName(at.repo)} is read-only for you.` })
+  if (getLibrary(at.repo)?.permission === 'r') return notify({ title: 'Read-only', body: `${libraryName(at.repo)} is read-only for you.`, transient: true })
 
   // What is there already (top level only: a folder that exists is merged into).
   let existing = new Set<string>()
@@ -258,6 +258,7 @@ function finishBatch(batch: string) {
   notify({
     title: failed.length ? `${failed.length} of ${all.length} uploads failed` : `Uploaded ${done.length === 1 ? done[0].name : `${done.length} files`}`,
     body: failed.length ? failed[0].error ?? undefined : `To ${where}`,
+    source: 'files.uploads',
   })
 }
 

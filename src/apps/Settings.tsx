@@ -5,27 +5,33 @@ import { setLinkSettings, useLinkSettings } from '../data/links'
 import { clearVisits, useVisits } from '../data/siteHistory'
 import { clearHits, useRecentHits } from '../data/spotlightRecent'
 import { favouriteKey, moveFavourite, removeFavourite, useFavourites } from '../data/spotlightFavourites'
-import { CATEGORIES, RECENT_COUNTS, setInclude, setSpotlightPrefs, setStart, START_SECTIONS, useSpotlightPrefs, type Fallback } from '../data/spotlightPrefs'
+import { ANSWERS_KEEP, CATEGORIES, RECENT_COUNTS, setInclude, setSpotlightPrefs, setStart, START_SECTIONS, useSpotlightPrefs, type Fallback } from '../data/spotlightPrefs'
+import { clearQuick } from '../data/agents'
 import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
-import { MC_ADDRESS, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
 import { setSwing, useSwingPrefs } from '../os/swing'
 import { ask } from '../os/Dialogs'
+import { Select } from '../os/Select'
 import { libraryName, loadLibraries, primaryOf, setSeafilePrefs, useLibraries, useSeafilePrefs } from '../data/seafile'
 import { fstabEntries, isSeafileType, useMounts } from '../data/mounts'
 
 const libraryNameOf = (prefix: string) => libraryName(prefix.slice('seafile://'.length))
-import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeUpdownKey, setOffice, setUpdownKey, signIn, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelyOwner } from '../os/account'
+import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, signIn, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelyOwner } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
 import { DOCK_MODES, getDockMode, setDockMode, type DockMode } from '../os/dockPrefs'
 import { AppIcon } from '../os/icons'
+import { setStartupPrefs, START_WINDOWS, useStartupPrefs } from '../os/startup'
+import { clearEntries, pruneEntries, useEntries } from '../os/notify'
+import { ACTIVITY_WINDOWS, isOff, KEEP, setNotifyPrefs, setOn, useNotifyPrefs, visibleSources, type NotifySource as NotifySourceDef } from '../os/notifyPrefs'
+import { disablePush, enablePush, pushState, sendTestPush, type PushState } from '../os/push'
 import { THEMES } from '../os/omarchyThemes'
 import { pullAll } from '../os/synced'
 import { ACCENTS, DARK_THEMES, LIGHT_THEMES, setAccent, setMode, setTheme, themeLabel, useTheme, type Mode } from '../os/theme'
 import { ReleaseStatus } from '../os/TopbarWidgets'
 import { useWM, type WinState } from '../os/wm'
+import { AgentsSettings } from './AgentsSettings'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
 import { BranchGlyph } from './LinkForge'
 import { SyncLine } from './Notebook'
@@ -184,27 +190,176 @@ function useDockMode(): DockMode {
   return mode
 }
 
+/**
+ * Push on this device (src/os/push.ts): Agents answers and questions as system notifications, also
+ * with MvL OS closed. iPhone and iPad only have it in the app added to the Home Screen.
+ */
+function PushRow() {
+  const [state, setState] = useState<PushState | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+  useEffect(() => void pushState().then(setState), [])
+  const run = (job: () => Promise<PushState>) => {
+    setBusy(true)
+    setNote(null)
+    job()
+      .then(setState, (e: Error) => setNote(e.message))
+      .finally(() => setBusy(false))
+  }
+  const test = () => {
+    setBusy(true)
+    sendTestPush()
+      .then((r) => setNote(r.sent ? `Sent to ${r.sent} device${r.sent === 1 ? '' : 's'}: it should show in a moment.` : 'No device took it: turn push off and on again here.'), (e: Error) => setNote(e.message))
+      .finally(() => setBusy(false))
+  }
+  const text: Record<PushState, string> = {
+    on: 'On: Agents answers and questions reach this device, also with MvL OS closed',
+    off: 'Agents answers and questions as notifications on this device, also with MvL OS closed',
+    denied: "Blocked: allow notifications for this site in the browser's (or the phone's) settings",
+    install: 'On iPhone and iPad: Share → Add to Home Screen, open MvL OS from there, and turn this on in it',
+    unsupported: 'Not in this browser',
+  }
+  return (
+    <li className="set-row">
+      <span className="set-row-text">
+        <strong>Push notifications on this device</strong>
+        <span className="muted">{note ?? (state ? text[state] : 'Checking…')}</span>
+      </span>
+      {state === 'on' && (
+        <>
+          <button className="btn btn-small" disabled={busy} onClick={test}>
+            Send a test
+          </button>
+          <button className="btn btn-small" disabled={busy} onClick={() => run(disablePush)}>
+            Turn off
+          </button>
+        </>
+      )}
+      {state === 'off' && (
+        <button className="btn btn-small" disabled={busy} onClick={() => run(enablePush)}>
+          Turn on
+        </button>
+      )}
+    </li>
+  )
+}
+
 function Notifications() {
-  useMinecraft() // re-renders when the toggle changes
+  const prefs = useNotifyPrefs()
+  const account = useAccount()
+  const entries = useEntries()
+  const owner = account.status === 'user'
   return (
     <>
-      <ul className="set-list">
-        <li className="set-row">
-          <span className="set-row-text">
-            <strong>Minecraft server</strong>
-            <span className="muted">When players join or leave {MC_ADDRESS}, or it goes down or comes back</span>
-          </span>
-          <Toggle on={mcNotificationsOn()} onChange={setMcNotifications} label="Minecraft notifications" />
-        </li>
-        <li className="set-row">
-          <span className="set-row-text">
-            <strong>Activity</strong>
-            <span className="muted">New pushes, releases and pull requests from the last 15 minutes, once per visit</span>
-          </span>
-          <span className="muted">Always on</span>
-        </li>
-      </ul>
-      <p className="muted set-help">Notifications show in the top right corner of the desktop and only while this page is open.</p>
+      <SetGroup title="Pop-ups">
+        <ul className="set-list">
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>Show pop-ups</strong>
+              <span className="muted">Off is do not disturb: they still collect behind the bell</span>
+            </span>
+            <Toggle on={prefs.popups} onChange={(on) => setNotifyPrefs({ popups: on })} label="Show pop-ups" />
+          </li>
+          {owner && <PushRow />}
+        </ul>
+      </SetGroup>
+
+      <SetGroup title="Notification center">
+        <div className="seg set-seg" role="radiogroup" aria-label="Keep notifications for">
+          {KEEP.map(([id, label]) => (
+            <button key={id} role="radio" aria-checked={prefs.keep === id} className={prefs.keep === id ? 'is-active' : ''} onClick={() => (setNotifyPrefs({ keep: id }), pruneEntries())}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="muted set-help">How long the bell in the top bar keeps a notification. They are kept on this device only; pop-ups that are only feedback (a failed paste, an update to restart into) are never kept.</p>
+        <ul className="set-list">
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>Remove once opened</strong>
+              <span className="muted">Opening one also takes it off the list</span>
+            </span>
+            <Toggle on={prefs.removeOnOpen} onChange={(on) => setNotifyPrefs({ removeOnOpen: on })} label="Remove notifications once opened" />
+          </li>
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>{entries.length ? `${entries.length} kept now` : 'Nothing kept now'}</strong>
+              <span className="muted">{entries.filter((e) => !e.read).length} not read yet</span>
+            </span>
+            <button className="btn btn-small" disabled={!entries.length} onClick={clearEntries}>
+              Clear all
+            </button>
+          </li>
+        </ul>
+      </SetGroup>
+
+      <SetGroup title="Apps">
+        <ul className="set-list">
+          {visibleSources(owner).map((src) => (
+            <NotifySourceRows key={src.app} src={src} />
+          ))}
+        </ul>
+        <p className="muted set-help">Notifications arrive while this page is open (Agents answers also after it was closed, once it is open again). Right-click one in the list to turn its kind off.</p>
+      </SetGroup>
+    </>
+  )
+}
+
+/**
+ * One app in Settings → Notifications: a switch for all of it, and for an app with several kinds
+ * of notification, a fold-out list to pick single kinds (and, for Activity, how recent).
+ */
+function NotifySourceRows({ src }: { src: NotifySourceDef }) {
+  const prefs = useNotifyPrefs()
+  const [open, setOpenRows] = useState(false)
+  const appOn = !isOff(prefs, src.app)
+  const kindOn = (id: string) => appOn && !isOff(prefs, `${src.app}.${id}`)
+  const single = src.kinds.length === 1
+  const on = src.kinds.filter((k) => kindOn(k.id)).length
+  const summary = single ? src.kinds[0].hint : !appOn ? 'Off' : on === src.kinds.length ? `All ${src.kinds.length} kinds` : on ? `${on} of ${src.kinds.length} kinds: ${src.kinds.filter((k) => kindOn(k.id)).map((k) => k.label.toLowerCase()).join(', ')}` : 'No kinds chosen'
+  return (
+    <>
+      <li className="set-row">
+        {src.icon ? <AppIcon app={src.icon} size={22} tone /> : <span className="set-glyph">M</span>}
+        <span className="set-row-text">
+          <strong>{src.label}</strong>
+          <span className="muted">{summary}</span>
+        </span>
+        {!single && (
+          <button className="btn btn-small set-fold" onClick={() => setOpenRows((o) => !o)} aria-expanded={open} disabled={!appOn}>
+            {open && appOn ? 'Done' : 'Choose…'}
+          </button>
+        )}
+        <Toggle on={appOn} onChange={(v) => setOn(src.app, v)} label={`${src.label} notifications`} />
+      </li>
+      {open && appOn && (
+        <>
+          {src.kinds.map((k) => (
+            <li key={k.id} className="set-row set-row-sub">
+              <span className="set-row-text">
+                <strong>{k.label}</strong>
+                <span className="muted">{k.hint}</span>
+              </span>
+              <Toggle on={kindOn(k.id)} onChange={(v) => setOn(`${src.app}.${k.id}`, v)} label={`${src.label}: ${k.label}`} />
+            </li>
+          ))}
+          {src.app === 'activity' && (
+            <li className="set-row set-row-sub set-row-stack">
+              <span className="set-row-text">
+                <strong>How recent</strong>
+                <span className="muted">Older activity stays quiet when MvL OS opens</span>
+              </span>
+              <div className="seg set-seg" role="radiogroup" aria-label="Notify about activity from the last">
+                {ACTIVITY_WINDOWS.map(([id, label]) => (
+                  <button key={id} role="radio" aria-checked={prefs.activityWindow === id} className={prefs.activityWindow === id ? 'is-active' : ''} onClick={() => setNotifyPrefs({ activityWindow: id })}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </li>
+          )}
+        </>
+      )}
     </>
   )
 }
@@ -545,7 +700,7 @@ function Launchers() {
 }
 
 /** Third-party services the widgets read from, with keys on the server: updown.io for Status. */
-type IntegrationId = 'updown' | 'seafile' | 'onlyoffice'
+type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice'
 
 /** Third-party services, one row each; a row opens that service's own settings. */
 function Integrations() {
@@ -563,6 +718,13 @@ function Integrations() {
       icon: <img className="set-fav" src="https://updown.io/favicon.ico" alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />,
       status: account.integrations.updown === 'server' ? 'Connected with the key set on the server' : account.integrations.updown ? 'Connected · for the Status widget' : 'Uptime checks, for the Status widget',
       on: !!account.integrations.updown,
+    },
+    {
+      id: 'ollama',
+      name: 'Ollama Cloud',
+      icon: <Fav src="https://ollama.com/public/icon-64x64.png" glyph="🦙" />,
+      status: account.integrations.ollama === 'server' ? 'Connected with the key set on the server' : account.integrations.ollama ? 'Connected · for Agents' : 'Models and web search, for the Agents app',
+      on: !!account.integrations.ollama,
     },
     {
       id: 'seafile',
@@ -593,7 +755,7 @@ function Integrations() {
           <strong>{current.name}</strong>
           {current.on && <span className="set-badge">Connected</span>}
         </div>
-        {current.id === 'updown' ? <UpdownSettings /> : current.id === 'seafile' ? <SeafileSettings /> : <OfficeSettings />}
+        {current.id === 'updown' ? <UpdownSettings /> : current.id === 'ollama' ? <OllamaSettings /> : current.id === 'seafile' ? <SeafileSettings /> : <OfficeSettings />}
       </>
     )
 
@@ -668,6 +830,64 @@ function UpdownSettings() {
           </p>
           <button className="btn btn-primary" disabled={busy}>
             {busy ? 'Checking…' : 'Connect updown.io'}
+          </button>
+        </form>
+      )}
+      {error && <p className="t-red">{error}</p>}
+    </>
+  )
+}
+
+/** Ollama Cloud's API key, for the Agents app: its models, web search and web fetch. */
+function OllamaSettings() {
+  const account = useAccount()
+  const wm = useWM()
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const save = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await setOllamaKey(key)
+      setKey('')
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      {account.integrations.ollama === 'server' && <p className="muted">Connected with OLLAMA_API_KEY from the server's environment. A key saved here would be used instead.</p>}
+      {account.integrations.ollama === 'settings' ? (
+        <>
+          <p className="muted">Connected with a key saved here, stored encrypted on this server. Agents uses it for the models, web search and reading pages; usage counts against your Ollama plan.</p>
+          <div className="set-actions">
+            <button className="btn btn-small btn-primary" onClick={() => wm.open('agents')}>
+              Open Agents
+            </button>
+            <button className="btn btn-small" onClick={() => removeOllamaKey().catch((e: Error) => setError(e.message))}>
+              Remove key
+            </button>
+          </div>
+        </>
+      ) : (
+        <form className="set-form" onSubmit={save}>
+          <label>
+            <span>API key</span>
+            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Ollama API key" autoComplete="off" required />
+          </label>
+          <p className="muted set-help">
+            Make one at{' '}
+            <a href="https://ollama.com/settings/keys" target="_blank" rel="noopener noreferrer">
+              ollama.com → Settings → Keys
+            </a>
+            . It is checked once, then stored encrypted on this server and only used from here.
+          </p>
+          <button className="btn btn-primary" disabled={busy}>
+            {busy ? 'Checking…' : 'Connect Ollama Cloud'}
           </button>
         </form>
       )}
@@ -764,16 +984,15 @@ function SeafileSettings() {
             <strong>Primary library</strong>
             <span className="muted">Home in Files: its Desktop, Documents, Downloads, Music, Pictures and Videos folders</span>
           </span>
-          <select className="set-select" value={primary?.id ?? ''} disabled={!libs?.length} onChange={(e) => setSeafilePrefs({ primary: e.target.value })} aria-label="Primary library">
-            {!libs && <option value="">Loading…</option>}
-            {libs?.map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.name}
-                {l.encrypted ? ' 🔒' : ''}
-                {l.type !== 'mine' && l.owner ? ` (${l.owner})` : ''}
-              </option>
-            ))}
-          </select>
+          <Select
+            className="set-select"
+            value={primary?.id ?? ''}
+            disabled={!libs?.length}
+            onChange={(primary) => setSeafilePrefs({ primary })}
+            aria-label="Primary library"
+            placeholder={libs ? undefined : 'Loading…'}
+            options={(libs ?? []).map((l) => ({ value: l.id, label: `${l.name}${l.encrypted ? ' 🔒' : ''}${l.type !== 'mine' && l.owner ? ` (${l.owner})` : ''}` }))}
+          />
         </li>
         <li className="set-row">
           <span className="set-row-text">
@@ -815,13 +1034,13 @@ function SeafileSettings() {
             <strong>Encrypted libraries</strong>
             <span className="muted">Ask for the password again after</span>
           </span>
-          <select className="set-select" value={sfPrefs.lockMinutes} onChange={(e) => setSeafilePrefs({ lockMinutes: Number(e.target.value) })} aria-label="Lock encrypted libraries after">
-            {[5, 15, 30, 55].map((m) => (
-              <option key={m} value={m}>
-                {m} minutes
-              </option>
-            ))}
-          </select>
+          <Select
+            className="set-select"
+            value={sfPrefs.lockMinutes}
+            onChange={(lockMinutes) => setSeafilePrefs({ lockMinutes })}
+            aria-label="Lock encrypted libraries after"
+            options={[5, 15, 30, 55].map((m) => ({ value: m, label: `${m} minutes` }))}
+          />
         </li>
       </ul>
       {libsError && (
@@ -1134,6 +1353,14 @@ function SpotlightSettings() {
   const visits = useVisits()
   const hits = useRecentHits()
   const account = useAccount()
+  // Quick answers come from the Agents app: only for the owner, with an Ollama key.
+  const agents = account.status === 'user' && !!account.integrations.ollama
+  const [cleared, setCleared] = useState(false)
+  const clearAnswers = async () => {
+    if (!(await ask({ title: 'Forget every quick answer?', body: 'Answers you continued in Agents stay there.', confirm: 'Forget all', danger: true }))) return
+    await clearQuick().catch(() => {})
+    setCleared(true)
+  }
   const fallbacks: [Fallback, string][] = [
     ['web', `Searches ${ENGINES[engine].label}`],
     ['terminal', 'Runs it in a terminal'],
@@ -1141,7 +1368,7 @@ function SpotlightSettings() {
   return (
     <>
       <SetGroup title="When Spotlight opens, show">
-        {START_SECTIONS.map(([id, label, hint]) => (
+        {START_SECTIONS.filter(([id]) => agents || id !== 'answers').map(([id, label, hint]) => (
           <label key={id} className="set-check">
             <input type="checkbox" checked={prefs.start[id]} onChange={(e) => setStart(id, e.target.checked)} />
             <span>
@@ -1159,11 +1386,28 @@ function SpotlightSettings() {
             </button>
           ))}
         </div>
-        <p className="muted set-help">How many recently visited websites, and repositories and issues, an empty Spotlight lists.</p>
+        <p className="muted set-help">How many recent answers, recently visited websites, and repositories and issues an empty Spotlight lists.</p>
       </SetGroup>
+      {agents && (
+        <SetGroup title="Keep quick answers for">
+          <div className="seg set-seg" role="radiogroup" aria-label="Keep quick answers for">
+            {ANSWERS_KEEP.map(([id, label]) => (
+              <button key={id} role="radio" aria-checked={prefs.answersKeep === id} className={prefs.answersKeep === id ? 'is-active' : ''} onClick={() => setSpotlightPrefs({ answersKeep: id })}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="muted set-help">
+            Questions you ask Agents from Spotlight (start with <code>?</code>) are answered there and listed under Recent answers, until this long after their last reply. Continue one in Agents (Ctrl+K) to keep it; forget one by hand with right-click or Shift+Delete.
+          </p>
+          <button className="btn btn-small" disabled={cleared} onClick={() => void clearAnswers()}>
+            {cleared ? 'Forgotten' : 'Forget all quick answers'}
+          </button>
+        </SetGroup>
+      )}
       <SpotlightFavourites />
       <SetGroup title="While you type, include">
-        {CATEGORIES.map(([id, label]) => (
+        {CATEGORIES.filter(([id]) => agents || id !== 'answers').map(([id, label]) => (
           <label key={id} className="set-check">
             <input type="checkbox" checked={prefs.include[id]} onChange={(e) => setInclude(id, e.target.checked)} />
             {label}
@@ -1241,6 +1485,42 @@ function SpotlightSettings() {
  * Where web links open, and whether the browser's new tab page (/?newtab) always uses this tab
  * and starts in Spotlight.
  */
+/** Settings → Windows: what the desktop shows when MvL OS opens again. */
+function WindowsSettings() {
+  const { windows } = useStartupPrefs()
+  const wm = useWM()
+  return (
+    <>
+      <SetGroup title="When MvL OS opens">
+        <div className="seg set-seg" role="radiogroup" aria-label="When MvL OS opens">
+          {START_WINDOWS.map(([id, label]) => (
+            <button key={id} role="radio" aria-checked={windows === id} className={windows === id ? 'is-active' : ''} onClick={() => setStartupPrefs({ windows: id })}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="muted set-help">
+          {START_WINDOWS.find(([id]) => id === windows)?.[2]}. This counts for a new tab, a reload and the installed app starting again.
+          {windows !== 'last' && " While this is chosen, MvL OS doesn't save which windows are open."}
+        </p>
+      </SetGroup>
+      <SetGroup title="Right now">
+        <ul className="set-list">
+          <li className="set-row">
+            <span className="set-row-text">
+              <strong>Start over</strong>
+              <span className="muted">Close every window and open the welcome windows</span>
+            </span>
+            <button className="btn btn-small" onClick={() => wm.reset()}>
+              Start over
+            </button>
+          </li>
+        </ul>
+      </SetGroup>
+    </>
+  )
+}
+
 function LinkSettingsPane() {
   const { target, newTabPageSameTab, newTabPageSpotlight } = useLinkSettings()
   const account = useAccount()
@@ -1275,7 +1555,7 @@ function LinkSettingsPane() {
   )
 }
 
-type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'golinks' | 'sync' | 'about'
+type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'agents' | 'golinks' | 'sync' | 'about'
 /** `owner`: only for the signed-in owner (accounts and services); visitors don't see it at all. */
 type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; keywords: string; blurb: string; owner?: true; render: () => ReactNode }
 
@@ -1302,7 +1582,7 @@ function SyncPane() {
           )}
         </li>
       </ul>
-      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, game high scores, the go links account, Spotlight's settings, favourites and history, /etc/fstab, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. Without an account they stay in this browser.</p>
+      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, game high scores, the go links account, Spotlight's settings, favourites and history, notification settings, what opens at the start, /etc/fstab, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. Without an account they stay in this browser.</p>
     </>
   )
 }
@@ -1317,14 +1597,16 @@ const GROUPS: Pane[][] = [
   ],
   [
     { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal favourites favorites starred', blurb: 'What Spotlight shows when it opens, what it searches, and what it remembers.', render: () => <SpotlightSettings /> },
+    { id: 'windows', label: 'Windows', hue: 'var(--yellow)', icon: svg(<><rect x="3" y="5" width="12" height="10" /><rect x="9" y="9" width="12" height="10" /></>), keywords: 'windows restore reopen startup start open last session layout tabs welcome empty desktop reset start over', blurb: 'What the desktop shows when MvL OS opens again.', render: () => <WindowsSettings /> },
     { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page spotlight', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
-    { id: 'notifications', label: 'Notifications', hue: 'var(--red)', icon: svg(<><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></>), keywords: 'notifications alerts minecraft activity', blurb: 'What may pop up in the corner of the desktop.', render: () => <Notifications /> },
+    { id: 'notifications', label: 'Notifications', hue: 'var(--red)', icon: svg(<><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></>), keywords: 'notifications alerts notification center bell pop-ups do not disturb dnd keep history clear minecraft activity agents uploads unpacking updates system browser', blurb: 'Pop-ups, the notification center, and which apps may notify.', render: () => <Notifications /> },
     { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal spotlight suggestions mvl.sh token', blurb: "The golinks account that go <alias> follows, in Spotlight and the terminal.", render: () => <GoLinks /> },
   ],
   [
     { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', owner: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
     { id: 'calendar', label: 'Calendar', hue: 'var(--red)', owner: true, icon: svg(<><rect x="4" y="5" width="16" height="15" /><path d="M4 10h16M9 3v4M15 3v4" /></>), keywords: 'calendar google agenda events caldav fastmail nextcloud icloud', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock.', render: () => <CalendarSettings /> },
-    { id: 'integrations', label: 'Integrations', hue: 'var(--green)', owner: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents', blurb: 'Services the widgets and Files read from: updown.io for Status, Seafile and OnlyOffice.', render: () => <Integrations /> },
+    { id: 'integrations', label: 'Integrations', hue: 'var(--green)', owner: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models', blurb: 'Services the widgets, Files and Agents use: updown.io for Status, Ollama Cloud, Seafile and OnlyOffice.', render: () => <Integrations /> },
+    { id: 'agents', label: 'Agents', hue: 'var(--magenta)', owner: true, icon: svg(<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 16l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" />), keywords: 'agents ai assistant ollama models quick deep research title thread system prompt agents.md tools memory', blurb: 'The Agents app: its models, what a new thread starts with, and its system prompt.', render: () => <AgentsSettings /> },
   ],
   [
     { id: 'sync', label: 'Sync', hue: 'var(--green)', owner: true, icon: svg(<><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3" /><path d="M18 3v4h-4M6 21v-4h4" /></>), keywords: 'sync devices cloud', blurb: 'What follows you between devices.', render: () => <SyncPane /> },

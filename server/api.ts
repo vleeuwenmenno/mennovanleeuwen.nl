@@ -1,5 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
+import { handleWebSearchApi } from './websearch.ts'
+import { addMemory, agentsPrompt, answer, approve, automaticModels, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, deleteMemory, deleteThread, getThread, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { authEnabled, currentUser, finishLogin, logout, requireUser, startLogin } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
@@ -8,11 +11,12 @@ import { allCalendars, allEvents, createEvent, deleteEvent, updateEvent } from '
 import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, MAX_RANGE_DAYS, startGoogle } from './google.ts'
 import { inbox } from './inbox.ts'
 import { linkPreview } from './preview.ts'
-import { cleanTrash, history, quota, setHistory, shareLink, createFile, fileLink, rangeRead, restore, thumbnail, trash, trashDir, uploadedBytes, libraries, removeItems, rename, transfer, linkSeafile, listDir, lock, mkdir, unlock, unlocked, removeOffice, seafileInfo, setOffice, unlinkSeafile } from './seafile.ts'
+import { cleanTrash, history, quota, setHistory, shareLink, createFile, fileLink, rangeRead, restore, streamFile, thumbnail, trash, trashDir, uploadedBytes, libraries, removeItems, rename, transfer, linkSeafile, listDir, lock, mkdir, unlock, unlocked, removeOffice, seafileInfo, setOffice, unlinkSeafile } from './seafile.ts'
 import { officeCallback, officeCheck, officeConfig } from './office.ts'
 import { archiveFile, cancelExtract, extractStatus, listArchive, startExtract } from './unzip.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
-import { HttpError, json, readJson, redirect, sameOrigin, SECURITY } from './http.ts'
+import { HttpError, json, readJson, redirect, sameOrigin, SECURITY, UNTRUSTED } from './http.ts'
+import { pushPublicKey, pushToUser, subscribe, unsubscribe } from './webpush.ts'
 import { minecraftOverview, minecraftStatus } from './minecraft.ts'
 import { search, clearSearchCache } from './search.ts'
 import { suggest } from './suggest.ts'
@@ -66,7 +70,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         googleEnabled: googleEnabled(),
         google: user ? googleAccount(user) : null,
         caldav: user ? listCaldav(user) : [],
-        integrations: { updown: user ? updownSource(user) : null },
+        integrations: { updown: user ? updownSource(user) : null, ollama: user ? ollamaSource(user) : null },
         seafile: user ? seafileInfo(user) : null,
       })
       return true
@@ -185,7 +189,30 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/seafile/raw' && read) {
       const range = req.headers.range
       const r = await rangeRead(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), typeof range === 'string' ? range : undefined)
-      res.writeHead(206, { 'Content-Type': r.type, 'Content-Range': r.contentRange, 'Content-Length': String(r.body.length), 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY }).end(head ? undefined : r.body)
+      res.writeHead(206, { 'Content-Type': 'application/octet-stream', 'Content-Range': r.contentRange, 'Content-Length': String(r.body.length), 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : r.body)
+      return true
+    }
+    // A whole file, piped with whatever range the browser asks for (the music player).
+    if (path === '/api/seafile/stream' && read) {
+      const range = req.headers.range
+      const r = await streamFile(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), typeof range === 'string' ? range : undefined)
+      // Only media types pass: an HTML or SVG file served from this origin would run as the site.
+      const type = r.headers.get('content-type') ?? ''
+      const headers: Record<string, string> = { 'Content-Type': /^(audio|video)\//i.test(type) ? type : 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY, ...UNTRUSTED }
+      for (const h of ['content-length', 'content-range']) {
+        const v = r.headers.get(h)
+        if (v) headers[h.replace(/(^|-)\w/g, (c) => c.toUpperCase())] = v
+      }
+      res.writeHead(r.status, headers)
+      if (head || !r.body) {
+        await r.body?.cancel().catch(() => {})
+        res.end()
+        return true
+      }
+      const body = Readable.fromWeb(r.body as import('node:stream/web').ReadableStream)
+      res.on('close', () => body.destroy())
+      body.on('error', () => res.destroy())
+      body.pipe(res)
       return true
     }
     if (path === '/api/seafile/link' && read) return json(res, 200, await fileLink(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), url.searchParams.get('op'))), true
@@ -193,6 +220,51 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/seafile/unlock' && read) return json(res, 200, unlocked(requireUser(req))), true
     if (path === '/api/seafile/lock' && method === 'POST') return lock(requireUser(req), (await readJson<{ repo?: string }>(req, 1024)).repo), json(res, 200, { ok: true }), true
     if (path === '/api/updown' && read) return json(res, 200, await updownChecks(requireUser(req))), true
+
+    // The Agents app (server/agents.ts): Ollama Cloud's key, threads, a turn (streamed) and memory.
+    if (path === '/api/integrations/ollama' && method === 'PUT') return await setOllamaKey(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true
+    if (path === '/api/integrations/ollama' && method === 'DELETE') return removeOllamaKey(requireUser(req)), json(res, 200, { ok: true }), true
+    if (path === '/api/agents/defaults' && read) return requireUser(req), json(res, 200, await automaticModels()), true
+    if (path === '/api/agents/models' && read) return requireUser(req), json(res, 200, await agentModels()), true
+    if (path === '/api/agents/threads' && read) return json(res, 200, listThreads(requireUser(req), url.searchParams.get('archived') === '1')), true
+    if (path === '/api/agents/quick' && read) return json(res, 200, listQuick(requireUser(req))), true
+    if (path === '/api/agents/quick' && method === 'DELETE') return clearQuick(requireUser(req)), json(res, 200, { ok: true }), true
+    if (path === '/api/agents/threads' && method === 'POST') return json(res, 200, await createThread(requireUser(req), await readJson(req, 4096))), true
+    const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/follow|\/stop|\/approve|\/answer|\/title|\/context)?$/.exec(path)
+    if (agentThread) {
+      const [, tid, sub] = agentThread
+      if (!sub && read) return json(res, 200, getThread(requireUser(req), tid)), true
+      if (!sub && method === 'PATCH') return json(res, 200, await updateThread(requireUser(req), tid, await readJson(req, 4096))), true
+      if (!sub && method === 'DELETE') return deleteThread(requireUser(req), tid), json(res, 200, { ok: true }), true
+      if (sub === '/messages' && method === 'POST') {
+        const user = requireUser(req)
+        return await runTurn(res, user, tid, await readJson(req, 16 * 1024 * 1024)), true
+      }
+      if (sub === '/follow' && read) return followThread(res, requireUser(req), tid), true
+      if (sub === '/stop' && method === 'POST') return stopThread(requireUser(req), tid), json(res, 200, { ok: true }), true
+      if (sub === '/title' && method === 'POST') return json(res, 200, await suggestTitle(requireUser(req), tid)), true
+      if (sub === '/context' && read) return json(res, 200, await contextOf(requireUser(req), tid)), true
+      if (sub === '/answer' && method === 'POST') return answer(requireUser(req), tid, await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true
+      if (sub === '/approve' && method === 'POST') return approve(requireUser(req), tid, await readJson(req, 1024)), json(res, 200, { ok: true }), true
+    }
+    if (path === '/api/agents/prompt' && read) return json(res, 200, await agentsPrompt(requireUser(req), url.searchParams.has('fresh'))), true
+    if (path.startsWith('/api/agents/websearch') && (await handleWebSearchApi(req, res, url, method, requireUser(req)))) return true
+    if (path === '/api/agents/projects' && read) return json(res, 200, listProjects(requireUser(req))), true
+    if (path === '/api/agents/projects' && method === 'POST') return json(res, 200, createProject(requireUser(req), await readJson(req, 4096))), true
+    if (path === '/api/agents/projects/order' && method === 'PUT') return json(res, 200, orderProjects(requireUser(req), await readJson(req, 16 * 1024))), true
+    const projectId = /^\/api\/agents\/projects\/(\d+)$/.exec(path)?.[1]
+    if (projectId && method === 'PATCH') return json(res, 200, renameProject(requireUser(req), projectId, await readJson(req, 4096))), true
+    if (projectId && method === 'DELETE') return deleteProject(requireUser(req), projectId), json(res, 200, { ok: true }), true
+    if (path === '/api/agents/memories' && method === 'POST') return json(res, 200, addMemory(requireUser(req), await readJson(req, 8192))), true
+    if (path === '/api/agents/memories' && read) return json(res, 200, listMemories(requireUser(req))), true
+    const memoryId = /^\/api\/agents\/memories\/(\d+)$/.exec(path)?.[1]
+    if (memoryId && method === 'PATCH') return json(res, 200, updateMemory(requireUser(req), memoryId, await readJson(req, 8192))), true
+    if (memoryId && method === 'DELETE') return deleteMemory(requireUser(req), Number(memoryId)), json(res, 200, { ok: true }), true
+    // Web Push (server/webpush.ts): the server's public key, this browser's subscription, a test.
+    if (path === '/api/push/key' && read) return requireUser(req), json(res, 200, pushPublicKey()), true
+    if (path === '/api/push/subscription' && method === 'POST') return json(res, 200, subscribe(requireUser(req), await readJson(req, 8 * 1024))), true
+    if (path === '/api/push/subscription' && method === 'DELETE') return json(res, 200, unsubscribe(requireUser(req), await readJson(req, 8 * 1024))), true
+    if (path === '/api/push/test' && method === 'POST') return json(res, 200, await pushToUser(requireUser(req), { title: 'MvL OS', body: 'Push notifications work on this device.', tag: 'push-test', url: '/' })), true
     if (path === '/api/preview' && read) {
       requireUser(req) // fetches other sites on request: the signed-in owner only
       const res2 = await linkPreview(url.searchParams.get('url') ?? '')

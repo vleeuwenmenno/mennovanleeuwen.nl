@@ -17,10 +17,12 @@ import { Files } from '../apps/Files'
 import { Viewer } from '../apps/Viewer'
 import { Preview, previewTitle } from '../apps/Preview'
 import { Player, playerTitle } from '../apps/Player'
+import { Amp, ampTitle } from '../apps/Amp'
 import { PdfViewer, pdfTitle } from '../apps/PdfViewer'
 import { Office, officeTitle } from '../apps/Office'
 import { Archive, archiveTitle } from '../apps/Archive'
 import { Zed } from '../apps/Zed'
+import { Agents } from '../apps/Agents'
 import type { AppId, WinState } from './wm'
 
 export type AppMeta = {
@@ -40,7 +42,8 @@ export const APP_META: Record<AppId, AppMeta> = {
   files: { title: 'Files', dock: 'Files', blurb: 'Browse the filesystem', size: [940, 600], render: (w) => <Files win={w} /> },
   zed: { title: 'Zed', dock: 'Zed', blurb: 'Edit Markdown and text files', size: [960, 620], render: (w) => <Zed win={w} /> },
   preview: { title: 'Preview', dock: 'Preview', blurb: 'Pictures: zoom, rotate, slideshow', size: [900, 620], titleOf: previewTitle, render: (w) => <Preview win={w} /> },
-  player: { title: 'Player', dock: 'Player', blurb: 'Video and music', size: [800, 484], titleOf: playerTitle, render: (w) => <Player win={w} /> },
+  player: { title: 'Player', dock: 'Player', blurb: 'Video', size: [800, 484], titleOf: playerTitle, render: (w) => <Player win={w} /> },
+  amp: { title: 'Omamp', dock: 'Omamp', blurb: 'Music: MP3, FLAC and more, with an equalizer and a playlist', size: [500, 660], titleOf: ampTitle, render: (w) => <Amp win={w} /> },
   pdf: { title: 'PDF', dock: 'PDF', blurb: 'PDFs: pages, search, zoom', size: [860, 680], titleOf: pdfTitle, render: (w) => <PdfViewer win={w} /> },
   archive: { title: 'Archive', dock: 'Archive', blurb: 'What is in a ZIP, without unpacking it', size: [820, 560], titleOf: archiveTitle, render: (w) => <Archive win={w} /> },
   office: { title: 'Office', dock: 'Office', blurb: 'Word, Excel and PowerPoint files, in OnlyOffice', size: [1100, 720], titleOf: officeTitle, render: (w) => <Office win={w} /> },
@@ -56,6 +59,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   contact: { title: 'New message', dock: 'Contact', blurb: 'Get in touch', size: [560, 500], render: () => <Contact /> },
   games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, Pool, Gladiator, Empires At War, Breakout', size: [720, 640], render: (w) => <Games win={w} /> },
   calendar: { title: 'Calendar', dock: 'Calendar', blurb: 'Your Google and CalDAV calendars: plan, move and invite', size: [1000, 660], render: (w) => <CalendarApp win={w} /> },
+  agents: { title: 'Agents', dock: 'Agents', blurb: 'Research assistant: quick answers or deep research, with memory', size: [920, 640], render: (w) => <Agents win={w} /> },
   notebook: { title: 'Notebook', dock: 'Notebook', blurb: 'Your notes, in Markdown, on any device', size: [860, 560], render: (w) => <Notebook win={w} /> },
   // A desktop widget (props.kind, props.id): a sticky note, the weather... See src/widgets.
   widget: { title: 'Widget', dock: 'Widget', blurb: 'Notes, weather and more on the desktop', size: [280, 260], chrome: 'note', render: (w) => <WidgetHost win={w} /> },

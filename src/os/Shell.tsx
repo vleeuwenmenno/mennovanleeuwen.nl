@@ -18,6 +18,9 @@ import { Dialogs } from './Dialogs'
 import { FolderPicker } from './FolderPicker'
 import { initBackButton, setBackFocus } from './backButton'
 import { startActivityAlerts } from './activityAlerts'
+import { startAgentWatch } from './agentWatch'
+import { startPush } from './push'
+import { NotificationCenter } from './NotificationCenter'
 import { followLinkSettings, linkSettings } from '../data/links'
 import { newTab, usePower } from './powerState'
 import { notify } from './notify'
@@ -107,9 +110,6 @@ function TopBar() {
     { label: 'All apps', onSelect: () => toggleOverlay('launchpad') },
     { label: 'Show desktop', disabled: !wm.windows.some((w) => !w.minimized), onSelect: () => wm.windows.forEach((w) => wm.minimize(w.pid)) },
     { separator: true },
-    { label: 'Appearance', submenu: appearanceMenu() },
-    { label: 'Dock', submenu: DOCK_MODES.map(([m, label]) => ({ label, checked: getDockMode() === m, onSelect: () => setDockMode(m) })) },
-    { separator: true },
     { label: 'Settings', onSelect: () => wm.open('settings', { t: String(Date.now()) }) },
     { label: 'About this system', onSelect: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) },
   ]
@@ -176,6 +176,7 @@ function TopBar() {
             </svg>
           )}
         </button>
+        <NotificationCenter />
       </div>
     </header>
   )
@@ -655,6 +656,16 @@ export function Shell() {
   const power = usePower()
   const overlay = useOverlay()
 
+  // Phones: app windows are full-screen sheets, and the notes (sticky widgets too) go one under
+  // the other down a desktop that scrolls when they don't fit (styles.css). A note brought to
+  // the front, or just added, scrolls into view.
+  const mobile = useIsMobile()
+  useEffect(() => {
+    if (!mobile || wm.focusedPid === null) return
+    const el = document.querySelector(`.window.chrome-note[data-pid="${wm.focusedPid}"]`)
+    el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [mobile, wm.focusedPid])
+
   // The mouse's Back and Forward buttons (and the browser's Back) work in the focused window.
   useEffect(initBackButton, [])
   useEffect(() => setBackFocus(wm.focusedPid), [wm.focusedPid])
@@ -663,7 +674,10 @@ export function Shell() {
   useEffect(() => {
     const params = new URLSearchParams(location.search)
     const app = params.get('open') as AppId | null
-    if (app && app in APP_META && app !== 'trash') wm.open(app)
+    // A system notification about an Agents answer opens its thread: /?open=agents&thread=<id>.
+    const thread = params.get('thread')
+    if (app === 'agents' && thread && /^[0-9a-f-]{36}$/.test(thread)) wm.open('agents', { thread, t: String(Date.now()) })
+    else if (app && app in APP_META && app !== 'trash') wm.open(app)
     // As the browser's new tab page, start in Spotlight, ready to type where to go.
     else if (newTab && linkSettings().newTabPageSpotlight) setOverlay('spotlight')
     // Back from GitHub's sign-in page: /?auth=ok|denied|error|off.
@@ -675,15 +689,20 @@ export function Shell() {
 
   // Fresh activity notifications start counting once the desktop is up.
   useEffect(() => {
-    if (power.phase === 'up') startActivityAlerts()
+    if (power.phase === 'up') startActivityAlerts(), startAgentWatch(), startPush()
   }, [power.phase])
 
   // Links in apps open where Settings > Links says.
   useEffect(followLinkSettings, [])
 
-  // Notifications (and anything else outside React's tree) can ask for an app to open.
+  // Notifications (and anything else outside React's tree) can ask for an app to open, by its id
+  // or as { app, props }.
   useEffect(() => {
-    const onOpen = (e: Event) => wm.open((e as CustomEvent<AppId>).detail)
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent<AppId | { app: AppId; props?: WinState['props'] }>).detail
+      if (typeof d === 'string') wm.open(d)
+      else wm.open(d.app, d.props)
+    }
     window.addEventListener('mvlos:open', onOpen)
     return () => window.removeEventListener('mvlos:open', onOpen)
   }, [wm.open])
@@ -718,12 +737,16 @@ export function Shell() {
         </div>
       </div>
       <TopBar />
-      <Desktop />
-      <main className="windows">
-        {wm.windows.map((w) => (
-          <AppWindow key={w.pid} w={w} />
-        ))}
-      </main>
+      {/* Icons and windows. On phones this layer scrolls down when windows reach below the
+          screen; the top bar, the dock and the wallpaper stay where they are. */}
+      <div className="desk-scroll">
+        <Desktop />
+        <main className="windows">
+          {wm.windows.map((w) => (
+            <AppWindow key={w.pid} w={w} />
+          ))}
+        </main>
+      </div>
       <SnapPreview />
       <Dock />
       {overlay === 'launchpad' && <Launchpad />}

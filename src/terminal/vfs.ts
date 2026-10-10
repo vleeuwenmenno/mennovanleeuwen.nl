@@ -1,3 +1,4 @@
+import { AGENTS_MD } from '../data/agentsPrompt'
 import { GAME_CATALOG } from '../apps/games/catalog'
 import { contributions, education, experience, headlines, hobbies, profile, projects, skills } from '../data/profile'
 import { PICTURES } from './pictures'
@@ -195,6 +196,8 @@ const homeFolders: Node[] = [
 const homeNode = dir(profile.handle, [
   readmeNode,
   cvNode,
+  // The Agents app's system prompt as it comes (read-only here; with Seafile as home, your own).
+  file('AGENTS.md', AGENTS_MD, { app: 'zed', props: { path: `${HOME}/AGENTS.md` } }),
   projectsNode,
   gamesNode,
   contributionsNode,

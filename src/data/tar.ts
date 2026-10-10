@@ -41,6 +41,14 @@ function num(b: Uint8Array, from: number, len: number): number {
 
 const pad = (n: number) => Math.ceil(n / BLOCK) * BLOCK
 
+/** The size field, which steps to the next header: a negative one ("-1000" is octal to parseInt)
+ * would never move past its own header, and loop on it for good. */
+function sizeOf(b: Uint8Array): number {
+  const n = num(b, 124, 12)
+  if (!Number.isSafeInteger(n) || n < 0) throw new TarError('This is not a tar archive (a header has a broken size)')
+  return n
+}
+
 /** A header block; null for an all-zero one (the end of the archive). */
 function parseHeader(b: Uint8Array): Header | null {
   if (b.every((x) => x === 0)) return null
@@ -61,7 +69,7 @@ function parseHeader(b: Uint8Array): Header | null {
   const group = ustar ? str(b, 297, 32) : ''
   return {
     name: prefix ? `${prefix}/${name}` : name,
-    size: num(b, 124, 12),
+    size: sizeOf(b),
     mtime: num(b, 136, 12),
     type: String.fromCharCode(b[156] || 48),
     link: str(b, 157, 100),

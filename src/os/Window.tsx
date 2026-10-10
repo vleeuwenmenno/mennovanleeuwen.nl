@@ -1,4 +1,4 @@
-import { useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useEffect, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { addWidgetItems } from '../widgets/registry'
 import { APP_META } from './apps'
 import { linkAt, linkMenu, openContextMenu, wantsNativeMenu, type MenuItem } from './ContextMenu'
@@ -6,7 +6,7 @@ import { getDockMode, snapReserve } from './dockPrefs'
 import { setSnapPreview } from './snapPreview'
 import { useSwing } from './swing'
 import { WindowMenuContext } from './windowMenu'
-import { SINGLE_INSTANCE, snapRect, useWM, type Geometry, type SnapZone, type WinState } from './wm'
+import { drawnHeight, fitNote, setDrawnHeight, SINGLE_INSTANCE, snapRect, useWM, type Geometry, type SnapZone, type WinState } from './wm'
 
 const TOP_BAR = 28
 const MIN_W = 280
@@ -72,6 +72,29 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
   const sectionRef = useRef<HTMLElement>(null)
   const swing = useSwing(sectionRef, 'notes')
 
+  // A note's text can run on below its box: how tall it really shows, so it is never fitted
+  // half off the bottom of the screen (fitNote in wm.tsx).
+  useEffect(() => {
+    const el = sectionRef.current
+    if (chrome !== 'note' || !el) return
+    let last = 0
+    const measure = () => {
+      const h = Math.max(el.offsetHeight, ...[...el.children].map((c) => (c as HTMLElement).offsetTop + (c as HTMLElement).offsetHeight))
+      if (Math.abs(h - last) < 2) return
+      last = h
+      setDrawnHeight(win.pid, h)
+      wm.refit()
+    }
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    for (const c of el.children) ro.observe(c)
+    return () => {
+      ro.disconnect()
+      setDrawnHeight(win.pid, null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chrome, win.pid])
+
   const begin = (mode: Drag['mode'], edge = '') => (e: ReactPointerEvent) => {
     if (e.button !== 0) return
     if ((e.target as HTMLElement).closest('button, a, input, textarea')) return
@@ -109,8 +132,11 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
           wm.setGeometry(win.pid, { x: d.x, y: d.y, w: d.w, h: d.h, snap: undefined, restore: undefined, maximized: false })
         }
       }
-      const x = Math.min(Math.max(d.x + dx, -d.w + 120), window.innerWidth - 120)
-      const y = Math.min(Math.max(d.y + dy, TOP_BAR), window.innerHeight - 60)
+      // A note stays whole on the screen (fitNote); other windows may hang off it a little.
+      const { x, y } =
+        chrome === 'note'
+          ? fitNote({ x: d.x + dx, y: d.y + dy, w: d.w, h: d.h }, window.innerWidth, window.innerHeight, sectionRef.current?.offsetHeight ?? drawnHeight(win.pid))
+          : { x: Math.min(Math.max(d.x + dx, -d.w + 120), window.innerWidth - 120), y: Math.min(Math.max(d.y + dy, TOP_BAR), window.innerHeight - 60) }
       wm.setGeometry(win.pid, { x, y })
       if (canSnap) {
         target.current = zoneAt(e.clientX, e.clientY)

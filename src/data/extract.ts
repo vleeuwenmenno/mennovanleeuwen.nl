@@ -102,6 +102,7 @@ export async function extract(zip: string, into: string, opts: ExtractOptions, o
       notify({
         title: s.state === 'done' ? `Unpacked ${archive}` : s.state === 'cancelled' ? `Stopped unpacking ${archive}` : `Could not unpack ${archive}`,
         body: s.error ?? `${s.total - s.errors.length} file${s.total - s.errors.length === 1 ? '' : 's'}${s.errors.length ? `, ${s.errors.length} left out (${s.errors[0].error})` : ''}`,
+        source: 'files.unpacking',
       })
     }
     return s

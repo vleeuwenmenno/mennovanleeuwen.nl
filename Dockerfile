@@ -23,7 +23,7 @@ WORKDIR /app
 ENV NODE_ENV=production PORT=8080 APP_VERSION=$APP_VERSION APP_COMMIT=$APP_COMMIT
 COPY --from=build /app/dist ./dist
 COPY server ./server
-COPY src/data/normalize.ts src/data/code.ts src/data/zip.ts src/data/tar.ts src/data/archive.ts ./src/data/
+COPY src/data/normalize.ts src/data/code.ts src/data/zip.ts src/data/tar.ts src/data/archive.ts src/data/agentsPrompt.ts ./src/data/
 # Sign-in sessions, linked instances and synced notes live here (a volume in compose.yml).
 RUN mkdir -p /app/data && chown node:node /app/data
 ENV DATA_DIR=/app/data
