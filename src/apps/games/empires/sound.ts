@@ -521,9 +521,23 @@ const denied: Recipe = (sr) => {
 }
 
 /** Something clunks into the build queue: a relay, a latch, a confirm beep. */
+/** A build order on a starship console: a soft key "thock", then two warm notes stepping up (or
+ * down, to cancel). Short and dry, with nothing ringing on after it. */
 const queue = (cancel: boolean): Recipe => (sr, r) => {
-  const beep = melody(sr, 660, cancel ? [[0, 0.04], [-5, 0.06]] : [[0, 0.04], [5, 0.06]], 'sin')
-  return layers(sr, [{ data: metal(true)(sr, r), gain: 0.35 }, { data: click(sr, r), gain: 0.5, at: 0.02 }, { data: beep, gain: 0.5, at: cancel ? 0 : 0.06 }])
+  const o = new Osc()
+  const lp = new Svf()
+  const thock = render(sr, 0.05, (t) => lp.run(o.sin(glide(320, 180, t, 0.03), sr) + noise() * 0.4, 1400, 0.7, sr).low * ad(t, 0.0008, 0.012))
+  const n1 = new Osc(r())
+  const n2 = new Osc(r())
+  const notes = cancel ? [7, 0] : [0, 7]
+  const chirp = render(sr, 0.13, (t) => {
+    const k = t < 0.055 ? 0 : 1
+    const lt = k ? t - 0.055 : t
+    const f = 523 * semi(notes[k])
+    // A sine with a soft triangle an octave up: warm, not a piercing beep.
+    return (n1.sin(f, sr) * 0.8 + n2.tri(f * 2, sr) * 0.12) * ad(lt, 0.004, k ? 0.035 : 0.02)
+  })
+  return layers(sr, [{ data: thock, gain: 0.7 }, { data: chirp, gain: 0.55, at: 0.012 }])
 }
 
 /** Data streaming into the research lab: a quick climbing arpeggio. */
