@@ -210,7 +210,8 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
       {(
         [
           ['sfx', 'Battle'],
-          ['ui', 'Crew and interface'],
+          ['voice', 'Unit responses'],
+          ['ui', 'Interface and alerts'],
           ['amb', 'Ambience'],
         ] as [Bus, string][]
       ).map(([bus, label]) => (

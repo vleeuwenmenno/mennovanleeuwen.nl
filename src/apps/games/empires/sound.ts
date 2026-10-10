@@ -14,7 +14,8 @@ const MUTE_KEY = 'mvlos.empires.muted'
 const MIX_KEY = 'mvlos.empires.mix'
 
 export type Where = { pan: number; gain: number }
-export type Bus = 'sfx' | 'ui' | 'amb'
+/** Battle sounds, crews answering (and abilities), interface and alerts, ambience: each has its own volume. */
+export type Bus = 'sfx' | 'voice' | 'ui' | 'amb'
 export type OrderKind = 'move' | 'attack' | 'attackMove' | 'patrol' | 'hold' | 'stop' | 'rally' | 'target'
 
 // --- DSP ------------------------------------------------------------------------------------------------
@@ -569,7 +570,7 @@ export class EmpiresSound {
   constructor() {
     let m = false
     let v = 0.7
-    let mix: Mix = { sfx: 1, ui: 0.9, amb: 0.7 }
+    let mix: Mix = { sfx: 1, voice: 0.9, ui: 0.9, amb: 0.7 }
     try {
       m = localStorage.getItem(MUTE_KEY) === '1'
       const raw = localStorage.getItem(VOLUME_KEY)
@@ -613,7 +614,7 @@ export class EmpiresSound {
       shelf.frequency.value = 5000
       shelf.gain.value = -6
       shelf.connect(this.master)
-      for (const b of ['sfx', 'ui', 'amb'] as Bus[]) {
+      for (const b of ['sfx', 'voice', 'ui', 'amb'] as Bus[]) {
         const g = ctx.createGain()
         g.connect(shelf)
         this.buses[b] = g
@@ -625,7 +626,7 @@ export class EmpiresSound {
 
   private applyVolume() {
     if (this.master) this.master.gain.value = this.muted ? 0 : this.volume * 0.8
-    for (const b of ['sfx', 'ui', 'amb'] as Bus[]) if (this.buses[b]) this.buses[b]!.gain.value = this.mix[b]
+    for (const b of ['sfx', 'voice', 'ui', 'amb'] as Bus[]) if (this.buses[b]) this.buses[b]!.gain.value = this.mix[b]
   }
 
   setMuted(m: boolean) {
@@ -780,7 +781,7 @@ export class EmpiresSound {
   }
 
   ability(id: AbilityId, where?: Where) {
-    if (this.ready()) this.play(`ab-${id}`, abilitySound(id), { where, gain: 0.8 * UI_LEVEL, takes: 2 })
+    if (this.ready()) this.play(`ab-${id}`, abilitySound(id), { bus: 'voice', where, gain: 0.8 * UI_LEVEL, takes: 2 })
   }
 
   // --- Crew and interface ---------------------------------------------------------------------------------
@@ -793,7 +794,7 @@ export class EmpiresSound {
     } catch {
       // Already over.
     }
-    this.ackSrc = this.play(name, recipe, { bus: 'ui', gain: 0.6 * UI_LEVEL, verb: 0.15, takes: 4 })
+    this.ackSrc = this.play(name, recipe, { bus: 'voice', gain: 0.6 * UI_LEVEL, verb: 0.15, takes: 4 })
   }
 
   select(faction: FactionId, tier: Tier) {
