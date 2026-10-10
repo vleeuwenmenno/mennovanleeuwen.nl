@@ -78,5 +78,7 @@ createServer(async (req, res) => {
   else createReadStream(found.full).pipe(res)
 }).listen(PORT, () => {
   console.log(`MvL OS on :${PORT}`)
+  if (process.env.NODE_ENV === 'production' && !process.env.PUBLIC_URL)
+    console.warn('PUBLIC_URL is not set: OAuth redirects and cookie flags follow the Host and X-Forwarded-* headers of each request. Set it to the site\'s address (https://example.com).')
   startMinecraftWatch()
 })
