@@ -1112,7 +1112,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           if (e.owner === myTeam && e.prev !== myTeam) {
             sound.surveyed()
             toast('Ore surveyed: click it to build a mining or defense platform', 'good')
-          } else if (e.prev === myTeam) toast(e.owner === -1 ? 'An unused ore claim has lapsed' : 'We lost the claim on an ore asteroid', 'bad')
+          } else if (e.prev === myTeam) toast(e.razed ? 'Platform destroyed: the ore has to be surveyed again' : e.owner === -1 ? 'An unused ore claim has lapsed' : 'We lost the claim on an ore asteroid', 'bad')
         } else if (e.k === 'salvaged' && e.owner === me) {
           sound.salvaged()
           toast(`Wreck salvaged: +${Math.round(e.value)} credits in all`, 'good')
