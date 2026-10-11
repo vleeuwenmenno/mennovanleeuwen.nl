@@ -5,7 +5,7 @@ import type { User } from './auth.ts'
 import { database, decrypt, encrypt } from './db.ts'
 import { HttpError } from './http.ts'
 
-// Web Push, so an Agents answer reaches the owner's phone or computer when MvL OS is not open:
+// Web Push, so an Agents answer reaches the user's phone or computer when MvL OS is not open:
 // the browser (or the installed app, also on iOS from 16.4 once added to the Home Screen) gives
 // the page a subscription with an endpoint at its push service, and this server sends messages
 // there. No dependencies, just Node's crypto:
@@ -116,7 +116,7 @@ function checkSubscription(body: PushSubscriptionJson) {
   return { endpoint, p256dh: b64u(p256dh), auth: b64u(auth) }
 }
 
-/** Saves this browser's subscription for the owner (again, when it is already known). */
+/** Saves this browser's subscription for the user (again, when it is already known). */
 export function subscribe(user: User, body: { subscription?: PushSubscriptionJson; device?: unknown }) {
   const sub = checkSubscription(body.subscription ?? {})
   const device = typeof body.device === 'string' ? body.device.slice(0, 120) : null
@@ -134,7 +134,7 @@ export function unsubscribe(user: User, body: { endpoint?: unknown }) {
   return { ok: true, devices: devices(user) }
 }
 
-/** How many devices get the owner's push messages. */
+/** How many devices get the user's push messages. */
 export const devices = (user: User) => (database().prepare('SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id = ?').get(user.id) as { n: number }).n
 
 // --- sending -----------------------------------------------------------------------------------
@@ -167,7 +167,7 @@ async function sendOne(row: Row, message: PushMessage): Promise<'sent' | 'gone' 
   return res.ok ? 'sent' : 'failed'
 }
 
-/** Sends a message to every device the owner turned push on for; forgets the ones that are gone. */
+/** Sends a message to every device the user turned push on for; forgets the ones that are gone. */
 export async function pushToUser(user: User, message: PushMessage): Promise<{ sent: number; failed: number }> {
   const rows = database().prepare('SELECT id, endpoint, keys FROM push_subscriptions WHERE user_id = ?').all(user.id) as Row[]
   const results = await Promise.all(rows.map((r) => sendOne(r, message).catch(() => 'failed' as const)))

@@ -2,7 +2,7 @@ import { serverKey, type User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { HttpError } from './http.ts'
 
-// updown.io, for the Status widget: the owner's uptime checks with their state, uptime, response
+// updown.io, for the Status widget: the user's uptime checks with their state, uptime, response
 // time and certificate expiry. Uses updown's read-only API key (it can't change anything):
 // UPDOWN_API_KEY from the server's environment, or one saved in Settings (stored encrypted like the
 // other tokens, and used first). Answers are cached for a minute.

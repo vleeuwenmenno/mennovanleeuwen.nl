@@ -3,7 +3,7 @@ import { getLibraries, getUnlocks, loadLibraries, lock, parseSf, SF, unlock } fr
 import { getAccount } from '../os/account'
 import { lookup } from './fs'
 import { CmdError, type Ctx } from './types'
-import { resolvePath } from './vfs'
+import { HOME, resolvePath } from './vfs'
 
 // util-linux's view of the mount table: mount, umount, findmnt and lsblk, and fscrypt for the
 // encrypted libraries. Mounting and unmounting need root (sudo) unless the fstab line says `user`,
@@ -379,7 +379,7 @@ ${c('bold', 'DESCRIPTION')}
        mount. Each filesystem is described on a separate line; fields on each line are separated
        by tabs or spaces. Lines starting with '#' are comments. Blank lines are ignored.
 
-       In MvL OS it also decides what Files shows: Home is whatever is mounted on /home/menno, the
+       In MvL OS it also decides what Files shows: Home is whatever is mounted on ${HOME}, the
        places in its sidebar are the folders under it, and the Seafile section lists what is
        mounted at /mnt/seafile. Edit it with ${c('green', 'sudo nano /etc/fstab')}; Settings →
        Integrations → Seafile edits the same lines.
@@ -389,7 +389,7 @@ ${c('bold', 'THE FIELDS')}
                         /dev/seafile/<name> (lsblk -f lists them), "seafile" for every library at
                         once (each in a folder named after it), or a folder for a bind mount.
                         Spaces are written \\040.
-       2. fs_file       where: an existing folder. On /home/menno it becomes home.
+       2. fs_file       where: an existing folder. On ${HOME} it becomes home.
        3. fs_vfstype    seafile for libraries, none for bind mounts.
        4. fs_mntops     defaults, or a comma-separated list: ro (read-only), noauto (not mounted at
                         boot; mount it with mount), user (any user may mount it), bind.
@@ -398,9 +398,9 @@ ${c('bold', 'THE FIELDS')}
 
 ${c('bold', 'EXAMPLES')}
        seafile                    /mnt/seafile          seafile  defaults  0 0
-       UUID=1f2e…                 /home/menno           seafile  defaults  0 0
+       UUID=1f2e…                 ${HOME.padEnd(21)} seafile  defaults  0 0
        LABEL=Photos               /mnt/photos           seafile  ro,noauto 0 0
-       /mnt/seafile/Photos/2024   /home/menno/Pictures  none     bind      0 0
+       /mnt/seafile/Photos/2024   ${`${HOME}/Pictures`.padEnd(21)} none     bind      0 0
 
 ${c('bold', 'SEE ALSO')}
        mount(8), umount(8), findmnt(8), lsblk(8), fscrypt(1)`

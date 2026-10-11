@@ -14,7 +14,7 @@ import {
 } from './google.ts'
 import { HttpError } from './http.ts'
 
-// Every calendar the owner connected, Google and CalDAV together, for the Agenda widget, the
+// Every calendar the user connected, Google and CalDAV together, for the Agenda widget, the
 // clock and the Calendar app: one list of calendars (CalDAV ids start with "caldav:") and one list
 // of events. One source failing (an expired Google link, a refused app password) doesn't hide the
 // others: its problem comes back in `errors`, named after the account.

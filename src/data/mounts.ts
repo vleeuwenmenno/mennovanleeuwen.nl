@@ -6,7 +6,7 @@ import { getLibraries, getSeafilePrefsStored, loadLibraries, PLACES, primaryOf, 
 
 // /etc/fstab, and what is mounted: the one place that says where Seafile shows up. Files and the
 // terminal both read it. The line `seafile /mnt/seafile seafile` puts every library in a folder
-// of its own (like SeaDrive), `UUID=<library id> /home/menno seafile` makes a library home, and a
+// of its own (like SeaDrive), `UUID=<library id> /home/<user> seafile` makes a library home, and a
 // bind line maps one folder onto another (Pictures onto a shared library, say). Settings edits
 // these lines; so can `sudo nano /etc/fstab`.
 //
@@ -83,8 +83,18 @@ function generated(): string {
 
 const store = synced<string | null>('fstab', null, { normalize: (v) => (typeof v === 'string' ? v : null) })
 
+/**
+ * Home used to be /home/menno for everyone; now it is /home/<your login> (src/os/identity.ts).
+ * A saved fstab from then still means home, so its /home/menno is read as today's HOME.
+ */
+const LEGACY_HOME = /(^|\s)\/home\/menno(?=[\s/]|$)/gm
+const currentHome = (text: string) => (HOME === '/home/menno' ? text : text.replace(LEGACY_HOME, `$1${HOME}`))
+
 /** /etc/fstab as it is now. */
-export const getFstab = () => store.get() ?? generated()
+export const getFstab = () => {
+  const saved = store.get()
+  return saved === null ? generated() : currentHome(saved)
+}
 // The site's filesystem shows the same /etc/fstab and /dev/seafile/* (for Files and Zed too).
 dynamic.fstab = () => getFstab()
 dynamic.devices = () => [...deviceNames().values()]

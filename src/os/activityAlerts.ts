@@ -1,4 +1,5 @@
 import { subscribeRecents, type Activity } from '../data/recents'
+import { cvMode } from './cvMode'
 import { notify } from './notify'
 import { ACTIVITY_KIND, activityWindowMs, notifyPrefs, sourceOn, type SourceId } from './notifyPrefs'
 
@@ -14,7 +15,8 @@ let started = false
 
 /** Starts watching; call when the desktop is up. */
 export function startActivityAlerts() {
-  if (started) return
+  // Menno's GitHub and git.mvl.sh activity: news on his CV page only (src/os/cvMode.ts).
+  if (started || !cvMode()) return
   started = true
   const seen = new Set<string>()
   // A beat after the desktop appears, so the notification slides in rather than being there already.

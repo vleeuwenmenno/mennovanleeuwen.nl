@@ -9,7 +9,7 @@ import { createWithTilt, tiltMenu, useWidgetConfig } from './config'
 import type { WidgetDef } from './types'
 
 // The Status widget: your updown.io checks (server/updown.ts), up or down, with uptime, response
-// time and certificates that expire soon. Owner only: it needs updown.io's read-only API key in
+// time and certificates that expire soon. Signed-in users only: it needs updown.io's read-only API key in
 // Settings → Integrations.
 
 type Check = {

@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { useGoSuggestionState, useGolinksTemplate } from '../data/golinks'
-import { profile } from '../data/profile'
+import { cvMode } from '../os/cvMode'
+import { HANDLE } from '../os/identity'
 import { linkAt, linkMenu, openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { notify } from '../os/notify'
 import { setAccent } from '../os/theme'
@@ -75,7 +76,7 @@ function Markup({ text, onAnimationEnd }: { text: string; onAnimationEnd?: () =>
 function Prompt({ cwd }: { cwd: string }) {
   return (
     <span className="prompt">
-      <span className="t-green">{profile.handle}</span>
+      <span className="t-green">{HANDLE}</span>
       <span className="t-muted">@</span>
       <span className="t-accent">mvlos</span> <span className="t-blue">{prettyPath(cwd)}</span>
       <span className="t-muted"> ❯ </span>
@@ -147,7 +148,9 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
           {
             id: nextId++,
             kind: 'out',
-            text: `\nWelcome to {c:accent}MvL OS{/}. Type {c:green}help{/} to see what works, or try {c:green}projects{/}, {c:green}recent{/}, {c:green}cat cv.md{/}.\n`,
+            text: cvMode()
+              ? `\nWelcome to {c:accent}MvL OS{/}. Type {c:green}help{/} to see what works, or try {c:green}projects{/}, {c:green}recent{/}, {c:green}cat cv.md{/}.\n`
+              : `\nWelcome to {c:accent}MvL OS{/}. Type {c:green}help{/} to see what works, or try {c:green}games{/}, {c:green}ls ~/Pictures{/}, {c:green}cat README.md{/}.\n`,
           },
         ]
       : [],
@@ -189,7 +192,7 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
   }, [pick])
   const history = useRef<string[]>(loadHistory())
   const histIdx = useRef<number | null>(null)
-  const env = useRef<Record<string, string>>({ USER: profile.handle, HOME, SHELL: '/bin/msh', TERM: 'xterm-mvlos', EDITOR: 'nvim', LANG: 'en_US.UTF-8' })
+  const env = useRef<Record<string, string>>({ USER: HANDLE, HOME, SHELL: '/bin/msh', TERM: 'xterm-mvlos', EDITOR: 'nvim', LANG: 'en_US.UTF-8' })
   const inputRef = useRef<HTMLInputElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const keyHandler = useRef<((key: string, text?: string) => boolean) | null>(null)

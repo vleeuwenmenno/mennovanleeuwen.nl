@@ -265,7 +265,7 @@ export function buildRequest(s: Settings, ollamaKey: string, query: string, max:
       const headers: Record<string, string> = { Accept: 'application/json' }
       const post = c.method === 'POST'
       if (post && c.body) headers['Content-Type'] = 'application/json'
-      // The owner's headers come last, so they can replace Accept or Content-Type.
+      // The user's headers come last, so they can replace Accept or Content-Type.
       for (const h of c.headers) headers[h.name] = h.value
       return { url: fill(c.url, query, max, encodeURIComponent), init: { method: c.method, headers, ...(post && c.body ? { body: fill(c.body, query, max, jsonEscape) } : {}) } }
     }

@@ -23,6 +23,7 @@ import { Office, officeTitle } from '../apps/Office'
 import { Archive, archiveTitle } from '../apps/Archive'
 import { Zed } from '../apps/Zed'
 import { Agents } from '../apps/Agents'
+import { HANDLE } from './identity'
 import type { AppId, WinState } from './wm'
 
 export type AppMeta = {
@@ -38,7 +39,7 @@ export type AppMeta = {
 }
 
 export const APP_META: Record<AppId, AppMeta> = {
-  terminal: { title: 'menno@mvlos: ~', dock: 'Terminal', blurb: 'A shell that actually works', size: [760, 500], render: (w) => <Terminal win={w} /> },
+  terminal: { title: `${HANDLE}@mvlos: ~`, dock: 'Terminal', blurb: 'A shell that actually works', size: [760, 500], render: (w) => <Terminal win={w} /> },
   files: { title: 'Files', dock: 'Files', blurb: 'Browse the filesystem', size: [940, 600], render: (w) => <Files win={w} /> },
   zed: { title: 'Zed', dock: 'Zed', blurb: 'Edit Markdown and text files', size: [960, 620], render: (w) => <Zed win={w} /> },
   preview: { title: 'Preview', dock: 'Preview', blurb: 'Pictures: zoom, rotate, slideshow', size: [900, 620], titleOf: previewTitle, render: (w) => <Preview win={w} /> },

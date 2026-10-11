@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { api, getAccount, subscribeAccount } from './account'
 
-// State that follows the owner between devices: notes, window layouts, desktop icons, launchers,
+// State that follows the user between devices: notes, window layouts, desktop icons, launchers,
 // dock order. Every store keeps its value in localStorage, so visitors get it per browser.
 // Signed in, it is also saved to the server (/api/state/<key>, server/state.ts) and loaded from
 // there on sign-in and whenever the tab comes back into view.

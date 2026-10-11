@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { HANDLE } from '../os/identity'
 import { restoreIcons, useDesktop } from '../os/desktopStore'
 import { DESKTOP_ICONS } from '../os/Desktop'
 import { openContextMenu, type MenuItem } from '../os/ContextMenu'
@@ -27,7 +28,7 @@ const shq = (s: string) => (/^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replace(/'/g
 
 // A file manager in the style of Omafile (the Omarchy file manager Menno contributes to), browsing
 // the same in-memory filesystem the terminal uses (only /tmp is writable there) and, for the
-// signed-in owner, Seafile: every library under Libraries, and the primary one as home when that
+// signed-in user, Seafile: every library under Libraries, and the primary one as home when that
 // is switched on in Settings (seafile://<library>/<path>, see src/data/seafile.ts).
 
 type View = 'list' | 'grid' | 'compact' | 'gallery'
@@ -1477,7 +1478,7 @@ function Properties({ item, close, pretty }: { item: Item; close: () => void; pr
     ['Type', KIND_LABEL[item.kind]],
     ['Size', item.kind === 'folder' ? `${item.size} items` : `${formatSize(item.size)} (${item.size.toLocaleString('en-GB')} bytes)`],
     ['Modified', new Date(item.mtime).toLocaleString('en-GB')],
-    ['Owner', 'menno (1000)'],
+    ['Owner', `${HANDLE} (1000)`],
     ['Permissions', item.kind === 'folder' ? (isTmp ? 'drwxrwxrwt' : 'dr-xr-xr-x') : isTmp ? '-rw-rw-rw-' : '-r--r--r--'],
       ]
   return (

@@ -6,10 +6,10 @@ import type { AppId } from './wm'
 // whole apps or single kinds off. Kept in this browser; synced when signed in, like notes.
 
 export type NotifyKind = { id: string; label: string; hint: string }
-export type NotifySource = { app: string; label: string; /** The app whose icon stands for it */ icon: AppId | null; /** Only the signed-in owner gets these */ owner?: boolean; kinds: NotifyKind[] }
+export type NotifySource = { app: string; label: string; /** The app whose icon stands for it */ icon: AppId | null; /** Only signed-in users get these */ account?: boolean; kinds: NotifyKind[] }
 
 export const NOTIFY_SOURCES: NotifySource[] = [
-  { app: 'agents', label: 'Agents', icon: 'agents', owner: true, kinds: [{ id: 'answer', label: 'Answers', hint: 'An answer comes in while its thread is not on screen' }] },
+  { app: 'agents', label: 'Agents', icon: 'agents', account: true, kinds: [{ id: 'answer', label: 'Answers', hint: 'An answer comes in while its thread is not on screen' }] },
   {
     app: 'minecraft',
     label: 'Minecraft server',
@@ -38,7 +38,7 @@ export const NOTIFY_SOURCES: NotifySource[] = [
     app: 'files',
     label: 'Files',
     icon: 'files',
-    owner: true,
+    account: true,
     kinds: [
       { id: 'uploads', label: 'Uploads', hint: 'Uploads to Seafile finish or fail' },
       { id: 'unpacking', label: 'Unpacking', hint: 'An archive is unpacked, stopped or fails' },
@@ -128,5 +128,5 @@ export const isOff = (prefs: NotifyPrefs, id: string) => prefs.off.includes(id)
 export const keepMs = (k: Keep) => KEEP.find(([id]) => id === k)?.[2] ?? 864e5 * 7
 export const sourceOf = (source: string | undefined) => (source ? NOTIFY_SOURCES.find((s) => s.app === source.split('.')[0]) : undefined)
 
-/** For Settings: every source, the owner-only ones only when signed in. */
-export const visibleSources = (owner: boolean) => NOTIFY_SOURCES.filter((s) => owner || !s.owner)
+/** For Settings: every source, the account-only ones only when signed in. */
+export const visibleSources = (signedIn: boolean) => NOTIFY_SOURCES.filter((s) => signedIn || !s.account)

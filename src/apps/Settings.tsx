@@ -17,7 +17,7 @@ import { libraryName, loadLibraries, primaryOf, setSeafilePrefs, useLibraries, u
 import { fstabEntries, isSeafileType, useMounts } from '../data/mounts'
 
 const libraryNameOf = (prefix: string) => libraryName(prefix.slice('seafile://'.length))
-import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, deleteAccount, hasRepoScope, signIn, signInWithRepos, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelyOwner } from '../os/account'
+import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, deleteAccount, hasRepoScope, signIn, signInWithRepos, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelySignedIn } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
@@ -41,7 +41,7 @@ import { SyncLine } from './Notebook'
 // Opened from the system menu, the desktop's right-click menu, Spotlight and the terminal;
 // props.section picks the pane (account, appearance, dock, launchers, search (Spotlight), notifications,
 // instances, calendar, integrations, golinks, sync, about). The account and service panes only show
-// for the signed-in owner.
+// for the signed-in user.
 
 const SignInFirst = ({ what }: { what: string }) => {
   const account = useAccount()
@@ -284,7 +284,7 @@ function Notifications() {
   const prefs = useNotifyPrefs()
   const account = useAccount()
   const entries = useEntries()
-  const owner = account.status === 'user'
+  const signedIn = account.status === 'user'
   return (
     <>
       <SetGroup title="Pop-ups">
@@ -296,7 +296,7 @@ function Notifications() {
             </span>
             <Toggle on={prefs.popups} onChange={(on) => setNotifyPrefs({ popups: on })} label="Show pop-ups" />
           </li>
-          {owner && <PushRow />}
+          {signedIn && <PushRow />}
         </ul>
       </SetGroup>
 
@@ -331,7 +331,7 @@ function Notifications() {
 
       <SetGroup title="Apps">
         <ul className="set-list">
-          {visibleSources(owner).map((src) => (
+          {visibleSources(signedIn).map((src) => (
             <NotifySourceRows key={src.app} src={src} />
           ))}
         </ul>
@@ -1396,7 +1396,7 @@ function SpotlightSettings() {
   const visits = useVisits()
   const hits = useRecentHits()
   const account = useAccount()
-  // Quick answers come from the Agents app: only for the owner, with an Ollama key.
+  // Quick answers come from the Agents app: only when signed in, with an Ollama key.
   const agents = account.status === 'user' && !!account.integrations.ollama
   const [cleared, setCleared] = useState(false)
   const clearAnswers = async () => {
@@ -1599,9 +1599,9 @@ function LinkSettingsPane() {
 }
 
 type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'agents' | 'golinks' | 'sync' | 'users' | 'about'
-/** `owner`: only for the signed-in owner (accounts and services); visitors don't see it at all.
+/** `account`: only when signed in (accounts and services); visitors don't see it at all.
  * `admin`: only for admins (the server checks that on every request too). */
-type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; keywords: string; blurb: string; owner?: true; admin?: true; render: () => ReactNode }
+type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; keywords: string; blurb: string; account?: true; admin?: true; render: () => ReactNode }
 
 const svg = (d: ReactNode) => (
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -1647,14 +1647,14 @@ const GROUPS: Pane[][] = [
     { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal spotlight suggestions mvl.sh token', blurb: "The golinks account that go <alias> follows, in Spotlight and the terminal.", render: () => <GoLinks /> },
   ],
   [
-    { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', owner: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
-    { id: 'calendar', label: 'Calendar', hue: 'var(--red)', owner: true, icon: svg(<><rect x="4" y="5" width="16" height="15" /><path d="M4 10h16M9 3v4M15 3v4" /></>), keywords: 'calendar google agenda events caldav fastmail nextcloud icloud', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock.', render: () => <CalendarSettings /> },
-    { id: 'integrations', label: 'Integrations', hue: 'var(--green)', owner: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models', blurb: 'Services the widgets, Files and Agents use: updown.io for Status, Ollama Cloud, Seafile and OnlyOffice.', render: () => <Integrations /> },
-    { id: 'agents', label: 'Agents', hue: 'var(--magenta)', owner: true, icon: svg(<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 16l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" />), keywords: 'agents ai assistant ollama models quick deep research title thread system prompt agents.md tools memory', blurb: 'The Agents app: its models, what a new thread starts with, and its system prompt.', render: () => <AgentsSettings /> },
+    { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', account: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
+    { id: 'calendar', label: 'Calendar', hue: 'var(--red)', account: true, icon: svg(<><rect x="4" y="5" width="16" height="15" /><path d="M4 10h16M9 3v4M15 3v4" /></>), keywords: 'calendar google agenda events caldav fastmail nextcloud icloud', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock.', render: () => <CalendarSettings /> },
+    { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models', blurb: 'Services the widgets, Files and Agents use: updown.io for Status, Ollama Cloud, Seafile and OnlyOffice.', render: () => <Integrations /> },
+    { id: 'agents', label: 'Agents', hue: 'var(--magenta)', account: true, icon: svg(<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 16l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" />), keywords: 'agents ai assistant ollama models quick deep research title thread system prompt agents.md tools memory', blurb: 'The Agents app: its models, what a new thread starts with, and its system prompt.', render: () => <AgentsSettings /> },
   ],
   [
-    { id: 'sync', label: 'Sync', hue: 'var(--green)', owner: true, icon: svg(<><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3" /><path d="M18 3v4h-4M6 21v-4h4" /></>), keywords: 'sync devices cloud', blurb: 'What follows you between devices.', render: () => <SyncPane /> },
-    { id: 'users', label: 'Users', hue: 'var(--accent)', owner: true, admin: true, icon: svg(<><circle cx="9" cy="8" r="3.5" /><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6" /><circle cx="17" cy="9" r="2.5" /><path d="M16 14.2c2.9.1 5 2.4 5 5.8" /></>), keywords: 'users accounts admin sign-up registration ban delete cap full', blurb: 'Every account, sign-up and the cap. Only for admins.', render: () => <UsersSettings /> },
+    { id: 'sync', label: 'Sync', hue: 'var(--green)', account: true, icon: svg(<><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3" /><path d="M18 3v4h-4M6 21v-4h4" /></>), keywords: 'sync devices cloud', blurb: 'What follows you between devices.', render: () => <SyncPane /> },
+    { id: 'users', label: 'Users', hue: 'var(--accent)', account: true, admin: true, icon: svg(<><circle cx="9" cy="8" r="3.5" /><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6" /><circle cx="17" cy="9" r="2.5" /><path d="M16 14.2c2.9.1 5 2.4 5 5.8" /></>), keywords: 'users accounts admin sign-up registration ban delete cap full', blurb: 'Every account, sign-up and the cap. Only for admins.', render: () => <UsersSettings /> },
     { id: 'about', label: 'About', hue: 'var(--text)', icon: svg(<><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5v.5" /></>), keywords: 'about version update release build', blurb: 'Which version this is, and whether a newer one is out.', render: () => <About /> },
   ],
 ]
@@ -1688,15 +1688,15 @@ export function Settings({ win }: { win: WinState }) {
     setShowPane(true)
   }
   const q = query.trim().toLowerCase()
-  // Visitors only see what works without an account; the owner's panes would just say "sign in".
-  const owner = useLikelyOwner()
+  // Visitors only see what works without an account; the user's panes would just say "sign in".
+  const signedIn = useLikelySignedIn()
   const admin = !!account.user?.admin
   const groups = useMemo(() => {
-    const mine = GROUPS.map((g) => g.filter((p) => (owner || !p.owner) && (admin || !p.admin))).filter((g) => g.length)
+    const mine = GROUPS.map((g) => g.filter((p) => (signedIn || !p.account) && (admin || !p.admin))).filter((g) => g.length)
     return q ? [mine.flat().filter((p) => `${p.label} ${p.keywords}`.toLowerCase().includes(q))] : mine
-  }, [q, owner, admin])
+  }, [q, signedIn, admin])
   const asked = PANES.find((p) => p.id === pane)!
-  const current = (asked.owner && !owner) || (asked.admin && !admin) ? ACCOUNT_PANE : asked
+  const current = (asked.account && !signedIn) || (asked.admin && !admin) ? ACCOUNT_PANE : asked
   const u = account.user
 
   return (

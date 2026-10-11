@@ -8,6 +8,7 @@ import { HOME, kindOfName, type FileKind } from '../terminal/vfs'
 import { droppedFiles, hasOsFiles, pickAndUpload, uploadFiles } from '../data/uploads'
 import { createFile, getClipboard, mkdir, setClipboard, deleteItems, deleteNote, download, DRAG_FILES, dropOp, getDragged, isInside, openSeafile, refreshDirs, renameItem, setSeafilePrefs, transferItems, useDir, useSeafileHome, useSeafilePrefs } from '../data/seafile'
 import { notify } from './notify'
+import { cvMode } from './cvMode'
 import { useAccount } from './account'
 import { ask } from './Dialogs'
 import { closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
@@ -40,9 +41,12 @@ export type DesktopIcon = {
 /** Emoji for what is in the Seafile Desktop folder, by kind. */
 const SF_GLYPH: Partial<Record<FileKind, string>> = { folder: '📁', image: '🖼️', markdown: '📝', text: '📄', pdf: '📕', document: '📃', audio: '🎵', video: '🎬', archive: '🗜️', disc: '💿', link: '🔗' }
 
+/** Menno's portfolio on the desktop: only on his CV page (src/os/cvMode.ts). */
+const CV_ICONS = new Set(['projects', 'contributions', 'boltwarden', 'pepper', 'cv', 'readme'])
+
 // Order is the default layout, top to bottom: folders, projects, then files. Folders and projects
 // get capitalized names like apps; files keep their real file names.
-export const DESKTOP_ICONS: DesktopIcon[] = [
+export const DESKTOP_ICONS: DesktopIcon[] = ([
   { id: 'projects', label: 'Projects', glyph: '📁', kind: 'folder', path: '~/projects', open: { app: 'files', props: { path: `${HOME}/projects` } }, terminal: 'cd ~/projects && ls -l' },
   { id: 'contributions', label: 'Contributions', glyph: '📂', kind: 'folder', path: '~/contributions', open: { app: 'files', props: { path: `${HOME}/contributions` } }, terminal: 'cd ~/contributions && ls -l' },
   { id: 'games', label: 'Games', glyph: '🎮', kind: 'folder', path: '~/games', open: { app: 'files', props: { path: `${HOME}/games` } }, terminal: 'cd ~/games && ls -l' },
@@ -62,7 +66,7 @@ export const DESKTOP_ICONS: DesktopIcon[] = [
   }),
   { id: 'cv', label: 'cv.md', glyph: '📄', kind: 'file', path: '~/cv.md', open: { app: 'zed', props: { path: `${HOME}/cv.md`, view: 'preview' } }, terminal: 'cat ~/cv.md' },
   { id: 'readme', label: 'README.md', glyph: '📝', kind: 'file', path: '~/README.md', open: { app: 'zed', props: { path: `${HOME}/README.md`, view: 'preview' } }, terminal: 'cat ~/README.md' },
-]
+] as DesktopIcon[]).filter((i) => cvMode() || !CV_ICONS.has(i.id))
 
 const CELL_W = 100
 const CELL_H = 96

@@ -19,6 +19,7 @@ import { timeAgo, useRecents } from '../data/recents'
 import { age, fileKind, HOME, lookup, prettyPath, walk } from '../terminal/vfs'
 import { MEDIA_APP } from '../data/media'
 import { signIn, useAccount } from './account'
+import { appHere, cvMode } from './cvMode'
 import { APP_META } from './apps'
 import { useCodeSearch } from './codeSearch'
 import { asWebAddress, useLinkPreview, type LinkPreview } from './linkPreview'
@@ -506,50 +507,52 @@ export function Spotlight() {
   const all = useMemo<Result[]>(() => {
     const out: Result[] = []
 
-    // Status
-    out.push({
-      id: 'status-mc',
-      group: 'Status',
-      title: 'Minecraft server',
-      subtitle: mc.status ? (mc.status.online ? `Online · ${mc.status.players.online}/${mc.status.players.max} players` : 'Offline') : 'Checking…',
-      keywords: 'mc minecraft server status players cloud.mvl.sh stardebris game',
-      icon: <Glyph color="linear-gradient(160deg,#5d9b3a,#3b6b25)">⛏</Glyph>,
-      run: () => wm.open('mcserver', { t: String(Date.now()) }),
-      enterLabel: 'Open overview',
-      alt: { label: 'Copy address', run: () => copy(MC_ADDRESS, MC_ADDRESS) },
-      preview: () => <McPreview />,
-    })
-    out.push({
-      id: 'status-activity',
-      group: 'Status',
-      title: 'Latest activity',
-      subtitle: recents.items[0] ? `${recents.items[0].title} · ${timeAgo(recents.items[0].date)}` : 'GitHub and git.mvl.sh',
-      keywords: 'github recent activity commits pushes releases status feed',
-      icon: <AppIcon app="recents" size={28} />,
-      run: () => wm.open('recents'),
-      preview: () => <ActivityPreview />,
-    })
-    out.push({
-      id: 'status-contrib',
-      group: 'Status',
-      title: 'Contributions this year',
-      subtitle: 'GitHub + git.mvl.sh',
-      keywords: 'contributions heatmap graph commits github gitea forgejo stats',
-      icon: <Glyph color="color-mix(in srgb, var(--green) 30%, transparent)">▦</Glyph>,
-      run: () => wm.open('recents'),
-      alt: { label: 'Show in terminal', run: () => term('heatmap') },
-      preview: () => <ContribPreview />,
-    })
-    const { years, days } = age()
-    out.push({
-      id: 'status-uptime',
-      group: 'Status',
-      title: `Uptime: ${years} years, ${days} days`,
-      subtitle: 'Menno has been running since 19 September 1996',
-      keywords: 'uptime age birthday born old',
-      icon: <Glyph>⏱</Glyph>,
-      run: () => term('uptime'),
-    })
+    // Status: Menno's server, activity and age only on his CV page (src/os/cvMode.ts)
+    if (cvMode()) {
+      out.push({
+        id: 'status-mc',
+        group: 'Status',
+        title: 'Minecraft server',
+        subtitle: mc.status ? (mc.status.online ? `Online · ${mc.status.players.online}/${mc.status.players.max} players` : 'Offline') : 'Checking…',
+        keywords: 'mc minecraft server status players cloud.mvl.sh stardebris game',
+        icon: <Glyph color="linear-gradient(160deg,#5d9b3a,#3b6b25)">⛏</Glyph>,
+        run: () => wm.open('mcserver', { t: String(Date.now()) }),
+        enterLabel: 'Open overview',
+        alt: { label: 'Copy address', run: () => copy(MC_ADDRESS, MC_ADDRESS) },
+        preview: () => <McPreview />,
+      })
+      out.push({
+        id: 'status-activity',
+        group: 'Status',
+        title: 'Latest activity',
+        subtitle: recents.items[0] ? `${recents.items[0].title} · ${timeAgo(recents.items[0].date)}` : 'GitHub and git.mvl.sh',
+        keywords: 'github recent activity commits pushes releases status feed',
+        icon: <AppIcon app="recents" size={28} />,
+        run: () => wm.open('recents'),
+        preview: () => <ActivityPreview />,
+      })
+      out.push({
+        id: 'status-contrib',
+        group: 'Status',
+        title: 'Contributions this year',
+        subtitle: 'GitHub + git.mvl.sh',
+        keywords: 'contributions heatmap graph commits github gitea forgejo stats',
+        icon: <Glyph color="color-mix(in srgb, var(--green) 30%, transparent)">▦</Glyph>,
+        run: () => wm.open('recents'),
+        alt: { label: 'Show in terminal', run: () => term('heatmap') },
+        preview: () => <ContribPreview />,
+      })
+      const { years, days } = age()
+      out.push({
+        id: 'status-uptime',
+        group: 'Status',
+        title: `Uptime: ${years} years, ${days} days`,
+        subtitle: 'Menno has been running since 19 September 1996',
+        keywords: 'uptime age birthday born old',
+        icon: <Glyph>⏱</Glyph>,
+        run: () => term('uptime'),
+      })
+    }
     out.push({
       id: 'status-time',
       group: 'Status',
@@ -566,9 +569,10 @@ export function Spotlight() {
       if (app === 'viewer' || app === 'widget' || app === 'pdf' || app === 'office' || app === 'archive') continue // need a file, or are added as widgets
       if (ALWAYS_NEW.has(app) && !account.seafile?.office) continue // OnlyOffice is not set up
       if (app === 'linkforge') continue // a dialog of Settings
+      if (!appHere(app)) continue // the CV apps, away from /cv
       if (app === 'mcserver') continue // the Minecraft server's status entry opens it
-      if (app === 'calendar' && account.status !== 'user') continue // the owner's own calendars
-      if (app === 'agents' && account.status !== 'user') continue // runs on the owner's Ollama key
+      if (app === 'calendar' && account.status !== 'user') continue // the user's own calendars
+      if (app === 'agents' && account.status !== 'user') continue // runs on the user's Ollama key
       const meta = APP_META[app]
       const open = wm.windows.filter((w) => w.app === app).length
       out.push({
@@ -605,11 +609,13 @@ export function Spotlight() {
     action('minimize', 'Minimize all windows', 'minimize hide windows show desktop', () => wm.windows.forEach((w) => wm.minimize(w.pid)), '▁')
     action('close', 'Close all windows', 'close quit all windows', () => wm.windows.forEach((w) => wm.close(w.pid)), '✕')
     action('cleanup', 'Clean up desktop icons', 'desktop icons tidy arrange reset', resetLayout, '▤')
-    action('print', 'Print or save CV as PDF', 'print pdf cv resume download', () => {
-      wm.open('cv')
-      setTimeout(() => window.print(), 300)
-    }, '⎙')
-    action('email', `Copy email address`, 'email mail contact copy', () => copy(revealEmail(), 'email address'), '@', 'Copies it; it is not shown here')
+    if (cvMode()) {
+      action('print', 'Print or save CV as PDF', 'print pdf cv resume download', () => {
+        wm.open('cv')
+        setTimeout(() => window.print(), 300)
+      }, '⎙')
+      action('email', `Copy email address`, 'email mail contact copy', () => copy(revealEmail(), 'email address'), '@', 'Copies it; it is not shown here')
+    } else action('cv', "Menno's CV", 'cv resume menno portfolio projects about author', () => openLink('/cv'), '↗', 'mennovanleeuwen.nl/cv')
     const ts = themeSettings()
     out.push({ id: 'theme-mode-light', group: 'Actions', title: 'Day mode', subtitle: themeLabel(ts.light), keywords: 'theme light day mode appearance', icon: <Glyph color={THEMES[ts.light].background}>☀</Glyph>, run: () => setMode('light') })
     out.push({ id: 'theme-mode-dark', group: 'Actions', title: 'Night mode', subtitle: themeLabel(ts.dark), keywords: 'theme dark night mode appearance', icon: <Glyph color={THEMES[ts.dark].background}>☾</Glyph>, run: () => setMode('dark') })
@@ -619,50 +625,52 @@ export function Spotlight() {
     for (const [name, color] of Object.entries(ACCENTS))
       out.push({ id: `accent-${name}`, group: 'Actions', title: `Accent color: ${name}`, keywords: `accent color colour ${name}`, icon: <Glyph color={color}> </Glyph>, run: () => setAccent(name) })
 
-    // Projects & contributions
-    for (const p of projects)
-      out.push({
-        id: `proj-${p.slug}`,
-        group: 'Projects',
-        title: p.name,
-        subtitle: p.tagline,
-        keywords: `${p.stack.join(' ')} project ${p.description}`,
-        icon: <Glyph color={p.accent}>{p.name[0]}</Glyph>,
-        run: () => wm.open('projects', { slug: p.slug }),
-        alt: p.url ? { label: 'Visit website', run: () => openLink(p.url!) } : undefined,
-        preview: () => (
-          <>
-            <h4>{p.name}</h4>
-            <p className="muted">{p.tagline}</p>
-            <p>{p.description}</p>
-            <p className="sp-small muted">
-              {p.stack.join(' · ')} · {p.status}
-            </p>
-          </>
-        ),
-      })
-    for (const c of contributions)
-      out.push({
-        id: `contrib-${c.slug}`,
-        group: 'Projects',
-        title: c.name,
-        subtitle: `Contributor · ${c.owner}/${c.slug}`,
-        keywords: `${c.description} contribution open source omarchy`,
-        icon: <Glyph color={c.accent}>{c.name[0]}</Glyph>,
-        run: () => wm.open('projects', { slug: c.slug }),
-        alt: { label: 'Open repository', run: () => openLink(c.repo) },
-        preview: () => (
-          <>
-            <h4>{c.name}</h4>
-            <p>{c.description}</p>
-            <ul className="sp-list">
-              {c.work.map((w) => (
-                <li key={w}>{w}</li>
-              ))}
-            </ul>
-          </>
-        ),
-      })
+    // Projects & contributions (the CV page only)
+    if (cvMode()) {
+      for (const p of projects)
+        out.push({
+          id: `proj-${p.slug}`,
+          group: 'Projects',
+          title: p.name,
+          subtitle: p.tagline,
+          keywords: `${p.stack.join(' ')} project ${p.description}`,
+          icon: <Glyph color={p.accent}>{p.name[0]}</Glyph>,
+          run: () => wm.open('projects', { slug: p.slug }),
+          alt: p.url ? { label: 'Visit website', run: () => openLink(p.url!) } : undefined,
+          preview: () => (
+            <>
+              <h4>{p.name}</h4>
+              <p className="muted">{p.tagline}</p>
+              <p>{p.description}</p>
+              <p className="sp-small muted">
+                {p.stack.join(' · ')} · {p.status}
+              </p>
+            </>
+          ),
+        })
+      for (const c of contributions)
+        out.push({
+          id: `contrib-${c.slug}`,
+          group: 'Projects',
+          title: c.name,
+          subtitle: `Contributor · ${c.owner}/${c.slug}`,
+          keywords: `${c.description} contribution open source omarchy`,
+          icon: <Glyph color={c.accent}>{c.name[0]}</Glyph>,
+          run: () => wm.open('projects', { slug: c.slug }),
+          alt: { label: 'Open repository', run: () => openLink(c.repo) },
+          preview: () => (
+            <>
+              <h4>{c.name}</h4>
+              <p>{c.description}</p>
+              <ul className="sp-list">
+                {c.work.map((w) => (
+                  <li key={w}>{w}</li>
+                ))}
+              </ul>
+            </>
+          ),
+        })
+    }
 
     // Games
     for (const g of GAMES)
@@ -747,9 +755,10 @@ export function Spotlight() {
         alt: { label: 'Copy link', run: () => copy(l.url, 'link') },
       })
 
-    // Links
-    for (const l of profile.links)
-      out.push({ id: `link-${l.label}`, group: 'Links', title: l.label, subtitle: l.url.replace(/^https:\/\//, ''), keywords: 'link profile social', icon: <Glyph>↗</Glyph>, run: () => openLink(l.url) })
+    // Menno's links, on his CV page
+    if (cvMode())
+      for (const l of profile.links)
+        out.push({ id: `link-${l.label}`, group: 'Links', title: l.label, subtitle: l.url.replace(/^https:\/\//, ''), keywords: 'link profile social', icon: <Glyph>↗</Glyph>, run: () => openLink(l.url) })
 
     return out
   }, [mc.status, recents.items, wm, account.status, notes, launchers])
@@ -936,7 +945,7 @@ export function Spotlight() {
           .slice(0, 4)
     const recentKeys = new Set(recentMatches.map((x) => hitKey(x.r.hit)))
 
-    // Repositories, issues, PRs and branches from the owner's code hosts.
+    // Repositories, issues, PRs and branches from the user's code hosts.
     const codeRows = (code.result?.hits ?? []).filter((h) => !recentKeys.has(hitKey(h))).map((h) => codeRow(h, copy))
     const codeStatus: Result[] = []
     // Searching and trouble only matter when the query is about code (#123, repo@branch).
@@ -1013,7 +1022,7 @@ export function Spotlight() {
     // Nothing of your own matched: Enter searches exactly what you typed (or runs it, as
     // Settings → Spotlight says). The engine's suggestions follow it, one arrow down away.
     const [first, second] = prefs.fallback === 'terminal' ? [runIt, web] : [web, runIt]
-    // The owner's research agent (the Agents app) takes the question too; "?" in front makes it
+    // The user's research agent (the Agents app) takes the question too; "?" in front makes it
     // the top hit.
     const question = q.trim().replace(/^\?\s*/, '')
     const agent: Result | null =

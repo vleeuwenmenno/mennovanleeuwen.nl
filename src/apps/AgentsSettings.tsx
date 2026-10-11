@@ -96,7 +96,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
   }, [account.integrations.ollama])
   useEffect(() => void load(), [load, settings.promptFile])
 
-  if (account.status !== 'user') return <p className="muted">Sign in first: Agents is the owner's research assistant.</p>
+  if (account.status !== 'user') return <p className="muted">Sign in first: Agents is a research assistant for signed-in users.</p>
 
   const inSeafile = whereIs(`${HOME}/AGENTS.md`).kind === 'sf'
   const library = prompt?.repo ? (getLibraries()?.find((l) => l.id === prompt.repo)?.name ?? 'Seafile') : null
@@ -274,7 +274,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
           : account.seafile
             ? 'Your home folder is the site’s own, so this file is read-only. Make Seafile your home (Integrations → Seafile) to write your own AGENTS.md there, then edit it in Zed or upload it on Seafile.'
             : 'This file is read-only here. Link Seafile and make it your home (Integrations) to write your own AGENTS.md, then edit it in Zed or upload it on Seafile.'}{' '}
-        Today’s date, the mode and what the agent remembers are added after it; <code>{'{{owner}}'}</code> becomes your name.
+        Today’s date, the mode and what the agent remembers are added after it; <code>{'{{user}}'}</code> becomes your name.
       </p>
       {prompt && (
         <details className="agt-prompt-box">
@@ -312,7 +312,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
 
 type KeyProvider = 'brave' | 'kagi' | 'tavily'
 type HeaderDraft = { name: string; value: string; set: boolean }
-/** The form: what the server sent, with every secret field empty until the owner types a new one. */
+/** The form: what the server sent, with every secret field empty until the user types a new one. */
 type Draft = { provider: Provider; searxngUrl: string; searxngAuth: string; keys: Record<KeyProvider, string>; url: string; method: 'GET' | 'POST'; body: string; headers: HeaderDraft[]; map: ResultMap }
 
 const draftOf = (v: WebSearchView): Draft => ({

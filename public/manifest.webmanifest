@@ -1,7 +1,7 @@
 {
-  "name": "MvL OS — Menno van Leeuwen",
+  "name": "MvL OS",
   "short_name": "MvL OS",
-  "description": "Menno van Leeuwen, DevOps engineer. A CV you can boot: projects, open source contributions and a terminal that actually works.",
+  "description": "A desktop in your browser: a terminal that actually works, files, an editor, music and games. Sign in with GitHub for your own.",
   "id": "/",
   "start_url": "/",
   "scope": "/",
@@ -19,7 +19,7 @@
   ],
   "shortcuts": [
     { "name": "Terminal", "url": "/?open=terminal", "icons": [{ "src": "/icons/app-192.png", "sizes": "192x192" }] },
-    { "name": "CV", "url": "/?open=cv", "icons": [{ "src": "/icons/app-192.png", "sizes": "192x192" }] },
+    { "name": "Menno's CV", "url": "/cv", "icons": [{ "src": "/icons/app-192.png", "sizes": "192x192" }] },
     { "name": "Games", "url": "/?open=games", "icons": [{ "src": "/icons/app-192.png", "sizes": "192x192" }] }
   ]
 }

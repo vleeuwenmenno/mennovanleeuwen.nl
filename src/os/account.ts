@@ -1,4 +1,6 @@
 import { useSyncExternalStore } from 'react'
+import { cvMode } from './cvMode'
+import { loginCookie, setLoginCookie } from './identity'
 
 // Who is signed in (GitHub, see server/auth.ts) and which Gitea/Forgejo instances they linked.
 // Visitors are "anon"; "off" means this server has no sign-in configured (or no server at all,
@@ -94,7 +96,7 @@ function set(next: Account) {
 }
 
 /** Signed in, or (while that is still being checked) signed in on the last visit. */
-export function useLikelyOwner() {
+export function useLikelySignedIn() {
   const { status } = useAccount()
   if (status === 'user') return true
   if (status !== 'loading') return false
@@ -136,8 +138,17 @@ export async function loadAccount() {
     const me = await api<{ authEnabled: boolean; registration?: Registration | null; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string; canWrite?: boolean } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null; ollama?: 'settings' | 'server' | null }; seafile?: SeafileInfo | null }>('/api/me')
     const next: Account = { status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, registration: me.registration ?? null, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null, ollama: me.integrations?.ollama ?? null }, seafile: me.seafile ?? null }
     // Another account's notes, history and layouts are still here: clear them and start clean.
-    if (heldByAnother(next)) {
-      await forgetBrowserAccount()
+    const stale = heldByAnother(next)
+    if (stale) await forgetBrowserAccount()
+    // The desktop booted as someone else (src/os/identity.ts read an old or missing login cookie):
+    // fix the cookie and boot again, once. Only when the cookie took, or this would loop.
+    const login = next.status === 'user' ? next.user!.login : null
+    let rename = false
+    if ((next.status === 'user' || next.status === 'anon') && loginCookie() !== login) {
+      setLoginCookie(login)
+      rename = loginCookie() === login
+    }
+    if (stale || rename) {
       location.reload()
       return
     }
@@ -147,10 +158,11 @@ export async function loadAccount() {
   }
 }
 
-export const signIn = () => location.assign('/api/auth/github/login')
+/** Off to GitHub, and back to this page (the CV page, or the desktop). */
+export const signIn = () => location.assign(`/api/auth/github/login${cvMode() ? '?back=/cv' : ''}`)
 
 /** Signs in again, asking GitHub for private repositories too (remembered for later sign-ins), or no longer asking. */
-export const signInWithRepos = (repo: boolean) => location.assign(`/api/auth/github/login?repo=${repo ? 1 : 0}`)
+export const signInWithRepos = (repo: boolean) => location.assign(`/api/auth/github/login?repo=${repo ? 1 : 0}${cvMode() ? '&back=/cv' : ''}`)
 
 /** Whether GitHub gave this account's token access to private repositories. */
 export const hasRepoScope = (u: AccountUser | null) => !!u?.githubScopes.includes('repo')
@@ -158,14 +170,20 @@ export const hasRepoScope = (u: AccountUser | null) => !!u?.githubScopes.include
 export async function signOut() {
   await api('/api/auth/logout', { method: 'POST' }).catch(() => {})
   await forgetBrowserAccount()
+  setLoginCookie(null)
   set({ status: 'anon', user: null, registration: account.registration, forges: [], googleEnabled: account.googleEnabled, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
+  // The terminal, home folder and boot screen were that account's (src/os/identity.ts): start again as a guest.
+  location.reload()
 }
 
 /** Deletes the account and everything the server keeps for it, then forgets it in this browser too. */
 export async function deleteAccount() {
   await api('/api/me', { method: 'DELETE' })
   await forgetBrowserAccount()
+  setLoginCookie(null)
   set({ status: 'anon', user: null, registration: account.registration, forges: [], googleEnabled: account.googleEnabled, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
+  // The terminal, home folder and boot screen were that account's (src/os/identity.ts): start again as a guest.
+  location.reload()
 }
 
 /** updown.io's read-only API key, for the Status widget: checked by the server, then stored encrypted. */
@@ -204,7 +222,7 @@ export async function removeCaldav(id: number) {
   set({ ...account, caldav: account.caldav.filter((c) => c.id !== id) })
 }
 
-/** Google Calendar, attached to the signed-in owner: off to Google's consent page and back. */
+/** Google Calendar, attached to the signed-in user: off to Google's consent page and back. */
 export const connectGoogle = () => location.assign('/api/google/connect')
 
 export async function disconnectGoogle() {

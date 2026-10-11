@@ -30,7 +30,7 @@ export const answerText = (a: QuickAnswer) =>
 
 const EMPTY = { live: { content: '', thinking: '' }, waiting: false, error: null }
 
-/** Asking, the answer on show, and the recent answers; `enabled` when the owner has Agents. */
+/** Asking, the answer on show, and the recent answers; `enabled` when the user has Agents. */
 export function useQuickAnswer(enabled: boolean) {
   const wm = useWM()
   const [answer, setAnswer] = useState<QuickAnswer | null>(null)

@@ -80,7 +80,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       return true
     }
 
-    // Google Calendar, attached to the signed-in owner (server/google.ts).
+    // Google Calendar, attached to the signed-in user (server/google.ts).
     if (read && path === '/api/google/connect') {
       if (!currentUser(req)) return redirect(res, '/?google=signin'), true
       return startGoogle(req, res), true
@@ -290,7 +290,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/push/subscription' && method === 'DELETE') return json(res, 200, unsubscribe(requireUser(req), await readJson(req, 8 * 1024))), true
     if (path === '/api/push/test' && method === 'POST') return json(res, 200, await pushToUser(requireUser(req), { title: 'MvL OS', body: 'Push notifications work on this device.', tag: 'push-test', url: '/' })), true
     if (path === '/api/preview' && read) {
-      requireUser(req) // fetches other sites on request: the signed-in owner only
+      requireUser(req) // fetches other sites on request: the signed-in user only
       const res2 = await linkPreview(url.searchParams.get('url') ?? '')
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'private, max-age=3600', ...SECURITY }).end(JSON.stringify(res2))
       return true

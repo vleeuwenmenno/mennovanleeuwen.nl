@@ -14,6 +14,8 @@ import { Desktop } from './Desktop'
 import { PowerScreens } from './Power'
 import { Notifications } from './Notifications'
 import { Uploads } from './Uploads'
+import { HANDLE } from './identity'
+import { cvMode } from './cvMode'
 import { Dialogs, tell } from './Dialogs'
 import { FolderPicker } from './FolderPicker'
 import { initBackButton, setBackFocus } from './backButton'
@@ -54,7 +56,8 @@ export function placement(app: AppId, openCount: number): Geometry {
   }
 }
 
-/** The opening layout: sticky note on the left, terminal beside it (just the note on phones). */
+/** The opening layout: sticky note on the left, terminal beside it (just the note on phones).
+ * The note is the welcome note, or Menno's headlines at /cv (src/apps/Notes.tsx). */
 export function initialLayout(): { app: AppId; geometry: Geometry; props?: WinState['props'] }[] {
   const vw = window.innerWidth
   const vh = window.innerHeight
@@ -62,9 +65,9 @@ export function initialLayout(): { app: AppId; geometry: Geometry; props?: WinSt
   if (vw < 720) return [{ app: 'notes', geometry: { x: 16, y: TOP + 16, w: vw - 32, h: 340 } }]
   const noteW = 310
 
-  // Big screens get a composed desk: notes on the left (shortcuts tucked under the headline
-  // note), the terminal in the middle and the CV on top, overlapping its lower right.
-  if (vw >= 1600 && vh >= 860) {
+  // Big screens on the CV page get a composed desk: notes on the left (shortcuts tucked under
+  // the headline note), the terminal in the middle and the CV on top, overlapping its lower right.
+  if (cvMode() && vw >= 1600 && vh >= 860) {
     const compW = 644 + 790
     const compH = 700
     const ox = Math.max(40, Math.round((vw - compW) / 2) - 40) // a little left of centre, clear of the icons
@@ -157,7 +160,8 @@ function TopBar() {
           </svg>
           <span className={`tb-dot ${recents.live ? 'is-live' : ''}`} />
         </button>
-        <MinecraftWidget />
+        {/* Menno's Minecraft server: his CV page only (src/os/cvMode.ts) */}
+        {cvMode() && <MinecraftWidget />}
         <button
           className="tb-icon"
           title={`${theme.label} · click for ${theme.palette.mode === 'light' ? 'night' : 'day'}, right-click for themes`}
@@ -742,7 +746,8 @@ export function Shell() {
         <div className="wp-glow wp-b" />
         <div className="wp-grid" />
         <div className="wp-sig">
-          menno<span>@</span>mvlos
+          {HANDLE}
+          <span>@</span>mvlos
         </div>
       </div>
       <TopBar />

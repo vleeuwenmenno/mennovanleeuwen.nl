@@ -105,7 +105,7 @@ export function database(): DatabaseSync {
     );
     CREATE INDEX IF NOT EXISTS mc_sessions_open ON mc_sessions (left_at);
     -- The Agents app (server/agents.ts): threads with their messages, and what the agent was asked
-    -- to remember about the owner across threads.
+    -- to remember about the user across threads.
     CREATE TABLE IF NOT EXISTS agent_threads (
       id TEXT PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -142,7 +142,7 @@ export function database(): DatabaseSync {
   if (!(db.prepare('PRAGMA table_info(agent_threads)').all() as { name: string }[]).some((c) => c.name === 'tools')) db.exec('ALTER TABLE agent_threads ADD COLUMN tools TEXT')
   if (!(db.prepare('PRAGMA table_info(agent_messages)').all() as { name: string }[]).some((c) => c.name === 'attachments')) db.exec('ALTER TABLE agent_messages ADD COLUMN attachments TEXT')
   // Added later: projects (threads grouped in the sidebar, with a memory of their own), pinned
-  // threads, and memories sorted by scope (the owner, or one project) and category ("People/Friends").
+  // threads, and memories sorted by scope (the user, or one project) and category ("People/Friends").
   db.exec(`CREATE TABLE IF NOT EXISTS agent_projects (
     id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -158,7 +158,7 @@ export function database(): DatabaseSync {
   if (!cols('agent_memories').includes('updated_at')) db.exec('ALTER TABLE agent_memories ADD COLUMN updated_at INTEGER')
   // A thread's todo list, for long jobs: the agent keeps it up to date, the window shows it.
   if (!cols('agent_threads').includes('todos')) db.exec('ALTER TABLE agent_threads ADD COLUMN todos TEXT')
-  // Web Push (server/webpush.ts): the browsers and installed apps the owner turned push on for.
+  // Web Push (server/webpush.ts): the browsers and installed apps the user turned push on for.
   db.exec(`CREATE TABLE IF NOT EXISTS push_subscriptions (
     id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

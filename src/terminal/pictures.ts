@@ -1,3 +1,4 @@
+import { HANDLE } from '../os/identity'
 import { THEMES } from '../os/omarchyThemes'
 
 // Images for ~/Pictures, drawn as SVG so they are real, viewable files without shipping any
@@ -15,7 +16,7 @@ function wallpaper(name: string) {
   <rect width="1600" height="1000" fill="url(#a)"/>
   <rect width="1600" height="1000" fill="url(#b)"/>
   <rect width="1600" height="1000" fill="url(#d)"/>
-  <text x="1540" y="930" text-anchor="end" font-family="monospace" font-weight="700" font-size="96" fill="${p.foreground}" fill-opacity=".08">menno<tspan fill="${p.accent}" fill-opacity=".3">@</tspan>mvlos</text>
+  <text x="1540" y="930" text-anchor="end" font-family="monospace" font-weight="700" font-size="96" fill="${p.foreground}" fill-opacity=".08">${HANDLE}<tspan fill="${p.accent}" fill-opacity=".3">@</tspan>mvlos</text>
 </svg>`
 }
 

@@ -32,7 +32,7 @@ export type Ctx = {
   print: (text: string) => void
   /** True when output goes to the screen rather than into a pipe or redirect. */
   tty: boolean
-  /** Running as root (sudo, for the signed-in owner): may write /etc/fstab and mount */
+  /** Running as root (sudo, for the signed-in user): may write /etc/fstab and mount */
   root?: boolean
   /** Redraws one block of output in place (htop, watch, cmatrix); null removes it again. */
   /** `alt`: the alternate screen, like nano's: only this block shows while it is up */

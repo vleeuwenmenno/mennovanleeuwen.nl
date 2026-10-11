@@ -15,6 +15,8 @@ const SESSION_COOKIE = 'mvlos_sid'
 const STATE_COOKIE = 'mvlos_oauth'
 /** Set once someone allows private repositories, so later sign-ins ask GitHub for the same scopes. */
 const REPO_COOKIE = 'mvlos_gh_repo'
+/** The signed-in login, readable by the page, so the desktop boots as that user before /api/me answers. */
+const LOGIN_COOKIE = 'mvlos_login'
 const SESSION_DAYS = 30
 // Sign-in only needs the profile. `repo` (asked for when someone allows it in Settings → Code hosts)
 // lets Spotlight find private repositories, issues and branches; GitHub has no read-only variant
@@ -97,18 +99,22 @@ export function startLogin(req: IncomingMessage, res: ServerResponse, url: URL) 
     state,
     allow_signup: 'false',
   })
-  const set = [setCookie(req, STATE_COOKIE, state, { maxAge: 600, path: '/api/auth' })]
+  // Where to come back to: the CV page when signing in from there, else the desktop.
+  const back = url.searchParams.get('back') === '/cv' ? '/cv' : '/'
+  const set = [setCookie(req, STATE_COOKIE, `${state} ${back}`, { maxAge: 600, path: '/api/auth' })]
   if (asked !== null) set.push(setCookie(req, REPO_COOKIE, repo ? '1' : '', { maxAge: repo ? 365 * 86400 : 0, path: '/api/auth' }))
   redirect(res, `https://github.com/login/oauth/authorize?${params}`, { 'Set-Cookie': set })
 }
 
 export async function finishLogin(req: IncomingMessage, res: ServerResponse, url: URL) {
   const clearState = setCookie(req, STATE_COOKIE, '', { maxAge: 0, path: '/api/auth' })
-  const fail = (reason: string) => redirect(res, `/?auth=${reason}`, { 'Set-Cookie': clearState })
+  const [expected, back = '/'] = (cookies(req)[STATE_COOKIE] ?? '').split(' ')
+  const home = back === '/cv' ? '/cv' : '/'
+  const fail = (reason: string) => redirect(res, `${home}?auth=${reason}`, { 'Set-Cookie': clearState })
   if (!authEnabled()) return fail('off')
   const code = url.searchParams.get('code')
   const state = url.searchParams.get('state')
-  if (!code || !state || state !== cookies(req)[STATE_COOKIE]) return fail('error')
+  if (!code || !state || state !== expected) return fail('error')
 
   const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
@@ -136,7 +142,7 @@ export async function finishLogin(req: IncomingMessage, res: ServerResponse, url
   // open and there is room. Banned accounts keep their row (and their spot), so they stay out.
   const db = database()
   const known = db.prepare('SELECT id, banned_at, ban_reason FROM users WHERE github_id = ?').get(me.id) as { id: number; banned_at: number | null; ban_reason: string | null } | undefined
-  if (known?.banned_at) return redirect(res, `/?auth=banned${known.ban_reason ? `&reason=${encodeURIComponent(known.ban_reason.slice(0, 200))}` : ''}`, { 'Set-Cookie': clearState })
+  if (known?.banned_at) return redirect(res, `${home}?auth=banned${known.ban_reason ? `&reason=${encodeURIComponent(known.ban_reason.slice(0, 200))}` : ''}`, { 'Set-Cookie': clearState })
   if (!known && !isAdmin(me.login)) {
     if (!registrationOpen()) return fail('closed')
     if (userCount() >= maxUsers()) return fail('full')
@@ -154,11 +160,13 @@ export async function finishLogin(req: IncomingMessage, res: ServerResponse, url
 
   const sid = randomBytes(32).toString('base64url')
   db.prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sha256(sid), id, now, now + SESSION_DAYS * 864e5)
-  redirect(res, '/?auth=ok', { 'Set-Cookie': [clearState, setCookie(req, SESSION_COOKIE, sid, { maxAge: SESSION_DAYS * 86400 })] })
+  redirect(res, `${home}?auth=ok`, {
+    'Set-Cookie': [clearState, setCookie(req, SESSION_COOKIE, sid, { maxAge: SESSION_DAYS * 86400 }), setCookie(req, LOGIN_COOKIE, me.login, { maxAge: SESSION_DAYS * 86400, readable: true })],
+  })
 }
 
 export function logout(req: IncomingMessage, res: ServerResponse) {
   const sid = cookies(req)[SESSION_COOKIE]
   if (sid && authEnabled()) database().prepare('DELETE FROM sessions WHERE id = ?').run(sha256(sid))
-  json(res, 200, { ok: true }, { 'Set-Cookie': setCookie(req, SESSION_COOKIE, '', { maxAge: 0 }) })
+  json(res, 200, { ok: true }, { 'Set-Cookie': [setCookie(req, SESSION_COOKIE, '', { maxAge: 0 }), setCookie(req, LOGIN_COOKIE, '', { maxAge: 0, readable: true })] })
 }

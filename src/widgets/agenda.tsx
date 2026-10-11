@@ -8,7 +8,7 @@ import { createWithTilt, setWidgetConfig, tiltMenu, useWidgetConfig } from './co
 import type { WidgetDef } from './types'
 
 // The Agenda widget: today and the coming days from Google Calendar and CalDAV accounts
-// (server/calendars.ts): the calendars switched on in Settings, or its own pick. Owner only: it
+// (server/calendars.ts): the calendars switched on in Settings, or its own pick. Signed-in users only: it
 // needs the GitHub sign-in with a calendar connected (Settings → Calendar).
 
 type Config = { calendars: string[] | null; days: number; tilt: number }

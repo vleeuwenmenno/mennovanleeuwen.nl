@@ -1,3 +1,4 @@
+import { HANDLE } from '../os/identity'
 import { contributions, profile, projects } from '../data/profile'
 import { ansiToMarkup, plain, rainbow } from './ansi'
 import { md5, sha } from './hash'
@@ -470,7 +471,7 @@ async function htop(ctx: Ctx, title = 'htop'): Promise<string> {
         ...windows.map((w) => ({ pid: w.pid, cmd: w.app + (w.props.game ? ` --${w.props.game}` : '') + (w.minimized ? '  (minimized)' : ''), cpu: 0, nodes: nodes(w.pid), time: (now - w.openedAt) / 1000, state: w.minimized ? 'T' : 'S' })),
       ]
       const head = `${'PID'.padStart(6)} ${'USER'.padEnd(8)} S ${'CPU%'.padStart(5)} ${'NODES'.padStart(6)} ${'TIME+'.padStart(9)}  Command`
-      const list = procs.map((p) => `${String(p.pid).padStart(6)} ${profile.handle.slice(0, 8).padEnd(8)} ${p.state === 'R' ? c('green', 'R') : p.state} ${p.cpu.toFixed(1).padStart(5)} ${String(p.nodes || '-').padStart(6)} ${clock(p.time).padStart(9)}  ${p.pid <= 4 ? c('muted', p.cmd) : p.cmd}`)
+      const list = procs.map((p) => `${String(p.pid).padStart(6)} ${HANDLE.slice(0, 8).padEnd(8)} ${p.state === 'R' ? c('green', 'R') : p.state} ${p.cpu.toFixed(1).padStart(5)} ${String(p.nodes || '-').padStart(6)} ${clock(p.time).padStart(9)}  ${p.pid <= 4 ? c('muted', p.cmd) : p.cmd}`)
       const footer = `${c('accent', 'q')}Quit  ${c('accent', 'F10')}Quit  ${c('muted', 'Ctrl+C')}Quit`
       const room = Math.max(1, rows - header.length - 4)
       ctx.live([...header, '', c('green', head.padEnd(cols)), ...list.slice(0, room), ...Array(Math.max(0, room - list.length)).fill(''), footer].join('\n'))

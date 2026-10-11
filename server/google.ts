@@ -5,7 +5,7 @@ import type { EventInput } from './calendars.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { cookies, HttpError, publicOrigin, redirect, setCookie } from './http.ts'
 
-// Google Calendar, attached to the signed-in (GitHub) owner: their calendars, shared ones
+// Google Calendar, attached to the signed-in (GitHub) user: their calendars, shared ones
 // included, for the Agenda widget, the clock and the Calendar app, which can also add, change and
 // delete events (and invite people) where Google allows it. Not a way to sign in. Google's refresh
 // token is stored encrypted and swapped for short-lived access tokens as needed.
