@@ -92,6 +92,81 @@ Spotlight takes `go <alias>` too, and lists matching aliases as you type (the mo
 ones after a bare `go `) from the golinks server's `/suggest`, asked straight from the browser so
 the token never passes through this site's server.
 
+### The shell, agents and skills
+
+The shell is msh 2.0 ([`src/terminal/msh/`](src/terminal/msh)): a POSIX-ish parser and
+interpreter. It supports if/for/while/until/case, functions, subshells, `$(…)`, `$((…))`, the
+`${…}` forms, globbing, heredocs, redirects (`2>`, `2>&1`, `<`), `set -e/-x/-u/-o pipefail` and
+builtins like `test`/`[`, `printf`, `read`, `source`, `eval` and `getopts`. `msh -c`, `msh file`
+and `./script.sh` with a `#!/bin/msh` (or sh/bash) shebang run scripts. `man msh` shows the
+reference ([`src/data/mshReference.ts`](src/data/mshReference.ts)), which the agents read as the
+built-in `msh` skill.
+
+`agents` ([`src/terminal/agents/`](src/terminal/agents)) is the Agents app as a coding-agent CLI.
+In a folder on Seafile, that folder becomes the thread's work folder:
+- File tools ([`server/workdir.ts`](server/workdir.ts)) let the agent read, write, edit, list,
+  glob, grep, move and delete inside the folder, and it follows the folder's `AGENTS.md` or
+  `CLAUDE.md`.
+- A `terminal` tool runs msh command lines in the user's own terminal.
+- Changes wait for approval, which can carry a note for the agent. Shift+Tab cycles between
+  asking first, accepting edits, and plan mode (read only until a plan is approved).
+- Prompt modes: `!cmd` runs a command, `# text` remembers something, `@path` attaches a file.
+- `agents -c`/`-r` resume a thread, `agents -p` answers once for pipes, and `/help` lists the
+  slash commands.
+
+`skills` ([`src/terminal/skills.ts`](src/terminal/skills.ts),
+[`server/skills.ts`](server/skills.ts)) manages SKILL.md folders. They live in
+`~/.agents/skills`, or a work folder's `.agents/skills` or `.claude/skills`, plus built-in `msh`
+and `skill-creator`. `skills add owner/repo` installs from GitHub, and `/name` starts one. The
+Agents app has the same work folders, permission modes, diff approvals and skills (Settings →
+Agents → Skills).
+
+**How complete it is (2026-10-11).** Everything above works end to end against a scripted
+stand-in for Ollama and a mock Seafile. It has not yet run against real models, so the tool
+descriptions and system prompt are untuned. Known limits:
+
+- **Context.** There is no `/compact` and no summarising. Older tool output is cut to 1,500
+  characters, but a long coding session can still outgrow the model's context window.
+- **Not in the TUI yet:**
+  - Claude Code's undo/rewind, custom slash commands, hooks, MCP servers, subagents,
+    background tasks and usage display
+  - image paste (`@path` attaches text files only)
+- **Tried in the browser:** messages, approvals, forms, plan mode, `!`, `#`, `@`, `/status`,
+  `/context`, `/model`, `/resume`, `-c`, `-p`, `ls`. **Not tried:** Esc interrupting a turn,
+  messages queued while it works, `/export`, `/copy`, `/open`, `/delete`, `/archive`,
+  `/projects`, `/tools`, Ctrl+O and Ctrl+L.
+- **Rendering.**
+  - The live block redraws whole on each streamed chunk, and a long reply only shows its tail
+    until it is done.
+  - Markdown has no syntax highlighting, and the terminal's markup does not nest (no bold in
+    colour).
+  - On phones, typing works, but Shift+Enter and Shift+Tab are hard to reach.
+- **Work folders.**
+  - Seafile only: not the browser's own files or `/tmp`.
+  - `glob`/`grep` walk at most 5,000 files and read at most 400 (up to 1 MB each), so they are
+    slow on big trees.
+  - Edits do not check whether the file changed since the agent read it.
+  - Files over 2 MB, and binary files, cannot be read.
+- **Terminal tool.**
+  - It needs an attached `agents` session, so turns started in the app do not get it.
+  - Each command gets 60 s and returns at most 60k characters of output.
+  - Interactive programs are refused, and prompts (rm's y/N) are answered no.
+  - "Don't ask again" for a command lasts until the server restarts.
+  - Read-only detection is a fixed allowlist; any `$(…)` asks.
+- **A turn keeps running after `agents` closes.** Its terminal tool calls then fail until
+  `agents -c` reattaches.
+- **Skills.**
+  - Install only from public GitHub repositories, and the app has no zip upload yet.
+  - `allowed-tools` in the front matter is ignored.
+  - Python/Node scripts cannot run (msh scripts can).
+  - Your own skills need home on Seafile.
+- **msh.**
+  - No arrays, `[[ ]]`, C-style `for`, process substitution, job control (`&` runs in the
+    foreground), aliases or traps.
+  - There is no separate stderr stream: `2>` redirects or drops error messages.
+  - Exec bits don't exist; the shebang decides whether a file runs.
+  - The prompt is one line (multi-line input only in scripts).
+
 `pepper` ([`src/terminal/pepper.ts`](src/terminal/pepper.ts)) simulates the Pepper CLI against a
 pretend lab cluster (3 masters, 4 minions). Its grammar, outcome names and output layout follow
 the real CLI; the cluster, states and timings are invented, and applies only last for the session.
