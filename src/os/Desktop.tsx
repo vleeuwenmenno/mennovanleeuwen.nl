@@ -19,6 +19,8 @@ import { resetLayout, restoreIcons, trashIcons, updateDesktop, useDesktop, type 
 import { openLink } from '../data/links'
 import { useSwing } from './swing'
 import { useWM, type AppId } from './wm'
+import { notesHidden } from './deskPrefs'
+import { useIsMobile } from './useIsMobile'
 import { extract, getZipDrag, setZipDrag, zipDragName } from '../data/extract'
 
 // A desktop that behaves like one: click to select, Ctrl/Shift-click to add, drag a marquee over
@@ -161,6 +163,8 @@ type Drag =
 export function Desktop() {
   const wm = useWM()
   const desk = useDesktop()
+  // A phone with its notes put away shows the icons as a grid of tiles, opened with a tap.
+  const phoneGrid = useIsMobile() && notesHidden.use()
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [offset, setOffset] = useState({ dx: 0, dy: 0 })
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
@@ -283,6 +287,8 @@ export function Desktop() {
   function onIconPointerDown(e: ReactPointerEvent, icon: DesktopIcon) {
     if (e.button !== 0 || renaming) return
     e.stopPropagation()
+    // The phone's grid has no positions to drag icons to: a finger there scrolls, taps or holds.
+    if (phoneGrid) return void setSelected(new Set([icon.id]))
     const additive = e.shiftKey || e.ctrlKey || e.metaKey
     let ids: string[]
     if (additive) {
@@ -302,6 +308,7 @@ export function Desktop() {
 
   function onSurfacePointerDown(e: ReactPointerEvent) {
     if (e.button !== 0 || e.target !== surface.current) return
+    if (phoneGrid) return void setSelected(new Set())
     setRenaming(null)
     const base = e.shiftKey || e.ctrlKey || e.metaKey ? new Set(selected) : new Set<string>()
     setSelected(base)
@@ -629,7 +636,7 @@ export function Desktop() {
   return (
     <div
       ref={surface}
-      className="desk"
+      className={`desk ${phoneGrid ? 'is-grid' : ''}`}
       tabIndex={-1}
       onPointerDown={onSurfacePointerDown}
       onPointerMove={onPointerMove}
@@ -677,7 +684,8 @@ export function Desktop() {
             onPointerDown={(e) => onIconPointerDown(e, icon)}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
-            onDoubleClick={() => open(icon)}
+            onDoubleClick={() => !phoneGrid && open(icon)}
+            onClick={() => phoneGrid && !renaming && open(icon)}
             onFocus={() => !selected.has(icon.id) && !drag.current && setSelected(new Set([icon.id]))}
             onContextMenu={(e) => {
               closeContextMenu()
