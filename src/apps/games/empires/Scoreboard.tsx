@@ -3,6 +3,7 @@ import { Floating, fmt, pingClass } from './Hud'
 import type { RosterSeat, SeatStatus } from './protocol'
 import { relColor } from './render'
 import type { Owner, World } from './sim'
+import { useCoarse } from './Touch'
 
 // The players in the battle, our side first: how each is doing in the fight (fleet, kills,
 // losses, credits earned, score) and, online, whether they're still there and their ping. Opened
@@ -20,6 +21,8 @@ const STATUS: Record<Exclude<SeatStatus, 'playing'>, string> = {
 
 export function Scoreboard({ w, me, names, roster, onClose }: { w: World; me: Owner; names: string[]; roster?: RosterSeat[] | null; onClose: () => void }) {
   const myTeam = w.players[me].team
+  // The column notes are tooltips for a mouse; fingers get them spelled out under the table.
+  const coarse = useCoarse()
   const fleets = w.players.map(() => 0)
   for (const u of w.units) if (!u.dead && isShip(u.t)) fleets[u.owner]++
   const sides = [myTeam, ...w.players.map((p) => p.team).filter((t, i, all) => t !== myTeam && all.indexOf(t) === i)]
@@ -71,6 +74,7 @@ export function Scoreboard({ w, me, names, roster, onClose }: { w: World; me: Ow
           </tbody>
         ))}
       </table>
+      {coarse && <p className="ew-muted ew-small ew-score-note">Fleet: ships in the fight now. Score: a tenth of the credits earned, plus ten points a kill.</p>}
     </Floating>
   )
 }

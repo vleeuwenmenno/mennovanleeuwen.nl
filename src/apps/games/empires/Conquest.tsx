@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { RotateHint } from './RotateHint'
 import { DIFFICULTY, type Difficulty } from './ai'
 import { FACTIONS, UNIT, buildable, isShip, type FactionId, type UnitType } from './data'
 import {
@@ -15,6 +16,8 @@ import { LayoutSection, Modal, SettingsPanel } from './Menus'
 import { actionFor, getSettings, keyName, useSettings, type Action } from './settings'
 import type { FleetSide, World } from './sim'
 import type { EmpiresSound } from './sound'
+import { LongPress, TAP_SLOP, TouchBar, WheelHost, getTouchMods, isTouch, setTouchMod, shiftOf, useCoarse, useLongPressWheel, useWheel, type WheelItem, type WheelRequest } from './Touch'
+import './touch-conquest.css'
 
 // Galactic conquest's screens: the setup, then the galaxy map (systems, lanes and fleets), the
 // view inside one system (its star and planets), the panels for a planet or a fleet, and the prompt
@@ -456,6 +459,8 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
   const headed = g.fleets.filter((f) => selIds.has(f.id) && (f.leg || f.route.length || f.waypoints?.length))
   const routes = headed.map((f) => [fleetAt(g, f), ...plannedHops(g, f).map((h) => (h.planet >= 0 ? planetAt(g, g.planets[h.planet]) : g.systems[h.system]))])
   const stops = headed.flatMap((f) => (f.waypoints ?? []).map((pid, i) => ({ key: `${f.id}:${i}`, at: planetAt(g, g.planets[pid]), r: planetR(g.planets[pid]), n: i + 1 })))
+  // On the things below, a finger's long press opens the map's action wheel rather than their tip
+  // (data-longpress); mice still hover for the tips.
   return (
     <svg className={`ew-gsvg ${mini ? 'is-mini' : ''}`} viewBox={vb} preserveAspectRatio="xMidYMid meet">
       <defs>
@@ -497,6 +502,7 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
             <g
               className="ew-gsys-hit"
               data-sid={s.id}
+              data-longpress=""
               onClick={() => on?.system(s.id)}
               data-tip={mini || d > 0.5 ? undefined : `${s.name}: ${s.planets.map((p) => g.planets[p].name).join(', ')}.${blockadeTip(g, s.id)} Click to zoom in; right-click to send the selected fleet (Shift to add a stop).`}
             >
@@ -525,7 +531,7 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
                   const on2 = selPs.has(pid)
                   const capture = p.capture ? p.capture.t / CAPTURE_TIME : 0
                   return (
-                    <g key={pid} className={`ew-splanet ${on2 ? 'is-sel' : ''}`} data-pid={pid}
+                    <g key={pid} className={`ew-splanet ${on2 ? 'is-sel' : ''}`} data-pid={pid} data-longpress=""
                       onClick={(e) => (e.stopPropagation(), on?.planet(p, e.detail > 1))}
                       data-tip={`${p.name}: ${PLANET_KINDS[p.kind].name}, ${planetIncome(g, p)} credits a day. ${p.owner < 0 ? 'Unclaimed.' : `Held by the ${factionName(g, p.owner)}.`} Double-click to zoom in; right-click to send the selected fleet (Shift to add a stop).`}>
                       <circle cx={q.x} cy={q.y} r={r + Math.max(px(6), r * 0.18)} fill="none" stroke={color(g, p.owner)} strokeWidth={p.owner < 0 ? 1 : 2.5} strokeDasharray={p.owner < 0 ? '3 4' : undefined} vectorEffect="non-scaling-stroke" className="ew-sring" />
@@ -574,7 +580,7 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
               <g className={`ew-gblock ${block.by === ME ? 'is-ours' : 'is-theirs'}`}>
                 <circle cx={s.x} cy={s.y} r={Math.max(px(26), d * (R + 2))} fill="none" stroke={color(g, block.by)} vectorEffect="non-scaling-stroke" />
                 {label(s.x + Math.max(px(26), d * (R + 2)) * 0.7071, s.y - Math.max(px(26), d * (R + 2)) * 0.7071, (
-                  <g data-tip={`${block.by === ME ? 'Our' : 'Enemy'} blockade.${blockadeTip(g, s.id)}`}>
+                  <g data-tip={`${block.by === ME ? 'Our' : 'Enemy'} blockade.${blockadeTip(g, s.id)}`} data-longpress="">
                     <path d="M0,-9 L8,-5 L8,1 C8,6 4,9 0,11 C-4,9 -8,6 -8,1 L-8,-5 Z" fill="#0b1226" stroke={color(g, block.by)} strokeWidth={1.6} />
                     <path d="M-4,-1 L4,-1 M-4,3 L4,3" stroke={block.by === ME ? '#7dffa0' : '#ff6a5e'} strokeWidth={1.6} strokeLinecap="round" />
                   </g>
@@ -594,7 +600,7 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
           const lead = fs.slice().sort((a, b) => b.ships.length - a.ships.length)[0]
           const on2 = fs.some((f) => selIds.has(f.id))
           return (
-            <g key={key} className={`ew-gfleet ${on2 ? 'is-sel' : ''}`} data-fid={lead.id} transform={`translate(${s.x} ${s.y}) scale(${1 / k}) translate(${owner === ME ? -24 : 24} -16)`}
+            <g key={key} className={`ew-gfleet ${on2 ? 'is-sel' : ''}`} data-fid={lead.id} data-longpress="" transform={`translate(${s.x} ${s.y}) scale(${1 / k}) translate(${owner === ME ? -24 : 24} -16)`}
               onClick={(e) => (e.stopPropagation(), fs.length > 1 && on?.fleets ? on.fleets(fs) : on?.fleet(lead))}
               data-tip={`${factionName(g, owner)} fleet${fs.length > 1 ? `s (${fs.length})` : ''}: ${n} ships`}>
               <rect x={-11} y={-7} width={22} height={14} rx={3} fill={color(g, owner)} />
@@ -615,7 +621,7 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
             off = { x: planetR(pl) * k + 26, y: -8 + i * 22 }
           }
           return (
-            <g key={f.id} className={`ew-gfleet ${f.leg ? 'is-moving' : 'is-orbit'} ${selIds.has(f.id) ? 'is-sel' : ''}`} data-fid={f.id} transform={`translate(${p.x} ${p.y}) scale(${1 / k}) translate(${off.x} ${off.y})`} onClick={(e) => (e.stopPropagation(), on?.fleet(f))}
+            <g key={f.id} className={`ew-gfleet ${f.leg ? 'is-moving' : 'is-orbit'} ${selIds.has(f.id) ? 'is-sel' : ''}`} data-fid={f.id} data-longpress="" transform={`translate(${p.x} ${p.y}) scale(${1 / k}) translate(${off.x} ${off.y})`} onClick={(e) => (e.stopPropagation(), on?.fleet(f))}
               data-tip={`${factionName(g, f.owner)} fleet: ${f.ships.length} ships${f.leg ? `, ${secs(eta(f))} to go` : ''}`}>
               {f.leg ? (
                 <>
@@ -674,6 +680,8 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
   const [fleetsOpen, setFleetsOpen] = useState(true)
   /** 'move': the next click on the map sends the selected fleets there (as a right-click would). */
   const [mode, setMode] = useState<'normal' | 'move'>('normal')
+  /** Phones and short screens hide the galaxy map until it's asked for (the map button). */
+  const [mapOpen, setMapOpen] = useState(false)
   const viewEl = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 800, h: 520 })
   const [cam, setCam] = useState<Cam>({ x: W / 2, y: H / 2, k: 0.8 })
@@ -725,6 +733,8 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
       if (!fitted.current) {
         fitted.current = true
         setCam({ x: W / 2, y: H / 2, k: fitK(s.w, s.h) })
+        // A small touch screen starts with the map clear: the fleet list opens from the top bar.
+        if (matchMedia('(pointer: coarse)').matches && (s.w <= 680 || matchMedia('(max-height: 500px)').matches)) setFleetsOpen(false)
       }
     }
     measure()
@@ -1089,9 +1099,10 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
       toast(none, 'bad')
     }
   }
-  /** The selection panel's commands (and their keys); Shift queues the ones that send fleets. */
-  const runCommand = (c: GCommand, queue = false) => {
-    const fs = ourSel()
+  /** The selection panel's commands (and their keys); Shift queues the ones that send fleets.
+   * `only`: these fleets of ours instead of the selection (the action wheel on a fleet). */
+  const runCommand = (c: GCommand, queue = false, only?: Fleet[]) => {
+    const fs = only ?? ourSel()
     if (c === 'idle') return nextIdle()
     if (c === 'all') return pickFleets(g.fleets.filter((f) => f.owner === ME))
     if (c === 'yards') return showYard()
@@ -1110,7 +1121,7 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
       return toast(why ?? 'None of these planets is ours', 'bad')
     }
     if (c === 'look') {
-      const ps = selPlanets.length ? selPlanets.map((p) => planetAt(g, p)) : (selFleet ? [selFleet] : selFleets).map((f) => fleetAt(g, f))
+      const ps = only ? only.map((f) => fleetAt(g, f)) : selPlanets.length ? selPlanets.map((p) => planetAt(g, p)) : (selFleet ? [selFleet] : selFleets).map((f) => fleetAt(g, f))
       if (!ps.length) return sound.error()
       const x0 = Math.min(...ps.map((p) => p.x))
       const x1 = Math.max(...ps.map((p) => p.x))
@@ -1245,13 +1256,28 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
     el.addEventListener('wheel', wheel, { passive: false })
     return () => el.removeEventListener('wheel', wheel)
   }, [])
+  /** Drags the map so the world point `grab` sits under (cx, cy), even while a zoom glides on. */
+  const dragTo = (grab: { x: number; y: number }, cx: number, cy: number) => {
+    const r = viewEl.current!.getBoundingClientRect()
+    camGoal.current = null
+    const sx = cx - r.left - size.w / 2
+    const sy = cy - r.top - size.h / 2
+    const z = zoomTo.current
+    if (z) Object.assign(z, { wx: grab.x, wy: grab.y, sx, sy, tx: sx, ty: sy, cx: NaN, cy: NaN })
+    else {
+      const c = camRef.current
+      moveCam(fix({ x: grab.x - sx / c.k, y: grab.y - sy / c.k, k: c.k }))
+    }
+  }
   // The left button drags out a box that selects our fleets in it (Shift adds to the selection), and
   // a click on open space lets go of the selection; the middle button drags the map along.
   const [box, setBox] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const onPointerDown = (e: React.PointerEvent) => {
+    // Fingers have their own gestures, unless the touch bar's Box mode wants a box drawn.
+    if (isTouch(e) && (!getTouchMods().box || fingers.current)) return touchDown(e)
     // Orders go out on the press, as in a battle: the right button, or the left one in move mode
     // (Shift keeps it on, for the next stop). The click that follows isn't a click.
-    if (e.button === 2 || (e.button === 0 && mode === 'move')) {
+    if (e.button === 2 || (e.button === 0 && mode === 'move' && !isTouch(e))) {
       e.preventDefault()
       orderAt(e.target as Element, e.clientX, e.clientY, e.shiftKey)
       if (e.button === 0) {
@@ -1270,25 +1296,19 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
     // Dragging the map holds the point grabbed under the cursor, even while a zoom glides on.
     const grab = toWorld(x0, y0)
     if (pan) camGoal.current = null
-    const add = e.shiftKey
+    const add = shiftOf(e)
+    const finger = isTouch(e)
     const onSpace = !(e.target as Element).closest('.ew-gsys, .ew-gfleet, .ew-splanet, button')
     dragged.current = false
     const move = (m: PointerEvent) => {
+      if (m.pointerId !== e.pointerId) return
       if (!dragged.current && Math.hypot(m.clientX - x0, m.clientY - y0) < 5) return
       dragged.current = true
-      if (pan) {
-        camGoal.current = null
-        const sx = m.clientX - r.left - size.w / 2
-        const sy = m.clientY - r.top - size.h / 2
-        const z = zoomTo.current
-        if (z) Object.assign(z, { wx: grab.x, wy: grab.y, sx, sy, tx: sx, ty: sy, cx: NaN, cy: NaN })
-        else {
-          const c = camRef.current
-          moveCam(fix({ x: grab.x - sx / c.k, y: grab.y - sy / c.k, k: c.k }))
-        }
-      } else setBox({ x0: x0 - r.left, y0: y0 - r.top, x1: m.clientX - r.left, y1: m.clientY - r.top })
+      if (pan) dragTo(grab, m.clientX, m.clientY)
+      else setBox({ x0: x0 - r.left, y0: y0 - r.top, x1: m.clientX - r.left, y1: m.clientY - r.top })
     }
     const up = (u: PointerEvent) => {
+      if (u.pointerId !== e.pointerId) return
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       if (!pan && dragged.current) {
@@ -1300,6 +1320,8 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
         if (fs.length || (add && selectedIds(sel).size)) pickFleets(fs, add)
         else pickPlanets(g.planets.filter((p) => inBox(planetScreen(g, p, c, size))), add)
         setBox(null)
+        // The touch bar's Box mode is for one box; the next drag moves the map again.
+        if (finger) setTouchMod('box', false)
       } else if (!pan && onSpace && !add) setSel(null)
       // The click that ends a drag isn't a click.
       setTimeout(() => (dragged.current = false), 0)
@@ -1308,12 +1330,106 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
     window.addEventListener('pointerup', up)
   }
 
+  // Touch: one finger drags the map and two pinch-zoom round their middle; a finger that stays put
+  // taps (the map's own clicks then select and zoom, as with a mouse) or, held, opens the action
+  // wheel. In move mode a tap sends the selected fleets there (a stop, with the sticky Shift).
+  const fingers = useRef<{ at: Map<number, { x: number; y: number }>; grab: { x: number; y: number }; pinch: { d: number; k: number; wx: number; wy: number } | null; moved: boolean; end: () => void } | null>(null)
+  const press = useRef(new LongPress())
+  /** Until when the map swallows clicks: the click a browser sends after a finger's gesture. */
+  const noClick = useRef(0)
+  const startPinch = (st: NonNullable<typeof fingers.current>) => {
+    const [a, b] = [...st.at.values()]
+    const w = toWorld((a.x + b.x) / 2, (a.y + b.y) / 2)
+    zoomTo.current = null
+    camGoal.current = null
+    st.pinch = { d: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), k: camRef.current.k, wx: w.x, wy: w.y }
+  }
+  const pinchTo = (st: NonNullable<typeof fingers.current>) => {
+    const [a, b] = [...st.at.values()]
+    const z = st.pinch!
+    const r = viewEl.current!.getBoundingClientRect()
+    const k = clamp((z.k * Math.hypot(a.x - b.x, a.y - b.y)) / z.d, kMinRef.current, K_MAX)
+    const sx = (a.x + b.x) / 2 - r.left - size.w / 2
+    const sy = (a.y + b.y) / 2 - r.top - size.h / 2
+    camGoal.current = null
+    moveCam(fix({ x: z.wx - sx / k, y: z.wy - sy / k, k }))
+  }
+  const touchDown = (e: React.PointerEvent) => {
+    const busy = fingers.current
+    // A first finger while others seem down: their lift went missing, so start afresh.
+    if (busy && e.isPrimary) busy.end()
+    else if (busy) {
+      // Another finger: two pinch.
+      busy.at.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      press.current.cancel()
+      busy.moved = true
+      dragged.current = true
+      startPinch(busy)
+      return
+    }
+    const target = e.target as Element
+    if (target.closest('button, .ew-touchbar')) return
+    const x0 = e.clientX
+    const y0 = e.clientY
+    const st: NonNullable<typeof fingers.current> = { at: new Map([[e.pointerId, { x: x0, y: y0 }]]), grab: toWorld(x0, y0), pinch: null, moved: false, end: () => {} }
+    fingers.current = st
+    dragged.current = false
+    press.current.start(e, () => mapWheel(target, x0, y0))
+    const move = (m: PointerEvent) => {
+      const p = st.at.get(m.pointerId)
+      // Once the wheel is open, the finger is choosing on it.
+      if (!p || press.current.fired) return
+      p.x = m.clientX
+      p.y = m.clientY
+      if (st.pinch) return pinchTo(st)
+      if (!st.moved) {
+        if (Math.hypot(m.clientX - x0, m.clientY - y0) <= TAP_SLOP) return
+        st.moved = true
+        dragged.current = true
+        press.current.cancel()
+      }
+      dragTo(st.grab, m.clientX, m.clientY)
+    }
+    const up = (u: PointerEvent) => {
+      if (!st.at.delete(u.pointerId)) return
+      if (st.at.size >= 2) return startPinch(st)
+      if (st.at.size === 1) {
+        // One finger left: it drags on from where it is.
+        st.pinch = null
+        const [p] = st.at.values()
+        st.grab = toWorld(p.x, p.y)
+        return
+      }
+      st.end()
+      if (st.moved || press.current.fired) noClick.current = performance.now() + 400
+      else if (u.type === 'pointerup') {
+        const shift = getTouchMods().shift
+        if (mode === 'move') {
+          orderAt(target, u.clientX, u.clientY, shift, true)
+          if (!shift) setMode('normal')
+          noClick.current = performance.now() + 400
+        } else if (!target.closest('.ew-gsys, .ew-gfleet, .ew-splanet') && !shift) setSel(null)
+      }
+      setTimeout(() => (dragged.current = false), 0)
+    }
+    st.end = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      if (fingers.current === st) fingers.current = null
+      press.current.cancel()
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+  }
+
   /**
    * An order at a spot on the map (a right-click, or a click in move mode): a planet, a system or a
    * fleet's badge under the cursor (a fleet: where it is), else the nearest planet (zoomed in) or
    * system (zoomed out) near the cursor, so it needn't land exactly on it.
    */
-  const orderAt = (target: Element, cx: number, cy: number, queue: boolean) => {
+  const orderAt = (target: Element, cx: number, cy: number, queue: boolean, touch = false) => {
     if (!selFleet && !selFleets.length) return
     const hit = target.closest('[data-pid], [data-sid], [data-fid]')
     if (hit instanceof SVGElement || hit instanceof HTMLElement) {
@@ -1336,7 +1452,7 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
     }
     if (selFleet?.owner === ME || selFleets.length) {
       sound.error()
-      toast('Right-click a planet or a system to send the fleet there', 'bad')
+      toast(touch ? 'Tap a planet or a system to send the fleet there' : 'Right-click a planet or a system to send the fleet there', 'bad')
     }
   }
 
@@ -1354,320 +1470,476 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
     const i = selPlanet ? (list.indexOf(selPlanet) + 1) % list.length : 0
     showPlanet(list[i].id, 30)
   }
+  /** Our capital: the planet with our biggest station (the richest, between equals). */
+  const toCapital = () => {
+    const cap = g.planets.filter((p) => p.owner === ME).sort((a, b) => b.station - a.station || planetIncome(g, b) - planetIncome(g, a))[0]
+    if (cap) showPlanet(cap.id, 30)
+    else sound.error()
+  }
+
+  /** What's under a finger on the map: a planet, a system or a fleet's badge (zoomed out, a badge
+   * stands for its side's fleets parked there), else the nearest of them close by. */
+  const mapHit = (target: Element, cx: number, cy: number): { planet: Planet } | { system: number } | { fleets: Fleet[] } | null => {
+    const c = camRef.current
+    const out = detail(c.k) < 0.5
+    const group = (f: Fleet) => (!f.leg && out ? g.fleets.filter((x) => !x.leg && x.system === f.system && x.owner === f.owner) : [f])
+    const hit = target.closest('[data-pid], [data-sid], [data-fid]')
+    if (hit instanceof SVGElement || hit instanceof HTMLElement) {
+      const { pid, sid, fid } = hit.dataset
+      if (pid) return { planet: g.planets[Number(pid)] }
+      if (sid) return { system: Number(sid) }
+      const f = g.fleets.find((x) => x.id === Number(fid))
+      if (f) return { fleets: group(f) }
+    }
+    // Fingers are broad: a fleet's badge within reach, then a planet or system as orders find them.
+    const r = viewEl.current!.getBoundingClientRect()
+    let near: Fleet | null = null
+    let best = 26
+    for (const f of g.fleets) {
+      const q = fleetScreen(g, f, c, size)
+      const dd = Math.hypot(q.x - (cx - r.left), q.y - (cy - r.top))
+      if (dd < best) (near = f), (best = dd)
+    }
+    if (near) return { fleets: group(near) }
+    const at = toWorld(cx, cy)
+    if (!out) {
+      const p = g.planets.reduce((b, x) => (Math.hypot(planetAt(g, x).x - at.x, planetAt(g, x).y - at.y) < Math.hypot(planetAt(g, b).x - at.x, planetAt(g, b).y - at.y) ? x : b))
+      const q = planetAt(g, p)
+      if (Math.hypot(q.x - at.x, q.y - at.y) * c.k < Math.max(90, planetR(p) * c.k * 2.5)) return { planet: p }
+    } else {
+      const sys = g.systems.reduce((b, x) => (Math.hypot(x.x - at.x, x.y - at.y) < Math.hypot(b.x - at.x, b.y - at.y) ? x : b))
+      if (Math.hypot(sys.x - at.x, sys.y - at.y) * c.k < 60) return { system: sys.id }
+    }
+    return null
+  }
+  /** Opens the action wheel (from the WheelHost round the screen). */
+  const wheel = useRef<(r: WheelRequest | null) => void>(() => {})
+  /** A long press on the map: what can be done with what's under the finger, on the action wheel. */
+  const mapWheel = (target: Element, cx: number, cy: number) => {
+    const hit = mapHit(target, cx, cy)
+    const ours = ourSel()
+    const noFleet = ours.length ? false : 'Select one of our fleets first'
+    const k = camRef.current.k
+    const ic = (name: IconName) => <Icon name={name} size={18} />
+    let title: string
+    let items: WheelItem[]
+    if (hit && 'planet' in hit) {
+      const p = hit.planet
+      const mine = p.owner === ME
+      title = `${p.name} · ${p.owner < 0 ? 'unclaimed' : mine ? 'ours' : factionName(g, p.owner)} · +${planetIncome(g, p)} a day`
+      items = [
+        { id: 'send', label: 'Send fleet', icon: ic('move'), disabled: noFleet, run: () => send(p.id) },
+        { id: 'queue', label: 'Add stop', icon: ic('rally'), disabled: noFleet, run: () => send(p.id, true) },
+        { id: 'open', label: mine && p.station ? 'Shipyard' : 'Open', icon: ic(mine && p.station ? 'yard' : 'target'), run: () => (sound.click(), setTake({}), setSel({ kind: 'planet', id: p.id })) },
+      ]
+      if (mine && p.station < 4)
+        items.push({
+          id: 'upgrade', label: p.station ? 'Upgrade station' : 'Build station', icon: ic('yard'), disabled: cantUpgradeStation(g, ME, p.id) ?? false,
+          run: () => {
+            const why = upgradeStation(g, ME, p.id)
+            if (!why) return sound.constructing()
+            sound.error()
+            toast(why, 'bad')
+          },
+        })
+      items.push({ id: 'zoom', label: 'Zoom in', icon: ic('radar'), run: () => showPlanet(p.id, 70) })
+    } else if (hit && 'system' in hit) {
+      const sys = g.systems[hit.system]
+      title = `${sys.name} · ${sys.planets.length} planet${sys.planets.length > 1 ? 's' : ''}`
+      items = [
+        { id: 'send', label: 'Send fleet', icon: ic('move'), disabled: noFleet, run: () => sendToSystem(sys.id) },
+        { id: 'queue', label: 'Add stop', icon: ic('rally'), disabled: noFleet, run: () => sendToSystem(sys.id, true) },
+        { id: 'planets', label: 'Its planets', icon: ic('target'), run: () => pickPlanets(sys.planets.map((pid) => g.planets[pid])) },
+        { id: 'zoom', label: 'Zoom in', icon: ic('radar'), run: () => (sound.click(), flyTo(sys.x, sys.y, Math.max(k, 11))) },
+      ]
+    } else if (hit && hit.fleets[0].owner === ME) {
+      const fs = hit.fleets
+      const f = fs[0]
+      // Orders go to the selection when the finger is on part of it, else to these fleets.
+      const acts = fs.some((x) => selectedIds(sel).has(x.id)) ? ours : fs
+      const here = f.leg ? [] : g.fleets.filter((x) => x.owner === ME && !x.leg && (detail(k) < 0.5 ? x.system === f.system : x.planet === f.planet))
+      title = `${fs.length > 1 ? `Our ${fs.length} fleets` : 'Our fleet'} · ${fs.reduce((n, x) => n + x.ships.length, 0)} ships`
+      items = [
+        { id: 'select', label: fs.length > 1 ? 'Select them' : 'Select', icon: ic('fleet'), run: () => pickFleets(fs) },
+        { id: 'here', label: 'All here', icon: ic('army'), disabled: f.leg ? 'In flight' : false, run: () => pickFleets(here) },
+        { id: 'stop', label: 'Stop', icon: ic('stop'), run: () => runCommand('stop', false, acts) },
+        { id: 'gather', label: 'Gather', icon: ic('rally'), disabled: acts.length < 2 ? 'Needs two fleets or more' : false, run: () => runCommand('gather', false, acts) },
+        { id: 'fallback', label: 'Fall back', icon: ic('jump'), run: () => runCommand('fallback', false, acts) },
+        { id: 'drop', label: 'Drop stop', icon: ic('back'), disabled: acts.some((x) => x.waypoints?.length) ? false : 'No stops queued', run: () => runCommand('drop', false, acts) },
+        { id: 'look', label: 'Look', icon: ic('target'), run: () => runCommand('look', false, acts) },
+      ]
+    } else if (hit) {
+      const f = hit.fleets[0]
+      const to = f.leg ? (f.route.length ? f.route[f.route.length - 1].planet : f.leg.planet) : f.planet
+      const noTarget = noFleet || (to < 0 ? 'Nowhere to meet it' : false)
+      title = `${factionName(g, f.owner)} fleet${hit.fleets.length > 1 ? `s (${hit.fleets.length})` : ''} · ${hit.fleets.reduce((n, x) => n + x.ships.length, 0)} ships`
+      items = [
+        { id: 'send', label: 'Attack', icon: ic('attack'), disabled: noTarget, run: () => send(to) },
+        { id: 'queue', label: 'Add stop', icon: ic('rally'), disabled: noTarget, run: () => send(to, true) },
+        { id: 'select', label: 'Info', icon: ic('fleet'), run: () => (sound.click(), setTake({}), setSel({ kind: 'fleet', id: f.id })) },
+        {
+          id: 'look', label: 'Look', icon: ic('target'),
+          run: () => {
+            const q = fleetAt(g, f)
+            flyTo(q.x, q.y, Math.max(k, 12))
+          },
+        },
+      ]
+    } else {
+      title = 'The galaxy'
+      items = [
+        { id: 'all', label: 'All fleets', icon: ic('army'), disabled: myFleets.length ? false : 'We have no fleets', run: () => runCommand('all') },
+        { id: 'idle', label: 'Next idle', icon: ic('idle'), disabled: idleFleets.length ? false : 'No fleet is idle', run: nextIdle },
+        { id: 'move', label: mode === 'move' ? 'Cancel move' : 'Move mode', icon: ic('move'), disabled: mode !== 'move' && noFleet, run: () => (mode === 'move' ? (sound.click(), setMode('normal')) : runCommand('move')) },
+        { id: 'whole', label: 'Whole galaxy', icon: ic('radar'), run: flyOut },
+        { id: 'capital', label: 'Capital', icon: ic('target'), disabled: g.planets.some((p) => p.owner === ME) ? false : 'We hold no planets', run: toCapital },
+        { id: 'yards', label: 'Shipyards', icon: ic('yard'), disabled: g.planets.some((p) => p.owner === ME && p.station) ? false : 'No stations', run: showYard },
+        { id: 'clear', label: 'Let go', icon: ic('back'), disabled: sel ? false : 'Nothing selected', run: () => (setSel(null), setTake({})) },
+      ]
+    }
+    wheel.current({ x: cx, y: cy, title, items })
+  }
   // Where we're looking, for the bar: the nearest system once zoomed in, and planet once close.
   const d = detail(cam.k)
   const near = d > 0.5 ? g.systems.reduce((b, s) => (Math.hypot(s.x - cam.x, s.y - cam.y) < Math.hypot(b.x - cam.x, b.y - cam.y) ? s : b)) : null
   const nearPlanet = near && cam.k > 30 ? near.planets.map((p) => g.planets[p]).reduce((b, p) => (Math.hypot(planetAt(g, p).x - cam.x, planetAt(g, p).y - cam.y) < Math.hypot(planetAt(g, b).x - cam.x, planetAt(g, b).y - cam.y) ? p : b)) : null
 
   return (
-    <div ref={rootEl} className={`ew-root ew-deck ew-galaxy ew-${myFaction}`} style={{ ['--ew-accent' as string]: FACTIONS[myFaction].color }} onContextMenu={noMenu}>
-      <Tips />
-      {/* The same top bar as a battle's, in the same order: faction, credits, fleet, planets; then
-          on the right the shipyards, the time and the menu. */}
-      <div className="ew-top ew-gtop">
-        <button className={`ew-top-cell ew-top-faction ${fleetsOpen ? 'is-on' : ''}`} onClick={() => (sound.click(), setFleetsOpen(!fleetsOpen))}
-          data-tip={`Our fleets: ${myFleets.length}. Click to show or hide the list.`} aria-label="Our fleets">
-          <span className="ew-emblem">
-            <img src={`/games/empires/world/emblem-${myFaction}.webp`} alt="" />
-            {myFleets.length > 0 && <em>{myFleets.length}</em>}
-          </span>
-          <div>
-            <strong>{FACTIONS[myFaction].name} <em className="ew-beta" data-tip="Galactic conquest is still being built: expect rough edges, and changes to come">Beta</em></strong>
-            <small>{g.name}{near ? ` › ${near.name}` : ''}{nearPlanet && nearPlanet.name !== near?.name ? ` › ${nearPlanet.name}` : ''}</small>
-          </div>
-        </button>
-        <button className={`ew-top-cell ew-creditcell ${economy ? 'is-on' : ''}`} onClick={() => (sound.click(), setEconomy(!economy))}
-          data-tip={`Credits and income per day: our ${g.planets.filter((p) => p.owner === ME).length} planets pay ${fmt(myIncome)} at the end of every day.\nClick for the economy: where it comes from, the best and worst planets, and recent purchases.`}>
-          <span className="ew-gold"><Icon name="credits" size={20} /></span>
-          <b className="ew-big">{fmt(mine.credits)}</b>
-          <small className="ew-good">+{fmt(myIncome)} / day</small>
-          {pay && <em key={pay.id} className="ew-gpaid">+{fmt(pay.amount)}</em>}
-        </button>
-        <div className="ew-top-cell" data-tip={`Ships in our ${myFleets.length} fleets`}>
-          <Icon name="fleet" size={20} />
-          <b className="ew-big">{myFleets.reduce((n, f) => n + f.ships.length, 0)}</b>
-          <small>in {myFleets.length}</small>
-        </div>
-        <div className="ew-top-cell ew-hide-narrow" data-tip="Planets held: ours, and the enemy's">
-          <span className="ew-good"><Icon name="radar" size={17} /></span>
-          <b>{g.planets.filter((p) => p.owner === ME).length}</b>
-          <small>vs</small>
-          <b className="ew-bad">{g.planets.filter((p) => p.owner >= 0 && p.owner !== ME).length}</b>
-          <small>/ {g.planets.length}</small>
-        </div>
-        <div className="ew-top-right">
-          {/* The shipyards: a bar filling as the next ship comes off a slip, a badge counting
-              what's queued across every planet; a click looks at the busiest yard. */}
-          <button className={`ew-top-cell ew-jobbtn ${nextJob ? 'is-busy' : ''}`} onClick={showYard} aria-label="Shipyards"
-            data-tip={nextJob ? `Shipyards: ${nextJob.q.unit === 'station' ? 'station work' : UNIT[nextJob.q.unit].name} at ${nextJob.p.name}, ${Math.ceil(nextJob.q.left)} s left${queued > 1 ? `, ${queued - 1} more queued` : ''}.\nClick to look at the next yard.` : 'Shipyards idle.\nClick to look at a planet with a station.'}>
-            <Icon name="yard" size={18} />
-            {queued > 0 && <em>{queued}</em>}
-            {nextJob && <i style={{ transform: `scaleX(${1 - nextJob.q.left / nextJob.q.total})` }} />}
+    <div ref={rootEl} className={`ew-root ew-deck ew-galaxy ew-${myFaction} ${selPlanet ? 'has-dock' : ''} ${mapOpen ? 'is-map-open' : ''}`} style={{ ['--ew-accent' as string]: FACTIONS[myFaction].color }} onContextMenu={noMenu}>
+      <WheelHost>
+        <WheelHook to={wheel} />
+        <Tips />
+        <RotateHint />
+        {/* The same top bar as a battle's, in the same order: faction, credits, fleet, planets; then
+            on the right the shipyards, the time and the menu. */}
+        <div className="ew-top ew-gtop">
+          <button className={`ew-top-cell ew-top-faction ${fleetsOpen ? 'is-on' : ''}`} onClick={() => (sound.click(), setFleetsOpen(!fleetsOpen), setMapOpen(false))}
+            data-tip={`Our fleets: ${myFleets.length}. Click to show or hide the list.`} aria-label="Our fleets">
+            <span className="ew-emblem">
+              <img src={`/games/empires/world/emblem-${myFaction}.webp`} alt="" />
+              {myFleets.length > 0 && <em>{myFleets.length}</em>}
+            </span>
+            <div>
+              <strong>{FACTIONS[myFaction].name} <em className="ew-beta" data-tip="Galactic conquest is still being built: expect rough edges, and changes to come">Beta</em></strong>
+              <small>{g.name}{near ? ` › ${near.name}` : ''}{nearPlanet && nearPlanet.name !== near?.name ? ` › ${nearPlanet.name}` : ''}</small>
+            </div>
           </button>
-          {/* Time: pause and play, the week, and the speed, which cycles 1x, 2x, 4x. */}
-          <div className={`ew-top-cell ew-timectl ${paused ? 'is-paused' : ''}`} role="group" aria-label="Time">
-            <button onClick={() => setPaused(!paused)} data-tip={`${paused ? 'Resume' : 'Pause'} (${keyName(getSettings().keys.pause)} or Space)`} aria-label={paused ? 'Resume' : 'Pause'}>
-              <Icon name={paused ? 'play' : 'pause'} size={16} />
+          <button className={`ew-top-cell ew-creditcell ${economy ? 'is-on' : ''}`} onClick={() => (sound.click(), setEconomy(!economy))}
+            data-tip={`Credits and income per day: our ${g.planets.filter((p) => p.owner === ME).length} planets pay ${fmt(myIncome)} at the end of every day.\nClick for the economy: where it comes from, the best and worst planets, and recent purchases.`}>
+            <span className="ew-gold"><Icon name="credits" size={20} /></span>
+            <b className="ew-big">{fmt(mine.credits)}</b>
+            <small className="ew-good">+{fmt(myIncome)} / day</small>
+            {pay && <em key={pay.id} className="ew-gpaid">+{fmt(pay.amount)}</em>}
+          </button>
+          <div className="ew-top-cell ew-gshipscell" data-tip={`Ships in our ${myFleets.length} fleets`}>
+            <Icon name="fleet" size={20} />
+            <b className="ew-big">{myFleets.reduce((n, f) => n + f.ships.length, 0)}</b>
+            <small>in {myFleets.length}</small>
+          </div>
+          <div className="ew-top-cell ew-hide-narrow" data-tip="Planets held: ours, and the enemy's">
+            <span className="ew-good"><Icon name="radar" size={17} /></span>
+            <b>{g.planets.filter((p) => p.owner === ME).length}</b>
+            <small>vs</small>
+            <b className="ew-bad">{g.planets.filter((p) => p.owner >= 0 && p.owner !== ME).length}</b>
+            <small>/ {g.planets.length}</small>
+          </div>
+          <div className="ew-top-right">
+            {/* The shipyards: a bar filling as the next ship comes off a slip, a badge counting
+                what's queued across every planet; a click looks at the busiest yard. */}
+            <button className={`ew-top-cell ew-jobbtn ${nextJob ? 'is-busy' : ''}`} onClick={showYard} aria-label="Shipyards"
+              data-tip={nextJob ? `Shipyards: ${nextJob.q.unit === 'station' ? 'station work' : UNIT[nextJob.q.unit].name} at ${nextJob.p.name}, ${Math.ceil(nextJob.q.left)} s left${queued > 1 ? `, ${queued - 1} more queued` : ''}.\nClick to look at the next yard.` : 'Shipyards idle.\nClick to look at a planet with a station.'}>
+              <Icon name="yard" size={18} />
+              {queued > 0 && <em>{queued}</em>}
+              {nextJob && <i style={{ transform: `scaleX(${1 - nextJob.q.left / nextJob.q.total})` }} />}
             </button>
-            <WeekClock g={g} />
-            <button className="ew-speedbtn" onClick={() => setSpeed(speed === 1 ? 2 : speed === 2 ? 4 : 1)} data-tip="Galaxy speed: click to cycle 1x, 2x, 4x" aria-label={`Galaxy speed ${speed}x`}>
-              {speed}×
+            {/* Time: pause and play, the week, and the speed, which cycles 1x, 2x, 4x. */}
+            <div className={`ew-top-cell ew-timectl ${paused ? 'is-paused' : ''}`} role="group" aria-label="Time">
+              <button onClick={() => setPaused(!paused)} data-tip={`${paused ? 'Resume' : 'Pause'} (${keyName(getSettings().keys.pause)} or Space)`} aria-label={paused ? 'Resume' : 'Pause'}>
+                <Icon name={paused ? 'play' : 'pause'} size={16} />
+              </button>
+              <WeekClock g={g} />
+              <button className="ew-speedbtn" onClick={() => setSpeed(speed === 1 ? 2 : speed === 2 ? 4 : 1)} data-tip="Galaxy speed: click to cycle 1x, 2x, 4x" aria-label={`Galaxy speed ${speed}x`}>
+                {speed}×
+              </button>
+            </div>
+            <button className="ew-top-cell ew-top-btn" onClick={() => setMenu('menu')} data-tip="Campaign menu: save, settings, window layout (Esc)" aria-label="Menu">
+              <Icon name="menu" size={18} />
             </button>
           </div>
-          <button className="ew-top-cell ew-top-btn" onClick={() => setMenu('menu')} data-tip="Campaign menu: save, settings, window layout (Esc)" aria-label="Menu">
-            <Icon name="menu" size={18} />
-          </button>
         </div>
-      </div>
 
-      <div
-        className={`ew-gview ${mode === 'move' ? 'is-ordering' : ''}`}
-        ref={viewEl}
-        onPointerDown={onPointerDown}
-        onPointerMove={(e) => {
-          const r = e.currentTarget.getBoundingClientRect()
-          mouse.current = { x: e.clientX - r.left, y: e.clientY - r.top, inside: true }
-        }}
-        onPointerLeave={() => (mouse.current.inside = false)}
-      >
-        <GalaxyView
+        <div
+          className={`ew-gview ${mode === 'move' ? 'is-ordering' : ''}`}
+          ref={viewEl}
+          onPointerDown={onPointerDown}
+          onClickCapture={(e) => {
+            if (performance.now() > noClick.current) return
+            noClick.current = 0
+            e.stopPropagation()
+            e.preventDefault()
+          }}
+          onPointerMove={(e) => {
+            // Fingers don't scroll the screen edges.
+            if (isTouch(e)) return
+            const r = e.currentTarget.getBoundingClientRect()
+            mouse.current = { x: e.clientX - r.left, y: e.clientY - r.top, inside: true }
+          }}
+          onPointerLeave={() => (mouse.current.inside = false)}
+        >
+          <GalaxyView
+            g={g}
+            cam={cam}
+            size={size}
+            sel={sel}
+            on={{
+              system: (s) => {
+                if (dragged.current) return
+                sound.click()
+                const sys = g.systems[s]
+                flyTo(sys.x, sys.y, Math.max(camRef.current.k, 11))
+              },
+              planet: (p, double) => {
+                if (dragged.current) return
+                sound.click()
+                if (double) showPlanet(p.id, 70)
+                else setSel({ kind: 'planet', id: p.id })
+              },
+              fleet: pickFleet,
+              fleets: (fs) => !dragged.current && pickFleets(fs),
+            }}
+          />
+          {box && <div className="ew-gbox" style={{ left: Math.min(box.x0, box.x1), top: Math.min(box.y0, box.y1), width: Math.abs(box.x1 - box.x0), height: Math.abs(box.y1 - box.y0) }} />}
+          <div className="ew-gzoom">
+            <button onClick={() => flyTo(cam.x, cam.y, cam.k * 2)} data-tip={`Zoom in (${keyName(getSettings().keys.zoomIn)} or the wheel)`}>+</button>
+            <button onClick={() => flyTo(cam.x, cam.y, cam.k / 2)} data-tip={`Zoom out (${keyName(getSettings().keys.zoomOut)} or the wheel)`}>−</button>
+            <button onClick={flyOut} data-tip="The whole galaxy (Esc)"><Icon name="radar" size={14} /></button>
+            {/* Phones and short screens: the galaxy map, hidden there until asked for. */}
+            <button className={`ew-gmapbtn ${mapOpen ? 'is-on' : ''}`} onClick={() => (sound.click(), setMapOpen(!mapOpen), mapOpen || setFleetsOpen(false))} aria-pressed={mapOpen} aria-label="Galaxy map" data-tip="Show or hide the galaxy map">
+              <Icon name="grid" size={14} />
+            </button>
+          </div>
+        </div>
+        <TouchBar className="ew-gtouchbar" extra={
+          <button className={mode === 'move' ? 'is-on' : ''} aria-pressed={mode === 'move'} disabled={mode !== 'move' && !ourSel().length} onClick={() => (mode === 'move' ? (sound.click(), setMode('normal')) : runCommand('move'))}
+            title={mode === 'move' ? 'Cancel move mode' : 'Move: the next tap on the map sends the selected fleets there'}>
+            <Icon name="move" size={16} /><span>{mode === 'move' ? 'Cancel' : 'Move'}</span>
+          </button>
+        } />
+
+        {/* Our fleets, to find them quickly. */}
+        {fleetsOpen && <Floating id="gFleets" title="Our fleets" at={{ left: 6, top: 56 }} className="ew-gfleets" layout={galaxyLayout} onClose={() => setFleetsOpen(false)} aside={<b className="ew-selcount">{myFleets.length || ''}</b>}>
+          {myFleets.length ? (
+            <ul>
+              {myFleets.map((f) => (
+                <li key={f.id}>
+                  <button className={selectedIds(sel).has(f.id) ? 'is-on' : ''} onClick={() => {
+                    pickFleet(f)
+                    const p = fleetAt(g, f)
+                    flyTo(p.x, p.y, Math.max(camRef.current.k, 12))
+                  }}>
+                    <b>{f.ships.length}</b>
+                    <span>{f.leg ? `→ ${g.planets[(f.route.length ? f.route[f.route.length - 1] : f.leg).planet]?.name ?? g.systems[f.leg.system].name}` : g.planets[f.planet]?.name}</span>
+                    {f.leg && <small>{secs(eta(f))}</small>}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <span className="ew-muted ew-small">No fleets. Build ships at a planet with a station.</span>
+          )}
+        </Floating>}
+
+        <GalaxyMinimap
           g={g}
           cam={cam}
           size={size}
-          sel={sel}
-          on={{
-            system: (s) => {
-              if (dragged.current) return
-              sound.click()
-              const sys = g.systems[s]
-              flyTo(sys.x, sys.y, Math.max(camRef.current.k, 11))
-            },
-            planet: (p, double) => {
-              if (dragged.current) return
-              sound.click()
-              if (double) showPlanet(p.id, 70)
-              else setSel({ kind: 'planet', id: p.id })
-            },
-            fleet: pickFleet,
-            fleets: (fs) => !dragged.current && pickFleets(fs),
+          onLook={(x, y) => {
+            camGoal.current = null
+            zoomTo.current = null
+            moveCam(fix({ ...camRef.current, x, y }))
+          }}
+          onWhole={flyOut}
+          onCapital={toCapital}
+          idle={idleFleets.length}
+          onIdle={nextIdle}
+          economy={economy}
+          onEconomy={() => (sound.click(), setEconomy(!economy))}
+        />
+
+        <GalaxySelection
+          g={g}
+          fleets={selFleet ? [selFleet] : selFleets}
+          planets={sel?.kind === 'planets' ? selPlanets : []}
+          take={take}
+          setTake={setTake}
+          mode={mode}
+          onCommand={(c) => runCommand(c)}
+          onFleets={(fs, drop) => {
+            const ids = drop ? [...selectedIds(sel)].filter((id) => !fs.some((f) => f.id === id)) : fs.map((f) => f.id)
+            setTake({})
+            setSel(ids.length > 1 ? { kind: 'fleets', ids } : ids.length ? { kind: 'fleet', id: ids[0] } : null)
+            sound.click()
+          }}
+          onPlanets={(ps, drop) => {
+            const ids = drop ? [...selectedPlanets(sel)].filter((id) => !ps.some((p) => p.id === id)) : ps.map((p) => p.id)
+            setSel(ids.length > 1 ? { kind: 'planets', ids } : ids.length ? { kind: 'planet', id: ids[0] } : null)
+            sound.click()
+          }}
+          enabled={(c) => {
+            const fs = ourSel()
+            if (c === 'idle') return myFleets.some((f) => !f.leg && !f.route.length && !f.waypoints?.length && f.planet >= 0)
+            if (c === 'all') return myFleets.length > 0
+            if (c === 'look') return selFleets.length > 0 || !!selFleet || selPlanets.length > 0
+            if (c === 'yards') return g.planets.some((p) => p.owner === ME && p.station)
+            if (c === 'economy') return true
+            if (c === 'upgrade') return selPlanets.some((p) => p.owner === ME && !cantUpgradeStation(g, ME, p.id))
+            if (c === 'gather') return fs.length > 1
+            if (c === 'drop') return fs.some((f) => f.waypoints?.length)
+            return fs.length > 0
           }}
         />
-        {box && <div className="ew-gbox" style={{ left: Math.min(box.x0, box.x1), top: Math.min(box.y0, box.y1), width: Math.abs(box.x1 - box.x0), height: Math.abs(box.y1 - box.y0) }} />}
-        <div className="ew-gzoom">
-          <button onClick={() => flyTo(cam.x, cam.y, cam.k * 2)} data-tip={`Zoom in (${keyName(getSettings().keys.zoomIn)} or the wheel)`}>+</button>
-          <button onClick={() => flyTo(cam.x, cam.y, cam.k / 2)} data-tip={`Zoom out (${keyName(getSettings().keys.zoomOut)} or the wheel)`}>−</button>
-          <button onClick={flyOut} data-tip="The whole galaxy (Esc)"><Icon name="radar" size={14} /></button>
-        </div>
-      </div>
-
-      {/* Our fleets, to find them quickly. */}
-      {fleetsOpen && <Floating id="gFleets" title="Our fleets" at={{ left: 6, top: 56 }} className="ew-gfleets" layout={galaxyLayout} onClose={() => setFleetsOpen(false)} aside={<b className="ew-selcount">{myFleets.length || ''}</b>}>
-        {myFleets.length ? (
-          <ul>
-            {myFleets.map((f) => (
-              <li key={f.id}>
-                <button className={selectedIds(sel).has(f.id) ? 'is-on' : ''} onClick={() => {
-                  pickFleet(f)
-                  const p = fleetAt(g, f)
-                  flyTo(p.x, p.y, Math.max(camRef.current.k, 12))
-                }}>
-                  <b>{f.ships.length}</b>
-                  <span>{f.leg ? `→ ${g.planets[(f.route.length ? f.route[f.route.length - 1] : f.leg).planet]?.name ?? g.systems[f.leg.system].name}` : g.planets[f.planet]?.name}</span>
-                  {f.leg && <small>{secs(eta(f))}</small>}
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <span className="ew-muted ew-small">No fleets. Build ships at a planet with a station.</span>
+        {selPlanet && (
+          <PlanetDock
+            g={g}
+            p={selPlanet}
+            sound={sound}
+            onClose={() => setSel(null)}
+            onFleet={pickFleet}
+            onLook={() => showPlanet(selPlanet.id, 70)}
+            toast={toast}
+          />
         )}
-      </Floating>}
+        {economy && <GalaxyEconomy g={g} onClose={() => setEconomy(false)} onPlanet={(pid) => showPlanet(pid)} onSystem={(s) => flyTo(g.systems[s].x, g.systems[s].y, Math.max(camRef.current.k, 11))} />}
 
-      <GalaxyMinimap
-        g={g}
-        cam={cam}
-        size={size}
-        onLook={(x, y) => {
-          camGoal.current = null
-          zoomTo.current = null
-          moveCam(fix({ ...camRef.current, x, y }))
-        }}
-        onWhole={flyOut}
-        onCapital={() => {
-          const cap = g.planets.filter((p) => p.owner === ME).sort((a, b) => b.station - a.station || planetIncome(g, b) - planetIncome(g, a))[0]
-          if (cap) showPlanet(cap.id, 30)
-          else sound.error()
-        }}
-        idle={idleFleets.length}
-        onIdle={nextIdle}
-        economy={economy}
-        onEconomy={() => (sound.click(), setEconomy(!economy))}
-      />
-
-      <GalaxySelection
-        g={g}
-        fleets={selFleet ? [selFleet] : selFleets}
-        planets={sel?.kind === 'planets' ? selPlanets : []}
-        take={take}
-        setTake={setTake}
-        mode={mode}
-        onCommand={(c) => runCommand(c)}
-        onFleets={(fs, drop) => {
-          const ids = drop ? [...selectedIds(sel)].filter((id) => !fs.some((f) => f.id === id)) : fs.map((f) => f.id)
-          setTake({})
-          setSel(ids.length > 1 ? { kind: 'fleets', ids } : ids.length ? { kind: 'fleet', id: ids[0] } : null)
-          sound.click()
-        }}
-        onPlanets={(ps, drop) => {
-          const ids = drop ? [...selectedPlanets(sel)].filter((id) => !ps.some((p) => p.id === id)) : ps.map((p) => p.id)
-          setSel(ids.length > 1 ? { kind: 'planets', ids } : ids.length ? { kind: 'planet', id: ids[0] } : null)
-          sound.click()
-        }}
-        enabled={(c) => {
-          const fs = ourSel()
-          if (c === 'idle') return myFleets.some((f) => !f.leg && !f.route.length && !f.waypoints?.length && f.planet >= 0)
-          if (c === 'all') return myFleets.length > 0
-          if (c === 'look') return selFleets.length > 0 || !!selFleet || selPlanets.length > 0
-          if (c === 'yards') return g.planets.some((p) => p.owner === ME && p.station)
-          if (c === 'economy') return true
-          if (c === 'upgrade') return selPlanets.some((p) => p.owner === ME && !cantUpgradeStation(g, ME, p.id))
-          if (c === 'gather') return fs.length > 1
-          if (c === 'drop') return fs.some((f) => f.waypoints?.length)
-          return fs.length > 0
-        }}
-      />
-      {selPlanet && (
-        <PlanetDock
-          g={g}
-          p={selPlanet}
-          sound={sound}
-          onClose={() => setSel(null)}
-          onFleet={pickFleet}
-          onLook={() => showPlanet(selPlanet.id, 70)}
-          toast={toast}
-        />
-      )}
-      {economy && <GalaxyEconomy g={g} onClose={() => setEconomy(false)} onPlanet={(pid) => showPlanet(pid)} onSystem={(s) => flyTo(g.systems[s].x, g.systems[s].y, Math.max(camRef.current.k, 11))} />}
-
-      <div className="ew-toasts">
-        {toasts.map((t) => {
-          const dismiss = () => setToasts((ts) => ts.filter((x) => x.id !== t.id))
-          return (
-            <section key={t.id} className={`ew-frame ew-toast is-${t.tone}`} onContextMenu={(e) => (e.preventDefault(), dismiss())}>
-              <div className="ew-frame-in">
-                <span>{t.text}</span>
-                <button className="ew-toast-x" onClick={dismiss} aria-label="Dismiss">×</button>
-              </div>
-            </section>
-          )
-        })}
-      </div>
-
-      {clash && g.winner === -1 && (
-        <BattlePrompt
-          g={g}
-          c={clash}
-          onFight={() => {
-            sound.click()
-            fight(clash)
-          }}
-          onAuto={() => {
-            sound.click()
-            settlePending(g, 'auto')
-            saveGalaxy(g)
-            setFrame((n) => n + 1)
-          }}
-          onRetreat={() => {
-            sound.click()
-            withdraw(g, ME)
-            saveGalaxy(g)
-            setFrame((n) => n + 1)
-          }}
-        />
-      )}
-
-      {g.winner !== -1 && (
-        <div className="ew-modal-back">
-          <div className={`ew-modal ew-result ${g.winner === ME ? 'is-won' : 'is-lost'}`}>
-            <Frame title={g.winner === ME ? 'Victory' : 'Defeat'}>
-              <h2>{g.winner === ME ? 'The galaxy is ours' : 'The war is lost'}</h2>
-              <p className="ew-muted">{g.winner === ME ? `The ${factionName(g, 1)} holds no planets and no fleets.` : `The ${factionName(g, 1)} took everything we held.`} Week {calendar(g.time).week + 1}.</p>
-              <div className="ew-menu-list is-row">
-                <button className="ew-menu-btn is-primary" onClick={onAbandon}>New campaign</button>
-                <button className="ew-menu-btn" onClick={onEnd}>Main menu</button>
-              </div>
-            </Frame>
-          </div>
+        <div className="ew-toasts">
+          {toasts.map((t) => {
+            const dismiss = () => setToasts((ts) => ts.filter((x) => x.id !== t.id))
+            return (
+              <section key={t.id} className={`ew-frame ew-toast is-${t.tone}`} onContextMenu={(e) => (e.preventDefault(), dismiss())} onPointerUp={(e) => isTouch(e) && dismiss()}>
+                <div className="ew-frame-in">
+                  <span>{t.text}</span>
+                  <button className="ew-toast-x" onClick={dismiss} aria-label="Dismiss">×</button>
+                </div>
+              </section>
+            )
+          })}
         </div>
-      )}
 
-      {menu === 'menu' && (
-        <Modal title="Galactic conquest" onClose={() => setMenu(null)}>
-          <div className="ew-menu-list">
-            <button className="ew-menu-btn is-primary" onClick={() => setMenu(null)}><Icon name="play" size={18} /> Resume</button>
-            <button className="ew-menu-btn" onClick={() => {
-              const ok = saveGalaxy(g)
-              toast(ok ? `Saved: ${g.save.name}` : 'Could not save: the browser\'s storage is full', ok ? 'good' : 'bad')
-              setMenu(null)
+        {clash && g.winner === -1 && (
+          <BattlePrompt
+            g={g}
+            c={clash}
+            onFight={() => {
+              sound.click()
+              fight(clash)
             }}
-              data-tip={`Save into "${g.save.name}". It also saves by itself as you play.`}>
-              <Icon name="yard" size={18} /> Save
-            </button>
-            <button className="ew-menu-btn" onClick={() => (setSaveName(g.save.name), setMenu('saveas'))} data-tip="Save a copy under a new name, and play on in that one">
-              <Icon name="keys" size={18} /> Save as…
-            </button>
-            <button className="ew-menu-btn" onClick={() => (saveGalaxy(g), setMenu('load'))} data-tip="Switch to another saved campaign (this one is saved first)">
-              <Icon name="back" size={18} /> Load game…
-            </button>
-            <button className="ew-menu-btn" onClick={() => setMenu('settings')}><Icon name="gear" size={18} /> Settings</button>
-            <button className="ew-menu-btn" onClick={onExit}><Icon name="exit" size={18} /> Save and quit to the main menu</button>
-            <button className="ew-menu-btn is-danger" onClick={() => setMenu('abandon')}>Abandon this campaign</button>
-          </div>
-          <LayoutSection store={galaxyLayout} campaign />
-        </Modal>
-      )}
-      {menu === 'saveas' && (
-        <Modal title="Save as" onClose={() => setMenu('menu')}>
-          <form className="ew-saveas" onSubmit={(e) => {
-            e.preventDefault()
-            if (!saveName.trim()) return
-            const ok = saveGalaxy(g, saveName)
-            toast(ok ? `Saved as: ${g.save.name}` : 'Could not save: the browser\'s storage is full', ok ? 'good' : 'bad')
-            setMenu(null)
-          }}>
-            <label className="ew-row">
-              <span>Name</span>
-              <input autoFocus value={saveName} maxLength={40} onChange={(e) => setSaveName(e.target.value)} aria-label="Save name" />
-            </label>
-            <p className="ew-muted ew-small">A new save with this name; the campaign carries on in it, and "{g.save.name}" stays as it is now.</p>
-            <div className="ew-menu-list is-row">
-              <button type="submit" className="ew-menu-btn is-primary" disabled={!saveName.trim()}>Save</button>
-              <button type="button" className="ew-menu-btn" onClick={() => setMenu('menu')}>Cancel</button>
+            onAuto={() => {
+              sound.click()
+              settlePending(g, 'auto')
+              saveGalaxy(g)
+              setFrame((n) => n + 1)
+            }}
+            onRetreat={() => {
+              sound.click()
+              withdraw(g, ME)
+              saveGalaxy(g)
+              setFrame((n) => n + 1)
+            }}
+          />
+        )}
+
+        {g.winner !== -1 && (
+          <div className="ew-modal-back">
+            <div className={`ew-modal ew-result ${g.winner === ME ? 'is-won' : 'is-lost'}`}>
+              <Frame title={g.winner === ME ? 'Victory' : 'Defeat'}>
+                <h2>{g.winner === ME ? 'The galaxy is ours' : 'The war is lost'}</h2>
+                <p className="ew-muted">{g.winner === ME ? `The ${factionName(g, 1)} holds no planets and no fleets.` : `The ${factionName(g, 1)} took everything we held.`} Week {calendar(g.time).week + 1}.</p>
+                <div className="ew-menu-list is-row">
+                  <button className="ew-menu-btn is-primary" onClick={onAbandon}>New campaign</button>
+                  <button className="ew-menu-btn" onClick={onEnd}>Main menu</button>
+                </div>
+              </Frame>
             </div>
-          </form>
-        </Modal>
-      )}
-      {menu === 'load' && (
-        <Modal title="Load game" onClose={() => setMenu('menu')} wide>
-          <SaveList sound={sound} current={g.save.id} onLoad={(next) => (setMenu(null), setSel(null), onLoad(next))} />
-        </Modal>
-      )}
-      {menu === 'abandon' && (
-        <Modal title="Abandon the campaign?" onClose={() => setMenu('menu')}>
-          <p>The save &ldquo;{g.save.name}&rdquo; is deleted. It can&apos;t be picked up again. Your other saves stay.</p>
-          <div className="ew-menu-list is-row">
-            <button className="ew-menu-btn is-danger" onClick={onAbandon}>Abandon</button>
-            <button className="ew-menu-btn" onClick={() => setMenu('menu')}>Cancel</button>
           </div>
-        </Modal>
-      )}
-      {menu === 'settings' && (
-        <Modal title="Settings" onClose={() => setMenu('menu')}>
-          <SettingsPanel sound={sound} />
-        </Modal>
-      )}
+        )}
+
+        {menu === 'menu' && (
+          <Modal title="Galactic conquest" onClose={() => setMenu(null)}>
+            <div className="ew-menu-list">
+              <button className="ew-menu-btn is-primary" onClick={() => setMenu(null)}><Icon name="play" size={18} /> Resume</button>
+              <button className="ew-menu-btn" onClick={() => {
+                const ok = saveGalaxy(g)
+                toast(ok ? `Saved: ${g.save.name}` : 'Could not save: the browser\'s storage is full', ok ? 'good' : 'bad')
+                setMenu(null)
+              }}
+                data-tip={`Save into "${g.save.name}". It also saves by itself as you play.`}>
+                <Icon name="yard" size={18} /> Save
+              </button>
+              <button className="ew-menu-btn" onClick={() => (setSaveName(g.save.name), setMenu('saveas'))} data-tip="Save a copy under a new name, and play on in that one">
+                <Icon name="keys" size={18} /> Save as…
+              </button>
+              <button className="ew-menu-btn" onClick={() => (saveGalaxy(g), setMenu('load'))} data-tip="Switch to another saved campaign (this one is saved first)">
+                <Icon name="back" size={18} /> Load game…
+              </button>
+              <button className="ew-menu-btn" onClick={() => setMenu('settings')}><Icon name="gear" size={18} /> Settings</button>
+              <button className="ew-menu-btn" onClick={onExit}><Icon name="exit" size={18} /> Save and quit to the main menu</button>
+              <button className="ew-menu-btn is-danger" onClick={() => setMenu('abandon')}>Abandon this campaign</button>
+            </div>
+            <LayoutSection store={galaxyLayout} campaign />
+          </Modal>
+        )}
+        {menu === 'saveas' && (
+          <Modal title="Save as" onClose={() => setMenu('menu')}>
+            <form className="ew-saveas" onSubmit={(e) => {
+              e.preventDefault()
+              if (!saveName.trim()) return
+              const ok = saveGalaxy(g, saveName)
+              toast(ok ? `Saved as: ${g.save.name}` : 'Could not save: the browser\'s storage is full', ok ? 'good' : 'bad')
+              setMenu(null)
+            }}>
+              <label className="ew-row">
+                <span>Name</span>
+                <input autoFocus value={saveName} maxLength={40} onChange={(e) => setSaveName(e.target.value)} aria-label="Save name" />
+              </label>
+              <p className="ew-muted ew-small">A new save with this name; the campaign carries on in it, and "{g.save.name}" stays as it is now.</p>
+              <div className="ew-menu-list is-row">
+                <button type="submit" className="ew-menu-btn is-primary" disabled={!saveName.trim()}>Save</button>
+                <button type="button" className="ew-menu-btn" onClick={() => setMenu('menu')}>Cancel</button>
+              </div>
+            </form>
+          </Modal>
+        )}
+        {menu === 'load' && (
+          <Modal title="Load game" onClose={() => setMenu('menu')} wide>
+            <SaveList sound={sound} current={g.save.id} onLoad={(next) => (setMenu(null), setSel(null), onLoad(next))} />
+          </Modal>
+        )}
+        {menu === 'abandon' && (
+          <Modal title="Abandon the campaign?" onClose={() => setMenu('menu')}>
+            <p>The save &ldquo;{g.save.name}&rdquo; is deleted. It can&apos;t be picked up again. Your other saves stay.</p>
+            <div className="ew-menu-list is-row">
+              <button className="ew-menu-btn is-danger" onClick={onAbandon}>Abandon</button>
+              <button className="ew-menu-btn" onClick={() => setMenu('menu')}>Cancel</button>
+            </div>
+          </Modal>
+        )}
+        {menu === 'settings' && (
+          <Modal title="Settings" onClose={() => setMenu('menu')}>
+            <SettingsPanel sound={sound} />
+          </Modal>
+        )}
+      </WheelHost>
     </div>
   )
+}
+
+/** Hands the screen's action wheel (from the WheelHost round it) to the screen itself. */
+function WheelHook({ to }: { to: { current: (r: WheelRequest | null) => void } }) {
+  const open = useWheel()
+  useEffect(() => {
+    to.current = open
+  }, [to, open])
+  return null
 }
 
 // --- The galaxy minimap ------------------------------------------------------------------------------------
@@ -1785,6 +2057,7 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
   const theirs = p.owner >= 0 && !ours
   const k = PLANET_KINDS[p.kind]
   const { lockedShips } = useSettings()
+  const coarse = useCoarse()
   const fac = g.sides[ME].faction
   const all = buildable(fac).filter((t) => lockedShips || t.level <= p.station)
   const [page, setPage] = useState<'warships' | 'strike'>(() => {
@@ -1893,7 +2166,7 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
           </div>
           <div className="ew-detail-main">
             <header className="ew-yardhead">
-              <h5 className="ew-yardtitle">{ours && p.station ? 'Shipyard' : ours ? 'No station' : 'Planet'}</h5>
+              <h5 className="ew-yardtitle">{ours && p.station ? 'Shipyard' : ours ? 'No station' : 'Planet'}<span className="ew-gp-headname"> · {p.name}</span></h5>
               {ours && stationBtn}
               <button className="ew-close" onClick={onClose} aria-label="Close">✕</button>
             </header>
@@ -1930,7 +2203,7 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
               <p className="ew-gp-note">Build a station here to defend {p.name} and build ships at it. Each station level also adds {Math.round(STATION_INCOME * 100)}% to what the planet pays.</p>
             ) : (
               <p className="ew-gp-note">
-                {k.blurb} {theirs ? (p.station ? `Its level ${p.station} station defends it: bring a fleet strong enough to beat it.` : 'No station defends it: a fleet that holds its orbit takes it.') : 'Unclaimed: a fleet that holds its orbit for a few seconds takes it.'} Select a fleet and right-click the planet to send it.
+                {k.blurb} {theirs ? (p.station ? `Its level ${p.station} station defends it: bring a fleet strong enough to beat it.` : 'No station defends it: a fleet that holds its orbit takes it.') : 'Unclaimed: a fleet that holds its orbit for a few seconds takes it.'} {coarse ? 'Select a fleet, then long-press the planet to send it.' : 'Select a fleet and right-click the planet to send it.'}
               </p>
             )}
           </div>
@@ -2152,8 +2425,8 @@ function ShipRow({ g, owner, id, n, children }: { g: Galaxy; owner: number; id: 
 type GCommand = 'move' | 'take' | 'stop' | 'gather' | 'fallback' | 'look' | 'idle' | 'all' | 'drop' | 'upgrade' | 'yards' | 'economy'
 /** The commands with a key, as bound in Settings (the battle's keys, where they mean the same). */
 const KEY_COMMAND: Partial<Record<Action, GCommand>> = { move: 'move', attack: 'take', stop: 'stop', hold: 'gather', retreat: 'fallback', focus: 'look', idle: 'idle' }
-const FLEET_COMMANDS: { id: GCommand; label: string; icon: IconName; key?: Action; tip: string }[] = [
-  { id: 'move', label: 'Move', icon: 'move', key: 'move', tip: 'Then click a planet or system to send them there (a right-click sends them straight away). Shift adds it as a stop after what they are doing.' },
+const FLEET_COMMANDS: { id: GCommand; label: string; icon: IconName; key?: Action; tip: string; touchTip?: string }[] = [
+  { id: 'move', label: 'Move', icon: 'move', key: 'move', tip: 'Then click a planet or system to send them there (a right-click sends them straight away). Shift adds it as a stop after what they are doing.', touchTip: 'Then tap a planet or system to send them there (or long-press it). With Shift on, it adds a stop after what they are doing.' },
   { id: 'take', label: 'Take nearest', icon: 'attack', key: 'attack', tip: "Each fleet goes for the nearest planet that isn't ours, to take it. Shift: once it's done with what it's doing." },
   { id: 'stop', label: 'Stop', icon: 'stop', key: 'stop', tip: 'Call off every order and stop: a fleet in flight halts at the next system it reaches.' },
   { id: 'gather', label: 'Gather', icon: 'rally', key: 'hold', tip: 'They all fly to the biggest of them (or where it is going) and join up there.' },
@@ -2171,6 +2444,13 @@ const PLANET_COMMANDS: typeof FLEET_COMMANDS = [
   { id: 'all', label: 'All fleets', icon: 'army', tip: 'Select every fleet of ours (Ctrl+A).' },
   { id: 'economy', label: 'Economy', icon: 'credits', tip: 'Our income, planet by planet.' },
 ]
+
+/** A button that a long press on a touch screen opens an action wheel on (when it has `wheel`);
+ * a tap still clicks it. */
+function HoldButton({ wheel, wheelTitle, ...rest }: { wheel?: (() => WheelItem[]) | null; wheelTitle?: string } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  const press = useLongPressWheel(wheel ?? (() => []), wheelTitle)
+  return <button {...rest} {...(wheel ? press : {})} />
+}
 
 /** Where a fleet is, as the selection groups them: in orbit of a planet, or on its way to one. */
 function fleetWhere(g: Galaxy, f: Fleet) {
@@ -2204,6 +2484,7 @@ function GalaxySelection({ g, fleets, planets, take, setTake, mode, onCommand, o
   enabled: (c: GCommand) => boolean
 }) {
   const { keys } = useSettings()
+  const coarse = useCoarse()
   const ships = fleets.reduce((n, f) => n + f.ships.length, 0)
   const ours = fleets.length > 0 && fleets.every((f) => f.owner === ME)
   // One fleet of ours in orbit: its ships can be split off by kind.
@@ -2233,26 +2514,39 @@ function GalaxySelection({ g, fleets, planets, take, setTake, mode, onCommand, o
             const owner = gr.fleets[0].owner
             return (
               <div key={gr.name + owner} className="ew-gselgroup">
-                <button className="ew-gselwhere" onClick={(e) => onFleets(gr.fleets, e.shiftKey)} style={{ ['--own' as string]: color(g, owner) }}
-                  data-tip={groups.size > 1 ? 'Click to keep only these fleets, Shift-click to let go of them' : undefined}>
+                <HoldButton className="ew-gselwhere" onClick={(e) => onFleets(gr.fleets, shiftOf(e))} style={{ ['--own' as string]: color(g, owner) }}
+                  data-tip={groups.size > 1 ? 'Click to keep only these fleets, Shift-click to let go of them' : undefined}
+                  wheel={groups.size > 1 ? () => [
+                    { id: 'only', label: 'Only these', icon: <Icon name="fleet" size={18} />, run: () => onFleets(gr.fleets, false) },
+                    { id: 'drop', label: 'Drop these', icon: <Icon name="back" size={18} />, run: () => onFleets(gr.fleets, true) },
+                  ] : null} wheelTitle={gr.name}>
                   <i />
                   <b>{gr.name}</b>
                   <small>{gr.fleets.length > 1 ? `${gr.fleets.length} fleets · ` : ''}{gr.status}</small>
-                </button>
+                </HoldButton>
                 <div className="ew-seltiles">
                   {grouped(gr.fleets.flatMap((f) => f.ships)).map(([id, n]) => {
                     const t = UNIT[id]
                     const k = split ? Math.min(n, take[id] ?? n) : n
                     const set = (v: number) => setTake({ ...take, [id]: clamp(v, 0, n) })
                     const only = () => setTake(Object.fromEntries(grouped(split!.ships).map(([x, c]) => [x, x === id ? c : 0])))
+                    // On a touch screen, a long press on a ship of a fleet being split does what Shift
+                    // and the mouse wheel do.
                     return (
-                      <button key={id} className={`ew-seltile ${owner === ME ? '' : 'is-enemy'} ${split && k === 0 ? 'is-off' : ''}`}
-                        onClick={(e) => (split ? (e.shiftKey ? set(k ? 0 : n) : picked === k && k === n ? setTake({}) : only()) : onFleets(gr.fleets, e.shiftKey))}
+                      <HoldButton key={id} className={`ew-seltile ${owner === ME ? '' : 'is-enemy'} ${split && k === 0 ? 'is-off' : ''}`}
+                        onClick={(e) => (split ? (shiftOf(e) ? set(k ? 0 : n) : picked === k && k === n ? setTake({}) : only()) : onFleets(gr.fleets, shiftOf(e)))}
                         onWheel={(e) => split && set(k + (e.deltaY < 0 ? 1 : -1))}
-                        {...unitTip(t, { who: owner === ME ? 'Ours' : factionName(g, owner), rel: owner === ME ? 'own' : 'enemy' }, split ? `${k} of ${n} go with the next order. Click: send only these; Shift-click: leave these behind; the wheel: one more or fewer.` : undefined)}>
+                        {...unitTip(t, { who: owner === ME ? 'Ours' : factionName(g, owner), rel: owner === ME ? 'own' : 'enemy' }, split ? `${k} of ${n} go with the next order. Click: send only these; Shift-click: leave these behind; the wheel: one more or fewer.` : undefined)}
+                        wheel={split ? () => [
+                          { id: 'only', label: 'Only these', icon: <Icon name="target" size={18} />, run: only },
+                          { id: 'leave', label: 'Leave these', icon: <Icon name="back" size={18} />, disabled: k ? false : 'None of them go', run: () => set(0) },
+                          { id: 'more', label: 'One more', icon: <b>+1</b>, disabled: k < n ? false : 'All of them go', run: () => set(k + 1) },
+                          { id: 'less', label: 'One fewer', icon: <b>−1</b>, disabled: k ? false : 'None of them go', run: () => set(k - 1) },
+                          { id: 'all', label: 'Whole fleet', icon: <Icon name="fleet" size={18} />, disabled: picked < split.ships.length ? false : 'The whole fleet goes', run: () => setTake({}) },
+                        ] : null} wheelTitle={`${t.name}: ${k} of ${n} go`}>
                         <ShipArt t={t} />
                         <em>{split && k < n ? `${k}/${n}` : n}</em>
-                      </button>
+                      </HoldButton>
                     )
                   })}
                 </div>
@@ -2263,15 +2557,19 @@ function GalaxySelection({ g, fleets, planets, take, setTake, mode, onCommand, o
             const whole = ps.length === g.systems[sid].planets.length
             return (
               <div key={sid} className="ew-gselgroup">
-                <button className="ew-gselwhere" onClick={(e) => onPlanets(ps, e.shiftKey)} data-tip={systems.size > 1 ? 'Click to keep only these planets, Shift-click to let go of them' : undefined}>
+                <HoldButton className="ew-gselwhere" onClick={(e) => onPlanets(ps, shiftOf(e))} data-tip={systems.size > 1 ? 'Click to keep only these planets, Shift-click to let go of them' : undefined}
+                  wheel={systems.size > 1 ? () => [
+                    { id: 'only', label: 'Only these', icon: <Icon name="target" size={18} />, run: () => onPlanets(ps, false) },
+                    { id: 'drop', label: 'Drop these', icon: <Icon name="back" size={18} />, run: () => onPlanets(ps, true) },
+                  ] : null} wheelTitle={g.systems[sid].name}>
                   <i style={{ background: STAR_COLOR[g.systems[sid].star] }} className="is-star" />
                   <b>{g.systems[sid].name}</b>
                   <small>{whole ? 'Whole system' : `${ps.length} of ${g.systems[sid].planets.length} planets`}</small>
-                </button>
+                </HoldButton>
                 <div className="ew-seltiles">
                   {ps.map((p) => (
-                    <button key={p.id} className="ew-seltile ew-gplanettile" style={{ ['--own' as string]: color(g, p.owner) }} onClick={(e) => onPlanets([p], e.shiftKey)}
-                      data-tip={`${p.name}: ${PLANET_KINDS[p.kind].name}, ${planetIncome(g, p)} credits a day. ${p.owner < 0 ? 'Unclaimed.' : p.owner === ME ? 'Ours.' : `Held by the ${factionName(g, p.owner)}.`}${p.station ? ` Station level ${p.station}.` : ''} Click to open it, Shift-click to let go of it.`}>
+                    <button key={p.id} className="ew-seltile ew-gplanettile" style={{ ['--own' as string]: color(g, p.owner) }} onClick={(e) => onPlanets([p], shiftOf(e))}
+                      data-tip={`${p.name}: ${PLANET_KINDS[p.kind].name}, ${planetIncome(g, p)} credits a day. ${p.owner < 0 ? 'Unclaimed.' : p.owner === ME ? 'Ours.' : `Held by the ${factionName(g, p.owner)}.`}${p.station ? ` Station level ${p.station}.` : ''} ${coarse ? 'Tap to open it; with Shift on, tap to let go of it.' : 'Click to open it, Shift-click to let go of it.'}`}>
                       <img src={PLANET_ART(p.kind)} alt="" />
                       {p.station > 0 && <em>{p.station}</em>}
                       {p.queue.length > 0 && <i className="ew-sbusy" />}
@@ -2281,11 +2579,17 @@ function GalaxySelection({ g, fleets, planets, take, setTake, mode, onCommand, o
               </div>
             )
           })}
-          {!fleets.length && !planets.length && <span className="ew-muted ew-small">Nothing selected. Drag a box round fleets, or round planets and systems.</span>}
+          {!fleets.length && !planets.length && (
+            <span className="ew-muted ew-small">
+              {coarse ? 'Nothing selected. Tap a fleet or a planet, or turn on Box and drag round several. Long-press the map for more.' : 'Nothing selected. Drag a box round fleets, or round planets and systems.'}
+            </span>
+          )}
         </div>
         {ours && (
           <p className="ew-ghint">
-            {split && picked < split.ships.length ? `The next order sends these ${picked} ships as a new fleet.` : 'Right-click a planet or system to send them; Shift+right-click adds stops.'}
+            {split && picked < split.ships.length
+              ? `The next order sends these ${picked} ships as a new fleet.`
+              : coarse ? 'Long-press a planet or system to send them, or tap Move and then it; with Shift on, it adds stops.' : 'Right-click a planet or system to send them; Shift+right-click adds stops.'}
             {stops > 0 && ` ${stops} stop${stops > 1 ? 's' : ''} queued.`}
           </p>
         )}
@@ -2295,7 +2599,7 @@ function GalaxySelection({ g, fleets, planets, take, setTake, mode, onCommand, o
         <div className="ew-cmdgrid">
           {commands.map((c) => (
             <button key={c.id} className={`ew-cmdbtn ${c.id === 'move' && mode === 'move' ? 'is-on' : ''}`} disabled={!enabled(c.id)} onClick={() => onCommand(c.id)}
-              data-tip={`${c.label}${c.key ? ` (${keyName(keys[c.key])})` : ''}: ${c.tip}`}>
+              data-tip={coarse ? `${c.label}: ${c.touchTip ?? c.tip}` : `${c.label}${c.key ? ` (${keyName(keys[c.key])})` : ''}: ${c.tip}`}>
               <Icon name={c.icon} size={20} />
               <span>{c.label}</span>
               {c.key && <kbd>{keyName(keys[c.key])}</kbd>}

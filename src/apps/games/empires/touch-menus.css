@@ -1,0 +1,312 @@
+/* Touch and phone screens for Empires At War's menus: the main menu, the lobbies, the modals, the
+   tech tree, the scoreboard and the result. Every rule sits behind a coarse pointer, a phone-sized
+   game (under 720px wide, or under 500px tall), so the desktop layout stays exactly as it was.
+   This file loads before empires.css, so its selectors carry an extra class to win. */
+
+/* --- Main menu: on a short screen the column scrolls, and tightens up ------------------------- */
+
+@media (max-height: 499px) {
+  .ew-root.ew-menu:not(.ew-gsetup) > .ew-menu-col {
+    max-height: 100%;
+    overflow-y: auto;
+    gap: 8px;
+    padding-top: 14px;
+    padding-right: 12px;
+    padding-bottom: 14px;
+  }
+  .ew-root.ew-menu:not(.ew-gsetup) .ew-logo {
+    font-size: 28px;
+  }
+  .ew-root.ew-menu:not(.ew-gsetup) .ew-tagline {
+    display: none;
+  }
+  .ew-root.ew-deck.ew-menu .ew-menu-frame .ew-menu-btn {
+    padding-top: 9px;
+    padding-bottom: 9px;
+  }
+  .ew-root.ew-deck .ew-modal-back {
+    padding: 8px;
+  }
+}
+@container (max-width: 719px) {
+  .ew-root.ew-menu:not(.ew-gsetup) > .ew-menu-col {
+    max-height: 100%;
+    overflow-y: auto;
+    padding-right: 12px;
+  }
+}
+
+/* --- Fingers: bigger targets, and no zooming in on a focused box ------------------------------- */
+
+@media (pointer: coarse) {
+  /* Settings and the map generator. Rows wrap, so three choices fit a phone-wide panel. */
+  .ew-root.ew-deck .ew-form .ew-seg button,
+  .ew-root.ew-deck .ew-gen .ew-seg button {
+    min-height: 36px;
+    padding: 6px 12px;
+    font-size: 13px;
+  }
+  .ew-root.ew-deck .ew-form .ew-row {
+    flex-wrap: wrap;
+    row-gap: 6px;
+    min-height: 40px;
+  }
+  .ew-root.ew-deck .ew-form .ew-row > .ew-seg {
+    margin-left: auto;
+  }
+  .ew-root.ew-deck .ew-form .ew-row > .ew-range {
+    flex: 1 1 160px;
+  }
+  .ew-root.ew-deck .ew-range input {
+    min-height: 28px;
+  }
+  .ew-root.ew-deck .ew-soundgrid button,
+  .ew-root.ew-deck .ew-soundtest-open {
+    min-height: 36px;
+    padding: 6px 10px;
+  }
+
+  /* A browser zooms the page into a box whose text is under 16px when it's focused. */
+  .ew-root.ew-deck.ew-lobby select,
+  .ew-root.ew-deck.ew-lobby input:not([type='range']),
+  .ew-root.ew-deck.ew-menu input:not([type='range']),
+  .ew-root.ew-deck .ew-modal input:not([type='range']),
+  .ew-root.ew-deck .ew-modal select {
+    font-size: 16px;
+  }
+  .ew-root.ew-deck.ew-lobby select {
+    min-height: 34px;
+  }
+
+  /* Modals and the battle menu. */
+  .ew-root.ew-deck .ew-modal .ew-close {
+    min-width: 36px;
+    padding: 0 10px;
+    line-height: 32px;
+  }
+  .ew-root.ew-deck .ew-bm-toggle {
+    min-height: 40px;
+  }
+  .ew-root.ew-deck .ew-bm-speed button {
+    min-height: 38px;
+  }
+  .ew-root.ew-deck .ew-bm-mini {
+    min-height: 36px;
+    padding: 6px 12px;
+    font-size: 12.5px;
+  }
+  .ew-root.ew-deck .ew-bm-mini.is-x {
+    min-width: 36px;
+    justify-content: center;
+  }
+  .ew-root.ew-deck .ew-bm-star {
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
+  }
+  .ew-root.ew-deck .ew-bm-layout li {
+    padding: 4px 6px;
+  }
+
+  /* Lobbies: the header, the chips, the players. */
+  .ew-root.ew-deck.ew-lobby .ew-lobby-head {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .ew-root.ew-deck.ew-lobby .ew-lobby-head > button {
+    min-height: 36px;
+    padding: 6px 12px;
+  }
+  .ew-root.ew-deck .ew-chip {
+    min-height: 32px;
+    padding: 5px 12px;
+    font-size: 12.5px;
+  }
+  /* Renaming moves out of the way on narrow screens; a finger still needs it. */
+  .ew-root.ew-deck.ew-lobby .ew-mp-me .ew-chip {
+    display: inline-flex;
+  }
+  .ew-root.ew-deck .ew-spawnno {
+    width: 30px;
+    height: 30px;
+    font-size: 14px;
+  }
+  .ew-root.ew-deck .ew-slotrow {
+    grid-template-columns: 32px minmax(60px, 96px) minmax(76px, 1fr) 84px minmax(84px, 112px);
+  }
+  .ew-root.ew-deck .ew-mp-room .ew-slotrow {
+    grid-template-columns: 32px minmax(80px, 1.6fr) minmax(64px, 0.8fr) 80px minmax(78px, 96px);
+  }
+  .ew-root.ew-deck .ew-factionseg button {
+    min-height: 34px;
+  }
+  .ew-root.ew-deck .ew-teamtag {
+    min-height: 32px;
+    padding: 6px 10px;
+  }
+  /* "Click to switch sides" is a tooltip: the arrows say it instead. */
+  .ew-root.ew-deck button.ew-teamtag:not(:disabled)::after {
+    content: ' ⇄';
+    opacity: 0.75;
+  }
+  .ew-root.ew-deck .ew-mp-sit {
+    min-height: 32px;
+    padding: 5px 8px;
+  }
+  .ew-root.ew-deck .ew-areahint {
+    flex-wrap: wrap;
+  }
+  .ew-root.ew-deck .ew-areahint > span {
+    flex: 1 1 200px;
+  }
+
+  /* The tech tree's cancel buttons. */
+  .ew-root.ew-deck .ew-tnode-x {
+    padding: 0 10px;
+    line-height: 28px;
+    font-size: 13px;
+  }
+}
+
+/* Emblem-only factions: the chosen one keeps its name, which is otherwise only a tooltip. */
+@media (pointer: coarse) {
+  @container (max-width: 1240px) {
+    .ew-root.ew-deck .ew-slotrow .ew-factionseg button.is-on {
+      flex: 1 1 auto;
+      justify-content: flex-start;
+    }
+    .ew-root.ew-deck .ew-slotrow .ew-factionseg button:not(.is-on) {
+      flex: none;
+    }
+    .ew-root.ew-deck .ew-slotrow .ew-factionseg button.is-on span {
+      display: inline;
+    }
+  }
+}
+
+/* The battle menu without its Keybinds button (fingers have no keys to bind). */
+.ew-root .ew-bm-panels.is-touch {
+  grid-template-columns: 1fr 1fr;
+}
+
+/* The editable map in the lobby, while a finger isn't drawing on it: swipes scroll the page. */
+.ew-root .ew-mappreview.is-editable.is-tap {
+  touch-action: manipulation;
+}
+
+/* --- Phone-wide lobbies: the header wraps, each player takes two lines -------------------------- */
+
+@container (max-width: 719px) {
+  .ew-root.ew-deck.ew-lobby .ew-lobby-head {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .ew-root.ew-deck.ew-lobby .ew-lobby-head h2 {
+    min-width: 0;
+    font-size: 16px;
+    overflow-wrap: anywhere;
+  }
+  .ew-root.ew-deck.ew-lobby .ew-mp-me .ew-chip {
+    display: inline-flex;
+  }
+  .ew-root.ew-deck .ew-launch {
+    flex-wrap: wrap;
+  }
+}
+@container (max-width: 600px) {
+  /* Number on the left over both lines; who and faction, then side and AI level. */
+  .ew-root.ew-deck .ew-slotrow,
+  .ew-root.ew-deck .ew-mp-room .ew-slotrow {
+    grid-template-columns: 32px minmax(0, 1fr) minmax(0, 1fr);
+    row-gap: 6px;
+  }
+  .ew-root.ew-deck .ew-slotrow.is-head {
+    display: none;
+  }
+  .ew-root.ew-deck .ew-slotrow:not(.is-closed) > :first-child {
+    grid-row: 1 / span 2;
+  }
+  .ew-root.ew-deck .ew-slotrow > :nth-child(4) {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .ew-root.ew-deck .ew-slotrow > :nth-child(5) {
+    grid-column: 3;
+    grid-row: 2;
+  }
+  .ew-root.ew-deck .ew-mp-lobbyrow {
+    grid-template-columns: minmax(0, 1fr) auto 76px;
+    gap: 8px;
+  }
+}
+
+/* --- Result: on a phone the table scrolls sideways, and the buttons stack ----------------------- */
+
+@container (max-width: 480px) {
+  .ew-root .ew-result table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .ew-root .ew-result td,
+  .ew-root .ew-result th {
+    padding-right: 7px;
+    font-size: 12px;
+  }
+  .ew-root.ew-deck .ew-result .ew-menu-list.is-row {
+    flex-direction: column;
+  }
+}
+
+/* --- Scoreboard: a short screen still gets a usable list ------------------------------------- */
+
+@media (max-height: 499px), (pointer: coarse) {
+  .ew-root .ew-float.ew-score {
+    max-height: max(calc(100% - 300px), min(240px, calc(100% - 70px)));
+  }
+}
+.ew-score .ew-score-note {
+  margin: 4px 0 0;
+}
+
+/* --- Turn your phone sideways (RotateHint.tsx) ------------------------------------------------ */
+
+.ew-rotatehint {
+  position: absolute;
+  left: 50%;
+  top: 52px;
+  z-index: 30;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  padding: 6px 6px 6px 12px;
+  border-radius: 10px;
+  background: rgba(8, 14, 28, 0.94);
+  border: 1px solid var(--ew-line, rgba(120, 170, 230, 0.26));
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  color: var(--ew-text, #dce6f5);
+  font-size: 13px;
+  pointer-events: auto;
+  animation: ew-rotatehint-in 0.2s ease-out;
+}
+.ew-rotatehint svg {
+  flex: none;
+  color: var(--ew-accent, #59c8ff);
+}
+.ew-root .ew-rotatehint button {
+  flex: none;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  border-radius: 8px;
+  color: var(--ew-muted, #8b9bb6);
+}
+@keyframes ew-rotatehint-in {
+  from {
+    opacity: 0;
+    translate: 0 -6px;
+  }
+}

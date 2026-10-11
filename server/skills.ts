@@ -8,6 +8,7 @@ import { readBody, readText, uploadFile, type Workdir } from './workdir.ts'
 import { onUserGone } from './db.ts'
 import { readTar } from '../src/data/tar.ts'
 import { MSH_REFERENCE } from '../src/data/mshReference.ts'
+import { CAVEMAN_ADHD_SKILL } from './builtinSkills.ts'
 
 // Skills for the agents, in the format Claude Code and Codex use: a folder with a SKILL.md (YAML
 // front matter with a name and a description, then the instructions) and any files it needs. The
@@ -56,7 +57,14 @@ export function parseSkill(text: string): { meta: Record<string, string>; body: 
 const describe = (meta: Record<string, string>, body: string) =>
   (meta.description || body.split('\n').find((l) => l.trim() && !l.startsWith('#')) || '').replace(/\s+/g, ' ').trim().slice(0, 1024)
 
+/** A built-in skill from its SKILL.md text. */
+function builtinFrom(text: string, fallbackName: string): Loaded {
+  const { meta, body } = parseSkill(text)
+  return { name: NAME.test(meta.name ?? '') ? meta.name : fallbackName, description: describe(meta, body), source: 'builtin', folder: null, label: '(built in)', userOnly: meta['disable-model-invocation'] === 'true', body }
+}
+
 const BUILTIN: Loaded[] = [
+  builtinFrom(CAVEMAN_ADHD_SKILL, 'caveman-adhd'),
   {
     name: 'msh',
     description: "The MvL OS shell: its syntax (POSIX sh with a few bash extras) and how it differs from bash. Read it before writing scripts or longer command lines for the terminal tool.",
