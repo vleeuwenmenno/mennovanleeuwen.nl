@@ -1,10 +1,19 @@
 # mennovanleeuwen.nl
 
-My CV as a tiny operating system: a sticky note, a terminal that actually works, and a dock
-with apps for projects, contributions, recent activity, the CV itself and contact details.
+A web desktop anyone can sign in to with GitHub, and my CV as a tiny operating system: a sticky
+note, a terminal that actually works, and a dock with apps for projects, contributions, recent
+activity, the CV itself and contact details.
 
-Built with Vite, React and TypeScript. The CV runs entirely in the browser; a small dependency-free
-Node server adds live status, GitHub sign-in for the owner and synced notes (see below).
+The CV lives at **`/cv`** ([`src/os/cvMode.ts`](src/os/cvMode.ts)): there the CV, Projects,
+Activity, Contact and Minecraft apps, the portfolio desktop icons, Spotlight's projects and links,
+the GitHub activity notifications and the CV commands in the terminal exist, and the server sends
+the CV's title and link preview. Everywhere else the site is a plain desktop with a welcome note.
+Visitors at `/cv` see my persona (`menno@mvlos`); signed in, you get your own desktop with the CV
+apps added. The desktop's user is the signed-in GitHub login (`alice@mvlos`, home `/home/alice`),
+or `guest` ([`src/os/identity.ts`](src/os/identity.ts)).
+
+Built with Vite, React and TypeScript. The desktop runs entirely in the browser; a small
+dependency-free Node server adds live status, GitHub sign-in and synced notes (see below).
 
 ## Develop
 
@@ -179,7 +188,10 @@ needs `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from a Google Cloud OAuth cl
 application*) with the Calendar API enabled, the scopes `calendar.readonly` and `calendar.events`
 (plus `openid` and `email`), and the redirect URI `https://<your site>/api/google/callback` (and
 `http://localhost:5173/api/google/callback` for development). Publish the consent screen to *In
-production*: in *Testing*, Google expires the access after seven days. Accounts connected before
+production*: in *Testing*, Google expires the access after seven days. The Calendar scopes are
+"sensitive": until Google has verified the app, everyone connecting sees Google's "unverified app"
+screen and at most 100 accounts can connect (verification asks for the privacy page,
+`/privacy.html`). Accounts connected before
 the Calendar app stay read-only until connected again (Settings → Calendar → *Allow editing*).
 
 **CalDAV** calendars (Fastmail, Nextcloud, iCloud and others) work next to Google: Settings →
@@ -217,10 +229,11 @@ dragged into another order and hidden (right-click, or *Customize sidebar*), syn
 
 **/etc/fstab** decides where Seafile shows up, for Files and the terminal alike
 ([`src/data/mounts.ts`](src/data/mounts.ts)). `seafile /mnt/seafile seafile` puts every library in a
-folder of its own, `UUID=<library id> /home/menno seafile` makes one home (Settings' *Use as home*
+folder of its own, `UUID=<library id> /home/<you> seafile` makes one home (Settings' *Use as home*
 and primary library write that line), and a bind line such as
-`/mnt/seafile/Photos/2024 /home/menno/Pictures none bind` maps a place somewhere else. Until anything
-edits it, the file is written from the older settings. The owner can `sudo nano /etc/fstab`, `sudo
+`/mnt/seafile/Photos/2024 /home/<you>/Pictures none bind` maps a place somewhere else (an older
+fstab's `/home/menno` is read as your home). Until anything
+edits it, the file is written from the older settings. Signed in, you can `sudo nano /etc/fstab`, `sudo
 mount` and `sudo umount` (visitors are not in sudoers); Files' Home, places, breadcrumbs and Seafile
 section follow at once, and the site's own home is at `/srv/site` while Seafile is on `~`. In the
 terminal ([`src/terminal/fs.ts`](src/terminal/fs.ts)) `ls`, `cd`, `cat`, `grep -r`, `find`, `fd`,
@@ -228,6 +241,23 @@ terminal ([`src/terminal/fs.ts`](src/terminal/fs.ts)) `ls`, `cd`, `cat`, `grep -
 asks first, unless `-f`), `tee`, `>` and **nano** ([`src/terminal/nano.ts`](src/terminal/nano.ts),
 GNU nano 8.2's keys on an alternate screen) work
 across the mounts; before a command runs, the Seafile folders and files it names are fetched.
+
+**Without Seafile**, signed in, `~` is kept in this browser ([`src/data/browserfs.ts`](src/data/browserfs.ts):
+one IndexedDB database per account, so another account on the same browser never sees it), laid
+over the site's own home so README.md, games/ and the wallpapers stay readable. The terminal,
+Files, Zed, the desktop, Preview, Player, Omamp, the PDF viewer, the Viewer and Archive (ZIPs) read
+and write it, and copying or moving between it and Seafile carries the bytes over
+([`src/data/fileOps.ts`](src/data/fileOps.ts)). Clearing the site's data deletes it, which is said
+wherever it shows: a strip in Files, *Browser only* in Zed's status bar, the terminal's welcome and
+`df`, Settings → Account (with a Delete). Once Seafile is home it is mounted on `/mnt/browser`
+instead, and MvL OS offers to copy it into Seafile folder for folder. Unpacking archives and
+OnlyOffice need the file in Seafile.
+
+**What needs you** ([`src/os/alerts.ts`](src/os/alerts.ts)) shows the way macOS lists *Finish
+setting up* in System Settings: "Set up file storage" (signed in without Seafile as home), an
+update to restart into, or a failing sync. Settings lists them under your name and badges the pane
+to go to, the dock badges Settings (or All apps), and the notification center keeps them on top
+under *Needs attention* until they are dealt with.
 `mount`, `findmnt`, `lsblk -f` and `man fstab` describe the table, read-only libraries mount `ro`,
 and encrypted ones answer `Required key not available` until `fscrypt unlock` gets their password.
 
@@ -323,10 +353,10 @@ The mouse's Back and Forward buttons, and the browser's own Back, go back in the
 
 Questions (delete this? empty the trash?) are the desktop's own dialogs, never the browser's.
 
-**Agents** is a research assistant on [Ollama Cloud](https://docs.ollama.com/cloud), for the
-signed-in owner ([`server/agents.ts`](server/agents.ts), [`src/apps/Agents.tsx`](src/apps/Agents.tsx)).
+**Agents** is a research assistant on [Ollama Cloud](https://docs.ollama.com/cloud), for
+signed-in users ([`server/agents.ts`](server/agents.ts), [`src/apps/Agents.tsx`](src/apps/Agents.tsx)).
 Add an API key from ollama.com in Settings → Integrations (stored encrypted), or set
-`OLLAMA_API_KEY` on the server. Each thread is *Quick* (a search or two, a short answer) or *Deep*
+`OLLAMA_API_KEY` on the server (admins only). Each thread is *Quick* (a search or two, a short answer) or *Deep*
 (searches from several angles, reads the sources with web fetch, and writes a structured answer
 with citations), on any of Ollama's cloud models that can call tools. Turns run on the server and
 stream to the window, with the model's thinking folded under each reply; Stop ends one. The
@@ -339,7 +369,7 @@ stored encrypted, see [`server/websearch.ts`](server/websearch.ts)) and Ollama's
 changes (each one waits for *Allow* in the window, since a page the agent read could have asked
 for it), `update_todos` (a plan for long jobs, shown as "3/12" over the composer; while items are
 open a turn may run up to 150 rounds, and it keeps going on the server when the window closes, until
-Stop) and `remember`/`update_memory`. Memory is the owner's (every thread) or a project's (that
+Stop) and `remember`/`update_memory`. Memory is yours (every thread) or a project's (that
 project's threads), filed by the agent under category paths such as People/Family or Work/Tools;
 the Memory view shows it as a tree to search, add to, edit, move and forget. Projects group threads
 in the sidebar: drag them into order, drag threads into or out of them, fold them; threads in and
