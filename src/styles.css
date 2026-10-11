@@ -1892,15 +1892,22 @@ body.is-resizing iframe {
 .t-sheet-close:hover {
   color: var(--fg-bright);
 }
-.t-sheet .set-row {
+.t-prefs .set-row {
   flex-wrap: wrap;
 }
-/* On a phone the size buttons go under their label rather than cutting it short. */
-.t-sheet .set-row-text {
+/* On a phone the size buttons go under their label rather than cutting it short (in the sheet
+   and in Settings → Apps → Terminal alike). */
+.t-prefs .set-row-text {
   flex-basis: 150px;
 }
 .t-sheet p {
   margin: 0 0 8px;
+}
+/* The way to the same settings in the Settings app, under the rest. */
+.t-sheet-foot {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  text-align: right;
 }
 .t-stepper {
   display: inline-flex;

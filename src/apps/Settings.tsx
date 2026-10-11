@@ -36,15 +36,17 @@ import { ACCENTS, DARK_THEMES, LIGHT_THEMES, setAccent, setMode, setTheme, theme
 import { ReleaseStatus } from '../os/TopbarWidgets'
 import { useWM, type AppId, type WinState } from '../os/wm'
 import { AgentsSettings } from './AgentsSettings'
+import { AmpPane, CalendarAppPrefs, FilesPane, GamesPane, PdfPane, PreviewPane, TerminalPane } from './AppSettings'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
 import { BranchGlyph } from './LinkForge'
 import { SyncLine } from './Notebook'
 
 // System settings, laid out like macOS: the account on top of a sidebar, one pane per topic.
-// Opened from the system menu, the desktop's right-click menu, Spotlight and the terminal;
-// props.section picks the pane (account, appearance, dock, launchers, search (Spotlight), notifications,
-// instances, calendar, integrations, golinks, sync, about). The account and service panes only show
-// for the signed-in user.
+// Opened from the system menu, the desktop's right-click menu, Spotlight, the terminal and apps'
+// window menus; props.section picks the pane (account, appearance, dock, launchers, search
+// (Spotlight), windows, links, notifications, golinks, instances, integrations, then the apps:
+// agents, calendar, files, games, amp, pdf, preview, terminal; then sync, users, about) and
+// props.sub a part of it. The account and service panes only show for the signed-in user.
 
 const SignInFirst = ({ what }: { what: string }) => {
   const account = useAccount()
@@ -1248,7 +1250,7 @@ function OfficeSettings() {
   )
 }
 
-/** Google Calendar and CalDAV accounts, for the Calendar app, the Agenda widget and the clock; and which calendars show. */
+/** Google Calendar and CalDAV accounts, for the Calendar app, the Agenda widget and the clock; which calendars show; and how the Calendar app opens. */
 function CalendarSettings() {
   const account = useAccount()
   const { calendars, errors } = useCalendarList()
@@ -1329,6 +1331,7 @@ function CalendarSettings() {
           <p className="muted set-help">Switched-on calendars show in the Calendar app, the clock and every Agenda widget, unless a widget picks its own (right-click it → Calendars). Until you switch them, Google calendars follow Google Calendar and the others are on.</p>
         </>
       )}
+      <CalendarAppPrefs />
     </>
   )
 }
@@ -1649,10 +1652,12 @@ function LinkSettingsPane() {
   )
 }
 
-type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'agents' | 'golinks' | 'sync' | 'users' | 'about'
+type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'agents' | 'golinks' | 'terminal' | 'files' | 'amp' | 'pdf' | 'preview' | 'games' | 'sync' | 'users' | 'about'
 /** `account`: only when signed in (accounts and services); visitors don't see it at all.
  * `admin`: only for admins (the server checks that on every request too). */
-type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; keywords: string; blurb: string; account?: true; admin?: true; render: (opened: { sub?: string; t?: string }) => ReactNode }
+type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; /** An app's pane (Settings → Apps) shows the app's own dock icon instead */ app?: AppId; keywords: string; blurb: string; account?: true; admin?: true; render: (opened: { sub?: string; t?: string }) => ReactNode }
+/** A group of panes in the sidebar, under a small heading when it has a title (Apps). */
+type Group = { title?: string; panes: Pane[] }
 
 const svg = (d: ReactNode) => (
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -1677,40 +1682,60 @@ function SyncPane() {
           )}
         </li>
       </ul>
-      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, game high scores, the go links account, Spotlight's settings, favourites and history, notification settings, what opens at the start, /etc/fstab, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. Without an account they stay in this browser.</p>
+      <p className="muted set-help">Notes, launchers, desktop icons, the dock, the search engine, where links open, the go links account, Spotlight's settings, favourites and history, notification settings, what opens at the start, /etc/fstab, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. So do some apps' settings: the Terminal's text size and extra keys, Agents, the Calendar app's view and calendars, and Files' bookmarks; and game high scores and Gladiator's saves. Without an account they stay in this browser, as do the other apps' settings in Settings → Apps.</p>
     </>
   )
 }
 
 // Grouped like macOS System Settings: the look of the desktop, then how things are found and
-// announced, then the outside services, then housekeeping.
-const GROUPS: Pane[][] = [
-  [
-    { id: 'appearance', label: 'Appearance', hue: 'var(--blue)', icon: svg(<><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" /></>), keywords: 'theme dark light mode accent color omarchy motion wiggle swing animation', blurb: 'Light and dark mode, themes, the accent color and motion.', render: () => <Appearance /> },
-    { id: 'dock', label: 'Dock', hue: 'var(--cyan)', icon: svg(<><rect x="3" y="4" width="18" height="16" /><path d="M7 16h10" /></>), keywords: 'dock hide pin apps order', blurb: 'When the dock shows, and what is in it.', render: () => <DockSettings /> },
-    { id: 'launchers', label: 'Launchers', hue: 'var(--magenta)', icon: svg(<><rect x="4" y="4" width="6" height="6" /><rect x="14" y="4" width="6" height="6" /><rect x="4" y="14" width="6" height="6" /><rect x="14" y="14" width="6" height="6" /></>), keywords: 'launchers links bookmarks desktop shortcuts', blurb: 'Links on the desktop, in All apps and in Spotlight.', render: () => <Launchers /> },
-  ],
-  [
-    { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal favourites favorites starred', blurb: 'What Spotlight shows when it opens, what it searches, and what it remembers.', render: () => <SpotlightSettings /> },
-    { id: 'windows', label: 'Windows', hue: 'var(--yellow)', icon: svg(<><rect x="3" y="5" width="12" height="10" /><rect x="9" y="9" width="12" height="10" /></>), keywords: 'windows restore reopen startup start open last session layout tabs welcome empty desktop reset start over', blurb: 'What the desktop shows when MvL OS opens again.', render: () => <WindowsSettings /> },
-    { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page spotlight', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
-    { id: 'notifications', label: 'Notifications', hue: 'var(--red)', icon: svg(<><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></>), keywords: 'notifications alerts notification center bell pop-ups do not disturb dnd keep history clear minecraft activity agents uploads unpacking updates system browser', blurb: 'Pop-ups, the notification center, and which apps may notify.', render: () => <Notifications /> },
-    { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal spotlight suggestions mvl.sh token', blurb: "The golinks account that go <alias> follows, in Spotlight and the terminal.", render: () => <GoLinks /> },
-  ],
-  [
-    { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', account: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
-    { id: 'calendar', label: 'Calendar', hue: 'var(--red)', account: true, icon: svg(<><rect x="4" y="5" width="16" height="15" /><path d="M4 10h16M9 3v4M15 3v4" /></>), keywords: 'calendar google agenda events caldav fastmail nextcloud icloud', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock.', render: () => <CalendarSettings /> },
-    { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models storage', blurb: 'Services the widgets, Files and Agents use: updown.io for Status, Ollama Cloud, Seafile and OnlyOffice.', render: ({ sub, t }) => <Integrations sub={sub} t={t} /> },
-    { id: 'agents', label: 'Agents', hue: 'var(--magenta)', account: true, icon: svg(<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 16l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" />), keywords: 'agents ai assistant ollama models quick deep research title thread system prompt agents.md tools memory', blurb: 'The Agents app: its models, what a new thread starts with, and its system prompt.', render: () => <AgentsSettings /> },
-  ],
-  [
-    { id: 'sync', label: 'Sync', hue: 'var(--green)', account: true, icon: svg(<><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3" /><path d="M18 3v4h-4M6 21v-4h4" /></>), keywords: 'sync devices cloud', blurb: 'What follows you between devices.', render: () => <SyncPane /> },
-    { id: 'users', label: 'Users', hue: 'var(--accent)', account: true, admin: true, icon: svg(<><circle cx="9" cy="8" r="3.5" /><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6" /><circle cx="17" cy="9" r="2.5" /><path d="M16 14.2c2.9.1 5 2.4 5 5.8" /></>), keywords: 'users accounts admin sign-up registration ban delete cap full', blurb: 'Every account, sign-up and the cap. Only for admins.', render: () => <UsersSettings /> },
-    { id: 'about', label: 'About', hue: 'var(--text)', icon: svg(<><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5v.5" /></>), keywords: 'about version update release build', blurb: 'Which version this is, and whether a newer one is out.', render: () => <About /> },
-  ],
+// announced, then the outside services, then each app's own settings (under a heading, since
+// their names alone don't say they are apps), then housekeeping.
+const GROUPS: Group[] = [
+  {
+    panes: [
+      { id: 'appearance', label: 'Appearance', hue: 'var(--blue)', icon: svg(<><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" /></>), keywords: 'theme dark light mode accent color omarchy motion wiggle swing animation', blurb: 'Light and dark mode, themes, the accent color and motion.', render: () => <Appearance /> },
+      { id: 'dock', label: 'Dock', hue: 'var(--cyan)', icon: svg(<><rect x="3" y="4" width="18" height="16" /><path d="M7 16h10" /></>), keywords: 'dock hide pin apps order', blurb: 'When the dock shows, and what is in it.', render: () => <DockSettings /> },
+      { id: 'launchers', label: 'Launchers', hue: 'var(--magenta)', icon: svg(<><rect x="4" y="4" width="6" height="6" /><rect x="14" y="4" width="6" height="6" /><rect x="4" y="14" width="6" height="6" /><rect x="14" y="14" width="6" height="6" /></>), keywords: 'launchers links bookmarks desktop shortcuts', blurb: 'Links on the desktop, in All apps and in Spotlight.', render: () => <Launchers /> },
+    ],
+  },
+  {
+    panes: [
+      { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal favourites favorites starred', blurb: 'What Spotlight shows when it opens, what it searches, and what it remembers.', render: () => <SpotlightSettings /> },
+      { id: 'windows', label: 'Windows', hue: 'var(--yellow)', icon: svg(<><rect x="3" y="5" width="12" height="10" /><rect x="9" y="9" width="12" height="10" /></>), keywords: 'windows restore reopen startup start open last session layout tabs welcome empty desktop reset start over', blurb: 'What the desktop shows when MvL OS opens again.', render: () => <WindowsSettings /> },
+      { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page spotlight', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
+      { id: 'notifications', label: 'Notifications', hue: 'var(--red)', icon: svg(<><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></>), keywords: 'notifications alerts notification center bell pop-ups do not disturb dnd keep history clear minecraft activity agents uploads unpacking updates system browser', blurb: 'Pop-ups, the notification center, and which apps may notify.', render: () => <Notifications /> },
+      { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal spotlight suggestions mvl.sh token', blurb: "The golinks account that go <alias> follows, in Spotlight and the terminal.", render: () => <GoLinks /> },
+    ],
+  },
+  {
+    panes: [
+      { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', account: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
+      { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models storage', blurb: 'Services the widgets, Files and Agents use: updown.io for Status, Ollama Cloud, Seafile and OnlyOffice.', render: ({ sub, t }) => <Integrations sub={sub} t={t} /> },
+    ],
+  },
+  {
+    title: 'Apps',
+    panes: [
+      { id: 'agents', label: 'Agents', hue: 'var(--magenta)', account: true, icon: null, app: 'agents', keywords: 'agents ai assistant ollama models quick deep research title thread system prompt agents.md tools memory', blurb: 'The Agents app: its models, what a new thread starts with, and its system prompt.', render: () => <AgentsSettings /> },
+      { id: 'calendar', label: 'Calendar', hue: 'var(--red)', account: true, icon: null, app: 'calendar', keywords: 'calendar google agenda events caldav fastmail nextcloud icloud view week month day year default new events', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock; and how the Calendar app opens.', render: () => <CalendarSettings /> },
+      { id: 'files', label: 'Files', hue: 'var(--blue)', icon: null, app: 'files', keywords: 'files file manager view list grid compact gallery icon size zoom sort order hidden dotfiles sidebar', blurb: 'How Files shows a folder: the view, icon size, sort order, hidden files and the sidebar.', render: () => <FilesPane /> },
+      { id: 'games', label: 'Games', hue: 'var(--cyan)', icon: null, app: 'games', keywords: 'games arcade pool gladiator empires at war rts sound music volume mute helpers aim sensitivity difficulty computer health bars rings fog camera edge scrolling key bindings keybinds keys', blurb: 'Pool, Gladiator and Empires At War: how they play and sound.', render: ({ sub, t }) => <GamesPane sub={sub} t={t} /> },
+      { id: 'amp', label: 'Omamp', hue: 'var(--green)', icon: null, app: 'amp', keywords: 'omamp music player audio winamp shuffle repeat equalizer eq preset visualizer spectrum oscilloscope time remaining playlist', blurb: 'The music player: shuffle and repeat, the equalizer, and what it shows.', render: () => <AmpPane /> },
+      { id: 'pdf', label: 'PDF', hue: 'var(--red)', icon: null, app: 'pdf', keywords: 'pdf viewer documents night mode dark sidebar thumbnails outline', blurb: 'The PDF viewer: its sidebar and night mode.', render: () => <PdfPane /> },
+      { id: 'preview', label: 'Preview', hue: 'var(--blue)', icon: null, app: 'preview', keywords: 'preview pictures images photos viewer sidebar', blurb: 'The picture viewer: its sidebar.', render: () => <PreviewPane /> },
+      { id: 'terminal', label: 'Terminal', hue: 'var(--green)', icon: null, app: 'terminal', keywords: 'terminal shell console text size font size zoom phone desktop extra keys touch keyboard esc tab ctrl colours colors theme', blurb: 'Text size on desktops and phones, and the extra keys on touch screens.', render: () => <TerminalPane /> },
+    ],
+  },
+  {
+    panes: [
+      { id: 'sync', label: 'Sync', hue: 'var(--green)', account: true, icon: svg(<><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3" /><path d="M18 3v4h-4M6 21v-4h4" /></>), keywords: 'sync devices cloud', blurb: 'What follows you between devices.', render: () => <SyncPane /> },
+      { id: 'users', label: 'Users', hue: 'var(--accent)', account: true, admin: true, icon: svg(<><circle cx="9" cy="8" r="3.5" /><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6" /><circle cx="17" cy="9" r="2.5" /><path d="M16 14.2c2.9.1 5 2.4 5 5.8" /></>), keywords: 'users accounts admin sign-up registration ban delete cap full', blurb: 'Every account, sign-up and the cap. Only for admins.', render: () => <UsersSettings /> },
+      { id: 'about', label: 'About', hue: 'var(--text)', icon: svg(<><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5v.5" /></>), keywords: 'about version update release build', blurb: 'Which version this is, and whether a newer one is out.', render: () => <About /> },
+    ],
+  },
 ]
 const ACCOUNT_PANE: Pane = { id: 'account', label: 'Account', hue: 'var(--accent)', icon: null, keywords: 'account github sign in sign out profile', blurb: '', render: () => <Account /> }
-const PANES: Pane[] = [ACCOUNT_PANE, ...GROUPS.flat()]
+const PANES: Pane[] = [ACCOUNT_PANE, ...GROUPS.flatMap((g) => g.panes)]
 const isPane = (id: string | undefined): id is PaneId => !!id && PANES.some((p) => p.id === id)
 
 // The pane last looked at, for the next time Settings opens without asking for one.
@@ -1744,9 +1769,10 @@ export function Settings({ win }: { win: WinState }) {
   const admin = !!account.user?.admin
   const alerts = useAlerts()
   const badges = alerts.reduce<Partial<Record<string, number>>>((m, a) => (a.pane ? { ...m, [a.pane]: (m[a.pane] ?? 0) + 1 } : m), {})
-  const groups = useMemo(() => {
-    const mine = GROUPS.map((g) => g.filter((p) => (signedIn || !p.account) && (admin || !p.admin))).filter((g) => g.length)
-    return q ? [mine.flat().filter((p) => `${p.label} ${p.keywords}`.toLowerCase().includes(q))] : mine
+  const groups = useMemo((): Group[] => {
+    const mine = GROUPS.map((g) => ({ ...g, panes: g.panes.filter((p) => (signedIn || !p.account) && (admin || !p.admin)) })).filter((g) => g.panes.length)
+    // Searching lists what matches in one plain list, without the groups' headings.
+    return q ? [{ panes: mine.flatMap((g) => g.panes).filter((p) => `${p.label} ${p.keywords}`.toLowerCase().includes(q)) }] : mine
   }, [q, signedIn, admin])
   const asked = PANES.find((p) => p.id === pane)!
   const current = (asked.account && !signedIn) || (asked.admin && !admin) ? ACCOUNT_PANE : asked
@@ -1760,7 +1786,7 @@ export function Settings({ win }: { win: WinState }) {
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && groups[0]?.[0] && go(groups[0][0].id)}
+          onKeyDown={(e) => e.key === 'Enter' && groups[0]?.panes[0] && go(groups[0].panes[0].id)}
           placeholder="Search"
           aria-label="Search settings"
         />
@@ -1790,13 +1816,22 @@ export function Settings({ win }: { win: WinState }) {
           </ul>
         )}
         {groups.map((g, i) => (
-          <ul key={i} className="set-nav">
-            {g.map((p) => (
+          <ul key={i} className="set-nav" aria-label={g.title}>
+            {g.title && (
+              <li className="set-nav-head" aria-hidden>
+                {g.title}
+              </li>
+            )}
+            {g.panes.map((p) => (
               <li key={p.id}>
                 <button className={current.id === p.id ? 'is-on' : ''} onClick={() => go(p.id)} aria-current={current.id === p.id ? 'page' : undefined}>
-                  <span className="set-tile" style={{ ['--hue' as string]: p.hue }}>
-                    {p.icon}
-                  </span>
+                  {p.app ? (
+                    <AppIcon app={p.app} size={22} tone />
+                  ) : (
+                    <span className="set-tile" style={{ ['--hue' as string]: p.hue }}>
+                      {p.icon}
+                    </span>
+                  )}
                   {p.label}
                   {badges[p.id] ? (
                     <span className="set-nav-badge" aria-label={`${badges[p.id]} needs attention`}>
@@ -1808,7 +1843,7 @@ export function Settings({ win }: { win: WinState }) {
             ))}
           </ul>
         ))}
-        {q && !groups[0].length && <p className="muted set-noresult">Nothing matches “{query.trim()}”.</p>}
+        {q && !groups[0].panes.length && <p className="muted set-noresult">Nothing matches “{query.trim()}”.</p>}
       </nav>
       <div className="set-main" ref={content}>
         <header className="set-head">

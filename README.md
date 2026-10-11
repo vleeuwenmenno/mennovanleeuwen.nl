@@ -96,8 +96,9 @@ the token never passes through this site's server.
 
 The Terminal has its own settings sheet ([`src/terminal/TerminalSettings.tsx`](src/terminal/TerminalSettings.tsx)),
 opened from its window menu (Terminal settings…), its right-click menu, or `settings` at the prompt
-(`settings system` opens the Settings app instead). They are kept in this browser and synced like
-notes when signed in ([`src/terminal/prefs.ts`](src/terminal/prefs.ts)):
+(`settings system` opens the Settings app instead). The same settings, less the per-window zoom,
+are in Settings → Apps → Terminal, and the sheet's *Open in Settings…* goes there. They are kept in
+this browser and synced like notes when signed in ([`src/terminal/prefs.ts`](src/terminal/prefs.ts)):
 - **Text size**, separately for desktops and for phones (below the 720 px breakpoint, where
   windows fill the screen). Changes apply live. The single size saved before carries over to both.
 - **Zoom** for one window only, until it closes: Ctrl + / − / 0, Ctrl with the scroll wheel, or a
@@ -206,7 +207,19 @@ each one can sit on the desktop as a sticky (right-click the desktop → *New st
 get a random tilt and colour, both changeable from the sticky's hover bar or menu. **Settings**
 (system menu, [`src/apps/Settings.tsx`](src/apps/Settings.tsx)) is laid out like macOS System
 Settings: the account on top of a sidebar, then one pane each for appearance (mode, Omarchy themes,
-accent), the dock, launchers, search, links, notifications, go links, code hosts, calendar, sync and about.
+accent), the dock, launchers, Spotlight, windows, links, notifications, go links, code hosts and
+integrations; then, under an **Apps** heading, one pane per app with settings of its own, with the
+app's dock icon ([`src/apps/AppSettings.tsx`](src/apps/AppSettings.tsx)); then sync, users and about.
+The Apps panes are Agents, Calendar (its accounts and calendars, the view it opens in and where new
+events go), Files (view, icon size, sort order, hidden files, sidebar), Games (Pool's helpers,
+sensitivity, computer and sound; Gladiator's sound and music; Empires At War's sound, battlefield,
+camera and a summary of its key bindings, with a button into the game's own key bindings and sound
+mix), Omamp (shuffle, repeat, equalizer and preset, visualizer, time, its windows), PDF (sidebar,
+night mode), Preview (sidebar) and Terminal. Each pane reads and writes the very store the app uses
+([`src/data/appPrefs.ts`](src/data/appPrefs.ts), [`src/apps/games/prefs.ts`](src/apps/games/prefs.ts),
+through [`src/os/localPref.ts`](src/os/localPref.ts) for what stays in this browser), so an open
+window follows a change at once and the other way round. Those apps' window menus have *… settings…*
+to jump to their pane.
 Settings → Spotlight picks what the empty Spotlight shows (favourites, recently visited websites,
 status, apps, your repositories) and how many recent items of each, which kinds of results it searches, whether Enter on an unmatched query searches the
 web or runs it in a terminal, the preview pane, and the web search engine. Recently visited websites
