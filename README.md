@@ -92,6 +92,25 @@ Spotlight takes `go <alias>` too, and lists matching aliases as you type (the mo
 ones after a bare `go `) from the golinks server's `/suggest`, asked straight from the browser so
 the token never passes through this site's server.
 
+### Terminal settings
+
+The Terminal has its own settings sheet ([`src/terminal/TerminalSettings.tsx`](src/terminal/TerminalSettings.tsx)),
+opened from its window menu (Terminal settings…), its right-click menu, or `settings` at the prompt
+(`settings system` opens the Settings app instead). They are kept in this browser and synced like
+notes when signed in ([`src/terminal/prefs.ts`](src/terminal/prefs.ts)):
+- **Text size**, separately for desktops and for phones (below the 720 px breakpoint, where
+  windows fill the screen). Changes apply live. The single size saved before carries over to both.
+- **Zoom** for one window only, until it closes: Ctrl + / − / 0, Ctrl with the scroll wheel, or a
+  two-finger pinch on a touch screen, with a badge showing the new size. It multiplies the text
+  size. Full-screen programs (nano, htop, `agents`) redraw to the new rows and columns, which
+  `stty size` prints.
+- **Extra keys** on touch screens ([`src/terminal/ExtraKeys.tsx`](src/terminal/ExtraKeys.tsx)),
+  like Termux's: Esc, Tab, Ctrl, Alt, Shift, arrows, Home, End and `~ | / -` above the keyboard
+  while the prompt has it. Ctrl, Alt and Shift apply to the next key when tapped, lock when
+  tapped twice, and apply while held; they also apply to letters typed on the keyboard (Ctrl, then
+  c, is Ctrl+C). The keys go through the same handler as a real keyboard, so completion, history
+  and full-screen programs get them as usual. The row can be turned off.
+
 ### The shell, agents and skills
 
 The shell is msh 2.0 ([`src/terminal/msh/`](src/terminal/msh)): a POSIX-ish parser and
