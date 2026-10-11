@@ -121,7 +121,7 @@ async function entryAt(user: User, repo: string, path: string) {
   return listing?.entries.find((e) => e.name === name) ?? null
 }
 
-async function readText(user: User, repo: string, path: string, signal: AbortSignal): Promise<string> {
+export async function readText(user: User, repo: string, path: string, signal: AbortSignal): Promise<string> {
   const { url } = await fileLink(user, repo, path, 'download')
   const res = await guardedFetch(user, url, { signal })
   if (res.status === 404) throw new Error(`No file at that path`)
@@ -133,7 +133,7 @@ async function readText(user: User, repo: string, path: string, signal: AbortSig
 }
 
 /** Makes a folder and the ones above it that are missing. */
-async function makeDirs(user: User, repo: string, path: string) {
+export async function makeDirs(user: User, repo: string, path: string) {
   const parts = path.split('/').filter(Boolean)
   let at = ''
   for (const part of parts) {
@@ -146,6 +146,11 @@ async function makeDirs(user: User, repo: string, path: string) {
 
 async function writeText(user: User, repo: string, path: string, content: string, signal: AbortSignal) {
   if (Buffer.byteLength(content) > 2 * 1024 * 1024) throw new Error('That is more than 2 MB of text')
+  return uploadFile(user, repo, path, content, signal)
+}
+
+/** Writes a file through Seafile's file server (its folders made first), replacing what is there. */
+export async function uploadFile(user: User, repo: string, path: string, data: string | Uint8Array, signal: AbortSignal) {
   const [dir, name] = split(path)
   const existing = await entryAt(user, repo, path)
   if (existing?.dir) throw new Error('There is a folder with that name')
@@ -154,7 +159,7 @@ async function writeText(user: User, repo: string, path: string, content: string
   const form = new FormData()
   form.append('parent_dir', dir)
   form.append('replace', existing ? '1' : '0')
-  form.append('file', new Blob([content], { type: 'text/plain' }), name)
+  form.append('file', new Blob([typeof data === 'string' ? data : new Uint8Array(data)], { type: typeof data === 'string' ? 'text/plain' : 'application/octet-stream' }), name)
   const res = await guardedFetch(user, `${url}?ret-json=1`, { method: 'POST', body: form, signal })
   if (!res.ok) throw new Error(`Seafile answered ${res.status}: ${(await res.text()).slice(0, 200)}`)
   return { created: !existing }

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { AGENTS_MD } from '../data/agentsPrompt'
-import { agentModels, agentSettings, getDefaults, getPrompt, listMemories, setAgentSettings, TOOL_GROUPS, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
+import { agentModels, getDefaults, getPrompt, listMemories, setAgentSettings, TOOL_GROUPS, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
 import { useMounts, whereIs } from '../data/mounts'
+import { syncAgentPlaces } from '../data/agentPlaces'
 import { getWebSearch, PROVIDERS, resetWebSearch, saveWebSearch, testWebSearch, type Provider, type ResultMap, type SearchResult, type WebSearchInput, type WebSearchView } from '../data/websearch'
-import { getLibraries, parseSf, useLibraries } from '../data/seafile'
+import { getLibraries, useLibraries } from '../data/seafile'
 import { useAccount } from '../os/account'
 import { Select } from '../os/Select'
 import { useWM } from '../os/wm'
@@ -21,21 +22,15 @@ const Toggle = ({ on, onChange, label, disabled }: { on: boolean; onChange: (on:
 const MODE_LABEL: Record<Mode, string> = { quick: 'Quick', deep: 'Deep research' }
 
 /**
- * Keeps the server told where ~/AGENTS.md is: in Seafile when Seafile is home (/etc/fstab says,
- * and only the browser has the mount table), or nowhere (the built-in one). Used wherever the
+ * Keeps the server told where ~/AGENTS.md and ~/.agents/skills are: in Seafile when Seafile is home
+ * (/etc/fstab says, and only the browser has the mount table), or nowhere. Used wherever the
  * Agents settings or the app are open.
  */
 export function usePromptLocation() {
   const mountsVersion = useMounts()
   const { libraries } = useLibraries()
   const { promptFile } = useAgentSettings()
-  useEffect(() => {
-    const w = whereIs(`${HOME}/AGENTS.md`)
-    if (w.kind === 'missing' && w.loading) return
-    const at = w.kind === 'sf' ? parseSf(w.sf) : null
-    const next = at ? { repo: at.repo, path: at.p } : null
-    if (JSON.stringify(next) !== JSON.stringify(agentSettings().promptFile)) setAgentSettings({ promptFile: next })
-  }, [mountsVersion, libraries, promptFile])
+  useEffect(() => syncAgentPlaces(), [mountsVersion, libraries, promptFile])
 }
 
 /** The categories, in order: each a page of its own, picked from a sidebar or tabs. */

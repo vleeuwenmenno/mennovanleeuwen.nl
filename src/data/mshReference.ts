@@ -50,7 +50,7 @@ sh and bash are names for msh too. Scripts for python, node and other interprete
     "double"          $vars, $(…) and \\ work inside
     \\x                one character literally
     ~ ~/dir           your home folder
-    $name ${name}     a variable; $1…$9 arguments, $# their count, "$@" all of them as words,
+    $name \${name}     a variable; $1…$9 arguments, $# their count, "$@" all of them as words,
                       $* joined, $? last status, $0 the script, $$ a process id, $RANDOM
     $(cmd) \`cmd\`      what cmd prints, trailing newlines removed
     $((1 + x * 2))    integer arithmetic: + - * / % ** << >> & | ^ ~ ! == != < <= > >= && || ?:

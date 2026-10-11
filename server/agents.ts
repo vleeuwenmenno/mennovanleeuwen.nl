@@ -11,6 +11,7 @@ import { readState, writeState } from './state.ts'
 import { webSearch } from './websearch.ts'
 import { pushToUser, type PushMessage } from './webpush.ts'
 import { AGENTS_MD } from '../src/data/agentsPrompt.ts'
+import { findSkill, folderOf, installSkills, listSkills, readSkillFile, removeSkill, skillFiles, type Folder, type Skill, type SkillPlaces } from './skills.ts'
 import { commandNames, exitPlanTool, FILE_DELETE, FILE_TOOLS, FILE_WRITES, PERMISSIONS, projectInstructions, readOnlyCommand, runFileTool, terminalTool, workdirOf, workdirTools, type Permission, type Workdir } from './workdir.ts'
 
 // The Agents app: a research assistant on Ollama Cloud, for the signed-in user. Threads and their
@@ -143,7 +144,7 @@ export async function automaticModels(): Promise<{ quick: string; deep: string; 
 // --- tool groups -----------------------------------------------------------------------------
 
 /** What a thread may use, switched in the window: each group is one or more tools. */
-export const TOOL_GROUPS = ['web', 'notes', 'code', 'seafile', 'seafile_write', 'memory', 'projects', 'files', 'terminal'] as const
+export const TOOL_GROUPS = ['web', 'notes', 'code', 'seafile', 'seafile_write', 'memory', 'projects', 'files', 'terminal', 'skills'] as const
 export type ToolGroup = (typeof TOOL_GROUPS)[number]
 const GROUP_OF: Record<string, ToolGroup> = {
   web_search: 'web',
@@ -169,6 +170,8 @@ const GROUP_OF: Record<string, ToolGroup> = {
   move_thread: 'projects',
   ...Object.fromEntries(FILE_TOOLS.map((t) => [t, 'files'])),
   terminal: 'terminal',
+  use_skill: 'skills',
+  read_skill_file: 'skills',
 }
 const toolGroups = (v: unknown): ToolGroup[] | null => (Array.isArray(v) ? TOOL_GROUPS.filter((g) => v.includes(g)) : null)
 
@@ -481,15 +484,16 @@ export function stopThread(user: User, id: string) {
  * model that names threads, and where ~/AGENTS.md is in Seafile when Seafile is home (the window
  * works that out from /etc/fstab and keeps it up to date).
  */
-type AgentSettings = { titleModel: string | null; quickModel: string | null; deepModel: string | null; promptFile: { repo: string; path: string } | null }
+type AgentSettings = { titleModel: string | null; quickModel: string | null; deepModel: string | null; promptFile: { repo: string; path: string } | null; skillsFolder: Folder | null; skillsOff: string[] }
 
 function agentSettings(user: User): AgentSettings {
-  const v = (readState(user).agents?.value ?? {}) as { titleModel?: unknown; quickModel?: unknown; deepModel?: unknown; promptFile?: { repo?: unknown; path?: unknown } | null }
+  const v = (readState(user).agents?.value ?? {}) as { titleModel?: unknown; quickModel?: unknown; deepModel?: unknown; promptFile?: { repo?: unknown; path?: unknown } | null; skillsFolder?: unknown; skillsOff?: unknown }
   const name = (x: unknown) => (typeof x === 'string' && /^[\w.:/-]{1,80}$/.test(x) ? x : null)
   const titleModel = name(v.titleModel)
   const f = v.promptFile
   const promptFile = f && typeof f.repo === 'string' && /^[0-9a-f-]{36}$/i.test(f.repo) && typeof f.path === 'string' && f.path.startsWith('/') && !f.path.split('/').includes('..') ? { repo: f.repo, path: f.path } : null
-  return { titleModel, quickModel: name(v.quickModel), deepModel: name(v.deepModel), promptFile }
+  const skillsOff = Array.isArray(v.skillsOff) ? v.skillsOff.filter((x): x is string => typeof x === 'string').slice(0, 500) : []
+  return { titleModel, quickModel: name(v.quickModel), deepModel: name(v.deepModel), promptFile, skillsFolder: folderOf(v.skillsFolder), skillsOff }
 }
 
 export type PromptInfo = { text: string; source: 'seafile' | 'builtin'; repo: string | null; path: string | null; missing: boolean; error: string | null }
@@ -938,6 +942,10 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
       ['items'],
     ),
   )
+  tools.push(
+    tool('use_skill', 'Read a skill (instructions for a kind of task, listed in the system prompt) in full, before you start a task it covers. Answers its instructions and the files in its folder.', { name: str('The skill name') }, ['name']),
+    tool('read_skill_file', "Read a file from a skill's folder, by its path relative to the folder (as use_skill lists them).", { name: str('The skill name'), path: str('The file, like templates/notes.md') }, ['name', 'path']),
+  )
   if (opts.workdir) tools.push(...workdirTools())
   if (opts.terminal) tools.push(terminalTool())
   if (opts.permission === 'plan') tools.push(exitPlanTool())
@@ -1324,7 +1332,7 @@ const modeLine = (mode: Mode) =>
     : 'Mode: Deep research. Research this thoroughly before you answer. Break the question into parts, search from several angles, read the most relevant primary sources with web_fetch rather than relying on snippets, compare what they say and note where they disagree. Then write a well-structured answer, with headings and lists where they help, that ends with the key sources.'
 
 /** AGENTS.md, then today's date, the mode, how to work, the project and the memories. */
-async function systemPrompt(user: User, mode: Mode, projectId: number | null = null, todos: Todo[] = [], folder = ''): Promise<string> {
+async function systemPrompt(user: User, mode: Mode, projectId: number | null = null, todos: Todo[] = [], folder = '', skills: Skill[] = []): Promise<string> {
   const all = listMemories(user)
   const name = user.name || user.login
   // {{owner}}: what older AGENTS.md files say, from before anyone could sign up.
@@ -1344,10 +1352,38 @@ async function systemPrompt(user: User, mode: Mode, projectId: number | null = n
     mine.length ? `What you remember about ${name} (user memory; the [#id] is for update_memory):\n${memoryLines(mine)}` : `You do not remember anything about ${name} yet.`,
     project ? (theirs.length ? `What you remember about the project "${project.name}":\n${memoryLines(theirs)}` : `Nothing is remembered about the project "${project.name}" yet.`) : '',
     folder,
+    skillLines(skills),
     todoLines(todos),
   ]
     .filter(Boolean)
     .join('\n\n')
+}
+
+/** The skills the model may start itself: names and descriptions (use_skill reads one). */
+function skillLines(skills: Skill[]): string {
+  const usable = skills.filter((s) => s.enabled && !s.userOnly)
+  if (!usable.length) return ''
+  return [
+    'Skills: instructions for particular kinds of tasks. When a task matches one, read it first with use_skill and follow it.',
+    ...usable.map((s) => `- ${s.name}: ${s.description}`),
+  ].join('\n')
+}
+
+/** Where a thread finds skills: its work folder, the user's skills folder, the built-in ones. */
+const skillPlaces = (user: User, workdir: Workdir | null): SkillPlaces => {
+  const settings = agentSettings(user)
+  return { user: seafileInfo(user) ? settings.skillsFolder : null, workdir: seafileInfo(user) ? workdir : null, off: settings.skillsOff }
+}
+
+/** A message that starts with /name, for a skill: the skill's instructions go with it. */
+async function skillInvocation(user: User, places: SkillPlaces, text: string): Promise<Attachment | null> {
+  const m = /^\/([\w.-]+)(?:\s+([\s\S]*))?$/.exec(text.trim())
+  if (!m) return null
+  const s = await findSkill(user, places, m[1]).catch(() => null)
+  if (!s) return null
+  const intro = `The user started the skill "${s.name}"${m[2] ? ` with: ${m[2].trim()}` : ''}. Follow its instructions${s.folder ? ` (its folder is ${s.label}; read_skill_file reads the files in it)` : ''}:`
+  const body = `${intro}\n\n${s.body}`
+  return { name: `${s.name} skill`, source: 'skill', kind: 'text', mime: 'text/markdown', size: body.length, text: body }
 }
 
 /** The work folder, the permission mode and the terminal, as the model reads them. */
@@ -1595,7 +1631,9 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
   let outcome: 'answered' | 'failed' | null = null
 
   try {
-    send({ type: 'message', message: addMessage(row.id, { role: 'user', content: text }, files) })
+    // /name for a skill: its instructions go along as an attachment the window shows.
+    const skillFile = text.startsWith('/') ? await skillInvocation(user, skillPlaces(user, toThread(row).workdir), text) : null
+    send({ type: 'message', message: addMessage(row.id, { role: 'user', content: text }, skillFile ? [...files, skillFile] : files) })
     // A new thread gets its title from the title model, alongside the answer; the first line of
     // the question stands in if that fails.
     if (row.title === NEW_TITLE && !titling.has(row.id)) {
@@ -1644,7 +1682,7 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
       const last = round >= budget || Date.now() - started > LONG_TIME // out of rounds: answer with what was found
       const stale = open > 0 && !last && !wrapUp && round - todoRound > 3
       const system =
-        (await systemPrompt(user, mode, row.project_id, todosOf(row.id), folderLines(now, offered.has('terminal'), instructions))) +
+        (await systemPrompt(user, mode, row.project_id, todosOf(row.id), folderLines(now, offered.has('terminal'), instructions), offered.has('use_skill') ? await listSkills(user, skillPlaces(user, now.workdir)).catch(() => []) : [])) +
         (last ? '\n\nYou have used all your tool calls for this turn: answer now with what you have, and say what is left to do.' : '') +
         (stale ? `\n\nReminder: your todo list has ${open} open ${open === 1 ? 'item' : 'items'} and you have not updated it for a while. Update it with update_todos as you go, or clear it if it no longer fits.` : '') +
         (wrapUp ? `\n\nYou have answered, but your todo list still has ${open} open ${open === 1 ? 'item' : 'items'}. Call update_todos now: mark what is finished as done, or send an empty list to clear it if the job is over or the user has moved on. Do not repeat your answer.` : '')
@@ -1700,6 +1738,18 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
             const r = await askClient(row.id, assistant, index, c, ctl.signal, send)
             if (!r) return JSON.stringify({ error: 'No terminal ran this: the terminal tool works while the agents command runs in the MvL OS terminal.' })
             return JSON.stringify({ exit_code: r.status, output: clip(r.output, MODES[mode].pageChars * 2) })
+          }
+          if (c.name === 'use_skill' || c.name === 'read_skill_file') {
+            try {
+              const s = await findSkill(user, skillPlaces(user, current().workdir), argString(c.arguments ?? {}, 'name'))
+              if (!s) return JSON.stringify({ error: `There is no skill called ${argString(c.arguments ?? {}, 'name')}` })
+              if (c.name === 'read_skill_file') return clip(await readSkillFile(user, s, argString(c.arguments ?? {}, 'path')), MODES[mode].pageChars * 4)
+              const files = await skillFiles(user, s)
+              return `# Skill: ${s.name}\nFolder: ${s.label}${files.length ? `\nFiles: ${files.join(', ')}` : ''}\n\n${clip(s.body, MODES[mode].pageChars * 4)}`
+            } catch (e) {
+              if (ctl.signal.aborted) throw e
+              return JSON.stringify({ error: (e as Error).message })
+            }
           }
           if (FILE_TOOL_SET.has(c.name)) {
             const w = current().workdir
@@ -1776,3 +1826,31 @@ export function followThread(res: ServerResponse, user: User, id: string, termin
     if (!set.size && followers.get(row.id) === set) followers.delete(row.id)
   })
 }
+
+// --- skills -----------------------------------------------------------------------------------
+
+/** Where to look, from a request: a thread's work folder, or a folder the terminal is in. */
+function placesFrom(user: User, q: URLSearchParams): SkillPlaces {
+  const thread = q.get('thread')
+  const workdir = thread ? toThread(ownThread(user, thread)).workdir : q.get('repo') ? workdirOf({ repo: q.get('repo'), path: q.get('path'), label: q.get('label') ?? undefined }) : null
+  return skillPlaces(user, workdir)
+}
+
+export const skillsList = (user: User, q: URLSearchParams) => listSkills(user, placesFrom(user, q))
+
+export async function skillInfo(user: User, name: string, q: URLSearchParams) {
+  const s = await findSkill(user, placesFrom(user, q), name)
+  if (!s) throw new HttpError(404, `No skill called ${name}`)
+  return { ...s, files: await skillFiles(user, s) }
+}
+
+/** Where an install or removal goes: the folder asked for, else the user's skills folder. */
+function skillTarget(user: User, v: unknown): Folder {
+  if (!seafileInfo(user)) throw new HttpError(409, 'Skills live in Seafile: link it in Settings first')
+  const target = folderOf(v) ?? agentSettings(user).skillsFolder
+  if (!target) throw new HttpError(409, 'There is no skills folder: put your home folder on Seafile (Settings → Seafile), or install with --project in a Seafile folder')
+  return target
+}
+
+export const skillsInstall = (user: User, body: { folder?: unknown; source?: unknown; skill?: unknown; force?: unknown }) => installSkills(user, skillTarget(user, body.folder), body)
+export const skillsRemove = (user: User, body: { folder?: unknown; name?: unknown }) => removeSkill(user, skillTarget(user, body.folder), String(body.name ?? ''))

@@ -23,7 +23,7 @@ export type AttachmentInfo = Omit<Attachment, 'text' | 'data'>
 export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; createdAt: number }
 
 /** What a thread may use, switched in the composer. */
-export type ToolGroup = 'web' | 'notes' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal'
+export type ToolGroup = 'web' | 'notes' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills'
 export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile?: boolean }[] = [
   { id: 'web', name: 'Web', detail: 'Search the web and read pages' },
   { id: 'notes', name: 'Notes', detail: 'Search and make notes; changing or deleting one asks you first' },
@@ -34,6 +34,7 @@ export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile
   { id: 'projects', name: 'Projects', detail: 'Make and rename projects, move this thread; asks you first' },
   { id: 'files', name: 'Work folder', detail: "Read, search and edit files in the thread's work folder" },
   { id: 'terminal', name: 'Terminal', detail: 'Run msh commands, from the agents command in the terminal' },
+  { id: 'skills', name: 'Skills', detail: 'Read the skills in ~/.agents/skills and the work folder when a task calls for one' },
 ]
 export const ALL_TOOLS = TOOL_GROUPS.map((g) => g.id)
 /** The groups there were before choices remembered which groups existed. */
@@ -134,8 +135,12 @@ export type AgentSettings = {
   tools: ToolGroup[]
   /** The tool groups there were when `tools` was last saved: any newer one starts switched on */
   seenTools: ToolGroup[]
+  /** ~/.agents/skills in Seafile, when home is there (src/data/agentPlaces.ts keeps it up to date) */
+  skillsFolder: { repo: string; path: string; label: string } | null
+  /** Skills switched off: the agents do not see them */
+  skillsOff: string[]
 }
-const settingsStore = synced<AgentSettings>('agents', { titleModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS }, {
+const settingsStore = synced<AgentSettings>('agents', { titleModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [] }, {
   normalize: (v) => {
     const s = (v ?? {}) as Partial<AgentSettings>
     return {
@@ -147,12 +152,33 @@ const settingsStore = synced<AgentSettings>('agents', { titleModel: null, quickM
       // Groups added since the choice was saved are on, like every group is for someone new.
       tools: Array.isArray(s.tools) ? ALL_TOOLS.filter((t) => s.tools!.includes(t) || !(Array.isArray(s.seenTools) ? s.seenTools : LEGACY_TOOLS).includes(t)) : ALL_TOOLS,
       seenTools: ALL_TOOLS,
+      skillsFolder: s.skillsFolder && typeof s.skillsFolder.repo === 'string' && typeof s.skillsFolder.path === 'string' ? { repo: s.skillsFolder.repo, path: s.skillsFolder.path, label: String(s.skillsFolder.label ?? s.skillsFolder.path) } : null,
+      skillsOff: Array.isArray(s.skillsOff) ? s.skillsOff.filter((x): x is string => typeof x === 'string') : [],
     }
   },
 })
 export const useAgentSettings = settingsStore.use
 export const agentSettings = settingsStore.get
 export const setAgentSettings = (patch: Partial<AgentSettings>) => settingsStore.set((s) => ({ ...s, ...patch }))
+
+/** A skill: instructions for a kind of task, in a folder with a SKILL.md (server/skills.ts). */
+export type Skill = { name: string; description: string; source: 'builtin' | 'user' | 'project'; folder: { repo: string; path: string } | null; label: string; userOnly: boolean; enabled: boolean }
+/** Where to look for skills besides the user's and the built-in ones: a thread's work folder, or a folder. */
+export type SkillsWhere = { thread?: string; folder?: Workdir | null }
+const skillsQuery = (w: SkillsWhere = {}) => {
+  const q = new URLSearchParams()
+  if (w.thread) q.set('thread', w.thread)
+  else if (w.folder) Object.entries(w.folder).forEach(([k, v]) => q.set(k, v))
+  const s = q.toString()
+  return s ? `?${s}` : ''
+}
+export const listSkills = (w?: SkillsWhere) => api<Skill[]>(`/api/agents/skills${skillsQuery(w)}`)
+export const skillInfo = (name: string, w?: SkillsWhere) => api<Skill & { body: string; files: string[] }>(`/api/agents/skills/${encodeURIComponent(name)}${skillsQuery(w)}`)
+/** Installs skills from GitHub into a skills folder (the user's, unless `folder` says another). */
+export const installSkills = (input: { source: string; skill?: string; force?: boolean; folder?: Workdir | null }) =>
+  api<{ installed: { name: string; files: number; label: string }[]; from: string }>('/api/agents/skills/install', { method: 'POST', json: input })
+export const removeSkill = (name: string, folder?: Workdir | null) => api('/api/agents/skills/remove', { method: 'POST', json: { name, folder } })
+export const setSkillEnabled = (name: string, on: boolean) => setAgentSettings({ skillsOff: on ? agentSettings().skillsOff.filter((n) => n !== name) : [...new Set([...agentSettings().skillsOff, name])] })
 
 /** "12.3k" */
 export const tokenCount = (n: number) => (n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k` : `${(n / 1_000_000).toFixed(1)}M`)
@@ -308,6 +334,10 @@ export function toolLabel(call: ToolCall): string {
       return s('description') || `Ran ${s('command').split('\n')[0].slice(0, 80)}`
     case 'exit_plan_mode':
       return 'Presented a plan'
+    case 'use_skill':
+      return `Read the skill ${s('name')}`
+    case 'read_skill_file':
+      return `Read ${s('path')} from the skill ${s('name')}`
     default:
       return call.name
   }
