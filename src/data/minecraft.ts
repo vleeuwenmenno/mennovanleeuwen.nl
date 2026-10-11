@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { notify } from '../os/notify'
 import { setOn, sourceOn } from '../os/notifyPrefs'
-import { signedIn } from '../os/account'
+import { api, signedIn } from '../os/account'
 
 // Status of the Minecraft server Menno hosts. Browsers cannot open a raw TCP connection to
 // port 25565, so the site's own server pings it (server/minecraft.ts, served at /api/minecraft).
@@ -28,7 +28,20 @@ export type McStatus = {
   /** Milliseconds for the site's server to get an answer (only from /api/minecraft). */
   latency?: number
   checkedAt: number
+  /** Over RCON, when the site's server has it set up (server/minecraft.ts); never from the public APIs. */
+  world?: McWorld
+  playerInfo?: Record<string, McPlayerInfo>
+  settings?: { difficulty?: string; border?: number; software?: string }
 }
+
+/** In-game day and time: `ticks` into the day (0 is 06:00), `clock` that as HH:MM. */
+export type McWorld = { day: number; ticks: number; clock: string; phase: 'day' | 'dusk' | 'night' | 'dawn' }
+/** `dimension` is overworld, nether, end or a datapack's own; `health` is 0..20 (two per heart). */
+export type McPlayerInfo = { dimension?: string; level?: number; health?: number }
+
+const PHASE_ICON: Record<McWorld['phase'], string> = { day: '☀', dusk: '◐', night: '☾', dawn: '◑' }
+/** "☀ Day 412 · 14:20", for the window's header, the top bar popup and the widget. */
+export const worldLine = (w: McWorld) => `${PHASE_ICON[w.phase]} Day ${w.day} · ${w.clock}`
 
 type State = { status: McStatus | null; error?: string; loading: boolean }
 
@@ -191,6 +204,17 @@ function startPolling() {
 // (server/minecraft.ts). Only there; on a static host the window shows the live status alone.
 
 export type McRange = '24h' | '7d' | '30d'
+/** Who was on in a bucket (earliest first, at most 12; `more` the rest), `joined`/`left` when inside it. */
+export type McBucket = {
+  from: number
+  to: number
+  peak: number | null
+  avg: number | null
+  uptime: number | null
+  players?: { name: string; joined?: number; left?: number }[]
+  more?: number
+  joins?: number
+}
 export type McOverview = {
   status: McStatus
   tracking: boolean
@@ -200,7 +224,7 @@ export type McOverview = {
   latency: number | null
   peak: { players: number; at: number } | null
   range: McRange
-  buckets: { from: number; to: number; peak: number | null; avg: number | null; uptime: number | null }[]
+  buckets: McBucket[]
   online: { name: string; since: number }[]
   recent: { name: string; joinedAt: number; leftAt: number | null }[]
   top: { name: string; ms: number; visits: number; lastSeen: number | null }[]
@@ -231,3 +255,17 @@ export function useMcOverview(range: McRange) {
   }, [range, tick])
   return { ...state, refresh: () => setTick((n) => n + 1) }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The RCON panel in the Minecraft server window, for admins (POST /api/minecraft/rcon checks that).
+
+export type McAdminRequest =
+  | { action: 'command'; command: string }
+  | { action: 'say'; text: string }
+  | { action: 'tell'; name: string; text: string }
+  | { action: 'kick'; name: string; reason?: string }
+  | { action: 'whitelist'; op: 'list' | 'add' | 'remove'; name?: string }
+export type McAdminResult = { command: string; output: string; whitelist?: string[] }
+
+export const mcAdmin = (req: McAdminRequest) => api<McAdminResult>('/api/minecraft/rcon', { method: 'POST', json: req })
+export const mcAdminInfo = () => api<{ configured: boolean }>('/api/minecraft/rcon')

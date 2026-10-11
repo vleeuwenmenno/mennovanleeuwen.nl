@@ -728,9 +728,11 @@ body.is-resizing iframe {
   height: 140px;
   font-size: 12.5px;
 }
+/* Room above the bars for the join marks on the tallest ones. */
 .mcs-plot {
   position: relative;
   padding-left: 22px;
+  padding-top: 16px;
 }
 .mcs-axis {
   position: absolute;
@@ -742,10 +744,10 @@ body.is-resizing iframe {
   font-variant-numeric: tabular-nums;
 }
 .mcs-axis-top {
-  top: -6px;
+  top: 10px;
 }
 .mcs-axis-zero {
-  top: 114px;
+  top: 130px;
 }
 .mcs-bars {
   display: flex;
@@ -757,6 +759,7 @@ body.is-resizing iframe {
 }
 .mcs-col {
   position: relative;
+  container-type: inline-size;
   flex: 1;
   height: 100%;
   display: flex;
@@ -899,6 +902,209 @@ body.is-resizing iframe {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+/* Someone joined in this bucket: a dot on top of the bar, or their head where the bar is wide enough. */
+.mcs-mark {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  pointer-events: none;
+}
+.mcs-mark img {
+  display: none;
+  image-rendering: pixelated;
+  box-shadow: 0 0 0 1px var(--panel-2);
+}
+.mcs-mark i,
+.mcs-legend-join {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--green);
+}
+@container (min-width: 13px) {
+  .mcs-mark img {
+    display: block;
+  }
+  .mcs-mark i {
+    display: none;
+  }
+}
+.mcs-legend-join {
+  display: inline-block;
+  margin-left: 8px;
+}
+.mcs-tip-people {
+  list-style: none;
+  margin: 5px 0 0;
+  padding: 6px 0 0;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 3px;
+}
+.mcs-tip-people li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mcs-tip-people img {
+  image-rendering: pixelated;
+}
+.mcs-tip-people li > span:first-of-type {
+  font-family: var(--mono);
+}
+.mcs-tip-people li > span.muted {
+  margin-left: auto;
+  padding-left: 12px;
+}
+/* Which dimension an online player is in (from RCON). */
+.mcs-dim {
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--d) 55%, transparent);
+  color: var(--d);
+  font-size: 10.5px;
+  line-height: 15px;
+  white-space: nowrap;
+  --d: var(--muted);
+}
+.mcs-dim.is-overworld {
+  --d: var(--green);
+}
+.mcs-dim.is-nether {
+  --d: var(--red);
+}
+.mcs-dim.is-end {
+  --d: var(--magenta);
+}
+.mcs-vitals {
+  font-variant-numeric: tabular-nums;
+}
+/* Admins: message or kick someone from On now. */
+.mcs-person-admin {
+  flex-wrap: wrap;
+}
+.mcs-acts {
+  display: inline-flex;
+  gap: 2px;
+}
+.mcs-acts button {
+  padding: 1px 6px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--muted);
+  font-size: 11px;
+}
+.mcs-acts button:hover,
+.mcs-acts button.is-active {
+  border-color: var(--line-strong);
+  color: var(--fg-bright);
+}
+.mcs-act-form {
+  flex-basis: 100%;
+  display: flex;
+  gap: 6px;
+  padding-left: 24px;
+}
+.mcs-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 7px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  font-size: 12px;
+  outline: 0;
+}
+.mcs-input:focus {
+  border-color: var(--accent);
+}
+.mcs-admin .mcs-card-head span {
+  font-size: 11px;
+}
+.mcs-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.mcs-wl-name {
+  gap: 5px;
+  padding: 2px 4px 2px 6px;
+  font-family: var(--mono);
+}
+.mcs-wl-name img {
+  image-rendering: pixelated;
+}
+.mcs-wl-name button {
+  padding: 0 3px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+}
+.mcs-wl-name button:hover {
+  color: var(--red);
+}
+.mcs-wl-add {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+  min-width: 180px;
+}
+.mcs-err {
+  margin: 0 0 8px;
+  color: var(--red);
+  font-size: 12px;
+}
+.mcs-console {
+  height: 170px;
+  overflow-y: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-dark);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+.mcs-line.is-in {
+  color: var(--fg-bright);
+}
+.mcs-line.is-out {
+  color: var(--fg);
+  opacity: 0.85;
+}
+.mcs-line.is-err {
+  color: var(--red);
+}
+.mcs-console-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-top: 0;
+  background: var(--bg-dark);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.mcs-console-input:focus-within {
+  border-color: var(--accent);
+}
+.mcs-console-input input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-bright);
+  font: inherit;
+  outline: 0;
 }
 .clock {
   font-size: 12px;
