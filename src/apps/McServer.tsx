@@ -199,6 +199,11 @@ function OnNow({ status, data }: { status: ReturnType<typeof useMinecraft>['stat
           {since.has(n) && <span className="muted">for {duration(Date.now() - since.get(n)!)}</span>}
         </li>
       ))}
+      {status.players.online > names.length && (
+        <li className="muted">
+          and {status.players.online - names.length} more who {status.players.online - names.length === 1 ? 'keeps their name' : 'keep their names'} hidden
+        </li>
+      )}
     </ul>
   )
 }

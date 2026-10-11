@@ -8,12 +8,15 @@ import { database } from './db.ts'
 export const MC_HOST = 'cloud.mvl.sh'
 export const MC_PORT = 25565
 const CACHE_MS = 10_000
+/** Players who switched off "Allow Server Listings" are sent with this id as "Anonymous Player". */
+const ANONYMOUS = '00000000-0000-0000-0000-000000000000'
 
 export type McStatus = {
   online: boolean
   version?: string
   motd?: string
-  players: { online: number; max: number; list: string[] }
+  /** `list` is the named part of the sample; `hidden` counts those in it who hide their name. */
+  players: { online: number; max: number; list: string[]; hidden?: number }
   icon?: string
   /** Milliseconds from opening the connection to the answer. */
   latency?: number
@@ -78,6 +81,8 @@ function ping(host: string, port: number, timeoutMs = 4000): Promise<McStatus> {
       const strLen = readVarint(buf, id[1])!
       const json = JSON.parse(buf.subarray(strLen[1], strLen[1] + strLen[0]).toString('utf8'))
       sock.end()
+      const sample: { id?: string; name?: string }[] = Array.isArray(json.players?.sample) ? json.players.sample : []
+      const anonymous = (p: { id?: string }) => p.id === ANONYMOUS
       resolve({
         online: true,
         version: json.version?.name,
@@ -85,7 +90,8 @@ function ping(host: string, port: number, timeoutMs = 4000): Promise<McStatus> {
         players: {
           online: json.players?.online ?? 0,
           max: json.players?.max ?? 0,
-          list: (json.players?.sample ?? []).map((p: { name: string }) => p.name).filter((n: string) => !!n && !n.includes('§')),
+          list: sample.filter((p) => !anonymous(p)).map((p) => p.name ?? '').filter((n) => !!n && !n.includes('§')),
+          hidden: sample.filter(anonymous).length,
         },
         icon: typeof json.favicon === 'string' ? json.favicon : undefined,
         latency: Date.now() - started,
@@ -165,7 +171,7 @@ function record(st: McStatus) {
   const open = db.prepare('SELECT id, name FROM mc_sessions WHERE left_at IS NULL').all() as { id: number; name: string }[]
   const here = new Set(st.online ? st.players.list : [])
   // A sample shorter than the count leaves people out at random: only trust it for who joined.
-  const complete = !st.online || st.players.list.length >= st.players.online
+  const complete = !st.online || st.players.list.length + (st.players.hidden ?? 0) >= st.players.online
   for (const s of open) if (!here.has(s.name) && complete) db.prepare('UPDATE mc_sessions SET left_at = ? WHERE id = ?').run(now, s.id)
   const known = new Set(open.map((s) => s.name))
   for (const name of here) if (!known.has(name)) db.prepare('INSERT INTO mc_sessions (name, joined_at) VALUES (?, ?)').run(name, now)
