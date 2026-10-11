@@ -1190,7 +1190,14 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
       case 'web_fetch': {
         const url = argString(args, 'url')
         if (!/^https?:\/\//i.test(url)) throw new Error('Only http(s) URLs')
-        const res = await ollama(key, '/api/web_fetch', { url }, limit)
+        const res = await ollama(key, '/api/web_fetch', { url }, limit).catch((e: Error) => {
+          // Ollama's reader answers "not found" when the page itself is missing (often a URL the
+          // model guessed): say that, and what to do, rather than blaming Ollama.
+          if (/^Ollama: not found$/i.test(e.message)) throw new Error('Page not found (404): the address may be wrong or the page has moved. Search for it instead of guessing the URL.')
+          // Other reader failures (the site refused it, timed out): the page, not the API key.
+          if (e.message.startsWith('Ollama: ')) throw new Error(`Couldn't read the page (${e.message.slice(8)}): try another source.`)
+          throw e
+        })
         const page = (await res.json()) as { title?: string; content?: string; links?: string[] }
         return JSON.stringify({ title: page.title ?? null, content: clip(page.content ?? '', MODES[mode].pageChars), links: (page.links ?? []).slice(0, 40) })
       }
