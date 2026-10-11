@@ -610,6 +610,32 @@ their slot as you play; load them from Galactic conquest → Load game), Gladiat
 scores and settings. A campaign battle cut off by closing the window waits in the loaded campaign,
 to be fought again from the start.
 
+## Empires At War messages and AI
+
+Messages about a place carry a ⌖: clicking one (or tapping it, or Enter when it has focus) takes
+the camera there and selects what it's about. On the galaxy map that's the planet taken, lost,
+fought over or given a station, our fleet a new ship joined, or a fleet that arrived or was
+stopped by a blockade; in battle it's the ship that was built, promoted or repaired, or the spot
+of an alarm, a beacon, a survey or a salvaged wreck. The × still only puts the message away.
+
+The AI plays like a person with limited hands, more limited the easier it is:
+- **Galactic conquest** ([`galaxy.ts`](src/apps/games/empires/galaxy.ts) `galaxyAi`, `GALAXY_AI`):
+  at most 3, 4, 8 or 14 orders a game minute (very easy to hard), counting fleet moves, splits,
+  ships and station work. It keeps one main fleet at a staging shipyard near the front, defends
+  planets under attack once it has noticed (40 s late on very easy, 6 s on hard), attacks a
+  reachable planet it thinks it can beat and sees that attack through, and sends a detachment or
+  two of a ship or two to take unclaimed planets nearby. It misjudges your strength by up to 40%
+  (very easy) or 10% (hard) and now and then picks worse. Both sides start on the same income and
+  fleet; only the AI's income multiplier differs (0.55, 0.7, 1 and 1.15).
+- **Battles** ([`ai.ts`](src/apps/games/empires/ai.ts)): at most 25, 35, 60 or 100 actions a
+  minute (a move for a group of ships is one), and it notices an attack on its base 6 to 1 seconds
+  late. It runs on the battle's own clock and dice, so multiplayer copies stay in step.
+
+```sh
+pnpm check:empires-galaxy [weeks] [runs] [turtle|expand]  # campaigns vs a scripted player: orders a minute, fleets, wandering
+pnpm empires:battle-ai [games] [minutes]                  # AI-only battles: wins per pairing, actions a minute against the cap
+```
+
 ## Empires At War on touch screens
 
 Phones and tablets play the whole game by touch ([`src/apps/games/empires/Touch.tsx`](src/apps/games/empires/Touch.tsx)),

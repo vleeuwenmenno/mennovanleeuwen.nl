@@ -1302,6 +1302,30 @@ span.ew-teamtag {
   color: #fff;
   background: rgba(255, 255, 255, 0.1);
 }
+/* A message about a place: clicking it (or Enter) takes the camera there. The crosshair says so. */
+.ew-toast.is-link {
+  cursor: pointer;
+}
+.ew-toast.is-link:hover .ew-frame-in {
+  color: #fff;
+  filter: brightness(1.18);
+}
+.ew-toast.is-link:focus-visible {
+  outline: 1px solid var(--ew-accent);
+  outline-offset: 2px;
+}
+.ew-toast-go {
+  flex: none;
+  font-style: normal;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--ew-muted);
+  transition: color 0.12s;
+}
+.ew-toast.is-link:hover .ew-toast-go,
+.ew-toast.is-link:focus-visible .ew-toast-go {
+  color: var(--ew-accent);
+}
 @keyframes ew-in-right {
   from {
     opacity: 0;

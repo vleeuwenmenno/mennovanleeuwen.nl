@@ -258,7 +258,9 @@ function offlineSetup(info: MatchInfo, me: number): Setup {
  * 70 ms of slack for uneven arrivals, without falling far behind the server. */
 const TURN_BUFFER = 2
 
-type Toast = { id: number; text: string; tone: 'good' | 'bad' | 'info'; t: number }
+/** `at`: where the message happened, for the camera to go to when it's clicked; `unit`: the ship or
+ * structure it's about, followed to where it is now and selected (if it's still there and ours). */
+type Toast = { id: number; text: string; tone: 'good' | 'bad' | 'info'; t: number; at?: { x: number; y: number; unit?: number } }
 
 function snapshot(w: World, me: Owner, sel: Set<number>, groups: Map<string, number[]>): Hud {
   const p = w.players[me]
@@ -434,9 +436,20 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   bestRef.current = best
   const toastId = useRef(1)
 
-  const toast = (text: string, tone: Toast['tone'] = 'info') =>
+  const toast = (text: string, tone: Toast['tone'] = 'info', at?: Toast['at']) =>
     (tone === 'bad' || getSettings().toasts) &&
-    setToasts((ts) => [...ts.slice(-3), { id: toastId.current++, text, tone, t: performance.now() }])
+    setToasts((ts) => [...ts.slice(-3), { id: toastId.current++, text, tone, t: performance.now(), at }])
+  /** Where a clicked message points: the camera goes there, and the ship it's about is selected. */
+  const lookAt = (at: NonNullable<Toast['at']>) => {
+    const u = at.unit !== undefined ? world.current.byId.get(at.unit) : undefined
+    if (u && !u.dead) {
+      centerOn(u.x, u.y)
+      if (u.owner === me) {
+        select([u.id])
+        sound.select(myFaction, u.t.tier)
+      }
+    } else centerOn(at.x, at.y)
+  }
   const setMode = (m: Mode) => {
     mode.current = m
     drawMode.current = null
@@ -1096,6 +1109,12 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       // Effects and sound.
       renderer.current.consume(events, w, me)
       const seesPoint = (x: number, y: number) => canSee(w, w.players[me].team, x, y)
+      /** The newest of our ships of a type near a spot: the one a 'built' or 'arrived' message is about. */
+      const newest = (unit: string, x: number, y: number) => {
+        let best: Unit | undefined
+        for (const u of w.units) if (u.owner === me && !u.dead && u.t.id === unit && (u.x - x) ** 2 + (u.y - y) ** 2 < 400 ** 2 && (!best || u.id > best.id)) best = u
+        return best?.id
+      }
       for (const e of events) {
         if (e.k === 'fire') sound.fire(e.kind, where(e.x, e.y), w.players[e.owner].faction, e.light)
         else if (e.k === 'hit') sound.hit(e.shield, e.kind === 'turbo' || e.kind === 'missile', where(e.x, e.y))
@@ -1105,33 +1124,34 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         else if (e.k === 'ability' && e.owner !== me) sound.ability(e.id, where(e.x, e.y))
         else if (e.k === 'hpdown') {
           sound.hardpointDown(where(e.x, e.y))
-          if (e.owner === me) toast(`${HP_NAME[e.what as HardpointKind]} destroyed on one of our ships`, 'bad')
+          if (e.owner === me) toast(`${HP_NAME[e.what as HardpointKind]} destroyed on one of our ships`, 'bad', { x: e.x, y: e.y })
         } else if (e.k === 'built' && e.owner === me) {
           const t = UNIT[e.unit]
           if (t.tier === 'mine' || t.tier === 'defense') sound.structureDone(t.tier)
           else sound.shipReady(myFaction, t.tier)
-          toast(t.tier === 'mine' ? `${t.name} is drilling` : t.tier === 'defense' ? `${t.name} online` : `${t.name}${t.squad > 1 ? ' squadron' : ''} ready`, 'good')
+          toast(t.tier === 'mine' ? `${t.name} is drilling` : t.tier === 'defense' ? `${t.name} online` : `${t.name}${t.squad > 1 ? ' squadron' : ''} ready`, 'good', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
         } else if (e.k === 'warp') {
           if (e.owner === me || seesPoint(e.x, e.y)) sound.warp(where(e.x, e.y), e.delay)
         } else if (e.k === 'arrived') {
           if (e.owner === me || seesPoint(e.x, e.y)) sound.arrive(where(e.x, e.y), UNIT[e.unit].size)
-          if (e.owner === me && e.field) toast(`${UNIT[e.unit].name} dropped out inside an asteroid field and took heavy damage`, 'bad')
-          else if (e.owner !== me && foes(w, e.owner, me) && seesPoint(e.x, e.y)) toast(`Enemy ${UNIT[e.unit].name.toLowerCase()} out of hyperspace`, 'bad')
+          if (e.owner === me && e.field) toast(`${UNIT[e.unit].name} dropped out inside an asteroid field and took heavy damage`, 'bad', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
+          else if (e.owner !== me && foes(w, e.owner, me) && seesPoint(e.x, e.y)) toast(`Enemy ${UNIT[e.unit].name.toLowerCase()} out of hyperspace`, 'bad', { x: e.x, y: e.y })
         } else if (e.k === 'retreating') {
           if (e.owner === me || seesPoint(e.x, e.y)) sound.warp(where(e.x, e.y), e.secs)
         } else if (e.k === 'retreated') {
           if (e.owner === me || seesPoint(e.x, e.y)) sound.arrive(where(e.x, e.y), UNIT[e.unit].size)
           if (e.owner === me) toast(e.refund > 0 ? `${UNIT[e.unit].name} jumped out: +${Math.round(e.refund)} credits in ${REFUND_DELAY} s` : `${UNIT[e.unit].name} jumped out`, 'good')
-          else if (foes(w, e.owner, me) && seesPoint(e.x, e.y)) toast(`An enemy ${UNIT[e.unit].name.toLowerCase()} escaped into hyperspace`, 'info')
+          else if (foes(w, e.owner, me) && seesPoint(e.x, e.y)) toast(`An enemy ${UNIT[e.unit].name.toLowerCase()} escaped into hyperspace`, 'info', { x: e.x, y: e.y })
         } else if (e.k === 'upgraded' && e.owner === me) {
           const up = SITE_UPGRADES.find((x) => x.id === e.id)!
+          const site = w.byId.get(e.unit)
           sound.researchDone()
-          toast(`${up.name}${up.levels > 1 ? ` ${e.level}` : ''} fitted`, 'good')
+          toast(`${up.name}${up.levels > 1 ? ` ${e.level}` : ''} fitted`, 'good', site && { x: site.x, y: site.y, unit: site.id })
         } else if (e.k === 'refunded' && e.owner === me) {
           toast(`Retreat refund: +${Math.round(e.amount)} credits for the ${UNIT[e.unit].name}`, 'good')
         } else if (e.k === 'repaired' && e.owner === me) {
           const u = w.byId.get(e.unit)
-          if (u) toast(`${u.t.name} repaired`, 'good')
+          if (u) toast(`${u.t.name} repaired`, 'good', { x: e.x, y: e.y, unit: u.id })
         } else if (e.k === 'reserved' && e.owner === me) {
           sound.shipReady(myFaction, UNIT[e.unit].tier)
           toast(`${UNIT[e.unit].name} ready in the fleet inventory: drag it onto the battlefield`, 'good')
@@ -1147,27 +1167,27 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         } else if (e.k === 'beacon') {
           if (e.owner === myTeam) {
             sound.capture(true)
-            toast('Beacon captured: +6 fleet capacity', 'good')
+            toast('Beacon captured: +6 fleet capacity', 'good', { x: e.x, y: e.y })
           } else if (e.prev === myTeam) {
             sound.capture(false)
-            toast('We lost a beacon', 'bad')
+            toast('We lost a beacon', 'bad', { x: e.x, y: e.y })
           }
         } else if (e.k === 'alarm' && e.owner === me) {
           sound.alarm(e.what.endsWith('station'))
           lastAlarm.current = { x: e.x, y: e.y, t: w.time }
-          toast(`${e.what} under attack! (Space to look)`, 'bad')
+          toast(`${e.what} under attack! (Space to look)`, 'bad', { x: e.x, y: e.y })
         } else if (e.k === 'survey') {
           if (e.owner === myTeam && e.prev !== myTeam) {
             sound.surveyed()
-            toast('Ore surveyed: click it to build a mining or defense platform', 'good')
-          } else if (e.prev === myTeam) toast(e.razed ? 'Platform destroyed: the ore has to be surveyed again' : e.owner === -1 ? 'An unused ore claim has lapsed' : 'We lost the claim on an ore asteroid', 'bad')
+            toast('Ore surveyed: click it to build a mining or defense platform', 'good', { x: e.x, y: e.y })
+          } else if (e.prev === myTeam) toast(e.razed ? 'Platform destroyed: the ore has to be surveyed again' : e.owner === -1 ? 'An unused ore claim has lapsed' : 'We lost the claim on an ore asteroid', 'bad', { x: e.x, y: e.y })
         } else if (e.k === 'salvaged' && e.owner === me) {
           sound.salvaged()
-          toast(`Wreck salvaged: +${Math.round(e.value)} credits in all`, 'good')
+          toast(`Wreck salvaged: +${Math.round(e.value)} credits in all`, 'good', { x: e.x, y: e.y })
         } else if (e.k === 'rankUp' && e.owner === me) {
           const u = w.byId.get(e.unit)
           sound.promoted()
-          if (u && u.t.tier !== 'fighter') toast(`${u.t.name} promoted: ${RANKS[e.rank]}`, 'good')
+          if (u && u.t.tier !== 'fighter') toast(`${u.t.name} promoted: ${RANKS[e.rank]}`, 'good', { x: e.x, y: e.y, unit: u.id })
         } else if (e.k === 'tech' && e.owner === me) {
           sound.researchDone()
           toast(`Research complete: ${TECH[e.id].name}`, 'good')
@@ -1981,12 +2001,24 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         <div className={`ew-toasts ${ui.paused && !ui.menu && !ui.panel ? 'is-low' : ''}`} aria-live="polite">
           {toasts.map((t) => {
             const dismiss = () => setToasts((ts) => ts.filter((x) => x.id !== t.id))
+            // A message about a place takes the camera there (click, tap, or Enter), and is done with.
+            const at = t.at
+            const go = at ? () => (lookAt(at), dismiss()) : undefined
             return (
               // Right-click, or the × that shows on hover, puts it away.
-              <section key={t.id} className={`ew-frame ew-toast is-${t.tone}`} onContextMenu={(e) => (e.preventDefault(), dismiss())}>
+              <section
+                key={t.id}
+                className={`ew-frame ew-toast is-${t.tone}${go ? ' is-link' : ''}`}
+                role={go ? 'button' : undefined}
+                tabIndex={go ? 0 : undefined}
+                onClick={go}
+                onKeyDown={go && ((e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), e.stopPropagation(), go()))}
+                onContextMenu={(e) => (e.preventDefault(), dismiss())}
+              >
                 <div className="ew-frame-in">
+                  {go && <i className="ew-toast-go" aria-hidden>⌖</i>}
                   <span>{t.text}</span>
-                  <button className="ew-toast-x" onClick={dismiss} aria-label="Dismiss">×</button>
+                  <button className="ew-toast-x" onClick={(e) => (e.stopPropagation(), dismiss())} aria-label="Dismiss">×</button>
                 </div>
               </section>
             )
