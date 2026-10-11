@@ -1,8 +1,9 @@
 import type { User } from './auth.ts'
-import { caldavCalendars, caldavEvents, createCaldavEvent, deleteCaldavEvent, listCaldav, moveCaldavEvent, updateCaldavEvent, type CaldavRef } from './caldav.ts'
+import { caldavCalendars, caldavEvents, createCaldavEvent, deleteCaldavEvent, getCaldavEvent, listCaldav, moveCaldavEvent, updateCaldavEvent, type CaldavRef } from './caldav.ts'
 import {
   createGoogleEvent,
   deleteGoogleEvent,
+  getGoogleEvent,
   googleAccount,
   listCalendars,
   listEvents,
@@ -25,12 +26,16 @@ import { HttpError } from './http.ts'
 
 export type AnyCalendar = CalendarInfo & { source: string }
 
-/** An event as the Calendar app sends it: ISO times, or "YYYY-MM-DD" dates when all day (end exclusive). */
-export type EventInput = { title: string; start: string; end: string; allDay: boolean; location?: string; description?: string; attendees?: string[]; timeZone?: string }
+/**
+ * An event as the Calendar app sends it: ISO times, or "YYYY-MM-DD" dates when all day (end
+ * exclusive). `recurrence` is an RRULE's value (FREQ=WEEKLY;BYDAY=MO), only for a new event: the
+ * Agents app makes repeating events, the Calendar app doesn't yet.
+ */
+export type EventInput = { title: string; start: string; end: string; allDay: boolean; location?: string; description?: string; attendees?: string[]; timeZone?: string; recurrence?: string }
 
-type Ref = GoogleRef | CaldavRef
-const encodeRef = (r: Ref) => Buffer.from(JSON.stringify(r)).toString('base64url')
-function decodeRef(raw: unknown): Ref {
+export type Ref = GoogleRef | CaldavRef
+export const encodeRef = (r: Ref) => Buffer.from(JSON.stringify(r)).toString('base64url')
+export function decodeRef(raw: unknown): Ref {
   try {
     const r = JSON.parse(Buffer.from(String(raw), 'base64url').toString('utf8')) as Ref
     if ((r.k === 'g' && typeof r.c === 'string' && typeof r.e === 'string') || (r.k === 'c' && typeof r.c === 'string' && typeof r.h === 'string' && typeof r.u === 'string')) return r
@@ -52,7 +57,17 @@ export async function allCalendars(user: User): Promise<{ calendars: AnyCalendar
   return {
     calendars: [
       ...google.map((c) => ({ ...c, source: 'Google' })),
-      ...caldav.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, primary: false, selected: true, writable: c.writable, source: labels.get(c.account) ?? 'CalDAV' })),
+      ...caldav.calendars.map((c) => ({
+        id: c.id,
+        name: c.name,
+        color: c.color,
+        primary: false,
+        selected: true,
+        writable: c.writable,
+        source: labels.get(c.account) ?? 'CalDAV',
+        // Only said for shared ones: a CalDAV server doesn't mark the calendars that are simply yours.
+        ...(c.shared === 'with-you' ? { access: c.writable ? ('writer' as const) : ('reader' as const) } : c.shared === 'by-you' ? { access: 'owner' as const } : {}),
+      })),
     ],
     errors: [...errors, ...caldav.errors],
   }
@@ -106,8 +121,8 @@ export async function allEvents(user: User, ids: string[] | null, range: { from:
 const EMAIL = /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]+$/
 const DATE = /^\d{4}-\d{2}-\d{2}$/
 
-/** Checks and tidies what the browser sent; `partial` allows leaving fields out. */
-function cleanInput(raw: unknown, partial: boolean): Partial<EventInput> {
+/** Checks and tidies what the browser sent; `partial` allows leaving fields out. The Agents app checks with it before asking the user. */
+export function cleanInput(raw: unknown, partial: boolean): Partial<EventInput> {
   if (!raw || typeof raw !== 'object') throw new HttpError(400, 'No event given')
   const r = raw as Record<string, unknown>
   const out: Partial<EventInput> = {}
@@ -135,18 +150,38 @@ function cleanInput(raw: unknown, partial: boolean): Partial<EventInput> {
     out.attendees = emails
   }
   if (typeof r.timeZone === 'string' && /^[\w+-]+(?:\/[\w+-]+)*$/.test(r.timeZone)) out.timeZone = r.timeZone
+  if (r.recurrence !== undefined && r.recurrence !== null && r.recurrence !== '') {
+    if (partial) throw new HttpError(400, 'How an event repeats can only be set when it is made')
+    out.recurrence = cleanRule(r.recurrence)
+  }
   if (!partial && (out.start === undefined || out.title === undefined)) throw new HttpError(400, 'A new event needs a title, start and end')
   return out
 }
 
+/** The repeat rules both Google and CalDAV take as they are, and that the agenda can show. */
+const RULE_PARTS = new Set(['FREQ', 'INTERVAL', 'COUNT', 'UNTIL', 'BYDAY', 'BYMONTHDAY', 'BYMONTH', 'BYSETPOS', 'WKST'])
+
+/** An RRULE value ("RRULE:" in front allowed), checked part by part. */
+function cleanRule(raw: unknown): string {
+  const rule = String(raw).trim().replace(/^RRULE:/i, '').toUpperCase()
+  const parts = rule.split(';').filter(Boolean).map((p) => p.split('='))
+  const bad = () => new HttpError(400, `"${String(raw).slice(0, 100)}" is not a repeat rule like FREQ=WEEKLY;BYDAY=MO,WE;COUNT=10`)
+  if (!parts.length || parts.some((p) => p.length !== 2 || !RULE_PARTS.has(p[0]) || !/^[A-Z0-9,+-]+$/.test(p[1]))) throw bad()
+  const get = (k: string) => parts.find((p) => p[0] === k)?.[1]
+  if (!/^(DAILY|WEEKLY|MONTHLY|YEARLY)$/.test(get('FREQ') ?? '')) throw bad()
+  if (get('COUNT') && get('UNTIL')) throw new HttpError(400, 'A repeat rule has COUNT or UNTIL, not both')
+  if (get('UNTIL') && !/^\d{8}(T\d{6}Z)?$/.test(get('UNTIL')!)) throw new HttpError(400, 'UNTIL is a date like 20261231, or a UTC time like 20261231T230000Z')
+  return parts.map((p) => p.join('=')).join(';')
+}
+
 const isCaldav = (calendarId: string) => calendarId.startsWith('caldav:')
 
-export async function createEvent(user: User, body: { calendar?: unknown; event?: unknown }) {
+/** Makes an event; answers its ref (the Agents app hands it to the model, to change it later). */
+export async function createEvent(user: User, body: { calendar?: unknown; event?: unknown }): Promise<string> {
   const calendar = String(body.calendar ?? '')
   const input = cleanInput(body.event, false) as EventInput
   if (!calendar) throw new HttpError(400, 'Pick a calendar')
-  if (isCaldav(calendar)) await createCaldavEvent(user, calendar, input)
-  else await createGoogleEvent(user, calendar, input)
+  return encodeRef(isCaldav(calendar) ? await createCaldavEvent(user, calendar, input) : await createGoogleEvent(user, calendar, input))
 }
 
 /**
@@ -174,6 +209,26 @@ export async function updateEvent(user: User, body: { ref?: unknown; event?: unk
   } else {
     if (Object.keys(input).some((k) => k !== 'timeZone')) await updateCaldavEvent(user, ref, input, all)
     if (target) await moveCaldavEvent(user, ref, target)
+  }
+}
+
+/** One event (or one occurrence of a series) as it is now: what the Agents app changes from. */
+export type EventNow = { title: string; start: string; end: string; allDay: boolean; location?: string; description?: string; recurring: boolean; guests: number; calendarId: string }
+export async function getEvent(user: User, rawRef: unknown): Promise<EventNow> {
+  const ref = decodeRef(rawRef)
+  if (ref.k === 'g') return { ...(await getGoogleEvent(user, ref)), calendarId: ref.c }
+  const e = await getCaldavEvent(user, ref)
+  const self = listCaldav(user).find((a) => ref.c.startsWith(`caldav:${a.id}:`))?.username.toLowerCase()
+  return {
+    title: e.title,
+    start: e.start,
+    end: e.end,
+    allDay: e.allDay,
+    location: e.location,
+    description: e.description,
+    recurring: !!ref.r || e.series,
+    guests: (e.attendees ?? []).filter((a) => !a.organizer && a.email !== self).length,
+    calendarId: ref.c,
   }
 }
 

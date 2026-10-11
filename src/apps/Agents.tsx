@@ -45,6 +45,7 @@ import {
   type Memory,
   type Mode,
   type ModelInfo,
+  type CallSummary,
   type PendingApproval,
   type TurnEvent,
   type Thread,
@@ -62,7 +63,7 @@ import { prettyPath } from '../terminal/vfs'
 import { DRAG_FILES, fileLink as seafileLink, getDragged, libraryName, parseSf } from '../data/seafile'
 import { pickFiles, pickFolder } from '../os/FolderPicker'
 import { Select } from '../os/Select'
-import { signIn, useAccount } from '../os/account'
+import { hasCalendar, signIn, useAccount } from '../os/account'
 import { fieldMenu, linkAt, linkMenu, openContextMenu, openMenuAt, selectionIn, tidyMenu, type MenuItem } from '../os/ContextMenu'
 import { searchWeb } from '../data/searchEngine'
 import { ask, choose } from '../os/Dialogs'
@@ -950,7 +951,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       setApprovals(e.pending)
       setLive(e.live)
     } else if (e.type === 'delta') setLive((l) => ({ content: (l?.content ?? '') + (e.content ?? ''), thinking: (l?.thinking ?? '') + (e.thinking ?? '') }))
-    else if (e.type === 'approval') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'approval', call: e.call }])
+    else if (e.type === 'approval') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'approval', call: e.call, summary: e.summary }])
     else if (e.type === 'client') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'client', call: e.call }])
     else if (e.type === 'question') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'question', form: e.form }])
     else if (e.type === 'answered' || e.type === 'approved' || e.type === 'clientDone') setApprovals((a) => a.filter((x) => x.callId !== e.callId))
@@ -1259,8 +1260,15 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       ...TOOL_GROUPS.map((g) => ({
         label: g.name,
         checked: tools.includes(g.id),
-        disabled: (g.seafile && !account.seafile) || (g.id === 'files' && !workdir) || g.id === 'terminal',
-        hint: g.id === 'files' && !workdir ? 'Choose a work folder first (the folder button above)' : g.id === 'terminal' ? 'Only from the agents command in the terminal' : g.detail,
+        disabled: (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.id === 'files' && !workdir) || g.id === 'terminal',
+        hint:
+          g.id === 'files' && !workdir
+            ? 'Choose a work folder first (the folder button above)'
+            : g.id === 'terminal'
+              ? 'Only from the agents command in the terminal'
+              : g.calendar && !hasCalendar(account)
+                ? 'Connect a calendar first (Settings → Apps → Calendar)'
+                : g.detail,
         onSelect: () => toggleTool(g.id),
       })),
       { separator: true },
@@ -1572,7 +1580,7 @@ function Messages({ messages, answering, approvals, onDecide, onAnswer }: { mess
           const wait = approvals.find((a) => a.messageId === m.id && a.index === j)
           if (wait?.kind === 'question' && wait.form) return <QuestionForm key={wait.callId} form={wait.form} onAnswer={(answers) => onAnswer(wait.callId, answers)} />
           if (c.name === 'ask_user' && results[j]) return <AnsweredForm key={j} tag={`${m.id}:${j}`} call={c} result={results[j].content} />
-          return <ToolCard key={j} tag={`${m.id}:${j}`} call={c} result={results[j]?.content} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />
+          return <ToolCard key={j} tag={`${m.id}:${j}`} call={c} result={results[j]?.content} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />
         })}
       </Fragment>,
     )
@@ -1643,9 +1651,11 @@ function codeBlockEnter(el: HTMLTextAreaElement): boolean {
 }
 
 type SearchHit = { title: string; url: string; snippet?: string }
+/** An event as calendar_list_events gives it to the model (server/agentCalendar.ts). */
+type CalendarHit = { id?: string; title: string; when: string; calendar: string }
 
 /** One tool call: what it did in a line, and when opened, what it was given and what came back. */
-function ToolCard({ tag, call, result, pending, approval, inTerminal }: { tag: string; call: ToolCall; result?: string; pending: boolean; approval?: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; inTerminal?: boolean }) {
+function ToolCard({ tag, call, result, pending, approval, inTerminal, summary }: { tag: string; call: ToolCall; result?: string; pending: boolean; approval?: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; inTerminal?: boolean; summary?: CallSummary }) {
   let parsed: unknown = null
   try {
     parsed = result ? JSON.parse(result) : null
@@ -1654,6 +1664,7 @@ function ToolCard({ tag, call, result, pending, approval, inTerminal }: { tag: s
   }
   const failed = !!parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'error' in parsed
   const hits = call.name === 'web_search' && Array.isArray(parsed) ? (parsed as SearchHit[]) : null
+  const events = call.name === 'calendar_list_events' && parsed && typeof parsed === 'object' && Array.isArray((parsed as { events?: unknown }).events) ? (parsed as { events: CalendarHit[]; more?: number }) : null
   if (approval)
     return (
       <div className="agt-tool is-asking" role="group" aria-label="Allow this change?" data-tool={tag}>
@@ -1661,8 +1672,18 @@ function ToolCard({ tag, call, result, pending, approval, inTerminal }: { tag: s
           <span className="agt-tool-icon" aria-hidden>
             ?
           </span>
-          <span className="agt-tool-label">{toolLabel(call)}</span>
+          <span className="agt-tool-label">{summary?.title ?? toolLabel(call)}</span>
         </p>
+        {summary && (
+          <dl className="agt-answers agt-ask-summary">
+            {summary.rows.map(([label, value], i) => (
+              <div key={i}>
+                <dt>{label}</dt>
+                <dd>{value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
         {call.name === 'seafile_write' && typeof call.arguments.content === 'string' && <pre className="agt-tool-body">{call.arguments.content.slice(0, 4000)}</pre>}
         {call.name === 'update_note' && typeof call.arguments.text === 'string' && <pre className="agt-tool-body">{call.arguments.text.slice(0, 4000)}</pre>}
         {call.name === 'web_fetch' && typeof call.arguments.url === 'string' && (
@@ -1681,9 +1702,15 @@ function ToolCard({ tag, call, result, pending, approval, inTerminal }: { tag: s
         <span className="agt-tool-icon" aria-hidden>
           {pending ? '◌' : failed ? '✕' : '✓'}
         </span>
-        <span className="agt-tool-label">{toolLabel(call)}</span>
+        <span className="agt-tool-label">{toolLabel(call, result)}</span>
         {inTerminal && <span className="muted"> · running in your terminal…</span>}
         {hits && <span className="muted"> · {hits.length} results</span>}
+        {events && (
+          <span className="muted">
+            {' '}
+            · {events.events.length + (events.more ?? 0)} {events.events.length + (events.more ?? 0) === 1 ? 'event' : 'events'}
+          </span>
+        )}
         {failed && <span className="t-red"> · {String((parsed as { error: unknown }).error)}</span>}
       </summary>
       {hits ? (
@@ -1701,6 +1728,19 @@ function ToolCard({ tag, call, result, pending, approval, inTerminal }: { tag: s
               <span className="muted"> {h.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}</span>
             </li>
           ))}
+        </ul>
+      ) : events?.events.length ? (
+        <ul className="agt-hits">
+          {events.events.map((e, i) => (
+            <li key={e.id ?? i}>
+              <span>{e.title}</span>
+              <span className="muted">
+                {' '}
+                {e.when} · {e.calendar}
+              </span>
+            </li>
+          ))}
+          {!!events.more && <li className="muted">and {events.more} more</li>}
         </ul>
       ) : (
         <pre className="agt-tool-body">{[`${call.name}(${JSON.stringify(call.arguments)})`, result ? (typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2)).slice(0, 6000) : pending ? 'Running…' : 'No result (the turn stopped).'].join('\n\n')}</pre>
@@ -1835,7 +1875,8 @@ function threadMarkdown(title: string, messages: AgentMessage[]): string {
   for (const m of messages) {
     if (m.role === 'user') out.push(`## You\n\n${m.content}${m.attachments?.length ? `\n\nAttached: ${m.attachments.map((a) => a.name).join(', ')}` : ''}`)
     else if (m.role === 'assistant') {
-      const steps = (m.toolCalls ?? []).map((c) => `- ${toolLabel(c)}`).join('\n')
+      const results = messages.slice(messages.indexOf(m) + 1).filter((r, k, rest) => r.role === 'tool' && rest.slice(0, k).every((x) => x.role === 'tool'))
+      const steps = (m.toolCalls ?? []).map((c, j) => `- ${toolLabel(c, results[j]?.content)}`).join('\n')
       if (m.content.trim() || steps) out.push(`## Agent\n\n${[steps, m.content.trim()].filter(Boolean).join('\n\n')}`)
     }
   }

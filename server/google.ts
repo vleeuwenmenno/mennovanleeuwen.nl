@@ -140,7 +140,8 @@ async function calendarApi<T>(user: User, path: string, init: { method?: string;
   return (res.status === 204 ? null : await res.json()) as T
 }
 
-export type CalendarInfo = { id: string; name: string; color: string; primary: boolean; selected: boolean; writable: boolean }
+/** `access` is Google's own role: owner (yours), writer (shared with you to edit), reader (shared to look at). */
+export type CalendarInfo = { id: string; name: string; color: string; primary: boolean; selected: boolean; writable: boolean; access?: 'owner' | 'writer' | 'reader' }
 export type Attendee = { email: string; name?: string; status?: 'accepted' | 'declined' | 'tentative' | 'needs-action'; organizer?: boolean; self?: boolean }
 export type CalendarEvent = {
   id: string
@@ -196,6 +197,7 @@ export function listCalendars(user: User): Promise<CalendarInfo[]> {
       primary: !!c.primary,
       selected: c.selected !== false,
       writable: canWrite && (c.accessRole === 'owner' || c.accessRole === 'writer'),
+      access: c.accessRole === 'owner' || c.accessRole === 'writer' ? c.accessRole : 'reader',
     }))
   })
 }
@@ -211,6 +213,7 @@ type GoogleEvent = {
   end: GoogleTime
   originalStartTime?: GoogleTime
   recurringEventId?: string
+  recurrence?: string[]
   location?: string
   htmlLink?: string
   hangoutLink?: string
@@ -292,6 +295,9 @@ function googleBody(input: Partial<EventInput>, existing?: GoogleEvent) {
     body.start = time(input.start, input.allDay, input.timeZone)
     body.end = time(input.end, input.allDay, input.timeZone)
   }
+  // Only for new events (calendars.ts refuses it in a change). Google wants the time zone with a
+  // repeating timed event, to know what "every Monday at 09:00" means across daylight saving.
+  if (input.recurrence) body.recurrence = [`RRULE:${input.recurrence}`]
   if (input.attendees !== undefined) {
     const known = new Map((existing?.attendees ?? []).filter((a) => a.email).map((a) => [a.email!.toLowerCase(), a]))
     // Yourself (the organizer) stays on the list; Google adds you back anyway.
@@ -304,9 +310,27 @@ function googleBody(input: Partial<EventInput>, existing?: GoogleEvent) {
 
 const eventPath = (calendar: string, event: string) => `/calendars/${encodeURIComponent(calendar)}/events/${encodeURIComponent(event)}`
 
-export async function createGoogleEvent(user: User, calendar: string, input: EventInput) {
-  await calendarApi(user, `/calendars/${encodeURIComponent(calendar)}/events?sendUpdates=all`, { method: 'POST', body: googleBody(input) })
+/** Makes an event; answers where it now lives. */
+export async function createGoogleEvent(user: User, calendar: string, input: EventInput): Promise<GoogleRef> {
+  const made = await calendarApi<GoogleEvent>(user, `/calendars/${encodeURIComponent(calendar)}/events?sendUpdates=all`, { method: 'POST', body: googleBody(input) })
   clearGoogleCache(user)
+  return { k: 'g', c: calendar, e: made.id }
+}
+
+/** One event (or one occurrence of a series) as it is now, for the Agents app's changes. */
+export async function getGoogleEvent(user: User, ref: GoogleRef): Promise<{ title: string; start: string; end: string; allDay: boolean; location?: string; description?: string; recurring: boolean; guests: number }> {
+  const e = await calendarApi<GoogleEvent>(user, eventPath(ref.c, ref.e))
+  if (e.status === 'cancelled') throw new HttpError(404, 'That event is gone from Google Calendar')
+  return {
+    title: e.summary || '(No title)',
+    start: e.start.dateTime ?? e.start.date ?? '',
+    end: e.end.dateTime ?? e.end.date ?? '',
+    allDay: !e.start.dateTime,
+    location: e.location,
+    description: e.description,
+    recurring: !!e.recurringEventId || !!e.recurrence?.length,
+    guests: (e.attendees ?? []).filter((a) => a.email && !a.self && !a.organizer).length,
+  }
 }
 
 /** Shifts a Google start or end by `ms`, keeping its kind (date or date-time) and time zone. */

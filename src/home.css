@@ -919,6 +919,14 @@ textarea.agt-q-input {
   margin: 0;
   color: var(--fg-bright);
 }
+/* What a calendar change does, on its approval card: short labels, values that wrap. */
+.agt-ask-summary div {
+  grid-template-columns: minmax(70px, 22%) 1fr;
+}
+.agt-ask-summary dd {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 
 /* A change the agent wants to make, waiting for the owner. */
 .agt-tool.is-asking {
