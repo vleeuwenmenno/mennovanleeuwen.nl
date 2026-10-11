@@ -6355,6 +6355,32 @@ button.fm-dd-row:hover {
   background: color-mix(in srgb, var(--orange) 55%, transparent);
   outline: 1px solid var(--orange);
 }
+/* Markdown tables (MarkdownPreview): scroll sideways inside their own box when too wide. */
+.zed-preview .md-table {
+  max-width: 100%;
+  margin: 0 0 12px;
+  overflow-x: auto;
+}
+.zed-preview .md-table table {
+  border-collapse: collapse;
+  font-size: 0.95em;
+  overflow-wrap: normal;
+}
+.zed-preview .md-table th,
+.zed-preview .md-table td {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+.zed-preview .md-table th {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  white-space: nowrap;
+}
+.zed-preview .md-table tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+}
 .zed-preview {
   overflow: auto;
   padding: 18px 28px 40px;
