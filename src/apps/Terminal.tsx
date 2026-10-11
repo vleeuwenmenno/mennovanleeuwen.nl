@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { useGoSuggestionState, useGolinksTemplate } from '../data/golinks'
 import { cvMode } from '../os/cvMode'
 import { browserMountPoint, useMounts } from '../data/mounts'
@@ -6,10 +6,15 @@ import { HANDLE } from '../os/identity'
 import { linkAt, linkMenu, openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { notify } from '../os/notify'
 import { setAccent } from '../os/theme'
+import { useIsMobile } from '../os/useIsMobile'
+import { useMediaQuery } from '../os/useMediaQuery'
 import { useWM, type WinState } from '../os/wm'
 import { complete, completions, escapeArg, fastfetch, runLine, WORD_RE, type Completion } from '../terminal/commands'
+import { ExtraKeys, useStickyMods, type ModKeys } from '../terminal/ExtraKeys'
 import { prepareFolder } from '../terminal/fs'
+import { useTerminalPrefs } from '../terminal/prefs'
 import { SlTrain } from '../terminal/SlTrain'
+import { TerminalSettings } from '../terminal/TerminalSettings'
 import { HOME, prettyPath, resolvePath } from '../terminal/vfs'
 
 /** The query's letters in `name`, in order and case-insensitively, marked the way fzf does. */
@@ -87,40 +92,21 @@ function Prompt({ cwd }: { cwd: string }) {
 
 let nextId = 1
 
-// Text size, shared by every terminal window and kept across visits, like a terminal's config.
-const FONT_KEY = 'mvlos.terminal.fontSize'
-const FONT_DEFAULT = 13
-const FONT_MIN = 9
-const FONT_MAX = 28
-const FONT_PRESETS = [11, 12, 13, 14, 16, 18, 20, 24]
-const fontListeners = new Set<() => void>()
-let fontSize = (() => {
-  try {
-    const v = Number(localStorage.getItem(FONT_KEY))
-    return v >= FONT_MIN && v <= FONT_MAX ? v : FONT_DEFAULT
-  } catch {
-    return FONT_DEFAULT
-  }
-})()
+// Zoom for one window only, like a browser tab's: it scales the text size from the settings
+// (src/terminal/prefs.ts) and is forgotten when the window closes.
+const ZOOM_MIN = 0.5
+const ZOOM_MAX = 3
+const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3]
+const clampZoom = (z: number) => Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)) * 100) / 100
+/** The next step up or down from `z`, which may sit between steps after a pinch. */
+const stepZoom = (z: number, dir: 1 | -1) => (dir > 0 ? (ZOOM_STEPS.find((s) => s > z + 0.001) ?? ZOOM_MAX) : ([...ZOOM_STEPS].reverse().find((s) => s < z - 0.001) ?? ZOOM_MIN))
 
-function setFontSize(size: number) {
-  fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, size))
-  try {
-    localStorage.setItem(FONT_KEY, String(fontSize))
-  } catch {
-    /* not persisted */
-  }
-  fontListeners.forEach((l) => l())
-}
+// "Terminal settings…" in a terminal window's menu (apps.tsx) opens the sheet in that window.
+const settingsOpeners = new Map<number, () => void>()
+export const terminalMenu = (w: WinState): MenuItem[] => [{ label: 'Terminal settings…', onSelect: () => settingsOpeners.get(w.pid)?.() }]
 
-const useFontSize = () =>
-  useSyncExternalStore(
-    (l) => {
-      fontListeners.add(l)
-      return () => fontListeners.delete(l)
-    },
-    () => fontSize,
-  )
+/** What the key handling reads from a key press: a real one, or one from the extra keys row. */
+type KeyLike = Pick<KeyboardEvent<HTMLInputElement>, 'key' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey' | 'preventDefault' | 'stopPropagation'>
 
 // Phones have no Tab key and typing is slow, so touch devices get one-tap commands.
 const QUICK = ['help', 'projects', 'recent 8', 'cat cv.md', 'ping boltwarden.org', 'sl', 'fastfetch', 'fortune | cowsay']
@@ -176,7 +162,36 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
   const busy = running || animating
   // Read-only: the scrollback can still be read, selected and copied, but nothing gets typed or run.
   const [readOnly, setReadOnly] = useState(false)
-  const size = useFontSize()
+
+  // Text size: the setting for this kind of screen (phones have their own), times this window's
+  // zoom. The text console keeps the boot screen's.
+  const prefs = useTerminalPrefs()
+  const mobile = useIsMobile()
+  const coarse = useMediaQuery('(pointer: coarse)')
+  const [zoom, setZoomState] = useState(1)
+  const zoomRef = useRef(zoom)
+  const [zoomBadge, setZoomBadge] = useState(false)
+  const badgeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => clearTimeout(badgeTimer.current ?? undefined), [])
+  const fontPx = onLogout ? null : (mobile ? prefs.fontMobile : prefs.fontDesktop) * zoom
+  /** Zooms this window and shows the new size for a moment. */
+  function setZoom(z: number) {
+    const next = clampZoom(z)
+    zoomRef.current = next
+    setZoomState(next)
+    setZoomBadge(true)
+    clearTimeout(badgeTimer.current ?? undefined)
+    badgeTimer.current = setTimeout(() => setZoomBadge(false), 1100)
+  }
+  const zoomBy = (z: number | 'in' | 'out') => setZoom(z === 'in' ? stepZoom(zoomRef.current, 1) : z === 'out' ? stepZoom(zoomRef.current, -1) : z)
+
+  // The settings sheet, from the window menu, the right-click menu or `settings`.
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  useEffect(() => {
+    if (embedded || onLogout) return
+    settingsOpeners.set(win.pid, () => setSettingsOpen(true))
+    return () => void settingsOpeners.delete(win.pid)
+  }, [win.pid, embedded, onLogout])
 
   // Tab opens a picker, like fzf: after `go <alias>` your go links, otherwise the commands, files
   // and folders the word could become (once there is more than one). It narrows as you type; Tab
@@ -210,6 +225,8 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
   const rawKeys = useRef(false)
   const shiftKeys = useRef(false)
   const resizeHandler = useRef<(() => void) | null>(null)
+  // While a command runs: measures the size again and tells the program when it changed.
+  const sizeCheck = useRef<(() => void) | null>(null)
   // A full-screen program on the alternate screen (nano): the rest of the scrollback hides meanwhile.
   const [alt, setAlt] = useState(false)
   // A program that draws its own prompt in its live block (agents): the shell's stays out of sight.
@@ -265,7 +282,7 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
     }
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (!frontRef.current || e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey || !idle()) return
-      if (document.querySelector('.spotlight, .om-panel, .ctx-menu')) return // an overlay has the keys
+      if (document.querySelector('.spotlight, .om-panel, .ctx-menu, .t-sheet')) return // an overlay has the keys
       inputRef.current?.focus({ preventScroll: true })
     }
     const onFocus = () => frontRef.current && idle() && inputRef.current?.focus({ preventScroll: true })
@@ -304,6 +321,49 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
       window.visualViewport?.removeEventListener('resize', keep)
     }
   }, [])
+
+  // A new text size changes how many rows and columns fit without changing the window, which the
+  // ResizeObserver would not notice: full-screen programs (nano, htop, agents) redraw to fit.
+  useLayoutEffect(() => sizeCheck.current?.(), [fontPx])
+
+  // Ctrl with the scroll wheel (a trackpad pinch sends the same) and a two-finger pinch on a touch
+  // screen zoom this window instead of the page.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || onLogout) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return
+      e.preventDefault()
+      const px = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY
+      setZoom(zoomRef.current * Math.exp(-px * 0.002))
+    }
+    let pinch: { spread: number; zoom: number } | null = null
+    const spread = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY) || 1
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) pinch = { spread: spread(e.touches), zoom: zoomRef.current }
+    }
+    const onTouchMove = (e: TouchEvent) => {
+      if (!pinch || e.touches.length !== 2) return
+      e.preventDefault()
+      setZoom((pinch.zoom * spread(e.touches)) / pinch.spread)
+    }
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) pinch = null
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    el.addEventListener('touchstart', onTouchStart, { passive: true })
+    el.addEventListener('touchmove', onTouchMove, { passive: false })
+    el.addEventListener('touchend', onTouchEnd)
+    el.addEventListener('touchcancel', onTouchEnd)
+    return () => {
+      el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('touchstart', onTouchStart)
+      el.removeEventListener('touchmove', onTouchMove)
+      el.removeEventListener('touchend', onTouchEnd)
+      el.removeEventListener('touchcancel', onTouchEnd)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onLogout])
 
   // Focus the prompt whenever this window comes to the front (not on touch, where it pops the keyboard).
   useEffect(() => {
@@ -370,12 +430,14 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
     setRunning(true)
     // The size follows the window while the command runs, for programs that redraw (agents).
     const size = termSize()
-    const watcher = new ResizeObserver(() => {
+    const check = () => {
       const now = termSize()
       if (now.cols === size.cols && now.rows === size.rows) return
       Object.assign(size, now)
       resizeHandler.current?.()
-    })
+    }
+    sizeCheck.current = check
+    const watcher = new ResizeObserver(check)
     if (scrollRef.current) watcher.observe(scrollRef.current)
     const results = await runLine(trimmed, {
       cwd,
@@ -389,6 +451,7 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
       clear: () => setEntries([]),
       exit: () => setTimeout(() => (onLogout ? onLogout() : embedded ? embedded.onExit() : wm.close(win.pid)), 120),
       console: !!onLogout,
+      openSettings: onLogout ? undefined : () => setSettingsOpen(true),
       startx: onLogout
         ? (launch) => {
             if (launch) {
@@ -411,6 +474,7 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
       signal: abortRef.current.signal,
     })
     watcher.disconnect()
+    sizeCheck.current = null
     resizeHandler.current = null
     keyHandler.current = null
     rawKeys.current = false
@@ -449,7 +513,7 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
   }
 
   /** Keys while the picker is open; true when the picker used the key. */
-  function onPickerKey(e: KeyboardEvent<HTMLInputElement>) {
+  function onPickerKey(e: KeyLike) {
     const n = choices.length
     const k = e.key.toLowerCase()
     if ((e.key === 'Tab' && !e.shiftKey) || e.key === 'ArrowDown' || (e.ctrlKey && k === 'n')) setPick((i) => (n ? (i + 1) % n : 0))
@@ -461,11 +525,12 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
     return true
   }
 
-  function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
-    // Text size, like Alacritty and Ghostty: Ctrl + / − / 0 while the terminal has the keys.
+  function onKeyDown(e: KeyLike) {
+    // Zoom, like Alacritty and Ghostty: Ctrl + / − / 0 while the terminal has the keys (and not
+    // the browser's zoom of the whole page).
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !onLogout && ['=', '+', '-', '_', '0'].includes(e.key)) {
       e.preventDefault()
-      setFontSize(e.key === '0' ? FONT_DEFAULT : fontSize + (e.key === '-' || e.key === '_' ? -1 : 1))
+      zoomBy(e.key === '0' ? 1 : e.key === '-' || e.key === '_' ? 'out' : 'in')
       return
     }
     if (readOnly) {
@@ -547,6 +612,107 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
     }
   }
 
+  // The extra keys row on touch screens (src/terminal/ExtraKeys.tsx), while the prompt has the
+  // keyboard. Its Ctrl, Alt and Shift also apply to what is typed on the keyboard.
+  const mods = useStickyMods()
+  const showKeys = coarse && prefs.extraKeys && caret.focused && !readOnly && !animating && !onLogout
+  useEffect(() => {
+    if (!showKeys) mods.reset()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showKeys])
+
+  /**
+   * One key with modifiers, the way a keyboard would send it: through onKeyDown, then what the
+   * browser does with a key nothing used (typing it, moving the caret), which a made-up key
+   * press does not get by itself.
+   */
+  function pressKey(key: string, m: ModKeys) {
+    let prevented = false
+    const e: KeyLike = {
+      key: m.shift && key.length === 1 ? key.toUpperCase() : key,
+      ctrlKey: m.ctrl,
+      altKey: m.alt,
+      shiftKey: m.shift,
+      metaKey: false,
+      preventDefault: () => void (prevented = true),
+      stopPropagation: () => {},
+    }
+    onKeyDown(e)
+    if (!prevented) keyDefault(e)
+  }
+  const pressRef = useRef(pressKey)
+  pressRef.current = pressKey
+
+  /** The browser's own part of a key press on the prompt line. */
+  function keyDefault(e: KeyLike) {
+    const el = inputRef.current
+    if (!el || e.ctrlKey || e.altKey || e.metaKey) return
+    if (e.key.length === 1) return typeText(e.key)
+    const len = el.value.length
+    const start = el.selectionStart ?? len
+    const end = el.selectionEnd ?? start
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      if (readOnly || (start === end && (e.key === 'Backspace' ? start === 0 : end === len))) return
+      const from = start !== end ? start : e.key === 'Backspace' ? start - 1 : start
+      const to = start !== end ? end : e.key === 'Backspace' ? start : start + 1
+      return replaceText(from, to, '')
+    }
+    const moves: Record<string, number> = { Home: 0, End: len, ArrowLeft: start !== end ? start : Math.max(0, start - 1), ArrowRight: start !== end ? end : Math.min(len, end + 1) }
+    const at = moves[e.key]
+    if (at === undefined) return
+    el.setSelectionRange(at, at)
+    syncCaret()
+  }
+
+  /** Text typed at the caret, as if from the keyboard (a raw program gets it as typed text). */
+  function typeText(text: string) {
+    const el = inputRef.current
+    if (!el || readOnly) return
+    if (running && keyHandler.current && rawKeys.current) return void keyHandler.current('Text', text)
+    replaceText(el.selectionStart ?? el.value.length, el.selectionEnd ?? el.value.length, text)
+  }
+
+  function replaceText(from: number, to: number, text: string) {
+    const el = inputRef.current
+    if (!el) return
+    // Straight into the field as well, so a second key in the same moment builds on this one.
+    const next = el.value.slice(0, from) + text + el.value.slice(to)
+    el.value = next
+    el.setSelectionRange(from + text.length, from + text.length)
+    setValue(next)
+    syncCaret()
+  }
+
+  /** A key from the row. */
+  const rowKey = (key: string) => pressKey(key, mods.take())
+
+  /** A real key press: with a modifier from the row on, it goes the row's way. */
+  function onRealKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (mods.armed() && !e.nativeEvent.isComposing && !['Shift', 'Control', 'Alt', 'Meta', 'Unidentified', 'Process', 'Dead'].includes(e.key)) {
+      e.preventDefault()
+      const m = mods.take()
+      pressKey(e.key, { ctrl: m.ctrl || e.ctrlKey, alt: m.alt || e.altKey, shift: m.shift || e.shiftKey })
+      return
+    }
+    onKeyDown(e)
+  }
+
+  // Phone keyboards mostly send text without telling which key (Android's key is "Unidentified"):
+  // with a modifier from the row on, that text becomes key presses too, so Ctrl and then c on the
+  // keyboard is Ctrl+C.
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    const onBeforeInput = (e: InputEvent) => {
+      if (!mods.armed() || e.inputType !== 'insertText' || !e.data) return
+      e.preventDefault()
+      for (const ch of e.data) pressRef.current(ch, mods.take())
+    }
+    el.addEventListener('beforeinput', onBeforeInput)
+    return () => el.removeEventListener('beforeinput', onBeforeInput)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   /** What a copy would take: the selected part of the prompt line, else the selected scrollback. */
   function selectedText() {
     const el = inputRef.current
@@ -613,25 +779,24 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
         ? []
         : [
             {
-              label: 'Text size',
+              label: 'Zoom',
               submenu: [
-                { label: 'Larger', shortcut: 'Ctrl +', disabled: size >= FONT_MAX, onSelect: () => setFontSize(size + 1) },
-                { label: 'Smaller', shortcut: 'Ctrl −', disabled: size <= FONT_MIN, onSelect: () => setFontSize(size - 1) },
-                { label: 'Default', shortcut: 'Ctrl 0', disabled: size === FONT_DEFAULT, onSelect: () => setFontSize(FONT_DEFAULT) },
-                { separator: true as const },
-                ...FONT_PRESETS.map((px) => ({ label: `${px} px`, checked: size === px, onSelect: () => setFontSize(px) })),
+                { label: 'Zoom in', shortcut: 'Ctrl +', disabled: zoom >= ZOOM_MAX, onSelect: () => zoomBy('in') },
+                { label: 'Zoom out', shortcut: 'Ctrl −', disabled: zoom <= ZOOM_MIN, onSelect: () => zoomBy('out') },
+                { label: 'Actual size', shortcut: 'Ctrl 0', disabled: zoom === 1, onSelect: () => zoomBy(1) },
               ],
             },
+            { label: 'Terminal settings…', onSelect: () => setSettingsOpen(true) },
           ]),
     ]
     openContextMenu(e, items)
   }
 
-  return (
+  const screen = (
     <div
-      className={`terminal ${onLogout ? 'is-console' : ''} ${alt ? 'is-alt' : ''} ${takeover ? 'is-takeover' : ''} ${readOnly ? 'is-readonly' : ''}`}
+      className={`terminal ${onLogout ? 'is-console' : ''} ${alt ? 'is-alt' : ''} ${takeover ? 'is-takeover' : ''} ${readOnly ? 'is-readonly' : ''} ${showKeys ? 'has-keys' : ''}`}
       ref={scrollRef}
-      style={onLogout ? undefined : { fontSize: size }}
+      style={fontPx === null ? undefined : { fontSize: fontPx }}
       onContextMenu={onMenu}
       onMouseUp={(e) => {
         if (e.button === 0 && !window.getSelection()?.toString()) inputRef.current?.focus({ preventScroll: true })
@@ -663,6 +828,21 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
             ref={inputRef}
             value={value}
             onChange={(e) => {
+              // Text the keyboard put in although a modifier from the row is on (some keyboards'
+              // input can't be stopped beforehand): taken out again and pressed as keys.
+              const next = e.target.value
+              if (mods.armed() && next.length > value.length) {
+                let head = 0
+                while (head < value.length && value[head] === next[head]) head++
+                const tail = value.length - head
+                if (next.slice(next.length - tail) === value.slice(head)) {
+                  const added = next.slice(head, next.length - tail)
+                  e.target.value = value
+                  e.target.setSelectionRange(head, head)
+                  for (const ch of added) pressKey(ch, mods.take())
+                  return
+                }
+              }
               // Text that arrives without key presses (a phone's keyboard, IME, dictation) goes to a raw program as typed.
               if (running && keyHandler.current && rawKeys.current) {
                 if (e.target.value) keyHandler.current('Text', e.target.value)
@@ -671,7 +851,7 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
               }
               setValue(e.target.value)
             }}
-            onKeyDown={onKeyDown}
+            onKeyDown={onRealKeyDown}
             readOnly={readOnly}
             onPaste={(e) => {
               if (readOnly) return e.preventDefault()
@@ -732,6 +912,34 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
           </button>
         ))}
       </div>
+    </div>
+  )
+  if (onLogout) return screen
+
+  const closeSettings = () => {
+    setSettingsOpen(false)
+    if (!coarse) inputRef.current?.focus({ preventScroll: true })
+  }
+  return (
+    <div className="term-wrap">
+      {screen}
+      {zoomBadge && (
+        <div className="t-zoom-badge" aria-live="polite">
+          {Math.round(zoom * 100)}%
+        </div>
+      )}
+      {showKeys && <ExtraKeys mods={mods} onKey={rowKey} />}
+      {settingsOpen && (
+        <TerminalSettings
+          zoom={zoom}
+          onZoom={zoomBy}
+          onClose={closeSettings}
+          onAppearance={() => {
+            setSettingsOpen(false)
+            wm.open('settings', { section: 'appearance', t: String(Date.now()) })
+          }}
+        />
+      )}
     </div>
   )
 }

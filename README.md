@@ -92,6 +92,25 @@ Spotlight takes `go <alias>` too, and lists matching aliases as you type (the mo
 ones after a bare `go `) from the golinks server's `/suggest`, asked straight from the browser so
 the token never passes through this site's server.
 
+### Terminal settings
+
+The Terminal has its own settings sheet ([`src/terminal/TerminalSettings.tsx`](src/terminal/TerminalSettings.tsx)),
+opened from its window menu (Terminal settings…), its right-click menu, or `settings` at the prompt
+(`settings system` opens the Settings app instead). They are kept in this browser and synced like
+notes when signed in ([`src/terminal/prefs.ts`](src/terminal/prefs.ts)):
+- **Text size**, separately for desktops and for phones (below the 720 px breakpoint, where
+  windows fill the screen). Changes apply live. The single size saved before carries over to both.
+- **Zoom** for one window only, until it closes: Ctrl + / − / 0, Ctrl with the scroll wheel, or a
+  two-finger pinch on a touch screen, with a badge showing the new size. It multiplies the text
+  size. Full-screen programs (nano, htop, `agents`) redraw to the new rows and columns, which
+  `stty size` prints.
+- **Extra keys** on touch screens ([`src/terminal/ExtraKeys.tsx`](src/terminal/ExtraKeys.tsx)),
+  like Termux's: Esc, Tab, Ctrl, Alt, Shift, arrows, Home, End and `~ | / -` above the keyboard
+  while the prompt has it. Ctrl, Alt and Shift apply to the next key when tapped, lock when
+  tapped twice, and apply while held; they also apply to letters typed on the keyboard (Ctrl, then
+  c, is Ctrl+C). The keys go through the same handler as a real keyboard, so completion, history
+  and full-screen programs get them as usual. The row can be turned off.
+
 ### The shell, agents and skills
 
 The shell is msh 2.0 ([`src/terminal/msh/`](src/terminal/msh)): a POSIX-ish parser and
@@ -520,6 +539,44 @@ dragging, the menus and an *Add widget* entry everywhere. Per-widget settings go
 [`config.ts`](src/widgets/config.ts) (`useWidgetConfig` / `setWidgetConfig`), which syncs like
 notes; where a widget sits is part of the synced window layout.
 
+## Touch screens
+
+On a phone or tablet, **holding a finger still for half a second is a right-click**, everywhere
+in the OS: the desktop, its icons, the dock, title bars, notes and widgets, Files, the Agents
+sidebar, the calendar, Spotlight results and the rest open the same menu a mouse gets, with a short
+buzz ([`installTouchContextMenu`](src/os/ContextMenu.tsx)). Moving the finger first (scrolling,
+dragging a window or an icon) or adding a second one is not a long press, and the tap that would
+follow the lift is dropped once a menu opened. Text fields keep the browser's own long press
+(selection, paste), and so do places with a long press of their own: Empires At War, Minesweeper's
+flags, held game buttons and game canvases. Anything else can opt out with `data-no-touch-menu`.
+On coarse pointers the menu's items are taller, and the OS chrome (bar, dock, title bars, sidebars)
+does not select its labels or show the browser's callout.
+
+On phones the notes and widgets go one under the other down a desktop that scrolls. Drag one by
+its top strip to move it up or down that column (the desktop scrolls along near the top bar and
+the dock), or long-press it for *Move up*, *Move down* and *Move to top*. The order is part of the
+phone's window layout (`stack` in [`src/os/wm.tsx`](src/os/wm.tsx)); on a big screen notes stay
+wherever they were put.
+
+## Games
+
+The Games app ([`src/apps/games/Games.tsx`](src/apps/games/Games.tsx)) is the arcade: picking a game
+opens it in a window of its own, titled with the game's name and grouped under Games in the dock.
+Each game has one window; picking it again (in the arcade, Spotlight, Launchpad, or `games tetris`
+and `./tetris.game` in the terminal) brings that window forward.
+
+A game in progress belongs to its window. Closing the window ends the game, and opening it again
+starts at its main menu. A page reload keeps the window, so the game carries on where it was:
+every game window has a session id (saved with the window layout), and what a game keeps to
+resume (Empires At War's battle snapshots, the campaign it had open, being in multiplayer) is
+stored under it ([`session.ts`](src/apps/games/session.ts)) and removed when the window closes. At
+startup, anything kept for a window that no longer exists is removed too.
+
+Save games stay until you delete them: Empires At War's Galactic conquest campaigns (they save into
+their slot as you play; load them from Galactic conquest → Load game), Gladiator's careers, high
+scores and settings. A campaign battle cut off by closing the window waits in the loaded campaign,
+to be fought again from the start.
+
 ## Empires At War on touch screens
 
 Phones and tablets play the whole game by touch ([`src/apps/games/empires/Touch.tsx`](src/apps/games/empires/Touch.tsx)),
@@ -556,10 +613,10 @@ sender's own seat ([`commands.ts`](src/apps/games/empires/commands.ts)), so a ta
 order other players' ships, play faster or claim a win. It also runs its own copy of every battle:
 players send a fingerprint of theirs every second, and one that drifted gets the server's copy.
 The same copy brings a player back after a reload or a dropped connection (within 30 seconds); a
-player who leaves hands their fleet to an AI. In battle, Tab (or the top bar's players button,
-which shows your ping) opens the player list: fleet, kills, losses, credits earned and score, and
-online each player's ping and whether they're still there; a toast says when an ally or enemy
-loses the connection, comes back, or gives up. What a client can still do is read past the fog of
+player who leaves (or closes the game's window) hands their fleet to an AI. In battle, Tab (or the
+top bar's players button, which shows your ping) opens the player list: fleet, kills, losses,
+credits earned and score, and online each player's ping and whether they're still there; a toast
+says when an ally or enemy loses the connection, comes back, or gives up. What a client can still do is read past the fog of
 war, since it holds the whole battle.
 
 The sim is bit-for-bit the same in every browser: it uses its own trigonometry

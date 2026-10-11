@@ -151,7 +151,8 @@ export function Minesweeper({ win }: { win: WinState }) {
         </button>
       </div>
       <div className="mines-scroll">
-        <div className="mines-grid" style={{ gridTemplateColumns: `repeat(${w}, var(--cell))` }} onContextMenu={(e) => e.preventDefault()}>
+        {/* data-longpress: holding a cell flags it, so the OS's long-press menu stays out of the way. */}
+        <div className="mines-grid" style={{ gridTemplateColumns: `repeat(${w}, var(--cell))` }} onContextMenu={(e) => e.preventDefault()} data-longpress="">
           {board.map((c, i) => (
             <button
               key={i}

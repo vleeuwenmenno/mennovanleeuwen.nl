@@ -3,6 +3,7 @@ import { CalendarApp } from '../apps/calendar/Calendar'
 import { Contact } from '../apps/Contact'
 import { Cv } from '../apps/Cv'
 import { Games } from '../apps/games/Games'
+import { gameInfo } from '../apps/games/catalog'
 import { KeysNote } from '../apps/KeysNote'
 import { Notebook } from '../apps/Notebook'
 import { Notes } from '../apps/Notes'
@@ -12,7 +13,7 @@ import { Projects } from '../apps/Projects'
 import { Settings } from '../apps/Settings'
 import { WidgetHost } from '../widgets/registry'
 import { Recents } from '../apps/Recents'
-import { Terminal } from '../apps/Terminal'
+import { Terminal, terminalMenu } from '../apps/Terminal'
 import { Files } from '../apps/Files'
 import { Viewer } from '../apps/Viewer'
 import { Preview, previewTitle } from '../apps/Preview'
@@ -23,6 +24,7 @@ import { Office, officeTitle } from '../apps/Office'
 import { Archive, archiveTitle } from '../apps/Archive'
 import { Zed } from '../apps/Zed'
 import { Agents } from '../apps/Agents'
+import type { MenuItem } from './ContextMenu'
 import { HANDLE } from './identity'
 import type { AppId, WinState } from './wm'
 
@@ -35,11 +37,15 @@ export type AppMeta = {
   chrome?: 'note'
   /** The window's own title, when it shows one file (its name) */
   titleOf?: (w: WinState) => string
+  /** A size for a window opened with these props, when it differs from `size` (a game's window) */
+  sizeOf?: (props: WinState['props']) => [number, number] | undefined
   render: (w: WinState) => ReactNode
+  /** The app's own items at the top of its window menu */
+  menu?: (w: WinState) => MenuItem[]
 }
 
 export const APP_META: Record<AppId, AppMeta> = {
-  terminal: { title: `${HANDLE}@mvlos: ~`, dock: 'Terminal', blurb: 'A shell that actually works', size: [760, 500], render: (w) => <Terminal win={w} /> },
+  terminal: { title: `${HANDLE}@mvlos: ~`, dock: 'Terminal', blurb: 'A shell that actually works', size: [760, 500], render: (w) => <Terminal win={w} />, menu: terminalMenu },
   files: { title: 'Files', dock: 'Files', blurb: 'Browse the filesystem', size: [940, 600], render: (w) => <Files win={w} /> },
   zed: { title: 'Zed', dock: 'Zed', blurb: 'Edit Markdown and text files', size: [960, 620], render: (w) => <Zed win={w} /> },
   preview: { title: 'Preview', dock: 'Preview', blurb: 'Pictures: zoom, rotate, slideshow', size: [900, 620], titleOf: previewTitle, render: (w) => <Preview win={w} /> },
@@ -58,7 +64,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   recents: { title: 'Activity', dock: 'Activity', blurb: 'Live activity and contribution graph', size: [780, 680], render: () => <Recents /> },
   cv: { title: 'cv.md — Viewer', dock: 'CV', blurb: 'The printable version of me', size: [760, 680], render: () => <Cv /> },
   contact: { title: 'New message', dock: 'Contact', blurb: 'Get in touch', size: [560, 500], render: () => <Contact /> },
-  games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, Pool, Gladiator, Empires At War, Breakout', size: [720, 640], render: (w) => <Games win={w} /> },
+  games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, Pool, Gladiator, Empires At War, Breakout', size: [720, 640], titleOf: (w) => gameInfo(w.props.game)?.name ?? 'Games', sizeOf: (p) => gameInfo(p.game)?.size, render: (w) => <Games win={w} /> },
   calendar: { title: 'Calendar', dock: 'Calendar', blurb: 'Your Google and CalDAV calendars: plan, move and invite', size: [1000, 660], render: (w) => <CalendarApp win={w} /> },
   agents: { title: 'Agents', dock: 'Agents', blurb: 'Research assistant: quick answers or deep research, with memory', size: [920, 640], render: (w) => <Agents win={w} /> },
   notebook: { title: 'Notebook', dock: 'Notebook', blurb: 'Your notes, in Markdown, on any device', size: [860, 560], render: (w) => <Notebook win={w} /> },

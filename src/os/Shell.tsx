@@ -34,16 +34,15 @@ import { AppIcon } from './icons'
 import { appearanceMenu } from './appearanceMenu'
 import { toggleMode, useTheme } from './theme'
 import { ClockWidget, MinecraftWidget, SystemMenu } from './TopbarWidgets'
-import { Window } from './Window'
+import { useIsMobile } from './useIsMobile'
+import { NoteStackSlot, Window } from './Window'
 import { SINGLE_INSTANCE, useWM, type AppId, type Geometry, type WinState } from './wm'
 
 const TOP = 28
 const DOCK_SPACE = 96
 
-export const isMobile = () => window.innerWidth < 720
-
-export function placement(app: AppId, openCount: number): Geometry {
-  const [w0, h0] = APP_META[app].size
+export function placement(app: AppId, openCount: number, props?: WinState['props']): Geometry {
+  const [w0, h0] = (props && APP_META[app].sizeOf?.(props)) || APP_META[app].size
   const vw = window.innerWidth
   const vh = window.innerHeight
   const w = Math.min(w0, vw - 32)
@@ -197,17 +196,6 @@ function LauncherIcon({ url, glyph, size = 48 }: { url: string; glyph?: string; 
       {glyph || broken ? <span className="dock-launcher-glyph">{glyph ?? '↗'}</span> : <img src={faviconOf(url)} alt="" draggable={false} onError={() => setBroken(true)} />}
     </span>
   )
-}
-
-/** True below the phone breakpoint, kept in step with the viewport. */
-function useIsMobile() {
-  const [mobile, setMobile] = useState(isMobile)
-  useEffect(() => {
-    const sync = () => setMobile(isMobile())
-    window.addEventListener('resize', sync)
-    return () => window.removeEventListener('resize', sync)
-  }, [])
-  return mobile
 }
 
 /**
@@ -461,7 +449,7 @@ function Dock() {
     const wins = wm.windows.filter((x) => x.app === app).sort((a, b) => a.pid - b.pid)
     const multi = !SINGLE_INSTANCE.has(app)
     return [
-      ...wins.map((w) => ({ label: `${APP_META[w.app].dock} · pid ${w.pid}${w.minimized ? ' (minimized)' : ''}`, onSelect: () => wm.focus(w.pid) })),
+      ...wins.map((w) => ({ label: `${APP_META[w.app].titleOf?.(w) ?? APP_META[w.app].dock} · pid ${w.pid}${w.minimized ? ' (minimized)' : ''}`, onSelect: () => wm.focus(w.pid) })),
       ...(wins.length ? [{ separator: true as const }] : []),
       wins.length && multi ? { label: 'New window', onSelect: () => wm.openNew(app) } : { label: wins.length ? 'Show' : 'Open', onSelect: () => wm.open(app) },
       ...(wins.some((w) => !w.minimized) ? [{ label: wins.length > 1 ? 'Minimize all' : 'Minimize', onSelect: () => wins.forEach((w) => wm.minimize(w.pid)) }] : []),
@@ -623,7 +611,7 @@ function AppWindow({ w }: { w: WinState }) {
   const def = w.app === 'widget' ? widgetDef(w.props.kind) : undefined
   if (def && w.props.id) return <WidgetWindow w={w} def={def} id={w.props.id} />
   return (
-    <Window win={w} title={meta.titleOf?.(w) ?? meta.title} chrome={meta.chrome}>
+    <Window win={w} title={meta.titleOf?.(w) ?? meta.title} chrome={meta.chrome} menuItems={meta.menu?.(w)}>
       {meta.render(w)}
     </Window>
   )
@@ -766,6 +754,8 @@ export function Shell() {
           {wm.windows.map((w) => (
             <AppWindow key={w.pid} w={w} />
           ))}
+          {/* Phones: where a note being moved up or down the column will land. */}
+          <NoteStackSlot />
         </main>
       </div>
       <SnapPreview />

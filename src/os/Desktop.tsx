@@ -14,7 +14,7 @@ import { notify } from './notify'
 import { cvMode } from './cvMode'
 import { useAccount } from './account'
 import { ask } from './Dialogs'
-import { closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
+import { cancelTouchMenu, closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
 import { resetLayout, restoreIcons, trashIcons, updateDesktop, useDesktop, type IconPos } from './desktopStore'
 import { openLink } from '../data/links'
 import { useSwing } from './swing'
@@ -316,8 +316,11 @@ export function Desktop() {
     const dy = e.clientY - d.startY
     if (d.kind === 'icons') {
       if (!d.moved && Math.hypot(dx, dy) < 4) return
-      if (!d.moved) swing.start(e.clientX)
-      else swing.move(e.clientX)
+      if (!d.moved) {
+        swing.start(e.clientX)
+        // Icons on the move: a finger resting again mid-drag is not a long press.
+        cancelTouchMenu()
+      } else swing.move(e.clientX)
       d.moved = true
       document.body.classList.add('is-dragging')
       offsetRef.current = { dx, dy }

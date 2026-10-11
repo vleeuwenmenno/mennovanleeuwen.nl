@@ -1117,6 +1117,53 @@ body.is-resizing iframe {
   outline: 0;
   background: color-mix(in srgb, var(--fg) 10%, transparent);
 }
+/* Fingers: items tall enough to hit, and a long menu scrolls instead of running off the screen. */
+@media (pointer: coarse) {
+  .ctx-menu {
+    font-size: 14px;
+    max-height: calc(100dvh - 16px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .ctx-item {
+    min-height: 40px;
+    padding: 9px 14px;
+  }
+  .ctx-sep {
+    margin: 4px 10px;
+  }
+}
+
+/* A long press on the OS's own chrome opens its menu (installTouchContextMenu in ContextMenu.tsx),
+   so the browser must not select its labels or show its callout first. Text in apps stays
+   selectable. */
+@media (pointer: coarse) {
+  .topbar,
+  .dock,
+  .dock-stack,
+  .dock-handle,
+  .desk,
+  .desk-icon,
+  .titlebar,
+  .note-grip,
+  .ctx-menu,
+  .om-row,
+  .nb-side,
+  .agt-rail,
+  .fm-side,
+  .fm-item,
+  .sp-item,
+  .nc-item {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  /* Fields in there (renaming an icon, a file or a thread; a sidebar's search) stay editable. */
+  :is(.topbar, .dock, .desk, .titlebar, .nb-side, .agt-rail, .fm-side, .fm-item) :is(input, textarea, [contenteditable]) {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
 
 /* ---------- Select (a dropdown that opens the menu above) ---------- */
 
@@ -1567,6 +1614,19 @@ body.is-resizing iframe {
 .window[data-app='terminal'] {
   background: var(--bg);
 }
+/* The screen, with the zoom badge, the settings sheet and the extra keys row around it. */
+.term-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.term-wrap > .terminal {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
 .terminal {
   height: 100%;
   overflow: auto;
@@ -1717,6 +1777,147 @@ body.is-resizing iframe {
   .t-quick button:active {
     background: color-mix(in srgb, var(--accent) 20%, transparent);
   }
+}
+/* With the extra keys up, the keyboard is too: the quick commands make room. */
+.terminal.has-keys .t-quick {
+  display: none;
+}
+/* Pinching zooms the terminal, not the page; one finger still scrolls. */
+@media (pointer: coarse) {
+  .term-wrap > .terminal {
+    touch-action: pan-x pan-y;
+  }
+}
+/* The extra keys row above a touch keyboard (src/terminal/ExtraKeys.tsx), Termux-style. */
+.t-keys {
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+  padding: 5px 6px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-dark);
+  font-family: var(--mono);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: none;
+}
+.t-key {
+  min-width: 0;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--fg-bright);
+  font: inherit;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.t-key.is-wide {
+  grid-column: span 2;
+}
+.t-key:active {
+  background: var(--line-strong);
+}
+/* A modifier for the next key, and locked (tapped twice). */
+.t-key.is-on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 25%, var(--panel-2));
+  color: var(--fg-bright);
+}
+.t-key.is-locked {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg);
+}
+/* "120%" for a moment after zooming. */
+.t-zoom-badge {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  z-index: 3;
+  padding: 3px 9px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-solid);
+  color: var(--fg-bright);
+  font-family: var(--mono);
+  font-size: 12px;
+  pointer-events: none;
+  box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.5);
+  animation: dlg-fade 0.12s ease-out;
+}
+/* Terminal settings, as a sheet over the terminal's own window. */
+.t-sheet-back {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.35);
+  animation: dlg-fade 0.12s ease-out;
+}
+.t-sheet {
+  width: min(500px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  padding: 14px 16px 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-solid);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+  animation: dlg-pop 0.14s ease-out;
+  outline: 0;
+}
+.t-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.t-sheet-head strong {
+  font-size: 14px;
+  color: var(--fg-bright);
+}
+.t-sheet-close {
+  width: 26px;
+  height: 26px;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--muted);
+}
+.t-sheet-close:hover {
+  color: var(--fg-bright);
+}
+.t-sheet .set-row {
+  flex-wrap: wrap;
+}
+/* On a phone the size buttons go under their label rather than cutting it short. */
+.t-sheet .set-row-text {
+  flex-basis: 150px;
+}
+.t-sheet p {
+  margin: 0 0 8px;
+}
+.t-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.t-stepper output {
+  min-width: 48px;
+  text-align: center;
+  font-family: var(--mono);
+  color: var(--fg-bright);
+}
+.t-stepper .btn:not(.btn-ghost) {
+  min-width: 28px;
+}
+.t-zoom-row {
+  margin-bottom: 6px;
 }
 .t-input.is-busy .prompt {
   opacity: 0.4;
@@ -5621,7 +5822,7 @@ button.fm-dd-row:hover {
   min-height: 0;
   display: flex;
 }
-.zed-dock-term > .terminal {
+.zed-dock-term > .term-wrap {
   flex: 1;
   min-width: 0;
 }
@@ -7676,11 +7877,34 @@ kbd {
   .window.chrome-note {
     position: relative;
     flex: none;
+    /* The column's order, which the visitor can change (stackOrder in wm.tsx). */
+    order: var(--stack, 0);
     transform: rotate(-1deg);
     left: 0 !important;
     top: 0 !important;
     width: auto !important;
     scroll-margin: calc(var(--top) + 12px) 0 calc(110px + var(--sab));
+  }
+  /* Moving a note up or down the column (Window.tsx): it lifts off the desk and follows the
+     finger; the notes it passes slide aside; a dashed slot shows where it will land. */
+  .window.chrome-note[data-lifting] {
+    z-index: 99000 !important;
+    scale: 1.03;
+    box-shadow: 0 34px 60px -18px rgba(0, 0, 0, 0.8), 0 3px 8px rgba(0, 0, 0, 0.25);
+    transition: scale 0.15s ease, box-shadow 0.15s ease;
+  }
+  .window.chrome-note[data-shifting] {
+    transition: translate 0.2s ease;
+  }
+  .note-slot {
+    position: absolute;
+    left: 18px;
+    right: 18px;
+    border: 2px dashed color-mix(in srgb, var(--fg) 35%, transparent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--fg) 6%, transparent);
+    pointer-events: none;
+    transition: top 0.2s ease;
   }
   .window.chrome-note:not([data-app='keys']) {
     height: auto !important;
