@@ -7,6 +7,7 @@ import { DEFAULT_RULES, GENERATED, MAP, MAPS, MAX_BEACONS, MAX_SEED, cleanRules,
 import { ALLY, ENEMY, OWN, drawTerrainOverview, relColor } from './render'
 import { ACTIONS, RESERVED, bindKey, keyName, keyOf, resetKeys, setSettings, useSettings, type Action, type Settings } from './settings'
 import { newWorld, type Owner, type World } from './sim'
+import { score } from './Scoreboard'
 import type { Bus, EmpiresSound } from './sound'
 
 // Everything outside a battle: the main menu, the skirmish lobby (map, players, teams), and the
@@ -1179,6 +1180,7 @@ export function Result({ w, me, names, won, onAgain, onExit, campaign = false, o
                 <th>Kills</th>
                 <th>Losses</th>
                 <th>Earned</th>
+                <th>Score</th>
               </tr>
             </thead>
             <tbody>
@@ -1192,6 +1194,7 @@ export function Result({ w, me, names, won, onAgain, onExit, campaign = false, o
                   <td>{p.stats.killed}</td>
                   <td>{p.stats.lost}</td>
                   <td>{fmt(p.stats.earned)}</td>
+                  <td>{fmt(score(w, i))}</td>
                 </tr>
               ))}
             </tbody>

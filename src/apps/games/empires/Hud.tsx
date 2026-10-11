@@ -43,6 +43,8 @@ export type MapFilter = 'all' | 'ships' | 'stations' | 'enemies'
 export type Command = Exclude<Mode, 'normal'> | 'stop' | 'hold' | 'ability' | 'retreat'
 
 export const fmt = (n: number) => Math.floor(n).toLocaleString('en-US')
+/** Green, amber or red for a round trip in milliseconds. */
+export const pingClass = (ms: number) => (ms < 90 ? 'is-good' : ms < 180 ? 'is-fair' : 'is-poor')
 export const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
 
 // Line icons on a 24-unit grid, stroked in the current colour.
@@ -404,7 +406,7 @@ function Vitals({ u, squad = [u], now }: { u: Unit; squad?: Unit[]; now: number 
 
 // --- Top bar ----------------------------------------------------------------------------------------
 
-export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onShipyard, onTechTree, onReserves, onEconomy }: {
+export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onShipyard, onTechTree, onReserves, onEconomy, onPlayers, ping }: {
   hud: Hud
   faction: FactionId
   sector: string
@@ -417,6 +419,10 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
   onTechTree: () => void
   onReserves: () => void
   onEconomy: () => void
+  /** The player list (scores; online, pings too). */
+  onPlayers?: () => void
+  /** Online: our round trip to the server, in milliseconds (-1 while the connection is down). */
+  ping?: number
 }) {
   const q = hud.queue[0]
   const r = hud.research[0]
@@ -457,7 +463,7 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
           {r && <i style={{ transform: `scaleX(${1 - r.left / r.total})` }} />}
         </button>
         {/* Time: pause and play, the battle clock, and the speed, which cycles 1x, 2x, 3x. */}
-        <div className={`ew-top-cell ew-timectl ${ui.paused ? 'is-paused' : ''}`} role="group" aria-label="Time">
+        <div className={`ew-top-cell ew-timectl ${ui.paused ? 'is-paused' : ''} ${onPause ? '' : 'is-clockonly'}`} role="group" aria-label="Time">
           {onPause && (
             <button onClick={onPause} data-tip={`${ui.paused ? 'Resume' : 'Pause'} (${keyName(keys.pause)})`} aria-label={ui.paused ? 'Resume' : 'Pause'}>
               <Icon name={ui.paused ? 'play' : 'pause'} size={16} />
@@ -470,6 +476,12 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
             </button>
           )}
         </div>
+        {onPlayers && (
+          <button className="ew-top-cell ew-top-btn ew-playersbtn" onClick={onPlayers} data-tip={`Players: scores${ping !== undefined ? ' and pings' : ''} (Tab)`} aria-label="Players">
+            <Icon name="army" size={18} />
+            {ping !== undefined && <small className={`ew-ping ${ping < 0 ? 'is-poor' : pingClass(ping)}`}>{ping < 0 ? 'offline' : `${ping} ms`}</small>}
+          </button>
+        )}
         <button className="ew-top-cell ew-top-btn" onClick={onMenu} data-tip="Battle menu: settings, keybinds, restart (Esc)" aria-label="Menu">
           <Icon name="menu" size={18} />
         </button>

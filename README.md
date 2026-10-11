@@ -534,7 +534,10 @@ sender's own seat ([`commands.ts`](src/apps/games/empires/commands.ts)), so a ta
 order other players' ships, play faster or claim a win. It also runs its own copy of every battle:
 players send a fingerprint of theirs every second, and one that drifted gets the server's copy.
 The same copy brings a player back after a reload or a dropped connection (within 30 seconds); a
-player who leaves hands their fleet to an AI. What a client can still do is read past the fog of
+player who leaves hands their fleet to an AI. In battle, Tab (or the top bar's players button,
+which shows your ping) opens the player list: fleet, kills, losses, credits earned and score, and
+online each player's ping and whether they're still there; a toast says when an ally or enemy
+loses the connection, comes back, or gives up. What a client can still do is read past the fog of
 war, since it holds the whole battle.
 
 The sim is bit-for-bit the same in every browser: it uses its own trigonometry

@@ -1,6 +1,6 @@
 import type { MatchInfo, Turn } from './match'
 import type { BattleSnap } from './snapshot'
-import { MP_PATH, type ClientMsg, type LobbyInfo, type MpLobby, type ServerMsg } from './protocol'
+import { MP_PATH, type ClientMsg, type LobbyInfo, type MpLobby, type RosterSeat, type ServerMsg } from './protocol'
 
 // The game's end of the multiplayer WebSocket. One connection per tab, kept open while the
 // multiplayer screens are up: it reconnects by itself after a drop (resuming the same player with
@@ -27,6 +27,8 @@ export type NetView = {
   rtt: number
   /** The battle we're in, and our seat in it, from its start until we leave its screen. */
   match: { info: MatchInfo; me: number } | null
+  /** The battle's players: how each seat is doing and its ping (null until the server says). */
+  roster: RosterSeat[] | null
 }
 const CHAT_KEEP = 100
 
@@ -76,7 +78,7 @@ export class Net {
   clockOffset = 0
   name = ''
   id = ''
-  view: NetView = { status: 'connecting', me: null, suggestion: '', login: null, lobbies: [], lobby: null, chat: [], problem: null, rtt: 0, match: null }
+  view: NetView = { status: 'connecting', me: null, suggestion: '', login: null, lobbies: [], lobby: null, chat: [], problem: null, rtt: 0, match: null, roster: null }
   /** The battle's turns not yet played, oldest first. Kept out of `view`: they come 30 a second
    * and the battle screen takes them straight from here. */
   turns: Turn[] = []
@@ -146,7 +148,9 @@ export class Net {
         // The same battle again (we reconnected): keep the screen, a sync follows.
         if (this.view.match?.info.id === m.match.id && this.view.match.me === m.me) return
         this.sync = null
-        return this.patch({ match: { info: m.match, me: m.me } })
+        return this.patch({ match: { info: m.match, me: m.me }, roster: null })
+      case 'roster':
+        return this.patch({ roster: m.seats })
       case 'turn':
         if (this.view.match) this.turns.push({ n: m.n, c: m.c, ...(m.ai ? { ai: m.ai } : {}) })
         return
@@ -181,7 +185,7 @@ export class Net {
   endMatch() {
     this.turns = []
     this.sync = null
-    this.patch({ match: null })
+    this.patch({ match: null, roster: null })
   }
 
   /** Out of the lobby (and its battle, if one is on): straight to the list, without waiting for
@@ -190,7 +194,7 @@ export class Net {
     this.send({ t: 'leave' })
     this.turns = []
     this.sync = null
-    this.patch({ match: null, lobby: null, chat: [] })
+    this.patch({ match: null, roster: null, lobby: null, chat: [] })
   }
 
   /** Done with multiplayer: closes for good (no reconnecting). */
@@ -264,6 +268,6 @@ export class Net {
     this.pings.set(n, performance.now())
     // Pings that never came back don't pile up.
     if (this.pings.size > 10) this.pings.delete(this.pings.keys().next().value!)
-    this.send({ t: 'ping', n })
+    this.send({ t: 'ping', n, ...(this.rtt ? { rtt: Math.round(this.rtt) } : {}) })
   }
 }

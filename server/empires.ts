@@ -11,7 +11,7 @@ import { CREDIT_STEPS, FACTIONS, START_CREDITS } from '../src/apps/games/empires
 import { DEFAULT_RULES, GENERATED, MAP, MAPS, cleanRules, generateMap, type MapDef } from '../src/apps/games/empires/maps.ts'
 import { matchBrains, matchWorld, stepTurn, type MatchInfo, type Turn } from '../src/apps/games/empires/match.ts'
 import { nameKey, nameProblem, randomName, tidyName } from '../src/apps/games/empires/names.ts'
-import { CHAT_MAX, HASH_EVERY, MP_PATH, type ClientMsg, type LobbyInfo, type MpLobby, type MpSlot, type ServerMsg, type SlotPatch } from '../src/apps/games/empires/protocol.ts'
+import { CHAT_MAX, HASH_EVERY, MP_PATH, type ClientMsg, type LobbyInfo, type MpLobby, type MpSlot, type RosterSeat, type ServerMsg, type SlotPatch } from '../src/apps/games/empires/protocol.ts'
 import { STEP, stateHash, type Owner, type World } from '../src/apps/games/empires/sim.ts'
 import { snapBrain, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
 
@@ -42,6 +42,8 @@ const KEEP_HASHES = 40
 const RESYNC_MS = 10_000
 /** The AI that takes over a seat whose player left. */
 const TAKEOVER: Difficulty = 'medium'
+/** Ticks between player list updates (for the pings; changes go out at once). */
+const ROSTER_EVERY = 60
 const STEP_MS = STEP * 1000
 /** Messages a second a connection may send on average, and in a burst. */
 const RATE = 40
@@ -63,6 +65,8 @@ type Player = {
   allowanceAt: number
   /** The lobby they're in. */
   lobby: string | null
+  /** Their round trip to the server, as their game last measured it, in milliseconds. */
+  rtt: number
 }
 
 const players = new Map<string, Player>()
@@ -84,8 +88,8 @@ type Match = {
   /** Orders taken since the last tick, for the next one, and seats the AI takes over then. */
   pending: Turn['c']
   takeover: [Owner, Difficulty][]
-  /** Seats whose players have left: nobody can order them any more. */
-  gone: Set<Owner>
+  /** Seats whose players have left (gave up, or never came back): nobody can order them any more. */
+  gone: Map<Owner, 'left' | 'dropped'>
   loaded: Set<string>
   timer: NodeJS.Timeout | null
   hashes: Map<number, number>
@@ -247,13 +251,13 @@ function join(p: Player, id: string) {
 }
 
 /** Out of the lobby: the seat opens up, the host passes on, an empty lobby closes. */
-function leave(p: Player, why = 'left') {
+function leave(p: Player, why = 'left', how: 'left' | 'dropped' = 'left') {
   const l = lobbyOf(p)
   p.lobby = null
   if (!l) return
   const game = matches.get(l.id)
   if (game) {
-    abandon(p, game)
+    abandon(p, game, how)
     if (seatIndex(game, p) >= 0) why = `${why}: the AI took over their fleet`
   }
   const i = seatOf(l, p)
@@ -366,7 +370,7 @@ function start(p: Player, l: MpLobby) {
       s.kind === 'human' || s.kind === 'ai' ? [{ kind: s.kind, player: s.player, name: s.kind === 'ai' ? `${DIFFICULTY[s.difficulty].name} AI` : s.name, faction: s.faction, team: s.team, spawn, difficulty: s.difficulty }] : [],
     ),
   }
-  const m: Match = { info, lobby: l.id, w: matchWorld(info), brains: matchBrains(info), n: 0, t0: 0, pending: [], takeover: [], gone: new Set(), loaded: new Set(), timer: null, hashes: new Map(), resynced: new Map() }
+  const m: Match = { info, lobby: l.id, w: matchWorld(info), brains: matchBrains(info), n: 0, t0: 0, pending: [], takeover: [], gone: new Map(), loaded: new Set(), timer: null, hashes: new Map(), resynced: new Map() }
   matches.set(l.id, m)
   l.state = 'playing'
   info.seats.forEach((s, i) => {
@@ -389,7 +393,19 @@ function begin(m: Match) {
   if (m.t0 || matches.get(m.lobby) !== m) return
   if (m.timer) clearTimeout(m.timer)
   m.t0 = performance.now()
+  pushRoster(m)
   clock(m)
+}
+
+function pushRoster(m: Match) {
+  const seats: RosterSeat[] = m.info.seats.map((s, i) => {
+    if (s.kind === 'ai') return { status: 'ai', ping: 0 }
+    const gone = m.gone.get(i)
+    const p = players.get(s.player)
+    if (gone) return { status: gone, ping: 0 }
+    return { status: p?.ws ? 'playing' : 'away', ping: p?.ws ? Math.round(p.rtt) : 0 }
+  })
+  toPlayers(m, JSON.stringify({ t: 'roster', seats } satisfies ServerMsg))
 }
 
 /** Runs every tick that's due by now, then sleeps until the next. A late wake-up (a busy
@@ -417,6 +433,7 @@ function runTick(m: Match) {
   }
   const msg = JSON.stringify({ t: 'turn', ...turn } satisfies ServerMsg)
   toPlayers(m, msg)
+  if (n % ROSTER_EVERY === 0) pushRoster(m)
 }
 
 /** Sends to every player still in the battle (not those who left it). */
@@ -433,11 +450,12 @@ function sync(p: Player, m: Match, why: 'drift' | 'rejoin') {
 
 /** A player is out of the battle for good (left, or gone too long): an AI admiral takes their
  * fleet from the next tick, on everyone's machine at once. */
-function abandon(p: Player, m: Match) {
+function abandon(p: Player, m: Match, how: 'left' | 'dropped') {
   const seat = seatIndex(m, p)
   if (seat < 0 || m.gone.has(seat)) return
-  m.gone.add(seat)
+  m.gone.set(seat, how)
   m.takeover.push([seat, TAKEOVER])
+  pushRoster(m)
 }
 
 function finish(m: Match) {
@@ -489,7 +507,7 @@ function checkHash(p: Player, m: Match, n: unknown, h: unknown) {
 // --- Connections ------------------------------------------------------------------------------------
 
 function forget(p: Player) {
-  leave(p, 'left')
+  leave(p, 'lost the connection', 'dropped')
   players.delete(p.id)
   byToken.delete(p.token)
   if (p.key && byName.get(p.key) === p) byName.delete(p.key)
@@ -512,6 +530,8 @@ function setAway(p: Player, away: boolean) {
   if (!l || i < 0 || l.slots[i].away === away) return
   l.slots[i] = { ...l.slots[i], away }
   pushLobby(l)
+  const game = matches.get(l.id)
+  if (game?.t0) pushRoster(game)
 }
 
 function hello(ws: WsConnection, conn: { p: Player | null; login: string | null; ip: string }, token: unknown) {
@@ -539,7 +559,7 @@ function hello(ws: WsConnection, conn: { p: Player | null; login: string | null;
     return
   }
   const p: Player = {
-    id: newId(), token: randomBytes(18).toString('base64url'), name: '', key: '', login: conn.login, ip: conn.ip, ws, leftAt: 0, allowance: BURST, allowanceAt: Date.now(), lobby: null,
+    id: newId(), token: randomBytes(18).toString('base64url'), name: '', key: '', login: conn.login, ip: conn.ip, ws, leftAt: 0, allowance: BURST, allowanceAt: Date.now(), lobby: null, rtt: 0,
   }
   players.set(p.id, p)
   byToken.set(p.token, p)
@@ -564,7 +584,11 @@ function onMessage(ws: WsConnection, conn: { p: Player | null; login: string | n
 
   const p = conn.p
   if (!allowed(p)) return ws.close(1008, 'too fast')
-  if (m.t === 'ping') return send(p, { t: 'pong', n: Number(m.n) || 0, at: Date.now() })
+  if (m.t === 'ping') {
+    const rtt = Number(m.rtt)
+    if (Number.isFinite(rtt)) p.rtt = Math.min(9999, Math.max(0, rtt))
+    return send(p, { t: 'pong', n: Number(m.n) || 0, at: Date.now() })
+  }
   if (m.t === 'claim') return claim(p, m.name)
   if (!p.name) return send(p, { t: 'error', why: 'Pick a name first.' })
   if (m.t === 'create') return create(p)

@@ -39,6 +39,12 @@ export type MpLobby = {
   state: 'open' | 'playing'
 }
 
+/** How a battle's seat is doing: its player is in, away (connection down, may come back), gave up
+ * (`left`) or never came back (`dropped`; both handed their fleet to an AI), or it's an AI seat. */
+export type SeatStatus = 'playing' | 'away' | 'left' | 'dropped' | 'ai'
+/** One seat in the battle's player list, by seat index; `ping` in milliseconds (0 for AI). */
+export type RosterSeat = { status: SeatStatus; ping: number }
+
 /** A lobby in the list. */
 export type LobbyInfo = { id: string; name: string; host: string; map: string; players: number; seats: number; state: MpLobby['state'] }
 
@@ -52,8 +58,9 @@ export type ClientMsg =
   | { t: 'hello'; token?: string }
   /** Take a name (also to change it later). */
   | { t: 'claim'; name: string }
-  /** For the round trip time; answered with `pong` straight away. */
-  | { t: 'ping'; n: number }
+  /** For the round trip time; answered with `pong` straight away. `rtt` is our last measure of
+   * it, which the server shows the other players. */
+  | { t: 'ping'; n: number; rtt?: number }
   /** Lobbies: make one (and host it), join one, leave the one you're in. */
   | { t: 'create' }
   | { t: 'join'; id: string }
@@ -103,6 +110,9 @@ export type ServerMsg =
   /** Our fingerprint at tick `n` didn't match the server's: our battle has drifted. A `sync`
    * follows to put it right. */
   | { t: 'desync'; n: number }
+  /** The battle's players: how each seat is doing, and its ping. Sent when that changes, and
+   * every couple of seconds for the pings. */
+  | { t: 'roster'; seats: RosterSeat[] }
   /** The server's own battle as it stands after tick `n` (snapshot.ts format), to carry on from:
    * after drifting, or on coming back to a battle under way. Turns after `n` follow. */
   | { t: 'sync'; n: number; world: string; brains: BattleSnap['brains']; why: 'drift' | 'rejoin' }
