@@ -5,6 +5,8 @@ import { ALL_SPRITES, FACTIONS, SITE_UPGRADES, TECH, UNIT, buildable, dims, isSh
 import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, ReserveTray, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type MapFilter, type Mode } from './empires/Hud'
 import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
+import { Multiplayer } from './empires/Multiplayer'
+import { Net } from './empires/net'
 import { loadSkirmish, restoreBrain, restoreWorld, saveSkirmish, snapBrain, snapshotWorld, type BattleSnap } from './empires/snapshot'
 import { listSaves, loadSave, resumeGalaxy, type Galaxy } from './empires/galaxy'
 import { actionFor, getSettings, keyName, setSettings, useSettings } from './empires/settings'
@@ -57,7 +59,7 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
   const [galaxy, setGalaxy] = useState<Galaxy | null>(() => resumeGalaxy())
   // A skirmish that was being fought when the page went away is fought on, from where it was.
   const [skirmish, setSkirmish] = useState(() => (galaxy ? null : loadSkirmish<Setup>()))
-  const [screen, setScreen] = useState<'menu' | 'lobby' | 'battle' | 'conquest' | 'fleetBattle'>(() => (galaxy ? 'conquest' : skirmish ? 'battle' : 'menu'))
+  const [screen, setScreen] = useState<'menu' | 'lobby' | 'battle' | 'conquest' | 'fleetBattle' | 'multiplayer'>(() => (galaxy ? 'conquest' : skirmish ? 'battle' : 'menu'))
   const [fight, setFight] = useState<ConquestBattle | null>(null)
   // Where the main menu opens (back from the campaign's load or new-game screen: its own sub-menu),
   // and which of those two screens the campaign opens on.
@@ -69,11 +71,20 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
   const sound = useRef<EmpiresSound>(null as unknown as EmpiresSound)
   if (!sound.current) sound.current = new EmpiresSound()
   useEffect(() => () => sound.current.dispose(), [])
+  // The multiplayer connection: opened on the way into the multiplayer screens, closed on the way out.
+  const [net, setNet] = useState<Net | null>(null)
+  const netRef = useRef(net)
+  netRef.current = net
+  useEffect(() => () => netRef.current?.close(), [])
 
   if (screen === 'menu') {
     const saves = listSaves()
     return (
       <MainMenu sound={sound.current} victories={best ?? 0} onPlay={() => setScreen('lobby')} initial={menuAt}
+        onMultiplayer={() => {
+          setNet(new Net())
+          setScreen('multiplayer')
+        }}
         latest={saves[0] ? `${saves[0].name}, week ${saves[0].week}` : undefined}
         saves={saves.length}
         onConquest={(how) => {
@@ -90,6 +101,19 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
       />
     )
   }
+  if (screen === 'multiplayer' && net)
+    return (
+      <Multiplayer
+        net={net}
+        sound={sound.current}
+        onBack={() => {
+          net.close()
+          setNet(null)
+          setMenuAt('multi')
+          setScreen('menu')
+        }}
+      />
+    )
   if (screen === 'conquest')
     return (
       <Conquest

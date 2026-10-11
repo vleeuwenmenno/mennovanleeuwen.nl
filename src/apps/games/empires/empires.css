@@ -667,6 +667,247 @@ span.ew-teamtag {
   padding-top: 10px;
 }
 
+/* Multiplayer: the name screen, the list of battles, and the lobby with its chat. */
+.ew-mp-name {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.ew-mp-namefield {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ew-muted);
+}
+.ew-mp-namerow {
+  display: flex;
+  gap: 6px;
+}
+.ew-deck .ew-mp-name input,
+.ew-deck .ew-mp-say input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 14px;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--ew-text);
+  background: var(--ew-cell);
+  border: 1px solid var(--ew-cell-line);
+  border-radius: 6px;
+  padding: 7px 9px;
+  user-select: text;
+}
+.ew-deck .ew-mp-say input {
+  font-size: 12.5px;
+  padding: 5px 8px;
+}
+.ew-deck .ew-mp-name input:focus,
+.ew-deck .ew-mp-say input:focus {
+  outline: none;
+  border-color: var(--ew-active-hi);
+}
+.ew-mp-name input[aria-invalid='true'] {
+  border-color: rgba(255, 106, 94, 0.6);
+}
+.ew-mp-bad {
+  color: #ffb3ab;
+}
+.ew-mp-status {
+  position: relative;
+  margin: 0 16px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(242, 193, 74, 0.12);
+  border: 1px solid rgba(242, 193, 74, 0.4);
+  color: #f6dc9c;
+  font-size: 12px;
+}
+.ew-menu-frame .ew-mp-status {
+  margin: 0;
+}
+.ew-mp-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  z-index: 20;
+  max-width: min(460px, calc(100% - 32px));
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: rgba(40, 14, 16, 0.94);
+  border: 1px solid rgba(255, 106, 94, 0.55);
+  color: #ffd5d0;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+.ew-mp-me {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ew-mp-me strong {
+  font-family: var(--ew-display);
+  font-size: 12.5px;
+  color: var(--ew-head);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-mp-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--ew-good);
+  box-shadow: 0 0 6px var(--ew-good);
+}
+.ew-mp-dot.is-connecting {
+  background: var(--ew-gold);
+  box-shadow: 0 0 6px var(--ew-gold);
+}
+.ew-mp-dot.is-offline {
+  background: var(--ew-bad);
+  box-shadow: none;
+}
+.ew-mp-grid {
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  align-items: start;
+}
+.ew-mp-grid .ew-frame-in p {
+  margin: 0;
+}
+.ew-mp-empty {
+  padding: 18px 4px;
+}
+.ew-mp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ew-mp-lobbyrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 92px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px 7px 12px;
+  border-radius: 6px;
+  background: rgba(20, 32, 60, 0.55);
+  border: 1px solid var(--ew-cell-line);
+}
+.ew-mp-lobbyrow.is-off {
+  opacity: 0.6;
+}
+.ew-mp-lobbyname {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ew-mp-lobbyname strong {
+  color: var(--ew-head);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-mp-count {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ew-muted);
+}
+.ew-deck .ew-mp-join {
+  padding: 5px 10px !important;
+}
+.ew-mp-left {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+.ew-mp-left > .ew-lobby-slots {
+  flex: none;
+}
+/* Player names need more room than "AI" does. */
+.ew-mp-room .ew-slotrow {
+  grid-template-columns: 26px minmax(80px, 1.6fr) minmax(64px, 0.8fr) 74px minmax(78px, 96px);
+}
+.ew-mp-who {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-mp-state {
+  font-size: 11.5px;
+  text-align: center;
+  color: var(--ew-muted);
+}
+.ew-mp-state.is-ready {
+  color: var(--ew-good);
+}
+.ew-mp-state.is-away {
+  color: var(--ew-gold);
+}
+.ew-mp-value {
+  margin: 0;
+  font-weight: 700;
+}
+.ew-deck .ew-mp-sit {
+  font-size: 11.5px;
+  padding: 3px 6px;
+}
+.ew-deck .ew-mp-ready {
+  padding: 9px 18px;
+  font-family: var(--ew-display);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ew-good);
+}
+.ew-mp-chat {
+  flex: 1;
+  min-height: 150px;
+}
+.ew-mp-chat .ew-frame-in {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: 100%;
+}
+.ew-mp-lines {
+  flex: 1;
+  min-height: 60px;
+  overflow-y: auto;
+  user-select: text;
+}
+.ew-mp-lines p {
+  margin: 0 0 3px;
+  overflow-wrap: anywhere;
+}
+.ew-mp-lines b {
+  color: var(--ew-head);
+}
+.ew-mp-notice {
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--ew-muted);
+}
+.ew-mp-say {
+  display: flex;
+  gap: 6px;
+}
+@container (max-width: 900px) {
+  .ew-mp-grid {
+    grid-template-columns: 1fr;
+  }
+  .ew-mp-me .ew-chip {
+    display: none;
+  }
+}
+
 /* Pause: a small panel at the top, the battle stays visible behind it. */
 .ew-pausebox {
   position: absolute;

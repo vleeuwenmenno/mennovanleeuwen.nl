@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DIFFICULTY, type Difficulty } from './ai'
-import { FACTIONS, type FactionId } from './data'
+import { CREDIT_STEPS, FACTIONS, type FactionId } from './data'
 import { Frame, Icon, Tips } from './Hud'
 import { battleLayout, type LayoutStore } from './layout'
 import { DEFAULT_RULES, GENERATED, MAP, MAPS, MAX_BEACONS, MAX_SEED, cleanRules, defaultArea, generateMap, type Amount, type MapDef, type MapRules, type Rect } from './maps'
@@ -24,7 +24,7 @@ export type Setup = { map: string; slots: Slot[]; credits: number; gen: MapRules
 const areaKey = (map: MapDef) => `${map.id}:${map.w}x${map.h}`
 
 const SETUP_KEY = 'mvlos.empires.lobby'
-export const CREDIT_STEPS = [500, 1000, 1600, 2500, 4000, 6000, 10000]
+export { CREDIT_STEPS }
 
 /** Each slot's start area: the one drawn in the lobby, or a square round its spawn point. */
 export const setupAreas = (s: Setup, map: MapDef): Rect[] => map.spawns.map((_, i) => (s.areasFor === areaKey(map) ? s.areas[i] : null) ?? defaultArea(map, i))
@@ -88,7 +88,7 @@ const noMenu = (e: React.MouseEvent) => {
   e.stopPropagation()
 }
 
-function Seg<T extends string | number | boolean>({ value, options, onChange, label }: { value: T; options: [T, string][]; onChange: (v: T) => void; label: string }) {
+export function Seg<T extends string | number | boolean>({ value, options, onChange, label }: { value: T; options: [T, string][]; onChange: (v: T) => void; label: string }) {
   return (
     <div className="ew-seg" role="group" aria-label={label}>
       {options.map(([v, text]) => (
@@ -531,10 +531,12 @@ export function HowToPlay() {
 // --- Main menu ------------------------------------------------------------------------------------------
 
 export type MenuScreen = 'main' | 'single' | 'multi' | 'conquest'
-export function MainMenu({ sound, victories, onPlay, onConquest, latest, saves = 0, initial = 'main' }: {
+export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, latest, saves = 0, initial = 'main' }: {
   sound: EmpiresSound
   victories: number
   onPlay: () => void
+  /** Online battles against other players. */
+  onMultiplayer: () => void
   /** Galactic conquest: carry on with the latest save, pick one to load, or set up a new one. */
   onConquest: (how: 'continue' | 'load' | 'new') => void
   /** The latest save ("name, week 3"), and how many there are. */
@@ -619,7 +621,9 @@ export function MainMenu({ sound, victories, onPlay, onConquest, latest, saves =
         )}
         {screen === 'multi' && (
           <Frame className="ew-menu-frame" title="Multiplayer">
-            {soon('Skirmish', 'attack', 'Battles against other players. Not built yet.')}
+            <button className="ew-menu-btn is-primary" onClick={click(onMultiplayer)} data-tip="Battles against other players online, with AI on any spare spawns">
+              <Icon name="attack" size={20} /> Skirmish
+            </button>
             <button className="ew-menu-btn" onClick={click(() => setScreen('main'))}>
               <Icon name="back" size={20} /> Back
             </button>
@@ -665,12 +669,12 @@ export function MainMenu({ sound, victories, onPlay, onConquest, latest, saves =
 
 // --- Lobby ---------------------------------------------------------------------------------------------
 
-const slotColor = (s: Slot) => (s.kind === 'closed' ? '#5a6478' : s.kind === 'you' ? OWN : s.team === 0 ? ALLY : ENEMY)
+export const slotColor = (s: Slot) => (s.kind === 'closed' ? '#5a6478' : s.kind === 'you' ? OWN : s.team === 0 ? ALLY : ENEMY)
 
 /** The map from above: nebulas, asteroid fields, rocks, ore, beacons, and the spawns numbered and
  * coloured by slot. Given start areas, it shows them too, and with `onArea` they can be redrawn:
  * drag out a box for the active slot, or click inside an area to make that slot the active one. */
-function MapPreview({ map, slots, areas, active = -1, onArea, onPick, className = '' }: {
+export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, className = '' }: {
   map: MapDef
   slots?: Slot[]
   areas?: Rect[]
@@ -862,14 +866,14 @@ const AMOUNTS: [Amount, string][] = [
 ]
 
 /** A map's size class by its area, and its dimensions in thousands of units. */
-function mapSize(m: MapDef) {
+export function mapSize(m: MapDef) {
   const area = (m.w * m.h) / 1e6
   const cls = area < 30 ? 'Small' : area < 50 ? 'Medium' : 'Large'
   return { cls, dims: `${(m.w / 1000).toFixed(1)}k × ${(m.h / 1000).toFixed(1)}k` }
 }
 
 /** A map in the picker: preview, size, what's on it, and its description. */
-function MapCard({ m, title, blurb, on, onPick }: { m: MapDef; title: string; blurb: string; on: boolean; onPick: () => void }) {
+export function MapCard({ m, title, blurb, on, onPick }: { m: MapDef; title: string; blurb: string; on: boolean; onPick: () => void }) {
   const size = mapSize(m)
   const terrain = [m.fields.length && 'asteroid fields', m.nebulas.length && 'nebulas'].filter(Boolean).join(' and ')
   return (
@@ -893,7 +897,7 @@ function MapCard({ m, title, blurb, on, onPick }: { m: MapDef; title: string; bl
 }
 
 /** What the marks on the preview are: only the kinds this map has. */
-function MapLegend({ map }: { map: MapDef }) {
+export function MapLegend({ map }: { map: MapDef }) {
   const items: [string, string][] = [
     ['spawn', 'Spawn'],
     ['ore', 'Ore'],
@@ -916,7 +920,7 @@ function MapLegend({ map }: { map: MapDef }) {
 }
 
 /** The generator's rules: compact rows under the map preview, which redraws as they change. */
-function GenControls({ rules, onChange, onReroll }: { rules: MapRules; onChange: (patch: Partial<MapRules>) => void; onReroll: () => void }) {
+export function GenControls({ rules, onChange, onReroll }: { rules: MapRules; onChange: (patch: Partial<MapRules>) => void; onReroll: () => void }) {
   // One labelled control: the label above, so every group reads top to bottom.
   const field = (label: string, control: ReactNode) => (
     <label className="ew-genfield">

@@ -5,18 +5,23 @@ import { currentUser } from './auth.ts'
 import { database } from './db.ts'
 import { sameOrigin } from './http.ts'
 import { acceptWebSocket, refuse, type WsConnection } from './ws.ts'
+import { DIFFICULTY } from '../src/apps/games/empires/ai.ts'
+import { CREDIT_STEPS, FACTIONS, START_CREDITS } from '../src/apps/games/empires/data.ts'
+import { DEFAULT_RULES, GENERATED, MAP, MAPS, cleanRules, generateMap, type MapDef } from '../src/apps/games/empires/maps.ts'
 import { nameKey, nameProblem, randomName, tidyName } from '../src/apps/games/empires/names.ts'
-import { MP_PATH, type ClientMsg, type ServerMsg } from '../src/apps/games/empires/protocol.ts'
+import { CHAT_MAX, MP_PATH, type ClientMsg, type LobbyInfo, type MpLobby, type MpSlot, type ServerMsg, type SlotPatch } from '../src/apps/games/empires/protocol.ts'
 
-// Empires At War multiplayer: the players online, their names and (later) lobbies and matches.
-// Anyone may play, signed in or not. Names are unique among everyone online; a signed-in user's
-// GitHub login is theirs alone. Everything lives in memory: a restart ends every game.
+// Empires At War multiplayer: the players online, their names, and the lobbies they gather in
+// before a battle. Anyone may play, signed in or not. Names are unique among everyone online; a
+// signed-in user's GitHub login is theirs alone. Everything lives in memory: a restart ends every
+// lobby and game.
 
-/** A dropped player keeps their name (and later their seat) this long, for a reload or a blip. */
+/** A dropped player keeps their name and seat this long, for a reload or a blip. */
 const GRACE_MS = 30_000
 const MAX_PLAYERS = 400
 const MAX_PER_IP = 16
 const MAX_MESSAGE = 16 * 1024
+const MAX_LOBBIES = 100
 /** Messages a second a connection may send on average, and in a burst. */
 const RATE = 40
 const BURST = 120
@@ -35,11 +40,14 @@ type Player = {
   leftAt: number
   allowance: number
   allowanceAt: number
+  /** The lobby they're in. */
+  lobby: string | null
 }
 
 const players = new Map<string, Player>()
 const byToken = new Map<string, Player>()
 const byName = new Map<string, Player>()
+const lobbies = new Map<string, MpLobby>()
 
 const send = (p: Player, m: ServerMsg) => p.ws?.send(JSON.stringify(m))
 const newId = () => randomBytes(9).toString('base64url')
@@ -50,6 +58,8 @@ function clientIp(req: IncomingMessage) {
   const fwd = String(req.headers['x-forwarded-for'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
   return fwd.at(-1) ?? req.socket.remoteAddress ?? '?'
 }
+
+// --- Names ------------------------------------------------------------------------------------------
 
 let loginsAt = 0
 let logins = new Map<string, string>()
@@ -82,14 +92,204 @@ function claim(p: Player, raw: string) {
   const name = tidyName(String(raw ?? ''))
   const why = nameProblem(name) ?? nameTaken(name, p)
   if (why) return send(p, { t: 'refused', why, suggestion: suggest(p) })
+  const first = !p.name
   if (p.key) byName.delete(p.key)
+  const was = p.name
   p.name = name
   p.key = nameKey(name)
   byName.set(p.key, p)
   send(p, { t: 'welcome', id: p.id, name: p.name, token: p.token, resumed: false })
+  const l = lobbyOf(p)
+  if (l) {
+    for (const s of l.slots) if (s.player === p.id) s.name = name
+    if (was !== name) notice(l, `${was} is now ${name}`)
+    pushLobby(l)
+  } else if (first) send(p, { t: 'lobbies', list: lobbyList() })
 }
 
+// --- Lobbies ----------------------------------------------------------------------------------------
+
+const lobbyOf = (p: Player) => (p.lobby ? lobbies.get(p.lobby) : undefined)
+const mapOf = (l: MpLobby): MapDef => (l.map === GENERATED ? generateMap(l.gen) : (MAP[l.map] ?? MAPS[0]))
+const humans = (l: MpLobby) => l.slots.filter((s) => s.kind === 'human')
+const seatOf = (l: MpLobby, p: Player) => l.slots.findIndex((s) => s.kind === 'human' && s.player === p.id)
+
+const openSlot = (i: number): MpSlot => ({ kind: 'open', player: '', name: '', faction: i % 2 ? 'droid' : 'republic', team: (i % 2) as 0 | 1, difficulty: 'medium', ready: false, away: false })
+const seat = (s: MpSlot, p: Player): MpSlot => ({ ...s, kind: 'human', player: p.id, name: p.name, ready: false, away: !p.ws })
+
+/** The slots for `map`, keeping what each spawn had where it still exists, and every human seated
+ * (moved to a free spawn if theirs is gone); null when there aren't enough spawns for them. */
+function slotsFor(map: MapDef, prev: MpSlot[]): MpSlot[] | null {
+  const n = map.spawns.length
+  const slots = Array.from({ length: n }, (_, i) => prev[i] ?? openSlot(i))
+  for (const s of prev.slice(n)) {
+    if (s.kind !== 'human') continue
+    const free = slots.findIndex((x) => x.kind !== 'human')
+    if (free < 0) return null
+    slots[free] = { ...s, team: slots[free].team }
+  }
+  return slots
+}
+
+function lobbyList(): LobbyInfo[] {
+  return [...lobbies.values()].map((l) => ({
+    id: l.id,
+    name: l.name,
+    host: players.get(l.host)?.name ?? '',
+    map: mapOf(l).name,
+    players: humans(l).length,
+    seats: l.slots.filter((s) => s.kind === 'human' || s.kind === 'open').length,
+    state: l.state,
+  }))
+}
+
+let listTimer: NodeJS.Timeout | null = null
+/** Everyone looking at the list gets the new one (a few changes at once go out together). */
+function pushList() {
+  if (listTimer) return
+  listTimer = setTimeout(() => {
+    listTimer = null
+    const msg = JSON.stringify({ t: 'lobbies', list: lobbyList() } satisfies ServerMsg)
+    for (const p of players.values()) if (p.name && !p.lobby && p.ws) p.ws.send(msg)
+  }, 150)
+}
+
+function pushLobby(l: MpLobby) {
+  const msg = JSON.stringify({ t: 'lobby', lobby: l } satisfies ServerMsg)
+  for (const s of humans(l)) players.get(s.player)?.ws?.send(msg)
+  pushList()
+}
+
+function notice(l: MpLobby, text: string) {
+  const msg = JSON.stringify({ t: 'chat', from: '', text, at: Date.now() } satisfies ServerMsg)
+  for (const s of humans(l)) players.get(s.player)?.ws?.send(msg)
+}
+
+/** A change that matters to the battle: everyone has to say they're ready again. */
+const unready = (l: MpLobby) => l.slots.forEach((s) => (s.ready = false))
+
+function create(p: Player) {
+  if (lobbies.size >= MAX_LOBBIES) return send(p, { t: 'error', why: 'There are too many battles being set up right now. Try again in a little while.' })
+  leave(p)
+  const map = MAPS[0]
+  const l: MpLobby = {
+    id: newId(),
+    name: `${p.name}'s battle`,
+    host: p.id,
+    map: map.id,
+    gen: { ...DEFAULT_RULES },
+    credits: START_CREDITS,
+    slots: slotsFor(map, [])!,
+    state: 'open',
+  }
+  l.slots[0] = seat(l.slots[0], p)
+  lobbies.set(l.id, l)
+  p.lobby = l.id
+  pushLobby(l)
+}
+
+function join(p: Player, id: string) {
+  const l = lobbies.get(String(id))
+  if (!l) return send(p, { t: 'error', why: 'That battle is gone.' })
+  if (l.id === p.lobby) return pushLobby(l)
+  if (l.state !== 'open') return send(p, { t: 'error', why: 'That battle has already started.' })
+  const i = l.slots.findIndex((s) => s.kind === 'open')
+  if (i < 0) return send(p, { t: 'error', why: 'That battle is full.' })
+  leave(p)
+  l.slots[i] = seat(l.slots[i], p)
+  p.lobby = l.id
+  notice(l, `${p.name} joined`)
+  pushLobby(l)
+}
+
+/** Out of the lobby: the seat opens up, the host passes on, an empty lobby closes. */
+function leave(p: Player, why = 'left') {
+  const l = lobbyOf(p)
+  p.lobby = null
+  if (!l) return
+  const i = seatOf(l, p)
+  if (i >= 0) l.slots[i] = { ...openSlot(i), faction: l.slots[i].faction, team: l.slots[i].team }
+  send(p, { t: 'lobby', lobby: null })
+  send(p, { t: 'lobbies', list: lobbyList() })
+  const left = humans(l)
+  if (!left.length) {
+    lobbies.delete(l.id)
+    pushList()
+    return
+  }
+  if (l.host === p.id) {
+    l.host = left[0].player
+    notice(l, `${p.name} ${why}; ${left[0].name} is the host now`)
+  } else notice(l, `${p.name} ${why}`)
+  pushLobby(l)
+}
+
+function moveSeat(p: Player, l: MpLobby, to: number) {
+  const from = seatOf(l, p)
+  const target = l.slots[to]
+  if (from < 0 || !target || target.kind !== 'open') return send(p, { t: 'error', why: 'That spawn is taken.' })
+  l.slots[to] = { ...l.slots[from], team: target.team, ready: false }
+  l.slots[from] = { ...openSlot(from), faction: l.slots[from].faction, team: l.slots[from].team }
+  pushLobby(l)
+}
+
+function changeSlot(p: Player, l: MpLobby, i: number, patch: SlotPatch) {
+  const s = l.slots[i]
+  if (!s || !patch || typeof patch !== 'object') return
+  const host = l.host === p.id
+  const own = s.kind === 'human' && s.player === p.id
+  if (!host && !own) return send(p, { t: 'error', why: 'Only the host can change other spawns.' })
+  const next = { ...s }
+  if (patch.kind !== undefined) {
+    if (!host || own || !['open', 'ai', 'closed'].includes(patch.kind)) return send(p, { t: 'error', why: "That can't be changed." })
+    if (s.kind === 'human') {
+      const them = players.get(s.player)
+      if (them) {
+        leave(them, 'was removed by the host')
+        send(them, { t: 'kicked', why: 'The host took you out of the battle.' })
+      }
+      // leave() opened the slot; carry on from there.
+      Object.assign(next, l.slots[i])
+    }
+    next.kind = patch.kind
+  }
+  if (patch.faction !== undefined && patch.faction in FACTIONS) next.faction = patch.faction
+  if (patch.team === 0 || patch.team === 1) next.team = patch.team
+  if (patch.difficulty !== undefined && patch.difficulty in DIFFICULTY && (host || own)) next.difficulty = patch.difficulty
+  l.slots[i] = next
+  unready(l)
+  pushLobby(l)
+}
+
+function changeSetup(p: Player, l: MpLobby, m: Extract<ClientMsg, { t: 'setup' }>) {
+  if (l.host !== p.id) return send(p, { t: 'error', why: 'Only the host can change the map and rules.' })
+  if (typeof m.credits === 'number' && CREDIT_STEPS.includes(m.credits)) l.credits = m.credits
+  if (m.map !== undefined || m.gen !== undefined) {
+    const id = m.map === undefined ? l.map : m.map === GENERATED || MAP[m.map] ? m.map : null
+    if (!id) return send(p, { t: 'error', why: 'No such map.' })
+    const gen = m.gen === undefined ? l.gen : cleanRules(m.gen)
+    const map = id === GENERATED ? generateMap(gen) : MAP[id]
+    const slots = slotsFor(map, l.slots)
+    if (!slots) return send(p, { t: 'error', why: 'That map has fewer spawns than there are players here.' })
+    l.map = id
+    l.gen = gen
+    l.slots = slots
+  }
+  unready(l)
+  pushLobby(l)
+}
+
+function chat(p: Player, l: MpLobby, raw: string) {
+  const text = String(raw ?? '').replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX)
+  if (!text) return
+  const msg = JSON.stringify({ t: 'chat', from: p.name, text, at: Date.now() } satisfies ServerMsg)
+  for (const s of humans(l)) players.get(s.player)?.ws?.send(msg)
+}
+
+// --- Connections ------------------------------------------------------------------------------------
+
 function forget(p: Player) {
+  leave(p, 'left')
   players.delete(p.id)
   byToken.delete(p.token)
   if (p.key && byName.get(p.key) === p) byName.delete(p.key)
@@ -105,6 +305,42 @@ function allowed(p: Player) {
   return true
 }
 
+/** Seated players show as away while their connection is down. */
+function setAway(p: Player, away: boolean) {
+  const l = lobbyOf(p)
+  const i = l ? seatOf(l, p) : -1
+  if (!l || i < 0 || l.slots[i].away === away) return
+  l.slots[i] = { ...l.slots[i], away }
+  pushLobby(l)
+}
+
+function hello(ws: WsConnection, conn: { p: Player | null; login: string | null; ip: string }, token: unknown) {
+  const firstName = (p: Player) => (conn.login && !nameTaken(conn.login, p) ? conn.login : suggest(p))
+  // Coming back within the grace period: the same player, name, lobby and seat, on this connection.
+  const back = typeof token === 'string' ? byToken.get(token) : undefined
+  if (back) {
+    back.ws?.close(4000, 'replaced')
+    back.ws = ws
+    back.leftAt = 0
+    conn.p = back
+    if (!back.name) return send(back, { t: 'ready', suggestion: firstName(back), login: conn.login })
+    send(back, { t: 'welcome', id: back.id, name: back.name, token: back.token, resumed: true })
+    const l = lobbyOf(back)
+    if (l) {
+      setAway(back, false)
+      send(back, { t: 'lobby', lobby: l })
+    } else send(back, { t: 'lobbies', list: lobbyList() })
+    return
+  }
+  const p: Player = {
+    id: newId(), token: randomBytes(18).toString('base64url'), name: '', key: '', login: conn.login, ip: conn.ip, ws, leftAt: 0, allowance: BURST, allowanceAt: Date.now(), lobby: null,
+  }
+  players.set(p.id, p)
+  byToken.set(p.token, p)
+  conn.p = p
+  send(p, { t: 'ready', suggestion: firstName(p), login: conn.login })
+}
+
 function onMessage(ws: WsConnection, conn: { p: Player | null; login: string | null; ip: string }, text: string) {
   let m: ClientMsg
   try {
@@ -116,32 +352,37 @@ function onMessage(ws: WsConnection, conn: { p: Player | null; login: string | n
 
   if (!conn.p) {
     if (m.t !== 'hello') return ws.close(1008, 'hello first')
-    // Coming back within the grace period: the same player, name and all, on this connection.
-    const back = typeof m.token === 'string' ? byToken.get(m.token) : undefined
-    if (back) {
-      back.ws?.close(4000, 'replaced')
-      back.ws = ws
-      back.leftAt = 0
-      conn.p = back
-      if (back.name) return send(back, { t: 'welcome', id: back.id, name: back.name, token: back.token, resumed: true })
-      return send(back, { t: 'ready', suggestion: conn.login && !nameTaken(conn.login, back) ? conn.login : suggest(back), login: conn.login })
-    }
-    const p: Player = { id: newId(), token: randomBytes(18).toString('base64url'), name: '', key: '', login: conn.login, ip: conn.ip, ws, leftAt: 0, allowance: BURST, allowanceAt: Date.now() }
-    players.set(p.id, p)
-    byToken.set(p.token, p)
-    conn.p = p
-    return send(p, { t: 'ready', suggestion: conn.login && !nameTaken(conn.login, p) ? conn.login : suggest(p), login: conn.login })
+    hello(ws, conn, m.token)
+    return
   }
 
   const p = conn.p
   if (!allowed(p)) return ws.close(1008, 'too fast')
+  if (m.t === 'ping') return send(p, { t: 'pong', n: Number(m.n) || 0, at: Date.now() })
+  if (m.t === 'claim') return claim(p, m.name)
+  if (!p.name) return send(p, { t: 'error', why: 'Pick a name first.' })
+  if (m.t === 'create') return create(p)
+  if (m.t === 'join') return join(p, m.id)
+  const l = lobbyOf(p)
+  if (!l) return send(p, { t: 'error', why: "You're not in a battle." })
   switch (m.t) {
-    case 'ping':
-      return send(p, { t: 'pong', n: Number(m.n) || 0, at: Date.now() })
-    case 'claim':
-      return claim(p, m.name)
+    case 'leave':
+      return leave(p)
+    case 'seat':
+      return moveSeat(p, l, Number(m.i))
+    case 'slot':
+      return changeSlot(p, l, Number(m.i), m.patch)
+    case 'setup':
+      return changeSetup(p, l, m)
+    case 'ready': {
+      const i = seatOf(l, p)
+      if (i >= 0) l.slots[i] = { ...l.slots[i], ready: !!m.on }
+      return pushLobby(l)
+    }
+    case 'chat':
+      return chat(p, l, m.text)
     default:
-      return send(p, { t: 'error', why: `Unknown message ${String(m.t).slice(0, 20)}` })
+      return send(p, { t: 'error', why: `Unknown message ${String((m as { t: string }).t).slice(0, 20)}` })
   }
 }
 
@@ -182,16 +423,17 @@ export function empiresUpgrade(req: IncomingMessage, socket: Duplex, head: Buffe
     if (p && p.ws === ws) {
       p.ws = null
       p.leftAt = Date.now()
+      setAway(p, true)
     }
   }
   return true
 }
 
-// Players who didn't come back in time are let go, and their names freed.
+// Players who didn't come back in time are let go: their seats open and their names are freed.
 setInterval(() => {
   const now = Date.now()
   for (const p of players.values()) if (!p.ws && p.leftAt && now - p.leftAt > GRACE_MS) forget(p)
 }, 5_000).unref()
 
-/** For tests and a status line: how many are online, and with names. */
-export const empiresOnline = () => ({ players: players.size, named: byName.size })
+/** For tests and a status line: how many are online, with names, and in lobbies. */
+export const empiresOnline = () => ({ players: players.size, named: byName.size, lobbies: lobbies.size })

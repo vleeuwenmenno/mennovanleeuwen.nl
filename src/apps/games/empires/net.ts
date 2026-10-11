@@ -1,11 +1,30 @@
-import { MP_PATH, type ClientMsg, type ServerMsg } from './protocol'
+import { MP_PATH, type ClientMsg, type LobbyInfo, type MpLobby, type ServerMsg } from './protocol'
 
 // The game's end of the multiplayer WebSocket. One connection per tab, kept open while the
 // multiplayer screens are up: it reconnects by itself after a drop (resuming the same player with
-// the tab's token), measures the round trip, and hands the server's messages to listeners.
+// the tab's token), measures the round trip, and hands the server's messages to listeners. It
+// also keeps what the screens show (who we are, the lobby list, our lobby, its chat) as `view`.
 
 export type NetStatus = 'connecting' | 'online' | 'offline'
 type Listener = (m: ServerMsg) => void
+
+export type ChatLine = { from: string; text: string; at: number }
+/** Everything the multiplayer screens draw, replaced (never changed in place) on every update. */
+export type NetView = {
+  status: NetStatus
+  /** Us, once a name is ours. */
+  me: { id: string; name: string } | null
+  /** A free name to offer on the join screen, and the signed-in login if any. */
+  suggestion: string
+  login: string | null
+  lobbies: LobbyInfo[]
+  lobby: MpLobby | null
+  chat: ChatLine[]
+  /** The last thing the server turned down, for a toast. */
+  problem: { why: string; n: number } | null
+  rtt: number
+}
+const CHAT_KEEP = 100
 
 /** Per tab, so two tabs are two players (handy for trying it alone) and a reload is the same one. */
 const TOKEN_KEY = 'mvlos.empires.mp.token'
@@ -32,6 +51,8 @@ export class Net {
   clockOffset = 0
   name = ''
   id = ''
+  view: NetView = { status: 'connecting', me: null, suggestion: '', login: null, lobbies: [], lobby: null, chat: [], problem: null, rtt: 0 }
+  private viewListeners = new Set<() => void>()
   private ws: WebSocket | null = null
   private listeners = new Set<Listener>()
   private statusListeners = new Set<(s: NetStatus) => void>()
@@ -58,6 +79,42 @@ export class Net {
   onStatus(fn: (s: NetStatus) => void) {
     this.statusListeners.add(fn)
     return () => void this.statusListeners.delete(fn)
+  }
+
+  /** For useSyncExternalStore: `view` changes. */
+  subscribe = (fn: () => void) => {
+    this.viewListeners.add(fn)
+    return () => void this.viewListeners.delete(fn)
+  }
+  getView = () => this.view
+
+  private patch(p: Partial<NetView>) {
+    this.view = { ...this.view, ...p }
+    for (const fn of this.viewListeners) fn()
+  }
+
+  private track(m: ServerMsg) {
+    switch (m.t) {
+      case 'ready':
+        return this.patch({ me: null, suggestion: m.suggestion, login: m.login })
+      case 'welcome':
+        return this.patch({ me: { id: m.id, name: m.name } })
+      case 'refused':
+        return this.patch({ suggestion: m.suggestion, problem: { why: m.why, n: (this.view.problem?.n ?? 0) + 1 } })
+      case 'lobbies':
+        return this.patch({ lobbies: m.list })
+      case 'lobby':
+        // A new lobby (or none) starts with an empty chat.
+        return this.patch({ lobby: m.lobby, chat: m.lobby && m.lobby.id === this.view.lobby?.id ? this.view.chat : [] })
+      case 'chat':
+        return this.patch({ chat: [...this.view.chat, { from: m.from, text: m.text, at: m.at }].slice(-CHAT_KEEP) })
+      case 'kicked':
+      case 'error':
+        return this.patch({ problem: { why: m.why, n: (this.view.problem?.n ?? 0) + 1 } })
+      case 'pong':
+        // Redraws for the ping readout are cheap but needn't happen on every pong.
+        if (Math.abs(this.rtt - this.view.rtt) > 3) this.patch({ rtt: this.rtt })
+    }
   }
 
   /** Asks for a name; resolves with null once it's ours, or why not and a name to try instead. */
@@ -89,6 +146,7 @@ export class Net {
     if (this.status === s) return
     this.status = s
     for (const fn of this.statusListeners) fn(s)
+    this.patch({ status: s })
   }
 
   private open() {
@@ -124,6 +182,7 @@ export class Net {
         this.id = m.id
       }
       if (m.t === 'welcome' || m.t === 'ready') this.setStatus('online')
+      this.track(m)
       for (const fn of [...this.listeners]) fn(m)
     }
     ws.onclose = () => {

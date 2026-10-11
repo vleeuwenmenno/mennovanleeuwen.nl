@@ -8,7 +8,8 @@ const URL_ = process.argv[2] ?? 'ws://localhost:5173/api/empires/ws'
 const ORIGIN = URL_.replace(/^ws/, 'http').replace(/\/api.*/, '')
 type Msg = Record<string, any>
 
-function client(origin: string | null = ORIGIN) {
+/** `ignore`: message types to drop (the name checks don't care about the lobby list). */
+function client(origin: string | null = ORIGIN, ignore = ['lobbies']) {
   const ws = new WebSocket(URL_, origin ? ({ headers: { Origin: origin } } as any) : undefined)
   const inbox: Msg[] = []
   const waiters: ((m: Msg) => void)[] = []
@@ -16,6 +17,7 @@ function client(origin: string | null = ORIGIN) {
   const closeWaiters: ((c: { code: number; reason: string }) => void)[] = []
   ws.onmessage = (e) => {
     const m = JSON.parse(String(e.data))
+    if (ignore.includes(m.t)) return
     const w = waiters.shift()
     if (w) w(m)
     else inbox.push(m)
@@ -124,4 +126,60 @@ const wc = await c.next()
 check('9 KB message (16-bit length) works', wc.t === 'welcome', wc)
 
 for (const x of [a2, b, c]) x.ws.close()
+
+// --- Lobbies ---
+const tag = Math.floor(Math.random() * 900 + 100)
+async function named(name: string) {
+  const x = client(ORIGIN, [])
+  await x.opened
+  x.send({ t: 'hello' })
+  await x.next()
+  x.send({ t: 'claim', name })
+  await x.next() // welcome
+  await x.next() // lobbies
+  return x
+}
+/** The next message of type `t` (that `ok` accepts), skipping others. */
+async function until(x: ReturnType<typeof client>, t: string, ok: (m: Msg) => boolean = () => true) {
+  for (;;) {
+    const m = await x.next()
+    if (m.t === t && ok(m)) return m
+  }
+}
+const host = await named(`Host ${tag}`)
+const guest = await named(`Guest ${tag}`)
+const third = await named(`Third ${tag}`)
+host.send({ t: 'create' })
+const made = (await until(host, 'lobby')).lobby
+check('host creates a lobby and sits in spawn 1', made.slots[0].kind === 'human' && made.host === made.slots[0].player && made.slots[1].kind === 'open', made)
+const listed = await until(guest, 'lobbies')
+check('others see it in the list', listed.list.some((l: Msg) => l.id === made.id && l.players === 1 && l.seats === 2), listed)
+guest.send({ t: 'join', id: made.id })
+const joinedL = (await until(guest, 'lobby')).lobby
+check('guest joins into the open spawn', joinedL.slots[1].kind === 'human' && joinedL.slots[1].name === `Guest ${tag}`, joinedL)
+const note = await until(host, 'chat')
+check('host hears that the guest joined', note.from === '' && /joined/.test(note.text), note)
+third.send({ t: 'join', id: made.id })
+const full = await until(third, 'error')
+check('a full lobby turns the third away', /full/.test(full.why), full)
+guest.send({ t: 'slot', i: 0, patch: { faction: 'droid' } })
+const notHost = await until(guest, 'error')
+check("a guest can't change the host's spawn", /host/.test(notHost.why), notHost)
+host.send({ t: 'setup', map: 'vanth' })
+const bigger = (await until(guest, 'lobby', (m) => m.lobby.map === 'vanth')).lobby
+check('host switches to a 4-spawn map, players keep their seats', bigger.map === 'vanth' && bigger.slots.length === 4 && bigger.slots[1].name === `Guest ${tag}`, bigger)
+guest.send({ t: 'ready', on: true })
+const readied = (await until(host, 'lobby', (m) => m.lobby.slots[1].ready)).lobby
+check('guest gets ready', readied.slots[1].ready === true, readied)
+host.send({ t: 'slot', i: 2, patch: { kind: 'ai' } })
+const unreadied = (await until(guest, 'lobby', (m) => m.lobby.slots[2].kind === 'ai')).lobby
+check('a change makes everyone ready up again', unreadied.slots[2].kind === 'ai' && unreadied.slots[1].ready === false, unreadied)
+host.send({ t: 'slot', i: 1, patch: { kind: 'open' } })
+const kicked = await until(guest, 'kicked')
+check('host can take a player out', /host/.test(kicked.why), kicked)
+host.send({ t: 'leave' })
+const gone = await until(third, 'lobbies')
+const after = gone.list.some((l: Msg) => l.id === made.id) ? (await until(third, 'lobbies')).list : gone.list
+check('an empty lobby closes', !after.some((l: Msg) => l.id === made.id), after)
+for (const x of [host, guest, third]) x.ws.close()
 setTimeout(() => process.exit(), 200)
