@@ -15,6 +15,7 @@ import { useAccount } from '../os/account'
 import { MEDIA_APP, thumbOf, useBrowserUrl } from '../data/media'
 import { droppedFiles, hasOsFiles, pickAndUpload, uploadFiles } from '../data/uploads'
 import { addBookmark, useSidebar } from '../data/filesSidebar'
+import { FILES_SORTS, FILES_ZOOM_MAX, FILES_ZOOM_MIN, filesPrefs, type FilesPrefs, type FilesSort, type FilesView } from '../data/appPrefs'
 import { FilesSidebar, type SideSection } from './FilesSidebar'
 import { libraryNames, mounts, posixOf, useMounts, whereIs } from '../data/mounts'
 import { lookup as fsLookup, walk as fsWalk } from '../terminal/fs'
@@ -36,22 +37,13 @@ const shq = (s: string) => (/^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replace(/'/g
 // (seafile://<library>/<path>, see src/data/seafile.ts). Without Seafile as home, ~ is kept in
 // this browser (src/data/browserfs.ts): writable, and said to be only here wherever it shows.
 
-type View = 'list' | 'grid' | 'compact' | 'gallery'
-type Sort = 'az' | 'za' | 'newest' | 'oldest' | 'largest' | 'smallest' | 'type'
-type Prefs = { view: View; zoom: number; sort: Sort; hidden: boolean; sidebar: boolean }
-
-const PREFS_KEY = 'mvlos.files.v1'
-const DEFAULT_PREFS: Prefs = { view: 'grid', zoom: 100, sort: 'az', hidden: false, sidebar: true }
+// View, zoom, sorting, hidden files and the sidebar are the same in every folder and every Files
+// window, and in Settings → Apps → Files (src/data/appPrefs.ts).
+type View = FilesView
+type Sort = FilesSort
+type Prefs = FilesPrefs
 const RECENT = 'recent://'
 const TRASH = 'trash://'
-
-function loadPrefs(): Prefs {
-  try {
-    return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') }
-  } catch {
-    return DEFAULT_PREFS
-  }
-}
 
 // Files opened from any Files window during this visit, newest first.
 const recent: Item[] = []
@@ -226,7 +218,7 @@ export function Files({ win }: { win: WinState }) {
   // With Seafile linked, the Trash is Seafile's (unless switched off in Settings).
   const sfPrefs = useSeafilePrefs()
   const sfTrash = !!account.seafile && sfPrefs.trash
-  const [prefs, setPrefsState] = useState<Prefs>(loadPrefs)
+  const prefs = filesPrefs.use()
   const { bookmarks } = useSidebar()
   const [path, setPath] = useState(() => (win.props.path ? fromOutside(win.props.path) : home))
   // The way in: a library is both ~ and /mnt/seafile/My Library, and Files stays on the one you took.
@@ -262,16 +254,7 @@ export function Files({ win }: { win: WinState }) {
   const main = useRef<HTMLDivElement>(null)
   const tiles = useRef(new Map<string, HTMLElement>())
 
-  const setPrefs = (patch: Partial<Prefs>) =>
-    setPrefsState((p) => {
-      const next = { ...p, ...patch }
-      try {
-        localStorage.setItem(PREFS_KEY, JSON.stringify(next))
-      } catch {
-        /* not persisted */
-      }
-      return next
-    })
+  const setPrefs = filesPrefs.patch
 
   // Re-read the filesystem when the window comes back to the front (the terminal may have written to /tmp).
   useEffect(() => setTick((t) => t + 1), [wm.focusedPid])
@@ -915,8 +898,8 @@ export function Files({ win }: { win: WinState }) {
     else if (ctrl && e.key.toLowerCase() === 'a') setSelected(new Set(items.map((i) => i.path)))
     else if (ctrl && e.key.toLowerCase() === 'l') setEditingPath(true)
     else if (ctrl && e.key.toLowerCase() === 'f') setSearch('')
-    else if (ctrl && (e.key === '=' || e.key === '+')) setPrefs({ zoom: Math.min(200, prefs.zoom + 10) })
-    else if (ctrl && e.key === '-') setPrefs({ zoom: Math.max(50, prefs.zoom - 10) })
+    else if (ctrl && (e.key === '=' || e.key === '+')) setPrefs({ zoom: Math.min(FILES_ZOOM_MAX, prefs.zoom + 10) })
+    else if (ctrl && e.key === '-') setPrefs({ zoom: Math.max(FILES_ZOOM_MIN, prefs.zoom - 10) })
     else if (e.altKey && e.key === 'ArrowLeft') goBack()
     else if (e.altKey && e.key === 'ArrowRight') goForward()
     else if ((e.altKey && e.key === 'ArrowUp') || e.key === 'Backspace') goUp()
@@ -1485,15 +1468,7 @@ export function Files({ win }: { win: WinState }) {
   )
 }
 
-const SORTS: [Sort, string][] = [
-  ['az', 'A to Z'],
-  ['za', 'Z to A'],
-  ['newest', 'Last modified'],
-  ['oldest', 'First modified'],
-  ['largest', 'Largest first'],
-  ['smallest', 'Smallest first'],
-  ['type', 'Type'],
-]
+const SORTS = FILES_SORTS
 
 function ViewMenu({ prefs, setPrefs, close }: { prefs: Prefs; setPrefs: (p: Partial<Prefs>) => void; close: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -1526,11 +1501,11 @@ function ViewMenu({ prefs, setPrefs, close }: { prefs: Prefs; setPrefs: (p: Part
       <div className="fm-dd-row fm-dd-zoom">
         <span className="fm-dd-check">⌕</span>
         <span className="fm-dd-label">Zoom</span>
-        <button onClick={() => setPrefs({ zoom: Math.max(50, prefs.zoom - 10) })} aria-label="Zoom out">
+        <button onClick={() => setPrefs({ zoom: Math.max(FILES_ZOOM_MIN, prefs.zoom - 10) })} aria-label="Zoom out">
           −
         </button>
         <span className="fm-dd-key">{prefs.zoom}%</span>
-        <button onClick={() => setPrefs({ zoom: Math.min(200, prefs.zoom + 10) })} aria-label="Zoom in">
+        <button onClick={() => setPrefs({ zoom: Math.min(FILES_ZOOM_MAX, prefs.zoom + 10) })} aria-label="Zoom in">
           +
         </button>
       </div>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { download, fileLink, isSf, libraryName, parseSf } from '../data/seafile'
 import { folderOf, nameOf, thumbOf, useMedia, useSiblings } from '../data/media'
+import { previewPrefs } from '../data/appPrefs'
 import { useWM, type WinState } from '../os/wm'
 import { useBackButton } from '../os/backButton'
 import { formatSize, prettyPath } from '../terminal/vfs'
@@ -18,14 +19,6 @@ const STEP = 1.25
 type View = { mode: 'auto' | 'fit' | 'free'; scale: number; x: number; y: number }
 const AUTO: View = { mode: 'auto', scale: 1, x: 0, y: 0 }
 
-const PREFS = 'mvlos.preview'
-function loadPrefs(): { sidebar: boolean } {
-  try {
-    return { sidebar: false, ...JSON.parse(localStorage.getItem(PREFS) ?? '{}') }
-  } catch {
-    return { sidebar: false }
-  }
-}
 
 export const previewTitle = (w: WinState) => (w.props.path ? nameOf(w.props.path) : 'Preview')
 
@@ -47,7 +40,8 @@ export function Preview({ win }: { win: WinState }) {
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null)
   const [view, setView] = useState<View>(AUTO)
   const [rotation, setRotation] = useState(0)
-  const [sidebar, setSidebarState] = useState(() => loadPrefs().sidebar)
+  // The folder's pictures down the side: in every Preview window, and in Settings → Apps → Preview.
+  const { sidebar } = previewPrefs.use()
   const [inspector, setInspector] = useState(false)
   const [slideshow, setSlideshow] = useState(false)
   const [full, setFull] = useState(false)
@@ -56,14 +50,7 @@ export function Preview({ win }: { win: WinState }) {
   const root = useRef<HTMLDivElement>(null)
   const stage = useRef<HTMLDivElement>(null)
 
-  const setSidebar = (on: boolean) => {
-    setSidebarState(on)
-    try {
-      localStorage.setItem(PREFS, JSON.stringify({ sidebar: on }))
-    } catch {
-      /* not kept */
-    }
-  }
+  const setSidebar = (on: boolean) => previewPrefs.patch({ sidebar: on })
 
   // A new picture starts fitted, upright.
   useEffect(() => {

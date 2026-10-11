@@ -1,4 +1,5 @@
 import { dayKey, startOfDay, type CalendarEvent } from '../../data/calendar'
+import { synced } from '../../os/synced'
 
 // Dates for the Calendar app: which days a view shows, its title, and where events go on the
 // grid. Everything is in this browser's local time; weeks start on Monday.
@@ -14,6 +15,9 @@ export const VIEWS: { id: View; label: string; key: string }[] = [
 ]
 
 export const isView = (v: unknown): v is View => VIEWS.some((x) => x.id === v)
+
+/** The view the Calendar app opens on: the one used last, or the one picked in Settings → Apps → Calendar. Synced. */
+export const calendarView = synced<View>('calendar-view', 'week', { normalize: (v) => (isView(v) ? v : 'week') })
 
 export const MINUTE = 60_000
 /** Drags and new events snap to this many minutes. */
