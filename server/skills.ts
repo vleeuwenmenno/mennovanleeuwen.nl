@@ -118,7 +118,7 @@ concrete: steps, rules, an example. Put long references in separate files.
 // --- reading skill folders ------------------------------------------------------------------------
 
 const cache = new Map<string, { at: number; value: Promise<Loaded[]> }>()
-const TTL = 5 * 60_000
+const TTL = 60_000
 /** Forgets what was read from a folder (after an install or a removal). */
 export const forgetFolder = (repo: string, path: string) => cache.delete(`${repo}:${path}`)
 
@@ -149,10 +149,14 @@ function folderSkills(user: User, folder: Folder, source: SkillSource): Promise<
 }
 
 /** Where skills are for a thread: its work folder's, then the user's, then the built-in ones. */
-export type SkillPlaces = { user: Folder | null; workdir: Workdir | null; off: string[] }
+export type SkillPlaces = { user: Folder | null; workdir: Workdir | null; off: string[]; /** Read the folders again now (the skills command, after a change) */ fresh?: boolean }
 
 async function loadAll(user: User, places: SkillPlaces): Promise<Loaded[]> {
   const lists: Loaded[][] = []
+  if (places.fresh) {
+    if (places.user) forgetFolder(places.user.repo, places.user.path)
+    if (places.workdir) for (const sub of ['.agents/skills', '.claude/skills']) forgetFolder(places.workdir.repo, `${places.workdir.path === '/' ? '' : places.workdir.path}/${sub}`)
+  }
   if (places.workdir) {
     const base = places.workdir.path === '/' ? '' : places.workdir.path
     for (const sub of ['.agents/skills', '.claude/skills'])

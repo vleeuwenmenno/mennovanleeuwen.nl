@@ -1,7 +1,7 @@
 import { installSkills, listSkills, removeSkill, setSkillEnabled, skillInfo, type Skill, type Workdir } from '../data/agents'
 import { seafileAt, syncAgentPlaces } from '../data/agentPlaces'
 import { getAccount } from '../os/account'
-import { lookup, writeFile } from './fs'
+import { lookup, makeDir, writeFile } from './fs'
 import { CmdError, type Ctx } from './types'
 import { HOME, prettyPath, resolvePath } from './vfs'
 
@@ -133,7 +133,7 @@ async function skills(ctx: Ctx): Promise<string> {
   switch (sub) {
     case 'ls':
     case 'list': {
-      const list = await listSkills({ folder: folderHere(ctx.cwd) })
+      const list = await listSkills({ folder: folderHere(ctx.cwd), fresh: true })
       return table(list, ctx.size.cols)
     }
     case 'add':
@@ -161,7 +161,7 @@ async function skills(ctx: Ctx): Promise<string> {
     case 'show': {
       const name = args[0]
       if (!name) throw new CmdError('usage: skills info <name>')
-      const s = await skillInfo(name, { folder: folderHere(ctx.cwd) }).catch((e: Error) => {
+      const s = await skillInfo(name, { folder: folderHere(ctx.cwd), fresh: true }).catch((e: Error) => {
         throw new CmdError(`skills: ${e.message}`)
       })
       return [
@@ -177,7 +177,7 @@ async function skills(ctx: Ctx): Promise<string> {
     case 'disable': {
       const name = args[0]
       if (!name) throw new CmdError(`usage: skills ${sub} <name>`)
-      const list = await listSkills({ folder: folderHere(ctx.cwd) })
+      const list = await listSkills({ folder: folderHere(ctx.cwd), fresh: true })
       if (!list.some((s) => s.name === name)) throw new CmdError(`skills: no skill called ${name}`)
       setSkillEnabled(name, sub === 'enable')
       return `${c('bold', name)} is ${sub === 'enable' ? c('green', 'on') : c('yellow', 'off')}`
@@ -190,6 +190,7 @@ async function skills(ctx: Ctx): Promise<string> {
       if (!project) userFolder()
       const file = `${base}/${name}/SKILL.md`
       if (lookup(resolvePath(ctx.cwd, file))) throw new CmdError(`skills: ${prettyPath(file)} exists already`)
+      await makeDir(ctx.cwd, `${base}/${name}`, true)
       await writeFile(ctx.cwd, file, TEMPLATE(name), false, false, 'skills')
       return `Made ${c('bold', prettyPath(file))}. Fill it in: ${c('cyan', `nano ${prettyPath(file)}`)}`
     }

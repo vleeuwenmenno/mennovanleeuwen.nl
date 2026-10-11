@@ -164,9 +164,10 @@ export const setAgentSettings = (patch: Partial<AgentSettings>) => settingsStore
 /** A skill: instructions for a kind of task, in a folder with a SKILL.md (server/skills.ts). */
 export type Skill = { name: string; description: string; source: 'builtin' | 'user' | 'project'; folder: { repo: string; path: string } | null; label: string; userOnly: boolean; enabled: boolean }
 /** Where to look for skills besides the user's and the built-in ones: a thread's work folder, or a folder. */
-export type SkillsWhere = { thread?: string; folder?: Workdir | null }
+export type SkillsWhere = { thread?: string; folder?: Workdir | null; fresh?: boolean }
 const skillsQuery = (w: SkillsWhere = {}) => {
   const q = new URLSearchParams()
+  if (w.fresh) q.set('fresh', '1')
   if (w.thread) q.set('thread', w.thread)
   else if (w.folder) Object.entries(w.folder).forEach(([k, v]) => q.set(k, v))
   const s = q.toString()

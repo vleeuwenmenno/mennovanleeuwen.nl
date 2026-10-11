@@ -36,15 +36,20 @@ export type Ctx = {
   root?: boolean
   /** Redraws one block of output in place (htop, watch, cmatrix); null removes it again. */
   /** `alt`: the alternate screen, like nano's: only this block shows while it is up */
-  live: (text: string | null, opts?: { alt?: boolean }) => void
-  /** Terminal size in characters, for full-screen programs. */
+  /** `hideInput`: the program draws its own prompt in the block, so the shell's stays out of sight */
+  live: (text: string | null, opts?: { alt?: boolean; hideInput?: boolean }) => void
+  /** Terminal size in characters, for full-screen programs; kept up to date while the command runs. */
   size: { cols: number; rows: number }
+  /** Called when the terminal changes size while the command runs (agents redraws); null stops it. */
+  onResize?: (handler: (() => void) | null) => void
   /** Receives keys typed while the command runs (q in htop); return true to swallow the key. */
   /**
-   * `raw` handlers also get Ctrl and Alt combinations (as ^X and M-x), F-keys (F1…F12) and pastes
-   * (key 'Paste', with the text), before the shell or the desktop sees them.
+   * `raw` handlers also get Ctrl and Alt combinations (as ^X and M-x), F-keys (F1…F12), pastes
+   * (key 'Paste', with the text) and text typed without key presses (key 'Text': phone keyboards,
+   * IME), before the shell or the desktop sees them.
    */
-  onKey: (handler: ((key: string, text?: string) => boolean) | null, opts?: { raw?: boolean }) => void
+  /** `shift` (with raw): Shift with a key that is not a character comes as S-Tab, S-Enter, S-ArrowUp… */
+  onKey: (handler: ((key: string, text?: string) => boolean) | null, opts?: { raw?: boolean; shift?: boolean }) => void
   /** Aborted by Ctrl+C. */
   signal: AbortSignal
 }

@@ -1833,7 +1833,7 @@ export function followThread(res: ServerResponse, user: User, id: string, termin
 function placesFrom(user: User, q: URLSearchParams): SkillPlaces {
   const thread = q.get('thread')
   const workdir = thread ? toThread(ownThread(user, thread)).workdir : q.get('repo') ? workdirOf({ repo: q.get('repo'), path: q.get('path'), label: q.get('label') ?? undefined }) : null
-  return skillPlaces(user, workdir)
+  return { ...skillPlaces(user, workdir), fresh: q.has('fresh') }
 }
 
 export const skillsList = (user: User, q: URLSearchParams) => listSkills(user, placesFrom(user, q))
