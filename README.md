@@ -474,7 +474,7 @@ for what fills the window) and attachments: text files, PDFs (their text, read i
 pdf.js) and pictures, from Seafile, this computer, a drop or a paste. Its tools: web search
 (Ollama's own by default; Settings → Agents → Web search switches it to SearXNG, Brave Search, Kagi,
 Tavily or any JSON search API described by a URL template, headers and result paths, with keys
-stored encrypted, see [`server/websearch.ts`](server/websearch.ts)) and Ollama's web fetch, your notes, your code hosts, Seafile (list, search by name, read), Seafile
+stored encrypted, see [`server/websearch.ts`](server/websearch.ts)) and Ollama's web fetch, your notes, your calendars (below), your code hosts, Seafile (list, search by name, read), Seafile
 changes (each one waits for *Allow* in the window, since a page the agent read could have asked
 for it), `update_todos` (a plan for long jobs, shown as "3/12" over the composer; while items are
 open a turn may run up to 150 rounds, and it keeps going on the server when the window closes, until
@@ -495,10 +495,24 @@ home, otherwise a read-only built-in one ([`src/data/agentsPrompt.ts`](src/data/
 Spotlight takes questions too: *Ask Agents* is under the web search, and a `?` in front makes it
 the top hit. `OLLAMA_URL` points it at a stand-in for ollama.com when testing.
 
+The Calendar tools ([`server/agentCalendar.ts`](server/agentCalendar.ts)) work on the calendars
+connected in Settings → Apps → Calendar, Google and CalDAV, shared ones included, through the same
+code as the Calendar app: `calendar_list_calendars` (ids, names, accounts, which can be changed,
+whose they are, the default for new events), `calendar_list_events` (a range, by default the next
+14 days, with an optional text search over title, description and place), and
+`calendar_create_event`, `calendar_update_event` (only the fields given) and `calendar_delete_event`.
+Changes always wait for *Allow*, in every permission mode (plan mode doesn't offer them), and the
+card says what happens: the calendar, the event, the time and what changes. A new event can repeat
+(an RRULE); for one occurrence of a repeating event a change or a delete is that occurrence's alone
+unless the agent asks for the whole series. The window sends its time zone with each message, so the
+agent knows today's date and the time where you are, and times go both ways in that zone. Google
+connections from before editing existed are read-only: the agent says to connect Google again. The
+group is only offered with a calendar connected.
+
 Web fetch reads an address straight away only when it came from outside the model: your own
 messages, search results, or the links of a page it already read, exactly as given. Any other
 address waits for *Allow*, shown in full, while the thread holds anything private (memories, notes,
-code, Seafile, attachments): a page could otherwise talk the agent into "reading"
+calendars, code, Seafile, attachments): a page could otherwise talk the agent into "reading"
 `https://someone.example/?d=<your notes>`.
 
 **Push notifications** ([`server/webpush.ts`](server/webpush.ts), [`src/os/push.ts`](src/os/push.ts)):

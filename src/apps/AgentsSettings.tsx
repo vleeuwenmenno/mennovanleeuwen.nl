@@ -7,7 +7,7 @@ import { useMounts, whereIs } from '../data/mounts'
 import { syncAgentPlaces } from '../data/agentPlaces'
 import { getWebSearch, PROVIDERS, resetWebSearch, saveWebSearch, testWebSearch, type Provider, type ResultMap, type SearchResult, type WebSearchInput, type WebSearchView } from '../data/websearch'
 import { getLibraries, useLibraries } from '../data/seafile'
-import { useAccount } from '../os/account'
+import { hasCalendar, useAccount } from '../os/account'
 import { Select } from '../os/Select'
 import { useWM } from '../os/wm'
 import { writeFile } from '../terminal/fs'
@@ -227,20 +227,23 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
             options={(['quick', 'deep'] as Mode[]).map((m) => ({ value: m, label: MODE_LABEL[m] }))}
           />
         </li>
-        {TOOL_GROUPS.map((g) => (
-          <li key={g.id} className={`set-row ${g.seafile && !account.seafile ? 'is-off' : ''}`}>
-            <span className="set-row-text">
-              <strong>{g.name}</strong>
-              <span className="muted">{g.detail}</span>
-            </span>
-            <Toggle
-              on={settings.tools.includes(g.id)}
-              disabled={g.seafile && !account.seafile}
-              onChange={(on) => setAgentSettings({ tools: on ? [...settings.tools, g.id] : settings.tools.filter((t) => t !== g.id) })}
-              label={g.name}
-            />
-          </li>
-        ))}
+        {TOOL_GROUPS.map((g) => {
+          const off = (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account))
+          return (
+            <li key={g.id} className={`set-row ${off ? 'is-off' : ''}`}>
+              <span className="set-row-text">
+                <strong>{g.name}</strong>
+                <span className="muted">{g.calendar && !hasCalendar(account) ? `${g.detail}. Connect a calendar first, in Settings → Apps → Calendar` : g.detail}</span>
+              </span>
+              <Toggle
+                on={settings.tools.includes(g.id)}
+                disabled={off}
+                onChange={(on) => setAgentSettings({ tools: on ? [...settings.tools, g.id] : settings.tools.filter((t) => t !== g.id) })}
+                label={g.name}
+              />
+            </li>
+          )
+        })}
       </ul>
       <p className="muted set-help">Each thread can switch its own mode and tools in the composer; the last choice there becomes the default here.</p>
 

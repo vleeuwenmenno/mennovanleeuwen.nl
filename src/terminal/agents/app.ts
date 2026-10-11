@@ -26,6 +26,7 @@ import {
   updateThread,
   type AgentMessage,
   type Attachment,
+  type CallSummary,
   type Form,
   type ModelInfo,
   type Mode,
@@ -38,7 +39,7 @@ import {
   type Workdir,
 } from '../../data/agents'
 import { seafileAt } from '../../data/agentPlaces'
-import { getAccount } from '../../os/account'
+import { getAccount, hasCalendar } from '../../os/account'
 import { lookup, prepareFolder, readFileText, writeFile } from '../fs'
 import type { Ctx } from '../types'
 import { HOME, prettyPath, resolvePath } from '../vfs'
@@ -70,7 +71,8 @@ export type SessionOptions = {
 }
 
 type LiveCall = { call: ToolCall; messageId: number; index: number; state: 'running' | 'approval' | 'question' | 'client' }
-type Approval = { callId: string; messageId: number; index: number; call: ToolCall | null }
+/** `summary`: what the change does, from the server, where the call alone doesn't say (a calendar change). */
+type Approval = { callId: string; messageId: number; index: number; call: ToolCall | null; summary?: CallSummary }
 type Asked = { callId: string; messageId: number; index: number; form: Form }
 type PickItem = { value: string; label: string; hint?: string; checked?: boolean }
 type Option = { label: string; hint?: string; run: () => void }
@@ -434,6 +436,13 @@ export class Session {
     const no: Option = { label: 'No, and tell the agent what to do differently', hint: 'esc', run: () => this.modal?.kind === 'approval' && ((this.modal.feedback = ''), this.draw()) }
     const inner = w - 4
     const file = sarg('path').split('/').pop() || sarg('path')
+    // A calendar change: what the server worked out, as label and value rows.
+    if (a.summary) {
+      const labelW = Math.min(12, Math.max(...a.summary.rows.map(([l]) => l.length)) + 2)
+      const rows = a.summary.rows.flatMap(([label, value]) => wrap([seg(value)], inner, [seg(label.padEnd(labelW), 'muted')], [seg(' '.repeat(labelW))]))
+      const verb = call.name === 'calendar_delete_event' ? 'Delete this event?' : call.name === 'calendar_create_event' ? 'Add this event?' : 'Make this change?'
+      return { title: a.summary.title, preview: rows, question: verb, options: [{ label: 'Yes', run: allow() }, no] }
+    }
     switch (call.name) {
       case 'edit_file':
       case 'multi_edit':
@@ -1052,7 +1061,7 @@ export class Session {
         }
         for (const p of e.pending) {
           const call = this.messages.find((m) => m.id === p.messageId)?.toolCalls?.[p.index] ?? p.call ?? null
-          if (p.kind === 'approval') this.approvals.push({ callId: p.callId, messageId: p.messageId, index: p.index, call })
+          if (p.kind === 'approval') this.approvals.push({ callId: p.callId, messageId: p.messageId, index: p.index, call, summary: p.summary })
           else if (p.kind === 'question' && p.form) this.asked.push({ callId: p.callId, messageId: p.messageId, index: p.index, form: p.form })
           else if (p.kind === 'client' && call) void this.runClient(p.callId, p.messageId, p.index, call)
           this.setCallState(p.messageId, p.index, p.kind === 'question' ? 'question' : p.kind)
@@ -1083,7 +1092,7 @@ export class Session {
       }
       case 'approval': {
         const call = e.call ?? this.messages.find((m) => m.id === e.messageId)?.toolCalls?.[e.index] ?? null
-        this.approvals.push({ callId: e.callId, messageId: e.messageId, index: e.index, call })
+        this.approvals.push({ callId: e.callId, messageId: e.messageId, index: e.index, call, summary: e.summary })
         this.setCallState(e.messageId, e.index, 'approval')
         this.next()
         break
@@ -1272,7 +1281,8 @@ export class Session {
       case '/tools': {
         const current = this.thread?.tools ?? this.tools
         const seafile = !!getAccount().seafile
-        const picked = await this.choose('Tools', TOOL_GROUPS.filter((g) => !g.seafile || seafile).map((g) => ({ value: g.id, label: g.name, hint: g.detail, checked: current.includes(g.id) })), true)
+        const calendar = hasCalendar(getAccount())
+        const picked = await this.choose('Tools', TOOL_GROUPS.filter((g) => (!g.seafile || seafile) && (!g.calendar || calendar)).map((g) => ({ value: g.id, label: g.name, hint: g.detail, checked: current.includes(g.id) })), true)
         if (!picked) return true
         this.tools = picked as ToolGroup[]
         await this.patch({ tools: this.tools })

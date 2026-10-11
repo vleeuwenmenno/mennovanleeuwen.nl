@@ -23,10 +23,12 @@ export type AttachmentInfo = Omit<Attachment, 'text' | 'data'>
 export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; createdAt: number }
 
 /** What a thread may use, switched in the composer. */
-export type ToolGroup = 'web' | 'notes' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills'
-export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile?: boolean }[] = [
+export type ToolGroup = 'web' | 'notes' | 'calendar' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills'
+/** `seafile` and `calendar`: only with Seafile linked, or a calendar connected. */
+export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile?: boolean; calendar?: boolean }[] = [
   { id: 'web', name: 'Web', detail: 'Search the web and read pages' },
   { id: 'notes', name: 'Notes', detail: 'Search and make notes; changing or deleting one asks you first' },
+  { id: 'calendar', name: 'Calendar', detail: 'Look through your calendars; adding, changing or deleting an event asks you first', calendar: true },
   { id: 'code', name: 'Code hosts', detail: 'Repositories, issues and pull requests' },
   { id: 'seafile', name: 'Seafile', detail: 'Find and read files', seafile: true },
   { id: 'seafile_write', name: 'Seafile changes', detail: 'Folders, writing, renaming, moving, deleting; asks you first', seafile: true },
@@ -69,11 +71,13 @@ export type Question = {
 }
 export type Form = { title: string; intro?: string; questions: Question[]; submit?: string }
 
+/** What a change does, worked out by the server where the call alone doesn't say (a calendar change): a headline and label/value rows. */
+export type CallSummary = { title: string; rows: [string, string][] }
 /** Something the agent waits on: a change to allow, or a form to answer; which reply asked and which call. */
-export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client'; form?: Form; call?: ToolCall }
+export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client'; form?: Form; call?: ToolCall; summary?: CallSummary }
 
 export type TurnEvent =
-  | { type: 'approval'; callId: string; messageId: number; index: number; call?: ToolCall }
+  | { type: 'approval'; callId: string; messageId: number; index: number; call?: ToolCall; summary?: CallSummary }
   /** A terminal tool call for the terminal to run; clientDone when it is answered or given up */
   | { type: 'client'; callId: string; messageId: number; index: number; call: ToolCall }
   | { type: 'clientDone'; callId: string }
@@ -224,8 +228,9 @@ export async function sendMessage(id: string, text: string, attachments: Attachm
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    // From the terminal's agents command, which can run the terminal tool.
-    body: JSON.stringify({ text, attachments, ...(opts.terminal ? { client: { terminal: true } } : {}) }),
+    // From the terminal's agents command, which can run the terminal tool. The time zone gives the
+    // agent today's date and the calendar tools' times where the user is.
+    body: JSON.stringify({ text, attachments, client: { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(opts.terminal ? { terminal: true } : {}) } }),
     signal,
   })
   await readEvents(res, onEvent)
@@ -266,10 +271,38 @@ const size = (n: number) => (n < 1024 ? `${n} bytes` : n < 1024 * 1024 ? `${(n /
 /** A note's first line, without Markdown's marks, for a tool card. */
 const noteName = (text: string) => (text.split('\n').find((l) => l.trim()) ?? '').replace(/^\s*(#{1,6}\s+|[-*+]\s+)/, '').trim().slice(0, 60)
 
-/** What a tool call did, in a few words, for its card. */
-export function toolLabel(call: ToolCall): string {
+/**
+ * A time the agent gave a calendar tool ("2026-10-14T10:00", in your zone unless it has an offset)
+ * as "Tue 14 Oct 10:00"; a date alone without the time.
+ */
+export function calendarTime(raw: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?\s*(Z|[+-]\d{2}:?\d{2})?)?$/i.exec(raw.trim())
+  if (!m) return raw
+  const [, y, mo, d, h, mi, off] = m
+  const at = h === undefined ? new Date(+y, +mo - 1, +d) : off ? new Date(raw.trim()) : new Date(+y, +mo - 1, +d, +h, +mi)
+  if (isNaN(at.getTime())) return raw
+  const day = at.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', ...(at.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}) }).replace(',', '')
+  return h === undefined ? day : `${day} ${at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}`
+}
+
+/** A calendar tool's result: the event it made, changed or deleted, as the server describes it. */
+function calendarOutcome(result: string | undefined): { done: 'created' | 'updated' | 'deleted'; title: string; when: string } | null {
+  if (!result) return null
+  try {
+    const r = JSON.parse(result) as Record<string, { title?: unknown; when?: unknown } | undefined>
+    for (const done of ['created', 'updated', 'deleted'] as const) if (r[done] && typeof r[done]!.title === 'string') return { done, title: r[done]!.title as string, when: String(r[done]!.when ?? '') }
+  } catch {
+    /* not JSON: no outcome */
+  }
+  return null
+}
+
+/** What a tool call did, in a few words, for its card; `result`, when it is in, can say more (a calendar event's title). */
+export function toolLabel(call: ToolCall, result?: string): string {
   const a = call.arguments ?? {}
   const s = (k: string) => (typeof a[k] === 'string' ? (a[k] as string) : '')
+  const made = call.name.startsWith('calendar_') ? calendarOutcome(result) : null
+  if (made) return `${made.done === 'created' ? 'Created' : made.done === 'updated' ? 'Changed' : 'Deleted'} event: ${made.title}${made.when ? `, ${made.when}` : ''}`
   switch (call.name) {
     case 'web_search':
       return `Searched the web for “${s('query')}”`
@@ -303,6 +336,18 @@ export function toolLabel(call: ToolCall): string {
       return `${a.append === true ? 'Add to' : 'Change'} the note “${noteName(getNote(s('id'))?.text ?? '') || 'a note'}”`
     case 'delete_note':
       return `Move the note “${noteName(getNote(s('id'))?.text ?? '') || 'a note'}” to the trash`
+    case 'calendar_list_calendars':
+      return 'Looked at your calendars'
+    case 'calendar_list_events': {
+      const range = s('from') || s('to') ? ` ${s('from') ? calendarTime(s('from')) : 'now'} – ${s('to') ? calendarTime(s('to')) : 'later'}` : ''
+      return s('query') ? `Searched your calendar for “${s('query')}”${range}` : `Looked at your calendar${range || ', the next 14 days'}`
+    }
+    case 'calendar_create_event':
+      return `Add event “${s('title')}”${s('start') ? `, ${calendarTime(s('start'))}` : ''}`
+    case 'calendar_update_event':
+      return `Change an event${s('title') ? ` to “${s('title')}”` : ''}${s('start') ? `, ${calendarTime(s('start'))}` : ''}`
+    case 'calendar_delete_event':
+      return a.all_occurrences === true ? 'Delete a repeating event' : 'Delete an event'
     case 'search_code':
       return `Searched code for “${s('query')}”`
     case 'seafile_list':

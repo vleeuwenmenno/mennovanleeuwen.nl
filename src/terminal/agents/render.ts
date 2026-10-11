@@ -1,4 +1,4 @@
-import { toolLabel, type Todo, type ToolCall } from '../../data/agents'
+import { calendarTime, toolLabel, type Todo, type ToolCall } from '../../data/agents'
 import { diffCounts, diffLines } from './diff'
 import { markdown } from './markdown'
 import { clipLine, seg, wrap, type Line } from './text'
@@ -65,6 +65,16 @@ export function toolTitle(call: ToolCall): [string, string] {
       return ['Skill', `${s(call, 'name')}/${s(call, 'path')}`]
     case 'exit_plan_mode':
       return ['Plan', '']
+    case 'calendar_list_calendars':
+      return ['Calendars', '']
+    case 'calendar_list_events':
+      return ['Calendar', [s(call, 'query') ? `"${s(call, 'query')}"` : '', s(call, 'from') || s(call, 'to') ? `${s(call, 'from') ? calendarTime(s(call, 'from')) : 'now'} → ${s(call, 'to') ? calendarTime(s(call, 'to')) : 'later'}` : ''].filter(Boolean).join(', ')]
+    case 'calendar_create_event':
+      return ['Add Event', `${s(call, 'title')}${s(call, 'start') ? `, ${calendarTime(s(call, 'start'))}` : ''}`]
+    case 'calendar_update_event':
+      return ['Change Event', s(call, 'title')]
+    case 'calendar_delete_event':
+      return ['Delete Event', '']
     default:
       return [toolLabel(call), '']
   }
@@ -197,6 +207,29 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
     }
     case 'exit_plan_mode':
       return obj?.approved ? [header(call, 'green', w), under(`You approved the plan${obj.permission === 'acceptEdits' ? ' (edits allowed)' : ''}`, 'green')] : [header(call, 'yellow', w), under(`You asked for changes: ${String(obj?.feedback ?? '')}`, 'yellow')]
+    case 'calendar_list_calendars': {
+      const list = Array.isArray(obj?.calendars) ? (obj.calendars as { name?: string; account?: string; writable?: boolean; default?: boolean }[]) : []
+      return ok([
+        under(`${list.length} calendar${list.length === 1 ? '' : 's'}`),
+        ...(verbose ? list.map((c) => clipLine([seg('     '), seg(c.name ?? '', 'bold'), seg(`  ${c.account ?? ''}${c.writable ? '' : ', read only'}${c.default ? ', default' : ''}`, 'muted')], w)) : []),
+      ])
+    }
+    case 'calendar_list_events': {
+      const list = Array.isArray(obj?.events) ? (obj.events as { title?: string; when?: string; calendar?: string }[]) : []
+      const total = list.length + (typeof obj?.more === 'number' ? obj.more : 0)
+      return ok([
+        under(`${total} event${total === 1 ? '' : 's'}`),
+        ...list.slice(0, max).map((e) => clipLine([seg('     '), seg(e.when ?? '', 'muted'), seg(`  ${e.title ?? ''}`), seg(`  ${e.calendar ?? ''}`, 'muted')], w)),
+        ...more(list.length - max, verbose),
+      ])
+    }
+    case 'calendar_create_event':
+    case 'calendar_update_event':
+    case 'calendar_delete_event': {
+      const done = (obj?.created ?? obj?.updated ?? obj?.deleted) as { title?: string; when?: string; calendar?: string } | undefined
+      const verb = obj?.created ? 'Added' : obj?.updated ? 'Changed' : 'Deleted'
+      return ok([under(done ? `${verb} ${done.title ?? ''}, ${done.when ?? ''} (${done.calendar ?? ''})${typeof obj?.applied_to === 'string' ? `, ${obj.applied_to}` : ''}` : 'Done')])
+    }
     case 'use_skill':
       return ok([under(`Read the skill${/Files: (.*)/.exec(result)?.[1] ? ` (${/Files: (.*)/.exec(result)![1]})` : ''}`)])
     default: {

@@ -9,6 +9,7 @@ import { checkRoom } from './quota.ts'
 import { fileLink, libraries, listDir, mkdir, removeItems, rename, seafile, seafileInfo, transfer, type Library } from './seafile.ts'
 import { readState, writeState } from './state.ts'
 import { webSearch } from './websearch.ts'
+import { CALENDAR_TOOLS, CALENDAR_WRITES, calendarConnected, calendarLines, calendarTools, NOT_CONNECTED, prepareCalendarCall, zoneOf, type CallSummary, type Prepared } from './agentCalendar.ts'
 import { notify } from './notifier.ts'
 import { AGENTS_MD } from '../src/data/agentsPrompt.ts'
 import { findSkill, folderOf, installSkills, listSkills, readSkillFile, removeSkill, skillFiles, type Folder, type Skill, type SkillPlaces } from './skills.ts'
@@ -19,8 +20,10 @@ import { commandNames, exitPlanTool, FILE_DELETE, readBody, STEERING, FILE_TOOLS
 // small set of tools and streaming what happens to the window as JSON lines.
 //
 // Most tools only read: the web through Ollama's own search and fetch, the user's notes, code
-// hosts and Seafile. `remember` and `update_memory` keep the agent's memory, either about the user
-// or about the thread's project, sorted into categories; the Memory view shows and edits it.
+// hosts, Seafile and calendars (server/agentCalendar.ts, which also adds, changes and deletes
+// events, each asked first). `remember` and `update_memory` keep the agent's memory, either
+// about the user or about the thread's project, sorted into categories; the Memory view shows and
+// edits it.
 // `update_todos` keeps a plan for long jobs, which lets a turn run for many more rounds. The Seafile tools that change something (a folder, a file written, renamed, moved or
 // deleted) wait for the user to allow each call in the window, because a page or file the
 // agent read could have talked it into one. Nothing runs code.
@@ -144,7 +147,7 @@ export async function automaticModels(): Promise<{ quick: string; deep: string; 
 // --- tool groups -----------------------------------------------------------------------------
 
 /** What a thread may use, switched in the window: each group is one or more tools. */
-export const TOOL_GROUPS = ['web', 'notes', 'code', 'seafile', 'seafile_write', 'memory', 'projects', 'files', 'terminal', 'skills'] as const
+export const TOOL_GROUPS = ['web', 'notes', 'calendar', 'code', 'seafile', 'seafile_write', 'memory', 'projects', 'files', 'terminal', 'skills'] as const
 export type ToolGroup = (typeof TOOL_GROUPS)[number]
 const GROUP_OF: Record<string, ToolGroup> = {
   web_search: 'web',
@@ -153,6 +156,7 @@ const GROUP_OF: Record<string, ToolGroup> = {
   create_note: 'notes',
   update_note: 'notes',
   delete_note: 'notes',
+  ...Object.fromEntries([...CALENDAR_TOOLS].map((t) => [t, 'calendar'])),
   search_code: 'code',
   seafile_list: 'seafile',
   seafile_search: 'seafile',
@@ -226,8 +230,8 @@ const TURNS_PER_USER = 2
 const TURNS_TOTAL = 20
 const titling = new Set<string>()
 
-/** A change waiting for the user: which reply asked for it (message and call index) and how to answer. */
-type Pending = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client'; form?: Form; call?: ToolCall; resolve: (answer: unknown) => void }
+/** A change waiting for the user: which reply asked for it (message and call index) and how to answer; `summary` says what it does where the call alone doesn't (a calendar change). */
+type Pending = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client'; form?: Form; call?: ToolCall; summary?: CallSummary; resolve: (answer: unknown) => void }
 export type PendingApproval = Omit<Pending, 'resolve'>
 const pending = new Map<string, Pending[]>() // by thread
 /** Windows following a turn they did not start (opened again, another tab), by thread. */
@@ -887,6 +891,7 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
     tool('delete_note', "Move one of the user's notes to the Notebook's trash, by its id (the user is asked first).", { id: str('The note id') }, ['id']),
     tool('search_code', "Search the user's code hosts (GitHub and linked Gitea/Forgejo): repositories by name, and issues and pull requests. `repo#text` searches one repository's issues, `repo@text` its branches.", { query: str('The search') }, ['query']),
   ]
+  if (calendarConnected(user)) tools.push(...calendarTools())
   if (seafileInfo(user)) {
     const lib = str('Library name or id')
     tools.push(
@@ -1014,7 +1019,7 @@ function givenUrls(thread: string): Set<string> {
   return given
 }
 
-const PRIVATE_TOOLS = new Set(['search_notes', 'search_code', 'seafile_list', 'seafile_search', 'seafile_read', 'create_note', 'update_note', 'read_file', 'list_dir', 'glob', 'grep', 'terminal'])
+const PRIVATE_TOOLS = new Set(['search_notes', 'search_code', 'seafile_list', 'seafile_search', 'seafile_read', 'create_note', 'update_note', 'read_file', 'list_dir', 'glob', 'grep', 'terminal', ...CALENDAR_TOOLS])
 /** Whether the model has anything private in front of it: memories, private tool results, attachments. */
 function holdsPrivate(user: User, thread: string): boolean {
   if (listMemories(user).length) return true
@@ -1028,8 +1033,12 @@ function fetchNeedsOwner(user: User, thread: string, url: unknown): boolean {
   return holdsPrivate(user, thread) && !givenUrls(thread).has(u)
 }
 
-/** Tools that change the user's files: each call waits for the user to allow it. */
-const NEEDS_APPROVAL = new Set(['seafile_mkdir', 'seafile_write', 'seafile_rename', 'seafile_move', 'seafile_delete', 'update_note', 'delete_note'])
+/**
+ * Tools that change the user's files or calendars: each call waits for the user to allow it.
+ * Accepting edits doesn't cover calendar changes: it is about files in the work folder, while an
+ * event lands in a calendar others may share, and can mail its guests.
+ */
+const NEEDS_APPROVAL = new Set(['seafile_mkdir', 'seafile_write', 'seafile_rename', 'seafile_move', 'seafile_delete', 'update_note', 'delete_note', ...CALENDAR_WRITES])
 const changes = (name: string) => NEEDS_APPROVAL.has(name) || FILE_WRITES.has(name) || name === FILE_DELETE
 const FILE_TOOL_SET = new Set<string>(FILE_TOOLS)
 
@@ -1160,6 +1169,9 @@ const readNotes = (user: User): NoteRow[] => {
 }
 /** Changes the notes on the server; the browser merges them in by id on its next sync. */
 const writeNotes = (user: User, change: (all: NoteRow[]) => NoteRow[]) => void writeState(user, 'notes', { value: change(readNotes(user)) })
+
+/** A calendar failure as the model is told it: a missing calendar says how to connect one. */
+const calendarError = (e: unknown) => (e instanceof HttpError && e.status === 409 && /not connected/i.test(e.message) ? NOT_CONNECTED : (e as Error).message)
 
 /** Runs one tool call. Answers what the model reads back; failures are told to it, not thrown. */
 async function runTool(user: User, key: string, thread: string, mode: Mode, call: ToolCall, signal: AbortSignal): Promise<string> {
@@ -1342,8 +1354,19 @@ const modeLine = (mode: Mode) =>
     ? 'Mode: Quick. Answer quickly and directly. Use a tool only when the answer depends on current or specific facts you do not know; one or two searches is usually enough. Keep the answer short.'
     : 'Mode: Deep research. Research this thoroughly before you answer. Break the question into parts, search from several angles, read the most relevant primary sources with web_fetch rather than relying on snippets, compare what they say and note where they disagree. Then write a well-structured answer, with headings and lists where they help, that ends with the key sources.'
 
+/** "Today is Sunday, 11 October 2026 in the user's time zone, Europe/Amsterdam (UTC+02:00).": the date where the user is. */
+function dateLine(zone: string): string {
+  const now = new Date()
+  const day = new Intl.DateTimeFormat('en-GB', { timeZone: zone, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(now)
+  const offset = new Intl.DateTimeFormat('en-GB', { timeZone: zone, timeZoneName: 'longOffset' }).formatToParts(now).find((p) => p.type === 'timeZoneName')?.value.replace('GMT', 'UTC') || 'UTC'
+  return `Today is ${day} in the user's time zone, ${zone} (${offset === 'UTC' ? 'UTC+00:00' : offset}).`
+}
+
+/** The zone the window said the user is in, else the server's own. */
+const zoneFor = (v: unknown) => zoneOf(v) ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+
 /** AGENTS.md, then today's date, the mode, how to work, the project and the memories. */
-async function systemPrompt(user: User, mode: Mode, projectId: number | null = null, todos: Todo[] = [], folder = '', skills: Skill[] = []): Promise<string> {
+async function systemPrompt(user: User, mode: Mode, projectId: number | null = null, todos: Todo[] = [], folder = '', skills: Skill[] = [], more: { zone?: string; calendar?: string } = {}): Promise<string> {
   const all = listMemories(user)
   const name = user.name || user.login
   // {{owner}}: what older AGENTS.md files say, from before anyone could sign up.
@@ -1353,7 +1376,7 @@ async function systemPrompt(user: User, mode: Mode, projectId: number | null = n
   const theirs = project ? all.filter((m) => m.projectId === project.id) : []
   return [
     base.trim(),
-    `Today is ${new Date().toUTCString().slice(0, 16)}.`,
+    dateLine(more.zone ?? zoneFor(null)),
     modeLine(mode),
     'When you need a decision, a choice or details from the user, ask with ask_user (a small form: choices, multiple choice, yes or no, text, numbers, ratings, dates) rather than asking in prose, and use the answers. Keep forms short. Ask before creating, renaming or moving projects unless the user already asked for it.',
     'Long jobs (many items or many steps, such as importing a long list, research in many parts or a batch of file changes): write a todo list with update_todos first, then work through it, keeping it up to date; while items are open you can keep going for many rounds. Batch where tools allow it (remember takes up to 50 facts per call), and report briefly at the end.',
@@ -1362,6 +1385,7 @@ async function systemPrompt(user: User, mode: Mode, projectId: number | null = n
       : '',
     mine.length ? `What you remember about ${name} (user memory; the [#id] is for update_memory):\n${memoryLines(mine)}` : `You do not remember anything about ${name} yet.`,
     project ? (theirs.length ? `What you remember about the project "${project.name}":\n${memoryLines(theirs)}` : `Nothing is remembered about the project "${project.name}" yet.`) : '',
+    more.calendar ?? '',
     folder,
     skillLines(skills),
     todoLines(todos),
@@ -1512,7 +1536,7 @@ const pushLine = (s: string) =>
     ?.slice(0, 180) ?? 'The answer is in.'
 
 /** Waits for the user to allow or decline a change (declined when stopped or after 15 minutes). */
-function askOwner(thread: string, messageId: number, index: number, call: ToolCall, signal: AbortSignal, send: (e: TurnEvent) => void): Promise<Verdict> {
+function askOwner(thread: string, messageId: number, index: number, call: ToolCall, signal: AbortSignal, send: (e: TurnEvent) => void, summary?: CallSummary): Promise<Verdict> {
   return new Promise((resolve) => {
     const callId = randomUUID()
     const done = (v: Verdict) => {
@@ -1527,8 +1551,8 @@ function askOwner(thread: string, messageId: number, index: number, call: ToolCa
     const onAbort = () => done({ allow: false })
     const timer = setTimeout(() => done({ allow: false }), APPROVAL_WAIT)
     signal.addEventListener('abort', onAbort)
-    pending.set(thread, [...(pending.get(thread) ?? []), { callId, messageId, index, kind: 'approval', call, resolve: (a) => done(a && typeof a === 'object' ? (a as Verdict) : { allow: a === true }) }])
-    send({ type: 'approval', callId, messageId, index, call })
+    pending.set(thread, [...(pending.get(thread) ?? []), { callId, messageId, index, kind: 'approval', call, ...(summary ? { summary } : {}), resolve: (a) => done(a && typeof a === 'object' ? (a as Verdict) : { allow: a === true }) }])
+    send({ type: 'approval', callId, messageId, index, call, ...(summary ? { summary } : {}) })
   })
 }
 
@@ -1579,7 +1603,7 @@ function askForm(thread: string, messageId: number, index: number, form: Form, s
 }
 
 export type TurnEvent =
-  | { type: 'approval'; callId: string; messageId: number; index: number; call?: ToolCall }
+  | { type: 'approval'; callId: string; messageId: number; index: number; call?: ToolCall; summary?: CallSummary }
   /** A terminal tool call for the terminal to run (then clientDone, when it is answered or given up) */
   | { type: 'client'; callId: string; messageId: number; index: number; call: ToolCall }
   | { type: 'clientDone'; callId: string }
@@ -1598,7 +1622,7 @@ export type TurnEvent =
  * Adds the user's message and answers it, streaming JSON lines (TurnEvent) to the response. The
  * turn stops when the window goes away or Stop is pressed; what was finished by then stays saved.
  */
-export async function runTurn(res: ServerResponse, user: User, id: string, body: { text?: string; attachments?: unknown; client?: { terminal?: unknown } }) {
+export async function runTurn(res: ServerResponse, user: User, id: string, body: { text?: string; attachments?: unknown; client?: { terminal?: unknown; timeZone?: unknown } }) {
   const row = ownThread(user, id)
   const text = String(body.text ?? '').trim()
   const files = checkAttachments(body.attachments)
@@ -1619,6 +1643,8 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
   // Asked from the terminal's agents command: that terminal can run the terminal tool.
   const fromTerminal = body.client?.terminal === true
   if (fromTerminal) attachTerminal(row.id, res)
+  // Where the user is, for today's date and the calendar tools' times.
+  const zone = zoneFor(body.client?.timeZone)
   // The turn goes on when the window closes (a long job can take a while); only Stop ends it, and
   // the window picks it up again from the saved messages.
   partial.set(row.id, { content: '', thinking: '' })
@@ -1694,7 +1720,10 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
       const last = round >= budget || Date.now() - started > LONG_TIME // out of rounds: answer with what was found
       const stale = open > 0 && !last && !wrapUp && round - todoRound > 3
       const system =
-        (await systemPrompt(user, mode, row.project_id, todosOf(row.id), folderLines(now, offered.has('terminal'), instructions), offered.has('use_skill') ? await listSkills(user, skillPlaces(user, now.workdir)).catch(() => []) : [])) +
+        (await systemPrompt(user, mode, row.project_id, todosOf(row.id), folderLines(now, offered.has('terminal'), instructions), offered.has('use_skill') ? await listSkills(user, skillPlaces(user, now.workdir)).catch(() => []) : [], {
+          zone,
+          calendar: now.tools.includes('calendar') ? calendarLines(user, zone) : '',
+        })) +
         (last ? '\n\nYou have used all your tool calls for this turn: answer now with what you have, and say what is left to do.' : '') +
         (stale ? `\n\nReminder: your todo list has ${open} open ${open === 1 ? 'item' : 'items'} and you have not updated it for a while. Update it with update_todos as you go, or clear it if it no longer fits.` : '') +
         (wrapUp ? `\n\nYou have answered, but your todo list still has ${open} open ${open === 1 ? 'item' : 'items'}. Call update_todos now: mark what is finished as done, or send an empty list to clear it if the job is over or the user has moved on. Do not repeat your answer.` : '')
@@ -1725,8 +1754,19 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
           if (decision === 'refuse')
             return JSON.stringify({ error: c.name === 'exit_plan_mode' ? 'You are not in plan mode.' : 'Plan mode: you can only look around for now. When you know what to change, call exit_plan_mode with your plan.' })
           const unknownPage = c.name === 'web_fetch' && fetchNeedsOwner(user, row.id, c.arguments?.url)
+          // A calendar call is checked first (and a change worked out in full), so a mistake goes
+          // back to the model before the user is asked, and they see what will happen.
+          let calendar: Prepared | null = null
+          if (CALENDAR_TOOLS.has(c.name)) {
+            try {
+              calendar = await prepareCalendarCall(user, c.name, c.arguments ?? {}, zone)
+            } catch (e) {
+              if (ctl.signal.aborted) throw e
+              return JSON.stringify({ error: calendarError(e) })
+            }
+          }
           if (decision === 'ask' || unknownPage) {
-            const v = await askOwner(row.id, assistant, index, c, ctl.signal, send)
+            const v = await askOwner(row.id, assistant, index, c, ctl.signal, send, calendar?.summary)
             if (c.name === 'exit_plan_mode') {
               if (!v.allow) return JSON.stringify({ approved: false, feedback: v.feedback ?? 'The user wants changes to the plan: ask what to change.' })
               const next: Permission = v.mode === 'acceptEdits' ? 'acceptEdits' : 'default'
@@ -1771,6 +1811,14 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
             } catch (e) {
               if (ctl.signal.aborted) throw e
               return JSON.stringify({ error: e instanceof HttpError && e.status === 423 ? 'That library is encrypted and locked: the user can unlock it in Files' : (e as Error).message })
+            }
+          }
+          if (calendar) {
+            try {
+              return await calendar.run()
+            } catch (e) {
+              if (ctl.signal.aborted) throw e
+              return JSON.stringify({ error: calendarError(e) })
             }
           }
           if (c.name === 'ask_user') {
