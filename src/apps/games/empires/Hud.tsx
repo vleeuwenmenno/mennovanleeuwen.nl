@@ -7,7 +7,7 @@ import {
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { spriteUrl } from './render'
 import { keyName, useSettings } from './settings'
-import { LongPress, isTouch, shiftOf, useLongPressWheel } from './Touch'
+import { LongPress, isTouch, shiftOf, useCoarse, useLongPressWheel } from './Touch'
 import { FIELD_DAMAGE, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
@@ -444,7 +444,7 @@ function Vitals({ u, squad = [u], now }: { u: Unit; squad?: Unit[]; now: number 
 
 // --- Top bar ----------------------------------------------------------------------------------------
 
-export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onShipyard, onTechTree, onReserves, onEconomy, onPlayers, ping }: {
+export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onShipyard, onTechTree, onReserves, onEconomy, onPlayers, onMap, mapOpen, ping }: {
   hud: Hud
   faction: FactionId
   sector: string
@@ -461,6 +461,9 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
   onPlayers?: () => void
   /** Online: our round trip to the server, in milliseconds (-1 while the connection is down). */
   ping?: number
+  /** Phones hide the tactical map: this shows it again (the button only shows on phones). */
+  onMap?: () => void
+  mapOpen?: boolean
 }) {
   const q = hud.queue[0]
   const r = hud.research[0]
@@ -518,6 +521,11 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
           <button className="ew-top-cell ew-top-btn ew-playersbtn" onClick={onPlayers} data-tip={`Players: scores${ping !== undefined ? ' and pings' : ''} (Tab)`} aria-label="Players">
             <Icon name="army" size={18} />
             {ping !== undefined && <small className={`ew-ping ${ping < 0 ? 'is-poor' : pingClass(ping)}`}>{ping < 0 ? 'offline' : `${ping} ms`}</small>}
+          </button>
+        )}
+        {onMap && (
+          <button className={`ew-top-cell ew-top-btn ew-maptoggle ${mapOpen ? 'is-on' : ''}`} onClick={onMap} aria-pressed={!!mapOpen} data-tip="Tactical map: show or hide it" aria-label="Tactical map">
+            <Icon name="radar" size={18} />
           </button>
         )}
         <button className="ew-top-cell ew-top-btn" onClick={onMenu} data-tip="Battle menu: settings, keybinds, restart (Esc)" aria-label="Menu">
@@ -587,7 +595,7 @@ function FactionButton({ hud, faction, sector, onReserves }: { hud: Hud; faction
 
 // --- Tactical map -----------------------------------------------------------------------------------
 
-export function TacticalMap({ canvas, sides, filter, onFilter, onStation, onAlert, onIdle, onArmy, onPointer, idle, fogGrid, onFogGrid, onMove }: {
+export function TacticalMap({ canvas, sides, filter, onFilter, onStation, onAlert, onIdle, onArmy, onPointer, onPointerEnd, idle, fogGrid, onFogGrid, onMove }: {
   onMove?: (box: { x: number; y: number; w: number; h: number }, root: { w: number; h: number }) => void
   idle: number
   fogGrid: boolean
@@ -602,6 +610,8 @@ export function TacticalMap({ canvas, sides, filter, onFilter, onStation, onAler
   onIdle: () => void
   onArmy: () => void
   onPointer: (e: React.PointerEvent) => void
+  /** The pointer let go of the map (or was taken away): ends a touch long press. */
+  onPointerEnd?: () => void
 }) {
   const filters: [MapFilter, string][] = [
     ['all', 'All'],
@@ -622,7 +632,7 @@ export function TacticalMap({ canvas, sides, filter, onFilter, onStation, onAler
           <button onClick={onArmy} data-tip="Select every warship (Ctrl+A)" aria-label="All ships"><Icon name="army" size={17} /></button>
           <FogGridButton on={fogGrid} onToggle={onFogGrid} />
         </div>
-        <canvas ref={canvas} className="ew-mini" onPointerDown={onPointer} onPointerMove={(e) => e.buttons === 1 && onPointer(e)} />
+        <canvas ref={canvas} className="ew-mini" onPointerDown={onPointer} onPointerMove={(e) => e.buttons === 1 && onPointer(e)} onPointerUp={onPointerEnd} onPointerCancel={onPointerEnd} />
       </div>
       <div className="ew-mapfilters" role="tablist" aria-label="Show on the map">
         {filters.map(([f, label]) => (
@@ -1518,6 +1528,24 @@ export const STANCE_INFO: Record<Stance, { label: string; icon: IconName; blurb:
 /** The stance after this one, for the button and its key. */
 export const nextStance = (s: Stance) => STANCES[(STANCES.indexOf(s) + 1) % STANCES.length]
 
+/** A control group's button: a tap selects it; on touch a long press sets it to the selection. */
+function GroupButton({ g, onGroup, onAssign, canAssign }: { g: Hud['groups'][number]; onGroup: (key: string) => void; onAssign?: (key: string, clear?: boolean) => void; canAssign: boolean }) {
+  const press = useLongPressWheel(
+    () => [
+      { id: 'set', label: 'Set to selection', icon: <Icon name="army" size={18} />, disabled: !canAssign && 'Select some of ours first', run: () => onAssign?.(g.key) },
+      { id: 'clear', label: 'Clear group', icon: <Icon name="stop" size={18} />, danger: true, run: () => onAssign?.(g.key, true) },
+    ],
+    `Group ${g.key}`,
+  )
+  return (
+    <button {...(onAssign ? press : {})} onClick={() => onGroup(g.key)} data-tip={`Group ${g.key}: ${g.count} ships (press ${g.key}, twice to look)`}>
+      <b>{g.key}</b>
+      {g.sprite && <img src={spriteUrl(g.sprite)} alt="" />}
+      <small>{g.count}</small>
+    </button>
+  )
+}
+
 const COMMANDS: { id: Command; label: string; icon: IconName }[] = [
   { id: 'move', label: 'Move', icon: 'move' },
   { id: 'attack', label: 'Attack move', icon: 'attack' },
@@ -1527,10 +1555,14 @@ const COMMANDS: { id: Command; label: string; icon: IconName }[] = [
   { id: 'rally', label: 'Rally point', icon: 'rally' },
 ]
 
-export function SelectionPanel({ w, sel, me, mode, onCommand, onPick, groups, onGroup }: {
+export function SelectionPanel({ w, sel, me, mode, onCommand, onPick, groups, onGroup, canAssign = false, onAssign }: {
   w: World
   groups: Hud['groups']
   onGroup: (key: string) => void
+  /** Whether there is anything of ours selected to put in a control group. */
+  canAssign?: boolean
+  /** Touch: set a control group to the selection (or clear it); keyboards use Ctrl+digit. */
+  onAssign?: (key: string, clear?: boolean) => void
   sel: Unit[]
   me: Owner
   mode: Mode
@@ -1566,17 +1598,22 @@ export function SelectionPanel({ w, sel, me, mode, onCommand, onPick, groups, on
   // The keys as bound in Settings, not the defaults.
   const { keys } = useSettings()
   const keyFor = (c: Command) => keyName(keys[c])
+  // Fingers have no Ctrl+digit: a button saves the selection as the next free group.
+  const coarse = useCoarse()
+  const free = onAssign && coarse && canAssign ? ['1', '2', '3', '4', '5', '6', '7', '8', '9'].find((k) => !groups.some((g) => g.key === k)) : undefined
   return (
     <Frame className="ew-selframe" title="Selected units" aside={<b className="ew-selcount">{sel.length || ''}</b>}>
-      {groups.length > 0 && (
+      {(groups.length > 0 || free) && (
         <div className="ew-groups" aria-label="Control groups">
           {groups.map((g) => (
-            <button key={g.key} onClick={() => onGroup(g.key)} data-tip={`Group ${g.key}: ${g.count} ships (press ${g.key}, twice to look)`}>
-              <b>{g.key}</b>
-              {g.sprite && <img src={spriteUrl(g.sprite)} alt="" />}
-              <small>{g.count}</small>
-            </button>
+            <GroupButton key={g.key} g={g} onGroup={onGroup} onAssign={onAssign} canAssign={canAssign} />
           ))}
+          {free && (
+            <button className="ew-groupadd" onClick={() => onAssign!(free)} data-tip={`Save the selection as group ${free}. Long-press a group to set it again.`}>
+              <b>+</b>
+              <small>Group</small>
+            </button>
+          )}
         </div>
       )}
       <div className="ew-seltiles">
@@ -1584,7 +1621,7 @@ export function SelectionPanel({ w, sel, me, mode, onCommand, onPick, groups, on
           const u = g[0]
           const hull = g.reduce((s, x) => s + x.hull, 0) / g.reduce((s, x) => s + x.hullMax, 0)
           return (
-            <button key={u.id} className={`ew-seltile ${u.owner === me ? '' : 'is-enemy'}`} onClick={(e) => onPick(u.id, e.shiftKey)} {...unitTip(u.t, ownerTag(w, me, u.owner), `${g.length > 1 ? `${g.length} selected. ` : ''}Click to select only this, Shift-click to drop it.`, g.length === 1 ? u : undefined)}>
+            <button key={u.id} className={`ew-seltile ${u.owner === me ? '' : 'is-enemy'}`} onClick={(e) => onPick(u.id, shiftOf(e))} {...unitTip(u.t, ownerTag(w, me, u.owner), `${g.length > 1 ? `${g.length} selected. ` : ''}Click to select only this, Shift-click to drop it.`, g.length === 1 ? u : undefined)}>
               <img src={spriteUrl(u.t.sprite)} alt="" />
               {g.length > 1 && <em>{g.length}</em>}
               <Bar value={hull} max={1} kind="hull" />

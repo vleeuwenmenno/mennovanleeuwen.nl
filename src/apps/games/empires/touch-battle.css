@@ -1,0 +1,204 @@
+/* The battle on touch screens and phones (EmpiresAtWar.tsx): the touch bar over the selection,
+   bigger targets for fingers, and a layout that fits a phone. A mouse on a desktop-sized screen
+   sees none of it: every rule here sits behind a coarse pointer, a screen at most 680px wide, or a
+   short screen with a finger. */
+
+/* The top bar's map button is for phones, where the map is hidden. */
+.ew-battle .ew-top .ew-maptoggle {
+  display: none;
+}
+.ew-battle .ew-top .ew-maptoggle.is-on {
+  color: var(--ew-accent);
+}
+
+/* --- Fingers --- */
+@media (pointer: coarse) {
+  /* The touch bar sits on top of the selection, so it goes where the selection is moved. */
+  .ew-battle .ew-selfloat {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+  }
+  .ew-battle.ew-deck .ew-cmdbtn {
+    min-height: 40px;
+    justify-content: center;
+  }
+  /* Key hints mean nothing without a keyboard. */
+  .ew-battle .ew-cmdbtn kbd {
+    display: none;
+  }
+  .ew-battle.ew-deck .ew-groups button {
+    min-height: 34px;
+    padding: 2px 8px 2px 6px;
+  }
+  .ew-battle .ew-groupadd b {
+    color: var(--ew-good);
+  }
+  .ew-battle.ew-deck .ew-maptools button {
+    width: 40px;
+    height: 40px;
+  }
+  .ew-battle.ew-deck .ew-mapfilters button {
+    min-height: 32px;
+  }
+  /* A ship dragged out of the fleet inventory must not scroll the page instead. */
+  .ew-battle .ew-reserve-tile {
+    touch-action: none;
+  }
+}
+
+/* --- Phones (and very narrow windows) --- */
+@container (max-width: 680px) {
+  /* The top bar: tighter cells, and it scrolls sideways if it still doesn't fit. */
+  .ew-battle .ew-top {
+    gap: 2px;
+    padding: 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .ew-battle .ew-top-right {
+    gap: 2px;
+  }
+  .ew-battle .ew-top-cell {
+    padding: 0 9px;
+    gap: 4px;
+  }
+  .ew-battle .ew-top-faction {
+    padding-left: 8px;
+    padding-right: 10px;
+  }
+  .ew-battle.ew-deck .ew-top-btn,
+  .ew-battle.ew-deck .ew-jobbtn,
+  .ew-battle .ew-timectl {
+    padding: 0 10px;
+  }
+  .ew-battle .ew-top .ew-maptoggle {
+    display: flex;
+  }
+
+  /* The tactical map: hidden until its button shows it, then under the top bar. */
+  .ew-battle .ew-float.ew-mapframe {
+    display: none;
+    top: 52px !important;
+    left: 6px !important;
+    bottom: auto !important;
+    width: min(300px, calc(100% - 12px));
+    height: 210px;
+    z-index: 5;
+  }
+  .ew-battle.is-mapopen .ew-float.ew-mapframe {
+    display: flex;
+  }
+
+  /* The selection: across the bottom, without its tiles; the commands in two rows. */
+  .ew-battle .ew-selfloat {
+    left: 6px !important;
+    right: 6px !important;
+    top: auto !important;
+    bottom: 6px !important;
+  }
+  .ew-battle .ew-selfloat > .ew-selframe {
+    flex: 1 1 auto;
+    align-self: stretch;
+    width: auto;
+    min-height: 0;
+    margin-left: 0;
+  }
+  .ew-battle .ew-cmdgrid {
+    grid-template-columns: repeat(5, 1fr);
+  }
+
+  /* The unit card (and the shipyard): a sheet across the screen, just above the selection. */
+  .ew-battle .ew-detailfloat {
+    left: 6px !important;
+    right: 6px !important;
+    top: auto !important;
+    bottom: calc(var(--ew-selh, 140px) + 12px) !important;
+    max-width: none;
+  }
+  .ew-battle .ew-detailfloat > * {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .ew-battle .ew-detailfloat .ew-detail {
+    max-height: 200px;
+  }
+  .ew-battle .ew-yard {
+    max-width: none;
+  }
+  .ew-battle .ew-dockshade {
+    height: 180px;
+  }
+}
+
+/* --- Phones on their side: short screens. The map hides too, the selection and the unit card sit
+   side by side at the bottom, and both get shorter. After the narrow rules, so a small phone on its
+   side gets this layout rather than the stacked one. --- */
+@media (pointer: coarse) and (max-height: 500px) {
+  .ew-battle .ew-top .ew-maptoggle {
+    display: flex;
+  }
+  .ew-battle .ew-float.ew-mapframe {
+    display: none;
+    top: 52px !important;
+    left: 6px !important;
+    bottom: auto !important;
+    width: min(300px, calc(100% - 12px));
+    height: min(210px, calc(100% - 64px));
+    z-index: 5;
+  }
+  .ew-battle.is-mapopen .ew-float.ew-mapframe {
+    display: flex;
+  }
+
+  /* The touch bar stands beside the selection rather than on top of it. */
+  .ew-battle .ew-selfloat {
+    flex-direction: row;
+    align-items: flex-end;
+  }
+  .ew-battle .ew-battlebar {
+    flex-direction: column;
+  }
+  .ew-battle .ew-selfloat > .ew-selframe {
+    flex: none;
+    align-self: auto;
+    width: 250px;
+    min-height: 0;
+  }
+  .ew-battle .ew-seltiles {
+    display: none;
+  }
+  .ew-battle .ew-cmdgrid {
+    grid-template-columns: repeat(5, 1fr);
+  }
+  .ew-battle .ew-cmdbtn > span {
+    display: none;
+  }
+
+  .ew-battle .ew-detailfloat {
+    max-width: calc(100% - 330px);
+  }
+  .ew-battle .ew-detailfloat .ew-detail {
+    max-height: 170px;
+  }
+  /* One row of ship cards, scrolling sideways. */
+  .ew-battle .ew-yard {
+    grid-template-rows: 64px;
+  }
+  .ew-battle .ew-dockshade {
+    height: 150px;
+  }
+}
+
+/* A small phone on its side is both narrow and short: undo the stacking from the narrow rules. */
+@container (max-width: 680px) {
+  @media (pointer: coarse) and (max-height: 500px) {
+    .ew-battle .ew-selfloat {
+      left: auto !important;
+    }
+    .ew-battle .ew-detailfloat {
+      right: auto !important;
+      bottom: 6px !important;
+    }
+  }
+}
