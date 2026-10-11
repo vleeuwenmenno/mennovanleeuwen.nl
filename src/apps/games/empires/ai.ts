@@ -1,6 +1,6 @@
 import { ABILITIES, LEVEL_UP, MAX_LEVEL, UNIT, UPGRADES, buildable, isShip, techsFor, unitOf, type Tier } from './data.ts'
 import { inside } from './maps.ts'
-import { canRetreat, cantBuild, cantRepair, cantResearch, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdDeploy, cmdMove, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, fleet, foes, near, rand, sees, shieldMax, type Owner, type Unit, type World } from './sim.ts'
+import { canRetreat, cantBuild, cantMend, cantRepair, cantResearch, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdDeploy, cmdGuard, cmdMove, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, fleet, foes, near, rand, sees, shieldMax, type Owner, type Unit, type World } from './sim.ts'
 import * as M from './detmath.ts'
 import { sq } from './detmath.ts'
 
@@ -35,24 +35,26 @@ type Level = {
   apm: number
   /** Seconds before it notices something attacking its station or platforms. */
   react: number
+  /** Chance, each time it thinks it over, that it unlocks repair craft once it has warships to mend. */
+  menders: number
 }
 
 export const DIFFICULTY: Record<Difficulty, Level> = {
   veryEasy: {
     name: 'Very easy', blurb: 'A sleepy recruit: earns little, never researches, and leaves you alone for the first ten minutes.',
-    income: 0.55, think: 3.5, wave: 5000, mines: 2, focus: false, calm: 600, research: false, abilities: false, defenses: false, apm: 25, react: 6,
+    income: 0.55, think: 3.5, wave: 5000, mines: 2, focus: false, calm: 600, research: false, abilities: false, defenses: false, apm: 25, react: 6, menders: 0,
   },
   easy: {
     name: 'Easy', blurb: 'Slow to react and slow to grow. No attacks for the first six minutes.',
-    income: 0.68, think: 3, wave: 4200, mines: 3, focus: false, calm: 360, research: true, abilities: false, defenses: false, apm: 35, react: 4,
+    income: 0.68, think: 3, wave: 4200, mines: 3, focus: false, calm: 360, research: true, abilities: false, defenses: false, apm: 35, react: 4, menders: 0.03,
   },
   medium: {
     name: 'Medium', blurb: 'A fair fight. It leaves you about two and a half minutes to settle in.',
-    income: 1, think: 1.5, wave: 2500, mines: 4, focus: true, calm: 150, research: true, abilities: true, defenses: true, apm: 60, react: 2,
+    income: 1, think: 1.5, wave: 2500, mines: 4, focus: true, calm: 150, research: true, abilities: true, defenses: true, apm: 60, react: 2, menders: 0.08,
   },
   hard: {
     name: 'Hard', blurb: 'Quick, greedy, aggressive from the start, and it goes for your shield generators.',
-    income: 1.25, think: 0.8, wave: 2000, mines: 5, focus: true, calm: 0, research: true, abilities: true, defenses: true, apm: 100, react: 1,
+    income: 1.25, think: 0.8, wave: 2000, mines: 5, focus: true, calm: 0, research: true, abilities: true, defenses: true, apm: 100, react: 1, menders: 0.16,
   },
 }
 
@@ -158,11 +160,15 @@ function pickShip(w: World, b: Brain): string | null {
   // break, a repair tender once there's a fleet worth mending (and not a second one too early).
   const army = fleet(w, b.o).filter((u) => !u.parent)
   const tenders = army.filter((u) => u.t.kind === 'support').length
+  // Repair craft: a couple of squadrons once there are warships to look after, and no more.
+  const menders = army.filter((u) => u.t.kind === 'repair').length / 2
+  const warships = army.filter((u) => u.t.tier === 'frigate' || u.t.tier === 'cruiser' || u.t.tier === 'capital').length
   const weight = (t: (typeof options)[number]) =>
     t.kind === 'bomber' ? 0.6 + Math.min(3, big * 0.5)
       : t.kind === 'ion' ? (big >= 2 ? 2.4 : 0.5)
         : t.kind === 'support' ? (army.length >= 6 && tenders < 1 + army.length / 10 ? 1.8 : 0.1)
-          : (weights[t.tier] ?? 1)
+          : t.kind === 'repair' ? (menders < Math.min(2, 0.5 + warships / 2) ? 2 : 0.05)
+            : (weights[t.tier] ?? 1)
   const total = options.reduce((s, t) => s + weight(t), 0)
   let r = rand(w) * total
   for (const t of options) {
@@ -256,6 +262,14 @@ export function think(w: World, b: Brain, dt: number) {
     }
   }
 
+  // Repair craft are a cheap unlock, worth having once there are warships (or a battered station) to
+  // mend. Harder admirals get round to it sooner.
+  const mender = buildable(p.faction).find((t) => t.kind === 'repair' && t.tech)
+  if (mender && D.menders && !upgradeDue && p.research.length === 0 && p.credits > 600 && !cantResearch(w, o, mender.tech!)) {
+    const due = army.some((u) => u.t.tier === 'frigate' || u.t.tier === 'cruiser' || u.t.tier === 'capital') || st.hull < st.hullMax * 0.8
+    if (due && rand(w) < D.menders) act(b, () => cmdResearch(w, o, mender.tech!), true)
+  }
+
   // Keep two orders in the yard, saving up for the one we picked rather than buying whatever's cheap.
   if (p.queue.length < (savingForMine ? 1 : 2) && !upgradeDue && !(savingForMine && p.credits < 500)) {
     if (b.want && cantBuild(w, o, b.want) && cantBuild(w, o, b.want) !== 'Not enough credits') b.want = null
@@ -266,7 +280,7 @@ export function think(w: World, b: Brain, dt: number) {
 
   // Abilities, when they'd help.
   for (const u of army) {
-    if (!D.abilities || !u.t.ability || u.abilityCd > 0) continue
+    if (!D.abilities || !u.t.ability || u.abilityCd > 0 || u.t.ability === 'fieldRepair') continue
     const foes = visibleEnemies(w, o, u.x, u.y, ABILITIES[u.t.ability].range ?? 650)
     if (!foes.length) continue
     const ok =
@@ -274,6 +288,8 @@ export function think(w: World, b: Brain, dt: number) {
       u.t.ability === 'shieldBoost' ? u.shield < shieldMax(u) * 0.4 && !u.nebula : u.t.ability === 'repairSwarm' ? u.hull < u.hullMax * 0.65 : u.t.ability === 'flakBarrage' ? foes.some((f) => f.t.tier === 'fighter') : true
     if (ok) act(b, () => cmdAbility(w, o, [u.id]))
   }
+
+  mend(w, b, army, st)
 
   // Defend: anything hitting our station or mines gets the whole home fleet, once it has noticed
   // (ships already heading there to fight need no new order).
@@ -290,7 +306,7 @@ export function think(w: World, b: Brain, dt: number) {
   else if (b.alarm < 0) b.alarm = w.time
   if (threat && !b.attacking && w.time - b.alarm >= D.react) {
     const at = threat
-    const home = army.filter((u) => d2(u, st) < sq(2200) && u.order.k !== 'attack' && !(u.order.k === 'move' && u.order.attack && d2(u.order, at) < sq(500)))
+    const home = army.filter((u) => u.t.kind !== 'repair' && d2(u, st) < sq(2200) && u.order.k !== 'attack' && !(u.order.k === 'move' && u.order.attack && d2(u.order, at) < sq(500)))
     if (home.length) act(b, () => cmdMove(w, o, home.map((u) => u.id), at.x, at.y, true))
     return
   }
@@ -303,7 +319,7 @@ export function think(w: World, b: Brain, dt: number) {
   }
   // Early on, before there are spare warships, the starting fighters do the surveying.
   if (!b.attacking && b.scouts.size < 2 && w.time < 240) {
-    const f = army.find((u) => u.t.tier === 'fighter' && !b.scouts.has(u.id))
+    const f = army.find((u) => u.t.tier === 'fighter' && u.t.kind !== 'repair' && !b.scouts.has(u.id))
     if (f) for (const id of army.filter((u) => u.squad && u.squad === f.squad).map((u) => u.id)) b.scouts.add(id)
   }
   // They pick beacons they can hold, and come home from fights they'd lose.
@@ -335,7 +351,8 @@ export function think(w: World, b: Brain, dt: number) {
   }
 
   // Attack waves.
-  const main = army.filter((u) => !b.scouts.has(u.id))
+  // Repair craft keep to their own work (see mend), out of the waves.
+  const main = army.filter((u) => !b.scouts.has(u.id) && u.t.kind !== 'repair')
   const mainValue = value(main)
   // Waves go out once the fleet is big enough, or the yard is full, or (so poor maps don't stall)
   // after four quiet minutes with at least half a wave ready.
@@ -397,6 +414,49 @@ export function think(w: World, b: Brain, dt: number) {
     const x = goal.x + (rand(w) - 0.5) * 300
     const y = goal.y + (rand(w) - 0.5) * 300
     act(b, () => cmdMove(w, o, go, x, y, true))
+  }
+}
+
+/** The ship or station of ours most worth a Field repair near (x, y): the most damaged, weighted by
+ * what it's worth, so a battered flagship or station comes before a scratched gunship. */
+function patient(w: World, o: Owner, x: number, y: number, r: number): Unit | undefined {
+  let best: Unit | undefined
+  let score = 0
+  for (const t of w.units) {
+    if (t.dead || cantMend(w, o, t) || d2(t, { x, y }) > sq(r)) continue
+    const need = 1 - t.hull / t.hullMax
+    if (need < 0.15) continue
+    const s = need * Math.sqrt(t.t.cost || 3000)
+    if (s > score) {
+      score = s
+      best = t
+    }
+  }
+  return best
+}
+
+/**
+ * Repair craft: each squadron with its ability ready goes to the ship or station that needs it most
+ * (Admirals that use abilities only; the sim's idle crews still help themselves). Between runs a
+ * squadron guards the fleet's most valuable warship, or the station, so it's at hand when that one
+ * gets hurt.
+ */
+function mend(w: World, b: Brain, army: Unit[], st: Unit) {
+  const o = b.o
+  const D = DIFFICULTY[b.diff]
+  const ward = army.filter((u) => u.t.tier === 'frigate' || u.t.tier === 'cruiser' || u.t.tier === 'capital').sort((a, c) => c.t.cost - a.t.cost || a.id - c.id)[0] ?? st
+  const squads = new Map<number, Unit[]>()
+  for (const u of army) if (u.t.kind === 'repair') squads.set(u.squad || -u.id, [...(squads.get(u.squad || -u.id) ?? []), u])
+  for (const crew of squads.values()) {
+    const lead = crew[0]
+    if (lead.aid) continue
+    const ids = crew.map((u) => u.id)
+    const sick = D.abilities && lead.abilityCd <= 0 ? patient(w, o, lead.x, lead.y, 1400) : undefined
+    if (sick) {
+      act(b, () => cmdAbility(w, o, ids, sick.id) || 'nothing to mend')
+      continue
+    }
+    if (!(lead.order.k === 'guard' && lead.order.id === ward.id)) act(b, () => cmdGuard(w, o, ids, ward.id), true)
   }
 }
 
@@ -473,7 +533,10 @@ export function fleetThink(w: World, b: Brain, dt: number) {
   const groups = new Map<Unit | null, number[]>()
   for (const u of mine) {
     const busy = u.order.k !== 'idle' || u.target
-    if (D.abilities && u.t.ability && u.abilityCd <= 0 && threatAt(w, o, u.x, u.y, 700) > 0) act(b, () => cmdAbility(w, o, [u.id]))
+    if (D.abilities && u.t.ability === 'fieldRepair' && u.abilityCd <= 0 && !u.aid) {
+      const sick = patient(w, o, u.x, u.y, 1400)
+      if (sick) act(b, () => cmdAbility(w, o, [u.id], sick.id))
+    } else if (D.abilities && u.t.ability && u.abilityCd <= 0 && threatAt(w, o, u.x, u.y, 700) > 0) act(b, () => cmdAbility(w, o, [u.id]))
     if (busy) continue
     const e = nearest(u)
     // The holder keeps the line by the station until they come within reach of it.

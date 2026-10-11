@@ -454,6 +454,10 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
         <Seg label="Team rings" value={s.rings} options={[[true, 'On'], [false, 'Off']]} onChange={(v) => set({ rings: v })} />
       </div>
       <div className="ew-row">
+        <span>{coarse ? 'Weapon ranges of selected ships' : 'Show weapon ranges on hover'}</span>
+        <Seg label="Weapon ranges" value={s.ranges} options={[[true, 'On'], [false, 'Off']]} onChange={(v) => set({ ranges: v })} />
+      </div>
+      <div className="ew-row">
         <span>Messages</span>
         <Seg label="Messages" value={s.toasts} options={[[true, 'All'], [false, 'Alerts only']]} onChange={(v) => set({ toasts: v })} />
       </div>

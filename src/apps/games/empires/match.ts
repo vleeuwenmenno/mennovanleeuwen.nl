@@ -37,7 +37,8 @@ export const matchBrains = (m: MatchInfo): Brain[] => m.seats.flatMap((s, i) => 
 export function giveFleet(w: World, from: Owner, to: Owner) {
   const moved = new Set<number>()
   for (const u of w.units) {
-    if (u.dead || u.owner !== from || !isShip(u.t)) continue
+    // The station's defense wing stays with the base.
+    if (u.dead || u.owner !== from || !isShip(u.t) || u.t.kind === 'wing') continue
     u.owner = to
     moved.add(u.id)
   }

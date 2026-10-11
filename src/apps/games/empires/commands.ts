@@ -24,7 +24,7 @@ const TABLE = {
   stance: { run: cmdStance, args: ['ids', 'stance'] },
   attack: { run: cmdAttack, args: ['ids', 'id', 'int', 'bool', 'bool'] },
   stop: { run: cmdStop, args: ['ids'] },
-  ability: { run: cmdAbility, args: ['ids'] },
+  ability: { run: cmdAbility, args: ['ids', 'id'] },
   rally: { run: cmdRally, args: ['x', 'y'] },
   upgradeSite: { run: cmdUpgradeSite, args: ['id', 'upgrade'] },
   repair: { run: cmdRepair, args: ['id'] },
@@ -60,7 +60,8 @@ function cleanArg(kind: Arg, v: unknown, w: World): unknown {
       return out.every((x) => x !== null) ? out : null
     }
     case 'id':
-      return int(v, 0, MAX_ID)
+      // Left out, it's 0: no unit (an ability fired without a target).
+      return v === undefined ? 0 : int(v, 0, MAX_ID)
     case 'int':
       // Left out, it's the -1 the sim's own defaults use (no hardpoint, no index).
       return v === undefined ? -1 : int(v, -1, 1000)

@@ -3,7 +3,7 @@ import { sq } from './detmath.ts'
 import { inside, mirrored, rng, type MapDef, type Pt } from './maps.ts'
 import { clearLine, findPath, navGrid, type NavGrid } from './nav.ts'
 import {
-  ABILITIES, ARMOR_BONUS, BASE_POP, mineType, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
+  ABILITIES, ARMOR_BONUS, BASE_POP, DEFENSE_WING, FIELD_REPAIR, MENDABLE, mineType, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind,
 } from './data.ts'
@@ -88,6 +88,8 @@ export type Unit = {
   abilityCd: number
   abilityOn: number
   slow: number
+  /** Carriers: seconds since the last launch. Stations: seconds until the hangar sends out the next
+   * defense wing craft (see wings). */
   hangarT: number
   /** Seconds left on construction (mining platforms). */
   building: number
@@ -115,6 +117,8 @@ export type Unit = {
   queue: Order[]
   /** Support ships: the ships they're repairing right now, for the repair beams. */
   mending: number[]
+  /** A repair craft on a Field repair run: the ship or station it is mending (0 when none). */
+  aid: number
   /** Strike craft on a strafing run: pulling away after a pass, until far enough out to turn. */
   breakOff: boolean
   /** Waypoints round the rocks to where the ship is going (x, y), found when it set off. */
@@ -404,7 +408,7 @@ export function spawn(w: World, id: string, owner: Owner, x: number, y: number, 
     hps: t.hardpoints.map((h) => ({ hp: h.hp, max: h.hp })),
     guns: gunsOf(w, t),
     order: { k: 'idle' }, ax: x, ay: y, squad, parent: 0, target: 0, retarget: rand(w) * 0.5, lastHit: -99, shieldHit: -99, shieldOut: -99, hitAngle: 0,
-    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, stance: 'maneuver', gx: x, gy: y, hitBy: 0, nebula: false, route: null, queue: [], mending: [], breakOff: false, face: null, repair: 0, retreat: 0, focus: 0, upg: {}, upgrading: null,
+    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, stance: 'maneuver', gx: x, gy: y, hitBy: 0, nebula: false, route: null, queue: [], mending: [], aid: 0, breakOff: false, face: null, repair: 0, retreat: 0, focus: 0, upg: {}, upgrading: null,
     seen: Array.from({ length: w.teams }, (_, t) => t === w.players[owner].team),
   }
   w.units.push(u)
@@ -546,6 +550,7 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
     const at = (ahead: number, side: number) => ({ x: sp.x + fx * ahead - fy * side, y: sp.y + fy * ahead + fx * side })
     const st = spawn(w, unitOf(p.faction, 'station').id, o, sp.x, sp.y, face - Math.PI / 2)
     p.station = st.id
+    spawnWing(w, st)
     const f1 = at(420, -120)
     const g1 = at(380, 140)
     const g2 = at(470, 230)
@@ -591,8 +596,12 @@ function issue(u: Unit, o: Order, queued = false) {
   u.order = o
   u.queue = []
   u.target = o.k === 'attack' ? o.id : 0
-  u.parent = 0
+  // Carrier fighters given orders go their own way; a defense wing stays its station's, and
+  // comes home once its orders are done.
+  if (u.t.kind !== 'wing') u.parent = 0
   u.face = null
+  // New orders call off a Field repair run.
+  u.aid = 0
 }
 
 /** Where a ship will be once its current and queued orders are done: where a queued patrol starts. */
@@ -931,6 +940,7 @@ export function cmdStop(w: World, owner: Owner, ids: number[]) {
     u.ax = u.x
     u.ay = u.y
     u.target = 0
+    u.aid = 0
     for (const g of u.guns) {
       g.target = 0
       g.burst = 0
@@ -938,13 +948,33 @@ export function cmdStop(w: World, owner: Owner, ids: number[]) {
   }
 }
 
-/** Which of a group's ships can fire their ability now. */
-export function cmdAbility(w: World, owner: Owner, ids: number[]) {
+/**
+ * Fire the abilities of a group's ships that are ready. `target` is a friendly ship or station for
+ * Field repair (the one under the cursor); when it can't be mended, or none is given, repair craft
+ * pick the most damaged one in reach themselves, and hold their ability when there is none.
+ * Answers how many fired.
+ */
+export function cmdAbility(w: World, owner: Owner, ids: number[], target = 0) {
   let used = 0
+  // The craft of one squadron go to the same patient.
+  const bySquad = new Map<number, Unit | undefined>()
   for (const i of ids) {
     const u = w.byId.get(i)
     if (!u || u.dead || u.owner !== owner || !u.t.ability || u.abilityCd > 0) continue
     const ab = ABILITIES[u.t.ability]
+    if (u.t.ability === 'fieldRepair') {
+      if (building(u)) continue
+      const given = w.byId.get(target)
+      let to = given && !cantMend(w, owner, given) && d2(given.x, given.y, u.x, u.y) < sq(ab.range!) ? given : undefined
+      if (!to) {
+        if (!u.squad || !bySquad.has(u.squad)) bySquad.set(u.squad || -u.id, mendPick(w, u, ab.range!, 0))
+        to = bySquad.get(u.squad || -u.id)
+      }
+      if (!to) continue
+      startMend(w, u, to)
+      used++
+      continue
+    }
     u.abilityCd = ab.cooldown
     u.abilityOn = ab.duration
     if (u.t.ability === 'shieldBoost') u.shield = Math.min(shieldMax(u), u.shield + shieldMax(u) * 0.5)
@@ -1160,6 +1190,7 @@ export function cantBuild(w: World, owner: Owner, id: string, reserve = false): 
   if (reserve && fromHangar(t)) return 'Strike craft launch from the hangar'
   if (!w.byId.get(p.station) || w.byId.get(p.station)!.dead) return 'No station'
   if (t.level > p.level) return `Needs station level ${t.level}`
+  if (t.tech && !p.techs.includes(t.tech)) return `Needs research: ${TECH[t.tech].name}`
   if (t.tier === 'capital' && capitals(w, owner) >= MAX_CAPITALS) return 'One flagship at a time'
   if (p.queue.length >= MAX_QUEUE) return 'Queue full'
   if (p.pop + queuedPop(p) + t.pop > p.popCap) return 'Fleet at its limit: capture beacons or upgrade the station'
@@ -1547,6 +1578,11 @@ function kill(w: World, u: Unit, by: Owner | -1) {
   w.events.push({ k: 'boom', x: u.x, y: u.y, tier: u.t.tier, owner: u.owner, size: u.t.size })
   w.players[u.owner].stats.lost++
   if (by !== -1) w.players[by].stats.killed++
+  // A lost defense wing craft: its station's hangar starts on a new one after a while.
+  if (u.t.kind === 'wing' && u.parent) {
+    const st = w.byId.get(u.parent)
+    if (st && !st.dead) st.hangarT = Math.max(st.hangarT || 0, DEFENSE_WING.wait)
+  }
   if (u.node >= 0 && w.nodes[u.node].site === u.id) {
     // A destroyed platform takes its claim with it: the ore is open again and has to be surveyed
     // anew, so a lost platform can't simply be put straight back up under the attacker's guns.
@@ -1579,7 +1615,8 @@ export const RANK_BONUS = 0.1
 /** A ship that destroys enemies worth its own cost becomes a veteran; three times, elite; six, an ace.
  * Each rank adds damage and hull (the extra hull arrives repaired) and faster shields. */
 function gainXp(w: World, u: Unit, amount: number) {
-  if (!isShip(u.t)) return
+  // A free defense wing craft has no price to measure its kills against: it never ranks up.
+  if (!isShip(u.t) || !u.t.cost) return
   u.xp += amount
   const own = u.t.cost / u.t.squad
   while (u.rank < 3 && u.xp >= own * RANK_AT[u.rank + 1]) {
@@ -1815,11 +1852,20 @@ function moveUnit(w: World, u: Unit, dt: number) {
       u.target = (shooter && inLeash(shooter) ? shooter : pickTarget(w, u, look, inLeash))?.id ?? 0
     }
   }
+  // On a Field repair run the patient comes first: no chasing anything.
+  const mend = mendTarget(w, u)
+  if (mend) u.target = 0
   const tgt = u.target ? w.byId.get(u.target) : undefined
 
   // Holding ships on the move keep going, guns firing at whatever they pass.
   const fighting = !!tgt && !tgt.dead && (u.order.k !== 'move' || (u.order.attack && u.stance !== 'hold'))
-  if (fighting) {
+  if (mend) {
+    // Circle the patient just outside its hull: aim a little ahead round it from where we are, so
+    // the craft orbit rather than ram, and fly straight at it from further out.
+    const R = radius(mend.t) + 60 + (u.id % 3) * 15
+    const ang = M.atan2(u.y - mend.y, u.x - mend.x) + 0.7
+    steer(u, mend.x + M.cos(ang) * R, mend.y + M.sin(ang) * R, max * 0.8, dt)
+  } else if (fighting) {
     const e = tgt!
     if (fighter && e.t.tier !== 'fighter') {
       // Strafing runs on anything bigger: dive in guns-first, pull away past the hull, and fly out
@@ -1878,7 +1924,8 @@ function moveUnit(w: World, u: Unit, dt: number) {
     const dist = M.hypot(u.ax - u.x, u.ay - u.y)
     if (fighter) {
       const ang = w.time * 0.9 + u.id
-      const r = 70 + (u.id % 4) * 18
+      // A defense wing circles its station outside the hull, not over the middle of it.
+      const r = 70 + (u.id % 4) * 18 + (parent && u.t.kind === 'wing' ? radius(parent.t) + 60 : 0)
       steer(u, u.ax + M.cos(ang) * r, u.ay + M.sin(ang) * r, max * 0.65, dt)
     } else if (dist > 30 + radius(t) * 0.3) {
       const wp = waypoint(w, u, u.ax, u.ay)
@@ -1958,6 +2005,7 @@ function fire(w: World, u: Unit, g: Gun, e: Unit) {
   let dmg = g.w.damage * effect(g.w.kind, e.t.tier)
   if (u.abilityOn > 0 && u.t.ability === 'broadside' && g.w.kind === 'turbo') dmg *= 1.6
   dmg *= (u.t.tier === 'station' && !moduleUp(u, 'sensor') ? 1 : u.mods.damage) * (1 + RANK_BONUS * u.rank)
+  if (u.t.kind === 'wing' && !atHome(w, u)) dmg *= DEFENSE_WING.away
   w.shots.push({
     x: from.x, y: from.y, vx: (ax - from.x) / Math.max(t, 0.001), vy: (ay - from.y) / Math.max(t, 0.001), left: hit ? t : t * 1.6,
     kind: g.w.kind, owner: u.owner, target: e.id, hp, dmg, hit, sx: from.x, sy: from.y, age: 0, from: u.id,
@@ -2251,6 +2299,156 @@ const CLUMSY: Partial<Record<Tier, true>> = { frigate: true, cruiser: true, capi
  * hull. Neither counts as being attacked, so no alarms and no kill credit. Returns true while the
  * terrain keeps the shields from recharging.
  */
+// --- Defense wings -----------------------------------------------------------------------------------
+
+/** A station's defense wing in a loose ring round it, as its carrier fighters would be: their
+ * station is their parent, so idle ones keep to it and they count towards no fleet. */
+function spawnWing(w: World, st: Unit) {
+  const t = wingOf(st.t.faction)
+  const g = spawnGroup(w, t.id, st.owner, st.x + radius(st.t) + 140, st.y, st.a)
+  for (const u of g) u.parent = st.id
+  st.hangarT = 0
+}
+
+/** Whether a defense wing craft is at home: its station stands and it's within reach of it. */
+export function atHome(w: World, u: Unit) {
+  const st = u.parent ? w.byId.get(u.parent) : undefined
+  return !!st && !st.dead && d2(u.x, u.y, st.x, st.y) < sq(DEFENSE_WING.radius)
+}
+
+/** A station's defense wing as it stands: craft left, full strength, and seconds to the next one
+ * (null while it's whole, Infinity while the hangar is down). */
+export function wingState(w: World, st: Unit) {
+  let left = 0
+  for (const u of w.units) if (!u.dead && u.parent === st.id && u.t.kind === 'wing') left++
+  const full = wingOf(st.t.faction).squad
+  return { left, full, next: left >= full ? null : hangarsUp(st) ? Math.max(0, st.hangarT || 0) : Infinity }
+}
+
+/**
+ * Stations rebuild their defense wings: while one is short of craft and its hangar stands, the
+ * countdown runs (a loss sets it to at least DEFENSE_WING.wait) and each time it's up one craft
+ * launches from a hangar and joins what's left of the squadron, the next DEFENSE_WING.every
+ * seconds later. A shot-off hangar holds the countdown where it is until it's mended.
+ */
+function wings(w: World, dt: number) {
+  for (const st of w.units) {
+    if (st.dead || st.t.tier !== 'station' || building(st)) continue
+    const t = wingOf(st.t.faction)
+    let left = 0
+    let squad = 0
+    for (const u of w.units)
+      if (!u.dead && u.parent === st.id && u.t.kind === 'wing') {
+        left++
+        squad = u.squad
+      }
+    if (left >= t.squad) {
+      st.hangarT = 0
+      continue
+    }
+    if (!hangarsUp(st)) continue
+    st.hangarT = (st.hangarT || 0) - dt
+    if (st.hangarT > 0) continue
+    st.hangarT = DEFENSE_WING.every
+    const bays = st.t.hardpoints.map((h, i) => (h.kind === 'hangar' && alive(st, i) ? i : -1)).filter((i) => i >= 0)
+    const bay = hpPos(st, bays[0])
+    const u = spawn(w, t.id, st.owner, bay.x, bay.y, st.a, squad || w.squadSeq++)
+    u.parent = st.id
+    u.v = t.speed * 0.5
+    w.events.push({ k: 'launch', owner: st.owner, x: bay.x, y: bay.y })
+  }
+}
+
+// --- Field repair ------------------------------------------------------------------------------------
+
+/** How much of a ship's hull is missing, plus a little for modules that are hurt but still standing
+ * (Field repair mends those, not shot-off ones). */
+function mendNeed(t: Unit) {
+  let mods = 0
+  for (const h of t.hps) if (h.hp > 0 && h.hp < h.max) mods += 1 - h.hp / h.max
+  return 1 - t.hull / t.hullMax + (t.hps.length ? (mods / t.hps.length) * 0.5 : 0)
+}
+
+/** Why a repair craft of `owner` can't mend `t`, or null when it can: a station, or a ship of
+ * gunship class or bigger, on our side, finished, and with something to mend. */
+export function cantMend(w: World, owner: Owner, t: Unit | undefined): string | null {
+  if (!t || t.dead || foes(w, t.owner, owner)) return 'Pick one of our ships or stations'
+  if (!MENDABLE.includes(t.t.tier)) return 'Field repair works on stations and on gunships and bigger'
+  if (building(t)) return 'Still under construction'
+  if (mendNeed(t) < 0.002) return 'Nothing to repair'
+  return null
+}
+
+/** The ship or station a repair craft would go to by itself within `r`: the most damaged (at least
+ * `least` of it missing), nearer ones first. Walks every unit rather than the grid, since orders
+ * run between ticks, when the grid may not be built (just after a reload). */
+function mendPick(w: World, u: Unit, r: number, least: number): Unit | undefined {
+  let best: Unit | undefined
+  let score = 0
+  for (const t of w.units) {
+    if (t === u || t.dead || cantMend(w, u.owner, t)) continue
+    const dd = d2(t.x, t.y, u.x, u.y)
+    if (dd > r * r) continue
+    const need = mendNeed(t)
+    if (need < least) continue
+    const s = need / (1 + Math.sqrt(dd) / r)
+    if (s > score) {
+      score = s
+      best = t
+    }
+  }
+  return best
+}
+
+function startMend(w: World, u: Unit, to: Unit) {
+  const ab = ABILITIES.fieldRepair
+  u.abilityCd = ab.cooldown
+  u.abilityOn = ab.duration
+  u.aid = to.id
+  w.events.push({ k: 'ability', owner: u.owner, id: 'fieldRepair', x: u.x, y: u.y })
+}
+
+/** The ship or station a repair craft is mending right now, if it's on a run and it still needs it. */
+export function mendTarget(w: World, u: Unit) {
+  const t = u.aid && u.abilityOn > 0 ? w.byId.get(u.aid) : undefined
+  return t && !t.dead ? t : undefined
+}
+
+/** How close (centre to centre, beyond the patient's own body) a repair craft must be to weld. */
+export const mendReach = (t: UnitType) => radius(t) + FIELD_REPAIR.reach
+/** Seconds between idle repair crews looking round for someone to mend. */
+const MEND_LOOK = 0.5
+
+/**
+ * Field repair: craft on a run weld their patient while in reach (hull, and modules that still
+ * stand), ending the run early once it's whole or gone. Idle (or guarding) crews with the ability
+ * ready look round now and then and start a run on anything nearby that has lost a tenth of itself.
+ */
+function fieldRepairs(w: World, dt: number) {
+  // Counted in ticks: the clock is a sum of floats, and comparing its floors flickers at the edges.
+  const look = Math.round(w.time / STEP) % Math.round(MEND_LOOK / STEP) === 0
+  for (const u of w.units) {
+    if (u.dead || u.t.ability !== 'fieldRepair') continue
+    u.mending = []
+    if (u.aid) {
+      const t = w.byId.get(u.aid)
+      if (u.abilityOn <= 0 || cantMend(w, u.owner, t)) {
+        u.aid = 0
+        u.abilityOn = 0
+        continue
+      }
+      if (d2(t!.x, t!.y, u.x, u.y) > sq(mendReach(t!.t))) continue
+      t!.hull = Math.min(t!.hullMax, t!.hull + (FIELD_REPAIR.flat + FIELD_REPAIR.share * t!.hullMax) * dt)
+      for (const h of t!.hps) if (h.hp > 0 && h.hp < h.max) h.hp = Math.min(h.max, h.hp + h.max * FIELD_REPAIR.share * dt)
+      u.mending.push(t!.id)
+      continue
+    }
+    if (!look || u.abilityCd > 0 || building(u) || (u.order.k !== 'idle' && u.order.k !== 'guard')) continue
+    const to = mendPick(w, u, 900, 0.1)
+    if (to) startMend(w, u, to)
+  }
+}
+
 /** Support ships patch up the hulls of damaged allied ships near them, the most damaged first. */
 function tenders(w: World, dt: number) {
   for (const u of w.units) {
@@ -2306,6 +2504,8 @@ export function tick(w: World, dt = STEP) {
   survey(w, dt)
   salvage(w, dt)
   tenders(w, dt)
+  fieldRepairs(w, dt)
+  wings(w, dt)
   for (const u of w.units) {
     if (u.dead) continue
     if (u.building > 0) {
@@ -2392,6 +2592,7 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
       p.level = s.station
       const st = spawn(w, unitOf(p.faction, 'station').id, o, sp.x, sp.y, face - Math.PI / 2)
       p.station = st.id
+      spawnWing(w, st)
     }
     // Biggest first onto the field, up to the cap; the rest waits in orbit.
     const order = [...s.ships].sort((a, b) => UNIT[b].pop - UNIT[a].pop)
