@@ -4,7 +4,9 @@
 //
 //   node scripts/empires-bot.ts [name] [ws://localhost:5173/api/empires/ws]
 //
-// Host a battle in the game first, then start the bot. Ctrl+C stops it (an AI takes its fleet).
+// Host a battle in the game first, then start the bot. Ctrl+C stops it: it quits the battle (an AI
+// takes its fleet) rather than stepping away. When a player steps away, it goes along with
+// whatever the others vote, so it never holds up a decision.
 
 import { UNIT } from '../src/apps/games/empires/data.ts'
 import { cmd } from '../src/apps/games/empires/commands.ts'
@@ -38,6 +40,10 @@ ws.onopen = () => {
     send({ t: 'ping', n: pingN, ...(rtt ? { rtt: Math.round(rtt) } : {}) })
   }, 2000)
 }
+process.on('SIGINT', () => {
+  send({ t: 'leave' })
+  setTimeout(() => process.exit(), 200)
+})
 ws.onclose = (e) => {
   say('connection closed', e.code, e.reason)
   process.exit()
@@ -106,6 +112,17 @@ ws.onmessage = (e) => {
       if (n % 90 === 45) play(w)
       return
     }
+    case 'roster':
+      // Agree with the first player to vote for carrying on (the bot's own vote counts too).
+      for (const a of m.away ?? []) {
+        const other = a.votes.find(([s, v]) => s !== me && v !== 'wait')
+        const mine = a.votes.find(([s]) => s === me)?.[1]
+        if (other && mine !== other[1]) {
+          say(`voting with the others about seat ${a.seat + 1}: ${other[1] === 'ai' ? 'the AI takes over' : `seat ${Number(other[1]) + 1} takes over`}`)
+          send({ t: 'vote', seat: a.seat, v: other[1] })
+        }
+      }
+      return
     case 'desync':
       return say(`drifted at tick ${m.n}; the server will send its battle`)
     case 'over':

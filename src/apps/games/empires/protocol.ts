@@ -42,8 +42,18 @@ export type MpLobby = {
 /** How a battle's seat is doing: its player is in, away (connection down, may come back), gave up
  * (`left`) or never came back (`dropped`; both handed their fleet to an AI), or it's an AI seat. */
 export type SeatStatus = 'playing' | 'away' | 'left' | 'dropped' | 'ai'
-/** One seat in the battle's player list, by seat index; `ping` in milliseconds (0 for AI). */
-export type RosterSeat = { status: SeatStatus; ping: number }
+/** One seat in the battle's player list, by seat index; `ping` in milliseconds (0 for AI). `to`:
+ * the seat of the teammate who took over this (dropped) player's fleet. */
+export type RosterSeat = { status: SeatStatus; ping: number; to?: number }
+
+/** What a player still in the battle wants done about one who stepped away: wait for them (the
+ * default), hand their fleet to an AI admiral, or to the teammate in that seat. */
+export type AwayVote = 'wait' | 'ai' | number
+/** A player who stepped away mid-battle (closed the tab, lost the connection): the battle waits
+ * for them until `deadline` (the server's clock, epoch milliseconds; 0 while nobody is back yet
+ * after a server restart, so nobody counts down), or until everyone still there votes the same
+ * way to carry on. `votes`: [voter's seat, vote]. */
+export type AwaySeat = { seat: number; deadline: number; votes: [number, AwayVote][] }
 
 /** A lobby in the list. */
 export type LobbyInfo = { id: string; name: string; host: string; map: string; players: number; seats: number; state: MpLobby['state'] }
@@ -54,8 +64,10 @@ export type SlotPatch = Partial<Pick<MpSlot, 'faction' | 'team' | 'difficulty'>>
 /** Client to server. */
 export type ClientMsg =
   /** First message on every connection. `token` resumes an identity after a reload or a dropped
-   * connection (it is kept for a short while). */
-  | { t: 'hello'; token?: string }
+   * connection, or a server restart (it is kept for a short while). `stored`: the token is the
+   * browser's last one rather than this tab's own (the tab was closed): it is only taken back if
+   * nobody is connected with it right now. */
+  | { t: 'hello'; token?: string; stored?: boolean }
   /** Take a name (also to change it later). */
   | { t: 'claim'; name: string }
   /** For the round trip time; answered with `pong` straight away. `rtt` is our last measure of
@@ -80,6 +92,8 @@ export type ClientMsg =
   | { t: 'cmd'; c: Cmd }
   /** Our battle's fingerprint after tick `n` (every HASH_EVERY ticks). */
   | { t: 'hash'; n: number; h: number }
+  /** About the player in `seat`, who stepped away: what we want done (see AwayVote). */
+  | { t: 'vote'; seat: number; v: AwayVote }
 
 /** Server to client. */
 export type ServerMsg =
@@ -93,8 +107,9 @@ export type ServerMsg =
   | { t: 'pong'; n: number; at: number }
   /** The open lobbies, sent to everyone not in one whenever the list changes. */
   | { t: 'lobbies'; list: LobbyInfo[] }
-  /** The lobby you're in, after every change; null once you're out of it. */
-  | { t: 'lobby'; lobby: MpLobby | null }
+  /** The lobby you're in, after every change; null once you're out of it (`why`, when that
+   * happened while you were away). */
+  | { t: 'lobby'; lobby: MpLobby | null; why?: string }
   /** A lobby chat line; `from` is empty for the lobby's own notices ("Vex joined"). */
   | { t: 'chat'; from: string; text: string; at: number }
   /** Taken out of the lobby by its host. */
@@ -111,8 +126,9 @@ export type ServerMsg =
    * follows to put it right. */
   | { t: 'desync'; n: number }
   /** The battle's players: how each seat is doing, and its ping. Sent when that changes, and
-   * every couple of seconds for the pings. */
-  | { t: 'roster'; seats: RosterSeat[] }
+   * every couple of seconds for the pings. `away`: players who stepped away; while there are
+   * any, the battle waits for them (no turns). */
+  | { t: 'roster'; seats: RosterSeat[]; away?: AwaySeat[] }
   /** The server's own battle as it stands after tick `n` (snapshot.ts format), to carry on from:
    * after drifting, or on coming back to a battle under way. Turns after `n` follow. */
   | { t: 'sync'; n: number; world: string; brains: BattleSnap['brains']; why: 'drift' | 'rejoin' }

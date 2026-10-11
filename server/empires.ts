@@ -1,6 +1,8 @@
 import { randomBytes, randomInt } from 'node:crypto'
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage } from 'node:http'
 import { isIP } from 'node:net'
+import { dirname, join as joinPath, resolve } from 'node:path'
 import type { Duplex } from 'node:stream'
 import { currentUser } from './auth.ts'
 import { database } from './db.ts'
@@ -13,14 +15,15 @@ import { CREDIT_STEPS, FACTIONS, START_CREDITS } from '../src/apps/games/empires
 import { DEFAULT_RULES, GENERATED, MAP, MAPS, cleanRules, generateMap, type MapDef } from '../src/apps/games/empires/maps.ts'
 import { matchBrains, matchWorld, stepTurn, type MatchInfo, type Turn } from '../src/apps/games/empires/match.ts'
 import { nameKey, nameProblem, randomName, tidyName } from '../src/apps/games/empires/names.ts'
-import { CHAT_MAX, HASH_EVERY, MP_PATH, type ClientMsg, type LobbyInfo, type MpLobby, type MpSlot, type RosterSeat, type ServerMsg, type SlotPatch } from '../src/apps/games/empires/protocol.ts'
+import { CHAT_MAX, HASH_EVERY, MP_PATH, type AwaySeat, type AwayVote, type ClientMsg, type LobbyInfo, type MpLobby, type MpSlot, type RosterSeat, type ServerMsg, type SlotPatch } from '../src/apps/games/empires/protocol.ts'
 import { STEP, stateHash, type Owner, type World } from '../src/apps/games/empires/sim.ts'
-import { snapBrain, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
+import { restoreBrain, restoreWorld, snapBrain, snapshotWorld, type BattleSnap } from '../src/apps/games/empires/snapshot.ts'
 
 // Empires At War multiplayer: the players online, their names, the lobbies they gather in, and
 // the battles. Anyone may play, signed in or not. Names are unique among everyone online; a
-// signed-in user's GitHub login is theirs alone. Everything lives in memory: a restart ends every
-// lobby and game.
+// signed-in user's GitHub login is theirs alone. Everything lives in memory, and a restart (a
+// deploy) carries it over: on the way down it is written to DATA_DIR, and on the way up it comes
+// back, with every battle on hold until its players have reconnected (see Restarts below).
 //
 // A battle runs in lockstep: every player's machine runs the whole battle itself, and only orders
 // cross the network. The server keeps the clock: each tick it hands everyone that tick's orders
@@ -30,6 +33,14 @@ import { snapBrain, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
 
 /** A dropped player keeps their name and seat this long, for a reload or a blip. */
 const GRACE_MS = 30_000
+/** A player who steps away mid-battle (closes the tab, loses the connection) has this long to come
+ * back, while the battle waits for them; then an AI admiral takes their fleet. Tests shorten it. */
+const REJOIN_MS = Number(process.env.EMPIRES_REJOIN_MS) || 60_000
+/** After a restart, longer: a deploy takes a while, and every player has to find the way back. */
+const RESTART_GRACE_MS = 3 * 60_000
+/** State saved on the way down older than this is from another time (the server was down long, or
+ * crashed and came back later): it is thrown away rather than resurrected. */
+const STATE_MAX_AGE_MS = 10 * 60_000
 const MAX_PLAYERS = 400
 const MAX_PER_IP = 16
 const MAX_MESSAGE = 16 * 1024
@@ -72,14 +83,17 @@ type Player = {
   login: string | null
   ip: string
   ws: WsConnection | null
-  /** When the connection dropped; the player is forgotten GRACE_MS later. */
+  /** When the connection dropped; the player is forgotten `grace` milliseconds later. */
   leftAt: number
+  grace: number
   allowance: number
   allowanceAt: number
   /** The lobby they're in. */
   lobby: string | null
   /** Their round trip to the server, as their game last measured it, in milliseconds. */
   rtt: number
+  /** Why they're out of their battle, when that happened while they were away (told on their return). */
+  outWhy?: string
 }
 
 const players = new Map<string, Player>()
@@ -98,11 +112,19 @@ type Match = {
   n: number
   /** When tick 0 was, by the server's clock; 0 while everyone's still loading. */
   t0: number
-  /** Orders taken since the last tick, for the next one, and seats the AI takes over then. */
+  /** Orders taken since the last tick, for the next one, and seats the AI takes over then (and
+   * fleets handed to a teammate then). */
   pending: Turn['c']
   takeover: [Owner, Difficulty][]
+  give: [Owner, Owner][]
   /** Seats whose players have left (gave up, or never came back): nobody can order them any more. */
   gone: Map<Owner, 'left' | 'dropped'>
+  /** Who took over a dropped player's fleet, when it was a teammate. */
+  heir: Map<Owner, Owner>
+  /** Players who stepped away: while there are any, the battle waits (see Stepping away). */
+  away: Map<Owner, { deadline: number; votes: Map<Owner, AwayVote> }>
+  /** The clock has started (everyone loaded, or LOAD_WAIT_MS went by). */
+  started: boolean
   loaded: Set<string>
   timer: NodeJS.Timeout | null
   hashes: Map<number, number>
@@ -284,8 +306,7 @@ function leave(p: Player, why = 'left', how: 'left' | 'dropped' = 'left') {
   if (!l) return
   const game = matches.get(l.id)
   if (game) {
-    abandon(p, game, how)
-    if (seatIndex(game, p) >= 0) why = `${why}: the AI took over their fleet`
+    if (abandon(p, game, how)) why = `${why}: the AI took over their fleet`
   }
   const i = seatOf(l, p)
   if (i >= 0) l.slots[i] = { ...openSlot(i), faction: l.slots[i].faction, team: l.slots[i].team }
@@ -400,7 +421,9 @@ function start(p: Player, l: MpLobby) {
       s.kind === 'human' || s.kind === 'ai' ? [{ kind: s.kind, player: s.player, name: s.kind === 'ai' ? `${DIFFICULTY[s.difficulty].name} AI` : s.name, faction: s.faction, team: s.team, spawn, difficulty: s.difficulty }] : [],
     ),
   }
-  const m: Match = { info, lobby: l.id, w: matchWorld(info), brains: matchBrains(info), n: 0, t0: 0, pending: [], takeover: [], gone: new Map(), loaded: new Set(), timer: null, hashes: new Map(), resynced: new Map() }
+  const m: Match = {
+    info, lobby: l.id, w: matchWorld(info), brains: matchBrains(info), n: 0, t0: 0, pending: [], takeover: [], give: [], gone: new Map(), heir: new Map(), away: new Map(), started: false, loaded: new Set(), timer: null, hashes: new Map(), resynced: new Map(),
+  }
   matches.set(l.id, m)
   l.state = 'playing'
   info.seats.forEach((s, i) => {
@@ -420,10 +443,25 @@ function loaded(p: Player, m: Match) {
 }
 
 function begin(m: Match) {
-  if (m.t0 || matches.get(m.lobby) !== m) return
+  if (m.started || matches.get(m.lobby) !== m) return
   if (m.timer) clearTimeout(m.timer)
-  m.t0 = performance.now()
+  m.started = true
+  // Whoever isn't connected by now has stepped away: the battle waits for them from the start.
+  m.info.seats.forEach((s, i) => {
+    if (s.kind === 'human' && !m.gone.has(i) && !players.get(s.player)?.ws) stepAway(m, i)
+  })
   pushRoster(m)
+  run(m)
+}
+
+/** (Re)starts the clock from the battle's current tick, unless someone is away. The time it
+ * stood still (waiting for a player, or the server restarting) doesn't count: nothing runs to
+ * catch up with it. */
+function run(m: Match) {
+  if (!m.started || m.away.size || matches.get(m.lobby) !== m) return
+  if (m.timer) clearTimeout(m.timer)
+  m.t0 = performance.now() - m.n * STEP_MS
+  m.watchedAt = performance.now()
   clock(m)
 }
 
@@ -432,15 +470,22 @@ function pushRoster(m: Match) {
     if (s.kind === 'ai') return { status: 'ai', ping: 0 }
     const gone = m.gone.get(i)
     const p = players.get(s.player)
-    if (gone) return { status: gone, ping: 0 }
+    const heir = m.heir.get(i)
+    if (gone) return { status: gone, ping: 0, ...(heir !== undefined ? { to: heir } : {}) }
     return { status: p?.ws ? 'playing' : 'away', ping: p?.ws ? Math.round(p.rtt) : 0 }
   })
-  toPlayers(m, JSON.stringify({ t: 'roster', seats } satisfies ServerMsg))
+  const away: AwaySeat[] = [...m.away].map(([seat, a]) => ({ seat, deadline: a.deadline, votes: [...a.votes] }))
+  toPlayers(m, JSON.stringify({ t: 'roster', seats, ...(away.length ? { away } : {}) } satisfies ServerMsg))
 }
 
 /** Runs every tick that's due by now, then sleeps until the next. A late wake-up (a busy
  * moment) just runs the missed ticks at once; players' games catch up the same way. */
 function clock(m: Match) {
+  // Someone stepped away: the battle waits (run starts it again).
+  if (m.away.size) {
+    m.timer = null
+    return
+  }
   let due = Math.floor((performance.now() - m.t0) / STEP_MS)
   // Far behind (the server was busy): run a bounded number now and let the battle fall back in
   // time, rather than blocking everything else to catch up.
@@ -469,9 +514,10 @@ function clock(m: Match) {
 
 function runTick(m: Match) {
   const n = ++m.n
-  const turn: Turn = { n, c: m.pending, ...(m.takeover.length ? { ai: m.takeover } : {}) }
+  const turn: Turn = { n, c: m.pending, ...(m.takeover.length ? { ai: m.takeover } : {}), ...(m.give.length ? { give: m.give } : {}) }
   m.pending = []
   m.takeover = []
+  m.give = []
   stepTurn(m.w, m.brains, turn)
   m.w.events.length = 0
   if (n % HASH_EVERY === 0) {
@@ -496,14 +542,107 @@ function sync(p: Player, m: Match, why: 'drift' | 'rejoin') {
 }
 
 /** A player is out of the battle for good (left, or gone too long): an AI admiral takes their
- * fleet from the next tick, on everyone's machine at once. */
+ * fleet from the next tick, on everyone's machine at once. False if they were out already. */
 function abandon(p: Player, m: Match, how: 'left' | 'dropped') {
   const seat = seatIndex(m, p)
-  if (seat < 0 || m.gone.has(seat)) return
+  if (seat < 0 || m.gone.has(seat)) return false
   m.gone.set(seat, how)
   m.takeover.push([seat, TAKEOVER])
+  // Nobody waits for them any more, and they have no say about anyone else.
+  m.away.delete(seat)
+  for (const a of m.away.values()) a.votes.delete(seat)
+  decideAll(m)
+  pushRoster(m)
+  run(m)
+  return true
+}
+
+// --- Stepping away ----------------------------------------------------------------------------------
+//
+// Quitting a battle (its menu's Leave) hands the fleet to an AI at once. Anything else that takes a
+// player away (closing the tab or the game's window, a dropped connection, a server restart) only
+// steps them away: the battle waits for everyone (no ticks) up to REJOIN_MS for them to come back,
+// and they pick up the server's battle when they do. Meanwhile everyone still there votes: wait
+// (the default), an AI admiral takes over, or a teammate takes over their fleet. The battle goes
+// on as soon as all of them pick the same way to carry on; when time runs out, the AI takes over.
+
+/** Seats whose players are in the battle right now: connected, and not away or out. */
+const present = (m: Match) => m.info.seats.flatMap((s, i) => (s.kind === 'human' && !m.gone.has(i) && !m.away.has(i) && players.get(s.player)?.ws ? [i] : []))
+
+function stepAway(m: Match, seat: number) {
+  if (m.away.has(seat) || m.gone.has(seat)) return
+  // After a restart nobody is back yet: nobody counts down until someone is (stepBack).
+  m.away.set(seat, { deadline: present(m).length ? Date.now() + REJOIN_MS : 0, votes: new Map() })
+  for (const a of m.away.values()) a.votes.delete(seat)
+  if (m.timer) clearTimeout(m.timer)
+  m.timer = null
+  decideAll(m)
+}
+
+function stepBack(m: Match, seat: number) {
+  if (!m.away.delete(seat)) return
+  // The first one back after a restart: the others' time to come back starts now.
+  for (const a of m.away.values()) if (!a.deadline) a.deadline = Date.now() + REJOIN_MS
+  run(m)
+}
+
+function vote(p: Player, m: Match, seat: unknown, v: unknown) {
+  const voter = seatIndex(m, p)
+  const a = typeof seat === 'number' ? m.away.get(seat) : undefined
+  if (!a || !present(m).includes(voter)) return
+  const mates = present(m).filter((i) => m.info.seats[i].team === m.info.seats[seat as number].team)
+  if (v !== 'wait' && v !== 'ai' && !(typeof v === 'number' && mates.includes(v))) return send(p, { t: 'error', why: "That player can't take over." })
+  a.votes.set(voter, v)
+  decide(m, seat as number)
   pushRoster(m)
 }
+
+/** Carries on without the player in `seat` if everyone still there picked the same way to. */
+function decide(m: Match, seat: number) {
+  const a = m.away.get(seat)
+  const voters = present(m)
+  if (!a || !voters.length) return
+  const picks = voters.map((i) => a.votes.get(i) ?? 'wait')
+  const pick = picks[0]
+  if (pick === 'wait' || picks.some((x) => x !== pick)) return
+  // A teammate picked to take over must still be there to.
+  if (typeof pick === 'number' && !voters.includes(pick)) return
+  takeSeat(m, seat, pick === 'ai' ? null : pick, 'vote')
+}
+
+/** Who's left to vote changed (someone stepped away, came back or left): votes may agree now. */
+function decideAll(m: Match) {
+  for (const seat of [...m.away.keys()]) decide(m, seat)
+}
+
+/** The player in `seat` is out (the others voted so, or their time ran out): an AI admiral takes
+ * their fleet, or teammate `to` takes the ships and credits (and the AI the base) from the next
+ * tick. They're out of the lobby too, and told why if they come back. */
+function takeSeat(m: Match, seat: number, to: number | null, how: 'vote' | 'time') {
+  if (!m.away.delete(seat) || m.gone.has(seat)) return
+  m.gone.set(seat, 'dropped')
+  m.takeover.push([seat, TAKEOVER])
+  const heir = to === null ? null : m.info.seats[to].name
+  if (to !== null) {
+    m.give.push([seat, to])
+    m.heir.set(seat, to)
+  }
+  const p = players.get(m.info.seats[seat].player)
+  if (p && p.lobby === m.lobby) {
+    const by = heir ? `${heir} took over your fleet` : 'an AI admiral took over your fleet'
+    p.outWhy = how === 'vote' ? `While you were away, the others carried on: ${by}.` : `You were away too long: ${by}.`
+    leave(p, heir ? `was away: ${heir} took over their fleet` : 'was away: the AI took over their fleet', 'dropped')
+  }
+  decideAll(m)
+  pushRoster(m)
+  run(m)
+}
+
+// Time's up for a player who stepped away: the AI takes over.
+setInterval(() => {
+  const now = Date.now()
+  for (const m of [...matches.values()]) for (const [seat, a] of [...m.away]) if (a.deadline && now > a.deadline) takeSeat(m, seat, null, 'time')
+}, 1000).unref()
 
 function finish(m: Match) {
   const l = lobbies.get(m.lobby)
@@ -540,7 +679,7 @@ function stopMatch(lobby: string) {
 
 function order(p: Player, m: Match, raw: unknown) {
   const seat = seatIndex(m, p)
-  if (seat < 0 || !m.t0 || m.gone.has(seat)) return
+  if (seat < 0 || !m.started || m.gone.has(seat)) return
   if (m.pending.filter(([s]) => s === seat).length >= MAX_CMDS_PER_TICK) return
   const c = cleanCmd(raw, m.w)
   if (!c) return send(p, { t: 'error', why: "That order didn't make sense to the server." })
@@ -579,31 +718,42 @@ function allowed(p: Player) {
   return true
 }
 
-/** Seated players show as away while their connection is down. */
+/** Seated players show as away while their connection is down; in a battle under way, they've
+ * stepped away (and the battle waits for them), or are back. */
 function setAway(p: Player, away: boolean) {
   const l = lobbyOf(p)
   const i = l ? seatOf(l, p) : -1
-  if (!l || i < 0 || l.slots[i].away === away) return
-  l.slots[i] = { ...l.slots[i], away }
-  pushLobby(l)
+  if (!l || i < 0) return
+  if (l.slots[i].away !== away) {
+    l.slots[i] = { ...l.slots[i], away }
+    pushLobby(l)
+  }
   const game = matches.get(l.id)
-  if (game?.t0) pushRoster(game)
+  if (!game?.started) return
+  const seat = seatIndex(game, p)
+  if (seat >= 0 && !game.gone.has(seat)) {
+    if (away) stepAway(game, seat)
+    else stepBack(game, seat)
+  }
+  pushRoster(game)
 }
 
-function hello(ws: WsConnection, conn: { p: Player | null; login: string | null; ip: string }, token: unknown) {
+function hello(ws: WsConnection, conn: { p: Player | null; login: string | null; ip: string }, token: unknown, stored: boolean) {
   const firstName = (p: Player) => (conn.login && !nameTaken(conn.login, p) ? conn.login : suggest(p))
   // Coming back within the grace period: the same player, name, lobby and seat, on this connection.
-  const back = typeof token === 'string' ? byToken.get(token) : undefined
+  // The browser's last token (from a closed tab) doesn't take over a tab still playing with it.
+  const known = typeof token === 'string' ? byToken.get(token) : undefined
+  const back = known && !(stored && known.ws) ? known : undefined
   if (back) {
     back.ws?.close(4000, 'replaced')
     back.ws = ws
     back.leftAt = 0
+    back.grace = GRACE_MS
     conn.p = back
     if (!back.name) return send(back, { t: 'ready', suggestion: firstName(back), login: conn.login })
     send(back, { t: 'welcome', id: back.id, name: back.name, token: back.token, resumed: true })
     const l = lobbyOf(back)
     if (l) {
-      setAway(back, false)
       send(back, { t: 'lobby', lobby: l })
       const game = matches.get(l.id)
       const seat = game ? seatIndex(game, back) : -1
@@ -611,11 +761,18 @@ function hello(ws: WsConnection, conn: { p: Player | null; login: string | null;
         send(back, { t: 'match', match: game.info, me: seat })
         sync(back, game, 'rejoin')
       }
-    } else send(back, { t: 'lobbies', list: lobbyList() })
+      // Back in the lobby, and in the battle: it carries on once nobody else is away.
+      setAway(back, false)
+    } else {
+      // Out of the battle while away (an AI or a teammate took over): say so.
+      send(back, { t: 'lobby', lobby: null, ...(back.outWhy ? { why: back.outWhy } : {}) })
+      back.outWhy = undefined
+      send(back, { t: 'lobbies', list: lobbyList() })
+    }
     return
   }
   const p: Player = {
-    id: newId(), token: randomBytes(18).toString('base64url'), name: '', key: '', login: conn.login, ip: conn.ip, ws, leftAt: 0, allowance: BURST, allowanceAt: Date.now(), lobby: null, rtt: 0,
+    id: newId(), token: randomBytes(18).toString('base64url'), name: '', key: '', login: conn.login, ip: conn.ip, ws, leftAt: 0, grace: GRACE_MS, allowance: BURST, allowanceAt: Date.now(), lobby: null, rtt: 0,
   }
   players.set(p.id, p)
   byToken.set(p.token, p)
@@ -634,7 +791,7 @@ function onMessage(ws: WsConnection, conn: { p: Player | null; login: string | n
 
   if (!conn.p) {
     if (m.t !== 'hello') return ws.close(1008, 'hello first')
-    hello(ws, conn, m.token)
+    hello(ws, conn, m.token, m.stored === true)
     return
   }
 
@@ -651,7 +808,7 @@ function onMessage(ws: WsConnection, conn: { p: Player | null; login: string | n
   if (m.t === 'join') return join(p, m.id)
   const l = lobbyOf(p)
   // Battle traffic still on its way after leaving is just dropped.
-  if (!l && (m.t === 'cmd' || m.t === 'hash' || m.t === 'loaded')) return
+  if (!l && (m.t === 'cmd' || m.t === 'hash' || m.t === 'loaded' || m.t === 'vote')) return
   if (!l) return send(p, { t: 'error', why: "You're not in a battle." })
   if (l.state === 'playing' && (m.t === 'seat' || m.t === 'slot' || m.t === 'setup' || m.t === 'ready' || m.t === 'start')) return send(p, { t: 'error', why: 'The battle is on: the lobby opens again when it ends.' })
   switch (m.t) {
@@ -674,11 +831,13 @@ function onMessage(ws: WsConnection, conn: { p: Player | null; login: string | n
       return start(p, l)
     case 'loaded':
     case 'cmd':
-    case 'hash': {
+    case 'hash':
+    case 'vote': {
       const game = matches.get(l.id)
       if (!game) return
       if (m.t === 'loaded') return loaded(p, game)
       if (m.t === 'cmd') return order(p, game, m.c)
+      if (m.t === 'vote') return vote(p, game, m.seat, m.v)
       return checkHash(p, game, m.n, m.h)
     }
     default:
@@ -707,6 +866,11 @@ export function empiresUpgrade(req: IncomingMessage, socket: Duplex, head: Buffe
   }
   if (path !== MP_PATH) return false
   socket.on('error', () => socket.destroy())
+  // On the way down: the state is already saved, so a player can only come back after the restart.
+  if (closing) {
+    refuse(socket, 503, 'Service Unavailable')
+    return true
+  }
   // Only this site's pages may connect: a sign-in cookie rides along with the upgrade.
   if (!sameOrigin(req) || !req.headers.origin) {
     refuse(socket, 403, 'Forbidden')
@@ -752,6 +916,9 @@ export function empiresUpgrade(req: IncomingMessage, socket: Duplex, head: Buffe
     if (p && p.ws === ws) {
       p.ws = null
       p.leftAt = Date.now()
+      // In a battle, kept long enough to rejoin it (and then to hear what happened, if too late).
+      const game = p.lobby ? matches.get(p.lobby) : undefined
+      p.grace = game && seatIndex(game, p) >= 0 && !game.gone.has(seatIndex(game, p)) ? REJOIN_MS + GRACE_MS : GRACE_MS
       setAway(p, true)
     }
   }
@@ -761,8 +928,172 @@ export function empiresUpgrade(req: IncomingMessage, socket: Duplex, head: Buffe
 // Players who didn't come back in time are let go: their seats open and their names are freed.
 setInterval(() => {
   const now = Date.now()
-  for (const p of players.values()) if (!p.ws && p.leftAt && now - p.leftAt > GRACE_MS) forget(p)
+  for (const p of players.values()) if (!p.ws && p.leftAt && now - p.leftAt > p.grace) forget(p)
 }, 5_000).unref()
 
 /** For tests and a status line: how many are online, with names, and in lobbies. */
 export const empiresOnline = () => ({ players: players.size, named: byName.size, lobbies: lobbies.size, battles: matches.size })
+
+// --- Restarts ---------------------------------------------------------------------------------------
+//
+// A deploy restarts the site (Docker sends SIGTERM and waits ~10 s). On the way down the players,
+// lobbies and battles are written to one small file; on the way up they're read back and the file
+// is deleted (so a crash loop can't bring stale state back again and again). Players come back as
+// dropped, with RESTART_GRACE_MS to reconnect with their token. In a battle they have all stepped
+// away, so it waits at its last tick; nobody counts down until the first player is back, and then
+// the others get REJOIN_MS like anyone who stepped away (see Stepping away). The server's copy of
+// each battle is the one everyone carries on from: a returning player gets it as a `rejoin` sync.
+
+/** Where the multiplayer state waits out a restart. */
+const STATE_FILE = joinPath(resolve(process.env.DATA_DIR ?? 'data'), 'empires-state.json')
+const STATE_VERSION = 1
+
+type SavedPlayer = Pick<Player, 'id' | 'token' | 'name' | 'login' | 'ip' | 'lobby'>
+type SavedMatch = {
+  info: MatchInfo
+  lobby: string
+  n: number
+  world: string
+  brains: BattleSnap['brains']
+  pending: Turn['c']
+  takeover: Match['takeover']
+  give: Match['give']
+  gone: [Owner, 'left' | 'dropped'][]
+  heir: [Owner, Owner][]
+}
+type SavedState = { v: number; at: number; players: SavedPlayer[]; lobbies: MpLobby[]; matches: SavedMatch[] }
+
+/** Writes everyone with a name, their lobbies and the battles to STATE_FILE (tmp + rename, so a
+ * half-written file is never read). Returns how many players it kept. */
+export function saveEmpires(): number {
+  const named = [...players.values()].filter((p) => p.name)
+  if (!named.length) {
+    rmSync(STATE_FILE, { force: true })
+    return 0
+  }
+  const state: SavedState = {
+    v: STATE_VERSION,
+    at: Date.now(),
+    players: named.map((p) => ({ id: p.id, token: p.token, name: p.name, login: p.login, ip: p.ip, lobby: p.lobby })),
+    lobbies: [...lobbies.values()],
+    matches: [...matches.values()].map((m) => ({
+      info: m.info,
+      lobby: m.lobby,
+      n: m.n,
+      world: snapshotWorld(m.w),
+      brains: m.brains.map(snapBrain),
+      // Orders taken for the next tick haven't reached anyone yet: they go out with it after the restart.
+      pending: m.pending,
+      takeover: m.takeover,
+      give: m.give,
+      gone: [...m.gone],
+      heir: [...m.heir],
+    })),
+  }
+  mkdirSync(dirname(STATE_FILE), { recursive: true })
+  const tmp = `${STATE_FILE}.tmp`
+  writeFileSync(tmp, JSON.stringify(state))
+  renameSync(tmp, STATE_FILE)
+  return named.length
+}
+
+/** Reads STATE_FILE back (and deletes it). Anything wrong with it (too old, another version,
+ * garbled) and the server starts empty, as it did before restarts carried anything over. */
+function restoreEmpires() {
+  let raw: string
+  try {
+    raw = readFileSync(STATE_FILE, 'utf8')
+  } catch {
+    return // nothing saved: a first start, or nobody was playing
+  }
+  rmSync(STATE_FILE, { force: true })
+  try {
+    const s = JSON.parse(raw) as SavedState
+    if (s?.v !== STATE_VERSION) throw new Error(`version ${String(s?.v)}`)
+    const age = Date.now() - Number(s.at)
+    if (!(age >= 0 && age <= STATE_MAX_AGE_MS)) throw new Error(`saved ${Math.round(age / 1000)} s ago`)
+    const now = Date.now()
+    for (const sp of s.players) {
+      if (typeof sp.id !== 'string' || typeof sp.token !== 'string' || typeof sp.name !== 'string' || !sp.name) continue
+      const p: Player = {
+        id: sp.id, token: sp.token, name: sp.name, key: nameKey(sp.name), login: sp.login ?? null, ip: String(sp.ip), ws: null, leftAt: now, grace: RESTART_GRACE_MS, allowance: BURST, allowanceAt: now, lobby: sp.lobby ?? null, rtt: 0,
+      }
+      players.set(p.id, p)
+      byToken.set(p.token, p)
+      byName.set(p.key, p)
+    }
+    for (const l of s.lobbies) {
+      // Everyone is away until they reconnect; a seat whose player wasn't kept opens up.
+      l.slots = l.slots.map((x, i) => (x.kind !== 'human' ? x : players.get(x.player)?.lobby === l.id ? { ...x, away: true } : { ...openSlot(i), faction: x.faction, team: x.team }))
+      const left = humans(l)
+      if (!left.length) continue
+      if (!left.some((x) => x.player === l.host)) l.host = left[0].player
+      l.state = 'open'
+      lobbies.set(l.id, l)
+    }
+    for (const sm of s.matches) {
+      const l = lobbies.get(sm.lobby)
+      const w = restoreWorld(sm.world)
+      if (!l || !w || !Array.isArray(sm.brains)) continue
+      const m: Match = {
+        info: sm.info, lobby: sm.lobby, w, brains: sm.brains.map(restoreBrain), n: sm.n, t0: 0, pending: sm.pending ?? [], takeover: sm.takeover ?? [], give: sm.give ?? [],
+        gone: new Map(sm.gone ?? []), heir: new Map(sm.heir ?? []), away: new Map(), started: true, loaded: new Set(), timer: null, hashes: new Map(), resynced: new Map(),
+      }
+      // A player who wasn't kept can't come back: their fleet goes to an AI on the first tick.
+      // Everyone else has stepped away, with nobody counting down yet.
+      m.info.seats.forEach((x, i) => {
+        if (x.kind !== 'human' || m.gone.has(i)) return
+        if (players.get(x.player)?.lobby === l.id) m.away.set(i, { deadline: 0, votes: new Map() })
+        else {
+          m.gone.set(i, 'dropped')
+          m.takeover.push([i, TAKEOVER])
+        }
+      })
+      matches.set(l.id, m)
+      l.state = 'playing'
+    }
+    for (const p of players.values()) if (p.lobby && !lobbies.has(p.lobby)) p.lobby = null
+    for (const l of lobbies.values()) if (l.state === 'open') unready(l)
+    console.log(`[empires] carried over a restart: ${players.size} players, ${lobbies.size} lobbies, ${matches.size} battles (saved ${Math.round(age / 1000)} s ago)`)
+  } catch (e) {
+    console.warn(`[empires] ignored the state saved before the restart: ${(e as Error).message}`)
+    players.clear()
+    byToken.clear()
+    byName.clear()
+    lobbies.clear()
+    matches.clear()
+  }
+}
+
+let closing = false
+/** On the way down: the state goes to disk, and every player is told the server is restarting
+ * (WebSocket close code 1012, "service restart"), so their game can say so while it waits. */
+function shutdown() {
+  if (closing) return
+  closing = true
+  for (const m of matches.values()) if (m.timer) clearTimeout(m.timer)
+  try {
+    const kept = saveEmpires()
+    if (kept) console.log(`[empires] saved ${kept} players, ${lobbies.size} lobbies and ${matches.size} battles for after the restart`)
+  } catch (e) {
+    console.error('[empires] could not save the state for after the restart:', (e as Error).message)
+  }
+  for (const p of players.values()) p.ws?.close(1012, 'server restarting')
+}
+
+let started = false
+/** Brings back what was saved before a restart, and saves it again on the next SIGTERM or SIGINT.
+ * Called once the server (or Vite's dev server) starts, not on import: `vite build` loads this
+ * file too, and mustn't eat the state. */
+export function startEmpires() {
+  if (started) return
+  started = true
+  restoreEmpires()
+  for (const sig of ['SIGTERM', 'SIGINT'] as const)
+    process.once(sig, () => {
+      shutdown()
+      // Vite's dev server has its own handler, which closes and exits; on our own, exit once the
+      // close frames have had a moment to go out.
+      if (!process.listenerCount(sig)) setTimeout(() => process.exit(0), 300)
+    })
+}
