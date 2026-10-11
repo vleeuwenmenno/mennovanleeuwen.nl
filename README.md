@@ -634,7 +634,10 @@ On phone-sized screens the game opens in fullscreen:
 
 The arcade's space RTS has online skirmishes: Main menu → Multiplayer → Skirmish. Anyone can play,
 signed in or not, under a typed or random name; names are unique among everyone online, and a
-signed-in user's GitHub login is theirs alone. A host sets up a battle (map, rules, starting
+signed-in user's GitHub login is theirs alone. The game remembers the last name you played under
+(in this browser, and with your account when signed in, so it follows you to other devices) and
+takes it by itself when you come back; if someone online has it right now (you, on another
+device), it says so and offers a free one instead. A host sets up a battle (map, rules, starting
 credits, and each spawn as open, AI or closed); players join from the list, pick their spawn,
 faction and side, chat, and say they're ready.
 
@@ -645,12 +648,40 @@ ticks a second and hands everyone each tick's orders; it cleans every order and 
 sender's own seat ([`commands.ts`](src/apps/games/empires/commands.ts)), so a tampered client can't
 order other players' ships, play faster or claim a win. It also runs its own copy of every battle:
 players send a fingerprint of theirs every second, and one that drifted gets the server's copy.
-The same copy brings a player back after a reload or a dropped connection (within 30 seconds); a
-player who leaves (or closes the game's window) hands their fleet to an AI. In battle, Tab (or the
+The same copy brings a player back after a reload or a dropped connection. In battle, Tab (or the
 top bar's players button, which shows your ping) opens the player list: fleet, kills, losses,
 credits earned and score, and online each player's ping and whether they're still there; a toast
-says when an ally or enemy loses the connection, comes back, or gives up. What a client can still do is read past the fog of
+says when an ally or enemy steps away, comes back, or gives up. What a client can still do is read past the fog of
 war, since it holds the whole battle.
+
+Quitting a battle (its menu's Leave) hands your fleet to an AI admiral at once. Anything else that
+takes you away (the connection dropping, closing the browser tab, closing the game's window) only
+steps you away: your seat is kept for 60 seconds, and the battle pauses for everyone meanwhile
+(the server stops handing out ticks, and doesn't fast-forward afterwards). The others see
+"<name> left" with a live countdown (the server's deadline, on each player's own clock) and vote:
+*Continue: AI takes over <name>*, *Continue: <teammate> takes over <name>'s fleet* (only when the
+player who left has teammates still there), or *Wait*, the default. The battle goes on as soon as
+everyone still there picks the same way to continue, and shows who voted what; when the countdown
+runs out, the AI takes over. A teammate taking over gets every ship and the credits, on every
+player's machine at the same tick, while an AI admiral keeps running the base (station, mines and
+defenses stay with their seat: one player runs one station). Coming back in time puts you straight
+back in the battle with the server's copy, and it carries on for everyone. The browser keeps your
+last token (in localStorage, next to the tab's own), so even after closing the tab, opening
+Empires → Multiplayer again rejoins the battle; the main menu shows *Rejoin battle* while your seat
+may still be waiting. Come back too late and the game says what happened to your fleet.
+
+Battles survive a restart of the site (a deploy, or watchtower pulling a new image). On SIGTERM
+the server writes every player (name and token), lobby and battle (the server's own copy, at its
+last tick) to `DATA_DIR/empires-state.json`, tells the players it is restarting (WebSocket close
+code 1012), and exits. The new server reads the file back and deletes it (one older than 10
+minutes, from another version or unreadable is ignored). Players have 3 minutes to reconnect, which
+their games do by themselves with their token, and each gets the server's battle back. A battle
+waits at the tick it stopped on: everyone in it has stepped away, with nobody counting down until
+the first player is back; from then the others get the usual 60 seconds (and the vote), and the
+time it was down doesn't count. Meanwhile the game says the server is restarting and the battle
+will carry on. Should the server have lost a battle anyway (a crash, SIGKILL, or a
+player gone too long), the battle screen says so and offers to keep playing it against the
+computer, from where it was, as an offline skirmish with AI admirals for the other players.
 
 The sim is bit-for-bit the same in every browser: it uses its own trigonometry
 ([`detmath.ts`](src/apps/games/empires/detmath.ts)) and a seeded random stream kept in the world.
@@ -662,6 +693,8 @@ The reverse proxy in front of the site has to pass WebSocket upgrades through (n
 pnpm check:empires                                              # two copies of a battle stay identical
 pnpm check:empires-ws ws://localhost:5173/api/empires/ws        # names, limits and lobbies (needs pnpm dev)
 pnpm check:empires-match 40 ws://localhost:5173/api/empires/ws  # a scripted battle: drift, rejoin, leave
+pnpm check:empires-restart                                      # a battle through a server restart (starts its own servers)
+pnpm check:empires-rejoin                                       # stepping away: rejoining, votes, teammate takeover, timeout
 pnpm empires:bot "Bot Rook"                                     # an opponent that joins your battle
 ```
 

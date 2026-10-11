@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { handleApi } from './server/api.ts'
-import { empiresUpgrade } from './server/empires.ts'
+import { empiresUpgrade, startEmpires } from './server/empires.ts'
 import { startMinecraftWatch } from './server/minecraft.ts'
 import { startNotifications } from './server/watchers.ts'
 
@@ -22,12 +22,14 @@ const liveApi = (): Plugin => {
     configureServer: (server) => {
       server.middlewares.use(handler)
       server.httpServer?.on('upgrade', upgrade)
+      startEmpires()
       startMinecraftWatch()
       startNotifications()
     },
     configurePreviewServer: (server) => {
       server.middlewares.use(handler)
       server.httpServer.on('upgrade', upgrade)
+      startEmpires()
       startMinecraftWatch()
       startNotifications()
     },

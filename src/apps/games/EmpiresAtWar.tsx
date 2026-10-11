@@ -8,7 +8,7 @@ import { LongPress, TouchBar, WheelHost, getTouchMods, isTouch, setTouchMod, shi
 import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
 import { Multiplayer } from './empires/Multiplayer'
-import { Net, type NetView } from './empires/net'
+import { Net, battleToRejoin, type NetView } from './empires/net'
 import { cmd as makeCmd, runCmd, thinPath, type CmdArgs, type CmdName, type CmdResult } from './empires/commands'
 import { matchBrains, matchMap, matchWorld, stepTurn, type MatchInfo } from './empires/match'
 import { HASH_EVERY } from './empires/protocol'
@@ -26,7 +26,7 @@ import {
 import { EmpiresSound, type OrderKind } from './empires/sound'
 import { TechTree } from './empires/TechTree'
 import { Scoreboard } from './empires/Scoreboard'
-import type { SeatStatus } from './empires/protocol'
+import type { AwayVote, SeatStatus } from './empires/protocol'
 import { useHighScore, useIsFocused } from './shared'
 import './empires/empires.css'
 import './empires/touch-battle.css'
@@ -86,12 +86,13 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
   const [net, setNet] = useState<Net | null>(null)
   const netRef = useRef(net)
   netRef.current = net
-  // Closing the window leaves the lobby or battle like quitting does (the AI takes over the seat),
-  // rather than holding it for a reconnect that isn't coming. A reload never gets here, so the
-  // server still lets that come back.
+  // Closing the window leaves a lobby like quitting does, rather than holding the seat for a
+  // reconnect that isn't coming. From a battle it only steps away: the battle waits a minute for
+  // the player to open the game again and rejoin it (the others can vote to carry on sooner). A
+  // reload never gets here, so the server lets that come back either way.
   useEffect(
     () => () => {
-      netRef.current?.leave()
+      if (!netRef.current?.inBattle()) netRef.current?.leave()
       netRef.current?.close()
     },
     [],
@@ -115,6 +116,7 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
           setNet(new Net())
           setScreen('multiplayer')
         }}
+        rejoin={battleToRejoin()}
         latest={saves[0] ? `${saves[0].name}, week ${saves[0].week}` : undefined}
         saves={saves.length}
         onConquest={(how) => {
@@ -131,32 +133,41 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
       />
     )
   }
-  if (screen === 'multiplayer' && net && mp?.match)
+  /** Out of multiplayer, back to the main menu's multiplayer page. */
+  const quitMultiplayer = (n: Net) => {
+    mpActive.set(session, false)
+    n.close()
+    setNet(null)
+    setMenuAt('multi')
+    setScreen('menu')
+  }
+  if (screen === 'multiplayer' && net && mp?.match) {
+    const { info, me } = mp.match
     return (
       <Battle
-        key={mp.match.info.id}
+        key={info.id}
         win={win}
-        online={{ net, info: mp.match.info, me: mp.match.me }}
+        online={{ net, info, me }}
         sound={sound.current}
         // Leaving (mid-battle, or from the result) leaves the lobby too; "back to the lobby" stays.
         onExit={() => net.leave()}
         onAgain={() => net.endMatch()}
-      />
-    )
-  if (screen === 'multiplayer' && net)
-    return (
-      <Multiplayer
-        net={net}
-        sound={sound.current}
-        onBack={() => {
-          mpActive.set(session, false)
-          net.close()
-          setNet(null)
-          setMenuAt('multi')
-          setScreen('menu')
+        onMenu={() => quitMultiplayer(net)}
+        // The server lost the battle: it goes on here as a skirmish, from this very moment, and is
+        // kept for a reload like any other skirmish.
+        onOffline={(snap) => {
+          const s = offlineSetup(info, me)
+          quitMultiplayer(net)
+          saveSkirmish(session, { setup: s, snap })
+          setSkirmish({ setup: s, snap })
+          setSetup(s)
+          setRound((r) => r + 1)
+          setScreen('battle')
         }}
       />
     )
+  }
+  if (screen === 'multiplayer' && net) return <Multiplayer net={net} sound={sound.current} onBack={() => quitMultiplayer(net)} />
   if (screen === 'conquest')
     return (
       <Conquest
@@ -223,6 +234,24 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
 const noSubscribe = () => () => {}
 const noView = (): NetView | null => null
 
+/** The AI admirals that take over every other player's fleet when a multiplayer battle carries on
+ * offline (the server's choice for a player who left, too). */
+const OFFLINE_AI = 'medium' as const
+
+/** A multiplayer battle as a skirmish setup, to carry it on offline: we're 'you', every other seat
+ * an AI, and spawns nobody had are closed. Sides stay as they were (team 0 or 1 by the match, not
+ * relative to us): the battle reads ours from the world. The players keep their names. */
+function offlineSetup(info: MatchInfo, me: number): Setup {
+  const map = matchMap(info)
+  const slots: Slot[] = map.spawns.map((_, i) => ({ kind: 'closed', faction: i % 2 ? 'droid' : 'republic', team: (i % 2) as 0 | 1, difficulty: OFFLINE_AI }))
+  const names: (string | null)[] = map.spawns.map(() => null)
+  info.seats.forEach((s, i) => {
+    slots[s.spawn] = { kind: i === me ? 'you' : 'ai', faction: s.faction, team: s.team, difficulty: s.kind === 'ai' ? s.difficulty : OFFLINE_AI }
+    names[s.spawn] = i === me ? null : s.kind === 'ai' ? s.name : `${s.name} (AI)`
+  })
+  return { map: info.map, gen: info.gen, credits: info.credits, slots, areas: [], names }
+}
+
 // --- Battle ---------------------------------------------------------------------------------------
 
 /** Multiplayer turns the battle keeps queued at most before it plays faster to catch up: about
@@ -250,7 +279,7 @@ function snapshot(w: World, me: Owner, sel: Set<number>, groups: Map<string, num
   }
 }
 
-function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, onAgain }: {
+function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, onAgain, onMenu, onOffline }: {
   win: WinState
   setup?: Setup
   conquest?: ConquestBattle
@@ -264,6 +293,10 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   sound: EmpiresSound
   onExit: () => void
   onAgain: () => void
+  /** Online, once the server has lost the battle: out to the main menu, or on against the computer
+   * from the battle as it stands. */
+  onMenu?: () => void
+  onOffline?: (snap: BattleSnap) => void
 }) {
   // A new battle lays the windows out afresh: the start layout, or the defaults. Before anything
   // draws, so nothing jumps.
@@ -283,7 +316,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         kind: (i === conquest.me ? 'you' : 'ai') as Slot['kind'], faction: s.faction, team: s.team as 0 | 1, difficulty: conquest.ai, spawn: i, name: conquest.names[i], area: defaultArea(map, i),
       }))
     const areas = setupAreas(setup!, map)
-    return setup!.slots.map((s, i) => ({ ...s, spawn: i, name: slotName(s, i), area: areas[i] })).filter((s) => s.kind !== 'closed')
+    return setup!.slots.map((s, i) => ({ ...s, spawn: i, name: setup!.names?.[i] ?? slotName(s, i), area: areas[i] })).filter((s) => s.kind !== 'closed')
   })
   const me: Owner = seats.findIndex((s) => s.kind === 'you')
   // Leaving a campaign battle (won, lost, or pulled out of) hands it back to the galaxy.
@@ -1004,6 +1037,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         if (q.length - steps > TURN_BUFFER) steps = Math.min(q.length, steps + Math.ceil((q.length - steps - TURN_BUFFER) / 3), 300)
         for (let i = 0; i < steps && w.winner === -1; i++) {
           const t = q.shift()!
+          for (const [from, to] of t.give ?? []) toast(`${to === me ? 'You take' : `${seats[to].name} takes`} over ${seats[from].name}'s fleet; an AI admiral runs their base`, to === me ? 'good' : 'info')
           stepTurn(w, brains.current, t, (seat, _c, r) => {
             if (seat === me && typeof r === 'string') {
               toast(r, 'bad')
@@ -1798,6 +1832,24 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   }
   const keepRef = useRef(keep)
   keepRef.current = keep
+  /** The server lost the battle: carry it on here, an AI admiral taking every other player's fleet. */
+  const goOffline = () => {
+    if (!online || !onOffline) return
+    const all = [...brains.current]
+    online.info.seats.forEach((_, i) => {
+      if (i !== me && !all.some((b) => b.o === i)) all.push(newBrain(i, OFFLINE_AI))
+    })
+    left.current = true
+    sound.click()
+    onOffline({
+      world: snapshotWorld(world.current),
+      brains: all.map(snapBrain),
+      cam: { ...cam.current },
+      sel: [...selected.current],
+      groups: [...groups.current.entries()],
+      speed: 1,
+    })
+  }
   // Every few seconds, and the moment the page goes away.
   useEffect(() => {
     const id = window.setInterval(() => keepRef.current(), 4000)
@@ -1824,10 +1876,11 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     roster.forEach((r, i) => {
       if (i === me || r.status === was[i]) return
       const who = `${seats[i].name} (${seats[i].team === myTeam ? 'ally' : 'enemy'})`
-      if (r.status === 'away') toast(`${who} lost the connection. Waiting for them to come back…`, 'info')
+      if (r.status === 'away') toast(`${who} stepped away. The battle waits for them to rejoin…`, 'info')
       else if (r.status === 'playing' && was[i] === 'away') toast(`${who} is back`, 'good')
       else if (r.status === 'left') toast(`${who} gave up: an AI admiral takes over their fleet`, seats[i].team === myTeam ? 'bad' : 'good')
-      else if (r.status === 'dropped') toast(`${who} didn't come back: an AI admiral takes over their fleet`, 'info')
+      // A teammate taking over says so when the fleet changes hands (on the turn it does).
+      else if (r.status === 'dropped' && r.to === undefined) toast(`${who} didn't come back: an AI admiral takes over their fleet`, 'info')
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [net?.roster])
@@ -1883,11 +1936,43 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           ping={online ? (net?.status === 'online' ? Math.round(net.rtt) : -1) : undefined}
         />
         {ui.players && <Scoreboard w={w} me={me} names={seats.map((s) => s.name)} roster={online ? net?.roster : undefined} onClose={() => setUi((u) => ({ ...u, players: false }))} />}
-        {online && net?.status !== 'online' && hud.winner === -1 && (
+        {online && net?.status !== 'online' && hud.winner === -1 && !net?.lost && (
           <div className="ew-pausebox">
-            <Frame title="Connection lost">
-              <p>Reconnecting to the server. The battle goes on without your orders for now; you'll be put back in it as soon as the connection is back.</p>
-            </Frame>
+            {net?.restarting ? (
+              <Frame title="Server restarting">
+                <p>The server is restarting for an update. It keeps this battle, which waits for everyone and carries on from this moment once the server is back, usually within a minute.</p>
+              </Frame>
+            ) : (
+              <Frame title="Connection lost">
+                <p>Reconnecting to the server. The battle waits for you meanwhile (for up to a minute), and you'll be put back in it as soon as the connection is back.</p>
+              </Frame>
+            )}
+          </div>
+        )}
+        {online && net?.status === 'online' && net.away.length > 0 && !net.lost && hud.winner === -1 && (
+          <AwayPanel v={net} net={online.net} me={me} names={seats.map((s) => s.name)} sound={sound} />
+        )}
+        {online && net?.lost && hud.winner === -1 && (
+          // Not a Modal: there's no closing it, only one of the two ways on.
+          <div className="ew-modal-back">
+            <div className="ew-modal ew-lost">
+              <Frame title="Battle lost by the server">
+                <p>{net.lost.why} You can keep playing it here against the computer, from where it is now: AI admirals take over every other player's fleet.</p>
+                <button className="ew-go" onClick={goOffline}>
+                  Keep playing against the computer
+                </button>
+                <button
+                  className="ew-menu-btn"
+                  onClick={() => {
+                    sound.click()
+                    left.current = true
+                    onMenu?.()
+                  }}
+                >
+                  <Icon name="back" size={18} /> Leave
+                </button>
+              </Frame>
+            </div>
           </div>
         )}
         {ui.economy && hud.winner === -1 && <EconomyPanel w={w} me={me} onClose={() => setUi((u) => ({ ...u, economy: false }))} />}
@@ -2054,6 +2139,70 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         )}
         {hud.winner !== -1 && <Result w={w} me={me} names={seats.map((s) => s.name)} won={hud.winner === myTeam} onAgain={onAgain} onExit={exit} campaign={!!conquest} online={!!online} />}
       </WheelHost>
+    </div>
+  )
+}
+
+/** Players who stepped away from an online battle, which waits for them: how long they have left
+ * to rejoin (the server's deadline, on our clock), and the vote on carrying on without them. The
+ * battle goes on as soon as everyone still here picks the same; when time runs out, the AI takes
+ * over. */
+function AwayPanel({ v, net, me, names, sound }: { v: NetView; net: Net; me: number; names: string[]; sound: EmpiresSound }) {
+  const [, redraw] = useState(0)
+  useEffect(() => {
+    const id = window.setInterval(() => redraw((n) => n + 1), 250)
+    return () => clearInterval(id)
+  }, [])
+  const roster = v.roster ?? []
+  const here = roster.flatMap((r, i) => (r.status === 'playing' ? [i] : []))
+  const teams = v.match?.info.seats.map((s) => s.team) ?? []
+  const label = (x: AwayVote, away: number) => (x === 'wait' ? 'wait' : x === 'ai' ? 'AI takes over' : `${x === me ? 'you take' : `${names[x]} takes`} over ${names[away]}'s fleet`)
+  return (
+    <div className="ew-pausebox ew-away">
+      {v.away.map((a) => {
+        const left = a.deadline ? Math.max(0, Math.ceil((a.deadline - (Date.now() + net.clockOffset)) / 1000)) : null
+        const mine = a.votes.find(([s]) => s === me)?.[1] ?? 'wait'
+        const mates = here.filter((i) => teams[i] === teams[a.seat] && i !== a.seat)
+        const pick = (x: AwayVote) => {
+          sound.click()
+          net.vote(a.seat, x)
+        }
+        return (
+          <Frame key={a.seat} title={`${names[a.seat]} left`}>
+            <p>
+              {left === null ? 'Waiting for them to come back after the server restart.' : (
+                <>
+                  Waiting for them to rejoin: <b className="ew-away-clock">{Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}</b>
+                </>
+              )}
+            </p>
+            <div className="ew-away-votes">
+              <button className={mine === 'ai' ? 'ew-go is-on' : 'ew-go'} onClick={() => pick('ai')} aria-pressed={mine === 'ai'}>
+                Continue: AI takes over {names[a.seat]}
+              </button>
+              {mates.map((t) => (
+                <button key={t} className={mine === t ? 'ew-go is-on' : 'ew-go'} onClick={() => pick(t)} aria-pressed={mine === t}>
+                  Continue: {t === me ? 'you take' : `${names[t]} takes`} over {names[a.seat]}'s fleet
+                </button>
+              ))}
+              <button className={mine === 'wait' ? 'ew-menu-btn is-on' : 'ew-menu-btn'} onClick={() => pick('wait')} aria-pressed={mine === 'wait'}>
+                Wait
+              </button>
+            </div>
+            <ul className="ew-away-tally">
+              {here.map((i) => {
+                const x = a.votes.find(([s]) => s === i)?.[1] ?? 'wait'
+                return (
+                  <li key={i}>
+                    <b>{i === me ? 'You' : names[i]}</b>: {label(x, a.seat)}
+                  </li>
+                )
+              })}
+            </ul>
+            <small className="ew-muted">The battle carries on as soon as everyone here picks the same. When the time runs out, the AI takes over.</small>
+          </Frame>
+        )
+      })}
     </div>
   )
 }

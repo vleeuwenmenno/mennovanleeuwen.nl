@@ -5,7 +5,7 @@ import { Frame, Icon, Tips } from './Hud'
 import { GENERATED, MAP, MAPS, MAX_SEED, generateMap, type MapDef } from './maps'
 import { GenControls, MapCard, MapLegend, MapPreview, Modal, mapSize, slotColor, type Slot } from './Menus'
 import { NAME_MAX, nameProblem, randomName, tidyName } from './names'
-import type { Net, NetView } from './net'
+import { battleToRejoin, mpName, type Net, type NetView } from './net'
 import { CHAT_MAX, type MpLobby, type MpSlot, type SlotPatch } from './protocol'
 import type { EmpiresSound } from './sound'
 import { useCoarse } from './Touch'
@@ -33,7 +33,21 @@ export function Multiplayer({ net, sound, onBack }: { net: Net; sound: EmpiresSo
     const t = setTimeout(() => setToast(null), 4500)
     return () => clearTimeout(t)
   }, [v.problem, sound])
-  const shown = toast && <div className="ew-mp-toast" role="status">{toast}</div>
+  // The server lost the lobby we were in (a battle lost mid-fight is the battle screen's to say).
+  const lost = v.lost && !v.match && (
+    <Modal title="Your lobby is gone" onClose={() => net.dismissLost()}>
+      <p>{v.lost.why} Host a new battle or join one from the list.</p>
+      <button className="ew-go" onClick={() => (sound.click(), net.dismissLost())}>
+        OK
+      </button>
+    </Modal>
+  )
+  const shown = (
+    <>
+      {toast && <div className="ew-mp-toast" role="status">{toast}</div>}
+      {lost}
+    </>
+  )
   if (!v.me)
     return (
       <JoinScreen v={v} net={net} sound={sound} onBack={onBack}>
@@ -121,6 +135,7 @@ function NameField({ v, net, sound, initial, onDone }: { v: NetView; net: Net; s
 
 function Status({ v }: { v: NetView }) {
   if (v.status === 'online') return null
+  if (v.restarting) return <p className="ew-mp-status">The server is restarting for an update. You'll be back where you were in a moment…</p>
   return <p className="ew-mp-status">{v.status === 'connecting' ? 'Connecting to the server…' : "Can't reach the server. Trying again…"}</p>
 }
 
@@ -135,7 +150,16 @@ function JoinScreen({ v, net, sound, onBack, children }: { v: NetView; net: Net;
         <p className="ew-tagline">Battles against other players, live.</p>
         <Frame className="ew-menu-frame" title="Multiplayer">
           <Status v={v} />
-          <NameField v={v} net={net} sound={sound} initial="" />
+          {v.nameNote && <p className="ew-mp-status">{v.nameNote}</p>}
+          {/* Back after closing the game mid-battle: the server puts us straight back in it. */}
+          {v.status !== 'online' && battleToRejoin() ? (
+            <p className="ew-muted">Rejoining your battle…</p>
+          ) : v.claiming ? (
+            <p className="ew-muted">Joining as {v.claiming}…</p>
+          ) : (
+            // The name used last time, unless it just turned out to be taken: then the server's suggestion.
+            <NameField v={v} net={net} sound={sound} initial={v.nameNote ? '' : (mpName.get() ?? '')} />
+          )}
           <button className="ew-menu-btn" onClick={() => (sound.click(), onBack())}>
             <Icon name="back" size={20} /> Back
           </button>
