@@ -6,7 +6,7 @@ import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, ReserveTray, Ti
 import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
 import { Multiplayer } from './empires/Multiplayer'
-import { Net, type NetView } from './empires/net'
+import { Net, mpActive, type NetView } from './empires/net'
 import { cmd as makeCmd, runCmd, thinPath, type CmdArgs, type CmdName, type CmdResult } from './empires/commands'
 import { matchBrains, matchMap, matchWorld, stepTurn, type MatchInfo } from './empires/match'
 import { HASH_EVERY } from './empires/protocol'
@@ -79,12 +79,21 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
   netRef.current = net
   useEffect(() => () => netRef.current?.close(), [])
   const mp = useSyncExternalStore(net ? net.subscribe : noSubscribe, net ? net.getView : noView)
+  // A reload in the middle of multiplayer goes back to it: the server still has us for a while.
+  useEffect(() => {
+    if (!mpActive.get()) return
+    const n = new Net()
+    setNet(n)
+    setScreen('multiplayer')
+    return () => n.close()
+  }, [])
 
   if (screen === 'menu') {
     const saves = listSaves()
     return (
       <MainMenu sound={sound.current} victories={best ?? 0} onPlay={() => setScreen('lobby')} initial={menuAt}
         onMultiplayer={() => {
+          mpActive.set(true)
           setNet(new Net())
           setScreen('multiplayer')
         }}
@@ -112,10 +121,7 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
         online={{ net, info: mp.match.info, me: mp.match.me }}
         sound={sound.current}
         // Leaving (mid-battle, or from the result) leaves the lobby too; "back to the lobby" stays.
-        onExit={() => {
-          net.send({ t: 'leave' })
-          net.endMatch()
-        }}
+        onExit={() => net.leave()}
         onAgain={() => net.endMatch()}
       />
     )
@@ -125,6 +131,7 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
         net={net}
         sound={sound.current}
         onBack={() => {
+          mpActive.set(false)
           net.close()
           setNet(null)
           setMenuAt('multi')
@@ -761,6 +768,18 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const loop = (now: number) => {
       const dt = Math.min(0.1, (now - last) / 1000)
       last = now
+      // Online: the server's battle replaces ours when ours drifted, or when we came back to it.
+      const sync = online?.net.sync
+      if (sync) {
+        online!.net.sync = null
+        const back = restoreWorld(sync.world)
+        if (back) {
+          world.current = back
+          brains.current = sync.brains.map(restoreBrain)
+          acc = 0
+          toast(sync.why === 'drift' ? "Your battle had drifted from everyone else's: it's been put right from the server." : 'Back in the battle.', 'info')
+        }
+      }
       const w = world.current
       const events: SimEvent[] = []
       if (online && w.winner === -1) {
@@ -772,7 +791,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         if (q.length - steps > TURN_BUFFER) steps = Math.min(q.length, steps + Math.ceil((q.length - steps - TURN_BUFFER) / 3), 300)
         for (let i = 0; i < steps && w.winner === -1; i++) {
           const t = q.shift()!
-          stepTurn(w, brains.current, t.c, (seat, _c, r) => {
+          stepTurn(w, brains.current, t, (seat, _c, r) => {
             if (seat === me && typeof r === 'string') {
               toast(r, 'bad')
               sound.error()

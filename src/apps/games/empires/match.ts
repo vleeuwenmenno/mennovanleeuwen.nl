@@ -10,8 +10,9 @@ import { STEP, autoStart, newWorld, tick, type Owner, type World } from './sim.t
 
 export type MatchSeat = { kind: 'human' | 'ai'; player: string; name: string; faction: FactionId; team: 0 | 1; spawn: number; difficulty: Difficulty }
 export type MatchInfo = { id: string; seed: number; map: string; gen: MapRules; credits: number; seats: MatchSeat[] }
-/** One tick's orders, by seat, in the order the server took them. */
-export type Turn = { n: number; c: [Owner, Cmd][] }
+/** One tick's orders, by seat, in the order the server took them; `ai`: seats an AI admiral takes
+ * over from this tick (their player left). */
+export type Turn = { n: number; c: [Owner, Cmd][]; ai?: [Owner, Difficulty][] }
 
 export const matchMap = (m: MatchInfo): MapDef => (m.map === GENERATED ? generateMap(m.gen) : (MAP[m.map] ?? MAPS[0]))
 
@@ -28,10 +29,11 @@ export function matchWorld(m: MatchInfo): World {
 
 export const matchBrains = (m: MatchInfo): Brain[] => m.seats.flatMap((s, i) => (s.kind === 'ai' ? [newBrain(i, s.difficulty)] : []))
 
-/** Moves the battle one tick on: the turn's orders, then the AI admirals, then the sim. `onRun`
- * hears what each order answered (a player's own refusals become toasts). */
-export function stepTurn(w: World, brains: Brain[], cmds: Turn['c'], onRun?: (seat: Owner, c: Cmd, result: unknown) => void) {
-  for (const [seat, c] of cmds) {
+/** Moves the battle one tick on: new AI admirals, the turn's orders, then the AI, then the sim.
+ * `onRun` hears what each order answered (a player's own refusals become toasts). */
+export function stepTurn(w: World, brains: Brain[], turn: Pick<Turn, 'c' | 'ai'>, onRun?: (seat: Owner, c: Cmd, result: unknown) => void) {
+  for (const [seat, d] of turn.ai ?? []) if (!brains.some((b) => b.o === seat)) brains.push(newBrain(seat, d))
+  for (const [seat, c] of turn.c) {
     const r = runCmd(w, seat, c)
     onRun?.(seat, c, r)
   }

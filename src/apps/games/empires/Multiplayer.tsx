@@ -266,7 +266,7 @@ function Room({ v, lobby, net, sound, children }: { v: NetView; lobby: MpLobby; 
     <div className="ew-root ew-deck ew-lobby" style={BG} onContextMenu={noMenu}>
       <Tips />
       <header className="ew-lobby-head">
-        <button onClick={() => (sound.click(), net.send({ t: 'leave' }))}>← Leave</button>
+        <button onClick={() => (sound.click(), net.leave())}>← Leave</button>
         <h2>{lobby.name}</h2>
         <MeChip v={v} net={net} sound={sound} />
       </header>

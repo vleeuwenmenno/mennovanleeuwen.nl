@@ -383,6 +383,38 @@ dragging, the menus and an *Add widget* entry everywhere. Per-widget settings go
 [`config.ts`](src/widgets/config.ts) (`useWidgetConfig` / `setWidgetConfig`), which syncs like
 notes; where a widget sits is part of the synced window layout.
 
+## Empires At War multiplayer
+
+The arcade's space RTS has online skirmishes: Main menu → Multiplayer → Skirmish. Anyone can play,
+signed in or not, under a typed or random name; names are unique among everyone online, and a
+signed-in user's GitHub login is theirs alone. A host sets up a battle (map, rules, starting
+credits, and each spawn as open, AI or closed); players join from the list, pick their spawn,
+faction and side, chat, and say they're ready.
+
+Battles run in deterministic lockstep: every player's browser runs the whole battle, and only
+orders cross the network. The server ([`server/empires.ts`](server/empires.ts), on the WebSocket
+`/api/empires/ws` from the dependency-free [`server/ws.ts`](server/ws.ts)) keeps the clock at 30
+ticks a second and hands everyone each tick's orders; it cleans every order and stamps it with the
+sender's own seat ([`commands.ts`](src/apps/games/empires/commands.ts)), so a tampered client can't
+order other players' ships, play faster or claim a win. It also runs its own copy of every battle:
+players send a fingerprint of theirs every second, and one that drifted gets the server's copy.
+The same copy brings a player back after a reload or a dropped connection (within 30 seconds); a
+player who leaves hands their fleet to an AI. What a client can still do is read past the fog of
+war, since it holds the whole battle.
+
+The sim is bit-for-bit the same in every browser: it uses its own trigonometry
+([`detmath.ts`](src/apps/games/empires/detmath.ts)) and a seeded random stream kept in the world.
+The reverse proxy in front of the site has to pass WebSocket upgrades through (nginx:
+`proxy_http_version 1.1`, `proxy_set_header Upgrade $http_upgrade`,
+`proxy_set_header Connection "upgrade"`; Caddy and Traefik do it by default).
+
+```sh
+pnpm check:empires                                              # two copies of a battle stay identical
+pnpm check:empires-ws ws://localhost:5173/api/empires/ws        # names, limits and lobbies (needs pnpm dev)
+pnpm check:empires-match 40 ws://localhost:5173/api/empires/ws  # a scripted battle: drift, rejoin, leave
+pnpm empires:bot "Bot Rook"                                     # an opponent that joins your battle
+```
+
 ## Installable app
 
 The site is a PWA: [`public/manifest.webmanifest`](public/manifest.webmanifest) makes it

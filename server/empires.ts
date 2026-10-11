@@ -5,14 +5,15 @@ import { currentUser } from './auth.ts'
 import { database } from './db.ts'
 import { sameOrigin } from './http.ts'
 import { acceptWebSocket, refuse, type WsConnection } from './ws.ts'
-import { DIFFICULTY, type Brain } from '../src/apps/games/empires/ai.ts'
+import { DIFFICULTY, type Brain, type Difficulty } from '../src/apps/games/empires/ai.ts'
 import { cleanCmd } from '../src/apps/games/empires/commands.ts'
 import { CREDIT_STEPS, FACTIONS, START_CREDITS } from '../src/apps/games/empires/data.ts'
 import { DEFAULT_RULES, GENERATED, MAP, MAPS, cleanRules, generateMap, type MapDef } from '../src/apps/games/empires/maps.ts'
 import { matchBrains, matchWorld, stepTurn, type MatchInfo, type Turn } from '../src/apps/games/empires/match.ts'
 import { nameKey, nameProblem, randomName, tidyName } from '../src/apps/games/empires/names.ts'
 import { CHAT_MAX, HASH_EVERY, MP_PATH, type ClientMsg, type LobbyInfo, type MpLobby, type MpSlot, type ServerMsg, type SlotPatch } from '../src/apps/games/empires/protocol.ts'
-import { STEP, stateHash, type World } from '../src/apps/games/empires/sim.ts'
+import { STEP, stateHash, type Owner, type World } from '../src/apps/games/empires/sim.ts'
+import { snapBrain, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
 
 // Empires At War multiplayer: the players online, their names, the lobbies they gather in, and
 // the battles. Anyone may play, signed in or not. Names are unique among everyone online; a
@@ -37,6 +38,10 @@ const LOAD_WAIT_MS = 20_000
 const MAX_CMDS_PER_TICK = 12
 /** Fingerprints the server keeps, to compare late ones against. */
 const KEEP_HASHES = 40
+/** A drifting player gets the server's battle at most this often. */
+const RESYNC_MS = 10_000
+/** The AI that takes over a seat whose player left. */
+const TAKEOVER: Difficulty = 'medium'
 const STEP_MS = STEP * 1000
 /** Messages a second a connection may send on average, and in a burst. */
 const RATE = 40
@@ -76,13 +81,16 @@ type Match = {
   n: number
   /** When tick 0 was, by the server's clock; 0 while everyone's still loading. */
   t0: number
-  /** Orders taken since the last tick, for the next one. */
+  /** Orders taken since the last tick, for the next one, and seats the AI takes over then. */
   pending: Turn['c']
+  takeover: [Owner, Difficulty][]
+  /** Seats whose players have left: nobody can order them any more. */
+  gone: Set<Owner>
   loaded: Set<string>
   timer: NodeJS.Timeout | null
   hashes: Map<number, number>
-  /** Players already told they drifted, so it's said once. */
-  drifted: Set<string>
+  /** When each player last got the server's battle after drifting. */
+  resynced: Map<string, number>
 }
 
 const send = (p: Player, m: ServerMsg) => p.ws?.send(JSON.stringify(m))
@@ -243,6 +251,11 @@ function leave(p: Player, why = 'left') {
   const l = lobbyOf(p)
   p.lobby = null
   if (!l) return
+  const game = matches.get(l.id)
+  if (game) {
+    abandon(p, game)
+    if (seatIndex(game, p) >= 0) why = `${why}: the AI took over their fleet`
+  }
   const i = seatOf(l, p)
   if (i >= 0) l.slots[i] = { ...openSlot(i), faction: l.slots[i].faction, team: l.slots[i].team }
   send(p, { t: 'lobby', lobby: null })
@@ -353,7 +366,7 @@ function start(p: Player, l: MpLobby) {
       s.kind === 'human' || s.kind === 'ai' ? [{ kind: s.kind, player: s.player, name: s.kind === 'ai' ? `${DIFFICULTY[s.difficulty].name} AI` : s.name, faction: s.faction, team: s.team, spawn, difficulty: s.difficulty }] : [],
     ),
   }
-  const m: Match = { info, lobby: l.id, w: matchWorld(info), brains: matchBrains(info), n: 0, t0: 0, pending: [], loaded: new Set(), timer: null, hashes: new Map(), drifted: new Set() }
+  const m: Match = { info, lobby: l.id, w: matchWorld(info), brains: matchBrains(info), n: 0, t0: 0, pending: [], takeover: [], gone: new Set(), loaded: new Set(), timer: null, hashes: new Map(), resynced: new Map() }
   matches.set(l.id, m)
   l.state = 'playing'
   info.seats.forEach((s, i) => {
@@ -393,23 +406,45 @@ function clock(m: Match) {
 
 function runTick(m: Match) {
   const n = ++m.n
-  const c = m.pending
+  const turn: Turn = { n, c: m.pending, ...(m.takeover.length ? { ai: m.takeover } : {}) }
   m.pending = []
-  stepTurn(m.w, m.brains, c)
+  m.takeover = []
+  stepTurn(m.w, m.brains, turn)
   m.w.events.length = 0
   if (n % HASH_EVERY === 0) {
     m.hashes.set(n, stateHash(m.w))
     m.hashes.delete(n - HASH_EVERY * KEEP_HASHES)
   }
-  const msg = JSON.stringify({ t: 'turn', n, c } satisfies ServerMsg)
-  for (const s of m.info.seats) if (s.kind === 'human') players.get(s.player)?.ws?.send(msg)
+  const msg = JSON.stringify({ t: 'turn', ...turn } satisfies ServerMsg)
+  toPlayers(m, msg)
+}
+
+/** Sends to every player still in the battle (not those who left it). */
+function toPlayers(m: Match, msg: string) {
+  m.info.seats.forEach((s, i) => {
+    if (s.kind === 'human' && !m.gone.has(i)) players.get(s.player)?.ws?.send(msg)
+  })
+}
+
+/** The server's battle as it stands, for a player to carry on from. */
+function sync(p: Player, m: Match, why: 'drift' | 'rejoin') {
+  send(p, { t: 'sync', n: m.n, world: snapshotWorld(m.w), brains: m.brains.map(snapBrain).map((b) => ({ ...b, scouts: [...b.scouts] })), why })
+}
+
+/** A player is out of the battle for good (left, or gone too long): an AI admiral takes their
+ * fleet from the next tick, on everyone's machine at once. */
+function abandon(p: Player, m: Match) {
+  const seat = seatIndex(m, p)
+  if (seat < 0 || m.gone.has(seat)) return
+  m.gone.add(seat)
+  m.takeover.push([seat, TAKEOVER])
 }
 
 function finish(m: Match) {
   const l = lobbies.get(m.lobby)
   stopMatch(m.lobby)
   const msg = JSON.stringify({ t: 'over', winner: m.w.winner } satisfies ServerMsg)
-  for (const s of m.info.seats) if (s.kind === 'human') players.get(s.player)?.ws?.send(msg)
+  toPlayers(m, msg)
   if (!l) return
   const won = m.info.seats.filter((s) => s.team === m.w.winner).map((s) => s.name)
   notice(l, `${won.join(' and ')} won the battle`)
@@ -431,7 +466,7 @@ function stopMatch(lobby: string) {
 
 function order(p: Player, m: Match, raw: unknown) {
   const seat = seatIndex(m, p)
-  if (seat < 0 || !m.t0) return
+  if (seat < 0 || !m.t0 || m.gone.has(seat)) return
   if (m.pending.filter(([s]) => s === seat).length >= MAX_CMDS_PER_TICK) return
   const c = cleanCmd(raw, m.w)
   if (!c) return send(p, { t: 'error', why: "That order didn't make sense to the server." })
@@ -440,10 +475,15 @@ function order(p: Player, m: Match, raw: unknown) {
 
 function checkHash(p: Player, m: Match, n: unknown, h: unknown) {
   const ours = typeof n === 'number' ? m.hashes.get(n) : undefined
-  if (ours === undefined || ours === h || m.drifted.has(p.id)) return
-  m.drifted.add(p.id)
-  console.warn(`[empires] ${p.name} drifted from the server's battle at tick ${n} (match ${m.info.id})`)
+  if (ours === undefined || ours === h) return
+  // Fingerprints already on their way when the sync went out still show the drift: one sync
+  // per drift is enough.
+  const last = m.resynced.get(p.id) ?? 0
+  if (Date.now() - last < RESYNC_MS) return
+  m.resynced.set(p.id, Date.now())
+  console.warn(`[empires] ${p.name} drifted from the server's battle at tick ${n} (match ${m.info.id}): sent the server's copy`)
   send(p, { t: 'desync', n: n as number })
+  sync(p, m, 'drift')
 }
 
 // --- Connections ------------------------------------------------------------------------------------
@@ -489,6 +529,12 @@ function hello(ws: WsConnection, conn: { p: Player | null; login: string | null;
     if (l) {
       setAway(back, false)
       send(back, { t: 'lobby', lobby: l })
+      const game = matches.get(l.id)
+      const seat = game ? seatIndex(game, back) : -1
+      if (game && seat >= 0 && !game.gone.has(seat)) {
+        send(back, { t: 'match', match: game.info, me: seat })
+        sync(back, game, 'rejoin')
+      }
     } else send(back, { t: 'lobbies', list: lobbyList() })
     return
   }

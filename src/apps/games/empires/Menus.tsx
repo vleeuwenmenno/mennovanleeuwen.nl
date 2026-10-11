@@ -188,7 +188,7 @@ export function BattleMenu({ w, me, sound, speed, onSpeed, onResume, onPanel, on
               <span>
                 {confirm === 'restart' ? 'Restart this battle from the beginning? It can\'t be picked up again.'
                   : campaign ? 'Pull our fleet out of this battle? Every ship still here jumps back to the galaxy, and the enemy keeps the field.'
-                  : online ? 'Leave this battle? Your ships stay where they are, and you can\'t come back to it.'
+                  : online ? 'Leave this battle? An AI admiral takes over your fleet, and you can\'t come back to it.'
                   : 'Leave this battle for the lobby? It can\'t be picked up again.'}
               </span>
               <div>

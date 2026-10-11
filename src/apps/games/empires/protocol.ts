@@ -3,6 +3,7 @@ import type { Cmd } from './commands.ts'
 import type { FactionId } from './data.ts'
 import type { MapRules } from './maps.ts'
 import type { MatchInfo, Turn } from './match.ts'
+import type { BattleSnap } from './snapshot.ts'
 
 // What the Empires At War multiplayer client and server say to each other over the WebSocket at
 // MP_PATH, as JSON text. Shared by both sides (types only, nothing to run).
@@ -99,5 +100,9 @@ export type ServerMsg =
   | ({ t: 'turn' } & Turn)
   /** The server's own copy of the battle has ended: `winner` is the winning team. */
   | { t: 'over'; winner: number }
-  /** Our fingerprint at tick `n` didn't match the server's: our battle has drifted. */
+  /** Our fingerprint at tick `n` didn't match the server's: our battle has drifted. A `sync`
+   * follows to put it right. */
   | { t: 'desync'; n: number }
+  /** The server's own battle as it stands after tick `n` (snapshot.ts format), to carry on from:
+   * after drifting, or on coming back to a battle under way. Turns after `n` follow. */
+  | { t: 'sync'; n: number; world: string; brains: BattleSnap['brains']; why: 'drift' | 'rejoin' }

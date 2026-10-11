@@ -1,4 +1,5 @@
 import type { MatchInfo, Turn } from './match'
+import type { BattleSnap } from './snapshot'
 import { MP_PATH, type ClientMsg, type LobbyInfo, type MpLobby, type ServerMsg } from './protocol'
 
 // The game's end of the multiplayer WebSocket. One connection per tab, kept open while the
@@ -46,6 +47,27 @@ const writeToken = (t: string) => {
   }
 }
 
+/** Whether this tab was in the multiplayer screens: a reload goes straight back to them (and the
+ * server puts the player back in their lobby or battle). */
+const ACTIVE_KEY = 'mvlos.empires.mp.active'
+export const mpActive = {
+  get: () => {
+    try {
+      return sessionStorage.getItem(ACTIVE_KEY) === '1'
+    } catch {
+      return false
+    }
+  },
+  set: (on: boolean) => {
+    try {
+      if (on) sessionStorage.setItem(ACTIVE_KEY, '1')
+      else sessionStorage.removeItem(ACTIVE_KEY)
+    } catch {
+      // Storage blocked: a reload lands on the main menu.
+    }
+  },
+}
+
 export class Net {
   status: NetStatus = 'connecting'
   /** Smoothed round trip in milliseconds. */
@@ -58,6 +80,8 @@ export class Net {
   /** The battle's turns not yet played, oldest first. Kept out of `view`: they come 30 a second
    * and the battle screen takes them straight from here. */
   turns: Turn[] = []
+  /** The server's battle to carry on from, when ours drifted or we came back mid-battle. */
+  sync: { n: number; world: string; brains: BattleSnap['brains']; why: 'drift' | 'rejoin' } | null = null
   private viewListeners = new Set<() => void>()
   private ws: WebSocket | null = null
   private listeners = new Set<Listener>()
@@ -119,12 +143,18 @@ export class Net {
         return this.patch({ problem: { why: m.why, n: (this.view.problem?.n ?? 0) + 1 } })
       case 'match':
         this.turns = []
+        // The same battle again (we reconnected): keep the screen, a sync follows.
+        if (this.view.match?.info.id === m.match.id && this.view.match.me === m.me) return
+        this.sync = null
         return this.patch({ match: { info: m.match, me: m.me } })
       case 'turn':
-        if (this.view.match) this.turns.push({ n: m.n, c: m.c })
+        if (this.view.match) this.turns.push({ n: m.n, c: m.c, ...(m.ai ? { ai: m.ai } : {}) })
         return
-      case 'desync':
-        return this.patch({ problem: { why: "Your game has drifted from everyone else's battle.", n: (this.view.problem?.n ?? 0) + 1 } })
+      case 'sync':
+        // Every turn queued so far is from before it.
+        this.turns = []
+        this.sync = { n: m.n, world: m.world, brains: m.brains, why: m.why }
+        return
       case 'pong':
         // Redraws for the ping readout are cheap but needn't happen on every pong.
         if (Math.abs(this.rtt - this.view.rtt) > 3) this.patch({ rtt: this.rtt })
@@ -150,7 +180,17 @@ export class Net {
   /** Off the battle screen: back to the lobby. */
   endMatch() {
     this.turns = []
+    this.sync = null
     this.patch({ match: null })
+  }
+
+  /** Out of the lobby (and its battle, if one is on): straight to the list, without waiting for
+   * the server to say so. */
+  leave() {
+    this.send({ t: 'leave' })
+    this.turns = []
+    this.sync = null
+    this.patch({ match: null, lobby: null, chat: [] })
   }
 
   /** Done with multiplayer: closes for good (no reconnecting). */
@@ -205,10 +245,12 @@ export class Net {
       this.track(m)
       for (const fn of [...this.listeners]) fn(m)
     }
-    ws.onclose = () => {
+    ws.onclose = (e) => {
       if (this.ws !== ws) return
       clearInterval(this.pingTimer)
       this.pings.clear()
+      // 4000: another connection of ours took over (a reload); this one is done.
+      if (e.code === 4000) this.closed = true
       if (this.closed) return
       this.setStatus('offline')
       // Back off: 0.5, 1, 2, 4, then every 5 seconds.
