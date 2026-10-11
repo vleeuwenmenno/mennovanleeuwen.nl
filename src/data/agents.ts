@@ -395,4 +395,15 @@ export async function toAttachment(blob: Blob, name: string, source: string): Pr
   return { name, source, kind: 'text', mime: mime || 'text/plain', size: blob.size, text }
 }
 
+/** The longest message the server takes as typed text (server/agents.ts); longer goes as a file. */
+export const MAX_MESSAGE = 20_000
+/** A paste this long becomes an attachment instead of filling the message box. */
+export const PASTE_AS_FILE = 5_000
+
+/** Text (a long paste or message) as a text attachment. */
+export function textAttachment(text: string, name: string): Attachment {
+  if (text.length > 400_000) throw new Error(`${name} is too long (over 400,000 characters)`)
+  return { name, source: 'Pasted', kind: 'text', mime: 'text/plain', size: new Blob([text]).size, text }
+}
+
 export const fileSize = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`)

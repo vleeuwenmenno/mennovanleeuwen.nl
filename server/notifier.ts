@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { actionUrl, allows, keepMs, normalizePrefs, NOTIFY_SOURCES, type Entry, type NoticeAction, type NotifyPrefs, type SourceId } from '../src/data/notifySources.ts'
+import { actionUrl, allows, brandBadge, brandIcon, keepMs, normalizePrefs, NOTIFY_SOURCES, sourceOf, type Brand, type Entry, type NoticeAction, type NotifyPrefs, type SourceId } from '../src/data/notifySources.ts'
 import type { User } from './auth.ts'
 import { database, onUserGone } from './db.ts'
 import { HttpError, SECURITY } from './http.ts'
@@ -25,6 +25,8 @@ export type Notice = {
   title: string
   body?: string
   icon?: string
+  /** Whose logo it carries (GitHub, Minecraft…), when not its source's own: the icon on devices, and in the list when there is no `icon` */
+  brand?: Brand
   action?: NoticeAction
   /** A key: sent the first time only, ever, for this account */
   once?: string
@@ -173,7 +175,9 @@ export function notify(user: AccountRef, n: Notice, { watched = false }: { watch
   const prefs = prefsOf(user)
   if (!allows(prefs, n.source)) return null
   if (n.once && !firstTime(user.id, n.once)) return null
-  const entry: Entry = { id: randomUUID(), title: n.title.slice(0, 200), ...(n.body ? { body: n.body.slice(0, 500) } : {}), ...(n.icon ? { icon: n.icon } : {}), ...(n.action ? { action: n.action } : {}), source: n.source, at: Date.now(), read: false }
+  const brand = n.brand ?? sourceOf(n.source)?.brand
+  const icon = n.icon ?? (brand && brandIcon(brand))
+  const entry: Entry = { id: randomUUID(), title: n.title.slice(0, 200), ...(n.body ? { body: n.body.slice(0, 500) } : {}), ...(icon ? { icon } : {}), ...(n.action ? { action: n.action } : {}), source: n.source, at: Date.now(), read: false }
   database()
     .prepare('INSERT INTO notifications (id, user_id, source, title, body, icon, action, at, read) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)')
     .run(entry.id, user.id, entry.source ?? null, entry.title, entry.body ?? null, entry.icon ?? null, entry.action ? JSON.stringify(entry.action) : null, entry.at)
@@ -182,7 +186,9 @@ export function notify(user: AccountRef, n: Notice, { watched = false }: { watch
   // with none in view gets it as push.
   broadcast(user.id, 'notice', { entry, popup: prefs.popups })
   if (prefs.popups && !inView(user.id)) {
-    void pushToUser(user as User, { title: entry.title, body: entry.body, tag: n.tag ?? entry.id, url: actionUrl(n.action), thread: n.action?.app === 'agents' ? n.action.props?.thread : undefined }).catch(() => {})
+    // On devices the brand wins over a picture (a player's head): it says where the news is from.
+    const logo = brand ? { icon: brandIcon(brand), badge: brandBadge(brand) } : {}
+    void pushToUser(user as User, { title: entry.title, body: entry.body, ...logo, tag: n.tag ?? entry.id, url: actionUrl(n.action), thread: n.action?.app === 'agents' ? n.action.props?.thread : undefined }).catch(() => {})
   }
   return entry
 }

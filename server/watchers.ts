@@ -106,10 +106,10 @@ export async function activity() {
       .filter((a) => claimOnce(u, `activity:${a.id}`))
     if (!fresh.length) continue
     if (fresh.length > 3) {
-      notify(u, { source: source(fresh[fresh.length - 1]), title: `Menno has been busy: ${fresh.length} new updates`, body: 'Open Activity to see them', action: { app: 'recents' } })
+      notify(u, { source: source(fresh[fresh.length - 1]), title: `Menno has been busy: ${fresh.length} new updates`, body: 'Open Activity to see them', brand: fresh.every((a) => a.source === fresh[0].source) ? fresh[0].source : undefined, action: { app: 'recents' } })
       continue
     }
-    for (const a of fresh) notify(u, { source: source(a), title: `New on ${a.source === 'github' ? 'GitHub' : 'git.mvl.sh'}: ${a.title}`, body: [a.detail, a.repo].filter(Boolean).join(' · '), action: { app: 'recents' } })
+    for (const a of fresh) notify(u, { source: source(a), title: `New on ${a.source === 'github' ? 'GitHub' : 'git.mvl.sh'}: ${a.title}`, body: [a.detail, a.repo].filter(Boolean).join(' · '), brand: a.source, action: { app: 'recents' } })
   }
 }
 

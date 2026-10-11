@@ -139,8 +139,11 @@ export const devices = (user: User) => (database().prepare('SELECT COUNT(*) AS n
 
 // --- sending -----------------------------------------------------------------------------------
 
-/** What the service worker shows (pwa/sw.js): a title and line, and the thread or page it opens. */
-export type PushMessage = { title: string; body?: string; tag?: string; url?: string; thread?: string }
+/**
+ * What the service worker shows (pwa/sw.js): a title and line, and the thread or page it opens.
+ * `icon` and `badge`: this site's own paths (a push message holds about 4 KB, so no pictures in it).
+ */
+export type PushMessage = { title: string; body?: string; icon?: string; badge?: string; tag?: string; url?: string; thread?: string }
 
 type Row = { id: number; endpoint: string; keys: string }
 

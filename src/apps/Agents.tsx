@@ -18,6 +18,9 @@ import {
   answerApproval,
   fileSize,
   toAttachment,
+  textAttachment,
+  MAX_MESSAGE,
+  PASTE_AS_FILE,
   type Attachment,
   type ToolGroup,
   createThread,
@@ -53,6 +56,7 @@ import {
   type Workdir,
 } from '../data/agents'
 import { diffLines } from '../terminal/agents/diff'
+import { dropDraft, getDraft, setDraft } from '../data/agentDrafts'
 import { posixOf } from '../data/mounts'
 import { prettyPath } from '../terminal/vfs'
 import { DRAG_FILES, fileLink as seafileLink, getDragged, libraryName, parseSf } from '../data/seafile'
@@ -243,6 +247,7 @@ function AgentsApp({ win }: { win: WinState }) {
   const remove = async (t: Thread) => {
     if (!(await ask({ title: `Delete “${t.title}”?`, body: 'The thread and everything in it is gone for good. Archive it instead to keep it out of the way.', confirm: 'Delete', danger: true }))) return
     await deleteThread(t.id).catch(() => {})
+    dropDraft(t.id)
     if (selected === t.id) open(null)
     refresh()
   }
@@ -892,7 +897,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [models, setModels] = useState<ModelInfo[]>([])
   const [draftMode, setDraftMode] = useState<Mode>(() => ask?.mode ?? agentSettings().mode)
   const [approvals, setApprovals] = useState<PendingApproval[]>([])
-  const [files, setFiles] = useState<Attachment[]>([])
+  // The message box starts from what was left there last time (src/data/agentDrafts.ts).
+  const [files, setFiles] = useState<Attachment[]>(() => getDraft(id ?? 'new')?.files ?? [])
   const [reading, setReading] = useState(0)
   const [dragOver, setDragOver] = useState(false)
   const settingsNow = useAgentSettings()
@@ -903,7 +909,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [draftWorkdir, setDraftWorkdir] = useState<Workdir | null>(null)
   const [draftPermission, setDraftPermission] = useState<Permission>('default')
   const [skills, setSkills] = useState<Skill[]>([])
-  const [text, setText] = useState('')
+  const [text, setText] = useState(() => getDraft(id ?? 'new')?.text ?? '')
   const [live, setLive] = useState<Live | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -923,6 +929,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       (e: Error) => setError(e.message),
     )
   }, [id])
+  // Kept for coming back: per thread, or for the new thread while there is none yet.
+  useEffect(() => setDraft(id ?? 'new', text, files), [id, text, files])
   useEffect(() => {
     agentModels().then(setModels, () => {})
     if (mayTakeFocus()) input.current?.focus()
@@ -1042,9 +1050,20 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   // A ref, not `busy`: two sends in one render (a double Enter, a re-run effect) must not both go.
   const sending = useRef(false)
   const send = async (asked?: string) => {
-    const message = (asked ?? text).trim()
-    const attached = asked === undefined ? files : []
-    if ((!message && !attached.length) || sending.current || reading) return
+    const typed = (asked ?? text).trim()
+    let attached = asked === undefined ? files : []
+    if ((!typed && !attached.length) || sending.current || reading) return
+    // Too long to send as typed text: it goes along as a file instead.
+    let message = typed
+    if (typed.length > MAX_MESSAGE) {
+      if (attached.length >= 10) return setError('That message is too long to send with 10 attachments: remove one first')
+      try {
+        attached = [...attached, textAttachment(typed, 'Message.txt')]
+      } catch (e) {
+        return setError((e as Error).message)
+      }
+      message = ''
+    }
     sending.current = true
     setError(null)
     setBusy(true)
@@ -1057,8 +1076,13 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         setThread(target)
         onCreated(target)
       }
-      setText('')
-      setFiles([])
+      // Asked from Spotlight: what is in the box stays there.
+      if (asked === undefined) {
+        setText('')
+        setFiles([])
+        dropDraft('new')
+        dropDraft(target.id)
+      }
       setLive({ content: '', thinking: '' })
       const ctl = new AbortController()
       abort.current = ctl
@@ -1066,8 +1090,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
         setError((e as Error).message)
-        setText((t) => t || message)
-        setFiles((f) => (f.length ? f : attached))
+        setText((t) => t || typed)
+        setFiles((f) => (f.length ? f : asked === undefined ? files : []))
       }
     } finally {
       abort.current = null
@@ -1441,6 +1465,14 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               if (e.clipboardData.files.length) {
                 e.preventDefault()
                 void fromComputer(e.clipboardData.files)
+                return
+              }
+              // A long paste (logs, raw data) goes along as a file, so the message box stays readable.
+              const pasted = e.clipboardData.getData('text/plain')
+              if (pasted.length >= PASTE_AS_FILE) {
+                e.preventDefault()
+                const n = files.filter((f) => f.source === 'Pasted').length
+                void addFiles(() => [Promise.resolve().then(() => textAttachment(pasted, n ? `Pasted text ${n + 1}.txt` : 'Pasted text.txt'))])
               }
             }}
             onContextMenu={composerMenu}

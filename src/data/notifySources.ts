@@ -9,6 +9,8 @@ export type NotifySource = {
   label: string
   /** The app whose icon stands for it (an AppId), or none */
   icon: string | null
+  /** The brand logo its notifications carry, unless one names its own (see Brand) */
+  brand?: Brand
   /** Only signed-in accounts get these (they come from the account's own data) */
   account?: boolean
   kinds: NotifyKind[]
@@ -30,6 +32,7 @@ export const NOTIFY_SOURCES: NotifySource[] = [
     app: 'minecraft',
     label: 'Minecraft server',
     icon: 'mcserver',
+    brand: 'minecraft',
     kinds: [
       { id: 'players', label: 'Players', hint: 'Someone joins or leaves' },
       { id: 'status', label: 'Online and offline', hint: 'The server goes down or comes back' },
@@ -70,6 +73,15 @@ export const NOTIFY_SOURCES: NotifySource[] = [
     ],
   },
 ]
+
+/**
+ * Brand logos for notifications, drawn by scripts/notify-icons.ts into public/icons/notify/: an icon
+ * (the bell, and push on Android, Windows, Linux and Chrome on macOS) and a white status bar badge
+ * (Android). Safari and iOS show the app icon whatever a notification names.
+ */
+export type Brand = 'github' | 'forgejo' | 'minecraft'
+export const brandIcon = (brand: Brand) => `/icons/notify/${brand}.png`
+export const brandBadge = (brand: Brand) => `/icons/notify/${brand}-badge.png`
 
 /** A source as notifications name it: "app.kind". */
 export type SourceId = `${string}.${string}`
