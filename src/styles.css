@@ -6496,6 +6496,74 @@ button.fm-dd-row:hover {
   border-top: 1px solid var(--line-strong);
   margin: 1.4em 0;
 }
+/* A quote's last block, and a quote inside a quote, need no extra space below. */
+.zed-preview blockquote > :last-child {
+  margin-bottom: 0;
+}
+.zed-preview blockquote blockquote {
+  margin-top: 0.4em;
+}
+.zed-preview h5,
+.zed-preview h6 {
+  margin: 1.2em 0 0.4em;
+  color: var(--fg-bright);
+  font-size: 1em;
+  line-height: 1.3;
+}
+.zed-preview h6 {
+  color: var(--muted);
+}
+.zed-preview del {
+  color: var(--muted);
+}
+/* Items of a loose list are paragraphs; keep their spacing a little tighter than the page's. */
+.zed-preview li > p {
+  margin-bottom: 0.5em;
+}
+.zed-preview .md-img {
+  max-width: 100%;
+  height: auto;
+  vertical-align: middle;
+}
+/* Syntax highlighting in code blocks (data/markdown/highlight.ts), in the theme's colours. */
+.zed-preview .hl-com {
+  color: var(--muted);
+  font-style: italic;
+}
+.zed-preview .hl-str {
+  color: var(--green);
+}
+.zed-preview .hl-num,
+.zed-preview .hl-lit {
+  color: var(--orange);
+}
+.zed-preview .hl-kw {
+  color: var(--magenta);
+}
+.zed-preview .hl-fn {
+  color: var(--blue);
+}
+.zed-preview .hl-type {
+  color: var(--yellow);
+}
+.zed-preview .hl-attr,
+.zed-preview .hl-var {
+  color: var(--cyan);
+}
+.zed-preview .hl-tag {
+  color: var(--red);
+}
+.zed-preview .hl-meta {
+  color: var(--yellow);
+}
+.zed-preview .hl-add {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+}
+.zed-preview .hl-del {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
 .zed-tab-preview {
   font-style: italic;
 }

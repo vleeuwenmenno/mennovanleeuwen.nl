@@ -39,6 +39,17 @@ Everything the site says lives in [`src/data/profile.ts`](src/data/profile.ts): 
 sticky note, projects, contributions, skills and experience. The terminal's filesystem
 (`~/cv.md`, `~/projects/*/README.md`, ...) is generated from the same file.
 
+Markdown renders the same everywhere it shows (Zed's preview, Notebook, Spotlight and the Agents
+app's answers), through one parser of our own in [`src/data/markdown/`](src/data/markdown):
+CommonMark's blocks and inlines (emphasis nests in any combination, setext and ATX headings,
+nested and loose lists, quotes, fenced and indented code, reference links, escapes and hard
+breaks) plus GitHub's tables, task lists, `~~strikethrough~~` and bare URLs. Fenced code is
+coloured for about 20 languages (TypeScript/JavaScript, JSON, shells, Python, Go, Rust, C-like
+languages, CSS, HTML/XML, YAML, TOML, INI, SQL, diff, Markdown, Dockerfile). Since the Markdown
+often comes from a model, raw HTML shows as text, only http(s), mailto and relative links become
+links, and pictures load from https or `data:` images only. `pnpm check:markdown` runs the
+parser's tests. Footnotes are not supported.
+
 ## Data snapshots
 
 `pnpm data` (`scripts/fetch-data.ts`) writes two files the site reads at runtime:
