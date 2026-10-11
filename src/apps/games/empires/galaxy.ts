@@ -5,10 +5,10 @@
 // an undefended planet is taken by staying in its orbit for a while. The galaxy runs in real time,
 // in seconds; a day is DAY seconds. No DOM, so headless sims can load it.
 
-import { DIFFICULTY, type Difficulty } from './ai'
-import { FACTIONS, UNIT, buildable, stationType, unitOf, type FactionId, type Tier } from './data'
-import { rng } from './maps'
-import { dpsVs } from './sim'
+import type { Difficulty } from './ai.ts'
+import { FACTIONS, UNIT, buildable, stationType, unitOf, type FactionId, type Tier } from './data.ts'
+import { rng } from './maps.ts'
+import { dpsVs } from './sim.ts'
 
 export type PlanetKind = 'desert' | 'ice' | 'lava' | 'ocean' | 'jungle' | 'city' | 'gas' | 'barren' | 'icegiant' | 'stormgiant' | 'toxic' | 'swamp' | 'crystal' | 'tundra'
 /** Gas giants: big, and their clouds fill a battle over them with nebulas. */
@@ -102,6 +102,8 @@ export type Side = {
   history: { day: number; credits: number; income: number }[]
   /** The latest money in and out, newest last. */
   ledger: { day: number; amount: number; what: string }[]
+  /** An AI side's plans and memory (see galaxyAi). */
+  mind?: GalaxyMind
 }
 const LEDGER = 30
 export type GalaxyEvent =
@@ -367,6 +369,12 @@ export function newGalaxy(opts: NewGalaxy): Galaxy {
       if (i === 0) capital.income = Math.round((capital.income * 1.5) / 5) * 5
     }),
   )
+  // A fair start: home systems are rolled (or, in the Rim Wars, drawn) unevenly, so the poorer
+  // side's capital pays the difference and both sides start on the same income.
+  const homeIncome = (o: number) => g.planets.reduce((v, p) => v + (p.owner === o ? p.income * (1 + STATION_INCOME * p.station) : 0), 0)
+  const poorer = homeIncome(0) < homeIncome(1) ? 0 : 1
+  const capital = homes[poorer][0] !== undefined ? g.planets[g.systems[homes[poorer][0]].planets[0]] : null
+  if (capital) capital.income += Math.round((homeIncome(1 - poorer) - homeIncome(poorer)) / (1 + STATION_INCOME * capital.station) / 5) * 5
   // Starting fleets at each capital.
   g.sides.forEach((s, o) => {
     const cap = g.systems[homes[o][0]].planets[0]
@@ -397,7 +405,7 @@ export const neighbours = (g: Galaxy, s: number) => g.lanes.filter((l) => l.incl
 /** What a planet pays its owner a day: its own income, plus its station's bonus, times the owner's
  * difficulty multiplier (an AI's). */
 export const planetIncome = (g: Galaxy, p: Planet) => {
-  const mul = p.owner >= 0 && g.sides[p.owner].ai ? DIFFICULTY[g.sides[p.owner].ai!].income : 1
+  const mul = p.owner >= 0 && g.sides[p.owner].ai ? GALAXY_AI[g.sides[p.owner].ai!].income : 1
   return Math.round(p.income * (1 + STATION_INCOME * p.station) * mul)
 }
 export const incomeOf = (g: Galaxy, o: number) => g.planets.reduce((s, p) => s + (p.owner === o ? planetIncome(g, p) : 0), 0)
@@ -951,8 +959,8 @@ export function tickGalaxy(g: Galaxy, dt: number) {
     if (!s.ai || !s.alive) return
     g.aiT[o] = (g.aiT[o] ?? 0) - dt
     if (g.aiT[o] > 0) return
-    g.aiT[o] = 3 + Math.random() * 2
     galaxyAi(g, o)
+    g.aiT[o] = GALAXY_AI[s.ai].think * (0.8 + roll(s.mind!) * 0.4)
   })
   // Who's still in it: anything owned or flying.
   g.sides.forEach((s, o) => {
@@ -987,70 +995,311 @@ export function withdraw(g: Galaxy, owner: number) {
 // --- The galaxy AI ------------------------------------------------------------------------------------
 
 /**
- * Every few seconds: build stations and upgrade them, keep the shipyards busy with a mix of ships
- * (bigger as it can afford them), take neutral planets with small detachments, and once a fleet is
- * clearly stronger than what holds an enemy planet, attack it.
+ * How the galaxy AI plays at each difficulty. It plays like a person with only so much time: a few
+ * orders a minute at most (fleet moves and splits, ships and station work queued; whatever is past
+ * that waits for a later look), and it misjudges strength, notices threats and chances late and now
+ * and then makes the worse choice, all the more the easier it is. Minutes are game minutes, so a
+ * sped-up galaxy speeds it up with everything else.
+ */
+export type GalaxyLevel = {
+  blurb: string
+  /** Orders it may give a minute. */
+  apm: number
+  /** Seconds between looks at the galaxy. */
+  think: number
+  /** How far off its estimate of an enemy planet's defence can be, either way (0.3: by up to 30%). */
+  misjudge: number
+  /** Seconds before it reacts to a threat to one of its planets, or acts on a weak enemy one. */
+  react: number
+  /** The chance that a decision is a worse pick than the best one it can see. */
+  blunder: number
+  /** Seconds it sticks with a staging planet, or waits after a failed attack before the next one. */
+  commit: number
+  /** How much stronger than the defence it thinks it sees its fleet must be before it attacks. */
+  margin: number
+  /** The fleet value it gathers before its first attack (it gathers more after a failed one). */
+  wave: number
+  /** Seconds before it attacks anything of the player's (it still takes unclaimed planets). */
+  calm: number
+  /** Detachments out taking unclaimed planets at once. */
+  claims: number
+  /** What its planets pay, against the player's. */
+  income: number
+}
+export const GALAXY_AI: Record<Difficulty, GalaxyLevel> = {
+  veryEasy: {
+    blurb: 'A sleepy recruit: earns little, gives few orders, misjudges your strength badly and leaves you alone for the first eight minutes.',
+    apm: 3, think: 9, misjudge: 0.4, react: 40, blunder: 0.3, commit: 90, margin: 1.8, wave: 5000, calm: 480, claims: 1, income: 0.55,
+  },
+  easy: {
+    blurb: 'Slow to react and slow to grow: a few orders a minute, often wrong about your strength. No attacks for the first five minutes.',
+    apm: 4, think: 7, misjudge: 0.3, react: 25, blunder: 0.2, commit: 75, margin: 1.6, wave: 4000, calm: 300, claims: 1, income: 0.7,
+  },
+  medium: {
+    blurb: 'A fair fight: it gathers a strike fleet, expands steadily and defends what it holds. It leaves you two minutes to settle in.',
+    apm: 8, think: 5, misjudge: 0.18, react: 12, blunder: 0.1, commit: 60, margin: 1.35, wave: 3000, calm: 120, claims: 2, income: 1,
+  },
+  hard: {
+    blurb: 'Quick to react and hard to fool, with a little more income than you. It attacks from the start.',
+    apm: 14, think: 3.5, misjudge: 0.1, react: 6, blunder: 0.04, commit: 45, margin: 1.2, wave: 2500, calm: 0, claims: 2, income: 1.15,
+  },
+}
+
+/** What the galaxy AI remembers between looks (saved with the campaign). */
+export type GalaxyMind = {
+  /** Orders it may give right now: it refills at its APM, up to a few in hand. */
+  budget: number
+  /** When it last looked, for the refill. */
+  last: number
+  /** Its own dice, so it plays the same from a save; `salt` seeds how it misjudges each planet. */
+  seed: number
+  salt: number
+  /** The planet its fleet gathers at, and when it next thinks about moving it. */
+  stage: number
+  restage: number
+  /** The planet its main fleet is going for and why (null: none), and when it may pick the next. */
+  target: number
+  goal: 'attack' | 'defend' | null
+  until: number
+  /** The fleet value it waits for before attacking: it grows after a failed attack. */
+  wave: number
+  /** When it first saw each threat to its planets, and each enemy planet looking weak. */
+  alarms: Record<number, number>
+  spotted: Record<number, number>
+  /** Detachments out taking planets: fleet id to the planet. */
+  claims: Record<number, number>
+  /** Orders given this campaign. */
+  orders: number
+}
+
+function newMind(g: Galaxy, o: number): GalaxyMind {
+  const D = GALAXY_AI[g.sides[o].ai ?? 'medium']
+  const seed = (Math.imul(g.seed + 1, 2654435761) + o * 40503) >>> 0
+  return { budget: 2, last: g.time, seed, salt: seed, stage: -1, restage: 0, target: -1, goal: null, until: 0, wave: D.wave, alarms: {}, spotted: {}, claims: {}, orders: 0 }
+}
+/** The AI's next dice roll, from 0 up to 1. */
+function roll(m: GalaxyMind) {
+  m.seed = (Math.imul(m.seed, 1664525) + 1013904223) >>> 0
+  return m.seed / 4294967296
+}
+/** How the AI misjudges a planet's defence right now: a factor near 1 that drifts every `commit`
+ * seconds, the same on every look in between (so it doesn't flip-flop from one look to the next). */
+function misjudged(m: GalaxyMind, D: GalaxyLevel, planet: number, time: number) {
+  let h = Math.imul(m.salt ^ Math.imul(planet + 1, 374761393) ^ Math.imul(Math.floor(time / D.commit) + 1, 668265263), 2246822519) >>> 0
+  h = Math.imul(h ^ (h >>> 13), 3266489917) >>> 0
+  h = (h ^ (h >>> 16)) >>> 0
+  return 1 + D.misjudge * ((h / 4294967296) * 2 - 1)
+}
+/** Where a fleet is headed in the end, stops included. */
+const finalStop = (f: Fleet) => (f.waypoints?.length ? f.waypoints[f.waypoints.length - 1] : headedTo(f))
+const flying = (f: Fleet) => !!f.leg || f.route.length > 0
+
+/**
+ * The AI's look at the galaxy, every few seconds. It keeps one main fleet together at a staging
+ * planet near the front, where its best shipyard builds straight into it. It defends planets under
+ * attack (once it has noticed), sends the main fleet at a reachable enemy planet it thinks it can
+ * beat once it has gathered enough, and keeps at that attack until it's won or lost instead of
+ * picking again on every look. A detachment or two of a couple of ships takes unclaimed planets
+ * nearby. Every order comes out of its budget, defence first.
  */
 function galaxyAi(g: Galaxy, o: number) {
   const s = g.sides[o]
-  const D = DIFFICULTY[s.ai!]
+  const D = GALAXY_AI[s.ai!]
+  const m = (s.mind ??= newMind(g, o))
+  m.budget = Math.min(Math.max(2, D.apm / 4), m.budget + ((g.time - m.last) * D.apm) / 60)
+  m.last = g.time
+  /** Give an order if there's budget for it; it only counts if it went through. */
+  const order = (give: () => string | null) => {
+    if (m.budget < 1 || give()) return false
+    m.budget--
+    m.orders++
+    return true
+  }
+  const hostile = (owner: number) => owner >= 0 && owner !== o
   const mine = g.planets.filter((p) => p.owner === o)
-  // Stations: one for roughly every three planets, on the richest; then upgrades.
-  const yards = mine.filter((p) => p.station > 0)
-  if (yards.length < Math.ceil(mine.length / 3)) {
-    const site = mine.filter((p) => !p.station && !p.queue.length).sort((a, b) => b.income - a.income)[0]
-    if (site && s.credits > STATION_COST[1] + 400) upgradeStation(g, o, site.id)
+  const hops = (from: number, to: number) => {
+    const path = lanePath(g, from, to, o)
+    return path ? path.length - 1 : 99
   }
-  for (const p of yards) if (p.station < 4 && s.credits > STATION_COST[p.station + 1] * 1.6 + 800 && !p.queue.length) upgradeStation(g, o, p.id)
-  // Ships: what the best yard can make, weighted towards bigger ones as money allows.
-  for (const p of yards.sort((a, b) => b.station - a.station)) {
-    if (p.queue.length >= 2) continue
-    const can = buildable(s.faction).filter((t) => t.level <= p.station && t.cost <= s.credits - 300)
-    if (!can.length) continue
-    const pick = can[Math.floor(Math.pow(Math.random(), 0.6) * can.length)]
-    if (pick.tier === 'capital' && g.fleets.some((f) => f.owner === o && f.ships.some((id) => UNIT[id].tier === 'capital'))) continue
-    buildAt(g, o, p.id, pick.id)
+  /** What it believes holds a planet: fleets there, half of those elsewhere in the system, and the
+   * station, all misjudged a little. */
+  const defence = (p: Planet) => {
+    let v = hostile(p.owner) ? p.station * 1500 : 0
+    for (const f of g.fleets) if (hostile(f.owner) && !f.leg && f.system === p.system) v += fleetValue(f.ships) * (f.planet === p.id ? 1 : 0.5)
+    return v * misjudged(m, D, p.id, g.time)
   }
-  // Fleets that hold an orbit and have nothing to do.
-  const idle = g.fleets.filter((f) => f.owner === o && !f.leg && !f.route.length && f.planet >= 0)
-  const enemyStrength = (p: { id: number; owner: number; station: number }) =>
-    fleetsAt(g, p.id).filter((f) => f.owner !== o).reduce((v, f) => v + fleetValue(f.ships), 0) + (p.owner >= 0 && p.owner !== o ? p.station * 1500 : 0)
-  const targeted = new Set(g.fleets.filter((f) => f.owner === o && (f.leg || f.route.length)).map((f) => (f.route.length ? f.route[f.route.length - 1].planet : f.leg!.planet)))
-  const hopsTo = (f: Fleet, p: Planet) => lanePath(g, f.system, p.system, o)?.length ?? 99
-  // Only a few detachments out grabbing neutral planets at a time, so the map doesn't fill up
-  // with single ships.
-  let grabbing = g.fleets.filter((f) => f.owner === o && (f.leg || f.route.length) && f.ships.length <= 2).length
-  const maxGrab = 2 + Math.floor(mine.length / 4)
-  for (const f of idle) {
-    const value = fleetValue(f.ships)
-    const home = g.planets[f.planet]
-    // Keep something at home while it's under threat nearby.
-    const near = (p: Planet) => hopsTo(f, p)
-    // Neutral planets first, nearest first, one fleet each; small fleets do this.
-    const neutral = g.planets.filter((p) => p.owner < 0 && !targeted.has(p.id) && !fleetsAt(g, p.id).some((x) => x.owner !== o)).sort((a, b) => near(a) - near(b))[0]
-    const enemy = g.planets
-      .filter((p) => p.owner >= 0 && p.owner !== o)
-      .map((p) => ({ p, need: enemyStrength(p) }))
-      .filter((x) => value > x.need * (1.4 / Math.max(0.6, D.income)) + 600)
-      .sort((a, b) => near(a.p) - near(b.p) || a.need - b.need)[0]
-    if (enemy && value > D.wave * 0.5) {
-      moveFleet(g, o, f.id, enemy.p.id)
-      targeted.add(enemy.p.id)
-    } else if (neutral && grabbing < maxGrab) {
-      grabbing++
-      // Split a small detachment off a big fleet; send a small fleet whole.
-      const small = f.ships.filter((id) => UNIT[id].tier !== 'fighter').sort((a, b) => UNIT[a].cost - UNIT[b].cost)
-      if (f.ships.length > 3 && small.length) moveFleet(g, o, f.id, neutral.id, [small[0]])
-      else if (home.owner === o && home.station && f.ships.length <= 3) continue
-      else moveFleet(g, o, f.id, neutral.id)
-      targeted.add(neutral.id)
+  const calmFor = (owner: number) => g.time < D.calm && !g.sides[owner]?.ai
+
+  // Threats: enemy fleets at our planets, or about to arrive. It acts on each only once it has
+  // been there a while: it notices late.
+  const threat = new Map<number, number>()
+  for (const f of g.fleets) {
+    if (!hostile(f.owner)) continue
+    const to = finalStop(f)
+    if (to < 0 || g.planets[to].owner !== o || (flying(f) && eta(f) > 30)) continue
+    threat.set(to, (threat.get(to) ?? 0) + fleetValue(f.ships))
+  }
+  for (const k of Object.keys(m.alarms)) if (!threat.has(Number(k))) delete m.alarms[Number(k)]
+  for (const pid of threat.keys()) m.alarms[pid] ??= g.time
+
+  // Detachments: done once their planet is ours, called off when the fleet is gone or an enemy got
+  // there first.
+  for (const [k, pid] of Object.entries(m.claims)) {
+    const f = g.fleets.find((x) => x.id === Number(k))
+    if (!f || g.planets[pid].owner === o || fleetsAt(g, pid).some((x) => hostile(x.owner))) delete m.claims[Number(k)]
+  }
+  const claimed = new Set(Object.keys(m.claims).map(Number))
+  const fleets = g.fleets.filter((f) => f.owner === o)
+  const main = fleets.filter((f) => !claimed.has(f.id)).reduce<Fleet | null>((b, f) => (!b || fleetValue(f.ships) > fleetValue(b.ships) ? f : b), null)
+  const mainValue = main ? fleetValue(main.ships) : 0
+  const mainIdle = !!main && !flying(main) && main.planet >= 0
+
+  // The staging planet: our shipyard nearest the enemy, rethought now and then.
+  if (g.planets[m.stage]?.owner !== o || g.time >= m.restage) {
+    const enemySystems = [...new Set(g.planets.filter((p) => hostile(p.owner)).map((p) => p.system))]
+    const front = (p: Planet) => Math.min(99, ...enemySystems.map((sys) => hops(p.system, sys)))
+    const yards = mine.filter((p) => p.station > 0)
+    const pick = (yards.length ? yards : mine).slice().sort((a, b) => front(a) - front(b) || b.station - a.station)[0]
+    if (pick) m.stage = pick.id
+    m.restage = g.time + D.commit
+  }
+
+  // 1. Defence: the main fleet goes to a planet it has noticed is under attack, if it's near and
+  // can win there. An attack under way gives way to it, unless it's nearly there; a defence under
+  // way is seen through (no chasing every raid around).
+  const alarms = [...threat]
+    .filter(([pid]) => g.time - m.alarms[pid] >= D.react)
+    .map(([pid, v]) => ({ p: g.planets[pid], v: v * misjudged(m, D, pid, g.time) }))
+    .sort((a, b) => b.p.station - a.p.station || b.p.income - a.p.income)
+  if (main && m.goal !== 'defend' && !(m.goal === 'attack' && eta(main) < 20) && alarms.length && roll(m) > D.blunder) {
+    const save = alarms.find((a) => mainValue >= a.v * 0.8 && hops(main.leg ? main.leg.system : main.system, a.p.system) <= 3)
+    if (save && finalStop(main) !== save.p.id && order(() => moveFleet(g, o, main.id, save.p.id))) {
+      m.goal = 'defend'
+      m.target = save.p.id
     }
   }
-  // Fleets still idle that are too small to attack alone gather at the biggest one, so they can.
-  const left = idle.filter((f) => g.fleets.includes(f) && !f.leg && !f.route.length)
-  if (left.length > 1 && g.planets.some((p) => p.owner >= 0 && p.owner !== o)) {
-    const main = left.reduce((b, f) => (fleetValue(f.ships) > fleetValue(b.ships) ? f : b))
-    for (const f of left) if (f !== main && f.planet !== main.planet && !(g.planets[f.planet].station && f.ships.length <= 2)) moveFleet(g, o, f.id, main.planet)
+
+  // 2. The goal in hand: kept until it's won or lost.
+  if (main && m.goal) {
+    const t = g.planets[m.target]
+    const there = !flying(main) && main.planet === t.id
+    const won = m.goal === 'attack' ? t.owner === o : !threat.has(t.id)
+    if (won && there) m.goal = null
+    else if (m.goal === 'attack' && there) {
+      // Holding the orbit while the battle is fought or the planet is taken.
+    } else if (!flying(main) && !there) {
+      // Beaten back (the survivors jumped out), or stopped on the way: it gathers more next time.
+      if (m.goal === 'attack') m.wave = Math.min(D.wave * 3, m.wave * 1.25)
+      m.goal = null
+      m.until = g.time + D.commit
+    }
+  }
+
+  // 3. A new attack: the main fleet, gathered, at a reachable enemy planet it thinks it can beat
+  // well enough, near ones first. A weak spot only counts once it has looked weak for a while.
+  if (main && mainIdle && !m.goal && g.time >= m.until) {
+    const options: { p: Planet; score: number }[] = []
+    for (const p of g.planets) {
+      const need = hostile(p.owner) ? defence(p) * D.margin + 400 : Infinity
+      const h = need <= mainValue ? hops(main.system, p.system) : 99
+      if (h >= 99 || calmFor(p.owner)) {
+        delete m.spotted[p.id]
+        continue
+      }
+      m.spotted[p.id] ??= g.time
+      if (g.time - m.spotted[p.id] >= D.react / 2) options.push({ p, score: need + h * 700 - p.income * 4 - p.station * 300 })
+    }
+    options.sort((a, b) => a.score - b.score)
+    const pick = roll(m) < D.blunder ? options[Math.floor(roll(m) * Math.min(3, options.length))] : options[0]
+    if (pick && mainValue >= m.wave && order(() => moveFleet(g, o, main.id, pick.p.id))) {
+      m.goal = 'attack'
+      m.target = pick.p.id
+    }
+  }
+
+  // 4. Detachments take unclaimed planets nearby (and, once it's not calm, undefended enemy ones):
+  // a spare fleet first, else a ship or two split off the main fleet while it waits. A lone ship
+  // only goes next door.
+  const expand = () => {
+    const open = g.planets.filter(
+      (p) => p.owner !== o && m.target !== p.id && !Object.values(m.claims).includes(p.id) && (p.owner < 0 || (!calmFor(p.owner) && !p.station)) && !fleetsAt(g, p.id).some((f) => hostile(f.owner)),
+    )
+    const spare = fleets.filter((f) => f !== main && !claimed.has(f.id) && !flying(f) && f.planet >= 0)
+    for (let n = Object.keys(m.claims).length; n < D.claims && open.length; n++) {
+      const from = spare.shift() ?? (main && mainIdle && !m.goal && main.ships.length >= 5 ? main : null)
+      if (!from) break
+      const near = open
+        .map((p) => ({ p, h: hops(from.system, p.system) }))
+        .filter((x) => x.h <= ((from === main ? main.ships.length < 7 : from.ships.length < 2) ? 1 : 2))
+        .sort((a, b) => a.h - b.h || b.p.income - a.p.income)
+      const goal = roll(m) < D.blunder ? near[Math.floor(roll(m) * near.length)] : near[0]
+      if (!goal) continue
+      const take = from === main ? from.ships.filter((id) => UNIT[id].tier !== 'fighter').sort((a, b) => UNIT[a].cost - UNIT[b].cost).slice(0, from.ships.length >= 7 ? 2 : 1) : undefined
+      if (take && !take.length) continue
+      const before = new Set(g.fleets.map((f) => f.id))
+      if (!order(() => moveFleet(g, o, from.id, goal.p.id, take))) break
+      const sent = take ? g.fleets.find((f) => !before.has(f.id)) : from
+      if (sent) m.claims[sent.id] = goal.p.id
+      open.splice(open.indexOf(goal.p), 1)
+    }
+  }
+
+  // 5. Everything else gathers: spare fleets join the main fleet (or go to the staging planet while
+  // it's away).
+  const gatherAll = () => {
+    const spare = fleets.filter((f) => g.fleets.includes(f) && f !== main && !claimed.has(f.id) && !(f.id in m.claims) && !flying(f) && f.planet >= 0)
+    const gather = main && mainIdle && !m.goal ? main.planet : m.stage
+    for (const f of spare) {
+      // (Not one that's busy taking the planet it's at.)
+      if (flying(f) || gather < 0 || f.planet === gather || g.planets[f.planet].capture?.owner === o) continue
+      if (!order(() => moveFleet(g, o, f.id, gather))) break
+    }
+    // An idle main fleet away from the staging planet goes back to it, unless it sits at a shipyard
+    // of ours: then that becomes the staging planet (no flying back and forth).
+    if (main && mainIdle && !m.goal && m.stage >= 0 && main.planet !== m.stage && !threat.has(main.planet)) {
+      const here = g.planets[main.planet]
+      if (here.owner === o && here.station > 0) m.stage = here.id
+      else order(() => moveFleet(g, o, main.id, m.stage))
+    }
+  }
+
+  // 6. Stations, then ships with what orders are left. Ships come from the staging planet's yard
+  // (they join the main fleet right there, no order needed to send them), and from another yard
+  // only while that one is full, builds bigger ships or money piles up. With few orders to spare it buys bigger ships
+  // rather than many small ones, the more so the richer it is.
+  const spend = () => {
+    const yards = mine.filter((p) => p.station > 0)
+    if (yards.length < Math.ceil(mine.length / 3)) {
+      const site = mine.filter((p) => !p.station && !p.queue.length).sort((a, b) => b.income - a.income)[0]
+      if (site && s.credits > STATION_COST[1] + 400) order(() => upgradeStation(g, o, site.id))
+    }
+    const stage = g.planets[m.stage]
+    const stageFull = !stage || stage.owner !== o || stage.queue.length >= 3
+    for (const p of yards.sort((a, b) => Number(b.id === m.stage) - Number(a.id === m.stage) || b.station - a.station)) {
+      // An upgrade needs an empty shipyard: it stops queueing ships there until it can.
+      if (p.station < 4 && s.credits > STATION_COST[p.station + 1] * 1.4 + 600) {
+        if (!p.queue.length) order(() => upgradeStation(g, o, p.id))
+        continue
+      }
+      if (p.id === m.stage ? p.queue.length >= 3 : p.queue.length >= 1 || !(stageFull || s.credits > 4000 || p.station > stage!.station)) continue
+      const can = buildable(s.faction).filter((t) => t.level <= p.station && t.cost <= s.credits - 300)
+      if (!can.length) break
+      const rich = Math.min(1, s.credits / 6000)
+      const pick = can[Math.min(can.length - 1, Math.floor(Math.pow(roll(m), 0.6 - rich * 0.35) * can.length))]
+      if (pick.tier === 'capital' && fleets.some((f) => f.ships.some((id) => UNIT[id].tier === 'capital'))) continue
+      if (!order(() => buildAt(g, o, p.id, pick.id))) break
+    }
+  }
+
+  // Money piling up goes on ships before anything else; otherwise expanding and gathering come first.
+  if (s.credits > 2500) {
+    spend()
+    expand()
+    gatherAll()
+  } else {
+    expand()
+    gatherAll()
+    spend()
   }
 }
 
