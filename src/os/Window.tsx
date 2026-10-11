@@ -30,7 +30,21 @@ type Props = {
   children: ReactNode
 }
 
-type Drag = { mode: 'move' | 'resize' | 'stack'; edge: string; startX: number; startY: number; x: number; y: number; w: number; h: number; moved: boolean; /** How far the phone desktop was scrolled when the finger went down */ scroll?: number }
+type Drag = {
+  mode: 'move' | 'resize' | 'stack'
+  edge: string
+  startX: number
+  startY: number
+  x: number
+  y: number
+  w: number
+  h: number
+  moved: boolean
+  /** How far the phone desktop was scrolled when the finger went down */
+  scroll?: number
+  /** A finger on a phone note's strip: the note only lifts after it is held still (HOLD_MS) */
+  hold?: { timer: ReturnType<typeof setTimeout> | null; armed: boolean; given: boolean; y: number; /** Where the finger was when the note lifted */ at: number }
+}
 type Target = SnapZone | 'max' | null
 
 // ---------------------------------------------------------------------------------------------
@@ -38,6 +52,14 @@ type Target = SnapZone | 'max' | null
 // wm.tsx). There, dragging a note by its top strip moves it up or down the column: the note lifts
 // and follows the finger, the others slide out of its way, and a dashed slot shows where it will
 // land. The desktop scrolls by itself when the finger nears the top bar or the dock.
+//
+// A finger has to hold the strip still for HOLD_MS first (the note lifts with a buzz): swiping
+// across the strip scrolls the desktop instead, since that is what a quick swipe there means.
+// Letting go of a lifted note without moving it opens its menu.
+
+const HOLD_MS = 400
+/** How far a finger may wander while holding, in px, before it counts as a scroll. */
+const HOLD_SLOP = 8
 
 /** A note being moved in the column: where every shown note sat when it started, top to bottom. */
 type Lift = {
@@ -155,7 +177,33 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     e.preventDefault()
     wm.focus(win.pid)
     const el = e.currentTarget as HTMLElement
-    drag.current = { mode, edge, startX: e.clientX, startY: e.clientY, x: win.x, y: win.y, w: win.w, h: win.h, moved: false, scroll: el.closest('.desk-scroll')?.scrollTop }
+    const d: Drag = { mode, edge, startX: e.clientX, startY: e.clientY, x: win.x, y: win.y, w: win.w, h: win.h, moved: false, scroll: el.closest('.desk-scroll')?.scrollTop }
+    drag.current = d
+    if (mode === 'stack' && e.pointerType === 'touch') {
+      const hold: NonNullable<Drag['hold']> = { timer: null, armed: false, given: false, y: e.clientY, at: e.clientY }
+      d.hold = hold
+      hold.timer = setTimeout(() => {
+        hold.timer = null
+        if (drag.current !== d || hold.given) return
+        // Held still long enough: the note is the finger's now, not the page's.
+        hold.armed = true
+        hold.at = hold.y
+        d.moved = true
+        cancelTouchMenu()
+        try {
+          navigator.vibrate?.(10)
+        } catch {
+          /* no vibration motor */
+        }
+        liftStart(d.startY, d.scroll, hold.y)
+      }, HOLD_MS)
+      // Once the note has lifted, the desktop must not scroll under it (a passive listener can't stop that).
+      const block = (t: TouchEvent) => {
+        if (drag.current !== d) return document.removeEventListener('touchmove', block)
+        if (hold.armed) t.preventDefault()
+      }
+      document.addEventListener('touchmove', block, { passive: false })
+    }
     el.setPointerCapture(e.pointerId)
     document.body.classList.add(mode === 'resize' ? 'is-resizing' : 'is-dragging')
     // No text gets selected on the way, whatever the browser does with the pointer.
@@ -280,6 +328,17 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     if (!d) return
     const dx = e.clientX - d.startX
     const dy = e.clientY - d.startY
+    if (d.mode === 'stack' && d.hold) {
+      d.hold.y = e.clientY
+      if (d.hold.armed) return liftMove(e.clientY)
+      // Moving before the hold is up: a scroll. Let the page have the finger.
+      if (!d.hold.given && Math.hypot(dx, dy) > HOLD_SLOP) {
+        d.hold.given = true
+        if (d.hold.timer) clearTimeout(d.hold.timer)
+        ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)
+      }
+      return
+    }
     if (d.mode === 'stack') {
       if (!d.moved && Math.abs(dy) < 6) return
       if (!d.moved) {
@@ -333,8 +392,21 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
   const end = (e: ReactPointerEvent) => {
     const d = drag.current
     drag.current = null
+    if (d?.hold?.timer) clearTimeout(d.hold.timer)
+    // Let go of a lifted note that never moved: it was a long press, so it gets its menu.
+    const pressed = !!d?.hold?.armed && e.type === 'pointerup' && Math.abs(e.clientY - d.hold.at) <= HOLD_SLOP
     // A cancelled gesture (the browser took the finger) puts the note back where it was.
     if (d?.mode === 'stack') liftEnd(e.type === 'pointerup')
+    if (pressed) {
+      // The click that follows this lift would land on the menu opening under the finger.
+      const swallow = (c: MouseEvent) => {
+        c.preventDefault()
+        c.stopPropagation()
+      }
+      window.addEventListener('click', swallow, { capture: true, once: true })
+      setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 600)
+      onMenu({ clientX: e.clientX, clientY: e.clientY, preventDefault() {}, stopPropagation() {} } as React.MouseEvent)
+    }
     swing.end()
     document.body.classList.remove('is-dragging', 'is-resizing')
     document.removeEventListener('selectstart', noSelect)

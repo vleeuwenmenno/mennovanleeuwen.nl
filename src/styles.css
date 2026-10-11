@@ -7981,6 +7981,10 @@ kbd {
   .window.chrome-note[data-shifting] {
     transition: translate 0.2s ease;
   }
+  /* A swipe on a note's strip scrolls the column; only holding it still picks the note up. */
+  .window.chrome-note .note-grip {
+    touch-action: pan-y;
+  }
   .note-slot {
     position: absolute;
     left: 18px;

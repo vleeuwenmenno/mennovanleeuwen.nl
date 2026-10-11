@@ -552,9 +552,10 @@ flags, held game buttons and game canvases. Anything else can opt out with `data
 On coarse pointers the menu's items are taller, and the OS chrome (bar, dock, title bars, sidebars)
 does not select its labels or show the browser's callout.
 
-On phones the notes and widgets go one under the other down a desktop that scrolls. Drag one by
-its top strip to move it up or down that column (the desktop scrolls along near the top bar and
-the dock), or long-press it for *Move up*, *Move down* and *Move to top*. The order is part of the
+On phones the notes and widgets go one under the other down a desktop that scrolls. Hold one by
+its top strip until it lifts (a swipe there just scrolls), then drag it up or down that column (the
+desktop scrolls along near the top bar and the dock); let go without moving, or long-press it, for
+*Move up*, *Move down* and *Move to top*. The order is part of the
 phone's window layout (`stack` in [`src/os/wm.tsx`](src/os/wm.tsx)); on a big screen notes stay
 wherever they were put.
 
