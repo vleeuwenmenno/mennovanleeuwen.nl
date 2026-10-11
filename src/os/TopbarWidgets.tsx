@@ -443,21 +443,6 @@ function AccountBlock({ close }: { close: () => void }) {
         >
           Sign out
         </button>
-        {account.googleEnabled && (
-          <div className="sys-attach">
-            <span aria-hidden>📅</span>
-            {account.google ? (
-              <span>
-                Calendar: <strong>{account.google.email}</strong>
-              </span>
-            ) : (
-              <>
-                <span className="muted">Google Calendar</span>
-                <button onClick={connectGoogle}>Connect</button>
-              </>
-            )}
-          </div>
-        )}
       </div>
     )
   if (account.status === 'anon')

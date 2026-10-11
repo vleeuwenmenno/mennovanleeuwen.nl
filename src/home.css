@@ -2710,16 +2710,8 @@ input.is-bad {
   text-decoration: line-through;
 }
 
-/* ---------- Google Calendar (system menu row, Settings) ---------- */
+/* ---------- Calendar colours (Settings) ---------- */
 
-.sys-attach {
-  flex-basis: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--line);
-}
 .set-swatch {
   flex: none;
   width: 12px;
