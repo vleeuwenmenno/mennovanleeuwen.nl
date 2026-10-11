@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 
 // Game settings and key bindings, kept in this browser. Volume and mute live with the sound
 // (sound.ts); everything else is here.
@@ -133,3 +133,32 @@ export function useSettings() {
 
 /** Which action a key press means, if any. */
 export const actionFor = (keys: Record<Action, string>, key: string) => (Object.keys(keys) as Action[]).find((a) => keys[a] === key)
+
+// Settings → Apps → Games can ask the game to show its own settings or key bindings: the main menu
+// or the battle menu opens that panel when it shows, now or (for a window still opening) within a
+// few seconds. Asked for and not shown by then (the galaxy map has no such panel), it is dropped.
+export type AskedPanel = 'settings' | 'keys'
+let asked: { panel: AskedPanel; at: number } | null = null
+const askListeners = new Set<() => void>()
+
+export function askPanel(panel: AskedPanel) {
+  asked = { panel, at: Date.now() }
+  for (const l of askListeners) l()
+}
+
+/** Calls `open` with a panel asked for from Settings, once, while the component is mounted. */
+export function useAskedPanel(open: (panel: AskedPanel) => void) {
+  const ref = useRef(open)
+  ref.current = open
+  useEffect(() => {
+    const take = () => {
+      if (!asked) return
+      const { panel, at } = asked
+      asked = null
+      if (Date.now() - at < 5000) ref.current(panel)
+    }
+    take()
+    askListeners.add(take)
+    return () => void askListeners.delete(take)
+  }, [])
+}

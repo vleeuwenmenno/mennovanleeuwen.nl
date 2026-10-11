@@ -1,5 +1,6 @@
 import type { AbilityId, FactionId, Tier, WeaponKind } from './data'
 import { RETREAT_TIME, WARP_RESERVE, WARP_YARD } from './sim'
+import { empiresMix, empiresMusic, empiresMuted, empiresVolume, type EmpiresBus, type EmpiresMix } from '../prefs'
 
 // Empires At War sounds, all synthesised: no audio files. Each sound is rendered once, in a few
 // slightly different takes, into a sample (small DSP below: oscillators, envelopes, a resonant
@@ -10,15 +11,11 @@ import { RETREAT_TIME, WARP_RESERVE, WARP_YARD } from './sim'
 // Crews answer orders over the radio: Republic ships with a squelch and clean military beeps,
 // droids with chattering square-wave bleeps.
 
-const VOLUME_KEY = 'mvlos.empires.volume'
-const MUTE_KEY = 'mvlos.empires.muted'
-const MIX_KEY = 'mvlos.empires.mix'
-const MUSIC_KEY = 'mvlos.empires.music'
 
 export type Where = { pan: number; gain: number }
 /** Battle sounds, crews answering (and abilities), interface and alerts, ambience (wind and the
  * far-off battle) and music (the bridge's low chord): each has its own volume. */
-export type Bus = 'sfx' | 'voice' | 'ui' | 'amb' | 'music'
+export type Bus = EmpiresBus
 const BUSES: Bus[] = ['sfx', 'voice', 'ui', 'amb', 'music']
 export type OrderKind = 'move' | 'attack' | 'attackMove' | 'patrol' | 'hold' | 'stop' | 'rally' | 'target'
 
@@ -745,7 +742,7 @@ const UI_LEVEL = 0.5
 
 // --- Engine ---------------------------------------------------------------------------------------------
 
-type Mix = Record<Bus, number>
+type Mix = EmpiresMix
 
 /** A long, dark, stereo tail made of decaying noise, for the convolution reverb. */
 function impulse(ctx: BaseAudioContext, secs: number) {
@@ -773,31 +770,20 @@ export class EmpiresSound {
   private drone: { stop: () => void } | null = null
   private rumble: GainNode | null = null
   private heat = 0
-  muted: boolean
-  volume: number
-  mix: Mix
-  /** The music can be switched off on its own, keeping its volume for when it comes back. */
-  music: boolean
-
-  constructor() {
-    let m = false
-    let v = 0.7
-    let mix: Mix = { sfx: 1, voice: 0.9, ui: 0.9, amb: 0.7, music: 0.7 }
-    let music = true
-    try {
-      m = localStorage.getItem(MUTE_KEY) === '1'
-      const raw = localStorage.getItem(VOLUME_KEY)
-      if (raw) v = Math.min(1, Math.max(0, Number(raw)))
-      const mx = JSON.parse(localStorage.getItem(MIX_KEY) ?? 'null') as Partial<Mix> | null
-      if (mx) mix = { ...mix, ...mx }
-      music = localStorage.getItem(MUSIC_KEY) !== '0'
-    } catch {
-      // Private mode: defaults.
-    }
-    this.muted = m
-    this.volume = v
-    this.mix = mix
-    this.music = music
+  /** Off, the volume, the mix and the music are kept with Settings (../prefs.ts), which may
+   * change them mid-game. The music can be switched off on its own, keeping its volume. */
+  private unsubscribe: (() => void) | null = null
+  get muted() {
+    return empiresMuted.get()
+  }
+  get volume() {
+    return empiresVolume.get()
+  }
+  get mix(): Mix {
+    return empiresMix.get()
+  }
+  get music() {
+    return empiresMusic.get()
   }
 
   /** Browsers only allow audio after a click or key press. */
@@ -806,6 +792,8 @@ export class EmpiresSound {
       const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
       if (!Ctx) return
       const ctx = (this.ctx = new Ctx())
+      const offs = [empiresMuted, empiresVolume, empiresMix, empiresMusic].map((p) => p.subscribe(() => this.applyVolume()))
+      this.unsubscribe = () => offs.forEach((off) => off())
       this.master = ctx.createGain()
       const comp = ctx.createDynamicsCompressor()
       comp.threshold.value = -16
@@ -845,35 +833,19 @@ export class EmpiresSound {
   }
 
   setMuted(m: boolean) {
-    this.muted = m
-    this.save(MUTE_KEY, m ? '1' : '0')
-    this.applyVolume()
+    empiresMuted.set(m)
   }
 
   setVolume(v: number) {
-    this.volume = v
-    this.save(VOLUME_KEY, String(v))
-    this.applyVolume()
+    empiresVolume.set(v)
   }
 
   setMusic(on: boolean) {
-    this.music = on
-    this.save(MUSIC_KEY, on ? '1' : '0')
-    this.applyVolume()
+    empiresMusic.set(on)
   }
 
   setMix(bus: Bus, v: number) {
-    this.mix = { ...this.mix, [bus]: v }
-    this.save(MIX_KEY, JSON.stringify(this.mix))
-    this.applyVolume()
-  }
-
-  private save(k: string, v: string) {
-    try {
-      localStorage.setItem(k, v)
-    } catch {
-      // ignore
-    }
+    empiresMix.patch({ [bus]: v })
   }
 
   /** The takes of a sound, rendered the first time it's needed. */
@@ -1214,6 +1186,8 @@ export class EmpiresSound {
   }
 
   dispose() {
+    this.unsubscribe?.()
+    this.unsubscribe = null
     this.stopDrone()
     void this.ctx?.close()
     this.ctx = null

@@ -2,8 +2,7 @@
 // balls, the tip on the cue ball, the thud of a cushion, a ball dropping and rolling down the
 // return, and the hiss of balls rolling on the cloth.
 
-const MUTE_KEY = 'mvlos.pool.muted'
-const VOLUME_KEY = 'mvlos.pool.volume'
+import { poolMuted, poolVolume } from '../prefs'
 
 type Mode = [freq: number, decay: number, amp: number]
 
@@ -60,26 +59,14 @@ export class PoolSound {
   private recent: number[] = []
   private clicks: AudioBuffer[] = []
   private tips: AudioBuffer[] = []
-  muted = false
-  /** 0 to 1, on top of mute. */
-  volume = 0.8
-
-  constructor() {
-    try {
-      this.muted = localStorage.getItem(MUTE_KEY) === '1'
-      const v = Number(localStorage.getItem(VOLUME_KEY))
-      if (localStorage.getItem(VOLUME_KEY) !== null && v >= 0 && v <= 1) this.volume = v
-    } catch {
-      /* defaults */
-    }
+  /** Off and the volume are kept with Settings (../prefs.ts), which may change them mid-game. */
+  private unsubscribe: (() => void) | null = null
+  get muted() {
+    return poolMuted.get()
   }
-
-  private save(key: string, value: string) {
-    try {
-      localStorage.setItem(key, value)
-    } catch {
-      /* the choice just won't persist */
-    }
+  /** 0 to 1, on top of mute. */
+  get volume() {
+    return poolVolume.get()
   }
 
   private applyGain() {
@@ -88,16 +75,12 @@ export class PoolSound {
   }
 
   setMuted(m: boolean) {
-    this.muted = m
-    this.save(MUTE_KEY, m ? '1' : '0')
-    this.applyGain()
+    poolMuted.set(m)
   }
 
   setVolume(v: number) {
-    this.volume = Math.max(0, Math.min(1, v))
-    this.save(VOLUME_KEY, String(this.volume))
+    poolVolume.set(Math.max(0, Math.min(1, v)))
     if (this.muted && v > 0) this.setMuted(false)
-    else this.applyGain()
   }
 
   /** Browsers only allow audio after a user gesture, so this is called from one. */
@@ -107,6 +90,8 @@ export class PoolSound {
       if (!Ctx) return
       const ctx = new Ctx()
       this.ctx = ctx
+      const offs = [poolMuted.subscribe(() => this.applyGain()), poolVolume.subscribe(() => this.applyGain())]
+      this.unsubscribe = () => offs.forEach((off) => off())
       this.out = ctx.createGain()
       this.out.gain.value = this.muted ? 0 : this.volume * this.volume
       const comp = ctx.createDynamicsCompressor()
@@ -137,6 +122,8 @@ export class PoolSound {
   }
 
   dispose() {
+    this.unsubscribe?.()
+    this.unsubscribe = null
     void this.ctx?.close()
     this.ctx = null
   }

@@ -607,11 +607,12 @@ function DockMore({
 
 /** A window with its app inside. */
 function AppWindow({ w }: { w: WinState }) {
+  const wm = useWM()
   const meta = APP_META[w.app]
   const def = w.app === 'widget' ? widgetDef(w.props.kind) : undefined
   if (def && w.props.id) return <WidgetWindow w={w} def={def} id={w.props.id} />
   return (
-    <Window win={w} title={meta.titleOf?.(w) ?? meta.title} chrome={meta.chrome} menuItems={meta.menu?.(w)}>
+    <Window win={w} title={meta.titleOf?.(w) ?? meta.title} chrome={meta.chrome} menuItems={meta.menu?.(w, wm)}>
       {meta.render(w)}
     </Window>
   )

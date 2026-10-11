@@ -1,12 +1,10 @@
+import { gladiatorMusic, gladiatorMuted, gladiatorVolume } from '../prefs'
 import { MUSIC_LEVEL, startAmbience, type Ambience, type AmbiencePlace } from './ambience'
 
 // Gladiator sounds, all synthesised with Web Audio like Pool's: struck metal and wood, blows on
 // flesh, blade whooshes and grunts, a crowd that murmurs, cheers and boos, spells, coins and a
 // fanfare. Music too: war drums in the arena and a plucked lyre in town, generated as it plays.
 
-const MUTE_KEY = 'mvlos.gladiator.muted'
-const VOLUME_KEY = 'mvlos.gladiator.volume'
-const MUSIC_KEY = 'mvlos.gladiator.music'
 
 type Mode = [ratio: number, decay: number, amp: number]
 const WOOD: Mode[] = [
@@ -180,46 +178,29 @@ export class GladiatorSound {
   private anvils: AudioBuffer[] = []
   private musicLevel = 1
   intensity = 0.3
-  muted = false
-  volume = 0.8
-  musicOn = true
-
-  constructor() {
-    try {
-      this.muted = localStorage.getItem(MUTE_KEY) === '1'
-      this.musicOn = localStorage.getItem(MUSIC_KEY) !== '0'
-      const v = Number(localStorage.getItem(VOLUME_KEY))
-      if (localStorage.getItem(VOLUME_KEY) !== null && v >= 0 && v <= 1) this.volume = v
-    } catch {
-      /* defaults */
-    }
+  /** Off, the volume and the music are kept with Settings (../prefs.ts), which may change them mid-game. */
+  private unsubscribe: (() => void) | null = null
+  get muted() {
+    return gladiatorMuted.get()
   }
-
-  private save(key: string, value: string) {
-    try {
-      localStorage.setItem(key, value)
-    } catch {
-      /* the choice just won't persist */
-    }
+  get volume() {
+    return gladiatorVolume.get()
+  }
+  get musicOn() {
+    return gladiatorMusic.get()
   }
 
   setMuted(m: boolean) {
-    this.muted = m
-    this.save(MUTE_KEY, m ? '1' : '0')
-    this.applyGain()
+    gladiatorMuted.set(m)
   }
 
   setVolume(v: number) {
-    this.volume = Math.max(0, Math.min(1, v))
-    this.save(VOLUME_KEY, String(this.volume))
+    gladiatorVolume.set(Math.max(0, Math.min(1, v)))
     if (this.muted && v > 0) this.setMuted(false)
-    else this.applyGain()
   }
 
   setMusic(on: boolean) {
-    this.musicOn = on
-    this.save(MUSIC_KEY, on ? '1' : '0')
-    this.applyMusic()
+    gladiatorMusic.set(on)
   }
 
   private applyMusic() {
@@ -259,6 +240,8 @@ export class GladiatorSound {
       if (!Ctx) return
       const ctx = new Ctx()
       this.ctx = ctx
+      const offs = [gladiatorMuted.subscribe(() => this.applyGain()), gladiatorVolume.subscribe(() => this.applyGain()), gladiatorMusic.subscribe(() => this.applyMusic())]
+      this.unsubscribe = () => offs.forEach((off) => off())
       this.out = ctx.createGain()
       this.out.gain.value = this.muted ? 0 : this.volume * this.volume
       const comp = ctx.createDynamicsCompressor()
@@ -331,6 +314,8 @@ export class GladiatorSound {
   }
 
   dispose() {
+    this.unsubscribe?.()
+    this.unsubscribe = null
     this.stopMusic()
     this.amb?.a.stop()
     this.amb = null

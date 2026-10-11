@@ -5,7 +5,8 @@ import { Frame, Icon, Tips } from './Hud'
 import { battleLayout, type LayoutStore } from './layout'
 import { DEFAULT_RULES, GENERATED, MAP, MAPS, MAX_BEACONS, MAX_SEED, cleanRules, defaultArea, generateMap, type Amount, type MapDef, type MapRules, type Rect } from './maps'
 import { ALLY, ENEMY, OWN, drawTerrainOverview, relColor } from './render'
-import { ACTIONS, RESERVED, bindKey, keyName, keyOf, resetKeys, setSettings, useSettings, type Action, type Settings } from './settings'
+import { ACTIONS, RESERVED, bindKey, keyName, keyOf, resetKeys, setSettings, useAskedPanel, useSettings, type Action, type Settings } from './settings'
+import { empiresMix, empiresMusic, empiresMuted, empiresVolume } from '../prefs'
 import { newWorld, type Owner, type World } from './sim'
 import { score } from './Scoreboard'
 import type { Bus, EmpiresSound } from './sound'
@@ -140,7 +141,7 @@ export function BattleMenu({ w, me, sound, speed, onSpeed, onResume, onPanel, on
   const s = useSettings()
   // Fingers have no keys to bind, so the keybinds panel stays out of their way.
   const coarse = useCoarse()
-  const [muted, setMuted] = useState(sound.muted)
+  const muted = empiresMuted.use()
   const [confirm, setConfirm] = useState<'restart' | 'exit' | null>(null)
   const p = w.players[me]
   const fac = FACTIONS[p.faction]
@@ -167,7 +168,7 @@ export function BattleMenu({ w, me, sound, speed, onSpeed, onResume, onPanel, on
             <Icon name="play" size={16} /> Resume
           </button>
           <div className="ew-bm-quick">
-            <button className={`ew-bm-toggle ${muted ? '' : 'is-on'}`} onClick={() => (sound.setMuted(!muted), setMuted(!muted))} data-tip={muted ? 'Sound is off: click to turn it on' : 'Sound is on: click to mute'}>
+            <button className={`ew-bm-toggle ${muted ? '' : 'is-on'}`} onClick={() => sound.setMuted(!muted)} data-tip={muted ? 'Sound is off: click to turn it on' : 'Sound is on: click to mute'}>
               <Icon name={muted ? 'mute' : 'sound'} size={16} /> Sound
             </button>
             {!online && <div className="ew-bm-speed" role="group" aria-label="Game speed">
@@ -382,10 +383,11 @@ function SoundTest({ sound }: { sound: EmpiresSound }) {
 
 export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
   const s = useSettings()
-  const [vol, setVol] = useState(sound.volume)
-  const [muted, setMuted] = useState(sound.muted)
-  const [mix, setMix] = useState(sound.mix)
-  const [music, setMusic] = useState(sound.music)
+  // The sound's settings, which Settings → Apps → Games may change too.
+  const vol = empiresVolume.use()
+  const muted = empiresMuted.use()
+  const mix = empiresMix.use()
+  const music = empiresMusic.use()
   const [testing, setTesting] = useState(false)
   // Scroll speed and edge scrolling are for mice: a finger drags the view.
   const coarse = useCoarse()
@@ -396,7 +398,7 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
       <label className="ew-row">
         <span>Master volume</span>
         <span className="ew-range">
-          <input type="range" min={0} max={1} step={0.05} value={vol} onChange={(e) => (sound.setVolume(Number(e.target.value)), setVol(Number(e.target.value)))} />
+          <input type="range" min={0} max={1} step={0.05} value={vol} onChange={(e) => sound.setVolume(Number(e.target.value))} />
           <b>{Math.round(vol * 100)}%</b>
         </span>
       </label>
@@ -412,18 +414,18 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
         <label key={bus} className="ew-row">
           <span>{label}</span>
           <span className="ew-range">
-            <input type="range" min={0} max={1} step={0.05} value={mix[bus]} onChange={(e) => (sound.setMix(bus, Number(e.target.value)), setMix({ ...sound.mix }))} />
+            <input type="range" min={0} max={1} step={0.05} value={mix[bus]} onChange={(e) => sound.setMix(bus, Number(e.target.value))} />
             <b>{Math.round(mix[bus] * 100)}%</b>
           </span>
         </label>
       ))}
       <div className="ew-row">
         <span>Sound</span>
-        <Seg label="Sound effects" value={!muted} options={[[true, 'On'], [false, 'Off']]} onChange={(on) => (sound.setMuted(!on), setMuted(!on))} />
+        <Seg label="Sound effects" value={!muted} options={[[true, 'On'], [false, 'Off']]} onChange={(on) => sound.setMuted(!on)} />
       </div>
       <div className="ew-row">
         <span>Music</span>
-        <Seg label="Music" value={music} options={[[true, 'On'], [false, 'Off']]} onChange={(on) => (sound.setMusic(on), setMusic(on))} />
+        <Seg label="Music" value={music} options={[[true, 'On'], [false, 'Off']]} onChange={(on) => sound.setMusic(on)} />
       </div>
       {!coarse && (
         <>
@@ -575,6 +577,8 @@ export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, 
   initial?: MenuScreen
 }) {
   const [panel, setPanel] = useState<'settings' | 'keys' | 'howto' | null>(null)
+  // Settings → Apps → Games asked for the game's settings or key bindings.
+  useAskedPanel(setPanel)
   // Fingers get no keybinds, and the notes that are tooltips for a mouse as text.
   const coarse = useCoarse()
   // The menu goes one level deep: single player or multiplayer, then the modes each one has.

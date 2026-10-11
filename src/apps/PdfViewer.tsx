@@ -1,5 +1,6 @@
 import { downloadFile, inBrowser, readBytes } from '../data/fileOps'
 import { browserFilesReady } from '../data/browserfs'
+import { pdfPrefs } from '../data/appPrefs'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
 import { pdfjs } from '../data/pdfjs'
@@ -23,16 +24,6 @@ const GAP = 14 // px between pages
 const PAD = 16
 const MIN = 0.25
 const MAX = 6
-const PREFS = 'mvlos.pdf'
-
-
-function loadPrefs(): { sidebar: boolean; night: boolean } {
-  try {
-    return { sidebar: true, night: false, ...JSON.parse(localStorage.getItem(PREFS) ?? '{}') }
-  } catch {
-    return { sidebar: true, night: false }
-  }
-}
 
 export const pdfTitle = (w: WinState) => (w.props.path ? nameOf(w.props.path) : 'PDF')
 
@@ -47,7 +38,8 @@ export function PdfViewer({ win }: { win: WinState }) {
   const [zoom, setZoom] = useState(1)
   const [rotation, setRotation] = useState(0)
   const [page, setPage] = useState(1)
-  const [prefs, setPrefsState] = useState(loadPrefs)
+  // The thumbnails and night mode: in every PDF window, and in Settings → Apps → PDF.
+  const prefs = pdfPrefs.use()
   const [tab, setTab] = useState<'pages' | 'outline'>('pages')
   const [outline, setOutline] = useState<OutlineItem[] | null>(null)
   const [full, setFull] = useState(false)
@@ -59,16 +51,7 @@ export function PdfViewer({ win }: { win: WinState }) {
   const texts = useRef<string[] | null>(null)
   const pendingScroll = useRef<{ x: number; y: number } | null>(null)
 
-  const setPrefs = (p: Partial<{ sidebar: boolean; night: boolean }>) =>
-    setPrefsState((old) => {
-      const next = { ...old, ...p }
-      try {
-        localStorage.setItem(PREFS, JSON.stringify(next))
-      } catch {
-        /* not kept */
-      }
-      return next
-    })
+  const setPrefs = pdfPrefs.patch
 
   // --- loading --------------------------------------------------------------------------------
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { readTags, type AudioTags } from '../data/audioTags'
 import { folderOf, formatTime, nameOf, useMedia, useSiblings } from '../data/media'
 import { download, isSf, parseSf } from '../data/seafile'
+import { AMP_PRESETS, ampPrefs, ampPresetOf, type AmpPrefs, type AmpRepeat, type AmpVis } from '../data/appPrefs'
 import { Select } from '../os/Select'
 import { useWM, type WinState } from '../os/wm'
 
@@ -12,32 +13,14 @@ import { useWM, type WinState } from '../os/wm'
 // file's folder. Keys, as in Winamp: Z X C V B for previous, play, pause, stop and next, the
 // arrows to seek and for volume, S for shuffle and R for repeat.
 
-const PREFS = 'mvlos.amp'
 const BANDS = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 14000, 16000]
 const BAND_LABELS = ['60', '170', '310', '600', '1K', '3K', '6K', '12K', '14K', '16K']
-const PRESETS: Record<string, number[]> = {
-  Flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-  Rock: [5, 3, -3, -5, -2, 2, 5, 7, 7, 7],
-  Pop: [-1, 3, 5, 5, 3, -1, -2, -2, -1, -1],
-  Dance: [6, 4, 1, 0, 0, -3, -4, -4, 0, 0],
-  Classical: [0, 0, 0, 0, 0, 0, -4, -4, -4, -6],
-  'Full bass': [6, 6, 6, 3, 1, -3, -6, -7, -8, -8],
-  'Full treble': [-6, -6, -6, -2, 2, 7, 10, 10, 10, 11],
-  Vocal: [-2, -3, -3, 1, 4, 4, 3, 1, 0, -2],
-  Headphones: [3, 7, 3, -2, -1, 1, 3, 6, 8, 9],
-}
-type Repeat = 'off' | 'all' | 'one'
-type Vis = 'bars' | 'scope' | 'off'
-type Prefs = { volume: number; balance: number; eq: boolean; preamp: number; bands: number[]; showEq: boolean; showPl: boolean; shuffle: boolean; repeat: Repeat; vis: Vis; remaining: boolean }
-const DEFAULTS: Prefs = { volume: 0.8, balance: 0, eq: false, preamp: 0, bands: PRESETS.Flat, showEq: true, showPl: true, shuffle: false, repeat: 'all', vis: 'bars', remaining: false }
-
-function loadPrefs(): Prefs {
-  try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(PREFS) ?? '{}') }
-  } catch {
-    return DEFAULTS
-  }
-}
+// The equalizer's presets and every other preference live in src/data/appPrefs.ts, shared with
+// Settings → Apps → Omamp.
+const PRESETS = AMP_PRESETS
+type Repeat = AmpRepeat
+type Vis = AmpVis
+type Prefs = AmpPrefs
 
 /** Where the audio element loads a Seafile file from: through this site, for the audio graph. */
 const streamOf = (path: string) => {
@@ -75,20 +58,8 @@ export function Amp({ win }: { win: WinState }) {
   // Seafile through this site; a track kept in this browser from its blob: address (same origin either way, for the audio graph).
   const url = isSf(path) ? streamOf(path) : media.url
 
-  const [prefs, setPrefsState] = useState(loadPrefs)
-  const setPrefs = useCallback(
-    (p: Partial<Prefs>) =>
-      setPrefsState((old) => {
-        const next = { ...old, ...p }
-        try {
-          localStorage.setItem(PREFS, JSON.stringify(next))
-        } catch {
-          /* not kept */
-        }
-        return next
-      }),
-    [],
-  )
+  const prefs = ampPrefs.use()
+  const setPrefs: (p: Partial<Prefs>) => void = ampPrefs.patch
 
   const audio = useRef<HTMLAudioElement>(null)
   const root = useRef<HTMLDivElement>(null)
@@ -486,7 +457,7 @@ export function Amp({ win }: { win: WinState }) {
             <Select
               className="amp-presets"
               // With the equalizer off nothing is chosen, so picking any preset (even the last one) turns it on.
-              value={prefs.eq ? (Object.keys(PRESETS).find((k) => PRESETS[k].every((v, i) => v === prefs.bands[i])) ?? null) : null}
+              value={prefs.eq ? ampPresetOf(prefs.bands) : null}
               placeholder={prefs.eq ? 'Custom' : 'Presets'}
               options={Object.keys(PRESETS).map((k) => ({ value: k, label: k }))}
               onChange={(k) => setPrefs({ bands: PRESETS[k], eq: true })}

@@ -15,7 +15,7 @@ import { HASH_EVERY } from './empires/protocol'
 import { restoreBrain, restoreWorld, snapBrain, snapshotWorld, type BattleSnap } from './empires/snapshot'
 import { listSaves, loadSave, type Galaxy } from './empires/galaxy'
 import { loadSkirmish, mpActive, resumeGalaxy, saveSkirmish } from './empires/keep'
-import { actionFor, getSettings, keyName, setSettings, useSettings } from './empires/settings'
+import { actionFor, getSettings, keyName, setSettings, useAskedPanel, useSettings } from './empires/settings'
 import { HP_NAME, hpName } from './empires/icons'
 import { Renderer, relColor, type Camera, type View } from './empires/render'
 import { beginLayout } from './empires/layout'
@@ -1758,6 +1758,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       return { ...u, paused: !online, menu: panel ? u.menu : true, panel }
     })
   }
+  // Settings → Apps → Games asked for the game's settings or key bindings.
+  useAskedPanel((panel) => openMenu(panel))
   const closeMenu = () => {
     sound.menu(false)
     setUi((u) => {
