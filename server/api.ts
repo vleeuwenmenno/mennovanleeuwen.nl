@@ -19,7 +19,7 @@ import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './upd
 import { HttpError, json, readJson, redirect, sameOrigin, SECURITY, UNTRUSTED } from './http.ts'
 import { pushPublicKey, pushToUser, subscribe, unsubscribe } from './webpush.ts'
 import { changeEntries, listEntries, noticeFromPage, openStream, presence } from './notifier.ts'
-import { minecraftOverview, minecraftStatus } from './minecraft.ts'
+import { minecraftAdmin, minecraftOverview, minecraftStatus, rconConfigured } from './minecraft.ts'
 import { search, clearSearchCache } from './search.ts'
 import { suggest } from './suggest.ts'
 import { readState, writeState } from './state.ts'
@@ -105,6 +105,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       await deleteUser(requireUser(req).id)
       return logout(req, res), true
     }
+
+    // The Minecraft server window's RCON panel, for admins only (server/minecraft.ts).
+    if (path === '/api/minecraft/rcon' && read) return requireAdmin(req), json(res, 200, { configured: rconConfigured() }), true
+    if (path === '/api/minecraft/rcon' && method === 'POST') return json(res, 200, await minecraftAdmin(requireAdmin(req), await readJson(req, 4096))), true
 
     // Settings → Users, for admins only (server/admin.ts).
     if (path === '/api/admin/stats' && read) return requireAdmin(req), json(res, 200, adminStats()), true

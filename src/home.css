@@ -3234,6 +3234,111 @@ button.cal-day.is-picked:not(.is-today) {
   overflow-wrap: anywhere;
 }
 
+/* ---------- Minecraft widget (src/widgets/minecraft.tsx) ---------- */
+
+.mcw {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 14px 14px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mcw-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: -6px;
+  font-size: 13px;
+}
+.mcw-head .sticky-btn {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.window.widget:hover .mcw-head .sticky-btn,
+.mcw-head .sticky-btn:focus-visible {
+  opacity: 0.6;
+}
+.mcw-dot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 99px;
+  background: #9aa29a;
+}
+.mcw-dot.is-up {
+  background: #3f9142;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #3f9142 22%, transparent);
+}
+.mcw-dot.is-down {
+  background: #c8323b;
+}
+.mcw-state {
+  font-size: 11px;
+  opacity: 0.65;
+}
+.mcw-addr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 7px;
+  border: 1px dashed color-mix(in srgb, currentColor 30%, transparent);
+  color: inherit;
+  text-align: left;
+}
+.mcw-addr code {
+  font-size: 12px;
+  font-weight: 600;
+}
+.mcw-addr span {
+  font-size: 11px;
+  opacity: 0.6;
+}
+.mcw-addr:hover {
+  background: color-mix(in srgb, currentColor 7%, transparent);
+}
+.mcw-players {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.mcw-count {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.mcw-count span {
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0.55;
+}
+.mcw-heads {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+.mcw-heads img {
+  image-rendering: pixelated;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.mcw-more,
+.mcw-muted {
+  font-size: 11px;
+  opacity: 0.65;
+}
+.mcw-world {
+  padding-top: 7px;
+  border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- Calendar app (src/apps/calendar) ---------- */
 
 .cal-agenda h4 {

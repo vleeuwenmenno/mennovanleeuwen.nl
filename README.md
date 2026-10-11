@@ -610,10 +610,12 @@ right-click menu, and no text selection (except a sticky being edited). Desktop 
 dragged too; Settings → Appearance → Motion turns either off. Several icons dragged at once gather
 in a pile under the pointer with a count badge, like Finder, and fan back out into the arrangement
 they had, moved to where you drop them. Add widgets from the desktop's menu (*Add widget*), All apps → Widgets or Spotlight.
-Today there are five: **Sticky note** (one of your notes, with checklists you can tick),
+Today there are six: **Sticky note** (one of your notes, with checklists you can tick),
 **Weather** (now, the next hours and three days from [Open-Meteo](https://open-meteo.com), for the
 browser's location or a city you pick; your pick syncs, the browser's location stays on that
-device), **Agenda** (Google Calendar and CalDAV, see above), **Code inbox** and **Status** (updown.io).
+device), **Agenda** (Google Calendar and CalDAV, see above), **Code inbox**, **Status** (updown.io)
+and **Minecraft server** (up or not, the address to copy, who is on with their heads, and the
+in-game day and time when RCON is set up; a click opens the Minecraft server window).
 
 The framework lives in [`src/widgets`](src/widgets). A widget is one `WidgetDef`
 ([`types.ts`](src/widgets/types.ts)): a name, a glyph, a size, its component, and optional hooks
@@ -837,3 +839,24 @@ answer. Turn RCON on in the Minecraft server's `server.properties` (`enable-rcon
 `rcon.port`, `rcon.password`). Keep its port off the internet and reachable only from the site,
 for example over a shared Docker network: RCON sends the password in plain text and can run any
 server command.
+
+With RCON set up, the pinger's tick also asks, on the same RCON login as `list`: the world's clock
+(`time query daytime` and `time query day`, shown as "☀ Day 412 · 14:20" in the window's header,
+the top bar popup and the widget), each online player's dimension, XP level and health (`data get
+entity <name> Dimension|XpLevel|Health`, for up to 12 players, only names that are valid Minecraft
+names), and every 10 minutes the difficulty, the world border (shown only when smaller than the
+default) and whether the server is vanilla or Paper (`version`). All of it is read-only and goes
+into the public status as optional fields; an answer that doesn't parse leaves its field out, and
+values are dropped after a few minutes without a fresh one. Player positions, the whitelist and the
+seed are never asked for there. The players chart also shows who was on in each bar (from the
+recorded visits): a mark on top of bars where someone joined, and their names, heads and join and
+leave times in the tooltip (tap a bar on a touch screen).
+
+Admins (`ADMIN_USERS`) also get a **Server console** in the Minecraft server window: say something
+in chat, message or kick a player from *On now*, list the whitelist and add or remove names, and
+run any command with its output in a scrollback (↑ for earlier ones). It goes through
+`POST /api/minecraft/rcon`, which only answers signed-in admins (everyone else gets 403, and
+nobody else sees the panel), takes one command per request (no newlines, at most 256 characters,
+player names checked), allows 30 commands a minute per admin and logs each one with the admin's
+login to the server's console. Commands that are hard to undo (`stop`, `ban`, `op`,
+`whitelist off`, `kill @a` and the like) ask first.

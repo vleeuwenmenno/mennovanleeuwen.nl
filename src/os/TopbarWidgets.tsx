@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { profile } from '../data/profile'
 import { timeAgo } from '../data/recents'
-import { fetchMinecraft, MC_ADDRESS, MC_PORT, mcNotificationsOn, setMcNotifications, useMinecraft } from '../data/minecraft'
+import { fetchMinecraft, MC_ADDRESS, MC_PORT, mcNotificationsOn, setMcNotifications, useMinecraft, worldLine } from '../data/minecraft'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
 import { dayKey, eventsOn, eventTime, fetchEvents, startOfDay, useCalendarVersion, useShownCalendarIds, type CalendarEvent } from '../data/calendar'
 import { connectGoogle, hasCalendar, signIn, signOut, useAccount } from './account'
@@ -304,7 +304,7 @@ export function MinecraftWidget() {
             <div>
               <strong>{status?.motd || 'Minecraft server'}</strong>
               <p className="muted">
-                {status ? (online ? `Online · Java ${status.version ?? ''}` : 'Offline right now') : error ? `Could not check (${error})` : 'Checking…'}
+                {status ? (online ? [`Online · Java ${status.version ?? ''}`, status.world && worldLine(status.world)].filter(Boolean).join(' · ') : 'Offline right now') : error ? `Could not check (${error})` : 'Checking…'}
               </p>
             </div>
           </div>
