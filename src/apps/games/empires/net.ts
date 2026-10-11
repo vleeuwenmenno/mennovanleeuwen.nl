@@ -49,27 +49,6 @@ const writeToken = (t: string) => {
   }
 }
 
-/** Whether this tab was in the multiplayer screens: a reload goes straight back to them (and the
- * server puts the player back in their lobby or battle). */
-const ACTIVE_KEY = 'mvlos.empires.mp.active'
-export const mpActive = {
-  get: () => {
-    try {
-      return sessionStorage.getItem(ACTIVE_KEY) === '1'
-    } catch {
-      return false
-    }
-  },
-  set: (on: boolean) => {
-    try {
-      if (on) sessionStorage.setItem(ACTIVE_KEY, '1')
-      else sessionStorage.removeItem(ACTIVE_KEY)
-    } catch {
-      // Storage blocked: a reload lands on the main menu.
-    }
-  },
-}
-
 export class Net {
   status: NetStatus = 'connecting'
   /** Smoothed round trip in milliseconds. */

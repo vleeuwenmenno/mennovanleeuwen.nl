@@ -1058,9 +1058,9 @@ function galaxyAi(g: Galaxy, o: number) {
 
 /**
  * Campaigns are saved in slots, each under a name the player chose, in this browser. The campaign in
- * play saves into its own slot by itself (every few seconds, and on anything that matters), so a
- * reload picks it up where it was; "Save as" copies it into a new slot. The index lists every slot
- * with what the load screen shows, newest first.
+ * play saves into its own slot by itself (every few seconds, and on anything that matters), so it
+ * can always be loaded again from where it was; "Save as" copies it into a new slot. The index
+ * lists every slot with what the load screen shows, newest first.
  */
 export type SaveInfo = { id: string; name: string; savedAt: number; galaxy: string; week: number; faction: FactionId; planets: number; enemy: number; total: number }
 const INDEX = 'mvlos.empires.saves'
@@ -1163,30 +1163,9 @@ export function loadSave(id: string): Galaxy | null {
     return null
   }
 }
-/** The campaign that was open when the page went away, to come straight back to. */
-const RESUME = 'mvlos.empires.resume'
-export function setResume(id: string | null) {
-  try {
-    if (id) localStorage.setItem(RESUME, id)
-    else localStorage.removeItem(RESUME)
-  } catch {
-    // Not remembered: the page opens on the main menu.
-  }
-}
-export function resumeGalaxy(): Galaxy | null {
-  try {
-    const id = localStorage.getItem(RESUME)
-    return id ? loadSave(id) : null
-  } catch {
-    return null
-  }
-}
-
 export function deleteSave(id: string) {
   try {
     localStorage.removeItem(SLOT(id))
-    // And a battle it had going.
-    localStorage.removeItem(`mvlos.empires.battle.${id}`)
   } catch {
     // Nothing to remove.
   }

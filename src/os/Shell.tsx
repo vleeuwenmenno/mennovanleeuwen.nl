@@ -41,8 +41,8 @@ import { SINGLE_INSTANCE, useWM, type AppId, type Geometry, type WinState } from
 const TOP = 28
 const DOCK_SPACE = 96
 
-export function placement(app: AppId, openCount: number): Geometry {
-  const [w0, h0] = APP_META[app].size
+export function placement(app: AppId, openCount: number, props?: WinState['props']): Geometry {
+  const [w0, h0] = (props && APP_META[app].sizeOf?.(props)) || APP_META[app].size
   const vw = window.innerWidth
   const vh = window.innerHeight
   const w = Math.min(w0, vw - 32)
@@ -449,7 +449,7 @@ function Dock() {
     const wins = wm.windows.filter((x) => x.app === app).sort((a, b) => a.pid - b.pid)
     const multi = !SINGLE_INSTANCE.has(app)
     return [
-      ...wins.map((w) => ({ label: `${APP_META[w.app].dock} · pid ${w.pid}${w.minimized ? ' (minimized)' : ''}`, onSelect: () => wm.focus(w.pid) })),
+      ...wins.map((w) => ({ label: `${APP_META[w.app].titleOf?.(w) ?? APP_META[w.app].dock} · pid ${w.pid}${w.minimized ? ' (minimized)' : ''}`, onSelect: () => wm.focus(w.pid) })),
       ...(wins.length ? [{ separator: true as const }] : []),
       wins.length && multi ? { label: 'New window', onSelect: () => wm.openNew(app) } : { label: wins.length ? 'Show' : 'Open', onSelect: () => wm.open(app) },
       ...(wins.some((w) => !w.minimized) ? [{ label: wins.length > 1 ? 'Minimize all' : 'Minimize', onSelect: () => wins.forEach((w) => wm.minimize(w.pid)) }] : []),
