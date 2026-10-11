@@ -1,5 +1,6 @@
 import { signedIn, subscribeAccount } from './account'
 import { applyChange, receive, setAccountList } from './notify'
+import { calendarChangedElsewhere } from '../data/calendar'
 
 // The live line to the server's notification hub (server/notifier.ts) while signed in: new
 // notifications for the account (a pop-up when this page is in view), and other pages reading or
@@ -33,6 +34,9 @@ function connect() {
     receive(entry, popup)
   })
   for (const kind of ['read', 'remove', 'clear'] as const) stream.addEventListener(kind, (e) => applyChange(kind, JSON.parse((e as MessageEvent).data)))
+  // An event added, changed or deleted anywhere (an agent did it, or another device): views of
+  // the calendar fetch again.
+  stream.addEventListener('calendar', () => calendarChangedElsewhere())
   document.addEventListener('visibilitychange', onVisibility)
   beat = setInterval(() => inView() && presence(), HEARTBEAT_MS)
 }

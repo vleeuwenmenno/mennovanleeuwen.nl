@@ -49,6 +49,16 @@ function calendarChanged() {
   version++
   for (const l of versionListeners) l()
 }
+/** A change made elsewhere (an agent, another device), told by the server's live stream (src/os/notifyStream.ts). */
+export const calendarChangedElsewhere = calendarChanged
+
+/** Until when the fetches ask the server to skip its own cache too (the refresh button). */
+let freshUntil = 0
+/** The refresh button: every view of events asks again, all the way to Google and the CalDAV servers. */
+export function reloadCalendars() {
+  freshUntil = Date.now() + 3000
+  calendarChanged()
+}
 /** Goes up after every change made here: put it in an effect's dependencies to fetch again. */
 export const useCalendarVersion = () =>
   useSyncExternalStore(
@@ -65,6 +75,7 @@ export function fetchEvents(from: Date, to: Date, calendars: string[] | null = n
   if (calendars && calendars.length === 0) return Promise.resolve({ events: [], errors: [] })
   const params = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() })
   if (calendars) params.set('calendars', calendars.join(','))
+  if (Date.now() < freshUntil) params.set('fresh', '1')
   const key = params.toString()
   const hit = cache.get(key)
   if (!fresh && hit && Date.now() - hit.at < CACHE_MS) return hit.value
