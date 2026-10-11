@@ -60,8 +60,13 @@ function useGameFullscreen() {
     return () => window.removeEventListener('keydown', onKey)
   }, [on])
   const exit = useCallback(() => setOn(false), [])
-  return { on, toggle: () => setOn((v) => !v), exit }
+  const enter = useCallback(() => setOn(true), [])
+  return { on, toggle: () => setOn((v) => !v), enter, exit }
 }
+
+/** Games that start in fullscreen on a phone, where a window leaves them too little room. */
+const FULL_ON_PHONES = new Set(['empires'])
+const isPhone = () => window.innerWidth < 720 || (window.matchMedia('(pointer: coarse)').matches && Math.min(window.innerWidth, window.innerHeight) < 500)
 
 const FullscreenIcon = ({ on }: { on: boolean }) => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -74,9 +79,13 @@ export function Games({ win }: { win: WinState }) {
   useEffect(() => setGame(win.props.game), [win.props])
   const current = GAMES.find((g) => g.id === game)
   const full = useGameFullscreen()
-  const { exit } = full
+  const { exit, enter } = full
   // Leaving a game (or closing the window) also leaves fullscreen.
   useEffect(() => exit, [game, exit])
+  // On a phone, some games open straight into fullscreen; the button still brings the window back.
+  useEffect(() => {
+    if (game && FULL_ON_PHONES.has(game) && isPhone()) enter()
+  }, [game, enter])
 
   if (current) {
     const Game = current.component

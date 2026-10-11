@@ -9,6 +9,8 @@ import { ACTIONS, RESERVED, bindKey, keyName, keyOf, resetKeys, setSettings, use
 import { newWorld, type Owner, type World } from './sim'
 import { score } from './Scoreboard'
 import type { Bus, EmpiresSound } from './sound'
+import { TAP_SLOP, isTouch, useCoarse } from './Touch'
+import './touch-menus.css'
 
 // Everything outside a battle: the main menu, the skirmish lobby (map, players, teams), and the
 // settings and key bindings, which the battle's own menu opens too.
@@ -136,6 +138,8 @@ export function BattleMenu({ w, me, sound, speed, onSpeed, onResume, onPanel, on
   online?: boolean
 }) {
   const s = useSettings()
+  // Fingers have no keys to bind, so the keybinds panel stays out of their way.
+  const coarse = useCoarse()
   const [muted, setMuted] = useState(sound.muted)
   const [confirm, setConfirm] = useState<'restart' | 'exit' | null>(null)
   const p = w.players[me]
@@ -178,9 +182,9 @@ export function BattleMenu({ w, me, sound, speed, onSpeed, onResume, onPanel, on
               <Icon name="grid" size={16} /> Fog grid
             </button>
           </div>
-          <div className="ew-bm-panels">
+          <div className={`ew-bm-panels ${coarse ? 'is-touch' : ''}`}>
             <button className="ew-menu-btn" onClick={() => onPanel('settings')}><Icon name="gear" size={16} /> Settings</button>
-            <button className="ew-menu-btn" onClick={() => onPanel('keys')}><Icon name="keys" size={16} /> Keybinds</button>
+            {!coarse && <button className="ew-menu-btn" onClick={() => onPanel('keys')}><Icon name="keys" size={16} /> Keybinds</button>}
             <button className="ew-menu-btn" onClick={() => onPanel('howto')}><Icon name="help" size={16} /> How to play</button>
           </div>
           <LayoutSection />
@@ -383,6 +387,8 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
   const [mix, setMix] = useState(sound.mix)
   const [music, setMusic] = useState(sound.music)
   const [testing, setTesting] = useState(false)
+  // Scroll speed and edge scrolling are for mice: a finger drags the view.
+  const coarse = useCoarse()
   const set = (next: Partial<Settings>) => setSettings(next)
   return (
     <div className="ew-form">
@@ -419,18 +425,22 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
         <span>Music</span>
         <Seg label="Music" value={music} options={[[true, 'On'], [false, 'Off']]} onChange={(on) => (sound.setMusic(on), setMusic(on))} />
       </div>
-      <h5>Camera</h5>
-      <label className="ew-row">
-        <span>Scroll speed</span>
-        <span className="ew-range">
-          <input type="range" min={0.4} max={2.5} step={0.1} value={s.cameraSpeed} onChange={(e) => set({ cameraSpeed: Number(e.target.value) })} />
-          <b>{s.cameraSpeed.toFixed(1)}×</b>
-        </span>
-      </label>
-      <div className="ew-row">
-        <span>Edge scrolling</span>
-        <Seg label="Edge scrolling" value={s.edgeScroll} options={[['off', 'Off'], ['fullscreen', 'Fullscreen only'], ['always', 'Always']]} onChange={(v) => set({ edgeScroll: v })} />
-      </div>
+      {!coarse && (
+        <>
+          <h5>Camera</h5>
+          <label className="ew-row">
+            <span>Scroll speed</span>
+            <span className="ew-range">
+              <input type="range" min={0.4} max={2.5} step={0.1} value={s.cameraSpeed} onChange={(e) => set({ cameraSpeed: Number(e.target.value) })} />
+              <b>{s.cameraSpeed.toFixed(1)}×</b>
+            </span>
+          </label>
+          <div className="ew-row">
+            <span>Edge scrolling</span>
+            <Seg label="Edge scrolling" value={s.edgeScroll} options={[['off', 'Off'], ['fullscreen', 'Fullscreen only'], ['always', 'Always']]} onChange={(v) => set({ edgeScroll: v })} />
+          </div>
+        </>
+      )}
       <h5>Battlefield</h5>
       <div className="ew-row">
         <span>Health bars</span>
@@ -501,8 +511,24 @@ export function KeybindsPanel() {
 export function HowToPlay() {
   const { keys } = useSettings()
   const k = (a: Action) => <kbd>{keyName(keys[a])}</kbd>
+  const coarse = useCoarse()
   return (
     <div className="ew-form ew-howto">
+      {coarse && (
+        <>
+          <h5>On a touchscreen</h5>
+          <ul>
+            <li>Tap a ship to select it. Drag with one finger to move the view, and pinch with two fingers to zoom.</li>
+            <li>Long-press anywhere on the battlefield for the action wheel: orders, building and more. Slide onto an action and let go, or let go first and tap one.</li>
+            <li>The ⇧ Shift button stays on until tapped again: orders queue up, taps add to the selection, and the shipyard builds five at a time. The ▢ Box button makes the next drag draw a box round a group instead of moving the view.</li>
+            <li>Double-tap a ship to select every ship of its kind. Long-press a ship card in the shipyard to build five or take one out of the queue.</li>
+            <li>On the galaxy map, tap a planet or a fleet to select it, and long-press for its orders.</li>
+            <li>In the lobby, tap Draw areas, then drag on the map to draw where each player may start. In the tech tree, long-press a queued tile to cancel it.</li>
+            <li>Long-press anything with a tip to read it.</li>
+          </ul>
+          <h5>How the battle works</h5>
+        </>
+      )}
       <ul>
         <li>Destroy every enemy station. A side is out when its stations are gone.</li>
         <li>In the lobby, drag on the map to draw where each player may start. Before the battle, click inside your area to place your station, then start.</li>
@@ -549,6 +575,8 @@ export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, 
   initial?: MenuScreen
 }) {
   const [panel, setPanel] = useState<'settings' | 'keys' | 'howto' | null>(null)
+  // Fingers get no keybinds, and the notes that are tooltips for a mouse as text.
+  const coarse = useCoarse()
   // The menu goes one level deep: single player or multiplayer, then the modes each one has.
   const [screen, setScreen] = useState<MenuScreen>(initial)
   const click = (fn: () => void) => () => {
@@ -592,6 +620,7 @@ export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, 
               <Icon name="radar" size={20} /> Galactic conquest
               <em className="ew-beta" data-tip="Still being built: expect rough edges, and changes to come">Beta</em>
             </button>
+            {coarse && <small className="ew-muted ew-small">Galactic conquest is still being built: expect rough edges, and changes to come.</small>}
             <button className="ew-menu-btn" onClick={click(() => setScreen('main'))}>
               <Icon name="back" size={20} /> Back
             </button>
@@ -618,6 +647,7 @@ export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, 
             <button className={`ew-menu-btn ${latest ? '' : 'is-primary'}`} onClick={click(() => onConquest('new'))} data-tip="Pick a galaxy, its length, your side and the enemy admiral">
               <Icon name="radar" size={20} /> New game
             </button>
+            {coarse && <small className="ew-muted ew-small">Beta: still being built, so expect rough edges, and changes to come.</small>}
             <button className="ew-menu-btn" onClick={click(() => setScreen('single'))}>
               <Icon name="back" size={20} /> Back
             </button>
@@ -643,9 +673,11 @@ export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, 
           <button className="ew-menu-btn" onClick={click(() => setPanel('settings'))}>
             <Icon name="gear" size={20} /> Settings
           </button>
-          <button className="ew-menu-btn" onClick={click(() => setPanel('keys'))}>
-            <Icon name="menu" size={20} /> Keybinds
-          </button>
+          {!coarse && (
+            <button className="ew-menu-btn" onClick={click(() => setPanel('keys'))}>
+              <Icon name="menu" size={20} /> Keybinds
+            </button>
+          )}
           <button className="ew-menu-btn" onClick={click(() => setPanel('howto'))}>
             <Icon name="help" size={20} /> How to play
           </button>
@@ -677,14 +709,16 @@ export const slotColor = (s: Slot) => (s.kind === 'closed' ? '#5a6478' : s.kind 
 
 /** The map from above: nebulas, asteroid fields, rocks, ore, beacons, and the spawns numbered and
  * coloured by slot. Given start areas, it shows them too, and with `onArea` they can be redrawn:
- * drag out a box for the active slot, or click inside an area to make that slot the active one. */
-export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, className = '' }: {
+ * drag out a box for the active slot, or click inside an area to make that slot the active one.
+ * A finger draws only with `fingerDraws`; otherwise it taps an area or scrolls the page past the map. */
+export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, fingerDraws = true, className = '' }: {
   map: MapDef
   slots?: Slot[]
   areas?: Rect[]
   active?: number
   onArea?: (r: Rect) => void
   onPick?: (i: number) => void
+  fingerDraws?: boolean
   className?: string
 }) {
   const ref = useRef<HTMLCanvasElement>(null)
@@ -692,7 +726,7 @@ export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, cla
   const [world] = useState(() => new Map<string, ReturnType<typeof newWorld>>())
   /** Screen to map units, from the last draw; and the box being dragged out, in map units. */
   const frame = useRef({ s: 1, ox: 0, oy: 0 })
-  const drag = useRef<{ x0: number; y0: number; x1: number; y1: number; moved: boolean } | null>(null)
+  const drag = useRef<{ x0: number; y0: number; x1: number; y1: number; moved: boolean; tap?: { x: number; y: number } } | null>(null)
   const redraw = useRef(() => {})
   useEffect(() => {
     const c = ref.current
@@ -815,13 +849,18 @@ export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, cla
   return (
     <canvas
       ref={ref}
-      className={`ew-mappreview ${editable ? 'is-editable' : ''} ${className}`}
+      className={`ew-mappreview ${editable ? 'is-editable' : ''} ${editable && !fingerDraws ? 'is-tap' : ''} ${className}`}
       // Shaped like the map, so the panel doesn't carry empty bands above and below it.
       style={className ? undefined : { aspectRatio: `${map.w} / ${map.h}` }}
       onPointerDown={
         editable
           ? (e) => {
               const p = toMap(e)
+              // A finger that can't draw only taps: the page scrolls if it moves instead.
+              if (isTouch(e) && !fingerDraws) {
+                drag.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y, moved: false, tap: { x: e.clientX, y: e.clientY } }
+                return
+              }
               ;(e.target as Element).setPointerCapture(e.pointerId)
               drag.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y, moved: false }
             }
@@ -832,6 +871,10 @@ export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, cla
           ? (e) => {
               const d = drag.current
               if (!d) return
+              if (d.tap) {
+                if (Math.hypot(e.clientX - d.tap.x, e.clientY - d.tap.y) > TAP_SLOP) drag.current = null
+                return
+              }
               const p = toMap(e)
               d.x1 = p.x
               d.y1 = p.y
@@ -853,6 +896,14 @@ export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, cla
                 const hit = areas?.findIndex((a, i) => slots?.[i]?.kind !== 'closed' && d.x0 >= a.x && d.y0 >= a.y && d.x0 <= a.x + a.w && d.y0 <= a.y + a.h) ?? -1
                 if (hit >= 0) onPick?.(hit)
               } else redraw.current()
+            }
+          : undefined
+      }
+      onPointerCancel={
+        editable
+          ? () => {
+              drag.current = null
+              redraw.current()
             }
           : undefined
       }
@@ -983,6 +1034,9 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
   const [picker, setPicker] = useState(false)
   /** Whose start area a drag on the map redraws. */
   const [active, setActive] = useState(0)
+  // On a touchscreen a swipe over the map scrolls the lobby, until Draw areas turns drawing on.
+  const coarse = useCoarse()
+  const [drawing, setDrawing] = useState(false)
   const generated = useMemo(() => generateMap(setup.gen), [setup.gen])
   const isGen = setup.map === GENERATED
   const map = isGen ? generated : (MAP[setup.map] ?? MAPS[0])
@@ -1110,12 +1164,25 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
               <button className="ew-chip" onClick={() => (sound.click(), setPicker(true))}>Change map</button>
             </span>
           }>
-          <MapPreview map={map} slots={setup.slots} areas={areas} active={act} onArea={setArea} onPick={(i) => (sound.click(), setActive(i))} />
+          <MapPreview map={map} slots={setup.slots} areas={areas} active={act} onArea={setArea} onPick={(i) => (sound.click(), setActive(i))} fingerDraws={drawing || !coarse} />
           <div className="ew-areahint">
             <span className="ew-small">
               <i className="ew-dot" style={{ background: slotColor(setup.slots[act]) }} />
-              Drag on the map to draw the start area for <b>{slotName(setup.slots[act], act)}</b>. Click an area, or a number on the left, to switch.
+              {coarse ? (
+                <>
+                  {drawing ? 'Drag on the map' : 'Tap Draw areas, then drag on the map'} to draw the start area for <b>{slotName(setup.slots[act], act)}</b>. Tap an area, or a player's number, to switch.
+                </>
+              ) : (
+                <>
+                  Drag on the map to draw the start area for <b>{slotName(setup.slots[act], act)}</b>. Click an area, or a number on the left, to switch.
+                </>
+              )}
             </span>
+            {coarse && (
+              <button className={`ew-chip ${drawing ? 'is-on' : ''}`} aria-pressed={drawing} onClick={() => (sound.click(), setDrawing(!drawing))}>
+                {drawing ? 'Done' : 'Draw areas'}
+              </button>
+            )}
             <button className="ew-chip" disabled={!setup.areas.some(Boolean)} onClick={() => (sound.click(), update({ ...setup, areas: [] }))}>
               Reset areas
             </button>

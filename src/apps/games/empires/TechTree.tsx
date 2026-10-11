@@ -1,8 +1,10 @@
+import { useRef } from 'react'
 import { LEVEL_UP, MAX_LEVEL, MAX_RESEARCH, TECH, UPGRADES, buildable, techsFor, unitOf, type FactionId, type UnitType } from './data'
 import { Icon, TechIcon, fmt, levelBlurb, researchName, techState, type Hud, type TechStatus } from './Hud'
 import { Modal } from './Menus'
 import { spriteUrl } from './render'
 import type { Owner, World } from './sim'
+import { LongPress, isTouch, useCoarse } from './Touch'
 
 // The tech tree: everything a faction can research, one line for the station (its levels and its
 // own upgrades) and one per ship type, with prerequisites drawn as connectors. It opens over the
@@ -57,11 +59,12 @@ type Props = { w: World; me: Owner; hud: Hud; onResearch: (id: string) => void; 
 export function TechTree({ w, me, hud, onResearch, onCancel, onClose }: Props) {
   const faction = w.players[me].faction
   const lines = linesFor(faction)
+  const coarse = useCoarse()
   return (
     <Modal title="Tech tree" onClose={onClose} className="is-tree">
       <ResearchQueue hud={hud} onCancel={onCancel} />
       <p className="ew-muted ew-small ew-tt-hint">
-        Click a tile to queue it, right-click or ✕ to cancel and get the credits back. Research runs one at a time, in order. The battle carries on while this is open.
+        {coarse ? 'Tap a tile to queue it; long-press it or tap ✕ to cancel and get the credits back.' : 'Click a tile to queue it, right-click or ✕ to cancel and get the credits back.'} Research runs one at a time, in order. The battle carries on while this is open.
       </p>
       <div className="ew-tt-scroll">
         {lines.map((line) => (
@@ -74,6 +77,7 @@ export function TechTree({ w, me, hud, onResearch, onCancel, onClose }: Props) {
 
 /** The research queue: what's running, what waits behind it, and the empty slots. */
 function ResearchQueue({ hud, onCancel }: { hud: Hud; onCancel: (index: number) => void }) {
+  const press = useCancelPress()
   let wait = 0
   return (
     <div className="ew-tt-queue">
@@ -100,8 +104,9 @@ function ResearchQueue({ hud, onCancel }: { hud: Hud; onCancel: (index: number) 
             className={`ew-tt-slot ${i === 0 ? 'is-busy' : ''}`}
             onContextMenu={(e) => {
               e.preventDefault()
-              onCancel(i)
+              if (!press.touched()) onCancel(i)
             }}
+            {...press.handlers(() => onCancel(i))}
           >
             <TechIcon id={r.id} size={34} progress={i === 0 ? 1 - r.left / r.total : 0} status={i === 0 ? 'busy' : 'queued'} />
             <span>
@@ -194,6 +199,7 @@ function Tile({ n, s, hud, faction, col, lane, onResearch, onCancel }: {
   const price = t ? { cost: t.cost, time: t.time } : UPGRADES[n.level!]!
   const blurb = t ? t.blurb : levelBlurb(faction, n.level!)
   const queued = s.slot >= 0
+  const press = useCancelPress()
   const label =
     s.status === 'done' ? '✓ Researched'
       : s.status === 'busy' ? `${Math.ceil(s.left)}s left`
@@ -211,8 +217,9 @@ function Tile({ n, s, hud, faction, col, lane, onResearch, onCancel }: {
         }}
         onContextMenu={(e) => {
           e.preventDefault()
-          if (queued) onCancel(s.slot)
+          if (queued && !press.touched()) onCancel(s.slot)
         }}
+        {...press.handlers(queued ? () => onCancel(s.slot) : null)}
         data-tip={`${name}\n${blurb}${s.why && s.status !== 'done' && !queued ? `\n\n${s.why}` : ''}`}
       >
         <TechIcon id={n.id} size={52} progress={s.progress} status={s.status} />
@@ -244,4 +251,36 @@ function Tile({ n, s, hud, faction, col, lane, onResearch, onCancel }: {
       )}
     </div>
   )
+}
+
+/**
+ * A finger's way to cancel research: a long press (with `cancel`; without one the handlers only
+ * watch). The click that follows it is swallowed, so a cancelled tile isn't queued again at once,
+ * and `touched` tells the context menu, which some phones open on a long press too, to leave it be.
+ * The data-longpress mark keeps the long-press tooltip from showing as well.
+ */
+function useCancelPress() {
+  const lp = useRef(new LongPress())
+  const touch = useRef(false)
+  return {
+    touched: () => touch.current,
+    handlers: (cancel: (() => void) | null) => ({
+      ...(cancel ? { 'data-longpress': '' } : {}),
+      onPointerDown: (e: React.PointerEvent) => {
+        touch.current = isTouch(e)
+        lp.current.fired = false
+        if (cancel && isTouch(e)) lp.current.start(e, cancel)
+      },
+      onPointerMove: (e: React.PointerEvent) => void (isTouch(e) && lp.current.move(e)),
+      onPointerUp: () => lp.current.cancel(),
+      onPointerCancel: () => lp.current.cancel(),
+      onClickCapture: (e: React.MouseEvent) => {
+        if (lp.current.fired) {
+          lp.current.fired = false
+          e.preventDefault()
+          e.stopPropagation()
+        }
+      },
+    }),
+  }
 }

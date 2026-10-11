@@ -8,6 +8,7 @@ import { NAME_MAX, nameProblem, randomName, tidyName } from './names'
 import type { Net, NetView } from './net'
 import { CHAT_MAX, type MpLobby, type MpSlot, type SlotPatch } from './protocol'
 import type { EmpiresSound } from './sound'
+import { useCoarse } from './Touch'
 
 // The multiplayer screens: pick a name, browse the battles being set up (or host one), and the
 // lobby itself, where the host picks the map and everyone their spawn, faction and side. All of it
@@ -149,11 +150,13 @@ function JoinScreen({ v, net, sound, onBack, children }: { v: NetView; net: Net;
 function MeChip({ v, net, sound }: { v: NetView; net: Net; sound: EmpiresSound }) {
   const [renaming, setRenaming] = useState(false)
   const ping = v.status !== 'online' ? 'offline' : v.rtt ? `${Math.round(v.rtt)} ms` : '…'
+  // Without hover, say what the number is.
+  const coarse = useCoarse()
   return (
     <div className="ew-mp-me">
       <i className={`ew-mp-dot is-${v.status}`} />
       <span className="ew-muted ew-small" data-tip="Round trip to the server">
-        {ping}
+        {coarse && v.status === 'online' ? `Ping ${ping}` : ping}
       </span>
       <strong>{v.me?.name}</strong>
       <button className="ew-chip" onClick={() => (sound.click(), setRenaming(true))}>
