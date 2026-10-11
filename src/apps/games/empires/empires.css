@@ -2863,6 +2863,11 @@ span.ew-teamtag {
   font-family: var(--ew-display);
   font-size: 15px;
 }
+/* Multiplayer has no pause or speed: the clock is all there is, so it stays when space is short. */
+.ew-timectl.is-clockonly .ew-clockval {
+  display: inline;
+  padding: 0 6px;
+}
 .ew-timectl.is-paused .ew-clockval {
   color: var(--ew-gold);
   animation: ew-blink 1s steps(2, start) infinite;
@@ -3145,6 +3150,90 @@ span.ew-teamtag {
 }
 .ew-deck .ew-creditcell:hover {
   background: linear-gradient(180deg, rgba(30, 46, 84, 0.98), rgba(12, 20, 40, 0.98));
+}
+
+/* The player list: scores, and online whether each player is still there and their ping. */
+.ew-float.ew-score {
+  width: min(560px, calc(100% - 24px));
+  max-height: calc(100% - 300px);
+  display: flex;
+}
+.ew-score > .ew-frame {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.ew-score .ew-frame-in {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px 10px;
+}
+.ew-score table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.ew-score th,
+.ew-score td {
+  padding: 4px 6px;
+  text-align: right;
+  white-space: nowrap;
+}
+.ew-score th:first-child,
+.ew-score td:first-child {
+  text-align: left;
+}
+.ew-score thead th {
+  font-weight: 500;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ew-muted);
+}
+.ew-score .ew-score-side th {
+  padding-top: 9px;
+  font-family: var(--ew-display);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ew-head);
+  border-bottom: 1px solid var(--ew-cell-line);
+}
+.ew-score td img {
+  width: 16px;
+  height: 16px;
+  margin-right: 5px;
+  vertical-align: -3px;
+}
+.ew-score tr.is-me td {
+  background: rgba(91, 155, 255, 0.1);
+}
+.ew-score tr.is-out td {
+  color: var(--ew-muted);
+}
+.ew-score-gone {
+  color: var(--ew-gold);
+}
+.ew-ping.is-good {
+  color: var(--ew-good);
+}
+.ew-ping.is-fair {
+  color: var(--ew-gold);
+}
+.ew-ping.is-poor {
+  color: var(--ew-bad);
+}
+.ew-deck .ew-playersbtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* The ping stays even where narrow top bars drop their small print. */
+.ew-top-cell.ew-playersbtn small {
+  display: inline;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* The economy panel. */
