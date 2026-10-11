@@ -136,6 +136,8 @@ In a folder on Seafile, that folder becomes the thread's work folder:
   one), Ctrl+Enter sends it, or the next one, now (stopping the agent). While it asks for an
   approval or a form, just typing tells it what to do instead: Enter declines every waiting change
   with that message, or answers the form with it.
+- A dropped stream reconnects by itself (for a minute) and an interrupted turn says so; Ctrl+R or
+  `/retry` runs the last message again, and `/rewind` picks one of your messages to go back to.
 - `agents -c`/`-r` resume a thread, `agents -p` answers once for pipes, and `/help` lists the
   slash commands.
 
@@ -512,6 +514,27 @@ terminals on the same thread see the same queue (`queue` events on the turn's st
 endpoints are `POST /api/agents/threads/:id/queue` and `/override`, `PATCH` and `DELETE
 …/queue/:qid` (`editing: true` holds the queue and returns the whole message) and `POST
 …/queue/:qid/send` (Send now) and `/move`.
+
+A turn that does not end with an answer says how it ended, with **Retry**: *Interrupted: the
+server restarted (an update)*, *Interrupted: the server stopped unexpectedly*, an error, or
+*Stopped* (the thread's `interrupted`, saved with it). On SIGTERM (a deploy; Docker waits about 10
+seconds) the server keeps the reply each running turn was writing, answers its unfinished tool calls
+with "the server restarted", and marks the thread; a thread still marked as running when the server
+starts (`turn_at`) was cut off by a crash or a kill and is marked that way. Queued messages wait
+after a restart, for *Send queued*. [`server/shutdown.ts`](server/shutdown.ts) runs every part's
+shutdown hook (Agents turns, Empires battles) from one signal handler. When a turn's stream drops,
+the window first looks for the turn again, a little slower each time, for a minute (*Reconnecting…*),
+picking it up where it is if it still runs; only then does it say *The connection dropped*, with
+Retry and Look again. A message that never got there goes back into the box. Retry (`POST
+…/retry`, streamed like a message) also sits under the last answer to have it written again: the
+last turn's output (a partial or failed reply, its tool calls and results, or the answer) goes and
+the same message, with its files, is answered again with the thread's model, mode and tools; queued
+messages run after it. Each of your messages has **Copy**, **Edit & resend** and **Rewind to here**
+(on hover, always on touch, and in its right-click menu): after a desktop dialog that says how many
+messages go, it and everything after it leave the thread (`POST …/rewind`; a running turn is
+stopped first, the queue stays) and it comes back into the message box with its files. What the
+tools did is not undone: memories, the plan, notes, calendar events and files the agent changed in
+the work folder stay as they are.
 Settings → Agents (also the app's ⚙) picks the model for Quick, Deep and titles, what a new thread
 starts with, and shows the system prompt: `~/AGENTS.md`, your own from Seafile when Seafile is
 home, otherwise a read-only built-in one ([`src/data/agentsPrompt.ts`](src/data/agentsPrompt.ts)).

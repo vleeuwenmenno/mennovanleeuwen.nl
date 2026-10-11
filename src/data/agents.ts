@@ -8,7 +8,15 @@ import { getNote } from './notes'
 export type Mode = 'quick' | 'deep'
 /** A step in the agent's plan for a long job. */
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission; queue: QueuedMessage[] }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission; queue: QueuedMessage[]; interrupted: Interruption | null }
+/**
+ * How the last turn was cut short, when it was: the server restarted (a deploy) or stopped without
+ * a word (a crash) while it ran, it failed, or it was stopped. Retry runs it again.
+ */
+export type Interruption = { reason: 'restart' | 'crash' | 'failed' | 'stopped'; error?: string; at: number }
+/** What a cut-short turn says in the thread. */
+export const interruptionText = (i: Interruption) =>
+  i.reason === 'restart' ? 'Interrupted: the server restarted (an update)' : i.reason === 'crash' ? 'Interrupted: the server stopped unexpectedly' : i.reason === 'failed' ? `Stopped by an error${i.error ? `: ${i.error}` : ''}` : 'Stopped'
 /**
  * A message written while the agent was working, waiting to be sent when it is done (the server
  * keeps the queue and sends them one by one). `editing`: a window is editing it, and the queue waits.
@@ -261,6 +269,31 @@ export async function sendMessage(id: string, text: string, attachments: Attachm
   })
   await readEvents(res, onEvent)
 }
+
+/**
+ * Retry: the thread's last turn again (its partial, failed or finished reply goes), streamed like
+ * sendMessage. Queued messages run after it.
+ */
+export async function retryTurn(id: string, onEvent: (e: TurnEvent) => void, signal: AbortSignal, opts: { terminal?: boolean } = {}) {
+  const res = await fetch(`/api/agents/threads/${id}/retry`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client: { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(opts.terminal ? { terminal: true } : {}) } }),
+    signal,
+  })
+  await readEvents(res, onEvent)
+}
+
+/**
+ * Rewind to one of your messages: it and everything after it leave the thread (a running turn is
+ * stopped first), and it comes back, files and all, to edit and send again. What tools changed is
+ * not undone.
+ */
+export const rewindThread = (id: string, messageId: number) => api<{ thread: Thread; removed: number; message: { text: string; attachments: Attachment[] } }>(`/api/agents/threads/${id}/rewind`, { method: 'POST', json: { messageId } })
+
+/** A stream that broke on the way (the network, or the server restarting), not one the server refused. */
+export const isDropped = (e: unknown) => e instanceof TypeError || (e as Error)?.name === 'NetworkError'
 
 /**
  * Joins a turn this window did not start (opened again while it runs, or another tab): a snapshot

@@ -10,6 +10,10 @@ import {
   deleteThread,
   editQueued,
   followThread,
+  interruptionText,
+  isDropped,
+  retryTurn,
+  rewindThread,
   getContext,
   getThread,
   listMemories,
@@ -112,6 +116,8 @@ const SLASH: [string, string][] = [
   ['/status', 'account, model, folder, mode'],
   ['/export', 'save the thread as Markdown'],
   ['/copy', 'copy the last reply'],
+  ['/retry', 'run your last message again (also ctrl+r)'],
+  ['/rewind', 'go back to one of your messages and edit it'],
   ['/open', 'open the thread in the Agents app'],
   ['/exit', 'leave (also Ctrl+D, Ctrl+C twice)'],
 ]
@@ -268,6 +274,7 @@ export class Session {
       }
     })
     this.out(out)
+    this.showInterrupted()
   }
 
   private loadSkills() {
@@ -433,6 +440,7 @@ export class Session {
         ['@', 'add a file (tab completes)'],
         ['ctrl+o', 'show thinking and full tool output'],
         ['ctrl+t', 'show or hide the plan'],
+        ['ctrl+r', 'retry: run your last message again'],
         ['ctrl+l', 'clear the screen'],
         ['ctrl+c twice, ctrl+d', 'leave'],
       ]
@@ -914,6 +922,10 @@ export class Session {
       case '^T':
         this.showTodos = !this.showTodos
         break
+      case '^R':
+        if (this.turn || !this.thread) return false
+        void this.retry()
+        break
       case 'Tab':
         break
       default:
@@ -1189,14 +1201,124 @@ export class Session {
     const ctl = new AbortController()
     this.turn = { ctl, started: Date.now(), content: '', thinking: '', chars: 0, verb: VERBS[Math.floor(Math.random() * VERBS.length)] }
     this.draw()
+    let dropped = false
     try {
       const thread = await this.ensureThread()
       await sendMessage(thread.id, text, files, (e) => this.onEvent(e), ctl.signal, { terminal: true })
     } catch (e) {
-      if (!ctl.signal.aborted) this.say(`Error: ${(e as Error).message}`, 'red')
+      if (ctl.signal.aborted) {
+        /* stopped */
+      } else if (isDropped(e) && this.thread) dropped = this.dropTurn()
+      else this.say(`Error: ${(e as Error).message}`, 'red')
     } finally {
       this.endTurn()
     }
+    if (dropped) void this.reconnect()
+  }
+
+  /** The stream broke: what was being written is not the answer (the server has it, or lost it). */
+  private dropTurn(): true {
+    if (this.turn) (this.turn.content = ''), (this.turn.thinking = '')
+    this.notice = null
+    return true
+  }
+
+  /**
+   * After a dropped stream: finds the thread again (the server may be restarting for an update),
+   * trying for a minute, a little slower each time. Still running: follow it; ended meanwhile:
+   * show what came, and how it ended.
+   */
+  private async reconnect() {
+    if (!this.thread || this.closed) return
+    const id = this.thread.id
+    this.say('The connection dropped · reconnecting (the server may be restarting)…', 'yellow')
+    const start = Date.now()
+    for (let wait = 1000; !this.closed && Date.now() - start < 60_000; wait = Math.min(wait * 2, 5000)) {
+      try {
+        const r = await getThread(id)
+        if (this.thread?.id !== id || this.turn) return
+        if (r.thread.running) return void this.followTurn()
+        this.onEvent({ type: 'snapshot', thread: r.thread, messages: r.messages, pending: r.pending, live: null })
+        this.showInterrupted()
+        return
+      } catch {
+        await new Promise((ok) => setTimeout(ok, wait))
+      }
+    }
+    if (!this.closed) this.say('The connection dropped and the server did not come back · /retry (ctrl+r) runs your last message again', 'red')
+  }
+
+  /** How the last turn was cut short, when it was, with the way to run it again. */
+  private showInterrupted() {
+    const cut = this.thread?.interrupted
+    if (cut && !this.thread?.running) this.say(`${interruptionText(cut)} · ctrl+r or /retry runs it again`, cut.reason === 'stopped' ? 'yellow' : 'red')
+  }
+
+  /** Retry: the last turn again; what the agent wrote for it goes, and your message is answered anew. */
+  private async retry() {
+    if (!this.thread) return this.say('Nothing to retry yet')
+    if (this.turn) return this.say('Wait for the agent to finish (esc stops it)', 'yellow')
+    const last = [...this.messages].reverse().find((m) => m.role === 'user')
+    if (!last) return this.say('Nothing to retry yet')
+    this.say('Retrying your last message')
+    // The server sends the message again: it shows again, under what went before.
+    this.echo = null
+    const ctl = new AbortController()
+    this.turn = { ctl, started: Date.now(), content: '', thinking: '', chars: 0, verb: VERBS[Math.floor(Math.random() * VERBS.length)] }
+    this.messages = this.messages.filter((m) => m.id < last.id)
+    this.draw()
+    let dropped = false
+    try {
+      await retryTurn(this.thread.id, (e) => this.onEvent(e), ctl.signal, { terminal: true })
+    } catch (e) {
+      if (ctl.signal.aborted) {
+        /* stopped */
+      } else if (isDropped(e)) dropped = this.dropTurn()
+      else this.say(`Error: ${(e as Error).message}`, 'red')
+    } finally {
+      this.endTurn()
+    }
+    if (dropped) void this.reconnect()
+  }
+
+  /** /rewind: pick one of your messages; it and everything after it go, and it comes back to edit. */
+  private async rewindPick() {
+    if (!this.thread) return this.say('Nothing to rewind yet')
+    const mine = this.messages.filter((m) => m.role === 'user')
+    if (!mine.length) return this.say('Nothing to rewind yet')
+    const items = mine
+      .map((m) => ({ value: String(m.id), label: (m.content.split('\n')[0] || (m.attachments ?? []).map((a) => a.name).join(', ')).slice(0, 80), hint: `${this.messages.filter((x) => x.id > m.id).length} after it` }))
+      .reverse()
+    const picked = await this.choose('Rewind to which message? It and everything after it go', items)
+    if (!picked) return
+    const id = Number(picked[0])
+    const after = this.messages.filter((x) => x.id > id).length
+    const sure = await this.choose(`Remove it and the ${after} after it?${this.turn ? ' The agent is stopped first.' : ''}`, [
+      { value: 'yes', label: 'Yes, rewind', hint: 'it comes back into the prompt to edit' },
+      { value: 'no', label: 'No' },
+      { value: 'info', label: 'Not undone: memories, the plan, notes, calendar events, and files changed in the work folder' },
+    ])
+    if (sure?.[0] !== 'yes') return
+    try {
+      if (this.turn) {
+        this.turn.content = ''
+        this.turn.ctl.abort()
+        this.follow?.abort()
+      }
+      const r = await rewindThread(this.thread.id, id)
+      this.thread = r.thread
+      this.messages = this.messages.filter((m) => m.id < id)
+      // The screen shows the thread as it is now.
+      this.ctx.clear()
+      this.welcome()
+      this.history()
+      this.say(`Rewound: ${r.removed} ${r.removed === 1 ? 'message' : 'messages'} removed. Not undone: memories, the plan, notes, calendar events and work folder files.`)
+      this.editor.set(r.message.text)
+      if (r.message.attachments.length) this.say(`Its ${r.message.attachments.length} attached ${r.message.attachments.length === 1 ? 'file is' : 'files are'} not brought back here: @ them again`, 'yellow')
+    } catch (e) {
+      this.say(`Could not rewind: ${(e as Error).message}`, 'red')
+    }
+    this.draw()
   }
 
   private endTurn() {
@@ -1228,14 +1350,19 @@ export class Session {
     this.follow = ctl
     this.turn = { ctl, started: Date.now(), content: '', thinking: '', chars: 0, verb: VERBS[0] }
     this.draw()
+    let dropped = false
     try {
       await followThread(this.thread.id, (e) => this.onEvent(e), ctl.signal, { terminal: true })
     } catch (e) {
-      if (!ctl.signal.aborted) this.say(`Error: ${(e as Error).message}`, 'red')
+      if (ctl.signal.aborted) {
+        /* stopped */
+      } else if (isDropped(e)) dropped = this.dropTurn()
+      else this.say(`Error: ${(e as Error).message}`, 'red')
     } finally {
       this.follow = null
       this.endTurn()
     }
+    if (dropped) void this.reconnect()
   }
 
   private onEvent(e: TurnEvent) {
@@ -1324,7 +1451,7 @@ export class Session {
         void this.runClient(e.callId, e.messageId, e.index, e.call)
         break
       case 'error':
-        this.out([...wrap([seg(`Error: ${e.error}`, 'red')], w, [seg('  ⎿  ', 'muted')], [seg('     ')]), []])
+        this.out([...wrap([seg(`Error: ${e.error}`, 'red'), seg(' · ctrl+r or /retry runs it again', 'muted')], w, [seg('  ⎿  ', 'muted')], [seg('     ')]), []])
         break
       case 'done':
         break
@@ -1686,6 +1813,12 @@ export class Session {
         }
         return true
       }
+      case '/retry':
+        await this.retry()
+        return true
+      case '/rewind':
+        await this.rewindPick()
+        return true
       case '/copy': {
         const last = [...this.messages].reverse().find((m) => m.role === 'assistant' && m.content.trim())
         if (!last) return this.say('No reply to copy yet'), true

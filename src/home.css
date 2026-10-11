@@ -345,10 +345,67 @@
   max-width: 420px;
   text-align: center;
 }
-.agt-user {
+/* Your message, on the right, with its actions under it (on hover; always on touch). */
+.agt-user-wrap {
   align-self: flex-end;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
   min-width: 0;
   max-width: min(78%, 640px);
+}
+.agt-user-actions {
+  display: flex;
+  gap: 2px;
+  visibility: hidden;
+}
+.agt-user-wrap:hover .agt-user-actions,
+.agt-user-wrap:focus-within .agt-user-actions {
+  visibility: visible;
+}
+@media (pointer: coarse) {
+  .agt-user-actions {
+    visibility: visible;
+  }
+}
+.agt-user-actions button {
+  padding: 1px 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.agt-user-actions button:hover {
+  color: var(--fg-bright);
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+}
+/* How the last turn ended when it did not answer (a restart, an error, a stop), with Retry; or
+   just Retry under the last answer, to have it written again. */
+.agt-cut {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+}
+.agt-cut.is-error {
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: var(--red);
+}
+.agt-cut .agt-retry {
+  padding: 1px 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.agt-cut .agt-retry:hover {
+  color: var(--fg-bright);
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+}
+.agt-user {
+  min-width: 0;
+  max-width: 100%;
   padding: 8px 12px;
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
@@ -991,7 +1048,7 @@ textarea.agt-q-input {
   .agt-scroll {
     padding: 12px;
   }
-  .agt-user {
+  .agt-user-wrap {
     max-width: 88%;
   }
   .agt-composer {
