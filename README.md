@@ -729,6 +729,25 @@ empty *New fleet* column while there are fewer than 4.
   to 4 on load, keeping the ones with orders. Fleets that meet at a planet stay apart; *Gather*
   sends them to the biggest one to join up.
 
+## Empires At War attack positions
+
+Warships (gunships and up) told to attack something, or picking a fight themselves, close in only
+until **every gun that counts against that target** reaches it, with 8% to spare
+([`sim.ts`](src/apps/games/empires/sim.ts) `stopDistance`). A gun counts when the ship would fire
+it at that kind of target and it adds at least a fifth of the damage of its best gun there: flak
+counts against fighters and gunships but not against capital ships or stations, so a flagship
+shoots a carrier from turbolaser range instead of drifting into flak range. When several of a
+side's warships attack the same target they spread over an arc on the side they came from
+(`attackSpots`): each gets a spot sized to its hull at its own stopping distance, so long guns hold
+further back, the arc grows with the group up to 120 degrees, and more ships form a second row
+nearer in. Spots are handed out in the order the ships stand round the target and refreshed when
+the group changes or every 4 seconds. Warships keep a small gap between hulls instead of
+overlapping. Strike craft keep their strafing runs and dogfights.
+
+```sh
+pnpm check:empires-spacing   # the arc, the stopping distances, following a target that moves, determinism
+```
+
 ## Empires At War messages and AI
 
 Messages about a place carry a ⌖: clicking one (or tapping it, or Enter when it has focus) takes
