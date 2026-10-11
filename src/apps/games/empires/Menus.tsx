@@ -584,6 +584,7 @@ export function MainMenu({ sound, victories, onPlay, onConquest, latest, saves =
             </button>
             <button className="ew-menu-btn" onClick={click(() => setScreen('conquest'))} data-tip="A campaign across a galaxy of star systems: take planets, build fleets, and fight for every orbit.">
               <Icon name="radar" size={20} /> Galactic conquest
+              <em className="ew-beta" data-tip="Still being built: expect rough edges, and changes to come">Beta</em>
             </button>
             <button className="ew-menu-btn" onClick={click(() => setScreen('main'))}>
               <Icon name="back" size={20} /> Back
@@ -591,7 +592,7 @@ export function MainMenu({ sound, victories, onPlay, onConquest, latest, saves =
           </Frame>
         )}
         {screen === 'conquest' && (
-          <Frame className="ew-menu-frame" title="Galactic conquest">
+          <Frame className="ew-menu-frame" title="Galactic conquest" aside={<em className="ew-beta" data-tip="Still being built: expect rough edges, and changes to come">Beta</em>}>
             {latest ? (
               <button className="ew-menu-btn is-primary" onClick={click(() => onConquest('continue'))} data-tip={`Carry on with the latest save: ${latest}`}>
                 <Icon name="play" size={20} /> Continue

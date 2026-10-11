@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import { DIFFICULTY, type Difficulty } from './ai'
 import { FACTIONS, UNIT, buildable, isShip, type FactionId, type UnitType } from './data'
 import {
-  BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GIANTS, blockedBy, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
+  BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GIANTS, blockedBy, contested, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
   autoResolve, buildAt, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, clashAt, deleteSave, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, renameSave, setResume, newGalaxy, planetIncome, saveGalaxy,
   settlePending, systemOwner, tickGalaxy, upgradeStation, withdraw,
   type BattleResult, type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetKind, type Side, type StarSystem,
@@ -240,6 +240,7 @@ function ConquestSetup({ sound, onBack, onStart }: { sound: EmpiresSound; onBack
   const [credits, setCredits] = useState(3000)
   const [name, setName] = useState('')
   const [blockadeRule, setBlockadeRule] = useState<BlockadeRule>('majority')
+  const [frontline, setFrontline] = useState(true)
   const choice: GalaxyChoice = kind === 'rim' ? { kind: 'rim' } : { kind: 'generated', seed }
   const preview = useMemo(() => newGalaxy({ choice, size, faction, difficulty, credits }), [kind, seed, size, faction, difficulty, credits]) // eslint-disable-line react-hooks/exhaustive-deps
   const click = (fn: () => void) => () => {
@@ -248,7 +249,7 @@ function ConquestSetup({ sound, onBack, onStart }: { sound: EmpiresSound; onBack
     fn()
   }
   return (
-    <ConquestFrame sound={sound} title="New campaign" onBack={onBack} wide>
+    <ConquestFrame sound={sound} title="New campaign · Galactic conquest (beta)" onBack={onBack} wide>
         <div className="ew-gsetup-body">
           <div className="ew-gsetup-opts">
             <Field label="Name">
@@ -286,9 +287,17 @@ function ConquestSetup({ sound, onBack, onStart }: { sound: EmpiresSound; onBack
               <Seg value={blockadeRule} options={(Object.keys(BLOCKADES) as BlockadeRule[]).map((k) => [k, BLOCKADES[k].label] as [BlockadeRule, string])} onChange={setBlockadeRule} />
             </Field>
             <p className="ew-muted ew-small">{BLOCKADES[blockadeRule].blurb} Fleets can always fly into a blockaded system to fight for it.</p>
+            <Field label="Front lines">
+              <Seg value={frontline} options={[[true, 'On'], [false, 'Off']] as [boolean, string][]} onChange={setFrontline} />
+            </Field>
+            <p className="ew-muted ew-small">
+              {frontline
+                ? 'A fleet in a system its side doesn\'t control can\'t jump on into another enemy-held system: it must win the system first, or fall back. No hopping deep behind the lines.'
+                : 'Fleets may jump from any system straight into any enemy system next to it.'}
+            </p>
             <div className="ew-menu-list is-row">
               <button className="ew-menu-btn" onClick={click(onBack)}><Icon name="back" size={18} /> Back</button>
-              <button className="ew-menu-btn is-primary" onClick={click(() => onStart(newGalaxy({ choice, size, faction, difficulty, credits, name, blockade: blockadeRule })))}>
+              <button className="ew-menu-btn is-primary" onClick={click(() => onStart(newGalaxy({ choice, size, faction, difficulty, credits, name, blockade: blockadeRule, frontline })))}>
                 <Icon name="play" size={18} /> Start
               </button>
             </div>
@@ -310,7 +319,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
     </label>
   )
 }
-function Seg<T extends string | number>({ value, options, onChange }: { value: T; options: [T, string][]; onChange: (v: T) => void }) {
+function Seg<T extends string | number | boolean>({ value, options, onChange }: { value: T; options: [T, string][]; onChange: (v: T) => void }) {
   return (
     <span className="ew-seg" role="radiogroup">
       {options.map(([v, l]) => (
@@ -360,6 +369,23 @@ function fleetAt(g: Galaxy, f: Fleet) {
   const to = f.leg.planet >= 0 ? planetAt(g, g.planets[f.leg.planet]) : g.systems[f.leg.system]
   const t = 1 - f.leg.left / f.leg.total
   return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t, moving: true, angle: Math.atan2(to.y - from.y, to.x - from.x) }
+}
+
+/** Over a planet being taken: who's taking it, how far along, and the seconds left (screen pixels). */
+function CaptureTag({ g, p }: { g: Galaxy; p: Planet }) {
+  if (!p.capture) return null
+  const ours = p.capture.owner === ME
+  const f = p.capture.t / CAPTURE_TIME
+  const text = `${ours ? 'Taking' : p.owner === ME ? 'Losing' : 'Enemy taking'} · ${Math.ceil(CAPTURE_TIME - p.capture.t)} s`
+  const w = 118
+  return (
+    <g transform="translate(0 -14)" className="ew-gcap">
+      <rect x={-w / 2} y={-26} width={w} height={24} rx={5} fill="rgba(6,10,22,0.9)" stroke={color(g, p.capture.owner)} />
+      <text x={0} y={-15} className="ew-gcaptag">{text}</text>
+      <rect x={-w / 2 + 7} y={-9} width={w - 14} height={3} rx={1.5} fill="rgba(255,255,255,0.15)" />
+      <rect x={-w / 2 + 7} y={-9} width={(w - 14) * f} height={3} rx={1.5} fill={color(g, p.capture.owner)} />
+    </g>
+  )
 }
 
 /** Where a fleet's badge is drawn on screen (as GalaxyView places it), for picking with a box. */
@@ -495,8 +521,13 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
                       data-tip={`${p.name}: ${PLANET_KINDS[p.kind].name}, ${planetIncome(g, p)} credits a day. ${p.owner < 0 ? 'Unclaimed.' : `Held by the ${factionName(g, p.owner)}.`} Double-click to zoom in; right-click to send the selected fleet.`}>
                       <circle cx={q.x} cy={q.y} r={r + Math.max(px(6), r * 0.18)} fill="none" stroke={color(g, p.owner)} strokeWidth={p.owner < 0 ? 1 : 2.5} strokeDasharray={p.owner < 0 ? '3 4' : undefined} vectorEffect="non-scaling-stroke" className="ew-sring" />
                       <image href={PLANET_ART(p.kind)} x={q.x - r} y={q.y - r} width={r * 2} height={r * 2} />
-                      {capture > 0 && (
-                        <circle cx={q.x} cy={q.y} r={r + Math.max(px(11), r * 0.3)} fill="none" stroke={color(g, p.capture!.owner)} strokeWidth={3} vectorEffect="non-scaling-stroke" pathLength={1} strokeDasharray={`${capture} 1`} transform={`rotate(-90 ${q.x} ${q.y})`} />
+                      {p.capture && (
+                        <>
+                          {/* Being taken: a track round the planet filling in the taker's colour, and a tag. */}
+                          <circle cx={q.x} cy={q.y} r={r + Math.max(px(11), r * 0.3)} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth={4} vectorEffect="non-scaling-stroke" className="ew-gcap" />
+                          <circle cx={q.x} cy={q.y} r={r + Math.max(px(11), r * 0.3)} fill="none" stroke={color(g, p.capture.owner)} strokeWidth={4} vectorEffect="non-scaling-stroke" pathLength={1} strokeDasharray={`${capture} 1`} transform={`rotate(-90 ${q.x} ${q.y})`} className="ew-gcap" />
+                          {label(q.x, q.y - r, <CaptureTag g={g} p={p} />)}
+                        </>
                       )}
                       {label(q.x - r * 0.75, q.y - r * 0.75, (
                         <>
@@ -516,6 +547,14 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
               </g>
             )}
             {battle && <circle cx={s.x} cy={s.y} r={Math.max(px(20), d * R)} className="ew-gbattle" vectorEffect="non-scaling-stroke" />}
+            {/* Zoomed out: a planet being taken shows as a filling ring round the system and its percentage. */}
+            {!mini && d < 0.6 && s.planets.map((pid) => g.planets[pid]).filter((p) => p.capture).slice(0, 1).map((p) => (
+              <g key={`c${p.id}`} opacity={1 - d / 0.6}>
+                <circle cx={s.x} cy={s.y} r={px(19)} fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth={3.5} vectorEffect="non-scaling-stroke" className="ew-gcap" />
+                <circle cx={s.x} cy={s.y} r={px(19)} fill="none" stroke={color(g, p.capture!.owner)} strokeWidth={3.5} vectorEffect="non-scaling-stroke" pathLength={1} strokeDasharray={`${p.capture!.t / CAPTURE_TIME} 1`} transform={`rotate(-90 ${s.x} ${s.y})`} className="ew-gcap" />
+                {label(s.x, s.y, <text x={0} y={-26} className={`ew-gcaptext ${p.capture!.owner === ME ? 'is-ours' : 'is-theirs'}`}>{p.capture!.owner === ME ? 'Taking' : 'Losing'} {p.name} {Math.floor((p.capture!.t / CAPTURE_TIME) * 100)}%</text>)}
+              </g>
+            ))}
             {/* A blockade: a barrier ring round the system in the blockading side's colour, and a
                 shield on it; red-edged when it's against us. */}
             {block && (
@@ -756,7 +795,14 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
           if (!e.auto) sound.alarm(true)
           else if (e.owners.includes(ME) && e.winner !== undefined) toast(`Battle at ${p.name}: ${e.winner === ME ? 'won' : 'lost'}`, e.winner === ME ? 'good' : 'bad')
         } else if (e.k === 'out') toast(`The ${factionName(g, e.owner)} is beaten`, e.owner === ME ? 'bad' : 'good')
-        else if (e.k === 'blockaded') {
+        else if (e.k === 'capturing') {
+          const p = g.planets[e.planet]
+          if (e.owner === ME) toast(`Our fleet is taking ${p.name}: ${CAPTURE_TIME} s in orbit`, 'info')
+          else if (e.from === ME) {
+            toast(`The enemy is taking ${p.name}: ${CAPTURE_TIME} s to stop them`, 'bad')
+            sound.alarm(false)
+          }
+        } else if (e.k === 'blockaded') {
           const where = g.systems[e.system].name
           if (e.owner === ME) {
             toast(e.by >= 0 ? `Our fleet was pulled out of hyperspace by the blockade at ${where}` : `Our fleet stopped at ${where}: blockades closed every way on`, 'bad')
@@ -1069,7 +1115,7 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
             {myFleets.length > 0 && <em>{myFleets.length}</em>}
           </span>
           <div>
-            <strong>{FACTIONS[myFaction].name}</strong>
+            <strong>{FACTIONS[myFaction].name} <em className="ew-beta" data-tip="Galactic conquest is still being built: expect rough edges, and changes to come">Beta</em></strong>
             <small>{g.name}{near ? ` › ${near.name}` : ''}{nearPlanet && nearPlanet.name !== near?.name ? ` › ${nearPlanet.name}` : ''}</small>
           </div>
         </button>
@@ -1561,7 +1607,12 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
                 <Icon name="hold" size={13} /> {blockade(g, p.system)!.by === ME ? 'Our blockade' : 'Enemy blockade'}
               </span>
             )}
-            {p.capture && <span className="ew-gp-line ew-small">{p.capture.owner === ME ? 'Our fleet is taking it' : 'The enemy is taking it'}: {Math.ceil(CAPTURE_TIME - p.capture.t)} s</span>}
+            {p.capture && (
+              <span className="ew-gp-cap" style={{ ['--cap' as string]: color(g, p.capture.owner) }} data-tip={`A fleet takes a planet by holding its orbit for ${CAPTURE_TIME} s with no defender there.`}>
+                <span>{p.capture.owner === ME ? 'Our fleet is taking it' : 'The enemy is taking it'}: {Math.ceil(CAPTURE_TIME - p.capture.t)} s</span>
+                <i><b style={{ width: `${(p.capture.t / CAPTURE_TIME) * 100}%` }} /></i>
+              </span>
+            )}
           </div>
           <div className="ew-detail-main">
             <header className="ew-yardhead">
@@ -1851,6 +1902,18 @@ function FleetPanel({ g, f, take, setTake, onClose }: { g: Galaxy; f: Fleet; tak
   return (
     <Floating id="gFleet" title={ours ? 'Our fleet' : `${factionName(g, f.owner)} fleet`} at={{ right: 8, top: 52 }} onClose={onClose} className="ew-gpanel" layout={galaxyLayout}>
       <p className="ew-muted ew-small">{where}</p>
+      {!f.leg && f.planet >= 0 && g.planets[f.planet].capture?.owner === f.owner && (
+        <span className="ew-gp-cap" style={{ ['--cap' as string]: color(g, f.owner) }}>
+          <span>Taking {g.planets[f.planet].name}: {Math.ceil(CAPTURE_TIME - g.planets[f.planet].capture!.t)} s</span>
+          <i><b style={{ width: `${(g.planets[f.planet].capture!.t / CAPTURE_TIME) * 100}%` }} /></i>
+        </span>
+      )}
+      {ours && !f.leg && g.rules.frontline && contested(g, f.system, ME) && (
+        <p className="ew-ghint">Front line: {g.systems[f.system].name} is contested. Win it before advancing into other enemy systems; the fleet can still fall back.</p>
+      )}
+      {ours && !f.leg && f.planet >= 0 && g.planets[f.planet].owner !== ME && !g.planets[f.planet].capture && !fleetsAt(g, f.planet).some((x) => x.owner !== ME) && !(g.planets[f.planet].owner >= 0 && g.planets[f.planet].station) && (
+        <p className="ew-ghint">Holding orbit: it takes the planet in {CAPTURE_TIME} s.</p>
+      )}
       <div className="ew-gships">
         {groups.map(([id, n]) => (
           <ShipRow key={id} g={g} owner={f.owner} id={id} n={n}>

@@ -110,6 +110,7 @@ export type GalaxyEvent =
   | { k: 'out'; owner: number }
   | { k: 'payday'; owner: number; amount: number; day: number }
   | { k: 'blockaded'; fleet: number; owner: number; system: number; by: number }
+  | { k: 'capturing'; planet: number; owner: number; from: number }
 
 export type Galaxy = {
   v: 1
@@ -131,7 +132,7 @@ export type Galaxy = {
   pending: number
   events: GalaxyEvent[]
   aiT: number[]
-  rules: { blockade: BlockadeRule }
+  rules: { blockade: BlockadeRule; frontline: boolean }
 }
 
 export type GalaxySize = 'short' | 'standard' | 'long'
@@ -302,7 +303,7 @@ function farthestPair(n: number, lanes: [number, number][]) {
   return best
 }
 
-export type NewGalaxy = { choice: GalaxyChoice; size: GalaxySize; faction: FactionId; difficulty: Difficulty; credits: number; name?: string; blockade?: BlockadeRule }
+export type NewGalaxy = { choice: GalaxyChoice; size: GalaxySize; faction: FactionId; difficulty: Difficulty; credits: number; name?: string; blockade?: BlockadeRule; frontline?: boolean }
 
 export function newGalaxy(opts: NewGalaxy): Galaxy {
   const seed = opts.choice.kind === 'generated' ? opts.choice.seed : 7
@@ -325,7 +326,7 @@ export function newGalaxy(opts: NewGalaxy): Galaxy {
     pending: -1,
     events: [],
     aiT: [0, 2],
-    rules: { blockade: opts.blockade ?? 'majority' },
+    rules: { blockade: opts.blockade ?? 'majority', frontline: opts.frontline ?? true },
   }
   defs.forEach((d, id) => {
     const sys: StarSystem = { id, name: d.name, x: d.x, y: d.y, star: d.star, planets: [] }
@@ -430,6 +431,21 @@ export function blockedBy(g: Galaxy, s: number, owner: number): number {
   return -1
 }
 
+/** Front lines (a campaign rule): a system `owner`'s side doesn't control while the other side holds
+ * planets there (as many or more than it does) is contested for it. */
+export function contested(g: Galaxy, s: number, owner: number) {
+  if (owner < 0) return false
+  const ps = g.systems[s].planets.map((p) => g.planets[p].owner)
+  const ours = ps.filter((o) => o === owner).length
+  const theirs = Math.max(0, ...g.sides.map((_, o) => (o === owner ? 0 : ps.filter((x) => x === o).length)))
+  return theirs > 0 && theirs >= ours
+}
+/** Whether the other side holds any planet in a system (for `owner`). */
+const enemyIn = (g: Galaxy, s: number, owner: number) => g.systems[s].planets.some((p) => g.planets[p].owner >= 0 && g.planets[p].owner !== owner)
+/** With front lines on, a fleet in a contested system can't jump straight into another system the
+ * enemy holds planets in: it has to win where it is first (or fall back). */
+const frontlineStops = (g: Galaxy, from: number, to: number, owner: number) => !!g.rules?.frontline && owner >= 0 && contested(g, from, owner) && enemyIn(g, to, owner)
+
 /** Systems from `a` to `b` by the quickest lanes (both ends included), or null. With `owner`, its
  * fleets don't fly through systems blockaded against it (they may still end in one). */
 export function lanePath(g: Galaxy, a: number, b: number, owner = -1): number[] | null {
@@ -445,6 +461,7 @@ export function lanePath(g: Galaxy, a: number, b: number, owner = -1): number[] 
     if (cur === b) break
     for (const nb of neighbours(g, cur)) {
       if (nb !== b && owner >= 0 && blockedBy(g, nb, owner) >= 0) continue
+      if (frontlineStops(g, cur, nb, owner)) continue
       const nd = d[cur] + dist(g.systems[cur], g.systems[nb])
       if (nd < d[nb]) {
         d[nb] = nd
@@ -515,7 +532,10 @@ export function moveFleet(g: Galaxy, owner: number, fleetId: number, planet: num
 
 /** Why a fleet can't get to a planet: a blockade in the way (named), or no lane at all. */
 function noWay(g: Galaxy, f: Fleet, planet: number) {
-  const open = lanePath(g, f.leg ? f.leg.system : f.system, g.planets[planet].system)
+  const at = f.leg ? f.leg.system : f.system
+  if (g.rules?.frontline && contested(g, at, f.owner) && neighbours(g, at).every((n) => !lanePath(g, n, g.planets[planet].system, f.owner) || frontlineStops(g, at, n, f.owner)))
+    return `Front line: win ${g.systems[at].name} first. From a contested system a fleet can only fall back to systems the enemy holds no planets in`
+  const open = lanePath(g, at, g.planets[planet].system)
   const wall = open?.slice(1, -1).find((s) => blockedBy(g, s, f.owner) >= 0)
   return wall !== undefined ? `Blockaded: the ${factionName(g, blockedBy(g, wall, f.owner))} holds ${g.systems[wall].name}, and every way round` : 'No hyperlane leads there'
 }
@@ -832,7 +852,10 @@ export function tickGalaxy(g: Galaxy, dt: number) {
     const here = fleetsAt(g, p.id)
     const taker = here.find((f) => f.owner !== p.owner)
     if (taker && !here.some((f) => f.owner === p.owner)) {
-      if (!p.capture || p.capture.owner !== taker.owner) p.capture = { owner: taker.owner, t: 0 }
+      if (!p.capture || p.capture.owner !== taker.owner) {
+        p.capture = { owner: taker.owner, t: 0 }
+        g.events.push({ k: 'capturing', planet: p.id, owner: taker.owner, from: p.owner })
+      }
       p.capture.t += dt
       if (p.capture.t >= CAPTURE_TIME) {
         const from = p.owner
@@ -1048,7 +1071,8 @@ function clean(v: Galaxy | null): Galaxy | null {
     s.ledger ??= []
   }
   v.events = []
-  v.rules ??= { blockade: 'majority' }
+  v.rules ??= { blockade: 'majority', frontline: true }
+  v.rules.frontline ??= true
   return v
 }
 export function loadSave(id: string): Galaxy | null {
