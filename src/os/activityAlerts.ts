@@ -1,5 +1,6 @@
 import { subscribeRecents, type Activity } from '../data/recents'
 import { notify } from './notify'
+import { signedIn } from './account'
 import { ACTIVITY_KIND, activityWindowMs, notifyPrefs, sourceOn, type SourceId } from './notifyPrefs'
 
 // Notifications for fresh activity: anything newer than the cutoff in Settings → Notifications
@@ -20,6 +21,8 @@ export function startActivityAlerts() {
   // A beat after the desktop appears, so the notification slides in rather than being there already.
   setTimeout(() => {
     subscribeRecents((s) => {
+      // Signed in, the server's notification hub watches the feeds and tells the account (server/watchers.ts).
+      if (signedIn()) return
       const cutoff = Date.now() - activityWindowMs(notifyPrefs().activityWindow)
       const fresh = s.items.filter((a) => !seen.has(a.id) && new Date(a.date).getTime() > cutoff)
       fresh.forEach((a) => seen.add(a.id))

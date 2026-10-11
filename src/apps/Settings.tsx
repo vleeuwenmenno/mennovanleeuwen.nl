@@ -24,13 +24,13 @@ import { DOCK_MODES, getDockMode, setDockMode, type DockMode } from '../os/dockP
 import { AppIcon } from '../os/icons'
 import { setStartupPrefs, START_WINDOWS, useStartupPrefs } from '../os/startup'
 import { clearEntries, pruneEntries, useEntries } from '../os/notify'
-import { ACTIVITY_WINDOWS, isOff, KEEP, setNotifyPrefs, setOn, useNotifyPrefs, visibleSources, type NotifySource as NotifySourceDef } from '../os/notifyPrefs'
+import { ACTIVITY_WINDOWS, CALENDAR_LEADS, isOff, KEEP, setNotifyPrefs, setOn, useNotifyPrefs, visibleSources, type NotifySource as NotifySourceDef } from '../os/notifyPrefs'
 import { disablePush, enablePush, pushState, sendTestPush, type PushState } from '../os/push'
 import { THEMES } from '../os/omarchyThemes'
 import { pullAll } from '../os/synced'
 import { ACCENTS, DARK_THEMES, LIGHT_THEMES, setAccent, setMode, setTheme, themeLabel, useTheme, type Mode } from '../os/theme'
 import { ReleaseStatus } from '../os/TopbarWidgets'
-import { useWM, type WinState } from '../os/wm'
+import { useWM, type AppId, type WinState } from '../os/wm'
 import { AgentsSettings } from './AgentsSettings'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
 import { BranchGlyph } from './LinkForge'
@@ -273,7 +273,7 @@ function Notifications() {
             </button>
           ))}
         </div>
-        <p className="muted set-help">How long the bell in the top bar keeps a notification. They are kept on this device only; pop-ups that are only feedback (a failed paste, an update to restart into) are never kept.</p>
+        <p className="muted set-help">{owner ? 'How long the bell in the top bar keeps a notification. Signed in, the list is the same on every device. ' : 'How long the bell in the top bar keeps a notification, on this device. '}Pop-ups that are only feedback (a failed paste, an update to restart into) are never kept.</p>
         <ul className="set-list">
           <li className="set-row">
             <span className="set-row-text">
@@ -300,7 +300,7 @@ function Notifications() {
             <NotifySourceRows key={src.app} src={src} />
           ))}
         </ul>
-        <p className="muted set-help">Notifications arrive while this page is open (Agents answers also after it was closed, once it is open again). Right-click one in the list to turn its kind off.</p>
+        <p className="muted set-help">{owner ? 'Signed in, the server watches all of these for you and keeps the list the same on every device: with push on, they reach this device even when MvL OS is closed. Do not disturb holds back pop-ups and push alike.' : 'These arrive while this page is open. Sign in to have the server watch for you, with push to your devices.'} Right-click one in the list to turn its kind off.</p>
       </SetGroup>
     </>
   )
@@ -316,17 +316,19 @@ function NotifySourceRows({ src }: { src: NotifySourceDef }) {
   const appOn = !isOff(prefs, src.app)
   const kindOn = (id: string) => appOn && !isOff(prefs, `${src.app}.${id}`)
   const single = src.kinds.length === 1
+  // Activity and Calendar have a setting of their own under Choose…, besides their kinds.
+  const extra = src.app === 'activity' || src.app === 'calendar'
   const on = src.kinds.filter((k) => kindOn(k.id)).length
   const summary = single ? src.kinds[0].hint : !appOn ? 'Off' : on === src.kinds.length ? `All ${src.kinds.length} kinds` : on ? `${on} of ${src.kinds.length} kinds: ${src.kinds.filter((k) => kindOn(k.id)).map((k) => k.label.toLowerCase()).join(', ')}` : 'No kinds chosen'
   return (
     <>
       <li className="set-row">
-        {src.icon ? <AppIcon app={src.icon} size={22} tone /> : <span className="set-glyph">M</span>}
+        {src.icon ? <AppIcon app={src.icon as AppId} size={22} tone /> : <span className="set-glyph">M</span>}
         <span className="set-row-text">
           <strong>{src.label}</strong>
           <span className="muted">{summary}</span>
         </span>
-        {!single && (
+        {(!single || extra) && (
           <button className="btn btn-small set-fold" onClick={() => setOpenRows((o) => !o)} aria-expanded={open} disabled={!appOn}>
             {open && appOn ? 'Done' : 'Choose…'}
           </button>
@@ -335,7 +337,7 @@ function NotifySourceRows({ src }: { src: NotifySourceDef }) {
       </li>
       {open && appOn && (
         <>
-          {src.kinds.map((k) => (
+          {!single && src.kinds.map((k) => (
             <li key={k.id} className="set-row set-row-sub">
               <span className="set-row-text">
                 <strong>{k.label}</strong>
@@ -344,6 +346,21 @@ function NotifySourceRows({ src }: { src: NotifySourceDef }) {
               <Toggle on={kindOn(k.id)} onChange={(v) => setOn(`${src.app}.${k.id}`, v)} label={`${src.label}: ${k.label}`} />
             </li>
           ))}
+          {src.app === 'calendar' && (
+            <li className="set-row set-row-sub set-row-stack">
+              <span className="set-row-text">
+                <strong>Remind me</strong>
+                <span className="muted">Events with a start time; the server reminds you, also with MvL OS closed</span>
+              </span>
+              <div className="seg set-seg" role="radiogroup" aria-label="Remind me">
+                {CALENDAR_LEADS.map((m) => (
+                  <button key={m} role="radio" aria-checked={prefs.calendarLead === m} className={prefs.calendarLead === m ? 'is-active' : ''} onClick={() => setNotifyPrefs({ calendarLead: m })}>
+                    {m ? `${m} min before` : 'When it starts'}
+                  </button>
+                ))}
+              </div>
+            </li>
+          )}
           {src.app === 'activity' && (
             <li className="set-row set-row-sub set-row-stack">
               <span className="set-row-text">

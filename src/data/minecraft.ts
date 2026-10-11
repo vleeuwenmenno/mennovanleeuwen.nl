@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { notify } from '../os/notify'
 import { setOn, sourceOn } from '../os/notifyPrefs'
+import { signedIn } from '../os/account'
 
 // Status of the Minecraft server Menno hosts. Browsers cannot open a raw TCP connection to
 // port 25565, so the site's own server pings it (server/minecraft.ts, served at /api/minecraft).
@@ -105,7 +106,8 @@ function watch(st: McStatus, live = false) {
   for (const name of st.players.list) misses.set(name, 0)
   if (!prev) return
 
-  const tell = (n: Parameters<typeof notify>[0]) => notify({ source: 'minecraft.players', action: { app: 'mcserver' }, ...n })
+  // Signed in, the server's notification hub watches the server and tells the account (server/watchers.ts).
+  const tell = (n: Parameters<typeof notify>[0]) => !signedIn() && notify({ source: 'minecraft.players', action: { app: 'mcserver' }, ...n })
   if (prev.online !== st.online) {
     tell({ title: st.online ? "Menno's Minecraft server is back online" : "Menno's Minecraft server went offline", body: MC_ADDRESS, source: 'minecraft.status' })
     if (!st.online) return

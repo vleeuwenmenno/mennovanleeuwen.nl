@@ -57,7 +57,7 @@ import { ask, choose } from '../os/Dialogs'
 import { setCloseGuard, useWM, type WinState } from '../os/wm'
 import { pullAll } from '../os/synced'
 import { mayTakeFocus } from '../os/overlays'
-import { allowNotifications, setOnScreen, watchThreads } from '../os/agentWatch'
+import { allowNotifications } from '../os/agentWatch'
 import { AgentsSettings, usePromptLocation } from './AgentsSettings'
 import { MarkdownPreview } from './Zed'
 
@@ -176,13 +176,6 @@ function AgentsApp({ win }: { win: WinState }) {
 
   usePromptLocation()
 
-  // The thread this window shows, while it is the focused window: its answer needs no notification.
-  const focused = wm.focusedPid === win.pid
-  useEffect(() => {
-    setOnScreen(focused ? selected : null)
-    return () => setOnScreen(null)
-  }, [focused, selected])
-
   // Closing while threads are answering: stop them, or let them go on on the server (they are
   // announced when done, and found again here later).
   useEffect(() => {
@@ -203,7 +196,6 @@ function AgentsApp({ win }: { win: WinState }) {
         return true
       }
       if (choice !== 'keep') return false
-      watchThreads(busy)
       // The click on Keep running lets the browser ask about its own notifications, once.
       void allowNotifications()
       return true
@@ -214,7 +206,7 @@ function AgentsApp({ win }: { win: WinState }) {
   const refresh = useCallback(() => {
     listThreads(archived).then(
       // Running ones are announced when done, if that happens while their answer is not on screen.
-      (list) => (setThreads(list), setListError(null), watchThreads(list)),
+      (list) => (setThreads(list), setListError(null)),
       (e: Error) => setListError(e.message),
     )
     listProjects().then(setProjects, () => {})

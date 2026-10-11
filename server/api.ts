@@ -17,6 +17,7 @@ import { archiveFile, cancelExtract, extractStatus, listArchive, startExtract } 
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
 import { HttpError, json, readJson, redirect, sameOrigin, SECURITY, UNTRUSTED } from './http.ts'
 import { pushPublicKey, pushToUser, subscribe, unsubscribe } from './webpush.ts'
+import { changeEntries, listEntries, noticeFromPage, openStream, presence } from './notifier.ts'
 import { minecraftOverview, minecraftStatus } from './minecraft.ts'
 import { search, clearSearchCache } from './search.ts'
 import { suggest } from './suggest.ts'
@@ -260,6 +261,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     const memoryId = /^\/api\/agents\/memories\/(\d+)$/.exec(path)?.[1]
     if (memoryId && method === 'PATCH') return json(res, 200, updateMemory(requireUser(req), memoryId, await readJson(req, 8192))), true
     if (memoryId && method === 'DELETE') return deleteMemory(requireUser(req), Number(memoryId)), json(res, 200, { ok: true }), true
+    // The notification hub (server/notifier.ts): the account's list (the bell), changes to it, a
+    // page's live stream and heartbeat, and notifications a page noticed itself.
+    if (path === '/api/notifications' && read) return json(res, 200, { entries: listEntries(requireUser(req)) }), true
+    if (path === '/api/notifications' && method === 'POST') return json(res, 200, noticeFromPage(requireUser(req), await readJson(req, 8 * 1024))), true
+    if (path === '/api/notifications' && method === 'PATCH') return json(res, 200, changeEntries(requireUser(req), await readJson(req, 64 * 1024))), true
+    if (path === '/api/notifications/stream' && read) return openStream(req, res, requireUser(req), url.searchParams.get('page')), true
+    if (path === '/api/notifications/presence' && method === 'POST') return json(res, 200, presence(requireUser(req), await readJson(req, 1024))), true
     // Web Push (server/webpush.ts): the server's public key, this browser's subscription, a test.
     if (path === '/api/push/key' && read) return requireUser(req), json(res, 200, pushPublicKey()), true
     if (path === '/api/push/subscription' && method === 'POST') return json(res, 200, subscribe(requireUser(req), await readJson(req, 8 * 1024))), true
