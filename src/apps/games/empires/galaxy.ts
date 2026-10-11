@@ -84,6 +84,9 @@ export type Fleet = {
   /** The flight in progress (from `system` to hop.system), then the rest of the route. */
   leg: (Hop & { left: number }) | null
   route: Hop[]
+  /** Planets queued (Shift) to go on to, in order, once it's where it's going: at each one that
+   * isn't its side's yet it stays to fight and take it first. */
+  waypoints?: number[]
   /** When it arrived where it is: the first fleet at a neutral planet holds it in a battle. */
   arrived: number
 }
@@ -494,11 +497,32 @@ export const eta = (f: Fleet) => (f.leg ? f.leg.left : 0) + f.route.reduce((s, h
 
 // --- Orders ----------------------------------------------------------------------------------------
 
+/** Where a fleet is headed: the end of its route, else the planet it orbits (-1 mid-system). */
+const headedTo = (f: Fleet) => (f.route.length ? f.route[f.route.length - 1].planet : f.leg ? f.leg.planet : f.planet)
+
+/** Still busy where it's going: flying, with stops queued, or taking the planet it orbits. */
+const busy = (g: Galaxy, f: Fleet) => !!f.leg || f.route.length > 0 || !!f.waypoints?.length || (f.planet >= 0 && g.planets[f.planet].owner !== f.owner)
+
+/** Every hop a fleet has ahead of it: its route, then on through its queued stops. */
+export function plannedHops(g: Galaxy, f: Fleet): Hop[] {
+  const hops = [...(f.leg ? [f.leg] : []), ...f.route]
+  let at = headedTo(f)
+  for (const w of f.waypoints ?? []) {
+    if (at < 0) break
+    const next = routeTo(g, { ...f, leg: null, planet: at, system: g.planets[at].system }, w)
+    if (!next) break
+    hops.push(...next)
+    at = w
+  }
+  return hops
+}
+
 /**
  * Send a fleet (or, with `take`, just those of its ships: split off as a new fleet) to a planet.
- * A fleet already flying finishes its current hop first.
+ * A fleet already flying finishes its current hop first. With `queue` (Shift), a fleet that's busy
+ * goes there once it's done with what it was doing.
  */
-export function moveFleet(g: Galaxy, owner: number, fleetId: number, planet: number, take?: string[]): string | null {
+export function moveFleet(g: Galaxy, owner: number, fleetId: number, planet: number, take?: string[], queue = false): string | null {
   let f = g.fleets.find((x) => x.id === fleetId)
   if (!f || f.owner !== owner) return 'Not our fleet'
   if (take && take.length && take.length < f.ships.length) {
@@ -510,9 +534,19 @@ export function moveFleet(g: Galaxy, owner: number, fleetId: number, planet: num
       rest.splice(i, 1)
     }
     f.ships = rest
-    const nf: Fleet = { ...f, id: g.nextId++, ships: [...take], route: [], leg: null }
+    const nf: Fleet = { ...f, id: g.nextId++, ships: [...take], route: [], leg: null, waypoints: [] }
     g.fleets.push(nf)
     f = nf
+  }
+  if (queue && busy(g, f)) {
+    const last = f.waypoints?.length ? f.waypoints[f.waypoints.length - 1] : headedTo(f)
+    if (last === planet) return null
+    if (last >= 0) {
+      const from = { ...f, leg: null, planet: last, system: g.planets[last].system }
+      if (!routeTo(g, from, planet)) return noWay(g, from, planet)
+    }
+    f.waypoints = [...(f.waypoints ?? []), planet]
+    return null
   }
   const hops = routeTo(g, f, planet)
   if (!hops) return noWay(g, f, planet)
@@ -521,9 +555,11 @@ export function moveFleet(g: Galaxy, owner: number, fleetId: number, planet: num
     const from = { ...f, system: f.leg.system, planet: f.leg.planet, leg: null }
     const rest = routeTo(g, from, planet)
     if (!rest) return noWay(g, from, planet)
+    f.waypoints = []
     f.route = f.leg.planet === planet ? [] : rest
     return null
   }
+  f.waypoints = []
   if (!hops.length) return null
   f.route = hops
   startLeg(f)
@@ -538,6 +574,28 @@ function noWay(g: Galaxy, f: Fleet, planet: number) {
   const open = lanePath(g, at, g.planets[planet].system)
   const wall = open?.slice(1, -1).find((s) => blockedBy(g, s, f.owner) >= 0)
   return wall !== undefined ? `Blockaded: the ${factionName(g, blockedBy(g, wall, f.owner))} holds ${g.systems[wall].name}, and every way round` : 'No hyperlane leads there'
+}
+
+/** Stop: no more stops, and a fleet in flight halts at the next system it reaches (at one of our
+ * planets there if there is one). */
+export function stopFleet(g: Galaxy, owner: number, fleetId: number): string | null {
+  const f = g.fleets.find((x) => x.id === fleetId)
+  if (!f || f.owner !== owner) return 'Not our fleet'
+  f.waypoints = []
+  f.route = []
+  if (f.leg && f.leg.planet < 0) {
+    const ps = g.systems[f.leg.system].planets.map((p) => g.planets[p])
+    f.leg.planet = (ps.find((p) => p.owner === owner) ?? ps[0]).id
+  }
+  return null
+}
+
+/** Drop the last stop queued for a fleet (or, with none queued, nothing). */
+export function dropWaypoint(g: Galaxy, owner: number, fleetId: number): boolean {
+  const f = g.fleets.find((x) => x.id === fleetId)
+  if (!f || f.owner !== owner || !f.waypoints?.length) return false
+  f.waypoints = f.waypoints.slice(0, -1)
+  return true
 }
 
 function startLeg(f: Fleet) {
@@ -714,12 +772,16 @@ export function applyBattle(g: Galaxy, c: Clash, res: BattleResult, auto: boolea
   const here = fleetsAt(g, c.planet)
   const back = new Map<number, number>()
   for (const f of here) if (!back.has(f.owner)) back.set(f.owner, f.from)
+  // The stops a side had queued: its survivors carry on with them.
+  const plans = new Map<number, number[]>()
+  for (const f of here) if (f.waypoints?.length && !plans.has(f.owner)) plans.set(f.owner, f.waypoints)
   g.fleets = g.fleets.filter((f) => !here.includes(f))
   for (const o of [c.holder, c.attacker]) {
     const ships = res.survivors[o] ?? []
     if (ships.length) {
       const f = addFleet(g, o, c.planet, ships)
       f.arrived = o === c.holder ? g.time - 1 : g.time
+      f.waypoints = [...(plans.get(o) ?? [])]
     }
     const esc = res.escaped[o] ?? []
     if (esc.length) {
@@ -799,7 +861,7 @@ export function tickGalaxy(g: Galaxy, dt: number) {
       f.planet = f.leg.planet
       f.arrived = g.time
       f.leg = null
-      if (!f.route.length) g.events.push({ k: 'arrived', fleet: f.id, planet: f.planet, owner: f.owner })
+      if (!f.route.length && !f.waypoints?.length) g.events.push({ k: 'arrived', fleet: f.id, planet: f.planet, owner: f.owner })
     } else f.leg = null
     const by = f.planet < 0 ? blockedBy(g, f.system, f.owner) : -1
     if (by >= 0) {
@@ -808,6 +870,7 @@ export function tickGalaxy(g: Galaxy, dt: number) {
       const stop = g.systems[f.system].planets.map((p) => g.planets[p]).sort((a, b) => Number(b.owner === by) - Number(a.owner === by) || b.station - a.station)[0]
       f.planet = stop.id
       f.route = []
+      f.waypoints = []
       f.arrived = g.time
       g.events.push({ k: 'blockaded', fleet: f.id, owner: f.owner, system: f.system, by })
     } else if (f.route.length) {
@@ -818,6 +881,7 @@ export function tickGalaxy(g: Galaxy, dt: number) {
       if (again && again.length) startLeg(f)
       else if (!again) {
         f.route = []
+        f.waypoints = []
         f.planet = g.systems[f.system].planets[0]
         f.arrived = g.time
         g.events.push({ k: 'blockaded', fleet: f.id, owner: f.owner, system: f.system, by: -1 })
@@ -830,7 +894,8 @@ export function tickGalaxy(g: Galaxy, dt: number) {
   // Fleets of one side at one planet join up.
   for (const f of [...g.fleets]) {
     if (f.leg || f.planet < 0) continue
-    const other = g.fleets.find((x) => x !== f && x.owner === f.owner && x.planet === f.planet && !x.leg && !x.route.length && !f.route.length)
+    // (Not a fleet only stopping on its way, nor one waiting there.)
+    const other = g.fleets.find((x) => x !== f && x.owner === f.owner && x.planet === f.planet && !x.leg && !x.route.length && !f.route.length && !x.waypoints?.length && !f.waypoints?.length)
     if (other && g.fleets.includes(f)) {
       other.ships.push(...f.ships)
       other.arrived = Math.min(other.arrived, f.arrived)
@@ -866,6 +931,20 @@ export function tickGalaxy(g: Galaxy, dt: number) {
         g.events.push({ k: 'captured', planet: p.id, owner: taker.owner, from })
       }
     } else p.capture = null
+  }
+  // Fleets with stops queued go on once the planet they're at is theirs (taken, or theirs already).
+  for (const f of g.fleets) {
+    if (f.leg || f.route.length || f.planet < 0 || !f.waypoints?.length || g.planets[f.planet].owner !== f.owner) continue
+    while (f.waypoints.length) {
+      const next = f.waypoints.shift()!
+      const hops = routeTo(g, f, next)
+      if (hops?.length) {
+        f.route = hops
+        startLeg(f)
+        break
+      }
+      if (!hops) g.events.push({ k: 'blockaded', fleet: f.id, owner: f.owner, system: f.system, by: -1 })
+    }
   }
   // The AI.
   g.sides.forEach((s, o) => {

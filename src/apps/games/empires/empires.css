@@ -4337,17 +4337,6 @@ span.ew-teamtag {
   color: var(--ew-muted);
 }
 
-/* The panel on the right: a planet or a fleet. */
-.ew-gpanel {
-  width: min(330px, calc(100% - 16px));
-}
-.ew-gpanel .ew-frame-in {
-  gap: 8px;
-  overflow: auto;
-}
-.ew-gpanel p {
-  margin: 0;
-}
 .ew-gships {
   display: grid;
   gap: 3px;
@@ -4373,24 +4362,6 @@ span.ew-teamtag {
 }
 .ew-gship b {
   font-variant-numeric: tabular-nums;
-}
-.ew-gstep {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-.ew-deck .ew-gstep button {
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  line-height: 1;
-}
-.ew-gstep em {
-  min-width: 18px;
-  text-align: center;
-  font-style: normal;
-  font-variant-numeric: tabular-nums;
-  color: var(--ew-good);
 }
 .ew-ghint {
   font-size: 11.5px;
@@ -4495,24 +4466,6 @@ span.ew-teamtag {
   border: 1px solid rgba(125, 255, 160, 0.9);
   background: rgba(125, 255, 160, 0.08);
   pointer-events: none;
-}
-.ew-gmulti {
-  display: grid;
-  gap: 3px;
-  max-height: 160px;
-  overflow: auto;
-}
-.ew-deck .ew-gmulti button {
-  display: grid;
-  grid-template-columns: 26px 1fr auto;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 7px;
-  text-align: left;
-  font-size: 12px;
-}
-.ew-gmulti small {
-  color: var(--ew-muted);
 }
 .ew-gname.is-big {
   font-size: 13px;
@@ -5106,4 +5059,104 @@ span.ew-teamtag {
   margin-left: 4px;
   font-size: 8.5px;
   padding: 0 4px;
+}
+
+/* Galactic conquest's selection, bottom right as in a battle: fleets grouped by where they are,
+   planets by their system, then the commands. */
+.ew-gselframe .ew-frame-in {
+  gap: 6px;
+}
+.ew-gselgroups {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 230px;
+  overflow: auto;
+}
+.ew-gselgroup {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ew-deck .ew-gselwhere {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border: 0;
+  background: rgba(255, 255, 255, 0.04);
+  text-align: left;
+  font-size: 12px;
+}
+.ew-gselwhere i {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--own, var(--ew-accent));
+}
+.ew-gselwhere i.is-star {
+  box-shadow: 0 0 6px currentColor;
+}
+.ew-gselwhere b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-gselwhere small {
+  margin-left: auto;
+  white-space: nowrap;
+  color: var(--ew-muted);
+  font-variant-numeric: tabular-nums;
+}
+.ew-seltile .ew-art {
+  width: 36px;
+  height: 36px;
+}
+.ew-deck .ew-seltile.is-off {
+  opacity: 0.35;
+}
+.ew-deck .ew-gplanettile {
+  justify-content: center;
+  border-color: var(--own);
+}
+.ew-gplanettile .ew-sbusy {
+  position: absolute;
+  background: var(--ew-gold);
+  bottom: 4px;
+  left: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.ew-gselframe .ew-ghint {
+  margin: 0;
+}
+.ew-gview.is-ordering {
+  cursor: crosshair;
+}
+/* A stop queued with Shift: numbered, above its planet. */
+.ew-gwaypt {
+  pointer-events: none;
+}
+.ew-gwaypt circle {
+  fill: #0b1226;
+  stroke: var(--ew-good);
+  stroke-width: 1.5;
+}
+.ew-gwaypt text {
+  fill: var(--ew-good);
+  font: 700 10px system-ui;
+  text-anchor: middle;
+}
+/* Zoomed out: a ring round a system with picked planets, solid when it's all of them. */
+.ew-gsyssel {
+  fill: none;
+  stroke: #f2c14a;
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+  pointer-events: none;
+}
+.ew-gsyssel.is-whole {
+  stroke-dasharray: none;
 }
