@@ -17,7 +17,8 @@ import { HttpError } from './http.ts'
 export type CaldavInfo = { id: number; label: string; url: string; username: string }
 /** `user` is who linked it: the server only reaches public addresses for them (server/egress.ts). */
 type Account = CaldavInfo & { password: string; user: User }
-type Calendar = { href: string; name: string; color: string; writable: boolean }
+/** `shared`: someone else's calendar shared with you, or yours shared with others (CalendarServer's resourcetype marks, which Apple and Nextcloud send). */
+type Calendar = { href: string; name: string; color: string; writable: boolean; shared?: 'with-you' | 'by-you' }
 export type CaldavAttendee = { email: string; name?: string; status?: 'accepted' | 'declined' | 'tentative' | 'needs-action'; organizer?: boolean }
 export type CaldavEvent = {
   /** Unique per occurrence: the UID and which occurrence. */
@@ -190,7 +191,9 @@ async function discover(account: Account): Promise<Calendar[]> {
       const color = (prop(r.body, 'calendar-color') ?? '').trim()
       // Servers that don't say are assumed writable; a refusal still shows when saving.
       const privileges = prop(r.body, 'current-user-privilege-set')
+      const type = prop(r.body, 'resourcetype') ?? ''
       return {
+        ...(/<(?:[\w-]+:)?shared\b(?!-)/.test(type) ? { shared: 'with-you' as const } : /<(?:[\w-]+:)?shared-owner\b/.test(type) ? { shared: 'by-you' as const } : {}),
         writable: !privileges || /<(?:[\w-]+:)?(?:write|write-content|all)\b/.test(privileges),
         href: resolve(home, r.href),
         name: unescapeXml(prop(r.body, 'displayname')?.trim() || decodeURIComponent(r.href.split('/').filter(Boolean).pop() ?? 'Calendar')),
@@ -450,7 +453,7 @@ onUserGone((id) => {
   for (const k of cache.keys()) if (k.startsWith(`${id}|`)) cache.delete(k)
 })
 
-export type CaldavCalendar = { id: string; account: number; href: string; name: string; color: string; writable: boolean }
+export type CaldavCalendar = { id: string; account: number; href: string; name: string; color: string; writable: boolean; shared?: 'with-you' | 'by-you' }
 
 /** Every calendar of every CalDAV account (ids are "caldav:<account>:<href>"), and what went wrong
  * per account (a refused app password, a server that is down), named after the account. */
@@ -459,7 +462,7 @@ export async function caldavCalendars(user: User): Promise<{ calendars: CaldavCa
   const lists = await Promise.all(
     accounts(user).map((a) =>
       cached(`${user.id}|cals|${a.id}`, 10 * 60_000, () => discover(a))
-        .then((cals) => cals.map((c) => ({ id: `caldav:${a.id}:${c.href}`, account: a.id, href: c.href, name: c.name, color: c.color, writable: c.writable })))
+        .then((cals) => cals.map((c) => ({ id: `caldav:${a.id}:${c.href}`, account: a.id, href: c.href, name: c.name, color: c.color, writable: c.writable, ...(c.shared ? { shared: c.shared } : {}) })))
         .catch((e: Error) => (errors.push(`${a.label}: ${e.message}`), [] as CaldavCalendar[])),
     ),
   )
@@ -685,15 +688,38 @@ async function deleteObject(account: Account, url: string) {
   if (!res.ok && res.status !== 404) refused(res, url)
 }
 
-export async function createCaldavEvent(user: User, calendarId: string, input: EventInput) {
+/** Makes an event; answers where it now lives. */
+export async function createCaldavEvent(user: User, calendarId: string, input: EventInput): Promise<CaldavRef> {
   const { account, calendar } = await calendarFor(user, calendarId)
   const uid = randomUUID()
   const ev = ['BEGIN:VEVENT', `UID:${uid}`, `CREATED:${davTime(new Date())}`, 'END:VEVENT']
+  // A repeating timed event is written in its time zone, not UTC, so "every Monday at 09:00" stays
+  // at 09:00 after daylight saving changes: a DTSTART with the TZID goes in first, and applyInput
+  // writes the times like it. The TZID is the IANA name without a VTIMEZONE, which CalDAV servers
+  // (Fastmail's Cyrus, Nextcloud's Sabre) and clients resolve themselves (RFC 7809).
+  if (input.recurrence && !input.allDay && input.timeZone) setProp(ev, 'DTSTART', [`DTSTART;TZID=${param(input.timeZone)}:${davTime(new Date(input.start)).slice(0, 15)}`])
   applyInput(ev, input, account.username.toLowerCase())
+  if (input.recurrence) setProp(ev, 'RRULE', [`RRULE:${input.recurrence}`])
   setProp(ev, 'SEQUENCE', ['SEQUENCE:0'])
   const href = `${calendar.href.endsWith('/') ? calendar.href : `${calendar.href}/`}${uid}.ics`
   await putObject(account, href, ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//mvlos//Calendar//EN', 'CALSCALE:GREGORIAN', ev, 'END:VCALENDAR'], 'new')
   clearCaldavCache(user)
+  return { k: 'c', c: calendarId, h: href, u: uid }
+}
+
+/** One event (or one occurrence of a series) as it is now, for the Agents app's changes. */
+export async function getCaldavEvent(user: User, ref: CaldavRef): Promise<CaldavEvent & { series: boolean }> {
+  const { account, calendar } = await calendarFor(user, ref.c)
+  const url = objectUrl(calendar, ref.h)
+  const res = await request(account, 'GET', url, { headers: { Accept: 'text/calendar' } })
+  if (!res.ok) refused(res, url)
+  const raws = rawEvents((await readCapped(res, 4 * 1024 * 1024)).toString('utf8')).filter((r) => r.props.UID?.value === ref.u)
+  const master = raws.find((r) => !r.props['RECURRENCE-ID'])
+  const override = ref.r ? raws.find((r) => r.props['RECURRENCE-ID'] && sameStart(icalTime(r.props['RECURRENCE-ID'].value, r.props['RECURRENCE-ID'].params)?.iso, ref.r!)) : undefined
+  // An occurrence nobody changed is the series at its own start (in the same form as DTSTART's value).
+  const event = override ? toEvent(override) : master && ref.r ? toEvent(master, ref.r.length === 10 ? ref.r.replace(/-/g, '') : davTime(new Date(ref.r))) : master ? toEvent(master) : null
+  if (!event) throw new HttpError(404, 'That event is gone from the calendar')
+  return { ...event, series: !!master?.props.RRULE }
 }
 
 /** The series (no RECURRENCE-ID) and the occurrence changed on its own that started out at `r`. */
