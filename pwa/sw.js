@@ -30,6 +30,8 @@ self.addEventListener('activate', (event) => {
 // Web Push from the server (server/webpush.ts): an Agents answer or question while MvL OS is
 // closed or in the background. Every push shows a notification: iOS stops delivering to apps that
 // don't, and Chrome shows a generic one of its own instead.
+const ownPath = (p) => (typeof p === 'string' && p.startsWith('/icons/') ? p : undefined)
+
 self.addEventListener('push', (event) => {
   let msg = {}
   try {
@@ -41,8 +43,10 @@ self.addEventListener('push', (event) => {
     self.registration.showNotification(msg.title || 'MvL OS', {
       body: msg.body || '',
       tag: msg.tag,
-      icon: '/icons/app-192.png',
-      badge: '/icons/app-192.png',
+      // A brand logo (GitHub, Minecraft…) when the server names one (server/notifier.ts). Only
+      // this site's own icons: the message comes from the server, but a path is all it needs.
+      icon: ownPath(msg.icon) || '/icons/app-192.png',
+      badge: ownPath(msg.badge) || '/icons/app-192.png',
       data: { thread: msg.thread, url: msg.url },
     }),
   )
