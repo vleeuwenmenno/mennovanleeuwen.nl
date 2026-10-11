@@ -1,20 +1,29 @@
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomInt } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { currentUser } from './auth.ts'
 import { database } from './db.ts'
 import { sameOrigin } from './http.ts'
 import { acceptWebSocket, refuse, type WsConnection } from './ws.ts'
-import { DIFFICULTY } from '../src/apps/games/empires/ai.ts'
+import { DIFFICULTY, type Brain } from '../src/apps/games/empires/ai.ts'
+import { cleanCmd } from '../src/apps/games/empires/commands.ts'
 import { CREDIT_STEPS, FACTIONS, START_CREDITS } from '../src/apps/games/empires/data.ts'
 import { DEFAULT_RULES, GENERATED, MAP, MAPS, cleanRules, generateMap, type MapDef } from '../src/apps/games/empires/maps.ts'
+import { matchBrains, matchWorld, stepTurn, type MatchInfo, type Turn } from '../src/apps/games/empires/match.ts'
 import { nameKey, nameProblem, randomName, tidyName } from '../src/apps/games/empires/names.ts'
-import { CHAT_MAX, MP_PATH, type ClientMsg, type LobbyInfo, type MpLobby, type MpSlot, type ServerMsg, type SlotPatch } from '../src/apps/games/empires/protocol.ts'
+import { CHAT_MAX, HASH_EVERY, MP_PATH, type ClientMsg, type LobbyInfo, type MpLobby, type MpSlot, type ServerMsg, type SlotPatch } from '../src/apps/games/empires/protocol.ts'
+import { STEP, stateHash, type World } from '../src/apps/games/empires/sim.ts'
 
-// Empires At War multiplayer: the players online, their names, and the lobbies they gather in
-// before a battle. Anyone may play, signed in or not. Names are unique among everyone online; a
+// Empires At War multiplayer: the players online, their names, the lobbies they gather in, and
+// the battles. Anyone may play, signed in or not. Names are unique among everyone online; a
 // signed-in user's GitHub login is theirs alone. Everything lives in memory: a restart ends every
 // lobby and game.
+//
+// A battle runs in lockstep: every player's machine runs the whole battle itself, and only orders
+// cross the network. The server keeps the clock: each tick it hands everyone that tick's orders
+// (cleaned, and stamped with the sender's own seat), and nobody's battle moves on without them.
+// It also runs its own copy, to check the fingerprints players send now and then and to call the
+// winner, so a tampered client can't order other players' ships, play faster, or claim a win.
 
 /** A dropped player keeps their name and seat this long, for a reload or a blip. */
 const GRACE_MS = 30_000
@@ -22,6 +31,13 @@ const MAX_PLAYERS = 400
 const MAX_PER_IP = 16
 const MAX_MESSAGE = 16 * 1024
 const MAX_LOBBIES = 100
+/** How long the clock waits for everyone's game to load before starting anyway. */
+const LOAD_WAIT_MS = 20_000
+/** Orders one player may give in a single tick (a drag-select order is one). */
+const MAX_CMDS_PER_TICK = 12
+/** Fingerprints the server keeps, to compare late ones against. */
+const KEEP_HASHES = 40
+const STEP_MS = STEP * 1000
 /** Messages a second a connection may send on average, and in a burst. */
 const RATE = 40
 const BURST = 120
@@ -48,6 +64,26 @@ const players = new Map<string, Player>()
 const byToken = new Map<string, Player>()
 const byName = new Map<string, Player>()
 const lobbies = new Map<string, MpLobby>()
+/** Battles under way, by lobby id. */
+const matches = new Map<string, Match>()
+
+type Match = {
+  info: MatchInfo
+  lobby: string
+  w: World
+  brains: Brain[]
+  /** The last tick run. */
+  n: number
+  /** When tick 0 was, by the server's clock; 0 while everyone's still loading. */
+  t0: number
+  /** Orders taken since the last tick, for the next one. */
+  pending: Turn['c']
+  loaded: Set<string>
+  timer: NodeJS.Timeout | null
+  hashes: Map<number, number>
+  /** Players already told they drifted, so it's said once. */
+  drifted: Set<string>
+}
 
 const send = (p: Player, m: ServerMsg) => p.ws?.send(JSON.stringify(m))
 const newId = () => randomBytes(9).toString('base64url')
@@ -214,6 +250,7 @@ function leave(p: Player, why = 'left') {
   const left = humans(l)
   if (!left.length) {
     lobbies.delete(l.id)
+    stopMatch(l.id)
     pushList()
     return
   }
@@ -284,6 +321,129 @@ function chat(p: Player, l: MpLobby, raw: string) {
   if (!text) return
   const msg = JSON.stringify({ t: 'chat', from: p.name, text, at: Date.now() } satisfies ServerMsg)
   for (const s of humans(l)) players.get(s.player)?.ws?.send(msg)
+}
+
+// --- Battles ----------------------------------------------------------------------------------------
+
+/** Why the host can't start yet, or null. Mirrors what the lobby screen shows. */
+function cantStart(l: MpLobby) {
+  const filled = l.slots.filter((s) => s.kind === 'human' || s.kind === 'ai')
+  if (!filled.some((s) => s.team === 0) || !filled.some((s) => s.team === 1)) return 'Both sides need someone on them.'
+  const away = l.slots.find((s) => s.kind === 'human' && s.away)
+  if (away) return `Waiting for ${away.name} to reconnect.`
+  const waiting = l.slots.find((s) => s.kind === 'human' && s.player !== l.host && !s.ready)
+  if (waiting) return `Waiting for ${waiting.name} to be ready.`
+  return null
+}
+
+const seatIndex = (m: Match, p: Player) => m.info.seats.findIndex((s) => s.kind === 'human' && s.player === p.id)
+
+function start(p: Player, l: MpLobby) {
+  if (l.host !== p.id) return send(p, { t: 'error', why: 'Only the host can start the battle.' })
+  if (l.state !== 'open' || matches.has(l.id)) return
+  const why = cantStart(l)
+  if (why) return send(p, { t: 'error', why })
+  const info: MatchInfo = {
+    id: newId(),
+    seed: randomInt(0, 2 ** 31),
+    map: l.map,
+    gen: l.gen,
+    credits: l.credits,
+    seats: l.slots.flatMap((s, spawn) =>
+      s.kind === 'human' || s.kind === 'ai' ? [{ kind: s.kind, player: s.player, name: s.kind === 'ai' ? `${DIFFICULTY[s.difficulty].name} AI` : s.name, faction: s.faction, team: s.team, spawn, difficulty: s.difficulty }] : [],
+    ),
+  }
+  const m: Match = { info, lobby: l.id, w: matchWorld(info), brains: matchBrains(info), n: 0, t0: 0, pending: [], loaded: new Set(), timer: null, hashes: new Map(), drifted: new Set() }
+  matches.set(l.id, m)
+  l.state = 'playing'
+  info.seats.forEach((s, i) => {
+    const them = s.kind === 'human' ? players.get(s.player) : undefined
+    if (them) send(them, { t: 'match', match: info, me: i })
+  })
+  notice(l, 'The battle has begun')
+  pushLobby(l)
+  // Nobody waits forever for a player whose game won't load.
+  m.timer = setTimeout(() => begin(m), LOAD_WAIT_MS)
+}
+
+function loaded(p: Player, m: Match) {
+  m.loaded.add(p.id)
+  const humans = m.info.seats.filter((s) => s.kind === 'human' && players.get(s.player)?.ws)
+  if (humans.every((s) => m.loaded.has(s.player))) begin(m)
+}
+
+function begin(m: Match) {
+  if (m.t0 || matches.get(m.lobby) !== m) return
+  if (m.timer) clearTimeout(m.timer)
+  m.t0 = performance.now()
+  clock(m)
+}
+
+/** Runs every tick that's due by now, then sleeps until the next. A late wake-up (a busy
+ * moment) just runs the missed ticks at once; players' games catch up the same way. */
+function clock(m: Match) {
+  const due = Math.floor((performance.now() - m.t0) / STEP_MS)
+  while (m.n < due && matches.get(m.lobby) === m) {
+    runTick(m)
+    if (m.w.winner !== -1) return finish(m)
+  }
+  if (matches.get(m.lobby) !== m) return
+  m.timer = setTimeout(() => clock(m), Math.max(1, m.t0 + (m.n + 1) * STEP_MS - performance.now()))
+}
+
+function runTick(m: Match) {
+  const n = ++m.n
+  const c = m.pending
+  m.pending = []
+  stepTurn(m.w, m.brains, c)
+  m.w.events.length = 0
+  if (n % HASH_EVERY === 0) {
+    m.hashes.set(n, stateHash(m.w))
+    m.hashes.delete(n - HASH_EVERY * KEEP_HASHES)
+  }
+  const msg = JSON.stringify({ t: 'turn', n, c } satisfies ServerMsg)
+  for (const s of m.info.seats) if (s.kind === 'human') players.get(s.player)?.ws?.send(msg)
+}
+
+function finish(m: Match) {
+  const l = lobbies.get(m.lobby)
+  stopMatch(m.lobby)
+  const msg = JSON.stringify({ t: 'over', winner: m.w.winner } satisfies ServerMsg)
+  for (const s of m.info.seats) if (s.kind === 'human') players.get(s.player)?.ws?.send(msg)
+  if (!l) return
+  const won = m.info.seats.filter((s) => s.team === m.w.winner).map((s) => s.name)
+  notice(l, `${won.join(' and ')} won the battle`)
+  pushLobby(l)
+}
+
+/** Ends the battle in this lobby (if any) and opens the lobby again. */
+function stopMatch(lobby: string) {
+  const m = matches.get(lobby)
+  if (!m) return
+  if (m.timer) clearTimeout(m.timer)
+  matches.delete(lobby)
+  const l = lobbies.get(lobby)
+  if (l) {
+    l.state = 'open'
+    unready(l)
+  }
+}
+
+function order(p: Player, m: Match, raw: unknown) {
+  const seat = seatIndex(m, p)
+  if (seat < 0 || !m.t0) return
+  if (m.pending.filter(([s]) => s === seat).length >= MAX_CMDS_PER_TICK) return
+  const c = cleanCmd(raw, m.w)
+  if (!c) return send(p, { t: 'error', why: "That order didn't make sense to the server." })
+  m.pending.push([seat, c])
+}
+
+function checkHash(p: Player, m: Match, n: unknown, h: unknown) {
+  const ours = typeof n === 'number' ? m.hashes.get(n) : undefined
+  if (ours === undefined || ours === h || m.drifted.has(p.id)) return
+  m.drifted.add(p.id)
+  console.warn(`[empires] ${p.name} drifted from the server's battle at tick ${n} (match ${m.info.id})`)
+  send(p, { t: 'desync', n: n as number })
 }
 
 // --- Connections ------------------------------------------------------------------------------------
@@ -364,7 +524,10 @@ function onMessage(ws: WsConnection, conn: { p: Player | null; login: string | n
   if (m.t === 'create') return create(p)
   if (m.t === 'join') return join(p, m.id)
   const l = lobbyOf(p)
+  // Battle traffic still on its way after leaving is just dropped.
+  if (!l && (m.t === 'cmd' || m.t === 'hash' || m.t === 'loaded')) return
   if (!l) return send(p, { t: 'error', why: "You're not in a battle." })
+  if (l.state === 'playing' && (m.t === 'seat' || m.t === 'slot' || m.t === 'setup' || m.t === 'ready' || m.t === 'start')) return send(p, { t: 'error', why: 'The battle is on: the lobby opens again when it ends.' })
   switch (m.t) {
     case 'leave':
       return leave(p)
@@ -381,6 +544,17 @@ function onMessage(ws: WsConnection, conn: { p: Player | null; login: string | n
     }
     case 'chat':
       return chat(p, l, m.text)
+    case 'start':
+      return start(p, l)
+    case 'loaded':
+    case 'cmd':
+    case 'hash': {
+      const game = matches.get(l.id)
+      if (!game) return
+      if (m.t === 'loaded') return loaded(p, game)
+      if (m.t === 'cmd') return order(p, game, m.c)
+      return checkHash(p, game, m.n, m.h)
+    }
     default:
       return send(p, { t: 'error', why: `Unknown message ${String((m as { t: string }).t).slice(0, 20)}` })
   }
@@ -436,4 +610,4 @@ setInterval(() => {
 }, 5_000).unref()
 
 /** For tests and a status line: how many are online, with names, and in lobbies. */
-export const empiresOnline = () => ({ players: players.size, named: byName.size, lobbies: lobbies.size })
+export const empiresOnline = () => ({ players: players.size, named: byName.size, lobbies: lobbies.size, battles: matches.size })

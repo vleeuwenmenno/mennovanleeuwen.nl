@@ -1,12 +1,16 @@
 import type { Difficulty } from './ai.ts'
+import type { Cmd } from './commands.ts'
 import type { FactionId } from './data.ts'
 import type { MapRules } from './maps.ts'
+import type { MatchInfo, Turn } from './match.ts'
 
 // What the Empires At War multiplayer client and server say to each other over the WebSocket at
 // MP_PATH, as JSON text. Shared by both sides (types only, nothing to run).
 
 export const MP_PATH = '/api/empires/ws'
 export const CHAT_MAX = 240
+/** Every this many ticks, players send the server a fingerprint of their battle to compare. */
+export const HASH_EVERY = 30
 
 /** One spawn in a lobby. `team` is absolute (side 0 or 1), not relative to whoever looks at it.
  * Human seats carry the player's id and name; `away` while their connection is down. */
@@ -60,6 +64,14 @@ export type ClientMsg =
   | { t: 'setup'; map?: string; gen?: MapRules; credits?: number }
   | { t: 'ready'; on: boolean }
   | { t: 'chat'; text: string }
+  /** Host only: everyone's ready, go. */
+  | { t: 'start' }
+  /** The battle's art and sounds are loaded; the clock starts once everyone has said so. */
+  | { t: 'loaded' }
+  /** An order, for the server to clean and hand to everyone for the next tick. */
+  | { t: 'cmd'; c: Cmd }
+  /** Our battle's fingerprint after tick `n` (every HASH_EVERY ticks). */
+  | { t: 'hash'; n: number; h: number }
 
 /** Server to client. */
 export type ServerMsg =
@@ -81,3 +93,11 @@ export type ServerMsg =
   | { t: 'kicked'; why: string }
   /** Something the client did wrong or can't do; the connection stays open. */
   | { t: 'error'; why: string }
+  /** The battle starts: build the world from `match`; we play seat `me`. Turns follow. */
+  | { t: 'match'; match: MatchInfo; me: number }
+  /** One tick's orders. Turns come in order, one per tick, starting at 1. */
+  | ({ t: 'turn' } & Turn)
+  /** The server's own copy of the battle has ended: `winner` is the winning team. */
+  | { t: 'over'; winner: number }
+  /** Our fingerprint at tick `n` didn't match the server's: our battle has drifted. */
+  | { t: 'desync'; n: number }

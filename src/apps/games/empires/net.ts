@@ -1,3 +1,4 @@
+import type { MatchInfo, Turn } from './match'
 import { MP_PATH, type ClientMsg, type LobbyInfo, type MpLobby, type ServerMsg } from './protocol'
 
 // The game's end of the multiplayer WebSocket. One connection per tab, kept open while the
@@ -23,6 +24,8 @@ export type NetView = {
   /** The last thing the server turned down, for a toast. */
   problem: { why: string; n: number } | null
   rtt: number
+  /** The battle we're in, and our seat in it, from its start until we leave its screen. */
+  match: { info: MatchInfo; me: number } | null
 }
 const CHAT_KEEP = 100
 
@@ -51,7 +54,10 @@ export class Net {
   clockOffset = 0
   name = ''
   id = ''
-  view: NetView = { status: 'connecting', me: null, suggestion: '', login: null, lobbies: [], lobby: null, chat: [], problem: null, rtt: 0 }
+  view: NetView = { status: 'connecting', me: null, suggestion: '', login: null, lobbies: [], lobby: null, chat: [], problem: null, rtt: 0, match: null }
+  /** The battle's turns not yet played, oldest first. Kept out of `view`: they come 30 a second
+   * and the battle screen takes them straight from here. */
+  turns: Turn[] = []
   private viewListeners = new Set<() => void>()
   private ws: WebSocket | null = null
   private listeners = new Set<Listener>()
@@ -111,6 +117,14 @@ export class Net {
       case 'kicked':
       case 'error':
         return this.patch({ problem: { why: m.why, n: (this.view.problem?.n ?? 0) + 1 } })
+      case 'match':
+        this.turns = []
+        return this.patch({ match: { info: m.match, me: m.me } })
+      case 'turn':
+        if (this.view.match) this.turns.push({ n: m.n, c: m.c })
+        return
+      case 'desync':
+        return this.patch({ problem: { why: "Your game has drifted from everyone else's battle.", n: (this.view.problem?.n ?? 0) + 1 } })
       case 'pong':
         // Redraws for the ping readout are cheap but needn't happen on every pong.
         if (Math.abs(this.rtt - this.view.rtt) > 3) this.patch({ rtt: this.rtt })
@@ -131,6 +145,12 @@ export class Net {
       })
       this.send({ t: 'claim', name })
     })
+  }
+
+  /** Off the battle screen: back to the lobby. */
+  endMatch() {
+    this.turns = []
+    this.patch({ match: null })
   }
 
   /** Done with multiplayer: closes for good (no reconnecting). */

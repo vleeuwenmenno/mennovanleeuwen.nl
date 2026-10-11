@@ -298,7 +298,7 @@ function Room({ v, lobby, net, sound, children }: { v: NetView; lobby: MpLobby; 
             <div className="ew-launch">
               <span className="ew-muted ew-small">{blocker ?? `${sides[0]} against ${sides[1]}. Ready to go.`}</span>
               {host ? (
-                <button className="ew-go" disabled={!!blocker} data-tip={blocker ?? 'Start the battle for everyone'}>
+                <button className="ew-go" disabled={!!blocker} data-tip={blocker ?? 'Start the battle for everyone'} onClick={() => (sound.unlock(), sound.click(), net.send({ t: 'start' }))}>
                   Start battle
                 </button>
               ) : (
