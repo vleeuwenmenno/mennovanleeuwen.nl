@@ -29,14 +29,64 @@ export type Account = {
 let account: Account = { status: 'loading', user: null, registration: null, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null }
 const listeners = new Set<() => void>()
 
-const OWNER_HINT = 'mvlos.owner'
+/** Whose saved state this browser holds: their user id, so another account never inherits it. */
+const ACCOUNT_KEY = 'mvlos.account'
+/** The older "the owner was signed in here" flag, from before anyone could sign up. */
+const LEGACY_HINT = 'mvlos.owner'
+/**
+ * What belongs to whoever is signed in rather than to this device: their synced state, the
+ * notification history, terminal history, Files' places, the Agents window layout and push.
+ * Themes, games and the like stay.
+ */
+const PER_ACCOUNT = [/^mvlos\.sync\./, /^mvlos\.notify\.history$/, /^mvlos\.history$/, /^mvlos\.files\.v1$/, /^mvlos\.desktop\.v1$/, /^mvlos\.dock\.v1$/, /^mvlos\.agents\./, /^mvlos\.push$/]
+
+function storedAccount(): string | null {
+  try {
+    return localStorage.getItem(ACCOUNT_KEY) ?? (localStorage.getItem(LEGACY_HINT) ? 'legacy' : null)
+  } catch {
+    return null
+  }
+}
+
+/** Clears what the last account left in this browser, and stops its push messages arriving here. */
+async function forgetBrowserAccount() {
+  try {
+    for (const k of Object.keys(localStorage)) if (PER_ACCOUNT.some((r) => r.test(k))) localStorage.removeItem(k)
+    localStorage.removeItem(ACCOUNT_KEY)
+    localStorage.removeItem(LEGACY_HINT)
+  } catch {
+    /* no storage: nothing was kept either */
+  }
+  try {
+    const sub = await (await navigator.serviceWorker?.getRegistration())?.pushManager?.getSubscription()
+    await sub?.unsubscribe()
+  } catch {
+    /* no push here */
+  }
+  window.dispatchEvent(new Event('mvlos:forget'))
+}
+
+/**
+ * Whether this browser holds another account's state: someone else signed in, or the last
+ * account's session ran out and a guest is here now. A browser from before sign-up was open
+ * (LEGACY_HINT) belongs to whoever signs in first.
+ */
+function heldByAnother(next: Account): boolean {
+  if (next.status !== 'user' && next.status !== 'anon') return false // unknown (offline, no sign-in): leave it
+  const was = storedAccount()
+  if (!was) return false
+  if (was === 'legacy') return next.status === 'anon'
+  return was !== String(next.user?.id ?? '')
+}
 
 function set(next: Account) {
   account = next
-  // Remembered so the next visit knows before /api/me answers (the boot is quicker for the owner).
+  // Remembered so the next visit knows who this browser's state belongs to (and boots quicker).
   try {
-    if (next.status === 'user') localStorage.setItem(OWNER_HINT, '1')
-    else if (next.status === 'anon' || next.status === 'off') localStorage.removeItem(OWNER_HINT)
+    if (next.status === 'user') {
+      localStorage.setItem(ACCOUNT_KEY, String(next.user!.id))
+      localStorage.removeItem(LEGACY_HINT)
+    } else if (next.status === 'anon') localStorage.removeItem(ACCOUNT_KEY)
   } catch {
     /* no storage: the quick boot just starts once /api/me answers */
   }
@@ -49,7 +99,7 @@ export function useLikelyOwner() {
   if (status === 'user') return true
   if (status !== 'loading') return false
   try {
-    return localStorage.getItem(OWNER_HINT) === '1'
+    return !!storedAccount()
   } catch {
     return false
   }
@@ -84,7 +134,14 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
 export async function loadAccount() {
   try {
     const me = await api<{ authEnabled: boolean; registration?: Registration | null; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string; canWrite?: boolean } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null; ollama?: 'settings' | 'server' | null }; seafile?: SeafileInfo | null }>('/api/me')
-    set({ status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, registration: me.registration ?? null, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null, ollama: me.integrations?.ollama ?? null }, seafile: me.seafile ?? null })
+    const next: Account = { status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, registration: me.registration ?? null, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null, ollama: me.integrations?.ollama ?? null }, seafile: me.seafile ?? null }
+    // Another account's notes, history and layouts are still here: clear them and start clean.
+    if (heldByAnother(next)) {
+      await forgetBrowserAccount()
+      location.reload()
+      return
+    }
+    set(next)
   } catch {
     set({ status: 'off', user: null, registration: null, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
   }
@@ -100,6 +157,14 @@ export const hasRepoScope = (u: AccountUser | null) => !!u?.githubScopes.include
 
 export async function signOut() {
   await api('/api/auth/logout', { method: 'POST' }).catch(() => {})
+  await forgetBrowserAccount()
+  set({ status: 'anon', user: null, registration: account.registration, forges: [], googleEnabled: account.googleEnabled, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
+}
+
+/** Deletes the account and everything the server keeps for it, then forgets it in this browser too. */
+export async function deleteAccount() {
+  await api('/api/me', { method: 'DELETE' })
+  await forgetBrowserAccount()
   set({ status: 'anon', user: null, registration: account.registration, forges: [], googleEnabled: account.googleEnabled, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
 }
 

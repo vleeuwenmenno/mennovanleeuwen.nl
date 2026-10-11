@@ -16,7 +16,7 @@ import { libraryName, loadLibraries, primaryOf, setSeafilePrefs, useLibraries, u
 import { fstabEntries, isSeafileType, useMounts } from '../data/mounts'
 
 const libraryNameOf = (prefix: string) => libraryName(prefix.slice('seafile://'.length))
-import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, hasRepoScope, signIn, signInWithRepos, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelyOwner } from '../os/account'
+import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, deleteAccount, hasRepoScope, signIn, signInWithRepos, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelyOwner } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
@@ -58,6 +58,7 @@ const SignInFirst = ({ what }: { what: string }) => {
 
 function Account() {
   const account = useAccount()
+  const [error, setError] = useState<string | null>(null)
   if (account.status === 'loading') return <p className="muted">Checking…</p>
   if (account.status === 'off')
     return (
@@ -116,9 +117,35 @@ function Account() {
             Sign out
           </button>
         </li>
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Delete account</strong>
+            <span className="muted">Removes everything this server keeps for you, and disconnects GitHub, Google and Seafile.</span>
+          </span>
+          <button className="btn btn-small btn-danger" onClick={() => void removeAccount(setError)}>
+            Delete…
+          </button>
+        </li>
       </ul>
+      {error && <p className="t-red">{error}</p>}
+      <p className="muted set-help">
+        What is stored and who can see it: <a href="/privacy.html" target="_blank" rel="noopener">privacy</a>.
+      </p>
     </>
   )
+}
+
+/** Settings → Account → Delete: asks first, since nothing comes back. */
+async function removeAccount(setError: (e: string | null) => void) {
+  const ok = await ask({
+    title: 'Delete your account?',
+    body: 'Your notes, layouts, Agents threads and memories, linked services and calendars are deleted from this server for good, and this app is removed from your GitHub account. Files in your own Seafile stay where they are.',
+    confirm: 'Delete my account',
+    danger: true,
+  })
+  if (!ok) return
+  setError(null)
+  await deleteAccount().catch((e: Error) => setError(e.message))
 }
 
 /** Light/dark mode, the Omarchy theme for each, and the accent. Kept in this browser. */

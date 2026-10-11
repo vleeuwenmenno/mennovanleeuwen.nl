@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { User } from './auth.ts'
 import type { EventInput } from './calendars.ts'
-import { database, decrypt, encrypt } from './db.ts'
+import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { guardedFetch, rethrowEgress } from './egress.ts'
 import { HttpError } from './http.ts'
 
@@ -445,6 +445,10 @@ function cached<T>(key: string, ms: number, load: () => Promise<T>): Promise<T> 
 export const clearCaldavCache = (user: User) => {
   for (const k of cache.keys()) if (k.startsWith(`${user.id}|`)) cache.delete(k)
 }
+
+onUserGone((id) => {
+  for (const k of cache.keys()) if (k.startsWith(`${id}|`)) cache.delete(k)
+})
 
 export type CaldavCalendar = { id: string; account: number; href: string; name: string; color: string; writable: boolean }
 

@@ -211,3 +211,22 @@ export function appSetting(name: string): string | null {
 export function setAppSetting(name: string, value: string) {
   database().prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value').run(name, value)
 }
+
+const goneHandlers: ((userId: number) => void)[] = []
+
+/** For modules that keep something per account in memory (caches, jobs): forget it when the account is deleted. */
+export const onUserGone = (fn: (userId: number) => void) => void goneHandlers.push(fn)
+
+/** Runs every onUserGone handler (server/users.ts, after deleting the account). */
+export const userGone = (userId: number) => goneHandlers.forEach((fn) => fn(userId))
+
+/**
+ * The id for a new account: never one a deleted account had (SQLite reuses the highest rowid
+ * after a delete), so nothing anyone kept about the old account can match the new one.
+ */
+export function nextUserId(): number {
+  const { n } = database().prepare('SELECT MAX(id) AS n FROM users').get() as { n: number | null }
+  const id = Math.max(n ?? 0, Number(appSetting('last_user_id') ?? 0)) + 1
+  setAppSetting('last_user_id', String(id))
+  return id
+}

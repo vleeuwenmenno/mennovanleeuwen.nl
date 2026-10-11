@@ -21,6 +21,7 @@ import { minecraftOverview, minecraftStatus } from './minecraft.ts'
 import { search, clearSearchCache } from './search.ts'
 import { suggest } from './suggest.ts'
 import { readState, writeState } from './state.ts'
+import { deleteUser } from './users.ts'
 
 // Every /api route, shared by the production server (server/index.ts) and Vite's dev and
 // preview servers (vite.config.ts). Resolves true when it answered the request.
@@ -92,6 +93,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     // Everything below changes something or reads private data.
     if (!read && !sameOrigin(req)) throw new HttpError(403, 'Cross-site request')
     if (method === 'POST' && path === '/api/auth/logout') return logout(req, res), true
+    // Deleting your own account (Settings → Account): everything it stored goes (server/users.ts).
+    if (method === 'DELETE' && path === '/api/me') {
+      await deleteUser(requireUser(req).id)
+      return logout(req, res), true
+    }
 
     if (path === '/api/state' && read) return json(res, 200, readState(requireUser(req))), true
     const stateKey = /^\/api\/state\/([^/]+)$/.exec(path)?.[1]

@@ -123,6 +123,8 @@ export const useEntries = () =>
 
 export const removeEntry = (id: string) => save(entries.filter((e) => e.id !== id))
 export const clearEntries = () => save([])
+// Signed out: the history was that account's (src/os/account.ts clears it from storage too).
+if (typeof window !== 'undefined') window.addEventListener('mvlos:forget', clearEntries)
 export const markAllRead = () => entries.some((e) => !e.read) && save(entries.map((e) => (e.read ? e : { ...e, read: true })))
 /** Opened from a pop-up or the center: gone when Settings says so, otherwise read. */
 export function opened(id: string) {

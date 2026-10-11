@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import { isAdmin, type User } from './auth.ts'
-import { database, decrypt, encrypt, sha256 } from './db.ts'
+import { database, decrypt, encrypt, sha256, onUserGone } from './db.ts'
 import { HttpError, publicOrigin } from './http.ts'
 import { guardedFetch, rethrowEgress } from './egress.ts'
 import { fileLink, officeServer, seafile, seafileInfo } from './seafile.ts'
@@ -180,6 +180,7 @@ async function saveVersion(user: User, repo: string, path: string, from: string)
 
 /** When OnlyOffice last called back, per user: never means it cannot reach this site. */
 const heard = new Map<number, { at: number; status: number }>()
+onUserGone((id) => heard.delete(id))
 export const noteCallback = (user: number, status: number) => heard.set(user, { at: Date.now(), status })
 
 const CONVERT_ERRORS: Record<string, string> = {

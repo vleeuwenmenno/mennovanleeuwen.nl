@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { appSetting, database, decrypt, encrypt, sha256 } from './db.ts'
+import { appSetting, database, decrypt, encrypt, nextUserId, sha256 } from './db.ts'
 import { cookies, HttpError, json, publicOrigin, redirect, setCookie } from './http.ts'
 
 // "Sign in with GitHub" (OAuth web flow). Any GitHub account may sign up while registration is
@@ -135,7 +135,7 @@ export async function finishLogin(req: IncomingMessage, res: ServerResponse, url
   // Who gets in: existing accounts unless banned, admins always, newcomers while registration is
   // open and there is room. Banned accounts keep their row (and their spot), so they stay out.
   const db = database()
-  const known = db.prepare('SELECT banned_at, ban_reason FROM users WHERE github_id = ?').get(me.id) as { banned_at: number | null; ban_reason: string | null } | undefined
+  const known = db.prepare('SELECT id, banned_at, ban_reason FROM users WHERE github_id = ?').get(me.id) as { id: number; banned_at: number | null; ban_reason: string | null } | undefined
   if (known?.banned_at) return redirect(res, `/?auth=banned${known.ban_reason ? `&reason=${encodeURIComponent(known.ban_reason.slice(0, 200))}` : ''}`, { 'Set-Cookie': clearState })
   if (!known && !isAdmin(me.login)) {
     if (!registrationOpen()) return fail('closed')
@@ -143,11 +143,14 @@ export async function finishLogin(req: IncomingMessage, res: ServerResponse, url
   }
 
   const now = Date.now()
-  db.prepare(
-    `INSERT INTO users (github_id, login, name, avatar, github_token, github_scopes, created_at, updated_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT (github_id) DO UPDATE SET login = excluded.login, name = excluded.name, avatar = excluded.avatar, github_token = excluded.github_token, github_scopes = excluded.github_scopes, updated_at = excluded.updated_at, last_seen_at = excluded.last_seen_at`,
-  ).run(me.id, me.login, me.name, me.avatar_url, encrypt(token), granted.scope ?? '', now, now, now)
-  const { id } = db.prepare('SELECT id FROM users WHERE github_id = ?').get(me.id) as { id: number }
+  let id: number
+  if (known) {
+    id = known.id
+    db.prepare('UPDATE users SET login = ?, name = ?, avatar = ?, github_token = ?, github_scopes = ?, updated_at = ?, last_seen_at = ? WHERE id = ?').run(me.login, me.name, me.avatar_url, encrypt(token), granted.scope ?? '', now, now, id)
+  } else {
+    id = nextUserId()
+    db.prepare('INSERT INTO users (id, github_id, login, name, avatar, github_token, github_scopes, created_at, updated_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, me.id, me.login, me.name, me.avatar_url, encrypt(token), granted.scope ?? '', now, now, now)
+  }
 
   const sid = randomBytes(32).toString('base64url')
   db.prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sha256(sid), id, now, now + SESSION_DAYS * 864e5)

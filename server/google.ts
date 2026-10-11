@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { User } from './auth.ts'
 import type { EventInput } from './calendars.ts'
-import { database, decrypt, encrypt } from './db.ts'
+import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { cookies, HttpError, publicOrigin, redirect, setCookie } from './http.ts'
 
 // Google Calendar, attached to the signed-in (GitHub) owner: their calendars, shared ones
@@ -171,6 +171,10 @@ const cache = new Map<string, { at: number; value: Promise<unknown> }>()
 export const clearGoogleCache = (user: User) => {
   for (const k of cache.keys()) if (k.startsWith(`${user.id}|`)) cache.delete(k)
 }
+onUserGone((id) => {
+  clearGoogleCache({ id } as User)
+  refreshing.delete(id)
+})
 function cached<T>(key: string, ms: number, load: () => Promise<T>): Promise<T> {
   const hit = cache.get(key)
   if (hit && Date.now() - hit.at < ms) return hit.value as Promise<T>

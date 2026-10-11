@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import type { ServerResponse } from 'node:http'
 import { serverKey, type User } from './auth.ts'
-import { database, decrypt, encrypt } from './db.ts'
+import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { HttpError, SECURITY } from './http.ts'
 import { search as codeSearch } from './search.ts'
 import { guardedFetch } from './egress.ts'
+import { checkRoom } from './quota.ts'
 import { fileLink, libraries, listDir, mkdir, removeItems, rename, seafile, seafileInfo, transfer, type Library } from './seafile.ts'
 import { readState, writeState } from './state.ts'
 import { webSearch } from './websearch.ts'
@@ -213,6 +214,10 @@ type MessageRow = { id: number; role: string; content: string; thinking: string 
 
 const NEW_TITLE = 'New thread'
 const running = new Map<string, AbortController>()
+/** Whose turn each running thread is, to cap how many run at once: per account, and on the server. */
+const runningFor = new Map<string, number>()
+const TURNS_PER_USER = 2
+const TURNS_TOTAL = 20
 const titling = new Set<string>()
 
 /** A change waiting for the owner: which reply asked for it (message and call index) and how to answer. */
@@ -418,6 +423,11 @@ export function deleteThread(user: User, id: string) {
   database().prepare('DELETE FROM agent_threads WHERE id = ?').run(row.id)
 }
 
+/** Stops every turn an account has running (banned or deleted, server/users.ts). */
+export function stopTurnsOf(userId: number) {
+  for (const [thread, u] of runningFor) if (u === userId) running.get(thread)?.abort()
+}
+
 export function stopThread(user: User, id: string) {
   running.get(ownThread(user, id).id)?.abort()
 }
@@ -442,6 +452,7 @@ function agentSettings(user: User): AgentSettings {
 
 export type PromptInfo = { text: string; source: 'seafile' | 'builtin'; repo: string | null; path: string | null; missing: boolean; error: string | null }
 const promptCache = new Map<number, { at: number; key: string; value: Promise<PromptInfo> }>()
+onUserGone((id) => promptCache.delete(id))
 
 /** ~/AGENTS.md: the owner's own from Seafile when home is there and it exists, else the built-in one. */
 export function agentsPrompt(user: User, fresh = false): Promise<PromptInfo> {
@@ -1422,12 +1433,16 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
   if (!text && !files.length) throw new HttpError(400, 'Write something first')
   if (text.length > 20_000) throw new HttpError(413, 'That message is too long')
   if (running.has(row.id)) throw new HttpError(409, 'This thread is still answering')
+  if ([...runningFor.values()].filter((u) => u === user.id).length >= TURNS_PER_USER) throw new HttpError(429, `At most ${TURNS_PER_USER} threads answer at once: wait for one to finish, or stop it`)
+  if (runningFor.size >= TURNS_TOTAL) throw new HttpError(429, 'The server is busy answering others: try again in a minute')
+  checkRoom(user, text.length + JSON.stringify(files).length)
   const key = requireKey(user)
   const mode = modeOf(row.mode)
   const info = (await models().catch(() => [] as ModelInfo[])).find((m) => m.name === row.model)
 
   const ctl = new AbortController()
   running.set(row.id, ctl)
+  runningFor.set(row.id, user.id)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
   // The turn goes on when the window closes (a long job can take a while); only Stop ends it, and
   // the window picks it up again from the saved messages.
@@ -1546,6 +1561,7 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
     } else send({ type: 'done' })
   } finally {
     running.delete(row.id)
+    runningFor.delete(row.id)
     partial.delete(row.id)
     // Nobody watching: the answer (or what went wrong) as a push message, the thread one tap away.
     if (outcome === 'answered') {

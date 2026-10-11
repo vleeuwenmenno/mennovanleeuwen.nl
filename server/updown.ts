@@ -1,5 +1,5 @@
 import { serverKey, type User } from './auth.ts'
-import { database, decrypt, encrypt } from './db.ts'
+import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { HttpError } from './http.ts'
 
 // updown.io, for the Status widget: the owner's uptime checks with their state, uptime, response
@@ -76,6 +76,7 @@ export function removeUpdownKey(user: User) {
 }
 
 const cache = new Map<number, { at: number; value: Promise<UpdownCheck[]> }>()
+onUserGone((id) => cache.delete(id))
 
 export function updownChecks(user: User): Promise<UpdownCheck[]> {
   const hit = cache.get(user.id)

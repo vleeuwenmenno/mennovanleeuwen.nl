@@ -11,6 +11,7 @@ import { readTar, scanTar, TarError } from '../src/data/tar.ts'
 import { METHODS, readZip, type ZipEntry, type ZipIndex } from '../src/data/zip.ts'
 import type { User } from './auth.ts'
 import { HttpError } from './http.ts'
+import { onUserGone } from './db.ts'
 import { guardedFetch } from './egress.ts'
 import { fileLink, guard, listDir, mkdir, repoId, seafPath } from './seafile.ts'
 
@@ -48,6 +49,13 @@ type Job = {
 }
 
 const jobs = new Map<string, Job>()
+onUserGone((id) => {
+  for (const [k, job] of jobs) {
+    if (job.user !== id) continue
+    job.abort.abort()
+    jobs.delete(k)
+  }
+})
 /** What one file and one job may unpack to, against archives that lie about sizes. */
 const MAX_FILE = 8 * 1024 ** 3
 const MAX_TOTAL = 32 * 1024 ** 3

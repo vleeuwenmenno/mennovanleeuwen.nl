@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { User } from './auth.ts'
-import { database, decrypt, encrypt } from './db.ts'
+import { database, decrypt, encrypt, onUserGone } from './db.ts'
 import { guardedFetch, rethrowEgress } from './egress.ts'
 import { HttpError } from './http.ts'
 
@@ -218,6 +218,9 @@ type ApiDirent = { type: 'dir' | 'file'; name: string; id: string; size?: number
 
 const encryptedRepos = new Map<string, boolean>() // `${user}:${repo}`
 const unlockedUntil = new Map<string, number>()
+onUserGone((id) => {
+  for (const m of [encryptedRepos, unlockedUntil]) for (const k of m.keys()) if (k.startsWith(`${id}:`)) m.delete(k)
+})
 
 async function isEncrypted(user: User, id: string): Promise<boolean> {
   const key = `${user.id}:${id}`

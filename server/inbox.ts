@@ -1,5 +1,6 @@
 import type { IssueHit } from '../src/data/code.ts'
 import type { User } from './auth.ts'
+import { onUserGone } from './db.ts'
 import { sources, type Source } from './forges.ts'
 import { list, toIssue, type ApiIssue } from './search.ts'
 
@@ -11,6 +12,7 @@ export type Inbox = { review: IssueHit[]; mine: IssueHit[]; assigned: IssueHit[]
 
 const CACHE_MS = 60_000
 const cache = new Map<number, { at: number; value: Promise<Inbox> }>()
+onUserGone((id) => cache.delete(id))
 
 async function githubBox(src: Source): Promise<Omit<Inbox, 'errors'>> {
   const q = (query: string) =>
