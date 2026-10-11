@@ -4507,6 +4507,86 @@ span.ew-teamtag {
 }
 
 /* The battle prompt. */
+/* The battle prompt on the galaxy map docks at the bottom without a backdrop: the map around it
+   stays usable (Conquest.tsx, BattlePrompt). */
+.ew-gbattle-dock {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 6;
+  width: min(720px, calc(100% - 24px));
+  max-height: calc(100% - 90px);
+  display: flex;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.ew-gbattle-dock > .ew-modal {
+  width: 100%;
+  pointer-events: auto;
+  filter: drop-shadow(0 14px 30px rgba(0, 0, 0, 0.55));
+}
+.ew-gb-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.ew-gb-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--ew-line, rgba(255, 255, 255, 0.2));
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ew-gb-tool:hover {
+  border-color: var(--ew-accent);
+  color: var(--ew-accent);
+}
+/* Folded: one slim bar. */
+.ew-gb-bar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--ew-line);
+  border-radius: 6px;
+  background: var(--ew-glass, var(--ew-bg));
+  color: var(--ew-text);
+  pointer-events: auto;
+  filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.55));
+}
+.ew-gb-bar > svg {
+  flex: none;
+  color: var(--ew-bad);
+}
+.ew-gb-bar strong {
+  font-family: var(--ew-display);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ew-gb-bar em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--ew-muted);
+}
+.ew-gb-bar-gap {
+  flex: 1;
+}
+.ew-gb-tool.is-primary {
+  border-color: var(--ew-active, var(--ew-accent));
+  background: var(--ew-active, var(--ew-accent));
+  color: #fff;
+}
 .ew-gb-sides {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
