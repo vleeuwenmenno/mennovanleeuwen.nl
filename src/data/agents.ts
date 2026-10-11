@@ -292,6 +292,34 @@ export async function retryTurn(id: string, onEvent: (e: TurnEvent) => void, sig
  */
 export const rewindThread = (id: string, messageId: number) => api<{ thread: Thread; removed: number; message: { text: string; attachments: Attachment[] } }>(`/api/agents/threads/${id}/rewind`, { method: 'POST', json: { messageId } })
 
+/**
+ * A shared link (server/shares.ts): a snapshot of a whole thread, or of one answer with the message
+ * it answers, that anyone with `url` can read until it expires or sharing stops.
+ */
+export type Share = { token: string; url: string; kind: 'thread' | 'response'; title: string; threadId: string; messageId: number | null; createdAt: number; expiresAt: number | null; views: number }
+export type ShareExpiry = 'never' | '1h' | '1d' | '7d' | '30d'
+export const SHARE_EXPIRY: { value: ShareExpiry; label: string }[] = [
+  { value: 'never', label: 'Never expires' },
+  { value: '1h', label: '1 hour' },
+  { value: '1d', label: '1 day' },
+  { value: '7d', label: '7 days' },
+  { value: '30d', label: '30 days' },
+]
+/** What a share leaves out, said wherever one is made. */
+export const SHARE_NOTE = 'Shares the questions and answers. Tool results, files, memories and thinking are not included; the steps it took show as short labels.'
+export const shareThread = (id: string, input: { kind: 'thread' | 'response'; messageId?: number; expires: ShareExpiry }) => api<Share>(`/api/agents/threads/${id}/share`, { method: 'POST', json: input })
+export const listShares = (thread?: string) => api<Share[]>(`/api/agents/shares${thread ? `?thread=${thread}` : ''}`)
+export const stopSharing = (token: string) => api(`/api/agents/shares/${token}`, { method: 'DELETE' })
+/** When a share stops working, in words: "never expires", "expires in 6 days". */
+export function expiryText(s: Share): string {
+  if (s.expiresAt === null) return 'never expires'
+  const left = s.expiresAt - Date.now()
+  if (left <= 0) return 'expired'
+  const min = Math.round(left / 60_000)
+  const h = Math.round(left / 3600_000)
+  return `expires in ${min < 60 ? `${Math.max(1, min)} min` : h < 48 ? `${h} h` : `${Math.round(h / 24)} days`}`
+}
+
 /** A stream that broke on the way (the network, or the server restarting), not one the server refused. */
 export const isDropped = (e: unknown) => e instanceof TypeError || (e as Error)?.name === 'NetworkError'
 

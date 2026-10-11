@@ -9,6 +9,7 @@ import {
   deleteMemory,
   deleteThread,
   editQueued,
+  expiryText,
   followThread,
   interruptionText,
   isDropped,
@@ -18,6 +19,7 @@ import {
   getThread,
   listMemories,
   listProjects,
+  listShares,
   listSkills,
   listThreads,
   overrideTurn,
@@ -29,6 +31,9 @@ import {
   sendMessage,
   sendQueuedNow,
   setSkillEnabled,
+  SHARE_NOTE,
+  shareThread,
+  stopSharing,
   stopThread,
   suggestTitle,
   toAttachment,
@@ -43,6 +48,8 @@ import {
   type Mode,
   type Permission,
   type QueuedMessage,
+  type Share,
+  type ShareExpiry,
   type Skill,
   type Thread,
   type ToolCall,
@@ -118,6 +125,9 @@ const SLASH: [string, string][] = [
   ['/copy', 'copy the last reply'],
   ['/retry', 'run your last message again (also ctrl+r)'],
   ['/rewind', 'go back to one of your messages and edit it'],
+  ['/share', 'share the thread as a link (last: the last answer; 1h, 1d, 7d, 30d)'],
+  ['/shares', "this thread's shared links"],
+  ['/unshare', 'stop sharing a link: /unshare <id>, or pick one'],
   ['/open', 'open the thread in the Agents app'],
   ['/exit', 'leave (also Ctrl+D, Ctrl+C twice)'],
 ]
@@ -1825,6 +1835,60 @@ export class Session {
         await navigator.clipboard.writeText(last.content).then(
           () => this.say('Copied the last reply', 'green'),
           () => this.say('The browser did not allow copying', 'red'),
+        )
+        return true
+      }
+      case '/share': {
+        if (!this.thread) return this.say('Send a message first: then there is a thread to share'), true
+        const words = arg.toLowerCase().split(/\s+/).filter(Boolean)
+        const EXPIRES = ['never', '1h', '1d', '7d', '30d']
+        const one = words.some((x) => x === 'last' || x === 'response' || x === 'answer')
+        if (words.some((x) => !EXPIRES.includes(x) && x !== 'last' && x !== 'response' && x !== 'answer')) return this.say('Usage: /share [last] [1h|1d|7d|30d|never]: the thread, or its last answer, as a link', 'red'), true
+        const expires = (words.find((x) => EXPIRES.includes(x)) ?? 'never') as ShareExpiry
+        const answer = [...this.messages].reverse().find((m) => m.role === 'assistant' && m.content.trim())
+        if (!answer) return this.say('There is no answer to share yet'), true
+        try {
+          const s = await shareThread(this.thread.id, { kind: one ? 'response' : 'thread', messageId: one ? answer.id : undefined, expires })
+          const copied = await navigator.clipboard?.writeText(s.url).then(() => true, () => false)
+          this.out([
+            [seg('✓ ', 'green'), seg(one ? 'Shared the last answer' : 'Shared this thread', 'bold'), seg(` · ${expiryText(s)}${copied ? ' · link copied' : ''}`, 'muted')],
+            [seg('  '), { t: s.url, link: s.url }],
+            ...wrap([seg(`${SHARE_NOTE} A snapshot: later messages are not added. /shares lists the links.`, 'muted')], w, [seg('  ')], [seg('  ')]),
+            [],
+          ])
+        } catch (e) {
+          this.say(`Could not share: ${(e as Error).message}`, 'red')
+        }
+        return true
+      }
+      case '/shares': {
+        if (!this.thread) return this.say('Nothing shared from a thread not made yet'), true
+        const list = await listShares(this.thread.id).catch((e: Error) => (this.say(e.message, 'red'), null))
+        if (!list) return true
+        if (!list.length) return this.say('This thread is not shared. /share shares it, /share last its last answer'), true
+        const out: Line[] = [[seg('Shared links', 'bold'), seg(` · ${this.thread.title}`, 'muted')]]
+        for (const s of list) out.push([seg(`  ${s.token.slice(0, 8)}  `, 'accent'), seg(s.kind === 'response' ? 'one answer' : 'whole thread'), seg(` · made ${ago(s.createdAt)} ago · ${expiryText(s)} · ${s.views} ${s.views === 1 ? 'view' : 'views'}`, 'muted')], [seg('            '), { t: s.url, link: s.url }])
+        this.out([...out, [seg('  /unshare <id> stops sharing one (/unshare alone picks)', 'muted')], []])
+        return true
+      }
+      case '/unshare': {
+        const all = await listShares().catch((e: Error) => (this.say(e.message, 'red'), null))
+        if (!all) return true
+        let target: Share | undefined
+        if (arg) {
+          const hits = all.filter((s) => s.token.startsWith(arg.trim()))
+          if (hits.length !== 1) return this.say(hits.length ? `${arg} matches more than one link: give more of it` : `No shared link ${arg}. /shares lists them`, 'red'), true
+          target = hits[0]
+        } else {
+          const mine = this.thread ? all.filter((s) => s.threadId === this.thread!.id) : all
+          if (!mine.length) return this.say('Nothing shared here'), true
+          const picked = await this.choose('Stop sharing which link? It stops working at once', mine.map((s) => ({ value: s.token, label: `${s.token.slice(0, 8)}  ${s.kind === 'response' ? 'one answer' : 'whole thread'}`, hint: `made ${ago(s.createdAt)} ago · ${expiryText(s)} · ${s.views} views` })))
+          target = mine.find((s) => s.token === picked?.[0])
+          if (!target) return true
+        }
+        await stopSharing(target.token).then(
+          () => this.say(`Stopped sharing ${target.token.slice(0, 8)}: the link no longer works`, 'green'),
+          (e: Error) => this.say(e.message, 'red'),
         )
         return true
       }
