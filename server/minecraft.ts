@@ -4,6 +4,11 @@ import { database } from './db.ts'
 // Asks the Minecraft server directly with the Server List Ping protocol (the request the game's
 // multiplayer menu sends), so the status is live instead of coming from a public API's cache.
 // Only the one hard-coded server is ever contacted.
+//
+// The ping's player sample is not a reliable list of names: players who switch off "Allow Server
+// Listings" come through as "Anonymous Player", and the same player can be named in one ping and
+// anonymous in the next. With MC_RCON (host:port) and MC_RCON_PASSWORD set, the names come from
+// RCON's `list` command instead, which always has everyone; the ping still gives the rest.
 
 export const MC_HOST = 'cloud.mvl.sh'
 export const MC_PORT = 25565
@@ -101,9 +106,103 @@ function ping(host: string, port: number, timeoutMs = 4000): Promise<McStatus> {
   })
 }
 
+// --- RCON ------------------------------------------------------------------------------------
+// Packets are: length, request id, type (int32 little-endian each), an ASCII body and two zero bytes.
+
+const RCON_AUTH = 3
+const RCON_COMMAND = 2
+const RCON_TIMEOUT_MS = 3000
+
+function rconTarget(): { host: string; port: number; password: string } | null {
+  const addr = process.env.MC_RCON?.trim()
+  const password = process.env.MC_RCON_PASSWORD
+  if (!addr || !password) return null
+  const i = addr.lastIndexOf(':')
+  const port = i > 0 ? Number(addr.slice(i + 1)) : 25575
+  return { host: i > 0 ? addr.slice(0, i) : addr, port: Number.isInteger(port) && port > 0 ? port : 25575, password }
+}
+
+function rconPacket(id: number, type: number, body: string) {
+  const b = Buffer.from(body, 'utf8')
+  const out = Buffer.alloc(14 + b.length)
+  out.writeInt32LE(10 + b.length, 0)
+  out.writeInt32LE(id, 4)
+  out.writeInt32LE(type, 8)
+  b.copy(out, 12)
+  return out
+}
+
+/** Logs in, runs one command and answers its output. */
+export function rcon(host: string, port: number, password: string, command: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const sock = connect({ host, port })
+    let buf = Buffer.alloc(0)
+    let authed = false
+    const fail = (err: Error) => {
+      sock.destroy()
+      reject(err)
+    }
+    sock.setTimeout(RCON_TIMEOUT_MS, () => fail(new Error('timeout')))
+    sock.on('error', fail)
+    sock.on('connect', () => sock.write(rconPacket(1, RCON_AUTH, password)))
+    sock.on('data', (chunk: Buffer) => {
+      buf = Buffer.concat([buf, chunk])
+      while (buf.length >= 4 && buf.length >= 4 + buf.readInt32LE(0)) {
+        const len = buf.readInt32LE(0)
+        const id = buf.readInt32LE(4)
+        const type = buf.readInt32LE(8)
+        const body = buf.subarray(12, 4 + len - 2).toString('utf8')
+        buf = buf.subarray(4 + len)
+        if (!authed) {
+          // Some servers send an empty response before the auth answer (type 2): skip it.
+          if (type !== RCON_COMMAND) continue
+          if (id === -1) return fail(new Error('wrong RCON password'))
+          authed = true
+          sock.write(rconPacket(2, RCON_COMMAND, command))
+        } else if (id === 2) {
+          sock.end()
+          return resolve(body)
+        }
+      }
+    })
+  })
+}
+
+/** "There are 4 of a max of 20 players online: a, b, c, d" (vanilla, Paper and friends). */
+export function parseList(out: string): string[] | null {
+  const m = /players online:(.*)$/s.exec(out.replace(/§./g, ''))
+  if (!m) return null
+  return m[1]
+    .split(',')
+    .map((n) => n.trim())
+    .filter(Boolean)
+}
+
+let rconWarned = false
+/** Everyone online by name over RCON, or null when it isn't set up or doesn't answer. */
+async function rconPlayers(): Promise<string[] | null> {
+  const t = rconTarget()
+  if (!t) return null
+  try {
+    const names = parseList(await rcon(t.host, t.port, t.password, 'list'))
+    if (!names) throw new Error('unexpected answer to list')
+    rconWarned = false
+    return names
+  } catch (e) {
+    if (!rconWarned) console.error('minecraft rcon:', (e as Error).message)
+    rconWarned = true
+    return null
+  }
+}
+
 let cached: { at: number; value: Promise<McStatus> } | null = null
 
-const pingNow = () => ping(MC_HOST, MC_PORT).catch((): McStatus => ({ online: false, players: { online: 0, max: 0, list: [] }, checkedAt: Date.now() }))
+async function pingNow(): Promise<McStatus> {
+  const st = await ping(MC_HOST, MC_PORT).catch((): McStatus => ({ online: false, players: { online: 0, max: 0, list: [] }, checkedAt: Date.now() }))
+  if (!st.online) return st
+  const names = await rconPlayers()
+  return names ? { ...st, players: { ...st.players, online: names.length, list: names, hidden: 0 } } : st
+}
 
 /** The server's status, cached for 10 seconds however many visitors ask. Offline when it does not answer. */
 export function minecraftStatus(): Promise<McStatus> {
@@ -171,7 +270,8 @@ function record(st: McStatus) {
   const open = db.prepare('SELECT id, name FROM mc_sessions WHERE left_at IS NULL').all() as { id: number; name: string }[]
   const here = new Set(st.online ? st.players.list : [])
   // A sample shorter than the count leaves people out at random: only trust it for who joined.
-  const complete = !st.online || st.players.list.length + (st.players.hidden ?? 0) >= st.players.online
+  // A player can be named in one ping and anonymous in the next, so the hidden ones count as unknown.
+  const complete = !st.online || st.players.list.length >= st.players.online
   for (const s of open) if (!here.has(s.name) && complete) db.prepare('UPDATE mc_sessions SET left_at = ? WHERE id = ?').run(now, s.id)
   const known = new Set(open.map((s) => s.name))
   for (const name of here) if (!known.has(name)) db.prepare('INSERT INTO mc_sessions (name, joined_at) VALUES (?, ?)').run(name, now)
