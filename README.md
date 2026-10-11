@@ -695,6 +695,40 @@ their slot as you play; load them from Galactic conquest → Load game), Gladiat
 scores and settings. A campaign battle cut off by closing the window waits in the loaded campaign,
 to be fought again from the start.
 
+## Galactic conquest fleets
+
+In Empires At War's Galactic conquest each side keeps at most **4 fleets at a planet**
+(`MAX_FLEETS` in [`galaxy.ts`](src/apps/games/empires/galaxy.ts)). Selecting a planet, or a fleet
+of ours at one, opens **Fleets at <planet>** ([`Inventory.tsx`](src/apps/games/empires/Inventory.tsx)):
+our fleets there side by side, each an inventory of slots holding a stack per kind of ship, with an
+empty *New fleet* column while there are fewer than 4.
+- **Mouse:** drag a stack onto another fleet to move it (it stacks with the same kind there); Shift
+  or the right button drags half, Ctrl one. Click a stack to pick it up and click a fleet to put it
+  there; double-click sends it to the next fleet. After every move a bar under the title sets the
+  exact count (− + All). Dragging a fleet's header onto another joins them; clicking a header
+  selects that fleet for orders.
+- **Touch:** tap a stack to pick it up and tap a fleet to put it there (the touch bar's Shift takes
+  half); a long press opens a wheel: *Move all*, *Move half*, *Move…* (with − + for the count), *New
+  fleet*, *Hold back* or *Deploy*, *Select fleet*. A long press on a fleet's header: select, hold
+  back all, join another fleet.
+- **Held back:** the shield row under each fleet holds ships back (`Fleet.reserve`, how many of
+  each kind). Move ships into it like into another fleet, or click a stack's corner icon (the
+  header's shield does the whole fleet). When the fleet fights, the rest jump in as before and the
+  held back ships start in the battle's reserve tray, to be called in during the fight; ones never
+  called in come out of a won battle untouched (and jump out with the rest of a lost one, except
+  fighters, as with any reserve). The battle prompt shows the split. Auto-resolve counts held back
+  ships in full but brings them in 4 seconds late (`RESERVE_CALL`), or at once when nothing else of
+  their side is left: holding back a third of an even fleet costs about a third of its chances.
+- **Moves** only happen between our fleets at the same planet; a fleet in flight shows its
+  inventory read-only (it can still change what it holds back). A fleet that gives away its last
+  ship is gone, and the selection follows its ships.
+- **The cap:** fleets of ours arriving where we already have 4 join the biggest there (one with
+  the same stops queued first); new ships join the first fleet at their planet; the AI keeps its
+  fleets at a planet together, as before, and deploys everything. Fleets keep their make-up and
+  held back ships through a battle. Old saves with more than 4 fleets at a planet are merged down
+  to 4 on load, keeping the ones with orders. Fleets that meet at a planet stay apart; *Gather*
+  sends them to the biggest one to join up.
+
 ## Empires At War messages and AI
 
 Messages about a place carry a ⌖: clicking one (or tapping it, or Enter when it has focus) takes
@@ -717,7 +751,8 @@ The AI plays like a person with limited hands, more limited the easier it is:
   late. It runs on the battle's own clock and dice, so multiplayer copies stay in step.
 
 ```sh
-pnpm check:empires-galaxy [weeks] [runs] [turtle|expand]  # campaigns vs a scripted player: orders a minute, fleets, wandering
+pnpm check:empires-galaxy [weeks] [runs] [turtle|expand]  # campaigns vs a scripted player: orders a minute, fleets, wandering, the fleet cap
+pnpm check:empires-fleets                                 # the fleet inventory: moves, the cap, held back ships into battles, old saves
 pnpm empires:battle-ai [games] [minutes]                  # AI-only battles: wins per pairing, actions a minute against the cap
 ```
 
@@ -733,7 +768,7 @@ and mouse and keyboard play is unchanged: every touch path checks `pointerType =
   send fleet, add stop, shipyard, station, zoom.
 - **Touch bar:** a sticky ⇧ Shift (queue, add to the selection, build five) and a ▢ Box mode (the
   next drag selects).
-- **Long presses elsewhere:** on ship cards, control groups, the minimap, selection tiles and
+- **Long presses elsewhere:** on ship cards, control groups, the minimap, selection tiles, fleet inventory stacks and
   tech-tree slots. On anything else, a long press shows its tooltip.
 
 On phone-sized screens the game opens in fullscreen:

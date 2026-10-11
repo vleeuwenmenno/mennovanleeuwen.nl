@@ -5,10 +5,11 @@ import { FACTIONS, UNIT, buildable, isShip, type FactionId, type UnitType } from
 import {
   BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GALAXY_AI, GIANTS, blockedBy, contested, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
   autoResolve, buildAt, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
-  settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw,
+  settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw, withoutShips,
   type BattleResult, type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetKind, type Side, type StarSystem,
 } from './galaxy'
 import { BuildQueue, Floating, Frame, Icon, Pips, ShipArt, ShipCard, Tips, unitTip, type IconName } from './Hud'
+import { FleetInventory } from './Inventory'
 import { galaxyLayout } from './layout'
 import type { BattleSnap } from './snapshot'
 import { loadCampaignBattle, saveCampaignBattle, setResume } from './keep'
@@ -686,6 +687,8 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   const [toasts, setToasts] = useState<GToast[]>([])
   const [pay, setPay] = useState<{ id: number; amount: number } | null>(null)
   const [fleetsOpen, setFleetsOpen] = useState(true)
+  /** The fleet inventory closed for this planet (or fleet in flight): it opens again for the next one. */
+  const [invClosed, setInvClosed] = useState<string | null>(null)
   /** 'move': the next click on the map sends the selected fleets there (as a right-click would). */
   const [mode, setMode] = useState<'normal' | 'move'>('normal')
   /** Phones and short screens hide the galaxy map until it's asked for (the map button). */
@@ -1168,7 +1171,12 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       const big = fs.slice().sort((a, b) => b.ships.length - a.ships.length)[0]
       const at = big.route.length ? big.route[big.route.length - 1].planet : big.leg ? big.leg.planet : big.planet
       let sent = 0
-      for (const f of fs) if (f !== big && !moveFleet(g, ME, f.id, at, undefined, queue)) sent++
+      for (const f of fs) {
+        if (f === big || moveFleet(g, ME, f.id, at, undefined, queue)) continue
+        // Fleets stay apart at a planet unless told otherwise: these join the big one there.
+        f.join = big.id
+        sent++
+      }
       return sent ? sound.order('move', myFaction) : sound.error()
     }
   }
@@ -1235,9 +1243,10 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     })
     const sp = base.spawns[0]
     const map: MapDef = { ...base, id: 'conquest', name: p.name, ore: [], beacons: [], wrecks: [], planet: { kind: p.kind, x: base.w / 2 + (sp.x - base.w / 2) * 0.5, y: base.h / 2 + 1500, r: 560 } }
+    // Ships the fleets hold back start in the battle's reserve, to be called in from there.
     const sides: FleetSide[] = [
-      { faction: g.sides[c.holder].faction, team: 0, ships: c.holderShips, station: c.station },
-      { faction: g.sides[c.attacker].faction, team: 1, ships: c.attackerShips },
+      { faction: g.sides[c.holder].faction, team: 0, ships: withoutShips(c.holderShips, c.holderHeld), reserve: c.holderHeld, station: c.station },
+      { faction: g.sides[c.attacker].faction, team: 1, ships: withoutShips(c.attackerShips, c.attackerHeld), reserve: c.attackerHeld },
     ]
     const meSide = c.holder === ME ? 0 : 1
     const enemy = meSide === 0 ? c.attacker : c.holder
@@ -1492,6 +1501,14 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       toast(touch ? 'Tap a planet or a system to send the fleet there' : 'Right-click a planet or a system to send the fleet there', 'bad')
     }
   }
+
+  // The fleet inventory: our fleets at the selected planet (or where the selected fleets are), or
+  // the one selected fleet of ours in flight.
+  const selAll = selFleet ? [selFleet] : selFleets
+  const invPlanet = selPlanet ? selPlanet.id : selAll.length && selAll.every((f) => !f.leg && f.planet >= 0 && f.planet === selAll[0].planet) ? selAll[0].planet : -1
+  const invFlight = invPlanet < 0 && selFleet?.owner === ME && selFleet.leg ? selFleet : undefined
+  const invKey = invPlanet >= 0 ? `p${invPlanet}` : invFlight ? `f${invFlight.id}` : null
+  const showInv = !!invKey && invKey !== invClosed && (!!invFlight || fleetsAt(g, invPlanet).some((f) => f.owner === ME))
 
   const myIncome = incomeOf(g, ME)
   const myFleets = g.fleets.filter((f) => f.owner === ME)
@@ -1835,6 +1852,32 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
             return fs.length > 0
           }}
         />
+        {showInv && (
+          <FleetInventory
+            key={invKey}
+            g={g}
+            planet={invPlanet}
+            flight={invFlight}
+            selected={selectedIds(sel)}
+            sound={sound}
+            toast={toast}
+            onSelect={(f) => {
+              setTake({})
+              setSel({ kind: 'fleet', id: f.id })
+              sound.select(myFaction, 'frigate')
+            }}
+            onMoved={(from, to) => {
+              // A selected fleet that gave away all it had: the selection follows its ships.
+              if (g.fleets.some((f) => f.id === from)) return
+              if (sel?.kind === 'fleet' && sel.id === from) setSel({ kind: 'fleet', id: to.id })
+              else if (sel?.kind === 'fleets' && sel.ids.includes(from)) {
+                const ids = [...new Set(sel.ids.map((id) => (id === from ? to.id : id)))]
+                setSel(ids.length > 1 ? { kind: 'fleets', ids } : { kind: 'fleet', id: ids[0] })
+              }
+            }}
+            onClose={() => setInvClosed(invKey)}
+          />
+        )}
         {selPlanet && (
           <PlanetDock
             g={g}
@@ -2676,14 +2719,23 @@ function BattlePrompt({ g, c, onShow, onFight, onAuto, onRetreat }: { g: Galaxy;
     for (let i = 0; i < 9; i++) if (autoResolve(g, c, g.time + i * 13.7).winner === ME) wins++
     return wins / 9
   }, [g, c])
-  const side = (o: number, ships: string[], station: number) => (
+  // Our ships held back are marked: they start the battle in the reserve.
+  const side = (o: number, ships: string[], held: string[], station: number) => (
     <div className="ew-gb-side" style={{ borderColor: color(g, o) }}>
       <h5 style={{ color: color(g, o) }}>{o === ME ? 'Our forces' : `${factionName(g, o)} forces`}</h5>
       {station > 0 && <p className="ew-small"><Icon name="yard" size={13} /> Station level {station}</p>}
       <div className="ew-gships">
-        {grouped(ships).map(([id, n]) => <ShipRow key={id} g={g} owner={o} id={id} n={n} />)}
+        {grouped(ships).map(([id, n]) => {
+          const h = o === ME ? held.filter((x) => x === id).length : 0
+          return (
+            <ShipRow key={id} g={g} owner={o} id={id} n={n}>
+              {h > 0 && <small className="ew-gb-held" data-tip={`${n - h} jump in at the start; ${h} held back in the reserve, to be called in during the battle`}><Icon name="hold" size={11} /> {h === n ? 'all held back' : `${n - h} in · ${h} held`}</small>}
+            </ShipRow>
+          )
+        })}
         {!ships.length && <span className="ew-muted ew-small">No ships</span>}
       </div>
+      {o === ME && held.length > 0 && <p className="ew-small ew-muted">{held.length} held back: they wait in the reserve, to be called in during the battle.</p>}
     </div>
   )
   const aside = (
@@ -2723,9 +2775,9 @@ function BattlePrompt({ g, c, onShow, onFight, onAuto, onRetreat }: { g: Galaxy;
       <div className="ew-modal is-wide ew-gbattle-modal">
         <Frame title={`Battle at ${p.name}`} aside={aside}>
           <div className="ew-gb-sides">
-            {side(c.holder, c.holderShips, c.station)}
+            {side(c.holder, c.holderShips, c.holderHeld, c.station)}
             <span className="ew-gb-vs">vs</span>
-            {side(c.attacker, c.attackerShips, 0)}
+            {side(c.attacker, c.attackerShips, c.attackerHeld, 0)}
           </div>
           <div className="ew-gb-odds" data-tip="How often we'd come out on top if the battle were auto-resolved">
             <span>Our chances</span>
