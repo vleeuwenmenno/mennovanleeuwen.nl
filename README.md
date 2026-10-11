@@ -519,6 +519,26 @@ dragging, the menus and an *Add widget* entry everywhere. Per-widget settings go
 [`config.ts`](src/widgets/config.ts) (`useWidgetConfig` / `setWidgetConfig`), which syncs like
 notes; where a widget sits is part of the synced window layout.
 
+## Empires At War on touch screens
+
+Phones and tablets play the whole game by touch ([`src/apps/games/empires/Touch.tsx`](src/apps/games/empires/Touch.tsx)),
+and mouse and keyboard play is unchanged: every touch path checks `pointerType === 'touch'` or the
+`(pointer: coarse)` media query.
+- **Gestures:** tap to select, drag to pan, pinch to zoom, and double-tap a ship for all of its
+  kind on screen.
+- **Action wheel:** a long press opens a radial wheel of context actions. In battle: move,
+  attack-move, patrol, line, facing, attack, area attack, guard, rally, info. On the galaxy map:
+  send fleet, add stop, shipyard, station, zoom.
+- **Touch bar:** a sticky ⇧ Shift (queue, add to the selection, build five) and a ▢ Box mode (the
+  next drag selects).
+- **Long presses elsewhere:** on ship cards, control groups, the minimap, selection tiles and
+  tech-tree slots. On anything else, a long press shows its tooltip.
+
+On phone-sized screens the game opens in fullscreen:
+- the HUD and galaxy panels become bottom sheets, with the minimap behind a button;
+- the menus and lobby scroll and fit;
+- portrait shows a hint to turn the phone sideways.
+
 ## Empires At War multiplayer
 
 The arcade's space RTS has online skirmishes: Main menu → Multiplayer → Skirmish. Anyone can play,
