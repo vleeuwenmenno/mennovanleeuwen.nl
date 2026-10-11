@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { AGENTS_MD } from '../data/agentsPrompt'
-import { agentModels, agentSettings, getDefaults, getPrompt, listMemories, setAgentSettings, TOOL_GROUPS, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
+import { installSkills, listSkills, removeSkill, setSkillEnabled, type Skill } from '../data/agents'
+import { ask } from '../os/Dialogs'
+import { agentModels, getDefaults, getPrompt, listMemories, setAgentSettings, TOOL_GROUPS, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
 import { useMounts, whereIs } from '../data/mounts'
+import { syncAgentPlaces } from '../data/agentPlaces'
 import { getWebSearch, PROVIDERS, resetWebSearch, saveWebSearch, testWebSearch, type Provider, type ResultMap, type SearchResult, type WebSearchInput, type WebSearchView } from '../data/websearch'
-import { getLibraries, parseSf, useLibraries } from '../data/seafile'
+import { getLibraries, useLibraries } from '../data/seafile'
 import { useAccount } from '../os/account'
 import { Select } from '../os/Select'
 import { useWM } from '../os/wm'
@@ -21,25 +24,19 @@ const Toggle = ({ on, onChange, label, disabled }: { on: boolean; onChange: (on:
 const MODE_LABEL: Record<Mode, string> = { quick: 'Quick', deep: 'Deep research' }
 
 /**
- * Keeps the server told where ~/AGENTS.md is: in Seafile when Seafile is home (/etc/fstab says,
- * and only the browser has the mount table), or nowhere (the built-in one). Used wherever the
+ * Keeps the server told where ~/AGENTS.md and ~/.agents/skills are: in Seafile when Seafile is home
+ * (/etc/fstab says, and only the browser has the mount table), or nowhere. Used wherever the
  * Agents settings or the app are open.
  */
 export function usePromptLocation() {
   const mountsVersion = useMounts()
   const { libraries } = useLibraries()
   const { promptFile } = useAgentSettings()
-  useEffect(() => {
-    const w = whereIs(`${HOME}/AGENTS.md`)
-    if (w.kind === 'missing' && w.loading) return
-    const at = w.kind === 'sf' ? parseSf(w.sf) : null
-    const next = at ? { repo: at.repo, path: at.p } : null
-    if (JSON.stringify(next) !== JSON.stringify(agentSettings().promptFile)) setAgentSettings({ promptFile: next })
-  }, [mountsVersion, libraries, promptFile])
+  useEffect(() => syncAgentPlaces(), [mountsVersion, libraries, promptFile])
 }
 
 /** The categories, in order: each a page of its own, picked from a sidebar or tabs. */
-type SectionId = 'general' | 'models' | 'threads' | 'search' | 'prompt'
+type SectionId = 'general' | 'models' | 'threads' | 'search' | 'skills' | 'prompt'
 const icon = (d: ReactNode) => (
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     {d}
@@ -50,6 +47,7 @@ const SECTIONS: { id: SectionId; label: string; blurb: string; icon: ReactNode }
   { id: 'models', label: 'Models', blurb: 'Which model a new Quick or Deep thread gets, and which one names threads.', icon: icon(<><rect x="4" y="4" width="16" height="16" /><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" /></>) },
   { id: 'threads', label: 'New threads', blurb: 'The mode and tools a new thread starts with.', icon: icon(<path d="M4 5h16v11H9l-5 4z" />) },
   { id: 'search', label: 'Web search', blurb: 'Where the agent searches the web. Reading pages always goes through Ollama.', icon: icon(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>) },
+  { id: 'skills', label: 'Skills', blurb: 'Instructions for kinds of tasks, in SKILL.md folders: the agent reads one when a task matches it, or you start one with /name.', icon: icon(<path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5z" />) },
   { id: 'prompt', label: 'System prompt', blurb: 'The instructions every thread starts with, from ~/AGENTS.md.', icon: icon(<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5" />) },
 ]
 const SECTION_KEY = 'mvlos.agents.settings'
@@ -249,6 +247,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
       </>
     ),
     search: <WebSearchSettings />,
+    skills: <SkillsSettings />,
     prompt: (
       <>
       <ul className="set-list">
@@ -579,6 +578,84 @@ function WebSearchSettings() {
           )}
         </>
       )}
+    </>
+  )
+}
+
+/** Settings → Skills: the skills there are, on or off, and installing more from GitHub. */
+function SkillsSettings() {
+  const account = useAccount()
+  const settings = useAgentSettings()
+  const [skills, setSkills] = useState<Skill[] | null>(null)
+  const [source, setSource] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<{ text: string; error: boolean } | null>(null)
+  const load = useCallback(() => {
+    listSkills({ fresh: true }).then(setSkills, (e: Error) => setNote({ text: e.message, error: true }))
+  }, [])
+  useEffect(() => load(), [load, settings.skillsFolder?.path])
+  const install = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!source.trim()) return
+    setBusy(true)
+    setNote(null)
+    try {
+      const r = await installSkills({ source: source.trim() })
+      setNote({ text: `Installed ${r.installed.map((x) => x.name).join(', ')} from ${r.from}`, error: false })
+      setSource('')
+      load()
+    } catch (err) {
+      setNote({ text: (err as Error).message, error: true })
+    } finally {
+      setBusy(false)
+    }
+  }
+  const remove = async (s: Skill) => {
+    if (!(await ask({ title: `Remove ${s.name}?`, body: `Its folder (${s.label}) goes to the library's trash.`, confirm: 'Remove', danger: true }))) return
+    removeSkill(s.name).then(load, (e: Error) => setNote({ text: e.message, error: true }))
+  }
+  const where = { builtin: 'Built in', user: 'Yours', project: 'Project' }
+  return (
+    <>
+      <ul className="set-list">
+        {skills === null && <li className="set-row muted">Loading…</li>}
+        {skills?.map((s) => (
+          <li key={s.name} className="set-row">
+            <span className="set-row-text">
+              <strong>
+                {s.name} <span className="muted">· {where[s.source]}{s.userOnly ? ' · only with /' + s.name : ''}</span>
+              </strong>
+              <span className="muted">{s.description}</span>
+            </span>
+            {s.source === 'user' && (
+              <button className="btn btn-small" onClick={() => void remove(s)}>
+                Remove
+              </button>
+            )}
+            <Toggle on={s.enabled} onChange={(on) => (setSkillEnabled(s.name, on), setSkills((list) => list?.map((x) => (x.name === s.name ? { ...x, enabled: on } : x)) ?? null))} label={`Use ${s.name}`} />
+          </li>
+        ))}
+      </ul>
+      <h4 className="set-subhead">Install from GitHub</h4>
+      <form className="set-form" onSubmit={install}>
+        <label>
+          <span>Repository</span>
+          <input value={source} onChange={(e) => setSource(e.target.value)} placeholder="owner/repo, owner/repo/path/to/skill, or a github.com address" disabled={!settings.skillsFolder || busy} spellCheck={false} autoComplete="off" />
+        </label>
+        <div>
+          <button className="btn btn-small btn-primary" disabled={!settings.skillsFolder || busy || !source.trim()}>
+            {busy ? 'Installing…' : 'Install'}
+          </button>
+        </div>
+      </form>
+      {note && <p className={note.error ? 't-red' : 'muted set-help'}>{note.text}</p>}
+      <p className="muted set-help">
+        {settings.skillsFolder
+          ? 'Skills are kept in ~/.agents/skills in your Seafile. Copying a folder with a SKILL.md there installs one too, and so does the terminal: skills add, skills new <name>. A work folder can have its own in .agents/skills.'
+          : account.seafile
+            ? 'Your home folder is not on Seafile, so ~/.agents/skills has nowhere to be: make Seafile your home in Integrations to install skills. The built-in ones work anyway.'
+            : 'Link Seafile and make it your home (Integrations) to keep your own skills in ~/.agents/skills. The built-in ones work anyway.'}
+      </p>
     </>
   )
 }

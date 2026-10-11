@@ -23,13 +23,19 @@ import { asWebAddress } from '../os/linkPreview'
 import { getAccount, signedIn } from '../os/account'
 import { followGoLink, golinksSite, golinksTemplate, golinksUrl, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { age, dynamic, fileKind, HOME, lookup as siteLookup, prettyPath, resolvePath, type DirNode, type Node } from './vfs'
-import { lookup, makeDir, prepare, removePath, touchFile, transfer, walk, writeFile } from './fs'
+import { lookup, makeDir, removePath, touchFile, transfer, walk, writeFile } from './fs'
 import { openSeafile } from '../data/seafile'
 import { manPages, mountCommands } from './mount'
 import { nanoCommands } from './nano'
+import { skillsCommands } from './skills'
+import { agentsCommands } from './agents'
 import { tarCommands } from './tar'
 import { unzipCommands } from './unzip'
 import { MEDIA_APP } from '../data/media'
+import { runLine, setShellHooks } from './msh/interp'
+import { MSH_MAN } from '../data/mshReference'
+
+export { runLine, type RunResult } from './msh/interp'
 
 // Output markup understood by the terminal renderer:
 //   {c:green}text{/}      colored span (green, red, yellow, blue, cyan, magenta, muted, accent, bold)
@@ -252,7 +258,7 @@ export function fastfetch(ctx: Pick<Ctx, 'windows'>) {
     `${c('accent', 'OS')}        MvL OS ${VERSION} (${browser})`,
     `${c('accent', 'Host')}      ${location.host || 'localhost'}`,
     `${c('accent', 'Uptime')}    ${fmtUptime()}`,
-    `${c('accent', 'Shell')}     msh 1.0`,
+    `${c('accent', 'Shell')}     msh 2.0`,
     `${c('accent', 'Display')}   ${window.innerWidth}x${window.innerHeight}`,
     `${c('accent', 'WM')}        react-wm (${ctx.windows.length} windows)`,
     // Menno's own lines on his CV page; whoever is signed in otherwise.
@@ -304,6 +310,16 @@ async function moveOrCopy(ctx: Ctx, op: 'move' | 'copy') {
   for (const s of sources) await transfer(op, ctx.cwd, s, dest, f.has('r') || f.has('R') || f.has('a'))
 }
 
+/** A shell builtin as a command, for callers that run commands without the shell. */
+function viaShell(name: string): Command['run'] {
+  return async (ctx) => {
+    const printed: string[] = []
+    const results = await runLine([name, ...ctx.args].map(shellQuote).join(' '), { ...ctx, print: (t) => void printed.push(t) })
+    if (results.some((r) => !r.ok)) throw new CmdError(printed.join('\n'), true)
+    return printed.join('\n')
+  }
+}
+
 export const commands: Record<string, Command> = {
   help: {
     desc: 'list commands',
@@ -315,6 +331,8 @@ export const commands: Record<string, Command> = {
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
         ['Network', ['curl', 'wget', 'whois', 'ping', 'dig', 'host', 'nslookup', 'minecraft']],
         ['Device', ['htop', 'df', 'du', 'free', 'nproc', 'lscpu', 'xrandr', 'ip', 'watch']],
+        ['Shell', ['msh', 'test', 'printf', 'read', 'source', 'type', 'sleep', 'seq', 'basename', 'dirname']],
+        ['Agents', ['agents', 'skills']],
         ['System', ['keys', 'ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'sudo', 'env', 'export', 'theme', 'tty', 'reboot', 'shutdown', 'clear', 'exit']],
         ['Fun', ['games', 'fastfetch', 'fortune', 'cowsay', 'figlet', 'lolcat', 'cmatrix', 'sl']],
       ]
@@ -322,6 +340,7 @@ export const commands: Record<string, Command> = {
         ...groups.map(([g, cmds]) => `${c('accent', g.padEnd(9))} ${cmds.map((n) => c('green', n)).join('  ')}`),
         '',
         `Pipes work: ${c('cyan', 'cat cv.md | grep -i go')}   Writes go to /tmp: ${c('cyan', 'echo hi > /tmp/x')}`,
+        `Scripts too: ${c('cyan', 'for f in *; do echo $f; done')}   The shell's syntax: ${c('cyan', 'man msh')}`,
         `${c('muted', 'Tab completes, ↑/↓ walks history, Ctrl+L clears, `man <cmd>` explains one.')}`,
       ].join('\n')
     },
@@ -427,17 +446,20 @@ export const commands: Record<string, Command> = {
   },
   grep: {
     desc: 'search text',
-    usage: 'grep [-i] [-n] [-v] [-c] [-r] <pattern> [file|dir]',
+    usage: 'grep [-i] [-n] [-v] [-c] [-r] [-q] [-w] [-F] <pattern> [file|dir]',
     run: (ctx) => {
       const f = flags(ctx.args)
       const [pattern, ...files] = f.rest
       if (pattern === undefined) throw new CmdError('usage: grep [-i] [-n] [-v] [-r] <pattern> [file]')
       let re: RegExp
       try {
-        re = new RegExp(pattern, f.has('i') ? 'i' : '')
+        const source = f.has('F') ? pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : pattern
+        re = new RegExp(f.has('w') ? `\\b(?:${source})\\b` : source, f.has('i') ? 'i' : '')
       } catch {
         throw new CmdError(`grep: invalid pattern '${pattern}'`)
       }
+      // Like the real grep: status 1 when nothing matched (if grep -q … works in scripts).
+      const none = () => new CmdError('', true)
       const hi = (l: string) => (f.has('v') ? l : l.replace(new RegExp(re.source, re.flags + 'g'), (m) => c('red', m)))
       const match = (l: string) => re.test(l) !== f.has('v')
 
@@ -453,12 +475,15 @@ export const commands: Record<string, Command> = {
             })
           }
         }
-        return out.join('\n')
+        if (!out.length) throw none()
+        return f.has('q') ? '' : out.join('\n')
       }
       const hits = lines(input(ctx, files, 'grep'))
         .map((l, i) => ({ l, i }))
         .filter(({ l }) => match(l))
       if (f.has('c')) return String(hits.length)
+      if (!hits.length) throw none()
+      if (f.has('q')) return ''
       return hits
         .map(({ l, i }) => (f.has('n') ? `${c('green', String(i + 1))}:` : '') + hi(l))
         .join('\n')
@@ -1106,11 +1131,58 @@ export const commands: Record<string, Command> = {
   poweroff: { desc: 'alias for shutdown', hidden: true, run: (ctx) => power(ctx, 'power off') },
   halt: { desc: 'alias for shutdown', hidden: true, run: (ctx) => power(ctx, 'power off') },
   reboot: { desc: 'restart MvL OS', run: (ctx) => power(ctx, 'reboot') },
+  msh: { desc: 'the shell: run a command line or a script', usage: 'msh [-nxe] [-c command [arg0 args…] | file [args…]]', man: MSH_MAN, run: viaShell('msh') },
+  sh: { desc: 'alias for msh', hidden: true, run: viaShell('msh') },
+  bash: { desc: 'alias for msh', hidden: true, run: viaShell('msh') },
+  test: { desc: 'check files, strings and numbers (also [ … ])', usage: 'test <expr>   or   [ <expr> ]', run: viaShell('test') },
+  printf: { desc: 'formatted output', usage: 'printf <format> [arguments…]', run: viaShell('printf') },
+  read: { desc: 'read a line into variables', usage: 'read [-r] [-p prompt] [name…]', run: viaShell('read') },
+  source: { desc: 'run a file in this shell', usage: 'source <file> [arguments…]', run: viaShell('source') },
+  type: { desc: 'what a name is: function, builtin or command', usage: 'type <name>…', run: viaShell('type') },
+  sleep: { desc: 'wait a while', usage: 'sleep <seconds>[s|m|h]', run: viaShell('sleep') },
+  true: { desc: 'succeed', hidden: true, run: () => '' },
+  false: { desc: 'fail', hidden: true, run: () => { throw new CmdError('', true) } },
+  seq: {
+    desc: 'print a sequence of numbers',
+    usage: 'seq [first [step]] last',
+    run: ({ args }) => {
+      const nums = args.filter((a) => a !== '-w').map(Number)
+      if (!nums.length || nums.some((n) => Number.isNaN(n))) throw new CmdError('usage: seq [first [step]] last')
+      const [first, step, last] = nums.length === 1 ? [1, 1, nums[0]] : nums.length === 2 ? [nums[0], 1, nums[1]] : nums
+      if (step === 0) throw new CmdError('seq: step must not be zero')
+      const out: number[] = []
+      for (let n = first; step > 0 ? n <= last : n >= last; n += step) {
+        out.push(n)
+        if (out.length > 100_000) throw new CmdError('seq: that is a lot of numbers (100,000 at most)')
+      }
+      const width = args.includes('-w') ? Math.max(...out.map((n) => String(n).length)) : 0
+      return out.map((n) => String(n).padStart(width, '0')).join('\n')
+    },
+  },
+  basename: {
+    desc: 'the last part of a path',
+    usage: 'basename <path> [suffix]',
+    run: ({ args }) => {
+      if (!args[0]) throw new CmdError('basename: missing operand')
+      const base = args[0].replace(/\/+$/, '').split('/').pop() || '/'
+      return args[1] && base !== args[1] && base.endsWith(args[1]) ? base.slice(0, -args[1].length) : base
+    },
+  },
+  dirname: {
+    desc: 'a path without its last part',
+    usage: 'dirname <path>',
+    run: ({ args }) => {
+      if (!args[0]) throw new CmdError('dirname: missing operand')
+      const p = args[0].replace(/\/+$/, '')
+      const i = p.lastIndexOf('/')
+      return i < 0 ? '.' : p.slice(0, i) || '/'
+    },
+  },
   headlines: { desc: 'what the sticky note says', hidden: true, run: () => headlines.map((h) => `• ${h}`).join('\n') },
 }
 
 // The real-network and device tools live in extra.ts.
-Object.assign(commands, extraCommands, findCommands, mountCommands, nanoCommands, unzipCommands, tarCommands)
+Object.assign(commands, extraCommands, findCommands, mountCommands, nanoCommands, unzipCommands, tarCommands, skillsCommands, agentsCommands)
 // Menno's CV in the terminal: only on his CV page (src/os/cvMode.ts).
 if (!cvMode()) for (const name of ['cv', 'projects', 'contribs', 'recent', 'stars', 'contact', 'heatmap', 'minecraft', 'mc', 'headlines']) delete commands[name]
 // /bin lists them all, like a real one (hidden easter eggs included; not the odd names like :q).
@@ -1257,158 +1329,14 @@ export function writeTmp(cwd: string, target: string, content: string, append: b
   const name = abs.slice(5)
   const existing = tmp().children.get(name)
   const prev = existing?.type === 'file' ? existing.content() : ''
-  const next = append && prev ? `${prev}\n${content}` : content
+  const next = append && prev ? (prev.endsWith('\n') ? prev + content : `${prev}\n${content}`) : content
   tmp().children.set(name, { type: 'file', name, content: () => next })
 }
 
 // ---------------------------------------------------------------------------
-// Parsing: quotes, $VARS, pipes, `;`/`&&`, and `>`/`>>` into /tmp.
+// The shell itself lives in msh/: it finds commands here.
 
-function tokenize(line: string, env: Record<string, string>): string[] {
-  const out: string[] = []
-  let cur = ''
-  let quote: '"' | "'" | null = null
-  let has = false
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i]
-    if (quote) {
-      if (ch === quote) quote = null
-      else if (ch === '\\' && quote === '"' && /["\\$`]/.test(line[i + 1] ?? '')) cur += line[++i]
-      else if (ch === '$' && quote === '"') {
-        const m = /^\$(\w+|\{\w+\})/.exec(line.slice(i))
-        if (m) {
-          cur += env[m[1].replace(/[{}]/g, '')] ?? ''
-          i += m[0].length - 1
-        } else cur += ch
-      } else cur += ch
-    } else if (ch === '"' || ch === "'") {
-      quote = ch
-      has = true
-    } else if (ch === '\\' && i + 1 < line.length) {
-      // A backslash keeps the next character as it is: find's \; and spaces in names.
-      cur += line[++i]
-      has = true
-    } else if (/\s/.test(ch)) {
-      if (cur || has) out.push(cur)
-      cur = ''
-      has = false
-    } else if (ch === '$') {
-      const m = /^\$(\w+|\{\w+\}|\?)/.exec(line.slice(i))
-      if (m) {
-        cur += env[m[1].replace(/[{}]/g, '')] ?? ''
-        i += m[0].length - 1
-        has = true
-      } else cur += ch
-    } else cur += ch
-  }
-  if (quote) throw new CmdError('msh: unterminated quote')
-  if (cur || has) out.push(cur)
-  return out
-}
-
-/** Splits on an unquoted separator. */
-function splitTop(line: string, sep: RegExp, seps: string[] = []): string[] {
-  const parts: string[] = []
-  let cur = ''
-  let quote: string | null = null
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i]
-    if (ch === '\\' && quote !== "'" && i + 1 < line.length) {
-      cur += ch + line[++i]
-      continue
-    }
-    if (quote) {
-      if (ch === quote) quote = null
-      cur += ch
-      continue
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch
-      cur += ch
-      continue
-    }
-    const m = sep.exec(line.slice(i))
-    if (m && m.index === 0) {
-      seps.push(m[0])
-      parts.push(cur)
-      cur = ''
-      i += m[0].length - 1
-      continue
-    }
-    cur += ch
-  }
-  parts.push(cur)
-  return parts
-}
-
-export type RunResult = { output: string; ok: boolean }
-
-type Base = Omit<Ctx, 'args' | 'stdin' | 'tty'>
-
-export async function runLine(line: string, shell: Base): Promise<RunResult[]> {
-  const results: RunResult[] = []
-  // `cd a; ls` must list a, so later statements see the new cwd.
-  const base: Base = {
-    ...shell,
-    setCwd: (p) => {
-      base.cwd = p
-      shell.setCwd(p)
-    },
-  }
-  // `;` always continues, `&&` stops after a failure.
-  const ops: string[] = []
-  const sequence = splitTop(line, /^(;|&&)/, ops)
-  for (let s = 0; s < sequence.length; s++) {
-    const stmt = sequence[s].trim()
-    if (!stmt) continue
-    const res = await runPipeline(stmt, base)
-    results.push(res)
-    if (res.output) base.print(res.output)
-    base.env['?'] = res.ok ? '0' : '1'
-    if (!res.ok && ops[s] === '&&') break
-  }
-  return results
-}
-
-async function runPipeline(stmt: string, base: Base): Promise<RunResult> {
-  let redirect: { target: string; append: boolean } | null = null
-  const ops: string[] = []
-  const redir = splitTop(stmt, /^>>?/, ops)
-  if (redir.length > 1) {
-    redirect = { target: redir[redir.length - 1].trim(), append: ops[ops.length - 1] === '>>' }
-    stmt = redir[0]
-    if (!redirect.target) return { output: c('red', 'msh: syntax error near `>`'), ok: false }
-  }
-
-  const stages = splitTop(stmt, /^\|/)
-  let stdin: string | null = null
-  let rendered = ''
-  try {
-    for (let i = 0; i < stages.length; i++) {
-      const [name, ...args] = tokenize(stages[i].trim(), base.env)
-      if (!name) throw new CmdError('msh: syntax error near `|`')
-      const cmd = commands[name] ?? executable(name, base.cwd)
-      if (!cmd) throw new CmdError(`msh: command not found: ${name}${name.length > 2 ? suggest(name) : ''}`)
-      const tty = i === stages.length - 1 && !redirect
-      // /bin/ls is ls.
-      const known = commands[name] ? name : (Object.keys(commands).find((k) => commands[k] === cmd) ?? null)
-      // Seafile behind the mounts: fetch what the command will look at, so it can read it at once.
-      if (known && !asksHelp(known, args)) await prepare(base.cwd, known, known === 'cd' && !args.length ? [HOME] : args)
-      const out = known && asksHelp(known, args) ? manPage(known) : ((await cmd.run({ ...base, args, stdin, tty })) ?? '')
-      rendered = out
-      stdin = strip(out)
-    }
-    if (redirect) {
-      await writeFile(base.cwd, redirect.target, stdin ?? '', redirect.append)
-      return { output: '', ok: true }
-    }
-    return { output: rendered, ok: true }
-  } catch (err) {
-    if (err instanceof CmdError && err.raw) return { output: err.message, ok: false }
-    const msg = err instanceof CmdError ? err.message : `msh: ${(err as Error).message}`
-    return { output: msg ? c('red', msg) : '', ok: false }
-  }
-}
+setShellHooks({ commands, executable: (name, cwd) => executable(name, cwd), manPage, asksHelp, suggest, strip })
 
 /** Games run from the terminal; on the text console there is no display, so one gets started. */
 function launchGame(ctx: Ctx, game?: string) {

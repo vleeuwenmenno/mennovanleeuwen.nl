@@ -1581,7 +1581,8 @@ body.is-resizing iframe {
 .terminal.is-alt > :not(.t-alt):not(.t-input) {
   display: none;
 }
-.terminal.is-alt .t-input {
+.terminal.is-alt .t-input,
+.terminal.is-takeover .t-input {
   position: absolute;
   height: 0;
   overflow: hidden;

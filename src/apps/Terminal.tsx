@@ -208,8 +208,12 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
   const abortRef = useRef<AbortController | null>(null)
   const keyHandler = useRef<((key: string, text?: string) => boolean) | null>(null)
   const rawKeys = useRef(false)
+  const shiftKeys = useRef(false)
+  const resizeHandler = useRef<(() => void) | null>(null)
   // A full-screen program on the alternate screen (nano): the rest of the scrollback hides meanwhile.
   const [alt, setAlt] = useState(false)
+  // A program that draws its own prompt in its live block (agents): the shell's stays out of sight.
+  const [takeover, setTakeover] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const windowsRef = useRef(wm.windows)
   windowsRef.current = wm.windows
@@ -346,9 +350,10 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
     const print = (text: string) => setEntries((e) => [...e, { id: nextId++, kind: 'out', text }])
     // One redrawable block per command line, for programs that update in place.
     let liveId: number | null = null
-    const live = (text: string | null, opts?: { alt?: boolean }) => {
+    const live = (text: string | null, opts?: { alt?: boolean; hideInput?: boolean }) => {
       setDrawing(text !== null)
       setAlt(text !== null && !!opts?.alt)
+      setTakeover(text !== null && !!opts?.hideInput)
       if (text === null) {
         const id = liveId
         liveId = null
@@ -363,6 +368,15 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
     }
     abortRef.current = new AbortController()
     setRunning(true)
+    // The size follows the window while the command runs, for programs that redraw (agents).
+    const size = termSize()
+    const watcher = new ResizeObserver(() => {
+      const now = termSize()
+      if (now.cols === size.cols && now.rows === size.rows) return
+      Object.assign(size, now)
+      resizeHandler.current?.()
+    })
+    if (scrollRef.current) watcher.observe(scrollRef.current)
     const results = await runLine(trimmed, {
       cwd,
       setCwd,
@@ -387,17 +401,23 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
       setAccent,
       print,
       live,
-      size: termSize(),
+      size,
+      onResize: (h) => void (resizeHandler.current = h),
       onKey: (h, opts) => {
         keyHandler.current = h
         rawKeys.current = !!h && !!opts?.raw
+        shiftKeys.current = !!h && !!opts?.shift
       },
       signal: abortRef.current.signal,
     })
+    watcher.disconnect()
+    resizeHandler.current = null
     keyHandler.current = null
     rawKeys.current = false
+    shiftKeys.current = false
     setDrawing(false)
     setAlt(false)
+    setTakeover(false)
     abortRef.current = null
     setRunning(false)
     if (results.some((r) => r.output.includes('{anim:'))) setAnimating(true)
@@ -457,7 +477,8 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
     // Raw programs (nano) get Ctrl+X as ^X and Alt+U as M-u, ahead of the shell and the desktop.
     if (running && keyHandler.current && rawKeys.current) {
       const k = e.key.length === 1 ? e.key : e.key
-      const token = e.ctrlKey && !e.altKey ? (e.key.length === 1 ? `^${k.toUpperCase()}` : `^${k}`) : e.altKey && !e.ctrlKey ? `M-${e.key.length === 1 ? k.toLowerCase() : k}` : k
+      const shift = shiftKeys.current && e.shiftKey && e.key.length > 1 ? 'S-' : ''
+      const token = e.ctrlKey && !e.altKey ? (e.key.length === 1 ? `^${k.toUpperCase()}` : `^${k}`) : e.altKey && !e.ctrlKey ? `M-${e.key.length === 1 ? k.toLowerCase() : k}` : shift + k
       if (e.metaKey || ['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return
       if (keyHandler.current(token)) {
         e.preventDefault()
@@ -608,7 +629,7 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
 
   return (
     <div
-      className={`terminal ${onLogout ? 'is-console' : ''} ${alt ? 'is-alt' : ''} ${readOnly ? 'is-readonly' : ''}`}
+      className={`terminal ${onLogout ? 'is-console' : ''} ${alt ? 'is-alt' : ''} ${takeover ? 'is-takeover' : ''} ${readOnly ? 'is-readonly' : ''}`}
       ref={scrollRef}
       style={onLogout ? undefined : { fontSize: size }}
       onContextMenu={onMenu}
@@ -641,7 +662,15 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
           <input
             ref={inputRef}
             value={value}
-            onChange={(e) => setValue(e.target.value)}
+            onChange={(e) => {
+              // Text that arrives without key presses (a phone's keyboard, IME, dictation) goes to a raw program as typed.
+              if (running && keyHandler.current && rawKeys.current) {
+                if (e.target.value) keyHandler.current('Text', e.target.value)
+                setValue('')
+                return
+              }
+              setValue(e.target.value)
+            }}
             onKeyDown={onKeyDown}
             readOnly={readOnly}
             onPaste={(e) => {

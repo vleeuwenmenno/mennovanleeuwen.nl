@@ -196,6 +196,10 @@ export function database(): DatabaseSync {
   if (!cols('users').includes('ban_reason')) db.exec('ALTER TABLE users ADD COLUMN ban_reason TEXT')
   if (!cols('users').includes('github_scopes')) db.exec('ALTER TABLE users ADD COLUMN github_scopes TEXT')
   db.exec('CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+  // Added later: a thread's work folder (JSON {repo, path, label}) and its permission mode, for
+  // the terminal's agents command and the file tools.
+  if (!cols('agent_threads').includes('workdir')) db.exec('ALTER TABLE agent_threads ADD COLUMN workdir TEXT')
+  if (!cols('agent_threads').includes('permission')) db.exec('ALTER TABLE agent_threads ADD COLUMN permission TEXT')
   // Added later: how many tokens a thread's last reply took up in the model's context.
   if (!(db.prepare('PRAGMA table_info(agent_threads)').all() as { name: string }[]).some((c) => c.name === 'context_tokens')) db.exec('ALTER TABLE agent_threads ADD COLUMN context_tokens INTEGER')
   key = Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))

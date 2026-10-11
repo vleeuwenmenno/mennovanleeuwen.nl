@@ -11,6 +11,8 @@ import { readState, writeState } from './state.ts'
 import { webSearch } from './websearch.ts'
 import { notify } from './notifier.ts'
 import { AGENTS_MD } from '../src/data/agentsPrompt.ts'
+import { findSkill, folderOf, installSkills, listSkills, readSkillFile, removeSkill, skillFiles, type Folder, type Skill, type SkillPlaces } from './skills.ts'
+import { commandNames, exitPlanTool, FILE_DELETE, FILE_TOOLS, FILE_WRITES, PERMISSIONS, projectInstructions, readOnlyCommand, runFileTool, terminalTool, workdirOf, workdirTools, type Permission, type Workdir } from './workdir.ts'
 
 // The Agents app: a research assistant on Ollama Cloud, for the signed-in user. Threads and their
 // messages live in SQLite; each turn runs here, on the server, calling Ollama's chat API with a
@@ -142,7 +144,7 @@ export async function automaticModels(): Promise<{ quick: string; deep: string; 
 // --- tool groups -----------------------------------------------------------------------------
 
 /** What a thread may use, switched in the window: each group is one or more tools. */
-export const TOOL_GROUPS = ['web', 'notes', 'code', 'seafile', 'seafile_write', 'memory', 'projects'] as const
+export const TOOL_GROUPS = ['web', 'notes', 'code', 'seafile', 'seafile_write', 'memory', 'projects', 'files', 'terminal', 'skills'] as const
 export type ToolGroup = (typeof TOOL_GROUPS)[number]
 const GROUP_OF: Record<string, ToolGroup> = {
   web_search: 'web',
@@ -166,6 +168,10 @@ const GROUP_OF: Record<string, ToolGroup> = {
   create_project: 'projects',
   rename_project: 'projects',
   move_thread: 'projects',
+  ...Object.fromEntries(FILE_TOOLS.map((t) => [t, 'files'])),
+  terminal: 'terminal',
+  use_skill: 'skills',
+  read_skill_file: 'skills',
 }
 const toolGroups = (v: unknown): ToolGroup[] | null => (Array.isArray(v) ? TOOL_GROUPS.filter((g) => v.includes(g)) : null)
 
@@ -205,11 +211,11 @@ function checkAttachments(v: unknown): Attachment[] {
 // --- threads -----------------------------------------------------------------------------------
 
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; projectId: number | null; pinned: boolean; todos: Todo[]; /** A title is being thought of */ titling: boolean; /** Tokens the last reply took up in the model's context, as Ollama counted them */ contextTokens: number | null; /** Tool groups it may use */ tools: ToolGroup[]; /** Asked from Spotlight and not continued in the app yet */ quick: boolean }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; projectId: number | null; pinned: boolean; todos: Todo[]; /** A title is being thought of */ titling: boolean; /** Tokens the last reply took up in the model's context, as Ollama counted them */ contextTokens: number | null; /** Tool groups it may use */ tools: ToolGroup[]; /** Asked from Spotlight and not continued in the app yet */ quick: boolean; /** The Seafile folder its file tools work in */ workdir: Workdir | null; /** How changes are allowed: ask each time, edits allowed, or read only while planning */ permission: Permission }
 export type ToolCall = { name: string; arguments: Record<string, unknown> }
 export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; createdAt: number }
 
-type ThreadRow = { id: string; title: string; mode: string; model: string; archived: number; created_at: number; updated_at: number; context_tokens: number | null; tools: string | null; project_id: number | null; pinned: number; todos: string | null; quick: number }
+type ThreadRow = { id: string; title: string; mode: string; model: string; archived: number; created_at: number; updated_at: number; context_tokens: number | null; tools: string | null; project_id: number | null; pinned: number; todos: string | null; quick: number; workdir: string | null; permission: string | null }
 type MessageRow = { id: number; role: string; content: string; thinking: string | null; tool_calls: string | null; tool_name: string | null; attachments: string | null; created_at: number }
 
 const NEW_TITLE = 'New thread'
@@ -221,7 +227,7 @@ const TURNS_TOTAL = 20
 const titling = new Set<string>()
 
 /** A change waiting for the user: which reply asked for it (message and call index) and how to answer. */
-type Pending = { callId: string; messageId: number; index: number; kind: 'approval' | 'question'; form?: Form; resolve: (answer: unknown) => void }
+type Pending = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client'; form?: Form; call?: ToolCall; resolve: (answer: unknown) => void }
 export type PendingApproval = Omit<Pending, 'resolve'>
 const pending = new Map<string, Pending[]>() // by thread
 /** Windows following a turn they did not start (opened again, another tab), by thread. */
@@ -229,8 +235,25 @@ const followers = new Map<string, Set<{ send: (e: TurnEvent) => void; close: () 
 /** The reply a running turn is writing now, which is only saved once the model finishes it. */
 const partial = new Map<string, { content: string; thinking: string }>()
 const APPROVAL_WAIT = 15 * 60_000
+/** Terminals running the agents command, by thread: only they can run the terminal tool. */
+const terminals = new Map<string, number>()
+const attachTerminal = (thread: string, res: ServerResponse) => {
+  terminals.set(thread, (terminals.get(thread) ?? 0) + 1)
+  res.on('close', () => {
+    const n = (terminals.get(thread) ?? 1) - 1
+    if (n > 0) terminals.set(thread, n)
+    else terminals.delete(thread)
+  })
+}
+/** Command names the user said not to ask about again, by thread (until the server restarts). */
+const allowedCommands = new Map<string, Set<string>>()
+/** How the user answered a change: allowed or not, and what came with it. */
+type Verdict = { allow: boolean; always?: 'edits' | 'command'; feedback?: string; mode?: Permission }
 
-const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: (r.tools ? toolGroups(JSON.parse(r.tools)) : null) ?? [...TOOL_GROUPS], quick: !!r.quick })
+const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: (r.tools ? toolGroups(JSON.parse(r.tools)) : null) ?? [...TOOL_GROUPS], quick: !!r.quick, workdir: r.workdir ? (JSON.parse(r.workdir) as Workdir) : null, permission: permissionOf(r.permission) })
+const permissionOf = (v: unknown): Permission => (PERMISSIONS.includes(v as Permission) ? (v as Permission) : 'default')
+/** With a work folder, its tools are switched on (a list saved before they existed lacks them). */
+const withFolderTools = (tools: ToolGroup[] | null, workdir: Workdir | null) => (tools && workdir ? [...new Set<ToolGroup>([...tools, 'files', 'terminal'])] : tools)
 const toMessage = (r: MessageRow): AgentMessage => ({
   id: r.id,
   role: r.role as AgentMessage['role'],
@@ -351,16 +374,17 @@ export function clearQuick(user: User) {
   for (const { id } of rows) if (!running.has(id)) database().prepare('DELETE FROM agent_threads WHERE id = ?').run(id)
 }
 
-export async function createThread(user: User, body: { mode?: string; model?: string; tools?: unknown; projectId?: unknown; quick?: unknown }): Promise<Thread> {
+export async function createThread(user: User, body: { mode?: string; model?: string; tools?: unknown; projectId?: unknown; quick?: unknown; workdir?: unknown; permission?: unknown }): Promise<Thread> {
   const mode = modeOf(body.mode)
   const project = projectRef(user, body.projectId)
   const model = body.model ? modelName(body.model) : await defaultModel(mode, user)
-  const tools = toolGroups(body.tools)
+  const workdir = workdirOf(body.workdir)
+  const tools = withFolderTools(toolGroups(body.tools), workdir)
   const now = Date.now()
   const id = randomUUID()
   database()
-    .prepare('INSERT INTO agent_threads (id, user_id, title, mode, model, archived, created_at, updated_at, tools, project_id, quick) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)')
-    .run(id, user.id, NEW_TITLE, mode, model, now, now, tools ? JSON.stringify(tools) : null, project, body.quick === true ? 1 : 0)
+    .prepare('INSERT INTO agent_threads (id, user_id, title, mode, model, archived, created_at, updated_at, tools, project_id, quick, workdir, permission) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, user.id, NEW_TITLE, mode, model, now, now, tools ? JSON.stringify(tools) : null, project, body.quick === true ? 1 : 0, workdir ? JSON.stringify(workdir) : null, permissionOf(body.permission))
   return toThread(ownThread(user, id))
 }
 
@@ -372,12 +396,26 @@ export function getThread(user: User, id: string): { thread: Thread; messages: A
 }
 
 /** The user's answer to a change the agent asked to make. */
-export function approve(user: User, id: string, body: { callId?: string; allow?: boolean }) {
+export function approve(user: User, id: string, body: { callId?: string; allow?: boolean; always?: unknown; feedback?: unknown; mode?: unknown }) {
   const row = ownThread(user, id)
   const list = pending.get(row.id) ?? []
   const p = list.find((x) => x.callId === body.callId && x.kind === 'approval')
   if (!p) throw new HttpError(404, 'Nothing is waiting for that')
-  p.resolve(body.allow === true)
+  const verdict: Verdict = {
+    allow: body.allow === true,
+    ...(body.always === 'edits' || body.always === 'command' ? { always: body.always } : {}),
+    ...(typeof body.feedback === 'string' && body.feedback.trim() ? { feedback: body.feedback.trim().slice(0, 4000) } : {}),
+    ...(PERMISSIONS.includes(body.mode as Permission) ? { mode: body.mode as Permission } : {}),
+  }
+  p.resolve(verdict)
+}
+
+/** What the terminal printed for a terminal tool call it ran. */
+export function clientResult(user: User, id: string, body: { callId?: string; output?: unknown; status?: unknown }) {
+  const row = ownThread(user, id)
+  const p = (pending.get(row.id) ?? []).find((x) => x.callId === body.callId && x.kind === 'client')
+  if (!p) throw new HttpError(404, 'Nothing is waiting for that')
+  p.resolve({ output: String(body.output ?? '').slice(0, 200_000), status: Number.isInteger(body.status) ? Number(body.status) : 1 })
 }
 
 /** The user's answers to a form the agent asked (or `skip`, to say no answer is coming). */
@@ -400,7 +438,7 @@ export function answer(user: User, id: string, body: { callId?: string; answers?
  * Renames, archives or unarchives, pins, moves to a project, or switches the mode, model or tools.
  * `quick: false` takes a quick answer from Spotlight into the app (there is no way back).
  */
-export async function updateThread(user: User, id: string, body: { title?: string; archived?: boolean; mode?: string; model?: string; tools?: unknown; pinned?: boolean; projectId?: unknown; quick?: boolean; todos?: null }): Promise<Thread> {
+export async function updateThread(user: User, id: string, body: { title?: string; archived?: boolean; mode?: string; model?: string; tools?: unknown; pinned?: boolean; projectId?: unknown; quick?: boolean; todos?: null; workdir?: unknown; permission?: unknown }): Promise<Thread> {
   const row = ownThread(user, id)
   // Dismissed in the window: the plan is gone, for the agent too.
   if (body.todos === null) database().prepare('UPDATE agent_threads SET todos = NULL WHERE id = ?').run(row.id)
@@ -409,11 +447,18 @@ export async function updateThread(user: User, id: string, body: { title?: strin
   const mode = body.mode === undefined ? modeOf(row.mode) : modeOf(body.mode)
   // Switching mode without naming a model takes that mode's usual one.
   const model = body.model !== undefined ? modelName(body.model) : body.mode !== undefined && mode !== row.mode ? await defaultModel(mode, user) : row.model
-  const tools = body.tools === undefined ? row.tools : JSON.stringify(toolGroups(body.tools) ?? [...TOOL_GROUPS])
+  const workdir = body.workdir === undefined ? (row.workdir ? (JSON.parse(row.workdir) as Workdir) : null) : workdirOf(body.workdir)
+  // A new work folder switches its tools on.
+  const newFolder = body.workdir !== undefined && workdir && row.workdir !== JSON.stringify(workdir)
+  const groups = body.tools === undefined ? (row.tools ? toolGroups(JSON.parse(row.tools)) : null) : (toolGroups(body.tools) ?? [...TOOL_GROUPS])
+  const tools = groups === null ? null : JSON.stringify(newFolder ? withFolderTools(groups, workdir) : groups)
   const pinned = body.pinned === undefined ? row.pinned : body.pinned ? 1 : 0
   const project = body.projectId === undefined ? row.project_id : projectRef(user, body.projectId)
   const quick = body.quick === false ? 0 : row.quick
-  database().prepare('UPDATE agent_threads SET title = ?, archived = ?, mode = ?, model = ?, tools = ?, pinned = ?, project_id = ?, quick = ? WHERE id = ?').run(title, archived, mode, model, tools, pinned, project, quick, row.id)
+  const permission = body.permission === undefined ? permissionOf(row.permission) : permissionOf(body.permission)
+  database()
+    .prepare('UPDATE agent_threads SET title = ?, archived = ?, mode = ?, model = ?, tools = ?, pinned = ?, project_id = ?, quick = ?, workdir = ?, permission = ? WHERE id = ?')
+    .run(title, archived, mode, model, tools, pinned, project, quick, workdir ? JSON.stringify(workdir) : null, permission, row.id)
   return toThread(ownThread(user, row.id))
 }
 
@@ -439,15 +484,16 @@ export function stopThread(user: User, id: string) {
  * model that names threads, and where ~/AGENTS.md is in Seafile when Seafile is home (the window
  * works that out from /etc/fstab and keeps it up to date).
  */
-type AgentSettings = { titleModel: string | null; quickModel: string | null; deepModel: string | null; promptFile: { repo: string; path: string } | null }
+type AgentSettings = { titleModel: string | null; quickModel: string | null; deepModel: string | null; promptFile: { repo: string; path: string } | null; skillsFolder: Folder | null; skillsOff: string[] }
 
 function agentSettings(user: User): AgentSettings {
-  const v = (readState(user).agents?.value ?? {}) as { titleModel?: unknown; quickModel?: unknown; deepModel?: unknown; promptFile?: { repo?: unknown; path?: unknown } | null }
+  const v = (readState(user).agents?.value ?? {}) as { titleModel?: unknown; quickModel?: unknown; deepModel?: unknown; promptFile?: { repo?: unknown; path?: unknown } | null; skillsFolder?: unknown; skillsOff?: unknown }
   const name = (x: unknown) => (typeof x === 'string' && /^[\w.:/-]{1,80}$/.test(x) ? x : null)
   const titleModel = name(v.titleModel)
   const f = v.promptFile
   const promptFile = f && typeof f.repo === 'string' && /^[0-9a-f-]{36}$/i.test(f.repo) && typeof f.path === 'string' && f.path.startsWith('/') && !f.path.split('/').includes('..') ? { repo: f.repo, path: f.path } : null
-  return { titleModel, quickModel: name(v.quickModel), deepModel: name(v.deepModel), promptFile }
+  const skillsOff = Array.isArray(v.skillsOff) ? v.skillsOff.filter((x): x is string => typeof x === 'string').slice(0, 500) : []
+  return { titleModel, quickModel: name(v.quickModel), deepModel: name(v.deepModel), promptFile, skillsFolder: folderOf(v.skillsFolder), skillsOff }
 }
 
 export type PromptInfo = { text: string; source: 'seafile' | 'builtin'; repo: string | null; path: string | null; missing: boolean; error: string | null }
@@ -593,7 +639,8 @@ export async function contextOf(user: User, id: string) {
     { label: prompt.source === 'seafile' ? 'AGENTS.md (yours, from Seafile)' : 'AGENTS.md (built in)', tokens: tokens(prompt.text) },
     { label: 'Date and mode', tokens: tokens(modeLine(mode)) + 20 },
     { label: `Memories (${memories.length})`, tokens: tokens(memoryLines(memories)) },
-    { label: `Tool definitions (${toolsFor(user, thread.tools, row.project_id !== null).length})`, tokens: tokens(JSON.stringify(toolsFor(user, thread.tools, row.project_id !== null))) },
+    { label: `Tool definitions (${toolsFor(user, thread.tools, row.project_id !== null, { workdir: !!thread.workdir, terminal: terminals.has(row.id), permission: thread.permission }).length})`, tokens: tokens(JSON.stringify(toolsFor(user, thread.tools, row.project_id !== null, { workdir: !!thread.workdir, terminal: terminals.has(row.id), permission: thread.permission }))) },
+    ...(thread.workdir || thread.permission !== 'default' ? [{ label: 'Work folder and mode', tokens: tokens(folderLines(thread, terminals.has(row.id), null)) }] : []),
     { label: `Your messages (${count('user')})`, tokens: sum('user') },
     { label: `Replies (${count('assistant')})`, tokens: sum('assistant', (m) => m.content + JSON.stringify(m.tool_calls ?? '')) },
     { label: 'Thinking (this turn)', tokens: sum('assistant', (m) => m.thinking ?? '') },
@@ -795,7 +842,10 @@ type ToolDef = { type: 'function'; function: { name: string; description: string
 const tool = (name: string, description: string, properties: Record<string, unknown>, required: string[] = []): ToolDef => ({ type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } })
 const str = (description: string) => ({ type: 'string', description })
 
-function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProject = false): ToolDef[] {
+/** What a turn can offer besides the groups: a work folder's tools, the terminal, plan mode. */
+type ToolOptions = { workdir?: boolean; terminal?: boolean; permission?: Permission }
+
+function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProject = false, opts: ToolOptions = {}): ToolDef[] {
   const tools = [
     tool('web_search', 'Search the web. Returns titles, URLs and a snippet of each result.', { query: str('What to search for'), max_results: { type: 'integer', description: 'How many results, 1 to 10 (default 5)' } }, ['query']),
     tool(
@@ -892,8 +942,15 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
       ['items'],
     ),
   )
-  // update_todos and ask_user belong to no group: they are always there.
-  return tools.filter((t) => !GROUP_OF[t.function.name] || groups.includes(GROUP_OF[t.function.name]))
+  tools.push(
+    tool('use_skill', 'Read a skill (instructions for a kind of task, listed in the system prompt) in full, before you start a task it covers. Answers its instructions and the files in its folder.', { name: str('The skill name') }, ['name']),
+    tool('read_skill_file', "Read a file from a skill's folder, by its path relative to the folder (as use_skill lists them).", { name: str('The skill name'), path: str('The file, like templates/notes.md') }, ['name', 'path']),
+  )
+  if (opts.workdir) tools.push(...workdirTools())
+  if (opts.terminal) tools.push(terminalTool())
+  if (opts.permission === 'plan') tools.push(exitPlanTool())
+  // update_todos and ask_user belong to no group: they are always there. Planning only reads.
+  return tools.filter((t) => (!GROUP_OF[t.function.name] || groups.includes(GROUP_OF[t.function.name])) && !(opts.permission === 'plan' && changes(t.function.name)))
 }
 
 // --- reading addresses the agent was not given -------------------------------------------------
@@ -949,7 +1006,7 @@ function givenUrls(thread: string): Set<string> {
   return given
 }
 
-const PRIVATE_TOOLS = new Set(['search_notes', 'search_code', 'seafile_list', 'seafile_search', 'seafile_read', 'create_note', 'update_note'])
+const PRIVATE_TOOLS = new Set(['search_notes', 'search_code', 'seafile_list', 'seafile_search', 'seafile_read', 'create_note', 'update_note', 'read_file', 'list_dir', 'glob', 'grep', 'terminal'])
 /** Whether the model has anything private in front of it: memories, private tool results, attachments. */
 function holdsPrivate(user: User, thread: string): boolean {
   if (listMemories(user).length) return true
@@ -965,6 +1022,34 @@ function fetchNeedsOwner(user: User, thread: string, url: unknown): boolean {
 
 /** Tools that change the user's files: each call waits for the user to allow it. */
 const NEEDS_APPROVAL = new Set(['seafile_mkdir', 'seafile_write', 'seafile_rename', 'seafile_move', 'seafile_delete', 'update_note', 'delete_note'])
+const changes = (name: string) => NEEDS_APPROVAL.has(name) || FILE_WRITES.has(name) || name === FILE_DELETE
+const FILE_TOOL_SET = new Set<string>(FILE_TOOLS)
+
+/**
+ * Whether a call runs, waits for the user, or is refused, by the thread's permission mode: plan
+ * mode only reads; accepting edits lets the file tools write in the work folder (deleting still
+ * asks); the terminal runs read-only lines, and the commands the user said not to ask about again.
+ */
+function decide(thread: string, permission: Permission, call: ToolCall): 'run' | 'ask' | 'refuse' {
+  const name = call.name
+  if (name === 'exit_plan_mode') return permission === 'plan' ? 'ask' : 'refuse'
+  if (name === 'terminal') {
+    const line = argString(call.arguments ?? {}, 'command')
+    if (readOnlyCommand(line)) return 'run'
+    if (permission === 'plan') return 'refuse'
+    const names = commandNames(line)
+    const ok = allowedCommands.get(thread)
+    return names.length && ok && names.every((n) => ok.has(n)) ? 'run' : 'ask'
+  }
+  if (!changes(name)) return 'run'
+  if (permission === 'plan') return 'refuse'
+  return FILE_WRITES.has(name) && permission === 'acceptEdits' ? 'run' : 'ask'
+}
+
+const setPermission = (thread: string, p: Permission) => database().prepare('UPDATE agent_threads SET permission = ? WHERE id = ?').run(p, thread)
+
+/** Hard work in a work folder takes many steps: a coding job gets more rounds than a question. */
+const FOLDER_ROUNDS = 60
 
 /** How far a turn may go while its todo list has open items. */
 const LONG_ROUNDS = 150
@@ -1247,7 +1332,7 @@ const modeLine = (mode: Mode) =>
     : 'Mode: Deep research. Research this thoroughly before you answer. Break the question into parts, search from several angles, read the most relevant primary sources with web_fetch rather than relying on snippets, compare what they say and note where they disagree. Then write a well-structured answer, with headings and lists where they help, that ends with the key sources.'
 
 /** AGENTS.md, then today's date, the mode, how to work, the project and the memories. */
-async function systemPrompt(user: User, mode: Mode, projectId: number | null = null, todos: Todo[] = []): Promise<string> {
+async function systemPrompt(user: User, mode: Mode, projectId: number | null = null, todos: Todo[] = [], folder = '', skills: Skill[] = []): Promise<string> {
   const all = listMemories(user)
   const name = user.name || user.login
   // {{owner}}: what older AGENTS.md files say, from before anyone could sign up.
@@ -1266,10 +1351,57 @@ async function systemPrompt(user: User, mode: Mode, projectId: number | null = n
       : '',
     mine.length ? `What you remember about ${name} (user memory; the [#id] is for update_memory):\n${memoryLines(mine)}` : `You do not remember anything about ${name} yet.`,
     project ? (theirs.length ? `What you remember about the project "${project.name}":\n${memoryLines(theirs)}` : `Nothing is remembered about the project "${project.name}" yet.`) : '',
+    folder,
+    skillLines(skills),
     todoLines(todos),
   ]
     .filter(Boolean)
     .join('\n\n')
+}
+
+/** The skills the model may start itself: names and descriptions (use_skill reads one). */
+function skillLines(skills: Skill[]): string {
+  const usable = skills.filter((s) => s.enabled && !s.userOnly)
+  if (!usable.length) return ''
+  return [
+    'Skills: instructions for particular kinds of tasks. When a task matches one, read it first with use_skill and follow it.',
+    ...usable.map((s) => `- ${s.name}: ${s.description}`),
+  ].join('\n')
+}
+
+/** Where a thread finds skills: its work folder, the user's skills folder, the built-in ones. */
+const skillPlaces = (user: User, workdir: Workdir | null): SkillPlaces => {
+  const settings = agentSettings(user)
+  return { user: seafileInfo(user) ? settings.skillsFolder : null, workdir: seafileInfo(user) ? workdir : null, off: settings.skillsOff }
+}
+
+/** A message that starts with /name, for a skill: the skill's instructions go with it. */
+async function skillInvocation(user: User, places: SkillPlaces, text: string): Promise<Attachment | null> {
+  const m = /^\/([\w.-]+)(?:\s+([\s\S]*))?$/.exec(text.trim())
+  if (!m) return null
+  const s = await findSkill(user, places, m[1]).catch(() => null)
+  if (!s) return null
+  const intro = `The user started the skill "${s.name}"${m[2] ? ` with: ${m[2].trim()}` : ''}. Follow its instructions${s.folder ? ` (its folder is ${s.label}; read_skill_file reads the files in it)` : ''}:`
+  const body = `${intro}\n\n${s.body}`
+  return { name: `${s.name} skill`, source: 'skill', kind: 'text', mime: 'text/markdown', size: body.length, text: body }
+}
+
+/** The work folder, the permission mode and the terminal, as the model reads them. */
+function folderLines(t: Thread, terminal: boolean, instructions: { name: string; text: string } | null): string {
+  const lines: string[] = []
+  if (t.workdir)
+    lines.push(
+      `Work folder: ${t.workdir.label}. You work in it like a coding agent in a checkout: list_dir, glob, grep and read_file to look around, edit_file (small, exact replacements) and write_file (new files) to change things, make_dir, move_path and delete_path for the rest. Paths are relative to the work folder. Read a file before you edit it, change only what the task needs, and keep the user's style.`,
+    )
+  if (terminal)
+    lines.push(
+      "The terminal tool runs a command line in msh, the MvL OS shell (POSIX sh with if/for/while/case, functions, $(…), pipes and redirects), in the user's own terminal, in the work folder. Its commands are MvL OS's, not Linux's: there is no git, python, node or package manager; man <command> and help tell what there is, and man msh the shell's syntax. Prefer the file tools for reading and changing files.",
+    )
+  if (t.permission === 'plan') lines.push('Plan mode is on: you can only read. Look around until you understand the task, then call exit_plan_mode with a clear plan and wait for the user. Do not try to change anything before that.')
+  else if (t.permission === 'acceptEdits' && t.workdir) lines.push('Edits are allowed: file changes in the work folder go through without asking; deleting, and terminal commands that change something, still ask.')
+  else if (t.workdir) lines.push('Each change (a file edit, a write, a command that changes something) waits for the user to allow it, and they may say why not: then do what they ask instead.')
+  if (instructions) lines.push(`The work folder's ${instructions.name}, the project's own instructions (follow them):\n<instructions>\n${instructions.text}\n</instructions>`)
+  return lines.join('\n\n')
 }
 
 /** The thread as Ollama reads it. Older tool output is shortened; this turn's stays whole. */
@@ -1369,23 +1501,48 @@ const pushLine = (s: string) =>
     ?.slice(0, 180) ?? 'The answer is in.'
 
 /** Waits for the user to allow or decline a change (declined when stopped or after 15 minutes). */
-function askOwner(thread: string, messageId: number, index: number, signal: AbortSignal, send: (e: TurnEvent) => void): Promise<boolean> {
+function askOwner(thread: string, messageId: number, index: number, call: ToolCall, signal: AbortSignal, send: (e: TurnEvent) => void): Promise<Verdict> {
   return new Promise((resolve) => {
     const callId = randomUUID()
-    const done = (allow: boolean) => {
+    const done = (v: Verdict) => {
       clearTimeout(timer)
       signal.removeEventListener('abort', onAbort)
       const left = (pending.get(thread) ?? []).filter((p) => p.callId !== callId)
       if (left.length) pending.set(thread, left)
       else pending.delete(thread)
-      send({ type: 'approved', callId, allow })
-      resolve(allow)
+      send({ type: 'approved', callId, allow: v.allow })
+      resolve(v)
     }
-    const onAbort = () => done(false)
-    const timer = setTimeout(() => done(false), APPROVAL_WAIT)
+    const onAbort = () => done({ allow: false })
+    const timer = setTimeout(() => done({ allow: false }), APPROVAL_WAIT)
     signal.addEventListener('abort', onAbort)
-    pending.set(thread, [...(pending.get(thread) ?? []), { callId, messageId, index, kind: 'approval', resolve: (a) => done(a === true) }])
-    send({ type: 'approval', callId, messageId, index })
+    pending.set(thread, [...(pending.get(thread) ?? []), { callId, messageId, index, kind: 'approval', call, resolve: (a) => done(a && typeof a === 'object' ? (a as Verdict) : { allow: a === true }) }])
+    send({ type: 'approval', callId, messageId, index, call })
+  })
+}
+
+/**
+ * Hands a terminal tool call to the terminal running the agents command and waits for what it
+ * printed (null when no terminal is attached, the turn stops, or after three minutes).
+ */
+function askClient(thread: string, messageId: number, index: number, call: ToolCall, signal: AbortSignal, send: (e: TurnEvent) => void): Promise<{ output: string; status: number } | null> {
+  if (!terminals.get(thread)) return Promise.resolve(null)
+  return new Promise((resolve) => {
+    const callId = randomUUID()
+    const done = (r: { output: string; status: number } | null) => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', onAbort)
+      const left = (pending.get(thread) ?? []).filter((p) => p.callId !== callId)
+      if (left.length) pending.set(thread, left)
+      else pending.delete(thread)
+      send({ type: 'clientDone', callId })
+      resolve(r)
+    }
+    const onAbort = () => done(null)
+    const timer = setTimeout(() => done(null), 3 * 60_000)
+    signal.addEventListener('abort', onAbort)
+    pending.set(thread, [...(pending.get(thread) ?? []), { callId, messageId, index, kind: 'client', call, resolve: (a) => done((a as { output: string; status: number } | null) ?? null) }])
+    send({ type: 'client', callId, messageId, index, call })
   })
 }
 
@@ -1411,7 +1568,10 @@ function askForm(thread: string, messageId: number, index: number, form: Form, s
 }
 
 export type TurnEvent =
-  | { type: 'approval'; callId: string; messageId: number; index: number }
+  | { type: 'approval'; callId: string; messageId: number; index: number; call?: ToolCall }
+  /** A terminal tool call for the terminal to run (then clientDone, when it is answered or given up) */
+  | { type: 'client'; callId: string; messageId: number; index: number; call: ToolCall }
+  | { type: 'clientDone'; callId: string }
   | { type: 'approved'; callId: string; allow: boolean }
   | { type: 'question'; callId: string; messageId: number; index: number; form: Form }
   | { type: 'answered'; callId: string }
@@ -1427,7 +1587,7 @@ export type TurnEvent =
  * Adds the user's message and answers it, streaming JSON lines (TurnEvent) to the response. The
  * turn stops when the window goes away or Stop is pressed; what was finished by then stays saved.
  */
-export async function runTurn(res: ServerResponse, user: User, id: string, body: { text?: string; attachments?: unknown }) {
+export async function runTurn(res: ServerResponse, user: User, id: string, body: { text?: string; attachments?: unknown; client?: { terminal?: unknown } }) {
   const row = ownThread(user, id)
   const text = String(body.text ?? '').trim()
   const files = checkAttachments(body.attachments)
@@ -1445,6 +1605,9 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
   running.set(row.id, ctl)
   runningFor.set(row.id, user.id)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  // Asked from the terminal's agents command: that terminal can run the terminal tool.
+  const fromTerminal = body.client?.terminal === true
+  if (fromTerminal) attachTerminal(row.id, res)
   // The turn goes on when the window closes (a long job can take a while); only Stop ends it, and
   // the window picks it up again from the saved messages.
   partial.set(row.id, { content: '', thinking: '' })
@@ -1469,7 +1632,9 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
   let outcome: 'answered' | 'failed' | null = null
 
   try {
-    send({ type: 'message', message: addMessage(row.id, { role: 'user', content: text }, files) })
+    // /name for a skill: its instructions go along as an attachment the window shows.
+    const skillFile = text.startsWith('/') ? await skillInvocation(user, skillPlaces(user, toThread(row).workdir), text) : null
+    send({ type: 'message', message: addMessage(row.id, { role: 'user', content: text }, skillFile ? [...files, skillFile] : files) })
     // A new thread gets its title from the title model, alongside the answer; the first line of
     // the question stands in if that fails.
     if (row.title === NEW_TITLE && !titling.has(row.id)) {
@@ -1489,8 +1654,17 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
     }
     send({ type: 'thread', thread: toThread(ownThread(user, row.id)) })
 
-    const tools = toolsFor(user, toThread(row).tools, row.project_id !== null)
-    const offered = new Set(tools.map((t) => t.function.name))
+    // The thread as it is each round: plan mode can end, and edits can be allowed, halfway.
+    const current = () => toThread(ownThread(user, row.id))
+    const toolsNow = (t: Thread) => toolsFor(user, t.tools, t.projectId !== null, { workdir: !!t.workdir, terminal: fromTerminal || terminals.has(row.id), permission: t.permission })
+    const first = current()
+    // The work folder's AGENTS.md, unless it is ~/AGENTS.md, which is the prompt already.
+    const promptFile = agentSettings(user).promptFile
+    const instructions = first.workdir
+      ? await projectInstructions(user, first.workdir, ctl.signal)
+          .then((i) => (i && promptFile?.repo === first.workdir!.repo && promptFile.path === `${first.workdir!.path === '/' ? '' : first.workdir!.path}/${i.name}` ? null : i))
+          .catch(() => null)
+      : null
     const started = Date.now()
     // Thinking is on in both modes (the window shows it, folded). gpt-oss takes a level for it.
     const think = !info?.thinking ? undefined : row.model.startsWith('gpt-oss') ? MODES[mode].think : true
@@ -1498,15 +1672,18 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
     // asked once to update or clear it when they finish a turn with items still open.
     let todoRound = -1
     let wrapUp = false
-    const todoTool = tools.filter((t) => t.function.name === 'update_todos')
     for (let round = 0; ; round++) {
-      // The mode's rounds, or many more while a todo list has open items (within an hour).
+      const now = current()
+      const tools = toolsNow(now)
+      const offered = new Set(tools.map((t) => t.function.name))
+      const todoTool = tools.filter((t) => t.function.name === 'update_todos')
+      // The mode's rounds (more in a work folder), or many more while a todo list has open items (within an hour).
       const open = openTodos(row.id)
-      const budget = open ? LONG_ROUNDS : MODES[mode].rounds
+      const budget = open ? LONG_ROUNDS : now.workdir ? Math.max(FOLDER_ROUNDS, MODES[mode].rounds) : MODES[mode].rounds
       const last = round >= budget || Date.now() - started > LONG_TIME // out of rounds: answer with what was found
       const stale = open > 0 && !last && !wrapUp && round - todoRound > 3
       const system =
-        (await systemPrompt(user, mode, row.project_id, todosOf(row.id))) +
+        (await systemPrompt(user, mode, row.project_id, todosOf(row.id), folderLines(now, offered.has('terminal'), instructions), offered.has('use_skill') ? await listSkills(user, skillPlaces(user, now.workdir)).catch(() => []) : [])) +
         (last ? '\n\nYou have used all your tool calls for this turn: answer now with what you have, and say what is left to do.' : '') +
         (stale ? `\n\nReminder: your todo list has ${open} open ${open === 1 ? 'item' : 'items'} and you have not updated it for a while. Update it with update_todos as you go, or clear it if it no longer fits.` : '') +
         (wrapUp ? `\n\nYou have answered, but your todo list still has ${open} open ${open === 1 ? 'item' : 'items'}. Call update_todos now: mark what is finished as done, or send an empty list to clear it if the job is over or the user has moved on. Do not repeat your answer.` : '')
@@ -1533,9 +1710,58 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
         calls.map(async (c, index) => {
           // Only what this thread offered: a model can still name a tool that is switched off.
           if (!offered.has(c.name)) return JSON.stringify({ error: `${c.name} is switched off for this thread` })
+          const decision = decide(row.id, current().permission, c)
+          if (decision === 'refuse')
+            return JSON.stringify({ error: c.name === 'exit_plan_mode' ? 'You are not in plan mode.' : 'Plan mode: you can only look around for now. When you know what to change, call exit_plan_mode with your plan.' })
           const unknownPage = c.name === 'web_fetch' && fetchNeedsOwner(user, row.id, c.arguments?.url)
-          if ((NEEDS_APPROVAL.has(c.name) || unknownPage) && !(await askOwner(row.id, assistant, index, ctl.signal, send)))
-            return JSON.stringify({ error: unknownPage ? "The user did not allow reading that address. Read addresses from search results, pages you read or the user's messages, exactly as given." : 'The user declined this change.' })
+          if (decision === 'ask' || unknownPage) {
+            const v = await askOwner(row.id, assistant, index, c, ctl.signal, send)
+            if (c.name === 'exit_plan_mode') {
+              if (!v.allow) return JSON.stringify({ approved: false, feedback: v.feedback ?? 'The user wants changes to the plan: ask what to change.' })
+              const next: Permission = v.mode === 'acceptEdits' ? 'acceptEdits' : 'default'
+              setPermission(row.id, next)
+              send({ type: 'thread', thread: current() })
+              return JSON.stringify({ approved: true, permission: next, note: next === 'acceptEdits' ? 'Go ahead: file edits in the work folder no longer ask.' : 'Go ahead: each change still asks the user.' })
+            }
+            if (!v.allow)
+              return JSON.stringify({ error: unknownPage ? "The user did not allow reading that address. Read addresses from search results, pages you read or the user's messages, exactly as given." : v.feedback ? `The user declined this and said: ${v.feedback}` : 'The user declined this change. Ask what they want instead, or try another way.' })
+            if (v.always === 'edits' && FILE_WRITES.has(c.name)) {
+              setPermission(row.id, 'acceptEdits')
+              send({ type: 'thread', thread: current() })
+            }
+            if (v.always === 'command' && c.name === 'terminal') {
+              const set = allowedCommands.get(row.id) ?? new Set<string>()
+              for (const n of commandNames(argString(c.arguments ?? {}, 'command'))) set.add(n)
+              allowedCommands.set(row.id, set)
+            }
+          }
+          if (c.name === 'terminal') {
+            const r = await askClient(row.id, assistant, index, c, ctl.signal, send)
+            if (!r) return JSON.stringify({ error: 'No terminal ran this: the terminal tool works while the agents command runs in the MvL OS terminal.' })
+            return JSON.stringify({ exit_code: r.status, output: clip(r.output, MODES[mode].pageChars * 2) })
+          }
+          if (c.name === 'use_skill' || c.name === 'read_skill_file') {
+            try {
+              const s = await findSkill(user, skillPlaces(user, current().workdir), argString(c.arguments ?? {}, 'name'))
+              if (!s) return JSON.stringify({ error: `There is no skill called ${argString(c.arguments ?? {}, 'name')}` })
+              if (c.name === 'read_skill_file') return clip(await readSkillFile(user, s, argString(c.arguments ?? {}, 'path')), MODES[mode].pageChars * 4)
+              const files = await skillFiles(user, s)
+              return `# Skill: ${s.name}\nFolder: ${s.label}${files.length ? `\nFiles: ${files.join(', ')}` : ''}\n\n${clip(s.body, MODES[mode].pageChars * 4)}`
+            } catch (e) {
+              if (ctl.signal.aborted) throw e
+              return JSON.stringify({ error: (e as Error).message })
+            }
+          }
+          if (FILE_TOOL_SET.has(c.name)) {
+            const w = current().workdir
+            if (!w) return JSON.stringify({ error: 'This thread has no work folder' })
+            try {
+              return await runFileTool(user, w, c.name, c.arguments ?? {}, AbortSignal.any([ctl.signal, AbortSignal.timeout(90_000)]), MODES[mode].pageChars)
+            } catch (e) {
+              if (ctl.signal.aborted) throw e
+              return JSON.stringify({ error: e instanceof HttpError && e.status === 423 ? 'That library is encrypted and locked: the user can unlock it in Files' : (e as Error).message })
+            }
+          }
           if (c.name === 'ask_user') {
             let form: Form
             try {
@@ -1584,8 +1810,9 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
  * thread as it is now, the reply being written so far, then the turn's events as they happen,
  * until it ends. A thread that is not answering gets its snapshot and the end straight away.
  */
-export function followThread(res: ServerResponse, user: User, id: string) {
+export function followThread(res: ServerResponse, user: User, id: string, terminal = false) {
   const row = ownThread(user, id)
+  if (terminal) attachTerminal(row.id, res)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
   const send = (e: TurnEvent) => void (!res.writableEnded && !res.destroyed && res.write(`${JSON.stringify(e)}\n`))
   const { thread, messages, pending: waiting } = getThread(user, row.id)
@@ -1600,3 +1827,31 @@ export function followThread(res: ServerResponse, user: User, id: string) {
     if (!set.size && followers.get(row.id) === set) followers.delete(row.id)
   })
 }
+
+// --- skills -----------------------------------------------------------------------------------
+
+/** Where to look, from a request: a thread's work folder, or a folder the terminal is in. */
+function placesFrom(user: User, q: URLSearchParams): SkillPlaces {
+  const thread = q.get('thread')
+  const workdir = thread ? toThread(ownThread(user, thread)).workdir : q.get('repo') ? workdirOf({ repo: q.get('repo'), path: q.get('path'), label: q.get('label') ?? undefined }) : null
+  return { ...skillPlaces(user, workdir), fresh: q.has('fresh') }
+}
+
+export const skillsList = (user: User, q: URLSearchParams) => listSkills(user, placesFrom(user, q))
+
+export async function skillInfo(user: User, name: string, q: URLSearchParams) {
+  const s = await findSkill(user, placesFrom(user, q), name)
+  if (!s) throw new HttpError(404, `No skill called ${name}`)
+  return { ...s, files: await skillFiles(user, s) }
+}
+
+/** Where an install or removal goes: the folder asked for, else the user's skills folder. */
+function skillTarget(user: User, v: unknown): Folder {
+  if (!seafileInfo(user)) throw new HttpError(409, 'Skills live in Seafile: link it in Settings first')
+  const target = folderOf(v) ?? agentSettings(user).skillsFolder
+  if (!target) throw new HttpError(409, 'There is no skills folder: put your home folder on Seafile (Settings → Seafile), or install with --project in a Seafile folder')
+  return target
+}
+
+export const skillsInstall = (user: User, body: { folder?: unknown; source?: unknown; skill?: unknown; force?: unknown }) => installSkills(user, skillTarget(user, body.folder), body)
+export const skillsRemove = (user: User, body: { folder?: unknown; name?: unknown }) => removeSkill(user, skillTarget(user, body.folder), String(body.name ?? ''))
