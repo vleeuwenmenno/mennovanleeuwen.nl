@@ -3,6 +3,7 @@ import { CalendarApp } from '../apps/calendar/Calendar'
 import { Contact } from '../apps/Contact'
 import { Cv } from '../apps/Cv'
 import { Games } from '../apps/games/Games'
+import { gameInfo } from '../apps/games/catalog'
 import { KeysNote } from '../apps/KeysNote'
 import { Notebook } from '../apps/Notebook'
 import { Notes } from '../apps/Notes'
@@ -35,6 +36,8 @@ export type AppMeta = {
   chrome?: 'note'
   /** The window's own title, when it shows one file (its name) */
   titleOf?: (w: WinState) => string
+  /** A size for a window opened with these props, when it differs from `size` (a game's window) */
+  sizeOf?: (props: WinState['props']) => [number, number] | undefined
   render: (w: WinState) => ReactNode
 }
 
@@ -58,7 +61,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   recents: { title: 'Activity', dock: 'Activity', blurb: 'Live activity and contribution graph', size: [780, 680], render: () => <Recents /> },
   cv: { title: 'cv.md — Viewer', dock: 'CV', blurb: 'The printable version of me', size: [760, 680], render: () => <Cv /> },
   contact: { title: 'New message', dock: 'Contact', blurb: 'Get in touch', size: [560, 500], render: () => <Contact /> },
-  games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, Pool, Gladiator, Empires At War, Breakout', size: [720, 640], render: (w) => <Games win={w} /> },
+  games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, Pool, Gladiator, Empires At War, Breakout', size: [720, 640], titleOf: (w) => gameInfo(w.props.game)?.name ?? 'Games', sizeOf: (p) => gameInfo(p.game)?.size, render: (w) => <Games win={w} /> },
   calendar: { title: 'Calendar', dock: 'Calendar', blurb: 'Your Google and CalDAV calendars: plan, move and invite', size: [1000, 660], render: (w) => <CalendarApp win={w} /> },
   agents: { title: 'Agents', dock: 'Agents', blurb: 'Research assistant: quick answers or deep research, with memory', size: [920, 640], render: (w) => <Agents win={w} /> },
   notebook: { title: 'Notebook', dock: 'Notebook', blurb: 'Your notes, in Markdown, on any device', size: [860, 560], render: (w) => <Notebook win={w} /> },

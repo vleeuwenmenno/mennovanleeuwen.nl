@@ -1,9 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useState, type ComponentType } from 'react'
-import type { WinState } from '../../os/wm'
+import { useWM, type WinState } from '../../os/wm'
 import { Breakout } from './Breakout'
 import { GAME_CATALOG } from './catalog'
 import { bestGladiatorLevel } from './gladiator/saves'
 import { highScores } from './shared'
+import { holdSession, newSession } from './session'
 import { Minecraft } from './Minecraft'
 import { Minesweeper } from './Minesweeper'
 import { PacMan } from './PacMan'
@@ -74,51 +75,67 @@ const FullscreenIcon = ({ on }: { on: boolean }) => (
   </svg>
 )
 
+/**
+ * The Games app: the arcade (a window without props.game), or one game in a window of its own
+ * (props.game, titled with the game's name). Picking a game in the arcade opens its window, or
+ * brings it forward when it's already open: one window per game, since two copies of a game would
+ * share its storage.
+ */
 export function Games({ win }: { win: WinState }) {
-  const [game, setGame] = useState<string | undefined>(win.props.game)
-  useEffect(() => setGame(win.props.game), [win.props])
-  const current = GAMES.find((g) => g.id === game)
+  const current = GAMES.find((g) => g.id === win.props.game)
+  return current ? <GameWindow win={win} game={current} /> : <Arcade />
+}
+
+function GameWindow({ win, game }: { win: WinState; game: (typeof GAMES)[number] }) {
+  const wm = useWM()
+  const session = win.props.session
+  // A game window without a session (opened just now, or saved before windows had them) gets one
+  // before the game starts, so what the game keeps is tied to this window from the first frame.
+  useEffect(() => {
+    if (!session) wm.setProps(win.pid, { session: newSession() })
+  }, [session, wm, win.pid])
+  // Closing the window ends the game: what it kept to carry on after a reload goes with it.
+  useEffect(() => (session ? holdSession(session) : undefined), [session])
   const full = useGameFullscreen()
   const { exit, enter } = full
-  // Leaving a game (or closing the window) also leaves fullscreen.
-  useEffect(() => exit, [game, exit])
+  // Closing the window also leaves fullscreen.
+  useEffect(() => exit, [exit])
   // On a phone, some games open straight into fullscreen; the button still brings the window back.
   useEffect(() => {
-    if (game && FULL_ON_PHONES.has(game) && isPhone()) enter()
-  }, [game, enter])
+    if (FULL_ON_PHONES.has(game.id) && isPhone()) enter()
+  }, [game.id, enter])
 
-  if (current) {
-    const Game = current.component
-    return (
-      <div className={`games-play ${full.on ? 'is-page-full' : ''}`}>
-        <div className="games-top">
-          <button className="back" onClick={() => setGame(undefined)}>
-            ← All games
-          </button>
-          <span className="games-title">
-            {current.glyph} {current.name}
-          </span>
-          <button className="games-full" onClick={full.toggle} title={full.on ? 'Back to the window (Esc)' : 'Fill the screen with the game'} aria-pressed={full.on}>
-            <FullscreenIcon on={full.on} />
-            <span>{full.on ? 'Exit fullscreen' : 'Fullscreen'}</span>
-          </button>
-        </div>
-        <Suspense fallback={<div className="game"><p className="muted">Loading…</p></div>}>
-          <Game key={current.id} win={win} />
-        </Suspense>
+  if (!session) return null
+  const Game = game.component
+  return (
+    <div className={`games-play ${full.on ? 'is-page-full' : ''}`}>
+      <div className="games-top">
+        <span className="games-title">
+          {game.glyph} {game.name}
+        </span>
+        <button className="games-full" onClick={full.toggle} title={full.on ? 'Back to the window (Esc)' : 'Fill the screen with the game'} aria-pressed={full.on}>
+          <FullscreenIcon on={full.on} />
+          <span>{full.on ? 'Exit fullscreen' : 'Fullscreen'}</span>
+        </button>
       </div>
-    )
-  }
+      <Suspense fallback={<div className="game"><p className="muted">Loading…</p></div>}>
+        <Game key={session} win={win} />
+      </Suspense>
+    </div>
+  )
+}
 
+function Arcade() {
+  const wm = useWM()
   return (
     <div className="games">
       <header className="games-head">
         <h2>Arcade</h2>
-        <p className="muted">Small games, written for this site. High scores stay in your browser.</p>
+        <p className="muted">Small games, written for this site. Each opens in its own window; closing it ends the game. High scores stay in your browser.</p>
       </header>
       <div className="games-grid">
         {GAMES.map((g) => (
-          <button key={g.id} className="game-card" style={{ ['--p' as string]: g.color }} onClick={() => setGame(g.id)}>
+          <button key={g.id} className="game-card" style={{ ['--p' as string]: g.color }} onClick={() => wm.open('games', { game: g.id })}>
             <span className="game-card-art">{g.glyph}</span>
             <strong>{g.name}</strong>
             <span className="muted">{g.blurb}</span>

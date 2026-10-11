@@ -8,12 +8,13 @@ import { LongPress, TouchBar, WheelHost, getTouchMods, isTouch, setTouchMod, shi
 import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
 import { Multiplayer } from './empires/Multiplayer'
-import { Net, mpActive, type NetView } from './empires/net'
+import { Net, type NetView } from './empires/net'
 import { cmd as makeCmd, runCmd, thinPath, type CmdArgs, type CmdName, type CmdResult } from './empires/commands'
 import { matchBrains, matchMap, matchWorld, stepTurn, type MatchInfo } from './empires/match'
 import { HASH_EVERY } from './empires/protocol'
-import { loadSkirmish, restoreBrain, restoreWorld, saveSkirmish, snapBrain, snapshotWorld, type BattleSnap } from './empires/snapshot'
-import { listSaves, loadSave, resumeGalaxy, type Galaxy } from './empires/galaxy'
+import { restoreBrain, restoreWorld, snapBrain, snapshotWorld, type BattleSnap } from './empires/snapshot'
+import { listSaves, loadSave, type Galaxy } from './empires/galaxy'
+import { loadSkirmish, mpActive, resumeGalaxy, saveSkirmish } from './empires/keep'
 import { actionFor, getSettings, keyName, setSettings, useSettings } from './empires/settings'
 import { HP_NAME, hpName } from './empires/icons'
 import { Renderer, relColor, type Camera, type View } from './empires/render'
@@ -61,11 +62,14 @@ const noMenu = (e: React.MouseEvent) => {
 
 export function EmpiresAtWar({ win }: { win: WinState }) {
   useDisplayFont()
+  // What this window keeps to carry on after a reload is stored under its session, and goes when
+  // the window is closed (../session.ts): a closed window opens on the main menu next time.
+  const session = win.props.session
   // Galactic conquest: the campaign lives here, so it outlasts the battles fought in it. A campaign
-  // that was open when the page went away (a reload, a closed tab) opens again straight away.
-  const [galaxy, setGalaxy] = useState<Galaxy | null>(() => resumeGalaxy())
-  // A skirmish that was being fought when the page went away is fought on, from where it was.
-  const [skirmish, setSkirmish] = useState(() => (galaxy ? null : loadSkirmish<Setup>()))
+  // that was open in this window before a reload opens again straight away.
+  const [galaxy, setGalaxy] = useState<Galaxy | null>(() => resumeGalaxy(session))
+  // So does a skirmish that was being fought, from where it was.
+  const [skirmish, setSkirmish] = useState(() => (galaxy ? null : loadSkirmish<Setup>(session)))
   const [screen, setScreen] = useState<'menu' | 'lobby' | 'battle' | 'conquest' | 'fleetBattle' | 'multiplayer'>(() => (galaxy ? 'conquest' : skirmish ? 'battle' : 'menu'))
   const [fight, setFight] = useState<ConquestBattle | null>(null)
   // Where the main menu opens (back from the campaign's load or new-game screen: its own sub-menu),
@@ -82,11 +86,20 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
   const [net, setNet] = useState<Net | null>(null)
   const netRef = useRef(net)
   netRef.current = net
-  useEffect(() => () => netRef.current?.close(), [])
+  // Closing the window leaves the lobby or battle like quitting does (the AI takes over the seat),
+  // rather than holding it for a reconnect that isn't coming. A reload never gets here, so the
+  // server still lets that come back.
+  useEffect(
+    () => () => {
+      netRef.current?.leave()
+      netRef.current?.close()
+    },
+    [],
+  )
   const mp = useSyncExternalStore(net ? net.subscribe : noSubscribe, net ? net.getView : noView)
   // A reload in the middle of multiplayer goes back to it: the server still has us for a while.
   useEffect(() => {
-    if (!mpActive.get()) return
+    if (!mpActive.get(session)) return
     const n = new Net()
     setNet(n)
     setScreen('multiplayer')
@@ -98,7 +111,7 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
     return (
       <MainMenu sound={sound.current} victories={best ?? 0} onPlay={() => setScreen('lobby')} initial={menuAt}
         onMultiplayer={() => {
-          mpActive.set(true)
+          mpActive.set(session, true)
           setNet(new Net())
           setScreen('multiplayer')
         }}
@@ -136,7 +149,7 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
         net={net}
         sound={sound.current}
         onBack={() => {
-          mpActive.set(false)
+          mpActive.set(session, false)
           net.close()
           setNet(null)
           setMenuAt('multi')
@@ -149,6 +162,7 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
       <Conquest
         g={galaxy}
         setG={setGalaxy}
+        session={session}
         sound={sound.current}
         start={conquestAt}
         onExit={() => {
@@ -191,14 +205,14 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
       win={win}
       setup={setup}
       resume={skirmish?.snap}
-      onSnap={(snap) => saveSkirmish(snap ? { setup, snap } : null)}
+      onSnap={(snap) => saveSkirmish(session, snap ? { setup, snap } : null)}
       sound={sound.current}
       onExit={() => {
         setSkirmish(null)
         setScreen('lobby')
       }}
       onAgain={() => {
-        saveSkirmish(null)
+        saveSkirmish(session, null)
         setSkirmish(null)
         setRound((r) => r + 1)
       }}
@@ -245,7 +259,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   online?: { net: Net; info: MatchInfo; me: number }
   /** A battle saved mid-fight, to carry on from. */
   resume?: BattleSnap | null
-  /** Keeps the battle saved as it goes (null once it's over), so a reload can resume it. */
+  /** Keeps the battle as it goes (null once it's over), so a reload of its window can resume it. */
   onSnap?: (s: BattleSnap | null) => void
   sound: EmpiresSound
   onExit: () => void

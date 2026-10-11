@@ -4,13 +4,14 @@ import { DIFFICULTY, type Difficulty } from './ai'
 import { FACTIONS, UNIT, buildable, isShip, type FactionId, type UnitType } from './data'
 import {
   BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GIANTS, blockedBy, contested, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
-  autoResolve, buildAt, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, setResume, newGalaxy, planetIncome, saveGalaxy,
+  autoResolve, buildAt, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
   settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw,
   type BattleResult, type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetKind, type Side, type StarSystem,
 } from './galaxy'
 import { BuildQueue, Floating, Frame, Icon, Pips, ShipArt, ShipCard, Tips, unitTip, type IconName } from './Hud'
 import { galaxyLayout } from './layout'
-import { loadCampaignBattle, saveCampaignBattle, type BattleSnap } from './snapshot'
+import type { BattleSnap } from './snapshot'
+import { loadCampaignBattle, saveCampaignBattle, setResume } from './keep'
 import { generateMap, DEFAULT_RULES, MAX_SEED, type MapDef } from './maps'
 import { LayoutSection, Modal, SettingsPanel } from './Menus'
 import { actionFor, getSettings, keyName, useSettings, type Action } from './settings'
@@ -35,7 +36,7 @@ export type ConquestBattle = {
   onDone: (w: World, left: boolean) => void
   /** Saved mid-fight: the battle carries on from here. */
   resume?: BattleSnap | null
-  /** Keeps it saved as it goes, with the campaign. */
+  /** Keeps it as it goes, for a reload of the window. */
   onSnap?: (s: BattleSnap | null) => void
 }
 
@@ -74,9 +75,11 @@ function grouped(ships: string[]): [string, number][] {
 
 /** The campaign: `g` is held by the caller, so it outlasts the battle view. Without one, the
  * Galactic conquest menu: continue the latest save, load one, or start a new campaign. */
-export function Conquest({ g, setG, sound, onExit, onBattle, start = 'new' }: {
+export function Conquest({ g, setG, session, sound, onExit, onBattle, start = 'new' }: {
   g: Galaxy | null
   setG: (g: Galaxy | null) => void
+  /** The window's session (../session.ts): what a reload of the window comes back to. */
+  session: string | undefined
   sound: EmpiresSound
   onExit: () => void
   onBattle: (b: ConquestBattle) => void
@@ -91,12 +94,13 @@ export function Conquest({ g, setG, sound, onExit, onBattle, start = 'new' }: {
     setOpened((n) => n + 1)
     setG(next)
   }
-  // While a campaign is open, a reload of the page comes straight back to it.
+  // While a campaign is open, a reload of the page comes straight back to it (closing the window
+  // forgets that; the campaign stays in its save slot).
   useEffect(() => {
-    if (g) setResume(g.save.id)
-  }, [g])
+    if (g) setResume(session, g.save.id)
+  }, [g, session])
   const leave = () => {
-    setResume(null)
+    setResume(session, null)
     onExit()
   }
   if (!g) {
@@ -115,19 +119,20 @@ export function Conquest({ g, setG, sound, onExit, onBattle, start = 'new' }: {
     <GalaxyMap
       key={opened}
       g={g}
+      session={session}
       sound={sound}
       onExit={() => {
         saveGalaxy(g)
         leave()
       }}
       onAbandon={() => {
-        saveCampaignBattle(g.save.id, null)
+        saveCampaignBattle(session, g.save.id, null)
         deleteSave(g.save.id)
         setG(null)
         leave()
       }}
       onEnd={() => {
-        saveCampaignBattle(g.save.id, null)
+        saveCampaignBattle(session, g.save.id, null)
         deleteSave(g.save.id)
         setG(null)
         leave()
@@ -666,7 +671,7 @@ function WeekClock({ g }: { g: Galaxy }) {
   )
 }
 
-function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g: Galaxy; sound: EmpiresSound; onExit: () => void; onAbandon: () => void; onEnd: () => void; onLoad: (g: Galaxy) => void; onBattle: (b: ConquestBattle) => void }) {
+function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g: Galaxy; session: string | undefined; sound: EmpiresSound; onExit: () => void; onAbandon: () => void; onEnd: () => void; onLoad: (g: Galaxy) => void; onBattle: (b: ConquestBattle) => void }) {
   const [, setFrame] = useState(0)
   const [sel, setSel] = useState<Sel>(null)
   const [take, setTake] = useState<Record<string, number>>({})
@@ -1171,13 +1176,13 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
 
   // The battle waiting for us.
   const clash = g.pending >= 0 ? clashAt(g, g.pending) : null
-  // A battle that was being fought when the page went away: straight back into it.
+  // A battle that was being fought in this window before a reload: straight back into it.
   useEffect(() => {
-    const saved = loadCampaignBattle(g.save.id)
+    const saved = loadCampaignBattle(session, g.save.id)
     if (!saved) return
     const c = g.pending === saved.planet ? clashAt(g, g.pending) : null
     if (c) fight(c, saved.snap)
-    else saveCampaignBattle(g.save.id, null)
+    else saveCampaignBattle(session, g.save.id, null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => {
@@ -1211,10 +1216,10 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
       ai: g.sides[enemy].ai ?? 'medium',
       names: [factionName(g, c.holder), factionName(g, c.attacker)],
       resume,
-      // Saved with the campaign as it's fought, so a reload carries on with it.
-      onSnap: (snap) => saveCampaignBattle(g.save.id, snap ? { planet: c.planet, snap } : null),
+      // Kept for the window as it's fought, so a reload carries on with it.
+      onSnap: (snap) => saveCampaignBattle(session, g.save.id, snap ? { planet: c.planet, snap } : null),
       onDone: (w, left) => {
-        saveCampaignBattle(g.save.id, null)
+        saveCampaignBattle(session, g.save.id, null)
         const res = resultOf(w, c, meSide, left)
         settlePending(g, res)
         saveGalaxy(g)

@@ -520,6 +520,25 @@ dragging, the menus and an *Add widget* entry everywhere. Per-widget settings go
 [`config.ts`](src/widgets/config.ts) (`useWidgetConfig` / `setWidgetConfig`), which syncs like
 notes; where a widget sits is part of the synced window layout.
 
+## Games
+
+The Games app ([`src/apps/games/Games.tsx`](src/apps/games/Games.tsx)) is the arcade: picking a game
+opens it in a window of its own, titled with the game's name and grouped under Games in the dock.
+Each game has one window; picking it again (in the arcade, Spotlight, Launchpad, or `games tetris`
+and `./tetris.game` in the terminal) brings that window forward.
+
+A game in progress belongs to its window. Closing the window ends the game, and opening it again
+starts at its main menu. A page reload keeps the window, so the game carries on where it was:
+every game window has a session id (saved with the window layout), and what a game keeps to
+resume (Empires At War's battle snapshots, the campaign it had open, being in multiplayer) is
+stored under it ([`session.ts`](src/apps/games/session.ts)) and removed when the window closes. At
+startup, anything kept for a window that no longer exists is removed too.
+
+Save games stay until you delete them: Empires At War's Galactic conquest campaigns (they save into
+their slot as you play; load them from Galactic conquest → Load game), Gladiator's careers, high
+scores and settings. A campaign battle cut off by closing the window waits in the loaded campaign,
+to be fought again from the start.
+
 ## Empires At War on touch screens
 
 Phones and tablets play the whole game by touch ([`src/apps/games/empires/Touch.tsx`](src/apps/games/empires/Touch.tsx)),
@@ -556,10 +575,10 @@ sender's own seat ([`commands.ts`](src/apps/games/empires/commands.ts)), so a ta
 order other players' ships, play faster or claim a win. It also runs its own copy of every battle:
 players send a fingerprint of theirs every second, and one that drifted gets the server's copy.
 The same copy brings a player back after a reload or a dropped connection (within 30 seconds); a
-player who leaves hands their fleet to an AI. In battle, Tab (or the top bar's players button,
-which shows your ping) opens the player list: fleet, kills, losses, credits earned and score, and
-online each player's ping and whether they're still there; a toast says when an ally or enemy
-loses the connection, comes back, or gives up. What a client can still do is read past the fog of
+player who leaves (or closes the game's window) hands their fleet to an AI. In battle, Tab (or the
+top bar's players button, which shows your ping) opens the player list: fleet, kills, losses,
+credits earned and score, and online each player's ping and whether they're still there; a toast
+says when an ally or enemy loses the connection, comes back, or gives up. What a client can still do is read past the fog of
 war, since it holds the whole battle.
 
 The sim is bit-for-bit the same in every browser: it uses its own trigonometry

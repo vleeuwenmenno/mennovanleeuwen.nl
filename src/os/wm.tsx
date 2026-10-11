@@ -72,6 +72,13 @@ export const SINGLE_INSTANCE = new Set<AppId>(['amp', 'notes', 'keys', 'trash', 
 /** Apps where opening always means a new one (New Document makes a new file each time); `create` says it is fresh. */
 export const ALWAYS_NEW = new Set<AppId>(['newdoc', 'newsheet', 'newslides'])
 
+/**
+ * Apps whose windows each show one thing, named by this prop: opening the app with it focuses the
+ * window already showing that thing, or opens another one (the arcade's games: one window per
+ * game). Windows without it (the arcade itself) are reused among themselves as usual.
+ */
+export const INSTANCE_PROP: Partial<Record<AppId, string>> = { games: 'game' }
+
 type Action =
   | { type: 'open'; app: AppId; geometry: Geometry; props?: WinState['props']; newInstance?: boolean }
   | { type: 'close'; pid: number }
@@ -181,20 +188,23 @@ function apply(state: State, action: Action): State {
     case 'restore':
       return restored(action.windows, state.windows)
     case 'open': {
-      // Reuse the app's frontmost window unless a new one was asked for.
-      const existing = action.newInstance && !SINGLE_INSTANCE.has(action.app)
+      // Reuse the app's frontmost window unless a new one was asked for. An app with an instance
+      // prop only reuses the window showing the same thing, and a thing never gets a second window.
+      const key = INSTANCE_PROP[action.app]
+      const thing = key ? action.props?.[key] : undefined
+      const existing = action.newInstance && !SINGLE_INSTANCE.has(action.app) && thing === undefined
         ? undefined
-        : state.windows.filter((w) => w.app === action.app).sort((a, b) => b.z - a.z)[0]
+        : state.windows.filter((w) => w.app === action.app && (!key || w.props[key] === thing)).sort((a, b) => b.z - a.z)[0]
       const z = state.topZ + 1
       if (existing) {
+        // That window keeps its own props (a game's session), with the new ones on top.
+        const props = !action.props ? existing.props : thing !== undefined ? { ...existing.props, ...action.props } : { ...action.props }
         return {
           ...state,
           touched: true,
           topZ: z,
           focused: existing.pid,
-          windows: state.windows.map((w) =>
-            w.pid === existing.pid ? { ...w, z, minimized: false, props: action.props ? { ...action.props } : w.props } : w,
-          ),
+          windows: state.windows.map((w) => (w.pid === existing.pid ? { ...w, z, minimized: false, props } : w)),
         }
       }
       const win: WinState = {
@@ -331,7 +341,7 @@ export function WindowManagerProvider({
 }: {
   children: ReactNode
   initial: () => { app: AppId; geometry: Geometry; props?: WinState['props'] }[]
-  placement: (app: AppId, openCount: number) => Geometry
+  placement: (app: AppId, openCount: number, props?: WinState['props']) => Geometry
   /** Filters saved layouts down to apps that still exist. */
   isApp: (app: string) => boolean
 }) {
@@ -396,8 +406,8 @@ export function WindowManagerProvider({
       // A CV app asked for away from /cv (an old link, a widget): it lives on the CV page.
       if (!appHere(app)) return location.assign(`/cv?open=${app}`)
       if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH, t: String(Date.now()) }, geometry: placement('files', state.windows.length) })
-      if (ALWAYS_NEW.has(app)) return dispatch({ type: 'open', app, props: { ...props, create: String(Date.now()) }, newInstance: true, geometry: placement(app, state.windows.length) })
-      dispatch({ type: 'open', app, props, geometry: placement(app, state.windows.length) })
+      if (ALWAYS_NEW.has(app)) return dispatch({ type: 'open', app, props: { ...props, create: String(Date.now()) }, newInstance: true, geometry: placement(app, state.windows.length, props) })
+      dispatch({ type: 'open', app, props, geometry: placement(app, state.windows.length, props) })
     },
     [placement, state.windows.length],
   )
@@ -406,7 +416,7 @@ export function WindowManagerProvider({
       // A CV app asked for away from /cv (an old link, a widget): it lives on the CV page.
       if (!appHere(app)) return location.assign(`/cv?open=${app}`)
       if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH }, newInstance: true, geometry: placement('files', state.windows.length) })
-      dispatch({ type: 'open', app, props: ALWAYS_NEW.has(app) ? { ...props, create: String(Date.now()) } : props, newInstance: true, geometry: placement(app, state.windows.length) })
+      dispatch({ type: 'open', app, props: ALWAYS_NEW.has(app) ? { ...props, create: String(Date.now()) } : props, newInstance: true, geometry: placement(app, state.windows.length, props) })
     },
     [placement, state.windows.length],
   )
