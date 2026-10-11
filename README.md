@@ -149,6 +149,9 @@ In a folder on Seafile, that folder becomes the thread's work folder:
   with that message, or answers the form with it.
 - A dropped stream reconnects by itself (for a minute) and an interrupted turn says so; Ctrl+R or
   `/retry` runs the last message again, and `/rewind` picks one of your messages to go back to.
+- `/share` shares the thread as a link and `/share last` its last answer, never expiring unless
+  given `1h`, `1d`, `7d` or `30d` (`/share last 7d`); `/shares` lists the thread's links and
+  `/unshare <id>` (or `/unshare` and a pick) stops one. See *Shared links* under Agents below.
 - `agents -c`/`-r` resume a thread, `agents -p` answers once for pipes, and `/help` lists the
   slash commands.
 
@@ -546,6 +549,29 @@ messages go, it and everything after it leave the thread (`POST …/rewind`; a r
 stopped first, the queue stays) and it comes back into the message box with its files. What the
 tools did is not undone: memories, the plan, notes, calendar events and files the agent changed in
 the work folder stay as they are.
+**Shared links** ([`server/shares.ts`](server/shares.ts), [`src/apps/AgentsShare.tsx`](src/apps/AgentsShare.tsx)):
+*Share thread…* (the thread's ⋯ menu, its right-click menu in the sidebar or the conversation) and
+**Share** under each answer (on hover, always on touch) make a link to the whole thread or to one
+answer with the message it answers. A link is a snapshot taken then: later messages, a rewind or a
+retry don't change it. It can expire after 1 hour, 1 day, 7 days or 30 days, or never (the
+default). The dialog shows the links the thread or answer has already (Copy, Open, *Stop
+sharing*) before offering *New link*, and Settings → Agents → *Shared links* lists them all.
+Opening one (`/s/<token>`, 144 random bits, the only way in; nothing lists them) shows a plain page
+the server renders itself, not MvL OS: the title, the date and expiry, your messages as bubbles and
+the answers as Markdown (the app's own parser, turned into HTML in which every piece of text is
+escaped; links only to http(s) and mail, pictures only from https and data:). What goes in: the
+title, the model, your messages (attached files by name and size only) and the answers; tool calls
+only as labels that name nothing they were given (*Searched notes*, *Looked at the calendar*),
+except a web search's query and the site a page was read from. Tool results, thinking, memories and
+the plan are never copied. The page runs no script: `Content-Security-Policy: default-src 'none';
+style-src 'nonce-…'; img-src https: data:`, `X-Robots-Tag: noindex, nofollow`, `Referrer-Policy:
+no-referrer`, `Cache-Control: private, max-age=60`, and it sets and reads no cookies. A link that
+never existed, expired or was revoked is the same 404. Stopping sharing deletes the snapshot,
+expired ones are deleted when shares are next touched, and deleting the thread or the account
+deletes its links. The endpoints are `POST /api/agents/threads/:id/share` (`{kind: "thread" |
+"response", messageId?, expires?: "never" | "1h" | "1d" | "7d" | "30d"}`, answering `{token, url,
+expiresAt, …}` with the address from `PUBLIC_URL`), `GET /api/agents/shares` (`?thread=` for one
+thread's) and `DELETE /api/agents/shares/:token`.
 Settings → Agents (also the app's ⚙) picks the model for Quick, Deep and titles, what a new thread
 starts with, and shows the system prompt: `~/AGENTS.md`, your own from Seafile when Seafile is
 home, otherwise a read-only built-in one ([`src/data/agentsPrompt.ts`](src/data/agentsPrompt.ts)).
@@ -610,10 +636,12 @@ right-click menu, and no text selection (except a sticky being edited). Desktop 
 dragged too; Settings → Appearance → Motion turns either off. Several icons dragged at once gather
 in a pile under the pointer with a count badge, like Finder, and fan back out into the arrangement
 they had, moved to where you drop them. Add widgets from the desktop's menu (*Add widget*), All apps → Widgets or Spotlight.
-Today there are five: **Sticky note** (one of your notes, with checklists you can tick),
+Today there are six: **Sticky note** (one of your notes, with checklists you can tick),
 **Weather** (now, the next hours and three days from [Open-Meteo](https://open-meteo.com), for the
 browser's location or a city you pick; your pick syncs, the browser's location stays on that
-device), **Agenda** (Google Calendar and CalDAV, see above), **Code inbox** and **Status** (updown.io).
+device), **Agenda** (Google Calendar and CalDAV, see above), **Code inbox**, **Status** (updown.io)
+and **Minecraft server** (up or not, the address to copy, who is on with their heads, and the
+in-game day and time when RCON is set up; a click opens the Minecraft server window).
 
 The framework lives in [`src/widgets`](src/widgets). A widget is one `WidgetDef`
 ([`types.ts`](src/widgets/types.ts)): a name, a glyph, a size, its component, and optional hooks
@@ -872,3 +900,24 @@ answer. Turn RCON on in the Minecraft server's `server.properties` (`enable-rcon
 `rcon.port`, `rcon.password`). Keep its port off the internet and reachable only from the site,
 for example over a shared Docker network: RCON sends the password in plain text and can run any
 server command.
+
+With RCON set up, the pinger's tick also asks, on the same RCON login as `list`: the world's clock
+(`time query daytime` and `time query day`, shown as "☀ Day 412 · 14:20" in the window's header,
+the top bar popup and the widget), each online player's dimension, XP level and health (`data get
+entity <name> Dimension|XpLevel|Health`, for up to 12 players, only names that are valid Minecraft
+names), and every 10 minutes the difficulty, the world border (shown only when smaller than the
+default) and whether the server is vanilla or Paper (`version`). All of it is read-only and goes
+into the public status as optional fields; an answer that doesn't parse leaves its field out, and
+values are dropped after a few minutes without a fresh one. Player positions, the whitelist and the
+seed are never asked for there. The players chart also shows who was on in each bar (from the
+recorded visits): a mark on top of bars where someone joined, and their names, heads and join and
+leave times in the tooltip (tap a bar on a touch screen).
+
+Admins (`ADMIN_USERS`) also get a **Server console** in the Minecraft server window: say something
+in chat, message or kick a player from *On now*, list the whitelist and add or remove names, and
+run any command with its output in a scrollback (↑ for earlier ones). It goes through
+`POST /api/minecraft/rcon`, which only answers signed-in admins (everyone else gets 403, and
+nobody else sees the panel), takes one command per request (no newlines, at most 256 characters,
+player names checked), allows 30 commands a minute per admin and logs each one with the admin's
+login to the server's console. Commands that are hard to undo (`stop`, `ban`, `op`,
+`whitelist off`, `kill @a` and the like) ask first.
