@@ -71,7 +71,7 @@ export type UnitType = {
   carrier?: { unit: string; every: number; max: number }
   /** What sets it apart from the other ships of its tier: bombers go for big hulls, support ships
    * mend the fleet, ion ships strip shields. Steers the AI and the target picking. */
-  kind?: 'bomber' | 'support' | 'ion' | 'repair'
+  kind?: 'bomber' | 'support' | 'ion' | 'repair' | 'wing'
   /** Research that has to be done before it can be built (on top of the station level). */
   tech?: string
   /** Repairs allied ships within `range`: `repair` hull points a second each, up to `max` ships. */
@@ -100,6 +100,16 @@ export const ABILITIES: Record<AbilityId, Ability> = {
  * full hull (and of each damaged module's) a second. Two craft mend a station or a flagship by
  * about a fifth over one run, a gunship from nearly nothing. */
 export const FIELD_REPAIR = { flat: 8, share: 0.005, reach: 200 }
+/**
+ * A station's defense wing: one free squadron of small fighters that every station starts with and
+ * keeps up. Away from home (more than `radius` from their station, or once it's gone) their guns do
+ * `away` of their damage. The station rebuilds lost craft one at a time, every `every` seconds,
+ * starting `wait` seconds after the last one was lost, while its hangar stands.
+ */
+export const DEFENSE_WING = { radius: 1400, away: 0.3, every: 25, wait: 15 }
+/** A faction's defense wing fighter. */
+export const wingOf = (faction: FactionId) => UNIT[faction === 'republic' ? 'r-picket' : 'd-picket']
+
 /** What field repairs work on: stations, and ships of gunship class and up. Strike craft and the
  * platforms on the ore are left to their own (platforms have repair crews of their own). */
 export const MENDABLE: Tier[] = ['gunship', 'frigate', 'cruiser', 'capital', 'station']
@@ -393,6 +403,12 @@ const WRITTEN: UnitType[] = [
     role: { role: 'Field repairs', strong: ['long fights', 'keeping flagships alive'], weak: ['fighters', 'flak', 'everything else'] },
   },
   {
+    id: 'r-picket', faction: 'republic', tier: 'fighter', kind: 'wing', name: 'Aegis picket', blurb: 'The station\'s own defense wing: five light interceptors that guard it for free and come back from its hangar when lost. Fierce at home, feeble far from it.',
+    sprite: 'republic-picket', aspect: 0.767, size: 22, hull: 34, shield: 10, regen: 1, speed: 285, turn: 4.8, pop: 0, cost: 0, build: 0, level: 1, squad: 5, sensor: 650,
+    weapons: [laser(4, 220, 0.45)], hardpoints: [], engines: [[5, 8.5]],
+    role: { role: 'Home defense', strong: ['fighters', 'bombers near the station'], weak: ['warships', 'being sent away from home'] },
+  },
+  {
     id: 'r-corvette', faction: 'republic', tier: 'gunship', kind: 'support', name: 'Mercy corvette', blurb: 'Repair tender: its work crews patch up the hulls of nearby ships. Lightly armed; keep it behind the line.',
     sprite: 'republic-corvette', aspect: 0.653, size: 86, hull: 520, shield: 260, regen: 8, speed: 135, turn: 1.8, pop: 2, cost: 550, build: 18, level: 2, squad: 1, sensor: 900,
     weapons: [flak(5, 280, 0.4)], hardpoints: [], engines: [[3.5, 9.4], [5, 9.5], [6.6, 9.4]],
@@ -460,6 +476,12 @@ const WRITTEN: UnitType[] = [
     sprite: 'droid-repair', aspect: 0.779, size: 30, hull: 85, shield: 0, regen: 0, speed: 245, turn: 3.8, pop: 1, cost: 260, build: 11, level: 1, squad: 2, sensor: 650,
     weapons: [laser(2, 200, 0.8)], hardpoints: [], engines: [[5, 9.1]], ability: 'fieldRepair',
     role: { role: 'Field repairs', strong: ['long fights', 'keeping flagships alive'], weak: ['fighters', 'flak', 'everything else'] },
+  },
+  {
+    id: 'd-picket', faction: 'droid', tier: 'fighter', kind: 'wing', name: 'Gnat guard droid', blurb: 'The foundry\'s own defense wing: six tiny droids that guard it for free and are rebuilt by its hangar when lost. Vicious at home, feeble far from it.',
+    sprite: 'droid-picket', aspect: 0.989, size: 20, hull: 26, shield: 0, regen: 0, speed: 275, turn: 5, pop: 0, cost: 0, build: 0, level: 1, squad: 6, sensor: 620,
+    weapons: [laser(3.5, 210, 0.42)], hardpoints: [], engines: [[5, 8]],
+    role: { role: 'Home defense', strong: ['fighters', 'bombers near the station'], weak: ['warships', 'being sent away from home'] },
   },
   {
     id: 'd-ion', faction: 'droid', tier: 'frigate', kind: 'ion', name: 'Disruptor frigate', blurb: 'One huge ion cannon that tears down shields in a few shots, leaving the hull open to everything else. Barely scratches bare armour.',
@@ -540,9 +562,10 @@ export const ALL_SPRITES = [
 ]
 export const SHIP_TIERS: Tier[] = ['fighter', 'gunship', 'frigate', 'cruiser', 'capital']
 export const unitOf = (faction: FactionId, tier: Tier) => UNIT[`${faction === 'republic' ? 'r' : 'd'}-${tier}`]
-/** The ships a faction can order from its station: by the station level they need, then cost. */
+/** The ships a faction can order from its station: by the station level they need, then cost. The
+ * station's defense wing comes with it and is never ordered. */
 export const buildable = (faction: FactionId) =>
-  UNITS.filter((u) => u.faction === faction && SHIP_TIERS.includes(u.tier)).sort((a, b) => a.level - b.level || a.cost - b.cost)
+  UNITS.filter((u) => u.faction === faction && SHIP_TIERS.includes(u.tier) && u.kind !== 'wing').sort((a, b) => a.level - b.level || a.cost - b.cost)
 /** A ship's job and counters: its own, or its tier's. */
 export const roleOf = (t: UnitType) => t.role ?? ROLES[t.tier]
 export const isShip = (t: UnitType) => t.tier !== 'station' && t.tier !== 'mine' && t.tier !== 'defense'

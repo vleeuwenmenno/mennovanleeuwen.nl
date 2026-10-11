@@ -3,7 +3,7 @@ import { sq } from './detmath.ts'
 import { inside, mirrored, rng, type MapDef, type Pt } from './maps.ts'
 import { clearLine, findPath, navGrid, type NavGrid } from './nav.ts'
 import {
-  ABILITIES, ARMOR_BONUS, BASE_POP, FIELD_REPAIR, MENDABLE, mineType, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
+  ABILITIES, ARMOR_BONUS, BASE_POP, DEFENSE_WING, FIELD_REPAIR, MENDABLE, mineType, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind,
 } from './data.ts'
@@ -88,6 +88,8 @@ export type Unit = {
   abilityCd: number
   abilityOn: number
   slow: number
+  /** Carriers: seconds since the last launch. Stations: seconds until the hangar sends out the next
+   * defense wing craft (see wings). */
   hangarT: number
   /** Seconds left on construction (mining platforms). */
   building: number
@@ -548,6 +550,7 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
     const at = (ahead: number, side: number) => ({ x: sp.x + fx * ahead - fy * side, y: sp.y + fy * ahead + fx * side })
     const st = spawn(w, unitOf(p.faction, 'station').id, o, sp.x, sp.y, face - Math.PI / 2)
     p.station = st.id
+    spawnWing(w, st)
     const f1 = at(420, -120)
     const g1 = at(380, 140)
     const g2 = at(470, 230)
@@ -593,7 +596,9 @@ function issue(u: Unit, o: Order, queued = false) {
   u.order = o
   u.queue = []
   u.target = o.k === 'attack' ? o.id : 0
-  u.parent = 0
+  // Carrier fighters given orders go their own way; a defense wing stays its station's, and
+  // comes home once its orders are done.
+  if (u.t.kind !== 'wing') u.parent = 0
   u.face = null
   // New orders call off a Field repair run.
   u.aid = 0
@@ -1573,6 +1578,11 @@ function kill(w: World, u: Unit, by: Owner | -1) {
   w.events.push({ k: 'boom', x: u.x, y: u.y, tier: u.t.tier, owner: u.owner, size: u.t.size })
   w.players[u.owner].stats.lost++
   if (by !== -1) w.players[by].stats.killed++
+  // A lost defense wing craft: its station's hangar starts on a new one after a while.
+  if (u.t.kind === 'wing' && u.parent) {
+    const st = w.byId.get(u.parent)
+    if (st && !st.dead) st.hangarT = Math.max(st.hangarT || 0, DEFENSE_WING.wait)
+  }
   if (u.node >= 0 && w.nodes[u.node].site === u.id) {
     // A destroyed platform takes its claim with it: the ore is open again and has to be surveyed
     // anew, so a lost platform can't simply be put straight back up under the attacker's guns.
@@ -1605,7 +1615,8 @@ export const RANK_BONUS = 0.1
 /** A ship that destroys enemies worth its own cost becomes a veteran; three times, elite; six, an ace.
  * Each rank adds damage and hull (the extra hull arrives repaired) and faster shields. */
 function gainXp(w: World, u: Unit, amount: number) {
-  if (!isShip(u.t)) return
+  // A free defense wing craft has no price to measure its kills against: it never ranks up.
+  if (!isShip(u.t) || !u.t.cost) return
   u.xp += amount
   const own = u.t.cost / u.t.squad
   while (u.rank < 3 && u.xp >= own * RANK_AT[u.rank + 1]) {
@@ -1913,7 +1924,8 @@ function moveUnit(w: World, u: Unit, dt: number) {
     const dist = M.hypot(u.ax - u.x, u.ay - u.y)
     if (fighter) {
       const ang = w.time * 0.9 + u.id
-      const r = 70 + (u.id % 4) * 18
+      // A defense wing circles its station outside the hull, not over the middle of it.
+      const r = 70 + (u.id % 4) * 18 + (parent && u.t.kind === 'wing' ? radius(parent.t) + 60 : 0)
       steer(u, u.ax + M.cos(ang) * r, u.ay + M.sin(ang) * r, max * 0.65, dt)
     } else if (dist > 30 + radius(t) * 0.3) {
       const wp = waypoint(w, u, u.ax, u.ay)
@@ -1993,6 +2005,7 @@ function fire(w: World, u: Unit, g: Gun, e: Unit) {
   let dmg = g.w.damage * effect(g.w.kind, e.t.tier)
   if (u.abilityOn > 0 && u.t.ability === 'broadside' && g.w.kind === 'turbo') dmg *= 1.6
   dmg *= (u.t.tier === 'station' && !moduleUp(u, 'sensor') ? 1 : u.mods.damage) * (1 + RANK_BONUS * u.rank)
+  if (u.t.kind === 'wing' && !atHome(w, u)) dmg *= DEFENSE_WING.away
   w.shots.push({
     x: from.x, y: from.y, vx: (ax - from.x) / Math.max(t, 0.001), vy: (ay - from.y) / Math.max(t, 0.001), left: hit ? t : t * 1.6,
     kind: g.w.kind, owner: u.owner, target: e.id, hp, dmg, hit, sx: from.x, sy: from.y, age: 0, from: u.id,
@@ -2286,6 +2299,66 @@ const CLUMSY: Partial<Record<Tier, true>> = { frigate: true, cruiser: true, capi
  * hull. Neither counts as being attacked, so no alarms and no kill credit. Returns true while the
  * terrain keeps the shields from recharging.
  */
+// --- Defense wings -----------------------------------------------------------------------------------
+
+/** A station's defense wing in a loose ring round it, as its carrier fighters would be: their
+ * station is their parent, so idle ones keep to it and they count towards no fleet. */
+function spawnWing(w: World, st: Unit) {
+  const t = wingOf(st.t.faction)
+  const g = spawnGroup(w, t.id, st.owner, st.x + radius(st.t) + 140, st.y, st.a)
+  for (const u of g) u.parent = st.id
+  st.hangarT = 0
+}
+
+/** Whether a defense wing craft is at home: its station stands and it's within reach of it. */
+export function atHome(w: World, u: Unit) {
+  const st = u.parent ? w.byId.get(u.parent) : undefined
+  return !!st && !st.dead && d2(u.x, u.y, st.x, st.y) < sq(DEFENSE_WING.radius)
+}
+
+/** A station's defense wing as it stands: craft left, full strength, and seconds to the next one
+ * (null while it's whole, Infinity while the hangar is down). */
+export function wingState(w: World, st: Unit) {
+  let left = 0
+  for (const u of w.units) if (!u.dead && u.parent === st.id && u.t.kind === 'wing') left++
+  const full = wingOf(st.t.faction).squad
+  return { left, full, next: left >= full ? null : hangarsUp(st) ? Math.max(0, st.hangarT || 0) : Infinity }
+}
+
+/**
+ * Stations rebuild their defense wings: while one is short of craft and its hangar stands, the
+ * countdown runs (a loss sets it to at least DEFENSE_WING.wait) and each time it's up one craft
+ * launches from a hangar and joins what's left of the squadron, the next DEFENSE_WING.every
+ * seconds later. A shot-off hangar holds the countdown where it is until it's mended.
+ */
+function wings(w: World, dt: number) {
+  for (const st of w.units) {
+    if (st.dead || st.t.tier !== 'station' || building(st)) continue
+    const t = wingOf(st.t.faction)
+    let left = 0
+    let squad = 0
+    for (const u of w.units)
+      if (!u.dead && u.parent === st.id && u.t.kind === 'wing') {
+        left++
+        squad = u.squad
+      }
+    if (left >= t.squad) {
+      st.hangarT = 0
+      continue
+    }
+    if (!hangarsUp(st)) continue
+    st.hangarT = (st.hangarT || 0) - dt
+    if (st.hangarT > 0) continue
+    st.hangarT = DEFENSE_WING.every
+    const bays = st.t.hardpoints.map((h, i) => (h.kind === 'hangar' && alive(st, i) ? i : -1)).filter((i) => i >= 0)
+    const bay = hpPos(st, bays[0])
+    const u = spawn(w, t.id, st.owner, bay.x, bay.y, st.a, squad || w.squadSeq++)
+    u.parent = st.id
+    u.v = t.speed * 0.5
+    w.events.push({ k: 'launch', owner: st.owner, x: bay.x, y: bay.y })
+  }
+}
+
 // --- Field repair ------------------------------------------------------------------------------------
 
 /** How much of a ship's hull is missing, plus a little for modules that are hurt but still standing
@@ -2432,6 +2505,7 @@ export function tick(w: World, dt = STEP) {
   salvage(w, dt)
   tenders(w, dt)
   fieldRepairs(w, dt)
+  wings(w, dt)
   for (const u of w.units) {
     if (u.dead) continue
     if (u.building > 0) {
@@ -2518,6 +2592,7 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
       p.level = s.station
       const st = spawn(w, unitOf(p.faction, 'station').id, o, sp.x, sp.y, face - Math.PI / 2)
       p.station = st.id
+      spawnWing(w, st)
     }
     // Biggest first onto the field, up to the cap; the rest waits in orbit.
     const order = [...s.ships].sort((a, b) => UNIT[b].pop - UNIT[a].pop)

@@ -720,6 +720,20 @@ the harder it is), keeps a squadron or two guarding its most valuable warship, a
 its worst-hurt ship or station. Galactic conquest has no research, so there they are built like
 any other ship.
 
+Every station also comes with a free **defense wing** (`DEFENSE_WING` in `data.ts`): the
+Republic's five Aegis pickets or the droids' six Gnat guard droids, smaller and frailer than line
+fighters. They cost nothing, take no fleet space and can't be built, retreat or escape with a
+conquest fleet. Their station is their parent, as a carrier's fighters are theirs, so when idle
+they circle it and take on whatever comes near, chasing it only so far. They can be ordered
+anywhere and come home once their orders are done, but more than 1,400 from their station, or
+once it's gone, their guns do 30% of their damage (they're drawn faded there, and the unit card
+says so). Lost craft come back from the station's hangar one at a time: the first 15 s after the
+last loss, then one every 25 s until the squadron is whole, even after it was wiped out. A
+shot-off hangar holds that until the station's repair crew rebuilds it (Field repair mends a
+damaged hangar, keeping it up, but doesn't rebuild one shot off); the station
+card shows "Defense wing 3/5 · next in 12 s". Stations in conquest fleet battles have one too
+(auto-resolve leaves it out). The AI's admirals never give them orders, so they cost no actions.
+
 ## Galactic conquest fleets
 
 In Empires At War's Galactic conquest each side keeps at most **4 fleets at a planet**

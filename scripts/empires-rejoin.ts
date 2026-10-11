@@ -81,7 +81,8 @@ d.ws.close()
 
 // --- c. A teammate takes over -------------------------------------------------------------------------
 
-const shipsOf = (p: Bot, seat: number) => p.w!.units.filter((u) => !u.dead && u.owner === seat && u.t.tier !== 'station' && u.t.tier !== 'mine' && u.t.tier !== 'defense').length
+// The station's defense wing stays with the base, so it isn't counted as fleet.
+const shipsOf = (p: Bot, seat: number) => p.w!.units.filter((u) => !u.dead && u.owner === seat && u.t.tier !== 'station' && u.t.tier !== 'mine' && u.t.tier !== 'defense' && u.t.kind !== 'wing').length
 c.ws.close()
 await waitFor('the others see Charlie away', () => !!awayIn(a, c.me) && !!awayIn(b, c.me))
 b.send({ t: 'vote', seat: c.me, v: b.me })

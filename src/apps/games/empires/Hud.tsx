@@ -1,14 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { battleLayout, type LayoutStore } from './layout'
 import {
-  ABILITIES, FACTIONS, LEVEL_UP, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, moduleSprite, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
+  ABILITIES, DEFENSE_WING, FACTIONS, LEVEL_UP, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, moduleSprite, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
   type UnitType,
 } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { spriteUrl } from './render'
 import { keyName, useSettings } from './settings'
 import { LongPress, isTouch, shiftOf, useCoarse, useLongPressWheel } from './Touch'
-import { FIELD_DAMAGE, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, mendTarget, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
+import { FIELD_DAMAGE, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard, research and game speed; and along the bottom the tactical map, a details panel for
@@ -839,6 +839,7 @@ function StationDetail(p: DetailProps & { st: Unit }) {
           </div>
           <Vitals u={st} now={w.time} />
           <HpSummary u={st} />
+          <WingInfo w={w} st={st} />
           <FocusInfo w={w} u={st} pick={p.turretPick} onClear={p.onClearFocus} />
           <RepairButton w={w} me={me} u={st} onRepair={p.onRepair} />
         </div>
@@ -872,6 +873,19 @@ function StationDetail(p: DetailProps & { st: Unit }) {
         </div>
       </Frame>
     </div>
+  )
+}
+
+/** The station's defense wing: craft left, and when the hangar sends the next one. */
+function WingInfo({ w, st }: { w: World; st: Unit }) {
+  const s = wingState(w, st)
+  const name = wingOf(st.t.faction).name
+  const line = s.next === null ? 'at full strength' : s.next === Infinity ? 'hangar down: no new craft until it is repaired' : `next in ${Math.ceil(s.next)} s`
+  return (
+    <small className="ew-muted ew-wing" data-tip-unit={wingOf(st.t.faction).id} data-tip-who="Yours" data-tip-rel="own"
+      data-tip={`${name}: the station's free defense wing. Lost craft come back from its hangar one at a time, every ${DEFENSE_WING.every} s, starting ${DEFENSE_WING.wait} s after the last loss, while a hangar stands.`}>
+      Defense wing {s.left}/{s.full} · {line}
+    </small>
   )
 }
 
@@ -1410,8 +1424,13 @@ export function UnitIntel({ t, who, rel, note, live }: { t: UnitType; who?: stri
         ))}
       </div>
       {ab && <p className="ew-intel-ab"><b>{ab.name}:</b> {ab.blurb}</p>}
+      {t.kind === 'wing' && (
+        <p className="ew-intel-ab">
+          <b>Home defense:</b> weaker away from the station. Within {fmt(DEFENSE_WING.radius)} of it full strength; further out, or once it's gone, {Math.round(DEFENSE_WING.away * 100)}% damage. Free, no fleet space, and rebuilt by the station's hangar when lost.
+        </p>
+      )}
       {live && live.rank > 0 && <p className="ew-intel-ab"><b>{RANKS[live.rank]}</b> · {live.kills} kills</p>}
-      {t.tier !== 'station' && <footer>
+      {t.tier !== 'station' && t.kind !== 'wing' && <footer>
         <span className="ew-cost"><Icon name="credits" size={12} /> {t.cost}</span>
         <span className="ew-time"><Icon name="time" size={12} /> {t.build} s</span>
         {t.level > 1 && <span className="ew-intel-lv">Station level {t.level}</span>}

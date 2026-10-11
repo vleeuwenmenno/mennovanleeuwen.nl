@@ -1,7 +1,7 @@
 import { FACTIONS, SURVEY_RADIUS, UNIT, dims, isShip, moduleSprite, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
-import { RETREAT_TIME, building, foes, hpPos, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
+import { RETREAT_TIME, atHome, building, foes, hpPos, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 
 // Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, nebulas
 // and asteroid fields, ore, rocks and beacons, the ships (generated sprites rotated in code, with engine glow, shield
@@ -1881,7 +1881,8 @@ export class Renderer {
       ctx.globalAlpha = 1
     }
 
-    this.drawSprite(ctx, t.sprite, u.x, u.y, u.a + Math.PI / 2, size, z, building(u) ? 0.55 : 1)
+    // A defense wing craft far from its station fights at a fraction of its strength: drawn faded.
+    this.drawSprite(ctx, t.sprite, u.x, u.y, u.a + Math.PI / 2, size, z, building(u) ? 0.55 : t.kind === 'wing' && !atHome(w, u) ? 0.45 : 1)
     if (t.hardpoints.some((h) => h.art)) this.drawModules(ctx, u, w, z)
     if (u.retreat > 0) this.drawCharge(ctx, u, z)
 
