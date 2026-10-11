@@ -1,29 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import type { WinState } from '../../os/wm'
-import { plan, type Hand, type Level, type Shot } from './pool/ai'
+import { plan, type Hand, type Shot } from './pool/ai'
 import { allStopped, castAim, fits, FOOT_X, freeSpot, HEAD_X, isMoving, L, POCKETS, R, rack, simulate, strike, W, type Ball, type Events } from './pool/physics'
 import { ballCss, MARGIN, paintBall, paintCue, paintTable, PLAIN, TOTAL_H, TOTAL_W, viewFor, type Sprite, type View } from './pool/render'
 import { judge, newLog, newMatch, WIN_SIMPLE, type Group, type Rules } from './pool/rules'
 import { PoolSound } from './pool/sound'
+import { POOL_DRAG, POOL_LEVELS, poolMuted, poolSettings, poolVolume } from './prefs'
 import { useGameKeys, useHighScore } from './shared'
 
 type Mode = 'cpu' | 'duo' | 'solo'
 type Phase = 'menu' | 'aim' | 'strike' | 'moving' | 'cpu' | 'over'
 
-// Sensitivity: metres of drag back for a full-power stroke.
-const DRAG = { low: 0.6, medium: 0.4, high: 0.25 }
-type Sensitivity = keyof typeof DRAG
-type Settings = { helpers: boolean; sensitivity: Sensitivity; level: Level }
-const LEVELS: Level[] = ['easy', 'medium', 'hard']
-const SETTINGS_KEY = 'mvlos.pool.settings'
-function readSettings(): Settings {
-  try {
-    const v = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}')
-    return { helpers: v.helpers !== false, sensitivity: v.sensitivity in DRAG ? v.sensitivity : 'medium', level: LEVELS.includes(v.level) ? v.level : 'medium' }
-  } catch {
-    return { helpers: true, sensitivity: 'medium', level: 'medium' }
-  }
-}
+// Helpers, sensitivity and the computer's level are kept with Settings → Apps → Games (./prefs.ts).
+const DRAG = POOL_DRAG
+const LEVELS = POOL_LEVELS
 const MAX_BACK = 0.28 // how far the cue draws back at full power
 const STRIKE_MS = 110
 const powerToSpeed = (p: number) => 0.25 + 8.75 * Math.pow(p, 1.7)
@@ -34,7 +24,7 @@ const NAMES: Record<Mode, [string, string]> = { cpu: ['You', 'Computer'], duo: [
 const has = (name: string) => (name === 'You' ? 'have' : 'has')
 const plainCss = `rgb(${PLAIN.join(',')})`
 
-type Hud = { phase: Phase; mode: Mode; rules: Rules; turn: 0 | 1; groups: [Group | null, Group | null]; scores: [number, number]; shots: number; onTable: number[]; msg: string; over: { title: string; text: string } | null; hand: Hand; muted: boolean; volume: number }
+type Hud = { phase: Phase; mode: Mode; rules: Rules; turn: 0 | 1; groups: [Group | null, Group | null]; scores: [number, number]; shots: number; onTable: number[]; msg: string; over: { title: string; text: string } | null; hand: Hand }
 
 export function Pool({ win }: { win: WinState }) {
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -44,17 +34,11 @@ export function Pool({ win }: { win: WinState }) {
   const wins = useHighScore('pool')
   const soloBest = { eight: useHighScore('pool-solo-eight', true), simple: useHighScore('pool-solo-simple', true) }
   const [pick, setPick] = useState<Rules>('eight')
-  const [settings, setSettings] = useState(readSettings)
-  const changeSettings = (next: Partial<Settings>) => {
-    const v = { ...settings, ...next }
-    setSettings(v)
-    s.current.settings = v
-    try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(v))
-    } catch {
-      /* the choice just won't persist */
-    }
-  }
+  const settings = poolSettings.use()
+  const changeSettings = poolSettings.patch
+  // Sound on or off and its volume, also changed from Settings while a game is open.
+  const muted = poolMuted.use()
+  const volume = poolVolume.use()
 
   const s = useRef({
     balls: rack(),
@@ -78,13 +62,15 @@ export function Pool({ win }: { win: WinState }) {
     over: null as Hud['over'],
     view: null as View | null,
     rot: false,
-    settings: readSettings(),
+    settings: poolSettings.get(),
   })
+  // The game loop reads the settings from here; Settings may change them mid-game.
+  s.current.settings = settings
 
   const snapshot = (): Hud => {
     const g = s.current
     const m = g.match
-    return { phase: g.phase, mode: g.mode, rules: m.rules, turn: m.turn, groups: [...m.groups], scores: [...m.scores], shots: m.shots, onTable: g.balls.filter((b) => b.on).map((b) => b.id), msg: g.msg, over: g.over, hand: g.hand, muted: sound.current.muted, volume: sound.current.volume }
+    return { phase: g.phase, mode: g.mode, rules: m.rules, turn: m.turn, groups: [...m.groups], scores: [...m.scores], shots: m.shots, onTable: g.balls.filter((b) => b.on).map((b) => b.id), msg: g.msg, over: g.over, hand: g.hand }
   }
   const [hud, setHud] = useState<Hud>(snapshot)
   const sync = () => setHud(snapshot())
@@ -681,8 +667,8 @@ export function Pool({ win }: { win: WinState }) {
           </>
         )}
         <div className="pool-sound">
-          <button className="pool-mute" onClick={toggleMute} title={hud.muted ? 'Sound off (M)' : 'Sound on (M)'} aria-label={hud.muted ? 'Turn sound on' : 'Turn sound off'}>
-            {hud.muted || hud.volume === 0 ? '🔇' : hud.volume < 0.5 ? '🔉' : '🔊'}
+          <button className="pool-mute" onClick={toggleMute} title={muted ? 'Sound off (M)' : 'Sound on (M)'} aria-label={muted ? 'Turn sound on' : 'Turn sound off'}>
+            {muted || volume === 0 ? '🔇' : volume < 0.5 ? '🔉' : '🔊'}
           </button>
           <input
             type="range"
@@ -690,10 +676,10 @@ export function Pool({ win }: { win: WinState }) {
             min={0}
             max={1}
             step={0.05}
-            value={hud.muted ? 0 : hud.volume}
+            value={muted ? 0 : volume}
             onChange={(e) => changeVolume(Number(e.target.value))}
             aria-label="Volume"
-            title={`Volume ${Math.round((hud.muted ? 0 : hud.volume) * 100)}%`}
+            title={`Volume ${Math.round((muted ? 0 : volume) * 100)}%`}
           />
         </div>
       </div>

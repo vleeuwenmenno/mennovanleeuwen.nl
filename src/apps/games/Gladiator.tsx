@@ -11,6 +11,7 @@ import type { AmbiencePlace } from './gladiator/ambience'
 import { gladiatorStore } from './gladiator/saves'
 import { EstateScreen, MarketScreen } from './gladiator/Estate'
 import { GladiatorSound } from './gladiator/sound'
+import { gladiatorMusic, gladiatorMuted } from './prefs'
 import { Apothecary, ArenaBoard, Bracket, GearShop, Hub, MageShop, PLACE_BG, Sheet, TopBar, Training, type Place } from './gladiator/Town'
 import { Gold } from './gladiator/ui'
 import './gladiator/gladiator.css'
@@ -65,7 +66,8 @@ export function Gladiator({ win }: { win: WinState }) {
   const saveRef = useRef(save)
   saveRef.current = save
   const [screen, setScreen] = useState<Screen>({ s: 'title' })
-  const [audio, setAudio] = useState({ muted: snd.muted, music: snd.musicOn })
+  // Sound and music, also switched with M in a fight and from Settings → Apps → Games.
+  const audio = { muted: gladiatorMuted.use(), music: gladiatorMusic.use() }
 
   useEffect(() => () => snd.dispose(), [snd])
   // Saves arriving from another device (signed in): refresh the slots, and if the run being
@@ -324,10 +326,10 @@ export function Gladiator({ win }: { win: WinState }) {
       onPointerDown={() => snd.wake()}
     >
       <div className="gl-audio">
-        <button onClick={() => (snd.wake(), snd.setMusic(!snd.musicOn), setAudio({ ...audio, music: snd.musicOn }))} title={audio.music ? 'Music on' : 'Music off'} aria-label="Toggle music">
+        <button onClick={() => (snd.wake(), snd.setMusic(!snd.musicOn))} title={audio.music ? 'Music on' : 'Music off'} aria-label="Toggle music">
           {audio.music ? '♫' : '♪̸'}
         </button>
-        <button onClick={() => (snd.wake(), snd.setMuted(!snd.muted), setAudio({ ...audio, muted: snd.muted }))} title={audio.muted ? 'Sound off (M)' : 'Sound on (M)'} aria-label="Toggle sound">
+        <button onClick={() => (snd.wake(), snd.setMuted(!snd.muted))} title={audio.muted ? 'Sound off (M)' : 'Sound on (M)'} aria-label="Toggle sound">
           {audio.muted ? '🔇' : '🔊'}
         </button>
       </div>

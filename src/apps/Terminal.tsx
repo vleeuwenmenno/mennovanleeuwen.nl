@@ -938,6 +938,10 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
             setSettingsOpen(false)
             wm.open('settings', { section: 'appearance', t: String(Date.now()) })
           }}
+          onAllSettings={() => {
+            setSettingsOpen(false)
+            wm.open('settings', { section: 'terminal', t: String(Date.now()) })
+          }}
         />
       )}
     </div>

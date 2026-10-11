@@ -16,13 +16,12 @@ import {
 } from '../../data/calendar'
 import { connectGoogle, hasCalendar, signIn, useAccount } from '../../os/account'
 import { openContextMenu, type MenuItem } from '../../os/ContextMenu'
-import { synced } from '../../os/synced'
 import { openLink } from '../../data/links'
 import { useWM, type WinState } from '../../os/wm'
 import { draftFromEvent, draftFromRange, EventEditor, type Choose, type Draft } from './EventEditor'
 import { MonthView } from './MonthView'
 import { TimeGrid, type Change } from './TimeGrid'
-import { addDays, atMinutes, isView, parseDay, step, VIEWS, viewRange, viewTitle, type View } from './time'
+import { addDays, atMinutes, calendarView, isView, parseDay, step, VIEWS, viewRange, viewTitle, type View } from './time'
 import { dayLoad, MiniMonth, YearView } from './YearView'
 
 // The Calendar app: every connected Google and CalDAV calendar in one place, by day, three days,
@@ -32,8 +31,6 @@ import { dayLoad, MiniMonth, YearView } from './YearView'
 // the sidebar are the same switches as in Settings → Calendar.
 //
 // props.date ("2026-10-09") and props.view open it on a day (from the clock's month).
-
-const viewPref = synced<View>('calendar-view', 'week', { normalize: (v) => (isView(v) ? v : 'week') })
 
 /** The time now, once a minute. */
 function useNow() {
@@ -54,7 +51,7 @@ export function CalendarApp({ win }: { win: WinState }) {
   const connected = hasCalendar(account)
   const now = useNow()
   const rootRef = useRef<HTMLDivElement>(null)
-  const savedView = viewPref.use()
+  const savedView = calendarView.use()
   const [view, setViewState] = useState<View>(() => (isView(win.props.view) ? win.props.view : savedView))
   const [anchor, setAnchor] = useState(() => (win.props.date ? parseDay(win.props.date) : startOfDay(new Date())))
   const [narrow, setNarrow] = useState(false)
@@ -89,8 +86,15 @@ export function CalendarApp({ win }: { win: WinState }) {
 
   const setView = (v: View) => {
     setViewState(v)
-    viewPref.set(v)
+    calendarView.set(v)
   }
+  // Picked in Settings → Apps → Calendar (or on another device) while this window is open: follow it.
+  const seenView = useRef(savedView)
+  useEffect(() => {
+    if (savedView === seenView.current) return
+    seenView.current = savedView
+    setViewState(savedView)
+  }, [savedView])
   // A narrow window has no room for seven columns: three days instead.
   const shownView: View = narrow && view === 'week' ? '3day' : view
   const { days, from, to } = useMemo(() => viewRange(shownView, anchor), [shownView, anchor])
