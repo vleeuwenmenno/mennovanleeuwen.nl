@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { handleApi } from './server/api.ts'
+import { empiresUpgrade } from './server/empires.ts'
 import { startMinecraftWatch } from './server/minecraft.ts'
 
 /** The /api routes during `pnpm dev` and `pnpm preview`, like server/index.ts in production. */
@@ -11,14 +12,20 @@ const liveApi = (): Plugin => {
   const handler = (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, next: () => void) => {
     handleApi(req, res).then((handled) => handled || next(), next)
   }
+  // The Empires At War multiplayer socket; other upgrades (Vite's hot reload) are left alone.
+  const upgrade = (req: import('node:http').IncomingMessage, socket: import('node:stream').Duplex, head: Buffer) => {
+    empiresUpgrade(req, socket, head)
+  }
   return {
     name: 'live-api',
     configureServer: (server) => {
       server.middlewares.use(handler)
+      server.httpServer?.on('upgrade', upgrade)
       startMinecraftWatch()
     },
     configurePreviewServer: (server) => {
       server.middlewares.use(handler)
+      server.httpServer.on('upgrade', upgrade)
       startMinecraftWatch()
     },
   }

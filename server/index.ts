@@ -3,11 +3,13 @@ import { stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import { handleApi } from './api.ts'
+import { empiresUpgrade } from './empires.ts'
 import { startMinecraftWatch } from './minecraft.ts'
 import { SECURITY } from './http.ts'
 
 // Serves the built site and the /api routes in server/api.ts: live status, GitHub sign-in,
-// synced desktop state and code search. No dependencies, just Node.
+// synced desktop state and code search, plus the Empires At War multiplayer WebSocket
+// (server/empires.ts). No dependencies, just Node.
 
 const ROOT = join(import.meta.dirname, '..', 'dist')
 const PORT = Number(process.env.PORT ?? 80)
@@ -76,9 +78,13 @@ createServer(async (req, res) => {
   })
   if (req.method === 'HEAD') res.end()
   else createReadStream(found.full).pipe(res)
-}).listen(PORT, () => {
-  console.log(`MvL OS on :${PORT}`)
-  if (process.env.NODE_ENV === 'production' && !process.env.PUBLIC_URL)
-    console.warn('PUBLIC_URL is not set: OAuth redirects and cookie flags follow the Host and X-Forwarded-* headers of each request. Set it to the site\'s address (https://example.com).')
-  startMinecraftWatch()
 })
+  .on('upgrade', (req, socket, head) => {
+    if (!empiresUpgrade(req, socket, head)) socket.destroy()
+  })
+  .listen(PORT, () => {
+    console.log(`MvL OS on :${PORT}`)
+    if (process.env.NODE_ENV === 'production' && !process.env.PUBLIC_URL)
+      console.warn('PUBLIC_URL is not set: OAuth redirects and cookie flags follow the Host and X-Forwarded-* headers of each request. Set it to the site\'s address (https://example.com).')
+    startMinecraftWatch()
+  })

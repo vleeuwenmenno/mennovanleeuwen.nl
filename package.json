@@ -12,6 +12,7 @@
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
     "check:push": "node scripts/webpush-check.ts",
     "check:empires": "node scripts/empires-sync.ts",
+    "check:empires-ws": "node scripts/empires-ws.ts",
     "start": "node server/index.ts"
   },
   "dependencies": {
