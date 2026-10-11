@@ -378,6 +378,90 @@
   color: var(--fg-bright);
   background: color-mix(in srgb, var(--fg) 9%, transparent);
 }
+/* An answer, with Share under it (on hover; always on touch), like your messages' actions. */
+.agt-answer-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+.agt-msg-actions {
+  display: flex;
+  gap: 2px;
+  margin-left: -6px;
+  visibility: hidden;
+}
+.agt-answer-wrap:hover .agt-msg-actions,
+.agt-answer-wrap:focus-within .agt-msg-actions {
+  visibility: visible;
+}
+@media (pointer: coarse) {
+  .agt-msg-actions {
+    visibility: visible;
+  }
+}
+.agt-msg-actions button {
+  padding: 1px 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.agt-msg-actions button:hover {
+  color: var(--fg-bright);
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+}
+/* The share dialog and Settings → Agents → Shared links: each link as an address to copy, with
+   when it was made, when it expires and its buttons. */
+.agt-share {
+  display: grid;
+  gap: 10px;
+}
+.agt-share p {
+  margin: 0;
+}
+.agt-share-link {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+.agt-share .agt-share-link {
+  padding: 8px;
+  border: 1px solid var(--line-strong);
+}
+.agt-share-title {
+  color: var(--fg-bright);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agt-share-url {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: 12px var(--mono);
+}
+.agt-share-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11.5px;
+}
+.agt-share-actions,
+.agt-share-new {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.agt-share-more {
+  justify-self: start;
+}
 /* How the last turn ended when it did not answer (a restart, an error, a stop), with Retry; or
    just Retry under the last answer, to have it written again. */
 .agt-cut {

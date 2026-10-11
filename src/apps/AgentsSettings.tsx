@@ -11,10 +11,12 @@ import { hasCalendar, useAccount } from '../os/account'
 import { Select } from '../os/Select'
 import { useWM } from '../os/wm'
 import { writeFile } from '../terminal/fs'
+import { SharesSettings } from './AgentsShare'
 import { HOME } from '../terminal/vfs'
 
 // The Agents app's settings, laid out like the rest of Settings: Ollama Cloud, the models, the web
-// search provider, what a new thread starts with, and the system prompt in ~/AGENTS.md. Shown as
+// search provider, what a new thread starts with, the system prompt in ~/AGENTS.md and the links
+// you shared. Shown as
 // the Agents pane in Settings and inside the Agents app (its ⚙), the same component in both.
 
 const Toggle = ({ on, onChange, label, disabled }: { on: boolean; onChange: (on: boolean) => void; label: string; disabled?: boolean }) => (
@@ -36,7 +38,7 @@ export function usePromptLocation() {
 }
 
 /** The categories, in order: each a page of its own, picked from a sidebar or tabs. */
-type SectionId = 'general' | 'models' | 'threads' | 'search' | 'skills' | 'prompt'
+type SectionId = 'general' | 'models' | 'threads' | 'search' | 'skills' | 'prompt' | 'shares'
 const icon = (d: ReactNode) => (
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     {d}
@@ -49,6 +51,7 @@ const SECTIONS: { id: SectionId; label: string; blurb: string; icon: ReactNode }
   { id: 'search', label: 'Web search', blurb: 'Where the agent searches the web. Reading pages always goes through Ollama.', icon: icon(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>) },
   { id: 'skills', label: 'Skills', blurb: 'Instructions for kinds of tasks, in SKILL.md folders: the agent reads one when a task matches it, or you start one with /name.', icon: icon(<path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5z" />) },
   { id: 'prompt', label: 'System prompt', blurb: 'The instructions every thread starts with, from ~/AGENTS.md.', icon: icon(<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5" />) },
+  { id: 'shares', label: 'Shared links', blurb: 'Threads and answers you shared: anyone with a link can read it, on a plain page, until it expires or you stop sharing.', icon: icon(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>) },
 ]
 const SECTION_KEY = 'mvlos.agents.settings'
 const storedSection = (): SectionId => {
@@ -250,6 +253,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
       </>
     ),
     search: <WebSearchSettings />,
+    shares: <SharesSettings />,
     skills: <SkillsSettings />,
     prompt: (
       <>

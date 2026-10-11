@@ -24,9 +24,11 @@ import { search, clearSearchCache } from './search.ts'
 import { suggest } from './suggest.ts'
 import { readState, writeState } from './state.ts'
 import { deleteUser } from './users.ts'
+import { createShare, deleteShare, isShareToken, listShares, serveShare } from './shares.ts'
 
 // Every /api route, shared by the production server (server/index.ts) and Vite's dev and
-// preview servers (vite.config.ts). Resolves true when it answered the request.
+// preview servers (vite.config.ts), plus the one page outside /api the server renders itself:
+// an Agents shared link (/s/<token>, server/shares.ts). Resolves true when it answered the request.
 
 export async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   let url: URL
@@ -36,6 +38,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     return false // not a path: server/index.ts answers 400
   }
   const path = url.pathname
+  if (path.startsWith('/s/')) return serveShare(req, res, path)
   if (!path.startsWith('/api/')) return false
   const method = req.method ?? 'GET'
   const head = method === 'HEAD'
@@ -267,7 +270,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/agents/quick' && read) return json(res, 200, listQuick(requireUser(req))), true
     if (path === '/api/agents/quick' && method === 'DELETE') return clearQuick(requireUser(req)), json(res, 200, { ok: true }), true
     if (path === '/api/agents/threads' && method === 'POST') return json(res, 200, await createThread(requireUser(req), await readJson(req, 4096))), true
-    const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/follow|\/stop|\/approve|\/answer|\/result|\/title|\/context|\/queue|\/override|\/retry|\/rewind|\/queue\/[0-9a-f-]{36}(?:\/send|\/move)?)?$/.exec(path)
+    const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/follow|\/stop|\/approve|\/answer|\/result|\/title|\/context|\/queue|\/override|\/retry|\/rewind|\/share|\/queue\/[0-9a-f-]{36}(?:\/send|\/move)?)?$/.exec(path)
     if (agentThread) {
       const [, tid, sub] = agentThread
       if (!sub && read) return json(res, 200, getThread(requireUser(req), tid)), true
@@ -290,6 +293,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return await retryTurn(res, user, tid, await readJson(req, 4096)), true
       }
       if (sub === '/rewind' && method === 'POST') return json(res, 200, await rewind(requireUser(req), tid, await readJson(req, 1024))), true
+      // A shared link: a snapshot of the thread, or of one answer, readable by anyone with the link.
+      if (sub === '/share' && method === 'POST') return json(res, 200, createShare(req, requireUser(req), tid, await readJson(req, 1024))), true
       // The queue: messages written while it works, sent one by one when it is done (or now).
       if (sub === '/queue' && method === 'POST') return json(res, 200, enqueue(requireUser(req), tid, await readJson(req, 16 * 1024 * 1024))), true
       if (sub === '/override' && method === 'POST') return json(res, 200, override(requireUser(req), tid, await readJson(req, 16 * 1024 * 1024))), true
@@ -298,6 +303,16 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       if (queued && !queued[3] && method === 'DELETE') return json(res, 200, removeQueued(requireUser(req), tid, queued[2])), true
       if (queued?.[3] === 'send' && method === 'POST') return json(res, 200, sendQueued(requireUser(req), tid, queued[2])), true
       if (queued?.[3] === 'move' && method === 'POST') return json(res, 200, moveQueued(requireUser(req), tid, queued[2], await readJson(req, 1024))), true
+    }
+    // The user's shared links (?thread= for one thread's), and Stop sharing.
+    if (path === '/api/agents/shares' && read) {
+      const thread = url.searchParams.get('thread')
+      return json(res, 200, listShares(req, requireUser(req), thread && /^[0-9a-f-]{36}$/.test(thread) ? thread : null)), true
+    }
+    const shareToken = /^\/api\/agents\/shares\/([^/]+)$/.exec(path)?.[1]
+    if (shareToken && method === 'DELETE') {
+      if (!isShareToken(shareToken)) throw new HttpError(404, 'No such shared link')
+      return deleteShare(requireUser(req), shareToken), json(res, 200, { ok: true }), true
     }
     if (path === '/api/agents/prompt' && read) return json(res, 200, await agentsPrompt(requireUser(req), url.searchParams.has('fresh'))), true
     if (path === '/api/agents/skills' && read) return json(res, 200, await skillsList(requireUser(req), url.searchParams)), true

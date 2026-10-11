@@ -84,6 +84,7 @@ import { pullAll } from '../os/synced'
 import { mayTakeFocus } from '../os/overlays'
 import { allowNotifications } from '../os/agentWatch'
 import { AgentsSettings, usePromptLocation } from './AgentsSettings'
+import { openShareDialog } from './AgentsShare'
 import { MarkdownPreview } from './Zed'
 
 // Agents: a research assistant on Ollama Cloud (server/agents.ts). Threads on the left (and the
@@ -284,6 +285,7 @@ function AgentsApp({ win }: { win: WinState }) {
     },
     { label: 'Rename…', onSelect: () => setRenaming(t.id) },
     { label: 'Copy as Markdown', onSelect: () => void getThread(t.id).then((r) => copy(threadMarkdown(r.thread.title, r.messages)), () => {}) },
+    { label: 'Share thread…', onSelect: () => void openShareDialog(t) },
     { separator: true },
     t.archived ? { label: 'Move back to threads', onSelect: () => archive(t, false) } : { label: 'Archive', onSelect: () => archive(t, true) },
     { label: 'Delete…', danger: true, onSelect: () => remove(t) },
@@ -1442,6 +1444,9 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     if (thread && title.trim() && title.trim() !== thread.title) updateThread(thread.id, { title }).then((t) => (setThread(t), onChanged()), () => {})
   }
 
+  // A thread can be shared once the agent has answered something in it (server/shares.ts).
+  const hasAnswer = messages.some((m) => m.role === 'assistant' && m.content.trim())
+
   // Right-click menus in the conversation: what is under the pointer (a link, the selection, code,
   // a tool call, a message) first, then the thread's own items.
   const quote = (text: string) => {
@@ -1456,6 +1461,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     thread
       ? [
           { label: 'Copy thread as Markdown', disabled: !messages.length, onSelect: () => copy(threadMarkdown(thread.title, messages)) },
+          { label: 'Share thread…', disabled: !hasAnswer, onSelect: () => void openShareDialog(thread) },
           { label: thread.pinned ? 'Unpin' : 'Pin', onSelect: () => void updateThread(thread.id, { pinned: !thread.pinned }).then((t) => (setThread(t), onChanged()), () => {}) },
           ...(projects.length
             ? [
@@ -1501,6 +1507,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     else if (msg?.role === 'assistant')
       items.push(
         { label: 'Copy answer', onSelect: () => copy(msg.content) },
+        ...(thread && msg.content.trim() ? [{ label: 'Share this answer…', onSelect: () => void openShareDialog(thread, msg) }] : []),
         { label: selectionIn(e.currentTarget) ? 'Quote the whole answer' : 'Quote in reply', onSelect: () => quote(msg.content) },
         ...(msg.thinking ? [{ label: 'Copy thoughts', onSelect: () => copy(msg.thinking!) }] : []),
         { separator: true },
@@ -1675,6 +1682,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             onClick={(e) =>
               openContextMenu(e, [
                 { label: 'Rename…', onSelect: () => setRenaming(true) },
+                { label: 'Share thread…', disabled: !hasAnswer, onSelect: () => void openShareDialog(thread) },
                 thread.archived ? { label: 'Move back to threads', onSelect: () => onArchive(thread, false) } : { label: 'Archive', onSelect: () => onArchive(thread, true) },
                 { separator: true },
                 { label: 'Delete…', danger: true, onSelect: () => onDelete(thread) },
@@ -1702,7 +1710,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             <p className="muted agt-empty-tools">Tools on: {tools.length ? TOOL_GROUPS.filter((g) => tools.includes(g.id)).map((g) => g.name).join(', ') : 'none, just the model'}.</p>
           </div>
         )}
-        <Messages messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} />
+        <Messages messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} />
         {reconnecting ? (
           <p className="agt-wait muted">Reconnecting… the connection dropped, or the server is restarting for an update.</p>
         ) : live ? (
@@ -1909,8 +1917,18 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 }
 
 /** The conversation, with each assistant step's tool calls shown as cards beside their results. */
-function Messages({ messages, answering, approvals, onDecide, onAnswer, onRewind }: { messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void }) {
+function Messages({ messages, answering, approvals, onDecide, onAnswer, onRewind, onShare }: { messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
   const out: ReactNode[] = []
+  // A turn's answer is its last message with text: Share sits under it, once the turn is done.
+  const answers = new Set<number>()
+  let last: number | null = null
+  for (const m of messages) {
+    if (m.role === 'user') {
+      if (last !== null) answers.add(last)
+      last = null
+    } else if (m.role === 'assistant' && m.content.trim()) last = m.id
+  }
+  if (last !== null && !answering) answers.add(last)
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i]
     if (m.role === 'user') {
@@ -1961,9 +1979,19 @@ function Messages({ messages, answering, approvals, onDecide, onAnswer, onRewind
           </div>
         )}
         {m.content.trim() && (
-          <article className="zed-preview agt-answer" data-msg={m.id}>
-            <MarkdownPreview text={m.content} />
-          </article>
+          <div className="agt-answer-wrap" data-msg={m.id}>
+            <article className="zed-preview agt-answer">
+              <MarkdownPreview text={m.content} />
+            </article>
+            {/* Under each answer on hover (always on touch): share it as a link. */}
+            {answers.has(m.id) && (
+              <div className="agt-msg-actions">
+                <button type="button" onClick={() => onShare(m)} title="Share this answer and the message it answers as a link">
+                  Share
+                </button>
+              </div>
+            )}
+          </div>
         )}
         {calls.map((c, j) => {
           const wait = approvals.find((a) => a.messageId === m.id && a.index === j)
