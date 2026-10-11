@@ -1,3 +1,4 @@
+import { HANDLE } from '../os/identity'
 import { contributions, profile, projects } from '../data/profile'
 import { ansiToMarkup, plain, rainbow } from './ansi'
 import { md5, sha } from './hash'
@@ -6,7 +7,7 @@ import { CmdError, type Ctx } from './types'
 import { lookup } from './fs'
 import { age, lookup as siteLookup, resolvePath, walk as siteWalk, type Node } from './vfs'
 import { runLine, writeTmp } from './commands'
-import { deviceNames, isBind, isSeafileType, mounts, whereIs } from '../data/mounts'
+import { browserMountPoint, deviceNames, isBind, isSeafileType, mounts, whereIs } from '../data/mounts'
 import { cachedDir, getLibraries, getQuota, loadLibraries, parseSf, SF } from '../data/seafile'
 import { getAccount } from '../os/account'
 
@@ -470,7 +471,7 @@ async function htop(ctx: Ctx, title = 'htop'): Promise<string> {
         ...windows.map((w) => ({ pid: w.pid, cmd: w.app + (w.props.game ? ` --${w.props.game}` : '') + (w.minimized ? '  (minimized)' : ''), cpu: 0, nodes: nodes(w.pid), time: (now - w.openedAt) / 1000, state: w.minimized ? 'T' : 'S' })),
       ]
       const head = `${'PID'.padStart(6)} ${'USER'.padEnd(8)} S ${'CPU%'.padStart(5)} ${'NODES'.padStart(6)} ${'TIME+'.padStart(9)}  Command`
-      const list = procs.map((p) => `${String(p.pid).padStart(6)} ${profile.handle.slice(0, 8).padEnd(8)} ${p.state === 'R' ? c('green', 'R') : p.state} ${p.cpu.toFixed(1).padStart(5)} ${String(p.nodes || '-').padStart(6)} ${clock(p.time).padStart(9)}  ${p.pid <= 4 ? c('muted', p.cmd) : p.cmd}`)
+      const list = procs.map((p) => `${String(p.pid).padStart(6)} ${HANDLE.slice(0, 8).padEnd(8)} ${p.state === 'R' ? c('green', 'R') : p.state} ${p.cpu.toFixed(1).padStart(5)} ${String(p.nodes || '-').padStart(6)} ${clock(p.time).padStart(9)}  ${p.pid <= 4 ? c('muted', p.cmd) : p.cmd}`)
       const footer = `${c('accent', 'q')}Quit  ${c('accent', 'F10')}Quit  ${c('muted', 'Ctrl+C')}Quit`
       const room = Math.max(1, rows - header.length - 4)
       ctx.live([...header, '', c('green', head.padEnd(cols)), ...list.slice(0, room), ...Array(Math.max(0, room - list.length)).fill(''), footer].join('\n'))
@@ -589,7 +590,9 @@ async function df(ctx: Ctx): Promise<string> {
     { fs: 'vfs', size: rootBytes, used: rootBytes, avail: 0, mount: '/' },
     { fs: 'tmpfs', size: Math.max(tmpBytes, 1024 * 1024), used: tmpBytes, avail: Math.max(tmpBytes, 1024 * 1024) - tmpBytes, mount: '/tmp' },
   ]
-  if (est?.quota) rows.push({ fs: 'browser-storage', size: est.quota, used: est.usage ?? 0, avail: Math.max(0, est.quota - (est.usage ?? 0)), mount: '/var/lib/browser' })
+  // Signed in, your files in this browser are mounted (on ~ without Seafile): that is this row.
+  const browserAt = browserMountPoint()
+  if (est?.quota) rows.push({ fs: 'browser-storage', size: est.quota, used: est.usage ?? 0, avail: Math.max(0, est.quota - (est.usage ?? 0)), mount: browserAt ?? '/var/lib/browser' })
 
   // Seafile: the account mount has the account's quota and usage; a library has its own size,
   // and (when it is yours) what is left of the quota, which all your libraries share, as datasets
@@ -636,6 +639,7 @@ async function df(ctx: Ctx): Promise<string> {
     return `${r.fs.padEnd(w)} ${fmt(r.size).padStart(n)}  ${fmt(r.used).padStart(n)} ${fmt(r.avail).padStart(n)} ${use.padStart(4)} ${r.mount}`
   })
   notes.unshift(est?.quota ? 'browser-storage is the real quota and usage this browser gives the site.' : 'This browser does not report its storage quota.')
+  if (browserAt) notes.splice(1, 0, `${browserAt} is kept in this browser only: clearing the site's data deletes it. Seafile (Settings → Integrations) keeps files for good.`)
   return [head, ...body, '', ...notes.map((t) => c('muted', t))].join('\n')
 }
 

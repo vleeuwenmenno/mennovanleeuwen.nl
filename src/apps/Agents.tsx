@@ -75,7 +75,7 @@ export function Agents({ win }: { win: WinState }) {
   if (account.status !== 'user')
     return (
       <div className="nb-blank">
-        <p className="muted">Agents is the owner's research assistant.</p>
+        <p className="muted">Agents is a research assistant for signed-in users.</p>
         {account.status === 'anon' && (
           <button className="btn btn-primary" onClick={signIn}>
             Sign in with GitHub
@@ -95,7 +95,7 @@ export function Agents({ win }: { win: WinState }) {
   return <AgentsApp win={win} />
 }
 
-/** What the main pane shows: a conversation, the settings, or the memory (the owner's or a project's). */
+/** What the main pane shows: a conversation, the settings, or the memory (the user's or a project's). */
 type Main = { kind: 'thread' } | { kind: 'settings' } | { kind: 'memory'; scope: number | null }
 type Drag = { kind: 'project'; id: number } | { kind: 'thread'; id: string } | null
 
@@ -666,7 +666,7 @@ function catTree(list: Memory[]): CatNode {
 const countIn = (n: CatNode): number => n.items.length + n.children.reduce((s, c) => s + countIn(c), 0)
 
 /**
- * The memory, in the main pane: the owner's or one project's, as a tree of categories. Memories can
+ * The memory, in the main pane: the user's or one project's, as a tree of categories. Memories can
  * be added, edited (text, category, which memory they belong to) and forgotten.
  */
 function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null; projects: Project[]; onScope: (scope: number | null) => void; onBack: () => void }) {
@@ -791,10 +791,10 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
 function MemoryForm({ memory, scope, projects, categories, onSave, onCancel }: { memory?: Memory; scope: number | null; projects: Project[]; categories: string[]; onSave: (input: { text: string; category: string; projectId: number | null }) => void; onCancel: () => void }) {
   const [text, setText] = useState(memory?.text ?? '')
   const [category, setCategory] = useState(memory?.category ?? '')
-  const [owner, setOwner] = useState<string>(scope === null ? 'user' : `p${scope}`)
+  const [whose, setWhose] = useState<string>(scope === null ? 'user' : `p${scope}`)
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (text.trim()) onSave({ text: text.trim(), category, projectId: owner === 'user' ? null : Number(owner.slice(1)) })
+    if (text.trim()) onSave({ text: text.trim(), category, projectId: whose === 'user' ? null : Number(whose.slice(1)) })
   }
   const close = categories.filter((c) => c.toLowerCase().startsWith(category.toLowerCase()) && c !== category).slice(0, 6)
   return (
@@ -802,7 +802,7 @@ function MemoryForm({ memory, scope, projects, categories, onSave, onCancel }: {
       <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="One fact, in a sentence" rows={2} autoFocus aria-label="Memory" />
       <div className="agt-mem-form-row">
         <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Category, like People/Friends" aria-label="Category" spellCheck={false} />
-        <Select value={owner} onChange={(v) => setOwner(String(v))} aria-label="Whose memory" options={[{ value: 'user', label: 'You' }, ...projects.map((p) => ({ value: `p${p.id}`, label: p.name }))]} />
+        <Select value={whose} onChange={(v) => setWhose(String(v))} aria-label="Whose memory" options={[{ value: 'user', label: 'You' }, ...projects.map((p) => ({ value: `p${p.id}`, label: p.name }))]} />
         <button type="button" className="btn btn-small" onClick={onCancel}>
           Cancel
         </button>

@@ -9,7 +9,7 @@ export const SECURITY = {
 }
 
 /** For file bytes passed through from Seafile: never rendered as a page of this site, even when
- * opened directly (a shared library's HTML or SVG would otherwise run with the owner's session). */
+ * opened directly (a shared library's HTML or SVG would otherwise run with the user's session). */
 export const UNTRUSTED = {
   'Content-Security-Policy': "default-src 'none'; sandbox",
 }
@@ -73,9 +73,10 @@ export function publicOrigin(req: IncomingMessage): string {
   return `${proto}://${req.headers['x-forwarded-host'] ?? req.headers.host ?? 'localhost'}`
 }
 
-export function setCookie(req: IncomingMessage, name: string, value: string, opts: { maxAge: number; path?: string }) {
+/** `readable`: the page's scripts may read it (never for anything secret). */
+export function setCookie(req: IncomingMessage, name: string, value: string, opts: { maxAge: number; path?: string; readable?: boolean }) {
   const secure = publicOrigin(req).startsWith('https:') ? '; Secure' : ''
-  return `${name}=${encodeURIComponent(value)}; Path=${opts.path ?? '/'}; Max-Age=${opts.maxAge}; HttpOnly; SameSite=Lax${secure}`
+  return `${name}=${encodeURIComponent(value)}; Path=${opts.path ?? '/'}; Max-Age=${opts.maxAge}${opts.readable ? '' : '; HttpOnly'}; SameSite=Lax${secure}`
 }
 
 /** State-changing requests must come from this site: a present Origin header has to match. */

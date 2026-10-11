@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useWM, type WinState } from '../os/wm'
-import { fileKind, formatSize, kindOfName, lookup, prettyPath, stat } from '../terminal/vfs'
+import { lookup, readFileText } from '../terminal/fs'
+import { fileKind, formatSize, kindOfName, prettyPath, stat } from '../terminal/vfs'
 import { isSf, libraryName, parseSf, sfPath, useFileLink } from '../data/seafile'
+import { useBrowserUrl } from '../data/media'
 
 // Opens one file from the virtual filesystem: images are shown, text is shown as text, and the
-// large stand-in files (ISOs, music, video) explain politely why they will not play.
+// large stand-in files (ISOs, music, video) explain politely why they will not play. Files kept
+// in this browser are real: their pictures and text show as they are.
 
 const UNPLAYABLE: Record<string, string> = {
   audio: 'This is a FLAC from a filesystem that only exists in your browser. Omasoloist plays the real ones.',
@@ -23,7 +26,15 @@ function LocalViewer({ path }: { path: string }) {
   const wm = useWM()
   const node = lookup(path)
   const kind = node ? fileKind(node) : 'file'
-  const src = useMemo(() => (node?.type === 'file' && kind === 'image' ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(node.content())}` : null), [node, kind])
+  // Kept in this browser: real pictures (a blob: address), and text read from storage when it is big.
+  const stored = node?.type === 'file' && node.browser ? node : null
+  const blob = useBrowserUrl(stored && kind === 'image' ? path : null)
+  const [text, setText] = useState<string | null>(null)
+  useEffect(() => {
+    setText(null)
+    if (stored && kind !== 'image') void readFileText(path).then((r) => setText(r?.text ?? ''), () => setText(''))
+  }, [path, stored?.size, stored?.mtime, kind])
+  const src = useMemo(() => (stored ? blob.url : node?.type === 'file' && kind === 'image' ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(node.content())}` : null), [node, kind, stored, blob.url])
 
   if (!node || node.type !== 'file') return <div className="viewer-empty muted">{path ? `${prettyPath(path)} no longer exists.` : 'Nothing to show.'}</div>
   const info = stat(path, node)
@@ -47,13 +58,13 @@ function LocalViewer({ path }: { path: string }) {
         <div className="viewer-image">
           <img src={src} alt={node.name} />
         </div>
-      ) : UNPLAYABLE[kind] ? (
+      ) : !stored && UNPLAYABLE[kind] ? (
         <div className="viewer-empty">
           <p className="viewer-big">{node.name}</p>
           <p className="muted">{UNPLAYABLE[kind]}</p>
         </div>
       ) : (
-        <pre className="viewer-text">{node.content()}</pre>
+        <pre className="viewer-text">{stored ? (text ?? 'Loading…') : node.content()}</pre>
       )}
     </div>
   )

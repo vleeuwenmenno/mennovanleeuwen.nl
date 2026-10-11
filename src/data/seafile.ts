@@ -311,6 +311,26 @@ export async function readText(path: string): Promise<string> {
   return res.text()
 }
 
+/** A file's bytes, straight from Seafile's file server (copying out of Seafile). */
+export async function readBlob(path: string): Promise<Blob> {
+  const res = await fetch(await fileLink(path, 'download'))
+  if (!res.ok) throw new Error(`Seafile answered ${res.status}`)
+  return res.blob()
+}
+
+/** Puts bytes in a Seafile folder under `name`, replacing a file of that name (copying into Seafile). */
+export async function uploadBlob(folder: string, name: string, blob: Blob) {
+  const at = parseSf(folder)!
+  const link = await fileLink(folder, 'upload')
+  const form = new FormData()
+  form.append('parent_dir', at.p)
+  form.append('replace', '1')
+  form.append('file', blob, name)
+  const res = await fetch(`${link}?ret-json=1`, { method: 'POST', body: form })
+  if (!res.ok) throw new Error((await res.text().catch(() => '')) || `Seafile answered ${res.status}`)
+  refreshDirs(folder)
+}
+
 /** Overwrites a file with new text (the editor's save). */
 export async function writeText(path: string, text: string) {
   const at = parseSf(path)!
@@ -411,8 +431,10 @@ export function openSeafile(wm: Opener, path: string, opts: { dir?: boolean; how
   if (how === 'player' || (how === 'default' && kind === 'video')) return Promise.resolve(wm.openNew('player', { path }))
   if (how === 'pdf' || (how === 'default' && kind === 'pdf')) return Promise.resolve(wm.openNew('pdf', { path }))
   if (how === 'archive' || (how === 'default' && isArchive(name))) return Promise.resolve(wm.openNew('archive', { path }))
-  if (how === 'office' || (how === 'default' && kind === 'document' && getAccount().seafile?.office)) return Promise.resolve(wm.openNew('office', { path }))
-  if (how === 'viewer') return Promise.resolve(wm.openNew('viewer', { path }))
+  // OnlyOffice fetches the file from Seafile, so only Seafile's files open there.
+  if (how === 'office' || (how === 'default' && kind === 'document' && isSf(path) && getAccount().seafile?.office)) return Promise.resolve(wm.openNew('office', { path }))
+  // A file kept in this browser (a filesystem path): anything else opens in the Viewer.
+  if (how === 'viewer' || !isSf(path)) return Promise.resolve(wm.openNew('viewer', { path }))
   return download(path)
 }
 

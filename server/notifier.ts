@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { actionUrl, allows, keepMs, normalizePrefs, NOTIFY_SOURCES, type Entry, type NoticeAction, type NotifyPrefs, type SourceId } from '../src/data/notifySources.ts'
 import type { User } from './auth.ts'
-import { database } from './db.ts'
+import { database, onUserGone } from './db.ts'
 import { HttpError, SECURITY } from './http.ts'
 import { readState } from './state.ts'
 import { pushToUser } from './webpush.ts'
@@ -36,14 +36,29 @@ type AccountRef = Pick<User, 'id'>
 
 const prefsOf = (user: AccountRef): NotifyPrefs => normalizePrefs(readState(user as User).notify?.value)
 const MAX_KEPT = 200
+/** Remembered "once" keys per account. */
+const MAX_ONCE = 5000
+/** Notifications a page may send per minute (feedback for its own account). */
+const PAGE_PER_MINUTE = 30
+const pageSent = new Map<number, { at: number; n: number }>()
+onUserGone((id) => pageSent.delete(id))
 
 // --- open pages ----------------------------------------------------------------------------------
 
 /** A page with the live stream open: whether it is in view, as it last said (a heartbeat). */
 type Page = { res: ServerResponse; visible: boolean; seen: number }
 const pages = new Map<number, Map<string, Page>>() // account → page id → page
+/** Live streams one account may have open at once (tabs, devices). */
+const MAX_PAGES = 8
 /** A page that said it was in view longer ago than this is taken to be asleep (a phone in a pocket). */
 const VISIBLE_FOR = 75_000
+
+/** Ends an account's live streams (signed out everywhere, banned or deleted, server/users.ts). */
+export function closeStreams(userId: number) {
+  for (const p of pages.get(userId)?.values() ?? []) p.res.end()
+  pages.delete(userId)
+}
+onUserGone(closeStreams)
 
 const inView = (userId: number) => [...(pages.get(userId)?.values() ?? [])].some((p) => p.visible && Date.now() - p.seen < VISIBLE_FOR)
 
@@ -57,6 +72,12 @@ export function openStream(req: IncomingMessage, res: ServerResponse, user: User
   res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', Connection: 'keep-alive', ...SECURITY })
   const list = pages.get(user.id) ?? new Map<string, Page>()
   pages.set(user.id, list)
+  // Anyone can sign up: a few open pages each, the oldest let go past that.
+  while (list.size >= MAX_PAGES) {
+    const [oldest, page] = list.entries().next().value!
+    list.delete(oldest)
+    page.res.end()
+  }
   list.set(id, { res, visible: true, seen: Date.now() })
   res.write(`event: hello\ndata: ${JSON.stringify({ page: id })}\n\n`)
   // A comment now and then keeps proxies from closing a quiet stream.
@@ -138,6 +159,8 @@ function firstTime(userId: number, key: string): boolean {
   const db = database()
   const r = db.prepare('INSERT OR IGNORE INTO notify_once (user_id, key, at) VALUES (?, ?, ?)').run(userId, key.slice(0, 300), Date.now())
   if (Math.random() < 0.02) db.prepare('DELETE FROM notify_once WHERE at < ?').run(Date.now() - 60 * 864e5)
+  // Pages can name keys too (noticeFromPage): each account keeps its newest few thousand.
+  if (r.changes && Math.random() < 0.05) db.prepare('DELETE FROM notify_once WHERE user_id = ? AND key NOT IN (SELECT key FROM notify_once WHERE user_id = ? ORDER BY at DESC LIMIT ?)').run(userId, userId, MAX_ONCE)
   return r.changes > 0
 }
 
@@ -166,6 +189,11 @@ export function notify(user: AccountRef, n: Notice, { watched = false }: { watch
 
 /** POST /api/notifications: something a page noticed itself (an upload finishing), for the list and the account's other devices. */
 export function noticeFromPage(user: User, body: { source?: unknown; title?: unknown; body?: unknown; action?: unknown; once?: unknown }) {
+  const now = Date.now()
+  const sent = pageSent.get(user.id)
+  if (sent && now - sent.at < 60_000) {
+    if (++sent.n > PAGE_PER_MINUTE) throw new HttpError(429, 'Too many notifications: slow down')
+  } else pageSent.set(user.id, { at: now, n: 1 })
   const source = typeof body.source === 'string' ? body.source : ''
   const [app, kind] = source.split('.')
   if (!NOTIFY_SOURCES.some((s) => s.app === app && s.kinds.some((k) => k.id === kind))) throw new HttpError(400, 'Unknown notification source')

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Privacy · MvL OS</title>
+    <meta name="description" content="What MvL OS stores when you sign in, who can see it, and how to delete it." />
+    <style>
+      :root {
+        --bg: #f7f7f5;
+        --text: #1d1d1b;
+        --muted: #5f5f5a;
+        --accent: #2f6fdf;
+        --line: #deded8;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #161615;
+          --text: #ececea;
+          --muted: #a3a39d;
+          --accent: #7aa7ff;
+          --line: #2e2e2b;
+        }
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 16px/1.6 system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      main {
+        max-width: 42rem;
+        margin: 0 auto;
+        padding: 3rem 1rem 4rem;
+      }
+      h1 {
+        font-size: 1.8rem;
+        margin: 0 0 0.25rem;
+      }
+      h2 {
+        font-size: 1.1rem;
+        margin: 2rem 0 0.5rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--line);
+      }
+      p,
+      li {
+        color: var(--text);
+      }
+      .muted {
+        color: var(--muted);
+      }
+      a {
+        color: var(--accent);
+      }
+      ul {
+        padding-left: 1.2rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Privacy</h1>
+      <p class="muted">MvL OS, the web desktop at mennovanleeuwen.nl, run by Menno van Leeuwen.</p>
+
+      <h2>Without signing in</h2>
+      <p>Nothing about you is kept on the server. Notes, layouts and settings you make as a guest stay in your browser's storage.</p>
+
+      <h2>When you sign in with GitHub</h2>
+      <p>The server keeps, in one database:</p>
+      <ul>
+        <li>Your GitHub account id, login, name and avatar address, and when you were last seen.</li>
+        <li>GitHub's access token for this app (encrypted). Sign-in only asks for your public profile; private repositories are only reached if you allow them in Settings → Code hosts.</li>
+        <li>Your sign-in sessions (30 days each).</li>
+        <li>What syncs between your devices: notes, window layouts, desktop icons, launchers, dock and settings.</li>
+        <li>Agents threads, their attachments, and what the agent remembers for you.</li>
+        <li>Services you link yourself, with their tokens or passwords encrypted: Gitea/Forgejo, Google Calendar, CalDAV, Seafile, OnlyOffice, updown.io, Ollama Cloud and web search providers.</li>
+        <li>Push subscriptions for the devices you turn notifications on for.</li>
+      </ul>
+      <p>Files you make without Seafile linked are stored in your browser only, never on this server, and are gone when you clear the site's data.</p>
+
+      <h2>Who sees it</h2>
+      <p>
+        Only you. Other users have no way to see anything of yours. The admin sees a list of accounts with their login, avatar, when they joined and were last seen, which kinds of services are linked,
+        and how much storage they use; never the contents of notes, threads, memories or files.
+      </p>
+      <p>
+        When you use a linked service, the server talks to it on your behalf: GitHub, Google, your own Gitea, CalDAV or Seafile server, and Ollama Cloud (the Agents app sends your messages there to
+        get answers). Their own privacy terms apply to what they receive.
+      </p>
+
+      <h2>Deleting it</h2>
+      <p>
+        Settings → Account → Delete account removes your account and everything listed above from the server at once, signs you out everywhere, revokes Google and Seafile access, and removes this app
+        from your GitHub account. Files in your own Seafile are not touched. Signing out alone clears what this browser kept for you.
+      </p>
+
+      <h2>Questions</h2>
+      <p>Ask Menno through the contact links on <a href="/cv">mennovanleeuwen.nl/cv</a>.</p>
+    </main>
+  </body>
+</html>

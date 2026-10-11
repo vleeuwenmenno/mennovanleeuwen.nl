@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { isCodeQuery, type SearchResponse } from '../data/code'
 import { useAccount } from './account'
 
-// Spotlight's live search over the owner's GitHub and Gitea/Forgejo instances (/api/search),
+// Spotlight's live search over the user's GitHub and Gitea/Forgejo instances (/api/search),
 // debounced while typing. Only runs when signed in.
 
 export type CodeSearch = { loading: boolean; result: SearchResponse | null; error: string | null; for: string }

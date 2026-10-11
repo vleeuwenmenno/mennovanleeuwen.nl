@@ -3,7 +3,8 @@ import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
 import { addMemory, agentsPrompt, answer, approve, automaticModels, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, deleteMemory, deleteThread, getThread, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
-import { authEnabled, currentUser, finishLogin, logout, requireUser, startLogin } from './auth.ts'
+import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
+import { authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, startLogin } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { addCaldav, listCaldav, removeCaldav } from './caldav.ts'
@@ -22,6 +23,7 @@ import { minecraftOverview, minecraftStatus } from './minecraft.ts'
 import { search, clearSearchCache } from './search.ts'
 import { suggest } from './suggest.ts'
 import { readState, writeState } from './state.ts'
+import { deleteUser } from './users.ts'
 
 // Every /api route, shared by the production server (server/index.ts) and Vite's dev and
 // preview servers (vite.config.ts). Resolves true when it answered the request.
@@ -60,13 +62,15 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
 
     // Sign-in.
-    if (read && path === '/api/auth/github/login') return startLogin(req, res), true
+    if (read && path === '/api/auth/github/login') return startLogin(req, res, url), true
     if (read && path === '/api/auth/github/callback') return await finishLogin(req, res, url), true
     if (read && path === '/api/me') {
       const user = currentUser(req)
       json(res, 200, {
         authEnabled: authEnabled(),
-        user: user && { login: user.login, name: user.name, avatar: user.avatar },
+        // Whether a new account could sign up now (the sign-in button says so before GitHub does).
+        registration: authEnabled() ? (({ open, full }) => ({ open, full }))(registration()) : null,
+        user: user && { id: user.id, login: user.login, name: user.name, avatar: user.avatar, admin: user.admin, githubScopes: user.githubScopes },
         forges: user ? listForges(user) : [],
         googleEnabled: googleEnabled(),
         google: user ? googleAccount(user) : null,
@@ -77,7 +81,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       return true
     }
 
-    // Google Calendar, attached to the signed-in owner (server/google.ts).
+    // Google Calendar, attached to the signed-in user (server/google.ts).
     if (read && path === '/api/google/connect') {
       if (!currentUser(req)) return redirect(res, '/?google=signin'), true
       return startGoogle(req, res), true
@@ -91,6 +95,26 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     // Everything below changes something or reads private data.
     if (!read && !sameOrigin(req)) throw new HttpError(403, 'Cross-site request')
     if (method === 'POST' && path === '/api/auth/logout') return logout(req, res), true
+    // Deleting your own account (Settings → Account): everything it stored goes (server/users.ts).
+    if (method === 'DELETE' && path === '/api/me') {
+      await deleteUser(requireUser(req).id)
+      return logout(req, res), true
+    }
+
+    // Settings → Users, for admins only (server/admin.ts).
+    if (path === '/api/admin/stats' && read) return requireAdmin(req), json(res, 200, adminStats()), true
+    if (path === '/api/admin/settings' && method === 'PUT') return requireAdmin(req), json(res, 200, updateSettings(await readJson(req, 1024))), true
+    if (path === '/api/admin/users' && read) return requireAdmin(req), json(res, 200, listUsers(url.searchParams.get('q'), url.searchParams.get('cursor'))), true
+    const adminTarget = /^\/api\/admin\/users\/(\d+)(\/ban|\/unban|\/signout)?$/.exec(path)
+    if (adminTarget) {
+      const admin = requireAdmin(req)
+      const [, uid, sub] = adminTarget
+      if (!sub && read) return json(res, 200, adminUser(uid)), true
+      if (!sub && method === 'DELETE') return await removeUser(admin, uid), json(res, 200, { ok: true }), true
+      if (sub === '/ban' && method === 'POST') return json(res, 200, banUser(admin, uid, await readJson(req, 4096))), true
+      if (sub === '/unban' && method === 'POST') return json(res, 200, unbanUser(admin, uid)), true
+      if (sub === '/signout' && method === 'POST') return json(res, 200, signOutUser(admin, uid)), true
+    }
 
     if (path === '/api/state' && read) return json(res, 200, readState(requireUser(req))), true
     const stateKey = /^\/api\/state\/([^/]+)$/.exec(path)?.[1]
@@ -274,7 +298,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/push/subscription' && method === 'DELETE') return json(res, 200, unsubscribe(requireUser(req), await readJson(req, 8 * 1024))), true
     if (path === '/api/push/test' && method === 'POST') return json(res, 200, await pushToUser(requireUser(req), { title: 'MvL OS', body: 'Push notifications work on this device.', tag: 'push-test', url: '/' })), true
     if (path === '/api/preview' && read) {
-      requireUser(req) // fetches other sites on request: the signed-in owner only
+      requireUser(req) // fetches other sites on request: the signed-in user only
       const res2 = await linkPreview(url.searchParams.get('url') ?? '')
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'private, max-age=3600', ...SECURITY }).end(JSON.stringify(res2))
       return true

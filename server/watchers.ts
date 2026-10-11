@@ -7,6 +7,7 @@ import { allEvents } from './calendars.ts'
 import { googleAccount } from './google.ts'
 import { MC_HOST, onMinecraftStatus, type McStatus } from './minecraft.ts'
 import { claimOnce, notify, registerWatcher, startWatchers, type Notice } from './notifier.ts'
+import { onUserGone } from './db.ts'
 import { readState } from './state.ts'
 
 // The notification hub's watchers (server/notifier.ts): things the server looks at every so often,
@@ -14,12 +15,14 @@ import { readState } from './state.ts'
 // what it finds to notify(), which applies the account's choices, keeps the list and pushes.
 //
 // - Minecraft: who joins and leaves, and the server going down or up, from the server's own
-//   pinger (server/minecraft.ts), for every account.
-// - Activity: new pushes, releases and the like on GitHub and git.mvl.sh, for every account, each
-//   item once, back as far as the account's "how recent" setting.
+//   pinger (server/minecraft.ts), for the admins (it is Menno's server, part of his CV at /cv).
+// - Activity: new pushes, releases and the like on Menno's GitHub and git.mvl.sh, for the admins,
+//   each item once, back as far as the account's "how recent" setting.
 // - Calendar: reminders before events, for each account with a calendar connected.
 
 const prefsOf = (user: User) => normalizePrefs(readState(user).notify?.value)
+/** Menno's own Minecraft server and activity: news for the admins only, not every account. */
+const admins = () => accounts().filter((u) => u.admin)
 
 // --- Minecraft -----------------------------------------------------------------------------------
 
@@ -35,7 +38,7 @@ export function minecraft(st: McStatus) {
   if (!prev) return // the first ping is where things stand, not news
 
   const tell = (source: SourceId, title: string, body: string, icon?: string) => {
-    for (const u of accounts()) notify(u, { source, title, body, icon, action: { app: 'mcserver' } })
+    for (const u of admins()) notify(u, { source, title, body, icon, action: { app: 'mcserver' } })
   }
   if (prev.online !== st.online) {
     tell('minecraft.status', st.online ? "Menno's Minecraft server is back online" : "Menno's Minecraft server went offline", MC_HOST)
@@ -84,7 +87,7 @@ async function activityFeed(): Promise<Activity[]> {
 }
 
 export async function activity() {
-  const users = accounts()
+  const users = admins()
   if (!users.length) return
   const items = await activityFeed()
   for (const u of users) {
@@ -111,6 +114,7 @@ export async function activity() {
 type CalEvent = Awaited<ReturnType<typeof allEvents>>['events'][number]
 /** Each account's coming events, read again every five minutes (Google and CalDAV are not asked every minute). */
 const upcoming = new Map<number, { at: number; events: CalEvent[] }>()
+onUserGone((id) => upcoming.delete(id))
 const REFRESH_MS = 5 * 60_000
 
 async function calendar() {

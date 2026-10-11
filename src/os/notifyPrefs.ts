@@ -1,4 +1,5 @@
 import { allows, DEFAULT_PREFS, normalizePrefs, NOTIFY_SOURCES, type NotifyPrefs } from '../data/notifySources'
+import { cvMode } from './cvMode'
 import { synced } from './synced'
 
 // Which notifications may show, and how long the notification center keeps them. Every
@@ -35,5 +36,6 @@ export function setOn(id: string, on: boolean) {
 }
 export const isOff = (prefs: NotifyPrefs, id: string) => prefs.off.includes(id)
 
-/** For Settings: every source, the owner-only ones only when signed in. */
-export const visibleSources = (owner: boolean) => NOTIFY_SOURCES.filter((s) => owner || !s.owner)
+/** For Settings: every source, the account-only ones only when signed in. */
+// Menno's Minecraft server and activity only notify on his CV page (src/os/cvMode.ts).
+export const visibleSources = (signedIn: boolean) => NOTIFY_SOURCES.filter((s) => (signedIn || !s.account) && (cvMode() || (s.app !== 'minecraft' && s.app !== 'activity')))

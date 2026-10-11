@@ -2,6 +2,8 @@ import { contributions, headlines, profile, projects } from '../data/profile'
 import { countFor, levels, loadContributions } from '../data/contributions'
 import { fetchMinecraft, MC_ADDRESS } from '../data/minecraft'
 import { fetchStars, loadRecents, timeAgo } from '../data/recents'
+import { appHere, cvMode } from '../os/cvMode'
+import { HANDLE, MENNO_PERSONA, SIGNED_IN_HANDLE } from '../os/identity'
 import type { AppId } from '../os/wm'
 import { lookupAddress, RECORD_TYPES, resolve, resolverFor } from './dns'
 import { pepper } from './pepper'
@@ -91,6 +93,9 @@ const APPS: Record<string, AppId> = {
   settings: 'settings',
   mcserver: 'mcserver',
 }
+
+// The CV apps only exist at /cv (src/os/cvMode.ts).
+for (const [name, app] of Object.entries(APPS)) if (!appHere(app)) delete APPS[name]
 
 const APP_NAMES: Record<AppId, string> = {
   terminal: 'terminal',
@@ -226,7 +231,12 @@ function treeLines(node: DirNode, prefix = ''): string[] {
   })
 }
 
+/** Menno's age on his CV page (the system has been up since he was born), else how long this page has been open. */
 function fmtUptime() {
+  if (!MENNO_PERSONA) {
+    const m = Math.floor(performance.now() / 60_000)
+    return m < 60 ? `${m} min` : `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`
+  }
   const { years, days } = age()
   return `${years} years, ${days} day${days === 1 ? '' : 's'}`
 }
@@ -237,7 +247,7 @@ export function fastfetch(ctx: Pick<Ctx, 'windows'>) {
   const ua = navigator.userAgent
   const browser = /Firefox\/(\d+)/.exec(ua)?.[0].replace('/', ' ') ?? /Edg\/(\d+)/.exec(ua)?.[0].replace('Edg/', 'Edge ') ?? /Chrome\/(\d+)/.exec(ua)?.[0].replace('/', ' ') ?? /Version\/(\d+).*Safari/.exec(ua)?.[1].replace(/^/, 'Safari ') ?? 'a browser'
   const info = [
-    `${c('accent', profile.handle)}@${c('accent', 'mvlos')}`,
+    `${c('accent', HANDLE)}@${c('accent', 'mvlos')}`,
     c('muted', '─'.repeat(16)),
     `${c('accent', 'OS')}        MvL OS ${VERSION} (${browser})`,
     `${c('accent', 'Host')}      ${location.host || 'localhost'}`,
@@ -245,9 +255,10 @@ export function fastfetch(ctx: Pick<Ctx, 'windows'>) {
     `${c('accent', 'Shell')}     msh 1.0`,
     `${c('accent', 'Display')}   ${window.innerWidth}x${window.innerHeight}`,
     `${c('accent', 'WM')}        react-wm (${ctx.windows.length} windows)`,
-    `${c('accent', 'Role')}      ${profile.role} @ ${profile.company}`,
-    `${c('accent', 'Langs')}     ${profile.favourites.languages.join(', ')}`,
-    `${c('accent', 'Distro')}    ${profile.favourites.platform}`,
+    // Menno's own lines on his CV page; whoever is signed in otherwise.
+    ...(MENNO_PERSONA
+      ? [`${c('accent', 'Role')}      ${profile.role} @ ${profile.company}`, `${c('accent', 'Langs')}     ${profile.favourites.languages.join(', ')}`, `${c('accent', 'Distro')}    ${profile.favourites.platform}`]
+      : [`${c('accent', 'User')}      ${SIGNED_IN_HANDLE ? `${getAccount().user?.name ?? HANDLE} (GitHub)` : 'guest'}`]),
     '',
     ['red', 'yellow', 'green', 'cyan', 'blue', 'magenta'].map((k) => c(k, '███')).join(''),
   ]
@@ -344,8 +355,8 @@ export const commands: Record<string, Command> = {
           const rw = (k.sf && !k.ro) || abs === '/tmp'
           const perm = k.type === 'dir' ? (rw ? 'drwxr-xr-x' : 'dr-xr-xr-x') : k.exec ? '-r-xr-xr-x' : rw ? '-rw-r--r--' : '-r--r--r--'
           const kAbs = `${abs === '/' ? '' : abs}/${k.name}`
-          const owner = k.sf || kAbs.startsWith(`${HOME}/`) || kAbs.startsWith('/srv/site/') || kAbs.startsWith('/tmp/') ? profile.handle : 'root'
-          return `${perm}  ${owner.padEnd(Math.max(profile.handle.length, 4))}  ${String(size).padStart(6)}  ${colorName(k)}`
+          const owner = k.sf || kAbs.startsWith(`${HOME}/`) || kAbs.startsWith('/srv/site/') || kAbs.startsWith('/tmp/') ? HANDLE : 'root'
+          return `${perm}  ${owner.padEnd(Math.max(HANDLE.length, 4))}  ${String(size).padStart(6)}  ${colorName(k)}`
         })
         .join('\n')
     },
@@ -566,16 +577,18 @@ export const commands: Record<string, Command> = {
   whoami: {
     desc: 'who is this',
     run: () =>
-      [
+      !MENNO_PERSONA
+        ? HANDLE
+        : [
         c('accent', profile.name),
         `${profile.role} @ ${profile.company}`,
         '',
         profile.summary,
         '',
         `Run ${c('green', 'cv')} for the full picture or ${c('green', 'projects')} for the fun part.`,
-      ].join('\n'),
+          ].join('\n'),
   },
-  id: { desc: 'user identity', hidden: true, run: () => `uid=1000(${profile.handle}) gid=1000(${profile.handle}) groups=1000(${profile.handle}),998(wheel),27(devops),42(omarchy)` },
+  id: { desc: 'user identity', hidden: true, run: () => `uid=1000(${HANDLE}) gid=1000(${HANDLE}) groups=1000(${HANDLE}),998(wheel),27(devops),42(omarchy)` },
   hostname: { desc: 'print hostname', hidden: true, run: () => 'mvlos' },
   uname: {
     desc: 'system info',
@@ -710,7 +723,7 @@ export const commands: Record<string, Command> = {
         ctx.openNewApp('files', { path: abs })
         return
       }
-      if ([...projects, ...contributions].some((p) => p.slug === slug)) {
+      if (cvMode() && [...projects, ...contributions].some((p) => p.slug === slug)) {
         ctx.openApp('projects', { slug })
         return
       }
@@ -896,8 +909,8 @@ export const commands: Record<string, Command> = {
       const { args } = ctx
       if (/^rm\s+-\w*[rR]\w*\s+(-\S+\s+)*\/(\s|$)/.test(args.join(' ') + ' ')) return `${c('red', 'sudo:')} absolutely not.`
       if (args[0] === 'make' && args.slice(1).join(' ') === 'me a sandwich') return 'Okay.'
-      // The signed-in owner may (it is their filesystem table); visitors are not in sudoers.
-      if (getAccount().status !== 'user') return `[sudo] password for ${profile.handle}: \n${c('red', `${profile.handle} is not in the sudoers file. This incident will be reported.`)}`
+      // The signed-in user may (it is their filesystem table); visitors are not in sudoers.
+      if (getAccount().status !== 'user') return `[sudo] password for ${HANDLE}: \n${c('red', `${HANDLE} is not in the sudoers file. This incident will be reported.`)}`
       if (!args.length) return 'usage: sudo command'
       if (['-i', '-s', 'su', 'bash', 'sh', 'msh'].includes(args[0])) throw new CmdError('sudo: no root shell here; put sudo in front of each command instead.')
       const printed: string[] = []
@@ -1098,6 +1111,8 @@ export const commands: Record<string, Command> = {
 
 // The real-network and device tools live in extra.ts.
 Object.assign(commands, extraCommands, findCommands, mountCommands, nanoCommands, unzipCommands, tarCommands)
+// Menno's CV in the terminal: only on his CV page (src/os/cvMode.ts).
+if (!cvMode()) for (const name of ['cv', 'projects', 'contribs', 'recent', 'stars', 'contact', 'heatmap', 'minecraft', 'mc', 'headlines']) delete commands[name]
 // /bin lists them all, like a real one (hidden easter eggs included; not the odd names like :q).
 dynamic.commands = () =>
   Object.keys(commands)
@@ -1108,7 +1123,7 @@ dynamic.commands = () =>
 /** Shuts down or reboots the whole "machine" after the broadcast has had a moment on screen. */
 function power(ctx: Ctx, what: 'reboot' | 'power off') {
   setTimeout(what === 'reboot' ? reboot : shutdown, 500)
-  return `Broadcast message from ${profile.handle}@mvlos on ${ctx.console ? 'tty1' : 'pts/0'}:\n\nThe system will ${what} now!`
+  return `Broadcast message from ${HANDLE}@mvlos on ${ctx.console ? 'tty1' : 'pts/0'}:\n\nThe system will ${what} now!`
 }
 
 /**
@@ -1238,7 +1253,7 @@ async function ping(ctx: Ctx): Promise<string> {
 
 export function writeTmp(cwd: string, target: string, content: string, append: boolean) {
   const abs = resolvePath(cwd, target)
-  if (!abs.startsWith('/tmp/') || abs.slice(5).includes('/')) throw new CmdError(`${target}: Read-only file system (only /tmp is writable)`)
+  if (!abs.startsWith('/tmp/') || abs.slice(5).includes('/')) throw new CmdError(`${target}: Read-only file system`)
   const name = abs.slice(5)
   const existing = tmp().children.get(name)
   const prev = existing?.type === 'file' ? existing.content() : ''

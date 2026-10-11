@@ -1,4 +1,4 @@
-import { profile } from '../data/profile'
+import { HANDLE } from '../os/identity'
 import { runLine, writeTmp, type Completion } from './commands'
 import { CmdError, type Ctx } from './types'
 import { lookup, removePath, sfOf } from './fs'
@@ -19,7 +19,7 @@ const c = (color: string, s: string) => `{c:${color}}${s}{/}`
 const DIR_SIZE = 4096
 
 const isUnderTmp = (abs: string) => abs.startsWith('/tmp/')
-const owner = (abs: string) => (abs === HOME || abs.startsWith(`${HOME}/`) || isUnderTmp(abs) || sfOf(abs) ? profile.handle : 'root')
+const owner = (abs: string) => (abs === HOME || abs.startsWith(`${HOME}/`) || isUnderTmp(abs) || sfOf(abs) ? HANDLE : 'root')
 const idOf = (abs: string) => (owner(abs) === 'root' ? 0 : 1000)
 const isExecutable = (node: Node) => node.type === 'dir' || (node.type === 'file' && !!node.exec) || node.name.endsWith('.game')
 
@@ -717,7 +717,7 @@ class FindParser {
       case '-user':
       case '-group': {
         const name = this.arg(pred)
-        if (!/^\d+$/.test(name) && name !== profile.handle && name !== 'root') throw new FindError(`find: '${name}' is not the name of a known ${pred === '-user' ? 'user' : 'group'}`)
+        if (!/^\d+$/.test(name) && name !== HANDLE && name !== 'root') throw new FindError(`find: '${name}' is not the name of a known ${pred === '-user' ? 'user' : 'group'}`)
         return test((e) => (/^\d+$/.test(name) ? idOf(e.abs) === Number(name) : owner(e.abs) === name))
       }
       case '-uid':

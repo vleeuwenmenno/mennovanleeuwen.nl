@@ -6,6 +6,7 @@ import { createNote } from '../data/notes'
 import { addWidget, widgetDefs } from '../widgets/registry'
 import { contributions, profile, projects } from '../data/profile'
 import { getAccount, signedIn } from './account'
+import { appHere, cvMode } from './cvMode'
 import { APP_META } from './apps'
 import { appearanceMenu } from './appearanceMenu'
 import { openContextMenu, type MenuItem } from './ContextMenu'
@@ -128,8 +129,8 @@ export function Launchpad() {
         label: 'Apps',
         icon: ICONS.apps,
         children: () =>
-          // The Calendar and Agents apps only mean something to the signed-in owner.
-          APP_ORDER.filter((a) => APP_META[a] && ((a !== 'calendar' && a !== 'agents') || signedIn()) && (!ALWAYS_NEW.has(a) || !!getAccount().seafile?.office)).map((app) => ({
+          // The Calendar and Agents apps only mean something when signed in; the CV apps only exist at /cv.
+          APP_ORDER.filter((a) => APP_META[a] && appHere(a) && ((a !== 'calendar' && a !== 'agents') || signedIn()) && (!ALWAYS_NEW.has(a) || !!getAccount().seafile?.office)).map((app) => ({
             label: APP_META[app].dock,
             icon: <AppIcon app={app} size={16} tone />,
             run: () => wm.open(app),
@@ -163,24 +164,27 @@ export function Launchpad() {
         icon: ICONS.games,
         children: () => GAME_CATALOG.map((g) => ({ label: g.name, icon: <span className="om-glyph">{g.glyph}</span>, run: () => wm.openNew('games', { game: g.id }) })),
       },
-      {
-        label: 'Projects',
-        icon: ICONS.projects,
-        children: () => [
-          ...projects.map((p) => ({ label: p.name, run: () => wm.open('projects', { slug: p.slug }) })),
-          ...contributions.map((c) => ({ label: `${c.owner}/${c.slug}`, run: () => wm.open('projects', { slug: c.slug }) })),
-        ],
-      },
+      ...(cvMode()
+        ? [
+            {
+              label: 'Projects',
+              icon: ICONS.projects,
+              children: () => [
+                ...projects.map((p) => ({ label: p.name, run: () => wm.open('projects', { slug: p.slug }) })),
+                ...contributions.map((c) => ({ label: `${c.owner}/${c.slug}`, run: () => wm.open('projects', { slug: c.slug }) })),
+              ],
+            },
+          ]
+        : []),
       {
         label: 'Learn',
         icon: ICONS.learn,
         children: () => [
-          { label: 'CV', run: () => wm.open('cv') },
+          ...(cvMode() ? [{ label: 'CV', run: () => wm.open('cv') }] : []),
           { label: 'Keyboard shortcuts', run: () => wm.open('keys') },
           { label: 'Terminal commands', run: () => wm.openNew('terminal', { run: 'help' }) },
-          { label: 'Recent activity', run: () => wm.open('recents') },
+          ...(cvMode() ? [{ label: 'Recent activity', run: () => wm.open('recents') }, { label: 'GitHub', run: link(`https://github.com/${profile.github}`) }] : [{ label: "Menno's CV", run: link('/cv') }]),
           { label: 'Source code', run: link('https://github.com/vleeuwenmenno/mennovanleeuwen.nl') },
-          { label: 'GitHub', run: link(`https://github.com/${profile.github}`) },
         ],
       },
       { label: 'Style', icon: ICONS.style, children: () => fromMenu(appearanceMenu()) },

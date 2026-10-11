@@ -78,7 +78,7 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
       ['Ctrl F', 'find in the file (↵ next, Shift ↵ previous)'],
       ['Ctrl Shift F', 'search the whole project'],
       ['Ctrl Shift V', 'Markdown preview (Alt-click the eye: split)'],
-      ['Ctrl S', 'save (only /tmp is writable)'],
+      ['Ctrl S', 'save (~, Seafile and /tmp are writable)'],
       ['Ctrl O / Click project name', 'open another folder'],
       ['Ctrl B', 'project panel'],
       ['Alt W / Middle-click tab', 'close the tab'],

@@ -2,7 +2,7 @@ import { synced } from '../os/synced'
 
 // Notes of your own: each one can sit on the desktop as a sticky (the "sticky" widget, see
 // apps/Sticky.tsx) and is listed in the Notebook app. Kept per browser for visitors, synced for the
-// signed-in owner. Deleting leaves a tombstone so another device can't bring the note back
+// signed-in user. Deleting leaves a tombstone so another device can't bring the note back
 // when the two merge.
 
 export type NoteColor = 'yellow' | 'pink' | 'blue' | 'green' | 'purple' | 'orange' | 'white'

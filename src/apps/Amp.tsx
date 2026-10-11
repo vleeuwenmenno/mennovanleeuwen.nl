@@ -72,7 +72,8 @@ export function Amp({ win }: { win: WinState }) {
   const siblings = useSiblings(path, ['audio'])
   const playlist = siblings.length ? siblings : path ? [path] : []
   const index = playlist.indexOf(path)
-  const url = isSf(path) ? streamOf(path) : null
+  // Seafile through this site; a track kept in this browser from its blob: address (same origin either way, for the audio graph).
+  const url = isSf(path) ? streamOf(path) : media.url
 
   const [prefs, setPrefsState] = useState(loadPrefs)
   const setPrefs = useCallback(

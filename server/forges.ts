@@ -1,4 +1,5 @@
 import type { User } from './auth.ts'
+import { guardedFetch, rethrowEgress } from './egress.ts'
 import { database, decrypt, encrypt } from './db.ts'
 import { HttpError } from './http.ts'
 
@@ -28,11 +29,14 @@ const TIMEOUT = 8000
 const blockedUntil = new Map<string, number>()
 const limitKey = (url: string, headers: Record<string, string>) => `${new URL(url).host}|${url.includes('/search/') ? 'search' : 'core'}|${headers.Authorization ?? ''}`
 
-async function get<T>(url: string, headers: Record<string, string>, label: string): Promise<T | null> {
+/** `user` is who chose the address (a linked instance: checked by guardedFetch), null for GitHub's own API. */
+async function get<T>(user: User | null, url: string, headers: Record<string, string>, label: string): Promise<T | null> {
   const key = limitKey(url, headers)
   const until = blockedUntil.get(key) ?? 0
   if (until > Date.now()) throw new HttpError(429, `${label} rate limit, back in ${Math.ceil((until - Date.now()) / 1000)} s`)
-  const res = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'mvlos', ...headers }, signal: AbortSignal.timeout(TIMEOUT) }).catch(() => {
+  const init = { headers: { Accept: 'application/json', 'User-Agent': 'mvlos', ...headers }, signal: AbortSignal.timeout(TIMEOUT) }
+  const res = await (user ? guardedFetch(user, url, init) : fetch(url, init)).catch((e) => {
+    rethrowEgress(e)
     throw new HttpError(502, `${label} did not answer`)
   })
   if (res.status === 404) return null
@@ -57,12 +61,12 @@ export function githubSource(user: User): Source {
     kind: 'github',
     web: 'https://github.com',
     login: user.login,
-    api: (path) => get(`https://api.github.com${path}`, { Authorization: `Bearer ${user.githubToken}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, 'GitHub'),
+    api: (path) => get(null, `https://api.github.com${path}`, { Authorization: `Bearer ${user.githubToken}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, 'GitHub'),
   }
 }
 
-function giteaSource(id: number, label: string, base: string, username: string, token: string): Source {
-  return { id: `forge:${id}`, label, kind: 'gitea', web: base, login: username, api: (path) => get(`${base}/api/v1${path}`, { Authorization: `token ${token}` }, label) }
+function giteaSource(user: User, id: number, label: string, base: string, username: string, token: string): Source {
+  return { id: `forge:${id}`, label, kind: 'gitea', web: base, login: username, api: (path) => get(user, `${base}/api/v1${path}`, { Authorization: `token ${token}` }, label) }
 }
 
 type ForgeRow = { id: number; label: string; base_url: string; username: string; token: string }
@@ -74,7 +78,7 @@ export function listForges(user: User): ForgeInfo[] {
 
 export function sources(user: User): Source[] {
   const rows = database().prepare('SELECT id, label, base_url, username, token FROM forges WHERE user_id = ? ORDER BY id').all(user.id) as unknown as ForgeRow[]
-  return [githubSource(user), ...rows.map((r) => giteaSource(r.id, r.label, r.base_url, r.username, decrypt(r.token)))]
+  return [githubSource(user), ...rows.map((r) => giteaSource(user, r.id, r.label, r.base_url, r.username, decrypt(r.token)))]
 }
 
 /** "git.example.com", "https://git.example.com/", ".../api/v1" all become "https://git.example.com". */
@@ -98,7 +102,7 @@ export async function addForge(user: User, body: { baseUrl?: string; token?: str
   const base = normalizeBase(body.baseUrl)
   const token = body.token.trim()
   const label = (body.label?.trim() || new URL(base).host).slice(0, 40)
-  const me = await get<{ login?: string; username?: string }>(`${base}/api/v1/user`, { Authorization: `token ${token}` }, label).catch((e: Error) => {
+  const me = await get<{ login?: string; username?: string }>(user, `${base}/api/v1/user`, { Authorization: `token ${token}` }, label).catch((e: Error) => {
     throw new HttpError(400, e.message)
   })
   const username = me?.login ?? me?.username

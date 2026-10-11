@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs'
-import { stat } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import { handleApi } from './api.ts'
@@ -18,6 +18,8 @@ const PORT = Number(process.env.PORT ?? 80)
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  // pdf.js's worker is a module: served as anything else, the browser refuses to run it.
+  '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
@@ -45,6 +47,27 @@ async function file(path: string) {
   return s?.isFile() ? { full, size: s.size } : null
 }
 
+// mennovanleeuwen.nl/cv is Menno's CV (src/os/cvMode.ts): the same app, with the page title,
+// description and link preview of the CV, so a shared /cv link shows his card.
+const CV_META = `<title>Menno van Leeuwen — MvL OS</title>
+    <meta name="description" content="Menno van Leeuwen, DevOps engineer. A CV you can boot: projects, open source contributions and a terminal that actually works." />
+    <meta property="og:title" content="Menno van Leeuwen — MvL OS" />
+    <meta property="og:description" content="DevOps engineer. Builder of Boltwarden, Savuvo, Pepper and Omasoloist." />`
+const CV_NOSCRIPT = `<noscript>
+      <main style="font-family:sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;color:#ddd">
+        <h1>Menno van Leeuwen</h1>
+        <p>DevOps engineer. This site is a small operating system and needs JavaScript.</p>
+        <p>Projects: Savuvo, Boltwarden, Pepper, Omasoloist. GitHub: <a href="https://github.com/vleeuwenmenno">vleeuwenmenno</a>.</p>
+      </main>
+    </noscript>`
+let cvPage: Buffer | null = null
+async function cvIndex(full: string): Promise<Buffer> {
+  if (cvPage) return cvPage
+  const html = await readFile(full, 'utf8')
+  cvPage = Buffer.from(html.replace(/<!-- meta[^>]*-->[\s\S]*?<!-- \/meta -->/, CV_META).replace(/<!-- noscript -->[\s\S]*?<!-- \/noscript -->/, CV_NOSCRIPT))
+  return cvPage
+}
+
 createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost')
   const path = url.pathname
@@ -69,6 +92,12 @@ createServer(async (req, res) => {
   }
   if (!found) {
     res.writeHead(404, { 'Content-Type': 'text/plain', ...SECURITY }).end('Not found\n')
+    return
+  }
+  if (served === '/index.html' && /^\/cv\/?$/.test(path)) {
+    const body = await cvIndex(found.full)
+    res.writeHead(200, { 'Content-Type': TYPES['.html'], 'Content-Length': body.length, 'Cache-Control': 'no-cache', ...SECURITY })
+    res.end(req.method === 'HEAD' ? undefined : body)
     return
   }
   res.writeHead(200, {

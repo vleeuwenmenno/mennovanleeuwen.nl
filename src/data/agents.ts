@@ -31,7 +31,7 @@ export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile
 export const ALL_TOOLS = TOOL_GROUPS.map((g) => g.id)
 /** The groups there were before choices remembered which groups existed. */
 const LEGACY_TOOLS: ToolGroup[] = ['web', 'notes', 'code', 'seafile', 'seafile_write', 'memory']
-/** About the owner (projectId null) or one project, filed under a category path like "People/Friends". */
+/** About the user (projectId null) or one project, filed under a category path like "People/Friends". */
 export type Memory = { id: number; text: string; category: string; projectId: number | null; threadId: string | null; createdAt: number; updatedAt: number | null }
 export type ModelInfo = { name: string; thinking: boolean; vision: boolean; contextLength: number | null }
 
@@ -162,7 +162,7 @@ export function agentModels(): Promise<ModelInfo[]> {
 }
 
 /**
- * Sends the owner's message and reads the answer as it streams: each JSON line is one event.
+ * Sends the user's message and reads the answer as it streams: each JSON line is one event.
  * Aborting `signal` stops the turn on the server too.
  */
 export async function sendMessage(id: string, text: string, attachments: Attachment[], onEvent: (e: TurnEvent) => void, signal: AbortSignal) {

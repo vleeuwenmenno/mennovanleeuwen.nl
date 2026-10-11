@@ -14,10 +14,14 @@ import { Desktop } from './Desktop'
 import { PowerScreens } from './Power'
 import { Notifications } from './Notifications'
 import { Uploads } from './Uploads'
-import { Dialogs } from './Dialogs'
+import { HANDLE } from './identity'
+import { cvMode } from './cvMode'
+import { Dialogs, tell } from './Dialogs'
 import { FolderPicker } from './FolderPicker'
 import { initBackButton, setBackFocus } from './backButton'
 import { startActivityAlerts } from './activityAlerts'
+import { startAlerts, useAlerts } from './alerts'
+import { startStorageMove } from './storageMove'
 import { startAgentWatch } from './agentWatch'
 import { startPush } from './push'
 import { startNotifyStream } from './notifyStream'
@@ -55,7 +59,8 @@ export function placement(app: AppId, openCount: number): Geometry {
   }
 }
 
-/** The opening layout: sticky note on the left, terminal beside it (just the note on phones). */
+/** The opening layout: sticky note on the left, terminal beside it (just the note on phones).
+ * The note is the welcome note, or Menno's headlines at /cv (src/apps/Notes.tsx). */
 export function initialLayout(): { app: AppId; geometry: Geometry; props?: WinState['props'] }[] {
   const vw = window.innerWidth
   const vh = window.innerHeight
@@ -63,9 +68,9 @@ export function initialLayout(): { app: AppId; geometry: Geometry; props?: WinSt
   if (vw < 720) return [{ app: 'notes', geometry: { x: 16, y: TOP + 16, w: vw - 32, h: 340 } }]
   const noteW = 310
 
-  // Big screens get a composed desk: notes on the left (shortcuts tucked under the headline
-  // note), the terminal in the middle and the CV on top, overlapping its lower right.
-  if (vw >= 1600 && vh >= 860) {
+  // Big screens on the CV page get a composed desk: notes on the left (shortcuts tucked under
+  // the headline note), the terminal in the middle and the CV on top, overlapping its lower right.
+  if (cvMode() && vw >= 1600 && vh >= 860) {
     const compW = 644 + 790
     const compH = 700
     const ox = Math.max(40, Math.round((vw - compW) / 2) - 40) // a little left of centre, clear of the icons
@@ -158,7 +163,8 @@ function TopBar() {
           </svg>
           <span className={`tb-dot ${recents.live ? 'is-live' : ''}`} />
         </button>
-        <MinecraftWidget />
+        {/* Menno's Minecraft server: his CV page only (src/os/cvMode.ts) */}
+        {cvMode() && <MinecraftWidget />}
         <button
           className="tb-icon"
           title={`${theme.label} · click for ${theme.palette.mode === 'light' ? 'night' : 'day'}, right-click for themes`}
@@ -262,6 +268,7 @@ function useDockVisibility(pinned: boolean, covered: boolean, appOpen: boolean, 
 }
 
 function Dock() {
+  const alerts = useAlerts()
   const wm = useWM()
   const overlay = useOverlay()
   const dockItems = useDock()
@@ -486,6 +493,7 @@ function Dock() {
         onContextMenu={(e) => openContextMenu(e, itemMenu(app))}
       >
         {iconOf(app)}
+        {app === 'settings' && alerts.length > 0 && <span className="app-badge">{alerts.length}</span>}
         <span className="dock-label">{labelOf(app)}</span>
         <span className="dock-dots">
           {Array.from({ length: Math.min(3, runningOf(app)) }, (_, n) => (
@@ -521,6 +529,8 @@ function Dock() {
             <span key={i} />
           ))}
         </span>
+        {/* Settings needs you (src/os/alerts.ts): on its own icon when it is in the dock, else here. */}
+        {alerts.length > 0 && !shown.includes('settings') && <span className="app-badge">{alerts.length}</span>}
         <span className="dock-label">All apps</span>
       </button>
       <span className="dock-sep" />
@@ -633,9 +643,15 @@ function WidgetWindow({ w, def, id }: { w: WinState; def: WidgetDef; id: string 
 
 const AUTH_NOTICES: Record<string, { title: string; body?: string }> = {
   ok: { title: 'Signed in', body: 'Notes, launchers and layouts now sync. Spotlight searches your repositories too (try #123 or repo@branch).' },
-  denied: { title: 'Sign-in refused', body: 'That GitHub account is not allowed on this desktop.' },
   error: { title: 'Sign-in failed', body: 'GitHub did not complete the sign-in. Try again.' },
   off: { title: 'Sign-in is not set up', body: 'This server has no GitHub OAuth app configured.' },
+}
+
+/** Sign-ins the server turned away (server/auth.ts finishLogin), shown as a dialog. */
+const REFUSED: Record<string, (reason: string | null) => { title: string; body: string }> = {
+  full: () => ({ title: "We're full", body: 'MvL OS has room for a limited number of accounts, and they are all taken. Your GitHub account was not added. Try again later; you can keep using this desktop as a guest.' }),
+  closed: () => ({ title: 'Sign-up is closed', body: 'New accounts are not being made right now. Your GitHub account was not added; you can keep using this desktop as a guest.' }),
+  banned: (reason) => ({ title: 'This account is blocked', body: reason ? `The admin blocked this account: ${reason.slice(0, 200)}` : 'The admin blocked this account from signing in.' }),
 }
 
 const GOOGLE_NOTICES: Record<string, { title: string; body?: string }> = {
@@ -682,15 +698,18 @@ export function Shell() {
     // As the browser's new tab page, start in Spotlight, ready to type where to go.
     else if (newTab && linkSettings().newTabPageSpotlight) setOverlay('spotlight')
     // Back from GitHub's sign-in page: /?auth=ok|denied|error|off.
+    const refused = REFUSED[params.get('auth') ?? '']
     const auth = AUTH_NOTICES[params.get('auth') ?? ''] ?? GOOGLE_NOTICES[params.get('google') ?? '']
-    if (auth) setTimeout(() => notify(auth), 1200)
-    if (params.has('open') || params.has('auth') || params.has('google')) history.replaceState(null, '', location.pathname)
+    // A refused sign-up is worth more than a toast: the account was not made.
+    if (refused) setTimeout(() => void tell(refused(params.get('reason'))), 1200)
+    else if (auth) setTimeout(() => notify(auth), 1200)
+    if (params.has('open') || params.has('auth') || params.has('google') || params.has('reason')) history.replaceState(null, '', location.pathname)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Fresh activity notifications start counting once the desktop is up.
   useEffect(() => {
-    if (power.phase === 'up') startActivityAlerts(), startAgentWatch(), startPush(), startNotifyStream()
+    if (power.phase === 'up') startActivityAlerts(), startAgentWatch(), startPush(), startNotifyStream(), startAlerts(), startStorageMove()
   }, [power.phase])
 
   // Links in apps open where Settings > Links says.
@@ -734,7 +753,8 @@ export function Shell() {
         <div className="wp-glow wp-b" />
         <div className="wp-grid" />
         <div className="wp-sig">
-          menno<span>@</span>mvlos
+          {HANDLE}
+          <span>@</span>mvlos
         </div>
       </div>
       <TopBar />

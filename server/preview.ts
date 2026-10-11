@@ -1,10 +1,9 @@
-import { lookup } from 'node:dns/promises'
-import { isIP } from 'node:net'
+import { assertPublic } from './egress.ts'
 import { HttpError } from './http.ts'
 
 // Link previews for Spotlight's "Go to example.com": the page's title, description, share image
 // and icon, read from the first part of its HTML. The server fetches arbitrary sites here, so
-// only for the signed-in owner, never private or internal addresses (also after redirects), at
+// only for signed-in users, never private or internal addresses (also after redirects), at
 // most 512 KB, and cached for a day.
 
 export type LinkPreview = { url: string; host: string; title: string | null; description: string | null; image: string | null; icon: string | null; siteName: string | null }
@@ -14,24 +13,10 @@ const OK_TTL = 24 * 3600_000
 const FAIL_TTL = 10 * 60_000
 const cache = new Map<string, { at: number; ttl: number; value: Promise<LinkPreview> }>()
 
-/** Loopback, private, link-local, CGNAT (Tailscale), multicast and other non-public addresses. */
-function isPrivate(ip: string): boolean {
-  if (isIP(ip) === 6) {
-    const v = ip.toLowerCase()
-    if (v.startsWith('::ffff:')) return isPrivate(v.slice(7))
-    return v === '::' || v === '::1' || /^f[cd]/.test(v) || /^fe[89ab]/.test(v) || v.startsWith('ff')
-  }
-  const [a, b] = ip.split('.').map(Number)
-  return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b < 128) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) || a >= 224
-}
-
-async function assertPublic(url: URL) {
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new HttpError(400, 'Only web addresses')
+/** Public addresses only (server/egress.ts), on the usual web ports. */
+async function assertWebsite(url: URL) {
   if (url.port && !['80', '443', '8080', '8443'].includes(url.port)) throw new HttpError(400, 'Unusual port')
-  const host = url.hostname.replace(/^\[|\]$/g, '')
-  const addresses = isIP(host) ? [host] : (await lookup(host, { all: true }).catch(() => [])).map((a) => a.address)
-  if (!addresses.length) throw new HttpError(404, 'That site does not exist')
-  if (addresses.some(isPrivate)) throw new HttpError(400, 'Not a public address')
+  await assertPublic(url)
 }
 
 const decode = (s: string) =>
@@ -77,7 +62,7 @@ function iconHref(head: string): string | null {
 async function fetchHead(start: URL): Promise<{ url: URL; html: string }> {
   let url = start
   for (let hop = 0; hop < 4; hop++) {
-    await assertPublic(url)
+    await assertWebsite(url)
     const res = await fetch(url, {
       redirect: 'manual',
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; mvlos link preview)', Accept: 'text/html,application/xhtml+xml', 'Accept-Language': 'en' },

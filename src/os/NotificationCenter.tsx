@@ -5,6 +5,7 @@ import { AppIcon } from './icons'
 import { clearEntries, markAllRead, openEntry, pruneEntries, removeEntry, useEntries, type Entry } from './notify'
 import { setNotifyPrefs, setOn, sourceOf, useNotifyPrefs } from './notifyPrefs'
 import { useWM, type AppId } from './wm'
+import { openAlert, useAlerts } from './alerts'
 
 /**
  * The notification center: a bell in the top bar with the unread count, and a list of what came
@@ -15,9 +16,11 @@ export function NotificationCenter() {
   const wm = useWM()
   const entries = useEntries()
   const prefs = useNotifyPrefs()
+  const alerts = useAlerts()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
-  const unread = entries.filter((e) => !e.read).length
+  // What needs you counts until it is dealt with (src/os/alerts.ts), on top of what is unread.
+  const unread = entries.filter((e) => !e.read).length + alerts.length
 
   useEffect(() => {
     if (!open) return
@@ -83,6 +86,25 @@ export function NotificationCenter() {
               Clear all
             </button>
           </div>
+          {/* Not notifications that come and go: they stay until dealt with, and cannot be cleared. */}
+          {alerts.length > 0 && (
+            <section className="nc-attention">
+              <h4 className="nc-day">Needs attention</h4>
+              {alerts.map((a) => (
+                <div key={a.id} className="nc-item is-unread is-alert">
+                  <button className="nc-main" onClick={() => (setOpen(false), openAlert(a))}>
+                    <span className="nc-icon nc-glyph nc-alert-glyph" aria-hidden>
+                      !
+                    </span>
+                    <span className="nc-text">
+                      <strong>{a.title}</strong>
+                      <span className="muted">{a.body}</span>
+                    </span>
+                  </button>
+                </div>
+              ))}
+            </section>
+          )}
           {entries.length ? (
             <div className="nc-list">
               {byDay(entries).map(([day, list]) => (
@@ -109,7 +131,7 @@ export function NotificationCenter() {
                 </section>
               ))}
             </div>
-          ) : (
+          ) : alerts.length ? null : (
             <p className="nc-empty muted">Nothing here. Notifications stay here for {keepText(prefs.keep)}.</p>
           )}
           <button className="nc-foot" onClick={settings}>

@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import type { User } from './auth.ts'
-import { database, decrypt, encrypt } from './db.ts'
+import { database, decrypt, encrypt, onUserGone } from './db.ts'
+import { guardedFetch, rethrowEgress } from './egress.ts'
 import { HttpError } from './http.ts'
 
 // Seafile, for the Files app: one account, linked in Settings → Integrations. Signing in once
@@ -64,12 +65,13 @@ function normalizeUrl(input: string | undefined, what: string): string {
   return `${url.origin}${url.pathname.replace(/\/+$/, '')}`
 }
 
-async function call(base: string, path: string, init: RequestInit & { token?: string; timeout?: number } = {}): Promise<Response> {
+/** A request to Seahub at the address `user` linked: public addresses only, for anyone but an admin (server/egress.ts). */
+async function call(user: User, base: string, path: string, init: RequestInit & { token?: string; timeout?: number } = {}): Promise<Response> {
   const { token, timeout = 15_000, ...rest } = init
   const headers = new Headers(rest.headers)
   headers.set('Accept', 'application/json')
   if (token) headers.set('Authorization', `Token ${token}`)
-  const res = await fetch(`${base}${path}`, { ...rest, headers, redirect: 'manual', signal: AbortSignal.timeout(timeout) }).catch(() => null)
+  const res = await guardedFetch(user, `${base}${path}`, { ...rest, headers, redirect: 'manual', signal: AbortSignal.timeout(timeout) }).catch((e) => (rethrowEgress(e), null))
   if (!res) throw new HttpError(502, 'Seafile did not answer')
   return res
 }
@@ -94,7 +96,7 @@ export async function linkSeafile(user: User, body: { url?: string; username?: s
   const form = new URLSearchParams({ username, password, platform: 'linux', device_id: randomBytes(20).toString('hex'), device_name: DEVICE_NAME, client_version: '1.0', platform_version: 'web' })
   const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' }
   if (body.otp?.trim()) headers['X-SEAFILE-OTP'] = body.otp.trim()
-  const res = await call(url, '/api2/auth-token/', { method: 'POST', headers, body: form })
+  const res = await call(user, url, '/api2/auth-token/', { method: 'POST', headers, body: form })
   if (res.status >= 300 && res.status < 400) throw new HttpError(400, 'Seafile redirected: check the URL (https, and the sub-path if it has one)')
   if (res.headers.get('x-seafile-otp') === 'required') {
     if (body.otp?.trim()) throw new HttpError(400, 'That 2FA code did not work')
@@ -108,25 +110,25 @@ export async function linkSeafile(user: User, body: { url?: string; username?: s
   if (!token) throw new HttpError(502, 'Seafile signed in but sent no token')
 
   const [account, server] = await Promise.all([
-    call(url, '/api2/account-info/', { token }).then((r) => (r.ok ? (r.json() as Promise<{ name?: string; email?: string }>) : null)).catch(() => null),
-    call(url, '/api2/server-info/').then((r) => (r.ok ? (r.json() as Promise<{ version?: string }>) : null)).catch(() => null),
+    call(user, url, '/api2/account-info/', { token }).then((r) => (r.ok ? (r.json() as Promise<{ name?: string; email?: string }>) : null)).catch(() => null),
+    call(user, url, '/api2/server-info/').then((r) => (r.ok ? (r.json() as Promise<{ version?: string }>) : null)).catch(() => null),
   ])
 
   // Linking again (a new password, or another account): sign the old device out first.
   const old = read<Link>(user, NAME)
-  if (old) await revoke(old)
+  if (old) await revoke(user, old)
   write(user, NAME, { url, username, token, name: account?.name || null, version: server?.version || null } satisfies Link)
   return seafileInfo(user)!
 }
 
 /** Signs this device out on Seafile (removing it from Devices), as far as Seafile lets it. */
-async function revoke(link: Link) {
-  await call(link.url, '/api2/logout-device/', { method: 'POST', token: link.token, timeout: 5000 }).catch(() => null)
+async function revoke(user: User, link: Link) {
+  await call(user, link.url, '/api2/logout-device/', { method: 'POST', token: link.token, timeout: 5000 }).catch(() => null)
 }
 
 export async function unlinkSeafile(user: User) {
   const link = read<Link>(user, NAME)
-  if (link) await revoke(link)
+  if (link) await revoke(user, link)
   remove(user, NAME)
   remove(user, OFFICE)
 }
@@ -137,7 +139,7 @@ export async function setOffice(user: User, body: { url?: string; secret?: strin
   const url = normalizeUrl(body.url, 'OnlyOffice')
   const secret = body.secret?.trim()
   if (!secret) throw new HttpError(400, 'The JWT secret is required (Seafile has needed one since version 12)')
-  const res = await fetch(`${url}/web-apps/apps/api/documents/api.js`, { signal: AbortSignal.timeout(10_000) }).catch(() => null)
+  const res = await guardedFetch(user, `${url}/web-apps/apps/api/documents/api.js`, { signal: AbortSignal.timeout(10_000) }).catch((e) => (rethrowEgress(e), null))
   if (!res) throw new HttpError(400, 'OnlyOffice did not answer at that URL')
   if (!res.ok) throw new HttpError(400, `No OnlyOffice there (api.js answered ${res.status})`)
   write(user, OFFICE, { url, secret } satisfies Office)
@@ -162,7 +164,7 @@ function linked(user: User): Link {
 /** A JSON request to Seahub's API as the linked account. */
 export async function seafile<T>(user: User, path: string, init: RequestInit = {}): Promise<T> {
   const link = linked(user)
-  const res = await call(link.url, path, { ...init, token: link.token })
+  const res = await call(user, link.url, path, { ...init, token: link.token })
   if (res.ok) return (await res.json()) as T
   const message = await errorOf(res)
   if (res.status === 401) throw new HttpError(409, 'Seafile no longer accepts the token: link it again in Settings')
@@ -216,6 +218,9 @@ type ApiDirent = { type: 'dir' | 'file'; name: string; id: string; size?: number
 
 const encryptedRepos = new Map<string, boolean>() // `${user}:${repo}`
 const unlockedUntil = new Map<string, number>()
+onUserGone((id) => {
+  for (const m of [encryptedRepos, unlockedUntil]) for (const k of m.keys()) if (k.startsWith(`${id}:`)) m.delete(k)
+})
 
 async function isEncrypted(user: User, id: string): Promise<boolean> {
   const key = `${user.id}:${id}`
@@ -389,7 +394,7 @@ export async function thumbnail(user: User, repo: unknown, path: unknown, size: 
   const px = Math.min(1024, Math.max(48, Math.round(Number(size) || 256)))
   await guard(user, id)
   const link = linked(user)
-  const res = await call(link.url, `/api2/repos/${id}/thumbnail/?p=${encodeURIComponent(p)}&size=${px}`, { token: link.token, timeout: 20_000 })
+  const res = await call(user, link.url, `/api2/repos/${id}/thumbnail/?p=${encodeURIComponent(p)}&size=${px}`, { token: link.token, timeout: 20_000 })
   const type = res.headers.get('content-type') ?? ''
   if (!res.ok || !type.startsWith('image/')) throw new HttpError(404, 'No thumbnail')
   return { type, body: Buffer.from(await res.arrayBuffer()) }
@@ -409,7 +414,7 @@ export async function rangeRead(user: User, repo: unknown, path: unknown, range:
   const span = m[3] ? Number(m[3]) : Number(m[2]) - Number(m[1]) + 1
   if (!(span > 0) || span > MAX_RANGE) throw new HttpError(416, `Ranges go up to ${MAX_RANGE / 1024 / 1024} MB`)
   const { url } = await fileLink(user, repo, path, 'download')
-  const res = await fetch(url, { headers: { Range: range! }, redirect: 'follow', signal: AbortSignal.timeout(60_000) }).catch(() => null)
+  const res = await guardedFetch(user, url, { headers: { Range: range! }, signal: AbortSignal.timeout(60_000) }).catch((e) => (rethrowEgress(e), null))
   if (!res) throw new HttpError(502, 'Seafile\'s file server did not answer')
   if (res.status !== 206) {
     await res.body?.cancel().catch(() => {})
@@ -426,7 +431,7 @@ export async function rangeRead(user: User, repo: unknown, path: unknown, range:
 export async function streamFile(user: User, repo: unknown, path: unknown, range: string | undefined): Promise<Response> {
   if (range !== undefined && !/^bytes=(\d+-\d*|-\d+)$/.test(range)) throw new HttpError(416, 'Ask for one byte range')
   const { url } = await fileLink(user, repo, path, 'download')
-  const res = await fetch(url, { headers: range ? { Range: range } : {}, redirect: 'follow' }).catch(() => null)
+  const res = await guardedFetch(user, url, { headers: range ? { Range: range } : {} }).catch((e) => (rethrowEgress(e), null))
   if (!res) throw new HttpError(502, 'Seafile\'s file server did not answer')
   if (res.status !== 200 && res.status !== 206) {
     await res.body?.cancel().catch(() => {})

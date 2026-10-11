@@ -37,8 +37,12 @@ const FULL_LIMIT = 300 * 1024 * 1024
 
 class ZipError extends Error {}
 
+/** Where an archive is read from: an address (with Range requests), or a Blob already here (a file kept in this browser). */
+type Source = string | Blob
+
 /** Bytes from..to (inclusive) of the file at `url`, with Range when the server allows. */
-async function bytes(url: string, from: number, to: number): Promise<{ data: Uint8Array; total: number | null; ranged: boolean }> {
+async function bytes(url: Source, from: number, to: number): Promise<{ data: Uint8Array; total: number | null; ranged: boolean }> {
+  if (typeof url !== 'string') return { data: new Uint8Array(await url.slice(from, to + 1).arrayBuffer()), total: url.size, ranged: true }
   const res = await fetch(url, { headers: { Range: `bytes=${from}-${to}` } })
   if (!res.ok) throw new ZipError(`The file server answered ${res.status}`)
   if (res.status === 206) {
@@ -53,7 +57,8 @@ async function bytes(url: string, from: number, to: number): Promise<{ data: Uin
 }
 
 /** The last `n` bytes, when the size is not known (a suffix range). */
-async function lastBytes(url: string, n: number): Promise<{ data: Uint8Array; total: number | null; ranged: boolean }> {
+async function lastBytes(url: Source, n: number): Promise<{ data: Uint8Array; total: number | null; ranged: boolean }> {
+  if (typeof url !== 'string') return bytes(url, Math.max(0, url.size - n), url.size - 1)
   const res = await fetch(url, { headers: { Range: `bytes=-${n}` } })
   if (!res.ok) throw new ZipError(`The file server answered ${res.status}`)
   const total = Number(/\/(\d+)$/.exec(res.headers.get('content-range') ?? '')?.[1])
@@ -81,7 +86,7 @@ const cp437 = (() => {
   }
 })()
 
-export async function readZip(url: string, knownSize?: number): Promise<ZipIndex> {
+export async function readZip(url: Source, knownSize?: number): Promise<ZipIndex> {
   // The end record is in the last 22 bytes, or up to 64 KB more with an archive comment.
   const tail = 22 + 65535 + 20
   const probe = knownSize !== undefined ? await bytes(url, Math.max(0, knownSize - tail), Math.max(0, knownSize - 1)) : await lastBytes(url, tail)

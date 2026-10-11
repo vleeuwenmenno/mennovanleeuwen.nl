@@ -1,6 +1,7 @@
 import type { User } from './auth.ts'
 import { database } from './db.ts'
 import { HttpError } from './http.ts'
+import { checkRoom } from './quota.ts'
 
 // Synced desktop state, one JSON document per key: notes, window layouts, desktop icons,
 // launchers, dock order. Last write wins; the browser keeps its own copy in localStorage and
@@ -29,11 +30,13 @@ export function writeState(user: User, key: string, body: { value?: unknown; bas
     const { n } = db.prepare('SELECT COUNT(*) AS n FROM state WHERE user_id = ?').get(user.id) as { n: number }
     if (n >= MAX_KEYS) throw new HttpError(400, 'Too many keys')
   }
+  const text = JSON.stringify(body.value)
+  checkRoom(user, text.length - (current?.value.length ?? 0))
   const updatedAt = Math.max(Date.now(), (current?.updated_at ?? 0) + 1)
   db.prepare('INSERT INTO state (user_id, key, value, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(
     user.id,
     key,
-    JSON.stringify(body.value),
+    text,
     updatedAt,
   )
   return { value: body.value, updatedAt }

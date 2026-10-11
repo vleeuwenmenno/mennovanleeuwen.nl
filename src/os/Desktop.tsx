@@ -6,8 +6,12 @@ import { addWidgetItems } from '../widgets/registry'
 import { projects } from '../data/profile'
 import { HOME, kindOfName, type FileKind } from '../terminal/vfs'
 import { droppedFiles, hasOsFiles, pickAndUpload, uploadFiles } from '../data/uploads'
-import { createFile, getClipboard, mkdir, setClipboard, deleteItems, deleteNote, download, DRAG_FILES, dropOp, getDragged, isInside, openSeafile, refreshDirs, renameItem, setSeafilePrefs, transferItems, useDir, useSeafileHome, useSeafilePrefs } from '../data/seafile'
+import { getClipboard, setClipboard, DRAG_FILES, getDragged, isInside, openSeafile, refreshDirs, setSeafilePrefs, useDir, useSeafileHome, useSeafilePrefs } from '../data/seafile'
+import { deleteNoteFor as deleteNote, downloadFile as download, dropOpFor as dropOp, makeFile as createFile, makeFolder as mkdir, removePaths as deleteItems, renamePath as renameItem, transferPaths as transferItems } from '../data/fileOps'
+import { listBrowser, useBrowserFiles } from '../data/browserfs'
+import { whereIs } from '../data/mounts'
 import { notify } from './notify'
+import { cvMode } from './cvMode'
 import { useAccount } from './account'
 import { ask } from './Dialogs'
 import { closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
@@ -40,9 +44,12 @@ export type DesktopIcon = {
 /** Emoji for what is in the Seafile Desktop folder, by kind. */
 const SF_GLYPH: Partial<Record<FileKind, string>> = { folder: '📁', image: '🖼️', markdown: '📝', text: '📄', pdf: '📕', document: '📃', audio: '🎵', video: '🎬', archive: '🗜️', disc: '💿', link: '🔗' }
 
+/** Menno's portfolio on the desktop: only on his CV page (src/os/cvMode.ts). */
+const CV_ICONS = new Set(['projects', 'contributions', 'boltwarden', 'pepper', 'cv', 'readme'])
+
 // Order is the default layout, top to bottom: folders, projects, then files. Folders and projects
 // get capitalized names like apps; files keep their real file names.
-export const DESKTOP_ICONS: DesktopIcon[] = [
+export const DESKTOP_ICONS: DesktopIcon[] = ([
   { id: 'projects', label: 'Projects', glyph: '📁', kind: 'folder', path: '~/projects', open: { app: 'files', props: { path: `${HOME}/projects` } }, terminal: 'cd ~/projects && ls -l' },
   { id: 'contributions', label: 'Contributions', glyph: '📂', kind: 'folder', path: '~/contributions', open: { app: 'files', props: { path: `${HOME}/contributions` } }, terminal: 'cd ~/contributions && ls -l' },
   { id: 'games', label: 'Games', glyph: '🎮', kind: 'folder', path: '~/games', open: { app: 'files', props: { path: `${HOME}/games` } }, terminal: 'cd ~/games && ls -l' },
@@ -62,7 +69,7 @@ export const DESKTOP_ICONS: DesktopIcon[] = [
   }),
   { id: 'cv', label: 'cv.md', glyph: '📄', kind: 'file', path: '~/cv.md', open: { app: 'zed', props: { path: `${HOME}/cv.md`, view: 'preview' } }, terminal: 'cat ~/cv.md' },
   { id: 'readme', label: 'README.md', glyph: '📝', kind: 'file', path: '~/README.md', open: { app: 'zed', props: { path: `${HOME}/README.md`, view: 'preview' } }, terminal: 'cat ~/README.md' },
-]
+] as DesktopIcon[]).filter((i) => cvMode() || !CV_ICONS.has(i.id))
 
 const CELL_W = 100
 const CELL_H = 96
@@ -195,19 +202,26 @@ export function Desktop() {
           { id: 'office:pptx', label: 'New Presentation', glyph: '📽️', kind: 'file', path: 'New Presentation', open: { app: 'newslides' }, terminal: '' },
         ]
       : []
-  const sfDesktop = sfHome && places ? places.desktop : null
-  const sfDir = useDir(sfDesktop, 15_000)
+  const seafileDesktop = sfHome && places ? places.desktop : null
+  // Without Seafile as home, ~/Desktop is kept in this browser: its files are on the desktop too.
+  useBrowserFiles()
+  const browserDesk = !seafileDesktop ? whereIs(`${HOME}/Desktop`) : null
+  const browserDesktop = browserDesk?.kind === 'browser' ? `${HOME}/Desktop` : null
+  /** The folder the desktop shows and drops into: Seafile's Desktop, or the browser's. */
+  const sfDesktop = seafileDesktop ?? browserDesktop
+  const sfDir = useDir(seafileDesktop, 15_000)
   useEffect(() => {
-    if (!sfDesktop) return
-    const again = () => document.visibilityState === 'visible' && refreshDirs(sfDesktop)
+    if (!seafileDesktop) return
+    const again = () => document.visibilityState === 'visible' && refreshDirs(seafileDesktop)
     const t = setInterval(again, 60_000)
     window.addEventListener('focus', again)
     return () => {
       clearInterval(t)
       window.removeEventListener('focus', again)
     }
-  }, [sfDesktop])
-  const sfIcons = (sfDir.listing?.entries ?? [])
+  }, [seafileDesktop])
+  const entries = browserDesk?.kind === 'browser' ? listBrowser(browserDesk.path).map((e) => ({ name: e.path.split('/').pop()!, dir: e.dir })) : (sfDir.listing?.entries ?? [])
+  const sfIcons = entries
     .filter((e) => !e.name.startsWith('.'))
     .map<DesktopIcon>((e) => {
       const kind = kindOfName(e.name, e.dir)
@@ -216,7 +230,7 @@ export function Desktop() {
       return { id: `sf:${e.name}`, label: e.name, glyph, kind: e.dir ? 'folder' : 'file', path: `${sfDesktop}/${e.name}`, open: { app: 'files' }, terminal: '', sf: { dir: e.dir } }
     })
   // The site's own icons stay unless switched off (then the desktop is just the Seafile Desktop folder and launchers).
-  const siteShown = !sfHome || siteIcons
+  const siteShown = !seafileDesktop || siteIcons
   const visible = [...(siteShown ? DESKTOP_ICONS.filter((i) => !desk.trashed.includes(i.id)) : []), ...sfIcons, ...officeIcons, ...linkIcons]
   const positions = useMemo(() => layout(visible.map((i) => i.id), desk.positions), [visible.map((i) => i.id).join(), desk.positions, viewport])
 
@@ -593,7 +607,7 @@ export function Desktop() {
       { separator: true },
       { label: 'Select all', shortcut: 'Ctrl A', onSelect: () => setSelected(new Set(visible.map((i) => i.id))) },
       { label: 'Clean up icons', onSelect: resetLayout },
-      ...(sfDesktop ? [{ label: 'Show the site’s icons', checked: siteIcons, onSelect: () => setSeafilePrefs({ siteIcons: !siteIcons }) }, { label: 'Refresh', onSelect: () => refreshDirs(sfDesktop) }] : []),
+      ...(seafileDesktop ? [{ label: 'Show the site’s icons', checked: siteIcons, onSelect: () => setSeafilePrefs({ siteIcons: !siteIcons }) }, { label: 'Refresh', onSelect: () => refreshDirs(seafileDesktop) }] : []),
       ...(desk.trashed.length && siteShown ? [{ label: `Put back ${desk.trashed.length} trashed icon${desk.trashed.length === 1 ? '' : 's'}`, onSelect: () => restoreIcons(desk.trashed) }] : []),
       { separator: true },
       {
@@ -602,7 +616,7 @@ export function Desktop() {
           { label: 'Terminal', onSelect: () => wm.open('terminal') },
           { label: 'Files', onSelect: () => wm.openNew('files') },
           { label: 'Notebook', onSelect: () => wm.open('notebook') },
-          { label: 'Activity', onSelect: () => wm.open('recents') },
+          ...(cvMode() ? [{ label: 'Activity', onSelect: () => wm.open('recents') }] : []),
           { label: 'About this system', onSelect: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) },
         ],
       },

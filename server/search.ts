@@ -1,6 +1,7 @@
 import type { BranchHit, Hit, IssueHit, Label, ParsedQuery, RepoHit, SearchResponse } from '../src/data/code.ts'
 import { parseQuery } from '../src/data/code.ts'
 import type { User } from './auth.ts'
+import { onUserGone } from './db.ts'
 import { sources, type Source } from './forges.ts'
 
 // Spotlight's code search over GitHub and linked Gitea/Forgejo instances. The query grammar is
@@ -49,6 +50,7 @@ function cached<T>(key: string, ttl: number, load: () => Promise<T>): Promise<T>
 export function clearSearchCache(user: User) {
   for (const k of cache.keys()) if (k.startsWith(`${user.id}|`)) cache.delete(k)
 }
+onUserGone((id) => clearSearchCache({ id } as User))
 
 // ---------------------------------------------------------------------------------------------
 // API shapes, only the fields used
