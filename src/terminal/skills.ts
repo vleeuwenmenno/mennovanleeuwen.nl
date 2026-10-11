@@ -199,7 +199,7 @@ async function skills(ctx: Ctx): Promise<string> {
       const lines = [`${c('muted', 'yours:')}    ${seafileAt(`${HOME}/.agents/skills`) ? '~/.agents/skills' : c('yellow', 'none (home is not on Seafile)')}`]
       const here = folderHere(ctx.cwd)
       if (here) lines.push(`${c('muted', 'project:')}  ${prettyPath(ctx.cwd)}/.agents/skills, ${prettyPath(ctx.cwd)}/.claude/skills`)
-      lines.push(`${c('muted', 'built in:')} msh, skill-creator`)
+      lines.push(`${c('muted', 'built in:')} caveman-adhd, msh, skill-creator`)
       return lines.join('\n')
     }
     default:

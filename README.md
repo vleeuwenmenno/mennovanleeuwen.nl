@@ -116,8 +116,9 @@ In a folder on Seafile, that folder becomes the thread's work folder:
 
 `skills` ([`src/terminal/skills.ts`](src/terminal/skills.ts),
 [`server/skills.ts`](server/skills.ts)) manages SKILL.md folders. They live in
-`~/.agents/skills`, or a work folder's `.agents/skills` or `.claude/skills`, plus built-in `msh`
-and `skill-creator`. `skills add owner/repo` installs from GitHub, and `/name` starts one. The
+`~/.agents/skills`, or a work folder's `.agents/skills` or `.claude/skills`, plus the built-in `msh`,
+`skill-creator` and [`caveman-adhd`](https://github.com/vleeuwenmenno/caveman-adhd) (terse, ADHD-shaped answers on
+request). `skills add owner/repo` installs from GitHub, and `/name` starts one. The
 Agents app has the same work folders, permission modes, diff approvals and skills (Settings →
 Agents → Skills).
 
