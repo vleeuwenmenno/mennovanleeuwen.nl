@@ -17,6 +17,8 @@
     "check:empires-match": "node scripts/empires-match.ts",
     "check:empires-restart": "node scripts/empires-restart.ts",
     "check:empires-rejoin": "node scripts/empires-rejoin.ts",
+    "check:empires-galaxy": "node scripts/empires-galaxy-ai.ts",
+    "empires:battle-ai": "node scripts/empires-battle-ai.ts",
     "empires:bot": "node scripts/empires-bot.ts",
     "start": "node server/index.ts"
   },
