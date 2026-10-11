@@ -3,7 +3,7 @@ import { RotateHint } from './RotateHint'
 import { DIFFICULTY, type Difficulty } from './ai'
 import { FACTIONS, UNIT, buildable, isShip, type FactionId, type UnitType } from './data'
 import {
-  BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GIANTS, blockedBy, contested, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
+  BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GALAXY_AI, GIANTS, blockedBy, contested, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
   autoResolve, buildAt, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
   settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw,
   type BattleResult, type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetKind, type Side, type StarSystem,
@@ -284,7 +284,7 @@ function ConquestSetup({ sound, onBack, onStart }: { sound: EmpiresSound; onBack
               <Seg value={faction} options={[['republic', FACTIONS.republic.name], ['droid', FACTIONS.droid.name]]} onChange={setFaction} />
             </Field>
             <Field label="Enemy admiral">
-              <select value={difficulty} onChange={(e) => setDifficulty(e.target.value as Difficulty)} data-tip={DIFFICULTY[difficulty].blurb}>
+              <select value={difficulty} onChange={(e) => setDifficulty(e.target.value as Difficulty)} data-tip={GALAXY_AI[difficulty].blurb}>
                 {(Object.keys(DIFFICULTY) as Difficulty[]).map((d) => <option key={d} value={d}>{DIFFICULTY[d].name}</option>)}
               </select>
             </Field>
@@ -346,7 +346,10 @@ type Sel = { kind: 'fleet'; id: number } | { kind: 'fleets'; ids: number[] } | {
 const selectedIds = (sel: Sel) => new Set(sel?.kind === 'fleet' ? [sel.id] : sel?.kind === 'fleets' ? sel.ids : [])
 /** The planets a selection holds. */
 const selectedPlanets = (sel: Sel) => new Set(sel?.kind === 'planet' ? [sel.id] : sel?.kind === 'planets' ? sel.ids : [])
-type GToast = { id: number; text: string; tone: 'good' | 'bad' | 'info'; t: number }
+/** Where a message takes the camera when it's clicked: a planet (selected), our fleet at a planet
+ * (selected; the planet if the fleet has gone), a fleet wherever it is now, or a whole system. */
+type GLook = { k: 'planet'; id: number } | { k: 'fleetAt'; planet: number } | { k: 'fleet'; id: number; planet: number } | { k: 'system'; id: number }
+type GToast = { id: number; text: string; tone: 'good' | 'bad' | 'info'; t: number; to?: GLook }
 
 // --- The map: one view from the whole galaxy down to a single planet ---------------------------------
 
@@ -748,8 +751,8 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     return () => ro.disconnect()
   }, [])
 
-  const toast = (text: string, tone: GToast['tone'] = 'info') => {
-    const t = { id: Math.random(), text, tone, t: performance.now() }
+  const toast = (text: string, tone: GToast['tone'] = 'info', to?: GLook) => {
+    const t = { id: Math.random(), text, tone, t: performance.now(), to }
     setToasts((ts) => [...ts.slice(-4), t])
   }
   useEffect(() => {
@@ -860,38 +863,40 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
         if (e.k === 'captured') {
           const p = g.planets[e.planet]
           if (e.owner === ME) {
-            toast(`${p.name} is ours`, 'good')
+            toast(`${p.name} is ours`, 'good', { k: 'planet', id: p.id })
             sound.capture(true)
           } else if (e.from === ME) {
-            toast(`We lost ${p.name}`, 'bad')
+            toast(`We lost ${p.name}`, 'bad', { k: 'planet', id: p.id })
             sound.capture(false)
           }
         } else if (e.k === 'built' && e.owner === ME) {
-          toast(`${UNIT[e.unit].name} ready at ${g.planets[e.planet].name}`, 'info')
+          // The new ship joins our fleet at the planet: clicking picks that fleet.
+          toast(`${UNIT[e.unit].name} ready at ${g.planets[e.planet].name}`, 'info', { k: 'fleetAt', planet: e.planet })
           sound.shipReady(myFaction, UNIT[e.unit].tier)
         } else if (e.k === 'station' && e.owner === ME) {
-          toast(`${g.planets[e.planet].name}: station level ${e.level}`, 'good')
+          toast(`${g.planets[e.planet].name}: station level ${e.level}`, 'good', { k: 'planet', id: e.planet })
           sound.levelUp()
         } else if (e.k === 'arrived' && e.owner === ME) {
-          toast(`Fleet arrived at ${g.planets[e.planet].name}`, 'info')
+          toast(`Fleet arrived at ${g.planets[e.planet].name}`, 'info', { k: 'fleet', id: e.fleet, planet: e.planet })
         } else if (e.k === 'battle') {
           const p = g.planets[e.planet]
           if (!e.auto) sound.alarm(true)
-          else if (e.owners.includes(ME) && e.winner !== undefined) toast(`Battle at ${p.name}: ${e.winner === ME ? 'won' : 'lost'}`, e.winner === ME ? 'good' : 'bad')
+          else if (e.owners.includes(ME) && e.winner !== undefined) toast(`Battle at ${p.name}: ${e.winner === ME ? 'won' : 'lost'}`, e.winner === ME ? 'good' : 'bad', { k: 'planet', id: p.id })
         } else if (e.k === 'out') toast(`The ${factionName(g, e.owner)} is beaten`, e.owner === ME ? 'bad' : 'good')
         else if (e.k === 'capturing') {
           const p = g.planets[e.planet]
-          if (e.owner === ME) toast(`Our fleet is taking ${p.name}: ${CAPTURE_TIME} s in orbit`, 'info')
+          if (e.owner === ME) toast(`Our fleet is taking ${p.name}: ${CAPTURE_TIME} s in orbit`, 'info', { k: 'planet', id: p.id })
           else if (e.from === ME) {
-            toast(`The enemy is taking ${p.name}: ${CAPTURE_TIME} s to stop them`, 'bad')
+            toast(`The enemy is taking ${p.name}: ${CAPTURE_TIME} s to stop them`, 'bad', { k: 'planet', id: p.id })
             sound.alarm(false)
           }
         } else if (e.k === 'blockaded') {
           const where = g.systems[e.system].name
           if (e.owner === ME) {
-            toast(e.by >= 0 ? `Our fleet was pulled out of hyperspace by the blockade at ${where}` : `Our fleet stopped at ${where}: blockades closed every way on`, 'bad')
+            const f = g.fleets.find((x) => x.id === e.fleet)
+            toast(e.by >= 0 ? `Our fleet was pulled out of hyperspace by the blockade at ${where}` : `Our fleet stopped at ${where}: blockades closed every way on`, 'bad', f ? { k: 'fleet', id: f.id, planet: f.planet } : { k: 'system', id: e.system })
             sound.alarm(false)
-          } else if (e.by === ME) toast(`Our blockade at ${where} stopped an enemy fleet`, 'good')
+          } else if (e.by === ME) toast(`Our blockade at ${where} stopped an enemy fleet`, 'good', { k: 'system', id: e.system })
         } else if (e.k === 'payday' && e.owner === ME && e.amount > 0) {
           setPay({ id: Math.random(), amount: e.amount })
           sound.salvaged()
@@ -1172,6 +1177,22 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     const q = planetAt(g, g.planets[pid])
     flyTo(q.x, q.y, Math.max(camRef.current.k, k))
     setSel({ kind: 'planet', id: pid })
+  }
+  /** Look at one of our fleets, wherever it is now: the camera flies there and it's selected. */
+  const showFleet = (f: Fleet) => {
+    const q = fleetAt(g, f)
+    flyTo(q.x, q.y, Math.max(camRef.current.k, 45))
+    setTake({})
+    setSel({ kind: 'fleet', id: f.id })
+  }
+  /** Where a clicked message points: the camera flies there and selects what it's about. A fleet
+   * that has since merged into another, or been lost, falls back to its planet. */
+  const lookAt = (to: GLook) => {
+    sound.click()
+    if (to.k === 'system') return flyTo(g.systems[to.id].x, g.systems[to.id].y, Math.max(camRef.current.k, 11))
+    const f = to.k === 'fleet' ? g.fleets.find((x) => x.id === to.id && x.owner === ME) : to.k === 'fleetAt' ? fleetsAt(g, to.planet).find((x) => x.owner === ME) : undefined
+    if (f) return showFleet(f)
+    showPlanet(to.k === 'planet' ? to.id : to.planet)
   }
 
   // The battle waiting for us.
@@ -1830,11 +1851,24 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
         <div className="ew-toasts">
           {toasts.map((t) => {
             const dismiss = () => setToasts((ts) => ts.filter((x) => x.id !== t.id))
+            // A message about a place takes the camera there (click, tap, or Enter), and is done with.
+            const to = t.to
+            const go = to ? () => (lookAt(to), dismiss()) : undefined
             return (
-              <section key={t.id} className={`ew-frame ew-toast is-${t.tone}`} onContextMenu={(e) => (e.preventDefault(), dismiss())} onPointerUp={(e) => isTouch(e) && dismiss()}>
+              <section
+                key={t.id}
+                className={`ew-frame ew-toast is-${t.tone}${go ? ' is-link' : ''}`}
+                role={go ? 'button' : undefined}
+                tabIndex={go ? 0 : undefined}
+                onClick={go}
+                onKeyDown={go && ((e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), e.stopPropagation(), go()))}
+                onContextMenu={(e) => (e.preventDefault(), dismiss())}
+                onPointerUp={(e) => isTouch(e) && !go && dismiss()}
+              >
                 <div className="ew-frame-in">
+                  {go && <i className="ew-toast-go" aria-hidden>⌖</i>}
                   <span>{t.text}</span>
-                  <button className="ew-toast-x" onClick={dismiss} aria-label="Dismiss">×</button>
+                  <button className="ew-toast-x" onClick={(e) => (e.stopPropagation(), dismiss())} aria-label="Dismiss">×</button>
                 </div>
               </section>
             )

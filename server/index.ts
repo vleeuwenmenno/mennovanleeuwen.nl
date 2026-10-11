@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { extname, join, normalize, sep } from 'node:path'
 import { handleApi } from './api.ts'
 import { empiresUpgrade, startEmpires } from './empires.ts'
+import { startAgents } from './agents.ts'
 import { startMinecraftWatch } from './minecraft.ts'
 import { startNotifications } from './watchers.ts'
 import { SECURITY } from './http.ts'
@@ -125,6 +126,8 @@ process.on('unhandledRejection', (e) => console.error('unhandled rejection:', e)
 
 // Battles and lobbies carried over from before a restart, before anyone can connect.
 startEmpires()
+// Agents turns a crash cut off are marked as interrupted, and a restart marks the running ones.
+startAgents()
 
 createServer((req, res) => {
   serve(req, res).catch((e: unknown) => {

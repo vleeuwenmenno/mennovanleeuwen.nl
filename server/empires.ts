@@ -8,6 +8,7 @@ import { currentUser } from './auth.ts'
 import { database } from './db.ts'
 import { isPrivate } from './egress.ts'
 import { sameOrigin } from './http.ts'
+import { onShutdown } from './shutdown.ts'
 import { acceptWebSocket, refuse, type WsConnection } from './ws.ts'
 import { DIFFICULTY, type Brain, type Difficulty } from '../src/apps/games/empires/ai.ts'
 import { cleanCmd } from '../src/apps/games/empires/commands.ts'
@@ -1089,11 +1090,6 @@ export function startEmpires() {
   if (started) return
   started = true
   restoreEmpires()
-  for (const sig of ['SIGTERM', 'SIGINT'] as const)
-    process.once(sig, () => {
-      shutdown()
-      // Vite's dev server has its own handler, which closes and exits; on our own, exit once the
-      // close frames have had a moment to go out.
-      if (!process.listenerCount(sig)) setTimeout(() => process.exit(0), 300)
-    })
+  // server/shutdown.ts runs it with the other parts' hooks, then exits.
+  onShutdown('empires', shutdown)
 }
