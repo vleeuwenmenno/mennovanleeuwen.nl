@@ -1,5 +1,9 @@
+import type { LookupAddress } from 'node:dns'
 import { lookup } from 'node:dns/promises'
+import { request as httpRequest, type IncomingMessage } from 'node:http'
+import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
+import { Readable } from 'node:stream'
 import type { User } from './auth.ts'
 import { HttpError } from './http.ts'
 
@@ -9,8 +13,8 @@ import { HttpError } from './http.ts'
 // the host, a cloud metadata service): every address, also after each redirect, must be public.
 // Admins may use internal addresses (their own Seafile on the LAN, say).
 //
-// A host whose DNS answer changes between this check and the request itself can still slip
-// through; the container's firewall (README, "Open sign-up") is the backstop for that.
+// The request goes to exactly the addresses that were checked (fetchPinned), so a host whose DNS
+// answer changes between the check and the request (DNS rebinding) cannot slip through to them.
 
 const MAX_HOPS = 5
 
@@ -28,13 +32,52 @@ export function isPrivate(ip: string): boolean {
   return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b < 128) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) || a >= 224
 }
 
-/** Refuses anything but http(s) to a host whose every address is public. */
-export async function assertPublic(url: URL) {
+/** A host's addresses, for http(s) only and when every one of them is public; refuses otherwise. */
+export async function publicAddresses(url: URL): Promise<LookupAddress[]> {
   if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new EgressError(400, 'Only web addresses')
   const host = url.hostname.replace(/^\[|\]$/g, '')
-  const addresses = isIP(host) ? [host] : (await lookup(host, { all: true }).catch(() => [])).map((a) => a.address)
+  const addresses: LookupAddress[] = isIP(host) ? [{ address: host, family: isIP(host) }] : await lookup(host, { all: true }).catch(() => [])
   if (!addresses.length) throw new EgressError(404, `${url.host} does not exist`)
-  if (addresses.some(isPrivate)) throw new EgressError(400, `${url.host} is not a public address`)
+  if (addresses.some((a) => isPrivate(a.address))) throw new EgressError(400, `${url.host} is not a public address`)
+  return addresses
+}
+
+/** Refuses anything but http(s) to a host whose every address is public. */
+export async function assertPublic(url: URL) {
+  await publicAddresses(url)
+}
+
+/**
+ * One request (no redirects followed) that connects only to `addresses`: the ones that were just
+ * checked, not whatever the host's DNS answers a moment later. TLS still checks the certificate
+ * against the host name. Answers a fetch Response; the body is not decompressed, so none is asked
+ * for.
+ */
+export async function fetchPinned(url: URL, init: RequestInit, addresses: LookupAddress[]): Promise<Response> {
+  // Request turns any body fetch takes (text, bytes, FormData, URLSearchParams) into bytes with
+  // the right Content-Type.
+  const req = new Request(url, { method: init.method, headers: init.headers, body: init.body, ...(init.body instanceof ReadableStream ? { duplex: 'half' } : {}) } as RequestInit)
+  const body = init.body == null ? null : Buffer.from(await req.arrayBuffer())
+  const headers: Record<string, string> = {}
+  req.headers.forEach((v, k) => {
+    if (k !== 'accept-encoding') headers[k] = v
+  })
+  if (body) headers['content-length'] = String(body.length)
+  const pinned = (_host: string, opts: { all?: boolean }, done: (err: Error | null, address: string | LookupAddress[], family?: number) => void) =>
+    opts?.all ? done(null, addresses) : done(null, addresses[0].address, addresses[0].family)
+  return new Promise<Response>((resolve, reject) => {
+    const send = url.protocol === 'https:' ? httpsRequest : httpRequest
+    const r = send(url, { method: req.method, headers, lookup: pinned as never, signal: init.signal ?? undefined }, (res: IncomingMessage) => {
+      const h = new Headers()
+      for (let i = 0; i + 1 < res.rawHeaders.length; i += 2) h.append(res.rawHeaders[i], res.rawHeaders[i + 1])
+      const status = res.statusCode && res.statusCode >= 200 ? res.statusCode : 502
+      const empty = status === 204 || status === 205 || status === 304 || req.method === 'HEAD'
+      if (empty) res.resume()
+      resolve(new Response(empty ? null : (Readable.toWeb(res) as ReadableStream<Uint8Array>), { status, statusText: res.statusMessage, headers: h }))
+    })
+    r.on('error', reject)
+    r.end(body ?? undefined)
+  })
 }
 
 /** Lets an EgressError through a `.catch()` that turns network failures into null or a message. */
@@ -53,10 +96,11 @@ export async function guardedFetch(user: User | null, input: string | URL, init:
   let url = new URL(input)
   let opts: RequestInit = { ...init, redirect: 'manual' }
   for (let hop = 0; ; hop++) {
+    let res: Response
     if (user?.admin) {
       if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new EgressError(400, 'Only web addresses')
-    } else await assertPublic(url)
-    const res = await fetch(url, opts)
+      res = await fetch(url, opts)
+    } else res = await fetchPinned(url, opts, await publicAddresses(url))
     const location = res.headers.get('location')
     if (!follow || res.status < 300 || res.status >= 400 || !location) return res
     if (hop >= MAX_HOPS) throw new HttpError(502, `${url.host} redirected too often`)

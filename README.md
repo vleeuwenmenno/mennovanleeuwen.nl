@@ -234,10 +234,11 @@ else saves their own in Settings → Integrations.
 
 Users choose the addresses of their Gitea, CalDAV, Seafile, OnlyOffice and search servers, so the
 server only reaches public addresses for them, also after redirects
-([`server/egress.ts`](server/egress.ts)); admins may use internal ones. A host whose DNS answer
-changes between that check and the request can still get through, so in production also keep the
-container away from private networks, e.g. with a rule in Docker's `DOCKER-USER` chain:
-`iptables -I DOCKER-USER -s <site container subnet> -d 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16 -j DROP`.
+([`server/egress.ts`](server/egress.ts)); admins may use internal ones. Each request connects to
+exactly the addresses that were checked, so a host whose DNS answer changes in between (DNS
+rebinding) cannot reach the server's network either; TLS still checks certificates by name. No
+firewall rule is needed for this. Don't add a subnet rule on a network the site shares with other
+services (a reverse proxy's): it would cut those off too.
 
 Gitea/Forgejo instances are linked from Settings → Code hosts, in a window of their own, with a personal access token (read access to
 repository, issue, user and organization). Tokens are stored encrypted (AES-256-GCM) in SQLite
