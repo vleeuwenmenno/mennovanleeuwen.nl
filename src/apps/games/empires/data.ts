@@ -91,15 +91,23 @@ export const ABILITIES: Record<AbilityId, Ability> = {
   launchSwarm: { name: 'Launch swarm', blurb: 'Empties the hangars: two extra droid squadrons at once.', cooldown: 60, duration: 0 },
   fieldRepair: {
     name: 'Field repair',
-    blurb: 'Flies to a damaged station, or a ship of gunship class or bigger, and welds it back together for 15 s: hull and damaged modules, never shot-off ones. Aims at the ship under the cursor, else the most damaged one nearby. Idle crews do it by themselves.',
+    blurb: 'Flies to a damaged station, or a ship of gunship class or bigger, and welds it back together for 15 s: hull and damaged modules, and it rebuilds destroyed station modules one at a time (a ship\'s shot-off modules stay lost). Aims at the ship under the cursor, else the most damaged one nearby. Idle crews do it by themselves.',
     cooldown: 35, duration: 15, range: 1400,
   },
 }
 
-/** Field repair, per repair craft in reach: hull points a second, plus this share of the target's
+/**
+ * Field repair, per repair craft in reach: hull points a second, plus this share of the target's
  * full hull (and of each damaged module's) a second. Two craft mend a station or a flagship by
- * about a fifth over one run, a gunship from nearly nothing. */
-export const FIELD_REPAIR = { flat: 8, share: 0.005, reach: 200 }
+ * about a fifth over one run, a gunship from nearly nothing.
+ *
+ * On a station (and only there) the crews also rebuild shot-off modules, one at a time: `rebuild`
+ * seconds of welding by one craft (so 10 s for a squadron of two, two thirds of a run) bring the
+ * module back at `back` of its strength, and from then on it heals like any damaged one. Each
+ * shot-off station module counts `lost` towards how badly the station needs mending, a little over
+ * the tenth that idle crews look for, so a lost hangar alone is enough to bring them over.
+ */
+export const FIELD_REPAIR = { flat: 8, share: 0.005, reach: 200, rebuild: 20, back: 0.25, lost: 0.12 }
 /**
  * A station's defense wing: one free squadron of small fighters that every station starts with and
  * keeps up. Away from home (more than `radius` from their station, or once it's gone) their guns do

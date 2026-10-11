@@ -21,6 +21,7 @@
     "check:empires-galaxy": "node scripts/empires-galaxy-ai.ts",
     "check:empires-fleets": "node scripts/empires-fleets.ts",
     "check:empires-spacing": "node scripts/empires-spacing.ts",
+    "check:empires-repair": "node scripts/empires-repair.ts",
     "empires:battle-ai": "node scripts/empires-battle-ai.ts",
     "empires:bot": "node scripts/empires-bot.ts",
     "start": "node server/index.ts"

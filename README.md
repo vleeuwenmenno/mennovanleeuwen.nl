@@ -711,7 +711,13 @@ hangar like any fighter and need the research Engineer wing or Welder protocols 
 25 s, station level 1) before the shipyard builds them. Their guns are next to useless; their
 ability, **Field repair** (35 s cooldown), sends them to a damaged station or a ship of gunship
 class or bigger for 15 s. Each craft in reach mends 8 hull a second plus 0.5% of the patient's
-hull, and its damaged modules (not shot-off ones). F, or the ability button, aims at the ship
+hull, and its damaged modules. On a station, and only there, they also rebuild shot-off modules
+one at a time, the strongest first (the hangar, then the shield generators, then the turbolasers,
+the other modules, and the flak last): 20 s of one craft's welding, so 10 s for the squadron,
+brings a module back at a quarter of its strength, after which it heals like a damaged one, and
+the progress stays on the module between runs. A ship's shot-off modules stay lost. A shot-off
+station module also counts as damage worth a run, so idle crews come over for a lost hangar
+alone. F, or the ability button, aims at the ship
 under the pointer, else the most damaged one within 1,400; on touch, the action wheel on one of
 ours has *Repair it*. Fighters, bombers and the platforms on the ore are refused. Idle or guarding
 crews start a run by themselves on anything within 900 that has lost a tenth of itself. A new
@@ -729,10 +735,14 @@ anywhere and come home once their orders are done, but more than 1,400 from thei
 once it's gone, their guns do 30% of their damage (they're drawn faded there, and the unit card
 says so). Lost craft come back from the station's hangar one at a time: the first 15 s after the
 last loss, then one every 25 s until the squadron is whole, even after it was wiped out. A
-shot-off hangar holds that until the station's repair crew rebuilds it (Field repair mends a
-damaged hangar, keeping it up, but doesn't rebuild one shot off); the station
+shot-off hangar holds that until the station's repair crew or a Field repair rebuilds it (the
+countdown carries on the moment the hangar stands again); the station
 card shows "Defense wing 3/5 · next in 12 s". Stations in conquest fleet battles have one too
 (auto-resolve leaves it out). The AI's admirals never give them orders, so they cost no actions.
+
+```sh
+pnpm check:empires-repair   # Field repair: a station's hangar rebuilt and its wing back, a frigate's lost turret, determinism
+```
 
 ## Galactic conquest fleets
 
