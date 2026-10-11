@@ -10,6 +10,7 @@ import { openContextMenu, type MenuItem } from './ContextMenu'
 import { toggleOverlay } from './overlays'
 import { reboot, shutdown } from './powerState'
 import { useWM } from './wm'
+import { NOTE_APPS, notesHidden } from './deskPrefs'
 
 /** A top-bar button with a dropdown panel that closes on outside click or Escape. */
 function TopbarPopover({ label, className = '', title, children, menu }: { label: ReactNode; className?: string; title: string; children: (close: () => void) => ReactNode; /** Right-click */ menu?: () => MenuItem[] }) {
@@ -458,6 +459,8 @@ function AccountBlock({ close }: { close: () => void }) {
 export function SystemMenu() {
   const wm = useWM()
   const built = new Date(BUILT)
+  const hidden = notesHidden.use()
+  const notes = wm.windows.some((w) => NOTE_APPS.has(w.app))
   return (
     <TopbarPopover
       className="tb-sys"
@@ -531,6 +534,16 @@ export function SystemMenu() {
             >
               All apps
             </button>
+            {(notes || hidden) && (
+              <button
+                onClick={() => {
+                  close()
+                  notesHidden.set(!hidden)
+                }}
+              >
+                {hidden ? 'Show notes and widgets' : 'Hide notes and widgets'}
+              </button>
+            )}
             <a href={`https://github.com/${REPO}/releases`} target="_blank" rel="noopener noreferrer" onClick={close}>
               Release notes
             </a>

@@ -572,6 +572,11 @@ desktop scrolls along near the top bar and the dock); let go without moving, or 
 phone's window layout (`stack` in [`src/os/wm.tsx`](src/os/wm.tsx)); on a big screen notes stay
 wherever they were put.
 
+The MvL OS menu (top left) has *Hide notes and widgets* to put them all away and see the desktop
+itself (per browser; adding a note brings them back). On a phone, where the icons otherwise sit
+behind the notes, the desktop's icons then show as a grid of tiles: tap one to open it, long-press
+for its menu.
+
 ## Games
 
 The Games app ([`src/apps/games/Games.tsx`](src/apps/games/Games.tsx)) is the arcade: picking a game

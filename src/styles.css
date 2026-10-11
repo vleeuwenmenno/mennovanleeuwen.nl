@@ -1226,6 +1226,11 @@ body.is-resizing iframe {
 
 /* ---------- Windows ---------- */
 
+/* Notes and widgets put away from the MvL OS menu (deskPrefs.ts). */
+.desk-scroll.is-notes-hidden .window.chrome-note {
+  display: none;
+}
+
 /* Desktop icons and windows: one layer that scrolls down on phones (see Shell). */
 .desk-scroll {
   position: absolute;
@@ -7987,6 +7992,26 @@ kbd {
   }
   .window.chrome-note[data-shifting] {
     transition: translate 0.2s ease;
+  }
+  /* Notes and widgets put away (MvL OS menu): the desktop's icons show instead, as a grid of
+     tiles that scrolls (Desktop.tsx, .is-grid). */
+  .desk.is-grid {
+    position: relative;
+    min-height: 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+    align-content: start;
+    justify-items: center;
+    gap: 14px 6px;
+    padding: calc(var(--top) + 18px) 12px calc(110px + var(--sab));
+  }
+  .desk.is-grid .desk-icon {
+    display: flex;
+    position: relative;
+    left: auto !important;
+    top: auto !important;
+    transform: none !important;
+    width: 84px;
   }
   /* A swipe on a note's strip scrolls the column; only holding it still picks the note up. */
   .window.chrome-note .note-grip {

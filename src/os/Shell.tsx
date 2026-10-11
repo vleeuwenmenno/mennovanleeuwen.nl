@@ -35,6 +35,7 @@ import { appearanceMenu } from './appearanceMenu'
 import { toggleMode, useTheme } from './theme'
 import { ClockWidget, MinecraftWidget, SystemMenu } from './TopbarWidgets'
 import { useIsMobile } from './useIsMobile'
+import { NOTE_APPS, notesHidden } from './deskPrefs'
 import { NoteStackSlot, Window } from './Window'
 import { SINGLE_INSTANCE, useWM, type AppId, type Geometry, type WinState } from './wm'
 
@@ -662,6 +663,16 @@ export function Shell() {
   const power = usePower()
   const overlay = useOverlay()
 
+  // Notes and widgets put away from the MvL OS menu come back by themselves when another one is
+  // added: a new note that doesn't show would look like nothing happened.
+  const hidden = notesHidden.use()
+  const noteCount = wm.windows.filter((w) => NOTE_APPS.has(w.app)).length
+  const notesBefore = useRef(noteCount)
+  useEffect(() => {
+    if (noteCount > notesBefore.current) notesHidden.set(false)
+    notesBefore.current = noteCount
+  }, [noteCount])
+
   // Phones: app windows are full-screen sheets, and the notes (sticky widgets too) go one under
   // the other down a desktop that scrolls when they don't fit (styles.css). A note brought to
   // the front, or just added, scrolls into view.
@@ -749,7 +760,7 @@ export function Shell() {
       <TopBar />
       {/* Icons and windows. On phones this layer scrolls down when windows reach below the
           screen; the top bar, the dock and the wallpaper stay where they are. */}
-      <div className="desk-scroll">
+      <div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''}`}>
         <Desktop />
         <main className="windows">
           {wm.windows.map((w) => (
