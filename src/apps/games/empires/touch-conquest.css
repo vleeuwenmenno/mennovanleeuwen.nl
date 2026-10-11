@@ -48,6 +48,7 @@
 /* Phones: the top bar fits, the map's buttons move to its top right, the selection and the planet
    dock share one sheet along the bottom (the dock takes over while a planet is picked), and the
    galaxy map opens from its button instead of covering the bottom of the screen. */
+@media (pointer: coarse), (max-width: 719px) {
 @container (max-width: 680px) {
   .ew-root.ew-galaxy .ew-gtop .ew-top-cell {
     padding: 0 10px;
@@ -127,6 +128,8 @@
     display: inline;
   }
 }
+}
+@media (pointer: coarse), (max-width: 719px) {
 @container (max-width: 420px) {
   /* The narrowest phones: the shipyards button goes (the map's action wheel has it), and the bar
      scrolls sideways rather than cutting off the menu. */
@@ -138,11 +141,12 @@
     scrollbar-width: none;
   }
 }
+}
 
 /* Short screens (a phone on its side): the galaxy map opens from its button, the selection drops
    its minimum height and lays its commands out in two rows, the dock shows one row of ships along
    the bottom left, and the battle prompt and the end of the war fit on the screen. */
-@media (max-height: 500px) {
+@media (pointer: coarse) and (max-height: 500px), (max-width: 719px) and (max-height: 500px) {
   .ew-root.ew-galaxy .ew-gtouchbar {
     top: 56px;
     left: 50%;
