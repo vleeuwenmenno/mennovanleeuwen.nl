@@ -926,6 +926,44 @@ span.ew-teamtag {
   align-self: center;
 }
 
+/* A player stepped away from an online battle: the countdown to their return, and the vote on
+   carrying on without them. Above the menus, since it decides whether the battle goes on. */
+.ew-pausebox.ew-away {
+  width: min(400px, calc(100% - 32px));
+  z-index: 7;
+  display: grid;
+  gap: 8px;
+}
+.ew-away-clock {
+  font-variant-numeric: tabular-nums;
+  color: var(--ew-gold);
+}
+.ew-away-votes {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+.ew-pausebox .ew-away-votes .ew-go {
+  align-self: stretch;
+}
+.ew-away-votes .is-on {
+  outline: 2px solid var(--ew-gold);
+  outline-offset: 1px;
+}
+.ew-away-tally {
+  list-style: none;
+  margin: 8px 0 4px;
+  padding: 0;
+  font-size: 12px;
+  color: #c4d0e4;
+}
+
+/* The server lost the battle: one of two ways on, nothing to close. */
+.ew-lost .ew-frame-in {
+  display: grid;
+  gap: 10px;
+}
+
 .ew-result h2 {
   font-size: 30px;
 }

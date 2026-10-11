@@ -1,11 +1,17 @@
+import { synced } from '../../../os/synced'
 import type { MatchInfo, Turn } from './match'
 import type { BattleSnap } from './snapshot'
-import { MP_PATH, type ClientMsg, type LobbyInfo, type MpLobby, type RosterSeat, type ServerMsg } from './protocol'
+import { MP_PATH, type AwaySeat, type AwayVote, type ClientMsg, type LobbyInfo, type MpLobby, type RosterSeat, type ServerMsg } from './protocol'
 
 // The game's end of the multiplayer WebSocket. One connection per tab, kept open while the
 // multiplayer screens are up: it reconnects by itself after a drop (resuming the same player with
 // the tab's token), measures the round trip, and hands the server's messages to listeners. It
 // also keeps what the screens show (who we are, the lobby list, our lobby, its chat) as `view`.
+//
+// The server carries players, lobbies and battles over a restart (a deploy): it says so as it goes
+// down (close code 1012), and we come back as the same player once it's up. Should it have lost us
+// anyway (too long away, or its saved state was unusable), `view.lost` says what was lost, so the
+// battle screen can offer to play on against the computer rather than wait for turns forever.
 
 export type NetStatus = 'connecting' | 'online' | 'offline'
 type Listener = (m: ServerMsg) => void
@@ -29,23 +35,67 @@ export type NetView = {
   match: { info: MatchInfo; me: number } | null
   /** The battle's players: how each seat is doing and its ping (null until the server says). */
   roster: RosterSeat[] | null
+  /** Players who stepped away from the battle: it waits for them (or for the others' votes). */
+  away: AwaySeat[]
+  /** The server said it was restarting as it closed the connection: we wait for it to come back. */
+  restarting: boolean
+  /** The server no longer has the battle or lobby we were in: why, to show until dismissed. */
+  lost: { why: string } | null
+  /** The remembered name being claimed by itself on connecting (the join screen waits for it). */
+  claiming: string | null
+  /** Why the remembered name couldn't be claimed by itself (taken by someone online right now). */
+  nameNote: string | null
 }
 const CHAT_KEEP = 100
+/** WebSocket close code 1012, "service restart": the server is going down to come straight back. */
+const RESTART_CODE = 1012
 
-/** Per tab, so two tabs are two players (handy for trying it alone) and a reload is the same one. */
+/** The name last claimed, to take again by itself next time: in this browser, and with the account
+ * when signed in to MvL OS, so it follows the player to their other devices. */
+export const mpName = synced<string | null>('games:empires-name', null, { normalize: (v) => (typeof v === 'string' && v ? v : null) })
+/** Per tab, so two tabs are two players (handy for trying it alone) and a reload is the same one.
+ * The browser also keeps the last one, for a tab opened after the one playing was closed: with it,
+ * the server puts the player back in their battle (unless that tab is still connected with it). */
 const TOKEN_KEY = 'mvlos.empires.mp.token'
-const readToken = () => {
+const LAST_KEY = 'mvlos.empires.mp.last'
+const readToken = (): { token?: string; stored?: true } => {
   try {
-    return sessionStorage.getItem(TOKEN_KEY) ?? undefined
+    const own = sessionStorage.getItem(TOKEN_KEY)
+    if (own) return { token: own }
+    const last = localStorage.getItem(LAST_KEY)
+    return last ? { token: last, stored: true } : {}
   } catch {
-    return undefined
+    return {}
   }
 }
 const writeToken = (t: string) => {
   try {
     sessionStorage.setItem(TOKEN_KEY, t)
+    localStorage.setItem(LAST_KEY, t)
   } catch {
     // Storage blocked: a reload makes a new player.
+  }
+}
+
+/** The battle this browser was last in, and when it last heard of it: a player who closed the tab
+ * (or the game) has REJOIN_MS (server/empires.ts) to come back to it, so the menus offer that. */
+const BATTLE_KEY = 'mvlos.empires.mp.battle'
+const REJOIN_MS = 60_000
+function keepBattle(id: string | null) {
+  try {
+    if (id) localStorage.setItem(BATTLE_KEY, JSON.stringify({ id, at: Date.now() }))
+    else localStorage.removeItem(BATTLE_KEY)
+  } catch {
+    // Storage blocked: the menus just don't offer to rejoin.
+  }
+}
+/** Whether a battle this browser was in may still be waiting for us. */
+export function battleToRejoin(): boolean {
+  try {
+    const b = JSON.parse(localStorage.getItem(BATTLE_KEY) ?? 'null') as { id: string; at: number } | null
+    return !!b && Date.now() - b.at < REJOIN_MS
+  } catch {
+    return false
   }
 }
 
@@ -57,7 +107,9 @@ export class Net {
   clockOffset = 0
   name = ''
   id = ''
-  view: NetView = { status: 'connecting', me: null, suggestion: '', login: null, lobbies: [], lobby: null, chat: [], problem: null, rtt: 0, match: null, roster: null }
+  view: NetView = {
+    status: 'connecting', me: null, suggestion: '', login: null, lobbies: [], lobby: null, chat: [], problem: null, rtt: 0, match: null, roster: null, away: [], restarting: false, lost: null, claiming: null, nameNote: null,
+  }
   /** The battle's turns not yet played, oldest first. Kept out of `view`: they come 30 a second
    * and the battle screen takes them straight from here. */
   turns: Turn[] = []
@@ -73,6 +125,10 @@ export class Net {
   private pings = new Map<number, number>()
   private pingN = 0
   private closed = false
+  /** The battle in `view.match` has ended on the server (its result is up). */
+  private over = false
+  /** The lobby's last notice ("The battle reached its time limit"), to say why a battle ended. */
+  private lastNotice = ''
 
   constructor() {
     this.open()
@@ -106,18 +162,40 @@ export class Net {
 
   private track(m: ServerMsg) {
     switch (m.t) {
-      case 'ready':
-        return this.patch({ me: null, suggestion: m.suggestion, login: m.login })
+      case 'ready': {
+        // Asked for a name again although we had one: the server doesn't know us any more, and
+        // whatever we were in is gone with us.
+        const why = this.view.match && !this.over ? (this.view.restarting ? 'The server restarted and lost this battle.' : 'The server no longer has this battle: the connection was gone too long.')
+          : this.view.lobby ? (this.view.restarting ? 'The server restarted and lost the battle you were setting up.' : 'The server no longer has the battle you were setting up: the connection was gone too long.')
+          : null
+        keepBattle(null)
+        return this.patch({ me: null, suggestion: m.suggestion, login: m.login, lobby: null, chat: [], away: [], ...(why ? { lost: { why } } : {}) })
+      }
       case 'welcome':
-        return this.patch({ me: { id: m.id, name: m.name } })
+        return this.patch({ me: { id: m.id, name: m.name }, claiming: null, nameNote: null })
       case 'refused':
+        if (this.view.claiming)
+          return this.patch({ claiming: null, suggestion: m.suggestion, nameNote: `${this.view.claiming}, the name you used last time, can't be used right now: ${m.why.charAt(0).toLowerCase()}${m.why.slice(1)}.` })
         return this.patch({ suggestion: m.suggestion, problem: { why: m.why, n: (this.view.problem?.n ?? 0) + 1 } })
       case 'lobbies':
         return this.patch({ lobbies: m.list })
-      case 'lobby':
+      case 'lobby': {
+        // No battle of ours there (any more): nothing to offer rejoining.
+        if (!m.lobby || m.lobby.state === 'open') keepBattle(null)
+        // Our battle's lobby open again (or gone) before the battle ended: the server stopped it
+        // (a time limit, an error), or it was lost while we were away.
+        const ended = !!this.view.match && !this.over && (!m.lobby || m.lobby.state === 'open')
         // A new lobby (or none) starts with an empty chat.
-        return this.patch({ lobby: m.lobby, chat: m.lobby && m.lobby.id === this.view.lobby?.id ? this.view.chat : [] })
+        return this.patch({
+          lobby: m.lobby,
+          chat: m.lobby && m.lobby.id === this.view.lobby?.id ? this.view.chat : [],
+          ...(ended ? { lost: { why: m.why ?? (this.lastNotice ? `${this.lastNotice}.` : 'The server no longer has this battle.') }, away: [] } : {}),
+          // Out of a battle while away, seen from a fresh start (the tab was closed): a toast.
+          ...(!ended && m.why ? { problem: { why: m.why, n: (this.view.problem?.n ?? 0) + 1 } } : {}),
+        })
+      }
       case 'chat':
+        if (!m.from) this.lastNotice = m.text
         return this.patch({ chat: [...this.view.chat, { from: m.from, text: m.text, at: m.at }].slice(-CHAT_KEEP) })
       case 'kicked':
       case 'error':
@@ -127,11 +205,20 @@ export class Net {
         // The same battle again (we reconnected): keep the screen, a sync follows.
         if (this.view.match?.info.id === m.match.id && this.view.match.me === m.me) return
         this.sync = null
-        return this.patch({ match: { info: m.match, me: m.me }, roster: null })
+        this.over = false
+        this.lastNotice = ''
+        keepBattle(m.match.id)
+        return this.patch({ match: { info: m.match, me: m.me }, roster: null, away: [], lost: null })
       case 'roster':
-        return this.patch({ roster: m.seats })
+        if (this.view.match) keepBattle(this.view.match.info.id)
+        return this.patch({ roster: m.seats, away: m.away ?? [] })
+      case 'over':
+        this.over = true
+        keepBattle(null)
+        return
       case 'turn':
-        if (this.view.match) this.turns.push({ n: m.n, c: m.c, ...(m.ai ? { ai: m.ai } : {}) })
+        if (this.view.match) this.turns.push({ n: m.n, c: m.c, ...(m.ai ? { ai: m.ai } : {}), ...(m.give ? { give: m.give } : {}) })
+        if (this.view.match && m.n % 150 === 0) keepBattle(this.view.match.info.id)
         return
       case 'sync':
         // Every turn queued so far is from before it.
@@ -164,7 +251,14 @@ export class Net {
   endMatch() {
     this.turns = []
     this.sync = null
-    this.patch({ match: null, roster: null })
+    keepBattle(null)
+    this.patch({ match: null, roster: null, away: [], lost: null })
+  }
+
+  /** The "the server lost it" notice has been read. */
+  dismissLost() {
+    keepBattle(null)
+    this.patch({ lost: null })
   }
 
   /** Out of the lobby (and its battle, if one is on): straight to the list, without waiting for
@@ -173,7 +267,18 @@ export class Net {
     this.send({ t: 'leave' })
     this.turns = []
     this.sync = null
-    this.patch({ match: null, roster: null, lobby: null, chat: [] })
+    keepBattle(null)
+    this.patch({ match: null, roster: null, lobby: null, chat: [], away: [], lost: null })
+  }
+
+  /** In a battle that's still on: closing the game then only steps away from it (see leave). */
+  inBattle() {
+    return !!this.view.match && !this.over && !this.view.lost
+  }
+
+  /** About the player in `seat`, who stepped away: wait for them, or carry on without them. */
+  vote(seat: number, v: AwayVote) {
+    this.send({ t: 'vote', seat, v })
   }
 
   /** Done with multiplayer: closes for good (no reconnecting). */
@@ -198,7 +303,7 @@ export class Net {
     this.setStatus('connecting')
     ws.onopen = () => {
       this.retry = 0
-      ws.send(JSON.stringify({ t: 'hello', token: readToken() } satisfies ClientMsg))
+      ws.send(JSON.stringify({ t: 'hello', ...readToken() } satisfies ClientMsg))
       clearInterval(this.pingTimer)
       this.ping()
       this.pingTimer = window.setInterval(() => this.ping(), 2000)
@@ -223,10 +328,22 @@ export class Net {
         writeToken(m.token)
         this.name = m.name
         this.id = m.id
+        // The name to take by itself next time (also on another device, signed in).
+        mpName.set(m.name)
       }
       if (m.t === 'welcome' || m.t === 'ready') this.setStatus('online')
       this.track(m)
+      // Back from the restart (`track` needed to know it was one, to say what was lost).
+      if ((m.t === 'welcome' || m.t === 'ready') && this.view.restarting) this.patch({ restarting: false })
       for (const fn of [...this.listeners]) fn(m)
+      // A new player here: take the name used last time straight away, if there is one. Taken by
+      // someone online right now (the same player on another device, say), the join screen says
+      // so and offers the server's suggestion instead.
+      const last = mpName.get()
+      if (m.t === 'ready' && last) {
+        this.patch({ claiming: last, nameNote: null })
+        this.send({ t: 'claim', name: last })
+      }
     }
     ws.onclose = (e) => {
       if (this.ws !== ws) return
@@ -235,6 +352,7 @@ export class Net {
       // 4000: another connection of ours took over (a reload); this one is done.
       if (e.code === 4000) this.closed = true
       if (this.closed) return
+      if (e.code === RESTART_CODE) this.patch({ restarting: true })
       this.setStatus('offline')
       // Back off: 0.5, 1, 2, 4, then every 5 seconds.
       const wait = Math.min(5000, 500 * 2 ** this.retry++)

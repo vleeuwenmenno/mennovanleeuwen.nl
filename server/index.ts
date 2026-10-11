@@ -3,7 +3,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import { handleApi } from './api.ts'
-import { empiresUpgrade } from './empires.ts'
+import { empiresUpgrade, startEmpires } from './empires.ts'
 import { startMinecraftWatch } from './minecraft.ts'
 import { startNotifications } from './watchers.ts'
 import { SECURITY } from './http.ts'
@@ -122,6 +122,9 @@ async function serve(req: IncomingMessage, res: ServerResponse) {
 // Agents turn and upload in flight).
 process.on('uncaughtException', (e) => console.error('uncaught:', e))
 process.on('unhandledRejection', (e) => console.error('unhandled rejection:', e))
+
+// Battles and lobbies carried over from before a restart, before anyone can connect.
+startEmpires()
 
 createServer((req, res) => {
   serve(req, res).catch((e: unknown) => {

@@ -20,8 +20,9 @@ export type SlotKind = 'you' | 'ai' | 'closed'
 /** One spawn point in the lobby: who plays there, as what, on which side. Team 0 is yours. */
 export type Slot = { kind: SlotKind; faction: FactionId; team: 0 | 1; difficulty: Difficulty }
 /** `map` is a fixed map's id, or GENERATED to build one from `gen`. `areas` are the start areas
- * drawn in the lobby, by slot; a slot without one starts round its spawn point. */
-export type Setup = { map: string; slots: Slot[]; credits: number; gen: MapRules; areas: (Rect | null)[]; areasFor?: string }
+ * drawn in the lobby, by slot; a slot without one starts round its spawn point. `names`, by slot:
+ * who plays there, for a multiplayer battle carried on offline (otherwise "You", "Enemy 2"…). */
+export type Setup = { map: string; slots: Slot[]; credits: number; gen: MapRules; areas: (Rect | null)[]; areasFor?: string; names?: (string | null)[] }
 
 /** Which map, at which size, start areas were drawn for: areas saved for anything else (another
  * map, or this one before it was resized) are dropped rather than landing in the wrong place. */
@@ -563,12 +564,14 @@ export function HowToPlay() {
 // --- Main menu ------------------------------------------------------------------------------------------
 
 export type MenuScreen = 'main' | 'single' | 'multi' | 'conquest'
-export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, latest, saves = 0, initial = 'main' }: {
+export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, latest, saves = 0, initial = 'main', rejoin = false }: {
   sound: EmpiresSound
   victories: number
   onPlay: () => void
   /** Online battles against other players. */
   onMultiplayer: () => void
+  /** A multiplayer battle this browser stepped away from may still be waiting: offer to rejoin it. */
+  rejoin?: boolean
   /** Galactic conquest: carry on with the latest save, pick one to load, or set up a new one. */
   onConquest: (how: 'continue' | 'load' | 'new') => void
   /** The latest save ("name, week 3"), and how many there are. */
@@ -659,7 +662,12 @@ export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, 
         )}
         {screen === 'multi' && (
           <Frame className="ew-menu-frame" title="Multiplayer">
-            <button className="ew-menu-btn is-primary" onClick={click(onMultiplayer)} data-tip="Battles against other players online, with AI on any spare spawns">
+            {rejoin && (
+              <button className="ew-menu-btn is-primary" onClick={click(onMultiplayer)} data-tip="Your battle waits a minute for you to come back">
+                <Icon name="play" size={20} /> Rejoin battle
+              </button>
+            )}
+            <button className={`ew-menu-btn ${rejoin ? '' : 'is-primary'}`} onClick={click(onMultiplayer)} data-tip="Battles against other players online, with AI on any spare spawns">
               <Icon name="attack" size={20} /> Skirmish
             </button>
             <button className="ew-menu-btn" onClick={click(() => setScreen('main'))}>
@@ -668,9 +676,14 @@ export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, 
           </Frame>
         )}
         {screen === 'main' && <Frame className="ew-menu-frame">
-          <button className="ew-menu-btn is-primary" onClick={click(() => setScreen('single'))}>
+          <button className={`ew-menu-btn ${rejoin ? '' : 'is-primary'}`} onClick={click(() => setScreen('single'))}>
             <Icon name="fleet" size={20} /> Single player
           </button>
+          {rejoin && (
+            <button className="ew-menu-btn is-primary" onClick={click(onMultiplayer)} data-tip="Your battle waits a minute for you to come back">
+              <Icon name="play" size={20} /> Rejoin battle
+            </button>
+          )}
           <button className="ew-menu-btn" onClick={click(() => setScreen('multi'))}>
             <Icon name="army" size={20} /> Multiplayer
           </button>
