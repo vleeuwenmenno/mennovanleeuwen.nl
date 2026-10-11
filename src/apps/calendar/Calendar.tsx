@@ -4,6 +4,7 @@ import {
   deleteEvent,
   fetchEvents,
   isShown,
+  reloadCalendars,
   setCalendarShown,
   startOfDay,
   updateEvent,
@@ -237,6 +238,7 @@ export function CalendarApp({ win }: { win: WinState }) {
     const v = VIEWS.find((x) => x.key === e.key.toLowerCase())
     if (v) setView(v.id)
     else if (e.key === 't') setAnchor(startOfDay(new Date()))
+    else if (e.key === 'r') reloadCalendars()
     else if (e.key === 'n' || e.key === 'c') newEvent()
     else if (e.key === 'ArrowLeft' || e.key === 'j' || e.key === 'p') setAnchor(step(shownView, anchor, -1))
     else if (e.key === 'ArrowRight' || e.key === 'k') setAnchor(step(shownView, anchor, 1))
@@ -289,6 +291,9 @@ export function CalendarApp({ win }: { win: WinState }) {
         </button>
         <button className="btn btn-small" onClick={() => setAnchor(startOfDay(new Date()))} title="Today (T)">
           Today
+        </button>
+        <button className="ca-icon" onClick={reloadCalendars} aria-label="Refresh" title="Refresh (R)">
+          ↻
         </button>
         <button className="ca-icon" onClick={() => setAnchor(step(shownView, anchor, -1))} aria-label="Previous" title="Previous (←)">
           ‹

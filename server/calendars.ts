@@ -14,6 +14,7 @@ import {
   type GoogleRef,
 } from './google.ts'
 import { HttpError } from './http.ts'
+import { tellPages } from './notifier.ts'
 
 // Every calendar the user connected, Google and CalDAV together, for the Agenda widget, the
 // clock and the Calendar app: one list of calendars (CalDAV ids start with "caldav:") and one list
@@ -181,7 +182,13 @@ export async function createEvent(user: User, body: { calendar?: unknown; event?
   const calendar = String(body.calendar ?? '')
   const input = cleanInput(body.event, false) as EventInput
   if (!calendar) throw new HttpError(400, 'Pick a calendar')
-  return encodeRef(isCaldav(calendar) ? await createCaldavEvent(user, calendar, input) : await createGoogleEvent(user, calendar, input))
+  try {
+    return encodeRef(isCaldav(calendar) ? await createCaldavEvent(user, calendar, input) : await createGoogleEvent(user, calendar, input))
+  } finally {
+    // The Calendar app, the Agenda widget and the clock, in every open page (an agent added it, or
+    // another device did): fetch again. Also after a failure, which may have half happened.
+    tellPages(user.id, 'calendar')
+  }
 }
 
 /**
@@ -190,25 +197,29 @@ export async function createEvent(user: User, body: { calendar?: unknown; event?
  * as it is; between the two it is made again there (with the fields sent) and deleted here.
  */
 export async function updateEvent(user: User, body: { ref?: unknown; event?: unknown; calendar?: unknown; all?: unknown }) {
-  const ref = decodeRef(body.ref)
-  const input = cleanInput(body.event, true)
-  const all = body.all === true
-  const target = typeof body.calendar === 'string' && body.calendar !== ref.c ? body.calendar : null
-  const recurring = ref.k === 'g' ? !!ref.m : !!ref.r
-  if (target && recurring) throw new HttpError(400, 'A repeating event stays in its calendar')
-  if (target && isCaldav(target) !== (ref.k === 'c')) {
-    const full = input as EventInput
-    if (full.title === undefined || full.start === undefined) throw new HttpError(400, 'Send the whole event to move it there')
-    await createEvent(user, { calendar: target, event: full })
-    await deleteEvent(user, { ref: body.ref })
-    return
-  }
-  if (ref.k === 'g') {
-    if (Object.keys(input).some((k) => k !== 'timeZone')) await updateGoogleEvent(user, ref, input, all)
-    if (target) await moveGoogleEvent(user, ref, target)
-  } else {
-    if (Object.keys(input).some((k) => k !== 'timeZone')) await updateCaldavEvent(user, ref, input, all)
-    if (target) await moveCaldavEvent(user, ref, target)
+  try {
+    const ref = decodeRef(body.ref)
+    const input = cleanInput(body.event, true)
+    const all = body.all === true
+    const target = typeof body.calendar === 'string' && body.calendar !== ref.c ? body.calendar : null
+    const recurring = ref.k === 'g' ? !!ref.m : !!ref.r
+    if (target && recurring) throw new HttpError(400, 'A repeating event stays in its calendar')
+    if (target && isCaldav(target) !== (ref.k === 'c')) {
+      const full = input as EventInput
+      if (full.title === undefined || full.start === undefined) throw new HttpError(400, 'Send the whole event to move it there')
+      await createEvent(user, { calendar: target, event: full })
+      await deleteEvent(user, { ref: body.ref })
+      return
+    }
+    if (ref.k === 'g') {
+      if (Object.keys(input).some((k) => k !== 'timeZone')) await updateGoogleEvent(user, ref, input, all)
+      if (target) await moveGoogleEvent(user, ref, target)
+    } else {
+      if (Object.keys(input).some((k) => k !== 'timeZone')) await updateCaldavEvent(user, ref, input, all)
+      if (target) await moveCaldavEvent(user, ref, target)
+    }
+  } finally {
+    tellPages(user.id, 'calendar')
   }
 }
 
@@ -234,6 +245,10 @@ export async function getEvent(user: User, rawRef: unknown): Promise<EventNow> {
 
 export async function deleteEvent(user: User, body: { ref?: unknown; all?: unknown }) {
   const ref = decodeRef(body.ref)
-  if (ref.k === 'g') await deleteGoogleEvent(user, ref, body.all === true)
-  else await deleteCaldavEvent(user, ref, body.all === true)
+  try {
+    if (ref.k === 'g') await deleteGoogleEvent(user, ref, body.all === true)
+    else await deleteCaldavEvent(user, ref, body.all === true)
+  } finally {
+    tellPages(user.id, 'calendar')
+  }
 }
