@@ -29,6 +29,11 @@ export type WinState = {
    * window does not shrink every window for good.
    */
   want?: Geometry
+  /**
+   * The note's place in the phone layout's column of notes (stackOrder), once it has been moved
+   * there by hand. Only the phone layout reads it; free-standing notes on a big screen ignore it.
+   */
+  stack?: number
 }
 
 export type SnapZone = 'left' | 'right' | 'tl' | 'tr' | 'bl' | 'br'
@@ -80,6 +85,7 @@ type Action =
   | { type: 'toggleMax'; pid: number }
   | { type: 'setGeometry'; pid: number; geometry: GeometryPatch }
   | { type: 'setProps'; pid: number; props: WinState['props'] }
+  | { type: 'restack'; pids: number[] }
   | { type: 'viewport'; width: number; height: number; layout: { app: AppId; geometry: Geometry }[] }
   | { type: 'reset'; layout: { app: AppId; geometry: Geometry; props?: WinState['props'] }[] }
   | { type: 'restore'; windows: SavedWindow[] }
@@ -99,7 +105,7 @@ type State = {
 }
 
 /** Actions that are the visitor's own doing (as opposed to a viewport change or a restore). */
-const USER_ACTIONS = new Set<Action['type']>(['open', 'close', 'focus', 'minimize', 'toggleMax', 'setGeometry', 'setProps'])
+const USER_ACTIONS = new Set<Action['type']>(['open', 'close', 'focus', 'minimize', 'toggleMax', 'setGeometry', 'setProps', 'restack'])
 
 
 /** Opens the opening layout on an empty desk, as if nobody had touched it yet. */
@@ -113,7 +119,7 @@ function fresh(layout: { app: AppId; geometry: Geometry; props?: WinState['props
 // Saved layouts: which windows are open, where, and what they show. Phones and bigger screens
 // keep separate layouts, since one rarely fits the other.
 
-export type SavedWindow = Geometry & Pick<WinState, 'app' | 'minimized' | 'maximized' | 'snap' | 'restore' | 'props'>
+export type SavedWindow = Geometry & Pick<WinState, 'app' | 'minimized' | 'maximized' | 'snap' | 'restore' | 'props' | 'stack'>
 
 /** Saved layouts from before widgets: a sticky was its own app. */
 function migrate(w: SavedWindow): SavedWindow {
@@ -148,6 +154,7 @@ function serialize(windows: WinState[]): SavedWindow[] {
       maximized: w.maximized,
       snap: w.snap,
       restore: w.restore,
+      stack: w.stack,
       props: Object.fromEntries(Object.entries(w.props).filter(([k, v]) => v !== undefined && !TRANSIENT_PROPS.has(k))),
     }))
 }
@@ -235,6 +242,10 @@ function apply(state: State, action: Action): State {
       }
     case 'setProps':
       return { ...state, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, props: { ...w.props, ...action.props } } : w)) }
+    case 'restack': {
+      const at = new Map(action.pids.map((pid, i) => [pid, i]))
+      return { ...state, touched: true, windows: state.windows.map((w) => (at.has(w.pid) ? { ...w, stack: at.get(w.pid) } : w)) }
+    }
     case 'viewport': {
       const { width, height } = action
       return {
@@ -256,6 +267,19 @@ function apply(state: State, action: Action): State {
 
 /** Notes (the headline note, the shortcuts, sticky and other widgets): the windows with note chrome. */
 export const NOTE_APPS = new Set<AppId>(['notes', 'keys', 'widget'])
+
+/**
+ * The notes in the order the phone layout stacks them, top to bottom: the ones moved by hand by
+ * their place (stack), then the rest in the order they are kept in (the order they were opened),
+ * so a note added later goes to the bottom.
+ */
+export function stackOrder(windows: WinState[]): number[] {
+  return windows
+    .map((w, i) => ({ w, i }))
+    .filter(({ w }) => NOTE_APPS.has(w.app))
+    .sort((a, b) => (a.w.stack ?? Infinity) - (b.w.stack ?? Infinity) || a.i - b.i)
+    .map(({ w }) => w.pid)
+}
 /** How tall each note is drawn (pid → px): a long note runs on below its box (Window.tsx measures it). */
 const drawnHeights = new Map<number, number>()
 export const drawnHeight = (pid: number) => drawnHeights.get(pid)
@@ -302,6 +326,8 @@ type WM = {
   setGeometry: (pid: number, geometry: GeometryPatch) => void
   /** A window changing what it shows itself (Preview going to the next picture): its title and saved layout follow. */
   setProps: (pid: number, props: WinState['props']) => void
+  /** Puts the notes in this order in the phone layout's column (pids, top to bottom). */
+  restack: (pids: number[]) => void
   /** Closes everything and opens the opening layout again (after a reboot), or nothing at all. */
   reset: (empty?: boolean) => void
   /** Fits the windows to the screen again (a note that turned out taller than its box). */
@@ -451,6 +477,7 @@ export function WindowManagerProvider({
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
       setGeometry: (pid, geometry) => dispatch({ type: 'setGeometry', pid, geometry }),
       setProps: (pid, props) => dispatch({ type: 'setProps', pid, props }),
+      restack: (pids) => dispatch({ type: 'restack', pids }),
       refit: () => dispatch({ type: 'viewport', width: window.innerWidth, height: window.innerHeight, layout: relayout() }),
       reset: (empty) => {
         dispatch({ type: 'reset', layout: empty ? [] : relayout() })

@@ -109,8 +109,206 @@ export function installContextMenuFallback() {
     if (e.defaultPrevented || wantsNativeMenu(e)) return
     const href = linkAt(e.target)
     if (href) openContextMenu(e, linkMenu(href))
-    else e.preventDefault()
+    // A long press's own event has no browser menu to hold back, and leaving it alone tells the
+    // long press (below) that nobody wanted it, so the finger's lift stays an ordinary tap.
+    else if (e !== synthetic) {
+      e.preventDefault()
+      unhandled = e
+    }
   })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Long press = right-click, on touch screens. iOS never fires contextmenu for a held finger, and
+// Android only sometimes (often selecting text or showing its callout instead), so every
+// onContextMenu in the OS would be out of reach. One listener on the window watches touch
+// pointers: a finger held still for LONG_PRESS_MS sends a contextmenu event to whatever it is on,
+// and the existing handlers open their menus as they do for a mouse.
+
+const LONG_PRESS_MS = 500
+/** How far a finger may wander and still be holding still, in px. */
+const SLOP = 10
+/**
+ * Where a long press is someone else's: elements with a long press of their own (Empires At War,
+ * Minesweeper's flags, held game buttons), canvases (games aim and drag on them), native pickers,
+ * the menu itself (a slow tap on an item must still choose it), and anything marked
+ * data-no-touch-menu. Text fields are left to the browser through wantsNativeMenu.
+ */
+const NO_TOUCH_MENU = '[data-longpress], [data-no-touch-menu], .ew-root, canvas, select, .ctx-menu'
+
+type Press = { id: number; target: Element; x: number; y: number; timer: ReturnType<typeof setTimeout> | null; fired: boolean; /** Text was already selected when the finger went down (the visitor's, not the press's) */ selected: boolean }
+let press: Press | null = null
+/** The contextmenu event a long press is sending right now. */
+let synthetic: Event | null = null
+/** The last contextmenu the fallback swallowed because nothing in the OS wanted it. */
+let unhandled: Event | null = null
+/** When the last long press opened something, to drop Android's own event for the same press. */
+let firedAt = 0
+let swallowClickUntil = 0
+const fingers = new Set<number>()
+
+function buzz() {
+  try {
+    navigator.vibrate?.(10)
+  } catch {
+    /* no vibration motor, or not allowed */
+  }
+}
+
+/**
+ * Called by drags that start before the finger has gone SLOP px (a window, a note, an icon): once
+ * something is moving under the finger, holding still again must not open a menu on top of it.
+ */
+export function cancelTouchMenu() {
+  if (press && !press.fired) {
+    if (press.timer) clearTimeout(press.timer)
+    press = null
+  }
+}
+
+/** The press opened a menu (or an app took it): the lift must not also tap what is underneath. */
+function claim(p: Press) {
+  p.fired = true
+  firedAt = Date.now()
+  buzz()
+  // A word the browser selected under the held finger is the press's doing, not the visitor's
+  // (a selection made before it, which a menu item may copy, stays).
+  if (!p.selected) window.getSelection()?.removeAllRanges()
+}
+
+function fire() {
+  const p = press
+  if (!p) return
+  p.timer = null
+  // The element can be re-rendered away while the finger rests on it.
+  const target = p.target.isConnected ? p.target : document.elementFromPoint(p.x, p.y)
+  if (!target || wantsNativeMenu({ target })) return void (press = null)
+  const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, composed: true, view: window, button: 2, buttons: 0, clientX: p.x, clientY: p.y, screenX: p.x, screenY: p.y })
+  synthetic = ev
+  try {
+    target.dispatchEvent(ev)
+  } finally {
+    synthetic = null
+  }
+  // Nobody wanted it (no menu here): the hold was just a slow tap, and its click goes through.
+  if (!ev.defaultPrevented) return void (press = null)
+  claim(p)
+}
+
+/** Installed once at startup, next to the right-click fallback (main.tsx). */
+export function installTouchContextMenu() {
+  const opts = { capture: true, passive: true }
+
+  window.addEventListener(
+    'pointerdown',
+    (e) => {
+      if (e.pointerType !== 'touch') return
+      // A new touch: the click still owed to the last press (if the browser never sent it) is not this one.
+      swallowClickUntil = 0
+      // The first finger down starts the count afresh, in case a lift went missing (an iframe took it).
+      if (e.isPrimary) fingers.clear()
+      fingers.add(e.pointerId)
+      // A second finger is a pinch or a two-finger scroll, never a press.
+      if (fingers.size > 1) return cancelTouchMenu()
+      const el = e.target instanceof Element ? e.target : null
+      if (!el || el.closest(NO_TOUCH_MENU) || wantsNativeMenu(e)) return
+      press = { id: e.pointerId, target: el, x: e.clientX, y: e.clientY, timer: setTimeout(fire, LONG_PRESS_MS), fired: false, selected: !window.getSelection()?.isCollapsed }
+    },
+    opts,
+  )
+
+  window.addEventListener(
+    'pointermove',
+    (e) => {
+      if (press?.id === e.pointerId && !press.fired && Math.hypot(e.clientX - press.x, e.clientY - press.y) > SLOP) cancelTouchMenu()
+    },
+    opts,
+  )
+
+  // Letting go after a menu opened: the press is over for the element underneath too, but as a
+  // cancelled gesture, not a finished one. Handlers that act on pointerup (a calendar tap that
+  // opens an event, an icon that selects itself) get pointercancel instead and stand down; the
+  // click the browser sends afterwards is dropped below.
+  window.addEventListener(
+    'pointerup',
+    (e) => {
+      if (e.pointerType !== 'touch') return
+      fingers.delete(e.pointerId)
+      const p = press
+      if (p?.id !== e.pointerId) return
+      press = null
+      if (p.timer) clearTimeout(p.timer)
+      if (!p.fired) return
+      e.stopImmediatePropagation()
+      swallowClickUntil = Date.now() + 600
+      e.target?.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: e.pointerId, pointerType: 'touch', isPrimary: e.isPrimary, clientX: e.clientX, clientY: e.clientY }))
+    },
+    { capture: true },
+  )
+
+  window.addEventListener(
+    'pointercancel',
+    (e) => {
+      if (e.pointerType !== 'touch') return
+      fingers.delete(e.pointerId)
+      if (press?.id === e.pointerId) {
+        if (press.timer) clearTimeout(press.timer)
+        press = null
+      }
+    },
+    opts,
+  )
+
+  // The page (or a list in it) scrolling under the finger means it was a swipe.
+  window.addEventListener('scroll', () => cancelTouchMenu(), opts)
+
+  window.addEventListener(
+    'click',
+    (e) => {
+      if (Date.now() > swallowClickUntil) return
+      swallowClickUntil = 0
+      e.preventDefault()
+      e.stopImmediatePropagation()
+    },
+    { capture: true },
+  )
+
+  // While a press holds a menu open, the browser starting a drag (draggable rows in Files and
+  // Agents) or a text selection would fight it for the same finger.
+  for (const type of ['dragstart', 'selectstart']) {
+    window.addEventListener(
+      type,
+      (e) => {
+        if (press?.fired) e.preventDefault()
+      },
+      { capture: true },
+    )
+  }
+
+  // Android's own contextmenu for a held finger, which can come just before or just after ours.
+  window.addEventListener(
+    'contextmenu',
+    (e) => {
+      if (e === synthetic || !e.isTrusted || (e as PointerEvent).pointerType === 'mouse') return
+      const p = press
+      // Ours already went out for this press (or only just did): one menu per press.
+      if (p?.fired || Date.now() - firedAt < 1000) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        return
+      }
+      if (!p) return
+      // Android got there first. Let it reach the handlers instead of sending a second one, and
+      // treat the press as ours if one of them took it, so the lift does not tap as well.
+      if (p.timer) clearTimeout(p.timer)
+      p.timer = null
+      setTimeout(() => {
+        if (press === p && e.defaultPrevented && e !== unhandled) claim(p)
+        else if (press === p) press = null
+      })
+    },
+    { capture: true },
+  )
 }
 
 export const closeContextMenu = () => set(null)

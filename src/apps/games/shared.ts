@@ -124,6 +124,8 @@ export function usePress() {
       onPointerLeave: stop,
       onPointerCancel: stop,
       onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+      // Holding is the button's own business (repeat), not the OS's long-press menu.
+      'data-longpress': '',
       // Keyboard activation (Enter/Space on a focused button) still works.
       onClick: (e: React.MouseEvent) => {
         if (e.detail === 0) fn()
