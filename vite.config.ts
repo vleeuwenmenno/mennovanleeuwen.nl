@@ -6,6 +6,7 @@ import react from '@vitejs/plugin-react'
 import { handleApi } from './server/api.ts'
 import { empiresUpgrade } from './server/empires.ts'
 import { startMinecraftWatch } from './server/minecraft.ts'
+import { startNotifications } from './server/watchers.ts'
 
 /** The /api routes during `pnpm dev` and `pnpm preview`, like server/index.ts in production. */
 const liveApi = (): Plugin => {
@@ -22,11 +23,13 @@ const liveApi = (): Plugin => {
       server.middlewares.use(handler)
       server.httpServer?.on('upgrade', upgrade)
       startMinecraftWatch()
+      startNotifications()
     },
     configurePreviewServer: (server) => {
       server.middlewares.use(handler)
       server.httpServer.on('upgrade', upgrade)
       startMinecraftWatch()
+      startNotifications()
     },
   }
 }

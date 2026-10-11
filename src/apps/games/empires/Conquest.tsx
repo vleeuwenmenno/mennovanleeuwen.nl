@@ -357,6 +357,8 @@ export function planetAt(g: Galaxy, p: Planet) {
 const reach = (g: Galaxy, s: number) => orbitOf(Math.max(0, ...g.systems[s].planets.map((p) => g.planets[p].orbit))).rx + 3
 
 type Cam = { x: number; y: number; k: number }
+/** How hard zooming in draws the spot under the cursor to the centre (under a tenth of the way a notch). */
+const ZOOM_PULL = 0.33
 /** Closest the map zooms in: a planet fills a good part of the view. */
 const K_MAX = 140
 const fitK = (w: number, h: number) => Math.min(w / W, h / H) * 0.94
@@ -677,7 +679,18 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
   const [cam, setCam] = useState<Cam>({ x: W / 2, y: H / 2, k: 0.8 })
   const camRef = useRef(cam)
   camRef.current = cam
+  /** Moves the camera now: the ref at once, so moves in the same frame build on each other. */
+  const moveCam = (c: Cam) => {
+    camRef.current = c
+    setCam(c)
+  }
   const camGoal = useRef<Cam | null>(null)
+  /** A wheel zoom under way: the zoom it's heading for, and the world point (wx, wy) that was under
+   * the cursor, now at (sx, sy) from the view's centre and gliding to (tx, ty) (zooming in pulls it
+   * towards the centre). (cx, cy) is where the cursor was, so more notches there build on it. */
+  const zoomTo = useRef<{ k: number; wx: number; wy: number; sx: number; sy: number; tx: number; ty: number; cx: number; cy: number } | null>(null)
+  /** How fast the keys and screen edges are panning, in screen pixels a second (it eases in and out). */
+  const panVel = useRef({ x: 0, y: 0 })
   const dragged = useRef(false)
   /** Camera keys held down, and where the mouse is over the map (for edge scrolling). */
   const held = useRef(new Set<string>())
@@ -695,7 +708,10 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
   const kMinRef = useRef(kMin)
   kMinRef.current = kMin
   const fix = (c: Cam): Cam => ({ x: clamp(c.x, 0, W), y: clamp(c.y, 0, H), k: clamp(c.k, kMinRef.current, K_MAX) })
-  const flyTo = (x: number, y: number, k: number) => (camGoal.current = fix({ x, y, k }))
+  const flyTo = (x: number, y: number, k: number) => {
+    zoomTo.current = null
+    camGoal.current = fix({ x, y, k })
+  }
   const flyOut = () => flyTo(W / 2, H / 2, kMin)
 
   // The view's size; the first time, the whole galaxy fits.
@@ -776,11 +792,44 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
         if (mouse.current.y < 8) dy--
         if (mouse.current.y > el.clientHeight - 8) dy++
       }
-      if (dx || dy) {
+      // Eases up to speed and back to a stop rather than starting and stopping dead; diagonals go
+      // no faster than straight. Closer in it goes faster across the screen, so getting from one
+      // system to the next doesn't crawl.
+      const len = Math.hypot(dx, dy) || 1
+      const top = 1100 * set.cameraSpeed * (camRef.current.k / kMinRef.current) ** 0.25
+      const v = panVel.current
+      const ease = 1 - Math.exp(-dt * 12)
+      v.x += ((dx / len) * top - v.x) * ease
+      v.y += ((dy / len) * top - v.y) * ease
+      if (!dx && !dy && Math.hypot(v.x, v.y) < 5) v.x = v.y = 0
+      if (v.x || v.y) {
         camGoal.current = null
         const c = camRef.current
-        const pan = (900 * set.cameraSpeed * dt) / c.k
-        setCam(fix({ ...c, x: c.x + Math.sign(dx) * pan, y: c.y + Math.sign(dy) * pan }))
+        const mx = (v.x * dt) / c.k
+        const my = (v.y * dt) / c.k
+        moveCam(fix({ ...c, x: c.x + mx, y: c.y + my }))
+        // A wheel zoom under way carries on from the panned spot.
+        if (zoomTo.current) {
+          zoomTo.current.wx += mx
+          zoomTo.current.wy += my
+        }
+      }
+      // A wheel zoom glides to its zoom, the point that was under the cursor gliding with it to
+      // its spot on screen.
+      const z = zoomTo.current
+      if (z) {
+        const c = camRef.current
+        const t = 1 - Math.exp(-dt * 14)
+        let k = Math.exp(Math.log(c.k) + (Math.log(z.k) - Math.log(c.k)) * t)
+        z.sx += (z.tx - z.sx) * t
+        z.sy += (z.ty - z.sy) * t
+        if (Math.abs(k / z.k - 1) < 0.002 && Math.hypot(z.tx - z.sx, z.ty - z.sy) < 0.5) {
+          k = z.k
+          z.sx = z.tx
+          z.sy = z.ty
+          zoomTo.current = null
+        }
+        moveCam(fix({ x: z.wx - z.sx / k, y: z.wy - z.sy / k, k }))
       }
       const goal = camGoal.current
       if (goal) {
@@ -789,8 +838,8 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
         const next = { x: c.x + (goal.x - c.x) * t, y: c.y + (goal.y - c.y) * t, k: Math.exp(Math.log(c.k) + (Math.log(goal.k) - Math.log(c.k)) * t) }
         if (Math.abs(next.k / goal.k - 1) < 0.01 && Math.hypot(goal.x - next.x, goal.y - next.y) * next.k < 1) {
           camGoal.current = null
-          setCam(goal)
-        } else setCam(next)
+          moveCam(goal)
+        } else moveCam(next)
       }
       for (const e of g.events) {
         if (e.k === 'captured') {
@@ -1168,14 +1217,34 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
     const c = camRef.current
     return { x: c.x + (cx - r.left - size.w / 2) / c.k, y: c.y + (cy - r.top - size.h / 2) / c.k, sx: cx - r.left, sy: cy - r.top }
   }
-  const onWheel = (e: React.WheelEvent) => {
-    const c = camGoal.current ?? camRef.current
-    camGoal.current = null
-    const at = toWorld(e.clientX, e.clientY)
-    const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY
-    const k = clamp(c.k * Math.exp(-dy * 0.0018), kMin, K_MAX)
-    setCam(fix({ x: at.x - (at.sx - size.w / 2) / k, y: at.y - (at.sy - size.h / 2) / k, k }))
-  }
+  // The wheel (and a touchpad pinch) sets where the zoom is heading; the clock glides there, so a
+  // notch of the wheel is a smooth step and a quick spin one long glide. A native listener, as
+  // React's is passive and couldn't keep a pinch from zooming the whole page.
+  useEffect(() => {
+    const el = viewEl.current
+    if (!el) return
+    const wheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY
+      // A pinch comes as small steps with Ctrl held.
+      const step = clamp(-dy * (e.ctrlKey ? 0.012 : 0.0025), -0.7, 0.7)
+      const r = el.getBoundingClientRect()
+      const c = camRef.current
+      const sx = e.clientX - r.left - el.clientWidth / 2
+      const sy = e.clientY - r.top - el.clientHeight / 2
+      const k = clamp((zoomTo.current?.k ?? c.k) * Math.exp(step), kMinRef.current, K_MAX)
+      // Zooming in draws the spot under the cursor towards the centre, under a tenth of the way a
+      // notch; zooming out keeps it under the cursor.
+      const pull = k > c.k && step > 0 ? Math.exp(-step * ZOOM_PULL) : 1
+      camGoal.current = null
+      const z = zoomTo.current
+      // More notches with the cursor where it was carry on with the same spot.
+      if (z && Math.hypot(z.cx - sx, z.cy - sy) < 6) Object.assign(z, { k, tx: z.tx * pull, ty: z.ty * pull })
+      else zoomTo.current = { k, wx: c.x + sx / c.k, wy: c.y + sy / c.k, sx, sy, tx: sx * pull, ty: sy * pull, cx: sx, cy: sy }
+    }
+    el.addEventListener('wheel', wheel, { passive: false })
+    return () => el.removeEventListener('wheel', wheel)
+  }, [])
   // The left button drags out a box that selects our fleets in it (Shift adds to the selection), and
   // a click on open space lets go of the selection; the middle button drags the map along.
   const [box, setBox] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
@@ -1198,7 +1267,9 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
     const r = viewEl.current!.getBoundingClientRect()
     const x0 = e.clientX
     const y0 = e.clientY
-    const c0 = camRef.current
+    // Dragging the map holds the point grabbed under the cursor, even while a zoom glides on.
+    const grab = toWorld(x0, y0)
+    if (pan) camGoal.current = null
     const add = e.shiftKey
     const onSpace = !(e.target as Element).closest('.ew-gsys, .ew-gfleet, .ew-splanet, button')
     dragged.current = false
@@ -1207,7 +1278,14 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
       dragged.current = true
       if (pan) {
         camGoal.current = null
-        setCam(fix({ ...c0, x: c0.x - (m.clientX - x0) / c0.k, y: c0.y - (m.clientY - y0) / c0.k }))
+        const sx = m.clientX - r.left - size.w / 2
+        const sy = m.clientY - r.top - size.h / 2
+        const z = zoomTo.current
+        if (z) Object.assign(z, { wx: grab.x, wy: grab.y, sx, sy, tx: sx, ty: sy, cx: NaN, cy: NaN })
+        else {
+          const c = camRef.current
+          moveCam(fix({ x: grab.x - sx / c.k, y: grab.y - sy / c.k, k: c.k }))
+        }
       } else setBox({ x0: x0 - r.left, y0: y0 - r.top, x1: m.clientX - r.left, y1: m.clientY - r.top })
     }
     const up = (u: PointerEvent) => {
@@ -1345,7 +1423,6 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
       <div
         className={`ew-gview ${mode === 'move' ? 'is-ordering' : ''}`}
         ref={viewEl}
-        onWheel={onWheel}
         onPointerDown={onPointerDown}
         onPointerMove={(e) => {
           const r = e.currentTarget.getBoundingClientRect()

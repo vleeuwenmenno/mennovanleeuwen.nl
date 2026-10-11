@@ -7,7 +7,7 @@ import { search as codeSearch } from './search.ts'
 import { fileLink, libraries, listDir, mkdir, removeItems, rename, seafile, seafileInfo, transfer, type Library } from './seafile.ts'
 import { readState, writeState } from './state.ts'
 import { webSearch } from './websearch.ts'
-import { pushToUser, type PushMessage } from './webpush.ts'
+import { notify } from './notifier.ts'
 import { AGENTS_MD } from '../src/data/agentsPrompt.ts'
 
 // The Agents app: a research assistant on Ollama Cloud, for the signed-in owner. Threads and their
@@ -1432,11 +1432,12 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
   // the window picks it up again from the saved messages.
   partial.set(row.id, { content: '', thinking: '' })
   // Whether a window still shows this turn: the one that asked, or one that joined it later. When
-  // none does, what the owner should know (the answer, a question for them) goes out as Web Push.
+  // none does, what the owner should know (the answer, a question for them) goes to the
+  // notification hub (server/notifier.ts): a pop-up on a page in view, or push to their devices.
   let asker = true
   res.on('close', () => (asker = false))
   const watched = () => (asker && !res.writableEnded) || !!followers.get(row.id)?.size
-  const away = (message: Omit<PushMessage, 'url' | 'thread'>) => void (!watched() && pushToUser(user, { ...message, url: `/?open=agents&thread=${row.id}`, thread: row.id }).catch(() => {}))
+  const away = (source: 'agents.answer' | 'agents.ask', message: { title: string; body: string; tag: string }) => void notify(user, { source, ...message, action: { app: 'agents', props: { thread: row.id } } }, { watched: watched() })
   const titleNow = () => (database().prepare('SELECT title FROM agent_threads WHERE id = ?').get(row.id) as { title: string } | undefined)?.title ?? 'Agents'
   const send = (e: TurnEvent) => {
     // Kept for windows that start following halfway through a reply.
@@ -1445,8 +1446,8 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
     else if (p && e.type === 'message' && e.message.role === 'assistant') (p.content = ''), (p.thinking = '')
     if (!res.writableEnded && !res.destroyed) res.write(`${JSON.stringify(e)}\n`)
     for (const f of followers.get(row.id) ?? []) f.send(e)
-    if (e.type === 'approval') away({ title: `Agents needs you: ${titleNow()}`, body: 'It wants to make a change, or read an address it was not given. Open it to allow or decline.', tag: `agents-ask-${row.id}` })
-    if (e.type === 'question') away({ title: `Agents asks: ${e.form.title}`, body: titleNow(), tag: `agents-ask-${row.id}` })
+    if (e.type === 'approval') away('agents.ask', { title: `Agents needs you: ${titleNow()}`, body: 'It wants to make a change, or read an address it was not given. Open it to allow or decline.', tag: `agents-ask-${row.id}` })
+    if (e.type === 'question') away('agents.ask', { title: `Agents asks: ${e.form.title}`, body: titleNow(), tag: `agents-ask-${row.id}` })
   }
   let outcome: 'answered' | 'failed' | null = null
 
@@ -1549,8 +1550,8 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
     // Nobody watching: the answer (or what went wrong) as a push message, the thread one tap away.
     if (outcome === 'answered') {
       const answer = [...messagesOf(row.id)].reverse().find((m) => m.role === 'assistant' && m.content.trim())?.content ?? ''
-      away({ title: `Agents answered: ${titleNow()}`, body: pushLine(answer), tag: `agents-${row.id}` })
-    } else if (outcome === 'failed') away({ title: `Agents stopped: ${titleNow()}`, body: 'Something went wrong. Open the thread to see what.', tag: `agents-${row.id}` })
+      away('agents.answer', { title: `Agents answered: ${titleNow()}`, body: pushLine(answer), tag: `agents-${row.id}` })
+    } else if (outcome === 'failed') away('agents.answer', { title: `Agents stopped: ${titleNow()}`, body: 'Something went wrong. Open the thread to see what.', tag: `agents-${row.id}` })
     // Gone when it was deleted while answering.
     const after = database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(row.id) as ThreadRow | undefined
     if (after) send({ type: 'thread', thread: toThread(after) })

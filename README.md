@@ -359,6 +359,22 @@ once into `DATA_DIR/vapid.json` (keep it: new keys mean every device has to turn
 `VAPID_SUBJECT` (a `mailto:` or `https:` address) defaults to `PUBLIC_URL`. Subscriptions are only
 accepted for the browsers' push services (Google, Mozilla, Apple, Microsoft).
 
+**The notification hub** ([`server/notifier.ts`](server/notifier.ts), its watchers in
+[`server/watchers.ts`](server/watchers.ts)): every notification for an account goes through one
+place. It drops what Settings → Notifications switched off (the choices sync, so the server reads
+them) and what was sent before, keeps the rest in the account's list (the bell, the same on every
+device), sends it live to the account's open pages (`/api/notifications/stream`, which show it as a
+pop-up when one is in view; pages say whether they are with a heartbeat), and pushes it when no
+page is in view, unless do not disturb is on. Apps hand notifications in two ways: when something
+happens (`notify()`: an Agents answer or question, a finished unpack), or from a watcher that looks
+every so often (`registerWatcher()`): the Minecraft server (from its pinger), new activity on
+GitHub and git.mvl.sh (every 5 minutes, each item once, back as far as Settings says), and calendar
+reminders (Google and CalDAV, read every 5 minutes, a reminder 0–30 minutes before an event). The
+list of sources and the rules for the choices are one file both sides import
+([`src/data/notifySources.ts`](src/data/notifySources.ts)), so Settings lists exactly what the
+server can send. Signed out, a visitor's pop-ups and list stay in that browser, from the page's
+own watchers. `NOTIFY_WATCH=off` leaves the watchers off.
+
 The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests
 and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 ([`server/inbox.ts`](server/inbox.ts)), with the access sign-in and linking already give.

@@ -158,6 +158,26 @@ export function database(): DatabaseSync {
   if (!cols('agent_memories').includes('updated_at')) db.exec('ALTER TABLE agent_memories ADD COLUMN updated_at INTEGER')
   // A thread's todo list, for long jobs: the agent keeps it up to date, the window shows it.
   if (!cols('agent_threads').includes('todos')) db.exec('ALTER TABLE agent_threads ADD COLUMN todos TEXT')
+  // The notification hub (server/notifier.ts): each account's notification list (the bell, on every
+  // device), and what was sent once already.
+  db.exec(`CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    source TEXT,
+    title TEXT NOT NULL,
+    body TEXT,
+    icon TEXT,
+    action TEXT,
+    at INTEGER NOT NULL,
+    read INTEGER NOT NULL DEFAULT 0
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS notifications_user ON notifications (user_id, at)')
+  db.exec(`CREATE TABLE IF NOT EXISTS notify_once (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, key)
+  )`)
   // Web Push (server/webpush.ts): the browsers and installed apps the owner turned push on for.
   db.exec(`CREATE TABLE IF NOT EXISTS push_subscriptions (
     id INTEGER PRIMARY KEY,

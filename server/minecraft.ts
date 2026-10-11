@@ -117,6 +117,12 @@ const KEEP_MS = 30 * 864e5
 const GAP_MS = 5 * 60_000
 
 let watching = false
+/** Told every ping's result (the notification hub's Minecraft watcher, server/watchers.ts). */
+const listeners = new Set<(st: McStatus) => void>()
+export function onMinecraftStatus(l: (st: McStatus) => void) {
+  listeners.add(l)
+  return () => listeners.delete(l)
+}
 
 /** Starts the pinger; MC_WATCH=off leaves it off (and the overview without history). */
 export function startMinecraftWatch() {
@@ -127,6 +133,13 @@ export function startMinecraftWatch() {
     const value = pingNow()
     cached = { at: Date.now(), value }
     const st = await value
+    for (const l of listeners) {
+      try {
+        l(st)
+      } catch (e) {
+        console.error('minecraft listener:', (e as Error).message)
+      }
+    }
     try {
       record(st)
       if (st.checkedAt - lastPrune > 3600_000) {
