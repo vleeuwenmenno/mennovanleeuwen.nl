@@ -27,6 +27,8 @@ export type Ctx = {
   console?: boolean
   /** On the text console: start the desktop. With `launch`, on an empty desk with just that app. */
   startx?: (launch?: { app: AppId; props?: Record<string, string> }) => void
+  /** Opens this terminal's settings sheet (not on the text console). */
+  openSettings?: () => void
   setAccent: (name: string) => boolean
   /** Writes a line to the screen right away (for commands that stream, like ping). */
   print: (text: string) => void

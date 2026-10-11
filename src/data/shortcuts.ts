@@ -55,6 +55,8 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
       ['Ctrl C', 'cancel the line or stop ping'],
       ['Ctrl L', 'clear the screen'],
       ['Ctrl U', 'clear the line'],
+      ['Ctrl + / Ctrl − / Ctrl 0', 'zoom this window in, out, back'],
+      ['Ctrl scroll / Pinch', 'zoom this window'],
     ],
   },
   {
