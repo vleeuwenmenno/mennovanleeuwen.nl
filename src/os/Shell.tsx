@@ -34,13 +34,12 @@ import { AppIcon } from './icons'
 import { appearanceMenu } from './appearanceMenu'
 import { toggleMode, useTheme } from './theme'
 import { ClockWidget, MinecraftWidget, SystemMenu } from './TopbarWidgets'
+import { useIsMobile } from './useIsMobile'
 import { Window } from './Window'
 import { SINGLE_INSTANCE, useWM, type AppId, type Geometry, type WinState } from './wm'
 
 const TOP = 28
 const DOCK_SPACE = 96
-
-export const isMobile = () => window.innerWidth < 720
 
 export function placement(app: AppId, openCount: number): Geometry {
   const [w0, h0] = APP_META[app].size
@@ -197,17 +196,6 @@ function LauncherIcon({ url, glyph, size = 48 }: { url: string; glyph?: string; 
       {glyph || broken ? <span className="dock-launcher-glyph">{glyph ?? '↗'}</span> : <img src={faviconOf(url)} alt="" draggable={false} onError={() => setBroken(true)} />}
     </span>
   )
-}
-
-/** True below the phone breakpoint, kept in step with the viewport. */
-function useIsMobile() {
-  const [mobile, setMobile] = useState(isMobile)
-  useEffect(() => {
-    const sync = () => setMobile(isMobile())
-    window.addEventListener('resize', sync)
-    return () => window.removeEventListener('resize', sync)
-  }, [])
-  return mobile
 }
 
 /**
@@ -623,7 +611,7 @@ function AppWindow({ w }: { w: WinState }) {
   const def = w.app === 'widget' ? widgetDef(w.props.kind) : undefined
   if (def && w.props.id) return <WidgetWindow w={w} def={def} id={w.props.id} />
   return (
-    <Window win={w} title={meta.titleOf?.(w) ?? meta.title} chrome={meta.chrome}>
+    <Window win={w} title={meta.titleOf?.(w) ?? meta.title} chrome={meta.chrome} menuItems={meta.menu?.(w)}>
       {meta.render(w)}
     </Window>
   )

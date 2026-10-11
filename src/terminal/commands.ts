@@ -700,6 +700,33 @@ export const commands: Record<string, Command> = {
   exit: { desc: 'close this terminal', run: (ctx) => void ctx.exit() },
   logout: { desc: 'alias for exit', hidden: true, run: (ctx) => void ctx.exit() },
   tty: { desc: 'print the terminal name', run: (ctx) => (ctx.console ? '/dev/tty1' : '/dev/pts/0') },
+  // Only the reading half of stty: the size follows the window and the text size, never the other way.
+  stty: {
+    desc: 'print the terminal size',
+    usage: 'stty [size | -a]',
+    run: (ctx) => {
+      const { rows, cols } = ctx.size
+      const [a] = ctx.args
+      if (a === 'size') return `${rows} ${cols}`
+      if (!a || a === '-a' || a === '--all') return `speed 38400 baud; rows ${rows}; columns ${cols}; line = 0;`
+      throw new CmdError(`stty: ${a}: only reading the size works here (stty size)`)
+    },
+  },
+  settings: {
+    desc: "this terminal's settings: text size, zoom, extra keys",
+    usage: 'settings [system]   (system opens the Settings app)',
+    run: (ctx) => {
+      const [a] = ctx.args
+      if (a === 'system' || a === 'os') {
+        if (!APPS.settings) throw new CmdError('settings: there is no Settings app here')
+        ctx.openApp(APPS.settings)
+        return
+      }
+      if (a && a !== 'terminal') throw new CmdError(`settings: ${a}: unknown\nusage: ${commands.settings.usage}`)
+      if (!ctx.openSettings) throw new CmdError('settings: the text console has no settings; startx first')
+      ctx.openSettings()
+    },
+  },
   startx: {
     desc: 'start the graphical session',
     hidden: true,

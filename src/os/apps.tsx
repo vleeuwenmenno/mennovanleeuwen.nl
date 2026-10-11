@@ -12,7 +12,7 @@ import { Projects } from '../apps/Projects'
 import { Settings } from '../apps/Settings'
 import { WidgetHost } from '../widgets/registry'
 import { Recents } from '../apps/Recents'
-import { Terminal } from '../apps/Terminal'
+import { Terminal, terminalMenu } from '../apps/Terminal'
 import { Files } from '../apps/Files'
 import { Viewer } from '../apps/Viewer'
 import { Preview, previewTitle } from '../apps/Preview'
@@ -23,6 +23,7 @@ import { Office, officeTitle } from '../apps/Office'
 import { Archive, archiveTitle } from '../apps/Archive'
 import { Zed } from '../apps/Zed'
 import { Agents } from '../apps/Agents'
+import type { MenuItem } from './ContextMenu'
 import { HANDLE } from './identity'
 import type { AppId, WinState } from './wm'
 
@@ -36,10 +37,12 @@ export type AppMeta = {
   /** The window's own title, when it shows one file (its name) */
   titleOf?: (w: WinState) => string
   render: (w: WinState) => ReactNode
+  /** The app's own items at the top of its window menu */
+  menu?: (w: WinState) => MenuItem[]
 }
 
 export const APP_META: Record<AppId, AppMeta> = {
-  terminal: { title: `${HANDLE}@mvlos: ~`, dock: 'Terminal', blurb: 'A shell that actually works', size: [760, 500], render: (w) => <Terminal win={w} /> },
+  terminal: { title: `${HANDLE}@mvlos: ~`, dock: 'Terminal', blurb: 'A shell that actually works', size: [760, 500], render: (w) => <Terminal win={w} />, menu: terminalMenu },
   files: { title: 'Files', dock: 'Files', blurb: 'Browse the filesystem', size: [940, 600], render: (w) => <Files win={w} /> },
   zed: { title: 'Zed', dock: 'Zed', blurb: 'Edit Markdown and text files', size: [960, 620], render: (w) => <Zed win={w} /> },
   preview: { title: 'Preview', dock: 'Preview', blurb: 'Pictures: zoom, rotate, slideshow', size: [900, 620], titleOf: previewTitle, render: (w) => <Preview win={w} /> },
