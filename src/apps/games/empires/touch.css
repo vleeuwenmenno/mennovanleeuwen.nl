@@ -1,0 +1,123 @@
+/* Touch for Empires At War (Touch.tsx): the action wheel and the touch bar. Only fingers see the
+   touch bar; the wheel only ever opens from a long press. */
+
+.ew-wheel-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  background: rgba(2, 4, 10, 0.25);
+  touch-action: none;
+  animation: ew-wheel-fade 0.12s ease-out;
+}
+.ew-wheel {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+.ew-wheel-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(8, 14, 28, 0.15) 30%, rgba(8, 14, 28, 0.82) 31%, rgba(8, 14, 28, 0.82) 100%);
+  border: 1px solid var(--ew-line, rgba(120, 160, 220, 0.35));
+  box-shadow: 0 0 24px rgba(0, 0, 0, 0.5);
+  animation: ew-wheel-pop 0.14s ease-out;
+}
+.ew-wheel-title {
+  position: absolute;
+  left: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 3px 10px;
+  border-radius: 99px;
+  background: rgba(8, 14, 28, 0.9);
+  border: 1px solid var(--ew-line, rgba(120, 160, 220, 0.35));
+  font-size: 12px;
+  color: var(--ew-text, #dfe8f5);
+}
+.ew-root .ew-wheel-mid {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 40px;
+  height: 40px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  padding: 0;
+  font-size: 20px;
+  line-height: 1;
+}
+.ew-root .ew-wheel-item {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 10.5px;
+  line-height: 1.1;
+  text-align: center;
+  background: var(--ew-bg-2, #101a2c);
+  border: 1px solid var(--ew-line, rgba(120, 160, 220, 0.35));
+  transition: transform 0.08s, background 0.08s, border-color 0.08s;
+  animation: ew-wheel-pop 0.14s ease-out;
+}
+.ew-root .ew-wheel-item span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ew-root .ew-wheel-item.is-hot:not(:disabled) {
+  transform: translate(-50%, -50%) scale(1.14);
+  background: color-mix(in srgb, var(--ew-active, #6cb4ff) 35%, transparent);
+  border-color: var(--ew-active-hi, #6cb4ff);
+}
+.ew-root .ew-wheel-item.is-danger {
+  color: #ff9a8a;
+}
+@keyframes ew-wheel-pop {
+  from {
+    opacity: 0;
+    scale: 0.7;
+  }
+}
+@keyframes ew-wheel-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* The touch bar: a sticky Shift and the box mode. */
+.ew-touchbar {
+  display: none;
+  gap: 6px;
+  pointer-events: auto;
+}
+@media (pointer: coarse) {
+  .ew-touchbar {
+    display: flex;
+  }
+}
+.ew-root .ew-touchbar button {
+  min-width: 44px;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 16px;
+  border-radius: 10px;
+  background: rgba(8, 14, 28, 0.85);
+}
+.ew-root .ew-touchbar button span {
+  font-size: 11px;
+}
+.ew-root .ew-touchbar button.is-on {
+  background: color-mix(in srgb, var(--ew-active, #6cb4ff) 35%, transparent);
+  border-color: var(--ew-active-hi, #6cb4ff);
+}

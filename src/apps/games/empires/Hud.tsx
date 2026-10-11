@@ -7,6 +7,7 @@ import {
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { spriteUrl } from './render'
 import { keyName, useSettings } from './settings'
+import { LongPress, isTouch, shiftOf, useLongPressWheel } from './Touch'
 import { FIELD_DAMAGE, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
@@ -146,15 +147,52 @@ export function Tips({ live }: { live?: (id: number) => Unit | undefined } = {})
         live = window.setInterval(place, 250)
       }, t.hasAttribute('data-tip-unit') ? 600 : 380)
     }
+    // Fingers have no hover: a long press on anything with a tip shows it until the next touch
+    // (things with a long press of their own, like ship cards, keep theirs).
+    const press = new LongPress()
+    let shown = 0
+    const down = (e: PointerEvent) => {
+      hide()
+      clearTimeout(shown)
+      if (!isTouch(e)) return
+      const under = document.elementFromPoint(e.clientX, e.clientY)
+      const t = under && root.contains(under) ? under.closest('[data-tip],[data-tip-unit],[data-longpress]') : null
+      if (!t || t.hasAttribute('data-longpress')) return
+      press.start(e, () => {
+        cur = t
+        place()
+        live = window.setInterval(place, 250)
+        shown = window.setTimeout(hide, 6000)
+      })
+    }
+    const touchMove = (e: PointerEvent) => void (isTouch(e) && press.move(e))
+    const touchUp = () => press.cancel()
+    // The tap that ends a long press on a button must not also press it.
+    const swallow = (e: MouseEvent) => {
+      if (!press.fired) return
+      press.fired = false
+      e.preventDefault()
+      e.stopPropagation()
+    }
     root.addEventListener('pointermove', move)
+    root.addEventListener('pointermove', touchMove)
+    root.addEventListener('pointerup', touchUp)
+    root.addEventListener('pointercancel', touchUp)
+    root.addEventListener('click', swallow, true)
     root.addEventListener('pointerleave', hide)
-    root.addEventListener('pointerdown', hide)
+    root.addEventListener('pointerdown', down)
     root.addEventListener('wheel', hide, { passive: true })
     return () => {
       hide()
+      press.cancel()
+      clearTimeout(shown)
       root.removeEventListener('pointermove', move)
+      root.removeEventListener('pointermove', touchMove)
+      root.removeEventListener('pointerup', touchUp)
+      root.removeEventListener('pointercancel', touchUp)
+      root.removeEventListener('click', swallow, true)
       root.removeEventListener('pointerleave', hide)
-      root.removeEventListener('pointerdown', hide)
+      root.removeEventListener('pointerdown', down)
       root.removeEventListener('wheel', hide)
     }
   }, [])
@@ -886,10 +924,24 @@ export function ShipCard({ t, who, why, whyReserve, level, queued, onBuild, onUn
   campaign?: boolean
 }) {
   const locked = t.level > level
+  // A finger has no Shift-click or right-click: a long press offers them on a wheel.
+  const press = useLongPressWheel(
+    () =>
+      locked
+        ? []
+        : [
+            { id: 'one', label: 'Build 1', run: () => onBuild(t.id, 1, !fromHangar(t) && !campaign) },
+            { id: 'five', label: 'Build 5', run: () => onBuild(t.id, 5, !fromHangar(t) && !campaign) },
+            ...(!fromHangar(t) && !campaign ? [{ id: 'jump', label: 'Jump in', disabled: why ?? undefined, run: () => onBuild(t.id, 1, false) }] : []),
+            { id: 'less', label: 'Remove 1', disabled: queued ? undefined : 'Nothing queued', danger: true, run: () => onUnqueue(t.id) },
+          ],
+    t.name,
+  )
   const card = (
     <button
+      {...press}
       className={`ew-shipcard ${locked ? 'is-locked' : (fromHangar(t) ? why : whyReserve) ? 'is-off' : ''}`}
-      onClick={(e) => onBuild(t.id, e.shiftKey ? 5 : 1, !fromHangar(t))}
+      onClick={(e) => onBuild(t.id, shiftOf(e) ? 5 : 1, !fromHangar(t))}
       onContextMenu={(e) => {
         e.preventDefault()
         onUnqueue(t.id)
@@ -912,7 +964,7 @@ export function ShipCard({ t, who, why, whyReserve, level, queued, onBuild, onUn
       {card}
       <button
         className={`ew-reservebtn ${why ? 'is-off' : ''}`}
-        onClick={(e) => onBuild(t.id, e.shiftKey ? 5 : 1, false)}
+        onClick={(e) => onBuild(t.id, shiftOf(e) ? 5 : 1, false)}
         data-tip={`Build a ${t.name} that jumps in beside the station as soon as it's done, instead of going to the fleet inventory. Shift-click for five.${why ? `\n\n${why}` : ''}`}
         aria-label={`Build a ${t.name} that jumps in at the station`}
       >
@@ -1042,8 +1094,12 @@ export function Floating({ id, title, at, onClose, aside, onMove, bare, classNam
     const rr = root.getBoundingClientRect()
     onMove({ x: r.left - rr.left, y: r.top - rr.top, w: r.width, h: r.height }, { w: rr.width, h: rr.height })
   })
+  const lastPointer = useRef('mouse')
   const grab = (e: React.PointerEvent) => {
+    lastPointer.current = e.pointerType
     if (e.button !== 0 || (e.target as Element).closest(NO_DRAG)) return
+    // A finger on a panel's body scrolls or taps it: only its header (or a handle) moves it.
+    if (isTouch(e) && !(e.target as Element).closest('.ew-float-head, [data-drag-handle]')) return
     const el = box.current
     const root = el?.parentElement
     if (!el || !root) return
@@ -1069,6 +1125,7 @@ export function Floating({ id, title, at, onClose, aside, onMove, bare, classNam
     window.addEventListener('pointerup', up)
   }
   const reset = (e: React.MouseEvent) => {
+    if (lastPointer.current === 'touch') return
     if (!(e.target as Element).closest(NO_DRAG)) layout.setPanelPos(id, undefined)
   }
   const style: React.CSSProperties = pos ? { left: pos.x, top: pos.y } : at
