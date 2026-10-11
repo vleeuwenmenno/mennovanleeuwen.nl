@@ -15,7 +15,7 @@ export type WeaponKind = 'laser' | 'flak' | 'turbo' | 'missile' | 'ion'
 export type HardpointKind = 'turret' | 'shield' | 'engine' | 'hangar' | 'refinery' | 'dock' | 'sensor' | 'drill'
 /** A module's sprite: modules/<faction>-<art>.webp. */
 export type ModuleArt = 'turbo' | 'flak' | 'ion' | 'shield' | 'hangar' | 'refinery' | 'dock' | 'sensor' | 'drill'
-export type AbilityId = 'flakBarrage' | 'repairSwarm' | 'shieldBoost' | 'tractor' | 'broadside' | 'launchSwarm'
+export type AbilityId = 'flakBarrage' | 'repairSwarm' | 'shieldBoost' | 'tractor' | 'broadside' | 'launchSwarm' | 'fieldRepair'
 
 export type Weapon = {
   kind: WeaponKind
@@ -71,7 +71,9 @@ export type UnitType = {
   carrier?: { unit: string; every: number; max: number }
   /** What sets it apart from the other ships of its tier: bombers go for big hulls, support ships
    * mend the fleet, ion ships strip shields. Steers the AI and the target picking. */
-  kind?: 'bomber' | 'support' | 'ion'
+  kind?: 'bomber' | 'support' | 'ion' | 'repair'
+  /** Research that has to be done before it can be built (on top of the station level). */
+  tech?: string
   /** Repairs allied ships within `range`: `repair` hull points a second each, up to `max` ships. */
   support?: { range: number; repair: number; max: number }
   /** Its job and counters, when they differ from its tier's (see ROLES). */
@@ -87,7 +89,20 @@ export const ABILITIES: Record<AbilityId, Ability> = {
   tractor: { name: 'Tractor lock', blurb: 'Enemy ships nearby crawl at a third of their speed for 7 s.', cooldown: 45, duration: 7, range: 650 },
   broadside: { name: 'Full broadside', blurb: 'Turbolasers deal 60% more damage for 10 s.', cooldown: 50, duration: 10 },
   launchSwarm: { name: 'Launch swarm', blurb: 'Empties the hangars: two extra droid squadrons at once.', cooldown: 60, duration: 0 },
+  fieldRepair: {
+    name: 'Field repair',
+    blurb: 'Flies to a damaged station, or a ship of gunship class or bigger, and welds it back together for 15 s: hull and damaged modules, never shot-off ones. Aims at the ship under the cursor, else the most damaged one nearby. Idle crews do it by themselves.',
+    cooldown: 35, duration: 15, range: 1400,
+  },
 }
+
+/** Field repair, per repair craft in reach: hull points a second, plus this share of the target's
+ * full hull (and of each damaged module's) a second. Two craft mend a station or a flagship by
+ * about a fifth over one run, a gunship from nearly nothing. */
+export const FIELD_REPAIR = { flat: 8, share: 0.005, reach: 200 }
+/** What field repairs work on: stations, and ships of gunship class and up. Strike craft and the
+ * platforms on the ore are left to their own (platforms have repair crews of their own). */
+export const MENDABLE: Tier[] = ['gunship', 'frigate', 'cruiser', 'capital', 'station']
 
 export const FACTIONS: Record<FactionId, { name: string; long: string; blurb: string; color: string; bolt: string; glow: string }> = {
   republic: {
@@ -372,6 +387,12 @@ const WRITTEN: UnitType[] = [
     role: { role: 'Bomber', strong: ['cruisers', 'flagships', 'stations'], weak: ['fighters', 'gunships', 'frigates'] },
   },
   {
+    id: 'r-repair', faction: 'republic', tier: 'fighter', kind: 'repair', tech: 'r-re-wing', name: 'Suture repair fighter', blurb: 'Engineer craft, two to a squadron. Barely armed, but its Field repair welds stations and warships back together in the middle of a fight.',
+    sprite: 'republic-repair', aspect: 0.774, size: 32, hull: 70, shield: 25, regen: 2, speed: 240, turn: 3.6, pop: 1, cost: 280, build: 12, level: 1, squad: 2, sensor: 700,
+    weapons: [laser(2, 200, 0.8)], hardpoints: [], engines: [[3.3, 8.2], [6.85, 8.2]], ability: 'fieldRepair',
+    role: { role: 'Field repairs', strong: ['long fights', 'keeping flagships alive'], weak: ['fighters', 'flak', 'everything else'] },
+  },
+  {
     id: 'r-corvette', faction: 'republic', tier: 'gunship', kind: 'support', name: 'Mercy corvette', blurb: 'Repair tender: its work crews patch up the hulls of nearby ships. Lightly armed; keep it behind the line.',
     sprite: 'republic-corvette', aspect: 0.653, size: 86, hull: 520, shield: 260, regen: 8, speed: 135, turn: 1.8, pop: 2, cost: 550, build: 18, level: 2, squad: 1, sensor: 900,
     weapons: [flak(5, 280, 0.4)], hardpoints: [], engines: [[3.5, 9.4], [5, 9.5], [6.6, 9.4]],
@@ -433,6 +454,12 @@ const WRITTEN: UnitType[] = [
     sprite: 'droid-bomber', aspect: 0.96, size: 36, hull: 85, shield: 0, regen: 0, speed: 185, turn: 3, pop: 2, cost: 400, build: 13, level: 2, squad: 3, sensor: 620,
     weapons: [laser(4, 220, 0.6), torpedo(48, 230, 6)], hardpoints: [], engines: [[5, 8.6]],
     role: { role: 'Bomber', strong: ['cruisers', 'flagships', 'stations'], weak: ['fighters', 'gunships', 'frigates'] },
+  },
+  {
+    id: 'd-repair', faction: 'droid', tier: 'fighter', kind: 'repair', tech: 'd-re-wing', name: 'Weaver repair droid', blurb: 'Spindly welder droids, two to a squadron. Next to harmless, but their Field repair stitches foundries and warships back together under fire.',
+    sprite: 'droid-repair', aspect: 0.779, size: 30, hull: 85, shield: 0, regen: 0, speed: 245, turn: 3.8, pop: 1, cost: 260, build: 11, level: 1, squad: 2, sensor: 650,
+    weapons: [laser(2, 200, 0.8)], hardpoints: [], engines: [[5, 9.1]], ability: 'fieldRepair',
+    role: { role: 'Field repairs', strong: ['long fights', 'keeping flagships alive'], weak: ['fighters', 'flak', 'everything else'] },
   },
   {
     id: 'd-ion', faction: 'droid', tier: 'frigate', kind: 'ion', name: 'Disruptor frigate', blurb: 'One huge ion cannon that tears down shields in a few shots, leaving the hull open to everything else. Barely scratches bare armour.',
@@ -587,6 +614,7 @@ export const TECHS: Tech[] = [
   tech('republic', 'r-fighter', 'r-fi-torp', 'Proton payload', 'Lasers and torpedoes deal 25% more damage.', 500, 35, 2, { damage: 0.25 }, ['r-fi-hull']),
   tech('republic', 'r-gunship', 'r-gs-flak', 'Flak tracking', 'Halberd guns deal 20% more damage.', 450, 30, 1, { damage: 0.2 }),
   tech('republic', 'r-gunship', 'r-gs-burn', 'Afterburners', 'Halberds fly 20% faster.', 350, 25, 1, { speed: 0.2 }, ['r-gs-flak']),
+  tech('republic', 'r-repair', 'r-re-wing', 'Engineer wing', 'Trains clone engineers for the hangar: unlocks the Suture repair fighter and its Field repair.', 300, 25, 1, {}),
   tech('republic', 'r-bomber', 'r-bo-payload', 'Heavy payload', 'Hammer bombs deal 25% more damage.', 550, 35, 2, { damage: 0.25 }),
   tech('republic', 'r-corvette', 'r-co-crews', 'Veteran work crews', 'Mercy corvettes repair 40% faster.', 600, 40, 2, { repair: 0.4 }),
   tech('republic', 'r-frigate', 'r-fr-shield', 'Deflector upgrade', 'Warden shields 30% stronger, recharging faster.', 600, 40, 2, { shield: 0.3, regen: 0.3 }),
@@ -603,6 +631,7 @@ export const TECHS: Tech[] = [
   tech('droid', 'd-fighter', 'd-fi-guns', 'Overcharged blasters', 'Lasers and torpedoes deal 25% more damage.', 450, 35, 2, { damage: 0.25 }, ['d-fi-line']),
   tech('droid', 'd-gunship', 'd-gs-shell', 'Armoured shell', 'Tridents get 25% more hull.', 450, 30, 1, { hull: 0.25 }),
   tech('droid', 'd-gunship', 'd-gs-cycle', 'Rapid cyclers', 'Trident guns fire 15% faster.', 450, 30, 1, { cooldown: -0.15 }, ['d-gs-shell']),
+  tech('droid', 'd-repair', 'd-re-wing', 'Welder protocols', 'Loads repair programming into the foundry: unlocks the Weaver repair droid and its Field repair.', 300, 25, 1, {}),
   tech('droid', 'd-bomber', 'd-bo-pods', 'Overloaded pods', 'Locust bombs deal 25% more damage.', 500, 35, 2, { damage: 0.25 }),
   tech('droid', 'd-ion', 'd-io-coils', 'Supercooled coils', 'Disruptor ion cannons fire 20% faster.', 700, 40, 2, { cooldown: -0.2 }),
   tech('droid', 'd-frigate', 'd-fr-plate', 'Shell plating', 'Scarabs get 25% more hull.', 600, 40, 2, { hull: 0.25 }),

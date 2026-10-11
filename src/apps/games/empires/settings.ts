@@ -71,11 +71,14 @@ export type Settings = {
   fogGrid: boolean
   /** Ships the station isn't upgraded enough for still show in the shipyard, greyed out. */
   lockedShips: boolean
+  /** Rings for each weapon's range (and the sensors) round the ship or structure under the pointer;
+   * on a touch screen, round the selected ones. */
+  ranges: boolean
   keys: Record<Action, string>
 }
 
 const KEY = 'mvlos.empires.settings'
-const DEFAULTS: Settings = { cameraSpeed: 1, edgeScroll: 'fullscreen', bars: 'damaged', rings: true, toasts: true, fogGrid: false, lockedShips: true, keys: { ...DEFAULT_KEYS } }
+const DEFAULTS: Settings = { cameraSpeed: 1, edgeScroll: 'fullscreen', bars: 'damaged', rings: true, toasts: true, fogGrid: false, lockedShips: true, ranges: true, keys: { ...DEFAULT_KEYS } }
 
 function read(): Settings {
   try {
@@ -89,6 +92,7 @@ function read(): Settings {
       toasts: v.toasts !== false,
       fogGrid: v.fogGrid === true,
       lockedShips: v.lockedShips !== false,
+      ranges: v.ranges !== false,
       keys: migrateKeys({ ...DEFAULT_KEYS, ...(v.keys && typeof v.keys === 'object' ? v.keys : {}) }),
     }
   } catch {

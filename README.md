@@ -695,6 +695,31 @@ their slot as you play; load them from Galactic conquest → Load game), Gladiat
 scores and settings. A campaign battle cut off by closing the window waits in the loaded campaign,
 to be fought again from the start.
 
+## Empires At War weapon ranges and repair craft
+
+Hovering a ship or structure in battle (ours, or an enemy we can see) rings it with its weapon
+ranges ([`render.ts`](src/apps/games/empires/render.ts) `drawRanges`): one ring per kind of gun
+and reach, each kind in its own colour and dash (lasers solid red, flak amber, turbolasers blue,
+missiles pink dots, ion violet), labelled with its name and range, plus a faint dashed ring for its
+sensors. On a touch screen, which has no hover, the selected ships show theirs. The setting
+*Show weapon ranges on hover* (on by default) is in the game's Settings and in Settings → Apps →
+Games → Empires At War.
+
+Each side has a repair squadron of two strike craft, the Republic's Suture repair fighter and the
+droids' Weaver repair droid ([`data.ts`](src/apps/games/empires/data.ts)). They launch from the
+hangar like any fighter and need the research Engineer wing or Welder protocols (300 credits,
+25 s, station level 1) before the shipyard builds them. Their guns are next to useless; their
+ability, **Field repair** (35 s cooldown), sends them to a damaged station or a ship of gunship
+class or bigger for 15 s. Each craft in reach mends 8 hull a second plus 0.5% of the patient's
+hull, and its damaged modules (not shot-off ones). F, or the ability button, aims at the ship
+under the pointer, else the most damaged one within 1,400; on touch, the action wheel on one of
+ours has *Repair it*. Fighters, bombers and the platforms on the ore are refused. Idle or guarding
+crews start a run by themselves on anything within 900 that has lost a tenth of itself. A new
+order calls a run off. The battle AI unlocks them now and then once it has warships (more often
+the harder it is), keeps a squadron or two guarding its most valuable warship, and sends them to
+its worst-hurt ship or station. Galactic conquest has no research, so there they are built like
+any other ship.
+
 ## Empires At War messages and AI
 
 Messages about a place carry a ⌖: clicking one (or tapping it, or Enter when it has focus) takes

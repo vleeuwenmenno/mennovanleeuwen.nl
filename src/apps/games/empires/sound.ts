@@ -719,7 +719,7 @@ const abilitySound = (id: AbilityId): Recipe => (sr, r) => {
     const charge = render(sr, 0.35, (t) => o.saw(glide(220, 900, t, 0.35), sr) * Math.min(1, t / 0.3) * 0.5)
     return layers(sr, [{ data: charge }, ...Array.from({ length: 8 }, (_, k) => ({ data: flak(sr, r), at: 0.32 + k * 0.07, gain: 0.7 }))])
   }
-  if (id === 'repairSwarm') {
+  if (id === 'repairSwarm' || id === 'fieldRepair') {
     const chirps = Array.from({ length: 6 }, (_, k) => ({ data: chatter(sr, r, 3, 1, 520), at: k * 0.14, gain: 0.5 }))
     return layers(sr, [...chirps, { data: metal(false)(sr, r), at: 0.2, gain: 0.4 }, { data: metal(false)(sr, r), at: 0.55, gain: 0.4 }])
   }

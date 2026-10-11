@@ -8,7 +8,7 @@ import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { spriteUrl } from './render'
 import { keyName, useSettings } from './settings'
 import { LongPress, isTouch, shiftOf, useCoarse, useLongPressWheel } from './Touch'
-import { FIELD_DAMAGE, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
+import { FIELD_DAMAGE, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, mendTarget, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard, research and game speed; and along the bottom the tactical map, a details panel for
@@ -864,7 +864,8 @@ function StationDetail(p: DetailProps & { st: Unit }) {
             </div>
             <div className="ew-yard" ref={grid}>
               {ships.map((t) => (
-                <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id)} whyReserve={cantBuild(w, me, t.id, true)} level={hud.level} queued={queued(t.id)} onBuild={p.onBuild} onUnqueue={p.onUnqueue} />
+                <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id)} whyReserve={cantBuild(w, me, t.id, true)} level={hud.level} queued={queued(t.id)} onBuild={p.onBuild} onUnqueue={p.onUnqueue}
+                  research={t.tech && !hud.techs.includes(t.tech) ? TECH[t.tech].name : null} />
               ))}
             </div>
           </div>
@@ -928,12 +929,15 @@ function OreDetail(p: DetailProps & { n: OreNode }) {
   )
 }
 
-export function ShipCard({ t, who, why, whyReserve, level, queued, onBuild, onUnqueue, campaign = false }: {
+export function ShipCard({ t, who, why, whyReserve, level, queued, onBuild, onUnqueue, campaign = false, research = null }: {
   t: UnitType; who: { who: string; rel: string }; why: string | null; whyReserve: string | null; level: number; queued: number; onBuild: (id: string, times: number, reserve?: boolean) => void; onUnqueue: (id: string) => void
   /** On the galaxy map: every ship joins the fleet in orbit, so no jump-in button. */
   campaign?: boolean
+  /** The research it still waits for, by name (null once it's done, or when it needs none). */
+  research?: string | null
 }) {
-  const locked = t.level > level
+  const locked = t.level > level || !!research
+  const lockText = t.level > level ? `Needs station level ${t.level}.` : `Needs research: ${research}. Find it in the tech tree.`
   // A finger has no Shift-click or right-click: a long press offers them on a wheel.
   const press = useLongPressWheel(
     () =>
@@ -956,13 +960,13 @@ export function ShipCard({ t, who, why, whyReserve, level, queued, onBuild, onUn
         e.preventDefault()
         onUnqueue(t.id)
       }}
-      {...unitTip(t, who, `${locked ? `Needs station level ${t.level}.` : campaign ? 'Click to build it here: it joins the fleet in orbit.' : fromHangar(t) ? 'Click to build: it launches from the hangar.' : 'Click to build it for the fleet inventory, then drag it out to any spot your fleet can see. The small corner button builds one that jumps in beside the station.'}${locked ? '' : ' Shift-click for five, right-click to remove one.'}${!locked && (fromHangar(t) ? why : whyReserve) ? `\n${fromHangar(t) ? why : whyReserve}` : ''}`)}
+      {...unitTip(t, who, `${locked ? lockText : campaign ? 'Click to build it here: it joins the fleet in orbit.' : fromHangar(t) ? 'Click to build: it launches from the hangar.' : 'Click to build it for the fleet inventory, then drag it out to any spot your fleet can see. The small corner button builds one that jumps in beside the station.'}${locked ? '' : ' Shift-click for five, right-click to remove one.'}${!locked && (fromHangar(t) ? why : whyReserve) ? `\n${fromHangar(t) ? why : whyReserve}` : ''}`)}
     >
       <ShipArt t={t} />
       <strong>{t.name}</strong>
       <span className="ew-cost"><Icon name="credits" size={11} /> {t.cost}</span>
       <span className="ew-time"><Icon name="time" size={11} /> {t.build}s</span>
-      {locked && <span className="ew-lock">Lv{t.level}</span>}
+      {locked && <span className="ew-lock">{t.level > level ? `Lv${t.level}` : 'Research'}</span>}
       {queued > 0 && <span className="ew-qbadge">{queued}</span>}
     </button>
   )
@@ -1411,6 +1415,7 @@ export function UnitIntel({ t, who, rel, note, live }: { t: UnitType; who?: stri
         <span className="ew-cost"><Icon name="credits" size={12} /> {t.cost}</span>
         <span className="ew-time"><Icon name="time" size={12} /> {t.build} s</span>
         {t.level > 1 && <span className="ew-intel-lv">Station level {t.level}</span>}
+        {t.tech && <span className="ew-intel-lv">Research: {TECH[t.tech].name}</span>}
       </footer>}
       {note && <p className="ew-intel-note">{note}</p>}
     </div>
@@ -1420,6 +1425,8 @@ export function UnitIntel({ t, who, rel, note, live }: { t: UnitType; who?: stri
 function orderText(w: World, u: Unit) {
   if (building(u)) return `Under construction: ${Math.ceil(u.building)} s`
   const o = u.order
+  const mend = mendTarget(w, u)
+  if (mend) return `Field repair: ${mend.t.name}`
   if (o.k === 'move') return o.attack ? 'Attack-moving' : 'Moving'
   if (u.retreat > 0) return `Charging hyperspace drive: jumping out in ${Math.ceil(u.retreat)} s`
   if (o.k === 'patrol') return 'Patrolling'
