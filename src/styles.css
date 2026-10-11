@@ -1165,6 +1165,19 @@ body.is-resizing iframe {
   }
 }
 
+/* A finger is holding on something with a menu (installTouchContextMenu): nothing on the page
+   may be selected or get the iOS callout until it lets go. Fields keep working. */
+.is-touch-holding,
+.is-touch-holding * {
+  -webkit-touch-callout: none !important;
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+.is-touch-holding :is(input, textarea, [contenteditable='true']) {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
 /* ---------- Select (a dropdown that opens the menu above) ---------- */
 
 /* Looks like a .set-select field, so it can stand in for a native select anywhere. */
@@ -2824,16 +2837,78 @@ body.is-resizing iframe {
   color: var(--p);
 }
 .games-play {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
 }
+/* The game bar floats over the top of the game and slides away when not wanted (useGameBar), so
+   the game gets the whole window. */
 .games-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 6;
   display: flex;
   align-items: center;
   gap: 14px;
   padding: 10px 16px;
+  background: var(--bg);
   border-bottom: 1px solid var(--line);
+  box-shadow: 0 8px 20px -12px rgba(0, 0, 0, 0.5);
+  transform: translateY(-100%);
+  transition: transform 0.18s ease;
+}
+.games-play.is-bar .games-top,
+.games-play .games-top:has(:focus-visible) {
+  transform: none;
+}
+/* Where a mouse brings the bar back: a thin strip along the top edge. */
+.games-hot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 8px;
+  z-index: 5;
+}
+/* Fingers get a handle hanging under the bar, which slides with it. */
+.games-handle {
+  display: none;
+}
+@media (pointer: coarse) {
+  .games-hot {
+    display: none;
+  }
+  .games-handle {
+    display: block;
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    width: 64px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    background: none;
+    transform: translateX(-50%);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .games-handle::before {
+    content: '';
+    display: block;
+    width: 40px;
+    height: 5px;
+    margin: 7px auto 0;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--fg) 45%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--bg) 60%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .games-top {
+    transition: none;
+  }
 }
 .games-title {
   font-weight: 600;
@@ -2862,6 +2937,16 @@ body.is-resizing iframe {
   background: var(--bg);
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
+}
+/* Under the phone's notch, the bar and its handle start below the safe area. */
+.games-play.is-page-full .games-top {
+  top: env(safe-area-inset-top);
+}
+.games-play.is-page-full:not(.is-bar) .games-top {
+  transform: translateY(calc(-100% - env(safe-area-inset-top)));
+}
+.games-play.is-page-full:not(.is-bar) .games-handle {
+  margin-top: env(safe-area-inset-top);
 }
 /* The dock shares the window's z-index and comes later in the page, so it would still sit on
    top of the game unless auto-hide already put it away (as it does for a maximized window). */
