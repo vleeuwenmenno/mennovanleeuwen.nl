@@ -210,7 +210,24 @@ export function database(): DatabaseSync {
   // next start), and how the last turn was cut short (JSON {reason, error?, at}), for Retry.
   if (!cols('agent_threads').includes('turn_at')) db.exec('ALTER TABLE agent_threads ADD COLUMN turn_at INTEGER')
   if (!cols('agent_threads').includes('interrupted')) db.exec('ALTER TABLE agent_threads ADD COLUMN interrupted TEXT')
-  key = Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
+  // Shared links to a thread or one answer (server/shares.ts): a snapshot taken when shared, read
+  // by anyone with the token until it expires or is revoked. They go with their thread and account.
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_shares (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    thread_id TEXT NOT NULL REFERENCES agent_threads(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    message_id INTEGER,
+    title TEXT NOT NULL,
+    snapshot TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    views INTEGER NOT NULL DEFAULT 0
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS agent_shares_user ON agent_shares (user_id, created_at)')
+  db.exec('CREATE INDEX IF NOT EXISTS agent_shares_thread ON agent_shares (thread_id)')
+  db.exec('CREATE INDEX IF NOT EXISTS agent_shares_expiry ON agent_shares (expires_at) WHERE expires_at IS NOT NULL')
+  key =Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())
   return db
 }

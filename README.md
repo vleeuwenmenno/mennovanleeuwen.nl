@@ -149,6 +149,9 @@ In a folder on Seafile, that folder becomes the thread's work folder:
   with that message, or answers the form with it.
 - A dropped stream reconnects by itself (for a minute) and an interrupted turn says so; Ctrl+R or
   `/retry` runs the last message again, and `/rewind` picks one of your messages to go back to.
+- `/share` shares the thread as a link and `/share last` its last answer, never expiring unless
+  given `1h`, `1d`, `7d` or `30d` (`/share last 7d`); `/shares` lists the thread's links and
+  `/unshare <id>` (or `/unshare` and a pick) stops one. See *Shared links* under Agents below.
 - `agents -c`/`-r` resume a thread, `agents -p` answers once for pipes, and `/help` lists the
   slash commands.
 
@@ -546,6 +549,29 @@ messages go, it and everything after it leave the thread (`POST …/rewind`; a r
 stopped first, the queue stays) and it comes back into the message box with its files. What the
 tools did is not undone: memories, the plan, notes, calendar events and files the agent changed in
 the work folder stay as they are.
+**Shared links** ([`server/shares.ts`](server/shares.ts), [`src/apps/AgentsShare.tsx`](src/apps/AgentsShare.tsx)):
+*Share thread…* (the thread's ⋯ menu, its right-click menu in the sidebar or the conversation) and
+**Share** under each answer (on hover, always on touch) make a link to the whole thread or to one
+answer with the message it answers. A link is a snapshot taken then: later messages, a rewind or a
+retry don't change it. It can expire after 1 hour, 1 day, 7 days or 30 days, or never (the
+default). The dialog shows the links the thread or answer has already (Copy, Open, *Stop
+sharing*) before offering *New link*, and Settings → Agents → *Shared links* lists them all.
+Opening one (`/s/<token>`, 144 random bits, the only way in; nothing lists them) shows a plain page
+the server renders itself, not MvL OS: the title, the date and expiry, your messages as bubbles and
+the answers as Markdown (the app's own parser, turned into HTML in which every piece of text is
+escaped; links only to http(s) and mail, pictures only from https and data:). What goes in: the
+title, the model, your messages (attached files by name and size only) and the answers; tool calls
+only as labels that name nothing they were given (*Searched notes*, *Looked at the calendar*),
+except a web search's query and the site a page was read from. Tool results, thinking, memories and
+the plan are never copied. The page runs no script: `Content-Security-Policy: default-src 'none';
+style-src 'nonce-…'; img-src https: data:`, `X-Robots-Tag: noindex, nofollow`, `Referrer-Policy:
+no-referrer`, `Cache-Control: private, max-age=60`, and it sets and reads no cookies. A link that
+never existed, expired or was revoked is the same 404. Stopping sharing deletes the snapshot,
+expired ones are deleted when shares are next touched, and deleting the thread or the account
+deletes its links. The endpoints are `POST /api/agents/threads/:id/share` (`{kind: "thread" |
+"response", messageId?, expires?: "never" | "1h" | "1d" | "7d" | "30d"}`, answering `{token, url,
+expiresAt, …}` with the address from `PUBLIC_URL`), `GET /api/agents/shares` (`?thread=` for one
+thread's) and `DELETE /api/agents/shares/:token`.
 Settings → Agents (also the app's ⚙) picks the model for Quick, Deep and titles, what a new thread
 starts with, and shows the system prompt: `~/AGENTS.md`, your own from Seafile when Seafile is
 home, otherwise a read-only built-in one ([`src/data/agentsPrompt.ts`](src/data/agentsPrompt.ts)).

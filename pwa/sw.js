@@ -7,7 +7,8 @@
 // - Pages: network first, the cached shell when offline.
 // - Hashed /assets/: cache first (they never change under the same name).
 // - Data snapshots (*.json) and Google Fonts: network first / stale-while-revalidate.
-// - /api/* and other sites: always the network, never cached.
+// - /api/*, Agents shared links (/s/*) and other sites: always the network, never cached (a link
+//   that was revoked must stop showing, offline too).
 
 const VERSION = '__VERSION__'
 const PRECACHE = __PRECACHE__
@@ -127,7 +128,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url)
 
   if (url.origin === self.location.origin) {
-    if (url.pathname.startsWith('/api/') || url.pathname === '/healthz') return
+    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/s/') || url.pathname === '/healthz') return
     if (request.mode === 'navigate') return event.respondWith(networkFirst(request, SHELL, '/'))
     if (url.pathname.startsWith('/assets/')) return event.respondWith(cacheFirst(request))
     if (url.pathname.endsWith('.json')) return event.respondWith(networkFirst(request, RUNTIME))

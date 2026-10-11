@@ -29,6 +29,8 @@ COPY src/apps/games/empires ./src/apps/games/empires
 # The agents: the shell's parser (to tell read-only command lines apart) and its reference (the msh skill).
 COPY src/data/mshReference.ts ./src/data/
 COPY src/terminal/msh/parse.ts ./src/terminal/msh/
+# Agents shared links (/s/<token>): the Markdown parser and code colours, to render the page.
+COPY src/data/markdown/parse.ts src/data/markdown/highlight.ts ./src/data/markdown/
 # Sign-in sessions, linked instances and synced notes live here (a volume in compose.yml).
 RUN mkdir -p /app/data && chown node:node /app/data
 ENV DATA_DIR=/app/data
