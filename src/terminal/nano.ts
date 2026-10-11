@@ -726,6 +726,8 @@ async function nano(ctx: Ctx): Promise<string | void> {
     const KNOWN = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '^P', '^N', 'Home', 'End', '^A', '^E', 'PageUp', 'PageDown', '^Y', '^V', '^Home', '^End', 'M-\\', 'M-/', 'Enter', 'Tab', 'Backspace', 'Delete', 'Paste', 'Escape', '^G', 'F1', '^X', 'F2', '^O', 'F3', '^S', '^R', 'F5', '^F', 'F6', '^B', 'M-w', 'M-q', '^\\', 'M-r', '^K', 'F9', '^U', 'F10', '^C', 'F11', '^/', '^_', 'M-g', 'M-u', 'M-e', '^T', '^J', '^Z', '^L'])
     ctx.onKey(
       (key, text) => {
+        // Phone keyboards type without key presses: their text goes in like a paste.
+        if (key === 'Text') key = 'Paste'
         if (!helpOpen && !prompt && key.length !== 1 && !KNOWN.has(key)) return false
         if (busy) return true
         busy = true

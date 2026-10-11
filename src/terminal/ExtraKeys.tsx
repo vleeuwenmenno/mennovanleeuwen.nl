@@ -120,7 +120,7 @@ export function ExtraKeys({ mods, onKey }: { mods: StickyMods; onKey: (key: stri
   }
 
   return (
-    <div className="t-keys" role="toolbar" aria-label="Extra keys" onContextMenu={(e) => e.preventDefault()}>
+    <div className="t-keys" role="toolbar" aria-label="Extra keys" data-no-touch-menu onContextMenu={(e) => e.preventDefault()}>
       {ROWS.flat().map((k) => {
         const s = k.mod ? mods.state[k.mod] : 'off'
         return (
