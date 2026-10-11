@@ -1442,6 +1442,7 @@ function orderText(w: World, u: Unit) {
 
 function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
   const { u, squad, me, w } = p
+  const coarse = useCoarse()
   const t = u.t
   const mine = u.owner === me
   const ally = !mine && w.players[u.owner].team === w.players[me].team
@@ -1480,7 +1481,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
             </button>
           </div>
         )}
-        {!mine && !ally && u.hps.length > 0 && <span className="ew-muted ew-small">Select your ships, hover this one and right-click a marker to target that hardpoint.</span>}
+        {!mine && !ally && u.hps.length > 0 && <span className="ew-muted ew-small">{coarse ? 'Select your ships, then long-press a marker on this one and pick Attack to target that hardpoint.' : 'Select your ships, hover this one and right-click a marker to target that hardpoint.'}</span>}
       </div>
     </Frame>
   )
@@ -1489,6 +1490,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
 /** Several kinds of ship: a row per type. */
 function GroupDetail(p: DetailProps) {
   const { sel } = p
+  const coarse = useCoarse()
   const types = new Map<string, Unit[]>()
   for (const u of sel) types.set(u.t.id, [...(types.get(u.t.id) ?? []), u])
   return (
@@ -1496,14 +1498,14 @@ function GroupDetail(p: DetailProps) {
       <div className="ew-detail-main">
         <header className="ew-unithead">
           <strong>Fleet</strong>
-          <span className="ew-muted ew-small">Click a type to keep only those, Shift-click to drop them.</span>
+          <span className="ew-muted ew-small">{coarse ? 'Tap a type to keep only those; with Shift on, a tap drops them.' : 'Click a type to keep only those, Shift-click to drop them.'}</span>
         </header>
         <div className="ew-fleet">
           {[...types.values()].map((us) => {
             const t = us[0].t
             const hull = us.reduce((s, u) => s + u.hull, 0) / us.reduce((s, u) => s + u.hullMax, 0)
             return (
-              <button key={t.id} className="ew-fleetrow" onClick={(e) => p.onOnly(t.id, e.shiftKey)} data-tip={t.blurb}>
+              <button key={t.id} className="ew-fleetrow" onClick={(e) => p.onOnly(t.id, shiftOf(e))} data-tip={t.blurb}>
                 <img src={spriteUrl(t.sprite)} alt="" />
                 <strong>{t.name}</strong>
                 <b>×{us.length}</b>

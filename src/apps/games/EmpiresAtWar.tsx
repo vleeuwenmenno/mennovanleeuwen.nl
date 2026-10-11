@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { RotateHint } from './empires/RotateHint'
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, fleetThink, newBrain, think, type Brain } from './empires/ai'
 import { ALL_SPRITES, FACTIONS, SITE_UPGRADES, TECH, UNIT, buildable, dims, isShip, type HardpointKind, type Tier } from './empires/data'
@@ -1837,6 +1838,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       <WheelHost>
         <WheelBridge to={wheel} />
         <Tips live={(id) => world.current.byId.get(id)} />
+        <RotateHint />
         {intel && <FieldIntel w={w} me={me} id={intel.id} x={intel.x} y={intel.y} />}
         <canvas
           ref={canvas}
