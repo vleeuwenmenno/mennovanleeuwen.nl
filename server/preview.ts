@@ -1,4 +1,4 @@
-import { assertPublic } from './egress.ts'
+import { fetchPinned, publicAddresses } from './egress.ts'
 import { HttpError } from './http.ts'
 
 // Link previews for Spotlight's "Go to example.com": the page's title, description, share image
@@ -13,10 +13,10 @@ const OK_TTL = 24 * 3600_000
 const FAIL_TTL = 10 * 60_000
 const cache = new Map<string, { at: number; ttl: number; value: Promise<LinkPreview> }>()
 
-/** Public addresses only (server/egress.ts), on the usual web ports. */
-async function assertWebsite(url: URL) {
+/** Public addresses only (server/egress.ts), on the usual web ports: the ones to connect to. */
+async function websiteAddresses(url: URL) {
   if (url.port && !['80', '443', '8080', '8443'].includes(url.port)) throw new HttpError(400, 'Unusual port')
-  await assertPublic(url)
+  return publicAddresses(url)
 }
 
 const decode = (s: string) =>
@@ -62,12 +62,13 @@ function iconHref(head: string): string | null {
 async function fetchHead(start: URL): Promise<{ url: URL; html: string }> {
   let url = start
   for (let hop = 0; hop < 4; hop++) {
-    await assertWebsite(url)
-    const res = await fetch(url, {
+    const addresses = await websiteAddresses(url)
+    // To the checked addresses only, so a DNS answer that changes meanwhile can't redirect it inside.
+    const res = await fetchPinned(url, {
       redirect: 'manual',
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; mvlos link preview)', Accept: 'text/html,application/xhtml+xml', 'Accept-Language': 'en' },
       signal: AbortSignal.timeout(6000),
-    }).catch(() => null)
+    }, addresses).catch(() => null)
     if (!res) throw new HttpError(502, 'The site did not answer')
     if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
       url = new URL(res.headers.get('location')!, url)
