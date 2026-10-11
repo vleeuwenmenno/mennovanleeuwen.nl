@@ -1,0 +1,207 @@
+/* Galactic conquest on touch screens and small ones (Conquest.tsx). Every rule here is for fingers
+   (pointer: coarse), phone-sized windows (680px wide or less) or short ones (500px tall or less: a
+   phone on its side); a mouse on a bigger screen sees the map exactly as before. empires.css loads
+   after this file, so the selectors start at `.ew-root.ew-galaxy` to outrank its rules. */
+
+/* Only phones and short screens get the map button, and the planet's name in its dock's header. */
+.ew-deck .ew-gzoom button.ew-gmapbtn,
+.ew-gp-headname {
+  display: none;
+}
+
+/* The touch bar (fingers only): over the top of the map, between the fleet list and the messages. */
+.ew-root.ew-galaxy .ew-gtouchbar {
+  position: absolute;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+}
+
+@media (pointer: coarse) {
+  /* Fingers: zoom buttons and commands big enough to hit, no key hints, and no callout on a long
+     press. */
+  .ew-root.ew-galaxy .ew-gzoom button {
+    width: 40px;
+    height: 40px;
+  }
+  .ew-root.ew-galaxy .ew-cmdbtn {
+    min-height: 40px;
+    justify-content: center;
+  }
+  .ew-root.ew-galaxy .ew-cmdbtn kbd {
+    display: none;
+  }
+  .ew-root.ew-galaxy .ew-gselwhere {
+    min-height: 30px;
+  }
+  .ew-root.ew-galaxy .ew-toast-x {
+    min-width: 32px;
+    min-height: 32px;
+  }
+  .ew-root.ew-galaxy .ew-gview {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+  }
+}
+
+/* Phones: the top bar fits, the map's buttons move to its top right, the selection and the planet
+   dock share one sheet along the bottom (the dock takes over while a planet is picked), and the
+   galaxy map opens from its button instead of covering the bottom of the screen. */
+@container (max-width: 680px) {
+  .ew-root.ew-galaxy .ew-gtop .ew-top-cell {
+    padding: 0 10px;
+  }
+  .ew-root.ew-galaxy .ew-gshipscell,
+  .ew-root.ew-galaxy .ew-gclock > b {
+    display: none;
+  }
+  .ew-root.ew-galaxy .ew-gdays {
+    gap: 2px;
+  }
+  .ew-root.ew-galaxy .ew-gdays i {
+    width: 5px;
+  }
+
+  .ew-root.ew-galaxy .ew-gzoom {
+    top: 8px;
+    right: 6px;
+    bottom: auto;
+  }
+  .ew-root.ew-galaxy .ew-gzoom button.ew-gmapbtn {
+    display: grid;
+  }
+  .ew-root.ew-galaxy .ew-toasts {
+    right: 56px;
+    width: calc(100% - 66px);
+  }
+  .ew-root.ew-galaxy .ew-gtouchbar {
+    top: 234px;
+    left: auto;
+    right: 6px;
+    transform: none;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .ew-root.ew-galaxy .ew-float.ew-gmapframe {
+    display: none;
+  }
+  .ew-root.ew-galaxy.is-map-open .ew-float.ew-gmapframe {
+    display: flex;
+    left: 6px !important;
+    top: 56px !important;
+    right: auto !important;
+    bottom: auto !important;
+    width: min(300px, calc(100% - 64px));
+    height: 214px;
+  }
+
+  .ew-root.ew-galaxy .ew-gselfloat,
+  .ew-root.ew-galaxy .ew-gdock {
+    left: 6px !important;
+    right: 6px !important;
+    top: auto !important;
+    bottom: 6px !important;
+    max-width: none;
+  }
+  .ew-root.ew-galaxy.has-dock .ew-gselfloat {
+    display: none;
+  }
+  .ew-root.ew-galaxy .ew-gselfloat > .ew-selframe {
+    flex: 1;
+    width: auto;
+    min-height: 0;
+  }
+  .ew-root.ew-galaxy .ew-gselgroups {
+    max-height: 112px;
+  }
+  .ew-root.ew-galaxy .ew-seltiles {
+    display: flex;
+    min-height: 0;
+  }
+  .ew-root.ew-galaxy .ew-cmdgrid {
+    grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  }
+  .ew-root.ew-galaxy .ew-gp-headname {
+    display: inline;
+  }
+}
+@container (max-width: 420px) {
+  /* The narrowest phones: the shipyards button goes (the map's action wheel has it), and the bar
+     scrolls sideways rather than cutting off the menu. */
+  .ew-root.ew-galaxy .ew-gtop .ew-jobbtn {
+    display: none;
+  }
+  .ew-root.ew-galaxy .ew-gtop {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+}
+
+/* Short screens (a phone on its side): the galaxy map opens from its button, the selection drops
+   its minimum height and lays its commands out in two rows, the dock shows one row of ships along
+   the bottom left, and the battle prompt and the end of the war fit on the screen. */
+@media (max-height: 500px) {
+  .ew-root.ew-galaxy .ew-gtouchbar {
+    top: 56px;
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    flex-direction: row;
+  }
+  .ew-root.ew-galaxy .ew-gzoom button.ew-gmapbtn {
+    display: grid;
+  }
+  .ew-root.ew-galaxy .ew-float.ew-gmapframe {
+    display: none;
+  }
+  .ew-root.ew-galaxy.is-map-open .ew-float.ew-gmapframe {
+    display: flex;
+    height: min(264px, calc(100% - 64px));
+  }
+
+  .ew-root.ew-galaxy .ew-gselfloat > .ew-selframe {
+    min-height: 0;
+  }
+  .ew-root.ew-galaxy .ew-gselgroups {
+    max-height: 72px;
+  }
+  .ew-root.ew-galaxy .ew-cmdgrid {
+    grid-template-columns: repeat(5, 1fr);
+  }
+  .ew-root.ew-galaxy.has-dock .ew-gselfloat {
+    display: none;
+  }
+  .ew-root.ew-galaxy.has-dock:not(.is-map-open) .ew-gdock {
+    left: 6px !important;
+    top: auto !important;
+    bottom: 6px !important;
+    max-width: calc(100% - 12px);
+  }
+  .ew-root.ew-galaxy .ew-gdock .ew-yard {
+    grid-template-rows: 84px;
+  }
+
+  .ew-root.ew-galaxy .ew-modal-back {
+    padding: 6px;
+  }
+  .ew-root.ew-galaxy .ew-modal .ew-frame-in {
+    padding: 8px 12px 10px;
+  }
+  .ew-root.ew-galaxy .ew-gbattle-modal .ew-gships {
+    max-height: 92px;
+    overflow: auto;
+  }
+  .ew-root.ew-galaxy .ew-gb-odds {
+    margin: 6px 0;
+  }
+  .ew-root.ew-galaxy .ew-result h2 {
+    margin: 2px 0 6px;
+    font-size: 20px;
+  }
+  .ew-root.ew-galaxy .ew-modal .ew-menu-btn {
+    padding-top: 7px;
+    padding-bottom: 7px;
+  }
+}
