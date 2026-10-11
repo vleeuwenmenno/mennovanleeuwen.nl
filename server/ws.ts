@@ -43,7 +43,8 @@ export class WsConnection {
       if (Date.now() - this.lastSeen > DEAD_AFTER) this.socket.destroy()
       else this.frame(0x9, Buffer.alloc(0))
     }, PING_EVERY)
-    if (head.length) this.read(head)
+    // What came with the upgrade is read once the caller has set onMessage and onClose.
+    if (head.length) setImmediate(() => this.read(head))
   }
 
   send(text: string) {
@@ -75,6 +76,8 @@ export class WsConnection {
   }
 
   private frame(op: number, payload: Buffer) {
+    // Pongs and pings count too: a peer that never reads is dropped, not buffered for.
+    if (this.socket.writableLength > MAX_BUFFERED) return void this.socket.destroy()
     const n = payload.length
     const head = n < 126 ? Buffer.alloc(2) : n < 65536 ? Buffer.alloc(4) : Buffer.alloc(10)
     head[0] = 0x80 | op
@@ -119,6 +122,8 @@ export class WsConnection {
       for (let i = 0; i < len; i++) payload[i] ^= mask[i & 3]
       this.buf = b.subarray(at + 4 + len)
 
+      // Control frames are small and whole (RFC 6455 5.5).
+      if (op >= 0x8 && (len > 125 || !fin)) return this.close(1002, 'bad control frame')
       if (op === 0x8) {
         this.close(payload.length >= 2 ? payload.readUInt16BE(0) : 1000)
         return

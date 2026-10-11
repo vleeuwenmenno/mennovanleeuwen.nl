@@ -1,5 +1,5 @@
 import type { User } from './auth.ts'
-import { guardedFetch, rethrowEgress } from './egress.ts'
+import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
 import { database, decrypt, encrypt } from './db.ts'
 import { HttpError } from './http.ts'
 
@@ -51,7 +51,7 @@ async function get<T>(user: User | null, url: string, headers: Record<string, st
     throw new HttpError(502, `${label} refused (no permission)`)
   }
   if (!res.ok) throw new HttpError(502, `${label} answered ${res.status}`)
-  return (await res.json()) as T
+  return JSON.parse((await readCapped(res, 16 * 1024 * 1024)).toString('utf8')) as T
 }
 
 export function githubSource(user: User): Source {

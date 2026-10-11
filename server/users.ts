@@ -2,6 +2,7 @@ import { stopTurnsOf } from './agents.ts'
 import { isAdmin, type User } from './auth.ts'
 import { database, decrypt, userGone } from './db.ts'
 import { disconnectGoogle } from './google.ts'
+import { closeGameSessions } from './empires.ts'
 import { HttpError } from './http.ts'
 import { closeStreams } from './notifier.ts'
 import { unlinkSeafile } from './seafile.ts'
@@ -28,6 +29,8 @@ export function signOutEverywhere(id: number) {
   database().prepare('DELETE FROM sessions WHERE user_id = ?').run(id)
   stopTurnsOf(id)
   closeStreams(id)
+  const row = database().prepare('SELECT login FROM users WHERE id = ?').get(id) as { login: string } | undefined
+  if (row) closeGameSessions(row.login)
 }
 
 /** Keeps the account (and its spot) but signs it out and lets it no longer sign in. */

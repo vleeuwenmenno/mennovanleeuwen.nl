@@ -29,7 +29,12 @@ import { deleteUser } from './users.ts'
 // preview servers (vite.config.ts). Resolves true when it answered the request.
 
 export async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-  const url = new URL(req.url ?? '/', 'http://localhost')
+  let url: URL
+  try {
+    url = new URL(req.url ?? '/', 'http://localhost')
+  } catch {
+    return false // not a path: server/index.ts answers 400
+  }
   const path = url.pathname
   if (!path.startsWith('/api/')) return false
   const method = req.method ?? 'GET'

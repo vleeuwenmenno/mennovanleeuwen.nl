@@ -1,7 +1,10 @@
 import { randomBytes } from 'node:crypto'
 import type { User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
-import { guardedFetch, rethrowEgress } from './egress.ts'
+import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
+
+/** The most a Seahub answer may hold: listings, links and settings are small. */
+const MAX_JSON = 16 * 1024 * 1024
 import { HttpError } from './http.ts'
 
 // Seafile, for the Files app: one account, linked in Settings → Integrations. Signing in once
@@ -165,7 +168,7 @@ function linked(user: User): Link {
 export async function seafile<T>(user: User, path: string, init: RequestInit = {}): Promise<T> {
   const link = linked(user)
   const res = await call(user, link.url, path, { ...init, token: link.token })
-  if (res.ok) return (await res.json()) as T
+  if (res.ok) return JSON.parse((await readCapped(res, MAX_JSON)).toString('utf8')) as T
   const message = await errorOf(res)
   if (res.status === 401) throw new HttpError(409, 'Seafile no longer accepts the token: link it again in Settings')
   // An encrypted library that is not unlocked (or no longer: Seafile forgets after an hour).
@@ -397,7 +400,7 @@ export async function thumbnail(user: User, repo: unknown, path: unknown, size: 
   const res = await call(user, link.url, `/api2/repos/${id}/thumbnail/?p=${encodeURIComponent(p)}&size=${px}`, { token: link.token, timeout: 20_000 })
   const type = res.headers.get('content-type') ?? ''
   if (!res.ok || !type.startsWith('image/')) throw new HttpError(404, 'No thumbnail')
-  return { type, body: Buffer.from(await res.arrayBuffer()) }
+  return { type, body: await readCapped(res, 16 * 1024 * 1024) }
 }
 
 /** The most one range read may ask for (a ZIP's table of contents is rarely more than a few MB). */
@@ -420,7 +423,7 @@ export async function rangeRead(user: User, repo: unknown, path: unknown, range:
     await res.body?.cancel().catch(() => {})
     throw new HttpError(res.status === 416 ? 416 : 502, `Seafile's file server answered ${res.status} to a range`)
   }
-  return { type: res.headers.get('content-type') ?? 'application/octet-stream', contentRange: res.headers.get('content-range') ?? '', body: Buffer.from(await res.arrayBuffer()) }
+  return { type: res.headers.get('content-type') ?? 'application/octet-stream', contentRange: res.headers.get('content-range') ?? '', body: await readCapped(res, span) }
 }
 
 /**

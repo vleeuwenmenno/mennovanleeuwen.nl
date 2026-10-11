@@ -70,3 +70,28 @@ export async function guardedFetch(user: User | null, input: string | URL, init:
     url = next
   }
 }
+
+/**
+ * A response body as bytes, refusing to hold more than `max`: a server a user chose can answer
+ * with anything, Content-Length or not, for as long as it likes.
+ */
+export async function readCapped(res: Response, max: number): Promise<Buffer> {
+  if (Number(res.headers.get('content-length')) > max) {
+    await res.body?.cancel().catch(() => {})
+    throw new HttpError(413, 'That is too big to read here')
+  }
+  const chunks: Uint8Array[] = []
+  let size = 0
+  const reader = res.body?.getReader()
+  while (reader) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.length
+    if (size > max) {
+      await reader.cancel().catch(() => {})
+      throw new HttpError(413, 'That is too big to read here')
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks)
+}

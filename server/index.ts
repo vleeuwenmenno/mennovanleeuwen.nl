@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
-import { createServer } from 'node:http'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import { handleApi } from './api.ts'
 import { empiresUpgrade } from './empires.ts'
@@ -68,9 +68,15 @@ async function cvIndex(full: string): Promise<Buffer> {
   return cvPage
 }
 
-createServer(async (req, res) => {
-  const url = new URL(req.url ?? '/', 'http://localhost')
-  const path = url.pathname
+/** One request: an /api route, or a file of the built site. */
+async function serve(req: IncomingMessage, res: ServerResponse) {
+  let path: string
+  try {
+    path = new URL(req.url ?? '/', 'http://localhost').pathname
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain', ...SECURITY }).end('Bad request\n')
+    return
+  }
 
   if (await handleApi(req, res)) return
 
@@ -108,9 +114,29 @@ createServer(async (req, res) => {
   })
   if (req.method === 'HEAD') res.end()
   else createReadStream(found.full).pipe(res)
+}
+
+// Anyone can send anything: a request that breaks something gets an error, and the server and
+// everyone else's requests go on.
+// The last line of defence: logged, and the server stays up (a restart would end every battle,
+// Agents turn and upload in flight).
+process.on('uncaughtException', (e) => console.error('uncaught:', e))
+process.on('unhandledRejection', (e) => console.error('unhandled rejection:', e))
+
+createServer((req, res) => {
+  serve(req, res).catch((e: unknown) => {
+    console.error('request failed:', (e as Error)?.message ?? e)
+    if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain', ...SECURITY }).end('Something went wrong\n')
+    else res.destroy()
+  })
 })
   .on('upgrade', (req, socket, head) => {
-    if (!empiresUpgrade(req, socket, head)) socket.destroy()
+    try {
+      if (!empiresUpgrade(req, socket, head)) socket.destroy()
+    } catch (e) {
+      console.error('upgrade failed:', (e as Error).message)
+      socket.destroy()
+    }
   })
   .listen(PORT, () => {
     console.log(`MvL OS on :${PORT}`)

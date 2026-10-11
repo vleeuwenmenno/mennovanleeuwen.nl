@@ -3,7 +3,7 @@ import type { IncomingMessage } from 'node:http'
 import { isAdmin, type User } from './auth.ts'
 import { database, decrypt, encrypt, sha256, onUserGone } from './db.ts'
 import { HttpError, publicOrigin } from './http.ts'
-import { guardedFetch, rethrowEgress } from './egress.ts'
+import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
 import { fileLink, officeServer, seafile, seafileInfo } from './seafile.ts'
 
 // OnlyOffice, the document server Seafile uses, editing Seafile's Office files in a window here.
@@ -166,7 +166,8 @@ export async function officeCallback(req: IncomingMessage, sealed: string | null
 async function saveVersion(user: User, repo: string, path: string, from: string) {
   const res = await guardedFetch(user, from, { signal: AbortSignal.timeout(60_000) })
   if (!res.ok) throw new Error(`the document server answered ${res.status}`)
-  const blob = await res.blob()
+  // From the document server the user chose: at most what a document can sensibly be.
+  const blob = new Blob([new Uint8Array(await readCapped(res, 200 * 1024 * 1024))])
   const dir = path.split('/').slice(0, -1).join('/') || '/'
   const { url: link } = await fileLink(user, repo, dir, 'update')
   const form = new FormData()

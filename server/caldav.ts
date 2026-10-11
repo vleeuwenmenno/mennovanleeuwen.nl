@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { User } from './auth.ts'
 import type { EventInput } from './calendars.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
-import { guardedFetch, rethrowEgress } from './egress.ts'
+import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
 import { HttpError } from './http.ts'
 
 // CalDAV calendars (Fastmail, Nextcloud, iCloud, Radicale...) for the Agenda widget, the clock and
@@ -113,7 +113,7 @@ async function dav(account: Account, method: 'PROPFIND' | 'REPORT', url: string,
   const res = await request(account, method, url, { headers: { Depth: depth, 'Content-Type': 'application/xml; charset=utf-8' }, body })
   if (res.status === 401 || res.status === 403) throw new Error(`${new URL(url).host} refused the username or app password`)
   if (res.status !== 207 && !res.ok) throw new Error(`${new URL(url).host} answered ${res.status}`)
-  return res.text()
+  return (await readCapped(res, 16 * 1024 * 1024)).toString('utf8')
 }
 
 const unescapeXml = (s: string) =>
@@ -668,7 +668,7 @@ function refused(res: Response, url: string): never {
 async function getObject(account: Account, url: string): Promise<{ ics: Ics; etag: string | null }> {
   const res = await request(account, 'GET', url, { headers: { Accept: 'text/calendar' } })
   if (!res.ok) refused(res, url)
-  return { ics: parseIcs(await res.text()), etag: res.headers.get('etag') }
+  return { ics: parseIcs((await readCapped(res, 4 * 1024 * 1024)).toString('utf8')), etag: res.headers.get('etag') }
 }
 
 /** Writes an object: `etag` it must still have, or 'new' for one that must not exist yet. */

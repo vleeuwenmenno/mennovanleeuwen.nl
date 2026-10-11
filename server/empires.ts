@@ -1,8 +1,10 @@
 import { randomBytes, randomInt } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
+import { isIP } from 'node:net'
 import type { Duplex } from 'node:stream'
 import { currentUser } from './auth.ts'
 import { database } from './db.ts'
+import { isPrivate } from './egress.ts'
 import { sameOrigin } from './http.ts'
 import { acceptWebSocket, refuse, type WsConnection } from './ws.ts'
 import { DIFFICULTY, type Brain, type Difficulty } from '../src/apps/games/empires/ai.ts'
@@ -32,6 +34,17 @@ const MAX_PLAYERS = 400
 const MAX_PER_IP = 16
 const MAX_MESSAGE = 16 * 1024
 const MAX_LOBBIES = 100
+/** Battles running at once: each one is simulated here too, on the event loop the site shares. */
+const MAX_MATCHES = 12
+/** Lobbies one address (or one signed-in account) may host. */
+const LOBBIES_PER_HOST = 2
+/** The longest a battle runs, and how long it goes on with nobody watching (AI against AI). */
+const MAX_MATCH_MS = 2 * 3600_000
+const UNWATCHED_MS = 60_000
+/** Missed ticks run at once after a late wake-up, at most; past that the battle slows down instead. */
+const MAX_CATCH_UP = 40
+/** A connection that hasn't said hello by then is closed. */
+const HELLO_MS = 10_000
 /** How long the clock waits for everyone's game to load before starting anyway. */
 const LOAD_WAIT_MS = 20_000
 /** Orders one player may give in a single tick (a drag-select order is one). */
@@ -95,16 +108,24 @@ type Match = {
   hashes: Map<number, number>
   /** When each player last got the server's battle after drifting. */
   resynced: Map<string, number>
+  /** When a player was last connected to it (an unwatched battle ends, see clock). */
+  watchedAt?: number
 }
 
 const send = (p: Player, m: ServerMsg) => p.ws?.send(JSON.stringify(m))
 const newId = () => randomBytes(9).toString('base64url')
 
-/** The address the request came from: the last X-Forwarded-For entry is the one our own reverse
- * proxy added (earlier ones are whatever the client claimed). */
+/**
+ * The address the request came from, as a key for the per-address limits. The last
+ * X-Forwarded-For entry is the one our own reverse proxy added, but only when the request came
+ * from that proxy (a private address): straight from the internet, the header is the client's to
+ * make up. IPv6 by its /64, which is what one home or server gets.
+ */
 function clientIp(req: IncomingMessage) {
+  const peer = (req.socket.remoteAddress ?? '?').replace(/^::ffff:/, '')
   const fwd = String(req.headers['x-forwarded-for'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-  return fwd.at(-1) ?? req.socket.remoteAddress ?? '?'
+  const ip = (fwd.length && isIP(peer) && isPrivate(peer) ? fwd.at(-1)! : peer).replace(/^::ffff:/, '')
+  return isIP(ip) === 6 ? `${ip.split(':').slice(0, 4).join(':')}::/64` : ip
 }
 
 // --- Names ------------------------------------------------------------------------------------------
@@ -158,7 +179,7 @@ function claim(p: Player, raw: string) {
 // --- Lobbies ----------------------------------------------------------------------------------------
 
 const lobbyOf = (p: Player) => (p.lobby ? lobbies.get(p.lobby) : undefined)
-const mapOf = (l: MpLobby): MapDef => (l.map === GENERATED ? generateMap(l.gen) : (MAP[l.map] ?? MAPS[0]))
+const mapOf = (l: MpLobby): MapDef => (l.map === GENERATED ? generateMap(l.gen) : Object.hasOwn(MAP, l.map) ? MAP[l.map] : MAPS[0])
 const humans = (l: MpLobby) => l.slots.filter((s) => s.kind === 'human')
 const seatOf = (l: MpLobby, p: Player) => l.slots.findIndex((s) => s.kind === 'human' && s.player === p.id)
 
@@ -218,6 +239,12 @@ const unready = (l: MpLobby) => l.slots.forEach((s) => (s.ready = false))
 
 function create(p: Player) {
   if (lobbies.size >= MAX_LOBBIES) return send(p, { t: 'error', why: 'There are too many battles being set up right now. Try again in a little while.' })
+  // A few each, counted by address and by account, so nobody fills the list on their own.
+  const mine = [...lobbies.values()].filter((l) => {
+    const host = players.get(l.host)
+    return host && host !== p && (host.ip === p.ip || (p.login && host.login === p.login))
+  })
+  if (mine.length >= LOBBIES_PER_HOST) return send(p, { t: 'error', why: 'You are already hosting battles elsewhere. Close one first.' })
   leave(p)
   const map = MAPS[0]
   const l: MpLobby = {
@@ -307,9 +334,10 @@ function changeSlot(p: Player, l: MpLobby, i: number, patch: SlotPatch) {
     }
     next.kind = patch.kind
   }
-  if (patch.faction !== undefined && patch.faction in FACTIONS) next.faction = patch.faction
+  // Own keys only: "toString" is in every object, and would take the server down.
+  if (typeof patch.faction === 'string' && Object.hasOwn(FACTIONS, patch.faction)) next.faction = patch.faction
   if (patch.team === 0 || patch.team === 1) next.team = patch.team
-  if (patch.difficulty !== undefined && patch.difficulty in DIFFICULTY && (host || own)) next.difficulty = patch.difficulty
+  if (typeof patch.difficulty === 'string' && Object.hasOwn(DIFFICULTY, patch.difficulty) && (host || own)) next.difficulty = patch.difficulty
   l.slots[i] = next
   unready(l)
   pushLobby(l)
@@ -319,7 +347,7 @@ function changeSetup(p: Player, l: MpLobby, m: Extract<ClientMsg, { t: 'setup' }
   if (l.host !== p.id) return send(p, { t: 'error', why: 'Only the host can change the map and rules.' })
   if (typeof m.credits === 'number' && CREDIT_STEPS.includes(m.credits)) l.credits = m.credits
   if (m.map !== undefined || m.gen !== undefined) {
-    const id = m.map === undefined ? l.map : m.map === GENERATED || MAP[m.map] ? m.map : null
+    const id = m.map === undefined ? l.map : m.map === GENERATED || (typeof m.map === 'string' && Object.hasOwn(MAP, m.map)) ? m.map : null
     if (!id) return send(p, { t: 'error', why: 'No such map.' })
     const gen = m.gen === undefined ? l.gen : cleanRules(m.gen)
     const map = id === GENERATED ? generateMap(gen) : MAP[id]
@@ -334,7 +362,8 @@ function changeSetup(p: Player, l: MpLobby, m: Extract<ClientMsg, { t: 'setup' }
 }
 
 function chat(p: Player, l: MpLobby, raw: string) {
-  const text = String(raw ?? '').replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX)
+  // No invisible characters (bidi overrides, zero-width): a line says what it looks like it says.
+  const text = String(raw ?? '').replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX)
   if (!text) return
   const msg = JSON.stringify({ t: 'chat', from: p.name, text, at: Date.now() } satisfies ServerMsg)
   for (const s of humans(l)) players.get(s.player)?.ws?.send(msg)
@@ -360,6 +389,7 @@ function start(p: Player, l: MpLobby) {
   if (l.state !== 'open' || matches.has(l.id)) return
   const why = cantStart(l)
   if (why) return send(p, { t: 'error', why })
+  if (matches.size >= MAX_MATCHES) return send(p, { t: 'error', why: 'Too many battles are running right now. Try again in a little while.' })
   const info: MatchInfo = {
     id: newId(),
     seed: randomInt(0, 2 ** 31),
@@ -411,12 +441,29 @@ function pushRoster(m: Match) {
 /** Runs every tick that's due by now, then sleeps until the next. A late wake-up (a busy
  * moment) just runs the missed ticks at once; players' games catch up the same way. */
 function clock(m: Match) {
-  const due = Math.floor((performance.now() - m.t0) / STEP_MS)
+  let due = Math.floor((performance.now() - m.t0) / STEP_MS)
+  // Far behind (the server was busy): run a bounded number now and let the battle fall back in
+  // time, rather than blocking everything else to catch up.
+  if (due - m.n > MAX_CATCH_UP) {
+    m.t0 += (due - m.n - MAX_CATCH_UP) * STEP_MS
+    due = m.n + MAX_CATCH_UP
+  }
   while (m.n < due && matches.get(m.lobby) === m) {
-    runTick(m)
+    try {
+      runTick(m)
+    } catch (e) {
+      // A battle that breaks ends; the server and the other battles go on.
+      console.error('empires: battle stopped:', (e as Error).message)
+      return halt(m, 'The battle stopped because of an error on the server')
+    }
     if (m.w.winner !== -1) return finish(m)
   }
   if (matches.get(m.lobby) !== m) return
+  // No battle runs forever, or on with nobody there to watch it.
+  if (m.n * STEP_MS > MAX_MATCH_MS) return halt(m, 'The battle reached its time limit')
+  const watched = m.info.seats.some((s) => s.kind === 'human' && !m.gone.has(m.info.seats.indexOf(s)) && players.get(s.player)?.ws)
+  if (watched) m.watchedAt = performance.now()
+  else if (performance.now() - (m.watchedAt ?? m.t0) > UNWATCHED_MS) return halt(m, 'The battle ended: nobody was left watching')
   m.timer = setTimeout(() => clock(m), Math.max(1, m.t0 + (m.n + 1) * STEP_MS - performance.now()))
 }
 
@@ -466,6 +513,15 @@ function finish(m: Match) {
   if (!l) return
   const won = m.info.seats.filter((s) => s.team === m.w.winner).map((s) => s.name)
   notice(l, `${won.join(' and ')} won the battle`)
+  pushLobby(l)
+}
+
+/** Ends a battle without a winner, saying why in the lobby. */
+function halt(m: Match, why: string) {
+  const l = lobbies.get(m.lobby)
+  stopMatch(m.lobby)
+  if (!l) return
+  notice(l, why)
   pushLobby(l)
 }
 
@@ -631,11 +687,25 @@ function onMessage(ws: WsConnection, conn: { p: Player | null; login: string | n
 }
 
 const perIp = new Map<string, number>()
+/** Open WebSockets, said hello or not. */
+let sockets = 0
+
+/** Closes a signed-in account's game connections (signed out everywhere, banned or deleted). */
+export function closeGameSessions(login: string) {
+  const key = login.toLowerCase()
+  for (const p of players.values()) if (p.login?.toLowerCase() === key) p.ws?.close(1008, 'signed out')
+}
 
 /** Takes the WebSocket upgrade for MP_PATH; false for any other path (left for others, such as
  * Vite's hot reload in development). */
 export function empiresUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): boolean {
-  if (new URL(req.url ?? '/', 'http://localhost').pathname !== MP_PATH) return false
+  let path: string
+  try {
+    path = new URL(req.url ?? '/', 'http://localhost').pathname
+  } catch {
+    return false // not a path at all: server/index.ts refuses it
+  }
+  if (path !== MP_PATH) return false
   socket.on('error', () => socket.destroy())
   // Only this site's pages may connect: a sign-in cookie rides along with the upgrade.
   if (!sameOrigin(req) || !req.headers.origin) {
@@ -643,14 +713,22 @@ export function empiresUpgrade(req: IncomingMessage, socket: Duplex, head: Buffe
     return true
   }
   const ip = clientIp(req)
-  const open = [...players.values()].filter((p) => p.ws).length
-  if (open >= MAX_PLAYERS || (perIp.get(ip) ?? 0) >= MAX_PER_IP) {
+  // Every accepted socket counts, also before it says hello.
+  if (sockets >= MAX_PLAYERS || (perIp.get(ip) ?? 0) >= MAX_PER_IP) {
     refuse(socket, 503, 'Service Unavailable')
     return true
   }
   const ws = acceptWebSocket(req, socket, head, { maxMessage: MAX_MESSAGE })
   if (!ws) return true
+  sockets++
   perIp.set(ip, (perIp.get(ip) ?? 0) + 1)
+  // Counted down when the socket itself closes, however the connection ends.
+  socket.once('close', () => {
+    sockets--
+    const n = (perIp.get(ip) ?? 1) - 1
+    if (n > 0) perIp.set(ip, n)
+    else perIp.delete(ip)
+  })
   let login: string | null = null
   try {
     login = currentUser(req)?.login ?? null
@@ -658,11 +736,18 @@ export function empiresUpgrade(req: IncomingMessage, socket: Duplex, head: Buffe
     // No database or sign-in configured: everyone is a guest.
   }
   const conn = { p: null as Player | null, login, ip }
-  ws.onMessage = (text) => onMessage(ws, conn, text)
+  const hello = setTimeout(() => !conn.p && ws.close(1008, 'hello first'), HELLO_MS)
+  ws.onMessage = (text) => {
+    // A message that breaks something closes this connection, not the server.
+    try {
+      onMessage(ws, conn, text)
+    } catch (e) {
+      console.error('empires: message failed:', (e as Error).message)
+      ws.close(1011, 'server error')
+    }
+  }
   ws.onClose = () => {
-    const n = (perIp.get(ip) ?? 1) - 1
-    if (n > 0) perIp.set(ip, n)
-    else perIp.delete(ip)
+    clearTimeout(hello)
     const p = conn.p
     if (p && p.ws === ws) {
       p.ws = null

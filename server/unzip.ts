@@ -12,7 +12,7 @@ import { METHODS, readZip, type ZipEntry, type ZipIndex } from '../src/data/zip.
 import type { User } from './auth.ts'
 import { HttpError } from './http.ts'
 import { onUserGone } from './db.ts'
-import { guardedFetch } from './egress.ts'
+import { guardedFetch, readCapped } from './egress.ts'
 import { fileLink, guard, listDir, mkdir, repoId, seafPath } from './seafile.ts'
 import { notify } from './notifier.ts'
 
@@ -103,7 +103,7 @@ async function tgzStream(user: User, url: string, signal?: AbortSignal): Promise
 
 /** Where a file's data starts: after its local header, whose name and extra lengths can differ. */
 async function dataStart(user: User, url: string, e: ZipEntry, signal: AbortSignal): Promise<number> {
-  const head = new Uint8Array(await (await range(user, url, e.offset, e.offset + 29, signal)).arrayBuffer())
+  const head = new Uint8Array(await readCapped(await range(user, url, e.offset, e.offset + 29, signal), 30))
   const v = new DataView(head.buffer)
   if (v.getUint32(0, true) !== 0x04034b50) throw new Error('its local header is damaged')
   return e.offset + 30 + v.getUint16(26, true) + v.getUint16(28, true)
@@ -130,8 +130,9 @@ async function openArchive(user: User, repo: string, path: string): Promise<Open
 
 async function readIndex(a: Opened): Promise<ZipIndex> {
   try {
-    if (a.format === 'zip') return await readZip(a.url, a.size)
-    if (a.format === 'tar') return await readTar(async (from, to) => new Uint8Array(await (await range(a.user, a.url, from, to)).arrayBuffer()), a.size)
+    // Through the egress guard: the link is whatever the user's Seafile handed back.
+    if (a.format === 'zip') return await readZip(a.url, a.size, (u, init) => guardedFetch(a.user, u, init))
+    if (a.format === 'tar') return await readTar(async (from, to) => new Uint8Array(await readCapped(await range(a.user, a.url, from, to), to - from + 1)), a.size)
     const entries: ZipEntry[] = []
     await scanTar(await tgzStream(a.user, a.url), (e) => void entries.push(e), { maxBytes: MAX_TGZ_UNPACKED })
     return { entries, size: a.size, comment: '', zip64: false, format: 'tgz' }
