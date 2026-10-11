@@ -52,6 +52,10 @@ export function restoreWorld(s: string): World | null {
     const w = { ...o, units, byId: new Map(units.map((u) => [u.id, u])), grid: new Map(), nav: new Map() } as unknown as World & { v?: number; types?: unknown }
     delete w.v
     delete w.types
+    // Saved before the world kept its own counters and random numbers.
+    w.squadSeq ??= Math.max(0, ...units.map((u) => u.squad)) + 1
+    w.wreckSeq ??= Math.max(999, ...w.wrecks.map((h) => h.id)) + 1
+    w.rs ??= (Math.random() * 2 ** 32) >>> 0
     return w
   } catch {
     return null
