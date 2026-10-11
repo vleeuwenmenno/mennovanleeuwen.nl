@@ -47,7 +47,9 @@
   }
 }
 
-/* --- Phones (and very narrow windows) --- */
+/* --- Phones: narrow on a touch screen or a phone-sized screen (a narrow desktop window keeps its
+   own layout) --- */
+@media (pointer: coarse), (max-width: 719px) {
 @container (max-width: 680px) {
   /* The top bar: tighter cells, and it scrolls sideways if it still doesn't fit. */
   .ew-battle .ew-top {
@@ -129,6 +131,7 @@
   .ew-battle .ew-dockshade {
     height: 180px;
   }
+}
 }
 
 /* --- Phones on their side: short screens. The map hides too, the selection and the unit card sit
