@@ -164,7 +164,11 @@ export function Desktop() {
   const wm = useWM()
   const desk = useDesktop()
   // A phone with its notes put away shows the icons as a grid of tiles, opened with a tap.
-  const phoneGrid = useIsMobile() && notesHidden.use()
+  // Both hooks every render (not `mobile && hidden`): a screen crossing the phone width would
+  // otherwise change the order of hooks.
+  const mobile = useIsMobile()
+  const hidden = notesHidden.use()
+  const phoneGrid = mobile && hidden
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [offset, setOffset] = useState({ dx: 0, dy: 0 })
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
