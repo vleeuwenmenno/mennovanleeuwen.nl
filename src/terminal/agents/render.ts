@@ -202,7 +202,7 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
       return ok(items.length ? todoLines(items, w).map((l, i) => (i === 0 ? [seg('  ⎿  ', 'muted'), ...l.slice(1)] : l)) : [under('Cleared the plan')])
     }
     case 'ask_user': {
-      const summary = typeof obj?.summary === 'string' ? obj.summary : obj?.skipped ? 'You closed the form' : ''
+      const summary = typeof obj?.summary === 'string' ? obj.summary : typeof obj?.said === 'string' ? `You wrote instead: ${obj.said}` : obj?.skipped ? 'You closed the form' : ''
       return ok(summary ? summary.split('\n').map((l, i) => clipLine([seg(i === 0 ? '  ⎿  ' : '     ', 'muted'), seg(l)], w)) : [under('Answered')])
     }
     case 'exit_plan_mode':

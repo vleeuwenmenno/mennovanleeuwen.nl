@@ -35,6 +35,18 @@ import {
   agentSettings,
   setAgentSettings,
   stopThread,
+  queueMessage,
+  overrideTurn,
+  editQueued,
+  saveQueued,
+  releaseQueued,
+  removeQueued,
+  sendQueuedNow,
+  type QueuedMessage,
+  isDropped,
+  retryTurn,
+  rewindThread,
+  interruptionText,
   suggestTitle,
   tokenCount,
   toolLabel,
@@ -66,7 +78,7 @@ import { Select } from '../os/Select'
 import { hasCalendar, signIn, useAccount } from '../os/account'
 import { fieldMenu, linkAt, linkMenu, openContextMenu, openMenuAt, selectionIn, tidyMenu, type MenuItem } from '../os/ContextMenu'
 import { searchWeb } from '../data/searchEngine'
-import { ask, choose } from '../os/Dialogs'
+import { ask, ask as confirmDialog, choose } from '../os/Dialogs'
 import { setCloseGuard, useWM, type WinState } from '../os/wm'
 import { pullAll } from '../os/synced'
 import { mayTakeFocus } from '../os/overlays'
@@ -875,6 +887,52 @@ function TodoChip({ todos, running, onDismiss }: { todos: Todo[]; running: boole
   )
 }
 
+/**
+ * Messages waiting to be sent, in order, over the composer: each can be edited (in the message
+ * box), sent now (stopping the agent if it works) or removed. After a stop or an error they wait
+ * for the user: Send queued sends the first.
+ */
+function QueueList({ queue, answering, editing, onEdit, onSend, onRemove }: { queue: QueuedMessage[]; answering: boolean; editing: string | null; onEdit: (q: QueuedMessage) => void; onSend: (q: QueuedMessage) => void; onRemove: (q: QueuedMessage) => void }) {
+  return (
+    <div className="agt-queue" aria-label="Queued messages">
+      <div className="agt-queue-head">
+        <span>{answering ? `Queued, sent one by one when it is done (${queue.length})` : `Waiting to be sent (${queue.length})`}</span>
+        <span className="agt-grow" />
+        {!answering && (
+          <button type="button" className="btn btn-small" onClick={() => onSend(queue[0])} title="Send the first queued message now; the rest follow">
+            Send queued
+          </button>
+        )}
+      </div>
+      <ol>
+        {queue.map((q, i) => (
+          <li key={q.id} className={editing === q.id ? 'is-editing' : ''}>
+            <span className="agt-queue-n">{i + 1}</span>
+            <span className="agt-queue-text" title={q.text}>
+              {q.text || <span className="muted">{q.attachments.map((a) => a.name).join(', ')}</span>}
+            </span>
+            {q.attachments.length > 0 && (
+              <span className="agt-queue-files muted" title={q.attachments.map((a) => a.name).join('\n')}>
+                <Icon name="clip" size={12} /> {q.attachments.length}
+              </span>
+            )}
+            {editing === q.id ? <span className="agt-queue-state">editing</span> : q.editing && <span className="agt-queue-state muted">editing elsewhere</span>}
+            <button type="button" onClick={() => onEdit(q)} disabled={!!editing} title="Edit it in the message box (↑ in an empty box edits the last one)">
+              Edit
+            </button>
+            <button type="button" onClick={() => onSend(q)} title={answering ? 'Stop the agent and send this now, ahead of the rest' : 'Send this now'}>
+              Send now
+            </button>
+            <button type="button" className="agt-queue-x" onClick={() => onRemove(q)} aria-label="Remove from the queue" title="Remove from the queue">
+              ×
+            </button>
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
 type ConversationProps = {
   id: string | null
   /** The project a new thread goes into */
@@ -916,6 +974,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [error, setError] = useState<string | null>(null)
   const [renaming, setRenaming] = useState(false)
   const [ctxOpen, setCtxOpen] = useState(false)
+  // A queued message being edited in the message box, and what was in the box before (back after).
+  const [editingQ, setEditingQ] = useState<{ id: string; stash: { text: string; files: Attachment[] } } | null>(null)
   const abort = useRef<AbortController | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
@@ -930,8 +990,9 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       (e: Error) => setError(e.message),
     )
   }, [id])
-  // Kept for coming back: per thread, or for the new thread while there is none yet.
-  useEffect(() => setDraft(id ?? 'new', text, files), [id, text, files])
+  // Kept for coming back: per thread, or for the new thread while there is none yet. A queued
+  // message being edited is not a draft.
+  useEffect(() => void (!editingQ && setDraft(id ?? 'new', text, files)), [id, text, files, editingQ])
   useEffect(() => {
     agentModels().then(setModels, () => {})
     if (mayTakeFocus()) input.current?.focus()
@@ -950,6 +1011,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       setMessages(e.messages)
       setApprovals(e.pending)
       setLive(e.live)
+      found(e.messages)
     } else if (e.type === 'delta') setLive((l) => ({ content: (l?.content ?? '') + (e.content ?? ''), thinking: (l?.thinking ?? '') + (e.thinking ?? '') }))
     else if (e.type === 'approval') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'approval', call: e.call, summary: e.summary }])
     else if (e.type === 'client') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'client', call: e.call }])
@@ -959,11 +1021,42 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       setMessages((ms) => [...ms, e.message])
       // The agent changed the Notebook on the server: fetch it now rather than at the next sync.
       if (e.message.role === 'tool' && /^(create|update|delete)_note$/.test(e.message.toolName ?? '')) void pullAll()
-      if (e.message.role === 'assistant') setLive({ content: '', thinking: '' })
+      // A user message mid-stream is the next queued one: what a stopped turn left unsaved goes.
+      if (e.message.role === 'assistant' || e.message.role === 'user') setLive({ content: '', thinking: '' })
     } else if (e.type === 'thread') {
       setThread(e.thread)
+      // At rest now (the last thing a chain of turns says): no reply is being written any more.
+      if (!e.thread.running) setLive(null)
       onChanged()
-    } else if (e.type === 'error') setError(e.error)
+    } else if (e.type === 'queue') setThread((t) => (t ? { ...t, queue: e.queue } : t))
+    // A failed turn: the thread's `interrupted` says so when it ends, with Retry (see below).
+  }
+
+  // A stream that drops (the network, or the server restarting for an update) is not the end of
+  // the turn: the follow effect below finds it again, trying for a minute, and only then says the
+  // connection dropped. `lostAt` is when it went; `unsent` a message that may not have got there.
+  const lostAt = useRef<number | null>(null)
+  const tries = useRef(0)
+  const [reconnecting, setReconnecting] = useState(false)
+  const [dropped, setDropped] = useState(false)
+  const unsent = useRef<{ text: string; files: Attachment[]; sent: string } | null>(null)
+  const lose = () => {
+    if (lostAt.current === null) (lostAt.current = Date.now()), (tries.current = 0)
+    setReconnecting(true)
+    setDropped(false)
+  }
+  /** The thread answered again: back in touch. A message the drop swallowed goes back in the box. */
+  const found = (msgs: AgentMessage[]) => {
+    lostAt.current = null
+    setReconnecting(false)
+    setDropped(false)
+    const u = unsent.current
+    unsent.current = null
+    if (u && [...msgs].reverse().find((m) => m.role === 'user')?.content !== u.sent) {
+      setText((t) => t || u.text)
+      setFiles((f) => (f.length ? f : u.files))
+      setError('The connection dropped before your message got there: it is back in the box')
+    }
   }
 
   // Answering, but not from this window (opened again later, or another tab): join the turn and
@@ -971,7 +1064,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   // broken stream to a turn still running joins again.
   const [rejoin, setRejoin] = useState(0)
   useEffect(() => {
-    if (!id || busy || !thread?.running) return
+    if (!id || busy || !(thread?.running || lostAt.current !== null)) return
     const ctl = new AbortController()
     followThread(id, onEvent, ctl.signal)
       .catch(() => {})
@@ -984,10 +1077,25 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             setMessages(r.messages)
             setApprovals(r.pending)
             setLive(null)
+            found(r.messages)
             onChanged()
             if (r.thread.running) setTimeout(() => setRejoin((n) => n + 1), 2000)
           },
-          () => setTimeout(() => setRejoin((n) => n + 1), 5000),
+          () => {
+            if (ctl.signal.aborted) return
+            // No answer: the server may be restarting. Look again, a little slower each time, for a minute.
+            lose()
+            if (Date.now() - (lostAt.current ?? Date.now()) > 60_000) {
+              lostAt.current = null
+              setReconnecting(false)
+              setDropped(true)
+              setLive(null)
+              // Not known to be running any more: what the window offers is Retry and Look again.
+              setThread((t) => (t ? { ...t, running: false } : t))
+              return
+            }
+            setTimeout(() => setRejoin((n) => n + 1), Math.min(5000, 1000 * 2 ** tries.current++))
+          },
         )
       })
     return () => ctl.abort()
@@ -1049,11 +1157,15 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   }, [thread?.id, workdir?.repo, workdir?.path])
 
   // A ref, not `busy`: two sends in one render (a double Enter, a re-run effect) must not both go.
+  // `sending` is the turn this window streams, `queueing` a message going to the queue (or
+  // answering what it asked, or an edit saved) while one streams.
   const sending = useRef(false)
+  const queueing = useRef(false)
   const send = async (asked?: string) => {
     const typed = (asked ?? text).trim()
     let attached = asked === undefined ? files : []
-    if ((!typed && !attached.length) || sending.current || reading) return
+    const toQueue = asked === undefined && (!!editingQ || (answering && !!thread))
+    if ((!typed && !attached.length) || (toQueue ? queueing.current : sending.current) || reading) return
     // Too long to send as typed text: it goes along as a file instead.
     let message = typed
     if (typed.length > MAX_MESSAGE) {
@@ -1064,6 +1176,26 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         return setError((e as Error).message)
       }
       message = ''
+    }
+    // Editing a queued message: Enter saves it back in its place.
+    if (editingQ && asked === undefined) return saveEdit(message, attached)
+    // While it works, a message waits in the queue; while it waits on you (changes to allow, a
+    // plan, a form), it answers all of that instead.
+    if (answering && thread && asked === undefined) {
+      queueing.current = true
+      setError(null)
+      try {
+        const r = waiting ? await overrideTurn(thread.id, message, attached) : await queueMessage(thread.id, message, attached)
+        setThread(r.thread)
+        setText('')
+        setFiles([])
+        dropDraft(thread.id)
+      } catch (e) {
+        setError((e as Error).message)
+      } finally {
+        queueing.current = false
+      }
+      return
     }
     sending.current = true
     setError(null)
@@ -1087,7 +1219,15 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       setLive({ content: '', thinking: '' })
       const ctl = new AbortController()
       abort.current = ctl
-      await sendMessage(target.id, message, attached, onEvent, ctl.signal)
+      let accepted = false
+      try {
+        await sendMessage(target.id, message, attached, (e) => ((accepted ||= e.type === 'message' && e.message.role === 'user'), onEvent(e)), ctl.signal)
+      } catch (e) {
+        // Dropped on the way, not refused: the turn may well go on (or the server is restarting).
+        if (!isDropped(e) || ctl.signal.aborted) throw e
+        if (!accepted && asked === undefined) unsent.current = { text: typed, files, sent: message }
+        lose()
+      }
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
         setError((e as Error).message)
@@ -1114,6 +1254,85 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Retry: the last turn again (what it left goes), streamed into this window like a message.
+  const retry = async () => {
+    if (!thread || sending.current) return
+    sending.current = true
+    setError(null)
+    setDropped(false)
+    setBusy(true)
+    pinned.current = true
+    const at = messages.map((m) => m.role).lastIndexOf('user')
+    setMessages((ms) => (at >= 0 ? ms.slice(0, at) : ms))
+    setThread((t) => (t ? { ...t, interrupted: null } : t))
+    setLive({ content: '', thinking: '' })
+    const ctl = new AbortController()
+    abort.current = ctl
+    try {
+      await retryTurn(thread.id, onEvent, ctl.signal)
+    } catch (e) {
+      if (isDropped(e) && !ctl.signal.aborted) lose()
+      else if ((e as Error).name !== 'AbortError') {
+        setError((e as Error).message)
+        void getThread(thread.id).then((r) => (setThread(r.thread), setMessages(r.messages), setApprovals(r.pending)), () => {})
+      }
+    } finally {
+      abort.current = null
+      sending.current = false
+      setBusy(false)
+      setLive(null)
+      setApprovals([])
+      onChanged()
+    }
+  }
+
+  // Rewind to one of your messages: it and everything after it go (asked first, saying what is not
+  // undone), and it comes back into the message box to edit and send again.
+  const rewindTo = async (m: AgentMessage, edit: boolean) => {
+    if (!thread) return
+    const after = messages.filter((x) => x.id > m.id)
+    const mine = after.filter((x) => x.role === 'user').length
+    const theirs = after.length - mine
+    const parts = [mine ? `${mine} more of yours` : '', theirs ? `${theirs} from the agent (replies and tool results)` : ''].filter(Boolean).join(' and ')
+    const ok = await confirmDialog({
+      title: edit ? 'Edit and send this message again?' : 'Rewind to this message?',
+      body: (
+        <>
+          <p>
+            This message {after.length ? `and the ${after.length} after it (${parts})` : ''} {after.length ? 'leave' : 'leaves'} the thread, and it goes back into the message box{text.trim() || files.length ? ', in place of what is there now' : ''}.
+            {answering ? ' The agent is stopped first.' : ''}
+          </p>
+          <p className="muted">What its tools did is not undone: memories, the plan, notes and calendar events stay as they are, and files it changed in the work folder are not restored. Queued messages stay queued.</p>
+        </>
+      ),
+      confirm: edit ? 'Rewind and edit' : 'Rewind',
+      danger: true,
+    })
+    if (!ok) return
+    try {
+      const r = await rewindThread(thread.id, m.id)
+      if (editingQ) cancelEdit()
+      const fresh = await getThread(thread.id).catch(() => null)
+      setThread(fresh?.thread ?? r.thread)
+      setMessages(fresh?.messages ?? messages.filter((x) => x.id < m.id))
+      setApprovals([])
+      setLive(null)
+      setError(null)
+      setDropped(false)
+      setText(r.message.text)
+      setFiles(r.message.attachments)
+      onChanged()
+      requestAnimationFrame(() => {
+        const el = input.current
+        if (!el) return
+        el.focus()
+        if (edit) el.setSelectionRange(el.value.length, el.value.length)
+      })
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
   const decide = (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => {
     if (!thread) return
     setApprovals((a) => a.filter((x) => x.callId !== callId))
@@ -1129,6 +1348,93 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     abort.current?.abort()
     if (thread) stopThread(thread.id).catch(() => {})
   }
+
+  // The queue: messages written while it works, kept by the server and sent one by one after it.
+  // Editing one takes it into the message box (files too) and holds the queue until it is saved or
+  // put back, so it is never sent halfway through a change.
+  const queue = thread?.queue ?? []
+  const waiting = approvals.some((a) => a.kind !== 'client')
+  const startEdit = async (q: QueuedMessage) => {
+    if (!thread || editingQ) return
+    try {
+      const r = await editQueued(thread.id, q.id)
+      setEditingQ({ id: q.id, stash: { text, files } })
+      setText(r.item.text)
+      setFiles(r.item.attachments)
+      setThread(r.thread)
+      setError(null)
+      requestAnimationFrame(() => {
+        const el = input.current
+        el?.focus()
+        el?.setSelectionRange(el.value.length, el.value.length)
+      })
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+  /** Back to what was in the box before the edit. */
+  const endEdit = () => {
+    if (!editingQ) return
+    setText(editingQ.stash.text)
+    setFiles(editingQ.stash.files)
+    setEditingQ(null)
+  }
+  const cancelEdit = () => {
+    if (editingQ && thread) releaseQueued(thread.id, editingQ.id).then((r) => setThread(r.thread), () => {})
+    endEdit()
+  }
+  const saveEdit = async (message: string, attached: Attachment[]) => {
+    if (!thread || !editingQ) return false
+    queueing.current = true
+    try {
+      setThread((await saveQueued(thread.id, editingQ.id, { text: message, attachments: attached })).thread)
+      endEdit()
+      return true
+    } catch (e) {
+      setError((e as Error).message)
+      return false
+    } finally {
+      queueing.current = false
+    }
+  }
+  const sendNow = async (q: QueuedMessage) => {
+    if (!thread) return
+    // The one being edited goes as it is in the box now.
+    if (editingQ?.id === q.id && !(await saveEdit(text.trim(), files))) return
+    sendQueuedNow(thread.id, q.id).then(
+      (r) => (setThread(r.thread), onChanged()),
+      (e: Error) => setError(e.message),
+    )
+  }
+  const removeQueue = (q: QueuedMessage) => {
+    if (!thread) return
+    if (editingQ?.id === q.id) endEdit()
+    removeQueued(thread.id, q.id).then((r) => setThread(r.thread), (e: Error) => setError(e.message))
+  }
+  // An editing window says it is still there, so the queue keeps waiting (the server lets it go on
+  // two minutes after the last word); closing the window mid-edit lets it go on straight away.
+  const editingNow = useRef<{ thread: string; id: string } | null>(null)
+  editingNow.current = editingQ && thread ? { thread: thread.id, id: editingQ.id } : null
+  useEffect(() => {
+    if (!editingQ || !thread) return
+    const t = setInterval(() => void editQueued(thread.id, editingQ.id).catch(() => {}), 60_000)
+    return () => clearInterval(t)
+  }, [editingQ?.id, thread?.id])
+  useEffect(
+    () => () => {
+      const e = editingNow.current
+      if (e) void releaseQueued(e.thread, e.id).catch(() => {})
+    },
+    [],
+  )
+  // Sent or removed from elsewhere while being edited: what was written stays in the box.
+  useEffect(() => {
+    if (editingQ && thread && !queue.some((q) => q.id === editingQ.id)) {
+      setEditingQ(null)
+      setError('That queued message was sent or removed meanwhile; what you wrote is still in the box')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue, editingQ?.id])
 
   const rename = (title: string) => {
     setRenaming(false)
@@ -1188,6 +1494,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       items.push(
         { label: 'Copy message', onSelect: () => copy(msg.content) },
         { label: 'Use as a new message', disabled: answering, onSelect: () => (setText(msg.content), input.current?.focus()) },
+        { label: 'Edit & resend…', onSelect: () => void rewindTo(msg, true) },
+        { label: 'Rewind to here…', onSelect: () => void rewindTo(msg, false) },
         { separator: true },
       )
     else if (msg?.role === 'assistant')
@@ -1225,7 +1533,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         { label: 'Quick', checked: mode === 'quick', disabled: answering, onSelect: () => setMode('quick') },
         { label: 'Deep research', checked: mode === 'deep', disabled: answering, onSelect: () => setMode('deep') },
         { separator: true },
-        answering ? { label: 'Stop', onSelect: stop } : { label: 'Send', shortcut: 'Enter', disabled: (!text.trim() && !files.length) || reading > 0, onSelect: () => void send() },
+        ...(answering ? [{ label: 'Stop', onSelect: stop }] : []),
+        { label: editingQ ? 'Save queued message' : waiting ? 'Send instead' : answering ? 'Queue' : 'Send', shortcut: 'Enter', disabled: (!text.trim() && !files.length) || reading > 0, onSelect: () => void send() },
       ]),
     )
   }
@@ -1240,6 +1549,13 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   }, [text])
 
   const answering = busy || !!thread?.running
+  // Messages left in the queue after a stop: another window (or the terminal) may send, edit or
+  // drop them, and nothing streams while the thread is at rest, so look now and then.
+  useEffect(() => {
+    if (!thread || answering || !thread.queue.length) return
+    const t = setInterval(() => void getThread(thread.id).then((r) => setThread((now) => (now?.id === r.thread.id ? r.thread : now)), () => {}), 4000)
+    return () => clearInterval(t)
+  }, [thread?.id, answering, thread?.queue.length])
   // "/name" starts a skill: the skills that fit what is typed so far.
   const slashAt = /^\/([\w.-]*)$/.exec(text)
   const slashSkills = slashAt ? skills.filter((sk) => sk.enabled && sk.name.startsWith(slashAt[1])).slice(0, 8) : []
@@ -1386,8 +1702,27 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             <p className="muted agt-empty-tools">Tools on: {tools.length ? TOOL_GROUPS.filter((g) => tools.includes(g.id)).map((g) => g.name).join(', ') : 'none, just the model'}.</p>
           </div>
         )}
-        <Messages messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} />
-        {live ? <LiveReply live={live} /> : answering && <p className="agt-wait muted">Working…</p>}
+        <Messages messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} />
+        {reconnecting ? (
+          <p className="agt-wait muted">Reconnecting… the connection dropped, or the server is restarting for an update.</p>
+        ) : live ? (
+          <LiveReply live={live} />
+        ) : (
+          answering && <p className="agt-wait muted">Working…</p>
+        )}
+        {!answering && !reconnecting && thread && messages.some((m) => m.role === 'user') && (
+          <div className={`agt-cut ${dropped || thread.interrupted ? 'is-error' : ''}`}>
+            {dropped ? <span>The connection dropped</span> : thread.interrupted && <span>{interruptionText(thread.interrupted)}</span>}
+            <button type="button" className={dropped || thread.interrupted ? 'btn btn-small' : 'agt-retry'} onClick={() => void retry()} title="Run your last message again; what the agent wrote for it goes">
+              ↻ Retry
+            </button>
+            {dropped && (
+              <button type="button" className="btn btn-small" onClick={() => (lose(), setRejoin((n) => n + 1))} title="Look for the turn again">
+                Look again
+              </button>
+            )}
+          </div>
+        )}
         {error && <p className="agt-error t-red">{error}</p>}
       </div>
 
@@ -1398,6 +1733,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           onDismiss={() => void updateThread(thread.id, { todos: null }).then((t) => (setThread(t), onChanged()), (e: Error) => setError(e.message))}
         />
       )}
+      {thread && queue.length > 0 && <QueueList queue={queue} answering={answering} editing={editingQ?.id ?? null} onEdit={(q) => void startEdit(q)} onSend={(q) => void sendNow(q)} onRemove={removeQueue} />}
       {thread && ctxOpen && <ContextPanel id={thread.id} version={messages.length} />}
       <form
         className={`agt-composer ${dragOver ? 'is-drop' : ''}`}
@@ -1453,6 +1789,16 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               ))}
             </ul>
           )}
+          {editingQ && (
+            <div className="agt-editing">
+              <span>
+                Editing queued message {queue.findIndex((q) => q.id === editingQ.id) + 1} <span className="muted">· Enter saves · Esc puts it back as it was</span>
+              </span>
+              <button type="button" className="btn btn-small" onClick={cancelEdit}>
+                Cancel
+              </button>
+            </div>
+          )}
           <textarea
             ref={input}
             value={text}
@@ -1461,6 +1807,18 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               if (e.key === 'Tab' && slashSkills.length) {
                 e.preventDefault()
                 setText(`/${slashSkills[0].name} `)
+                return
+              }
+              // Up in an empty box edits the last queued message, Esc puts an edit back.
+              if (e.key === 'ArrowUp' && !text && !files.length && !editingQ && queue.length && !e.shiftKey) {
+                e.preventDefault()
+                void startEdit(queue[queue.length - 1])
+                return
+              }
+              if (e.key === 'Escape' && editingQ) {
+                e.preventDefault()
+                e.stopPropagation()
+                cancelEdit()
                 return
               }
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -1484,7 +1842,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               }
             }}
             onContextMenu={composerMenu}
-            placeholder={mode === 'deep' ? 'What should it research?' : 'Ask anything'}
+            placeholder={editingQ ? 'The queued message' : waiting ? 'Tell it what to do instead…' : answering ? 'Queue a message for when it is done…' : mode === 'deep' ? 'What should it research?' : 'Ask anything'}
             rows={1}
             aria-label="Message"
           />
@@ -1508,14 +1866,29 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               <Icon name="chevron" size={12} />
             </button>
             {thread && <ContextMeter thread={thread} models={models} open={ctxOpen} onToggle={() => setCtxOpen((o) => !o)} />}
-            {answering ? (
-              <button type="button" className="agt-send is-stop" onClick={stop} aria-label="Stop" title="Stop">
+            {answering && (
+              <button type="button" className="agt-send is-stop" onClick={stop} aria-label="Stop" title="Stop (the queue waits)">
                 <Icon name="stop" size={14} />
               </button>
-            ) : (
+            )}
+            {editingQ ? (
+              <button className="agt-send has-label" disabled={(!text.trim() && !files.length) || reading > 0} title="Save the queued message (Enter)">
+                Save
+              </button>
+            ) : !answering ? (
               <button className="agt-send" disabled={(!text.trim() && !files.length) || reading > 0} aria-label="Send" title="Send (Enter; Shift+Enter for a new line)">
                 <Icon name="send" size={16} />
               </button>
+            ) : waiting ? (
+              <button className="agt-send has-label" disabled={(!text.trim() && !files.length) || reading > 0} title="Send instead (Enter): declines the changes it asks for, or answers its question, with this message">
+                <Icon name="send" size={14} /> Send instead
+              </button>
+            ) : (
+              (text.trim() || files.length > 0) && (
+                <button className="agt-send has-label" disabled={reading > 0} title="Queue (Enter): sent when it is done">
+                  <Icon name="send" size={14} /> Queue
+                </button>
+              )
             )}
           </div>
         </div>
@@ -1536,27 +1909,43 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 }
 
 /** The conversation, with each assistant step's tool calls shown as cards beside their results. */
-function Messages({ messages, answering, approvals, onDecide, onAnswer }: { messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void }) {
+function Messages({ messages, answering, approvals, onDecide, onAnswer, onRewind }: { messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void }) {
   const out: ReactNode[] = []
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i]
     if (m.role === 'user') {
       out.push(
-        <div key={m.id} className="agt-user" data-msg={m.id}>
-          {m.content && (
-            <div className="zed-preview agt-user-text">
-              <MarkdownPreview text={m.content} breaks />
-            </div>
-          )}
-          {!!m.attachments?.length && (
-            <ul className="agt-files is-sent">
-              {m.attachments.map((f, i) => (
-                <li key={i} title={f.source}>
-                  <span aria-hidden>{f.kind === 'image' ? '🖼' : '📄'}</span> {f.name}
-                </li>
-              ))}
-            </ul>
-          )}
+        <div key={m.id} className="agt-user-wrap" data-msg={m.id}>
+          <div className="agt-user">
+            {m.content && (
+              <div className="zed-preview agt-user-text">
+                <MarkdownPreview text={m.content} breaks />
+              </div>
+            )}
+            {!!m.attachments?.length && (
+              <ul className="agt-files is-sent">
+                {m.attachments.map((f, i) => (
+                  <li key={i} title={f.source}>
+                    <span aria-hidden>{f.kind === 'image' ? '🖼' : '📄'}</span> {f.name}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          {/* Under each of your messages on hover (always on touch): copy it, or go back to it. */}
+          <div className="agt-user-actions">
+            {m.content && (
+              <button type="button" onClick={() => copy(m.content)} title="Copy the message">
+                Copy
+              </button>
+            )}
+            <button type="button" onClick={() => onRewind(m, true)} title="Take the thread back to this message and edit it to send again">
+              Edit & resend
+            </button>
+            <button type="button" onClick={() => onRewind(m, false)} title="Remove this message and everything after it; it goes back into the message box">
+              Rewind to here
+            </button>
+          </div>
         </div>,
       )
       continue
@@ -2337,10 +2726,12 @@ function AnsweredForm({ tag, call, result }: { tag: string; call: ToolCall; resu
   let summary = ''
   let skipped = false
   let error = ''
+  let said = ''
   try {
-    const r = JSON.parse(result) as { summary?: string; skipped?: boolean; error?: string }
+    const r = JSON.parse(result) as { summary?: string; skipped?: boolean; error?: string; said?: string }
     summary = r.summary ?? ''
     skipped = !!r.skipped
+    said = r.said ?? ''
     error = r.error ?? ''
   } catch {
     summary = result
@@ -2352,7 +2743,7 @@ function AnsweredForm({ tag, call, result }: { tag: string; call: ToolCall; resu
           {error ? '✕' : skipped ? '–' : '✓'}
         </span>
         <span className="agt-tool-label">{toolLabel(call)}</span>
-        <span className="muted"> · {error || (skipped ? 'not answered' : 'answered')}</span>
+        <span className="muted"> · {error || (said ? `you wrote instead: ${said}` : skipped ? 'not answered' : 'answered')}</span>
       </summary>
       {summary && (
         <dl className="agt-answers">

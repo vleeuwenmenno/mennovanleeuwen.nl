@@ -8,15 +8,26 @@ import {
   createThread,
   deleteMemory,
   deleteThread,
+  editQueued,
   followThread,
+  interruptionText,
+  isDropped,
+  retryTurn,
+  rewindThread,
   getContext,
   getThread,
   listMemories,
   listProjects,
   listSkills,
   listThreads,
+  overrideTurn,
+  queueMessage,
+  releaseQueued,
+  removeQueued,
+  saveQueued,
   sendClientResult,
   sendMessage,
+  sendQueuedNow,
   setSkillEnabled,
   stopThread,
   suggestTitle,
@@ -31,6 +42,7 @@ import {
   type ModelInfo,
   type Mode,
   type Permission,
+  type QueuedMessage,
   type Skill,
   type Thread,
   type ToolCall,
@@ -104,6 +116,8 @@ const SLASH: [string, string][] = [
   ['/status', 'account, model, folder, mode'],
   ['/export', 'save the thread as Markdown'],
   ['/copy', 'copy the last reply'],
+  ['/retry', 'run your last message again (also ctrl+r)'],
+  ['/rewind', 'go back to one of your messages and edit it'],
   ['/open', 'open the thread in the Agents app'],
   ['/exit', 'leave (also Ctrl+D, Ctrl+C twice)'],
 ]
@@ -127,7 +141,10 @@ export class Session {
   private approvals: Approval[] = []
   private asked: Asked[] = []
   private modal: Modal | null = null
-  private queue: string[] = []
+  /** A queued message being edited in the prompt (the queue waits meanwhile), and what the prompt held before. */
+  private editingQ: { id: string; stash: string; renewed: number } | null = null
+  /** Typing in the prompt while the agent waits on you: the approval or form stays closed until it is sent or esc. */
+  private overriding = false
   private shellContext: string[] = []
   private echo: string | null = null
   private verbose = false
@@ -167,6 +184,14 @@ export class Session {
       this.timer = setInterval(() => {
         this.tick++
         if (this.turn || this.liveCalls.length) this.draw()
+        // Every few seconds at rest with messages queued: another window may send or change them.
+        if (this.tick % 33 === 0) this.lookAtQueue()
+        // An edit says it is still going, so the server keeps the queue waiting.
+        const ed = this.editingQ
+        if (ed && this.thread && Date.now() - ed.renewed > 60_000) {
+          ed.renewed = Date.now()
+          void editQueued(this.thread.id, ed.id).catch(() => {})
+        }
       }, 120)
       agentModels()
         .then((m) => ((this.models = m), this.draw()))
@@ -185,6 +210,7 @@ export class Session {
     this.closed = true
     this.follow?.abort()
     if (this.timer) clearInterval(this.timer)
+    if (this.editingQ && this.thread) void releaseQueued(this.thread.id, this.editingQ.id).catch(() => {})
     this.ctx.onKey(null)
     this.ctx.onResize?.(null)
     this.ctx.live(null)
@@ -248,6 +274,7 @@ export class Session {
       }
     })
     this.out(out)
+    this.showInterrupted()
   }
 
   private loadSkills() {
@@ -276,7 +303,11 @@ export class Session {
       if (this.showTodos && this.thread?.todos.length) L.push(...todoLines(this.thread.todos, w))
       L.push([])
     }
-    for (const q of this.queue) L.push(...userLines(q, w).map((l, i) => (i === 0 ? [...l, seg('  (queued)', 'muted')] : l)))
+    this.queue().forEach((q, n) => {
+      const files = q.attachments.length ? ` +${q.attachments.length} file${q.attachments.length === 1 ? '' : 's'}` : ''
+      const state = this.editingQ?.id === q.id ? '  (editing)' : q.editing ? '  (queued, editing elsewhere)' : `  (queued${this.turn ? '' : ', waiting'} ${n + 1})`
+      L.push(...userLines(q.text || q.attachments.map((a) => a.name).join(', '), w).slice(0, 3).map((l, i) => (i === 0 ? [...l, seg(`${files}${state}`, this.editingQ?.id === q.id ? 'accent' : 'muted')] : l)))
+    })
     if (this.modal) L.push(...this.drawModal(w))
     else L.push(...this.drawPrompt(w), ...this.drawFooter(w))
     this.ctx.live(toMarkup(L), { hideInput: true })
@@ -296,7 +327,7 @@ export class Session {
     const lead = this.shellMode() ? '! ' : this.memoryMode() ? '# ' : '> '
     const body: Line[] = []
     if (!text) {
-      const hint = this.turn ? 'Type to queue a message for when it is done' : this.workdir ? 'Ask about this folder, or ask for a change' : 'Ask anything'
+      const hint = this.editingQ ? 'The queued message (empty: ctrl+x removes it)' : this.overriding ? 'Tell it what to do instead' : this.turn ? 'Type to queue a message for when it is done' : this.workdir ? 'Ask about this folder, or ask for a change' : 'Ask anything'
       body.push([seg(lead, 'muted'), seg(' ', 'inverse'), seg(hint, 'muted')])
     } else {
       // Rows of the text, hard-wrapped, with the cursor drawn as an inverse cell.
@@ -320,7 +351,9 @@ export class Session {
         pos += ln.length + 1
       })
     }
-    return [...box(body, w, { color }), ...this.drawCompletions(w)]
+    const n = this.editingQ ? this.queue().findIndex((q) => q.id === this.editingQ!.id) + 1 : 0
+    const framed = this.editingQ ? box(body, w, { color: 'accent', title: `editing queued message ${n}` }) : this.overriding ? box(body, w, { color: 'yellow', title: `tell it what to do instead of ${this.waitingOn()}` }) : box(body, w, { color })
+    return [...framed, ...this.drawCompletions(w)]
   }
 
   /** What Tab would put in: slash commands and skills, or files after @. */
@@ -371,6 +404,9 @@ export class Session {
     if (this.ctrlC && Date.now() - this.ctrlC < 2000) left = [seg('  Press Ctrl+C again to exit', 'yellow')]
     else if (this.esc && Date.now() - this.esc < 1500 && this.editor.text) left = [seg('  Press Esc again to clear', 'yellow')]
     else if (this.notice) left = [seg(`  ${this.notice}`, 'muted')]
+    else if (this.editingQ) left = [seg('  enter saves · esc puts it back · ctrl+enter sends it now · ctrl+x removes it', 'accent')]
+    else if (this.overriding) left = [seg('  enter sends it instead · esc goes back', 'yellow')]
+    else if (this.queue().length && !this.editor.text) left = [seg(`  ${this.turn ? '' : `${this.queue().length} waiting · `}↑ edits the last · ctrl+enter sends ${this.turn ? 'the next now' : 'the next'} · ctrl+x removes the last`, 'muted')]
     else if (this.permission === 'acceptEdits') left = [seg('  ⏵⏵ accept edits on', 'magenta'), seg(' (shift+tab to cycle)', 'muted')]
     else if (this.permission === 'plan') left = [seg('  ⏸ plan mode on', 'cyan'), seg(' (shift+tab to cycle)', 'muted')]
     else if (this.shellMode()) left = [seg('  ! shell mode: runs in msh, the output goes along with your next message', 'magenta')]
@@ -391,7 +427,11 @@ export class Session {
     const bw = Math.min(w, 100)
     if (m.kind === 'help') {
       const keys: [string, string][] = [
-        ['enter', 'send'],
+        ['enter', 'send; while it works: queue it for when it is done'],
+        ['enter while it asks you something', 'send it instead: declines the changes, answers the form'],
+        ['↑ in an empty prompt', 'edit the last queued message'],
+        ['ctrl+enter', 'send the next queued message now (stops the agent)'],
+        ['ctrl+x', 'remove the last queued message'],
         ['shift+enter, alt+enter, \\ enter', 'new line'],
         ['esc', 'stop the agent; twice: clear the prompt'],
         ['shift+tab', 'cycle: ask for changes, accept edits, plan'],
@@ -400,6 +440,7 @@ export class Session {
         ['@', 'add a file (tab completes)'],
         ['ctrl+o', 'show thinking and full tool output'],
         ['ctrl+t', 'show or hide the plan'],
+        ['ctrl+r', 'retry: run your last message again'],
         ['ctrl+l', 'clear the screen'],
         ['ctrl+c twice, ctrl+d', 'leave'],
       ]
@@ -489,6 +530,7 @@ export class Session {
     } else {
       body.push([seg(spec.question, 'bold')])
       spec.options.forEach((o, i) => body.push([seg(i === m.sel ? '❯ ' : '  ', 'accent'), seg(`${i + 1}. ${o.label}`, i === m.sel ? 'accent' : undefined), ...(o.hint ? [seg(` (${o.hint})`, 'muted')] : [])]))
+      body.push([], [seg(`or just type to tell it what to do instead${this.approvals.length + this.asked.length > 1 ? ` (answers all ${this.approvals.length + this.asked.length} waiting)` : ''}`, 'muted')])
     }
     return box(body, w, { color: 'yellow', title: spec.title })
   }
@@ -517,6 +559,7 @@ export class Session {
       return true
     }
     const spec = this.approvalSpec(m.a, this.w())
+    if ((k.length === 1 && !/^[0-9 ]$/.test(k)) || k === 'Text' || k === 'Paste') return this.startOverride(k.length === 1 ? k : (text ?? '')), true
     if (k === 'ArrowUp' || k === '^P') m.sel = (m.sel - 1 + spec.options.length) % spec.options.length
     else if (k === 'ArrowDown' || k === '^N' || k === 'Tab') m.sel = (m.sel + 1) % spec.options.length
     else if (k === 'Enter') spec.options[m.sel].run()
@@ -601,7 +644,8 @@ export class Session {
         body.push(input())
     }
     if (m.error) body.push([], [seg(m.error, 'red')])
-    const hint = q.type === 'info' ? 'enter to go on · esc closes the form' : q.type === 'multi' ? 'space to tick · enter to go on · esc closes the form' : q.type === 'scale' ? '←→ to choose · enter to go on · esc closes the form' : q.type === 'choice' || q.type === 'confirm' ? '↑↓ to choose · enter to go on · esc closes the form' : `enter to go on${q.multiline ? ' · shift+enter new line' : ''} · esc closes the form`
+    const typing = ['text', 'number', 'date'].includes(q.type) || m.other
+    const hint = (typing ? '' : 'type to tell it something else instead · ') + (q.type === 'info' ? 'enter to go on · esc closes the form' : q.type === 'multi' ? 'space to tick · enter to go on · esc closes the form' : q.type === 'scale' ? '←→ to choose · enter to go on · esc closes the form' : q.type === 'choice' || q.type === 'confirm' ? '↑↓ to choose · enter to go on · esc closes the form' : `enter to go on${q.multiline ? ' · shift+enter new line' : ''} · esc closes the form`)
     body.push([], [seg(hint, 'muted')])
     return box(body, w, { color: 'cyan', title: form.title })
   }
@@ -618,6 +662,8 @@ export class Session {
     }
     if (k === '^C') return this.ctrlCKey(), true
     if (k === 'Enter') return this.formNext(m), true
+    // A letter where the question takes none: a message instead of the answers.
+    if (!typing && ((k.length === 1 && !/^[0-9 yn]$/.test(k)) || k === 'Text' || k === 'Paste')) return this.startOverride(k.length === 1 ? k : (text ?? '')), true
     if (typing) {
       if (k === 'Backspace') m.text = m.text.slice(0, -1)
       else if (k === 'Paste' || k === 'Text') m.text += text ?? ''
@@ -713,7 +759,7 @@ export class Session {
 
   /** Opens the next thing waiting for the user: a change to allow, then a form. */
   private next() {
-    if (this.modal) return this.draw()
+    if (this.modal || this.overriding) return this.draw()
     const a = this.approvals[0]
     if (a) this.modal = { kind: 'approval', a, sel: 0, feedback: null }
     else if (this.asked[0]) this.openForm(this.asked[0])
@@ -818,8 +864,22 @@ export class Session {
         break
       case 'ArrowUp':
       case '^P':
-        e.up()
+        // Up in an empty prompt edits the last queued message, as in Claude Code.
+        if (k === 'ArrowUp' && !e.text && !this.editingQ && !this.overriding && this.queue().length) void this.editQueued(this.queue()[this.queue().length - 1])
+        else e.up()
         break
+      case '^X': {
+        const q = this.editingQ ? this.queue().find((x) => x.id === this.editingQ!.id) : !e.text ? this.queue()[this.queue().length - 1] : undefined
+        if (!q) return false
+        void this.removeQueued(q)
+        break
+      }
+      case '^Enter': {
+        const q = this.editingQ ? this.queue().find((x) => x.id === this.editingQ!.id) : this.queue()[0]
+        if (!q) return false
+        void this.sendNow(q)
+        break
+      }
       case 'ArrowDown':
       case '^N':
         e.down()
@@ -833,7 +893,13 @@ export class Session {
         this.pick = 0
         break
       case 'Escape':
-        if (this.turn) void this.interrupt()
+        if (this.editingQ) this.cancelEdit()
+        else if (this.overriding) {
+          // Back to what it asked.
+          this.overriding = false
+          e.clear()
+          this.next()
+        } else if (this.turn) void this.interrupt()
         else if (e.text && this.esc && Date.now() - this.esc < 1500) {
           e.clear()
           this.esc = 0
@@ -855,6 +921,10 @@ export class Session {
         break
       case '^T':
         this.showTodos = !this.showTodos
+        break
+      case '^R':
+        if (this.turn || !this.thread) return false
+        void this.retry()
         break
       case 'Tab':
         break
@@ -923,6 +993,7 @@ export class Session {
   private async submit() {
     const raw = this.editor.expanded()
     const text = raw.trim()
+    if (this.editingQ) return this.saveEdit(text)
     if (!text) return
     this.editor.remember(this.editor.text)
     this.editor.clear()
@@ -938,12 +1009,151 @@ export class Session {
       const handled = await this.slash(cmd.toLowerCase(), rest.join(' ').trim(), text)
       if (handled) return
     }
-    if (this.turn) {
-      this.queue.push(text)
-      this.draw()
-      return
-    }
+    // While it asks you something, a message answers it instead; while it works, it is queued.
+    if (this.thread && (this.overriding || this.waitingOn())) return this.sayInstead(text)
+    if (this.turn && this.thread) return this.enqueue(text)
+    if (this.turn) return this.say('One moment: the thread is still being made', 'yellow')
     await this.send(text)
+  }
+
+  // --- the queue (kept by the server, sent one by one when a turn is done) -----------------------
+
+  private queue(): QueuedMessage[] {
+    return this.thread?.queue ?? []
+  }
+
+  /** What the agent waits on you for, in a few words ('' when nothing). */
+  private waitingOn(): string {
+    const n = this.approvals.length
+    const forms = this.asked.length
+    return [n ? (n === 1 ? 'the change it asks for' : `the ${n} changes it asks for`) : '', forms ? (forms === 1 ? 'its question' : 'its questions') : ''].filter(Boolean).join(' and ')
+  }
+
+  /** A letter typed in an approval or a form: the prompt takes it, to tell the agent what to do instead. */
+  private startOverride(text: string) {
+    this.modal = null
+    this.overriding = true
+    this.editor.insert(text.replace(/\s+/g, ' '))
+    this.draw()
+  }
+
+  private async sayInstead(text: string) {
+    this.overriding = false
+    const thread = this.thread!
+    let files: Attachment[] = []
+    try {
+      files = await this.attachments(text)
+    } catch {
+      /* said already */
+    }
+    // Shown first: the turn goes on as soon as the server has it, and its output follows this.
+    this.out([...userLines(text, this.w()).map((l, i) => (i === 0 ? [...l, seg('  (instead)', 'muted')] : l)), []])
+    try {
+      const r = await overrideTurn(thread.id, text, files)
+      this.thread = r.thread
+      if (r.queued) this.say('It was no longer waiting on you, so this is queued for when it is done')
+    } catch (e) {
+      this.say(`Could not send that: ${(e as Error).message}`, 'red')
+    }
+    this.next()
+  }
+
+  private async enqueue(text: string) {
+    let files: Attachment[] = []
+    try {
+      files = await this.attachments(text)
+    } catch {
+      /* said already */
+    }
+    try {
+      this.thread = (await queueMessage(this.thread!.id, text, files)).thread
+    } catch (e) {
+      this.say(`Could not queue that: ${(e as Error).message}`, 'red')
+    }
+    this.draw()
+  }
+
+  /** Takes a queued message into the prompt to edit; the queue waits until it is saved or put back. */
+  private async editQueued(q: QueuedMessage) {
+    if (!this.thread) return
+    try {
+      const r = await editQueued(this.thread.id, q.id)
+      this.thread = r.thread
+      this.editingQ = { id: q.id, stash: this.editor.text, renewed: Date.now() }
+      this.editor.set(r.item.text)
+    } catch (e) {
+      this.say(`Could not edit it: ${(e as Error).message}`, 'red')
+    }
+    this.draw()
+  }
+
+  /** Back to what the prompt held before the edit. */
+  private endEdit() {
+    if (!this.editingQ) return
+    this.editor.set(this.editingQ.stash)
+    this.editingQ = null
+  }
+
+  private cancelEdit() {
+    if (this.editingQ && this.thread) void releaseQueued(this.thread.id, this.editingQ.id).then((r) => ((this.thread = r.thread), this.draw()), () => {})
+    this.endEdit()
+    this.draw()
+  }
+
+  /** Saves the edited message in its place (its files stay); true when saved. */
+  private async saveEdit(text: string): Promise<boolean> {
+    if (!this.editingQ || !this.thread) return false
+    if (!text) return this.say('Nothing left to send: ctrl+x removes it', 'yellow'), false
+    try {
+      this.thread = (await saveQueued(this.thread.id, this.editingQ.id, { text })).thread
+      this.endEdit()
+      return true
+    } catch (e) {
+      this.say(`Could not save it: ${(e as Error).message}`, 'red')
+      return false
+    } finally {
+      this.draw()
+    }
+  }
+
+  private async removeQueued(q: QueuedMessage) {
+    if (!this.thread) return
+    if (this.editingQ?.id === q.id) this.endEdit()
+    try {
+      this.thread = (await removeQueued(this.thread.id, q.id)).thread
+      this.notice = 'Removed from the queue'
+    } catch (e) {
+      this.say(`Could not remove it: ${(e as Error).message}`, 'red')
+    }
+    this.draw()
+  }
+
+  /** Send now: stops the agent if it works and sends this one next (while it asks something, this answers it). */
+  private async sendNow(q: QueuedMessage) {
+    if (!this.thread) return
+    if (this.editingQ?.id === q.id && !(await this.saveEdit(this.editor.expanded().trim()))) return
+    try {
+      this.thread = (await sendQueuedNow(this.thread.id, q.id)).thread
+    } catch (e) {
+      return this.say(`Could not send it: ${(e as Error).message}`, 'red')
+    }
+    // Sent from a thread at rest: the server answers it, and this follows along.
+    if (!this.turn && this.thread.running) void this.followTurn()
+    this.draw()
+  }
+
+  /** At rest with messages queued: another window may have sent, changed or started them. */
+  private lookAtQueue() {
+    if (this.turn || this.closed || !this.thread?.queue.length) return
+    void getThread(this.thread.id).then(
+      (r) => {
+        if (this.turn || this.closed || r.thread.id !== this.thread?.id) return
+        this.thread = r.thread
+        if (r.thread.running) void this.followTurn()
+        else this.draw()
+      },
+      () => {},
+    )
   }
 
   /** The folder @files and ! commands start from: the work folder when it is mounted, else where agents was started. */
@@ -991,23 +1201,132 @@ export class Session {
     const ctl = new AbortController()
     this.turn = { ctl, started: Date.now(), content: '', thinking: '', chars: 0, verb: VERBS[Math.floor(Math.random() * VERBS.length)] }
     this.draw()
+    let dropped = false
     try {
       const thread = await this.ensureThread()
       await sendMessage(thread.id, text, files, (e) => this.onEvent(e), ctl.signal, { terminal: true })
     } catch (e) {
-      if (!ctl.signal.aborted) this.say(`Error: ${(e as Error).message}`, 'red')
+      if (ctl.signal.aborted) {
+        /* stopped */
+      } else if (isDropped(e) && this.thread) dropped = this.dropTurn()
+      else this.say(`Error: ${(e as Error).message}`, 'red')
     } finally {
       this.endTurn()
     }
+    if (dropped) void this.reconnect()
+  }
+
+  /** The stream broke: what was being written is not the answer (the server has it, or lost it). */
+  private dropTurn(): true {
+    if (this.turn) (this.turn.content = ''), (this.turn.thinking = '')
+    this.notice = null
+    return true
+  }
+
+  /**
+   * After a dropped stream: finds the thread again (the server may be restarting for an update),
+   * trying for a minute, a little slower each time. Still running: follow it; ended meanwhile:
+   * show what came, and how it ended.
+   */
+  private async reconnect() {
+    if (!this.thread || this.closed) return
+    const id = this.thread.id
+    this.say('The connection dropped · reconnecting (the server may be restarting)…', 'yellow')
+    const start = Date.now()
+    for (let wait = 1000; !this.closed && Date.now() - start < 60_000; wait = Math.min(wait * 2, 5000)) {
+      try {
+        const r = await getThread(id)
+        if (this.thread?.id !== id || this.turn) return
+        if (r.thread.running) return void this.followTurn()
+        this.onEvent({ type: 'snapshot', thread: r.thread, messages: r.messages, pending: r.pending, live: null })
+        this.showInterrupted()
+        return
+      } catch {
+        await new Promise((ok) => setTimeout(ok, wait))
+      }
+    }
+    if (!this.closed) this.say('The connection dropped and the server did not come back · /retry (ctrl+r) runs your last message again', 'red')
+  }
+
+  /** How the last turn was cut short, when it was, with the way to run it again. */
+  private showInterrupted() {
+    const cut = this.thread?.interrupted
+    if (cut && !this.thread?.running) this.say(`${interruptionText(cut)} · ctrl+r or /retry runs it again`, cut.reason === 'stopped' ? 'yellow' : 'red')
+  }
+
+  /** Retry: the last turn again; what the agent wrote for it goes, and your message is answered anew. */
+  private async retry() {
+    if (!this.thread) return this.say('Nothing to retry yet')
+    if (this.turn) return this.say('Wait for the agent to finish (esc stops it)', 'yellow')
+    const last = [...this.messages].reverse().find((m) => m.role === 'user')
+    if (!last) return this.say('Nothing to retry yet')
+    this.say('Retrying your last message')
+    // The server sends the message again: it shows again, under what went before.
+    this.echo = null
+    const ctl = new AbortController()
+    this.turn = { ctl, started: Date.now(), content: '', thinking: '', chars: 0, verb: VERBS[Math.floor(Math.random() * VERBS.length)] }
+    this.messages = this.messages.filter((m) => m.id < last.id)
+    this.draw()
+    let dropped = false
+    try {
+      await retryTurn(this.thread.id, (e) => this.onEvent(e), ctl.signal, { terminal: true })
+    } catch (e) {
+      if (ctl.signal.aborted) {
+        /* stopped */
+      } else if (isDropped(e)) dropped = this.dropTurn()
+      else this.say(`Error: ${(e as Error).message}`, 'red')
+    } finally {
+      this.endTurn()
+    }
+    if (dropped) void this.reconnect()
+  }
+
+  /** /rewind: pick one of your messages; it and everything after it go, and it comes back to edit. */
+  private async rewindPick() {
+    if (!this.thread) return this.say('Nothing to rewind yet')
+    const mine = this.messages.filter((m) => m.role === 'user')
+    if (!mine.length) return this.say('Nothing to rewind yet')
+    const items = mine
+      .map((m) => ({ value: String(m.id), label: (m.content.split('\n')[0] || (m.attachments ?? []).map((a) => a.name).join(', ')).slice(0, 80), hint: `${this.messages.filter((x) => x.id > m.id).length} after it` }))
+      .reverse()
+    const picked = await this.choose('Rewind to which message? It and everything after it go', items)
+    if (!picked) return
+    const id = Number(picked[0])
+    const after = this.messages.filter((x) => x.id > id).length
+    const sure = await this.choose(`Remove it and the ${after} after it?${this.turn ? ' The agent is stopped first.' : ''}`, [
+      { value: 'yes', label: 'Yes, rewind', hint: 'it comes back into the prompt to edit' },
+      { value: 'no', label: 'No' },
+      { value: 'info', label: 'Not undone: memories, the plan, notes, calendar events, and files changed in the work folder' },
+    ])
+    if (sure?.[0] !== 'yes') return
+    try {
+      if (this.turn) {
+        this.turn.content = ''
+        this.turn.ctl.abort()
+        this.follow?.abort()
+      }
+      const r = await rewindThread(this.thread.id, id)
+      this.thread = r.thread
+      this.messages = this.messages.filter((m) => m.id < id)
+      // The screen shows the thread as it is now.
+      this.ctx.clear()
+      this.welcome()
+      this.history()
+      this.say(`Rewound: ${r.removed} ${r.removed === 1 ? 'message' : 'messages'} removed. Not undone: memories, the plan, notes, calendar events and work folder files.`)
+      this.editor.set(r.message.text)
+      if (r.message.attachments.length) this.say(`Its ${r.message.attachments.length} attached ${r.message.attachments.length === 1 ? 'file is' : 'files are'} not brought back here: @ them again`, 'yellow')
+    } catch (e) {
+      this.say(`Could not rewind: ${(e as Error).message}`, 'red')
+    }
+    this.draw()
   }
 
   private endTurn() {
     if (this.turn?.content.trim()) this.out([...assistantLines(this.turn.content, this.w()), []])
     this.turn = null
     this.liveCalls = []
+    this.overriding = false
     this.draw()
-    const next = this.queue.shift()
-    if (next && !this.closed) void this.send(next)
   }
 
   private async interrupt() {
@@ -1019,8 +1338,9 @@ export class Session {
     this.modal = null
     this.approvals = []
     this.asked = []
-    this.queue = []
-    this.say('Interrupted · What should the agent do instead?', 'yellow')
+    this.overriding = false
+    // The queue stays (on the server) for you to send, edit or drop.
+    this.say(`Interrupted · What should the agent do instead?${this.queue().length ? ` (${this.queue().length} queued: ctrl+enter sends the next)` : ''}`, 'yellow')
   }
 
   /** Joins a turn that is running already (resumed while it works). */
@@ -1030,14 +1350,19 @@ export class Session {
     this.follow = ctl
     this.turn = { ctl, started: Date.now(), content: '', thinking: '', chars: 0, verb: VERBS[0] }
     this.draw()
+    let dropped = false
     try {
       await followThread(this.thread.id, (e) => this.onEvent(e), ctl.signal, { terminal: true })
     } catch (e) {
-      if (!ctl.signal.aborted) this.say(`Error: ${(e as Error).message}`, 'red')
+      if (ctl.signal.aborted) {
+        /* stopped */
+      } else if (isDropped(e)) dropped = this.dropTurn()
+      else this.say(`Error: ${(e as Error).message}`, 'red')
     } finally {
       this.follow = null
       this.endTurn()
     }
+    if (dropped) void this.reconnect()
   }
 
   private onEvent(e: TurnEvent) {
@@ -1078,7 +1403,17 @@ export class Session {
         break
       case 'message':
         this.messages.push(e.message)
+        // The next queued message, answered on the same stream: a new turn.
+        if (e.message.role === 'user' && this.turn) this.turn.started = Date.now()
         this.showMessage(e.message)
+        break
+      case 'queue':
+        if (this.thread) this.thread = { ...this.thread, queue: e.queue }
+        if (this.editingQ && !e.queue.some((q) => q.id === this.editingQ!.id)) {
+          this.editingQ = null
+          this.notice = 'That queued message was sent or removed meanwhile; what you wrote is still here'
+        }
+        this.draw()
         break
       case 'thread': {
         const before = this.thread
@@ -1116,7 +1451,7 @@ export class Session {
         void this.runClient(e.callId, e.messageId, e.index, e.call)
         break
       case 'error':
-        this.out([...wrap([seg(`Error: ${e.error}`, 'red')], w, [seg('  ⎿  ', 'muted')], [seg('     ')]), []])
+        this.out([...wrap([seg(`Error: ${e.error}`, 'red'), seg(' · ctrl+r or /retry runs it again', 'muted')], w, [seg('  ⎿  ', 'muted')], [seg('     ')]), []])
         break
       case 'done':
         break
@@ -1478,6 +1813,12 @@ export class Session {
         }
         return true
       }
+      case '/retry':
+        await this.retry()
+        return true
+      case '/rewind':
+        await this.rewindPick()
+        return true
       case '/copy': {
         const last = [...this.messages].reverse().find((m) => m.role === 'assistant' && m.content.trim())
         if (!last) return this.say('No reply to copy yet'), true
