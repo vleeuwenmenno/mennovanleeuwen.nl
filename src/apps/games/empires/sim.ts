@@ -231,7 +231,7 @@ export type SimEvent =
   | { k: 'built'; owner: Owner; unit: string; x: number; y: number }
   /** `owner` and `prev` are teams here. */
   | { k: 'beacon'; owner: number; prev: number; x: number; y: number }
-  | { k: 'survey'; owner: number; prev: number; node: number; x: number; y: number }
+  | { k: 'survey'; owner: number; prev: number; node: number; x: number; y: number; /** The platform on it was destroyed */ razed?: boolean }
   | { k: 'out'; owner: Owner }
   | { k: 'alarm'; owner: Owner; x: number; y: number; what: string }
   | { k: 'level'; owner: Owner; level: number }
@@ -1547,7 +1547,17 @@ function kill(w: World, u: Unit, by: Owner | -1) {
   w.events.push({ k: 'boom', x: u.x, y: u.y, tier: u.t.tier, owner: u.owner, size: u.t.size })
   w.players[u.owner].stats.lost++
   if (by !== -1) w.players[by].stats.killed++
-  if (u.node >= 0 && w.nodes[u.node].site === u.id) w.nodes[u.node].site = 0
+  if (u.node >= 0 && w.nodes[u.node].site === u.id) {
+    // A destroyed platform takes its claim with it: the ore is open again and has to be surveyed
+    // anew, so a lost platform can't simply be put straight back up under the attacker's guns.
+    const n = w.nodes[u.node]
+    const prev = n.owner
+    n.site = 0
+    n.owner = -1
+    n.claim = -1
+    n.progress = 0
+    if (prev !== -1) w.events.push({ k: 'survey', owner: -1, prev, node: n.id, x: n.x, y: n.y, razed: true })
+  }
   leaveWreck(w, u)
   if (u.t.tier === 'station' && !w.fleet) {
     // A player whose station falls is out; the last team with a station standing wins.
