@@ -161,6 +161,16 @@ export const useAgentSettings = settingsStore.use
 export const agentSettings = settingsStore.get
 export const setAgentSettings = (patch: Partial<AgentSettings>) => settingsStore.set((s) => ({ ...s, ...patch }))
 
+/**
+ * Whether "don't ask again" makes sense for a terminal command: never for commands that run other
+ * command lines or change files (the server asks for those anyway), nor for lines that write a file.
+ */
+const NEVER_ALWAYS = new Set(['msh', 'sh', 'bash', 'eval', 'source', '.', 'xargs', 'find', 'fd', 'sudo', 'env', 'command', 'watch', 'exec', 'rm', 'mv', 'cp', 'curl', 'wget'])
+export function canAlwaysAllow(command: string): boolean {
+  const names = command.split(/[|;&\n]/).map((p) => p.trim().split(/\s+/)[0]).filter(Boolean)
+  return !!names.length && !names.some((n) => NEVER_ALWAYS.has(n)) && !/(^|[^<>&0-9])(\d?>{1,2}|&>)\s*(?!&|\/dev\/null\b)\S/.test(command)
+}
+
 /** A skill: instructions for a kind of task, in a folder with a SKILL.md (server/skills.ts). */
 export type Skill = { name: string; description: string; source: 'builtin' | 'user' | 'project'; folder: { repo: string; path: string } | null; label: string; userOnly: boolean; enabled: boolean }
 /** Where to look for skills besides the user's and the built-in ones: a thread's work folder, or a folder. */

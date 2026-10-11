@@ -47,6 +47,7 @@ import {
   type Thread,
   type ToolCall,
   listSkills,
+  canAlwaysAllow,
   type Permission,
   type Skill,
   type Workdir,
@@ -1745,7 +1746,7 @@ function ApprovalActions({ call, decide }: { call: ToolCall; decide: (allow: boo
                 Allow all edits
               </button>
             )}
-            {call.name === 'terminal' && (
+            {call.name === 'terminal' && typeof call.arguments?.command === 'string' && canAlwaysAllow(call.arguments.command) && (
               <button className="btn btn-small" onClick={() => decide(true, { always: 'command' })} title="Commands like this one run without asking in this thread">
                 Always allow this command
               </button>

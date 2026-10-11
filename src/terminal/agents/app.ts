@@ -3,6 +3,7 @@ import {
   agentModels,
   answerApproval,
   answerForm,
+  canAlwaysAllow,
   createProject,
   createThread,
   deleteMemory,
@@ -449,7 +450,7 @@ export class Session {
           title: 'Terminal command',
           preview: [...wrap([seg(cmd, 'green')], inner, [seg('  ')]), ...(sarg('description') ? [[seg(`  ${sarg('description')}`, 'muted')]] : [])],
           question: 'Run this command?',
-          options: [{ label: 'Yes', run: allow() }, { label: `Yes, and don't ask again for ${names.slice(0, 3).join(', ') || 'these'} commands in this thread`, run: allow({ always: 'command' }) }, no],
+          options: [{ label: 'Yes', run: allow() }, ...(canAlwaysAllow(cmd) ? [{ label: `Yes, and don't ask again for ${names.slice(0, 3).join(', ') || 'these'} commands in this thread`, run: allow({ always: 'command' }) }] : []), no],
         }
       }
       case 'exit_plan_mode':

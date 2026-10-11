@@ -514,6 +514,8 @@ export function commandWords(node: Node): { name: string; args: string[]; redirs
   const out: { name: string; args: string[]; redirs: Redirect[] }[] = []
   const visit = (n: Node | null) => {
     if (!n) return
+    // A compound command's own redirects (if …; fi > file) write too.
+    if (n.t !== 'simple' && n.t !== 'group' && n.t !== 'subshell' && 'redirs' in n && n.redirs.length) out.push(...n.redirs.map((r) => ({ name: '', args: [], redirs: [r] })))
     switch (n.t) {
       case 'simple':
         out.push({ name: n.words[0] ?? '', args: n.words.slice(1), redirs: n.redirs })
@@ -546,6 +548,9 @@ export function commandWords(node: Node): { name: string; args: string[]; redirs
         break
       case 'case':
         n.arms.forEach((a) => visit(a.body))
+        break
+      case 'arith':
+        out.push({ name: '((', args: [n.expr], redirs: [] })
         break
       case 'func':
         out.push({ name: 'function', args: [n.name], redirs: [] })

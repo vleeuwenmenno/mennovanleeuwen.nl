@@ -1,3 +1,4 @@
+import { Worker } from 'node:worker_threads'
 import type { User } from './auth.ts'
 import { guardedFetch } from './egress.ts'
 import { HttpError } from './http.ts'
@@ -126,10 +127,32 @@ export async function readText(user: User, repo: string, path: string, signal: A
   const res = await guardedFetch(user, url, { signal })
   if (res.status === 404) throw new Error(`No file at that path`)
   if (!res.ok) throw new Error(`Seafile answered ${res.status}`)
-  if (Number(res.headers.get('content-length')) > 4 * 1024 * 1024) throw new Error('That file is too big to read here (over 4 MB)')
-  const bytes = Buffer.from(await res.arrayBuffer())
+  const bytes = await readBody(res, 4 * 1024 * 1024, 'That file is too big to read here (over 4 MB)')
   if (bytes.subarray(0, 8000).includes(0)) throw new Error('That is not a text file')
   return bytes.toString('utf8')
+}
+
+/** A response body, read only up to `max` bytes (whatever Content-Length says); more is an error. */
+export async function readBody(res: Response, max: number, tooBig: string): Promise<Buffer> {
+  if (Number(res.headers.get('content-length')) > max) {
+    await res.body?.cancel().catch(() => {})
+    throw new Error(tooBig)
+  }
+  if (!res.body) return Buffer.alloc(0)
+  const chunks: Uint8Array[] = []
+  let size = 0
+  const reader = res.body.getReader()
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.length
+    if (size > max) {
+      await reader.cancel().catch(() => {})
+      throw new Error(tooBig)
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks)
 }
 
 /** Makes a folder and the ones above it that are missing. */
@@ -195,41 +218,75 @@ async function walkFiles(user: User, repo: string, root: string): Promise<FileEn
   return out
 }
 
-/** A glob as a regular expression over a relative path: ** crosses folders, {a,b} picks one. */
-export function globRegExp(glob: string, ci = false): RegExp {
-  let re = ''
+/** Brace alternatives expanded: a/{b,c}.md → a/b.md, a/c.md (at most 32). */
+function braces(glob: string): string[] {
+  const m = /\{([^{}]*)\}/.exec(glob)
+  if (!m) return [glob]
+  const out = m[1].split(',').flatMap((alt) => braces(glob.slice(0, m.index) + alt + glob.slice(m.index + m[0].length)))
+  if (out.length > 32) throw new Error('That pattern has too many {…} choices')
+  return out
+}
+
+type GlobToken = { k: 'lit'; c: string } | { k: 'any' } | { k: 'star' } | { k: 'globstar' } | { k: 'globdir' } | { k: 'set'; neg: boolean; test: (c: string) => boolean }
+
+function tokens(glob: string): GlobToken[] {
+  const out: GlobToken[] = []
   for (let i = 0; i < glob.length; i++) {
     const ch = glob[i]
     if (ch === '*') {
-      if (glob[i + 1] === '*') {
+      let n = 1
+      while (glob[i + 1] === '*') (i++, n++)
+      if (n >= 2 && glob[i + 1] === '/') {
         i++
-        if (glob[i + 1] === '/') {
-          i++
-          re += '(?:.*/)?'
-        } else re += '.*'
-      } else re += '[^/]*'
-    } else if (ch === '?') re += '[^/]'
-    else if (ch === '{') {
-      const end = glob.indexOf('}', i)
-      if (end < 0) re += '\\{'
-      else {
-        re += `(?:${glob
-          .slice(i + 1, end)
-          .split(',')
-          .map((x) => x.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*'))
-          .join('|')})`
-        i = end
+        out.push({ k: 'globdir' })
+      } else out.push({ k: n >= 2 ? 'globstar' : 'star' })
+    } else if (ch === '?') out.push({ k: 'any' })
+    else if (ch === '[' && glob.indexOf(']', i + 2) > 0) {
+      const end = glob.indexOf(']', i + 2)
+      let body = glob.slice(i + 1, end)
+      const neg = body[0] === '!' || body[0] === '^'
+      if (neg) body = body.slice(1)
+      const ranges: [string, string][] = []
+      for (let k = 0; k < body.length; k++) {
+        if (body[k + 1] === '-' && k + 2 < body.length) (ranges.push([body[k], body[k + 2]]), (k += 2))
+        else ranges.push([body[k], body[k]])
       }
-    } else if (ch === '[') {
-      const end = glob.indexOf(']', i)
-      if (end < 0) re += '\\['
-      else {
-        re += `[${glob.slice(i + 1, end).replace(/^!/, '^')}]`
-        i = end
-      }
-    } else re += ch.replace(/[.+^${}()|\\]/g, '\\$&')
+      out.push({ k: 'set', neg, test: (c) => ranges.some(([a, b]) => c >= a && c <= b) !== neg })
+      i = end
+    } else out.push({ k: 'lit', c: ch === '\\' && i + 1 < glob.length ? glob[++i] : ch })
   }
-  return new RegExp(`^${re}$`, ci ? 'i' : '')
+  return out
+}
+
+/**
+ * Matches a path against a glob (** crosses folders, {a,b} picks one) without regular
+ * expressions: a table over pattern and path, so no pattern can make it take long.
+ */
+export function globMatcher(glob: string): { test: (path: string) => boolean } {
+  if (glob.length > 300) throw new Error('That pattern is too long')
+  const patterns = braces(glob).map(tokens)
+  const one = (t: GlobToken[], str: string) => {
+    const s = [...str]
+    const n = s.length
+    let next = new Array<boolean>(n + 1).fill(false)
+    next[n] = true
+    for (let i = t.length - 1; i >= 0; i--) {
+      const tok = t[i]
+      const cur = new Array<boolean>(n + 1).fill(false)
+      let later = false // globdir: some '/' at or after j with next[k+1]
+      for (let j = n; j >= 0; j--) {
+        if (tok.k === 'star') cur[j] = next[j] || (j < n && s[j] !== '/' && cur[j + 1])
+        else if (tok.k === 'globstar') cur[j] = next[j] || (j < n && cur[j + 1])
+        else if (tok.k === 'globdir') {
+          if (j < n && s[j] === '/' && next[j + 1]) later = true
+          cur[j] = next[j] || later
+        } else if (j < n) cur[j] = next[j + 1] && (tok.k === 'any' ? s[j] !== '/' : tok.k === 'lit' ? s[j] === tok.c : tok.test(s[j]))
+      }
+      next = cur
+    }
+    return next[0]
+  }
+  return { test: (path) => path.length <= 2048 && patterns.some((t) => one(t, path)) }
 }
 
 const TEXTY = /\.(md|markdown|txt|csv|tsv|json|jsonc|ya?ml|toml|ini|conf|cfg|log|xml|html?|css|scss|less|s?js|mjs|cjs|jsx|tsx?|py|rb|go|rs|java|kt|c|h|cpp|hpp|cs|php|sh|msh|bash|fish|zsh|sql|lua|swift|r|tex|env|svg|vue|svelte|astro|dart|ex|exs|erl|hs|ml|nix|tf|gradle|properties|gitignore|dockerfile|makefile)$/i
@@ -295,7 +352,7 @@ export async function runFileTool(user: User, w: Workdir, name: string, args: Re
     }
     case 'glob': {
       const root = resolveIn(w, s('path') || '.')
-      const re = globRegExp(s('pattern').replace(/^\.\//, ''))
+      const re = globMatcher(s('pattern').replace(/^\.\//, ''))
       const rel = (p: string) => p.slice(root === '/' ? 1 : root.length + 1)
       const hits = (await walkFiles(user, repo, root)).filter((f) => re.test(rel(f.path)) || (!s('pattern').includes('/') && re.test(f.path.split('/').pop()!)))
       hits.sort((a, b) => b.mtime - a.mtime)
@@ -303,16 +360,17 @@ export async function runFileTool(user: User, w: Workdir, name: string, args: Re
       return hits.slice(0, 200).map((f) => shown(w, f.path)).join('\n') + (hits.length > 200 ? `\n[${hits.length - 200} more; narrow the pattern]` : '')
     }
     case 'grep': {
-      let re: RegExp
+      const flags = args.ignore_case === true ? 'i' : ''
+      if (s('pattern').length > 1000) throw new Error('That pattern is too long')
       try {
-        re = new RegExp(s('pattern'), args.ignore_case === true ? 'i' : '')
+        new RegExp(s('pattern'), flags)
       } catch (e) {
         throw new Error(`Bad regular expression: ${(e as Error).message}`)
       }
       const target = resolveIn(w, s('path') || '.')
       const entry = await entryAt(user, repo, target)
       if (!entry) throw new Error(`Nothing at ${s('path')}`)
-      const only = s('glob') ? globRegExp(s('glob')) : null
+      const only = s('glob') ? globMatcher(s('glob')) : null
       const files = entry.dir ? (await walkFiles(user, repo, target)).filter((f) => f.size <= 1024 * 1024 && isText(f.path) && (!only || only.test(f.path.split('/').pop()!) || only.test(shown(w, f.path)))) : [{ path: target, size: entry.size, mtime: entry.mtime }]
       const ctx = Math.min(10, Math.max(0, Math.floor(Number(args.context) || 0)))
       const out: string[] = []
@@ -321,14 +379,21 @@ export async function runFileTool(user: User, w: Workdir, name: string, args: Re
       let skipped = 0
       const queue = files.slice(0, 400)
       skipped = files.length - queue.length
-      // A few files at a time from Seafile.
-      for (let i = 0; i < queue.length && hits < 200; i += 8) {
+      // The texts, a few at a time from Seafile (32 MB at most together), then matched in a worker.
+      const texts: (readonly [string, string])[] = []
+      let bytes = 0
+      for (let i = 0; i < queue.length && bytes < 32 * 1024 * 1024; i += 8) {
         const batch = await Promise.all(queue.slice(i, i + 8).map((f) => readText(user, repo, f.path, signal).then((t) => [f.path, t] as const).catch(() => null)))
-        for (const item of batch) {
-          if (!item || hits >= 200) continue
-          const [path, text] = item
+        for (const item of batch) if (item && bytes < 32 * 1024 * 1024) (texts.push(item), (bytes += item[1].length))
+      }
+      skipped += queue.length - texts.length
+      const found = await matchLines(s('pattern'), flags, texts.map(([, t]) => t), 200)
+      {
+        for (let f = 0; f < texts.length; f++) {
+          if (hits >= 200) break
+          const [path, text] = texts[f]
           const lines = text.split('\n')
-          const idx = lines.flatMap((l, n) => (re.test(l) ? [n] : []))
+          const idx = found[f]
           if (!idx.length) continue
           matched.push(shown(w, path))
           if (args.files_only === true) continue
@@ -383,6 +448,41 @@ export async function runFileTool(user: User, w: Workdir, name: string, args: Re
   throw new Error(`There is no tool called ${name}`)
 }
 
+// A pattern from the model can take exponential time (ReDoS), so lines are matched in a worker
+// that is stopped after a few seconds: the server's own thread never runs it.
+const MATCHER = `const { parentPort, workerData } = require('node:worker_threads')
+const re = new RegExp(workerData.pattern, workerData.flags)
+let total = 0
+parentPort.postMessage(workerData.texts.map((text) => {
+  const idx = []
+  const lines = text.split('\\n')
+  for (let n = 0; n < lines.length && total < workerData.max; n++) if (re.test(lines[n])) (idx.push(n), total++)
+  return idx
+}))`
+
+/** For each text, the lines (0-based) that match; fails when the pattern takes too long. */
+function matchLines(pattern: string, flags: string, texts: string[], max: number): Promise<number[][]> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(MATCHER, { eval: true, workerData: { pattern, flags, texts, max }, resourceLimits: { maxOldGenerationSizeMb: 256 } })
+    const timer = setTimeout(() => {
+      void worker.terminate()
+      reject(new Error('That pattern took too long (over 3 s): make it simpler'))
+    }, 3000)
+    worker.once('message', (m: number[][]) => {
+      clearTimeout(timer)
+      void worker.terminate()
+      resolve(m)
+    })
+    worker.once('error', (e: Error) => {
+      clearTimeout(timer)
+      reject(new Error(`grep failed: ${e.message}`))
+    })
+  })
+}
+
+/** Files that steer the agent itself: writing them always asks, even with edits allowed. */
+export const STEERING = /(^|\/)(AGENTS\.md|CLAUDE\.md|\.agents|\.claude)(\/|$)/i
+
 /** AGENTS.md (or CLAUDE.md) at the top of the work folder: the project's own instructions. */
 export async function projectInstructions(user: User, w: Workdir, signal: AbortSignal): Promise<{ name: string; text: string } | null> {
   const { entries } = await listDir(user, w.repo, w.path).catch(() => ({ entries: [] as { name: string; dir: boolean }[] }))
@@ -398,11 +498,11 @@ export async function projectInstructions(user: User, w: Workdir, signal: AbortS
 const READ_ONLY = new Set([
   'ls', 'll', 'cat', 'less', 'more', 'bat', 'head', 'tail', 'wc', 'grep', 'egrep', 'sort', 'uniq', 'tree', 'pwd', 'echo', 'printf', 'stat', 'du', 'df', 'file',
   'which', 'type', 'whoami', 'id', 'date', 'cal', 'uname', 'uptime', 'hostname', 'env', 'man', 'help', 'jq', 'sha256sum', 'sha1sum', 'sha512sum', 'md5sum', 'base64',
-  'seq', 'basename', 'dirname', 'test', '[', 'true', 'false', ':', 'cd', 'find', 'fd', 'calc', 'nproc', 'free', 'ps', 'diff', 'read', 'set', 'export', 'local',
-  'sleep', 'dig', 'host', 'nslookup', 'whois', 'findmnt', 'lsblk', 'tty', 'history', 'fastfetch', 'fortune', 'cowsay', 'figlet',
+  'seq', 'basename', 'dirname', 'test', '[', 'true', 'false', ':', 'cd', 'calc', 'nproc', 'free', 'ps', 'diff', 'read', 'set', 'export', 'local',
+  'sleep', 'findmnt', 'lsblk', 'tty', 'history', 'fastfetch', 'fortune', 'cowsay', 'figlet',
 ])
-/** Arguments that make a looking command change something. */
-const WRITING_ARGS: Record<string, RegExp> = { find: /^-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)$/, fd: /^(-x|-X|--exec|--exec-batch)$/ }
+// Not here on purpose: find and fd (-delete, -exec, fd -x in ways a word check misses), and dig,
+// host, nslookup and whois (a lookup can carry data out, past web_fetch's guard).
 
 /** Whether a command line only reads (so it can run without the user allowing it). */
 export function readOnlyCommand(line: string): boolean {
@@ -417,7 +517,8 @@ export function readOnlyCommand(line: string): boolean {
   return cmds.every((c) => {
     if (c.name === 'function') return false
     if (c.name && (!READ_ONLY.has(c.name) || /[$*?[]/.test(c.name))) return false
-    if (c.name && WRITING_ARGS[c.name] && c.args.some((a) => WRITING_ARGS[c.name].test(a))) return false
+    // Words that expand or are quoted could say anything once the shell is done with them.
+    if (c.args.some((a) => /[$`'"\\]/.test(a))) return false
     return c.redirs.every((r) => r.op === '<' || r.op === '<<' || r.op === '<<-' || ((r.op === '>&' || r.op === '<&') && /^[0-9-]$/.test(r.target)) || r.target === '/dev/null')
   })
 }

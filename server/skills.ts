@@ -1,9 +1,11 @@
-import { gunzipSync } from 'node:zlib'
+import { gunzip } from 'node:zlib'
+import { promisify } from 'node:util'
 import type { User } from './auth.ts'
 import { guardedFetch } from './egress.ts'
 import { HttpError } from './http.ts'
 import { listDir, removeItems } from './seafile.ts'
-import { readText, uploadFile, type Workdir } from './workdir.ts'
+import { readBody, readText, uploadFile, type Workdir } from './workdir.ts'
+import { onUserGone } from './db.ts'
 import { readTar } from '../src/data/tar.ts'
 import { MSH_REFERENCE } from '../src/data/mshReference.ts'
 
@@ -117,16 +119,26 @@ concrete: steps, rules, an example. Put long references in separate files.
 
 // --- reading skill folders ------------------------------------------------------------------------
 
+// Per account: what one user's Seafile answered is never shown to another. Oldest out past 200.
 const cache = new Map<string, { at: number; value: Promise<Loaded[]> }>()
 const TTL = 60_000
+const MAX_CACHED = 200
+const cacheKey = (user: User, repo: string, path: string) => `${user.id}:${repo}:${path}`
 /** Forgets what was read from a folder (after an install or a removal). */
-export const forgetFolder = (repo: string, path: string) => cache.delete(`${repo}:${path}`)
+export const forgetFolder = (user: User, repo: string, path: string) => cache.delete(cacheKey(user, repo, path))
+onUserGone((id) => {
+  for (const k of cache.keys()) if (k.startsWith(`${id}:`)) cache.delete(k)
+})
 
 /** The skills in one folder of skill folders. */
 function folderSkills(user: User, folder: Folder, source: SkillSource): Promise<Loaded[]> {
-  const key = `${folder.repo}:${folder.path}`
+  const key = cacheKey(user, folder.repo, folder.path)
   const hit = cache.get(key)
   if (hit && Date.now() - hit.at < TTL) return hit.value
+  cache.delete(key)
+  const now = Date.now()
+  for (const [k, v] of cache) if (now - v.at >= TTL) cache.delete(k)
+  while (cache.size >= MAX_CACHED) cache.delete(cache.keys().next().value!)
   const value = (async () => {
     const listing = await listDir(user, folder.repo, folder.path).catch(() => null)
     const dirs = (listing?.entries ?? []).filter((e) => e.dir && !e.name.startsWith('.')).slice(0, 60)
@@ -154,8 +166,8 @@ export type SkillPlaces = { user: Folder | null; workdir: Workdir | null; off: s
 async function loadAll(user: User, places: SkillPlaces): Promise<Loaded[]> {
   const lists: Loaded[][] = []
   if (places.fresh) {
-    if (places.user) forgetFolder(places.user.repo, places.user.path)
-    if (places.workdir) for (const sub of ['.agents/skills', '.claude/skills']) forgetFolder(places.workdir.repo, `${places.workdir.path === '/' ? '' : places.workdir.path}/${sub}`)
+    if (places.user) forgetFolder(user, places.user.repo, places.user.path)
+    if (places.workdir) for (const sub of ['.agents/skills', '.claude/skills']) forgetFolder(user, places.workdir.repo, `${places.workdir.path === '/' ? '' : places.workdir.path}/${sub}`)
   }
   if (places.workdir) {
     const base = places.workdir.path === '/' ? '' : places.workdir.path
@@ -225,21 +237,36 @@ const MAX_FILES = 500
 const MAX_BYTES = 8 * 1024 * 1024
 
 /** Installs the skills in a GitHub repository (or one folder of it) into a skills folder. */
+const unzip = promisify(gunzip)
+/** Accounts installing right now: one install at a time each. */
+const installing = new Set<number>()
+
 export async function installSkills(user: User, target: Folder, body: { source?: unknown; skill?: unknown; force?: unknown }): Promise<{ installed: { name: string; files: number; label: string }[]; from: string }> {
+  if (installing.has(user.id)) throw new HttpError(429, 'An install is already running: wait for it to finish')
+  installing.add(user.id)
+  try {
+    return await install(user, target, body)
+  } finally {
+    installing.delete(user.id)
+  }
+}
+
+async function install(user: User, target: Folder, body: { source?: unknown; skill?: unknown; force?: unknown }): Promise<{ installed: { name: string; files: number; label: string }[]; from: string }> {
   const src = parseSource(String(body.source ?? ''))
   const ref = src.ref ?? 'HEAD'
   const from = `github.com/${src.owner}/${src.repo}${src.path ? `/${src.path}` : ''}${src.ref ? `@${src.ref}` : ''}`
   const res = await guardedFetch(user, `https://codeload.github.com/${src.owner}/${src.repo}/tar.gz/${encodeURIComponent(ref)}`, { signal: AbortSignal.timeout(60_000) })
   if (res.status === 404) throw new HttpError(404, `GitHub has no ${src.owner}/${src.repo}${src.ref ? ` at ${src.ref}` : ''} (or it is private)`)
   if (!res.ok) throw new HttpError(502, `GitHub answered ${res.status}`)
-  if (Number(res.headers.get('content-length')) > MAX_DOWNLOAD) throw new HttpError(413, 'That repository is too big to install skills from (over 25 MB)')
-  const gz = Buffer.from(await res.arrayBuffer())
-  if (gz.length > MAX_DOWNLOAD) throw new HttpError(413, 'That repository is too big to install skills from (over 25 MB)')
+  const tooBig = 'That repository is too big to install skills from (over 25 MB)'
+  const gz = await readBody(res, MAX_DOWNLOAD, tooBig).catch((e: Error) => {
+    throw new HttpError(e.message === tooBig ? 413 : 502, e.message)
+  })
   let tar: Buffer
   try {
-    tar = gunzipSync(gz, { maxOutputLength: 200 * 1024 * 1024 })
-  } catch {
-    throw new HttpError(502, 'GitHub sent something that is not a gzipped tar')
+    tar = await unzip(gz, { maxOutputLength: 64 * 1024 * 1024 })
+  } catch (e) {
+    throw new HttpError((e as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE' ? 413 : 502, (e as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE' ? 'That repository unpacks to over 64 MB' : 'GitHub sent something that is not a gzipped tar')
   }
   const index = await readTar(async (a, b) => new Uint8Array(tar.subarray(a, b + 1)), tar.length, 50_000)
   // codeload puts everything in one top folder (repo-ref/).
@@ -279,7 +306,7 @@ export async function installSkills(user: User, target: Folder, body: { source?:
       await uploadFile(user, target.repo, `${base}/${p.name}/${f.rel}`, new Uint8Array(tar.subarray(f.offset, f.offset + f.size)), AbortSignal.timeout(60_000))
     }
   }
-  forgetFolder(target.repo, target.path)
+  forgetFolder(user, target.repo, target.path)
   return { installed: plan.map((p) => ({ name: p.name, files: p.files.length, label: `${target.label}/${p.name}` })), from }
 }
 
@@ -289,7 +316,7 @@ export async function removeSkill(user: User, target: Folder, name: string) {
   const s = skills.find((x) => x.name === name)
   if (!s?.folder) throw new HttpError(404, `No skill called ${name} in ${target.label}`)
   await removeItems(user, { repo: target.repo, parent: target.path, names: [s.folder.path.split('/').pop()!] })
-  forgetFolder(target.repo, target.path)
+  forgetFolder(user, target.repo, target.path)
 }
 
 /** A skills folder from a request: {repo, path, label}. */

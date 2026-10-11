@@ -12,7 +12,7 @@ import { webSearch } from './websearch.ts'
 import { notify } from './notifier.ts'
 import { AGENTS_MD } from '../src/data/agentsPrompt.ts'
 import { findSkill, folderOf, installSkills, listSkills, readSkillFile, removeSkill, skillFiles, type Folder, type Skill, type SkillPlaces } from './skills.ts'
-import { commandNames, exitPlanTool, FILE_DELETE, FILE_TOOLS, FILE_WRITES, PERMISSIONS, projectInstructions, readOnlyCommand, runFileTool, terminalTool, workdirOf, workdirTools, type Permission, type Workdir } from './workdir.ts'
+import { commandNames, exitPlanTool, FILE_DELETE, readBody, STEERING, FILE_TOOLS, FILE_WRITES, PERMISSIONS, projectInstructions, readOnlyCommand, runFileTool, terminalTool, workdirOf, workdirTools, type Permission, type Workdir } from './workdir.ts'
 
 // The Agents app: a research assistant on Ollama Cloud, for the signed-in user. Threads and their
 // messages live in SQLite; each turn runs here, on the server, calling Ollama's chat API with a
@@ -246,7 +246,14 @@ const attachTerminal = (thread: string, res: ServerResponse) => {
   })
 }
 /** Command names the user said not to ask about again, by thread (until the server restarts). */
-const allowedCommands = new Map<string, Set<string>>()
+const allowedCommands = new Map<string, { user: number; names: Set<string> }>()
+/** Commands that run other command lines, or anything at all: never "don't ask again" for these. */
+const NEVER_ALWAYS = new Set(['msh', 'sh', 'bash', 'eval', 'source', '.', 'xargs', 'find', 'fd', 'sudo', 'env', 'command', 'watch', 'exec', 'rm', 'mv', 'cp', 'curl', 'wget'])
+/** Whether a command line writes to a file through a redirect (> file, >> file, &> file). */
+const writesFile = (line: string) => /(^|[^<>&0-9])(\d?>{1,2}|&>)\s*(?!&|\/dev\/null\b)\S/.test(line)
+onUserGone((id) => {
+  for (const [thread, a] of allowedCommands) if (a.user === id) allowedCommands.delete(thread)
+})
 /** How the user answered a change: allowed or not, and what came with it. */
 type Verdict = { allow: boolean; always?: 'edits' | 'command'; feedback?: string; mode?: Permission }
 
@@ -465,6 +472,7 @@ export async function updateThread(user: User, id: string, body: { title?: strin
 export function deleteThread(user: User, id: string) {
   const row = ownThread(user, id)
   running.get(row.id)?.abort()
+  allowedCommands.delete(row.id)
   database().prepare('DELETE FROM agent_threads WHERE id = ?').run(row.id)
 }
 
@@ -1038,11 +1046,15 @@ function decide(thread: string, permission: Permission, call: ToolCall): 'run' |
     if (readOnlyCommand(line)) return 'run'
     if (permission === 'plan') return 'refuse'
     const names = commandNames(line)
-    const ok = allowedCommands.get(thread)
+    const ok = allowedCommands.get(thread)?.names
+    if (writesFile(line) || names.some((n) => NEVER_ALWAYS.has(n))) return 'ask'
     return names.length && ok && names.every((n) => ok.has(n)) ? 'run' : 'ask'
   }
   if (!changes(name)) return 'run'
   if (permission === 'plan') return 'refuse'
+  // AGENTS.md, CLAUDE.md, .agents/ and .claude/ steer later turns: a lasting injection, so always asked.
+  const paths = ['path', 'from', 'to'].map((k) => argString(call.arguments ?? {}, k)).filter(Boolean)
+  if (paths.some((p) => STEERING.test(p))) return 'ask'
   return FILE_WRITES.has(name) && permission === 'acceptEdits' ? 'run' : 'ask'
 }
 
@@ -1274,8 +1286,7 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
         const { url } = await fileLink(user, repo, absPath(argString(args, 'path')), 'download')
         const res = await guardedFetch(user, url, { signal: limit })
         if (!res.ok) throw new Error(`Seafile answered ${res.status}`)
-        if (Number(res.headers.get('content-length')) > 4 * 1024 * 1024) throw new Error('That file is too big to read here (over 4 MB)')
-        const bytes = Buffer.from(await res.arrayBuffer())
+        const bytes = await readBody(res, 4 * 1024 * 1024, 'That file is too big to read here (over 4 MB)')
         if (bytes.subarray(0, 8000).includes(0)) throw new Error('That is not a text file')
         return JSON.stringify({ content: clip(bytes.toString('utf8'), MODES[mode].pageChars * 2) })
       }
@@ -1730,9 +1741,9 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
               send({ type: 'thread', thread: current() })
             }
             if (v.always === 'command' && c.name === 'terminal') {
-              const set = allowedCommands.get(row.id) ?? new Set<string>()
-              for (const n of commandNames(argString(c.arguments ?? {}, 'command'))) set.add(n)
-              allowedCommands.set(row.id, set)
+              const entry = allowedCommands.get(row.id) ?? { user: user.id, names: new Set<string>() }
+              for (const n of commandNames(argString(c.arguments ?? {}, 'command'))) if (!NEVER_ALWAYS.has(n)) entry.names.add(n)
+              allowedCommands.set(row.id, entry)
             }
           }
           if (c.name === 'terminal') {
