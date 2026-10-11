@@ -1,5 +1,6 @@
 import { snapReserve } from './dockPrefs'
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
+import { appHere } from './cvMode'
 import { synced } from './synced'
 import { startupPrefs } from './startup'
 
@@ -392,6 +393,8 @@ export function WindowManagerProvider({
   // "Trash" is a place, not an app: it opens in Files (whose trash:// view lists trashed items).
   const open = useCallback(
     (app: AppId, props?: WinState['props']) => {
+      // A CV app asked for away from /cv (an old link, a widget): it lives on the CV page.
+      if (!appHere(app)) return location.assign(`/cv?open=${app}`)
       if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH, t: String(Date.now()) }, geometry: placement('files', state.windows.length) })
       if (ALWAYS_NEW.has(app)) return dispatch({ type: 'open', app, props: { ...props, create: String(Date.now()) }, newInstance: true, geometry: placement(app, state.windows.length) })
       dispatch({ type: 'open', app, props, geometry: placement(app, state.windows.length) })
@@ -400,6 +403,8 @@ export function WindowManagerProvider({
   )
   const openNew = useCallback(
     (app: AppId, props?: WinState['props']) => {
+      // A CV app asked for away from /cv (an old link, a widget): it lives on the CV page.
+      if (!appHere(app)) return location.assign(`/cv?open=${app}`)
       if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH }, newInstance: true, geometry: placement('files', state.windows.length) })
       dispatch({ type: 'open', app, props: ALWAYS_NEW.has(app) ? { ...props, create: String(Date.now()) } : props, newInstance: true, geometry: placement(app, state.windows.length) })
     },

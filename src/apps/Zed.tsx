@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { useWM, type WinState } from '../os/wm'
 import { fileKind, HOME, KIND_LABEL, kindOfName, lookup as siteLookup, prettyPath, type DirNode, type Node } from '../terminal/vfs'
-import { lookup, makeDir, MAX_TEXT, prepare, removePath, touchFile, transfer, walk } from '../terminal/fs'
-import { cachedDir, deleteNote, DRAG_FILES, dropOp, getClipboard, getDragged, getLibrary, isInside, isSf, libraryName, openSeafile, parseSf, readText, seafileWebUrl, setClipboard, setDragged, SF, sfPath, shareLink, transferItems, useClipboard, useDir, writeText } from '../data/seafile'
+import { lookup, makeDir, MAX_TEXT, prepare, readFileText, removePath, touchFile, transfer, walk } from '../terminal/fs'
+import { browserPathOf, canWriteFolder, deleteNoteFor, dropOpFor, inBrowser, saveText, transferPaths } from '../data/fileOps'
+import { browserFilesState, useBrowserFiles } from '../data/browserfs'
+import { notify } from '../os/notify'
+import { cachedDir, DRAG_FILES, getClipboard, getDragged, getLibrary, isInside, isSf, libraryName, openSeafile, parseSf, readText, seafileWebUrl, setClipboard, setDragged, SF, sfPath, shareLink, useClipboard, useDir, writeText } from '../data/seafile'
 import { mounts, posixOf, useMounts, whereIs } from '../data/mounts'
 import { droppedFiles, hasOsFiles, uploadFiles } from '../data/uploads'
 import { openContextMenu, type MenuItem } from '../os/ContextMenu'
@@ -17,7 +20,8 @@ import { useMediaQuery } from '../os/useMediaQuery'
 // (Ctrl+Shift+F) and file finder (Ctrl+P). Markdown opened from elsewhere starts in the preview.
 // The project panel sees the filesystem the way the terminal does, through /etc/fstab, so a
 // Seafile library on ~ or under /mnt/seafile is there to browse and edit: Ctrl+S saves back to
-// Seafile. The site's own files are read-only, except /tmp. Right-clicking the panel creates,
+// Seafile. Without Seafile as home, ~ is kept in this browser (data/browserfs.ts): editable, with
+// "Browser only" in the status bar. The site's own files are read-only, except /tmp. Right-clicking the panel creates,
 // renames, deletes, cuts, copies and pastes, and entries drag onto folders, as in Files (and the
 // clipboard and drags are the same ones Files and the desktop use). Opening another file while
 // Zed is open adds a tab to the frontmost window, as the real one does. The project is the home
@@ -63,10 +67,12 @@ function write(path: string, text: string) {
   return true
 }
 
-/** Where a file really is: its Seafile path (null for the site's own files), and whether it is read-only. */
-function locate(path: string): { sf: string | null; ro: boolean } {
+/** Where a file really is: its Seafile path (null for the site's own files), whether it is read-only, and whether it is kept in this browser. */
+function locate(path: string): { sf: string | null; ro: boolean; browser?: boolean } {
   if (isSf(path)) return { sf: path, ro: getLibrary(parseSf(path)!.repo)?.permission === 'r' }
   const w = whereIs(path)
+  // On the browser mount: writable (the site's own files there are saved as the browser's copy).
+  if (w.kind === 'browser') return { sf: null, ro: false, browser: true }
   if (w.kind === 'sf') return w.sf === SF ? { sf: null, ro: true } : { sf: w.sf, ro: w.ro }
   if (w.kind === 'missing') return { sf: null, ro: true }
   return { sf: null, ro: !/^\/tmp\/[^/]+$/.test(path) }
@@ -74,7 +80,7 @@ function locate(path: string): { sf: string | null; ro: boolean } {
 
 /** Whether files and folders can be made and removed in a folder: /tmp, or Seafile you may write to. */
 function canWriteIn(dir: string) {
-  if (dir === '/tmp') return true
+  if (dir === '/tmp' || canWriteFolder(dir)) return true
   const w = whereIs(dir)
   return w.kind === 'sf' && w.sf !== SF && !w.ro && cachedDir(w.sf)?.listing?.perm !== 'r'
 }
@@ -88,15 +94,17 @@ function isMount(path: string) {
 
 const canChange = (path: string) => path !== '/' && !isMount(path) && canWriteIn(parentOf(path))
 
-/** The Seafile path to cut, copy or drag for an entry: Seafile files and folders only. */
+/** The path to cut, copy or drag for an entry: Seafile files and folders, and what is kept in this browser. */
 function clipOf(path: string) {
-  const sf = locate(path).sf
-  return sf && !isMount(path) ? sf : null
+  if (isMount(path)) return null
+  if (inBrowser(path)) return path
+  return locate(path).sf
 }
 
-const sfParentOf = (sf: string) => {
-  const at = parseSf(sf)!
-  return sfPath(at.repo, at.p.split('/').slice(0, -1).join('/') || '/')
+/** The folder a clipboard or drag path is in: a Seafile folder, or a folder of the filesystem. */
+const sfParentOf = (p: string) => {
+  const at = parseSf(p)
+  return at ? sfPath(at.repo, at.p.split('/').slice(0, -1).join('/') || '/') : p.replace(/\/[^/]*$/, '') || '/'
 }
 
 /** A path handed to Zed from elsewhere: Seafile paths by where they are mounted, and the site's own files where they are now. */
@@ -133,6 +141,19 @@ export function Zed({ win }: { win: WinState }) {
   const [root, setRoot] = useState(() => win.props.root ?? HOME)
   const [tabs, setTabs] = useState<string[]>([])
   const [buffers, setBuffers] = useState<Record<string, Buffer>>({})
+  // Tabs opened again at boot may have been read before this browser's files (or the account)
+  // loaded: once they are in, read the untouched ones again from where they really are.
+  useBrowserFiles()
+  const storeReady = browserFilesState() === 'ready'
+  useEffect(() => {
+    if (!storeReady) return
+    for (const t of tabs) {
+      const b = buffers[t]
+      if (!locate(t).browser || !b || b.loading || b.text !== b.saved) continue
+      void readFileText(t).then((r) => r && setBuffers((now) => (now[t] && now[t].text === now[t].saved ? { ...now, [t]: { text: r.text, saved: r.text } } : now)))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeReady])
   const [views, setViews] = useState<Record<string, View>>({})
   const [active, setActive] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([root]))
@@ -210,8 +231,9 @@ export function Zed({ win }: { win: WinState }) {
   const openFile = (raw: string, at?: Omit<Jump, 'path'>) => {
     const path = normalize(raw)
     setTabs((ts) => (ts.includes(path) ? ts : [...ts, path]))
-    const { sf } = locate(path)
+    const { sf, browser } = locate(path)
     if (sf) loadSeafile(path, sf)
+    else if (browser) loadBrowser(path)
     else setBuffers((bs) => (bs[path] ? bs : { ...bs, [path]: { text: read(path), saved: read(path) } }))
     setActive(path)
     setCursor({ line: at?.line ?? 0, col: at?.col ?? 0 })
@@ -229,6 +251,15 @@ export function Zed({ win }: { win: WinState }) {
     setBuffers((bs) => ({ ...bs, [path]: { text: '', saved: '', loading: true } }))
     readText(sf)
       .then((t) => setBuffers((now) => ({ ...now, [path]: { text: t, saved: t } })))
+      .catch((e: Error) => setBuffers((now) => ({ ...now, [path]: { text: '', saved: '', error: `Could not open it: ${e.message}` } })))
+  }
+
+  /** A file kept in this browser: big or binary ones are read from IndexedDB, not from memory. */
+  const loadBrowser = (path: string) => {
+    if (buffers[path] && !buffers[path].error) return
+    setBuffers((bs) => ({ ...bs, [path]: { text: '', saved: '', loading: true } }))
+    readFileText(path)
+      .then((r) => setBuffers((now) => ({ ...now, [path]: { text: r?.text ?? '', saved: r?.text ?? '' } })))
       .catch((e: Error) => setBuffers((now) => ({ ...now, [path]: { text: '', saved: '', error: `Could not open it: ${e.message}` } })))
   }
 
@@ -360,7 +391,21 @@ export function Zed({ win }: { win: WinState }) {
         .catch((e: Error) => setStatus(`Not saved: ${e.message}`))
       return
     }
-    if (!write(active, buf.text)) return setStatus('Read-only file system. Only /tmp and Seafile are writable.')
+    if (locate(active).browser) {
+      if (buf.loading || buf.error) return
+      const path = active
+      const text = buf.text
+      saveText(path, text)
+        .then(() => {
+          setBuffers((bs) => (bs[path] ? { ...bs, [path]: { ...bs[path], saved: text } } : bs))
+          setStatus(`Saved ${prettyPath(path)} in this browser`)
+          // Once per device: where it went, and what that means.
+          notify({ title: 'Saved in this browser only', body: "Files in ~ are kept in this browser until Seafile is set up: clearing the site's data deletes them.", action: { app: 'settings', props: { section: 'integrations', sub: 'seafile' } }, once: 'browser-files-first-save', transient: true })
+        })
+        .catch((e: Error) => setStatus(`Not saved: ${e.message}`))
+      return
+    }
+    if (!write(active, buf.text)) return setStatus('Read-only file system. Only /tmp, ~ and Seafile are writable.')
     setBuffers((bs) => ({ ...bs, [active]: { ...bs[active], saved: bs[active].text } }))
     setStatus(`Saved ${prettyPath(active)}`)
   }
@@ -433,7 +478,7 @@ export function Zed({ win }: { win: WinState }) {
     const name = base(path)
     const { sf } = locate(path)
     const unsaved = tabs.some((t) => inside(t, path) && buffers[t] && buffers[t].text !== buffers[t].saved)
-    const note = sf ? await deleteNote([sf]) : { final: true, body: 'It was only ever in memory.' }
+    const note = sf ? await deleteNoteFor([sf]) : inBrowser(path) ? await deleteNoteFor([path]) : { final: true, body: 'It was only ever in memory.' }
     const body = unsaved ? `${note.body} Changes not saved in its open tabs are lost too.` : note.body
     if (!(await ask({ title: note.final ? `Delete ${name} for good?` : `Delete ${name}?`, body, confirm: 'Delete', danger: true }))) return
     setStatus(`Deleting ${name}…`)
@@ -454,22 +499,23 @@ export function Zed({ win }: { win: WinState }) {
     setStatus(op === 'move' ? `Cut ${base(path)}: paste it into a folder with Ctrl+V` : `Copied ${base(path)}`)
   }
 
-  /** The Seafile folder the clipboard can be pasted into, or null. */
+  /** The folder the clipboard can be pasted into (a Seafile path, or a folder kept in this browser), or null. */
   const pasteInto = (dir: string) => {
     const c = getClipboard()
     const w = whereIs(dir)
-    if (!c || w.kind !== 'sf' || !canWriteIn(dir) || isInside(c.paths, w.sf)) return null
-    if (c.op === 'move' && c.paths.every((p) => sfParentOf(p) === w.sf)) return null
-    return w.sf
+    const target = w.kind === 'sf' ? w.sf : w.kind === 'browser' ? dir : null
+    if (!c || !target || !canWriteIn(dir) || isInside(c.paths, target)) return null
+    if (c.op === 'move' && c.paths.every((p) => sfParentOf(p) === target)) return null
+    return target
   }
 
   /** Moves or copies Seafile paths into a folder of the panel; open tabs follow what moved. */
   const carry = async (op: 'move' | 'copy', paths: string[], dir: string, into: string) => {
     const what = paths.length === 1 ? base(paths[0]) : `${paths.length} items`
-    const moved = op === 'move' ? paths.map((p) => [posixOf(p), join(dir, base(p))] as const) : []
+    const moved = op === 'move' ? paths.map((p) => [isSf(p) ? posixOf(p) : p, join(dir, base(p))] as const) : []
     setStatus(`${op === 'move' ? 'Moving' : 'Copying'} ${what}…`)
     try {
-      await transferItems(op, paths, into)
+      await transferPaths(op, paths, into)
       for (const [from, to] of moved) if (from) rekey(from, to)
       setStatus(`${op === 'move' ? 'Moved' : 'Copied'} ${what} to ${prettyPath(dir)}`)
       return true
@@ -582,14 +628,15 @@ export function Zed({ win }: { win: WinState }) {
       e.preventDefault()
       e.dataTransfer.dropEffect = effect
       if (dropOn !== dir) setDropOn(dir)
-      return w.kind === 'sf' ? w.sf : null
+      return target
     }
-    if (w.kind !== 'sf' || !canWriteIn(dir)) return null
+    const target = w.kind === 'sf' ? w.sf : w.kind === 'browser' ? dir : null
+    if (!target || !canWriteIn(dir)) return null
     if (!getDragged() && hasOsFiles(e.dataTransfer)) return ok('copy')
     const paths = getDragged()
-    if (!paths || !e.dataTransfer.types.includes(DRAG_FILES) || isInside(paths, w.sf)) return null
-    const op = dropOp(paths, w.sf, e)
-    if (op === 'move' && paths.every((p) => sfParentOf(p) === w.sf)) return null
+    if (!paths || !e.dataTransfer.types.includes(DRAG_FILES) || isInside(paths, target)) return null
+    const op = dropOpFor(paths, target, e)
+    if (op === 'move' && paths.every((p) => sfParentOf(p) === target)) return null
     return ok(op)
   }
   const dropInto = (e: DragEvent, dir: string) => {
@@ -603,7 +650,7 @@ export function Zed({ win }: { win: WinState }) {
       return
     }
     const paths = getDragged()!
-    const op = dropOp(paths, into, e)
+    const op = dropOpFor(paths, into, e)
     dragEnd()
     void carry(op, paths, dir, into)
   }
@@ -990,6 +1037,11 @@ export function Zed({ win }: { win: WinState }) {
           </svg>
         </button>
         <span className="zed-status-msg">{status ?? (buf && active ? `${where(active)}${buf.text !== buf.saved ? ' •' : ''}` : prettyPath(root))}</span>
+        {active && browserPathOf(active) !== null && (
+          <span className="zed-status-browser" title="Kept in this browser only: clearing the site's data deletes it. Set up Seafile in Settings → Integrations to keep files for good.">
+            Browser only
+          </span>
+        )}
         <span className="spacer" />
         {buf && active && (
           <>
@@ -1038,6 +1090,7 @@ const indent = (depth: number) => 8 + depth * 12
 
 /** A folder of the project panel, through the mounts: Seafile folders are listed when opened. */
 function Tree({ dir, depth, ctx }: { dir: string; depth: number; ctx: TreeCtx }) {
+  useBrowserFiles() // the terminal or Files may change what is kept in this browser
   const open = ctx.open.has(dir)
   const w = whereIs(dir)
   const sf = w.kind === 'sf' && w.sf !== SF ? w.sf : null

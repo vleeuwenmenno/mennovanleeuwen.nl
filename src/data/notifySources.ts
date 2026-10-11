@@ -1,4 +1,4 @@
-// What can notify, and the owner's choices about it, shared by the browser (src/os/notifyPrefs.ts,
+// What can notify, and each user's choices about it, shared by the browser (src/os/notifyPrefs.ts,
 // Settings → Notifications) and the server's notification hub (server/notifier.ts), so Settings
 // always lists exactly what the server can send. Every notification names its source as
 // "app.kind". No DOM or Node APIs here: both runtimes import it.
@@ -10,7 +10,7 @@ export type NotifySource = {
   /** The app whose icon stands for it (an AppId), or none */
   icon: string | null
   /** Only signed-in accounts get these (they come from the account's own data) */
-  owner?: boolean
+  account?: boolean
   kinds: NotifyKind[]
 }
 
@@ -19,13 +19,13 @@ export const NOTIFY_SOURCES: NotifySource[] = [
     app: 'agents',
     label: 'Agents',
     icon: 'agents',
-    owner: true,
+    account: true,
     kinds: [
       { id: 'answer', label: 'Answers', hint: 'An answer comes in while its thread is not on screen' },
       { id: 'ask', label: 'Needs you', hint: 'It waits for you to allow something or answer its questions' },
     ],
   },
-  { app: 'calendar', label: 'Calendar', icon: 'calendar', owner: true, kinds: [{ id: 'reminder', label: 'Reminders', hint: 'An event is about to start' }] },
+  { app: 'calendar', label: 'Calendar', icon: 'calendar', account: true, kinds: [{ id: 'reminder', label: 'Reminders', hint: 'An event is about to start' }] },
   {
     app: 'minecraft',
     label: 'Minecraft server',
@@ -54,13 +54,21 @@ export const NOTIFY_SOURCES: NotifySource[] = [
     app: 'files',
     label: 'Files',
     icon: 'files',
-    owner: true,
+    account: true,
     kinds: [
       { id: 'uploads', label: 'Uploads', hint: 'Uploads to Seafile finish or fail' },
       { id: 'unpacking', label: 'Unpacking', hint: 'An archive is unpacked, stopped or fails' },
     ],
   },
-  { app: 'system', label: 'MvL OS', icon: null, kinds: [{ id: 'update', label: 'Updates', hint: 'A new version is ready to restart into' }] },
+  {
+    app: 'system',
+    label: 'MvL OS',
+    icon: null,
+    kinds: [
+      { id: 'update', label: 'Updates', hint: 'A new version is ready to restart into' },
+      { id: 'storage', label: 'File storage', hint: 'Your files are only kept in this browser (it stays in the notification center until Seafile is set up)' },
+    ],
+  },
 ]
 
 /** A source as notifications name it: "app.kind". */

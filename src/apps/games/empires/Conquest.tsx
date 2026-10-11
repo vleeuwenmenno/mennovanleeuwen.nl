@@ -1489,7 +1489,8 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
         size={size}
         onLook={(x, y) => {
           camGoal.current = null
-          setCam(fix({ ...camRef.current, x, y }))
+          zoomTo.current = null
+          moveCam(fix({ ...camRef.current, x, y }))
         }}
         onWhole={flyOut}
         onCapital={() => {

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { User } from './auth.ts'
 import type { EventInput } from './calendars.ts'
-import { database, decrypt, encrypt } from './db.ts'
+import { database, decrypt, encrypt, onUserGone } from './db.ts'
+import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
 import { HttpError } from './http.ts'
 
 // CalDAV calendars (Fastmail, Nextcloud, iCloud, Radicale...) for the Agenda widget, the clock and
@@ -14,7 +15,8 @@ import { HttpError } from './http.ts'
 // iCalendar library: the few elements and properties needed are read and written directly.
 
 export type CaldavInfo = { id: number; label: string; url: string; username: string }
-type Account = CaldavInfo & { password: string }
+/** `user` is who linked it: the server only reaches public addresses for them (server/egress.ts). */
+type Account = CaldavInfo & { password: string; user: User }
 type Calendar = { href: string; name: string; color: string; writable: boolean }
 export type CaldavAttendee = { email: string; name?: string; status?: 'accepted' | 'declined' | 'tentative' | 'needs-action'; organizer?: boolean }
 export type CaldavEvent = {
@@ -48,7 +50,7 @@ export function listCaldav(user: User): CaldavInfo[] {
 
 function accounts(user: User): Account[] {
   const rows = database().prepare('SELECT id, label, base_url, username, password FROM caldav WHERE user_id = ? ORDER BY id').all(user.id) as unknown as Row[]
-  return rows.map((r) => ({ id: r.id, label: r.label, url: r.base_url, username: r.username, password: decrypt(r.password) }))
+  return rows.map((r) => ({ id: r.id, label: r.label, url: r.base_url, username: r.username, password: decrypt(r.password), user }))
 }
 
 /** Finds the account's calendars (proving the URL and password work), then stores it. */
@@ -57,7 +59,7 @@ export async function addCaldav(user: User, body: { url?: string; username?: str
   const username = body.username?.trim()
   const password = body.password?.trim()
   if (!username || !password) throw new HttpError(400, 'Username and app password are required')
-  const account: Account = { id: 0, label: '', url, username, password }
+  const account: Account = { id: 0, label: '', url, username, password, user }
   const found = await discover(account).catch((e: Error) => {
     throw new HttpError(400, e.message)
   })
@@ -97,13 +99,12 @@ function normalizeUrl(input: string): string {
 // WebDAV
 
 async function request(account: Account, method: string, url: string, init: { headers?: Record<string, string>; body?: string } = {}): Promise<Response> {
-  const res = await fetch(url, {
+  const res = await guardedFetch(account.user, url, {
     method,
     headers: { Authorization: `Basic ${Buffer.from(`${account.username}:${account.password}`).toString('base64')}`, 'User-Agent': 'mvlos', ...init.headers },
     body: init.body,
-    redirect: 'follow',
     signal: AbortSignal.timeout(12_000),
-  }).catch(() => null)
+  }).catch((e) => (rethrowEgress(e), null))
   if (!res) throw new HttpError(502, `${new URL(url).host} did not answer`)
   return res
 }
@@ -112,7 +113,7 @@ async function dav(account: Account, method: 'PROPFIND' | 'REPORT', url: string,
   const res = await request(account, method, url, { headers: { Depth: depth, 'Content-Type': 'application/xml; charset=utf-8' }, body })
   if (res.status === 401 || res.status === 403) throw new Error(`${new URL(url).host} refused the username or app password`)
   if (res.status !== 207 && !res.ok) throw new Error(`${new URL(url).host} answered ${res.status}`)
-  return res.text()
+  return (await readCapped(res, 16 * 1024 * 1024)).toString('utf8')
 }
 
 const unescapeXml = (s: string) =>
@@ -158,6 +159,7 @@ async function discover(account: Account): Promise<Calendar[]> {
   for (const start of [account.url, new URL('/.well-known/caldav', account.url).href]) {
     const xml = await dav(account, 'PROPFIND', start, '0', `<d:propfind ${D}><d:prop><d:current-user-principal/></d:prop></d:propfind>`).catch((e: Error) => {
       if (/refused/.test(e.message)) throw e
+      rethrowEgress(e)
       return null
     })
     const href = xml && hrefIn(xml, 'current-user-principal')
@@ -444,6 +446,10 @@ export const clearCaldavCache = (user: User) => {
   for (const k of cache.keys()) if (k.startsWith(`${user.id}|`)) cache.delete(k)
 }
 
+onUserGone((id) => {
+  for (const k of cache.keys()) if (k.startsWith(`${id}|`)) cache.delete(k)
+})
+
 export type CaldavCalendar = { id: string; account: number; href: string; name: string; color: string; writable: boolean }
 
 /** Every calendar of every CalDAV account (ids are "caldav:<account>:<href>"), and what went wrong
@@ -662,7 +668,7 @@ function refused(res: Response, url: string): never {
 async function getObject(account: Account, url: string): Promise<{ ics: Ics; etag: string | null }> {
   const res = await request(account, 'GET', url, { headers: { Accept: 'text/calendar' } })
   if (!res.ok) refused(res, url)
-  return { ics: parseIcs(await res.text()), etag: res.headers.get('etag') }
+  return { ics: parseIcs((await readCapped(res, 4 * 1024 * 1024)).toString('utf8')), etag: res.headers.get('etag') }
 }
 
 /** Writes an object: `etag` it must still have, or 'new' for one that must not exist yet. */

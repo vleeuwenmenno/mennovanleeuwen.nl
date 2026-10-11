@@ -1,5 +1,6 @@
 import { addLauncher, getLaunchers, useLaunchers } from '../data/launchers'
 import { signedIn, useAccount } from './account'
+import { appHere } from './cvMode'
 import { synced } from './synced'
 import type { AppId } from './wm'
 
@@ -12,10 +13,11 @@ import type { AppId } from './wm'
 
 export type DockId = AppId | `launcher:${string}`
 
-export const DEFAULT_DOCK: AppId[] = ['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'notes', 'notebook', 'contact']
+// The CV apps are only there at /cv (src/os/cvMode.ts).
+export const DEFAULT_DOCK: AppId[] = (['terminal', 'files', 'zed', 'projects', 'recents', 'cv', 'games', 'notes', 'notebook', 'contact'] as AppId[]).filter(appHere)
 
 /** Apps that can sit on the dock: not Trash (always last), not windows that need a file or note. */
-const DOCKABLE = new Set<AppId>([...DEFAULT_DOCK, 'keys', 'settings', 'calendar', 'agents', 'preview', 'player', 'amp', 'newdoc', 'newsheet', 'newslides'])
+const DOCKABLE = new Set<AppId>(([...DEFAULT_DOCK, 'keys', 'settings', 'calendar', 'agents', 'preview', 'player', 'amp', 'newdoc', 'newsheet', 'newslides'] as AppId[]).filter(appHere))
 
 type DockState = { order: DockId[]; removed: AppId[] } | null
 

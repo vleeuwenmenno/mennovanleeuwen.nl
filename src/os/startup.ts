@@ -7,7 +7,7 @@ import { synced } from './synced'
 export type StartWindows = 'last' | 'welcome' | 'empty'
 export const START_WINDOWS: [StartWindows, string, string][] = [
   ['last', 'Last windows', 'The windows that were open, where they were'],
-  ['welcome', 'Welcome windows', 'The terminal, notes and CV, as on a first visit'],
+  ['welcome', 'Welcome windows', 'The terminal and notes (and the CV, on /cv), as on a first visit'],
   ['empty', 'Empty desktop', 'No windows; open what you need from the dock or Spotlight'],
 ]
 

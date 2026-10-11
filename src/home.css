@@ -1450,6 +1450,89 @@ textarea.agt-q-input {
 .agt-crumb::after {
   content: ' ›';
 }
+/* The work folder and the permission mode, as chips in the thread's toolbar. */
+.agt-chip {
+  flex: 0 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 34%;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.agt-chip:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+.agt-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agt-chip.is-on {
+  color: var(--text);
+}
+.agt-chip.is-acceptEdits {
+  color: var(--magenta, var(--accent));
+  border-color: color-mix(in srgb, var(--magenta, var(--accent)) 50%, transparent);
+}
+.agt-chip.is-plan {
+  color: var(--cyan, var(--accent));
+  border-color: color-mix(in srgb, var(--cyan, var(--accent)) 50%, transparent);
+}
+.agt-diff span {
+  display: block;
+  white-space: pre-wrap;
+}
+.agt-ask-feedback {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+.agt-plan {
+  margin: 6px 0;
+}
+/* Skills offered while typing /name in the message box. */
+.agt-slash {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+  max-height: 12em;
+  overflow-y: auto;
+}
+.agt-slash button {
+  display: block;
+  width: 100%;
+  padding: 3px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.agt-slash button:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
 
 /* The memory: a tree of categories, each memory a row to edit or forget. */
 .agt-scroll.agt-memory-view {
@@ -3804,4 +3887,98 @@ button.cal-day.is-picked:not(.is-today) {
 .set-row-text > .set-row-wrap {
   white-space: normal;
   overflow: visible;
+}
+
+/* Settings → Users (admins, src/apps/UsersSettings.tsx) */
+.usr-avatar {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.usr-avatar.is-blank {
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--line);
+}
+.set-row-text strong .set-badge {
+  margin-left: 6px;
+  vertical-align: 1px;
+  font-weight: normal;
+}
+.set-badge.usr-banned {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 50%, transparent);
+}
+.usr-search {
+  width: 100%;
+  margin-bottom: 8px;
+}
+.usr-cap {
+  flex: none;
+}
+.usr-cap input {
+  width: 6em;
+}
+.usr-ban {
+  flex: 1;
+}
+
+/* Settings: what needs you, under your name (src/os/alerts.ts), and the count on a pane */
+.set-alerts {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+}
+.set-alerts button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, var(--red) 40%, transparent);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: var(--fg-bright);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.set-alerts li + li button {
+  border-top: 0;
+}
+.set-alerts button:hover {
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+}
+.set-alert-dot {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--red);
+}
+.set-alert-text {
+  flex: 1;
+  min-width: 0;
+}
+.set-nav-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--red);
 }

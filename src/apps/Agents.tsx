@@ -46,9 +46,17 @@ import {
   type TurnEvent,
   type Thread,
   type ToolCall,
+  listSkills,
+  canAlwaysAllow,
+  type Permission,
+  type Skill,
+  type Workdir,
 } from '../data/agents'
+import { diffLines } from '../terminal/agents/diff'
+import { posixOf } from '../data/mounts'
+import { prettyPath } from '../terminal/vfs'
 import { DRAG_FILES, fileLink as seafileLink, getDragged, libraryName, parseSf } from '../data/seafile'
-import { pickFiles } from '../os/FolderPicker'
+import { pickFiles, pickFolder } from '../os/FolderPicker'
 import { Select } from '../os/Select'
 import { signIn, useAccount } from '../os/account'
 import { fieldMenu, linkAt, linkMenu, openContextMenu, openMenuAt, selectionIn, tidyMenu, type MenuItem } from '../os/ContextMenu'
@@ -75,7 +83,7 @@ export function Agents({ win }: { win: WinState }) {
   if (account.status !== 'user')
     return (
       <div className="nb-blank">
-        <p className="muted">Agents is the owner's research assistant.</p>
+        <p className="muted">Agents is a research assistant for signed-in users.</p>
         {account.status === 'anon' && (
           <button className="btn btn-primary" onClick={signIn}>
             Sign in with GitHub
@@ -95,7 +103,7 @@ export function Agents({ win }: { win: WinState }) {
   return <AgentsApp win={win} />
 }
 
-/** What the main pane shows: a conversation, the settings, or the memory (the owner's or a project's). */
+/** What the main pane shows: a conversation, the settings, or the memory (the user's or a project's). */
 type Main = { kind: 'thread' } | { kind: 'settings' } | { kind: 'memory'; scope: number | null }
 type Drag = { kind: 'project'; id: number } | { kind: 'thread'; id: string } | null
 
@@ -666,7 +674,7 @@ function catTree(list: Memory[]): CatNode {
 const countIn = (n: CatNode): number => n.items.length + n.children.reduce((s, c) => s + countIn(c), 0)
 
 /**
- * The memory, in the main pane: the owner's or one project's, as a tree of categories. Memories can
+ * The memory, in the main pane: the user's or one project's, as a tree of categories. Memories can
  * be added, edited (text, category, which memory they belong to) and forgotten.
  */
 function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null; projects: Project[]; onScope: (scope: number | null) => void; onBack: () => void }) {
@@ -791,10 +799,10 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
 function MemoryForm({ memory, scope, projects, categories, onSave, onCancel }: { memory?: Memory; scope: number | null; projects: Project[]; categories: string[]; onSave: (input: { text: string; category: string; projectId: number | null }) => void; onCancel: () => void }) {
   const [text, setText] = useState(memory?.text ?? '')
   const [category, setCategory] = useState(memory?.category ?? '')
-  const [owner, setOwner] = useState<string>(scope === null ? 'user' : `p${scope}`)
+  const [whose, setWhose] = useState<string>(scope === null ? 'user' : `p${scope}`)
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (text.trim()) onSave({ text: text.trim(), category, projectId: owner === 'user' ? null : Number(owner.slice(1)) })
+    if (text.trim()) onSave({ text: text.trim(), category, projectId: whose === 'user' ? null : Number(whose.slice(1)) })
   }
   const close = categories.filter((c) => c.toLowerCase().startsWith(category.toLowerCase()) && c !== category).slice(0, 6)
   return (
@@ -802,7 +810,7 @@ function MemoryForm({ memory, scope, projects, categories, onSave, onCancel }: {
       <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="One fact, in a sentence" rows={2} autoFocus aria-label="Memory" />
       <div className="agt-mem-form-row">
         <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Category, like People/Friends" aria-label="Category" spellCheck={false} />
-        <Select value={owner} onChange={(v) => setOwner(String(v))} aria-label="Whose memory" options={[{ value: 'user', label: 'You' }, ...projects.map((p) => ({ value: `p${p.id}`, label: p.name }))]} />
+        <Select value={whose} onChange={(v) => setWhose(String(v))} aria-label="Whose memory" options={[{ value: 'user', label: 'You' }, ...projects.map((p) => ({ value: `p${p.id}`, label: p.name }))]} />
         <button type="button" className="btn btn-small" onClick={onCancel}>
           Cancel
         </button>
@@ -892,6 +900,9 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const account = useAccount()
   const pcFiles = useRef<HTMLInputElement>(null)
   const [draftModel, setDraftModel] = useState<string | null>(null)
+  const [draftWorkdir, setDraftWorkdir] = useState<Workdir | null>(null)
+  const [draftPermission, setDraftPermission] = useState<Permission>('default')
+  const [skills, setSkills] = useState<Skill[]>([])
   const [text, setText] = useState('')
   const [live, setLive] = useState<Live | null>(null)
   const [busy, setBusy] = useState(false)
@@ -931,9 +942,10 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       setApprovals(e.pending)
       setLive(e.live)
     } else if (e.type === 'delta') setLive((l) => ({ content: (l?.content ?? '') + (e.content ?? ''), thinking: (l?.thinking ?? '') + (e.thinking ?? '') }))
-    else if (e.type === 'approval') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'approval' }])
+    else if (e.type === 'approval') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'approval', call: e.call }])
+    else if (e.type === 'client') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'client', call: e.call }])
     else if (e.type === 'question') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'question', form: e.form }])
-    else if (e.type === 'answered' || e.type === 'approved') setApprovals((a) => a.filter((x) => x.callId !== e.callId))
+    else if (e.type === 'answered' || e.type === 'approved' || e.type === 'clientDone') setApprovals((a) => a.filter((x) => x.callId !== e.callId))
     else if (e.type === 'message') {
       setMessages((ms) => [...ms, e.message])
       // The agent changed the Notebook on the server: fetch it now rather than at the next sync.
@@ -993,6 +1005,40 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     else setDraftModel(name)
   }
 
+  // The work folder (a Seafile folder its file tools work in) and how changes are allowed.
+  const workdir = thread ? thread.workdir : draftWorkdir
+  const permission = thread ? thread.permission : draftPermission
+  const setWorkdir = (w: Workdir | null) => {
+    if (thread) updateThread(thread.id, { workdir: w }).then((t) => (setThread(t), onChanged()), (e: Error) => setError(e.message))
+    else {
+      setDraftWorkdir(w)
+      if (w && !draftTools.includes('files')) setDraftTools((t) => [...t, 'files'])
+    }
+  }
+  const setPermission = (p: Permission) => {
+    if (thread) updateThread(thread.id, { permission: p }).then((t) => (setThread(t), onChanged()), (e: Error) => setError(e.message))
+    else setDraftPermission(p)
+  }
+  const chooseFolder = async () => {
+    const sf = await pickFolder({ title: 'Work folder', start: null })
+    const at = sf ? parseSf(sf) : null
+    if (!sf || !at) return
+    const posix = posixOf(sf)
+    setWorkdir({ repo: at.repo, path: at.p || '/', label: posix ? prettyPath(posix) : `${libraryName(at.repo)}${at.p === '/' ? '' : at.p}` })
+  }
+  const folderMenu = (e: React.MouseEvent) =>
+    openMenuAt(e.currentTarget, [
+      { label: 'Choose a folder…', hint: 'In Seafile: the agent reads, searches and edits files there', disabled: !account.seafile, onSelect: () => void chooseFolder() },
+      { label: 'No work folder', checked: !workdir, onSelect: () => setWorkdir(null) },
+    ])
+  const permissionMenu = (e: React.MouseEvent) =>
+    openMenuAt(e.currentTarget, (['default', 'acceptEdits', 'plan'] as Permission[]).map((p) => ({ label: PERMISSION_LABEL[p], hint: PERMISSION_HELP[p], checked: permission === p, onSelect: () => setPermission(p) })))
+  useEffect(() => {
+    if (!account.seafile && !thread) return
+    listSkills(thread ? { thread: thread.id } : { folder: workdir }).then(setSkills, () => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thread?.id, workdir?.repo, workdir?.path])
+
   // A ref, not `busy`: two sends in one render (a double Enter, a re-run effect) must not both go.
   const sending = useRef(false)
   const send = async (asked?: string) => {
@@ -1006,7 +1052,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     let target = thread
     try {
       if (!target) {
-        target = await createThread({ mode: draftMode, tools: draftTools, projectId: draftProject, ...(draftModel ? { model: draftModel } : {}) })
+        target = await createThread({ mode: draftMode, tools: draftTools, projectId: draftProject, workdir: draftWorkdir, permission: draftPermission, ...(draftModel ? { model: draftModel } : {}) })
         streamed.current = target.id
         setThread(target)
         onCreated(target)
@@ -1043,10 +1089,10 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const decide = (callId: string, allow: boolean) => {
+  const decide = (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => {
     if (!thread) return
     setApprovals((a) => a.filter((x) => x.callId !== callId))
-    answerApproval(thread.id, callId, allow).catch((e: Error) => setError(e.message))
+    answerApproval(thread.id, callId, allow, extra).catch((e: Error) => setError(e.message))
   }
   const respond = (callId: string, answers: Record<string, unknown> | null) => {
     if (!thread) return
@@ -1169,6 +1215,9 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   }, [text])
 
   const answering = busy || !!thread?.running
+  // "/name" starts a skill: the skills that fit what is typed so far.
+  const slashAt = /^\/([\w.-]*)$/.exec(text)
+  const slashSkills = slashAt ? skills.filter((sk) => sk.enabled && sk.name.startsWith(slashAt[1])).slice(0, 8) : []
   const projectName = projects.find((p) => p.id === (thread ? thread.projectId : draftProject))?.name ?? null
   const modelOptions = models.length ? models : model ? [{ name: model, thinking: false, vision: false, contextLength: null }] : []
   const tools = thread?.tools ?? draftTools
@@ -1185,9 +1234,9 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     openMenuAt(e.currentTarget, [
       ...TOOL_GROUPS.map((g) => ({
         label: g.name,
-        hint: g.detail,
         checked: tools.includes(g.id),
-        disabled: g.seafile && !account.seafile,
+        disabled: (g.seafile && !account.seafile) || (g.id === 'files' && !workdir) || g.id === 'terminal',
+        hint: g.id === 'files' && !workdir ? 'Choose a work folder first (the folder button above)' : g.id === 'terminal' ? 'Only from the agents command in the terminal' : g.detail,
         onSelect: () => toggleTool(g.id),
       })),
       { separator: true },
@@ -1263,6 +1312,14 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           </button>
         )}
         <span className="nb-spacer" />
+        {(account.seafile || workdir) && (
+          <button className={`agt-chip ${workdir ? 'is-on' : ''}`} onClick={folderMenu} disabled={answering} title={workdir ? `Work folder: ${workdir.label}` : 'Give it a folder to work in'}>
+            <Icon name="folder" size={13} /> <span className="agt-chip-label">{workdir ? workdir.label : 'No folder'}</span>
+          </button>
+        )}
+        <button className={`agt-chip is-${permission}`} onClick={permissionMenu} title={PERMISSION_HELP[permission]}>
+          {PERMISSION_LABEL[permission]}
+        </button>
         {thread && (
           <button
             className="agt-icon"
@@ -1346,11 +1403,34 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               {reading > 0 && <li className="muted">Reading {reading}…</li>}
             </ul>
           )}
+          {slashSkills.length > 0 && (
+            <ul className="agt-slash" aria-label="Skills">
+              {slashSkills.map((sk) => (
+                <li key={sk.name}>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setText(`/${sk.name} `)
+                      input.current?.focus()
+                    }}
+                  >
+                    <b>/{sk.name}</b> <span className="muted">{sk.description}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           <textarea
             ref={input}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
+              if (e.key === 'Tab' && slashSkills.length) {
+                e.preventDefault()
+                setText(`/${slashSkills[0].name} `)
+                return
+              }
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault()
                 // Ctrl+Enter always sends, also from inside a code block.
@@ -1416,7 +1496,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 }
 
 /** The conversation, with each assistant step's tool calls shown as cards beside their results. */
-function Messages({ messages, answering, approvals, onDecide, onAnswer }: { messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void }) {
+function Messages({ messages, answering, approvals, onDecide, onAnswer }: { messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void }) {
   const out: ReactNode[] = []
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i]
@@ -1460,7 +1540,7 @@ function Messages({ messages, answering, approvals, onDecide, onAnswer }: { mess
           const wait = approvals.find((a) => a.messageId === m.id && a.index === j)
           if (wait?.kind === 'question' && wait.form) return <QuestionForm key={wait.callId} form={wait.form} onAnswer={(answers) => onAnswer(wait.callId, answers)} />
           if (c.name === 'ask_user' && results[j]) return <AnsweredForm key={j} tag={`${m.id}:${j}`} call={c} result={results[j].content} />
-          return <ToolCard key={j} tag={`${m.id}:${j}`} call={c} result={results[j]?.content} pending={!results[j] && answering} approval={wait?.kind === 'approval' ? (allow) => onDecide(wait.callId, allow) : undefined} />
+          return <ToolCard key={j} tag={`${m.id}:${j}`} call={c} result={results[j]?.content} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />
         })}
       </Fragment>,
     )
@@ -1533,7 +1613,7 @@ function codeBlockEnter(el: HTMLTextAreaElement): boolean {
 type SearchHit = { title: string; url: string; snippet?: string }
 
 /** One tool call: what it did in a line, and when opened, what it was given and what came back. */
-function ToolCard({ tag, call, result, pending, approval }: { tag: string; call: ToolCall; result?: string; pending: boolean; approval?: (allow: boolean) => void }) {
+function ToolCard({ tag, call, result, pending, approval, inTerminal }: { tag: string; call: ToolCall; result?: string; pending: boolean; approval?: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; inTerminal?: boolean }) {
   let parsed: unknown = null
   try {
     parsed = result ? JSON.parse(result) : null
@@ -1559,14 +1639,8 @@ function ToolCard({ tag, call, result, pending, approval }: { tag: string; call:
             <pre className="agt-tool-body agt-ask-url">{call.arguments.url.slice(0, 2000)}</pre>
           </>
         )}
-        <div className="agt-ask-actions">
-          <button className="btn btn-small btn-primary" onClick={() => approval(true)}>
-            Allow
-          </button>
-          <button className="btn btn-small" onClick={() => approval(false)}>
-            Decline
-          </button>
-        </div>
+        <ApprovalPreview call={call} />
+        <ApprovalActions call={call} decide={approval} />
       </div>
     )
   return (
@@ -1576,6 +1650,7 @@ function ToolCard({ tag, call, result, pending, approval }: { tag: string; call:
           {pending ? '◌' : failed ? '✕' : '✓'}
         </span>
         <span className="agt-tool-label">{toolLabel(call)}</span>
+        {inTerminal && <span className="muted"> · running in your terminal…</span>}
         {hits && <span className="muted"> · {hits.length} results</span>}
         {failed && <span className="t-red"> · {String((parsed as { error: unknown }).error)}</span>}
       </summary>
@@ -1599,6 +1674,100 @@ function ToolCard({ tag, call, result, pending, approval }: { tag: string; call:
         <pre className="agt-tool-body">{[`${call.name}(${JSON.stringify(call.arguments)})`, result ? (typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2)).slice(0, 6000) : pending ? 'Running…' : 'No result (the turn stopped).'].join('\n\n')}</pre>
       )}
     </details>
+  )
+}
+
+const PERMISSION_LABEL: Record<Permission, string> = { default: 'Ask first', acceptEdits: 'Edits allowed', plan: 'Plan' }
+const PERMISSION_HELP: Record<Permission, string> = {
+  default: 'Each change waits for you to allow it',
+  acceptEdits: 'File edits in the work folder go through; deleting and commands still ask',
+  plan: 'Read only: it looks around, then shows you a plan to approve',
+}
+const FILE_EDITS = new Set(['write_file', 'edit_file', 'multi_edit', 'make_dir', 'move_path'])
+
+/** What a change looks like: a diff for an edit, the text for a write, the command, the plan. */
+function ApprovalPreview({ call }: { call: ToolCall }) {
+  const a = call.arguments ?? {}
+  if (call.name === 'edit_file' || call.name === 'multi_edit') {
+    const edits = call.name === 'multi_edit' && Array.isArray(a.edits) ? (a.edits as Record<string, unknown>[]) : [a]
+    return (
+      <pre className="agt-tool-body agt-diff">
+        {edits.flatMap((e, k) => [
+          ...(k ? [<span key={`s${k}`} className="muted">⋯{'\n'}</span>] : []),
+          ...diffLines(String(e.old_string ?? ''), String(e.new_string ?? '')).map((d, i) => (
+            <span key={`${k}-${i}`} className={d.kind === '-' ? 't-red' : d.kind === '+' ? 't-green' : 'muted'}>
+              {`${d.kind} ${d.text}\n`}
+            </span>
+          )),
+        ])}
+      </pre>
+    )
+  }
+  if (call.name === 'write_file' && typeof a.content === 'string') return <pre className="agt-tool-body">{a.content.slice(0, 6000)}</pre>
+  if (call.name === 'terminal' && typeof a.command === 'string')
+    return (
+      <>
+        <pre className="agt-tool-body agt-ask-command">{a.command.slice(0, 4000)}</pre>
+        {typeof a.description === 'string' && <p className="muted agt-ask-why">{a.description}</p>}
+      </>
+    )
+  if (call.name === 'exit_plan_mode' && typeof a.plan === 'string')
+    return (
+      <article className="zed-preview agt-answer agt-plan">
+        <MarkdownPreview text={a.plan} />
+      </article>
+    )
+  return null
+}
+
+/** Allow, allow from now on, or decline (with what to do instead), by what is asked. */
+function ApprovalActions({ call, decide }: { call: ToolCall; decide: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void }) {
+  const [feedback, setFeedback] = useState('')
+  const plan = call.name === 'exit_plan_mode'
+  return (
+    <>
+      <div className="agt-ask-actions">
+        {plan ? (
+          <>
+            <button className="btn btn-small btn-primary" onClick={() => decide(true, { mode: 'acceptEdits' })}>
+              Start, edits allowed
+            </button>
+            <button className="btn btn-small" onClick={() => decide(true, { mode: 'default' })}>
+              Start, ask for each edit
+            </button>
+          </>
+        ) : (
+          <>
+            <button className="btn btn-small btn-primary" onClick={() => decide(true)}>
+              Allow
+            </button>
+            {FILE_EDITS.has(call.name) && (
+              <button className="btn btn-small" onClick={() => decide(true, { always: 'edits' })} title="File edits in the work folder go through from now on">
+                Allow all edits
+              </button>
+            )}
+            {call.name === 'terminal' && typeof call.arguments?.command === 'string' && canAlwaysAllow(call.arguments.command) && (
+              <button className="btn btn-small" onClick={() => decide(true, { always: 'command' })} title="Commands like this one run without asking in this thread">
+                Always allow this command
+              </button>
+            )}
+          </>
+        )}
+        <button className="btn btn-small" onClick={() => decide(false, feedback.trim() ? { feedback: feedback.trim() } : {})}>
+          {plan ? 'Keep planning' : 'Decline'}
+        </button>
+      </div>
+      <input
+        className="agt-ask-feedback"
+        value={feedback}
+        onChange={(e) => setFeedback(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && feedback.trim()) decide(false, { feedback: feedback.trim() })
+        }}
+        placeholder={plan ? 'What should change in the plan? (Enter sends)' : 'Or tell it what to do instead (Enter sends)'}
+        aria-label="What to do instead"
+      />
+    </>
   )
 }
 
@@ -1672,6 +1841,7 @@ function byDay(threads: Thread[]): { label: string; items: Thread[] }[] {
 }
 
 const ICONS: Record<string, ReactNode> = {
+  folder: <path d="M3 6h6l2 2h10v11H3z" />,
   sidebar: (
     <>
       <rect x="3" y="4" width="18" height="16" />

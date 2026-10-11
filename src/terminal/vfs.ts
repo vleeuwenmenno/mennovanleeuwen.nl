@@ -4,9 +4,13 @@ import { contributions, education, experience, headlines, hobbies, profile, proj
 import { PICTURES } from './pictures'
 import { revealEmail } from '../data/email'
 import { BUILT, COMMIT, SHORT_VERSION, VERSION } from '../version'
+import { cvMode } from '../os/cvMode'
+import { HANDLE } from '../os/identity'
 
 // A read-only, in-memory filesystem built from profile.ts. Nothing here touches the real
-// machine; "files" are strings and a few of them point at an app or URL for `open`.
+// machine; "files" are strings and a few of them point at an app or URL for `open`. Menno's CV
+// (cv.md, projects/, his documents) is only in the home folder on his CV page (src/os/cvMode.ts);
+// elsewhere home is a plain one, named after whoever uses the desktop (src/os/identity.ts).
 
 export type FileNode = {
   type: 'file'
@@ -22,11 +26,13 @@ export type FileNode = {
   ro?: boolean
   /** A program (the commands in /bin) */
   exec?: boolean
+  /** Where it really is, for files kept in this browser (data/browserfs.ts) */
+  browser?: string
 }
-export type DirNode = { type: 'dir'; name: string; children: Map<string, Node>; mtime?: number; sf?: string; ro?: boolean }
+export type DirNode = { type: 'dir'; name: string; children: Map<string, Node>; mtime?: number; sf?: string; ro?: boolean; browser?: string }
 export type Node = FileNode | DirNode
 
-export const HOME = `/home/${profile.handle}`
+export const HOME = `/home/${HANDLE}`
 
 const file = (name: string, content: string | (() => string), open?: FileNode['open']): FileNode => ({
   type: 'file',
@@ -164,7 +170,7 @@ const contributionsNode = dir(
 
 // The usual home folders, with a few believable files. Pictures are real SVG images; the large
 // downloads and media files are stand-ins with a display size.
-const homeFolders: Node[] = [
+const cvHomeFolders: Node[] = [
   // ~/Desktop shows what is on the desktop; its entries are the same nodes as in ~ (like symlinks).
   dir('Desktop', [projectsNode, contributionsNode, gamesNode, cvNode, readmeNode]),
   dir('Documents', [
@@ -193,7 +199,42 @@ const homeFolders: Node[] = [
   ]),
 ]
 
-const homeNode = dir(profile.handle, [
+/** Home away from the CV page: the usual folders, the games and the wallpapers. */
+const plainHomeFolders: Node[] = [
+  dir('Desktop', [gamesNode]),
+  dir('Documents', []),
+  dir('Downloads', []),
+  dir('Music', []),
+  dir(
+    'Pictures',
+    PICTURES.map((pic, i): FileNode => ({ type: 'file', name: pic.name, content: pic.svg, mtime: Date.now() - (i + 1) * 3 * 864e5 })),
+  ),
+  dir('Videos', []),
+]
+
+const welcomeNode = file('README.md', () =>
+  [
+    'Welcome to MvL OS, a desktop in your browser.',
+    '',
+    'Things to try:',
+    '  help             every command this shell knows',
+    '  games/           the arcade, one launcher per game',
+    '  ls ~/Pictures    a few wallpapers',
+    '',
+    'Signed in with GitHub, your notes, layouts and services follow you between devices.',
+    `Made by ${profile.name}: his CV is at https://mennovanleeuwen.nl/cv.`,
+  ].join('\n'),
+)
+
+const plainHome = dir(HANDLE, [
+  welcomeNode,
+  file('AGENTS.md', AGENTS_MD, { app: 'zed', props: { path: `${HOME}/AGENTS.md` } }),
+  gamesNode,
+  ...plainHomeFolders,
+  file('.bashrc', ['# not actually bash, but it reads like it', "alias ll='ls -la'", 'export EDITOR=nvim', 'export PAGER=cat'].join('\n')),
+])
+
+const cvHome = dir(HANDLE, [
   readmeNode,
   cvNode,
   // The Agents app's system prompt as it comes (read-only here; with Seafile as home, your own).
@@ -201,7 +242,7 @@ const homeNode = dir(profile.handle, [
   projectsNode,
   gamesNode,
   contributionsNode,
-  ...homeFolders,
+  ...cvHomeFolders,
   file('hobbies.txt', hobbies.map((h) => `${h.name}\n  ${h.note}${h.url ? `\n  ${h.url}` : ''}`).join('\n\n')),
   file('headlines.txt', headlines.join('\n'), { app: 'notes' }),
   file(
@@ -212,6 +253,8 @@ const homeNode = dir(profile.handle, [
   file('.bashrc', ['# not actually bash, but it reads like it', "alias ll='ls -la'", 'export EDITOR=nvim', 'export PAGER=cat'].join('\n')),
   file('.plan', 'Ship Boltwarden 1.0.\nGet Pepper to a first stable release.\nSleep at some point.'),
 ])
+
+const homeNode = cvMode() ? cvHome : plainHome
 
 /**
  * Files whose contents live elsewhere: /etc/fstab and the Seafile devices in /dev come from the

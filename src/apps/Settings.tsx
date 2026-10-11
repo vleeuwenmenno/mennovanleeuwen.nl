@@ -11,12 +11,16 @@ import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateL
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { setSwing, useSwingPrefs } from '../os/swing'
 import { ask } from '../os/Dialogs'
+import { UsersSettings } from './UsersSettings'
+import { openAlert, useAlerts } from '../os/alerts'
+import { formatSize } from '../terminal/vfs'
+import { browserFilesState, browserTree, useBrowserFiles, wipeBrowserFiles } from '../data/browserfs'
 import { Select } from '../os/Select'
 import { libraryName, loadLibraries, primaryOf, setSeafilePrefs, useLibraries, useSeafilePrefs } from '../data/seafile'
 import { fstabEntries, isSeafileType, useMounts } from '../data/mounts'
 
 const libraryNameOf = (prefix: string) => libraryName(prefix.slice('seafile://'.length))
-import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, signIn, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelyOwner } from '../os/account'
+import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, deleteAccount, hasRepoScope, signIn, signInWithRepos, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelySignedIn } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
@@ -40,7 +44,7 @@ import { SyncLine } from './Notebook'
 // Opened from the system menu, the desktop's right-click menu, Spotlight and the terminal;
 // props.section picks the pane (account, appearance, dock, launchers, search (Spotlight), notifications,
 // instances, calendar, integrations, golinks, sync, about). The account and service panes only show
-// for the signed-in owner.
+// for the signed-in user.
 
 const SignInFirst = ({ what }: { what: string }) => {
   const account = useAccount()
@@ -58,6 +62,7 @@ const SignInFirst = ({ what }: { what: string }) => {
 
 function Account() {
   const account = useAccount()
+  const [error, setError] = useState<string | null>(null)
   if (account.status === 'loading') return <p className="muted">Checking…</p>
   if (account.status === 'off')
     return (
@@ -71,8 +76,15 @@ function Account() {
         <span className="set-hero-avatar is-guest">?</span>
         <strong>Guest</strong>
         <p className="muted">Your notes, launchers and settings are saved in this browser.</p>
-        <button className="link-btn" onClick={signIn}>
-          Owner sign-in
+        {account.registration && !account.registration.open ? (
+          <p className="muted">Sign-up is closed right now. Existing accounts can still sign in.</p>
+        ) : account.registration?.full ? (
+          <p className="muted">We're full: every account is taken. Existing accounts can still sign in.</p>
+        ) : (
+          <p className="muted">Sign in with GitHub for your own desktop: notes, layouts and integrations that follow you between devices.</p>
+        )}
+        <button className="btn btn-primary" onClick={signIn}>
+          Sign in with GitHub
         </button>
       </div>
     )
@@ -109,9 +121,62 @@ function Account() {
             Sign out
           </button>
         </li>
+        <BrowserFilesRow />
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Delete account</strong>
+            <span className="muted">Removes everything this server keeps for you, and disconnects GitHub, Google and Seafile.</span>
+          </span>
+          <button className="btn btn-small btn-danger" onClick={() => void removeAccount(setError)}>
+            Delete…
+          </button>
+        </li>
       </ul>
+      {error && <p className="t-red">{error}</p>}
+      <p className="muted set-help">
+        What is stored and who can see it: <a href="/privacy.html" target="_blank" rel="noopener">privacy</a>.
+      </p>
     </>
   )
+}
+
+/** Settings → Account: what is kept in this browser for you (src/data/browserfs.ts), and deleting it. */
+function BrowserFilesRow() {
+  useBrowserFiles()
+  const { files, bytes } = browserTree()
+  if (browserFilesState() !== 'ready') return null
+  const remove = async () => {
+    const ok = await ask({ title: 'Delete the files in this browser?', body: `${files} ${files === 1 ? 'file' : 'files'} (${formatSize(bytes)}) kept in this browser are deleted for good. Files in Seafile are not touched.`, confirm: 'Delete', danger: true })
+    if (ok) await wipeBrowserFiles()
+  }
+  return (
+    <li className="set-row">
+      <span className="set-row-text">
+        <strong>Files in this browser</strong>
+        <span className="muted">{files ? `${files} ${files === 1 ? 'file' : 'files'}, ${formatSize(bytes)}. Only here: clearing the site's data deletes them.` : 'None yet. Without Seafile as home, files you make are kept here.'}</span>
+      </span>
+      {files > 0 && (
+        <button className="btn btn-small" onClick={() => void remove()}>
+          Delete…
+        </button>
+      )}
+    </li>
+  )
+}
+
+/** Settings → Account → Delete: asks first, since nothing comes back. */
+async function removeAccount(setError: (e: string | null) => void) {
+  const ok = await ask({
+    title: 'Delete your account?',
+    body: 'Your notes, layouts, Agents threads and memories, linked services and calendars are deleted from this server for good, and this app is removed from your GitHub account. Files in your own Seafile stay where they are.',
+    confirm: 'Delete my account',
+    danger: true,
+  })
+  if (!ok) return
+  setError(null)
+  // This browser's copy of its files goes too (the server never had them).
+  await wipeBrowserFiles().catch(() => {})
+  await deleteAccount().catch((e: Error) => setError(e.message))
 }
 
 /** Light/dark mode, the Omarchy theme for each, and the accent. Kept in this browser. */
@@ -249,7 +314,7 @@ function Notifications() {
   const prefs = useNotifyPrefs()
   const account = useAccount()
   const entries = useEntries()
-  const owner = account.status === 'user'
+  const signedIn = account.status === 'user'
   return (
     <>
       <SetGroup title="Pop-ups">
@@ -261,7 +326,7 @@ function Notifications() {
             </span>
             <Toggle on={prefs.popups} onChange={(on) => setNotifyPrefs({ popups: on })} label="Show pop-ups" />
           </li>
-          {owner && <PushRow />}
+          {signedIn && <PushRow />}
         </ul>
       </SetGroup>
 
@@ -273,7 +338,7 @@ function Notifications() {
             </button>
           ))}
         </div>
-        <p className="muted set-help">{owner ? 'How long the bell in the top bar keeps a notification. Signed in, the list is the same on every device. ' : 'How long the bell in the top bar keeps a notification, on this device. '}Pop-ups that are only feedback (a failed paste, an update to restart into) are never kept.</p>
+        <p className="muted set-help">{signedIn ? 'How long the bell in the top bar keeps a notification. Signed in, the list is the same on every device. ' : 'How long the bell in the top bar keeps a notification, on this device. '}Pop-ups that are only feedback (a failed paste, an update to restart into) are never kept.</p>
         <ul className="set-list">
           <li className="set-row">
             <span className="set-row-text">
@@ -296,11 +361,11 @@ function Notifications() {
 
       <SetGroup title="Apps">
         <ul className="set-list">
-          {visibleSources(owner).map((src) => (
+          {visibleSources(signedIn).map((src) => (
             <NotifySourceRows key={src.app} src={src} />
           ))}
         </ul>
-        <p className="muted set-help">{owner ? 'Signed in, the server watches all of these for you and keeps the list the same on every device: with push on, they reach this device even when MvL OS is closed. Do not disturb holds back pop-ups and push alike.' : 'These arrive while this page is open. Sign in to have the server watch for you, with push to your devices.'} Right-click one in the list to turn its kind off.</p>
+        <p className="muted set-help">{signedIn ? 'Signed in, the server watches all of these for you and keeps the list the same on every device: with push on, they reach this device even when MvL OS is closed. Do not disturb holds back pop-ups and push alike.' : 'These arrive while this page is open. Sign in to have the server watch for you, with push to your devices.'} Right-click one in the list to turn its kind off.</p>
       </SetGroup>
     </>
   )
@@ -509,8 +574,14 @@ function Instances() {
           <span className="set-glyph">⌥</span>
           <span className="set-row-text">
             <strong>GitHub</strong>
-            <span className="muted">@{account.user!.login} · from your sign-in</span>
+            <span className="muted">
+              @{account.user!.login} · {hasRepoScope(account.user) ? 'public and private repositories' : 'public repositories only'}
+            </span>
           </span>
+          {/* Sign-in only asks GitHub for the profile; private repositories take the broad `repo` scope. */}
+          <button className="btn btn-small" onClick={() => signInWithRepos(!hasRepoScope(account.user))}>
+            {hasRepoScope(account.user) ? 'Public only' : 'Allow private'}
+          </button>
         </li>
         {account.forges.map((f) => (
           <li key={f.id} className="set-row">
@@ -532,6 +603,7 @@ function Instances() {
         Link an instance…
       </button>
       <p className="muted set-help">Gitea and Forgejo instances are linked with a personal access token. Spotlight then searches their repositories, issues, pull requests and branches too.</p>
+      <p className="muted set-help">Private GitHub repositories need GitHub's <code>repo</code> scope, which also allows writing to them (GitHub has no read-only version). Turning it off again may need the app removed under GitHub → Settings → Applications.</p>
     </>
   )
 }
@@ -721,9 +793,13 @@ function Launchers() {
 type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice'
 
 /** Third-party services, one row each; a row opens that service's own settings. */
-function Integrations() {
+/** `sub` opens one service's settings straight away (Settings → Integrations → Seafile, from an alert). */
+function Integrations({ sub, t }: { sub?: string; t?: string }) {
   const account = useAccount()
   const [open, setOpen] = useState<IntegrationId | null>(null)
+  useEffect(() => {
+    if (sub === 'updown' || sub === 'ollama' || sub === 'seafile' || sub === 'onlyoffice') setOpen(sub)
+  }, [sub, t])
   const { libraries } = useLibraries()
   if (account.status !== 'user') return <p className="muted">Sign in first to connect services for widgets and Files.</p>
   const seafile = account.seafile
@@ -1371,7 +1447,7 @@ function SpotlightSettings() {
   const visits = useVisits()
   const hits = useRecentHits()
   const account = useAccount()
-  // Quick answers come from the Agents app: only for the owner, with an Ollama key.
+  // Quick answers come from the Agents app: only when signed in, with an Ollama key.
   const agents = account.status === 'user' && !!account.integrations.ollama
   const [cleared, setCleared] = useState(false)
   const clearAnswers = async () => {
@@ -1573,9 +1649,10 @@ function LinkSettingsPane() {
   )
 }
 
-type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'agents' | 'golinks' | 'sync' | 'about'
-/** `owner`: only for the signed-in owner (accounts and services); visitors don't see it at all. */
-type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; keywords: string; blurb: string; owner?: true; render: () => ReactNode }
+type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'agents' | 'golinks' | 'sync' | 'users' | 'about'
+/** `account`: only when signed in (accounts and services); visitors don't see it at all.
+ * `admin`: only for admins (the server checks that on every request too). */
+type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; keywords: string; blurb: string; account?: true; admin?: true; render: (opened: { sub?: string; t?: string }) => ReactNode }
 
 const svg = (d: ReactNode) => (
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -1621,13 +1698,14 @@ const GROUPS: Pane[][] = [
     { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal spotlight suggestions mvl.sh token', blurb: "The golinks account that go <alias> follows, in Spotlight and the terminal.", render: () => <GoLinks /> },
   ],
   [
-    { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', owner: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
-    { id: 'calendar', label: 'Calendar', hue: 'var(--red)', owner: true, icon: svg(<><rect x="4" y="5" width="16" height="15" /><path d="M4 10h16M9 3v4M15 3v4" /></>), keywords: 'calendar google agenda events caldav fastmail nextcloud icloud', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock.', render: () => <CalendarSettings /> },
-    { id: 'integrations', label: 'Integrations', hue: 'var(--green)', owner: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models', blurb: 'Services the widgets, Files and Agents use: updown.io for Status, Ollama Cloud, Seafile and OnlyOffice.', render: () => <Integrations /> },
-    { id: 'agents', label: 'Agents', hue: 'var(--magenta)', owner: true, icon: svg(<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 16l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" />), keywords: 'agents ai assistant ollama models quick deep research title thread system prompt agents.md tools memory', blurb: 'The Agents app: its models, what a new thread starts with, and its system prompt.', render: () => <AgentsSettings /> },
+    { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', account: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
+    { id: 'calendar', label: 'Calendar', hue: 'var(--red)', account: true, icon: svg(<><rect x="4" y="5" width="16" height="15" /><path d="M4 10h16M9 3v4M15 3v4" /></>), keywords: 'calendar google agenda events caldav fastmail nextcloud icloud', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock.', render: () => <CalendarSettings /> },
+    { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models storage', blurb: 'Services the widgets, Files and Agents use: updown.io for Status, Ollama Cloud, Seafile and OnlyOffice.', render: ({ sub, t }) => <Integrations sub={sub} t={t} /> },
+    { id: 'agents', label: 'Agents', hue: 'var(--magenta)', account: true, icon: svg(<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 16l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" />), keywords: 'agents ai assistant ollama models quick deep research title thread system prompt agents.md tools memory', blurb: 'The Agents app: its models, what a new thread starts with, and its system prompt.', render: () => <AgentsSettings /> },
   ],
   [
-    { id: 'sync', label: 'Sync', hue: 'var(--green)', owner: true, icon: svg(<><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3" /><path d="M18 3v4h-4M6 21v-4h4" /></>), keywords: 'sync devices cloud', blurb: 'What follows you between devices.', render: () => <SyncPane /> },
+    { id: 'sync', label: 'Sync', hue: 'var(--green)', account: true, icon: svg(<><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3" /><path d="M18 3v4h-4M6 21v-4h4" /></>), keywords: 'sync devices cloud', blurb: 'What follows you between devices.', render: () => <SyncPane /> },
+    { id: 'users', label: 'Users', hue: 'var(--accent)', account: true, admin: true, icon: svg(<><circle cx="9" cy="8" r="3.5" /><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6" /><circle cx="17" cy="9" r="2.5" /><path d="M16 14.2c2.9.1 5 2.4 5 5.8" /></>), keywords: 'users accounts admin sign-up registration ban delete cap full', blurb: 'Every account, sign-up and the cap. Only for admins.', render: () => <UsersSettings /> },
     { id: 'about', label: 'About', hue: 'var(--text)', icon: svg(<><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5v.5" /></>), keywords: 'about version update release build', blurb: 'Which version this is, and whether a newer one is out.', render: () => <About /> },
   ],
 ]
@@ -1661,14 +1739,17 @@ export function Settings({ win }: { win: WinState }) {
     setShowPane(true)
   }
   const q = query.trim().toLowerCase()
-  // Visitors only see what works without an account; the owner's panes would just say "sign in".
-  const owner = useLikelyOwner()
+  // Visitors only see what works without an account; the user's panes would just say "sign in".
+  const signedIn = useLikelySignedIn()
+  const admin = !!account.user?.admin
+  const alerts = useAlerts()
+  const badges = alerts.reduce<Partial<Record<string, number>>>((m, a) => (a.pane ? { ...m, [a.pane]: (m[a.pane] ?? 0) + 1 } : m), {})
   const groups = useMemo(() => {
-    const mine = GROUPS.map((g) => g.filter((p) => owner || !p.owner)).filter((g) => g.length)
+    const mine = GROUPS.map((g) => g.filter((p) => (signedIn || !p.account) && (admin || !p.admin))).filter((g) => g.length)
     return q ? [mine.flat().filter((p) => `${p.label} ${p.keywords}`.toLowerCase().includes(q))] : mine
-  }, [q, owner])
+  }, [q, signedIn, admin])
   const asked = PANES.find((p) => p.id === pane)!
-  const current = asked.owner && !owner ? ACCOUNT_PANE : asked
+  const current = (asked.account && !signedIn) || (asked.admin && !admin) ? ACCOUNT_PANE : asked
   const u = account.user
 
   return (
@@ -1690,6 +1771,24 @@ export function Settings({ win }: { win: WinState }) {
             <span className="muted">{u ? `@${u.login} · GitHub` : 'This browser only'}</span>
           </span>
         </button>
+        {/* What needs you, as macOS lists "Finish setting up" under your name (src/os/alerts.ts). */}
+        {!q && alerts.length > 0 && (
+          <ul className="set-alerts">
+            {alerts.map((a) => (
+              <li key={a.id}>
+                <button onClick={() => (a.run ? a.run() : a.pane ? go(a.pane as PaneId) : openAlert(a))} title={a.body}>
+                  <span className="set-alert-dot" aria-hidden>
+                    !
+                  </span>
+                  <span className="set-alert-text">{a.title}</span>
+                  <span className="set-chevron" aria-hidden>
+                    ›
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         {groups.map((g, i) => (
           <ul key={i} className="set-nav">
             {g.map((p) => (
@@ -1699,6 +1798,11 @@ export function Settings({ win }: { win: WinState }) {
                     {p.icon}
                   </span>
                   {p.label}
+                  {badges[p.id] ? (
+                    <span className="set-nav-badge" aria-label={`${badges[p.id]} needs attention`}>
+                      {badges[p.id]}
+                    </span>
+                  ) : null}
                 </button>
               </li>
             ))}
@@ -1714,7 +1818,7 @@ export function Settings({ win }: { win: WinState }) {
           <h2>{current.label}</h2>
           {current.blurb && <p className="muted">{current.blurb}</p>}
         </header>
-        <div className="set-body">{current.render()}</div>
+        <div className="set-body">{current.render({ sub: win.props.section === current.id ? win.props.sub : undefined, t: win.props.t })}</div>
       </div>
     </div>
   )

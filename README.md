@@ -1,10 +1,19 @@
 # mennovanleeuwen.nl
 
-My CV as a tiny operating system: a sticky note, a terminal that actually works, and a dock
-with apps for projects, contributions, recent activity, the CV itself and contact details.
+A web desktop anyone can sign in to with GitHub, and my CV as a tiny operating system: a sticky
+note, a terminal that actually works, and a dock with apps for projects, contributions, recent
+activity, the CV itself and contact details.
 
-Built with Vite, React and TypeScript. The CV runs entirely in the browser; a small dependency-free
-Node server adds live status, GitHub sign-in for the owner and synced notes (see below).
+The CV lives at **`/cv`** ([`src/os/cvMode.ts`](src/os/cvMode.ts)): there the CV, Projects,
+Activity, Contact and Minecraft apps, the portfolio desktop icons, Spotlight's projects and links,
+the GitHub activity notifications and the CV commands in the terminal exist, and the server sends
+the CV's title and link preview. Everywhere else the site is a plain desktop with a welcome note.
+Visitors at `/cv` see my persona (`menno@mvlos`); signed in, you get your own desktop with the CV
+apps added. The desktop's user is the signed-in GitHub login (`alice@mvlos`, home `/home/alice`),
+or `guest` ([`src/os/identity.ts`](src/os/identity.ts)).
+
+Built with Vite, React and TypeScript. The desktop runs entirely in the browser; a small
+dependency-free Node server adds live status, GitHub sign-in and synced notes (see below).
 
 ## Develop
 
@@ -83,6 +92,81 @@ Spotlight takes `go <alias>` too, and lists matching aliases as you type (the mo
 ones after a bare `go `) from the golinks server's `/suggest`, asked straight from the browser so
 the token never passes through this site's server.
 
+### The shell, agents and skills
+
+The shell is msh 2.0 ([`src/terminal/msh/`](src/terminal/msh)): a POSIX-ish parser and
+interpreter. It supports if/for/while/until/case, functions, subshells, `$(…)`, `$((…))`, the
+`${…}` forms, globbing, heredocs, redirects (`2>`, `2>&1`, `<`), `set -e/-x/-u/-o pipefail` and
+builtins like `test`/`[`, `printf`, `read`, `source`, `eval` and `getopts`. `msh -c`, `msh file`
+and `./script.sh` with a `#!/bin/msh` (or sh/bash) shebang run scripts. `man msh` shows the
+reference ([`src/data/mshReference.ts`](src/data/mshReference.ts)), which the agents read as the
+built-in `msh` skill.
+
+`agents` ([`src/terminal/agents/`](src/terminal/agents)) is the Agents app as a coding-agent CLI.
+In a folder on Seafile, that folder becomes the thread's work folder:
+- File tools ([`server/workdir.ts`](server/workdir.ts)) let the agent read, write, edit, list,
+  glob, grep, move and delete inside the folder, and it follows the folder's `AGENTS.md` or
+  `CLAUDE.md`.
+- A `terminal` tool runs msh command lines in the user's own terminal.
+- Changes wait for approval, which can carry a note for the agent. Shift+Tab cycles between
+  asking first, accepting edits, and plan mode (read only until a plan is approved).
+- Prompt modes: `!cmd` runs a command, `# text` remembers something, `@path` attaches a file.
+- `agents -c`/`-r` resume a thread, `agents -p` answers once for pipes, and `/help` lists the
+  slash commands.
+
+`skills` ([`src/terminal/skills.ts`](src/terminal/skills.ts),
+[`server/skills.ts`](server/skills.ts)) manages SKILL.md folders. They live in
+`~/.agents/skills`, or a work folder's `.agents/skills` or `.claude/skills`, plus built-in `msh`
+and `skill-creator`. `skills add owner/repo` installs from GitHub, and `/name` starts one. The
+Agents app has the same work folders, permission modes, diff approvals and skills (Settings →
+Agents → Skills).
+
+**How complete it is (2026-10-11).** Everything above works end to end against a scripted
+stand-in for Ollama and a mock Seafile. It has not yet run against real models, so the tool
+descriptions and system prompt are untuned. Known limits:
+
+- **Context.** There is no `/compact` and no summarising. Older tool output is cut to 1,500
+  characters, but a long coding session can still outgrow the model's context window.
+- **Not in the TUI yet:**
+  - Claude Code's undo/rewind, custom slash commands, hooks, MCP servers, subagents,
+    background tasks and usage display
+  - image paste (`@path` attaches text files only)
+- **Tried in the browser:** messages, approvals, forms, plan mode, `!`, `#`, `@`, `/status`,
+  `/context`, `/model`, `/resume`, `-c`, `-p`, `ls`. **Not tried:** Esc interrupting a turn,
+  messages queued while it works, `/export`, `/copy`, `/open`, `/delete`, `/archive`,
+  `/projects`, `/tools`, Ctrl+O and Ctrl+L.
+- **Rendering.**
+  - The live block redraws whole on each streamed chunk, and a long reply only shows its tail
+    until it is done.
+  - Markdown has no syntax highlighting, and the terminal's markup does not nest (no bold in
+    colour).
+  - On phones, typing works, but Shift+Enter and Shift+Tab are hard to reach.
+- **Work folders.**
+  - Seafile only: not the browser's own files or `/tmp`.
+  - `glob`/`grep` walk at most 5,000 files and read at most 400 (up to 1 MB each), so they are
+    slow on big trees.
+  - Edits do not check whether the file changed since the agent read it.
+  - Files over 2 MB, and binary files, cannot be read.
+- **Terminal tool.**
+  - It needs an attached `agents` session, so turns started in the app do not get it.
+  - Each command gets 60 s and returns at most 60k characters of output.
+  - Interactive programs are refused, and prompts (rm's y/N) are answered no.
+  - "Don't ask again" for a command lasts until the server restarts.
+  - Read-only detection is a fixed allowlist; any `$(…)` asks.
+- **A turn keeps running after `agents` closes.** Its terminal tool calls then fail until
+  `agents -c` reattaches.
+- **Skills.**
+  - Install only from public GitHub repositories, and the app has no zip upload yet.
+  - `allowed-tools` in the front matter is ignored.
+  - Python/Node scripts cannot run (msh scripts can).
+  - Your own skills need home on Seafile.
+- **msh.**
+  - No arrays, `[[ ]]`, C-style `for`, process substitution, job control (`&` runs in the
+    foreground), aliases or traps.
+  - There is no separate stderr stream: `2>` redirects or drops error messages.
+  - Exec bits don't exist; the shebang decides whether a file runs.
+  - The prompt is one line (multi-line input only in scripts).
+
 `pepper` ([`src/terminal/pepper.ts`](src/terminal/pepper.ts)) simulates the Pepper CLI against a
 pretend lab cluster (3 masters, 4 minions). Its grammar, outcome names and output layout follow
 the real CLI; the cluster, states and timings are invented, and applies only last for the session.
@@ -139,8 +223,22 @@ dock icon to remove it, and right-click (or Shift+Enter) an app, launcher or rep
 Spotlight or All apps to pin it. Settings → Dock lists what was taken off, to add it back, and
 restores the default dock. Everyone can still drag dock icons to reorder them.
 
-Only GitHub logins in `ALLOWED_USERS` (default `vleeuwenmenno`) can sign in; everyone else keeps
-the CV. Gitea/Forgejo instances are linked from Settings → Code hosts, in a window of their own, with a personal access token (read access to
+Anyone with a GitHub account can sign up for a desktop of their own, up to `MAX_USERS` accounts
+(default 100). Over the cap, or with sign-up closed, a new account gets a "We're full" (or
+"Sign-up is closed") dialog instead; existing accounts and admins can always sign in. Logins in
+`ADMIN_USERS` (default `vleeuwenmenno`) are admins: Settings → Users lists the accounts (counts and
+sizes only, never their contents), bans, signs out and deletes them, and opens or closes sign-up.
+Keys set on the server (`OLLAMA_API_KEY`, `UPDOWN_API_KEY`) are only used for admins; everyone
+else saves their own in Settings → Integrations.
+
+Users choose the addresses of their Gitea, CalDAV, Seafile, OnlyOffice and search servers, so the
+server only reaches public addresses for them, also after redirects
+([`server/egress.ts`](server/egress.ts)); admins may use internal ones. A host whose DNS answer
+changes between that check and the request can still get through, so in production also keep the
+container away from private networks, e.g. with a rule in Docker's `DOCKER-USER` chain:
+`iptables -I DOCKER-USER -s <site container subnet> -d 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16 -j DROP`.
+
+Gitea/Forgejo instances are linked from Settings → Code hosts, in a window of their own, with a personal access token (read access to
 repository, issue, user and organization). Tokens are stored encrypted (AES-256-GCM) in SQLite
 (`node:sqlite`, no extra dependency) under `DATA_DIR` (default `./data`, a volume in compose).
 
@@ -149,12 +247,12 @@ Setup:
 1. Create a GitHub OAuth app (GitHub → Settings → Developer settings → OAuth Apps) with callback
    URL `https://<your site>/api/auth/github/callback`. Local dev needs its own app with
    `http://localhost:5173/api/auth/github/callback`.
-2. Put `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `.env`. Optional: `ALLOWED_USERS`
-   (comma-separated logins), `PUBLIC_URL` (the site's
+2. Put `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `.env`. Optional: `ADMIN_USERS`
+   (comma-separated logins), `MAX_USERS` (the starting cap; Settings → Users changes it), `PUBLIC_URL` (the site's
    address, e.g. `https://mennovanleeuwen.nl`; set it in production, since without it the server
    takes `Host` and `X-Forwarded-*` from each request, and logs a warning at startup), `SESSION_SECRET` (otherwise a random key is generated once into
-   `DATA_DIR/secret.key`), `GITHUB_SCOPES` (default `read:user repo read:org`; `repo` is what
-   lets Spotlight see private repositories).
+   `DATA_DIR/secret.key`), `GITHUB_SCOPES` (what "Allow private" in Settings → Code hosts asks
+   for, default `read:user repo read:org`; sign-in itself only asks for `read:user`).
 
 Without the OAuth settings, sign-in is simply off and everything else works as before.
 
@@ -165,7 +263,10 @@ needs `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from a Google Cloud OAuth cl
 application*) with the Calendar API enabled, the scopes `calendar.readonly` and `calendar.events`
 (plus `openid` and `email`), and the redirect URI `https://<your site>/api/google/callback` (and
 `http://localhost:5173/api/google/callback` for development). Publish the consent screen to *In
-production*: in *Testing*, Google expires the access after seven days. Accounts connected before
+production*: in *Testing*, Google expires the access after seven days. The Calendar scopes are
+"sensitive": until Google has verified the app, everyone connecting sees Google's "unverified app"
+screen and at most 100 accounts can connect (verification asks for the privacy page,
+`/privacy.html`). Accounts connected before
 the Calendar app stay read-only until connected again (Settings → Calendar → *Allow editing*).
 
 **CalDAV** calendars (Fastmail, Nextcloud, iCloud and others) work next to Google: Settings →
@@ -203,10 +304,11 @@ dragged into another order and hidden (right-click, or *Customize sidebar*), syn
 
 **/etc/fstab** decides where Seafile shows up, for Files and the terminal alike
 ([`src/data/mounts.ts`](src/data/mounts.ts)). `seafile /mnt/seafile seafile` puts every library in a
-folder of its own, `UUID=<library id> /home/menno seafile` makes one home (Settings' *Use as home*
+folder of its own, `UUID=<library id> /home/<you> seafile` makes one home (Settings' *Use as home*
 and primary library write that line), and a bind line such as
-`/mnt/seafile/Photos/2024 /home/menno/Pictures none bind` maps a place somewhere else. Until anything
-edits it, the file is written from the older settings. The owner can `sudo nano /etc/fstab`, `sudo
+`/mnt/seafile/Photos/2024 /home/<you>/Pictures none bind` maps a place somewhere else (an older
+fstab's `/home/menno` is read as your home). Until anything
+edits it, the file is written from the older settings. Signed in, you can `sudo nano /etc/fstab`, `sudo
 mount` and `sudo umount` (visitors are not in sudoers); Files' Home, places, breadcrumbs and Seafile
 section follow at once, and the site's own home is at `/srv/site` while Seafile is on `~`. In the
 terminal ([`src/terminal/fs.ts`](src/terminal/fs.ts)) `ls`, `cd`, `cat`, `grep -r`, `find`, `fd`,
@@ -214,6 +316,23 @@ terminal ([`src/terminal/fs.ts`](src/terminal/fs.ts)) `ls`, `cd`, `cat`, `grep -
 asks first, unless `-f`), `tee`, `>` and **nano** ([`src/terminal/nano.ts`](src/terminal/nano.ts),
 GNU nano 8.2's keys on an alternate screen) work
 across the mounts; before a command runs, the Seafile folders and files it names are fetched.
+
+**Without Seafile**, signed in, `~` is kept in this browser ([`src/data/browserfs.ts`](src/data/browserfs.ts):
+one IndexedDB database per account, so another account on the same browser never sees it), laid
+over the site's own home so README.md, games/ and the wallpapers stay readable. The terminal,
+Files, Zed, the desktop, Preview, Player, Omamp, the PDF viewer, the Viewer and Archive (ZIPs) read
+and write it, and copying or moving between it and Seafile carries the bytes over
+([`src/data/fileOps.ts`](src/data/fileOps.ts)). Clearing the site's data deletes it, which is said
+wherever it shows: a strip in Files, *Browser only* in Zed's status bar, the terminal's welcome and
+`df`, Settings → Account (with a Delete). Once Seafile is home it is mounted on `/mnt/browser`
+instead, and MvL OS offers to copy it into Seafile folder for folder. Unpacking archives and
+OnlyOffice need the file in Seafile.
+
+**What needs you** ([`src/os/alerts.ts`](src/os/alerts.ts)) shows the way macOS lists *Finish
+setting up* in System Settings: "Set up file storage" (signed in without Seafile as home), an
+update to restart into, or a failing sync. Settings lists them under your name and badges the pane
+to go to, the dock badges Settings (or All apps), and the notification center keeps them on top
+under *Needs attention* until they are dealt with.
 `mount`, `findmnt`, `lsblk -f` and `man fstab` describe the table, read-only libraries mount `ro`,
 and encrypted ones answer `Required key not available` until `fscrypt unlock` gets their password.
 
@@ -309,10 +428,10 @@ The mouse's Back and Forward buttons, and the browser's own Back, go back in the
 
 Questions (delete this? empty the trash?) are the desktop's own dialogs, never the browser's.
 
-**Agents** is a research assistant on [Ollama Cloud](https://docs.ollama.com/cloud), for the
-signed-in owner ([`server/agents.ts`](server/agents.ts), [`src/apps/Agents.tsx`](src/apps/Agents.tsx)).
+**Agents** is a research assistant on [Ollama Cloud](https://docs.ollama.com/cloud), for
+signed-in users ([`server/agents.ts`](server/agents.ts), [`src/apps/Agents.tsx`](src/apps/Agents.tsx)).
 Add an API key from ollama.com in Settings → Integrations (stored encrypted), or set
-`OLLAMA_API_KEY` on the server. Each thread is *Quick* (a search or two, a short answer) or *Deep*
+`OLLAMA_API_KEY` on the server (admins only). Each thread is *Quick* (a search or two, a short answer) or *Deep*
 (searches from several angles, reads the sources with web fetch, and writes a structured answer
 with citations), on any of Ollama's cloud models that can call tools. Turns run on the server and
 stream to the window, with the model's thinking folded under each reply; Stop ends one. The
@@ -325,7 +444,7 @@ stored encrypted, see [`server/websearch.ts`](server/websearch.ts)) and Ollama's
 changes (each one waits for *Allow* in the window, since a page the agent read could have asked
 for it), `update_todos` (a plan for long jobs, shown as "3/12" over the composer; while items are
 open a turn may run up to 150 rounds, and it keeps going on the server when the window closes, until
-Stop) and `remember`/`update_memory`. Memory is the owner's (every thread) or a project's (that
+Stop) and `remember`/`update_memory`. Memory is yours (every thread) or a project's (that
 project's threads), filed by the agent under category paths such as People/Family or Work/Tools;
 the Memory view shows it as a tree to search, add to, edit, move and forget. Projects group threads
 in the sidebar: drag them into order, drag threads into or out of them, fold them; threads in and

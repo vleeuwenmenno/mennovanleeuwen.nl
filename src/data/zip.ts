@@ -37,9 +37,15 @@ const FULL_LIMIT = 300 * 1024 * 1024
 
 class ZipError extends Error {}
 
+/** Where an archive is read from: an address (with Range requests), or a Blob already here (a file kept in this browser). */
+type Source = string | Blob
+/** How an address is fetched: fetch itself in the browser; on the server, one that refuses internal addresses. */
+type Fetcher = (url: string, init: RequestInit) => Promise<Response>
+
 /** Bytes from..to (inclusive) of the file at `url`, with Range when the server allows. */
-async function bytes(url: string, from: number, to: number): Promise<{ data: Uint8Array; total: number | null; ranged: boolean }> {
-  const res = await fetch(url, { headers: { Range: `bytes=${from}-${to}` } })
+async function bytes(url: Source, from: number, to: number, get: Fetcher = fetch): Promise<{ data: Uint8Array; total: number | null; ranged: boolean }> {
+  if (typeof url !== 'string') return { data: new Uint8Array(await url.slice(from, to + 1).arrayBuffer()), total: url.size, ranged: true }
+  const res = await get(url, { headers: { Range: `bytes=${from}-${to}` } })
   if (!res.ok) throw new ZipError(`The file server answered ${res.status}`)
   if (res.status === 206) {
     const total = Number(/\/(\d+)$/.exec(res.headers.get('content-range') ?? '')?.[1])
@@ -53,8 +59,9 @@ async function bytes(url: string, from: number, to: number): Promise<{ data: Uin
 }
 
 /** The last `n` bytes, when the size is not known (a suffix range). */
-async function lastBytes(url: string, n: number): Promise<{ data: Uint8Array; total: number | null; ranged: boolean }> {
-  const res = await fetch(url, { headers: { Range: `bytes=-${n}` } })
+async function lastBytes(url: Source, n: number, get: Fetcher = fetch): Promise<{ data: Uint8Array; total: number | null; ranged: boolean }> {
+  if (typeof url !== 'string') return bytes(url, Math.max(0, url.size - n), url.size - 1)
+  const res = await get(url, { headers: { Range: `bytes=-${n}` } })
   if (!res.ok) throw new ZipError(`The file server answered ${res.status}`)
   const total = Number(/\/(\d+)$/.exec(res.headers.get('content-range') ?? '')?.[1])
   const data = new Uint8Array(await res.arrayBuffer())
@@ -81,10 +88,10 @@ const cp437 = (() => {
   }
 })()
 
-export async function readZip(url: string, knownSize?: number): Promise<ZipIndex> {
+export async function readZip(url: Source, knownSize?: number, get: Fetcher = fetch): Promise<ZipIndex> {
   // The end record is in the last 22 bytes, or up to 64 KB more with an archive comment.
   const tail = 22 + 65535 + 20
-  const probe = knownSize !== undefined ? await bytes(url, Math.max(0, knownSize - tail), Math.max(0, knownSize - 1)) : await lastBytes(url, tail)
+  const probe = knownSize !== undefined ? await bytes(url, Math.max(0, knownSize - tail), Math.max(0, knownSize - 1), get) : await lastBytes(url, tail, get)
   const whole = probe.ranged ? null : probe.data
   const tailData = whole ? whole.subarray(Math.max(0, whole.length - tail)) : probe.data
   const view = new DataView(tailData.buffer, tailData.byteOffset, tailData.byteLength)
@@ -112,7 +119,7 @@ export async function readZip(url: string, knownSize?: number): Promise<ZipIndex
   if (at >= 20 && u32(view, at - 20) === EOCD64_LOCATOR) {
     zip64 = true
     const recordAt = u64(view, at - 20 + 8)
-    const rec = whole ? whole.subarray(recordAt, recordAt + 56) : (await bytes(url, recordAt, recordAt + 55)).data
+    const rec = whole ? whole.subarray(recordAt, recordAt + 56) : (await bytes(url, recordAt, recordAt + 55, get)).data
     const rv = new DataView(rec.buffer, rec.byteOffset, rec.byteLength)
     if (u32(rv, 0) !== EOCD64) throw new ZipError('The ZIP64 table of contents is damaged')
     count = u64(rv, 32)
@@ -126,7 +133,7 @@ export async function readZip(url: string, knownSize?: number): Promise<ZipIndex
   let cd: Uint8Array
   if (whole) cd = whole.subarray(cdOffset, cdOffset + cdSize)
   else if (cdOffset >= tailStart) cd = tailData.subarray(cdOffset - tailStart, cdOffset - tailStart + cdSize)
-  else cd = (await bytes(url, cdOffset, cdOffset + cdSize - 1)).data
+  else cd = (await bytes(url, cdOffset, cdOffset + cdSize - 1, get)).data
 
   const cv = new DataView(cd.buffer, cd.byteOffset, cd.byteLength)
   const entries: ZipEntry[] = []

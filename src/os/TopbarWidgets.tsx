@@ -5,6 +5,7 @@ import { fetchMinecraft, MC_ADDRESS, MC_PORT, mcNotificationsOn, setMcNotificati
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
 import { dayKey, eventsOn, eventTime, fetchEvents, startOfDay, useCalendarVersion, useShownCalendarIds, type CalendarEvent } from '../data/calendar'
 import { connectGoogle, hasCalendar, signIn, signOut, useAccount } from './account'
+import { cvMode } from './cvMode'
 import { openContextMenu, type MenuItem } from './ContextMenu'
 import { toggleOverlay } from './overlays'
 import { reboot, shutdown } from './powerState'
@@ -139,7 +140,8 @@ function Calendar({ close }: { close: () => void }) {
   const weeks = Array.from({ length: cells.length / 7 }, (_, i) => cells.slice(i * 7, i * 7 + 7))
   const move = (n: number) => setView(new Date(view.getFullYear(), view.getMonth() + n, 1))
   const isToday = (d: Date) => d.toDateString() === today.toDateString()
-  const isBirthday = (d: Date) => d.getDate() === born.getDate() && d.getMonth() === born.getMonth()
+  // Menno's birthday, marked on his CV page only.
+  const isBirthday = (d: Date) => cvMode() && d.getDate() === born.getDate() && d.getMonth() === born.getMonth()
   const showingNow = view.getFullYear() === today.getFullYear() && view.getMonth() === today.getMonth()
 
   return (
@@ -461,7 +463,7 @@ function AccountBlock({ close }: { close: () => void }) {
   if (account.status === 'anon')
     return (
       <div className="sys-user">
-        <span className="muted">Owner?</span>
+        <span className="muted">Guest</span>
         <button onClick={signIn}>Sign in with GitHub</button>
       </div>
     )
@@ -513,8 +515,10 @@ export function SystemMenu() {
               )}{' '}
               · {built.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })} {built.toTimeString().slice(0, 5)}
             </dd>
-            <dt>Owner</dt>
-            <dd>{profile.name}</dd>
+            <dt>Made by</dt>
+            <dd>
+              <a href="/cv">{profile.name}</a>
+            </dd>
           </dl>
           <AccountBlock close={close} />
           <div className="sys-actions">

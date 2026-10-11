@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '../apps/Terminal'
-import { profile } from '../data/profile'
-import { useLikelyOwner } from './account'
+import { HANDLE } from './identity'
+import { HOME } from '../terminal/vfs'
+import { useLikelySignedIn } from './account'
 import { bootDone, finishShutdown, powerOn, usePower } from './powerState'
 import type { WinState } from './wm'
 import { VERSION } from '../version'
@@ -24,7 +25,7 @@ const BOOT: LogLine[] = [
   ['k', '[    0.120954] NET: Registered PF_TAILSCALE protocol family', 30],
   ['k', '[    0.162008] usb 1-1: new high-speed USB device: Mechanical Keyboard (very clicky)', 30],
   ['k', '[    0.210447] nvme0n1: p1 p2 p3 (projects, contributions, games)', 30],
-  ['k', '[    0.264113] EXT4-fs (nvme0n1p2): mounted filesystem /home/menno ro, for your safety', 30],
+  ['k', `[    0.264113] EXT4-fs (nvme0n1p2): mounted filesystem ${HOME} ro, for your safety`, 30],
   ['k', '[    0.301772] Run /sbin/init as init process', 40],
   ['info', '', 60],
   ['info', `Welcome to MvL OS ${VERSION} (Arch, Omarchy flavour)!`, 120],
@@ -36,7 +37,7 @@ const BOOT: LogLine[] = [
   ['ok', 'Started Journal Service.', 110],
   ['start', 'Starting Load Kernel Module caffeine...', 70],
   ['ok', 'Finished Load Kernel Module caffeine.', 120],
-  ['ok', 'Mounted /home/menno/Projects.', 70],
+  ['ok', `Mounted ${HOME}/Projects.`, 70],
   ['ok', 'Reached target Local File Systems.', 60],
   ['start', 'Starting Network Manager...', 90],
   ['ok', 'Started Network Manager.', 140],
@@ -80,7 +81,7 @@ function consoleLines(): LogLine[] {
     ['info', '', 200],
     ['info', `MvL OS ${VERSION} mvlos tty1`, 0],
     ['info', '', 0],
-    ['info', `mvlos login: ${profile.handle} (automatic login)`, 300],
+    ['info', `mvlos login: ${HANDLE} (automatic login)`, 300],
     ['info', `Last login: ${last} on tty1`, 120],
   ]
 }
@@ -89,20 +90,20 @@ function consoleLines(): LogLine[] {
 const kernelTime = () => `[${(performance.now() / 1000).toFixed(6).padStart(12)}]`
 
 const SHUTDOWN = (reboot: boolean): LogLine[] => [
-  ['start', `Stopping Session 1 of User ${profile.handle}...`, 0],
+  ['start', `Stopping Session 1 of User ${HANDLE}...`, 0],
   ['start', 'Stopping Hyprland compositor (react-wm)...', 60],
   ['ok', 'Stopped Hyprland compositor (react-wm).', 140],
   ['ok', 'Stopped Minecraft status probe for cloud.mvl.sh.', 70],
   ['ok', 'Stopped Pepper cluster agent.', 90],
   ['ok', 'Stopped Boltwarden vault (it was locked anyway).', 80],
-  ['ok', `Stopped Session 1 of User ${profile.handle}.`, 110],
+  ['ok', `Stopped Session 1 of User ${HANDLE}.`, 110],
   ['ok', 'Removed slice User Slice of UID 1000.', 70],
   ['start', 'Stopping Tailscale node agent...', 60],
   ['ok', 'Stopped Tailscale node agent.', 150],
   ['ok', 'Stopped Network Manager.', 90],
   ['ok', 'Reached target Network is Offline.', 70],
-  ['start', 'Unmounting /home/menno/Projects...', 60],
-  ['ok', 'Unmounted /home/menno/Projects.', 130],
+  ['start', `Unmounting ${HOME}/Projects...`, 60],
+  ['ok', `Unmounted ${HOME}/Projects.`, 130],
   ['ok', 'Stopped Journal Service.', 90],
   ['ok', 'Reached target System Shutdown.', 80],
   ['ok', `Reached target System ${reboot ? 'Reboot' : 'Power Off'}.`, 120],
@@ -176,7 +177,7 @@ function useFollow(dep: unknown) {
 const CONSOLE_WIN: WinState = { pid: -1, app: 'terminal', x: 0, y: 0, w: 0, h: 0, z: 0, minimized: false, maximized: false, props: {}, openedAt: 0 }
 
 // Scales every boot log delay, so the whole boot speeds up or slows down without changing its rhythm.
-// The signed-in owner has seen it before: theirs flies by in about a second.
+// The signed-in user has seen it before: theirs flies by in about a second.
 const BOOT_PACE = 0.88
 const OWNER_PACE = 0.2
 
@@ -189,7 +190,7 @@ function Boot() {
   const [resumed, setResumed] = useState(false)
   const [leaving, setLeaving] = useState(false)
   const main = useMemo(() => [...BOOT, XORG_JOB, ...(wantConsole ? consoleLines() : GUI)], [wantConsole])
-  const quick = useLikelyOwner()
+  const quick = useLikelySignedIn()
   const [n, mainDone] = useLog(main, false, quick ? OWNER_PACE : BOOT_PACE)
   const [g, guiDone] = useLog(STARTX, !resumed)
   const consoleOpen = wantConsole && mainDone

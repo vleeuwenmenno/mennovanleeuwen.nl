@@ -2,7 +2,7 @@ import { synced } from './synced'
 
 // Desktop icon state shared by the Desktop and Files' Trash view: where each icon sits, what it is
 // called, and which icons are in the trash. Remembered per browser, so a visitor's tidy (or messy)
-// desktop survives a reload, and synced to the server for the signed-in owner.
+// desktop survives a reload, and synced to the server for the signed-in user.
 
 export type IconPos = { col: number; row: number }
 export type DesktopState = {

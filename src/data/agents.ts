@@ -8,7 +8,12 @@ import { getNote } from './notes'
 export type Mode = 'quick' | 'deep'
 /** A step in the agent's plan for a long job. */
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission }
+/** A thread's work folder: a Seafile folder (library and path), and how the terminal showed it (~/Projects/x). */
+export type Workdir = { repo: string; path: string; label: string }
+/** How changes are allowed: each one asks, file edits go through, or read only while planning. */
+export type Permission = 'default' | 'acceptEdits' | 'plan'
+export const PERMISSIONS: Permission[] = ['default', 'acceptEdits', 'plan']
 /** A group of threads in the sidebar, with a memory of its own. */
 export type Project = { id: number; name: string; sort: number; createdAt: number }
 export type ToolCall = { name: string; arguments: Record<string, unknown> }
@@ -18,7 +23,7 @@ export type AttachmentInfo = Omit<Attachment, 'text' | 'data'>
 export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; createdAt: number }
 
 /** What a thread may use, switched in the composer. */
-export type ToolGroup = 'web' | 'notes' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects'
+export type ToolGroup = 'web' | 'notes' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills'
 export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile?: boolean }[] = [
   { id: 'web', name: 'Web', detail: 'Search the web and read pages' },
   { id: 'notes', name: 'Notes', detail: 'Search and make notes; changing or deleting one asks you first' },
@@ -27,11 +32,14 @@ export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile
   { id: 'seafile_write', name: 'Seafile changes', detail: 'Folders, writing, renaming, moving, deleting; asks you first', seafile: true },
   { id: 'memory', name: 'Memory', detail: 'Remember what you tell it' },
   { id: 'projects', name: 'Projects', detail: 'Make and rename projects, move this thread; asks you first' },
+  { id: 'files', name: 'Work folder', detail: "Read, search and edit files in the thread's work folder" },
+  { id: 'terminal', name: 'Terminal', detail: 'Run msh commands, from the agents command in the terminal' },
+  { id: 'skills', name: 'Skills', detail: 'Read the skills in ~/.agents/skills and the work folder when a task calls for one' },
 ]
 export const ALL_TOOLS = TOOL_GROUPS.map((g) => g.id)
 /** The groups there were before choices remembered which groups existed. */
 const LEGACY_TOOLS: ToolGroup[] = ['web', 'notes', 'code', 'seafile', 'seafile_write', 'memory']
-/** About the owner (projectId null) or one project, filed under a category path like "People/Friends". */
+/** About the user (projectId null) or one project, filed under a category path like "People/Friends". */
 export type Memory = { id: number; text: string; category: string; projectId: number | null; threadId: string | null; createdAt: number; updatedAt: number | null }
 export type ModelInfo = { name: string; thinking: boolean; vision: boolean; contextLength: number | null }
 
@@ -62,10 +70,13 @@ export type Question = {
 export type Form = { title: string; intro?: string; questions: Question[]; submit?: string }
 
 /** Something the agent waits on: a change to allow, or a form to answer; which reply asked and which call. */
-export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question'; form?: Form }
+export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client'; form?: Form; call?: ToolCall }
 
 export type TurnEvent =
-  | { type: 'approval'; callId: string; messageId: number; index: number }
+  | { type: 'approval'; callId: string; messageId: number; index: number; call?: ToolCall }
+  /** A terminal tool call for the terminal to run; clientDone when it is answered or given up */
+  | { type: 'client'; callId: string; messageId: number; index: number; call: ToolCall }
+  | { type: 'clientDone'; callId: string }
   | { type: 'approved'; callId: string; allow: boolean }
   | { type: 'question'; callId: string; messageId: number; index: number; form: Form }
   | { type: 'answered'; callId: string }
@@ -78,13 +89,20 @@ export type TurnEvent =
   | { type: 'snapshot'; thread: Thread; messages: AgentMessage[]; pending: PendingApproval[]; live: { content: string; thinking: string } | null }
 
 export const listThreads = (archived: boolean) => api<Thread[]>(`/api/agents/threads${archived ? '?archived=1' : ''}`)
-export const createThread = (input: { mode: Mode; model?: string; tools?: ToolGroup[]; projectId?: number | null; quick?: boolean }) => api<Thread>('/api/agents/threads', { method: 'POST', json: input })
+export const createThread = (input: { mode: Mode; model?: string; tools?: ToolGroup[]; projectId?: number | null; quick?: boolean; workdir?: Workdir | null; permission?: Permission }) => api<Thread>('/api/agents/threads', { method: 'POST', json: input })
 export const getThread = (id: string) => api<{ thread: Thread; messages: AgentMessage[]; pending: PendingApproval[] }>(`/api/agents/threads/${id}`)
 export const answerForm = (id: string, callId: string, answers: Record<string, unknown> | null) =>
   api(`/api/agents/threads/${id}/answer`, { method: 'POST', json: answers ? { callId, answers } : { callId, skip: true } })
-export const answerApproval = (id: string, callId: string, allow: boolean) => api(`/api/agents/threads/${id}/approve`, { method: 'POST', json: { callId, allow } })
+/**
+ * Allows or declines a change. `always`: allow edits from now on, or this command; `feedback`: why
+ * not, for the agent; `mode`: the permission mode a plan starts in (exit_plan_mode).
+ */
+export const answerApproval = (id: string, callId: string, allow: boolean, extra: { always?: 'edits' | 'command'; feedback?: string; mode?: Permission } = {}) =>
+  api(`/api/agents/threads/${id}/approve`, { method: 'POST', json: { callId, allow, ...extra } })
+/** What the terminal printed for a terminal tool call. */
+export const sendClientResult = (id: string, callId: string, output: string, status: number) => api(`/api/agents/threads/${id}/result`, { method: 'POST', json: { callId, output, status } })
 /** `todos: null` dismisses the thread's plan (for the agent too). */
-export const updateThread = (id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'mode' | 'model' | 'tools' | 'pinned' | 'projectId' | 'quick'>> & { todos?: null }) => api<Thread>(`/api/agents/threads/${id}`, { method: 'PATCH', json: patch })
+export const updateThread = (id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'mode' | 'model' | 'tools' | 'pinned' | 'projectId' | 'quick' | 'workdir' | 'permission'>> & { todos?: null }) => api<Thread>(`/api/agents/threads/${id}`, { method: 'PATCH', json: patch })
 export const deleteThread = (id: string) => api(`/api/agents/threads/${id}`, { method: 'DELETE' })
 export const stopThread = (id: string) => api(`/api/agents/threads/${id}/stop`, { method: 'POST' })
 /** Quick answers asked from Spotlight and not continued in the app, newest first (expired ones pruned). */
@@ -117,8 +135,12 @@ export type AgentSettings = {
   tools: ToolGroup[]
   /** The tool groups there were when `tools` was last saved: any newer one starts switched on */
   seenTools: ToolGroup[]
+  /** ~/.agents/skills in Seafile, when home is there (src/data/agentPlaces.ts keeps it up to date) */
+  skillsFolder: { repo: string; path: string; label: string } | null
+  /** Skills switched off: the agents do not see them */
+  skillsOff: string[]
 }
-const settingsStore = synced<AgentSettings>('agents', { titleModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS }, {
+const settingsStore = synced<AgentSettings>('agents', { titleModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [] }, {
   normalize: (v) => {
     const s = (v ?? {}) as Partial<AgentSettings>
     return {
@@ -130,12 +152,44 @@ const settingsStore = synced<AgentSettings>('agents', { titleModel: null, quickM
       // Groups added since the choice was saved are on, like every group is for someone new.
       tools: Array.isArray(s.tools) ? ALL_TOOLS.filter((t) => s.tools!.includes(t) || !(Array.isArray(s.seenTools) ? s.seenTools : LEGACY_TOOLS).includes(t)) : ALL_TOOLS,
       seenTools: ALL_TOOLS,
+      skillsFolder: s.skillsFolder && typeof s.skillsFolder.repo === 'string' && typeof s.skillsFolder.path === 'string' ? { repo: s.skillsFolder.repo, path: s.skillsFolder.path, label: String(s.skillsFolder.label ?? s.skillsFolder.path) } : null,
+      skillsOff: Array.isArray(s.skillsOff) ? s.skillsOff.filter((x): x is string => typeof x === 'string') : [],
     }
   },
 })
 export const useAgentSettings = settingsStore.use
 export const agentSettings = settingsStore.get
 export const setAgentSettings = (patch: Partial<AgentSettings>) => settingsStore.set((s) => ({ ...s, ...patch }))
+
+/**
+ * Whether "don't ask again" makes sense for a terminal command: never for commands that run other
+ * command lines or change files (the server asks for those anyway), nor for lines that write a file.
+ */
+const NEVER_ALWAYS = new Set(['msh', 'sh', 'bash', 'eval', 'source', '.', 'xargs', 'find', 'fd', 'sudo', 'env', 'command', 'watch', 'exec', 'rm', 'mv', 'cp', 'curl', 'wget'])
+export function canAlwaysAllow(command: string): boolean {
+  const names = command.split(/[|;&\n]/).map((p) => p.trim().split(/\s+/)[0]).filter(Boolean)
+  return !!names.length && !names.some((n) => NEVER_ALWAYS.has(n)) && !/(^|[^<>&0-9])(\d?>{1,2}|&>)\s*(?!&|\/dev\/null\b)\S/.test(command)
+}
+
+/** A skill: instructions for a kind of task, in a folder with a SKILL.md (server/skills.ts). */
+export type Skill = { name: string; description: string; source: 'builtin' | 'user' | 'project'; folder: { repo: string; path: string } | null; label: string; userOnly: boolean; enabled: boolean }
+/** Where to look for skills besides the user's and the built-in ones: a thread's work folder, or a folder. */
+export type SkillsWhere = { thread?: string; folder?: Workdir | null; fresh?: boolean }
+const skillsQuery = (w: SkillsWhere = {}) => {
+  const q = new URLSearchParams()
+  if (w.fresh) q.set('fresh', '1')
+  if (w.thread) q.set('thread', w.thread)
+  else if (w.folder) Object.entries(w.folder).forEach(([k, v]) => q.set(k, v))
+  const s = q.toString()
+  return s ? `?${s}` : ''
+}
+export const listSkills = (w?: SkillsWhere) => api<Skill[]>(`/api/agents/skills${skillsQuery(w)}`)
+export const skillInfo = (name: string, w?: SkillsWhere) => api<Skill & { body: string; files: string[] }>(`/api/agents/skills/${encodeURIComponent(name)}${skillsQuery(w)}`)
+/** Installs skills from GitHub into a skills folder (the user's, unless `folder` says another). */
+export const installSkills = (input: { source: string; skill?: string; force?: boolean; folder?: Workdir | null }) =>
+  api<{ installed: { name: string; files: number; label: string }[]; from: string }>('/api/agents/skills/install', { method: 'POST', json: input })
+export const removeSkill = (name: string, folder?: Workdir | null) => api('/api/agents/skills/remove', { method: 'POST', json: { name, folder } })
+export const setSkillEnabled = (name: string, on: boolean) => setAgentSettings({ skillsOff: on ? agentSettings().skillsOff.filter((n) => n !== name) : [...new Set([...agentSettings().skillsOff, name])] })
 
 /** "12.3k" */
 export const tokenCount = (n: number) => (n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k` : `${(n / 1_000_000).toFixed(1)}M`)
@@ -162,15 +216,16 @@ export function agentModels(): Promise<ModelInfo[]> {
 }
 
 /**
- * Sends the owner's message and reads the answer as it streams: each JSON line is one event.
+ * Sends the user's message and reads the answer as it streams: each JSON line is one event.
  * Aborting `signal` stops the turn on the server too.
  */
-export async function sendMessage(id: string, text: string, attachments: Attachment[], onEvent: (e: TurnEvent) => void, signal: AbortSignal) {
+export async function sendMessage(id: string, text: string, attachments: Attachment[], onEvent: (e: TurnEvent) => void, signal: AbortSignal, opts: { terminal?: boolean } = {}) {
   const res = await fetch(`/api/agents/threads/${id}/messages`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, attachments }),
+    // From the terminal's agents command, which can run the terminal tool.
+    body: JSON.stringify({ text, attachments, ...(opts.terminal ? { client: { terminal: true } } : {}) }),
     signal,
   })
   await readEvents(res, onEvent)
@@ -180,8 +235,8 @@ export async function sendMessage(id: string, text: string, attachments: Attachm
  * Joins a turn this window did not start (opened again while it runs, or another tab): a snapshot
  * with the reply written so far, then its events live. Resolves when the turn ends.
  */
-export async function followThread(id: string, onEvent: (e: TurnEvent) => void, signal: AbortSignal) {
-  await readEvents(await fetch(`/api/agents/threads/${id}/follow`, { credentials: 'same-origin', signal }), onEvent)
+export async function followThread(id: string, onEvent: (e: TurnEvent) => void, signal: AbortSignal, opts: { terminal?: boolean } = {}) {
+  await readEvents(await fetch(`/api/agents/threads/${id}/follow${opts.terminal ? '?client=terminal' : ''}`, { credentials: 'same-origin', signal }), onEvent)
 }
 
 async function readEvents(res: Response, onEvent: (e: TurnEvent) => void) {
@@ -266,6 +321,34 @@ export function toolLabel(call: ToolCall): string {
       return `${a.copy === true ? 'Copy' : 'Move'} ${s('path')} in ${s('library')} to ${s('to_folder')}${s('to_library') ? ` in ${s('to_library')}` : ''}`
     case 'seafile_delete':
       return `Delete ${s('path')} in ${s('library')}`
+    case 'read_file':
+      return `Read ${s('path')}${a.offset ? ` from line ${String(a.offset)}` : ''}`
+    case 'write_file':
+      return `Write ${s('path')} (${s('content').split('\n').length} lines)`
+    case 'edit_file':
+      return `Edit ${s('path')}`
+    case 'multi_edit':
+      return `Edit ${s('path')} (${Array.isArray(a.edits) ? a.edits.length : 0} changes)`
+    case 'list_dir':
+      return `Listed ${s('path') || 'the work folder'}`
+    case 'glob':
+      return `Found files matching ${s('pattern')}`
+    case 'grep':
+      return `Searched for “${s('pattern')}”${s('path') ? ` in ${s('path')}` : ''}`
+    case 'make_dir':
+      return `Make folder ${s('path')}`
+    case 'move_path':
+      return `Move ${s('from')} to ${s('to')}`
+    case 'delete_path':
+      return `Delete ${s('path')}`
+    case 'terminal':
+      return s('description') || `Ran ${s('command').split('\n')[0].slice(0, 80)}`
+    case 'exit_plan_mode':
+      return 'Presented a plan'
+    case 'use_skill':
+      return `Read the skill ${s('name')}`
+    case 'read_skill_file':
+      return `Read ${s('path')} from the skill ${s('name')}`
     default:
       return call.name
   }

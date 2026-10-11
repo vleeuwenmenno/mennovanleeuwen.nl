@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { useGoSuggestionState, useGolinksTemplate } from '../data/golinks'
-import { profile } from '../data/profile'
+import { cvMode } from '../os/cvMode'
+import { browserMountPoint, useMounts } from '../data/mounts'
+import { HANDLE } from '../os/identity'
 import { linkAt, linkMenu, openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { notify } from '../os/notify'
 import { setAccent } from '../os/theme'
@@ -75,7 +77,7 @@ function Markup({ text, onAnimationEnd }: { text: string; onAnimationEnd?: () =>
 function Prompt({ cwd }: { cwd: string }) {
   return (
     <span className="prompt">
-      <span className="t-green">{profile.handle}</span>
+      <span className="t-green">{HANDLE}</span>
       <span className="t-muted">@</span>
       <span className="t-accent">mvlos</span> <span className="t-blue">{prettyPath(cwd)}</span>
       <span className="t-muted"> ❯ </span>
@@ -147,11 +149,23 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
           {
             id: nextId++,
             kind: 'out',
-            text: `\nWelcome to {c:accent}MvL OS{/}. Type {c:green}help{/} to see what works, or try {c:green}projects{/}, {c:green}recent{/}, {c:green}cat cv.md{/}.\n`,
+            text: cvMode()
+              ? `\nWelcome to {c:accent}MvL OS{/}. Type {c:green}help{/} to see what works, or try {c:green}projects{/}, {c:green}recent{/}, {c:green}cat cv.md{/}.\n`
+              : `\nWelcome to {c:accent}MvL OS{/}. Type {c:green}help{/} to see what works, or try {c:green}games{/}, {c:green}ls ~/Pictures{/}, {c:green}cat README.md{/}.\n`,
           },
         ]
       : [],
   )
+  // Signed in without Seafile as home: ~ is writable, but only kept in this browser. Said once in
+  // the boot terminal, as soon as the account is known.
+  const mountsVersion = useMounts()
+  const toldBrowser = useRef(false)
+  useEffect(() => {
+    if (!win.props.motd || toldBrowser.current || browserMountPoint() !== HOME) return
+    toldBrowser.current = true
+    setEntries((list) => [...list, { id: nextId++, kind: 'out', text: `{c:yellow}~ is kept in this browser only{/}: clearing the site's data deletes it. Link Seafile in Settings → Integrations to keep files for good ({c:green}df -h{/} shows the space).\n` }])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mountsVersion])
   const [cwd, setCwd] = useState(embedded?.cwd ?? HOME)
   const [value, setValue] = useState('')
   const [running, setRunning] = useState(false)
@@ -189,13 +203,17 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
   }, [pick])
   const history = useRef<string[]>(loadHistory())
   const histIdx = useRef<number | null>(null)
-  const env = useRef<Record<string, string>>({ USER: profile.handle, HOME, SHELL: '/bin/msh', TERM: 'xterm-mvlos', EDITOR: 'nvim', LANG: 'en_US.UTF-8' })
+  const env = useRef<Record<string, string>>({ USER: HANDLE, HOME, SHELL: '/bin/msh', TERM: 'xterm-mvlos', EDITOR: 'nvim', LANG: 'en_US.UTF-8' })
   const inputRef = useRef<HTMLInputElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const keyHandler = useRef<((key: string, text?: string) => boolean) | null>(null)
   const rawKeys = useRef(false)
+  const shiftKeys = useRef(false)
+  const resizeHandler = useRef<(() => void) | null>(null)
   // A full-screen program on the alternate screen (nano): the rest of the scrollback hides meanwhile.
   const [alt, setAlt] = useState(false)
+  // A program that draws its own prompt in its live block (agents): the shell's stays out of sight.
+  const [takeover, setTakeover] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const windowsRef = useRef(wm.windows)
   windowsRef.current = wm.windows
@@ -332,9 +350,10 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
     const print = (text: string) => setEntries((e) => [...e, { id: nextId++, kind: 'out', text }])
     // One redrawable block per command line, for programs that update in place.
     let liveId: number | null = null
-    const live = (text: string | null, opts?: { alt?: boolean }) => {
+    const live = (text: string | null, opts?: { alt?: boolean; hideInput?: boolean }) => {
       setDrawing(text !== null)
       setAlt(text !== null && !!opts?.alt)
+      setTakeover(text !== null && !!opts?.hideInput)
       if (text === null) {
         const id = liveId
         liveId = null
@@ -349,6 +368,15 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
     }
     abortRef.current = new AbortController()
     setRunning(true)
+    // The size follows the window while the command runs, for programs that redraw (agents).
+    const size = termSize()
+    const watcher = new ResizeObserver(() => {
+      const now = termSize()
+      if (now.cols === size.cols && now.rows === size.rows) return
+      Object.assign(size, now)
+      resizeHandler.current?.()
+    })
+    if (scrollRef.current) watcher.observe(scrollRef.current)
     const results = await runLine(trimmed, {
       cwd,
       setCwd,
@@ -373,17 +401,23 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
       setAccent,
       print,
       live,
-      size: termSize(),
+      size,
+      onResize: (h) => void (resizeHandler.current = h),
       onKey: (h, opts) => {
         keyHandler.current = h
         rawKeys.current = !!h && !!opts?.raw
+        shiftKeys.current = !!h && !!opts?.shift
       },
       signal: abortRef.current.signal,
     })
+    watcher.disconnect()
+    resizeHandler.current = null
     keyHandler.current = null
     rawKeys.current = false
+    shiftKeys.current = false
     setDrawing(false)
     setAlt(false)
+    setTakeover(false)
     abortRef.current = null
     setRunning(false)
     if (results.some((r) => r.output.includes('{anim:'))) setAnimating(true)
@@ -443,7 +477,8 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
     // Raw programs (nano) get Ctrl+X as ^X and Alt+U as M-u, ahead of the shell and the desktop.
     if (running && keyHandler.current && rawKeys.current) {
       const k = e.key.length === 1 ? e.key : e.key
-      const token = e.ctrlKey && !e.altKey ? (e.key.length === 1 ? `^${k.toUpperCase()}` : `^${k}`) : e.altKey && !e.ctrlKey ? `M-${e.key.length === 1 ? k.toLowerCase() : k}` : k
+      const shift = shiftKeys.current && e.shiftKey && e.key.length > 1 ? 'S-' : ''
+      const token = e.ctrlKey && !e.altKey ? (e.key.length === 1 ? `^${k.toUpperCase()}` : `^${k}`) : e.altKey && !e.ctrlKey ? `M-${e.key.length === 1 ? k.toLowerCase() : k}` : shift + k
       if (e.metaKey || ['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return
       if (keyHandler.current(token)) {
         e.preventDefault()
@@ -594,7 +629,7 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
 
   return (
     <div
-      className={`terminal ${onLogout ? 'is-console' : ''} ${alt ? 'is-alt' : ''} ${readOnly ? 'is-readonly' : ''}`}
+      className={`terminal ${onLogout ? 'is-console' : ''} ${alt ? 'is-alt' : ''} ${takeover ? 'is-takeover' : ''} ${readOnly ? 'is-readonly' : ''}`}
       ref={scrollRef}
       style={onLogout ? undefined : { fontSize: size }}
       onContextMenu={onMenu}
@@ -627,7 +662,15 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
           <input
             ref={inputRef}
             value={value}
-            onChange={(e) => setValue(e.target.value)}
+            onChange={(e) => {
+              // Text that arrives without key presses (a phone's keyboard, IME, dictation) goes to a raw program as typed.
+              if (running && keyHandler.current && rawKeys.current) {
+                if (e.target.value) keyHandler.current('Text', e.target.value)
+                setValue('')
+                return
+              }
+              setValue(e.target.value)
+            }}
             onKeyDown={onKeyDown}
             readOnly={readOnly}
             onPaste={(e) => {

@@ -177,6 +177,9 @@ export function markAllRead() {
   save(entries.map((e) => (e.read ? e : { ...e, read: true })))
   change({ read: true })
 }
+// Signed out, or another account here: the list was that account's (src/os/account.ts clears it
+// from storage too). Only here: the server keeps each account's own list.
+if (typeof window !== 'undefined') window.addEventListener('mvlos:forget', () => save([]))
 /** Opened from a pop-up or the center: gone when Settings says so, otherwise read. */
 export function opened(id: string) {
   if (notifyPrefs().removeOnOpen) return removeEntry(id)
