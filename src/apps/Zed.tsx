@@ -1547,6 +1547,18 @@ function rich(s: string, key: string): ReactNode[] {
 const LIST = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/
 const BLOCK_START = /^\s*(#{1,6}\s|>|```|([-*+]|\d+[.)])\s|(---|\*\*\*|___)\s*$)/
 
+// Tables, GitHub style: a header row, a separator row (dashes, colons for alignment), then rows.
+// Pipes at the ends are optional; a pipe inside a cell is written \|.
+const TABLE_SEP = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/
+function tableCells(line: string): string[] {
+  let t = line.trim()
+  if (t.startsWith('|')) t = t.slice(1)
+  if (t.endsWith('|') && !t.endsWith('\\|')) t = t.slice(0, -1)
+  return t.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
+}
+const isTableStart = (lines: string[], i: number) =>
+  lines[i].includes('|') && i + 1 < lines.length && TABLE_SEP.test(lines[i + 1]) && lines[i + 1].includes('-') && (lines[i + 1].includes('|') || lines[i].trim().startsWith('|'))
+
 type Item = { indent: number; ordered: boolean; text: string }
 
 function list(items: Item[], key: string): ReactNode {
@@ -1636,6 +1648,28 @@ export function MarkdownPreview({ text, breaks = false }: { text: string; breaks
       out.push(<blockquote key={key}><MarkdownPreview text={body.join('\n')} breaks={breaks} /></blockquote>)
       continue
     }
+    if (isTableStart(lines, i)) {
+      const head = tableCells(line)
+      const align = tableCells(lines[i + 1]).map((c) => (c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : undefined))
+      const rows: string[][] = []
+      i += 2
+      while (i < lines.length && lines[i].trim() && lines[i].includes('|')) rows.push(tableCells(lines[i++]))
+      out.push(
+        <div key={key} className="md-table">
+          <table>
+            <thead>
+              <tr>{head.map((c, j) => <th key={j} style={{ textAlign: align[j] }}>{rich(c, `${key}h${j}`)}</th>)}</tr>
+            </thead>
+            <tbody>
+              {rows.map((r, n) => (
+                <tr key={n}>{head.map((_, j) => <td key={j} style={{ textAlign: align[j] }}>{rich(r[j] ?? '', `${key}r${n}c${j}`)}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      )
+      continue
+    }
     if (LIST.test(line)) {
       const items: Item[] = []
       while (i < lines.length) {
@@ -1649,7 +1683,7 @@ export function MarkdownPreview({ text, breaks = false }: { text: string; breaks
       continue
     }
     const para: string[] = []
-    while (i < lines.length && lines[i].trim() && (!para.length || !BLOCK_START.test(lines[i]))) para.push(breaks ? lines[i++].trimEnd() : lines[i++].trim())
+    while (i < lines.length && lines[i].trim() && (!para.length || (!BLOCK_START.test(lines[i]) && !isTableStart(lines, i)))) para.push(breaks ? lines[i++].trimEnd() : lines[i++].trim())
     out.push(<p key={key} className={breaks ? 'md-breaks' : undefined}>{rich(para.join(breaks ? '\n' : ' '), key)}</p>)
   }
   return <>{out}</>
