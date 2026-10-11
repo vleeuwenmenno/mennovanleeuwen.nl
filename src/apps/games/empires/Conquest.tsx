@@ -1188,6 +1188,17 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   useEffect(() => {
     if (g.pending >= 0 && !clash) g.pending = -1
   })
+  /** Where the waiting battle is: the camera flies there (without selecting anything). */
+  const lookAtClash = (pid: number) => {
+    const q = planetAt(g, g.planets[pid])
+    flyTo(q.x, q.y, Math.max(camRef.current.k, 45))
+  }
+  // A new battle for us: fly to it, so the prompt's planet is right there on the map.
+  const clashPlanet = clash?.planet ?? -1
+  useEffect(() => {
+    if (clashPlanet >= 0) lookAtClash(clashPlanet)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clashPlanet])
 
   const fight = (c: Clash, resume?: BattleSnap) => {
     const p = g.planets[c.planet]
@@ -1834,6 +1845,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
           <BattlePrompt
             g={g}
             c={clash}
+            onShow={() => lookAtClash(clash.planet)}
             onFight={() => {
               sound.click()
               fight(clash)
@@ -2616,8 +2628,15 @@ function GalaxySelection({ g, fleets, planets, take, setTake, mode, onCommand, o
   )
 }
 
-function BattlePrompt({ g, c, onFight, onAuto, onRetreat }: { g: Galaxy; c: Clash; onFight: () => void; onAuto: () => void; onRetreat: () => void }) {
+/**
+ * The battle waiting for us, docked at the bottom of the map rather than over it: the galaxy stays
+ * paused, but the map can still be looked around (and the battle's planet flown back to) before
+ * deciding. It folds down to one line to see more of the map.
+ */
+function BattlePrompt({ g, c, onShow, onFight, onAuto, onRetreat }: { g: Galaxy; c: Clash; onShow: () => void; onFight: () => void; onAuto: () => void; onRetreat: () => void }) {
   const p = g.planets[c.planet]
+  // Short screens (phones on their side, a small window) start folded, so the map stays in view.
+  const [folded, setFolded] = useState(() => window.innerHeight < 760)
   const odds = useMemo(() => {
     let wins = 0
     for (let i = 0; i < 9; i++) if (autoResolve(g, c, g.time + i * 13.7).winner === ME) wins++
@@ -2633,10 +2652,42 @@ function BattlePrompt({ g, c, onFight, onAuto, onRetreat }: { g: Galaxy; c: Clas
       </div>
     </div>
   )
+  const aside = (
+    <span className="ew-gb-tools">
+      <span className="ew-muted ew-small">{g.systems[p.system].name} system</span>
+      <button className="ew-gb-tool" onClick={onShow} data-tip={`Fly the map to ${p.name}`} aria-label={`Show ${p.name} on the map`}>
+        <Icon name="target" size={14} /> Show
+      </button>
+      <button className="ew-gb-tool" onClick={() => setFolded(true)} aria-expanded aria-label="Fold the battle prompt" data-tip="Fold down, to see more of the map">
+        ▾
+      </button>
+    </span>
+  )
+  // Folded: one slim bar with the choices, the rest of the map in view.
+  if (folded)
+    return (
+      <div className="ew-gbattle-dock" role="dialog" aria-label={`Battle at ${p.name}`}>
+        <div className="ew-gb-bar">
+          <Icon name="attack" size={16} />
+          <strong>Battle at {p.name}</strong>
+          <em>{Math.round(odds * 100)}%</em>
+          <span className="ew-gb-bar-gap" />
+          <button className="ew-gb-tool" onClick={onShow} aria-label={`Show ${p.name} on the map`} data-tip={`Fly the map to ${p.name}`}>
+            <Icon name="target" size={14} />
+          </button>
+          <button className="ew-gb-tool is-primary" onClick={onFight}>Fight</button>
+          <button className="ew-gb-tool" onClick={onAuto}>Auto</button>
+          {c.attacker === ME && <button className="ew-gb-tool" onClick={onRetreat}>Retreat</button>}
+          <button className="ew-gb-tool" onClick={() => setFolded(false)} aria-expanded={false} aria-label="Open the battle prompt" data-tip="Both fleets and the odds">
+            ▴
+          </button>
+        </div>
+      </div>
+    )
   return (
-    <div className="ew-modal-back">
+    <div className="ew-gbattle-dock" role="dialog" aria-label={`Battle at ${p.name}`}>
       <div className="ew-modal is-wide ew-gbattle-modal">
-        <Frame title={`Battle at ${p.name}`} aside={<span className="ew-muted ew-small">{g.systems[p.system].name} system</span>}>
+        <Frame title={`Battle at ${p.name}`} aside={aside}>
           <div className="ew-gb-sides">
             {side(c.holder, c.holderShips, c.station)}
             <span className="ew-gb-vs">vs</span>
