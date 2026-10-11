@@ -539,6 +539,25 @@ dragging, the menus and an *Add widget* entry everywhere. Per-widget settings go
 [`config.ts`](src/widgets/config.ts) (`useWidgetConfig` / `setWidgetConfig`), which syncs like
 notes; where a widget sits is part of the synced window layout.
 
+## Touch screens
+
+On a phone or tablet, **holding a finger still for half a second is a right-click**, everywhere
+in the OS: the desktop, its icons, the dock, title bars, notes and widgets, Files, the Agents
+sidebar, the calendar, Spotlight results and the rest open the same menu a mouse gets, with a short
+buzz ([`installTouchContextMenu`](src/os/ContextMenu.tsx)). Moving the finger first (scrolling,
+dragging a window or an icon) or adding a second one is not a long press, and the tap that would
+follow the lift is dropped once a menu opened. Text fields keep the browser's own long press
+(selection, paste), and so do places with a long press of their own: Empires At War, Minesweeper's
+flags, held game buttons and game canvases. Anything else can opt out with `data-no-touch-menu`.
+On coarse pointers the menu's items are taller, and the OS chrome (bar, dock, title bars, sidebars)
+does not select its labels or show the browser's callout.
+
+On phones the notes and widgets go one under the other down a desktop that scrolls. Drag one by
+its top strip to move it up or down that column (the desktop scrolls along near the top bar and
+the dock), or long-press it for *Move up*, *Move down* and *Move to top*. The order is part of the
+phone's window layout (`stack` in [`src/os/wm.tsx`](src/os/wm.tsx)); on a big screen notes stay
+wherever they were put.
+
 ## Empires At War on touch screens
 
 Phones and tablets play the whole game by touch ([`src/apps/games/empires/Touch.tsx`](src/apps/games/empires/Touch.tsx)),

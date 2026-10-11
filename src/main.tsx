@@ -2,7 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { APP_META } from './os/apps'
 import { loadAccount } from './os/account'
-import { installContextMenuFallback } from './os/ContextMenu'
+import { installContextMenuFallback, installTouchContextMenu } from './os/ContextMenu'
 import { appHere } from './os/cvMode'
 import { initialLayout, placement, Shell } from './os/Shell'
 import { applyDockReserve } from './os/dockPrefs'
@@ -23,6 +23,7 @@ trackVisualViewport()
 startSync()
 startBrowserFiles()
 installContextMenuFallback()
+installTouchContextMenu()
 void loadAccount()
 
 // Saved windows of apps that don't exist on this page (the CV apps away from /cv) are dropped.

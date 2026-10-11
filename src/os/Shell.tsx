@@ -35,7 +35,7 @@ import { appearanceMenu } from './appearanceMenu'
 import { toggleMode, useTheme } from './theme'
 import { ClockWidget, MinecraftWidget, SystemMenu } from './TopbarWidgets'
 import { useIsMobile } from './useIsMobile'
-import { Window } from './Window'
+import { NoteStackSlot, Window } from './Window'
 import { SINGLE_INSTANCE, useWM, type AppId, type Geometry, type WinState } from './wm'
 
 const TOP = 28
@@ -754,6 +754,8 @@ export function Shell() {
           {wm.windows.map((w) => (
             <AppWindow key={w.pid} w={w} />
           ))}
+          {/* Phones: where a note being moved up or down the column will land. */}
+          <NoteStackSlot />
         </main>
       </div>
       <SnapPreview />
