@@ -17,3 +17,20 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+
+  # The runtime image copies the server and the few src/ files it imports one by one: start it
+  # and ask /healthz, so a file the server needs but the image lacks fails here, not in production.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t mvlos-ci .
+      - name: The image starts
+        run: |
+          docker run -d --name mvlos-ci -e MC_WATCH=off -p 8080:8080 mvlos-ci
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8080/healthz > /dev/null; then echo "up"; exit 0; fi
+            sleep 1
+          done
+          docker logs mvlos-ci
+          exit 1
