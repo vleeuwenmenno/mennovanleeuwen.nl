@@ -11,6 +11,7 @@ import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateL
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { setSwing, useSwingPrefs } from '../os/swing'
 import { ask } from '../os/Dialogs'
+import { UsersSettings } from './UsersSettings'
 import { Select } from '../os/Select'
 import { libraryName, loadLibraries, primaryOf, setSeafilePrefs, useLibraries, useSeafilePrefs } from '../data/seafile'
 import { fstabEntries, isSeafileType, useMounts } from '../data/mounts'
@@ -1597,9 +1598,10 @@ function LinkSettingsPane() {
   )
 }
 
-type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'agents' | 'golinks' | 'sync' | 'about'
-/** `owner`: only for the signed-in owner (accounts and services); visitors don't see it at all. */
-type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; keywords: string; blurb: string; owner?: true; render: () => ReactNode }
+type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'agents' | 'golinks' | 'sync' | 'users' | 'about'
+/** `owner`: only for the signed-in owner (accounts and services); visitors don't see it at all.
+ * `admin`: only for admins (the server checks that on every request too). */
+type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; keywords: string; blurb: string; owner?: true; admin?: true; render: () => ReactNode }
 
 const svg = (d: ReactNode) => (
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -1652,6 +1654,7 @@ const GROUPS: Pane[][] = [
   ],
   [
     { id: 'sync', label: 'Sync', hue: 'var(--green)', owner: true, icon: svg(<><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3" /><path d="M18 3v4h-4M6 21v-4h4" /></>), keywords: 'sync devices cloud', blurb: 'What follows you between devices.', render: () => <SyncPane /> },
+    { id: 'users', label: 'Users', hue: 'var(--accent)', owner: true, admin: true, icon: svg(<><circle cx="9" cy="8" r="3.5" /><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6" /><circle cx="17" cy="9" r="2.5" /><path d="M16 14.2c2.9.1 5 2.4 5 5.8" /></>), keywords: 'users accounts admin sign-up registration ban delete cap full', blurb: 'Every account, sign-up and the cap. Only for admins.', render: () => <UsersSettings /> },
     { id: 'about', label: 'About', hue: 'var(--text)', icon: svg(<><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5v.5" /></>), keywords: 'about version update release build', blurb: 'Which version this is, and whether a newer one is out.', render: () => <About /> },
   ],
 ]
@@ -1687,12 +1690,13 @@ export function Settings({ win }: { win: WinState }) {
   const q = query.trim().toLowerCase()
   // Visitors only see what works without an account; the owner's panes would just say "sign in".
   const owner = useLikelyOwner()
+  const admin = !!account.user?.admin
   const groups = useMemo(() => {
-    const mine = GROUPS.map((g) => g.filter((p) => owner || !p.owner)).filter((g) => g.length)
+    const mine = GROUPS.map((g) => g.filter((p) => (owner || !p.owner) && (admin || !p.admin))).filter((g) => g.length)
     return q ? [mine.flat().filter((p) => `${p.label} ${p.keywords}`.toLowerCase().includes(q))] : mine
-  }, [q, owner])
+  }, [q, owner, admin])
   const asked = PANES.find((p) => p.id === pane)!
-  const current = asked.owner && !owner ? ACCOUNT_PANE : asked
+  const current = (asked.owner && !owner) || (asked.admin && !admin) ? ACCOUNT_PANE : asked
   const u = account.user
 
   return (

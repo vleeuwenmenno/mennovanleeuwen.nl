@@ -3805,3 +3805,42 @@ button.cal-day.is-picked:not(.is-today) {
   white-space: normal;
   overflow: visible;
 }
+
+/* Settings → Users (admins, src/apps/UsersSettings.tsx) */
+.usr-avatar {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.usr-avatar.is-blank {
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--line);
+}
+.set-row-text strong .set-badge {
+  margin-left: 6px;
+  vertical-align: 1px;
+  font-weight: normal;
+}
+.set-badge.usr-banned {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 50%, transparent);
+}
+.usr-search {
+  width: 100%;
+  margin-bottom: 8px;
+}
+.usr-cap {
+  flex: none;
+}
+.usr-cap input {
+  width: 6em;
+}
+.usr-ban {
+  flex: 1;
+}

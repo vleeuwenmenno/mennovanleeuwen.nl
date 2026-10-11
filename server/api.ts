@@ -3,7 +3,8 @@ import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
 import { addMemory, agentsPrompt, answer, approve, automaticModels, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, deleteMemory, deleteThread, getThread, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
-import { authEnabled, currentUser, finishLogin, logout, registration, requireUser, startLogin } from './auth.ts'
+import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
+import { authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, startLogin } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { addCaldav, listCaldav, removeCaldav } from './caldav.ts'
@@ -97,6 +98,21 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (method === 'DELETE' && path === '/api/me') {
       await deleteUser(requireUser(req).id)
       return logout(req, res), true
+    }
+
+    // Settings → Users, for admins only (server/admin.ts).
+    if (path === '/api/admin/stats' && read) return requireAdmin(req), json(res, 200, adminStats()), true
+    if (path === '/api/admin/settings' && method === 'PUT') return requireAdmin(req), json(res, 200, updateSettings(await readJson(req, 1024))), true
+    if (path === '/api/admin/users' && read) return requireAdmin(req), json(res, 200, listUsers(url.searchParams.get('q'), url.searchParams.get('cursor'))), true
+    const adminTarget = /^\/api\/admin\/users\/(\d+)(\/ban|\/unban|\/signout)?$/.exec(path)
+    if (adminTarget) {
+      const admin = requireAdmin(req)
+      const [, uid, sub] = adminTarget
+      if (!sub && read) return json(res, 200, adminUser(uid)), true
+      if (!sub && method === 'DELETE') return await removeUser(admin, uid), json(res, 200, { ok: true }), true
+      if (sub === '/ban' && method === 'POST') return json(res, 200, banUser(admin, uid, await readJson(req, 4096))), true
+      if (sub === '/unban' && method === 'POST') return json(res, 200, unbanUser(admin, uid)), true
+      if (sub === '/signout' && method === 'POST') return json(res, 200, signOutUser(admin, uid)), true
     }
 
     if (path === '/api/state' && read) return json(res, 200, readState(requireUser(req))), true
