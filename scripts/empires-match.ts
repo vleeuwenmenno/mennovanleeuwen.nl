@@ -111,6 +111,8 @@ function player(name: string): Promise<Player> {
     connect(p)
   })
 }
+/** How the latest player list Alpha got shows Bravo. */
+const bravoSeen = () => a.seen.filter((m) => m.t === 'roster').at(-1)?.seats[b.me!]?.status
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const waitFor = async (what: string, test: () => boolean, ms = 5000) => {
   const end = Date.now() + ms
@@ -195,15 +197,18 @@ await waitFor("a drifted game gets the server's battle", () => b.seen.some((m) =
 await sleep(phase / 2)
 const before = b.seen.length
 b.ws.close()
-await sleep(2000)
+await waitFor('the others see a dropped player as away', () => bravoSeen() === 'away', 3000)
+await sleep(1500)
 connect(b, b.token)
 await waitFor('a dropped player is put back in the battle', () => b.seen.slice(before).some((m) => m.t === 'welcome' && m.resumed) && b.seen.slice(before).some((m) => m.t === 'sync' && m.why === 'rejoin'), 5000)
+await waitFor('the others see them back', () => bravoSeen() === 'playing', 3000)
 
 // 3. Bravo leaves for good: an AI takes its fleet, and Alpha carries on.
 await sleep(phase)
 const left = b.n
 b.send({ t: 'leave' })
 await waitFor("an AI takes over the leaver's fleet", () => a.takeovers === 1, 3000)
+await waitFor('the others see that they gave up', () => bravoSeen() === 'left', 3000)
 await sleep(phase / 2)
 timers.forEach(clearInterval)
 

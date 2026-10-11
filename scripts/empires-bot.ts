@@ -27,7 +27,17 @@ let brains: Brain[] = []
 let me = -1
 let n = 0
 
-ws.onopen = () => send({ t: 'hello' })
+// Pings like the game does, so the others see its round trip in the player list.
+let rtt = 0
+const pings = new Map<number, number>()
+let pingN = 0
+ws.onopen = () => {
+  send({ t: 'hello' })
+  setInterval(() => {
+    pings.set(++pingN, performance.now())
+    send({ t: 'ping', n: pingN, ...(rtt ? { rtt: Math.round(rtt) } : {}) })
+  }, 2000)
+}
 ws.onclose = (e) => {
   say('connection closed', e.code, e.reason)
   process.exit()
@@ -35,6 +45,12 @@ ws.onclose = (e) => {
 ws.onmessage = (e) => {
   const m = JSON.parse(String(e.data)) as ServerMsg
   switch (m.t) {
+    case 'pong': {
+      const at = pings.get(m.n)
+      pings.delete(m.n)
+      if (at !== undefined) rtt = performance.now() - at
+      return
+    }
     case 'ready':
       return send({ t: 'claim', name })
     case 'refused':

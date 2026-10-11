@@ -22,6 +22,8 @@ import {
 } from './empires/sim'
 import { EmpiresSound, type OrderKind } from './empires/sound'
 import { TechTree } from './empires/TechTree'
+import { Scoreboard } from './empires/Scoreboard'
+import type { SeatStatus } from './empires/protocol'
 import { useHighScore, useIsFocused } from './shared'
 import './empires/empires.css'
 
@@ -352,7 +354,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const [ready, setReady] = useState(false)
   const [hud, setHud] = useState<Hud>(() => snapshot(world.current, me, selected.current, groups.current))
   const [toasts, setToasts] = useState<Toast[]>([])
-  const [ui, setUi] = useState({ paused: false, speed: speed.current, mode: 'normal' as Mode, menu: false, panel: null as 'settings' | 'keys' | 'howto' | null, tree: false, deploy: deploying.current, placed: placed.current, reserves: !!conquest, economy: false })
+  const [ui, setUi] = useState({ paused: false, speed: speed.current, mode: 'normal' as Mode, menu: false, panel: null as 'settings' | 'keys' | 'howto' | null, tree: false, deploy: deploying.current, placed: placed.current, reserves: !!conquest, economy: false, players: false })
   /** Whether the game was paused before a menu opened (menus pause it, closing them restores that). */
   const pausedBefore = useRef(false)
   const uiRef = useRef(ui)
@@ -1046,6 +1048,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       } else if (action === 'techTree') setTree(!uiRef.current.tree)
       else if (action === 'pause') togglePause()
       else if (action === 'fogGrid') setSettings({ fogGrid: !settingsRef.current.fogGrid })
+      else if (k === 'tab') setUi((u) => ({ ...u, players: !u.players }))
       else if (action === 'focus') {
         const us = mySelection()
         if (us.length) centerOn(us.reduce((s, u) => s + u.x, 0) / us.length, us.reduce((s, u) => s + u.y, 0) / us.length)
@@ -1528,6 +1531,26 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     }
   }, [])
 
+  // Online: who's still in the battle. A player dropping out, coming back or giving up is news.
+  const net = useSyncExternalStore(online ? online.net.subscribe : noSubscribe, online ? online.net.getView : noView)
+  const lastRoster = useRef<SeatStatus[] | null>(null)
+  useEffect(() => {
+    const roster = net?.roster
+    if (!roster) return
+    const was = lastRoster.current
+    lastRoster.current = roster.map((r) => r.status)
+    if (!was) return
+    roster.forEach((r, i) => {
+      if (i === me || r.status === was[i]) return
+      const who = `${seats[i].name} (${seats[i].team === myTeam ? 'ally' : 'enemy'})`
+      if (r.status === 'away') toast(`${who} lost the connection. Waiting for them to come back…`, 'info')
+      else if (r.status === 'playing' && was[i] === 'away') toast(`${who} is back`, 'good')
+      else if (r.status === 'left') toast(`${who} gave up: an AI admiral takes over their fleet`, seats[i].team === myTeam ? 'bad' : 'good')
+      else if (r.status === 'dropped') toast(`${who} didn't come back: an AI admiral takes over their fleet`, 'info')
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [net?.roster])
+
   const w = world.current
   const fac = FACTIONS[myFaction]
   if (!ready)
@@ -1562,7 +1585,17 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         onTechTree={() => setTree(!ui.tree)}
         onReserves={() => setUi((u) => ({ ...u, reserves: !u.reserves }))}
         onEconomy={() => setUi((u) => ({ ...u, economy: !u.economy }))}
+        onPlayers={() => setUi((u) => ({ ...u, players: !u.players }))}
+        ping={online ? (net?.status === 'online' ? Math.round(net.rtt) : -1) : undefined}
       />
+      {ui.players && <Scoreboard w={w} me={me} names={seats.map((s) => s.name)} roster={online ? net?.roster : undefined} onClose={() => setUi((u) => ({ ...u, players: false }))} />}
+      {online && net?.status !== 'online' && hud.winner === -1 && (
+        <div className="ew-pausebox">
+          <Frame title="Connection lost">
+            <p>Reconnecting to the server. The battle goes on without your orders for now; you'll be put back in it as soon as the connection is back.</p>
+          </Frame>
+        </div>
+      )}
       {ui.economy && hud.winner === -1 && <EconomyPanel w={w} me={me} onClose={() => setUi((u) => ({ ...u, economy: false }))} />}
       {ui.reserves && hud.winner === -1 && <ReserveTray reserve={hud.reserve} onGrab={grabReserve} onClose={() => setUi((u) => ({ ...u, reserves: false }))} />}
 
