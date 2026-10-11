@@ -22,7 +22,8 @@ export type McStatus = {
   online: boolean
   version?: string
   motd?: string
-  players: { online: number; max: number; list: string[] }
+  /** `list` is the named part of the sample; `hidden` counts those in it who hide their name. */
+  players: { online: number; max: number; list: string[]; hidden?: number }
   icon?: string
   /** Milliseconds for the site's server to get an answer (only from /api/minecraft). */
   latency?: number
@@ -63,6 +64,9 @@ export function fetchMinecraft(force = false): Promise<State> {
     })
   return inflight
 }
+
+/** Players who switched off "Allow Server Listings" come through as "Anonymous Player": leave them out. */
+const named = (list: Json[] | undefined) => (list ?? []).filter((p) => p.uuid !== '00000000-0000-0000-0000-000000000000')
 
 function fromPublicApis(get: (url: string) => Promise<Json>): Promise<State> {
   return Promise.allSettled([get(APIS.mcstatus), get(APIS.mcsrvstat)])
@@ -116,9 +120,13 @@ function watch(st: McStatus, live = false) {
 
   const joined = st.players.list.filter((p) => !prev.misses.has(p))
   const left: string[] = []
+  // With fewer names than players (some hide theirs, and can switch between pings) a missing name
+  // may still be on: only a complete list says who left.
+  const complete = st.players.list.length >= st.players.online
   for (const [name, n] of prev.misses) {
     if (misses.has(name)) continue
-    if (live || n + 1 >= 2) left.push(name)
+    if (!complete) misses.set(name, n)
+    else if (live || n + 1 >= 2) left.push(name)
     else misses.set(name, n + 1) // missing once: keep watching
   }
   const total = `${st.players.online} of ${st.players.max} players online · ${MC_ADDRESS}`
@@ -140,7 +148,7 @@ function fromMcstatusJson(j: Json): McStatus {
     online: !!j.online,
     version: j.version?.name_clean,
     motd: j.motd?.clean,
-    players: { online: j.players?.online ?? 0, max: j.players?.max ?? 0, list: (j.players?.list ?? []).map((p: Json) => p.name_clean) },
+    players: { online: j.players?.online ?? 0, max: j.players?.max ?? 0, list: named(j.players?.list).map((p: Json) => p.name_clean) },
     icon: j.icon || undefined,
     checkedAt: Date.now(),
   }
@@ -151,7 +159,7 @@ function fromMcsrvstatJson(j: Json): McStatus {
     online: !!j.online,
     version: typeof j.version === 'string' ? j.version.replace(/^Paper |^Spigot /, '') : undefined,
     motd: Array.isArray(j.motd?.clean) ? j.motd.clean.join(' ').trim() : undefined,
-    players: { online: j.players?.online ?? 0, max: j.players?.max ?? 0, list: (j.players?.list ?? []).map((p: Json) => p.name) },
+    players: { online: j.players?.online ?? 0, max: j.players?.max ?? 0, list: named(j.players?.list).map((p: Json) => p.name) },
     icon: j.icon || undefined,
     checkedAt: Date.now(),
   }

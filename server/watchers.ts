@@ -47,10 +47,14 @@ export function minecraft(st: McStatus) {
   if (!st.online) return
   const joined = st.players.list.filter((p) => !prev.misses.has(p))
   const left: string[] = []
+  // With fewer names than players (some hide theirs, and can switch between pings) a missing name
+  // may still be on: only a complete list says who left.
+  const complete = st.players.list.length >= st.players.online
   // A ping's player sample can leave someone out now and then: gone only after two misses in a row.
   for (const [name, n] of prev.misses) {
     if (misses.has(name)) continue
-    if (n + 1 >= 2) left.push(name)
+    if (!complete) misses.set(name, n)
+    else if (n + 1 >= 2) left.push(name)
     else misses.set(name, n + 1)
   }
   const total = `${st.players.online} of ${st.players.max} players online · ${MC_HOST}`

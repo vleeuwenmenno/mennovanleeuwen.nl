@@ -1031,7 +1031,7 @@ export const commands: Record<string, Command> = {
         `${c('green', '●')} ${c('bold', status.motd || MC_ADDRESS)}`,
         `  address  ${c('green', MC_ADDRESS)}`,
         `  version  Java ${status.version ?? '?'}`,
-        `  players  ${status.players.online}/${status.players.max}${status.players.list.length ? `: ${status.players.list.join(', ')}` : c('muted', ' (nobody mining right now)')}`,
+        `  players  ${status.players.online}/${status.players.max}${status.players.list.length ? `: ${status.players.list.join(', ')}` : c('muted', status.players.online ? ' (names hidden)' : ' (nobody mining right now)')}`,
         c('muted', `  history  open mcserver`),
       ].join('\n')
     },

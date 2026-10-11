@@ -621,3 +621,13 @@ players over time with the server's availability underneath, who is on and since
 visits and who played most. Open it from Spotlight (Enter on the Minecraft entry), the
 *Overview* button in the top bar's Minecraft popup, or `open mcserver`. `MC_WATCH=off` stops the
 pinger; the window then shows the live status only.
+
+The ping's player list is not reliable for names: players who switch off *Allow Server Listings*
+in Minecraft come through as "Anonymous Player", and the same player can be named in one ping and
+anonymous in the next. Those are left out, and while anyone is hidden nobody is marked as gone.
+For exact names, set `MC_RCON` (`host:port`, the port defaults to 25575) and `MC_RCON_PASSWORD`:
+the server then asks RCON's `list` command who is on, and falls back to the ping when RCON doesn't
+answer. Turn RCON on in the Minecraft server's `server.properties` (`enable-rcon=true`,
+`rcon.port`, `rcon.password`). Keep its port off the internet and reachable only from the site,
+for example over a shared Docker network: RCON sends the password in plain text and can run any
+server command.
