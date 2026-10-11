@@ -11,6 +11,10 @@
     "build:full": "node scripts/fetch-data.ts && tsc -b && tsc -p tsconfig.server.json && vite build",
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
     "check:push": "node scripts/webpush-check.ts",
+    "check:empires": "node scripts/empires-sync.ts",
+    "check:empires-ws": "node scripts/empires-ws.ts",
+    "check:empires-match": "node scripts/empires-match.ts",
+    "empires:bot": "node scripts/empires-bot.ts",
     "start": "node server/index.ts"
   },
   "dependencies": {

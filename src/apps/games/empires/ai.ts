@@ -1,6 +1,8 @@
-import { ABILITIES, LEVEL_UP, MAX_LEVEL, UNIT, UPGRADES, buildable, isShip, techsFor, unitOf, type Tier } from './data'
-import { inside } from './maps'
-import { canRetreat, cantBuild, cantRepair, cantResearch, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdDeploy, cmdMove, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, fleet, foes, near, sees, shieldMax, type Owner, type Unit, type World } from './sim'
+import { ABILITIES, LEVEL_UP, MAX_LEVEL, UNIT, UPGRADES, buildable, isShip, techsFor, unitOf, type Tier } from './data.ts'
+import { inside } from './maps.ts'
+import { canRetreat, cantBuild, cantRepair, cantResearch, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdDeploy, cmdMove, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, fleet, foes, near, rand, sees, shieldMax, type Owner, type Unit, type World } from './sim.ts'
+import * as M from './detmath.ts'
+import { sq } from './detmath.ts'
 
 // The enemy admiral. Every second or two it looks at the battle and decides: claim ore, upgrade
 // the station, queue ships that counter what it has seen, defend what's under attack, grab
@@ -52,7 +54,7 @@ export type Brain = { o: Owner; diff: Difficulty; t: number; wave: number; attac
 export const newBrain = (o: Owner, diff: Difficulty): Brain => ({ o, diff, t: 2, wave: DIFFICULTY[diff].wave, attacking: false, peak: 0, scouts: new Set(), want: null, lastWave: 0 })
 
 const value = (us: Unit[]) => us.reduce((s, u) => s + (u.t.cost / u.t.squad) * (0.3 + 0.7 * (u.hull / u.hullMax)), 0)
-const d2 = (a: { x: number; y: number }, b: { x: number; y: number }) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2
+const d2 = (a: { x: number; y: number }, b: { x: number; y: number }) => sq(a.x - b.x) + sq(a.y - b.y)
 
 function visibleEnemies(w: World, o: Owner, x: number, y: number, r: number) {
   const out: Unit[] = []
@@ -71,12 +73,12 @@ function visibleEnemies(w: World, o: Owner, x: number, y: number, r: number) {
 function clearSpot(w: World, st: Unit, x: number, y: number) {
   const bad = (px: number, py: number) => inside(w.map.nebulas, px, py, 250) || inside(w.map.fields, px, py, 200)
   if (!bad(x, y)) return { x, y }
-  const a0 = Math.atan2(y - st.y, x - st.x)
-  const d0 = Math.hypot(x - st.x, y - st.y)
+  const a0 = M.atan2(y - st.y, x - st.x)
+  const d0 = M.hypot(x - st.x, y - st.y)
   for (const d of [d0, d0 * 0.7, d0 * 1.4])
     for (const da of [0.35, -0.35, 0.7, -0.7, 1.05, -1.05, 1.4, -1.4]) {
-      const px = Math.min(w.w - 80, Math.max(80, st.x + Math.cos(a0 + da) * d))
-      const py = Math.min(w.h - 80, Math.max(80, st.y + Math.sin(a0 + da) * d))
+      const px = Math.min(w.w - 80, Math.max(80, st.x + M.cos(a0 + da) * d))
+      const py = Math.min(w.h - 80, Math.max(80, st.y + M.sin(a0 + da) * d))
       if (!bad(px, py)) return { x: px, y: py }
     }
   return { x, y }
@@ -117,7 +119,7 @@ function pickShip(w: World, b: Brain): string | null {
         : t.kind === 'support' ? (army.length >= 6 && tenders < 1 + army.length / 10 ? 1.8 : 0.1)
           : (weights[t.tier] ?? 1)
   const total = options.reduce((s, t) => s + weight(t), 0)
-  let r = Math.random() * total
+  let r = rand(w) * total
   for (const t of options) {
     r -= weight(t)
     if (r <= 0) return t.id
@@ -129,7 +131,7 @@ export function think(w: World, b: Brain, dt: number) {
   b.t -= dt
   if (b.t > 0 || w.winner !== -1) return
   const D = DIFFICULTY[b.diff]
-  b.t = D.think * (0.8 + Math.random() * 0.4)
+  b.t = D.think * (0.8 + rand(w) * 0.4)
   const o = b.o
   const p = w.players[o]
   const st = w.byId.get(p.station)
@@ -144,7 +146,7 @@ export function think(w: World, b: Brain, dt: number) {
   // Rally in front of the station, towards the nearest enemy (or the middle of the map), out of
   // any nebula or asteroid field.
   const aim = enemySt ?? { x: w.w / 2, y: w.h / 2 }
-  const ad = Math.hypot(aim.x - st.x, aim.y - st.y) || 1
+  const ad = M.hypot(aim.x - st.x, aim.y - st.y) || 1
   const rally = clearSpot(w, st, st.x + ((aim.x - st.x) / ad) * 560, st.y + ((aim.y - st.y) / ad) * 560)
   cmdRally(w, o, rally.x, rally.y)
 
@@ -200,7 +202,7 @@ export function think(w: World, b: Brain, dt: number) {
       .flatMap(([id]) => techsFor(id))
       .concat(techsFor(unitOf(p.faction, 'station').id))
       .filter((t) => !cantResearch(w, o, t.id))
-    if (options.length) cmdResearch(w, o, options[Math.floor(Math.random() * options.length)].id)
+    if (options.length) cmdResearch(w, o, options[Math.floor(rand(w) * options.length)].id)
   }
 
   // Keep two orders in the yard, saving up for the one we picked rather than buying whatever's cheap.
@@ -232,7 +234,7 @@ export function think(w: World, b: Brain, dt: number) {
     }
   }
   if (threat && !b.attacking) {
-    const home = army.filter((u) => d2(u, st) < 2200 ** 2)
+    const home = army.filter((u) => d2(u, st) < sq(2200))
     cmdMove(w, o, home.filter((u) => u.order.k !== 'attack').map((u) => u.id), threat.x, threat.y, true)
     return
   }
@@ -262,14 +264,14 @@ export function think(w: World, b: Brain, dt: number) {
     .filter((g) => threatAt(w, o, g.x, g.y) < scoutValue * 0.9)
     .sort((a, c) => d2(a, st) - d2(c, st))
   for (const s of scouts) {
-    if (threatAt(w, o, s.x, s.y, 700) > scoutValue * 1.3 && d2(s, st) > 1500 ** 2) {
+    if (threatAt(w, o, s.x, s.y, 700) > scoutValue * 1.3 && d2(s, st) > sq(1500)) {
       cmdMove(w, o, [s.id], p.rally.x, p.rally.y)
       continue
     }
     // Each scout (or squadron) takes a different goal.
     const slot = [...new Set(scouts.map((x) => x.squad || x.id))].indexOf(s.squad || s.id)
     const goal = wanted[slot % Math.max(1, wanted.length)]
-    if (goal && s.order.k === 'idle') cmdMove(w, o, [s.id], goal.x + (Math.random() - 0.5) * 160, goal.y + (Math.random() - 0.5) * 160, !calm)
+    if (goal && s.order.k === 'idle') cmdMove(w, o, [s.id], goal.x + (rand(w) - 0.5) * 160, goal.y + (rand(w) - 0.5) * 160, !calm)
   }
 
   // Attack waves.
@@ -283,7 +285,7 @@ export function think(w: World, b: Brain, dt: number) {
   for (const u of w.units) {
     if (u.dead || u.owner === o || foes(w, u.owner, o) || !isShip(u.t) || u.order.k !== 'move' || !u.order.attack) continue
     const home = w.byId.get(w.players[u.owner].station)
-    if (home && d2(u, home) > 2200 ** 2) pushing.push(u)
+    if (home && d2(u, home) > sq(2200)) pushing.push(u)
   }
   const push = value(pushing) > 1200 ? { x: pushing.reduce((s, u) => s + u.x, 0) / pushing.length, y: pushing.reduce((s, u) => s + u.y, 0) / pushing.length } : null
   const joinAlly = !!push && mainValue >= b.wave * 0.3
@@ -294,7 +296,7 @@ export function think(w: World, b: Brain, dt: number) {
   }
   const cxm = main.reduce((s, u) => s + u.x, 0) / Math.max(1, main.length)
   const cym = main.reduce((s, u) => s + u.y, 0) / Math.max(1, main.length)
-  const outgunned = threatAt(w, o, cxm, cym, 1100) > mainValue * 1.5 && d2({ x: cxm, y: cym }, st) > 1800 ** 2
+  const outgunned = threatAt(w, o, cxm, cym, 1100) > mainValue * 1.5 && d2({ x: cxm, y: cym }, st) > sq(1800)
   if (b.attacking && (mainValue < b.peak * 0.35 || outgunned)) {
     b.attacking = false
     b.wave = Math.min(9000, b.wave * 1.15)
@@ -302,7 +304,7 @@ export function think(w: World, b: Brain, dt: number) {
     return
   }
   if (!b.attacking) {
-    const loose = main.filter((u) => u.order.k === 'idle' && d2(u, p.rally) > 700 ** 2)
+    const loose = main.filter((u) => u.order.k === 'idle' && d2(u, p.rally) > sq(700))
     if (loose.length) cmdMove(w, o, loose.map((u) => u.id), p.rally.x, p.rally.y)
     return
   }
@@ -330,7 +332,7 @@ export function think(w: World, b: Brain, dt: number) {
         }
       }
     }
-    if (u.order.k === 'idle' || (u.order.k === 'move' && d2(u.order, goal) > 400 ** 2)) cmdMove(w, o, [u.id], goal.x + (Math.random() - 0.5) * 300, goal.y + (Math.random() - 0.5) * 300, true)
+    if (u.order.k === 'idle' || (u.order.k === 'move' && d2(u.order, goal) > sq(400))) cmdMove(w, o, [u.id], goal.x + (rand(w) - 0.5) * 300, goal.y + (rand(w) - 0.5) * 300, true)
   }
 }
 
@@ -362,7 +364,7 @@ export function fleetThink(w: World, b: Brain, dt: number) {
   const f = w.fleet
   if (!f || b.t > 0 || w.winner !== -1) return
   const D = DIFFICULTY[b.diff]
-  b.t = Math.min(1.5, D.think) * (0.8 + Math.random() * 0.4)
+  b.t = Math.min(1.5, D.think) * (0.8 + rand(w) * 0.4)
   const o = b.o
   const p = w.players[o]
   const mine = fleet(w, o).filter((u) => !u.parent && u.retreat <= 0)
@@ -375,11 +377,11 @@ export function fleetThink(w: World, b: Brain, dt: number) {
   let onField = mine.reduce((s, u) => s + u.t.pop / u.t.squad, 0) + w.arrivals.filter((a) => a.owner === o).reduce((s, a) => s + UNIT[a.unit].pop, 0)
   for (const id of [...p.reserve].sort((a, c) => UNIT[c].pop - UNIT[a].pop)) {
     if (onField + UNIT[id].pop > f.cap && onField > 0) continue
-    const toMid = Math.atan2(mid.y - entry.y, mid.x - entry.x)
+    const toMid = M.atan2(mid.y - entry.y, mid.x - entry.x)
     for (let i = 0; i < 12; i++) {
-      const a = toMid + (Math.random() - 0.5) * 1.8
-      const d = 200 + Math.random() * (entry.r - 350)
-      if (!cmdDeploy(w, o, id, entry.x + Math.cos(a) * d, entry.y + Math.sin(a) * d, toMid)) {
+      const a = toMid + (rand(w) - 0.5) * 1.8
+      const d = 200 + rand(w) * (entry.r - 350)
+      if (!cmdDeploy(w, o, id, entry.x + M.cos(a) * d, entry.y + M.sin(a) * d, toMid)) {
         onField += UNIT[id].pop
         break
       }
@@ -406,7 +408,7 @@ export function fleetThink(w: World, b: Brain, dt: number) {
     const e = nearest(u)
     if (holder) {
       // Hold the line by the station until they come within reach of it.
-      if (e && d2(e, st!) < 2600 ** 2) cmdMove(w, o, [u.id], e.x, e.y, true)
+      if (e && d2(e, st!) < sq(2600)) cmdMove(w, o, [u.id], e.x, e.y, true)
       continue
     }
     if (e) cmdMove(w, o, [u.id], e.x, e.y, true)

@@ -1,3 +1,6 @@
+import * as M from './detmath.ts'
+import { sq } from './detmath.ts'
+
 // The battlefields. Each map lists its spawn points, ore, beacons and terrain, and how it is
 // symmetric, so everything can be placed once and copied to every player's side: nobody gets the
 // better lanes. Besides the fixed maps there's a generator that builds a fair map from a few rules
@@ -37,7 +40,7 @@ export type MapDef = {
 export type Wreckage = Pt & { value: number }
 
 /** Whether a point is inside any of the patches (grown by `pad`). */
-export const inside = (ps: Patch[], x: number, y: number, pad = 0) => ps.some((p) => (x - p.x) ** 2 + (y - p.y) ** 2 < (p.r + pad) ** 2)
+export const inside = (ps: Patch[], x: number, y: number, pad = 0) => ps.some((p) => sq(x - p.x) + sq(y - p.y) < sq(p.r + pad))
 
 /** A start area: where a player may put their station, chosen before the battle starts. */
 export type Rect = { x: number; y: number; w: number; h: number }
@@ -64,11 +67,11 @@ export function rng(seed: number) {
 }
 
 const rot = (p: Pt, c: Pt, a: number): Pt => {
-  const s = Math.sin(a)
-  const co = Math.cos(a)
+  const s = M.sin(a)
+  const co = M.cos(a)
   return { x: c.x + (p.x - c.x) * co - (p.y - c.y) * s, y: c.y + (p.x - c.x) * s + (p.y - c.y) * co }
 }
-const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y)
+const dist = (a: Pt, b: Pt) => M.hypot(a.x - b.x, a.y - b.y)
 
 type Shape = { w: number; h: number; sym: Symmetry }
 
@@ -380,7 +383,7 @@ export function generateMap(rules: MapRules): MapDef {
     n === 2 ? { x: 600 + rs() * 250, y: h / 2 + (rs() - 0.5) * h * 0.4 } : n === 3 ? rot({ x: c.x, y: 650 }, c, (rs() - 0.5) * 0.5) : { x: 650 + rs() * 250, y: 600 + rs() * 200 }
   const spawns = mirrored(m, s0)
   const inBounds = (p: Pt, margin: number) => p.x > margin && p.y > margin && p.x < w - margin && p.y < h - margin
-  const toCentre = Math.atan2(c.y - s0.y, c.x - s0.x)
+  const toCentre = M.atan2(c.y - s0.y, c.x - s0.x)
   const reach = dist(s0, c)
 
   /** Tries random spots from `gen` until `ok` accepts all copies, relaxing `ok` as tries run out. */
@@ -401,7 +404,7 @@ export function generateMap(rules: MapRules): MapDef {
       () => {
         const d = k === 0 ? 800 + ro() * 300 : 1050 + ro() * (reach * 1.05 - 1050)
         const a = toCentre + (ro() - 0.5) * (k === 0 ? 2.2 : 3)
-        return { x: s0.x + Math.cos(a) * d, y: s0.y + Math.sin(a) * d }
+        return { x: s0.x + M.cos(a) * d, y: s0.y + M.sin(a) * d }
       },
       (ps, k2) =>
         ps.length === n &&
@@ -450,7 +453,7 @@ export function generateMap(rules: MapRules): MapDef {
     for (let i = 0; i < lobes; i++) {
       const a = r() * Math.PI * 2
       const d = size * (0.55 + r() * 0.35)
-      out.push({ x: at.x + Math.cos(a) * d, y: at.y + Math.sin(a) * d, r: size * (0.45 + r() * 0.3) })
+      out.push({ x: at.x + M.cos(a) * d, y: at.y + M.sin(a) * d, r: size * (0.45 + r() * 0.3) })
     }
     return out
   }

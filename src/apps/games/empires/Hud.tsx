@@ -409,8 +409,9 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
   faction: FactionId
   sector: string
   ui: { paused: boolean; speed: number }
-  onPause: () => void
-  onSpeed: (s: number) => void
+  /** Left out in multiplayer, where the server keeps time: only the clock shows. */
+  onPause?: () => void
+  onSpeed?: (s: number) => void
   onMenu: () => void
   onShipyard: () => void
   onTechTree: () => void
@@ -457,13 +458,17 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
         </button>
         {/* Time: pause and play, the battle clock, and the speed, which cycles 1x, 2x, 3x. */}
         <div className={`ew-top-cell ew-timectl ${ui.paused ? 'is-paused' : ''}`} role="group" aria-label="Time">
-          <button onClick={onPause} data-tip={`${ui.paused ? 'Resume' : 'Pause'} (${keyName(keys.pause)})`} aria-label={ui.paused ? 'Resume' : 'Pause'}>
-            <Icon name={ui.paused ? 'play' : 'pause'} size={16} />
-          </button>
+          {onPause && (
+            <button onClick={onPause} data-tip={`${ui.paused ? 'Resume' : 'Pause'} (${keyName(keys.pause)})`} aria-label={ui.paused ? 'Resume' : 'Pause'}>
+              <Icon name={ui.paused ? 'play' : 'pause'} size={16} />
+            </button>
+          )}
           <b className="ew-clockval">{clock(hud.time)}</b>
-          <button className="ew-speedbtn" onClick={() => onSpeed((ui.speed % 3) + 1)} data-tip="Game speed: click to cycle 1x, 2x, 3x" aria-label={`Game speed ${ui.speed}x`}>
-            {ui.speed}×
-          </button>
+          {onSpeed && (
+            <button className="ew-speedbtn" onClick={() => onSpeed((ui.speed % 3) + 1)} data-tip="Game speed: click to cycle 1x, 2x, 3x" aria-label={`Game speed ${ui.speed}x`}>
+              {ui.speed}×
+            </button>
+          )}
         </div>
         <button className="ew-top-cell ew-top-btn" onClick={onMenu} data-tip="Battle menu: settings, keybinds, restart (Esc)" aria-label="Menu">
           <Icon name="menu" size={18} />

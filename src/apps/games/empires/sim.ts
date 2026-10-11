@@ -1,10 +1,12 @@
-import { inside, mirrored, rng, type MapDef, type Pt } from './maps'
-import { clearLine, findPath, navGrid, type NavGrid } from './nav'
+import * as M from './detmath.ts'
+import { sq } from './detmath.ts'
+import { inside, mirrored, rng, type MapDef, type Pt } from './maps.ts'
+import { clearLine, findPath, navGrid, type NavGrid } from './nav.ts'
 import {
   ABILITIES, ARMOR_BONUS, BASE_POP, mineType, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind,
-} from './data'
+} from './data.ts'
 
 // The battle itself, with no DOM: ships, orders, steering, guns, shields and hardpoints, the
 // economy and capture beacons. The game screen and the headless balance sims both drive it by
@@ -272,6 +274,12 @@ export type World = {
   shots: Shot[]
   events: SimEvent[]
   nextId: number
+  /** Ids for the next squadron and the next battle wreck. */
+  squadSeq: number
+  wreckSeq: number
+  /** The battle's random numbers come from here (see `rand`), never from Math.random: kept in the
+   * world, every player's copy of a multiplayer battle draws the same ones. */
+  rs: number
   /** The winning team, or -1 while the battle goes on. */
   winner: number
   grid: Map<number, Unit[]>
@@ -297,9 +305,17 @@ export type FleetRules = {
 // --- Helpers ----------------------------------------------------------------------------------------
 
 const TAU = Math.PI * 2
+/** The battle's next random number in [0, 1): mulberry32, like `rng`, with its state in the world. */
+export function rand(w: World) {
+  w.rs = (w.rs + 0x6d2b79f5) >>> 0
+  let t = w.rs
+  t = Math.imul(t ^ (t >>> 15), t | 1)
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+}
 const wrap = (a: number) => ((a + Math.PI) % TAU + TAU) % TAU - Math.PI
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v)
-const d2 = (ax: number, ay: number, bx: number, by: number) => (ax - bx) ** 2 + (ay - by) ** 2
+const d2 = (ax: number, ay: number, bx: number, by: number) => sq(ax - bx) + sq(ay - by)
 
 /** Rough body radius, for spacing, clicking and collisions. */
 export const radius = (t: UnitType) => {
@@ -312,8 +328,8 @@ export function shipPoint(u: Unit, gx: number, gy: number) {
   const [w, h] = dims(u.t)
   const side = (gx / 10 - 0.5) * w
   const fwd = (0.5 - gy / 10) * h
-  const c = Math.cos(u.a)
-  const s = Math.sin(u.a)
+  const c = M.cos(u.a)
+  const s = M.sin(u.a)
   return { x: u.x + c * fwd - s * side, y: u.y + s * fwd + c * side }
 }
 export const hpPos = (u: Unit, i: number) => shipPoint(u, u.t.hardpoints[i].x, u.t.hardpoints[i].y)
@@ -373,9 +389,9 @@ function fightRange(t: UnitType) {
 // --- Setup -----------------------------------------------------------------------------------------
 
 /** A unit's guns: its own weapons, then one per armed hardpoint. */
-const gunsOf = (t: UnitType): Gun[] =>
+const gunsOf = (w: World, t: UnitType): Gun[] =>
   [...t.weapons.map((wp) => ({ w: wp, hp: -1 })), ...t.hardpoints.flatMap((h, i) => (h.weapon ? [{ w: h.weapon, hp: i }] : []))].map((g) => ({
-    ...g, cd: Math.random() * g.w.cooldown, burst: 0, burstT: 0, target: 0, aim: 0, focus: 0,
+    ...g, cd: rand(w) * g.w.cooldown, burst: 0, burstT: 0, target: 0, aim: 0, focus: 0,
   }))
 
 export function spawn(w: World, id: string, owner: Owner, x: number, y: number, a: number, squad = 0): Unit {
@@ -386,8 +402,8 @@ export function spawn(w: World, id: string, owner: Owner, x: number, y: number, 
   const u: Unit = {
     id: w.nextId++, t, owner, x, y, a, v: 0, hull: hullMax, hullMax, shield: t.shield * mods.shield, mods,
     hps: t.hardpoints.map((h) => ({ hp: h.hp, max: h.hp })),
-    guns: gunsOf(t),
-    order: { k: 'idle' }, ax: x, ay: y, squad, parent: 0, target: 0, retarget: Math.random() * 0.5, lastHit: -99, shieldHit: -99, shieldOut: -99, hitAngle: 0,
+    guns: gunsOf(w, t),
+    order: { k: 'idle' }, ax: x, ay: y, squad, parent: 0, target: 0, retarget: rand(w) * 0.5, lastHit: -99, shieldHit: -99, shieldOut: -99, hitAngle: 0,
     abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, stance: 'maneuver', gx: x, gy: y, hitBy: 0, nebula: false, route: null, queue: [], mending: [], breakOff: false, face: null, repair: 0, retreat: 0, focus: 0, upg: {}, upgrading: null,
     seen: Array.from({ length: w.teams }, (_, t) => t === w.players[owner].team),
   }
@@ -396,18 +412,17 @@ export function spawn(w: World, id: string, owner: Owner, x: number, y: number, 
   return u
 }
 
-let squadSeq = 1
 /** A whole order's worth: one ship, or a squadron of fighters in a loose vee. */
 export function spawnGroup(w: World, id: string, owner: Owner, x: number, y: number, a: number) {
   const t = UNIT[id]
-  const squad = t.squad > 1 ? squadSeq++ : 0
+  const squad = t.squad > 1 ? w.squadSeq++ : 0
   const out: Unit[] = []
   for (let i = 0; i < t.squad; i++) {
     const row = Math.ceil(i / 2)
     const side = i === 0 ? 0 : i % 2 ? -1 : 1
     const back = row * 26
     const off = side * row * 24
-    out.push(spawn(w, id, owner, x - Math.cos(a) * back - Math.sin(a) * off, y - Math.sin(a) * back + Math.cos(a) * off, a, squad))
+    out.push(spawn(w, id, owner, x - M.cos(a) * back - M.sin(a) * off, y - M.sin(a) * back + M.cos(a) * off, a, squad))
   }
   return out
 }
@@ -421,12 +436,12 @@ export type Seat = { faction: FactionId; team: number; spawn: number; incomeMul?
  * stations start, so any world on the map will do for checking. */
 export function startProblem(w: World, x: number, y: number, others: Pt[]): string | null {
   if (x < 350 || y < 350 || x > w.w - 350 || y > w.h - 350) return 'Too close to the edge of the map'
-  if (others.some((o) => d2(x, y, o.x, o.y) < 1400 ** 2)) return 'Too close to another station'
-  if (w.rocks.some((k) => d2(x, y, k.x, k.y) < (k.r + 380) ** 2)) return 'Too close to the rocks'
+  if (others.some((o) => d2(x, y, o.x, o.y) < sq(1400))) return 'Too close to another station'
+  if (w.rocks.some((k) => d2(x, y, k.x, k.y) < sq(k.r + 380))) return 'Too close to the rocks'
   if (inside(w.map.fields, x, y, 300)) return 'Inside an asteroid field'
-  if (w.nodes.some((n) => d2(x, y, n.x, n.y) < 450 ** 2)) return 'Too close to an ore asteroid'
-  if (w.beacons.some((b) => d2(x, y, b.x, b.y) < 500 ** 2)) return 'Too close to a beacon'
-  if (w.wrecks.some((h) => d2(x, y, h.x, h.y) < (h.size * 0.6 + 300) ** 2)) return 'Too close to a wreck'
+  if (w.nodes.some((n) => d2(x, y, n.x, n.y) < sq(450))) return 'Too close to an ore asteroid'
+  if (w.beacons.some((b) => d2(x, y, b.x, b.y) < sq(500))) return 'Too close to a beacon'
+  if (w.wrecks.some((h) => d2(x, y, h.x, h.y) < sq(h.size * 0.6 + 300))) return 'Too close to a wreck'
   return null
 }
 
@@ -436,7 +451,7 @@ export function autoStart(w: World, area: { x: number; y: number; w: number; h: 
   const inArea = (p: Pt) => p.x >= area.x && p.y >= area.y && p.x <= area.x + area.w && p.y <= area.y + area.h
   if (inArea(spawnAt) && !startProblem(w, spawnAt.x, spawnAt.y, others)) return { ...spawnAt }
   const mid = { x: area.x + area.w / 2, y: area.y + area.h / 2 }
-  const diag = Math.hypot(area.w, area.h) || 1
+  const diag = M.hypot(area.w, area.h) || 1
   let best: Pt | null = null
   let bestScore = -Infinity
   const N = 14
@@ -444,8 +459,8 @@ export function autoStart(w: World, area: { x: number; y: number; w: number; h: 
     for (let j = 0; j <= N; j++) {
       const p = { x: area.x + (area.w * i) / N, y: area.y + (area.h * j) / N }
       if (startProblem(w, p.x, p.y, others)) continue
-      const ore = w.nodes.reduce((sum, n) => sum + Math.exp(-Math.hypot(n.x - p.x, n.y - p.y) / 1100), 0)
-      const score = ore - (Math.hypot(p.x - mid.x, p.y - mid.y) / diag) * 0.6
+      const ore = w.nodes.reduce((sum, n) => sum + M.exp(-M.hypot(n.x - p.x, n.y - p.y) / 1100), 0)
+      const score = ore - (M.hypot(p.x - mid.x, p.y - mid.y) / diag) * 0.6
       if (score > bestScore) {
         bestScore = score
         best = p
@@ -462,11 +477,11 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
   const teams = Math.max(...seats.map((s) => s.team)) + 1
   const w: World = {
     w: W, h: H, time: 0, units: [], byId: new Map(), players: [], teams, map, nodes: [], beacons: [], rocks: [], wrecks: [], shots: [], events: [],
-    nextId: 1, winner: -1, grid: new Map(), seenT: 0, nav: new Map(), arrivals: [],
+    nextId: 1, squadSeq: 1, wreckSeq: 1000, rs: ((opts.seed ?? map.seed) ^ 0x9e3779b9) >>> 0, winner: -1, grid: new Map(), seenT: 0, nav: new Map(), arrivals: [],
   }
   w.players = seats.map((s) => {
     const sp = s.at ?? map.spawns[s.spawn]
-    const d = Math.hypot(c.x - sp.x, c.y - sp.y) || 1
+    const d = M.hypot(c.x - sp.x, c.y - sp.y) || 1
     return {
       faction: s.faction, team: s.team, spawn: s.spawn, start: { x: sp.x, y: sp.y }, alive: true, credits: opts.credits ?? START_CREDITS, income: 0, incomeMul: s.incomeMul ?? 1, level: 1, station: 0,
       queue: [], reserve: [], research: [], techs: [], rally: { x: sp.x + ((c.x - sp.x) / d) * 600, y: sp.y + ((c.y - sp.y) / d) * 600 }, pop: 0, popCap: BASE_POP, lastAlarm: -99,
@@ -499,21 +514,21 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
       const vx = c.x - p.x
       const vy = c.y - p.y
       const t = clamp(((x - p.x) * vx + (y - p.y) * vy) / (vx * vx + vy * vy), 0, 1)
-      return d2(x, y, p.x + vx * t, p.y + vy * t) < (240 + rad) ** 2
+      return d2(x, y, p.x + vx * t, p.y + vy * t) < sq(240 + rad)
     })
   let tries = 0
   while (w.rocks.length < map.rocks && tries++ < 4000) {
     const cx = 250 + r() * (W - 500)
     const cy = 200 + r() * (H - 400)
-    const rad = 30 + r() ** 2 * 110
+    const rad = 30 + sq(r()) * 110
     const copies = mirrored(map, { x: cx, y: cy })
     const ok = copies.every(
       (p) =>
         p.x > 150 && p.y > 150 && p.x < W - 150 && p.y < H - 150 &&
-        !keepClear.some(([x, y, cc]) => d2(p.x, p.y, x, y) < (cc + rad) ** 2) &&
+        !keepClear.some(([x, y, cc]) => d2(p.x, p.y, x, y) < sq(cc + rad)) &&
         !inLane(p.x, p.y, rad) &&
         !inside(map.fields, p.x, p.y, rad + 60) &&
-        !w.rocks.some((k) => d2(p.x, p.y, k.x, k.y) < (k.r + rad + 40) ** 2),
+        !w.rocks.some((k) => d2(p.x, p.y, k.x, k.y) < sq(k.r + rad + 40)),
     )
     if (!ok) continue
     const kind = r() < 0.5 ? 0 : 1
@@ -525,9 +540,9 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
   // before anything is built on it.
   if (!opts.fleet) w.players.forEach((p, o) => {
     const sp = p.start
-    const face = Math.atan2(c.y - sp.y, c.x - sp.x)
-    const fx = Math.cos(face)
-    const fy = Math.sin(face)
+    const face = M.atan2(c.y - sp.y, c.x - sp.x)
+    const fx = M.cos(face)
+    const fy = M.sin(face)
     const at = (ahead: number, side: number) => ({ x: sp.x + fx * ahead - fy * side, y: sp.y + fy * ahead + fx * side })
     const st = spawn(w, unitOf(p.faction, 'station').id, o, sp.x, sp.y, face - Math.PI / 2)
     p.station = st.id
@@ -558,8 +573,8 @@ function offRocks(w: World, u: Unit, x: number, y: number): Pt {
     if (dd >= R * R) continue
     const d = Math.sqrt(dd)
     // Dead centre: come out on the side the ship is coming from.
-    const nx = d > 1 ? (x - k.x) / d : (u.x - k.x) / (Math.hypot(u.x - k.x, u.y - k.y) || 1)
-    const ny = d > 1 ? (y - k.y) / d : (u.y - k.y) / (Math.hypot(u.x - k.x, u.y - k.y) || 1)
+    const nx = d > 1 ? (x - k.x) / d : (u.x - k.x) / (M.hypot(u.x - k.x, u.y - k.y) || 1)
+    const ny = d > 1 ? (y - k.y) / d : (u.y - k.y) / (M.hypot(u.x - k.x, u.y - k.y) || 1)
     x = k.x + nx * R
     y = k.y + ny * R
   }
@@ -615,7 +630,7 @@ function formation(w: World, owner: Owner, ids: number[], x: number, y: number, 
   if (!us.length) return
   const cx = us.reduce((s, u) => s + u.x, 0) / us.length
   const cy = us.reduce((s, u) => s + u.y, 0) / us.length
-  const spread = Math.max(1, ...us.map((u) => Math.hypot(u.x - cx, u.y - cy)))
+  const spread = Math.max(1, ...us.map((u) => M.hypot(u.x - cx, u.y - cy)))
   const fit = Math.min(1, (90 + Math.sqrt(us.length) * 70) / spread)
   // A group keeps the pace of its slowest ship.
   const pace = us.length > 1 ? Math.min(...us.map((u) => speedOf(u))) : Infinity
@@ -633,10 +648,10 @@ export function cmdMove(w: World, owner: Owner, ids: number[], x: number, y: num
 export function closedLoop(path: Pt[]) {
   if (path.length < 4) return false
   let len = 0
-  for (let i = 1; i < path.length; i++) len += Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y)
+  for (let i = 1; i < path.length; i++) len += M.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y)
   const a = path[0]
   const b = path[path.length - 1]
-  return len > 500 && Math.hypot(b.x - a.x, b.y - a.y) < Math.max(160, len * 0.15)
+  return len > 500 && M.hypot(b.x - a.x, b.y - a.y) < Math.max(160, len * 0.15)
 }
 
 /** `n` spots spread evenly along a drawn line, from one end to the other (one ship: the middle),
@@ -645,7 +660,7 @@ export function spreadAlong(path: Pt[], n: number): Pt[] {
   const ring = closedLoop(path)
   if (ring) path = [...path, path[0]]
   const cum = [0]
-  for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y))
+  for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + M.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y))
   const total = cum[cum.length - 1]
   const at = (d: number): Pt => {
     let i = 1
@@ -676,8 +691,8 @@ export function lineGroups(w: World, owner: Owner, ids: number[]): Unit[][] {
  * a vee behind it, centred on (x, y), `gap` apart.
  */
 export function veeSpots(n: number, x: number, y: number, heading: number, gap: number): Pt[] {
-  const fx = Math.cos(heading)
-  const fy = Math.sin(heading)
+  const fx = M.cos(heading)
+  const fy = M.sin(heading)
   const off = Array.from({ length: n }, (_, i) => {
     const row = Math.ceil(i / 2)
     const side = i === 0 ? 0 : i % 2 ? -1 : 1
@@ -695,7 +710,7 @@ function groupSpots(w: World, g: Unit[], x: number, y: number, heading: number):
     const p = offRocks(w, g[0], clamp(x, 40, w.w - 40), clamp(y, 40, w.h - 40))
     return [{ u: g[0], x: p.x, y: p.y }]
   }
-  const lat = (p: Pt) => -Math.sin(heading) * p.x + Math.cos(heading) * p.y
+  const lat = (p: Pt) => -M.sin(heading) * p.x + M.cos(heading) * p.y
   const spots = veeSpots(g.length, x, y, heading, squadGap(g[0]))
   const ships = [...g].sort((a, b) => lat(a) - lat(b))
   const places = spots.map((p, i) => ({ p, i })).sort((a, b) => lat(a.p) - lat(b.p))
@@ -725,13 +740,13 @@ export function lineTargets(w: World, owner: Owner, ids: number[], path: Pt[]): 
     // whichever start makes the shortest trip overall.
     const cx = spots.reduce((s, p) => s + p.x, 0) / spots.length
     const cy = spots.reduce((s, p) => s + p.y, 0) / spots.length
-    const bearing = (p: Pt) => Math.atan2(p.y - cy, p.x - cx)
+    const bearing = (p: Pt) => M.atan2(p.y - cy, p.x - cx)
     order = groups.map((g) => ({ g, c: mid(g) })).sort((p, q) => bearing(p.c) - bearing(q.c))
     const round = [...spots].sort((p, q) => bearing(p) - bearing(q))
     let best = 0
     let bestD = Infinity
     for (let k = 0; k < round.length; k++) {
-      const d = order.reduce((s, o, i) => s + Math.hypot(o.c.x - round[(i + k) % round.length].x, o.c.y - round[(i + k) % round.length].y), 0)
+      const d = order.reduce((s, o, i) => s + M.hypot(o.c.x - round[(i + k) % round.length].x, o.c.y - round[(i + k) % round.length].y), 0)
       if (d < bestD) {
         bestD = d
         best = k
@@ -740,7 +755,7 @@ export function lineTargets(w: World, owner: Owner, ids: number[], path: Pt[]): 
     spots = order.map((_, i) => round[(i + best) % round.length])
   }
   // A squadron's vee points the way it flies there.
-  return order.flatMap(({ g, c }, i) => groupSpots(w, g, spots[i].x, spots[i].y, Math.atan2(spots[i].y - c.y, spots[i].x - c.x)))
+  return order.flatMap(({ g, c }, i) => groupSpots(w, g, spots[i].x, spots[i].y, M.atan2(spots[i].y - c.y, spots[i].x - c.x)))
 }
 
 /** Spread ships evenly along a line the player drew (see lineTargets). */
@@ -762,12 +777,12 @@ export function faceTargets(w: World, owner: Owner, ids: number[], x: number, y:
   const all = groups.flat()
   const cx = all.reduce((s, u) => s + u.x, 0) / all.length
   const cy = all.reduce((s, u) => s + u.y, 0) / all.length
-  const spread = Math.max(1, ...all.map((u) => Math.hypot(u.x - cx, u.y - cy)))
+  const spread = Math.max(1, ...all.map((u) => M.hypot(u.x - cx, u.y - cy)))
   const fit = Math.min(1, (90 + Math.sqrt(all.length) * 70) / spread)
   // Turned from the way it would fly there to the way it should face.
-  const turn = face - Math.atan2(y - cy, x - cx)
-  const c = Math.cos(turn)
-  const sn = Math.sin(turn)
+  const turn = face - M.atan2(y - cy, x - cx)
+  const c = M.cos(turn)
+  const sn = M.sin(turn)
   return groups.flatMap((g) => {
     const gx = (g.reduce((s, u) => s + u.x, 0) / g.length - cx) * fit
     const gy = (g.reduce((s, u) => s + u.y, 0) / g.length - cy) * fit
@@ -792,7 +807,7 @@ export function cmdPatrol(w: World, owner: Owner, ids: number[], x: number, y: n
 }
 
 /** Whether an enemy is inside an area order's circle (any part of its hull counts). */
-const inArea = (o: { x: number; y: number; r: number }, e: Unit) => d2(e.x, e.y, o.x, o.y) < (o.r + radius(e.t) * 0.5) ** 2
+const inArea = (o: { x: number; y: number; r: number }, e: Unit) => d2(e.x, e.y, o.x, o.y) < sq(o.r + radius(e.t) * 0.5)
 
 /**
  * The target a ship takes under an area order: the enemy in the circle its guns hurt most, made
@@ -816,7 +831,7 @@ function areaTarget(w: World, u: Unit, o: { x: number; y: number; r: number }, c
     // Seconds the target would last against what's already on it: the longer, the more it needs us.
     const toughness = e.hull + e.shield + 1
     const covered = (onIt.get(e.id) ?? 0) / toughness
-    const near = 1 / (1 + Math.hypot(e.x - u.x, e.y - u.y) / 1500)
+    const near = 1 / (1 + M.hypot(e.x - u.x, e.y - u.y) / 1500)
     const sc = (mine / (1 + covered * 30)) * near * (e === cur ? 1.25 : 1)
     if (sc > score) {
       score = sc
@@ -934,7 +949,7 @@ export function cmdAbility(w: World, owner: Owner, ids: number[]) {
     u.abilityOn = ab.duration
     if (u.t.ability === 'shieldBoost') u.shield = Math.min(shieldMax(u), u.shield + shieldMax(u) * 0.5)
     if (u.t.ability === 'tractor')
-      for (const e of w.units) if (!e.dead && foes(w, e.owner, owner) && isShip(e.t) && d2(e.x, e.y, u.x, u.y) < ab.range! ** 2) e.slow = ab.duration
+      for (const e of w.units) if (!e.dead && foes(w, e.owner, owner) && isShip(e.t) && d2(e.x, e.y, u.x, u.y) < sq(ab.range!)) e.slow = ab.duration
     if (u.t.ability === 'launchSwarm') for (let k = 0; k < 2; k++) launch(w, u, true)
     w.events.push({ k: 'ability', owner, id: u.t.ability, x: u.x, y: u.y })
     used++
@@ -998,7 +1013,7 @@ function siteUpgrades(w: World, dt: number) {
     u.upg[id] = (u.upg[id] ?? 0) + 1
     if (id === 'shield') {
       // The dome goes on (as tough as the platform's armour makes it); the shields charge from empty.
-      retype(u, mineType(u.t.faction, true), u.upg.armor ? 1 + ARMOR_BONUS : 1)
+      retype(w, u, mineType(u.t.faction, true), u.upg.armor ? 1 + ARMOR_BONUS : 1)
       u.shield = 0
     }
     if (id === 'armor') {
@@ -1167,7 +1182,7 @@ export function cmdBuild(w: World, owner: Owner, id: string, reserve = false) {
 
 /** Whether a team can see a point: any of its ships or structures has it in sensor range. */
 export function canSee(w: World, team: number, x: number, y: number) {
-  return w.units.some((u) => !u.dead && w.players[u.owner].team === team && d2(u.x, u.y, x, y) < sensorOf(u) ** 2)
+  return w.units.some((u) => !u.dead && w.players[u.owner].team === team && d2(u.x, u.y, x, y) < sq(sensorOf(u)))
 }
 
 /**
@@ -1180,12 +1195,12 @@ export function cantWarp(w: World, owner: Owner, id: string, x: number, y: numbe
   const r = radius(t)
   if (x < r + 40 || y < r + 40 || x > w.w - r - 40 || y > w.h - r - 40) return 'Off the map'
   const entry = w.fleet?.entry[owner]
-  const atEntry = !!entry && d2(x, y, entry.x, entry.y) < entry.r ** 2
+  const atEntry = !!entry && d2(x, y, entry.x, entry.y) < sq(entry.r)
   if (!atEntry && !canSee(w, w.players[owner].team, x, y)) return w.fleet ? 'Out of sight: ships jump in where the fleet can see, or at our entry point' : 'Out of sight: ships can only jump in where the fleet can see'
-  if (w.rocks.some((k) => d2(x, y, k.x, k.y) < (k.r + r) ** 2)) return 'An asteroid is in the way'
-  if (w.nodes.some((n) => d2(x, y, n.x, n.y) < (n.r + r) ** 2)) return 'An ore asteroid is in the way'
-  if (w.units.some((u) => !u.dead && u.t.tier !== 'fighter' && d2(x, y, u.x, u.y) < ((radius(u.t) + r) * 0.85) ** 2)) return 'Something is in the way'
-  if (w.arrivals.some((a) => d2(x, y, a.x, a.y) < (radius(UNIT[a.unit]) + r) ** 2)) return 'Another ship is jumping in there'
+  if (w.rocks.some((k) => d2(x, y, k.x, k.y) < sq(k.r + r))) return 'An asteroid is in the way'
+  if (w.nodes.some((n) => d2(x, y, n.x, n.y) < sq(n.r + r))) return 'An ore asteroid is in the way'
+  if (w.units.some((u) => !u.dead && u.t.tier !== 'fighter' && d2(x, y, u.x, u.y) < sq((radius(u.t) + r) * 0.85))) return 'Something is in the way'
+  if (w.arrivals.some((a) => d2(x, y, a.x, a.y) < sq(radius(UNIT[a.unit]) + r))) return 'Another ship is jumping in there'
   return null
 }
 
@@ -1211,21 +1226,21 @@ export function cmdDeploy(w: World, owner: Owner, id: string, x: number, y: numb
 function yardSpot(w: World, o: Owner, st: Unit, id: string) {
   const p = w.players[o]
   const t = UNIT[id]
-  const toward = Math.atan2(p.rally.y - st.y, p.rally.x - st.x)
+  const toward = M.atan2(p.rally.y - st.y, p.rally.x - st.x)
   const reach = radius(st.t) + radius(t) + 70
   for (let ring = 0; ring < 4; ring++)
     for (const off of [0, 0.45, -0.45, 0.9, -0.9, 1.4, -1.4, 2, -2, 2.6, -2.6, Math.PI]) {
       const ang = toward + off
       const d = reach + ring * radius(t) * 1.6
-      const x = st.x + Math.cos(ang) * d
-      const y = st.y + Math.sin(ang) * d
+      const x = st.x + M.cos(ang) * d
+      const y = st.y + M.sin(ang) * d
       const blocked =
-        w.rocks.some((k) => d2(x, y, k.x, k.y) < (k.r + radius(t)) ** 2) ||
-        w.units.some((u) => !u.dead && u !== st && u.t.tier !== 'fighter' && d2(x, y, u.x, u.y) < (radius(u.t) + radius(t)) ** 2) ||
-        w.arrivals.some((a) => d2(x, y, a.x, a.y) < (radius(UNIT[a.unit]) + radius(t)) ** 2)
+        w.rocks.some((k) => d2(x, y, k.x, k.y) < sq(k.r + radius(t))) ||
+        w.units.some((u) => !u.dead && u !== st && u.t.tier !== 'fighter' && d2(x, y, u.x, u.y) < sq(radius(u.t) + radius(t))) ||
+        w.arrivals.some((a) => d2(x, y, a.x, a.y) < sq(radius(UNIT[a.unit]) + radius(t)))
       if (!blocked) return { x: clamp(x, 60, w.w - 60), y: clamp(y, 60, w.h - 60), a: toward }
     }
-  return { x: st.x + Math.cos(toward) * reach, y: st.y + Math.sin(toward) * reach, a: toward }
+  return { x: st.x + M.cos(toward) * reach, y: st.y + M.sin(toward) * reach, a: toward }
 }
 
 /** Ships whose jump is done drop out of hyperspace; into an asteroid field, they pay for it. */
@@ -1337,7 +1352,7 @@ function restation(w: World, u: Unit) {
   const p = w.players[u.owner]
   const t = stationType(p.faction, p.level, p.techs)
   if (t === u.t) return
-  retype(u, t)
+  retype(w, u, t)
   const max = t.hull * u.mods.hull
   u.hull += max - u.hullMax
   u.hullMax = max
@@ -1347,13 +1362,13 @@ function restation(w: World, u: Unit) {
 /** Swap a unit to another form of its type (a grown station, a platform with a part added): parts
  * it already had, matched by key, keep their damage and reload; new ones arrive whole, scaled by
  * `scale` (a platform's armour). Its hull is left to the caller. */
-function retype(u: Unit, t: UnitType, scale = 1) {
+function retype(w: World, u: Unit, t: UnitType, scale = 1) {
   const old = new Map(u.t.hardpoints.map((h, i) => [h.key, i]))
   const hps = t.hardpoints.map((h) => {
     const i = old.get(h.key)
     return i === undefined ? { hp: h.hp * scale, max: h.hp * scale } : u.hps[i]
   })
-  const guns = gunsOf(t).map((g) => {
+  const guns = gunsOf(w, t).map((g) => {
     const i = old.get(t.hardpoints[g.hp]?.key)
     const had = i === undefined ? undefined : u.guns.find((x) => x.hp === i)
     return had ? { ...had, hp: g.hp } : g
@@ -1391,7 +1406,7 @@ export function cantSite(w: World, owner: Owner, node: number, id: string): stri
   if (n.site) return 'Something is already built here'
   if (n.owner !== p.team) return 'Survey it first: keep ships near it for a few seconds'
   // Only enemies we can see stop us: the check must not give away ships hidden in the fog.
-  if (w.units.some((u) => !u.dead && foes(w, u.owner, owner) && sees(w, owner, u) && isShip(u.t) && u.t.tier !== 'fighter' && d2(u.x, u.y, n.x, n.y) < SURVEY_RADIUS ** 2)) return 'Enemy ships are in the way'
+  if (w.units.some((u) => !u.dead && foes(w, u.owner, owner) && sees(w, owner, u) && isShip(u.t) && u.t.tier !== 'fighter' && d2(u.x, u.y, n.x, n.y) < sq(SURVEY_RADIUS))) return 'Enemy ships are in the way'
   const t = UNIT[id]
   if (!t || t.faction !== p.faction || (t.tier !== 'mine' && t.tier !== 'defense')) return 'That can\'t be built on ore'
   if (p.credits < t.cost) return 'Not enough credits'
@@ -1478,7 +1493,7 @@ function launch(w: World, carrier: Unit, extra = false) {
     if (out.size >= c.max + (techBonus(w.players[carrier.owner], carrier.t.id).hangar ?? 0)) return
   }
   const bays = carrier.t.hardpoints.map((h, i) => (h.kind === 'hangar' && alive(carrier, i) ? i : -1)).filter((i) => i >= 0)
-  const bay = hpPos(carrier, bays[Math.floor(Math.random() * bays.length)])
+  const bay = hpPos(carrier, bays[Math.floor(rand(w) * bays.length)])
   for (const f of spawnGroup(w, c.unit, carrier.owner, bay.x, bay.y, carrier.a)) {
     f.parent = carrier.id
     f.v = f.t.speed * 0.6
@@ -1486,12 +1501,11 @@ function launch(w: World, carrier: Unit, extra = false) {
   w.events.push({ k: 'launch', owner: carrier.owner, x: bay.x, y: bay.y })
 }
 
-let wreckSeq = 1000
 /** Warships leave a hulk worth part of their cost, for whoever holds the field to strip. */
 function leaveWreck(w: World, u: Unit) {
   if (u.t.tier !== 'frigate' && u.t.tier !== 'cruiser' && u.t.tier !== 'capital') return
   const value = Math.round((u.t.cost * 0.3) / 10) * 10
-  w.wrecks.push({ id: wreckSeq++, x: u.x, y: u.y, value, left: value, sprite: u.t.sprite, size: u.t.size, rot: u.a + Math.PI / 2, decay: 180, team: -1 })
+  w.wrecks.push({ id: w.wreckSeq++, x: u.x, y: u.y, value, left: value, sprite: u.t.sprite, size: u.t.size, rot: u.a + Math.PI / 2, decay: 180, team: -1 })
 }
 
 /**
@@ -1600,7 +1614,7 @@ export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: num
     }
     rest -= kind === 'ion' ? soaked / 2 : soaked
     u.shieldHit = w.time
-    u.hitAngle = Math.atan2(fromY - u.y, fromX - u.x)
+    u.hitAngle = M.atan2(fromY - u.y, fromX - u.x)
   }
   // Ion does next to nothing to bare armour.
   if (kind === 'ion') rest *= 0.1
@@ -1655,12 +1669,12 @@ function pickTarget(w: World, u: Unit, r: number, ok: (e: Unit) => boolean = () 
 
 function steer(u: Unit, tx: number, ty: number, want: number, dt: number, inPlace = false) {
   const turn = u.t.turn * (u.slow > 0 ? 0.5 : 1)
-  const ang = Math.atan2(ty - u.y, tx - u.x)
+  const ang = M.atan2(ty - u.y, tx - u.x)
   const diff = wrap(ang - u.a)
   u.a = wrap(u.a + clamp(diff, -turn * dt, turn * dt))
   // Big ships slow right down to turn; fighters bank through it.
   const fighter = u.t.tier === 'fighter'
-  const align = fighter ? 0.55 + 0.45 * Math.max(0, Math.cos(diff)) : Math.max(inPlace ? 0 : 0.15, Math.cos(diff))
+  const align = fighter ? 0.55 + 0.45 * Math.max(0, M.cos(diff)) : Math.max(inPlace ? 0 : 0.15, M.cos(diff))
   const target = want * align
   const acc = u.t.speed * (fighter ? 1.6 : 0.6)
   u.v += clamp(target - u.v, -acc * dt * 1.5, acc * dt)
@@ -1672,7 +1686,7 @@ function steer(u: Unit, tx: number, ty: number, want: number, dt: number, inPlac
 function detour(w: World, u: Unit, tx: number, ty: number) {
   const dx = tx - u.x
   const dy = ty - u.y
-  const len = Math.hypot(dx, dy)
+  const len = M.hypot(dx, dy)
   if (len < 1) return { x: tx, y: ty }
   const ux = dx / len
   const uy = dy / len
@@ -1716,7 +1730,7 @@ function waypoint(w: World, u: Unit, tx: number, ty: number): Pt {
   // Sized to 20-unit steps so similar ships share a grid.
   const clear = Math.ceil((radius(u.t) * 0.7 + 20) / 20) * 20
   if (!u.route || u.route.x !== tx || u.route.y !== ty) {
-    const within = (p: { x: number; y: number; r: number }, x: number, y: number) => (x - p.x) ** 2 + (y - p.y) ** 2 < p.r ** 2
+    const within = (p: { x: number; y: number; r: number }, x: number, y: number) => sq(x - p.x) + sq(y - p.y) < sq(p.r)
     const keepOut = patches.map((p, i) => (within(p, tx, ty) || within(p, u.x, u.y) ? -1 : i)).filter((i) => i >= 0)
     const obs = [...w.rocks, ...keepOut.map((i) => patches[i])]
     const key = `${clear}:${keepOut.join(',')}`
@@ -1725,7 +1739,7 @@ function waypoint(w: World, u: Unit, tx: number, ty: number): Pt {
     u.route = { x: tx, y: ty, pts: findPath(g, obs, clear, u.x, u.y, tx, ty), obs }
   }
   const { pts, obs } = u.route
-  while (pts.length > 1 && (d2(u.x, u.y, pts[0].x, pts[0].y) < 60 ** 2 || clearLine(obs, u.x, u.y, pts[1].x, pts[1].y, clear))) pts.shift()
+  while (pts.length > 1 && (d2(u.x, u.y, pts[0].x, pts[0].y) < sq(60) || clearLine(obs, u.x, u.y, pts[1].x, pts[1].y, clear))) pts.shift()
   return pts.length ? pts[0] : { x: tx, y: ty }
 }
 
@@ -1747,8 +1761,8 @@ function moveUnit(w: World, u: Unit, dt: number) {
       // Each guard keeps its own place round it, just outside its hull.
       const ang = u.id * 2.39996
       const d = radius(g.t) + radius(t) + 60
-      u.ax = g.x + Math.cos(ang) * d
-      u.ay = g.y + Math.sin(ang) * d
+      u.ax = g.x + M.cos(ang) * d
+      u.ay = g.y + M.sin(ang) * d
     }
   }
 
@@ -1762,11 +1776,11 @@ function moveUnit(w: World, u: Unit, dt: number) {
     const o = u.order
     const cur = valid(w, u.target, u.owner)
     if (!cur || !inArea(o, cur) || u.retarget <= 0) {
-      u.retarget = 0.8 + Math.random() * 0.4
+      u.retarget = 0.8 + rand(w) * 0.4
       u.target = areaTarget(w, u, o, cur)?.id ?? 0
     }
   } else if (u.retarget <= 0) {
-    u.retarget = 0.4 + Math.random() * 0.3
+    u.retarget = 0.4 + rand(w) * 0.3
     const guarding = u.order.k === 'guard'
     const engage = u.order.k === 'idle' || guarding || u.order.k === 'patrol' || (u.order.k === 'move' && u.order.attack)
     const cur = valid(w, u.target, u.owner)
@@ -1782,9 +1796,9 @@ function moveUnit(w: World, u: Unit, dt: number) {
       u.gx = u.order.k === 'idle' || guarding ? u.ax : u.x
       u.gy = u.order.k === 'idle' || guarding ? u.ay : u.y
     }
-    const inLeash = (e: Unit) => leash === Infinity || d2(e.x, e.y, u.gx, u.gy) < leash ** 2
+    const inLeash = (e: Unit) => leash === Infinity || d2(e.x, e.y, u.gx, u.gy) < sq(leash)
     if (!engage) u.target = 0
-    else if (cur && inLeash(cur) && d2(cur.x, cur.y, u.x, u.y) < (sensorOf(u) * 1.1) ** 2) u.target = cur.id
+    else if (cur && inLeash(cur) && d2(cur.x, cur.y, u.x, u.y) < sq(sensorOf(u) * 1.1)) u.target = cur.id
     else {
       // Answer whoever is shooting at us, if they're within the leash; else the best target near.
       const shooter = !hold && w.time - u.lastHit < 3 ? valid(w, u.hitBy, u.owner) : undefined
@@ -1800,19 +1814,19 @@ function moveUnit(w: World, u: Unit, dt: number) {
     if (fighter && e.t.tier !== 'fighter') {
       // Strafing runs on anything bigger: dive in guns-first, pull away past the hull, and fly out
       // far enough to turn round and line up again before coming back into range.
-      const dist = Math.hypot(e.x - u.x, e.y - u.y)
+      const dist = M.hypot(e.x - u.x, e.y - u.y)
       const r = radius(e.t)
       if (dist < r + 50) u.breakOff = true
       else if (dist > r + 320) u.breakOff = false
-      if (u.breakOff) steer(u, u.x + Math.cos(u.a) * 100 + ((u.id % 5) - 2) * 20, u.y + Math.sin(u.a) * 100, max, dt)
+      if (u.breakOff) steer(u, u.x + M.cos(u.a) * 100 + ((u.id % 5) - 2) * 20, u.y + M.sin(u.a) * 100, max, dt)
       else steer(u, e.x + ((u.id % 7) - 3) * 6, e.y + ((u.id % 5) - 2) * 6, max, dt)
     } else if (fighter) {
       // Dogfight: chase with a little lead, overshoot, loop back round.
-      const lead = Math.hypot(e.x - u.x, e.y - u.y) / 700
-      const ex = e.x + Math.cos(e.a) * e.v * lead
-      const ey = e.y + Math.sin(e.a) * e.v * lead
-      const close = d2(u.x, u.y, e.x, e.y) < (radius(e.t) + 45) ** 2
-      if (close) steer(u, u.x + Math.cos(u.a) * 100, u.y + Math.sin(u.a) * 100, max, dt)
+      const lead = M.hypot(e.x - u.x, e.y - u.y) / 700
+      const ex = e.x + M.cos(e.a) * e.v * lead
+      const ey = e.y + M.sin(e.a) * e.v * lead
+      const close = d2(u.x, u.y, e.x, e.y) < sq(radius(e.t) + 45)
+      if (close) steer(u, u.x + M.cos(u.a) * 100, u.y + M.sin(u.a) * 100, max, dt)
       else steer(u, ex + ((u.id % 7) - 3) * 8, ey + ((u.id % 5) - 2) * 8, max, dt)
     } else if (u.stance === 'hold' && u.order.k !== 'area') {
       // An area attack was an order to go in: holding ships only hold otherwise.
@@ -1821,7 +1835,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
       // Close to fighting range, then hold there and swing round to face the enemy.
       // Brake in time to stop at range rather than ramming them.
       const want = fightRange(t) * u.mods.range * 0.8 + radius(e.t) * 0.5
-      const dist = Math.hypot(e.x - u.x, e.y - u.y)
+      const dist = M.hypot(e.x - u.x, e.y - u.y)
       const brake = Math.sqrt(2 * t.speed * 0.9 * Math.max(0, dist - want))
       const p = dist > want ? detour(w, u, e.x, e.y) : e
       steer(u, p.x, p.y, dist > want ? Math.min(max, brake) : 0, dt, dist <= want)
@@ -1829,7 +1843,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
   } else if (u.order.k === 'area') {
     // Nothing to shoot: done once the circle is in sight (or reached) and empty; until then, close in.
     const o = u.order
-    const dist = Math.hypot(o.x - u.x, o.y - u.y)
+    const dist = M.hypot(o.x - u.x, o.y - u.y)
     const clear = !w.units.some((e) => !e.dead && foes(w, e.owner, u.owner) && sees(w, u.owner, e) && inArea(o, e))
     if (clear && (dist < o.r * 0.8 || canSee(w, w.players[u.owner].team, o.x, o.y))) nextOrder(u, u.x, u.y)
     else if (dist > o.r * 0.5) {
@@ -1839,7 +1853,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
     } else u.v = Math.max(0, u.v - t.speed * dt)
   } else if (u.order.k === 'move' || u.order.k === 'patrol') {
     const o = u.order
-    const dist = Math.hypot(o.x - u.x, o.y - u.y)
+    const dist = M.hypot(o.x - u.x, o.y - u.y)
     const pace = Math.min(max, o.speed)
     if (dist < (fighter ? 60 : 24 + radius(t) * 0.2)) {
       if (o.k === 'patrol') u.order = { ...o, x: o.bx, y: o.by, bx: o.x, by: o.y }
@@ -1851,23 +1865,23 @@ function moveUnit(w: World, u: Unit, dt: number) {
     }
   } else {
     // Idle: fighters circle their spot, everything else drifts back to it and waits.
-    const dist = Math.hypot(u.ax - u.x, u.ay - u.y)
+    const dist = M.hypot(u.ax - u.x, u.ay - u.y)
     if (fighter) {
       const ang = w.time * 0.9 + u.id
       const r = 70 + (u.id % 4) * 18
-      steer(u, u.ax + Math.cos(ang) * r, u.ay + Math.sin(ang) * r, max * 0.65, dt)
+      steer(u, u.ax + M.cos(ang) * r, u.ay + M.sin(ang) * r, max * 0.65, dt)
     } else if (dist > 30 + radius(t) * 0.3) {
       const wp = waypoint(w, u, u.ax, u.ay)
       const p = detour(w, u, wp.x, wp.y)
       steer(u, p.x, p.y, Math.min(max, dist * 0.8 + 10), dt)
     } else if (u.face !== null && Math.abs(wrap(u.face - u.a)) > 0.01) {
       // Swing round in place to the heading it was told to arrive with.
-      steer(u, u.x + Math.cos(u.face) * 100, u.y + Math.sin(u.face) * 100, 0, dt, true)
+      steer(u, u.x + M.cos(u.face) * 100, u.y + M.sin(u.face) * 100, 0, dt, true)
     } else u.v = Math.max(0, u.v - t.speed * dt)
   }
 
-  u.x += Math.cos(u.a) * u.v * dt
-  u.y += Math.sin(u.a) * u.v * dt
+  u.x += M.cos(u.a) * u.v * dt
+  u.y += M.sin(u.a) * u.v * dt
 
   // Keep clear of rocks, structures and each other (fighters only dodge the big stuff).
   const r0 = radius(t)
@@ -1888,8 +1902,8 @@ function moveUnit(w: World, u: Unit, dt: number) {
       // Each of the pair moves part of the overlap away per tick; a structure doesn't budge, so the ship takes all of it.
       const d = Math.sqrt(dd) || 1
       const push = (min - d) * Math.min(1, 4 * dt) * (isShip(o.t) ? 1 : 2.5)
-      const nx = d > 1 ? (u.x - o.x) / d : Math.cos(u.id)
-      const ny = d > 1 ? (u.y - o.y) / d : Math.sin(u.id)
+      const nx = d > 1 ? (u.x - o.x) / d : M.cos(u.id)
+      const ny = d > 1 ? (u.y - o.y) / d : M.sin(u.id)
       u.x += nx * push
       u.y += ny * push
     })
@@ -1900,12 +1914,12 @@ function moveUnit(w: World, u: Unit, dt: number) {
 const BOLT_SPEED: Record<WeaponKind, number> = { laser: 1100, flak: 1250, turbo: 850, missile: 480, ion: 700 }
 
 function fire(w: World, u: Unit, g: Gun, e: Unit) {
-  const from = g.hp >= 0 ? hpPos(u, g.hp) : u.t.tier === 'fighter' ? { x: u.x + Math.cos(u.a) * 10, y: u.y + Math.sin(u.a) * 10 } : shipPoint(u, 3 + Math.random() * 4, 2 + Math.random() * 6)
+  const from = g.hp >= 0 ? hpPos(u, g.hp) : u.t.tier === 'fighter' ? { x: u.x + M.cos(u.a) * 10, y: u.y + M.sin(u.a) * 10 } : shipPoint(u, 3 + rand(w) * 4, 2 + rand(w) * 6)
   // Aim: the hardpoint we were told to hit, or (for heavy guns) whatever hardpoint faces us.
   let hp = -1
   const forced = u.order.k === 'attack' && u.order.id === e.id ? u.order.hp : -1
   if (forced >= 0 && alive(e, forced)) hp = forced
-  else if (e.hps.length && Math.random() < 0.6) {
+  else if (e.hps.length && rand(w) < 0.6) {
     let bd = Infinity
     e.hps.forEach((h, i) => {
       if (h.hp <= 0) return
@@ -1917,20 +1931,20 @@ function fire(w: World, u: Unit, g: Gun, e: Unit) {
       }
     })
   }
-  const aim = hp >= 0 ? hpPos(e, hp) : { x: e.x + (Math.random() - 0.5) * radius(e.t) * 0.8, y: e.y + (Math.random() - 0.5) * radius(e.t) * 0.8 }
+  const aim = hp >= 0 ? hpPos(e, hp) : { x: e.x + (rand(w) - 0.5) * radius(e.t) * 0.8, y: e.y + (rand(w) - 0.5) * radius(e.t) * 0.8 }
   const speed = BOLT_SPEED[g.w.kind]
-  let t = Math.hypot(aim.x - from.x, aim.y - from.y) / speed
-  let ax = aim.x + Math.cos(e.a) * e.v * t
-  let ay = aim.y + Math.sin(e.a) * e.v * t
-  const hit = Math.random() < accuracy(g.w.kind, e.t.tier) * (e.slow > 0 ? 1.2 : 1)
+  let t = M.hypot(aim.x - from.x, aim.y - from.y) / speed
+  let ax = aim.x + M.cos(e.a) * e.v * t
+  let ay = aim.y + M.sin(e.a) * e.v * t
+  const hit = rand(w) < accuracy(g.w.kind, e.t.tier) * (e.slow > 0 ? 1.2 : 1)
   if (!hit) {
-    const off = radius(e.t) * (0.8 + Math.random()) + 20
-    const side = Math.random() < 0.5 ? -1 : 1
-    const ang = Math.atan2(ay - from.y, ax - from.x) + side * Math.PI / 2
-    ax += Math.cos(ang) * off
-    ay += Math.sin(ang) * off
+    const off = radius(e.t) * (0.8 + rand(w)) + 20
+    const side = rand(w) < 0.5 ? -1 : 1
+    const ang = M.atan2(ay - from.y, ax - from.x) + side * Math.PI / 2
+    ax += M.cos(ang) * off
+    ay += M.sin(ang) * off
   }
-  t = Math.hypot(ax - from.x, ay - from.y) / speed
+  t = M.hypot(ax - from.x, ay - from.y) / speed
   let dmg = g.w.damage * effect(g.w.kind, e.t.tier)
   if (u.abilityOn > 0 && u.t.ability === 'broadside' && g.w.kind === 'turbo') dmg *= 1.6
   dmg *= (u.t.tier === 'station' && !moduleUp(u, 'sensor') ? 1 : u.mods.damage) * (1 + RANK_BONUS * u.rank)
@@ -1964,7 +1978,7 @@ function shoot(w: World, u: Unit, dt: number) {
     const inReach = (e: Unit) => {
       const rr = g.w.range * u.mods.range + radius(e.t) * 0.5
       if (d2(e.x, e.y, from.x, from.y) > rr * rr) return false
-      if (g.w.arc && Math.abs(wrap(Math.atan2(e.y - u.y, e.x - u.x) - u.a)) > g.w.arc) return false
+      if (g.w.arc && Math.abs(wrap(M.atan2(e.y - u.y, e.x - u.x) - u.a)) > g.w.arc) return false
       return true
     }
     // First this gun's own focus, then the structure's (or the ship's target): each only while it
@@ -2004,10 +2018,10 @@ function shoot(w: World, u: Unit, dt: number) {
       continue
     }
     g.target = e.id
-    g.aim = Math.atan2(e.y - from.y, e.x - from.x)
+    g.aim = M.atan2(e.y - from.y, e.x - from.x)
     fire(w, u, g, e)
     const barrage = u.abilityOn > 0 && u.t.ability === 'flakBarrage' && g.w.kind === 'flak' ? 0.5 : 1
-    g.cd = g.w.cooldown * barrage * u.mods.cooldown * (0.9 + Math.random() * 0.2)
+    g.cd = g.w.cooldown * barrage * u.mods.cooldown * (0.9 + rand(w) * 0.2)
     g.burst = (g.w.burst ?? 1) - 1
     g.burstT = 0.11
   }
@@ -2021,13 +2035,13 @@ function moveShots(w: World, dt: number) {
     if (s.kind === 'missile' && s.hit) {
       const e = w.byId.get(s.target)
       if (e && !e.dead) {
-        const sp = Math.hypot(s.vx, s.vy)
-        const ang = Math.atan2(e.y - s.y, e.x - s.x)
-        const cur = Math.atan2(s.vy, s.vx)
+        const sp = M.hypot(s.vx, s.vy)
+        const ang = M.atan2(e.y - s.y, e.x - s.x)
+        const cur = M.atan2(s.vy, s.vx)
         const na = cur + clamp(wrap(ang - cur), -3 * dt, 3 * dt)
-        s.vx = Math.cos(na) * sp
-        s.vy = Math.sin(na) * sp
-        s.left = Math.max(s.left, Math.hypot(e.x - s.x, e.y - s.y) / sp)
+        s.vx = M.cos(na) * sp
+        s.vy = M.sin(na) * sp
+        s.left = Math.max(s.left, M.hypot(e.x - s.x, e.y - s.y) / sp)
       }
     }
     s.x += s.vx * dt
@@ -2095,7 +2109,7 @@ function economy(w: World, dt: number) {
         if (fromHangar(UNIT[q.unit])) {
           const bay = st.t.hardpoints.findIndex((h) => h.kind === 'hangar')
           const from = bay >= 0 ? hpPos(st, bay) : st
-          const a = Math.atan2(p.rally.y - from.y, p.rally.x - from.x)
+          const a = M.atan2(p.rally.y - from.y, p.rally.x - from.x)
           const group = spawnGroup(w, q.unit, o, from.x, from.y, a)
           for (const u of group) u.v = u.t.speed * 0.5
           cmdMove(w, o, group.map((u) => u.id), p.rally.x, p.rally.y, true)
@@ -2362,7 +2376,7 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
     const p = w.players[o]
     p.techs = [...(s.techs ?? [])]
     const sp = map.spawns[o]
-    const face = Math.atan2(c.y - sp.y, c.x - sp.x)
+    const face = M.atan2(c.y - sp.y, c.x - sp.x)
     if (o === 0 && s.station) {
       p.level = s.station
       const st = spawn(w, unitOf(p.faction, 'station').id, o, sp.x, sp.y, face - Math.PI / 2)
@@ -2379,8 +2393,8 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
       } else p.reserve.push(id)
     }
     // A loose block facing the middle: rows across, big ships in the middle rows.
-    const fx = Math.cos(face)
-    const fy = Math.sin(face)
+    const fx = M.cos(face)
+    const fy = M.sin(face)
     const ahead = o === 0 && s.station ? 650 : 0
     const perRow = 5
     field.forEach((id, i) => {
@@ -2402,3 +2416,48 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
 
 /** Ships a player owns, for selection helpers and the AI. */
 export const fleet = (w: World, o: Owner) => w.units.filter((u) => !u.dead && u.owner === o && isShip(u.t))
+
+const hashView = new DataView(new ArrayBuffer(8))
+/**
+ * A fingerprint of the battle: every ship's place, heading, speed, hull, shields and target, the
+ * shots in flight, each player's credits, the clock and the random numbers. Multiplayer peers
+ * compare these to find out whether their copies of the battle have drifted apart. Numbers go in
+ * bit for bit, so the smallest difference shows.
+ */
+export function stateHash(w: World): number {
+  let h = 0x811c9dc5
+  const int = (v: number) => {
+    h = Math.imul(h ^ (v | 0), 0x01000193)
+  }
+  const num = (v: number) => {
+    hashView.setFloat64(0, v)
+    int(hashView.getInt32(0))
+    int(hashView.getInt32(4))
+  }
+  num(w.time)
+  int(w.rs)
+  int(w.nextId)
+  int(w.winner)
+  for (const u of w.units) {
+    if (u.dead) continue
+    int(u.id)
+    num(u.x)
+    num(u.y)
+    num(u.a)
+    num(u.v)
+    num(u.hull)
+    num(u.shield)
+    int(u.target)
+  }
+  int(w.shots.length)
+  for (const s of w.shots) {
+    num(s.x)
+    num(s.y)
+  }
+  for (const p of w.players) {
+    num(p.credits)
+    int(p.queue.length)
+    int(p.research.length)
+  }
+  return h >>> 0
+}

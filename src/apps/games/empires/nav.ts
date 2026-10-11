@@ -2,7 +2,8 @@
 // cells, built the first time a ship that size needs a path. A path is found on the grid, then
 // pulled tight so ships fly straight lines from one rock's edge to the next.
 
-import type { Pt } from './maps'
+import { sq } from './detmath.ts'
+import type { Pt } from './maps.ts'
 export type { Pt }
 type Circle = { x: number; y: number; r: number }
 
@@ -34,7 +35,7 @@ export function navGrid(rocks: Circle[], w: number, h: number, clear: number): N
       for (let c = c0; c <= c1; c++) {
         const x = (c + 0.5) * CELL
         const y = (r + 0.5) * CELL
-        if ((x - k.x) ** 2 + (y - k.y) ** 2 < R * R) blocked[r * cols + c] = 1
+        if (sq(x - k.x) + sq(y - k.y) < R * R) blocked[r * cols + c] = 1
       }
   }
   return { cols, rows, blocked }
@@ -48,7 +49,7 @@ export function clearLine(rocks: Circle[], ax: number, ay: number, bx: number, b
   for (const k of rocks) {
     const t = Math.max(0, Math.min(1, ((k.x - ax) * dx + (k.y - ay) * dy) / len2))
     const R = k.r + clear
-    if ((ax + dx * t - k.x) ** 2 + (ay + dy * t - k.y) ** 2 < R * R) return false
+    if (sq(ax + dx * t - k.x) + sq(ay + dy * t - k.y) < R * R) return false
   }
   return true
 }

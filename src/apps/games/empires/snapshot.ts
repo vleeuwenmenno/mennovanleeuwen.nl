@@ -1,7 +1,6 @@
-import type { Brain } from './ai'
-import type { UnitType } from './data'
-import type { Camera } from './render'
-import type { World } from './sim'
+import type { Brain } from './ai.ts'
+import type { UnitType } from './data.ts'
+import type { World } from './sim.ts'
 
 // A battle frozen mid-fight, so a reload (or a closed tab) carries on from the same moment: the
 // whole world (every ship with its damage, orders and reload timers, the shots in flight, the
@@ -12,7 +11,9 @@ import type { World } from './sim'
 export type BattleSnap = {
   world: string
   brains: (Omit<Brain, 'scouts'> & { scouts: number[] })[]
-  cam: Camera
+  /** Where the player was looking (render.ts's Camera; spelled out so the server, which loads
+   * this file, needn't load the renderer). */
+  cam: { x: number; y: number; zoom: number }
   sel: number[]
   groups: [string, number[]][]
   speed: number
@@ -52,6 +53,10 @@ export function restoreWorld(s: string): World | null {
     const w = { ...o, units, byId: new Map(units.map((u) => [u.id, u])), grid: new Map(), nav: new Map() } as unknown as World & { v?: number; types?: unknown }
     delete w.v
     delete w.types
+    // Saved before the world kept its own counters and random numbers.
+    w.squadSeq ??= Math.max(0, ...units.map((u) => u.squad)) + 1
+    w.wreckSeq ??= Math.max(999, ...w.wrecks.map((h) => h.id)) + 1
+    w.rs ??= (Math.random() * 2 ** 32) >>> 0
     return w
   } catch {
     return null

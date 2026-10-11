@@ -531,6 +531,8 @@ export function dims(t: UnitType): [number, number] {
 // --- Economy ----------------------------------------------------------------------------------------
 
 export const START_CREDITS = 1600
+/** The starting credits a lobby can pick from. */
+export const CREDIT_STEPS = [500, 1000, 1600, 2500, 4000, 6000, 10000]
 /** Ore must be surveyed before anything is built on it: ships nearby, unopposed, for this long. */
 export const SURVEY_TIME = 8
 export const SURVEY_RADIUS = 380

@@ -1,10 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, fleetThink, newBrain, think, type Brain } from './empires/ai'
 import { ALL_SPRITES, FACTIONS, SITE_UPGRADES, TECH, UNIT, buildable, dims, isShip, type HardpointKind, type Tier } from './empires/data'
 import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, ReserveTray, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type MapFilter, type Mode } from './empires/Hud'
 import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
+import { Multiplayer } from './empires/Multiplayer'
+import { Net, mpActive, type NetView } from './empires/net'
+import { cmd as makeCmd, runCmd, thinPath, type CmdArgs, type CmdName, type CmdResult } from './empires/commands'
+import { matchBrains, matchMap, matchWorld, stepTurn, type MatchInfo } from './empires/match'
+import { HASH_EVERY } from './empires/protocol'
 import { loadSkirmish, restoreBrain, restoreWorld, saveSkirmish, snapBrain, snapshotWorld, type BattleSnap } from './empires/snapshot'
 import { listSaves, loadSave, resumeGalaxy, type Galaxy } from './empires/galaxy'
 import { actionFor, getSettings, keyName, setSettings, useSettings } from './empires/settings'
@@ -13,8 +18,7 @@ import { Renderer, relColor, type Camera, type View } from './empires/render'
 import { beginLayout } from './empires/layout'
 import { defaultArea, inRect, inside, type Pt } from './empires/maps'
 import {
-  STEP, cmdAbility, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdStance, cmdMove, cmdPatrol, cmdRally, cmdResearch, RANKS, autoStart, REFUND_DELAY, canSee, closedLoop, cantWarp, cmdArea, cmdDeploy, cmdFocus, cmdGuard, cmdUpgradeSite, cmdRepair, cmdRetreat, cmdFace, cmdLine, cmdSite, faceTargets, lineGroups, lineTargets, cmdStop, foes, hpPos, newFleetBattle, newWorld, startProblem, tick, type Owner, type SimEvent,
-  type Unit, type World,
+  STEP, RANKS, autoStart, REFUND_DELAY, canSee, closedLoop, cantWarp, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, startProblem, tick, type Owner, type SimEvent, type Unit, type World, stateHash,
 } from './empires/sim'
 import { EmpiresSound, type OrderKind } from './empires/sound'
 import { TechTree } from './empires/TechTree'
@@ -57,7 +61,7 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
   const [galaxy, setGalaxy] = useState<Galaxy | null>(() => resumeGalaxy())
   // A skirmish that was being fought when the page went away is fought on, from where it was.
   const [skirmish, setSkirmish] = useState(() => (galaxy ? null : loadSkirmish<Setup>()))
-  const [screen, setScreen] = useState<'menu' | 'lobby' | 'battle' | 'conquest' | 'fleetBattle'>(() => (galaxy ? 'conquest' : skirmish ? 'battle' : 'menu'))
+  const [screen, setScreen] = useState<'menu' | 'lobby' | 'battle' | 'conquest' | 'fleetBattle' | 'multiplayer'>(() => (galaxy ? 'conquest' : skirmish ? 'battle' : 'menu'))
   const [fight, setFight] = useState<ConquestBattle | null>(null)
   // Where the main menu opens (back from the campaign's load or new-game screen: its own sub-menu),
   // and which of those two screens the campaign opens on.
@@ -69,11 +73,30 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
   const sound = useRef<EmpiresSound>(null as unknown as EmpiresSound)
   if (!sound.current) sound.current = new EmpiresSound()
   useEffect(() => () => sound.current.dispose(), [])
+  // The multiplayer connection: opened on the way into the multiplayer screens, closed on the way out.
+  const [net, setNet] = useState<Net | null>(null)
+  const netRef = useRef(net)
+  netRef.current = net
+  useEffect(() => () => netRef.current?.close(), [])
+  const mp = useSyncExternalStore(net ? net.subscribe : noSubscribe, net ? net.getView : noView)
+  // A reload in the middle of multiplayer goes back to it: the server still has us for a while.
+  useEffect(() => {
+    if (!mpActive.get()) return
+    const n = new Net()
+    setNet(n)
+    setScreen('multiplayer')
+    return () => n.close()
+  }, [])
 
   if (screen === 'menu') {
     const saves = listSaves()
     return (
       <MainMenu sound={sound.current} victories={best ?? 0} onPlay={() => setScreen('lobby')} initial={menuAt}
+        onMultiplayer={() => {
+          mpActive.set(true)
+          setNet(new Net())
+          setScreen('multiplayer')
+        }}
         latest={saves[0] ? `${saves[0].name}, week ${saves[0].week}` : undefined}
         saves={saves.length}
         onConquest={(how) => {
@@ -90,6 +113,32 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
       />
     )
   }
+  if (screen === 'multiplayer' && net && mp?.match)
+    return (
+      <Battle
+        key={mp.match.info.id}
+        win={win}
+        online={{ net, info: mp.match.info, me: mp.match.me }}
+        sound={sound.current}
+        // Leaving (mid-battle, or from the result) leaves the lobby too; "back to the lobby" stays.
+        onExit={() => net.leave()}
+        onAgain={() => net.endMatch()}
+      />
+    )
+  if (screen === 'multiplayer' && net)
+    return (
+      <Multiplayer
+        net={net}
+        sound={sound.current}
+        onBack={() => {
+          mpActive.set(false)
+          net.close()
+          setNet(null)
+          setMenuAt('multi')
+          setScreen('menu')
+        }}
+      />
+    )
   if (screen === 'conquest')
     return (
       <Conquest
@@ -152,7 +201,14 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
   )
 }
 
+const noSubscribe = () => () => {}
+const noView = (): NetView | null => null
+
 // --- Battle ---------------------------------------------------------------------------------------
+
+/** Multiplayer turns the battle keeps queued at most before it plays faster to catch up: about
+ * 70 ms of slack for uneven arrivals, without falling far behind the server. */
+const TURN_BUFFER = 2
 
 type Toast = { id: number; text: string; tone: 'good' | 'bad' | 'info'; t: number }
 
@@ -175,10 +231,13 @@ function snapshot(w: World, me: Owner, sel: Set<number>, groups: Map<string, num
   }
 }
 
-function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }: {
+function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, onAgain }: {
   win: WinState
   setup?: Setup
   conquest?: ConquestBattle
+  /** A multiplayer battle: built from the match, played from the server's turns, and every order
+   * goes through the server. */
+  online?: { net: Net; info: MatchInfo; me: number }
   /** A battle saved mid-fight, to carry on from. */
   resume?: BattleSnap | null
   /** Keeps the battle saved as it goes (null once it's over), so a reload can resume it. */
@@ -192,8 +251,14 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
   useState(() => beginLayout())
   // Players are the open slots, in spawn order; we're the one marked 'you'.
   // A galactic conquest battle brings its own map and fleets; a skirmish comes from the lobby.
-  const [map] = useState(() => (conquest ? conquest.map : setupMap(setup!)))
+  const [map] = useState(() => (online ? matchMap(online.info) : conquest ? conquest.map : setupMap(setup!)))
   const [seats] = useState(() => {
+    // Online, every other seat counts as 'ai' here: it only decides who's 'you' (the world and
+    // the AI admirals come from the match itself).
+    if (online)
+      return online.info.seats.map((s, i) => ({
+        kind: (i === online.me ? 'you' : 'ai') as Slot['kind'], faction: s.faction, team: s.team, difficulty: s.difficulty, spawn: s.spawn, name: s.name, area: defaultArea(map, s.spawn),
+      }))
     if (conquest)
       return conquest.sides.map((s, i) => ({
         kind: (i === conquest.me ? 'you' : 'ai') as Slot['kind'], faction: s.faction, team: s.team as 0 | 1, difficulty: conquest.ai, spawn: i, name: conquest.names[i], area: defaultArea(map, i),
@@ -227,6 +292,7 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
     if (back) world.current = back
     resumed.current = !!back
   }
+  if (!world.current && online) world.current = matchWorld(online.info)
   if (!world.current && conquest) world.current = newFleetBattle(map, conquest.sides, { seed: map.seed })
   if (!world.current) {
     const base = makeWorld(seats.map((s) => map.spawns[s.spawn]))
@@ -235,12 +301,12 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
   }
   /** Before the battle: time stands still while the player picks where to start. Our station
    * isn't placed (or shown) until they've clicked a spot. */
-  const deploying = useRef(!conquest && !resumed.current)
-  const placed = useRef(!!conquest || !!resumed.current)
+  const deploying = useRef(!conquest && !online && !resumed.current)
+  const placed = useRef(!!conquest || !!online || !!resumed.current)
   const myTeam = world.current.players[me].team
   const myFaction = world.current.players[me].faction
   const brains = useRef<Brain[]>(
-    resumed.current && resume ? resume.brains.map(restoreBrain) : seats.map((s, i) => (s.kind === 'ai' ? newBrain(i, s.difficulty) : null)).filter((b): b is Brain => !!b),
+    online ? matchBrains(online.info) : resumed.current && resume ? resume.brains.map(restoreBrain) : seats.map((s, i) => (s.kind === 'ai' ? newBrain(i, s.difficulty) : null)).filter((b): b is Brain => !!b),
   )
   const settings = useSettings()
   const settingsRef = useRef(settings)
@@ -419,6 +485,16 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
     return { unit: best, hp, node, wreck, at: p }
   }
 
+  /** Gives an order. In single player it runs at once. Online it goes to the server and runs on
+   * everyone's machine at the next tick: it answers null here, and a refusal comes back as a toast
+   * when the turn arrives (a tick or two later). */
+  const order = <K extends CmdName>(f: K, ...a: CmdArgs<K>): CmdResult<K> | null => {
+    const c = makeCmd(f, ...a)
+    if (!online) return runCmd(world.current, me, c) as CmdResult<K>
+    online.net.send({ t: 'cmd', c })
+    return null
+  }
+
   /** Who answers an order on the radio: the biggest ship in the selection. */
   const RANK: Tier[] = ['station', 'fighter', 'gunship', 'frigate', 'cruiser', 'capital']
   const voice = (): Tier => mySelection().reduce<Tier>((best, u) => (RANK.indexOf(u.t.tier) > RANK.indexOf(best) ? u.t.tier : best), 'station')
@@ -427,21 +503,20 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
   /** A click with a command from the grid (or its key) armed: move, attack-move, patrol or rally. */
   /** `queued` (Shift): after the orders the ships already have, rather than instead of them. */
   const modeClick = (sx: number, sy: number, m: Mode, queued = false) => {
-    const w = world.current
     const { at } = pick(sx, sy)
     const ids = mySelection().map((u) => u.id)
     if (m === 'rally') {
-      cmdRally(w, me, at.x, at.y)
+      order('rally', at.x, at.y)
       renderer.current.ping(at.x, at.y, '#7dffa0')
     } else if (m === 'patrol') {
-      cmdPatrol(w, me, ids, at.x, at.y, queued)
+      order('patrol', ids, at.x, at.y, queued)
       renderer.current.ping(at.x, at.y, '#8fd0ff')
     } else if (m === 'move') {
-      cmdMove(w, me, ids, at.x, at.y, false, queued)
+      order('move', ids, at.x, at.y, false, queued)
       renderer.current.ping(at.x, at.y, '#7dffa0')
     } else if (m === 'guard') {
       const { unit } = pick(sx, sy)
-      const why = unit ? cmdGuard(w, me, ids, unit.id) : 'Click one of our ships or structures to guard'
+      const why = unit ? order('guard', ids, unit.id) : 'Click one of our ships or structures to guard'
       if (why) {
         toast(why, 'bad')
         sound.error()
@@ -454,12 +529,11 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
 
   /** The command grid (and its keys). Point-and-click ones arm a mode; the rest act at once. */
   const runCommand = (c: Command) => {
-    const w = world.current
     const ids = mySelection().map((u) => u.id)
     sound.unlock()
     if (c === 'stop') {
       if (!mySelection().some((u) => isShip(u.t) || (u.owner === me && u.guns.length > 0))) return sound.error()
-      cmdStop(w, me, ids)
+      order('stop', ids)
       turretPick.current = null
       say('stop')
     } else if (c === 'hold') {
@@ -468,12 +542,12 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
       if (!ships.length) return sound.error()
       const now = ships.every((u) => u.stance === ships[0].stance) ? ships[0].stance : 'roam'
       const next = nextStance(now)
-      cmdStance(w, me, ids, next)
+      order('stance', ids, next)
       say('hold')
       toast(`Stance: ${STANCE_INFO[next].label}, ${STANCE_INFO[next].blurb}`, 'info')
     } else if (c === 'ability') useAbility()
     else if (c === 'retreat') {
-      const why = cmdRetreat(w, me, ids)
+      const why = order('retreat', ids)
       if (why) {
         toast(why, 'bad')
         sound.error()
@@ -505,7 +579,7 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
     // Structures fire where they're told: every gun, or the one gun that was clicked.
     if (armed.length && target) {
       const tp = turretPick.current && armed.some((u) => u.id === turretPick.current!.unit) ? turretPick.current : null
-      const why = cmdFocus(w, me, tp ? [tp.unit] : armed.map((u) => u.id), target.id, tp ? tp.hp : -1, friendly)
+      const why = order('focus', tp ? [tp.unit] : armed.map((u) => u.id), target.id, tp ? tp.hp : -1, friendly)
       if (why) {
         toast(why, 'bad')
         sound.error()
@@ -525,21 +599,21 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
         return
       }
       if (stationSel) {
-        cmdRally(w, me, at.x, at.y)
+        order('rally', at.x, at.y)
         renderer.current.ping(at.x, at.y, '#7dffa0')
         say('rally')
       }
       return
     }
     if (target) {
-      cmdAttack(w, me, ships.map((u) => u.id), target.id, hp, queued, friendly)
+      order('attack', ships.map((u) => u.id), target.id, hp, queued, friendly)
       if (friendly) toast(`Opening fire on our own ${target.t.name}`, 'bad')
 
       renderer.current.ping(target.x, target.y, '#ff5a50')
       say(hp >= 0 ? 'target' : 'attack')
       if (hp >= 0) toast(`Targeting ${HP_NAME[target.t.hardpoints[hp].kind].toLowerCase()}`, 'info')
     } else {
-      cmdMove(w, me, ships.map((u) => u.id), at.x, at.y, attackMove, queued)
+      order('move', ships.map((u) => u.id), at.x, at.y, attackMove, queued)
       renderer.current.ping(at.x, at.y, attackMove ? '#ffaa5a' : '#7dffa0')
       say(attackMove ? 'attackMove' : 'move')
     }
@@ -547,15 +621,15 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
 
   const buildSite = (node: number, id: string) => {
     sound.unlock()
-    const why = cmdSite(world.current, me, node, id)
+    const why = order('site', node, id)
     if (why) {
       toast(why, 'bad')
       sound.error()
       return
     }
     sound.constructing()
-    // Select what's going up, so its construction shows in the card.
-    select([world.current.nodes[node].site])
+    // Select what's going up, so its construction shows in the card (online it isn't there yet).
+    if (!online) select([world.current.nodes[node].site])
   }
 
   const centerOn = (x: number, y: number) => {
@@ -597,7 +671,8 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
   }
   const useAbility = () => {
     const ready = mySelection().filter((u) => u.t.ability && u.abilityCd <= 0)
-    const n = cmdAbility(world.current, me, mySelection().map((u) => u.id))
+    // Online the count isn't known yet: the abilities that are ready will fire.
+    const n = order('ability', mySelection().map((u) => u.id)) ?? ready.length
     if (n) for (const id of new Set(ready.map((u) => u.t.ability!))) sound.ability(id)
     else if (mySelection().some((u) => u.t.ability)) sound.error()
   }
@@ -607,7 +682,7 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
     let why: string | null = null
     let n = 0
     for (let i = 0; i < times; i++) {
-      why = cmdBuild(world.current, me, id, reserve)
+      why = order('build', id, reserve)
       if (why) break
       n++
     }
@@ -621,14 +696,14 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
     const q = world.current.players[me].queue
     for (let i = q.length - 1; i >= 0; i--)
       if (q[i].unit === id) {
-        cmdCancel(world.current, me, i)
+        order('cancel', i)
         sound.unqueued()
         return
       }
   }
   const research = (id: string) => {
     sound.unlock()
-    const why = cmdResearch(world.current, me, id)
+    const why = order('research', id)
     if (why) {
       toast(why, 'bad')
       sound.error()
@@ -639,7 +714,11 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
   useEffect(() => {
     let live = true
     sound.unlock()
-    void Promise.all([renderer.current.ready(), sound.warm(myFaction)]).then(() => live && setReady(true))
+    void Promise.all([renderer.current.ready(), sound.warm(myFaction)]).then(() => {
+      if (!live) return
+      setReady(true)
+      online?.net.send({ t: 'loaded' })
+    })
     return () => {
       live = false
     }
@@ -689,9 +768,41 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
     const loop = (now: number) => {
       const dt = Math.min(0.1, (now - last) / 1000)
       last = now
+      // Online: the server's battle replaces ours when ours drifted, or when we came back to it.
+      const sync = online?.net.sync
+      if (sync) {
+        online!.net.sync = null
+        const back = restoreWorld(sync.world)
+        if (back) {
+          world.current = back
+          brains.current = sync.brains.map(restoreBrain)
+          acc = 0
+          toast(sync.why === 'drift' ? "Your battle had drifted from everyone else's: it's been put right from the server." : 'Back in the battle.', 'info')
+        }
+      }
       const w = world.current
       const events: SimEvent[] = []
-      if (!paused.current && !deploying.current && w.winner === -1) {
+      if (online && w.winner === -1) {
+        // Multiplayer: play the server's turns, about one a tick. More queued than the buffer (a
+        // slow frame, a hidden tab) plays faster to catch up; none queued waits for the next.
+        const q = online.net.turns
+        acc += dt
+        let steps = Math.min(q.length, Math.floor(acc / STEP))
+        if (q.length - steps > TURN_BUFFER) steps = Math.min(q.length, steps + Math.ceil((q.length - steps - TURN_BUFFER) / 3), 300)
+        for (let i = 0; i < steps && w.winner === -1; i++) {
+          const t = q.shift()!
+          stepTurn(w, brains.current, t, (seat, _c, r) => {
+            if (seat === me && typeof r === 'string') {
+              toast(r, 'bad')
+              sound.error()
+            }
+          })
+          events.push(...w.events)
+          w.events.length = 0
+          if (t.n % HASH_EVERY === 0) online.net.send({ t: 'hash', n: t.n, h: stateHash(w) })
+        }
+        acc = q.length ? Math.max(0, acc - steps * STEP) : Math.min(acc - steps * STEP, STEP)
+      } else if (!paused.current && !deploying.current && w.winner === -1) {
         acc += dt * speed.current
         let steps = 0
         while (acc >= STEP && steps < 12) {
@@ -1116,7 +1227,7 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
       if (d.moved && ln && ln.length > 1 && ids.length) {
         const [a, b] = [ln[0], ln[ln.length - 1]]
         const r = Math.max(60, Math.hypot(b.x - a.x, b.y - a.y))
-        cmdArea(world.current, me, ids, a.x, a.y, r)
+        order('area', ids, a.x, a.y, r)
         renderer.current.ping(a.x, a.y, '#ff5a50')
         say('attack')
       } else modeClick(d.x0, d.y0, 'attack', e.shiftKey)
@@ -1131,7 +1242,7 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
       if (d.area && d.moved && ln && ln.length > 1 && ids.length) {
         const [a, b] = [ln[0], ln[ln.length - 1]]
         const r = Math.max(60, Math.hypot(b.x - a.x, b.y - a.y))
-        cmdArea(world.current, me, ids, a.x, a.y, r)
+        order('area', ids, a.x, a.y, r)
         renderer.current.ping(a.x, a.y, '#ff5a50')
         say('attack')
       } else if (d.moved && ln && ln.length > 1 && ids.length) {
@@ -1139,8 +1250,8 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
         const [a, b] = [ln[0], ln[ln.length - 1]]
         const face = Math.atan2(b.y - a.y, b.x - a.x)
         const targets = d.face ? faceTargets(w, me, ids, a.x, a.y, face) : lineTargets(w, me, ids, ln)
-        if (d.face) cmdFace(w, me, ids, a.x, a.y, face, d.attack, e.shiftKey)
-        else cmdLine(w, me, ids, ln, d.attack, e.shiftKey)
+        if (d.face) order('face', ids, a.x, a.y, face, d.attack, e.shiftKey)
+        else order('line', ids, thinPath(ln), d.attack, e.shiftKey)
         for (const q of targets) renderer.current.ping(q.x, q.y, d.attack ? '#ffaa5a' : '#7dffa0')
         say(d.attack ? 'attackMove' : 'move')
       } else command(d.x0, d.y0, false, e.shiftKey)
@@ -1223,8 +1334,8 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
     if (e.button === 2) {
       const ships = mySelection().filter((u) => isShip(u.t))
       if (ships.length) {
-        if (mode.current === 'patrol') cmdPatrol(w, me, ships.map((u) => u.id), x, y)
-        else cmdMove(w, me, ships.map((u) => u.id), x, y, mode.current === 'attack')
+        if (mode.current === 'patrol') order('patrol', ships.map((u) => u.id), x, y)
+        else order('move', ships.map((u) => u.id), x, y, mode.current === 'attack')
         say(mode.current === 'patrol' ? 'patrol' : mode.current === 'attack' ? 'attackMove' : 'move')
       }
       return
@@ -1296,7 +1407,7 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
       const g = warpGhost()
       reserveDrag.current = null
       if (!g) return
-      const why = cmdDeploy(world.current, me, id, g.x, g.y, g.a)
+      const why = order('deploy', id, g.x, g.y, g.a)
       if (why) {
         toast(why, 'bad')
         sound.error()
@@ -1349,6 +1460,8 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
   }
 
   const togglePause = () => {
+    // The server keeps time in multiplayer: nobody pauses it.
+    if (online) return
     paused.current = !paused.current
     sound.pause(paused.current)
     setUi((u) => ({ ...u, paused: paused.current }))
@@ -1359,8 +1472,8 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
     else sound.menu(true)
     setUi((u) => {
       if (!u.menu && !u.panel) pausedBefore.current = paused.current
-      paused.current = true
-      return { ...u, paused: true, menu: panel ? u.menu : true, panel }
+      paused.current = !online
+      return { ...u, paused: !online, menu: panel ? u.menu : true, panel }
     })
   }
   const closeMenu = () => {
@@ -1378,7 +1491,7 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
     setUi((u) => ({ ...u, tree: open }))
   }
   const cancelResearch = (i: number) => {
-    cmdCancelResearch(world.current, me, i)
+    order('cancelResearch', i)
     sound.unqueued()
   }
   const setSpeed = (s: number) => {
@@ -1444,7 +1557,7 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
         onWheel={onWheel}
       />
 
-      <TopBar hud={hud} faction={myFaction} sector={sector} ui={ui} onShipyard={selectStation} onPause={togglePause} onSpeed={setSpeed}
+      <TopBar hud={hud} faction={myFaction} sector={sector} ui={ui} onShipyard={selectStation} onPause={online ? undefined : togglePause} onSpeed={online ? undefined : setSpeed}
         onMenu={() => (ui.menu ? closeMenu() : openMenu())}
         onTechTree={() => setTree(!ui.tree)}
         onReserves={() => setUi((u) => ({ ...u, reserves: !u.reserves }))}
@@ -1499,12 +1612,12 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
             }}
             onBuild={build}
             onUnqueue={unqueue}
-            onCancel={(i) => cmdCancel(w, me, i)}
+            onCancel={(i) => order('cancel', i)}
             onResearch={research}
             onTechTree={() => setTree(true)}
             onSite={buildSite}
             onUpgradeSite={(id, upgrade) => {
-              const why = cmdUpgradeSite(world.current, me, id, upgrade)
+              const why = order('upgradeSite', id, upgrade)
               if (why) {
                 toast(why, 'bad')
                 sound.error()
@@ -1512,22 +1625,19 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
             }}
             turretPick={turretPick.current}
           onClearFocus={(id) => {
-            const u = world.current.byId.get(id)
-            if (u) {
-              u.focus = 0
-              for (const g of u.guns) g.focus = 0
-            }
+            // No target: every gun picks its own again.
+            order('focus', [id], 0)
             sound.click()
           }}
           onRetreat={(ids) => {
-              const why = cmdRetreat(world.current, me, ids)
+              const why = order('retreat', ids)
               if (why) {
                 toast(why, 'bad')
                 sound.error()
               } else sound.arm()
             }}
             onRepair={(id) => {
-              const why = cmdRepair(world.current, me, id)
+              const why = order('repair', id)
               if (why) {
                 toast(why, 'bad')
                 sound.error()
@@ -1562,6 +1672,13 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
           </Frame>
         </div>
       )}
+      {online && hud.time === 0 && !ui.menu && !ui.panel && (
+        <div className="ew-pausebox">
+          <Frame title="Get ready">
+            <p>Waiting for every player's game to load. The battle starts for everyone at once.</p>
+          </Frame>
+        </div>
+      )}
       {ui.paused && !ui.deploy && !ui.menu && !ui.panel && hud.winner === -1 && (
         <div className="ew-pausebox">
           <Frame title="Paused">
@@ -1574,7 +1691,7 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
       )}
       {ui.tree && hud.winner === -1 && <TechTree w={w} me={me} hud={hud} onResearch={research} onCancel={cancelResearch} onClose={() => setTree(false)} />}
       {ui.menu && !ui.panel && hud.winner === -1 && (
-        <BattleMenu w={w} me={me} sound={sound} speed={ui.speed} onSpeed={setSpeed} onResume={closeMenu} onPanel={openMenu} onRestart={conquest ? undefined : onAgain} onExit={exit} campaign={!!conquest} />
+        <BattleMenu w={w} me={me} sound={sound} speed={ui.speed} onSpeed={setSpeed} onResume={closeMenu} onPanel={openMenu} onRestart={conquest || online ? undefined : onAgain} onExit={exit} campaign={!!conquest} online={!!online} />
       )}
       {ui.panel === 'settings' && (
         <Modal title="Settings" onClose={closeMenu}>
@@ -1591,7 +1708,7 @@ function Battle({ win, setup, conquest, resume, onSnap, sound, onExit, onAgain }
           <HowToPlay />
         </Modal>
       )}
-      {hud.winner !== -1 && <Result w={w} me={me} names={seats.map((s) => s.name)} won={hud.winner === myTeam} onAgain={onAgain} onExit={exit} campaign={!!conquest} />}
+      {hud.winner !== -1 && <Result w={w} me={me} names={seats.map((s) => s.name)} won={hud.winner === myTeam} onAgain={onAgain} onExit={exit} campaign={!!conquest} online={!!online} />}
     </div>
   )
 }

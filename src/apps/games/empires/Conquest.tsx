@@ -3,16 +3,16 @@ import { DIFFICULTY, type Difficulty } from './ai'
 import { FACTIONS, UNIT, buildable, isShip, type FactionId, type UnitType } from './data'
 import {
   BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GIANTS, blockedBy, contested, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
-  autoResolve, buildAt, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, clashAt, deleteSave, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, renameSave, setResume, newGalaxy, planetIncome, saveGalaxy,
-  settlePending, systemOwner, tickGalaxy, upgradeStation, withdraw,
+  autoResolve, buildAt, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, setResume, newGalaxy, planetIncome, saveGalaxy,
+  settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw,
   type BattleResult, type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetKind, type Side, type StarSystem,
 } from './galaxy'
-import { BuildQueue, Floating, Frame, Icon, Pips, ShipArt, ShipCard, Tips, unitTip } from './Hud'
+import { BuildQueue, Floating, Frame, Icon, Pips, ShipArt, ShipCard, Tips, unitTip, type IconName } from './Hud'
 import { galaxyLayout } from './layout'
 import { loadCampaignBattle, saveCampaignBattle, type BattleSnap } from './snapshot'
 import { generateMap, DEFAULT_RULES, MAX_SEED, type MapDef } from './maps'
 import { LayoutSection, Modal, SettingsPanel } from './Menus'
-import { actionFor, getSettings, keyName, useSettings } from './settings'
+import { actionFor, getSettings, keyName, useSettings, type Action } from './settings'
 import type { FleetSide, World } from './sim'
 import type { EmpiresSound } from './sound'
 
@@ -333,9 +333,11 @@ function Seg<T extends string | number | boolean>({ value, options, onChange }: 
 
 // --- The galaxy map -----------------------------------------------------------------------------------
 
-type Sel = { kind: 'fleet'; id: number } | { kind: 'fleets'; ids: number[] } | { kind: 'planet'; id: number } | null
+type Sel = { kind: 'fleet'; id: number } | { kind: 'fleets'; ids: number[] } | { kind: 'planet'; id: number } | { kind: 'planets'; ids: number[] } | null
 /** The fleets a selection holds. */
 const selectedIds = (sel: Sel) => new Set(sel?.kind === 'fleet' ? [sel.id] : sel?.kind === 'fleets' ? sel.ids : [])
+/** The planets a selection holds. */
+const selectedPlanets = (sel: Sel) => new Set(sel?.kind === 'planet' ? [sel.id] : sel?.kind === 'planets' ? sel.ids : [])
 type GToast = { id: number; text: string; tone: 'good' | 'bad' | 'info'; t: number }
 
 // --- The map: one view from the whole galaxy down to a single planet ---------------------------------
@@ -390,6 +392,12 @@ function CaptureTag({ g, p }: { g: Galaxy; p: Planet }) {
   )
 }
 
+/** Where a planet is on screen, for picking with a box: zoomed out, where its system's star is. */
+function planetScreen(g: Galaxy, p: Planet, cam: Cam, size: { w: number; h: number }) {
+  const q = detail(cam.k) < 0.5 ? g.systems[p.system] : planetAt(g, p)
+  return { x: (q.x - cam.x) * cam.k + size.w / 2, y: (q.y - cam.y) * cam.k + size.h / 2 }
+}
+
 /** Where a fleet's badge is drawn on screen (as GalaxyView places it), for picking with a box. */
 function fleetScreen(g: Galaxy, f: Fleet, cam: Cam, size: { w: number; h: number }) {
   const k = cam.k
@@ -419,9 +427,7 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
   mini?: boolean
   on?: {
     planet: (p: Planet, double: boolean) => void
-    planetOrder: (p: Planet) => void
     system: (s: number) => void
-    systemOrder: (s: number) => void
     fleet: (f: Fleet) => void
     fleets?: (fs: Fleet[]) => void
   }
@@ -431,11 +437,12 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
   const vb = cam && size ? `${cam.x - size.w / 2 / k} ${cam.y - size.h / 2 / k} ${size.w / k} ${size.h / k}` : `0 0 ${W} ${H}`
   const d = mini ? 0 : detail(k)
   const selIds = selectedIds(sel ?? null)
+  const selPs = selectedPlanets(sel ?? null)
   // What's on screen, so a close view doesn't draw the whole galaxy.
   const view = cam && size ? { x0: cam.x - size.w / 2 / k - 40, x1: cam.x + size.w / 2 / k + 40, y0: cam.y - size.h / 2 / k - 40, y1: cam.y + size.h / 2 / k + 40 } : null
   const shown = (x: number, y: number) => !view || (x > view.x0 && x < view.x1 && y > view.y0 && y < view.y1)
-  const label = (x: number, y: number, children: ReactNode, cls = '') => (
-    <g transform={`translate(${x} ${y}) scale(${1 / k})`} className={cls}>{children}</g>
+  const label = (x: number, y: number, children: ReactNode, cls = '', key?: string) => (
+    <g key={key} transform={`translate(${x} ${y}) scale(${1 / k})`} className={cls}>{children}</g>
   )
   // Zoomed out, the fleets parked in a system show as one badge per side.
   const parked = new Map<string, Fleet[]>()
@@ -445,10 +452,10 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
       const key = `${f.system}:${f.owner}`
       parked.set(key, [...(parked.get(key) ?? []), f])
     }
-  // Where the selected fleets are headed.
-  const routes = g.fleets
-    .filter((f) => selIds.has(f.id) && (f.leg || f.route.length))
-    .map((f) => [fleetAt(g, f), ...[...(f.leg ? [f.leg] : []), ...f.route].map((h) => (h.planet >= 0 ? planetAt(g, g.planets[h.planet]) : g.systems[h.system]))])
+  // Where the selected fleets are headed, on through any stops queued with Shift.
+  const headed = g.fleets.filter((f) => selIds.has(f.id) && (f.leg || f.route.length || f.waypoints?.length))
+  const routes = headed.map((f) => [fleetAt(g, f), ...plannedHops(g, f).map((h) => (h.planet >= 0 ? planetAt(g, g.planets[h.planet]) : g.systems[h.system]))])
+  const stops = headed.flatMap((f) => (f.waypoints ?? []).map((pid, i) => ({ key: `${f.id}:${i}`, at: planetAt(g, g.planets[pid]), r: planetR(g.planets[pid]), n: i + 1 })))
   return (
     <svg className={`ew-gsvg ${mini ? 'is-mini' : ''}`} viewBox={vb} preserveAspectRatio="xMidYMid meet">
       <defs>
@@ -479,6 +486,7 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
       {routes.map((route, i) => (
         <polyline key={i} className="ew-groute" points={route.map((p) => `${p.x},${p.y}`).join(' ')} vectorEffect="non-scaling-stroke" />
       ))}
+
       {g.systems.map((s) => {
         if (!shown(s.x, s.y)) return null
         const battle = g.pending >= 0 && g.planets[g.pending].system === s.id
@@ -488,9 +496,9 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
           <g key={s.id} className="ew-gsys">
             <g
               className="ew-gsys-hit"
+              data-sid={s.id}
               onClick={() => on?.system(s.id)}
-              onContextMenu={(e) => (e.preventDefault(), e.stopPropagation(), on?.systemOrder(s.id))}
-              data-tip={mini || d > 0.5 ? undefined : `${s.name}: ${s.planets.map((p) => g.planets[p].name).join(', ')}.${blockadeTip(g, s.id)} Click to zoom in; right-click to send the selected fleet.`}
+              data-tip={mini || d > 0.5 ? undefined : `${s.name}: ${s.planets.map((p) => g.planets[p].name).join(', ')}.${blockadeTip(g, s.id)} Click to zoom in; right-click to send the selected fleet (Shift to add a stop).`}
             >
               <circle cx={s.x} cy={s.y} r={d > 0.5 ? px(30) : Math.max(px(22), 4)} fill="transparent" />
               <circle cx={s.x} cy={s.y} r={Math.max(px(13), 7)} fill={`url(#star-${s.star})`} />
@@ -514,13 +522,12 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
                   const p = g.planets[pid]
                   const q = planetAt(g, p)
                   const r = planetR(p)
-                  const on2 = sel?.kind === 'planet' && sel.id === pid
+                  const on2 = selPs.has(pid)
                   const capture = p.capture ? p.capture.t / CAPTURE_TIME : 0
                   return (
-                    <g key={pid} className={`ew-splanet ${on2 ? 'is-sel' : ''}`}
+                    <g key={pid} className={`ew-splanet ${on2 ? 'is-sel' : ''}`} data-pid={pid}
                       onClick={(e) => (e.stopPropagation(), on?.planet(p, e.detail > 1))}
-                      onContextMenu={(e) => (e.preventDefault(), e.stopPropagation(), on?.planetOrder(p))}
-                      data-tip={`${p.name}: ${PLANET_KINDS[p.kind].name}, ${planetIncome(g, p)} credits a day. ${p.owner < 0 ? 'Unclaimed.' : `Held by the ${factionName(g, p.owner)}.`} Double-click to zoom in; right-click to send the selected fleet.`}>
+                      data-tip={`${p.name}: ${PLANET_KINDS[p.kind].name}, ${planetIncome(g, p)} credits a day. ${p.owner < 0 ? 'Unclaimed.' : `Held by the ${factionName(g, p.owner)}.`} Double-click to zoom in; right-click to send the selected fleet (Shift to add a stop).`}>
                       <circle cx={q.x} cy={q.y} r={r + Math.max(px(6), r * 0.18)} fill="none" stroke={color(g, p.owner)} strokeWidth={p.owner < 0 ? 1 : 2.5} strokeDasharray={p.owner < 0 ? '3 4' : undefined} vectorEffect="non-scaling-stroke" className="ew-sring" />
                       <image href={PLANET_ART(p.kind)} x={q.x - r} y={q.y - r} width={r * 2} height={r * 2} />
                       {p.capture && (
@@ -549,6 +556,10 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
               </g>
             )}
             {battle && <circle cx={s.x} cy={s.y} r={Math.max(px(20), d * R)} className="ew-gbattle" vectorEffect="non-scaling-stroke" />}
+            {/* Zoomed out: a ring round a system with picked planets (solid when it's all of them). */}
+            {!mini && d < 1 && s.planets.some((pid) => selPs.has(pid)) && (
+              <circle cx={s.x} cy={s.y} r={px(23)} className={`ew-gsyssel ${s.planets.every((pid) => selPs.has(pid)) ? 'is-whole' : ''}`} opacity={1 - d} vectorEffect="non-scaling-stroke" />
+            )}
             {/* Zoomed out: a planet being taken shows as a filling ring round the system and its percentage. */}
             {!mini && d < 0.6 && s.planets.map((pid) => g.planets[pid]).filter((p) => p.capture).slice(0, 1).map((p) => (
               <g key={`c${p.id}`} opacity={1 - d / 0.6}>
@@ -583,7 +594,7 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
           const lead = fs.slice().sort((a, b) => b.ships.length - a.ships.length)[0]
           const on2 = fs.some((f) => selIds.has(f.id))
           return (
-            <g key={key} className={`ew-gfleet ${on2 ? 'is-sel' : ''}`} transform={`translate(${s.x} ${s.y}) scale(${1 / k}) translate(${owner === ME ? -24 : 24} -16)`}
+            <g key={key} className={`ew-gfleet ${on2 ? 'is-sel' : ''}`} data-fid={lead.id} transform={`translate(${s.x} ${s.y}) scale(${1 / k}) translate(${owner === ME ? -24 : 24} -16)`}
               onClick={(e) => (e.stopPropagation(), fs.length > 1 && on?.fleets ? on.fleets(fs) : on?.fleet(lead))}
               data-tip={`${factionName(g, owner)} fleet${fs.length > 1 ? `s (${fs.length})` : ''}: ${n} ships`}>
               <rect x={-11} y={-7} width={22} height={14} rx={3} fill={color(g, owner)} />
@@ -604,7 +615,7 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
             off = { x: planetR(pl) * k + 26, y: -8 + i * 22 }
           }
           return (
-            <g key={f.id} className={`ew-gfleet ${f.leg ? 'is-moving' : 'is-orbit'} ${selIds.has(f.id) ? 'is-sel' : ''}`} transform={`translate(${p.x} ${p.y}) scale(${1 / k}) translate(${off.x} ${off.y})`} onClick={(e) => (e.stopPropagation(), on?.fleet(f))}
+            <g key={f.id} className={`ew-gfleet ${f.leg ? 'is-moving' : 'is-orbit'} ${selIds.has(f.id) ? 'is-sel' : ''}`} data-fid={f.id} transform={`translate(${p.x} ${p.y}) scale(${1 / k}) translate(${off.x} ${off.y})`} onClick={(e) => (e.stopPropagation(), on?.fleet(f))}
               data-tip={`${factionName(g, f.owner)} fleet: ${f.ships.length} ships${f.leg ? `, ${secs(eta(f))} to go` : ''}`}>
               {f.leg ? (
                 <>
@@ -621,6 +632,13 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
             </g>
           )
         })}
+      {/* The stops queued with Shift, numbered in order, just above each planet. */}
+      {!mini && stops.map((w) => label(w.at.x, w.at.y, (
+        <g className="ew-gwaypt" transform={`translate(0 ${-(w.r * k * d + 12)})`}>
+          <circle r={8} />
+          <text y={3.5}>{w.n}</text>
+        </g>
+      ), '', w.key))}
     </svg>
   )
 }
@@ -654,6 +672,8 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
   const [toasts, setToasts] = useState<GToast[]>([])
   const [pay, setPay] = useState<{ id: number; amount: number } | null>(null)
   const [fleetsOpen, setFleetsOpen] = useState(true)
+  /** 'move': the next click on the map sends the selected fleets there (as a right-click would). */
+  const [mode, setMode] = useState<'normal' | 'move'>('normal')
   const viewEl = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 800, h: 520 })
   const [cam, setCam] = useState<Cam>({ x: W / 2, y: H / 2, k: 0.8 })
@@ -676,8 +696,8 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
   const held = useRef(new Set<string>())
   const mouse = useRef({ x: 0, y: 0, inside: false })
   const rootEl = useRef<HTMLDivElement>(null)
-  const state = useRef({ paused, speed, menu })
-  state.current = { paused, speed, menu }
+  const state = useRef({ paused, speed, menu, mode })
+  state.current = { paused, speed, menu, mode }
   useSettings()
   const mine = g.sides[ME]
   const myFaction = mine.faction
@@ -881,11 +901,22 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
   const selFleet = sel?.kind === 'fleet' ? g.fleets.find((f) => f.id === sel.id) : undefined
   const selFleets = sel?.kind === 'fleets' ? g.fleets.filter((f) => sel.ids.includes(f.id)) : []
   const selPlanet = sel?.kind === 'planet' ? g.planets[sel.id] : undefined
+  const selPlanets = sel?.kind === 'planets' ? sel.ids.map((id) => g.planets[id]) : selPlanet ? [selPlanet] : []
   useEffect(() => {
     // Selected fleets that are gone (merged, destroyed) let go.
     if (sel?.kind === 'fleet' && !selFleet) setSel(null)
     if (sel?.kind === 'fleets' && selFleets.length !== sel.ids.length) setSel(selFleets.length > 1 ? { kind: 'fleets', ids: selFleets.map((f) => f.id) } : selFleets.length ? { kind: 'fleet', id: selFleets[0].id } : null)
   })
+  /** A box with no fleets of ours in it picked these planets: ours if any, else all of them. One
+   * opens its dock; several (a whole system, say) show in the selection. */
+  const pickPlanets = (ps: Planet[], add = false) => {
+    const mine = ps.filter((p) => p.owner === ME)
+    const ids = [...new Set([...(add ? selectedPlanets(sel) : []), ...(mine.length ? mine : ps).map((p) => p.id)])]
+    setTake({})
+    if (!ids.length) return setSel(null)
+    setSel(ids.length === 1 ? { kind: 'planet', id: ids[0] } : { kind: 'planets', ids })
+    sound.click()
+  }
   /** A box or a click picked these fleets: one, several, or (an empty box) none. */
   const pickFleets = (fs: Fleet[], add = false) => {
     const ids = [...new Set([...(add ? selectedIds(sel) : []), ...fs.map((f) => f.id)])].filter((id) => g.fleets.some((f) => f.id === id && f.owner === ME))
@@ -918,8 +949,18 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
         setPaused((p) => !p)
       } else if (action === 'zoomIn' || k === '+') flyTo(c.x, c.y, c.k * 1.8)
       else if (action === 'zoomOut') flyTo(c.x, c.y, c.k / 1.8)
-      else if (k === 'escape') {
+      else if (g.pending >= 0 && (k === 'backspace' || (action && action in KEY_COMMAND))) {
+        // A battle waiting to be fought: it gets settled first.
+        e.preventDefault()
+      } else if (k === 'backspace') {
+        e.preventDefault()
+        runCommand('drop')
+      } else if (action && action in KEY_COMMAND) {
+        e.preventDefault()
+        runCommand(KEY_COMMAND[action]!, e.shiftKey)
+      } else if (k === 'escape') {
         if (state.current.menu) setMenu(null)
+        else if (state.current.mode !== 'normal') setMode('normal')
         else if (sel) setSel(null)
         else if (c.k > kMin * 1.15) flyOut()
         else setMenu('menu')
@@ -943,15 +984,15 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
     for (const [id, n] of grouped(f.ships)) for (let i = 0; i < Math.min(n, take[id] ?? n); i++) out.push(id)
     return out
   }
-  const send = (planet: number) => {
-    if (dragged.current) return
+  /** Send the selected fleets to a planet; with `queue` (Shift), as a stop after what they're doing. */
+  const send = (planet: number, queue = false) => {
     // Several fleets: each flies there whole, and they join up when they arrive.
     if (selFleets.length) {
       let sent = 0
       let why: string | null = null
       for (const f of selFleets) {
         if (f.owner !== ME) continue
-        const w = moveFleet(g, ME, f.id, planet)
+        const w = moveFleet(g, ME, f.id, planet, undefined, queue)
         if (w) why = w
         else sent++
       }
@@ -971,7 +1012,7 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
     const ships = chosen(selFleet)
     if (!ships.length) return sound.error()
     const before = new Set(g.fleets.map((f) => f.id))
-    const why = moveFleet(g, ME, selFleet.id, planet, ships.length < selFleet.ships.length ? ships : undefined)
+    const why = moveFleet(g, ME, selFleet.id, planet, ships.length < selFleet.ships.length ? ships : undefined, queue)
     if (why) {
       sound.error()
       toast(why, 'bad')
@@ -984,10 +1025,10 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
     sound.order('move', myFaction)
   }
   /** Right-click on a system: the planet worth going to (an enemy's, then a free one, then ours). */
-  const sendToSystem = (s: number) => {
+  const sendToSystem = (s: number, queue = false) => {
     const ps = g.systems[s].planets.map((p) => g.planets[p])
     const target = ps.find((p) => p.owner >= 0 && p.owner !== ME) ?? ps.find((p) => p.owner < 0) ?? ps[0]
-    send(target.id)
+    send(target.id, queue)
   }
   const pickFleet = (f: Fleet) => {
     if (dragged.current) return
@@ -995,6 +1036,120 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
     setTake({})
     if (f.owner === ME) sound.select(myFaction, 'frigate')
     else sound.click()
+  }
+  // Move mode ends with nothing of ours left to move.
+  useEffect(() => {
+    if (mode === 'move' && !(selFleet?.owner === ME || selFleets.length)) setMode('normal')
+  })
+  // Right-click gives orders on the map, Shift+right-click too: never the browser's menu (which the
+  // desktop lets through with Shift elsewhere), except in a text field.
+  useEffect(() => {
+    const el = rootEl.current
+    if (!el) return
+    const stop = (e: MouseEvent) => {
+      if (!(e.target as Element)?.closest?.('input, textarea')) e.preventDefault()
+    }
+    el.addEventListener('contextmenu', stop, true)
+    return () => el.removeEventListener('contextmenu', stop, true)
+  }, [])
+  /** Our selected fleets, for the commands. */
+  const ourSel = () => (selFleet ? [selFleet] : selFleets).filter((f) => f.owner === ME)
+  /** The next fleet of ours waiting in orbit with nothing to do: selected, and shown. */
+  const nextIdle = () => {
+    const idle = g.fleets.filter((f) => f.owner === ME && !f.leg && !f.route.length && !f.waypoints?.length && f.planet >= 0)
+    if (!idle.length) return sound.error()
+    const f = idle[selFleet ? (idle.indexOf(selFleet) + 1) % idle.length : 0]
+    pickFleet(f)
+    const p = fleetAt(g, f)
+    flyTo(p.x, p.y, Math.max(camRef.current.k, 12))
+  }
+  /** Send each fleet to the planet it gets to soonest of those `want` allows, or report why not. */
+  const sendEach = (fs: Fleet[], want: (p: Planet, f: Fleet) => boolean, none: string, queue: boolean) => {
+    let sent = 0
+    for (const f of fs) {
+      // From where it'll be once done, when queued.
+      const last = queue ? (f.waypoints?.length ? f.waypoints[f.waypoints.length - 1] : f.route.length ? f.route[f.route.length - 1].planet : f.leg ? f.leg.planet : f.planet) : -1
+      const from = last >= 0 ? { ...f, leg: null, route: [], planet: last, system: g.planets[last].system } : f
+      let best = -1
+      let bt = Infinity
+      for (const p of g.planets) {
+        if (!want(p, f)) continue
+        const hops = routeTo(g, from, p.id)
+        const t = hops ? hops.reduce((n, h) => n + h.total, 0) : Infinity
+        if (t < bt) {
+          bt = t
+          best = p.id
+        }
+      }
+      if (best >= 0 && !moveFleet(g, ME, f.id, best, undefined, queue)) sent++
+    }
+    if (sent) sound.order('move', myFaction)
+    else {
+      sound.error()
+      toast(none, 'bad')
+    }
+  }
+  /** The selection panel's commands (and their keys); Shift queues the ones that send fleets. */
+  const runCommand = (c: GCommand, queue = false) => {
+    const fs = ourSel()
+    if (c === 'idle') return nextIdle()
+    if (c === 'all') return pickFleets(g.fleets.filter((f) => f.owner === ME))
+    if (c === 'yards') return showYard()
+    if (c === 'economy') return (sound.click(), setEconomy(!economy))
+    if (c === 'upgrade') {
+      let done = 0
+      let why: string | null = null
+      for (const p of selPlanets) {
+        if (p.owner !== ME) continue
+        const w = upgradeStation(g, ME, p.id)
+        if (w) why = w
+        else done++
+      }
+      if (done) return sound.constructing()
+      sound.error()
+      return toast(why ?? 'None of these planets is ours', 'bad')
+    }
+    if (c === 'look') {
+      const ps = selPlanets.length ? selPlanets.map((p) => planetAt(g, p)) : (selFleet ? [selFleet] : selFleets).map((f) => fleetAt(g, f))
+      if (!ps.length) return sound.error()
+      const x0 = Math.min(...ps.map((p) => p.x))
+      const x1 = Math.max(...ps.map((p) => p.x))
+      const y0 = Math.min(...ps.map((p) => p.y))
+      const y1 = Math.max(...ps.map((p) => p.y))
+      const fit = Math.min(size.w / (x1 - x0 + 60), size.h / (y1 - y0 + 60))
+      return flyTo((x0 + x1) / 2, (y0 + y1) / 2, Math.min(Math.max(camRef.current.k, 12), fit))
+    }
+    if (!fs.length) return sound.error()
+    if (c === 'move') {
+      sound.click()
+      return setMode(mode === 'move' ? 'normal' : 'move')
+    }
+    if (c === 'stop') {
+      for (const f of fs) stopFleet(g, ME, f.id)
+      return sound.order('move', myFaction)
+    }
+    if (c === 'drop') {
+      const dropped = fs.filter((f) => dropWaypoint(g, ME, f.id)).length
+      return dropped ? sound.click() : sound.error()
+    }
+    if (c === 'take') {
+      // Not where it is (or is going) already.
+      const busyAt = (f: Fleet) => new Set([f.planet, f.leg?.planet ?? -1, ...f.route.map((h) => h.planet), ...(f.waypoints ?? [])])
+      return sendEach(fs, (p, f) => p.owner !== ME && !busyAt(f).has(p.id), 'No planet left to take within reach', queue)
+    }
+    if (c === 'fallback') {
+      const stations = g.planets.some((p) => p.owner === ME && p.station)
+      return sendEach(fs, (p) => p.owner === ME && (!stations || p.station > 0), 'None of our planets within reach', queue)
+    }
+    if (c === 'gather') {
+      if (fs.length < 2) return sound.error()
+      // At the biggest one: where it is, or where it's going.
+      const big = fs.slice().sort((a, b) => b.ships.length - a.ships.length)[0]
+      const at = big.route.length ? big.route[big.route.length - 1].planet : big.leg ? big.leg.planet : big.planet
+      let sent = 0
+      for (const f of fs) if (f !== big && !moveFleet(g, ME, f.id, at, undefined, queue)) sent++
+      return sent ? sound.order('move', myFaction) : sound.error()
+    }
   }
   /** Look at a planet: the camera flies in and it's selected. */
   const showPlanet = (pid: number, k = 45) => {
@@ -1094,6 +1249,18 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
   // a click on open space lets go of the selection; the middle button drags the map along.
   const [box, setBox] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const onPointerDown = (e: React.PointerEvent) => {
+    // Orders go out on the press, as in a battle: the right button, or the left one in move mode
+    // (Shift keeps it on, for the next stop). The click that follows isn't a click.
+    if (e.button === 2 || (e.button === 0 && mode === 'move')) {
+      e.preventDefault()
+      orderAt(e.target as Element, e.clientX, e.clientY, e.shiftKey)
+      if (e.button === 0) {
+        if (!e.shiftKey) setMode('normal')
+        dragged.current = true
+        window.addEventListener('pointerup', () => setTimeout(() => (dragged.current = false), 0), { once: true })
+      }
+      return
+    }
     if (e.button !== 0 && e.button !== 1) return
     const pan = e.button === 1
     if (pan) e.preventDefault()
@@ -1127,11 +1294,11 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
       if (!pan && dragged.current) {
         const bx = { l: Math.min(x0, u.clientX) - r.left - 10, r: Math.max(x0, u.clientX) - r.left + 10, t: Math.min(y0, u.clientY) - r.top - 10, b: Math.max(y0, u.clientY) - r.top + 10 }
         const c = camRef.current
-        pickFleets(g.fleets.filter((f) => {
-          if (f.owner !== ME) return false
-          const p = fleetScreen(g, f, c, size)
-          return p.x >= bx.l && p.x <= bx.r && p.y >= bx.t && p.y <= bx.b
-        }), add)
+        const inBox = (p: { x: number; y: number }) => p.x >= bx.l && p.x <= bx.r && p.y >= bx.t && p.y <= bx.b
+        const fs = g.fleets.filter((f) => f.owner === ME && inBox(fleetScreen(g, f, c, size)))
+        // No fleets of ours in it: the planets (a system's all of them, zoomed out, where its star is).
+        if (fs.length || (add && selectedIds(sel).size)) pickFleets(fs, add)
+        else pickPlanets(g.planets.filter((p) => inBox(planetScreen(g, p, c, size))), add)
         setBox(null)
       } else if (!pan && onSpace && !add) setSel(null)
       // The click that ends a drag isn't a click.
@@ -1141,19 +1308,31 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
     window.addEventListener('pointerup', up)
   }
 
-  /** A right-click on open space: the nearest planet (zoomed in) or system (zoomed out) near the
-   * cursor gets the order, so it needn't land exactly on it. */
-  const onViewOrder = (e: React.MouseEvent) => {
-    noMenu(e)
-    const at = toWorld(e.clientX, e.clientY)
+  /**
+   * An order at a spot on the map (a right-click, or a click in move mode): a planet, a system or a
+   * fleet's badge under the cursor (a fleet: where it is), else the nearest planet (zoomed in) or
+   * system (zoomed out) near the cursor, so it needn't land exactly on it.
+   */
+  const orderAt = (target: Element, cx: number, cy: number, queue: boolean) => {
+    if (!selFleet && !selFleets.length) return
+    const hit = target.closest('[data-pid], [data-sid], [data-fid]')
+    if (hit instanceof SVGElement || hit instanceof HTMLElement) {
+      const { pid, sid, fid } = hit.dataset
+      if (pid) return send(Number(pid), queue)
+      if (sid) return sendToSystem(Number(sid), queue)
+      const f = g.fleets.find((x) => x.id === Number(fid))
+      const to = f ? (f.leg ? (f.route.length ? f.route[f.route.length - 1].planet : f.leg.planet) : f.planet) : -1
+      if (f && !selectedIds(sel).has(f.id) && to >= 0) return send(to, queue)
+    }
+    const at = toWorld(cx, cy)
     const k = camRef.current.k
     if (detail(k) > 0.5) {
       const p = g.planets.reduce((b, x) => (Math.hypot(planetAt(g, x).x - at.x, planetAt(g, x).y - at.y) < Math.hypot(planetAt(g, b).x - at.x, planetAt(g, b).y - at.y) ? x : b))
       const q = planetAt(g, p)
-      if (Math.hypot(q.x - at.x, q.y - at.y) * k < Math.max(90, planetR(p) * k * 2.5)) return send(p.id)
+      if (Math.hypot(q.x - at.x, q.y - at.y) * k < Math.max(90, planetR(p) * k * 2.5)) return send(p.id, queue)
     } else {
       const s = g.systems.reduce((b, x) => (Math.hypot(x.x - at.x, x.y - at.y) < Math.hypot(b.x - at.x, b.y - at.y) ? x : b))
-      if (Math.hypot(s.x - at.x, s.y - at.y) * k < 60) return sendToSystem(s.id)
+      if (Math.hypot(s.x - at.x, s.y - at.y) * k < 60) return sendToSystem(s.id, queue)
     }
     if (selFleet?.owner === ME || selFleets.length) {
       sound.error()
@@ -1163,7 +1342,7 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
 
   const myIncome = incomeOf(g, ME)
   const myFleets = g.fleets.filter((f) => f.owner === ME)
-  const idleFleets = myFleets.filter((f) => !f.leg && !f.route.length && f.planet >= 0)
+  const idleFleets = myFleets.filter((f) => !f.leg && !f.route.length && !f.waypoints?.length && f.planet >= 0)
   // The shipyards across our planets: what's queued, and what comes off a slip next.
   const yards = g.planets.filter((p) => p.owner === ME && p.queue.length)
   const queued = yards.reduce((n, p) => n + p.queue.length, 0)
@@ -1242,10 +1421,9 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
       </div>
 
       <div
-        className="ew-gview"
+        className={`ew-gview ${mode === 'move' ? 'is-ordering' : ''}`}
         ref={viewEl}
         onPointerDown={onPointerDown}
-        onContextMenu={onViewOrder}
         onPointerMove={(e) => {
           const r = e.currentTarget.getBoundingClientRect()
           mouse.current = { x: e.clientX - r.left, y: e.clientY - r.top, inside: true }
@@ -1264,14 +1442,12 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
               const sys = g.systems[s]
               flyTo(sys.x, sys.y, Math.max(camRef.current.k, 11))
             },
-            systemOrder: sendToSystem,
             planet: (p, double) => {
               if (dragged.current) return
               sound.click()
               if (double) showPlanet(p.id, 70)
               else setSel({ kind: 'planet', id: p.id })
             },
-            planetOrder: (p) => send(p.id),
             fleet: pickFleet,
             fleets: (fs) => !dragged.current && pickFleets(fs),
           }}
@@ -1322,20 +1498,43 @@ function GalaxyMap({ g, sound, onExit, onAbandon, onEnd, onLoad, onBattle }: { g
           else sound.error()
         }}
         idle={idleFleets.length}
-        onIdle={() => {
-          if (!idleFleets.length) return sound.error()
-          const i = selFleet ? (idleFleets.indexOf(selFleet) + 1) % idleFleets.length : 0
-          const f = idleFleets[i]
-          pickFleet(f)
-          const p = fleetAt(g, f)
-          flyTo(p.x, p.y, Math.max(camRef.current.k, 12))
-        }}
+        onIdle={nextIdle}
         economy={economy}
         onEconomy={() => (sound.click(), setEconomy(!economy))}
       />
 
-      {selFleet && <FleetPanel g={g} f={selFleet} take={take} setTake={setTake} onClose={() => setSel(null)} />}
-      {selFleets.length > 1 && <FleetsPanel g={g} fleets={selFleets} onOnly={pickFleet} onClose={() => setSel(null)} />}
+      <GalaxySelection
+        g={g}
+        fleets={selFleet ? [selFleet] : selFleets}
+        planets={sel?.kind === 'planets' ? selPlanets : []}
+        take={take}
+        setTake={setTake}
+        mode={mode}
+        onCommand={(c) => runCommand(c)}
+        onFleets={(fs, drop) => {
+          const ids = drop ? [...selectedIds(sel)].filter((id) => !fs.some((f) => f.id === id)) : fs.map((f) => f.id)
+          setTake({})
+          setSel(ids.length > 1 ? { kind: 'fleets', ids } : ids.length ? { kind: 'fleet', id: ids[0] } : null)
+          sound.click()
+        }}
+        onPlanets={(ps, drop) => {
+          const ids = drop ? [...selectedPlanets(sel)].filter((id) => !ps.some((p) => p.id === id)) : ps.map((p) => p.id)
+          setSel(ids.length > 1 ? { kind: 'planets', ids } : ids.length ? { kind: 'planet', id: ids[0] } : null)
+          sound.click()
+        }}
+        enabled={(c) => {
+          const fs = ourSel()
+          if (c === 'idle') return myFleets.some((f) => !f.leg && !f.route.length && !f.waypoints?.length && f.planet >= 0)
+          if (c === 'all') return myFleets.length > 0
+          if (c === 'look') return selFleets.length > 0 || !!selFleet || selPlanets.length > 0
+          if (c === 'yards') return g.planets.some((p) => p.owner === ME && p.station)
+          if (c === 'economy') return true
+          if (c === 'upgrade') return selPlanets.some((p) => p.owner === ME && !cantUpgradeStation(g, ME, p.id))
+          if (c === 'gather') return fs.length > 1
+          if (c === 'drop') return fs.some((f) => f.waypoints?.length)
+          return fs.length > 0
+        }}
+      />
       {selPlanet && (
         <PlanetDock
           g={g}
@@ -1947,68 +2146,162 @@ function ShipRow({ g, owner, id, n, children }: { g: Galaxy; owner: number; id: 
   )
 }
 
-/** Several fleets picked with a box: what they hold together, and each one to pick on its own. */
-function FleetsPanel({ g, fleets, onOnly, onClose }: { g: Galaxy; fleets: Fleet[]; onOnly: (f: Fleet) => void; onClose: () => void }) {
-  const ships = fleets.flatMap((f) => f.ships)
-  return (
-    <Floating id="gFleet" title={`${fleets.length} fleets`} at={{ right: 8, top: 52 }} onClose={onClose} className="ew-gpanel" layout={galaxyLayout} aside={<b className="ew-selcount">{ships.length}</b>}>
-      <div className="ew-gships">
-        {grouped(ships).map(([id, n]) => <ShipRow key={id} g={g} owner={ME} id={id} n={n} />)}
-      </div>
-      <div className="ew-gmulti">
-        {fleets.map((f) => (
-          <button key={f.id} onClick={() => onOnly(f)} data-tip="Select only this fleet">
-            <b>{f.ships.length}</b>
-            <span>{f.leg ? `→ ${g.planets[(f.route.length ? f.route[f.route.length - 1] : f.leg).planet]?.name ?? g.systems[f.leg.system].name}` : g.planets[f.planet]?.name}</span>
-            {f.leg && <small>{secs(eta(f))}</small>}
-          </button>
-        ))}
-      </div>
-      <p className="ew-ghint">Right-click a planet or system to send them all: they join up into one fleet where they arrive.</p>
-    </Floating>
-  )
+// --- The selection: fleets or planets, and what to do with them -----------------------------------
+
+type GCommand = 'move' | 'take' | 'stop' | 'gather' | 'fallback' | 'look' | 'idle' | 'all' | 'drop' | 'upgrade' | 'yards' | 'economy'
+/** The commands with a key, as bound in Settings (the battle's keys, where they mean the same). */
+const KEY_COMMAND: Partial<Record<Action, GCommand>> = { move: 'move', attack: 'take', stop: 'stop', hold: 'gather', retreat: 'fallback', focus: 'look', idle: 'idle' }
+const FLEET_COMMANDS: { id: GCommand; label: string; icon: IconName; key?: Action; tip: string }[] = [
+  { id: 'move', label: 'Move', icon: 'move', key: 'move', tip: 'Then click a planet or system to send them there (a right-click sends them straight away). Shift adds it as a stop after what they are doing.' },
+  { id: 'take', label: 'Take nearest', icon: 'attack', key: 'attack', tip: "Each fleet goes for the nearest planet that isn't ours, to take it. Shift: once it's done with what it's doing." },
+  { id: 'stop', label: 'Stop', icon: 'stop', key: 'stop', tip: 'Call off every order and stop: a fleet in flight halts at the next system it reaches.' },
+  { id: 'gather', label: 'Gather', icon: 'rally', key: 'hold', tip: 'They all fly to the biggest of them (or where it is going) and join up there.' },
+  { id: 'fallback', label: 'Fall back', icon: 'jump', key: 'retreat', tip: 'Each fleet flies to the nearest of our planets with a station.' },
+  { id: 'look', label: 'Look', icon: 'target', key: 'focus', tip: 'Show them on the map.' },
+  { id: 'idle', label: 'Next idle', icon: 'idle', key: 'idle', tip: 'Select the next fleet of ours waiting in orbit with nothing to do.' },
+  { id: 'all', label: 'All fleets', icon: 'army', tip: 'Select every fleet of ours (Ctrl+A).' },
+  { id: 'drop', label: 'Drop stop', icon: 'back', tip: 'Take back the last stop queued with Shift (Backspace).' },
+]
+const PLANET_COMMANDS: typeof FLEET_COMMANDS = [
+  { id: 'look', label: 'Look', icon: 'target', key: 'focus', tip: 'Show them on the map.' },
+  { id: 'upgrade', label: 'Upgrade stations', icon: 'yard', tip: 'Build or upgrade the station at each of these planets of ours that can, while the credits last.' },
+  { id: 'yards', label: 'Shipyards', icon: 'clock', tip: 'Show our shipyards, one after another: the one finishing soonest first.' },
+  { id: 'idle', label: 'Next idle', icon: 'idle', key: 'idle', tip: 'Select the next fleet of ours waiting in orbit with nothing to do.' },
+  { id: 'all', label: 'All fleets', icon: 'army', tip: 'Select every fleet of ours (Ctrl+A).' },
+  { id: 'economy', label: 'Economy', icon: 'credits', tip: 'Our income, planet by planet.' },
+]
+
+/** Where a fleet is, as the selection groups them: in orbit of a planet, or on its way to one. */
+function fleetWhere(g: Galaxy, f: Fleet) {
+  if (!f.leg) {
+    const p = g.planets[f.planet]
+    const cap = p?.capture
+    const status = !p ? '' : cap ? `${cap.owner === f.owner ? 'Taking' : 'Losing'} · ${Math.ceil(CAPTURE_TIME - cap.t)} s` : p.owner === f.owner ? 'In orbit' : 'Holding orbit'
+    return { key: `at:${f.planet}`, name: p?.name ?? '', status, moving: false }
+  }
+  const to = f.route.length ? f.route[f.route.length - 1].planet : f.leg.planet
+  return { key: `to:${to}`, name: `→ ${g.planets[to]?.name ?? g.systems[f.leg.system].name}`, status: secs(eta(f)), moving: true }
 }
 
-function FleetPanel({ g, f, take, setTake, onClose }: { g: Galaxy; f: Fleet; take: Record<string, number>; setTake: (t: Record<string, number>) => void; onClose: () => void }) {
-  const ours = f.owner === ME
-  const where = f.leg
-    ? `Flying to ${g.planets[(f.route.length ? f.route[f.route.length - 1] : f.leg).planet]?.name ?? g.systems[f.leg.system].name}, ${secs(eta(f))} to go`
-    : `In orbit of ${g.planets[f.planet]?.name}`
-  const groups = grouped(f.ships)
-  const picked = groups.reduce((s, [id, n]) => s + Math.min(n, take[id] ?? n), 0)
+/**
+ * The selection, bottom right as in a battle. Fleets: grouped by where they are (or where they're
+ * going), a tile per kind of ship; for one fleet in orbit, the tiles pick which ships an order sends
+ * (click: only these, Shift-click: leave these behind, the wheel: one more or fewer). Planets:
+ * grouped by system, a whole system shown as such. Then the commands.
+ */
+function GalaxySelection({ g, fleets, planets, take, setTake, mode, onCommand, onFleets, onPlanets, enabled }: {
+  g: Galaxy
+  fleets: Fleet[]
+  planets: Planet[]
+  take: Record<string, number>
+  setTake: (t: Record<string, number>) => void
+  mode: 'normal' | 'move'
+  onCommand: (c: GCommand) => void
+  /** Keep only these (or, with `drop`, let go of them). */
+  onFleets: (fs: Fleet[], drop: boolean) => void
+  onPlanets: (ps: Planet[], drop: boolean) => void
+  enabled: (c: GCommand) => boolean
+}) {
+  const { keys } = useSettings()
+  const ships = fleets.reduce((n, f) => n + f.ships.length, 0)
+  const ours = fleets.length > 0 && fleets.every((f) => f.owner === ME)
+  // One fleet of ours in orbit: its ships can be split off by kind.
+  const split = fleets.length === 1 && ours && !fleets[0].leg ? fleets[0] : null
+  const groups = new Map<string, { name: string; status: string; moving: boolean; fleets: Fleet[] }>()
+  for (const f of fleets) {
+    const w = fleetWhere(g, f)
+    const gr = groups.get(w.key)
+    if (gr) gr.fleets.push(f)
+    else groups.set(w.key, { ...w, fleets: [f] })
+  }
+  const systems = new Map<number, Planet[]>()
+  for (const p of planets) systems.set(p.system, [...(systems.get(p.system) ?? []), p])
+  const stops = Math.max(0, ...fleets.map((f) => f.waypoints?.length ?? 0))
+  const picked = split ? grouped(split.ships).reduce((n, [id, c]) => n + Math.min(c, take[id] ?? c), 0) : 0
+  const commands = planets.length && !fleets.length ? PLANET_COMMANDS : FLEET_COMMANDS
+  // Planets that make up whole systems are named as systems.
+  const allWhole = [...systems.entries()].every(([sid, ps]) => ps.length === g.systems[sid].planets.length)
+  const title = fleets.length
+    ? fleets.length === 1 ? (ours ? 'Our fleet' : `${factionName(g, fleets[0].owner)} fleet`) : `${fleets.length} fleets`
+    : !planets.length ? 'Selected' : !allWhole ? `${planets.length} planets` : systems.size === 1 ? g.systems[planets[0].system].name : `${systems.size} systems`
   return (
-    <Floating id="gFleet" title={ours ? 'Our fleet' : `${factionName(g, f.owner)} fleet`} at={{ right: 8, top: 52 }} onClose={onClose} className="ew-gpanel" layout={galaxyLayout}>
-      <p className="ew-muted ew-small">{where}</p>
-      {!f.leg && f.planet >= 0 && g.planets[f.planet].capture?.owner === f.owner && (
-        <span className="ew-gp-cap" style={{ ['--cap' as string]: color(g, f.owner) }}>
-          <span>Taking {g.planets[f.planet].name}: {Math.ceil(CAPTURE_TIME - g.planets[f.planet].capture!.t)} s</span>
-          <i><b style={{ width: `${(g.planets[f.planet].capture!.t / CAPTURE_TIME) * 100}%` }} /></i>
-        </span>
-      )}
-      {ours && !f.leg && g.rules.frontline && contested(g, f.system, ME) && (
-        <p className="ew-ghint">Front line: {g.systems[f.system].name} is contested. Win it before advancing into other enemy systems; the fleet can still fall back.</p>
-      )}
-      {ours && !f.leg && f.planet >= 0 && g.planets[f.planet].owner !== ME && !g.planets[f.planet].capture && !fleetsAt(g, f.planet).some((x) => x.owner !== ME) && !(g.planets[f.planet].owner >= 0 && g.planets[f.planet].station) && (
-        <p className="ew-ghint">Holding orbit: it takes the planet in {CAPTURE_TIME} s.</p>
-      )}
-      <div className="ew-gships">
-        {groups.map(([id, n]) => (
-          <ShipRow key={id} g={g} owner={f.owner} id={id} n={n}>
-            {ours && !f.leg && n > 0 && (
-              <span className="ew-gstep" data-tip="How many of these to send">
-                <button onClick={() => setTake({ ...take, [id]: Math.max(0, Math.min(n, take[id] ?? n) - 1) })}>−</button>
-                <em>{Math.min(n, take[id] ?? n)}</em>
-                <button onClick={() => setTake({ ...take, [id]: Math.min(n, (take[id] ?? n) + 1) })}>+</button>
-              </span>
-            )}
-          </ShipRow>
-        ))}
-      </div>
-      {ours && (
-        <p className="ew-ghint">
-          {f.leg ? 'Right-click a planet or system to change course.' : picked < f.ships.length ? `Right-click a planet or system to send these ${picked} ships as a new fleet.` : 'Right-click a planet or system to send the fleet. Use − to leave some ships behind.'}
-        </p>
-      )}
+    <Floating id="gSel" bare at={{ right: 6, bottom: 6 }} className="ew-selfloat ew-gselfloat" layout={galaxyLayout}>
+      <Frame className="ew-selframe ew-gselframe" title={title} aside={<b className="ew-selcount">{fleets.length ? ships : planets.length || ''}</b>}>
+        <div className="ew-gselgroups">
+          {[...groups.values()].map((gr) => {
+            const owner = gr.fleets[0].owner
+            return (
+              <div key={gr.name + owner} className="ew-gselgroup">
+                <button className="ew-gselwhere" onClick={(e) => onFleets(gr.fleets, e.shiftKey)} style={{ ['--own' as string]: color(g, owner) }}
+                  data-tip={groups.size > 1 ? 'Click to keep only these fleets, Shift-click to let go of them' : undefined}>
+                  <i />
+                  <b>{gr.name}</b>
+                  <small>{gr.fleets.length > 1 ? `${gr.fleets.length} fleets · ` : ''}{gr.status}</small>
+                </button>
+                <div className="ew-seltiles">
+                  {grouped(gr.fleets.flatMap((f) => f.ships)).map(([id, n]) => {
+                    const t = UNIT[id]
+                    const k = split ? Math.min(n, take[id] ?? n) : n
+                    const set = (v: number) => setTake({ ...take, [id]: clamp(v, 0, n) })
+                    const only = () => setTake(Object.fromEntries(grouped(split!.ships).map(([x, c]) => [x, x === id ? c : 0])))
+                    return (
+                      <button key={id} className={`ew-seltile ${owner === ME ? '' : 'is-enemy'} ${split && k === 0 ? 'is-off' : ''}`}
+                        onClick={(e) => (split ? (e.shiftKey ? set(k ? 0 : n) : picked === k && k === n ? setTake({}) : only()) : onFleets(gr.fleets, e.shiftKey))}
+                        onWheel={(e) => split && set(k + (e.deltaY < 0 ? 1 : -1))}
+                        {...unitTip(t, { who: owner === ME ? 'Ours' : factionName(g, owner), rel: owner === ME ? 'own' : 'enemy' }, split ? `${k} of ${n} go with the next order. Click: send only these; Shift-click: leave these behind; the wheel: one more or fewer.` : undefined)}>
+                        <ShipArt t={t} />
+                        <em>{split && k < n ? `${k}/${n}` : n}</em>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })}
+          {[...systems.entries()].map(([sid, ps]) => {
+            const whole = ps.length === g.systems[sid].planets.length
+            return (
+              <div key={sid} className="ew-gselgroup">
+                <button className="ew-gselwhere" onClick={(e) => onPlanets(ps, e.shiftKey)} data-tip={systems.size > 1 ? 'Click to keep only these planets, Shift-click to let go of them' : undefined}>
+                  <i style={{ background: STAR_COLOR[g.systems[sid].star] }} className="is-star" />
+                  <b>{g.systems[sid].name}</b>
+                  <small>{whole ? 'Whole system' : `${ps.length} of ${g.systems[sid].planets.length} planets`}</small>
+                </button>
+                <div className="ew-seltiles">
+                  {ps.map((p) => (
+                    <button key={p.id} className="ew-seltile ew-gplanettile" style={{ ['--own' as string]: color(g, p.owner) }} onClick={(e) => onPlanets([p], e.shiftKey)}
+                      data-tip={`${p.name}: ${PLANET_KINDS[p.kind].name}, ${planetIncome(g, p)} credits a day. ${p.owner < 0 ? 'Unclaimed.' : p.owner === ME ? 'Ours.' : `Held by the ${factionName(g, p.owner)}.`}${p.station ? ` Station level ${p.station}.` : ''} Click to open it, Shift-click to let go of it.`}>
+                      <img src={PLANET_ART(p.kind)} alt="" />
+                      {p.station > 0 && <em>{p.station}</em>}
+                      {p.queue.length > 0 && <i className="ew-sbusy" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+          {!fleets.length && !planets.length && <span className="ew-muted ew-small">Nothing selected. Drag a box round fleets, or round planets and systems.</span>}
+        </div>
+        {ours && (
+          <p className="ew-ghint">
+            {split && picked < split.ships.length ? `The next order sends these ${picked} ships as a new fleet.` : 'Right-click a planet or system to send them; Shift+right-click adds stops.'}
+            {stops > 0 && ` ${stops} stop${stops > 1 ? 's' : ''} queued.`}
+          </p>
+        )}
+        {fleets.length === 1 && ours && g.rules.frontline && !fleets[0].leg && contested(g, fleets[0].system, ME) && (
+          <p className="ew-ghint">Front line: {g.systems[fleets[0].system].name} is contested. Win it before advancing into other enemy systems; the fleet can still fall back.</p>
+        )}
+        <div className="ew-cmdgrid">
+          {commands.map((c) => (
+            <button key={c.id} className={`ew-cmdbtn ${c.id === 'move' && mode === 'move' ? 'is-on' : ''}`} disabled={!enabled(c.id)} onClick={() => onCommand(c.id)}
+              data-tip={`${c.label}${c.key ? ` (${keyName(keys[c.key])})` : ''}: ${c.tip}`}>
+              <Icon name={c.icon} size={20} />
+              <span>{c.label}</span>
+              {c.key && <kbd>{keyName(keys[c.key])}</kbd>}
+            </button>
+          ))}
+        </div>
+      </Frame>
     </Floating>
   )
 }
