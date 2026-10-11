@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState, type ComponentType } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from 'react'
 import { useWM, type WinState } from '../../os/wm'
 import { Breakout } from './Breakout'
 import { GAME_CATALOG } from './catalog'
@@ -65,6 +65,40 @@ function useGameFullscreen() {
   return { on, toggle: () => setOn((v) => !v), enter, exit }
 }
 
+/**
+ * The game bar (name and fullscreen) shows for a moment when the game opens, then gets out of the
+ * way. Shown again by hovering the top edge or tapping the handle, it hides by itself after a few
+ * seconds, or once the mouse leaves it.
+ */
+function useGameBar() {
+  const [shown, setShown] = useState(true)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const later = useCallback((ms: number) => {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = setTimeout(() => setShown(false), ms)
+  }, [])
+  useEffect(() => {
+    later(2500)
+    return () => void (timer.current && clearTimeout(timer.current))
+  }, [later])
+  const show = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = null
+    setShown(true)
+  }, [])
+  const hideSoon = useCallback(() => later(700), [later])
+  const toggle = useCallback(() => {
+    if (shown) {
+      if (timer.current) clearTimeout(timer.current)
+      setShown(false)
+    } else {
+      setShown(true)
+      later(5000)
+    }
+  }, [shown, later])
+  return { shown, show, hideSoon, toggle }
+}
+
 /** Games that start in fullscreen on a phone, where a window leaves them too little room. */
 const FULL_ON_PHONES = new Set(['empires'])
 const isPhone = () => window.innerWidth < 720 || (window.matchMedia('(pointer: coarse)').matches && Math.min(window.innerWidth, window.innerHeight) < 500)
@@ -105,11 +139,16 @@ function GameWindow({ win, game }: { win: WinState; game: (typeof GAMES)[number]
     if (FULL_ON_PHONES.has(game.id) && isPhone()) enter()
   }, [game.id, enter])
 
+  const bar = useGameBar()
+
   if (!session) return null
   const Game = game.component
   return (
-    <div className={`games-play ${full.on ? 'is-page-full' : ''}`}>
-      <div className="games-top">
+    <div className={`games-play ${full.on ? 'is-page-full' : ''} ${bar.shown ? 'is-bar' : ''}`}>
+      {/* The bar hides itself to leave the game the whole window: a mouse brings it back at the
+          top edge, a finger with the handle hanging under it. */}
+      <div className="games-hot" onPointerEnter={(e) => e.pointerType === 'mouse' && bar.show()} aria-hidden />
+      <div className="games-top" onPointerEnter={(e) => e.pointerType === 'mouse' && bar.show()} onPointerLeave={(e) => e.pointerType === 'mouse' && bar.hideSoon()}>
         <span className="games-title">
           {game.glyph} {game.name}
         </span>
@@ -117,6 +156,7 @@ function GameWindow({ win, game }: { win: WinState; game: (typeof GAMES)[number]
           <FullscreenIcon on={full.on} />
           <span>{full.on ? 'Exit fullscreen' : 'Fullscreen'}</span>
         </button>
+        <button className="games-handle" onClick={bar.toggle} aria-label={bar.shown ? 'Hide the game bar' : 'Show the game bar'} aria-expanded={bar.shown} />
       </div>
       <Suspense fallback={<div className="game"><p className="muted">Loading…</p></div>}>
         <Game key={session} win={win} />

@@ -136,6 +136,30 @@ const SLOP = 10
  */
 const NO_TOUCH_MENU = '[data-longpress], [data-no-touch-menu], .ew-root, canvas, select, .ctx-menu'
 
+/**
+ * Whether a long press here will open a menu: some element on the way up has a contextmenu
+ * handler (read from React's props on the element, since React listens at the root), or it is a
+ * link (the fallback's link menu). Only then is the browser kept from selecting text under the
+ * finger; a hold on plain text with no menu still selects it as usual.
+ */
+function hasMenu(el: Element | null): boolean {
+  for (let n: Element | null = el; n && n !== document.body; n = n.parentElement) {
+    if (n instanceof HTMLAnchorElement && /^https?:|^mailto:/.test(n.href)) return true
+    for (const k in n) if (k.startsWith('__reactProps$') && (n as unknown as Record<string, { onContextMenu?: unknown }>)[k]?.onContextMenu) return true
+  }
+  return false
+}
+
+/** While a menu-bound press lasts (and a moment after), the page can't be selected (styles.css). */
+let unholdTimer: ReturnType<typeof setTimeout> | null = null
+function hold(on: boolean) {
+  if (unholdTimer) clearTimeout(unholdTimer)
+  unholdTimer = null
+  if (on) document.documentElement.classList.add('is-touch-holding')
+  // iOS can still pick a word just after the lift: keep it off a little longer.
+  else unholdTimer = setTimeout(() => document.documentElement.classList.remove('is-touch-holding'), 400)
+}
+
 type Press = { id: number; target: Element; x: number; y: number; timer: ReturnType<typeof setTimeout> | null; fired: boolean; /** Text was already selected when the finger went down (the visitor's, not the press's) */ selected: boolean }
 let press: Press | null = null
 /** The contextmenu event a long press is sending right now. */
@@ -163,6 +187,7 @@ export function cancelTouchMenu() {
   if (press && !press.fired) {
     if (press.timer) clearTimeout(press.timer)
     press = null
+    hold(false)
   }
 }
 
@@ -182,7 +207,7 @@ function fire() {
   p.timer = null
   // The element can be re-rendered away while the finger rests on it.
   const target = p.target.isConnected ? p.target : document.elementFromPoint(p.x, p.y)
-  if (!target || wantsNativeMenu({ target })) return void (press = null)
+  if (!target || wantsNativeMenu({ target })) return void ((press = null), hold(false))
   const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, composed: true, view: window, button: 2, buttons: 0, clientX: p.x, clientY: p.y, screenX: p.x, screenY: p.y })
   synthetic = ev
   try {
@@ -191,7 +216,7 @@ function fire() {
     synthetic = null
   }
   // Nobody wanted it (no menu here): the hold was just a slow tap, and its click goes through.
-  if (!ev.defaultPrevented) return void (press = null)
+  if (!ev.defaultPrevented) return void ((press = null), hold(false))
   claim(p)
 }
 
@@ -213,6 +238,7 @@ export function installTouchContextMenu() {
       const el = e.target instanceof Element ? e.target : null
       if (!el || el.closest(NO_TOUCH_MENU) || wantsNativeMenu(e)) return
       press = { id: e.pointerId, target: el, x: e.clientX, y: e.clientY, timer: setTimeout(fire, LONG_PRESS_MS), fired: false, selected: !window.getSelection()?.isCollapsed }
+      if (hasMenu(el)) hold(true)
     },
     opts,
   )
@@ -237,6 +263,7 @@ export function installTouchContextMenu() {
       const p = press
       if (p?.id !== e.pointerId) return
       press = null
+      hold(false)
       if (p.timer) clearTimeout(p.timer)
       if (!p.fired) return
       e.stopImmediatePropagation()
@@ -254,6 +281,7 @@ export function installTouchContextMenu() {
       if (press?.id === e.pointerId) {
         if (press.timer) clearTimeout(press.timer)
         press = null
+        hold(false)
       }
     },
     opts,
@@ -284,6 +312,13 @@ export function installTouchContextMenu() {
       { capture: true },
     )
   }
+
+  // A word iOS selects during the hold or just after the menu opened is the press's doing.
+  document.addEventListener('selectionchange', () => {
+    if (!document.documentElement.classList.contains('is-touch-holding') || press?.selected) return
+    const sel = window.getSelection()
+    if (sel && !sel.isCollapsed && !wantsNativeMenu({ target: sel.anchorNode?.parentElement ?? null })) sel.removeAllRanges()
+  })
 
   // Android's own contextmenu for a held finger, which can come just before or just after ours.
   window.addEventListener(
@@ -324,27 +359,38 @@ export function openMenuAt(anchor: Element, items: MenuItem[], place: 'below' | 
 
 function MenuList({ items, x, y, altX, up, altY, onClose }: { items: MenuItem[]; x: number; y: number; altX?: number; up?: boolean; altY?: number; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState({ x, y })
+  const [pos, setPos] = useState<{ x: number; y: number; maxH?: number }>({ x, y })
   const [openSub, setOpenSub] = useState<number | null>(null)
   const [subPos, setSubPos] = useState({ x: 0, y: 0, altX: 0 })
 
-  // Keep the menu on screen: flip left/up when it would overflow.
+  // Keep the menu on screen: flip left/up when it would overflow, and scroll when it is taller
+  // than the screen. Measured against the visual viewport, which on phones is the part actually
+  // showing (window.innerHeight can include what the browser's own bars cover).
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
-    const r = el.getBoundingClientRect()
-    const nx = x + r.width > window.innerWidth - 8 ? Math.max(8, (altX ?? x) - r.width) : x
-    let ny = up ? y - r.height : y
-    if (ny < 8) ny = 8
-    else if (ny + r.height > window.innerHeight - 8) ny = altY !== undefined && altY - r.height >= 8 ? altY - r.height : Math.max(8, window.innerHeight - r.height - 8)
-    setPos({ x: nx, y: ny })
+    const vv = window.visualViewport
+    const top = vv?.offsetTop ?? 0
+    const left = vv?.offsetLeft ?? 0
+    const vw = vv?.width ?? window.innerWidth
+    const vh = vv?.height ?? window.innerHeight
+    const maxH = vh - 16
+    // Layout sizes, not the bounding box: the entry animation starts the menu scaled down, which
+    // would measure it short and let it run off the bottom.
+    const width = el.offsetWidth
+    const h = Math.min(el.scrollHeight + (el.offsetHeight - el.clientHeight), maxH)
+    const nx = x + width > left + vw - 8 ? Math.max(left + 8, (altX ?? x) - width) : x
+    let ny = up ? y - h : y
+    if (ny < top + 8) ny = top + 8
+    else if (ny + h > top + vh - 8) ny = altY !== undefined && altY - h >= top + 8 ? altY - h : Math.max(top + 8, top + vh - h - 8)
+    setPos({ x: nx, y: ny, maxH })
   }, [x, y, altX, up, altY])
 
   // The submenu is a sibling, not a child: the menu's entry animation uses a transform, which
   // would make a nested position:fixed element position relative to the menu instead of the viewport.
   return (
     <>
-      <div ref={ref} className="ctx-menu" role="menu" style={{ left: pos.x, top: pos.y }} onContextMenu={(e) => e.preventDefault()}>
+      <div ref={ref} className="ctx-menu" role="menu" style={{ left: pos.x, top: pos.y, maxHeight: pos.maxH }} onContextMenu={(e) => e.preventDefault()}>
         {items.map((item, i) =>
           'separator' in item ? (
             <div key={i} className="ctx-sep" role="separator" />
