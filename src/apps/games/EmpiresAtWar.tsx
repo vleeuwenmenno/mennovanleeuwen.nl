@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, fleetThink, newBrain, think, type Brain } from './empires/ai'
 import { ALL_SPRITES, FACTIONS, SITE_UPGRADES, TECH, UNIT, buildable, dims, isShip, type HardpointKind, type Tier } from './empires/data'
-import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, ReserveTray, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type MapFilter, type Mode } from './empires/Hud'
+import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, Icon, ReserveTray, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
+import { LongPress, TouchBar, WheelHost, getTouchMods, isTouch, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
 import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
 import { Multiplayer } from './empires/Multiplayer'
@@ -18,7 +19,7 @@ import { Renderer, relColor, type Camera, type View } from './empires/render'
 import { beginLayout } from './empires/layout'
 import { defaultArea, inRect, inside, type Pt } from './empires/maps'
 import {
-  STEP, RANKS, autoStart, REFUND_DELAY, canSee, closedLoop, cantWarp, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, startProblem, tick, type Owner, type SimEvent, type Unit, type World, stateHash,
+  STEP, RANKS, autoStart, REFUND_DELAY, canRetreat, canSee, closedLoop, cantWarp, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, startProblem, tick, type Owner, type SimEvent, type Unit, type World, stateHash,
 } from './empires/sim'
 import { EmpiresSound, type OrderKind } from './empires/sound'
 import { TechTree } from './empires/TechTree'
@@ -26,6 +27,7 @@ import { Scoreboard } from './empires/Scoreboard'
 import type { SeatStatus } from './empires/protocol'
 import { useHighScore, useIsFocused } from './shared'
 import './empires/empires.css'
+import './empires/touch-battle.css'
 
 // Empires At War: a space RTS in the spirit of Empire at War, set in a Clone Wars style war
 // between a Republic navy and a droid Confederacy. One skirmish map against the AI: mine ore,
@@ -347,6 +349,16 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const lastClick = useRef({ t: 0, id: 0 })
   /** A line being drawn with the right button, in map units: ships spread along it on release. */
   const line = useRef<Pt[] | null>(null)
+  // Touch: a long press opens the action wheel; a line or facing drag armed from it draws with the
+  // next one-finger drag (fingers have no right button). Whether the last pointer was a finger
+  // decides the hints' wording, and keeps a finger off the screen edges from scrolling.
+  const press = useRef(new LongPress())
+  const miniPress = useRef(new LongPress())
+  const drawMode = useRef<'line' | 'face' | null>(null)
+  const touchLast = useRef(false)
+  const [touchUi, setTouchUi] = useState(false)
+  const wheel = useRef<(r: WheelRequest | null) => void>(() => {})
+  const [mapOpen, setMapOpen] = useState(false)
 
   const root = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -354,7 +366,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const [ready, setReady] = useState(false)
   const [hud, setHud] = useState<Hud>(() => snapshot(world.current, me, selected.current, groups.current))
   const [toasts, setToasts] = useState<Toast[]>([])
-  const [ui, setUi] = useState({ paused: false, speed: speed.current, mode: 'normal' as Mode, menu: false, panel: null as 'settings' | 'keys' | 'howto' | null, tree: false, deploy: deploying.current, placed: placed.current, reserves: !!conquest, economy: false, players: false })
+  const [ui, setUi] = useState({ paused: false, speed: speed.current, mode: 'normal' as Mode, draw: null as 'line' | 'face' | null, menu: false, panel: null as 'settings' | 'keys' | 'howto' | null, tree: false, deploy: deploying.current, placed: placed.current, reserves: !!conquest, economy: false, players: false })
   /** Whether the game was paused before a menu opened (menus pause it, closing them restores that). */
   const pausedBefore = useRef(false)
   const uiRef = useRef(ui)
@@ -379,7 +391,14 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     setToasts((ts) => [...ts.slice(-3), { id: toastId.current++, text, tone, t: performance.now() }])
   const setMode = (m: Mode) => {
     mode.current = m
-    setUi((u) => ({ ...u, mode: m }))
+    drawMode.current = null
+    setUi((u) => ({ ...u, mode: m, draw: null }))
+  }
+  /** Touch: arm a line (or facing) drag for the next one-finger drag on the battlefield. */
+  const setDraw = (m: 'line' | 'face' | null) => {
+    mode.current = 'normal'
+    drawMode.current = m
+    setUi((u) => ({ ...u, mode: 'normal', draw: m }))
   }
   const view = () => {
     const c = canvas.current!
@@ -389,6 +408,11 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const { vw, vh } = view()
     const c = cam.current
     return { x: c.x + (sx - vw / 2) / c.zoom, y: c.y + (sy - vh / 2) / c.zoom }
+  }
+  const toScreen = (x: number, y: number) => {
+    const { vw, vh } = view()
+    const c = cam.current
+    return { x: (x - c.x) * c.zoom + vw / 2, y: (y - c.y) * c.zoom + vh / 2 }
   }
   const minZoom = () => {
     const { vw, vh } = view()
@@ -678,6 +702,178 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     if (n) for (const id of new Set(ready.map((u) => u.t.ability!))) sound.ability(id)
     else if (mySelection().some((u) => u.t.ability)) sound.error()
   }
+  /** Every one of ours of this type on screen (a double-click, or a double tap). */
+  const selectType = (unit: Unit, add: boolean) => {
+    const { vw, vh } = view()
+    const a = toWorld(0, 0)
+    const b = toWorld(vw, vh)
+    select(world.current.units.filter((u) => u.owner === me && u.t.id === unit.t.id && u.x >= a.x && u.x <= b.x && u.y >= a.y && u.y <= b.y).map((u) => u.id), add)
+  }
+  /** The crew of what was just picked answers (structures just click). */
+  const pickedSound = (u: Unit) => (isShip(u.t) || u.t.tier === 'station' ? sound.select(myFaction, u.t.tier) : sound.click())
+  const setGroup = (k: string, clear = false) => {
+    if (clear) groups.current.delete(k)
+    else groups.current.set(k, mySelection().map((u) => u.id))
+    toast(clear ? `Group ${k} cleared` : `Group ${k} set`, 'info')
+    sound.click()
+  }
+
+  /**
+   * Touch: the action wheel for a long press on the battlefield, at a screen point (and where the
+   * finger is on the page). What it offers depends on what is selected and what is under the finger;
+   * every action goes through the same orders as the mouse and keys.
+   */
+  const fieldWheel = (sx: number, sy: number, cx: number, cy: number) => {
+    const w = world.current
+    const { unit, node, at } = pick(sx, sy)
+    const mine = mySelection()
+    const ships = mine.filter((u) => isShip(u.t))
+    const guns = mine.filter((u) => !isShip(u.t) && u.guns.length > 0)
+    const ids = () => mySelection().filter((u) => isShip(u.t)).map((u) => u.id)
+    const enemy = !!unit && foes(w, unit.owner, me)
+    const own = !!unit && unit.owner === me
+    // The wheel may stay open a moment while the battle goes on: an action aims at the spot on the
+    // unit that was pressed, wherever it has got to, or else at the map point.
+    const off = unit ? { x: at.x - unit.x, y: at.y - unit.y } : { x: 0, y: 0 }
+    const spot = () => {
+      const u = unit && world.current.byId.get(unit.id)
+      return u && !u.dead ? toScreen(u.x + off.x, u.y + off.y) : toScreen(at.x, at.y)
+    }
+    const it = (id: string, label: string, icon: IconName, run: () => void, disabled?: string | false): WheelItem => ({ id, label, icon: <Icon name={icon} size={18} />, run, disabled: disabled || undefined })
+    const arm = (m: Mode) => () => {
+      const s = spot()
+      modeClick(s.x, s.y, m, shiftOf())
+    }
+    const only = (u: Unit) => () => {
+      select([u.id])
+      pickedSound(u)
+    }
+    const info = unit ? [it('info', 'Info', 'help', () => setIntel({ id: unit.id, x: sx, y: sy }))] : []
+    const items: WheelItem[] = []
+    if (ships.length && unit && enemy) {
+      items.push(
+        it('attack', 'Attack', 'attack', () => {
+          const s = spot()
+          command(s.x, s.y, false, shiftOf())
+        }),
+        it('area', 'Attack area', 'target', () => {
+          // A circle round it, about as big on screen as a thumb's sweep: everything in it is shared out.
+          const u = world.current.byId.get(unit.id) ?? unit
+          order('area', ids(), u.x, u.y, Math.max(60, Math.max(...dims(u.t)) * 0.6, 110 / cam.current.zoom))
+          renderer.current.ping(u.x, u.y, '#ff5a50')
+          say('attack')
+        }),
+        it('move', 'Move here', 'move', arm('move')),
+        // With structures selected too, their guns alone (Attack sends both).
+        ...(guns.length
+          ? [
+              it('focus', 'Focus fire', 'radar', () => {
+                const u = world.current.byId.get(unit.id)
+                if (!u) return
+                const why = order('focus', guns.map((g) => g.id), u.id, -1, false)
+                if (why) {
+                  toast(why, 'bad')
+                  sound.error()
+                } else {
+                  renderer.current.ping(u.x, u.y, '#ff5a50')
+                  sound.order('target', myFaction, 'station')
+                  toast(`Guns focusing on the ${u.t.name}`, 'info')
+                }
+              }),
+            ]
+          : []),
+        ...info,
+      )
+    } else if (ships.length && unit && own) {
+      items.push(it('guard', 'Guard it', 'hold', arm('guard')), it('only', 'Select only this', 'target', only(unit)), it('type', 'Select all of type', 'fleet', () => selectType(unit, shiftOf())), ...info)
+    } else if (ships.length) {
+      // Empty space (or an ally). One ship or squadron turns to face the drag; more spread along it,
+      // or keep their formation and turn to face it.
+      const several = lineGroups(w, me, ships.map((u) => u.id)).length > 1
+      const withAb = ships.filter((u) => u.t.ability)
+      items.push(
+        it('move', 'Move here', 'move', arm('move')),
+        it('attackMove', 'Attack move', 'attack', () => {
+          // Straight to the order: on an ally, the attack-move click would open fire on it.
+          const s = spot()
+          const p = toWorld(s.x, s.y)
+          order('move', ids(), p.x, p.y, true, shiftOf())
+          renderer.current.ping(p.x, p.y, '#ffaa5a')
+          say('attackMove')
+        }),
+        it('patrol', 'Patrol', 'patrol', arm('patrol')),
+        it('line', several ? 'Line' : 'Face', several ? 'fleet' : 'roam', () => setDraw('line')),
+        ...(several ? [it('face', 'Face', 'roam', () => setDraw('face'))] : []),
+        it('stance', 'Stance', 'hold', () => runCommand('hold')),
+        it('stop', 'Stop', 'stop', () => runCommand('stop')),
+        ...(withAb.length ? [it('ability', 'Ability', 'ability', () => runCommand('ability'), !withAb.some((u) => u.abilityCd <= 0) && 'Not ready yet')] : []),
+        ...(mine.some(canRetreat) ? [{ ...it('retreat', 'Retreat', 'jump', () => runCommand('retreat')), danger: true }] : []),
+        ...info,
+      )
+    } else {
+      const station = mine.some((u) => u.t.tier === 'station')
+      if (station) items.push(it('rally', 'Rally here', 'rally', arm('rally')))
+      if (enemy && guns.length)
+        items.push(
+          it('focus', 'Focus fire', 'attack', () => {
+            const s = spot()
+            command(s.x, s.y, false)
+          }),
+        )
+      if (unit && own) items.push(it('only', 'Select', 'target', only(unit)), it('type', 'Select all of type', 'fleet', () => selectType(unit, shiftOf())))
+      if (!unit && node >= 0)
+        items.push(
+          it('ore', 'Ore info', 'ore', () => {
+            selected.current.clear()
+            pickedNode.current = node
+            sound.click()
+          }),
+        )
+      items.push(it('army', 'Select army', 'army', selectArmy), it('idle', 'Select idle', 'idle', selectIdle))
+      if (!station) items.push(it('station', 'Station', 'yard', selectStation))
+      items.push(...info)
+    }
+    wheel.current({ x: cx, y: cy, items, title: unit ? unit.t.name : ships.length ? `${ships.length} ship${ships.length > 1 ? 's' : ''}` : undefined })
+  }
+
+  /** Touch: the wheel for a long press on the tactical map, at a map point. */
+  const miniWheel = (x: number, y: number, cx: number, cy: number) => {
+    const ships = () => mySelection().filter((u) => isShip(u.t)).map((u) => u.id)
+    const go = (kind: 'move' | 'attackMove' | 'patrol') => () => {
+      if (kind === 'patrol') order('patrol', ships(), x, y, shiftOf())
+      else order('move', ships(), x, y, kind === 'attackMove', shiftOf())
+      say(kind)
+    }
+    const items: WheelItem[] = []
+    if (mySelection().some((u) => isShip(u.t)))
+      items.push(
+        { id: 'move', label: 'Move here', icon: <Icon name="move" size={18} />, run: go('move') },
+        { id: 'attackMove', label: 'Attack move', icon: <Icon name="attack" size={18} />, run: go('attackMove') },
+        { id: 'patrol', label: 'Patrol', icon: <Icon name="patrol" size={18} />, run: go('patrol') },
+      )
+    else if (mySelection().some((u) => u.t.tier === 'station'))
+      items.push({
+        id: 'rally', label: 'Rally here', icon: <Icon name="rally" size={18} />,
+        run: () => {
+          order('rally', x, y)
+          say('rally')
+        },
+      })
+    wheel.current({ x: cx, y: cy, items })
+  }
+
+  /** Touch has no Esc or right-click: the touch bar's ✕ backs out of an armed order, then the selection. */
+  const cancelTouch = () => {
+    if (drawMode.current) setDraw(null)
+    else if (mode.current !== 'normal') setMode('normal')
+    else if (turretPick.current) turretPick.current = null
+    else {
+      selected.current.clear()
+      pickedNode.current = -1
+    }
+    dropIntel()
+    sound.click()
+  }
 
   const build = (id: string, times = 1, reserve = false) => {
     sound.unlock()
@@ -827,7 +1023,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       if (k.has('arrowup') || k.has(set.keys.panUp)) cm.y -= pan
       if (k.has('arrowdown') || k.has(set.keys.panDown)) cm.y += pan
       const edge = set.edgeScroll === 'always' || (set.edgeScroll === 'fullscreen' && !!root.current?.closest('.is-page-full'))
-      if (edge && mouse.current.inside) {
+      if (edge && mouse.current.inside && !touchLast.current) {
         const e = 8
         if (mouse.current.x < e) cm.x -= pan
         if (mouse.current.x > vw - e) cm.x += pan
@@ -1109,9 +1305,31 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         const [a, b] = [...touches.current.values()]
         pinch.current = { d: Math.hypot(a.x - b.x, a.y - b.y), zoom: cam.current.zoom }
         drag.current = null
+        line.current = null
+        press.current.cancel()
+        return
+      }
+      const fresh = touches.current.size === 1 && !deploying.current
+      // A line or facing drag armed from the wheel: this drag draws it, as a right-drag would.
+      if (fresh && drawMode.current) {
+        const face = drawMode.current === 'face' || lineGroups(world.current, me, mySelection().map((u) => u.id)).length === 1
+        drag.current = { x0: p.x, y0: p.y, box: false, pan: false, moved: false, cx: 0, cy: 0, button: 2, face }
+        line.current = [toWorld(p.x, p.y)]
+        return
+      }
+      // Box mode (the touch bar): this drag selects instead of moving the view.
+      if (fresh && getTouchMods().box) {
+        drag.current = { x0: p.x, y0: p.y, box: true, pan: false, moved: false, cx: 0, cy: 0, button: 0 }
         return
       }
       drag.current = { x0: p.x, y0: p.y, box: false, pan: true, moved: false, cx: cam.current.x, cy: cam.current.y, button: 0 }
+      // Held still: the action wheel, and the finger stops panning.
+      const { clientX, clientY } = e
+      if (fresh)
+        press.current.start(e, () => {
+          drag.current = null
+          fieldWheel(p.x, p.y, clientX, clientY)
+        })
       return
     }
     if (e.button === 1) {
@@ -1158,8 +1376,10 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const onPointerMove = (e: React.PointerEvent) => {
     const p = local(e)
     mouse.current = { ...p, inside: true }
+    touchLast.current = isTouch(e)
     if (e.pointerType === 'touch' && touches.current.has(e.pointerId)) {
       touches.current.set(e.pointerId, p)
+      press.current.move(e)
       if (pinch.current && touches.current.size === 2) {
         const [a, b] = [...touches.current.values()]
         const d = Math.hypot(a.x - b.x, a.y - b.y)
@@ -1204,19 +1424,44 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       touches.current.delete(e.pointerId)
       if (touches.current.size < 2) pinch.current = null
       drag.current = null
-      if (!d || d.moved) return
+      press.current.cancel()
+      // A long press: the wheel has it.
+      if (press.current.fired) {
+        press.current.fired = false
+        return
+      }
+      if (!d) return
+      // The touch bar's sticky Shift: queue orders, add to the selection.
+      const add = shiftOf()
+      if (d.button === 2) {
+        finishDrag(d, add)
+        if (!add) setDraw(null)
+        return
+      }
+      if (d.box) {
+        setTouchMod('box', false)
+        if (d.moved) return boxSelect(d, p, add)
+      }
+      if (d.moved) return
       if (deploying.current) return placeStart(p.x, p.y)
       // A tap.
       const { unit, node, hp: part } = pick(p.x, p.y)
       if (mode.current !== 'normal') {
-        modeClick(p.x, p.y, mode.current)
-        setMode('normal')
+        modeClick(p.x, p.y, mode.current, add)
+        if (!add) setMode('normal')
       } else if (unit && unit.owner === me) {
-        select([unit.id])
-        turretPick.current = !isShip(unit.t) && part >= 0 && unit.t.hardpoints[part]?.weapon ? { unit: unit.id, hp: part } : null
-      } else if (mySelection().length && (!unit || foes(w0, unit.owner, me))) command(p.x, p.y, false)
+        // A double tap takes every one of its type on screen, as a double-click does.
+        const now = performance.now()
+        const dbl = lastClick.current.id === unit.id && now - lastClick.current.t < 350
+        lastClick.current = { t: now, id: unit.id }
+        if (dbl) selectType(unit, add)
+        else if (add && selected.current.has(unit.id)) for (const id of withSquads([unit.id])) selected.current.delete(id)
+        else select([unit.id], add)
+        turretPick.current = !isShip(unit.t) && part >= 0 && unit.t.hardpoints[part]?.weapon && !add ? { unit: unit.id, hp: part } : null
+        pickedSound(unit)
+      } else if (mySelection().length && (!unit || foes(world.current, unit.owner, me))) command(p.x, p.y, false, add)
       else if (unit) select([unit.id])
-      else {
+      else if (!add) {
         selected.current.clear()
         pickedNode.current = node
       }
@@ -1239,37 +1484,12 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       return
     }
     if (d?.button === 2) {
-      const ln = line.current
-      line.current = null
-      const ids = mySelection().filter((u) => isShip(u.t)).map((u) => u.id)
-      if (d.area && d.moved && ln && ln.length > 1 && ids.length) {
-        const [a, b] = [ln[0], ln[ln.length - 1]]
-        const r = Math.max(60, Math.hypot(b.x - a.x, b.y - a.y))
-        order('area', ids, a.x, a.y, r)
-        renderer.current.ping(a.x, a.y, '#ff5a50')
-        say('attack')
-      } else if (d.moved && ln && ln.length > 1 && ids.length) {
-        const w = world.current
-        const [a, b] = [ln[0], ln[ln.length - 1]]
-        const face = Math.atan2(b.y - a.y, b.x - a.x)
-        const targets = d.face ? faceTargets(w, me, ids, a.x, a.y, face) : lineTargets(w, me, ids, ln)
-        if (d.face) order('face', ids, a.x, a.y, face, d.attack, e.shiftKey)
-        else order('line', ids, thinPath(ln), d.attack, e.shiftKey)
-        for (const q of targets) renderer.current.ping(q.x, q.y, d.attack ? '#ffaa5a' : '#7dffa0')
-        say(d.attack ? 'attackMove' : 'move')
-      } else command(d.x0, d.y0, false, e.shiftKey)
+      finishDrag(d, e.shiftKey)
       return
     }
     if (!d || !d.box) return
-    const w = world.current
     if (d.moved) {
-      const a = toWorld(Math.min(d.x0, p.x), Math.min(d.y0, p.y))
-      const b = toWorld(Math.max(d.x0, p.x), Math.max(d.y0, p.y))
-      const inBox = (u: Unit) => u.owner === me && u.x >= a.x && u.x <= b.x && u.y >= a.y && u.y <= b.y
-      let ids = w.units.filter((u) => inBox(u) && isShip(u.t)).map((u) => u.id)
-      if (!ids.length) ids = w.units.filter(inBox).map((u) => u.id)
-      select(ids, e.shiftKey)
-      if (mySelection().length) sound.select(myFaction, voice())
+      boxSelect(d, p, e.shiftKey)
       return
     }
     const { unit, node } = pick(p.x, p.y)
@@ -1291,13 +1511,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       sound.click()
       return
     }
-    if (dbl) {
-      // Every ship of that type on screen.
-      const { vw, vh } = view()
-      const a = toWorld(0, 0)
-      const b = toWorld(vw, vh)
-      select(w.units.filter((u) => u.owner === me && u.t.id === unit.t.id && u.x >= a.x && u.x <= b.x && u.y >= a.y && u.y <= b.y).map((u) => u.id), e.shiftKey)
-    } else if (e.shiftKey && selected.current.has(unit.id)) {
+    if (dbl) selectType(unit, e.shiftKey)
+    else if (e.shiftKey && selected.current.has(unit.id)) {
       for (const id of withSquads([unit.id])) selected.current.delete(id)
     } else select([unit.id], e.shiftKey)
     // Clicking one of a structure's guns picks that gun: a right-click then aims just it.
@@ -1306,6 +1521,41 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     // The crew of what we just picked answers (structures just click).
     if (isShip(unit.t) || unit.t.tier === 'station') sound.select(myFaction, unit.t.tier)
     else sound.click()
+  }
+
+  /** A right-drag (or a line drawn by finger) let go: an area attack, a facing, a line, or, without
+   * a drag, the usual order on the spot. `queued` is Shift. */
+  const finishDrag = (d: NonNullable<typeof drag.current>, queued: boolean) => {
+    const ln = line.current
+    line.current = null
+    const ids = mySelection().filter((u) => isShip(u.t)).map((u) => u.id)
+    if (d.area && d.moved && ln && ln.length > 1 && ids.length) {
+      const [a, b] = [ln[0], ln[ln.length - 1]]
+      const r = Math.max(60, Math.hypot(b.x - a.x, b.y - a.y))
+      order('area', ids, a.x, a.y, r)
+      renderer.current.ping(a.x, a.y, '#ff5a50')
+      say('attack')
+    } else if (d.moved && ln && ln.length > 1 && ids.length) {
+      const w = world.current
+      const [a, b] = [ln[0], ln[ln.length - 1]]
+      const face = Math.atan2(b.y - a.y, b.x - a.x)
+      const targets = d.face ? faceTargets(w, me, ids, a.x, a.y, face) : lineTargets(w, me, ids, ln)
+      if (d.face) order('face', ids, a.x, a.y, face, d.attack, queued)
+      else order('line', ids, thinPath(ln), d.attack, queued)
+      for (const q of targets) renderer.current.ping(q.x, q.y, d.attack ? '#ffaa5a' : '#7dffa0')
+      say(d.attack ? 'attackMove' : 'move')
+    } else command(d.x0, d.y0, false, queued)
+  }
+  /** A selection box let go: our warships in it, or our structures if there are none. */
+  const boxSelect = (d: NonNullable<typeof drag.current>, p: Pt, add: boolean) => {
+    const w = world.current
+    const a = toWorld(Math.min(d.x0, p.x), Math.min(d.y0, p.y))
+    const b = toWorld(Math.max(d.x0, p.x), Math.max(d.y0, p.y))
+    const inBox = (u: Unit) => u.owner === me && u.x >= a.x && u.x <= b.x && u.y >= a.y && u.y <= b.y
+    let ids = w.units.filter((u) => inBox(u) && isShip(u.t)).map((u) => u.id)
+    if (!ids.length) ids = w.units.filter(inBox).map((u) => u.id)
+    select(ids, add)
+    if (mySelection().length) sound.select(myFaction, voice())
   }
 
   const onWheel = (e: React.WheelEvent) => {
@@ -1334,6 +1584,14 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const oy = (r.height - w.h * s) / 2
     const x = (e.clientX - r.left - ox) / s
     const y = (e.clientY - r.top - oy) / s
+    // Touch: held still, the wheel gives the selection its orders there; after it, the finger
+    // sliding over the wheel leaves the view alone.
+    if (isTouch(e)) {
+      if (e.type === 'pointerdown') {
+        const { clientX, clientY } = e
+        miniPress.current.start(e, () => miniWheel(x, y, clientX, clientY))
+      } else if (!miniPress.current.move(e) && miniPress.current.fired) return
+    }
     if (e.button === 2) {
       const ships = mySelection().filter((u) => isShip(u.t))
       if (ships.length) {
@@ -1370,6 +1628,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const docked = b.x < 60 && b.y + b.h > root.h - 60
     setMapRoom(docked ? b.w : 0)
   }, [])
+  /** Phones stack the unit card above the selection: it needs the selection's height. */
+  const selMoved = useCallback((b: { h: number }) => root.current?.style.setProperty('--ew-selh', `${Math.round(b.h)}px`), [])
   /** A structure's gun picked by clicking it: right-clicking an enemy aims that gun alone. */
   const turretPick = useRef<{ unit: number; hp: number } | null>(null)
   /** Whether the fleet inventory has been opened for its first ship this battle. */
@@ -1400,7 +1660,11 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       if (!r) return
       const x = ev.clientX - r.left
       const y = ev.clientY - r.top
-      mouse.current = { x, y, inside: x >= 0 && y >= 0 && x <= r.width && y <= r.height && !(ev.target as Element | null)?.closest?.('.ew-frame, .ew-top') }
+      // A finger's events all go to the tile it started on: what's under it has to be looked up.
+      const touch = ev.pointerType === 'touch'
+      const over = touch ? document.elementFromPoint(ev.clientX, ev.clientY) : (ev.target as Element | null)
+      touchLast.current = touch
+      mouse.current = { x, y, inside: x >= 0 && y >= 0 && x <= r.width && y <= r.height && !over?.closest?.('.ew-frame, .ew-top') }
     }
     const up = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', move)
@@ -1561,187 +1825,226 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     )
 
   const sel = hud.sel.map((i) => w.byId.get(i)).filter((u): u is Unit => !!u)
+  // The hints say "tap" to a finger.
+  const click = touchUi ? 'tap' : 'click'
+  const Click = touchUi ? 'Tap' : 'Click'
   return (
-    <div className={`ew-root ew-deck ew-battle ew-${myFaction}`} ref={root} style={{ ['--ew-accent' as string]: fac.color }} onContextMenu={noMenu}>
-      <Tips live={(id) => world.current.byId.get(id)} />
-      {intel && <FieldIntel w={w} me={me} id={intel.id} x={intel.x} y={intel.y} />}
-      <canvas
-        ref={canvas}
-        className={`ew-canvas ${ui.mode !== 'normal' ? `is-targeting is-mode-${ui.mode}` : ''}`}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={() => ((drag.current = null), (line.current = null), touches.current.clear(), (pinch.current = null))}
-        onPointerLeave={() => {
-          mouse.current.inside = false
-          hover.current = { unit: 0, hp: -1, node: -1, wreck: 0 }
-          dropIntel()
-        }}
-        onWheel={onWheel}
-      />
-
-      <TopBar hud={hud} faction={myFaction} sector={sector} ui={ui} onShipyard={selectStation} onPause={online ? undefined : togglePause} onSpeed={online ? undefined : setSpeed}
-        onMenu={() => (ui.menu ? closeMenu() : openMenu())}
-        onTechTree={() => setTree(!ui.tree)}
-        onReserves={() => setUi((u) => ({ ...u, reserves: !u.reserves }))}
-        onEconomy={() => setUi((u) => ({ ...u, economy: !u.economy }))}
-        onPlayers={() => setUi((u) => ({ ...u, players: !u.players }))}
-        ping={online ? (net?.status === 'online' ? Math.round(net.rtt) : -1) : undefined}
-      />
-      {ui.players && <Scoreboard w={w} me={me} names={seats.map((s) => s.name)} roster={online ? net?.roster : undefined} onClose={() => setUi((u) => ({ ...u, players: false }))} />}
-      {online && net?.status !== 'online' && hud.winner === -1 && (
-        <div className="ew-pausebox">
-          <Frame title="Connection lost">
-            <p>Reconnecting to the server. The battle goes on without your orders for now; you'll be put back in it as soon as the connection is back.</p>
-          </Frame>
-        </div>
-      )}
-      {ui.economy && hud.winner === -1 && <EconomyPanel w={w} me={me} onClose={() => setUi((u) => ({ ...u, economy: false }))} />}
-      {ui.reserves && hud.winner === -1 && <ReserveTray reserve={hud.reserve} onGrab={grabReserve} onClose={() => setUi((u) => ({ ...u, reserves: false }))} />}
-
-      <div className={`ew-toasts ${ui.paused && !ui.menu && !ui.panel ? 'is-low' : ''}`} aria-live="polite">
-        {toasts.map((t) => {
-          const dismiss = () => setToasts((ts) => ts.filter((x) => x.id !== t.id))
-          return (
-            // Right-click, or the × that shows on hover, puts it away.
-            <section key={t.id} className={`ew-frame ew-toast is-${t.tone}`} onContextMenu={(e) => (e.preventDefault(), dismiss())}>
-              <div className="ew-frame-in">
-                <span>{t.text}</span>
-                <button className="ew-toast-x" onClick={dismiss} aria-label="Dismiss">×</button>
-              </div>
-            </section>
-          )
-        })}
-      </div>
-      {ui.mode !== 'normal' && (
-        <div className="ew-modehint">
-          {ui.mode === 'attack' && !mySelection().some((u) => isShip(u.t))
-            ? turretPick.current ? 'Attack: click an enemy for the picked gun to aim at.' : 'Attack: click an enemy for every gun to aim at. Click one gun first to aim just that one.'
-            : ui.mode === 'attack' ? 'Attack move: click where to go. Ships fight whatever they meet. Drag a circle (either button) to attack everything in it; click one of ours to open fire on it.'
-            : ui.mode === 'move' ? 'Move: click where to go. Ships ignore enemies on the way.'
-              : ui.mode === 'patrol' ? 'Patrol: click the far end. Ships fly back and forth, fighting what they meet.'
-              : ui.mode === 'guard' ? 'Guard: click one of our ships or structures. The selection stays with it and fights off what comes near.'
-                : "Rally point: click where new ships should gather."}{' '}
-          Shift-click to keep going, <kbd>Esc</kbd> to cancel.
-        </div>
-      )}
-
-      {/* The tactical map floats: it can be dragged anywhere. While it sits in its corner the dock
-          leaves room for it, so the unit card stays beside it. */}
-      <TacticalMap canvas={mini} sides={sides} filter={mapFilter} onFilter={setMapFilter} onPointer={onMini}
-        onStation={selectStation} onIdle={selectIdle} onArmy={selectArmy} idle={hud.idle}
-        fogGrid={settings.fogGrid} onFogGrid={() => setSettings({ fogGrid: !settings.fogGrid })}
-        onAlert={() => (lastAlarm.current ? centerOn(lastAlarm.current.x, lastAlarm.current.y) : toast('No alerts yet', 'info'))}
-        onMove={mapMoved}
-      />
-      {/* The bottom of the screen: a shade for the panels to sit on; the unit card (beside the map
-          while it sits in its corner) and the selection float like the map, and can be moved. */}
-      <div className="ew-dockshade" />
-      <Floating id="detail" bare at={{ left: mapRoom ? mapRoom + 12 : 6, bottom: 6 }} className="ew-detailfloat">
-          <DetailPanel w={w} me={me} sel={sel} hud={hud} faction={myFaction}
-            onOnly={(id, drop) => {
-              const keep = sel.filter((u) => (drop ? u.t.id !== id : u.t.id === id)).map((u) => u.id)
-              selected.current = new Set(keep)
-            }}
-            onBuild={build}
-            onUnqueue={unqueue}
-            onCancel={(i) => order('cancel', i)}
-            onResearch={research}
-            onTechTree={() => setTree(true)}
-            onSite={buildSite}
-            onUpgradeSite={(id, upgrade) => {
-              const why = order('upgradeSite', id, upgrade)
-              if (why) {
-                toast(why, 'bad')
-                sound.error()
-              } else sound.constructing()
-            }}
-            turretPick={turretPick.current}
-          onClearFocus={(id) => {
-            // No target: every gun picks its own again.
-            order('focus', [id], 0)
-            sound.click()
+    <div className={`ew-root ew-deck ew-battle ew-${myFaction}${mapOpen ? ' is-mapopen' : ''}`} ref={root} style={{ ['--ew-accent' as string]: fac.color }} onContextMenu={noMenu}
+      onPointerDownCapture={(e) => {
+        touchLast.current = isTouch(e)
+        setTouchUi(isTouch(e))
+      }}>
+      <WheelHost>
+        <WheelBridge to={wheel} />
+        <Tips live={(id) => world.current.byId.get(id)} />
+        {intel && <FieldIntel w={w} me={me} id={intel.id} x={intel.x} y={intel.y} />}
+        <canvas
+          ref={canvas}
+          className={`ew-canvas ${ui.mode !== 'normal' ? `is-targeting is-mode-${ui.mode}` : ''}`}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={() => ((drag.current = null), (line.current = null), touches.current.clear(), (pinch.current = null), press.current.cancel())}
+          onPointerLeave={(e) => {
+            mouse.current.inside = false
+            hover.current = { unit: 0, hp: -1, node: -1, wreck: 0 }
+            // A finger "leaves" as it lifts: a unit card opened from the wheel stays up.
+            if (!isTouch(e)) dropIntel()
           }}
-          onRetreat={(ids) => {
-              const why = order('retreat', ids)
-              if (why) {
-                toast(why, 'bad')
-                sound.error()
-              } else sound.arm()
-            }}
-            onRepair={(id) => {
-              const why = order('repair', id)
-              if (why) {
-                toast(why, 'bad')
-                sound.error()
-              } else sound.constructing()
-            }}
-            node={hud.sel.length || pickedNode.current < 0 ? null : w.nodes[pickedNode.current]}
-            onStation={selectStation}
-          />
-      </Floating>
-      <Floating id="selection" bare at={{ right: 6, bottom: 6 }} className="ew-selfloat">
-          <SelectionPanel w={world.current} sel={sel} me={me} mode={ui.mode} onCommand={runCommand} groups={hud.groups} onGroup={recallGroup}
-            onPick={(id, shift) => {
-              const ids = withSquads([id])
-              if (shift) for (const i of ids) selected.current.delete(i)
-              else selected.current = new Set(ids)
+          onWheel={onWheel}
+        />
+
+        <TopBar hud={hud} faction={myFaction} sector={sector} ui={ui} onShipyard={selectStation} onPause={online ? undefined : togglePause} onSpeed={online ? undefined : setSpeed}
+          onMenu={() => (ui.menu ? closeMenu() : openMenu())}
+          onTechTree={() => setTree(!ui.tree)}
+          onReserves={() => setUi((u) => ({ ...u, reserves: !u.reserves }))}
+          onEconomy={() => setUi((u) => ({ ...u, economy: !u.economy }))}
+          onPlayers={() => setUi((u) => ({ ...u, players: !u.players }))}
+          onMap={() => setMapOpen((o) => !o)}
+          mapOpen={mapOpen}
+          ping={online ? (net?.status === 'online' ? Math.round(net.rtt) : -1) : undefined}
+        />
+        {ui.players && <Scoreboard w={w} me={me} names={seats.map((s) => s.name)} roster={online ? net?.roster : undefined} onClose={() => setUi((u) => ({ ...u, players: false }))} />}
+        {online && net?.status !== 'online' && hud.winner === -1 && (
+          <div className="ew-pausebox">
+            <Frame title="Connection lost">
+              <p>Reconnecting to the server. The battle goes on without your orders for now; you'll be put back in it as soon as the connection is back.</p>
+            </Frame>
+          </div>
+        )}
+        {ui.economy && hud.winner === -1 && <EconomyPanel w={w} me={me} onClose={() => setUi((u) => ({ ...u, economy: false }))} />}
+        {ui.reserves && hud.winner === -1 && <ReserveTray reserve={hud.reserve} onGrab={grabReserve} onClose={() => setUi((u) => ({ ...u, reserves: false }))} />}
+
+        <div className={`ew-toasts ${ui.paused && !ui.menu && !ui.panel ? 'is-low' : ''}`} aria-live="polite">
+          {toasts.map((t) => {
+            const dismiss = () => setToasts((ts) => ts.filter((x) => x.id !== t.id))
+            return (
+              // Right-click, or the × that shows on hover, puts it away.
+              <section key={t.id} className={`ew-frame ew-toast is-${t.tone}`} onContextMenu={(e) => (e.preventDefault(), dismiss())}>
+                <div className="ew-frame-in">
+                  <span>{t.text}</span>
+                  <button className="ew-toast-x" onClick={dismiss} aria-label="Dismiss">×</button>
+                </div>
+              </section>
+            )
+          })}
+        </div>
+        {ui.mode !== 'normal' && (
+          <div className="ew-modehint">
+            {ui.mode === 'attack' && !mySelection().some((u) => isShip(u.t))
+              ? turretPick.current ? `Attack: ${click} an enemy for the picked gun to aim at.` : `Attack: ${click} an enemy for every gun to aim at. ${Click} one gun first to aim just that one.`
+              : ui.mode === 'attack' ? touchUi ? 'Attack move: tap where to go. Ships fight whatever they meet; tap one of ours to open fire on it.' : 'Attack move: click where to go. Ships fight whatever they meet. Drag a circle (either button) to attack everything in it; click one of ours to open fire on it.'
+              : ui.mode === 'move' ? `Move: ${click} where to go. Ships ignore enemies on the way.`
+                : ui.mode === 'patrol' ? `Patrol: ${click} the far end. Ships fly back and forth, fighting what they meet.`
+                : ui.mode === 'guard' ? `Guard: ${click} one of our ships or structures. The selection stays with it and fights off what comes near.`
+                  : `Rally point: ${click} where new ships should gather.`}{' '}
+            {touchUi ? 'Turn on Shift to keep going, ✕ to cancel.' : <>Shift-click to keep going, <kbd>Esc</kbd> to cancel.</>}
+          </div>
+        )}
+        {ui.draw && (
+          <div className="ew-modehint">
+            {ui.draw === 'face' || lineGroups(w, me, mySelection().map((u) => u.id)).length === 1
+              ? 'Face: drag from where to go towards the way to face.'
+              : 'Line: drag a line. The ships spread along it; draw a loop to ring a spot.'}{' '}
+            ✕ to cancel.
+          </div>
+        )}
+
+        {/* The tactical map floats: it can be dragged anywhere. While it sits in its corner the dock
+            leaves room for it, so the unit card stays beside it. */}
+        <TacticalMap canvas={mini} sides={sides} filter={mapFilter} onFilter={setMapFilter} onPointer={onMini} onPointerEnd={() => miniPress.current.cancel()}
+          onStation={selectStation} onIdle={selectIdle} onArmy={selectArmy} idle={hud.idle}
+          fogGrid={settings.fogGrid} onFogGrid={() => setSettings({ fogGrid: !settings.fogGrid })}
+          onAlert={() => (lastAlarm.current ? centerOn(lastAlarm.current.x, lastAlarm.current.y) : toast('No alerts yet', 'info'))}
+          onMove={mapMoved}
+        />
+        {/* The bottom of the screen: a shade for the panels to sit on; the unit card (beside the map
+            while it sits in its corner) and the selection float like the map, and can be moved. */}
+        <div className="ew-dockshade" />
+        <Floating id="detail" bare at={{ left: mapRoom ? mapRoom + 12 : 6, bottom: 6 }} className="ew-detailfloat">
+            <DetailPanel w={w} me={me} sel={sel} hud={hud} faction={myFaction}
+              onOnly={(id, drop) => {
+                const keep = sel.filter((u) => (drop ? u.t.id !== id : u.t.id === id)).map((u) => u.id)
+                selected.current = new Set(keep)
+              }}
+              onBuild={build}
+              onUnqueue={unqueue}
+              onCancel={(i) => order('cancel', i)}
+              onResearch={research}
+              onTechTree={() => setTree(true)}
+              onSite={buildSite}
+              onUpgradeSite={(id, upgrade) => {
+                const why = order('upgradeSite', id, upgrade)
+                if (why) {
+                  toast(why, 'bad')
+                  sound.error()
+                } else sound.constructing()
+              }}
+              turretPick={turretPick.current}
+            onClearFocus={(id) => {
+              // No target: every gun picks its own again.
+              order('focus', [id], 0)
               sound.click()
             }}
-          />
-      </Floating>
+            onRetreat={(ids) => {
+                const why = order('retreat', ids)
+                if (why) {
+                  toast(why, 'bad')
+                  sound.error()
+                } else sound.arm()
+              }}
+              onRepair={(id) => {
+                const why = order('repair', id)
+                if (why) {
+                  toast(why, 'bad')
+                  sound.error()
+                } else sound.constructing()
+              }}
+              node={hud.sel.length || pickedNode.current < 0 ? null : w.nodes[pickedNode.current]}
+              onStation={selectStation}
+            />
+        </Floating>
+        <Floating id="selection" bare at={{ right: 6, bottom: 6 }} className="ew-selfloat" onMove={selMoved}>
+            {/* Fingers only: the sticky Shift, box select, and a way to back out (no Esc on a phone). */}
+            <TouchBar className="ew-battlebar"
+              extra={(ui.mode !== 'normal' || ui.draw || hud.sel.length > 0 || pickedNode.current >= 0) && (
+                <button onClick={cancelTouch} title={ui.mode !== 'normal' || ui.draw ? 'Cancel the order' : 'Clear the selection'}>
+                  ✕<span>{ui.mode !== 'normal' || ui.draw ? 'Cancel' : 'Clear'}</span>
+                </button>
+              )}
+            />
+            <SelectionPanel w={world.current} sel={sel} me={me} mode={ui.mode} onCommand={runCommand} groups={hud.groups} onGroup={recallGroup}
+              canAssign={sel.some((u) => u.owner === me)} onAssign={setGroup}
+              onPick={(id, shift) => {
+                const ids = withSquads([id])
+                if (shift) for (const i of ids) selected.current.delete(i)
+                else selected.current = new Set(ids)
+                sound.click()
+              }}
+            />
+        </Floating>
 
-      {ui.deploy && !ui.menu && !ui.panel && (
-        <div className="ew-pausebox ew-deploybox">
-          <Frame title="Choose your start">
-            <p>
-              {ui.placed
-                ? 'Click again to move your station, or start when you are ready.'
-                : 'Click inside your start area (the bright box) to place your station. Everyone else picks inside theirs.'}
-            </p>
-            <button className="ew-go" onClick={beginBattle} disabled={!ui.placed}>
-              Start battle (Enter)
-            </button>
-          </Frame>
-        </div>
-      )}
-      {online && hud.time === 0 && !ui.menu && !ui.panel && (
-        <div className="ew-pausebox">
-          <Frame title="Get ready">
-            <p>Waiting for every player's game to load. The battle starts for everyone at once.</p>
-          </Frame>
-        </div>
-      )}
-      {ui.paused && !ui.deploy && !ui.menu && !ui.panel && hud.winner === -1 && (
-        <div className="ew-pausebox">
-          <Frame title="Paused">
-            <p>The battle is on hold. You can still look around and give orders.</p>
-            <button className="ew-go" onClick={togglePause}>
-              Resume ({keyName(settings.keys.pause)})
-            </button>
-          </Frame>
-        </div>
-      )}
-      {ui.tree && hud.winner === -1 && <TechTree w={w} me={me} hud={hud} onResearch={research} onCancel={cancelResearch} onClose={() => setTree(false)} />}
-      {ui.menu && !ui.panel && hud.winner === -1 && (
-        <BattleMenu w={w} me={me} sound={sound} speed={ui.speed} onSpeed={setSpeed} onResume={closeMenu} onPanel={openMenu} onRestart={conquest || online ? undefined : onAgain} onExit={exit} campaign={!!conquest} online={!!online} />
-      )}
-      {ui.panel === 'settings' && (
-        <Modal title="Settings" onClose={closeMenu}>
-          <SettingsPanel sound={sound} />
-        </Modal>
-      )}
-      {ui.panel === 'keys' && (
-        <Modal title="Keybinds" onClose={closeMenu} wide>
-          <KeybindsPanel />
-        </Modal>
-      )}
-      {ui.panel === 'howto' && (
-        <Modal title="How to play" onClose={closeMenu}>
-          <HowToPlay />
-        </Modal>
-      )}
-      {hud.winner !== -1 && <Result w={w} me={me} names={seats.map((s) => s.name)} won={hud.winner === myTeam} onAgain={onAgain} onExit={exit} campaign={!!conquest} online={!!online} />}
+        {ui.deploy && !ui.menu && !ui.panel && (
+          <div className="ew-pausebox ew-deploybox">
+            <Frame title="Choose your start">
+              <p>
+                {ui.placed
+                  ? `${Click} again to move your station, or start when you are ready.`
+                  : `${Click} inside your start area (the bright box) to place your station. Everyone else picks inside theirs.`}
+              </p>
+              <button className="ew-go" onClick={beginBattle} disabled={!ui.placed}>
+                Start battle (Enter)
+              </button>
+            </Frame>
+          </div>
+        )}
+        {online && hud.time === 0 && !ui.menu && !ui.panel && (
+          <div className="ew-pausebox">
+            <Frame title="Get ready">
+              <p>Waiting for every player's game to load. The battle starts for everyone at once.</p>
+            </Frame>
+          </div>
+        )}
+        {ui.paused && !ui.deploy && !ui.menu && !ui.panel && hud.winner === -1 && (
+          <div className="ew-pausebox">
+            <Frame title="Paused">
+              <p>The battle is on hold. You can still look around and give orders.</p>
+              <button className="ew-go" onClick={togglePause}>
+                Resume ({keyName(settings.keys.pause)})
+              </button>
+            </Frame>
+          </div>
+        )}
+        {ui.tree && hud.winner === -1 && <TechTree w={w} me={me} hud={hud} onResearch={research} onCancel={cancelResearch} onClose={() => setTree(false)} />}
+        {ui.menu && !ui.panel && hud.winner === -1 && (
+          <BattleMenu w={w} me={me} sound={sound} speed={ui.speed} onSpeed={setSpeed} onResume={closeMenu} onPanel={openMenu} onRestart={conquest || online ? undefined : onAgain} onExit={exit} campaign={!!conquest} online={!!online} />
+        )}
+        {ui.panel === 'settings' && (
+          <Modal title="Settings" onClose={closeMenu}>
+            <SettingsPanel sound={sound} />
+          </Modal>
+        )}
+        {ui.panel === 'keys' && (
+          <Modal title="Keybinds" onClose={closeMenu} wide>
+            <KeybindsPanel />
+          </Modal>
+        )}
+        {ui.panel === 'howto' && (
+          <Modal title="How to play" onClose={closeMenu}>
+            <HowToPlay />
+          </Modal>
+        )}
+        {hud.winner !== -1 && <Result w={w} me={me} names={seats.map((s) => s.name)} won={hud.winner === myTeam} onAgain={onAgain} onExit={exit} campaign={!!conquest} online={!!online} />}
+      </WheelHost>
     </div>
   )
+}
+
+/** Hands the battle the action wheel's opener (the battle renders the WheelHost it lives in). */
+function WheelBridge({ to }: { to: React.MutableRefObject<(r: WheelRequest | null) => void> }) {
+  const open = useWheel()
+  useEffect(() => {
+    to.current = open
+  }, [open, to])
+  return null
 }
