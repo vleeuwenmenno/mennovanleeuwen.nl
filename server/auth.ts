@@ -37,6 +37,12 @@ export function currentUser(req: IncomingMessage): User | null {
   return { id: row.id, login: row.login, name: row.name, avatar: row.avatar, githubToken: decrypt(row.github_token) }
 }
 
+/** Every account that may sign in (for notifications that go to all who want them, server/watchers.ts). */
+export function accounts(): User[] {
+  const rows = database().prepare('SELECT id, login, name, avatar, github_token FROM users').all() as UserRow[]
+  return rows.filter((r) => allowed().includes(r.login.toLowerCase())).map((r) => ({ id: r.id, login: r.login, name: r.name, avatar: r.avatar, githubToken: decrypt(r.github_token) }))
+}
+
 export function requireUser(req: IncomingMessage): User {
   const user = currentUser(req)
   if (!user) throw new HttpError(401, 'Not signed in')

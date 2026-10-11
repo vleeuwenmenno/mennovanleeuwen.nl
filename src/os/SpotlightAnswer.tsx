@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { MarkdownPreview } from '../apps/Zed'
-import { watchThreads } from './agentWatch'
 import { agentSettings, createThread, deleteThread, getThread, listQuick, sendMessage, toolLabel, updateThread, type AgentMessage, type QuickAnswerInfo, type Thread } from '../data/agents'
 import { AppIcon } from './icons'
 import { useWM } from './wm'
@@ -54,9 +53,8 @@ export function useQuickAnswer(enabled: boolean) {
     run.current = null
     if (!r) return
     r.ctl.abort()
+    // Still answering: the server's notification hub tells when it is in (server/agents.ts).
     if (!r.sent) void r.thread.then((t) => t && deleteThread(t.id).catch(() => {}))
-    // Still answering: announced when it is in (src/os/agentWatch.ts).
-    else void r.thread.then((t) => t && watchThreads([{ id: t.id, title: t.title, running: true }]))
   }, [])
   useEffect(() => drop, [drop])
 

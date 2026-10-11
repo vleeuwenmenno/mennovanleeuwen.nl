@@ -1,5 +1,4 @@
 import { useSyncExternalStore } from 'react'
-import { notify } from '../os/notify'
 import { archiveStem } from './archive'
 import { parseSf, refreshDirs, sfPath } from './seafile'
 
@@ -75,7 +74,7 @@ export type ExtractOptions = {
 export async function extract(zip: string, into: string, opts: ExtractOptions, onUpdate?: (s: Status) => void, signal?: AbortSignal): Promise<Status> {
   const z = parseSf(zip)!
   const t = parseSf(into)!
-  const { id } = await call<{ id: string }>('/api/seafile/extract', { method: 'POST', json: { repo: z.repo, path: z.p, into: { repo: t.repo, path: t.p }, entries: opts.entries, base: opts.base, clash: opts.clash, decisions: opts.decisions } })
+  const { id } = await call<{ id: string }>('/api/seafile/extract', { method: 'POST', json: { repo: z.repo, path: z.p, into: { repo: t.repo, path: t.p }, entries: opts.entries, base: opts.base, clash: opts.clash, decisions: opts.decisions, quiet: opts.quiet } })
   const archive = z.p.split('/').pop()!
   const job: ExtractJob = { id, archive, zip, into, status: { id, state: 'running', error: null, total: 0, totalBytes: 0, bytes: 0, current: null, count: 0, files: 0, done: [], errors: [], into: { repo: t.repo, path: t.p } } }
   jobs = [...jobs, job]
@@ -98,13 +97,7 @@ export async function extract(zip: string, into: string, opts: ExtractOptions, o
     // The folder it went into, and the one that holds it (it may be new).
     const parent = t.p.split('/').slice(0, -1).join('/') || '/'
     refreshDirs(sfPath(t.repo, parent))
-    if (!opts.quiet) {
-      notify({
-        title: s.state === 'done' ? `Unpacked ${archive}` : s.state === 'cancelled' ? `Stopped unpacking ${archive}` : `Could not unpack ${archive}`,
-        body: s.error ?? `${s.total - s.errors.length} file${s.total - s.errors.length === 1 ? '' : 's'}${s.errors.length ? `, ${s.errors.length} left out (${s.errors[0].error})` : ''}`,
-        source: 'files.unpacking',
-      })
-    }
+    // How it went is told by the server's notification hub (server/unzip.ts), also with this page closed.
     return s
   }
 }

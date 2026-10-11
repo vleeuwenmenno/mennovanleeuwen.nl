@@ -12,6 +12,7 @@ import { METHODS, readZip, type ZipEntry, type ZipIndex } from '../src/data/zip.
 import type { User } from './auth.ts'
 import { HttpError } from './http.ts'
 import { fileLink, guard, listDir, mkdir, repoId, seafPath } from './seafile.ts'
+import { notify } from './notifier.ts'
 
 // Unpacking an archive that is in Seafile into a Seafile folder, here on the server. Each chosen
 // file is unpacked to a temporary file, checked against the size the archive gives (and a ZIP's
@@ -226,7 +227,7 @@ async function mkdirs(user: User, repo: string, path: string, known: Known) {
  */
 export async function startExtract(
   user: User,
-  body: { repo?: string; path?: string; into?: { repo?: string; path?: string }; entries?: string[]; base?: string; clash?: Clash; decisions?: Record<string, Clash> },
+  body: { repo?: string; path?: string; into?: { repo?: string; path?: string }; entries?: string[]; base?: string; clash?: Clash; decisions?: Record<string, Clash>; quiet?: boolean },
 ): Promise<{ id: string; total: number; totalBytes: number }> {
   const zip = { repo: repoId(body.repo), path: seafPath(body.path) }
   const into = { repo: repoId(body.into?.repo), path: seafPath(body.into?.path) }
@@ -256,6 +257,18 @@ export async function startExtract(
   jobs.set(job.id, job)
   void run(job, user, archive, plan, clash, body.decisions ?? {}).finally(() => {
     job.current = null
+    // Told through the notification hub, so it reaches the owner with Files (or the page) closed;
+    // the terminal's unzip asks for none, since it prints its own result.
+    if (!body.quiet) {
+      const name = zip.path.split('/').pop() || 'the archive'
+      const ok = job.total - job.errors.length
+      notify(user, {
+        source: 'files.unpacking',
+        title: job.state === 'done' ? `Unpacked ${name}` : job.state === 'cancelled' ? `Stopped unpacking ${name}` : `Could not unpack ${name}`,
+        body: job.error ?? `${ok} file${ok === 1 ? '' : 's'}${job.errors.length ? `, ${job.errors.length} left out (${job.errors[0].error})` : ''}`,
+        action: { app: 'files', props: { path: `seafile://${into.repo}${into.path === '/' ? '' : into.path.replace(/\/+$/, '')}` } },
+      })
+    }
     setTimeout(() => jobs.delete(job.id), KEEP_FINISHED)
   })
   return { id: job.id, total: job.total, totalBytes }

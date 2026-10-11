@@ -4,6 +4,7 @@ import { createServer } from 'node:http'
 import { extname, join, normalize, sep } from 'node:path'
 import { handleApi } from './api.ts'
 import { startMinecraftWatch } from './minecraft.ts'
+import { startNotifications } from './watchers.ts'
 import { SECURITY } from './http.ts'
 
 // Serves the built site and the /api routes in server/api.ts: live status, GitHub sign-in,
@@ -81,4 +82,5 @@ createServer(async (req, res) => {
   if (process.env.NODE_ENV === 'production' && !process.env.PUBLIC_URL)
     console.warn('PUBLIC_URL is not set: OAuth redirects and cookie flags follow the Host and X-Forwarded-* headers of each request. Set it to the site\'s address (https://example.com).')
   startMinecraftWatch()
+  startNotifications()
 })

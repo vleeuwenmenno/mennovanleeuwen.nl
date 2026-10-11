@@ -73,8 +73,9 @@ self.addEventListener('notificationclick', (event) => {
         if (tab) return tab.focus().then(() => tab.postMessage({ openThread: thread }))
         return self.clients.openWindow(`/?open=agents&thread=${encodeURIComponent(thread)}`)
       }
-      if (tab) return tab.focus()
-      return self.clients.openWindow(typeof url === 'string' && url.startsWith('/') ? url : '/')
+      const to = typeof url === 'string' && url.startsWith('/') ? url : '/'
+      if (tab) return tab.focus().then(() => tab.postMessage({ openUrl: to }))
+      return self.clients.openWindow(to)
     }),
   )
 })

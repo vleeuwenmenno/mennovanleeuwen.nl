@@ -5,6 +5,7 @@ import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { handleApi } from './server/api.ts'
 import { startMinecraftWatch } from './server/minecraft.ts'
+import { startNotifications } from './server/watchers.ts'
 
 /** The /api routes during `pnpm dev` and `pnpm preview`, like server/index.ts in production. */
 const liveApi = (): Plugin => {
@@ -16,10 +17,12 @@ const liveApi = (): Plugin => {
     configureServer: (server) => {
       server.middlewares.use(handler)
       startMinecraftWatch()
+      startNotifications()
     },
     configurePreviewServer: (server) => {
       server.middlewares.use(handler)
       startMinecraftWatch()
+      startNotifications()
     },
   }
 }

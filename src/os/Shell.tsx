@@ -20,6 +20,7 @@ import { initBackButton, setBackFocus } from './backButton'
 import { startActivityAlerts } from './activityAlerts'
 import { startAgentWatch } from './agentWatch'
 import { startPush } from './push'
+import { startNotifyStream } from './notifyStream'
 import { NotificationCenter } from './NotificationCenter'
 import { followLinkSettings, linkSettings } from '../data/links'
 import { newTab, usePower } from './powerState'
@@ -689,7 +690,7 @@ export function Shell() {
 
   // Fresh activity notifications start counting once the desktop is up.
   useEffect(() => {
-    if (power.phase === 'up') startActivityAlerts(), startAgentWatch(), startPush()
+    if (power.phase === 'up') startActivityAlerts(), startAgentWatch(), startPush(), startNotifyStream()
   }, [power.phase])
 
   // Links in apps open where Settings > Links says.

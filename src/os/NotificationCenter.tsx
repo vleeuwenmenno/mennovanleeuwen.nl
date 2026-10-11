@@ -4,7 +4,7 @@ import { openContextMenu, type MenuItem } from './ContextMenu'
 import { AppIcon } from './icons'
 import { clearEntries, markAllRead, openEntry, pruneEntries, removeEntry, useEntries, type Entry } from './notify'
 import { setNotifyPrefs, setOn, sourceOf, useNotifyPrefs } from './notifyPrefs'
-import { useWM } from './wm'
+import { useWM, type AppId } from './wm'
 
 /**
  * The notification center: a bell in the top bar with the unread count, and a list of what came
@@ -124,7 +124,7 @@ export function NotificationCenter() {
 function EntryIcon({ e }: { e: Entry }) {
   const app = sourceOf(e.source)?.icon
   if (e.icon) return <img className="nc-icon" src={e.icon} alt="" width={28} height={28} />
-  if (app) return <AppIcon app={app} size={28} />
+  if (app) return <AppIcon app={app as AppId} size={28} />
   return (
     <span className="nc-icon nc-glyph" aria-hidden>
       M
