@@ -8,7 +8,12 @@ import { getNote } from './notes'
 export type Mode = 'quick' | 'deep'
 /** A step in the agent's plan for a long job. */
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission }
+/** A thread's work folder: a Seafile folder (library and path), and how the terminal showed it (~/Projects/x). */
+export type Workdir = { repo: string; path: string; label: string }
+/** How changes are allowed: each one asks, file edits go through, or read only while planning. */
+export type Permission = 'default' | 'acceptEdits' | 'plan'
+export const PERMISSIONS: Permission[] = ['default', 'acceptEdits', 'plan']
 /** A group of threads in the sidebar, with a memory of its own. */
 export type Project = { id: number; name: string; sort: number; createdAt: number }
 export type ToolCall = { name: string; arguments: Record<string, unknown> }
@@ -18,7 +23,7 @@ export type AttachmentInfo = Omit<Attachment, 'text' | 'data'>
 export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; createdAt: number }
 
 /** What a thread may use, switched in the composer. */
-export type ToolGroup = 'web' | 'notes' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects'
+export type ToolGroup = 'web' | 'notes' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal'
 export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile?: boolean }[] = [
   { id: 'web', name: 'Web', detail: 'Search the web and read pages' },
   { id: 'notes', name: 'Notes', detail: 'Search and make notes; changing or deleting one asks you first' },
@@ -27,6 +32,8 @@ export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile
   { id: 'seafile_write', name: 'Seafile changes', detail: 'Folders, writing, renaming, moving, deleting; asks you first', seafile: true },
   { id: 'memory', name: 'Memory', detail: 'Remember what you tell it' },
   { id: 'projects', name: 'Projects', detail: 'Make and rename projects, move this thread; asks you first' },
+  { id: 'files', name: 'Work folder', detail: "Read, search and edit files in the thread's work folder" },
+  { id: 'terminal', name: 'Terminal', detail: 'Run msh commands, from the agents command in the terminal' },
 ]
 export const ALL_TOOLS = TOOL_GROUPS.map((g) => g.id)
 /** The groups there were before choices remembered which groups existed. */
@@ -62,10 +69,13 @@ export type Question = {
 export type Form = { title: string; intro?: string; questions: Question[]; submit?: string }
 
 /** Something the agent waits on: a change to allow, or a form to answer; which reply asked and which call. */
-export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question'; form?: Form }
+export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client'; form?: Form; call?: ToolCall }
 
 export type TurnEvent =
-  | { type: 'approval'; callId: string; messageId: number; index: number }
+  | { type: 'approval'; callId: string; messageId: number; index: number; call?: ToolCall }
+  /** A terminal tool call for the terminal to run; clientDone when it is answered or given up */
+  | { type: 'client'; callId: string; messageId: number; index: number; call: ToolCall }
+  | { type: 'clientDone'; callId: string }
   | { type: 'approved'; callId: string; allow: boolean }
   | { type: 'question'; callId: string; messageId: number; index: number; form: Form }
   | { type: 'answered'; callId: string }
@@ -78,13 +88,20 @@ export type TurnEvent =
   | { type: 'snapshot'; thread: Thread; messages: AgentMessage[]; pending: PendingApproval[]; live: { content: string; thinking: string } | null }
 
 export const listThreads = (archived: boolean) => api<Thread[]>(`/api/agents/threads${archived ? '?archived=1' : ''}`)
-export const createThread = (input: { mode: Mode; model?: string; tools?: ToolGroup[]; projectId?: number | null; quick?: boolean }) => api<Thread>('/api/agents/threads', { method: 'POST', json: input })
+export const createThread = (input: { mode: Mode; model?: string; tools?: ToolGroup[]; projectId?: number | null; quick?: boolean; workdir?: Workdir | null; permission?: Permission }) => api<Thread>('/api/agents/threads', { method: 'POST', json: input })
 export const getThread = (id: string) => api<{ thread: Thread; messages: AgentMessage[]; pending: PendingApproval[] }>(`/api/agents/threads/${id}`)
 export const answerForm = (id: string, callId: string, answers: Record<string, unknown> | null) =>
   api(`/api/agents/threads/${id}/answer`, { method: 'POST', json: answers ? { callId, answers } : { callId, skip: true } })
-export const answerApproval = (id: string, callId: string, allow: boolean) => api(`/api/agents/threads/${id}/approve`, { method: 'POST', json: { callId, allow } })
+/**
+ * Allows or declines a change. `always`: allow edits from now on, or this command; `feedback`: why
+ * not, for the agent; `mode`: the permission mode a plan starts in (exit_plan_mode).
+ */
+export const answerApproval = (id: string, callId: string, allow: boolean, extra: { always?: 'edits' | 'command'; feedback?: string; mode?: Permission } = {}) =>
+  api(`/api/agents/threads/${id}/approve`, { method: 'POST', json: { callId, allow, ...extra } })
+/** What the terminal printed for a terminal tool call. */
+export const sendClientResult = (id: string, callId: string, output: string, status: number) => api(`/api/agents/threads/${id}/result`, { method: 'POST', json: { callId, output, status } })
 /** `todos: null` dismisses the thread's plan (for the agent too). */
-export const updateThread = (id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'mode' | 'model' | 'tools' | 'pinned' | 'projectId' | 'quick'>> & { todos?: null }) => api<Thread>(`/api/agents/threads/${id}`, { method: 'PATCH', json: patch })
+export const updateThread = (id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'mode' | 'model' | 'tools' | 'pinned' | 'projectId' | 'quick' | 'workdir' | 'permission'>> & { todos?: null }) => api<Thread>(`/api/agents/threads/${id}`, { method: 'PATCH', json: patch })
 export const deleteThread = (id: string) => api(`/api/agents/threads/${id}`, { method: 'DELETE' })
 export const stopThread = (id: string) => api(`/api/agents/threads/${id}/stop`, { method: 'POST' })
 /** Quick answers asked from Spotlight and not continued in the app, newest first (expired ones pruned). */
@@ -165,12 +182,13 @@ export function agentModels(): Promise<ModelInfo[]> {
  * Sends the user's message and reads the answer as it streams: each JSON line is one event.
  * Aborting `signal` stops the turn on the server too.
  */
-export async function sendMessage(id: string, text: string, attachments: Attachment[], onEvent: (e: TurnEvent) => void, signal: AbortSignal) {
+export async function sendMessage(id: string, text: string, attachments: Attachment[], onEvent: (e: TurnEvent) => void, signal: AbortSignal, opts: { terminal?: boolean } = {}) {
   const res = await fetch(`/api/agents/threads/${id}/messages`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, attachments }),
+    // From the terminal's agents command, which can run the terminal tool.
+    body: JSON.stringify({ text, attachments, ...(opts.terminal ? { client: { terminal: true } } : {}) }),
     signal,
   })
   await readEvents(res, onEvent)
@@ -180,8 +198,8 @@ export async function sendMessage(id: string, text: string, attachments: Attachm
  * Joins a turn this window did not start (opened again while it runs, or another tab): a snapshot
  * with the reply written so far, then its events live. Resolves when the turn ends.
  */
-export async function followThread(id: string, onEvent: (e: TurnEvent) => void, signal: AbortSignal) {
-  await readEvents(await fetch(`/api/agents/threads/${id}/follow`, { credentials: 'same-origin', signal }), onEvent)
+export async function followThread(id: string, onEvent: (e: TurnEvent) => void, signal: AbortSignal, opts: { terminal?: boolean } = {}) {
+  await readEvents(await fetch(`/api/agents/threads/${id}/follow${opts.terminal ? '?client=terminal' : ''}`, { credentials: 'same-origin', signal }), onEvent)
 }
 
 async function readEvents(res: Response, onEvent: (e: TurnEvent) => void) {
@@ -266,6 +284,30 @@ export function toolLabel(call: ToolCall): string {
       return `${a.copy === true ? 'Copy' : 'Move'} ${s('path')} in ${s('library')} to ${s('to_folder')}${s('to_library') ? ` in ${s('to_library')}` : ''}`
     case 'seafile_delete':
       return `Delete ${s('path')} in ${s('library')}`
+    case 'read_file':
+      return `Read ${s('path')}${a.offset ? ` from line ${String(a.offset)}` : ''}`
+    case 'write_file':
+      return `Write ${s('path')} (${s('content').split('\n').length} lines)`
+    case 'edit_file':
+      return `Edit ${s('path')}`
+    case 'multi_edit':
+      return `Edit ${s('path')} (${Array.isArray(a.edits) ? a.edits.length : 0} changes)`
+    case 'list_dir':
+      return `Listed ${s('path') || 'the work folder'}`
+    case 'glob':
+      return `Found files matching ${s('pattern')}`
+    case 'grep':
+      return `Searched for “${s('pattern')}”${s('path') ? ` in ${s('path')}` : ''}`
+    case 'make_dir':
+      return `Make folder ${s('path')}`
+    case 'move_path':
+      return `Move ${s('from')} to ${s('to')}`
+    case 'delete_path':
+      return `Delete ${s('path')}`
+    case 'terminal':
+      return s('description') || `Ran ${s('command').split('\n')[0].slice(0, 80)}`
+    case 'exit_plan_mode':
+      return 'Presented a plan'
     default:
       return call.name
   }
