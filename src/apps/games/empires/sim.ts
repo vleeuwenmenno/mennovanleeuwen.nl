@@ -131,7 +131,20 @@ export type Unit = {
   upg: Partial<Record<SiteUpgradeId, number>>
   /** The upgrade being fitted, and seconds left. */
   upgrading: { id: SiteUpgradeId; left: number; total: number } | null
+  /** Its place on the arc a group of warships forms round the target they're all attacking (see
+   * attackSpots), or null while it has none. */
+  slot: Slot | null
 }
+
+/**
+ * A warship's place round its target when several of its side's warships fight the same one: `a`
+ * is the bearing from the target to the spot, `inset` how much nearer than its own stopping
+ * distance it sits (a second row). `t` is the target it was worked out for, `key` a fingerprint of
+ * the group and `at` when, so it is worked out again only when the group changes or it has gone
+ * stale. `held`: the ship reached its spot and stays there until the spot or the target moves
+ * well away.
+ */
+export type Slot = { t: number; key: number; at: number; a: number; inset: number; held: boolean }
 
 /** A ship being built. `reserve`: it goes to the fleet reserve when done instead of jumping in. */
 export type QueueItem = { unit: string; left: number; total: number; reserve?: boolean }
@@ -386,6 +399,59 @@ function fightRange(t: UnitType) {
   return best.range
 }
 
+/** How much nearer than the shortest of its guns' reach a warship stops, so a target edging
+ * away or a nudge from a neighbour doesn't put it out of range at once. */
+const STOP_MARGIN = 0.92
+
+/** A gun's damage a second against a tier, counting only weapons it would actually fire at it
+ * (the same lower limit `shoot` uses for a ship's target). */
+function gunDps(g: Gun, tier: Tier) {
+  const eff = effect(g.w.kind, tier)
+  return eff < 0.3 ? 0 : (g.w.damage * (g.w.burst ?? 1) * eff * accuracy(g.w.kind, tier)) / g.w.cooldown
+}
+
+/**
+ * The guns worth closing in for against a tier: working ones it would fire at it that add real
+ * damage next to the best of them (a fifth of it or more). So flak doesn't count against a
+ * capital ship or a station, nor a cruiser's slow flak against a frigate, but a gunship's flak
+ * does against fighters and gunships, and a flagship's flak and turbolasers both do against
+ * fighters. Empty when nothing it carries is any use against that tier.
+ */
+export function relevantGuns(u: Unit, tier: Tier): Gun[] {
+  const live = u.guns.filter((g) => g.hp < 0 || alive(u, g.hp))
+  const best = live.reduce((m, g) => Math.max(m, gunDps(g, tier)), 0)
+  return best > 0 ? live.filter((g) => gunDps(g, tier) >= best * 0.2) : []
+}
+
+/** How far a gun reaches measured from the ship's centre: its range, less how far its hardpoint
+ * sits out to the side or behind the centre. A ship at its spot turns its nose to the target, so
+ * a gun further forward is never further away; one aft or out on a wing may be. */
+function gunReach(u: Unit, g: Gun) {
+  const r = g.w.range * u.mods.range
+  if (g.hp < 0) return r
+  const [w, h] = dims(u.t)
+  const p = u.t.hardpoints[g.hp]
+  return r - M.hypot((p.x / 10 - 0.5) * w, Math.max(0, (p.y / 10 - 0.5) * h))
+}
+
+/**
+ * Where a warship attacking `e` stops, as a distance between their centres: as soon as every gun
+ * that counts against it (see relevantGuns) reaches, with a little to spare. A gun reaches a
+ * target once its centre is within range plus half the target's radius (see `shoot`), so that is
+ * measured the same way. `reach` is where the shortest of those guns stops reaching. A ship with
+ * nothing that counts closes to its best gun's range, as before.
+ */
+export function stopDistance(u: Unit, e: Unit): { stop: number; reach: number } {
+  const guns = relevantGuns(u, e.t.tier)
+  const half = radius(e.t) * 0.5
+  if (!guns.length) {
+    const stop = fightRange(u.t) * u.mods.range * 0.8 + half
+    return { stop, reach: stop / 0.8 }
+  }
+  const short = Math.max(20, Math.min(...guns.map((g) => gunReach(u, g))))
+  return { stop: short * STOP_MARGIN + half, reach: short + half }
+}
+
 // --- Setup -----------------------------------------------------------------------------------------
 
 /** A unit's guns: its own weapons, then one per armed hardpoint. */
@@ -404,7 +470,7 @@ export function spawn(w: World, id: string, owner: Owner, x: number, y: number, 
     hps: t.hardpoints.map((h) => ({ hp: h.hp, max: h.hp })),
     guns: gunsOf(w, t),
     order: { k: 'idle' }, ax: x, ay: y, squad, parent: 0, target: 0, retarget: rand(w) * 0.5, lastHit: -99, shieldHit: -99, shieldOut: -99, hitAngle: 0,
-    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, stance: 'maneuver', gx: x, gy: y, hitBy: 0, nebula: false, route: null, queue: [], mending: [], breakOff: false, face: null, repair: 0, retreat: 0, focus: 0, upg: {}, upgrading: null,
+    abilityCd: 0, abilityOn: 0, slow: 0, hangarT: 0, building: 0, node: -1, dead: false, born: w.time, kills: 0, xp: 0, rank: 0, stance: 'maneuver', gx: x, gy: y, hitBy: 0, nebula: false, route: null, queue: [], mending: [], breakOff: false, face: null, repair: 0, retreat: 0, focus: 0, upg: {}, upgrading: null, slot: null,
     seen: Array.from({ length: w.teams }, (_, t) => t === w.players[owner].team),
   }
   w.units.push(u)
@@ -1753,6 +1819,139 @@ function waypoint(w: World, u: Unit, tx: number, ty: number): Pt {
   return pts.length ? pts[0] : { x: tx, y: ty }
 }
 
+// --- Attack spots ----------------------------------------------------------------------------------
+
+/** The widest arc a group spreads over round its target (120 degrees): more ships than fit form a
+ * second row rather than surrounding it. */
+const ARC_MAX = (Math.PI * 2) / 3
+/** Seconds before a group's spots are worked out again even though the group stayed the same, so
+ * they follow a target that moves round. */
+const RESLOT = 4
+/** The least room between two warships' hulls (see the end of moveUnit). */
+const HULL_GAP = 8
+/** Room a warship leaves either side of itself on the arc, on top of its hull. */
+const arcGap = (r: number) => 14 + r * 0.2
+
+/** Whether a warship fights its target from a spot: it closes in and stops at range, unlike
+ * strike craft on their runs or ships holding still. Matches the branches in moveUnit. */
+const closesIn = (u: Unit, e: Unit | undefined) =>
+  !!e && !e.dead && u.t.tier !== 'fighter' && (u.order.k !== 'move' || (u.order.attack && u.stance !== 'hold')) && !(u.stance === 'hold' && u.order.k !== 'area')
+
+/**
+ * Warships closing in on each target, by owner and target, for this tick: worked out afresh at the
+ * start of every tick from the world itself, so it carries nothing from one tick to the next (and
+ * nothing a snapshot would miss). Strike craft and fighter targets are left out: fighters dart
+ * about too much for an arc round them to mean anything.
+ */
+let spotGroups = new Map<string, Unit[]>()
+function findSpotGroups(w: World) {
+  spotGroups = new Map()
+  for (const u of w.units) {
+    if (u.dead || !isShip(u.t) || building(u) || u.retreat > 0 || !u.target) continue
+    const e = w.byId.get(u.target)
+    if (!e || e.t.tier === 'fighter' || !closesIn(u, e)) continue
+    const k = `${u.owner}:${e.id}`
+    const g = spotGroups.get(k)
+    if (g) g.push(u)
+    else spotGroups.set(k, [u])
+  }
+}
+
+/** The ships of `u`'s side closing in on `e` right now, `u` among them, in id order. */
+function spotGroup(u: Unit, e: Unit): Unit[] {
+  const g = (spotGroups.get(`${u.owner}:${e.id}`) ?? []).filter((m) => m.target === e.id && !m.dead)
+  if (!g.includes(u)) g.push(u)
+  return g.sort((a, b) => a.id - b.id)
+}
+
+const groupKey = (g: Unit[]) => g.reduce((h, m) => Math.imul(h ^ m.id, 0x01000193), 0x811c9dc5 ^ g.length) >>> 0
+
+/**
+ * Hand out spots round `e` to a group of warships attacking it together: an arc on the side they
+ * come from, centred on their average bearing, each ship given as much of it as its hull needs
+ * (its width and a gap either side) at its own stopping distance, so long guns hold further back.
+ * The arc grows with the group up to ARC_MAX; ships that don't fit form another row nearer in
+ * (still within reach), the longest guns taking the outer row. Within a row the ships are placed
+ * in the order they stand round the target, so nobody has to cross anyone else's path.
+ */
+function attackSpots(w: World, e: Unit, g: Unit[], key: number) {
+  let sx = 0
+  let sy = 0
+  for (const m of g) {
+    const d = M.hypot(m.x - e.x, m.y - e.y) || 1
+    sx += (m.x - e.x) / d
+    sy += (m.y - e.y) / d
+  }
+  const mid = Math.abs(sx) + Math.abs(sy) > 1e-6 ? M.atan2(sy, sx) : M.atan2(g[0].y - e.y, g[0].x - e.x)
+  const bearing = (m: Unit) => wrap(M.atan2(m.y - e.y, m.x - e.x) - mid)
+  const ships = g.map((m) => ({ m, stop: stopDistance(m, e).stop, r: radius(m.t) })).sort((a, b) => b.stop - a.stop || a.m.id - b.m.id)
+  const inner = radius(e.t) * 0.5 + 20
+  // How far out the next row may sit: the previous row's nearest spot, less the widest hull in it.
+  let limit = Infinity
+  let i = 0
+  while (i < ships.length) {
+    const row: { m: Unit; d: number; r: number; need: number; inset: number }[] = []
+    let width = 0
+    while (i < ships.length) {
+      const s = ships[i]
+      const d = Math.max(inner + s.r, Math.min(s.stop, limit))
+      const need = (s.r * 2 + arcGap(s.r) * 2) / d
+      if (row.length && width + need > ARC_MAX) break
+      row.push({ m: s.m, d, r: s.r, need, inset: Math.max(0, s.stop - d) })
+      width += need
+      i++
+    }
+    row.sort((a, b) => bearing(a.m) - bearing(b.m) || a.m.id - b.m.id)
+    let at = mid - width / 2
+    for (const s of row) {
+      // The spot is kept as an inset from the ship's own stopping distance, which changes as its
+      // guns are shot off: 0 on the outer row.
+      const held = s.m.slot?.t === e.id && s.m.slot.held
+      s.m.slot = { t: e.id, key, at: w.time, a: wrap(at + s.need / 2), inset: s.inset, held }
+      at += s.need
+    }
+    limit = Math.min(...row.map((s) => s.d)) - Math.max(...row.map((s) => s.r * 2 + arcGap(s.r)))
+  }
+}
+
+/**
+ * Close in on `e` and fight it from a spot: alone, straight at it until every gun that counts is
+ * in reach; with others of its side on the same target, to its own place on their arc (see
+ * attackSpots), then hold there facing it until the spot drifts well away or the target gets out
+ * of reach. Brakes in time to stop rather than ram, and steers round rocks on the way.
+ */
+function closeIn(w: World, u: Unit, e: Unit, max: number, dt: number) {
+  const t = u.t
+  const { stop, reach } = stopDistance(u, e)
+  const dist = M.hypot(e.x - u.x, e.y - u.y)
+  const g = e.t.tier === 'fighter' ? [u] : spotGroup(u, e)
+  if (g.length < 2) {
+    u.slot = null
+    const brake = Math.sqrt(2 * t.speed * 0.9 * Math.max(0, dist - stop))
+    const p = dist > stop ? detour(w, u, e.x, e.y) : e
+    steer(u, p.x, p.y, dist > stop ? Math.min(max, brake) : 0, dt, dist <= stop)
+    return
+  }
+  const key = groupKey(g)
+  if (!u.slot || u.slot.t !== e.id || u.slot.key !== key || w.time - u.slot.at >= RESLOT) attackSpots(w, e, g, key)
+  const s = u.slot!
+  const d = Math.max(radius(e.t) * 0.5 + radius(t) + 20, stop - s.inset)
+  const px = e.x + M.cos(s.a) * d
+  const py = e.y + M.sin(s.a) * d
+  const off = M.hypot(px - u.x, py - u.y)
+  const r = radius(t)
+  if (s.held && (off > 40 + r * 0.6 || dist > (stop + reach) / 2)) s.held = false
+  else if (!s.held && off < 10 + r * 0.12) s.held = true
+  if (s.held) {
+    // Swing round to face the enemy.
+    steer(u, e.x, e.y, 0, dt, true)
+    return
+  }
+  const brake = Math.sqrt(2 * t.speed * 0.9 * off)
+  const p = detour(w, u, px, py)
+  steer(u, p.x, p.y, Math.min(max, brake), dt)
+}
+
 function moveUnit(w: World, u: Unit, dt: number) {
   const t = u.t
   if (!isShip(t) || building(u)) return
@@ -1841,15 +2040,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
     } else if (u.stance === 'hold' && u.order.k !== 'area') {
       // An area attack was an order to go in: holding ships only hold otherwise.
       steer(u, e.x, e.y, 0, dt, true)
-    } else {
-      // Close to fighting range, then hold there and swing round to face the enemy.
-      // Brake in time to stop at range rather than ramming them.
-      const want = fightRange(t) * u.mods.range * 0.8 + radius(e.t) * 0.5
-      const dist = M.hypot(e.x - u.x, e.y - u.y)
-      const brake = Math.sqrt(2 * t.speed * 0.9 * Math.max(0, dist - want))
-      const p = dist > want ? detour(w, u, e.x, e.y) : e
-      steer(u, p.x, p.y, dist > want ? Math.min(max, brake) : 0, dt, dist <= want)
-    }
+    } else closeIn(w, u, e, max, dt)
   } else if (u.order.k === 'area') {
     // Nothing to shoot: done once the circle is in sight (or reached) and empty; until then, close in.
     const o = u.order
@@ -1904,19 +2095,33 @@ function moveUnit(w: World, u: Unit, dt: number) {
       u.y = k.y + ((u.y - k.y) / d) * min
     }
   }
-  if (!fighter)
+  if (!fighter) {
+    // Warships keep a small gap between hulls rather than overlapping. Inside the gap they ease
+    // apart slowly, so a tight group settles instead of jostling; a real overlap (hulls a quarter
+    // or more into each other) is pushed out faster, as before.
+    const bx = u.x
+    const by = u.y
     near(w, u.x, u.y, r0 + 240, (o, dd) => {
       if (o === u || o.t.tier === 'fighter') return
-      const min = (r0 + radius(o.t)) * 0.75
+      const touch = r0 + radius(o.t)
+      const min = touch + HULL_GAP
       if (dd >= min * min) return
       // Each of the pair moves part of the overlap away per tick; a structure doesn't budge, so the ship takes all of it.
       const d = Math.sqrt(dd) || 1
-      const push = (min - d) * Math.min(1, 4 * dt) * (isShip(o.t) ? 1 : 2.5)
+      const rate = d < touch * 0.75 ? 4 : 1.5
+      const push = (min - d) * Math.min(1, rate * dt) * (isShip(o.t) ? 1 : 2.5)
       const nx = d > 1 ? (u.x - o.x) / d : M.cos(u.id)
       const ny = d > 1 ? (u.y - o.y) / d : M.sin(u.id)
       u.x += nx * push
       u.y += ny * push
     })
+    // A waiting ship that was nudged aside takes the nudge as its new spot, instead of steering
+    // back into its neighbour and being nudged out again for ever.
+    if (u.order.k === 'idle' && !u.target && !u.parent) {
+      u.ax += u.x - bx
+      u.ay += u.y - by
+    }
+  }
   u.x = clamp(u.x, 20, w.w - 20)
   u.y = clamp(u.y, 20, w.h - 20)
 }
@@ -2306,6 +2511,7 @@ export function tick(w: World, dt = STEP) {
   survey(w, dt)
   salvage(w, dt)
   tenders(w, dt)
+  findSpotGroups(w)
   for (const u of w.units) {
     if (u.dead) continue
     if (u.building > 0) {
