@@ -215,11 +215,11 @@ function checkAttachments(v: unknown): Attachment[] {
 // --- threads -----------------------------------------------------------------------------------
 
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; projectId: number | null; pinned: boolean; todos: Todo[]; /** A title is being thought of */ titling: boolean; /** Tokens the last reply took up in the model's context, as Ollama counted them */ contextTokens: number | null; /** Tool groups it may use */ tools: ToolGroup[]; /** Asked from Spotlight and not continued in the app yet */ quick: boolean; /** The Seafile folder its file tools work in */ workdir: Workdir | null; /** How changes are allowed: ask each time, edits allowed, or read only while planning */ permission: Permission }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; projectId: number | null; pinned: boolean; todos: Todo[]; /** A title is being thought of */ titling: boolean; /** Tokens the last reply took up in the model's context, as Ollama counted them */ contextTokens: number | null; /** Tool groups it may use */ tools: ToolGroup[]; /** Asked from Spotlight and not continued in the app yet */ quick: boolean; /** The Seafile folder its file tools work in */ workdir: Workdir | null; /** How changes are allowed: ask each time, edits allowed, or read only while planning */ permission: Permission; /** Messages waiting to be sent when the running turn is done, in order */ queue: QueuedInfo[] }
 export type ToolCall = { name: string; arguments: Record<string, unknown> }
 export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; createdAt: number }
 
-type ThreadRow = { id: string; title: string; mode: string; model: string; archived: number; created_at: number; updated_at: number; context_tokens: number | null; tools: string | null; project_id: number | null; pinned: number; todos: string | null; quick: number; workdir: string | null; permission: string | null }
+type ThreadRow = { id: string; title: string; mode: string; model: string; archived: number; created_at: number; updated_at: number; context_tokens: number | null; tools: string | null; project_id: number | null; pinned: number; todos: string | null; quick: number; workdir: string | null; permission: string | null; queue: string | null }
 type MessageRow = { id: number; role: string; content: string; thinking: string | null; tool_calls: string | null; tool_name: string | null; attachments: string | null; created_at: number }
 
 const NEW_TITLE = 'New thread'
@@ -261,7 +261,252 @@ onUserGone((id) => {
 /** How the user answered a change: allowed or not, and what came with it. */
 type Verdict = { allow: boolean; always?: 'edits' | 'command'; feedback?: string; mode?: Permission }
 
-const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: (r.tools ? toolGroups(JSON.parse(r.tools)) : null) ?? [...TOOL_GROUPS], quick: !!r.quick, workdir: r.workdir ? (JSON.parse(r.workdir) as Workdir) : null, permission: permissionOf(r.permission) })
+// --- the queue ---------------------------------------------------------------------------------
+
+/**
+ * Messages written while a turn runs wait in the thread's queue, saved with the thread (column
+ * queue), so they outlast a closed window and a restart. When a turn ends with an answer, the
+ * server sends the first one as the next turn by itself, on the same stream; a turn that failed or
+ * was stopped leaves the queue for the user to send or drop. Every window on the thread sees it
+ * change ('queue' events on the turn's stream, and `queue` on the thread).
+ */
+type Queued = { id: string; text: string; attachments: Attachment[]; zone: string | null; createdAt: number }
+export type QueuedInfo = { id: string; text: string; attachments: AttachmentInfo[]; createdAt: number; /** A window is editing it: the queue waits */ editing: boolean }
+/** What a turn starts from: the user's message, its files and the time zone they are in. */
+type Ask = { text: string; files: Attachment[]; zone: string }
+const MAX_QUEUE = 20
+/**
+ * The queued message a window is editing, by thread. The queue waits while one is, so a message is
+ * never sent halfway through a change; a window that goes away without saving lets it go on after
+ * EDIT_HOLD, and an editing window says it is still there well within that.
+ */
+const editing = new Map<string, { id: string; at: number }>()
+const EDIT_HOLD = 2 * 60_000
+/** Threads whose queue was due while a message in it was being edited: it goes on when the edit is done. */
+const held = new Map<string, { user: User; timer: ReturnType<typeof setTimeout> }>()
+/** A message sent now (Send now, or a message with files while the agent asked something), by thread: the stopped turn's chain starts it next. */
+const sendNext = new Map<string, Ask>()
+/** How a running chain of turns tells its windows something outside a turn (the queue changed). */
+const sinks = new Map<string, (e: TurnEvent) => void>()
+onUserGone((id) => {
+  for (const [thread, h] of held) if (h.user.id === id) (clearTimeout(h.timer), held.delete(thread))
+})
+
+const queueOf = (thread: string): Queued[] => {
+  const row = database().prepare('SELECT queue FROM agent_threads WHERE id = ?').get(thread) as { queue: string | null } | undefined
+  return row?.queue ? (JSON.parse(row.queue) as Queued[]) : []
+}
+const editLock = (thread: string) => {
+  const e = editing.get(thread)
+  if (e && Date.now() - e.at < EDIT_HOLD) return e
+  if (e) editing.delete(thread)
+  return null
+}
+const fileInfo = (files: Attachment[]): AttachmentInfo[] => files.map(({ text: _t, data: _d, ...info }) => info)
+function queueInfo(thread: string, list: Queued[]): QueuedInfo[] {
+  const lock = editLock(thread)
+  return list.map((q) => ({ id: q.id, text: q.text, attachments: fileInfo(q.attachments), createdAt: q.createdAt, editing: lock?.id === q.id }))
+}
+function setQueue(thread: string, list: Queued[]) {
+  database().prepare('UPDATE agent_threads SET queue = ? WHERE id = ?').run(list.length ? JSON.stringify(list) : null, thread)
+  sinks.get(thread)?.({ type: 'queue', queue: queueInfo(thread, list) })
+}
+const askOf = (q: Queued): Ask => ({ text: q.text, files: q.attachments, zone: zoneFor(q.zone) })
+
+/** The message and files from a request, checked as a turn checks them. */
+function askFrom(user: User, body: { text?: unknown; attachments?: unknown; client?: { timeZone?: unknown } }): Ask {
+  const text = String(body.text ?? '').trim()
+  const files = checkAttachments(body.attachments)
+  if (!text && !files.length) throw new HttpError(400, 'Write something first')
+  if (text.length > 20_000) throw new HttpError(413, 'That message is too long')
+  checkRoom(user, text.length + JSON.stringify(files).length)
+  return { text, files, zone: zoneFor(body.client?.timeZone) }
+}
+
+/** Whether another turn may start for this account now: a few per account, and not too many on the server. */
+function checkTurnRoom(user: User) {
+  if ([...runningFor.values()].filter((u) => u === user.id).length >= TURNS_PER_USER) throw new HttpError(429, `At most ${TURNS_PER_USER} threads answer at once: wait for one to finish, or stop it`)
+  if (runningFor.size >= TURNS_TOTAL) throw new HttpError(429, 'The server is busy answering others: try again in a minute')
+}
+
+/** Whether the turn waits on the user: a change to allow, a plan, or a form (not the terminal running a command). */
+const waitsOnUser = (thread: string) => (pending.get(thread) ?? []).some((p) => p.kind !== 'client')
+
+/** A reply typed in the message box instead of an answer to a form the agent asked. */
+class Said {
+  text: string
+  constructor(text: string) {
+    this.text = text
+  }
+}
+
+/**
+ * The user said something while the agent waits on them: every change waiting is declined with it
+ * as the reason, and every form answered with it, so the turn goes on with the model reading it.
+ */
+function answerPending(thread: string, text: string) {
+  for (const p of [...(pending.get(thread) ?? [])]) {
+    if (p.kind === 'approval') p.resolve({ allow: false, feedback: text.slice(0, 4000) } satisfies Verdict)
+    else if (p.kind === 'question') p.resolve(new Said(text.slice(0, 4000)))
+  }
+}
+
+/**
+ * Says something to the agent now, whatever it is doing: a thread at rest starts a turn with it, a
+ * turn waiting on the user gets it as the answer, and a turn at work is stopped (as Stop does, so
+ * what it finished stays saved) for it to go next, ahead of the queue. Files can't go with an
+ * answer, so with files a waiting turn is stopped too.
+ */
+function deliver(user: User, thread: string, ask: Ask) {
+  if (!running.has(thread)) return startChain(user, thread, ask)
+  if (waitsOnUser(thread) && !ask.files.length) return answerPending(thread, ask.text)
+  // Sent now twice before the turn stopped: the later one goes first, the earlier one right after.
+  const earlier = sendNext.get(thread)
+  if (earlier) setQueue(thread, [{ id: randomUUID(), text: earlier.text, attachments: earlier.files, zone: earlier.zone, createdAt: Date.now() }, ...queueOf(thread)])
+  sendNext.set(thread, ask)
+  running.get(thread)?.abort()
+}
+
+/** Starts a chain of turns that no request streams (a window follows it): Send now on a thread at rest, or the queue going on. */
+function startChain(user: User, thread: string, ask: Ask) {
+  checkTurnRoom(user)
+  requireKey(user)
+  void chain(user, thread, ask, null, false)
+}
+
+/** The queue was due while a message in it was being edited: now that the edit is done (or abandoned), it goes on. */
+function resumeHeld(thread: string) {
+  const h = held.get(thread)
+  if (!h) return
+  clearTimeout(h.timer)
+  const lock = editLock(thread)
+  if (lock) return void (h.timer = setTimeout(() => resumeHeld(thread), EDIT_HOLD - (Date.now() - lock.at) + 500))
+  held.delete(thread)
+  const list = queueOf(thread)
+  if (running.has(thread) || !list.length || !database().prepare('SELECT 1 FROM agent_threads WHERE id = ?').get(thread)) return
+  try {
+    checkTurnRoom(h.user)
+    requireKey(h.user)
+  } catch {
+    return // the queue stays, for the user to send
+  }
+  setQueue(thread, list.slice(1))
+  void chain(h.user, thread, askOf(list[0]), null, false)
+}
+
+/** What a chain does after a turn: a message sent now, else (after an answer) the queue's first, unless one is being edited. */
+function nextAsk(user: User, thread: string, outcome: Outcome): Ask | null {
+  const now = sendNext.get(thread)
+  if (now) return sendNext.delete(thread), now
+  if (outcome !== 'answered' || !database().prepare('SELECT 1 FROM agent_threads WHERE id = ?').get(thread)) return null
+  const list = queueOf(thread)
+  if (!list.length) return null
+  const lock = editLock(thread)
+  if (lock) {
+    clearTimeout(held.get(thread)?.timer)
+    held.set(thread, { user, timer: setTimeout(() => resumeHeld(thread), EDIT_HOLD - (Date.now() - lock.at) + 500) })
+    return null
+  }
+  setQueue(thread, list.slice(1))
+  return askOf(list[0])
+}
+
+/**
+ * Adds a message to the queue. On a thread at rest with nothing queued it is simply sent (the turn
+ * ended between the window deciding to queue and asking).
+ */
+export function enqueue(user: User, id: string, body: { text?: unknown; attachments?: unknown; client?: { timeZone?: unknown } }): { thread: Thread } {
+  const row = ownThread(user, id)
+  const ask = askFrom(user, body)
+  const list = queueOf(row.id)
+  if (!running.has(row.id) && !list.length) startChain(user, row.id, ask)
+  else {
+    if (list.length >= MAX_QUEUE) throw new HttpError(409, `At most ${MAX_QUEUE} messages can wait at once`)
+    setQueue(row.id, [...list, { id: randomUUID(), text: ask.text, attachments: ask.files, zone: body.client?.timeZone ? ask.zone : null, createdAt: Date.now() }])
+  }
+  return { thread: toThread(ownThread(user, row.id)) }
+}
+
+/**
+ * A message from the message box while the agent waits on the user (a change to allow, a plan, a
+ * form): it answers all of them instead (see deliver). Waiting on nothing by now, it is queued.
+ */
+export function override(user: User, id: string, body: { text?: unknown; attachments?: unknown; client?: { timeZone?: unknown } }): { thread: Thread; queued: boolean } {
+  const row = ownThread(user, id)
+  if (running.has(row.id) && !waitsOnUser(row.id)) return { ...enqueue(user, id, body), queued: true }
+  deliver(user, row.id, askFrom(user, body))
+  return { thread: toThread(ownThread(user, row.id)), queued: false }
+}
+
+const ownQueued = (row: ThreadRow, qid: string) => {
+  const list = queueOf(row.id)
+  const i = list.findIndex((q) => q.id === qid)
+  if (i < 0) throw new HttpError(404, 'That message was sent or removed meanwhile')
+  return { list, i }
+}
+
+/**
+ * Edits a queued message. `editing: true` says a window is editing it (and is still there): the
+ * queue waits, and the whole message comes back, files and all, to edit. New text or files save
+ * it; either, or `editing: false`, ends the edit and lets the queue go on.
+ */
+export function editQueued(user: User, id: string, qid: string, body: { text?: unknown; attachments?: unknown; editing?: unknown }): { thread: Thread; item?: Queued } {
+  const row = ownThread(user, id)
+  const { list, i } = ownQueued(row, qid)
+  if (body.editing === true && body.text === undefined && body.attachments === undefined) {
+    editing.set(row.id, { id: qid, at: Date.now() })
+    setQueue(row.id, list)
+    return { thread: toThread(ownThread(user, row.id)), item: list[i] }
+  }
+  if (body.text !== undefined || body.attachments !== undefined) {
+    const text = body.text === undefined ? list[i].text : String(body.text).trim()
+    const attachments = body.attachments === undefined ? list[i].attachments : checkAttachments(body.attachments)
+    if (!text && !attachments.length) throw new HttpError(400, 'Nothing left to send: remove it instead')
+    if (text.length > 20_000) throw new HttpError(413, 'That message is too long')
+    checkRoom(user, text.length + JSON.stringify(attachments).length)
+    list[i] = { ...list[i], text, attachments }
+  }
+  if (editing.get(row.id)?.id === qid) editing.delete(row.id)
+  setQueue(row.id, list)
+  resumeHeld(row.id)
+  return { thread: toThread(ownThread(user, row.id)) }
+}
+
+export function removeQueued(user: User, id: string, qid: string): { thread: Thread } {
+  const row = ownThread(user, id)
+  const { list, i } = ownQueued(row, qid)
+  if (editing.get(row.id)?.id === qid) editing.delete(row.id)
+  setQueue(row.id, list.filter((_, j) => j !== i))
+  resumeHeld(row.id)
+  return { thread: toThread(ownThread(user, row.id)) }
+}
+
+/** Moves a queued message to another place in the queue. */
+export function moveQueued(user: User, id: string, qid: string, body: { to?: unknown }): { thread: Thread } {
+  const row = ownThread(user, id)
+  const { list, i } = ownQueued(row, qid)
+  const [item] = list.splice(i, 1)
+  list.splice(Math.max(0, Math.min(list.length, Math.round(Number(body.to) || 0))), 0, item)
+  setQueue(row.id, list)
+  return { thread: toThread(ownThread(user, row.id)) }
+}
+
+/**
+ * Send now: the queued message goes straight away, ahead of the rest. A working turn is stopped
+ * for it, a waiting one gets it as the answer, and a thread at rest (stopped, or failed, with
+ * messages left) starts with it.
+ */
+export function sendQueued(user: User, id: string, qid: string): { thread: Thread } {
+  const row = ownThread(user, id)
+  const { list, i } = ownQueued(row, qid)
+  if (!running.has(row.id)) (checkTurnRoom(user), requireKey(user))
+  if (editing.get(row.id)?.id === qid) editing.delete(row.id)
+  setQueue(row.id, list.filter((_, j) => j !== i))
+  deliver(user, row.id, askOf(list[i]))
+  return { thread: toThread(ownThread(user, row.id)) }
+}
+
+const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: (r.tools ? toolGroups(JSON.parse(r.tools)) : null) ?? [...TOOL_GROUPS], quick: !!r.quick, workdir: r.workdir ? (JSON.parse(r.workdir) as Workdir) : null, permission: permissionOf(r.permission), queue: queueInfo(r.id, r.queue ? (JSON.parse(r.queue) as Queued[]) : []) })
 const permissionOf = (v: unknown): Permission => (PERMISSIONS.includes(v as Permission) ? (v as Permission) : 'default')
 /** With a work folder, its tools are switched on (a list saved before they existed lacks them). */
 const withFolderTools = (tools: ToolGroup[] | null, workdir: Workdir | null) => (tools && workdir ? [...new Set<ToolGroup>([...tools, 'files', 'terminal'])] : tools)
@@ -475,18 +720,29 @@ export async function updateThread(user: User, id: string, body: { title?: strin
 
 export function deleteThread(user: User, id: string) {
   const row = ownThread(user, id)
+  sendNext.delete(row.id)
   running.get(row.id)?.abort()
   allowedCommands.delete(row.id)
+  editing.delete(row.id)
+  clearTimeout(held.get(row.id)?.timer)
+  held.delete(row.id)
   database().prepare('DELETE FROM agent_threads WHERE id = ?').run(row.id)
 }
 
 /** Stops every turn an account has running (banned or deleted, server/users.ts). */
 export function stopTurnsOf(userId: number) {
-  for (const [thread, u] of runningFor) if (u === userId) running.get(thread)?.abort()
+  for (const [thread, u] of runningFor) if (u === userId) (sendNext.delete(thread), running.get(thread)?.abort())
 }
 
+/** Stop: the turn ends and the queue waits. A message sent now that had not started yet goes back to the queue's front. */
 export function stopThread(user: User, id: string) {
-  running.get(ownThread(user, id).id)?.abort()
+  const row = ownThread(user, id)
+  const next = sendNext.get(row.id)
+  if (next) {
+    sendNext.delete(row.id)
+    setQueue(row.id, [{ id: randomUUID(), text: next.text, attachments: next.files, zone: next.zone, createdAt: Date.now() }, ...queueOf(row.id)])
+  }
+  running.get(row.id)?.abort()
 }
 
 // --- settings, AGENTS.md and titles -----------------------------------------------------------
@@ -806,8 +1062,9 @@ function normalizeForm(args: Record<string, unknown>): Form {
 }
 
 /** The answers as the model reads them back: by id, plus "Question: answer" lines with labels. */
-function answerText(form: Form, answers: Record<string, unknown> | null): string {
+function answerText(form: Form, answers: Record<string, unknown> | Said | null): string {
   if (!answers) return JSON.stringify({ skipped: true, note: 'The user closed the form without answering.' })
+  if (answers instanceof Said) return JSON.stringify({ skipped: true, said: answers.text, note: `The user did not fill in the form and wrote instead: ${answers.text}` })
   const lines = form.questions
     .filter((q) => q.type !== 'info')
     .map((q) => {
@@ -1581,11 +1838,11 @@ function askClient(thread: string, messageId: number, index: number, call: ToolC
   })
 }
 
-/** Shows the user a form and waits for the answers (none when stopped, skipped, or after 30 minutes). */
-function askForm(thread: string, messageId: number, index: number, form: Form, signal: AbortSignal, send: (e: TurnEvent) => void): Promise<Record<string, unknown> | null> {
+/** Shows the user a form and waits for the answers (none when stopped, skipped, or after 30 minutes; what they said instead when they wrote in the message box). */
+function askForm(thread: string, messageId: number, index: number, form: Form, signal: AbortSignal, send: (e: TurnEvent) => void): Promise<Record<string, unknown> | Said | null> {
   return new Promise((resolve) => {
     const callId = randomUUID()
-    const done = (answers: Record<string, unknown> | null) => {
+    const done = (answers: Record<string, unknown> | Said | null) => {
       clearTimeout(timer)
       signal.removeEventListener('abort', onAbort)
       const left = (pending.get(thread) ?? []).filter((p) => p.callId !== callId)
@@ -1597,7 +1854,7 @@ function askForm(thread: string, messageId: number, index: number, form: Form, s
     const onAbort = () => done(null)
     const timer = setTimeout(() => done(null), 30 * 60_000)
     signal.addEventListener('abort', onAbort)
-    pending.set(thread, [...(pending.get(thread) ?? []), { callId, messageId, index, kind: 'question', form, resolve: (a) => done((a as Record<string, unknown> | null) ?? null) }])
+    pending.set(thread, [...(pending.get(thread) ?? []), { callId, messageId, index, kind: 'question', form, resolve: (a) => done((a as Record<string, unknown> | Said | null) ?? null) }])
     send({ type: 'question', callId, messageId, index, form })
   })
 }
@@ -1613,62 +1870,102 @@ export type TurnEvent =
   | { type: 'delta'; content?: string; thinking?: string }
   | { type: 'message'; message: AgentMessage }
   | { type: 'thread'; thread: Thread }
+  /** The thread's queue changed (a message added, edited, removed, or taken to send) */
+  | { type: 'queue'; queue: QueuedInfo[] }
   | { type: 'error'; error: string }
   | { type: 'done' }
   /** First on a follow stream: the thread as it is, with the reply being written so far (null when not running) */
   | { type: 'snapshot'; thread: Thread; messages: AgentMessage[]; pending: PendingApproval[]; live: { content: string; thinking: string } | null }
 
+/** How a turn ended: with an answer, with an error, or stopped. */
+type Outcome = 'answered' | 'failed' | 'stopped'
+
 /**
- * Adds the user's message and answers it, streaming JSON lines (TurnEvent) to the response. The
- * turn stops when the window goes away or Stop is pressed; what was finished by then stays saved.
+ * Adds the user's message and answers it, streaming JSON lines (TurnEvent) to the response. When
+ * it is done and messages are queued, the next one is answered on the same stream, and so on. The
+ * turn goes on when the window goes away; Stop ends it, and what was finished by then stays saved.
  */
 export async function runTurn(res: ServerResponse, user: User, id: string, body: { text?: string; attachments?: unknown; client?: { terminal?: unknown; timeZone?: unknown } }) {
   const row = ownThread(user, id)
-  const text = String(body.text ?? '').trim()
-  const files = checkAttachments(body.attachments)
-  if (!text && !files.length) throw new HttpError(400, 'Write something first')
-  if (text.length > 20_000) throw new HttpError(413, 'That message is too long')
+  const ask = askFrom(user, body)
   if (running.has(row.id)) throw new HttpError(409, 'This thread is still answering')
-  if ([...runningFor.values()].filter((u) => u === user.id).length >= TURNS_PER_USER) throw new HttpError(429, `At most ${TURNS_PER_USER} threads answer at once: wait for one to finish, or stop it`)
-  if (runningFor.size >= TURNS_TOTAL) throw new HttpError(429, 'The server is busy answering others: try again in a minute')
-  checkRoom(user, text.length + JSON.stringify(files).length)
-  const key = requireKey(user)
-  const mode = modeOf(row.mode)
-  const info = (await models().catch(() => [] as ModelInfo[])).find((m) => m.name === row.model)
-
-  const ctl = new AbortController()
-  running.set(row.id, ctl)
-  runningFor.set(row.id, user.id)
+  checkTurnRoom(user)
+  requireKey(user)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
   // Asked from the terminal's agents command: that terminal can run the terminal tool.
   const fromTerminal = body.client?.terminal === true
   if (fromTerminal) attachTerminal(row.id, res)
-  // Where the user is, for today's date and the calendar tools' times.
-  const zone = zoneFor(body.client?.timeZone)
-  // The turn goes on when the window closes (a long job can take a while); only Stop ends it, and
-  // the window picks it up again from the saved messages.
-  partial.set(row.id, { content: '', thinking: '' })
+  await chain(user, row.id, ask, res, fromTerminal)
+}
+
+/**
+ * Runs turns one after another on a thread: the first message, then whatever comes next (a
+ * message sent now, or the queue's first after an answer). `res` is the request that asked, when
+ * one did; windows that joined later follow along. The thread counts as running, and holds its
+ * place among the account's turns, from the first turn to the last.
+ */
+async function chain(user: User, thread: string, first: Ask, res: ServerResponse | null, fromTerminal: boolean) {
+  // Set before anything waits, so a second message can't start another turn alongside.
+  running.set(thread, new AbortController())
+  runningFor.set(thread, user.id)
+  partial.set(thread, { content: '', thinking: '' })
   // Whether a window still shows this turn: the one that asked, or one that joined it later. When
   // none does, what the user should know (the answer, a question for them) goes to the
   // notification hub (server/notifier.ts): a pop-up on a page in view, or push to their devices.
-  let asker = true
-  res.on('close', () => (asker = false))
-  const watched = () => (asker && !res.writableEnded) || !!followers.get(row.id)?.size
-  const away = (source: 'agents.answer' | 'agents.ask', message: { title: string; body: string; tag: string }) => void notify(user, { source, ...message, action: { app: 'agents', props: { thread: row.id } } }, { watched: watched() })
-  const titleNow = () => (database().prepare('SELECT title FROM agent_threads WHERE id = ?').get(row.id) as { title: string } | undefined)?.title ?? 'Agents'
+  let asker = !!res
+  res?.on('close', () => (asker = false))
+  const watched = () => (asker && !!res && !res.writableEnded) || !!followers.get(thread)?.size
+  const away = (source: 'agents.answer' | 'agents.ask', message: { title: string; body: string; tag: string }) => void notify(user, { source, ...message, action: { app: 'agents', props: { thread } } }, { watched: watched() })
+  const titleNow = () => (database().prepare('SELECT title FROM agent_threads WHERE id = ?').get(thread) as { title: string } | undefined)?.title ?? 'Agents'
   const send = (e: TurnEvent) => {
     // Kept for windows that start following halfway through a reply.
-    const p = partial.get(row.id)
+    const p = partial.get(thread)
     if (p && e.type === 'delta') (p.content += e.content ?? ''), (p.thinking += e.thinking ?? '')
     else if (p && e.type === 'message' && e.message.role === 'assistant') (p.content = ''), (p.thinking = '')
-    if (!res.writableEnded && !res.destroyed) res.write(`${JSON.stringify(e)}\n`)
-    for (const f of followers.get(row.id) ?? []) f.send(e)
-    if (e.type === 'approval') away('agents.ask', { title: `Agents needs you: ${titleNow()}`, body: 'It wants to make a change, or read an address it was not given. Open it to allow or decline.', tag: `agents-ask-${row.id}` })
-    if (e.type === 'question') away('agents.ask', { title: `Agents asks: ${e.form.title}`, body: titleNow(), tag: `agents-ask-${row.id}` })
+    if (res && !res.writableEnded && !res.destroyed) res.write(`${JSON.stringify(e)}\n`)
+    for (const f of followers.get(thread) ?? []) f.send(e)
+    if (e.type === 'approval') away('agents.ask', { title: `Agents needs you: ${titleNow()}`, body: 'It wants to make a change, or read an address it was not given. Open it to allow or decline.', tag: `agents-ask-${thread}` })
+    if (e.type === 'question') away('agents.ask', { title: `Agents asks: ${e.form.title}`, body: titleNow(), tag: `agents-ask-${thread}` })
   }
-  let outcome: 'answered' | 'failed' | null = null
-
+  sinks.set(thread, send)
+  let ask: Ask | null = first
+  let outcome: Outcome = 'stopped'
   try {
+    while (ask) {
+      const ctl = new AbortController()
+      running.set(thread, ctl)
+      outcome = await turn(user, thread, ask, ctl, send, fromTerminal && ask === first)
+      ask = nextAsk(user, thread, outcome)
+      // A turn stopped halfway through a reply leaves it unsaved: the next one starts clean.
+      if (ask) partial.set(thread, { content: '', thinking: '' })
+    }
+  } finally {
+    sinks.delete(thread)
+    running.delete(thread)
+    runningFor.delete(thread)
+    partial.delete(thread)
+    // Nobody watching: the answer (or what went wrong) as a push message, the thread one tap away.
+    if (outcome === 'answered') {
+      const answer = [...messagesOf(thread)].reverse().find((m) => m.role === 'assistant' && m.content.trim())?.content ?? ''
+      away('agents.answer', { title: `Agents answered: ${titleNow()}`, body: pushLine(answer), tag: `agents-${thread}` })
+    } else if (outcome === 'failed') away('agents.answer', { title: `Agents stopped: ${titleNow()}`, body: 'Something went wrong. Open the thread to see what.', tag: `agents-${thread}` })
+    // Gone when it was deleted while answering.
+    const after = database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(thread) as ThreadRow | undefined
+    if (after) send({ type: 'thread', thread: toThread(after) })
+    res?.end()
+    for (const f of followers.get(thread) ?? []) f.close()
+    followers.delete(thread)
+  }
+}
+
+/** One turn: the user's message saved, then rounds of the model and its tools until it answers. */
+async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, send: (e: TurnEvent) => void, fromTerminal: boolean): Promise<Outcome> {
+  const { text, files, zone } = ask
+  try {
+    const row = ownThread(user, thread)
+    const key = requireKey(user)
+    const mode = modeOf(row.mode)
+    const info = (await models().catch(() => [] as ModelInfo[])).find((m) => m.name === row.model)
     // /name for a skill: its instructions go along as an attachment the window shows.
     const skillFile = text.startsWith('/') ? await skillInvocation(user, skillPlaces(user, toThread(row).workdir), text) : null
     send({ type: 'message', message: addMessage(row.id, { role: 'user', content: text }, skillFile ? [...files, skillFile] : files) })
@@ -1839,28 +2136,15 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
       if (wrapUp) break
     }
     send({ type: 'done' })
-    outcome = 'answered'
+    return 'answered'
   } catch (e) {
     if (!ctl.signal.aborted) {
       if (!(e instanceof HttpError)) console.error('agents:', e)
       send({ type: 'error', error: e instanceof HttpError ? e.message : 'Something went wrong' })
-      outcome = 'failed'
-    } else send({ type: 'done' })
-  } finally {
-    running.delete(row.id)
-    runningFor.delete(row.id)
-    partial.delete(row.id)
-    // Nobody watching: the answer (or what went wrong) as a push message, the thread one tap away.
-    if (outcome === 'answered') {
-      const answer = [...messagesOf(row.id)].reverse().find((m) => m.role === 'assistant' && m.content.trim())?.content ?? ''
-      away('agents.answer', { title: `Agents answered: ${titleNow()}`, body: pushLine(answer), tag: `agents-${row.id}` })
-    } else if (outcome === 'failed') away('agents.answer', { title: `Agents stopped: ${titleNow()}`, body: 'Something went wrong. Open the thread to see what.', tag: `agents-${row.id}` })
-    // Gone when it was deleted while answering.
-    const after = database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(row.id) as ThreadRow | undefined
-    if (after) send({ type: 'thread', thread: toThread(after) })
-    res.end()
-    for (const f of followers.get(row.id) ?? []) f.close()
-    followers.delete(row.id)
+      return 'failed'
+    }
+    send({ type: 'done' })
+    return 'stopped'
   }
 }
 

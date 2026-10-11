@@ -204,6 +204,8 @@ export function database(): DatabaseSync {
   if (!cols('agent_threads').includes('permission')) db.exec('ALTER TABLE agent_threads ADD COLUMN permission TEXT')
   // Added later: how many tokens a thread's last reply took up in the model's context.
   if (!(db.prepare('PRAGMA table_info(agent_threads)').all() as { name: string }[]).some((c) => c.name === 'context_tokens')) db.exec('ALTER TABLE agent_threads ADD COLUMN context_tokens INTEGER')
+  // Added later: messages written while a turn runs, waiting to be sent next (JSON, server/agents.ts).
+  if (!cols('agent_threads').includes('queue')) db.exec('ALTER TABLE agent_threads ADD COLUMN queue TEXT')
   key = Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())
   return db
