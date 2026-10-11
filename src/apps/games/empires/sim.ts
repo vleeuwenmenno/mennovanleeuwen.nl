@@ -2494,14 +2494,15 @@ function fleetEnd(w: World, dt: number) {
 }
 
 /** One side of a fleet battle: its ships (type ids; a fighter id is a whole squadron), and for the
- * side holding the planet, its station's level (0: none). */
-export type FleetSide = { faction: FactionId; team: number; ships: string[]; station?: number; techs?: string[] }
+ * side holding the planet, its station's level (0: none). `reserve`: more ships, held back by the
+ * fleet's orders: they start in the reserve, to be called in during the battle. */
+export type FleetSide = { faction: FactionId; team: number; ships: string[]; reserve?: string[]; station?: number; techs?: string[] }
 
 /**
  * A galactic conquest battle over a planet. The first side holds it: its station (if any) sits at
  * the first spawn with its fleet in front; the other fleets drop out of hyperspace at the other
  * spawns. Each side starts with up to `cap` fleet size on the field, biggest ships first, and the
- * rest waits in orbit to be called in from the reserve.
+ * rest waits in orbit to be called in from the reserve, with any ships its fleets held back.
  */
 export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: number; cap?: number } = {}): World {
   const w = newWorld(map, sides.map((s, i) => ({ faction: s.faction, team: s.team, spawn: i, incomeMul: 0 })), { seed: opts.seed, credits: 0, fleet: true })
@@ -2528,6 +2529,7 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
         used += UNIT[id].pop
       } else p.reserve.push(id)
     }
+    p.reserve.push(...(s.reserve ?? []))
     // A loose block facing the middle: rows across, big ships in the middle rows.
     const fx = M.cos(face)
     const fy = M.sin(face)

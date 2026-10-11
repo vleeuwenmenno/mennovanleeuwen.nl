@@ -172,7 +172,8 @@ function Wheel({ req, onClose }: { req: WheelRequest; onClose: () => void }) {
       const r = el.getBoundingClientRect()
       const dx = cx - r.left - centre.x
       const dy = cy - r.top - centre.y
-      if (Math.hypot(dx, dy) < 30) return null
+      // Still where it opened (near an edge the wheel sits off the finger): nothing picked yet.
+      if (Math.hypot(dx, dy) < 30 || Math.hypot(cx - req.x, cy - req.y) < 30) return null
       const a = Math.atan2(dy, dx)
       let best = 0
       let bestD = Infinity

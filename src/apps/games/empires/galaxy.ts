@@ -89,7 +89,16 @@ export type Fleet = {
   waypoints?: number[]
   /** When it arrived where it is: the first fleet at a neutral planet holds it in a battle. */
   arrived: number
+  /** Ships it holds back when a battle starts, by type: how many of each wait in the battle's
+   * reserve (to be called in during the fight) instead of jumping in with the rest. */
+  reserve?: Record<string, number>
+  /** The fleet it was sent to join up with (Gather): the two become one once both are at the same
+   * planet. */
+  join?: number
 }
+
+/** The most fleets a side keeps at one planet: more that end up there join up (see capFleets). */
+export const MAX_FLEETS = 4
 export type Side = {
   faction: FactionId
   credits: number
@@ -387,8 +396,10 @@ export function newGalaxy(opts: NewGalaxy): Galaxy {
 const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y)
 
 function addFleet(g: Galaxy, owner: number, planet: number, ships: string[]): Fleet {
-  // Joins a fleet of ours already sitting there.
-  const here = g.fleets.find((f) => f.owner === owner && f.planet === planet && !f.leg)
+  // Joins a fleet of ours already sitting there: the first one (fleet 1 in the inventory), unless
+  // it's only waiting to go on to its next stop and another one is staying.
+  const fs = fleetsHere(g, owner, planet)
+  const here = fs.find((f) => !f.waypoints?.length) ?? fs[0]
   if (here) {
     here.ships.push(...ships)
     return here
@@ -397,6 +408,183 @@ function addFleet(g: Galaxy, owner: number, planet: number, ships: string[]): Fl
   const f: Fleet = { id: g.nextId++, owner, ships: [...ships], planet, system: p.system, from: planet, leg: null, route: [], arrived: g.time }
   g.fleets.push(f)
   return f
+}
+
+// --- The fleet inventory ---------------------------------------------------------------------------
+//
+// Each fleet is an inventory of ships, stacked by type, in two parts: the ships that jump in when a
+// battle starts, and the ones held back in the battle's reserve (Fleet.reserve counts those). Ships
+// move between our fleets at the same planet, a whole stack or any part of one, and into a new fleet
+// there while there are fewer than MAX_FLEETS. A fleet that gives away its last ship is gone.
+
+/** A side's fleets in orbit of a planet (not those flying through), in the order they're listed. */
+export const fleetsHere = (g: Galaxy, owner: number, planet: number) => g.fleets.filter((f) => f.owner === owner && f.planet === planet && !f.leg)
+const countOf = (ships: string[], id: string) => ships.reduce((n, x) => n + (x === id ? 1 : 0), 0)
+/** How many ships of a type a fleet holds back (never more than it has of them). */
+export const heldOf = (f: Fleet, id: string) => Math.min(Math.max(0, Math.floor(f.reserve?.[id] ?? 0)), countOf(f.ships, id))
+/** The ships a fleet holds back when a battle starts. */
+export const heldShips = (f: Fleet) => Object.keys(f.reserve ?? {}).flatMap((id) => Array<string>(heldOf(f, id)).fill(id))
+/** `all` without one of each of `some` (ship ids, counted). */
+export function withoutShips(all: string[], some: string[]) {
+  const rest = [...all]
+  for (const id of some) {
+    const i = rest.indexOf(id)
+    if (i >= 0) rest.splice(i, 1)
+  }
+  return rest
+}
+/** Holds back `n` ships of a type (as many as it has, at most); the rest jump in. */
+function setHeld(f: Fleet, id: string, n: number) {
+  const v = Math.max(0, Math.min(countOf(f.ships, id), Math.floor(n)))
+  f.reserve ??= {}
+  if (v) f.reserve[id] = v
+  else delete f.reserve[id]
+  tidyReserve(f)
+}
+/** A fleet's reserve with only the types it has, in counts it can hold; none at all when empty. */
+function tidyReserve(f: Fleet) {
+  if (!f.reserve) return
+  for (const id of Object.keys(f.reserve)) {
+    const v = heldOf(f, id)
+    if (v > 0) f.reserve[id] = v
+    else delete f.reserve[id]
+  }
+  if (!Object.keys(f.reserve).length) delete f.reserve
+}
+/** One fleet joins another: its ships (held back ones still held back) and the earlier arrival. */
+function absorb(g: Galaxy, from: Fleet, into: Fleet) {
+  if (from === into) return
+  into.ships.push(...from.ships)
+  for (const [id, n] of Object.entries(from.reserve ?? {})) {
+    into.reserve ??= {}
+    into.reserve[id] = (into.reserve[id] ?? 0) + n
+  }
+  tidyReserve(into)
+  into.arrived = Math.min(into.arrived, from.arrived)
+  g.fleets = g.fleets.filter((x) => x !== from)
+}
+/**
+ * Ships split off a fleet as their own (by `take`, ship ids counted): the ones that jump in go
+ * first, then held back ones, which stay held back in the new fleet. The new fleet is listed but
+ * has no orders.
+ */
+function splitOff(g: Galaxy, f: Fleet, take: string[]): Fleet {
+  const nf: Fleet = { id: g.nextId++, owner: f.owner, ships: [], planet: f.planet, system: f.system, from: f.from, leg: null, route: [], waypoints: [], arrived: f.arrived }
+  for (const [id, n] of grouped(take)) {
+    const have = countOf(f.ships, id)
+    const held = heldOf(f, id)
+    const k = Math.min(n, have)
+    // Ships that jump in leave first; past those it takes held back ones.
+    const heldGone = Math.max(0, k - (have - held))
+    f.ships = withoutShips(f.ships, Array<string>(k).fill(id))
+    setHeld(f, id, held - heldGone)
+    nf.ships.push(...Array<string>(k).fill(id))
+    if (heldGone) setHeld(nf, id, heldGone)
+  }
+  g.fleets.push(nf)
+  return nf
+}
+const grouped = (ships: string[]) => {
+  const m = new Map<string, number>()
+  for (const id of ships) m.set(id, (m.get(id) ?? 0) + 1)
+  return [...m.entries()]
+}
+
+/** Where ships go in the inventory: a fleet (a new one at the same planet with 'new'), into the
+ * part that jumps in or the part held back. */
+export type Bay = { fleet: number; held: boolean }
+
+/**
+ * Move `n` ships of one type (as many as there are, at most) from one part of a fleet to another:
+ * between the ships that jump in and the ones held back in the same fleet (also while it flies), or
+ * to another of our fleets at the same planet, or a new one there. Returns the fleet they went to,
+ * or why they can't go.
+ */
+export function shiftShips(g: Galaxy, owner: number, from: Bay, to: { fleet: number | 'new'; held: boolean }, unit: string, n: number): Fleet | string {
+  const a = g.fleets.find((f) => f.id === from.fleet)
+  if (!a || a.owner !== owner) return 'Not our fleet'
+  const have = countOf(a.ships, unit)
+  const held = heldOf(a, unit)
+  const k = Math.min(Math.floor(n), from.held ? held : have - held)
+  if (k <= 0) return 'None of those to move'
+  if (to.fleet === a.id) {
+    if (from.held !== to.held) setHeld(a, unit, held + (to.held ? k : -k))
+    return a
+  }
+  if (a.leg) return 'In flight: ships move between fleets only while they hold an orbit'
+  let b: Fleet
+  if (to.fleet === 'new') {
+    // A fleet that gives away all it has only changes its name: that's no extra fleet.
+    if (fleetsHere(g, owner, a.planet).length >= MAX_FLEETS && k < a.ships.length) return `At most ${MAX_FLEETS} fleets at one planet`
+    b = { id: g.nextId++, owner, ships: [], planet: a.planet, system: a.system, from: a.planet, leg: null, route: [], waypoints: [], arrived: a.arrived }
+    g.fleets.push(b)
+  } else {
+    const t = g.fleets.find((f) => f.id === to.fleet)
+    if (!t || t.owner !== owner) return 'Not our fleet'
+    if (t.leg || t.planet !== a.planet) return 'Ships move only between fleets at the same planet'
+    b = t
+  }
+  a.ships = withoutShips(a.ships, Array<string>(k).fill(unit))
+  setHeld(a, unit, from.held ? held - k : held)
+  const bHeld = heldOf(b, unit)
+  b.ships.push(...Array<string>(k).fill(unit))
+  if (to.held) setHeld(b, unit, bHeld + k)
+  if (!a.ships.length) g.fleets = g.fleets.filter((x) => x !== a)
+  return b
+}
+
+/** Hold back `n` ships of a type in a fleet (the rest of that type jump in). Also while it flies. */
+export function holdBack(g: Galaxy, owner: number, fleetId: number, unit: string, n: number): string | null {
+  const f = g.fleets.find((x) => x.id === fleetId)
+  if (!f || f.owner !== owner) return 'Not our fleet'
+  setHeld(f, unit, n)
+  return null
+}
+
+/** One of our fleets joins another at the same planet, whole. */
+export function mergeFleets(g: Galaxy, owner: number, fromId: number, intoId: number): string | null {
+  const a = g.fleets.find((f) => f.id === fromId)
+  const b = g.fleets.find((f) => f.id === intoId)
+  if (!a || !b || a.owner !== owner || b.owner !== owner) return 'Not our fleet'
+  if (a === b) return null
+  if (a.leg || b.leg || a.planet !== b.planet) return 'Fleets join up only at the same planet'
+  absorb(g, a, b)
+  return null
+}
+
+/**
+ * Fleets sent to join another (Gather) do so once both are at the same planet, and no side keeps
+ * more than MAX_FLEETS at one planet: past that, one folds into another there, until they're down
+ * to the cap. The one to fold in is one without orders before one with them, the latest to arrive
+ * first (a fleet flying in joins those already there), then the smallest; it joins one with the same
+ * stops queued if there is one, else the biggest. Runs every tick, and on saves made before the cap.
+ */
+export function capFleets(g: Galaxy) {
+  for (const f of [...g.fleets]) {
+    if (f.join === undefined || !g.fleets.includes(f) || f.leg || f.route.length) continue
+    const t = g.fleets.find((x) => x.id === f.join && x.owner === f.owner)
+    if (!t || t === f) delete f.join
+    else if (!t.leg && t.planet === f.planet && f.planet >= 0) absorb(g, f, t)
+    // The one it was to meet has settled somewhere else: nothing to wait for.
+    else if (!t.leg && !t.route.length) delete f.join
+  }
+  const at = new Map<string, Fleet[]>()
+  for (const f of g.fleets) {
+    if (f.leg || f.route.length || f.planet < 0) continue
+    const key = `${f.owner}:${f.planet}`
+    at.set(key, [...(at.get(key) ?? []), f])
+  }
+  for (const fs of at.values()) {
+    while (fs.length > MAX_FLEETS) {
+      const orders = (f: Fleet) => (f.waypoints?.length || f.join !== undefined ? 1 : 0)
+      const fold = fs.slice().sort((a, b) => orders(a) - orders(b) || b.arrived - a.arrived || a.ships.length - b.ships.length || b.id - a.id)[0]
+      const stops = (f: Fleet) => (f.waypoints ?? []).join(',')
+      const same = (f: Fleet) => (stops(f) === stops(fold) ? 1 : 0)
+      const into = fs.filter((f) => f !== fold).sort((a, b) => same(b) - same(a) || b.ships.length - a.ships.length)[0]
+      absorb(g, fold, into)
+      fs.splice(fs.indexOf(fold), 1)
+    }
+  }
 }
 
 // --- Looking things up -------------------------------------------------------------------------------
@@ -533,7 +721,8 @@ export function plannedHops(g: Galaxy, f: Fleet): Hop[] {
 export function moveFleet(g: Galaxy, owner: number, fleetId: number, planet: number, take?: string[], queue = false): string | null {
   let f = g.fleets.find((x) => x.id === fleetId)
   if (!f || f.owner !== owner) return 'Not our fleet'
-  if (take && take.length && take.length < f.ships.length) {
+  // (Splitting off ships that would stay where they are makes no new fleet.)
+  if (take && take.length && take.length < f.ships.length && !(f.planet === planet && !f.leg)) {
     if (f.leg) return 'Split fleets only while they hold an orbit'
     const rest = [...f.ships]
     for (const id of take) {
@@ -541,11 +730,10 @@ export function moveFleet(g: Galaxy, owner: number, fleetId: number, planet: num
       if (i < 0) return 'Those ships are not in this fleet'
       rest.splice(i, 1)
     }
-    f.ships = rest
-    const nf: Fleet = { ...f, id: g.nextId++, ships: [...take], route: [], leg: null, waypoints: [] }
-    g.fleets.push(nf)
-    f = nf
+    f = splitOff(g, f, take)
   }
+  // A new order replaces a join-up that was under way.
+  delete f.join
   if (queue && busy(g, f)) {
     const last = f.waypoints?.length ? f.waypoints[f.waypoints.length - 1] : headedTo(f)
     if (last === planet) return null
@@ -591,6 +779,7 @@ export function stopFleet(g: Galaxy, owner: number, fleetId: number): string | n
   if (!f || f.owner !== owner) return 'Not our fleet'
   f.waypoints = []
   f.route = []
+  delete f.join
   if (f.leg && f.leg.planet < 0) {
     const ps = g.systems[f.leg.system].planets.map((p) => g.planets[p])
     f.leg.planet = (ps.find((p) => p.owner === owner) ?? ps[0]).id
@@ -675,8 +864,9 @@ export function cancelBuild(g: Galaxy, owner: number, planet: number, i: number)
 
 // --- Battles ---------------------------------------------------------------------------------------
 
-/** A battle waiting at a planet: who holds it, who attacks, and with what. */
-export type Clash = { planet: number; holder: number; attacker: number; station: number; holderShips: string[]; attackerShips: string[] }
+/** A battle waiting at a planet: who holds it, who attacks, and with what. The `Held` lists are
+ * the part of each side's ships its fleets hold back in the reserve (included in `Ships`). */
+export type Clash = { planet: number; holder: number; attacker: number; station: number; holderShips: string[]; attackerShips: string[]; holderHeld: string[]; attackerHeld: string[] }
 
 export function clashAt(g: Galaxy, planet: number): Clash | null {
   const p = g.planets[planet]
@@ -689,8 +879,13 @@ export function clashAt(g: Galaxy, planet: number): Clash | null {
   const holder = owners.has(p.owner) ? p.owner : here.slice().sort((a, b) => a.arrived - b.arrived)[0].owner
   const attacker = [...owners].find((o) => o !== holder)!
   const ships = (o: number) => here.filter((f) => f.owner === o).flatMap((f) => f.ships)
-  return { planet, holder, attacker, station: p.owner === holder ? p.station : 0, holderShips: ships(holder), attackerShips: ships(attacker) }
+  const held = (o: number) => here.filter((f) => f.owner === o).flatMap(heldShips)
+  return { planet, holder, attacker, station: p.owner === holder ? p.station : 0, holderShips: ships(holder), attackerShips: ships(attacker), holderHeld: held(holder), attackerHeld: held(attacker) }
 }
+
+/** Seconds into an auto-resolved battle before held back ships are called in (sooner when nothing
+ * else of their side is left out there). */
+export const RESERVE_CALL = 4
 
 /** How a battle ended: the winning side, and what's left of each side. Ships that jumped out are
  * `escaped`: they go back where they came from. */
@@ -699,17 +894,21 @@ export type BattleResult = { winner: number; survivors: Record<number, string[]>
 /**
  * A quick result without playing it out: both sides trade damage once a second, each ship firing at
  * what its guns hurt most, until one side is gone. An attacker that has lost most of its fleet while
- * the defence still stands pulls out what's left.
+ * the defence still stands pulls out what's left. Ships held back count in full but come in late,
+ * as a player would call them in: after RESERVE_CALL seconds, or at once when nothing else of their
+ * side is left fighting. A side that wins before then keeps them untouched; an attacker that pulls
+ * out takes them along.
  */
 export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
   const r = rng(Math.floor(seed * 1000) + c.planet)
-  type U = { side: number; id: string; tier: Tier; hp: number; max: number; dps: (tier: Tier) => number; station?: boolean }
-  const mk = (side: number, id: string): U => {
+  type U = { side: number; id: string; tier: Tier; hp: number; max: number; dps: (tier: Tier) => number; station?: boolean; late?: boolean }
+  const mk = (side: number, id: string, late = false): U => {
     const t = UNIT[id]
     const hp = (t.hull + t.shield) * t.squad
-    return { side, id, tier: t.tier, hp, max: hp, dps: (tier) => dpsVs(t, tier) * t.squad }
+    return { side, id, tier: t.tier, hp, max: hp, dps: (tier) => dpsVs(t, tier) * t.squad, ...(late ? { late } : {}) }
   }
-  const us: U[] = [...c.holderShips.map((id) => mk(c.holder, id)), ...c.attackerShips.map((id) => mk(c.attacker, id))]
+  const side = (o: number, ships: string[], held: string[] = []) => [...withoutShips(ships, held).map((id) => mk(o, id)), ...held.map((id) => mk(o, id, true))]
+  const us: U[] = [...side(c.holder, c.holderShips, c.holderHeld), ...side(c.attacker, c.attackerShips, c.attackerHeld)]
   if (c.station) {
     const t = stationType(g.sides[c.holder].faction, c.station, [])
     const hp = t.hull + t.shield
@@ -721,11 +920,14 @@ export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
   const start = { [c.holder]: total(c.holder), [c.attacker]: total(c.attacker) } as Record<number, number>
   let escaped: string[] = []
   for (let t = 0; t < 900; t++) {
+    // The reserve is called in.
+    for (const u of us) if (u.late && (t >= RESERVE_CALL || !us.some((x) => x.side === u.side && !x.late && x.hp > 0))) u.late = false
     const alive = us.filter((u) => u.hp > 0)
     if (!alive.some((u) => u.side === c.holder) || !alive.some((u) => u.side === c.attacker)) break
+    const field = alive.filter((u) => !u.late)
     const dmg = new Map<U, number>()
-    for (const a of alive) {
-      const foes = alive.filter((u) => u.side !== a.side)
+    for (const a of field) {
+      const foes = field.filter((u) => u.side !== a.side)
       let best = foes[0]
       let bs = -1
       for (const e of foes) {
@@ -774,34 +976,49 @@ function fallback(g: Galaxy, owner: number, prefer: number, not: number) {
   return best >= 0 ? best : prefer >= 0 && prefer !== not ? prefer : -1
 }
 
+/**
+ * What's left of a side's fleets after a battle: the ships that came out of it go back into the
+ * fleets they fought in (each type into the fleets that had it, in order), so the fleets keep their
+ * names, stops and held back ships; fleets with nothing left are gone. Without a fleet of its own
+ * there (a station's side), they make one.
+ */
+function refill(g: Galaxy, owner: number, planet: number, old: Fleet[], ships: string[]): Fleet[] {
+  if (!old.length) return ships.length ? [addFleet(g, owner, planet, ships)] : []
+  const had = old.map((f) => f.ships)
+  for (const f of old) f.ships = []
+  for (const id of ships) {
+    const i = old.findIndex((f, k) => countOf(f.ships, id) < countOf(had[k], id))
+    old[i >= 0 ? i : 0].ships.push(id)
+  }
+  for (const f of old) tidyReserve(f)
+  g.fleets = g.fleets.filter((f) => !old.includes(f) || f.ships.length)
+  return old.filter((f) => f.ships.length)
+}
+
 /** Settle a battle: survivors stay (the winner keeps or takes the planet), escaped ships fly back. */
 export function applyBattle(g: Galaxy, c: Clash, res: BattleResult, auto: boolean) {
   const p = g.planets[c.planet]
   const here = fleetsAt(g, c.planet)
-  const back = new Map<number, number>()
-  for (const f of here) if (!back.has(f.owner)) back.set(f.owner, f.from)
-  // The stops a side had queued: its survivors carry on with them.
-  const plans = new Map<number, number[]>()
-  for (const f of here) if (f.waypoints?.length && !plans.has(f.owner)) plans.set(f.owner, f.waypoints)
-  g.fleets = g.fleets.filter((f) => !here.includes(f))
+  // Fleets of other sides, if any, have no part in it: they're gone with the battle's losers.
+  g.fleets = g.fleets.filter((f) => !here.includes(f) || f.owner === c.holder || f.owner === c.attacker)
   for (const o of [c.holder, c.attacker]) {
+    const old = here.filter((f) => f.owner === o)
+    const back = old[0]?.from ?? -1
     const ships = res.survivors[o] ?? []
-    if (ships.length) {
-      const f = addFleet(g, o, c.planet, ships)
-      f.arrived = o === c.holder ? g.time - 1 : g.time
-      f.waypoints = [...(plans.get(o) ?? [])]
-    }
     const esc = res.escaped[o] ?? []
-    if (esc.length) {
-      const to = fallback(g, o, back.get(o) ?? -1, c.planet)
-      if (to >= 0) {
-        const f = addFleet(g, o, c.planet, esc)
-        // Out of the battle at once: flying to the fallback planet.
-        if (f.ships.length === esc.length) {
-          moveFleet(g, o, f.id, to)
-        }
-      }
+    if (ships.length) {
+      // Survivors stay, with any of theirs that jumped out (they're back with the fleet), and carry
+      // on with the stops their fleets had queued.
+      for (const f of refill(g, o, c.planet, old, [...ships, ...esc])) f.arrived = o === c.holder ? g.time - 1 : g.time
+      continue
     }
+    const to = esc.length ? fallback(g, o, back, c.planet) : -1
+    if (to < 0) {
+      g.fleets = g.fleets.filter((f) => !old.includes(f))
+      continue
+    }
+    // Out of the battle at once: flying to the fallback planet.
+    for (const f of refill(g, o, c.planet, old, esc)) moveFleet(g, o, f.id, to)
   }
   if (c.station && !res.stationLeft) {
     p.station = 0
@@ -899,16 +1116,13 @@ export function tickGalaxy(g: Galaxy, dt: number) {
       f.planet = g.systems[f.system].planets[0]
     }
   }
-  // Fleets of one side at one planet join up.
+  // An AI side's fleets at one planet join up: it plans around one main fleet and detachments sent
+  // off from it. The player's stay apart (up to MAX_FLEETS, see capFleets), so they can be split.
   for (const f of [...g.fleets]) {
-    if (f.leg || f.planet < 0) continue
+    if (f.leg || f.planet < 0 || !g.sides[f.owner]?.ai) continue
     // (Not a fleet only stopping on its way, nor one waiting there.)
     const other = g.fleets.find((x) => x !== f && x.owner === f.owner && x.planet === f.planet && !x.leg && !x.route.length && !f.route.length && !x.waypoints?.length && !f.waypoints?.length)
-    if (other && g.fleets.includes(f)) {
-      other.ships.push(...f.ships)
-      other.arrived = Math.min(other.arrived, f.arrived)
-      g.fleets = g.fleets.filter((x) => x !== f)
-    }
+    if (other && g.fleets.includes(f)) absorb(g, f, other)
   }
   // Battles, then captures.
   for (const p of g.planets) {
@@ -954,6 +1168,8 @@ export function tickGalaxy(g: Galaxy, dt: number) {
       if (!hops) g.events.push({ k: 'blockaded', fleet: f.id, owner: f.owner, system: f.system, by: -1 })
     }
   }
+  // Join-ups, and the cap on fleets at a planet (fleets that just went on from a stop don't count).
+  capFleets(g)
   // The AI.
   g.sides.forEach((s, o) => {
     if (!s.ai || !s.alive) return
@@ -1383,8 +1599,16 @@ export function saveGalaxy(g: Galaxy, as?: string): boolean {
 /** A saved campaign, made fit for this version of the game, or null. */
 function clean(v: Galaxy | null): Galaxy | null {
   if (!v || v.v !== 1 || !Array.isArray(v.systems) || !Array.isArray(v.planets) || !Array.isArray(v.fleets)) return null
-  // Ships that no longer exist in the game are dropped.
-  for (const f of v.fleets) f.ships = f.ships.filter((id) => UNIT[id])
+  // Ships that no longer exist in the game are dropped, and held back counts fit what's there.
+  for (const f of v.fleets) {
+    f.ships = f.ships.filter((id) => UNIT[id])
+    if (f.reserve && typeof f.reserve !== 'object') delete f.reserve
+    tidyReserve(f)
+    if (typeof f.join !== 'number') delete f.join
+  }
+  v.fleets = v.fleets.filter((f) => f.ships.length)
+  // Saves from before the cap on fleets at a planet: the spare ones join up.
+  capFleets(v)
   for (const p of v.planets) {
     p.queue = p.queue.filter((q) => q.unit === 'station' || UNIT[q.unit])
     if (!PLANET_KINDS[p.kind]) p.kind = 'barren'
