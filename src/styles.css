@@ -8778,3 +8778,11 @@ kbd {
   background: var(--red);
   border-radius: 50%;
 }
+
+/* Installed as an app: no sideways overscroll gestures (Chrome's swipe back) on the page itself. */
+@media (display-mode: standalone) {
+  html,
+  body {
+    overscroll-behavior-x: none;
+  }
+}

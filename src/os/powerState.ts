@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { reloadIntoLatest } from './pwa'
 
 // The machine's power state. 'boot' prints the boot log (and may pause into a tty), 'up' is the
 // desktop, 'down' prints the shutdown log, and 'off' is a black screen waiting for a key.
@@ -32,7 +33,10 @@ export function usePower() {
 
 export const reboot = () => set({ phase: 'down', then: 'boot' })
 export const shutdown = () => set({ phase: 'down', then: 'off' })
-/** The shutdown log finished: power off, or start booting again. */
-export const finishShutdown = () => set(state.then === 'off' ? { phase: 'off' } : { phase: 'boot', run: state.run + 1 })
-export const powerOn = () => set({ phase: 'boot', run: state.run + 1 })
+/**
+ * The shutdown log finished: power off, or start again. Starting again (here, or from the off
+ * screen) reloads the page onto the latest release, and the boot log plays as the page loads.
+ */
+export const finishShutdown = () => (state.then === 'off' ? set({ phase: 'off' }) : void reloadIntoLatest())
+export const powerOn = () => void reloadIntoLatest()
 export const bootDone = () => set({ phase: 'up' })

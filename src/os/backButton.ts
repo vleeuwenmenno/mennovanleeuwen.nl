@@ -28,6 +28,14 @@ export function useBackButton(pid: number, handler: Handler) {
   }, [pid])
 }
 
+/**
+ * Installed on an iPhone's home screen: there the browser's Back is a swipe in from the left edge,
+ * which iOS animates as leaving the page (sliding the whole OS away) before the guard can catch
+ * it, and it starts easily while dragging something near the edge. Without the extra entry there
+ * is nothing to go back to, so the swipe does nothing. The mouse buttons still work.
+ */
+const iosHomeScreen = () => (navigator as Navigator & { standalone?: boolean }).standalone === true
+
 let started = false
 export function initBackButton() {
   if (started) return
@@ -49,14 +57,14 @@ export function initBackButton() {
     if (!(history.state as { mvlosGuard?: boolean } | null)?.mvlosGuard) history.pushState({ ...(history.state ?? {}), mvlosGuard: true }, '')
   }
   const arm = () => {
-    guard()
+    if (!iosHomeScreen()) guard()
     window.removeEventListener('pointerdown', arm, true)
     window.removeEventListener('keydown', arm, true)
   }
   window.addEventListener('pointerdown', arm, true)
   window.addEventListener('keydown', arm, true)
   window.addEventListener('popstate', () => {
-    guard()
+    if (!iosHomeScreen()) guard()
     if (Date.now() > ignorePopUntil) go('back')
   })
 }
