@@ -1653,6 +1653,111 @@ textarea.agt-q-input {
   color: var(--fg-bright);
 }
 
+/* Messages queued while the agent works: a small list over the composer, each with its actions. */
+.agt-queue {
+  margin: 0 12px;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  background: var(--panel-2);
+  font-size: 12px;
+}
+.agt-queue-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  color: var(--muted);
+}
+.agt-queue ol {
+  max-height: 160px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0 0 4px;
+  list-style: none;
+}
+.agt-queue li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 6px 2px 10px;
+}
+.agt-queue li.is-editing {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.agt-queue-n {
+  flex: none;
+  min-width: 14px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.agt-queue-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-bright);
+}
+.agt-queue-files {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.agt-queue-state {
+  flex: none;
+  color: var(--accent);
+  font-size: 11px;
+}
+.agt-queue li button {
+  flex: none;
+  padding: 1px 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.agt-queue li button:hover:not(:disabled) {
+  color: var(--fg-bright);
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+}
+.agt-queue li button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.agt-queue li .agt-queue-x {
+  font-size: 14px;
+  line-height: 1;
+}
+.agt-queue li .agt-queue-x:hover {
+  color: var(--red);
+}
+/* A queued message being edited in the message box: says so, with a way back. */
+.agt-editing {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 0 2px;
+  color: var(--accent);
+  font-size: 11.5px;
+}
+/* Queue, Send instead and Save carry a word, so it is clear what Enter does. */
+.agt-send.has-label {
+  width: auto;
+  gap: 5px;
+  padding: 0 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+@media (max-width: 719px) {
+  .agt-queue li {
+    flex-wrap: wrap;
+  }
+  .agt-queue-text {
+    flex-basis: calc(100% - 30px);
+  }
+}
+
 /* The agent's plan for a long job: a thin bar over the composer, the list when tapped. */
 .agt-todos {
   position: relative;

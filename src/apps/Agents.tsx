@@ -35,6 +35,14 @@ import {
   agentSettings,
   setAgentSettings,
   stopThread,
+  queueMessage,
+  overrideTurn,
+  editQueued,
+  saveQueued,
+  releaseQueued,
+  removeQueued,
+  sendQueuedNow,
+  type QueuedMessage,
   suggestTitle,
   tokenCount,
   toolLabel,
@@ -875,6 +883,52 @@ function TodoChip({ todos, running, onDismiss }: { todos: Todo[]; running: boole
   )
 }
 
+/**
+ * Messages waiting to be sent, in order, over the composer: each can be edited (in the message
+ * box), sent now (stopping the agent if it works) or removed. After a stop or an error they wait
+ * for the user: Send queued sends the first.
+ */
+function QueueList({ queue, answering, editing, onEdit, onSend, onRemove }: { queue: QueuedMessage[]; answering: boolean; editing: string | null; onEdit: (q: QueuedMessage) => void; onSend: (q: QueuedMessage) => void; onRemove: (q: QueuedMessage) => void }) {
+  return (
+    <div className="agt-queue" aria-label="Queued messages">
+      <div className="agt-queue-head">
+        <span>{answering ? `Queued, sent one by one when it is done (${queue.length})` : `Waiting to be sent (${queue.length})`}</span>
+        <span className="agt-grow" />
+        {!answering && (
+          <button type="button" className="btn btn-small" onClick={() => onSend(queue[0])} title="Send the first queued message now; the rest follow">
+            Send queued
+          </button>
+        )}
+      </div>
+      <ol>
+        {queue.map((q, i) => (
+          <li key={q.id} className={editing === q.id ? 'is-editing' : ''}>
+            <span className="agt-queue-n">{i + 1}</span>
+            <span className="agt-queue-text" title={q.text}>
+              {q.text || <span className="muted">{q.attachments.map((a) => a.name).join(', ')}</span>}
+            </span>
+            {q.attachments.length > 0 && (
+              <span className="agt-queue-files muted" title={q.attachments.map((a) => a.name).join('\n')}>
+                <Icon name="clip" size={12} /> {q.attachments.length}
+              </span>
+            )}
+            {editing === q.id ? <span className="agt-queue-state">editing</span> : q.editing && <span className="agt-queue-state muted">editing elsewhere</span>}
+            <button type="button" onClick={() => onEdit(q)} disabled={!!editing} title="Edit it in the message box (↑ in an empty box edits the last one)">
+              Edit
+            </button>
+            <button type="button" onClick={() => onSend(q)} title={answering ? 'Stop the agent and send this now, ahead of the rest' : 'Send this now'}>
+              Send now
+            </button>
+            <button type="button" className="agt-queue-x" onClick={() => onRemove(q)} aria-label="Remove from the queue" title="Remove from the queue">
+              ×
+            </button>
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
 type ConversationProps = {
   id: string | null
   /** The project a new thread goes into */
@@ -916,6 +970,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [error, setError] = useState<string | null>(null)
   const [renaming, setRenaming] = useState(false)
   const [ctxOpen, setCtxOpen] = useState(false)
+  // A queued message being edited in the message box, and what was in the box before (back after).
+  const [editingQ, setEditingQ] = useState<{ id: string; stash: { text: string; files: Attachment[] } } | null>(null)
   const abort = useRef<AbortController | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
@@ -930,8 +986,9 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       (e: Error) => setError(e.message),
     )
   }, [id])
-  // Kept for coming back: per thread, or for the new thread while there is none yet.
-  useEffect(() => setDraft(id ?? 'new', text, files), [id, text, files])
+  // Kept for coming back: per thread, or for the new thread while there is none yet. A queued
+  // message being edited is not a draft.
+  useEffect(() => void (!editingQ && setDraft(id ?? 'new', text, files)), [id, text, files, editingQ])
   useEffect(() => {
     agentModels().then(setModels, () => {})
     if (mayTakeFocus()) input.current?.focus()
@@ -959,11 +1016,15 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       setMessages((ms) => [...ms, e.message])
       // The agent changed the Notebook on the server: fetch it now rather than at the next sync.
       if (e.message.role === 'tool' && /^(create|update|delete)_note$/.test(e.message.toolName ?? '')) void pullAll()
-      if (e.message.role === 'assistant') setLive({ content: '', thinking: '' })
+      // A user message mid-stream is the next queued one: what a stopped turn left unsaved goes.
+      if (e.message.role === 'assistant' || e.message.role === 'user') setLive({ content: '', thinking: '' })
     } else if (e.type === 'thread') {
       setThread(e.thread)
+      // At rest now (the last thing a chain of turns says): no reply is being written any more.
+      if (!e.thread.running) setLive(null)
       onChanged()
-    } else if (e.type === 'error') setError(e.error)
+    } else if (e.type === 'queue') setThread((t) => (t ? { ...t, queue: e.queue } : t))
+    else if (e.type === 'error') setError(e.error)
   }
 
   // Answering, but not from this window (opened again later, or another tab): join the turn and
@@ -1049,11 +1110,15 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   }, [thread?.id, workdir?.repo, workdir?.path])
 
   // A ref, not `busy`: two sends in one render (a double Enter, a re-run effect) must not both go.
+  // `sending` is the turn this window streams, `queueing` a message going to the queue (or
+  // answering what it asked, or an edit saved) while one streams.
   const sending = useRef(false)
+  const queueing = useRef(false)
   const send = async (asked?: string) => {
     const typed = (asked ?? text).trim()
     let attached = asked === undefined ? files : []
-    if ((!typed && !attached.length) || sending.current || reading) return
+    const toQueue = asked === undefined && (!!editingQ || (answering && !!thread))
+    if ((!typed && !attached.length) || (toQueue ? queueing.current : sending.current) || reading) return
     // Too long to send as typed text: it goes along as a file instead.
     let message = typed
     if (typed.length > MAX_MESSAGE) {
@@ -1064,6 +1129,26 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         return setError((e as Error).message)
       }
       message = ''
+    }
+    // Editing a queued message: Enter saves it back in its place.
+    if (editingQ && asked === undefined) return saveEdit(message, attached)
+    // While it works, a message waits in the queue; while it waits on you (changes to allow, a
+    // plan, a form), it answers all of that instead.
+    if (answering && thread && asked === undefined) {
+      queueing.current = true
+      setError(null)
+      try {
+        const r = waiting ? await overrideTurn(thread.id, message, attached) : await queueMessage(thread.id, message, attached)
+        setThread(r.thread)
+        setText('')
+        setFiles([])
+        dropDraft(thread.id)
+      } catch (e) {
+        setError((e as Error).message)
+      } finally {
+        queueing.current = false
+      }
+      return
     }
     sending.current = true
     setError(null)
@@ -1129,6 +1214,93 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     abort.current?.abort()
     if (thread) stopThread(thread.id).catch(() => {})
   }
+
+  // The queue: messages written while it works, kept by the server and sent one by one after it.
+  // Editing one takes it into the message box (files too) and holds the queue until it is saved or
+  // put back, so it is never sent halfway through a change.
+  const queue = thread?.queue ?? []
+  const waiting = approvals.some((a) => a.kind !== 'client')
+  const startEdit = async (q: QueuedMessage) => {
+    if (!thread || editingQ) return
+    try {
+      const r = await editQueued(thread.id, q.id)
+      setEditingQ({ id: q.id, stash: { text, files } })
+      setText(r.item.text)
+      setFiles(r.item.attachments)
+      setThread(r.thread)
+      setError(null)
+      requestAnimationFrame(() => {
+        const el = input.current
+        el?.focus()
+        el?.setSelectionRange(el.value.length, el.value.length)
+      })
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+  /** Back to what was in the box before the edit. */
+  const endEdit = () => {
+    if (!editingQ) return
+    setText(editingQ.stash.text)
+    setFiles(editingQ.stash.files)
+    setEditingQ(null)
+  }
+  const cancelEdit = () => {
+    if (editingQ && thread) releaseQueued(thread.id, editingQ.id).then((r) => setThread(r.thread), () => {})
+    endEdit()
+  }
+  const saveEdit = async (message: string, attached: Attachment[]) => {
+    if (!thread || !editingQ) return false
+    queueing.current = true
+    try {
+      setThread((await saveQueued(thread.id, editingQ.id, { text: message, attachments: attached })).thread)
+      endEdit()
+      return true
+    } catch (e) {
+      setError((e as Error).message)
+      return false
+    } finally {
+      queueing.current = false
+    }
+  }
+  const sendNow = async (q: QueuedMessage) => {
+    if (!thread) return
+    // The one being edited goes as it is in the box now.
+    if (editingQ?.id === q.id && !(await saveEdit(text.trim(), files))) return
+    sendQueuedNow(thread.id, q.id).then(
+      (r) => (setThread(r.thread), onChanged()),
+      (e: Error) => setError(e.message),
+    )
+  }
+  const removeQueue = (q: QueuedMessage) => {
+    if (!thread) return
+    if (editingQ?.id === q.id) endEdit()
+    removeQueued(thread.id, q.id).then((r) => setThread(r.thread), (e: Error) => setError(e.message))
+  }
+  // An editing window says it is still there, so the queue keeps waiting (the server lets it go on
+  // two minutes after the last word); closing the window mid-edit lets it go on straight away.
+  const editingNow = useRef<{ thread: string; id: string } | null>(null)
+  editingNow.current = editingQ && thread ? { thread: thread.id, id: editingQ.id } : null
+  useEffect(() => {
+    if (!editingQ || !thread) return
+    const t = setInterval(() => void editQueued(thread.id, editingQ.id).catch(() => {}), 60_000)
+    return () => clearInterval(t)
+  }, [editingQ?.id, thread?.id])
+  useEffect(
+    () => () => {
+      const e = editingNow.current
+      if (e) void releaseQueued(e.thread, e.id).catch(() => {})
+    },
+    [],
+  )
+  // Sent or removed from elsewhere while being edited: what was written stays in the box.
+  useEffect(() => {
+    if (editingQ && thread && !queue.some((q) => q.id === editingQ.id)) {
+      setEditingQ(null)
+      setError('That queued message was sent or removed meanwhile; what you wrote is still in the box')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue, editingQ?.id])
 
   const rename = (title: string) => {
     setRenaming(false)
@@ -1225,7 +1397,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         { label: 'Quick', checked: mode === 'quick', disabled: answering, onSelect: () => setMode('quick') },
         { label: 'Deep research', checked: mode === 'deep', disabled: answering, onSelect: () => setMode('deep') },
         { separator: true },
-        answering ? { label: 'Stop', onSelect: stop } : { label: 'Send', shortcut: 'Enter', disabled: (!text.trim() && !files.length) || reading > 0, onSelect: () => void send() },
+        ...(answering ? [{ label: 'Stop', onSelect: stop }] : []),
+        { label: editingQ ? 'Save queued message' : waiting ? 'Send instead' : answering ? 'Queue' : 'Send', shortcut: 'Enter', disabled: (!text.trim() && !files.length) || reading > 0, onSelect: () => void send() },
       ]),
     )
   }
@@ -1240,6 +1413,13 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   }, [text])
 
   const answering = busy || !!thread?.running
+  // Messages left in the queue after a stop: another window (or the terminal) may send, edit or
+  // drop them, and nothing streams while the thread is at rest, so look now and then.
+  useEffect(() => {
+    if (!thread || answering || !thread.queue.length) return
+    const t = setInterval(() => void getThread(thread.id).then((r) => setThread((now) => (now?.id === r.thread.id ? r.thread : now)), () => {}), 4000)
+    return () => clearInterval(t)
+  }, [thread?.id, answering, thread?.queue.length])
   // "/name" starts a skill: the skills that fit what is typed so far.
   const slashAt = /^\/([\w.-]*)$/.exec(text)
   const slashSkills = slashAt ? skills.filter((sk) => sk.enabled && sk.name.startsWith(slashAt[1])).slice(0, 8) : []
@@ -1398,6 +1578,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           onDismiss={() => void updateThread(thread.id, { todos: null }).then((t) => (setThread(t), onChanged()), (e: Error) => setError(e.message))}
         />
       )}
+      {thread && queue.length > 0 && <QueueList queue={queue} answering={answering} editing={editingQ?.id ?? null} onEdit={(q) => void startEdit(q)} onSend={(q) => void sendNow(q)} onRemove={removeQueue} />}
       {thread && ctxOpen && <ContextPanel id={thread.id} version={messages.length} />}
       <form
         className={`agt-composer ${dragOver ? 'is-drop' : ''}`}
@@ -1453,6 +1634,16 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               ))}
             </ul>
           )}
+          {editingQ && (
+            <div className="agt-editing">
+              <span>
+                Editing queued message {queue.findIndex((q) => q.id === editingQ.id) + 1} <span className="muted">· Enter saves · Esc puts it back as it was</span>
+              </span>
+              <button type="button" className="btn btn-small" onClick={cancelEdit}>
+                Cancel
+              </button>
+            </div>
+          )}
           <textarea
             ref={input}
             value={text}
@@ -1461,6 +1652,18 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               if (e.key === 'Tab' && slashSkills.length) {
                 e.preventDefault()
                 setText(`/${slashSkills[0].name} `)
+                return
+              }
+              // Up in an empty box edits the last queued message, Esc puts an edit back.
+              if (e.key === 'ArrowUp' && !text && !files.length && !editingQ && queue.length && !e.shiftKey) {
+                e.preventDefault()
+                void startEdit(queue[queue.length - 1])
+                return
+              }
+              if (e.key === 'Escape' && editingQ) {
+                e.preventDefault()
+                e.stopPropagation()
+                cancelEdit()
                 return
               }
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -1484,7 +1687,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               }
             }}
             onContextMenu={composerMenu}
-            placeholder={mode === 'deep' ? 'What should it research?' : 'Ask anything'}
+            placeholder={editingQ ? 'The queued message' : waiting ? 'Tell it what to do instead…' : answering ? 'Queue a message for when it is done…' : mode === 'deep' ? 'What should it research?' : 'Ask anything'}
             rows={1}
             aria-label="Message"
           />
@@ -1508,14 +1711,29 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               <Icon name="chevron" size={12} />
             </button>
             {thread && <ContextMeter thread={thread} models={models} open={ctxOpen} onToggle={() => setCtxOpen((o) => !o)} />}
-            {answering ? (
-              <button type="button" className="agt-send is-stop" onClick={stop} aria-label="Stop" title="Stop">
+            {answering && (
+              <button type="button" className="agt-send is-stop" onClick={stop} aria-label="Stop" title="Stop (the queue waits)">
                 <Icon name="stop" size={14} />
               </button>
-            ) : (
+            )}
+            {editingQ ? (
+              <button className="agt-send has-label" disabled={(!text.trim() && !files.length) || reading > 0} title="Save the queued message (Enter)">
+                Save
+              </button>
+            ) : !answering ? (
               <button className="agt-send" disabled={(!text.trim() && !files.length) || reading > 0} aria-label="Send" title="Send (Enter; Shift+Enter for a new line)">
                 <Icon name="send" size={16} />
               </button>
+            ) : waiting ? (
+              <button className="agt-send has-label" disabled={(!text.trim() && !files.length) || reading > 0} title="Send instead (Enter): declines the changes it asks for, or answers its question, with this message">
+                <Icon name="send" size={14} /> Send instead
+              </button>
+            ) : (
+              (text.trim() || files.length > 0) && (
+                <button className="agt-send has-label" disabled={reading > 0} title="Queue (Enter): sent when it is done">
+                  <Icon name="send" size={14} /> Queue
+                </button>
+              )
             )}
           </div>
         </div>
@@ -2337,10 +2555,12 @@ function AnsweredForm({ tag, call, result }: { tag: string; call: ToolCall; resu
   let summary = ''
   let skipped = false
   let error = ''
+  let said = ''
   try {
-    const r = JSON.parse(result) as { summary?: string; skipped?: boolean; error?: string }
+    const r = JSON.parse(result) as { summary?: string; skipped?: boolean; error?: string; said?: string }
     summary = r.summary ?? ''
     skipped = !!r.skipped
+    said = r.said ?? ''
     error = r.error ?? ''
   } catch {
     summary = result
@@ -2352,7 +2572,7 @@ function AnsweredForm({ tag, call, result }: { tag: string; call: ToolCall; resu
           {error ? '✕' : skipped ? '–' : '✓'}
         </span>
         <span className="agt-tool-label">{toolLabel(call)}</span>
-        <span className="muted"> · {error || (skipped ? 'not answered' : 'answered')}</span>
+        <span className="muted"> · {error || (said ? `you wrote instead: ${said}` : skipped ? 'not answered' : 'answered')}</span>
       </summary>
       {summary && (
         <dl className="agt-answers">

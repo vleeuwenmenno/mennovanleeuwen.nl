@@ -131,6 +131,11 @@ In a folder on Seafile, that folder becomes the thread's work folder:
 - Changes wait for approval, which can carry a note for the agent. Shift+Tab cycles between
   asking first, accepting edits, and plan mode (read only until a plan is approved).
 - Prompt modes: `!cmd` runs a command, `# text` remembers something, `@path` attaches a file.
+- While the agent works, Enter queues a message (shown over the prompt; the server sends it when
+  the turn is done). ↑ in an empty prompt edits the last queued one, Ctrl+X removes it (or the last
+  one), Ctrl+Enter sends it, or the next one, now (stopping the agent). While it asks for an
+  approval or a form, just typing tells it what to do instead: Enter declines every waiting change
+  with that message, or answers the form with it.
 - `agents -c`/`-r` resume a thread, `agents -p` answers once for pipes, and `/help` lists the
   slash commands.
 
@@ -489,6 +494,24 @@ several questions at once), and its turn waits for the answers. Each question ty
 in `FIELDS` ([`src/apps/Agents.tsx`](src/apps/Agents.tsx)) and an unknown type falls back to a text
 field, so new types can be added one at a time. Threads get a title from a small model, can be renamed (with a
 suggestion), archived and deleted, and the sidebar folds to a rail.
+
+While a turn runs, Enter in the composer queues the message (files and all) instead: queued
+messages sit over the composer in order, each with *Edit* (it goes back into the message box, files
+included; ↑ in an empty box edits the last one, Esc puts it back), *Send now* and remove. The
+server keeps the queue with the thread (column `queue`), so it survives closing the window: when a
+turn ends with an answer, the server sends the next queued message as the next turn by itself, on
+the same stream, one at a time. A turn that fails or is stopped leaves the queue waiting, with
+*Send queued*. The queue holds still while a message in it is being edited (a window that goes away
+mid-edit lets it go on after two minutes). *Send now* stops the running turn (as Stop does: what it
+finished stays saved) and sends that message next, ahead of the rest. While the agent waits on you
+(changes to allow, a plan, a form), the composer says *Tell it what to do instead…* and *Send
+instead*: the message declines every waiting change with it as the reason, or answers the form
+with it, and the turn goes on with the model reading it; *Send now* on a queued message does the
+same then. A message with files can't be an answer, so it stops the turn and goes next. Windows and
+terminals on the same thread see the same queue (`queue` events on the turn's stream). The
+endpoints are `POST /api/agents/threads/:id/queue` and `/override`, `PATCH` and `DELETE
+…/queue/:qid` (`editing: true` holds the queue and returns the whole message) and `POST
+…/queue/:qid/send` (Send now) and `/move`.
 Settings → Agents (also the app's ⚙) picks the model for Quick, Deep and titles, what a new thread
 starts with, and shows the system prompt: `~/AGENTS.md`, your own from Seafile when Seafile is
 home, otherwise a read-only built-in one ([`src/data/agentsPrompt.ts`](src/data/agentsPrompt.ts)).

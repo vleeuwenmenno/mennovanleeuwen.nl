@@ -8,7 +8,12 @@ import { getNote } from './notes'
 export type Mode = 'quick' | 'deep'
 /** A step in the agent's plan for a long job. */
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission; queue: QueuedMessage[] }
+/**
+ * A message written while the agent was working, waiting to be sent when it is done (the server
+ * keeps the queue and sends them one by one). `editing`: a window is editing it, and the queue waits.
+ */
+export type QueuedMessage = { id: string; text: string; attachments: AttachmentInfo[]; createdAt: number; editing: boolean }
 /** A thread's work folder: a Seafile folder (library and path), and how the terminal showed it (~/Projects/x). */
 export type Workdir = { repo: string; path: string; label: string }
 /** How changes are allowed: each one asks, file edits go through, or read only while planning. */
@@ -87,6 +92,8 @@ export type TurnEvent =
   | { type: 'delta'; content?: string; thinking?: string }
   | { type: 'message'; message: AgentMessage }
   | { type: 'thread'; thread: Thread }
+  /** The thread's queue changed */
+  | { type: 'queue'; queue: QueuedMessage[] }
   | { type: 'error'; error: string }
   | { type: 'done' }
   /** First on a follow stream: the thread as it is, with the reply being written so far (null when not running) */
@@ -109,6 +116,25 @@ export const sendClientResult = (id: string, callId: string, output: string, sta
 export const updateThread = (id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'mode' | 'model' | 'tools' | 'pinned' | 'projectId' | 'quick' | 'workdir' | 'permission'>> & { todos?: null }) => api<Thread>(`/api/agents/threads/${id}`, { method: 'PATCH', json: patch })
 export const deleteThread = (id: string) => api(`/api/agents/threads/${id}`, { method: 'DELETE' })
 export const stopThread = (id: string) => api(`/api/agents/threads/${id}/stop`, { method: 'POST' })
+
+// The queue (server/agents.ts): messages written while the agent works, sent one by one after it.
+const client = () => ({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
+/** Adds a message to the queue (on a thread at rest with nothing queued, it is simply sent: follow the thread). */
+export const queueMessage = (id: string, text: string, attachments: Attachment[]) => api<{ thread: Thread }>(`/api/agents/threads/${id}/queue`, { method: 'POST', json: { text, attachments, client: client() } })
+/**
+ * While the agent waits on you (changes to allow, a plan, a form): the message answers all of them
+ * instead, declining the changes with it as the reason. Waiting on nothing by then, it is queued.
+ */
+export const overrideTurn = (id: string, text: string, attachments: Attachment[]) => api<{ thread: Thread; queued: boolean }>(`/api/agents/threads/${id}/override`, { method: 'POST', json: { text, attachments, client: client() } })
+/** Starts editing a queued message: the queue waits (say so again within two minutes to keep it waiting), and the whole message comes back. */
+export const editQueued = (id: string, qid: string) => api<{ thread: Thread; item: { id: string; text: string; attachments: Attachment[] } }>(`/api/agents/threads/${id}/queue/${qid}`, { method: 'PATCH', json: { editing: true } })
+/** Saves an edited queued message (leave out `attachments` to keep them), which ends the edit. */
+export const saveQueued = (id: string, qid: string, patch: { text: string; attachments?: Attachment[] }) => api<{ thread: Thread }>(`/api/agents/threads/${id}/queue/${qid}`, { method: 'PATCH', json: patch })
+/** Ends an edit without saving: the queue goes on. */
+export const releaseQueued = (id: string, qid: string) => api<{ thread: Thread }>(`/api/agents/threads/${id}/queue/${qid}`, { method: 'PATCH', json: { editing: false } })
+export const removeQueued = (id: string, qid: string) => api<{ thread: Thread }>(`/api/agents/threads/${id}/queue/${qid}`, { method: 'DELETE' })
+/** Send now: stops the agent if it is working and sends this message next; while it waits on you, the message answers instead. */
+export const sendQueuedNow = (id: string, qid: string) => api<{ thread: Thread }>(`/api/agents/threads/${id}/queue/${qid}/send`, { method: 'POST' })
 /** Quick answers asked from Spotlight and not continued in the app, newest first (expired ones pruned). */
 export type QuickAnswerInfo = { thread: Thread; question: string; answer: string }
 export const listQuick = () => api<QuickAnswerInfo[]>('/api/agents/quick')
