@@ -385,6 +385,9 @@ function EmpiresSettings() {
         <Row title="Team rings under ships">
           <Toggle on={s.rings} onChange={(rings) => setEmpires({ rings })} label="Team rings under ships" />
         </Row>
+        <Row title="Show weapon ranges on hover" hint="Rings for each gun's reach and the sensors round the ship or station under the pointer; on a touch screen, round the selected ones">
+          <Toggle on={s.ranges} onChange={(ranges) => setEmpires({ ranges })} label="Show weapon ranges on hover" />
+        </Row>
         <Row title="Fog of war grid" hint={`Where sight ends, cell by cell · ${keyName(s.keys.fogGrid)} in a battle`}>
           <Toggle on={s.fogGrid} onChange={(fogGrid) => setEmpires({ fogGrid })} label="Fog of war grid" />
         </Row>

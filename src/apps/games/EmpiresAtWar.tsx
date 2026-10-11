@@ -21,7 +21,7 @@ import { Renderer, relColor, type Camera, type View } from './empires/render'
 import { beginLayout } from './empires/layout'
 import { defaultArea, inRect, inside, type Pt } from './empires/maps'
 import {
-  STEP, RANKS, autoStart, REFUND_DELAY, canRetreat, canSee, closedLoop, cantWarp, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, startProblem, tick, type Owner, type SimEvent, type Unit, type World, stateHash,
+  STEP, RANKS, autoStart, REFUND_DELAY, canRetreat, canSee, cantMend, closedLoop, cantWarp, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, startProblem, tick, type Owner, type SimEvent, type Unit, type World, stateHash,
 } from './empires/sim'
 import { EmpiresSound, type OrderKind } from './empires/sound'
 import { TechTree } from './empires/TechTree'
@@ -756,12 +756,16 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     select(world.current.units.filter((u) => u.owner === me && isShip(u.t)).map((u) => u.id))
     if (mySelection().length) sound.select(myFaction, voice())
   }
-  const useAbility = () => {
+  /** `target`: what Field repair should mend; the ship or station under the pointer when left out. */
+  const useAbility = (target = hover.current.unit) => {
     const ready = mySelection().filter((u) => u.t.ability && u.abilityCd <= 0)
     // Online the count isn't known yet: the abilities that are ready will fire.
-    const n = order('ability', mySelection().map((u) => u.id)) ?? ready.length
+    const n = order('ability', mySelection().map((u) => u.id), target) ?? ready.length
     if (n) for (const id of new Set(ready.map((u) => u.t.ability!))) sound.ability(id)
-    else if (mySelection().some((u) => u.t.ability)) sound.error()
+    else if (mySelection().some((u) => u.t.ability)) {
+      sound.error()
+      if (ready.some((u) => u.t.ability === 'fieldRepair')) toast('Field repair: no damaged station or gunship-class ship nearby', 'bad')
+    }
   }
   /** Every one of ours of this type on screen (a double-click, or a double tap). */
   const selectType = (unit: Unit, add: boolean) => {
@@ -846,6 +850,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         ...info,
       )
     } else if (ships.length && unit && own) {
+      // Repair craft selected and this one hurt: Field repair on it.
+      const menders = ships.filter((u) => u.t.ability === 'fieldRepair')
+      if (menders.length && !cantMend(w, me, unit)) items.push(it('repair', 'Repair it', 'ability', () => useAbility(unit.id), !menders.some((u) => u.abilityCd <= 0) && 'Not ready yet'))
       items.push(it('guard', 'Guard it', 'hold', arm('guard')), it('only', 'Select only this', 'target', only(unit)), it('type', 'Select all of type', 'fleet', () => selectType(unit, shiftOf())), ...info)
     } else if (ships.length) {
       // Empty space (or an ally). One ship or squadron turns to face the drag; more spread along it,
@@ -1220,6 +1227,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         warpGhost: warpGhost(),
         hideOwner: deploying.current && !placed.current ? me : -1,
         showRally: mySelection().some((u) => u.t.tier === 'station'),
+        // A finger has no hover: the selection shows its ranges instead.
+        ranges: settingsRef.current.ranges ? (touchLast.current ? 'selected' : 'hover') : 'off',
       }
       renderer.current.draw(ctx, w, cm, vw, vh, v, dt * (paused.current ? 0 : speed.current))
       sound.ambience(paused.current ? 0 : dt)

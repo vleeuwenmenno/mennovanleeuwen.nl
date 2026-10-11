@@ -695,6 +695,45 @@ their slot as you play; load them from Galactic conquest → Load game), Gladiat
 scores and settings. A campaign battle cut off by closing the window waits in the loaded campaign,
 to be fought again from the start.
 
+## Empires At War weapon ranges and repair craft
+
+Hovering a ship or structure in battle (ours, or an enemy we can see) rings it with its weapon
+ranges ([`render.ts`](src/apps/games/empires/render.ts) `drawRanges`): one ring per kind of gun
+and reach, each kind in its own colour and dash (lasers solid red, flak amber, turbolasers blue,
+missiles pink dots, ion violet), labelled with its name and range, plus a faint dashed ring for its
+sensors. On a touch screen, which has no hover, the selected ships show theirs. The setting
+*Show weapon ranges on hover* (on by default) is in the game's Settings and in Settings → Apps →
+Games → Empires At War.
+
+Each side has a repair squadron of two strike craft, the Republic's Suture repair fighter and the
+droids' Weaver repair droid ([`data.ts`](src/apps/games/empires/data.ts)). They launch from the
+hangar like any fighter and need the research Engineer wing or Welder protocols (300 credits,
+25 s, station level 1) before the shipyard builds them. Their guns are next to useless; their
+ability, **Field repair** (35 s cooldown), sends them to a damaged station or a ship of gunship
+class or bigger for 15 s. Each craft in reach mends 8 hull a second plus 0.5% of the patient's
+hull, and its damaged modules (not shot-off ones). F, or the ability button, aims at the ship
+under the pointer, else the most damaged one within 1,400; on touch, the action wheel on one of
+ours has *Repair it*. Fighters, bombers and the platforms on the ore are refused. Idle or guarding
+crews start a run by themselves on anything within 900 that has lost a tenth of itself. A new
+order calls a run off. The battle AI unlocks them now and then once it has warships (more often
+the harder it is), keeps a squadron or two guarding its most valuable warship, and sends them to
+its worst-hurt ship or station. Galactic conquest has no research, so there they are built like
+any other ship.
+
+Every station also comes with a free **defense wing** (`DEFENSE_WING` in `data.ts`): the
+Republic's five Aegis pickets or the droids' six Gnat guard droids, smaller and frailer than line
+fighters. They cost nothing, take no fleet space and can't be built, retreat or escape with a
+conquest fleet. Their station is their parent, as a carrier's fighters are theirs, so when idle
+they circle it and take on whatever comes near, chasing it only so far. They can be ordered
+anywhere and come home once their orders are done, but more than 1,400 from their station, or
+once it's gone, their guns do 30% of their damage (they're drawn faded there, and the unit card
+says so). Lost craft come back from the station's hangar one at a time: the first 15 s after the
+last loss, then one every 25 s until the squadron is whole, even after it was wiped out. A
+shot-off hangar holds that until the station's repair crew rebuilds it (Field repair mends a
+damaged hangar, keeping it up, but doesn't rebuild one shot off); the station
+card shows "Defense wing 3/5 · next in 12 s". Stations in conquest fleet battles have one too
+(auto-resolve leaves it out). The AI's admirals never give them orders, so they cost no actions.
+
 ## Galactic conquest fleets
 
 In Empires At War's Galactic conquest each side keeps at most **4 fleets at a planet**
