@@ -7,7 +7,7 @@ import { CmdError, type Ctx } from './types'
 import { lookup } from './fs'
 import { age, lookup as siteLookup, resolvePath, walk as siteWalk, type Node } from './vfs'
 import { runLine, writeTmp } from './commands'
-import { deviceNames, isBind, isSeafileType, mounts, whereIs } from '../data/mounts'
+import { browserMountPoint, deviceNames, isBind, isSeafileType, mounts, whereIs } from '../data/mounts'
 import { cachedDir, getLibraries, getQuota, loadLibraries, parseSf, SF } from '../data/seafile'
 import { getAccount } from '../os/account'
 
@@ -590,7 +590,9 @@ async function df(ctx: Ctx): Promise<string> {
     { fs: 'vfs', size: rootBytes, used: rootBytes, avail: 0, mount: '/' },
     { fs: 'tmpfs', size: Math.max(tmpBytes, 1024 * 1024), used: tmpBytes, avail: Math.max(tmpBytes, 1024 * 1024) - tmpBytes, mount: '/tmp' },
   ]
-  if (est?.quota) rows.push({ fs: 'browser-storage', size: est.quota, used: est.usage ?? 0, avail: Math.max(0, est.quota - (est.usage ?? 0)), mount: '/var/lib/browser' })
+  // Signed in, your files in this browser are mounted (on ~ without Seafile): that is this row.
+  const browserAt = browserMountPoint()
+  if (est?.quota) rows.push({ fs: 'browser-storage', size: est.quota, used: est.usage ?? 0, avail: Math.max(0, est.quota - (est.usage ?? 0)), mount: browserAt ?? '/var/lib/browser' })
 
   // Seafile: the account mount has the account's quota and usage; a library has its own size,
   // and (when it is yours) what is left of the quota, which all your libraries share, as datasets
@@ -637,6 +639,7 @@ async function df(ctx: Ctx): Promise<string> {
     return `${r.fs.padEnd(w)} ${fmt(r.size).padStart(n)}  ${fmt(r.used).padStart(n)} ${fmt(r.avail).padStart(n)} ${use.padStart(4)} ${r.mount}`
   })
   notes.unshift(est?.quota ? 'browser-storage is the real quota and usage this browser gives the site.' : 'This browser does not report its storage quota.')
+  if (browserAt) notes.splice(1, 0, `${browserAt} is kept in this browser only: clearing the site's data deletes it. Seafile (Settings → Integrations) keeps files for good.`)
   return [head, ...body, '', ...notes.map((t) => c('muted', t))].join('\n')
 }
 

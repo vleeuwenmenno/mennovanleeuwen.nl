@@ -9,6 +9,7 @@ import { applyDockReserve } from './os/dockPrefs'
 import { registerServiceWorker } from './os/pwa'
 import { trackVisualViewport } from './os/viewport'
 import { startSync } from './os/synced'
+import { startBrowserFiles } from './data/browserfs'
 import { initTheme } from './os/theme'
 import { WindowManagerProvider, type AppId } from './os/wm'
 import './styles.css'
@@ -20,6 +21,7 @@ applyDockReserve()
 registerServiceWorker()
 trackVisualViewport()
 startSync()
+startBrowserFiles()
 installContextMenuFallback()
 void loadAccount()
 

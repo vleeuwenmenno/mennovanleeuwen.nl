@@ -1,5 +1,6 @@
-import { getFstab, isSeafileType, libraryNames, mounts, setFstab, whereIs } from '../data/mounts'
-import { cachedDir, createFile, deleteItems, errorStatus, getLibraries, historyDays, listDir, loadLibraries, mkdir as sfMkdir, parseSf, readText, renameItem, SF, sfPath, transferItems, writeText, type Entry } from '../data/seafile'
+import { browserFilesReady, browserText, listBrowser, mkdirBrowser, readBrowserBlob, readBrowserText, removeBrowser, statBrowser, transferBrowser, writeBrowserFile } from '../data/browserfs'
+import { browserMountPoint, getFstab, isSeafileType, libraryNames, mounts, setFstab, whereIs } from '../data/mounts'
+import { cachedDir, createFile, deleteItems, errorStatus, getLibraries, historyDays, listDir, loadLibraries, mkdir as sfMkdir, parseSf, readBlob, readText, renameItem, SF, sfPath, transferItems, uploadBlob, writeText, type Entry } from '../data/seafile'
 import { getAccount } from '../os/account'
 import { writeTmp } from './commands'
 import { CmdError } from './types'
@@ -10,6 +11,10 @@ import { kindOfName, lookup as siteLookup, resolvePath, type DirNode, type FileN
 // mounts. Commands are synchronous, so before one runs, prepare() fetches the Seafile folders (and,
 // for cat, grep and friends, the file contents) it is going to need; lookup() then answers from
 // those caches. Writing (>, touch, mkdir, rm, mv, cp, nano) goes straight to Seafile.
+//
+// Signed in, the files kept in this browser (data/browserfs.ts) are mounted too, on ~ while home
+// is not in Seafile. That mount lies over the site's own home (README.md, games/, the pictures):
+// those stay readable, and what you write lands in the browser, over them where names meet.
 
 /** File contents fetched for commands, by Seafile path, with the mtime they were read at. */
 const texts = new Map<string, { text: string; mtime: number }>()
@@ -87,6 +92,33 @@ function sfNode(sf: string, name: string, ro: boolean): Node | null {
   return cachedDir(sf)?.listing ? sfDir(sf, name, readOnly) : null
 }
 
+/**
+ * A path on the browser mount: the browser's file or folder, laid over whatever the site has at
+ * the same place (a folder shows both; the browser's wins where names meet). The site's own
+ * files there stay read-only: they have no `browser` field.
+ */
+function browserNode(abs: string, path: string): Node | null {
+  const e = statBrowser(path)
+  const site = siteLookup(abs)
+  if (!e) return site
+  const name = abs === '/' ? '' : baseOf(abs)
+  if (!e.dir) return { type: 'file', name, browser: path, size: e.size, mtime: e.mtime, content: () => browserText(path) ?? '' }
+  return {
+    type: 'dir',
+    name,
+    browser: path,
+    mtime: e.mtime,
+    get children() {
+      const out = new Map<string, Node>(site?.type === 'dir' ? site.children : [])
+      for (const child of listBrowser(path)) {
+        const n = browserNode(join(abs, baseOf(child.path)), child.path)
+        if (n) out.set(baseOf(child.path), n)
+      }
+      return out
+    },
+  }
+}
+
 /** Names a folder gains on top of its own: mount points right inside it. */
 function extraChildren(abs: string): Map<string, Node> {
   const out = new Map<string, Node>()
@@ -105,7 +137,7 @@ export function lookup(abs: string): Node | null {
     const node = siteLookup(abs) as FileNode
     return { ...node, size: new TextEncoder().encode(node.content()).length, ro: true }
   }
-  let node: Node | null = w.kind === 'local' ? siteLookup(w.path) : w.kind === 'sf' ? sfNode(w.sf, abs === '/' ? '' : baseOf(abs), w.ro) : null
+  let node: Node | null = w.kind === 'local' ? siteLookup(w.path) : w.kind === 'sf' ? sfNode(w.sf, abs === '/' ? '' : baseOf(abs), w.ro) : w.kind === 'browser' ? browserNode(abs, w.path) : null
   // A mount point that only exists because something is mounted on it.
   if (!node && mounts().some((m) => m.target === abs)) node = { type: 'dir', name: baseOf(abs), children: new Map() }
   if (node?.type !== 'dir') return node
@@ -219,6 +251,8 @@ async function ensureTree(root: string, cmd: string, read: boolean) {
  * tree and -r. Throws the command's own error for a locked library or a lost connection.
  */
 export async function prepare(cwd: string, cmd: string, args: string[]) {
+  // The browser's files load once, right after sign-in; the first command waits for that.
+  if (browserMountPoint()) await browserFilesReady()
   if (!usesSeafile() || !getAccount().seafile || SELF_SERVED.has(cmd)) return
   if (!getLibraries()) await loadLibraries()
   const read = READERS.has(cmd)
@@ -260,7 +294,9 @@ export async function prepareFolder(abs: string) {
 export async function readFileText(abs: string): Promise<{ text: string; ro: boolean } | null> {
   const node = lookup(abs)
   if (!node || node.type !== 'file') return null
-  if (!node.sf) return { text: node.content(), ro: abs !== '/etc/fstab' && !abs.startsWith('/tmp/') }
+  if (node.browser) return { text: await readBrowserText(node.browser), ro: false }
+  // The site's own files under the browser mount: readable, and saving makes the browser's copy.
+  if (!node.sf) return { text: node.content(), ro: abs !== '/etc/fstab' && !abs.startsWith('/tmp/') && whereIs(abs).kind !== 'browser' }
   const text = await readText(node.sf)
   texts.set(node.sf, { text, mtime: node.mtime ?? 0 })
   return { text, ro: !!node.ro }
@@ -281,6 +317,20 @@ export async function writeFile(cwd: string, target: string, content: string, ap
   const w = whereIs(abs)
   if (w.kind === 'missing') throw err(`${who}: ${target}: Transport endpoint is not connected`)
   if (w.kind === 'local') return writeTmp('/', w.path, content, append)
+  if (w.kind === 'browser') {
+    await browserFilesReady()
+    const node = lookup(abs)
+    if (node?.type === 'dir') throw err(`${who}: is a directory: ${target}`)
+    await browserFolder(parentOf(abs), who, target)
+    const body = content && !content.endsWith('\n') ? `${content}\n` : content
+    let text = body
+    if (append && node) {
+      const prev = node.browser ? await readBrowserText(node.browser) : node.content()
+      text = prev && !prev.endsWith('\n') ? `${prev}\n${body}` : prev + body
+    }
+    await writeBrowserFile(w.path, text).catch(asCmdError(who))
+    return
+  }
   if (w.ro || w.sf === SF) throw err(`${who}: read-only file system: ${target}`)
   await ensure(abs, who, target, false)
   const e = sfEntry(w.sf)
@@ -298,11 +348,28 @@ export async function writeFile(cwd: string, target: string, content: string, ap
   await listDir(sfParent(w.sf)!, 0).catch(() => {})
 }
 
+/** A browser store refusal (a full disk, say) as the command's own error. */
+const asCmdError = (who: string) => (e: Error) => {
+  throw err(`${who}: ${e.message}`)
+}
+
+/**
+ * Makes sure a folder on the browser mount exists in the browser, so a file can go in it: one of
+ * the site's own folders there (games/, Pictures/) is made in the browser on first write.
+ */
+async function browserFolder(absDir: string, who: string, arg: string) {
+  const w = whereIs(absDir)
+  if (w.kind !== 'browser') throw err(`${who}: cannot create '${arg}': Read-only file system`)
+  if (statBrowser(w.path)?.dir) return
+  if (lookup(absDir)?.type !== 'dir') throw err(`${who}: cannot create '${arg}': No such file or directory`)
+  await mkdirBrowser(w.path, true).catch(asCmdError(who))
+}
+
 /** For a write: a path's Seafile location, or the error to give (`what` is the command and verb). */
 function writable(abs: string, arg: string, what: string): string {
   const w = whereIs(abs)
   if (w.kind === 'missing') throw err(`${what} '${arg}': Transport endpoint is not connected`)
-  if (w.kind === 'local' || w.ro || w.sf === SF) throw err(`${what} '${arg}': Read-only file system`)
+  if (w.kind !== 'sf' || w.ro || w.sf === SF) throw err(`${what} '${arg}': Read-only file system`)
   return w.sf
 }
 
@@ -314,6 +381,17 @@ export async function makeDir(cwd: string, arg: string, parents: boolean) {
     throw err(`mkdir: cannot create directory '${arg}': File exists`)
   }
   if (abs.startsWith('/tmp/')) throw err(`mkdir: cannot create directory '${arg}': /tmp is flat here, files only`)
+  const where = whereIs(abs)
+  if (where.kind === 'browser') {
+    await browserFilesReady()
+    if (!lookup(parentOf(abs))) {
+      if (!parents) throw err(`mkdir: cannot create directory '${arg}': No such file or directory`)
+      await makeDir('/', parentOf(abs), true)
+    }
+    await browserFolder(parentOf(abs), 'mkdir', arg)
+    await mkdirBrowser(where.path, true).catch(asCmdError('mkdir'))
+    return
+  }
   const sf = writable(abs, arg, 'mkdir: cannot create directory')
   const parent = parentOf(abs)
   await ensure(parent, 'mkdir', null, false)
@@ -329,6 +407,13 @@ export async function touchFile(cwd: string, arg: string) {
   const abs = resolvePath(cwd, arg)
   if (lookup(abs)) return
   if (abs.startsWith('/tmp/')) return writeTmp('/', abs, '', true)
+  const where = whereIs(abs)
+  if (where.kind === 'browser') {
+    if (!lookup(parentOf(abs))) throw err(`touch: cannot touch '${arg}': No such file or directory`)
+    await browserFolder(parentOf(abs), 'touch', arg)
+    await writeBrowserFile(where.path, '').catch(asCmdError('touch'))
+    return
+  }
   const sf = writable(abs, arg, 'touch: cannot touch')
   if (!lookup(parentOf(abs))) throw err(`touch: cannot touch '${arg}': No such file or directory`)
   await createFile(sf)
@@ -353,6 +438,14 @@ export async function removePath(cwd: string, arg: string, opts: { recursive: bo
   }
   const w = whereIs(abs)
   if (w.kind === 'sf' && parseSf(w.sf)?.p === '/') throw err(`rm: cannot remove '${arg}': Device or resource busy`)
+  if (w.kind === 'browser') {
+    // Kept in this browser: there is no trash, so rm (without -f) asks first.
+    if (w.path === '/') throw err(`rm: cannot remove '${arg}': Device or resource busy`)
+    if (!node.browser) throw err(`rm: cannot remove '${arg}': Read-only file system`)
+    if (opts.ask && !opts.force && node.type === 'dir' && !(await opts.ask(`rm: remove '${arg}' and everything in it for good? Files in this browser have no trash [y/N]`))) return
+    await removeBrowser(node.browser)
+    return
+  }
   const sf = writable(abs, arg, 'rm: cannot remove')
   if (opts.ask && !opts.force) {
     const repo = parseSf(sf)!.repo
@@ -398,12 +491,52 @@ export async function transfer(op: 'move' | 'copy', cwd: string, srcArg: string,
     for (const sf of [sfParent(fromSf.sf), toSf.sf]) if (sf) await listDir(sf, 0).catch(() => {})
     return
   }
-  // Across: only files, carried as text.
-  if (node.type === 'dir') throw err(`${cmd}: cannot ${op} '${srcArg}' to '${destArg}': Operation not supported`)
-  if (op === 'move' && !fromSf && !src.startsWith('/tmp/')) throw err(`mv: cannot move '${srcArg}': Read-only file system`)
-  const text = fromSf ? await readText(fromSf.sf) : node.content()
-  await writeFile('/', dest, text, false, false, cmd).catch((e: Error) => {
-    throw err(e.message.replace(/^(cp|mv): (.*): (.*)$/, `${cmd}: cannot create regular file '${destArg}': $3`))
-  })
-  if (op === 'move') await removePath('/', src, { recursive: false, force: true, dir: false })
+  // Within the browser: its own move and copy.
+  const toBrowser = whereIs(into).kind === 'browser'
+  if (node.browser && toBrowser) {
+    const existing = lookup(dest)
+    if (existing?.type === 'dir') throw err(`${cmd}: cannot overwrite directory '${destArg}' with non-directory`)
+    await browserFolder(into, cmd, destArg)
+    if (existing?.browser) await removeBrowser(existing.browser)
+    await transferBrowser(op, node.browser, (whereIs(dest) as { path: string }).path).catch(asCmdError(cmd))
+    return
+  }
+  // Across Seafile, the browser and /tmp: the bytes are carried over, folders and all.
+  const movable = !!fromSf || !!node.browser || src.startsWith('/tmp/')
+  if (op === 'move' && (!movable || fromSf?.ro)) throw err(`mv: cannot move '${srcArg}': Read-only file system`)
+  if (node.type === 'dir' && fromSf) await ensureTree(fromSf.sf, cmd, false)
+  await copyAcross(src, dest, cmd, destArg)
+  if (op === 'move') await removePath('/', src, { recursive: true, force: true, dir: false })
+}
+
+/** A file's bytes, wherever it is. */
+async function bytesOf(node: FileNode): Promise<Blob> {
+  if (node.browser) return readBrowserBlob(node.browser)
+  if (node.sf) return readBlob(node.sf)
+  return new Blob([node.content()], { type: 'text/plain' })
+}
+
+/** Copies a file or folder to a new place on another filesystem (the browser, Seafile, /tmp). */
+async function copyAcross(src: string, dest: string, cmd: string, destArg: string) {
+  const node = lookup(src)
+  if (!node) return
+  const into = parentOf(dest)
+  const w = whereIs(into)
+  const cannot = (why: string) => err(`${cmd}: cannot create ${node.type === 'dir' ? 'directory' : 'regular file'} '${destArg}': ${why}`)
+  if (node.type === 'dir') {
+    if (lookup(dest)?.type !== 'dir') await makeDir('/', dest, true)
+    for (const name of node.children.keys()) await copyAcross(join(src, name), join(dest, name), cmd, destArg)
+    return
+  }
+  if (lookup(dest)?.type === 'dir') throw err(`${cmd}: cannot overwrite directory '${destArg}' with non-directory`)
+  if (w.kind === 'browser') {
+    await browserFolder(into, cmd, destArg)
+    await writeBrowserFile((whereIs(dest) as { path: string }).path, await bytesOf(node)).catch(asCmdError(cmd))
+  } else if (w.kind === 'sf') {
+    if (w.ro || w.sf === SF) throw cannot('Read-only file system')
+    await uploadBlob(w.sf, baseOf(dest), await bytesOf(node))
+    await listDir(w.sf, 0).catch(() => {})
+  } else if (w.kind === 'local' && dest.startsWith('/tmp/')) {
+    writeTmp('/', dest, await (await bytesOf(node)).text(), false)
+  } else throw cannot(w.kind === 'missing' ? 'Transport endpoint is not connected' : 'Read-only file system')
 }

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { besideArchive, cancelExtract, dismissExtract, DRAG_ZIP, extract, setZipDrag, useExtractJobs, type Clash } from '../data/extract'
 import { posixOf } from '../data/mounts'
-import { download, getLibrary, isSf, libraryName, parseSf, useLibraries } from '../data/seafile'
+import { downloadFile, inBrowser, readBytes } from '../data/fileOps'
+import { useBrowserFiles } from '../data/browserfs'
+import { getLibrary, isSf, libraryName, parseSf, useLibraries } from '../data/seafile'
 import { pickFolder } from '../os/FolderPicker'
 import { openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { folderOf, nameOf, useMedia } from '../data/media'
@@ -80,8 +82,12 @@ export function Archive({ win }: { win: WinState }) {
   }, [path])
   const rawUrl = `/api/seafile/raw?${archiveQuery}`
 
+  // A ZIP kept in this browser is read from its Blob (tars only from Seafile, whose server reads them).
+  useBrowserFiles() // a window opened again at boot waits for this browser's files to load
+  const stored = !isSf(path) && inBrowser(path)
+  const blob = useRef<Blob | null>(null)
   useEffect(() => {
-    if (!isSf(path)) return
+    if (!isSf(path) && !(stored && zip)) return
     if (media.size === null) return
     let live = true
     setIndex(null)
@@ -91,8 +97,10 @@ export function Archive({ win }: { win: WinState }) {
     setFwd([])
     // A ZIP is read here, with ranges through the site's server (Seafile's file server sends no
     // CORS headers on them); a tar by the server, which can read a gzipped one through.
-    const read = zip
-      ? readZip(rawUrl, media.size ?? undefined)
+    const read = stored
+      ? readBytes(path).then((b) => ((blob.current = b), readZip(b)))
+      : zip
+        ? readZip(rawUrl, media.size ?? undefined)
       : fetch(`/api/seafile/archive?${archiveQuery}`, { credentials: 'same-origin' }).then(async (res) => {
           const body = await res.json().catch(() => null)
           if (!res.ok) throw new Error(body?.error ?? `The server answered ${res.status}`)
@@ -104,7 +112,7 @@ export function Archive({ win }: { win: WinState }) {
     return () => {
       live = false
     }
-  }, [path, media.size === null])
+  }, [path, media.size === null, stored])
 
   useEffect(() => {
     if (wm.focusedPid === win.pid && !root.current?.contains(document.activeElement)) list.current?.focus({ preventScroll: true })
@@ -192,8 +200,9 @@ export function Archive({ win }: { win: WinState }) {
   const base = () => (query ? '' : folder)
 
   /** Unpacks these rows (none: everything) into `into` straight away. */
+  // Unpacking runs on the server, which reads the archive from Seafile.
   const unpack = (paths: string[] | undefined, into: string, clash: Clash = 'keep') =>
-    void extract(path, into, { entries: paths?.length ? paths : undefined, base: base(), clash }).catch((e: Error) => setToast(e.message))
+    stored ? setToast('Unpacking works for archives in Seafile; save single files from here instead') : void extract(path, into, { entries: paths?.length ? paths : undefined, base: base(), clash }).catch((e: Error) => setToast(e.message))
   /** The Extract panel: where to and what to do with names already there, for what is selected. */
   const openPanel = (into = besideArchive(path)) => setPanel({ into, clash: 'keep' })
   const startExtract = () => {
@@ -220,6 +229,7 @@ export function Archive({ win }: { win: WinState }) {
     setToast(`Unpacking ${r.name.split('/').pop()}…`)
     try {
       const data = await readEntry(e, async (from, to) => {
+        if (blob.current) return new Uint8Array(await blob.current.slice(from, to + 1).arrayBuffer())
         const res = await fetch(rawUrl, { headers: { Range: `bytes=${from}-${to}` }, credentials: 'same-origin' })
         if (res.status !== 206) throw new Error((await res.json().catch(() => null))?.error ?? `The server answered ${res.status}`)
         return new Uint8Array(await res.arrayBuffer())
@@ -285,7 +295,7 @@ export function Archive({ win }: { win: WinState }) {
       { label: 'Extract all to…', disabled: !index, onSelect: () => openPanel() },
       { separator: true },
       { label: 'Show in Files', onSelect: () => wm.openNew('files', { path: folderOf(path), select: path }) },
-      { label: 'Download archive', onSelect: () => void download(path).catch(() => {}) },
+      { label: 'Download archive', onSelect: () => void downloadFile(path).catch(() => {}) },
       { label: 'Properties', shortcut: 'Alt ↵', disabled: !index, onSelect: () => setProps('archive') },
     ]
   }
@@ -490,15 +500,15 @@ export function Archive({ win }: { win: WinState }) {
         <button className="btn btn-small" onClick={() => wm.openNew('files', { path: folderOf(path), select: path })}>
           Show in Files
         </button>
-        <button className="btn btn-small" onClick={() => void download(path).catch(() => {})}>
+        <button className="btn btn-small" onClick={() => void downloadFile(path).catch(() => {})}>
           Download
         </button>
       </div>
 
-      {media.unplayable || (!isSf(path) && path) ? (
+      {media.unplayable || (!isSf(path) && !(stored && zip) && path) ? (
         <div className="pv-empty">
           <p className="pv-big">{media.name}</p>
-          <p className="muted">{media.unplayable ?? 'Only archives in Seafile open here.'}</p>
+          <p className="muted">{media.unplayable ?? (stored ? 'Only ZIP archives open here from this browser; tar archives open from Seafile.' : 'Only archives in Seafile open here.')}</p>
         </div>
       ) : error ? (
         <div className="pv-empty">

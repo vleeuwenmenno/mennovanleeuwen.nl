@@ -26,8 +26,10 @@ export type FileNode = {
   ro?: boolean
   /** A program (the commands in /bin) */
   exec?: boolean
+  /** Where it really is, for files kept in this browser (data/browserfs.ts) */
+  browser?: string
 }
-export type DirNode = { type: 'dir'; name: string; children: Map<string, Node>; mtime?: number; sf?: string; ro?: boolean }
+export type DirNode = { type: 'dir'; name: string; children: Map<string, Node>; mtime?: number; sf?: string; ro?: boolean; browser?: string }
 export type Node = FileNode | DirNode
 
 export const HOME = `/home/${HANDLE}`

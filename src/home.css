@@ -3844,3 +3844,58 @@ button.cal-day.is-picked:not(.is-today) {
 .usr-ban {
   flex: 1;
 }
+
+/* Settings: what needs you, under your name (src/os/alerts.ts), and the count on a pane */
+.set-alerts {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+}
+.set-alerts button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, var(--red) 40%, transparent);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: var(--fg-bright);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.set-alerts li + li button {
+  border-top: 0;
+}
+.set-alerts button:hover {
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+}
+.set-alert-dot {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--red);
+}
+.set-alert-text {
+  flex: 1;
+  min-width: 0;
+}
+.set-nav-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--red);
+}

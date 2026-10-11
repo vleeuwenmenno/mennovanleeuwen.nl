@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { useGoSuggestionState, useGolinksTemplate } from '../data/golinks'
 import { cvMode } from '../os/cvMode'
+import { browserMountPoint, useMounts } from '../data/mounts'
 import { HANDLE } from '../os/identity'
 import { linkAt, linkMenu, openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { notify } from '../os/notify'
@@ -155,6 +156,16 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
         ]
       : [],
   )
+  // Signed in without Seafile as home: ~ is writable, but only kept in this browser. Said once in
+  // the boot terminal, as soon as the account is known.
+  const mountsVersion = useMounts()
+  const toldBrowser = useRef(false)
+  useEffect(() => {
+    if (!win.props.motd || toldBrowser.current || browserMountPoint() !== HOME) return
+    toldBrowser.current = true
+    setEntries((list) => [...list, { id: nextId++, kind: 'out', text: `{c:yellow}~ is kept in this browser only{/}: clearing the site's data deletes it. Link Seafile in Settings → Integrations to keep files for good ({c:green}df -h{/} shows the space).\n` }])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mountsVersion])
   const [cwd, setCwd] = useState(embedded?.cwd ?? HOME)
   const [value, setValue] = useState('')
   const [running, setRunning] = useState(false)

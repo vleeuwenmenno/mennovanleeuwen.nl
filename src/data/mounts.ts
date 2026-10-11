@@ -181,17 +181,33 @@ function wire() {
 export const isSeafileType = (m: FstabEntry) => m.type === 'seafile' || m.type === 'fuse.seafile'
 export const isBind = (m: FstabEntry) => m.options.includes('bind') || m.options.includes('rbind')
 
+export const isBrowserType = (m: FstabEntry) => m.type === 'browser'
+
+/**
+ * Files kept in this browser (data/browserfs.ts), for anyone signed in: on ~ while home is not in
+ * Seafile, else on /mnt/browser, so what was made there stays in reach. Not in fstab: it comes
+ * with the account, like the disk with the machine.
+ */
+const browserMount = (target: string): Mount => entry('browser', target, 'browser', 'rw,nosuid,nodev')
+
 /** What is mounted now, in mount order (later mounts cover earlier ones). */
 export function mounts(): Mount[] {
   wire()
-  const linked = !!getAccount().seafile
+  const account = getAccount()
+  const linked = !!account.seafile
   const fromFstab = parseFstab(getFstab())
     .flatMap((l) => (l.entry ? [l.entry] : []))
     .filter((e) => e.type !== 'swap' && !e.options.includes('noauto') && !unmounted.has(e.target))
   // The disk, /tmp and /proc are mounted before fstab is read, whatever it says.
   const system = SYSTEM_MOUNTS.filter((s) => !fromFstab.some((e) => e.target === s.target))
-  return [...system, ...fromFstab, ...manual].filter((m) => linked || !isSeafileType(m))
+  const listed = [...fromFstab, ...manual].filter((m) => linked || !isSeafileType(m))
+  const homeTaken = listed.some((m) => m.target === HOME && (isSeafileType(m) || isBind(m)))
+  const browser = account.status === 'user' ? [browserMount(homeTaken ? '/mnt/browser' : HOME)] : []
+  return [...system, ...browser, ...listed]
 }
+
+/** Where the browser's files are mounted now (~ or /mnt/browser), or null when signed out. */
+export const browserMountPoint = (): string | null => mounts().find(isBrowserType)?.target ?? null
 
 /** fstab's lines (comments and broken lines left out). */
 export const fstabEntries = () => parseFstab(getFstab()).flatMap((l) => (l.entry ? [l.entry] : []))
@@ -272,7 +288,12 @@ export const subscribeMounts = (l: () => void) => {
 /** A library shared with you read-only stays read-only, however it is mounted. */
 const readOnlyLibrary = (repo: string) => getLibraries()?.find((l) => l.id === repo)?.permission === 'r'
 
-export type Where = { kind: 'sf'; sf: string; ro: boolean; mount: Mount } | { kind: 'local'; path: string } | { kind: 'missing'; mount: Mount; loading: boolean }
+/** `browser`: kept in this browser (data/browserfs.ts); `path` is inside that store, `abs` the path asked about. */
+export type Where =
+  | { kind: 'sf'; sf: string; ro: boolean; mount: Mount }
+  | { kind: 'browser'; path: string; abs: string; mount: Mount }
+  | { kind: 'local'; path: string }
+  | { kind: 'missing'; mount: Mount; loading: boolean }
 
 export function whereIs(abs: string, depth = 0): Where {
   let best: Mount | null = null
@@ -285,6 +306,7 @@ export function whereIs(abs: string, depth = 0): Where {
     const inner = whereIs(trimSlash(best.source + rel) || '/', depth + 1)
     return inner.kind === 'sf' ? { ...inner, ro: inner.ro || ro } : inner
   }
+  if (isBrowserType(best)) return { kind: 'browser', path: rel || '/', abs, mount: best }
   if (!isSeafileType(best)) return { kind: 'local', path: abs }
   if (best.source === 'seafile') {
     if (!rel || rel === '/') return { kind: 'sf', sf: SF, ro: true, mount: best }

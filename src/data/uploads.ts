@@ -1,6 +1,8 @@
 import { useSyncExternalStore } from 'react'
 import { notify } from '../os/notify'
 import { choose } from '../os/Dialogs'
+import { browserFilesReady, mkdirBrowser, statBrowser, writeBrowserFile } from './browserfs'
+import { whereIs } from './mounts'
 import { fileLink, getLibrary, libraryName, parseSf, refreshDirs, type Listing } from './seafile'
 
 // Uploads into Seafile: files and whole folders, from the computer (dropped on Files or the
@@ -72,6 +74,7 @@ type Choice = 'replace' | 'keep' | 'skip' | 'cancel'
  */
 export async function uploadFiles(picked: Picked[], target: string) {
   const at = parseSf(target)
+  if (!at && picked.length && whereIs(target).kind === 'browser') return keepInBrowser(picked, target)
   if (!at || !picked.length) return
   if (getLibrary(at.repo)?.permission === 'r') return notify({ title: 'Read-only', body: `${libraryName(at.repo)} is read-only for you.`, transient: true })
 
@@ -304,6 +307,55 @@ export function droppedFiles(dt: DataTransfer): Promise<Picked[]> {
   return Promise.all(entries.map((e) => (e ? walk(e, '') : Promise.resolve()))).then(() => out)
 }
 
+/**
+ * Files from the computer into a folder kept in this browser (data/browserfs.ts): no server and
+ * no transfer, they are just stored. Names already there ask once: replace, keep both, or skip.
+ */
+async function keepInBrowser(picked: Picked[], target: string) {
+  await browserFilesReady()
+  const base = (whereIs(target) as { path: string }).path
+  const inside = (dir: string, name: string) => (dir === '/' ? `/${name}` : `${dir}/${name}`)
+  const clashes = picked.filter((p) => !p.rel && statBrowser(inside(base, p.file.name)))
+  let choice: Choice = 'replace'
+  if (clashes.length) {
+    const one = clashes.length === 1
+    choice = ((await choose({
+      title: one ? `“${clashes[0].file.name}” is already here` : `${clashes.length} files are already here`,
+      body: `Replace ${one ? 'it' : 'them'}, keep both (the new ${one ? 'one gets' : 'ones get'} a number), or leave ${one ? 'it' : 'them'} out?`,
+      buttons: [
+        { id: 'cancel', label: 'Cancel' },
+        { id: 'skip', label: 'Skip' },
+        { id: 'keep', label: 'Keep both' },
+        { id: 'replace', label: 'Replace', primary: true },
+      ],
+    })) ?? 'cancel') as Choice
+    if (choice === 'cancel') return
+  }
+  let stored = 0
+  try {
+    for (const p of picked) {
+      const dir = p.rel ? inside(base, p.rel) : base
+      await mkdirBrowser(dir, true)
+      let name = p.file.name
+      if (statBrowser(inside(dir, name)) && !p.rel) {
+        if (choice === 'skip') continue
+        if (choice === 'keep') {
+          const dot = name.lastIndexOf('.')
+          const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, '']
+          let n = 2
+          while (statBrowser(inside(dir, `${stem} ${n}${ext}`))) n++
+          name = `${stem} ${n}${ext}`
+        }
+      }
+      await writeBrowserFile(inside(dir, name), p.file)
+      stored++
+    }
+  } catch (e) {
+    notify({ title: 'Not everything was saved', body: (e as Error).message, transient: true })
+  }
+  if (stored) notify({ title: `Saved ${stored === 1 ? picked[0].file.name : `${stored} files`} in this browser`, body: 'Only here: clearing the site data deletes them. Seafile (Settings → Integrations) keeps them for good.', transient: true })
+}
+
 /** Files picked with a file input: a folder pick keeps each file's folders. */
 export const pickedFiles = (list: FileList): Picked[] =>
   [...list].map((file) => {
@@ -323,5 +375,5 @@ export function pickAndUpload(target: string, folder = false) {
 
 export const targetName = (target: string) => {
   const at = parseSf(target)
-  return at ? (at.p === '/' ? libraryName(at.repo) : at.p.split('/').pop()!) : target
+  return at ? (at.p === '/' ? libraryName(at.repo) : at.p.split('/').pop()!) : target.split('/').pop() || target
 }

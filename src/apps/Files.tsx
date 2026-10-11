@@ -6,18 +6,22 @@ import { openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { openLink } from '../data/links'
 import { useWM, type AppId, type WinState } from '../os/wm'
 import { formatSize, HOME, KIND_LABEL, kindOfName, lookup, prettyPath, resolvePath, stat, walk, type FileKind, type Node } from '../terminal/vfs'
-import { createFile, deleteItems, deleteNote, download as sfDownload, DRAG_FILES, dropOp, getClipboard, getDragged, getLibrary, isInside, openSeafile, renameItem, setClipboard, setDragged, transferItems, useClipboard, isSf, libraryName, lock, mkdir, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useSeafilePrefs, setSeafilePrefs, setPlace, PLACES, shareLink, seafileWebUrl, loadLibraries, useUnlocks, type Library, type PlaceId } from '../data/seafile'
+import { createFile, DRAG_FILES, getClipboard, getDragged, getLibrary, isInside, openSeafile, setClipboard, setDragged, useClipboard, isSf, libraryName, lock, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useSeafilePrefs, setSeafilePrefs, setPlace, PLACES, shareLink, seafileWebUrl, loadLibraries, useUnlocks, type Library, type PlaceId } from '../data/seafile'
 import { pickFolder } from '../os/FolderPicker'
 import { useBackButton } from '../os/backButton'
 import { SeafileTrash } from './SeafileTrash'
 import { ask } from '../os/Dialogs'
 import { useAccount } from '../os/account'
-import { MEDIA_APP, thumbOf } from '../data/media'
+import { MEDIA_APP, thumbOf, useBrowserUrl } from '../data/media'
 import { droppedFiles, hasOsFiles, pickAndUpload, uploadFiles } from '../data/uploads'
 import { addBookmark, useSidebar } from '../data/filesSidebar'
 import { FilesSidebar, type SideSection } from './FilesSidebar'
 import { libraryNames, mounts, posixOf, useMounts, whereIs } from '../data/mounts'
-import { lookup as fsLookup } from '../terminal/fs'
+import { lookup as fsLookup, walk as fsWalk } from '../terminal/fs'
+import { browserMountPoint } from '../data/mounts'
+import { cvMode } from '../os/cvMode'
+import { browserBytes, useBrowserFiles } from '../data/browserfs'
+import { browserPathOf, canChange, canWriteFolder, deleteNoteFor, dropOpFor, inBrowser, downloadFile, makeFile, makeFolder, removePaths, renamePath, transferPaths } from '../data/fileOps'
 import { isArchive } from '../data/archive'
 import { besideArchive, extract, getZipDrag, setZipDrag, zipDragName } from '../data/extract'
 import { useEdgeSwipe } from '../os/useEdgeSwipe'
@@ -27,9 +31,10 @@ import { useMediaQuery } from '../os/useMediaQuery'
 const shq = (s: string) => (/^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
 
 // A file manager in the style of Omafile (the Omarchy file manager Menno contributes to), browsing
-// the same in-memory filesystem the terminal uses (only /tmp is writable there) and, for the
-// signed-in user, Seafile: every library under Libraries, and the primary one as home when that
-// is switched on in Settings (seafile://<library>/<path>, see src/data/seafile.ts).
+// the same filesystem the terminal uses and, for the signed-in user, Seafile: every library under
+// Libraries, and the primary one as home when that is switched on in Settings
+// (seafile://<library>/<path>, see src/data/seafile.ts). Without Seafile as home, ~ is kept in
+// this browser (src/data/browserfs.ts): writable, and said to be only here wherever it shows.
 
 type View = 'list' | 'grid' | 'compact' | 'gallery'
 type Sort = 'az' | 'za' | 'newest' | 'oldest' | 'largest' | 'smallest' | 'type'
@@ -150,10 +155,23 @@ export function FileIcon({ size, kind, name }: { size: number; kind: FileKind; n
 
 function Thumb({ item, size, gallery = false, emblem }: { item: Item; size: number; gallery?: boolean; emblem?: string }) {
   const [broken, setBroken] = useState(false)
+  // Pictures kept in this browser show themselves (a blob: address).
+  const stored = useBrowserUrl(item.kind === 'image' && !item.sf && item.node?.type === 'file' && item.node.browser ? item.path : null)
   // Seafile's pictures come as its thumbnails (not for encrypted libraries: those fall back to the icon).
   const src = useMemo(
-    () => (item.kind !== 'image' ? null : item.sf ? (size >= 40 ? thumbOf(item.path, gallery ? 512 : 256) : null) : item.node?.type === 'file' ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(item.node.content())}` : null),
-    [item, size >= 40, gallery],
+    () =>
+      item.kind !== 'image'
+        ? null
+        : item.sf
+          ? size >= 40
+            ? thumbOf(item.path, gallery ? 512 : 256)
+            : null
+          : item.node?.type === 'file'
+            ? item.node.browser
+              ? stored.url
+              : `data:image/svg+xml;charset=utf-8,${encodeURIComponent(item.node.content())}`
+            : null,
+    [item, size >= 40, gallery, stored.url],
   )
   // An explicit box: SVGs with only a viewBox have no dependable intrinsic size.
   if (src && !broken)
@@ -184,13 +202,13 @@ export function Files({ win }: { win: WinState }) {
   /** Where a filesystem path is for Files: a seafile:// path, or the site's own. */
   const toInternal = (posix: string): string | null => {
     const w = whereIs(posix)
-    return w.kind === 'sf' ? w.sf : w.kind === 'local' ? w.path : null
+    return w.kind === 'sf' ? w.sf : w.kind === 'local' ? w.path : w.kind === 'browser' ? posix : null
   }
   /** A path as the terminal shows it; the site's own home is /srv/site while Seafile is on ~. */
   const toPosix = (p: string): string | null => {
     if (p === path && posixHere) {
       const w = whereIs(posixHere)
-      if ((w.kind === 'sf' && w.sf === p) || (w.kind === 'local' && w.path === p)) return posixHere
+      if ((w.kind === 'sf' && w.sf === p) || (w.kind === 'local' && w.path === p) || (w.kind === 'browser' && posixHere === p)) return posixHere
     }
     if (isSf(p)) return p === SF ? (mounts().find((m) => m.source === 'seafile')?.target ?? null) : posixOf(p)
     if (p === RECENT || p === TRASH || p.includes('://')) return null
@@ -306,10 +324,12 @@ export function Files({ win }: { win: WinState }) {
 
   // --- listing --------------------------------------------------------------------------------
 
+  const browserVersion = useBrowserFiles()
   const items = useMemo<Item[]>(() => {
     void tick
+    void browserVersion
     const toItem = (p: string): Item | null => {
-      const node = lookup(p)
+      const node = fsLookup(p)
       if (!node) return null
       const st = stat(p, node)
       return { path: p, name: node.name, node, kind: st.kind, size: st.size, mtime: st.mtime }
@@ -336,7 +356,7 @@ export function Files({ win }: { win: WinState }) {
       ]
     else if (search) {
       const q = search.toLowerCase()
-      list = walk(path)
+      list = (browserPathOf(path) !== null ? fsWalk(path) : walk(path))
         .filter((p) => p !== path && p.split('/').pop()!.toLowerCase().includes(q))
         .map(toItem)
         .filter((x): x is Item => !!x)
@@ -370,10 +390,13 @@ export function Files({ win }: { win: WinState }) {
     // Folders stay on top, as in every file manager.
     return list.sort((a, b) => (a.kind === 'folder' ? 0 : 1) - (b.kind === 'folder' ? 0 : 1) || cmp[prefs.sort](a, b))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, search, prefs.hidden, prefs.sort, tick, desk.trashed, desk.names, libraries, sfDir.listing, posixHere])
+  }, [path, search, prefs.hidden, prefs.sort, tick, desk.trashed, desk.names, libraries, sfDir.listing, posixHere, browserVersion])
 
   const writable = path === '/tmp' || path.startsWith('/tmp/')
-  const sfWritable = isSf(path) && path !== SF && sfDir.listing?.perm === 'rw'
+  /** Kept in this browser: writable, and only here (said in the strip above the files). */
+  const inBrowserHere = browserPathOf(path) !== null
+  /** Whether files can be made here: Seafile you may write to, or this browser. */
+  const sfWritable = (isSf(path) && path !== SF && sfDir.listing?.perm === 'rw') || (inBrowserHere && canWriteFolder(path))
   /** ~/Documents, Seafile › Photos/2024 or /etc: how a path reads in the path bar and dialogs. */
   const pretty = (p: string) => {
     const posix = toPosix(p)
@@ -421,7 +444,8 @@ export function Files({ win }: { win: WinState }) {
     openSeafile(wm, item.path, { how: how === 'terminal' ? 'default' : how }).catch((e: Error) => setToast(e.message))
   }
 
-  const download = (item: Item) => sfDownload(item.path).catch((e: Error) => setToast(e.message))
+  /** To the computer: Seafile hands out a link, the browser's own files are saved from here. */
+  const download = (item: Item) => void downloadFile(item.path).catch((e: Error) => setToast(e.message))
   const unpack = (zip: string, into: string) => {
     setToast(`Unpacking ${zip.split('/').pop()}…`)
     void extract(zip, into, { clash: 'keep' }).catch((e: Error) => setToast(e.message))
@@ -429,23 +453,23 @@ export function Files({ win }: { win: WinState }) {
 
   // --- changing things in Seafile ------------------------------------------------------------
 
-  /** Whether the account may change things in that Seafile folder (its library's permission). */
-  const canWrite = (folder: string) => isSf(folder) && folder !== SF && getLibrary(parseSf(folder)!.repo)?.permission === 'rw'
+  /** Whether things can be made in that folder: Seafile you may write to (its library's permission), or this browser. */
+  const canWrite = (folder: string) => canWriteFolder(folder)
   const named = (paths: string[]) => (paths.length === 1 ? (paths[0].split('/').pop() ?? '') : `${paths.length} items`)
   /** Runs a change, saying what it is doing and then what it did. */
   const busy = (doing: string, done: string, work: Promise<unknown>) => {
     setToast(doing)
     return work.then(() => setToast(done)).catch((e: Error) => setToast(e.message))
   }
-  /** Seafile files and folders among these (not libraries themselves). */
-  const sfOnly = (list: Item[]) => list.filter((i) => i.sf && !i.sf.library).map((i) => i.path)
+  /** What among these can be cut, moved and deleted: Seafile files and folders (not libraries), and what is kept in this browser. */
+  const sfOnly = (list: Item[]) => list.filter((i) => (i.sf ? !i.sf.library : canChange(i.path))).map((i) => i.path)
 
   const newFolder = () => {
     if (!sfWritable) return
     const taken = new Set(items.map((i) => i.name))
     let name = 'New folder'
     for (let n = 2; taken.has(name); n++) name = `New folder ${n}`
-    mkdir(`${path}/${name}`)
+    makeFolder(`${path === '/' ? '' : path}/${name}`)
       .then((made) => {
         setSelected(new Set([made]))
         setRenaming(made)
@@ -455,7 +479,7 @@ export function Files({ win }: { win: WinState }) {
 
   const newTextFile = () => {
     if (!sfWritable) return
-    createFile(`${path}/untitled.txt`)
+    makeFile(`${path === '/' ? '' : path}/untitled.txt`)
       .then((made) => {
         setSelected(new Set([made]))
         setRenaming(made)
@@ -468,17 +492,17 @@ export function Files({ win }: { win: WinState }) {
     const name = value.trim()
     if (!name || name === item.name) return
     if (name.includes('/')) return setToast('A name cannot have a / in it')
-    renameItem(item.path, name, item.kind === 'folder')
+    renamePath(item.path, name, item.kind === 'folder')
       .then((made) => setSelected(new Set([made])))
       .catch((e: Error) => setToast(e.message))
   }
 
   const deleteSf = async (paths: string[]) => {
     if (!paths.length) return
-    const note = await deleteNote(paths)
+    const note = await deleteNoteFor(paths)
     if (!(await ask({ title: note.final ? `Delete ${named(paths)} for good?` : `Delete ${named(paths)}?`, body: note.body, confirm: 'Delete', danger: true }))) return
     setSelected(new Set())
-    busy(`Deleting ${named(paths)}…`, `Deleted ${named(paths)}`, deleteItems(paths))
+    busy(`Deleting ${named(paths)}…`, `Deleted ${named(paths)}`, removePaths(paths))
   }
 
   const cut = (paths: string[]) => paths.length && (setClipboard({ op: 'move', paths }), setToast(`Cut ${named(paths)}: paste it somewhere with Ctrl+V`))
@@ -487,7 +511,7 @@ export function Files({ win }: { win: WinState }) {
     const c = getClipboard()
     if (!c || !canWrite(into)) return
     if (isInside(c.paths, into)) return setToast('A folder cannot go inside itself')
-    busy(`${c.op === 'move' ? 'Moving' : 'Copying'} ${named(c.paths)}…`, `${c.op === 'move' ? 'Moved' : 'Copied'} ${named(c.paths)}`, transferItems(c.op, c.paths, into)).then(() => c.op === 'move' && setClipboard(null))
+    busy(`${c.op === 'move' ? 'Moving' : 'Copying'} ${named(c.paths)}…`, `${c.op === 'move' ? 'Moved' : 'Copied'} ${named(c.paths)}`, transferPaths(c.op, c.paths, into)).then(() => c.op === 'move' && setClipboard(null))
   }
 
   // Dragging: files and folders go onto folders, a folder's empty space, the sidebar, other
@@ -520,7 +544,7 @@ export function Files({ win }: { win: WinState }) {
     }
     const paths = getDragged()
     if (!paths || !e.dataTransfer.types.includes(DRAG_FILES) || !canWrite(into) || isInside(paths, into)) return false
-    const op = dropOp(paths, into, e)
+    const op = dropOpFor(paths, into, e)
     if (op === 'move' && paths.every((p) => parentOf(p) === into)) return false
     e.preventDefault()
     e.stopPropagation()
@@ -548,16 +572,17 @@ export function Files({ win }: { win: WinState }) {
     }
     const paths = getDragged()
     if (!paths || !acceptDrop(e, into)) return
-    const op = dropOp(paths, into, e)
+    const op = dropOpFor(paths, into, e)
     dragEnd()
-    busy(`${op === 'move' ? 'Moving' : 'Copying'} ${named(paths)}…`, `${op === 'move' ? 'Moved' : 'Copied'} ${named(paths)} to ${pretty(into)}`, transferItems(op, paths, into))
+    busy(`${op === 'move' ? 'Moving' : 'Copying'} ${named(paths)}…`, `${op === 'move' ? 'Moved' : 'Copied'} ${named(paths)} to ${pretty(into)}`, transferPaths(op, paths, into))
   }
 
-  const readOnly = () => setToast(isSf(path) ? `${libraryName(parseSf(path)!.repo)} is read-only for you` : 'Read-only file system. Only /tmp is writable here.')
+  const readOnly = () =>
+    setToast(isSf(path) ? `${libraryName(parseSf(path)!.repo)} is read-only for you` : inBrowserHere ? "That is one of the site's own files: read-only, but you can copy it" : `Read-only file system. ${browserMountPoint() ? `${prettyPath(browserMountPoint()!)} and /tmp are` : 'Only /tmp is'} writable here.`)
 
   const trashItems = (list: Item[]) => {
     if (!list.length) return
-    if (list.some((i) => i.sf)) return deleteSf(sfOnly(list))
+    if (list.some((i) => i.sf || inBrowser(i.path))) return deleteSf(sfOnly(list))
     if (!list.every((i) => i.path.startsWith('/tmp/'))) return readOnly()
     const tmp = lookup('/tmp')
     if (tmp?.type === 'dir') for (const i of list) tmp.children.delete(i.name)
@@ -656,6 +681,9 @@ export function Files({ win }: { win: WinState }) {
         ...(library ? [] : [{ separator: true } as MenuItem, { label: 'Delete', shortcut: 'Del', danger: true, disabled: !canWrite(parentOf(item.path)), onSelect: () => void deleteSf([item.path]) }]),
       ]
     }
+    // Kept in this browser (or the site's own files under it, which can be copied out of).
+    const stored = canChange(item.path)
+    const onMount = browserPathOf(item.path) !== null
     return [
       { label: 'Open', shortcut: '↵', onSelect: () => openItem(item) },
       ...(isDir
@@ -669,18 +697,30 @@ export function Files({ win }: { win: WinState }) {
                 { label: 'Viewer', onSelect: () => openItem(item, 'viewer') },
                 ...(item.kind === 'image' ? [{ label: 'Preview', onSelect: () => openItem(item, 'preview') }] : []),
                 ...(item.kind === 'audio' ? [{ label: 'Omamp', onSelect: () => openItem(item, 'amp') }] : []),
-                  ...(item.kind === 'video' || item.kind === 'audio' ? [{ label: 'Player', onSelect: () => openItem(item, 'player') }] : []),
+                ...(item.kind === 'video' || item.kind === 'audio' ? [{ label: 'Player', onSelect: () => openItem(item, 'player') }] : []),
+                ...(stored && item.kind === 'pdf' ? [{ label: 'PDF', onSelect: () => openItem(item, 'pdf') }] : []),
+                ...(stored && isArchive(item.name) ? [{ label: 'Archive', onSelect: () => openItem(item, 'archive') }] : []),
                 { label: 'Terminal (cat)', onSelect: () => openItem(item, 'terminal') },
               ],
             },
+            ...(stored ? [{ label: 'Download', onSelect: () => download(item) }] : []),
           ]),
       { label: 'Open in terminal', onSelect: () => openItem(item, 'terminal') },
+      ...(onMount
+        ? [
+            { separator: true } as MenuItem,
+            ...(stored ? [{ label: 'Cut', shortcut: 'Ctrl X', onSelect: () => cut([item.path]) }] : []),
+            { label: 'Copy', shortcut: 'Ctrl C', onSelect: () => copy([item.path]) },
+            ...(isDir && clip ? [{ label: `Paste into ${item.name}`, disabled: !canWrite(item.path), onSelect: () => paste(item.path) }] : []),
+            ...(stored ? [{ label: 'Rename', shortcut: 'F2', onSelect: () => setRenaming(item.path) }] : []),
+          ]
+        : []),
       { separator: true },
       { label: 'Copy path', onSelect: () => copyPath(item.path) },
       ...(isDir ? [{ label: 'Add to bookmarks', disabled: bookmarks.includes(item.path), onSelect: () => bookmark(item.path) }] : []),
       { label: 'Properties', shortcut: 'Alt ↵', onSelect: () => setProps(item) },
       { separator: true },
-      { label: 'Move to Trash', shortcut: 'Del', danger: true, onSelect: () => trashItems([item]) },
+      stored ? { label: 'Delete', shortcut: 'Del', danger: true, onSelect: () => void deleteSf([item.path]) } : { label: 'Move to Trash', shortcut: 'Del', danger: true, onSelect: () => trashItems([item]) },
     ]
   }
 
@@ -758,6 +798,31 @@ export function Files({ win }: { win: WinState }) {
         { label: 'Seafile', submenu: seafileMenu(path) },
         { label: 'Add to bookmarks', disabled: bookmarks.includes(path), onSelect: () => bookmark(path) },
         { label: 'Properties', shortcut: 'Alt ↵', onSelect: () => setProps(currentFolderItem()) },
+      ]
+    if (inBrowserHere)
+      return [
+        {
+          label: 'New',
+          disabled: !sfWritable,
+          submenu: [
+            { label: 'Folder', onSelect: newFolder },
+            { label: 'Text file', onSelect: newTextFile },
+          ],
+        },
+        {
+          label: 'Upload',
+          disabled: !sfWritable,
+          submenu: [
+            { label: 'Files…', onSelect: () => pickAndUpload(path) },
+            { label: 'Folder…', onSelect: () => pickAndUpload(path, true) },
+          ],
+        },
+        ...(clip ? [{ label: `Paste ${named(clip.paths)}`, shortcut: 'Ctrl V', disabled: !sfWritable, onSelect: () => paste() }] : []),
+        { label: 'Open terminal here', onSelect: () => wm.openNew('terminal', { run: `cd ${shq(prettyPath(path))} && ls`, t: String(Date.now()) }) },
+        { separator: true },
+        ...viewMenu(),
+        { separator: true },
+        { label: 'Add to bookmarks', disabled: bookmarks.includes(path), onSelect: () => bookmark(path) },
       ]
     return [
       ...(writable ? [{ label: 'New text file', onSelect: newFile }] : []),
@@ -838,9 +903,12 @@ export function Files({ win }: { win: WinState }) {
     if ((e.target as HTMLElement).closest('input')) return
     const ctrl = e.ctrlKey || e.metaKey
     const sel = selectedItems()
-    if (ctrl && isSf(path) && e.key.toLowerCase() === 'c' && sfOnly(sel).length) copy(sfOnly(sel))
-    else if (ctrl && isSf(path) && e.key.toLowerCase() === 'x' && sfOnly(sel).length) cut(sfOnly(sel))
-    else if (ctrl && isSf(path) && e.key.toLowerCase() === 'v') paste()
+    const store = isSf(path) || inBrowserHere
+    // Copying works for the site's own files under ~ too (into the browser or Seafile).
+    const copyable = inBrowserHere ? sel.map((i) => i.path) : sfOnly(sel)
+    if (ctrl && store && e.key.toLowerCase() === 'c' && copyable.length) copy(copyable)
+    else if (ctrl && store && e.key.toLowerCase() === 'x' && sfOnly(sel).length) cut(sfOnly(sel))
+    else if (ctrl && store && e.key.toLowerCase() === 'v') paste()
     else if (e.key === 'F2' && sel.length === 1 && sfOnly(sel).length && sfWritable) setRenaming(sel[0].path)
     else if (ctrl && ['1', '2', '3', '4'].includes(e.key)) setPrefs({ view: (['list', 'grid', 'compact', 'gallery'] as View[])[Number(e.key) - 1] })
     else if (ctrl && e.key.toLowerCase() === 'h') setPrefs({ hidden: !prefs.hidden })
@@ -1039,7 +1107,7 @@ export function Files({ win }: { win: WinState }) {
       id: 'bookmarks',
       label: 'Bookmarks',
       items: bookmarks
-        .filter((b) => (isSf(b) ? !!account.seafile : lookup(b)))
+        .filter((b) => (isSf(b) ? !!account.seafile : fsLookup(b)))
         .map((b) => ({ id: b, label: isSf(b) && parseSf(b)!.p === '/' ? libraryName(parseSf(b)!.repo) : b.split('/').pop()!.replace(/^./, (ch) => ch.toUpperCase()), target: b, icon: '⚲', bookmark: true, title: pretty(b) })),
     },
     {
@@ -1048,16 +1116,24 @@ export function Files({ win }: { win: WinState }) {
       items: [
         { id: 'nvme0n1', label: 'nvme0n1 (read-only)', target: '/', icon: '⛁' },
         { id: 'tmpfs', label: 'tmpfs', target: '/tmp', icon: '⛁' },
+        ...(browserMountPoint() ? [{ id: 'browser', label: 'This browser', target: browserMountPoint()!, icon: '⚠', title: `${prettyPath(browserMountPoint()!)}: kept in this browser only, gone when its site data is cleared` }] : []),
       ],
     },
-    {
-      id: 'network',
-      label: 'Network',
-      items: [
-        { id: 'git.mvl.sh', label: 'git.mvl.sh', target: 'https://git.mvl.sh/vleeuwenmenno', icon: '⇄' },
-        { id: 'github.com', label: 'github.com', target: 'https://github.com/vleeuwenmenno', icon: '⇄' },
-      ],
-    },
+    // Menno's code hosts on his CV page; your own GitHub elsewhere.
+    ...(cvMode()
+      ? [
+          {
+            id: 'network',
+            label: 'Network',
+            items: [
+              { id: 'git.mvl.sh', label: 'git.mvl.sh', target: 'https://git.mvl.sh/vleeuwenmenno', icon: '⇄' },
+              { id: 'github.com', label: 'github.com', target: 'https://github.com/vleeuwenmenno', icon: '⇄' },
+            ],
+          },
+        ]
+      : account.user
+        ? [{ id: 'network', label: 'Network', items: [{ id: 'github.com', label: 'github.com', target: `https://github.com/${account.user.login}`, icon: '⇄' }] }]
+        : []),
   ]
 
   return (
@@ -1173,9 +1249,10 @@ export function Files({ win }: { win: WinState }) {
           onClick={(e) =>
             openContextMenu({ clientX: e.currentTarget.getBoundingClientRect().right - 220, clientY: e.currentTarget.getBoundingClientRect().bottom + 4, preventDefault() {}, stopPropagation() {} }, [
               { label: 'New window', onSelect: () => wm.openNew('files', { path }) },
-              ...(isSf(path)
+              ...(isSf(path) || inBrowserHere
                 ? [
                     { label: 'New folder', disabled: !sfWritable, onSelect: newFolder },
+                    ...(inBrowserHere ? [{ label: 'New text file', disabled: !sfWritable, onSelect: newTextFile }] : []),
                     { label: 'Upload files…', disabled: !sfWritable, onSelect: () => pickAndUpload(path) },
                     { label: 'Upload folder…', disabled: !sfWritable, onSelect: () => pickAndUpload(path, true) },
                   ]
@@ -1193,6 +1270,20 @@ export function Files({ win }: { win: WinState }) {
         </button>
       </div>
 
+      {inBrowserHere && (
+        <div className="fm-browser-note" role="note">
+          <span>⚠ Saved in this browser only. Clearing the site's data deletes these files.{sfHome ? ' Copy what you want to keep into Seafile.' : ''}</span>
+          {sfHome ? (
+            <button className="link-btn" onClick={() => navigate(sfHome)}>
+              Seafile home
+            </button>
+          ) : (
+            <button className="link-btn" onClick={() => wm.open('settings', { section: 'integrations', sub: 'seafile', t: String(Date.now()) })}>
+              Set up Seafile
+            </button>
+          )}
+        </div>
+      )}
       <div className={`fm-body ${narrow && drawer ? 'has-drawer' : ''}`}>
         {narrow && drawer && <div className="fm-scrim" onPointerDown={() => setDrawer(false)} aria-hidden />}
         {(narrow ? drawer : prefs.sidebar) && (
@@ -1256,7 +1347,7 @@ export function Files({ win }: { win: WinState }) {
                     {libraryName(parseSf(path)!.repo)} has no {path.split('/').pop()} folder (any more).
                   </p>
                   <span className="office-actions">
-                    <button className="btn btn-small btn-primary" onClick={() => mkdir(path).then(() => refreshDirs(path)).catch((e: Error) => setToast(e.message))}>
+                    <button className="btn btn-small btn-primary" onClick={() => makeFolder(path).then(() => refreshDirs(path)).catch((e: Error) => setToast(e.message))}>
                       Create it
                     </button>
                     <button
@@ -1289,10 +1380,10 @@ export function Files({ win }: { win: WinState }) {
                 else tiles.current.delete(item.path)
               }}
               className={`fm-item ${selected.has(item.path) ? 'is-selected' : ''} ${item.name.startsWith('.') ? 'is-hidden' : ''} ${dropOn === item.path ? 'is-drop' : ''} ${clip?.op === 'move' && clip.paths.includes(item.path) ? 'is-cut' : ''}`}
-              draggable={!!item.sf && !item.sf.library && renaming !== item.path}
+              draggable={(item.sf ? !item.sf.library : canChange(item.path)) && renaming !== item.path}
               onDragStart={(e) => dragStart(e, item)}
               onDragEnd={dragEnd}
-              {...(item.sf && item.kind === 'folder'
+              {...((item.sf || canWrite(item.path)) && item.kind === 'folder'
                 ? {
                     'data-sf-drop': canWrite(item.path) ? item.path : undefined,
                     onDragEnter: (e: React.DragEvent) => acceptDrop(e, item.path),
@@ -1382,6 +1473,7 @@ export function Files({ win }: { win: WinState }) {
           {items.length} item{items.length === 1 ? '' : 's'}
           {selectedItems().length > 0 && ` · ${selectedItems().length} selected${selectedSize ? ` (${formatSize(selectedSize)})` : ''}`}
           {writable && ' · writable'}
+          {inBrowserHere && ` · this browser only · ${formatSize(browserBytes())} used`}
           {isSf(path) && path !== SF && sfDir.listing && (sfDir.listing.perm === 'rw' ? ` · ${libraryName(parseSf(path)!.repo)}` : ` · ${libraryName(parseSf(path)!.repo)} (read-only)`)}
         </span>
         <span>View size {prefs.zoom}%</span>

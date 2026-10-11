@@ -8379,3 +8379,56 @@ kbd {
     display: none;
   }
 }
+
+/* Files: a folder kept in this browser only (src/data/browserfs.ts) */
+.fm-browser-note {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--fg-bright);
+  background: color-mix(in srgb, var(--yellow) 18%, var(--panel));
+  border-bottom: 1px solid color-mix(in srgb, var(--yellow) 45%, transparent);
+}
+.fm-browser-note span {
+  flex: 1;
+  min-width: 0;
+}
+/* Zed: the open file is kept in this browser only */
+.zed-status-browser {
+  flex: none;
+  padding: 0 6px;
+  font-size: 11px;
+  color: var(--yellow);
+  border: 1px solid color-mix(in srgb, var(--yellow) 50%, transparent);
+}
+/* A red count on an app icon (Settings needs you, src/os/alerts.ts), macOS style */
+.app-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  background: var(--red);
+  box-shadow: 0 0 0 2px var(--bg-dark);
+  pointer-events: none;
+}
+/* The notification center's "Needs attention" (src/os/alerts.ts) */
+.nc-attention {
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.nc-alert-glyph {
+  color: #fff;
+  background: var(--red);
+  border-radius: 50%;
+}

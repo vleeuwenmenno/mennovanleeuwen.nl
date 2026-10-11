@@ -20,6 +20,8 @@ import { Dialogs, tell } from './Dialogs'
 import { FolderPicker } from './FolderPicker'
 import { initBackButton, setBackFocus } from './backButton'
 import { startActivityAlerts } from './activityAlerts'
+import { startAlerts, useAlerts } from './alerts'
+import { startStorageMove } from './storageMove'
 import { startAgentWatch } from './agentWatch'
 import { startPush } from './push'
 import { NotificationCenter } from './NotificationCenter'
@@ -265,6 +267,7 @@ function useDockVisibility(pinned: boolean, covered: boolean, appOpen: boolean, 
 }
 
 function Dock() {
+  const alerts = useAlerts()
   const wm = useWM()
   const overlay = useOverlay()
   const dockItems = useDock()
@@ -489,6 +492,7 @@ function Dock() {
         onContextMenu={(e) => openContextMenu(e, itemMenu(app))}
       >
         {iconOf(app)}
+        {app === 'settings' && alerts.length > 0 && <span className="app-badge">{alerts.length}</span>}
         <span className="dock-label">{labelOf(app)}</span>
         <span className="dock-dots">
           {Array.from({ length: Math.min(3, runningOf(app)) }, (_, n) => (
@@ -524,6 +528,8 @@ function Dock() {
             <span key={i} />
           ))}
         </span>
+        {/* Settings needs you (src/os/alerts.ts): on its own icon when it is in the dock, else here. */}
+        {alerts.length > 0 && !shown.includes('settings') && <span className="app-badge">{alerts.length}</span>}
         <span className="dock-label">All apps</span>
       </button>
       <span className="dock-sep" />
@@ -702,7 +708,7 @@ export function Shell() {
 
   // Fresh activity notifications start counting once the desktop is up.
   useEffect(() => {
-    if (power.phase === 'up') startActivityAlerts(), startAgentWatch(), startPush()
+    if (power.phase === 'up') startActivityAlerts(), startAgentWatch(), startPush(), startAlerts(), startStorageMove()
   }, [power.phase])
 
   // Links in apps open where Settings > Links says.

@@ -40,7 +40,7 @@ const LEGACY_HINT = 'mvlos.owner'
  * notification history, terminal history, Files' places, the Agents window layout and push.
  * Themes, games and the like stay.
  */
-const PER_ACCOUNT = [/^mvlos\.sync\./, /^mvlos\.notify\.history$/, /^mvlos\.history$/, /^mvlos\.files\.v1$/, /^mvlos\.desktop\.v1$/, /^mvlos\.dock\.v1$/, /^mvlos\.agents\./, /^mvlos\.push$/]
+const PER_ACCOUNT = [/^mvlos\.sync\./, /^mvlos\.notify\.history$/, /^mvlos\.history$/, /^mvlos\.files\.v1$/, /^mvlos\.desktop\.v1$/, /^mvlos\.dock\.v1$/, /^mvlos\.agents\./, /^mvlos\.push$/, /^mvlos\.browser\./]
 
 function storedAccount(): string | null {
   try {
@@ -52,20 +52,27 @@ function storedAccount(): string | null {
 
 /** Clears what the last account left in this browser, and stops its push messages arriving here. */
 async function forgetBrowserAccount() {
-  try {
-    for (const k of Object.keys(localStorage)) if (PER_ACCOUNT.some((r) => r.test(k))) localStorage.removeItem(k)
-    localStorage.removeItem(ACCOUNT_KEY)
-    localStorage.removeItem(LEGACY_HINT)
-  } catch {
-    /* no storage: nothing was kept either */
+  // First: synced stores stop saving (src/os/synced.ts), so nothing writes the old state back
+  // between here and the page starting again.
+  window.dispatchEvent(new Event('mvlos:forget'))
+  const clear = () => {
+    try {
+      for (const k of Object.keys(localStorage)) if (PER_ACCOUNT.some((r) => r.test(k))) localStorage.removeItem(k)
+      localStorage.removeItem(ACCOUNT_KEY)
+      localStorage.removeItem(LEGACY_HINT)
+    } catch {
+      /* no storage: nothing was kept either */
+    }
   }
+  clear()
   try {
     const sub = await (await navigator.serviceWorker?.getRegistration())?.pushManager?.getSubscription()
     await sub?.unsubscribe()
   } catch {
     /* no push here */
   }
-  window.dispatchEvent(new Event('mvlos:forget'))
+  // Anything else that wrote meanwhile (the notification history, say) goes too.
+  clear()
 }
 
 /**

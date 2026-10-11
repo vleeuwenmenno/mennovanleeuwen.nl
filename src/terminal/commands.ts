@@ -1253,7 +1253,7 @@ async function ping(ctx: Ctx): Promise<string> {
 
 export function writeTmp(cwd: string, target: string, content: string, append: boolean) {
   const abs = resolvePath(cwd, target)
-  if (!abs.startsWith('/tmp/') || abs.slice(5).includes('/')) throw new CmdError(`${target}: Read-only file system (only /tmp is writable)`)
+  if (!abs.startsWith('/tmp/') || abs.slice(5).includes('/')) throw new CmdError(`${target}: Read-only file system`)
   const name = abs.slice(5)
   const existing = tmp().children.get(name)
   const prev = existing?.type === 'file' ? existing.content() : ''

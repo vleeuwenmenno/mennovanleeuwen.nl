@@ -1,3 +1,4 @@
+import { cvMode } from './cvMode'
 import { synced } from './synced'
 import type { AppId } from './wm'
 
@@ -44,7 +45,15 @@ export const NOTIFY_SOURCES: NotifySource[] = [
       { id: 'unpacking', label: 'Unpacking', hint: 'An archive is unpacked, stopped or fails' },
     ],
   },
-  { app: 'system', label: 'MvL OS', icon: null, kinds: [{ id: 'update', label: 'Updates', hint: 'A new version is ready to restart into' }] },
+  {
+    app: 'system',
+    label: 'MvL OS',
+    icon: null,
+    kinds: [
+      { id: 'update', label: 'Updates', hint: 'A new version is ready to restart into' },
+      { id: 'storage', label: 'File storage', hint: 'Your files are only kept in this browser (it stays in the notification center until Seafile is set up)' },
+    ],
+  },
 ]
 
 /** An activity event's notification kind: merges count as pull requests, forks as new repositories. */
@@ -129,4 +138,5 @@ export const keepMs = (k: Keep) => KEEP.find(([id]) => id === k)?.[2] ?? 864e5 *
 export const sourceOf = (source: string | undefined) => (source ? NOTIFY_SOURCES.find((s) => s.app === source.split('.')[0]) : undefined)
 
 /** For Settings: every source, the account-only ones only when signed in. */
-export const visibleSources = (signedIn: boolean) => NOTIFY_SOURCES.filter((s) => signedIn || !s.account)
+// Menno's Minecraft server and activity only notify on his CV page (src/os/cvMode.ts).
+export const visibleSources = (signedIn: boolean) => NOTIFY_SOURCES.filter((s) => (signedIn || !s.account) && (cvMode() || (s.app !== 'minecraft' && s.app !== 'activity')))

@@ -12,6 +12,9 @@ import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } f
 import { setSwing, useSwingPrefs } from '../os/swing'
 import { ask } from '../os/Dialogs'
 import { UsersSettings } from './UsersSettings'
+import { openAlert, useAlerts } from '../os/alerts'
+import { formatSize } from '../terminal/vfs'
+import { browserFilesState, browserTree, useBrowserFiles, wipeBrowserFiles } from '../data/browserfs'
 import { Select } from '../os/Select'
 import { libraryName, loadLibraries, primaryOf, setSeafilePrefs, useLibraries, useSeafilePrefs } from '../data/seafile'
 import { fstabEntries, isSeafileType, useMounts } from '../data/mounts'
@@ -118,6 +121,7 @@ function Account() {
             Sign out
           </button>
         </li>
+        <BrowserFilesRow />
         <li className="set-row">
           <span className="set-row-text">
             <strong>Delete account</strong>
@@ -136,6 +140,30 @@ function Account() {
   )
 }
 
+/** Settings → Account: what is kept in this browser for you (src/data/browserfs.ts), and deleting it. */
+function BrowserFilesRow() {
+  useBrowserFiles()
+  const { files, bytes } = browserTree()
+  if (browserFilesState() !== 'ready') return null
+  const remove = async () => {
+    const ok = await ask({ title: 'Delete the files in this browser?', body: `${files} ${files === 1 ? 'file' : 'files'} (${formatSize(bytes)}) kept in this browser are deleted for good. Files in Seafile are not touched.`, confirm: 'Delete', danger: true })
+    if (ok) await wipeBrowserFiles()
+  }
+  return (
+    <li className="set-row">
+      <span className="set-row-text">
+        <strong>Files in this browser</strong>
+        <span className="muted">{files ? `${files} ${files === 1 ? 'file' : 'files'}, ${formatSize(bytes)}. Only here: clearing the site's data deletes them.` : 'None yet. Without Seafile as home, files you make are kept here.'}</span>
+      </span>
+      {files > 0 && (
+        <button className="btn btn-small" onClick={() => void remove()}>
+          Delete…
+        </button>
+      )}
+    </li>
+  )
+}
+
 /** Settings → Account → Delete: asks first, since nothing comes back. */
 async function removeAccount(setError: (e: string | null) => void) {
   const ok = await ask({
@@ -146,6 +174,8 @@ async function removeAccount(setError: (e: string | null) => void) {
   })
   if (!ok) return
   setError(null)
+  // This browser's copy of its files goes too (the server never had them).
+  await wipeBrowserFiles().catch(() => {})
   await deleteAccount().catch((e: Error) => setError(e.message))
 }
 
@@ -746,9 +776,13 @@ function Launchers() {
 type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice'
 
 /** Third-party services, one row each; a row opens that service's own settings. */
-function Integrations() {
+/** `sub` opens one service's settings straight away (Settings → Integrations → Seafile, from an alert). */
+function Integrations({ sub, t }: { sub?: string; t?: string }) {
   const account = useAccount()
   const [open, setOpen] = useState<IntegrationId | null>(null)
+  useEffect(() => {
+    if (sub === 'updown' || sub === 'ollama' || sub === 'seafile' || sub === 'onlyoffice') setOpen(sub)
+  }, [sub, t])
   const { libraries } = useLibraries()
   if (account.status !== 'user') return <p className="muted">Sign in first to connect services for widgets and Files.</p>
   const seafile = account.seafile
@@ -1601,7 +1635,7 @@ function LinkSettingsPane() {
 type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'agents' | 'golinks' | 'sync' | 'users' | 'about'
 /** `account`: only when signed in (accounts and services); visitors don't see it at all.
  * `admin`: only for admins (the server checks that on every request too). */
-type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; keywords: string; blurb: string; account?: true; admin?: true; render: () => ReactNode }
+type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; keywords: string; blurb: string; account?: true; admin?: true; render: (opened: { sub?: string; t?: string }) => ReactNode }
 
 const svg = (d: ReactNode) => (
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -1649,7 +1683,7 @@ const GROUPS: Pane[][] = [
   [
     { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', account: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
     { id: 'calendar', label: 'Calendar', hue: 'var(--red)', account: true, icon: svg(<><rect x="4" y="5" width="16" height="15" /><path d="M4 10h16M9 3v4M15 3v4" /></>), keywords: 'calendar google agenda events caldav fastmail nextcloud icloud', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock.', render: () => <CalendarSettings /> },
-    { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models', blurb: 'Services the widgets, Files and Agents use: updown.io for Status, Ollama Cloud, Seafile and OnlyOffice.', render: () => <Integrations /> },
+    { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models storage', blurb: 'Services the widgets, Files and Agents use: updown.io for Status, Ollama Cloud, Seafile and OnlyOffice.', render: ({ sub, t }) => <Integrations sub={sub} t={t} /> },
     { id: 'agents', label: 'Agents', hue: 'var(--magenta)', account: true, icon: svg(<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 16l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" />), keywords: 'agents ai assistant ollama models quick deep research title thread system prompt agents.md tools memory', blurb: 'The Agents app: its models, what a new thread starts with, and its system prompt.', render: () => <AgentsSettings /> },
   ],
   [
@@ -1691,6 +1725,8 @@ export function Settings({ win }: { win: WinState }) {
   // Visitors only see what works without an account; the user's panes would just say "sign in".
   const signedIn = useLikelySignedIn()
   const admin = !!account.user?.admin
+  const alerts = useAlerts()
+  const badges = alerts.reduce<Partial<Record<string, number>>>((m, a) => (a.pane ? { ...m, [a.pane]: (m[a.pane] ?? 0) + 1 } : m), {})
   const groups = useMemo(() => {
     const mine = GROUPS.map((g) => g.filter((p) => (signedIn || !p.account) && (admin || !p.admin))).filter((g) => g.length)
     return q ? [mine.flat().filter((p) => `${p.label} ${p.keywords}`.toLowerCase().includes(q))] : mine
@@ -1718,6 +1754,24 @@ export function Settings({ win }: { win: WinState }) {
             <span className="muted">{u ? `@${u.login} · GitHub` : 'This browser only'}</span>
           </span>
         </button>
+        {/* What needs you, as macOS lists "Finish setting up" under your name (src/os/alerts.ts). */}
+        {!q && alerts.length > 0 && (
+          <ul className="set-alerts">
+            {alerts.map((a) => (
+              <li key={a.id}>
+                <button onClick={() => (a.run ? a.run() : a.pane ? go(a.pane as PaneId) : openAlert(a))} title={a.body}>
+                  <span className="set-alert-dot" aria-hidden>
+                    !
+                  </span>
+                  <span className="set-alert-text">{a.title}</span>
+                  <span className="set-chevron" aria-hidden>
+                    ›
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         {groups.map((g, i) => (
           <ul key={i} className="set-nav">
             {g.map((p) => (
@@ -1727,6 +1781,11 @@ export function Settings({ win }: { win: WinState }) {
                     {p.icon}
                   </span>
                   {p.label}
+                  {badges[p.id] ? (
+                    <span className="set-nav-badge" aria-label={`${badges[p.id]} needs attention`}>
+                      {badges[p.id]}
+                    </span>
+                  ) : null}
                 </button>
               </li>
             ))}
@@ -1742,7 +1801,7 @@ export function Settings({ win }: { win: WinState }) {
           <h2>{current.label}</h2>
           {current.blurb && <p className="muted">{current.blurb}</p>}
         </header>
-        <div className="set-body">{current.render()}</div>
+        <div className="set-body">{current.render({ sub: win.props.section === current.id ? win.props.sub : undefined, t: win.props.t })}</div>
       </div>
     </div>
   )

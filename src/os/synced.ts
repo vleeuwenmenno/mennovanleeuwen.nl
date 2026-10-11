@@ -31,6 +31,12 @@ type Internal = Synced<unknown> & {
 }
 
 const stores = new Map<string, Internal>()
+/**
+ * Set while an account's state is being cleared from this browser (src/os/account.ts), right
+ * before the page starts again: nothing may write it back, or the next account would get it.
+ */
+let frozen = false
+if (typeof window !== 'undefined') window.addEventListener('mvlos:forget', () => (frozen = true))
 const storageKey = (key: string) => `mvlos.sync.${key}`
 
 function readMeta<T>(key: string, fallback: T, legacyKey?: string, normalize?: (v: unknown) => T): Meta<T> {
@@ -54,6 +60,7 @@ export function synced<T>(key: string, fallback: T, opts: { legacyKey?: string; 
   const remoteListeners = new Set<(v: T) => void>()
   const emit = () => listeners.forEach((l) => l())
   const save = () => {
+    if (frozen) return
     try {
       localStorage.setItem(storageKey(key), JSON.stringify(meta))
     } catch {
@@ -140,6 +147,11 @@ const statusListeners = new Set<() => void>()
 const setStatus = (s: SyncStatus) => {
   status = s
   statusListeners.forEach((l) => l())
+}
+export const getSyncStatus = () => status
+export const subscribeSyncStatus = (l: () => void) => {
+  statusListeners.add(l)
+  return () => statusListeners.delete(l)
 }
 export const useSyncStatus = () =>
   useSyncExternalStore(

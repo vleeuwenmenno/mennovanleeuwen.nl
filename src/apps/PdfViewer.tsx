@@ -1,7 +1,9 @@
+import { downloadFile, inBrowser, readBytes } from '../data/fileOps'
+import { browserFilesReady } from '../data/browserfs'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
 import { pdfjs } from '../data/pdfjs'
-import { download, fileLink, isSf, libraryName, parseSf } from '../data/seafile'
+import { isSf, libraryName, parseSf } from '../data/seafile'
 import { folderOf, nameOf } from '../data/media'
 import { useWM, type WinState } from '../os/wm'
 import { prettyPath } from '../terminal/vfs'
@@ -71,7 +73,7 @@ export function PdfViewer({ win }: { win: WinState }) {
   // --- loading --------------------------------------------------------------------------------
 
   useEffect(() => {
-    if (!path || !isSf(path)) return setError(path ? 'Only PDFs in Seafile open here.' : 'Nothing to show.')
+    if (!path) return setError('Nothing to show.')
     let live = true
     let task: { destroy: () => Promise<void> } | null = null
     setDoc(null)
@@ -80,11 +82,12 @@ export function PdfViewer({ win }: { win: WinState }) {
     setOutline(null)
     texts.current = null
     ;(async () => {
-      const link = await fileLink(path, 'download')
+      // A window opened again at boot asks before this browser's files have loaded.
+      if (!isSf(path)) await browserFilesReady()
+      if (!isSf(path) && !inBrowser(path)) throw new Error('only PDFs in Seafile or kept in this browser open here')
+      // Seafile's file server, or this browser's own store.
+      const data = new Uint8Array(await (await readBytes(path)).arrayBuffer())
       if (!live) return
-      const res = await fetch(link)
-      if (!res.ok) throw new Error(`Seafile answered ${res.status}`)
-      const data = new Uint8Array(await res.arrayBuffer())
       const m = await pdfjs()
       const loading = m.getDocument({ data })
       task = loading
@@ -335,7 +338,7 @@ export function PdfViewer({ win }: { win: WinState }) {
         <Tool label={full ? 'Exit full screen (F)' : 'Full screen (F)'} onClick={toggleFull}>
           {full ? <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /> : <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />}
         </Tool>
-        <Tool label="Download" onClick={() => void download(path).catch(() => {})}>
+        <Tool label="Download" onClick={() => void downloadFile(path).catch(() => {})}>
           <path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14" />
         </Tool>
       </div>
@@ -369,7 +372,7 @@ export function PdfViewer({ win }: { win: WinState }) {
               <p className="pv-big">{name}</p>
               <p className="muted">{error}</p>
               {isSf(path) && (
-                <button className="btn btn-small" onClick={() => void download(path).catch(() => {})}>
+                <button className="btn btn-small" onClick={() => void downloadFile(path).catch(() => {})}>
                   Download
                 </button>
               )}
