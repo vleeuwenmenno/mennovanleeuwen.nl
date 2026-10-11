@@ -11,6 +11,7 @@ import { readState, writeState } from './state.ts'
 import { webSearch } from './websearch.ts'
 import { CALENDAR_TOOLS, CALENDAR_WRITES, calendarConnected, calendarLines, calendarTools, NOT_CONNECTED, prepareCalendarCall, zoneOf, type CallSummary, type Prepared } from './agentCalendar.ts'
 import { notify } from './notifier.ts'
+import { isShuttingDown, onShutdown } from './shutdown.ts'
 import { AGENTS_MD } from '../src/data/agentsPrompt.ts'
 import { findSkill, folderOf, installSkills, listSkills, readSkillFile, removeSkill, skillFiles, type Folder, type Skill, type SkillPlaces } from './skills.ts'
 import { commandNames, exitPlanTool, FILE_DELETE, readBody, STEERING, FILE_TOOLS, FILE_WRITES, PERMISSIONS, projectInstructions, readOnlyCommand, runFileTool, terminalTool, workdirOf, workdirTools, type Permission, type Workdir } from './workdir.ts'
@@ -215,11 +216,16 @@ function checkAttachments(v: unknown): Attachment[] {
 // --- threads -----------------------------------------------------------------------------------
 
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; projectId: number | null; pinned: boolean; todos: Todo[]; /** A title is being thought of */ titling: boolean; /** Tokens the last reply took up in the model's context, as Ollama counted them */ contextTokens: number | null; /** Tool groups it may use */ tools: ToolGroup[]; /** Asked from Spotlight and not continued in the app yet */ quick: boolean; /** The Seafile folder its file tools work in */ workdir: Workdir | null; /** How changes are allowed: ask each time, edits allowed, or read only while planning */ permission: Permission; /** Messages waiting to be sent when the running turn is done, in order */ queue: QueuedInfo[] }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; projectId: number | null; pinned: boolean; todos: Todo[]; /** A title is being thought of */ titling: boolean; /** Tokens the last reply took up in the model's context, as Ollama counted them */ contextTokens: number | null; /** Tool groups it may use */ tools: ToolGroup[]; /** Asked from Spotlight and not continued in the app yet */ quick: boolean; /** The Seafile folder its file tools work in */ workdir: Workdir | null; /** How changes are allowed: ask each time, edits allowed, or read only while planning */ permission: Permission; /** Messages waiting to be sent when the running turn is done, in order */ queue: QueuedInfo[]; /** How the last turn was cut short, when it was: Retry runs it again */ interrupted: Interruption | null }
+/**
+ * A turn that did not end with an answer: the server restarted (a deploy) or stopped without a
+ * word (a crash) while it ran, it failed, or it was stopped.
+ */
+export type Interruption = { reason: 'restart' | 'crash' | 'failed' | 'stopped'; error?: string; at: number }
 export type ToolCall = { name: string; arguments: Record<string, unknown> }
 export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; createdAt: number }
 
-type ThreadRow = { id: string; title: string; mode: string; model: string; archived: number; created_at: number; updated_at: number; context_tokens: number | null; tools: string | null; project_id: number | null; pinned: number; todos: string | null; quick: number; workdir: string | null; permission: string | null; queue: string | null }
+type ThreadRow = { id: string; title: string; mode: string; model: string; archived: number; created_at: number; updated_at: number; context_tokens: number | null; tools: string | null; project_id: number | null; pinned: number; todos: string | null; quick: number; workdir: string | null; permission: string | null; queue: string | null; turn_at: number | null; interrupted: string | null }
 type MessageRow = { id: number; role: string; content: string; thinking: string | null; tool_calls: string | null; tool_name: string | null; attachments: string | null; created_at: number }
 
 const NEW_TITLE = 'New thread'
@@ -371,7 +377,7 @@ function deliver(user: User, thread: string, ask: Ask) {
 function startChain(user: User, thread: string, ask: Ask) {
   checkTurnRoom(user)
   requireKey(user)
-  void chain(user, thread, ask, null, false)
+  void runChain(user, thread, ask, null, false)
 }
 
 /** The queue was due while a message in it was being edited: now that the edit is done (or abandoned), it goes on. */
@@ -391,11 +397,13 @@ function resumeHeld(thread: string) {
     return // the queue stays, for the user to send
   }
   setQueue(thread, list.slice(1))
-  void chain(h.user, thread, askOf(list[0]), null, false)
+  void runChain(h.user, thread, askOf(list[0]), null, false)
 }
 
 /** What a chain does after a turn: a message sent now, else (after an answer) the queue's first, unless one is being edited. */
 function nextAsk(user: User, thread: string, outcome: Outcome): Ask | null {
+  // On the way down nothing new starts: what waits stays queued for after the restart.
+  if (isShuttingDown()) return null
   const now = sendNext.get(thread)
   if (now) return sendNext.delete(thread), now
   if (outcome !== 'answered' || !database().prepare('SELECT 1 FROM agent_threads WHERE id = ?').get(thread)) return null
@@ -506,7 +514,7 @@ export function sendQueued(user: User, id: string, qid: string): { thread: Threa
   return { thread: toThread(ownThread(user, row.id)) }
 }
 
-const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: (r.tools ? toolGroups(JSON.parse(r.tools)) : null) ?? [...TOOL_GROUPS], quick: !!r.quick, workdir: r.workdir ? (JSON.parse(r.workdir) as Workdir) : null, permission: permissionOf(r.permission), queue: queueInfo(r.id, r.queue ? (JSON.parse(r.queue) as Queued[]) : []) })
+const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: (r.tools ? toolGroups(JSON.parse(r.tools)) : null) ?? [...TOOL_GROUPS], quick: !!r.quick, workdir: r.workdir ? (JSON.parse(r.workdir) as Workdir) : null, permission: permissionOf(r.permission), queue: queueInfo(r.id, r.queue ? (JSON.parse(r.queue) as Queued[]) : []), interrupted: r.interrupted && !running.has(r.id) ? (JSON.parse(r.interrupted) as Interruption) : null })
 const permissionOf = (v: unknown): Permission => (PERMISSIONS.includes(v as Permission) ? (v as Permission) : 'default')
 /** With a work folder, its tools are switched on (a list saved before they existed lacks them). */
 const withFolderTools = (tools: ToolGroup[] | null, workdir: Workdir | null) => (tools && workdir ? [...new Set<ToolGroup>([...tools, 'files', 'terminal'])] : tools)
@@ -1895,7 +1903,16 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
   // Asked from the terminal's agents command: that terminal can run the terminal tool.
   const fromTerminal = body.client?.terminal === true
   if (fromTerminal) attachTerminal(row.id, res)
-  await chain(user, row.id, ask, res, fromTerminal)
+  await runChain(user, row.id, ask, res, fromTerminal)
+}
+
+/** Each running chain of turns, by thread, to wait for its end (Rewind stops it first). */
+const chains = new Map<string, Promise<void>>()
+function runChain(user: User, thread: string, first: Ask, res: ServerResponse | null, fromTerminal: boolean) {
+  const p = chain(user, thread, first, res, fromTerminal)
+  chains.set(thread, p)
+  void p.finally(() => chains.get(thread) === p && chains.delete(thread))
+  return p
 }
 
 /**
@@ -1909,6 +1926,8 @@ async function chain(user: User, thread: string, first: Ask, res: ServerResponse
   running.set(thread, new AbortController())
   runningFor.set(thread, user.id)
   partial.set(thread, { content: '', thinking: '' })
+  // Marked as running in the database too: a server that dies without a word finds it on its next start.
+  database().prepare('UPDATE agent_threads SET turn_at = ?, interrupted = NULL WHERE id = ?').run(Date.now(), thread)
   // Whether a window still shows this turn: the one that asked, or one that joined it later. When
   // none does, what the user should know (the answer, a question for them) goes to the
   // notification hub (server/notifier.ts): a pop-up on a page in view, or push to their devices.
@@ -1930,16 +1949,22 @@ async function chain(user: User, thread: string, first: Ask, res: ServerResponse
   sinks.set(thread, send)
   let ask: Ask | null = first
   let outcome: Outcome = 'stopped'
+  let error: string | undefined
   try {
     while (ask) {
       const ctl = new AbortController()
       running.set(thread, ctl)
-      outcome = await turn(user, thread, ask, ctl, send, fromTerminal && ask === first)
+      ;({ outcome, error } = await turn(user, thread, ask, ctl, send, fromTerminal && ask === first))
       ask = nextAsk(user, thread, outcome)
       // A turn stopped halfway through a reply leaves it unsaved: the next one starts clean.
       if (ask) partial.set(thread, { content: '', thinking: '' })
     }
   } finally {
+    // How it ended, for Retry; on the way down the shutdown hook has said so already.
+    if (!isShuttingDown()) {
+      const cut: Interruption | null = outcome === 'answered' ? null : { reason: outcome, ...(error ? { error } : {}), at: Date.now() }
+      database().prepare('UPDATE agent_threads SET turn_at = NULL, interrupted = ? WHERE id = ?').run(cut ? JSON.stringify(cut) : null, thread)
+    }
     sinks.delete(thread)
     running.delete(thread)
     runningFor.delete(thread)
@@ -1959,7 +1984,7 @@ async function chain(user: User, thread: string, first: Ask, res: ServerResponse
 }
 
 /** One turn: the user's message saved, then rounds of the model and its tools until it answers. */
-async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, send: (e: TurnEvent) => void, fromTerminal: boolean): Promise<Outcome> {
+async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, send: (e: TurnEvent) => void, fromTerminal: boolean): Promise<{ outcome: Outcome; error?: string }> {
   const { text, files, zone } = ask
   try {
     const row = ownThread(user, thread)
@@ -2136,15 +2161,16 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
       if (wrapUp) break
     }
     send({ type: 'done' })
-    return 'answered'
+    return { outcome: 'answered' }
   } catch (e) {
     if (!ctl.signal.aborted) {
       if (!(e instanceof HttpError)) console.error('agents:', e)
-      send({ type: 'error', error: e instanceof HttpError ? e.message : 'Something went wrong' })
-      return 'failed'
+      const error = e instanceof HttpError ? e.message : 'Something went wrong'
+      send({ type: 'error', error })
+      return { outcome: 'failed', error }
     }
     send({ type: 'done' })
-    return 'stopped'
+    return { outcome: 'stopped' }
   }
 }
 
@@ -2169,6 +2195,108 @@ export function followThread(res: ServerResponse, user: User, id: string, termin
     set.delete(follower)
     if (!set.size && followers.get(row.id) === set) followers.delete(row.id)
   })
+}
+
+// --- restarts, Retry and Rewind -----------------------------------------------------------------
+
+/**
+ * Tool calls of the last reply that never got a result (the turn was cut off while they ran) get
+ * one saying so, so the thread reads as a whole to the model: every call answered.
+ */
+function closeOpenCalls(thread: string, note: string) {
+  const msgs = messagesOf(thread)
+  const last = msgs.map((m) => m.role).lastIndexOf('assistant')
+  const calls = msgs[last]?.toolCalls ?? []
+  const answered = msgs.slice(last + 1).filter((m) => m.role === 'tool').length
+  for (const c of calls.slice(answered)) addMessage(thread, { role: 'tool', toolName: c.name, content: JSON.stringify({ error: note }) })
+}
+
+/**
+ * On the way down (a deploy sends SIGTERM): each running turn keeps the reply it was writing, its
+ * unfinished tool calls are closed, and the thread says it was interrupted by a restart, for the
+ * window to offer Retry. Nothing new starts, and what is queued stays queued.
+ */
+function shutdownTurns() {
+  const now = Date.now()
+  for (const thread of running.keys()) {
+    try {
+      const p = partial.get(thread)
+      if (p && (p.content.trim() || p.thinking.trim())) addMessage(thread, { role: 'assistant', content: p.content, thinking: p.thinking })
+      else closeOpenCalls(thread, 'The server restarted before this finished')
+      database().prepare('UPDATE agent_threads SET turn_at = NULL, interrupted = ? WHERE id = ?').run(JSON.stringify({ reason: 'restart', at: now } satisfies Interruption), thread)
+    } catch (e) {
+      console.error('[agents] could not mark a turn as interrupted:', (e as Error).message)
+    }
+  }
+  if (running.size) console.log(`[agents] ${running.size} running ${running.size === 1 ? 'turn' : 'turns'} marked as interrupted by the restart`)
+}
+
+let started = false
+/**
+ * Once the server (or Vite's dev server) starts: a thread still marked as running was cut off
+ * without a word (a crash, or a kill), so it is marked as interrupted that way. Its queue waits for
+ * the user, like after any interruption.
+ */
+export function startAgents() {
+  if (started) return
+  started = true
+  const rows = database().prepare('SELECT id, turn_at FROM agent_threads WHERE turn_at IS NOT NULL').all() as { id: string; turn_at: number }[]
+  for (const r of rows) {
+    closeOpenCalls(r.id, 'The server stopped before this finished')
+    database().prepare('UPDATE agent_threads SET turn_at = NULL, interrupted = ? WHERE id = ?').run(JSON.stringify({ reason: 'crash', at: r.turn_at } satisfies Interruption), r.id)
+  }
+  if (rows.length) console.log(`[agents] ${rows.length} ${rows.length === 1 ? 'turn was' : 'turns were'} cut off by a crash: marked as interrupted`)
+  onShutdown('agents', shutdownTurns)
+}
+
+/** A user message's files as they were sent, without the skill instructions a /name added (those come again). */
+const filesOf = (thread: string, messageId: number): Attachment[] => {
+  const row = database().prepare('SELECT attachments FROM agent_messages WHERE id = ? AND thread_id = ?').get(messageId, thread) as { attachments: string | null } | undefined
+  return row?.attachments ? (JSON.parse(row.attachments) as Attachment[]).filter((a) => a.source !== 'skill') : []
+}
+
+/**
+ * Retry: the last turn again. What it left (a partial or failed reply, its tool calls and results,
+ * or a whole answer to regenerate) goes, and the same message, with the same files, is answered
+ * again with the thread's model, mode and tools, streamed like a new message. Queued messages run
+ * after it, as after any answer.
+ */
+export async function retryTurn(res: ServerResponse, user: User, id: string, body: { client?: { terminal?: unknown; timeZone?: unknown } }) {
+  const row = ownThread(user, id)
+  if (running.has(row.id)) throw new HttpError(409, 'This thread is still answering')
+  const last = [...messagesOf(row.id)].reverse().find((m) => m.role === 'user')
+  if (!last) throw new HttpError(400, 'There is nothing to try again')
+  checkTurnRoom(user)
+  requireKey(user)
+  const ask: Ask = { text: last.content, files: filesOf(row.id, last.id), zone: zoneFor(body.client?.timeZone) }
+  database().prepare('DELETE FROM agent_messages WHERE thread_id = ? AND id >= ?').run(row.id, last.id)
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
+  const fromTerminal = body.client?.terminal === true
+  if (fromTerminal) attachTerminal(row.id, res)
+  await runChain(user, row.id, ask, res, fromTerminal)
+}
+
+/**
+ * Rewind to one of the user's messages: it and everything after it leave the thread, and it comes
+ * back (text and files) for the message box. A running turn is stopped first. What tools did along
+ * the way (memories, the plan, notes, files in the work folder, calendar events) is not undone, and
+ * the queue stays.
+ */
+export async function rewind(user: User, id: string, body: { messageId?: unknown }): Promise<{ thread: Thread; removed: number; message: { text: string; attachments: Attachment[] } }> {
+  const row = ownThread(user, id)
+  const target = database().prepare("SELECT id, content FROM agent_messages WHERE id = ? AND thread_id = ? AND role = 'user'").get(Number(body.messageId), row.id) as { id: number; content: string } | undefined
+  if (!target) throw new HttpError(404, 'That message is not in this thread any more')
+  const chainNow = chains.get(row.id)
+  if (running.has(row.id)) {
+    stopThread(user, row.id)
+    // Its last words (the tool results of the stopped reply) are written before anything goes.
+    await Promise.race([chainNow, new Promise((r) => setTimeout(r, 10_000))])
+  }
+  const message = { text: target.content, attachments: filesOf(row.id, target.id) }
+  const { n } = database().prepare('SELECT COUNT(*) AS n FROM agent_messages WHERE thread_id = ? AND id >= ?').get(row.id, target.id) as { n: number }
+  database().prepare('DELETE FROM agent_messages WHERE thread_id = ? AND id >= ?').run(row.id, target.id)
+  database().prepare('UPDATE agent_threads SET interrupted = NULL, context_tokens = NULL WHERE id = ?').run(row.id)
+  return { thread: toThread(ownThread(user, row.id)), removed: n, message }
 }
 
 // --- skills -----------------------------------------------------------------------------------

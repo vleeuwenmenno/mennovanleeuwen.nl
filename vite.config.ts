@@ -5,6 +5,7 @@ import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { handleApi } from './server/api.ts'
 import { empiresUpgrade, startEmpires } from './server/empires.ts'
+import { startAgents } from './server/agents.ts'
 import { startMinecraftWatch } from './server/minecraft.ts'
 import { startNotifications } from './server/watchers.ts'
 
@@ -23,6 +24,7 @@ const liveApi = (): Plugin => {
       server.middlewares.use(handler)
       server.httpServer?.on('upgrade', upgrade)
       startEmpires()
+      startAgents()
       startMinecraftWatch()
       startNotifications()
     },
@@ -30,6 +32,7 @@ const liveApi = (): Plugin => {
       server.middlewares.use(handler)
       server.httpServer.on('upgrade', upgrade)
       startEmpires()
+      startAgents()
       startMinecraftWatch()
       startNotifications()
     },
