@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
-import { addMemory, agentsPrompt, answer, approve, retryTurn, rewind, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, deleteMemory, deleteThread, getThread, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
+import { addMemory, agentsPrompt, answer, approve, retryTurn, rewind, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
 import { authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, startLogin } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
@@ -270,7 +270,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/agents/quick' && read) return json(res, 200, listQuick(requireUser(req))), true
     if (path === '/api/agents/quick' && method === 'DELETE') return clearQuick(requireUser(req)), json(res, 200, { ok: true }), true
     if (path === '/api/agents/threads' && method === 'POST') return json(res, 200, await createThread(requireUser(req), await readJson(req, 4096))), true
-    const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/follow|\/stop|\/approve|\/answer|\/result|\/title|\/context|\/queue|\/override|\/retry|\/rewind|\/share|\/queue\/[0-9a-f-]{36}(?:\/send|\/move)?)?$/.exec(path)
+    const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/follow|\/stop|\/approve|\/answer|\/result|\/title|\/retitle|\/context|\/queue|\/override|\/retry|\/rewind|\/share|\/queue\/[0-9a-f-]{36}(?:\/send|\/move)?)?$/.exec(path)
     if (agentThread) {
       const [, tid, sub] = agentThread
       if (!sub && read) return json(res, 200, getThread(requireUser(req), tid)), true
@@ -284,6 +284,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       if (sub === '/result' && method === 'POST') return clientResult(requireUser(req), tid, await readJson(req, 512 * 1024)), json(res, 200, { ok: true }), true
       if (sub === '/stop' && method === 'POST') return stopThread(requireUser(req), tid), json(res, 200, { ok: true }), true
       if (sub === '/title' && method === 'POST') return json(res, 200, await suggestTitle(requireUser(req), tid)), true
+      if (sub === '/retitle' && method === 'POST') return json(res, 200, await regenerateTitle(requireUser(req), tid)), true
       if (sub === '/context' && read) return json(res, 200, await contextOf(requireUser(req), tid)), true
       if (sub === '/answer' && method === 'POST') return answer(requireUser(req), tid, await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true
       if (sub === '/approve' && method === 'POST') return approve(requireUser(req), tid, await readJson(req, 8192)), json(res, 200, { ok: true }), true

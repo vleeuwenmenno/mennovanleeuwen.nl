@@ -1,4 +1,4 @@
-import { agentSettings, answerApproval, answerForm, createThread, getThread, listProjects, listThreads, sendClientResult, sendMessage, type Permission, type Thread, type Workdir } from '../../data/agents'
+import { agentSettings, answerApproval, answerForm, createThread, getThread, listProjects, listThreads, sendClientResult, sendMessage, threadMatches, type Permission, type Thread, type Workdir } from '../../data/agents'
 import { seafileAt, syncAgentPlaces } from '../../data/agentPlaces'
 import { getAccount } from '../../os/account'
 import { CmdError, type Ctx } from '../types'
@@ -39,7 +39,7 @@ const AGENTS_MAN = `{c:bold}NAME{/}
 
 {c:bold}OPTIONS{/}
        -c, --continue          continue the latest thread in this folder
-       -r, --resume [what]     resume a thread by id (its first characters) or title words
+       -r, --resume [what]     resume a thread by id (its first characters) or title words (earlier titles too)
        -p, --print             non-interactive: print the answer and exit (changes that need
                                approval are declined); also when the output goes into a pipe
        --model <name>          the model to use
@@ -122,7 +122,8 @@ async function agents(ctx: Ctx): Promise<string | void> {
     if (opts.cont) thread = threads.find((t) => sameFolder(t.workdir, workdir)) ?? (workdir ? null : threads[0] ?? null)
     else if (opts.resume) {
       const q = opts.resume.toLowerCase()
-      const hits = threads.filter((t) => t.id.startsWith(q) || t.title.toLowerCase().includes(q))
+      // Earlier titles count: a thread is found by the name it had when you last saw it.
+      const hits = threads.filter((t) => t.id.startsWith(q) || threadMatches(t, q))
       if (hits.length === 1) thread = hits[0]
       else first = `/resume ${opts.resume}`
     } else first = '/resume'

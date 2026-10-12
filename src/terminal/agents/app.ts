@@ -36,6 +36,9 @@ import {
   stopSharing,
   stopThread,
   suggestTitle,
+  regenerateTitle,
+  threadMatches,
+  agentSettings,
   toAttachment,
   TOOL_GROUPS,
   toolLabel,
@@ -114,6 +117,7 @@ const SLASH: [string, string][] = [
   ['/project', 'put this thread in a project'],
   ['/projects', 'list, rename or delete projects'],
   ['/rename', 'rename the thread (no name: suggest one)'],
+  ['/title', 'the title and earlier ones (regen: a fresh one)'],
   ['/pin', 'pin or unpin the thread'],
   ['/archive', 'archive the thread and start a new one'],
   ['/delete', 'delete the thread'],
@@ -1431,7 +1435,7 @@ export class Session {
         this.permission = e.thread.permission
         this.mode = e.thread.mode
         this.workdir = e.thread.workdir
-        if (before && before.title !== e.thread.title && before.title === 'New thread') this.notice = `Thread: ${e.thread.title}`
+        if (before && before.title !== e.thread.title && before.id === e.thread.id) this.notice = before.title === 'New thread' ? `Thread: ${e.thread.title}` : `Thread renamed: ${e.thread.title} (was ${before.title})`
         this.draw()
         break
       }
@@ -1590,7 +1594,7 @@ export class Session {
       case '/resume': {
         if (busy()) return true
         const threads = await listThreads(false).catch(() => [] as Thread[])
-        const items = threads.filter((t) => !arg || t.title.toLowerCase().includes(arg.toLowerCase())).map((t) => ({ value: t.id, label: t.title, hint: `${ago(t.updatedAt)} ago${t.workdir ? ` · ${t.workdir.label}` : ''}${t.running ? ' · working' : ''}`, checked: t.id === this.thread?.id }))
+        const items = threads.filter((t) => threadMatches(t, arg.toLowerCase())).map((t) => ({ value: t.id, label: t.title, hint: `${ago(t.updatedAt)} ago${t.workdir ? ` · ${t.workdir.label}` : ''}${t.running ? ' · working' : ''}`, checked: t.id === this.thread?.id }))
         if (!items.length) return this.say('No threads to resume'), true
         const picked = await this.choose('Resume a thread', items)
         if (picked) await this.open(picked[0])
@@ -1727,6 +1731,34 @@ export class Session {
         this.say(`Renamed to “${title}”`)
         return true
       }
+      case '/title': {
+        if (!this.thread) return this.say('Send a message first: then the thread has a title'), true
+        if (arg === 'regen' || arg === 'regenerate') {
+          this.notice = 'Thinking of a title…'
+          this.draw()
+          try {
+            const before = this.thread.title
+            this.thread = (await regenerateTitle(this.thread.id)).thread
+            this.say(this.thread.title === before ? `Still “${before}”: no better title came to mind` : `Renamed to “${this.thread.title}”`)
+          } catch (e) {
+            this.say(`No new title: ${(e as Error).message}`, 'red')
+          }
+          return true
+        }
+        if (arg) return this.say('Usage: /title shows the title, /title regen asks for a fresh one, /rename <title> sets your own', 'yellow'), true
+        // Looked up again: a check after the last answer may have changed it since.
+        const t = await getThread(this.thread.id).then((r) => r.thread, () => this.thread!)
+        this.thread = t
+        const s = agentSettings()
+        const row = (k: string, v: string): Line => [seg(`  ${k.padEnd(14)}`, 'muted'), seg(v)]
+        this.out([
+          [seg('Title ', 'bold'), seg(t.title)],
+          row('named by', t.titleSource === 'user' ? 'you: kept as it is (/title regen hands it back)' : !s.titleRefresh ? 'the title model; not kept up to date (Settings → Agents → Models)' : `the title model, checked every ${s.titleEvery} of your messages`),
+          ...(t.aliases.length ? t.aliases.map((a, i) => row(i ? '' : 'also known as', `${a.title}  (until ${ago(a.until)} ago)`)) : [row('also known as', 'nothing yet')]),
+          [],
+        ])
+        return true
+      }
       case '/pin':
         if (!this.thread) return this.say('Nothing to pin yet'), true
         await this.patch({ pinned: !this.thread.pinned })
@@ -1800,6 +1832,7 @@ export class Session {
           [seg('Status', 'bold')],
           row('account', a.user ? `${a.user.login} (GitHub)` : 'not signed in'),
           row('thread', t ? `${t.title} (${t.id.slice(0, 8)})` : 'new (made on your first message)'),
+          ...(t?.aliases.length ? [row('also known as', t.aliases.map((a) => a.title).join(', '))] : []),
           row('model', t?.model ?? this.model ?? 'default for the mode'),
           row('mode', this.mode === 'deep' ? 'deep research' : 'quick'),
           row('permissions', { default: 'ask before each change', acceptEdits: 'accept edits', plan: 'plan (read only)' }[this.permission]),

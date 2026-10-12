@@ -210,6 +210,13 @@ export function database(): DatabaseSync {
   // next start), and how the last turn was cut short (JSON {reason, error?, at}), for Retry.
   if (!cols('agent_threads').includes('turn_at')) db.exec('ALTER TABLE agent_threads ADD COLUMN turn_at INTEGER')
   if (!cols('agent_threads').includes('interrupted')) db.exec('ALTER TABLE agent_threads ADD COLUMN interrupted TEXT')
+  // Added later: keeping titles up to date (server/agents.ts). Who set the title ('user' when it
+  // was renamed by hand, which the automatic check never overrides; NULL or 'auto' otherwise), the
+  // titles it had before (JSON [{title, until}], newest first), and the last message id when the
+  // title was last decided on, so the check knows how much was said since.
+  if (!cols('agent_threads').includes('title_source')) db.exec('ALTER TABLE agent_threads ADD COLUMN title_source TEXT')
+  if (!cols('agent_threads').includes('title_history')) db.exec('ALTER TABLE agent_threads ADD COLUMN title_history TEXT')
+  if (!cols('agent_threads').includes('title_mark')) db.exec('ALTER TABLE agent_threads ADD COLUMN title_mark INTEGER')
   // Shared links to a thread or one answer (server/shares.ts): a snapshot taken when shared, read
   // by anyone with the token until it expires or is revoked. They go with their thread and account.
   db.exec(`CREATE TABLE IF NOT EXISTS agent_shares (

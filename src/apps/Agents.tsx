@@ -48,6 +48,9 @@ import {
   rewindThread,
   interruptionText,
   suggestTitle,
+  regenerateTitle,
+  threadMatches,
+  alsoKnownAs,
   tokenCount,
   toolLabel,
   updateThread,
@@ -78,7 +81,7 @@ import { Select } from '../os/Select'
 import { hasCalendar, signIn, useAccount } from '../os/account'
 import { fieldMenu, linkAt, linkMenu, openContextMenu, openMenuAt, selectionIn, tidyMenu, type MenuItem } from '../os/ContextMenu'
 import { searchWeb } from '../data/searchEngine'
-import { ask, ask as confirmDialog, choose } from '../os/Dialogs'
+import { ask, ask as confirmDialog, choose, tell } from '../os/Dialogs'
 import { setCloseGuard, useWM, type WinState } from '../os/wm'
 import { pullAll } from '../os/synced'
 import { mayTakeFocus } from '../os/overlays'
@@ -238,10 +241,11 @@ function AgentsApp({ win }: { win: WinState }) {
     listProjects().then(setProjects, () => {})
   }, [archived])
   useEffect(refresh, [refresh])
-  // Titles being thought of arrive a moment after the answer starts, and threads answering in the
-  // background finish on their own: look again until the titles are in and nothing is running.
+  // Titles being thought of arrive a moment after the answer starts, titles being checked a moment
+  // after it ends, and threads answering in the background finish on their own: look again until
+  // the titles are in and nothing is running.
   useEffect(() => {
-    const titling = threads.some((t) => t.titling)
+    const titling = threads.some((t) => t.titling || t.checkingTitle)
     if (!titling && !threads.some((t) => t.running)) return
     const timer = setTimeout(refresh, titling ? 1500 : 3000)
     return () => clearTimeout(timer)
@@ -252,7 +256,8 @@ function AgentsApp({ win }: { win: WinState }) {
   }
 
   const query = q.trim().toLowerCase()
-  const shown = useMemo(() => threads.filter((t) => !query || t.title.toLowerCase().includes(query)), [threads, query])
+  // Earlier titles count too: a thread is found by the name it had when you last saw it.
+  const shown = useMemo(() => threads.filter((t) => threadMatches(t, query)), [threads, query])
   const inProject = (t: Thread) => t.projectId !== null && projects.some((p) => p.id === t.projectId)
   const loose = pinnedFirst(shown.filter((t) => archived || !inProject(t)))
   const loosePinned = loose.filter((t) => t.pinned)
@@ -271,6 +276,11 @@ function AgentsApp({ win }: { win: WinState }) {
     refresh()
   }
   const pin = (t: Thread) => void updateThread(t.id, { pinned: !t.pinned }).then(refresh, () => {})
+  // A fresh title from the title model, shown as being thought of until it lands.
+  const regenerate = (t: Thread) => {
+    setThreads((list) => list.map((x) => (x.id === t.id ? { ...x, titling: true } : x)))
+    regenerateTitle(t.id).then(refresh, (e: Error) => (refresh(), void tell({ title: 'No new title', body: e.message })))
+  }
   const move = (t: Thread, projectId: number | null) => void updateThread(t.id, { projectId }).then(refresh, () => {})
   const menu = (t: Thread): MenuItem[] => [
     { label: 'Open', onSelect: () => open(t.id) },
@@ -284,6 +294,7 @@ function AgentsApp({ win }: { win: WinState }) {
       ]),
     },
     { label: 'Rename…', onSelect: () => setRenaming(t.id) },
+    { label: 'Regenerate title', hint: regenerateHint(t), disabled: t.titling, onSelect: () => regenerate(t) },
     { label: 'Copy as Markdown', onSelect: () => void getThread(t.id).then((r) => copy(threadMarkdown(r.thread.title, r.messages)), () => {}) },
     { label: 'Share thread…', onSelect: () => void openShareDialog(t) },
     { separator: true },
@@ -439,7 +450,7 @@ function AgentsApp({ win }: { win: WinState }) {
           className={`agt-item ${t.id === selected && main.kind === 'thread' ? 'is-active' : ''}`}
           onClick={() => open(t.id)}
           onContextMenu={(e) => openContextMenu(e, menu(t))}
-          title={`${t.title}\n${t.mode === 'deep' ? 'Deep research' : 'Quick'} · ${t.model}`}
+          title={[t.title, alsoKnownAs(t), `${t.mode === 'deep' ? 'Deep research' : 'Quick'} · ${t.model}`].filter(Boolean).join('\n')}
           {...(archived ? {} : dragging({ kind: 'thread', id: t.id }))}
         >
           <span className={`agt-dot-mode is-${t.mode} ${t.running ? 'is-running' : ''}`} aria-label={t.mode === 'deep' ? 'Deep research' : 'Quick'} />
@@ -1003,8 +1014,12 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 
   useEffect(() => {
     if (!listThread) return
-    setThread((t) => (t && t.id === listThread.id && (t.title !== listThread.title || t.titling !== listThread.titling) ? { ...t, title: listThread.title, titling: listThread.titling } : t))
-  }, [listThread?.title, listThread?.titling])
+    setThread((t) =>
+      t && t.id === listThread.id && (t.title !== listThread.title || t.titling !== listThread.titling || t.aliases.length !== listThread.aliases.length || t.titleSource !== listThread.titleSource)
+        ? { ...t, title: listThread.title, titling: listThread.titling, aliases: listThread.aliases, titleSource: listThread.titleSource, checkingTitle: listThread.checkingTitle }
+        : t,
+    )
+  }, [listThread?.title, listThread?.titling, listThread?.aliases.length, listThread?.titleSource])
 
   // What a turn streams, whether this window started it or joined it later.
   const onEvent = (e: TurnEvent) => {
@@ -1438,6 +1453,14 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, editingQ?.id])
 
+  const regenerate = () => {
+    if (!thread) return
+    setThread({ ...thread, titling: true })
+    regenerateTitle(thread.id).then(
+      (r) => (setThread(r.thread), onChanged()),
+      (e: Error) => (setThread((t) => (t ? { ...t, titling: false } : t)), setError(e.message)),
+    )
+  }
   const rename = (title: string) => {
     setRenaming(false)
     title = title.trim()
@@ -1476,6 +1499,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               ]
             : []),
           { label: 'Rename…', onSelect: () => setRenaming(true) },
+          { label: 'Regenerate title', hint: regenerateHint(thread), disabled: thread.titling, onSelect: regenerate },
           thread.archived ? { label: 'Move back to threads', onSelect: () => onArchive(thread, false) } : { label: 'Archive', onSelect: () => onArchive(thread, true) },
           { label: 'Delete…', danger: true, onSelect: () => onDelete(thread) },
         ]
@@ -1662,7 +1686,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         {thread && renaming ? (
           <RenameBox thread={thread} onSave={rename} onCancel={() => setRenaming(false)} />
         ) : (
-          <button className="agt-title" onDoubleClick={() => thread && setRenaming(true)} title={thread ? 'Double-click to rename' : undefined}>
+          <button className="agt-title" onDoubleClick={() => thread && setRenaming(true)} title={thread ? [alsoKnownAs(thread), 'Double-click to rename'].filter(Boolean).join('\n') : undefined}>
             {thread ? <Scramble text={thread.title} pending={titlePending(thread) || (busy && thread.title === NEW_TITLE)} /> : 'New thread'}
           </button>
         )}
@@ -1682,6 +1706,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             onClick={(e) =>
               openContextMenu(e, [
                 { label: 'Rename…', onSelect: () => setRenaming(true) },
+                { label: 'Regenerate title', hint: regenerateHint(thread), disabled: thread.titling || !messages.length, onSelect: regenerate },
                 { label: 'Share thread…', disabled: !hasAnswer, onSelect: () => void openShareDialog(thread) },
                 thread.archived ? { label: 'Move back to threads', onSelect: () => onArchive(thread, false) } : { label: 'Archive', onSelect: () => onArchive(thread, true) },
                 { separator: true },
@@ -2400,6 +2425,8 @@ const MODE_HELP: Record<Mode, string> = {
 // --- titles ----------------------------------------------------------------------------------
 
 const NEW_TITLE = 'New thread'
+/** Regenerate title's second line: only when it changes more than the title (one you named goes back to automatic). */
+const regenerateHint = (t: Thread) => (t.titleSource === 'user' ? 'You named it: titles keep up to date again after this' : undefined)
 /** Still waiting for the title model. */
 const titlePending = (t: Thread) => t.titling || (t.title === NEW_TITLE && t.running)
 

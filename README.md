@@ -152,6 +152,9 @@ In a folder on Seafile, that folder becomes the thread's work folder:
 - `/share` shares the thread as a link and `/share last` its last answer, never expiring unless
   given `1h`, `1d`, `7d` or `30d` (`/share last 7d`); `/shares` lists the thread's links and
   `/unshare <id>` (or `/unshare` and a pick) stops one. See *Shared links* under Agents below.
+- `/title` shows the thread's title, who named it and the titles it had before (`/status` shows
+  those too), `/title regen` asks the title model for a fresh one, and `/rename` sets your own,
+  which is then kept as it is. See *Titles keep up to date* under Agents below.
 - `agents -c`/`-r` resume a thread, `agents -p` answers once for pipes, and `/help` lists the
   slash commands.
 
@@ -511,6 +514,29 @@ in `FIELDS` ([`src/apps/Agents.tsx`](src/apps/Agents.tsx)) and an unknown type f
 field, so new types can be added one at a time. Threads get a title from a small model, can be renamed (with a
 suggestion), archived and deleted, and the sidebar folds to a rail.
 
+**Titles keep up to date** (Settings → Agents → Models → *Thread titles*, on by default). A first
+title names how a thread started, and threads wander, so every few of your messages (3, 4, 6 or 10;
+4 by default, sooner when a thread grows by more than about 24,000 characters over at least two
+messages) the server asks the title model once more, after the turn has answered and without
+holding up the answer or the next queued message. It gets the current title and a small digest of
+the latest exchanges (your last few messages and the start of each answer; no tool results,
+thinking or files beyond their names) and answers `{"keep": true}` or `{"title": "…"}`. The prompt
+leans hard towards keeping: a follow-up, a deeper question or new details keep the title, and only
+a real change of subject renames the thread. A failed check is only logged, and waits as long as a
+normal one before it is tried again. A title you set yourself (renaming in the app, or `/rename`)
+is never changed automatically; *Regenerate title* (the thread's ⋯ menu, its right-click menu in
+the sidebar or the conversation, `/title regen` in the terminal) asks for a fresh title for what the
+thread talks about now, saves it straight away and hands the title back to the automatic check. Old
+titles stay on the thread as aliases (the last five, with when each was replaced): hovering a thread
+in the sidebar, or the title over the conversation, shows *Also known as: …*, and the sidebar's
+search, `/resume` and `agents -r` find threads by them too. The thread's columns are `title_source`
+(`user` when renamed by hand), `title_history` (JSON `[{title, until}]`, newest first) and
+`title_mark` (the last message id when the title was last decided on, which the check counts
+from); the thread carries them as `titleSource`, `aliases` and, while a check runs, `checkingTitle`
+(windows look again until it is done, and a change streams as a `thread` event when the turn's
+stream is still open). `POST /api/agents/threads/:id/retitle` regenerates and answers `{thread}`;
+`…/title` still only suggests one for the rename box.
+
 While a turn runs, Enter in the composer queues the message (files and all) instead: queued
 messages sit over the composer in order, each with *Edit* (it goes back into the message box, files
 included; ↑ in an empty box edits the last one, Esc puts it back), *Send now* and remove. The
@@ -572,8 +598,8 @@ deletes its links. The endpoints are `POST /api/agents/threads/:id/share` (`{kin
 "response", messageId?, expires?: "never" | "1h" | "1d" | "7d" | "30d"}`, answering `{token, url,
 expiresAt, …}` with the address from `PUBLIC_URL`), `GET /api/agents/shares` (`?thread=` for one
 thread's) and `DELETE /api/agents/shares/:token`.
-Settings → Agents (also the app's ⚙) picks the model for Quick, Deep and titles, what a new thread
-starts with, and shows the system prompt: `~/AGENTS.md`, your own from Seafile when Seafile is
+Settings → Agents (also the app's ⚙) picks the model for Quick, Deep and titles, whether titles
+keep up to date (and how often they are checked), what a new thread starts with, and shows the system prompt: `~/AGENTS.md`, your own from Seafile when Seafile is
 home, otherwise a read-only built-in one ([`src/data/agentsPrompt.ts`](src/data/agentsPrompt.ts)).
 Spotlight takes questions too: *Ask Agents* is under the web search, and a `?` in front makes it
 the top hit. `OLLAMA_URL` points it at a stand-in for ollama.com when testing.
