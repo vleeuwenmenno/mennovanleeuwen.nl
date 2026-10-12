@@ -85,6 +85,8 @@ const ICONS = {
   speed: 'M4 6l7 6l-7 6z M12 6l7 6l-7 6z',
   // A grid with one corner cell shaded off: the fog grid.
   grid: 'M3.5 3.5h17v17h-17z M3.5 9.17h17 M3.5 14.83h17 M9.17 3.5v17 M14.83 3.5v17 M14.83 14.83l5.67 5.67 M17.6 14.83l2.9 2.9',
+  // An open book: the Codex.
+  codex: 'M12 6.5C10 5 7 4.5 4 5v13.5c3-.5 6 0 8 1.5c2-1.5 5-2 8-1.5V5c-3-.5-6 0-8 1.5z M12 6.5V20',
   // Hyperspace: streaks closing in on a point.
   jump: 'M12 12m-2.5 0a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0 M2 12h5 M17 12h5 M4.5 5.5l3.5 3 M19.5 18.5l-3.5-3 M4.5 18.5l3.5-3 M19.5 5.5l-3.5 3',
 } as const
