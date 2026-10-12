@@ -8,7 +8,7 @@ import { LongPress, TouchBar, WheelHost, getTouchMods, isTouch, setTouchMod, shi
 import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
 import { Multiplayer } from './empires/Multiplayer'
-import { Net, battleToRejoin, type NetView } from './empires/net'
+import { Net, REJOIN_WAIT, awayBattle, battleToRejoin, type NetView } from './empires/net'
 import { cmd as makeCmd, runCmd, thinPath, type CmdArgs, type CmdName, type CmdResult } from './empires/commands'
 import { matchBrains, matchMap, matchWorld, stepTurn, type MatchInfo } from './empires/match'
 import { HASH_EVERY } from './empires/protocol'
@@ -87,9 +87,9 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
   const netRef = useRef(net)
   netRef.current = net
   // Closing the window leaves a lobby like quitting does, rather than holding the seat for a
-  // reconnect that isn't coming. From a battle it only steps away: the battle waits a minute for
-  // the player to open the game again and rejoin it (the others can vote to carry on sooner). A
-  // reload never gets here, so the server lets that come back either way.
+  // reconnect that isn't coming. From a battle it only steps away: the battle waits a few minutes
+  // (REJOIN_MS) for the player to open the game again and rejoin it (the others can vote to carry
+  // on sooner). A reload never gets here, so the server lets that come back either way.
   useEffect(
     () => () => {
       if (!netRef.current?.inBattle()) netRef.current?.leave()
@@ -107,6 +107,23 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
     return () => n.close()
   }, [])
 
+  // Whether a multiplayer battle waits for us, for the main menu's "Rejoin battle": the one this
+  // browser was last in to begin with, then what the server says (signed in, that covers a battle
+  // left on another device too). Asked again now and then, as the battle stops waiting at some point.
+  const [rejoin, setRejoin] = useState(battleToRejoin)
+  useEffect(() => {
+    if (screen !== 'menu') return
+    let live = true
+    const ask = () => void awayBattle().then((b) => live && b !== null && setRejoin(b))
+    setRejoin(battleToRejoin())
+    ask()
+    const t = setInterval(ask, 15_000)
+    return () => {
+      live = false
+      clearInterval(t)
+    }
+  }, [screen])
+
   if (screen === 'menu') {
     const saves = listSaves()
     return (
@@ -116,7 +133,7 @@ export function EmpiresAtWar({ win }: { win: WinState }) {
           setNet(new Net())
           setScreen('multiplayer')
         }}
-        rejoin={battleToRejoin()}
+        rejoin={rejoin}
         latest={saves[0] ? `${saves[0].name}, week ${saves[0].week}` : undefined}
         saves={saves.length}
         onConquest={(how) => {
@@ -1974,7 +1991,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
               </Frame>
             ) : (
               <Frame title="Connection lost">
-                <p>Reconnecting to the server. The battle waits for you meanwhile (for up to a minute), and you'll be put back in it as soon as the connection is back.</p>
+                <p>Reconnecting to the server. The battle waits for you meanwhile (for up to {REJOIN_WAIT}), and you'll be put back in it as soon as the connection is back.</p>
               </Frame>
             )}
           </div>

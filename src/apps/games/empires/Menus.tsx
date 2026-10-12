@@ -3,6 +3,8 @@ import { DIFFICULTY, type Difficulty } from './ai'
 import { CREDIT_STEPS, FACTIONS, type FactionId } from './data'
 import { Frame, Icon, Tips } from './Hud'
 import { battleLayout, type LayoutStore } from './layout'
+import { NAME_MAX, nameProblem, tidyName } from './names'
+import { REJOIN_WAIT, mpName } from './net'
 import { DEFAULT_RULES, GENERATED, MAP, MAPS, MAX_BEACONS, MAX_SEED, cleanRules, defaultArea, generateMap, type Amount, type MapDef, type MapRules, type Rect } from './maps'
 import { ALLY, ENEMY, OWN, drawTerrainOverview, relColor } from './render'
 import { ACTIONS, RESERVED, bindKey, keyName, keyOf, resetKeys, setSettings, useAskedPanel, useSettings, type Action, type Settings } from './settings'
@@ -476,9 +478,63 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
         <span>Ships the station isn't upgraded for</span>
         <Seg label="Locked ships" value={s.lockedShips} options={[[false, 'Hide'], [true, 'Show greyed out']]} onChange={(v) => set({ lockedShips: v })} />
       </div>
+      <h5>Multiplayer</h5>
+      <MpNameRow sound={sound} />
       <h5>Sound test</h5>
       {testing ? <SoundTest sound={sound} /> : <button className="ew-soundtest-open" onClick={() => (sound.unlock(), setTesting(true))}>Play every sound in the game…</button>}
     </div>
+  )
+}
+
+/** The multiplayer name the game remembers (net.ts): joining takes it by itself. It can be changed
+ * here for next time (in a lobby, the header's Change renames at once), or forgotten, so the next
+ * visit asks again. */
+function MpNameRow({ sound }: { sound: EmpiresSound }) {
+  const name = mpName.use()
+  const [draft, setDraft] = useState<string | null>(null)
+  if (draft === null)
+    return (
+      <div className="ew-row">
+        <span>
+          Name <small className="ew-muted">{name ? <>· <b>{name}</b>, taken by itself when you join</> : '· none yet, asked when you join'}</small>
+        </span>
+        <span className="ew-chips">
+          <button className="ew-chip" onClick={() => (sound.click(), setDraft(name ?? ''))}>
+            {name ? 'Change' : 'Pick one'}
+          </button>
+          {name && (
+            <button className="ew-chip" onClick={() => (sound.click(), mpName.set(null))} data-tip="The next time you join, you're asked for a name">
+              Forget
+            </button>
+          )}
+        </span>
+      </div>
+    )
+  const tidy = tidyName(draft)
+  const why = nameProblem(tidy)
+  return (
+    <form
+      className="ew-row ew-mpname"
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (why) return sound.error()
+        sound.click()
+        mpName.set(tidy)
+        setDraft(null)
+      }}
+    >
+      <span>Name</span>
+      <span className="ew-mpname-edit">
+        <input value={draft} maxLength={NAME_MAX + 4} autoFocus spellCheck={false} onChange={(e) => setDraft(e.target.value)} aria-label="Multiplayer name" aria-invalid={!!why} />
+        <button type="submit" className="ew-chip" disabled={!!why}>
+          Save
+        </button>
+        <button type="button" className="ew-chip" onClick={() => (sound.click(), setDraft(null))}>
+          Cancel
+        </button>
+      </span>
+      {why && draft && <small className="ew-mp-bad ew-mpname-why">{why}</small>}
+    </form>
   )
 }
 
@@ -677,7 +733,7 @@ export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, 
         {screen === 'multi' && (
           <Frame className="ew-menu-frame" title="Multiplayer">
             {rejoin && (
-              <button className="ew-menu-btn is-primary" onClick={click(onMultiplayer)} data-tip="Your battle waits a minute for you to come back">
+              <button className="ew-menu-btn is-primary" onClick={click(onMultiplayer)} data-tip={`Your battle waits ${REJOIN_WAIT} for you to come back`}>
                 <Icon name="play" size={20} /> Rejoin battle
               </button>
             )}
@@ -694,7 +750,7 @@ export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, 
             <Icon name="fleet" size={20} /> Single player
           </button>
           {rejoin && (
-            <button className="ew-menu-btn is-primary" onClick={click(onMultiplayer)} data-tip="Your battle waits a minute for you to come back">
+            <button className="ew-menu-btn is-primary" onClick={click(onMultiplayer)} data-tip={`Your battle waits ${REJOIN_WAIT} for you to come back`}>
               <Icon name="play" size={20} /> Rejoin battle
             </button>
           )}
