@@ -2,9 +2,11 @@ import { along, capsule, circle, halfHull, part, spline, sym, thick, turn, turnP
 import type { ModelDef } from './spec.ts'
 import type { Detail, Part, Pt, Tone } from './types.ts'
 
-// The droid Confederacy's style kit: organic, insect-like curves instead of plates, bone-tan
-// shells with violet accents, a glowing sensor eye and violet engine light. Built from arcs and
-// tapering segments rather than wedges.
+// The Swarm: a concept for a future third faction, not used in battle. Organic, insect-like curves
+// instead of plates, bone-tan shells with violet accents, a glowing sensor eye and violet engine
+// light, built from arcs and tapering segments rather than wedges. These were the Confederacy's
+// first designs; they are kept here as they were, one for each droid unit (same ids, same box and
+// hardpoints), and the Codex shows them under "Swarm (concept)".
 
 /**
  * A crescent: points along an elliptical arc (centre cx, cy, radii rx, ry) from angle a0 to a1, and

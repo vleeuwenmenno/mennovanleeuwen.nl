@@ -3,9 +3,9 @@ import { ABILITIES, FACTIONS, STATIONS, TECH, TECHS, UNITS, moduleSprite, roleOf
 import { info, sameSel, selName, targets, weaponLine, WEAPON_NAME, type Sel } from './codexInfo'
 import { Frame, HpIcon, Icon, Tips, fmt } from './Hud'
 import { HP_COLOR, hpName } from './icons'
-import { BREAK_WEIGHTS, hasModel, hullState, modelFor, modelStyles, pickAt, type Model } from './models/index.ts'
+import { BREAK_WEIGHTS, SWARM, hasModel, hasSwarm, hullState, modelFor, modelStyles, pickAt, type Model } from './models/index.ts'
 import { ModelFx } from './models/fx.ts'
-import { LIGHT } from './models/kit.ts'
+import { LIGHT, PALETTES } from './models/kit.ts'
 import { cacheStats, drawHull, drawMounts, liveEngines } from './models/paint.ts'
 import type { BreakKind } from './models/types.ts'
 import { spriteUrl } from './render'
@@ -100,8 +100,10 @@ function ModuleCard({ t, model, sel, dmg, onClear }: { t: UnitType; model: Model
   )
 }
 
-function Stats({ t, model, dmg, selected, hover, onSelect, onHover }: {
+function Stats({ t, concept = false, model, dmg, selected, hover, onSelect, onHover }: {
   t: UnitType
+  /** A Swarm concept design: the numbers are the droid unit's it mirrors. */
+  concept?: boolean
   model: Model | null
   dmg: Damage
   selected: Sel | null
@@ -126,6 +128,7 @@ function Stats({ t, model, dmg, selected, hover, onSelect, onHover }: {
         <h3 style={{ color: FACTIONS[t.faction].color }}>{t.name}</h3>
         {role && <em>{role.role}</em>}
       </header>
+      {concept && <p className="ew-cx-concept ew-small">Swarm concept design. The numbers below are the Confederacy {t.name}'s, which it mirrors; the Swarm has none of its own yet.</p>}
       {selected && <ModuleCard t={t} model={model} sel={selected} dmg={dmg} onClear={() => onSelect(null)} />}
       <p className="ew-muted">{t.blurb}</p>
       <div className="ew-cx-grid">
@@ -436,7 +439,7 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
             const r = t.size * (t.tier === 'fighter' ? 0.3 : 0.065) * (0.9 + Math.random() * 0.1)
             const grd = g.createRadialGradient(x, y, 0, x, y, r)
             grd.addColorStop(0, '#ffffff')
-            grd.addColorStop(0.3, FACTIONS[t.faction].glow)
+            grd.addColorStop(0.3, PALETTES[model.faction].engine)
             grd.addColorStop(1, 'rgba(0,0,0,0)')
             g.fillStyle = grd
             g.beginPath()
@@ -701,15 +704,19 @@ export function Codex({ sound, onClose }: { sound: EmpiresSound; onClose: () => 
 }
 
 function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => void }) {
-  const [faction, setFaction] = useState<FactionId>('republic')
-  const list = useMemo(() => UNITS.filter((u) => u.faction === faction), [faction])
+  // The tabs: the two sides, and the Swarm, a concept for a future faction shown on the droid units
+  // it mirrors (their numbers, their hardpoints), never used in battle.
+  const [side, setSide] = useState<FactionId | 'swarm'>('republic')
+  const concept = side === 'swarm'
+  const faction: FactionId = concept ? 'droid' : side
+  const list = useMemo(() => UNITS.filter((u) => u.faction === faction && (!concept || hasSwarm(u))), [faction, concept])
   const [pickId, setPickId] = useState<string>('r-frigate')
   const base = list.find((u) => u.id === pickId) ?? list[0]
   const [level, setLevel] = useState(4)
   const t = shown(base, level)
-  const styles = modelStyles(t)
+  const styles = concept ? [] : modelStyles(t)
   const [style, setStyle] = useState('')
-  const model = modelFor(t, styles.includes(style) ? style : '')
+  const model = modelFor(t, concept ? SWARM : styles.includes(style) ? style : '')
   const [workshop, setWorkshop] = useState(false)
   const [show, setShow] = useState<Show>({ hardpoints: false, ranges: false, glow: true, outlines: false, spin: false })
   const [tool, setTool] = useState<Tool>('inspect')
@@ -815,10 +822,13 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
         <h2>Codex</h2>
         <div className="ew-seg" role="group" aria-label="Side">
           {(['republic', 'droid'] as const).map((f) => (
-            <button key={f} className={faction === f ? 'is-on' : ''} onClick={click(() => setFaction(f))}>
+            <button key={f} className={side === f ? 'is-on' : ''} onClick={click(() => setSide(f))}>
               {FACTIONS[f].name}
             </button>
           ))}
+          <button className={concept ? 'is-on' : ''} onClick={click(() => setSide('swarm'))} data-tip="Swarm (concept): design previews for a possible future faction. Not in the game.">
+            Swarm <small>(concept)</small>
+          </button>
         </div>
         <button className={`ew-cx-ws ${workshop ? 'is-on' : ''}`} aria-pressed={workshop} onClick={click(() => setWorkshop(!workshop))} data-tip="Tools for checking the models: parts, hardpoints, damage and break-ups">
           <Icon name="gear" size={14} /> Workshop
@@ -829,6 +839,11 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
       </header>
       <div className="ew-cx-body">
         <nav className="ew-cx-nav" aria-label="Units">
+          {concept && (
+            <p className="ew-cx-concept ew-small">
+              <b>Swarm (concept)</b> · design previews for a possible future faction, not in the game. Each is shown on the numbers and hardpoints of the Confederacy unit it mirrors.
+            </p>
+          )}
           {TIER_GROUPS.map((grp) => {
             const units = list.filter((u) => grp.tiers.includes(u.tier))
             if (!units.length) return null
@@ -838,7 +853,11 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
                 {units.map((u) => (
                   <button key={u.id} className={u.id === base.id ? 'is-on' : ''} onClick={click(() => setPickId(u.id))}>
                     <span>{u.name}</span>
-                    {hasModel(u) && <em className="ew-cx-tag" data-tip="Drawn as a procedural model (the setting Procedural models switches back to the sprites)">Model</em>}
+                    {concept ? (
+                      <em className="ew-cx-tag is-concept" data-tip="A design preview for a future faction, shown on this droid unit's numbers and hardpoints">Concept</em>
+                    ) : (
+                      hasModel(u) && <em className="ew-cx-tag" data-tip="Drawn as a procedural model (the setting Procedural models switches back to the sprites)">Model</em>
+                    )}
                   </button>
                 ))}
               </section>
@@ -946,6 +965,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
           <Frame title="Specifications">
             <Stats
               t={t}
+              concept={concept}
               model={model}
               dmg={dmg}
               selected={selected}

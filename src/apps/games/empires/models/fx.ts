@@ -27,7 +27,7 @@ type Flier = {
   /** World radius, for culling and smoke size. */
   r: number
   smokeT: number
-  palette: 'republic' | 'droid'
+  palette: Model['faction']
 }
 type Drift = { dx: number; dy: number; drift: number; slow: number; spin: number; spinSlow: number }
 /** A broken hull anchored to a battle wreck. */

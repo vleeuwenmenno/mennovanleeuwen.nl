@@ -14,9 +14,12 @@
 // 5. Frigates and up shed at least four parts as they are battered, and a part that goes with an
 //    engine hardpoint carries that engine's glow; strike craft, gunships and structures burst into
 //    three or more real fragments.
+//
+// Every check runs on the Swarm concept designs too (swarm.ts, shown only in the Codex): each droid
+// unit built in the Swarm style, on that unit's own box and hardpoints.
 
 import { STATIONS, TECHS, UNITS, mineType, stationType, type UnitType } from '../src/apps/games/empires/data.ts'
-import { BREAK_WEIGHTS, breakOutcome, breakPieces, buildModel, hasModel, hullState, modelStyles, onHull, wreckState } from '../src/apps/games/empires/models/index.ts'
+import { BREAK_WEIGHTS, SWARM, breakOutcome, breakPieces, buildModel, hasModel, hasSwarm, hullState, modelStyles, onHull, wreckState } from '../src/apps/games/empires/models/index.ts'
 
 let failed = 0
 const fail = (msg: string) => {
@@ -47,14 +50,16 @@ for (const t of UNITS) {
 console.log(`Models: ${types.length} unit types (${UNITS.filter(hasModel).map((t) => t.id).join(', ')})`)
 // Models are cached per look by key: two different types must never share one.
 const keys = new Map<string, UnitType>()
-for (const t of types) {
-  const k = buildModel(t).key
+for (const [t, style] of types.flatMap((t) => [[t, undefined], ...(hasSwarm(t) ? [[t, SWARM]] : [])] as [UnitType, string | undefined][])) {
+  const k = buildModel(t, style).key
   const other = keys.get(k)
   ok(!other || (other.id === t.id && other.hardpoints.length === t.hardpoints.length), `${t.id}: model key ${k} is shared with another look`)
   keys.set(k, t)
 }
 
-for (const [t, style] of types.flatMap((t) => [[t, undefined], ...modelStyles(t).map((s) => [t, s])] as [UnitType, string | undefined][])) {
+const looks = types.flatMap((t) => [[t, undefined], ...modelStyles(t).map((s) => [t, s]), ...(hasSwarm(t) ? [[t, SWARM]] : [])] as [UnitType, string | undefined][])
+console.log(`Looks: ${looks.length} (${looks.filter(([, s]) => s === SWARM).length} of them Swarm concepts)`)
+for (const [t, style] of looks) {
   const label = `${t.id}${t.tier === 'station' ? ` (${t.sprite}, ${t.hardpoints.length} modules)` : ''}${style ? ` [${style}]` : ''}`
   let m
   try {

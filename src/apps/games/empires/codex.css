@@ -76,6 +76,16 @@
   color: #04060d;
   background: var(--ew-gold);
 }
+.ew-cx-tag.is-concept {
+  background: #b9a3e6;
+}
+.ew-cx-concept {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px dashed rgba(185, 163, 230, 0.6);
+  border-radius: 4px;
+  color: #d9ccf5;
+}
 .ew-cx-view {
   position: relative;
   min-width: 0;
@@ -349,6 +359,10 @@
     border-right: 0;
     border-bottom: 1px solid var(--ew-cell-line);
     padding: 8px 10px;
+  }
+  /* The Swarm's note is in the specifications too; in the chip row it would only push them away. */
+  .ew-cx-nav .ew-cx-concept {
+    display: none;
   }
   .ew-cx-nav section {
     flex-direction: row;

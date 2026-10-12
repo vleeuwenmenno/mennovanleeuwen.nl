@@ -1,7 +1,7 @@
 import { STATIONS, UNITS, dims, stationType, type FactionId, type Tier, type UnitType } from '../data.ts'
 import { circle, hash, inPart, inPoly, jagged, rng, seedOf } from './kit.ts'
-import * as droid from './droid.ts'
 import * as republic from './republic.ts'
+import * as swarm from './swarm.ts'
 import type { ModelDef } from './spec.ts'
 import type { BreakKind, HullState, Model, Mount, MountDesign, Part, Pt, Scorch } from './types.ts'
 
@@ -33,21 +33,36 @@ const DEFS: Record<string, ModelDef> = {
   'r-defense': republic.defense,
   'r-defense-flak': republic.defense,
   'r-defense-gun': republic.defense,
-  'd-fighter': droid.fighter,
-  'd-station': droid.station,
-  'd-bomber': droid.bomber,
-  'd-repair': droid.repair,
-  'd-picket': droid.picket,
-  'd-gunship': droid.gunship,
-  'd-ion': droid.ion,
-  'd-frigate': droid.frigate,
-  'd-cruiser': droid.cruiser,
-  'd-capital': droid.capital,
-  'd-mine': droid.mine,
-  'd-defense': droid.defense,
-  'd-defense-flak': droid.defense,
-  'd-defense-gun': droid.defense,
+  'd-fighter': swarm.fighter,
+  'd-station': swarm.station,
+  'd-bomber': swarm.bomber,
+  'd-repair': swarm.repair,
+  'd-picket': swarm.picket,
+  'd-gunship': swarm.gunship,
+  'd-ion': swarm.ion,
+  'd-frigate': swarm.frigate,
+  'd-cruiser': swarm.cruiser,
+  'd-capital': swarm.capital,
+  'd-mine': swarm.mine,
+  'd-defense': swarm.defense,
+  'd-defense-flak': swarm.defense,
+  'd-defense-gun': swarm.defense,
 }
+
+/**
+ * The Swarm: a concept kit for a future third faction (swarm.ts), one design for each droid unit,
+ * on the same box and hardpoints. Never used in battle: the Codex shows them under "Swarm
+ * (concept)", built with the style SWARM.
+ */
+const SWARM_DEFS: Record<string, ModelDef> = Object.fromEntries(
+  (['fighter', 'station', 'bomber', 'repair', 'picket', 'gunship', 'ion', 'frigate', 'cruiser', 'capital', 'mine', 'defense', 'defense-flak', 'defense-gun'] as const).map((k) => [
+    `d-${k}`,
+    k.startsWith('defense') ? swarm.defense : swarm[k as Exclude<typeof k, 'defense-flak' | 'defense-gun'>],
+  ]),
+)
+/** The style that builds a droid unit as its Swarm concept design. */
+export const SWARM = 'swarm'
+export const hasSwarm = (t: UnitType) => t.id in SWARM_DEFS
 
 export const hasModel = (t: UnitType) => t.id in DEFS
 
@@ -59,7 +74,7 @@ export function modelFor(t: UnitType, style = ''): Model | null {
   let byStyle = built.get(t)
   if (!byStyle) built.set(t, (byStyle = new Map()))
   let m = byStyle.get(style)
-  if (m === undefined) byStyle.set(style, (m = hasModel(t) ? buildModel(t, style || undefined) : null))
+  if (m === undefined) byStyle.set(style, (m = (style === SWARM ? hasSwarm(t) : hasModel(t)) ? buildModel(t, style || undefined) : null))
   return m
 }
 
@@ -92,8 +107,9 @@ export function typeOfSprite(sprite: string): UnitType | null {
 const DETACH_BY_DEFAULT: MountDesign[] = ['flak']
 
 export function buildModel(t: UnitType, style?: string): Model {
-  const def = DEFS[t.id]
-  if (!def) throw new Error(`No model for ${t.id}`)
+  const concept = style === SWARM
+  const def = concept ? SWARM_DEFS[t.id] : DEFS[t.id]
+  if (!def) throw new Error(`No ${concept ? 'Swarm ' : ''}model for ${t.id}`)
   let w: number
   let h: number
   let level = 1
@@ -110,7 +126,7 @@ export function buildModel(t: UnitType, style?: string): Model {
     h = dh * k
   }
   const long = Math.max(w, h)
-  const spec = def({ t, w, h, level, style })
+  const spec = def({ t, w, h, level, style: concept ? undefined : style })
   const grid = (gx: number, gy: number): Pt => [(gx / 10 - 0.5) * w, (gy / 10 - 0.5) * h]
   const mounts: Mount[] = t.hardpoints.map((hp, i) => {
     const [x, y] = grid(hp.x, hp.y)
@@ -128,7 +144,7 @@ export function buildModel(t: UnitType, style?: string): Model {
   const seed = seedOf(t.tier === 'station' ? `${t.id}:${level}` : t.id)
   return {
     key,
-    faction: t.faction,
+    faction: concept ? 'swarm' : t.faction,
     w,
     h,
     long,

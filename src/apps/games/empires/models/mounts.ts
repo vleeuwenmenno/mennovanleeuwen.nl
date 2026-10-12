@@ -7,7 +7,7 @@ import type { MountDesign, Part, Pt } from './types.ts'
 // bent, plating burnt black with embers in the cracks, for a module that was shot up but stays on
 // the hull; and a burnt socket ('crater') for one that was blown clean off.
 
-type Faction = 'republic' | 'droid'
+type Faction = 'republic' | 'droid' | 'swarm'
 export type MountLook = MountDesign | 'crater'
 
 const cache = new Map<string, Part[]>()
@@ -24,7 +24,7 @@ export function mountParts(design: MountLook, faction: Faction, broken: boolean)
 const embers = (pts: Pt[]): Part => part('embers', [], 'ember', 9, { glow: true, noOutline: true, details: [{ k: 'lights', pts, r: 0.07, tone: 'ember' }] })
 
 function build(design: MountLook, faction: Faction, broken: boolean): Part[] {
-  const droid = faction === 'droid'
+  const droid = faction !== 'republic'
   // A droid module is rounder and plainer; the Republic's is plated and banded in red.
   const plate = droid ? circle(0, 0, 1, 20) : chamfer(0, 0, 2, 2, 0.55)
   switch (design) {

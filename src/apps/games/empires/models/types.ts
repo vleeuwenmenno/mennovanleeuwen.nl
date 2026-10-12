@@ -98,7 +98,9 @@ export type Scorch = { x: number; y: number; r: number; level: number; seed: num
 export type Model = {
   /** The unit type it was built for (a station's level and modules make it a type of its own). */
   key: string
-  faction: 'republic' | 'droid'
+  /** Whose look it has: its palette and mount style. 'swarm' is the concept kit (swarm.ts), shown
+   * only in the Codex. */
+  faction: 'republic' | 'droid' | 'swarm'
   /** The box in model units (the unit's dims, scaled). */
   w: number
   h: number

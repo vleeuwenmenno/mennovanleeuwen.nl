@@ -362,7 +362,7 @@ export function inset(pts: Pt[], d: number): Pt[] {
 // --- Palettes and style kits ------------------------------------------------------------------------
 
 /** Three cel tones per colour role: lit, base, shadow. */
-export type Palette = Record<Tone, [string, string, string]> & { outline: string; smoke: string; debris: string }
+export type Palette = Record<Tone, [string, string, string]> & { outline: string; smoke: string; debris: string; /** Engine light, for the glow drawn behind the nozzles. */ engine: string }
 
 /**
  * Taken from the faction sprites, so the models still read as the same sides: Republic warships are
@@ -371,7 +371,7 @@ export type Palette = Record<Tone, [string, string, string]> & { outline: string
  * mark a job rather than a side: `aid` is the green of repair craft, `trim` the gold of a station's
  * own defense wing.
  */
-export const PALETTES: Record<'republic' | 'droid', Palette> = {
+export const PALETTES: Record<'republic' | 'droid' | 'swarm', Palette> = {
   republic: {
     hull: ['#f7f3ea', '#e0dacd', '#a4a3ad'],
     hull2: ['#ebe5d8', '#cdc6b8', '#8e8c94'],
@@ -385,6 +385,7 @@ export const PALETTES: Record<'republic' | 'droid', Palette> = {
     aid: ['#b4f5a8', '#4cc25e', '#23703c'],
     trim: ['#ffe68e', '#f0b636', '#9c6a1e'],
     outline: '#15171d',
+    engine: '#6ad0ff',
     smoke: 'rgba(52,52,60,1)',
     debris: '#d8d2c8',
   },
@@ -401,6 +402,25 @@ export const PALETTES: Record<'republic' | 'droid', Palette> = {
     aid: ['#d6f7a8', '#86cc54', '#41702a'],
     trim: ['#ffe7a0', '#d8a444', '#8a5e22'],
     outline: '#1b130d',
+    engine: '#c890ff',
+    smoke: 'rgba(58,52,48,1)',
+    debris: '#c8b48c',
+  },
+  // The Swarm concept (swarm.ts) keeps the colours the Confederacy's first designs had.
+  swarm: {
+    hull: ['#f6e7c6', '#d9c095', '#9a8263'],
+    hull2: ['#e5cfa6', '#bea57a', '#7c684d'],
+    accent: ['#c9a0ff', '#8c55d6', '#4c2c7c'],
+    metal: ['#86766a', '#5e5248', '#3a322c'],
+    dark: ['#4e4038', '#332822', '#1e1814'],
+    glass: ['#f0d6ff', '#a070ff', '#4e3290'],
+    glow: ['#f4e2ff', '#c890ff', '#8a50d0'],
+    char: ['#4a3d34', '#2e2520', '#1a1411'],
+    ember: ['#ffe29a', '#ff8a3a', '#c4401a'],
+    aid: ['#d6f7a8', '#86cc54', '#41702a'],
+    trim: ['#ffe7a0', '#d8a444', '#8a5e22'],
+    outline: '#1b130d',
+    engine: '#c890ff',
     smoke: 'rgba(58,52,48,1)',
     debris: '#c8b48c',
   },
