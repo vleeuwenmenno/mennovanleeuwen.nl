@@ -1,5 +1,6 @@
 import { ABILITIES, LEVEL_UP, MAX_LEVEL, UNIT, UPGRADES, buildable, isShip, techsFor, unitOf, type Tier } from './data.ts'
 import { inside } from './maps.ts'
+import { mapDist, rangeDist } from './scale.ts'
 import { canRetreat, cantBuild, cantMend, cantRepair, cantResearch, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdDeploy, cmdGuard, cmdMove, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, fleet, foes, near, rand, sees, shieldMax, type Owner, type Unit, type World } from './sim.ts'
 import * as M from './detmath.ts'
 import { sq } from './detmath.ts'
@@ -132,7 +133,7 @@ function clearSpot(w: World, st: Unit, x: number, y: number) {
 }
 
 /** What the enemy has (that we can see) around a spot. */
-const threatAt = (w: World, o: Owner, x: number, y: number, r = 900) => value(visibleEnemies(w, o, x, y, r))
+const threatAt = (w: World, o: Owner, x: number, y: number, r = rangeDist(900)) => value(visibleEnemies(w, o, x, y, r))
 
 /** What to save up for next: weighted towards ships that counter what we've seen. */
 function pickShip(w: World, b: Brain): string | null {
@@ -199,7 +200,7 @@ export function think(w: World, b: Brain, dt: number) {
   // any nebula or asteroid field.
   const aim = enemySt ?? { x: w.w / 2, y: w.h / 2 }
   const ad = M.hypot(aim.x - st.x, aim.y - st.y) || 1
-  const rally = clearSpot(w, st, st.x + ((aim.x - st.x) / ad) * 560, st.y + ((aim.y - st.y) / ad) * 560)
+  const rally = clearSpot(w, st, st.x + ((aim.x - st.x) / ad) * mapDist(560), st.y + ((aim.y - st.y) / ad) * mapDist(560))
   // (Only when it has moved: leaving it where it is takes no hands.)
   if (d2(rally, p.rally) > sq(60)) act(b, () => cmdRally(w, o, rally.x, rally.y), true)
 
@@ -281,7 +282,7 @@ export function think(w: World, b: Brain, dt: number) {
   // Abilities, when they'd help.
   for (const u of army) {
     if (!D.abilities || !u.t.ability || u.abilityCd > 0 || u.t.ability === 'fieldRepair') continue
-    const foes = visibleEnemies(w, o, u.x, u.y, ABILITIES[u.t.ability].range ?? 650)
+    const foes = visibleEnemies(w, o, u.x, u.y, ABILITIES[u.t.ability].range ?? rangeDist(650))
     if (!foes.length) continue
     const ok =
       // A nebula would drain a boost straight away.
@@ -296,7 +297,7 @@ export function think(w: World, b: Brain, dt: number) {
   const assets = w.units.filter((u) => u.owner === o && (u.t.tier === 'station' || u.t.tier === 'mine' || u.t.tier === 'defense'))
   let threat: Unit | undefined
   for (const a of assets) {
-    const foes = visibleEnemies(w, o, a.x, a.y, 1000)
+    const foes = visibleEnemies(w, o, a.x, a.y, rangeDist(1000))
     if (foes.length) {
       threat = foes[0]
       break
@@ -306,7 +307,7 @@ export function think(w: World, b: Brain, dt: number) {
   else if (b.alarm < 0) b.alarm = w.time
   if (threat && !b.attacking && w.time - b.alarm >= D.react) {
     const at = threat
-    const home = army.filter((u) => u.t.kind !== 'repair' && d2(u, st) < sq(2200) && u.order.k !== 'attack' && !(u.order.k === 'move' && u.order.attack && d2(u.order, at) < sq(500)))
+    const home = army.filter((u) => u.t.kind !== 'repair' && d2(u, st) < sq(mapDist(2200)) && u.order.k !== 'attack' && !(u.order.k === 'move' && u.order.attack && d2(u.order, at) < sq(500)))
     if (home.length) act(b, () => cmdMove(w, o, home.map((u) => u.id), at.x, at.y, true))
     return
   }
@@ -336,7 +337,7 @@ export function think(w: World, b: Brain, dt: number) {
     .filter((g) => threatAt(w, o, g.x, g.y) < scoutValue * 0.9)
     .sort((a, c) => d2(a, st) - d2(c, st))
   for (const s of scouts) {
-    if (threatAt(w, o, s.x, s.y, 700) > scoutValue * 1.3 && d2(s, st) > sq(1500)) {
+    if (threatAt(w, o, s.x, s.y, rangeDist(700)) > scoutValue * 1.3 && d2(s, st) > sq(mapDist(1500))) {
       if (!(s.order.k === 'move' && d2(s.order, p.rally) < sq(300))) act(b, () => cmdMove(w, o, [s.id], p.rally.x, p.rally.y))
       continue
     }
@@ -362,7 +363,7 @@ export function think(w: World, b: Brain, dt: number) {
   for (const u of w.units) {
     if (u.dead || u.owner === o || foes(w, u.owner, o) || !isShip(u.t) || u.order.k !== 'move' || !u.order.attack) continue
     const home = w.byId.get(w.players[u.owner].station)
-    if (home && d2(u, home) > sq(2200)) pushing.push(u)
+    if (home && d2(u, home) > sq(mapDist(2200))) pushing.push(u)
   }
   const push = value(pushing) > 1200 ? { x: pushing.reduce((s, u) => s + u.x, 0) / pushing.length, y: pushing.reduce((s, u) => s + u.y, 0) / pushing.length } : null
   const joinAlly = !!push && mainValue >= b.wave * 0.3
@@ -373,7 +374,7 @@ export function think(w: World, b: Brain, dt: number) {
   }
   const cxm = main.reduce((s, u) => s + u.x, 0) / Math.max(1, main.length)
   const cym = main.reduce((s, u) => s + u.y, 0) / Math.max(1, main.length)
-  const outgunned = threatAt(w, o, cxm, cym, 1100) > mainValue * 1.5 && d2({ x: cxm, y: cym }, st) > sq(1800)
+  const outgunned = threatAt(w, o, cxm, cym, rangeDist(1100)) > mainValue * 1.5 && d2({ x: cxm, y: cym }, st) > sq(mapDist(1800))
   if (b.attacking && (mainValue < b.peak * 0.35 || outgunned)) {
     b.attacking = false
     b.wave = Math.min(9000, b.wave * 1.15)
@@ -451,7 +452,7 @@ function mend(w: World, b: Brain, army: Unit[], st: Unit) {
     const lead = crew[0]
     if (lead.aid) continue
     const ids = crew.map((u) => u.id)
-    const sick = D.abilities && lead.abilityCd <= 0 ? patient(w, o, lead.x, lead.y, 1400) : undefined
+    const sick = D.abilities && lead.abilityCd <= 0 ? patient(w, o, lead.x, lead.y, ABILITIES.fieldRepair.range!) : undefined
     if (sick) {
       act(b, () => cmdAbility(w, o, ids, sick.id) || 'nothing to mend')
       continue
@@ -534,13 +535,13 @@ export function fleetThink(w: World, b: Brain, dt: number) {
   for (const u of mine) {
     const busy = u.order.k !== 'idle' || u.target
     if (D.abilities && u.t.ability === 'fieldRepair' && u.abilityCd <= 0 && !u.aid) {
-      const sick = patient(w, o, u.x, u.y, 1400)
+      const sick = patient(w, o, u.x, u.y, ABILITIES.fieldRepair.range!)
       if (sick) act(b, () => cmdAbility(w, o, [u.id], sick.id))
-    } else if (D.abilities && u.t.ability && u.abilityCd <= 0 && threatAt(w, o, u.x, u.y, 700) > 0) act(b, () => cmdAbility(w, o, [u.id]))
+    } else if (D.abilities && u.t.ability && u.abilityCd <= 0 && threatAt(w, o, u.x, u.y, rangeDist(700)) > 0) act(b, () => cmdAbility(w, o, [u.id]))
     if (busy) continue
     const e = nearest(u)
     // The holder keeps the line by the station until they come within reach of it.
-    if (holder && !(e && d2(e, st!) < sq(2600))) continue
+    if (holder && !(e && d2(e, st!) < sq(mapDist(2600)))) continue
     groups.set(e, [...(groups.get(e) ?? []), u.id])
   }
   for (const [e, ids] of groups) {

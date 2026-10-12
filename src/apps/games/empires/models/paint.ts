@@ -333,12 +333,34 @@ function cached(key: string, w: number, h: number, paint: (g: CanvasRenderingCon
 }
 /** How much the model bitmaps hold now, for the Codex's numbers. */
 export const cacheStats = () => ({ bitmaps: store.size, mb: bytes / 1048576 })
+/** Empties the cache, for measuring how much one scene fills it from nothing. */
+export function clearCache() {
+  store.clear()
+  bytes = 0
+}
+/** The same, split by what the bitmaps are of (hulls, turrets, wreck and fragment pieces, parts shot
+ * off), for measuring a big battle. */
+export function cacheBreakdown() {
+  const out: Record<string, { bitmaps: number; mb: number }> = {}
+  for (const [k, c] of store) {
+    const kind = k.startsWith('m|') ? 'mounts' : k.includes('|h|') ? 'hulls' : k.includes('|x|') ? 'pieces' : 'parts'
+    const o = (out[kind] ??= { bitmaps: 0, mb: 0 })
+    o.bitmaps++
+    o.mb += (c.width * c.height * 4) / 1048576
+  }
+  return out
+}
 
-/** The size bucket for something `px` device pixels across. */
+/**
+ * The size bucket for something `px` device pixels across: steps of √2 (32, 45, 64, 91, 128, 181,
+ * 256…), so a bitmap is never much more than half as big again as it shows. Steps of two left a
+ * cruiser just past one step painted at nearly twice its size, four times the memory, and a big
+ * mixed battle seen up close overran the cache with them.
+ */
 function bucket(px: number) {
-  let b = 32
-  while (b < px * 1.15 && b < 1024) b *= 2
-  return b
+  let k = 0
+  while (32 * Math.SQRT2 ** k < px * 1.15 && k < 10) k++
+  return Math.round(32 * Math.SQRT2 ** k)
 }
 /**
  * How many light headings a bitmap `b` pixels across is painted for. A turning ship steps from
@@ -366,9 +388,11 @@ const smooth = (a: number, b: number, x: number) => {
  * Draws a cached bitmap lit for heading `rot` out of `n` headings: the heading just below it, then
  * the one above faded in over it (see lightTuning). `bitmap(step)` gives the bitmap for a heading and
  * `place` draws it. A see-through unit (alpha under 1) gets the nearest heading alone, since two
- * see-through layers would add up darker.
+ * see-through layers would add up darker; so does anything drawn with `blend` off. `stand(step)`
+ * may offer a bitmap of a look that is nearly the same (the hull a moment ago, before its latest
+ * scorch mark or lost part), for when this frame has no time left to paint the new look.
  */
-function drawLit(ctx: CanvasRenderingContext2D, rot: number, n: number, bitmap: (step: number, may: boolean) => HTMLCanvasElement | null, place: (c: HTMLCanvasElement) => void) {
+function drawLit(ctx: CanvasRenderingContext2D, rot: number, n: number, bitmap: (step: number, may: boolean) => HTMLCanvasElement | null, place: (c: HTMLCanvasElement) => void, blend = true, stand?: (step: number) => HTMLCanvasElement | null) {
   const pos = ((((rot / TAU) * n) % n) + n) % n
   const i0 = Math.floor(pos)
   const i1 = (i0 + 1) % n
@@ -385,11 +409,12 @@ function drawLit(ctx: CanvasRenderingContext2D, rot: number, n: number, bitmap: 
       const near = bitmap((i + d) % n, false) ?? bitmap((i - d + n) % n, false)
       if (near) return near
     }
-    return must ? bitmap(i, true) : null
+    if (must) return stand?.(i) ?? bitmap(i, true)
+    return null
   }
   const main = w < 0.5 ? i0 : i1
   const first = pick(main, true)!
-  if (ctx.globalAlpha < 0.999 || w < 0.01 || w > 0.99) return place(first)
+  if (!blend || ctx.globalAlpha < 0.999 || w < 0.01 || w > 0.99) return place(first)
   // Under the blend: the lower heading, then the upper one faded in by `w`.
   const lo = main === i0 ? first : pick(i0, false)
   const hi = main === i1 ? first : pick(i1, false)
@@ -426,15 +451,15 @@ export function drawHull(ctx: CanvasRenderingContext2D, m: Model, x: number, y: 
     const pad = 4 + b * 0.05
     const cw = Math.ceil(m.w * ppu + pad * 2)
     const ch = Math.ceil(m.h * ppu + pad * 2)
-    const sk = stateKey(state)
     const s = size / b
+    const keyOf = (st: HullState, ls: number) => `${m.key}|h|${stateKey(st)}|${o.wreck ? 'w' : ''}|${ls}/${n}|${b}`
     drawLit(
       ctx,
       lr,
       n,
       (ls, may) =>
         cached(
-          `${m.key}|h|${sk}|${o.wreck ? 'w' : ''}|${ls}/${n}|${b}`,
+          keyOf(state, ls),
           cw,
           ch,
           (g) => {
@@ -445,6 +470,21 @@ export function drawHull(ctx: CanvasRenderingContext2D, m: Model, x: number, y: 
           may,
         ),
       (c) => ctx.drawImage(c, (-cw / 2) * s, (-ch / 2) * s, cw * s, ch * s),
+      true,
+      // In a big fight hulls take a new scorch mark or lose a part every few frames, and each new look
+      // would have to be painted at once, budget or not. The look it had a moment ago stands in (one
+      // scorch level less, or with the part it just lost) until a frame has time to paint the new one.
+      (ls) => {
+        const alts: HullState[] = []
+        if (state.scorch > 0) alts.push({ ...state, scorch: state.scorch - 1 })
+        for (let i = 0; i < m.detachable.length; i++) if (state.detached & (1 << i)) alts.push({ ...state, detached: state.detached & ~(1 << i) })
+        for (const alt of alts)
+          for (let d = 0; d <= n / 8; d++) {
+            const hit = cached(keyOf(alt, (ls + d) % n), cw, ch, () => {}, false) ?? cached(keyOf(alt, (ls - d + n) % n), cw, ch, () => {}, false)
+            if (hit) return hit
+          }
+        return null
+      },
     )
   }
   ctx.restore()
@@ -530,15 +570,17 @@ export function drawPart(ctx: CanvasRenderingContext2D, m: Model, index: number,
 
 /**
  * One piece of a broken hull, its middle at (x, y), turned by `rot`. `key` names the break (the
- * wreck and the way it broke), since every break cuts its own pieces.
+ * wreck and the way it broke), since every break cuts its own pieces. `tumble`: a fragment spinning
+ * away, lit from the nearest of 8 headings with no crossfade, since nobody can follow the light on
+ * it, and a burst of them would otherwise fill the cache with every heading of every fragment.
  */
-export function drawPiece(ctx: CanvasRenderingContext2D, m: Model, piece: Piece, key: string, state: HullState, x: number, y: number, rot: number, size: number, zdpr: number, alpha = 1) {
+export function drawPiece(ctx: CanvasRenderingContext2D, m: Model, piece: Piece, key: string, state: HullState, x: number, y: number, rot: number, size: number, zdpr: number, alpha = 1, tumble = false) {
   const k = size / m.long
   const span = Math.max(piece.x1 - piece.x0, piece.y1 - piece.y0)
   const px = span * k * zdpr
   if (px < 1.5) return
   const b = bucket(px)
-  const n = headings(b)
+  const n = tumble ? 8 : headings(b)
   const ppu = b / span
   const pad = 3 + b * 0.04
   const cw = Math.ceil((piece.x1 - piece.x0) * ppu + pad * 2)
@@ -566,6 +608,7 @@ export function drawPiece(ctx: CanvasRenderingContext2D, m: Model, piece: Piece,
         may,
       ),
     (c) => ctx.drawImage(c, (piece.x0 - piece.cx) * k - pad * s, (piece.y0 - piece.cy) * k - pad * s, cw * s, ch * s),
+    !tumble,
   )
   ctx.restore()
 }
@@ -589,6 +632,56 @@ export function drawMounts(ctx: CanvasRenderingContext2D, m: Model, x: number, y
     else if (mt.detach) drawMount(ctx, m.faction, 'crater', true, wx, wy, rot, r, zdpr, alpha)
     else drawMount(ctx, m.faction, mt.design, true, wx, wy, mt.turns ? aim(mt.hp) : rot, r, zdpr, alpha)
   }
+}
+
+// --- Thumbnails --------------------------------------------------------------------------------------
+
+const thumbs = new Map<string, { url: string; pad: number }>()
+const FRESH: HullState = { detached: 0, scorch: 0, variant: 0 }
+/**
+ * A small still picture of a unit for the menus, cards and tiles: its hull nose up under the world's
+ * light, every mount on it pointing forward (wrecked, or a burnt socket where it blew off, for each
+ * hardpoint `dead` marks). `px` is its long side in pixels. Returned as a data URL for an <img> or an
+ * SVG <image>, with `pad`: the margin painted round the unit's box (in model units, each side), so
+ * outlines aren't cut and the box can still be lined up with the hardpoints. Painted once per look
+ * and kept, so a card can ask for it on every render.
+ */
+export function thumbnail(m: Model, px: number, dead?: readonly boolean[]) {
+  const key = `${m.key}|${px}|${dead?.map((d) => (d ? 1 : 0)).join('') ?? ''}`
+  const hit = thumbs.get(key)
+  if (hit) {
+    thumbs.delete(key)
+    thumbs.set(key, hit)
+    return hit
+  }
+  const pad = m.long * 0.04
+  const ppu = px / (m.long + pad * 2)
+  const c = document.createElement('canvas')
+  c.width = Math.ceil((m.w + pad * 2) * ppu)
+  c.height = Math.ceil((m.h + pad * 2) * ppu)
+  const g = c.getContext('2d')!
+  g.translate(c.width / 2, c.height / 2)
+  g.scale(ppu, ppu)
+  const light = lightFor(0)
+  paintModel(g, m, { light, ppu, state: FRESH })
+  const pal = PALETTES[m.faction]
+  for (const mt of m.mounts) {
+    if (mt.design === 'engine') continue
+    const gone = !!dead?.[mt.hp]
+    g.save()
+    g.translate(mt.x, mt.y)
+    g.scale(mt.r, mt.r)
+    paintParts(g, mountParts(gone && mt.detach ? 'crater' : mt.design, m.faction, gone), pal, light, ppu * mt.r)
+    g.restore()
+  }
+  const out = { url: c.toDataURL('image/png'), pad }
+  thumbs.set(key, out)
+  // A few hundred is far more than any screen shows at once.
+  for (const k of thumbs.keys()) {
+    if (thumbs.size <= 400) break
+    thumbs.delete(k)
+  }
+  return out
 }
 
 /** Which of a unit's engine glows still burn: an engine part that came off takes its glow along. */

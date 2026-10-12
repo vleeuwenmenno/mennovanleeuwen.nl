@@ -14,7 +14,7 @@ export type Pt = [number, number]
  * tones (lit, base and shadow), and which one a part gets depends on how its facet faces the
  * light, recomputed as the ship turns.
  */
-export type Tone = 'hull' | 'hull2' | 'accent' | 'metal' | 'dark' | 'glass' | 'glow' | 'char' | 'ember'
+export type Tone = 'hull' | 'hull2' | 'accent' | 'metal' | 'dark' | 'glass' | 'glow' | 'char' | 'ember' | 'aid' | 'trim'
 
 /** Surface detail drawn on top of a part and clipped to it. */
 export type Detail =
@@ -83,11 +83,17 @@ export type Mount = {
   /** Blown off when destroyed (flies away as debris, leaving a burnt socket); otherwise it stays
    * on the hull, broken and burnt. */
   detach: boolean
+  /** A turret the model adds beyond the unit's own hardpoints, for show (the bigger prototype ships
+   * carry more, smaller guns than the battle knows about). It follows the hardpoint `hp` it stands
+   * for: aims where that gun aims and is wrecked when it is. Extra mounts come after the real ones,
+   * so mount i is still hardpoint i for every real one. */
+  extra?: boolean
 }
 
-/** How a hull comes apart: cut across in bands (long ships) or into wedges round the middle
- * (round stations). */
-export type BreakStyle = 'bands' | 'pie'
+/** How a hull comes apart: cut across in bands (long ships), into wedges round the middle (round
+ * stations), or a ring hull's way: its core sphere comes away whole and the ring round it breaks
+ * into segments (see Model.core). */
+export type BreakStyle = 'bands' | 'pie' | 'ring'
 export type BreakKind = 'intact' | 'half' | 'pieces'
 
 /** A scorch mark's spot, and the hull damage level (1-3) from which it shows. */
@@ -98,7 +104,9 @@ export type Scorch = { x: number; y: number; r: number; level: number; seed: num
 export type Model = {
   /** The unit type it was built for (a station's level and modules make it a type of its own). */
   key: string
-  faction: 'republic' | 'droid'
+  /** Whose look it has: its palette and mount style. 'swarm' is the concept kit (swarm.ts), shown
+   * only in the Codex. */
+  faction: 'republic' | 'droid' | 'swarm'
   /** The box in model units (the unit's dims, scaled). */
   w: number
   h: number
@@ -112,6 +120,10 @@ export type Model = {
    * `detached` mask is the i-th of these). */
   detachable: number[]
   breakStyle: BreakStyle
+  /** How many lines a 'bands' break into pieces cuts across the hull (default 2, three pieces). */
+  cuts?: number
+  /** For the 'ring' break: the core sphere's middle and radius, in model units. */
+  core?: { x: number; y: number; r: number }
   scorch: Scorch[]
   /** A number unique to the design, seeding its scorch marks and break lines. */
   seed: number

@@ -7,7 +7,7 @@ import type { MountDesign, Part, Pt } from './types.ts'
 // bent, plating burnt black with embers in the cracks, for a module that was shot up but stays on
 // the hull; and a burnt socket ('crater') for one that was blown clean off.
 
-type Faction = 'republic' | 'droid'
+type Faction = 'republic' | 'droid' | 'swarm'
 export type MountLook = MountDesign | 'crater'
 
 const cache = new Map<string, Part[]>()
@@ -24,8 +24,10 @@ export function mountParts(design: MountLook, faction: Faction, broken: boolean)
 const embers = (pts: Pt[]): Part => part('embers', [], 'ember', 9, { glow: true, noOutline: true, details: [{ k: 'lights', pts, r: 0.07, tone: 'ember' }] })
 
 function build(design: MountLook, faction: Faction, broken: boolean): Part[] {
-  const droid = faction === 'droid'
-  // A droid module is rounder and plainer; the Republic's is plated and banded in red.
+  // A Swarm module is rounder and plainer; the Republic's is plated and banded in red; the droid
+  // navy's is a box turret of the same plated shape, gunmetal under sand, with red sensor lights.
+  const droid = faction === 'swarm'
+  const cis = faction === 'droid'
   const plate = droid ? circle(0, 0, 1, 20) : chamfer(0, 0, 2, 2, 0.55)
   switch (design) {
     case 'crater':
@@ -49,11 +51,11 @@ function build(design: MountLook, faction: Faction, broken: boolean): Part[] {
         barrels.push(part(`tip${x}`, box(x, -1.06, 0.2, 0.16), 'metal', 4))
       }
       return [
-        part('base', droid ? circle(0, 0, 1) : plate, droid ? 'hull2' : 'hull', 0, {
+        part('base', droid ? circle(0, 0, 1) : plate, droid ? 'hull2' : cis ? 'metal' : 'hull', 0, {
           lift: 0.1,
           details: droid ? [{ k: 'shape', pts: circle(0, 0.62, 0.22, 10), tone: 'accent' }] : [{ k: 'shape', pts: box(0, 0.72, 0.5, 0.3), tone: 'accent' }, { k: 'line', pts: circle(0, 0, 0.8, 16) }],
         }),
-        part('housing', droid ? circle(0, 0.08, 0.6, 16) : chamfer(0, 0.05, 1.15, 1.05, 0.3), droid ? 'hull' : 'hull2', 1, {
+        part('housing', droid ? circle(0, 0.08, 0.6, 16) : chamfer(0, 0.05, 1.15, 1.05, 0.3), droid || cis ? 'hull' : 'hull2', 1, {
           lift: 0.12,
           details: droid ? [] : [{ k: 'shape', pts: box(0, 0.05, 0.22, 0.75), tone: 'accent' }],
         }),
@@ -77,11 +79,11 @@ function build(design: MountLook, faction: Faction, broken: boolean): Part[] {
           part('eye', circle(0, 0.1, 0.24, 12), 'glass', 3, { details: [{ k: 'lights', pts: [[0, 0.1]], r: 0.1 }] }),
         ]
       return [
-        part('base', droid ? circle(0, 0, 1) : plate, droid ? 'hull2' : 'hull', 0, {
+        part('base', droid ? circle(0, 0, 1) : plate, droid ? 'hull2' : cis ? 'metal' : 'hull', 0, {
           lift: 0.1,
-          details: [{ k: 'line', pts: circle(0, 0, 0.82, 16) }, ...(droid ? [] : [{ k: 'lights' as const, pts: [[-0.62, 0.55], [0.62, 0.55], [-0.75, 0.1], [0.75, 0.1]] as Pt[], r: 0.06 }])],
+          details: [{ k: 'line', pts: circle(0, 0, 0.82, 16) }, ...(droid ? [] : [{ k: 'lights' as const, pts: [[-0.62, 0.55], [0.62, 0.55], [-0.75, 0.1], [0.75, 0.1]] as Pt[], r: 0.06, tone: cis ? ('glass' as const) : undefined }])],
         }),
-        part('housing', rounded(0, 0.18, 1.15, 1.05, 0.22), droid ? 'hull' : 'hull2', 1, {
+        part('housing', rounded(0, 0.18, 1.15, 1.05, 0.22), droid || cis ? 'hull' : 'hull2', 1, {
           lift: 0.14,
           details: droid ? [{ k: 'shape', pts: circle(0, 0.3, 0.18, 10), tone: 'accent' }] : [{ k: 'shape', pts: box(-0.28, 0.2, 0.2, 0.85), tone: 'accent' }, { k: 'shape', pts: box(0.28, 0.2, 0.2, 0.85), tone: 'accent' }],
         }),
@@ -96,7 +98,7 @@ function build(design: MountLook, faction: Faction, broken: boolean): Part[] {
           embers([[-0.2, -0.3], [0.3, -0.35], [0.05, 0.15], [-0.45, 0.25], [0.5, 0.3]]),
         ]
       return [
-        part('ball', circle(0, 0, 0.95, 22), droid ? 'hull' : 'hull', 0, {
+        part('ball', circle(0, 0, 0.95, 22), cis ? 'hull2' : 'hull', 0, {
           sphere: true,
           details: [
             { k: 'shape', pts: box(0, 0.02, 2, 0.24), tone: 'accent' },

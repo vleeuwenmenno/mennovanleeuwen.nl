@@ -21,20 +21,71 @@ export function targets(kind: WeaponKind) {
 
 export const weaponLine = (w: Weapon) => `${w.damage}${(w.burst ?? 1) > 1 ? `×${w.burst}` : ''} dmg every ${w.cooldown} s · range ${w.range} · ${((w.damage * (w.burst ?? 1)) / w.cooldown).toFixed(1)} dps`
 
-/** Friendly names for parts, by the start of their id. */
+/** Friendly names for parts, by the start of their id (the more specific first). */
 const PART_NAMES: [string, string][] = [
-  ['socket', 'Socket'], ['hull', 'Hull plating'], ['tip', 'Wing tip'], ['wing', 'Wing'], ['gun', 'Cannon'], ['strake', 'Canard'], ['fuse', 'Fuselage'],
-  ['spine', 'Spine'], ['droid', 'Astromech socket'], ['cockpit', 'Cockpit'], ['engine', 'Engine'], ['deck', 'Deck'], ['rail', 'Deck rail'],
-  ['block', 'Block'], ['bridge', 'Bridge'], ['tower', 'Bridge tower'], ['mast', 'Antenna mast'], ['dish', 'Sensor dish'], ['claw', 'Claw wing'],
-  ['hook', 'Lower claw'], ['shoulder', 'Shoulder'], ['tail', 'Tail'], ['head', 'Head'], ['eye', 'Sensor eye'], ['skirt', 'Hull skirt'],
-  ['spire', 'Command spire'], ['fin', 'Spire fin'], ['crown', 'Spire crown'], ['beacon', 'Spire beacon'], ['strut', 'Strut'], ['bar', 'Outer frame'],
-  ['bastion', 'Corner bastion'], ['girder', 'Girder'], ['brace', 'Brace'], ['arm', 'Arm'], ['far', 'Far pod'], ['dock', 'Dry dock'],
+  ['socket', 'Socket'], ['hull', 'Hull plating'], ['tip', 'Wing tip'], ['wing', 'Wing'], ['gunF', 'Blaster barrels'], ['podGun', 'Gun pod barrels'], ['gun', 'Cannon'],
+  ['strake', 'Canard'], ['fuse', 'Fuselage'], ['droid', 'Astromech socket'], ['cockpit', 'Cockpit'], ['engine', 'Engine'], ['deck', 'Deck'],
+  ['rail', 'Deck rail'], ['block', 'Block'], ['bridge', 'Bridge'], ['tower', 'Bridge tower'], ['mast', 'Antenna mast'], ['dish', 'Sensor dish'],
+  ['hookC', 'Crane hook'], ['shoulder', 'Shoulder'], ['tail', 'Tail'], ['head', 'Head'], ['eye', 'Sensor eye'], ['skirt', 'Hull skirt'],
+  ['spire', 'Command spire'], ['fin', 'Fin'], ['beacon', 'Spire beacon'], ['strut', 'Strut'], ['bar', 'Outer frame'], ['bastion', 'Corner bastion'],
+  ['girder', 'Girder'], ['brace', 'Brace'], ['far', 'Far pod'], ['dock', 'Dry dock'], ['rack', 'Torpedo rack'], ['bay', 'Bomb bay'],
+  ['fore', 'Forearm'], ['crane', 'Crane boom'], ['ball', 'Ball turret'], ['flak', 'Flak turret'], ['sponson', 'Shield sponson'], ['trench', 'Flight deck'],
+  ['antenna', 'Antenna'], ['foot', 'Anchor foot'], ['pad', 'Landing pad'], ['neck', 'Neck'], ['base', 'Turret base'], ['belt', 'Ore conveyor'],
+  ['frame', 'Deck frame'], ['spoke', 'Spoke'], ['outrigger', 'Outrigger'], ['hopper', 'Ammunition hopper'], ['cap', 'Capacitor bank'],
+  ['body', 'Body'], ['abdomen', 'Abdomen'], ['thorax', 'Thorax'], ['cord', 'Spinal cord'], ['prong', 'Ion prong'], ['focus', 'Ion focus'],
+  ['seg', 'Vertebra'], ['shell', 'Shell case'], ['seam', 'Shell seam'], ['rib', 'Rib'], ['trail', 'Trailing edge'], ['spar', 'Wing spar'],
+  ['tractor', 'Tractor projector'], ['stalk', 'Stalk'], ['link', 'Link'], ['bulb', 'Gun bulb'], ['dome', 'Dome'], ['rim', 'Carapace rim'],
+  ['node', 'Side node'], ['cradle', 'Gun cradle'], ['spike', 'Capacitor spine'], ['knuckle', 'Knuckle pod'], ['joint', 'Joint'], ['iris', 'Iris'],
+  ['thread', 'Silk thread'], ['strut', 'Strut'], ['legF', 'Front leg'], ['legM', 'Middle leg'], ['legB', 'Hind leg'], ['web', 'Web strand'],
 ]
+/** The droid navy's own parts (droid.ts), where its ids mean something else than the Swarm's or
+ * the Republic's. */
+const DROID_NAMES: [string, string][] = [
+  ['visor', 'Sensor visor'], ['blade', 'Blade'], ['vane', 'Vane'], ['sail', 'Sail fin'], ['tipFin', 'Gallery fin'], ['gallery', 'Gun gallery'],
+  ['jaw', 'Docking jaw'], ['hangar', 'Hangar segment'], ['clamp', 'Docking clamp'], ['sphere', 'Core sphere'], ['core', 'Core sphere'],
+  ['housing', 'Drill housing'], ['side', 'Side pod'], ['crate', 'Ammunition crate'], ['bulb', 'Forward bulb'], ['spike', 'Ion spike'],
+  ['plate', 'Armour plate'], ['ring', 'Ring hull'], ['tower', 'Gun tower'], ['spire', 'Antenna spire'], ['frame', 'Outer frame'],
+  ['collar', 'Collar'], ['gunbox', 'Gun box'], ['claw', 'Claw'],
+]
+
 export function partName(m: Model, i: number, t: UnitType) {
   const id = m.parts[i].id
-  if (id.startsWith('pod')) return t.tier === 'station' ? 'Docking pod' : 'Engine pod'
-  if (id.startsWith('block') && t.tier === 'station') return id === 'block' ? 'Command block' : 'Frame block'
-  if (id.startsWith('deck') && t.tier === 'station') return 'Deck plate'
+  const station = t.tier === 'station'
+  const structure = t.tier === 'mine' || t.tier === 'defense'
+  if (m.faction === 'droid') {
+    if (id.startsWith('pod') && !id.startsWith('podGun')) return station ? 'Gun pod' : t.id === 'd-repair' ? 'Tool pod' : t.id === 'd-gunship' ? 'Cannon pod' : 'Engine block'
+    if (/Strut$/.test(id)) return 'Strut'
+    if (id.startsWith('arm')) return station ? 'Docking arm' : t.id === 'd-gunship' ? 'Gun arm' : 'Manipulator arm'
+    if (id.startsWith('frame') && !station) return 'Bay frame'
+    if (id.startsWith('claw')) return structure ? 'Anchor claw' : 'Manipulator claw'
+    if (id.startsWith('block') || id.startsWith('engine')) return 'Engine block'
+    if (/^(wing|leg)[LR].*Knee$/.test(id)) return 'Knee joint'
+    if (/^(wing|leg)[LR].*Gun$/.test(id)) return 'Blaster'
+    if (/^wing[LR]/.test(id)) return 'Wing-leg'
+    if (/^leg[LR]/.test(id)) return 'Rear wing-leg'
+    const hit = DROID_NAMES.find(([p]) => id.startsWith(p))
+    if (hit) return hit[1]
+  }
+  if (id.startsWith('podGun')) return 'Gun pod barrels'
+  if (id.startsWith('pod')) return station ? 'Docking pod' : t.id === 'd-bomber' ? 'Bomb pod' : t.id === 'd-gunship' ? 'Gun pod' : 'Engine pod'
+  if (id.startsWith('block') && station) return id === 'block' ? 'Command block' : 'Frame block'
+  if (id.startsWith('deck') && station) return 'Deck plate'
+  if (id.startsWith('well')) return t.tier === 'mine' ? 'Drill well' : 'Repair bay'
+  if (id.startsWith('ring')) return t.id === 'd-picket' ? 'Guard ring' : 'Repair ring'
+  if (id.startsWith('hub')) return structure ? 'Hub' : 'Repair hub'
+  if (id.startsWith('claw')) return structure ? 'Anchor claw' : t.id === 'd-fighter' ? 'Claw wing' : t.id === 'd-capital' ? 'Arm claw' : 'Manipulator claw'
+  if (id.startsWith('hook') && !id.startsWith('hookC')) return t.id === 'd-cruiser' ? 'Wing hook' : 'Lower claw'
+  if (id.startsWith('arm')) return station ? (t.faction === 'droid' ? 'Arm segment' : 'Arm') : t.id === 'r-repair' ? 'Manipulator arm' : t.id === 'd-gunship' ? 'Gun arm' : t.id === 'd-capital' ? 'Hangar arm' : 'Girder arm'
+  if (id.startsWith('leg') && !/^leg[FMB]/.test(id)) return structure ? 'Anchor leg' : 'Leg'
+  if (id.startsWith('plate')) return station ? 'Shell plate' : 'Leg plate'
+  if (id.startsWith('core')) return 'Hive core'
+  if (id.startsWith('collar')) return station ? 'Hive collar' : 'Gun collar'
+  if (id.startsWith('crown')) return station ? 'Spire crown' : 'Bridge crown'
+  if (id.startsWith('fin') && station) return 'Spire fin'
+  if (id.startsWith('horn')) return station ? 'Arm bud' : 'Horn'
+  if (id.startsWith('spine')) return /^spine\d/.test(id) ? 'Side spine' : 'Spine'
+  if (id.startsWith('sac')) return structure ? 'Ammunition sac' : 'Hive sac'
+  if (id.startsWith('web')) return t.id === 'd-cruiser' ? 'Wing membrane' : 'Web strand'
   return PART_NAMES.find(([p]) => id.startsWith(p))?.[1] ?? id
 }
 

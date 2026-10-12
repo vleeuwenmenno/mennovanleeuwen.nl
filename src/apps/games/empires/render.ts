@@ -1,10 +1,12 @@
-import { FACTIONS, SURVEY_RADIUS, UNIT, dims, isShip, moduleSprite, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
+import { FACTIONS, SURVEY_RADIUS, UNIT, dims, isShip, moduleSprite, type HardpointKind, type Tier, type WeaponKind } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
 import { RETREAT_TIME, atHome, building, foes, hpPos, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 import { BREAK_WEIGHTS, hullState, modelFor, unitForSprite, type HullState, type Model } from './models/index.ts'
 import { ModelFx } from './models/fx.ts'
+import { PALETTES } from './models/kit.ts'
 import { drawHull, drawMounts, liveEngines } from './models/paint.ts'
+import { averageRings, moduleRing } from './ranges.ts'
 
 // Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, nebulas
 // and asteroid fields, ore, rocks and beacons, the ships (procedural cel-shaded models where a unit
@@ -219,21 +221,6 @@ const RANGE_STYLE: Record<WeaponKind, { rgb: string; dash: number[]; name: strin
   missile: { rgb: '255,140,222', dash: [3, 6], name: 'Missiles' },
   ion: { rgb: '176,146,255', dash: [14, 5, 3, 5], name: 'Ion cannon' },
 }
-/** A type's guns as rings: one per kind and reach (the hardpoints it lost are its own business),
- * longest first. Worked out once per type; grown stations are types of their own. */
-const RANGE_RINGS = new WeakMap<UnitType, { kind: WeaponKind; range: number }[]>()
-function rangeRings(t: UnitType) {
-  let rings = RANGE_RINGS.get(t)
-  if (!rings) {
-    rings = []
-    for (const wp of [...t.weapons, ...t.hardpoints.flatMap((h) => (h.weapon ? [h.weapon] : []))])
-      if (!rings.some((r) => r.kind === wp.kind && r.range === wp.range)) rings.push({ kind: wp.kind, range: wp.range })
-    rings.sort((a, b) => b.range - a.range)
-    RANGE_RINGS.set(t, rings)
-  }
-  return rings
-}
-
 const TIER_ORDER: Record<Tier, number> = { station: 0, mine: 1, defense: 1, capital: 2, cruiser: 3, frigate: 4, gunship: 5, fighter: 6 }
 const ICON_PATH = new Map<HardpointKind, Path2D>()
 const iconPath = (k: HardpointKind) => {
@@ -418,9 +405,13 @@ export class Renderer {
       } else if (e.k === 'boom') {
         if (!seen(e.x, e.y)) continue
         const color = e.owner === undefined ? '#888' : w.players[e.owner].faction === 'republic' ? '#d8d2c8' : '#c8b48c'
+        // A unit drawn with its model breaks into its own fragments (see trackModels): the old
+        // flecks of debris are only for sprites. The battle's event doesn't say which unit it was,
+        // so it is the one we were following that died on that spot.
+        const modelled = this.modelsOn && [...this.tracked.values()].some((tr) => tr.u.dead && Math.abs(tr.u.x - e.x) < 1 && Math.abs(tr.u.y - e.y) < 1)
         if (e.tier === 'fighter' || e.tier === 'gunship') {
           this.blast(e.x, e.y, e.size * 1.2)
-          this.debris(e.x, e.y, e.size * 2, color)
+          if (!modelled) this.debris(e.x, e.y, e.size * 2, color)
         } else {
           // Big ships come apart in a chain of blasts before the final one.
           const n = Math.round(3 + e.size / 40)
@@ -430,7 +421,7 @@ export class Renderer {
             this.pending.push({ at: this.clock + i * (0.12 + Math.random() * 0.1), x: e.x + Math.cos(a) * r, y: e.y + Math.sin(a) * r, size: e.size * (0.25 + Math.random() * 0.2), final: false })
           }
           this.pending.push({ at: this.clock + n * 0.17, x: e.x, y: e.y, size: e.size, final: true })
-          this.debris(e.x, e.y, e.size, color)
+          if (!modelled) this.debris(e.x, e.y, e.size, color)
         }
       } else if (e.k === 'warp') {
         if (e.owner !== me && !seen(e.x, e.y)) continue
@@ -1049,11 +1040,12 @@ export class Renderer {
     ctx.lineDashOffset = 0
 
     // Weapon ranges, under the ships.
-    if (view.ranges === 'hover' && view.hover && !view.box) this.drawRanges(ctx, w, view, z, view.hover, true)
+    // Pointing at a gun (or, by touch, having picked one) rings just that gun.
+    if (view.ranges === 'hover' && view.hover && !view.box) this.drawRanges(ctx, w, view, z, view.hover, true, view.hoverHp)
     else if (view.ranges === 'selected') {
       // A big selection would bury the field in rings: the first few only.
       let n = 0
-      for (const id of view.selected) if (n++ < 6) this.drawRanges(ctx, w, view, z, id, view.selected.size === 1)
+      for (const id of view.selected) if (n++ < 6) this.drawRanges(ctx, w, view, z, id, view.selected.size === 1, view.turretPick?.unit === id ? view.turretPick.hp : -1)
     }
 
     // Ships and stations, big ones first so fighters fly over them.
@@ -1444,7 +1436,8 @@ export class Renderer {
           if (st.detached & (1 << i) && !(tr.det & (1 << i))) this.fx.flyPart(m, pi, u.x, u.y, rot, u.t.size, vx, vy, u.id * 977 + i)
         })
         m.mounts.forEach((mt, i) => {
-          if (mt.detach && dead[i] && !tr.dead[i]) this.fx.flyMount(m, i, u.x, u.y, rot, this.aims.get(u.id * 64 + i) ?? rot, u.t.size, vx, vy, u.id * 613 + i)
+          // A mount follows its hardpoint (a turret for show follows the one it stands for).
+          if (mt.detach && dead[mt.hp] && !tr.dead[mt.hp]) this.fx.flyMount(m, i, u.x, u.y, rot, this.aims.get(u.id * 64 + mt.hp) ?? rot, u.t.size, vx, vy, u.id * 613 + i)
         })
       }
       if (tr) Object.assign(tr, { u, m, det: st.detached, st, dead, vis })
@@ -1491,37 +1484,46 @@ export class Renderer {
   }
 
   /**
-   * The rings round one ship or structure (ours, or anyone's we can see): one per kind of gun and
-   * reach, in that gun's colour and dash, labelled lightly with its name and range at the ring's
-   * top, fanned out so close rings don't print over each other; and its sensor range, fainter.
-   * `labels` off for a crowd of selected ships.
+   * The rings round one ship or structure (ours, or anyone's we can see). Pointing at one of its
+   * guns (`hp`): that gun's ring alone, centred on the gun where it sits, at its range, since that
+   * is where the battle fires it from (see ranges.ts). Otherwise one ring per kind of gun, centred on
+   * the unit at the average reach of that kind's standing guns, in that gun's colour and dash,
+   * labelled lightly with its name and reach at the ring's top, fanned out so close rings don't
+   * print over each other; and its sensor range, fainter. `labels` off for a crowd of selected ships.
    */
-  private drawRanges(ctx: CanvasRenderingContext2D, w: World, view: View, z: number, id: number, labels: boolean) {
+  private drawRanges(ctx: CanvasRenderingContext2D, w: World, view: View, z: number, id: number, labels: boolean, hp = -1) {
     const u = w.byId.get(id)
     if (!u || u.dead || !u.seen[w.players[view.me].team] || u.owner === view.hideOwner) return
-    const rings = rangeRings(u.t)
     ctx.lineWidth = 1.5 / z
     ctx.font = `${11 / z}px system-ui, sans-serif`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'bottom'
-    const ring = (r: number, rgb: string, dash: number[], alpha: number, label: string, i: number) => {
+    const ring = (x: number, y: number, r: number, rgb: string, dash: number[], alpha: number, label: string, i: number) => {
       ctx.strokeStyle = `rgba(${rgb},${alpha})`
       ctx.setLineDash(dash.length ? dash.map((d) => d / z) : [])
       ctx.beginPath()
-      ctx.arc(u.x, u.y, r, 0, TAU)
+      ctx.arc(x, y, r, 0, TAU)
       ctx.stroke()
       if (!labels) return
       // Fanned along the top so rings close together keep their labels apart.
       const a = -Math.PI / 2 + (i % 2 ? 1 : -1) * Math.ceil(i / 2) * Math.min(0.5, 70 / z / r)
       ctx.fillStyle = `rgba(${rgb},${Math.min(1, alpha + 0.3)})`
-      ctx.fillText(label, u.x + Math.cos(a) * r, u.y + Math.sin(a) * r - 3 / z)
+      ctx.fillText(label, x + Math.cos(a) * r, y + Math.sin(a) * r - 3 / z)
     }
-    ring(sensorOf(u), '200,215,240', [4, 8], 0.22, `Sensors ${Math.round(sensorOf(u))}`, rings.length)
-    rings.forEach((g, i) => {
-      const st = RANGE_STYLE[g.kind]
-      const r = g.range * u.mods.range
-      ring(r, st.rgb, st.dash, 0.55, `${st.name} ${Math.round(r)}`, i)
-    })
+    const one = hp >= 0 ? moduleRing(u.t, hp, u.mods.range) : null
+    if (one) {
+      const at = hpPos(u, hp)
+      const st = RANGE_STYLE[one.kind]
+      // A gun that was shot out reaches nothing: its ring is drawn faint.
+      ring(at.x, at.y, one.range, st.rgb, st.dash, u.hps[hp].hp > 0 ? 0.75 : 0.25, `${hpName(u.t.hardpoints[hp])} #${hp + 1} · ${Math.round(one.range)}`, 0)
+    } else {
+      const rings = averageRings(u.t, (i) => u.hps[i].hp > 0, u.mods.range)
+      ring(u.x, u.y, sensorOf(u), '200,215,240', [4, 8], 0.22, `Sensors ${Math.round(sensorOf(u))}`, rings.length)
+      rings.forEach((g, i) => {
+        const st = RANGE_STYLE[g.kind]
+        ring(u.x, u.y, g.reach, st.rgb, st.dash, 0.55, `${st.name} ${g.n > 1 ? '· avg ' : ''}${Math.round(g.reach)}`, i)
+      })
+    }
     ctx.setLineDash([])
     ctx.textAlign = 'start'
     ctx.textBaseline = 'alphabetic'
@@ -1817,7 +1819,10 @@ export class Renderer {
     ctx.lineTo(g.x + Math.cos(g.a) * (r + 22 / z), g.y + Math.sin(g.a) * (r + 22 / z))
     ctx.stroke()
     ctx.restore()
-    this.drawSprite(ctx, g.sprite, g.x, g.y, g.a + Math.PI / 2, g.size, z, g.ok ? 0.55 : 0.3)
+    // Its model where it has one (the ghost only knows the sprite), else the sprite.
+    const t = unitForSprite(g.sprite)
+    if (t) this.drawShip(ctx, t.id, g.sprite, g.x, g.y, g.a + Math.PI / 2, g.size, z, g.ok ? 0.55 : 0.3)
+    else this.drawSprite(ctx, g.sprite, g.x, g.y, g.a + Math.PI / 2, g.size, z, g.ok ? 0.55 : 0.3)
     const label = !g.ok ? g.why : g.field ? `Asteroid field: arrives badly damaged` : null
     if (label) {
       ctx.save()
@@ -1950,7 +1955,8 @@ export class Renderer {
         const r = Math.max(4 / z, size * (t.tier === 'fighter' ? 0.35 : 0.07)) * thrust * flick
         const g = ctx.createRadialGradient(ex, ey, 0, ex, ey, r)
         g.addColorStop(0, '#ffffff')
-        g.addColorStop(0.3, fac.glow)
+        // A model's engines burn in its own palette's colour (the droid navy's blue-white).
+        g.addColorStop(0.3, m ? PALETTES[m.faction].engine : fac.glow)
         g.addColorStop(1, 'rgba(0,0,0,0)')
         ctx.fillStyle = g
         ctx.beginPath()

@@ -1,8 +1,7 @@
 import { useRef } from 'react'
 import { LEVEL_UP, MAX_LEVEL, MAX_RESEARCH, TECH, UPGRADES, buildable, techsFor, unitOf, type FactionId, type UnitType } from './data'
-import { Icon, TechIcon, fmt, levelBlurb, researchName, techState, type Hud, type TechStatus } from './Hud'
+import { Icon, TechIcon, fmt, levelBlurb, researchName, techState, useUnitArt, type Hud, type TechStatus } from './Hud'
 import { Modal } from './Menus'
-import { spriteUrl } from './render'
 import type { Owner, World } from './sim'
 import { LongPress, isTouch, useCoarse } from './Touch'
 
@@ -132,6 +131,7 @@ type LineProps = { line: Line; w: World; me: Owner; hud: Hud; faction: FactionId
 
 function TreeLine({ line, w, me, hud, faction, onResearch, onCancel }: LineProps) {
   const { t, nodes } = line
+  const art = useUnitArt()
   const station = t.tier === 'station'
   const { at, lanes, cols } = layout(nodes)
   const states = new Map(nodes.map((n) => [n.key, nodeState(w, me, hud, n)]))
@@ -168,7 +168,7 @@ function TreeLine({ line, w, me, hud, faction, onResearch, onCancel }: LineProps
         })}
       </svg>
       <div className={`ew-tt-head ${locked ? 'is-locked' : ''}`} style={{ gridRow: `1 / span ${lanes}` }}>
-        <img src={spriteUrl(t.sprite)} alt="" />
+        <img src={art(t.sprite)} alt="" />
         <strong>{station ? 'Station' : t.name}</strong>
         <small>{station ? `Level ${hud.level} of ${MAX_LEVEL}` : locked ? `Needs station level ${t.level}` : t.squad > 1 ? `Squadron of ${t.squad}` : `${t.tier[0].toUpperCase()}${t.tier.slice(1)}`}</small>
       </div>

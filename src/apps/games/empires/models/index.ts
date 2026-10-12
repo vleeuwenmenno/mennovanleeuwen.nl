@@ -1,7 +1,9 @@
-import { STATIONS, UNITS, dims, type Tier, type UnitType } from '../data.ts'
+import { STATIONS, UNITS, dims, stationType, type FactionId, type Tier, type UnitType } from '../data.ts'
 import { circle, hash, inPart, inPoly, jagged, rng, seedOf } from './kit.ts'
 import * as droid from './droid.ts'
+import * as proto from './proto.ts'
 import * as republic from './republic.ts'
+import * as swarm from './swarm.ts'
 import type { ModelDef } from './spec.ts'
 import type { BreakKind, HullState, Model, Mount, MountDesign, Part, Pt, Scorch } from './types.ts'
 
@@ -20,10 +22,59 @@ export type { HullState, Model } from './types.ts'
 /** The designs, by unit id. A station's id covers all its levels: the design grows with the level. */
 const DEFS: Record<string, ModelDef> = {
   'r-fighter': republic.fighter,
+  'r-bomber': republic.bomber,
+  'r-repair': republic.repair,
+  'r-picket': republic.picket,
+  'r-gunship': republic.gunship,
+  'r-corvette': republic.corvette,
   'r-frigate': republic.frigate,
+  'r-cruiser': republic.cruiser,
+  'r-capital': republic.capital,
   'r-station': republic.station,
+  'r-mine': republic.mine,
+  'r-defense': republic.defense,
+  'r-defense-flak': republic.defense,
+  'r-defense-gun': republic.defense,
   'd-fighter': droid.fighter,
+  'd-station': droid.station,
+  'd-bomber': droid.bomber,
+  'd-repair': droid.repair,
+  'd-picket': droid.picket,
+  'd-gunship': droid.gunship,
+  'd-ion': droid.ion,
+  'd-frigate': droid.frigate,
+  'd-cruiser': droid.cruiser,
+  'd-capital': droid.capital,
+  'd-mine': droid.mine,
+  'd-defense': droid.defense,
+  'd-defense-flak': droid.defense,
+  'd-defense-gun': droid.defense,
 }
+
+/**
+ * The Swarm: a concept kit for a future third faction (swarm.ts), one design for each droid unit,
+ * on the same box and hardpoints. Never used in battle: the Codex shows them under "Swarm
+ * (concept)", built with the style SWARM.
+ */
+const SWARM_DEFS: Record<string, ModelDef> = Object.fromEntries(
+  (['fighter', 'station', 'bomber', 'repair', 'picket', 'gunship', 'ion', 'frigate', 'cruiser', 'capital', 'mine', 'defense', 'defense-flak', 'defense-gun'] as const).map((k) => [
+    `d-${k}`,
+    k.startsWith('defense') ? swarm.defense : swarm[k as Exclude<typeof k, 'defense-flak' | 'defense-gun'>],
+  ]),
+)
+/** The style that builds a droid unit as its Swarm concept design. */
+export const SWARM = 'swarm'
+export const hasSwarm = (t: UnitType) => t.id in SWARM_DEFS
+/** A Swarm design's own name (the droid unit it mirrors has a droid-navy name). */
+export const swarmName = (t: UnitType) => swarm.SWARM_NAMES[t.id] ?? t.name
+
+/**
+ * Prototypes of bigger, more detailed warships (proto.ts), shown only in the Codex next to the
+ * battle's designs, at the size classes in sizes.ts (protoType). Built with the style PROTO.
+ */
+const PROTO_DEFS: Record<string, ModelDef> = { 'r-frigate': proto.frigate, 'r-capital': proto.capital }
+export const PROTO = 'proto'
+export const hasProto = (t: UnitType) => t.id in PROTO_DEFS
 
 export const hasModel = (t: UnitType) => t.id in DEFS
 
@@ -35,12 +86,14 @@ export function modelFor(t: UnitType, style = ''): Model | null {
   let byStyle = built.get(t)
   if (!byStyle) built.set(t, (byStyle = new Map()))
   let m = byStyle.get(style)
-  if (m === undefined) byStyle.set(style, (m = hasModel(t) ? buildModel(t, style || undefined) : null))
+  if (m === undefined) byStyle.set(style, (m = (style === SWARM ? hasSwarm(t) : style === PROTO ? hasProto(t) : hasModel(t)) ? buildModel(t, style || undefined) : null))
   return m
 }
 
-/** The design variants a unit's model can be shown in (the Codex offers them), by level. */
-export const modelStyles = (t: UnitType): string[] => (t.id === 'r-station' && /-4$/.test(t.sprite) ? [...republic.STATION_FRAMES] : [])
+/** The design variants a unit's model can be shown in (the Codex offers them): the Republic
+ * station's level-4 frame, the droid flagship's ring or carrier hull. */
+export const modelStyles = (t: UnitType): string[] =>
+  t.id === 'r-station' && /-4$/.test(t.sprite) ? [...republic.STATION_FRAMES] : t.id === 'd-capital' ? [...droid.CAPITAL_DESIGNS] : []
 
 const bySprite = new Map<string, UnitType | null>()
 /** The model behind a wreck, which only knows the sprite of the ship it was. */
@@ -55,13 +108,22 @@ export function unitForSprite(sprite: string): UnitType | null {
   return modelForSprite(sprite) ? (bySprite.get(sprite) ?? null) : null
 }
 
+/** The unit type a sprite name stands for, a station by its stage (with only that level's own
+ * modules): for the menus and tiles that only know a sprite. */
+export function typeOfSprite(sprite: string): UnitType | null {
+  const st = /^(republic|droid)-station-(\d)$/.exec(sprite)
+  if (st) return stationType(st[1] as FactionId, Number(st[2]), [])
+  return UNITS.find((u) => u.sprite === sprite && u.tier !== 'station') ?? null
+}
+
 /** Which mounts blow off by default: small flak turrets. Heavy guns, shield generators, hangars and
  * station modules stay on the hull, wrecked. */
 const DETACH_BY_DEFAULT: MountDesign[] = ['flak']
 
 export function buildModel(t: UnitType, style?: string): Model {
-  const def = DEFS[t.id]
-  if (!def) throw new Error(`No model for ${t.id}`)
+  const concept = style === SWARM
+  const def = concept ? SWARM_DEFS[t.id] : style === PROTO ? PROTO_DEFS[t.id] : DEFS[t.id]
+  if (!def) throw new Error(`No ${concept ? 'Swarm ' : style === PROTO ? 'prototype ' : ''}model for ${t.id}`)
   let w: number
   let h: number
   let level = 1
@@ -78,23 +140,30 @@ export function buildModel(t: UnitType, style?: string): Model {
     h = dh * k
   }
   const long = Math.max(w, h)
-  const spec = def({ t, w, h, level, style })
+  const spec = def({ t, w, h, level, style: concept || style === PROTO ? undefined : style })
   const grid = (gx: number, gy: number): Pt => [(gx / 10 - 0.5) * w, (gy / 10 - 0.5) * h]
   const mounts: Mount[] = t.hardpoints.map((hp, i) => {
     const [x, y] = grid(hp.x, hp.y)
     const design: MountDesign = hp.art ?? (hp.kind === 'engine' ? 'engine' : hp.kind === 'turret' ? 'turbo' : (hp.kind as MountDesign))
-    return { hp: i, x, y, r: ((hp.s ?? 0.05) * long) / 2, design, turns: !!hp.weapon, detach: DETACH_BY_DEFAULT.includes(design), ...spec.mount?.(i) }
+    const { scale = 1, ...over } = spec.mount?.(i) ?? {}
+    return { hp: i, x, y, r: (((hp.s ?? 0.05) * long) / 2) * scale, design, turns: !!hp.weapon, detach: DETACH_BY_DEFAULT.includes(design), ...over }
   })
+  for (const e of spec.extraMounts ?? []) {
+    const real = t.hardpoints[e.maps]
+    mounts.push({ hp: e.maps, x: e.x, y: e.y, r: e.r, design: e.design, turns: !!real?.weapon, detach: e.detach ?? DETACH_BY_DEFAULT.includes(e.design), extra: true })
+  }
   // Every mount sits in a socket: a dark recess in the plating, under the superstructure.
   const sockets: Part[] = mounts
     .filter((m) => m.design !== 'engine')
-    .map((m) => ({ id: `socket${m.hp}`, pts: circle(m.x, m.y, m.r * 1.1, 18), tone: 'dark' as const, z: 0.5, details: [{ k: 'line' as const, pts: circle(m.x, m.y, m.r * 0.92, 16) }] }))
+    .map((m, i) => ({ id: m.extra ? `socketx${i}` : `socket${m.hp}`, pts: circle(m.x, m.y, m.r * 1.1, 18), tone: 'dark' as const, z: 0.5, details: [{ k: 'line' as const, pts: circle(m.x, m.y, m.r * 0.92, 16) }] }))
   const parts = [...spec.parts.filter((p) => (p.level ?? 1) <= level), ...sockets].sort((a, b) => a.z - b.z)
-  const key = `${t.tier === 'station' ? `${t.id}:${level}:${t.hardpoints.map((p) => p.key).join(',')}` : t.id}${style ? `:${style}` : ''}`
+  // A mining platform with its Shield generator fitted is a type of its own with one more socket,
+  // so its key names its modules too, as a station's does.
+  const key = `${t.tier === 'station' ? `${t.id}:${level}:${t.hardpoints.map((p) => p.key).join(',')}` : t.tier === 'mine' ? `${t.id}:${t.hardpoints.map((p) => p.key).join(',')}` : t.id}${style ? `:${style}` : ''}`
   const seed = seedOf(t.tier === 'station' ? `${t.id}:${level}` : t.id)
   return {
     key,
-    faction: t.faction,
+    faction: concept ? 'swarm' : t.faction,
     w,
     h,
     long,
@@ -103,6 +172,8 @@ export function buildModel(t: UnitType, style?: string): Model {
     engines: spec.engines ?? t.engines.map(([gx, gy]) => grid(gx, gy)),
     detachable: parts.flatMap((p, i) => (p.detach ? [i] : [])),
     breakStyle: spec.breakStyle ?? 'bands',
+    cuts: spec.cuts,
+    core: spec.core,
     scorch: scorchSpots(parts, w, h, seed),
     seed,
   }
@@ -148,8 +219,9 @@ export function hullState(m: Model, d: Damage, tier: Tier): HullState {
   let detached = 0
   for (let i = 0; i < m.detachable.length; i++) if (partGone(m, i, d)) detached |= 1 << i
   const f = d.hull / Math.max(1, d.hullMax)
-  // Strike craft share one burn layout: there are many of them and they're small.
-  return { detached, scorch: f > 0.75 ? 0 : f > 0.5 ? 1 : f > 0.25 ? 2 : 3, variant: tier === 'fighter' ? 0 : d.id & 3 }
+  // Strike craft and gunships share one burn layout: there are many of them and they're small, and
+  // four layouts each would mean four times the bitmaps for every heading they turn through.
+  return { detached, scorch: f > 0.75 ? 0 : f > 0.5 ? 1 : f > 0.25 ? 2 : 3, variant: tier === 'fighter' || tier === 'gunship' ? 0 : d.id & 3 }
 }
 export const stateKey = (s: HullState) => `${s.detached}.${s.scorch}.${s.variant}`
 
@@ -206,7 +278,47 @@ function cutPieces(m: Model, kind: BreakKind, variant: number): Piece[] {
   const amp = m.long * 0.028
   let regions: { region: Pt[]; cuts: Pt[][] }[]
   if (kind === 'intact') regions = [{ region: [[-X, -Y], [X, -Y], [X, Y], [-X, Y]], cuts: [] }]
-  else if (m.breakStyle === 'pie') {
+  else if (m.breakStyle === 'ring' && m.core) {
+    // The core sphere comes away whole, its spokes torn round its edge; in half, the whole ring
+    // drifts off it, in pieces the ring breaks into three or four segments too.
+    const { x: cx, y: cy, r: rc } = m.core
+    const R = Math.hypot(X, Y) * 1.4
+    const disc: Pt[] = []
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2
+      const k = 1 + (r() - 0.5) * 0.08
+      disc.push([cx + Math.cos(a) * rc * k, cy + Math.sin(a) * rc * k])
+    }
+    const rim = [...disc, disc[0]]
+    if (kind === 'half') {
+      // Everything outside the disc, as one polygon: the box, a slit in to the disc, round the disc
+      // the other way, and back out (the slit has no width, so it covers nothing).
+      const outer: Pt[] = [[cx, cy - R], [cx + R, cy - R], [cx + R, cy + R], [cx - R, cy + R], [cx - R, cy - R]]
+      const around: Pt[] = [disc[18], ...disc.slice(0, 19).reverse(), ...disc.slice(19).reverse(), disc[18]]
+      regions = [
+        { region: disc, cuts: [rim] },
+        { region: [...outer, [cx, cy - R], ...around, [cx, cy - R]], cuts: [rim] },
+      ]
+    } else {
+      const n = 3 + Math.floor(r() * 2)
+      const a0 = r() * Math.PI * 2
+      const angles = Array.from({ length: n }, (_, i) => a0 + ((i + 0.4 * (r() - 0.5)) / n) * Math.PI * 2)
+      const rays = angles.map((a) => jagged([cx + Math.cos(a) * rc, cy + Math.sin(a) * rc], [cx + Math.cos(a) * R, cy + Math.sin(a) * R], 7, amp * 1.4, r))
+      regions = [{ region: disc, cuts: [rim] }]
+      angles.forEach((a, i) => {
+        const b = i + 1 < n ? angles[i + 1] : angles[0] + Math.PI * 2
+        const outerArc: Pt[] = []
+        const innerArc: Pt[] = []
+        for (let k = 1; k < 10; k++) {
+          const t = a + ((b - a) * k) / 10
+          outerArc.push([cx + Math.cos(t) * R, cy + Math.sin(t) * R])
+          innerArc.push([cx + Math.cos(t) * rc, cy + Math.sin(t) * rc])
+        }
+        const next = rays[(i + 1) % n]
+        regions.push({ region: [...rays[i], ...outerArc, ...next.slice().reverse(), ...innerArc.reverse()], cuts: [rays[i], next, [rays[i][0], ...innerArc.slice().reverse(), next[0]]] })
+      })
+    }
+  } else if (m.breakStyle === 'pie') {
     const n = kind === 'half' ? 2 : 4 + Math.floor(r() * 2)
     const a0 = r() * Math.PI * 2
     const angles = Array.from({ length: n }, (_, i) => a0 + ((i + 0.5 * (r() - 0.5)) / n) * Math.PI * 2)
@@ -225,7 +337,7 @@ function cutPieces(m: Model, kind: BreakKind, variant: number): Piece[] {
   } else {
     // Cut across the hull: one line for a half, two (three on the biggest ships) for pieces, kept
     // far enough apart that the jagged lines never cross.
-    const count = kind === 'half' ? 1 : m.long >= 300 ? 3 : 2
+    const count = kind === 'half' ? 1 : (m.cuts ?? (m.long >= 300 ? 3 : 2))
     const ys: number[] = []
     for (let i = 0; i < count; i++) {
       const lo = -0.32 + (0.64 * i) / count
@@ -289,6 +401,8 @@ export function pickAt(m: Model, x: number, y: number, detached: number, minR = 
   let bestD = Infinity
   for (let i = m.mounts.length - 1; i >= 0; i--) {
     const mt = m.mounts[i]
+    // Turrets for show answer to no hardpoint of their own.
+    if (mt.extra) continue
     const d = Math.hypot(x - mt.x, y - mt.y)
     if (mt.design !== 'engine' && d < Math.max(mt.r * 1.15, minR) && d < bestD) (best = i), (bestD = d)
   }

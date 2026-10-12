@@ -793,18 +793,44 @@ progress carries over both ways, and signing in from Gladiator comes back to the
 Multiplayer works the same. The game in progress belongs to the browser tab instead of a window: a
 reload carries on where it was, closing the tab ends it.
 
+## Empires At War battlefield scale
+
+Three dials in [`scale.ts`](src/apps/games/empires/scale.ts) set how big a battle feels:
+
+- `MAP_SCALE` (1.25): every battle map, in skirmish, multiplayer and Galactic conquest, is this much
+  bigger in each direction than drawn (on top of `SPREAD` in `maps.ts`). Spawns, ore, beacons,
+  wrecks, fields, nebulas and start areas move out with it, as do the distances the AI measures
+  across the map; ships, structures, ore and rocks keep their size.
+- `RANGE_SCALE` (1.1): every weapon, sensor, ability range, repair tender, the defense wing's home
+  radius and what the sim derives from them (chase leashes, how far ships look, strafing runs).
+  The numbers in `data.ts` stay as written; research bonuses stay percentages on top.
+- `SPEED_SCALE` (1.0): every ship's speed.
+
+Changing one changes every battle, so the multiplayer hash from `pnpm check:empires` changes too.
+Battles saved before keep the map and ship types they were saved with.
+
 ## Empires At War weapon ranges and repair craft
 
 Hovering a ship or structure in battle (ours, or an enemy we can see) rings it with its weapon
-ranges ([`render.ts`](src/apps/games/empires/render.ts) `drawRanges`): one ring per kind of gun
-and reach, each kind in its own colour and dash (lasers solid red, flak amber, turbolasers blue,
-missiles pink dots, ion violet), labelled with its name and range, plus a faint dashed ring for its
-sensors. On a touch screen, which has no hover, the selected ships show theirs. The setting
-*Show weapon ranges on hover* (on by default) is in the game's Settings and in Settings → Apps →
-Games → Empires At War.
+ranges ([`render.ts`](src/apps/games/empires/render.ts) `drawRanges`, worked out in
+[`ranges.ts`](src/apps/games/empires/ranges.ts)): one ring per kind of gun, centred on the unit
+at the average reach of that kind's standing guns (labelled e.g. *Turbolasers · avg 792*), each
+kind in its own colour and dash (lasers solid red, flak amber, turbolasers blue, missiles pink
+dots, ion violet), plus a faint dashed ring for its sensors. Pointing at one of its guns instead
+rings that gun alone, centred on the gun where it sits. That is how the battle measures it: a gun
+on a hardpoint fires from the hardpoint, out to its range (times any range research), and a target
+is in reach once its centre is within that plus half its radius, an allowance for the target's size
+the rings leave out. A unit's average reach is measured from its centre: for a ship, which turns
+its nose to what it fights, as its stopping distance does (a gun's range less how far it sits out
+to the side or behind the centre); for a structure, which never turns, averaged over every
+direction. On a touch screen, which has no hover, the selected ships show theirs, and a structure's
+gun picked by tapping it shows its own ring. The Codex does the same: pointing at a gun (on the
+model or in the hardpoint list) or selecting it shows its own ring, and the Workshop's *Ranges*
+shows the averages. The setting *Show weapon ranges on hover* (on by default) is in the game's
+Settings and in Settings → Apps → Games → Empires At War.
 
 Each side has a repair squadron of two strike craft, the Republic's Suture repair fighter and the
-droids' Weaver repair droid ([`data.ts`](src/apps/games/empires/data.ts)). They launch from the
+droids' Tinker repair droid ([`data.ts`](src/apps/games/empires/data.ts)). They launch from the
 hangar like any fighter and need the research Engineer wing or Welder protocols (300 credits,
 25 s, station level 1) before the shipyard builds them. Their guns are next to useless; their
 ability, **Field repair** (35 s cooldown), sends them to a damaged station or a ship of gunship
@@ -825,7 +851,7 @@ its worst-hurt ship or station. Galactic conquest has no research, so there they
 any other ship.
 
 Every station also comes with a free **defense wing** (`DEFENSE_WING` in `data.ts`): the
-Republic's five Aegis pickets or the droids' six Gnat guard droids, smaller and frailer than line
+Republic's five Aegis pickets or the droids' six Bolt guard droids, smaller and frailer than line
 fighters. They cost nothing, take no fleet space and can't be built, retreat or escape with a
 conquest fleet. Their station is their parent, as a carrier's fighters are theirs, and with no
 orders of their own they guard it: each craft has its own slot in an even ring just outside the
@@ -987,17 +1013,46 @@ pnpm empires:battle-ai [games] [minutes]                  # AI-only battles: win
 
 ## Empires At War procedural models and the Codex
 
-Ships and stations are moving from generated sprites to procedural models built from parts
-([`src/apps/games/empires/models/`](src/apps/games/empires/models)), drawn cel-shaded like the
+Every ship and structure of both sides is drawn as a procedural model built from parts
+([`src/apps/games/empires/models/`](src/apps/games/empires/models)), cel-shaded like the
 cartoon: flat fills in three hard tones, a heavy dark outline, panel lines, stripes, windows and
-engine light. So far the Republic's Lance interceptor, Warden frigate and Bastion station and the
-droids' Mantis fighter have one; every other unit keeps its sprite. The station is a squared-off
-military platform of plates and girders that grows with its level: a compact eight-sided core at
-level 1, short arms with docking pods and a girder frame at level 2, long arms, big pods and dry
-docks at level 3, and a great outer frame on struts at level 4, square with corner bastions or
-octagonal (the battle uses `STATION_FRAME` in
-[`republic.ts`](src/apps/games/empires/models/republic.ts); the Codex shows both). The setting *Procedural models (preview)* (on by default, in the game's Settings and
-in Settings → Apps → Games → Empires At War) switches back to the sprites to compare.
+engine light. The setting *Procedural models (preview)* (on by default, in the game's Settings and
+in Settings → Apps → Games → Empires At War) switches back to the generated sprites, which stay as
+a fallback for now.
+
+Each side is a family. The **Republic** builds angular off-white wedges with deep red bands, grey
+machinery and blue engines: the Lance interceptor, the blunt twin-engine Hammer bomber with its
+bomb bay and torpedo racks, the Suture repair fighter with manipulator arms and a green repair hub,
+the Aegis picket in the defense wing's gold bands, the Halberd gunship with a ball turret on each
+wing, the Mercy corvette with its green repair ring and crane booms, the Warden frigate, the long
+Paladin cruiser with its turbolasers in a row on an armoured spine, and the Sovereign dreadnought
+with a flight-deck trench and twin bridge towers. Its Bastion station is a squared-off military
+platform of plates and girders that grows with its level: a compact eight-sided core at level 1,
+short arms with docking pods and a girder frame at level 2, long arms, big pods and dry docks at
+level 3, and a great outer frame on struts at level 4, square with corner bastions or octagonal
+(the battle uses `STATION_FRAME` in [`republic.ts`](src/apps/games/empires/models/republic.ts);
+the Codex shows both). The **Confederacy** is an industrial droid navy
+([`droid.ts`](src/apps/games/empires/models/droid.ts)): weathered sand and bone plating over dark
+gunmetal, rust-brown and dull blue-grey panels, rivets, red and amber sensor eyes and blue-white
+engines, long spines with heavy forward sections, tall sails, boxy engine blocks and rings and
+spheres for the biggest hulls. Its fighter is a flying droid with a row of eyes and folding
+wing-legs, its bomber a twin-hulled cousin with a bomb bay between the hulls, its repair craft a
+blocky welder with manipulator arms, its guard droid a small gold-banded three-blade, its gunship a
+ball head on three long cannon arms. The ion frigate is a slim spine behind a great emitter dish,
+the line frigate a spine with a big armoured bulb and a tall sail, the cruiser a narrow destroyer
+with a towering sail and swept gun galleries either side. The flagship is a ring hull open at the
+front round a core sphere, docking-bay gaps between them (it breaks into ring segments and the
+sphere, the `ring` break style); the Codex also shows a broad carrier design on the same
+hardpoints (`CAPITAL_DESIGN` picks the battle's). Its station is built round a sphere core on a deck
+plate, gaining ring arcs and docking arms at level 2, the closed ring with hangar segments and gun
+pods at level 3, and an outer frame joining gun towers with antenna spires at level 4. The platforms
+of both sides stand on clamp legs that hold them to their asteroid.
+
+The Confederacy's first, insect-like designs are kept in
+[`swarm.ts`](src/apps/games/empires/models/swarm.ts) as the **Swarm**, a concept for a possible
+future third faction: one design for each droid unit on that unit's box and hardpoints, in their
+tan and violet palette. They are never used in battle; the Codex shows them under *Swarm
+(concept)*, on the droid units' numbers, and `check:empires-models` checks them like the rest.
 
 - **The format** ([`types.ts`](src/apps/games/empires/models/types.ts)): a model is a list of
   parts, each a polygon (with holes for rings) in a colour role (`hull`, `accent`, `metal`…), a z
@@ -1006,10 +1061,12 @@ in Settings → Apps → Games → Empires At War) switches back to the sprites 
   stripes, lights) and a reason to come off (`detach`: when a hardpoint is destroyed, below a hull
   share, or only at death). Ships are drawn on a box 100 units on the long side, nose up; the
   station in the pixels of the frame its sprites were cut from. The helpers in
-  [`kit.ts`](src/apps/games/empires/models/kit.ts) build wedge hulls, tapered sections, wings,
-  engine pods, rings, chamfered blocks and mirrored pairs (`sym`), and hold each faction's
-  palette (taken from its sprites: off-white, deep red and blue light for the Republic; bone tan
-  and violet for the droids).
+  [`kit.ts`](src/apps/games/empires/models/kit.ts) build wedge hulls, outlines from half-width
+  rows (`halfHull`), tapered sections, wings, engine pods, capsules, smooth organic outlines
+  (`spline`), tapering bands along a line for limbs and spars (`thick`), rings, chamfered blocks
+  and mirrored pairs (`sym`), and hold each faction's palette (taken from its sprites: off-white,
+  deep red and blue light for the Republic; bone tan and violet for the droids; plus green for
+  repair craft and gold for a station's own defense wing).
 - **Hardpoints:** turrets, shield generators, hangars and station modules are mounts placed by
   the model builder on the unit's own hardpoints from [`data.ts`](src/apps/games/empires/data.ts),
   one per hardpoint and in the same order, so they sit exactly where the battle aims and the
@@ -1018,12 +1075,15 @@ in Settings → Apps → Games → Empires At War) switches back to the sprites 
   [`mounts.ts`](src/apps/games/empires/models/mounts.ts).
 - **Lighting and caching** ([`paint.ts`](src/apps/games/empires/models/paint.ts)): the light
   comes from the top left of the screen, so a facet's tone (lit, base or shadow) is worked out for
-  the ship's heading. A hull is painted once into a bitmap per size bucket (powers of two near its
-  size on screen), per light heading and per damage state, kept in one cache with a memory budget
-  (112 MB, 48 MB on phones), and turned to the exact heading when drawn. There are 64 light
-  headings (under 6° apart) at the sizes ships show at in battle and 32 for specks, for the few
-  big bitmaps and on phones; a heading is only painted when a ship first turns to it, at most 3 ms
-  of painting a frame (past that, the nearest heading already painted stands in). As a ship turns,
+  the ship's heading. A hull is painted once into a bitmap per size bucket (steps of √2 from 32
+  pixels, so a bitmap is at most about half as big again as it shows), per light heading and per
+  damage state, kept in one cache with a memory budget (112 MB, 48 MB on phones), and turned to
+  the exact heading when drawn. There are 64 light headings (under 6° apart) at the sizes ships
+  show at in battle and 32 for specks, for the few big bitmaps and on phones; fragments tumbling
+  away use 8. A heading is only painted when a ship first turns to it, at most 3 ms of painting a
+  frame (past that, the nearest heading already painted stands in, and a hull that has just taken a
+  new scorch mark or lost a part keeps its look of a moment ago until there is time). Strike craft
+  and gunships share one burn layout, so a swarm doesn't multiply the bitmaps. As a ship turns,
   the two nearest headings are crossfaded over the middle of each step, so the shading moves on
   smoothly instead of popping (`lightTuning` in paint.ts; a linear blend and the old snap can be
   compared there). Turrets get the same treatment in bitmaps of their own, because they turn to
@@ -1033,19 +1093,50 @@ in Settings → Apps → Games → Empires At War) switches back to the sprites 
   worst); parts come off at their hull share and fly away tumbling and smoking; wrecked mounts
   show broken. All of it follows from the battle's own state.
 - **Death and wrecks** ([`fx.ts`](src/apps/games/empires/models/fx.ts)): fighters, gunships
-  and structures burst into fragments that fade. A frigate (and later cruisers and flagships) leaves
-  the battle's wreck as before (`leaveWreck`, salvage, decay are unchanged), and its hull lies there
+  and structures burst into fragments that fade (a station's and a platform's slabs tumble slowly
+  and linger); the old flecks of debris are only drawn for units shown as sprites. Frigates,
+  cruisers and flagships leave the battle's wreck as before (`leaveWreck`, salvage, decay are
+  unchanged), and the hull lies there
   in one scorched piece, broken in half or in several pieces drifting slowly apart, until the wreck
   is salvaged or drifts off. Which one is picked from the wreck's id and the map's seed with
   integer maths (`breakOutcome`, weights per class in `BREAK_WEIGHTS`), so every player in a
   multiplayer battle sees the same break. Nothing of this touches the battle itself.
 
-**Adding a unit's model:** write a `ModelDef` in the faction's file
-([`republic.ts`](src/apps/games/empires/models/republic.ts),
-[`droid.ts`](src/apps/games/empires/models/droid.ts)) that returns its parts on the unit's box
-(use the hardpoint positions from `data.ts` to leave room for its mounts), list it in `DEFS` in
-[`index.ts`](src/apps/games/empires/models/index.ts), run `pnpm check:empires-models`, and look at
-it in the Codex's Workshop.
+- **Menus** ([`Hud.tsx`](src/apps/games/empires/Hud.tsx) `ShipArt`, `useUnitArt`): unit cards,
+  the shipyard, the fleet inventory and its tiles, Galactic conquest's fleet grids, tooltips and
+  the tech tree show a still of the model (nose up, under the world's light, with its mounts, a
+  shot-off one wrecked), painted once per look by `thumbnail` in paint.ts and kept as a data URL.
+  A ship dragged from the fleet inventory is ghosted as its model too.
+
+**Bigger ships (prototype):** warships are being tried at bigger sizes, redesigned with more to
+them rather than just scaled. The size classes are one table, `SIZE_CLASSES` in
+[`sizes.ts`](src/apps/games/empires/models/sizes.ts): strike craft ×1, gunships and corvettes ×1.15,
+frigates ×1.4, cruisers ×1.7, flagships ×2.5, stations and platforms ×1 for now. The first two
+redesigns, the Republic's Warden frigate and Sovereign dreadnought, are in
+[`proto.ts`](src/apps/games/empires/models/proto.ts): layered armour plates, a raised deck with
+trenches and hangar bays, a stepped superstructure with masts and dishes, engine banks with
+auxiliary nozzles, greebles, and many smaller turrets for show (`extraMounts`, each standing for a
+real hardpoint: it aims where that gun aims and is wrecked with it). They keep every hardpoint where
+`data.ts` puts it, and the dreadnought breaks into four chunks (`cuts`). Only the Codex shows them:
+a *Current / New (prototype)* switch on those two ships, at true relative scale, and *Size classes*,
+which lays a fighter, frigate, cruiser and flagship out as they are now and at their proposed sizes.
+Battles still use today's sizes and designs.
+
+**Adding a unit's model:**
+
+1. In `data.ts`, give the unit its box (`aspect`, `size`) and its hardpoints and engines on the
+   0-10 grid, as before.
+2. Write a `ModelDef` in the faction's file
+   ([`republic.ts`](src/apps/games/empires/models/republic.ts),
+   [`droid.ts`](src/apps/games/empires/models/droid.ts)) that returns its parts on the unit's box,
+   100 units on the long side, nose up (a hardpoint at grid (gx, gy) sits at
+   ((gx / 10 − 0.5) × w, (gy / 10 − 0.5) × h)). Leave solid hull under every hardpoint, give
+   frigates and bigger at least four parts that come off as they are battered, and tie engine
+   pods to engine hardpoints (`detach: { hp }`) or engine glows (`engine`).
+3. List it in `DEFS` in [`index.ts`](src/apps/games/empires/models/index.ts), and give any new
+   part names a friendly name in [`codexInfo.ts`](src/apps/games/empires/codexInfo.ts).
+4. Run `pnpm check:empires-models` (it fails for any unit without a model), and look at it in the
+   Codex's Workshop: damage it, detach its parts and destroy it a few times.
 
 **The Codex** (main menu → Codex, [`Codex.tsx`](src/apps/games/empires/Codex.tsx)) lists every
 ship and structure of both sides with its numbers: hull, shields, speed, turn rate, sensors, fleet
@@ -1072,7 +1163,7 @@ a module or part opens a wheel: Inspect, Damage, Destroy, Detach. On a phone the
 row of chips over the view and the numbers.
 
 ```sh
-pnpm check:empires-models   # every model builds, its mounts match the hardpoints, detachable parts are sound, breaks are deterministic and weighted
+pnpm check:empires-models   # every unit has a model that builds, its mounts match the hardpoints, parts come off soundly, breaks are deterministic and weighted, small craft and structures burst into real fragments
 ```
 
 ## Empires At War on touch screens

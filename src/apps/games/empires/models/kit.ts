@@ -217,6 +217,94 @@ export function jagged(a: Pt, b: Pt, steps: number, amp: number, r: () => number
   return out
 }
 
+/** A rounded bar from a to b, `r0` thick at a and `r1` at b, with round ends: a strut, a droid's
+ * limb segment, a boom. */
+export function capsule(a: Pt, b: Pt, r0: number, r1 = r0, n = 5): Pt[] {
+  const ang = Math.atan2(b[1] - a[1], b[0] - a[0])
+  const out: Pt[] = []
+  for (let i = 0; i <= n; i++) {
+    const t = ang - Math.PI / 2 + (i / n) * Math.PI
+    out.push([b[0] + Math.cos(t) * r1, b[1] + Math.sin(t) * r1])
+  }
+  for (let i = 0; i <= n; i++) {
+    const t = ang + Math.PI / 2 + (i / n) * Math.PI
+    out.push([a[0] + Math.cos(t) * r0, a[1] + Math.sin(t) * r0])
+  }
+  return out
+}
+
+/**
+ * A smooth curve through points (Catmull-Rom), `n` steps between each pair: how the droids' organic
+ * outlines are drawn from a handful of control points. `closed` joins the last point to the first.
+ */
+export function spline(pts: Pt[], n = 4, closed = false): Pt[] {
+  const out: Pt[] = []
+  const len = pts.length
+  const at = (i: number) => (closed ? pts[((i % len) + len) % len] : pts[Math.max(0, Math.min(len - 1, i))])
+  const segs = closed ? len : len - 1
+  for (let i = 0; i < segs; i++) {
+    const [p0, p1, p2, p3] = [at(i - 1), at(i), at(i + 1), at(i + 2)]
+    for (let k = 0; k < n; k++) {
+      const t = k / n
+      const t2 = t * t
+      const t3 = t2 * t
+      const f = (a: number, b: number, c: number, d: number) => 0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (-a + 3 * b - 3 * c + d) * t3)
+      out.push([f(p0[0], p1[0], p2[0], p3[0]), f(p0[1], p1[1], p2[1], p3[1])])
+    }
+  }
+  if (!closed) out.push(pts[len - 1])
+  return out
+}
+
+/** A band along a polyline, `w0` thick at its start tapering to `w1` at its end: a limb, a spar, a
+ * strand of web. */
+export function thick(pts: Pt[], w0: number, w1 = w0): Pt[] {
+  const n = pts.length
+  const left: Pt[] = []
+  const right: Pt[] = []
+  for (let i = 0; i < n; i++) {
+    const a = pts[Math.max(0, i - 1)]
+    const b = pts[Math.min(n - 1, i + 1)]
+    const dx = b[0] - a[0]
+    const dy = b[1] - a[1]
+    const l = Math.hypot(dx, dy) || 1
+    const w = (w0 + (w1 - w0) * (i / Math.max(1, n - 1))) / 2
+    left.push([pts[i][0] - (dy / l) * w, pts[i][1] + (dx / l) * w])
+    right.push([pts[i][0] + (dy / l) * w, pts[i][1] - (dx / l) * w])
+  }
+  return [...left, ...right.reverse()]
+}
+
+/** The left half of a hull from its outline, as (y, half-width) rows from nose to tail, closed down
+ * the centre line, so it can be mirrored into the right half (sym) and each half lit on its own. */
+export const halfHull = (rows: [number, number][]): Pt[] => [[0, rows[0][0]], ...rows.map(([y, w]) => [-w, y] as Pt), [0, rows[rows.length - 1][0]]]
+/** A whole outline from (y, half-width) rows, both sides in one polygon. */
+export const fullHull = (rows: [number, number][]): Pt[] => [...rows.map(([y, w]) => [-w, y] as Pt), ...rows.map(([y, w]) => [w, y] as Pt).reverse()]
+
+/** Evenly spaced points from a to b, both ends included: rows of windows and running lights. */
+export function along(a: Pt, b: Pt, n: number): Pt[] {
+  return Array.from({ length: n }, (_, i) => {
+    const t = n === 1 ? 0.5 : i / (n - 1)
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t] as Pt
+  })
+}
+
+/** A part turned by `a` round (cx, cy), its facets, slope and details turned with it. */
+export function turnPart(p: Part, a: number, cx = 0, cy = 0): Part {
+  const c = Math.cos(a)
+  const s = Math.sin(a)
+  const tp = (pts: Pt[]) => turn(pts, a, cx, cy)
+  const ts = (v: Pt): Pt => [v[0] * c - v[1] * s, v[0] * s + v[1] * c]
+  return {
+    ...p,
+    pts: tp(p.pts),
+    holes: p.holes?.map(tp),
+    slope: p.slope ? ts(p.slope) : undefined,
+    facets: p.facets?.map((f) => ({ pts: tp(f.pts), slope: ts(f.slope) })),
+    details: p.details?.map((d) => ({ ...d, pts: tp(d.pts) })),
+  }
+}
+
 /** A blob for a scorch mark: a lumpy circle. */
 export function blob(x: number, y: number, r: number, r0: () => number, n = 9): Pt[] {
   const out: Pt[] = []
@@ -274,14 +362,16 @@ export function inset(pts: Pt[], d: number): Pt[] {
 // --- Palettes and style kits ------------------------------------------------------------------------
 
 /** Three cel tones per colour role: lit, base, shadow. */
-export type Palette = Record<Tone, [string, string, string]> & { outline: string; smoke: string; debris: string }
+export type Palette = Record<Tone, [string, string, string]> & { outline: string; smoke: string; debris: string; /** Engine light, for the glow drawn behind the nozzles. */ engine: string }
 
 /**
- * Taken from the faction sprites, so the models still read as the same sides: Republic warships are
- * off-white with deep red bands, grey machinery and blue engine light; droid ships bone tan with
- * violet accents and violet glow. Shadows lean cool, the way the cartoon shades them.
+ * Republic warships are off-white with deep red bands, grey machinery and blue engine light, as
+ * their sprites are. The droid navy is weathered sand and bone with rust-brown and dull blue-grey
+ * plating over dark gunmetal, red and amber sensor eyes (its `glass`) and blue-white engines.
+ * Shadows lean cool, the way the cartoon shades them. Two roles mark a job rather than a side:
+ * `aid` is the green of repair craft, `trim` the gold of a station's own defense wing.
  */
-export const PALETTES: Record<'republic' | 'droid', Palette> = {
+export const PALETTES: Record<'republic' | 'droid' | 'swarm', Palette> = {
   republic: {
     hull: ['#f7f3ea', '#e0dacd', '#a4a3ad'],
     hull2: ['#ebe5d8', '#cdc6b8', '#8e8c94'],
@@ -292,11 +382,33 @@ export const PALETTES: Record<'republic' | 'droid', Palette> = {
     glow: ['#d8f3ff', '#6ad0ff', '#2a86d6'],
     char: ['#4a3d34', '#2e2520', '#1a1411'],
     ember: ['#ffe29a', '#ff8a3a', '#c4401a'],
+    aid: ['#b4f5a8', '#4cc25e', '#23703c'],
+    trim: ['#ffe68e', '#f0b636', '#9c6a1e'],
     outline: '#15171d',
+    engine: '#6ad0ff',
     smoke: 'rgba(52,52,60,1)',
     debris: '#d8d2c8',
   },
   droid: {
+    hull: ['#efe4c9', '#cfc09d', '#8f826a'],
+    hull2: ['#aab3ba', '#7f8a93', '#535d68'],
+    accent: ['#cf7d4f', '#9e5434', '#5f3221'],
+    metal: ['#7d7f84', '#57595f', '#37393e'],
+    dark: ['#47484d', '#2e2f34', '#1c1d21'],
+    glass: ['#ffd88f', '#ff5a2e', '#8c2414'],
+    glow: ['#f2f9ff', '#a8dcff', '#5a96cc'],
+    char: ['#4a3d34', '#2e2520', '#1a1411'],
+    ember: ['#ffe29a', '#ff8a3a', '#c4401a'],
+    aid: ['#d6f7a8', '#86cc54', '#41702a'],
+    trim: ['#ffe7a0', '#d8a444', '#8a5e22'],
+    outline: '#16130f',
+    engine: '#a8dcff',
+    smoke: 'rgba(60,56,52,1)',
+    debris: '#cfc09d',
+  },
+
+  // The Swarm concept (swarm.ts) keeps the colours the Confederacy's first designs had.
+  swarm: {
     hull: ['#f6e7c6', '#d9c095', '#9a8263'],
     hull2: ['#e5cfa6', '#bea57a', '#7c684d'],
     accent: ['#c9a0ff', '#8c55d6', '#4c2c7c'],
@@ -306,7 +418,10 @@ export const PALETTES: Record<'republic' | 'droid', Palette> = {
     glow: ['#f4e2ff', '#c890ff', '#8a50d0'],
     char: ['#4a3d34', '#2e2520', '#1a1411'],
     ember: ['#ffe29a', '#ff8a3a', '#c4401a'],
+    aid: ['#d6f7a8', '#86cc54', '#41702a'],
+    trim: ['#ffe7a0', '#d8a444', '#8a5e22'],
     outline: '#1b130d',
+    engine: '#c890ff',
     smoke: 'rgba(58,52,48,1)',
     debris: '#c8b48c',
   },

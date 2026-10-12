@@ -10,6 +10,7 @@ import { ALLY, ENEMY, OWN, drawTerrainOverview, relColor } from './render'
 import { ACTIONS, RESERVED, bindKey, keyName, keyOf, resetKeys, setSettings, useAskedPanel, useSettings, type Action, type Settings } from './settings'
 import { empiresMix, empiresMusic, empiresMuted, empiresVolume } from '../prefs'
 import { newWorld, type Owner, type World } from './sim'
+import { MAP_SCALE } from './scale'
 import { Codex } from './Codex'
 import { score } from './Scoreboard'
 import type { Bus, EmpiresSound } from './sound'
@@ -844,8 +845,9 @@ export function MapPreview({ map, slots, areas, active = -1, onArea, onPick, fin
       g.fillStyle = '#050813'
       g.fillRect(ox, oy, map.w * s, map.h * s)
       g.strokeStyle = 'rgba(140,180,240,0.08)'
-      for (let x = 700; x < map.w; x += 700) g.strokeRect(ox + x * s, oy, 0, map.h * s)
-      for (let y = 700; y < map.h; y += 700) g.strokeRect(ox, oy + y * s, map.w * s, 0)
+      const cell = 700 * MAP_SCALE
+      for (let x = cell; x < map.w; x += cell) g.strokeRect(ox + x * s, oy, 0, map.h * s)
+      for (let y = cell; y < map.h; y += cell) g.strokeRect(ox, oy + y * s, map.w * s, 0)
       drawTerrainOverview(g, map, ox, oy, s)
       g.fillStyle = 'rgba(150,150,165,0.45)'
       for (const r of w!.rocks) {
@@ -1013,7 +1015,8 @@ const AMOUNTS: [Amount, string][] = [
 
 /** A map's size class by its area, and its dimensions in thousands of units. */
 export function mapSize(m: MapDef) {
-  const area = (m.w * m.h) / 1e6
+  // Measured against the battlefield's scale, so a map keeps its class whatever MAP_SCALE is.
+  const area = (m.w * m.h) / 1e6 / MAP_SCALE ** 2
   const cls = area < 30 ? 'Small' : area < 50 ? 'Medium' : 'Large'
   return { cls, dims: `${(m.w / 1000).toFixed(1)}k × ${(m.h / 1000).toFixed(1)}k` }
 }

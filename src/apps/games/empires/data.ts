@@ -8,6 +8,14 @@
 // Frigates and everything bigger are clean hulls with empty sockets: every gun, shield generator,
 // hangar and station module is a hardpoint drawn as its own sprite (public/games/empires/modules),
 // so what a ship shows is exactly what it has. Engines stay part of the hull.
+//
+// Ranges, sensors and speeds are written at the old battlefield scale; scale.ts stretches them
+// (see `reach` and `scaled`), so the numbers below stay the ones to balance against each other.
+
+import { RANGE_SCALE, SPEED_SCALE } from './scale.ts'
+
+/** A gun's or a sensor's reach, as written, at the battlefield's range scale (see scale.ts). */
+const reach = (r: number) => Math.round(r * RANGE_SCALE)
 
 export type FactionId = 'republic' | 'droid'
 export type Tier = 'fighter' | 'gunship' | 'frigate' | 'cruiser' | 'capital' | 'station' | 'mine' | 'defense'
@@ -86,13 +94,13 @@ export const ABILITIES: Record<AbilityId, Ability> = {
   flakBarrage: { name: 'Flak barrage', blurb: 'Point defence fires twice as fast for 8 s.', cooldown: 40, duration: 8 },
   repairSwarm: { name: 'Repair swarm', blurb: 'Repair droids restore 30% hull over 10 s.', cooldown: 60, duration: 10 },
   shieldBoost: { name: 'Shield boost', blurb: 'Instantly restores half the shields.', cooldown: 45, duration: 0 },
-  tractor: { name: 'Tractor lock', blurb: 'Enemy ships nearby crawl at a third of their speed for 7 s.', cooldown: 45, duration: 7, range: 650 },
+  tractor: { name: 'Tractor lock', blurb: 'Enemy ships nearby crawl at a third of their speed for 7 s.', cooldown: 45, duration: 7, range: reach(650) },
   broadside: { name: 'Full broadside', blurb: 'Turbolasers deal 60% more damage for 10 s.', cooldown: 50, duration: 10 },
   launchSwarm: { name: 'Launch swarm', blurb: 'Empties the hangars: two extra droid squadrons at once.', cooldown: 60, duration: 0 },
   fieldRepair: {
     name: 'Field repair',
     blurb: 'Flies to a damaged station, or a ship of gunship class or bigger, and welds it back together for 15 s: hull and damaged modules, and it rebuilds destroyed station modules one at a time (a ship\'s shot-off modules stay lost). Aims at the ship under the cursor, else the most damaged one nearby. Idle crews do it by themselves.',
-    cooldown: 35, duration: 15, range: 1400,
+    cooldown: 35, duration: 15, range: reach(1400),
   },
 }
 
@@ -114,7 +122,7 @@ export const FIELD_REPAIR = { flat: 8, share: 0.005, reach: 200, rebuild: 20, ba
  * `away` of their damage. The station rebuilds lost craft one at a time, every `every` seconds,
  * starting `wait` seconds after the last one was lost, while its hangar stands.
  */
-export const DEFENSE_WING = { radius: 1400, away: 0.3, every: 25, wait: 15 }
+export const DEFENSE_WING = { radius: reach(1400), away: 0.3, every: 25, wait: 15 }
 /** A faction's defense wing fighter. */
 export const wingOf = (faction: FactionId) => UNIT[faction === 'republic' ? 'r-picket' : 'd-picket']
 
@@ -162,15 +170,15 @@ const ACCURACY: Record<WeaponKind, Record<Tier, number>> = {
 export const effect = (w: WeaponKind, t: Tier) => VS[w][t]
 export const accuracy = (w: WeaponKind, t: Tier) => ACCURACY[w][t]
 
-const laser = (damage: number, range = 240, cooldown = 0.5): Weapon => ({ kind: 'laser', damage, range, cooldown, arc: 0.35 })
-const flak = (damage: number, range = 320, cooldown = 0.35, burst = 1): Weapon => ({ kind: 'flak', damage, range, cooldown, burst })
-const turbo = (damage: number, range = 650, cooldown = 2.2, burst = 2): Weapon => ({ kind: 'turbo', damage, range, cooldown, burst })
-const missile = (damage: number, range = 420, cooldown = 4): Weapon => ({ kind: 'missile', damage, range, cooldown, burst: 2, arc: 0.6 })
+const laser = (damage: number, range = 240, cooldown = 0.5): Weapon => ({ kind: 'laser', damage, range: reach(range), cooldown, arc: 0.35 })
+const flak = (damage: number, range = 320, cooldown = 0.35, burst = 1): Weapon => ({ kind: 'flak', damage, range: reach(range), cooldown, burst })
+const turbo = (damage: number, range = 650, cooldown = 2.2, burst = 2): Weapon => ({ kind: 'turbo', damage, range: reach(range), cooldown, burst })
+const missile = (damage: number, range = 420, cooldown = 4): Weapon => ({ kind: 'missile', damage, range: reach(range), cooldown, burst: 2, arc: 0.6 })
 /** Fighters' proton torpedoes: slow to reload, useless against other fighters, deadly to big hulls. */
-const torpedo = (damage: number, range = 280, cooldown = 7): Weapon => ({ kind: 'missile', damage, range, cooldown, burst: 2, arc: 0.4 })
+const torpedo = (damage: number, range = 280, cooldown = 7): Weapon => ({ kind: 'missile', damage, range: reach(range), cooldown, burst: 2, arc: 0.4 })
 
 /** An ion cannon: a slow, heavy bolt that tears down shields and does next to nothing to a hull. */
-const ion = (damage: number, range = 620, cooldown = 2.4): Weapon => ({ kind: 'ion', damage, range, cooldown, burst: 1 })
+const ion = (damage: number, range = 620, cooldown = 2.4): Weapon => ({ kind: 'ion', damage, range: reach(range), cooldown, burst: 1 })
 
 const P = (kind: HardpointKind, x: number, y: number, hp: number, weapon?: Weapon): Hardpoint => ({ kind, x, y, hp, weapon })
 /** A module with its own sprite, `s` as a share of the ship's longest side. */
@@ -188,6 +196,16 @@ const toughen = (t: UnitType): UnitType => ({
   shield: Math.round(t.shield * TOUGHNESS),
   hardpoints: t.hardpoints.map((h) => ({ ...h, hp: Math.round(h.hp * TOUGHNESS) })),
 })
+/** A unit as written, at the battlefield's scale (see scale.ts): sensors and repair range reach
+ * further and engines push harder. Weapons are scaled where they're made (see `reach`). */
+const scaled = (t: UnitType): UnitType => ({
+  ...t,
+  sensor: reach(t.sensor),
+  speed: t.speed * SPEED_SCALE,
+  ...(t.support ? { support: { ...t.support, range: reach(t.support.range) } } : {}),
+})
+/** Toughened and scaled: every unit goes through this once. */
+const finish = (t: UnitType) => scaled(toughen(t))
 
 // --- Platforms on the ore ---------------------------------------------------------------------------
 
@@ -214,7 +232,7 @@ export const MINE_FLAK: Record<FactionId, Weapon> = { republic: flak(1.1, 320, 0
 function minePlatform(faction: FactionId, shielded = false): UnitType {
   const d = DECKS[faction]
   return {
-    id: faction === 'republic' ? 'r-mine' : 'd-mine', faction, tier: 'mine', name: faction === 'republic' ? 'Mining platform' : 'Ore harvester',
+    id: faction === 'republic' ? 'r-mine' : 'd-mine', faction, tier: 'mine', name: faction === 'republic' ? 'Mining platform' : 'Ore extractor',
     blurb: 'Drills an ore asteroid for credits: two drill rigs and an ore silo, each worth part of the income while it works, and a small flak turret that can hold off a fighter squadron.',
     sprite: `mine-${faction}`, aspect: faction === 'republic' ? 1.051 : 1.092, size: 120, hull: 1000, shield: shielded ? 600 : 0, regen: shielded ? 10 : 0, speed: 0, turn: 0, pop: 0, cost: 500, build: 24, level: 1, squad: 1, sensor: 600,
     weapons: [],
@@ -325,7 +343,7 @@ export const STATIONS: Record<FactionId, StationPlan> = {
   },
   droid: {
     id: 'd-station',
-    name: 'Foundry station',
+    name: 'Crucible foundry station',
     blurb: 'The droid foundry. It starts as a small core and grows with every upgrade. Lose it and the battle is lost.',
     perPx: 460 / 1148,
     regen: 20,
@@ -380,7 +398,7 @@ export function stationType(faction: FactionId, level: number, techs: readonly s
     hardpoints: mods.map((m) => ({ kind: m.kind, art: m.art, key: m.key, hp: m.hp, weapon: m.weapon, x: ((m.x - x0) / w) * 10, y: ((m.y - y0) / h) * 10, s: m.s / long })),
     engines: [],
   }
-  const tough = toughen(t)
+  const tough = finish(t)
   stationCache.set(id, tough)
   return tough
 }
@@ -464,29 +482,29 @@ const WRITTEN: UnitType[] = [
 
   // --- Droid Confederacy ------------------------------------------------------------------------
   {
-    id: 'd-fighter', faction: 'droid', tier: 'fighter', name: 'Mantis droid fighter', blurb: 'Five cheap droids per squadron. Fragile, relentless, and their torpedoes add up against big ships.',
+    id: 'd-fighter', faction: 'droid', tier: 'fighter', name: 'Ratchet droid fighter', blurb: 'Five cheap droids per squadron. Fragile, relentless, and their torpedoes add up against big ships.',
     sprite: 'droid-fighter', aspect: 0.963, size: 28, hull: 38, shield: 0, regen: 0, speed: 255, turn: 4.4, pop: 1, cost: 230, build: 9, level: 1, squad: 5, sensor: 650,
     weapons: [laser(5, 230, 0.45), torpedo(16, 260)], hardpoints: [], engines: [[5, 8.4]],
   },
   {
-    id: 'd-gunship', faction: 'droid', tier: 'gunship', name: 'Trident gunship', blurb: 'Three blaster arms that tear through fighters.',
+    id: 'd-gunship', faction: 'droid', tier: 'gunship', name: 'Triad gunship', blurb: 'Three blaster arms that tear through fighters.',
     sprite: 'droid-gunship', aspect: 1.067, size: 64, hull: 395, shield: 80, regen: 5, speed: 165, turn: 2.6, pop: 2, cost: 400, build: 13, level: 1, squad: 1, sensor: 780,
     weapons: [flak(6, 290, 0.28), laser(12, 320, 1)], hardpoints: [], engines: [[5, 6.6]],
   },
   {
-    id: 'd-bomber', faction: 'droid', tier: 'fighter', kind: 'bomber', name: 'Locust bomber', blurb: 'Droid bombers, three to a squadron. Cheap, fragile, and their bomb pods wreck big hulls.',
+    id: 'd-bomber', faction: 'droid', tier: 'fighter', kind: 'bomber', name: 'Sledge bomber', blurb: 'Twin-hulled droid bombers, three to a squadron. Cheap, fragile, and their bomb bays wreck big hulls.',
     sprite: 'droid-bomber', aspect: 0.96, size: 36, hull: 85, shield: 0, regen: 0, speed: 185, turn: 3, pop: 2, cost: 400, build: 13, level: 2, squad: 3, sensor: 620,
     weapons: [laser(4, 220, 0.6), torpedo(48, 230, 6)], hardpoints: [], engines: [[5, 8.6]],
     role: { role: 'Bomber', strong: ['cruisers', 'flagships', 'stations'], weak: ['fighters', 'gunships', 'frigates'] },
   },
   {
-    id: 'd-repair', faction: 'droid', tier: 'fighter', kind: 'repair', tech: 'd-re-wing', name: 'Weaver repair droid', blurb: 'Spindly welder droids, two to a squadron. Next to harmless, but their Field repair stitches foundries and warships back together under fire.',
+    id: 'd-repair', faction: 'droid', tier: 'fighter', kind: 'repair', tech: 'd-re-wing', name: 'Tinker repair droid', blurb: 'Blocky welder droids, two to a squadron. Next to harmless, but their Field repair stitches foundries and warships back together under fire.',
     sprite: 'droid-repair', aspect: 0.779, size: 30, hull: 85, shield: 0, regen: 0, speed: 245, turn: 3.8, pop: 1, cost: 260, build: 11, level: 1, squad: 2, sensor: 650,
     weapons: [laser(2, 200, 0.8)], hardpoints: [], engines: [[5, 9.1]], ability: 'fieldRepair',
     role: { role: 'Field repairs', strong: ['long fights', 'keeping flagships alive'], weak: ['fighters', 'flak', 'everything else'] },
   },
   {
-    id: 'd-picket', faction: 'droid', tier: 'fighter', kind: 'wing', name: 'Gnat guard droid', blurb: 'The foundry\'s own defense wing: six tiny droids that guard it for free and are rebuilt by its hangar when lost. Vicious at home, feeble far from it.',
+    id: 'd-picket', faction: 'droid', tier: 'fighter', kind: 'wing', name: 'Bolt guard droid', blurb: 'The foundry\'s own defense wing: six tiny droids that guard it for free and are rebuilt by its hangar when lost. Vicious at home, feeble far from it.',
     sprite: 'droid-picket', aspect: 0.989, size: 20, hull: 26, shield: 0, regen: 0, speed: 275, turn: 5, pop: 0, cost: 0, build: 0, level: 1, squad: 6, sensor: 620,
     weapons: [laser(3.5, 210, 0.42)], hardpoints: [], engines: [[5, 8]],
     role: { role: 'Home defense', strong: ['fighters', 'bombers near the station'], weak: ['warships', 'being sent away from home'] },
@@ -500,7 +518,7 @@ const WRITTEN: UnitType[] = [
     role: { role: 'Shield breaker', strong: ['shielded warships', 'stations'], weak: ['fighters', 'unshielded ships'] },
   },
   {
-    id: 'd-frigate', faction: 'droid', tier: 'frigate', name: 'Scarab frigate', blurb: 'Armoured shell, prong cannons and repair droids.',
+    id: 'd-frigate', faction: 'droid', tier: 'frigate', name: 'Bulwark frigate', blurb: 'A heavy armoured bulb, twin cannons and repair droids.',
     sprite: 'droid-frigate', aspect: 0.422, size: 135, hull: 1150, shield: 450, regen: 10, speed: 72, turn: 1.0, pop: 3, cost: 760, build: 21, level: 2, squad: 1, sensor: 950,
     weapons: [],
     hardpoints: [
@@ -511,7 +529,7 @@ const WRITTEN: UnitType[] = [
     ability: 'repairSwarm',
   },
   {
-    id: 'd-cruiser', faction: 'droid', tier: 'cruiser', name: 'Manta cruiser', blurb: 'Wide-winged gunline with prong cannons and a tractor projector that pins ships in place.',
+    id: 'd-cruiser', faction: 'droid', tier: 'cruiser', name: 'Anvil cruiser', blurb: 'Gun galleries either side of a towering sail, and a tractor projector that pins ships in place.',
     sprite: 'droid-cruiser', aspect: 1.508, size: 260, hull: 2700, shield: 1100, regen: 18, speed: 49, turn: 0.55, pop: 5, cost: 1550, build: 33, level: 3, squad: 1, sensor: 1200,
     weapons: [],
     hardpoints: [
@@ -521,7 +539,7 @@ const WRITTEN: UnitType[] = [
     engines: [[4.47, 9.55], [5.52, 9.55]], ability: 'tractor',
   },
   {
-    id: 'd-capital', faction: 'droid', tier: 'capital', name: 'Hive carrier', blurb: 'A flying droid factory. Its hangar arms never stop launching.',
+    id: 'd-capital', faction: 'droid', tier: 'capital', name: 'Gyre battleship', blurb: 'A ring-hulled flying factory round a command sphere. Its hangar bays never stop launching.',
     sprite: 'droid-capital', aspect: 0.742, size: 380, hull: 6200, shield: 2800, regen: 32, speed: 31, turn: 0.32, pop: 10, cost: 4000, build: 68, level: 4, squad: 1, sensor: 1500,
     weapons: [],
     hardpoints: [
@@ -537,10 +555,10 @@ const WRITTEN: UnitType[] = [
   defensePlatform('droid', 'flak'),
   defensePlatform('droid', 'gun'),
 ]
-/** Every unit, toughened (stations come out of stationType that way already). */
-export const UNITS: UnitType[] = WRITTEN.map((u) => (u.tier === 'station' ? u : toughen(u)))
+/** Every unit, toughened and scaled (stations come out of stationType that way already). */
+export const UNITS: UnitType[] = WRITTEN.map((u) => (u.tier === 'station' ? u : finish(u)))
 
-const SHIELDED_MINE: Record<FactionId, UnitType> = { republic: toughen(minePlatform('republic', true)), droid: toughen(minePlatform('droid', true)) }
+const SHIELDED_MINE: Record<FactionId, UnitType> = { republic: finish(minePlatform('republic', true)), droid: finish(minePlatform('droid', true)) }
 /** A faction's mining platform as built, or with its Shield generator fitted. */
 export const mineType = (faction: FactionId, shielded: boolean) => (shielded ? SHIELDED_MINE[faction] : UNITS.find((u) => u.faction === faction && u.tier === 'mine')!)
 
@@ -656,21 +674,21 @@ export const TECHS: Tech[] = [
   tech('republic', 'r-capital', 'r-ca-bulbs', 'Reinforced shield bulbs', 'Sovereign shields 30% stronger, recharging faster.', 1200, 60, 4, { shield: 0.3, regen: 0.3 }, ['r-ca-range']),
   // Droid Confederacy
   tech('droid', 'd-station', 'd-st-guns', 'Foundry cannons', 'A sensor eye on the station: its cannons hit 25% harder while the eye stands.', 700, 45, 1, { damage: 0.25 }),
-  tech('droid', 'd-station', 'd-st-ore', 'Ore processors', 'An ore processor on the station: harvesters bring in 25% more credits while it stands.', 600, 40, 1, { mines: 0.25 }),
+  tech('droid', 'd-station', 'd-st-ore', 'Ore processors', 'An ore processor on the station: extractors bring in 25% more credits while it stands.', 600, 40, 1, { mines: 0.25 }),
   tech('droid', 'd-station', 'd-st-dock', 'Repair crews', 'A repair crane on the station: our ships near it repair 2% of their hull a second while it stands.', 800, 45, 2, { repair: 0.02 }, ['d-st-guns']),
-  tech('droid', 'd-fighter', 'd-fi-line', 'Assembly lines', 'Mantis squadrons build 30% faster.', 400, 30, 1, { build: -0.3 }),
+  tech('droid', 'd-fighter', 'd-fi-line', 'Assembly lines', 'Ratchet squadrons build 30% faster.', 400, 30, 1, { build: -0.3 }),
   tech('droid', 'd-fighter', 'd-fi-guns', 'Overcharged blasters', 'Lasers and torpedoes deal 25% more damage.', 450, 35, 2, { damage: 0.25 }, ['d-fi-line']),
-  tech('droid', 'd-gunship', 'd-gs-shell', 'Armoured shell', 'Tridents get 25% more hull.', 450, 30, 1, { hull: 0.25 }),
-  tech('droid', 'd-gunship', 'd-gs-cycle', 'Rapid cyclers', 'Trident guns fire 15% faster.', 450, 30, 1, { cooldown: -0.15 }, ['d-gs-shell']),
-  tech('droid', 'd-repair', 'd-re-wing', 'Welder protocols', 'Loads repair programming into the foundry: unlocks the Weaver repair droid and its Field repair.', 300, 25, 1, {}),
-  tech('droid', 'd-bomber', 'd-bo-pods', 'Overloaded pods', 'Locust bombs deal 25% more damage.', 500, 35, 2, { damage: 0.25 }),
+  tech('droid', 'd-gunship', 'd-gs-shell', 'Armour casing', 'Triads get 25% more hull.', 450, 30, 1, { hull: 0.25 }),
+  tech('droid', 'd-gunship', 'd-gs-cycle', 'Rapid cyclers', 'Triad guns fire 15% faster.', 450, 30, 1, { cooldown: -0.15 }, ['d-gs-shell']),
+  tech('droid', 'd-repair', 'd-re-wing', 'Welder protocols', 'Loads repair programming into the foundry: unlocks the Tinker repair droid and its Field repair.', 300, 25, 1, {}),
+  tech('droid', 'd-bomber', 'd-bo-pods', 'Overloaded pods', 'Sledge bombs deal 25% more damage.', 500, 35, 2, { damage: 0.25 }),
   tech('droid', 'd-ion', 'd-io-coils', 'Supercooled coils', 'Disruptor ion cannons fire 20% faster.', 700, 40, 2, { cooldown: -0.2 }),
-  tech('droid', 'd-frigate', 'd-fr-plate', 'Shell plating', 'Scarabs get 25% more hull.', 600, 40, 2, { hull: 0.25 }),
-  tech('droid', 'd-frigate', 'd-fr-prong', 'Prong amplifiers', 'Scarab cannons deal 20% more damage.', 650, 40, 2, { damage: 0.2 }, ['d-fr-plate']),
-  tech('droid', 'd-cruiser', 'd-cr-ray', 'Ray shielding', 'Manta shields 30% stronger, recharging faster.', 800, 45, 3, { shield: 0.3, regen: 0.3 }),
-  tech('droid', 'd-cruiser', 'd-cr-thrust', 'Thruster refit', 'Mantas fly 20% faster.', 700, 40, 3, { speed: 0.2 }, ['d-cr-ray']),
-  tech('droid', 'd-capital', 'd-ca-hangar', 'Expanded hangars', 'Hive carriers launch faster and keep one more squadron out.', 1200, 60, 4, { hangar: 1 }),
-  tech('droid', 'd-capital', 'd-ca-armour', 'Hive armour', 'Hive carriers get 25% more hull.', 1200, 60, 4, { hull: 0.25 }, ['d-ca-hangar']),
+  tech('droid', 'd-frigate', 'd-fr-plate', 'Bulwark plating', 'Bulwarks get 25% more hull.', 600, 40, 2, { hull: 0.25 }),
+  tech('droid', 'd-frigate', 'd-fr-prong', 'Cannon amplifiers', 'Bulwark cannons deal 20% more damage.', 650, 40, 2, { damage: 0.2 }, ['d-fr-plate']),
+  tech('droid', 'd-cruiser', 'd-cr-ray', 'Deflector banks', 'Anvil shields 30% stronger, recharging faster.', 800, 45, 3, { shield: 0.3, regen: 0.3 }),
+  tech('droid', 'd-cruiser', 'd-cr-thrust', 'Thruster refit', 'Anvils fly 20% faster.', 700, 40, 3, { speed: 0.2 }, ['d-cr-ray']),
+  tech('droid', 'd-capital', 'd-ca-hangar', 'Expanded hangars', 'Gyre battleships launch faster and keep one more squadron out.', 1200, 60, 4, { hangar: 1 }),
+  tech('droid', 'd-capital', 'd-ca-armour', 'Ring armour', 'Gyre battleships get 25% more hull.', 1200, 60, 4, { hull: 0.25 }, ['d-ca-hangar']),
 ]
 export const TECH: Record<string, Tech> = Object.fromEntries(TECHS.map((t) => [t.id, t]))
 export const techsFor = (unitId: string) => TECHS.filter((t) => t.for === unitId)

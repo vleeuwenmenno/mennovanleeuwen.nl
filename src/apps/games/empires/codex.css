@@ -31,6 +31,7 @@
   gap: 6px;
 }
 .ew-cx-body {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: grid;
@@ -75,6 +76,34 @@
   border-radius: 3px;
   color: #04060d;
   background: var(--ew-gold);
+}
+.ew-cx-tag.is-concept {
+  background: #b9a3e6;
+}
+.ew-cx-concept {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px dashed rgba(185, 163, 230, 0.6);
+  border-radius: 4px;
+  color: #d9ccf5;
+}
+.ew-cx-sizes {
+  position: absolute;
+  inset: 6px;
+  z-index: 5;
+  border: 1px solid var(--ew-cell-line);
+  border-radius: 6px;
+  background: #04060d;
+}
+.ew-cx-sizes canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.ew-cx-sizes .ew-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
 }
 .ew-cx-view {
   position: relative;
@@ -349,6 +378,10 @@
     border-right: 0;
     border-bottom: 1px solid var(--ew-cell-line);
     padding: 8px 10px;
+  }
+  /* The Swarm's note is in the specifications too; in the chip row it would only push them away. */
+  .ew-cx-nav .ew-cx-concept {
+    display: none;
   }
   .ew-cx-nav section {
     flex-direction: row;

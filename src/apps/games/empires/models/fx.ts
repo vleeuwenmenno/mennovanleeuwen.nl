@@ -27,7 +27,7 @@ type Flier = {
   /** World radius, for culling and smoke size. */
   r: number
   smokeT: number
-  palette: 'republic' | 'droid'
+  palette: Model['faction']
 }
 type Drift = { dx: number; dy: number; drift: number; slow: number; spin: number; spinSlow: number }
 /** A broken hull anchored to a battle wreck. */
@@ -153,7 +153,7 @@ export class ModelFx {
       const py = y + (p.cx * s + p.cy * c) * k
       const away = Math.atan2(py - y, px - x) + (r() - 0.5) * 0.8
       this.fling(
-        { draw: (ctx, fx, fy, a, zdpr, alpha) => drawPiece(ctx, m, p, `f${variant}.${i}`, st, fx, fy, a, size, zdpr, alpha), x: px, y: py, a: rot, r: size * Math.sqrt(p.share) * 0.5, palette: m.faction },
+        { draw: (ctx, fx, fy, a, zdpr, alpha) => drawPiece(ctx, m, p, `f${variant}.${i}`, st, fx, fy, a, size, zdpr, alpha, !big), x: px, y: py, a: rot, r: size * Math.sqrt(p.share) * 0.5, palette: m.faction },
         vx * 0.5,
         vy * 0.5,
         big ? 14 : 45 + size,

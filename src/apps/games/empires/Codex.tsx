@@ -3,11 +3,13 @@ import { ABILITIES, FACTIONS, STATIONS, TECH, TECHS, UNITS, moduleSprite, roleOf
 import { info, sameSel, selName, targets, weaponLine, WEAPON_NAME, type Sel } from './codexInfo'
 import { Frame, HpIcon, Icon, Tips, fmt } from './Hud'
 import { HP_COLOR, hpName } from './icons'
-import { BREAK_WEIGHTS, hasModel, hullState, modelFor, modelStyles, pickAt, type Model } from './models/index.ts'
+import { BREAK_WEIGHTS, PROTO, SWARM, hasModel, hasProto, hasSwarm, hullState, modelFor, modelStyles, pickAt, swarmName, type Model } from './models/index.ts'
+import { SIZE_CLASSES, protoType } from './models/sizes.ts'
 import { ModelFx } from './models/fx.ts'
-import { LIGHT } from './models/kit.ts'
+import { LIGHT, PALETTES } from './models/kit.ts'
 import { cacheStats, drawHull, drawMounts, liveEngines } from './models/paint.ts'
 import type { BreakKind } from './models/types.ts'
+import { averageRings, moduleRing } from './ranges.ts'
 import { spriteUrl } from './render'
 import type { EmpiresSound } from './sound'
 import { Seg } from './Menus'
@@ -38,6 +40,8 @@ const TIER_GROUPS: { name: string; tiers: Tier[] }[] = [
   { name: 'Flagships', tiers: ['capital'] },
   { name: 'Structures', tiers: ['station', 'mine', 'defense'] },
 ]
+/** How the Codex names a design variant, where its id alone wouldn't say enough. */
+const STYLE_NAMES: Record<string, string> = { ring: 'Ring hull', carrier: 'Alt design: carrier' }
 const RANGE_RGB: Record<WeaponKind, string> = { laser: '255,128,112', flak: '255,196,92', turbo: '122,190,255', missile: '255,140,222', ion: '176,146,255' }
 const TAU = Math.PI * 2
 
@@ -100,8 +104,10 @@ function ModuleCard({ t, model, sel, dmg, onClear }: { t: UnitType; model: Model
   )
 }
 
-function Stats({ t, model, dmg, selected, hover, onSelect, onHover }: {
+function Stats({ t, concept = false, model, dmg, selected, hover, onSelect, onHover }: {
   t: UnitType
+  /** A Swarm concept design: the numbers are the droid unit's it mirrors. */
+  concept?: boolean
   model: Model | null
   dmg: Damage
   selected: Sel | null
@@ -123,11 +129,13 @@ function Stats({ t, model, dmg, selected, hover, onSelect, onHover }: {
   return (
     <div className="ew-cx-stats">
       <header>
-        <h3 style={{ color: FACTIONS[t.faction].color }}>{t.name}</h3>
+        <h3 style={{ color: FACTIONS[t.faction].color }}>{concept ? swarmName(t) : t.name}</h3>
         {role && <em>{role.role}</em>}
       </header>
+      {concept && <p className="ew-cx-concept ew-small">Swarm concept design. The numbers below are the Confederacy {t.name}'s, which it mirrors; the Swarm has none of its own yet.</p>}
       {selected && <ModuleCard t={t} model={model} sel={selected} dmg={dmg} onClear={() => onSelect(null)} />}
-      <p className="ew-muted">{t.blurb}</p>
+      {/* The blurb describes the droid design; a Swarm concept has its own look. */}
+      {!concept && <p className="ew-muted">{t.blurb}</p>}
       <div className="ew-cx-grid">
         {row('Hull', fmt(t.hull))}
         {row('Shields', t.shield ? `${fmt(t.shield)} · +${t.regen}/s` : 'None')}
@@ -254,8 +262,11 @@ type Tool = 'inspect' | 'damage' | 'detach'
  * pointer hits are worked out from this, so they match what's on screen. */
 type ViewState = { rot: number; zoom: number; z: number; w: number; h: number }
 
-function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey, onHover, onClick, onLongPress, onNote }: {
+function Viewer({ t, fitSize, model, workshop, show, dmg, boom, hover, selected, resetKey, onHover, onClick, onLongPress, onNote }: {
   t: UnitType
+  /** Fit the view to a unit this long instead (so a ship and its bigger prototype show at their
+   * true relative scale). */
+  fitSize?: number
   model: Model | null
   workshop: boolean
   show: Show
@@ -276,8 +287,8 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
 }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const view = useRef<ViewState>({ rot: 0, zoom: 1, z: 1, w: 1, h: 1 })
-  const live = useRef({ t, model, workshop, show, dmg, boom, hover, selected, onNote })
-  live.current = { t, model, workshop, show, dmg, boom, hover, selected, onNote }
+  const live = useRef({ t, fitSize, model, workshop, show, dmg, boom, hover, selected, onNote })
+  live.current = { t, fitSize, model, workshop, show, dmg, boom, hover, selected, onNote }
   const fx = useMemo(() => new ModelFx(), [])
   const stars = useMemo(starfield, [])
   const imgs = useRef(new Map<string, HTMLImageElement>())
@@ -318,8 +329,9 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
   /** The scale that fits the unit (or its longest gun, with the ranges on) into the view. A selected
    * gun's reach doesn't change it: the view would jump; scrolling out shows the whole ring. */
   const fitOf = (w: number, h: number) => {
-    const { t, show } = live.current
-    const reach = show.ranges ? Math.max(t.size * 0.6, ...guns(t).map((x) => x.range)) * 2 : t.size * 1.25
+    const { t, show, fitSize } = live.current
+    const size = fitSize ?? t.size
+    const reach = show.ranges ? Math.max(size * 0.6, ...guns(t).map((x) => x.range)) * 2 : size * 1.25
     return (Math.min(w, h) * 0.86) / reach
   }
   /** A hardpoint's place in the view's world units, as drawn this frame. */
@@ -387,7 +399,7 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
             if (st.detached & (1 << i) && !(pm.det & (1 << i))) fx.flyPart(model, pi, 0, 0, rot, t.size, 0, 0, i * 31 + Math.floor(now))
           })
           model.mounts.forEach((mt, i) => {
-            if (mt.detach && deadNow[i] && !pm.hps[i]) fx.flyMount(model, i, 0, 0, rot, scan.get(i) ?? rot, t.size, 0, 0, i * 17 + Math.floor(now))
+            if (mt.detach && deadNow[mt.hp] && !pm.hps[mt.hp]) fx.flyMount(model, i, 0, 0, rot, scan.get(mt.hp) ?? rot, t.size, 0, 0, i * 17 + Math.floor(now))
           })
         }
         prevMask.current = { det: st.detached, hps: deadNow, unit: model.key }
@@ -408,20 +420,15 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
         g.fillText(label, x, y - r - 4 / z)
         g.textAlign = 'start'
       }
-      if (show.ranges) {
-        const seen = new Set<string>()
-        for (const x of guns(t)) {
-          const key = `${x.kind}${x.range}`
-          if (seen.has(key)) continue
-          seen.add(key)
-          ring(0, 0, x.range, x.kind, `${WEAPON_NAME[x.kind]} ${x.range}`)
-        }
-      }
-      // The selected gun's own reach, from where it sits.
-      const sw = selected && 'hp' in selected ? t.hardpoints[selected.hp]?.weapon : undefined
-      if (sw && selected && 'hp' in selected && !boom) {
-        const [x, y] = hpAt(selected.hp)
-        ring(x, y, sw.range, sw.kind, `${WEAPON_NAME[sw.kind]} ${sw.range}`)
+      // A gun pointed at (or else the one selected) shows its own reach alone, from where it sits, as
+      // the battle fires it; otherwise, with Ranges on, the unit's average reach per kind of gun.
+      const gunSel = [hover, selected].find((s): s is { hp: number } => !!s && 'hp' in s && !!t.hardpoints[s.hp]?.weapon)
+      const one = gunSel ? moduleRing(t, gunSel.hp) : null
+      if (one && gunSel && !boom) {
+        const [x, y] = hpAt(gunSel.hp)
+        ring(x, y, one.range, one.kind, `${WEAPON_NAME[one.kind]} #${gunSel.hp + 1} · ${one.range}`)
+      } else if (show.ranges) {
+        for (const x of averageRings(t, (i) => (dmg.hps[i]?.hp ?? 1) > 0)) ring(0, 0, x.reach, x.kind, `${WEAPON_NAME[x.kind]} ${x.n > 1 ? '· avg ' : ''}${Math.round(x.reach)}`)
       }
       if (boom && model) {
         fx.drawHulk(g, 1000 + boom.n, zdpr)
@@ -436,7 +443,7 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
             const r = t.size * (t.tier === 'fighter' ? 0.3 : 0.065) * (0.9 + Math.random() * 0.1)
             const grd = g.createRadialGradient(x, y, 0, x, y, r)
             grd.addColorStop(0, '#ffffff')
-            grd.addColorStop(0.3, FACTIONS[t.faction].glow)
+            grd.addColorStop(0.3, PALETTES[model.faction].engine)
             grd.addColorStop(1, 'rgba(0,0,0,0)')
             g.fillStyle = grd
             g.beginPath()
@@ -690,6 +697,101 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
   )
 }
 
+/**
+ * The size classes being tried (models/sizes.ts): a fighter, frigate, cruiser and flagship of the
+ * side, each as it is now and at its proposed size, side by side at one scale, nose up. A ship with
+ * a prototype design (models/proto.ts) shows it; the others are their current model scaled up.
+ */
+function SizeStrip({ faction, onClose }: { faction: FactionId; onClose: () => void }) {
+  const canvas = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    const c = canvas.current!
+    const draw = () => {
+      const dpr = Math.min(2, window.devicePixelRatio || 1)
+      const W = c.clientWidth
+      const H = c.clientHeight
+      if (!W || !H) return
+      c.width = Math.round(W * dpr)
+      c.height = Math.round(H * dpr)
+      const g = c.getContext('2d')!
+      g.setTransform(dpr, 0, 0, dpr, 0, 0)
+      g.fillStyle = '#04060d'
+      g.fillRect(0, 0, W, H)
+      const tiers: Tier[] = ['fighter', 'frigate', 'cruiser', 'capital']
+      const items = tiers.flatMap((tier) => {
+        const t = UNITS.find((u) => u.faction === faction && u.tier === tier && !u.kind)!
+        const pt = protoType(t)
+        return [
+          { t, m: modelFor(t), label: 'now', tier },
+          { t: pt, m: modelFor(pt, hasProto(t) ? PROTO : ''), label: hasProto(t) ? `×${SIZE_CLASSES[tier]}, new design` : `×${SIZE_CLASSES[tier]}, scaled only`, tier },
+        ]
+      })
+      // One column per class, as wide as its bigger version; today's sizes in the top row, the
+      // proposed ones under them, everything at one scale.
+      const gap = 40
+      const dimsOf = (it: (typeof items)[number]) => (it.m ? [(it.m.w / it.m.long) * it.t.size, (it.m.h / it.m.long) * it.t.size] : [it.t.size, it.t.size])
+      const cols = tiers.map((_, i) => Math.max(dimsOf(items[i * 2])[0], dimsOf(items[i * 2 + 1])[0]))
+      const rowH = [Math.max(...tiers.map((_, i) => dimsOf(items[i * 2])[1])), Math.max(...tiers.map((_, i) => dimsOf(items[i * 2 + 1])[1]))]
+      const total = cols.reduce((a, b) => a + b, 0) + gap * (cols.length - 1)
+      const label = 52
+      const k = Math.min((W - 140) / total, (H - 70 - label * 2) / (rowH[0] + rowH[1]))
+      // Each column at least wide enough for its labels.
+      const colW = cols.map((c) => Math.max(c * k, 160))
+      const x0 = 120 + (W - 140 - colW.reduce((a, b) => a + b, 0) - gap * (cols.length - 1)) / 2
+      const bases = [50 + rowH[0] * k, 50 + rowH[0] * k + label + rowH[1] * k]
+      g.textAlign = 'center'
+      let x = x0
+      tiers.forEach((_, ci) => {
+        const cw = colW[ci]
+        for (const row of [0, 1]) {
+          const it = items[ci * 2 + row]
+          const [, h] = dimsOf(it)
+          const cx = x + cw / 2
+          const base = bases[row]
+          if (it.m) {
+            g.save()
+            g.translate(cx, base - (h * k) / 2)
+            g.scale(k, k)
+            drawHull(g, it.m, 0, 0, 0, it.t.size, k * dpr, { detached: 0, scorch: 0, variant: 0 })
+            drawMounts(g, it.m, 0, 0, 0, it.t.size, k * dpr, it.t.hardpoints.map((p) => ({ hp: p.hp })), () => 0)
+            g.restore()
+          }
+          g.font = '12px system-ui, sans-serif'
+          g.fillStyle = row ? '#f2c14a' : '#9aa6bd'
+          g.fillText(`${Math.round(it.t.size)} long${row ? `, ${it.label}` : ''}`, cx, base + 16)
+          if (row) {
+            g.fillStyle = '#d6dded'
+            g.font = '13px system-ui, sans-serif'
+            g.fillText(it.t.name, cx, base + 34)
+          }
+        }
+        x += cw + gap
+      })
+      g.textAlign = 'start'
+      g.font = '13px system-ui, sans-serif'
+      g.fillStyle = '#9aa6bd'
+      g.fillText('Now', 16, bases[0] - 4)
+      g.fillStyle = '#f2c14a'
+      g.fillText('Proposed', 16, bases[1] - 4)
+      g.textAlign = 'start'
+      g.fillStyle = '#9aa6bd'
+      g.fillText('Size classes, side by side at one scale (nose up). Battles still use today\'s sizes.', 16, 22)
+    }
+    draw()
+    const ro = new ResizeObserver(draw)
+    ro.observe(c)
+    return () => ro.disconnect()
+  }, [faction])
+  return (
+    <div className="ew-cx-sizes">
+      <canvas ref={canvas} />
+      <button className="ew-close" onClick={onClose} aria-label="Close the size classes">
+        ✕
+      </button>
+    </div>
+  )
+}
+
 export function Codex({ sound, onClose }: { sound: EmpiresSound; onClose: () => void }) {
   return (
     <div className="ew-root ew-deck ew-codex" onContextMenu={(e) => e.preventDefault()}>
@@ -701,15 +803,24 @@ export function Codex({ sound, onClose }: { sound: EmpiresSound; onClose: () => 
 }
 
 function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => void }) {
-  const [faction, setFaction] = useState<FactionId>('republic')
-  const list = useMemo(() => UNITS.filter((u) => u.faction === faction), [faction])
+  // The tabs: the two sides, and the Swarm, a concept for a future faction shown on the droid units
+  // it mirrors (their numbers, their hardpoints), never used in battle.
+  const [side, setSide] = useState<FactionId | 'swarm'>('republic')
+  const concept = side === 'swarm'
+  const faction: FactionId = concept ? 'droid' : side
+  const list = useMemo(() => UNITS.filter((u) => u.faction === faction && (!concept || hasSwarm(u))), [faction, concept])
   const [pickId, setPickId] = useState<string>('r-frigate')
   const base = list.find((u) => u.id === pickId) ?? list[0]
   const [level, setLevel] = useState(4)
-  const t = shown(base, level)
-  const styles = modelStyles(t)
+  // A ship with a bigger prototype (models/proto.ts) can be shown either way, at true relative scale.
+  const canProto = !concept && hasProto(base)
+  const [protoOn, setProtoOn] = useState(false)
+  const now = shown(base, level)
+  const t = canProto && protoOn ? protoType(now) : now
+  const styles = concept || (canProto && protoOn) ? [] : modelStyles(t)
   const [style, setStyle] = useState('')
-  const model = modelFor(t, styles.includes(style) ? style : '')
+  const model = modelFor(t, concept ? SWARM : canProto && protoOn ? PROTO : styles.includes(style) ? style : '')
+  const [sizes, setSizes] = useState(false)
   const [workshop, setWorkshop] = useState(false)
   const [show, setShow] = useState<Show>({ hardpoints: false, ranges: false, glow: true, outlines: false, spin: false })
   const [tool, setTool] = useState<Tool>('inspect')
@@ -815,11 +926,19 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
         <h2>Codex</h2>
         <div className="ew-seg" role="group" aria-label="Side">
           {(['republic', 'droid'] as const).map((f) => (
-            <button key={f} className={faction === f ? 'is-on' : ''} onClick={click(() => setFaction(f))}>
+            <button key={f} className={side === f ? 'is-on' : ''} onClick={click(() => setSide(f))}>
               {FACTIONS[f].name}
             </button>
           ))}
+          <button className={concept ? 'is-on' : ''} onClick={click(() => setSide('swarm'))} data-tip="Swarm (concept): design previews for a possible future faction. Not in the game.">
+            Swarm <small>(concept)</small>
+          </button>
         </div>
+        {!concept && (
+          <button className={`ew-cx-ws ${sizes ? 'is-on' : ''}`} aria-pressed={sizes} onClick={click(() => setSizes(!sizes))} data-tip="The size classes being tried: each class now and at its proposed size, side by side at one scale">
+            Size classes
+          </button>
+        )}
         <button className={`ew-cx-ws ${workshop ? 'is-on' : ''}`} aria-pressed={workshop} onClick={click(() => setWorkshop(!workshop))} data-tip="Tools for checking the models: parts, hardpoints, damage and break-ups">
           <Icon name="gear" size={14} /> Workshop
         </button>
@@ -828,7 +947,13 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
         </button>
       </header>
       <div className="ew-cx-body">
+        {sizes && <SizeStrip faction={faction} onClose={() => setSizes(false)} />}
         <nav className="ew-cx-nav" aria-label="Units">
+          {concept && (
+            <p className="ew-cx-concept ew-small">
+              <b>Swarm (concept)</b> · design previews for a possible future faction, not in the game. Each is shown on the numbers and hardpoints of the Confederacy unit it mirrors.
+            </p>
+          )}
           {TIER_GROUPS.map((grp) => {
             const units = list.filter((u) => grp.tiers.includes(u.tier))
             if (!units.length) return null
@@ -837,8 +962,12 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
                 <h5>{grp.name}</h5>
                 {units.map((u) => (
                   <button key={u.id} className={u.id === base.id ? 'is-on' : ''} onClick={click(() => setPickId(u.id))}>
-                    <span>{u.name}</span>
-                    {hasModel(u) && <em className="ew-cx-tag" data-tip="Drawn as a procedural model (the rest still use their sprites)">Model</em>}
+                    <span>{concept ? swarmName(u) : u.name}</span>
+                    {concept ? (
+                      <em className="ew-cx-tag is-concept" data-tip="A design preview for a future faction, shown on this droid unit's numbers and hardpoints">Concept</em>
+                    ) : (
+                      hasModel(u) && <em className="ew-cx-tag" data-tip="Drawn as a procedural model (the setting Procedural models switches back to the sprites)">Model</em>
+                    )}
                   </button>
                 ))}
               </section>
@@ -849,6 +978,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
           <div className="ew-cx-stage">
             <Viewer
               t={t}
+              fitSize={canProto ? protoType(now).size : undefined}
               model={model}
               workshop={workshop}
               show={show}
@@ -863,10 +993,18 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
               onNote={setNote}
             />
             {hover && !hover.fromList && <HoverTip t={t} model={model} sel={hover.sel} x={hover.x} y={hover.y} dmg={dmg} />}
-            {(t.tier === 'station' || styles.length > 0) && (
+            {(t.tier === 'station' || styles.length > 0 || canProto) && (
               <div className="ew-cx-level">
+                {canProto && (
+                  <Seg
+                    label="Version"
+                    value={protoOn ? 'new' : 'current'}
+                    options={[['current', 'Current'], ['new', `New (prototype, ×${SIZE_CLASSES[t.tier]})`]]}
+                    onChange={(v) => setProtoOn(v === 'new')}
+                  />
+                )}
                 {t.tier === 'station' && <Seg label="Station level" value={level} options={STATIONS[t.faction].stages.map((_, i) => [i + 1, `Level ${i + 1}`] as [number, string])} onChange={(v) => setLevel(v)} />}
-                {styles.length > 0 && <Seg label="Outer frame" value={styles.includes(style) ? style : styles[0]} options={styles.map((s) => [s, s[0].toUpperCase() + s.slice(1)] as [string, string])} onChange={(v) => setStyle(v)} />}
+                {styles.length > 0 && <Seg label={t.tier === 'station' ? 'Outer frame' : 'Design'} value={styles.includes(style) ? style : styles[0]} options={styles.map((s) => [s, STYLE_NAMES[s] ?? s[0].toUpperCase() + s.slice(1)] as [string, string])} onChange={(v) => setStyle(v)} />}
               </div>
             )}
             <button className="ew-cx-reset" onClick={click(() => setResetKey((k) => k + 1))} data-tip="Back to nose up at the starting zoom">
@@ -946,6 +1084,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
           <Frame title="Specifications">
             <Stats
               t={t}
+              concept={concept}
               model={model}
               dmg={dmg}
               selected={selected}
