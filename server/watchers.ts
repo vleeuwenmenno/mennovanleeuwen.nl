@@ -9,6 +9,7 @@ import { MC_HOST, onMinecraftStatus, type McStatus } from './minecraft.ts'
 import { claimOnce, notify, registerWatcher, startWatchers, type Notice } from './notifier.ts'
 import { onUserGone } from './db.ts'
 import { readState } from './state.ts'
+import { taskReminders } from './tasks.ts'
 
 // The notification hub's watchers (server/notifier.ts): things the server looks at every so often,
 // so their notifications reach the accounts that want them with no MvL OS page open. Each one hands
@@ -19,6 +20,7 @@ import { readState } from './state.ts'
 // - Activity: new pushes, releases and the like on Menno's GitHub and git.mvl.sh, for the admins,
 //   each item once, back as far as the account's "how recent" setting.
 // - Calendar: reminders before events, for each account with a calendar connected.
+// - Tasks: reminders for due tasks (server/tasks.ts), for each account with tasks.
 
 const prefsOf = (user: User) => normalizePrefs(readState(user).notify?.value)
 /** Menno's own Minecraft server and activity: news for the admins only, not every account. */
@@ -173,5 +175,6 @@ export function startNotifications() {
   onMinecraftStatus(minecraft)
   registerWatcher({ name: 'activity', every: 5 * 60_000, run: activity })
   registerWatcher({ name: 'calendar', every: 60_000, run: calendar })
+  registerWatcher({ name: 'tasks', every: 60_000, run: () => taskReminders() })
   startWatchers()
 }

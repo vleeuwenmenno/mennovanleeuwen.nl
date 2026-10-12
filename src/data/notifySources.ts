@@ -28,6 +28,7 @@ export const NOTIFY_SOURCES: NotifySource[] = [
     ],
   },
   { app: 'calendar', label: 'Calendar', icon: 'calendar', account: true, kinds: [{ id: 'reminder', label: 'Reminders', hint: 'An event is about to start' }] },
+  { app: 'tasks', label: 'Tasks', icon: 'tasks', account: true, kinds: [{ id: 'due', label: 'Reminders', hint: "A task is due, or its own reminder comes (the default is set in the Tasks app's settings)" }] },
   {
     app: 'minecraft',
     label: 'Minecraft server',
