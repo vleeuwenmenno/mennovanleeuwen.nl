@@ -229,6 +229,7 @@ function Viewer({ t, model, workshop, show, dmg, setDmg, boom, onPick }: {
     const c = canvas.current!
     const g = c.getContext('2d')!
     let raf = 0
+    let starPat: CanvasPattern | null = null
     let last = performance.now()
     const scan = new Map<number, number>()
     const frame = (now: number) => {
@@ -249,7 +250,7 @@ function Viewer({ t, model, workshop, show, dmg, setDmg, boom, onPick }: {
       g.setTransform(dpr, 0, 0, dpr, 0, 0)
       g.fillStyle = '#04060d'
       g.fillRect(0, 0, w, h)
-      const pat = g.createPattern(stars, 'repeat')
+      const pat = (starPat ??= g.createPattern(stars, 'repeat'))
       if (pat) {
         g.fillStyle = pat
         g.fillRect(0, 0, w, h)

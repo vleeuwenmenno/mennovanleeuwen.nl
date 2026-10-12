@@ -307,7 +307,7 @@ export class Renderer {
   private fx = new ModelFx()
   /** Every modelled unit seen last frame, with what had come off it then, so a part that comes
    * off (or a unit that dies) shows the moment it happens. */
-  private tracked = new Map<number, { u: Unit; m: Model; det: number; dead: boolean[]; vis: boolean }>()
+  private tracked = new Map<number, { u: Unit; m: Model; det: number; st: HullState; dead: boolean[]; vis: boolean }>()
   /** Modelled warships that just died where we could see, until their wreck shows up: what had
    * already come off them carries over to the hulk. */
   private deaths: { x: number; y: number; det: number; at: number }[] = []
@@ -1447,8 +1447,8 @@ export class Renderer {
           if (mt.detach && dead[i] && !tr.dead[i]) this.fx.flyMount(m, i, u.x, u.y, rot, this.aims.get(u.id * 64 + i) ?? rot, u.t.size, vx, vy, u.id * 613 + i)
         })
       }
-      if (tr) Object.assign(tr, { u, m, det: st.detached, dead, vis })
-      else this.tracked.set(u.id, { u, m, det: st.detached, dead, vis })
+      if (tr) Object.assign(tr, { u, m, det: st.detached, st, dead, vis })
+      else this.tracked.set(u.id, { u, m, det: st.detached, st, dead, vis })
     }
     for (const [id, tr] of this.tracked) {
       if (w.byId.get(id) === tr.u && !tr.u.dead) continue
@@ -1927,7 +1927,9 @@ export class Renderer {
     const hov = view.hover === u.id
     const rel = relColor(w, view.me, u.owner)
     const m = this.modelsOn ? modelFor(t) : null
-    const st: HullState | null = m ? hullState(m, u, t.tier) : null
+    // Worked out this frame already while keeping up with the models (see trackModels).
+    const tr = m ? this.tracked.get(u.id) : undefined
+    const st: HullState | null = m ? (tr && tr.u === u && tr.m === m ? tr.st : hullState(m, u, t.tier)) : null
     const lit = m && st ? liveEngines(m, st) : null
 
     // Engine glow, stronger at speed.

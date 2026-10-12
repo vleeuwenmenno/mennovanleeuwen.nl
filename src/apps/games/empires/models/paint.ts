@@ -53,9 +53,10 @@ const shifted = (p: Path2D, dx: number, dy: number) => {
 
 /**
  * Paints parts in order, in model units (the context already scaled so one unit is `ppu` device
- * pixels). `light` points towards the light in model space.
+ * pixels). `light` points towards the light in model space. `lightsOut`: a dead hulk, its windows
+ * and engine lights dark (embers in its wreckage still glow).
  */
-export function paintParts(g: CanvasRenderingContext2D, parts: Part[], pal: Palette, light: Pt, ppu: number, debug = false) {
+export function paintParts(g: CanvasRenderingContext2D, parts: Part[], pal: Palette, light: Pt, ppu: number, debug = false, lightsOut = false) {
   // Outline widths in device pixels, thicker on big bitmaps, never under one pixel.
   const ow = Math.min(2.6, Math.max(1, 0.8 + ppu * 0.32)) / ppu
   const fine = ppu >= 0.9
@@ -143,7 +144,7 @@ export function paintParts(g: CanvasRenderingContext2D, parts: Part[], pal: Pale
     }
     // Lights glow on their own: drawn over everything, unclipped, at least a pixel big.
     for (const d of p.details ?? []) {
-      if (d.k !== 'lights') continue
+      if (d.k !== 'lights' || (lightsOut && d.tone !== 'ember')) continue
       const t = pal[d.tone ?? 'glow']
       const r = Math.max(d.r, 0.55 / ppu)
       g.fillStyle = t[1]
@@ -197,7 +198,7 @@ export function paintModel(g: CanvasRenderingContext2D, m: Model, o: PaintOpts) 
   const parts = m.parts.filter((_, i) => !gone.has(i))
   g.save()
   if (o.region) g.clip(polyPath(o.region))
-  paintParts(g, parts, pal, o.light, o.ppu, o.debug)
+  paintParts(g, parts, pal, o.light, o.ppu, o.debug, o.wreckMounts)
   const sil = silhouette(parts)
   if (o.state.scorch > 0 || gone.size) {
     g.save()
@@ -283,7 +284,8 @@ export function paintModel(g: CanvasRenderingContext2D, m: Model, o: PaintOpts) 
 /** Every painted bitmap, least recently used first, and how many bytes they hold. */
 const store = new Map<string, HTMLCanvasElement>()
 let bytes = 0
-const BUDGET = 112 * 1024 * 1024
+// Phones get a smaller budget: their browsers cap how much canvas memory a page may hold.
+const BUDGET = (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 48 : 112) * 1024 * 1024
 
 function cached(key: string, w: number, h: number, paint: (g: CanvasRenderingContext2D) => void) {
   const hit = store.get(key)
@@ -404,7 +406,7 @@ export function drawPart(ctx: CanvasRenderingContext2D, m: Model, index: number,
   const c = cached(`${m.key}|p|${index}|${ls}|${b}`, cw, ch, (g) => {
     g.translate(pad - b0.x0 * ppu, pad - b0.y0 * ppu)
     g.scale(ppu, ppu)
-    paintParts(g, [p], PALETTES[m.faction], lightFor((ls / LIGHTS) * TAU), ppu)
+    paintParts(g, [p], PALETTES[m.faction], lightFor((ls / LIGHTS) * TAU), ppu, false, true)
     // Torn off: burnt across.
     g.globalCompositeOperation = 'source-atop'
     g.fillStyle = 'rgba(30,20,14,0.35)'
