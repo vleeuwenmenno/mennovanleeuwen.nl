@@ -520,7 +520,7 @@ function chatter(sr: number, r: Rnd, count: number, contour: number, base = 380)
 /** A crew acknowledgement: what they say depends on the order and who they are. */
 const ack = (kind: OrderKind | 'select', faction: FactionId, tier: Tier = 'frigate'): Recipe => (sr, r) => {
   // Small craft answer higher and quicker, flagships lower.
-  const shift = { fighter: 4, gunship: 2, frigate: 0, cruiser: -2, capital: -4, station: -5, mine: 0, defense: 0 }[tier]
+  const shift = { fighter: 4, gunship: 2, frigate: 0, cruiser: -2, capital: -4, station: -5, mine: 0, defense: 0, yard: -3 }[tier]
   if (faction === 'droid') {
     const contour = { select: 0, move: 1, attack: -1, attackMove: -0.5, patrol: 0.5, hold: 0, stop: -1, rally: 1, target: 1.5 }[kind]
     const count = kind === 'select' ? 2 + Math.floor(r() * 2) : 3 + Math.floor(r() * 2)
@@ -1061,7 +1061,7 @@ export class EmpiresSound {
   constructing() {
     this.ui('construct', construct, 0.5)
   }
-  structureDone(kind: 'mine' | 'defense') {
+  structureDone(kind: 'mine' | 'defense' | 'yard') {
     this.ui(`done-${kind}`, kind === 'mine' ? drillUp : weaponsOnline, 0.6, 1)
   }
   surveyed() {

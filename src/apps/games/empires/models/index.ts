@@ -1,5 +1,6 @@
 import { STATIONS, UNITS, dims, stationType, type FactionId, type Tier, type UnitType } from '../data.ts'
 import { circle, hash, inPart, inPoly, jagged, rng, seedOf } from './kit.ts'
+import * as base from './base.ts'
 import * as droid from './droid.ts'
 import * as proto from './proto.ts'
 import * as protoDroid from './proto-droid.ts'
@@ -51,6 +52,11 @@ const DEFS: Record<string, ModelDef> = {
   'd-defense': droid.defense,
   'd-defense-flak': droid.defense,
   'd-defense-gun': droid.defense,
+  // Hybrid bases: the engineers and the Frigate Yards (base.ts).
+  'r-engineer': base.republicEngineer,
+  'd-engineer': base.droidEngineer,
+  'r-yard': base.republicYard,
+  'd-yard': base.droidYard,
 }
 
 /**

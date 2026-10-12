@@ -642,6 +642,7 @@ export function HowToPlay() {
         <li>Park ships at glowing ore for a few seconds to survey it, then click it to build a mining platform (credits) or a defense platform (guns).</li>
         <li>Hold ships near a beacon to capture it: more income and a bigger fleet for your whole team.</li>
         <li>Select your station ({k('station')}) to build ships. Open the tech tree ({k('techTree')}) to research upgrades, including station levels that unlock frigates, cruisers and a flagship. The battle carries on while it's open.</li>
+        <li>Your station is a Command Station: it builds strike craft, gunships and engineers. From station level 2, engineers build a Frigate Yard anywhere inside the build ring round it ({k('build')} with engineers or the station selected): the yard builds frigates and corvettes, with its own queue and rally point ({k('yard')} selects it). Engineers also weld our structures back together: right-click one with them. A destroyed yard leaves a ruin that engineers rebuild for half the price.</li>
         <li>Big ships have hardpoints. Hover one and right-click a marker to target it: knock out shield generators first.</li>
         <li>Fighters beat cruisers and flagships, gunships beat fighters, frigates beat gunships, cruisers beat frigates.</li>
         <li>Asteroid fields wear down frigates, cruisers and flagships flying through them (fighters and gunships dodge the rocks). Nebulas knock out shields and halve sensor range.</li>

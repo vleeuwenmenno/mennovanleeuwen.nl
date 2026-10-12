@@ -2,7 +2,7 @@ import { bigType, sizedType, type ShipSizes } from './models/sizes.ts'
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { battleLayout, type LayoutStore } from './layout'
 import {
-  ABILITIES, DEFENSE_WING, FACTIONS, LEVEL_UP, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, moduleSprite, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
+  ABILITIES, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, yardOf, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, moduleSprite, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
   type UnitType,
 } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
@@ -11,7 +11,7 @@ import { thumbnail } from './models/paint.ts'
 import { spriteUrl } from './render'
 import { keyName, useSettings } from './settings'
 import { LongPress, isTouch, shiftOf, useCoarse, useLongPressWheel } from './Touch'
-import { FIELD_DAMAGE, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, typeOf, cantResearch, cantSite, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
+import { FIELD_DAMAGE, cantConstruct, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, typeOf, cantResearch, cantSite, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard, research and game speed; and along the bottom the tactical map, a details panel for
@@ -40,11 +40,16 @@ export type Hud = {
   beacons: number
   beaconsAll: number
   mines: number
+  /** Hybrid bases (sim.ts World.hybrid): the station is a Command Station with yards round it. */
+  hybrid: boolean
+  /** Our yards: built ones with their queue, and sites with how far along they are (0 to 1). */
+  yards: { id: number; unit: string; queue: QueueItem[]; built: boolean; progress: number }[]
 }
-/** What a left-click on the battlefield does: select, or carry out a command picked from the grid. */
-export type Mode = 'normal' | 'move' | 'attack' | 'patrol' | 'rally' | 'guard'
+/** What a left-click on the battlefield does: select, or carry out a command picked from the grid
+ * ('place': put down the yard being placed). */
+export type Mode = 'normal' | 'move' | 'attack' | 'patrol' | 'rally' | 'guard' | 'place'
 export type MapFilter = 'all' | 'ships' | 'stations' | 'enemies'
-export type Command = Exclude<Mode, 'normal'> | 'stop' | 'hold' | 'ability' | 'retreat'
+export type Command = Exclude<Mode, 'normal' | 'place'> | 'stop' | 'hold' | 'ability' | 'retreat'
 
 export const fmt = (n: number) => Math.floor(n).toLocaleString('en-US')
 /** Green, amber or red for a round trip in milliseconds. */
@@ -90,6 +95,8 @@ const ICONS = {
   grid: 'M3.5 3.5h17v17h-17z M3.5 9.17h17 M3.5 14.83h17 M9.17 3.5v17 M14.83 3.5v17 M14.83 14.83l5.67 5.67 M17.6 14.83l2.9 2.9',
   // An open book: the Codex.
   codex: 'M12 6.5C10 5 7 4.5 4 5v13.5c3-.5 6 0 8 1.5c2-1.5 5-2 8-1.5V5c-3-.5-6 0-8 1.5z M12 6.5V20',
+  // A slipway: two rails, a gantry across them and a hull taking shape between.
+  slip: 'M5 3v18 M19 3v18 M5 8h14 M9.5 21v-7l2.5-4l2.5 4v7',
   // Hyperspace: streaks closing in on a point.
   jump: 'M12 12m-2.5 0a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0 M2 12h5 M17 12h5 M4.5 5.5l3.5 3 M19.5 18.5l-3.5-3 M4.5 18.5l3.5-3 M19.5 5.5l-3.5 3',
 } as const
@@ -484,8 +491,10 @@ function Vitals({ u, squad = [u], now }: { u: Unit; squad?: Unit[]; now: number 
 
 // --- Top bar ----------------------------------------------------------------------------------------
 
-export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onShipyard, onTechTree, onReserves, onEconomy, onPlayers, onMap, mapOpen, ping }: {
+export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onShipyard, onYard, onTechTree, onReserves, onEconomy, onPlayers, onMap, mapOpen, ping }: {
   hud: Hud
+  /** Select one of our yards (hybrid bases). */
+  onYard?: (id: number) => void
   faction: FactionId
   sector: string
   ui: { paused: boolean; speed: number }
@@ -531,12 +540,25 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
       <div className="ew-top-right">
         {/* The shipyard and the lab: an icon each, a bar filling as the current job runs and a badge
             counting what's queued; the tooltip names it. */}
-        <button className={`ew-top-cell ew-jobbtn ${q ? 'is-busy' : ''}`} onClick={onShipyard} aria-label="Shipyard"
-          data-tip={q ? `Shipyard: ${UNIT[q.unit].name}, ${Math.ceil(q.left)} s left${hud.queue.length > 1 ? `, ${hud.queue.length - 1} more queued` : ''}.\nClick to select the station (H).` : 'Shipyard idle.\nClick to select the station and build ships (H).'}>
+        <button className={`ew-top-cell ew-jobbtn ${q ? 'is-busy' : ''}`} onClick={onShipyard} aria-label={hud.hybrid ? 'Command Station' : 'Shipyard'}
+          data-tip={q ? `${hud.hybrid ? 'Command Station' : 'Shipyard'}: ${UNIT[q.unit].name}, ${Math.ceil(q.left)} s left${hud.queue.length > 1 ? `, ${hud.queue.length - 1} more queued` : ''}.\nClick to select the station (H).` : `${hud.hybrid ? 'Command Station' : 'Shipyard'} idle.\nClick to select the station and build ships (H).`}>
           <Icon name="yard" size={18} />
           {hud.queue.length > 0 && <em>{hud.queue.length}</em>}
           {q && <i style={{ transform: `scaleX(${1 - q.left / q.total})` }} />}
         </button>
+        {/* Hybrid bases: a job button per yard, the same way (a site shows its progress). */}
+        {onYard && hud.yards.map((y) => {
+          const yq = y.queue[0]
+          const name = UNIT[y.unit].name
+          return (
+            <button key={y.id} className={`ew-top-cell ew-jobbtn ew-yardbtn ${yq || !y.built ? 'is-busy' : ''}`} onClick={() => onYard(y.id)} aria-label={name}
+              data-tip={!y.built ? `${name}: under construction, ${Math.round(y.progress * 100)}%.\nClick to select it (${keyName(keys.yard)}).` : yq ? `${name}: ${UNIT[yq.unit].name}, ${Math.ceil(yq.left)} s left${y.queue.length > 1 ? `, ${y.queue.length - 1} more queued` : ''}.\nClick to select it (${keyName(keys.yard)}).` : `${name} idle.\nClick to select it and build frigates (${keyName(keys.yard)}).`}>
+              <Icon name="slip" size={18} />
+              {y.queue.length > 0 && <em>{y.queue.length}</em>}
+              {!y.built ? <i style={{ transform: `scaleX(${y.progress})` }} /> : yq && <i style={{ transform: `scaleX(${1 - yq.left / yq.total})` }} />}
+            </button>
+          )
+        })}
         <button className={`ew-top-cell ew-jobbtn ${r ? 'is-busy' : ''}`} onClick={onTechTree} aria-label="Tech tree"
           data-tip={r ? `Research: ${researchName(r.id, hud.level)}, ${Math.ceil(r.left)} s left${hud.research.length > 1 ? `, ${hud.research.length - 1} more queued` : ''}.\nClick for the tech tree (${keyName(keys.techTree)}).` : `Research idle.\nClick for the tech tree (${keyName(keys.techTree)}).`}>
           <Icon name="tree" size={18} />
@@ -706,9 +728,16 @@ type DetailProps = {
   hud: Hud
   faction: FactionId
   onOnly: (typeId: string, drop: boolean) => void
-  onBuild: (id: string, times: number, reserve?: boolean) => void
-  onUnqueue: (id: string) => void
-  onCancel: (index: number) => void
+  /** `at`: the yard to build it at (0 or left out: the station). */
+  onBuild: (id: string, times: number, reserve?: boolean, at?: number) => void
+  onUnqueue: (id: string, at?: number) => void
+  onCancel: (index: number, at?: number) => void
+  /** Hybrid bases: start placing a yard (with the selected engineers, or any we have). */
+  onPlace: (unit: string) => void
+  /** Call off a yard still going up. */
+  onCancelSite: (id: number) => void
+  /** Select one of ours (the base tabs: the station, a yard). */
+  onSelect: (id: number) => void
   onResearch: (id: string) => void
   onTechTree: () => void
   onSite: (node: number, id: string) => void
@@ -732,6 +761,7 @@ export function DetailPanel(p: DetailProps) {
   const station = sel.find((u) => u.owner === me && u.t.tier === 'station')
   if (station) return <StationDetail {...p} st={station} />
   const first = sel[0]
+  if (first.owner === me && first.t.tier === 'yard' && sel.length === 1) return <YardDetail {...p} y={first} />
   if (sel.every((u) => u.t.id === first.t.id)) return <UnitDetail {...p} u={first} squad={sel} />
   return <GroupDetail {...p} />
 }
@@ -831,17 +861,22 @@ function StationDetail(p: DetailProps & { st: Unit }) {
   // Ships the station isn't upgraded for yet stay out of the shipyard, unless the setting shows them.
   const { lockedShips } = useSettings()
   // At the battle's ship sizes, so the cards and their tooltips show the numbers the sim uses.
-  const all = buildable(faction).map((t) => typeOf(w, t.id)).filter((t) => lockedShips || t.level <= hud.level)
+  // With hybrid bases the Command Station builds strike craft, gunships, engineers and (until their
+  // yard comes) the heaviest ships; the frigates and corvettes come from the Frigate Yard.
+  const list = w.hybrid ? baseBuilds(faction).filter((t) => builtAt(t) === 'station') : buildable(faction)
+  const all = list.map((t) => typeOf(w, t.id)).filter((t) => lockedShips || t.level <= hud.level)
   const queued = (id: string) => hud.queue.filter((q) => q.unit === id).length
-  // Warships and strike craft on separate pages, picked on the left; the choice is remembered.
-  const [page, setPage] = useState<'warships' | 'strike'>(() => {
+  // Warships and strike craft on separate pages (and, with hybrid bases, the yards), picked on the
+  // left; the choice is remembered.
+  const [page, setPage] = useState<'warships' | 'strike' | 'yards'>(() => {
     try {
-      return localStorage.getItem('mvlos.empires.yardpage') === 'strike' ? 'strike' : 'warships'
+      const v = localStorage.getItem('mvlos.empires.yardpage')
+      return v === 'strike' ? 'strike' : v === 'yards' && w.hybrid ? 'yards' : 'warships'
     } catch {
       return 'warships'
     }
   })
-  const pick = (pg: 'warships' | 'strike') => {
+  const pick = (pg: 'warships' | 'strike' | 'yards') => {
     setPage(pg)
     try {
       localStorage.setItem('mvlos.empires.yardpage', pg)
@@ -876,7 +911,7 @@ function StationDetail(p: DetailProps & { st: Unit }) {
           <Schematic u={st} size={96} tip={unitTip(st.t, ownerTag(w, me, st.owner), undefined, st)} />
           <div className="ew-side-info">
             <strong {...unitTip(st.t, ownerTag(w, me, st.owner), undefined, st)}>{st.t.name}</strong>
-            <small className="ew-muted">Production station</small>
+            <small className="ew-muted">{w.hybrid ? 'Command Station' : 'Production station'}</small>
             <Pips level={hud.level} />
           </div>
           <Vitals u={st} now={w.time} />
@@ -887,7 +922,7 @@ function StationDetail(p: DetailProps & { st: Unit }) {
         </div>
         <div className="ew-detail-main">
           <header className="ew-yardhead">
-            <h5 className="ew-yardtitle">Shipyard</h5>
+            {w.hybrid ? <BaseTabs w={w} me={me} cur={st.id} onSelect={p.onSelect} /> : <h5 className="ew-yardtitle">Shipyard</h5>}
             <TechTreeButton hud={hud} onOpen={p.onTechTree} />
           </header>
           <div className="ew-yardbody">
@@ -899,14 +934,22 @@ function StationDetail(p: DetailProps & { st: Unit }) {
                 <em>{warships.length}</em>
               </button>
               <button role="tab" aria-selected={page === 'strike'} className={page === 'strike' ? 'is-on' : ''} onClick={() => pick('strike')}
-                data-tip="Strike craft: fighters and bombers launch from the station's hangar; gunships go to the fleet inventory, or jump in at the station with the small button.">
+                data-tip={`Strike craft: fighters and bombers${w.hybrid ? ', and engineers,' : ''} launch from the station's hangar; gunships go to the fleet inventory, or jump in at the station with the small button.`}>
                 <Icon name="attack" size={16} />
                 <span>Strike craft</span>
                 <em>{strike.length}</em>
               </button>
+              {w.hybrid && (
+                <button role="tab" aria-selected={page === 'yards'} className={page === 'yards' ? 'is-on' : ''} onClick={() => pick('yards')}
+                  data-tip="Yards: engineers build them within the Command Station's build radius. The Frigate Yard builds frigates and corvettes.">
+                  <Icon name="slip" size={16} />
+                  <span>Yards</span>
+                </button>
+              )}
             </div>
             <div className="ew-yard" ref={grid}>
-              {ships.map((t) => (
+              {page === 'yards' && <YardCard w={w} me={me} t={yardOf(faction)} onPlace={p.onPlace} onSelect={p.onSelect} />}
+              {page !== 'yards' && ships.map((t) => (
                 <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id)} whyReserve={cantBuild(w, me, t.id, true)} level={hud.level} queued={queued(t.id)} onBuild={p.onBuild} onUnqueue={p.onUnqueue}
                   research={t.tech && !hud.techs.includes(t.tech) ? TECH[t.tech].name : null} />
               ))}
@@ -985,8 +1028,10 @@ function OreDetail(p: DetailProps & { n: OreNode }) {
   )
 }
 
-export function ShipCard({ t, who, why, whyReserve, level, queued, onBuild, onUnqueue, campaign = false, research = null }: {
+export function ShipCard({ t, who, why, whyReserve, level, queued, onBuild, onUnqueue, campaign = false, research = null, where = 'the station' }: {
   t: UnitType; who: { who: string; rel: string }; why: string | null; whyReserve: string | null; level: number; queued: number; onBuild: (id: string, times: number, reserve?: boolean) => void; onUnqueue: (id: string) => void
+  /** Where a ship that jumps in straight away arrives: beside the station, or the yard building it. */
+  where?: string
   /** On the galaxy map: every ship joins the fleet in orbit, so no jump-in button. */
   campaign?: boolean
   /** The research it still waits for, by name (null once it's done, or when it needs none). */
@@ -1016,7 +1061,7 @@ export function ShipCard({ t, who, why, whyReserve, level, queued, onBuild, onUn
         e.preventDefault()
         onUnqueue(t.id)
       }}
-      {...unitTip(t, who, `${locked ? lockText : campaign ? 'Click to build it here: it joins the fleet in orbit.' : fromHangar(t) ? 'Click to build: it launches from the hangar.' : 'Click to build it for the fleet inventory, then drag it out to any spot your fleet can see. The small corner button builds one that jumps in beside the station.'}${locked ? '' : ' Shift-click for five, right-click to remove one.'}${!locked && (fromHangar(t) ? why : whyReserve) ? `\n${fromHangar(t) ? why : whyReserve}` : ''}`)}
+      {...unitTip(t, who, `${locked ? lockText : campaign ? 'Click to build it here: it joins the fleet in orbit.' : fromHangar(t) ? 'Click to build: it launches from the hangar.' : `Click to build it for the fleet inventory, then drag it out to any spot your fleet can see. The small corner button builds one that jumps in beside ${where}.`}${locked ? '' : ' Shift-click for five, right-click to remove one.'}${!locked && (fromHangar(t) ? why : whyReserve) ? `\n${fromHangar(t) ? why : whyReserve}` : ''}`)}
     >
       <ShipArt t={t} />
       <strong>{t.name}</strong>
@@ -1035,8 +1080,8 @@ export function ShipCard({ t, who, why, whyReserve, level, queued, onBuild, onUn
       <button
         className={`ew-reservebtn ${why ? 'is-off' : ''}`}
         onClick={(e) => onBuild(t.id, shiftOf(e) ? 5 : 1, false)}
-        data-tip={`Build a ${t.name} that jumps in beside the station as soon as it's done, instead of going to the fleet inventory. Shift-click for five.${why ? `\n\n${why}` : ''}`}
-        aria-label={`Build a ${t.name} that jumps in at the station`}
+        data-tip={`Build a ${t.name} that jumps in beside ${where} as soon as it's done, instead of going to the fleet inventory. Shift-click for five.${why ? `\n\n${why}` : ''}`}
+        aria-label={`Build a ${t.name} that jumps in at ${where}`}
       >
         <Icon name="jump" size={13} />
       </button>
@@ -1054,7 +1099,7 @@ const PROJECTORS = 5
  * Click a hologram to cancel that ship (refunded).
  */
 export type QueueItem = { unit: string; left: number; total: number; reserve?: boolean; sprite?: string; name?: string }
-export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false }: { queue: QueueItem[]; onCancel: (i: number) => void; max?: number; campaign?: boolean }) {
+export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false, at = 'the station' }: { queue: QueueItem[]; onCancel: (i: number) => void; max?: number; campaign?: boolean; /** Where its ships jump in: the station, or the yard it belongs to. */ at?: string }) {
   const art = useUnitArt()
   return (
     <div className="ew-buildq" aria-label={`Build queue: ${queue.length} of ${max}`}>
@@ -1070,7 +1115,7 @@ export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false 
         const sprite = q.sprite ?? t?.sprite ?? ''
         const name = q.name ?? t?.name ?? q.unit
         const done = i === 0 ? 1 - q.left / q.total : 0
-        const where = !t ? 'at the station' : campaign ? 'joins the fleet in orbit' : q.reserve ? 'for the fleet inventory' : fromHangar(t) ? 'from the hangar' : 'jumps in at the station'
+        const where = !t ? `at ${at}` : campaign ? 'joins the fleet in orbit' : q.reserve ? 'for the fleet inventory' : fromHangar(t) ? 'from the hangar' : `jumps in at ${at}`
         return (
           <button key={i} className={`ew-holo ${i === 0 ? 'is-building' : ''}`} onClick={() => onCancel(i)}
             data-tip={`${name}, ${where}${i === 0 ? `: ${Math.round(done * 100)}%, ${Math.ceil(q.left)} s left` : `: waiting (${i + 1} in the queue)`}.\nClick to cancel and refund.`}>
@@ -1514,6 +1559,7 @@ function orderText(w: World, u: Unit) {
 
 function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
   const art = useUnitArt()
+  const { keys } = useSettings()
   const { u, squad, me, w } = p
   const coarse = useCoarse()
   const t = u.t
@@ -1535,6 +1581,15 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
           {mine && <span className="ew-muted ew-small ew-orders">{orderText(w, u)}{u.kills > 0 ? ` · ${u.kills} kills` : ''}</span>}
           {mine && <RetreatIcon ships={squad.filter((x) => x.owner === me)} onRetreat={p.onRetreat} />}
         </header>
+        {/* Engineers: their job first, the yard they can build and how. */}
+        {mine && isEngineer(t) && w.hybrid && (
+          <div className="ew-engtools">
+            <div className="ew-yard">
+              <YardCard w={w} me={me} t={yardOf(u.t.faction)} onPlace={p.onPlace} onSelect={p.onSelect} />
+            </div>
+            <span className="ew-muted ew-small">{coarse ? 'Tap the card, then a spot in the build ring. Long-press one of our structures to repair it.' : `Click the card (${keyName(keys.build)}), then a spot in the build ring. Right-click one of our structures to repair it.`}</span>
+          </div>
+        )}
         <span className="ew-muted ew-small">{t.blurb}</span>
         <Counters t={t} />
         <Vitals u={u} squad={squad} now={w.time} />
@@ -1557,6 +1612,120 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
         {!mine && !ally && u.hps.length > 0 && <span className="ew-muted ew-small">{coarse ? 'Select your ships, then long-press a marker on this one and pick Attack to target that hardpoint.' : 'Select your ships, hover this one and right-click a marker to target that hardpoint.'}</span>}
       </div>
     </Frame>
+  )
+}
+
+// --- Hybrid bases --------------------------------------------------------------------------------------
+
+/** Switches between the Command Station and our yards: one tab each, the one shown lit. A yard
+ * still going up shows how far along it is. */
+function BaseTabs({ w, me, cur, onSelect }: { w: World; me: Owner; cur: number; onSelect: (id: number) => void }) {
+  const { keys } = useSettings()
+  const st = w.byId.get(w.players[me].station)
+  const yards = w.units.filter((u) => !u.dead && u.owner === me && u.t.tier === 'yard')
+  return (
+    <div className="ew-basetabs" role="tablist" aria-label="Station and yards">
+      {st && (
+        <button role="tab" aria-selected={cur === st.id} className={cur === st.id ? 'is-on' : ''} onClick={() => onSelect(st.id)} data-tip={`Command Station: strike craft, gunships, engineers and the heaviest ships (${keyName(keys.station)})`}>
+          <Icon name="yard" size={14} /> Command Station
+        </button>
+      )}
+      {yards.map((y) => (
+        <button key={y.id} role="tab" aria-selected={cur === y.id} className={cur === y.id ? 'is-on' : ''} onClick={() => onSelect(y.id)} data-tip={`${y.t.name}: frigates and corvettes (${keyName(keys.yard)})`}>
+          <Icon name="slip" size={14} /> Frigate Yard{building(y) ? ` ${Math.round((1 - y.building / y.t.build) * 100)}%` : ''}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** A yard as something to build: its price and what it needs, or how ours is doing (standing,
+ * going up, or a ruin to rebuild for less). Click to place it, or to select the one we have. */
+export function YardCard({ w, me, t, onPlace, onSelect }: { w: World; me: Owner; t: UnitType; onPlace: (unit: string) => void; onSelect: (id: number) => void }) {
+  const p = w.players[me]
+  const ours = w.units.find((u) => !u.dead && u.owner === me && u.t.id === t.id)
+  const ruin = (w.ruins ?? []).find((r) => r.owner === me && r.unit === t.id)
+  const engineers = w.units.some((u) => !u.dead && u.owner === me && isEngineer(u.t))
+  const cost = ruin ? Math.round(t.cost * REBUILD) : t.cost
+  const locked = t.level > p.level
+  const why = ours ? null : locked ? `Needs station level ${t.level}` : !engineers ? 'Needs engineers: build a squadron at the Command Station' : p.credits < cost ? 'Not enough credits' : null
+  const state = ours ? (building(ours) ? `Going up: ${Math.round((1 - ours.building / ours.t.build) * 100)}%` : 'Built') : ruin ? `Rebuild: ${cost}` : null
+  const tip = `${t.name}\n${t.blurb}\nEngineers build it within the Command Station\'s build radius, in ${t.build} s for one squadron (more go faster). A destroyed yard leaves its ruin: rebuilt there, it costs ${Math.round(REBUILD * 100)}%.${ours ? '\n\nClick to select it.' : why ? `\n\n${why}` : '\n\nClick, then pick a spot inside the build ring.'}`
+  return (
+    <button className={`ew-shipcard ew-yardcard ${locked ? 'is-locked' : why ? 'is-off' : ''} ${ours ? 'is-built' : ''}`} onClick={() => (ours ? onSelect(ours.id) : onPlace(t.id))} {...unitTip(t, ownerTag(w, me, me), tip)}>
+      <ShipArt t={t} />
+      <strong>{t.name.replace(/^\S+ /, '')}</strong>
+      {state ? <span className="ew-cost">{state}</span> : <span className="ew-cost"><Icon name="credits" size={11} /> {cost}</span>}
+      {!state && <span className="ew-time"><Icon name="time" size={11} /> {t.build}s</span>}
+      {locked && <span className="ew-lock">Lv{t.level}</span>}
+    </button>
+  )
+}
+
+/**
+ * One of our yards: while it goes up, its progress, who is building it and a way to call it off
+ * (with the refund); once built, its own queue and build cards, as the station's shipyard has.
+ */
+function YardDetail(p: DetailProps & { y: Unit }) {
+  const { w, me, y, hud } = p
+  const { lockedShips } = useSettings()
+  const faction = y.t.faction
+  const site = !!y.site
+  const ships = baseBuilds(faction).filter((t) => builtAt(t) === 'yard').map((t) => typeOf(w, t.id)).filter((t) => lockedShips || t.level <= hud.level)
+  const queue = y.yq ?? []
+  const crews = w.units.filter((u) => !u.dead && isEngineer(u.t) && u.mending.includes(y.id)).length
+  const coming = w.units.filter((u) => !u.dead && u.owner === me && isEngineer(u.t) && u.order.k === 'construct' && u.order.id === y.id).length
+  const progress = 1 - y.building / y.t.build
+  return (
+    <div className="ew-stationwrap">
+      {!site && <BuildQueue queue={queue} onCancel={(i) => p.onCancel(i, y.id)} at="the yard" />}
+      <Frame className="ew-detail is-station is-yard">
+        <div className="ew-detail-side">
+          <Schematic u={y} size={96} tip={unitTip(y.t, ownerTag(w, me, y.owner), undefined, y)} />
+          <div className="ew-side-info">
+            <strong {...unitTip(y.t, ownerTag(w, me, y.owner), undefined, y)}>{y.t.name}</strong>
+            <small className="ew-muted">Frigate Yard</small>
+          </div>
+          <Vitals u={y} now={w.time} />
+          <HpSummary u={y} />
+          {!site && <FocusInfo w={w} u={y} pick={p.turretPick} onClear={p.onClearFocus} />}
+          {!site && <RepairButton w={w} me={me} u={y} onRepair={p.onRepair} />}
+        </div>
+        <div className="ew-detail-main">
+          <header className="ew-yardhead">
+            <BaseTabs w={w} me={me} cur={y.id} onSelect={p.onSelect} />
+          </header>
+          {site ? (
+            <div className="ew-sitebox" data-tip="Engineers build a yard at one squadron's pace per three craft, up to three squadrons at once.">
+              <span className="ew-muted">
+                {!y.site!.started
+                  ? coming
+                    ? `Engineers on their way (${coming} craft).`
+                    : 'Waiting for engineers: send some to build it.'
+                  : crews
+                    ? `Under construction: ${Math.round(progress * 100)}%, ${crews} engineer craft welding.`
+                    : `Under construction: ${Math.round(progress * 100)}%, nobody welding.`}
+              </span>
+              <Bar value={progress} max={1} kind="shield" />
+              <button className="ew-repair" onClick={() => p.onCancelSite(y.id)} data-tip={y.site!.started ? 'Call it off: work has started, so only part of the price comes back.' : 'Call it off before work starts: the full price comes back.'}>
+                <Icon name="stop" size={13} /> Cancel <Icon name="credits" size={12} /> +{siteRefund(y)}
+              </button>
+              {cantConstruct(w, me, y) === null && !crews && !coming && <small className="ew-muted">Select engineers and right-click it (long-press on touch).</small>}
+            </div>
+          ) : (
+            <div className="ew-yardbody">
+              <div className="ew-yard">
+                {ships.map((t) => (
+                  <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id, false, y.id)} whyReserve={cantBuild(w, me, t.id, true, y.id)} level={hud.level} queued={queue.filter((q) => q.unit === t.id).length}
+                    onBuild={(id, n, reserve) => p.onBuild(id, n, reserve, y.id)} onUnqueue={(id) => p.onUnqueue(id, y.id)} where="the yard"
+                    research={t.tech && !hud.techs.includes(t.tech) ? TECH[t.tech].name : null} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </Frame>
+    </div>
   )
 }
 
@@ -1649,7 +1818,7 @@ export function SelectionPanel({ w, sel, me, mode, onCommand, onPick, groups, on
   const art = useUnitArt()
   const mine = sel.filter((u) => u.owner === me)
   const ships = mine.filter((u) => isShip(u.t))
-  const station = mine.some((u) => u.t.tier === 'station')
+  const station = mine.some((u) => u.t.tier === 'station' || (u.t.tier === 'yard' && !!u.yq))
   // One tile per ship, or per fighter squadron.
   const tiles: Unit[][] = []
   const bySquad = new Map<number, Unit[]>()

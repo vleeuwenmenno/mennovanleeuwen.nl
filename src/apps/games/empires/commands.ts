@@ -2,7 +2,7 @@ import { LEVEL_UP, SITE_UPGRADES, TECH, UNIT, type SiteUpgradeId } from './data.
 import type { Pt } from './maps.ts'
 import {
   STANCES, cmdAbility, cmdArea, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdDeploy, cmdFace, cmdFocus, cmdGuard, cmdLine, cmdMove, cmdPatrol, cmdRally, cmdRepair, cmdResearch,
-  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, type Owner, type Stance, type World,
+  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdCancelSite, type Owner, type Stance, type World,
 } from './sim.ts'
 
 // Every order a player can give, as data: a name and its arguments. In multiplayer an order goes to
@@ -25,16 +25,20 @@ const TABLE = {
   attack: { run: cmdAttack, args: ['ids', 'id', 'int', 'bool', 'bool'] },
   stop: { run: cmdStop, args: ['ids'] },
   ability: { run: cmdAbility, args: ['ids', 'id'] },
-  rally: { run: cmdRally, args: ['x', 'y'] },
+  rally: { run: cmdRally, args: ['x', 'y', 'id'] },
   upgradeSite: { run: cmdUpgradeSite, args: ['id', 'upgrade'] },
   repair: { run: cmdRepair, args: ['id'] },
   retreat: { run: cmdRetreat, args: ['ids'] },
-  build: { run: cmdBuild, args: ['unit', 'bool'] },
+  build: { run: cmdBuild, args: ['unit', 'bool', 'id'] },
   deploy: { run: cmdDeploy, args: ['unit', 'x', 'y', 'num'] },
-  cancel: { run: cmdCancel, args: ['int'] },
+  cancel: { run: cmdCancel, args: ['int', 'id'] },
   research: { run: cmdResearch, args: ['tech'] },
   cancelResearch: { run: cmdCancelResearch, args: ['int'] },
   site: { run: cmdSite, args: ['int', 'unit'] },
+  // Hybrid bases: engineers place a yard, build or repair a structure; a site can be called off.
+  place: { run: cmdPlace, args: ['ids', 'unit', 'x', 'y', 'bool'] },
+  construct: { run: cmdConstruct, args: ['ids', 'id', 'bool'] },
+  cancelSite: { run: cmdCancelSite, args: ['id'] },
 } as const satisfies Record<string, { run: (w: World, owner: Owner, ...a: never[]) => unknown; args: readonly Arg[] }>
 
 export type CmdName = keyof typeof TABLE

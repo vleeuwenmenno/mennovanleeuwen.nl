@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { RotateHint } from './empires/RotateHint'
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, fleetThink, newBrain, profileOf, think, type Brain } from './empires/ai'
-import { ALL_SPRITES, FACTIONS, SITE_UPGRADES, TECH, UNIT, buildable, dims, isShip, type HardpointKind, type Tier } from './empires/data'
+import { ALL_SPRITES, BUILD_RADIUS, FACTIONS, SITE_UPGRADES, TECH, UNIT, buildable, dims, isEngineer, isShip, yardOf, type HardpointKind, type Tier } from './empires/data'
 import { SizesContext, DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, Icon, ReserveTray, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
 import { LongPress, TouchBar, WheelHost, getTouchMods, isTouch, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
 import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
@@ -21,7 +21,7 @@ import { Renderer, relColor, type Camera, type View } from './empires/render'
 import { beginLayout } from './empires/layout'
 import { defaultArea, inRect, inside, type Pt } from './empires/maps'
 import {
-  STEP, RANKS, autoStart, REFUND_DELAY, canRetreat, canSee, cantMend, closedLoop, cantWarp, typeOf, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, startProblem, tick, type Owner, type SimEvent, type Unit, type World, stateHash,
+  STEP, RANKS, autoStart, REFUND_DELAY, canRetreat, canSee, cantConstruct, cantMend, closedLoop, cantWarp, typeOf, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, placement, startProblem, tick, type Owner, type SimEvent, type Unit, type World, stateHash,
 } from './empires/sim'
 import { EmpiresSound, type OrderKind } from './empires/sound'
 import { TechTree } from './empires/TechTree'
@@ -295,6 +295,10 @@ function snapshot(w: World, me: Owner, sel: Set<number>, groups: Map<string, num
     credits: p.credits, income: p.income, pop: p.pop, popCap: p.popCap, level: p.level,
     queue: p.queue.map((q) => ({ ...q })), reserve: [...p.reserve], research: p.research.map((r) => ({ ...r })), techs: [...p.techs], time: w.time, sel: [...sel], winner: w.winner,
     beacons: w.beacons.filter((b) => b.owner === p.team).length, beaconsAll: w.beacons.length, mines: w.units.filter((u) => u.owner === me && u.t.tier === 'mine').length,
+    hybrid: !!w.hybrid,
+    yards: w.units
+      .filter((u) => !u.dead && u.owner === me && u.t.tier === 'yard')
+      .map((u) => ({ id: u.id, unit: u.t.id, queue: (u.yq ?? []).map((q) => ({ ...q })), built: !u.site, progress: u.site ? 1 - u.building / u.t.build : 1 })),
   }
 }
 
@@ -393,6 +397,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const selected = useRef(new Set<number>(resumed.current && resume ? resume.sel : []))
   const groups = useRef(new Map<string, number[]>(resumed.current && resume ? resume.groups : []))
   const mode = useRef<Mode>('normal')
+  /** Hybrid bases: the yard being placed ('place' mode), the engineers who will build it, and on
+   * touch the spot picked so far (it waits for the confirm button). */
+  const placing = useRef<{ unit: string; ids: number[]; at: Pt | null } | null>(null)
   /** An ore asteroid picked with nothing else selected: the command card offers to build on it. */
   const pickedNode = useRef(-1)
   const hover = useRef({ unit: 0, hp: -1, node: -1, wreck: 0 })
@@ -469,6 +476,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   }
   const setMode = (m: Mode) => {
     mode.current = m
+    if (m !== 'place') placing.current = null
     drawMode.current = null
     setUi((u) => ({ ...u, mode: m, draw: null }))
   }
@@ -609,9 +617,10 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const modeClick = (sx: number, sy: number, m: Mode, queued = false) => {
     const { at } = pick(sx, sy)
     const ids = mySelection().map((u) => u.id)
+    if (m === 'place') return place(at, queued)
     if (m === 'rally') {
-      order('rally', at.x, at.y)
-      renderer.current.ping(at.x, at.y, '#7dffa0')
+      order('rally', at.x, at.y, rallyAt())
+      renderer.current.ping(at.x, at.y, rallyAt() ? '#ffc86e' : '#7dffa0')
     } else if (m === 'patrol') {
       order('patrol', ids, at.x, at.y, queued)
       renderer.current.ping(at.x, at.y, '#8fd0ff')
@@ -659,7 +668,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     } else {
       // Attack also works for armed structures: their guns focus where it's clicked.
       const armed = mySelection().some((u) => !isShip(u.t) && u.guns.length)
-      if (c === 'rally' ? !mySelection().some((u) => u.t.tier === 'station') : !mySelection().some((u) => isShip(u.t)) && !(c === 'attack' && armed)) return sound.error()
+      if (c === 'rally' ? !mySelection().some((u) => u.t.tier === 'station') && !rallyAt() : !mySelection().some((u) => isShip(u.t)) && !(c === 'attack' && armed)) return sound.error()
       setMode(mode.current === c ? 'normal' : c)
       sound.arm()
     }
@@ -680,6 +689,29 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       return
     }
     const target = unit && (foes(w, unit.owner, me) || friendly) ? unit : undefined
+    // Engineers: a right-click on one of our structures builds or repairs it, on our ruin of a yard
+    // rebuilds it; the rest of the selection carries on as usual.
+    const crew = ships.filter((u) => isEngineer(u.t))
+    if (crew.length && !attackMove) {
+      const ruin = (w.ruins ?? []).find((r) => r.owner === me && Math.hypot(r.x - at.x, r.y - at.y) < typeOf(w, r.unit).size * 0.45)
+      const job = unit && unit.owner === me && !isShip(unit.t) ? unit : undefined
+      if (job || (ruin && !unit)) {
+        const why = job ? order('construct', crew.map((u) => u.id), job.id, queued) : order('place', crew.map((u) => u.id), ruin!.unit, ruin!.x, ruin!.y, queued)
+        if (why) {
+          toast(why, 'bad')
+          sound.error()
+        } else {
+          const to = job ?? ruin!
+          renderer.current.ping(to.x, to.y, '#ffc86e')
+          sound.order('move', myFaction, 'fighter')
+          if (!job) sound.constructing()
+        }
+        const rest = ships.filter((u) => !isEngineer(u.t))
+        if (!rest.length) return
+        order('move', rest.map((u) => u.id), at.x, at.y, false, queued)
+        return
+      }
+    }
     // Structures fire where they're told: every gun, or the one gun that was clicked.
     if (armed.length && target) {
       const tp = turretPick.current && armed.some((u) => u.id === turretPick.current!.unit) ? turretPick.current : null
@@ -702,9 +734,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         sound.error()
         return
       }
-      if (stationSel) {
-        order('rally', at.x, at.y)
-        renderer.current.ping(at.x, at.y, '#7dffa0')
+      if (stationSel || rallyAt()) {
+        order('rally', at.x, at.y, rallyAt())
+        renderer.current.ping(at.x, at.y, rallyAt() ? '#ffc86e' : '#7dffa0')
         say('rally')
       }
       return
@@ -740,6 +772,104 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     cam.current.x = x
     cam.current.y = y
     clampCam()
+  }
+
+  // --- Hybrid bases --------------------------------------------------------------------------------
+
+  /** The yard whose rally point a rally order sets: a selected yard of ours (with no station
+   * selected, whose own rally point comes first), else 0 for the station's. */
+  const rallyAt = () => {
+    const mine = mySelection()
+    if (mine.some((u) => u.t.tier === 'station')) return 0
+    return mine.find((u) => u.t.tier === 'yard' && !!u.yq)?.id ?? 0
+  }
+  /** Start placing a yard: with the engineers selected, or else every one of ours (idle ones
+   * first). Without any, it says how to get some. */
+  const startPlace = (unit: string) => {
+    sound.unlock()
+    const w = world.current
+    const ours = w.units.filter((u) => !u.dead && u.owner === me && isEngineer(u.t))
+    const chosen = mySelection().filter((u) => isEngineer(u.t))
+    const crew = chosen.length ? chosen : ours
+    const why = !w.hybrid ? 'No yards in this battle' : !crew.length ? 'No engineers: build an engineer squadron at the Command Station first' : null
+    // The rest (level, credits, one at a time) shows on the ghost itself.
+    if (why) {
+      toast(why, 'bad')
+      sound.error()
+      return
+    }
+    setMode('place')
+    placing.current = { unit, ids: crew.map((u) => u.id), at: null }
+    sound.arm()
+  }
+  /** Put the yard down at `at` (the order goes into the engineers' queues with `queued`). */
+  const place = (at: Pt, queued = false) => {
+    const pl = placing.current
+    if (!pl) return
+    // A finger pins the spot first (a tap elsewhere moves it): the confirm button builds it.
+    if (touchLast.current) {
+      pl.at = { x: at.x, y: at.y }
+      sound.click()
+      setUi((u) => ({ ...u }))
+      return
+    }
+    const why = order('place', pl.ids, pl.unit, at.x, at.y, queued)
+    if (why) {
+      toast(why, 'bad')
+      sound.error()
+      return
+    }
+    renderer.current.ping(at.x, at.y, '#ffc86e')
+    sound.constructing()
+    toast(`${UNIT[pl.unit].name}: the engineers are on their way`, 'info')
+    setMode('normal')
+  }
+  /** Touch (the action wheel): start placing a yard with its spot already pinned at `at`. */
+  const pinYard = (at: Pt) => {
+    startPlace(yardOf(world.current.players[me].faction).id)
+    if (placing.current) placing.current.at = { x: at.x, y: at.y }
+    setUi((u) => ({ ...u }))
+  }
+  /** Touch: build at the pinned spot. */
+  const confirmPlace = () => {
+    const at = placing.current?.at
+    if (!at) return
+    placing.current!.at = null
+    touchLast.current = false
+    place(at, shiftOf())
+  }
+  /** The ghost of the yard being placed, for the renderer: under the pointer (or the pinned spot). */
+  const placeGhost = () => {
+    const pl = placing.current
+    const w = world.current
+    if (!pl || mode.current !== 'place') return null
+    const at = pl.at ?? (mouse.current.inside ? toWorld(mouse.current.x, mouse.current.y) : null)
+    const st = w.byId.get(w.players[me].station)
+    if (!at || !st) return null
+    const g = placement(w, me, pl.unit, at.x, at.y)
+    return { t: typeOf(w, pl.unit), x: g.x, y: g.y, a: g.a, ok: !g.why, why: g.why, cost: g.cost, rebuild: !!g.ruin, ring: { x: st.x, y: st.y, r: BUILD_RADIUS } }
+  }
+  /** Select one of our yards, the next one each time; asked again for the one selected, look at it. */
+  const selectYard = () => {
+    const w = world.current
+    const yards = w.units.filter((u) => !u.dead && u.owner === me && u.t.tier === 'yard')
+    if (!yards.length) {
+      toast(w.hybrid ? 'No yard yet: engineers build one near the Command Station' : 'No yards in this battle', 'info')
+      return sound.error()
+    }
+    const cur = yards.findIndex((y) => selected.current.has(y.id))
+    const next = yards[(cur + 1) % yards.length]
+    if (cur >= 0 && yards.length === 1) centerOn(next.x + 150, next.y + 80)
+    select([next.id])
+    sound.select(myFaction, 'station')
+  }
+  /** Select a unit of ours and look at it (the base tabs). */
+  const selectOne = (id: number) => {
+    const u = world.current.byId.get(id)
+    if (!u || u.dead) return
+    select([id])
+    centerOn(u.x + 150, u.y + 80)
+    sound.click()
   }
   /** Select the station (where ships are built) and look at it. */
   const selectStation = () => {
@@ -867,6 +997,16 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         ...info,
       )
     } else if (ships.length && unit && own) {
+      // Engineers selected and this one of our structures needs building or mending.
+      const crew = ships.filter((u) => isEngineer(u.t))
+      if (crew.length && !cantConstruct(w, me, unit))
+        items.push(it('construct', unit.site ? 'Build it' : 'Repair it', 'slip', () => {
+          const why = order('construct', crew.map((u) => u.id), unit.id, shiftOf())
+          if (why) {
+            toast(why, 'bad')
+            sound.error()
+          } else renderer.current.ping(unit.x, unit.y, '#ffc86e')
+        }))
       // Repair craft selected and this one hurt: Field repair on it.
       const menders = ships.filter((u) => u.t.ability === 'fieldRepair')
       if (menders.length && !cantMend(w, me, unit)) items.push(it('repair', 'Repair it', 'ability', () => useAbility(unit.id), !menders.some((u) => u.abilityCd <= 0) && 'Not ready yet'))
@@ -876,6 +1016,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       // or keep their formation and turn to face it.
       const several = lineGroups(w, me, ships.map((u) => u.id)).length > 1
       const withAb = ships.filter((u) => u.t.ability)
+      // Engineers: put a yard down here (pinned, for the confirm button).
+      if (w.hybrid && ships.some((u) => isEngineer(u.t))) items.push(it('yard', 'Build yard', 'slip', () => pinYard(at)))
       items.push(
         it('move', 'Move here', 'move', arm('move')),
         it('attackMove', 'Attack move', 'attack', () => {
@@ -897,7 +1039,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       )
     } else {
       const station = mine.some((u) => u.t.tier === 'station')
-      if (station) items.push(it('rally', 'Rally here', 'rally', arm('rally')))
+      if (station || rallyAt()) items.push(it('rally', 'Rally here', 'rally', arm('rally')))
+      if (station && w.hybrid) items.push(it('yard', 'Build yard', 'slip', () => pinYard(at)))
       if (enemy && guns.length)
         items.push(
           it('focus', 'Focus fire', 'attack', () => {
@@ -960,12 +1103,12 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     sound.click()
   }
 
-  const build = (id: string, times = 1, reserve = false) => {
+  const build = (id: string, times = 1, reserve = false, at = 0) => {
     sound.unlock()
     let why: string | null = null
     let n = 0
     for (let i = 0; i < times; i++) {
-      why = order('build', id, reserve)
+      why = order('build', id, reserve, at)
       if (why) break
       n++
     }
@@ -975,11 +1118,11 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     } else sound.queued()
   }
   /** Right-click on a ship card: drop the last one of that type from the queue. */
-  const unqueue = (id: string) => {
-    const q = world.current.players[me].queue
+  const unqueue = (id: string, at = 0) => {
+    const q = at ? (world.current.byId.get(at)?.yq ?? []) : world.current.players[me].queue
     for (let i = q.length - 1; i >= 0; i--)
       if (q[i].unit === id) {
-        order('cancel', i)
+        order('cancel', i, at)
         sound.unqueued()
         return
       }
@@ -1151,9 +1294,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           if (e.owner === me) toast(`${HP_NAME[e.what as HardpointKind]} destroyed on one of our ships`, 'bad', { x: e.x, y: e.y })
         } else if (e.k === 'built' && e.owner === me) {
           const t = UNIT[e.unit]
-          if (t.tier === 'mine' || t.tier === 'defense') sound.structureDone(t.tier)
+          if (t.tier === 'mine' || t.tier === 'defense' || t.tier === 'yard') sound.structureDone(t.tier)
           else sound.shipReady(myFaction, t.tier)
-          toast(t.tier === 'mine' ? `${t.name} is drilling` : t.tier === 'defense' ? `${t.name} online` : `${t.name}${t.squad > 1 ? ' squadron' : ''} ready`, 'good', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
+          toast(t.tier === 'mine' ? `${t.name} is drilling` : t.tier === 'defense' ? `${t.name} online` : t.tier === 'yard' ? `${t.name} complete: frigates and corvettes are built there now` : `${t.name}${t.squad > 1 ? ' squadron' : ''} ready`, 'good', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
         } else if (e.k === 'warp') {
           if (e.owner === me || seesPoint(e.x, e.y)) sound.warp(where(e.x, e.y), e.delay)
         } else if (e.k === 'arrived') {
@@ -1218,7 +1361,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         } else if (e.k === 'level' && e.owner === me) {
           sound.levelUp()
           const unlocked = buildable(myFaction).filter((t) => t.level === e.level).map((t) => t.name)
-          toast(`Station level ${e.level}${unlocked.length ? `: ${unlocked.join(', ')} unlocked` : ''}`, 'good')
+          // With hybrid bases level 2 unlocks the Frigate Yard, where the frigates are built.
+          const yard = w.hybrid && yardOf(myFaction).level === e.level
+          toast(`Station level ${e.level}${yard ? `: the ${yardOf(myFaction).name} unlocked, build it with engineers` : unlocked.length ? `: ${unlocked.join(', ')} unlocked` : ''}`, 'good')
         }
       }
       // Drop dead ships from the selection.
@@ -1247,6 +1392,11 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         // A finger has no hover: the selection shows its ranges instead.
         ranges: settingsRef.current.ranges ? (touchLast.current ? 'selected' : 'hover') : 'off',
         models: settingsRef.current.models,
+        place: placeGhost(),
+        buildRing: w.hybrid && mySelection().some((u) => u.t.tier === 'station' || isEngineer(u.t)) ? (() => {
+          const st = w.byId.get(w.players[me].station)
+          return st ? { x: st.x, y: st.y, r: BUILD_RADIUS } : null
+        })() : null,
       }
       renderer.current.draw(ctx, w, cm, vw, vh, v, dt * (paused.current ? 0 : speed.current))
       sound.ambience(paused.current ? 0 : dt)
@@ -1334,6 +1484,15 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       } else if (action === 'attack' || action === 'move' || action === 'patrol' || action === 'rally' || action === 'hold' || action === 'stop' || action === 'retreat' || action === 'guard') runCommand(action)
       else if (action === 'ability') useAbility()
       else if (action === 'station' || k === 'home') selectStation()
+      else if (action === 'yard') selectYard()
+      else if (action === 'build') {
+        // The yard's ghost follows the pointer; over our ruin of it, it snaps on and costs half.
+        if (mySelection().some((u) => isEngineer(u.t) || u.t.tier === 'station')) startPlace(yardOf(world.current.players[me].faction).id)
+        else {
+          toast('Select engineers (or the Command Station) to build a yard', 'bad')
+          sound.error()
+        }
+      }
       else if (action === 'idle') selectIdle()
       else if (action === 'alert') {
         if (lastAlarm.current) centerOn(lastAlarm.current.x, lastAlarm.current.y)
@@ -1462,8 +1621,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     }
     if (mode.current !== 'normal') {
       modeClick(p.x, p.y, mode.current, e.shiftKey)
-      // Shift keeps the command armed for more clicks, each queued after the last.
-      if (!e.shiftKey) setMode('normal')
+      // Shift keeps the command armed for more clicks, each queued after the last. A yard being
+      // placed stays armed until it goes down.
+      if (!e.shiftKey && mode.current !== 'place') setMode('normal')
       return
     }
     drag.current = { x0: p.x, y0: p.y, box: true, pan: false, moved: false, cx: 0, cy: 0, button: 0 }
@@ -1544,7 +1704,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       const { unit, node, hp: part } = pick(p.x, p.y)
       if (mode.current !== 'normal') {
         modeClick(p.x, p.y, mode.current, add)
-        if (!add) setMode('normal')
+        if (!add && mode.current !== 'place') setMode('normal')
       } else if (unit && unit.owner === me) {
         // A double tap takes every one of its type on screen, as a double-click does.
         const now = performance.now()
@@ -1973,7 +2133,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           onWheel={onWheel}
         />
 
-        <TopBar hud={hud} faction={myFaction} sector={sector} ui={ui} onShipyard={selectStation} onPause={online ? undefined : togglePause} onSpeed={online ? undefined : setSpeed}
+        <TopBar hud={hud} faction={myFaction} sector={sector} ui={ui} onShipyard={selectStation} onYard={selectOne} onPause={online ? undefined : togglePause} onSpeed={online ? undefined : setSpeed}
           onMenu={() => (ui.menu ? closeMenu() : openMenu())}
           onTechTree={() => setTree(!ui.tree)}
           onReserves={() => setUi((u) => ({ ...u, reserves: !u.reserves }))}
@@ -2060,8 +2220,21 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
               : ui.mode === 'move' ? `Move: ${click} where to go. Ships ignore enemies on the way.`
                 : ui.mode === 'patrol' ? `Patrol: ${click} the far end. Ships fly back and forth, fighting what they meet.`
                 : ui.mode === 'guard' ? `Guard: ${click} one of our ships or structures. The selection stays with it and fights off what comes near.`
-                  : `Rally point: ${click} where new ships should gather.`}{' '}
-            {touchUi ? 'Turn on Shift to keep going, ✕ to cancel.' : <>Shift-click to keep going, <kbd>Esc</kbd> to cancel.</>}
+                  : ui.mode === 'place' ? `${UNIT[placing.current?.unit ?? yardOf(myFaction).id].name}: ${click} a spot inside the build ring round the Command Station.${touchUi ? ' Then build it here.' : ''}`
+                  : `Rally point: ${click} where new ships should gather${rallyAt() ? ' from this yard' : ''}.`}{' '}
+            {ui.mode === 'place'
+              ? touchUi ? 'Shift on: after the engineers\' other orders. ✕ to cancel.' : <>Shift-click: after the engineers' other orders. <kbd>Esc</kbd> or right-click to cancel.</>
+              : touchUi ? 'Turn on Shift to keep going, ✕ to cancel.' : <>Shift-click to keep going, <kbd>Esc</kbd> to cancel.</>}
+            {ui.mode === 'place' && placing.current?.at && (
+              <div className="ew-placebar">
+                <button className="ew-go" onClick={confirmPlace} disabled={!placeGhost()?.ok}>
+                  Build here
+                </button>
+                <button className="ew-menu-btn" onClick={() => setMode('normal')}>
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
         )}
         {ui.draw && (
@@ -2092,7 +2265,16 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
               }}
               onBuild={build}
               onUnqueue={unqueue}
-              onCancel={(i) => order('cancel', i)}
+              onCancel={(i, at) => order('cancel', i, at ?? 0)}
+              onPlace={startPlace}
+              onSelect={selectOne}
+              onCancelSite={(id) => {
+                const why = order('cancelSite', id)
+                if (why) {
+                  toast(why, 'bad')
+                  sound.error()
+                } else sound.unqueued()
+              }}
               onResearch={research}
               onTechTree={() => setTree(true)}
               onSite={buildSite}

@@ -3908,6 +3908,95 @@ span.ew-teamtag {
   height: 17px;
   border-radius: 4px;
 }
+
+/* Hybrid bases: the Command Station's and the yards' tabs, a yard card, a site under way, the
+   engineers' build card, and the touch confirm bar for placing a yard. */
+.ew-basetabs {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.ew-deck .ew-basetabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  font-family: var(--ew-display);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ew-muted);
+}
+.ew-deck .ew-basetabs button.is-on {
+  color: var(--ew-head);
+  border-color: color-mix(in srgb, var(--ew-accent) 60%, transparent);
+  background: color-mix(in srgb, var(--ew-accent) 18%, rgba(20, 30, 56, 0.9));
+}
+.ew-deck .ew-yard .ew-shipcard.ew-yardcard {
+  grid-row: 1 / span 2;
+  width: 140px;
+  height: auto;
+  align-self: stretch;
+  grid-template-rows: 1fr auto auto;
+}
+.ew-yard:has(.ew-yardcard) {
+  grid-auto-columns: 140px;
+}
+.ew-deck .ew-yard .ew-yardcard .ew-art {
+  height: 100%;
+  max-height: 96px;
+}
+.ew-deck .ew-yardcard.is-built {
+  border-color: rgba(125, 255, 160, 0.45);
+}
+.ew-sitebox {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 280px;
+  font-size: 12px;
+}
+.ew-deck .ew-sitebox .ew-repair {
+  align-self: flex-start;
+}
+.ew-engtools {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.ew-engtools .ew-yard {
+  grid-template-rows: 64px;
+  grid-auto-columns: 88px;
+}
+.ew-deck .ew-engtools .ew-yard .ew-shipcard.ew-yardcard {
+  grid-row: auto;
+  width: 88px;
+  height: 64px;
+  grid-template-rows: 26px auto auto;
+}
+.ew-deck .ew-engtools .ew-yard .ew-yardcard .ew-art {
+  height: 26px;
+}
+.ew-placebar {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+}
+.ew-placebar .ew-go,
+.ew-deck .ew-placebar .ew-menu-btn {
+  flex: 1;
+  min-height: 40px;
+  margin: 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.ew-top .ew-yardbtn {
+  color: #ffc86e;
+}
 .ew-yard .ew-reservebtn svg {
   width: 11px;
   height: 11px;

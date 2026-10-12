@@ -38,7 +38,7 @@ const TIER_GROUPS: { name: string; tiers: Tier[] }[] = [
   { name: 'Frigates', tiers: ['frigate'] },
   { name: 'Cruisers', tiers: ['cruiser'] },
   { name: 'Flagships', tiers: ['capital'] },
-  { name: 'Structures', tiers: ['station', 'mine', 'defense'] },
+  { name: 'Structures', tiers: ['station', 'yard', 'mine', 'defense'] },
 ]
 /** How the Codex names a design variant, where its id alone wouldn't say enough. */
 const STYLE_NAMES: Record<string, string> = { ring: 'Ring hull', carrier: 'Alt design: carrier' }
@@ -125,7 +125,7 @@ function Stats({ t, concept = false, model, dmg, selected, hover, onSelect, onHo
       <b>{value}</b>
     </div>
   )
-  const ship = t.tier !== 'station' && t.tier !== 'mine' && t.tier !== 'defense'
+  const ship = isShip(t)
   return (
     <div className="ew-cx-stats">
       <header>
@@ -453,7 +453,7 @@ function Viewer({ t, fitSize, model, workshop, show, dmg, boom, hover, selected,
           g.globalCompositeOperation = 'source-over'
         }
         drawHull(g, model, 0, 0, rot, t.size, zdpr, st, { debug: show.outlines })
-        const ship = t.tier !== 'station' && t.tier !== 'mine' && t.tier !== 'defense'
+        const ship = isShip(t)
         drawMounts(g, model, 0, 0, rot, t.size, zdpr, dmg.hps, (i) => {
           // With nothing to shoot at, the crews sweep their guns to and fro; a selected gun holds
           // still, pointing ahead, so it's easy to look at.

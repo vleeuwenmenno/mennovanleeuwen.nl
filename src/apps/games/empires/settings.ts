@@ -6,7 +6,7 @@ import { useEffect, useRef, useSyncExternalStore } from 'react'
 export type Action =
   | 'panUp' | 'panDown' | 'panLeft' | 'panRight' | 'zoomIn' | 'zoomOut'
   | 'move' | 'attack' | 'stop' | 'patrol' | 'hold' | 'rally' | 'ability' | 'retreat' | 'guard'
-  | 'station' | 'idle' | 'focus' | 'alert' | 'techTree' | 'pause' | 'fogGrid'
+  | 'station' | 'yard' | 'build' | 'idle' | 'focus' | 'alert' | 'techTree' | 'pause' | 'fogGrid'
 
 export const ACTIONS: { id: Action; label: string; group: string }[] = [
   { id: 'panUp', label: 'Camera up', group: 'Camera' },
@@ -25,6 +25,8 @@ export const ACTIONS: { id: Action; label: string; group: string }[] = [
   { id: 'retreat', label: 'Hyperspace retreat (gunships and up)', group: 'Commands' },
   { id: 'guard', label: 'Guard a ship or structure', group: 'Commands' },
   { id: 'station', label: 'Select station', group: 'Selection' },
+  { id: 'yard', label: 'Select yard (again: the next one)', group: 'Selection' },
+  { id: 'build', label: 'Build a yard (engineers or the station selected)', group: 'Commands' },
   { id: 'idle', label: 'Select idle ships', group: 'Selection' },
   { id: 'focus', label: 'Look at selection', group: 'Selection' },
   { id: 'alert', label: 'Look at last alert', group: 'Selection' },
@@ -38,7 +40,7 @@ export const ACTIONS: { id: Action; label: string; group: string }[] = [
 export const DEFAULT_KEYS: Record<Action, string> = {
   panUp: 'w', panDown: 's', panLeft: 'a', panRight: 'd', zoomIn: '=', zoomOut: '-',
   move: 'm', attack: 'e', stop: 'q', patrol: 'r', hold: 'g', rally: 'y', ability: 'f', retreat: 'j', guard: 'v',
-  station: 'h', idle: 'i', focus: 'c', alert: ' ', techTree: 'k', pause: 'p', fogGrid: 'f2',
+  station: 'h', yard: 'u', build: 'b', idle: 'i', focus: 'c', alert: ' ', techTree: 'k', pause: 'p', fogGrid: 'f2',
 }
 
 /** The defaults before they moved next to WASD. Saved keys that still match them all move along;

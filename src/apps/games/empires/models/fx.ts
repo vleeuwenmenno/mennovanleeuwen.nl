@@ -143,7 +143,7 @@ export class ModelFx {
     const r = rng(hash(key, 0x5a7))
     const variant = key % 8
     const pieces = breakPieces(m, 'pieces', variant)
-    const big = tier === 'station' || tier === 'mine' || tier === 'defense'
+    const big = tier === 'station' || tier === 'mine' || tier === 'defense' || tier === 'yard'
     const k = size / m.long
     const st: HullState = { ...state, scorch: 3 }
     pieces.forEach((p, i) => {

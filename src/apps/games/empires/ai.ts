@@ -1,9 +1,9 @@
-import { ABILITIES, LEVEL_UP, MAX_LEVEL, TECHS, UNIT, UPGRADES, buildable, isShip, unitOf, type FactionId, type Tech, type Tier, type UnitType } from './data.ts'
+import { ABILITIES, BUILD_RADIUS, LEVEL_UP, MAX_LEVEL, REBUILD, SURVEY_RADIUS, TECHS, UNIT, UPGRADES, buildable, builtAt, isEngineer, isShip, unitOf, yardOf, type FactionId, type Tech, type Tier, type UnitType } from './data.ts'
 import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import {
-  canRetreat, cantBuild, cantMend, cantRepair, cantResearch, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdDeploy, cmdGuard, cmdMove, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite,
-  dpsVs, fleet, foes, moduleUp, near, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
+  allQueued, building, canRetreat, cantBuild, cantMend, cantRepair, cantResearch, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite,
+  dpsVs, fleet, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
 } from './sim.ts'
 import * as M from './detmath.ts'
 import { sq } from './detmath.ts'
@@ -123,6 +123,11 @@ type Style = {
   mendAt: number
   /** How much it likes each ship class, on top of its counters (see pickShip). */
   tiers: Partial<Record<Tier, number>>
+  /** Hybrid bases: seconds after reaching station level 2 before it puts up its Frigate Yard (an
+   * offensive admiral has its engineers bought by then and places it at once), and the warships
+   * it keeps guarding the yard once it stands. */
+  yardDelay: number
+  yardGuards: number
   /** Fleet battles: an attacker pulls out below this share of the defender's strength... */
   bail: number
   /** ...and a holder goes out to meet attackers this much further from its station. */
@@ -134,19 +139,19 @@ export const PROFILES: Record<Profile, Style> = {
     name: 'Defensive',
     blurb: 'Turtles: more gun platforms and earlier station upgrades, strikes late with a big fleet, and counter-attacks as soon as your attack fails.',
     wave: 1.6, calm: 1.3, rest: 90, regroup: 0.5, outgunned: 1.2, recall: 0.35, edge: 1.5, beaconReach: 3800, hold: 1, turtle: true, platforms: 1, platPerLevel: 1, platMax: 3, levels: [130, 320, 540], levelArmy: 600, mines: 0, raiders: 0, counter: true, fortify: 3, keep: 300, mendAt: 0.5,
-    tiers: { capital: 1.25, cruiser: 1.1, frigate: 1.1, fighter: 0.8 }, bail: 0.4, sally: 0.8,
+    tiers: { capital: 1.25, cruiser: 1.1, frigate: 1.1, fighter: 0.8 }, yardDelay: 45, yardGuards: 3, bail: 0.4, sally: 0.8,
   },
   balanced: {
     name: 'Balanced',
     blurb: 'A steady mix: expands, upgrades and researches as it goes, and attacks once it has gathered a fleet.',
     wave: 1, calm: 1, rest: 45, regroup: 0.4, outgunned: 1.5, recall: 0.6, edge: 1.25, beaconReach: 4300, hold: 0.85, turtle: false, platforms: 0, platPerLevel: 1, platMax: 1, levels: [170, 400, 680], levelArmy: 900, mines: 1, raiders: 0, counter: true, fortify: 1.2, keep: 200, mendAt: 0.35,
-    tiers: {}, bail: 0.3, sally: 1,
+    tiers: {}, yardDelay: 10, yardGuards: 2, bail: 0.3, sally: 1,
   },
   offensive: {
     name: 'Offensive',
     blurb: 'Early pressure: raids your mines, attacks often and takes risks. Few platforms, later upgrades.',
     wave: 0.7, calm: 0.6, rest: 15, regroup: 0.25, outgunned: 2, recall: 1.2, edge: 0.9, beaconReach: 4800, hold: 0.6, turtle: false, platforms: 0, platPerLevel: 0.5, platMax: 1, levels: [200, 460, 800], levelArmy: 1000, mines: 1, raiders: 2, counter: false, fortify: 0.5, keep: 100, mendAt: 0.25,
-    tiers: { gunship: 1.25, fighter: 1.2, capital: 0.85 }, bail: 0.2, sally: 1.6,
+    tiers: { gunship: 1.25, fighter: 1.2, capital: 0.85 }, yardDelay: 0, yardGuards: 1, bail: 0.2, sally: 1.6,
   },
 }
 /** The profile for a stored value: anything unknown (or missing, from before profiles) is Balanced. */
@@ -194,6 +199,13 @@ export type Brain = {
   threatPeakLast: number
   /** No new scouts before this (one was just lost). */
   scoutWait: number
+  /** Hybrid bases: when it reached station level 2 (-1: not yet), and the ships guarding its yard.
+   * `engSeen`: its engineer craft at the last look; `engWait`: no new engineers before this (some
+   * were just lost). */
+  lv2: number
+  guards: number[]
+  engSeen: number
+  engWait: number
 }
 
 /** The quiet start before it attacks anything of ours: its difficulty's, stretched or shortened
@@ -209,7 +221,7 @@ const handsMax = (D: Level) => Math.max(3, D.apm / 12)
 
 export const newBrain = (o: Owner, diff: Difficulty, profile: Profile = 'balanced'): Brain => ({
   o, diff, profile, t: 2, wave: DIFFICULTY[diff].wave * PROFILES[profile].wave, attacking: false, peak: 0, scouts: new Set(), want: null, lastWave: 0, hands: handsMax(DIFFICULTY[diff]), acts: 0, alarm: -1,
-  muster: -1, home: 0, troops: [], raid: [], raidAt: -1, mending: [], focus: 0, foes: {}, threatPeak: 0, beaten: -1, threatPeakLast: 0, scoutWait: 0,
+  muster: -1, home: 0, troops: [], raid: [], raidAt: -1, mending: [], focus: 0, foes: {}, threatPeak: 0, beaten: -1, threatPeakLast: 0, scoutWait: 0, lv2: -1, guards: [], engSeen: 0, engWait: 0,
 })
 
 /** Its hands free up again with time (every tick, thinking or not). A brain saved before any of
@@ -233,6 +245,10 @@ function rest(b: Brain, dt: number) {
   b.beaten ??= -1
   b.threatPeakLast ??= 0
   b.scoutWait ??= 0
+  b.lv2 ??= -1
+  b.guards ??= []
+  b.engSeen ??= 0
+  b.engWait ??= 0
 }
 /** Take an action if its hands are free; it counts only when the command went through (a refusal,
  * which comes back as a string, costs nothing). A `spare` action (the economy) leaves one free for
@@ -249,6 +265,8 @@ const value = (us: Unit[]) => us.reduce((s, u) => s + (u.t.cost / u.t.squad) * (
 const d2 = (a: { x: number; y: number }, b: { x: number; y: number }) => sq(a.x - b.x) + sq(a.y - b.y)
 const centre = (us: Unit[]) => ({ x: us.reduce((s, u) => s + u.x, 0) / Math.max(1, us.length), y: us.reduce((s, u) => s + u.y, 0) / Math.max(1, us.length) })
 const warship = (u: Unit) => u.t.tier === 'frigate' || u.t.tier === 'cruiser' || u.t.tier === 'capital'
+/** Repair craft and engineers: they keep to their own work, out of the fighting. */
+const worker = (u: Unit) => u.t.kind === 'repair' || isEngineer(u.t)
 
 function visibleEnemies(w: World, o: Owner, x: number, y: number, r: number) {
   const out: Unit[] = []
@@ -332,10 +350,11 @@ function foeMix(w: World, b: Brain): [UnitType, number][] {
  * drawn by weight with the battle's dice. Specialists by what they're for: a repair tender once
  * there's a fleet worth mending, ion ships against shields, repair craft once unlocked.
  */
-export function pickShip(w: World, b: Brain): string | null {
+export function pickShip(w: World, b: Brain, only?: (t: UnitType) => boolean): string | null {
   const p = w.players[b.o]
   const S = PROFILES[b.profile]
   const options = buildable(p.faction).filter((t) => {
+    if (only && !only(t)) return false
     const why = cantBuild(w, b.o, t.id)
     return !why || why === 'Not enough credits'
   })
@@ -355,7 +374,8 @@ export function pickShip(w: World, b: Brain): string | null {
   const eff = new Map(options.map((t) => [t, off.get(t)! / Math.max(1e-6, risk.get(t)!)]))
   const effMax = Math.max(...eff.values()) || 1
   const army = fleet(w, b.o).filter((u) => !u.parent)
-  const count = (id: string) => army.filter((u) => u.t.id === id).length / UNIT[id].squad + p.queue.filter((q) => q.unit === id).length
+  const queued = allQueued(w, b.o)
+  const count = (id: string) => army.filter((u) => u.t.id === id).length / UNIT[id].squad + queued.filter((q) => q.unit === id).length
   const tenders = army.filter((u) => u.t.kind === 'support').length
   const menders = army.filter((u) => u.t.kind === 'repair').length / 2
   const warships = army.filter(warship).length
@@ -472,7 +492,7 @@ export function think(w: World, b: Brain, dt: number) {
   const ad = M.hypot(aim.x - st.x, aim.y - st.y) || 1
   const front = clearSpot(w, st, st.x + ((aim.x - st.x) / ad) * mapDist(560), st.y + ((aim.y - st.y) / ad) * mapDist(560))
   // (Out in the middle only while its fleet is a match for what it has seen of the enemy's.)
-  const mainNow = value(fleet(w, o).filter((u) => !u.parent && u.t.kind !== 'repair' && !b.scouts.has(u.id) && !b.raid.includes(u.id)))
+  const mainNow = value(fleet(w, o).filter((u) => !u.parent && !worker(u) && !b.scouts.has(u.id) && !b.raid.includes(u.id)))
   const seenNow = Object.values(b.foes).reduce((sum, v) => sum + v, 0)
   const homeBeacon = mainNow >= seenNow * 0.9 && mainNow >= 2000
     ? w.beacons
@@ -505,7 +525,7 @@ export function think(w: World, b: Brain, dt: number) {
   const platNext = platforms < platGoal && mines >= 2
   const savingForMine = !!ours[0] && mines < mineGoal && !(platNext && ours.length === 1)
   // What is attacking our station, mines or platforms right now (as far as we can see).
-  const assets = w.units.filter((u) => u.owner === o && (u.t.tier === 'station' || u.t.tier === 'mine' || u.t.tier === 'defense'))
+  const assets = w.units.filter((u) => u.owner === o && (u.t.tier === 'station' || u.t.tier === 'mine' || u.t.tier === 'defense' || u.t.tier === 'yard'))
   let threat: Unit | undefined
   let threatValue = 0
   let hit: Unit | undefined
@@ -580,7 +600,7 @@ export function think(w: World, b: Brain, dt: number) {
   }
   // Badly damaged structures get a repair crew when there's money to spare.
   for (const u of w.units) {
-    if (u.owner !== o || u.dead || (u.t.tier !== 'station' && u.t.tier !== 'mine' && u.t.tier !== 'defense')) continue
+    if (u.owner !== o || u.dead || (u.t.tier !== 'station' && u.t.tier !== 'mine' && u.t.tier !== 'defense' && u.t.tier !== 'yard')) continue
     if (savingNow && !(u.t.tier === 'station' && u.hull < u.hullMax * 0.5)) continue
     if (u.hull < u.hullMax * 0.6 || u.hps.some((h) => h.hp <= 0)) if (!cantRepair(w, o, u) && p.credits > 900) act(b, () => cmdRepair(w, o, u.id), true)
   }
@@ -589,14 +609,23 @@ export function think(w: World, b: Brain, dt: number) {
 
   // Research with a purpose, one at a time (the station's level shares the queue), once the yard
   // is busy (or it's saving up for a ship), keeping some credits in hand.
-  if (D.research && !saving && p.research.length === 0 && p.queue.length >= 1 && w.time > 90) {
+  // Hybrid bases: the Frigate Yard, its engineers and guards (yardSaving: it is saving up for it).
+  const yardSaving = w.hybrid ? planYard(w, b, D, S, st, enemySt, army) && !(threatValue > armyValue * 0.8) : false
+  const yards = w.units.filter((u) => !u.dead && u.owner === o && u.t.tier === 'yard' && !building(u)).length
+  const queued = allQueued(w, o).length
+
+  if (D.research && !saving && p.research.length === 0 && queued >= 1 && w.time > 90) {
     const tech = pickTech(w, b, mines)
     const capitalSaved = !!b.want && UNIT[b.want].tier === 'capital'
     if (tech && p.credits >= tech.cost + S.keep + (capitalSaved ? 800 : 0) && !cantResearch(w, o, tech.id)) act(b, () => cmdResearch(w, o, tech.id), true)
   }
 
   // Keep two orders in the yard, saving up for the one we picked rather than buying whatever's cheap.
-  if (p.queue.length < (savingForMine || lean ? 1 : 2) && !saving && !(savingForMine && p.credits < 500)) {
+  // A yard standing idle is saved up for first: its next ship is one of its own (frigates, corvettes).
+  const idleYard = w.units.some((u) => !u.dead && u.owner === o && u.t.tier === 'yard' && !!u.yq && !u.yq.length && !building(u))
+  if (idleYard && !saving && !yardSaving && !(b.want && builtAt(UNIT[b.want]) === 'yard')) b.want = pickShip(w, b, (t) => builtAt(t) === 'yard') ?? b.want
+  // (A yard is one more to keep busy.)
+  if (queued < (savingForMine || lean ? 1 : 2) + yards && !saving && !yardSaving && !(savingForMine && p.credits < 500)) {
     if (b.want && cantBuild(w, o, b.want) && cantBuild(w, o, b.want) !== 'Not enough credits') b.want = null
     b.want ??= pickShip(w, b)
     const want = b.want
@@ -647,7 +676,8 @@ export function think(w: World, b: Brain, dt: number) {
   if (b.scouts.size < scoutsBefore && w.time > 60) b.scoutWait = w.time + 45
   b.raid = b.raid.filter((id) => w.byId.get(id) && !mendingIds.has(id))
   const raiders = new Set(b.raid)
-  const main = army.filter((u) => !b.scouts.has(u.id) && !raiders.has(u.id) && !mendingIds.has(u.id) && u.t.kind !== 'repair')
+  const guards = new Set(b.guards)
+  const main = army.filter((u) => !b.scouts.has(u.id) && !raiders.has(u.id) && !mendingIds.has(u.id) && !guards.has(u.id) && !worker(u))
   const mainValue = value(main)
   if (threat && w.time - b.alarm >= D.react) {
     // A wave out while something big hits home: called back, the more readily the more defensive.
@@ -658,7 +688,7 @@ export function think(w: World, b: Brain, dt: number) {
     }
     if (!b.attacking) {
       const at = threat
-      const home = army.filter((u) => u.t.kind !== 'repair' && !raiders.has(u.id) && d2(u, st) < sq(mapDist(3200)))
+      const home = army.filter((u) => !worker(u) && !raiders.has(u.id) && !guards.has(u.id) && d2(u, st) < sq(mapDist(3200)))
       // It fights for an outlying mine or platform only when it can win there (with the guns of
       // its own structures nearby); against more, it pulls the fleet in under the station's guns
       // and waits for them there. An attack on the station itself is always met.
@@ -695,12 +725,12 @@ export function think(w: World, b: Brain, dt: number) {
 
   // Scouts: a couple of fast ships keep the beacons ours.
   if (!b.attacking && b.scouts.size < 2 && w.time >= b.scoutWait) {
-    const spare = army.find((u) => (u.t.tier === 'gunship' || u.t.tier === 'frigate') && !b.scouts.has(u.id) && !raiders.has(u.id) && !mendingIds.has(u.id))
+    const spare = army.find((u) => (u.t.tier === 'gunship' || u.t.tier === 'frigate') && !b.scouts.has(u.id) && !raiders.has(u.id) && !mendingIds.has(u.id) && !guards.has(u.id))
     if (spare) b.scouts.add(spare.id)
   }
   // Early on, before there are spare warships, the starting fighters do the surveying.
   if (!b.attacking && b.scouts.size < 2 && w.time < 240 && w.time >= b.scoutWait) {
-    const f = army.find((u) => u.t.tier === 'fighter' && u.t.kind !== 'repair' && !b.scouts.has(u.id) && !raiders.has(u.id))
+    const f = army.find((u) => u.t.tier === 'fighter' && !worker(u) && !b.scouts.has(u.id) && !raiders.has(u.id))
     if (f) for (const id of army.filter((u) => u.squad && u.squad === f.squad).map((u) => u.id)) b.scouts.add(id)
   }
   // They pick beacons they can hold, and come home from fights they'd lose.
@@ -754,8 +784,8 @@ function raid(w: World, b: Brain, army: Unit[], st: Unit, enemySt: Unit, n: numb
   const o = b.o
   const p = w.players[o]
   if (b.raid.length < n) {
-    const taken = new Set([...b.raid, ...b.scouts, ...b.mending, ...b.troops])
-    const spare = army.find((u) => (u.t.tier === 'gunship' || (u.t.tier === 'fighter' && u.t.kind !== 'repair')) && u.t.kind !== 'support' && !taken.has(u.id))
+    const taken = new Set([...b.raid, ...b.scouts, ...b.mending, ...b.troops, ...b.guards])
+    const spare = army.find((u) => (u.t.tier === 'gunship' || (u.t.tier === 'fighter' && !worker(u))) && u.t.kind !== 'support' && !taken.has(u.id))
     if (spare) for (const u of army.filter((x) => x === spare || (spare.squad && x.squad === spare.squad))) b.raid.push(u.id)
   }
   const crew = b.raid.map((id) => w.byId.get(id)!).filter(Boolean)
@@ -879,7 +909,8 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
   // short of the wave. With nothing it can take, the nearest anyway.
   const from = push ?? c
   const targets = [
-    ...w.units.filter((u) => foes(w, u.owner, o) && (u.t.tier === 'mine' || u.t.tier === 'defense') && sees(w, o, u)),
+    // Yards count as targets too: raiding the enemy's production is worth a wave.
+    ...w.units.filter((u) => foes(w, u.owner, o) && (u.t.tier === 'mine' || u.t.tier === 'defense' || u.t.tier === 'yard') && sees(w, o, u)),
     ...w.beacons.filter((bc) => bc.owner !== team),
   ].sort((a, z) => d2(a, from) - d2(z, from))
   const takeable = (g: { x: number; y: number }) => forceAt(w, o, g.x, g.y, rangeDist(1100)) < troopValue * 0.8
@@ -979,6 +1010,99 @@ function mend(w: World, b: Brain, army: Unit[], st: Unit) {
     }
     if (!(lead.order.k === 'guard' && lead.order.id === ward.id)) act(b, () => cmdGuard(w, o, ids, ward.id), true)
   }
+}
+
+/**
+ * Hybrid bases: the Frigate Yard. Once its profile says it's time (some seconds after station level
+ * 2; an offensive admiral buys its engineers while the upgrade is still under way), it buys an
+ * engineer squadron if it has none, saves up and puts the yard on the safe side of its station
+ * (see yardSpot), or rebuilds it on its ruin. Once the yard stands it keeps a few warships guarding
+ * it and its rally point on the station's. Answers whether it is saving up for the yard or its
+ * engineers, so the ship purchases wait.
+ */
+function planYard(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit | undefined, army: Unit[]): boolean {
+  const o = b.o
+  const p = w.players[o]
+  const yt = yardOf(p.faction)
+  if (p.level >= 2 && b.lv2 < 0) b.lv2 = w.time
+  const mine = w.units.find((u) => !u.dead && u.owner === o && u.t.id === yt.id)
+  const engineers = army.filter((u) => isEngineer(u.t))
+  const eng = UNIT[`${p.faction === 'republic' ? 'r' : 'd'}-engineer`]
+  // Engineers lost: a minute before it sends more the same way.
+  if (engineers.length < b.engSeen) b.engWait = w.time + 60
+  b.engSeen = engineers.length
+  // With nothing to build they wait behind the station, away from the fighting (new ones head for
+  // the rally point out in front, like every ship).
+  const away = enemySt ? M.atan2(st.y - enemySt.y, st.x - enemySt.x) : M.atan2(st.y - w.h / 2, st.x - w.w / 2)
+  const haven = { x: Math.min(w.w - 150, Math.max(150, st.x + M.cos(away) * (radius(st.t) + 260))), y: Math.min(w.h - 150, Math.max(150, st.y + M.sin(away) * (radius(st.t) + 260))) }
+  const loose = engineers.filter((u) => (u.order.k === 'idle' || (u.order.k === 'move' && d2(u.order, p.rally) < sq(400))) && d2(u, haven) > sq(450))
+  if (loose.length) act(b, () => cmdMove(w, o, loose.map((u) => u.id), haven.x, haven.y), true)
+  /** No engineers: buy a squadron (answers whether it is saving up for one). Not while its base is
+   * under attack, nor just after losing the last ones. */
+  const hire = () => {
+    if (p.queue.some((q) => q.unit === eng.id) || w.time < b.engWait || b.alarm >= 0) return false
+    if (p.credits >= eng.cost) act(b, () => cmdBuild(w, o, eng.id), true)
+    return true
+  }
+  if (mine && building(mine)) {
+    // A site: at least one squadron on it (new ones, if the last were lost).
+    if (!engineers.length) return hire()
+    if (!engineers.some((u) => u.order.k === 'construct' && u.order.id === mine.id)) act(b, () => cmdConstruct(w, o, engineers.map((u) => u.id), mine.id))
+    return false
+  }
+  if (mine) {
+    // Its ships gather where the station's do, and a few warships stand guard over it.
+    if (mine.yr && sq(mine.yr.x - p.rally.x) + sq(mine.yr.y - p.rally.y) > sq(60)) act(b, () => cmdRally(w, o, p.rally.x, p.rally.y, mine.id), true)
+    b.guards = b.guards.filter((id) => {
+      const u = w.byId.get(id)
+      return !!u && !u.dead && u.owner === o
+    })
+    for (const id of b.guards) {
+      const u = w.byId.get(id)!
+      if (u.order.k === 'idle' && d2(u, mine) > sq(radius(mine.t) + 600)) act(b, () => cmdGuard(w, o, [u.id], mine.id))
+    }
+    if (b.guards.length < S.yardGuards) {
+      const taken = new Set([...b.guards, ...b.scouts, ...b.raid, ...b.troops, ...b.mending])
+      const pick = army
+        .filter((u) => (u.t.tier === 'gunship' || u.t.tier === 'frigate') && u.t.kind !== 'support' && !taken.has(u.id) && u.retreat <= 0)
+        .sort((a, z) => d2(a, mine) - d2(z, mine) || a.id - z.id)[0]
+      if (pick && act(b, () => cmdGuard(w, o, [pick.id], mine.id))) b.guards.push(pick.id)
+    }
+    return false
+  }
+  b.guards = []
+  const leveling = p.research.some((r) => r.id === LEVEL_UP)
+  const due = p.level >= 2 ? w.time >= b.lv2 + S.yardDelay * D.pace : S.yardDelay === 0 && leveling
+  if (!due) return false
+  if (!engineers.length) return hire()
+  if (p.level < 2) return false
+  const ruin = (w.ruins ?? []).find((r) => r.owner === o && r.unit === yt.id)
+  const cost = ruin ? Math.round(yt.cost * REBUILD) : yt.cost
+  if (p.credits < cost) return true
+  const spot = ruin && !placement(w, o, yt.id, ruin.x, ruin.y).why ? ruin : yardSpot(w, o, st, enemySt, yt.id)
+  if (spot) act(b, () => cmdPlace(w, o, engineers.map((u) => u.id), yt.id, spot.x, spot.y), true)
+  return false
+}
+
+/**
+ * Where an admiral puts a yard: inside the build radius on the side of its station away from the
+ * nearest enemy station (or from the middle of the map), as near the station as it fits, keeping
+ * clear of the survey rings round ore so its mines can still go up; failing that, anywhere it fits.
+ */
+function yardSpot(w: World, o: Owner, st: Unit, enemySt: Unit | undefined, id: string): { x: number; y: number } | null {
+  const away = enemySt ? M.atan2(st.y - enemySt.y, st.x - enemySt.x) : M.atan2(st.y - w.h / 2, st.x - w.w / 2)
+  const r = radius(UNIT[id])
+  const r0 = radius(st.t) + r + 220
+  for (const strict of [true, false])
+    for (let d = r0; d <= BUILD_RADIUS - 40; d += 220)
+      for (const off of [0, 0.45, -0.45, 0.9, -0.9, 1.35, -1.35, 1.8, -1.8, 2.3, -2.3, 2.8, -2.8]) {
+        const x = st.x + M.cos(away + off) * d
+        const y = st.y + M.sin(away + off) * d
+        if (placement(w, o, id, x, y).why) continue
+        if (strict && w.nodes.some((n) => d2(n, { x, y }) < sq(SURVEY_RADIUS + r))) continue
+        return { x, y }
+      }
+  return null
 }
 
 /** The defense platform to build against what the enemy has been flying: flak against a swarm
