@@ -78,6 +78,9 @@ the old one in its trash), keep both (the newcomer gets a number, `notes 2.txt`)
 Ctrl+Z on the desktop or in Files puts back what the last drag moved. Files from the computer
 upload where they are dropped, and in Chrome a file dragged out of Files to the computer is
 saved there. Launchers and apps dropped into a folder become `.desktop` files in it.
+The Agents composer takes files from the computer, Files and the desktop as attachments (a
+launcher is typed in as its address; a folder is turned away with a note, since there is nothing in
+it to read), and the Terminal pastes the paths of files and folders onto the line (below).
 
 For an app that wants drops (attachments, say), the contract is one hook on an element:
 
@@ -138,7 +141,19 @@ Minecraft server status for cloud.mvl.sh (mcstatus.io).
 Commands live in [`src/terminal/commands.ts`](src/terminal/commands.ts). The filesystem is
 read-only and in memory; only `/tmp` accepts writes (`echo hi > /tmp/x`), and those vanish on
 reload. Pipes, `;`, `&&`, `$VARS`, tab completion and history all work. `ps` and `kill` operate
-on the open windows.
+on the open windows. `open <name>` starts an app (`photos`, `mail`, `contacts`, `tasks`, `calendar`,
+`files`, `agents`… and `open` alone lists them); a word with a slash or a dot, or the name of a file
+or folder right there, is a path and opens that instead. `photos`, `mail`, `contacts` and `tasks`
+are commands of their own too. `ls` takes several paths, like GNU ls: files first, then each folder
+under a `name:` heading.
+
+Files and folders dragged onto the terminal paste their paths, quoted for msh and separated by
+spaces, onto the line, like real terminals do (Seafile's as `ls` shows them, through the mounts in
+`/etc/fstab`). Files from the computer have no path, so the terminal asks to upload them into the
+working folder (Seafile or this browser's) first, then pastes the new paths. With a full-screen
+program attached (`ctx.attachStream`), the paths go to the program as a bracketed paste instead.
+The quoting is in [`src/terminal/words.ts`](src/terminal/words.ts); `pnpm check:terminal-cmds`
+tests it and the commands above.
 
 Real tools live in [`src/terminal/extra.ts`](src/terminal/extra.ts) and run from the visitor's
 browser: `curl`/`wget` (any site that allows cross-origin requests, e.g. `curl wttr.in/Amsterdam`,
@@ -802,7 +817,7 @@ with citations), on any of Ollama's cloud models that can call tools. Turns run 
 stream to the window, with the model's thinking folded under each reply; Stop ends one. The
 composer holds the mode, the model, which tools the thread may use, a context-window ring (tap it
 for what fills the window) and attachments: text files, PDFs (their text, read in the browser with
-pdf.js) and pictures, from Seafile, this computer, a drop or a paste. Its tools: web search
+pdf.js) and pictures, from Seafile, this computer, a drop (from the computer, Files or the desktop) or a paste. Its tools: web search
 (Ollama's own by default; Settings → Agents → Web search switches it to SearXNG, Brave Search, Kagi,
 Tavily or any JSON search API described by a URL template, headers and result paths, with keys
 stored encrypted, see [`server/websearch.ts`](server/websearch.ts)) and Ollama's web fetch, your notes, your calendars (below), your code hosts, Seafile (list, search by name, read), Seafile
@@ -1417,6 +1432,28 @@ nearer in. Spots are handed out in the order the ships stand round the target an
 the group changes or every 4 seconds. Warships keep a small gap between hulls instead of
 overlapping. Strike craft keep their strafing runs and dogfights.
 
+**Holding a heading.** A warship that has reached its firing spot **settles** there (`Unit.settled`,
+`closeIn` and `arrive` in sim.ts): it swings round on the spot only until every gun that counts
+bears on its target (coming in nose first, that's at once), then keeps its heading while the
+turrets do the turning. A new target, or one shifting about round it, changes nothing as long as
+any gun that counts can bear on it (`bearing`: in reach from its hardpoint, inside its arc for a
+gun fixed to the hull); a fighter darting out of reach is left to come back. The hull only turns
+to bring a gun to bear when none can, to keep a gun fixed to the nose (a gunship's missiles) on
+target, or to move somewhere new, and setting off from its spot unsettles it. The way in and the
+way out are far apart (it settles once every gun reaches, and only leaves once none does), so it
+doesn't jiggle round the stopping point. Holding ships (the Hold stance) work the same way. The
+battle's turrets turn all the way round at once, so the hull never has to help them; only the
+strike craft's and gunships' hull guns have arcs (lasers ±20°, missiles ±34°, torpedoes ±23°).
+
+**Who pushes whom.** Hulls pressing into each other are pushed apart by class (`PUSH_CLASS`,
+`pushClass` in sim.ts): strike craft 0, gunships and corvettes 1, frigates 2, cruisers 3,
+flagships 4, structures never move. The smaller of two ships takes the whole push and never moves
+the bigger one; what of its own way heads into the bigger hull turns into a slide round it, on the
+side it's already on, so it steers round. A bigger ship coming through moves the smaller ones aside
+out of its path, smoothly, a little each tick. Ships of the same class share the push as before.
+A unit's own `pushClass` overrides its class's: the hook for a later ability that lets a ship
+shove bigger hulls. Tractor lock only slows ships, so it doesn't touch this.
+
 ```sh
 pnpm check:empires-spacing   # the arc, the stopping distances, following a target that moves, determinism
 ```
@@ -1438,10 +1475,69 @@ The AI plays like a person with limited hands, more limited the easier it is:
   two of a ship or two to take unclaimed planets nearby. It misjudges your strength by up to 40%
   (very easy) or 10% (hard) and now and then picks worse. Both sides start on the same income and
   fleet; only the AI's income multiplier differs (0.55, 0.7, 1 and 1.15). It plays under the fog of
-  war like the player (see above): what it can't see it doesn't know.
+  war like the player (see above): what it can't see it doesn't know. Each AI empire also has a
+  profile (see below), picked from the galaxy's seed (`galaxyProfile`, the same on every load, so
+  older saves get one too): a defensive one wants to be 15% stronger than a planet's defence before
+  it attacks, gathers 30% more first and leaves you alone 30% longer; an offensive one 12% less, 20%
+  less and 30% sooner (`GALAXY_STYLE`). Its fleet battles are fought with the same profile.
 - **Battles** ([`ai.ts`](src/apps/games/empires/ai.ts)): at most 25, 35, 60 or 100 actions a
   minute (a move for a group of ships is one), and it notices an attack on its base 6 to 1 seconds
   late. It runs on the battle's own clock and dice, so multiplayer copies stay in step.
+
+**Battle AI profiles.** Next to its difficulty, every AI seat has a style: **Defensive**,
+**Balanced** (the default) or **Offensive** (`PROFILES` in ai.ts). It's picked in the skirmish
+setup (remembered with the other setup fields) and by the host for AI seats in the multiplayer
+lobby, and it's part of the match config (`MatchSeat.profile`), so every copy of a battle and the
+server referee run the same admirals. Setups, matches and saved battles from before profiles play
+Balanced. Every profile plays the same game, with a purpose:
+- **Economy:** it claims and mines the ore on its half first, and once that's all built on reaches
+  for the ore in the middle; it deepens its drills and shields its platforms when it's flush.
+- **Station:** it goes up a level on its profile's timetable, once it has a fleet worth the
+  investment, and saves for it in the last 45 seconds or so rather than stalling the yard for
+  minutes.
+- **Research** (`pickTech`): the station's refinery once mines pay for it, the repair dock once it
+  flies cruisers or flagships, the station's guns (more the more defensive, and while its base is
+  attacked), the repair craft once it has warships, and upgrades for the ships it flies most by the
+  credits of them, range, armour and shields first. Nothing but the refinery at level 1.
+- **Ships** (`pickShip`): every ship it could build is weighed by how well it does against the
+  enemy fleet it has seen (the damage it deals to that mix per credit, times how long it lasts
+  under that mix's fire, from the same tables the guns use; it remembers what it saw, fading over
+  a couple of minutes), by how far up the classes it is (frigates, then cruisers, then a flagship
+  once its fleet is worth a flagship), and by its profile's taste. Ion frigates only against
+  shields, a repair tender for a big fleet, repair craft for its warships.
+- **Fighting:** its fleet waits on the nearest beacon in the middle while it's a match for what it
+  has seen of the enemy (holding it), else in front of the station. A wave goes out once it's big
+  enough and bigger than the enemy fleet it has seen, gathers at the rally point first and goes out
+  together; ships built meanwhile follow in batches. It picks goals it can take (mines, platforms,
+  beacons, the station, counting the guns of stations and platforms there), fires its warships on
+  one target at a time (`focusFire`: kept till it's dead; heavy guns at the shield generators), uses
+  its abilities, and turns back once it has lost too much or meets a much bigger force. Cruisers and
+  flagships badly hurt go home to the repair dock or the repair craft and rejoin once whole. It
+  defends an outlying mine only when it can win there; against more it waits under the station's
+  guns.
+
+| | Defensive | Balanced | Offensive |
+| --- | --- | --- | --- |
+| First wave at (fleet value, × difficulty's) | 1.6 | 1 | 0.7 |
+| Fleet must be this much bigger than the enemy's it has seen | 1.5× | 1.25× | 0.9× |
+| Quiet start (× difficulty's; medium 150 s) | 1.3 (195 s) | 1 (150 s) | 0.6 (90 s; easy levels keep theirs) |
+| Rest between waves | 90 s | 45 s | 15 s |
+| Wave turns back below / against | 50% / 1.2× | 40% / 1.5× | 25% / 2× |
+| Calls a wave home when the base is hit by | 35% of it | 60% | 120% |
+| Fights for an outlying mine with | 1× the attackers | 0.85× | 0.6× |
+| Station level 2 / 3 / 4 due at | 130 / 320 / 540 s | 170 / 400 / 680 s | 200 / 460 / 800 s |
+| Fleet value per station level before upgrading | 600 | 900 | 1000 |
+| Gun platforms (level 1-2 / 3 / 4) | 1 / 2 / 3 | 0 / 1 / 1 | 0 / 0 / 1 |
+| Mines on top of its difficulty's (+1 from level 3) | 0 | +1 | +1 |
+| Raiders after your mines | none | none | 2 ships, from 4 min |
+| Counter-attacks | when your attack fails, or the fleet it has seen of yours is small | when your attack fails | no |
+| Heavy ships go home to mend below | 50% hull | 35% | 25% |
+| Fleet battles: pulls out below / meets attackers at | 40% / 0.8× | 30% / 1× | 20% / 1.6× |
+
+How it fares, headless (Big ship sizes, medium, Kessar Belt and Cinder Gate × 5 seeds, both
+sides): these admirals beat the earlier one in 51 of 60 battles (Defensive 17, Balanced 18,
+Offensive 16 of 20), where the earlier one against itself wins 5 of 6 for the Republic side. Head to
+head, Balanced and Offensive edge out Defensive (22-14, 20-16, 12-24 over 36 battles each).
 
 ```sh
 pnpm check:empires-galaxy [weeks] [runs] [turtle|expand]  # campaigns vs a scripted player: orders a minute, fleets, wandering, the fleet cap, the difficulty ranking, the fog of war
@@ -1677,7 +1773,7 @@ right now, the name screen says so, with the name filled in to try again. *Chang
 multiplayer header renames you at once; the game's Settings (and Settings → Apps → Empires At War)
 show the remembered name, to change it for next time or *Forget* it, so the next visit asks. A
 host sets up a battle (map, rules, starting
-credits, and each spawn as open, AI or closed); players join from the list, pick their spawn,
+credits, and each spawn as open, AI (with its difficulty and style) or closed); players join from the list, pick their spawn,
 faction and side, chat, and say they're ready.
 
 Battles run in deterministic lockstep: every player's browser runs the whole battle, and only

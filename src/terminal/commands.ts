@@ -34,6 +34,7 @@ import { tarCommands } from './tar'
 import { unzipCommands } from './unzip'
 import { MEDIA_APP } from '../data/media'
 import { runLine, setShellHooks } from './msh/interp'
+import { meansPath, shellQuote } from './words'
 import { MSH_MAN } from '../data/mshReference'
 
 export { runLine, type RunResult } from './msh/interp'
@@ -65,6 +66,18 @@ type Command = {
   complete?: (args: string[], word: string) => Completion[]
 }
 
+/** Whether `open <word>` means a file or folder rather than the app of that name. */
+const pathMeant = (word: string, cwd: string) => meansPath(word, !!lookup(resolvePath(cwd, word)))
+
+/** An app's own command (`photos`): opens it, unless it does not exist here (the CV site). */
+function openHere(ctx: Ctx, name: string) {
+  if (!APPS[name]) throw new CmdError(`${name}: there is no ${name} app here`)
+  ctx.openApp(APPS[name])
+}
+
+/** Whether a word is an app's name and nothing else (what `open` would start): prepare() leaves it alone. */
+export const isAppName = (word: string, cwd: string) => !!APPS[word] && !pathMeant(word, cwd)
+
 const APPS: Record<string, AppId> = {
   terminal: 'terminal',
   files: 'files',
@@ -82,7 +95,13 @@ const APPS: Record<string, AppId> = {
   resume: 'cv',
   about: 'cv',
   contact: 'contact',
-  mail: 'contact',
+  mail: 'mail',
+  email: 'mail',
+  contacts: 'contacts',
+  addressbook: 'contacts',
+  tasks: 'tasks',
+  todo: 'tasks',
+  calendar: 'calendar',
   games: 'games',
   arcade: 'games',
   zed: 'zed',
@@ -98,7 +117,6 @@ const APPS: Record<string, AppId> = {
   trash: 'trash',
   notebook: 'notebook',
   agents: 'agents',
-  contacts: 'contacts',
   settings: 'settings',
   mcserver: 'mcserver',
 }
@@ -124,7 +142,7 @@ const APP_NAMES: Record<AppId, string> = {
   projects: 'files',
   recents: 'activity',
   cv: 'cv-viewer',
-  contact: 'mail',
+  contact: 'contact',
   games: 'arcade',
   zed: 'zed',
   trash: 'trash',
@@ -303,7 +321,7 @@ function cowsay(text: string) {
 const KIND_ICON: Record<string, string> = { push: '↑', pr: '⇄', merge: '⑂', issue: '◎', release: '★', create: '+', star: '☆', comment: '…', fork: '⑂' }
 
 /** Quotes one argument for a command line run through the shell again (sudo, find -exec). */
-export const shellQuote = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
+export { shellQuote }
 
 /** mv and cp: one source onto a name, or several into a folder. */
 async function moveOrCopy(ctx: Ctx, op: 'move' | 'copy') {
@@ -333,6 +351,7 @@ export const commands: Record<string, Command> = {
     run: () => {
       const groups: [string, string[]][] = [
         ['Explore', ['ls', 'cd', 'pwd', 'cat', 'tree', 'find', 'fd', 'open', 'go', 'files', 'visited']],
+        ['Apps', ['photos', 'mail', 'contacts', 'tasks', 'games']],
         ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'git', 'heatmap', 'stars', 'contact']],
         ['Files', ['nano', 'touch', 'mkdir', 'cp', 'mv', 'rm', 'tee', 'unzip', 'tar', 'mount', 'umount', 'findmnt', 'lsblk', 'fscrypt']],
         ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
@@ -364,27 +383,51 @@ export const commands: Record<string, Command> = {
   },
   ls: {
     desc: 'list directory contents',
-    usage: 'ls [-a] [-l] [path]',
+    usage: 'ls [-a] [-l] [path...]',
     run: (ctx) => {
       const f = flags(ctx.args)
-      const target = f.rest[0] ?? '.'
-      const abs = resolvePath(ctx.cwd, target)
-      const node = lookup(abs)
-      if (!node) throw new CmdError(`ls: cannot access '${target}': No such file or directory`)
-      if (node.type === 'file') return ctx.tty ? colorName(node) : node.name
-      const kids = [...node.children.values()].filter((n) => f.has('a') || !n.name.startsWith('.')).sort((a, b) => a.name.localeCompare(b.name, 'en'))
-      // Into a pipe: bare names, one per line (ls | wc -l). On the screen: columns.
-      if (!f.has('l')) return ctx.tty ? lsColumns(kids, ctx.size.cols) : kids.map((k) => k.name).join('\n')
-      return kids
-        .map((k) => {
-          const size = k.type === 'file' ? (k.size ?? k.content().length) : 4096
-          const rw = (k.sf && !k.ro) || abs === '/tmp'
-          const perm = k.type === 'dir' ? (rw ? 'drwxr-xr-x' : 'dr-xr-xr-x') : k.exec ? '-r-xr-xr-x' : rw ? '-rw-r--r--' : '-r--r--r--'
-          const kAbs = `${abs === '/' ? '' : abs}/${k.name}`
-          const owner = k.sf || kAbs.startsWith(`${HOME}/`) || kAbs.startsWith('/srv/site/') || kAbs.startsWith('/tmp/') ? HANDLE : 'root'
-          return `${perm}  ${owner.padEnd(Math.max(HANDLE.length, 4))}  ${String(size).padStart(6)}  ${colorName(k)}`
-        })
-        .join('\n')
+      // One entry per line in a pipe (ls | wc -l), columns on the screen, or the long listing.
+      const render = (rows: { node: Node; abs: string }[]) => {
+        if (!f.has('l')) return ctx.tty ? lsColumns(rows.map((r) => r.node), ctx.size.cols) : rows.map((r) => r.node.name).join('\n')
+        return rows
+          .map(({ node: k, abs: kAbs }) => {
+            const size = k.type === 'file' ? (k.size ?? k.content().length) : 4096
+            const rw = (k.sf && !k.ro) || kAbs.startsWith('/tmp/')
+            const perm = k.type === 'dir' ? (rw ? 'drwxr-xr-x' : 'dr-xr-xr-x') : k.exec ? '-r-xr-xr-x' : rw ? '-rw-r--r--' : '-r--r--r--'
+            const owner = k.sf || kAbs.startsWith(`${HOME}/`) || kAbs.startsWith('/srv/site/') || kAbs.startsWith('/tmp/') ? HANDLE : 'root'
+            return `${perm}  ${owner.padEnd(Math.max(HANDLE.length, 4))}  ${String(size).padStart(6)}  ${colorName(k)}`
+          })
+          .join('\n')
+      }
+      const inside = (node: DirNode, abs: string) =>
+        render(
+          [...node.children.values()]
+            .filter((n) => f.has('a') || !n.name.startsWith('.'))
+            .sort((a, b) => a.name.localeCompare(b.name, 'en'))
+            .map((n) => ({ node: n, abs: `${abs === '/' ? '' : abs}/${n.name}` })),
+        )
+      const missing: string[] = []
+      const targets = (f.rest.length ? f.rest : ['.']).flatMap((t) => {
+        const abs = resolvePath(ctx.cwd, t)
+        const node = lookup(abs)
+        if (node) return [{ t, abs, node }]
+        missing.push(`ls: cannot access '${t}': No such file or directory`)
+        return []
+      })
+      // Like GNU ls: files named on the line first, then each folder under its own `name:` heading.
+      const files = targets.filter((x) => x.node.type === 'file')
+      const dirs = targets.filter((x): x is typeof x & { node: DirNode } => x.node.type === 'dir')
+      if (files.length === 1 && !dirs.length && !missing.length) return ctx.tty ? colorName(files[0].node) : files[0].node.name
+      const blocks: string[] = []
+      if (files.length) blocks.push(render(files.map((x) => ({ node: x.node, abs: x.abs }))))
+      for (const d of dirs) {
+        const body = inside(d.node, d.abs)
+        blocks.push(targets.length + missing.length > 1 ? (body ? `${d.t}:\n${body}` : `${d.t}:`) : body)
+      }
+      const listing = blocks.join('\n\n')
+      // What could be listed still is; the others are said, and the command fails, like GNU ls.
+      if (missing.length) throw new CmdError([...missing.map((m) => c('red', m)), ...(listing ? [listing] : [])].join('\n'), true)
+      return listing
     },
   },
   ll: { desc: 'alias for ls -la', hidden: true, run: (ctx) => commands.ls.run({ ...ctx, args: ['-la', ...ctx.args] }) },
@@ -758,7 +801,9 @@ export const commands: Record<string, Command> = {
         openLink(target)
         return `Opening ${link(target)}`
       }
-      if (APPS[target]) {
+      // An app's name wins, unless a path is clearly meant: one with a slash or a dot, or a file or
+      // folder of that name right here.
+      if (APPS[target] && !pathMeant(target, ctx.cwd)) {
         ctx.openApp(APPS[target])
         return
       }
@@ -1139,6 +1184,10 @@ export const commands: Record<string, Command> = {
       else ctx.openNewApp('files', { path: abs.split('/').slice(0, -1).join('/') || '/', select: abs })
     },
   },
+  photos: { desc: 'open the Photos app', run: (ctx) => openHere(ctx, 'photos') },
+  mail: { desc: 'open the Mail app', run: (ctx) => openHere(ctx, 'mail') },
+  contacts: { desc: 'open the Contacts app', run: (ctx) => openHere(ctx, 'contacts') },
+  tasks: { desc: 'open the Tasks app', run: (ctx) => openHere(ctx, 'tasks') },
   nautilus: { desc: 'alias for files', hidden: true, run: (ctx) => commands.files.run(ctx) },
   calc: {
     desc: 'calculator with units and currencies',
@@ -1379,7 +1428,7 @@ export function writeTmp(cwd: string, target: string, content: string, append: b
 // ---------------------------------------------------------------------------
 // The shell itself lives in msh/: it finds commands here.
 
-setShellHooks({ commands, executable: (name, cwd) => executable(name, cwd), manPage, asksHelp, suggest, strip })
+setShellHooks({ commands, executable: (name, cwd) => executable(name, cwd), manPage, asksHelp, suggest, strip, isAppName })
 
 /** Games run from the terminal; on the text console there is no display, so one gets started. */
 function launchGame(ctx: Ctx, game?: string) {

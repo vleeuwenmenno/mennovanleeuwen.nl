@@ -5,6 +5,11 @@ import { browserMountPoint, useMounts } from '../data/mounts'
 import { HANDLE } from '../os/identity'
 import { linkAt, linkMenu, openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { notify } from '../os/notify'
+import { ask } from '../os/Dialogs'
+import { useDropTarget, type Drag } from '../os/dnd'
+import { posixPath } from '../data/launchers'
+import { whereIs } from '../data/mounts'
+import { uploadFiles } from '../data/uploads'
 import { setAccent } from '../os/theme'
 import { useIsMobile } from '../os/useIsMobile'
 import { useMediaQuery } from '../os/useMediaQuery'
@@ -12,6 +17,7 @@ import { useWM, type WinState } from '../os/wm'
 import { complete, completions, escapeArg, fastfetch, runLine, WORD_RE, type Completion } from '../terminal/commands'
 import { ExtraKeys, useStickyMods, type ModKeys } from '../terminal/ExtraKeys'
 import { prepareFolder } from '../terminal/fs'
+import { quotePaths } from '../terminal/words'
 import { useTerminalPrefs } from '../terminal/prefs'
 import { SlTrain } from '../terminal/SlTrain'
 import { TerminalSettings } from '../terminal/TerminalSettings'
@@ -910,6 +916,71 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
       el?.setSelectionRange(start + flat.length, start + flat.length)
       syncCaret()
     })
+  }
+
+  // Files and folders dropped on the terminal paste their paths, quoted, like on a real one. Those
+  // from the computer have no path here: they upload into the working folder first, if asked.
+  useDropTarget(
+    scrollRef,
+    {
+      accept: (d) => (readOnly ? null : d.os ? 'copy' : d.items.some((i) => i.kind === 'file') ? 'link' : null),
+      drop: (d) => void dropPaths(d),
+    },
+    !onLogout,
+  )
+
+  /** What is typed or pasted goes to a program that has the screen (as a bracketed paste), or the input line. */
+  function pasteText(text: string) {
+    const s = sessionRef.current
+    if (s) return s.send(encodePaste(text, s.vt.modes.bracketedPaste))
+    if (running && keyHandler.current && rawKeys.current) return void keyHandler.current('Paste', text)
+    if (running) return notify({ title: 'A command is running', body: 'Paths go in when it is done.', transient: true })
+    const el = inputRef.current
+    const start = el?.selectionStart ?? value.length
+    const end = el?.selectionEnd ?? value.length
+    const before = value.slice(0, start)
+    const after = value.slice(end)
+    const put = `${before && !/\s$/.test(before) ? ' ' : ''}${text}${/^\s/.test(after) ? '' : ' '}`
+    setValue(before + put + after)
+    requestAnimationFrame(() => {
+      el?.focus({ preventScroll: true })
+      el?.setSelectionRange(before.length + put.length, before.length + put.length)
+      syncCaret()
+    })
+  }
+
+  async function dropPaths(d: Drag) {
+    const names: string[] = []
+    if (d.os) {
+      const picked = await d.files()
+      if (!picked.length) return
+      if (sessionRef.current || running) return notify({ title: 'Nothing to paste', body: 'Files from the computer have no path here. Drop them when the prompt is free.', transient: true })
+      const w = whereIs(cwd)
+      if (!(w.kind === 'browser' || (w.kind === 'sf' && !w.ro))) {
+        notify({ title: `Cannot upload into ${prettyPath(cwd)}`, body: 'Go to a folder in Seafile or in this browser (cd ~) and drop them again.', transient: true })
+        return
+      }
+      const top = [...new Set(picked.map((p) => (p.rel ? p.rel.split('/')[0] : p.file.name)))]
+      const one = top.length === 1
+      const ok = await ask({
+        title: one ? `Upload “${top[0]}”?` : `Upload ${top.length} items?`,
+        body: `Files from your computer have no path in the terminal. ${one ? 'It goes' : 'They go'} into ${prettyPath(cwd)}, and the path${one ? ' is' : 's are'} added to the line.`,
+        confirm: 'Upload',
+      })
+      if (!ok) return
+      await uploadFiles(picked, w.kind === 'sf' ? w.sf : cwd)
+      names.push(...top.map((n) => `${cwd === '/' ? '' : cwd}/${n}`))
+    } else {
+      const unmounted: string[] = []
+      for (const i of d.items) {
+        if (i.kind !== 'file') continue
+        const path = posixPath(i.path)
+        if (path) names.push(path)
+        else unmounted.push(i.name)
+      }
+      if (unmounted.length) notify({ title: `${unmounted.length === 1 ? unmounted[0] : `${unmounted.length} items`} not in the terminal`, body: 'Their library is not mounted. See mount.', transient: true })
+    }
+    if (names.length) pasteText(quotePaths(names))
   }
 
   /** Selects the whole scrollback, prompt line included. */
