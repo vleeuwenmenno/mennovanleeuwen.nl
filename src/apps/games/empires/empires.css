@@ -4446,6 +4446,27 @@ span.ew-teamtag {
   font: 700 11px system-ui, sans-serif;
   text-anchor: middle;
 }
+/* The fog of war: a system we don't see shows what we last saw there, faded and greyed, the star
+   dimmed, and under each planet when we last looked. */
+.ew-gsys.is-fog .ew-gsys-hit circle {
+  opacity: 0.6;
+}
+.ew-splanet.is-fog image {
+  opacity: 0.55;
+  filter: grayscale(0.6) drop-shadow(0 0 10px rgba(0, 0, 0, 0.6));
+}
+.ew-splanet.is-fog > .ew-sring {
+  opacity: 0.55;
+}
+.ew-spseen {
+  fill: #9fb0cc;
+  font: italic 500 11px system-ui, sans-serif;
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.85);
+  stroke-width: 3px;
+  pointer-events: none;
+}
 .ew-sbusy {
   fill: var(--ew-gold);
   animation: ew-blink 1s ease-in-out infinite alternate;
@@ -5216,6 +5237,14 @@ span.ew-teamtag {
 .ew-gp-block {
   font-weight: 600;
 }
+.ew-gp-fog {
+  color: var(--ew-muted);
+  font-style: italic;
+}
+.ew-gp-full {
+  color: var(--ew-bad);
+  font-weight: 600;
+}
 
 /* Decorations on the galaxy map never take clicks: a line drawn at a fixed width on screen is
    hit-tested at that width in map units, which zoomed in covers whole planets. Planets, systems,
@@ -5350,6 +5379,13 @@ span.ew-teamtag {
 .ew-deck .ew-gplanettile {
   justify-content: center;
   border-color: var(--own);
+}
+.ew-deck .ew-gplanettile.is-fog {
+  border-style: dashed;
+}
+.ew-deck .ew-gplanettile.is-fog img {
+  opacity: 0.55;
+  filter: grayscale(0.6);
 }
 .ew-gplanettile .ew-sbusy {
   position: absolute;
