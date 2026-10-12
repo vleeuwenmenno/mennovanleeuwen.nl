@@ -572,6 +572,7 @@ export function Spotlight() {
       if (!appHere(app)) continue // the CV apps, away from /cv
       if (app === 'mcserver') continue // the Minecraft server's status entry opens it
       if (app === 'calendar' && account.status !== 'user') continue // the user's own calendars
+      if (app === 'contacts' && account.status !== 'user') continue // the user's own contacts
       if (app === 'agents' && account.status !== 'user') continue // runs on the user's Ollama key
       if (app === 'tasks' && account.status !== 'user') continue // the user's own lists
       const meta = APP_META[app]

@@ -9,6 +9,7 @@ import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { addCaldav, clearCaldavCache, listCaldav, removeCaldav } from './caldav.ts'
 import { allCalendars, allEvents, createEvent, deleteEvent, updateEvent } from './calendars.ts'
+import { handleContactsApi } from './contacts.ts'
 import { handleTasksApi } from './tasks.ts'
 import { empiresAway } from './empires.ts'
 import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, MAX_RANGE_DAYS, startGoogle } from './google.ts'
@@ -159,6 +160,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/caldav' && method === 'POST') return json(res, 200, await addCaldav(requireUser(req), await readJson(req, 8 * 1024))), true
     const caldavId = /^\/api\/caldav\/(\d+)$/.exec(path)?.[1]
     if (caldavId && method === 'DELETE') return removeCaldav(requireUser(req), Number(caldavId)), json(res, 200, { ok: true }), true
+    // The Contacts app (server/contacts.ts): the address book on this site and CardDAV ones.
+    if (path.startsWith('/api/contacts') && (await handleContactsApi(req, res, url, method, requireUser(req)))) return true
     if (path === '/api/calendar/calendars' && read) return json(res, 200, await allCalendars(requireUser(req))), true
     if (path === '/api/calendar/events' && read) {
       // ?from=&to= (ISO dates or times) for a range, or ?days=N from the start of today.

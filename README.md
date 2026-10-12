@@ -271,7 +271,7 @@ accent), the dock, launchers, Spotlight, windows, links, notifications, go links
 integrations; then, under an **Apps** heading, one pane per app with settings of its own, with the
 app's dock icon ([`src/apps/AppSettings.tsx`](src/apps/AppSettings.tsx)); then sync, users and about.
 The Apps panes are Agents, Calendar (its accounts and calendars, the view it opens in and where new
-events go), Files (view, icon size, sort order, hidden files, sidebar), Games (Pool's helpers,
+events go), Contacts (address books and where new contacts go), Files (view, icon size, sort order, hidden files, sidebar), Games (Pool's helpers,
 sensitivity, computer and sound; Gladiator's sound and music; Empires At War's sound, battlefield,
 camera and a summary of its key bindings, with a button into the game's own key bindings and sound
 mix), Omamp (shuffle, repeat, equalizer and preset, visualizer, time, its windows), PDF (sidebar,
@@ -813,6 +813,65 @@ own watchers. `NOTIFY_WATCH=off` leaves the watchers off.
 The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests
 and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 ([`server/inbox.ts`](server/inbox.ts)), with the access sign-in and linking already give.
+
+## Contacts
+
+The **Contacts** app ([`src/apps/contacts`](src/apps/contacts)) keeps everyone in one list: the
+address book on this site (in SQLite, for whoever has no CardDAV server) and every CardDAV address
+book linked in Settings → Integrations → Contacts (or Settings → Apps → Contacts): Fastmail (its
+URL is filled in), iCloud, Nextcloud, Radicale and any other, with an app password stored
+encrypted like CalDAV's. When a CalDAV account is linked already, the pane offers to use its login
+for contacts too (Fastmail's carddav host, iCloud's contacts host, the same URL elsewhere); the
+password never leaves the server. The address books are found the standard way (principal →
+addressbook-home-set → address books), and the server keeps each book's cards in memory by their
+ETags: a refresh lists the ETags and fetches only the cards that are new or changed
+(addressbook-multiget) ([`server/carddav.ts`](server/carddav.ts), with the WebDAV helpers in
+[`server/dav.ts`](server/dav.ts)).
+
+Search matches names, addresses, part of a phone number and organisations; the strip along the
+list jumps to a letter (a finger can slide along it). The sidebar has the address books, the groups
+(both kinds: Apple's and Fastmail's group cards, and CATEGORIES) and the birthdays and anniversaries
+of the coming 30 days. A card shows every way to reach someone, their dates (with the age they
+turn), groups, note and which address book it is in; Edit changes it in place, with a photo made
+small in the browser. Right-click a contact (or ⋯) to move it to another address book, export its
+vCard, or delete it (asked first). The ⋯ menu imports and exports .vcf files from and to this
+computer or Files (Seafile), and *Find duplicates* lists people who are in twice (the same address,
+or the same full name) to merge into one. On a phone the window shows the list or the card, with
+the address books and groups in a menu above the list.
+
+vCards are read and written directly ([`server/vcard.ts`](server/vcard.ts)): 3.0 and 4.0, folded
+lines, escapes, PHOTO inline or as an address, Apple's item groups and labels, and 2.1's
+quoted-printable on import. An edit sends the contact as it was loaded and as it is now; the server
+reads the card again, changes only the fields that differ, and writes it back with its ETag, so a
+change made elsewhere meanwhile stays and every property the app does not know (other apps' X-
+properties, keys, sounds) is kept. A 412 from the server answers "it changed somewhere else".
+New cards are vCard 3.0, which every server takes. `pnpm check:contacts`
+([`scripts/contacts-check.ts`](scripts/contacts-check.ts)) runs all of this against a stand-in
+CardDAV server, including another user who must see none of it.
+
+**For other apps** ([`src/data/contacts.ts`](src/data/contacts.ts)): the contacts are loaded once
+per page and shared, with an index by email address.
+
+| Call | Does |
+|------|------|
+| `searchContacts(q, limit?)` | contacts matching a name, address, phone or organisation, best first |
+| `contactByEmail(email)` | the contact with that address, or null |
+| `contactsByEmails(emails)` | a Map from lower-case address to contact, for many at once (one load for every caller) |
+| `peekContactByEmail(email)`, `useContactByEmail(email)` | the same without waiting, and as a hook |
+| `openContact(idOrEmail, name?)` | the Contacts app on that person; an unknown address gets a card with *Add to contacts* |
+| `addContact({ email, name, ...fields }, { book?, groups? })` | a new contact in the default address book (Settings), answers it |
+| `birthdays(from, to)` | birthdays and anniversaries in a range, with the years they mark, for a Birthdays calendar |
+| `registerContactSlot('recent-mail' \| 'upcoming-events', render)` | fills that section of the contact card (empty until an app registers it) |
+
+[`src/apps/contacts/people.tsx`](src/apps/contacts/people.tsx) has the components:
+`<PeoplePicker value onChange placeholder? exclude?>` is a recipient or guest field (chips; your
+contacts suggested while typing, picked with the arrow keys and Enter or Tab; a contact with
+several addresses opens them to choose from; a group adds everyone in it; any valid address as
+typed, after Enter, a comma or leaving the field; several pasted at once, `Name <address>` included;
+Backspace takes the last one off). `<PersonChip email name?>` shows a person by their contact's
+name and photo, a hover card with *Open contact* or *Add to contacts*, and opens the contact on a
+click. `<Avatar contact? email? name? size?>` is the photo or initials, and `parseAddresses(text)`
+turns pasted text into `{ email, name? }` people.
 
 ## Widgets
 
