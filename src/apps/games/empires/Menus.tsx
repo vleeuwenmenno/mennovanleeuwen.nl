@@ -337,6 +337,7 @@ function SoundTest({ sound }: { sound: EmpiresSound }) {
       ['Mine online', () => sound.structureDone('mine')],
       ['Defense online', () => sound.structureDone('defense')],
       ['Ore surveyed', () => sound.surveyed()],
+      ['Day ends (conquest)', () => sound.payday()],
       ['Beacon taken', () => sound.capture(true)],
       ['Beacon lost', () => sound.capture(false)],
     ]],
@@ -427,6 +428,10 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
       <div className="ew-row">
         <span>Music</span>
         <Seg label="Music" value={music} options={[[true, 'On'], [false, 'Off']]} onChange={(on) => sound.setMusic(on)} />
+      </div>
+      <div className="ew-row">
+        <span>Day ends (conquest)</span>
+        <Seg label="Sound when a day ends in Galactic conquest" value={s.daySound} options={[[true, 'On'], [false, 'Off']]} onChange={(on) => set({ daySound: on })} />
       </div>
       {!coarse && (
         <>

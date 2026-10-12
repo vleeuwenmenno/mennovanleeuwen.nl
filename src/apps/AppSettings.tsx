@@ -363,6 +363,9 @@ function EmpiresSettings() {
         <Row title="Music">
           <Toggle on={music} onChange={(on) => empiresMusic.set(on)} label="Empires At War music" />
         </Row>
+        <Row title="Day ends sound" hint="A soft tick each day in Galactic conquest">
+          <Toggle on={s.daySound} onChange={(on) => setEmpires({ daySound: on })} label="Sound when a day ends" />
+        </Row>
         <Row title="Sound mix" hint="Battle, unit responses, interface, ambience and music each have their own volume">
           <button className="btn btn-small" onClick={() => open('settings')}>
             In the game…

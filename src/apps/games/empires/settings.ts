@@ -74,11 +74,13 @@ export type Settings = {
   /** Rings for each weapon's range (and the sensors) round the ship or structure under the pointer;
    * on a touch screen, round the selected ones. */
   ranges: boolean
+  /** Galactic conquest's soft tick when a day ends (payday): it comes often, so it can be switched off. */
+  daySound: boolean
   keys: Record<Action, string>
 }
 
 const KEY = 'mvlos.empires.settings'
-const DEFAULTS: Settings = { cameraSpeed: 1, edgeScroll: 'fullscreen', bars: 'damaged', rings: true, toasts: true, fogGrid: false, lockedShips: true, ranges: true, keys: { ...DEFAULT_KEYS } }
+const DEFAULTS: Settings = { cameraSpeed: 1, edgeScroll: 'fullscreen', bars: 'damaged', rings: true, toasts: true, fogGrid: false, lockedShips: true, ranges: true, daySound: true, keys: { ...DEFAULT_KEYS } }
 
 function read(): Settings {
   try {
@@ -93,6 +95,7 @@ function read(): Settings {
       fogGrid: v.fogGrid === true,
       lockedShips: v.lockedShips !== false,
       ranges: v.ranges !== false,
+      daySound: v.daySound !== false,
       keys: migrateKeys({ ...DEFAULT_KEYS, ...(v.keys && typeof v.keys === 'object' ? v.keys : {}) }),
     }
   } catch {
