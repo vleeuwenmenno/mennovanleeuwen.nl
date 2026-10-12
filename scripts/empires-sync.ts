@@ -13,7 +13,7 @@
 
 import { MAPS } from '../src/apps/games/empires/maps.ts'
 import { STEP, newWorld, stateHash, tick, type World } from '../src/apps/games/empires/sim.ts'
-import { newBrain, think, type Brain } from '../src/apps/games/empires/ai.ts'
+import { PROFILE_IDS, newBrain, think, type Brain } from '../src/apps/games/empires/ai.ts'
 import { restoreBrain, restoreWorld, snapBrain, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
 
 const minutes = Number(process.argv[2] ?? 6)
@@ -25,7 +25,8 @@ const seats = map.spawns.map((_, i) => ({ faction: i % 2 ? ('droid' as const) : 
 type Copy = { w: World; brains: Brain[] }
 const make = (): Copy => ({
   w: newWorld(map, seats, { seed: 4242, ...(big ? { sizes: 'big' as const } : {}) }),
-  brains: seats.map((_, i) => newBrain(i, i % 2 ? 'hard' : 'medium')),
+  // Every AI profile plays in it: defensive and balanced on one side, offensive and balanced on the other.
+  brains: seats.map((_, i) => newBrain(i, i % 2 ? 'hard' : 'medium', PROFILE_IDS[[0, 2, 1, 1][i % 4]])),
 })
 const step = (c: Copy) => {
   for (const b of c.brains) think(c.w, b, STEP)

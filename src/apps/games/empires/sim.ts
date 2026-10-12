@@ -145,6 +145,13 @@ export type Unit = {
   /** A defense wing craft's parking slot round its station while it guards it (see guardSlot),
    * handed out the first time it guards; absent until then, and in battles saved before slots. */
   post?: number
+  /** A warship that has reached its firing spot: it keeps its heading there, its turrets doing the
+   * turning, for as long as any gun that counts can bear on what it fights (see closeIn). Absent
+   * (and in battles saved before it) until it first settles. */
+  settled?: boolean
+  /** How hard it is to shove aside, overriding its class's (see pushClass): the hook for an
+   * ability that lets a ship push bigger hulls. Absent: its class's. */
+  pushClass?: number
 }
 
 /**
@@ -355,6 +362,16 @@ export const typeOf = (w: World, id: string): UnitType => sizedType(id, w.sizes)
 const spreadOf = (w: World, us: Unit[]) => (w.sizes === 'big' ? Math.max(BIG_SPREAD, ...us.map((u) => SIZE_CLASSES[u.t.tier])) : 1)
 /** How hard a ship speeds up and brakes, before its tier's factor (see steer). */
 const accOf = (t: UnitType) => t.speed * (t.accel ?? 1)
+
+/**
+ * How hard a hull is to shove aside, by class. Where two hulls press into each other, the one of
+ * the lower class gives way entirely and steers round the other, which isn't moved at all; two of
+ * the same class share the push. Structures never move. A unit's own `pushClass` overrides its
+ * class's: the hook for an ability (a ram, a heavy tractor) that lets a ship push bigger ones.
+ * Tractor lock only slows ships, so it doesn't touch this.
+ */
+export const PUSH_CLASS: Record<Tier, number> = { fighter: 0, gunship: 1, frigate: 2, cruiser: 3, capital: 4, station: 10, mine: 10, defense: 10 }
+export const pushClass = (u: Unit) => (isShip(u.t) ? (u.pushClass ?? PUSH_CLASS[u.t.tier]) : Infinity)
 
 /** Rough body radius, for spacing, clicking and collisions. */
 export const radius = (t: UnitType) => {
@@ -1994,6 +2011,71 @@ function attackSpots(w: World, e: Unit, g: Unit[], key: number) {
   }
 }
 
+/** Whether one gun can fire on `e` from where the ship is, as it is turned now: in reach from its
+ * hardpoint, and inside its arc for a gun fixed to the hull (the same test `shoot` makes). Turrets
+ * turn all the way round. */
+function gunBears(u: Unit, g: Gun, e: Unit) {
+  const from = g.hp >= 0 ? hpPos(u, g.hp) : u
+  const rr = g.w.range * u.mods.range + radius(e.t) * 0.5
+  if (d2(e.x, e.y, from.x, from.y) > rr * rr) return false
+  return !g.w.arc || Math.abs(wrap(M.atan2(e.y - u.y, e.x - u.x) - u.a)) <= g.w.arc
+}
+
+/**
+ * How a warship's guns that count against `e` (see relevantGuns) bear on it right now: `any` of
+ * them, `all` of them, and whether one of them is `fixed` to the hull (only fires inside an arc
+ * off the nose), so the hull has to keep pointing at the target. A ship with nothing that counts
+ * goes by its stopping distance's reach.
+ */
+export function bearing(u: Unit, e: Unit): { any: boolean; all: boolean; fixed: boolean } {
+  const guns = relevantGuns(u, e.t.tier)
+  if (!guns.length) {
+    const near = M.hypot(e.x - u.x, e.y - u.y) <= stopDistance(u, e).reach
+    return { any: near, all: near, fixed: false }
+  }
+  let any = false
+  let all = true
+  let fixed = false
+  for (const g of guns) {
+    if (g.w.arc) fixed = true
+    if (gunBears(u, g, e)) any = true
+    else all = false
+  }
+  return { any, all, fixed }
+}
+
+/** Come to a stop where it is, keeping its heading. */
+function holdStill(u: Unit, dt: number) {
+  u.v = Math.max(0, u.v - accOf(u.t) * 0.9 * dt)
+}
+
+/**
+ * At its firing spot: it settles there once every gun that counts bears on the target (coming in
+ * nose first, that's at once), or once it faces it. Until then it swings round on the spot, which
+ * is the only turning it does there: from then on the turrets follow the fight (see closeIn).
+ */
+function arrive(u: Unit, e: Unit, b: { all: boolean; fixed: boolean }, dt: number) {
+  if (b.all && !b.fixed) {
+    u.settled = true
+    holdStill(u, dt)
+    return
+  }
+  steer(u, e.x, e.y, 0, dt, true)
+  if (Math.abs(wrap(M.atan2(e.y - u.y, e.x - u.x) - u.a)) < 0.05) u.settled = true
+}
+
+/** Which way along the axis (ax, ay) the vector (px, py) leans: 1 or -1, and by the unit's id when
+ * it hardly leans either way, so every copy of a battle picks the same. */
+const sideOf = (px: number, py: number, ax: number, ay: number, id: number) => {
+  const dot = px * ax + py * ay
+  return dot > 1e-3 ? 1 : dot < -1e-3 ? -1 : id % 2 ? 1 : -1
+}
+
+/** A ship that sets off somewhere leaves its firing spot behind. */
+const unsettle = (u: Unit) => {
+  if (u.settled) u.settled = false
+}
+
 /**
  * Close in on `e` and fight it from a spot: alone, straight at it until every gun that counts is
  * in reach; with others of its side on the same target, to its own place on their arc (see
@@ -2004,12 +2086,32 @@ function closeIn(w: World, u: Unit, e: Unit, max: number, dt: number) {
   const t = u.t
   const { stop, reach } = stopDistance(u, e)
   const dist = M.hypot(e.x - u.x, e.y - u.y)
+  const b = bearing(u, e)
+  if (u.settled) {
+    // At its firing spot the hull stays put and the turrets turn: a new target, or one shifting
+    // about, changes nothing while any gun that counts can bear on it. A gun fixed to the nose
+    // (a gunship's missiles) keeps the nose on the target instead. Only once nothing bears does
+    // it set off again; a fighter darting out of reach is left to come back.
+    if (b.fixed && dist <= reach) {
+      steer(u, e.x, e.y, 0, dt, true)
+      return
+    }
+    if (!b.fixed && (b.any || e.t.tier === 'fighter')) {
+      holdStill(u, dt)
+      return
+    }
+    u.settled = false
+  }
   const g = e.t.tier === 'fighter' ? [u] : spotGroup(u, e)
   if (g.length < 2) {
     u.slot = null
+    if (dist <= stop) {
+      arrive(u, e, b, dt)
+      return
+    }
     const brake = Math.sqrt(2 * accOf(t) * 0.9 * Math.max(0, dist - stop))
-    const p = dist > stop ? detour(w, u, e.x, e.y) : e
-    steer(u, p.x, p.y, dist > stop ? Math.min(max, brake) : 0, dt, dist <= stop)
+    const p = detour(w, u, e.x, e.y)
+    steer(u, p.x, p.y, Math.min(max, brake), dt)
     return
   }
   const key = groupKey(g)
@@ -2023,8 +2125,7 @@ function closeIn(w: World, u: Unit, e: Unit, max: number, dt: number) {
   if (s.held && (off > 40 + r * 0.6 || dist > (stop + reach) / 2)) s.held = false
   else if (!s.held && off < 10 + r * 0.12) s.held = true
   if (s.held) {
-    // Swing round to face the enemy.
-    steer(u, e.x, e.y, 0, dt, true)
+    arrive(u, e, b, dt)
     return
   }
   const brake = Math.sqrt(2 * accOf(t) * 0.9 * off)
@@ -2137,8 +2238,11 @@ function moveUnit(w: World, u: Unit, dt: number) {
       if (close) steer(u, u.x + M.cos(u.a) * 100, u.y + M.sin(u.a) * 100, max, dt)
       else steer(u, ex + ((u.id % 7) - 3) * 8, ey + ((u.id % 5) - 2) * 8, max, dt)
     } else if (u.stance === 'hold' && u.order.k !== 'area') {
-      // An area attack was an order to go in: holding ships only hold otherwise.
-      steer(u, e.x, e.y, 0, dt, true)
+      // An area attack was an order to go in: holding ships only hold otherwise. The hull turns
+      // only for a gun fixed to the nose, or to bring a gun to bear when none does.
+      const b = bearing(u, e)
+      if (b.fixed || !b.any) steer(u, e.x, e.y, 0, dt, true)
+      else holdStill(u, dt)
     } else closeIn(w, u, e, max, dt)
   } else if (u.order.k === 'area') {
     // Nothing to shoot: done once the circle is in sight (or reached) and empty; until then, close in.
@@ -2147,6 +2251,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
     const clear = !w.units.some((e) => !e.dead && foes(w, e.owner, u.owner) && sees(w, u.owner, e) && inArea(o, e))
     if (clear && (dist < o.r * 0.8 || canSee(w, w.players[u.owner].team, o.x, o.y))) nextOrder(u, u.x, u.y)
     else if (dist > o.r * 0.5) {
+      unsettle(u)
       const wp = waypoint(w, u, o.x, o.y)
       const p = detour(w, u, wp.x, wp.y)
       steer(u, p.x, p.y, fighter ? max : Math.min(max, dist * 0.9 + 12), dt)
@@ -2159,6 +2264,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
       if (o.k === 'patrol') u.order = { ...o, x: o.bx, y: o.by, bx: o.x, by: o.y }
       else nextOrder(u, o.x, o.y, o.face ?? null)
     } else {
+      unsettle(u)
       const wp = waypoint(w, u, o.x, o.y)
       const p = detour(w, u, wp.x, wp.y)
       steer(u, p.x, p.y, fighter ? pace : Math.min(pace, dist * 0.9 + 12), dt)
@@ -2182,6 +2288,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
       const r = 70 + (u.id % 4) * 18
       steer(u, u.ax + M.cos(ang) * r, u.ay + M.sin(ang) * r, max * 0.65, dt)
     } else if (dist > 30 + radius(t) * 0.3) {
+      unsettle(u)
       const wp = waypoint(w, u, u.ax, u.ay)
       const p = detour(w, u, wp.x, wp.y)
       steer(u, p.x, p.y, Math.min(max, dist * 0.8 + 10), dt)
@@ -2209,21 +2316,50 @@ function moveUnit(w: World, u: Unit, dt: number) {
     // Warships keep a small gap between hulls rather than overlapping. Inside the gap they ease
     // apart slowly, so a tight group settles instead of jostling; a real overlap (hulls a quarter
     // or more into each other) is pushed out faster, as before.
+    // Who gives way goes by class (see pushClass): a smaller hull never moves a bigger one. It
+    // takes the whole push itself and slides off round the bigger hull, and a bigger ship coming
+    // through moves it aside out of its path rather than shoving it along ahead.
     const bx = u.x
     const by = u.y
+    const mine = pushClass(u)
     near(w, u.x, u.y, r0 + keepApartReach(w), (o, dd) => {
       if (o === u || o.t.tier === 'fighter') return
       const touch = r0 + radius(o.t)
       const min = touch + HULL_GAP
       if (dd >= min * min) return
-      // Each of the pair moves part of the overlap away per tick; a structure doesn't budge, so the ship takes all of it.
+      const theirs = pushClass(o)
+      // A smaller hull pressing on us: it makes way (in its own move), we don't.
+      if (theirs < mine) return
+      // Each of a pair of the same class moves part of the overlap away per tick; the smaller of
+      // two ships takes all of it, and against a structure, which doesn't budge, a little more.
       const d = Math.sqrt(dd) || 1
       const rate = d < touch * 0.75 ? 4 : 1.5
-      const push = (min - d) * Math.min(1, rate * dt) * (isShip(o.t) ? 1 : 2.5)
+      const bigger = isShip(o.t) && theirs > mine
+      const push = (min - d) * Math.min(1, rate * dt) * (!isShip(o.t) ? 2.5 : bigger ? 2 : 1)
       const nx = d > 1 ? (u.x - o.x) / d : M.cos(u.id)
       const ny = d > 1 ? (u.y - o.y) / d : M.sin(u.id)
       u.x += nx * push
       u.y += ny * push
+      if (!bigger) return
+      // Running into the bigger hull: the part of our way that heads into it turns into a slide
+      // round it, on the side we're already on (by id when dead centre), so we steer round it.
+      const hx = M.cos(u.a)
+      const hy = M.sin(u.a)
+      const into = -(hx * nx + hy * ny)
+      if (u.v > 1 && into > 0) {
+        const s = sideOf(hx + into * nx, hy + into * ny, -ny, nx, u.id)
+        u.x += -ny * s * into * u.v * dt * 0.6
+        u.y += nx * s * into * u.v * dt * 0.6
+      }
+      // The bigger ship coming our way: step aside out of its path, to the side we're on.
+      const ox = M.cos(o.a)
+      const oy = M.sin(o.a)
+      const ahead = ox * nx + oy * ny
+      if (o.v > 1 && ahead > 0) {
+        const s = sideOf(nx - ahead * ox, ny - ahead * oy, -oy, ox, u.id)
+        u.x += -oy * s * ahead * o.v * dt * 0.8
+        u.y += ox * s * ahead * o.v * dt * 0.8
+      }
     })
     // A waiting ship that was nudged aside takes the nudge as its new spot, instead of steering
     // back into its neighbour and being nudged out again for ever.

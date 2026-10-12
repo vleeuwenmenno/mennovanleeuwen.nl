@@ -1,5 +1,5 @@
 import type { ShipSizes } from './models/sizes.ts'
-import type { Difficulty } from './ai.ts'
+import type { Difficulty, Profile } from './ai.ts'
 import type { Cmd } from './commands.ts'
 import type { FactionId } from './data.ts'
 import type { MapRules } from './maps.ts'
@@ -28,6 +28,8 @@ export type MpSlot = {
   faction: FactionId
   team: 0 | 1
   difficulty: Difficulty
+  /** How an AI seat plays (ai.ts PROFILES); lobbies from before profiles have none: Balanced. */
+  profile?: Profile
   ready: boolean
   away: boolean
 }
@@ -67,7 +69,7 @@ export type AwaySeat = { seat: number; deadline: number; votes: [number, AwayVot
 export type LobbyInfo = { id: string; name: string; host: string; map: string; players: number; seats: number; state: MpLobby['state'] }
 
 /** What can change about a slot; who may change what is up to the server. */
-export type SlotPatch = Partial<Pick<MpSlot, 'faction' | 'team' | 'difficulty'>> & { kind?: 'open' | 'ai' | 'closed' }
+export type SlotPatch = Partial<Pick<MpSlot, 'faction' | 'team' | 'difficulty' | 'profile'>> & { kind?: 'open' | 'ai' | 'closed' }
 
 /** Client to server. */
 export type ClientMsg =

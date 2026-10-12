@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { RotateHint } from './empires/RotateHint'
 import type { WinState } from '../../os/wm'
-import { DIFFICULTY, fleetThink, newBrain, think, type Brain } from './empires/ai'
+import { DIFFICULTY, fleetThink, newBrain, profileOf, think, type Brain } from './empires/ai'
 import { ALL_SPRITES, FACTIONS, SITE_UPGRADES, TECH, UNIT, buildable, dims, isShip, type HardpointKind, type Tier } from './empires/data'
 import { SizesContext, DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, Icon, ReserveTray, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
 import { LongPress, TouchBar, WheelHost, getTouchMods, isTouch, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
@@ -260,10 +260,10 @@ const OFFLINE_AI = 'medium' as const
  * relative to us): the battle reads ours from the world. The players keep their names. */
 function offlineSetup(info: MatchInfo, me: number): Setup {
   const map = matchMap(info)
-  const slots: Slot[] = map.spawns.map((_, i) => ({ kind: 'closed', faction: i % 2 ? 'droid' : 'republic', team: (i % 2) as 0 | 1, difficulty: OFFLINE_AI }))
+  const slots: Slot[] = map.spawns.map((_, i) => ({ kind: 'closed', faction: i % 2 ? 'droid' : 'republic', team: (i % 2) as 0 | 1, difficulty: OFFLINE_AI, profile: 'balanced' }))
   const names: (string | null)[] = map.spawns.map(() => null)
   info.seats.forEach((s, i) => {
-    slots[s.spawn] = { kind: i === me ? 'you' : 'ai', faction: s.faction, team: s.team, difficulty: s.kind === 'ai' ? s.difficulty : OFFLINE_AI }
+    slots[s.spawn] = { kind: i === me ? 'you' : 'ai', faction: s.faction, team: s.team, difficulty: s.kind === 'ai' ? s.difficulty : OFFLINE_AI, profile: s.kind === 'ai' ? profileOf(s.profile) : 'balanced' }
     names[s.spawn] = i === me ? null : s.kind === 'ai' ? s.name : `${s.name} (AI)`
   })
   return { map: info.map, gen: info.gen, credits: info.credits, slots, areas: [], names, sizes: info.sizes ?? 'classic' }
@@ -328,11 +328,11 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     // the AI admirals come from the match itself).
     if (online)
       return online.info.seats.map((s, i) => ({
-        kind: (i === online.me ? 'you' : 'ai') as Slot['kind'], faction: s.faction, team: s.team, difficulty: s.difficulty, spawn: s.spawn, name: s.name, area: defaultArea(map, s.spawn),
+        kind: (i === online.me ? 'you' : 'ai') as Slot['kind'], faction: s.faction, team: s.team, difficulty: s.difficulty, profile: profileOf(s.profile), spawn: s.spawn, name: s.name, area: defaultArea(map, s.spawn),
       }))
     if (conquest)
       return conquest.sides.map((s, i) => ({
-        kind: (i === conquest.me ? 'you' : 'ai') as Slot['kind'], faction: s.faction, team: s.team as 0 | 1, difficulty: conquest.ai, spawn: i, name: conquest.names[i], area: defaultArea(map, i),
+        kind: (i === conquest.me ? 'you' : 'ai') as Slot['kind'], faction: s.faction, team: s.team as 0 | 1, difficulty: conquest.ai, profile: profileOf(conquest.profile), spawn: i, name: conquest.names[i], area: defaultArea(map, i),
       }))
     const areas = setupAreas(setup!, map)
     return setup!.slots.map((s, i) => ({ ...s, spawn: i, name: setup!.names?.[i] ?? slotName(s, i), area: areas[i] })).filter((s) => s.kind !== 'closed')
@@ -377,7 +377,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const myTeam = world.current.players[me].team
   const myFaction = world.current.players[me].faction
   const brains = useRef<Brain[]>(
-    online ? matchBrains(online.info) : resumed.current && resume ? resume.brains.map(restoreBrain) : seats.map((s, i) => (s.kind === 'ai' ? newBrain(i, s.difficulty) : null)).filter((b): b is Brain => !!b),
+    online ? matchBrains(online.info) : resumed.current && resume ? resume.brains.map(restoreBrain) : seats.map((s, i) => (s.kind === 'ai' ? newBrain(i, s.difficulty, s.profile) : null)).filter((b): b is Brain => !!b),
   )
   const settings = useSettings()
   const settingsRef = useRef(settings)
