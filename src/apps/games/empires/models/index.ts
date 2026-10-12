@@ -182,8 +182,9 @@ export function hullState(m: Model, d: Damage, tier: Tier): HullState {
   let detached = 0
   for (let i = 0; i < m.detachable.length; i++) if (partGone(m, i, d)) detached |= 1 << i
   const f = d.hull / Math.max(1, d.hullMax)
-  // Strike craft share one burn layout: there are many of them and they're small.
-  return { detached, scorch: f > 0.75 ? 0 : f > 0.5 ? 1 : f > 0.25 ? 2 : 3, variant: tier === 'fighter' ? 0 : d.id & 3 }
+  // Strike craft and gunships share one burn layout: there are many of them and they're small, and
+  // four layouts each would mean four times the bitmaps for every heading they turn through.
+  return { detached, scorch: f > 0.75 ? 0 : f > 0.5 ? 1 : f > 0.25 ? 2 : 3, variant: tier === 'fighter' || tier === 'gunship' ? 0 : d.id & 3 }
 }
 export const stateKey = (s: HullState) => `${s.detached}.${s.scorch}.${s.variant}`
 
