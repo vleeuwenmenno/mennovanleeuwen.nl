@@ -2431,6 +2431,23 @@ const filesOf = (thread: string, messageId: number): Attachment[] => {
   return row?.attachments ? (JSON.parse(row.attachments) as Attachment[]).filter((a) => a.source !== 'skill') : []
 }
 
+/** Picture types the app shows; anything else a client claimed is sent as plain bytes, never rendered. */
+const PICTURE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+
+/**
+ * A picture sent with one of the user's messages, for the app's thumbnails and its full-size view.
+ * The bytes are kept with the message anyway (vision models get them again on every turn), so a
+ * thread opened later still shows them. Only the thread's owner gets them, and only pictures:
+ * `index` counts the message's attachments as the thread lists them.
+ */
+export function messagePicture(user: User, id: string, messageId: string, index: string): { type: string; body: Buffer } {
+  const row = ownThread(user, id)
+  const found = database().prepare('SELECT attachments FROM agent_messages WHERE id = ? AND thread_id = ?').get(Number(messageId), row.id) as { attachments: string | null } | undefined
+  const file = found?.attachments ? (JSON.parse(found.attachments) as Attachment[])[Number(index)] : undefined
+  if (!file || file.kind !== 'image' || !file.data) throw new HttpError(404, 'No such picture')
+  return { type: PICTURE_TYPES.has(file.mime) ? file.mime : 'application/octet-stream', body: Buffer.from(file.data, 'base64') }
+}
+
 /**
  * Retry: the last turn again. What it left (a partial or failed reply, its tool calls and results,
  * or a whole answer to regenerate) goes, and the same message, with the same files, is answered

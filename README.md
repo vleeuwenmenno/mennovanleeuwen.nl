@@ -575,6 +575,17 @@ messages go, it and everything after it leave the thread (`POST …/rewind`; a r
 stopped first, the queue stays) and it comes back into the message box with its files. What the
 tools did is not undone: memories, the plan, notes, calendar events and files the agent changed in
 the work folder stay as they are.
+
+**Pictures** you attach show as thumbnails in the message box and on your sent messages
+([`src/apps/AgentsImages.tsx`](src/apps/AgentsImages.tsx)); other files stay chips with their name.
+A click opens the picture over the window: ← and → (or a swipe) go through the message's pictures,
+Esc or a click beside it closes it, and it has *Download* and, for a sent picture, *Open in
+Preview*. The server keeps a picture's bytes with its message anyway (vision models get them on
+every turn), so a thread opened later shows them again: `GET
+…/messages/:mid/attachments/:index` serves one to the thread's owner, as the picture types it knows
+or as plain bytes otherwise, never rendered as a page. Preview opens such an address with props
+`src`, `name` and `from` instead of a file path. Shared links still carry only names and sizes.
+
 **Shared links** ([`server/shares.ts`](server/shares.ts), [`src/apps/AgentsShare.tsx`](src/apps/AgentsShare.tsx)):
 *Share thread…* (the thread's ⋯ menu, its right-click menu in the sidebar or the conversation) and
 **Share** under each answer (on hover, always on touch) make a link to the whole thread or to one

@@ -18,9 +18,13 @@ const STEP = 1.25
 
 type View = { mode: 'auto' | 'fit' | 'free'; scale: number; x: number; y: number }
 const AUTO: View = { mode: 'auto', scale: 1, x: 0, y: 0 }
+const NONE: string[] = []
 
 
-export const previewTitle = (w: WinState) => (w.props.path ? nameOf(w.props.path) : 'Preview')
+export const previewTitle = (w: WinState) => (w.props.path ? nameOf(w.props.path) : w.props.name || 'Preview')
+
+/** A picture at an address of this site instead of a file (`src`, one sent to Agents): only paths here, never another site. */
+const addressOf = (src: string | undefined) => (src && /^\/(?!\/)/.test(src) ? src : null)
 
 export function Preview({ win }: { win: WinState }) {
   const wm = useWM()
@@ -34,8 +38,12 @@ export function Preview({ win }: { win: WinState }) {
     wm.setProps(win.pid, { path: p })
   }
 
-  const media = useMedia(path)
-  const siblings = useSiblings(path, ['image'])
+  // A picture at an address (props src, name and from) is shown alone: no folder to go through.
+  const address = addressOf(win.props.src)
+  const fileMedia = useMedia(address ? '' : path)
+  const folder = useSiblings(address ? '' : path, ['image'])
+  const media = useMemo<typeof fileMedia>(() => (address ? { name: win.props.name || 'Picture', kind: 'image', url: address, size: null, mtime: null, error: null, unplayable: null } : fileMedia), [address, win.props.name, fileMedia])
+  const siblings = address ? NONE : folder
   const index = siblings.indexOf(path)
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null)
   const [view, setView] = useState<View>(AUTO)
@@ -237,7 +245,7 @@ export function Preview({ win }: { win: WinState }) {
   // --- rendering -----------------------------------------------------------------------------
 
   const at = parseSf(path)
-  const where = at ? `${libraryName(at.repo)}${at.p.split('/').slice(0, -1).join('/') || '/'}` : prettyPath(folderOf(path))
+  const where = address ? win.props.from || 'This site' : at ? `${libraryName(at.repo)}${at.p.split('/').slice(0, -1).join('/') || '/'}` : prettyPath(folderOf(path))
   const showInFiles = () => wm.openNew('files', { path: folderOf(path), select: path })
   const save = () => (isSf(path) ? download(path).catch(() => {}) : media.url && Object.assign(document.createElement('a'), { href: media.url, download: media.name }).click())
   const zoomLabel = `${Math.round(scale * 100)}%`
@@ -383,9 +391,11 @@ export function Preview({ win }: { win: WinState }) {
               </dd>
             </dl>
             <div className="pv-actions">
-              <button className="btn btn-small" onClick={showInFiles}>
-                Show in Files
-              </button>
+              {!address && (
+                <button className="btn btn-small" onClick={showInFiles}>
+                  Show in Files
+                </button>
+              )}
               <button className="btn btn-small" onClick={save}>
                 Download
               </button>

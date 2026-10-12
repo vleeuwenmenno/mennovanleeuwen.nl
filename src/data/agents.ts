@@ -560,4 +560,7 @@ export function textAttachment(text: string, name: string): Attachment {
   return { name, source: 'Pasted', kind: 'text', mime: 'text/plain', size: new Blob([text]).size, text }
 }
 
+/** Where a picture sent with a message loads from (server/agents.ts messagePicture): `index` among the message's attachments. */
+export const pictureUrl = (thread: string, message: number, index: number) => `/api/agents/threads/${thread}/messages/${message}/attachments/${index}`
+
 export const fileSize = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`)

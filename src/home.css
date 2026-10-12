@@ -680,6 +680,178 @@
   padding-right: 8px;
   background: transparent;
 }
+/* Attached pictures as thumbnails (src/apps/AgentsImages.tsx): the picture scaled down, cropped
+   to fill; one alone is bigger. The name shows over the bottom on hover, and always on touch. */
+.agt-thumbs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.agt-user .agt-thumbs {
+  margin-top: 6px;
+  justify-content: flex-end;
+}
+.agt-thumbs li {
+  position: relative;
+}
+.agt-thumb {
+  position: relative;
+  display: block;
+  width: 96px;
+  height: 72px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--bg-dark);
+  cursor: zoom-in;
+}
+.agt-thumbs.is-one .agt-thumb {
+  width: 160px;
+  height: 120px;
+}
+.agt-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.agt-thumb:hover,
+.agt-thumb:focus-visible {
+  border-color: var(--accent);
+}
+.agt-thumb-name {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 2px 6px;
+  background: color-mix(in srgb, #000 62%, transparent);
+  color: #fff;
+  font-size: 10px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.agt-thumb:hover .agt-thumb-name,
+.agt-thumb:focus-visible .agt-thumb-name {
+  opacity: 1;
+}
+@media (hover: none) {
+  .agt-thumb-name {
+    opacity: 1;
+  }
+}
+.agt-thumb-x {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, #000 62%, transparent);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+}
+.agt-thumb-x:hover {
+  background: var(--red);
+}
+/* The full view: over the window (or the page), the picture fitted, its name and actions above. */
+.agt-lightbox {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, #000 86%, transparent);
+  color: #fff;
+  outline: none;
+  overflow: hidden;
+}
+.agt-lightbox.is-page {
+  position: fixed;
+  z-index: 10000;
+}
+.agt-lightbox-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  min-width: 0;
+}
+.agt-lightbox-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agt-lightbox-name .muted {
+  color: color-mix(in srgb, #fff 60%, transparent);
+}
+.agt-lightbox-x {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 22px;
+  line-height: 1;
+}
+.agt-lightbox-x:hover {
+  background: color-mix(in srgb, #fff 16%, transparent);
+}
+.agt-lightbox-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  /* A definite cell, so the picture's max-height of 100% fits it rather than growing the view. */
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  place-items: center;
+  overflow: hidden;
+  padding: 0 12px 12px;
+  touch-action: pan-y pinch-zoom;
+}
+.agt-lightbox-stage img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  user-select: none;
+}
+.agt-lightbox-nav {
+  position: absolute;
+  top: 50%;
+  width: 40px;
+  height: 56px;
+  margin-top: -28px;
+  padding: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, #000 40%, transparent);
+  color: #fff;
+  font-size: 30px;
+  line-height: 1;
+}
+.agt-lightbox-nav:hover {
+  background: color-mix(in srgb, #000 70%, transparent);
+}
+.agt-lightbox-nav.is-prev {
+  left: 10px;
+}
+.agt-lightbox-nav.is-next {
+  right: 10px;
+}
 .agt-warn {
   margin: 0;
   color: var(--yellow);
