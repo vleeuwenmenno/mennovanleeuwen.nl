@@ -86,7 +86,7 @@ const APPS: Record<string, AppId> = {
   zed: 'zed',
   editor: 'zed',
   preview: 'preview',
-  photos: 'preview',
+  photos: 'photos',
   player: 'player',
   video: 'player',
   amp: 'amp',
@@ -132,6 +132,7 @@ const APP_NAMES: Record<AppId, string> = {
   linkforge: 'link-forge',
   calendar: 'calendar',
   agents: 'agents',
+  photos: 'photos',
 }
 
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */
