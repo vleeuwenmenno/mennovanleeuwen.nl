@@ -27,6 +27,7 @@
     "check:empires-models": "node scripts/empires-models.ts",
     "check:agents-roles": "node scripts/agents-roles.ts",
     "check:agents-permissions": "node scripts/agents-permissions.ts",
+    "check:agents-compact": "node scripts/agents-compact.ts",
     "check:seafile-stream": "node scripts/seafile-stream.ts",
     "check:tasks": "node scripts/tasks-check.ts",
     "empires:battle-ai": "node scripts/empires-battle-ai.ts",

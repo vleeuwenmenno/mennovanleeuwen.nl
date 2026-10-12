@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import { AGENTS_MD } from '../data/agentsPrompt'
 import { allowSite, installSkills, listSites, listSkills, removeSite, removeSkill, setSkillEnabled, type AllowedSite, type Skill } from '../data/agents'
 import { ask } from '../os/Dialogs'
-import { agentModels, getDefaults, getPrompt, listMemories, setAgentSettings, TITLE_EVERY, TOOL_GROUPS, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
+import { agentModels, COMPACT_AT, getDefaults, getPrompt, listMemories, setAgentSettings, TITLE_EVERY, TOOL_GROUPS, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
 import { useMounts, whereIs } from '../data/mounts'
 import { syncAgentPlaces } from '../data/agentPlaces'
 import { getWebSearch, PROVIDERS, resetWebSearch, saveWebSearch, testWebSearch, type Provider, type ResultMap, type SearchResult, type WebSearchInput, type WebSearchView } from '../data/websearch'
@@ -47,7 +47,7 @@ const icon = (d: ReactNode) => (
 const SECTIONS: { id: SectionId; label: string; blurb: string; icon: ReactNode }[] = [
   { id: 'general', label: 'General', blurb: 'The Ollama Cloud connection Agents runs on, and what it remembers.', icon: icon(<><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1" /></>) },
   { id: 'models', label: 'Models', blurb: 'Which model a new Quick or Deep thread gets, which one names threads and keeps their titles up to date, and which one checks web addresses in Auto.', icon: icon(<><rect x="4" y="4" width="16" height="16" /><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" /></>) },
-  { id: 'threads', label: 'New threads', blurb: 'The mode and tools a new thread starts with.', icon: icon(<path d="M4 5h16v11H9l-5 4z" />) },
+  { id: 'threads', label: 'New threads', blurb: 'The mode and tools a new thread starts with, and how a long thread makes room in the model’s context window.', icon: icon(<path d="M4 5h16v11H9l-5 4z" />) },
   { id: 'permissions', label: 'Permissions', blurb: 'What the agent may do without asking you: the web sites you allowed for good. Each thread picks its own mode in its toolbar (Ask first, Auto, Edits allowed, Plan, Bypass).', icon: icon(<path d="M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6z" />) },
   { id: 'search', label: 'Web search', blurb: 'Where the agent searches the web. Reading pages always goes through Ollama.', icon: icon(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>) },
   { id: 'skills', label: 'Skills', blurb: 'Instructions for kinds of tasks, in SKILL.md folders: the agent reads one when a task matches it, or you start one with /name.', icon: icon(<path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5z" />) },
@@ -283,6 +283,32 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
         })}
       </ul>
       <p className="muted set-help">Each thread can switch its own mode and tools in the composer; the last choice there becomes the default here.</p>
+
+      <h4 className="set-subhead">Long threads</h4>
+      <ul className="set-list">
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Compact by itself</strong>
+            <span className="muted">When a thread nearly fills the model's context window, the model summarises the conversation so far and carries on from the summary. Also when the model says a request is too long, which is then tried again. Every message stays in the thread to read.</span>
+          </span>
+          <Toggle on={settings.autoCompact} onChange={(autoCompact) => setAgentSettings({ autoCompact })} label="Compact long threads by themselves" />
+        </li>
+        <li className={`set-row ${settings.autoCompact ? '' : 'is-off'}`}>
+          <span className="set-row-text">
+            <strong>Compact at</strong>
+            <span className="muted">How full the context window gets first</span>
+          </span>
+          <Select
+            className="set-select"
+            value={settings.compactAt}
+            onChange={(compactAt) => setAgentSettings({ compactAt })}
+            disabled={!settings.autoCompact}
+            aria-label="Compact when the context window is this full"
+            options={COMPACT_AT.map((n) => ({ value: n, label: `${n}% full` }))}
+          />
+        </li>
+      </ul>
+      <p className="muted set-help">Compact any time with /compact in a thread (in the app or the agents command), or Compact conversation in its menu; add what the summary should keep, like <code>/compact keep the API details</code>.</p>
 
       </>
     ),

@@ -953,6 +953,87 @@
   margin: 0;
   font-size: 11px;
 }
+/* Compaction: where the thread compacts by itself (a mark on the context bar), the last compaction
+   and Compact now; in the conversation a divider that opens to the summary. */
+.agt-ctx-bar {
+  position: relative;
+}
+.agt-ctx-mark {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--fg-bright);
+}
+.agt-ctx-compact {
+  margin-top: 4px;
+}
+.agt-compact {
+  max-width: 760px;
+  margin: 4px 0 10px;
+  font-size: 12px;
+}
+.agt-compact summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--accent);
+}
+.agt-compact summary::before,
+.agt-compact summary::after {
+  content: '';
+  flex: 1;
+  min-width: 12px;
+  border-top: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.agt-compact-label {
+  min-width: 0;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.agt-compact-more {
+  order: 3;
+  flex: none;
+  font-size: 11px;
+}
+.agt-compact-more::after {
+  content: ' ›';
+}
+.agt-compact[open] .agt-compact-more::after {
+  content: ' ⌄';
+}
+.agt-compact-body {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.agt-compact-body > p {
+  margin: 0 0 8px;
+}
+.agt-compact-body .agt-answer :is(h1, h2, h3) {
+  margin: 10px 0 4px;
+  padding: 0;
+  border: 0;
+  font-size: 12.5px;
+}
+.agt-compacting {
+  color: var(--accent);
+  animation: agt-pulse 1.4s ease-in-out infinite;
+}
+.agt-compact-focus {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+.agt-compact-focus textarea {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+}
 .agt-dot {
   display: inline-block;
   width: 7px;
