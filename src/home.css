@@ -1833,13 +1833,15 @@ textarea.agt-q-input {
   font-style: italic;
 }
 /* Settings → Agents → Permissions: adding an allowed site by hand. */
-.agt-site-add {
+.agt-site-add,
+.set-inline-edit {
   display: flex;
   flex: 1;
   gap: 6px;
   min-width: 0;
 }
-.agt-site-add input {
+.agt-site-add input,
+.set-inline-edit input {
   flex: 1;
   min-width: 0;
   padding: 4px 8px;
@@ -1849,7 +1851,8 @@ textarea.agt-q-input {
   font: inherit;
   outline: 0;
 }
-.agt-site-add input:focus {
+.agt-site-add input:focus,
+.set-inline-edit input:focus {
   border-color: var(--accent);
 }
 .agt-diff span {

@@ -12,6 +12,11 @@ export const MP_PATH = '/api/empires/ws'
 export const CHAT_MAX = 240
 /** Every this many ticks, players send the server a fingerprint of their battle to compare. */
 export const HASH_EVERY = 30
+/** How long a battle waits for a player who stepped away (closed the tab or the game, lost the
+ * connection) before an AI admiral takes their fleet. Long enough to find the way back after
+ * closing the wrong window, reopening the browser or switching devices; the others needn't sit it
+ * out, as they can vote to carry on sooner. */
+export const REJOIN_MS = 3 * 60_000
 
 /** One spawn in a lobby. `team` is absolute (side 0 or 1), not relative to whoever looks at it.
  * Human seats carry the player's id and name; `away` while their connection is down. */
@@ -66,7 +71,8 @@ export type ClientMsg =
   /** First message on every connection. `token` resumes an identity after a reload or a dropped
    * connection, or a server restart (it is kept for a short while). `stored`: the token is the
    * browser's last one rather than this tab's own (the tab was closed): it is only taken back if
-   * nobody is connected with it right now. */
+   * nobody is connected with it right now. Without a token to resume, a signed-in player gets back
+   * their own player who isn't connected (from another device or browser), if there is one. */
   | { t: 'hello'; token?: string; stored?: boolean }
   /** Take a name (also to change it later). */
   | { t: 'claim'; name: string }

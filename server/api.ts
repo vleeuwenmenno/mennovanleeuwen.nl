@@ -9,6 +9,7 @@ import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { addCaldav, clearCaldavCache, listCaldav, removeCaldav } from './caldav.ts'
 import { allCalendars, allEvents, createEvent, deleteEvent, updateEvent } from './calendars.ts'
+import { empiresAway } from './empires.ts'
 import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, MAX_RANGE_DAYS, startGoogle } from './google.ts'
 import { inbox } from './inbox.ts'
 import { linkPreview } from './preview.ts'
@@ -126,6 +127,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       if (sub === '/ban' && method === 'POST') return json(res, 200, banUser(admin, uid, await readJson(req, 4096))), true
       if (sub === '/unban' && method === 'POST') return json(res, 200, unbanUser(admin, uid)), true
       if (sub === '/signout' && method === 'POST') return json(res, 200, signOutUser(admin, uid)), true
+    }
+
+    // Empires At War: whether a multiplayer battle waits for this browser's player (by its token) or
+    // this account's, for the menus' "Rejoin battle" (server/empires.ts). Guests may ask too.
+    if (path === '/api/empires/away' && method === 'POST') {
+      const body = await readJson<{ token?: unknown }>(req, 1024)
+      return json(res, 200, empiresAway(body?.token, currentUser(req)?.login ?? null)), true
     }
 
     if (path === '/api/state' && read) return json(res, 200, readState(requireUser(req))), true

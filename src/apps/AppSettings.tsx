@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { AMP_PRESETS, ampPrefs, ampPresetOf, FILES_SORTS, FILES_VIEWS, FILES_ZOOM_MAX, FILES_ZOOM_MIN, filesPrefs, pdfPrefs, previewPrefs, type AmpRepeat, type AmpVis } from '../data/appPrefs'
 import { useCalendarList, useLastCalendar, setLastCalendar } from '../data/calendar'
 import { useAccount } from '../os/account'
@@ -7,6 +7,8 @@ import { useWM } from '../os/wm'
 import { TerminalPrefsBody, ZOOM_HELP } from '../terminal/TerminalSettings'
 import { calendarView, VIEWS } from './calendar/time'
 import { gameInfo } from './games/catalog'
+import { NAME_MAX, nameProblem, tidyName } from './games/empires/names'
+import { mpName } from './games/empires/net'
 import { ACTIONS, askPanel, DEFAULT_KEYS, keyName, resetKeys, setSettings as setEmpires, useSettings as useEmpires, type AskedPanel } from './games/empires/settings'
 import { empiresMusic, empiresMuted, empiresVolume, gladiatorMusic, gladiatorMuted, gladiatorVolume, POOL_DRAG, POOL_LEVELS, poolMuted, poolSettings, poolVolume, type PoolSensitivity } from './games/prefs'
 
@@ -341,6 +343,49 @@ function GladiatorSettings() {
   )
 }
 
+/** The name Empires At War takes by itself on joining multiplayer (empires/net.ts): changed here
+ * for next time, or forgotten so the next visit asks for one. */
+function EmpiresName() {
+  const name = mpName.use()
+  const [draft, setDraft] = useState<string | null>(null)
+  const why = draft === null ? null : nameProblem(tidyName(draft))
+  const hint = draft !== null ? (draft && why) || 'Taken by itself the next time you join' : name ? `${name}, taken by itself when you join` : 'None yet: asked when you join'
+  return (
+    <Row title="Multiplayer name" hint={hint}>
+      {draft === null ? (
+        <>
+          {name && (
+            <button className="btn btn-small btn-ghost" onClick={() => mpName.set(null)}>
+              Forget
+            </button>
+          )}
+          <button className="btn btn-small" onClick={() => setDraft(name ?? '')}>
+            {name ? 'Change…' : 'Pick one…'}
+          </button>
+        </>
+      ) : (
+        <form
+          className="set-inline-edit"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (why) return
+            mpName.set(tidyName(draft))
+            setDraft(null)
+          }}
+        >
+          <input value={draft} maxLength={NAME_MAX + 4} autoFocus spellCheck={false} onChange={(e) => setDraft(e.target.value)} aria-label="Multiplayer name" aria-invalid={!!why} />
+          <button className="btn btn-small" type="submit" disabled={!!why}>
+            Save
+          </button>
+          <button className="btn btn-small btn-ghost" type="button" onClick={() => setDraft(null)}>
+            Cancel
+          </button>
+        </form>
+      )}
+    </Row>
+  )
+}
+
 function EmpiresSettings() {
   const wm = useWM()
   const s = useEmpires()
@@ -371,6 +416,9 @@ function EmpiresSettings() {
             In the game…
           </button>
         </Row>
+      </ul>
+      <ul className="set-list">
+        <EmpiresName />
       </ul>
       <ul className="set-list">
         <Row title="Health bars" stack>
@@ -468,7 +516,7 @@ export function GamesPane({ sub, t }: { sub?: string; t?: string }) {
       <GameSection id="empires" opened={at('empires')}>
         <EmpiresSettings />
       </GameSection>
-      <p className="muted set-help">Tetris, Pac-Man, Snake, Minesweeper and Breakout have no settings. These stay in this browser; high scores and Gladiator's saves follow you between devices once signed in.</p>
+      <p className="muted set-help">Tetris, Pac-Man, Snake, Minesweeper and Breakout have no settings. These stay in this browser; high scores, Gladiator's saves and your Empires At War multiplayer name follow you between devices once signed in.</p>
     </>
   )
 }

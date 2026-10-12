@@ -16,7 +16,7 @@ import { CREDIT_STEPS, FACTIONS, START_CREDITS } from '../src/apps/games/empires
 import { DEFAULT_RULES, GENERATED, MAP, MAPS, cleanRules, generateMap, type MapDef } from '../src/apps/games/empires/maps.ts'
 import { matchBrains, matchWorld, stepTurn, type MatchInfo, type Turn } from '../src/apps/games/empires/match.ts'
 import { nameKey, nameProblem, randomName, tidyName } from '../src/apps/games/empires/names.ts'
-import { CHAT_MAX, HASH_EVERY, MP_PATH, type AwaySeat, type AwayVote, type ClientMsg, type LobbyInfo, type MpLobby, type MpSlot, type RosterSeat, type ServerMsg, type SlotPatch } from '../src/apps/games/empires/protocol.ts'
+import { CHAT_MAX, HASH_EVERY, MP_PATH, REJOIN_MS as REJOIN_DEFAULT_MS, type AwaySeat, type AwayVote, type ClientMsg, type LobbyInfo, type MpLobby, type MpSlot, type RosterSeat, type ServerMsg, type SlotPatch } from '../src/apps/games/empires/protocol.ts'
 import { STEP, stateHash, type Owner, type World } from '../src/apps/games/empires/sim.ts'
 import { restoreBrain, restoreWorld, snapBrain, snapshotWorld, type BattleSnap } from '../src/apps/games/empires/snapshot.ts'
 
@@ -35,9 +35,11 @@ import { restoreBrain, restoreWorld, snapBrain, snapshotWorld, type BattleSnap }
 /** A dropped player keeps their name and seat this long, for a reload or a blip. */
 const GRACE_MS = 30_000
 /** A player who steps away mid-battle (closes the tab, loses the connection) has this long to come
- * back, while the battle waits for them; then an AI admiral takes their fleet. Tests shorten it. */
-const REJOIN_MS = Number(process.env.EMPIRES_REJOIN_MS) || 60_000
-/** After a restart, longer: a deploy takes a while, and every player has to find the way back. */
+ * back, while the battle waits for them; then an AI admiral takes their fleet (protocol.ts says
+ * why it's three minutes). Tests shorten it. */
+const REJOIN_MS = Number(process.env.EMPIRES_REJOIN_MS) || REJOIN_DEFAULT_MS
+/** After a restart, for everyone at once: a deploy takes a while, and every player has to find the
+ * way back. */
 const RESTART_GRACE_MS = 3 * 60_000
 /** State saved on the way down older than this is from another time (the server was down long, or
  * crashed and came back later): it is thrown away rather than resurrected. */
@@ -405,6 +407,12 @@ function cantStart(l: MpLobby) {
 }
 
 const seatIndex = (m: Match, p: Player) => m.info.seats.findIndex((s) => s.kind === 'human' && s.player === p.id)
+/** Whether the player has a seat in a battle under way that's still theirs (not handed over). */
+function battling(p: Player) {
+  const game = p.lobby ? matches.get(p.lobby) : undefined
+  const seat = game ? seatIndex(game, p) : -1
+  return !!game && seat >= 0 && !game.gone.has(seat)
+}
 
 function start(p: Player, l: MpLobby) {
   if (l.host !== p.id) return send(p, { t: 'error', why: 'Only the host can start the battle.' })
@@ -739,12 +747,27 @@ function setAway(p: Player, away: boolean) {
   pushRoster(game)
 }
 
+/** A signed-in player's own player that isn't connected right now, for them coming back from
+ * another device or browser (without its token): the one a battle is waiting for first, else the
+ * one that left last. Never a connected one: that's them playing elsewhere, or in a second tab on
+ * purpose. */
+function awayByLogin(login: string) {
+  const key = login.toLowerCase()
+  let best: Player | undefined
+  for (const p of players.values()) {
+    if (p.ws || !p.name || p.login?.toLowerCase() !== key) continue
+    if (!best || (battling(p) !== battling(best) ? battling(p) : p.leftAt > best.leftAt)) best = p
+  }
+  return best
+}
+
 function hello(ws: WsConnection, conn: { p: Player | null; login: string | null; ip: string }, token: unknown, stored: boolean) {
   const firstName = (p: Player) => (conn.login && !nameTaken(conn.login, p) ? conn.login : suggest(p))
   // Coming back within the grace period: the same player, name, lobby and seat, on this connection.
   // The browser's last token (from a closed tab) doesn't take over a tab still playing with it.
+  // Signed in, the account finds its player too, from a browser that never had its token.
   const known = typeof token === 'string' ? byToken.get(token) : undefined
-  const back = known && !(stored && known.ws) ? known : undefined
+  const back = (known && !(stored && known.ws) ? known : undefined) ?? (conn.login ? awayByLogin(conn.login) : undefined)
   if (back) {
     back.ws?.close(4000, 'replaced')
     back.ws = ws
@@ -918,8 +941,7 @@ export function empiresUpgrade(req: IncomingMessage, socket: Duplex, head: Buffe
       p.ws = null
       p.leftAt = Date.now()
       // In a battle, kept long enough to rejoin it (and then to hear what happened, if too late).
-      const game = p.lobby ? matches.get(p.lobby) : undefined
-      p.grace = game && seatIndex(game, p) >= 0 && !game.gone.has(seatIndex(game, p)) ? REJOIN_MS + GRACE_MS : GRACE_MS
+      p.grace = battling(p) ? REJOIN_MS + GRACE_MS : GRACE_MS
       setAway(p, true)
     }
   }
@@ -931,6 +953,14 @@ setInterval(() => {
   const now = Date.now()
   for (const p of players.values()) if (!p.ws && p.leftAt && now - p.leftAt > p.grace) forget(p)
 }, 5_000).unref()
+
+/** Whether a battle is waiting for this browser's player (its last token) or this signed-in
+ * account's, which stepped away from it: the menus offer to rejoin it. */
+export function empiresAway(token: unknown, login: string | null): { battle: boolean } {
+  const known = typeof token === 'string' ? byToken.get(token) : undefined
+  const mine = (p: Player | undefined) => !!p && !p.ws && battling(p)
+  return { battle: mine(known) || (!!login && mine(awayByLogin(login))) }
+}
 
 /** For tests and a status line: how many are online, with names, and in lobbies. */
 export const empiresOnline = () => ({ players: players.size, named: byName.size, lobbies: lobbies.size, battles: matches.size })
