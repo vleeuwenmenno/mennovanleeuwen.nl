@@ -34,6 +34,19 @@ const DEFS: Record<string, ModelDef> = {
   'r-defense-flak': republic.defense,
   'r-defense-gun': republic.defense,
   'd-fighter': droid.fighter,
+  'd-station': droid.station,
+  'd-bomber': droid.bomber,
+  'd-repair': droid.repair,
+  'd-picket': droid.picket,
+  'd-gunship': droid.gunship,
+  'd-ion': droid.ion,
+  'd-frigate': droid.frigate,
+  'd-cruiser': droid.cruiser,
+  'd-capital': droid.capital,
+  'd-mine': droid.mine,
+  'd-defense': droid.defense,
+  'd-defense-flak': droid.defense,
+  'd-defense-gun': droid.defense,
 }
 
 export const hasModel = (t: UnitType) => t.id in DEFS
