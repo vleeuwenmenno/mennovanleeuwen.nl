@@ -1749,7 +1749,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     if (urls.length) setText((t) => `${t}${t && !t.endsWith('\n') ? '\n' : ''}${urls.join('\n')}`)
     if (paths.length) void fromPaths(paths)
     if (fromPc.some((p) => !p.rel)) void fromComputer(fromPc.filter((p) => !p.rel).map((p) => p.file))
-    if (folders) notify({ title: folders > 1 ? 'Folders cannot be attached' : 'A folder cannot be attached', body: 'Attach the files inside it, or zip the folder first.', icon: 'folder', transient: true })
+    if (folders) notify({ title: folders > 1 ? 'Folders cannot be attached' : 'A folder cannot be attached', body: 'Attach the files inside it, or zip the folder first.', transient: true })
     input.current?.focus()
   }
   const fromComputer = (list: FileList | File[]) => addFiles(() => [...list].map((f) => toAttachment(f, f.name, 'This computer')))
