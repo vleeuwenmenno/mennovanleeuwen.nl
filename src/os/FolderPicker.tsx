@@ -8,14 +8,15 @@ import { Select } from './Select'
 //
 //   const path = await pickFolder({ title: 'Folder for Documents', start: current })
 //   const paths = await pickFiles({ title: 'Attach files' })     // files instead, several at once
+//   const path = await pickFolder({ title: 'Folder with photos', any: true })  // read-only libraries too
 
-type Request = { title: string; start?: string | null; files?: boolean; resolve: (paths: string[] | null) => void }
+type Request = { title: string; start?: string | null; files?: boolean; any?: boolean; resolve: (paths: string[] | null) => void }
 
 let current: Request | null = null
 const listeners = new Set<() => void>()
 const emit = () => listeners.forEach((l) => l())
 
-export function pickFolder(r: { title: string; start?: string | null }): Promise<string | null> {
+export function pickFolder(r: { title: string; start?: string | null; any?: boolean }): Promise<string | null> {
   return new Promise((resolve) => {
     current?.resolve(null)
     current = { ...r, resolve: (paths) => resolve(paths?.[0] ?? null) }
@@ -52,8 +53,8 @@ export function FolderPicker() {
 
 function Picker({ request }: { request: Request }) {
   const { libraries } = useLibraries()
-  // Folders to save into need a library that can be written; files to read can come from any.
-  const writable = (libraries ?? []).filter((l) => request.files || l.permission === 'rw')
+  // Folders to save into need a library that can be written; files (and folders) to read can come from any.
+  const writable = (libraries ?? []).filter((l) => request.files || request.any || l.permission === 'rw')
   const [chosen, setChosen] = useState<string[]>([])
   const start = request.start ? parseSf(request.start) : null
   const [repo, setRepo] = useState<string | null>(start?.repo ?? null)
@@ -100,7 +101,7 @@ function Picker({ request }: { request: Request }) {
             aria-label="Library"
             options={writable.map((l) => ({ value: l.id, label: `${l.name}${l.encrypted ? ' 🔒' : ''}` }))}
           />
-          {!request.files && (
+          {!request.files && !request.any && (
             <button className="btn btn-small" onClick={newFolder} disabled={!here}>
               New folder
             </button>

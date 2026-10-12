@@ -4,6 +4,7 @@ import {
   answerApproval,
   answerForm,
   canAlwaysAllow,
+  compactionText,
   createProject,
   createThread,
   deleteMemory,
@@ -69,7 +70,7 @@ import { HOME, prettyPath, resolvePath } from '../vfs'
 import { runCommand, workdirPath } from './client'
 import { Editor } from './editor'
 import { markdown } from './markdown'
-import { assistantLines, editPreview, filePreview, runningLines, thinkingLines, todoLines, toolLines, userLines } from './render'
+import { assistantLines, compactLines, editPreview, filePreview, runningLines, thinkingLines, todoLines, toolLines, userLines } from './render'
 import { ago, box, clipLine, count, lines as toMarkup, seg, width, wrap, type Line } from './text'
 
 // The agents command's session: a coding-agent CLI in the MvL OS terminal. Finished messages go to
@@ -126,6 +127,8 @@ const SLASH: [string, string][] = [
   ['/delete', 'delete the thread'],
   ['/todos', "the agent's plan (clear: drop it)"],
   ['/context', 'what takes up the context window'],
+  ['/compact', 'summarise the thread so far to free up context (add what to keep)'],
+  ['/summary', 'what the last compaction kept: the summary the agent works from'],
   ['/memory', 'what the agent remembers (add, rm)'],
   ['/status', 'account, model, folder, mode'],
   ['/export', 'save the thread as Markdown'],
@@ -282,6 +285,7 @@ export class Session {
     const msgs = this.messages
     msgs.forEach((m, i) => {
       if (m.role === 'user') out.push(...userLines(m.content, w), [])
+      else if (m.role === 'compact') out.push(...compactLines(m, w, this.verbose), [])
       else if (m.role === 'assistant') {
         if (m.content.trim()) out.push(...assistantLines(m.content, w), [])
         ;(m.toolCalls ?? []).forEach((c, k) => {
@@ -1240,6 +1244,30 @@ export class Session {
     if (dropped) void this.reconnect()
   }
 
+  /**
+   * /compact: the server has the thread's model summarise the conversation so far, and the agent
+   * works from the summary from then on. Streamed like a message (the divider comes as a message);
+   * no files go with it, so the shell output waiting for the next message stays waiting.
+   */
+  private async compact(text: string) {
+    this.out([[seg('> ', 'muted'), seg(text, 'accent')], []])
+    const ctl = new AbortController()
+    this.turn = { ctl, started: Date.now(), content: '', thinking: '', chars: 0, verb: 'Compacting the conversation' }
+    this.draw()
+    let dropped = false
+    try {
+      await sendMessage(this.thread!.id, text, [], (e) => this.onEvent(e), ctl.signal, { terminal: true })
+    } catch (e) {
+      if (ctl.signal.aborted) {
+        /* stopped */
+      } else if (isDropped(e)) dropped = this.dropTurn()
+      else this.say(`Could not compact: ${(e as Error).message}`, 'red')
+    } finally {
+      this.endTurn()
+    }
+    if (dropped) void this.reconnect()
+  }
+
   /** The stream broke: what was being written is not the answer (the server has it, or lost it). */
   private dropTurn(): true {
     if (this.turn) (this.turn.content = ''), (this.turn.thinking = '')
@@ -1282,14 +1310,16 @@ export class Session {
   private async retry() {
     if (!this.thread) return this.say('Nothing to retry yet')
     if (this.turn) return this.say('Wait for the agent to finish (esc stops it)', 'yellow')
+    // A /compact cut short is compacted again: nothing goes.
+    const compact = !!this.thread.interrupted?.compact
     const last = [...this.messages].reverse().find((m) => m.role === 'user')
-    if (!last) return this.say('Nothing to retry yet')
-    this.say('Retrying your last message')
+    if (!last && !compact) return this.say('Nothing to retry yet')
+    this.say(compact ? 'Compacting again' : 'Retrying your last message')
     // The server sends the message again: it shows again, under what went before.
     this.echo = null
     const ctl = new AbortController()
-    this.turn = { ctl, started: Date.now(), content: '', thinking: '', chars: 0, verb: VERBS[Math.floor(Math.random() * VERBS.length)] }
-    this.messages = this.messages.filter((m) => m.id < last.id)
+    this.turn = { ctl, started: Date.now(), content: '', thinking: '', chars: 0, verb: compact ? 'Compacting the conversation' : VERBS[Math.floor(Math.random() * VERBS.length)] }
+    if (!compact && last) this.messages = this.messages.filter((m) => m.id < last.id)
     this.draw()
     let dropped = false
     try {
@@ -1311,13 +1341,14 @@ export class Session {
     const mine = this.messages.filter((m) => m.role === 'user')
     if (!mine.length) return this.say('Nothing to rewind yet')
     const items = mine
-      .map((m) => ({ value: String(m.id), label: (m.content.split('\n')[0] || (m.attachments ?? []).map((a) => a.name).join(', ')).slice(0, 80), hint: `${this.messages.filter((x) => x.id > m.id).length} after it` }))
+      .map((m) => ({ value: String(m.id), label: (m.content.split('\n')[0] || (m.attachments ?? []).map((a) => a.name).join(', ')).slice(0, 80), hint: `${this.messages.filter((x) => x.id > m.id && x.role !== 'compact').length} after it${this.messages.some((x) => x.id > m.id && x.role === 'compact') ? ', and a compaction' : ''}` }))
       .reverse()
     const picked = await this.choose('Rewind to which message? It and everything after it go', items)
     if (!picked) return
     const id = Number(picked[0])
-    const after = this.messages.filter((x) => x.id > id).length
-    const sure = await this.choose(`Remove it and the ${after} after it?${this.turn ? ' The agent is stopped first.' : ''}`, [
+    const after = this.messages.filter((x) => x.id > id && x.role !== 'compact').length
+    const compactions = this.messages.filter((x) => x.id > id && x.role === 'compact').length
+    const sure = await this.choose(`Remove it and the ${after} after it?${compactions ? ` A compaction after it goes too: the agent works from the messages before it again.` : ''}${this.turn ? ' The agent is stopped first.' : ''}`, [
       { value: 'yes', label: 'Yes, rewind', hint: 'it comes back into the prompt to edit' },
       { value: 'no', label: 'No' },
       { value: 'info', label: 'Not undone: memories, the plan, notes, calendar events, and files changed in the work folder' },
@@ -1477,6 +1508,14 @@ export class Session {
       case 'error':
         this.out([...wrap([seg(`Error: ${e.error}`, 'red'), seg(' · ctrl+r or /retry runs it again', 'muted')], w, [seg('  ⎿  ', 'muted')], [seg('     ')]), []])
         break
+      case 'compact':
+        // A compaction under way (asked for, or by itself when the context is nearly full).
+        if (e.state === 'start' && this.turn) {
+          this.turn.verb = e.auto ? 'Context nearly full: compacting the conversation' : 'Compacting the conversation'
+          this.turn.started = Date.now()
+        } else if (e.state === 'failed' && e.auto) this.say(`Could not compact the conversation: ${e.error ?? 'something went wrong'}`, 'yellow')
+        this.draw()
+        break
       case 'done':
         break
     }
@@ -1493,6 +1532,11 @@ export class Session {
     if (m.role === 'user') {
       if (this.echo !== null && m.content === this.echo) this.echo = null
       else this.out([...userLines(m.content, w), []])
+      return
+    }
+    if (m.role === 'compact') {
+      this.out([...compactLines(m, w, this.verbose), []])
+      if (this.turn) this.turn.verb = VERBS[Math.floor(Math.random() * VERBS.length)]
       return
     }
     if (m.role === 'assistant') {
@@ -1811,8 +1855,29 @@ export class Session {
         const filled = cap ? Math.round((total / cap) * barW) : 0
         const out: Line[] = [[seg('Context ', 'bold'), seg(`${c.model} · ${count(total)}${cap ? ` of ${count(cap)} tokens (${Math.round((total / cap) * 100)}%)` : ' tokens'}`, 'muted')]]
         if (cap) out.push([seg('█'.repeat(filled), 'accent'), seg('░'.repeat(Math.max(0, barW - filled)), 'muted')])
-        for (const p of c.parts.filter((x) => x.tokens > 0)) out.push([seg(`  ${p.label.padEnd(36)}`), seg(count(p.tokens).padStart(7), 'muted')])
+        for (const p of c.parts.filter((x) => x.tokens > 0)) out.push([seg(`  ${p.label.padEnd(36)}`, p.label.startsWith('Summary') ? 'accent' : undefined), seg(count(p.tokens).padStart(7), 'muted')])
+        if (c.compaction) out.push(...wrap([seg(`Compacted ${c.compaction.times === 1 ? 'once' : `${c.compaction.times} times`}, last ${c.compaction.auto ? 'by itself' : 'on request'} ${ago(c.compaction.at)} ago: the summary stands in for the ${c.compaction.hidden} messages before it (/summary shows it).`, 'muted')], w, [seg('  ')]))
+        out.push(...wrap([seg(c.autoCompact !== null ? `It compacts by itself at ${c.autoCompact}% of the window; /compact does it now.` : 'Compacting by itself is off (Settings → Agents); /compact does it now.', 'muted')], w, [seg('  ')]))
         this.out([...out, []])
+        return true
+      }
+      case '/compact': {
+        if (!this.thread) return this.say('Nothing to compact yet: /compact summarises the conversation so far'), true
+        const since = this.messages.slice(this.messages.map((m) => m.role).lastIndexOf('compact') + 1)
+        if (!since.some((m) => m.role === 'user' || m.role === 'assistant')) return this.say(since.length < this.messages.length ? 'Nothing new to compact since the last time' : 'Nothing to compact yet'), true
+        // While it works (or asks you something), the compaction waits its turn in the queue.
+        if (this.turn) {
+          await this.enqueue(raw)
+          this.say('Queued: it compacts when the agent is done')
+          return true
+        }
+        await this.compact(raw)
+        return true
+      }
+      case '/summary': {
+        const last = [...this.messages].reverse().find((m) => m.role === 'compact')
+        if (!last) return this.say('This thread has not been compacted. /compact does it.'), true
+        this.out([...compactLines(last, w, true), []])
         return true
       }
       case '/memory':
@@ -1847,6 +1912,7 @@ export class Session {
           row('mode', this.mode === 'deep' ? 'deep research' : 'quick'),
           row('permissions', { default: 'ask before each change', auto: 'auto (web reads checked)', acceptEdits: 'accept edits', plan: 'plan (read only)', bypass: 'bypass (nothing asks)' }[this.permission]),
           row('work folder', this.workdir ? this.workdir.label : 'none'),
+          row('context', [this.messages.some((m) => m.role === 'compact') ? `compacted ${this.messages.filter((m) => m.role === 'compact').length}×, last ${ago(this.messages.filter((m) => m.role === 'compact').at(-1)!.createdAt)} ago` : 'not compacted', agentSettings().autoCompact ? `compacts by itself at ${agentSettings().compactAt}%` : 'compacting by itself is off'].join(' · ')),
           row('tools', (t?.tools ?? this.tools).join(', ')),
           row('skills', this.skills.filter((s) => s.enabled).map((s) => s.name).join(', ') || 'none'),
           row('seafile', a.seafile ? 'linked' : 'not linked (no work folders or skills)'),
@@ -1978,7 +2044,7 @@ export class Session {
       else if (m.role === 'assistant') {
         const steps = (m.toolCalls ?? []).map((c) => `- ${toolLabel(c)}`).join('\n')
         if (m.content.trim() || steps) out.push(`## Agent\n\n${[steps, m.content.trim()].filter(Boolean).join('\n\n')}`)
-      }
+      } else if (m.role === 'compact') out.push(`---\n\n*${compactionText(m.compact)}. The summary the agent works from since:*\n\n${m.content.split('\n').map((l) => `> ${l}`).join('\n')}\n\n---`)
     }
     return `${out.join('\n\n')}\n`
   }

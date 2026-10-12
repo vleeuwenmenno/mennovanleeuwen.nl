@@ -275,6 +275,40 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  photos: {
+    bg: 'linear-gradient(160deg,#ffb36b,#e0537a 55%,#7a4fd0)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <rect x="10" y="13" width="28" height="22" rx="3" />
+        <circle cx="30" cy="20" r="2.5" />
+        <path d="M10 31l8-8 7 7 4-4 9 9" />
+      </>
+    ),
+  },
+  contacts: {
+    bg: 'linear-gradient(160deg,#c49a6c,#8a6038)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <rect x="12" y="9" width="25" height="30" rx="2" />
+        <circle cx="24.5" cy="20" r="4.5" />
+        <path d="M17 33c1.2-4 4-6 7.5-6s6.3 2 7.5 6M9 15h3M9 24h3M9 33h3" />
+      </>
+    ),
+  },
+  tasks: {
+    bg: 'linear-gradient(160deg,#fbfbf8,#dcdfe6)',
+    fg: '#e0782f',
+    glyph: (
+      <>
+        <circle cx="15" cy="15" r="3.2" />
+        <circle cx="15" cy="24" r="3.2" />
+        <circle cx="15" cy="33" r="3.2" />
+        <path d="M22 15h14M22 24h14M22 33h10" />
+      </>
+    ),
+  },
   settings: {
     bg: 'linear-gradient(160deg,#9aa5b8,#5a6478)',
     fg: '#fff',
@@ -325,7 +359,10 @@ const HUES: Record<AppId, string> = {
   widget: 'var(--yellow)',
   calendar: 'var(--red)',
   mail: 'var(--blue)',
+  contacts: 'var(--orange)',
+  tasks: 'var(--orange)',
   agents: 'var(--magenta)',
+  photos: 'var(--orange)',
   settings: 'var(--text)',
   trash: 'var(--muted)',
 }

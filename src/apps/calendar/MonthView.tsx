@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { dayKey, eventsOn, startOfDay, type CalendarEvent } from '../../data/calendar'
 import { addDays, atMinutes, hhmm, isoWeek, moved, sameDay, span } from './time'
-import type { Change } from './TimeGrid'
+import { isTaskEvent } from './tasks'
+import { TaskCheck, type Change } from './TimeGrid'
 
 // Six weeks around the month. Each day lists its all-day events, then its timed ones, as far as
 // they fit, then "+3 more" (which opens that day). Drag an event to another day to move it there
@@ -18,13 +19,15 @@ type Props = {
   onChange: (e: CalendarEvent, change: Change) => void
   onDay: (d: Date) => void
   onMenu: (ev: ReactMouseEvent, e: CalendarEvent | null, at: Date, allDay: boolean) => void
+  /** A task's ring ticked. */
+  onToggle?: (e: CalendarEvent) => void
 }
 
 type Drag = { kind: 'create'; from: number; to: number } | { kind: 'move'; e: CalendarEvent; grab: number; at: number; moved: boolean } | { kind: 'tap'; e: CalendarEvent | null; at: number }
 
 const LINE = 19
 
-export function MonthView({ days, month, events, now, onOpen, onCreate, onChange, onDay, onMenu }: Props) {
+export function MonthView({ days, month, events, now, onOpen, onCreate, onChange, onDay, onMenu, onToggle }: Props) {
   const gridRef = useRef<HTMLDivElement>(null)
   const [lines, setLines] = useState(3)
   const [drag, setDragState] = useState<Drag | null>(null)
@@ -160,10 +163,11 @@ export function MonthView({ days, month, events, now, onOpen, onCreate, onChange
                   <div
                     key={e.id}
                     data-ev={e.id}
-                    className={`ca-chip ${e.allDay ? 'is-allday' : ''} ${e.editable ? '' : 'is-ro'} ${drag?.kind === 'move' && drag.moved && drag.e.id === e.id ? 'is-dragging' : ''} ${!e.allDay && span(e).end < now.getTime() ? 'is-past' : ''}`}
+                    className={`ca-chip ${e.allDay ? 'is-allday' : ''} ${isTaskEvent(e) ? `is-task ${e.task.completed ? 'is-done' : ''}` : ''} ${e.editable ? '' : 'is-ro'} ${drag?.kind === 'move' && drag.moved && drag.e.id === e.id ? 'is-dragging' : ''} ${!e.allDay && span(e).end < now.getTime() ? 'is-past' : ''}`}
                     style={{ ['--c' as string]: e.color }}
                     title={`${e.title} · ${e.calendar}`}
                   >
+                    {isTaskEvent(e) && <TaskCheck e={e} onToggle={onToggle} />}
                     {!e.allDay && <span className="ca-chip-time">{hhmm(new Date(e.start))}</span>}
                     <span className="ca-chip-title">{e.title}</span>
                   </div>
