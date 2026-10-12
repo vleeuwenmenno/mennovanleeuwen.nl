@@ -1,0 +1,1211 @@
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { Readable } from 'node:stream'
+import { allows, normalizePrefs } from '../src/data/notifySources.ts'
+import { accounts, isAdmin, requireUser, type User } from './auth.ts'
+import { database, decrypt, encrypt, onUserGone } from './db.ts'
+import { guardedFetch, readCapped, rethrowEgress } from './egress.ts'
+import { HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
+import { parseInvite, type Invite } from './imip.ts'
+import { sanitizeHtml } from './mailhtml.ts'
+import { claimOnce, notify, registerWatcher, tellPages } from './notifier.ts'
+import { readState } from './state.ts'
+
+// Mail over JMAP (RFC 8620, RFC 8621): Fastmail, Stalwart and other servers that speak it. An
+// account is a JMAP session URL (found from a host through /.well-known/jmap; Fastmail's is the
+// default) and an API token, stored encrypted. The token never reaches the browser: the Mail app
+// (src/apps/mail) asks this server's small per-user API under /api/mail, and every JMAP call goes
+// from here, through server/egress.ts, batched with back-references where one answer feeds the next.
+//
+// - Mailboxes, identities, threads (Email/query with collapseThreads), whole conversations
+//   (Thread/get + Email/get) with their HTML made safe here (server/mailhtml.ts) and calendar
+//   invitations read (server/imip.ts).
+// - Changes: flags, moves (archive, trash, junk), permanent deletes only from Trash, drafts
+//   (Email/set in Drafts, replaced on every save) and sending (EmailSubmission/set with
+//   onSuccessUpdateEmail: out of Drafts into Sent).
+// - Blobs: attachments uploaded and downloaded through here; inline (cid:) pictures put into the
+//   HTML as data: URIs, or (big ones) through short-lived sealed links that need no session cookie.
+// - Push: per linked account, while useful (mail notifications on, or Mail used lately), a JMAP
+//   EventSource, or polling when the server has none or it keeps failing. New mail in the Inbox
+//   comes as a notification (server/notifier.ts, web push included) and open Mail windows update.
+//
+// IMAP and SMTP are not supported (yet).
+
+export const FASTMAIL_SESSION = 'https://api.fastmail.com/jmap/session'
+const CORE = 'urn:ietf:params:jmap:core'
+const MAIL = 'urn:ietf:params:jmap:mail'
+const SUBMISSION = 'urn:ietf:params:jmap:submission'
+/** Accounts one user may link. */
+const MAX_ACCOUNTS = 5
+/** A JMAP Id: 1 to 255 characters of the URL-safe base64 alphabet. Checked before any goes into a URL or a call. */
+const ID = /^[A-Za-z0-9_-]{1,255}$/
+const EMAIL = /^[^\s@<>(),;:"\\]+@[^\s@<>(),;:"\\]+$/
+const TIMEOUT = 20_000
+
+export type MailAccountInfo = { id: number; label: string; username: string; url: string }
+type Linked = MailAccountInfo & { user: User; token: string }
+type Row = { id: number; user_id: number; label: string; session_url: string; username: string; token: string; push_state: string | null }
+
+// ---------------------------------------------------------------------------------------------
+// Accounts
+
+let ready = false
+function table() {
+  if (ready) return database()
+  database().exec(`CREATE TABLE IF NOT EXISTS jmap_accounts (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    session_url TEXT NOT NULL,
+    username TEXT NOT NULL,
+    token TEXT NOT NULL,
+    push_state TEXT,
+    created_at INTEGER NOT NULL
+  )`)
+  ready = true
+  return database()
+}
+
+export function listMail(user: User): MailAccountInfo[] {
+  const rows = table().prepare('SELECT id, label, session_url, username FROM jmap_accounts WHERE user_id = ? ORDER BY id').all(user.id) as unknown as Row[]
+  return rows.map((r) => ({ id: r.id, label: r.label, username: r.username, url: r.session_url }))
+}
+
+function linked(user: User, id: unknown): Linked {
+  const row = table().prepare('SELECT * FROM jmap_accounts WHERE user_id = ? AND id = ?').get(user.id, Number(id)) as unknown as Row | undefined
+  if (!row) throw new HttpError(404, 'No such mail account')
+  return { id: row.id, label: row.label, username: row.username, url: row.session_url, user, token: decrypt(row.token) }
+}
+
+/** A session URL from what was typed: a host means its /.well-known/jmap. */
+function sessionUrl(input: string | undefined): string {
+  let raw = (input ?? '').trim() || FASTMAIL_SESSION
+  if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    throw new HttpError(400, 'That is not a URL')
+  }
+  if (url.username || url.password) throw new HttpError(400, 'Leave credentials out of the URL')
+  if (url.pathname === '/' && !url.search) url.pathname = '/.well-known/jmap'
+  return url.href
+}
+
+/** Checks the token against the session (proving it works and has mail), then stores it. */
+export async function addMail(user: User, body: { url?: string; token?: string; label?: string }): Promise<MailAccountInfo> {
+  const token = body.token?.trim()
+  if (!token) throw new HttpError(400, 'An API token is required')
+  if (token.length > 4096 || /\s/.test(token)) throw new HttpError(400, 'That does not look like an API token')
+  const { session, url } = await readSession(user, sessionUrl(body.url), token)
+  const label = (body.label?.trim() || (/fastmail/.test(url) ? 'Fastmail' : new URL(url).host)).slice(0, 40)
+  const db = table()
+  const existing = db.prepare('SELECT id FROM jmap_accounts WHERE user_id = ? AND session_url = ? AND username = ?').get(user.id, url, session.username) as { id: number } | undefined
+  if (existing) {
+    // The same account again (a new token): keep it, with its place in the list.
+    db.prepare('UPDATE jmap_accounts SET label = ?, token = ? WHERE id = ?').run(label, encrypt(token), existing.id)
+    forget(existing.id)
+    return { id: existing.id, label, username: session.username, url }
+  }
+  const { n } = db.prepare('SELECT COUNT(*) AS n FROM jmap_accounts WHERE user_id = ?').get(user.id) as { n: number }
+  if (n >= MAX_ACCOUNTS) throw new HttpError(400, `At most ${MAX_ACCOUNTS} mail accounts`)
+  const r = db.prepare('INSERT INTO jmap_accounts (user_id, label, session_url, username, token, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(user.id, label, url, session.username, encrypt(token), Date.now())
+  return { id: Number(r.lastInsertRowid), label, username: session.username, url }
+}
+
+export function removeMail(user: User, id: number) {
+  table().prepare('DELETE FROM jmap_accounts WHERE user_id = ? AND id = ?').run(user.id, id)
+  forget(id)
+}
+
+/** Drops what is kept in memory about an account (its session, mailboxes, push line). */
+function forget(id: number) {
+  sessions.delete(id)
+  metas.delete(id)
+  people.delete(id)
+  stopLive(id)
+}
+
+onUserGone((userId) => {
+  for (const [id, l] of live) if (l.userId === userId) forget(id)
+  lastUse.delete(userId)
+})
+
+// ---------------------------------------------------------------------------------------------
+// Sessions and calls
+
+type Session = {
+  apiUrl: string
+  downloadUrl: string
+  uploadUrl: string
+  eventSourceUrl: string | null
+  accountId: string
+  username: string
+  maxSizeUpload: number
+  maxObjectsInSet: number
+  submission: boolean
+  state: string
+  at: number
+}
+const sessions = new Map<number, Session>()
+const SESSION_TTL = 30 * 60_000
+
+const bearer = (token: string) => ({ Authorization: `Bearer ${token}`, 'User-Agent': 'mvlos' })
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).host
+  } catch {
+    return url
+  }
+}
+
+/** Reads a session, following redirects (/.well-known/jmap points elsewhere) with the token kept, over https only. */
+async function readSession(user: User, start: string, token: string): Promise<{ session: Session; url: string }> {
+  let at = start
+  for (let hop = 0; hop < 4; hop++) {
+    const res = await guardedFetch(user, at, { headers: { ...bearer(token), Accept: 'application/json' }, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT) }).catch((e) => (rethrowEgress(e), null))
+    if (!res) throw new HttpError(502, `${hostOf(at)} did not answer`)
+    const location = res.headers.get('location')
+    if (res.status >= 300 && res.status < 400 && location) {
+      await res.body?.cancel().catch(() => {})
+      const next = new URL(location, at)
+      if (new URL(at).protocol === 'https:' && next.protocol !== 'https:') throw new HttpError(400, `${hostOf(at)} sent the session to an insecure address`)
+      at = next.href
+      continue
+    }
+    if (res.status === 401 || res.status === 403) throw new HttpError(400, `${hostOf(at)} refused the token`)
+    if (!res.ok) throw new HttpError(400, `${hostOf(at)} answered ${res.status}: is that a JMAP server?`)
+    let body: Record<string, unknown>
+    try {
+      body = JSON.parse((await readCapped(res, 1024 * 1024)).toString('utf8'))
+    } catch {
+      throw new HttpError(400, `${hostOf(at)} did not answer with a JMAP session`)
+    }
+    return { session: toSession(body, at), url: start === at ? start : at }
+  }
+  throw new HttpError(400, `${hostOf(start)} redirected too often`)
+}
+
+function toSession(j: Record<string, unknown>, base: string): Session {
+  const caps = (j.capabilities ?? {}) as Record<string, Record<string, unknown>>
+  const primary = (j.primaryAccounts ?? {}) as Record<string, string>
+  const accountId = primary[MAIL]
+  const abs = (v: unknown) => (typeof v === 'string' && v ? new URL(v, base).href : null)
+  const apiUrl = abs(j.apiUrl)
+  const downloadUrl = typeof j.downloadUrl === 'string' ? j.downloadUrl : null
+  const uploadUrl = typeof j.uploadUrl === 'string' ? j.uploadUrl : null
+  if (!caps[CORE] || !apiUrl || !downloadUrl || !uploadUrl) throw new HttpError(400, 'That is not a JMAP session')
+  if (!caps[MAIL] || !accountId || !ID.test(accountId)) throw new HttpError(400, 'That account has no mail (does the token have Mail access?)')
+  const core = caps[CORE]
+  const accountCaps = (((j.accounts ?? {}) as Record<string, { accountCapabilities?: Record<string, unknown> }>)[accountId]?.accountCapabilities ?? {}) as Record<string, unknown>
+  return {
+    apiUrl,
+    downloadUrl: template(downloadUrl, base),
+    uploadUrl: template(uploadUrl, base),
+    eventSourceUrl: typeof j.eventSourceUrl === 'string' && j.eventSourceUrl ? template(j.eventSourceUrl, base) : null,
+    accountId,
+    username: typeof j.username === 'string' && j.username ? j.username.slice(0, 200) : accountId,
+    maxSizeUpload: Math.min(Number(core.maxSizeUpload) || 50_000_000, 50_000_000),
+    maxObjectsInSet: Math.max(1, Math.min(Number(core.maxObjectsInSet) || 500, 500)),
+    submission: !!caps[SUBMISSION] && (SUBMISSION in accountCaps || !!primary[SUBMISSION]),
+    state: typeof j.state === 'string' ? j.state : '',
+    at: Date.now(),
+  }
+}
+
+/** A URL template (RFC 6570 level 1) resolved against the session's URL, its {variables} kept. */
+const template = (v: string, base: string) => new URL(v.replace(/[{}]/g, (c) => (c === '{' ? '%7B' : '%7D')), base).href.replace(/%7B(\w+)%7D/gi, '{$1}')
+
+/** A URL template filled in, each value escaped. */
+const fill = (template: string, values: Record<string, string>) => template.replace(/\{(\w+)\}/g, (all, k: string) => (k in values ? encodeURIComponent(values[k]) : all))
+
+async function session(acc: Linked, fresh = false): Promise<Session> {
+  const known = sessions.get(acc.id)
+  if (known && !fresh && Date.now() - known.at < SESSION_TTL) return known
+  const { session: s } = await readSession(acc.user, acc.url, acc.token).catch((e: HttpError) => {
+    throw new HttpError(e.status === 400 ? 502 : e.status, `${acc.label}: ${e.message}`)
+  })
+  sessions.set(acc.id, s)
+  return s
+}
+
+type Call = [string, Record<string, unknown>, string]
+type Json = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
+
+/** The answers to one request, by call id; a method error throws, with the server's words. */
+class Answers {
+  private list: [string, Json, string][]
+  constructor(list: [string, Json, string][]) {
+    this.list = list
+  }
+  all(id: string): [string, Json][] {
+    return this.list.filter((r) => r[2] === id).map((r) => [r[0], r[1]])
+  }
+  error(id: string): Json | null {
+    return this.all(id).find(([name]) => name === 'error')?.[1] ?? null
+  }
+  get(id: string, name?: string): Json {
+    const err = this.error(id)
+    if (err) throw new HttpError(err.type === 'notFound' ? 404 : 502, `The mail server refused ${name ?? 'that'}: ${err.description ?? err.type ?? 'error'}`)
+    const found = this.all(id).find(([n]) => !name || n === name)
+    if (!found) throw new HttpError(502, `The mail server did not answer ${name ?? id}`)
+    return found[1]
+  }
+}
+
+/** One JMAP request: the calls in order, later ones free to refer back to earlier answers. */
+async function jmap(acc: Linked, calls: Call[]): Promise<Answers> {
+  const s = await session(acc)
+  const using = [CORE, MAIL, ...(calls.some(([m]) => m.startsWith('EmailSubmission/') || m.startsWith('Identity/')) ? [SUBMISSION] : [])]
+  const res = await guardedFetch(acc.user, s.apiUrl, {
+    method: 'POST',
+    headers: { ...bearer(acc.token), 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ using, methodCalls: calls.map(([m, args, id]) => [m, { accountId: s.accountId, ...args }, id]) }),
+    signal: AbortSignal.timeout(TIMEOUT),
+  }).catch((e) => (rethrowEgress(e), null))
+  if (!res) throw new HttpError(502, `${acc.label} did not answer`)
+  if (res.status === 401 || res.status === 403) {
+    sessions.delete(acc.id)
+    await res.body?.cancel().catch(() => {})
+    throw new HttpError(502, `${acc.label} refused the token: link it again in Settings → Integrations → Mail`)
+  }
+  const text = (await readCapped(res, 64 * 1024 * 1024)).toString('utf8')
+  let body: Json
+  try {
+    body = JSON.parse(text)
+  } catch {
+    throw new HttpError(502, `${acc.label} answered ${res.status}`)
+  }
+  if (!res.ok) throw new HttpError(502, `${acc.label} answered ${res.status}: ${body.detail ?? body.type ?? ''}`.trim())
+  // The session changed (new mailboxes' URLs, another account): read it again next time.
+  if (body.sessionState && s.state && body.sessionState !== s.state) sessions.delete(acc.id)
+  return new Answers(Array.isArray(body.methodResponses) ? body.methodResponses : [])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Mailboxes and identities
+
+export type Mailbox = { id: string; name: string; parentId: string | null; role: string | null; sortOrder: number; total: number; unread: number; totalThreads: number; unreadThreads: number }
+export type Identity = { id: string; name: string; email: string; replyTo: Address[] | null; bcc: Address[] | null; textSignature: string }
+type Address = { name: string | null; email: string }
+type Meta = { at: number; mailboxes: Mailbox[]; identities: Identity[]; role: (r: string) => string | null }
+const metas = new Map<number, Meta>()
+
+const MAILBOX_PROPS = ['id', 'name', 'parentId', 'role', 'sortOrder', 'totalEmails', 'unreadEmails', 'totalThreads', 'unreadThreads']
+
+async function meta(acc: Linked, fresh = false): Promise<Meta> {
+  const known = metas.get(acc.id)
+  if (known && !fresh && Date.now() - known.at < 60_000) return known
+  const s = await session(acc)
+  const r = await jmap(acc, [['Mailbox/get', { ids: null, properties: MAILBOX_PROPS }, 'm'], ...(s.submission ? ([['Identity/get', { ids: null }, 'i']] as Call[]) : [])])
+  const mailboxes: Mailbox[] = (r.get('m', 'Mailbox/get').list as Json[]).map((m) => ({
+    id: String(m.id),
+    name: String(m.name ?? ''),
+    parentId: m.parentId ?? null,
+    role: m.role ?? null,
+    sortOrder: Number(m.sortOrder) || 0,
+    total: Number(m.totalEmails) || 0,
+    unread: Number(m.unreadEmails) || 0,
+    totalThreads: Number(m.totalThreads) || 0,
+    unreadThreads: Number(m.unreadThreads) || 0,
+  }))
+  const identities: Identity[] = s.submission && !r.error('i') ? (r.get('i', 'Identity/get').list as Json[]).map((i) => ({ id: String(i.id), name: String(i.name ?? ''), email: String(i.email ?? ''), replyTo: i.replyTo ?? null, bcc: i.bcc ?? null, textSignature: String(i.textSignature ?? '') })) : []
+  const m: Meta = { at: Date.now(), mailboxes, identities, role: (role) => mailboxes.find((b) => b.role === role)?.id ?? null }
+  metas.set(acc.id, m)
+  return m
+}
+
+// ---------------------------------------------------------------------------------------------
+// Threads and messages
+
+export type ThreadRow = {
+  id: string
+  threadId: string
+  mailboxIds: string[]
+  from: Address[]
+  to: Address[]
+  subject: string
+  preview: string
+  receivedAt: string
+  seen: boolean
+  flagged: boolean
+  answered: boolean
+  draft: boolean
+  hasAttachment: boolean
+  /** Messages in the conversation. */
+  count: number
+}
+
+const ROW_PROPS = ['id', 'threadId', 'mailboxIds', 'keywords', 'from', 'to', 'subject', 'preview', 'receivedAt', 'hasAttachment']
+const addresses = (v: unknown): Address[] => (Array.isArray(v) ? v.filter((a) => a && typeof a.email === 'string').map((a) => ({ name: typeof a.name === 'string' && a.name ? a.name : null, email: a.email })) : [])
+
+function toRow(e: Json, count: number): ThreadRow {
+  const k = e.keywords ?? {}
+  return {
+    id: e.id,
+    threadId: e.threadId,
+    mailboxIds: Object.keys(e.mailboxIds ?? {}),
+    from: addresses(e.from),
+    to: addresses(e.to),
+    subject: String(e.subject ?? ''),
+    preview: String(e.preview ?? ''),
+    receivedAt: String(e.receivedAt ?? ''),
+    seen: !!k.$seen,
+    flagged: !!k.$flagged,
+    answered: !!k.$answered,
+    draft: !!k.$draft,
+    hasAttachment: !!e.hasAttachment,
+    count,
+  }
+}
+
+/**
+ * A search as typed, into a JMAP filter: free words search everything, and from:, to:, cc:,
+ * subject:, has:attachment, is:unread, is:flagged, after:YYYY-MM-DD and before:YYYY-MM-DD narrow it.
+ * "Quoted words" stay together.
+ */
+export function parseSearch(q: string): Json | null {
+  const filter: Json = {}
+  const words: string[] = []
+  for (const m of q.matchAll(/(\w+):(?:"([^"]*)"|(\S+))|"([^"]*)"|(\S+)/g)) {
+    const [, key, quotedValue, value, quoted, word] = m
+    const v = (quotedValue ?? value ?? '').slice(0, 200)
+    const k = key?.toLowerCase()
+    if (k === 'from' || k === 'to' || k === 'cc' || k === 'bcc' || k === 'subject' || k === 'body') filter[k] = v
+    else if (k === 'has' && /^attach/i.test(v)) filter.hasAttachment = true
+    else if (k === 'is' && v === 'unread') filter.notKeyword = '$seen'
+    else if (k === 'is' && (v === 'flagged' || v === 'starred')) filter.hasKeyword = '$flagged'
+    else if ((k === 'after' || k === 'before') && /^\d{4}-\d{2}-\d{2}$/.test(v)) filter[k] = new Date(`${v}T00:00:00Z`).toISOString().replace('.000', '')
+    else words.push((quoted ?? word ?? m[0]).slice(0, 200))
+  }
+  if (words.length) filter.text = words.join(' ')
+  return Object.keys(filter).length ? filter : null
+}
+
+/** A page of conversations: a mailbox's, or a search across every mailbox but Trash and Junk. */
+export async function listThreads(acc: Linked, opts: { mailbox?: string | null; q?: string | null; position?: number; limit?: number }) {
+  const m = await meta(acc)
+  const search = opts.q ? parseSearch(opts.q) : null
+  let filter: Json | null
+  if (search) {
+    const away = [m.role('trash'), m.role('junk')].filter((x): x is string => !!x)
+    filter = { ...search, ...(opts.mailbox && ID.test(opts.mailbox) ? { inMailbox: opts.mailbox } : away.length ? { inMailboxOtherThan: away } : {}) }
+  } else {
+    if (!opts.mailbox || !ID.test(opts.mailbox)) throw new HttpError(400, 'Which mailbox?')
+    filter = { inMailbox: opts.mailbox }
+  }
+  const position = Math.max(0, Math.min(Number(opts.position) || 0, 1_000_000))
+  const limit = Math.max(1, Math.min(Number(opts.limit) || 50, 200))
+  const r = await jmap(acc, [
+    ['Email/query', { filter, sort: [{ property: 'receivedAt', isAscending: false }], collapseThreads: true, position, limit, calculateTotal: true }, 'q'],
+    ['Email/get', { '#ids': { resultOf: 'q', name: 'Email/query', path: '/ids' }, properties: ROW_PROPS }, 'g'],
+    ['Thread/get', { '#ids': { resultOf: 'g', name: 'Email/get', path: '/list/*/threadId' } }, 't'],
+  ])
+  const q = r.get('q', 'Email/query')
+  const emails = new Map((r.get('g', 'Email/get').list as Json[]).map((e) => [e.id, e]))
+  const sizes = new Map((r.get('t', 'Thread/get').list as Json[]).map((t) => [t.id, (t.emailIds ?? []).length]))
+  const rows = (q.ids as string[]).map((id) => emails.get(id)).filter(Boolean).map((e) => toRow(e!, sizes.get(e!.threadId) ?? 1))
+  return { rows, total: typeof q.total === 'number' ? q.total : null, position: q.position ?? position }
+}
+
+export type Attachment = { blobId: string; name: string; type: string; size: number; cid: string | null }
+export type Message = ThreadRow & {
+  cc: Address[]
+  bcc: Address[]
+  replyTo: Address[]
+  sentAt: string | null
+  messageId: string[]
+  inReplyTo: string[]
+  references: string[]
+  /** Safe HTML, for the sandboxed frame. */
+  html: string | null
+  /** Plain text, when the message has no HTML. */
+  text: string | null
+  blocked: number
+  trackers: number
+  /** Whether remote images were let in. */
+  images: boolean
+  truncated: boolean
+  attachments: Attachment[]
+  invite: Invite | null
+}
+
+const MESSAGE_PROPS = [...ROW_PROPS, 'cc', 'bcc', 'replyTo', 'sentAt', 'messageId', 'inReplyTo', 'references', 'textBody', 'htmlBody', 'attachments', 'bodyValues']
+const BODY_ARGS = { fetchTextBodyValues: true, fetchHTMLBodyValues: true, maxBodyValueBytes: 1_000_000 }
+const escapeText = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/** Senders whose remote images always load (the Mail app's "Always for this sender", synced state "mail"). */
+function imageSenders(user: User): Set<string> {
+  const v = readState(user).mail?.value as { imageSenders?: unknown } | undefined
+  return new Set(Array.isArray(v?.imageSenders) ? v.imageSenders.filter((x): x is string => typeof x === 'string').map((x) => x.toLowerCase()) : [])
+}
+
+/** Inline pictures up to this size each, and this much in all per message, go into its HTML as data: URIs. */
+const INLINE_EACH = 1_500_000
+const INLINE_TOTAL = 6_000_000
+
+/** A sealed, short-lived link to one of a message's inline parts: the message frame loads it without cookies. */
+function inlineLink(acc: Linked, part: { blobId: string; type: string }): string {
+  const sealed = encrypt(JSON.stringify({ u: acc.user.id, a: acc.id, b: part.blobId, t: part.type, e: Date.now() + 12 * 3600_000 }))
+  return `/api/mail/inline/${Buffer.from(sealed).toString('base64url')}`
+}
+
+async function render(acc: Linked, e: Json, images: boolean): Promise<Message> {
+  const values = (e.bodyValues ?? {}) as Record<string, { value?: string; isTruncated?: boolean }>
+  const parts = (list: unknown): Json[] => (Array.isArray(list) ? list : [])
+  const htmlParts = parts(e.htmlBody)
+  const textParts = parts(e.textBody)
+  const files = parts(e.attachments)
+  const valid = (p: Json) => typeof p.blobId === 'string' && ID.test(p.blobId)
+  // Inline parts by Content-ID, for cid: images.
+  const byCid = new Map<string, Json>()
+  for (const p of [...files, ...htmlParts]) if (p.cid && valid(p)) byCid.set(String(p.cid).replace(/^<|>$/g, ''), p)
+  let html: string | null = null
+  let text: string | null = null
+  let blocked = 0
+  let trackers = 0
+  let usedCids: string[] = []
+  const truncated = Object.values(values).some((v) => v.isTruncated)
+  if (htmlParts.some((p) => p.type === 'text/html')) {
+    // The parts in order: HTML as it is, text as text, pictures in between where they were.
+    const source = htmlParts
+      .map((p) => {
+        if (p.type === 'text/html') return values[p.partId]?.value ?? ''
+        if (String(p.type).startsWith('text/')) return `<div style="white-space: pre-wrap">${escapeText(values[p.partId]?.value ?? '')}</div>`
+        if (String(p.type).startsWith('image/') && valid(p)) return `<img src="cid:${p.cid ? encodeURIComponent(String(p.cid).replace(/^<|>$/g, '')) : `blob.${p.blobId}`}" alt="">`
+        return ''
+      })
+      .join('\n')
+    // The pictures the HTML shows: small ones go into it as data: URIs (the sandboxed frame then
+    // loads nothing for them at all), bigger ones through a sealed link.
+    const partOf = (id: string) => (id.startsWith('blob.') ? htmlParts.find((x) => x.blobId === id.slice(5)) : byCid.get(id))
+    const wanted = new Set<Json>()
+    for (const m of source.matchAll(/cid:([^"'\s>)]+)/gi)) {
+      let id = m[1]
+      try {
+        id = decodeURIComponent(id)
+      } catch {
+        /* as written */
+      }
+      const p = partOf(id.replace(/^<|>$/g, ''))
+      if (p && SHOWABLE.test(String(p.type))) wanted.add(p)
+    }
+    const embedded = new Map<string, string>()
+    let room = INLINE_TOTAL
+    await Promise.all(
+      [...wanted].map(async (p) => {
+        const size = Number(p.size) || 0
+        if (size > INLINE_EACH || size > room) return
+        room -= size
+        const bytes = await readCapped(await fetchBlob(acc, p.blobId, 'image', p.type), INLINE_EACH).catch(() => null)
+        if (bytes) embedded.set(p.blobId, `data:${String(p.type).toLowerCase()};base64,${bytes.toString('base64')}`)
+      }),
+    )
+    const cid = (id: string) => {
+      const p = partOf(id)
+      if (!p || !SHOWABLE.test(String(p.type))) return null
+      return embedded.get(p.blobId) ?? inlineLink(acc, { blobId: p.blobId, type: p.type })
+    }
+    const s = sanitizeHtml(source, { images, cid })
+    html = s.html
+    blocked = s.blocked
+    trackers = s.trackers
+    usedCids = s.cids
+  } else {
+    text = textParts
+      .filter((p) => String(p.type).startsWith('text/'))
+      .map((p) => values[p.partId]?.value ?? '')
+      .join('\n')
+  }
+  const used = new Set(usedCids)
+  const attachments: Attachment[] = files
+    .filter(valid)
+    .filter((p) => !(p.cid && used.has(String(p.cid).replace(/^<|>$/g, ''))))
+    .map((p) => ({ blobId: p.blobId, name: String(p.name ?? '') || (String(p.type).startsWith('text/calendar') ? 'invite.ics' : 'attachment'), type: String(p.type ?? 'application/octet-stream'), size: Number(p.size) || 0, cid: p.cid ? String(p.cid) : null }))
+  // A calendar invitation: the first text/calendar part or .ics file, read for its card.
+  let invite: Invite | null = null
+  const ics = [...files, ...textParts, ...htmlParts].find((p) => valid(p) && (/^text\/calendar\b/i.test(String(p.type)) || /\.ics$/i.test(String(p.name ?? ''))))
+  if (ics) {
+    const value = values[ics.partId]?.value
+    const body = value ?? (await blobText(acc, ics.blobId, 256 * 1024).catch(() => null))
+    invite = body ? parseInvite(body) : null
+  }
+  // The invitation's own text/calendar part (no file name) is the card; a named .ics stays a file.
+  if (invite) attachments.splice(0, attachments.length, ...attachments.filter((a) => !(a.name === 'invite.ics' && /^text\/calendar\b/i.test(a.type) && !files.find((p) => p.blobId === a.blobId)?.name)))
+  return {
+    ...toRow(e, 0),
+    cc: addresses(e.cc),
+    bcc: addresses(e.bcc),
+    replyTo: addresses(e.replyTo),
+    sentAt: e.sentAt ?? null,
+    messageId: Array.isArray(e.messageId) ? e.messageId : [],
+    inReplyTo: Array.isArray(e.inReplyTo) ? e.inReplyTo : [],
+    references: Array.isArray(e.references) ? e.references : [],
+    html,
+    text,
+    blocked,
+    trackers,
+    images,
+    truncated,
+    attachments,
+    invite,
+  }
+}
+
+/** A conversation, oldest first. `images`: message ids to show with remote images (Load images). */
+export async function getThread(acc: Linked, threadId: string, images: string[]): Promise<{ id: string; messages: Message[] }> {
+  if (!ID.test(threadId)) throw new HttpError(400, 'Bad thread')
+  const r = await jmap(acc, [
+    ['Thread/get', { ids: [threadId] }, 't'],
+    ['Email/get', { '#ids': { resultOf: 't', name: 'Thread/get', path: '/list/*/emailIds' }, properties: MESSAGE_PROPS, ...BODY_ARGS }, 'g'],
+  ])
+  const thread = (r.get('t', 'Thread/get').list as Json[])[0]
+  if (!thread) throw new HttpError(404, 'That conversation is gone')
+  const senders = imageSenders(acc.user)
+  const emails = new Map((r.get('g', 'Email/get').list as Json[]).map((e) => [e.id, e]))
+  const list = (thread.emailIds as string[]).map((id) => emails.get(id)).filter((e): e is Json => !!e)
+  const messages = await Promise.all(list.map((e) => render(acc, e, images.includes(e.id) || addresses(e.from).some((a) => senders.has(a.email.toLowerCase())))))
+  return { id: threadId, messages }
+}
+
+/** One message again (with remote images, after Load images). */
+export async function getMessage(acc: Linked, emailId: string, images: boolean): Promise<Message> {
+  if (!ID.test(emailId)) throw new HttpError(400, 'Bad message')
+  const r = await jmap(acc, [['Email/get', { ids: [emailId], properties: MESSAGE_PROPS, ...BODY_ARGS }, 'g']])
+  const e = (r.get('g', 'Email/get').list as Json[])[0]
+  if (!e) throw new HttpError(404, 'That message is gone')
+  return render(acc, e, images)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Changes
+
+type Op = 'seen' | 'unseen' | 'flag' | 'unflag' | 'move' | 'archive' | 'trash' | 'junk' | 'notjunk' | 'destroy'
+const OPS = new Set<Op>(['seen', 'unseen', 'flag', 'unflag', 'move', 'archive', 'trash', 'junk', 'notjunk', 'destroy'])
+
+const idList = (v: unknown, max = 500): string[] => (Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string' && ID.test(x)))].slice(0, max) : [])
+
+/**
+ * Flags and moves. `threadIds` reach every message of those conversations (in `from`, when that
+ * is given: archiving a conversation from the Inbox leaves its Sent replies where they are).
+ */
+export async function act(acc: Linked, body: { op?: unknown; emailIds?: unknown; threadIds?: unknown; to?: unknown; from?: unknown }) {
+  const op = body.op as Op
+  if (!OPS.has(op)) throw new HttpError(400, 'Unknown action')
+  const emailIds = idList(body.emailIds)
+  const threadIds = idList(body.threadIds, 200)
+  if (!emailIds.length && !threadIds.length) throw new HttpError(400, 'Nothing chosen')
+  const m = await meta(acc)
+  const s = await session(acc)
+  const calls: Call[] = []
+  if (threadIds.length) {
+    calls.push(['Thread/get', { ids: threadIds }, 't'])
+    calls.push(['Email/get', { '#ids': { resultOf: 't', name: 'Thread/get', path: '/list/*/emailIds' }, properties: ['id', 'mailboxIds', 'keywords'] }, 'te'])
+  }
+  if (emailIds.length) calls.push(['Email/get', { ids: emailIds, properties: ['id', 'mailboxIds', 'keywords'] }, 'e'])
+  const r = await jmap(acc, calls)
+  const found = [...(threadIds.length ? (r.get('te', 'Email/get').list as Json[]) : []), ...(emailIds.length ? (r.get('e', 'Email/get').list as Json[]) : [])]
+  const emails = [...new Map(found.map((e) => [e.id as string, e])).values()]
+  const from = typeof body.from === 'string' && m.mailboxes.some((b) => b.id === body.from) ? body.from : null
+
+  const update: Record<string, Json> = {}
+  const destroy: string[] = []
+  const move = (to: string, extra: Json = {}) => {
+    const keep = new Set([m.role('sent'), m.role('drafts')].filter(Boolean))
+    for (const e of emails) {
+      const boxes = Object.keys(e.mailboxIds ?? {})
+      if (boxes.length === 1 && boxes[0] === to) {
+        if (Object.keys(extra).length) update[e.id] = extra
+        continue
+      }
+      if (from) {
+        if (!boxes.includes(from)) continue
+        update[e.id] = { [`mailboxIds/${from}`]: null, [`mailboxIds/${to}`]: true, ...extra }
+      } else {
+        // A whole conversation from a search: the user's own sent mail and drafts stay put.
+        if (threadIds.length && boxes.some((b) => keep.has(b)) && !emailIds.includes(e.id)) continue
+        update[e.id] = { mailboxIds: { [to]: true }, ...extra }
+      }
+    }
+  }
+  const need = (role: string, what: string) => {
+    const id = m.role(role)
+    if (!id) throw new HttpError(400, `${acc.label} has no ${what} mailbox`)
+    return id
+  }
+  if (op === 'seen' || op === 'unseen') for (const e of emails) update[e.id] = { 'keywords/$seen': op === 'seen' ? true : null }
+  else if (op === 'flag' || op === 'unflag') for (const e of emails) update[e.id] = { 'keywords/$flagged': op === 'flag' ? true : null }
+  else if (op === 'move') {
+    const to = typeof body.to === 'string' && m.mailboxes.some((b) => b.id === body.to) ? body.to : null
+    if (!to) throw new HttpError(400, 'No such mailbox')
+    move(to)
+  } else if (op === 'archive') move(need('archive', 'Archive'))
+  else if (op === 'trash') move(need('trash', 'Trash'))
+  else if (op === 'junk') move(need('junk', 'Junk'), { 'keywords/$junk': true, 'keywords/$notjunk': null })
+  else if (op === 'notjunk') move(need('inbox', 'Inbox'), { 'keywords/$junk': null, 'keywords/$notjunk': true })
+  else if (op === 'destroy') {
+    // Gone for good: only what is in Trash and nowhere else (a conversation's Sent copies stay).
+    const trash = need('trash', 'Trash')
+    const inTrash = (e: Json) => Object.keys(e.mailboxIds ?? {}).every((b) => b === trash)
+    if (emails.some((e) => emailIds.includes(e.id) && !inTrash(e))) throw new HttpError(400, 'Only messages in Trash can be deleted for good')
+    destroy.push(...emails.filter(inTrash).map((e) => e.id))
+    if (!destroy.length) throw new HttpError(400, 'Only messages in Trash can be deleted for good')
+  }
+  const ids = Object.keys(update)
+  const chunks: Call[] = []
+  for (let i = 0; i < ids.length; i += s.maxObjectsInSet) chunks.push(['Email/set', { update: Object.fromEntries(ids.slice(i, i + s.maxObjectsInSet).map((id) => [id, update[id]])) }, `u${i}`])
+  for (let i = 0; i < destroy.length; i += s.maxObjectsInSet) chunks.push(['Email/set', { destroy: destroy.slice(i, i + s.maxObjectsInSet) }, `d${i}`])
+  if (!chunks.length) return { changed: 0 }
+  const done = await jmap(acc, chunks)
+  let changed = 0
+  for (const [, , id] of chunks) {
+    const set = done.get(id, 'Email/set')
+    const failed = Object.values({ ...(set.notUpdated ?? {}), ...(set.notDestroyed ?? {}) }) as Json[]
+    if (failed.length) throw new HttpError(502, `The mail server refused ${failed.length === 1 ? 'one change' : `${failed.length} changes`}: ${failed[0].description ?? failed[0].type}`)
+    changed += Object.keys(set.updated ?? {}).length + (set.destroyed ?? []).length
+  }
+  metas.delete(acc.id) // unread counts moved
+  tellPages(acc.user.id, 'mail', { account: acc.id })
+  return { changed }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Drafts and sending
+
+type DraftInput = {
+  /** The draft this one replaces (each save makes a new one: JMAP messages can't be changed). */
+  id?: unknown
+  identityId?: unknown
+  to?: unknown
+  cc?: unknown
+  bcc?: unknown
+  subject?: unknown
+  text?: unknown
+  attachments?: unknown
+  inReplyTo?: unknown
+  references?: unknown
+  /** The message answered or forwarded, which gets $answered or $forwarded once sent. */
+  replyOf?: unknown
+  forwardOf?: unknown
+}
+
+function cleanAddresses(v: unknown, what: string): Address[] {
+  if (v === undefined || v === null) return []
+  if (!Array.isArray(v) || v.length > 100) throw new HttpError(400, `Bad ${what}`)
+  return v.map((a) => {
+    const email = String((a as Json)?.email ?? '').trim()
+    if (!EMAIL.test(email) || email.length > 254) throw new HttpError(400, `${email || 'An empty address'} is not an email address`)
+    const name = typeof (a as Json)?.name === 'string' ? (a as Json).name.trim().slice(0, 200) : ''
+    return { name: name || null, email }
+  })
+}
+
+const messageIds = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length < 1000 && !/[\s<>]/.test(x)).slice(-50) : [])
+
+function draftEmail(m: Meta, d: DraftInput): { email: Json; identity: Identity | null } {
+  const drafts = m.role('drafts')
+  if (!drafts) throw new HttpError(400, 'This account has no Drafts mailbox')
+  const identity = m.identities.find((i) => i.id === d.identityId) ?? m.identities[0] ?? null
+  const to = cleanAddresses(d.to, 'To')
+  const cc = cleanAddresses(d.cc, 'Cc')
+  const bcc = cleanAddresses(d.bcc, 'Bcc')
+  const files = Array.isArray(d.attachments) ? d.attachments.slice(0, 100) : []
+  const attachments = files.map((a: Json) => {
+    if (typeof a?.blobId !== 'string' || !ID.test(a.blobId)) throw new HttpError(400, 'Bad attachment')
+    const type = typeof a.type === 'string' && /^[\w.+-]+\/[\w.+-]+$/.test(a.type) ? a.type : 'application/octet-stream'
+    return { blobId: a.blobId, type, name: String(a.name ?? 'attachment').replace(/[\r\n"\\/]/g, '_').slice(0, 200), disposition: 'attachment' }
+  })
+  const email: Json = {
+    mailboxIds: { [drafts]: true },
+    keywords: { $draft: true, $seen: true },
+    ...(identity ? { from: [{ name: identity.name || null, email: identity.email }] } : {}),
+    ...(to.length ? { to } : {}),
+    ...(cc.length ? { cc } : {}),
+    ...(bcc.length ? { bcc } : {}),
+    ...(identity?.replyTo?.length ? { replyTo: identity.replyTo } : {}),
+    subject: String(d.subject ?? '').replace(/[\r\n]+/g, ' ').slice(0, 998),
+    ...(messageIds(d.inReplyTo).length ? { inReplyTo: messageIds(d.inReplyTo) } : {}),
+    ...(messageIds(d.references).length ? { references: messageIds(d.references) } : {}),
+    bodyValues: { body: { value: String(d.text ?? '').slice(0, 2_000_000) } },
+    textBody: [{ partId: 'body', type: 'text/plain' }],
+    ...(attachments.length ? { attachments } : {}),
+  }
+  return { email, identity }
+}
+
+/** An old draft to replace: only if it really is a draft, so a save never deletes a received message. */
+async function oldDraft(acc: Linked, id: unknown): Promise<string | null> {
+  if (typeof id !== 'string' || !ID.test(id)) return null
+  const r = await jmap(acc, [['Email/get', { ids: [id], properties: ['keywords'] }, 'g']])
+  const e = (r.get('g', 'Email/get').list as Json[])[0]
+  return e?.keywords?.$draft ? id : null
+}
+
+/** Saves a draft (replacing the one before); answers its new id. */
+export async function saveDraft(acc: Linked, d: DraftInput): Promise<{ id: string }> {
+  const m = await meta(acc)
+  const { email } = draftEmail(m, d)
+  const old = await oldDraft(acc, d.id)
+  const r = await jmap(acc, [['Email/set', { create: { draft: email }, ...(old ? { destroy: [old] } : {}) }, 's']])
+  const set = r.get('s', 'Email/set')
+  const created = set.created?.draft
+  if (!created) throw new HttpError(502, `The mail server refused the draft: ${set.notCreated?.draft?.description ?? set.notCreated?.draft?.type ?? 'error'}`)
+  tellPages(acc.user.id, 'mail', { account: acc.id })
+  return { id: created.id }
+}
+
+export async function discardDraft(acc: Linked, id: unknown) {
+  const old = await oldDraft(acc, id)
+  if (!old) return
+  const r = await jmap(acc, [['Email/set', { destroy: [old] }, 's']])
+  r.get('s', 'Email/set')
+  tellPages(acc.user.id, 'mail', { account: acc.id })
+}
+
+/**
+ * Sends: the message is made in Drafts and submitted with the chosen identity in one request;
+ * once the server has taken it, it moves to Sent and loses $draft (onSuccessUpdateEmail), and the
+ * draft it came from goes. The answered message gets $answered ($forwarded for a forward).
+ */
+export async function send(acc: Linked, d: DraftInput): Promise<{ id: string }> {
+  const s = await session(acc)
+  if (!s.submission) throw new HttpError(400, `${acc.label} does not allow sending with this token (it needs Submission access)`)
+  const m = await meta(acc)
+  const { email, identity } = draftEmail(m, d)
+  if (!identity) throw new HttpError(400, 'This account has no identity to send from')
+  if (!email.to && !email.cc && !email.bcc) throw new HttpError(400, 'Who is it to?')
+  const drafts = m.role('drafts')!
+  const sent = m.role('sent')
+  const old = await oldDraft(acc, d.id)
+  const answered = typeof d.replyOf === 'string' && ID.test(d.replyOf) ? d.replyOf : null
+  const forwarded = typeof d.forwardOf === 'string' && ID.test(d.forwardOf) ? d.forwardOf : null
+  // Without a Sent mailbox the message would be in none: then it stays in Drafts, sent.
+  const afterwards = sent ? { [`mailboxIds/${drafts}`]: null, [`mailboxIds/${sent}`]: true, 'keywords/$draft': null } : { 'keywords/$draft': null }
+  const calls: Call[] = [
+    ['Email/set', { create: { draft: email } }, 'e'],
+    ['EmailSubmission/set', { create: { send: { identityId: identity.id, emailId: '#draft' } }, onSuccessUpdateEmail: { '#send': afterwards } }, 's'],
+  ]
+  if (old) calls.push(['Email/set', { destroy: [old] }, 'old'])
+  if (answered || forwarded) calls.push(['Email/set', { update: Object.fromEntries([...(answered ? [[answered, { 'keywords/$answered': true }]] : []), ...(forwarded ? [[forwarded, { 'keywords/$forwarded': true }]] : [])]) }, 'k'])
+  const r = await jmap(acc, calls)
+  const made = r.get('e', 'Email/set')
+  if (!made.created?.draft) throw new HttpError(502, `The mail server refused the message: ${made.notCreated?.draft?.description ?? made.notCreated?.draft?.type ?? 'error'}`)
+  const sub = r.get('s', 'EmailSubmission/set')
+  if (!sub.created?.send) {
+    // Not sent: what was made stays a draft, for another try.
+    const why = sub.notCreated?.send
+    throw new HttpError(502, `Not sent: ${why?.description ?? why?.type ?? 'the mail server refused it'}`)
+  }
+  metas.delete(acc.id)
+  tellPages(acc.user.id, 'mail', { account: acc.id })
+  return { id: made.created.draft.id }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Blobs
+
+/** POST /api/mail/:id/upload: the request's bytes into the account's blob store. */
+async function upload(acc: Linked, req: IncomingMessage, type: string | null): Promise<{ blobId: string; type: string; size: number }> {
+  // A custom header means a cross-site form can't post here (it would need a preflight).
+  if (req.headers['x-mail-upload'] !== '1') throw new HttpError(400, 'Upload with X-Mail-Upload: 1')
+  const s = await session(acc)
+  const contentType = type && /^[\w.+-]+\/[\w.+-]+$/.test(type) ? type : 'application/octet-stream'
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length
+    if (size > s.maxSizeUpload) throw new HttpError(413, `Attachments can be at most ${Math.floor(s.maxSizeUpload / 1_000_000)} MB here`)
+    chunks.push(chunk as Buffer)
+  }
+  const res = await guardedFetch(acc.user, fill(s.uploadUrl, { accountId: s.accountId }), {
+    method: 'POST',
+    headers: { ...bearer(acc.token), 'Content-Type': contentType },
+    body: Buffer.concat(chunks),
+    signal: AbortSignal.timeout(120_000),
+  }).catch((e) => (rethrowEgress(e), null))
+  if (!res) throw new HttpError(502, `${acc.label} did not answer`)
+  const body = JSON.parse((await readCapped(res, 64 * 1024)).toString('utf8') || '{}') as Json
+  if (!res.ok || typeof body.blobId !== 'string') throw new HttpError(502, `${acc.label} refused the upload (${res.status})`)
+  return { blobId: body.blobId, type: String(body.type ?? contentType), size: Number(body.size) || size }
+}
+
+async function fetchBlob(acc: Linked, blobId: string, name: string, type: string): Promise<Response> {
+  if (!ID.test(blobId)) throw new HttpError(400, 'Bad attachment')
+  const s = await session(acc)
+  const res = await guardedFetch(acc.user, fill(s.downloadUrl, { accountId: s.accountId, blobId, name: name || 'attachment', type: type || 'application/octet-stream' }), { headers: bearer(acc.token), signal: AbortSignal.timeout(120_000) }).catch((e) => (rethrowEgress(e), null))
+  if (!res) throw new HttpError(502, `${acc.label} did not answer`)
+  if (res.status === 404) throw new HttpError(404, 'That attachment is gone')
+  if (!res.ok) throw new HttpError(502, `${acc.label} answered ${res.status}`)
+  return res
+}
+
+async function blobText(acc: Linked, blobId: string, max: number): Promise<string> {
+  return (await readCapped(await fetchBlob(acc, blobId, 'invite.ics', 'text/calendar'), max)).toString('utf8')
+}
+
+/** Pictures the browser may show as they are; anything else is a download. Never SVG or HTML. */
+const SHOWABLE = /^image\/(png|jpe?g|gif|webp|bmp|avif)$/i
+
+async function pipeBlob(res: ServerResponse, blob: Response, name: string, type: string, inline: boolean, head: boolean) {
+  const show = inline && SHOWABLE.test(type)
+  const headers: Record<string, string> = {
+    'Content-Type': show ? type.toLowerCase() : 'application/octet-stream',
+    'Content-Disposition': `${show ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name || 'attachment')}`,
+    'Cache-Control': 'private, max-age=3600',
+    ...SECURITY,
+    ...UNTRUSTED,
+  }
+  const length = blob.headers.get('content-length')
+  if (length && /^\d+$/.test(length)) headers['Content-Length'] = length
+  res.writeHead(200, headers)
+  if (head || !blob.body) {
+    await blob.body?.cancel().catch(() => {})
+    return res.end()
+  }
+  const body = Readable.fromWeb(blob.body as import('node:stream/web').ReadableStream)
+  res.on('close', () => body.destroy())
+  body.on('error', () => res.destroy())
+  body.pipe(res)
+}
+
+/** GET /api/mail/inline/<sealed>: an inline picture for the message frame (no cookie there). */
+async function serveInline(res: ServerResponse, token: string, head: boolean) {
+  let claim: { u: number; a: number; b: string; t: string; e: number }
+  try {
+    claim = JSON.parse(decrypt(Buffer.from(token, 'base64url').toString('utf8')))
+  } catch {
+    throw new HttpError(404, 'Not found')
+  }
+  if (!claim || claim.e < Date.now() || !SHOWABLE.test(claim.t)) throw new HttpError(404, 'Not found')
+  const user = userById(claim.u)
+  if (!user) throw new HttpError(404, 'Not found')
+  const acc = linked(user, claim.a)
+  await pipeBlob(res, await fetchBlob(acc, claim.b, 'image', claim.t), 'image', claim.t, true, head)
+}
+
+// ---------------------------------------------------------------------------------------------
+// People: recent correspondents, for the recipient fields until Contacts takes over
+
+type Person = { name: string | null; email: string; count: number; last: string }
+const people = new Map<number, { at: number; list: Person[] }>()
+
+/** Whom the account wrote to (Sent) and heard from (Inbox) lately, most often first. */
+async function correspondents(acc: Linked): Promise<Person[]> {
+  const known = people.get(acc.id)
+  if (known && Date.now() - known.at < 10 * 60_000) return known.list
+  const m = await meta(acc)
+  const sent = m.role('sent')
+  const inbox = m.role('inbox')
+  const calls: Call[] = []
+  const recent = (box: string, id: string, props: string[]) => {
+    calls.push(['Email/query', { filter: { inMailbox: box }, sort: [{ property: 'receivedAt', isAscending: false }], limit: 250 }, `${id}q`])
+    calls.push(['Email/get', { '#ids': { resultOf: `${id}q`, name: 'Email/query', path: '/ids' }, properties: [...props, 'receivedAt'] }, id])
+  }
+  if (sent) recent(sent, 's', ['to', 'cc', 'bcc'])
+  if (inbox) recent(inbox, 'i', ['from'])
+  const map = new Map<string, Person>()
+  if (calls.length) {
+    const r = await jmap(acc, calls)
+    const add = (a: Address, at: string, weight: number) => {
+      const key = a.email.toLowerCase()
+      const p = map.get(key) ?? { name: a.name, email: a.email, count: 0, last: '' }
+      p.count += weight
+      if (!p.name && a.name) p.name = a.name
+      if (at > p.last) p.last = at
+      map.set(key, p)
+    }
+    if (sent) for (const e of r.get('s', 'Email/get').list as Json[]) for (const a of [...addresses(e.to), ...addresses(e.cc), ...addresses(e.bcc)]) add(a, e.receivedAt ?? '', 3)
+    if (inbox) for (const e of r.get('i', 'Email/get').list as Json[]) for (const a of addresses(e.from)) add(a, e.receivedAt ?? '', 1)
+  }
+  const own = new Set(m.identities.map((i) => i.email.toLowerCase()))
+  const list = [...map.values()].filter((p) => !own.has(p.email.toLowerCase()) && !/^(no-?reply|mailer-daemon|bounce)/i.test(p.email)).sort((a, b) => b.count - a.count || b.last.localeCompare(a.last))
+  people.set(acc.id, { at: Date.now(), list })
+  return list
+}
+
+async function suggest(acc: Linked, q: string): Promise<{ name: string | null; email: string }[]> {
+  const needle = q.trim().toLowerCase()
+  const list = await correspondents(acc)
+  return list
+    .filter((p) => !needle || p.email.toLowerCase().includes(needle) || (p.name ?? '').toLowerCase().includes(needle))
+    .slice(0, 8)
+    .map(({ name, email }) => ({ name, email }))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Push: new mail and live updates
+
+/** When each user last used Mail (any /api/mail request): push stays on for a while after. */
+const lastUse = new Map<number, number>()
+const USE_WINDOW = 30 * 60_000
+/** Polling, when the server has no EventSource or it keeps failing; and how often the lines are looked after (scripts/mail-check.ts makes both quick). */
+const POLL_MS = Number(process.env.MAIL_POLL_MS) || 2 * 60_000
+const WATCH_MS = Number(process.env.MAIL_WATCH_MS) || 60_000
+
+type Live = { accountId: number; userId: number; stopped: boolean; abort: AbortController | null; mode: 'stream' | 'poll'; failures: number; nextPoll: number; emailState: string | null; mailboxState: string | null; chain: Promise<void>; connected: boolean }
+const live = new Map<number, Live>()
+
+function stopLive(id: number) {
+  const l = live.get(id)
+  if (!l) return
+  l.stopped = true
+  l.abort?.abort()
+  live.delete(id)
+}
+
+/** An account that may sign in, enough of it for the requests made on its behalf (egress checks who is an admin). */
+function userById(id: number): User | null {
+  const row = database().prepare('SELECT id, login, name, avatar FROM users WHERE id = ? AND banned_at IS NULL').get(id) as { id: number; login: string; name: string | null; avatar: string | null } | undefined
+  return row ? { id: row.id, login: row.login, name: row.name, avatar: row.avatar, githubToken: '', githubScopes: [], admin: isAdmin(row.login) } : null
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms).unref())
+
+/** The account as it is now (or null once it was removed), for a long-running push line. */
+function current(l: Live): Linked | null {
+  const user = userById(l.userId)
+  if (!user) return null
+  try {
+    return linked(user, l.accountId)
+  } catch {
+    return null
+  }
+}
+
+/** One check at a time per account, in order. */
+const queueCheck = (l: Live) => (l.chain = l.chain.then(() => checkChanges(l)).catch((e) => console.error(`mail push (${l.accountId}):`, (e as Error).message)))
+
+/**
+ * What changed since the last check (Email/changes): new messages in the Inbox, unread, become
+ * notifications, each once; any change tells the account's open pages.
+ */
+async function checkChanges(l: Live) {
+  const acc = current(l)
+  if (!acc || l.stopped) return
+  if (!l.emailState) {
+    const stored = (table().prepare('SELECT push_state FROM jmap_accounts WHERE id = ?').get(acc.id) as { push_state: string | null } | undefined)?.push_state
+    if (stored) l.emailState = stored
+    else {
+      const r = await jmap(acc, [['Email/get', { ids: [] }, 'g']])
+      l.emailState = String(r.get('g', 'Email/get').state ?? '')
+      table().prepare('UPDATE jmap_accounts SET push_state = ? WHERE id = ?').run(l.emailState, acc.id)
+      return
+    }
+  }
+  const created: string[] = []
+  let changed = false
+  for (let round = 0; round < 5; round++) {
+    const r = await jmap(acc, [['Email/changes', { sinceState: l.emailState, maxChanges: 200 }, 'c']])
+    const err = r.error('c')
+    if (err) {
+      // Too far behind (or the state is unknown): start again from now.
+      const fresh = await jmap(acc, [['Email/get', { ids: [] }, 'g']])
+      l.emailState = String(fresh.get('g', 'Email/get').state ?? '')
+      changed = true
+      break
+    }
+    const c = r.get('c', 'Email/changes')
+    created.push(...((c.created ?? []) as string[]))
+    if ((c.created ?? []).length || (c.updated ?? []).length || (c.destroyed ?? []).length) changed = true
+    l.emailState = String(c.newState ?? l.emailState)
+    if (!c.hasMoreChanges) break
+  }
+  table().prepare('UPDATE jmap_accounts SET push_state = ? WHERE id = ?').run(l.emailState, acc.id)
+  if (changed) {
+    metas.delete(acc.id)
+    tellPages(acc.user.id, 'mail', { account: acc.id })
+  }
+  if (created.length) await announce(acc, created.slice(-100))
+}
+
+async function announce(acc: Linked, ids: string[]) {
+  const prefs = normalizePrefs(readState(acc.user).notify?.value)
+  if (!allows(prefs, 'mail.new')) return
+  const r = await jmap(acc, [
+    ['Mailbox/query', { filter: { role: 'inbox' } }, 'b'],
+    ['Email/get', { ids, properties: ['id', 'threadId', 'from', 'subject', 'preview', 'mailboxIds', 'keywords', 'receivedAt'] }, 'g'],
+  ])
+  const inbox = (r.get('b', 'Mailbox/query').ids as string[])[0]
+  const cutoff = Date.now() - 2 * 864e5
+  const fresh = (r.get('g', 'Email/get').list as Json[])
+    .filter((e) => inbox && e.mailboxIds?.[inbox] && !e.keywords?.$seen && !e.keywords?.$draft && Date.parse(e.receivedAt) > cutoff)
+    .filter((e) => claimOnce(acc.user, `mail:${acc.id}:${e.id}`))
+  if (!fresh.length) return
+  const who = (e: Json) => addresses(e.from)[0]?.name || addresses(e.from)[0]?.email || 'Someone'
+  if (fresh.length > 3) {
+    const names = [...new Set(fresh.map(who))]
+    notify(acc.user, { source: 'mail.new', title: `${fresh.length} new emails`, body: `From ${names.slice(0, 3).join(', ')}${names.length > 3 ? ` and ${names.length - 3} more` : ''} · ${acc.label}`, action: { app: 'mail', props: { account: String(acc.id) } }, tag: `mail-${acc.id}` })
+    return
+  }
+  for (const e of fresh)
+    notify(acc.user, {
+      source: 'mail.new',
+      title: who(e),
+      body: [String(e.subject ?? '') || '(No subject)', String(e.preview ?? '').slice(0, 200)].filter(Boolean).join('\n'),
+      action: { app: 'mail', props: { account: String(acc.id), email: e.id } },
+      tag: `mail-${acc.id}-${e.id}`,
+    })
+}
+
+/** The account's EventSource, read for as long as the line is wanted; polling when there is none. */
+async function stream(l: Live) {
+  while (!l.stopped) {
+    const acc = current(l)
+    if (!acc) return stopLive(l.accountId)
+    let s: Session
+    try {
+      s = await session(acc)
+    } catch {
+      await sleep(Math.min(10 * 60_000, 15_000 * 2 ** l.failures++))
+      continue
+    }
+    if (!s.eventSourceUrl) {
+      l.mode = 'poll'
+      return
+    }
+    await queueCheck(l) // where things stand (and what came while the line was down)
+    const abort = new AbortController()
+    l.abort = abort
+    let quiet: ReturnType<typeof setTimeout> | null = null
+    // A ping is asked for every 60 s: nothing for three minutes means the line is dead.
+    const watch = () => {
+      if (quiet) clearTimeout(quiet)
+      quiet = setTimeout(() => abort.abort(), 180_000)
+      quiet.unref()
+    }
+    try {
+      const url = fill(s.eventSourceUrl, { types: 'Email,Mailbox', closeafter: 'no', ping: '60' })
+      const res = await guardedFetch(acc.user, url, { headers: { ...bearer(acc.token), Accept: 'text/event-stream', 'Cache-Control': 'no-cache' }, signal: abort.signal })
+      if (!res.ok || !res.body) throw new Error(`EventSource answered ${res.status}`)
+      l.connected = true
+      watch()
+      const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
+      let buffer = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done || l.stopped) break
+        watch()
+        l.failures = 0
+        buffer += value
+        if (buffer.length > 1_000_000) throw new Error('EventSource sent too much at once')
+        let cut: number
+        while ((cut = buffer.search(/\r?\n\r?\n/)) >= 0) {
+          const block = buffer.slice(0, cut)
+          buffer = buffer.slice(cut).replace(/^\r?\n\r?\n/, '')
+          const event = /^event:\s*(.*)$/m.exec(block)?.[1]?.trim() ?? 'message'
+          const data = [...block.matchAll(/^data:\s?(.*)$/gm)].map((m) => m[1]).join('\n')
+          if (event !== 'state' || !data) continue
+          let change: Json
+          try {
+            change = JSON.parse(data)
+          } catch {
+            continue
+          }
+          const mine = change?.changed?.[s.accountId] as Record<string, string> | undefined
+          if (!mine) continue
+          if (mine.Email && mine.Email !== l.emailState) void queueCheck(l)
+          else if (mine.Mailbox && mine.Mailbox !== l.mailboxState) {
+            metas.delete(acc.id)
+            tellPages(acc.user.id, 'mail', { account: acc.id })
+          }
+          if (mine.Mailbox) l.mailboxState = mine.Mailbox
+        }
+      }
+    } catch {
+      l.failures++
+    } finally {
+      if (quiet) clearTimeout(quiet)
+      l.abort = null
+    }
+    if (l.stopped) return
+    // A line that never worked three times over: poll instead.
+    if (!l.connected && l.failures >= 3) {
+      l.mode = 'poll'
+      return
+    }
+    await sleep(Math.min(5 * 60_000, 2_000 * 2 ** Math.min(l.failures, 8)))
+  }
+}
+
+/** Whether a push line is worth keeping for this user: mail notifications on, or Mail used lately. */
+function useful(user: User): boolean {
+  if (Date.now() - (lastUse.get(user.id) ?? 0) < USE_WINDOW) return true
+  return allows(normalizePrefs(readState(user).notify?.value), 'mail.new')
+}
+
+/** The watcher's tick: push lines started and stopped as wanted, polled accounts checked. */
+export async function mailWatch() {
+  const rows = table().prepare('SELECT id, user_id FROM jmap_accounts').all() as { id: number; user_id: number }[]
+  const users = new Map(accounts().map((u) => [u.id, u]))
+  const wanted = new Set<number>()
+  for (const r of rows) {
+    const user = users.get(r.user_id)
+    if (user && useful(user)) wanted.add(r.id)
+  }
+  for (const id of [...live.keys()]) if (!wanted.has(id)) stopLive(id)
+  for (const r of rows) {
+    if (!wanted.has(r.id)) continue
+    let l = live.get(r.id)
+    if (!l) {
+      l = { accountId: r.id, userId: r.user_id, stopped: false, abort: null, mode: 'stream', failures: 0, nextPoll: 0, emailState: null, mailboxState: null, chain: Promise.resolve(), connected: false }
+      live.set(r.id, l)
+      const started = l
+      void stream(started).catch((e) => console.error(`mail push (${started.accountId}):`, (e as Error).message))
+    }
+    if (l.mode === 'poll' && Date.now() >= l.nextPoll) {
+      l.nextPoll = Date.now() + POLL_MS
+      void queueCheck(l)
+    }
+  }
+}
+
+registerWatcher({ name: 'mail', every: WATCH_MS, run: mailWatch })
+
+// ---------------------------------------------------------------------------------------------
+// The API
+
+/** Every /api/mail route (server/api.ts hands them over); resolves true when it answered. */
+export async function handleMailApi(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
+  const path = url.pathname
+  const method = req.method ?? 'GET'
+  const head = method === 'HEAD'
+  const read = method === 'GET' || head
+  // Inline pictures in the message frame: a sealed link, not the session (the frame sends no cookie).
+  const inline = /^\/api\/mail\/inline\/([\w-]{20,2000})$/.exec(path)
+  if (inline && read) return await serveInline(res, inline[1], head), true
+
+  const user = requireUser(req)
+  lastUse.set(user.id, Date.now())
+  const q = (k: string) => url.searchParams.get(k)
+  if (path === '/api/mail/accounts' && read) return json(res, 200, { accounts: listMail(user) }), true
+  if (path === '/api/mail/accounts' && method === 'POST') {
+    const info = await addMail(user, await readJson(req, 16 * 1024))
+    void mailWatch().catch(() => {})
+    return json(res, 200, info), true
+  }
+  const removing = /^\/api\/mail\/accounts\/(\d+)$/.exec(path)
+  if (removing && method === 'DELETE') return removeMail(user, Number(removing[1])), json(res, 200, { ok: true }), true
+
+  const route = /^\/api\/mail\/(\d+)\/([a-z]+)(?:\/([A-Za-z0-9_-]{1,255}))?$/.exec(path)
+  if (!route) throw new HttpError(404, 'Not found')
+  const acc = linked(user, route[1])
+  const [, , what, id] = route
+  if (what === 'bootstrap' && read) {
+    const [m, s] = await Promise.all([meta(acc, true), session(acc)])
+    return json(res, 200, { mailboxes: m.mailboxes, identities: m.identities, maxSizeUpload: s.maxSizeUpload, canSend: s.submission, username: s.username }), true
+  }
+  if (what === 'threads' && read) return json(res, 200, await listThreads(acc, { mailbox: q('mailbox'), q: q('q'), position: Number(q('position')), limit: Number(q('limit')) })), true
+  if (what === 'thread' && read && id) return json(res, 200, await getThread(acc, id, idList((q('images') ?? '').split(',')))), true
+  if (what === 'message' && read && id) return json(res, 200, await getMessage(acc, id, q('images') === '1')), true
+  if (what === 'act' && method === 'POST') return json(res, 200, await act(acc, await readJson(req, 64 * 1024))), true
+  if (what === 'draft' && method === 'POST') return json(res, 200, await saveDraft(acc, await readJson(req, 4 * 1024 * 1024))), true
+  if (what === 'draft' && method === 'DELETE' && id) return await discardDraft(acc, id), json(res, 200, { ok: true }), true
+  if (what === 'send' && method === 'POST') return json(res, 200, await send(acc, await readJson(req, 4 * 1024 * 1024))), true
+  if (what === 'upload' && method === 'POST') return json(res, 200, await upload(acc, req, q('type'))), true
+  if (what === 'blob' && read && id) {
+    const name = (q('name') ?? 'attachment').slice(0, 200)
+    const type = (q('type') ?? 'application/octet-stream').slice(0, 100)
+    return await pipeBlob(res, await fetchBlob(acc, id, name, type), name, type, q('inline') === '1', head), true
+  }
+  if (what === 'suggest' && read) return json(res, 200, { people: await suggest(acc, (q('q') ?? '').slice(0, 100)) }), true
+  throw new HttpError(404, 'Not found')
+}

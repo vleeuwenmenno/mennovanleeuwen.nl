@@ -135,6 +135,7 @@ const APP_NAMES: Record<AppId, string> = {
   linkforge: 'link-forge',
   calendar: 'calendar',
   agents: 'agents',
+  mail: 'mail',
   photos: 'photos',
   contacts: 'contacts',
   tasks: 'tasks',

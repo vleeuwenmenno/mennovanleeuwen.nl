@@ -29,6 +29,7 @@ import { suggest } from './suggest.ts'
 import { readState, writeState } from './state.ts'
 import { deleteUser } from './users.ts'
 import { createShare, deleteShare, isShareToken, listShares, serveShare } from './shares.ts'
+import { handleMailApi } from './jmap.ts'
 
 // Every /api route, shared by the production server (server/index.ts) and Vite's dev and
 // preview servers (vite.config.ts), plus the one page outside /api the server renders itself:
@@ -385,6 +386,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/inbox' && read) return json(res, 200, await inbox(requireUser(req), url.searchParams.has('fresh'))), true
 
     if (path === '/api/search' && read) return json(res, 200, await search(requireUser(req), url.searchParams.get('q') ?? '')), true
+    // The Mail app over JMAP (server/jmap.ts): accounts, mailboxes, conversations, drafts, sending and attachments.
+    if (path.startsWith('/api/mail/')) return await handleMailApi(req, res, url)
 
     throw new HttpError(404, 'Not found')
   } catch (e) {
