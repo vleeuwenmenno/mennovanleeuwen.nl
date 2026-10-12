@@ -793,6 +793,22 @@ progress carries over both ways, and signing in from Gladiator comes back to the
 Multiplayer works the same. The game in progress belongs to the browser tab instead of a window: a
 reload carries on where it was, closing the tab ends it.
 
+## Empires At War battlefield scale
+
+Three dials in [`scale.ts`](src/apps/games/empires/scale.ts) set how big a battle feels:
+
+- `MAP_SCALE` (1.25): every battle map, in skirmish, multiplayer and Galactic conquest, is this much
+  bigger in each direction than drawn (on top of `SPREAD` in `maps.ts`). Spawns, ore, beacons,
+  wrecks, fields, nebulas and start areas move out with it, as do the distances the AI measures
+  across the map; ships, structures, ore and rocks keep their size.
+- `RANGE_SCALE` (1.1): every weapon, sensor, ability range, repair tender, the defense wing's home
+  radius and what the sim derives from them (chase leashes, how far ships look, strafing runs).
+  The numbers in `data.ts` stay as written; research bonuses stay percentages on top.
+- `SPEED_SCALE` (1.0): every ship's speed.
+
+Changing one changes every battle, so the multiplayer hash from `pnpm check:empires` changes too.
+Battles saved before keep the map and ship types they were saved with.
+
 ## Empires At War weapon ranges and repair craft
 
 Hovering a ship or structure in battle (ours, or an enemy we can see) rings it with its weapon

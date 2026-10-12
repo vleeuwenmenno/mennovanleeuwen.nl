@@ -8,6 +8,14 @@
 // Frigates and everything bigger are clean hulls with empty sockets: every gun, shield generator,
 // hangar and station module is a hardpoint drawn as its own sprite (public/games/empires/modules),
 // so what a ship shows is exactly what it has. Engines stay part of the hull.
+//
+// Ranges, sensors and speeds are written at the old battlefield scale; scale.ts stretches them
+// (see `reach` and `scaled`), so the numbers below stay the ones to balance against each other.
+
+import { RANGE_SCALE, SPEED_SCALE } from './scale.ts'
+
+/** A gun's or a sensor's reach, as written, at the battlefield's range scale (see scale.ts). */
+const reach = (r: number) => Math.round(r * RANGE_SCALE)
 
 export type FactionId = 'republic' | 'droid'
 export type Tier = 'fighter' | 'gunship' | 'frigate' | 'cruiser' | 'capital' | 'station' | 'mine' | 'defense'
@@ -86,13 +94,13 @@ export const ABILITIES: Record<AbilityId, Ability> = {
   flakBarrage: { name: 'Flak barrage', blurb: 'Point defence fires twice as fast for 8 s.', cooldown: 40, duration: 8 },
   repairSwarm: { name: 'Repair swarm', blurb: 'Repair droids restore 30% hull over 10 s.', cooldown: 60, duration: 10 },
   shieldBoost: { name: 'Shield boost', blurb: 'Instantly restores half the shields.', cooldown: 45, duration: 0 },
-  tractor: { name: 'Tractor lock', blurb: 'Enemy ships nearby crawl at a third of their speed for 7 s.', cooldown: 45, duration: 7, range: 650 },
+  tractor: { name: 'Tractor lock', blurb: 'Enemy ships nearby crawl at a third of their speed for 7 s.', cooldown: 45, duration: 7, range: reach(650) },
   broadside: { name: 'Full broadside', blurb: 'Turbolasers deal 60% more damage for 10 s.', cooldown: 50, duration: 10 },
   launchSwarm: { name: 'Launch swarm', blurb: 'Empties the hangars: two extra droid squadrons at once.', cooldown: 60, duration: 0 },
   fieldRepair: {
     name: 'Field repair',
     blurb: 'Flies to a damaged station, or a ship of gunship class or bigger, and welds it back together for 15 s: hull and damaged modules, and it rebuilds destroyed station modules one at a time (a ship\'s shot-off modules stay lost). Aims at the ship under the cursor, else the most damaged one nearby. Idle crews do it by themselves.',
-    cooldown: 35, duration: 15, range: 1400,
+    cooldown: 35, duration: 15, range: reach(1400),
   },
 }
 
@@ -114,7 +122,7 @@ export const FIELD_REPAIR = { flat: 8, share: 0.005, reach: 200, rebuild: 20, ba
  * `away` of their damage. The station rebuilds lost craft one at a time, every `every` seconds,
  * starting `wait` seconds after the last one was lost, while its hangar stands.
  */
-export const DEFENSE_WING = { radius: 1400, away: 0.3, every: 25, wait: 15 }
+export const DEFENSE_WING = { radius: reach(1400), away: 0.3, every: 25, wait: 15 }
 /** A faction's defense wing fighter. */
 export const wingOf = (faction: FactionId) => UNIT[faction === 'republic' ? 'r-picket' : 'd-picket']
 
@@ -162,15 +170,15 @@ const ACCURACY: Record<WeaponKind, Record<Tier, number>> = {
 export const effect = (w: WeaponKind, t: Tier) => VS[w][t]
 export const accuracy = (w: WeaponKind, t: Tier) => ACCURACY[w][t]
 
-const laser = (damage: number, range = 240, cooldown = 0.5): Weapon => ({ kind: 'laser', damage, range, cooldown, arc: 0.35 })
-const flak = (damage: number, range = 320, cooldown = 0.35, burst = 1): Weapon => ({ kind: 'flak', damage, range, cooldown, burst })
-const turbo = (damage: number, range = 650, cooldown = 2.2, burst = 2): Weapon => ({ kind: 'turbo', damage, range, cooldown, burst })
-const missile = (damage: number, range = 420, cooldown = 4): Weapon => ({ kind: 'missile', damage, range, cooldown, burst: 2, arc: 0.6 })
+const laser = (damage: number, range = 240, cooldown = 0.5): Weapon => ({ kind: 'laser', damage, range: reach(range), cooldown, arc: 0.35 })
+const flak = (damage: number, range = 320, cooldown = 0.35, burst = 1): Weapon => ({ kind: 'flak', damage, range: reach(range), cooldown, burst })
+const turbo = (damage: number, range = 650, cooldown = 2.2, burst = 2): Weapon => ({ kind: 'turbo', damage, range: reach(range), cooldown, burst })
+const missile = (damage: number, range = 420, cooldown = 4): Weapon => ({ kind: 'missile', damage, range: reach(range), cooldown, burst: 2, arc: 0.6 })
 /** Fighters' proton torpedoes: slow to reload, useless against other fighters, deadly to big hulls. */
-const torpedo = (damage: number, range = 280, cooldown = 7): Weapon => ({ kind: 'missile', damage, range, cooldown, burst: 2, arc: 0.4 })
+const torpedo = (damage: number, range = 280, cooldown = 7): Weapon => ({ kind: 'missile', damage, range: reach(range), cooldown, burst: 2, arc: 0.4 })
 
 /** An ion cannon: a slow, heavy bolt that tears down shields and does next to nothing to a hull. */
-const ion = (damage: number, range = 620, cooldown = 2.4): Weapon => ({ kind: 'ion', damage, range, cooldown, burst: 1 })
+const ion = (damage: number, range = 620, cooldown = 2.4): Weapon => ({ kind: 'ion', damage, range: reach(range), cooldown, burst: 1 })
 
 const P = (kind: HardpointKind, x: number, y: number, hp: number, weapon?: Weapon): Hardpoint => ({ kind, x, y, hp, weapon })
 /** A module with its own sprite, `s` as a share of the ship's longest side. */
@@ -188,6 +196,16 @@ const toughen = (t: UnitType): UnitType => ({
   shield: Math.round(t.shield * TOUGHNESS),
   hardpoints: t.hardpoints.map((h) => ({ ...h, hp: Math.round(h.hp * TOUGHNESS) })),
 })
+/** A unit as written, at the battlefield's scale (see scale.ts): sensors and repair range reach
+ * further and engines push harder. Weapons are scaled where they're made (see `reach`). */
+const scaled = (t: UnitType): UnitType => ({
+  ...t,
+  sensor: reach(t.sensor),
+  speed: t.speed * SPEED_SCALE,
+  ...(t.support ? { support: { ...t.support, range: reach(t.support.range) } } : {}),
+})
+/** Toughened and scaled: every unit goes through this once. */
+const finish = (t: UnitType) => scaled(toughen(t))
 
 // --- Platforms on the ore ---------------------------------------------------------------------------
 
@@ -380,7 +398,7 @@ export function stationType(faction: FactionId, level: number, techs: readonly s
     hardpoints: mods.map((m) => ({ kind: m.kind, art: m.art, key: m.key, hp: m.hp, weapon: m.weapon, x: ((m.x - x0) / w) * 10, y: ((m.y - y0) / h) * 10, s: m.s / long })),
     engines: [],
   }
-  const tough = toughen(t)
+  const tough = finish(t)
   stationCache.set(id, tough)
   return tough
 }
@@ -537,10 +555,10 @@ const WRITTEN: UnitType[] = [
   defensePlatform('droid', 'flak'),
   defensePlatform('droid', 'gun'),
 ]
-/** Every unit, toughened (stations come out of stationType that way already). */
-export const UNITS: UnitType[] = WRITTEN.map((u) => (u.tier === 'station' ? u : toughen(u)))
+/** Every unit, toughened and scaled (stations come out of stationType that way already). */
+export const UNITS: UnitType[] = WRITTEN.map((u) => (u.tier === 'station' ? u : finish(u)))
 
-const SHIELDED_MINE: Record<FactionId, UnitType> = { republic: toughen(minePlatform('republic', true)), droid: toughen(minePlatform('droid', true)) }
+const SHIELDED_MINE: Record<FactionId, UnitType> = { republic: finish(minePlatform('republic', true)), droid: finish(minePlatform('droid', true)) }
 /** A faction's mining platform as built, or with its Shield generator fitted. */
 export const mineType = (faction: FactionId, shielded: boolean) => (shielded ? SHIELDED_MINE[faction] : UNITS.find((u) => u.faction === faction && u.tier === 'mine')!)
 

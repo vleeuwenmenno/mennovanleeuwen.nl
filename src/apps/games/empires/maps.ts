@@ -1,5 +1,6 @@
 import * as M from './detmath.ts'
 import { sq } from './detmath.ts'
+import { MAP_SCALE } from './scale.ts'
 
 // The battlefields. Each map lists its spawn points, ore, beacons and terrain, and how it is
 // symmetric, so everything can be placed once and copied to every player's side: nobody gets the
@@ -48,7 +49,7 @@ export const inRect = (r: Rect, x: number, y: number) => x >= r.x && y >= r.y &&
 /** A spawn's own start area when nobody has drawn one: a square round it, inside the map. */
 export function defaultArea(map: MapDef, i: number): Rect {
   const sp = map.spawns[i]
-  const size = Math.min(2600, map.w * 0.38, map.h * 0.5)
+  const size = Math.min(2600 * MAP_SCALE, map.w * 0.38, map.h * 0.5)
   const x = Math.max(0, Math.min(map.w - size, sp.x - size / 2))
   const y = Math.max(0, Math.min(map.h - size, sp.y - size / 2))
   return { x, y, w: size, h: size }
@@ -107,11 +108,13 @@ const sc = { x: shroud.w / 2, y: shroud.h / 2 }
 
 /** How far every map is spread out from how it was drawn: positions and terrain grow, while ore,
  * beacons, wrecks and stations keep their size, so there's more open space between them and
- * fleets take longer to get anywhere. */
+ * fleets take longer to get anywhere. The battlefield's own dial, MAP_SCALE (scale.ts), goes on
+ * top of this. */
 export const SPREAD = 1.35
 
-/** A map spread out by `k` (see SPREAD). Scattered rocks grow in number to keep their density. */
-export function spread(m: MapDef, k = SPREAD): MapDef {
+/** A map spread out by `k` (see SPREAD and MAP_SCALE). Scattered rocks grow in number to keep their
+ * density. */
+export function spread(m: MapDef, k = SPREAD * MAP_SCALE): MapDef {
   const p = <T extends Pt>(q: T): T => ({ ...q, x: q.x * k, y: q.y * k })
   const patch = <T extends Patch>(q: T): T => ({ ...p(q), r: q.r * k })
   return {

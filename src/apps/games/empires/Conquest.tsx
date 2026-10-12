@@ -14,6 +14,7 @@ import { galaxyLayout } from './layout'
 import type { BattleSnap } from './snapshot'
 import { loadCampaignBattle, saveCampaignBattle, setResume } from './keep'
 import { generateMap, DEFAULT_RULES, MAX_SEED, type MapDef } from './maps'
+import { mapDist } from './scale'
 import { LayoutSection, Modal, SettingsPanel } from './Menus'
 import { actionFor, getSettings, keyName, useSettings, type Action } from './settings'
 import type { FleetSide, World } from './sim'
@@ -1268,7 +1269,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       wrecks: 'none',
     })
     const sp = base.spawns[0]
-    const map: MapDef = { ...base, id: 'conquest', name: p.name, ore: [], beacons: [], wrecks: [], planet: { kind: p.kind, x: base.w / 2 + (sp.x - base.w / 2) * 0.5, y: base.h / 2 + 1500, r: 560 } }
+    const map: MapDef = { ...base, id: 'conquest', name: p.name, ore: [], beacons: [], wrecks: [], planet: { kind: p.kind, x: base.w / 2 + (sp.x - base.w / 2) * 0.5, y: base.h / 2 + mapDist(1500), r: 560 } }
     // Ships the fleets hold back start in the battle's reserve, to be called in from there.
     const sides: FleetSide[] = [
       { faction: g.sides[c.holder].faction, team: 0, ships: withoutShips(c.holderShips, c.holderHeld), reserve: c.holderHeld, station: c.station },

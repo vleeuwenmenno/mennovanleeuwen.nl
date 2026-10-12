@@ -2,6 +2,7 @@ import * as M from './detmath.ts'
 import { sq } from './detmath.ts'
 import { inside, mirrored, rng, type MapDef, type Pt } from './maps.ts'
 import { clearLine, findPath, navGrid, type NavGrid } from './nav.ts'
+import { mapDist, rangeDist } from './scale.ts'
 import {
   ABILITIES, ARMOR_BONUS, BASE_POP, DEFENSE_WING, FIELD_REPAIR, MENDABLE, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
@@ -32,8 +33,8 @@ export const sees = (w: World, o: Owner, u: Unit) => u.seen[w.players[o].team]
  */
 export type Stance = 'hold' | 'maneuver' | 'roam'
 export const STANCES: Stance[] = ['hold', 'maneuver', 'roam']
-/** How far Maneuver ships chase from where a fight started. */
-export const LEASH = { fighter: 1100, ship: 800 }
+/** How far Maneuver ships chase from where a fight started (it goes with how far guns reach). */
+export const LEASH = { fighter: rangeDist(1100), ship: rangeDist(800) }
 
 export type Order =
   | { k: 'idle' }
@@ -511,7 +512,7 @@ export type Seat = { faction: FactionId; team: number; spawn: number; incomeMul?
  * stations start, so any world on the map will do for checking. */
 export function startProblem(w: World, x: number, y: number, others: Pt[]): string | null {
   if (x < 350 || y < 350 || x > w.w - 350 || y > w.h - 350) return 'Too close to the edge of the map'
-  if (others.some((o) => d2(x, y, o.x, o.y) < sq(1400))) return 'Too close to another station'
+  if (others.some((o) => d2(x, y, o.x, o.y) < sq(mapDist(1400)))) return 'Too close to another station'
   if (w.rocks.some((k) => d2(x, y, k.x, k.y) < sq(k.r + 380))) return 'Too close to the rocks'
   if (inside(w.map.fields, x, y, 300)) return 'Inside an asteroid field'
   if (w.nodes.some((n) => d2(x, y, n.x, n.y) < sq(450))) return 'Too close to an ore asteroid'
@@ -534,7 +535,7 @@ export function autoStart(w: World, area: { x: number; y: number; w: number; h: 
     for (let j = 0; j <= N; j++) {
       const p = { x: area.x + (area.w * i) / N, y: area.y + (area.h * j) / N }
       if (startProblem(w, p.x, p.y, others)) continue
-      const ore = w.nodes.reduce((sum, n) => sum + M.exp(-M.hypot(n.x - p.x, n.y - p.y) / 1100), 0)
+      const ore = w.nodes.reduce((sum, n) => sum + M.exp(-M.hypot(n.x - p.x, n.y - p.y) / mapDist(1100)), 0)
       const score = ore - (M.hypot(p.x - mid.x, p.y - mid.y) / diag) * 0.6
       if (score > bestScore) {
         bestScore = score
@@ -559,7 +560,7 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
     const d = M.hypot(c.x - sp.x, c.y - sp.y) || 1
     return {
       faction: s.faction, team: s.team, spawn: s.spawn, start: { x: sp.x, y: sp.y }, alive: true, credits: opts.credits ?? START_CREDITS, income: 0, incomeMul: s.incomeMul ?? 1, level: 1, station: 0,
-      queue: [], reserve: [], research: [], techs: [], rally: { x: sp.x + ((c.x - sp.x) / d) * 600, y: sp.y + ((c.y - sp.y) / d) * 600 }, pop: 0, popCap: BASE_POP, lastAlarm: -99,
+      queue: [], reserve: [], research: [], techs: [], rally: { x: sp.x + ((c.x - sp.x) / d) * mapDist(600), y: sp.y + ((c.y - sp.y) / d) * mapDist(600) }, pop: 0, popCap: BASE_POP, lastAlarm: -99,
       stats: { built: 0, lost: 0, killed: 0, earned: 0 },
       incomeParts: { station: 0, mines: 0, beacons: 0 },
       earnedBy: { station: 0, mines: 0, beacons: 0, salvage: 0, refunds: 0 },
@@ -582,7 +583,7 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
     const side = r() < 0.5 ? 'republic' : 'droid'
     return { id: i + 1, x: h.x, y: h.y, value: h.value, left: h.value, sprite: `${side}-${big ? 'capital' : 'cruiser'}`, size: big ? 340 : 220, rot: r() * TAU, decay: Infinity, team: -1 }
   })
-  const keepClear = [...w.wrecks.map((h) => [h.x, h.y, h.size * 0.6]), ...w.nodes.map((n) => [n.x, n.y, 260]), ...w.beacons.map((b) => [b.x, b.y, 330]), ...map.spawns.map((p) => [p.x, p.y, 700])]
+  const keepClear = [...w.wrecks.map((h) => [h.x, h.y, h.size * 0.6]), ...w.nodes.map((n) => [n.x, n.y, 260]), ...w.beacons.map((b) => [b.x, b.y, 330]), ...map.spawns.map((p) => [p.x, p.y, mapDist(700)])]
   const inLane = (x: number, y: number, rad: number) =>
     map.spawns.some((p) => {
       // Distance from the point to the segment between this spawn and the centre.
@@ -2049,7 +2050,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
     const roam = u.stance === 'roam'
     // Holding ships only look as far as their guns reach (fighters a little further); roamers as
     // far as they can see.
-    const look = hold ? (fighter ? 450 : fightRange(t) * u.mods.range + 100) : roam ? sensorOf(u) : Math.min(sensorOf(u), fighter ? 900 : 800)
+    const look = hold ? (fighter ? rangeDist(450) : fightRange(t) * u.mods.range + 100) : roam ? sensorOf(u) : Math.min(sensorOf(u), rangeDist(fighter ? 900 : 800))
     const leash = hold ? look : roam ? Infinity : fighter ? LEASH.fighter : LEASH.ship
     // A fight is measured from where it started: an idle ship's post, or the spot on its way
     // where it turned to fight.
@@ -2087,7 +2088,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
       const dist = M.hypot(e.x - u.x, e.y - u.y)
       const r = radius(e.t)
       if (dist < r + 50) u.breakOff = true
-      else if (dist > r + 320) u.breakOff = false
+      else if (dist > r + rangeDist(320)) u.breakOff = false
       if (u.breakOff) steer(u, u.x + M.cos(u.a) * 100 + ((u.id % 5) - 2) * 20, u.y + M.sin(u.a) * 100, max, dt)
       else steer(u, e.x + ((u.id % 7) - 3) * 6, e.y + ((u.id % 5) - 2) * 6, max, dt)
     } else if (fighter) {
@@ -2385,7 +2386,7 @@ function economy(w: World, dt: number) {
     // Repair docks mend our ships parked near the station.
     const repair = moduleUp(st, 'dock') ? techBonus(p, st.t.id).repair : 0
     if (repair)
-      near(w, st.x, st.y, 900, (u) => {
+      near(w, st.x, st.y, rangeDist(900), (u) => {
         if (u.owner === o && isShip(u.t) && u.hull < u.hullMax) u.hull = Math.min(u.hullMax, u.hull + u.hullMax * repair * dt)
       })
     const q = p.queue[0]
@@ -2778,7 +2779,7 @@ function fieldRepairs(w: World, dt: number) {
       continue
     }
     if (!look || u.abilityCd > 0 || building(u) || (u.order.k !== 'idle' && u.order.k !== 'guard')) continue
-    const to = mendPick(w, u, 900, 0.1)
+    const to = mendPick(w, u, rangeDist(900), 0.1)
     if (to) startMend(w, u, to)
   }
 }
@@ -2917,7 +2918,7 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
   const w = newWorld(map, sides.map((s, i) => ({ faction: s.faction, team: s.team, spawn: i, incomeMul: 0 })), { seed: opts.seed, credits: 0, fleet: true })
   const cap = opts.cap ?? FLEET_CAP
   const c = { x: w.w / 2, y: w.h / 2 }
-  w.fleet = { entry: sides.map((_, i) => ({ x: map.spawns[i].x, y: map.spawns[i].y, r: 1300 })), cap, holder: sides[0].team, endT: 3 }
+  w.fleet = { entry: sides.map((_, i) => ({ x: map.spawns[i].x, y: map.spawns[i].y, r: mapDist(1300) })), cap, holder: sides[0].team, endT: 3 }
   sides.forEach((s, o) => {
     const p = w.players[o]
     p.techs = [...(s.techs ?? [])]
