@@ -8,6 +8,7 @@ import { ModelFx } from './models/fx.ts'
 import { LIGHT, PALETTES } from './models/kit.ts'
 import { cacheStats, drawHull, drawMounts, liveEngines } from './models/paint.ts'
 import type { BreakKind } from './models/types.ts'
+import { averageRings, moduleRing } from './ranges.ts'
 import { spriteUrl } from './render'
 import type { EmpiresSound } from './sound'
 import { Seg } from './Menus'
@@ -411,20 +412,15 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
         g.fillText(label, x, y - r - 4 / z)
         g.textAlign = 'start'
       }
-      if (show.ranges) {
-        const seen = new Set<string>()
-        for (const x of guns(t)) {
-          const key = `${x.kind}${x.range}`
-          if (seen.has(key)) continue
-          seen.add(key)
-          ring(0, 0, x.range, x.kind, `${WEAPON_NAME[x.kind]} ${x.range}`)
-        }
-      }
-      // The selected gun's own reach, from where it sits.
-      const sw = selected && 'hp' in selected ? t.hardpoints[selected.hp]?.weapon : undefined
-      if (sw && selected && 'hp' in selected && !boom) {
-        const [x, y] = hpAt(selected.hp)
-        ring(x, y, sw.range, sw.kind, `${WEAPON_NAME[sw.kind]} ${sw.range}`)
+      // A gun pointed at (or else the one selected) shows its own reach alone, from where it sits, as
+      // the battle fires it; otherwise, with Ranges on, the unit's average reach per kind of gun.
+      const gunSel = [hover, selected].find((s): s is { hp: number } => !!s && 'hp' in s && !!t.hardpoints[s.hp]?.weapon)
+      const one = gunSel ? moduleRing(t, gunSel.hp) : null
+      if (one && gunSel && !boom) {
+        const [x, y] = hpAt(gunSel.hp)
+        ring(x, y, one.range, one.kind, `${WEAPON_NAME[one.kind]} #${gunSel.hp + 1} · ${one.range}`)
+      } else if (show.ranges) {
+        for (const x of averageRings(t, (i) => (dmg.hps[i]?.hp ?? 1) > 0)) ring(0, 0, x.reach, x.kind, `${WEAPON_NAME[x.kind]} ${x.n > 1 ? '· avg ' : ''}${Math.round(x.reach)}`)
       }
       if (boom && model) {
         fx.drawHulk(g, 1000 + boom.n, zdpr)

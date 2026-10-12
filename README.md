@@ -796,12 +796,22 @@ reload carries on where it was, closing the tab ends it.
 ## Empires At War weapon ranges and repair craft
 
 Hovering a ship or structure in battle (ours, or an enemy we can see) rings it with its weapon
-ranges ([`render.ts`](src/apps/games/empires/render.ts) `drawRanges`): one ring per kind of gun
-and reach, each kind in its own colour and dash (lasers solid red, flak amber, turbolasers blue,
-missiles pink dots, ion violet), labelled with its name and range, plus a faint dashed ring for its
-sensors. On a touch screen, which has no hover, the selected ships show theirs. The setting
-*Show weapon ranges on hover* (on by default) is in the game's Settings and in Settings → Apps →
-Games → Empires At War.
+ranges ([`render.ts`](src/apps/games/empires/render.ts) `drawRanges`, worked out in
+[`ranges.ts`](src/apps/games/empires/ranges.ts)): one ring per kind of gun, centred on the unit
+at the average reach of that kind's standing guns (labelled e.g. *Turbolasers · avg 792*), each
+kind in its own colour and dash (lasers solid red, flak amber, turbolasers blue, missiles pink
+dots, ion violet), plus a faint dashed ring for its sensors. Pointing at one of its guns instead
+rings that gun alone, centred on the gun where it sits. That is how the battle measures it: a gun
+on a hardpoint fires from the hardpoint, out to its range (times any range research), and a target
+is in reach once its centre is within that plus half its radius, an allowance for the target's size
+the rings leave out. A unit's average reach is measured from its centre: for a ship, which turns
+its nose to what it fights, as its stopping distance does (a gun's range less how far it sits out
+to the side or behind the centre); for a structure, which never turns, averaged over every
+direction. On a touch screen, which has no hover, the selected ships show theirs, and a structure's
+gun picked by tapping it shows its own ring. The Codex does the same: pointing at a gun (on the
+model or in the hardpoint list) or selecting it shows its own ring, and the Workshop's *Ranges*
+shows the averages. The setting *Show weapon ranges on hover* (on by default) is in the game's
+Settings and in Settings → Apps → Games → Empires At War.
 
 Each side has a repair squadron of two strike craft, the Republic's Suture repair fighter and the
 droids' Weaver repair droid ([`data.ts`](src/apps/games/empires/data.ts)). They launch from the
