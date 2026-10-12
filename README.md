@@ -837,9 +837,13 @@ any other ship.
 Every station also comes with a free **defense wing** (`DEFENSE_WING` in `data.ts`): the
 Republic's five Aegis pickets or the droids' six Bolt guard droids, smaller and frailer than line
 fighters. They cost nothing, take no fleet space and can't be built, retreat or escape with a
-conquest fleet. Their station is their parent, as a carrier's fighters are theirs, so when idle
-they circle it and take on whatever comes near, chasing it only so far. They can be ordered
-anywhere and come home once their orders are done, but more than 1,400 from their station, or
+conquest fleet. Their station is their parent, as a carrier's fighters are theirs, and with no
+orders of their own they guard it: each craft has its own slot in an even ring just outside the
+hull, where it flies to, slows, stops and waits facing out (no circling). They take on any enemy
+inside the reach of the station's turbolasers (measured from each turbolaser mount the way the
+guns measure it, research range bonuses included, so it grows with the station), chase it at
+most 250 further out, and fly back to their slots and park once it's dead or gone. They can be
+ordered anywhere and come home to guard once their orders are done, but more than 1,400 from their station, or
 once it's gone, their guns do 30% of their damage (they're drawn faded there, and the unit card
 says so). Lost craft come back from the station's hangar one at a time: the first 15 s after the
 last loss, then one every 25 s until the squadron is whole, even after it was wiped out. A
