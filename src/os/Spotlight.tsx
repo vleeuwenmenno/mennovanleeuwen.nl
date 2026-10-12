@@ -574,6 +574,7 @@ export function Spotlight() {
       if (app === 'calendar' && account.status !== 'user') continue // the user's own calendars
       if (app === 'contacts' && account.status !== 'user') continue // the user's own contacts
       if (app === 'agents' && account.status !== 'user') continue // runs on the user's Ollama key
+      if (app === 'tasks' && account.status !== 'user') continue // the user's own lists
       const meta = APP_META[app]
       const open = wm.windows.filter((w) => w.app === app).length
       out.push({

@@ -10,6 +10,7 @@ import { githubCommits } from './github.ts'
 import { addCaldav, clearCaldavCache, listCaldav, removeCaldav } from './caldav.ts'
 import { allCalendars, allEvents, createEvent, deleteEvent, updateEvent } from './calendars.ts'
 import { handleContactsApi } from './contacts.ts'
+import { handleTasksApi } from './tasks.ts'
 import { empiresAway } from './empires.ts'
 import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, MAX_RANGE_DAYS, startGoogle } from './google.ts'
 import { inbox } from './inbox.ts'
@@ -183,6 +184,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/calendar/events' && method === 'POST') return await createEvent(requireUser(req), await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true
     if (path === '/api/calendar/events' && method === 'PATCH') return await updateEvent(requireUser(req), await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true
     if (path === '/api/calendar/events' && method === 'DELETE') return await deleteEvent(requireUser(req), await readJson(req, 8 * 1024)), json(res, 200, { ok: true }), true
+    // The Tasks app (server/tasks.ts): CalDAV task lists and the ones on this site.
+    if ((path === '/api/tasks' || path.startsWith('/api/tasks/')) && (await handleTasksApi(req, res, url, method, requireUser(req)))) return true
     if (path === '/api/integrations/updown' && method === 'PUT') return await setUpdownKey(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true
     if (path === '/api/integrations/updown' && method === 'DELETE') return removeUpdownKey(requireUser(req)), json(res, 200, { ok: true }), true
     // Seafile, for the Files app (server/seafile.ts): link with { url, username, password, otp? }.

@@ -1,7 +1,7 @@
-import { calendarTime, toolLabel, type Todo, type ToolCall } from '../../data/agents'
+import { calendarTime, compactionText, toolLabel, type AgentMessage, type Todo, type ToolCall } from '../../data/agents'
 import { diffCounts, diffLines } from './diff'
 import { markdown } from './markdown'
-import { clipLine, seg, wrap, type Line } from './text'
+import { clipLine, count, seg, width, wrap, type Line } from './text'
 
 // How the agents TUI shows a conversation: your messages after >, replies after ●, each tool call
 // as a line with what came of it under ⎿, edits as diffs, like a coding agent's CLI.
@@ -25,6 +25,21 @@ export function thinkingLines(thinking: string, verbose: boolean, w: number): Li
   if (!thinking.trim()) return []
   if (verbose) return wrap([seg(thinking.trim(), 'muted')], w, [seg('✻ ', 'muted')], [seg('  ')])
   return [clipLine([seg('✻ ', 'muted'), seg(`Thought: ${oneLine(thinking, 200)}`, 'muted')], w)]
+}
+
+/**
+ * Where the thread was compacted: a rule across the screen saying how, then the summary itself
+ * (verbose, or /summary) or a line saying where to find it. The messages above stay on screen.
+ */
+export function compactLines(m: AgentMessage, w: number, full: boolean): Line[] {
+  const c = m.compact
+  const head: Line = [seg('── ', 'accent'), seg(`✻ ${compactionText(c)}`, 'accent'), ...(c?.instructions ? [seg(` · ${oneLine(c.instructions, 60)}`, 'muted')] : []), seg(' ')]
+  // The rule stops a little short: a line as wide as the screen wraps when ✻ is drawn two cells wide.
+  const out: Line[] = [clipLine([...head, seg('─'.repeat(Math.max(0, w - width(head) - 2)), 'accent')], w)]
+  const was = c ? `${c.messages} ${c.messages === 1 ? 'message' : 'messages'}, about ${count(c.before)} tokens, now ${count(c.after)}` : ''
+  if (full) out.push(...markdown(m.content.trim(), w - 2).map((l) => [seg('  '), ...l]))
+  else out.push(...wrap([seg(`The agent works from a summary of what is above${was ? ` (${was})` : ''}. /summary shows it.`, 'muted')], w, [seg('  ⎿  ', 'muted')], [seg('     ')]))
+  return out
 }
 
 /** A tool call's name and argument, as its header line shows it. */

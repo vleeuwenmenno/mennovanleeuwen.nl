@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { dayKey, eventsOn, eventTime, fetchEvents, isShown, startOfDay, useCalendarChoice, useCalendarList, useCalendarVersion, useShownCalendarIds, type CalendarEvent } from '../data/calendar'
+import { completeTask, dueDay, openTask, useTaskPrefs, useTasks } from '../data/tasks'
 import { connectGoogle, hasCalendar, signIn, useAccount } from '../os/account'
 import type { MenuItem } from '../os/ContextMenu'
 import { useWindowMenu } from '../os/windowMenu'
@@ -9,7 +10,8 @@ import type { WidgetDef } from './types'
 
 // The Agenda widget: today and the coming days from Google Calendar and CalDAV accounts
 // (server/calendars.ts): the calendars switched on in Settings, or its own pick. Signed-in users only: it
-// needs the GitHub sign-in with a calendar connected (Settings → Calendar).
+// needs the GitHub sign-in with a calendar connected (Settings → Calendar). Today also lists the
+// tasks due today or overdue (src/data/tasks.ts), from the lists the Calendar shows, to tick off.
 
 type Config = { calendars: string[] | null; days: number; tilt: number }
 const DEFAULTS: Config = { calendars: null, days: 3, tilt: 0 }
@@ -51,6 +53,15 @@ function useEvents(config: Config, enabled: boolean) {
 }
 
 
+/** Today's open tasks: due today or before, from the lists switched on for the calendar. */
+function useTodaysTasks() {
+  const { lists, tasks } = useTasks()
+  const { hiddenInCalendar } = useTaskPrefs()
+  const today = dayKey(new Date())
+  const colors = new Map((lists ?? []).map((l) => [l.id, l.color]))
+  return tasks.filter((t) => !t.completed && t.due && dueDay(t)! <= today && colors.has(t.list) && !hiddenInCalendar.includes(t.list)).map((t) => ({ task: t, color: colors.get(t.list)! }))
+}
+
 function dayLabel(key: string) {
   const today = new Date()
   const tomorrow = new Date(today.getTime() + 864e5)
@@ -73,6 +84,7 @@ export function Agenda({ id }: { win: WinState; id: string }) {
   const config = useWidgetConfig<Config>(id, DEFAULTS)
   const connected = hasCalendar(account)
   const { events, error } = useEvents(config, connected)
+  const todays = useTodaysTasks()
   const windowMenu = useWindowMenu()
   const wm = useWM()
   const [, setNow] = useState(0)
@@ -124,6 +136,7 @@ export function Agenda({ id }: { win: WinState; id: string }) {
     )
 
   const now = Date.now()
+  const today = dayKey(new Date())
   return (
     <div className="ag">
       {head}
@@ -133,7 +146,24 @@ export function Agenda({ id }: { win: WinState; id: string }) {
         byDay(events, config.days).map(([key, list]) => (
           <section key={key} className="ag-day">
             <h4>{dayLabel(key)}</h4>
-            {list.length === 0 && <p className="ag-empty">Nothing planned</p>}
+            {list.length === 0 && (key !== today || !todays.length) && <p className="ag-empty">Nothing planned</p>}
+            {key === today &&
+              todays.map(({ task: t, color }) => (
+                <div key={t.id} className="ag-event" title={t.notes}>
+                  <button className="ca-task-check" style={{ ['--c' as string]: color }} onClick={() => void completeTask(t).catch(() => {})} role="checkbox" aria-checked={false} aria-label={`Complete "${t.title}"`} />
+                  <span className={`ag-time ${dueDay(t) !== today ? 't-red' : ''}`}>{dueDay(t) !== today ? 'overdue' : t.allDay ? 'today' : new Date(t.due!).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}</span>
+                  <a
+                    className="ag-title"
+                    href="/?open=tasks"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      openTask(t.id)
+                    }}
+                  >
+                    {t.title}
+                  </a>
+                </div>
+              ))}
             {list.map((e) => {
               const past = !e.allDay && new Date(e.end).getTime() < now
               const live = !e.allDay && new Date(e.start).getTime() <= now && !past

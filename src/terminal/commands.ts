@@ -134,6 +134,7 @@ const APP_NAMES: Record<AppId, string> = {
   calendar: 'calendar',
   agents: 'agents',
   contacts: 'contacts',
+  tasks: 'tasks',
 }
 
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */

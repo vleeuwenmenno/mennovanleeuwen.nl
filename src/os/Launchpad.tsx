@@ -38,7 +38,7 @@ type Entry = {
   dockId?: DockId
 }
 
-const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'preview', 'player', 'amp', 'newdoc', 'newsheet', 'newslides', 'projects', 'recents', 'cv', 'games', 'mcserver', 'notebook', 'calendar', 'contacts', 'agents', 'contact', 'notes', 'keys', 'settings', 'trash']
+const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'preview', 'player', 'amp', 'newdoc', 'newsheet', 'newslides', 'projects', 'recents', 'cv', 'games', 'mcserver', 'notebook', 'calendar', 'tasks', 'contacts', 'agents', 'contact', 'notes', 'keys', 'settings', 'trash']
 
 const stroke = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const
 const Icon = ({ children }: { children: ReactNode }) => (
@@ -129,8 +129,8 @@ export function Launchpad() {
         label: 'Apps',
         icon: ICONS.apps,
         children: () =>
-          // The Calendar and Agents apps only mean something when signed in; the CV apps only exist at /cv.
-          APP_ORDER.filter((a) => APP_META[a] && appHere(a) && ((a !== 'calendar' && a !== 'agents' && a !== 'contacts') || signedIn()) && (!ALWAYS_NEW.has(a) || !!getAccount().seafile?.office)).map((app) => ({
+          // The Calendar, Tasks, Contacts and Agents apps only mean something when signed in; the CV apps only exist at /cv.
+          APP_ORDER.filter((a) => APP_META[a] && appHere(a) && ((a !== 'calendar' && a !== 'agents' && a !== 'tasks' && a !== 'contacts') || signedIn()) && (!ALWAYS_NEW.has(a) || !!getAccount().seafile?.office)).map((app) => ({
             label: APP_META[app].dock,
             icon: <AppIcon app={app} size={16} tone />,
             run: () => wm.open(app),
