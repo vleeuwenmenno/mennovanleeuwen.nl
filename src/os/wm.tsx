@@ -34,7 +34,15 @@ export type WinState = {
    * there by hand. Only the phone layout reads it; free-standing notes on a big screen ignore it.
    */
   stack?: number
+  /**
+   * The workspace the window lives on (1 to WORKSPACES). Notes and widgets have none: they are
+   * part of the desktop and show on every workspace. Windows saved before workspaces are on 1.
+   */
+  ws?: number
 }
+
+/** How many workspaces there are, numbered from 1 like Omarchy's (Alt+1 to Alt+9 reach them all). */
+export const WORKSPACES = 9
 
 export type SnapZone = 'left' | 'right' | 'tl' | 'tr' | 'bl' | 'br'
 
@@ -96,6 +104,8 @@ type Action =
   | { type: 'viewport'; width: number; height: number; layout: { app: AppId; geometry: Geometry }[] }
   | { type: 'reset'; layout: { app: AppId; geometry: Geometry; props?: WinState['props'] }[] }
   | { type: 'restore'; windows: SavedWindow[] }
+  | { type: 'workspace'; n: number }
+  | { type: 'moveTo'; pid: number; n: number }
 
 /** `touched` flips once the visitor moves, resizes or opens something; until then a viewport
  * change re-applies the opening layout instead of just clamping. `focused` is the window that
@@ -106,18 +116,54 @@ type State = {
   topZ: number
   touched: boolean
   focused: number | null
+  /** The workspace on screen. */
+  ws: number
+  /** Phone-sized screen: there is one workspace's worth of room, so every window counts as shown. */
+  phone: boolean
   /** Counts what the visitor did (open, close, move, focus...), not what the screen size did to
    * the windows: only those changes are saved, so two screens don't keep overwriting each other. */
   edits: number
 }
 
 /** Actions that are the visitor's own doing (as opposed to a viewport change or a restore). */
-const USER_ACTIONS = new Set<Action['type']>(['open', 'close', 'focus', 'minimize', 'toggleMax', 'setGeometry', 'setProps', 'restack'])
+const USER_ACTIONS = new Set<Action['type']>(['open', 'close', 'focus', 'minimize', 'toggleMax', 'setGeometry', 'setProps', 'restack', 'moveTo'])
+
+const isPhone = () => window.innerWidth < 720
+
+/** The workspace a window lives on, or null for notes and widgets (they are on all of them). */
+export const workspaceOf = (w: Pick<WinState, 'app' | 'ws'>): number | null => (NOTE_APPS.has(w.app) ? null : (w.ws ?? 1))
+
+/** Whether a window is on the screen's workspace (minimized or not): always on a phone, where
+ * every window is reachable as if there were just one workspace. */
+const onScreen = (state: Pick<State, 'ws' | 'phone'>, w: WinState) => state.phone || workspaceOf(w) === null || workspaceOf(w) === state.ws
+
+/** The frontmost window that shows on the current workspace, for focus to fall back to. */
+const topShown = (state: Pick<State, 'ws' | 'phone'>, windows: WinState[]) =>
+  windows.filter((w) => !w.minimized && onScreen(state, w)).reduce<WinState | null>((a, w) => (!a || w.z > a.z ? w : a), null)
+
+// Which workspace is on screen is this browser's own business (another device can be looking at
+// a different one), so it is kept here rather than in the synced window layout.
+const WS_KEY = 'mvlos.workspace'
+function savedWorkspace(): number {
+  try {
+    const n = Number(localStorage.getItem(WS_KEY))
+    return Number.isInteger(n) && n >= 1 && n <= WORKSPACES ? n : 1
+  } catch {
+    return 1
+  }
+}
+function saveWorkspace(n: number) {
+  try {
+    localStorage.setItem(WS_KEY, String(n))
+  } catch {
+    /* not kept */
+  }
+}
 
 
 /** Opens the opening layout on an empty desk, as if nobody had touched it yet. */
 function fresh(layout: { app: AppId; geometry: Geometry; props?: WinState['props'] }[]): State {
-  let s: State = { windows: [], nextPid: 100, topZ: 10, touched: false, focused: null, edits: 0 }
+  let s: State = { windows: [], nextPid: 100, topZ: 10, touched: false, focused: null, ws: 1, phone: isPhone(), edits: 0 }
   for (const w of layout) s = reducer(s, { type: 'open', app: w.app, geometry: w.geometry, props: w.props })
   return { ...s, touched: false, edits: 0 }
 }
@@ -126,7 +172,7 @@ function fresh(layout: { app: AppId; geometry: Geometry; props?: WinState['props
 // Saved layouts: which windows are open, where, and what they show. Phones and bigger screens
 // keep separate layouts, since one rarely fits the other.
 
-export type SavedWindow = Geometry & Pick<WinState, 'app' | 'minimized' | 'maximized' | 'snap' | 'restore' | 'props' | 'stack'>
+export type SavedWindow = Geometry & Pick<WinState, 'app' | 'minimized' | 'maximized' | 'snap' | 'restore' | 'props' | 'stack' | 'ws'>
 
 /** Saved layouts from before widgets: a sticky was its own app. */
 function migrate(w: SavedWindow): SavedWindow {
@@ -162,13 +208,14 @@ function serialize(windows: WinState[]): SavedWindow[] {
       snap: w.snap,
       restore: w.restore,
       stack: w.stack,
+      ws: workspaceOf(w) ?? undefined,
       props: Object.fromEntries(Object.entries(w.props).filter(([k, v]) => v !== undefined && !TRANSIENT_PROPS.has(k))),
     }))
 }
 
 /** A state showing `saved`. Windows already open that match one (same app, same props) keep
  * their pid, so their app keeps running (a terminal keeps its history) and just moves. */
-function restored(saved: SavedWindow[], current: WinState[] = []): State {
+function restored(saved: SavedWindow[], current: WinState[] = [], ws = 1): State {
   const unused = current.slice()
   const key = (w: { app: AppId; props: WinState['props'] }) => `${w.app}|${JSON.stringify(Object.entries(w.props).filter(([k, v]) => v !== undefined && !TRANSIENT_PROPS.has(k)).sort())}`
   let pid = Math.max(100, ...current.map((w) => w.pid + 1))
@@ -177,10 +224,11 @@ function restored(saved: SavedWindow[], current: WinState[] = []): State {
     const i = unused.findIndex((u) => key(u) === key(w))
     const same = i >= 0 ? unused.splice(i, 1)[0] : null
     const want = { x: w.x, y: w.y, w: w.w, h: w.h }
+    w = { ...w, ws: NOTE_APPS.has(w.app) ? undefined : Math.min(WORKSPACES, Math.max(1, Math.round(w.ws ?? 1))) }
     return same ? { ...same, ...w, want, props: same.props, pid: same.pid, z: ++z } : { ...w, want, props: { ...w.props }, pid: pid++, z: ++z, openedAt: Date.now() }
   })
-  const top = windows.filter((w) => !w.minimized).at(-1)
-  return { windows, nextPid: pid, topZ: z, touched: true, focused: top?.pid ?? null, edits: 0 }
+  const view = { ws, phone: isPhone() }
+  return { windows, nextPid: pid, topZ: z, touched: true, focused: topShown(view, windows)?.pid ?? null, ...view, edits: 0 }
 }
 
 function reducer(state: State, action: Action): State {
@@ -193,7 +241,21 @@ function apply(state: State, action: Action): State {
     case 'reset':
       return fresh(action.layout)
     case 'restore':
-      return restored(action.windows, state.windows)
+      return restored(action.windows, state.windows, state.ws)
+    case 'workspace': {
+      const n = Math.min(WORKSPACES, Math.max(1, action.n))
+      if (n === state.ws) return state
+      return { ...state, ws: n, focused: topShown({ ...state, ws: n }, state.windows)?.pid ?? null }
+    }
+    case 'moveTo': {
+      // Like Hyprland's movetoworkspace: the window goes, and the screen follows it there.
+      const target = state.windows.find((w) => w.pid === action.pid)
+      const n = Math.min(WORKSPACES, Math.max(1, action.n))
+      if (!target || NOTE_APPS.has(target.app)) return state
+      const z = state.topZ + 1
+      const windows = state.windows.map((w) => (w.pid === action.pid ? { ...w, ws: n, z } : w))
+      return { ...state, touched: true, topZ: z, ws: n, windows, focused: target.minimized ? (topShown({ ...state, ws: n }, windows)?.pid ?? null) : target.pid }
+    }
     case 'open': {
       // Reuse the app's frontmost window unless a new one was asked for. An app with an instance
       // prop only reuses the window showing the same thing, and a thing never gets a second window.
@@ -210,6 +272,8 @@ function apply(state: State, action: Action): State {
           ...state,
           touched: true,
           topZ: z,
+          // Its workspace comes on screen with it.
+          ws: workspaceOf(existing) ?? state.ws,
           focused: existing.pid,
           windows: state.windows.map((w) => (w.pid === existing.pid ? { ...w, z, minimized: false, props } : w)),
         }
@@ -223,6 +287,8 @@ function apply(state: State, action: Action): State {
         maximized: false,
         props: action.props ?? {},
         openedAt: Date.now(),
+        // New windows open on the workspace on screen; notes and widgets belong to all of them.
+        ws: NOTE_APPS.has(action.app) ? undefined : state.ws,
       }
       return { ...state, touched: true, focused: win.pid, windows: [...state.windows, win], nextPid: state.nextPid + 1, topZ: z }
     }
@@ -231,9 +297,11 @@ function apply(state: State, action: Action): State {
     case 'focus': {
       const target = state.windows.find((w) => w.pid === action.pid)
       if (!target) return state
-      if (target.z === state.topZ && !target.minimized) return state.focused === action.pid ? state : { ...state, focused: action.pid }
+      const ws = workspaceOf(target) ?? state.ws
+      if (target.z === state.topZ && !target.minimized && ws === state.ws) return state.focused === action.pid ? state : { ...state, focused: action.pid }
       const z = state.topZ + 1
-      return { ...state, topZ: z, focused: action.pid, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, z, minimized: false } : w)) }
+      // Focusing a window on another workspace (from the dock, Spotlight) goes there.
+      return { ...state, topZ: z, ws, focused: action.pid, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, z, minimized: false } : w)) }
     }
     case 'minimize':
       return { ...state, focused: state.focused === action.pid ? null : state.focused, windows: state.windows.map((w) => (w.pid === action.pid ? { ...w, minimized: true } : w)) }
@@ -260,6 +328,7 @@ function apply(state: State, action: Action): State {
       const { width, height } = action
       return {
         ...state,
+        phone: width < 720,
         windows: state.windows.map((w) => {
           if (w.snap) return { ...w, ...snapRect(w.snap, width, height) }
           const fresh = !state.touched && action.layout.find((l) => l.app === w.app)
@@ -342,6 +411,17 @@ type WM = {
   reset: (empty?: boolean) => void
   /** Fits the windows to the screen again (a note that turned out taller than its box). */
   refit: () => void
+  /** The workspace on screen (1 to WORKSPACES). */
+  workspace: number
+  /** Puts another workspace on screen; its windows show and the others' hide (they keep running). */
+  setWorkspace: (n: number) => void
+  /** Moves a window to a workspace and goes there with it. Notes and widgets stay on all of them. */
+  moveToWorkspace: (pid: number, n: number) => void
+  /** Whether a window is on the workspace on screen (minimized or not). Always true on a phone,
+   * which shows every window as if there were one workspace. */
+  shown: (w: WinState) => boolean
+  /** Whether workspaces are in use: not on a phone. */
+  workspaces: boolean
 }
 
 const Ctx = createContext<WM | null>(null)
@@ -377,8 +457,13 @@ export function WindowManagerProvider({
     const start = startupPrefs().windows
     if (start === 'empty') return fresh([])
     const saved = start === 'last' ? usable(layoutStore().get()) : null
-    return saved ? restored(saved) : fresh(relayout())
+    return saved ? restored(saved, [], savedWorkspace()) : fresh(relayout())
   })
+
+  // A phone shows every window as one workspace, so it leaves the desktop's choice alone.
+  useEffect(() => {
+    if (!state.phone) saveWorkspace(state.ws)
+  }, [state.ws, state.phone])
 
   const stateRef = useRef(state)
   stateRef.current = state
@@ -463,8 +548,8 @@ export function WindowManagerProvider({
   }, [relayout])
 
   const value = useMemo<WM>(() => {
-    const visible = state.windows.filter((w) => !w.minimized)
-    const top = visible.reduce<WinState | null>((a, w) => (!a || w.z > a.z ? w : a), null)
+    const visible = state.windows.filter((w) => !w.minimized && onScreen(state, w))
+    const top = topShown(state, state.windows)
     const focused = visible.some((w) => w.pid === state.focused) ? state.focused : (top?.pid ?? null)
     return {
       windows: state.windows,
@@ -489,13 +574,18 @@ export function WindowManagerProvider({
       setProps: (pid, props) => dispatch({ type: 'setProps', pid, props }),
       restack: (pids) => dispatch({ type: 'restack', pids }),
       refit: () => dispatch({ type: 'viewport', width: window.innerWidth, height: window.innerHeight, layout: relayout() }),
+      workspace: state.ws,
+      setWorkspace: (n) => dispatch({ type: 'workspace', n }),
+      moveToWorkspace: (pid, n) => dispatch({ type: 'moveTo', pid, n }),
+      shown: (w) => onScreen(state, w),
+      workspaces: !state.phone,
       reset: (empty) => {
         dispatch({ type: 'reset', layout: empty ? [] : relayout() })
         savedEdits.current = 0
         layoutStore().set(null)
       },
     }
-  }, [state.windows, state.focused, open, openNew, relayout])
+  }, [state.windows, state.focused, state.ws, state.phone, open, openNew, relayout])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

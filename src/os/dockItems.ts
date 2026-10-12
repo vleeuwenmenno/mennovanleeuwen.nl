@@ -63,12 +63,15 @@ export function setDockOrder(order: DockId[]) {
 
 export const isPinned = (id: DockId) => resolveDock().includes(id)
 
-export function pinToDock(id: DockId) {
+/** Pins an app or launcher at the end of the dock, or at `at` (an open app dragged in among the
+ * pinned ones). */
+export function pinToDock(id: DockId, at?: number) {
   if (!signedIn()) return
   const current = resolveDock()
   const state = store.get()
   const removed = (state?.removed ?? []).filter((a) => a !== id)
-  store.set({ order: current.includes(id) ? current : [...current, id], removed })
+  const order = current.includes(id) ? current : at === undefined ? [...current, id] : [...current.slice(0, at), id, ...current.slice(at)]
+  store.set({ order, removed })
 }
 
 export function unpinFromDock(id: DockId) {

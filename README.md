@@ -33,6 +33,34 @@ bar, one monospace face, and colours from Omarchy's own theme palettes
 "auto" follows the OS. The sun/moon button in the bar toggles; right-click it (or the desktop)
 for every Omarchy theme and accent overrides. `theme list` / `theme <name>` in the terminal too.
 
+## Workspaces and the dock
+
+Like Omarchy, the desktop has workspaces ([`src/os/wm.tsx`](src/os/wm.tsx)): the numbers in the
+top bar are workspaces 1 to 9, not windows. Exactly one is on screen; the others' windows are
+hidden but keep running (a game keeps its state, a terminal its history). The bar always shows 1
+to 5 and any later one with windows; the one on screen is underlined and empty ones are dimmed.
+Click a number (or scroll over them) to go there, and right-click one for its windows. New windows
+open on the workspace on screen. Sticky notes, the shortcuts note and widgets are part of the
+desktop rather than windows, so they show on every workspace.
+
+Super is Omarchy's key, but the system keeps it, so a web page never sees it; the site uses Alt:
+**Alt+1…9** goes to a workspace, **Alt+Shift+1…9** moves the focused window there (and goes with
+it, like Hyprland's `movetoworkspace`), **Ctrl+Alt+← →** steps through them. These work everywhere,
+the terminal included, except that on a Mac a text field keeps Option+digit for typing characters.
+A window's menu (right-click its title bar) has *Move to workspace*, and dragging a window onto a
+number in the bar moves it there. Each window's workspace is saved with the window layout; which
+workspace is on screen is kept per browser. Phones have room for one workspace, so there the
+numbers don't show and every window is reachable as if there were just one.
+
+The dock keeps the pinned apps and launchers, and every open app that isn't pinned gets an item of
+its own after them, past a thin divider, like macOS ([`src/os/Shell.tsx`](src/os/Shell.tsx),
+`Dock`). So a minimized window can always be brought back, on a phone too, where the dock comes
+back with the bar at the bottom. An app's dots show how many windows it has (with a count when
+there is more than one), on every workspace. Clicking an app opens it or brings its most recent
+window back, switching to that window's workspace; clicking again minimizes it, or with several
+windows brings the next one forward. Right-click (or long-press) an app for its windows by title,
+with their workspace. Its item goes when its last window closes. Notes and widgets never get one.
+
 ## Editing content
 
 Everything the site says lives in [`src/data/profile.ts`](src/data/profile.ts): headlines on the
@@ -277,8 +305,10 @@ clone command, link or branch name.
 
 Signed in, the dock is yours too ([`src/os/dockItems.ts`](src/os/dockItems.ts)): right-click a
 dock icon to remove it, and right-click (or Shift+Enter) an app, launcher or repository in
-Spotlight or All apps to pin it. Settings → Dock lists what was taken off, to add it back, and
-restores the default dock. Everyone can still drag dock icons to reorder them.
+Spotlight or All apps to pin it. An open app that isn't pinned offers *Keep in dock* on its own
+dock item, or drag it in among the pinned ones to pin it at that spot. Settings → Dock lists what
+was taken off, to add it back, and restores the default dock. Everyone can still drag dock icons
+to reorder them.
 
 Anyone with a GitHub account can sign up for a desktop of their own, up to `MAX_USERS` accounts
 (default 100). Over the cap, or with sign-up closed, a new account gets a "We're full" (or
