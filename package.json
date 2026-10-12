@@ -33,6 +33,7 @@
     "mail:mock": "node scripts/mail-mock.ts",
     "check:photos": "node scripts/photos-check.ts",
     "check:terminal-vt": "node scripts/terminal-vt.ts",
+    "check:terminal-cmds": "node scripts/terminal-cmds.ts",
     "check:contacts": "node scripts/contacts-check.ts",
     "check:tasks": "node scripts/tasks-check.ts",
     "check:launchers": "node scripts/launchers-check.ts",
