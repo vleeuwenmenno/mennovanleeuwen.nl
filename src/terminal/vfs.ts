@@ -356,7 +356,8 @@ export function kindOfName(name: string, dir = false): FileKind {
   const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : ''
   if (['svg', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'ico'].includes(ext)) return 'image'
   if (['md', 'markdown'].includes(ext)) return 'markdown'
-  if (ext === 'url') return 'link'
+  // Web shortcuts: .url, and .desktop launchers (src/data/launcherFiles.ts).
+  if (ext === 'url' || ext === 'desktop') return 'link'
   if (ext === 'game') return 'game'
   if (['flac', 'mp3', 'ogg', 'oga', 'opus', 'wav', 'm4a', 'aac'].includes(ext)) return 'audio'
   if (['mp4', 'mkv', 'webm', 'mov', 'm4v', 'ogv'].includes(ext)) return 'video'

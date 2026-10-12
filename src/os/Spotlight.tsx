@@ -4,7 +4,7 @@ import { openSticky } from '../apps/Sticky'
 import { MarkdownPreview } from '../apps/Zed'
 import { isCodeQuery, type BranchHit, type Hit, type IssueHit, type RepoHit } from '../data/code'
 import { forgetHit, hitKey, rememberHit, useRecentHits, weight } from '../data/spotlightRecent'
-import { faviconOf, launch, useLaunchers } from '../data/launchers'
+import { faviconOf, launch, launcherImage, useLaunchers } from '../data/launchers'
 import { createNote, noteTitle, NOTE_COLORS, useAllNotes } from '../data/notes'
 import { addWidget, widgetDefs } from '../widgets/registry'
 import { ENGINES, searchWeb, useSearchSettings, useSuggestions } from '../data/searchEngine'
@@ -750,8 +750,8 @@ export function Spotlight() {
         title: l.label,
         subtitle: l.url.replace(/^https?:\/\//, '').replace(/\/$/, ''),
         keywords: `launcher link bookmark ${l.url}`,
-        icon: l.glyph ? <Glyph>{l.glyph}</Glyph> : <Glyph><img className="sp-fav" src={faviconOf(l.url)} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} /></Glyph>,
-        run: () => launch(l),
+        icon: l.glyph ? <Glyph>{l.glyph}</Glyph> : <Glyph><img className="sp-fav" src={launcherImage(l)} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} /></Glyph>,
+        run: () => launch(l, wm),
         alt: { label: 'Copy link', run: () => copy(l.url, 'link') },
       })
 
