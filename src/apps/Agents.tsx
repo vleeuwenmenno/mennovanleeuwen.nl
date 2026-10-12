@@ -78,7 +78,10 @@ import { diffLines } from '../terminal/agents/diff'
 import { dropDraft, getDraft, setDraft } from '../data/agentDrafts'
 import { posixOf } from '../data/mounts'
 import { prettyPath } from '../terminal/vfs'
-import { DRAG_FILES, fileLink as seafileLink, getDragged, libraryName, parseSf } from '../data/seafile'
+import { libraryName, parseSf } from '../data/seafile'
+import { readBytes } from '../data/fileOps'
+import { useDropTarget, type Drag as DropDrag } from '../os/dnd'
+import { notify } from '../os/notify'
 import { pickFiles, pickFolder } from '../os/FolderPicker'
 import { Select } from '../os/Select'
 import { hasCalendar, signIn, useAccount } from '../os/account'
@@ -976,7 +979,6 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   // The message box starts from what was left there last time (src/data/agentDrafts.ts).
   const [files, setFiles] = useState<Attachment[]>(() => getDraft(id ?? 'new')?.files ?? [])
   const [reading, setReading] = useState(0)
-  const [dragOver, setDragOver] = useState(false)
   const settingsNow = useAgentSettings()
   const [draftTools, setDraftTools] = useState<ToolGroup[]>(settingsNow.tools)
   const account = useAccount()
@@ -1614,7 +1616,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       tidyMenu([
         ...fieldMenu(e.currentTarget),
         { separator: true },
-        { label: 'Attach from Files (Seafile)…', disabled: !account.seafile, onSelect: () => void pickFiles({ title: 'Attach files' }).then((p) => void (p?.length && fromSeafile(p))) },
+        { label: 'Attach from Files (Seafile)…', disabled: !account.seafile, onSelect: () => void pickFiles({ title: 'Attach files' }).then((p) => void (p?.length && fromPaths(p))) },
         { label: 'Attach from this computer…', onSelect: () => pcFiles.current?.click() },
         { separator: true },
         { label: 'Quick', checked: mode === 'quick', disabled: answering, onSelect: () => setMode('quick') },
@@ -1717,20 +1719,43 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     setError(failed.length ? failed.join(' · ') : null)
     input.current?.focus()
   }
-  const fromSeafile = (paths: string[]) =>
+  // Files from Seafile or this browser (the picker, or dragged from Files and the desktop).
+  const fromPaths = (paths: string[]) =>
     addFiles(() =>
       paths.map(async (p) => {
-        const at = parseSf(p)!
-        const name = at.p.split('/').pop() || 'file'
-        const res = await fetch(await seafileLink(p, 'download'))
-        if (!res.ok) throw new Error(`${name}: Seafile answered ${res.status}`)
-        return toAttachment(await res.blob(), name, `Seafile: ${libraryName(at.repo)} ${at.p}`)
+        const at = parseSf(p)
+        const name = (at ? at.p : p).split('/').pop() || 'file'
+        return toAttachment(await readBytes(p), name, at ? `Seafile: ${libraryName(at.repo)} ${at.p}` : `Files: ${p}`)
       }),
     )
+  // A drop on the composer: files attach like the button and paste do, a launcher is typed in as
+  // its address, and a folder is said no to, since it has nothing to read.
+  const composerBox = useRef<HTMLFormElement>(null)
+  useDropTarget(composerBox, {
+    accept: (d) => (d.os || d.items.some((i) => i.kind === 'file' || i.kind === 'launcher') ? 'copy' : null),
+    drop: (d) => void dropOnComposer(d),
+  })
+  const dropOnComposer = async (d: DropDrag) => {
+    const paths: string[] = []
+    const urls: string[] = []
+    let folders = 0
+    for (const i of d.items) {
+      const l = i.kind === 'launcher' ? i : i.kind === 'file' ? i.launcher : undefined
+      if (l?.url) urls.push(l.url)
+      else if (i.kind === 'file') i.dir ? folders++ : paths.push(i.path)
+    }
+    const fromPc = d.os ? await d.files() : []
+    folders += new Set(fromPc.filter((p) => p.rel).map((p) => p.rel.split('/')[0])).size
+    if (urls.length) setText((t) => `${t}${t && !t.endsWith('\n') ? '\n' : ''}${urls.join('\n')}`)
+    if (paths.length) void fromPaths(paths)
+    if (fromPc.some((p) => !p.rel)) void fromComputer(fromPc.filter((p) => !p.rel).map((p) => p.file))
+    if (folders) notify({ title: folders > 1 ? 'Folders cannot be attached' : 'A folder cannot be attached', body: 'Attach the files inside it, or zip the folder first.', icon: 'folder', transient: true })
+    input.current?.focus()
+  }
   const fromComputer = (list: FileList | File[]) => addFiles(() => [...list].map((f) => toAttachment(f, f.name, 'This computer')))
   const attachMenu = (e: React.MouseEvent) =>
     openMenuAt(e.currentTarget, [
-      { label: 'From Files (Seafile)…', disabled: !account.seafile, onSelect: () => void pickFiles({ title: 'Attach files' }).then((p) => void (p?.length && fromSeafile(p))) },
+      { label: 'From Files (Seafile)…', disabled: !account.seafile, onSelect: () => void pickFiles({ title: 'Attach files' }).then((p) => void (p?.length && fromPaths(p))) },
       { label: 'From this computer…', onSelect: () => pcFiles.current?.click() },
     ], 'above')
 
@@ -1831,25 +1856,11 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       {thread && queue.length > 0 && <QueueList queue={queue} answering={answering} editing={editingQ?.id ?? null} onEdit={(q) => void startEdit(q)} onSend={(q) => void sendNow(q)} onRemove={removeQueue} />}
       {thread && ctxOpen && <ContextPanel id={thread.id} version={messages.length} onCompact={hasConversation ? () => void compactDialog() : undefined} />}
       <form
-        className={`agt-composer ${dragOver ? 'is-drop' : ''}`}
+        ref={composerBox}
+        className="agt-composer"
         onSubmit={(e) => {
           e.preventDefault()
           void send()
-        }}
-        onDragOver={(e) => {
-          if ([...e.dataTransfer.types].some((t) => t === 'Files' || t === DRAG_FILES)) {
-            e.preventDefault()
-            setDragOver(true)
-          }
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => {
-          setDragOver(false)
-          const dragged = e.dataTransfer.types.includes(DRAG_FILES) ? getDragged() : null
-          if (!dragged?.length && !e.dataTransfer.files.length) return
-          e.preventDefault()
-          if (dragged?.length) void fromSeafile(dragged)
-          else void fromComputer(e.dataTransfer.files)
         }}
       >
         <div className="agt-box" onClick={(e) => e.target === e.currentTarget && input.current?.focus()}>
