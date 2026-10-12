@@ -85,9 +85,10 @@ export type Mount = {
   detach: boolean
 }
 
-/** How a hull comes apart: cut across in bands (long ships) or into wedges round the middle
- * (round stations). */
-export type BreakStyle = 'bands' | 'pie'
+/** How a hull comes apart: cut across in bands (long ships), into wedges round the middle (round
+ * stations), or a ring hull's way: its core sphere comes away whole and the ring round it breaks
+ * into segments (see Model.core). */
+export type BreakStyle = 'bands' | 'pie' | 'ring'
 export type BreakKind = 'intact' | 'half' | 'pieces'
 
 /** A scorch mark's spot, and the hull damage level (1-3) from which it shows. */
@@ -114,6 +115,8 @@ export type Model = {
    * `detached` mask is the i-th of these). */
   detachable: number[]
   breakStyle: BreakStyle
+  /** For the 'ring' break: the core sphere's middle and radius, in model units. */
+  core?: { x: number; y: number; r: number }
   scorch: Scorch[]
   /** A number unique to the design, seeding its scorch marks and break lines. */
   seed: number

@@ -38,10 +38,34 @@ const PART_NAMES: [string, string][] = [
   ['node', 'Side node'], ['cradle', 'Gun cradle'], ['spike', 'Capacitor spine'], ['knuckle', 'Knuckle pod'], ['joint', 'Joint'], ['iris', 'Iris'],
   ['thread', 'Silk thread'], ['strut', 'Strut'], ['legF', 'Front leg'], ['legM', 'Middle leg'], ['legB', 'Hind leg'], ['web', 'Web strand'],
 ]
+/** The droid navy's own parts (droid.ts), where its ids mean something else than the Swarm's or
+ * the Republic's. */
+const DROID_NAMES: [string, string][] = [
+  ['visor', 'Sensor visor'], ['blade', 'Blade'], ['vane', 'Vane'], ['sail', 'Sail fin'], ['tipFin', 'Gallery fin'], ['gallery', 'Gun gallery'],
+  ['jaw', 'Docking jaw'], ['hangar', 'Hangar segment'], ['clamp', 'Docking clamp'], ['sphere', 'Core sphere'], ['core', 'Core sphere'],
+  ['housing', 'Drill housing'], ['side', 'Side pod'], ['crate', 'Ammunition crate'], ['bulb', 'Forward bulb'], ['spike', 'Ion spike'],
+  ['plate', 'Armour plate'], ['ring', 'Ring hull'], ['tower', 'Gun tower'], ['spire', 'Antenna spire'], ['frame', 'Outer frame'],
+  ['collar', 'Collar'], ['gunbox', 'Gun box'], ['claw', 'Claw'],
+]
+
 export function partName(m: Model, i: number, t: UnitType) {
   const id = m.parts[i].id
   const station = t.tier === 'station'
   const structure = t.tier === 'mine' || t.tier === 'defense'
+  if (m.faction === 'droid') {
+    if (id.startsWith('pod') && !id.startsWith('podGun')) return station ? 'Gun pod' : t.id === 'd-repair' ? 'Tool pod' : t.id === 'd-gunship' ? 'Cannon pod' : 'Engine block'
+    if (/Strut$/.test(id)) return 'Strut'
+    if (id.startsWith('arm')) return station ? 'Docking arm' : t.id === 'd-gunship' ? 'Gun arm' : 'Manipulator arm'
+    if (id.startsWith('frame') && !station) return 'Bay frame'
+    if (id.startsWith('claw')) return structure ? 'Anchor claw' : 'Manipulator claw'
+    if (id.startsWith('block') || id.startsWith('engine')) return 'Engine block'
+    if (/^(wing|leg)[LR].*Knee$/.test(id)) return 'Knee joint'
+    if (/^(wing|leg)[LR].*Gun$/.test(id)) return 'Blaster'
+    if (/^wing[LR]/.test(id)) return 'Wing-leg'
+    if (/^leg[LR]/.test(id)) return 'Rear wing-leg'
+    const hit = DROID_NAMES.find(([p]) => id.startsWith(p))
+    if (hit) return hit[1]
+  }
   if (id.startsWith('podGun')) return 'Gun pod barrels'
   if (id.startsWith('pod')) return station ? 'Docking pod' : t.id === 'd-bomber' ? 'Bomb pod' : t.id === 'd-gunship' ? 'Gun pod' : 'Engine pod'
   if (id.startsWith('block') && station) return id === 'block' ? 'Command block' : 'Frame block'

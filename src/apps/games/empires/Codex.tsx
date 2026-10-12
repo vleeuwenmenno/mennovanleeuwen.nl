@@ -885,7 +885,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
             {(t.tier === 'station' || styles.length > 0) && (
               <div className="ew-cx-level">
                 {t.tier === 'station' && <Seg label="Station level" value={level} options={STATIONS[t.faction].stages.map((_, i) => [i + 1, `Level ${i + 1}`] as [number, string])} onChange={(v) => setLevel(v)} />}
-                {styles.length > 0 && <Seg label="Outer frame" value={styles.includes(style) ? style : styles[0]} options={styles.map((s) => [s, s[0].toUpperCase() + s.slice(1)] as [string, string])} onChange={(v) => setStyle(v)} />}
+                {styles.length > 0 && <Seg label={t.tier === 'station' ? 'Outer frame' : 'Design'} value={styles.includes(style) ? style : styles[0]} options={styles.map((s) => [s, s[0].toUpperCase() + s.slice(1)] as [string, string])} onChange={(v) => setStyle(v)} />}
               </div>
             )}
             <button className="ew-cx-reset" onClick={click(() => setResetKey((k) => k + 1))} data-tip="Back to nose up at the starting zoom">

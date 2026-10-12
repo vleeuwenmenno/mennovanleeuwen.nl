@@ -4,6 +4,7 @@ import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from '.
 import { RETREAT_TIME, atHome, building, foes, hpPos, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 import { BREAK_WEIGHTS, hullState, modelFor, unitForSprite, type HullState, type Model } from './models/index.ts'
 import { ModelFx } from './models/fx.ts'
+import { PALETTES } from './models/kit.ts'
 import { drawHull, drawMounts, liveEngines } from './models/paint.ts'
 
 // Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, nebulas
@@ -1957,7 +1958,8 @@ export class Renderer {
         const r = Math.max(4 / z, size * (t.tier === 'fighter' ? 0.35 : 0.07)) * thrust * flick
         const g = ctx.createRadialGradient(ex, ey, 0, ex, ey, r)
         g.addColorStop(0, '#ffffff')
-        g.addColorStop(0.3, fac.glow)
+        // A model's engines burn in its own palette's colour (the droid navy's blue-white).
+        g.addColorStop(0.3, m ? PALETTES[m.faction].engine : fac.glow)
         g.addColorStop(1, 'rgba(0,0,0,0)')
         ctx.fillStyle = g
         ctx.beginPath()

@@ -1001,16 +1001,28 @@ platform of plates and girders that grows with its level: a compact eight-sided 
 short arms with docking pods and a girder frame at level 2, long arms, big pods and dry docks at
 level 3, and a great outer frame on struts at level 4, square with corner bastions or octagonal
 (the battle uses `STATION_FRAME` in [`republic.ts`](src/apps/games/empires/models/republic.ts);
-the Codex shows both). The **Confederacy** is organic and insect-like, bone tan with violet seams
-and eyes, built from segments and jointed limbs: the Mantis fighter, the Locust bomber with two fat
-bomb pods, the spider-like Weaver repair droid with welding torches, the gold-ringed Gnat guard
-droid, the three-armed Trident gunship, the centipede Disruptor with its ion projector between two
-mandibles, the beetle Scarab frigate, the Manta cruiser (a ray with gun spars, ribs and a membrane)
-and the Hive carrier with two mantis-like hangar arms and honeycomb hive sacs. Its Foundry station
-is a hive: an egg-shaped carapace of six shell plates round an iris at level 1, a collar and six
-segmented arms at level 2, full-length arms with knuckle pods at level 3 and a web spun between the
-arm tips at level 4. The mining and defense platforms of both sides stand on clamp or insect legs
-that hold them to their asteroid.
+the Codex shows both). The **Confederacy** is an industrial droid navy
+([`droid.ts`](src/apps/games/empires/models/droid.ts)): weathered sand and bone plating over dark
+gunmetal, rust-brown and dull blue-grey panels, rivets, red and amber sensor eyes and blue-white
+engines, long spines with heavy forward sections, tall sails, boxy engine blocks and rings and
+spheres for the biggest hulls. Its fighter is a flying droid with a row of eyes and folding
+wing-legs, its bomber a twin-hulled cousin with a bomb bay between the hulls, its repair craft a
+blocky welder with manipulator arms, its guard droid a small gold-banded three-blade, its gunship a
+ball head on three long cannon arms. The ion frigate is a slim spine behind a great emitter dish,
+the line frigate a spine with a big armoured bulb and a tall sail, the cruiser a narrow destroyer
+with a towering sail and swept gun galleries either side. The flagship is a ring hull open at the
+front round a core sphere, docking-bay gaps between them (it breaks into ring segments and the
+sphere, the `ring` break style); the Codex also shows a broad carrier design on the same
+hardpoints (`CAPITAL_DESIGN` picks the battle's). Its station is built round a sphere core on a deck
+plate, gaining ring arcs and docking arms at level 2, the closed ring with hangar segments and gun
+pods at level 3, and an outer frame joining gun towers with antenna spires at level 4. The platforms
+of both sides stand on clamp legs that hold them to their asteroid.
+
+The Confederacy's first, insect-like designs are kept in
+[`swarm.ts`](src/apps/games/empires/models/swarm.ts) as the **Swarm**, a concept for a possible
+future third faction: one design for each droid unit on that unit's box and hardpoints, in their
+tan and violet palette. They are never used in battle; the Codex shows them under *Swarm
+(concept)*, on the droid units' numbers, and `check:empires-models` checks them like the rest.
 
 - **The format** ([`types.ts`](src/apps/games/empires/models/types.ts)): a model is a list of
   parts, each a polygon (with holes for rings) in a colour role (`hull`, `accent`, `metal`…), a z

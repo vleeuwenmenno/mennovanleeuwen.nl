@@ -16,6 +16,8 @@ export type ModelSpec = {
   mount?: (hp: number) => Partial<Pick<Mount, 'detach' | 'design' | 'turns'>> | undefined
   engines?: Pt[]
   breakStyle?: BreakStyle
+  /** The core sphere a 'ring' break leaves whole. */
+  core?: { x: number; y: number; r: number }
 }
 
 export type ModelDef = (c: BuildCtx) => ModelSpec

@@ -1,5 +1,6 @@
 import { STATIONS, UNITS, dims, stationType, type FactionId, type Tier, type UnitType } from '../data.ts'
 import { circle, hash, inPart, inPoly, jagged, rng, seedOf } from './kit.ts'
+import * as droid from './droid.ts'
 import * as republic from './republic.ts'
 import * as swarm from './swarm.ts'
 import type { ModelDef } from './spec.ts'
@@ -33,20 +34,20 @@ const DEFS: Record<string, ModelDef> = {
   'r-defense': republic.defense,
   'r-defense-flak': republic.defense,
   'r-defense-gun': republic.defense,
-  'd-fighter': swarm.fighter,
-  'd-station': swarm.station,
-  'd-bomber': swarm.bomber,
-  'd-repair': swarm.repair,
-  'd-picket': swarm.picket,
-  'd-gunship': swarm.gunship,
-  'd-ion': swarm.ion,
-  'd-frigate': swarm.frigate,
-  'd-cruiser': swarm.cruiser,
-  'd-capital': swarm.capital,
-  'd-mine': swarm.mine,
-  'd-defense': swarm.defense,
-  'd-defense-flak': swarm.defense,
-  'd-defense-gun': swarm.defense,
+  'd-fighter': droid.fighter,
+  'd-station': droid.station,
+  'd-bomber': droid.bomber,
+  'd-repair': droid.repair,
+  'd-picket': droid.picket,
+  'd-gunship': droid.gunship,
+  'd-ion': droid.ion,
+  'd-frigate': droid.frigate,
+  'd-cruiser': droid.cruiser,
+  'd-capital': droid.capital,
+  'd-mine': droid.mine,
+  'd-defense': droid.defense,
+  'd-defense-flak': droid.defense,
+  'd-defense-gun': droid.defense,
 }
 
 /**
@@ -78,8 +79,10 @@ export function modelFor(t: UnitType, style = ''): Model | null {
   return m
 }
 
-/** The design variants a unit's model can be shown in (the Codex offers them), by level. */
-export const modelStyles = (t: UnitType): string[] => (t.id === 'r-station' && /-4$/.test(t.sprite) ? [...republic.STATION_FRAMES] : [])
+/** The design variants a unit's model can be shown in (the Codex offers them): the Republic
+ * station's level-4 frame, the droid flagship's ring or carrier hull. */
+export const modelStyles = (t: UnitType): string[] =>
+  t.id === 'r-station' && /-4$/.test(t.sprite) ? [...republic.STATION_FRAMES] : t.id === 'd-capital' ? [...droid.CAPITAL_DESIGNS] : []
 
 const bySprite = new Map<string, UnitType | null>()
 /** The model behind a wreck, which only knows the sprite of the ship it was. */
@@ -153,6 +156,7 @@ export function buildModel(t: UnitType, style?: string): Model {
     engines: spec.engines ?? t.engines.map(([gx, gy]) => grid(gx, gy)),
     detachable: parts.flatMap((p, i) => (p.detach ? [i] : [])),
     breakStyle: spec.breakStyle ?? 'bands',
+    core: spec.core,
     scorch: scorchSpots(parts, w, h, seed),
     seed,
   }
@@ -257,7 +261,47 @@ function cutPieces(m: Model, kind: BreakKind, variant: number): Piece[] {
   const amp = m.long * 0.028
   let regions: { region: Pt[]; cuts: Pt[][] }[]
   if (kind === 'intact') regions = [{ region: [[-X, -Y], [X, -Y], [X, Y], [-X, Y]], cuts: [] }]
-  else if (m.breakStyle === 'pie') {
+  else if (m.breakStyle === 'ring' && m.core) {
+    // The core sphere comes away whole, its spokes torn round its edge; in half, the whole ring
+    // drifts off it, in pieces the ring breaks into three or four segments too.
+    const { x: cx, y: cy, r: rc } = m.core
+    const R = Math.hypot(X, Y) * 1.4
+    const disc: Pt[] = []
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2
+      const k = 1 + (r() - 0.5) * 0.08
+      disc.push([cx + Math.cos(a) * rc * k, cy + Math.sin(a) * rc * k])
+    }
+    const rim = [...disc, disc[0]]
+    if (kind === 'half') {
+      // Everything outside the disc, as one polygon: the box, a slit in to the disc, round the disc
+      // the other way, and back out (the slit has no width, so it covers nothing).
+      const outer: Pt[] = [[cx, cy - R], [cx + R, cy - R], [cx + R, cy + R], [cx - R, cy + R], [cx - R, cy - R]]
+      const around: Pt[] = [disc[18], ...disc.slice(0, 19).reverse(), ...disc.slice(19).reverse(), disc[18]]
+      regions = [
+        { region: disc, cuts: [rim] },
+        { region: [...outer, [cx, cy - R], ...around, [cx, cy - R]], cuts: [rim] },
+      ]
+    } else {
+      const n = 3 + Math.floor(r() * 2)
+      const a0 = r() * Math.PI * 2
+      const angles = Array.from({ length: n }, (_, i) => a0 + ((i + 0.4 * (r() - 0.5)) / n) * Math.PI * 2)
+      const rays = angles.map((a) => jagged([cx + Math.cos(a) * rc, cy + Math.sin(a) * rc], [cx + Math.cos(a) * R, cy + Math.sin(a) * R], 7, amp * 1.4, r))
+      regions = [{ region: disc, cuts: [rim] }]
+      angles.forEach((a, i) => {
+        const b = i + 1 < n ? angles[i + 1] : angles[0] + Math.PI * 2
+        const outerArc: Pt[] = []
+        const innerArc: Pt[] = []
+        for (let k = 1; k < 10; k++) {
+          const t = a + ((b - a) * k) / 10
+          outerArc.push([cx + Math.cos(t) * R, cy + Math.sin(t) * R])
+          innerArc.push([cx + Math.cos(t) * rc, cy + Math.sin(t) * rc])
+        }
+        const next = rays[(i + 1) % n]
+        regions.push({ region: [...rays[i], ...outerArc, ...next.slice().reverse(), ...innerArc.reverse()], cuts: [rays[i], next, [rays[i][0], ...innerArc.slice().reverse(), next[0]]] })
+      })
+    }
+  } else if (m.breakStyle === 'pie') {
     const n = kind === 'half' ? 2 : 4 + Math.floor(r() * 2)
     const a0 = r() * Math.PI * 2
     const angles = Array.from({ length: n }, (_, i) => a0 + ((i + 0.5 * (r() - 0.5)) / n) * Math.PI * 2)
