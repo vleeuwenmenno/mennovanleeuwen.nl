@@ -6,7 +6,7 @@ import { getDockMode, snapReserve } from './dockPrefs'
 import { setSnapPreview } from './snapPreview'
 import { useSwing } from './swing'
 import { WindowMenuContext } from './windowMenu'
-import { drawnHeight, fitNote, setDrawnHeight, SINGLE_INSTANCE, snapRect, stackOrder, useWM, type Geometry, type SnapZone, type WinState } from './wm'
+import { drawnHeight, fitNote, setDrawnHeight, SINGLE_INSTANCE, snapRect, stackOrder, useWM, workspaceOf, WORKSPACES, type Geometry, type SnapZone, type WinState } from './wm'
 
 const TOP_BAR = 28
 const MIN_W = 280
@@ -131,12 +131,27 @@ const SNAPS: [SnapZone, string][] = [
 
 const noSelect = (e: Event) => e.preventDefault()
 
+/** The workspace number in the top bar under the pointer, if any: dropping a window there moves
+ * it to that workspace. The number being aimed at lights up (data-drop). */
+function workspaceAt(x: number, y: number): number | null {
+  let hit: number | null = null
+  for (const el of document.querySelectorAll<HTMLElement>('.ws[data-ws]')) {
+    const r = el.getBoundingClientRect()
+    const over = x >= r.left - 2 && x <= r.right + 2 && y >= r.top - 4 && y <= r.bottom + 4
+    el.toggleAttribute('data-drop', over)
+    if (over) hit = Number(el.dataset.ws)
+  }
+  return hit
+}
+const clearWorkspaceDrop = () => document.querySelectorAll('.ws[data-drop]').forEach((el) => el.removeAttribute('data-drop'))
+
 const maxRect = (): Geometry => ({ x: 10, y: TOP_BAR + 10, w: window.innerWidth - 20, h: window.innerHeight - TOP_BAR - 20 - (getDockMode() === 'show' ? snapReserve() : 0) })
 
 export function Window({ win, title, chrome = 'default', className = '', style, menuItems = [], closeLabel = 'Close', resizableWidth = false, children }: Props) {
   const wm = useWM()
   const drag = useRef<Drag | null>(null)
   const target = useRef<Target>(null)
+  const wsTarget = useRef<number | null>(null)
   const focused = wm.focusedPid === win.pid
   const canSnap = chrome === 'default' && window.innerWidth >= 720
   const sectionRef = useRef<HTMLElement>(null)
@@ -371,7 +386,12 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
           ? fitNote({ x: d.x + dx, y: d.y + dy, w: d.w, h: d.h }, window.innerWidth, window.innerHeight, sectionRef.current?.offsetHeight ?? drawnHeight(win.pid))
           : { x: Math.min(Math.max(d.x + dx, -d.w + 120), window.innerWidth - 120), y: Math.min(Math.max(d.y + dy, TOP_BAR), window.innerHeight - 60) }
       wm.setGeometry(win.pid, { x, y })
-      if (canSnap) {
+      // Over a workspace number in the top bar: dropping there moves the window to it.
+      wsTarget.current = chrome === 'default' && wm.workspaces ? workspaceAt(e.clientX, e.clientY) : null
+      if (wsTarget.current !== null) {
+        target.current = null
+        setSnapPreview(null)
+      } else if (canSnap) {
         target.current = zoneAt(e.clientX, e.clientY)
         setSnapPreview(target.current === 'max' ? maxRect() : target.current ? snapRect(target.current) : null)
       }
@@ -411,8 +431,12 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     document.body.classList.remove('is-dragging', 'is-resizing')
     document.removeEventListener('selectstart', noSelect)
     setSnapPreview(null)
+    clearWorkspaceDrop()
     const zone = target.current
+    const toWs = wsTarget.current
     target.current = null
+    wsTarget.current = null
+    if (d?.mode === 'move' && d.moved && toWs !== null) return wm.moveToWorkspace(win.pid, toWs)
     if (!d || d.mode !== 'move' || !d.moved || !zone) return
     const restore = { x: d.x, y: d.y, w: d.w, h: d.h }
     if (zone === 'max') wm.setGeometry(win.pid, { maximized: true, restore })
@@ -438,7 +462,9 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     })
   }
   const windowMenu = (): MenuItem[] => {
-    const others = wm.windows.filter((w) => w.pid !== win.pid)
+    // Windows on other workspaces are out of sight, so "other windows" means the ones on this one.
+    const others = wm.windows.filter((w) => w.pid !== win.pid && wm.shown(w))
+    const ws = workspaceOf(win)
     // For widgets, only the same kind (all weather widgets, not every widget).
     const siblings = others.filter((w) => w.app === win.app && w.props.kind === win.props.kind)
     // Phones: the note's place in the column, for when dragging it is fiddly (or a long way).
@@ -461,6 +487,9 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
           ]
         : []),
       { label: 'Center on screen', onSelect: center },
+      ...(ws !== null && wm.workspaces
+        ? [{ label: 'Move to workspace', submenu: Array.from({ length: WORKSPACES }, (_, i) => ({ label: `Workspace ${i + 1}`, shortcut: `Alt Shift ${i + 1}`, checked: ws === i + 1, onSelect: () => wm.moveToWorkspace(win.pid, i + 1) })) }]
+        : []),
       ...(chrome === 'note' ? [{ label: 'Add widget', submenu: addWidgetItems(wm) }] : []),
       ...(!SINGLE_INSTANCE.has(win.app) && win.app !== 'widget' ? [{ separator: true as const }, { label: 'New window', onSelect: () => wm.openNew(win.app) }] : []),
       { separator: true },
@@ -486,7 +515,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
   return (
     <section
       ref={sectionRef}
-      className={`window chrome-${chrome} ${focused ? 'is-focused' : ''} ${win.maximized ? 'is-max' : ''} ${win.minimized ? 'is-min' : ''} ${win.snap ? 'is-snapped' : ''} ${className}`}
+      className={`window chrome-${chrome} ${focused ? 'is-focused' : ''} ${win.maximized ? 'is-max' : ''} ${win.minimized ? 'is-min' : ''} ${wm.shown(win) ? '' : 'is-away'} ${win.snap ? 'is-snapped' : ''} ${className}`}
       // --stack: the note's place in the phone layout's column (only that layout reads it).
       style={{ ...style, left: win.x, top: win.y, width: win.w, height: win.h, zIndex: win.z, ...(chrome === 'note' ? { ['--stack' as string]: stackOrder(wm.windows).indexOf(win.pid) } : {}) }}
       onPointerDown={() => wm.focus(win.pid)}

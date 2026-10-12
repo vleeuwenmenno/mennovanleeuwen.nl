@@ -699,7 +699,7 @@ function DockSettings() {
     return (
       <>
         {behaviour}
-        <p className="muted set-help">Drag dock icons to reorder them. Sign in to add apps and launchers to the dock or take them off.</p>
+        <p className="muted set-help">Drag dock icons to reorder them. Open apps also show in the dock until they are closed. Sign in to add apps and launchers to the dock or take them off.</p>
       </>
     )
   const launcherOf = (id: DockId) => launchers.find((l) => launcherDockId(l.id) === id)
@@ -748,7 +748,7 @@ function DockSettings() {
           ))}
         </div>
       )}
-      <p className="muted set-help">Right-click anything in Spotlight or All apps to pin it, including repositories.</p>
+      <p className="muted set-help">Right-click anything in Spotlight or All apps to pin it, including repositories. Open apps also show in the dock until they are closed; right-click one and choose Keep in dock, or drag it in among the pinned ones.</p>
       <button className="btn btn-small" disabled={isDefaultDock()} onClick={resetDock}>
         Restore default dock
       </button>

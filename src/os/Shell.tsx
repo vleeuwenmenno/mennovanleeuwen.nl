@@ -29,7 +29,7 @@ import { NotificationCenter } from './NotificationCenter'
 import { followLinkSettings, linkSettings } from '../data/links'
 import { newTab, usePower } from './powerState'
 import { notify } from './notify'
-import { isDefaultDock, isLauncherId, resetDock, setDockOrder, unpinFromDock, useCanCustomizeDock, useDock, type DockId } from './dockItems'
+import { isDefaultDock, isDockableApp, isLauncherId, pinToDock, resetDock, setDockOrder, unpinFromDock, useCanCustomizeDock, useDock, type DockId } from './dockItems'
 import { AppIcon } from './icons'
 import { appearanceMenu } from './appearanceMenu'
 import { toggleMode, useTheme } from './theme'
@@ -37,7 +37,7 @@ import { ClockWidget, MinecraftWidget, SystemMenu } from './TopbarWidgets'
 import { useIsMobile } from './useIsMobile'
 import { NOTE_APPS, notesHidden } from './deskPrefs'
 import { NoteStackSlot, Window } from './Window'
-import { SINGLE_INSTANCE, useWM, type AppId, type Geometry, type WinState } from './wm'
+import { SINGLE_INSTANCE, useWM, workspaceOf, WORKSPACES, type AppId, type Geometry, type WinState } from './wm'
 
 const TOP = 28
 const DOCK_SPACE = 96
@@ -105,48 +105,68 @@ export function initialLayout(): { app: AppId; geometry: Geometry; props?: WinSt
   return [{ app: 'terminal', geometry: { x: left + noteW + 40, y: top, w: termW, h: termH }, props: { motd: '1' } }, ...notes(left)]
 }
 
+/** A window's name in menus: its own title when it shows one thing, else its app's dock name. */
+const winTitle = (w: WinState) => APP_META[w.app].titleOf?.(w) ?? APP_META[w.app].dock
+
 function TopBar() {
   const wm = useWM()
   const recents = useRecents()
   const theme = useTheme()
-  const ordered = wm.windows.slice().sort((a, b) => a.pid - b.pid)
+  // Workspaces, like Omarchy's bar: 1 to 5 always, and any later one that has windows on it.
+  const onWs = (n: number) => wm.windows.filter((w) => workspaceOf(w) === n).sort((a, b) => a.pid - b.pid)
+  const occupied = new Set(wm.windows.map(workspaceOf).filter((n): n is number => n !== null))
+  const count = Math.min(WORKSPACES, Math.max(5, wm.workspace, ...occupied))
+  const mine = wm.windows.filter((w) => wm.shown(w))
   // The bar's own menu, for its background and anything on it without a menu of its own.
   const barMenu = (): MenuItem[] => [
     { label: 'Search…', shortcut: 'Ctrl K', onSelect: () => toggleOverlay('spotlight') },
     { label: 'All apps', onSelect: () => toggleOverlay('launchpad') },
-    { label: 'Show desktop', disabled: !wm.windows.some((w) => !w.minimized), onSelect: () => wm.windows.forEach((w) => wm.minimize(w.pid)) },
+    { label: 'Show desktop', disabled: !mine.some((w) => !w.minimized), onSelect: () => mine.forEach((w) => wm.minimize(w.pid)) },
     { separator: true },
     { label: 'Settings', onSelect: () => wm.open('settings', { t: String(Date.now()) }) },
     { label: 'About this system', onSelect: () => wm.open('terminal', { run: 'fastfetch', t: String(Date.now()) }) },
   ]
-  // A workspace number stands for its window.
-  const workspaceMenu = (w: WinState): MenuItem[] => [
-    { label: `${APP_META[w.app].dock} · pid ${w.pid}`, disabled: true },
-    { separator: true },
-    w.minimized || w.pid !== wm.focusedPid ? { label: 'Show', onSelect: () => wm.focus(w.pid) } : { label: 'Minimize', onSelect: () => wm.minimize(w.pid) },
-    ...(APP_META[w.app].chrome !== 'note' ? [{ label: w.maximized ? 'Restore size' : 'Maximize', onSelect: () => (wm.focus(w.pid), wm.toggleMax(w.pid)) }] : []),
-    { separator: true },
-    ...(wm.windows.length > 1 ? [{ label: 'Close other windows', onSelect: () => wm.windows.filter((x) => x.pid !== w.pid).forEach((x) => wm.close(x.pid)) }] : []),
-    { label: 'Close', danger: true, onSelect: () => wm.close(w.pid) },
-  ]
+  // A workspace's menu: its windows to pick from, and bringing the focused window over.
+  const focusedWin = wm.windows.find((w) => w.pid === wm.focusedPid && workspaceOf(w) !== null)
+  const workspaceMenu = (n: number): MenuItem[] => {
+    const wins = onWs(n)
+    return [
+      { label: `Workspace ${n}`, disabled: true },
+      { separator: true },
+      ...(n !== wm.workspace ? [{ label: 'Go to workspace', shortcut: `Alt ${n}`, onSelect: () => wm.setWorkspace(n) }] : []),
+      ...(focusedWin && workspaceOf(focusedWin) !== n ? [{ label: `Move ${winTitle(focusedWin)} here`, shortcut: `Alt Shift ${n}`, onSelect: () => wm.moveToWorkspace(focusedWin.pid, n) }] : []),
+      ...(wins.length ? [{ separator: true as const }, ...wins.map((w) => ({ label: `${winTitle(w)}${w.minimized ? ' (minimized)' : ''}`, onSelect: () => wm.focus(w.pid) }))] : [{ label: 'No windows', disabled: true }]),
+      ...(wins.length ? [{ separator: true as const }, { label: wins.length > 1 ? `Close all ${wins.length} windows` : 'Close its window', danger: true, onSelect: () => wins.forEach((w) => wm.close(w.pid)) }] : []),
+    ]
+  }
+  // Scrolling over the numbers walks through the workspaces, as in Waybar.
+  const onWheel = (e: React.WheelEvent) => {
+    const by = Math.sign(e.deltaY || e.deltaX)
+    if (by) wm.setWorkspace(Math.min(count, Math.max(1, wm.workspace + by)))
+  }
   return (
     <header className="topbar" onContextMenu={(e) => openContextMenu(e, barMenu())}>
       <div className="topbar-left">
         <SystemMenu />
-        {/* One numbered "workspace" per window, like the Omarchy bar. */}
-        <nav className="workspaces" aria-label="Open windows">
-          {ordered.slice(0, 9).map((w, i) => (
-            <button
-              key={w.pid}
-              className={`ws ${w.pid === wm.focusedPid && !w.minimized ? 'is-active' : ''} ${w.minimized ? 'is-min' : ''}`}
-              onClick={() => (w.pid === wm.focusedPid && !w.minimized ? wm.minimize(w.pid) : wm.focus(w.pid))}
-              onContextMenu={(e) => openContextMenu(e, workspaceMenu(w))}
-              title={`${APP_META[w.app].dock}${w.minimized ? ' (minimized)' : ''}`}
-            >
-              {i + 1}
-            </button>
-          ))}
-          {ordered.length > 9 && <span className="ws-more">+{ordered.length - 9}</span>}
+        {/* Workspaces, like the Omarchy bar: the one on screen underlined, empty ones dimmed.
+            Phones have room for one workspace, so they don't show (styles.css). */}
+        <nav className="workspaces" aria-label="Workspaces" onWheel={onWheel}>
+          {Array.from({ length: count }, (_, i) => i + 1).map((n) => {
+            const wins = onWs(n)
+            return (
+              <button
+                key={n}
+                data-ws={n}
+                className={`ws ${n === wm.workspace ? 'is-active' : ''} ${wins.length ? '' : 'is-empty'}`}
+                onClick={() => wm.setWorkspace(n)}
+                onContextMenu={(e) => openContextMenu(e, workspaceMenu(n))}
+                title={`Workspace ${n} (Alt ${n})${wins.length ? ` · ${[...new Set(wins.map((w) => APP_META[w.app].dock))].join(', ')}` : ' · empty'}`}
+                aria-current={n === wm.workspace ? 'true' : undefined}
+              >
+                {n}
+              </button>
+            )
+          })}
         </nav>
       </div>
       <ClockWidget />
@@ -265,7 +285,9 @@ function Dock() {
   const launchers = useLaunchers()
   const [order, setOrder] = useState<DockId[]>(dockItems)
   const [dragging, setDragging] = useState<{ app: DockId; dx: number } | null>(null)
-  const drag = useRef<{ app: DockId; startX: number; moved: boolean } | null>(null)
+  const drag = useRef<{ app: DockId; startX: number; moved: boolean; running: boolean } | null>(null)
+  const dockItemsRef = useRef(dockItems)
+  dockItemsRef.current = dockItems
   // Follow pins, removals and other devices, except in the middle of a drag.
   useEffect(() => {
     if (!drag.current) setOrder(dockItems)
@@ -276,15 +298,19 @@ function Dock() {
   const orderRef = useRef(order)
   orderRef.current = order
   const suppressClick = useRef(false)
-  const [fit, setFit] = useState(order.length)
+  // Open apps that aren't pinned get an item of their own after the pinned ones, like macOS, so
+  // a minimized window can always be brought back. They go when their last window closes. Notes
+  // and widgets are part of the desktop, not windows to come back to, so they never get one.
+  const runningApps = [...new Set(wm.windows.filter((w) => workspaceOf(w) !== null).sort((a, b) => a.pid - b.pid).map((w) => w.app))].filter((a) => !order.includes(a))
+  const [fit, setFit] = useState(order.length + runningApps.length)
   const [moreOpen, setMoreOpen] = useState(false)
   const navRef = useRef<HTMLElement>(null)
   const firstRef = useRef<HTMLButtonElement>(null)
-  const appWindows = wm.windows.filter((w) => !w.minimized && APP_META[w.app].chrome !== 'note')
+  const appWindows = wm.windows.filter((w) => !w.minimized && wm.shown(w) && APP_META[w.app].chrome !== 'note')
   // Whether a window sits where the dock is (or is maximized), for "auto-hide when a window covers it".
   // The dock's spot is worked out from its size, since a hidden dock is moved off-screen.
   const covered = wm.windows.some((w) => {
-    if (w.minimized) return false
+    if (w.minimized || !wm.shown(w)) return false
     if (w.maximized) return true
     const nav = navRef.current
     if (!nav) return false
@@ -301,7 +327,7 @@ function Dock() {
     `${appWindows.map((w) => w.pid).join()}|${wm.focusedPid}`,
   )
 
-  // How many apps fit between "All apps" and Trash. The rest go behind a "More" button, so the dock
+  // How many apps (pinned and open ones) fit between "All apps" and Trash. The rest go behind a "More" button, so the dock
   // never scrolls or runs off a phone screen. Every item is as wide as the "All apps" button.
   useLayoutEffect(() => {
     const measure = () => {
@@ -313,11 +339,11 @@ function Dock() {
       const chrome = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth)
       const sep = nav.querySelector<HTMLElement>('.dock-sep')
       const sepW = sep ? sep.offsetWidth + parseFloat(getComputedStyle(sep).marginLeft) * 2 : 0
-      const room = window.innerWidth - 16 - chrome - 2 * sepW
+      const room = window.innerWidth - 16 - chrome - (runningApps.length ? 3 : 2) * sepW
       const W = first.offsetWidth
       // n apps plus All apps and Trash (plus More when it is needed), with gaps between all children.
       const width = (n: number, more: boolean) => (n + 2 + +more) * W + (n + 3 + +more) * gap
-      const n = order.length
+      const n = order.length + runningApps.length
       if (width(n, false) <= room) return setFit(n)
       let k = n - 1
       while (k > 0 && width(k, true) > room) k--
@@ -327,10 +353,13 @@ function Dock() {
     window.addEventListener('resize', measure)
     document.fonts?.ready.then(measure)
     return () => window.removeEventListener('resize', measure)
-  }, [order.length])
+  }, [order.length, runningApps.length])
 
-  const shown = order.slice(0, fit)
-  const overflow = order.slice(fit)
+  // Open apps keep their place when room runs out; pinned ones go behind More first.
+  const runShown = runningApps.slice(0, fit)
+  const pinShown = order.slice(0, Math.max(0, fit - runShown.length))
+  const shown = [...pinShown, ...runShown]
+  const overflow = [...order.slice(pinShown.length), ...runningApps.slice(runShown.length)]
   useEffect(() => {
     if (!overflow.length) setMoreOpen(false)
   }, [overflow.length])
@@ -358,9 +387,12 @@ function Dock() {
   // Mouse and pen only: on touch the dock scrolls sideways instead. Move/up are tracked on window
   // because React moving the icon in the DOM mid-drag drops its pointer capture.
   const dxRef = useRef(0)
-  const onPointerDown = (e: React.PointerEvent, app: DockId) => {
+  // An open app that isn't pinned can be dragged in among the pinned ones to pin it there (signed
+  // in, and only apps that can sit on the dock); let go to the right of them and it stays unpinned.
+  const onPointerDown = (e: React.PointerEvent, app: DockId, running = false) => {
     if (e.button !== 0 || e.pointerType === 'touch') return
-    drag.current = { app, startX: e.clientX, moved: false }
+    if (running && !(canCustomize && !isLauncherId(app) && isDockableApp(app))) return
+    drag.current = { app, startX: e.clientX, moved: false, running }
     dxRef.current = 0
 
     const onMove = (ev: PointerEvent) => {
@@ -373,12 +405,16 @@ function Dock() {
       const r = el.getBoundingClientRect()
       const naturalCenter = r.left + r.width / 2 - dxRef.current
       const others = orderRef.current.filter((a) => a !== d.app)
+      // Only the icons on show count (the ones behind More come after them anyway).
+      const onShow = others.filter((a) => items.current.has(a))
       let idx = 0
-      for (const a of others) {
+      for (const a of onShow) {
         const o = items.current.get(a)!.getBoundingClientRect()
         if (ev.clientX > o.left + o.width / 2) idx++
       }
-      const next = [...others.slice(0, idx), d.app, ...others.slice(idx)]
+      const last = onShow.length ? items.current.get(onShow[onShow.length - 1])! : firstRef.current
+      const inPinned = !d.running || (!!last && ev.clientX <= last.getBoundingClientRect().right + last.offsetWidth / 2)
+      const next = inPinned ? [...others.slice(0, idx), d.app, ...others.slice(idx)] : others
       if (next.join() !== orderRef.current.join()) {
         prevRects.current = new Map([...items.current].map(([a, node]) => [a, node.getBoundingClientRect().left]))
         orderRef.current = next // a quick drop can land before the re-render
@@ -399,7 +435,9 @@ function Dock() {
         suppressClick.current = true
         // The click that follows a drag lands on whatever is under the pointer; drop the flag soon either way.
         setTimeout(() => (suppressClick.current = false), 50)
-        setDockOrder(orderRef.current)
+        if (!d.running) setDockOrder(orderRef.current)
+        else if (orderRef.current.includes(d.app)) pinToDock(d.app, orderRef.current.indexOf(d.app))
+        else setOrder(dockItemsRef.current)
       }
       setDragging(null)
     }
@@ -417,19 +455,31 @@ function Dock() {
     return l ? <LauncherIcon url={l.url} glyph={l.glyph} size={size} /> : <AppIcon app={id as AppId} size={size} tone />
   }
 
+  // Clicking an app: open it, or bring its window back (from being minimized, or from another
+  // workspace, which comes on screen with it). Its focused window minimizes; with several windows,
+  // each click brings the next one forward instead.
   const launch = (id: DockId) => {
     const l = launcherOf(id)
     if (l) return void launchLink(l)
     const app = id as AppId
-    const wins = wm.windows.filter((x) => x.app === app)
+    const wins = wm.windows.filter((x) => x.app === app).sort((a, b) => a.pid - b.pid)
+    if (!wins.length || app === 'trash') return wm.open(app)
     const focused = wins.find((x) => x.pid === wm.focusedPid && !x.minimized)
-    if (focused && app !== 'trash') wm.minimize(focused.pid)
-    else wm.open(app)
+    if (focused && wins.length === 1) return wm.minimize(focused.pid)
+    if (focused) return wm.focus(wins[(wins.indexOf(focused) + 1) % wins.length].pid)
+    // The most recent window, on this workspace if it has one there.
+    const here = wins.filter((w) => wm.shown(w))
+    wm.focus((here.length ? here : wins).reduce((a, w) => (w.z > a.z ? w : a)).pid)
   }
 
   // An item's own menu ends with taking it off the dock (signed in); the dock's settings live on
   // the dock itself (right-click its background, edges or separators).
-  const removeItem = (id: DockId): MenuItem[] => (canCustomize && id !== 'trash' ? [{ separator: true }, { label: 'Remove from dock', onSelect: () => unpinFromDock(id) }] : [])
+  // An open app that isn't pinned offers to stay instead.
+  const removeItem = (id: DockId): MenuItem[] => {
+    if (!canCustomize || id === 'trash') return []
+    if (order.includes(id)) return [{ separator: true }, { label: 'Remove from dock', onSelect: () => unpinFromDock(id) }]
+    return !isLauncherId(id) && isDockableApp(id) ? [{ separator: true }, { label: 'Keep in dock', onSelect: () => pinToDock(id) }] : []
+  }
   const dockSettingsMenu = (): MenuItem[] => [
     { label: 'Show the dock', submenu: DOCK_MODES.map(([m, label]) => ({ label, checked: getDockMode() === m, onSelect: () => setDockMode(m) })) },
     { separator: true },
@@ -450,7 +500,10 @@ function Dock() {
     const wins = wm.windows.filter((x) => x.app === app).sort((a, b) => a.pid - b.pid)
     const multi = !SINGLE_INSTANCE.has(app)
     return [
-      ...wins.map((w) => ({ label: `${APP_META[w.app].titleOf?.(w) ?? APP_META[w.app].dock} · pid ${w.pid}${w.minimized ? ' (minimized)' : ''}`, onSelect: () => wm.focus(w.pid) })),
+      ...wins.map((w) => {
+        const notes = [w.minimized && 'minimized', wm.workspaces && workspaceOf(w) !== null && `workspace ${workspaceOf(w)}`].filter(Boolean)
+        return { label: `${winTitle(w)} · pid ${w.pid}${notes.length ? ` (${notes.join(', ')})` : ''}`, onSelect: () => wm.focus(w.pid) }
+      }),
       ...(wins.length ? [{ separator: true as const }] : []),
       wins.length && multi ? { label: 'New window', onSelect: () => wm.openNew(app) } : { label: wins.length ? 'Show' : 'Open', onSelect: () => wm.open(app) },
       ...(wins.some((w) => !w.minimized) ? [{ label: wins.length > 1 ? 'Minimize all' : 'Minimize', onSelect: () => wins.forEach((w) => wm.minimize(w.pid)) }] : []),
@@ -459,7 +512,7 @@ function Dock() {
     ]
   }
 
-  const appButton = (app: DockId) => {
+  const appButton = (app: DockId, running = false) => {
     const isDragged = dragging?.app === app
     return (
       <button
@@ -470,7 +523,7 @@ function Dock() {
         }}
         className={`dock-item ${isDragged ? 'is-dragged' : ''}`}
         style={isDragged ? { transform: `translate(${dragging.dx}px, -10px) scale(1.12)` } : undefined}
-        onPointerDown={app === 'trash' ? undefined : (e) => onPointerDown(e, app)}
+        onPointerDown={app === 'trash' ? undefined : (e) => onPointerDown(e, app, running)}
         onClick={() => {
           if (suppressClick.current) {
             suppressClick.current = false
@@ -489,6 +542,7 @@ function Dock() {
             <span key={n} className="dock-dot is-on" />
           ))}
         </span>
+        {runningOf(app) > 1 && <span className="dock-count">{runningOf(app)}</span>}
       </button>
     )
   }
@@ -523,10 +577,16 @@ function Dock() {
         <span className="dock-label">All apps</span>
       </button>
       <span className="dock-sep" />
-      {shown.map(appButton)}
-      {overflow.length > 0 && (
-        <DockMore apps={overflow} open={moreOpen} setOpen={setMoreOpen} onLaunch={launch} running={runningOf} icon={iconOf} label={labelOf} menu={itemMenu} />
-      )}
+      {/* One flat, keyed list, so an open app dragged in among the pinned ones moves rather than
+          remounts. More closes the pinned part, before the open apps. */}
+      {[
+        ...pinShown.map((id) => appButton(id)),
+        ...(overflow.length
+          ? [<DockMore key="more" apps={overflow} open={moreOpen} setOpen={setMoreOpen} onLaunch={launch} running={runningOf} icon={iconOf} label={labelOf} menu={itemMenu} />]
+          : []),
+        ...(runShown.length ? [<span key="sep-running" className="dock-sep" />] : []),
+        ...runShown.map((id) => appButton(id, true)),
+      ]}
       <span className="dock-sep" />
       {appButton('trash')}
     </nav>
@@ -732,6 +792,34 @@ export function Shell() {
     if (power.run > 0) wm.reset()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [power.run])
+
+  // Workspaces from the keyboard, from anywhere (like Ctrl+K): Alt+1 to Alt+9 go to one,
+  // Alt+Shift+1 to 9 take the focused window there, Ctrl+Alt+← and → step through them. Super
+  // would be Omarchy's key, but the system keeps it, so it never reaches a web page. Captured
+  // before the apps see the keys (the terminal would send them on as Meta keys). On a Mac,
+  // Option+digit types a character (™, £), so a text field keeps those.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (power.phase !== 'up' || !wm.workspaces || !e.altKey || e.metaKey) return
+      const digit = /^Digit([1-9])$/.exec(e.code)
+      if (digit && !e.ctrlKey) {
+        const el = document.activeElement as HTMLElement | null
+        if (/Mac/.test(navigator.platform) && el && (el.isContentEditable || /^(INPUT|TEXTAREA)$/.test(el.tagName))) return
+        e.preventDefault()
+        e.stopPropagation()
+        const n = Number(digit[1])
+        const focused = wm.windows.find((w) => w.pid === wm.focusedPid)
+        if (e.shiftKey) focused && workspaceOf(focused) !== null && wm.moveToWorkspace(focused.pid, n)
+        else wm.setWorkspace(n)
+      } else if (e.ctrlKey && !e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        e.preventDefault()
+        e.stopPropagation()
+        wm.setWorkspace(Math.min(WORKSPACES, Math.max(1, wm.workspace + (e.key === 'ArrowRight' ? 1 : -1))))
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [power.phase, wm])
 
   // Ctrl+K / Cmd+K opens Spotlight from anywhere, including inside the terminal.
   useEffect(() => {

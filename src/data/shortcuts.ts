@@ -23,9 +23,18 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
       ['Drag to top edge', 'maximize'],
       ['Drag a snapped window', 'back to its old size'],
       ['Hover bottom edge', 'show a hidden dock'],
-      ['Click dock icon', 'open, focus or minimize'],
+      ['Click dock icon', 'open, focus or minimize; again for its next window'],
       ['Right-click dock', 'dock settings; on an icon, its windows'],
-      ['Drag dock icon', 'reorder the dock'],
+      ['Drag dock icon', 'reorder the dock; drag an open app in to pin it'],
+    ],
+  },
+  {
+    area: 'Workspaces',
+    keys: [
+      ['Alt 1–9 / Click a number', 'go to that workspace'],
+      ['Alt Shift 1–9', 'move the focused window there'],
+      ['Ctrl Alt ← → / Scroll the numbers', 'previous, next workspace'],
+      ['Drag a window onto a number', 'move it to that workspace'],
     ],
   },
   {

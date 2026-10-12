@@ -267,13 +267,19 @@ body.is-resizing iframe {
   font-weight: 700;
   border-bottom-color: var(--accent);
 }
-.ws.is-min {
-  opacity: 0.5;
+.ws:not(.is-active):not(.is-empty) {
+  color: color-mix(in srgb, var(--fg) 80%, var(--muted));
 }
-.ws-more {
-  font-size: 11px;
-  color: var(--muted);
-  padding: 0 4px;
+/* A workspace with no windows on it, as Waybar dims them. */
+.ws.is-empty:not(.is-active) {
+  opacity: 0.45;
+}
+/* A window being dragged over this number goes to that workspace when let go. */
+.ws[data-drop] {
+  opacity: 1;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  border-bottom-color: var(--accent);
 }
 .tb-icon {
   position: relative;
@@ -1481,7 +1487,8 @@ body.is-resizing iframe {
 .window.is-focused {
   border-color: var(--accent);
 }
-.window.is-min {
+.window.is-min,
+.window.is-away {
   display: none;
 }
 .window.is-max {
@@ -7407,6 +7414,24 @@ button.fm-dd-row:hover {
 }
 .dock-dot.is-on {
   background: var(--accent);
+}
+/* How many windows an app has open, when it is more than one. */
+.dock-count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--bg);
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg-dark);
+  pointer-events: none;
 }
 .dock-sep {
   width: 1px;
