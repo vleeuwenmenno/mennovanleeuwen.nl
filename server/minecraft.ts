@@ -151,6 +151,20 @@ function rconPacket(id: number, type: number, body: string) {
  * a whole when the server stops answering for RCON_TIMEOUT_MS (or after RCON_SESSION_MS in all).
  */
 export function rconSession<T>(host: string, port: number, password: string, use: (run: (command: string) => Promise<string>) => Promise<T>): Promise<T> {
+  // Vanilla Minecraft gathers every RCON connection's command output in one shared buffer, so two
+  // sessions at once (the pinger's tick, a visitor's status, the admin console) can get each
+  // other's answers glued onto their own: "There are 0 of a max of 20 players online: There are 0
+  // …", read as a player called "There are 0 of a max…". One session at a time, in turn.
+  const turn = rconQueue.then(() => openRconSession(host, port, password, use))
+  rconQueue = turn.then(
+    () => {},
+    () => {},
+  )
+  return turn
+}
+let rconQueue: Promise<void> = Promise.resolve()
+
+function openRconSession<T>(host: string, port: number, password: string, use: (run: (command: string) => Promise<string>) => Promise<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     const sock = connect({ host, port })
     let buf = Buffer.alloc(0)
@@ -236,10 +250,12 @@ const plain = (out: string) => out.replace(/§./gs, '').trim()
 export function parseList(out: string): string[] | null {
   const m = /players online:(.*)$/s.exec(out.replace(/§./g, ''))
   if (!m) return null
+  // Only real usernames: an answer with something else glued on (see rconSession) must never
+  // turn into a player.
   return m[1]
     .split(',')
     .map((n) => n.trim())
-    .filter(Boolean)
+    .filter((n) => /^[A-Za-z0-9_]{3,16}$/.test(n))
 }
 
 // The extras RCON can tell besides who is on, asked on the pinger's tick (never by a visitor's
