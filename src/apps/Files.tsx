@@ -6,14 +6,14 @@ import { openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { openLink } from '../data/links'
 import { useWM, type AppId, type WinState } from '../os/wm'
 import { formatSize, HOME, KIND_LABEL, kindOfName, lookup, prettyPath, resolvePath, stat, walk, type FileKind, type Node } from '../terminal/vfs'
-import { createFile, DRAG_FILES, getClipboard, getDragged, getLibrary, isInside, openSeafile, setClipboard, setDragged, useClipboard, isSf, libraryName, lock, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useSeafilePrefs, setSeafilePrefs, setPlace, PLACES, shareLink, seafileWebUrl, loadLibraries, useUnlocks, type Library, type PlaceId } from '../data/seafile'
+import { createFile, getClipboard, getLibrary, isInside, openSeafile, setClipboard, useClipboard, isSf, libraryName, lock, parseSf, refreshDirs, SF, sfPath, unlock, useDir, useLibraries, useSeafileHome, useSeafilePrefs, setSeafilePrefs, setPlace, PLACES, shareLink, seafileWebUrl, loadLibraries, useUnlocks, type Library, type PlaceId } from '../data/seafile'
 import { pickFolder } from '../os/FolderPicker'
 import { useBackButton } from '../os/backButton'
 import { SeafileTrash } from './SeafileTrash'
 import { ask } from '../os/Dialogs'
 import { useAccount } from '../os/account'
 import { MEDIA_APP, thumbOf, useBrowserUrl } from '../data/media'
-import { droppedFiles, hasOsFiles, pickAndUpload, uploadFiles } from '../data/uploads'
+import { pickAndUpload } from '../data/uploads'
 import { addBookmark, useSidebar } from '../data/filesSidebar'
 import { FILES_SORTS, FILES_ZOOM_MAX, FILES_ZOOM_MIN, filesPrefs, type FilesPrefs, type FilesSort, type FilesView } from '../data/appPrefs'
 import { FilesSidebar, type SideSection } from './FilesSidebar'
@@ -22,9 +22,13 @@ import { lookup as fsLookup, walk as fsWalk } from '../terminal/fs'
 import { browserMountPoint } from '../data/mounts'
 import { cvMode } from '../os/cvMode'
 import { browserBytes, useBrowserFiles } from '../data/browserfs'
-import { browserPathOf, canChange, canWriteFolder, deleteNoteFor, dropOpFor, inBrowser, downloadFile, makeFile, makeFolder, removePaths, renamePath, transferPaths } from '../data/fileOps'
+import { browserPathOf, canChange, canWriteFolder, deleteNoteFor, inBrowser, downloadFile, makeFile, makeFolder, removePaths, renamePath, transferPaths } from '../data/fileOps'
 import { isArchive } from '../data/archive'
-import { besideArchive, extract, getZipDrag, setZipDrag, zipDragName } from '../data/extract'
+import { besideArchive, extract } from '../data/extract'
+import { dropInTrash, dropIntoFolder, downloadUrl, folderOp, prepareDownload, trashOp, undoLastMove } from '../data/fileDrop'
+import { launch, launcherAt, launcherImage, renameLauncherFile, useLauncherFiles, type Launcher } from '../data/launchers'
+import { isLauncherName } from '../data/launcherFiles'
+import { holdToDrag, startNativeDrag, useDropTarget, type DragItem, type DropTarget } from '../os/dnd'
 import { useEdgeSwipe } from '../os/useEdgeSwipe'
 import { useMediaQuery } from '../os/useMediaQuery'
 
@@ -145,7 +149,7 @@ export function FileIcon({ size, kind, name }: { size: number; kind: FileKind; n
   )
 }
 
-function Thumb({ item, size, gallery = false, emblem }: { item: Item; size: number; gallery?: boolean; emblem?: string }) {
+function Thumb({ item, size, gallery = false, emblem, launcher }: { item: Item; size: number; gallery?: boolean; emblem?: string; launcher?: Launcher | null }) {
   const [broken, setBroken] = useState(false)
   // Pictures kept in this browser show themselves (a blob: address).
   const stored = useBrowserUrl(item.kind === 'image' && !item.sf && item.node?.type === 'file' && item.node.browser ? item.path : null)
@@ -165,6 +169,17 @@ function Thumb({ item, size, gallery = false, emblem }: { item: Item; size: numb
             : null,
     [item, size >= 40, gallery, stored.url],
   )
+  // A launcher shows as itself: its emoji, its picture or its site's icon.
+  if (launcher) {
+    const img = launcher.glyph ? null : launcherImage(launcher)
+    return img && !broken ? (
+      <img className="fm-launcher-img" src={img} alt="" draggable={false} onError={() => setBroken(true)} style={{ width: size, height: size }} />
+    ) : (
+      <span className="fm-launcher-glyph" style={{ fontSize: Math.round(size * 0.8) }}>
+        {launcher.glyph ?? (launcher.app ? '▦' : '🔗')}
+      </span>
+    )
+  }
   // An explicit box: SVGs with only a viewBox have no dependable intrinsic size.
   if (src && !broken)
     return <img className={`fm-thumb ${item.sf ? 'is-photo' : ''}`} src={src} alt="" loading="lazy" onError={() => setBroken(true)} style={gallery ? undefined : { width: Math.round(size * 1.35), height: size }} draggable={false} />
@@ -246,8 +261,6 @@ export function Files({ win }: { win: WinState }) {
   const [tick, setTick] = useState(0)
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
-  /** The folder a drag would land in right now, highlighted */
-  const [dropOn, setDropOn] = useState<string | null>(null)
   const clip = useClipboard()
   /** Which library's trash the Trash view opens on (from a folder's Seafile menu) */
   const [trashRepo, setTrashRepo] = useState<string | null>(null)
@@ -375,6 +388,15 @@ export function Files({ win }: { win: WinState }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, search, prefs.hidden, prefs.sort, tick, desk.trashed, desk.names, libraries, sfDir.listing, posixHere, browserVersion])
 
+  // .desktop files are launchers: shown by their name and icon (the raw file with hidden files
+  // shown), and opened by opening what they point at.
+  useLauncherFiles()
+  const launcherOf = (item: Item): Launcher | null => (item.kind === 'link' && !item.trash && isLauncherName(item.name) ? (launcherAt(item.path, item.mtime) ?? null) : null)
+  const shownName = (item: Item) => {
+    const l = launcherOf(item)
+    return l && !prefs.hidden ? l.label : item.name
+  }
+
   const writable = path === '/tmp' || path.startsWith('/tmp/')
   /** Kept in this browser: writable, and only here (said in the strip above the files). */
   const inBrowserHere = browserPathOf(path) !== null
@@ -398,6 +420,11 @@ export function Files({ win }: { win: WinState }) {
       return
     }
     if (item.path === SF) return navigate(SF, true, item.posix)
+    const l = how === 'default' ? launcherOf(item) : null
+    if (l) {
+      remember(item)
+      return launch(l, wm)
+    }
     if (item.sf) return openSeafileItem(item, how)
     const node = item.node
     if (!node) return
@@ -473,6 +500,12 @@ export function Files({ win }: { win: WinState }) {
   const commitRename = (item: Item, value: string) => {
     setRenaming(null)
     const name = value.trim()
+    // A launcher's name is its Name= (the file keeps its own), unless the raw files are shown.
+    const l = launcherOf(item)
+    if (l && !prefs.hidden) {
+      if (name && name !== l.label) renameLauncherFile(item.path, name.slice(0, 60)).catch((e: Error) => setToast(e.message))
+      return
+    }
     if (!name || name === item.name) return
     if (name.includes('/')) return setToast('A name cannot have a / in it')
     renamePath(item.path, name, item.kind === 'folder')
@@ -497,68 +530,47 @@ export function Files({ win }: { win: WinState }) {
     busy(`${c.op === 'move' ? 'Moving' : 'Copying'} ${named(c.paths)}…`, `${c.op === 'move' ? 'Moved' : 'Copied'} ${named(c.paths)}`, transferPaths(c.op, c.paths, into)).then(() => c.op === 'move' && setClipboard(null))
   }
 
-  // Dragging: files and folders go onto folders, a folder's empty space, the sidebar, other
-  // Files windows and the desktop. Within a library they move, into another one they copy.
-  const dragStart = (e: React.DragEvent, item: Item) => {
+  // Dragging (src/os/dnd.ts): files and folders go onto folders, a folder's empty space, the
+  // sidebar, other Files windows, the desktop, the dock and app windows. Within a library they
+  // move, into another one they copy (Ctrl or Alt copies, Shift moves). A finger holds one to drag it.
+  const dragItems = (item: Item): Extract<DragItem, { kind: 'file' }>[] => {
     const list = selected.has(item.path) ? selectedItems() : [item]
-    const paths = sfOnly(list)
-    if (!paths.length || renaming) return e.preventDefault()
+    return list
+      .filter((i) => (i.sf ? !i.sf.library : canChange(i.path)))
+      .map((i) => {
+        const l = launcherOf(i)
+        return { kind: 'file' as const, path: i.path, name: i.name, dir: i.kind === 'folder', ...(l ? { launcher: { id: l.id, label: l.label, url: l.url, glyph: l.glyph, image: l.image, app: l.app } } : {}) }
+      })
+  }
+  const dragStart = (e: React.DragEvent, item: Item) => {
+    const list = dragItems(item)
+    if (!list.length || renaming) return e.preventDefault()
     if (!selected.has(item.path)) setSelected(new Set([item.path]))
-    e.dataTransfer.setData(DRAG_FILES, JSON.stringify(paths))
-    e.dataTransfer.setData('text/plain', paths.map(pretty).join('\n'))
-    e.dataTransfer.effectAllowed = 'copyMove'
-    setDragged(paths)
+    // One file can go to the computer too (Chrome), once its address is ready.
+    const one = list.length === 1 && !list[0].dir ? downloadUrl(list[0].path) : null
+    startNativeDrag(e, list, 'files', { text: list.map((i) => pretty(i.path)).join('\n'), download: one })
   }
-  const dragEnd = () => {
-    setDragged(null)
-    setDropOn(null)
+  /** Where a drop lands: a folder (data-drop on it), or the folder on show. */
+  const filesTarget: DropTarget = {
+    accept: (d, spot) => {
+      const into = spot ?? path
+      if (into === TRASH) return trashOp(d)
+      return folderOp(d, into)
+    },
+    drop: (d, spot, op) => {
+      const into = spot ?? path
+      if (into === TRASH) return void dropInTrash(d)
+      const n = d.os ? 'the files' : d.items.length === 1 ? (d.items[0].kind === 'file' ? (d.items[0].launcher?.label ?? d.items[0].name) : d.items[0].label) : `${d.items.length} items`
+      setToast(op === 'move' ? `Moving ${n}…` : `Copying ${n}…`)
+      void dropIntoFolder(d, into, op).then((landed) => {
+        setToast(landed.length ? `${op === 'move' ? 'Moved' : d.os ? 'Uploading' : 'Copied'} ${n}${into === path ? '' : ` to ${pretty(into)}`}` : null)
+        if (into === path && landed.length) setSelected(new Set(landed.map((l) => l.path)))
+      })
+    },
+    // A folder held under the drag opens, so it can go on further in.
+    spring: (spot) => spot !== TRASH && navigate(spot),
   }
-  /** Whether a drag can land in `into`; says so to the browser (and highlights it) when it can. */
-  const acceptDrop = (e: React.DragEvent, into: string) => {
-    // Files from the computer upload into any Seafile folder you can write to, and rows from
-    // Archive unpack there.
-    if (getZipDrag(e) || (!getDragged() && hasOsFiles(e.dataTransfer))) {
-      if (!canWrite(into)) return false
-      e.preventDefault()
-      e.stopPropagation()
-      e.dataTransfer.dropEffect = 'copy'
-      if (dropOn !== into) setDropOn(into)
-      return true
-    }
-    const paths = getDragged()
-    if (!paths || !e.dataTransfer.types.includes(DRAG_FILES) || !canWrite(into) || isInside(paths, into)) return false
-    const op = dropOpFor(paths, into, e)
-    if (op === 'move' && paths.every((p) => parentOf(p) === into)) return false
-    e.preventDefault()
-    e.stopPropagation()
-    e.dataTransfer.dropEffect = op
-    if (dropOn !== into) setDropOn(into)
-    return true
-  }
-  const dropInto = (e: React.DragEvent, into: string) => {
-    const fromZip = getZipDrag(e)
-    if (fromZip) {
-      if (!acceptDrop(e, into)) return
-      setDropOn(null)
-      setZipDrag(null)
-      setToast(`Unpacking ${zipDragName(fromZip)}…`)
-      void extract(fromZip.zip, into, { entries: fromZip.entries, base: fromZip.base, clash: 'keep' }).catch((err: Error) => setToast(err.message))
-      return
-    }
-    if (!getDragged() && hasOsFiles(e.dataTransfer)) {
-      if (!acceptDrop(e, into)) return
-      setDropOn(null)
-      droppedFiles(e.dataTransfer)
-        .then((picked) => uploadFiles(picked, into))
-        .catch((err: Error) => setToast(err.message))
-      return
-    }
-    const paths = getDragged()
-    if (!paths || !acceptDrop(e, into)) return
-    const op = dropOpFor(paths, into, e)
-    dragEnd()
-    busy(`${op === 'move' ? 'Moving' : 'Copying'} ${named(paths)}…`, `${op === 'move' ? 'Moved' : 'Copied'} ${named(paths)} to ${pretty(into)}`, transferPaths(op, paths, into))
-  }
+  useDropTarget(main, filesTarget)
 
   const readOnly = () =>
     setToast(isSf(path) ? `${libraryName(parseSf(path)!.repo)} is read-only for you` : inBrowserHere ? "That is one of the site's own files: read-only, but you can copy it" : `Read-only file system. ${browserMountPoint() ? `${prettyPath(browserMountPoint()!)} and /tmp are` : 'Only /tmp is'} writable here.`)
@@ -615,10 +627,21 @@ export function Files({ win }: { win: WinState }) {
       ]
     }
     const isDir = item.kind === 'folder'
+    const l = launcherOf(item)
+    // A launcher opens what it points at; its file can still be edited, moved and deleted.
+    const launcherItems: MenuItem[] = l
+      ? [
+          { label: l.app ? 'Open' : 'Open ↗', shortcut: '↵', onSelect: () => launch(l, wm) },
+          ...(l.url ? [{ label: 'Copy link', onSelect: () => void navigator.clipboard?.writeText(l.url).then(() => setToast('Copied the link')).catch(() => {}) }] : []),
+          { label: 'Edit the file in Zed', onSelect: () => openItem(item, 'zed') },
+          { separator: true },
+        ]
+      : []
     if (item.sf) {
       const library = item.sf.library
       return [
-        { label: 'Open', shortcut: '↵', onSelect: () => openItem(item) },
+        ...launcherItems,
+        ...(l ? [] : [{ label: 'Open', shortcut: '↵', onSelect: () => openItem(item) }]),
         ...(isDir
           ? [{ label: 'Open in new window', onSelect: () => wm.openNew('files', { path: item.path }) }]
           : [
@@ -668,7 +691,8 @@ export function Files({ win }: { win: WinState }) {
     const stored = canChange(item.path)
     const onMount = browserPathOf(item.path) !== null
     return [
-      { label: 'Open', shortcut: '↵', onSelect: () => openItem(item) },
+      ...launcherItems,
+      ...(l ? [] : [{ label: 'Open', shortcut: '↵', onSelect: () => openItem(item) }]),
       ...(isDir
         ? [{ label: 'Open in new window', onSelect: () => wm.openNew('files', { path: item.path }) }]
         : [
@@ -908,6 +932,7 @@ export function Files({ win }: { win: WinState }) {
     else if (e.key === 'Delete') trashItems(sel)
     else if (e.key === 'F5' && isSf(path)) refreshDirs(path)
     else if (e.key === 'Escape') setSelected(new Set())
+    else if (ctrl && e.key.toLowerCase() === 'z') void undoLastMove()
     else if (e.key.startsWith('Arrow')) moveSelection(e.key.slice(5).toLowerCase() as 'up', e.shiftKey)
     else return
     e.preventDefault()
@@ -1274,10 +1299,9 @@ export function Files({ win }: { win: WinState }) {
             sections={sections}
             active={path}
             onOpen={(target) => (setDrawer(false), openPlace(target))}
-            acceptFiles={acceptDrop}
-            dropFiles={dropInto}
+            dropTarget={filesTarget}
             footer={
-              <button className={`fm-side-item ${path === TRASH ? 'is-active' : ''}`} onClick={() => (setDrawer(false), navigate(TRASH))}>
+              <button className={`fm-side-item ${path === TRASH ? 'is-active' : ''}`} onClick={() => (setDrawer(false), navigate(TRASH))} data-drop={TRASH}>
                 <span className="fm-side-icon">🗑</span>
                 <span className="fm-side-label">Trash</span>
                 {trashCount !== null && <span className="fm-side-count">{trashCount}</span>}
@@ -1287,12 +1311,7 @@ export function Files({ win }: { win: WinState }) {
         )}
 
         <div
-          className={`fm-main fm-view-${prefs.view} ${dropOn === path ? 'is-drop' : ''} ${touch && selected.size > 0 ? 'has-checks' : ''}`}
-          data-sf-drop={canWrite(path) ? path : undefined}
-          onDragEnter={(e) => acceptDrop(e, path)}
-          onDragOver={(e) => acceptDrop(e, path)}
-          onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as globalThis.Node | null) && setDropOn(null)}
-          onDrop={(e) => dropInto(e, path)}
+          className={`fm-main fm-view-${prefs.view} ${touch && selected.size > 0 ? 'has-checks' : ''}`}
           ref={main}
           tabIndex={0}
           onPointerDown={onMainPointerDown}
@@ -1362,20 +1381,16 @@ export function Files({ win }: { win: WinState }) {
                 if (el) tiles.current.set(item.path, el)
                 else tiles.current.delete(item.path)
               }}
-              className={`fm-item ${selected.has(item.path) ? 'is-selected' : ''} ${item.name.startsWith('.') ? 'is-hidden' : ''} ${dropOn === item.path ? 'is-drop' : ''} ${clip?.op === 'move' && clip.paths.includes(item.path) ? 'is-cut' : ''}`}
-              draggable={(item.sf ? !item.sf.library : canChange(item.path)) && renaming !== item.path}
+              className={`fm-item ${selected.has(item.path) ? 'is-selected' : ''} ${item.name.startsWith('.') ? 'is-hidden' : ''} ${clip?.op === 'move' && clip.paths.includes(item.path) ? 'is-cut' : ''} ${launcherOf(item) ? 'is-launcher' : ''}`}
+              // Touch drags with a held finger instead (holdToDrag), which browsers do not do themselves.
+              draggable={!touch && (item.sf ? !item.sf.library : canChange(item.path)) && renaming !== item.path}
               onDragStart={(e) => dragStart(e, item)}
-              onDragEnd={dragEnd}
-              {...((item.sf || canWrite(item.path)) && item.kind === 'folder'
-                ? {
-                    'data-sf-drop': canWrite(item.path) ? item.path : undefined,
-                    onDragEnter: (e: React.DragEvent) => acceptDrop(e, item.path),
-                    onDragOver: (e: React.DragEvent) => acceptDrop(e, item.path),
-                    onDragLeave: (e: React.DragEvent) => !e.currentTarget.contains(e.relatedTarget as globalThis.Node | null) && dropOn === item.path && setDropOn(path),
-                    onDrop: (e: React.DragEvent) => dropInto(e, item.path),
-                  }
-                : {})}
-              onPointerDown={(e) => (pointer.current = e.pointerType)}
+              data-drop={item.kind === 'folder' && canWrite(item.path) ? item.path : undefined}
+              onPointerDown={(e) => {
+                pointer.current = e.pointerType
+                if (e.pointerType === 'touch') holdToDrag(e, () => (renaming ? null : dragItems(item)), 'files')
+                else if (item.kind !== 'folder' && (item.sf || inBrowser(item.path))) prepareDownload(item.path, item.size)
+              }}
               onClick={(e) => clickItem(e, item)}
               // Touch opens on its own double tap (clickItem); this is the mouse's.
               onDoubleClick={() => pointer.current === 'mouse' && renaming !== item.path && openItem(item)}
@@ -1383,7 +1398,7 @@ export function Files({ win }: { win: WinState }) {
                 if (!selected.has(item.path)) setSelected(new Set([item.path]))
                 openContextMenu(e, itemMenu(item))
               }}
-              title={search !== null ? pretty(item.path) : item.name}
+              title={search !== null ? pretty(item.path) : launcherOf(item) ? `${shownName(item)} (${item.name})` : item.name}
             >
               {touch && selected.size > 0 && (
                 <span
@@ -1404,19 +1419,20 @@ export function Files({ win }: { win: WinState }) {
                 />
               )}
               <span className="fm-icon">
-                <Thumb item={item} size={iconSize} gallery={prefs.view === 'gallery'} emblem={emblemOf(item)} />
+                <Thumb item={item} size={iconSize} gallery={prefs.view === 'gallery'} emblem={emblemOf(item)} launcher={launcherOf(item)} />
               </span>
               {renaming === item.path ? (
                 <input
                   className="fm-rename"
-                  defaultValue={item.name}
+                  defaultValue={shownName(item)}
                   autoFocus
                   spellCheck={false}
-                  aria-label={`New name for ${item.name}`}
+                  aria-label={`New name for ${shownName(item)}`}
                   // The name without its extension is selected, as in every file manager.
                   onFocus={(e) => {
-                    const dot = item.kind === 'folder' ? -1 : item.name.lastIndexOf('.')
-                    e.currentTarget.setSelectionRange(0, dot > 0 ? dot : item.name.length)
+                    const v = shownName(item)
+                    const dot = item.kind === 'folder' || v !== item.name ? -1 : v.lastIndexOf('.')
+                    e.currentTarget.setSelectionRange(0, dot > 0 ? dot : v.length)
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => e.stopPropagation()}
@@ -1424,20 +1440,20 @@ export function Files({ win }: { win: WinState }) {
                     e.stopPropagation()
                     if (e.key === 'Enter') e.currentTarget.blur()
                     if (e.key === 'Escape') {
-                      e.currentTarget.value = item.name
+                      e.currentTarget.value = shownName(item)
                       e.currentTarget.blur()
                     }
                   }}
                   onBlur={(e) => commitRename(item, e.currentTarget.value)}
                 />
               ) : (
-                <span className="fm-name">{prefs.view === 'grid' || prefs.view === 'gallery' ? middleEllipsis(item.name, captionChars) : item.name}</span>
+                <span className="fm-name">{prefs.view === 'grid' || prefs.view === 'gallery' ? middleEllipsis(shownName(item), captionChars) : shownName(item)}</span>
               )}
               {prefs.view === 'list' && (
                 <>
                   <span className="fm-col">{item.kind === 'folder' ? (item.sf ? (item.sf.library ? formatSize(item.sf.library.size) : '') : `${item.size} items`) : formatSize(item.size)}</span>
                   <span className="fm-col">{new Date(item.mtime).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
-                  <span className="fm-col">{KIND_LABEL[item.kind]}</span>
+                  <span className="fm-col">{launcherOf(item) ? 'Launcher' : KIND_LABEL[item.kind]}</span>
                 </>
               )}
               {search !== null && prefs.view !== 'list' && !item.sf && <span className="fm-where">{prettyPath(item.path.split('/').slice(0, -1).join('/') || '/')}</span>}

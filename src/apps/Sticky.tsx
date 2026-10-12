@@ -6,6 +6,13 @@ import { useWM, type WinState } from '../os/wm'
 import { TILTS } from '../widgets/config'
 import type { WidgetDef, WM } from '../widgets/types'
 import { closeWidget, openWidget, widgetWindows } from '../widgets/windows'
+import { useDropTarget, type DragItem } from '../os/dnd'
+
+/** A web launcher dragged onto a note, as a Markdown link (apps and files have no address to link). */
+const linkOf = (i: DragItem): string | null => {
+  const l = i.kind === 'launcher' ? i : i.kind === 'file' ? i.launcher : undefined
+  return l?.url ? `[${l.label.replace(/[[\]]/g, '')}](${l.url})` : null
+}
 
 // The sticky note widget: one of your notes (src/data/notes.ts) on the desktop. Its colour and
 // tilt belong to the note, so the Notebook and every device show the same.
@@ -116,6 +123,17 @@ export function Sticky({ win }: { win: WinState }) {
   // Showing the note (ticks work) or editing it (a textarea). Empty notes are edited.
   const [editing, setEditing] = useState(() => !note?.text.trim())
   const caret = useRef<number | null>(null)
+  // Launchers dropped on the note are added to it as links, one per line.
+  const root = useRef<HTMLDivElement>(null)
+  useDropTarget(root, {
+    accept: (d) => (d.items.some((i) => linkOf(i)) ? 'link' : null),
+    drop: (d) => {
+      const n = getNote(win.props.id ?? '')
+      const links = d.items.map(linkOf).filter((x): x is string => !!x)
+      if (!n || !links.length) return
+      updateNote(n.id, { text: `${n.text}${n.text && !n.text.endsWith('\n') ? '\n' : ''}${links.join('\n')}` })
+    },
+  })
 
   // A sticky whose note was deleted (here or on another device) goes away. A layout restored from
   // the server can arrive a moment before its notes do, so look again before closing.
@@ -198,7 +216,7 @@ export function Sticky({ win }: { win: WinState }) {
   }
 
   return (
-    <div className="sticky">
+    <div className="sticky" ref={root}>
       <div className="sticky-tools" onContextMenu={menu}>
         {(Object.keys(NOTE_COLORS) as NoteColor[]).map((c) => (
           <button key={c} className={`sticky-dot ${note.color === c ? 'is-on' : ''}`} style={{ background: NOTE_COLORS[c].bg }} aria-label={NOTE_COLORS[c].label} title={NOTE_COLORS[c].label} onClick={() => updateNote(note.id, { color: c })} />

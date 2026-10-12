@@ -1,5 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { faviconOf, launch as launchLink, useLaunchers } from '../data/launchers'
+import { getLaunchers, launch as launchLink, launcherImage, launchersAreFiles, useLaunchers, writeLauncherFile } from '../data/launchers'
+import { dropInTrash, trashOp } from '../data/fileDrop'
+import { useDropTarget, type Drag, type DragItem, type DropOp } from './dnd'
+import { filesFor, openWith } from './appDrops'
+import { HOME } from '../terminal/vfs'
+import { whereIs } from '../data/mounts'
 import { widgetDef } from '../widgets/registry'
 import type { WidgetDef } from '../widgets/types'
 import { useRecents } from '../data/recents'
@@ -210,11 +215,12 @@ function TopBar() {
 }
 
 /** A launcher's dock icon: the site's favicon (or your emoji) on a flat tile like the apps'. */
-function LauncherIcon({ url, glyph, size = 48 }: { url: string; glyph?: string; size?: number }) {
+function LauncherIcon({ url, glyph, image, size = 48 }: { url: string; glyph?: string; image?: string; size?: number }) {
   const [broken, setBroken] = useState(false)
+  const src = launcherImage({ url, image })
   return (
     <span className="app-icon is-tone dock-launcher" style={{ width: size, height: size, ['--hue' as string]: 'var(--accent)' }}>
-      {glyph || broken ? <span className="dock-launcher-glyph">{glyph ?? '↗'}</span> : <img src={faviconOf(url)} alt="" draggable={false} onError={() => setBroken(true)} />}
+      {glyph || broken || !src ? <span className="dock-launcher-glyph">{glyph ?? '↗'}</span> : <img src={src} alt="" draggable={false} onError={() => setBroken(true)} />}
     </span>
   )
 }
@@ -452,7 +458,8 @@ function Dock() {
   const runningOf = (id: DockId) => (isLauncherId(id) ? 0 : wm.windows.filter((w) => w.app === id).length)
   const iconOf = (id: DockId, size = 48) => {
     const l = launcherOf(id)
-    return l ? <LauncherIcon url={l.url} glyph={l.glyph} size={size} /> : <AppIcon app={id as AppId} size={size} tone />
+    if (l?.app && !l.glyph) return <AppIcon app={l.app as AppId} size={size} tone />
+    return l ? <LauncherIcon url={l.url} glyph={l.glyph} image={l.image} size={size} /> : <AppIcon app={id as AppId} size={size} tone />
   }
 
   // Clicking an app: open it, or bring its window back (from being minimized, or from another
@@ -460,7 +467,7 @@ function Dock() {
   // each click brings the next one forward instead.
   const launch = (id: DockId) => {
     const l = launcherOf(id)
-    if (l) return void launchLink(l)
+    if (l) return void launchLink(l, wm)
     const app = id as AppId
     const wins = wm.windows.filter((x) => x.app === app).sort((a, b) => a.pid - b.pid)
     if (!wins.length || app === 'trash') return wm.open(app)
@@ -491,8 +498,8 @@ function Dock() {
     const l = launcherOf(id)
     if (l)
       return [
-        { label: 'Open ↗', onSelect: () => launchLink(l) },
-        { label: 'Copy link', onSelect: () => navigator.clipboard?.writeText(l.url).catch(() => {}) },
+        { label: l.app ? 'Open' : 'Open ↗', onSelect: () => launchLink(l, wm) },
+        ...(l.url ? [{ label: 'Copy link', onSelect: () => navigator.clipboard?.writeText(l.url).catch(() => {}) }] : []),
         { label: 'Edit launchers…', onSelect: () => wm.open('settings', { section: 'launchers', t: String(Date.now()) }) },
         ...removeItem(id),
       ]
@@ -512,6 +519,40 @@ function Dock() {
     ]
   }
 
+  // Dropping on the dock: a file on an app's icon opens it there (if that app opens it), a
+  // launcher or an app anywhere on it pins it (at that spot, signed in), and anything on Trash
+  // goes in the trash. Each icon is a spot (data-drop) of the dock's target.
+  const pinnable = (d: Drag) => canCustomize && d.items.length > 0 && d.items.every((i) => (i.kind === 'app' ? isDockableApp(i.app) : i.kind === 'launcher' || (i.kind === 'file' && !!i.launcher)))
+  const pinItems = async (items: DragItem[], at: number | undefined) => {
+    for (const i of items) {
+      if (i.kind === 'app') pinToDock(i.app, at)
+      else if (i.kind === 'launcher') pinToDock(`launcher:${i.id}`, at)
+      else if (i.kind === 'file' && i.launcher) {
+        // A launcher file the dock does not read (one in Documents, say) gets a copy in the
+        // applications folder, which it does.
+        if (!getLaunchers().some((l) => l.id === i.launcher!.id) && launchersAreFiles()) {
+          const apps = whereIs(`${HOME}/.local/share/applications`)
+          const folder = apps.kind === 'sf' ? apps.sf : `${HOME}/.local/share/applications`
+          await writeLauncherFile(folder, { ...i.launcher, id: i.launcher.id }).catch(() => null)
+        }
+        pinToDock(`launcher:${i.launcher.id}`, at)
+      }
+    }
+  }
+  useDropTarget(navRef, {
+    accept: (d, spot): DropOp | null => {
+      if (spot === 'trash') return trashOp(d)
+      if (spot && !isLauncherId(spot) && filesFor(spot as AppId, d.items).length) return 'open'
+      return pinnable(d) ? 'link' : null
+    },
+    drop: (d, spot, op) => {
+      if (op === 'trash') return void dropInTrash(d)
+      if (op === 'open' && spot) return filesFor(spot as AppId, d.items).forEach((f) => openWith(wm, spot as AppId, f))
+      const at = spot ? order.indexOf(spot as DockId) : -1
+      void pinItems(d.items, at >= 0 ? at : undefined)
+    },
+  })
+
   const appButton = (app: DockId, running = false) => {
     const isDragged = dragging?.app === app
     return (
@@ -522,6 +563,7 @@ function Dock() {
           else items.current.delete(app)
         }}
         className={`dock-item ${isDragged ? 'is-dragged' : ''}`}
+        data-drop={app}
         style={isDragged ? { transform: `translate(${dragging.dx}px, -10px) scale(1.12)` } : undefined}
         onPointerDown={app === 'trash' ? undefined : (e) => onPointerDown(e, app, running)}
         onClick={() => {
@@ -549,7 +591,7 @@ function Dock() {
 
   return (
     <>
-    {dock.autohide && <div className="dock-hotzone" onPointerEnter={dock.show} onPointerLeave={dock.hideSoon} aria-hidden />}
+    {dock.autohide && <div className="dock-hotzone" onPointerEnter={dock.show} onPointerLeave={dock.hideSoon} onDragEnter={dock.show} aria-hidden />}
     {dock.tucked && !dock.visible && (
       <button className="dock-handle" onClick={dock.peek} aria-label="Show the dock">
         <span />

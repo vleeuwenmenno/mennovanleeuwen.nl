@@ -136,6 +136,135 @@ body.is-resizing iframe {
   pointer-events: none;
 }
 
+/* ---------- Drag and drop (src/os/dnd.ts) ---------- */
+
+/* Where a drag would land: a folder, a place, an app in the dock, a window that opens it. */
+.fm-item[data-drop-over],
+.fm-side-item[data-drop-over],
+.fm-side-slot[data-drop-over] > .fm-side-item,
+.desk-icon[data-drop-over] {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.fm-main[data-drop-over],
+.window-body[data-drop-over],
+.sticky[data-drop-over] {
+  outline: 2px dashed color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: -6px;
+}
+.dock-item[data-drop-over] .app-icon {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  transform: scale(1.12);
+}
+.dock[data-drop-over] {
+  outline: 2px dashed color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.dock-item[data-drop-over='trash'] .app-icon {
+  outline-color: var(--red);
+}
+/* A finger held on an item: it lifts, and moving now drags it. */
+[data-lifted] {
+  transform: scale(1.05);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+/* What is being dragged, under the pointer: up to three icons in a stack, how many there are and,
+   on the cursor, what letting go would do (+ copy, → move, ↗ link or pin, ⏎ open, 🗑 delete).
+   The same element is the drag image of the browser's own drags (.is-image), drawn off screen. */
+.dnd-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 300000;
+  pointer-events: none;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  width: 96px;
+  padding: 14px 0 0 14px;
+}
+.dnd-ghost.is-image {
+  top: -400px;
+  left: -400px;
+  padding: 0;
+}
+.dnd-ghost-stack {
+  position: relative;
+  width: 44px;
+  height: 44px;
+}
+.dnd-ghost-tile {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 26px;
+  line-height: 1;
+  background: var(--bg-light);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  transform: translate(calc(var(--k) * 5px), calc(var(--k) * -4px)) rotate(calc(var(--k) * 4deg));
+}
+.dnd-ghost-tile img {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+}
+.dnd-ghost-label {
+  max-width: 96px;
+  padding: 1px 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: var(--on-accent);
+  background: var(--accent);
+}
+.dnd-ghost-count {
+  position: absolute;
+  top: 6px;
+  left: calc(50% + 20px);
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: #e5484d;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+}
+.dnd-ghost-op {
+  position: absolute;
+  top: 0;
+  left: 0;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+.dnd-ghost-op:empty {
+  display: none;
+}
+.dnd-ghost[data-op='trash'] .dnd-ghost-op {
+  background: var(--red);
+}
+/* Desktop icons draw themselves on the desktop: there the cursor only says what a drop would do. */
+.dnd-ghost.is-home .dnd-ghost-stack,
+.dnd-ghost.is-home .dnd-ghost-label,
+.dnd-ghost.is-home .dnd-ghost-count {
+  visibility: hidden;
+}
+
 /* ---------- Desktop & wallpaper ---------- */
 
 .desktop {
@@ -1181,10 +1310,6 @@ body.is-resizing iframe {
 }
 /* The sway while dragged (useSwing in src/os/swing.ts sets --swing on the desktop), hanging from
    the top like the notes. Only the selected icons are the ones being dragged. */
-.desk-icon.is-drop {
-  background: color-mix(in srgb, var(--accent) 30%, transparent);
-  outline: 1px solid var(--accent);
-}
 .desk-icon.is-selected {
   rotate: var(--swing, 0deg);
   transform-origin: 50% 0;
@@ -4434,19 +4559,18 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
   text-align: center;
   color: var(--muted);
 }
-/* Dragging files: where they would land, and files cut for pasting. */
-.fm-item.is-drop,
-.fm-side-item.is-drop {
-  background: color-mix(in srgb, var(--accent) 28%, transparent);
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
-}
-.fm-main.is-drop {
-  outline: 2px dashed color-mix(in srgb, var(--accent) 70%, transparent);
-  outline-offset: -6px;
-}
+/* Files cut for pasting. */
 .fm-item.is-cut {
   opacity: 0.5;
+}
+/* A launcher (.desktop file) shows its own emoji or picture. */
+.fm-launcher-glyph {
+  display: inline-grid;
+  place-items: center;
+  line-height: 1;
+}
+.fm-launcher-img {
+  object-fit: contain;
 }
 .fm-rename {
   width: 100%;
@@ -5710,16 +5834,6 @@ button.fm-dd-row:hover {
 .ar-label {
   -webkit-user-drag: element;
 }
-/* What a drag of several rows looks like (made for the moment the drag starts). */
-.ar-ghost {
-  position: fixed;
-  top: -100px;
-  left: 0;
-  padding: 4px 10px;
-  background: var(--accent);
-  color: var(--on-accent, #fff);
-  font-size: 12px;
-}
 .ar-glyph {
   display: inline-flex;
   width: 16px;
@@ -6969,6 +7083,11 @@ button.fm-dd-row:hover {
   display: grid;
   place-items: center;
   padding: 16px;
+}
+/* An app or launcher dragged out of it: out of the way of the dock and the desktop until let go. */
+.om-backdrop.is-dragging-out {
+  opacity: 0;
+  pointer-events: none;
 }
 .om-panel {
   display: flex;
