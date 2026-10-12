@@ -7,26 +7,28 @@ import { notify } from '../os/notify'
 import type { AppId } from '../os/wm'
 import { HOME } from '../terminal/vfs'
 import { lookup, makeDir, prepare, readFileText, removePath, transfer, writeFile } from '../terminal/fs'
-import { browserFilesState, browserText, listBrowser, readBrowserText, subscribeBrowserFiles } from './browserfs'
+import { browserFilesState, browserText, listBrowser, mkdirBrowser, readBrowserText, setVirtualFiles, statBrowser, subscribeBrowserFiles, virtualFilesChanged } from './browserfs'
+import { virtualLaunchers, type StoredLauncher } from './launcherStore'
 import { posixOf, subscribeMounts, whereIs } from './mounts'
 import { cachedDir, isSf, listDir, readText, refreshDirs, subscribeDirs, type Entry } from './seafile'
 import { idForPath, idInText, isLauncherName, launcherFileName, launcherFromText, launcherText, migrateLaunchers, type Launcher, type LauncherPort } from './launcherFiles'
 
 // Launchers of your own: a web address (or an MvL OS app), a name and an optional emoji or
-// picture. They are .desktop files (src/data/launcherFiles.ts), wherever home is: those in
-// ~/Desktop sit on the desktop, those in ~/.local/share/applications are for the dock, All apps
-// and Spotlight only, as on Linux. Home is Seafile's when it is mounted on ~, else the files kept
-// in this browser (src/data/browserfs.ts).
+// picture. They are .desktop files (src/data/launcherFiles.ts) in your home: those in ~/Desktop
+// sit on the desktop, those in ~/.local/share/applications are for the dock, All apps and
+// Spotlight only, as on Linux.
 //
-// Visitors have no home to write to: theirs stay a list in this browser (synced.ts), as all
-// launchers were before. Signed in, that same list is synced and is turned into files once per
-// home (migrateLaunchers); it is never emptied, so a home that comes later (another browser, or
-// Seafile linked later) gets them too.
+// They are kept in a list synced like notes (synced.ts): in this browser for visitors, and
+// through the server, so on every device, when signed in. Without Seafile, home is kept in this
+// browser alone, so there the list itself is what the two folders show (src/data/launcherStore.ts,
+// through src/data/browserfs.ts): every device has the same files. With Seafile as home they are
+// real files in Seafile, which every device sees anyway; the list is turned into those files once
+// (migrateLaunchers) and never emptied. Visitors have no home: theirs are just the list.
 
 export type { Launcher } from './launcherFiles'
 export { cleanUrl } from './launcherFiles'
 
-type Legacy = Omit<Launcher, 'file'>
+type Legacy = StoredLauncher
 const legacy = synced<Legacy[]>('launchers', [], { normalize: (v) => (Array.isArray(v) ? v.filter((l) => l && typeof l.id === 'string' && (typeof l.url === 'string' || typeof l.app === 'string')).map((l) => ({ ...l, url: l.url ?? '' })) : []) })
 /** The order Settings → Launchers put them in (ids); the rest follow by name. */
 const order = synced<string[]>('launcher-order', [], { normalize: (v) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []) })
@@ -41,6 +43,17 @@ export const isLauncherApp = (app: string) => APP_IDS.has(app)
 
 const DESKTOP = () => `${HOME}/Desktop`
 const APPS = () => `${HOME}/.local/share/applications`
+
+/** The two folders in the browser's store, when home is kept there (signed in, no Seafile on ~). */
+function browserDirs(): { desktop: string; apps: string } | null {
+  if (getAccount().status !== 'user') return null
+  const d = whereIs(DESKTOP())
+  const a = whereIs(APPS())
+  return d.kind === 'browser' && a.kind === 'browser' ? { desktop: d.path, apps: a.path } : null
+}
+
+/** The list as the files of those two folders (see launcherStore.ts). */
+const virtual = virtualLaunchers({ get: () => legacy.get(), set: (fn) => legacy.set(fn), dirs: browserDirs, isApp: (a) => isLauncherApp(a) })
 const languages = () => (typeof navigator === 'undefined' ? [] : navigator.languages ?? [])
 const nameOf = (p: string) => p.split('/').pop() || ''
 
@@ -257,6 +270,15 @@ function start() {
   started = true
   current = compute()
   for (const sub of [subscribeAccount, subscribeMounts, subscribeBrowserFiles, subscribeDirs, legacy.subscribe, order.subscribe]) sub(() => schedule())
+  // Without Seafile, the list is the launcher folders' files.
+  setVirtualFiles(virtual)
+  for (const sub of [legacy.subscribe, subscribeMounts, subscribeAccount]) sub(() => virtualFilesChanged())
+  const appsFolder = () => {
+    const d = browserDirs()
+    if (d && browserFilesState() === 'ready' && !statBrowser(d.apps)) void mkdirBrowser(d.apps, true).catch(() => {})
+  }
+  subscribeBrowserFiles(appsFolder)
+  appsFolder()
   // Another device may have changed the folders: look again now and then while in view.
   const again = () => {
     const h = home()
@@ -431,7 +453,8 @@ const migratedFor = new Set<string>()
 /** Turns the old list into files, once per home and visit (again when another device adds to it). */
 function maybeMigrate(again = false): Promise<void> {
   const h = home()
-  if (h.kind !== 'files' || !legacy.get().length) return Promise.resolve()
+  // Only Seafile homes have real launcher files; the browser's show the list itself.
+  if (h.kind !== 'files' || !isSf(h.desktop) || !legacy.get().length) return Promise.resolve()
   const key = `${getAccount().user?.id}:${h.desktop}`
   if (migrating || (migratedFor.has(key) && !again)) return migrating ?? Promise.resolve()
   migratedFor.add(key)

@@ -442,11 +442,19 @@ Writing changes only the keys it sets, so comments, other groups and keys MvL OS
 Settings → Launchers lists them all, to add, edit, reorder and remove, and moves a file between
 the two folders with its *Desktop* switch. Spotlight, the dock and All apps read the same two
 folders; a launcher dragged into another folder stays a working launcher there but leaves the
-dock. Visitors have no home to write to, so theirs stay the list in this browser, as before. That
-list (synced, signed in) is turned into files once per home: into Seafile once for every device
-(the ids done are kept in `~/.local/share/applications/.mvlos-migrated`, so a launcher deleted
-since does not come back), and into each browser's own files where there is no Seafile. Nothing
-is taken out of it.
+dock.
+
+Launchers are kept in a list synced like notes: in this browser for visitors (who have no home,
+so for them that is all they are), and through the server when signed in, so every device has
+them. Without Seafile, home is kept in this browser alone, so there the two folders' `.desktop`
+files *are* that list ([`src/data/launcherStore.ts`](src/data/launcherStore.ts), through
+[`src/data/browserfs.ts`](src/data/browserfs.ts)): writing, renaming, moving or deleting one there
+(from the terminal, Files, the desktop or Settings) changes the list, and the other devices show
+the same files. One moved out to another folder becomes a plain file of this browser and leaves
+the list; a `.desktop` file moved in joins it. With Seafile as home they are real files in Seafile,
+which every device sees anyway: the list is turned into those files once (the ids done are kept in
+`~/.local/share/applications/.mvlos-migrated`, so a launcher deleted since does not come back),
+and nothing is taken out of it.
 
 Signing in with GitHub (system menu → *Sign in with GitHub*) syncs all of that through the server
 and turns Spotlight into a code search over GitHub and any linked Gitea/Forgejo instances

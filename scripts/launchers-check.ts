@@ -9,7 +9,11 @@
 //      (two "devices", each with a store of its own) and into Seafile shared by two devices, run
 //      at the same moment and again later. Every launcher lands once, keeps its id, and one
 //      deleted since does not come back.
-//   3. Moving and copying with names that meet (src/data/transferPlan.ts): replace, keep both,
+//   3. Without Seafile, the launcher folders' files are the synced launcher list
+//      (src/data/launcherStore.ts): two devices, syncing through the real server's /api/state, see
+//      the same files after one adds, renames, moves (between the folders, out of them and back
+//      in) and deletes.
+//   4. Moving and copying with names that meet (src/data/transferPlan.ts): replace, keep both,
 //      skip, cancel, a copy next to itself, undo, within the browser's store, within Seafile, and
 //      between the two.
 //
@@ -28,6 +32,7 @@ import { MY_LIBRARY, PHOTOS, putFile, startMockSeafile } from './mock-seafile.ts
 import { DesktopEntryError, formatDesktopFile, getLocalized, getValue, parseDesktopFile, setValue, escapeValue, unescapeValue } from '../src/data/desktopEntry.ts'
 import { MIGRATED, idInText, launcherFileName, launcherFromText, launcherText, migrateLaunchers, readLaunchers, type Launcher, type LauncherPort } from '../src/data/launcherFiles.ts'
 import { transferInto, undoMove, type Clash, type TransferPort } from '../src/data/transferPlan.ts'
+import { virtualLaunchers, type StoredLauncher } from '../src/data/launcherStore.ts'
 
 const throwsAt = (text: string, line: RegExp) => {
   try {
@@ -321,7 +326,7 @@ const dirs = { desktop: `${HOME}/Desktop`, apps: `${HOME}/.local/share/applicati
   check('Seafile home: the files read back as launchers', (await readLaunchers(two.port, sdirs)).length === 3)
 }
 
-// --- 3. moving and copying ------------------------------------------------------------------------
+// --- 4. moving and copying ------------------------------------------------------------------------
 
 const answer = (c: Clash | null) => async () => c
 {
@@ -402,6 +407,77 @@ const answer = (c: Clash | null) => async () => c
   check('Seafile to the browser: a move, replacing (when asked)', !!down && down.moved[0].to === '/h/Desktop/notes 2.md' && !lib.files.has('/Desktop/notes 2.md') && (await b.read('/h/Desktop/notes 2.md')) === 'from the browser')
   const back = await transferInto(both, 'copy', [`${desk}/report.txt`].filter(() => lib.files.has('/Desktop/report.txt')), '/h/Desktop', answer('skip'))
   check('Seafile to the browser: skip leaves the browser’s own', !!back && (await b.read('/h/Desktop/report.txt')) === 'browser report')
+}
+
+// --- 3. without Seafile: the synced list as files ----------------------------------------------------
+
+{
+  // A device: its copy of the list (as synced.ts keeps it), and the browser's store around the
+  // two folders the way browserfs.ts routes to the list: a .desktop file elsewhere is a plain file.
+  const device = () => {
+    let value: StoredLauncher[] = []
+    let base = 0
+    const plain = new Map<string, string>()
+    const v = virtualLaunchers({ get: () => value, set: (fn) => void (value = fn(value)), dirs: () => ({ desktop: '/Desktop', apps: '/.local/share/applications' }), isApp: (a) => a === 'files' })
+    return {
+      v,
+      plain,
+      async push() {
+        const r = await api<{ updatedAt: number; conflict?: boolean }>('/api/state/launchers', { method: 'PUT', json: { value, base } })
+        if (r.conflict) throw new Error('conflict')
+        base = r.updatedAt
+      },
+      async pull() {
+        const all = await api<Record<string, { value: StoredLauncher[]; updatedAt: number }>>('/api/state')
+        value = all.launchers?.value ?? []
+        base = all.launchers?.updatedAt ?? 0
+      },
+      ls: (dir: string) => v.list(dir).map((e) => e.path.split('/').pop()).sort(),
+      // browserfs.ts's transferBrowser, for these two places
+      move(from: string, to: string) {
+        if (v.has(from)) {
+          if (v.isPlace(to) && v.rename('move', from, to)) return
+          plain.set(to, v.text(from)!)
+          v.remove(from)
+        } else if (v.isPlace(to) && v.write(to, plain.get(from)!)) plain.delete(from)
+      },
+    }
+  }
+  const a = device()
+  const b = device()
+  const same = async (what: string) => {
+    await a.push()
+    await b.pull()
+    check(`no Seafile, two devices: ${what}`, JSON.stringify([b.ls('/Desktop'), b.ls('/.local/share/applications')]) === JSON.stringify([a.ls('/Desktop'), a.ls('/.local/share/applications')]) && a.ls('/Desktop').every((n) => b.v.text(`/Desktop/${n}`) === a.v.text(`/Desktop/${n}`)))
+  }
+  check('no Seafile: a launcher written in ~/Desktop joins the list', a.v.write('/Desktop/Docs.desktop', '# mine\n[Desktop Entry]\nType=Link\nName=Docs\nURL=https://docs.example/\nX-Extra=kept\n'))
+  check('no Seafile: a file that is not a launcher stays a plain file', !a.v.write('/Desktop/broken.desktop', 'not a desktop entry') && !a.v.isPlace('/Documents/x.desktop'))
+  await same('the one added shows on the other')
+  check('…as the same file, comments and unknown keys kept', (b.v.text('/Desktop/Docs.desktop') ?? '').includes('# mine') && (b.v.text('/Desktop/Docs.desktop') ?? '').includes('X-Extra=kept') && /X-MvL-Id=\w+/.test(b.v.text('/Desktop/Docs.desktop') ?? ''))
+  const id = /X-MvL-Id=(\w+)/.exec(a.v.text('/Desktop/Docs.desktop')!)![1]
+  b.v.write('/Desktop/Docs.desktop', b.v.text('/Desktop/Docs.desktop')!.replace('Name=Docs', 'Name=Manual'))
+  await b.push()
+  await a.pull()
+  check('no Seafile: renamed on the other device (Name=), the file keeps its name and id', (a.v.text('/Desktop/Docs.desktop') ?? '').includes('Name=Manual') && a.v.text('/Desktop/Docs.desktop')!.includes(`X-MvL-Id=${id}`))
+  a.move('/Desktop/Docs.desktop', '/.local/share/applications/Docs.desktop')
+  await same('moved off the desktop into applications')
+  check('…where the other device has it', b.ls('/Desktop').length === 0 && JSON.stringify(b.ls('/.local/share/applications')) === '["Docs.desktop"]')
+  a.move('/.local/share/applications/Docs.desktop', '/Documents/Docs.desktop')
+  await same('moved out to Documents: it leaves the list')
+  check('…and is a plain file of that browser', a.plain.has('/Documents/Docs.desktop') && b.ls('/.local/share/applications').length === 0)
+  a.move('/Documents/Docs.desktop', '/Desktop/Docs.desktop')
+  await same('moved back in: it joins the list again, with its id')
+  check('…on the other device’s desktop', JSON.stringify(b.ls('/Desktop')) === '["Docs.desktop"]' && b.v.text('/Desktop/Docs.desktop')!.includes(`X-MvL-Id=${id}`))
+  check('no Seafile: a copy gets an id of its own', a.v.rename('copy', '/Desktop/Docs.desktop', '/Desktop/Docs 2.desktop') && a.v.text('/Desktop/Docs 2.desktop')!.match(/X-MvL-Id=(\w+)/)![1] !== id)
+  a.v.remove('/Desktop/Docs 2.desktop')
+  a.v.remove('/Desktop/Docs.desktop')
+  await same('deleted on one, gone on the other')
+  check('…nothing left', b.ls('/Desktop').length === 0 && b.ls('/.local/share/applications').length === 0)
+  // The list as it was before files (no name, no text): shown as files made from its fields.
+  const old = device()
+  await api('/api/state/launchers', { method: 'PUT', json: { value: legacy, base: (await api<Record<string, { updatedAt: number }>>('/api/state')).launchers.updatedAt } })
+  await old.pull()
+  check('no Seafile: the list from before shows as files', JSON.stringify(old.ls('/Desktop')) === '["GitHub 2.desktop","GitHub.desktop","News today tomorrow.desktop"]' && JSON.stringify(old.ls('/.local/share/applications')) === '["Mail.desktop"]' && old.v.text('/Desktop/GitHub.desktop')!.includes('X-MvL-Id=gh000001'))
 }
 
 await server.dispose()
