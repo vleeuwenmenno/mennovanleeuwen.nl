@@ -14,7 +14,7 @@ import { Projects } from '../apps/Projects'
 import { Settings } from '../apps/Settings'
 import { WidgetHost } from '../widgets/registry'
 import { Recents } from '../apps/Recents'
-import { Terminal, terminalMenu } from '../apps/Terminal'
+import { Terminal, terminalMenu, terminalTitle } from '../apps/Terminal'
 import { Files } from '../apps/Files'
 import { Viewer } from '../apps/Viewer'
 import { Preview, previewTitle } from '../apps/Preview'
@@ -37,8 +37,8 @@ export type AppMeta = {
   blurb: string
   size: [number, number]
   chrome?: 'note'
-  /** The window's own title, when it shows one file (its name) */
-  titleOf?: (w: WinState) => string
+  /** The window's own title, when it shows one file (its name), or a program set one (undefined: the usual) */
+  titleOf?: (w: WinState) => string | undefined
   /** A size for a window opened with these props, when it differs from `size` (a game's window) */
   sizeOf?: (props: WinState['props']) => [number, number] | undefined
   render: (w: WinState) => ReactNode
@@ -67,7 +67,7 @@ const gamesMenu = (w: WinState, wm: ReturnType<typeof useWM>): MenuItem[] => {
 }
 
 export const APP_META: Record<AppId, AppMeta> = {
-  terminal: { title: `${HANDLE}@mvlos: ~`, dock: 'Terminal', blurb: 'A shell that actually works', size: [760, 500], render: (w) => <Terminal win={w} />, menu: terminalMenu },
+  terminal: { title: `${HANDLE}@mvlos: ~`, dock: 'Terminal', blurb: 'A shell that actually works', size: [760, 500], titleOf: terminalTitle, render: (w) => <Terminal win={w} />, menu: terminalMenu },
   files: { title: 'Files', dock: 'Files', blurb: 'Browse the filesystem', size: [940, 600], render: (w) => <Files win={w} />, menu: settingsMenu('Files', 'files') },
   zed: { title: 'Zed', dock: 'Zed', blurb: 'Edit Markdown and text files', size: [960, 620], render: (w) => <Zed win={w} /> },
   preview: { title: 'Preview', dock: 'Preview', blurb: 'Pictures: zoom, rotate, slideshow', size: [900, 620], titleOf: previewTitle, render: (w) => <Preview win={w} />, menu: settingsMenu('Preview', 'preview') },
