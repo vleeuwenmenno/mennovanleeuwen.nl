@@ -1,12 +1,12 @@
 import { SHIP_SIZE_BLURB, SHIP_SIZE_NAMES, SHIP_SIZES, sizedType, type ShipSizes } from './models/sizes.ts'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { RotateHint } from './RotateHint'
-import { DIFFICULTY, type Difficulty } from './ai'
+import { DIFFICULTY, type Difficulty, type Profile } from './ai'
 import { FACTIONS, UNIT, buildable, isShip, type FactionId, type UnitType } from './data'
 import {
   BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GALAXY_AI, GIANTS, blockadeIn, canSee, contested, known, ownerFor, sees, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
   autoResolve, buildAt, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
-  settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw, withoutShips,
+  galaxyProfile, settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw, withoutShips,
   type BattleResult, type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetKind, type Side, type StarSystem,
 } from './galaxy'
 import { BuildQueue, Floating, Frame, Icon, Pips, ShipArt, ShipCard, SizesContext, Tips, unitTip, type IconName } from './Hud'
@@ -35,6 +35,8 @@ export type ConquestBattle = {
   /** Which side (index into `sides`) the player is. */
   me: number
   ai: Difficulty
+  /** How the AI empire plays (galaxyProfile); left out, Balanced. */
+  profile?: Profile
   names: string[]
   /** The campaign's ship sizes (models/sizes.ts); left out, Classic. */
   sizes?: ShipSizes
@@ -1292,6 +1294,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       sides,
       me: meSide,
       ai: g.sides[enemy].ai ?? 'medium',
+      profile: galaxyProfile(g, enemy),
       names: [factionName(g, c.holder), factionName(g, c.attacker)],
       sizes: g.rules?.sizes,
       resume,

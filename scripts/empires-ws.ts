@@ -174,6 +174,16 @@ check('guest gets ready', readied.slots[1].ready === true, readied)
 host.send({ t: 'slot', i: 2, patch: { kind: 'ai' } })
 const unreadied = (await until(guest, 'lobby', (m) => m.lobby.slots[2].kind === 'ai')).lobby
 check('a change makes everyone ready up again', unreadied.slots[2].kind === 'ai' && unreadied.slots[1].ready === false, unreadied)
+check('a new AI seat plays Balanced', unreadied.slots[2].profile === 'balanced', unreadied.slots[2])
+host.send({ t: 'slot', i: 2, patch: { profile: 'offensive' } })
+const styled = (await until(guest, 'lobby', (m) => m.lobby.slots[2].profile === 'offensive')).lobby
+check('host picks the AI seat\'s profile', styled.slots[2].profile === 'offensive', styled.slots[2])
+host.send({ t: 'slot', i: 2, patch: { profile: 'reckless' } })
+const unknown = (await until(guest, 'lobby')).lobby
+check('a profile that doesn\'t exist is ignored', unknown.slots[2].profile === 'offensive', unknown.slots[2])
+guest.send({ t: 'slot', i: 2, patch: { profile: 'defensive' } })
+const refusedStyle = await until(guest, 'error')
+check("a guest can't change an AI seat's profile", /host/.test(refusedStyle.why), refusedStyle)
 host.send({ t: 'slot', i: 1, patch: { kind: 'open' } })
 const kicked = await until(guest, 'kicked')
 check('host can take a player out', /host/.test(kicked.why), kicked)

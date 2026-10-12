@@ -498,6 +498,17 @@
   display: flex;
   min-width: 0;
 }
+/* An AI's level over its style (Defensive, Balanced, Offensive). */
+.ew-aipick {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.ew-aipick > select {
+  min-width: 0;
+  width: 100%;
+}
 .ew-slotrow .ew-factionseg button {
   flex: 1;
   min-width: 0;

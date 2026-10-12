@@ -10,7 +10,7 @@ import { isPrivate } from './egress.ts'
 import { sameOrigin } from './http.ts'
 import { onShutdown } from './shutdown.ts'
 import { acceptWebSocket, refuse, type WsConnection } from './ws.ts'
-import { DIFFICULTY, type Brain, type Difficulty } from '../src/apps/games/empires/ai.ts'
+import { DIFFICULTY, PROFILES, profileOf, type Brain, type Difficulty } from '../src/apps/games/empires/ai.ts'
 import { cleanCmd } from '../src/apps/games/empires/commands.ts'
 import { CREDIT_STEPS, FACTIONS, START_CREDITS } from '../src/apps/games/empires/data.ts'
 import { DEFAULT_RULES, GENERATED, MAP, MAPS, cleanRules, generateMap, type MapDef } from '../src/apps/games/empires/maps.ts'
@@ -208,7 +208,7 @@ const mapOf = (l: MpLobby): MapDef => (l.map === GENERATED ? generateMap(l.gen) 
 const humans = (l: MpLobby) => l.slots.filter((s) => s.kind === 'human')
 const seatOf = (l: MpLobby, p: Player) => l.slots.findIndex((s) => s.kind === 'human' && s.player === p.id)
 
-const openSlot = (i: number): MpSlot => ({ kind: 'open', player: '', name: '', faction: i % 2 ? 'droid' : 'republic', team: (i % 2) as 0 | 1, difficulty: 'medium', ready: false, away: false })
+const openSlot = (i: number): MpSlot => ({ kind: 'open', player: '', name: '', faction: i % 2 ? 'droid' : 'republic', team: (i % 2) as 0 | 1, difficulty: 'medium', profile: 'balanced', ready: false, away: false })
 const seat = (s: MpSlot, p: Player): MpSlot => ({ ...s, kind: 'human', player: p.id, name: p.name, ready: false, away: !p.ws })
 
 /** The slots for `map`, keeping what each spawn had where it still exists, and every human seated
@@ -364,6 +364,7 @@ function changeSlot(p: Player, l: MpLobby, i: number, patch: SlotPatch) {
   if (typeof patch.faction === 'string' && Object.hasOwn(FACTIONS, patch.faction)) next.faction = patch.faction
   if (patch.team === 0 || patch.team === 1) next.team = patch.team
   if (typeof patch.difficulty === 'string' && Object.hasOwn(DIFFICULTY, patch.difficulty) && (host || own)) next.difficulty = patch.difficulty
+  if (typeof patch.profile === 'string' && Object.hasOwn(PROFILES, patch.profile) && (host || own)) next.profile = profileOf(patch.profile)
   l.slots[i] = next
   unready(l)
   pushLobby(l)
@@ -431,7 +432,7 @@ function start(p: Player, l: MpLobby) {
     credits: l.credits,
     ...(l.sizes === 'big' ? { sizes: l.sizes } : {}),
     seats: l.slots.flatMap((s, spawn) =>
-      s.kind === 'human' || s.kind === 'ai' ? [{ kind: s.kind, player: s.player, name: s.kind === 'ai' ? `${DIFFICULTY[s.difficulty].name} AI` : s.name, faction: s.faction, team: s.team, spawn, difficulty: s.difficulty }] : [],
+      s.kind === 'human' || s.kind === 'ai' ? [{ kind: s.kind, player: s.player, name: s.kind === 'ai' ? `${DIFFICULTY[s.difficulty].name} ${PROFILES[profileOf(s.profile)].name.toLowerCase()} AI` : s.name, faction: s.faction, team: s.team, spawn, difficulty: s.difficulty, ...(s.kind === 'ai' ? { profile: profileOf(s.profile) } : {}) }] : [],
     ),
   }
   const m: Match = {

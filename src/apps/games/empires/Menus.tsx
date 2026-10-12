@@ -1,6 +1,6 @@
 import { SHIP_SIZE_BLURB, SHIP_SIZE_NAMES, SHIP_SIZES, type ShipSizes } from './models/sizes.ts'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { DIFFICULTY, type Difficulty } from './ai'
+import { DIFFICULTY, PROFILES, PROFILE_IDS, profileOf, type Difficulty, type Profile } from './ai'
 import { CREDIT_STEPS, FACTIONS, type FactionId } from './data'
 import { Frame, Icon, Tips } from './Hud'
 import { battleLayout, type LayoutStore } from './layout'
@@ -22,8 +22,9 @@ import './touch-menus.css'
 // settings and key bindings, which the battle's own menu opens too.
 
 export type SlotKind = 'you' | 'ai' | 'closed'
-/** One spawn point in the lobby: who plays there, as what, on which side. Team 0 is yours. */
-export type Slot = { kind: SlotKind; faction: FactionId; team: 0 | 1; difficulty: Difficulty }
+/** One spawn point in the lobby: who plays there, as what, on which side. Team 0 is yours. An AI
+ * plays at its difficulty, the way its profile says (ai.ts PROFILES). */
+export type Slot = { kind: SlotKind; faction: FactionId; team: 0 | 1; difficulty: Difficulty; profile: Profile }
 /** `map` is a fixed map's id, or GENERATED to build one from `gen`. `areas` are the start areas
  * drawn in the lobby, by slot; a slot without one starts round its spawn point. `names`, by slot:
  * who plays there, for a multiplayer battle carried on offline (otherwise "You", "Enemy 2"…). */
@@ -47,8 +48,8 @@ export const setupMap = (s: Setup): MapDef => (s.map === GENERATED ? generateMap
 function slotsFor(map: MapDef, prev: Slot[] = []): Slot[] {
   return map.spawns.map((_, i) => {
     if (prev[i]) return prev[i]
-    if (i === 0) return { kind: 'you', faction: 'republic', team: 0, difficulty: 'easy' }
-    return { kind: i === 1 ? 'ai' : 'closed', faction: i % 2 ? 'droid' : 'republic', team: 1, difficulty: prev[1]?.difficulty ?? 'easy' }
+    if (i === 0) return { kind: 'you', faction: 'republic', team: 0, difficulty: 'easy', profile: 'balanced' }
+    return { kind: i === 1 ? 'ai' : 'closed', faction: i % 2 ? 'droid' : 'republic', team: 1, difficulty: prev[1]?.difficulty ?? 'easy', profile: prev[1]?.profile ?? 'balanced' }
   })
 }
 
@@ -61,7 +62,8 @@ function lastSetup(): Setup {
     const map = v?.map === GENERATED ? generateMap(gen) : v?.map && MAP[v.map] ? MAP[v.map] : MAPS[0]
     const ok = (s: Partial<Slot>): s is Slot =>
       !!s && (s.kind === 'ai' || s.kind === 'closed' || s.kind === 'you') && (s.faction === 'republic' || s.faction === 'droid') && (s.team === 0 || s.team === 1) && !!s.difficulty && s.difficulty in DIFFICULTY
-    const slots = Array.isArray(v?.slots) ? v.slots.filter(ok) : []
+    // Setups saved before profiles: their AIs play Balanced.
+    const slots = Array.isArray(v?.slots) ? v.slots.filter(ok).map((s) => ({ ...s, profile: profileOf(s.profile) })) : []
     if (slots[0]) slots[0] = { ...slots[0], kind: 'you', team: 0 }
     const credits = typeof v?.credits === 'number' && CREDIT_STEPS.includes(v.credits) ? v.credits : 1600
     const isRect = (r: unknown): r is Rect =>
@@ -99,6 +101,25 @@ export const slotName = (s: Slot, i: number) => (s.kind === 'you' ? 'You' : `${s
 const noMenu = (e: React.MouseEvent) => {
   e.preventDefault()
   e.stopPropagation()
+}
+
+/** An AI seat's difficulty and its style (profile), one above the other, for the skirmish setup
+ * and the multiplayer lobby. */
+export function AiPicker({ difficulty, profile, onChange }: { difficulty: Difficulty; profile: Profile; onChange: (patch: { difficulty?: Difficulty; profile?: Profile }) => void }) {
+  return (
+    <div className="ew-aipick">
+      <select value={difficulty} onChange={(e) => onChange({ difficulty: e.target.value as Difficulty })} aria-label="AI difficulty" data-tip={DIFFICULTY[difficulty].blurb}>
+        {(Object.keys(DIFFICULTY) as Difficulty[]).map((d) => (
+          <option key={d} value={d}>{DIFFICULTY[d].name}</option>
+        ))}
+      </select>
+      <select value={profile} onChange={(e) => onChange({ profile: e.target.value as Profile })} aria-label="AI style" data-tip={PROFILES[profile].blurb}>
+        {PROFILE_IDS.map((p) => (
+          <option key={p} value={p}>{PROFILES[p].name}</option>
+        ))}
+      </select>
+    </div>
+  )
 }
 
 export function Seg<T extends string | number | boolean>({ value, options, onChange, label }: { value: T; options: [T, string][]; onChange: (v: T) => void; label: string }) {
@@ -1181,7 +1202,7 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
               <span>Player</span>
               <span>Faction</span>
               <span>Side</span>
-              <span>AI level</span>
+              <span>AI level · style</span>
             </div>
             {setup.slots.map((s, i) => (
               <div key={i} role="row" className={`ew-slotrow ${s.kind === 'closed' ? 'is-closed' : ''} ${i === act ? 'is-active' : ''}`}>
@@ -1224,11 +1245,7 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
                       </button>
                     )}
                     {s.kind === 'ai' ? (
-                      <select value={s.difficulty} onChange={(e) => setSlot(i, { difficulty: e.target.value as Difficulty })} aria-label="Difficulty" data-tip={DIFFICULTY[s.difficulty].blurb}>
-                        {(Object.keys(DIFFICULTY) as Difficulty[]).map((d) => (
-                          <option key={d} value={d}>{DIFFICULTY[d].name}</option>
-                        ))}
-                      </select>
+                      <AiPicker difficulty={s.difficulty} profile={s.profile} onChange={(patch) => setSlot(i, patch)} />
                     ) : (
                       <span />
                     )}
@@ -1237,7 +1254,14 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
               </div>
             ))}
           </div>
-          <p className="ew-muted ew-small">{DIFFICULTY[setup.slots.find((s) => s.kind === 'ai' && s.team === 1)?.difficulty ?? 'easy'].blurb}</p>
+          {(() => {
+            const foe = setup.slots.find((s) => s.kind === 'ai' && s.team === 1)
+            return (
+              <p className="ew-muted ew-small">
+                {DIFFICULTY[foe?.difficulty ?? 'easy'].blurb} {PROFILES[foe?.profile ?? 'balanced'].name}: {PROFILES[foe?.profile ?? 'balanced'].blurb}
+              </p>
+            )
+          })()}
           <h5>Starting credits</h5>
           <label className="ew-range">
             <input type="range" min={0} max={CREDIT_STEPS.length - 1} step={1} value={step} onChange={(e) => update({ ...setup, credits: CREDIT_STEPS[Number(e.target.value)] })} aria-label="Starting credits" />

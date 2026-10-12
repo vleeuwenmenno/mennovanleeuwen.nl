@@ -6,7 +6,7 @@
 // in seconds; a day is DAY seconds. No DOM, so headless sims can load it.
 
 import type { ShipSizes } from './models/sizes.ts'
-import type { Difficulty } from './ai.ts'
+import { PROFILE_IDS, type Difficulty, type Profile } from './ai.ts'
 import { FACTIONS, UNIT, buildable, stationType, unitOf, type FactionId, type Tier } from './data.ts'
 import { rng } from './maps.ts'
 import { dpsVs } from './sim.ts'
@@ -1653,6 +1653,25 @@ export const GALAXY_AI: Record<Difficulty, GalaxyLevel> = {
   },
 }
 
+/**
+ * How an AI empire plays its campaign: one of the battle AI's profiles (ai.ts PROFILES), picked per
+ * empire from the galaxy's seed, so it's the same on every load and campaigns saved before profiles
+ * get one too without anything new in the save. Its fleet battles are fought with the same profile.
+ */
+export function galaxyProfile(g: Pick<Galaxy, 'seed'>, o: number): Profile {
+  let h = Math.imul((g.seed + 1) ^ Math.imul(o + 7, 0x9e3779b1), 0x85ebca6b) >>> 0
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0
+  return PROFILE_IDS[((h ^ (h >>> 16)) >>> 0) % PROFILE_IDS.length]
+}
+/** What a profile changes in a campaign: how much stronger than a planet's defence it wants to be
+ * before it attacks (`margin`), how big a fleet it gathers first (`wave`), and how long it leaves
+ * the player alone (`calm`), as multipliers on its difficulty's. */
+export const GALAXY_STYLE: Record<Profile, { margin: number; wave: number; calm: number }> = {
+  defensive: { margin: 1.15, wave: 1.3, calm: 1.3 },
+  balanced: { margin: 1, wave: 1, calm: 1 },
+  offensive: { margin: 0.88, wave: 0.8, calm: 0.7 },
+}
+
 /** What the galaxy AI remembers between looks (saved with the campaign). */
 export type GalaxyMind = {
   /** Orders it may give right now: it refills at its APM, up to a few in hand. */
@@ -1683,7 +1702,7 @@ export type GalaxyMind = {
 function newMind(g: Galaxy, o: number): GalaxyMind {
   const D = GALAXY_AI[g.sides[o].ai ?? 'medium']
   const seed = (Math.imul(g.seed + 1, 2654435761) + o * 40503) >>> 0
-  return { budget: 2, last: g.time, seed, salt: seed, stage: -1, restage: 0, target: -1, goal: null, until: 0, wave: D.wave, alarms: {}, spotted: {}, claims: {}, orders: 0 }
+  return { budget: 2, last: g.time, seed, salt: seed, stage: -1, restage: 0, target: -1, goal: null, until: 0, wave: D.wave * GALAXY_STYLE[galaxyProfile(g, o)].wave, alarms: {}, spotted: {}, claims: {}, orders: 0 }
 }
 /** The AI's next dice roll, from 0 up to 1. */
 function roll(m: GalaxyMind) {
@@ -1752,7 +1771,8 @@ function galaxyAi(g: Galaxy, o: number) {
     } else v += k.ships < 0 ? (hostile(k.owner) ? FOG_GUESS : 0) : k.value
     return v * misjudged(m, D, p.id, g.time)
   }
-  const calmFor = (owner: number) => g.time < D.calm && !g.sides[owner]?.ai
+  const style = GALAXY_STYLE[galaxyProfile(g, o)]
+  const calmFor = (owner: number) => g.time < D.calm * style.calm && !g.sides[owner]?.ai
 
   // Threats: enemy fleets it can see at our planets, or flying in to one inside a system it sees
   // (what's coming down the lanes it can't see until it arrives). It acts on each only once it has
@@ -1824,7 +1844,7 @@ function galaxyAi(g: Galaxy, o: number) {
       // Holding the orbit while the battle is fought or the planet is taken.
     } else if (!flying(main) && !there) {
       // Beaten back (the survivors jumped out), or stopped on the way: it gathers more next time.
-      if (m.goal === 'attack') m.wave = Math.min(D.wave * 3, m.wave * 1.25)
+      if (m.goal === 'attack') m.wave = Math.min(D.wave * style.wave * 3, m.wave * 1.25)
       m.goal = null
       m.until = g.time + D.commit
     }
@@ -1836,7 +1856,7 @@ function galaxyAi(g: Galaxy, o: number) {
     const options: { p: Planet; score: number }[] = []
     for (const p of g.planets) {
       const owner = holder(p)
-      const need = hostile(owner) ? defence(p) * D.margin + 400 : Infinity
+      const need = hostile(owner) ? defence(p) * D.margin * style.margin + 400 : Infinity
       const h = need <= mainValue ? hops(main.system, p.system) : 99
       if (h >= 99 || calmFor(owner)) {
         delete m.spotted[p.id]
