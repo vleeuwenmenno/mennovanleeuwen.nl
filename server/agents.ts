@@ -224,12 +224,20 @@ export type TitleAlias = { title: string; until: number }
  * A turn that did not end with an answer: the server restarted (a deploy) or stopped without a
  * word (a crash) while it ran, it failed, or it was stopped.
  */
-export type Interruption = { reason: 'restart' | 'crash' | 'failed' | 'stopped'; error?: string; at: number }
+export type Interruption = { reason: 'restart' | 'crash' | 'failed' | 'stopped'; error?: string; at: number; /** It was a compaction (/compact) that was cut short: Retry compacts again, with the same instructions */ compact?: { instructions?: string } }
 export type ToolCall = { name: string; arguments: Record<string, unknown> }
-export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; /** A tool result's: why it ran without asking (a web read the automatic check cleared, an allowed site) */ checked?: string; createdAt: number }
+export type AgentMessage = { id: number; /** 'compact': a compaction, its content the summary that stands in for everything before it */ role: 'user' | 'assistant' | 'tool' | 'compact'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; /** A tool result's: why it ran without asking (a web read the automatic check cleared, an allowed site) */ checked?: string; /** A compaction's: how it came about */ compact?: Compaction; createdAt: number }
+/**
+ * How a compaction came about: asked for (/compact, with the user's instructions) or automatic
+ * (the context passed the threshold in Settings, or the model said it was too long), how many
+ * messages it summarised and roughly how many tokens they took against the summary's. `request`:
+ * the user's message it was working on, when it compacted in the middle of a turn (sent on word for
+ * word); `files`: the files attached before it, by name, which the model is told about.
+ */
+export type Compaction = { auto: boolean; reason?: 'threshold' | 'overflow'; instructions?: string; messages: number; before: number; after: number; model: string; request?: string; files?: string[] }
 
 type ThreadRow = { id: string; title: string; mode: string; model: string; archived: number; created_at: number; updated_at: number; context_tokens: number | null; tools: string | null; project_id: number | null; pinned: number; todos: string | null; quick: number; workdir: string | null; permission: string | null; queue: string | null; turn_at: number | null; interrupted: string | null; title_source: string | null; title_history: string | null; title_mark: number | null }
-type MessageRow = { id: number; role: string; content: string; thinking: string | null; tool_calls: string | null; tool_name: string | null; attachments: string | null; checked: string | null; created_at: number }
+type MessageRow = { id: number; role: string; content: string; thinking: string | null; tool_calls: string | null; tool_name: string | null; attachments: string | null; checked: string | null; compact: string | null; created_at: number }
 
 const NEW_TITLE = 'New thread'
 const running = new Map<string, AbortController>()
@@ -446,7 +454,8 @@ export function enqueue(user: User, id: string, body: { text?: unknown; attachme
  */
 export function override(user: User, id: string, body: { text?: unknown; attachments?: unknown; client?: { timeZone?: unknown } }): { thread: Thread; queued: boolean } {
   const row = ownThread(user, id)
-  if (running.has(row.id) && !waitsOnUser(row.id)) return { ...enqueue(user, id, body), queued: true }
+  // /compact answers nothing: it waits its turn in the queue.
+  if (running.has(row.id) && (!waitsOnUser(row.id) || compactAsk({ text: String(body.text ?? ''), files: [], zone: '' }))) return { ...enqueue(user, id, body), queued: true }
   deliver(user, row.id, askFrom(user, body))
   return { thread: toThread(ownThread(user, row.id)), queued: false }
 }
@@ -534,6 +543,7 @@ const toMessage = (r: MessageRow): AgentMessage => ({
   ...(r.tool_name ? { toolName: r.tool_name } : {}),
   ...(r.attachments ? { attachments: (JSON.parse(r.attachments) as Attachment[]).map(({ text: _t, data: _d, ...info }) => info) } : {}),
   ...(r.checked ? { checked: r.checked } : {}),
+  ...(r.compact ? { compact: JSON.parse(r.compact) as Compaction } : {}),
   createdAt: r.created_at,
 })
 
@@ -771,12 +781,14 @@ export function stopThread(user: User, id: string) {
  * model that names threads, the one that checks web addresses in Auto, and where ~/AGENTS.md is in Seafile when Seafile is home (the window
  * works that out from /etc/fstab and keeps it up to date).
  */
-type AgentSettings = { titleModel: string | null; /** The safety check model, for web addresses the agent built itself in Auto (null: as the title model's default) */ checkModel: string | null; quickModel: string | null; deepModel: string | null; promptFile: { repo: string; path: string } | null; skillsFolder: Folder | null; skillsOff: string[]; /** Whether titles are checked against the conversation now and then, and changed when it moved on */ titleRefresh: boolean; /** Every how many of the user's messages that check runs */ titleEvery: number }
+type AgentSettings = { titleModel: string | null; /** The safety check model, for web addresses the agent built itself in Auto (null: as the title model's default) */ checkModel: string | null; quickModel: string | null; deepModel: string | null; promptFile: { repo: string; path: string } | null; skillsFolder: Folder | null; skillsOff: string[]; /** Whether titles are checked against the conversation now and then, and changed when it moved on */ titleRefresh: boolean; /** Every how many of the user's messages that check runs */ titleEvery: number; /** Whether a thread is compacted by itself when its context gets full */ autoCompact: boolean; /** How full (percent of the model's context window) before it is */ compactAt: number }
 /** The intervals Settings offers for the title check, in messages from the user. */
 export const TITLE_EVERY = [3, 4, 6, 10]
+/** How full the context may get before a thread is compacted by itself, as Settings offers it (percent). */
+export const COMPACT_AT = [60, 70, 80, 85, 90, 95]
 
 function agentSettings(user: User): AgentSettings {
-  const v = (readState(user).agents?.value ?? {}) as { titleModel?: unknown; checkModel?: unknown; quickModel?: unknown; deepModel?: unknown; promptFile?: { repo?: unknown; path?: unknown } | null; skillsFolder?: unknown; skillsOff?: unknown; titleRefresh?: unknown; titleEvery?: unknown }
+  const v = (readState(user).agents?.value ?? {}) as { titleModel?: unknown; checkModel?: unknown; quickModel?: unknown; deepModel?: unknown; promptFile?: { repo?: unknown; path?: unknown } | null; skillsFolder?: unknown; skillsOff?: unknown; titleRefresh?: unknown; titleEvery?: unknown; autoCompact?: unknown; compactAt?: unknown }
   const name = (x: unknown) => (typeof x === 'string' && /^[\w.:/-]{1,80}$/.test(x) ? x : null)
   const titleModel = name(v.titleModel)
   const f = v.promptFile
@@ -785,7 +797,10 @@ function agentSettings(user: User): AgentSettings {
   // On unless switched off: settings saved before the check existed have no say yet.
   const titleRefresh = v.titleRefresh !== false
   const titleEvery = TITLE_EVERY.includes(Number(v.titleEvery)) ? Number(v.titleEvery) : 4
-  return { titleModel, checkModel: name(v.checkModel), quickModel: name(v.quickModel), deepModel: name(v.deepModel), promptFile, skillsFolder: folderOf(v.skillsFolder), skillsOff, titleRefresh, titleEvery }
+  // Compacting by itself is on unless switched off, at 85% of the context window.
+  const autoCompact = v.autoCompact !== false
+  const compactAt = COMPACT_AT.includes(Number(v.compactAt)) ? Number(v.compactAt) : 85
+  return { titleModel, checkModel: name(v.checkModel), quickModel: name(v.quickModel), deepModel: name(v.deepModel), promptFile, skillsFolder: folderOf(v.skillsFolder), skillsOff, titleRefresh, titleEvery, autoCompact, compactAt }
 }
 
 export type PromptInfo = { text: string; source: 'seafile' | 'builtin'; repo: string | null; path: string | null; missing: boolean; error: string | null }
@@ -1051,23 +1066,32 @@ export async function regenerateTitle(user: User, id: string): Promise<{ thread:
   return { thread }
 }
 
-/** What the next turn sends the model, part by part, with a rough token count (about 4 characters a token). */
-export async function contextOf(user: User, id: string) {
+/**
+ * What the next turn sends the model, part by part, with a rough token count (about 4 characters a
+ * token). After a compaction the summary is a part of its own, and the messages are those since;
+ * `compaction` says when it was, how many messages it stands in for and how many times the thread
+ * was compacted, and `autoCompact` the threshold (percent of the window; null when it is off).
+ */
+export async function contextOf(user: User, id: string, terminal = terminals.has(id)) {
   const row = ownThread(user, id)
   const mode = modeOf(row.mode)
   const prompt = await agentsPrompt(user)
   const memories = listMemories(user).filter((m) => m.projectId === null || m.projectId === row.project_id)
   const thread = toThread(row)
-  const history = chatHistory(row.id)
+  const { boundary } = sinceCompaction(row.id)
+  const all = chatHistory(row.id)
+  const history = boundary ? all.slice(1) : all
   const tokens = (s: string) => Math.ceil(s.length / 4)
   const sum = (role: string, f: (m: ChatMessage) => string = (m) => m.content) => history.filter((m) => m.role === role).reduce((n, m) => n + tokens(f(m)), 0)
   const count = (role: string) => history.filter((m) => m.role === role).length
+  const tools = toolsFor(user, thread.tools, row.project_id !== null, { workdir: !!thread.workdir, terminal, permission: thread.permission })
   const parts = [
     { label: prompt.source === 'seafile' ? 'AGENTS.md (yours, from Seafile)' : 'AGENTS.md (built in)', tokens: tokens(prompt.text) },
     { label: 'Date and mode', tokens: tokens(modeLine(mode)) + 20 },
     { label: `Memories (${memories.length})`, tokens: tokens(memoryLines(memories)) },
-    { label: `Tool definitions (${toolsFor(user, thread.tools, row.project_id !== null, { workdir: !!thread.workdir, terminal: terminals.has(row.id), permission: thread.permission }).length})`, tokens: tokens(JSON.stringify(toolsFor(user, thread.tools, row.project_id !== null, { workdir: !!thread.workdir, terminal: terminals.has(row.id), permission: thread.permission }))) },
-    ...(thread.workdir || thread.permission === 'plan' || thread.permission === 'bypass' ? [{ label: 'Work folder and mode', tokens: tokens(folderLines(thread, terminals.has(row.id), null)) }] : []),
+    { label: `Tool definitions (${tools.length})`, tokens: tokens(JSON.stringify(tools)) },
+    ...(thread.workdir || thread.permission === 'plan' || thread.permission === 'bypass' ? [{ label: 'Work folder and mode', tokens: tokens(folderLines(thread, terminal, null)) }] : []),
+    ...(boundary ? [{ label: 'Summary of earlier messages', tokens: tokens(all[0].content) }] : []),
     { label: `Your messages (${count('user')})`, tokens: sum('user') },
     { label: `Replies (${count('assistant')})`, tokens: sum('assistant', (m) => m.content + JSON.stringify(m.tool_calls ?? '')) },
     { label: 'Thinking (this turn)', tokens: sum('assistant', (m) => m.thinking ?? '') },
@@ -1075,7 +1099,16 @@ export async function contextOf(user: User, id: string) {
     { label: 'Pictures', tokens: history.reduce((n, m) => n + (m.images?.length ?? 0) * 800, 0) },
   ]
   const info = (await models().catch(() => [] as ModelInfo[])).find((m) => m.name === row.model)
-  return { model: row.model, contextLength: info?.contextLength ?? null, measured: row.context_tokens ?? null, estimate: parts.reduce((n, p) => n + p.tokens, 0), parts }
+  const settings = agentSettings(user)
+  const compaction = boundary
+    ? {
+        at: boundary.createdAt,
+        auto: !!boundary.compact?.auto,
+        hidden: (database().prepare("SELECT COUNT(*) AS n FROM agent_messages WHERE thread_id = ? AND id < ? AND role != 'compact'").get(row.id, boundary.id) as { n: number }).n,
+        times: (database().prepare("SELECT COUNT(*) AS n FROM agent_messages WHERE thread_id = ? AND role = 'compact'").get(row.id) as { n: number }).n,
+      }
+    : null
+  return { model: row.model, contextLength: info?.contextLength ?? null, measured: row.context_tokens ?? null, estimate: parts.reduce((n, p) => n + p.tokens, 0), parts, compaction, autoCompact: settings.autoCompact ? settings.compactAt : null }
 }
 
 // --- memory -----------------------------------------------------------------------------------
@@ -2060,16 +2093,54 @@ function folderLines(t: Thread, terminal: boolean, instructions: { name: string;
   return lines.join('\n\n')
 }
 
-/** The thread as Ollama reads it. Older tool output is shortened; this turn's stays whole. */
+/**
+ * The thread split at its last compaction: the compaction (null when there is none) and the
+ * messages after it, which the model still gets as they are.
+ */
+function sinceCompaction(thread: string): { boundary: AgentMessage | null; rest: AgentMessage[] } {
+  const all = messagesOf(thread)
+  const at = all.map((m) => m.role).lastIndexOf('compact')
+  return { boundary: at >= 0 ? all[at] : null, rest: all.slice(at + 1) }
+}
+
+/**
+ * A compaction as the model reads it: the summary, as a note from the app in place of the messages
+ * before it, with the files attached back then (by name) and, when it compacted in the middle of a
+ * turn, the user's message it was working on, word for word.
+ */
+function summaryMessage(c: AgentMessage): ChatMessage {
+  const info = c.compact
+  return {
+    role: 'user',
+    content: [
+      `${APP_NOTE} The earlier part of this conversation was compacted to make room in your context window. This summary, written then, stands in for it: the messages themselves are no longer in front of you. Carry on from it without repeating work it says is done; if you need something it left out, ask the user or look again.`,
+      `<summary>
+${c.content}
+</summary>`,
+      info?.files?.length ? `Files the user attached earlier (their contents are not in front of you any more; ask for them again if you need them): ${info.files.join(', ')}` : '',
+      info?.request ? `The user's latest message, which you were working on when the conversation was compacted:
+<message>
+${info.request}
+</message>` : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n'),
+  }
+}
+
+/**
+ * The thread as Ollama reads it: after a compaction, its summary and the messages since. Older tool
+ * output is shortened; this turn's stays whole.
+ */
 function chatHistory(thread: string, vision = true): ChatMessage[] {
   const rows = database().prepare('SELECT id, attachments FROM agent_messages WHERE thread_id = ? AND attachments IS NOT NULL').all(thread) as { id: number; attachments: string }[]
   const files = new Map(rows.map((r) => [r.id, JSON.parse(r.attachments) as Attachment[]]))
-  const all = messagesOf(thread)
+  const { boundary, rest: all } = sinceCompaction(thread)
   const lastUser = all.map((m) => m.role).lastIndexOf('user')
   // A long turn keeps its last 16 tool results whole; older ones are shortened like earlier turns'.
   const toolIdx = all.flatMap((m, i) => (m.role === 'tool' ? [i] : []))
   const keepWhole = new Set(toolIdx.filter((i) => i > lastUser).slice(-16))
-  return all.map((m, i): ChatMessage => {
+  const history = all.map((m, i): ChatMessage => {
     if (m.role === 'tool') return { role: 'tool', tool_name: m.toolName ?? '', content: keepWhole.has(i) ? m.content : clip(m.content, 1500) }
     const current = i >= lastUser
     if (m.role === 'assistant')
@@ -2088,13 +2159,14 @@ function chatHistory(thread: string, vision = true): ChatMessage[] {
     // A reply that only thought (no text, no calls) is left out: some models' servers (Mistral's)
     // refuse an assistant message with neither, and the app's nudge after it says what happened.
     .filter((m) => m.role !== 'assistant' || m.content.trim() || m.tool_calls?.length)
+  return boundary ? [summaryMessage(boundary), ...history] : history
 }
 
 function addMessage(thread: string, m: Omit<AgentMessage, 'id' | 'createdAt' | 'attachments'>, files: Attachment[] = []): AgentMessage {
   const now = Date.now()
   const r = database()
-    .prepare('INSERT INTO agent_messages (thread_id, role, content, thinking, tool_calls, tool_name, attachments, checked, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(thread, m.role, m.content, m.thinking || null, m.toolCalls?.length ? JSON.stringify(m.toolCalls) : null, m.toolName ?? null, files.length ? JSON.stringify(files) : null, m.checked ?? null, now)
+    .prepare('INSERT INTO agent_messages (thread_id, role, content, thinking, tool_calls, tool_name, attachments, checked, compact, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(thread, m.role, m.content, m.thinking || null, m.toolCalls?.length ? JSON.stringify(m.toolCalls) : null, m.toolName ?? null, files.length ? JSON.stringify(files) : null, m.checked ?? null, m.compact ? JSON.stringify(m.compact) : null, now)
   database().prepare('UPDATE agent_threads SET updated_at = ? WHERE id = ?').run(now, thread)
   return { ...m, ...(m.toolCalls?.length ? {} : { toolCalls: undefined }), ...(files.length ? { attachments: files.map(({ text: _t, data: _d, ...info }) => info) } : {}), id: Number(r.lastInsertRowid), createdAt: now }
 }
@@ -2160,6 +2232,195 @@ async function chat(key: string, body: { messages: ChatMessage[] } & Record<stri
   }
   line(buffer)
   return { content, thinking, calls, used }
+}
+
+// --- compaction --------------------------------------------------------------------------------
+//
+// A long thread outgrows the model's context window. Compacting asks the thread's own model for a
+// structured summary of everything so far (the user's goals and requests, decisions, files and
+// paths, the current state, open todos, errors and their fixes, the next step) and saves it as a
+// message with role 'compact': the boundary. From then on the model gets its system prompt, the
+// summary and only the messages after it; the window still shows the whole thread, with the
+// boundary as a divider. A later compaction summarises the summary and what came after it.
+//
+// What lives outside the messages is not touched and keeps reaching the model as before, in the
+// system prompt: the todo list, plan mode and the permission mode, the work folder and its
+// AGENTS.md, memory (the user's and the project's) and skills. Files attached before the boundary
+// are named in the summary's note; their contents go.
+//
+// It happens when asked (/compact, with optional instructions about what to keep, sent as a
+// message: queued like any other while a turn runs), and by itself (Settings → Agents): before a
+// model call whose context would pass the threshold, and once after a call the model refused for
+// being too long, which is then tried again.
+
+const COMPACT_PROMPT = [
+  'You compact a conversation between a user and an AI agent (an assistant that researches and works on files with tools), so that the agent can carry on in a fresh context window. Your summary replaces every message you are given: from now on the agent sees only its instructions, your summary and what comes after it.',
+  'Write the summary in Markdown under these headings, in this order, leaving one out only when there is nothing at all for it:',
+  "## User goals and requests: what the user asked for and wants, every request that is still open, and the constraints and preferences they gave, in the user's own words where the wording matters.",
+  '## Decisions: what was decided or agreed, and why.',
+  '## Files and paths: the files, folders, addresses and other places that were looked at or changed, each with what was done to it (read, edited, created, moved, deleted).',
+  '## Current state: where the work stands: what is done, what works and what does not.',
+  '## Open todos: what is left to do.',
+  '## Errors and fixes: the errors met and how each was fixed, or that it was not.',
+  '## Next step: the very next thing to do, specific enough to carry on without asking.',
+  'Keep every fact the agent will need: names, numbers, paths, commands, code identifiers, exact error messages, links. Leave out greetings, chatter and tool output that no longer matters. Write in the language of the conversation. Answer with the summary only, nothing before or after it, and call no tools.',
+].join('\n')
+
+/** Threads compacting now, and whether it was asked for (with its instructions), for a restart that cuts one short. */
+const compacting = new Map<string, { manual: boolean; instructions?: string }>()
+
+/** A model's refusal of a request for being too long for its context window, as Ollama words it. */
+const TOO_LONG = /context (length|window|size)|too (long|many tokens)|maximum context|exceeds? (the )?(max|context|model)|input length|prompt is too long|num_ctx/i
+const tooLong = (e: unknown) => e instanceof HttpError && e.status === 502 && TOO_LONG.test(e.message)
+
+/** "/compact" or "/compact keep the API details": a compaction instead of a message (null when it is not one). */
+function compactAsk(ask: Ask): { instructions?: string } | null {
+  const m = /^\/compact(?:\s+([\s\S]*))?$/i.exec(ask.text.trim())
+  if (!m || ask.files.length) return null
+  const instructions = m[1]?.trim().slice(0, 4000)
+  return instructions ? { instructions } : {}
+}
+
+/** Rough tokens of a request: about 4 characters a token, a picture about 800. */
+function requestTokens(messages: ChatMessage[], tools: unknown[] = []): number {
+  let chars = tools.length ? JSON.stringify(tools).length : 0
+  let pictures = 0
+  for (const m of messages) {
+    chars += m.content.length + (m.thinking?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0)
+    pictures += m.images?.length ?? 0
+  }
+  return Math.ceil(chars / 4) + pictures * 800
+}
+
+/** Whether there is anything to compact: something the user or the agent said since the last boundary. */
+const compactable = (thread: string) => sinceCompaction(thread).rest.some((m) => m.role === 'user' || m.role === 'assistant')
+/** In the middle of a turn: whether there is more than the message it works on (a summary of only that would just lose it). */
+const worthCompacting = (thread: string) => {
+  const { rest } = sinceCompaction(thread)
+  return rest.length > 1 && compactable(thread)
+}
+
+/**
+ * The conversation since the last boundary as the summariser reads it: plain text, the earlier
+ * summary first. Tool results are shortened, and harder when it does not fit `budget` characters;
+ * past that, the middle goes (the start says what was asked, the end where it stands).
+ */
+function transcriptOf(boundary: AgentMessage | null, rest: AgentMessage[], files: Map<number, Attachment[]>, budget: number): string {
+  const render = (toolChars: number) => {
+    const out: string[] = []
+    if (boundary) out.push(`[Summary of the conversation before this, from an earlier compaction]\n${boundary.content}`)
+    for (const m of rest) {
+      if (m.role === 'user') {
+        const attached = (files.get(m.id) ?? []).map((a) =>
+          a.source === 'skill' ? `(started the skill ${a.name.replace(/ skill$/, '')})` : a.kind === 'text' ? `<attachment name="${a.name}" from="${a.source}">\n${clip(a.text ?? '', toolChars * 2)}\n</attachment>` : `(attached the picture ${a.name})`,
+        )
+        out.push([`User: ${m.content}`, ...attached].join('\n'))
+      } else if (m.role === 'assistant') {
+        const calls = (m.toolCalls ?? []).map((c) => `[called ${c.name} ${clip(JSON.stringify(c.arguments ?? {}), 600)}]`)
+        if (m.content.trim() || calls.length) out.push([`Agent: ${m.content.trim()}`, ...calls].join('\n'))
+      } else if (m.role === 'tool') out.push(`[${m.toolName ?? 'tool'} result] ${clip(m.content, toolChars)}`)
+    }
+    return out.join('\n\n')
+  }
+  let text = render(1500)
+  if (text.length > budget) text = render(300)
+  if (text.length > budget) {
+    const head = Math.floor(budget * 0.25)
+    const tail = budget - head
+    text = `${text.slice(0, head)}\n\n[… ${text.length - budget} characters from the middle of the conversation left out …]\n\n${text.slice(-tail)}`
+  }
+  return text
+}
+
+/**
+ * Compacts a thread: the thread's model summarises everything since the last boundary (the earlier
+ * summary included), and the summary is saved as the new boundary. `request` (in the middle of a
+ * turn) keeps the user's message being worked on word for word. Answers the compaction message.
+ */
+async function compactThread(user: User, key: string, thread: string, opts: { auto: boolean; reason?: Compaction['reason']; instructions?: string; request?: boolean }, signal: AbortSignal, send: (e: TurnEvent) => void): Promise<AgentMessage> {
+  const row = database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(thread) as ThreadRow | undefined
+  if (!row) throw new HttpError(404, 'No such thread')
+  const { boundary, rest } = sinceCompaction(thread)
+  if (!rest.some((m) => m.role === 'user' || m.role === 'assistant')) throw new HttpError(409, boundary ? 'Nothing new to compact since the last time' : 'There is nothing to compact yet')
+  const info = (await models().catch(() => [] as ModelInfo[])).find((m) => m.name === row.model)
+  const rows = database().prepare('SELECT id, attachments FROM agent_messages WHERE thread_id = ? AND attachments IS NOT NULL').all(thread) as { id: number; attachments: string }[]
+  const files = new Map(rows.map((r) => [r.id, JSON.parse(r.attachments) as Attachment[]]))
+  const before = requestTokens(chatHistory(thread, info?.vision ?? false))
+  compacting.set(thread, { manual: !opts.auto, ...(opts.instructions ? { instructions: opts.instructions } : {}) })
+  send({ type: 'compact', state: 'start', auto: opts.auto })
+  try {
+    // What fits: the window less room for the prompt and the summary, at about 3 characters a token.
+    let budget = Math.min(1_200_000, Math.max(20_000, ((info?.contextLength ?? 128_000) - 8_000) * 3))
+    const think = !info?.thinking ? undefined : row.model.startsWith('gpt-oss') ? 'low' : false
+    let summary = ''
+    for (let attempt = 0; ; attempt++) {
+      const ask = [
+        `The conversation to compact, oldest first:\n\n<conversation>\n${transcriptOf(boundary, rest, files, budget)}\n</conversation>`,
+        opts.instructions ? `The user asked for this compaction and said what to focus on (follow it when you choose what to keep):\n<instructions>\n${opts.instructions}\n</instructions>` : '',
+        'Write the summary now.',
+      ]
+        .filter(Boolean)
+        .join('\n\n')
+      try {
+        const reply = await chat(key, { model: row.model, messages: [{ role: 'system', content: COMPACT_PROMPT }, { role: 'user', content: ask }], options: { temperature: 0.2 }, ...(think === undefined ? {} : { think }) }, signal, () => {})
+        summary = reply.content.replace(/<think>[\s\S]*?<\/think>/g, '').trim()
+        break
+      } catch (e) {
+        // Too long even for this: once more with half as much of the conversation.
+        if (attempt || !tooLong(e) || signal.aborted) throw e
+        budget = Math.floor(budget / 2)
+      }
+    }
+    if (!summary) throw new HttpError(502, 'The model wrote no summary: try again, or switch the thread to another model')
+    const lastAsk = [...rest].reverse().find((m) => m.role === 'user')
+    const attached = rest.flatMap((m) => (files.get(m.id) ?? []).filter((a) => a.source !== 'skill').map((a) => `${a.name}${a.source ? ` (${a.source})` : ''}`))
+    const earlier = boundary?.compact?.files ?? []
+    const compact: Compaction = {
+      auto: opts.auto,
+      ...(opts.reason ? { reason: opts.reason } : {}),
+      ...(opts.instructions ? { instructions: opts.instructions } : {}),
+      messages: rest.length,
+      before,
+      after: 0,
+      model: row.model,
+      // In the middle of a turn: the message it works on, or the one an earlier compaction in it kept.
+      ...(opts.request && (lastAsk || boundary?.compact?.request) ? { request: lastAsk ? clip(lastAsk.content, 8000) : boundary!.compact!.request } : {}),
+      ...(attached.length || earlier.length ? { files: [...new Set([...earlier, ...attached])].slice(-50) } : {}),
+    }
+    compact.after = requestTokens([summaryMessage({ id: 0, role: 'compact', content: summary, compact, createdAt: 0 })])
+    const saved = addMessage(thread, { role: 'compact', content: summary, compact })
+    // The last count was of the context before: the next reply measures it again.
+    database().prepare('UPDATE agent_threads SET context_tokens = NULL WHERE id = ?').run(thread)
+    send({ type: 'message', message: saved })
+    send({ type: 'thread', thread: toThread(database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(thread) as ThreadRow) })
+    return saved
+  } catch (e) {
+    if (!signal.aborted) send({ type: 'compact', state: 'failed', auto: opts.auto, error: e instanceof HttpError ? e.message : 'Something went wrong' })
+    throw e
+  } finally {
+    compacting.delete(thread)
+  }
+}
+
+/** A /compact as a step in a chain of turns (sent, or next in the queue). */
+async function compactTurn(user: User, thread: string, instructions: string | undefined, ctl: AbortController, send: (e: TurnEvent) => void): Promise<TurnResult> {
+  const step = instructions ? { instructions } : {}
+  try {
+    const key = requireKey(user)
+    // Nothing new since the last boundary (a /compact queued twice): nothing to do.
+    if (compactable(thread)) await compactThread(user, key, thread, { auto: false, ...step }, ctl.signal, send)
+    send({ type: 'done' })
+    return { outcome: 'answered' }
+  } catch (e) {
+    if (!ctl.signal.aborted) {
+      if (!(e instanceof HttpError)) console.error('agents: compaction:', e)
+      const error = `Could not compact: ${e instanceof HttpError ? e.message : 'something went wrong'}`
+      send({ type: 'error', error })
+      return { outcome: 'failed', error, compact: step }
+    }
+    send({ type: 'done' })
+    return { outcome: 'stopped', compact: step }
+  }
 }
 
 /** One line of an answer for a push message, without Markdown's marks. */
@@ -2254,12 +2515,16 @@ export type TurnEvent =
   /** The thread's queue changed (a message added, edited, removed, or taken to send) */
   | { type: 'queue'; queue: QueuedInfo[] }
   | { type: 'error'; error: string }
+  /** A compaction began (then its message comes, with role 'compact'), or failed; `auto` when it was not asked for */
+  | { type: 'compact'; state: 'start' | 'failed'; auto: boolean; error?: string }
   | { type: 'done' }
   /** First on a follow stream: the thread as it is, with the reply being written so far (null when not running) */
   | { type: 'snapshot'; thread: Thread; messages: AgentMessage[]; pending: PendingApproval[]; live: { content: string; thinking: string } | null }
 
 /** How a turn ended: with an answer, with an error, or stopped. */
 type Outcome = 'answered' | 'failed' | 'stopped'
+/** A turn's end, and (for a /compact) its instructions, so that Retry compacts again. */
+type TurnResult = { outcome: Outcome; error?: string; compact?: { instructions?: string } }
 
 /**
  * Adds the user's message and answers it, streaming JSON lines (TurnEvent) to the response. When
@@ -2270,6 +2535,7 @@ export async function runTurn(res: ServerResponse, user: User, id: string, body:
   const row = ownThread(user, id)
   const ask = askFrom(user, body)
   if (running.has(row.id)) throw new HttpError(409, 'This thread is still answering')
+  if (compactAsk(ask) && !compactable(row.id)) throw new HttpError(409, sinceCompaction(row.id).boundary ? 'Nothing new to compact since the last time' : 'There is nothing to compact yet')
   checkTurnRoom(user)
   requireKey(user)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
@@ -2323,11 +2589,12 @@ async function chain(user: User, thread: string, first: Ask, res: ServerResponse
   let ask: Ask | null = first
   let outcome: Outcome = 'stopped'
   let error: string | undefined
+  let compact: TurnResult['compact']
   try {
     while (ask) {
       const ctl = new AbortController()
       running.set(thread, ctl)
-      ;({ outcome, error } = await turn(user, thread, ask, ctl, send, fromTerminal && ask === first))
+      ;({ outcome, error, compact } = await turn(user, thread, ask, ctl, send, fromTerminal && ask === first))
       ask = nextAsk(user, thread, outcome)
       // A turn stopped halfway through a reply leaves it unsaved: the next one starts clean.
       if (ask) partial.set(thread, { content: '', thinking: '' })
@@ -2335,7 +2602,7 @@ async function chain(user: User, thread: string, first: Ask, res: ServerResponse
   } finally {
     // How it ended, for Retry; on the way down the shutdown hook has said so already.
     if (!isShuttingDown()) {
-      const cut: Interruption | null = outcome === 'answered' ? null : { reason: outcome, ...(error ? { error } : {}), at: Date.now() }
+      const cut: Interruption | null = outcome === 'answered' ? null : { reason: outcome, ...(error ? { error } : {}), at: Date.now(), ...(compact ? { compact } : {}) }
       database().prepare('UPDATE agent_threads SET turn_at = NULL, interrupted = ? WHERE id = ?').run(cut ? JSON.stringify(cut) : null, thread)
     }
     sinks.delete(thread)
@@ -2357,13 +2624,31 @@ async function chain(user: User, thread: string, first: Ask, res: ServerResponse
 }
 
 /** One turn: the user's message saved, then rounds of the model and its tools until it answers. */
-async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, send: (e: TurnEvent) => void, fromTerminal: boolean): Promise<{ outcome: Outcome; error?: string }> {
+async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, send: (e: TurnEvent) => void, fromTerminal: boolean): Promise<TurnResult> {
+  // /compact is no message for the model: the thread is compacted instead.
+  const step = compactAsk(ask)
+  if (step) return compactTurn(user, thread, step.instructions, ctl, send)
   const { text, files, zone } = ask
   try {
     const row = ownThread(user, thread)
     const key = requireKey(user)
     const mode = modeOf(row.mode)
     const info = (await models().catch(() => [] as ModelInfo[])).find((m) => m.name === row.model)
+    // Compacting by itself (Settings → Agents): past this many tokens, when the window's size is known.
+    const settings = agentSettings(user)
+    const limit = settings.autoCompact && info?.contextLength ? Math.floor((info.contextLength * settings.compactAt) / 100) : null
+    const autoCompact = (reason: 'threshold' | 'overflow', request: boolean) => compactThread(user, key, row.id, { auto: true, reason, request }, ctl.signal, send)
+    // Before the message goes in: when it would take the context past the threshold, what came
+    // before is compacted first, so this turn starts fresh with the message and its files whole.
+    if (limit && compactable(row.id)) {
+      const incoming = Math.ceil((text.length + files.reduce((n, f) => n + (f.text?.length ?? 0), 0)) / 4) + files.filter((f) => f.kind === 'image').length * 800
+      const { estimate } = await contextOf(user, row.id, fromTerminal)
+      if (estimate + incoming > limit)
+        await autoCompact('threshold', false).catch((e) => {
+          if (ctl.signal.aborted) throw e
+          console.warn('agents: compacting before a message failed:', (e as Error).message)
+        })
+    }
     // /name for a skill: its instructions go along as an attachment the window shows.
     const skillFile = text.startsWith('/') ? await skillInvocation(user, skillPlaces(user, toThread(row).workdir), text) : null
     const asked = addMessage(row.id, { role: 'user', content: text }, skillFile ? [...files, skillFile] : files)
@@ -2411,6 +2696,9 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
     let nudged = false
     // How many web addresses Auto's rules cleared per site in this turn (webReadGate).
     const ruleBudget = new Map<string, number>()
+    // The round it last compacted in: not again in the very next one (the summary and this turn's
+    // own messages may still be over the threshold; then it goes on and the model says if it is too much).
+    let compactedAt = -2
     for (let round = 0; ; round++) {
       const now = current()
       const tools = toolsNow(now)
@@ -2437,8 +2725,39 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
           ? `You have answered, but your todo list still has ${open} open ${open === 1 ? 'item' : 'items'}. Call update_todos now: mark what is finished as done, or send an empty list to clear it if the job is over or the user has moved on. Do not repeat your answer.`
           : null
       const offer = last ? [] : wrapUp ? todoTool : tools
-      const messages = [{ role: 'system', content: system }, ...chatHistory(row.id, info?.vision ?? false), ...(note ? [{ role: 'user', content: `${APP_NOTE} ${note}` }] : [])]
-      const reply = await chat(key, { model: row.model, messages, ...(offer.length ? { tools: offer } : {}), ...(think === undefined ? {} : { think }) }, ctl.signal, (d) => send({ type: 'delta', ...(wrapUp ? { thinking: d.thinking } : d) }))
+      const build = () => [{ role: 'system', content: system }, ...chatHistory(row.id, info?.vision ?? false), ...(note ? [{ role: 'user', content: `${APP_NOTE} ${note}` }] : [])]
+      let messages = build()
+      // Past the threshold: compacted first, this turn's work so far included (the message it
+      // works on goes along word for word). A failed compaction only goes to the log.
+      if (limit && round - compactedAt > 1 && requestTokens(messages, offer) > limit && worthCompacting(row.id)) {
+        try {
+          await autoCompact('threshold', true)
+          compactedAt = round
+          messages = build()
+        } catch (e) {
+          if (ctl.signal.aborted) throw e
+          console.warn('agents: compacting failed:', (e as Error).message)
+        }
+      }
+      const callModel = () => chat(key, { model: row.model, messages, ...(offer.length ? { tools: offer } : {}), ...(think === undefined ? {} : { think }) }, ctl.signal, (d) => send({ type: 'delta', ...(wrapUp ? { thinking: d.thinking } : d) }))
+      let reply: Awaited<ReturnType<typeof chat>>
+      try {
+        reply = await callModel()
+      } catch (e) {
+        // The model said it is too long for its window: compacted, and asked once more. When even
+        // compacting fails, the model's own refusal is what the user sees.
+        if (!tooLong(e) || ctl.signal.aborted || !settings.autoCompact || !worthCompacting(row.id)) throw e
+        try {
+          await autoCompact('overflow', true)
+        } catch (failed) {
+          if (ctl.signal.aborted) throw failed
+          console.warn('agents: compacting after a refusal failed:', (failed as Error).message)
+          throw e
+        }
+        compactedAt = round
+        messages = build()
+        reply = await callModel()
+      }
       const calls = last ? [] : wrapUp ? reply.calls.filter((c) => c.name === 'update_todos') : reply.calls
       if (reply.used !== null) database().prepare('UPDATE agent_threads SET context_tokens = ? WHERE id = ?').run(reply.used, row.id)
       // A wrap-up round that only says something again adds nothing: it is not kept.
@@ -2640,7 +2959,10 @@ function shutdownTurns() {
       const p = partial.get(thread)
       if (p && (p.content.trim() || p.thinking.trim())) addMessage(thread, { role: 'assistant', content: p.content, thinking: p.thinking })
       else closeOpenCalls(thread, 'The server restarted before this finished')
-      database().prepare('UPDATE agent_threads SET turn_at = NULL, interrupted = ? WHERE id = ?').run(JSON.stringify({ reason: 'restart', at: now } satisfies Interruption), thread)
+      // A /compact cut short says so, for Retry to compact again (not to answer the last message anew).
+      const c = compacting.get(thread)
+      const compact = c?.manual ? { compact: c.instructions ? { instructions: c.instructions } : {} } : {}
+      database().prepare('UPDATE agent_threads SET turn_at = NULL, interrupted = ? WHERE id = ?').run(JSON.stringify({ reason: 'restart', at: now, ...compact } satisfies Interruption), thread)
     } catch (e) {
       console.error('[agents] could not mark a turn as interrupted:', (e as Error).message)
     }
@@ -2691,19 +3013,23 @@ export function messagePicture(user: User, id: string, messageId: string, index:
 
 /**
  * Retry: the last turn again. What it left (a partial or failed reply, its tool calls and results,
- * or a whole answer to regenerate) goes, and the same message, with the same files, is answered
- * again with the thread's model, mode and tools, streamed like a new message. Queued messages run
- * after it, as after any answer.
+ * a compaction in it or after it, or a whole answer to regenerate) goes, and the same message, with
+ * the same files, is answered again with the thread's model, mode and tools, streamed like a new
+ * message. Queued messages run after it, as after any answer. A /compact that failed or was cut
+ * short is compacted again instead.
  */
 export async function retryTurn(res: ServerResponse, user: User, id: string, body: { client?: { terminal?: unknown; timeZone?: unknown } }) {
   const row = ownThread(user, id)
   if (running.has(row.id)) throw new HttpError(409, 'This thread is still answering')
+  // A /compact that failed or was cut short: compacting again is what is retried, and nothing goes.
+  const cut = row.interrupted ? (JSON.parse(row.interrupted) as Interruption) : null
   const last = [...messagesOf(row.id)].reverse().find((m) => m.role === 'user')
-  if (!last) throw new HttpError(400, 'There is nothing to try again')
+  if (!last && !cut?.compact) throw new HttpError(400, 'There is nothing to try again')
   checkTurnRoom(user)
   requireKey(user)
-  const ask: Ask = { text: last.content, files: filesOf(row.id, last.id), zone: zoneFor(body.client?.timeZone) }
-  database().prepare('DELETE FROM agent_messages WHERE thread_id = ? AND id >= ?').run(row.id, last.id)
+  const zone = zoneFor(body.client?.timeZone)
+  const ask: Ask = cut?.compact ? { text: `/compact ${cut.compact.instructions ?? ''}`.trim(), files: [], zone } : { text: last!.content, files: filesOf(row.id, last!.id), zone }
+  if (!cut?.compact) database().prepare('DELETE FROM agent_messages WHERE thread_id = ? AND id >= ?').run(row.id, last!.id)
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
   const fromTerminal = body.client?.terminal === true
   if (fromTerminal) attachTerminal(row.id, res)
@@ -2714,7 +3040,8 @@ export async function retryTurn(res: ServerResponse, user: User, id: string, bod
  * Rewind to one of the user's messages: it and everything after it leave the thread, and it comes
  * back (text and files) for the message box. A running turn is stopped first. What tools did along
  * the way (memories, the plan, notes, files in the work folder, calendar events) is not undone, and
- * the queue stays.
+ * the queue stays. A compaction after it goes too (it summarised messages that are gone), so the
+ * model gets the messages before it as they are again, or the summary of an earlier compaction.
  */
 export async function rewind(user: User, id: string, body: { messageId?: unknown }): Promise<{ thread: Thread; removed: number; message: { text: string; attachments: Attachment[] } }> {
   const row = ownThread(user, id)

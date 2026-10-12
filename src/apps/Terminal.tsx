@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { useGoSuggestionState, useGolinksTemplate } from '../data/golinks'
 import { cvMode } from '../os/cvMode'
 import { browserMountPoint, useMounts } from '../data/mounts'
@@ -16,6 +16,12 @@ import { useTerminalPrefs } from '../terminal/prefs'
 import { SlTrain } from '../terminal/SlTrain'
 import { TerminalSettings } from '../terminal/TerminalSettings'
 import { HOME, prettyPath, resolvePath } from '../terminal/vfs'
+import { markupColor, parseMarkupLines, type MarkupNode } from '../terminal/markup'
+import type { Line } from '../terminal/vt/screen'
+import { VtSession, type TermPort } from '../terminal/vt/session'
+import { VtLines, VtView } from '../terminal/vt/VtView'
+import { encodeKey, encodePaste } from '../terminal/vt/keys'
+import { CmdError } from '../terminal/types'
 
 /** The query's letters in `name`, in order and case-insensitively, marked the way fzf does. */
 function Matched({ name, query }: { name: string; query: string }) {
@@ -38,45 +44,69 @@ function Matched({ name, query }: { name: string; query: string }) {
   )
 }
 
-type Entry = { id: number; kind: 'cmd'; cwd: string; text: string } | { id: number; kind: 'out'; text: string; alt?: boolean }
+/** `vt`: what an attached stream (SSH, vtdemo) left on the screen when it detached. */
+type Entry = { id: number; kind: 'cmd'; cwd: string; text: string } | { id: number; kind: 'out'; text: string; alt?: boolean } | { id: number; kind: 'vt'; lines: Line[] }
 
-const MARKUP = /\{(c|link|anim|fg):([^}]*)\}([\s\S]*?)\{\/\}/g
-const COLORS = new Set(['green', 'red', 'yellow', 'blue', 'cyan', 'magenta', 'muted', 'accent', 'bold', 'inverse', 'heat1', 'heat2', 'heat3', 'heat4'])
-
-/**
- * Renders the `{c:color}…{/}` / `{fg:#rrggbb}…{/}` / `{link:url}…{/}` markup produced by commands.
- * Output can contain text from the network (curl), so every argument is checked: only known
- * colours, hex colours, http(s) links and the one animation.
- */
-function Markup({ text, onAnimationEnd }: { text: string; onAnimationEnd?: () => void }) {
-  const parts: ReactNode[] = []
-  let last = 0
-  for (const m of text.matchAll(MARKUP)) {
-    if (m.index! > last) parts.push(text.slice(last, m.index))
-    const [, kind, arg, inner] = m
-    const valid = kind === 'c' ? COLORS.has(arg) : kind === 'fg' ? /^#[0-9a-f]{6}$/i.test(arg) : kind === 'link' ? /^https?:\/\//.test(arg) : arg === 'sl'
-    if (!valid) continue
-    parts.push(
-      kind === 'fg' ? (
-        <span key={m.index} style={{ color: arg }}>
+/** One node of the markup tree (src/terminal/markup.ts) as React. */
+function renderNode(node: MarkupNode, key: number, onAnimationEnd?: () => void): ReactNode {
+  if (typeof node === 'string') return node
+  const inner = node.children.map((c, i) => renderNode(c, i, onAnimationEnd))
+  switch (node.kind) {
+    case 'fg':
+      return (
+        <span key={key} style={{ color: markupColor(node.arg) }}>
           {inner}
         </span>
-      ) : kind === 'anim' ? (
-        <SlTrain key={m.index} onDone={onAnimationEnd} />
-      ) : kind === 'link' ? (
-        <a key={m.index} href={arg} target="_blank" rel="noopener noreferrer">
+      )
+    case 'bg':
+      return (
+        <span key={key} style={{ background: markupColor(node.arg) }}>
+          {inner}
+        </span>
+      )
+    case 'anim':
+      return <SlTrain key={key} onDone={onAnimationEnd} />
+    case 'link':
+      return (
+        <a key={key} href={node.arg} target="_blank" rel="noopener noreferrer">
           {inner}
         </a>
-      ) : (
-        <span key={m.index} className={`t-${arg}`}>
+      )
+    default:
+      return (
+        <span key={key} className={`t-${node.arg}`}>
           {inner}
         </span>
-      ),
-    )
-    last = m.index! + m[0].length
+      )
   }
-  if (last < text.length) parts.push(text.slice(last))
-  return <>{parts}</>
+}
+
+/** One line of markup; it only renders again when its text (and the tags open around it) changed. */
+const MarkupLineView = memo(
+  function MarkupLineView({ nodes, newline, onAnimationEnd }: { k: string; nodes: MarkupNode[]; newline: boolean; onAnimationEnd?: () => void }) {
+    return (
+      <>
+        {nodes.map((n, i) => renderNode(n, i, onAnimationEnd))}
+        {newline && '\n'}
+      </>
+    )
+  },
+  (a, b) => a.k === b.k && a.newline === b.newline,
+)
+
+/**
+ * Renders the markup produced by commands (src/terminal/markup.ts): colours, looks, links and
+ * the one animation, nested, line by line.
+ */
+function Markup({ text, onAnimationEnd }: { text: string; onAnimationEnd?: () => void }) {
+  const lines = useMemo(() => parseMarkupLines(text), [text])
+  return (
+    <>
+      {lines.map((l, i) => (
+        <MarkupLineView key={i} k={l.key} nodes={l.nodes} newline={i < lines.length - 1} onAnimationEnd={onAnimationEnd} />
+      ))}
+    </>
+  )
 }
 
 function Prompt({ cwd }: { cwd: string }) {
@@ -106,7 +136,17 @@ const settingsOpeners = new Map<number, () => void>()
 export const terminalMenu = (w: WinState): MenuItem[] => [{ label: 'Terminal settings…', onSelect: () => settingsOpeners.get(w.pid)?.() }]
 
 /** What the key handling reads from a key press: a real one, or one from the extra keys row. */
-type KeyLike = Pick<KeyboardEvent<HTMLInputElement>, 'key' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey' | 'preventDefault' | 'stopPropagation'>
+type KeyLike = Pick<KeyboardEvent<HTMLInputElement>, 'key' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey' | 'preventDefault' | 'stopPropagation'> & { code?: string }
+
+/** The window title a program set (OSC 0/2) while a stream is attached; else the usual (apps.tsx). */
+export const terminalTitle = (w: WinState) => (w.props.vtTitle ? String(w.props.vtTitle) : undefined)
+
+/** A theme colour (set by src/os/theme.ts) for programs that ask for the terminal's colours. */
+const themeColor = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+
+// An attached stream draws with a tighter line height than msh's output (src/styles.css), so
+// box drawing joins up; rows are counted with it.
+const VT_LINE_HEIGHT = 1.25
 
 // Phones have no Tab key and typing is slow, so touch devices get one-tap commands.
 const QUICK = ['help', 'projects', 'recent 8', 'cat cv.md', 'ping boltwarden.org', 'sl', 'fastfetch', 'fortune | cowsay']
@@ -234,6 +274,99 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
   const scrollRef = useRef<HTMLDivElement>(null)
   const windowsRef = useRef(wm.windows)
   windowsRef.current = wm.windows
+
+  // An attached byte stream (src/terminal/vt/session.ts): while there is one, the window shows
+  // its screen and every key goes to it.
+  const [session, setSession] = useState<VtSession | null>(null)
+  const sessionRef = useRef<VtSession | null>(null)
+  const [vtAlt, setVtAlt] = useState(false)
+  const cellRef = useRef<{ w: number; h: number } | null>(null)
+  // Whether the view follows the output (it stops when scrolled up to read the scrollback).
+  const stuckRef = useRef(true)
+  const propsRef = useRef(win.props)
+  propsRef.current = win.props
+  const setVtTitle = (title: string | null) => {
+    if (embedded || onLogout) return
+    if ((propsRef.current.vtTitle ?? '') === (title ?? '')) return
+    wm.setProps(win.pid, { vtTitle: title ?? '' })
+  }
+  const setVtTitleRef = useRef(setVtTitle)
+  setVtTitleRef.current = setVtTitle
+
+  /** Columns and rows for the attached screen, from the measured cell or the font. */
+  function vtSize() {
+    const el = scrollRef.current
+    if (!el) return { cols: 80, rows: 24 }
+    const style = getComputedStyle(el)
+    let cell = cellRef.current
+    if (!cell) {
+      const ctx2d = document.createElement('canvas').getContext('2d')!
+      ctx2d.font = `${style.fontSize} ${style.fontFamily}`
+      cell = { w: ctx2d.measureText('MMMMMMMMMM').width / 10 || 8, h: parseFloat(style.fontSize) * VT_LINE_HEIGHT || 16 }
+    }
+    const w = el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+    const h = el.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)
+    return { cols: Math.max(20, Math.floor(w / cell.w)), rows: Math.max(4, Math.floor(h / cell.h)) }
+  }
+
+  /** ctx.attachStream: hands this window to a byte stream until it detaches. */
+  function attachStream(): TermPort {
+    if (sessionRef.current) throw new CmdError('a stream is already attached to this terminal')
+    cellRef.current = null
+    const s = new VtSession(vtSize(), {
+      onEnd: (lines) => {
+        sessionRef.current = null
+        setSession(null)
+        setVtAlt(false)
+        setVtTitleRef.current(null)
+        if (lines.length) setEntries((e) => [...e, { id: nextId++, kind: 'vt', lines }])
+        if (!matchMedia('(pointer: coarse)').matches) requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }))
+      },
+      onTitle: (t) => setVtTitleRef.current(t || null),
+      colors: () => ({ fg: themeColor('--fg'), bg: themeColor('--bg') }),
+    })
+    sessionRef.current = s
+    stuckRef.current = true
+    setSession(s)
+    setValue('')
+    return s
+  }
+
+  // The window closing ends the stream.
+  useEffect(() => () => sessionRef.current?.detach(), [])
+
+  // A title left over from a stream before a reload goes.
+  useEffect(() => {
+    if (win.props.vtTitle && !sessionRef.current) setVtTitle(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // The attached screen follows the window's size and the text size.
+  useEffect(() => {
+    if (!session) return
+    const fit = () => session.resize(vtSize())
+    const ro = new ResizeObserver(fit)
+    if (scrollRef.current) ro.observe(scrollRef.current)
+    fit()
+    return () => ro.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, fontPx])
+  const onCellSize = useCallback(
+    (w: number, h: number) => {
+      const was = cellRef.current
+      if (was && Math.abs(was.w - w) < 0.01 && Math.abs(was.h - h) < 0.01) return
+      cellRef.current = { w, h }
+      sessionRef.current?.resize(vtSize())
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+  /** After the attached screen drew: keep the newest output in view, unless scrolled up. */
+  const onVtDrawn = useCallback((alt: boolean) => {
+    setVtAlt(alt)
+    const el = scrollRef.current
+    if (el && (stuckRef.current || alt)) el.scrollTop = el.scrollHeight
+  }, [])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
@@ -378,6 +511,11 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
   // Run each request once: React's dev-mode double effects (and re-renders) must not repeat it.
   const handledProps = useRef<WinState['props'] | null>(null)
   useEffect(() => {
+    // A program's title changes the props too, but is not a new request.
+    const prev = handledProps.current
+    const keys = (p: WinState['props']) => Object.keys(p).filter((k) => k !== 'vtTitle')
+    const titleOnly = !!prev && prev.vtTitle !== win.props.vtTitle && keys(prev).length === keys(win.props).length && keys(prev).every((k) => prev[k] === win.props[k])
+    if (titleOnly) handledProps.current = win.props
     if (!win.props.run || handledProps.current === win.props) return
     handledProps.current = win.props
     submit(win.props.run)
@@ -427,6 +565,7 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
       }
     }
     abortRef.current = new AbortController()
+    const signal = abortRef.current.signal
     setRunning(true)
     // The size follows the window while the command runs, for programs that redraw (agents).
     const size = termSize()
@@ -472,7 +611,15 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
         shiftKeys.current = !!h && !!opts?.shift
       },
       signal: abortRef.current.signal,
+      attachStream: () => {
+        const port = attachStream()
+        // Stop command (the menu) ends it; Ctrl+C goes to the program.
+        signal.addEventListener('abort', () => port.detach(), { once: true })
+        return port
+      },
     })
+    // A stream outlives nothing: the command that attached it is done.
+    sessionRef.current?.detach()
     watcher.disconnect()
     sizeCheck.current = null
     resizeHandler.current = null
@@ -537,6 +684,22 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
       // Copying a selection and moving around the line still work; nothing else does.
       if ((e.ctrlKey || e.metaKey) && ['c', 'a'].includes(e.key.toLowerCase())) return
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Shift', 'Control', 'Meta', 'Alt'].includes(e.key)) e.preventDefault()
+      return
+    }
+    // An attached stream gets every key as an xterm sends it, except copying a selection (Ctrl+C
+    // with text selected, Ctrl+Shift+C) and pasting (Ctrl+V, Ctrl+Shift+V), which the browser does.
+    const s = sessionRef.current
+    if (s) {
+      const k = e.key.toLowerCase()
+      if ((e.ctrlKey || e.metaKey) && (k === 'v' || (k === 'c' && (e.shiftKey || window.getSelection()?.toString())))) return
+      // Keys that only start composing (IME, dead keys, phone keyboards) arrive as text instead.
+      if (['Process', 'Unidentified', 'Dead'].includes(e.key)) return
+      const seq = encodeKey(e, s.vt.modes)
+      if (seq === null) return
+      e.preventDefault()
+      e.stopPropagation()
+      stuckRef.current = true
+      s.send(seq)
       return
     }
     // Raw programs (nano) get Ctrl+X as ^X and Alt+U as M-u, ahead of the shell and the desktop.
@@ -730,6 +893,8 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
       return
     }
     if (!text) return
+    const s = sessionRef.current
+    if (s) return s.send(encodePaste(text, s.vt.modes.bracketedPaste))
     if (running && keyHandler.current && rawKeys.current) {
       keyHandler.current('Paste', text)
       return
@@ -771,7 +936,7 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
       { label: 'Paste', shortcut: 'Ctrl V', disabled: readOnly || animating, onSelect: () => void paste() },
       { label: 'Select all', onSelect: selectAll },
       { separator: true },
-      { label: 'Clear', shortcut: 'Ctrl L', disabled: alt || readOnly, onSelect: () => setEntries([]) },
+      { label: 'Clear', shortcut: 'Ctrl L', disabled: alt || readOnly || !!session, onSelect: () => setEntries([]) },
       ...(running ? [{ label: 'Stop command', shortcut: 'Ctrl C', disabled: readOnly, onSelect: () => abortRef.current?.abort() }] : []),
       { separator: true },
       { label: 'Read-only', checked: readOnly, onSelect: () => setReadOnly((r) => !r) },
@@ -794,8 +959,13 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
 
   const screen = (
     <div
-      className={`terminal ${onLogout ? 'is-console' : ''} ${alt ? 'is-alt' : ''} ${takeover ? 'is-takeover' : ''} ${readOnly ? 'is-readonly' : ''} ${showKeys ? 'has-keys' : ''}`}
+      className={`terminal ${onLogout ? 'is-console' : ''} ${alt || (session && vtAlt) ? 'is-alt' : ''} ${takeover ? 'is-takeover' : ''} ${session ? 'is-vt' : ''} ${readOnly ? 'is-readonly' : ''} ${showKeys ? 'has-keys' : ''}`}
       ref={scrollRef}
+      onScroll={(e) => {
+        if (!sessionRef.current) return
+        const el = e.currentTarget
+        stuckRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 8
+      }}
       style={fontPx === null ? undefined : { fontSize: fontPx }}
       onContextMenu={onMenu}
       onMouseUp={(e) => {
@@ -809,6 +979,8 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
               <Prompt cwd={e.cwd} />
               {e.text}
             </div>
+          ) : e.kind === 'vt' ? (
+            <VtLines lines={e.lines} />
           ) : (
             <pre className={`t-out ${e.alt ? 't-alt' : ''}`}>
               <Markup text={e.text} onAnimationEnd={() => setAnimating(false)} />
@@ -816,7 +988,8 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
           )}
         </Fragment>
       ))}
-      {running && !drawing && (
+      {session && <VtView session={session} focused={caret.focused && !readOnly} onCellSize={onCellSize} onDrawn={onVtDrawn} />}
+      {running && !drawing && !session && (
         <div className="t-line t-muted">
           <span className="spinner" /> working…
         </div>
@@ -844,6 +1017,11 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
                 }
               }
               // Text that arrives without key presses (a phone's keyboard, IME, dictation) goes to a raw program as typed.
+              if (sessionRef.current) {
+                if (e.target.value) sessionRef.current.send(e.target.value.replace(/\n/g, '\r'))
+                setValue('')
+                return
+              }
               if (running && keyHandler.current && rawKeys.current) {
                 if (e.target.value) keyHandler.current('Text', e.target.value)
                 setValue('')
@@ -855,14 +1033,26 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
             readOnly={readOnly}
             onPaste={(e) => {
               if (readOnly) return e.preventDefault()
+              const s = sessionRef.current
+              if (s) {
+                e.preventDefault()
+                s.send(encodePaste(e.clipboardData.getData('text/plain'), s.vt.modes.bracketedPaste))
+                return
+              }
               if (!running || !keyHandler.current || !rawKeys.current) return
               e.preventDefault()
               keyHandler.current('Paste', e.clipboardData.getData('text/plain'))
             }}
             onKeyUp={syncCaret}
             onSelect={syncCaret}
-            onFocus={syncCaret}
-            onBlur={syncCaret}
+            onFocus={() => {
+              syncCaret()
+              if (sessionRef.current?.vt.modes.focus) sessionRef.current.send('\x1b[I')
+            }}
+            onBlur={() => {
+              syncCaret()
+              if (sessionRef.current?.vt.modes.focus) sessionRef.current.send('\x1b[O')
+            }}
             onScroll={syncCaret}
             spellCheck={false}
             autoCapitalize="off"

@@ -1,0 +1,469 @@
+/* The Tasks app (src/apps/tasks/Tasks.tsx). Its sheets borrow the Calendar's (.ca-sheet, .ca-field). */
+.tk {
+  position: relative;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  background: var(--panel-solid);
+  color: var(--text);
+  font-size: 12px;
+  outline: 0;
+}
+.tk-empty {
+  display: grid;
+  place-items: center;
+}
+
+/* Sidebar: search, the smart lists as tiles, then the lists by account. */
+.tk-side {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 12px;
+  width: 240px;
+  padding: 10px;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+}
+.tk.is-narrow .tk-side {
+  flex: 1;
+  width: auto;
+  border-right: 0;
+}
+.tk-search {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--line-strong);
+  outline: 0;
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+}
+.tk-search:focus {
+  border-color: var(--accent);
+}
+.tk-smart {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.tk-tile {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 2px 6px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--fg);
+  text-align: left;
+}
+.tk-tile:hover {
+  border-color: var(--line-strong);
+}
+.tk-tile.is-on {
+  border-color: var(--c);
+  background: color-mix(in srgb, var(--c) 16%, var(--panel-2));
+}
+.tk-tile-glyph {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--c);
+  color: var(--panel-solid);
+  font-size: 12px;
+  font-weight: 800;
+}
+.tk-tile strong {
+  justify-self: end;
+  color: var(--fg-bright);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+.tk-tile > span:last-child {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-weight: 600;
+}
+.tk-lists h4 {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.tk-list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 6px;
+  color: var(--fg-bright);
+  text-align: left;
+}
+.tk-list:hover {
+  background: var(--panel-2);
+}
+.tk-list.is-on {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.tk-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.tk-list-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tk-cal-mark {
+  color: var(--muted);
+  font-size: 10px;
+  opacity: 0.6;
+}
+.tk-count {
+  min-width: 1.5em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.tk-side-foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+/* The tasks. */
+.tk-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.tk-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 6px;
+}
+.tk-head h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 22px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tk-head .btn.is-on {
+  border-color: var(--accent);
+}
+.tk-total {
+  color: var(--muted);
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+.tk-back {
+  flex: none;
+  padding: 2px 4px;
+  color: var(--accent);
+  font-size: 13px;
+}
+.tk-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 8px 4px;
+  padding: 4px 6px 4px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.tk-add input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--fg-bright);
+  font: inherit;
+  font-size: 13px;
+}
+.tk-chips {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+.tk-chip {
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--fg-bright);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.tk-chip-x {
+  padding: 0 3px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.tk-chip-x:hover {
+  color: var(--red);
+}
+.tk-rows {
+  flex: 1;
+  min-height: 0;
+  padding: 0 8px 16px;
+  overflow: auto;
+}
+.tk-heading {
+  margin: 12px 0 2px;
+  padding: 0 10px 4px;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-bright);
+  font-size: 13px;
+}
+.tk-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  user-select: none;
+}
+.tk-row:hover {
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+}
+.tk-row.is-selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.tk-row.is-done .tk-title {
+  color: var(--muted);
+}
+.tk-row.is-dragging {
+  z-index: 3;
+  background: var(--panel-2);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.tk-row.is-drop-before::before,
+.tk-row.is-drop-after::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: var(--accent);
+}
+.tk-row.is-drop-before::before {
+  top: -1px;
+}
+.tk-row.is-drop-after::after {
+  bottom: -1px;
+}
+.tk-grip {
+  flex: none;
+  width: 12px;
+  padding-top: 1px;
+  color: var(--muted);
+  cursor: grab;
+  opacity: 0;
+  touch-action: none;
+}
+.tk-row:hover .tk-grip,
+.tk-row.is-dragging .tk-grip {
+  opacity: 1;
+}
+.tk-grip.is-blank {
+  cursor: default;
+}
+.tk-check {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 0;
+  padding: 0;
+  border: 2px solid var(--c);
+  border-radius: 50%;
+  background: transparent;
+  opacity: 0.85;
+}
+.tk-check:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--c) 22%, transparent);
+}
+.tk-check.is-on {
+  background: radial-gradient(circle, var(--c) 0 45%, transparent 50%);
+  opacity: 1;
+}
+.tk-check:disabled {
+  opacity: 0.4;
+}
+.tk-check.is-ghost {
+  border-style: dashed;
+  opacity: 0.5;
+}
+.tk-body {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+.tk-title {
+  color: var(--fg-bright);
+  font-size: 13px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+.tk-bangs {
+  color: var(--orange);
+  font-weight: 800;
+}
+.tk-notes {
+  overflow: hidden;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tk-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.tk-meta .is-overdue {
+  color: var(--red);
+  font-weight: 600;
+}
+.tk-meta a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.tk-meta a:hover {
+  text-decoration: underline;
+}
+.tk-in {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.tk-in .tk-dot {
+  width: 7px;
+  height: 7px;
+}
+.tk-none {
+  margin: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* Sheets */
+.tk-sheet:focus {
+  outline: 0;
+}
+.tk-sheet-title {
+  flex: 1;
+  color: var(--fg-bright);
+  font-size: 15px;
+}
+.tk-seg {
+  display: inline-flex;
+  justify-self: start;
+  border: 1px solid var(--line-strong);
+}
+.tk-seg button {
+  padding: 4px 9px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.tk-seg button + button {
+  border-left: 1px solid var(--line);
+}
+.tk-seg button.is-on {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.tk-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tk-colors button {
+  width: 20px;
+  height: 20px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+}
+.tk-colors button.is-on {
+  border-color: var(--fg-bright);
+  box-shadow: 0 0 0 2px var(--panel-solid) inset;
+}
+
+/* Touch: everything a finger has to hit is bigger, and the drag handle always shows. */
+@media (pointer: coarse) {
+  .tk-check {
+    width: 22px;
+    height: 22px;
+  }
+  .tk-grip {
+    width: 18px;
+    font-size: 16px;
+    opacity: 0.7;
+  }
+  .tk-row {
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  .tk-list {
+    padding: 8px 6px;
+  }
+}
+
+/* Tasks in the Calendar app (src/apps/calendar): a ring to tick before the title. */
+.ca-task-check {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  margin-right: 4px;
+  padding: 0;
+  border: 1.5px solid var(--c);
+  border-radius: 50%;
+  background: transparent;
+  vertical-align: -1px;
+}
+.ca-task-check:hover {
+  background: color-mix(in srgb, var(--c) 30%, transparent);
+}
+.ca-task-check.is-on {
+  background: radial-gradient(circle, var(--c) 0 45%, transparent 50%);
+}
+.ca-chip.is-task::before {
+  display: none;
+}
+.ca-chip.is-task.is-done .ca-chip-title,
+.ca-bar.is-task.is-done,
+.ca-ev.is-task.is-done .ca-ev-title {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+.ca-bar.is-task,
+.ca-ev.is-task {
+  border-left-style: dotted;
+}
+.ca-ev.is-task {
+  flex-direction: row;
+  align-items: center;
+  gap: 0;
+}

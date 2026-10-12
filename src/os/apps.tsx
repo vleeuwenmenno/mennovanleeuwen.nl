@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { CalendarApp } from '../apps/calendar/Calendar'
+import { ContactsApp } from '../apps/contacts/Contacts'
 import { Contact } from '../apps/Contact'
 import { Cv } from '../apps/Cv'
 import { gameLinkItems, Games } from '../apps/games/Games'
@@ -13,7 +14,7 @@ import { Projects } from '../apps/Projects'
 import { Settings } from '../apps/Settings'
 import { WidgetHost } from '../widgets/registry'
 import { Recents } from '../apps/Recents'
-import { Terminal, terminalMenu } from '../apps/Terminal'
+import { Terminal, terminalMenu, terminalTitle } from '../apps/Terminal'
 import { Files } from '../apps/Files'
 import { Viewer } from '../apps/Viewer'
 import { Preview, previewTitle } from '../apps/Preview'
@@ -25,6 +26,7 @@ import { Archive, archiveTitle } from '../apps/Archive'
 import { Zed } from '../apps/Zed'
 import { Agents } from '../apps/Agents'
 import { Photos } from '../apps/photos/Photos'
+import { TasksApp } from '../apps/tasks/Tasks'
 import type { MenuItem } from './ContextMenu'
 import { HANDLE } from './identity'
 import type { AppId, useWM, WinState } from './wm'
@@ -36,8 +38,8 @@ export type AppMeta = {
   blurb: string
   size: [number, number]
   chrome?: 'note'
-  /** The window's own title, when it shows one file (its name) */
-  titleOf?: (w: WinState) => string
+  /** The window's own title, when it shows one file (its name), or a program set one (undefined: the usual) */
+  titleOf?: (w: WinState) => string | undefined
   /** A size for a window opened with these props, when it differs from `size` (a game's window) */
   sizeOf?: (props: WinState['props']) => [number, number] | undefined
   render: (w: WinState) => ReactNode
@@ -66,7 +68,7 @@ const gamesMenu = (w: WinState, wm: ReturnType<typeof useWM>): MenuItem[] => {
 }
 
 export const APP_META: Record<AppId, AppMeta> = {
-  terminal: { title: `${HANDLE}@mvlos: ~`, dock: 'Terminal', blurb: 'A shell that actually works', size: [760, 500], render: (w) => <Terminal win={w} />, menu: terminalMenu },
+  terminal: { title: `${HANDLE}@mvlos: ~`, dock: 'Terminal', blurb: 'A shell that actually works', size: [760, 500], titleOf: terminalTitle, render: (w) => <Terminal win={w} />, menu: terminalMenu },
   files: { title: 'Files', dock: 'Files', blurb: 'Browse the filesystem', size: [940, 600], render: (w) => <Files win={w} />, menu: settingsMenu('Files', 'files') },
   zed: { title: 'Zed', dock: 'Zed', blurb: 'Edit Markdown and text files', size: [960, 620], render: (w) => <Zed win={w} /> },
   preview: { title: 'Preview', dock: 'Preview', blurb: 'Pictures: zoom, rotate, slideshow', size: [900, 620], titleOf: previewTitle, render: (w) => <Preview win={w} />, menu: settingsMenu('Preview', 'preview') },
@@ -87,6 +89,8 @@ export const APP_META: Record<AppId, AppMeta> = {
   contact: { title: 'New message', dock: 'Contact', blurb: 'Get in touch', size: [560, 500], render: () => <Contact /> },
   games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, Pool, Gladiator, Empires At War, Breakout', size: [720, 640], titleOf: (w) => gameInfo(w.props.game)?.name ?? 'Games', sizeOf: (p) => gameInfo(p.game)?.size, render: (w) => <Games win={w} />, menu: gamesMenu },
   calendar: { title: 'Calendar', dock: 'Calendar', blurb: 'Your Google and CalDAV calendars: plan, move and invite', size: [1000, 660], render: (w) => <CalendarApp win={w} />, menu: settingsMenu('Calendar', 'calendar') },
+  contacts: { title: 'Contacts', dock: 'Contacts', blurb: 'Your people: on this site, Fastmail, iCloud and other CardDAV', size: [920, 620], render: (w) => <ContactsApp win={w} />, menu: settingsMenu('Contacts', 'contacts') },
+  tasks: { title: 'Tasks', dock: 'Tasks', blurb: 'Reminders and to-dos: your CalDAV lists, or lists on this site', size: [880, 600], render: (w) => <TasksApp win={w} /> },
   agents: { title: 'Agents', dock: 'Agents', blurb: 'Research assistant: quick answers or deep research, with memory', size: [920, 640], render: (w) => <Agents win={w} /> },
   notebook: { title: 'Notebook', dock: 'Notebook', blurb: 'Your notes, in Markdown, on any device', size: [860, 560], render: (w) => <Notebook win={w} /> },
   // A desktop widget (props.kind, props.id): a sticky note, the weather... See src/widgets.

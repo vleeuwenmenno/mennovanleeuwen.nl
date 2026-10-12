@@ -19,6 +19,9 @@ import { connectGoogle, hasCalendar, signIn, useAccount } from '../../os/account
 import { openContextMenu, type MenuItem } from '../../os/ContextMenu'
 import { openLink } from '../../data/links'
 import { useWM, type WinState } from '../../os/wm'
+import { completeTask, deleteTask, openTask, setTaskPrefs, updateTask, useTaskPrefs, useTasks } from '../../data/tasks'
+import { isTaskEvent, taskEvents } from './tasks'
+import '../tasks/tasks.css'
 import { draftFromEvent, draftFromRange, EventEditor, type Choose, type Draft } from './EventEditor'
 import { MonthView } from './MonthView'
 import { TimeGrid, type Change } from './TimeGrid'
@@ -29,7 +32,9 @@ import { dayLoad, MiniMonth, YearView } from './YearView'
 // week, month or year. Events can be made (click or drag on an empty spot), moved and stretched
 // (drag them), changed, moved to another calendar and deleted, with people invited by email;
 // Google and the CalDAV server keep them, so they show on your phone too. The calendars ticked in
-// the sidebar are the same switches as in Settings → Calendar.
+// the sidebar are the same switches as in Settings → Calendar. Tasks with a due date show too
+// (src/apps/calendar/tasks.ts), per list as switched on under Tasks in the sidebar: tick them
+// there, drag them to another day or time, open them in the Tasks app.
 //
 // props.date ("2026-10-09") and props.view open it on a day (from the clock's month).
 
@@ -138,9 +143,14 @@ export function CalendarApp({ win }: { win: WinState }) {
     }
   }, [])
 
+  // Tasks due in the range, from the lists switched on for the calendar.
+  const { lists: taskLists, tasks } = useTasks()
+  const taskPrefs = useTaskPrefs()
+  const dueTasks = useMemo(() => taskEvents(tasks, taskLists ?? [], taskPrefs.hiddenInCalendar, from, to), [tasks, taskLists, taskPrefs.hiddenInCalendar, from, to])
+
   const events = useMemo(
-    () => (data?.events ?? []).filter((e) => optimistic[e.id] !== 'deleted').map((e) => (optimistic[e.id] ? { ...e, ...(optimistic[e.id] as Change) } : e)),
-    [data, optimistic],
+    () => [...(data?.events ?? []), ...dueTasks].filter((e) => optimistic[e.id] !== 'deleted').map((e) => (optimistic[e.id] ? { ...e, ...(optimistic[e.id] as Change) } : e)),
+    [data, dueTasks, optimistic],
   )
   const writable = (calendars ?? []).filter((c) => c.writable)
 
@@ -156,7 +166,7 @@ export function CalendarApp({ win }: { win: WinState }) {
     if (writable.some((c) => c.id === lastCalendar)) return lastCalendar!
     return (writable.find((c) => c.primary) ?? writable[0])?.id ?? ''
   }
-  const open = (e: CalendarEvent) => setEditing({ event: e, draft: draftFromEvent(e) })
+  const open = (e: CalendarEvent) => (isTaskEvent(e) ? openTask(e.task.id) : setEditing({ event: e, draft: draftFromEvent(e) }))
   const create = (start: Date, end: Date, allDay: boolean) => setEditing({ event: null, draft: draftFromRange(start, end, allDay, defaultCalendar()) })
   const newEvent = () => {
     // The next whole hour today, or 09:00 on the day in view.
@@ -167,6 +177,11 @@ export function CalendarApp({ win }: { win: WinState }) {
 
   /** A drag ended: move or stretch the event there (asking first for a repeating one). */
   const change = async (e: CalendarEvent, c: Change) => {
+    // A task dragged to another day or time: that is its new due date.
+    if (isTaskEvent(e)) {
+      setError(null)
+      return updateTask(e.task, { due: c.start }).catch((err: Error) => setError(err.message))
+    }
     let all = false
     if (e.recurring) {
       const a = await choose('This event repeats. Move only this one, or all of them?', 'Move')
@@ -184,6 +199,7 @@ export function CalendarApp({ win }: { win: WinState }) {
   }
 
   const remove = async (e: CalendarEvent) => {
+    if (isTaskEvent(e)) return deleteTask(e.task).catch((err: Error) => setError(err.message))
     let all = false
     if (e.recurring) {
       const a = await choose('This event repeats. Delete only this one, or all of them?', 'Delete')
@@ -213,9 +229,28 @@ export function CalendarApp({ win }: { win: WinState }) {
     setView('day')
   }
 
+  /** A task's ring ticked in a view. */
+  const toggleTask = (e: CalendarEvent) => {
+    if (!isTaskEvent(e)) return
+    setError(null)
+    completeTask(e.task, !e.task.completed).catch((err: Error) => setError(err.message))
+  }
+
   /** Right-click: on an event, what can be done with it; on an empty spot, a new event there. */
   const menu = (ev: MouseEvent, e: CalendarEvent | null, at: Date, allDay: boolean) => {
-    const items: MenuItem[] = e
+    const writableTask = e && isTaskEvent(e) && !!taskLists?.find((l) => l.id === e.task.list)?.writable
+    const items: MenuItem[] = e && isTaskEvent(e)
+      ? [
+          { label: 'Open in Tasks', onSelect: () => openTask(e.task.id) },
+          ...(writableTask
+            ? [
+                { label: e.task.completed ? 'Mark as not completed' : 'Mark as completed', onSelect: () => toggleTask(e) },
+                { separator: true as const },
+                { label: 'Delete task', danger: true, onSelect: () => void remove(e) },
+              ]
+            : []),
+        ]
+      : e
       ? [
           { label: e.editable ? 'Open' : 'Show details', onSelect: () => open(e) },
           ...(e.meet ? [{ label: 'Join the call', onSelect: () => openLink(e.meet!) }] : []),
@@ -348,6 +383,22 @@ export function CalendarApp({ win }: { win: WinState }) {
                   ))}
               </section>
             ))}
+            {!!taskLists?.length && (
+              <section className="ca-cals">
+                <h4>Tasks</h4>
+                {taskLists.map((l) => (
+                  <label key={l.id} className="ca-cal" title={`${l.name} · ${l.source}`}>
+                    <input
+                      type="checkbox"
+                      checked={!taskPrefs.hiddenInCalendar.includes(l.id)}
+                      onChange={(e) => setTaskPrefs({ hiddenInCalendar: e.target.checked ? taskPrefs.hiddenInCalendar.filter((x) => x !== l.id) : [...taskPrefs.hiddenInCalendar, l.id] })}
+                      style={{ accentColor: l.color }}
+                    />
+                    <span className="ca-cal-name">{l.name}</span>
+                  </label>
+                ))}
+              </section>
+            )}
             {account.google && !account.google.canWrite && (
               <p className="ca-hint">
                 Google is connected read-only.{' '}
@@ -375,9 +426,9 @@ export function CalendarApp({ win }: { win: WinState }) {
               }}
             />
           ) : shownView === 'month' ? (
-            <MonthView days={days} month={anchor.getMonth()} events={events} now={now} onOpen={open} onCreate={create} onChange={change} onDay={showDay} onMenu={menu} />
+            <MonthView days={days} month={anchor.getMonth()} events={events} now={now} onOpen={open} onCreate={create} onChange={change} onDay={showDay} onMenu={menu} onToggle={toggleTask} />
           ) : (
-            <TimeGrid days={days} events={events} now={now} onOpen={open} onCreate={create} onChange={change} onDay={showDay} onMenu={menu} />
+            <TimeGrid days={days} events={events} now={now} onOpen={open} onCreate={create} onChange={change} onDay={showDay} onMenu={menu} onToggle={toggleTask} />
           )}
         </div>
       </div>
