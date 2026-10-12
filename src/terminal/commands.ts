@@ -765,6 +765,15 @@ export const commands: Record<string, Command> = {
       const slug = target.replace(/\/$/, '').split('/').pop() ?? ''
       const abs = resolvePath(ctx.cwd, target)
       const node = lookup(abs)
+      // A launcher (.desktop, src/data/launchers.ts) opens what it points at, wherever the file is.
+      if (node?.type === 'file' && /\.desktop$/i.test(abs)) {
+        const { launch, readLauncherFile } = await import('../data/launchers')
+        const l = await readLauncherFile(abs)
+        if (l) {
+          launch(l, { open: (app, props) => ctx.openApp(app, props as Record<string, string>) })
+          return l.app ? undefined : `Opening ${link(l.url)}`
+        }
+      }
       // A file in Seafile opens the way Files would open it (PDF, Preview, Zed…).
       if (node?.type === 'file' && node.sf) {
         await openSeafile({ open: (app, props) => ctx.openApp(app, props as Record<string, string>), openNew: (app, props) => ctx.openNewApp(app, props as Record<string, string>) }, node.sf)

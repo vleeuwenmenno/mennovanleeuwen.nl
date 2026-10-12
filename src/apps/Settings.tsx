@@ -7,13 +7,13 @@ import { clearHits, useRecentHits } from '../data/spotlightRecent'
 import { favouriteKey, moveFavourite, removeFavourite, useFavourites } from '../data/spotlightFavourites'
 import { ANSWERS_KEEP, CATEGORIES, RECENT_COUNTS, setInclude, setSpotlightPrefs, setStart, START_SECTIONS, useSpotlightPrefs, type Fallback } from '../data/spotlightPrefs'
 import { clearQuick } from '../data/agents'
-import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
+import { addLauncher, cleanUrl, faviconOf, launcherImage, launchersAreFiles, moveLauncher, posixPath, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { setSwing, useSwingPrefs } from '../os/swing'
 import { ask } from '../os/Dialogs'
 import { UsersSettings } from './UsersSettings'
 import { openAlert, useAlerts } from '../os/alerts'
-import { formatSize } from '../terminal/vfs'
+import { formatSize, prettyPath } from '../terminal/vfs'
 import { browserFilesState, browserTree, useBrowserFiles, wipeBrowserFiles } from '../data/browserfs'
 import { Select } from '../os/Select'
 import { useStatus as usePhotoStatus } from '../data/photos'
@@ -626,13 +626,14 @@ function LauncherRow({ l, first, last }: { l: Launcher; first: boolean; last: bo
       <li className="set-row is-editing">
         <input className="set-emoji" value={draft.glyph ?? ''} onChange={(e) => setDraft({ ...draft, glyph: e.target.value.slice(0, 4) })} placeholder="🔗" aria-label="Emoji" />
         <input value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} aria-label="Label" />
-        <input value={draft.url} onChange={(e) => setDraft({ ...draft, url: e.target.value })} aria-label="URL" className={error ? 'is-bad' : ''} spellCheck={false} />
+        {!l.app && <input value={draft.url} onChange={(e) => setDraft({ ...draft, url: e.target.value })} aria-label="URL" className={error ? 'is-bad' : ''} spellCheck={false} />}
         <button
           className="btn btn-small btn-primary"
           onClick={() => {
-            const url = cleanUrl(draft.url)
-            if (!url || !draft.label.trim()) return setError(true)
-            updateLauncher(l.id, { label: draft.label.trim().slice(0, 40), url, glyph: draft.glyph?.trim() || undefined })
+            // A launcher that opens an app has no address to change.
+            const url = l.app ? '' : cleanUrl(draft.url)
+            if ((!url && !l.app) || !draft.label.trim()) return setError(true)
+            updateLauncher(l.id, { label: draft.label.trim().slice(0, 40), url: url ?? '', glyph: draft.glyph?.trim() || undefined })
             setEditing(false)
           }}
         >
@@ -645,12 +646,17 @@ function LauncherRow({ l, first, last }: { l: Launcher; first: boolean; last: bo
     )
   return (
     <li className="set-row">
-      {l.glyph ? <span className="set-glyph">{l.glyph}</span> : <img className="set-fav" src={faviconOf(l.url)} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />}
+      {l.glyph || !launcherImage(l) ? <span className="set-glyph">{l.glyph ?? '▦'}</span> : <img className="set-fav" src={launcherImage(l)} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />}
       <span className="set-row-text">
         <strong>{l.label}</strong>
-        <a className="muted" href={l.url} target="_blank" rel="noopener noreferrer">
-          {l.url.replace(/^https?:\/\//, '').replace(/\/$/, '')}
-        </a>
+        {l.app ? (
+          <span className="muted">Opens {l.app}</span>
+        ) : (
+          <a className="muted" href={l.url} target="_blank" rel="noopener noreferrer">
+            {l.url.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+          </a>
+        )}
+        {l.file && <span className="muted set-file">{prettyPath(posixPath(l.file) ?? l.file)}</span>}
       </span>
       <button className="btn btn-small btn-ghost" disabled={first} onClick={() => moveLauncher(l.id, -1)} aria-label="Move up">
         ↑
@@ -712,7 +718,7 @@ function DockSettings() {
   const icon = (id: DockId) => {
     if (!isLauncherId(id)) return <AppIcon app={id} size={22} tone />
     const l = launcherOf(id)
-    return l?.glyph ? <span className="set-glyph">{l.glyph}</span> : <img className="set-fav" src={l ? faviconOf(l.url) : undefined} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
+    return l?.glyph ? <span className="set-glyph">{l.glyph}</span> : <img className="set-fav" src={l ? launcherImage(l) : undefined} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
   }
   const move = (i: number, by: number) => {
     const next = dock.slice()
@@ -763,6 +769,7 @@ function DockSettings() {
 
 function Launchers() {
   const launchers = useLaunchers()
+  const files = launchersAreFiles()
   const [form, setForm] = useState({ label: '', url: '', glyph: '' })
   const [error, setError] = useState<string | null>(null)
   const submit = (e: FormEvent) => {
@@ -792,6 +799,13 @@ function Launchers() {
       </form>
       {error && <p className="t-red">{error}</p>}
       <p className="muted set-help">Launchers sit on the desktop and show up in All apps and Spotlight. Without an emoji they use the site's own icon.</p>
+      {files ? (
+        <p className="muted set-help">
+          Each one is a <code>.desktop</code> file in your home: those on the desktop in <code>~/Desktop</code>, the others in <code>~/.local/share/applications</code>. Drag them into folders like any file; the terminal shows the files themselves (<code>ls ~/Desktop</code>, <code>cat</code>, <code>open</code>).
+        </p>
+      ) : (
+        <p className="muted set-help">They are kept in this browser. Signed in, they become <code>.desktop</code> files in your home.</p>
+      )}
     </>
   )
 }

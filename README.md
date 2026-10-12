@@ -61,6 +61,43 @@ window back, switching to that window's workspace; clicking again minimizes it, 
 windows brings the next one forward. Right-click (or long-press) an app for its windows by title,
 with their workspace. Its item goes when its last window closes. Notes and widgets never get one.
 
+## Drag and drop
+
+Things can be dragged wherever they make sense ([`src/os/dnd.ts`](src/os/dnd.ts)): desktop icons
+(several at once, as a pile with a count), rows in Files, apps and launchers in All apps, and rows
+in Archive. They land on desktop folders and the desktop itself, Files windows (a folder, the
+folder on show, a place in the sidebar, the Trash), the dock, and the windows of apps that show
+files: Preview, Player, Omamp, PDF, the Viewer, Archive and Zed show what is dropped on them, and
+a sticky note takes a launcher as a link. Within one library (or within this browser) files move;
+between Seafile's libraries and this browser they copy, and Ctrl or Alt copies, Shift moves.
+What a drop would do shows on the cursor (+ copy, → move, ↗ link or pin, ⏎ open, 🗑 delete), and
+where it would land is outlined. Holding a drag over a folder for a moment opens it, in Files and
+on the desktop, so it can go on further in. Names already there ask first: replace (Seafile keeps
+the old one in its trash), keep both (the newcomer gets a number, `notes 2.txt`), or skip
+([`src/data/fileDrop.ts`](src/data/fileDrop.ts), [`src/data/transferPlan.ts`](src/data/transferPlan.ts)).
+Ctrl+Z on the desktop or in Files puts back what the last drag moved. Files from the computer
+upload where they are dropped, and in Chrome a file dragged out of Files to the computer is
+saved there. Launchers and apps dropped into a folder become `.desktop` files in it.
+
+For an app that wants drops (attachments, say), the contract is one hook on an element:
+
+```ts
+const ref = useRef<HTMLDivElement>(null)
+useDropTarget(ref, {
+  accept: (drag) => (drag.os || drag.items.some((i) => i.kind === 'file') ? 'copy' : null),
+  drop: async (drag) => attach(drag.os ? await drag.files() : drag.items),
+})
+```
+
+`drag.items` are the MvL OS items (`file` with its path, Seafile's `seafile://…` or a filesystem
+path, and a `launcher` when it is a `.desktop` file; `launcher`, `app`, `entries` of an archive,
+`icon`), `drag.os` says files from the computer, whose `File`s `drag.files()` gives at the drop,
+and `drag.keys` the modifier keys. `accept` answers what a drop would do (`'move'`, `'copy'`,
+`'link'`, `'open'`, `'trash'`) or null; elements inside the target can carry `data-drop="…"`,
+and the target is then asked about that spot first (the folder under the pointer, say). The
+innermost target that takes a drag gets it, its highlight is `[data-drop-over]` in CSS, and the
+same target works for the browser's own drags, MvL OS's pointer drags and a finger.
+
 ## Editing content
 
 Everything the site says lives in [`src/data/profile.ts`](src/data/profile.ts): headlines on the
@@ -374,6 +411,51 @@ Launchers are a URL, a name and an optional emoji (otherwise the site's own favi
 in localStorage ([`src/os/synced.ts`](src/os/synced.ts)), with one window layout for phones and one
 for bigger screens.
 
+Signed in, launchers are files: freedesktop `.desktop` files in your home, as on Linux
+([`src/data/launchers.ts`](src/data/launchers.ts), [`src/data/launcherFiles.ts`](src/data/launcherFiles.ts)).
+Those on the desktop are in `~/Desktop`; the ones for the dock, All apps and Spotlight only are in
+the hidden `~/.local/share/applications`. Home is Seafile's when it is mounted on `~`, else the
+files kept in this browser. A launcher file looks like this:
+
+```ini
+[Desktop Entry]
+Type=Link
+Name=GitHub
+URL=https://github.com/
+Icon=🐙
+X-MvL-Id=1a2b3c4d
+```
+
+`Icon=` is an emoji or a picture's address (without one, the site's favicon), and `X-MvL-Id=`
+keeps the dock and Spotlight's favourites pointing at it when the file moves. One that opens an
+MvL OS app instead has `Type=Application`, `X-MvL-App=calendar` and, optionally,
+`X-MvL-Props=path=~/Work;`. The desktop and Files show a launcher as itself (its name and icon,
+opened with a double-click), never as `GitHub.desktop`; *Show hidden files* in Files shows the
+file's own name, and its menu has *Edit the file in Zed*. Renaming one changes its `Name=` (and
+drops its translations, `Name[nl]=`, so the new name shows in every language); the file keeps its
+name. The terminal shows them as the files they are: `ls ~/Desktop` lists `GitHub.desktop`, `cat`
+prints it and `open GitHub.desktop` opens what it points at. The format is read without a library
+([`src/data/desktopEntry.ts`](src/data/desktopEntry.ts)) and strictly: a file that is not a desktop
+entry, a program to run (`Exec=` alone) or an address that is not http(s) is shown as a plain file.
+Writing changes only the keys it sets, so comments, other groups and keys MvL OS does not know stay.
+
+Settings → Launchers lists them all, to add, edit, reorder and remove, and moves a file between
+the two folders with its *Desktop* switch. Spotlight, the dock and All apps read the same two
+folders; a launcher dragged into another folder stays a working launcher there but leaves the
+dock.
+
+Launchers are kept in a list synced like notes: in this browser for visitors (who have no home,
+so for them that is all they are), and through the server when signed in, so every device has
+them. Without Seafile, home is kept in this browser alone, so there the two folders' `.desktop`
+files *are* that list ([`src/data/launcherStore.ts`](src/data/launcherStore.ts), through
+[`src/data/browserfs.ts`](src/data/browserfs.ts)): writing, renaming, moving or deleting one there
+(from the terminal, Files, the desktop or Settings) changes the list, and the other devices show
+the same files. One moved out to another folder becomes a plain file of this browser and leaves
+the list; a `.desktop` file moved in joins it. With Seafile as home they are real files in Seafile,
+which every device sees anyway: the list is turned into those files once (the ids done are kept in
+`~/.local/share/applications/.mvlos-migrated`, so a launcher deleted since does not come back),
+and nothing is taken out of it.
+
 Signing in with GitHub (system menu → *Sign in with GitHub*) syncs all of that through the server
 and turns Spotlight into a code search over GitHub and any linked Gitea/Forgejo instances
 ([`server/search.ts`](server/search.ts)):
@@ -394,7 +476,9 @@ dock icon to remove it, and right-click (or Shift+Enter) an app, launcher or rep
 Spotlight or All apps to pin it. An open app that isn't pinned offers *Keep in dock* on its own
 dock item, or drag it in among the pinned ones to pin it at that spot. Settings → Dock lists what
 was taken off, to add it back, and restores the default dock. Everyone can still drag dock icons
-to reorder them.
+to reorder them. Dropping a launcher or an app (from All apps) on the dock pins it there, a file
+dropped on an app's icon opens in that app if it opens that kind of file, and anything dropped on
+Trash goes in the trash.
 
 Anyone with a GitHub account can sign up for a desktop of their own, up to `MAX_USERS` accounts
 (default 100). Over the cap, or with sign-up closed, a new account gets a "We're full" (or
@@ -1101,6 +1185,11 @@ The MvL OS menu (top left) has *Hide notes and widgets* to put them all away and
 itself (per browser; adding a note brings them back). On a phone, where the icons otherwise sit
 behind the notes, the desktop's icons then show as a grid of tiles: tap one to open it, long-press
 for its menu.
+
+Dragging works with a finger too: hold a desktop icon (in the phone's grid) or a row in Files still
+for a moment and it lifts with a buzz; move the finger then and it drags, to
+the same places a mouse drags to. Holding on without moving opens its menu as before, and moving
+after that closes the menu and drags.
 
 ## Games
 

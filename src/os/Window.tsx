@@ -6,6 +6,8 @@ import { getDockMode, snapReserve } from './dockPrefs'
 import { setSnapPreview } from './snapPreview'
 import { useSwing } from './swing'
 import { WindowMenuContext } from './windowMenu'
+import { useDropTarget } from './dnd'
+import { filesFor, SHOWS_FILE } from './appDrops'
 import { drawnHeight, fitNote, setDrawnHeight, SINGLE_INSTANCE, snapRect, stackOrder, useWM, workspaceOf, WORKSPACES, type Geometry, type SnapZone, type WinState } from './wm'
 
 const TOP_BAR = 28
@@ -156,6 +158,22 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
   const canSnap = chrome === 'default' && window.innerWidth >= 720
   const sectionRef = useRef<HTMLElement>(null)
   const swing = useSwing(sectionRef, 'notes')
+  // Apps that show a file (Preview, Player, Zed…) show the one dropped on their window, unless
+  // a target of the app's own inside takes it first.
+  const bodyRef = useRef<HTMLDivElement>(null)
+  useDropTarget(
+    bodyRef,
+    {
+      accept: (d) => (filesFor(win.app, d.items).length ? 'open' : null),
+      drop: (d) => {
+        const file = filesFor(win.app, d.items)[0]
+        if (!file) return
+        wm.setProps(win.pid, { path: file.path, t: String(Date.now()) })
+        wm.focus(win.pid)
+      },
+    },
+    SHOWS_FILE.has(win.app),
+  )
 
   // A note's text can run on below its box: how tall it really shows, so it is never fitted
   // half off the bottom of the screen (fitNote in wm.tsx).
@@ -543,7 +561,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
           </button>
         </div>
       )}
-      <div className="window-body">
+      <div className="window-body" ref={bodyRef}>
         <WindowMenuContext.Provider value={(e) => onMenu(e)}>{children}</WindowMenuContext.Provider>
       </div>
       {chrome === 'default' && !win.maximized && (

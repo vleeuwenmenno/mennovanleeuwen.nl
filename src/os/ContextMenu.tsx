@@ -191,6 +191,17 @@ export function cancelTouchMenu() {
   }
 }
 
+/**
+ * A drag took the finger over (src/os/dnd.ts lifts an item after a hold, and moving it then
+ * drags): forget the press, even when its menu already opened, so the lift goes to the drag.
+ */
+export function releaseTouchPress() {
+  if (!press) return
+  if (press.timer) clearTimeout(press.timer)
+  press = null
+  hold(false)
+}
+
 /** The press opened a menu (or an app took it): the lift must not also tap what is underneath. */
 function claim(p: Press) {
   p.fired = true

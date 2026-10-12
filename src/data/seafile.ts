@@ -216,6 +216,12 @@ function fetchDir(path: string) {
     .finally(emitDirs)
 }
 
+/** Called whenever a folder listing arrives or is dropped from the cache. */
+export const subscribeDirs = (l: () => void) => {
+  dirListeners.add(l)
+  return () => void dirListeners.delete(l)
+}
+
 /** Lists again: the folder itself, or everything under a library or path prefix. */
 export function refreshDirs(prefix: string) {
   for (const key of [...dirCache.keys()]) if (key === prefix || key.startsWith(prefix.endsWith('/') ? prefix : prefix + '/')) dirCache.delete(key)

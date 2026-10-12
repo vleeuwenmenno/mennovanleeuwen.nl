@@ -1,5 +1,6 @@
 import { useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { openContextMenu, type MenuItem } from '../os/ContextMenu'
+import { useDropTarget, type DropTarget } from '../os/dnd'
 import { arrange, moveItem, moveSection, removeBookmark, resetSidebar, setHidden, useSidebar } from '../data/filesSidebar'
 
 // Files' sidebar: sections of places, in the order you dragged them into, minus what you hid.
@@ -13,24 +14,26 @@ const DRAG_TYPE = 'application/x-mvlos-sidebar'
 type Drag = { section: string; id?: string }
 
 /**
- * acceptFiles / dropFiles: files dragged from Files or the desktop, onto a place they can go
- * (acceptFiles says whether, and tells the browser); a folder they cannot go to ignores them.
+ * dropTarget: what files (and launchers) dragged onto a place do (src/os/dnd.ts): each place is a
+ * spot with its folder as data-drop, and so is anything in the footer that has one (the Trash).
+ * A place they cannot go to says no and nothing happens.
  */
 export function FilesSidebar({
   sections,
   active,
   onOpen,
   footer,
-  acceptFiles,
-  dropFiles,
+  dropTarget,
 }: {
   sections: SideSection[]
   active: string
   onOpen: (target: string) => void
   footer?: ReactNode
-  acceptFiles?: (e: DragEvent, target: string) => boolean
-  dropFiles?: (e: DragEvent, target: string) => void
+  dropTarget?: DropTarget
 }) {
+  const nav = useRef<HTMLElement>(null)
+  // Only places take drops: the sidebar's empty space is not a folder.
+  useDropTarget(nav, { accept: (d, spot) => (spot && dropTarget ? dropTarget.accept(d, spot) : null), drop: (d, spot, op, at) => spot && dropTarget?.drop(d, spot, op, at) }, !!dropTarget)
   const state = useSidebar()
   const [customizing, setCustomizing] = useState(false)
   const [drag, setDrag] = useState<Drag | null>(null)
@@ -69,26 +72,16 @@ export function FilesSidebar({
     return list[list.indexOf(id) + 1] ?? null
   }
 
-  const [filesOn, setFilesOn] = useState<string | null>(null)
-  const onItemOver = (e: DragEvent, section: SideSection, id: string, place: string) => {
+  const onItemOver = (e: DragEvent, section: SideSection, id: string) => {
     const drag = dragging.current
-    if (!drag && acceptFiles) {
-      if (acceptFiles(e, place)) setFilesOn(place)
-      else if (filesOn === place) setFilesOn(null)
-      return
-    }
     if (!drag?.id || drag.section !== section.id) return
     e.preventDefault()
     e.stopPropagation()
     const before = target(e, itemOrder(section), id)
     if (over?.section !== section.id || over.id !== before) setOver({ section: section.id, id: before })
   }
-  const onItemDrop = (e: DragEvent, section: SideSection, id: string, place: string) => {
+  const onItemDrop = (e: DragEvent, section: SideSection, id: string) => {
     const drag = dragging.current
-    if (!drag && dropFiles) {
-      setFilesOn(null)
-      return dropFiles(e, place)
-    }
     if (!drag?.id || drag.section !== section.id) return
     e.preventDefault()
     e.stopPropagation()
@@ -126,7 +119,7 @@ export function FilesSidebar({
   const marker = (section: string, id: string | null) => over && drag && over.section === section && over.id === id
 
   return (
-    <nav className={`fm-side ${customizing ? 'is-customizing' : ''}`} onDragEnd={end} onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setOver(null)}>
+    <nav ref={nav} className={`fm-side ${customizing ? 'is-customizing' : ''}`} onDragEnd={end} onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setOver(null)}>
       {customizing && (
         <div className="fm-side-custom">
           <span>Drag to reorder, switch to show</span>
@@ -154,10 +147,10 @@ export function FilesSidebar({
               const item = items.get(id)!
               const off = hidden.has(`${sid}:${id}`)
               return (
-                <div key={id} className="fm-side-slot" onDragEnter={(e) => onItemOver(e, section, id, item.target)} onDragOver={(e) => onItemOver(e, section, id, item.target)} onDragLeave={() => filesOn === item.target && setFilesOn(null)} onDrop={(e) => onItemDrop(e, section, id, item.target)} data-sf-drop={item.target.startsWith('seafile://') && item.target !== 'seafile://' ? item.target : undefined}>
+                <div key={id} className="fm-side-slot" onDragEnter={(e) => onItemOver(e, section, id)} onDragOver={(e) => onItemOver(e, section, id)} onDrop={(e) => onItemDrop(e, section, id)} data-drop={/^(https?|recent|trash):/.test(item.target) ? undefined : item.target}>
                   {marker(sid, id) && <div className="fm-side-drop" />}
                   <button
-                    className={`fm-side-item ${active === item.target ? 'is-active' : ''} ${filesOn === item.target ? 'is-drop' : ''} ${off || sectionHidden ? 'is-off' : ''} ${drag?.id === id && drag.section === sid ? 'is-dragging' : ''}`}
+                    className={`fm-side-item ${active === item.target ? 'is-active' : ''} ${off || sectionHidden ? 'is-off' : ''} ${drag?.id === id && drag.section === sid ? 'is-dragging' : ''}`}
                     draggable
                     onDragStart={(e) => start(e, { section: sid, id })}
                     onClick={() => !customizing && onOpen(item.target)}

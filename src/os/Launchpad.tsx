@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { openSticky } from '../apps/Sticky'
 import { GAME_CATALOG } from '../apps/games/catalog'
-import { faviconOf, launch as launchLink, useLaunchers } from '../data/launchers'
+import { launch as launchLink, launcherImage, useLaunchers, type Launcher } from '../data/launchers'
+import { startNativeDrag, type DragItem } from './dnd'
 import { createNote } from '../data/notes'
 import { addWidget, widgetDefs } from '../widgets/registry'
 import { contributions, profile, projects } from '../data/profile'
@@ -36,7 +37,15 @@ type Entry = {
   swatch?: string
   /** Right-click pins it to the dock or takes it off (signed in). */
   dockId?: DockId
+  /** Dragged out onto the dock, the desktop or a folder (an app, a launcher). */
+  drag?: DragItem
 }
+
+/** A launcher as something to drag: its file when it has one. */
+const launcherDrag = (l: Launcher): DragItem =>
+  l.file
+    ? { kind: 'file', path: l.file, name: l.file.split('/').pop()!, dir: false, launcher: { id: l.id, label: l.label, url: l.url, glyph: l.glyph, image: l.image, app: l.app } }
+    : { kind: 'launcher', id: l.id, label: l.label, url: l.url, glyph: l.glyph, image: l.image, app: l.app, props: l.props }
 
 const APP_ORDER: AppId[] = ['terminal', 'files', 'zed', 'preview', 'player', 'amp', 'photos', 'newdoc', 'newsheet', 'newslides', 'projects', 'recents', 'cv', 'games', 'mcserver', 'notebook', 'calendar', 'mail', 'tasks', 'contacts', 'agents', 'contact', 'notes', 'keys', 'settings', 'trash']
 
@@ -117,6 +126,8 @@ export function Launchpad() {
   const input = useRef<HTMLInputElement>(null)
   const list = useRef<HTMLDivElement>(null)
   const close = () => setOverlay(null)
+  // Dragging an app or a launcher out: the panel steps aside (it stays, so the drag ends properly).
+  const [out, setOut] = useState(false)
   const launchers = useLaunchers()
   const dock = useDock()
   const canPin = useCanCustomizeDock()
@@ -136,6 +147,7 @@ export function Launchpad() {
             run: () => wm.open(app),
             runNew: SINGLE_INSTANCE.has(app) ? undefined : () => wm.openNew(app),
             dockId: isDockableApp(app) ? app : undefined,
+            drag: { kind: 'app' as const, app, label: APP_META[app].dock },
           })),
       },
       // Your own links (Settings → Launchers), when there are any.
@@ -147,9 +159,10 @@ export function Launchpad() {
               children: () =>
                 launchers.map((l) => ({
                   label: l.label,
-                  icon: l.glyph ? <span className="om-glyph">{l.glyph}</span> : <img className="al-fav" src={faviconOf(l.url)} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />,
-                  run: () => launchLink(l),
+                  icon: l.glyph || !launcherImage(l) ? <span className="om-glyph">{l.glyph ?? '▦'}</span> : <img className="al-fav" src={launcherImage(l)} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />,
+                  run: () => launchLink(l, wm),
                   dockId: launcherDockId(l.id),
+                  drag: launcherDrag(l),
                 })),
             },
           ]
@@ -251,7 +264,7 @@ export function Launchpad() {
 
   const title = path.length ? `${path[path.length - 1].label}…` : 'Go…'
   return (
-    <div className="om-backdrop" onPointerDown={(e) => e.target === e.currentTarget && close()}>
+    <div className={`om-backdrop ${out ? 'is-dragging-out' : ''}`} onPointerDown={(e) => e.target === e.currentTarget && close()}>
       <div
         className="om-panel"
         role="dialog"
@@ -281,6 +294,13 @@ export function Launchpad() {
               role="option"
               aria-selected={i === active}
               className={`om-row ${i === active ? 'is-active' : ''}`}
+              draggable={!!e.drag}
+              onDragStart={(ev) => {
+                if (!e.drag) return ev.preventDefault()
+                startNativeDrag(ev, [e.drag], 'launchpad')
+                setTimeout(() => setOut(true), 0)
+              }}
+              onDragEnd={close}
               onPointerMove={() => setActive(i)}
               onClick={(ev) => choose(e, ev.ctrlKey || ev.metaKey)}
               onContextMenu={(ev) => {

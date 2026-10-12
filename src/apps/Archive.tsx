@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { besideArchive, cancelExtract, dismissExtract, DRAG_ZIP, extract, setZipDrag, useExtractJobs, type Clash } from '../data/extract'
+import { besideArchive, cancelExtract, dismissExtract, extract, useExtractJobs, type Clash } from '../data/extract'
+import { startNativeDrag } from '../os/dnd'
 import { posixOf } from '../data/mounts'
 import { downloadFile, inBrowser, readBytes } from '../data/fileOps'
 import { useBrowserFiles } from '../data/browserfs'
@@ -399,19 +400,9 @@ export function Archive({ win }: { win: WinState }) {
       setAnchor(r.path)
       setCursor(r.path)
     }
-    e.dataTransfer.setData(DRAG_ZIP, JSON.stringify(paths))
-    e.dataTransfer.setData('text/plain', paths.join('\n'))
-    e.dataTransfer.effectAllowed = 'copy'
-    if (paths.length > 1) {
-      // One label for many rows, rather than the one row under the pointer.
-      const ghost = document.createElement('div')
-      ghost.className = 'ar-ghost'
-      ghost.textContent = `${paths.length} items`
-      document.body.append(ghost)
-      e.dataTransfer.setDragImage(ghost, -10, -10)
-      setTimeout(() => ghost.remove())
-    }
-    setZipDrag({ zip: path, entries: paths, base: base() })
+    // One item for all the rows (src/os/dnd.ts): whoever takes it unpacks them where it lands.
+    const label = paths.length === 1 ? paths[0].replace(/\/$/, '').split('/').pop()! : `${paths.length} items from ${nameOf(path)}`
+    startNativeDrag(e, [{ kind: 'entries', zip: path, entries: paths, base: base(), label }], 'archive', { text: paths.join('\n') })
   }
 
   // Rubber-band selection (Ctrl adds to what is selected). It starts on a row as well as on empty
@@ -590,7 +581,7 @@ export function Archive({ win }: { win: WinState }) {
                 title={r.path}
               >
                 <span className="ar-name">
-                  <span className="ar-label" draggable onDragStart={(e) => dragStart(e, r)} onDragEnd={() => setZipDrag(null)}>
+                  <span className="ar-label" draggable onDragStart={(e) => dragStart(e, r)}>
                     <span className="ar-glyph">{r.dir ? <FolderIcon size={16} /> : <FileIcon size={16} kind={kindOfName(r.name)} name={r.name} />}</span>
                     {r.name}
                     {r.entry?.encrypted && <span title="Encrypted">🔒</span>}
