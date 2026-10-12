@@ -884,7 +884,7 @@ async function askTitleModel(user: User, key: string, messages: { role: string; 
   const model = agentSettings(user).titleModel ?? (await defaultModel('quick'))
   const info = (await models().catch(() => [] as ModelInfo[])).find((m) => m.name === model)
   const think = info?.thinking ? (model.startsWith('gpt-oss') ? 'low' : false) : undefined
-  const body = { model, stream: false, options: { temperature, num_predict: 60 }, messages, ...(think === undefined ? {} : { think }) }
+  const body = { model, stream: false, options: { temperature, num_predict: 60 }, messages: endOnUser(messages), ...(think === undefined ? {} : { think }) }
   const res = await ollama(key, '/api/chat', { ...body, format }, AbortSignal.timeout(30_000)).catch((e) => {
     if (e instanceof HttpError && e.status === 409) throw e // the key itself
     return ollama(key, '/api/chat', body, AbortSignal.timeout(30_000))
@@ -1898,9 +1898,22 @@ function addMessage(thread: string, m: Omit<AgentMessage, 'id' | 'createdAt' | '
 
 type ChunkCall = { function: { name: string; arguments: Record<string, unknown> | string } }
 
+/** How the app's own notes to the model start, so it does not take them for the user's words. */
+const APP_NOTE = '(A note from the app, not from the user.)'
+
+/**
+ * The conversation as sent: never ending on the assistant's own reply, which some models' servers
+ * (Mistral's) refuse, where others carry on from it. Nothing should leave it there (the app's
+ * notes go after it as a message); this is the safety net.
+ */
+function endOnUser<M extends { role: string }>(messages: M[]): (M | ChatMessage)[] {
+  const last = messages.filter((m) => m.role !== 'system').at(-1)
+  return last?.role === 'assistant' ? [...messages, { role: 'user', content: 'Continue.' }] : messages
+}
+
 /** One call to Ollama's chat API, streamed: deltas go out as they come, the whole reply is answered. */
-async function chat(key: string, body: object, signal: AbortSignal, onDelta: (d: { content?: string; thinking?: string }) => void) {
-  const res = await ollama(key, '/api/chat', { ...body, stream: true }, signal)
+async function chat(key: string, body: { messages: ChatMessage[] } & Record<string, unknown>, signal: AbortSignal, onDelta: (d: { content?: string; thinking?: string }) => void) {
+  const res = await ollama(key, '/api/chat', { ...body, messages: endOnUser(body.messages), stream: true }, signal)
   let content = ''
   let thinking = ''
   let used: number | null = null
@@ -2207,15 +2220,18 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
           zone,
           calendar: now.tools.includes('calendar') ? calendarLines(user, zone) : '',
         })) +
-        (nudged
-          ? '\n\nYour last reply only thought and wrote nothing for the user. Write your answer now, in the reply itself (not in your thinking), from what you found so far; say what is still open. Do not call tools.'
-          : last
-            ? '\n\nYou have used all your tool calls for this turn: answer now with what you have, and say what is left to do.'
-            : '') +
-        (stale ? `\n\nReminder: your todo list has ${open} open ${open === 1 ? 'item' : 'items'} and you have not updated it for a while. Update it with update_todos as you go, or clear it if it no longer fits.` : '') +
-        (wrapUp ? `\n\nYou have answered, but your todo list still has ${open} open ${open === 1 ? 'item' : 'items'}. Call update_todos now: mark what is finished as done, or send an empty list to clear it if the job is over or the user has moved on. Do not repeat your answer.` : '')
+        (last && !nudged ? '\n\nYou have used all your tool calls for this turn: answer now with what you have, and say what is left to do.' : '') +
+        (stale ? `\n\nReminder: your todo list has ${open} open ${open === 1 ? 'item' : 'items'} and you have not updated it for a while. Update it with update_todos as you go, or clear it if it no longer fits.` : '')
+      // The nudge and the wrap-up follow the model's own reply, so they go along as a message after
+      // it (never saved, never shown): some models' servers (Mistral's) refuse a conversation that
+      // ends on the assistant.
+      const note = nudged
+        ? 'Your last reply only thought and wrote nothing for the user. Write your answer now, in the reply itself (not in your thinking), from what you found so far; say what is still open. Do not call tools.'
+        : wrapUp
+          ? `You have answered, but your todo list still has ${open} open ${open === 1 ? 'item' : 'items'}. Call update_todos now: mark what is finished as done, or send an empty list to clear it if the job is over or the user has moved on. Do not repeat your answer.`
+          : null
       const offer = last ? [] : wrapUp ? todoTool : tools
-      const messages = [{ role: 'system', content: system }, ...chatHistory(row.id, info?.vision ?? false)]
+      const messages = [{ role: 'system', content: system }, ...chatHistory(row.id, info?.vision ?? false), ...(note ? [{ role: 'user', content: `${APP_NOTE} ${note}` }] : [])]
       const reply = await chat(key, { model: row.model, messages, ...(offer.length ? { tools: offer } : {}), ...(think === undefined ? {} : { think }) }, ctl.signal, (d) => send({ type: 'delta', ...(wrapUp ? { thinking: d.thinking } : d) }))
       const calls = last ? [] : wrapUp ? reply.calls.filter((c) => c.name === 'update_todos') : reply.calls
       if (reply.used !== null) database().prepare('UPDATE agent_threads SET context_tokens = ? WHERE id = ?').run(reply.used, row.id)
