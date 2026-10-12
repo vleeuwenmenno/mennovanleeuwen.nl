@@ -3,7 +3,7 @@ import { RotateHint } from './RotateHint'
 import { DIFFICULTY, type Difficulty } from './ai'
 import { FACTIONS, UNIT, buildable, isShip, type FactionId, type UnitType } from './data'
 import {
-  BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GALAXY_AI, GIANTS, blockedBy, contested, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
+  BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GALAXY_AI, GIANTS, blockadeIn, canSee, contested, known, ownerFor, sees, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
   autoResolve, buildAt, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
   settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw, withoutShips,
   type BattleResult, type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetKind, type Side, type StarSystem,
@@ -50,14 +50,9 @@ const noMenu = (e: React.MouseEvent) => {
 const ME = 0
 const color = (g: Galaxy, o: number) => (o < 0 ? '#7d879c' : FACTIONS[g.sides[o].faction].color)
 const fmt = (n: number) => Math.floor(n).toLocaleString('en-US')
-/** Who blockades a system (whose fleets it stops), for drawing: the blockading side, or -1. */
-function blockade(g: Galaxy, s: number): { by: number; against: number } | null {
-  for (let o = 0; o < g.sides.length; o++) {
-    const by = blockedBy(g, s, o)
-    if (by >= 0) return { by, against: o }
-  }
-  return null
-}
+/** Who blockades a system (whose fleets it stops), for drawing, as far as we know: the blockading
+ * side and the side it stops, or null. */
+const blockade = (g: Galaxy, s: number) => blockadeIn(g, s, ME)
 const blockadeTip = (g: Galaxy, s: number) => {
   const b = blockade(g, s)
   if (!b) return ''
@@ -66,6 +61,22 @@ const blockadeTip = (g: Galaxy, s: number) => {
     : ` Enemy blockade: our fleets can't fly through ${g.systems[s].name}, only into it.`
 }
 const secs = (s: number) => (s >= 60 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `${Math.ceil(s)}s`)
+/** The galaxy day (from 1) a moment of it falls on, for "last seen day N". */
+const dayOf = (t: number) => calendar(Math.max(0, t)).day + 1
+/** What a planet pays with a station of this level, before an AI's difficulty: what we can tell of
+ * one we don't see. */
+const knownIncome = (p: Planet, station: number) => Math.round(p.income * (1 + STATION_INCOME * station))
+/** Fleets at a planet that we can see (all of them where we see the system). */
+const seenAt = (g: Galaxy, planet: number) => fleetsAt(g, planet).filter((f) => canSee(g, ME, f))
+/** What we know of a planet that's hidden from us, in a few words: who held it when we last looked,
+ * its station and the ships we saw there. */
+function lastSeen(g: Galaxy, p: Planet) {
+  const k = known(g, ME, p)
+  if (k.live) return ''
+  const who = k.owner < 0 ? 'unclaimed' : k.owner === ME ? 'ours' : `held by the ${factionName(g, k.owner)}`
+  const ships = k.ships < 0 ? 'no word of its fleets' : k.ships ? `${k.ships} enemy ship${k.ships > 1 ? 's' : ''} in orbit` : 'no ships in orbit'
+  return `Hidden: no fleet or planet of ours in ${g.systems[p.system].name}. Last seen ${k.t <= 0 ? 'on the pre-war charts' : `on day ${dayOf(k.t)}`}: ${who}${k.station ? `, station level ${k.station}` : ''}, ${ships}.`
+}
 
 /** Ship ids counted by type, biggest first: [id, count]. */
 function grouped(ships: string[]): [string, number][] {
@@ -421,7 +432,7 @@ function fleetScreen(g: Galaxy, f: Fleet, cam: Cam, size: { w: number; h: number
   const p = fleetAt(g, f)
   const s = at(p.x, p.y)
   if (f.leg || f.planet < 0) return s
-  return { x: s.x + planetR(g.planets[f.planet]) * k + 26, y: s.y - 8 + fleetsAt(g, f.planet).indexOf(f) * 22 }
+  return { x: s.x + planetR(g.planets[f.planet]) * k + 26, y: s.y - 8 + seenAt(g, f.planet).indexOf(f) * 22 }
 }
 
 /**
@@ -456,16 +467,19 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
   const label = (x: number, y: number, children: ReactNode, cls = '', key?: string) => (
     <g key={key} transform={`translate(${x} ${y}) scale(${1 / k})`} className={cls}>{children}</g>
   )
+  // Only the fleets we can see: ours, and others in systems we see (see the fog of war in galaxy.ts).
+  const visible = g.fleets.filter((f) => canSee(g, ME, f))
   // Zoomed out, the fleets parked in a system show as one badge per side.
   const parked = new Map<string, Fleet[]>()
   if (d < 0.5)
-    for (const f of g.fleets) {
+    for (const f of visible) {
       if (f.leg) continue
       const key = `${f.system}:${f.owner}`
       parked.set(key, [...(parked.get(key) ?? []), f])
     }
   // Where the selected fleets are headed, on through any stops queued with Shift.
-  const headed = g.fleets.filter((f) => selIds.has(f.id) && (f.leg || f.route.length || f.waypoints?.length))
+  // (Ours only: where the enemy's fleets are going is theirs to know.)
+  const headed = g.fleets.filter((f) => f.owner === ME && selIds.has(f.id) && (f.leg || f.route.length || f.waypoints?.length))
   const routes = headed.map((f) => [fleetAt(g, f), ...plannedHops(g, f).map((h) => (h.planet >= 0 ? planetAt(g, g.planets[h.planet]) : g.systems[h.system]))])
   const stops = headed.flatMap((f) => (f.waypoints ?? []).map((pid, i) => ({ key: `${f.id}:${i}`, at: planetAt(g, g.planets[pid]), r: planetR(g.planets[pid]), n: i + 1 })))
   // On the things below, a finger's long press opens the map's action wheel rather than their tip
@@ -483,8 +497,8 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
         ))}
       </defs>
       {g.systems.map((s) => {
-        const o = systemOwner(g, s.id)
-        return o >= 0 && shown(s.x, s.y) ? <circle key={`t${s.id}`} cx={s.x} cy={s.y} r={46} fill={color(g, o)} opacity={0.12 * (1 - d * 0.5)} /> : null
+        const o = systemOwner(g, s.id, ME)
+        return o >= 0 && shown(s.x, s.y) ? <circle key={`t${s.id}`} cx={s.x} cy={s.y} r={46} fill={color(g, o)} opacity={0.12 * (1 - d * 0.5) * (sees(g, ME, s.id) ? 1 : 0.5)} /> : null
       })}
       {g.lanes.map(([a, b], i) => {
         const A = g.systems[a]
@@ -506,14 +520,17 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
         const battle = g.pending >= 0 && g.planets[g.pending].system === s.id
         const block = mini ? null : blockade(g, s.id)
         const R = reach(g, s.id)
+        // Hidden from us: what's drawn there is what we last saw, faded.
+        const fog = !sees(g, ME, s.id)
+        const lastLook = fog ? Math.max(...s.planets.map((pid) => known(g, ME, g.planets[pid]).t)) : 0
         return (
-          <g key={s.id} className="ew-gsys">
+          <g key={s.id} className={`ew-gsys ${fog ? 'is-fog' : ''}`}>
             <g
               className="ew-gsys-hit"
               data-sid={s.id}
               data-longpress=""
               onClick={() => on?.system(s.id)}
-              data-tip={mini || d > 0.5 ? undefined : `${s.name}: ${s.planets.map((p) => g.planets[p].name).join(', ')}.${blockadeTip(g, s.id)} Click to zoom in; right-click to send the selected fleet (Shift to add a stop).`}
+              data-tip={mini || d > 0.5 ? undefined : `${s.name}: ${s.planets.map((p) => g.planets[p].name).join(', ')}.${fog ? ` Hidden: we have no planet or fleet there; what shows is what we last saw (${lastLook <= 0 ? 'the pre-war charts' : `day ${dayOf(lastLook)}`}).` : ''}${blockadeTip(g, s.id)} Click to zoom in; right-click to send the selected fleet (Shift to add a stop).`}
             >
               <circle cx={s.x} cy={s.y} r={d > 0.5 ? px(30) : Math.max(px(22), 4)} fill="transparent" />
               <circle cx={s.x} cy={s.y} r={Math.max(px(13), 7)} fill={`url(#star-${s.star})`} />
@@ -524,7 +541,7 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
               s.planets.map((pid, i) => {
                 const p = g.planets[pid]
                 const a = -Math.PI / 2 + (i - (s.planets.length - 1) / 2) * 0.55
-                return <circle key={pid} cx={s.x + Math.cos(a) * px(15)} cy={s.y + Math.sin(a) * px(15)} r={px(2.6)} fill={color(g, p.owner)} stroke="#000" strokeWidth={px(0.6)} opacity={1 - d} />
+                return <circle key={pid} cx={s.x + Math.cos(a) * px(15)} cy={s.y + Math.sin(a) * px(15)} r={px(2.6)} fill={color(g, ownerFor(g, ME, p))} stroke="#000" strokeWidth={px(0.6)} opacity={(1 - d) * (fog ? 0.55 : 1)} />
               })}
             {/* Zoomed in: the planets on their orbits. */}
             {d > 0 && (
@@ -539,13 +556,17 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
                   const r = planetR(p)
                   const on2 = selPs.has(pid)
                   const capture = p.capture ? p.capture.t / CAPTURE_TIME : 0
+                  // What we know of it: as it is, or (hidden) as we last saw it.
+                  const k = known(g, ME, p)
                   return (
-                    <g key={pid} className={`ew-splanet ${on2 ? 'is-sel' : ''}`} data-pid={pid} data-longpress=""
+                    <g key={pid} className={`ew-splanet ${on2 ? 'is-sel' : ''} ${k.live ? '' : 'is-fog'}`} data-pid={pid} data-longpress=""
                       onClick={(e) => (e.stopPropagation(), on?.planet(p, e.detail > 1))}
-                      data-tip={`${p.name}: ${PLANET_KINDS[p.kind].name}, ${planetIncome(g, p)} credits a day. ${p.owner < 0 ? 'Unclaimed.' : `Held by the ${factionName(g, p.owner)}.`} Double-click to zoom in; right-click to send the selected fleet (Shift to add a stop).`}>
-                      <circle cx={q.x} cy={q.y} r={r + Math.max(px(6), r * 0.18)} fill="none" stroke={color(g, p.owner)} strokeWidth={p.owner < 0 ? 1 : 2.5} strokeDasharray={p.owner < 0 ? '3 4' : undefined} vectorEffect="non-scaling-stroke" className="ew-sring" />
+                      data-tip={k.live
+                        ? `${p.name}: ${PLANET_KINDS[p.kind].name}, ${planetIncome(g, p)} credits a day. ${p.owner < 0 ? 'Unclaimed.' : `Held by the ${factionName(g, p.owner)}.`} Double-click to zoom in; right-click to send the selected fleet (Shift to add a stop).`
+                        : `${p.name}: ${PLANET_KINDS[p.kind].name}, about ${knownIncome(p, k.station)} credits a day. ${lastSeen(g, p)} Double-click to zoom in; right-click to send the selected fleet (Shift to add a stop).`}>
+                      <circle cx={q.x} cy={q.y} r={r + Math.max(px(6), r * 0.18)} fill="none" stroke={color(g, k.owner)} strokeWidth={k.owner < 0 ? 1 : 2.5} strokeDasharray={k.owner < 0 || !k.live ? '3 4' : undefined} vectorEffect="non-scaling-stroke" className="ew-sring" />
                       <image href={PLANET_ART(p.kind)} x={q.x - r} y={q.y - r} width={r * 2} height={r * 2} />
-                      {p.capture && (
+                      {k.live && p.capture && (
                         <>
                           {/* Being taken: a track round the planet filling in the taker's colour, and a tag. */}
                           <circle cx={q.x} cy={q.y} r={r + Math.max(px(11), r * 0.3)} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth={4} vectorEffect="non-scaling-stroke" className="ew-gcap" />
@@ -555,16 +576,17 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
                       )}
                       {label(q.x - r * 0.75, q.y - r * 0.75, (
                         <>
-                          {p.station > 0 && (
-                            <g transform="translate(-10 -10)">
-                              <rect x={-9} y={-9} width={18} height={18} rx={4} fill="#0b1226" stroke={color(g, p.owner)} />
-                              <text y={4} className="ew-slv">{p.station}</text>
+                          {k.station > 0 && (
+                            <g transform="translate(-10 -10)" opacity={k.live ? 1 : 0.6}>
+                              <rect x={-9} y={-9} width={18} height={18} rx={4} fill="#0b1226" stroke={color(g, k.owner)} strokeDasharray={k.live ? undefined : '2 2'} />
+                              <text y={4} className="ew-slv">{k.station}</text>
                             </g>
                           )}
-                          {p.queue.length > 0 && <circle cx={p.station ? 6 : -6} cy={-16} r={4} className="ew-sbusy" />}
+                          {k.live && p.queue.length > 0 && <circle cx={k.station ? 6 : -6} cy={-16} r={4} className="ew-sbusy" />}
                         </>
                       ))}
-                      {k > 7 && label(q.x, q.y + r, <text y={20} className="ew-spname" opacity={clamp((k - 7) / 4, 0, 1)}>{p.name}</text>)}
+                      {cam && cam.k > 7 && label(q.x, q.y + r, <text y={20} className="ew-spname" opacity={clamp((cam.k - 7) / 4, 0, 1)}>{p.name}</text>)}
+                      {!k.live && cam && cam.k > 7 && label(q.x, q.y + r, <text y={34} className="ew-spseen" opacity={clamp((cam.k - 7) / 4, 0, 1) * 0.85}>{k.t <= 0 ? 'Pre-war charts' : `Last seen day ${dayOf(k.t)}`}{k.ships > 0 ? ` · ${k.ships} ships` : ''}</text>)}
                     </g>
                   )
                 })}
@@ -576,7 +598,7 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
               <circle cx={s.x} cy={s.y} r={px(23)} className={`ew-gsyssel ${s.planets.every((pid) => selPs.has(pid)) ? 'is-whole' : ''}`} opacity={1 - d} vectorEffect="non-scaling-stroke" />
             )}
             {/* Zoomed out: a planet being taken shows as a filling ring round the system and its percentage. */}
-            {!mini && d < 0.6 && s.planets.map((pid) => g.planets[pid]).filter((p) => p.capture).slice(0, 1).map((p) => (
+            {!mini && !fog && d < 0.6 && s.planets.map((pid) => g.planets[pid]).filter((p) => p.capture).slice(0, 1).map((p) => (
               <g key={`c${p.id}`} opacity={1 - d / 0.6}>
                 <circle cx={s.x} cy={s.y} r={px(19)} fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth={3.5} vectorEffect="non-scaling-stroke" className="ew-gcap" />
                 <circle cx={s.x} cy={s.y} r={px(19)} fill="none" stroke={color(g, p.capture!.owner)} strokeWidth={3.5} vectorEffect="non-scaling-stroke" pathLength={1} strokeDasharray={`${p.capture!.t / CAPTURE_TIME} 1`} transform={`rotate(-90 ${s.x} ${s.y})`} className="ew-gcap" />
@@ -618,7 +640,7 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
           )
         })}
       {!mini &&
-        g.fleets.map((f) => {
+        visible.map((f) => {
           if (!f.leg && d < 0.5) return null
           const p = fleetAt(g, f)
           if (!shown(p.x, p.y)) return null
@@ -626,7 +648,7 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
           let off = { x: 0, y: 0 }
           if (!f.leg && f.planet >= 0) {
             const pl = g.planets[f.planet]
-            const i = fleetsAt(g, f.planet).indexOf(f)
+            const i = seenAt(g, f.planet).indexOf(f)
             off = { x: planetR(pl) * k + 26, y: -8 + i * 22 }
           }
           return (
@@ -900,6 +922,9 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
             toast(e.by >= 0 ? `Our fleet was pulled out of hyperspace by the blockade at ${where}` : `Our fleet stopped at ${where}: blockades closed every way on`, 'bad', f ? { k: 'fleet', id: f.id, planet: f.planet } : { k: 'system', id: e.system })
             sound.alarm(false)
           } else if (e.by === ME) toast(`Our blockade at ${where} stopped an enemy fleet`, 'good', { k: 'system', id: e.system })
+        } else if (e.k === 'yardFull' && e.owner === ME) {
+          toast(`${g.planets[e.planet].name}: our fleets there are full. The ${UNIT[e.unit].name} waits in the shipyard until one makes room or leaves`, 'bad', { k: 'planet', id: e.planet })
+          sound.error()
         } else if (e.k === 'payday' && e.owner === ME && e.amount > 0) {
           setPay({ id: Math.random(), amount: e.amount })
           if (getSettings().daySound) sound.payday()
@@ -921,7 +946,8 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [g])
 
-  const selFleet = sel?.kind === 'fleet' ? g.fleets.find((f) => f.id === sel.id) : undefined
+  // (An enemy fleet that slips out of sight is let go, as if it were gone.)
+  const selFleet = sel?.kind === 'fleet' ? g.fleets.find((f) => f.id === sel.id && canSee(g, ME, f)) : undefined
   const selFleets = sel?.kind === 'fleets' ? g.fleets.filter((f) => sel.ids.includes(f.id)) : []
   const selPlanet = sel?.kind === 'planet' ? g.planets[sel.id] : undefined
   const selPlanets = sel?.kind === 'planets' ? sel.ids.map((id) => g.planets[id]) : selPlanet ? [selPlanet] : []
@@ -1050,7 +1076,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   /** Right-click on a system: the planet worth going to (an enemy's, then a free one, then ours). */
   const sendToSystem = (s: number, queue = false) => {
     const ps = g.systems[s].planets.map((p) => g.planets[p])
-    const target = ps.find((p) => p.owner >= 0 && p.owner !== ME) ?? ps.find((p) => p.owner < 0) ?? ps[0]
+    const target = ps.find((p) => ownerFor(g, ME, p) >= 0 && ownerFor(g, ME, p) !== ME) ?? ps.find((p) => ownerFor(g, ME, p) < 0) ?? ps[0]
     send(target.id, queue)
   }
   const pickFleet = (f: Fleet) => {
@@ -1536,20 +1562,21 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   const mapHit = (target: Element, cx: number, cy: number): { planet: Planet } | { system: number } | { fleets: Fleet[] } | null => {
     const c = camRef.current
     const out = detail(c.k) < 0.5
-    const group = (f: Fleet) => (!f.leg && out ? g.fleets.filter((x) => !x.leg && x.system === f.system && x.owner === f.owner) : [f])
+    const group = (f: Fleet) => (!f.leg && out ? g.fleets.filter((x) => !x.leg && x.system === f.system && x.owner === f.owner && canSee(g, ME, x)) : [f])
     const hit = target.closest('[data-pid], [data-sid], [data-fid]')
     if (hit instanceof SVGElement || hit instanceof HTMLElement) {
       const { pid, sid, fid } = hit.dataset
       if (pid) return { planet: g.planets[Number(pid)] }
       if (sid) return { system: Number(sid) }
       const f = g.fleets.find((x) => x.id === Number(fid))
-      if (f) return { fleets: group(f) }
+      if (f && canSee(g, ME, f)) return { fleets: group(f) }
     }
     // Fingers are broad: a fleet's badge within reach, then a planet or system as orders find them.
     const r = viewEl.current!.getBoundingClientRect()
     let near: Fleet | null = null
     let best = 26
     for (const f of g.fleets) {
+      if (!canSee(g, ME, f)) continue
       const q = fleetScreen(g, f, c, size)
       const dd = Math.hypot(q.x - (cx - r.left), q.y - (cy - r.top))
       if (dd < best) (near = f), (best = dd)
@@ -1580,7 +1607,8 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     if (hit && 'planet' in hit) {
       const p = hit.planet
       const mine = p.owner === ME
-      title = `${p.name} · ${p.owner < 0 ? 'unclaimed' : mine ? 'ours' : factionName(g, p.owner)} · +${planetIncome(g, p)} a day`
+      const k = known(g, ME, p)
+      title = `${p.name} · ${k.owner < 0 ? 'unclaimed' : mine ? 'ours' : factionName(g, k.owner)}${k.live ? '' : ` (day ${dayOf(k.t)})`} · +${k.live ? planetIncome(g, p) : knownIncome(p, k.station)} a day`
       items = [
         { id: 'send', label: 'Send fleet', icon: ic('move'), disabled: noFleet, run: () => send(p.id) },
         { id: 'queue', label: 'Add stop', icon: ic('rally'), disabled: noFleet, run: () => send(p.id, true) },
@@ -2043,7 +2071,9 @@ type GMapFilter = 'all' | 'fleets' | 'planets' | 'enemies'
 /**
  * The whole galaxy small, like a battle's tactical map: lanes, systems in their holder's colour,
  * fleets as dots, and the box of what the main view shows. Click or drag on it to look there. The
- * buttons beside it jump to the capital, cycle through idle fleets, and open the economy.
+ * buttons beside it jump to the capital, cycle through idle fleets, and open the economy. Under the
+ * fog of war it shows the fleets we can see and, for systems we don't, who held them when we last
+ * looked (faded); how many planets each side holds is public knowledge.
  */
 function GalaxyMinimap({ g, cam, size, onLook, onCapital, onIdle, idle, onEconomy, economy, onWhole }: {
   g: Galaxy
@@ -2082,8 +2112,9 @@ function GalaxyMinimap({ g, cam, size, onLook, onCapital, onIdle, idle, onEconom
   }
   const vw = size.w / cam.k
   const vh = size.h / cam.k
-  const showFleet = (f: Fleet) => filter === 'all' || filter === 'fleets' || (filter === 'enemies' && f.owner !== ME)
-  const showSystem = (s: StarSystem) => filter !== 'fleets' && (filter !== 'enemies' || s.planets.some((p) => g.planets[p].owner >= 0 && g.planets[p].owner !== ME))
+  // Only what we can see, and what we last saw where we can't (faded).
+  const showFleet = (f: Fleet) => canSee(g, ME, f) && (filter === 'all' || filter === 'fleets' || (filter === 'enemies' && f.owner !== ME))
+  const showSystem = (s: StarSystem) => filter !== 'fleets' && (filter !== 'enemies' || s.planets.some((p) => ownerFor(g, ME, g.planets[p]) >= 0 && ownerFor(g, ME, g.planets[p]) !== ME))
   const filters: [GMapFilter, string][] = [
     ['all', 'All'],
     ['fleets', 'Fleets'],
@@ -2105,14 +2136,16 @@ function GalaxyMinimap({ g, cam, size, onLook, onCapital, onIdle, idle, onEconom
         </div>
         <svg className="ew-mini ew-gmini" data-nodrag viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" onPointerDown={look} onPointerMove={(e) => e.buttons === 1 && look(e)}>
           {g.systems.map((s) => {
-            const o = systemOwner(g, s.id)
-            return o >= 0 && showSystem(s) ? <circle key={`t${s.id}`} cx={s.x} cy={s.y} r={40} fill={color(g, o)} opacity={0.18} /> : null
+            const o = systemOwner(g, s.id, ME)
+            return o >= 0 && showSystem(s) ? <circle key={`t${s.id}`} cx={s.x} cy={s.y} r={40} fill={color(g, o)} opacity={sees(g, ME, s.id) ? 0.18 : 0.08} /> : null
           })}
           {g.lanes.map(([a, b], i) => (
             <line key={i} x1={g.systems[a].x} y1={g.systems[a].y} x2={g.systems[b].x} y2={g.systems[b].y} stroke="rgba(140,180,240,0.3)" strokeWidth={2} />
           ))}
           {g.systems.map((s) =>
-            showSystem(s) ? <circle key={s.id} cx={s.x} cy={s.y} r={9} fill={color(g, systemOwner(g, s.id))} stroke="#000" strokeWidth={2} /> : <circle key={s.id} cx={s.x} cy={s.y} r={5} fill="rgba(160,180,210,0.35)" />,
+            showSystem(s) ? (
+              <circle key={s.id} cx={s.x} cy={s.y} r={9} fill={color(g, systemOwner(g, s.id, ME))} stroke={sees(g, ME, s.id) ? '#000' : 'rgba(200,215,240,0.5)'} strokeWidth={2} strokeDasharray={sees(g, ME, s.id) ? undefined : '3 3'} opacity={sees(g, ME, s.id) ? 1 : 0.55} />
+            ) : <circle key={s.id} cx={s.x} cy={s.y} r={5} fill="rgba(160,180,210,0.35)" />,
           )}
           {g.fleets.filter(showFleet).map((f) => {
             const p = fleetAt(g, f)
@@ -2148,7 +2181,9 @@ function GalaxyMinimap({ g, cam, size, onLook, onCapital, onIdle, idle, onEconom
  */
 function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galaxy; p: Planet; sound: EmpiresSound; onClose: () => void; onFleet: (f: Fleet) => void; onLook: () => void; toast: (t: string, tone?: GToast['tone']) => void }) {
   const ours = p.owner === ME
-  const theirs = p.owner >= 0 && !ours
+  // What we know of it: as it is where we see the system, else as we last saw it.
+  const kn = known(g, ME, p)
+  const theirs = kn.owner >= 0 && !ours
   const k = PLANET_KINDS[p.kind]
   const { lockedShips } = useSettings()
   const coarse = useCoarse()
@@ -2217,7 +2252,7 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
       toast(why, 'bad')
     } else sound.constructing()
   }
-  const here = fleetsAt(g, p.id)
+  const here = seenAt(g, p.id)
   const who = { who: `Yours · ${FACTIONS[fac].long}`, rel: 'own' }
   const queue = p.queue.map((q) => (q.unit === 'station' ? { ...q, sprite: `${fac}-station-${Math.min(4, p.station + 1)}`, name: p.station ? `Station level ${p.station + 1}` : 'A new station' } : q))
   const stationBtn = p.station < 4 && (
@@ -2238,20 +2273,30 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
             <div className="ew-side-info">
               <strong>{p.name}</strong>
               <small className="ew-muted">{k.name} · {g.systems[p.system].name}</small>
-              {p.station > 0 && <Pips level={p.station} />}
+              {kn.station > 0 && <Pips level={kn.station} />}
             </div>
-            <span className="ew-gp-line" data-tip={p.station ? `${p.income} a day, +${Math.round(STATION_INCOME * p.station * 100)}% from its station` : k.blurb}>
-              <Icon name="credits" size={13} /> <b>+{planetIncome(g, p)}</b> a day
+            <span className="ew-gp-line" data-tip={kn.station ? `${p.income} a day, +${Math.round(STATION_INCOME * kn.station * 100)}% from its station` : k.blurb}>
+              <Icon name="credits" size={13} /> <b>+{kn.live ? planetIncome(g, p) : knownIncome(p, kn.station)}</b> a day
             </span>
-            <span className="ew-gp-line" style={{ color: color(g, p.owner) }}>
-              {p.owner < 0 ? 'Unclaimed' : ours ? 'Ours' : `Held by the ${factionName(g, p.owner)}`}
+            <span className="ew-gp-line" style={{ color: color(g, kn.owner), opacity: kn.live ? 1 : 0.7 }}>
+              {kn.owner < 0 ? 'Unclaimed' : ours ? 'Ours' : `Held by the ${factionName(g, kn.owner)}`}
             </span>
+            {!kn.live && (
+              <span className="ew-gp-line ew-small ew-gp-fog" data-tip={lastSeen(g, p)}>
+                <Icon name="radar" size={13} /> {kn.t <= 0 ? 'Pre-war charts' : `Last seen day ${dayOf(kn.t)}`}{kn.ships >= 0 ? ` · ${kn.ships} ships` : ''}
+              </span>
+            )}
+            {ours && p.queue[0]?.full && (
+              <span className="ew-gp-line ew-small ew-gp-full" data-tip="Every fleet here is full and there are already four: the finished ship waits in the shipyard (and the queue behind it) until a fleet makes room or leaves.">
+                <Icon name="fleet" size={13} /> Fleets full: a ship waits
+              </span>
+            )}
             {blockade(g, p.system) && (
               <span className="ew-gp-line ew-small ew-gp-block" data-tip={blockadeTip(g, p.system).trim()} style={{ color: color(g, blockade(g, p.system)!.by) }}>
                 <Icon name="hold" size={13} /> {blockade(g, p.system)!.by === ME ? 'Our blockade' : 'Enemy blockade'}
               </span>
             )}
-            {p.capture && (
+            {kn.live && p.capture && (
               <span className="ew-gp-cap" style={{ ['--cap' as string]: color(g, p.capture.owner) }} data-tip={`A fleet takes a planet by holding its orbit for ${CAPTURE_TIME} s with no defender there.`}>
                 <span>{p.capture.owner === ME ? 'Our fleet is taking it' : 'The enemy is taking it'}: {Math.ceil(CAPTURE_TIME - p.capture.t)} s</span>
                 <i><b style={{ width: `${(p.capture.t / CAPTURE_TIME) * 100}%` }} /></i>
@@ -2295,6 +2340,10 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
               </div>
             ) : ours ? (
               <p className="ew-gp-note">Build a station here to defend {p.name} and build ships at it. Each station level also adds {Math.round(STATION_INCOME * 100)}% to what the planet pays.</p>
+            ) : !kn.live ? (
+              <p className="ew-gp-note">
+                {k.blurb} {lastSeen(g, p)} Send a fleet to find out what holds it now. {coarse ? 'Select a fleet, then long-press the planet to send it.' : 'Select a fleet and right-click the planet to send it.'}
+              </p>
             ) : (
               <p className="ew-gp-note">
                 {k.blurb} {theirs ? (p.station ? `Its level ${p.station} station defends it: bring a fleet strong enough to beat it.` : 'No station defends it: a fleet that holds its orbit takes it.') : 'Unclaimed: a fleet that holds its orbit for a few seconds takes it.'} {coarse ? 'Select a fleet, then long-press the planet to send it.' : 'Select a fleet and right-click the planet to send it.'}
@@ -2357,8 +2406,13 @@ function GalaxyEconomy({ g, onClose, onPlanet, onSystem }: { g: Galaxy; onClose:
   const rows = ours.slice().sort((a, b) =>
     sort === 'best' ? planetIncome(g, b) - planetIncome(g, a) : sort === 'worst' ? planetIncome(g, a) - planetIncome(g, b) : sort === 'earned' ? b.earned - a.earned : a.name.localeCompare(b.name),
   )
-  const threatened = (p: Planet) => (p.capture && p.capture.owner !== ME) || g.fleets.some((f) => f.owner !== ME && (f.planet === p.id || (f.leg && f.leg.planet === p.id) || f.route.some((h) => h.planet === p.id)))
-  const enemyIncome = g.sides.reduce((v, _, o) => v + (o === ME ? 0 : incomeOf(g, o)), 0)
+  // (Enemy fleets we can see there, or flying to it inside its system: the rest are in hyperspace.)
+  const threatened = (p: Planet) => (p.capture && p.capture.owner !== ME) || g.fleets.some((f) => f.owner !== ME && canSee(g, ME, f) && (f.planet === p.id || (f.leg && f.leg.planet === p.id)))
+  // What we can tell of the enemy's income: their planets as we know them, at the stations we saw.
+  const enemyIncome = g.planets.reduce((v, p) => {
+    const k = known(g, ME, p)
+    return v + (k.owner >= 0 && k.owner !== ME ? knownIncome(p, k.station) : 0)
+  }, 0)
   const enemyPlanets = g.planets.filter((p) => p.owner >= 0 && p.owner !== ME).length
   const kinds = (Object.keys(PLANET_KINDS) as PlanetKind[])
     .map((k) => ({ k, n: ours.filter((p) => p.kind === k).length, v: ours.filter((p) => p.kind === k).reduce((v, p) => v + planetIncome(g, p), 0) }))
@@ -2464,7 +2518,7 @@ function GalaxyEconomy({ g, onClose, onPlanet, onSystem }: { g: Galaxy; onClose:
         <span>Earned <b>{fmt(s.earned)}</b></span>
         <span>Ships <b>{fmt(s.spent.ships)}</b></span>
         <span>Stations <b>{fmt(s.spent.stations)}</b></span>
-        <span className="ew-muted" data-tip="What the enemy's planets pay them a day">Enemy: {enemyPlanets} planets, about +{fmt(enemyIncome)} a day</span>
+        <span className="ew-muted" data-tip="How many planets the enemy holds is known; what they pay is our guess, from the planets and stations we last saw">Enemy: {enemyPlanets} planets, about +{fmt(enemyIncome)} a day</span>
       </div>
     </Floating>
   )
@@ -2554,8 +2608,9 @@ function fleetWhere(g: Galaxy, f: Fleet) {
     const status = !p ? '' : cap ? `${cap.owner === f.owner ? 'Taking' : 'Losing'} · ${Math.ceil(CAPTURE_TIME - cap.t)} s` : p.owner === f.owner ? 'In orbit' : 'Holding orbit'
     return { key: `at:${f.planet}`, name: p?.name ?? '', status, moving: false }
   }
-  const to = f.route.length ? f.route[f.route.length - 1].planet : f.leg.planet
-  return { key: `to:${to}`, name: `→ ${g.planets[to]?.name ?? g.systems[f.leg.system].name}`, status: secs(eta(f)), moving: true }
+  // An enemy fleet we see flying shows where it's flying in the system, not its orders.
+  const to = f.owner !== ME ? f.leg.planet : f.route.length ? f.route[f.route.length - 1].planet : f.leg.planet
+  return { key: `to:${to}`, name: `→ ${g.planets[to]?.name ?? g.systems[f.leg.system].name}`, status: f.owner !== ME ? 'In flight' : secs(eta(f)), moving: true }
 }
 
 /**
@@ -2661,14 +2716,17 @@ function GalaxySelection({ g, fleets, planets, take, setTake, mode, onCommand, o
                   <small>{whole ? 'Whole system' : `${ps.length} of ${g.systems[sid].planets.length} planets`}</small>
                 </HoldButton>
                 <div className="ew-seltiles">
-                  {ps.map((p) => (
-                    <button key={p.id} className="ew-seltile ew-gplanettile" style={{ ['--own' as string]: color(g, p.owner) }} onClick={(e) => onPlanets([p], shiftOf(e))}
-                      data-tip={`${p.name}: ${PLANET_KINDS[p.kind].name}, ${planetIncome(g, p)} credits a day. ${p.owner < 0 ? 'Unclaimed.' : p.owner === ME ? 'Ours.' : `Held by the ${factionName(g, p.owner)}.`}${p.station ? ` Station level ${p.station}.` : ''} ${coarse ? 'Tap to open it; with Shift on, tap to let go of it.' : 'Click to open it, Shift-click to let go of it.'}`}>
-                      <img src={PLANET_ART(p.kind)} alt="" />
-                      {p.station > 0 && <em>{p.station}</em>}
-                      {p.queue.length > 0 && <i className="ew-sbusy" />}
-                    </button>
-                  ))}
+                  {ps.map((p) => {
+                    const k = known(g, ME, p)
+                    return (
+                      <button key={p.id} className={`ew-seltile ew-gplanettile ${k.live ? '' : 'is-fog'}`} style={{ ['--own' as string]: color(g, k.owner) }} onClick={(e) => onPlanets([p], shiftOf(e))}
+                        data-tip={`${p.name}: ${PLANET_KINDS[p.kind].name}, ${k.live ? planetIncome(g, p) : `about ${knownIncome(p, k.station)}`} credits a day. ${k.live ? `${p.owner < 0 ? 'Unclaimed.' : p.owner === ME ? 'Ours.' : `Held by the ${factionName(g, p.owner)}.`}${p.station ? ` Station level ${p.station}.` : ''}` : lastSeen(g, p)} ${coarse ? 'Tap to open it; with Shift on, tap to let go of it.' : 'Click to open it, Shift-click to let go of it.'}`}>
+                        <img src={PLANET_ART(p.kind)} alt="" />
+                        {k.station > 0 && <em>{k.station}</em>}
+                        {k.live && p.queue.length > 0 && <i className="ew-sbusy" />}
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
             )
