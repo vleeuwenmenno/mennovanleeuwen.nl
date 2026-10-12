@@ -2222,7 +2222,7 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
   const queue = p.queue.map((q) => (q.unit === 'station' ? { ...q, sprite: `${fac}-station-${Math.min(4, p.station + 1)}`, name: p.station ? `Station level ${p.station + 1}` : 'A new station' } : q))
   const stationBtn = p.station < 4 && (
     <button className={`ew-gp-up ${upWhy ? 'is-off' : ''}`} onClick={upgrade}
-      data-tip={`${p.station ? `Upgrade to level ${p.station + 1}: bigger ships, a tougher station, +${Math.round(STATION_INCOME * 100)}% income` : `Build a station: it defends the planet, builds ships and adds ${Math.round(STATION_INCOME * 100)}% income`}. ${STATION_TIME[p.station + 1]} s.${upWhy ? `\n${upWhy}` : ''}`}>
+      data-tip={`${p.station ? `Upgrade to level ${p.station + 1}: bigger ships, a tougher station, +${Math.round(STATION_INCOME * 100)}% income` : `Build a station: it defends the planet, builds ships and adds ${Math.round(STATION_INCOME * 100)}% income`}. ${STATION_TIME[p.station + 1]} s.${p.queue.some((q) => q.unit !== 'station') && !upWhy ? ' Starts after the ships in the queue.' : ''}${upWhy ? `\n${upWhy}` : ''}`}>
       <Icon name="yard" size={13} /> {p.station ? 'Upgrade' : 'Build station'} <Icon name="credits" size={12} /> {STATION_COST[p.station + 1]}
     </button>
   )

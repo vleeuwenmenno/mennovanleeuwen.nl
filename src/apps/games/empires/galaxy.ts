@@ -809,8 +809,10 @@ export function cantBuildAt(g: Galaxy, owner: number, planet: number, unit: stri
   const t = UNIT[unit]
   if (p.owner !== owner) return 'Not our planet'
   if (!p.station) return 'Needs a station to build ships'
-  if (p.queue.some((q) => q.unit === 'station')) return 'The station is being upgraded'
-  if (t.level > p.station) return `Needs station level ${t.level}`
+  // Ships behind a queued upgrade are fine at the current level; the ones that need the next level stay locked until
+  // the upgrade has actually finished, because the level only rises then (queueing them early would be a promise the
+  // shipyard might not keep if the upgrade is cancelled).
+  if (t.level > p.station) return p.queue.some((q) => q.unit === 'station') ? `Needs station level ${t.level}: wait for the upgrade` : `Needs station level ${t.level}`
   if (p.queue.length >= MAX_YARD) return 'Shipyard queue full'
   if (g.sides[owner].credits < t.cost) return 'Not enough credits'
   return null
@@ -827,11 +829,15 @@ export function buildAt(g: Galaxy, owner: number, planet: number, unit: string):
   g.planets[planet].queue.push({ unit, left: time, total: time })
   return null
 }
+/** Upgrading a station can be queued behind the ships already building: it goes to the back of the queue, so it
+ * starts once everything ahead of it is done, and its credits are charged when it is queued, like a ship's. Only one
+ * upgrade can sit in a planet's queue at a time. */
 export function cantUpgradeStation(g: Galaxy, owner: number, planet: number): string | null {
   const p = g.planets[planet]
   if (p.owner !== owner) return 'Not our planet'
   if (p.station >= 4) return 'Station at its highest level'
-  if (p.queue.length) return p.queue.some((q) => q.unit === 'station') ? 'Already being built' : 'Wait for the shipyard queue to finish'
+  if (p.queue.some((q) => q.unit === 'station')) return 'Already being built'
+  if (p.queue.length >= MAX_YARD) return 'Shipyard queue full'
   if (g.sides[owner].credits < STATION_COST[p.station + 1]) return 'Not enough credits'
   return null
 }
