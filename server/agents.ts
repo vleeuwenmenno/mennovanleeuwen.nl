@@ -1869,7 +1869,7 @@ function chatHistory(thread: string, vision = true): ChatMessage[] {
   // A long turn keeps its last 16 tool results whole; older ones are shortened like earlier turns'.
   const toolIdx = all.flatMap((m, i) => (m.role === 'tool' ? [i] : []))
   const keepWhole = new Set(toolIdx.filter((i) => i > lastUser).slice(-16))
-  return all.map((m, i) => {
+  return all.map((m, i): ChatMessage => {
     if (m.role === 'tool') return { role: 'tool', tool_name: m.toolName ?? '', content: keepWhole.has(i) ? m.content : clip(m.content, 1500) }
     const current = i >= lastUser
     if (m.role === 'assistant')
@@ -1885,6 +1885,9 @@ function chatHistory(thread: string, vision = true): ChatMessage[] {
     const images = vision ? attached.filter((a) => a.kind === 'image').map((a) => a.data!) : []
     return { role: 'user', content: [m.content, ...texts].filter(Boolean).join('\n\n'), ...(images.length ? { images } : {}) }
   })
+    // A reply that only thought (no text, no calls) is left out: some models' servers (Mistral's)
+    // refuse an assistant message with neither, and the app's nudge after it says what happened.
+    .filter((m) => m.role !== 'assistant' || m.content.trim() || m.tool_calls?.length)
 }
 
 function addMessage(thread: string, m: Omit<AgentMessage, 'id' | 'createdAt' | 'attachments'>, files: Attachment[] = []): AgentMessage {

@@ -24,6 +24,7 @@ type ChatBody = { model: string; messages: Message[]; stream?: boolean; tools?: 
 
 const MODEL = 'mistral-large-4'
 const MISTRAL = 'Expected last role User or Tool (or Assistant with prefix True) for serving but got assistant'
+const EMPTY = 'Assistant message must have either content or tool_calls, but not none.'
 
 // --- The stand-in for Ollama ----------------------------------------------------------------------
 
@@ -50,6 +51,12 @@ function chat(body: ChatBody, res: ServerResponse) {
     res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: MISTRAL }))
     return
   }
+  // Mistral also refuses an assistant message with neither text nor tool calls.
+  if (body.messages.some((m) => m.role === 'assistant' && !m.content.trim() && !m.tool_calls?.length)) {
+    refused.push(body)
+    res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: EMPTY }))
+    return
+  }
   // The title model (not streamed).
   if (body.stream === false) {
     res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ model: MODEL, message: { role: 'assistant', content: '{"title":"Roles check"}' }, done: true }))
@@ -58,7 +65,8 @@ function chat(body: ChatBody, res: ServerResponse) {
   // The scenario is in the user's last own message; the round is the replies since.
   const at = body.messages.map((m) => m.role === 'user' && m.content.startsWith('SCENARIO ')).lastIndexOf(true)
   const scenario = body.messages[at]?.content.slice('SCENARIO '.length) ?? ''
-  const round = body.messages.slice(at + 1).filter((m) => m.role === 'assistant').length
+  // The app's own notes count as a round too: the thinking-only reply before a nudge is not sent.
+  const round = body.messages.slice(at + 1).filter((m) => m.role === 'assistant' || m.content.startsWith('(A note from the app')).length
   if (scenario === 'nudge') {
     if (round === 0) return reply(res, { thinking: 'Let me look in the notes.', tool_calls: call('search_notes', { query: 'roles' }) })
     if (round === 1) return reply(res, { thinking: 'Nothing found. I should answer.' })
