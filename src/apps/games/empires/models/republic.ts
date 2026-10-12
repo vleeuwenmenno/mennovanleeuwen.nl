@@ -1,4 +1,4 @@
-import { arcBand, box, chamfer, circle, mirror, move, part, pod, rect, sym, turn } from './kit.ts'
+import { box, chamfer, circle, mirror, part, pod, rect, sym, turn } from './kit.ts'
 import type { ModelDef } from './spec.ts'
 import type { Part, Pt } from './types.ts'
 
@@ -183,120 +183,195 @@ export const frigate: ModelDef = () => {
   }
 }
 
+/** The level-4 outer frame: a square with bastions at its corners, or an octagon with hard corners. */
+export type StationFrame = 'square' | 'octagon'
+export const STATION_FRAMES: StationFrame[] = ['square', 'octagon']
+/** The frame the battle draws until one is picked for good. */
+export const STATION_FRAME: StationFrame = 'square'
+
 /**
- * Bastion station: the Republic shipyard, grown in rings. A plated disc with red rings and a dark
- * command spire at level 1; arms with docking pods and an inner ring at level 2; long arms reaching
- * the far modules at level 3; at level 4 a great outer ring on eight struts. Coordinates are frame
- * pixels from the frame's centre, where data.ts places the station's modules.
+ * Bastion station: the Republic shipyard, a chunky military platform built from plates and
+ * girders that grows with its level. Level 1 is a compact core: an eight-sided deck of four plates
+ * sloping down from a raised command block, red bands round it and a dark spire down the middle.
+ * Level 2 adds four short arms with blocky docking pods and a square girder frame between them.
+ * Level 3 runs the arms out long to big pods, with dry docks alongside. Level 4 puts a great
+ * outer frame round it all on diagonal struts (square with corner bastions, or octagonal, by
+ * `style`). Coordinates are frame pixels from the frame's centre, where data.ts places the modules.
  */
-export const station: ModelDef = ({ level }) => {
+export const station: ModelDef = ({ level, style }) => {
+  const frame: StationFrame = style === 'octagon' ? 'octagon' : STATION_FRAME
   const parts: Part[] = []
-  const lv = (n: number) => ({ level: n })
-  const TAU = Math.PI * 2
-  // Level 4: the outer ring on struts (drawn first, under everything).
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * TAU + Math.PI / 8
-    const strut = turn(rect(-20, 195, 40, 240), a - Math.PI / 2)
-    parts.push(part(`strut${i}`, strut, 'metal', 0, { ...lv(4), details: [{ k: 'line', pts: turn([[0, 220], [0, 420]], a - Math.PI / 2) }] }))
+  const Q = Math.PI / 2
+  // Each side's parts are drawn for the top side (negative y) and turned round to the other three.
+  const sides = (id: string, make: (s: number) => Part) => {
+    for (let s = 0; s < 4; s++) parts.push({ ...make(s), id: `${id}${s}` })
   }
-  for (let i = 0; i < 4; i++) {
-    const a0 = (i / 4) * TAU + 0.21
-    const a1 = ((i + 1) / 4) * TAU - 0.21
-    const mid = (a0 + a1) / 2
-    parts.push(part(`ring${i}`, arcBand(0, 0, 425, 515, a0, a1, 18), 'hull', 1, {
-      ...lv(4),
-      slope: [Math.cos(mid) * 0.45, Math.sin(mid) * 0.45],
-      lift: 6,
-      details: [
-        { k: 'shape', pts: arcBand(0, 0, 455, 488, a0 + 0.06, a0 + 0.36, 6), tone: 'accent' },
-        { k: 'shape', pts: arcBand(0, 0, 455, 488, a1 - 0.36, a1 - 0.06, 6), tone: 'accent' },
-        { k: 'lights', pts: Array.from({ length: 7 }, (_, k) => { const a = a0 + 0.45 + ((a1 - a0 - 0.9) * k) / 6; return [Math.cos(a) * 432, Math.sin(a) * 432] as Pt }), r: 4 },
-        { k: 'line', pts: Array.from({ length: 13 }, (_, k) => { const a = a0 + ((a1 - a0) * k) / 12; return [Math.cos(a) * 470, Math.sin(a) * 470] as Pt }) },
-      ],
-    }))
-  }
-  // Level 3: long arms up, down and to the sides, with pods at their ends.
-  const arm = (id: string, len: number, w: number, podW: number, podH: number, at: number, vert: boolean) => {
-    const out: Part[] = []
-    const a = vert ? 0 : Math.PI / 2
-    for (const s of [-1, 1]) {
-      const r = (pts: Pt[]) => turn(pts.map(([x, y]) => [x, y * s] as Pt), a)
-      out.push(part(`${id}${s}`, r(rect(-w / 2, 180, w, len - 180)), 'hull', 2, {
-        ...lv(at),
-        lift: 5,
-        details: [
-          { k: 'shape', pts: r(rect(-w * 0.16, 215, w * 0.32, len - 300)), tone: 'accent' },
-          { k: 'line', pts: r([[-w / 2, 260], [w / 2, 260]]) },
-          { k: 'line', pts: r([[-w / 2, len - 90], [w / 2, len - 90]]) },
-          { k: 'lights', pts: [0.3, 0.45, 0.6, 0.75].map((k) => r([[-w / 2 + 8, 180 + (len - 180) * k]])[0]), r: 4 },
-          { k: 'lights', pts: [0.3, 0.45, 0.6, 0.75].map((k) => r([[w / 2 - 8, 180 + (len - 180) * k]])[0]), r: 4 },
-        ],
-      }))
-      out.push(part(`${id}pod${s}`, r(chamfer(0, len - podH / 2 + 8, podW, podH, podW * 0.22)), 'hull2', 3, {
-        ...lv(at),
-        lift: 7,
-        details: [
-          { k: 'shape', pts: r(box(0, len - podH / 2 + 8, podW * 0.32, podH * 0.6)), tone: 'accent' },
-          { k: 'shape', pts: r(box(0, len - podH + 30, podW * 0.62, 14)), tone: 'dark' },
-          { k: 'lights', pts: [-0.3, -0.1, 0.1, 0.3].map((k) => r([[podW * k, len - podH + 30]])[0]), r: 3 },
-        ],
-      }))
+  /** A part drawn for the top side, turned to side `s` (0 top, 1 right, 2 bottom, 3 left), its
+   * facet and details turned with it. */
+  const onSide = (s: number, p: Part): Part => {
+    const a = s * Q
+    const tp = (pts: Pt[]) => turn(pts, a)
+    const c = Math.cos(a)
+    const n = Math.sin(a)
+    return {
+      ...p,
+      pts: tp(p.pts),
+      holes: p.holes?.map(tp),
+      slope: p.slope ? [p.slope[0] * c - p.slope[1] * n, p.slope[0] * n + p.slope[1] * c] : undefined,
+      facets: p.facets?.map((f) => ({ pts: tp(f.pts), slope: [f.slope[0] * c - f.slope[1] * n, f.slope[0] * n + f.slope[1] * c] as Pt })),
+      details: p.details?.map((d) => ({ ...d, pts: tp(d.pts) })),
     }
-    return out
   }
-  // Level 4 reaches further out to the sides than level 3 does, so the side arms grow with it.
-  parts.push(...arm('armV', 557, 130, 230, 150, 3, true))
-  parts.push(...arm('armH', level >= 4 ? 574 : 483, 120, 150, 210, 3, false))
-  // Level 2: short arms with docking pods, and an inner ring between them.
-  for (let i = 0; i < 4; i++) {
-    const a0 = (i / 4) * TAU + 0.32
-    const a1 = ((i + 1) / 4) * TAU - 0.32
-    const mid = (a0 + a1) / 2
-    parts.push(part(`inner${i}`, arcBand(0, 0, 268, 318, a0, a1, 14), 'hull2', 1, {
-      ...lv(2),
-      slope: [Math.cos(mid) * 0.4, Math.sin(mid) * 0.4],
-      lift: 4,
-      details: [
-        { k: 'line', pts: Array.from({ length: 9 }, (_, k) => { const a = a0 + ((a1 - a0) * k) / 8; return [Math.cos(a) * 293, Math.sin(a) * 293] as Pt }) },
-        { k: 'shape', pts: arcBand(0, 0, 268, 318, mid - 0.08, mid + 0.08, 3), tone: 'dark' },
-      ],
-    }))
+  const lights = (pts: Pt[], r = 4) => ({ k: 'lights' as const, pts, r })
+  const row = (x0: number, x1: number, y: number, n: number): Pt[] => Array.from({ length: n }, (_, i) => [x0 + ((x1 - x0) * i) / Math.max(1, n - 1), y] as Pt)
+
+  // --- Level 4: the outer frame on struts, under everything else -------------------------------
+  if (level >= 4) {
+    // Diagonal struts from the core's corners out to the frame's corners.
+    for (let s = 0; s < 4; s++) {
+      const a = s * Q + Math.PI / 4
+      parts.push(part(`strut${s}`, turn(rect(-17, -390, 34, 250), a), 'metal', 0, { lift: 3, details: [{ k: 'line', pts: turn([[0, -385], [0, -150]], a) }] }))
+    }
+    if (frame === 'square') {
+      // Four straight bars, each a plate sloping outward, red bands and running lights on them,
+      // and a heavy bastion block at each corner.
+      sides('bar', (s) =>
+        onSide(s, part('', rect(-350, -440, 700, 80), 'hull', 1, {
+          slope: [0, -0.45],
+          lift: 6,
+          details: [
+            { k: 'shape', pts: rect(-300, -428, 120, 22), tone: 'accent' },
+            { k: 'shape', pts: rect(180, -428, 120, 22), tone: 'accent' },
+            { k: 'line', pts: [[-350, -400], [350, -400]] },
+            ...[-160, -80, 80, 160].map((x) => ({ k: 'line' as const, pts: [[x, -440], [x, -360]] as Pt[] })),
+            lights(row(-320, 320, -367, 9)),
+          ],
+        })),
+      )
+      sides('bastion', (s) =>
+        onSide(s, part('', chamfer(-400, -400, 130, 130, 26), 'hull2', 2, {
+          lift: 9,
+          facets: [{ pts: [[-465, -465], [-335, -465], [-400, -400]], slope: [0, -0.45] }, { pts: [[-465, -465], [-465, -335], [-400, -400]], slope: [-0.45, 0] }],
+          details: [{ k: 'shape', pts: rect(-425, -425, 50, 50), tone: 'accent' }, { k: 'shape', pts: rect(-412, -412, 24, 24), tone: 'dark' }, lights([[-452, -400], [-400, -452]])],
+        })),
+      )
+    } else {
+      // Eight bars round an octagon with hard corners, each sloping outward its own way.
+      const oct = (half: number, c: number): Pt[] => [[-half + c, -half], [half - c, -half], [half, -half + c], [half, half - c], [half - c, half], [-half + c, half], [-half, half - c], [-half, -half + c]]
+      const lerp = (a: Pt, b: Pt, t: number): Pt => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+      const outer = oct(440, 170)
+      const inner = oct(360, 137)
+      for (let i = 0; i < 8; i++) {
+        const j = (i + 1) % 8
+        const mx = (outer[i][0] + outer[j][0]) / 2
+        const my = (outer[i][1] + outer[j][1]) / 2
+        const l = Math.hypot(mx, my)
+        const straight = i % 2 === 0
+        parts.push(part(`bar${i}`, [outer[i], outer[j], inner[j], inner[i]], straight ? 'hull' : 'hull2', 1, {
+          slope: [(mx / l) * 0.45, (my / l) * 0.45],
+          lift: 6,
+          details: [
+            { k: 'line', pts: [[(outer[i][0] + inner[i][0]) / 2, (outer[i][1] + inner[i][1]) / 2], [(outer[j][0] + inner[j][0]) / 2, (outer[j][1] + inner[j][1]) / 2]] },
+            ...(straight
+              ? [{ k: 'shape' as const, pts: [lerp(outer[i], outer[j], 0.36), lerp(outer[i], outer[j], 0.64), lerp(inner[i], inner[j], 0.64), lerp(inner[i], inner[j], 0.36)], tone: 'accent' as const }]
+              : [lights([[mx * 0.92, my * 0.92]], 5)]),
+          ],
+        }))
+      }
+    }
   }
-  parts.push(...arm('stub', 340, 112, 140, 120, 2, true))
-  parts.push(...arm('stubH', 340, 112, 120, 140, 2, false))
-  // Level 1: the core disc, its red rings and the spire.
-  parts.push(part('skirt', circle(0, 0, 214, 48), 'metal', 4, { lift: 3, details: Array.from({ length: 16 }, (_, k) => { const a = (k / 16) * TAU; return { k: 'shape' as const, pts: turn(box(0, 207, 22, 12), a), tone: 'dark' as const } }) }))
-  for (let i = 0; i < 8; i++) {
-    // The disc in eight facets, each sloping outward: lit on the side towards the light, shadowed
-    // on the far side and plain between, so it reads as a shallow dome however it is turned.
-    const a0 = (i / 8) * TAU - Math.PI / 8
-    const a1 = a0 + TAU / 8
-    const mid = (a0 + a1) / 2
-    const q: Pt[] = [[0, 0], ...Array.from({ length: 9 }, (_, k) => { const a = a0 + ((a1 - a0) * k) / 8; return [Math.cos(a) * 200, Math.sin(a) * 200] as Pt })]
-    parts.push(part(`disc${i}`, q, 'hull', 5, {
-      slope: [Math.cos(mid) * 0.5, Math.sin(mid) * 0.5],
+
+  // --- Levels 2 and 3: arms, pods, the girder frame and the dry docks ---------------------------
+  if (level >= 2) {
+    // The square girder frame between the pods, and a block at each of its corners.
+    sides('girder', (s) => onSide(s, part('', rect(-300, -311, 600, 22), 'metal', 1.5, { lift: 2, details: [{ k: 'line', pts: [[-300, -300], [300, -300]] }] })))
+    sides('brace', (s) => onSide(s, part('', turn(rect(-13, -290, 26, 150), Math.PI / 4), 'metal', 1.5, { lift: 2 })))
+    sides('block', (s) => onSide(s, part('', chamfer(-300, -300, 64, 64, 12), 'hull2', 2.5, { lift: 5, details: [{ k: 'shape', pts: rect(-312, -312, 24, 24), tone: 'accent' }] })))
+  }
+  // An arm out of side s, from the core to `len`, `w` wide; vertical arms are 0 and 2.
+  const vertical = (s: number) => s % 2 === 0
+  if (level >= 2) {
+    sides('arm', (s) => {
+      const len = level >= 3 ? (vertical(s) ? 470 : level >= 4 ? 470 : 400) : 230
+      const w = vertical(s) ? 130 : 120
+      return onSide(s, part('', rect(-w / 2, -len, w, len - 180), 'hull', 3, {
+        lift: 4,
+        facets: [{ pts: rect(-w / 2, -len, w * 0.3, len - 180), slope: [-0.45, 0] }, { pts: rect(w * 0.2, -len, w * 0.3, len - 180), slope: [0.45, 0] }],
+        details: [
+          { k: 'shape', pts: rect(-w * 0.12, -len + 10, w * 0.24, len - 200), tone: 'accent' },
+          ...(len > 300 ? [{ k: 'line' as const, pts: [[-w / 2, -330], [w / 2, -330]] as Pt[] }] : []),
+          lights(row(-len + 20, -200, 0, Math.max(2, Math.round((len - 220) / 45))).map(([y]) => [-w / 2 + 8, y] as Pt)),
+          lights(row(-len + 20, -200, 0, Math.max(2, Math.round((len - 220) / 45))).map(([y]) => [w / 2 - 8, y] as Pt)),
+        ],
+      }))
+    })
+    // Level-2 docking pods: blocky, with a red block and a dark loading slot.
+    sides('pod', (s) =>
+      onSide(s, part('', chamfer(0, -283, vertical(s) ? 150 : 130, 130, 18), 'hull2', 5, {
+        lift: 7,
+        facets: [{ pts: rect(-80, -348, 18, 130), slope: [-0.45, 0] }, { pts: rect(62, -348, 18, 130), slope: [0.45, 0] }],
+        details: [{ k: 'shape', pts: rect(-30, -340, 60, 26), tone: 'accent' }, { k: 'shape', pts: rect(-44, -236, 88, 12), tone: 'dark' }, lights(row(-36, 36, -230, 4), 3)],
+      })),
+    )
+  }
+  if (level >= 3) {
+    // The far pods: big on the vertical arms (where the level-3 modules sit), smaller on the sides.
+    sides('far', (s) => {
+      const v = vertical(s)
+      const out = v ? 565 : level >= 4 ? 574 : 491
+      const along = v ? 150 : 150
+      const across = v ? 230 : 200
+      return onSide(s, part('', chamfer(0, -out + along / 2, across, along, 28), 'hull2', 5, {
+        lift: 8,
+        facets: [{ pts: rect(-across / 2, -out, across * 0.18, along), slope: [-0.45, 0] }, { pts: rect(across * 0.32, -out, across * 0.18, along), slope: [0.45, 0] }],
+        details: [
+          { k: 'shape', pts: rect(-22, -out + 10, 44, along - 20), tone: 'accent' },
+          { k: 'shape', pts: rect(-across / 2 + 14, -out + along - 26, across - 28, 12), tone: 'dark' },
+          lights(row(-across / 2 + 20, across / 2 - 20, -out + along - 20, 6), 3),
+        ],
+      }))
+    })
+    // Dry docks either side of the vertical arms: open girder frames with lights down them.
+    for (const s of [0, 2])
+      for (const x of [-1, 1]) {
+        const p = part(`dock${s}${x}`, rect(x < 0 ? -150 : 80, -400, 70, 150), 'metal', 2, {
+          lift: 3,
+          details: [{ k: 'shape', pts: rect(x < 0 ? -138 : 92, -388, 46, 126), tone: 'dark' }, lights(row(-380, -270, 0, 4).map(([y]) => [x < 0 ? -115 : 115, y] as Pt), 3)],
+        })
+        parts.push(onSide(s, p))
+      }
+  }
+
+  // --- Level 1: the core ------------------------------------------------------------------------
+  parts.push(part('skirt', chamfer(0, 0, 420, 420, 92), 'metal', 6, {
+    lift: 3,
+    details: [0, 1, 2, 3].flatMap((s) => [-120, -40, 40, 120].map((x) => ({ k: 'shape' as const, pts: turn(rect(x - 12, -209, 24, 10), s * Q), tone: 'dark' as const }))),
+  }))
+  // The deck: four plates sloping down from the command block, so one or two catch the light.
+  const deck: Pt[] = [[-152.5, -152.5], [-115, -190], [115, -190], [152.5, -152.5], [85, -85], [-85, -85]]
+  sides('deck', (s) =>
+    onSide(s, part('', deck, 'hull', 7, {
+      slope: [0, -0.45],
       lift: 2,
-      noOutline: true,
       details: [
-        { k: 'shape', pts: arcBand(0, 0, 118, 150, a0, a1, 6), tone: 'accent' },
-        { k: 'shape', pts: arcBand(0, 0, 62, 86, a0, a1, 6), tone: 'accent' },
-        { k: 'line', pts: [[Math.cos(mid) * 90, Math.sin(mid) * 90], [Math.cos(mid) * 200, Math.sin(mid) * 200]] },
-        { k: 'line', pts: Array.from({ length: 7 }, (_, k) => { const a = a0 + ((a1 - a0) * k) / 6; return [Math.cos(a) * 172, Math.sin(a) * 172] as Pt }) },
-        { k: 'lights', pts: [-0.2, -0.12, 0.12, 0.2].map((d) => [Math.cos(mid + d) * 186, Math.sin(mid + d) * 186] as Pt), r: 3.5 },
-        ...(i % 2 ? [] : [{ k: 'shape' as const, pts: move(box(0, 0, 9, 9), Math.cos(mid + 0.2) * 158, Math.sin(mid + 0.2) * 158), tone: 'dark' as const }]),
+        { k: 'shape', pts: rect(-150, -176, 300, 22), tone: 'accent' },
+        { k: 'shape', pts: rect(-62, -132, 124, 14), tone: 'accent' },
+        { k: 'line', pts: [[-118, -150], [118, -150]] },
+        { k: 'shape', pts: rect(-100, -118, 18, 10), tone: 'dark' },
+        { k: 'shape', pts: rect(82, -118, 18, 10), tone: 'dark' },
+        lights(row(-96, 96, -183, 7), 3.5),
       ],
-    }))
-  }
-  // The disc's rim, outlined once round the whole (the facets themselves only meet in a crease).
-  parts.push(part('rim', circle(0, 0, 200, 48), 'hull', 4.9, { noOutline: false }))
-  parts.push(part('hub', circle(0, 0, 50, 28), 'hull2', 6, { lift: 4, details: [{ k: 'line', pts: circle(0, 0, 36, 20) }] }))
+    })),
+  )
+  parts.push(part('block', chamfer(0, 0, 170, 170, 34), 'hull2', 8, {
+    lift: 5,
+    details: [{ k: 'shape', pts: rect(-62, -62, 22, 22), tone: 'dark' }, { k: 'shape', pts: rect(40, 40, 22, 22), tone: 'dark' }, lights([[-70, 0], [70, 0], [0, -70], [0, 70]], 3.5)],
+  }))
   // The command spire: a dark tower down the middle, finned, with a lit tip.
   const spire: Pt[] = [[0, -175], [-6, -150], [-9, -95], [-20, -70], [-20, -30], [-11, -18], [-11, 40], [-18, 70], [-12, 160], [0, 172]]
-  parts.push(...sym(part('spire', spire, 'dark', 7, { slope: [-0.5, 0], lift: 9, details: [{ k: 'shape', pts: [[0, -120], [-3, -110], [-3, 120], [0, 130]], tone: 'metal' }, { k: 'line', pts: [[-11, 0], [0, 0]] }] })))
-  parts.push(...sym(part('fin', [[-11, -60], [-38, -30], [-36, -18], [-11, -30]], 'dark', 6, { slope: [-0.4, 0], lift: 6 })))
-  parts.push(part('crown', chamfer(0, 0, 30, 46, 9), 'metal', 8, { lift: 3, details: [{ k: 'lights', pts: [[0, -12], [0, 0], [0, 12]], r: 3.4 }] }))
-  parts.push(part('beacon', box(0, -168, 4, 10), 'accent', 9, { glow: true, noOutline: true, detach: { hull: 0.3 } }))
-  // Level-1 docking clamps either side of the spire's foot.
-  parts.push(...sym(part('clamp', [[-30, 120], [-58, 120], [-64, 150], [-30, 150]], 'hull2', 6, { lift: 3, details: [{ k: 'shape', pts: rect(-52, 128, 16, 14), tone: 'dark' }] })))
-  return { parts: parts.filter((p) => (p.level ?? 1) <= level), breakStyle: 'pie' }
+  parts.push(...sym(part('spire', spire, 'dark', 9, { slope: [-0.5, 0], lift: 9, details: [{ k: 'shape', pts: [[0, -120], [-3, -110], [-3, 120], [0, 130]], tone: 'metal' }, { k: 'line', pts: [[-11, 0], [0, 0]] }] })))
+  parts.push(...sym(part('fin', [[-11, -60], [-38, -30], [-36, -18], [-11, -30]], 'dark', 8.5, { slope: [-0.4, 0], lift: 6 })))
+  parts.push(part('crown', chamfer(0, 0, 30, 46, 9), 'metal', 10, { lift: 3, details: [{ k: 'lights', pts: [[0, -12], [0, 0], [0, 12]], r: 3.4 }] }))
+  parts.push(part('beacon', box(0, -168, 4, 10), 'accent', 11, { glow: true, noOutline: true, detach: { hull: 0.3 } }))
+  return { parts, breakStyle: 'pie' }
 }

@@ -12,16 +12,15 @@ import type { HullState, Model, Part, Pt } from './types.ts'
 //
 // Painting is too slow to repeat for every ship every frame, so a unit's hull is painted once into
 // a small bitmap per size bucket (powers of two, roughly the size it shows at), per light bucket
-// (16 headings: the bitmap is turned to the exact heading when drawn, and the light is never more
-// than 11° out) and per damage state, and kept in one shared cache with a memory budget. Turrets
+// (64 headings on small bitmaps, 32 on big ones, painted as ships turn to them; the bitmap is
+// turned to the exact heading when drawn, and the two nearest headings are crossfaded so the
+// shading doesn't snap, see drawLit) and per damage state, and kept in one shared cache with a memory budget. Turrets
 // get bitmaps of their own, since they turn to aim. Only a hull bigger than LIVE pixels on screen,
 // where few can fit, is painted straight onto the screen, with exact light.
 
 const TAU = Math.PI * 2
 /** Above this many device pixels across, a hull is painted live instead of from a bitmap. */
 const LIVE = 720
-/** Headings the light is worked out for. */
-const LIGHTS = 16
 
 // --- Paths -------------------------------------------------------------------------------------------
 
@@ -285,20 +284,44 @@ export function paintModel(g: CanvasRenderingContext2D, m: Model, o: PaintOpts) 
 const store = new Map<string, HTMLCanvasElement>()
 let bytes = 0
 // Phones get a smaller budget: their browsers cap how much canvas memory a page may hold.
-const BUDGET = (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 48 : 112) * 1024 * 1024
+const PHONE = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
+const BUDGET = (PHONE ? 48 : 112) * 1024 * 1024
 
-function cached(key: string, w: number, h: number, paint: (g: CanvasRenderingContext2D) => void) {
+/**
+ * Painting new bitmaps is the expensive part: a fleet turning at once could ask for hundreds in a
+ * frame. Each frame (anything within 12 ms) gets PAINT_MS of painting; past that, drawLit makes do
+ * with a nearby heading that is already painted, and the rest get painted in the frames after.
+ */
+const PAINT_MS = 3
+let frameT = 0
+let spent = 0
+function mayPaint() {
+  const now = performance.now()
+  if (now - frameT > 12) {
+    frameT = now
+    spent = 0
+  }
+  return spent < PAINT_MS
+}
+
+function cached(key: string, w: number, h: number, paint: (g: CanvasRenderingContext2D) => void): HTMLCanvasElement
+function cached(key: string, w: number, h: number, paint: (g: CanvasRenderingContext2D) => void, may: boolean): HTMLCanvasElement | null
+/** A bitmap from the cache, painted now if it isn't there (unless `may` is false: then null). */
+function cached(key: string, w: number, h: number, paint: (g: CanvasRenderingContext2D) => void, may = true) {
   const hit = store.get(key)
   if (hit) {
     store.delete(key)
     store.set(key, hit)
     return hit
   }
+  if (!may) return null
+  const t0 = performance.now()
   const c = document.createElement('canvas')
   c.width = Math.max(1, Math.ceil(w))
   c.height = Math.max(1, Math.ceil(h))
   const g = c.getContext('2d')!
   paint(g)
+  spent += performance.now() - t0
   store.set(key, c)
   bytes += c.width * c.height * 4
   for (const [k, old] of store) {
@@ -317,8 +340,66 @@ function bucket(px: number) {
   while (b < px * 1.15 && b < 1024) b *= 2
   return b
 }
-/** The nearest of the light headings to `rot`. */
-const lightStep = (rot: number) => (((Math.round((rot / TAU) * LIGHTS) % LIGHTS) + LIGHTS) % LIGHTS)
+/**
+ * How many light headings a bitmap `b` pixels across is painted for. A turning ship steps from
+ * one to the next: 64 (under 6° apart) at the sizes frigates and stations show at in a battle;
+ * 32 for specks of 64 px or less, where a step can't be seen, and for the few big ones (zoomed
+ * right in), and on phones, to keep memory down; the crossfade below hides the steps. Each
+ * heading is only painted when a ship first turns to it.
+ */
+const headings = (b: number) => (lightTuning.coarse ? 16 : PHONE || b <= 64 || b > 256 ? 32 : 64)
+/**
+ * How two neighbouring headings are blended as a ship turns between them (a setting object so a
+ * test can compare them side by side). 'window' draws the
+ * nearer heading alone for most of the way and crossfades only over the middle 40% of each step
+ * (smoothstep): the cel tones stay crisp, with no doubled edges most of the time, and a facet
+ * flipping from lit to shadow dissolves over a couple of degrees instead of snapping. 'linear'
+ * (always blending by the fraction) was tried as well: smoother still, but every frame draws two
+ * bitmaps and the slightly doubled outlines read as soft. 'none' is the old snap.
+ */
+export const lightTuning: { blend: 'window' | 'linear' | 'none'; /** The old 16 headings, to compare. */ coarse: boolean } = { blend: 'window', coarse: false }
+const smooth = (a: number, b: number, x: number) => {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
+  return t * t * (3 - 2 * t)
+}
+/**
+ * Draws a cached bitmap lit for heading `rot` out of `n` headings: the heading just below it, then
+ * the one above faded in over it (see lightTuning). `bitmap(step)` gives the bitmap for a heading and
+ * `place` draws it. A see-through unit (alpha under 1) gets the nearest heading alone, since two
+ * see-through layers would add up darker.
+ */
+function drawLit(ctx: CanvasRenderingContext2D, rot: number, n: number, bitmap: (step: number, may: boolean) => HTMLCanvasElement | null, place: (c: HTMLCanvasElement) => void) {
+  const pos = ((((rot / TAU) * n) % n) + n) % n
+  const i0 = Math.floor(pos)
+  const i1 = (i0 + 1) % n
+  const f = pos - i0
+  const b = lightTuning.blend
+  const w = b === 'linear' ? f : b === 'window' ? smooth(0.3, 0.7, f) : f < 0.5 ? 0 : 1
+  // A heading's bitmap: painted if this frame still has time for it, else the nearest one that is
+  // painted already; `must` paints it anyway when there is none (something has to be drawn).
+  const pick = (i: number, must: boolean) => {
+    const hit = bitmap(i, false)
+    if (hit) return hit
+    if (mayPaint()) return bitmap(i, true)
+    for (let d = 1; d <= n / 8; d++) {
+      const near = bitmap((i + d) % n, false) ?? bitmap((i - d + n) % n, false)
+      if (near) return near
+    }
+    return must ? bitmap(i, true) : null
+  }
+  const main = w < 0.5 ? i0 : i1
+  const first = pick(main, true)!
+  if (ctx.globalAlpha < 0.999 || w < 0.01 || w > 0.99) return place(first)
+  // Under the blend: the lower heading, then the upper one faded in by `w`.
+  const lo = main === i0 ? first : pick(i0, false)
+  const hi = main === i1 ? first : pick(i1, false)
+  if (!lo || !hi) return place(first)
+  place(lo)
+  const a = ctx.globalAlpha
+  ctx.globalAlpha = a * w
+  place(hi)
+  ctx.globalAlpha = a
+}
 
 export type DrawOpts = { alpha?: number; debug?: boolean; wreck?: boolean; /** Light it as if turned this way (default: as drawn). */ lightRot?: number }
 
@@ -340,18 +421,31 @@ export function drawHull(ctx: CanvasRenderingContext2D, m: Model, x: number, y: 
     paintModel(ctx, m, { light: lightFor(lr), ppu: px / m.long, state, debug: o.debug, wreckMounts: o.wreck })
   } else {
     const b = bucket(px)
-    const ls = lightStep(lr)
+    const n = headings(b)
     const ppu = b / m.long
     const pad = 4 + b * 0.05
     const cw = Math.ceil(m.w * ppu + pad * 2)
     const ch = Math.ceil(m.h * ppu + pad * 2)
-    const c = cached(`${m.key}|h|${stateKey(state)}|${o.wreck ? 'w' : ''}|${ls}|${b}`, cw, ch, (g) => {
-      g.translate(cw / 2, ch / 2)
-      g.scale(ppu, ppu)
-      paintModel(g, m, { light: lightFor((ls / LIGHTS) * TAU), ppu, state, wreckMounts: o.wreck })
-    })
+    const sk = stateKey(state)
     const s = size / b
-    ctx.drawImage(c, (-cw / 2) * s, (-ch / 2) * s, cw * s, ch * s)
+    drawLit(
+      ctx,
+      lr,
+      n,
+      (ls, may) =>
+        cached(
+          `${m.key}|h|${sk}|${o.wreck ? 'w' : ''}|${ls}/${n}|${b}`,
+          cw,
+          ch,
+          (g) => {
+            g.translate(cw / 2, ch / 2)
+            g.scale(ppu, ppu)
+            paintModel(g, m, { light: lightFor((ls / n) * TAU), ppu, state, wreckMounts: o.wreck })
+          },
+          may,
+        ),
+      (c) => ctx.drawImage(c, (-cw / 2) * s, (-ch / 2) * s, cw * s, ch * s),
+    )
   }
   ctx.restore()
 }
@@ -373,16 +467,28 @@ export function drawMount(ctx: CanvasRenderingContext2D, faction: Model['faction
     paintParts(ctx, parts, pal, lightFor(rot), r * zdpr)
   } else {
     const b = bucket(px)
-    const ls = lightStep(rot)
+    const n = headings(b)
     const ppu = b / 2.4
     const cw = Math.ceil(b * 1.1 + 4)
-    const c = cached(`m|${faction}|${look}|${broken ? 1 : 0}|${ls}|${b}`, cw, cw, (g) => {
-      g.translate(cw / 2, cw / 2)
-      g.scale(ppu, ppu)
-      paintParts(g, parts, pal, lightFor((ls / LIGHTS) * TAU), ppu)
-    })
     const s = (r * 2.4) / b
-    ctx.drawImage(c, (-cw / 2) * s, (-cw / 2) * s, cw * s, cw * s)
+    drawLit(
+      ctx,
+      rot,
+      n,
+      (ls, may) =>
+        cached(
+          `m|${faction}|${look}|${broken ? 1 : 0}|${ls}/${n}|${b}`,
+          cw,
+          cw,
+          (g) => {
+            g.translate(cw / 2, cw / 2)
+            g.scale(ppu, ppu)
+            paintParts(g, parts, pal, lightFor((ls / n) * TAU), ppu)
+          },
+          may,
+        ),
+      (c) => ctx.drawImage(c, (-cw / 2) * s, (-cw / 2) * s, cw * s, cw * s),
+    )
   }
   ctx.restore()
 }
@@ -398,7 +504,8 @@ export function drawPart(ctx: CanvasRenderingContext2D, m: Model, index: number,
   const px = span * k * zdpr
   if (px < 1.5) return
   const b = bucket(px)
-  const ls = lightStep(rot)
+  // Tumbling debris: the nearest of 16 headings is plenty, nobody can follow its light.
+  const ls = ((Math.round((rot / TAU) * 16) % 16) + 16) % 16
   const ppu = b / span
   const pad = 3 + b * 0.06
   const cw = Math.ceil((b0.x1 - b0.x0) * ppu + pad * 2)
@@ -406,7 +513,7 @@ export function drawPart(ctx: CanvasRenderingContext2D, m: Model, index: number,
   const c = cached(`${m.key}|p|${index}|${ls}|${b}`, cw, ch, (g) => {
     g.translate(pad - b0.x0 * ppu, pad - b0.y0 * ppu)
     g.scale(ppu, ppu)
-    paintParts(g, [p], PALETTES[m.faction], lightFor((ls / LIGHTS) * TAU), ppu, false, true)
+    paintParts(g, [p], PALETTES[m.faction], lightFor((ls / 16) * TAU), ppu, false, true)
     // Torn off: burnt across.
     g.globalCompositeOperation = 'source-atop'
     g.fillStyle = 'rgba(30,20,14,0.35)'
@@ -431,22 +538,35 @@ export function drawPiece(ctx: CanvasRenderingContext2D, m: Model, piece: Piece,
   const px = span * k * zdpr
   if (px < 1.5) return
   const b = bucket(px)
-  const ls = lightStep(rot)
+  const n = headings(b)
   const ppu = b / span
   const pad = 3 + b * 0.04
   const cw = Math.ceil((piece.x1 - piece.x0) * ppu + pad * 2)
   const ch = Math.ceil((piece.y1 - piece.y0) * ppu + pad * 2)
-  const c = cached(`${m.key}|x|${key}|${stateKey(state)}|${ls}|${b}`, cw, ch, (g) => {
-    g.translate(pad - piece.x0 * ppu, pad - piece.y0 * ppu)
-    g.scale(ppu, ppu)
-    paintModel(g, m, { light: lightFor((ls / LIGHTS) * TAU), ppu, state, wreckMounts: true, region: piece.region, cuts: piece.cuts })
-  })
+  const sk = stateKey(state)
   const s = k / ppu
   ctx.save()
   ctx.translate(x, y)
   ctx.rotate(rot)
   if (alpha < 1) ctx.globalAlpha *= alpha
-  ctx.drawImage(c, (piece.x0 - piece.cx) * k - pad * s, (piece.y0 - piece.cy) * k - pad * s, cw * s, ch * s)
+  drawLit(
+    ctx,
+    rot,
+    n,
+    (ls, may) =>
+      cached(
+        `${m.key}|x|${key}|${sk}|${ls}/${n}|${b}`,
+        cw,
+        ch,
+        (g) => {
+          g.translate(pad - piece.x0 * ppu, pad - piece.y0 * ppu)
+          g.scale(ppu, ppu)
+          paintModel(g, m, { light: lightFor((ls / n) * TAU), ppu, state, wreckMounts: true, region: piece.region, cuts: piece.cuts })
+        },
+        may,
+      ),
+    (c) => ctx.drawImage(c, (piece.x0 - piece.cx) * k - pad * s, (piece.y0 - piece.cy) * k - pad * s, cw * s, ch * s),
+  )
   ctx.restore()
 }
 

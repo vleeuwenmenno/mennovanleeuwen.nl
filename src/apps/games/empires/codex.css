@@ -91,21 +91,133 @@
   touch-action: none;
   cursor: grab;
 }
-.ew-cx-canvas.is-workshop {
-  cursor: crosshair;
+.ew-cx-canvas.is-over {
+  cursor: pointer;
+}
+/* The view and what floats over it: the level and frame switches, Reset view, the hint and the
+   hover tip. */
+.ew-cx-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .ew-cx-level {
   position: absolute;
   top: 10px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+.ew-cx-reset {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+}
+.ew-cx-tip {
+  position: absolute;
+  z-index: 3;
+  max-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 10px;
+  border: 1px solid rgba(127, 240, 255, 0.55);
+  border-radius: 6px;
+  background: rgba(6, 10, 22, 0.94);
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+.ew-cx-tip b {
+  font-size: 12.5px;
+}
+.ew-cx-tip small {
+  font-size: 11px;
+}
+/* The selected module, at the top of the specifications. */
+.ew-cx-module {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid rgba(127, 240, 255, 0.45);
+  border-radius: 6px;
+  background: rgba(40, 90, 120, 0.16);
+}
+.ew-cx-module header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.ew-cx-module p {
+  margin: 0;
+}
+.ew-cx-mname {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+}
+.ew-root .ew-cx-x {
+  padding: 0 6px;
+  font-size: 11px;
+}
+/* Hardpoint rows: each one picks its module on the model. */
+.ew-cx-list.ew-cx-hps li {
+  display: block;
+}
+.ew-root .ew-cx-hps button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 8px 1fr;
+  column-gap: 8px;
+  align-items: center;
+  text-align: left;
+  background: transparent;
+  border-color: transparent;
+  padding: 3px 6px;
+}
+.ew-cx-hps button small {
+  grid-column: 2;
+  color: var(--ew-muted);
+}
+.ew-cx-hps button i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.ew-cx-hps em {
+  font-style: normal;
+}
+.ew-root .ew-cx-hps li.is-over button {
+  border-color: rgba(127, 240, 255, 0.35);
+}
+.ew-root .ew-cx-hps li.is-on button {
+  border-color: rgba(127, 240, 255, 0.8);
+  background: rgba(40, 90, 120, 0.28);
 }
 .ew-cx-hint {
   position: absolute;
-  top: 10px;
+  bottom: 12px;
   right: 12px;
+  max-width: calc(100% - 150px);
   margin: 0;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(4, 6, 13, 0.7);
+  text-align: right;
   pointer-events: none;
+}
+.ew-cx-level .ew-seg button {
+  white-space: nowrap;
 }
 .ew-cx-tools {
   display: flex;
@@ -252,6 +364,9 @@
     height: min(52vh, 420px);
     flex: none;
   }
+  .ew-cx-stage {
+    flex: none;
+  }
   .ew-cx-side {
     border-left: 0;
     overflow: visible;
@@ -260,10 +375,7 @@
     flex-wrap: wrap;
     gap: 8px;
   }
-  .ew-cx-hint {
-    top: auto;
-    bottom: 8px;
-  }
+
   .ew-cx-view:has(.ew-cx-tools) .ew-cx-hint {
     display: none;
   }

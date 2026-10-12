@@ -917,9 +917,13 @@ pnpm empires:battle-ai [games] [minutes]                  # AI-only battles: win
 Ships and stations are moving from generated sprites to procedural models built from parts
 ([`src/apps/games/empires/models/`](src/apps/games/empires/models)), drawn cel-shaded like the
 cartoon: flat fills in three hard tones, a heavy dark outline, panel lines, stripes, windows and
-engine light. So far the Republic's Lance interceptor, Warden frigate and Bastion station (which
-grows with every station level) and the droids' Mantis fighter have one; every other unit keeps
-its sprite. The setting *Procedural models (preview)* (on by default, in the game's Settings and
+engine light. So far the Republic's Lance interceptor, Warden frigate and Bastion station and the
+droids' Mantis fighter have one; every other unit keeps its sprite. The station is a squared-off
+military platform of plates and girders that grows with its level: a compact eight-sided core at
+level 1, short arms with docking pods and a girder frame at level 2, long arms, big pods and dry
+docks at level 3, and a great outer frame on struts at level 4, square with corner bastions or
+octagonal (the battle uses `STATION_FRAME` in
+[`republic.ts`](src/apps/games/empires/models/republic.ts); the Codex shows both). The setting *Procedural models (preview)* (on by default, in the game's Settings and
 in Settings → Apps → Games → Empires At War) switches back to the sprites to compare.
 
 - **The format** ([`types.ts`](src/apps/games/empires/models/types.ts)): a model is a list of
@@ -942,10 +946,16 @@ in Settings → Apps → Games → Empires At War) switches back to the sprites 
 - **Lighting and caching** ([`paint.ts`](src/apps/games/empires/models/paint.ts)): the light
   comes from the top left of the screen, so a facet's tone (lit, base or shadow) is worked out for
   the ship's heading. A hull is painted once into a bitmap per size bucket (powers of two near its
-  size on screen), per light heading (16, so the light is never more than 11° out) and per damage
-  state, kept in one cache with a memory budget, and turned to the exact heading when drawn.
-  Turrets have bitmaps of their own because they turn to aim. Only a hull more than 720 device
-  pixels across (zoomed right in, so few fit on screen) is painted live, with exact light.
+  size on screen), per light heading and per damage state, kept in one cache with a memory budget
+  (112 MB, 48 MB on phones), and turned to the exact heading when drawn. There are 64 light
+  headings (under 6° apart) at the sizes ships show at in battle and 32 for specks, for the few
+  big bitmaps and on phones; a heading is only painted when a ship first turns to it, at most 3 ms
+  of painting a frame (past that, the nearest heading already painted stands in). As a ship turns,
+  the two nearest headings are crossfaded over the middle of each step, so the shading moves on
+  smoothly instead of popping (`lightTuning` in paint.ts; a linear blend and the old snap can be
+  compared there). Turrets get the same treatment in bitmaps of their own, because they turn to
+  aim. Only a hull more than 720 device pixels across (zoomed right in, so few fit on screen) is
+  painted live, with exact light.
 - **Damage:** scorch marks spread as the hull drops (four levels, with burnt-through holes at the
   worst); parts come off at their hull share and fly away tumbling and smoking; wrecked mounts
   show broken. All of it follows from the battle's own state.
@@ -967,14 +977,26 @@ it in the Codex's Workshop.
 **The Codex** (main menu → Codex, [`Codex.tsx`](src/apps/games/empires/Codex.tsx)) lists every
 ship and structure of both sides with its numbers: hull, shields, speed, turn rate, sensors, fleet
 space, cost, build time, station level, firepower, each weapon (damage, burst, range, reload),
-hardpoints, what it beats and what beats it, and its ability, next to a turning view of its model
-(or sprite). Drag to turn it, scroll or pinch to zoom; a station has a level switch. **Workshop**
-mode adds tools for checking models: hardpoint markers, weapon ranges, engine glow and part
-outlines (detachable parts orange, engines blue), a hull slider, clicking (tapping) a hardpoint to
-damage and then destroy it or a part to shoot it off, a Detach button per part, and **Destroy**,
-which plays the death the battle would show; pressing it again re-rolls how it breaks, or the
-break can be forced (intact, half, pieces). On a phone the list becomes a row of chips over the
-view and the numbers.
+hardpoints, what it beats and what beats it, and its ability, next to a view of its model (or
+sprite), nose up. Drag to turn it, scroll or pinch to zoom, **Reset view** to go back; a station
+has a level switch and, at level 4, a switch between the two outer frames.
+
+Every module and named part can be looked at ([`codexInfo.ts`](src/apps/games/empires/codexInfo.ts)
+holds the words): hovering one outlines it on the model and shows a tip (name, type, health, and
+for a gun its damage, rate, range and what it is good against); clicking or tapping selects it,
+which adds a **Module** section to the specifications (what it does, what losing it costs the
+unit, whether it is blown off or stays on wrecked) and rings a gun's reach on the model. The
+hardpoint list in the specifications selects and highlights the same way. Esc or clicking empty
+space clears it.
+
+**Workshop** mode adds tools for checking models: a click tool (**Inspect** selects, **Damage**
+takes half a module's health and then destroys it, **Detach** shoots a part or a flak turret off),
+hardpoint markers, weapon ranges, engine glow, part outlines (detachable parts orange, engines
+blue), **Spin** (off by default) to watch the light move, a hull slider, a Detach button per part,
+and **Destroy**, which plays the death the battle would show; pressing it again re-rolls how it
+breaks, or the break can be forced (intact, half, pieces). On a touch screen, holding a finger on
+a module or part opens a wheel: Inspect, Damage, Destroy, Detach. On a phone the list becomes a
+row of chips over the view and the numbers.
 
 ```sh
 pnpm check:empires-models   # every model builds, its mounts match the hardpoints, detachable parts are sound, breaks are deterministic and weighted

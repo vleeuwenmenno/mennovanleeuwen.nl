@@ -27,14 +27,20 @@ const DEFS: Record<string, ModelDef> = {
 
 export const hasModel = (t: UnitType) => t.id in DEFS
 
-const built = new WeakMap<UnitType, Model | null>()
+const built = new WeakMap<UnitType, Map<string, Model | null>>()
 /** The model for a unit type, built on first use (null if it has none). Every grown station is a
- * type of its own (see stationType), so each level and set of modules gets its own model. */
-export function modelFor(t: UnitType): Model | null {
-  let m = built.get(t)
-  if (m === undefined) built.set(t, (m = hasModel(t) ? buildModel(t) : null))
+ * type of its own (see stationType), so each level and set of modules gets its own model. `style`
+ * picks a design variant (the station's level-4 frame); left out, the design's default. */
+export function modelFor(t: UnitType, style = ''): Model | null {
+  let byStyle = built.get(t)
+  if (!byStyle) built.set(t, (byStyle = new Map()))
+  let m = byStyle.get(style)
+  if (m === undefined) byStyle.set(style, (m = hasModel(t) ? buildModel(t, style || undefined) : null))
   return m
 }
+
+/** The design variants a unit's model can be shown in (the Codex offers them), by level. */
+export const modelStyles = (t: UnitType): string[] => (t.id === 'r-station' && /-4$/.test(t.sprite) ? [...republic.STATION_FRAMES] : [])
 
 const bySprite = new Map<string, UnitType | null>()
 /** The model behind a wreck, which only knows the sprite of the ship it was. */
@@ -53,7 +59,7 @@ export function unitForSprite(sprite: string): UnitType | null {
  * station modules stay on the hull, wrecked. */
 const DETACH_BY_DEFAULT: MountDesign[] = ['flak']
 
-export function buildModel(t: UnitType): Model {
+export function buildModel(t: UnitType, style?: string): Model {
   const def = DEFS[t.id]
   if (!def) throw new Error(`No model for ${t.id}`)
   let w: number
@@ -72,7 +78,7 @@ export function buildModel(t: UnitType): Model {
     h = dh * k
   }
   const long = Math.max(w, h)
-  const spec = def({ t, w, h, level })
+  const spec = def({ t, w, h, level, style })
   const grid = (gx: number, gy: number): Pt => [(gx / 10 - 0.5) * w, (gy / 10 - 0.5) * h]
   const mounts: Mount[] = t.hardpoints.map((hp, i) => {
     const [x, y] = grid(hp.x, hp.y)
@@ -84,7 +90,7 @@ export function buildModel(t: UnitType): Model {
     .filter((m) => m.design !== 'engine')
     .map((m) => ({ id: `socket${m.hp}`, pts: circle(m.x, m.y, m.r * 1.1, 18), tone: 'dark' as const, z: 0.5, details: [{ k: 'line' as const, pts: circle(m.x, m.y, m.r * 0.92, 16) }] }))
   const parts = [...spec.parts.filter((p) => (p.level ?? 1) <= level), ...sockets].sort((a, b) => a.z - b.z)
-  const key = t.tier === 'station' ? `${t.id}:${level}:${t.hardpoints.map((p) => p.key).join(',')}` : t.id
+  const key = `${t.tier === 'station' ? `${t.id}:${level}:${t.hardpoints.map((p) => p.key).join(',')}` : t.id}${style ? `:${style}` : ''}`
   const seed = seedOf(t.tier === 'station' ? `${t.id}:${level}` : t.id)
   return {
     key,
@@ -105,7 +111,7 @@ export function buildModel(t: UnitType): Model {
 /** The parts that make up the hull's outline: everything solid that doesn't come off. */
 export const hullParts = (m: Model) => m.parts.filter((p) => p.pts.length >= 3 && !p.glow && !p.detach)
 /** Whether a point (model units) is on the hull. */
-export const onHull = (m: Model, x: number, y: number) => m.parts.some((p) => p.pts.length >= 3 && !p.glow && inPart(p, x, y))
+export const onHull = (m: Model, x: number, y: number) => m.parts.some((p) => p.pts.length >= 3 && !p.glow && !p.id.startsWith('socket') && inPart(p, x, y))
 
 /** Where scorch marks can go: spots on the hull, the first few showing from light damage, more as
  * it gets worse. */
@@ -176,12 +182,24 @@ export function breakOutcome(key: number, seed: number, tier: Tier): { kind: Bre
  * (model units), the break lines along its edges, and its share of the hull. */
 export type Piece = { region: Pt[]; cx: number; cy: number; x0: number; y0: number; x1: number; y1: number; cuts: Pt[][]; share: number }
 
+const pieceCache = new WeakMap<Model, Map<string, Piece[]>>()
 /**
  * The pieces a model breaks into: one for an intact wreck, two for a break in half, three or more
  * for pieces. Long hulls are cut across with jagged lines; round stations are cut into wedges round
  * the middle. The same model, kind and variant always give the same pieces.
  */
 export function breakPieces(m: Model, kind: BreakKind, variant: number): Piece[] {
+  // Worked out once per model and break: a squadron dying together would otherwise sample its
+  // hull dozens of times in one frame.
+  let byKey = pieceCache.get(m)
+  if (!byKey) pieceCache.set(m, (byKey = new Map()))
+  const key = `${kind}:${variant}`
+  let hit = byKey.get(key)
+  if (!hit) byKey.set(key, (hit = cutPieces(m, kind, variant)))
+  return hit
+}
+
+function cutPieces(m: Model, kind: BreakKind, variant: number): Piece[] {
   const r = rng(hash(m.seed, variant, kind === 'half' ? 2 : kind === 'pieces' ? 3 : 1))
   const X = m.w * 0.9
   const Y = m.h * 0.9
@@ -263,13 +281,18 @@ export function wreckState(m: Model, key: number, detached?: number): HullState 
   return { detached: mask, scorch: 3, variant: key & 3 }
 }
 
-/** What is under a point (model units): a mount first (they sit on top), else the topmost part
- * still on the hull. For the Codex's workshop. */
-export function pickAt(m: Model, x: number, y: number, detached: number): { mount: number } | { part: number } | null {
+/** What is under a point (model units): a mount first (they sit on top; within `minR` of its middle
+ * however small it is drawn, so a finger can hit it), else the topmost part still on the hull. For
+ * the Codex. */
+export function pickAt(m: Model, x: number, y: number, detached: number, minR = 0): { mount: number } | { part: number } | null {
+  let best = -1
+  let bestD = Infinity
   for (let i = m.mounts.length - 1; i >= 0; i--) {
     const mt = m.mounts[i]
-    if (mt.design !== 'engine' && Math.hypot(x - mt.x, y - mt.y) < mt.r * 1.15) return { mount: i }
+    const d = Math.hypot(x - mt.x, y - mt.y)
+    if (mt.design !== 'engine' && d < Math.max(mt.r * 1.15, minR) && d < bestD) (best = i), (bestD = d)
   }
+  if (best >= 0) return { mount: best }
   for (let i = m.parts.length - 1; i >= 0; i--) {
     const p = m.parts[i]
     const d = m.detachable.indexOf(i)

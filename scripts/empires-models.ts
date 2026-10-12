@@ -11,7 +11,7 @@
 //    weights for its class; every break splits the hull into pieces that cover it.
 
 import { STATIONS, TECHS, UNITS, stationType, type UnitType } from '../src/apps/games/empires/data.ts'
-import { BREAK_WEIGHTS, breakOutcome, breakPieces, buildModel, hasModel, hullState, onHull, wreckState } from '../src/apps/games/empires/models/index.ts'
+import { BREAK_WEIGHTS, breakOutcome, breakPieces, buildModel, hasModel, hullState, modelStyles, onHull, wreckState } from '../src/apps/games/empires/models/index.ts'
 
 let failed = 0
 const fail = (msg: string) => {
@@ -36,11 +36,11 @@ for (const t of UNITS) {
 }
 console.log(`Models: ${types.length} unit types (${UNITS.filter(hasModel).map((t) => t.id).join(', ')})`)
 
-for (const t of types) {
-  const label = `${t.id}${t.tier === 'station' ? ` (${t.sprite}, ${t.hardpoints.length} modules)` : ''}`
+for (const [t, style] of types.flatMap((t) => [[t, undefined], ...modelStyles(t).map((s) => [t, s])] as [UnitType, string | undefined][])) {
+  const label = `${t.id}${t.tier === 'station' ? ` (${t.sprite}, ${t.hardpoints.length} modules)` : ''}${style ? ` [${style}]` : ''}`
   let m
   try {
-    m = buildModel(t)
+    m = buildModel(t, style)
   } catch (e) {
     fail(`${label}: build threw ${(e as Error).message}`)
     continue
@@ -93,7 +93,8 @@ for (const t of types) {
       if (kind === 'intact') ok(pieces.length === 1, `${label}: an intact wreck has ${pieces.length} pieces`)
       if (kind === 'half') ok(pieces.length === 2, `${label}: a half break has ${pieces.length} pieces`)
       if (kind === 'pieces') ok(pieces.length >= 3, `${label}: a break into pieces has ${pieces.length}`)
-      const again = breakPieces(m, kind, v)
+      // A freshly built model, so nothing comes from the cache.
+      const again = breakPieces(buildModel(t, style), kind, v)
       ok(JSON.stringify(again) === JSON.stringify(pieces), `${label}: ${kind} break ${v} isn't the same twice`)
     }
   }
