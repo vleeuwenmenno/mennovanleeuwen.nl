@@ -132,6 +132,7 @@ const APP_NAMES: Record<AppId, string> = {
   linkforge: 'link-forge',
   calendar: 'calendar',
   agents: 'agents',
+  tasks: 'tasks',
 }
 
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */
