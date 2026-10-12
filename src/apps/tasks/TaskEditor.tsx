@@ -171,10 +171,16 @@ export function TaskEditor({ task, defaults = {}, lists, onClose }: Props) {
             <span>Link</span>
             <span className="ca-when">
               <input value={d.url} onChange={(e) => set({ url: e.target.value })} placeholder="https://…" inputMode="url" spellCheck={false} aria-label="Link" />
-              {/^https?:\/\//.test(d.url.trim()) && (
-                <button type="button" className="btn btn-small" onClick={() => openLink(d.url.trim())} title="Open the link">
-                  ↗
+              {/^message:/i.test(d.url.trim()) ? (
+                <button type="button" className="btn btn-small" onClick={() => openLink(d.url.trim())} title="Open the email in Mail">
+                  ✉
                 </button>
+              ) : (
+                /^https?:\/\//.test(d.url.trim()) && (
+                  <button type="button" className="btn btn-small" onClick={() => openLink(d.url.trim())} title="Open the link">
+                    ↗
+                  </button>
+                )
               )}
             </span>
           </div>

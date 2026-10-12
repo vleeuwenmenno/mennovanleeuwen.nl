@@ -1983,6 +1983,10 @@ body.is-resizing iframe {
   min-height: 0;
   height: auto;
 }
+.terminal[data-drop-over] {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
 .terminal {
   height: 100%;
   overflow: auto;
@@ -9373,4 +9377,14 @@ kbd {
   body {
     overscroll-behavior-x: none;
   }
+}
+
+/* A contact in Spotlight's preview. */
+.sp-contact {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+}
+.sp-contact h4 {
+  margin: 4px 0 0;
 }

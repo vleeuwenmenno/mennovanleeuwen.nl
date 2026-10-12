@@ -24,6 +24,9 @@ import { APP_META } from './apps'
 import { useCodeSearch } from './codeSearch'
 import { asWebAddress, useLinkPreview, type LinkPreview } from './linkPreview'
 import { openLink } from '../data/links'
+import { displayName, matchScore, openContact, useContacts, type Contact } from '../data/contacts'
+import { composeMail, fetchThreads, openMail, useMailAccounts, type ThreadRow } from '../data/mail'
+import { Avatar } from '../apps/contacts/people'
 import { isDockableApp, linkDockId, pinLink, pinToDock, unpinFromDock, useCanCustomizeDock, useDock, type DockId } from './dockItems'
 import { revealEmail } from '../data/email'
 import { cachedRates, loadRates, smartCalc, type CalcResult } from './smartcalc'
@@ -39,7 +42,7 @@ import { ALWAYS_NEW, SINGLE_INSTANCE, useWM, type AppId } from './wm'
 // Ctrl+K: one search box for apps, files, projects, games, live status, quick actions, maths and
 // terminal commands, with a preview of the highlighted result on the right.
 
-type Group = 'Top hit' | 'Favourites' | 'Go links' | 'Answers' | 'Recent' | 'Recently visited' | 'Status' | 'Apps' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Widgets' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Web' | 'Fallback'
+type Group = 'Top hit' | 'Favourites' | 'Go links' | 'Answers' | 'Recent' | 'Recently visited' | 'Status' | 'Apps' | 'Contacts' | 'Mail' | 'Repositories' | 'Issues & PRs' | 'Branches' | 'Code' | 'Widgets' | 'Notes' | 'Actions' | 'Projects' | 'Games' | 'Files' | 'Links' | 'Web' | 'Fallback'
 
 /** One entry in Spotlight's actions panel (Ctrl+K, right-click). */
 type SpAction = { id: string; label: string; keys: string[]; run: () => void; danger?: boolean }
@@ -63,6 +66,8 @@ type Result = {
   link?: { label: string; url: string }
   /** Remembered results: drops it from what Spotlight remembers (right-click, or Shift+Delete) */
   forget?: () => void
+  /** More in its actions panel (a contact: copy the address, call) */
+  more?: { label: string; run: () => void }[]
 }
 
 const Glyph = ({ children, color = 'var(--panel-2)' }: { children: ReactNode; color?: string }) => (
@@ -269,7 +274,7 @@ function visitRow(v: Visit, goTemplate: string | null, copy: (text: string, labe
 }
 
 /** Which setting leaves a group out of what you type. */
-const CATEGORY_OF: Partial<Record<Group, Category>> = { Answers: 'answers', 'Recently visited': 'sites', Status: 'status', Projects: 'projects', Games: 'games', Files: 'files' }
+const CATEGORY_OF: Partial<Record<Group, Category>> = { Answers: 'answers', 'Recently visited': 'sites', Status: 'status', Projects: 'projects', Games: 'games', Files: 'files', Contacts: 'contacts', Mail: 'mail' }
 
 function StateBadge({ state, draft }: { state: IssueHit['state']; draft?: boolean }) {
   const label = draft && state === 'open' ? 'draft' : state
@@ -446,6 +451,93 @@ function codeRow(h: Hit, copy: (text: string, label: string) => void): Result {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Your contacts and your mail
+
+/** A contact: Enter opens it; sending an email, copying the address and calling are its other actions. */
+function contactRow(c: Contact, copy: (text: string, label: string) => void): Result {
+  const name = displayName(c)
+  const email = (c.emails.find((e) => e.pref) ?? c.emails[0])?.value
+  const phone = (c.phones.find((p) => p.pref) ?? c.phones[0])?.value
+  return {
+    id: `contact-${c.id}`,
+    group: 'Contacts',
+    title: name,
+    subtitle: [email, phone, c.org].filter(Boolean).join(' · ') || 'Contact',
+    icon: <Avatar contact={c} size={28} />,
+    run: () => openContact(c.id),
+    enterLabel: 'Open contact',
+    alt: email ? { label: 'Send email', run: () => composeMail({ to: [{ name, email }] }) } : undefined,
+    more: [...(email ? [{ label: `Copy ${email}`, run: () => copy(email, 'address') }] : []), ...(phone ? [{ label: `Call ${phone}`, run: () => void window.open(`tel:${phone.replace(/[^\d+*#]/g, '')}`, '_self') }] : [])],
+    preview: () => (
+      <div className="sp-contact">
+        <Avatar contact={c} size={56} />
+        <h4>{name}</h4>
+        {(c.title || c.org) && <p className="muted">{[c.title, c.org].filter(Boolean).join(' · ')}</p>}
+        <dl className="sp-dl">
+          {c.emails.map((e, i) => (
+            <span key={`e${i}`} style={{ display: 'contents' }}>
+              <dt>{e.type ?? 'email'}</dt>
+              <dd>{e.value}</dd>
+            </span>
+          ))}
+          {c.phones.map((p, i) => (
+            <span key={`p${i}`} style={{ display: 'contents' }}>
+              <dt>{p.type ?? 'phone'}</dt>
+              <dd>{p.value}</dd>
+            </span>
+          ))}
+        </dl>
+      </div>
+    ),
+  }
+}
+
+type MailHit = ThreadRow & { account: number }
+
+/** "mail: text": the newest matching conversations in every linked account, asked a moment after typing stops. */
+function useMailSearch(q: string | null): { q: string; hits: MailHit[]; loading: boolean; error: string | null } {
+  const { accounts } = useMailAccounts()
+  const [state, setState] = useState<{ q: string; hits: MailHit[]; loading: boolean; error: string | null }>({ q: '', hits: [], loading: false, error: null })
+  useEffect(() => {
+    const text = q?.trim() ?? ''
+    if (!text || !accounts?.length) return setState({ q: text, hits: [], loading: false, error: null })
+    let live = true
+    setState((s) => ({ ...s, loading: true }))
+    const t = setTimeout(() => {
+      Promise.allSettled(accounts.map((a) => fetchThreads(a.id, { q: text, position: 0, limit: 6 }).then((r) => r.rows.map((x) => ({ ...x, account: a.id })))))
+        .then((all) => {
+          if (!live) return
+          const hits = all.flatMap((r) => (r.status === 'fulfilled' ? r.value : [])).sort((a, b) => b.receivedAt.localeCompare(a.receivedAt)).slice(0, 8)
+          const failed = all.find((r): r is PromiseRejectedResult => r.status === 'rejected')
+          setState({ q: text, hits, loading: false, error: hits.length || !failed ? null : (failed.reason as Error).message })
+        })
+    }, 250)
+    return () => {
+      live = false
+      clearTimeout(t)
+    }
+  }, [q, accounts])
+  return state
+}
+
+const mailRow = (r: MailHit, many: boolean, label: string | undefined): Result => ({
+  id: `mail-${r.account}-${r.id}`,
+  group: 'Mail',
+  title: r.subject || '(No subject)',
+  subtitle: [r.from.map((a) => a.name || a.email).join(', ') || '(No sender)', new Date(r.receivedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }), many ? label : null].filter(Boolean).join(' · '),
+  icon: <AppIcon app="mail" size={28} />,
+  run: () => openMail(r.id, { account: r.account }),
+  enterLabel: 'Open in Mail',
+  preview: () => (
+    <>
+      <h4>{r.subject || '(No subject)'}</h4>
+      <p className="muted sp-small">{r.from.map((a) => (a.name ? `${a.name} <${a.email}>` : a.email)).join(', ')}</p>
+      <p>{r.preview}</p>
+    </>
+  ),
+})
+
+// ---------------------------------------------------------------------------------------------
 
 export function Spotlight() {
   const wm = useWM()
@@ -487,6 +579,11 @@ export function Spotlight() {
   const close = () => setOverlay(null)
   // A question for the Agents app, answered here; Ctrl+K continues it in the Agents window.
   const quick = useQuickAnswer(account.status === 'user' && !!account.integrations.ollama)
+  // Your contacts as you type, and your mail after "mail:".
+  const { contacts } = useContacts()
+  const { accounts: mailAccounts } = useMailAccounts()
+  const mailQuery = sub || account.status !== 'user' || !prefs.include.mail ? null : (/^mail:\s*(.*)$/is.exec(q)?.[1] ?? null)
+  const mail = useMailSearch(mailQuery)
   const adopt = () => {
     void quick.adopt()
     close()
@@ -902,6 +999,25 @@ export function Spotlight() {
 
     if (goAlias !== null) return goRows(goAlias)
 
+    // "mail: text": the newest matching mail, Enter opens one; the last row shows all of it in Mail.
+    if (mailQuery !== null) {
+      const text = mailQuery.trim()
+      const many = (mailAccounts?.length ?? 0) > 1
+      const rows = mail.q === text ? mail.hits.map((r) => mailRow(r, many, mailAccounts?.find((a) => a.id === r.account)?.label)) : []
+      const status: Result[] = !mailAccounts?.length
+        ? [{ id: 'mail-none', group: 'Mail', title: 'Link a mail account to search it here', icon: <AppIcon app="mail" size={28} />, run: () => wm.open('settings', { section: 'integrations', sub: 'mail', t: String(Date.now()) }) }]
+        : !text
+          ? [{ id: 'mail-hint', group: 'Mail', title: 'Search your mail', subtitle: 'Words, or from: to: subject: has:attachment is:unread after:2026-01-31', icon: <AppIcon app="mail" size={28} />, run: () => wm.open('mail') }]
+          : mail.loading || mail.q !== text
+            ? [{ id: 'mail-loading', group: 'Mail', title: 'Searching your mail…', icon: <Glyph>⌕</Glyph>, run: () => {} }]
+            : !rows.length
+              ? [{ id: 'mail-nothing', group: 'Mail', title: mail.error ? `Mail search failed: ${mail.error}` : 'No mail matches', icon: <Glyph>∅</Glyph>, run: () => {} }]
+              : []
+      const first = rows[0] ? [{ ...rows[0], group: 'Top hit' as Group }] : []
+      const inMail: Result[] = text && mailAccounts?.length ? [{ id: 'mail-all', group: 'Fallback', title: `Search Mail for “${text}”`, icon: <AppIcon app="mail" size={28} />, run: () => wm.open('mail', { search: text, t: String(Date.now()) }), enterLabel: 'Search' }] : []
+      return [...first, ...rows.slice(1), ...status, ...inMail]
+    }
+
     if (calc) out.push(calcRow(calc))
 
     // A web address always leads: "Go to google.com", with what the page says about itself.
@@ -972,15 +1088,17 @@ export function Spotlight() {
       : []
     // Quick answers, by question first and then by what the answer says.
     const answered = prefs.include.answers ? quick.recent.map((a) => ({ r: answerRow(a), s: Math.max(score(a.question, query, true), score(a.answer, query) * 0.5) })) : []
+    // Your contacts, by name, address, phone or organisation (as Contacts' own search ranks them).
+    const people = account.status === 'user' && prefs.include.contacts && query.length > 1 ? contacts.map((c) => ({ r: contactRow(c, copy), s: matchScore(c, query) * 0.9 })).filter((x) => x.s > 0) : []
     const scored = all
       .filter((r) => !CATEGORY_OF[r.group] || prefs.include[CATEGORY_OF[r.group]!])
       .map((r) => ({ r, s: Math.max(score(r.title, query, true) * 1.2, score(r.keywords ?? '', query) * 0.8, score(r.subtitle ?? '', query) * 0.6) }))
-      .concat(visited, answered)
+      .concat(visited, answered, people)
       .filter((x) => x.s > 0)
       .sort((a, b) => b.s - a.s)
 
     // The single best match leads, then everything else grouped.
-    const order: Group[] = ['Recent', 'Answers', 'Recently visited', 'Status', 'Apps', 'Widgets', 'Repositories', 'Issues & PRs', 'Branches', 'Notes', 'Actions', 'Projects', 'Games', 'Files', 'Links']
+    const order: Group[] = ['Recent', 'Answers', 'Recently visited', 'Status', 'Apps', 'Contacts', 'Widgets', 'Repositories', 'Issues & PRs', 'Branches', 'Notes', 'Actions', 'Projects', 'Games', 'Files', 'Links']
     const [top, ...rest] = scored
     const recentRows = recentMatches.map((x) => recentRow(x.r.hit))
     // A remembered thing that matches well beats an app name that matches about as well.
@@ -1049,7 +1167,7 @@ export function Spotlight() {
     out.push(second)
     if (agent && !asking) out.push(agent)
     return out
-  }, [q, all, calc, code, suggestions, engine, sub, wm, recentHits, visits, prefs, favourites, favouriteKeys, address, page, goAlias, goTemplate, goSuggestions, account, quick.ask, quick.recent, quick.show, quick.adopt, quick.forget])
+  }, [q, all, calc, code, suggestions, engine, sub, wm, recentHits, visits, prefs, favourites, favouriteKeys, address, page, goAlias, goTemplate, goSuggestions, account, quick.ask, quick.recent, quick.show, quick.adopt, quick.forget, contacts, mailQuery, mail, mailAccounts])
 
   useEffect(() => {
     setActive(0)
@@ -1098,7 +1216,7 @@ export function Spotlight() {
   const currentPin = pinFor(current)
   const execute = (r: Result | undefined, alt: boolean) => {
     if (!r) return
-    const keepOpen = r.id.startsWith('sub-') || r.id === 'calc' || ((r.id === 'agent' || r.id.startsWith('answer-')) && !alt) || (r.id.startsWith('code-') && r.id !== 'code-signin' && !r.id.startsWith('code-err-')) || (r.id === 'status-mc' && alt) || r.id.startsWith('act-email') || r.id.startsWith('accent-') || r.id.startsWith('theme-')
+    const keepOpen = r.id.startsWith('sub-') || r.id === 'calc' || ((r.id === 'agent' || r.id.startsWith('answer-')) && !alt) || (r.id.startsWith('code-') && r.id !== 'code-signin' && !r.id.startsWith('code-err-')) || (r.id === 'status-mc' && alt) || r.id.startsWith('act-email') || r.id.startsWith('accent-') || r.id.startsWith('theme-') || r.id === 'mail-loading' || r.id === 'mail-nothing'
     ;(alt && r.alt ? r.alt.run : r.run)()
     if (!keepOpen) close()
   }
@@ -1122,6 +1240,7 @@ export function Spotlight() {
     if (fav) out.push({ id: 'fav', label: favouriteKeys.has(favouriteKey(fav)) ? 'Remove from favourites' : 'Add to favourites', keys: ['Ctrl', 'D'], run: () => toggleFavourite(r) })
     const pin = pinFor(r)
     if (pin) out.push({ id: 'pin', label: pin.pinned ? 'Remove from dock' : 'Pin to dock', keys: ['Shift', '↵'], run: () => togglePin(r) })
+    for (const [i, m] of (r.more ?? []).entries()) out.push({ id: `more-${i}`, label: m.label, keys: [], run: () => (m.run(), close()) })
     if (r.forget) out.push({ id: 'forget', label: 'Forget', keys: ['Shift', 'Del'], run: r.forget, danger: true })
     return out
   }

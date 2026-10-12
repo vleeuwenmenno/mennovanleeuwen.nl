@@ -761,3 +761,93 @@
     padding-block: 9px;
   }
 }
+
+/* The card's sections from other apps: Recent mail (Mail) and Upcoming events (Calendar). */
+.ct-slot-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.ct-slot-head .link-btn {
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.ct-slot-empty {
+  margin: 0;
+  font-size: 12px;
+}
+.ct-slot-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ct-slot-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0 8px;
+  width: 100%;
+  padding: 5px 6px;
+  border-radius: 4px;
+  color: var(--fg);
+  text-align: left;
+}
+.ct-slot-row:hover {
+  background: var(--panel-2);
+}
+.ct-slot-row > :not(.ct-slot-dot) {
+  grid-column: 2;
+}
+.ct-slot-row:not(:has(.ct-slot-dot)) > * {
+  grid-column: 1 / -1;
+}
+.ct-slot-dot {
+  grid-row: 1 / span 2;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.ct-slot-title {
+  overflow: hidden;
+  color: var(--fg-bright);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ct-slot-title.is-unread {
+  font-weight: 700;
+}
+.ct-slot-sub {
+  font-size: 11px;
+}
+/* "Make a task from this email": when it is due. */
+.pim-due {
+  display: grid;
+  gap: 8px;
+}
+.pim-due-title {
+  margin: 0;
+  color: var(--fg-bright);
+  font-weight: 600;
+}
+.pim-due-date {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pim-due-date input {
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+}

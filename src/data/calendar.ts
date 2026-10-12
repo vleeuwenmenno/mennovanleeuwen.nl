@@ -27,6 +27,8 @@ export type CalendarEvent = {
   editable?: boolean
   /** Where it lives, for the server: sent back with a change. */
   ref?: string
+  /** Its iCalendar UID (an invitation in Mail opens it by this). */
+  uid?: string
 }
 
 const CACHE_MS = 2 * 60_000
@@ -151,7 +153,7 @@ export function useShownCalendarIds(): string[] | null {
 // Changes, from the Calendar app. Google and CalDAV send invitations to the guests themselves.
 
 /** A new or changed event: ISO times, or "YYYY-MM-DD" dates when all day (end exclusive). */
-export type EventInput = { title: string; start: string; end: string; allDay: boolean; location?: string; description?: string; attendees?: string[] }
+export type EventInput = { title: string; start: string; end: string; allDay: boolean; location?: string; description?: string; attendees?: string[]; recurrence?: string }
 
 const timeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone
 
@@ -175,4 +177,35 @@ export const deleteEvent = (e: CalendarEvent, all = false) => change('DELETE', {
 // The calendar new events go in unless picked otherwise: the one used last.
 const lastCalendar = synced<string | null>('calendar-default', null, { normalize: (v) => (typeof v === 'string' ? v : null) })
 export const useLastCalendar = lastCalendar.use
+export const lastCalendarId = lastCalendar.get
 export const setLastCalendar = (id: string) => lastCalendar.set(id)
+
+// ---------------------------------------------------------------------------------------------
+// Starting from other apps: a new event filled in (Mail's "Create event from this email",
+// Contacts' "New event with them"), and an event opened by its UID (an invitation in Mail).
+
+/** A new event as another app asks for it; `start`/`end` are ISO times or "YYYY-MM-DD" days. */
+export type EventRequest = { title?: string; guests?: string[]; description?: string; location?: string; start?: string; end?: string; allDay?: boolean }
+
+const pending = new Map<string, EventRequest>()
+const openCalendar = (props: Record<string, string>) => window.dispatchEvent(new CustomEvent('mvlos:open', { detail: { app: 'calendar', props: { ...props, t: String(Date.now()) } } }))
+
+/** Opens the Calendar app's event editor with a new event filled in (in the calendar used last). */
+export function composeEvent(req: EventRequest = {}) {
+  const key = crypto.randomUUID()
+  pending.set(key, req)
+  openCalendar({ compose: key, ...(req.start ? { date: dayKey(new Date(req.start.length === 10 ? `${req.start}T00:00:00` : req.start)) } : {}) })
+}
+
+/** The Calendar app takes a request opened with composeEvent (once). */
+export function takeEventRequest(key: string | undefined): EventRequest | null {
+  if (!key) return null
+  const r = pending.get(key) ?? null
+  pending.delete(key)
+  return r
+}
+
+/** Opens the Calendar app on a day, with the event of this iCalendar UID open when it is there. */
+export function openEventByUid(uid: string, date: Date) {
+  openCalendar({ date: dayKey(date), event: uid })
+}

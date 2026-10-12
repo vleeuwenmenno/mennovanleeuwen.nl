@@ -61,9 +61,10 @@ export function Avatar({ contact, email, name, size = 32 }: { contact?: Contact 
 /**
  * A person as a small chip: their avatar and name (the contact's, else the name given, else the
  * address). Hovering shows who it is; clicking opens their card in Contacts (or offers to add
- * them). `onRemove` adds a × (a picked recipient).
+ * them). `onRemove` adds a × (a picked recipient), `badge` goes before the name (a guest's
+ * answer), `onMenu` takes the right-click.
  */
-export function PersonChip({ email, name, onRemove, invalid, compact }: { email: string; name?: string; onRemove?: () => void; invalid?: boolean; compact?: boolean }) {
+export function PersonChip({ email, name, onRemove, invalid, compact, badge, title, onMenu }: { email: string; name?: string; onRemove?: () => void; invalid?: boolean; compact?: boolean; badge?: ReactNode; title?: string; onMenu?: (e: React.MouseEvent) => void }) {
   const c = useContactByEmail(email)
   const label = c ? displayName(c) : name || email
   const ref = useRef<HTMLSpanElement>(null)
@@ -74,12 +75,14 @@ export function PersonChip({ email, name, onRemove, invalid, compact }: { email:
     <span
       ref={ref}
       className={`pp-chip ${invalid ? 'is-invalid' : ''} ${c ? 'is-known' : ''} ${compact ? 'is-compact' : ''}`}
-      title={invalid ? `${email} is not an email address` : undefined}
+      title={invalid ? `${email} is not an email address` : title}
+      onContextMenu={onMenu}
       onMouseEnter={() => (clearTimeout(timer.current), (timer.current = setTimeout(() => setHover(true), 450)))}
       onMouseLeave={() => (clearTimeout(timer.current), (timer.current = setTimeout(() => setHover(false), 150)))}
     >
       <button type="button" className="pp-chip-main" onClick={() => openContact(c?.id ?? email, name)} aria-label={`${label} <${email}>: open in Contacts`}>
         <Avatar contact={c} email={email} name={name} size={compact ? 16 : 18} />
+        {badge}
         <span className="pp-chip-name">{label}</span>
       </button>
       {onRemove && (
@@ -134,14 +137,38 @@ type Suggestion =
   | { kind: 'contact'; contact: Contact }
   | { kind: 'group'; name: string; people: Person[] }
   | { kind: 'typed'; email: string }
+  | { kind: 'more'; email: string; name?: string }
 
 /**
  * A field to pick people: chips for those picked, suggestions from your contacts while typing
  * (arrow keys and Enter or Tab; a contact with several addresses opens them to choose from, a
  * group adds everyone in it), any valid address as it is (Enter, comma or leaving the field), and
- * several at once by pasting. Backspace in the empty field takes the last one off.
+ * several at once by pasting. Backspace in the empty field takes the last one off. `more` adds
+ * suggestions after your contacts' (Mail's recent correspondents), `badge` marks a chip.
  */
-export function PeoplePicker({ value, onChange, placeholder, autoFocus, disabled, label, exclude = [] }: { value: Person[]; onChange: (next: Person[]) => void; placeholder?: string; autoFocus?: boolean; disabled?: boolean; label?: string; exclude?: string[] }) {
+export function PeoplePicker({
+  value,
+  onChange,
+  placeholder,
+  autoFocus,
+  disabled,
+  label,
+  exclude = [],
+  more,
+  moreLabel = 'Recent',
+  badge,
+}: {
+  value: Person[]
+  onChange: (next: Person[]) => void
+  placeholder?: string
+  autoFocus?: boolean
+  disabled?: boolean
+  label?: string
+  exclude?: string[]
+  more?: (q: string) => Promise<Person[]>
+  moreLabel?: string
+  badge?: (p: Person) => ReactNode
+}) {
   const { contacts, groups } = useContacts()
   const [text, setText] = useState('')
   const [open, setOpen] = useState(false)
@@ -163,6 +190,17 @@ export function PeoplePicker({ value, onChange, placeholder, autoFocus, disabled
   }
 
   const q = text.trim()
+  // The other suggestions (`more`), asked for a moment after typing stops.
+  const [extra, setExtra] = useState<Person[]>([])
+  useEffect(() => {
+    if (!more || !q || !open) return setExtra([])
+    let live = true
+    const t = setTimeout(() => void more(q).then((l) => live && setExtra(l), () => live && setExtra([])), 150)
+    return () => {
+      live = false
+      clearTimeout(t)
+    }
+  }, [q, open]) // eslint-disable-line react-hooks/exhaustive-deps
   const suggestions: Suggestion[] = useMemo(() => {
     if (expanded) return expanded.emails.filter((e) => !taken.has(e.value.toLowerCase())).map((e) => ({ kind: 'email' as const, contact: expanded, email: e.value, type: e.type }))
     if (!q) return []
@@ -183,10 +221,13 @@ export function PeoplePicker({ value, onChange, placeholder, autoFocus, disabled
       if (free.length === 1 || typedAddress) out.push({ kind: 'email', contact: c, email: (typedAddress ?? free[0]).value, type: (typedAddress ?? free[0]).type })
       else out.push({ kind: 'contact', contact: c })
     }
-    if (isEmail(q) && !out.some((s) => s.kind === 'email' && s.email.toLowerCase() === fold)) out.push({ kind: 'typed', email: q })
-    return out.slice(0, 10)
+    // Then the others (recent correspondents), leaving out whoever is already there.
+    const shown = (e: string) => out.some((s) => (s.kind === 'email' || s.kind === 'more' || s.kind === 'typed' ? s.email.toLowerCase() === e : s.kind === 'contact' && s.contact.emails.some((x) => x.value.toLowerCase() === e)))
+    for (const p of extra) if (!taken.has(p.email.toLowerCase()) && !shown(p.email.toLowerCase()) && out.length < 10) out.push({ kind: 'more', email: p.email, name: p.name || undefined })
+    if (isEmail(q) && !out.some((s) => (s.kind === 'email' || s.kind === 'more') && s.email.toLowerCase() === fold)) out.push({ kind: 'typed', email: q })
+    return out.slice(0, 11)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, expanded, contacts, groups, value])
+  }, [q, expanded, contacts, groups, value, extra])
 
   useEffect(() => {
     setActive(0)
@@ -200,6 +241,7 @@ export function PeoplePicker({ value, onChange, placeholder, autoFocus, disabled
     }
     if (s.kind === 'group') return add(s.people)
     if (s.kind === 'typed') return add(parseAddresses(s.email))
+    if (s.kind === 'more') return add([s.name ? { email: s.email, name: s.name } : { email: s.email }])
     add([{ email: s.email, name: displayName(s.contact) }])
   }
 
@@ -265,7 +307,7 @@ export function PeoplePicker({ value, onChange, placeholder, autoFocus, disabled
       }}
     >
       {value.map((p, i) => (
-        <PersonChip key={p.email} email={p.email} name={p.name} invalid={!isEmail(p.email)} onRemove={disabled ? undefined : () => onChange(value.filter((_, j) => j !== i))} />
+        <PersonChip key={p.email} email={p.email} name={p.name} invalid={!isEmail(p.email)} badge={badge?.(p)} onRemove={disabled ? undefined : () => onChange(value.filter((_, j) => j !== i))} />
       ))}
       <input
         ref={input}
@@ -301,13 +343,13 @@ export function PeoplePicker({ value, onChange, placeholder, autoFocus, disabled
         onPaste={onPaste}
       />
       {open && suggestions.length > 0 && field.current && (
-        <Suggestions anchor={field.current} id={listId} items={suggestions} active={active} expanded={expanded} onHover={setActive} onPick={pick} onBack={() => setExpanded(null)} />
+        <Suggestions anchor={field.current} id={listId} items={suggestions} active={active} expanded={expanded} moreLabel={moreLabel} onHover={setActive} onPick={pick} onBack={() => setExpanded(null)} />
       )}
     </div>
   )
 }
 
-function Suggestions({ anchor, id, items, active, expanded, onHover, onPick, onBack }: { anchor: HTMLElement; id: string; items: Suggestion[]; active: number; expanded: Contact | null; onHover: (i: number) => void; onPick: (s: Suggestion) => void; onBack: () => void }) {
+function Suggestions({ anchor, id, items, active, expanded, moreLabel, onHover, onPick, onBack }: { anchor: HTMLElement; id: string; items: Suggestion[]; active: number; expanded: Contact | null; moreLabel: string; onHover: (i: number) => void; onPick: (s: Suggestion) => void; onBack: () => void }) {
   const [rect, setRect] = useState(() => anchor.getBoundingClientRect())
   useLayoutEffect(() => {
     const update = () => setRect(anchor.getBoundingClientRect())
@@ -339,6 +381,16 @@ function Suggestions({ anchor, id, items, active, expanded, onHover, onPick, onB
           <span className="pp-sug-text">
             <strong>{s.name}</strong>
             <span className="muted">Group · {s.people.length === 1 ? '1 person' : `${s.people.length} people`}</span>
+          </span>
+        </>
+      )
+    if (s.kind === 'more')
+      return (
+        <>
+          <Avatar email={s.email} name={s.name} size={26} />
+          <span className="pp-sug-text">
+            <strong>{s.name || s.email}</strong>
+            <span className="muted">{s.name ? `${s.email} · ${moreLabel}` : moreLabel}</span>
           </span>
         </>
       )

@@ -1,16 +1,19 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useAccount } from '../../os/account'
 import { openMenuAt } from '../../os/ContextMenu'
 import { ask } from '../../os/Dialogs'
+import { useDropTarget, type DragItem } from '../../os/dnd'
 import { pickFiles } from '../../os/FolderPicker'
 import { notify } from '../../os/notify'
 import { Select } from '../../os/Select'
+import { readBytes } from '../../data/fileOps'
 import { fileLink, parseSf } from '../../data/seafile'
 import { discardDraft, saveDraft, sendMail, uploadBlob, type Address, type Boot, type ComposeAttachment, type DraftBody } from '../../data/mail'
 import { formatSize, RecipientField } from './parts'
 
 // Writing a message: a new one, a reply, a forward or a draft picked up again. Plain text, with
-// attachments from this computer or from Files (Seafile). Every change is saved as a draft after a
+// attachments from this computer or from Files (Seafile), or dropped on it (files from the
+// computer, Files or the desktop; a launcher drops in as its link). Every change is saved as a draft after a
 // moment's pause (Email/set in Drafts, replacing the one before), so closing the window loses
 // nothing; Send submits it with the chosen identity.
 
@@ -39,6 +42,11 @@ export type ComposeInit = {
 
 type Att = { key: string; name: string; type: string; size: number; blobId?: string; error?: string }
 
+/** A launcher in a drag (on its own, or a .desktop file): its name and address. */
+const launcherOf = (i: DragItem) => (i.kind === 'launcher' ? i : i.kind === 'file' ? i.launcher : undefined)
+/** A file in a drag that can be attached (not a folder, not a launcher). */
+const attachable = (i: DragItem): i is Extract<DragItem, { kind: 'file' }> => i.kind === 'file' && !i.dir && !i.launcher
+
 const SAVE_AFTER = 2000
 
 export function Composer({ account, boot, init, narrow, onClose }: { account: number; boot: Boot; init: ComposeInit; narrow: boolean; onClose: () => void }) {
@@ -56,7 +64,7 @@ export function Composer({ account, boot, init, narrow, onClose }: { account: nu
   const [saving, setSaving] = useState(false)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [dropping, setDropping] = useState(false)
+  const box = useRef<HTMLElement>(null)
   const touched = useRef(false)
   const dirty = useRef(false)
   const pcFiles = useRef<HTMLInputElement>(null)
@@ -220,12 +228,35 @@ export function Composer({ account, boot, init, narrow, onClose }: { account: nu
       void close()
     }
   }
-  const onDrop = (e: DragEvent) => {
-    if (!e.dataTransfer.types.includes('Files')) return
-    e.preventDefault()
-    setDropping(false)
-    void addFiles([...e.dataTransfer.files])
-  }
+  // Dropped here: files are attached (from the computer, Files or the desktop), launchers go into
+  // the text as their links.
+  useDropTarget(box, {
+    accept: (d) => (d.os || d.items.some(attachable) ? 'copy' : d.items.some((i) => launcherOf(i)?.url) ? 'link' : null),
+    drop: async (d) => {
+      if (d.os) void addFiles((await d.files()).map((p) => p.file))
+      const files = d.items.filter(attachable)
+      if (files.length)
+        void addFiles(
+          await Promise.all(
+            files.map(async (f) => {
+              try {
+                return { name: f.name, blob: await readBytes(f.path) }
+              } catch (e) {
+                setError(`${f.name}: ${(e as Error).message}`)
+                return null
+              }
+            }),
+          ).then((l) => l.filter((x): x is { name: string; blob: Blob } => !!x)),
+        )
+      const links = d.items.map(launcherOf).filter((l): l is NonNullable<ReturnType<typeof launcherOf>> => !!l?.url)
+      if (links.length) {
+        const add = links.map((l) => `${l.label}: ${l.url}`).join('\n')
+        const el = textRef.current
+        const at = el && document.activeElement === el ? el.selectionStart : text.length
+        setText((t) => `${t.slice(0, at)}${at > 0 && !t.slice(0, at).endsWith('\n') ? '\n' : ''}${add}\n${t.slice(at)}`)
+      }
+    },
+  })
   const attachMenu = (el: Element) =>
     openMenuAt(el, [
       { label: 'From this computer…', onSelect: () => pcFiles.current?.click() },
@@ -235,14 +266,7 @@ export function Composer({ account, boot, init, narrow, onClose }: { account: nu
   const status = sending ? 'Sending…' : saving ? 'Saving…' : saved ? `Draft saved ${saved.at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : ''
 
   return (
-    <section
-      className={`ml-compose ${dropping ? 'is-drop' : ''} ${narrow ? 'is-narrow' : ''}`}
-      aria-label={init.title}
-      onKeyDown={onKey}
-      onDragOver={(e) => e.dataTransfer.types.includes('Files') && (e.preventDefault(), setDropping(true))}
-      onDragLeave={(e) => e.currentTarget === e.target && setDropping(false)}
-      onDrop={onDrop}
-    >
+    <section ref={box} className={`ml-compose ${narrow ? 'is-narrow' : ''}`} aria-label={init.title} onKeyDown={onKey}>
       <header className="ml-compose-head">
         <strong>{init.title}</strong>
         <span className="nb-spacer" />

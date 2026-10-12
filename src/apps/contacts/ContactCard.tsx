@@ -1,10 +1,15 @@
 import type { ReactNode } from 'react'
+import { composeEvent } from '../../data/calendar'
 import { openLink } from '../../data/links'
+import { composeMail, useMailAccounts } from '../../data/mail'
 import { datesIn, displayName, groupsOf, useContactSlot, type Address, type Book, type Contact, type ContactSlot } from '../../data/contacts'
+import { hasCalendar, useAccount } from '../../os/account'
 import { Avatar } from './people'
 
 // One contact, to read: who they are, every way to reach them, their dates and groups, and the
-// places other apps fill in (recent mail from Mail, upcoming events from Calendar).
+// places other apps fill in (recent mail from Mail, upcoming events from Calendar). Email writes
+// to them in Mail once a mail account is linked (the browser's mail program until then), and New
+// event invites them in Calendar.
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
@@ -57,6 +62,8 @@ export function ContactCard({ contact, book, onEdit, onMenu, onBack }: { contact
   const groups = groupsOf(c)
   const firstEmail = c.emails.find((e) => e.pref) ?? c.emails[0]
   const firstPhone = c.phones.find((p) => p.pref) ?? c.phones[0]
+  const mail = !!useMailAccounts().accounts?.length
+  const calendar = hasCalendar(useAccount())
   return (
     <article className="ct-card" onContextMenu={(e) => !(e.target as Element).closest('a, input, textarea') && onMenu(e)}>
       <header className="ct-card-head">
@@ -70,10 +77,20 @@ export function ContactCard({ contact, book, onEdit, onMenu, onBack }: { contact
         {c.nickname && <p className="ct-sub">“{c.nickname}”</p>}
         {work && <p className="ct-sub">{work}</p>}
         <div className="ct-actions">
-          {firstEmail && (
-            <a className="btn btn-small" href={`mailto:${encodeURIComponent(firstEmail.value).replace(/%40/g, '@')}`}>
-              Email
-            </a>
+          {firstEmail &&
+            (mail ? (
+              <button className="btn btn-small" onClick={() => composeMail({ to: [{ name, email: firstEmail.value }] })} title={`Write to ${firstEmail.value} in Mail`}>
+                Email
+              </button>
+            ) : (
+              <a className="btn btn-small" href={`mailto:${encodeURIComponent(firstEmail.value).replace(/%40/g, '@')}`}>
+                Email
+              </a>
+            ))}
+          {firstEmail && calendar && (
+            <button className="btn btn-small" onClick={() => composeEvent({ guests: [firstEmail.value.toLowerCase()] })} title={`A new event with ${name} as a guest`}>
+              New event
+            </button>
           )}
           {firstPhone && (
             <a className="btn btn-small" href={`tel:${firstPhone.value.replace(/[^\d+*#]/g, '')}`}>
@@ -173,6 +190,7 @@ export function ContactCard({ contact, book, onEdit, onMenu, onBack }: { contact
 
 /** Someone who is not in your contacts (opened from a mail's address): who, and Add to contacts. */
 export function UnknownCard({ email, name, onAdd, onBack }: { email: string; name?: string; onAdd: () => void; onBack?: () => void }) {
+  const calendar = hasCalendar(useAccount())
   return (
     <article className="ct-card">
       <header className="ct-card-head">
@@ -191,6 +209,11 @@ export function UnknownCard({ email, name, onAdd, onBack }: { email: string; nam
           <a className="btn btn-small" href={`mailto:${email}`}>
             Email
           </a>
+          {calendar && (
+            <button className="btn btn-small" onClick={() => composeEvent({ guests: [email.toLowerCase()] })}>
+              New event
+            </button>
+          )}
         </div>
       </header>
       <section className="ct-section">

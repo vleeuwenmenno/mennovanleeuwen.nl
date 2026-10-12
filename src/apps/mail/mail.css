@@ -649,7 +649,7 @@
   flex-direction: column;
   min-height: 0;
 }
-.ml-compose.is-drop::after {
+.ml-compose[data-drop-over]::after {
   position: absolute;
   inset: 6px;
   display: grid;
@@ -659,6 +659,9 @@
   color: var(--fg-bright);
   content: 'Drop to attach';
   pointer-events: none;
+}
+.ml-compose[data-drop-over='link']::after {
+  content: 'Drop to add the link';
 }
 .ml-compose-head {
   display: flex;
@@ -697,32 +700,6 @@
   top: 9px;
   right: 14px;
 }
-.ml-chips {
-  display: flex;
-  flex: 1;
-  flex-wrap: wrap;
-  gap: 4px;
-  min-width: 0;
-  padding-right: 54px;
-}
-.ml-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 1px 2px 1px 7px;
-  border: 1px solid var(--line-strong);
-  background: var(--panel-2);
-  color: var(--fg-bright);
-}
-.ml-chip.is-bad {
-  border-color: var(--red);
-  color: var(--red);
-}
-.ml-chip button {
-  padding: 0 4px;
-  color: var(--muted);
-}
-.ml-chips input,
 .ml-subject-input {
   flex: 1;
   min-width: 120px;
@@ -732,30 +709,6 @@
   color: var(--fg-bright);
   font: inherit;
   outline: 0;
-}
-.ml-suggest {
-  position: absolute;
-  top: 100%;
-  left: 78px;
-  z-index: 5;
-  min-width: 260px;
-  max-width: calc(100% - 92px);
-  margin: 0;
-  padding: 4px 0;
-  border: 1px solid var(--line-strong);
-  background: var(--panel-solid);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.3);
-  list-style: none;
-}
-.ml-suggest li {
-  display: flex;
-  flex-direction: column;
-  padding: 5px 10px;
-  cursor: pointer;
-}
-.ml-suggest li.is-on,
-.ml-suggest li:hover {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .ml-compose-text {
   flex: 1;
@@ -861,10 +814,6 @@
 .ml.is-narrow .ml-field-label {
   width: 46px;
 }
-.ml.is-narrow .ml-suggest {
-  left: 8px;
-  max-width: calc(100% - 16px);
-}
 @media (pointer: coarse) {
   .ml-icon {
     width: 36px;
@@ -873,4 +822,43 @@
   .ml-box {
     padding: 10px 12px;
   }
+}
+
+/* Contacts' people picker in To, Cc and Bcc: borderless, filling the row. */
+.ml-recipients .pp-field {
+  flex: 1;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+}
+.ml-to-row .ml-recipients .pp-field {
+  padding-right: 54px;
+}
+/* Senders and recipients as chips: wrapping instead of an ellipsis. */
+.ml-msg-to {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 4px;
+  overflow: visible;
+  white-space: normal;
+}
+.ml-msg-to > span {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 4px;
+}
+.ml-msg-who .pp-chip {
+  vertical-align: middle;
+}
+.ml-invite-state {
+  font-size: 12px;
+  color: var(--fg-bright);
+}
+.ml-invite-reply {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }

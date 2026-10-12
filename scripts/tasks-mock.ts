@@ -5,7 +5,7 @@
 //
 // It answers what server/caldav.ts and server/tasks.ts ask: the principal and calendar home
 // (PROPFIND), the collections in it (one for events only, one for tasks only, one for both),
-// calendar-query REPORTs for VTODO and VEVENT, and GET, PUT and DELETE of objects with ETags
+// calendar-query REPORTs for VTODO and VEVENT (and by UID), and GET, PUT and DELETE of objects with ETags
 // (If-Match, If-None-Match: 412 when they don't hold), MKCALENDAR, PROPPATCH and DELETE of
 // collections. Everything is kept in memory. Tests can make an object change "somewhere else" right
 // after it was read (`bump`), to see what a conflict does.
@@ -128,7 +128,9 @@ export async function startMock(port = 0): Promise<Mock> {
     }
     if (method === 'REPORT' && collection) {
       const want = /comp-filter name="VTODO"/.test(body) ? 'VTODO' : 'VEVENT'
-      const parts = [...collection.objects].filter(([, o]) => o.text.includes(`BEGIN:${want}`)).map(([href, o]) => response(href, `<d:getetag>${xmlEsc(o.etag)}</d:getetag><c:calendar-data>${xmlEsc(o.text)}</c:calendar-data>`))
+      // A search by UID (an invitation looked up by Mail): only the objects with it.
+      const uid = /<c:prop-filter name="UID"><c:text-match[^>]*>([^<]*)</.exec(body)?.[1]?.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+      const parts = [...collection.objects].filter(([, o]) => o.text.includes(`BEGIN:${want}`) && (uid === undefined || o.text.includes(`UID:${uid}\r\n`))).map(([href, o]) => response(href, `<d:getetag>${xmlEsc(o.etag)}</d:getetag><c:calendar-data>${xmlEsc(o.text)}</c:calendar-data>`))
       return xml(207, multistatus(parts))
     }
     if (method === 'MKCALENDAR') {

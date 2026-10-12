@@ -19,9 +19,11 @@ export const START_SECTIONS: [StartSection, string, string][] = [
 export const RECENT_COUNTS = [3, 5, 8, 12] as const
 
 /** Kinds of results that can be left out of what you type. */
-export type Category = 'answers' | 'sites' | 'status' | 'projects' | 'games' | 'files'
+export type Category = 'answers' | 'sites' | 'status' | 'projects' | 'games' | 'files' | 'contacts' | 'mail'
 export const CATEGORIES: [Category, string][] = [
   ['answers', 'Recent answers'],
+  ['contacts', 'Contacts'],
+  ['mail', 'Mail (type mail: and what to look for)'],
   ['sites', 'Recently visited websites'],
   ['status', 'Status'],
   ['projects', 'Projects'],
@@ -57,7 +59,7 @@ export type SpotlightPrefs = {
 
 const DEFAULTS: SpotlightPrefs = {
   start: { favourites: true, answers: true, sites: true, status: true, apps: true, code: true },
-  include: { answers: true, sites: true, status: true, projects: true, games: true, files: true },
+  include: { answers: true, sites: true, status: true, projects: true, games: true, files: true, contacts: true, mail: true },
   fallback: 'web',
   preview: true,
   recentCount: 5,
