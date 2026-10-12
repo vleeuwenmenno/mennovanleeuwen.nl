@@ -209,10 +209,10 @@ descriptions and system prompt are untuned. Known limits:
   messages queued while it works, `/export`, `/copy`, `/open`, `/delete`, `/archive`,
   `/projects`, `/tools`, Ctrl+O and Ctrl+L.
 - **Rendering.**
-  - The live block redraws whole on each streamed chunk, and a long reply only shows its tail
-    until it is done.
-  - Markdown has no syntax highlighting, and the terminal's markup does not nest (no bold in
-    colour).
+  - The live block is rebuilt whole on each streamed chunk (the terminal then only redraws the
+    lines that changed), and a long reply only shows its tail until it is done.
+  - Markdown has no syntax highlighting. The terminal's markup nests now (bold in colour), but
+    the TUI's text helpers still write it flat.
   - On phones, typing works, but Shift+Enter and Shift+Tab are hard to reach.
 - **Work folders.**
   - Seafile only: not the browser's own files or `/tmp`.
@@ -251,6 +251,84 @@ the terminals the last tab left open, and starts with one fresh terminal in fron
 saved desk. There, links (Spotlight, launchers, `open github.com`, `go`) replace the page like an
 address bar would; elsewhere they open in a new tab. Settings → Links changes both. `reboot` and `shutdown` play the systemd
 shutdown log ([`src/os/Power.tsx`](src/os/Power.tsx)); a reboot starts from the opening layout again.
+
+### Streams and the VT emulator
+
+A Terminal window can hand itself to a byte stream: a program somewhere else (SSH, next) whose
+output is read by an xterm-compatible emulator ([`src/terminal/vt/screen.ts`](src/terminal/vt/screen.ts))
+and drawn by [`VtView`](src/terminal/vt/VtView.tsx), while every key goes to it. It covers what
+full-screen programs use: cursor movement, save and restore; erasing in the line and the display;
+inserting and deleting lines and characters; scroll regions and origin mode; the alternate
+screen; line wrap with xterm's pending wrap; tab stops and DEC line drawing; 16, 256 and
+truecolour foreground and background; bold, dim, italic, underline, inverse, strikethrough and
+overline; OSC 0/2 titles (the window's title follows) and OSC 8 links; bracketed paste,
+application cursor and keypad keys, mouse reporting (X10, normal, button and any-event tracking,
+SGR), focus events, cursor visibility and shape, synchronized output; the replies to device
+attribute, status, cursor position, mode and size requests; and resizing to the window's real
+columns and rows (lines are cut, not reflowed). Rows only redraw when they changed.
+
+Keys are sent as xterm sends them ([`src/terminal/vt/keys.ts`](src/terminal/vt/keys.ts)): Ctrl and
+Alt combinations, F1–F12, Home/End/PageUp/PageDown/Insert/Delete with modifiers, Shift+Tab, the
+keypad in application mode, and the extra keys row on touch screens. Ctrl+C with text selected
+and Ctrl+Shift+C copy, and Ctrl+V and Ctrl+Shift+V paste, instead. The left and middle buttons
+and the wheel are reported when the program asks; Shift keeps the mouse for selecting text, the
+right button keeps the menu, and on the alternate screen without mouse tracking the wheel sends
+arrow keys (less, man). Ctrl with the wheel and Ctrl + / − / 0 still zoom, and the screen redraws
+to the new size. When the stream ends, what it left on the normal screen stays in the scrollback,
+in colour, and msh's prompt comes back.
+
+A command gets the stream API as `ctx.attachStream()` (only in a terminal window, not in pipes),
+which returns a port ([`src/terminal/vt/session.ts`](src/terminal/vt/session.ts)):
+
+```ts
+const port = ctx.attachStream()
+port.write(bytes)                      // program output: Uint8Array (UTF-8) or string
+port.onData((keys) => send(keys))      // keys, pastes, mouse and the emulator's replies, as text
+port.onResize(({ cols, rows }) => …)   // the window changed size; port.size is the size now
+await port.detached                    // settles when either side ends it
+port.detach()                          // hands the window back to msh
+```
+
+Stop command in the right-click menu, closing the window, or the command returning also detach
+it. A program can pin the size it wants with `CSI 8 ; rows ; cols t`, as xterm allows.
+
+`vtdemo` (hidden, [`src/terminal/vt/demo.ts`](src/terminal/vt/demo.ts)) tries it without SSH:
+`vtdemo play nvim` (or `less`, `top`, `nano`, `tmux`) replays a recorded session at its own pace
+and pauses at each checkpoint (Space goes on, q quits), `vtdemo colors` shows every colour and
+look, and `vtdemo keys` echoes what each key, paste, click and focus change sends (Ctrl+D quits).
+
+`pnpm check:terminal-vt` ([`scripts/terminal-vt.ts`](scripts/terminal-vt.ts)) replays the recordings
+headlessly and compares, at every checkpoint, the screen's text, colours and looks, the cursor,
+the modes and the scroll region with what tmux showed at that moment; it also runs synthetic
+sequences for each feature, the key, mouse and paste encodings, and the markup below.
+[`scripts/terminal-vt-record.ts`](scripts/terminal-vt-record.ts) makes the recordings (in
+[`src/terminal/vt/fixtures`](src/terminal/vt/fixtures)): it runs Neovim, less, top, nano and tmux
+in a tmux pane of 80×24, catches every byte with pipe-pane, and asks tmux for its screen at each
+checkpoint. One known difference is kept on purpose: erasing to the end of the line while the
+cursor waits to wrap clears the last column, as in xterm (tmux leaves it).
+
+**Why our own emulator and not xterm.js.** xterm.js is a full terminal with its own renderer,
+input textarea, selection, scrollback and theme, in a canvas or WebGL. Everything msh does is DOM
+in the same window: the prompt with its fzf-style picker, links, `sl`, figlet, the agents TUI,
+the themes, text size and per-window zoom, and the extra keys. Using xterm.js would have meant
+either a second renderer that only shows up for streams, with all of that bridged into it, or
+rewriting msh as a byte stream. The emulator is about 1,200 lines (1,700 with keys, the port and
+the renderer) without dependencies. It draws with the same font, colours (the 16 ANSI colours
+follow the theme as `--ansi-0` … `--ansi-15`), zoom and selection as the rest of the terminal,
+and runs in plain node for the check script.
+
+**Markup.** Command output uses the terminal's markup ([`src/terminal/markup.ts`](src/terminal/markup.ts)):
+`{c:green}…{/}` for a colour or a look (bold, dim, italic, underline, strike, inverse),
+`{fg:#rrggbb}` and `{bg:#rrggbb}` (or `{fg:1}` for an ANSI colour of the theme), `{link:https://…}`
+and `{anim:sl}`. Tags nest, so `{c:bold}{fg:#ff0000}bold red{/}{/}` works; a tag that is not valid
+shows as text. `curl` of a page with ANSI colours (wttr.in) keeps backgrounds, bold, italic,
+underline and inverse ([`src/terminal/ansi.ts`](src/terminal/ansi.ts)).
+
+**Not done yet.** Reflowing wrapped lines on resize; double-width and double-height lines (DECDHL);
+sixel and other images; the kitty keyboard protocol; OSC 52 (clipboard) and OSC 4 (palette) are
+ignored; right-to-left text and grapheme clusters beyond combining marks (emoji ZWJ sequences
+take more than two cells). Not tried on a real phone yet, only in the browser's phone emulation:
+Android keyboards that send Backspace without a key event may not reach the program.
 
 ## Notes, launchers and sign-in (home page mode)
 

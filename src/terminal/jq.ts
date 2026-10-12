@@ -747,7 +747,7 @@ export type JqOptions = { raw?: boolean; compact?: boolean; color?: boolean; nul
 function colorJson(v: J, indent: string, compact: boolean): string {
   const nl = compact ? '' : '\n'
   const pad = compact ? '' : indent + '  '
-  const esc = (s: string) => JSON.stringify(s).replace(/\{(?=(?:c|link|anim|fg):|\/\})/g, '{​')
+  const esc = (s: string) => JSON.stringify(s).replace(/\{(?=(?:c|link|anim|fg|bg):|\/\})/g, '{​')
   if (v === null) return '{c:muted}null{/}'
   if (typeof v === 'string') return `{c:green}${esc(v)}{/}`
   if (typeof v === 'number' || typeof v === 'boolean') return String(v)
@@ -809,7 +809,7 @@ export function jq(filter: string, input: string, opts: JqOptions = {}): string 
   const out: string[] = []
   for (const d of data) {
     for (const v of prog(d)) {
-      if (opts.raw && typeof v === 'string') out.push(opts.color ? v.replace(/\{(?=(?:c|link|anim|fg):|\/\})/g, '{​') : v)
+      if (opts.raw && typeof v === 'string') out.push(opts.color ? v.replace(/\{(?=(?:c|link|anim|fg|bg):|\/\})/g, '{​') : v)
       else if (opts.color) out.push(colorJson(v, '', !!opts.compact))
       else out.push(opts.compact ? JSON.stringify(v) : JSON.stringify(v, null, 2))
     }
