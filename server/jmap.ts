@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { allows, normalizePrefs } from '../src/data/notifySources.ts'
@@ -1159,6 +1160,131 @@ export async function mailWatch() {
 }
 
 registerWatcher({ name: 'mail', every: WATCH_MS, run: mailWatch })
+
+// ---------------------------------------------------------------------------------------------
+// For the other apps (server/pim.ts): one message's facts, mail with someone, a message found by
+// its Message-ID, and an invitation's answer sent by email (iMIP). Each reads the account again
+// here; nothing about a message is taken from the browser.
+
+export type { Linked as MailAccount }
+/** One of the user's linked accounts (404 when it is not theirs). */
+export const mailAccount = (user: User, id: unknown): Linked => linked(user, id)
+export const mailAccounts = (user: User): Linked[] => listMail(user).map((a) => linked(user, a.id))
+
+/** The addresses the account sends as: its identities and its username, lower case. */
+export async function ownAddresses(acc: Linked): Promise<string[]> {
+  const [m, s] = await Promise.all([meta(acc), session(acc)])
+  return [...new Set([...m.identities.map((i) => i.email), s.username].filter((e) => EMAIL.test(e)).map((e) => e.toLowerCase()))]
+}
+
+export type MessageFacts = { id: string; threadId: string; subject: string; from: Address[]; to: Address[]; cc: Address[]; receivedAt: string; preview: string; messageId: string | null; ics: string | null }
+
+/** What other apps need of a message: its people, a snippet, its Message-ID and its invitation's iCalendar text. */
+export async function messageFacts(acc: Linked, emailId: unknown): Promise<MessageFacts> {
+  if (typeof emailId !== 'string' || !ID.test(emailId)) throw new HttpError(400, 'Bad message')
+  const r = await jmap(acc, [['Email/get', { ids: [emailId], properties: ['id', 'threadId', 'subject', 'from', 'to', 'cc', 'receivedAt', 'preview', 'messageId', 'textBody', 'attachments', 'bodyValues'], fetchTextBodyValues: true, maxBodyValueBytes: 256 * 1024 }, 'g']])
+  const e = (r.get('g', 'Email/get').list as Json[])[0]
+  if (!e) throw new HttpError(404, 'That message is gone')
+  const parts = [...(Array.isArray(e.attachments) ? e.attachments : []), ...(Array.isArray(e.textBody) ? e.textBody : [])] as Json[]
+  const part = parts.find((p) => typeof p.blobId === 'string' && ID.test(p.blobId) && (/^text\/calendar\b/i.test(String(p.type)) || /\.ics$/i.test(String(p.name ?? ''))))
+  const ics = part ? ((e.bodyValues?.[part.partId]?.value as string | undefined) ?? (await blobText(acc, part.blobId, 256 * 1024).catch(() => null))) : null
+  const mid = Array.isArray(e.messageId) && typeof e.messageId[0] === 'string' ? e.messageId[0] : null
+  return { id: e.id, threadId: e.threadId, subject: String(e.subject ?? ''), from: addresses(e.from), to: addresses(e.to), cc: addresses(e.cc), receivedAt: String(e.receivedAt ?? ''), preview: String(e.preview ?? ''), messageId: mid, ics }
+}
+
+/** The latest conversations with any of these people (from, to or cc), outside Drafts, Trash and Junk. */
+export async function mailWith(acc: Linked, emails: string[], limit: number): Promise<ThreadRow[]> {
+  const people = emails.filter((e) => EMAIL.test(e)).slice(0, 20)
+  if (!people.length) return []
+  const m = await meta(acc)
+  const away = [m.role('drafts'), m.role('trash'), m.role('junk')].filter((x): x is string => !!x)
+  const anyone = { operator: 'OR', conditions: people.flatMap((email) => [{ from: email }, { to: email }, { cc: email }]) }
+  const filter = away.length ? { operator: 'AND', conditions: [anyone, { inMailboxOtherThan: away }] } : anyone
+  const r = await jmap(acc, [
+    ['Email/query', { filter, sort: [{ property: 'receivedAt', isAscending: false }], collapseThreads: true, limit: Math.max(1, Math.min(limit, 20)) }, 'q'],
+    ['Email/get', { '#ids': { resultOf: 'q', name: 'Email/query', path: '/ids' }, properties: ROW_PROPS }, 'g'],
+  ])
+  const byId = new Map((r.get('g', 'Email/get').list as Json[]).map((e) => [e.id, e]))
+  return (r.get('q', 'Email/query').ids as string[]).map((id) => byId.get(id)).filter((e): e is Json => !!e).map((e) => toRow(e, 1))
+}
+
+/** The message with this Message-ID (without its angle brackets) in the account, or null. */
+export async function findByMessageId(acc: Linked, messageId: string): Promise<{ id: string; threadId: string } | null> {
+  if (!messageId || messageId.length > 998 || /[\s<>]/.test(messageId)) return null
+  const r = await jmap(acc, [
+    ['Email/query', { filter: { header: ['Message-ID', messageId] }, sort: [{ property: 'receivedAt', isAscending: false }], limit: 5 }, 'q'],
+    ['Email/get', { '#ids': { resultOf: 'q', name: 'Email/query', path: '/ids' }, properties: ['id', 'threadId', 'messageId'] }, 'g'],
+  ])
+  // The header filter matches text inside the field: only an exact Message-ID counts.
+  const e = (r.get('g', 'Email/get').list as Json[]).find((x) => Array.isArray(x.messageId) && x.messageId.includes(messageId))
+  return e ? { id: e.id, threadId: e.threadId } : null
+}
+
+/** A header's words: as they are when plain ASCII, otherwise an RFC 2047 encoded word. */
+const headerWords = (s: string) => {
+  const clean = s.replace(/[\r\n]+/g, ' ').trim()
+  return /^[\x20-\x7e]*$/.test(clean) ? clean : `=?UTF-8?B?${Buffer.from(clean, 'utf8').toString('base64')}?=`
+}
+const mailbox = (a: Address) => (a.name ? `${/^[\x20-\x7e]*$/.test(a.name) ? `"${a.name.replace(/["\\\r\n]/g, '')}"` : headerWords(a.name)} <${a.email}>` : `<${a.email}>`)
+const base64Lines = (s: string) => Buffer.from(s, 'utf8').toString('base64').replace(/.{76}/g, '$&\r\n')
+
+/**
+ * Sends an iTIP message (RFC 5546) by email (iMIP, RFC 6047): a plain-text part and the
+ * iCalendar one as text/calendar with its METHOD, as alternatives. JMAP can't set a part's
+ * Content-Type parameters, so the message is written here whole and brought in with
+ * Email/import, then submitted like any other (and moved to Sent).
+ */
+export async function sendItip(acc: Linked, opts: { from: string; to: Address; subject: string; text: string; ics: string; method: string }): Promise<{ id: string }> {
+  const s = await session(acc)
+  if (!s.submission) throw new HttpError(400, `${acc.label} does not allow sending with this token (it needs Submission access)`)
+  if (!EMAIL.test(opts.to.email)) throw new HttpError(400, 'The organiser has no email address')
+  const m = await meta(acc)
+  const identity = m.identities.find((i) => i.email.toLowerCase() === opts.from.toLowerCase()) ?? m.identities[0]
+  if (!identity) throw new HttpError(400, 'This account has no identity to send from')
+  const drafts = m.role('drafts')
+  if (!drafts) throw new HttpError(400, 'This account has no Drafts mailbox')
+  const sent = m.role('sent')
+  const boundary = `mvlos-${randomBytes(12).toString('hex')}`
+  const domain = identity.email.split('@')[1] ?? 'mvlos'
+  const raw = [
+    `From: ${mailbox({ name: identity.name || null, email: identity.email })}`,
+    `To: ${mailbox(opts.to)}`,
+    `Subject: ${headerWords(opts.subject).slice(0, 900)}`,
+    `Date: ${new Date().toUTCString().replace('GMT', '+0000')}`,
+    `Message-ID: <${randomBytes(16).toString('hex')}@${domain}>`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=utf-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    base64Lines(opts.text),
+    `--${boundary}`,
+    `Content-Type: text/calendar; method=${opts.method}; charset=utf-8`,
+    'Content-Transfer-Encoding: base64',
+    '',
+    base64Lines(opts.ics),
+    `--${boundary}--`,
+    '',
+  ].join('\r\n')
+  const res = await guardedFetch(acc.user, fill(s.uploadUrl, { accountId: s.accountId }), { method: 'POST', headers: { ...bearer(acc.token), 'Content-Type': 'message/rfc822' }, body: Buffer.from(raw, 'utf8'), signal: AbortSignal.timeout(TIMEOUT) }).catch((e) => (rethrowEgress(e), null))
+  if (!res) throw new HttpError(502, `${acc.label} did not answer`)
+  const up = JSON.parse((await readCapped(res, 64 * 1024)).toString('utf8') || '{}') as Json
+  if (!res.ok || typeof up.blobId !== 'string') throw new HttpError(502, `${acc.label} refused the upload (${res.status})`)
+  const afterwards = sent ? { [`mailboxIds/${drafts}`]: null, [`mailboxIds/${sent}`]: true, 'keywords/$draft': null } : { 'keywords/$draft': null }
+  const r = await jmap(acc, [
+    ['Email/import', { emails: { reply: { blobId: up.blobId, mailboxIds: { [drafts]: true }, keywords: { $draft: true, $seen: true } } } }, 'i'],
+    ['EmailSubmission/set', { create: { send: { identityId: identity.id, emailId: '#reply' } }, onSuccessUpdateEmail: { '#send': afterwards } }, 's'],
+  ])
+  const made = r.get('i', 'Email/import')
+  if (!made.created?.reply) throw new HttpError(502, `The mail server refused the reply: ${made.notCreated?.reply?.description ?? made.notCreated?.reply?.type ?? 'error'}`)
+  const sub = r.get('s', 'EmailSubmission/set')
+  if (!sub.created?.send) throw new HttpError(502, `Not sent: ${sub.notCreated?.send?.description ?? sub.notCreated?.send?.type ?? 'the mail server refused it'}`)
+  metas.delete(acc.id)
+  tellPages(acc.user.id, 'mail', { account: acc.id })
+  return { id: made.created.reply.id }
+}
 
 // ---------------------------------------------------------------------------------------------
 // The API

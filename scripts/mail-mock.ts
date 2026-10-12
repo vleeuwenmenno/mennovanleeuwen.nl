@@ -5,8 +5,9 @@
 //
 // Enough of JMAP for what server/jmap.ts asks: the session (and /.well-known/jmap), Mailbox/get
 // and /query, Identity/get, Email/query (filters, collapseThreads, paging), Email/get (properties,
-// body values), Thread/get, Email/set (create, patches, destroy), Email/changes,
-// EmailSubmission/set with onSuccessUpdateEmail, back-references, blob upload and download, and
+// body values), Thread/get, Email/set (create, patches, destroy), Email/import (of an uploaded
+// message, kept whole as `raw` for checking), Email/changes, EmailSubmission/set with
+// onSuccessUpdateEmail, back-references, blob upload and download, and
 // an EventSource that sends StateChange events. One account, made-up mail, nothing real.
 // POST /mock/deliver (no token) drops a new message into the Inbox, as if it just arrived.
 
@@ -209,6 +210,10 @@ export async function startMockJmap(opts: { port?: number; token?: string; host?
     if (f.hasAttachment !== undefined && e.hasAttachment !== f.hasAttachment) return false
     if (f.hasKeyword && !e.keywords[f.hasKeyword]) return false
     if (f.notKeyword && e.keywords[f.notKeyword]) return false
+    if (Array.isArray(f.header)) {
+      const [name, value] = f.header as [string, string | undefined]
+      if (!/^message-id$/i.test(name) || (value !== undefined && !(e.messageId as string[]).some((m) => `<${m}>`.includes(value)))) return false
+    }
     if (f.after && e.receivedAt < f.after) return false
     if (f.before && e.receivedAt >= f.before) return false
     if (f.text) {
@@ -333,6 +338,29 @@ export async function startMockJmap(opts: { port?: number; token?: string; host?
         case 'Email/set': {
           const r = emailSet(args, created)
           ok(r)
+          break
+        }
+        case 'Email/import': {
+          // A whole message, uploaded first: read just far enough for the list and for sending.
+          const out: J = { oldState: String(emailState), created: {}, notCreated: {} }
+          for (const [cid, imp] of Object.entries((args.emails ?? {}) as Record<string, J>)) {
+            const b = blobs.get(imp.blobId)
+            if (!b) {
+              out.notCreated[cid] = { type: 'blobNotFound' }
+              continue
+            }
+            const raw = b.data.toString('utf8')
+            const head = raw.split(/\r?\n\r?\n/)[0].replace(/\r?\n[ \t]/g, ' ')
+            const header = (name: string) => new RegExp(`^${name}:\\s*(.*)$`, 'im').exec(head)?.[1] ?? ''
+            const addr = (v: string) => [...v.matchAll(/<?([^\s<>,"]+@[^\s<>,"]+)>?/g)].map((m) => ({ name: null, email: m[1] }))
+            const e = make({ from: addr(header('From')), to: addr(header('To')), subject: header('Subject'), text: '', mailbox: Object.keys(imp.mailboxIds ?? {})[0] ?? 'mb-drafts', seen: !!imp.keywords?.$seen, draft: !!imp.keywords?.$draft }, false)
+            e.raw = raw
+            created.set(cid, e.id)
+            out.created[cid] = { id: e.id, blobId: imp.blobId, threadId: e.threadId, size: b.data.length }
+            changed([e.id], [], [])
+          }
+          out.newState = String(emailState)
+          ok(out)
           break
         }
         case 'EmailSubmission/set': {

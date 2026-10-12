@@ -1540,7 +1540,7 @@ function SpotlightSettings() {
       )}
       <SpotlightFavourites />
       <SetGroup title="While you type, include">
-        {CATEGORIES.filter(([id]) => agents || id !== 'answers').map(([id, label]) => (
+        {CATEGORIES.filter(([id]) => (agents || id !== 'answers') && (account.status === 'user' || (id !== 'contacts' && id !== 'mail'))).map(([id, label]) => (
           <label key={id} className="set-check">
             <input type="checkbox" checked={prefs.include[id]} onChange={(e) => setInclude(id, e.target.checked)} />
             {label}

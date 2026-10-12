@@ -25,6 +25,7 @@ import {
   type Op,
   type ThreadRow,
 } from '../../data/mail'
+import { findMail } from '../../data/pim'
 import { Composer, type ComposeInit } from './Composer'
 import { Avatar, htmlToText, shortDate } from './parts'
 import { Reader, type ReplyMode } from './Reader'
@@ -36,8 +37,10 @@ import './mail.css'
 // scrolls), the conversation on the right, a message being written in its place. On a phone, or
 // in a narrow window, one at a time: mailboxes, list, conversation, with a way back.
 //
-// props.account picks an account, props.email opens a message (a notification, openMail()), and
-// props.compose takes a message to write from composeMail() (src/data/mail.ts).
+// props.account picks an account, props.email opens a message (a notification, openMail()),
+// props.message opens one by its Message-ID (openMailByMessageId(), a task's link back), and
+// props.compose takes a message to write from composeMail() (src/data/mail.ts); props.search
+// searches (Spotlight's "Search Mail for …").
 
 const ROW = 74
 const PAGE = 50
@@ -154,6 +157,8 @@ export function Mail({ win }: { win: WinState }) {
   // Opened from elsewhere: on a message, or with one to write.
   useEffect(() => {
     if (win.props.account && accounts?.some((a) => a.id === Number(win.props.account))) setAccountId(Number(win.props.account))
+    // Spotlight's "Search Mail for …".
+    if (win.props.search) runSearch(win.props.search)
     const req = takeCompose(win.props.compose)
     if (req) startCompose({ to: toAddresses(req.to), cc: toAddresses(req.cc), bcc: toAddresses(req.bcc), subject: req.subject ?? '', text: req.body ?? '', files: req.attachments, title: 'New message' })
   }, [win.props.t, accounts]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -178,6 +183,23 @@ export function Mail({ win }: { win: WinState }) {
       live = false
     }
   }, [win.props.t, acc]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Opened on a Message-ID (a task's or an event's link back): found in whichever account has it.
+  useEffect(() => {
+    const mid = win.props.message
+    if (!mid || !accounts?.length) return
+    let live = true
+    findMail(mid)
+      .then((r) => live && wm.setProps(win.pid, { ...win.props, message: undefined, account: String(r.account), email: r.id, t: String(Date.now()) }))
+      .catch((e: Error) => {
+        if (!live) return
+        setError(/not in your mail/.test(e.message) ? 'That message is no longer in your mail.' : e.message)
+        wm.setProps(win.pid, { ...win.props, message: undefined })
+      })
+    return () => {
+      live = false
+    }
+  }, [win.props.t, accounts]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const roleOf = (role: string) => boot?.mailboxes.find((b) => b.role === role)?.id ?? null
   const current = boot?.mailboxes.find((b) => b.id === mailbox) ?? null

@@ -157,8 +157,9 @@ export type NoticeAction = { app: string; props?: Record<string, string> }
 /** The address a push message opens (the service worker opens it when MvL OS isn't running). */
 export function actionUrl(action: NoticeAction | undefined): string {
   if (!action) return '/'
-  const thread = action.app === 'agents' ? action.props?.thread : undefined
-  return `/?open=${encodeURIComponent(action.app)}${thread ? `&thread=${encodeURIComponent(thread)}` : ''}`
+  // What it is about goes along (a thread, a task, a message: src/os/openUrl.ts takes only what each app allows).
+  const props = Object.entries(action.props ?? {}).filter(([k, v]) => /^[a-z]{1,20}$/.test(k) && typeof v === 'string' && v.length <= 300)
+  return `/?open=${encodeURIComponent(action.app)}${props.map(([k, v]) => `&${k}=${encodeURIComponent(v)}`).join('')}`
 }
 
 /** A notification as kept in the notification center (the server's list, or this browser's). */

@@ -20,6 +20,11 @@ const STATE_COOKIE = 'mvlos_google'
 const WRITE_SCOPE = 'https://www.googleapis.com/auth/calendar.events'
 const SCOPES = `openid email https://www.googleapis.com/auth/calendar.readonly ${WRITE_SCOPE}`
 
+// Where Google's APIs are: GOOGLE_API_URL and GOOGLE_TOKEN_URL point them at a stand-in for
+// the checks (scripts/pim-check.ts); nothing else sets them.
+const CALENDAR_API = process.env.GOOGLE_API_URL || 'https://www.googleapis.com/calendar/v3'
+const TOKEN_URL = process.env.GOOGLE_TOKEN_URL || 'https://oauth2.googleapis.com/token'
+
 export const googleEnabled = () => !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)
 
 type GoogleRow = { email: string; refresh_token: string; access_token: string | null; expires_at: number }
@@ -50,7 +55,7 @@ export function startGoogle(req: IncomingMessage, res: ServerResponse) {
 }
 
 async function tokenRequest(body: Record<string, string>) {
-  const res = await fetch('https://oauth2.googleapis.com/token', {
+  const res = await fetch(TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ client_id: process.env.GOOGLE_CLIENT_ID!, client_secret: process.env.GOOGLE_CLIENT_SECRET!, ...body }),
@@ -123,7 +128,7 @@ async function accessToken(user: User): Promise<string> {
 
 async function calendarApi<T>(user: User, path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   const token = await accessToken(user)
-  const res = await fetch(`https://www.googleapis.com/calendar/v3${path}`, {
+  const res = await fetch(`${CALENDAR_API}${path}`, {
     method: init.method ?? 'GET',
     headers: { Authorization: `Bearer ${token}`, ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
@@ -165,6 +170,8 @@ export type CalendarEvent = {
   editable?: boolean
   /** What the server needs to change or delete it (opaque to the browser). */
   ref?: string
+  /** Its iCalendar UID, the same in every calendar it is in (an invitation in Mail finds it by this). */
+  uid?: string
 }
 
 const cache = new Map<string, { at: number; value: Promise<unknown> }>()
@@ -206,6 +213,7 @@ type GoogleTime = { date?: string; dateTime?: string; timeZone?: string }
 type GooglePerson = { email?: string; displayName?: string; responseStatus?: string; organizer?: boolean; self?: boolean }
 type GoogleEvent = {
   id: string
+  iCalUID?: string
   status?: string
   summary?: string
   description?: string
@@ -273,6 +281,7 @@ export async function listEvents(user: User, ids: string[] | null, range: { from
             recurring: !!e.recurringEventId || undefined,
             editable: cal.writable,
             ref: ref({ k: 'g', c: cal.id, e: e.id, m: e.recurringEventId }),
+            uid: e.iCalUID,
           }))
       }).catch(() => [] as CalendarEvent[]),
     ),
@@ -371,4 +380,76 @@ export async function moveGoogleEvent(user: User, ref: GoogleRef, destination: s
 export async function deleteGoogleEvent(user: User, ref: GoogleRef, all: boolean) {
   await calendarApi(user, `${eventPath(ref.c, all && ref.m ? ref.m : ref.e)}?sendUpdates=all`, { method: 'DELETE' })
   clearGoogleCache(user)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Invitations (server/pim.ts): an event found by its iCalendar UID (Google puts invitations sent
+// to the account in its calendar by itself), your answer to it, a guest's answer on your own
+// event, and an invitation from elsewhere imported as it is.
+
+export type GoogleFound = { calendarId: string; calendar: string; id: string; title: string; start: string; end: string; allDay: boolean; cancelled: boolean; url?: string; attendees: Attendee[] }
+
+/** The event with this UID in one of your calendars that you can change (the main one first), or null. */
+export async function googleByUid(user: User, uid: string): Promise<GoogleFound | null> {
+  if (!googleAccount(user) || !uid || uid.length > 1000) return null
+  const calendars = (await listCalendars(user)).filter((c) => c.access === 'owner' || c.access === 'writer').sort((a, b) => Number(b.primary) - Number(a.primary)).slice(0, 10)
+  for (const cal of calendars) {
+    const d = await calendarApi<{ items?: GoogleEvent[] }>(user, `/calendars/${encodeURIComponent(cal.id)}/events?${new URLSearchParams({ iCalUID: uid, showDeleted: 'true', maxResults: '5' })}`).catch(() => null)
+    const e = d?.items?.find((x) => !x.recurringEventId) ?? d?.items?.[0]
+    if (!e) continue
+    return {
+      calendarId: cal.id,
+      calendar: cal.name,
+      id: e.id,
+      title: e.summary || '(No title)',
+      start: e.start.dateTime ?? e.start.date ?? '',
+      end: e.end.dateTime ?? e.end.date ?? '',
+      allDay: !e.start.dateTime,
+      cancelled: e.status === 'cancelled',
+      url: e.htmlLink,
+      attendees: (e.attendees ?? []).filter((a) => a.email).map((a) => ({ email: a.email!.toLowerCase(), name: a.displayName, status: STATUS[a.responseStatus ?? ''], organizer: a.organizer || undefined, self: a.self || undefined })),
+    }
+  }
+  return null
+}
+
+const GOOGLE_STATUS: Record<string, string> = { accepted: 'accepted', declined: 'declined', tentative: 'tentative', 'needs-action': 'needsAction' }
+
+/**
+ * Sets one person's answer on an event: yours (`self`, or one of `emails`) to an invitation, which
+ * Google then sends to the organiser; or a guest's on your own event, from their reply by email
+ * (`notify` false: nobody needs telling). Answers false when that person is not on it.
+ */
+export async function setGoogleAnswer(user: User, calendarId: string, eventId: string, who: { self?: boolean; emails: string[] }, status: 'accepted' | 'declined' | 'tentative' | 'needs-action', notify: boolean): Promise<boolean> {
+  const path = eventPath(calendarId, eventId)
+  const e = await calendarApi<GoogleEvent>(user, path)
+  const wanted = new Set(who.emails.map((x) => x.toLowerCase()))
+  const attendees = e.attendees ?? []
+  const i = attendees.findIndex((a) => (who.self && a.self) || (a.email && wanted.has(a.email.toLowerCase())))
+  if (i < 0) return false
+  attendees[i] = { ...attendees[i], responseStatus: GOOGLE_STATUS[status] }
+  await calendarApi(user, `${path}?sendUpdates=${notify ? 'all' : 'none'}`, { method: 'PATCH', body: { attendees } })
+  clearGoogleCache(user)
+  return true
+}
+
+/** An invitation from elsewhere, imported into a Google calendar with its own UID (no one is mailed). */
+export async function importGoogleEvent(
+  user: User,
+  calendarId: string,
+  e: { uid: string; title: string; start: string; end: string; allDay: boolean; location?: string | null; description?: string | null; organizer: { email: string; name?: string | null } | null; attendees: { email: string; name?: string | null; status: string }[] },
+): Promise<string> {
+  const body = {
+    iCalUID: e.uid,
+    summary: e.title,
+    start: time(e.start, e.allDay),
+    end: time(e.end, e.allDay),
+    ...(e.location ? { location: e.location } : {}),
+    ...(e.description ? { description: e.description } : {}),
+    ...(e.organizer ? { organizer: { email: e.organizer.email, ...(e.organizer.name ? { displayName: e.organizer.name } : {}) } } : {}),
+    attendees: e.attendees.map((a) => ({ email: a.email, ...(a.name ? { displayName: a.name } : {}), responseStatus: GOOGLE_STATUS[a.status] ?? 'needsAction' })),
+  }
+  const made = await calendarApi<GoogleEvent>(user, `/calendars/${encodeURIComponent(calendarId)}/events/import`, { method: 'POST', body })
+  clearGoogleCache(user)
+  return made.id
 }

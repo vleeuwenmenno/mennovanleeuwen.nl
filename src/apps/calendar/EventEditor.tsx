@@ -2,11 +2,16 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import { createEvent, dayKey, deleteEvent, setLastCalendar, updateEvent, type CalendarEvent, type CalendarInfo, type EventInput } from '../../data/calendar'
 import { connectGoogle } from '../../os/account'
 import { Select } from '../../os/Select'
+import { composeMail, openMailByMessageId } from '../../data/mail'
+import { messageIdOf } from '../../data/pim'
+import { PeoplePicker, PersonChip, type Person } from '../contacts/people'
 import { addDays, hhmm, parseDay, span } from './time'
 
 // A new event, or one to look at and change: title, calendar, when, where, who and notes. Guests
-// get an invitation by email from Google or the CalDAV server. For one occurrence of a repeating
-// event, saving and deleting ask whether it is about that one or the whole series.
+// are picked from your contacts (Contacts' people picker) and get an invitation by email from
+// Google or the CalDAV server; Email guests writes to them all. For one occurrence of a repeating
+// event, saving and deleting ask whether it is about that one or the whole series. Notes that link
+// back to a mail (an event made from one) get a button that opens it in Mail.
 
 export type Draft = {
   title: string
@@ -83,7 +88,12 @@ function changes(before: EventInput, after: EventInput): Partial<EventInput> {
   return out
 }
 
-const EMAIL = /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]+$/
+/** The first link back to a message in the notes (an event made from an email), as its Message-ID. */
+const MAIL_LINK = /(https?:\/\/\S+[?&]open=mail\S*|message:\S+)/
+const mailIn = (notes: string) => {
+  const m = MAIL_LINK.exec(notes)
+  return m ? messageIdOf(m[1].replace(/[).,;]+$/, '')) : null
+}
 const STATUS: Record<string, [string, string]> = { accepted: ['✓', 'going'], declined: ['✕', 'not going'], tentative: ['?', 'maybe'], 'needs-action': ['…', 'not answered yet'] }
 
 type Props = {
@@ -97,7 +107,6 @@ type Props = {
 
 export function EventEditor({ event, initial, calendars, googleCanWrite, choose, onClose }: Props) {
   const [d, setDraft] = useState(initial)
-  const [guest, setGuest] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -107,6 +116,19 @@ export function EventEditor({ event, initial, calendars, googleCanWrite, choose,
   const readOnly = !!event && !event.editable
   const calendar = calendars.find((c) => c.id === d.calendarId)
   const statusOf = new Map((event?.attendees ?? []).map((a) => [a.email.toLowerCase(), a]))
+  // Names for the guests: the event's, then what was picked.
+  const [names, setNames] = useState<Record<string, string>>(() => Object.fromEntries((event?.attendees ?? []).filter((a) => a.name).map((a) => [a.email.toLowerCase(), a.name!])))
+  const people: Person[] = d.guests.map((g) => (names[g] ? { email: g, name: names[g] } : { email: g }))
+  const badge = (p: Person) => {
+    const a = statusOf.get(p.email.toLowerCase())
+    const [icon, label] = STATUS[a?.status ?? ''] ?? ['', '']
+    return icon ? (
+      <b className={`ca-guest-status is-${a?.status}`} title={`${label}${a?.organizer ? ' · organiser' : ''}`}>
+        {icon}
+      </b>
+    ) : null
+  }
+  const mailMessage = mailIn(d.description)
 
   useEffect(() => {
     if (!readOnly) titleRef.current?.focus()
@@ -128,30 +150,10 @@ export function EventEditor({ event, initial, calendars, googleCanWrite, choose,
       return { ...next, endDate: dayKey(end), endTime: hhmm(end) }
     })
 
-  /** Adds what is typed in the guests field; the new list, or null when it isn't an address. */
-  const addGuest = (): string[] | null => {
-    const emails = guest
-      .split(/[\s,;]+/)
-      .map((g) => g.trim().replace(/^.*<(.+)>$/, '$1'))
-      .filter(Boolean)
-    const bad = emails.find((g) => !EMAIL.test(g))
-    if (bad) {
-      setError(`${bad} is not an email address`)
-      return null
-    }
-    setError(null)
-    const guests = [...new Set([...d.guests, ...emails.map((g) => g.toLowerCase())])]
-    set({ guests })
-    setGuest('')
-    return guests
-  }
-
   const save = async (ev?: FormEvent) => {
     ev?.preventDefault()
     if (readOnly || busy) return
-    const guests = guest.trim() ? addGuest() : d.guests
-    if (!guests) return
-    const input = inputOf({ ...d, guests })
+    const input = inputOf(d)
     if (typeof input === 'string') return setError(input)
     setBusy(true)
     setError(null)
@@ -259,41 +261,22 @@ export function EventEditor({ event, initial, calendars, googleCanWrite, choose,
           </label>
           <div className="ca-field">
             <span>Guests</span>
-            <div className="ca-guests">
-              {d.guests.map((g) => {
-                const a = statusOf.get(g)
-                const [icon, label] = STATUS[a?.status ?? ''] ?? ['', '']
-                return (
-                  <span key={g} className={`ca-guest is-${a?.status ?? 'new'}`} title={`${g}${label ? ` · ${label}` : ''}${a?.organizer ? ' · organizer' : ''}`}>
-                    {icon && <b>{icon}</b>}
-                    {a?.name || g}
-                    {!readOnly && (
-                      <button type="button" onClick={() => set({ guests: d.guests.filter((x) => x !== g) })} aria-label={`Remove ${g}`}>
-                        ×
-                      </button>
-                    )}
-                  </span>
-                )
-              })}
-              {!readOnly && (
-                <input
-                  value={guest}
-                  onChange={(e) => setGuest(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ',' || (e.key === 'Tab' && guest.trim())) {
-                      e.preventDefault()
-                      addGuest()
-                    } else if (e.key === 'Backspace' && !guest && d.guests.length) set({ guests: d.guests.slice(0, -1) })
-                  }}
-                  onBlur={() => guest.trim() && addGuest()}
-                  placeholder={d.guests.length ? 'Add another' : 'Invite people by email'}
-                  inputMode="email"
-                  autoComplete="off"
-                  spellCheck={false}
-                  aria-label="Add guests"
-                />
-              )}
-            </div>
+            {readOnly ? (
+              <div className="ca-guests is-ro">
+                {people.length ? people.map((p) => <PersonChip key={p.email} email={p.email} name={p.name} compact badge={badge(p)} />) : <em className="muted">None</em>}
+              </div>
+            ) : (
+              <PeoplePicker
+                value={people}
+                onChange={(next) => {
+                  setNames((n) => ({ ...n, ...Object.fromEntries(next.filter((p) => p.name).map((p) => [p.email.toLowerCase(), p.name!])) }))
+                  set({ guests: [...new Set(next.map((p) => p.email.toLowerCase()))] })
+                }}
+                badge={badge}
+                placeholder="Invite people by name or email"
+                label="Guests"
+              />
+            )}
           </div>
           <label className="ca-field ca-notes">
             <span>Notes</span>
@@ -328,6 +311,16 @@ export function EventEditor({ event, initial, calendars, googleCanWrite, choose,
             <a className="btn btn-small btn-ghost" href={event.meet} target="_blank" rel="noopener noreferrer">
               🎥 Join call
             </a>
+          )}
+          {d.guests.length > 0 && (
+            <button type="button" className="btn btn-small btn-ghost" onClick={() => composeMail({ to: people.map((p) => p.email), subject: d.title.trim() || event?.title || '' })} title="Write to everyone on it">
+              ✉ Email guests
+            </button>
+          )}
+          {mailMessage && (
+            <button type="button" className="btn btn-small btn-ghost" onClick={() => openMailByMessageId(mailMessage)} title="The email this event was made from">
+              Open the email
+            </button>
           )}
           <span className="nb-spacer" />
           {event && !readOnly && (

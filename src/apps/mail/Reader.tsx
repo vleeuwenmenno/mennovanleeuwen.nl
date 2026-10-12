@@ -22,7 +22,8 @@ import {
   type MessageRef,
   type Op,
 } from '../../data/mail'
-import { Avatar, formatSize, htmlToText, InviteCard, longDate, MessageFrame, PersonName, PlainText } from './parts'
+import { PersonChip } from '../contacts/people'
+import { Avatar, formatSize, htmlToText, InviteCard, longDate, MessageFrame, PlainText, showPerson } from './parts'
 
 // The reading pane: one conversation, oldest message first. Read and unread-but-old messages are
 // folded to a line; the newest and the unread ones are open. HTML mail shows in a sandboxed frame
@@ -45,7 +46,7 @@ type Props = {
 }
 
 /** What other apps get to see of a message (Make task, Create event, invitations). */
-export const messageRef = (account: number, m: Message): MessageRef => ({ account, id: m.id, threadId: m.threadId, subject: m.subject, from: m.from, to: m.to, receivedAt: m.receivedAt, text: m.text ?? (m.html ? htmlToText(m.html) : ''), invite: m.invite })
+export const messageRef = (account: number, m: Message): MessageRef => ({ account, id: m.id, threadId: m.threadId, subject: m.subject, from: m.from, to: m.to, cc: m.cc, receivedAt: m.receivedAt, text: m.text ?? (m.html ? htmlToText(m.html) : ''), invite: m.invite, messageId: m.messageId[0] ?? null })
 
 export function Reader({ account, threadId, boot, mailbox, narrow, onBack, onAction, onReply, onSearch }: Props) {
   const [messages, setMessages] = useState<Message[] | null>(null)
@@ -277,11 +278,8 @@ function MessageCard({
     list.length > 0 && (
       <span>
         {label}{' '}
-        {list.map((a, i) => (
-          <span key={a.email}>
-            {i > 0 && ', '}
-            <PersonName person={a} />
-          </span>
+        {list.map((a) => (
+          <PersonChip key={a.email} email={a.email} name={a.name ?? undefined} compact title={a.name ? `${a.name} <${a.email}>` : a.email} onMenu={(e) => showPerson(a, e)} />
         ))}
       </span>
     )
@@ -291,7 +289,13 @@ function MessageCard({
         <Avatar person={sender} />
         <div className="ml-msg-who">
           <div>
-            {sender ? <PersonName person={sender} more={searchFrom} /> : <strong>(No sender)</strong>}
+            {sender ? (
+              <span onClick={(e) => e.stopPropagation()}>
+                <PersonChip email={sender.email} name={sender.name ?? undefined} title={sender.name ? `${sender.name} <${sender.email}>` : sender.email} onMenu={(e) => showPerson(sender, e, searchFrom)} />
+              </span>
+            ) : (
+              <strong>(No sender)</strong>
+            )}
             {sender?.name && <span className="muted ml-msg-addr"> &lt;{sender.email}&gt;</span>}
             {m.draft && <em className="ml-draft">Draft</em>}
           </div>

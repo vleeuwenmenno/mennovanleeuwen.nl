@@ -68,7 +68,10 @@ Things can be dragged wherever they make sense ([`src/os/dnd.ts`](src/os/dnd.ts)
 in Archive. They land on desktop folders and the desktop itself, Files windows (a folder, the
 folder on show, a place in the sidebar, the Trash), the dock, and the windows of apps that show
 files: Preview, Player, Omamp, PDF, the Viewer, Archive and Zed show what is dropped on them, and
-a sticky note takes a launcher as a link. Within one library (or within this browser) files move;
+a sticky note takes a launcher as a link. A message being written in Mail attaches the files dropped
+on it (from the computer, Files or the desktop) and takes a launcher as its link in the text, and
+the Calendar imports the events of a dropped `.ics` file (shown first, into the calendar you pick).
+Within one library (or within this browser) files move;
 between Seafile's libraries and this browser they copy, and Ctrl or Alt copies, Shift moves.
 What a drop would do shows on the cursor (+ copy, → move, ↗ link or pin, ⏎ open, 🗑 delete), and
 where it would land is outlined. Holding a drag over a folder for a moment opens it, in Files and
@@ -411,7 +414,8 @@ through [`src/os/localPref.ts`](src/os/localPref.ts) for what stays in this brow
 window follows a change at once and the other way round. Those apps' window menus have *… settings…*
 to jump to their pane.
 Settings → Spotlight picks what the empty Spotlight shows (favourites, recently visited websites,
-status, apps, your repositories) and how many recent items of each, which kinds of results it searches, whether Enter on an unmatched query searches the
+status, apps, your repositories) and how many recent items of each, which kinds of results it searches (your
+contacts among them, and your mail after `mail:`; see *How the apps work together*), whether Enter on an unmatched query searches the
 web or runs it in a terminal, the preview pane, and the web search engine. Recently visited websites
 are the pages opened from MvL OS itself (Spotlight, launchers, `open`, `go`, links in apps), since a page
 can't read the browser's history ([`src/data/siteHistory.ts`](src/data/siteHistory.ts)); go links are
@@ -552,8 +556,14 @@ server expanding repeating events, so everything shows both sources together.
 The **Calendar** app ([`src/apps/calendar`](src/apps/calendar)) shows the switched-on calendars by
 day, three days, week, month or year. Drag on an empty spot to make an event, drag an event to
 move it, drag its bottom edge to change its length; open one to change its title, time, place,
-notes, calendar and guests (invited by email by Google or the CalDAV server). For one occurrence
-of a repeating event it asks whether the change is for that one or the whole series. Changes go
+notes, calendar and guests (picked from your contacts, invited by email by Google or the CalDAV
+server; *Email guests* writes to them all). For one occurrence
+of a repeating event it asks whether the change is for that one or the whole series. The sidebar
+has a *Birthdays* calendar under Contacts: your contacts' birthdays and anniversaries as all-day
+events with the age they turn, read-only, on until switched off there; opening one opens the
+contact. A `.ics` file dropped on the calendar is imported: its events (title, time in its own
+zone, place, notes, how it repeats) are listed first, then made in the calendar picked, without
+their guests so nobody gets an invitation from you (a file imported twice makes its events twice). Changes go
 through [`server/calendars.ts`](server/calendars.ts): Google's API, or the event's own iCalendar
 text on the CalDAV server, written back with its ETag so other apps' properties stay.
 
@@ -587,7 +597,10 @@ stay out either way. Links open in a new tab without an opener or referrer, with
 as their tooltip. Inline (`cid:`) pictures come along as `data:` URIs, or (big ones) through
 short-lived sealed links that need no cookie. Quoted text, in HTML and plain text alike, is folded
 away. Calendar invitations (a `text/calendar` part or an `.ics` file, iMIP REQUEST, REPLY or CANCEL,
-[`server/imip.ts`](server/imip.ts)) show as a card with what, when, where and the organiser.
+[`server/imip.ts`](server/imip.ts)) show as a card with what, when, where and the organiser, and
+are answered from it (see *How the apps work together*). Senders and recipients show as your
+contacts, with their photos; mailto: links in HTML mail open the composer (in a new tab, as every
+link in a message does, since the message's frame runs no scripts).
 
 While mail notifications are on (Settings → Notifications → Mail) or Mail was used in the last half
 hour, the server keeps a JMAP EventSource open per account (and polls every two minutes for servers
@@ -596,11 +609,12 @@ in view, and open Mail windows update at once. `pnpm check:mail` tests the sanit
 mail and everything above against a stand-in JMAP server ([`scripts/mail-mock.ts`](scripts/mail-mock.ts),
 which also runs on its own with `pnpm mail:mock` for trying the app). For other apps,
 [`src/data/mail.ts`](src/data/mail.ts) has `composeMail({ to, cc, subject, body, attachments })` and
-`openMail(id)`, and hooks Contacts, Calendar and Tasks can take: `setSuggestProvider` (who the
-recipient fields suggest; recent correspondents until then), `setPersonHandler` (a click on a
-sender or recipient; copy the address or write to them until then), `setInviteHandler` (answering
-invitations; *Coming soon* until then) and `registerMessageAction` (the message menu, where *Make
-task from this email* and *Create event from this email* wait as `task` and `event`).
+`openMail(id)` (and `openMailByMessageId(id)`), and hooks Contacts, Calendar and Tasks take:
+`setSuggestProvider` (who the recipient fields suggest after your contacts: recent
+correspondents), `setPersonHandler` (a click on a sender's or recipient's name), `setInviteHandler`
+(answering invitations, and what the card says about them) and `registerMessageAction` (the
+message menu's *Make task from this email* and *Create event from this email*, `task` and
+`event`). [`src/os/pimLinks.tsx`](src/os/pimLinks.tsx) plugs them in.
 
 **Tasks** ([`src/apps/tasks`](src/apps/tasks), [`server/tasks.ts`](server/tasks.ts)) is a to-do app laid
 out like Apple's Reminders, for signed-in users. Its lists are the task lists of the CalDAV accounts in
@@ -651,8 +665,8 @@ need `tasks` added to the OAuth client, another sensitive scope for Google to ve
 listId })` makes a task and answers it, in `listId` or else the list picked under *New tasks* in the
 Tasks settings (or the first CalDAV list); `due` is a day ("2026-10-14") or an ISO time, and
 everything but the title may be left out. `openTask(id)` opens the Tasks app on a task, with its
-details. Mail's "Make a task from this email" is meant to use these, with a link to the message in
-`url`. Underneath is `/api/tasks`: `GET` (`?fresh=1` past the cache), `POST {list?, task}`, `PATCH
+details. Mail's *Make task from this email* makes its tasks on the server instead
+(`/api/pim/task-from-mail`), with a `message:` link back to the message in `url`. Underneath is `/api/tasks`: `GET` (`?fresh=1` past the cache), `POST {list?, task}`, `PATCH
 {ref, task, list?}` and `DELETE {ref}`, `PUT /api/tasks/order`, and `POST`, `PATCH` and `DELETE` on
 `/api/tasks/lists`.
 
@@ -1010,7 +1024,8 @@ installed app (on iPhone and iPad from iOS 16.4, once MvL OS is added to the Hom
 from there). When an Agents answer is in, or the agent waits for an *Allow* or a form, and no
 window is watching that thread, the server sends it as Web Push (VAPID, RFC 8292; encrypted per
 RFC 8291, checked by `pnpm check:push` against the RFC's example), with no dependencies. Tapping
-it opens the thread. The server's keys are `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`, or generated
+it opens the thread, and any push opens what it is about: a task reminder that task, new mail that
+message ([`src/os/openUrl.ts`](src/os/openUrl.ts) takes only what each app allows from the address). The server's keys are `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`, or generated
 once into `DATA_DIR/vapid.json` (keep it: new keys mean every device has to turn push on again);
 `VAPID_SUBJECT` (a `mailto:` or `https:` address) defaults to `PUBLIC_URL`. Subscriptions are only
 accepted for the browsers' push services (Google, Mozilla, Apple, Microsoft).
@@ -1142,17 +1157,72 @@ per page and shared, with an index by email address.
 | `openContact(idOrEmail, name?)` | the Contacts app on that person; an unknown address gets a card with *Add to contacts* |
 | `addContact({ email, name, ...fields }, { book?, groups? })` | a new contact in the default address book (Settings), answers it |
 | `birthdays(from, to)` | birthdays and anniversaries in a range, with the years they mark, for a Birthdays calendar |
-| `registerContactSlot('recent-mail' \| 'upcoming-events', render)` | fills that section of the contact card (empty until an app registers it) |
+| `registerContactSlot('recent-mail' \| 'upcoming-events', render)` | fills that section of the contact card (Mail's and Calendar's, from src/os/pimLinks.tsx) |
 
 [`src/apps/contacts/people.tsx`](src/apps/contacts/people.tsx) has the components:
-`<PeoplePicker value onChange placeholder? exclude?>` is a recipient or guest field (chips; your
+`<PeoplePicker value onChange placeholder? exclude? more? badge?>` is a recipient or guest field (chips; your
 contacts suggested while typing, picked with the arrow keys and Enter or Tab; a contact with
 several addresses opens them to choose from; a group adds everyone in it; any valid address as
 typed, after Enter, a comma or leaving the field; several pasted at once, `Name <address>` included;
-Backspace takes the last one off). `<PersonChip email name?>` shows a person by their contact's
-name and photo, a hover card with *Open contact* or *Add to contacts*, and opens the contact on a
-click. `<Avatar contact? email? name? size?>` is the photo or initials, and `parseAddresses(text)`
+Backspace takes the last one off; `more` adds suggestions after your contacts', such as Mail's
+recent correspondents, and `badge` marks a chip, such as a guest's answer). `<PersonChip email name?
+badge? onMenu?>` shows a person by their contact's name and photo, a hover card with *Open contact*
+or *Add to contacts*, and opens the contact on a click. `<Avatar contact? email? name? size?>` is the photo or initials, and `parseAddresses(text)`
 turns pasted text into `{ email, name? }` people.
+
+## How the apps work together
+
+Mail, Contacts, Calendar and Tasks each have hooks for the others, and
+[`src/os/pimLinks.tsx`](src/os/pimLinks.tsx) plugs them in once for the page, with the server side
+in [`server/pim.ts`](server/pim.ts) (`/api/pim/…`, per user, every message read again from the
+user's own account):
+
+- **People in Mail.** To, Cc and Bcc are Contacts' people picker: your contacts as you type
+  (groups too), then recent correspondents. Senders and recipients are contact chips with their
+  photos; a click opens the contact, or a card with *Add to contacts* for an address you don't
+  know, and right-click adds *New message*, *Copy address* and *Mail from them*.
+- **The contact card** has *Email* (Mail's composer once a mail account is linked) and *New event*
+  (the Calendar's editor, with them as a guest), and two sections: *Recent mail*, the last five
+  conversations from or to any of their addresses across your mail accounts (JMAP search, Drafts,
+  Trash and Junk left out; a click opens it), and *Upcoming events*, the events of the next 60 days
+  where they are a guest or the organiser (a click opens it in the Calendar).
+- **Invitations.** The card in Mail answers with Accept, Maybe or Decline where the event lives:
+  in a linked CalDAV calendar (Fastmail puts invitations there by itself) your PARTSTAT is changed
+  in the event's own text and the server, which does scheduling, mails the organiser; in Google
+  Calendar the answer goes through Google's API, which mails them; anywhere else the event is
+  copied into the calendar you used last (not when declined) and your answer goes out by email as
+  an iMIP REPLY (`text/calendar; method=REPLY`, the message written whole and sent with JMAP's
+  Email/import and EmailSubmission). The card shows your answer and the calendar, and *Open in
+  Calendar* opens the event there. A cancellation offers to take the event out of your calendar; a
+  guest's reply shows whether your event has their answer yet and writes it on (only the answer of
+  the guest who sent it).
+- **From a message.** *Create event from this email* opens the Calendar's editor with the subject,
+  everyone on the message as guests and a link back to it in the notes (this site's
+  `/?open=mail&message=<Message-ID>`, which the editor's *Open the email* follows). *Make task
+  from this email* asks when it is due (no date, today, tomorrow, next week or a date) and makes a
+  task with the subject, the sender and a snippet, and the message as a `message:%3C<Message-ID>%3E`
+  link, the kind Apple's Reminders and Mail use, so it opens the message on a Mac or an iPhone
+  too; in Tasks it opens it in Mail, found by its Message-ID in whichever account has it.
+- **Calendar.** *Email guests* (in the editor and an event's menu) writes to everyone on it with
+  the title as subject. The *Birthdays* calendar comes from your contacts.
+- **mailto: links** anywhere in MvL OS (contact cards, the Calendar, Agents answers, notes,
+  Markdown previews, HTML mail) open Mail's composer once a mail account is linked, and the
+  browser's mail program otherwise ([`src/data/links.ts`](src/data/links.ts)'s
+  `registerLinkHandler`); so does `/?mailto=<a mailto: link>`.
+- **Spotlight** lists your contacts as you type (name, address, phone; Enter opens the contact,
+  Ctrl+Enter writes to them, and Ctrl+K has *Copy* the address and *Call*), and `mail:` followed
+  by a search (the words and `from:` … filters Mail takes) shows the newest matching messages
+  from every account, Enter opening one. Settings → Spotlight switches both off.
+
+```sh
+pnpm check:pim-links   # Against stand-ins for JMAP, CalDAV and Google Calendar: invitations answered in each place (PARTSTAT, Google's API, an iMIP REPLY), cancellations, replies, a contact's mail and events, tasks from mail, another user seeing none of it
+```
+
+[`scripts/google-mock.ts`](scripts/google-mock.ts) is the Google Calendar stand-in: the server
+talks to it instead of Google when `GOOGLE_API_URL` (and `GOOGLE_TOKEN_URL`) point there, which
+only the checks do. Not yet tried against real Fastmail, Google or iCloud accounts: how Fastmail
+takes the iMIP message made with Email/import, and Google's `events/import` for an invitation from
+elsewhere, are as their documentation says.
 
 ## Widgets
 
