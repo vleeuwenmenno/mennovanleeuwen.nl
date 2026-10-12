@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { cvMode } from './cvMode'
+import { playMode } from './playMode'
 import { loginCookie, setLoginCookie } from './identity'
 
 // Who is signed in (GitHub, see server/auth.ts) and which Gitea/Forgejo instances they linked.
@@ -165,11 +166,20 @@ export async function loadAccount() {
   }
 }
 
-/** Off to GitHub, and back to this page (the CV page, or the desktop). */
-export const signIn = () => location.assign(`/api/auth/github/login${cvMode() ? '?back=/cv' : ''}`)
+/** Where sign-in comes back to: this page when it's the CV or a game's direct link, else the desktop (server/auth.ts). */
+const back = () => (cvMode() ? '/cv' : playMode() ? location.pathname.replace(/(.)\/$/, '$1') : null)
+
+/** Off to GitHub, and back to this page (the CV page, a game's direct link, or the desktop). */
+export const signIn = () => {
+  const to = back()
+  location.assign(`/api/auth/github/login${to ? `?back=${encodeURIComponent(to)}` : ''}`)
+}
 
 /** Signs in again, asking GitHub for private repositories too (remembered for later sign-ins), or no longer asking. */
-export const signInWithRepos = (repo: boolean) => location.assign(`/api/auth/github/login?repo=${repo ? 1 : 0}${cvMode() ? '&back=/cv' : ''}`)
+export const signInWithRepos = (repo: boolean) => {
+  const to = back()
+  location.assign(`/api/auth/github/login?repo=${repo ? 1 : 0}${to ? `&back=${encodeURIComponent(to)}` : ''}`)
+}
 
 /** Whether GitHub gave this account's token access to private repositories. */
 export const hasRepoScope = (u: AccountUser | null) => !!u?.githubScopes.includes('repo')

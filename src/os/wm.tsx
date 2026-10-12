@@ -590,6 +590,39 @@ export function WindowManagerProvider({
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
 
+/**
+ * A window manager with one window that is the whole page: a game opened by its direct link
+ * (/play/<game>, src/apps/games/Play.tsx), without the desktop around it. The game sees the window
+ * manager it expects (its window always focused, so its keys work), and the page has no other
+ * windows to move, close or switch to, so those do nothing. Opening an app leaves for MvL OS.
+ */
+export function SoloWindowProvider({ win, children }: { win: WinState; children: ReactNode }) {
+  const value = useMemo<WM>(() => {
+    const none = () => {}
+    return {
+      windows: [win],
+      focusedPid: win.pid,
+      open: (app, props) => location.assign(app === 'games' && props?.game ? `/play/${encodeURIComponent(props.game)}` : '/'),
+      openNew: (app, props) => location.assign(app === 'games' && props?.game ? `/play/${encodeURIComponent(props.game)}` : '/'),
+      close: none,
+      focus: none,
+      minimize: none,
+      toggleMax: none,
+      setGeometry: none,
+      setProps: none,
+      restack: none,
+      reset: none,
+      refit: none,
+      workspace: 1,
+      setWorkspace: none,
+      moveToWorkspace: none,
+      shown: () => true,
+      workspaces: false,
+    }
+  }, [win])
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>
+}
+
 export function useWM() {
   const wm = useContext(Ctx)
   if (!wm) throw new Error('useWM outside WindowManagerProvider')
