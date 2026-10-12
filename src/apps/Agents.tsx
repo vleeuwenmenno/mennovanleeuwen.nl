@@ -46,6 +46,8 @@ import {
   retryTurn,
   rewindThread,
   interruptionText,
+  compactionText,
+  isCompact,
   suggestTitle,
   regenerateTitle,
   threadMatches,
@@ -990,6 +992,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [error, setError] = useState<string | null>(null)
   const [renaming, setRenaming] = useState(false)
   const [ctxOpen, setCtxOpen] = useState(false)
+  // A compaction under way (asked for, or by itself in the middle of a turn): shown in place of the reply.
+  const [compacting, setCompacting] = useState<{ auto: boolean } | null>(null)
   // A queued message being edited in the message box, and what was in the box before (back after).
   const [editingQ, setEditingQ] = useState<{ id: string; stash: { text: string; files: Attachment[] } } | null>(null)
   const abort = useRef<AbortController | null>(null)
@@ -1037,8 +1041,10 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     else if (e.type === 'client') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'client', call: e.call }])
     else if (e.type === 'question') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'question', form: e.form }])
     else if (e.type === 'answered' || e.type === 'approved' || e.type === 'clientDone') setApprovals((a) => a.filter((x) => x.callId !== e.callId))
+    else if (e.type === 'compact') setCompacting(e.state === 'start' ? { auto: e.auto } : null)
     else if (e.type === 'message') {
       setMessages((ms) => [...ms, e.message])
+      if (e.message.role === 'compact') setCompacting(null)
       // The agent changed the Notebook on the server: fetch it now rather than at the next sync.
       if (e.message.role === 'tool' && /^(create|update|delete)_note$/.test(e.message.toolName ?? '')) void pullAll()
       // A user message mid-stream is the next queued one: what a stopped turn left unsaved goes.
@@ -1046,7 +1052,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     } else if (e.type === 'thread') {
       setThread(e.thread)
       // At rest now (the last thing a chain of turns says): no reply is being written any more.
-      if (!e.thread.running) setLive(null)
+      if (!e.thread.running) (setLive(null), setCompacting(null))
       onChanged()
     } else if (e.type === 'queue') setThread((t) => (t ? { ...t, queue: e.queue } : t))
     // A failed turn: the thread's `interrupted` says so when it ends, with Retry (see below).
@@ -1199,6 +1205,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     }
     // Editing a queued message: Enter saves it back in its place.
     if (editingQ && asked === undefined) return saveEdit(message, attached)
+    // /compact summarises the thread so far: a thread not made yet has nothing to summarise.
+    if (isCompact(message) && !attached.length && !hasConversation) return setError('There is nothing to compact yet: /compact summarises the conversation so far')
     // While it works, a message waits in the queue; while it waits on you (changes to allow, a
     // plan, a form), it answers all of that instead.
     if (answering && thread && asked === undefined) {
@@ -1241,7 +1249,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       abort.current = ctl
       let accepted = false
       try {
-        await sendMessage(target.id, message, attached, (e) => ((accepted ||= e.type === 'message' && e.message.role === 'user'), onEvent(e)), ctl.signal)
+        await sendMessage(target.id, message, attached, (e) => ((accepted ||= (e.type === 'message' && e.message.role === 'user') || e.type === 'compact'), onEvent(e)), ctl.signal)
       } catch (e) {
         // Dropped on the way, not refused: the turn may well go on (or the server is restarting).
         if (!isDropped(e) || ctl.signal.aborted) throw e
@@ -1251,17 +1259,53 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
         setError((e as Error).message)
-        setText((t) => t || typed)
-        setFiles((f) => (f.length ? f : asked === undefined ? files : []))
+        // A compaction from the thread's menu was never in the box.
+        if (asked === undefined || !isCompact(typed)) {
+          setText((t) => t || typed)
+          setFiles((f) => (f.length ? f : asked === undefined ? files : []))
+        }
       }
     } finally {
       abort.current = null
       sending.current = false
       setBusy(false)
       setLive(null)
+      setCompacting(null)
       setApprovals([])
       onChanged()
     }
+  }
+
+  // Compact: the model summarises the thread so far and works from the summary from then on (all
+  // messages stay here). Optional instructions say what the summary should keep. While it works,
+  // the compaction waits in the queue like a message.
+  const compactNow = (focus = '') => {
+    if (!thread) return
+    const text = `/compact ${focus.trim()}`.trim()
+    if (!answering) return void send(text)
+    queueMessage(thread.id, text, []).then(
+      (r) => setThread(r.thread),
+      (e: Error) => setError(e.message),
+    )
+  }
+  const compactDialog = async () => {
+    if (!thread) return
+    let focus = ''
+    const ok = await confirmDialog({
+      title: 'Compact this conversation?',
+      body: (
+        <>
+          <p>The model writes a summary of the conversation so far and works from that from now on, which frees up its context window. Every message stays here to read.</p>
+          <label className="agt-compact-focus">
+            <span className="muted">What should the summary keep in particular? (optional)</span>
+            <textarea rows={3} placeholder="For example: the API details and the open bugs" onChange={(e) => (focus = e.target.value)} />
+          </label>
+          {answering && <p className="muted">It is working now: the compaction waits in the queue until it is done.</p>}
+        </>
+      ),
+      confirm: 'Compact',
+    })
+    if (ok) compactNow(focus)
   }
 
   // Asked from Spotlight: send it once the window is up (once, even when effects run twice).
@@ -1282,7 +1326,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     setDropped(false)
     setBusy(true)
     pinned.current = true
-    const at = messages.map((m) => m.role).lastIndexOf('user')
+    // A /compact cut short is compacted again: nothing goes.
+    const at = thread.interrupted?.compact ? -1 : messages.map((m) => m.role).lastIndexOf('user')
     setMessages((ms) => (at >= 0 ? ms.slice(0, at) : ms))
     setThread((t) => (t ? { ...t, interrupted: null } : t))
     setLive({ content: '', thinking: '' })
@@ -1301,6 +1346,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       sending.current = false
       setBusy(false)
       setLive(null)
+      setCompacting(null)
       setApprovals([])
       onChanged()
     }
@@ -1310,10 +1356,12 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   // undone), and it comes back into the message box to edit and send again.
   const rewindTo = async (m: AgentMessage, edit: boolean) => {
     if (!thread) return
-    const after = messages.filter((x) => x.id > m.id)
+    const after = messages.filter((x) => x.id > m.id && x.role !== 'compact')
     const mine = after.filter((x) => x.role === 'user').length
     const theirs = after.length - mine
     const parts = [mine ? `${mine} more of yours` : '', theirs ? `${theirs} from the agent (replies and tool results)` : ''].filter(Boolean).join(' and ')
+    // A compaction after it summarised messages that go: it goes too.
+    const compactions = messages.filter((x) => x.id > m.id && x.role === 'compact').length
     const ok = await confirmDialog({
       title: edit ? 'Edit and send this message again?' : 'Rewind to this message?',
       body: (
@@ -1322,6 +1370,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             This message {after.length ? `and the ${after.length} after it (${parts})` : ''} {after.length ? 'leave' : 'leaves'} the thread, and it goes back into the message box{text.trim() || files.length ? ', in place of what is there now' : ''}.
             {answering ? ' The agent is stopped first.' : ''}
           </p>
+          {compactions > 0 && <p className="muted">{compactions === 1 ? 'The compaction after it goes too' : `The ${compactions} compactions after it go too`}: the agent works from the messages before it again.</p>}
           <p className="muted">What its tools did is not undone: memories, the plan, notes and calendar events stay as they are, and files it changed in the work folder are not restored. Queued messages stay queued.</p>
         </>
       ),
@@ -1472,6 +1521,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 
   // A thread can be shared once the agent has answered something in it (server/shares.ts).
   const hasAnswer = messages.some((m) => m.role === 'assistant' && m.content.trim())
+  // A thread can be compacted once something was said in it.
+  const hasConversation = messages.some((m) => m.role === 'user' || m.role === 'assistant')
 
   // Right-click menus in the conversation: what is under the pointer (a link, the selection, code,
   // a tool call, a message) first, then the thread's own items.
@@ -1503,6 +1554,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             : []),
           { label: 'Rename…', onSelect: () => setRenaming(true) },
           { label: 'Regenerate title', hint: regenerateHint(thread), disabled: thread.titling, onSelect: regenerate },
+          { label: 'Compact conversation…', hint: 'Summarise it so far, to free up the context window', disabled: !hasConversation, onSelect: () => void compactDialog() },
           thread.archived ? { label: 'Move back to threads', onSelect: () => onArchive(thread, false) } : { label: 'Archive', onSelect: () => onArchive(thread, true) },
           { label: 'Delete…', danger: true, onSelect: () => onDelete(thread) },
         ]
@@ -1523,7 +1575,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         { label: 'Copy the result', disabled: !result, onSelect: () => result && copy(result.content) },
         { separator: true },
       )
-    } else if (msg?.role === 'user')
+    } else if (msg?.role === 'compact') items.push({ label: 'Copy summary', onSelect: () => copy(msg.content) }, { separator: true })
+    else if (msg?.role === 'user')
       items.push(
         { label: 'Copy message', onSelect: () => copy(msg.content) },
         { label: 'Use as a new message', disabled: answering, onSelect: () => (setText(msg.content), input.current?.focus()) },
@@ -1593,6 +1646,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   // "/name" starts a skill: the skills that fit what is typed so far.
   const slashAt = /^\/([\w.-]*)$/.exec(text)
   const slashSkills = slashAt ? skills.filter((sk) => sk.enabled && sk.name.startsWith(slashAt[1])).slice(0, 8) : []
+  // The one built-in command: /compact, once there is something to compact.
+  const slashCompact = !!slashAt && hasConversation && 'compact'.startsWith(slashAt[1]) && slashAt[1] !== 'compact'
   const projectName = projects.find((p) => p.id === (thread ? thread.projectId : draftProject))?.name ?? null
   const modelOptions = models.length ? models : model ? [{ name: model, thinking: false, vision: false, contextLength: null }] : []
   const tools = thread?.tools ?? draftTools
@@ -1711,6 +1766,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
                 { label: 'Rename…', onSelect: () => setRenaming(true) },
                 { label: 'Regenerate title', hint: regenerateHint(thread), disabled: thread.titling || !messages.length, onSelect: regenerate },
                 { label: 'Share thread…', disabled: !hasAnswer, onSelect: () => void openShareDialog(thread) },
+                { label: 'Compact conversation…', hint: 'Summarise it so far, to free up the context window', disabled: !hasConversation, onSelect: () => void compactDialog() },
                 thread.archived ? { label: 'Move back to threads', onSelect: () => onArchive(thread, false) } : { label: 'Archive', onSelect: () => onArchive(thread, true) },
                 { separator: true },
                 { label: 'Delete…', danger: true, onSelect: () => onDelete(thread) },
@@ -1741,6 +1797,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         <Messages threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} />
         {reconnecting ? (
           <p className="agt-wait muted">Reconnecting… the connection dropped, or the server is restarting for an update.</p>
+        ) : compacting ? (
+          <p className="agt-wait muted agt-compacting">{compacting.auto ? 'The context is nearly full: compacting the conversation…' : 'Compacting the conversation…'}</p>
         ) : live ? (
           <LiveReply live={live} />
         ) : (
@@ -1770,7 +1828,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         />
       )}
       {thread && queue.length > 0 && <QueueList queue={queue} answering={answering} editing={editingQ?.id ?? null} onEdit={(q) => void startEdit(q)} onSend={(q) => void sendNow(q)} onRemove={removeQueue} />}
-      {thread && ctxOpen && <ContextPanel id={thread.id} version={messages.length} />}
+      {thread && ctxOpen && <ContextPanel id={thread.id} version={messages.length} onCompact={hasConversation ? () => void compactDialog() : undefined} />}
       <form
         className={`agt-composer ${dragOver ? 'is-drop' : ''}`}
         onSubmit={(e) => {
@@ -1797,8 +1855,22 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           {(files.length > 0 || reading > 0) && (
             <AttachedFiles files={files} pictureOf={(f) => memoryPicture(f as Attachment)} onRemove={(i) => setFiles((list) => list.filter((_, j) => j !== i))} more={reading > 0 && <li className="muted">Reading {reading}…</li>} />
           )}
-          {slashSkills.length > 0 && (
-            <ul className="agt-slash" aria-label="Skills">
+          {(slashSkills.length > 0 || slashCompact) && (
+            <ul className="agt-slash" aria-label="Commands and skills">
+              {slashCompact && (
+                <li>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setText('/compact ')
+                      input.current?.focus()
+                    }}
+                  >
+                    <b>/compact</b> <span className="muted">Summarise the conversation so far to free up the context window; add what the summary should keep</span>
+                  </button>
+                </li>
+              )}
               {slashSkills.map((sk) => (
                 <li key={sk.name}>
                   <button
@@ -1830,9 +1902,9 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Tab' && slashSkills.length) {
+              if (e.key === 'Tab' && (slashCompact || slashSkills.length)) {
                 e.preventDefault()
-                setText(`/${slashSkills[0].name} `)
+                setText(slashCompact ? '/compact ' : `/${slashSkills[0].name} `)
                 return
               }
               // Up in an empty box edits the last queued message, Esc puts an edit back.
@@ -1979,6 +2051,10 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
       continue
     }
     if (m.role === 'tool') continue // drawn with the call that asked for it
+    if (m.role === 'compact') {
+      out.push(<CompactDivider key={m.id} m={m} />)
+      continue
+    }
     const calls = m.toolCalls ?? []
     const results = messages.slice(i + 1, i + 1 + calls.length).filter((r) => r.role === 'tool')
     out.push(
@@ -2013,6 +2089,34 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
     )
   }
   return <>{out}</>
+}
+
+/**
+ * Where the thread was compacted: a divider across the conversation saying how, which opens to the
+ * summary the agent works from since. The messages above it stay as they were.
+ */
+function CompactDivider({ m }: { m: AgentMessage }) {
+  const c = m.compact
+  return (
+    <details className="agt-compact" data-msg={m.id}>
+      <summary>
+        <span className="agt-compact-label">
+          {compactionText(c)}
+          {c?.instructions && <span className="muted"> · {c.instructions}</span>}
+        </span>
+        <span className="agt-compact-more muted">Summary</span>
+      </summary>
+      <div className="agt-compact-body">
+        <p className="muted">
+          From here on the agent works from this summary instead of the {c ? `${c.messages} ${c.messages === 1 ? 'message' : 'messages'}` : 'messages'} above it
+          {c ? ` (about ${tokenCount(c.before)} tokens down to ${tokenCount(c.after)})` : ''}. They stay here for you to read.
+        </p>
+        <article className="zed-preview agt-answer">
+          <MarkdownPreview text={m.content} />
+        </article>
+      </div>
+    </details>
+  )
 }
 
 /** The model's thoughts: one small grey line to tap, showing the latest thought while it thinks. */
@@ -2319,7 +2423,7 @@ function threadMarkdown(title: string, messages: AgentMessage[]): string {
       const results = messages.slice(messages.indexOf(m) + 1).filter((r, k, rest) => r.role === 'tool' && rest.slice(0, k).every((x) => x.role === 'tool'))
       const steps = (m.toolCalls ?? []).map((c, j) => `- ${toolLabel(c, results[j]?.content)}`).join('\n')
       if (m.content.trim() || steps) out.push(`## Agent\n\n${[steps, m.content.trim()].filter(Boolean).join('\n\n')}`)
-    }
+    } else if (m.role === 'compact') out.push(`---\n\n*${compactionText(m.compact)}. The summary the agent works from since:*\n\n${m.content.split('\n').map((l) => `> ${l}`).join('\n')}\n\n---`)
   }
   return out.join('\n\n') + '\n'
 }
@@ -2540,8 +2644,11 @@ function ContextMeter({ thread, models, open, onToggle }: { thread: Thread; mode
   )
 }
 
-/** What the next message sends the model, part by part, against the window's size. */
-function ContextPanel({ id, version }: { id: string; version: number }) {
+/**
+ * What the next message sends the model, part by part, against the window's size, with where it
+ * compacts by itself (a mark on the bar) and the last compaction, if any. `onCompact`: Compact now.
+ */
+function ContextPanel({ id, version, onCompact }: { id: string; version: number; onCompact?: () => void }) {
   const [info, setInfo] = useState<ContextInfo | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
@@ -2562,13 +2669,14 @@ function ContextPanel({ id, version }: { id: string; version: number }) {
       </p>
       <div className="agt-ctx-bar" aria-hidden>
         {info.parts.map((p, i) => (
-          <span key={p.label} style={{ width: `${(p.tokens / scale) * 100}%`, background: PART_COLORS[i % PART_COLORS.length] }} />
+          <span key={p.label} style={{ width: `${(p.tokens / scale) * 100}%`, background: p.label.startsWith('Summary') ? 'var(--accent)' : PART_COLORS[i % PART_COLORS.length] }} />
         ))}
+        {info.autoCompact !== null && info.contextLength && <i className="agt-ctx-mark" style={{ left: `${info.autoCompact}%` }} />}
       </div>
       <ul className="agt-ctx-parts">
         {info.parts.map((p, i) => (
           <li key={p.label}>
-            <span className="agt-ctx-swatch" style={{ background: PART_COLORS[i % PART_COLORS.length] }} />
+            <span className="agt-ctx-swatch" style={{ background: p.label.startsWith('Summary') ? 'var(--accent)' : PART_COLORS[i % PART_COLORS.length] }} />
             <span>{p.label}</span>
             <span className="muted">≈ {tokenCount(p.tokens)}</span>
           </li>
@@ -2577,6 +2685,20 @@ function ContextPanel({ id, version }: { id: string; version: number }) {
       <p className="muted agt-ctx-note">
         {info.measured !== null ? `Ollama counted ${info.measured.toLocaleString()} tokens after the last reply. ` : ''}
         The parts are estimates (about 4 characters a token) of what the next message sends: ≈ {tokenCount(info.estimate)} in all. Older tool results go in shortened.
+      </p>
+      <p className="muted agt-ctx-note agt-ctx-compact">
+        {info.compaction
+          ? `Compacted ${info.compaction.times === 1 ? 'once' : `${info.compaction.times} times`}, last ${info.compaction.auto ? 'by itself' : 'on request'} at ${new Date(info.compaction.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}: the summary stands in for the ${info.compaction.hidden} messages before it. `
+          : ''}
+        {info.autoCompact !== null ? `It compacts by itself at ${info.autoCompact}% of the window (the mark on the bar).` : 'Compacting by itself is off (Settings → Agents → New threads).'}
+        {onCompact && (
+          <>
+            {' '}
+            <button type="button" className="btn btn-small" onClick={onCompact}>
+              Compact now…
+            </button>
+          </>
+        )}
       </p>
     </div>
   )
