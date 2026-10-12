@@ -2,6 +2,8 @@ import { STATIONS, UNITS, dims, stationType, type FactionId, type Tier, type Uni
 import { circle, hash, inPart, inPoly, jagged, rng, seedOf } from './kit.ts'
 import * as droid from './droid.ts'
 import * as proto from './proto.ts'
+import * as protoDroid from './proto-droid.ts'
+import * as protoSwarm from './proto-swarm.ts'
 import * as republic from './republic.ts'
 import * as swarm from './swarm.ts'
 import type { ModelDef } from './spec.ts'
@@ -69,12 +71,32 @@ export const hasSwarm = (t: UnitType) => t.id in SWARM_DEFS
 export const swarmName = (t: UnitType) => swarm.SWARM_NAMES[t.id] ?? t.name
 
 /**
- * The bigger redesigns (proto.ts) that ships have under Big ship sizes (sizes.ts): a Big unit type
- * of one of these is built with them, as is any type asked for in the style PROTO (the Codex).
+ * The Big redesigns (proto.ts, proto-droid.ts, proto-swarm.ts): what every ship above strike craft
+ * looks like under Big ship sizes (sizes.ts). A Big unit type (bigType) is built with these, the
+ * Swarm's in the style SWARM.
  */
-const PROTO_DEFS: Record<string, ModelDef> = { 'r-frigate': proto.frigate, 'r-capital': proto.capital }
-export const PROTO = 'proto'
-export const hasProto = (t: UnitType) => t.id in PROTO_DEFS
+const BIG_DEFS: Record<string, ModelDef> = {
+  'r-gunship': proto.gunship,
+  'r-corvette': proto.corvette,
+  'r-frigate': proto.frigate,
+  'r-cruiser': proto.cruiser,
+  'r-capital': proto.capital,
+  'd-gunship': protoDroid.gunship,
+  'd-ion': protoDroid.ion,
+  'd-frigate': protoDroid.frigate,
+  'd-cruiser': protoDroid.cruiser,
+  'd-capital': protoDroid.capital,
+}
+const SWARM_BIG_DEFS: Record<string, ModelDef> = {
+  'd-gunship': protoSwarm.gunship,
+  'd-ion': protoSwarm.ion,
+  'd-frigate': protoSwarm.frigate,
+  'd-cruiser': protoSwarm.cruiser,
+  'd-capital': protoSwarm.capital,
+}
+/** Whether a unit has a Big redesign of its own (in the style `style`), rather than its Classic
+ * model drawn bigger. */
+export const hasBigDesign = (t: UnitType, style = '') => t.id in (style === SWARM ? SWARM_BIG_DEFS : BIG_DEFS)
 
 export const hasModel = (t: UnitType) => t.id in DEFS
 
@@ -86,7 +108,7 @@ export function modelFor(t: UnitType, style = ''): Model | null {
   let byStyle = built.get(t)
   if (!byStyle) built.set(t, (byStyle = new Map()))
   let m = byStyle.get(style)
-  if (m === undefined) byStyle.set(style, (m = (style === SWARM ? hasSwarm(t) : style === PROTO ? hasProto(t) : hasModel(t)) ? buildModel(t, style || undefined) : null))
+  if (m === undefined) byStyle.set(style, (m = (style === SWARM ? hasSwarm(t) : hasModel(t)) ? buildModel(t, style || undefined) : null))
   return m
 }
 
@@ -122,10 +144,9 @@ const DETACH_BY_DEFAULT: MountDesign[] = ['flak']
 
 export function buildModel(t: UnitType, style?: string): Model {
   const concept = style === SWARM
-  // A Big battle's redesigned ship (sizes.ts) is its prototype design, the same as the Codex shows.
-  if (!concept && t.big && t.id in PROTO_DEFS) style = PROTO
-  const def = concept ? SWARM_DEFS[t.id] : style === PROTO ? PROTO_DEFS[t.id] : DEFS[t.id]
-  if (!def) throw new Error(`No ${concept ? 'Swarm ' : style === PROTO ? 'prototype ' : ''}model for ${t.id}`)
+  // A Big unit type (sizes.ts) is built with its Big redesign where it has one.
+  const def = (t.big ? (concept ? SWARM_BIG_DEFS : BIG_DEFS)[t.id] : undefined) ?? (concept ? SWARM_DEFS : DEFS)[t.id]
+  if (!def) throw new Error(`No ${concept ? 'Swarm ' : ''}model for ${t.id}`)
   let w: number
   let h: number
   let level = 1
@@ -142,7 +163,7 @@ export function buildModel(t: UnitType, style?: string): Model {
     h = dh * k
   }
   const long = Math.max(w, h)
-  const spec = def({ t, w, h, level, style: concept || style === PROTO ? undefined : style })
+  const spec = def({ t, w, h, level, style: concept ? undefined : style })
   const grid = (gx: number, gy: number): Pt => [(gx / 10 - 0.5) * w, (gy / 10 - 0.5) * h]
   const mounts: Mount[] = t.hardpoints.map((hp, i) => {
     const [x, y] = grid(hp.x, hp.y)
@@ -157,7 +178,7 @@ export function buildModel(t: UnitType, style?: string): Model {
   const parts = [...spec.parts.filter((p) => (p.level ?? 1) <= level), ...sockets].sort((a, b) => a.z - b.z)
   // A mining platform with its Shield generator fitted is a type of its own with one more socket,
   // so its key names its modules too, as a station's does.
-  const key = `${t.tier === 'station' ? `${t.id}:${level}:${t.hardpoints.map((p) => p.key).join(',')}` : t.tier === 'mine' ? `${t.id}:${t.hardpoints.map((p) => p.key).join(',')}` : t.id}${style ? `:${style}` : ''}`
+  const key = `${t.tier === 'station' ? `${t.id}:${level}:${t.hardpoints.map((p) => p.key).join(',')}` : t.tier === 'mine' ? `${t.id}:${t.hardpoints.map((p) => p.key).join(',')}` : t.id}${t.big ? ':big' : ''}${style ? `:${style}` : ''}`
   const seed = seedOf(t.tier === 'station' ? `${t.id}:${level}` : t.id)
   return {
     key,

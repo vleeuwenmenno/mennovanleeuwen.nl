@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ABILITIES, FACTIONS, STATIONS, TECH, TECHS, UNITS, moduleSprite, roleOf, stationType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
+import { ABILITIES, FACTIONS, STATIONS, TECH, TECHS, UNITS, isShip, moduleSprite, roleOf, stationType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
 import { info, sameSel, selName, targets, weaponLine, WEAPON_NAME, type Sel } from './codexInfo'
 import { Frame, HpIcon, Icon, Tips, fmt } from './Hud'
 import { HP_COLOR, hpName } from './icons'
-import { BREAK_WEIGHTS, PROTO, SWARM, hasModel, hasProto, hasSwarm, hullState, modelFor, modelStyles, pickAt, swarmName, type Model } from './models/index.ts'
+import { BREAK_WEIGHTS, SWARM, hasModel, hasSwarm, hullState, modelFor, modelStyles, pickAt, swarmName, type Model } from './models/index.ts'
 import { SIZE_CLASSES, bigType, protoType } from './models/sizes.ts'
 import { ModelFx } from './models/fx.ts'
 import { LIGHT, PALETTES } from './models/kit.ts'
@@ -698,11 +698,11 @@ function Viewer({ t, fitSize, model, workshop, show, dmg, boom, hover, selected,
 }
 
 /**
- * The ship sizes (models/sizes.ts): a fighter, frigate, cruiser and flagship of the side, each as it
- * is in Classic and in Big, side by side at one scale, nose up. A ship with a Big redesign
- * (models/proto.ts) shows it; the others are their current model scaled up.
+ * The ship sizes (models/sizes.ts): the side's fighter and every ship bigger than strike craft, each
+ * as it is in Classic and in Big (its Big redesign), side by side at one scale, nose up. `concept`:
+ * the Swarm's designs, on the droid units they mirror.
  */
-function SizeStrip({ faction, onClose }: { faction: FactionId; onClose: () => void }) {
+function SizeStrip({ faction, concept, onClose }: { faction: FactionId; concept: boolean; onClose: () => void }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
     const c = canvas.current!
@@ -717,18 +717,19 @@ function SizeStrip({ faction, onClose }: { faction: FactionId; onClose: () => vo
       g.setTransform(dpr, 0, 0, dpr, 0, 0)
       g.fillStyle = '#04060d'
       g.fillRect(0, 0, W, H)
-      const tiers: Tier[] = ['fighter', 'frigate', 'cruiser', 'capital']
-      const items = tiers.flatMap((tier) => {
-        const t = UNITS.find((u) => u.faction === faction && u.tier === tier && !u.kind)!
+      const ships = UNITS.filter((u) => u.faction === faction && isShip(u) && (u.tier !== 'fighter' || !u.kind) && (!concept || hasSwarm(u)))
+      const tiers = ships.map((u) => u.tier)
+      const style = concept ? SWARM : ''
+      const items = ships.flatMap((t) => {
         const pt = protoType(t)
         return [
-          { t, m: modelFor(t), label: 'classic', tier },
-          { t: pt, m: modelFor(pt, hasProto(t) ? PROTO : ''), label: hasProto(t) ? `×${SIZE_CLASSES[tier]}, new design` : `×${SIZE_CLASSES[tier]}, scaled only`, tier },
+          { t, m: modelFor(t, style), label: 'classic', tier: t.tier },
+          { t: pt, m: modelFor(pt, style), label: pt === t ? 'same' : `×${SIZE_CLASSES[t.tier]}`, tier: t.tier },
         ]
       })
       // One column per class, as wide as its bigger version; today's sizes in the top row, the
       // proposed ones under them, everything at one scale.
-      const gap = 40
+      const gap = 28
       const dimsOf = (it: (typeof items)[number]) => (it.m ? [(it.m.w / it.m.long) * it.t.size, (it.m.h / it.m.long) * it.t.size] : [it.t.size, it.t.size])
       const cols = tiers.map((_, i) => Math.max(dimsOf(items[i * 2])[0], dimsOf(items[i * 2 + 1])[0]))
       const rowH = [Math.max(...tiers.map((_, i) => dimsOf(items[i * 2])[1])), Math.max(...tiers.map((_, i) => dimsOf(items[i * 2 + 1])[1]))]
@@ -736,7 +737,7 @@ function SizeStrip({ faction, onClose }: { faction: FactionId; onClose: () => vo
       const label = 52
       const k = Math.min((W - 140) / total, (H - 70 - label * 2) / (rowH[0] + rowH[1]))
       // Each column at least wide enough for its labels.
-      const colW = cols.map((c) => Math.max(c * k, 160))
+      const colW = cols.map((c) => Math.max(c * k, 120))
       const x0 = 120 + (W - 140 - colW.reduce((a, b) => a + b, 0) - gap * (cols.length - 1)) / 2
       const bases = [50 + rowH[0] * k, 50 + rowH[0] * k + label + rowH[1] * k]
       g.textAlign = 'center'
@@ -762,7 +763,7 @@ function SizeStrip({ faction, onClose }: { faction: FactionId; onClose: () => vo
           if (row) {
             g.fillStyle = '#d6dded'
             g.font = '13px system-ui, sans-serif'
-            g.fillText(it.t.name, cx, base + 34)
+            g.fillText(concept ? swarmName(it.t) : it.t.name, cx, base + 34)
           }
         }
         x += cw + gap
@@ -781,7 +782,7 @@ function SizeStrip({ faction, onClose }: { faction: FactionId; onClose: () => vo
     const ro = new ResizeObserver(draw)
     ro.observe(c)
     return () => ro.disconnect()
-  }, [faction])
+  }, [faction, concept])
   return (
     <div className="ew-cx-sizes">
       <canvas ref={canvas} />
@@ -812,15 +813,15 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
   const [pickId, setPickId] = useState<string>('r-frigate')
   const base = list.find((u) => u.id === pickId) ?? list[0]
   const [level, setLevel] = useState(4)
-  // A ship with a bigger prototype (models/proto.ts) can be shown either way, at true relative scale.
-  // Every warship can be shown as it is under Big ship sizes (the Warden and Sovereign redesigned).
-  const canProto = !concept && bigType(base) !== base
-  const [protoOn, setProtoOn] = useState(false)
+  // Every ship bigger than strike craft can be shown as it is in Classic or under Big ship sizes (its
+  // Big redesign, with its Big numbers), at true relative scale; Big, the game's default, first.
+  const canProto = bigType(base) !== base
+  const [protoOn, setProtoOn] = useState(true)
   const now = shown(base, level)
   const t = canProto && protoOn ? protoType(now) : now
-  const styles = concept || (canProto && protoOn) ? [] : modelStyles(t)
+  const styles = concept ? [] : modelStyles(t)
   const [style, setStyle] = useState('')
-  const model = modelFor(t, concept ? SWARM : canProto && protoOn ? (hasProto(t) ? PROTO : '') : styles.includes(style) ? style : '')
+  const model = modelFor(t, concept ? SWARM : styles.includes(style) ? style : '')
   const [sizes, setSizes] = useState(false)
   const [workshop, setWorkshop] = useState(false)
   const [show, setShow] = useState<Show>({ hardpoints: false, ranges: false, glow: true, outlines: false, spin: false })
@@ -935,11 +936,9 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
             Swarm <small>(concept)</small>
           </button>
         </div>
-        {!concept && (
-          <button className={`ew-cx-ws ${sizes ? 'is-on' : ''}`} aria-pressed={sizes} onClick={click(() => setSizes(!sizes))} data-tip="The size classes being tried: each class now and at its proposed size, side by side at one scale">
-            Size classes
-          </button>
-        )}
+        <button className={`ew-cx-ws ${sizes ? 'is-on' : ''}`} aria-pressed={sizes} onClick={click(() => setSizes(!sizes))} data-tip="Ship sizes: every ship in Classic and in Big, side by side at one scale">
+          Size classes
+        </button>
         <button className={`ew-cx-ws ${workshop ? 'is-on' : ''}`} aria-pressed={workshop} onClick={click(() => setWorkshop(!workshop))} data-tip="Tools for checking the models: parts, hardpoints, damage and break-ups">
           <Icon name="gear" size={14} /> Workshop
         </button>
@@ -948,7 +947,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
         </button>
       </header>
       <div className="ew-cx-body">
-        {sizes && <SizeStrip faction={faction} onClose={() => setSizes(false)} />}
+        {sizes && <SizeStrip faction={faction} concept={concept} onClose={() => setSizes(false)} />}
         <nav className="ew-cx-nav" aria-label="Units">
           {concept && (
             <p className="ew-cx-concept ew-small">
@@ -1000,7 +999,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
                   <Seg
                     label="Ship sizes"
                     value={protoOn ? 'new' : 'current'}
-                    options={[['current', 'Classic'], ['new', hasProto(t) ? `Big: new design (×${SIZE_CLASSES[t.tier]})` : `Big (×${SIZE_CLASSES[t.tier]})`]]}
+                    options={[['current', 'Classic'], ['new', `Big (×${SIZE_CLASSES[t.tier]})`]]}
                     onChange={(v) => setProtoOn(v === 'new')}
                   />
                 )}

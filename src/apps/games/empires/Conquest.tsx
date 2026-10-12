@@ -1,4 +1,4 @@
-import { SHIP_SIZE_BLURB, SHIP_SIZE_NAMES, SHIP_SIZES, type ShipSizes } from './models/sizes.ts'
+import { SHIP_SIZE_BLURB, SHIP_SIZE_NAMES, SHIP_SIZES, sizedType, type ShipSizes } from './models/sizes.ts'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { RotateHint } from './RotateHint'
 import { DIFFICULTY, type Difficulty } from './ai'
@@ -9,7 +9,7 @@ import {
   settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw, withoutShips,
   type BattleResult, type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetKind, type Side, type StarSystem,
 } from './galaxy'
-import { BuildQueue, Floating, Frame, Icon, Pips, ShipArt, ShipCard, Tips, unitTip, type IconName } from './Hud'
+import { BuildQueue, Floating, Frame, Icon, Pips, ShipArt, ShipCard, SizesContext, Tips, unitTip, type IconName } from './Hud'
 import { FleetInventory } from './Inventory'
 import { galaxyLayout } from './layout'
 import type { BattleSnap } from './snapshot'
@@ -132,6 +132,7 @@ export function Conquest({ g, setG, session, sound, onExit, onBattle, start = 'n
     return <ConquestSetup sound={sound} onBack={leave} onStart={open} />
   }
   return (
+    <SizesContext.Provider value={g.rules?.sizes}>
     <GalaxyMap
       key={opened}
       g={g}
@@ -156,6 +157,7 @@ export function Conquest({ g, setG, session, sound, onExit, onBattle, start = 'n
       onLoad={open}
       onBattle={onBattle}
     />
+    </SizesContext.Provider>
   )
 }
 
@@ -265,7 +267,7 @@ function ConquestSetup({ sound, onBack, onStart }: { sound: EmpiresSound; onBack
   const [name, setName] = useState('')
   const [blockadeRule, setBlockadeRule] = useState<BlockadeRule>('majority')
   const [frontline, setFrontline] = useState(true)
-  const [sizes, setSizes] = useState<ShipSizes>('classic')
+  const [sizes, setSizes] = useState<ShipSizes>('big')
   const choice: GalaxyChoice = kind === 'rim' ? { kind: 'rim' } : { kind: 'generated', seed }
   const preview = useMemo(() => newGalaxy({ choice, size, faction, difficulty, credits }), [kind, seed, size, faction, difficulty, credits]) // eslint-disable-line react-hooks/exhaustive-deps
   const click = (fn: () => void) => () => {
@@ -2198,7 +2200,8 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
   const { lockedShips } = useSettings()
   const coarse = useCoarse()
   const fac = g.sides[ME].faction
-  const all = buildable(fac).filter((t) => lockedShips || t.level <= p.station)
+  // At the campaign's ship sizes, so the cards and their tooltips show the numbers its battles use.
+  const all = buildable(fac).map((t) => sizedType(t.id, g.rules?.sizes)).filter((t) => lockedShips || t.level <= p.station)
   const [page, setPage] = useState<'warships' | 'strike'>(() => {
     try {
       return localStorage.getItem('mvlos.empires.yardpage') === 'strike' ? 'strike' : 'warships'
@@ -2567,7 +2570,7 @@ function resultOf(w: World, c: Clash, meSide: number, left: boolean): BattleResu
 // --- Panels ---------------------------------------------------------------------------------------------
 
 function ShipRow({ g, owner, id, n, children }: { g: Galaxy; owner: number; id: string; n: number; children?: ReactNode }) {
-  const t = UNIT[id]
+  const t = sizedType(id, g.rules?.sizes)
   return (
     <div className="ew-gship" {...unitTip(t, { who: owner === ME ? `Yours · ${FACTIONS[g.sides[owner].faction].long}` : `Enemy · ${FACTIONS[g.sides[owner].faction].long}`, rel: owner === ME ? 'own' : 'enemy' })}>
       <ShipArt t={t} />
@@ -2685,7 +2688,7 @@ function GalaxySelection({ g, fleets, planets, take, setTake, mode, onCommand, o
                 </HoldButton>
                 <div className="ew-seltiles">
                   {grouped(gr.fleets.flatMap((f) => f.ships)).map(([id, n]) => {
-                    const t = UNIT[id]
+                    const t = sizedType(id, g.rules?.sizes)
                     const k = split ? Math.min(n, take[id] ?? n) : n
                     const set = (v: number) => setTake({ ...take, [id]: clamp(v, 0, n) })
                     const only = () => setTake(Object.fromEntries(grouped(split!.ships).map(([x, c]) => [x, x === id ? c : 0])))

@@ -24,7 +24,7 @@ export const weaponLine = (w: Weapon) => `${w.damage}${(w.burst ?? 1) > 1 ? `×$
 /** Friendly names for parts, by the start of their id (the more specific first). */
 const PART_NAMES: [string, string][] = [
   // The Big redesigns (proto.ts).
-  ['armour', 'Armour plate'], ['gallery', 'Hangar gallery'], ['barbette', 'Turret barbette'], ['seat', 'Turret pad'], ['command', 'Command tower'],
+  ['armour', 'Armour plate'], ['cup', 'Gun socket'], ['launch', 'Hangar pad'], ['gallery', 'Hangar gallery'], ['barbette', 'Turret barbette'], ['seat', 'Turret pad'], ['command', 'Command tower'],
   ['tier', 'Superstructure tier'], ['superBase', 'Superstructure'], ['aux', 'Auxiliary engine'], ['array', 'Antenna array'],
   ['socket', 'Socket'], ['hull', 'Hull plating'], ['tip', 'Wing tip'], ['wing', 'Wing'], ['gunF', 'Blaster barrels'], ['podGun', 'Gun pod barrels'], ['gun', 'Cannon'],
   ['strake', 'Canard'], ['fuse', 'Fuselage'], ['droid', 'Astromech socket'], ['cockpit', 'Cockpit'], ['engine', 'Engine'], ['deck', 'Deck'],

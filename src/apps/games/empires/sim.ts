@@ -6,7 +6,7 @@ import { mapDist, rangeDist } from './scale.ts'
 import { BIG_SPREAD, SIZE_CLASSES, sizedType, type ShipSizes } from './models/sizes.ts'
 import {
   ABILITIES, ARMOR_BONUS, BASE_POP, DEFENSE_WING, FIELD_REPAIR, MENDABLE, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
-  SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
+  SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind,
 } from './data.ts'
 
@@ -657,22 +657,29 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
 /** A ship that takes orders: ours, and not spooling up to jump out. */
 const commandable = (u: Unit | undefined, owner: Owner): u is Unit => !!u && !u.dead && u.owner === owner && isShip(u.t) && u.retreat <= 0
 
-/** Spread a group's destinations around (x, y), keeping its shape (squeezed if it's spread out). */
-/** A spot a ship can actually reach: moved out to the edge of any rock it falls inside. */
+/**
+ * A spot a ship can actually reach: moved out to the edge of any rock it falls inside, and clear of
+ * every structure (station, platform), which never budge while a warship keeps HULL_GAP clear of
+ * every hull: a spot overlapping one could never be reached, and the ship would be pushed back from
+ * it for ever. Big ship sizes made that easy to run into. Two passes, for a spot between two.
+ */
 function offRocks(w: World, u: Unit, x: number, y: number): Pt {
   if (u.t.tier === 'fighter') return { x, y }
-  const clear = radius(u.t) * 0.7 + 10
-  for (const k of w.rocks) {
-    const R = k.r + clear
-    const dd = d2(x, y, k.x, k.y)
-    if (dd >= R * R) continue
+  const away = (cx: number, cy: number, R: number) => {
+    const dd = d2(x, y, cx, cy)
+    if (dd >= R * R) return
     const d = Math.sqrt(dd)
     // Dead centre: come out on the side the ship is coming from.
-    const nx = d > 1 ? (x - k.x) / d : (u.x - k.x) / (M.hypot(u.x - k.x, u.y - k.y) || 1)
-    const ny = d > 1 ? (y - k.y) / d : (u.y - k.y) / (M.hypot(u.x - k.x, u.y - k.y) || 1)
-    x = k.x + nx * R
-    y = k.y + ny * R
+    const nx = d > 1 ? (x - cx) / d : (u.x - cx) / (M.hypot(u.x - cx, u.y - cy) || 1)
+    const ny = d > 1 ? (y - cy) / d : (u.y - cy) / (M.hypot(u.x - cx, u.y - cy) || 1)
+    x = cx + nx * R
+    y = cy + ny * R
   }
+  const clear = radius(u.t) * 0.7 + 10
+  for (const k of w.rocks) away(k.x, k.y, k.r + clear)
+  const r0 = radius(u.t)
+  for (let pass = 0; pass < 2; pass++)
+    for (const o of w.units) if (!o.dead && !isShip(o.t)) away(o.x, o.y, r0 + radius(o.t) + HULL_GAP + 6)
   return { x: clamp(x, 40, w.w - 40), y: clamp(y, 40, w.h - 40) }
 }
 
@@ -1890,6 +1897,18 @@ const ARC_MAX = (Math.PI * 2) / 3
 const RESLOT = 4
 /** The least room between two warships' hulls (see the end of moveUnit). */
 const HULL_GAP = 8
+/**
+ * How far round itself a warship looks for hulls to keep clear of, on top of its own radius: at
+ * least the biggest hull there can be (and the gap), so a small ship sees a big one coming as much
+ * as the big one sees it; otherwise a gunship would never make way for a Big flagship, and the
+ * flagship would be pushed back off it for ever.
+ */
+let bigReach = 0
+const keepApartReach = (w: World) => {
+  if (w.sizes !== 'big') return 240
+  if (!bigReach) bigReach = Math.max(240, ...UNITS.map((t) => radius(sizedType(t.id, 'big')) + HULL_GAP + 4))
+  return bigReach
+}
 /** Room a warship leaves either side of itself on the arc, on top of its hull. */
 const arcGap = (r: number) => 14 + r * 0.2
 
@@ -2192,7 +2211,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
     // or more into each other) is pushed out faster, as before.
     const bx = u.x
     const by = u.y
-    near(w, u.x, u.y, r0 + 240, (o, dd) => {
+    near(w, u.x, u.y, r0 + keepApartReach(w), (o, dd) => {
       if (o === u || o.t.tier === 'fighter') return
       const touch = r0 + radius(o.t)
       const min = touch + HULL_GAP

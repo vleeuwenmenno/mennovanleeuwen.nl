@@ -279,6 +279,8 @@ function create(p: Player) {
     map: map.id,
     gen: { ...DEFAULT_RULES },
     credits: START_CREDITS,
+    // Big ship sizes by default; the host can pick Classic.
+    sizes: 'big',
     slots: slotsFor(map, [])!,
     state: 'open',
   }

@@ -1,18 +1,19 @@
 import { UNIT, dims, type Hardpoint, type Tier, type UnitType } from '../data.ts'
 
-// Ship sizes: Classic (the battle as it has always been) or Big (preview), picked per match and
+// Ship sizes: Big (the default) or Classic (the battle as it was before), picked per match and
 // carried in the match's config, so every player's copy of a battle and the server referee agree.
+// Battles, matches and campaigns from before there was a choice are Classic.
 // Under Big, warships are bigger by their size class, handle heavier, and the Republic's Warden
 // and Sovereign are their bigger redesigns (proto.ts) with their guns spread out over the hull.
 // Everything Big changes is in the tables here; the sim, the renderer and the Codex all take their
 // unit types from bigType(). No DOM here: the sim and the server load it too.
 
 export type ShipSizes = 'classic' | 'big'
-export const SHIP_SIZES: ShipSizes[] = ['classic', 'big']
-export const SHIP_SIZE_NAMES: Record<ShipSizes, string> = { classic: 'Classic', big: 'Big (preview)' }
+export const SHIP_SIZES: ShipSizes[] = ['big', 'classic']
+export const SHIP_SIZE_NAMES: Record<ShipSizes, string> = { classic: 'Classic', big: 'Big' }
 export const SHIP_SIZE_BLURB: Record<ShipSizes, string> = {
-  classic: 'Every ship at its usual size.',
-  big: 'Warships much bigger by class (flagships 2.5×), heavier to turn and slower to get going. A preview.',
+  classic: 'Warships at their original, smaller sizes.',
+  big: 'Warships much bigger by class (flagships 2.5×), heavier to turn and slower to get going.',
 }
 
 /** How much longer each class is under Big than in Classic. */
@@ -50,11 +51,12 @@ export const HANDLING: Record<Tier, { turn: number; accel: number; speed: number
 export const BIG_SPREAD = 1.3
 
 /**
- * Where the redesigned ships carry their hardpoints under Big, on the 0-10 grid (x from the left,
- * y from the nose), with each one's size `s` as a share of the ship's length, in the order of the
- * unit's hardpoints in data.ts. One turret per gun, spread over the bigger hull: the guns stay
- * about the size they were in Classic, so there is room between them. Every other ship keeps its
- * hardpoints where they are on its grid, growing with the hull.
+ * Where warships carry their hardpoints under Big, on the 0-10 grid (x from the left, y from the
+ * nose), with each one's size `s` as a share of the ship's length, in the order of the unit's
+ * hardpoints in data.ts. One turret per gun, spread over the bigger hull: the guns stay about the
+ * size they were in Classic (a little bigger on the flagships), so there is room between them. The
+ * Swarm's concept designs use the droid units' layouts, as they use their hardpoints in Classic.
+ * Ships with no hardpoints (strike craft, gunships) carry their guns on the hull.
  */
 export const BIG_LAYOUT: Record<string, { x: number; y: number; s?: number }[]> = {
   // Warden frigate: the flak in two pairs, forward on the deck and aft on the flanks; the
@@ -84,6 +86,65 @@ export const BIG_LAYOUT: Record<string, { x: number; y: number; s?: number }[]> 
     { x: 7.25, y: 8.15, s: 0.096 },
     { x: 5, y: 9.2 },
     { x: 5, y: 4.9, s: 0.08 },
+  ],
+  // Paladin cruiser: two turbolasers down the spine, two on the shoulders, the flak on pads either
+  // side aft, the shield bulbs on the sponsons, the engines where they were.
+  'r-cruiser': [
+    { x: 5, y: 1.9, s: 0.05 },
+    { x: 5, y: 3.1, s: 0.05 },
+    { x: 3.62, y: 4.6, s: 0.05 },
+    { x: 6.38, y: 4.6, s: 0.05 },
+    { x: 2.77, y: 7.1, s: 0.04 },
+    { x: 7.23, y: 7.1, s: 0.04 },
+    { x: 1.7, y: 5.6, s: 0.075 },
+    { x: 8.3, y: 5.6, s: 0.075 },
+    { x: 2.46, y: 9.4 },
+    { x: 7.54, y: 9.4 },
+  ],
+  // Disruptor frigate: the ion cannon forward, the shield generator amidships, the flak aft, spaced
+  // out down the spine.
+  'd-ion': [
+    { x: 5, y: 2.3, s: 0.13 },
+    { x: 5, y: 4.6, s: 0.075 },
+    { x: 5, y: 6.8, s: 0.06 },
+  ],
+  // Bulwark frigate: the twin cannons either side of the bulb, the shield generator on the spine
+  // behind it, the flak on the sponsons.
+  'd-frigate': [
+    { x: 3.1, y: 1.4, s: 0.06 },
+    { x: 6.9, y: 1.4, s: 0.06 },
+    { x: 5, y: 3.8, s: 0.065 },
+    { x: 2.49, y: 6.73, s: 0.05 },
+    { x: 7.51, y: 6.73, s: 0.05 },
+  ],
+  // Anvil cruiser: down each gallery from the root out, the light gun, the shield generator, then
+  // the heavy cannon near the tip.
+  'd-cruiser': [
+    { x: 0.9, y: 6.06, s: 0.055 },
+    { x: 9.1, y: 6.06, s: 0.055 },
+    { x: 3.4, y: 4.25, s: 0.045 },
+    { x: 6.6, y: 4.25, s: 0.045 },
+    { x: 2.15, y: 5.0, s: 0.05 },
+    { x: 7.85, y: 5.0, s: 0.05 },
+    { x: 4.47, y: 9.3 },
+    { x: 5.52, y: 9.3 },
+  ],
+  // Gyre battleship: two heavy guns on the core sphere and two out on the ring's flanks, the shield
+  // generators on the core's crown, the flak and the hangars round the ring.
+  'd-capital': [
+    { x: 4.08, y: 5.85, s: 0.05 },
+    { x: 5.92, y: 5.85, s: 0.05 },
+    { x: 1.27, y: 5.6, s: 0.05 },
+    { x: 8.73, y: 5.6, s: 0.05 },
+    { x: 2.72, y: 1.31, s: 0.04 },
+    { x: 7.28, y: 1.31, s: 0.04 },
+    { x: 1.25, y: 3.33, s: 0.04 },
+    { x: 8.75, y: 3.33, s: 0.04 },
+    { x: 4.19, y: 4.7, s: 0.06 },
+    { x: 5.81, y: 4.7, s: 0.06 },
+    { x: 5, y: 9.1 },
+    { x: 2.64, y: 2.55, s: 0.075 },
+    { x: 7.36, y: 2.55, s: 0.075 },
   ],
 }
 

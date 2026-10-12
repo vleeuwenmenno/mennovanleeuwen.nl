@@ -3,7 +3,7 @@ import { RotateHint } from './empires/RotateHint'
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, fleetThink, newBrain, think, type Brain } from './empires/ai'
 import { ALL_SPRITES, FACTIONS, SITE_UPGRADES, TECH, UNIT, buildable, dims, isShip, type HardpointKind, type Tier } from './empires/data'
-import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, Icon, ReserveTray, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
+import { SizesContext, DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, Icon, ReserveTray, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
 import { LongPress, TouchBar, WheelHost, getTouchMods, isTouch, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
 import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
@@ -1946,6 +1946,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const click = touchUi ? 'tap' : 'click'
   const Click = touchUi ? 'Tap' : 'Click'
   return (
+    <SizesContext.Provider value={w.sizes}>
     <div className={`ew-root ew-deck ew-battle ew-${myFaction}${mapOpen ? ' is-mapopen' : ''}`} ref={root} style={{ ['--ew-accent' as string]: fac.color }} onContextMenu={noMenu}
       onPointerDownCapture={(e) => {
         touchLast.current = isTouch(e)
@@ -2199,6 +2200,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         {hud.winner !== -1 && <Result w={w} me={me} names={seats.map((s) => s.name)} won={hud.winner === myTeam} onAgain={onAgain} onExit={exit} campaign={!!conquest} online={!!online} />}
       </WheelHost>
     </div>
+    </SizesContext.Provider>
   )
 }
 

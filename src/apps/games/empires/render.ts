@@ -102,6 +102,10 @@ type CloudLayer = { img: HTMLCanvasElement; x: number; y: number; r: number; spi
 type TerrainArt = { map: MapDef; clouds: CloudLayer[]; rocks: FieldRock[]; fields: Patch[] }
 
 const TAU = Math.PI * 2
+/** A bolt's length and width in world units, by kind. Under Big ship sizes they are slimmer and
+ * longer, so they read as thin streaks of light next to the big hulls rather than fat dashes. */
+const BOLTS = { turbo: [46, 5], flak: [10, 2.2], laser: [22, 2.6] } as const
+const BOLTS_BIG = { turbo: [72, 3], flak: [15, 1.5], laser: [30, 1.7] } as const
 /** An undamaged hull. */
 const FRESH: HullState = { detached: 0, scorch: 0, variant: 0 }
 
@@ -1122,8 +1126,7 @@ export class Renderer {
         ctx.fill()
         continue
       }
-      const len = s.kind === 'turbo' ? 46 : s.kind === 'flak' ? 10 : 22
-      const width = s.kind === 'turbo' ? 5 : s.kind === 'flak' ? 2.2 : 2.6
+      const [len, width] = (w.sizes === 'big' ? BOLTS_BIG : BOLTS)[s.kind === 'turbo' ? 'turbo' : s.kind === 'flak' ? 'flak' : 'laser']
       const min = 1.2 / z
       ctx.strokeStyle = s.kind === 'flak' ? '#ffcf70' : col
       ctx.globalAlpha = 0.45

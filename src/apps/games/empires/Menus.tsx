@@ -74,10 +74,11 @@ function lastSetup(): Setup {
       slots: slotsFor(map, slots.slice(0, map.spawns.length)).map((s, i) => (i ? { ...s, kind: s.kind === 'you' ? 'ai' : s.kind } : s)),
       credits,
       gen,
-      sizes: v?.sizes === 'big' ? 'big' : 'classic',
+      // Big is the default; a setup that chose Classic keeps it.
+      sizes: v?.sizes === 'classic' ? 'classic' : 'big',
     }
   } catch {
-    return { map: MAPS[0].id, slots: slotsFor(MAPS[0]), credits: 1600, gen: { ...DEFAULT_RULES }, areas: [] }
+    return { map: MAPS[0].id, slots: slotsFor(MAPS[0]), credits: 1600, gen: { ...DEFAULT_RULES }, areas: [], sizes: 'big' }
   }
 }
 

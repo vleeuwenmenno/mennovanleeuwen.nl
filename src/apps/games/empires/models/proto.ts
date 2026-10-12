@@ -1,19 +1,20 @@
-import { along, box, chamfer, circle, halfHull, part, rect, sym } from './kit.ts'
+import { area, along, box, capsule, chamfer, circle, halfHull, part, rect, sym } from './kit.ts'
+import * as classic from './republic.ts'
 import { edgeBand, nacelle } from './republic.ts'
 import type { BuildCtx, ModelDef, ModelSpec } from './spec.ts'
-import type { Detail, Part, Pt } from './types.ts'
+import type { Detail, Part, Pt, Tone } from './types.ts'
 
-// The bigger redesigns of the Republic's Warden frigate and Sovereign dreadnought: what they look
-// like under Big ship sizes (sizes.ts), and in the Codex's "New" view. They are built on the Big
-// unit type, whose hardpoints sit where BIG_LAYOUT in sizes.ts puts them: one turret per gun,
-// spread over the bigger hull with room between them, each on its own pad or barbette.
+// The Republic's ships as they are under Big ship sizes (sizes.ts): bigger redesigns, built on the
+// Big unit type, whose hardpoints sit where BIG_LAYOUT in sizes.ts puts them: one turret per gun,
+// spread over the bigger hull with room between them, each on its own pad or barbette. The helpers
+// here (plates, seats, calm) are shared with the droid navy's and the Swarm's Big designs.
 //
 // The look is meant to read as big and slow: large, quiet surfaces with a few crisp details. Long
 // armour plates down the flanks, a raised deck, a trench, a strong stepped superstructure with its
 // bridge, a few masts and dishes, an engine bank, and lights placed sparingly.
 
 /** Half-width of a hull at `y`, from its (y, half-width) rows. */
-function widthAt(rows: [number, number][], y: number) {
+export function widthAt(rows: [number, number][], y: number) {
   if (y <= rows[0][0]) return rows[0][1]
   for (let i = 1; i < rows.length; i++) {
     const [y0, w0] = rows[i - 1]
@@ -24,11 +25,11 @@ function widthAt(rows: [number, number][], y: number) {
 }
 
 /** A point `d` in from the left edge of a hull at `y`. */
-const edgeAt = (rows: [number, number][], y: number, d: number): Pt => [-(widthAt(rows, y) - d), y]
+export const edgeAt = (rows: [number, number][], y: number, d: number): Pt => [-(widthAt(rows, y) - d), y]
 
 /** A long armour plate on the left side of a hull, laid along its edge between `in0` and `in1` in
  * from it, from y0 to y1: one seam across the middle and a pair of running lights. */
-function plate(id: string, rows: [number, number][], y0: number, y1: number, in0: number, in1: number, z: number, more: Partial<Part> = {}): Part {
+export function plate(id: string, rows: [number, number][], y0: number, y1: number, in0: number, in1: number, z: number, more: Partial<Part> = {}): Part {
   const e = (y: number, d: number) => edgeAt(rows, y, d)
   const pts: Pt[] = [e(y0, in0), e(y0 + 0.8, in1), e(y1 - 0.8, in1), e(y1, in0)]
   const mid = (y0 + y1) / 2
@@ -45,19 +46,41 @@ function plate(id: string, rows: [number, number][], y0: number, y1: number, in0
 }
 
 /** A panel line following the left edge of a hull `d` in from it, from y0 to y1. */
-const edgeLine = (rows: [number, number][], y0: number, y1: number, d: number): Detail => ({ k: 'line', pts: along([0, y0], [0, y1], 6).map(([, y]) => edgeAt(rows, y, d)) })
+export const edgeLine = (rows: [number, number][], y0: number, y1: number, d: number): Detail => ({ k: 'line', pts: along([0, y0], [0, y1], 6).map(([, y]) => edgeAt(rows, y, d)) })
 
 /** Where hardpoint `i` sits in model units. */
-const hpAt = (c: BuildCtx, i: number): Pt => [(c.t.hardpoints[i].x / 10 - 0.5) * c.w, (c.t.hardpoints[i].y / 10 - 0.5) * c.h]
+export const hpAt = (c: BuildCtx, i: number): Pt => [(c.t.hardpoints[i].x / 10 - 0.5) * c.w, (c.t.hardpoints[i].y / 10 - 0.5) * c.h]
+
+/** How a faction's turret seats look: the pad under a light gun, the barbette under a heavy one,
+ * and the band across a barbette's back. */
+export type SeatLook = { pad: Tone; heavy: Tone; band: Tone }
+export const REPUBLIC_SEAT: SeatLook = { pad: 'hull2', heavy: 'metal', band: 'accent' }
 
 /** A turret's seat: a raised round pad (a barbette for a heavy gun) under hardpoint `i`, a little
- * wider than the turret, with a ring scribed round it. Left side only; the right one is mirrored. */
-function seat(id: string, c: BuildCtx, i: number, r: number, z: number, heavy: boolean): Part {
+ * wider than the turret, with a ring scribed round it. */
+export function seat(id: string, c: BuildCtx, i: number, r: number, z: number, heavy: boolean, look: SeatLook = REPUBLIC_SEAT): Part {
   const [x, y] = hpAt(c, i)
-  return part(id, circle(x, y, r, heavy ? 20 : 16), heavy ? 'metal' : 'hull2', z, {
+  return part(id, circle(x, y, r, heavy ? 20 : 16), heavy ? look.heavy : look.pad, z, {
     lift: heavy ? 0.9 : 0.5,
-    details: [{ k: 'line', pts: [...circle(x, y, r * 0.86, 18), circle(x, y, r * 0.86, 18)[0]] }, ...(heavy ? [{ k: 'shape' as const, pts: box(x, y + r * 0.78, r * 0.9, r * 0.22), tone: 'accent' as const }] : [])],
+    details: [{ k: 'line', pts: [...circle(x, y, r * 0.86, 18), circle(x, y, r * 0.86, 18)[0]] }, ...(heavy ? [{ k: 'shape' as const, pts: box(x, y + r * 0.78, r * 0.9, r * 0.22), tone: look.band }] : [])],
   })
+}
+
+/**
+ * Quietens a design for its Big size: rows of lights thinned (at most about `lights` a row), and
+ * small greebles (dark or metal patches under `greeble` square units) left out. For the small ships
+ * that are only a little bigger under Big: their shape stays, their surface calms down.
+ */
+export function calm(spec: ModelSpec, lights = 4, greeble = 6): ModelSpec {
+  const quiet = (d: Detail): Detail | null => {
+    if (d.k === 'lights' && d.pts.length > lights) {
+      const step = Math.ceil(d.pts.length / lights)
+      return { ...d, pts: d.pts.filter((_, i) => i % step === 0) }
+    }
+    if (d.k === 'shape' && (d.tone === 'dark' || d.tone === 'metal') && Math.abs(area(d.pts)) < greeble) return null
+    return d
+  }
+  return { ...spec, parts: spec.parts.map((p) => (p.details ? { ...p, details: p.details.map(quiet).filter((d): d is Detail => !!d) } : p)) }
 }
 
 /**
@@ -205,4 +228,123 @@ export const capital: ModelDef = (c): ModelSpec => {
     part('array', rect(-6.4, 18.6, 12.8, 0.9), 'dark', 4.3, { detach: { hull: 0.58 }, details: [{ k: 'lights', pts: along([-5.6, 19], [5.6, 19], 3), r: 0.32, tone: 'accent' }] }),
   ]
   return { parts, breakStyle: 'bands', cuts: 3 }
+}
+
+// --- The smaller ships ---------------------------------------------------------------------------------
+
+/** Halberd gunship at 1.15×: the same heavy fighter-hunter, its surface quietened. */
+export const gunship: ModelDef = (c) => calm(classic.gunship(c))
+
+/**
+ * Mercy corvette at 1.15×: the repair tender, calmer. The same blunt arrowhead with its green-ringed
+ * repair bay, but one long plate down each flank instead of patchwork, a single crane boom each side,
+ * a tower with its mast aft, two dishes and three engines; the painted flak turret on the nose.
+ */
+export const corvette: ModelDef = (): ModelSpec => {
+  const rows: [number, number][] = [[-50, 0.5], [-44, 4], [-34, 8.6], [-20, 14], [-4, 20], [12, 25.5], [24, 30.5], [29, 32.4], [33, 27], [37, 17]]
+  const parts: Part[] = [
+    ...sym(part('hull', halfHull(rows), 'hull', 0, {
+      slope: [-0.55, 0.05],
+      details: [
+        { k: 'shape', pts: edgeBand(rows.slice(1, 8), 3), tone: 'accent' },
+        { k: 'lights', pts: [-14, 4, 20].map((y) => edgeAt(rows, y, 6)), r: 0.5 },
+        edgeLine(rows, -28, 22, 9),
+        { k: 'shape', pts: [[-24, 28], [-14, 27], [-14, 32]], tone: 'accent' },
+      ],
+    })),
+    ...sym(plate('armour', rows, -26, -8, 3.6, 8.6, 0.8)),
+    ...sym(plate('armourAft', rows, 14, 26, 3.6, 9.6, 0.8, { detach: { hull: 0.34 } }), { detach: { hull: 0.24 } }),
+    ...sym(part('spine', [[0, -45], [-1.8, -40], [-4.4, -16], [0, -15]], 'hull2', 1, { slope: [-0.5, -0.05], lift: 1.2, details: [{ k: 'shape', pts: [[0, -42], [-0.9, -39], [-1.4, -30], [0, -30]], tone: 'accent' }] })),
+    part('block', chamfer(0, 40, 31, 9, 3), 'metal', 1, { lift: 0.6, details: [{ k: 'line', pts: [[-14, 40], [14, 40]] }] }),
+    nacelle('pod0', -9.8, 34, 48.5, 7.6, 0, 2, { detach: { hull: 0.16 } }),
+    nacelle('pod1', 0, 34, 49, 7.6, 1, 2),
+    nacelle('pod2', 10.4, 34, 48.5, 7.6, 2, 2, { detach: { hull: 0.1 } }),
+    // The repair bay: a raised ring round a dark well, the aid cross in it.
+    part('ring', circle(0, 2, 12.5, 32), 'hull2', 2, {
+      holes: [circle(0, 2, 8.4, 28)],
+      lift: 1.6,
+      details: [{ k: 'shape', pts: circle(0, 2, 11.2, 32), tone: 'aid' }, { k: 'shape', pts: circle(0, 2, 9.8, 28), tone: 'hull2' }, { k: 'lights', pts: circle(0, 2, 10.5, 4), r: 0.6, tone: 'aid' }],
+    }),
+    part('well', circle(0, 2, 8.6, 28), 'dark', 1.8, { details: [{ k: 'shape', pts: box(0, 2, 9, 2.8), tone: 'aid' }, { k: 'shape', pts: box(0, 2, 2.8, 9), tone: 'aid' }] }),
+    part('tower', chamfer(0, 23, 14, 12, 3), 'hull', 3, {
+      lift: 2.2,
+      facets: [{ pts: [[-7, 20], [-4, 17], [-4, 29], [-7, 26]], slope: [-0.5, 0] }],
+      details: [{ k: 'shape', pts: rect(-7, 25.4, 14, 1.8), tone: 'accent' }, { k: 'lights', pts: along([-3, 19], [3, 19], 3), r: 0.55, tone: 'glass' }],
+    }),
+    part('mast', box(0, 15.5, 1, 7), 'dark', 4, { detach: { hull: 0.5 }, details: [{ k: 'lights', pts: [[0, 12.6]], r: 0.5, tone: 'accent' }] }),
+    ...sym(part('crane', capsule([-8, -8], [-13, -26], 1.6, 1.2), 'metal', 3, { lift: 2.2, detach: { hull: 0.42 } }), { detach: { hull: 0.3 } }),
+    ...sym(part('dish', circle(-16, 16, 3, 14), 'metal', 3, { lift: 1, slope: [-0.3, 0.3], detach: { hull: 0.36 }, details: [{ k: 'shape', pts: circle(-16, 16, 1, 8), tone: 'dark' }] }), { slope: [0.3, 0.3], detach: { hull: 0.24 } }),
+    ...classic.ballTurret('flak', 0, -25, 3.2, 3),
+  ]
+  return { parts, breakStyle: 'bands' }
+}
+
+// --- Line ships ----------------------------------------------------------------------------------------
+
+/**
+ * Paladin cruiser at 1.7×: the line warship as a long, quiet hull. A needle prow with red edge bands;
+ * a narrow raised spine carrying two turbolasers on barbettes, the other two on the shoulders either
+ * side of it; shield sponsons standing out from the hull, a single band across each; a long armour
+ * belt aft down each flank with the flak on pads on it; swept
+ * stabilisers, a stepped bridge and two big engine nacelles, shot off with their engines.
+ */
+export const cruiser: ModelDef = (c): ModelSpec => {
+  const rows: [number, number][] = [[-50, 0.4], [-46, 2], [-38, 4.2], [-28, 6.2], [-18, 7.6], [-8, 8.8], [4, 9.8], [16, 10.4], [26, 11.6], [34, 12.2], [40, 11], [43, 8]]
+  const parts: Part[] = [
+    ...sym(part('wing', [[-11, 22], [-17, 29], [-18.6, 36], [-12, 37]], 'hull', 0, {
+      slope: [-0.45, 0.05],
+      details: [{ k: 'shape', pts: [[-11, 22], [-17, 29], [-17.6, 31.5], [-11.4, 25.5]], tone: 'accent' }],
+    }), { slope: [0.45, 0.05] }),
+    ...sym(part('tip', [[-17, 29], [-18.8, 26], [-18.8, 36.5], [-18.6, 36]], 'hull', 0.2, { slope: [-0.45, 0], detach: { hull: 0.26 } }), { slope: [0.45, 0], detach: { hull: 0.18 } }),
+    ...sym(part('hull', halfHull(rows), 'hull', 1, {
+      slope: [-0.55, 0.03],
+      details: [
+        { k: 'shape', pts: edgeBand(rows.slice(1, 9), 1.5), tone: 'accent' },
+        { k: 'lights', pts: [-24, -12, 2].map((y) => edgeAt(rows, y, 2.6)), r: 0.42 },
+        edgeLine(rows, -36, 12, 2.4),
+        { k: 'shape', pts: [[0, -37], [-4, -37], [-4.4, -35], [0, -35]], tone: 'accent' },
+      ],
+    })),
+    // The armour belt aft down each flank, the flak on it.
+    ...sym(plate('armour', rows, 14, 31, 1.4, 4.4, 1.2)),
+    ...sym(part('fin', [[-3.6, -33], [-8.6, -25], [-8.6, -22.5], [-4.6, -24]], 'hull2', 1.4, { slope: [-0.4, 0], lift: 0.6, detach: { hull: 0.3 }, details: [{ k: 'shape', pts: [[-3.6, -33], [-8.6, -25], [-8.6, -23.8], [-4, -30]], tone: 'accent' }] }), { slope: [0.4, 0], detach: { hull: 0.22 } }),
+    // The spine, narrow and raised, with the forward turbolasers on it.
+    ...sym(part('spine', [[0, -44], [-1.6, -40], [-3.4, -32], [-3.6, 25], [0, 26]], 'hull2', 2, {
+      slope: [-0.45, 0],
+      lift: 1.6,
+      details: [
+        { k: 'shape', pts: [[0, -43], [-0.8, -40], [-1.1, -37], [0, -37]], tone: 'accent' },
+        { k: 'shape', pts: rect(-3.6, -11.6, 3.6, 1.6), tone: 'accent' },
+        { k: 'line', pts: [[-2.4, -6], [-2.4, 22]] },
+      ],
+    })),
+    // Shield sponsons on the shoulders, standing out from the hull.
+    ...sym(part('sponson', chamfer(-12.4, 6, 11.6, 17, 3.4), 'hull2', 2.2, {
+      lift: 2.2,
+      facets: [{ pts: [[-18.2, 0.6], [-15.2, -2.5], [-15.2, 14.5], [-18.2, 11.4]], slope: [-0.5, 0] }],
+      details: [{ k: 'shape', pts: rect(-18.2, 12, 11.6, 1.6), tone: 'accent' }, { k: 'lights', pts: [[-17, 1], [-17, 10]], r: 0.4 }],
+    })),
+    seat('barbette', c, 0, 3.2, 2.4, true),
+    seat('barbetteMid', c, 1, 3.2, 2.4, true),
+    ...sym(seat('barbetteAft', c, 2, 3.2, 1.4, true)),
+    ...sym(seat('seat', c, 4, 2.6, 1.3, false)),
+    part('block', chamfer(0, 39, 11, 13, 2.5), 'metal', 2, { lift: 0.8 }),
+    nacelle('podL', -9.55, 28, 49.6, 8.4, 0, 3, { detach: { hp: 8 } }),
+    nacelle('podR', 9.55, 28, 49.6, 8.4, 1, 3, { detach: { hp: 9 } }),
+    // The bridge: a stepped block aft, windows across its face.
+    part('bridge', chamfer(0, 30, 11, 10, 2.6), 'hull', 3, {
+      lift: 2.4,
+      facets: [{ pts: [[-5.5, 27.4], [-3, 25], [-3, 35], [-5.5, 32.6]], slope: [-0.5, 0] }],
+      details: [{ k: 'shape', pts: rect(-5.5, 31.6, 11, 1.6), tone: 'accent' }, { k: 'lights', pts: along([-2.4, 26.2], [2.4, 26.2], 3), r: 0.5, tone: 'glass' }],
+    }),
+    part('tower', chamfer(0, 31, 5.6, 5, 1.4), 'hull2', 4, { lift: 1.4, details: [{ k: 'lights', pts: [[0, 31]], r: 0.5, tone: 'accent' }] }),
+    part('mast', box(-3.4, 36, 0.8, 6), 'dark', 5, { detach: { hull: 0.5 }, details: [{ k: 'lights', pts: [[-3.4, 33.4]], r: 0.45, tone: 'accent' }] }),
+    part('dish', circle(3.8, 36, 1.8, 12), 'metal', 5, { lift: 0.8, slope: [0.3, 0.3], detach: { hull: 0.36 }, details: [{ k: 'shape', pts: circle(3.8, 36, 0.6, 8), tone: 'dark' }] }),
+  ]
+  return {
+    parts,
+    breakStyle: 'bands',
+    // Its flak turrets blow off; the turbolasers and shield bulbs stay on, wrecked.
+    mount: (i) => ({ detach: i === 4 || i === 5 }),
+  }
 }

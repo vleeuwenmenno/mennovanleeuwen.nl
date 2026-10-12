@@ -397,7 +397,7 @@ export function nacelle(id: string, x: number, y0: number, y1: number, w: number
 
 /** A painted ball turret (strike craft and gunships carry their guns on the hull, not on hardpoints):
  * a ball with twin barrels pointing forward. */
-function ballTurret(id: string, x: number, y: number, r: number, z: number, more: Partial<Part> = {}): Part[] {
+export function ballTurret(id: string, x: number, y: number, r: number, z: number, more: Partial<Part> = {}): Part[] {
   return [
     part(`${id}Gun`, box(x - r * 0.32, y - r * 1.25, r * 0.26, r * 1.6), 'dark', z, more),
     part(`${id}Gun2`, box(x + r * 0.32, y - r * 1.25, r * 0.26, r * 1.6), 'dark', z, more),
