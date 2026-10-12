@@ -1808,6 +1808,50 @@ textarea.agt-q-input {
   color: var(--cyan, var(--accent));
   border-color: color-mix(in srgb, var(--cyan, var(--accent)) 50%, transparent);
 }
+.agt-chip.is-auto {
+  color: var(--text);
+}
+/* Bypass runs nearly everything without asking: never on by accident, so it stands out. */
+.agt-chip.is-bypass {
+  color: var(--red);
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  font-weight: 600;
+}
+.agt-chip.is-bypass::before {
+  content: '⚠';
+}
+.agt-chip.is-bypass:hover:not(:disabled) {
+  color: var(--red);
+  border-color: var(--red);
+}
+/* Why a web read ran without asking (Auto's check, an allowed site): small, on the tool's row. */
+.agt-tool-checked {
+  font-size: 11px;
+}
+.agt-ask-check {
+  font-style: italic;
+}
+/* Settings → Agents → Permissions: adding an allowed site by hand. */
+.agt-site-add {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+}
+.agt-site-add input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  outline: 0;
+}
+.agt-site-add input:focus {
+  border-color: var(--accent);
+}
 .agt-diff span {
   display: block;
   white-space: pre-wrap;

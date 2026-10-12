@@ -12,8 +12,15 @@ import { commandWords, parse } from '../src/terminal/msh/parse.ts'
 // ones that change something.
 
 export type Workdir = { repo: string; path: string; label: string }
-export type Permission = 'default' | 'acceptEdits' | 'plan'
-export const PERMISSIONS: readonly Permission[] = ['default', 'acceptEdits', 'plan']
+/**
+ * How a thread's tool calls are allowed (server/agents.ts decide): `default` asks for each change
+ * and for web addresses the agent built itself; `auto` is the same, except that such addresses are
+ * checked automatically first; `acceptEdits` also lets file edits in the work folder through;
+ * `plan` only reads; `bypass` runs everything except the lasting changes (calendar writes and the
+ * files that steer the agent).
+ */
+export type Permission = 'default' | 'auto' | 'acceptEdits' | 'plan' | 'bypass'
+export const PERMISSIONS: readonly Permission[] = ['default', 'auto', 'acceptEdits', 'plan', 'bypass']
 
 /** A work folder from a request: a library id, a path in it, and how the terminal showed it. */
 export function workdirOf(v: unknown): Workdir | null {

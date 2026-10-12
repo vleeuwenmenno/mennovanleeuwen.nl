@@ -59,6 +59,7 @@ import {
   type ToolGroup,
   type TurnEvent,
   type Workdir,
+  siteOf,
 } from '../../data/agents'
 import { seafileAt } from '../../data/agentPlaces'
 import { getAccount, hasCalendar } from '../../os/account'
@@ -77,7 +78,9 @@ import { ago, box, clipLine, count, lines as toMarkup, seg, width, wrap, type Li
 
 const FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
 const VERBS = ['Thinking', 'Pondering', 'Brewing', 'Tinkering', 'Mulling', 'Working', 'Noodling', 'Percolating', 'Computing', 'Considering']
-const MODES: Permission[] = ['default', 'acceptEdits', 'plan']
+/** The modes shift+tab cycles through; Bypass is only ever picked on purpose (/permissions, --permission-mode). */
+const MODES: Permission[] = ['default', 'auto', 'acceptEdits', 'plan']
+const ALL_MODES: Permission[] = [...MODES, 'bypass']
 
 export type SessionOptions = {
   thread: Thread | null
@@ -94,7 +97,7 @@ export type SessionOptions = {
 
 type LiveCall = { call: ToolCall; messageId: number; index: number; state: 'running' | 'approval' | 'question' | 'client' }
 /** `summary`: what the change does, from the server, where the call alone doesn't say (a calendar change). */
-type Approval = { callId: string; messageId: number; index: number; call: ToolCall | null; summary?: CallSummary }
+type Approval = { callId: string; messageId: number; index: number; call: ToolCall | null; summary?: CallSummary; check?: string }
 type Asked = { callId: string; messageId: number; index: number; form: Form }
 type PickItem = { value: string; label: string; hint?: string; checked?: boolean }
 type Option = { label: string; hint?: string; run: () => void }
@@ -267,7 +270,7 @@ export class Session {
         [seg(' Tips for getting started:', 'muted')],
         [seg(' 1. Ask about your files, or ask for changes: edits wait for your yes', 'muted')],
         [seg(' 2. @ adds a file, ! runs a command, # remembers something', 'muted')],
-        [seg(' 3. shift+tab: accept edits, or plan first', 'muted')],
+        [seg(' 3. shift+tab: auto, accept edits, or plan first', 'muted')],
         [],
       ])
   }
@@ -423,6 +426,8 @@ export class Session {
     else if (this.queue().length && !this.editor.text) left = [seg(`  ${this.turn ? '' : `${this.queue().length} waiting · `}↑ edits the last · ctrl+enter sends ${this.turn ? 'the next now' : 'the next'} · ctrl+x removes the last`, 'muted')]
     else if (this.permission === 'acceptEdits') left = [seg('  ⏵⏵ accept edits on', 'magenta'), seg(' (shift+tab to cycle)', 'muted')]
     else if (this.permission === 'plan') left = [seg('  ⏸ plan mode on', 'cyan'), seg(' (shift+tab to cycle)', 'muted')]
+    else if (this.permission === 'bypass') left = [seg('  ⚠ bypass on: nothing asks', 'red'), seg(' (shift+tab to leave)', 'muted')]
+    else if (this.permission === 'auto') left = [seg('  ⏵ auto: web reads checked', 'accent'), seg(' (shift+tab to cycle)', 'muted')]
     else if (this.shellMode()) left = [seg('  ! shell mode: runs in msh, the output goes along with your next message', 'magenta')]
     else if (this.memoryMode()) left = [seg('  # memory: saved to what the agent remembers', 'cyan')]
     else left = [seg('  ? for shortcuts', 'muted')]
@@ -448,7 +453,7 @@ export class Session {
         ['ctrl+x', 'remove the last queued message'],
         ['shift+enter, alt+enter, \\ enter', 'new line'],
         ['esc', 'stop the agent; twice: clear the prompt'],
-        ['shift+tab', 'cycle: ask for changes, accept edits, plan'],
+        ['shift+tab', 'cycle: ask for changes, auto, accept edits, plan'],
         ['! ', 'run a command in msh; its output goes with your next message'],
         ['# ', 'remember something'],
         ['@', 'add a file (tab completes)'],
@@ -522,10 +527,15 @@ export class Session {
           title: 'Ready to code?',
           preview: [[seg('Here is the plan:', 'bold')], [], ...markdown(sarg('plan'), inner)],
           question: 'Go ahead?',
-          options: [{ label: 'Yes, and allow edits', run: allow({ mode: 'acceptEdits' }) }, { label: 'Yes, and ask for each edit', run: allow({ mode: 'default' }) }, { label: 'No, keep planning', hint: 'esc', run: no.run }],
+          options: [{ label: 'Yes, and allow edits', run: allow({ mode: 'acceptEdits' }) }, { label: 'Yes, and ask for each edit', hint: 'auto', run: allow({ mode: 'auto' }) }, { label: 'No, keep planning', hint: 'esc', run: no.run }],
         }
       case 'web_fetch':
-        return { title: 'Read an address', preview: [[seg(sarg('url'), 'cyan')], [seg('The agent was not given this address; with private data in the thread, it could leak some.', 'muted')]], question: 'Read it?', options: [{ label: 'Yes', run: allow() }, no] }
+        return {
+          title: 'Read an address',
+          preview: [[seg(sarg('url'), 'cyan')], [seg('The agent was not given this address; with private data in the thread, it could leak some.', 'muted')], ...(a.check ? [[seg(a.check, 'muted')]] : [])],
+          question: 'Read it?',
+          options: [{ label: 'Yes', run: allow() }, ...(siteOf(sarg('url')) ? [{ label: `Yes, and allow ${siteOf(sarg('url'))} from now on`, hint: 'all threads', run: allow({ always: 'domain' }) }] : []), no],
+        }
       case 'delete_path':
         return { title: 'Delete', preview: [[seg(sarg('path'), 'red')], [seg("It goes to the library's trash.", 'muted')]], question: `Delete ${file}?`, options: [{ label: 'Yes', run: allow() }, no] }
       default: {
@@ -1400,7 +1410,7 @@ export class Session {
         }
         for (const p of e.pending) {
           const call = this.messages.find((m) => m.id === p.messageId)?.toolCalls?.[p.index] ?? p.call ?? null
-          if (p.kind === 'approval') this.approvals.push({ callId: p.callId, messageId: p.messageId, index: p.index, call, summary: p.summary })
+          if (p.kind === 'approval') this.approvals.push({ callId: p.callId, messageId: p.messageId, index: p.index, call, summary: p.summary, check: p.check })
           else if (p.kind === 'question' && p.form) this.asked.push({ callId: p.callId, messageId: p.messageId, index: p.index, form: p.form })
           else if (p.kind === 'client' && call) void this.runClient(p.callId, p.messageId, p.index, call)
           this.setCallState(p.messageId, p.index, p.kind === 'question' ? 'question' : p.kind)
@@ -1441,7 +1451,7 @@ export class Session {
       }
       case 'approval': {
         const call = e.call ?? this.messages.find((m) => m.id === e.messageId)?.toolCalls?.[e.index] ?? null
-        this.approvals.push({ callId: e.callId, messageId: e.messageId, index: e.index, call, summary: e.summary })
+        this.approvals.push({ callId: e.callId, messageId: e.messageId, index: e.index, call, summary: e.summary, check: e.check })
         this.setCallState(e.messageId, e.index, 'approval')
         this.next()
         break
@@ -1622,8 +1632,8 @@ export class Session {
       }
       case '/permissions':
       case '/permission': {
-        const names: Record<Permission, string> = { default: 'Ask before each change', acceptEdits: 'Accept edits in the work folder', plan: 'Plan first (read only)' }
-        const p = (MODES as string[]).includes(arg) ? (arg as Permission) : (await this.choose('Permissions', MODES.map((m) => ({ value: m, label: names[m], checked: m === this.permission }))))?.[0]
+        const names: Record<Permission, string> = { default: 'Ask before each change', auto: 'Auto: web addresses it builds are checked for you', acceptEdits: 'Accept edits in the work folder', plan: 'Plan first (read only)', bypass: 'Bypass: nothing asks (but calendar changes and AGENTS.md)' }
+        const p = (ALL_MODES as string[]).includes(arg) ? (arg as Permission) : (await this.choose('Permissions', ALL_MODES.map((m) => ({ value: m, label: names[m], checked: m === this.permission }))))?.[0]
         if (p) await this.setPermission(p as Permission)
         return true
       }
@@ -1835,7 +1845,7 @@ export class Session {
           ...(t?.aliases.length ? [row('also known as', t.aliases.map((a) => a.title).join(', '))] : []),
           row('model', t?.model ?? this.model ?? 'default for the mode'),
           row('mode', this.mode === 'deep' ? 'deep research' : 'quick'),
-          row('permissions', { default: 'ask before each change', acceptEdits: 'accept edits', plan: 'plan (read only)' }[this.permission]),
+          row('permissions', { default: 'ask before each change', auto: 'auto (web reads checked)', acceptEdits: 'accept edits', plan: 'plan (read only)', bypass: 'bypass (nothing asks)' }[this.permission]),
           row('work folder', this.workdir ? this.workdir.label : 'none'),
           row('tools', (t?.tools ?? this.tools).join(', ')),
           row('skills', this.skills.filter((s) => s.enabled).map((s) => s.name).join(', ') || 'none'),

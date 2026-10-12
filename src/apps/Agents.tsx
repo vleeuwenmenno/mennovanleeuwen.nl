@@ -66,6 +66,8 @@ import {
   type ToolCall,
   listSkills,
   canAlwaysAllow,
+  PERMISSIONS,
+  siteOf,
   type Permission,
   type Skill,
   type Workdir,
@@ -979,7 +981,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const pcFiles = useRef<HTMLInputElement>(null)
   const [draftModel, setDraftModel] = useState<string | null>(null)
   const [draftWorkdir, setDraftWorkdir] = useState<Workdir | null>(null)
-  const [draftPermission, setDraftPermission] = useState<Permission>('default')
+  // New threads start in Auto: like Ask first, but web addresses it builds are checked for you.
+  const [draftPermission, setDraftPermission] = useState<Permission>('auto')
   const [skills, setSkills] = useState<Skill[]>([])
   const [text, setText] = useState(() => getDraft(id ?? 'new')?.text ?? '')
   const [live, setLive] = useState<Live | null>(null)
@@ -1030,7 +1033,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       setLive(e.live)
       found(e.messages)
     } else if (e.type === 'delta') setLive((l) => ({ content: (l?.content ?? '') + (e.content ?? ''), thinking: (l?.thinking ?? '') + (e.thinking ?? '') }))
-    else if (e.type === 'approval') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'approval', call: e.call, summary: e.summary }])
+    else if (e.type === 'approval') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'approval', call: e.call, summary: e.summary, check: e.check }])
     else if (e.type === 'client') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'client', call: e.call }])
     else if (e.type === 'question') setApprovals((a) => [...a, { callId: e.callId, messageId: e.messageId, index: e.index, kind: 'question', form: e.form }])
     else if (e.type === 'answered' || e.type === 'approved' || e.type === 'clientDone') setApprovals((a) => a.filter((x) => x.callId !== e.callId))
@@ -1166,7 +1169,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       { label: 'No work folder', checked: !workdir, onSelect: () => setWorkdir(null) },
     ])
   const permissionMenu = (e: React.MouseEvent) =>
-    openMenuAt(e.currentTarget, (['default', 'acceptEdits', 'plan'] as Permission[]).map((p) => ({ label: PERMISSION_LABEL[p], hint: PERMISSION_HELP[p], checked: permission === p, onSelect: () => setPermission(p) })))
+    openMenuAt(e.currentTarget, PERMISSIONS.map((p) => ({ label: PERMISSION_LABEL[p], hint: PERMISSION_HELP[p], checked: permission === p, onSelect: () => setPermission(p) })))
   useEffect(() => {
     if (!account.seafile && !thread) return
     listSkills(thread ? { thread: thread.id } : { folder: workdir }).then(setSkills, () => {})
@@ -2004,7 +2007,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
           const wait = approvals.find((a) => a.messageId === m.id && a.index === j)
           if (wait?.kind === 'question' && wait.form) return <QuestionForm key={wait.callId} form={wait.form} onAnswer={(answers) => onAnswer(wait.callId, answers)} />
           if (c.name === 'ask_user' && results[j]) return <AnsweredForm key={j} tag={`${m.id}:${j}`} call={c} result={results[j].content} />
-          return <ToolCard key={j} tag={`${m.id}:${j}`} call={c} result={results[j]?.content} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />
+          return <ToolCard key={j} tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />
         })}
       </Fragment>,
     )
@@ -2079,7 +2082,7 @@ type SearchHit = { title: string; url: string; snippet?: string }
 type CalendarHit = { id?: string; title: string; when: string; calendar: string }
 
 /** One tool call: what it did in a line, and when opened, what it was given and what came back. */
-function ToolCard({ tag, call, result, pending, approval, inTerminal, summary }: { tag: string; call: ToolCall; result?: string; pending: boolean; approval?: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; inTerminal?: boolean; summary?: CallSummary }) {
+function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, summary, check }: { tag: string; call: ToolCall; result?: string; /** Why it ran without asking (a checked web read) */ checked?: string; pending: boolean; approval?: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; inTerminal?: boolean; summary?: CallSummary; /** What Auto's check said about a web read it would not clear */ check?: string }) {
   let parsed: unknown = null
   try {
     parsed = result ? JSON.parse(result) : null
@@ -2114,6 +2117,7 @@ function ToolCard({ tag, call, result, pending, approval, inTerminal, summary }:
           <>
             <p className="muted agt-ask-why">This address did not come from your messages, a search result or a page it read. Allow it only if it looks right: an address can carry what the agent knows to someone else's site.</p>
             <pre className="agt-tool-body agt-ask-url">{call.arguments.url.slice(0, 2000)}</pre>
+            {check && <p className="muted agt-ask-why agt-ask-check">{check}</p>}
           </>
         )}
         <ApprovalPreview call={call} />
@@ -2128,6 +2132,12 @@ function ToolCard({ tag, call, result, pending, approval, inTerminal, summary }:
         </span>
         <span className="agt-tool-label">{toolLabel(call, result)}</span>
         {inTerminal && <span className="muted"> · running in your terminal…</span>}
+        {checked && (
+          <span className="muted agt-tool-checked" title={checked}>
+            {' '}
+            · {checked}
+          </span>
+        )}
         {hits && <span className="muted"> · {hits.length} results</span>}
         {events && (
           <span className="muted">
@@ -2173,11 +2183,13 @@ function ToolCard({ tag, call, result, pending, approval, inTerminal, summary }:
   )
 }
 
-const PERMISSION_LABEL: Record<Permission, string> = { default: 'Ask first', acceptEdits: 'Edits allowed', plan: 'Plan' }
+const PERMISSION_LABEL: Record<Permission, string> = { default: 'Ask first', auto: 'Auto', acceptEdits: 'Edits allowed', plan: 'Plan', bypass: 'Bypass' }
 const PERMISSION_HELP: Record<Permission, string> = {
-  default: 'Each change waits for you to allow it',
-  acceptEdits: 'File edits in the work folder go through; deleting and commands still ask',
+  default: 'Each change, and each web address it made up, waits for you to allow it',
+  auto: 'Web addresses it made up are checked for you (rules, then the safety check model); changes still ask',
+  acceptEdits: 'File edits in the work folder go through and web reads are checked like Auto; deleting and commands still ask',
   plan: 'Read only: it looks around, then shows you a plan to approve',
+  bypass: 'Nothing asks: edits, deletes, commands and web reads all run. Calendar changes and AGENTS.md, CLAUDE.md, .agents/ and .claude/ still ask',
 }
 const FILE_EDITS = new Set(['write_file', 'edit_file', 'multi_edit', 'make_dir', 'move_path'])
 
@@ -2228,7 +2240,7 @@ function ApprovalActions({ call, decide }: { call: ToolCall; decide: (allow: boo
             <button className="btn btn-small btn-primary" onClick={() => decide(true, { mode: 'acceptEdits' })}>
               Start, edits allowed
             </button>
-            <button className="btn btn-small" onClick={() => decide(true, { mode: 'default' })}>
+            <button className="btn btn-small" onClick={() => decide(true, { mode: 'auto' })} title="Goes on in Auto: each edit asks, web addresses it makes up are checked for you">
               Start, ask for each edit
             </button>
           </>
@@ -2240,6 +2252,11 @@ function ApprovalActions({ call, decide }: { call: ToolCall; decide: (allow: boo
             {FILE_EDITS.has(call.name) && (
               <button className="btn btn-small" onClick={() => decide(true, { always: 'edits' })} title="File edits in the work folder go through from now on">
                 Allow all edits
+              </button>
+            )}
+            {call.name === 'web_fetch' && typeof call.arguments?.url === 'string' && siteOf(call.arguments.url) && (
+              <button className="btn btn-small" onClick={() => decide(true, { always: 'domain' })} title={`Reads on ${siteOf(call.arguments.url)} go through without asking from now on, in all your threads (Settings → Agents → Permissions)`}>
+                Allow {siteOf(call.arguments.url)}
               </button>
             )}
             {call.name === 'terminal' && typeof call.arguments?.command === 'string' && canAlwaysAllow(call.arguments.command) && (

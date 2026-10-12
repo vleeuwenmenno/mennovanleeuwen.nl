@@ -33,16 +33,22 @@ export const interruptionText = (i: Interruption) =>
 export type QueuedMessage = { id: string; text: string; attachments: AttachmentInfo[]; createdAt: number; editing: boolean }
 /** A thread's work folder: a Seafile folder (library and path), and how the terminal showed it (~/Projects/x). */
 export type Workdir = { repo: string; path: string; label: string }
-/** How changes are allowed: each one asks, file edits go through, or read only while planning. */
-export type Permission = 'default' | 'acceptEdits' | 'plan'
-export const PERMISSIONS: Permission[] = ['default', 'acceptEdits', 'plan']
+/**
+ * How changes are allowed: each one asks (Ask first); Auto, the same but web addresses the agent
+ * built itself are checked automatically; file edits go through (also checked like Auto); read only
+ * while planning; or Bypass, where nothing asks but calendar changes and the agent's own steering
+ * files. In the order the chip's menu shows them.
+ */
+export type Permission = 'default' | 'auto' | 'acceptEdits' | 'plan' | 'bypass'
+export const PERMISSIONS: Permission[] = ['default', 'auto', 'acceptEdits', 'plan', 'bypass']
 /** A group of threads in the sidebar, with a memory of its own. */
 export type Project = { id: number; name: string; sort: number; createdAt: number }
 export type ToolCall = { name: string; arguments: Record<string, unknown> }
 /** A file sent with a message: text files as text, pictures as base64 (for models that can see). */
 export type Attachment = { name: string; source: string; kind: 'text' | 'image'; mime: string; size: number; text?: string; data?: string }
 export type AttachmentInfo = Omit<Attachment, 'text' | 'data'>
-export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; createdAt: number }
+/** `checked` (tool results): why it ran without asking, such as a web read Auto's check cleared. */
+export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; checked?: string; createdAt: number }
 
 /** What a thread may use, switched in the composer. */
 export type ToolGroup = 'web' | 'notes' | 'calendar' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills'
@@ -95,11 +101,11 @@ export type Form = { title: string; intro?: string; questions: Question[]; submi
 
 /** What a change does, worked out by the server where the call alone doesn't say (a calendar change): a headline and label/value rows. */
 export type CallSummary = { title: string; rows: [string, string][] }
-/** Something the agent waits on: a change to allow, or a form to answer; which reply asked and which call. */
-export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client'; form?: Form; call?: ToolCall; summary?: CallSummary }
+/** Something the agent waits on: a change to allow, or a form to answer; which reply asked and which call. `check`: what Auto's check said about a web read it would not clear. */
+export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client'; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
 
 export type TurnEvent =
-  | { type: 'approval'; callId: string; messageId: number; index: number; call?: ToolCall; summary?: CallSummary }
+  | { type: 'approval'; callId: string; messageId: number; index: number; call?: ToolCall; summary?: CallSummary; check?: string }
   /** A terminal tool call for the terminal to run; clientDone when it is answered or given up */
   | { type: 'client'; callId: string; messageId: number; index: number; call: ToolCall }
   | { type: 'clientDone'; callId: string }
@@ -122,10 +128,11 @@ export const getThread = (id: string) => api<{ thread: Thread; messages: AgentMe
 export const answerForm = (id: string, callId: string, answers: Record<string, unknown> | null) =>
   api(`/api/agents/threads/${id}/answer`, { method: 'POST', json: answers ? { callId, answers } : { callId, skip: true } })
 /**
- * Allows or declines a change. `always`: allow edits from now on, or this command; `feedback`: why
- * not, for the agent; `mode`: the permission mode a plan starts in (exit_plan_mode).
+ * Allows or declines a change. `always`: allow edits from now on, this command, or (a web read)
+ * the address's site for good, in all threads; `feedback`: why not, for the agent; `mode`: the
+ * permission mode a plan starts in (exit_plan_mode).
  */
-export const answerApproval = (id: string, callId: string, allow: boolean, extra: { always?: 'edits' | 'command'; feedback?: string; mode?: Permission } = {}) =>
+export const answerApproval = (id: string, callId: string, allow: boolean, extra: { always?: 'edits' | 'command' | 'domain'; feedback?: string; mode?: Permission } = {}) =>
   api(`/api/agents/threads/${id}/approve`, { method: 'POST', json: { callId, allow, ...extra } })
 /** What the terminal printed for a terminal tool call. */
 export const sendClientResult = (id: string, callId: string, output: string, status: number) => api(`/api/agents/threads/${id}/result`, { method: 'POST', json: { callId, output, status } })
@@ -168,7 +175,21 @@ export type ContextInfo = { model: string; contextLength: number | null; measure
 export const getContext = (id: string) => api<ContextInfo>(`/api/agents/threads/${id}/context`)
 
 export type PromptInfo = { text: string; source: 'seafile' | 'builtin'; repo: string | null; path: string | null; missing: boolean; error: string | null }
-export const getDefaults = () => api<{ quick: string; deep: string; title: string }>('/api/agents/defaults')
+export const getDefaults = () => api<{ quick: string; deep: string; title: string; check: string }>('/api/agents/defaults')
+
+/** A web site you allowed for good ("Allow github.com"): every thread reads addresses there without asking. */
+export type AllowedSite = { host: string; createdAt: number }
+export const listSites = () => api<AllowedSite[]>('/api/agents/sites')
+export const allowSite = (host: string) => api<AllowedSite[]>('/api/agents/sites', { method: 'POST', json: { host } })
+export const removeSite = (host: string) => api<AllowedSite[]>(`/api/agents/sites/${encodeURIComponent(host)}`, { method: 'DELETE' })
+/** The site an address is on, as "Allow …" names it: without www. */
+export const siteOf = (url: string) => {
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, '')
+  } catch {
+    return null
+  }
+}
 export const getPrompt = (fresh = false) => api<PromptInfo>(`/api/agents/prompt${fresh ? '?fresh' : ''}`)
 
 /**
@@ -177,6 +198,8 @@ export const getPrompt = (fresh = false) => api<PromptInfo>(`/api/agents/prompt$
  */
 export type AgentSettings = {
   titleModel: string | null
+  /** The safety check model: checks web addresses the agent built itself, in Auto (null: the usual one) */
+  checkModel: string | null
   /** The model a new Quick or Deep thread gets (null: the usual one) */
   quickModel: string | null
   deepModel: string | null
@@ -198,11 +221,12 @@ export type AgentSettings = {
 }
 /** The intervals for the title check that Settings offers, in your messages (server/agents.ts has the same). */
 export const TITLE_EVERY = [3, 4, 6, 10]
-const settingsStore = synced<AgentSettings>('agents', { titleModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 4 }, {
+const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 4 }, {
   normalize: (v) => {
     const s = (v ?? {}) as Partial<AgentSettings>
     return {
       titleModel: typeof s.titleModel === 'string' ? s.titleModel : null,
+      checkModel: typeof s.checkModel === 'string' ? s.checkModel : null,
       quickModel: typeof s.quickModel === 'string' ? s.quickModel : null,
       deepModel: typeof s.deepModel === 'string' ? s.deepModel : null,
       mode: s.mode === 'deep' ? 'deep' : 'quick',

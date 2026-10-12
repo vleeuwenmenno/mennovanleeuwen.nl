@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { AGENTS_MD } from '../data/agentsPrompt'
-import { installSkills, listSkills, removeSkill, setSkillEnabled, type Skill } from '../data/agents'
+import { allowSite, installSkills, listSites, listSkills, removeSite, removeSkill, setSkillEnabled, type AllowedSite, type Skill } from '../data/agents'
 import { ask } from '../os/Dialogs'
 import { agentModels, getDefaults, getPrompt, listMemories, setAgentSettings, TITLE_EVERY, TOOL_GROUPS, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
 import { useMounts, whereIs } from '../data/mounts'
@@ -38,7 +38,7 @@ export function usePromptLocation() {
 }
 
 /** The categories, in order: each a page of its own, picked from a sidebar or tabs. */
-type SectionId = 'general' | 'models' | 'threads' | 'search' | 'skills' | 'prompt' | 'shares'
+type SectionId = 'general' | 'models' | 'threads' | 'permissions' | 'search' | 'skills' | 'prompt' | 'shares'
 const icon = (d: ReactNode) => (
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     {d}
@@ -46,8 +46,9 @@ const icon = (d: ReactNode) => (
 )
 const SECTIONS: { id: SectionId; label: string; blurb: string; icon: ReactNode }[] = [
   { id: 'general', label: 'General', blurb: 'The Ollama Cloud connection Agents runs on, and what it remembers.', icon: icon(<><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1" /></>) },
-  { id: 'models', label: 'Models', blurb: 'Which model a new Quick or Deep thread gets, and which one names threads and keeps their titles up to date.', icon: icon(<><rect x="4" y="4" width="16" height="16" /><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" /></>) },
+  { id: 'models', label: 'Models', blurb: 'Which model a new Quick or Deep thread gets, which one names threads and keeps their titles up to date, and which one checks web addresses in Auto.', icon: icon(<><rect x="4" y="4" width="16" height="16" /><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" /></>) },
   { id: 'threads', label: 'New threads', blurb: 'The mode and tools a new thread starts with.', icon: icon(<path d="M4 5h16v11H9l-5 4z" />) },
+  { id: 'permissions', label: 'Permissions', blurb: 'What the agent may do without asking you: the web sites you allowed for good. Each thread picks its own mode in its toolbar (Ask first, Auto, Edits allowed, Plan, Bypass).', icon: icon(<path d="M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6z" />) },
   { id: 'search', label: 'Web search', blurb: 'Where the agent searches the web. Reading pages always goes through Ollama.', icon: icon(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>) },
   { id: 'skills', label: 'Skills', blurb: 'Instructions for kinds of tasks, in SKILL.md folders: the agent reads one when a task matches it, or you start one with /name.', icon: icon(<path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5z" />) },
   { id: 'prompt', label: 'System prompt', blurb: 'The instructions every thread starts with, from ~/AGENTS.md.', icon: icon(<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5" />) },
@@ -81,7 +82,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
   const account = useAccount()
   const settings = useAgentSettings()
   const [models, setModels] = useState<ModelInfo[]>([])
-  const [auto, setAuto] = useState<{ quick: string; deep: string; title: string } | null>(null)
+  const [auto, setAuto] = useState<{ quick: string; deep: string; title: string; check: string } | null>(null)
   const [prompt, setPrompt] = useState<PromptInfo | null>(null)
   const [memories, setMemories] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
@@ -209,6 +210,13 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
           </span>
           {modelSelect(settings.titleModel, auto?.title, (titleModel) => setAgentSettings({ titleModel }), 'Model for thread titles')}
         </li>
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Safety check</strong>
+            <span className="muted">In Auto, looks at web addresses the agent built itself and says whether they are safe to read. It sees only the address and the addresses the thread was given, never your memories or files</span>
+          </span>
+          {modelSelect(settings.checkModel, auto?.check, (checkModel) => setAgentSettings({ checkModel }), 'Model for the safety check')}
+        </li>
       </ul>
       <p className="muted set-help">Ollama Cloud's models that can use tools, with their context window. A thread keeps the model it started with; change it in the thread's composer.</p>
 
@@ -278,6 +286,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
 
       </>
     ),
+    permissions: <PermissionSettings />,
     search: <WebSearchSettings />,
     shares: <SharesSettings />,
     skills: <SkillsSettings />,
@@ -337,6 +346,66 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
         {error && <p className="t-red">{error}</p>}
       </div>
     </div>
+  )
+}
+
+// --- permissions -----------------------------------------------------------------------------------
+
+/** The web sites you allowed for good ("Allow github.com" on a web read), with a way to add and remove them. */
+function PermissionSettings() {
+  const [sites, setSites] = useState<AllowedSite[] | null>(null)
+  const [draft, setDraft] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    listSites().then(setSites, (e: Error) => setError(e.message))
+  }, [])
+  const add = (e: FormEvent) => {
+    e.preventDefault()
+    if (!draft.trim()) return
+    setError(null)
+    allowSite(draft).then(
+      (list) => (setSites(list), setDraft('')),
+      (err: Error) => setError(err.message),
+    )
+  }
+  const remove = (host: string) => {
+    setError(null)
+    removeSite(host).then(setSites, (err: Error) => setError(err.message))
+  }
+  return (
+    <>
+      <h4 className="set-subhead">Allowed web sites</h4>
+      <ul className="set-list agt-sites">
+        {sites?.map((s) => (
+          <li key={s.host} className="set-row">
+            <span className="set-row-text">
+              <strong>{s.host}</strong>
+              <span className="muted">Allowed {new Date(s.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+            </span>
+            <button className="btn btn-small" onClick={() => remove(s.host)} aria-label={`Remove ${s.host}`}>
+              Remove
+            </button>
+          </li>
+        ))}
+        {sites && !sites.length && (
+          <li className="set-row">
+            <span className="set-row-text muted">None yet. When the agent asks to read an address, “Allow github.com” allows it and adds the site here.</span>
+          </li>
+        )}
+        <li className="set-row">
+          <form className="agt-site-add" onSubmit={add}>
+            <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Add a site, like docs.python.org" aria-label="Add an allowed site" />
+            <button className="btn btn-small" type="submit" disabled={!draft.trim()}>
+              Add
+            </button>
+          </form>
+        </li>
+      </ul>
+      {error && <p className="t-red">{error}</p>}
+      <p className="muted set-help">
+        The agent reads addresses on these sites without asking, in every thread and every mode. Only the site itself counts (www. too), not its subdomains. An address it was given (in your messages, a search result or a page it read) never asks anyway.
+      </p>
+    </>
   )
 }
 
