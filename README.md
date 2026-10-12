@@ -706,6 +706,65 @@ The **Code inbox** widget lists pull requests waiting for your review, your own 
 and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 ([`server/inbox.ts`](server/inbox.ts)), with the access sign-in and linking already give.
 
+## Photos
+
+**Photos** ([`src/apps/photos`](src/apps/photos)) is a timeline of the photos and videos in your
+Seafile folders or your Immich library, by the day they were taken: months and days, newest first,
+with the years down the right edge to drag through. Ctrl+wheel, a pinch or the − and + buttons
+change the size of the squares. A photo opens in a lightbox: the arrow keys, a swipe or the side
+buttons go through the timeline, the wheel, a pinch, double-click, + and − zoom towards the pointer
+(drag to pan), I shows the details (when it was taken, camera, lens, exposure, size, and the
+coordinates when it has GPS: no map service is asked), the full stop makes it a favourite, and
+Escape or a swipe down goes back. Download, *Show in Files* (Seafile) and *Open in Immich* are in
+its bar; videos play in Player. *Albums* are the Seafile folders you chose, or Immich's albums;
+*Favourites* are kept in this server's database for Seafile and in Immich for Immich. With both set
+up, Seafile | Immich in the toolbar switches between them (remembered for your account); they are
+not mixed into one timeline. The grid only puts the rows on screen in the page, so 20,000 photos
+scroll like 20; thumbnails load six at a time, the newest wish first, and the browser keeps them.
+
+**Seafile** has no idea what a photo is, so the server keeps an index per account
+([`server/photos.ts`](server/photos.ts), in SQLite). The ⚙ view chooses the folders (any library,
+read-only ones too) and suggests folders named Photos, Pictures, Camera Uploads or DCIM. A walk
+lists them in the background, four requests at a time, and reads each new or changed photo's first
+128 KB with a byte range for its EXIF ([`server/exif.ts`](server/exif.ts), no library): JPEG,
+TIFF, PNG (eXIf), WebP (its EXIF chunk), HEIC, HEIF and AVIF (the Exif item, found through iinf
+and iloc, and the primary picture's size and rotation), and the creation time and size of MP4 and
+MOV (WebM and MKV keep the file's date). When what it needs is further on (a HEIC's Exif item, a
+WebP's EXIF chunk, a phone video's moov box at the end), a second range fetches exactly that.
+Walking again only reads files whose Seafile id or date changed, and skips a folder whose id did
+not change since the last full walk (Seafile's folder ids change when anything inside does);
+deleted files leave the index. The app walks again when it is opened and the index is over 15
+minutes old, or with *Look for new photos*. Caps: 100,000 photos and 20,000 folders per account,
+two walks at a time across the server. EXIF dates have no time zone, so a photo shows the time on
+the camera's clock; a file's date (no EXIF) and a video's creation time are shown in yours.
+Encrypted libraries are walked only while unlocked in Files, and their photos only show then;
+Seafile makes no thumbnails there, so the small preview the camera embedded in the EXIF stands in.
+Thumbnails come from Seafile's thumbnail API through the server (the token stays there), with an
+ETag and a week's Cache-Control; the full photo comes straight from Seafile's file server with a
+short-lived link, as in Files. Linking another Seafile account starts the index over.
+
+**Immich** is linked in Settings → Integrations or in Photos' ⚙ view, with its URL and an API key
+(Immich: *Account settings → API keys*; All, or at least asset.read, asset.view, asset.download,
+asset.update, album.read, timeline.read and user.read). Linking asks Immich for its version first
+and refuses anything but Immich 2 and 3. The key is stored encrypted and only ever sent from the
+server ([`server/immich.ts`](server/immich.ts)), without following redirects: thumbnails, the
+originals and video (with byte ranges, for seeking) come through the server. Immich indexes its
+own photos, so nothing is copied: the timeline is its month buckets, a photo's details its asset,
+favourites its own. Times are the photographer's clock, as Immich gives them.
+
+`pnpm check:photos` ([`scripts/photos-check.ts`](scripts/photos-check.ts)) checks the EXIF reader
+against small files made by Pillow, exiv2, ImageMagick and ffmpeg (and one written by hand,
+big-endian) in [`scripts/fixtures/photos`](scripts/fixtures/photos) (its `make.py` makes them
+again), then runs the real server against stand-ins for Seafile and Immich
+([`scripts/photos-mock.ts`](scripts/photos-mock.ts)): suggestions, the walk and its byte ranges,
+months in the viewer's time zone, thumbnails and 304s, walking again (nothing read when nothing
+changed; new, changed, deleted files and a deleted folder), encrypted libraries locked and
+unlocked, another account seeing nothing, and Immich (an old version and a wrong key refused, both
+of its bucket formats, thumbnails, albums, favourites, video ranges, the key never in an answer).
+`node scripts/photos-mock.ts [count]` starts both stand-ins with a big made-up library (Seafile on
+8810, Immich on 8815) for trying the app; they are on 127.0.0.1, so link them as an admin. Not
+yet tried against a real Seafile or Immich server, nor with HEIC files from a real phone.
+
 ## Widgets
 
 Widgets sit on the desktop like sticky notes: no title bar, tape on top, a sway when dragged, a
