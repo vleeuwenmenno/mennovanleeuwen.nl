@@ -36,6 +36,7 @@ import { ACCENTS, DARK_THEMES, LIGHT_THEMES, setAccent, setMode, setTheme, theme
 import { ReleaseStatus } from '../os/TopbarWidgets'
 import { useWM, type AppId, type WinState } from '../os/wm'
 import { AgentsSettings } from './AgentsSettings'
+import { ContactsSettings } from './contacts/ContactsSettings'
 import { AmpPane, CalendarAppPrefs, FilesPane, GamesPane, PdfPane, PreviewPane, TerminalPane } from './AppSettings'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
 import { BranchGlyph } from './LinkForge'
@@ -45,7 +46,7 @@ import { SyncLine } from './Notebook'
 // Opened from the system menu, the desktop's right-click menu, Spotlight, the terminal and apps'
 // window menus; props.section picks the pane (account, appearance, dock, launchers, search
 // (Spotlight), windows, links, notifications, golinks, instances, integrations, then the apps:
-// agents, calendar, files, games, amp, pdf, preview, terminal; then sync, users, about) and
+// agents, calendar, contacts, files, games, amp, pdf, preview, terminal; then sync, users, about) and
 // props.sub a part of it. The account and service panes only show for the signed-in user.
 
 const SignInFirst = ({ what }: { what: string }) => {
@@ -792,7 +793,7 @@ function Launchers() {
 }
 
 /** Third-party services the widgets read from, with keys on the server: updown.io for Status. */
-type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice'
+type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice' | 'contacts'
 
 /** Third-party services, one row each; a row opens that service's own settings. */
 /** `sub` opens one service's settings straight away (Settings → Integrations → Seafile, from an alert). */
@@ -800,7 +801,7 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
   const account = useAccount()
   const [open, setOpen] = useState<IntegrationId | null>(null)
   useEffect(() => {
-    if (sub === 'updown' || sub === 'ollama' || sub === 'seafile' || sub === 'onlyoffice') setOpen(sub)
+    if (sub === 'updown' || sub === 'ollama' || sub === 'seafile' || sub === 'onlyoffice' || sub === 'contacts') setOpen(sub)
   }, [sub, t])
   const { libraries } = useLibraries()
   if (account.status !== 'user') return <p className="muted">Sign in first to connect services for widgets and Files.</p>
@@ -837,6 +838,7 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
       on: !!seafile?.office,
       disabled: !seafile,
     },
+    { id: 'contacts', name: 'Contacts (CardDAV)', icon: <span className="set-glyph">📇</span>, status: 'Fastmail, iCloud, Nextcloud and other address books, for Contacts', on: false },
   ]
 
   const current = rows.find((r) => r.id === open && !r.disabled)
@@ -851,7 +853,7 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
           <strong>{current.name}</strong>
           {current.on && <span className="set-badge">Connected</span>}
         </div>
-        {current.id === 'updown' ? <UpdownSettings /> : current.id === 'ollama' ? <OllamaSettings /> : current.id === 'seafile' ? <SeafileSettings /> : <OfficeSettings />}
+        {current.id === 'updown' ? <UpdownSettings /> : current.id === 'ollama' ? <OllamaSettings /> : current.id === 'seafile' ? <SeafileSettings /> : current.id === 'contacts' ? <ContactsSettings /> : <OfficeSettings />}
       </>
     )
 
@@ -1652,7 +1654,7 @@ function LinkSettingsPane() {
   )
 }
 
-type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'agents' | 'golinks' | 'terminal' | 'files' | 'amp' | 'pdf' | 'preview' | 'games' | 'sync' | 'users' | 'about'
+type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'contacts' | 'integrations' | 'agents' | 'golinks' | 'terminal' | 'files' | 'amp' | 'pdf' | 'preview' | 'games' | 'sync' | 'users' | 'about'
 /** `account`: only when signed in (accounts and services); visitors don't see it at all.
  * `admin`: only for admins (the server checks that on every request too). */
 type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; /** An app's pane (Settings → Apps) shows the app's own dock icon instead */ app?: AppId; keywords: string; blurb: string; account?: true; admin?: true; render: (opened: { sub?: string; t?: string }) => ReactNode }
@@ -1718,6 +1720,7 @@ const GROUPS: Group[] = [
     panes: [
       { id: 'agents', label: 'Agents', hue: 'var(--magenta)', account: true, icon: null, app: 'agents', keywords: 'agents ai assistant ollama models quick deep research title thread system prompt agents.md tools memory', blurb: 'The Agents app: its models, what a new thread starts with, and its system prompt.', render: () => <AgentsSettings /> },
       { id: 'calendar', label: 'Calendar', hue: 'var(--red)', account: true, icon: null, app: 'calendar', keywords: 'calendar google agenda events caldav fastmail nextcloud icloud view week month day year default new events', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock; and how the Calendar app opens.', render: () => <CalendarSettings /> },
+      { id: 'contacts', label: 'Contacts', hue: 'var(--orange)', account: true, icon: null, app: 'contacts', keywords: 'contacts people address book carddav fastmail icloud nextcloud radicale vcard vcf birthdays groups', blurb: 'Address books: on this site, Fastmail, iCloud and other CardDAV; where new contacts go.', render: () => <ContactsSettings /> },
       { id: 'files', label: 'Files', hue: 'var(--blue)', icon: null, app: 'files', keywords: 'files file manager view list grid compact gallery icon size zoom sort order hidden dotfiles sidebar', blurb: 'How Files shows a folder: the view, icon size, sort order, hidden files and the sidebar.', render: () => <FilesPane /> },
       { id: 'games', label: 'Games', hue: 'var(--cyan)', icon: null, app: 'games', keywords: 'games arcade pool gladiator empires at war rts sound music volume mute helpers aim sensitivity difficulty computer health bars rings fog procedural models sprites camera edge scrolling key bindings keybinds keys multiplayer name online', blurb: 'Pool, Gladiator and Empires At War: how they play and sound.', render: ({ sub, t }) => <GamesPane sub={sub} t={t} /> },
       { id: 'amp', label: 'Omamp', hue: 'var(--green)', icon: null, app: 'amp', keywords: 'omamp music player audio winamp shuffle repeat equalizer eq preset visualizer spectrum oscilloscope time remaining playlist', blurb: 'The music player: shuffle and repeat, the equalizer, and what it shows.', render: () => <AmpPane /> },
