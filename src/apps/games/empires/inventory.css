@@ -1,9 +1,11 @@
 /* The fleet inventory of Galactic conquest (Inventory.tsx): our fleets at a planet side by side, each
-   a grid of bevelled slots like a crafting game's inventory, the held back row under it. Selectors
-   start at `.ew-root .ew-inv` to outrank empires.css (which loads after this file). */
+   a grid of bevelled cells like a role-playing game's backpack, where every ship takes up a
+   footprint by its size. Selectors start at `.ew-root .ew-inv` to outrank empires.css (which loads
+   after this file). */
 
 .ew-root .ew-float.ew-inv {
-  --slot: 42px;
+  --slot: 34px;
+  --gap: 2px;
   max-width: calc(100% - 12px);
 }
 .ew-root .ew-inv .ew-frame-in {
@@ -38,7 +40,7 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  padding: 1px 24px 2px 3px;
+  padding: 1px 48px 2px 3px;
   min-width: 0;
   cursor: pointer;
   border-radius: 4px;
@@ -59,12 +61,17 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: calc(var(--slot) * 4);
+  max-width: calc(var(--slot) * 6 - 44px);
 }
-.ew-root .ew-inv .ew-inv-holdall {
+/* The header's tools: arrange and hold all back. */
+.ew-root .ew-inv-tools {
   position: absolute;
   top: 2px;
   right: 0;
+  display: flex;
+  gap: 2px;
+}
+.ew-root .ew-inv .ew-inv-tool {
   width: 22px;
   height: 22px;
   padding: 0;
@@ -72,55 +79,89 @@
   place-items: center;
   color: var(--ew-muted);
 }
-.ew-root .ew-inv .ew-inv-holdall.is-on {
+.ew-root .ew-inv .ew-inv-tool.is-on {
   color: var(--ew-gold);
 }
+/* How full the fleet's grid is: a thin bar under the header, red when it's full. */
+.ew-root .ew-inv-room {
+  display: block;
+  height: 3px;
+  margin-top: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.ew-root .ew-inv-room b {
+  display: block;
+  height: 100%;
+  background: var(--ew-accent);
+}
+.ew-root .ew-inv-fleet.is-full .ew-inv-room b {
+  background: var(--ew-bad);
+}
 
-/* The slots: bevelled in, the ship's art in the middle and its count in the corner. */
+/* The grid: bevelled cells, and the ships on them, each spanning its footprint. */
 .ew-root .ew-inv-grid {
   display: grid;
-  gap: 3px;
-  padding: 3px;
-  border-radius: 4px;
+  gap: var(--gap);
+  padding: 0;
+  outline: 3px solid rgba(0, 0, 0, 0.35);
+  border-radius: 3px;
   background: rgba(0, 0, 0, 0.35);
+  touch-action: none;
 }
-.ew-root .ew-inv-grid.is-held {
-  background: rgba(70, 52, 14, 0.35);
-}
-.ew-root .ew-inv-slot {
-  position: relative;
-  width: var(--slot);
-  height: var(--slot);
+.ew-root .ew-inv-cell {
   border-radius: 3px;
   background: rgba(38, 50, 78, 0.9);
   box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.5), inset -2px -2px 0 rgba(170, 200, 255, 0.09);
 }
-.ew-root .ew-inv-grid.is-held .ew-inv-slot {
-  background: rgba(62, 52, 34, 0.9);
-}
-.ew-root .ew-inv-slot.has-stack {
+.ew-root .ew-inv-item {
+  position: relative;
+  z-index: 1;
+  border-radius: 4px;
+  background: linear-gradient(160deg, rgba(76, 100, 150, 0.95), rgba(44, 58, 92, 0.95));
+  box-shadow: inset 0 0 0 1px rgba(170, 200, 255, 0.28), 0 1px 3px rgba(0, 0, 0, 0.6);
   cursor: grab;
   outline: none;
+  overflow: hidden;
 }
-.ew-root .ew-inv-slot.has-stack:hover,
-.ew-root .ew-inv-slot.has-stack:focus-visible {
-  background: rgba(70, 92, 140, 0.95);
+.ew-root .ew-inv-item:hover,
+.ew-root .ew-inv-item:focus-visible {
+  background: linear-gradient(160deg, rgba(96, 124, 180, 0.98), rgba(58, 76, 118, 0.98));
 }
-.ew-root .ew-inv-grid.is-held .ew-inv-slot.has-stack:hover {
-  background: rgba(100, 84, 50, 0.95);
+/* Held back: gold, like the reserve. */
+.ew-root .ew-inv-item.is-held {
+  background: linear-gradient(160deg, rgba(120, 96, 44, 0.95), rgba(74, 58, 26, 0.95));
+  box-shadow: inset 0 0 0 1px rgba(242, 193, 74, 0.55), 0 1px 3px rgba(0, 0, 0, 0.6);
 }
-.ew-root .ew-inv-slot.is-carried {
+.ew-root .ew-inv-item.is-carried {
+  opacity: 0.45;
   box-shadow: inset 0 0 0 2px var(--ew-gold), 0 0 10px rgba(242, 193, 74, 0.45);
 }
-.ew-root .ew-inv-slot .ew-art {
+.ew-root .ew-inv.is-carrying .ew-inv-item {
+  cursor: copy;
+}
+/* The art fills the footprint; a ship turned on its side has its art turned with it. */
+.ew-root .ew-inv-art {
   position: absolute;
-  inset: 4px;
-  width: calc(100% - 8px);
-  height: calc(100% - 8px);
+  left: 50%;
+  top: 50%;
+  width: calc(100% - 6px);
+  height: calc(100% - 6px);
+  transform: translate(-50%, -50%);
   pointer-events: none;
+}
+.ew-root .ew-inv-item.is-side .ew-inv-art {
+  width: calc(var(--h) * var(--slot) + (var(--h) - 1) * var(--gap) - 6px);
+  height: calc(var(--w) * var(--slot) + (var(--w) - 1) * var(--gap) - 6px);
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+.ew-root .ew-inv-art .ew-art {
+  width: 100%;
+  height: 100%;
   filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.7));
 }
-.ew-root .ew-inv-slot em {
+.ew-root .ew-inv-item em {
   position: absolute;
   right: 3px;
   bottom: 1px;
@@ -130,9 +171,24 @@
   text-shadow: 1px 1px 0 #000, -1px 1px 0 #000, 1px -1px 0 #000, -1px -1px 0 #000;
   pointer-events: none;
 }
-/* The hold toggle in the top left corner: a gun sight to hold the stack back, a shield to deploy it. */
+/* Where a carried ship would go: green where it fits, red where it doesn't. */
+.ew-root .ew-inv-fit {
+  z-index: 2;
+  border-radius: 4px;
+  pointer-events: none;
+}
+.ew-root .ew-inv-fit.is-ok {
+  background: rgba(90, 230, 130, 0.28);
+  box-shadow: inset 0 0 0 2px rgba(110, 255, 150, 0.9);
+}
+.ew-root .ew-inv-fit.is-bad {
+  background: rgba(255, 80, 70, 0.28);
+  box-shadow: inset 0 0 0 2px rgba(255, 100, 90, 0.95);
+}
+/* The hold toggle in the top left corner: a gun sight to hold the ship back, a shield to deploy it. */
 .ew-root .ew-inv-hold {
   position: absolute;
+  z-index: 1;
   top: 1px;
   left: 1px;
   width: 16px;
@@ -146,7 +202,7 @@
   cursor: pointer;
   transition: opacity 0.12s;
 }
-.ew-root .ew-inv-slot:hover .ew-inv-hold,
+.ew-root .ew-inv-item:hover .ew-inv-hold,
 .ew-root .ew-inv-hold.is-held {
   opacity: 1;
 }
@@ -157,18 +213,6 @@
   color: #fff;
   background: rgba(40, 70, 130, 0.95);
 }
-.ew-root .ew-inv-label {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 3px;
-  font-size: 10.5px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ew-gold);
-  opacity: 0.85;
-}
-
 /* Room for a new fleet while there are fewer than the cap. */
 .ew-root .ew-inv-fleet.is-new {
   border-style: dashed;
@@ -176,7 +220,7 @@
 }
 .ew-root .ew-inv-newdrop {
   flex: 1;
-  min-height: calc(var(--slot) * 2);
+  min-height: calc(var(--slot) * 4);
   width: calc(var(--slot) * 2.2);
   display: flex;
   flex-direction: column;
@@ -235,24 +279,47 @@
   color: var(--ew-bad);
 }
 
-/* A stack (or a fleet) being dragged follows the pointer, over everything. */
+/* A ship (or a fleet) being carried follows the pointer, over everything, at its footprint's size. */
 .ew-inv-ghost {
   position: fixed;
   z-index: 10000;
-  width: 44px;
-  height: 44px;
-  margin: -22px 0 0 -22px;
   pointer-events: none;
   border-radius: 4px;
-  background: rgba(38, 50, 78, 0.75);
+  background: rgba(38, 50, 78, 0.55);
   box-shadow: 0 0 0 2px #f2c14a, 0 6px 16px rgba(0, 0, 0, 0.6);
   color: #dce6f5;
-  display: grid;
-  place-items: center;
+  opacity: 0.85;
+}
+/* Over a grid, where the cells it would take light up, it stands back so they show through. */
+.ew-inv-ghost.is-over {
+  background: transparent;
+  box-shadow: none;
+  opacity: 0.55;
+}
+.ew-inv-ghost .ew-inv-art {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(100% - 6px);
+  height: calc(100% - 6px);
+  transform: translate(-50%, -50%);
+}
+.ew-inv-ghost.is-side .ew-inv-art {
+  width: calc(var(--gh) - 6px);
+  height: calc(var(--gw) - 6px);
+  transform: translate(-50%, -50%) rotate(90deg);
 }
 .ew-inv-ghost .ew-art {
-  width: 36px;
-  height: 36px;
+  width: 100%;
+  height: 100%;
+}
+.ew-inv-ghost.is-fleet {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  background: rgba(38, 50, 78, 0.75);
+  opacity: 1;
 }
 .ew-inv-ghost em {
   position: absolute;
@@ -264,20 +331,22 @@
   text-shadow: 1px 1px 0 #000, -1px -1px 0 #000;
 }
 
-/* Fingers: bigger slots, the hold toggle always shown, and the panel as a sheet along the top on
+/* Fingers: bigger cells, the hold toggle always shown, and the panel as a sheet along the top on
    phones, its fleets two by two. */
 @media (pointer: coarse) {
   .ew-root .ew-float.ew-inv {
-    --slot: 46px;
+    --slot: 38px;
   }
-  .ew-root .ew-inv-hold {
+  /* (On ships of one cell it would hide the art: those hold back from the long-press wheel.) */
+  .ew-root .ew-inv-item.is-big .ew-inv-hold {
     opacity: 1;
   }
 }
 @media (pointer: coarse), (max-width: 719px) {
 @container (max-width: 680px) {
+  /* Two fleets side by side on a phone held upright: six cells of 24px each. */
   .ew-root.ew-galaxy .ew-float.ew-inv {
-    --slot: 33px;
+    --slot: 24px;
     left: 6px !important;
     right: 6px !important;
     top: 56px !important;
@@ -286,6 +355,10 @@
   .ew-root .ew-inv-body {
     max-height: 40vh;
     justify-content: center;
+    gap: 6px;
+  }
+  .ew-root .ew-inv-fleet {
+    padding: 4px;
   }
   .ew-root .ew-inv-strip.is-carry small {
     display: none;

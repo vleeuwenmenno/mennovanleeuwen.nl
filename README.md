@@ -834,37 +834,95 @@ pnpm check:empires-repair   # Field repair: a station's hangar rebuilt and its w
 
 ## Galactic conquest fleets
 
-In Empires At War's Galactic conquest each side keeps at most **4 fleets at a planet**
-(`MAX_FLEETS` in [`galaxy.ts`](src/apps/games/empires/galaxy.ts)). Selecting a planet, or a fleet
-of ours at one, opens **Fleets at <planet>** ([`Inventory.tsx`](src/apps/games/empires/Inventory.tsx)):
-our fleets there side by side, each an inventory of slots holding a stack per kind of ship, with an
-empty *New fleet* column while there are fewer than 4.
-- **Mouse:** drag a stack onto another fleet to move it (it stacks with the same kind there); Shift
-  or the right button drags half, Ctrl one. Click a stack to pick it up and click a fleet to put it
-  there; double-click sends it to the next fleet. After every move a bar under the title sets the
-  exact count (− + All). Dragging a fleet's header onto another joins them; clicking a header
-  selects that fleet for orders.
-- **Touch:** tap a stack to pick it up and tap a fleet to put it there (the touch bar's Shift takes
-  half); a long press opens a wheel: *Move all*, *Move half*, *Move…* (with − + for the count), *New
-  fleet*, *Hold back* or *Deploy*, *Select fleet*. A long press on a fleet's header: select, hold
-  back all, join another fleet.
-- **Held back:** the shield row under each fleet holds ships back (`Fleet.reserve`, how many of
-  each kind). Move ships into it like into another fleet, or click a stack's corner icon (the
-  header's shield does the whole fleet). When the fleet fights, the rest jump in as before and the
-  held back ships start in the battle's reserve tray, to be called in during the fight; ones never
-  called in come out of a won battle untouched (and jump out with the rest of a lost one, except
-  fighters, as with any reserve). The battle prompt shows the split. Auto-resolve counts held back
-  ships in full but brings them in 4 seconds late (`RESERVE_CALL`), or at once when nothing else of
-  their side is left: holding back a third of an even fleet costs about a third of its chances.
-- **Moves** only happen between our fleets at the same planet; a fleet in flight shows its
-  inventory read-only (it can still change what it holds back). A fleet that gives away its last
-  ship is gone, and the selection follows its ships.
-- **The cap:** fleets of ours arriving where we already have 4 join the biggest there (one with
-  the same stops queued first); new ships join the first fleet at their planet; the AI keeps its
-  fleets at a planet together, as before, and deploys everything. Fleets keep their make-up and
-  held back ships through a battle. Old saves with more than 4 fleets at a planet are merged down
-  to 4 on load, keeping the ones with orders. Fleets that meet at a planet stay apart; *Gather*
-  sends them to the biggest one to join up.
+In Empires At War's Galactic conquest every fleet carries its ships on a **grid of 6 by 4 cells**
+(`GRID_W`, `GRID_H` in [`galaxy.ts`](src/apps/games/empires/galaxy.ts)), like a backpack in a
+role-playing game, and each side keeps at most **4 fleets at a planet** (`MAX_FLEETS`). Every
+ship takes up a footprint by its size (`FOOTPRINT`, wide by tall as it sits upright):
+
+| Ships | Footprint | Per fleet at most |
+| --- | --- | --- |
+| Fighters, bombers, repair craft, pickets (the fighter tier) | 1×1, stacking up to 3 squadrons of one type (`STACK`) | 72 squadrons |
+| Gunships | 1×1, one per cell | 24 |
+| Frigates (also the droid ion frigate) and the Republic's repair corvette | 1×2 | 12 |
+| Cruisers | 2×2 | 6 |
+| Dreadnoughts and carriers (capital ships) | 2×3 | 3 |
+
+Only strike craft stack: three frigates are three items. Each item on the grid either jumps in when
+a battle starts or is **held back** (gold), waiting in the battle's reserve.
+
+Selecting a planet, or a fleet of ours at one, opens **Fleets at <planet>**
+([`Inventory.tsx`](src/apps/games/empires/Inventory.tsx)): our fleets there side by side, each its
+grid with a bar of how full it is, and an empty *New fleet* column while there are fewer than 4.
+- **Mouse:** drag a ship to a spot: the cells it would take light up green where it fits and red
+  where it doesn't, **R** or a right-click turns a ship that isn't square on its side. Dropped on a
+  stack of its own kind it joins it; dropped on a fleet's header it goes wherever it fits there.
+  Shift drags half a stack, Ctrl one squadron. A click picks a ship up (the bar under the title
+  sets how many of a stack, and turns it) and a click on a spot puts it down; a double-click sends
+  it to the next fleet; a right-click on a ship turns it where it lies. After a move of strike
+  craft the bar sets the exact count (− + All). Dragging a fleet's header onto another joins them
+  as far as there's room; clicking a header selects that fleet for orders. Each header has
+  **Arrange** (packs the fleet again, biggest first, stacks filled) and hold back all.
+- **Touch:** tap a ship to pick it up and tap a spot to put it there (the touch bar's Shift takes
+  half a stack); a long press opens a wheel: *Move*, *Move half*, *Move one*, *New fleet*, *Turn*,
+  *Hold back* or *Deploy*, *Select fleet*. A long press on a fleet's header: select, hold back
+  all, arrange, join another fleet. On a phone the fleets sit two by two.
+- **Held back:** the corner icon on a ship holds it back or deploys it (the header's shield does the
+  whole fleet). When the fleet fights, the rest jump in and the held back ships start in the
+  battle's reserve tray, to be called in during the fight; ones never called in come out of a won
+  battle untouched (and jump out with the rest of a lost one, except fighters, as with any
+  reserve). The battle prompt shows the split. Auto-resolve counts held back ships in full but
+  brings them in 4 seconds late (`RESERVE_CALL`), or at once when nothing else of their side is
+  left.
+- **Moves** only happen between our fleets at the same planet; a fleet in flight shows its grid
+  read-only (it can still change what it holds back). A fleet that gives away its last ship is
+  gone, and the selection follows its ships. Ships come out of a battle on the same spots of the
+  same grids (held back ones first, as they waited in the reserve).
+- **Full fleets:** a fleet with no room takes nothing more. Merging (a header dragged onto another,
+  *Gather*) moves what fits and leaves the rest as a fleet of its own. A fleet flying in to a planet
+  where we already have 4 folds into the others there when all of it fits (the one with the same
+  stops queued first, then the biggest); when it doesn't, it **stays a fleet of its own past the
+  cap** until we sort it out, but no new fleet is made there meanwhile.
+- **The shipyard:** a finished ship joins the first fleet at its planet with room (one that is
+  staying before one only stopping on its way), else a new fleet while there are fewer than 4.
+  When every fleet there is full and there are 4, the ship **waits in the shipyard**, holding up
+  the queue behind it, until a fleet makes room or leaves: the planet dock says "Fleets full" and a
+  message says so once.
+- **The AI** builds only where there's room, keeps its fleets at a planet together where they fit
+  whole, and moves the fleets waiting beside its main fleet with it as one army (one order).
+- **Old saves** (stacks without spots): every fleet is laid out on load, biggest ships first, its
+  held back ships still held back; what doesn't fit forms another fleet beside it with the same
+  orders, and spare fleets then fold in down to 4 where they fit.
+
+## Galactic conquest fog of war
+
+Each side sees only part of the galaxy ([`galaxy.ts`](src/apps/games/empires/galaxy.ts)
+`updateSight`, `known`, `canSee`). A side **sees a star system** while it owns a planet there, has
+a fleet there (in orbit, or flying between its planets), or the system is contested for it (one of
+its planets being taken, or a battle it's in). Everything else is **hidden**:
+- In a hidden system we see the star, the planets and their kinds, and **what we last saw**
+  (`Side.intel`): who held each planet, its station level and the enemy ships in its orbit, drawn
+  faded with dashed rings and "Last seen day N" under each planet (the planet dock and tips say the
+  same). A new campaign starts with the **pre-war charts**: who held what and their stations, no
+  word of any fleet. Never live fleets, stations being built, captures or shipyards.
+- Enemy fleets show only inside systems we see; out on a lane they're in hyperspace and nobody sees
+  them, so an attack shows up when it arrives. A fleet of ours flying through a system glimpses it
+  on the way, and a side that loses a planet knows it even with nothing left there.
+- Routes plan by what we know: a blockade we didn't know of pulls the fleet out of hyperspace when
+  it gets there. The map, the galaxy minimap, tips, the planet dock, the selection, the economy's
+  enemy estimate, messages and long-press wheels all keep to this. How many planets each side holds
+  is public (the top bar's "8 vs 8"); the enemy's fleets and income are not (the economy shows a
+  guess from what we last saw).
+- **The AI plays by the same rules:** it reads planets and enemy fleets only through what its side
+  sees and remembers. For a planet it has never seen the orbit of it guesses a small garrison
+  (`FOG_GUESS`); its detachments taking planets nearby double as scouts. Scouts and probes as ships
+  of their own are planned for later.
+- Sight is worked out once a tick for every side and saved with the campaign; old saves start with
+  the galaxy as it is on their charts and sight from what each side holds.
+
+```sh
+pnpm check:empires-fleets    # footprints, placing and turning, stacking, full fleets, merges, the shipyard waiting, old saves
+pnpm check:empires-galaxy    # the AI's campaigns, the fog's rules, and the AI deciding the same whatever it can't see
+```
 
 ## Empires At War attack positions
 
@@ -901,13 +959,14 @@ The AI plays like a person with limited hands, more limited the easier it is:
   reachable planet it thinks it can beat and sees that attack through, and sends a detachment or
   two of a ship or two to take unclaimed planets nearby. It misjudges your strength by up to 40%
   (very easy) or 10% (hard) and now and then picks worse. Both sides start on the same income and
-  fleet; only the AI's income multiplier differs (0.55, 0.7, 1 and 1.15).
+  fleet; only the AI's income multiplier differs (0.55, 0.7, 1 and 1.15). It plays under the fog of
+  war like the player (see above): what it can't see it doesn't know.
 - **Battles** ([`ai.ts`](src/apps/games/empires/ai.ts)): at most 25, 35, 60 or 100 actions a
   minute (a move for a group of ships is one), and it notices an attack on its base 6 to 1 seconds
   late. It runs on the battle's own clock and dice, so multiplayer copies stay in step.
 
 ```sh
-pnpm check:empires-galaxy [weeks] [runs] [turtle|expand]  # campaigns vs a scripted player: orders a minute, fleets, wandering, the fleet cap
+pnpm check:empires-galaxy [weeks] [runs] [turtle|expand]  # campaigns vs a scripted player: orders a minute, fleets, wandering, the fleet cap, the difficulty ranking, the fog of war
 pnpm check:empires-fleets                                 # the fleet inventory: moves, the cap, held back ships into battles, old saves
 pnpm empires:battle-ai [games] [minutes]                  # AI-only battles: wins per pairing, actions a minute against the cap
 ```
