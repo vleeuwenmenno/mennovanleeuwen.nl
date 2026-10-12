@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
 import {
+  createEvent,
   dayKey,
   deleteEvent,
   fetchEvents,
   isShown,
   reloadCalendars,
   setCalendarShown,
+  setLastCalendar,
   startOfDay,
+  takeEventRequest,
   updateEvent,
   useCalendarChoice,
   useCalendarList,
@@ -15,11 +18,19 @@ import {
   type CalendarEvent,
   type CalendarInfo,
 } from '../../data/calendar'
+import { openContact, useContacts } from '../../data/contacts'
+import { readBytes } from '../../data/fileOps'
+import { openLink } from '../../data/links'
+import { composeMail } from '../../data/mail'
+import { completeTask, deleteTask, openTask, setTaskPrefs, updateTask, useTaskPrefs, useTasks } from '../../data/tasks'
 import { connectGoogle, hasCalendar, signIn, useAccount } from '../../os/account'
 import { openContextMenu, type MenuItem } from '../../os/ContextMenu'
-import { openLink } from '../../data/links'
+import { choose as askWith } from '../../os/Dialogs'
+import { useDropTarget } from '../../os/dnd'
+import { notify } from '../../os/notify'
 import { useWM, type WinState } from '../../os/wm'
-import { completeTask, deleteTask, openTask, setTaskPrefs, updateTask, useTaskPrefs, useTasks } from '../../data/tasks'
+import { BIRTHDAY_COLOR, BIRTHDAYS, birthdayEvents, isBirthdayEvent } from './birthdays'
+import { parseIcs, type IcsEvent } from './ics'
 import { isTaskEvent, taskEvents } from './tasks'
 import '../tasks/tasks.css'
 import { draftFromEvent, draftFromRange, EventEditor, type Choose, type Draft } from './EventEditor'
@@ -34,9 +45,12 @@ import { dayLoad, MiniMonth, YearView } from './YearView'
 // Google and the CalDAV server keep them, so they show on your phone too. The calendars ticked in
 // the sidebar are the same switches as in Settings → Calendar. Tasks with a due date show too
 // (src/apps/calendar/tasks.ts), per list as switched on under Tasks in the sidebar: tick them
-// there, drag them to another day or time, open them in the Tasks app.
+// there, drag them to another day or time, open them in the Tasks app. So do your contacts'
+// birthdays (src/apps/calendar/birthdays.ts), and .ics files dropped on it are imported.
 //
-// props.date ("2026-10-09") and props.view open it on a day (from the clock's month).
+// props.date ("2026-10-09") and props.view open it on a day (from the clock's month), props.event
+// with an iCalendar UID opens that event there (an invitation in Mail), and props.compose takes a
+// new event to fill in from composeEvent() (Mail's "Create event from this email").
 
 /** The time now, once a minute. */
 function useNow() {
@@ -148,11 +162,38 @@ export function CalendarApp({ win }: { win: WinState }) {
   const taskPrefs = useTaskPrefs()
   const dueTasks = useMemo(() => taskEvents(tasks, taskLists ?? [], taskPrefs.hiddenInCalendar, from, to), [tasks, taskLists, taskPrefs.hiddenInCalendar, from, to])
 
+  // Your contacts' birthdays and anniversaries, unless switched off.
+  const { contacts } = useContacts()
+  const birthdaysOn = picks[BIRTHDAYS] !== false
+  const birthdays = useMemo(() => (birthdaysOn ? birthdayEvents(contacts, from, to) : []), [contacts, birthdaysOn, from, to])
+
   const events = useMemo(
-    () => [...(data?.events ?? []), ...dueTasks].filter((e) => optimistic[e.id] !== 'deleted').map((e) => (optimistic[e.id] ? { ...e, ...(optimistic[e.id] as Change) } : e)),
-    [data, dueTasks, optimistic],
+    () => [...(data?.events ?? []), ...birthdays, ...dueTasks].filter((e) => optimistic[e.id] !== 'deleted').map((e) => (optimistic[e.id] ? { ...e, ...(optimistic[e.id] as Change) } : e)),
+    [data, birthdays, dueTasks, optimistic],
   )
   const writable = (calendars ?? []).filter((c) => c.writable)
+
+  // Asked from another app: a new event filled in (composeEvent), or an event by its UID.
+  const wantedUid = useRef<string | null>(null)
+  useEffect(() => {
+    const req = takeEventRequest(win.props.compose)
+    if (req) {
+      const allDay = !!req.allDay
+      const start = req.start ? new Date(allDay ? `${req.start.slice(0, 10)}T00:00:00` : req.start) : atMinutes(startOfDay(new Date()), (new Date().getHours() + 1) * 60)
+      const end = req.end ? new Date(allDay ? `${req.end.slice(0, 10)}T00:00:00` : req.end) : allDay ? addDays(start, 1) : new Date(start.getTime() + 3600_000)
+      const draft = draftFromRange(start, end, allDay, defaultCalendar())
+      setEditing({ event: null, draft: { ...draft, title: req.title ?? '', guests: req.guests ?? [], description: req.description ?? '', location: req.location ?? '' } })
+    }
+    wantedUid.current = win.props.event ?? null
+  }, [win.props.t]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const uid = wantedUid.current
+    if (!uid || !data) return
+    const e = data.events.find((x) => x.uid === uid)
+    if (!e) return
+    wantedUid.current = null
+    setEditing({ event: e, draft: draftFromEvent(e) })
+  }, [data])
 
   const choose: Choose = useCallback((question, verb) => new Promise((resolve) => setAsking({ question, verb, resolve })), [])
   const answer = (a: 'one' | 'all' | null) => {
@@ -166,7 +207,7 @@ export function CalendarApp({ win }: { win: WinState }) {
     if (writable.some((c) => c.id === lastCalendar)) return lastCalendar!
     return (writable.find((c) => c.primary) ?? writable[0])?.id ?? ''
   }
-  const open = (e: CalendarEvent) => (isTaskEvent(e) ? openTask(e.task.id) : setEditing({ event: e, draft: draftFromEvent(e) }))
+  const open = (e: CalendarEvent) => (isTaskEvent(e) ? openTask(e.task.id) : isBirthdayEvent(e) ? openContact(e.person.contact.id) : setEditing({ event: e, draft: draftFromEvent(e) }))
   const create = (start: Date, end: Date, allDay: boolean) => setEditing({ event: null, draft: draftFromRange(start, end, allDay, defaultCalendar()) })
   const newEvent = () => {
     // The next whole hour today, or 09:00 on the day in view.
@@ -239,6 +280,11 @@ export function CalendarApp({ win }: { win: WinState }) {
   /** Right-click: on an event, what can be done with it; on an empty spot, a new event there. */
   const menu = (ev: MouseEvent, e: CalendarEvent | null, at: Date, allDay: boolean) => {
     const writableTask = e && isTaskEvent(e) && !!taskLists?.find((l) => l.id === e.task.list)?.writable
+    const guests = e ? (e.attendees ?? []).filter((a) => !a.self).map((a) => a.email) : []
+    if (e && isBirthdayEvent(e)) {
+      const email = e.person.contact.emails[0]?.value
+      return openContextMenu(ev, [{ label: 'Open contact', onSelect: () => open(e) }, ...(email ? [{ label: `Email ${email}`, onSelect: () => composeMail({ to: [email] }) }] : [])])
+    }
     const items: MenuItem[] = e && isTaskEvent(e)
       ? [
           { label: 'Open in Tasks', onSelect: () => openTask(e.task.id) },
@@ -255,6 +301,7 @@ export function CalendarApp({ win }: { win: WinState }) {
           { label: e.editable ? 'Open' : 'Show details', onSelect: () => open(e) },
           ...(e.meet ? [{ label: 'Join the call', onSelect: () => openLink(e.meet!) }] : []),
           ...(e.url ? [{ label: 'Open in Google Calendar', onSelect: () => openLink(e.url!) }] : []),
+          ...(guests.length ? [{ label: 'Email guests', onSelect: () => composeMail({ to: guests, subject: e.title }) }] : []),
           ...(e.editable && !e.recurring && writable.length > 1
             ? [{ label: 'Move to', submenu: writable.map((c) => ({ label: c.name, swatch: c.color, checked: c.id === e.calendarId, disabled: c.id === e.calendarId, onSelect: () => moveTo(e, c) })) }]
             : []),
@@ -266,6 +313,80 @@ export function CalendarApp({ win }: { win: WinState }) {
         ]
     openContextMenu(ev, items)
   }
+
+  // .ics files dropped on the calendar: their events, shown first, imported into the calendar picked.
+  const importIcs = async (files: { name: string; blob: Blob }[]) => {
+    const found: IcsEvent[] = []
+    for (const f of files) found.push(...parseIcs(await f.blob.text()))
+    if (!found.length) return notify({ title: 'Nothing to import', body: files.length === 1 ? `${files[0].name} has no events` : 'Those files have no events', transient: true })
+    if (!writable.length) return notify({ title: 'No calendar to import into', body: 'Connect a calendar that can be written to first', transient: true })
+    let target = defaultCalendar()
+    const when = (x: IcsEvent) => (x.allDay ? new Date(`${x.start}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : new Date(x.start).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }))
+    const answer = await askWith({
+      title: found.length === 1 ? 'Import this event?' : `Import ${found.length} events?`,
+      body: (
+        <div className="ca-import">
+          <ul className="ca-import-list">
+            {found.slice(0, 12).map((x, i) => (
+              <li key={i}>
+                <strong>{x.title}</strong>
+                <span className="muted">
+                  {when(x)}
+                  {x.recurrence ? ' · repeats' : ''}
+                  {x.location ? ` · ${x.location}` : ''}
+                </span>
+              </li>
+            ))}
+            {found.length > 12 && <li className="muted">and {found.length - 12} more</li>}
+          </ul>
+          <label className="ca-import-into">
+            Into
+            <select defaultValue={target} onChange={(e) => (target = e.target.value)}>
+              {writable.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} · {c.source ?? 'Google'}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="muted">Guests are left out, so nobody is sent an invitation.</p>
+        </div>
+      ),
+      buttons: [
+        { id: 'cancel', label: 'Cancel' },
+        { id: 'import', label: 'Import', primary: true },
+      ],
+    })
+    if (answer !== 'import') return
+    let done = 0
+    const failed: string[] = []
+    for (const x of found) {
+      try {
+        await createEvent(target, x)
+        done++
+      } catch (e) {
+        failed.push(`${x.title}: ${(e as Error).message}`)
+      }
+    }
+    setLastCalendar(target)
+    if (found[0]) setAnchor(startOfDay(new Date(found[0].allDay ? `${found[0].start}T00:00:00` : found[0].start)))
+    notify({ title: done === 1 ? 'Imported 1 event' : `Imported ${done} events`, body: failed.length ? `Not imported: ${failed.slice(0, 3).join('; ')}` : writable.find((c) => c.id === target)?.name, transient: !failed.length })
+  }
+  const isIcs = (name: string) => /\.(ics|ical|ifb|icalendar)$/i.test(name)
+  useDropTarget(
+    rootRef,
+    {
+      accept: (d) => (d.os || d.items.some((i) => i.kind === 'file' && !i.dir && isIcs(i.name)) ? 'copy' : null),
+      drop: async (d) => {
+        const files: { name: string; blob: Blob }[] = []
+        if (d.os) for (const p of await d.files()) if (isIcs(p.file.name) || p.file.type === 'text/calendar') files.push({ name: p.file.name, blob: p.file })
+        for (const i of d.items) if (i.kind === 'file' && !i.dir && isIcs(i.name)) files.push({ name: i.name, blob: await readBytes(i.path) })
+        if (!files.length) return notify({ title: 'Only .ics files can be imported', transient: true })
+        await importIcs(files).catch((e: Error) => setError(e.message))
+      },
+    },
+    connected,
+  )
 
   const onKey = (e: KeyboardEvent) => {
     if (editing || asking || e.metaKey || e.ctrlKey || e.altKey) return
@@ -383,6 +504,14 @@ export function CalendarApp({ win }: { win: WinState }) {
                   ))}
               </section>
             ))}
+            <section className="ca-cals">
+              <h4>Contacts</h4>
+              <label className="ca-cal" title="Your contacts' birthdays and anniversaries (read-only)">
+                <input type="checkbox" checked={birthdaysOn} onChange={(e) => setCalendarShown(BIRTHDAYS, e.target.checked)} style={{ accentColor: BIRTHDAY_COLOR }} />
+                <span className="ca-cal-name">Birthdays</span>
+                <span className="ca-ro">read-only</span>
+              </label>
+            </section>
             {!!taskLists?.length && (
               <section className="ca-cals">
                 <h4>Tasks</h4>

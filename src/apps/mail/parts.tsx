@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react'
 import { openContextMenu, openMenuAt, type MenuItem } from '../../os/ContextMenu'
 import { notify } from '../../os/notify'
-import { composeMail, inviteHandlerOf, personHandlerOf, suggestPeople, type Address, type Invite, type InviteAnswer, type MessageRef, type Person } from '../../data/mail'
+import { Avatar as PersonAvatar, PeoplePicker, parseAddresses as parsePeople, type Person as PickedPerson } from '../contacts/people'
+import { composeMail, inviteHandlerOf, personHandlerOf, suggestPeople, type Address, type Invite, type InviteAnswer, type InviteStatus, type MessageRef, type Person } from '../../data/mail'
 
 // Pieces of the Mail app: the sandboxed frame HTML mail is shown in, plain text with its links
 // and quotes, the invitation card, recipient fields and what a click on a person does.
@@ -31,9 +32,17 @@ details.mail-quote[open] > summary { margin-bottom: 8px; }
 </style></head><body>${html}</body></html>`
 }
 
+/**
+ * mailto: links in HTML mail go to Mail's composer: the frame runs no scripts, so they become this
+ * site's /?mailto= address, which opens MvL OS (in a new tab, as every link in the frame does)
+ * with the message ready to write.
+ */
+const composeLinks = (html: string) =>
+  html.replace(/href="(mailto:[^"]*)"/gi, (_, href: string) => `href="${location.origin}/?mailto=${encodeURIComponent(href.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'))}"`)
+
 /** HTML mail: a sandboxed frame (no scripts, no same-origin), as tall as the reading pane allows. */
 export function MessageFrame({ html, images, tall }: { html: string; images: boolean; tall: boolean }) {
-  const doc = useMemo(() => frameDoc(html, images), [html, images])
+  const doc = useMemo(() => frameDoc(composeLinks(html), images), [html, images])
   return <iframe className={`ml-frame ${tall ? 'is-tall' : ''}`} sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={doc} title="Message" referrerPolicy="no-referrer" />
 }
 
@@ -135,7 +144,10 @@ export function PlainText({ text }: { text: string }) {
 /** A click on a sender or recipient: Contacts' handler when it has one, otherwise copy or write. */
 export function showPerson(person: Address, e: MouseEvent, more: MenuItem[] = []) {
   const handler = personHandlerOf()
-  if (handler) return handler(person, { x: e.clientX, y: e.clientY, anchor: e.currentTarget as Element })
+  if (handler) {
+    e.preventDefault()
+    return handler(person, { x: e.clientX, y: e.clientY, anchor: e.currentTarget as Element, menu: e.type === 'contextmenu' }, more)
+  }
   const label = person.name ? `${person.name} <${person.email}>` : person.email
   const items: MenuItem[] = [
     { label: 'Copy address', hint: label, onSelect: () => void navigator.clipboard?.writeText(person.email).then(() => notify({ title: 'Address copied', body: person.email, transient: true })).catch(() => {}) },
@@ -184,26 +196,47 @@ function inviteWhen(inv: Invite): string {
   return `${day}, ${t(s)}${e ? ` – ${sameDay ? t(e) : `${e.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${t(e)}`}` : ''}`
 }
 
-/** A calendar invitation in a message: what, when, where and from whom, with answers once Calendar takes them. */
+const ANSWER_LABEL: Record<InviteAnswer, string> = { accepted: 'Accept', tentative: 'Maybe', declined: 'Decline' }
+const ANSWERED: Record<string, string> = { accepted: 'You accepted', tentative: 'You said maybe', declined: 'You declined', 'needs-action': 'Not answered yet' }
+
+/**
+ * A calendar invitation in a message: what, when, where and from whom, with what Calendar says
+ * about it once it plugs in (setInviteHandler): your answer and where the event is, Accept, Maybe
+ * and Decline for an invitation, removing a cancelled event, and writing a guest's reply onto your
+ * own event.
+ */
 export function InviteCard({ invite, message }: { invite: Invite; message: MessageRef }) {
   const handler = inviteHandlerOf()
-  const [busy, setBusy] = useState<InviteAnswer | null>(null)
-  const [done, setDone] = useState<InviteAnswer | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [status, setStatus] = useState<InviteStatus | null>(null)
   const label = invite.method === 'REQUEST' ? 'Invitation' : invite.method === 'CANCEL' ? 'Cancelled' : invite.method === 'REPLY' ? 'Reply' : invite.method === 'COUNTER' ? 'New time proposed' : invite.method.toLowerCase()
-  const answer = async (a: InviteAnswer) => {
-    if (!handler) return
-    setBusy(a)
+  useEffect(() => {
+    let live = true
+    setStatus(null)
+    handler?.status?.(invite, message).then(
+      (s) => live && setStatus(s),
+      () => live && setStatus(null),
+    )
+    return () => {
+      live = false
+    }
+  }, [message.id, message.account]) // eslint-disable-line react-hooks/exhaustive-deps
+  const run = async (what: string, work: () => Promise<InviteStatus | void>) => {
+    setBusy(what)
     try {
-      await handler.answer(invite, a, message)
-      setDone(a)
+      const s = await work()
+      if (s) setStatus(s)
     } catch (e) {
-      notify({ title: 'Could not answer', body: (e as Error).message, transient: true })
+      notify({ title: 'Could not do that', body: (e as Error).message, transient: true })
     } finally {
       setBusy(null)
     }
   }
+  const answer = status?.answer ?? null
+  const where = status?.calendar
+  const replies = status?.replies.length ? status.replies : invite.replies.map((r) => ({ email: r.email, name: r.name, answer: r.status.toLowerCase(), inCalendar: null, fromSender: true }))
   return (
-    <div className={`ml-invite ${invite.method === 'CANCEL' ? 'is-cancelled' : ''}`}>
+    <div className={`ml-invite ${invite.method === 'CANCEL' || status?.cancelled ? 'is-cancelled' : ''}`}>
       <div className="ml-invite-date" aria-hidden>
         {invite.start ? (
           <>
@@ -226,19 +259,67 @@ export function InviteCard({ invite, message }: { invite: Invite; message: Messa
           </span>
         )}
         {invite.method === 'REPLY' &&
-          invite.replies.map((r) => (
-            <span key={r.email}>
-              {r.name || r.email} {STATUS[r.status] ?? 'answered'} this.
+          replies.map((r) => (
+            <span key={r.email} className="ml-invite-reply">
+              {r.name || r.email} {STATUS[r.answer.toUpperCase()] ?? 'answered'} this.
+              {r.inCalendar === true && <span className="muted"> Your event shows it.</span>}
+              {status?.organiser && r.fromSender && r.inCalendar === false && handler?.apply && (
+                <button className="btn btn-small" disabled={!!busy} onClick={() => void run('apply', () => handler.apply!(invite, message))}>
+                  {busy === 'apply' ? '…' : 'Update your event'}
+                </button>
+              )}
             </span>
           ))}
         {invite.method === 'REQUEST' && (
+          <>
+            {status && (
+              <span className="ml-invite-state">
+                {[answer ? ANSWERED[answer] : null, where ? `In ${where}` : status.canAnswer ? 'Not in your calendars yet' : null].filter(Boolean).join(' · ')}
+              </span>
+            )}
+            <div className="ml-invite-actions">
+              {(['accepted', 'tentative', 'declined'] as InviteAnswer[]).map((a) => (
+                <button
+                  key={a}
+                  className={`btn btn-small ${answer === a ? 'btn-primary' : ''}`}
+                  aria-pressed={answer === a}
+                  disabled={!handler || !!busy || (!!status && !status.canAnswer)}
+                  title={handler ? undefined : 'Coming soon'}
+                  onClick={() => void run(a, async () => (await handler!.answer(invite, a, message)) ?? undefined)}
+                >
+                  {busy === a ? '…' : ANSWER_LABEL[a]}
+                </button>
+              ))}
+              {!handler && <span className="ml-soon">Coming soon</span>}
+              {handler?.open && invite.start && (
+                <button className="link-btn" onClick={() => handler.open!(invite, message)}>
+                  Open in Calendar
+                </button>
+              )}
+            </div>
+          </>
+        )}
+        {invite.method === 'CANCEL' && status && (
           <div className="ml-invite-actions">
-            {(['accepted', 'tentative', 'declined'] as InviteAnswer[]).map((a) => (
-              <button key={a} className={`btn btn-small ${done === a ? 'btn-primary' : ''}`} disabled={!handler || !!busy} title={handler ? undefined : 'Coming soon'} onClick={() => void answer(a)}>
-                {busy === a ? '…' : a === 'accepted' ? 'Accept' : a === 'tentative' ? 'Maybe' : 'Decline'}
-              </button>
-            ))}
-            {!handler && <span className="ml-soon">Coming soon</span>}
+            {where && !status.cancelled ? (
+              <>
+                <span className="muted">Still in {where}.</span>
+                {handler?.remove && (
+                  <button className="btn btn-small" disabled={!!busy} onClick={() => void run('remove', () => handler.remove!(invite, message))}>
+                    {busy === 'remove' ? '…' : 'Remove from calendar'}
+                  </button>
+                )}
+              </>
+            ) : (
+              <span className="muted">Not in your calendars.</span>
+            )}
+          </div>
+        )}
+        {invite.method === 'REPLY' && where && handler?.open && (
+          <div className="ml-invite-actions">
+            <button className="link-btn" onClick={() => handler.open!(invite, message)}>
+              Open in Calendar
+            </button>
           </div>
         )}
       </div>
@@ -249,118 +330,26 @@ export function InviteCard({ invite, message }: { invite: Invite; message: Messa
 // ---------------------------------------------------------------------------------------------
 // Recipient fields
 
-const ADDRESS = /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]+$/
-
 /** "Name <a@b.c>", "a@b.c" or several of them, as addresses (whatever is not one is left out). */
-export function parseAddresses(text: string): Address[] {
-  const out: Address[] = []
-  for (const part of text.split(/[,;\n]+/)) {
-    const m = /^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/.exec(part) ?? null
-    const email = (m ? m[2] : part).trim()
-    if (ADDRESS.test(email)) out.push({ name: m?.[1].trim() || null, email })
-  }
-  return out
-}
+export const parseAddresses = (text: string): Address[] => parsePeople(text).map((p) => ({ name: p.name ?? null, email: p.email }))
 
 /**
- * To, Cc and Bcc: addresses as chips, typed or picked from `suggest` (recent correspondents now;
- * Contacts' people once it plugs in through setSuggestProvider).
+ * To, Cc and Bcc: Contacts' people picker (your contacts as you type, groups, several pasted at
+ * once), with what `suggest` says after them: Contacts plugs in through setSuggestProvider with
+ * its people first and recent correspondents after; until then, recent correspondents.
  */
 export function RecipientField({ label, value, onChange, account, autoFocus, suggest = suggestPeople }: { label: string; value: Address[]; onChange: (v: Address[]) => void; account: number; autoFocus?: boolean; suggest?: (q: string, account: number | null) => Promise<Person[]> }) {
-  const [text, setText] = useState('')
-  const [options, setOptions] = useState<Person[]>([])
-  const [active, setActive] = useState(0)
-  const [focused, setFocused] = useState(false)
-  const input = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    const q = text.trim()
-    if (!focused || q.length < 1) return setOptions([])
-    let live = true
-    const t = setTimeout(() => {
-      suggest(q, account)
-        .then((list) => live && (setOptions(list.filter((p) => !value.some((v) => v.email.toLowerCase() === p.email.toLowerCase())).slice(0, 8)), setActive(0)))
-        .catch(() => live && setOptions([]))
-    }, 150)
-    return () => {
-      live = false
-      clearTimeout(t)
-    }
-  }, [text, focused, account]) // eslint-disable-line react-hooks/exhaustive-deps
-  const add = (list: Address[]) => {
-    const fresh = list.filter((a) => !value.some((v) => v.email.toLowerCase() === a.email.toLowerCase()))
-    if (fresh.length) onChange([...value, ...fresh])
-    setText('')
-    setOptions([])
-  }
-  const commit = () => {
-    const parsed = parseAddresses(text)
-    if (parsed.length) add(parsed)
-    return parsed.length > 0
-  }
-  const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'ArrowDown' && options.length) return e.preventDefault(), setActive((a) => (a + 1) % options.length)
-    if (e.key === 'ArrowUp' && options.length) return e.preventDefault(), setActive((a) => (a - 1 + options.length) % options.length)
-    if ((e.key === 'Enter' || e.key === 'Tab') && options.length && text.trim()) {
-      e.preventDefault()
-      const p = options[active]
-      return add([{ name: p.name ?? null, email: p.email }])
-    }
-    if (e.key === 'Enter' || e.key === ',' || e.key === ';') {
-      if (text.trim()) {
-        e.preventDefault()
-        commit()
-      }
-      return
-    }
-    if (e.key === 'Escape' && options.length) return e.stopPropagation(), setOptions([])
-    if (e.key === 'Backspace' && !text && value.length) onChange(value.slice(0, -1))
-  }
+  const people = useMemo<PickedPerson[]>(() => value.map((a) => (a.name ? { email: a.email, name: a.name } : { email: a.email })), [value])
   return (
-    <div className="ml-field ml-recipients" onClick={() => input.current?.focus()}>
+    <div className="ml-field ml-recipients">
       <span className="ml-field-label">{label}</span>
-      <div className="ml-chips">
-        {value.map((a) => (
-          <span key={a.email} className={`ml-chip ${ADDRESS.test(a.email) ? '' : 'is-bad'}`} title={a.name ? `${a.name} <${a.email}>` : a.email}>
-            {a.name || a.email}
-            <button type="button" aria-label={`Remove ${a.email}`} onClick={(e) => (e.stopPropagation(), onChange(value.filter((v) => v !== a)))}>
-              ×
-            </button>
-          </span>
-        ))}
-        <input
-          ref={input}
-          value={text}
-          autoFocus={autoFocus}
-          onChange={(e) => {
-            const v = e.target.value
-            // A pasted list: the complete addresses in it become chips at once.
-            if (/[,;\n]/.test(v) && parseAddresses(v).length) {
-              const rest = v.split(/[,;\n]/).pop() ?? ''
-              add(parseAddresses(v.slice(0, v.length - rest.length)))
-              setText(rest)
-            } else setText(v)
-          }}
-          onKeyDown={onKey}
-          onFocus={() => setFocused(true)}
-          onBlur={() => {
-            setFocused(false)
-            commit()
-          }}
-          aria-label={label}
-          autoComplete="off"
-          spellCheck={false}
-        />
-      </div>
-      {options.length > 0 && (
-        <ul className="ml-suggest" role="listbox">
-          {options.map((p, i) => (
-            <li key={p.email} role="option" aria-selected={i === active} className={i === active ? 'is-on' : ''} onMouseDown={(e) => (e.preventDefault(), add([{ name: p.name ?? null, email: p.email }]))}>
-              <strong>{p.name || p.email}</strong>
-              {p.name && <span className="muted">{p.email}</span>}
-            </li>
-          ))}
-        </ul>
-      )}
+      <PeoplePicker
+        value={people}
+        onChange={(next) => onChange(next.map((p) => ({ name: p.name ?? null, email: p.email })))}
+        more={(q) => suggest(q, account).then((list) => list.map((p) => (p.name ? { email: p.email, name: p.name } : { email: p.email })))}
+        label={label}
+        autoFocus={autoFocus}
+      />
     </div>
   )
 }
@@ -386,15 +375,7 @@ export const longDate = (iso: string) => {
   return isNaN(d.getTime()) ? '' : d.toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-/** A coloured circle with someone's initial. */
+/** A person's picture: their contact's photo, or their initials on a colour of their own. */
 export function Avatar({ person, size = 32 }: { person: Address | undefined; size?: number }) {
-  const key = (person?.email ?? '?').toLowerCase()
-  let h = 0
-  for (const c of key) h = (h * 31 + c.charCodeAt(0)) % 360
-  const letter = (person?.name || person?.email || '?').replace(/^["'\s]+/, '').charAt(0).toUpperCase()
-  return (
-    <span className="ml-avatar" style={{ width: size, height: size, background: `hsl(${h} 45% 45%)`, fontSize: size * 0.45 }} aria-hidden>
-      {letter}
-    </span>
-  )
+  return <PersonAvatar email={person?.email} name={person?.name || person?.email || '?'} size={size} />
 }

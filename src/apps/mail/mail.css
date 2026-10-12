@@ -649,7 +649,7 @@
   flex-direction: column;
   min-height: 0;
 }
-.ml-compose.is-drop::after {
+.ml-compose[data-drop-over]::after {
   position: absolute;
   inset: 6px;
   display: grid;
@@ -659,6 +659,9 @@
   color: var(--fg-bright);
   content: 'Drop to attach';
   pointer-events: none;
+}
+.ml-compose[data-drop-over='link']::after {
+  content: 'Drop to add the link';
 }
 .ml-compose-head {
   display: flex;
@@ -873,4 +876,43 @@
   .ml-box {
     padding: 10px 12px;
   }
+}
+
+/* Contacts' people picker in To, Cc and Bcc: borderless, filling the row. */
+.ml-recipients .pp-field {
+  flex: 1;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+}
+.ml-to-row .ml-recipients .pp-field {
+  padding-right: 54px;
+}
+/* Senders and recipients as chips: wrapping instead of an ellipsis. */
+.ml-msg-to {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 4px;
+  overflow: visible;
+  white-space: normal;
+}
+.ml-msg-to > span {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 4px;
+}
+.ml-msg-who .pp-chip {
+  vertical-align: middle;
+}
+.ml-invite-state {
+  font-size: 12px;
+  color: var(--fg-bright);
+}
+.ml-invite-reply {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }

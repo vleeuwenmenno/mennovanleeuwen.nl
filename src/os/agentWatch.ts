@@ -1,3 +1,4 @@
+import { openFromParams } from './openUrl'
 import { enablePush } from './push'
 
 // The page's side of system notifications. Agents answers, calendar reminders and the rest are told
@@ -32,10 +33,6 @@ export function startAgentWatch() {
     const data = e.data as { openThread?: unknown; openUrl?: unknown } | null
     if (typeof data?.openThread === 'string') return openThread(data.openThread)
     if (typeof data?.openUrl !== 'string') return
-    const params = new URL(data.openUrl, location.origin).searchParams
-    const app = params.get('open')
-    const thread = params.get('thread')
-    if (app === 'agents' && thread) openThread(thread)
-    else if (app && /^[a-z]{2,20}$/.test(app)) window.dispatchEvent(new CustomEvent('mvlos:open', { detail: app }))
+    openFromParams(new URL(data.openUrl, location.origin).searchParams, (app, props) => window.dispatchEvent(new CustomEvent('mvlos:open', { detail: props ? { app, props } : app })))
   })
 }

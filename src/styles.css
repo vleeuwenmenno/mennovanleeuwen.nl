@@ -9374,3 +9374,13 @@ kbd {
     overscroll-behavior-x: none;
   }
 }
+
+/* A contact in Spotlight's preview. */
+.sp-contact {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+}
+.sp-contact h4 {
+  margin: 4px 0 0;
+}

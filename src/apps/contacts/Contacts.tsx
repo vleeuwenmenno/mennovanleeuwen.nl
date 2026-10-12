@@ -20,6 +20,7 @@ import {
   type Contact,
   type ContactFields,
 } from '../../data/contacts'
+import { openMailto } from '../../data/links'
 import { readBlob, uploadBlob } from '../../data/seafile'
 import { signIn, useAccount } from '../../os/account'
 import { openContextMenu, openMenuAt, type MenuItem } from '../../os/ContextMenu'
@@ -258,7 +259,7 @@ export function ContactsApp({ win }: { win: WinState }) {
     return [
       { label: 'Open', onSelect: () => select(c) },
       ...(book?.writable ? [{ label: 'Edit', shortcut: 'E', onSelect: () => edit(c) }] : []),
-      ...(c.emails[0] ? [{ label: `Email ${c.emails[0].value}`, onSelect: () => void window.open(`mailto:${c.emails[0].value}`, '_self') }] : []),
+      ...(c.emails[0] ? [{ label: `Email ${c.emails[0].value}`, onSelect: () => openMailto(`mailto:${c.emails[0].value}`) }] : []),
       ...(c.emails[0] ? [{ label: 'Copy email address', onSelect: () => void navigator.clipboard?.writeText(c.emails[0].value) }] : []),
       { separator: true },
       ...(targets.length && book?.writable ? [{ label: 'Move to', submenu: targets.map((b) => ({ label: b.id === 'local' ? b.name : `${b.name} · ${b.source}`, onSelect: () => void run(() => moveContact(c, b.id).then((m) => setView({ kind: 'contact', id: m.id }))) })) }] : []),

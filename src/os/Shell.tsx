@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { getLaunchers, launch as launchLink, launcherImage, launchersAreFiles, useLaunchers, writeLauncherFile } from '../data/launchers'
 import { dropInTrash, trashOp } from '../data/fileDrop'
+import { openFromParams } from './openUrl'
 import { useDropTarget, type Drag, type DragItem, type DropOp } from './dnd'
 import { filesFor, openWith } from './appDrops'
 import { HOME } from '../terminal/vfs'
@@ -791,14 +792,15 @@ export function Shell() {
   useEffect(initBackButton, [])
   useEffect(() => setBackFocus(wm.focusedPid), [wm.focusedPid])
 
-  // App shortcuts from the installed app's icon menu (manifest.webmanifest): /?open=terminal.
+  // App shortcuts from the installed app's icon menu (manifest.webmanifest): /?open=terminal. A
+  // system notification opens what it is about (/?open=agents&thread=<id>, /?open=tasks&task=<id>),
+  // links back to a message open it (/?open=mail&message=<Message-ID>), and /?mailto= writes one
+  // (src/os/openUrl.ts).
   useEffect(() => {
     const params = new URLSearchParams(location.search)
-    const app = params.get('open') as AppId | null
-    // A system notification about an Agents answer opens its thread: /?open=agents&thread=<id>.
-    const thread = params.get('thread')
-    if (app === 'agents' && thread && /^[0-9a-f-]{36}$/.test(thread)) wm.open('agents', { thread, t: String(Date.now()) })
-    else if (app && app in APP_META && app !== 'trash') wm.open(app)
+    if (openFromParams(params, (app, props) => wm.open(app, props))) {
+      /* opened */
+    }
     // As the browser's new tab page, start in Spotlight, ready to type where to go.
     else if (newTab && linkSettings().newTabPageSpotlight) setOverlay('spotlight')
     // Back from GitHub's sign-in page: /?auth=ok|denied|error|off.
@@ -807,7 +809,7 @@ export function Shell() {
     // A refused sign-up is worth more than a toast: the account was not made.
     if (refused) setTimeout(() => void tell(refused(params.get('reason'))), 1200)
     else if (auth) setTimeout(() => notify(auth), 1200)
-    if (params.has('open') || params.has('auth') || params.has('google') || params.has('reason')) history.replaceState(null, '', location.pathname)
+    if (params.has('open') || params.has('mailto') || params.has('auth') || params.has('google') || params.has('reason')) history.replaceState(null, '', location.pathname)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

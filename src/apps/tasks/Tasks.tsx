@@ -650,7 +650,7 @@ function TaskRows({ rows, lists, now, selected, leaving, showList, reorder, onSe
                       }}
                       title={t.url}
                     >
-                      🔗 {linkLabel(t.url)}
+                      {/^message:/i.test(t.url) ? '✉' : '🔗'} {linkLabel(t.url)}
                     </a>
                   )}
                   {showList && list && (

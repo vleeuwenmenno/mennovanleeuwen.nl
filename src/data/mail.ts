@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { api, subscribeAccount, getAccount } from '../os/account'
+import type { MenuItem } from '../os/ContextMenu'
 import { synced } from '../os/synced'
 
 // Mail for the browser: the Mail app (src/apps/mail) reads and changes mail through the site's
@@ -83,6 +84,9 @@ export async function loadMailAccounts(): Promise<void> {
   }
   emitAccounts()
 }
+
+/** The linked accounts as known now (null before the first load): whether a mailto: can go to Mail. */
+export const mailAccountsNow = () => accounts
 
 let watching = false
 export function useMailAccounts(): { accounts: MailAccount[] | null; error: string | null } {
@@ -247,15 +251,16 @@ export const recentPeople = recentCorrespondents
 
 /**
  * What a click on a sender's or recipient's name does. Mail's own: a menu to copy the address or
- * write to them. Contacts can take over with `setPersonHandler()` (show or add the contact).
+ * write to them. Contacts can take over with `setPersonHandler()` (show or add the contact);
+ * `more` are Mail's own items for that person (Mail from them), to add to its menu.
  */
-export type PersonHandler = (person: Person, at: { x: number; y: number; anchor?: Element }) => void
+export type PersonHandler = (person: Person, at: { x: number; y: number; anchor?: Element; menu?: boolean }, more: MenuItem[]) => void
 let personHandler: PersonHandler | null = null
 export const setPersonHandler = (fn: PersonHandler | null) => void (personHandler = fn)
 export const personHandlerOf = () => personHandler
 
 /** A message as other apps see it, for actions on it (Make task, Create event). */
-export type MessageRef = { account: number; id: string; threadId: string; subject: string; from: Address[]; to: Address[]; receivedAt: string; text: string; invite: Invite | null }
+export type MessageRef = { account: number; id: string; threadId: string; subject: string; from: Address[]; to: Address[]; cc: Address[]; receivedAt: string; text: string; invite: Invite | null; messageId: string | null }
 export type MessageAction = { id: string; label: string; run: (m: MessageRef) => void; hint?: string }
 const actions = new Map<string, MessageAction>()
 const actionListeners = new Set<() => void>()
@@ -274,9 +279,33 @@ export function registerMessageAction(a: MessageAction): () => void {
 }
 export const messageActions = () => [...actions.values()]
 
-/** Answering an invitation (Accept, Maybe, Decline): Calendar plugs in here. Until then the buttons say "Coming soon". */
+/**
+ * Answering an invitation (Accept, Maybe, Decline): Calendar plugs in here. Until then the buttons
+ * say "Coming soon". `status` says what the card shows (your answer so far, which calendar has
+ * the event); `remove` takes a cancelled event out of the calendar and `apply` writes a guest's
+ * reply onto your event. Each answers the card's new status.
+ */
 export type InviteAnswer = 'accepted' | 'tentative' | 'declined'
-export type InviteHandler = { answer: (invite: Invite, answer: InviteAnswer, message: MessageRef) => Promise<void>; open?: (invite: Invite) => void }
+export type InviteStatus = {
+  /** Your answer so far (from your calendar's copy when there is one). */
+  answer: InviteAnswer | 'needs-action' | null
+  /** The calendar the event is in, if any, and whether it is cancelled there. */
+  calendar: string | null
+  cancelled: boolean
+  /** It can be answered (an invitation that lists you). */
+  canAnswer: boolean
+  /** A reply: each guest's answer and whether your event shows it yet (null: not on it). */
+  replies: { email: string; name: string | null; answer: string; inCalendar: boolean | null; fromSender: boolean }[]
+  /** You organise the event (a reply can be written onto it). */
+  organiser: boolean
+}
+export type InviteHandler = {
+  answer: (invite: Invite, answer: InviteAnswer, message: MessageRef) => Promise<InviteStatus | void>
+  open?: (invite: Invite, message: MessageRef) => void
+  status?: (invite: Invite, message: MessageRef) => Promise<InviteStatus>
+  remove?: (invite: Invite, message: MessageRef) => Promise<InviteStatus>
+  apply?: (invite: Invite, message: MessageRef) => Promise<InviteStatus>
+}
 let inviteHandler: InviteHandler | null = null
 export const setInviteHandler = (h: InviteHandler | null) => void (inviteHandler = h)
 export const inviteHandlerOf = () => inviteHandler
@@ -301,14 +330,24 @@ const open = (props: Record<string, string>) => window.dispatchEvent(new CustomE
 
 /** Opens Mail with a new message, filled in (Contacts' "Send email", Calendar's "Email guests"). */
 export function composeMail(req: ComposeRequest = {}) {
+  open({ compose: queueCompose(req), ...(req.account ? { account: String(req.account) } : {}) })
+}
+
+/** Keeps a message to write for the Mail app, which takes it by the key answered (props.compose). */
+export function queueCompose(req: ComposeRequest): string {
   const key = crypto.randomUUID()
   pending.set(key, req)
-  open({ compose: key, ...(req.account ? { account: String(req.account) } : {}) })
+  return key
 }
 
 /** Opens Mail on one message (its conversation), by its JMAP id; `account` when several are linked. */
 export function openMail(id: string, opts: { account?: number } = {}) {
   open({ email: id, ...(opts.account ? { account: String(opts.account) } : {}) })
+}
+
+/** Opens Mail on the message with this Message-ID, in whichever linked account has it (a task's or an event's link back). */
+export function openMailByMessageId(messageId: string) {
+  open({ message: messageId })
 }
 
 /** A mailto: link as a compose request. */
