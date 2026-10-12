@@ -98,6 +98,7 @@ const APPS: Record<string, AppId> = {
   trash: 'trash',
   notebook: 'notebook',
   agents: 'agents',
+  contacts: 'contacts',
   settings: 'settings',
   mcserver: 'mcserver',
 }
@@ -134,6 +135,8 @@ const APP_NAMES: Record<AppId, string> = {
   linkforge: 'link-forge',
   calendar: 'calendar',
   agents: 'agents',
+  contacts: 'contacts',
+  tasks: 'tasks',
 }
 
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */

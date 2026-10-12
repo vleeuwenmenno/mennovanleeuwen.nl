@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { CalendarApp } from '../apps/calendar/Calendar'
+import { ContactsApp } from '../apps/contacts/Contacts'
 import { Contact } from '../apps/Contact'
 import { Cv } from '../apps/Cv'
 import { gameLinkItems, Games } from '../apps/games/Games'
@@ -24,6 +25,7 @@ import { Office, officeTitle } from '../apps/Office'
 import { Archive, archiveTitle } from '../apps/Archive'
 import { Zed } from '../apps/Zed'
 import { Agents } from '../apps/Agents'
+import { TasksApp } from '../apps/tasks/Tasks'
 import type { MenuItem } from './ContextMenu'
 import { HANDLE } from './identity'
 import type { AppId, useWM, WinState } from './wm'
@@ -86,6 +88,8 @@ export const APP_META: Record<AppId, AppMeta> = {
   contact: { title: 'New message', dock: 'Contact', blurb: 'Get in touch', size: [560, 500], render: () => <Contact /> },
   games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, Pool, Gladiator, Empires At War, Breakout', size: [720, 640], titleOf: (w) => gameInfo(w.props.game)?.name ?? 'Games', sizeOf: (p) => gameInfo(p.game)?.size, render: (w) => <Games win={w} />, menu: gamesMenu },
   calendar: { title: 'Calendar', dock: 'Calendar', blurb: 'Your Google and CalDAV calendars: plan, move and invite', size: [1000, 660], render: (w) => <CalendarApp win={w} />, menu: settingsMenu('Calendar', 'calendar') },
+  contacts: { title: 'Contacts', dock: 'Contacts', blurb: 'Your people: on this site, Fastmail, iCloud and other CardDAV', size: [920, 620], render: (w) => <ContactsApp win={w} />, menu: settingsMenu('Contacts', 'contacts') },
+  tasks: { title: 'Tasks', dock: 'Tasks', blurb: 'Reminders and to-dos: your CalDAV lists, or lists on this site', size: [880, 600], render: (w) => <TasksApp win={w} /> },
   agents: { title: 'Agents', dock: 'Agents', blurb: 'Research assistant: quick answers or deep research, with memory', size: [920, 640], render: (w) => <Agents win={w} /> },
   notebook: { title: 'Notebook', dock: 'Notebook', blurb: 'Your notes, in Markdown, on any device', size: [860, 560], render: (w) => <Notebook win={w} /> },
   // A desktop widget (props.kind, props.id): a sticky note, the weather... See src/widgets.
