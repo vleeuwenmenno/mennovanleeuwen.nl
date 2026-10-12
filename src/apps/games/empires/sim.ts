@@ -68,7 +68,9 @@ export type Unit = {
   hull: number
   hullMax: number
   shield: number
-  hps: { hp: number; max: number }[]
+  /** Its modules (one per hardpoint): `fix` is how far a Field repair has got rebuilding a shot-off
+   * station module, in seconds of one craft's welding (see FIELD_REPAIR.rebuild). */
+  hps: { hp: number; max: number; fix?: number }[]
   guns: Gun[]
   order: Order
   /** Idle ships drift back here after chasing something. */
@@ -2566,16 +2568,43 @@ function wings(w: World, dt: number) {
 
 // --- Field repair ------------------------------------------------------------------------------------
 
-/** How much of a ship's hull is missing, plus a little for modules that are hurt but still standing
- * (Field repair mends those, not shot-off ones). */
+/** How much of a ship's hull is missing, plus a little for modules that are hurt but still standing,
+ * and on a station for each shot-off module too (Field repair rebuilds those only on stations). */
 function mendNeed(t: Unit) {
   let mods = 0
-  for (const h of t.hps) if (h.hp > 0 && h.hp < h.max) mods += 1 - h.hp / h.max
-  return 1 - t.hull / t.hullMax + (t.hps.length ? (mods / t.hps.length) * 0.5 : 0)
+  let lost = 0
+  for (const h of t.hps) {
+    if (h.hp <= 0) lost++
+    else if (h.hp < h.max) mods += 1 - h.hp / h.max
+  }
+  const rebuild = t.t.tier === 'station' ? lost * FIELD_REPAIR.lost : 0
+  return 1 - t.hull / t.hullMax + (t.hps.length ? (mods / t.hps.length) * 0.5 : 0) + rebuild
+}
+
+/**
+ * A repair craft's share of rebuilding a station's shot-off modules: one module at a time, the one
+ * with the most strength first. That puts the hangar first (it brings the defense wing back), then
+ * the shield generators, then the turbolasers, the sensor, refinery and dock, and the flak last,
+ * which is the order a station needs them in, without a list of its own to keep up. Equals go by
+ * their place on the station, so every machine picks the same one. Progress stays on the module
+ * between runs, so a lone craft finishes the job on its next run.
+ */
+function rebuildModule(t: Unit, dt: number) {
+  let pick = -1
+  t.hps.forEach((h, i) => {
+    if (h.hp <= 0 && (pick < 0 || h.max > t.hps[pick].max)) pick = i
+  })
+  if (pick < 0) return
+  const h = t.hps[pick]
+  h.fix = (h.fix ?? 0) + dt
+  if (h.fix < FIELD_REPAIR.rebuild) return
+  h.fix = 0
+  h.hp = h.max * FIELD_REPAIR.back
 }
 
 /** Why a repair craft of `owner` can't mend `t`, or null when it can: a station, or a ship of
- * gunship class or bigger, on our side, finished, and with something to mend. */
+ * gunship class or bigger, on our side, finished, and with something to mend (on a station, a
+ * shot-off module counts). */
 export function cantMend(w: World, owner: Owner, t: Unit | undefined): string | null {
   if (!t || t.dead || foes(w, t.owner, owner)) return 'Pick one of our ships or stations'
   if (!MENDABLE.includes(t.t.tier)) return 'Field repair works on stations and on gunships and bigger'
@@ -2626,7 +2655,7 @@ const MEND_LOOK = 0.5
 
 /**
  * Field repair: craft on a run weld their patient while in reach (hull, and modules that still
- * stand), ending the run early once it's whole or gone. Idle (or guarding) crews with the ability
+ * stand, and on a station the shot-off ones too), ending the run early once it's whole or gone. Idle (or guarding) crews with the ability
  * ready look round now and then and start a run on anything nearby that has lost a tenth of itself.
  */
 function fieldRepairs(w: World, dt: number) {
@@ -2645,6 +2674,8 @@ function fieldRepairs(w: World, dt: number) {
       if (d2(t!.x, t!.y, u.x, u.y) > sq(mendReach(t!.t))) continue
       t!.hull = Math.min(t!.hullMax, t!.hull + (FIELD_REPAIR.flat + FIELD_REPAIR.share * t!.hullMax) * dt)
       for (const h of t!.hps) if (h.hp > 0 && h.hp < h.max) h.hp = Math.min(h.max, h.hp + h.max * FIELD_REPAIR.share * dt)
+      // Only the main station gets its shot-off modules rebuilt; ships keep theirs lost for now.
+      if (t!.t.tier === 'station') rebuildModule(t!, dt)
       u.mending.push(t!.id)
       continue
     }
