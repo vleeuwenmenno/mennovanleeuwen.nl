@@ -3,7 +3,7 @@ import { sq } from './detmath.ts'
 import { inside, mirrored, rng, type MapDef, type Pt } from './maps.ts'
 import { clearLine, findPath, navGrid, type NavGrid } from './nav.ts'
 import {
-  ABILITIES, ARMOR_BONUS, BASE_POP, DEFENSE_WING, FIELD_REPAIR, MENDABLE, mineType, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
+  ABILITIES, ARMOR_BONUS, BASE_POP, DEFENSE_WING, FIELD_REPAIR, MENDABLE, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind,
 } from './data.ts'
@@ -140,6 +140,9 @@ export type Unit = {
   /** Its place on the arc a group of warships forms round the target they're all attacking (see
    * attackSpots), or null while it has none. */
   slot: Slot | null
+  /** A defense wing craft's parking slot round its station while it guards it (see guardSlot),
+   * handed out the first time it guards; absent until then, and in battles saved before slots. */
+  post?: number
 }
 
 /**
@@ -2002,6 +2005,9 @@ function moveUnit(w: World, u: Unit, dt: number) {
     u.ax = parent.x
     u.ay = parent.y
   }
+  // A defense wing craft with no orders of its own guards its station.
+  const home = guarded(u, parent)
+  if (home && u.post === undefined) u.post = freePost(w, u, home)
   if (u.order.k === 'guard') {
     const g = w.byId.get(u.order.id)
     if (!g || g.dead || foes(w, g.owner, u.owner)) nextOrder(u, u.x, u.y)
@@ -2026,6 +2032,13 @@ function moveUnit(w: World, u: Unit, dt: number) {
     if (!cur || !inArea(o, cur) || u.retarget <= 0) {
       u.retarget = 0.8 + rand(w) * 0.4
       u.target = areaTarget(w, u, o, cur)?.id ?? 0
+    }
+  } else if (home) {
+    // Guarding: anything inside the station's turbolaser reach, chased only a little past it.
+    if (u.retarget <= 0) {
+      u.retarget = 0.4 + rand(w) * 0.3
+      const cur = valid(w, u.target, u.owner)
+      u.target = cur && inGuardZone(home, cur, WING_GUARD.leash) ? cur.id : guardPick(w, u, home)?.id ?? 0
     }
   } else if (u.retarget <= 0) {
     u.retarget = 0.4 + rand(w) * 0.3
@@ -2112,13 +2125,23 @@ function moveUnit(w: World, u: Unit, dt: number) {
       const p = detour(w, u, wp.x, wp.y)
       steer(u, p.x, p.y, fighter ? pace : Math.min(pace, dist * 0.9 + 12), dt)
     }
+  } else if (home) {
+    // Guarding with nothing to fight: fly to its slot round the station, slow down, and park
+    // there facing out.
+    const s = guardSlot(home, u.post ?? 0)
+    const dist = M.hypot(s.x - u.x, s.y - u.y)
+    if (dist > WING_GUARD.park) {
+      // Brake in time to stop on it, and slow right down while not yet pointed at it, so the
+      // craft turns in tight and settles instead of looping round the slot.
+      const facing = M.cos(wrap(M.atan2(s.y - u.y, s.x - u.x) - u.a))
+      steer(u, s.x, s.y, Math.min(max, Math.sqrt(t.speed * 1.2 * dist)) * clamp(facing, 0.1, 1), dt)
+    } else steer(u, u.x + M.cos(s.a) * 100, u.y + M.sin(s.a) * 100, 0, dt, true)
   } else {
     // Idle: fighters circle their spot, everything else drifts back to it and waits.
     const dist = M.hypot(u.ax - u.x, u.ay - u.y)
     if (fighter) {
       const ang = w.time * 0.9 + u.id
-      // A defense wing circles its station outside the hull, not over the middle of it.
-      const r = 70 + (u.id % 4) * 18 + (parent && u.t.kind === 'wing' ? radius(parent.t) + 60 : 0)
+      const r = 70 + (u.id % 4) * 18
       steer(u, u.ax + M.cos(ang) * r, u.ay + M.sin(ang) * r, max * 0.65, dt)
     } else if (dist > 30 + radius(t) * 0.3) {
       const wp = waypoint(w, u, u.ax, u.ay)
@@ -2515,6 +2538,81 @@ function spawnWing(w: World, st: Unit) {
   const g = spawnGroup(w, t.id, st.owner, st.x + radius(st.t) + 140, st.y, st.a)
   for (const u of g) u.parent = st.id
   st.hangarT = 0
+}
+
+/**
+ * How a defense wing guards its station: it takes on anything inside the reach of the station's
+ * turbolasers, chases it at most `leash` further out, and otherwise waits parked round the station,
+ * each craft in its own slot `out` outside the hull (it counts as there within `park`).
+ */
+const WING_GUARD = { leash: 250, out: 80, park: 8 }
+
+/** The station a defense wing craft is guarding: its own, while it stands and the craft has no
+ * orders of its own (none given, or all of them done). */
+function guarded(u: Unit, parent: Unit | undefined): Unit | undefined {
+  return u.t.kind === 'wing' && parent && !parent.dead && parent.t.tier === 'station' && u.order.k === 'idle' && !u.queue.length ? parent : undefined
+}
+
+/** The first parking slot round a station that none of the rest of its wing has taken. */
+function freePost(w: World, u: Unit, st: Unit) {
+  const taken = new Set<number>()
+  for (const o of w.units) if (o !== u && !o.dead && o.parent === st.id && o.t.kind === 'wing' && o.post !== undefined) taken.add(o.post)
+  let i = 0
+  while (taken.has(i)) i++
+  return i
+}
+
+/** Where a wing craft parks while guarding: slot `post` of the squadron's, spread evenly round the
+ * station just outside its hull, and the heading it faces there (straight out). */
+export function guardSlot(st: Unit, post: number) {
+  const n = wingOf(st.t.faction).squad
+  const a = st.a + ((post % n) + 0.5) * (Math.PI * 2 / n)
+  const d = radius(st.t) + WING_GUARD.out
+  return { x: st.x + M.cos(a) * d, y: st.y + M.sin(a) * d, a }
+}
+
+/** The station's turbolasers as they sit: each mount and how far its gun reaches, research range
+ * bonuses counted, the same way `shoot` measures it. Shot-off mounts still count, so the ground
+ * the wing holds doesn't shrink as the guns are lost. */
+function turboReach(st: Unit): { x: number; y: number; r: number }[] {
+  const out: { x: number; y: number; r: number }[] = []
+  for (const g of st.guns) {
+    if (g.w.kind !== 'turbo') continue
+    const p = g.hp >= 0 ? hpPos(st, g.hp) : st
+    out.push({ x: p.x, y: p.y, r: g.w.range * st.mods.range })
+  }
+  if (!out.length) {
+    // No turbolasers at all: the plan's, from the middle.
+    const plan = STATIONS[st.t.faction].modules.find((m) => m.weapon?.kind === 'turbo')
+    out.push({ x: st.x, y: st.y, r: (plan?.weapon?.range ?? 800) * st.mods.range })
+  }
+  return out
+}
+
+/** Whether `e` is inside the station's turbolaser reach (and `extra` more): within range of one of
+ * the guns, plus half its own size, as `shoot` measures it. */
+export function inGuardZone(st: Unit, e: Unit, extra = 0, guns = turboReach(st)) {
+  const half = radius(e.t) * 0.5
+  return guns.some((g) => d2(e.x, e.y, g.x, g.y) <= sq(g.r + half + extra))
+}
+
+/** The best enemy for a guarding wing craft to take on: one inside the station's turbolaser
+ * reach, scored as pickTarget does, and more so if it's going for the station or this craft. */
+function guardPick(w: World, u: Unit, st: Unit): Unit | undefined {
+  const guns = turboReach(st)
+  const span = Math.max(...guns.map((g) => M.hypot(g.x - st.x, g.y - st.y) + g.r)) + 300
+  let best: Unit | undefined
+  let score = 0
+  near(w, st.x, st.y, span, (e) => {
+    if (!foes(w, e.owner, u.owner) || !sees(w, u.owner, e) || !inGuardZone(st, e, 0, guns)) return
+    const threat = e.target === st.id || e.target === u.id || u.hitBy === e.id ? 1.5 : 1
+    const s = ((dpsVs(u.t, e.t.tier) + 0.01) / (Math.sqrt(d2(e.x, e.y, u.x, u.y)) + 250)) * (e.t.tier === 'mine' ? 0.6 : 1) * threat
+    if (s > score) {
+      score = s
+      best = e
+    }
+  })
+  return best
 }
 
 /** Whether a defense wing craft is at home: its station stands and it's within reach of it. */
