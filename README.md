@@ -183,6 +183,11 @@ In a folder on Seafile, that folder becomes the thread's work folder:
 - `/title` shows the thread's title, who named it and the titles it had before (`/status` shows
   those too), `/title regen` asks the title model for a fresh one, and `/rename` sets your own,
   which is then kept as it is. See *Titles keep up to date* under Agents below.
+- `/compact` summarises the thread so far to free up the model's context window, and `/compact
+  keep the API details` says what the summary should keep; while the agent works it waits in the
+  queue. A rule across the screen marks the spot, `/summary` shows what was kept, and `/context`
+  and `/status` say when it was compacted and at what point it does so by itself. See
+  *Compaction* under Agents below.
 - `agents -c`/`-r` resume a thread, `agents -p` answers once for pipes, and `/help` lists the
   slash commands.
 
@@ -198,8 +203,11 @@ Agents → Skills).
 stand-in for Ollama and a mock Seafile. It has not yet run against real models, so the tool
 descriptions and system prompt are untuned. Known limits:
 
-- **Context.** There is no `/compact` and no summarising. Older tool output is cut to 1,500
-  characters, but a long coding session can still outgrow the model's context window.
+- **Context.** A summary is only as good as the model that writes it: details it leaves out are
+  gone for the agent (not for you: every message stays in the thread). The threshold works from an
+  estimate (about 4 characters a token), and a model whose window size Ollama does not report is
+  only compacted when it refuses a request as too long. A turn that is one huge message cannot be
+  compacted at all.
 - **Not in the TUI yet:**
   - Claude Code's undo/rewind, custom slash commands, hooks, MCP servers, subagents,
     background tasks and usage display
@@ -616,6 +624,43 @@ stopped first, the queue stays) and it comes back into the message box with its 
 tools did is not undone: memories, the plan, notes, calendar events and files the agent changed in
 the work folder stay as they are.
 
+**Compaction** ([`server/agents.ts`](server/agents.ts)): a long thread outgrows the model's context
+window, so it can be compacted. The thread's own model writes a structured summary of the
+conversation so far (the user's goals and requests, decisions, files and paths, the current state,
+open todos, errors and their fixes, the next step), which is saved in the thread as a boundary: a
+message with role `compact` (column `compact` holds how it came about). From then on each model
+call sends the system prompt, the summary (as a note from the app) and only the messages after the
+boundary; compacting again summarises the earlier summary with what came after it. Everything that
+is not a message reaches the model as before, in the system prompt: the todo list, plan mode and
+the permission mode, the work folder and its AGENTS.md, memory and skills. Files attached before the
+boundary are named in the note (their contents go), and a compaction in the middle of a turn keeps
+the message it was working on word for word. Ask for one with `/compact` (in the composer, with a
+suggestion as you type it, or the agents command), *Compact conversation…* in the thread's menus
+(with a box for what to keep) or *Compact now…* in the context breakdown; text after `/compact`
+steers what the summary keeps, as in Claude Code. It is sent like a message, so while a turn runs
+it waits in the queue (a `/compact` message to a thread that is answering gets 409, like any
+message), and one with nothing new since the last boundary does nothing. By itself (Settings →
+Agents → New threads → *Long threads*: on by default, at 85% of the window, 60 to 95% or off): a
+message that would take the estimate past the threshold compacts what came before it first, so the
+turn starts with the message and its files whole; within a turn, a model call past it compacts the
+turn's work so far; and a call the model refuses as too long is compacted and tried once more. The
+conversation keeps every message, with a *Conversation compacted* divider that opens to the
+summary; the context breakdown shows the summary as a part of its own, marks the threshold on its
+bar and says when the thread was last compacted. How it fits with the rest: **Retry** after a
+compaction answers the last message again, and a compaction after that message goes with it; Retry
+after a `/compact` that failed or was cut short (the thread's `interrupted` carries `compact`)
+compacts again and removes nothing. **Rewind** to a message before a boundary removes the
+compaction too, since it summarised messages that are gone, so the model gets the messages before
+it as they are again; rewinding to one after it keeps it. **Shared links** never carry a summary
+(it can hold what tools returned): they show the messages as before. **Spotlight**'s quick answers
+are threads like any other and compact the same way; the answer it shows is the agent's, never the
+summary. A **restart** keeps every boundary (they are messages); a restart in the middle of a
+`/compact` leaves the thread as it was, with Retry to compact again.
+
+```sh
+pnpm check:agents-compact   # /compact with and without instructions, what the next call gets, the threshold, a too-long refusal, /compact while a turn runs, Retry, Rewind, shares, a restart
+```
+
 **Pictures** you attach show as thumbnails in the message box and on your sent messages
 ([`src/apps/AgentsImages.tsx`](src/apps/AgentsImages.tsx)); other files stay chips with their name.
 A click opens the picture over the window: ← and → (or a swipe) go through the message's pictures,
@@ -650,7 +695,7 @@ deletes its links. The endpoints are `POST /api/agents/threads/:id/share` (`{kin
 expiresAt, …}` with the address from `PUBLIC_URL`), `GET /api/agents/shares` (`?thread=` for one
 thread's) and `DELETE /api/agents/shares/:token`.
 Settings → Agents (also the app's ⚙) picks the model for Quick, Deep and titles, whether titles
-keep up to date (and how often they are checked), what a new thread starts with, and shows the system prompt: `~/AGENTS.md`, your own from Seafile when Seafile is
+keep up to date (and how often they are checked), what a new thread starts with, whether and when long threads compact by themselves, and shows the system prompt: `~/AGENTS.md`, your own from Seafile when Seafile is
 home, otherwise a read-only built-in one ([`src/data/agentsPrompt.ts`](src/data/agentsPrompt.ts)).
 Spotlight takes questions too: *Ask Agents* is under the web search, and a `?` in front makes it
 the top hit. `OLLAMA_URL` points it at a stand-in for ollama.com when testing.
