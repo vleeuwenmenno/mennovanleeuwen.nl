@@ -34,7 +34,8 @@ const MAX_JOBS = 2
 /** How old the index may get before opening the app walks again. */
 const STALE = 15 * 60_000
 
-export type Item = [id: string, wall: number, flags: number, ratio: number, duration: number | null]
+/** A photo on the timeline: its id, when (wall clock), VIDEO and FAVOURITE, width / height, a video's seconds, and its version (for the thumbnail's address). */
+export type Item = [id: string, wall: number, flags: number, ratio: number, duration: number | null, version: string]
 /** Item flags. */
 const VIDEO = 1
 const FAVOURITE = 2
@@ -536,9 +537,9 @@ const seafileSource: Source = {
     const to = Date.UTC(Number(m[1]), Number(m[2]), 1)
     const w = await seafileWhere(user, opts)
     const rows = db()
-      .prepare(`SELECT id, kind, width, height, orientation, favourite, ${WALL} AS wall FROM photos WHERE ${w.sql} AND ${WALL} >= ? AND ${WALL} < ? ORDER BY wall DESC, path DESC`)
-      .all(opts.tz * 60_000, ...w.params, opts.tz * 60_000, from, opts.tz * 60_000, to) as { id: number; kind: string; width: number | null; height: number | null; orientation: number | null; favourite: number; wall: number }[]
-    return rows.map((r) => [String(r.id), r.wall, (r.kind === 'video' ? VIDEO : 0) | (r.favourite ? FAVOURITE : 0), ratioOf(r.width, r.height, r.orientation), null])
+      .prepare(`SELECT id, kind, width, height, orientation, favourite, file_id, ${WALL} AS wall FROM photos WHERE ${w.sql} AND ${WALL} >= ? AND ${WALL} < ? ORDER BY wall DESC, path DESC`)
+      .all(opts.tz * 60_000, ...w.params, opts.tz * 60_000, from, opts.tz * 60_000, to) as { id: number; kind: string; width: number | null; height: number | null; orientation: number | null; favourite: number; file_id: string; wall: number }[]
+    return rows.map((r) => [String(r.id), r.wall, (r.kind === 'video' ? VIDEO : 0) | (r.favourite ? FAVOURITE : 0), ratioOf(r.width, r.height, r.orientation), null, r.file_id.slice(0, 10)])
   },
   async thumb(user, id, size, etag) {
     const row = rowOf(user, id)
@@ -679,7 +680,7 @@ const immichSource: Source = {
     const items: Item[] = a.id.map((id, i) => {
       const utc = Date.parse(a.fileCreatedAt[i].endsWith('Z') || /[+-]\d\d:?\d\d$/.test(a.fileCreatedAt[i]) ? a.fileCreatedAt[i] : `${a.fileCreatedAt[i]}Z`)
       const wall = utc + (a.localOffsetHours[i] ?? 0) * 3600_000
-      return [id, wall, (a.isImage[i] ? 0 : VIDEO) | (a.isFavorite[i] ? FAVOURITE : 0), Math.round((a.ratio?.[i] ?? 1) * 1000) / 1000 || 1, a.isImage[i] ? null : seconds(a.duration?.[i])]
+      return [id, wall, (a.isImage[i] ? 0 : VIDEO) | (a.isFavorite[i] ? FAVOURITE : 0), Math.round((a.ratio?.[i] ?? 1) * 1000) / 1000 || 1, a.isImage[i] ? null : seconds(a.duration?.[i]), '']
     })
     return items.sort((x, y) => y[1] - x[1])
   },
@@ -744,7 +745,6 @@ const SOURCES: Record<string, Source> = { seafile: seafileSource, immich: immich
 /** What the app shows first: which sources are set up, Seafile's folders and its walk. */
 async function status(user: User) {
   const seafile = seafileReady(user)
-  if (seafile) freshen(user)
   const immichLink: ImmichInfo | null = immichInfo(user)
   return {
     seafile: seafile ? { sources: await sourcesInfo(user), job: jobs.get(user.id) ?? null, scannedAt: (db().prepare('SELECT scanned_at FROM photo_accounts WHERE user_id = ?').get(user.id) as { scanned_at: number | null } | undefined)?.scanned_at ?? null } : null,
