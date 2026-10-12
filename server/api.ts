@@ -17,6 +17,7 @@ import { inbox } from './inbox.ts'
 import { linkPreview } from './preview.ts'
 import { cleanTrash, history, quota, setHistory, shareLink, createFile, fileLink, rangeRead, restore, streamFile, thumbnail, trash, trashDir, uploadedBytes, libraries, removeItems, rename, transfer, linkSeafile, listDir, lock, mkdir, unlock, unlocked, removeOffice, seafileInfo, setOffice, unlinkSeafile } from './seafile.ts'
 import { officeCallback, officeCheck, officeConfig } from './office.ts'
+import { handlePhotosApi } from './photos.ts'
 import { archiveFile, cancelExtract, extractStatus, listArchive, startExtract } from './unzip.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
 import { HttpError, json, readJson, redirect, sameOrigin, SECURITY, UNTRUSTED } from './http.ts'
@@ -275,6 +276,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/seafile/unlock' && read) return json(res, 200, unlocked(requireUser(req))), true
     if (path === '/api/seafile/lock' && method === 'POST') return lock(requireUser(req), (await readJson<{ repo?: string }>(req, 1024)).repo), json(res, 200, { ok: true }), true
     if (path === '/api/updown' && read) return json(res, 200, await updownChecks(requireUser(req))), true
+    // The Photos app (server/photos.ts): its Seafile index and Immich, and linking Immich.
+    if ((path.startsWith('/api/photos/') || path === '/api/integrations/immich') && (await handlePhotosApi(req, res, url, method))) return true
 
     // The Agents app (server/agents.ts): Ollama Cloud's key, threads, a turn (streamed) and memory.
     if (path === '/api/integrations/ollama' && method === 'PUT') return await setOllamaKey(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true

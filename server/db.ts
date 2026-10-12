@@ -246,6 +246,60 @@ export function database(): DatabaseSync {
     PRIMARY KEY (user_id, host)
   )`)
   if (!cols('agent_messages').includes('checked')) db.exec('ALTER TABLE agent_messages ADD COLUMN checked TEXT')
+  // The Photos app (server/photos.ts): the Seafile folders chosen as photo sources, the index of
+  // the photos and videos in them (what EXIF says, read from each file's first bytes), and the
+  // folders' Seafile ids from the last full walk (an unchanged id means nothing in it changed).
+  db.exec(`CREATE TABLE IF NOT EXISTS photo_sources (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    repo TEXT NOT NULL,
+    path TEXT NOT NULL,
+    PRIMARY KEY (user_id, repo, path)
+  )`)
+  db.exec(`CREATE TABLE IF NOT EXISTS photos (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    repo TEXT NOT NULL,
+    path TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    mtime INTEGER NOT NULL,
+    file_id TEXT NOT NULL,
+    taken_at INTEGER NOT NULL,
+    taken_src TEXT NOT NULL,
+    taken_offset TEXT,
+    width INTEGER,
+    height INTEGER,
+    orientation INTEGER,
+    make TEXT,
+    model TEXT,
+    lens TEXT,
+    exposure REAL,
+    fnumber REAL,
+    iso INTEGER,
+    focal REAL,
+    focal35 REAL,
+    lat REAL,
+    lon REAL,
+    alt REAL,
+    thumb BLOB,
+    favourite INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (user_id, repo, path)
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS photos_taken ON photos (user_id, taken_at)')
+  db.exec(`CREATE TABLE IF NOT EXISTS photo_dirs (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    repo TEXT NOT NULL,
+    path TEXT NOT NULL,
+    dir_id TEXT NOT NULL,
+    PRIMARY KEY (user_id, repo, path)
+  )`)
+  // Which Seafile account the index is of (its URL and username): linking another one starts over.
+  db.exec(`CREATE TABLE IF NOT EXISTS photo_accounts (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    seafile TEXT NOT NULL,
+    scanned_at INTEGER
+  )`)
+
   // Tasks kept on the site itself (server/tasks.ts), for accounts without CalDAV task lists: lists,
   // and each task as its own VTODO text, so it is read and changed like a CalDAV one. `etag` counts
   // the task's versions.

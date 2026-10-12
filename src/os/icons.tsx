@@ -265,6 +265,17 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  photos: {
+    bg: 'linear-gradient(160deg,#ffb36b,#e0537a 55%,#7a4fd0)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <rect x="10" y="13" width="28" height="22" rx="3" />
+        <circle cx="30" cy="20" r="2.5" />
+        <path d="M10 31l8-8 7 7 4-4 9 9" />
+      </>
+    ),
+  },
   contacts: {
     bg: 'linear-gradient(160deg,#c49a6c,#8a6038)',
     fg: '#fff',
@@ -340,6 +351,7 @@ const HUES: Record<AppId, string> = {
   contacts: 'var(--orange)',
   tasks: 'var(--orange)',
   agents: 'var(--magenta)',
+  photos: 'var(--orange)',
   settings: 'var(--text)',
   trash: 'var(--muted)',
 }

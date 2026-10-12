@@ -16,6 +16,8 @@ import { openAlert, useAlerts } from '../os/alerts'
 import { formatSize } from '../terminal/vfs'
 import { browserFilesState, browserTree, useBrowserFiles, wipeBrowserFiles } from '../data/browserfs'
 import { Select } from '../os/Select'
+import { useStatus as usePhotoStatus } from '../data/photos'
+import { ImmichLink } from './photos/PhotosSettings'
 import { libraryName, loadLibraries, primaryOf, setSeafilePrefs, useLibraries, useSeafilePrefs } from '../data/seafile'
 import { fstabEntries, isSeafileType, useMounts } from '../data/mounts'
 
@@ -793,7 +795,7 @@ function Launchers() {
 }
 
 /** Third-party services the widgets read from, with keys on the server: updown.io for Status. */
-type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice' | 'contacts'
+type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice' | 'immich' | 'contacts'
 
 /** Third-party services, one row each; a row opens that service's own settings. */
 /** `sub` opens one service's settings straight away (Settings → Integrations → Seafile, from an alert). */
@@ -804,6 +806,7 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
     if (sub === 'updown' || sub === 'ollama' || sub === 'seafile' || sub === 'onlyoffice' || sub === 'contacts') setOpen(sub)
   }, [sub, t])
   const { libraries } = useLibraries()
+  const photos = usePhotoStatus().status
   if (account.status !== 'user') return <p className="muted">Sign in first to connect services for widgets and Files.</p>
   const seafile = account.seafile
   const host = (url: string) => url.replace(/^https?:\/\//, '')
@@ -838,6 +841,13 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
       on: !!seafile?.office,
       disabled: !seafile,
     },
+    {
+      id: 'immich',
+      name: 'Immich',
+      icon: <span className="set-glyph">🖼</span>,
+      status: photos?.immich ? `${host(photos.immich.url)} · Immich ${photos.immich.version} · for Photos` : 'Your photo library, in the Photos app',
+      on: !!photos?.immich,
+    },
     { id: 'contacts', name: 'Contacts (CardDAV)', icon: <span className="set-glyph">📇</span>, status: 'Fastmail, iCloud, Nextcloud and other address books, for Contacts', on: false },
   ]
 
@@ -853,7 +863,7 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
           <strong>{current.name}</strong>
           {current.on && <span className="set-badge">Connected</span>}
         </div>
-        {current.id === 'updown' ? <UpdownSettings /> : current.id === 'ollama' ? <OllamaSettings /> : current.id === 'seafile' ? <SeafileSettings /> : current.id === 'contacts' ? <ContactsSettings /> : <OfficeSettings />}
+        {current.id === 'updown' ? <UpdownSettings /> : current.id === 'ollama' ? <OllamaSettings /> : current.id === 'seafile' ? <SeafileSettings /> : current.id === 'immich' ? <ImmichLink /> : current.id === 'contacts' ? <ContactsSettings /> : <OfficeSettings />}
       </>
     )
 
