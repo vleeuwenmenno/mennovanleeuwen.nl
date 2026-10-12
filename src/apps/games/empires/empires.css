@@ -754,6 +754,11 @@ span.ew-teamtag {
   font-family: var(--ew-display);
   font-size: 12.5px;
   color: var(--ew-head);
+}
+.ew-mp-as {
+  min-width: 0;
+  font-size: 12px;
+  color: var(--ew-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5426,4 +5431,39 @@ span.ew-teamtag {
 }
 .ew-gsyssel.is-whole {
   stroke-dasharray: none;
+}
+
+/* Settings: the remembered multiplayer name, changed in place. */
+.ew-mpname {
+  flex-wrap: wrap;
+}
+.ew-mpname-edit {
+  display: flex;
+  flex: 1;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+.ew-mpname-edit input {
+  flex: 1;
+  min-width: 0;
+  max-width: 220px;
+  font: inherit;
+  color: var(--ew-text);
+  background: var(--ew-cell);
+  border: 1px solid var(--ew-cell-line);
+  border-radius: 6px;
+  padding: 4px 8px;
+  user-select: text;
+}
+.ew-mpname-edit input:focus {
+  outline: none;
+  border-color: var(--ew-active-hi);
+}
+.ew-mpname-edit input[aria-invalid='true'] {
+  border-color: rgba(255, 106, 94, 0.6);
+}
+.ew-mpname-why {
+  flex-basis: 100%;
+  text-align: right;
 }

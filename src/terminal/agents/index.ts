@@ -45,7 +45,8 @@ const AGENTS_MAN = `{c:bold}NAME{/}
        --model <name>          the model to use
        --deep                  deep research mode
        --project <name>        put a new thread in this project
-       --permission-mode <m>   default, acceptEdits or plan
+       --permission-mode <m>   auto (the default: web addresses it builds are checked),
+                               default (ask first), acceptEdits, plan or bypass
        --no-dir                no work folder, even in a Seafile folder
 
 {c:bold}EXAMPLES{/}
@@ -54,7 +55,7 @@ const AGENTS_MAN = `{c:bold}NAME{/}
        agents -p "summarise README.md" > /tmp/summary.md
        cat notes.md | agents -p "turn this into a todo list"`
 
-const PERMS: Permission[] = ['default', 'acceptEdits', 'plan']
+const PERMS: Permission[] = ['default', 'auto', 'acceptEdits', 'plan', 'bypass']
 
 function needAgents() {
   const a = getAccount()
@@ -72,7 +73,7 @@ const sameFolder = (a: Workdir | null, b: Workdir | null) => !!a && !!b && a.rep
 
 async function agents(ctx: Ctx): Promise<string | void> {
   const args = [...ctx.args]
-  const opts = { cont: false, resume: null as string | null, print: false, model: null as string | null, deep: false, project: null as string | null, permission: 'default' as Permission, noDir: false }
+  const opts = { cont: false, resume: null as string | null, print: false, model: null as string | null, deep: false, project: null as string | null, permission: 'auto' as Permission, noDir: false }
   const words: string[] = []
   for (let i = 0; i < args.length; i++) {
     const a = args[i]

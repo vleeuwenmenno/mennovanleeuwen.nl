@@ -1,7 +1,8 @@
-import { synced } from '../../../os/synced'
+import { api, getAccount, subscribeAccount } from '../../../os/account'
+import { pullAll, synced } from '../../../os/synced'
 import type { MatchInfo, Turn } from './match'
 import type { BattleSnap } from './snapshot'
-import { MP_PATH, type AwaySeat, type AwayVote, type ClientMsg, type LobbyInfo, type MpLobby, type RosterSeat, type ServerMsg } from './protocol'
+import { MP_PATH, REJOIN_MS, type AwaySeat, type AwayVote, type ClientMsg, type LobbyInfo, type MpLobby, type RosterSeat, type ServerMsg } from './protocol'
 
 // The game's end of the multiplayer WebSocket. One connection per tab, kept open while the
 // multiplayer screens are up: it reconnects by itself after a drop (resuming the same player with
@@ -41,7 +42,8 @@ export type NetView = {
   restarting: boolean
   /** The server no longer has the battle or lobby we were in: why, to show until dismissed. */
   lost: { why: string } | null
-  /** The remembered name being claimed by itself on connecting (the join screen waits for it). */
+  /** The remembered name being claimed by itself on connecting (the join screen waits for it);
+   * empty while it's still being looked up (the account's copy, signed in on a new device). */
   claiming: string | null
   /** Why the remembered name couldn't be claimed by itself (taken by someone online right now). */
   nameNote: string | null
@@ -51,8 +53,30 @@ const CHAT_KEEP = 100
 const RESTART_CODE = 1012
 
 /** The name last claimed, to take again by itself next time: in this browser, and with the account
- * when signed in to MvL OS, so it follows the player to their other devices. */
+ * when signed in to MvL OS, so it follows the player to their other devices. Settings can change
+ * it, or forget it (null) so the next visit asks again. */
 export const mpName = synced<string | null>('games:empires-name', null, { normalize: (v) => (typeof v === 'string' && v ? v : null) })
+
+/** The remembered name, waiting for the account's copy when there's none in this browser yet:
+ * signed in on a new device (or just signed in again), it arrives a moment after the page loads,
+ * which may be after the server asked for a name. */
+async function recallName(): Promise<string | null> {
+  if (mpName.get()) return mpName.get()
+  if (getAccount().status === 'loading')
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        if (getAccount().status === 'loading') return
+        off()
+        clearTimeout(t)
+        resolve()
+      }
+      const off = subscribeAccount(done)
+      // Not waiting long for an account that won't load (offline): the join screen asks instead.
+      const t = setTimeout(() => (off(), resolve()), 4000)
+    })
+  if (getAccount().status === 'user') await pullAll()
+  return mpName.get()
+}
 /** Per tab, so two tabs are two players (handy for trying it alone) and a reload is the same one.
  * The browser also keeps the last one, for a tab opened after the one playing was closed: with it,
  * the server puts the player back in their battle (unless that tab is still connected with it). */
@@ -78,9 +102,10 @@ const writeToken = (t: string) => {
 }
 
 /** The battle this browser was last in, and when it last heard of it: a player who closed the tab
- * (or the game) has REJOIN_MS (server/empires.ts) to come back to it, so the menus offer that. */
+ * (or the game) has REJOIN_MS (protocol.ts) to come back to it, so the menus offer that. */
 const BATTLE_KEY = 'mvlos.empires.mp.battle'
-const REJOIN_MS = 60_000
+/** How long a battle waits for a player who stepped away, in words: "3 minutes". */
+export const REJOIN_WAIT = `${REJOIN_MS / 60_000} minutes`
 function keepBattle(id: string | null) {
   try {
     if (id) localStorage.setItem(BATTLE_KEY, JSON.stringify({ id, at: Date.now() }))
@@ -96,6 +121,16 @@ export function battleToRejoin(): boolean {
     return !!b && Date.now() - b.at < REJOIN_MS
   } catch {
     return false
+  }
+}
+
+/** Asks the server whether a battle is waiting for us: for this browser's player (its last token),
+ * or signed in, for the account's player on another device. Null when it can't say (offline). */
+export async function awayBattle(): Promise<boolean | null> {
+  try {
+    return (await api<{ battle: boolean }>('/api/empires/away', { method: 'POST', json: { token: readToken().token ?? null } })).battle
+  } catch {
+    return null
   }
 }
 
@@ -328,8 +363,10 @@ export class Net {
         writeToken(m.token)
         this.name = m.name
         this.id = m.id
-        // The name to take by itself next time (also on another device, signed in).
-        mpName.set(m.name)
+        // A name just taken is the one to take by itself next time (also on another device, signed
+        // in). Coming back as the same player leaves it be: it was kept when taken, and may since
+        // have been changed or forgotten in Settings, for the next new start.
+        if (!m.resumed) mpName.set(m.name)
       }
       if (m.t === 'welcome' || m.t === 'ready') this.setStatus('online')
       this.track(m)
@@ -337,13 +374,8 @@ export class Net {
       if ((m.t === 'welcome' || m.t === 'ready') && this.view.restarting) this.patch({ restarting: false })
       for (const fn of [...this.listeners]) fn(m)
       // A new player here: take the name used last time straight away, if there is one. Taken by
-      // someone online right now (the same player on another device, say), the join screen says
-      // so and offers the server's suggestion instead.
-      const last = mpName.get()
-      if (m.t === 'ready' && last) {
-        this.patch({ claiming: last, nameNote: null })
-        this.send({ t: 'claim', name: last })
-      }
+      // someone online right now, the join screen says so and offers it again to try.
+      if (m.t === 'ready') void this.reclaim(ws)
     }
     ws.onclose = (e) => {
       if (this.ws !== ws) return
@@ -358,6 +390,18 @@ export class Net {
       const wait = Math.min(5000, 500 * 2 ** this.retry++)
       this.retryTimer = window.setTimeout(() => this.open(), wait)
     }
+  }
+
+  /** Claims the remembered name by itself, once it's known; with none, the join screen asks. */
+  private async reclaim(ws: WebSocket) {
+    const now = mpName.get()
+    this.patch({ claiming: now ?? '', nameNote: null })
+    const name = now ?? (await recallName())
+    // Gone meanwhile (a new connection asks again), or a name taken some other way.
+    if (this.ws !== ws || this.view.me) return
+    if (!name) return this.patch({ claiming: null })
+    this.patch({ claiming: name })
+    this.send({ t: 'claim', name })
   }
 
   private ping() {

@@ -1158,8 +1158,12 @@ The arcade's space RTS has online skirmishes: Main menu → Multiplayer → Skir
 signed in or not, under a typed or random name; names are unique among everyone online, and a
 signed-in user's GitHub login is theirs alone. The game remembers the last name you played under
 (in this browser, and with your account when signed in, so it follows you to other devices) and
-takes it by itself when you come back; if someone online has it right now (you, on another
-device), it says so and offers a free one instead. A host sets up a battle (map, rules, starting
+takes it by itself when you come back, straight to the list of battles; on a device that hasn't
+loaded the account's copy yet, it waits for it rather than asking. If someone online has the name
+right now, the name screen says so, with the name filled in to try again. *Change* in the
+multiplayer header renames you at once; the game's Settings (and Settings → Apps → Empires At War)
+show the remembered name, to change it for next time or *Forget* it, so the next visit asks. A
+host sets up a battle (map, rules, starting
 credits, and each spawn as open, AI or closed); players join from the list, pick their spawn,
 faction and side, chat, and say they're ready.
 
@@ -1178,7 +1182,8 @@ war, since it holds the whole battle.
 
 Quitting a battle (its menu's Leave) hands your fleet to an AI admiral at once. Anything else that
 takes you away (the connection dropping, closing the browser tab, closing the game's window) only
-steps you away: your seat is kept for 60 seconds, and the battle pauses for everyone meanwhile
+steps you away: your seat is kept for 3 minutes (long enough to reopen the browser, or pick up
+another device), and the battle pauses for everyone meanwhile
 (the server stops handing out ticks, and doesn't fast-forward afterwards). The others see
 "<name> left" with a live countdown (the server's deadline, on each player's own clock) and vote:
 *Continue: AI takes over <name>*, *Continue: <teammate> takes over <name>'s fleet* (only when the
@@ -1189,8 +1194,11 @@ player's machine at the same tick, while an AI admiral keeps running the base (s
 defenses stay with their seat: one player runs one station). Coming back in time puts you straight
 back in the battle with the server's copy, and it carries on for everyone. The browser keeps your
 last token (in localStorage, next to the tab's own), so even after closing the tab, opening
-Empires → Multiplayer again rejoins the battle; the main menu shows *Rejoin battle* while your seat
-may still be waiting. Come back too late and the game says what happened to your fleet.
+Empires → Multiplayer again rejoins the battle. Signed in, your account finds your seat too, from
+another browser or device without the token (only a player of yours that isn't connected: a second
+tab playing on purpose keeps its own). The main menu shows *Rejoin battle* while your seat is
+waiting, as the server says (`POST /api/empires/away`, by the browser's token or the account).
+Come back too late and the game says what happened to your fleet.
 
 Battles survive a restart of the site (a deploy, or watchtower pulling a new image). On SIGTERM
 the server writes every player (name and token), lobby and battle (the server's own copy, at its
@@ -1199,7 +1207,7 @@ code 1012), and exits. The new server reads the file back and deletes it (one ol
 minutes, from another version or unreadable is ignored). Players have 3 minutes to reconnect, which
 their games do by themselves with their token, and each gets the server's battle back. A battle
 waits at the tick it stopped on: everyone in it has stepped away, with nobody counting down until
-the first player is back; from then the others get the usual 60 seconds (and the vote), and the
+the first player is back; from then the others get the usual 3 minutes (and the vote), and the
 time it was down doesn't count. Meanwhile the game says the server is restarting and the battle
 will carry on. Should the server have lost a battle anyway (a crash, SIGKILL, or a
 player gone too long), the battle screen says so and offers to keep playing it against the

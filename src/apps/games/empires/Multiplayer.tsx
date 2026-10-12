@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { DIFFICULTY, type Difficulty } from './ai'
 import { CREDIT_STEPS, FACTIONS, type FactionId } from './data'
 import { Frame, Icon, Tips } from './Hud'
@@ -154,11 +155,12 @@ function JoinScreen({ v, net, sound, onBack, children }: { v: NetView; net: Net;
           {/* Back after closing the game mid-battle: the server puts us straight back in it. */}
           {v.status !== 'online' && battleToRejoin() ? (
             <p className="ew-muted">Rejoining your battle…</p>
-          ) : v.claiming ? (
-            <p className="ew-muted">Joining as {v.claiming}…</p>
+          ) : v.claiming !== null ? (
+            <p className="ew-muted">{v.claiming ? `Joining as ${v.claiming}…` : 'Joining…'}</p>
           ) : (
-            // The name used last time, unless it just turned out to be taken: then the server's suggestion.
-            <NameField v={v} net={net} sound={sound} initial={v.nameNote ? '' : (mpName.get() ?? '')} />
+            // The name used last time (also when it just turned out to be taken, to try again), else
+            // the server's suggestion.
+            <NameField v={v} net={net} sound={sound} initial={mpName.get() ?? ''} />
           )}
           <button className="ew-menu-btn" onClick={() => (sound.click(), onBack())}>
             <Icon name="back" size={20} /> Back
@@ -170,27 +172,36 @@ function JoinScreen({ v, net, sound, onBack, children }: { v: NetView; net: Net;
   )
 }
 
-/** Who we are, the ping, and a way to change name, at the right of the header. */
+/** Who we are, the ping, and a way to change name, at the right of the header. The name is
+ * remembered for next time; Settings can forget it. */
 function MeChip({ v, net, sound }: { v: NetView; net: Net; sound: EmpiresSound }) {
   const [renaming, setRenaming] = useState(false)
+  // The dialog covers the whole screen, not the header (which holds it in place otherwise).
+  const box = useRef<HTMLDivElement>(null)
+  const screen = box.current?.closest('.ew-root')
   const ping = v.status !== 'online' ? 'offline' : v.rtt ? `${Math.round(v.rtt)} ms` : '…'
   // Without hover, say what the number is.
   const coarse = useCoarse()
   return (
-    <div className="ew-mp-me">
+    <div className="ew-mp-me" ref={box}>
       <i className={`ew-mp-dot is-${v.status}`} />
       <span className="ew-muted ew-small" data-tip="Round trip to the server">
         {coarse && v.status === 'online' ? `Ping ${ping}` : ping}
       </span>
-      <strong>{v.me?.name}</strong>
-      <button className="ew-chip" onClick={() => (sound.click(), setRenaming(true))}>
-        Change name
+      <span className="ew-mp-as">
+        Playing as <strong>{v.me?.name}</strong>
+      </span>
+      <button className="ew-chip" onClick={() => (sound.click(), setRenaming(true))} data-tip="Pick another name (it's remembered for next time)">
+        Change
       </button>
-      {renaming && (
-        <Modal title="Change name" onClose={() => setRenaming(false)}>
-          <NameField v={v} net={net} sound={sound} initial={v.me?.name ?? ''} onDone={() => setRenaming(false)} />
-        </Modal>
-      )}
+      {renaming &&
+        screen &&
+        createPortal(
+          <Modal title="Change name" onClose={() => setRenaming(false)}>
+            <NameField v={v} net={net} sound={sound} initial={v.me?.name ?? ''} onDone={() => setRenaming(false)} />
+          </Modal>,
+          screen,
+        )}
     </div>
   )
 }
