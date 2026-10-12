@@ -72,6 +72,17 @@ export function useBrowserUrl(path: string | null): { url: string | null; error:
   return state.key === key ? { url: state.url, error: state.error } : { url: null, error: null }
 }
 
+/**
+ * Where a Seafile file plays from: through this site (/api/seafile/stream), not straight from
+ * Seafile's file server, which ignores byte ranges for encrypted libraries so the browser could
+ * not seek in them; the stream route answers ranges itself then. Same origin, too: the music
+ * player's audio graph only hears media from its own origin.
+ */
+export const streamOf = (path: string) => {
+  const at = parseSf(path)
+  return at ? `/api/seafile/stream?repo=${encodeURIComponent(at.repo)}&p=${encodeURIComponent(at.p)}` : null
+}
+
 /** A file to show or play: its address, size and date, wherever it lives. */
 export function useMedia(path: string): Media {
   const sf = isSf(path)
@@ -82,7 +93,11 @@ export function useMedia(path: string): Media {
     const name = nameOf(path)
     if (sf) {
       const entry = dir.listing?.entries.find((e) => e.name === name)
-      return { name, kind: kindOfName(name), url: link.url, size: entry?.size ?? null, mtime: entry?.mtime ?? null, error: link.error, unplayable: null }
+      const kind = kindOfName(name)
+      // Video and audio stream through this site; the download link still comes first, as the
+      // check that the library is not locked (its 423 is the error shown then).
+      const url = link.url && (kind === 'video' || kind === 'audio') ? streamOf(path) : link.url
+      return { name, kind, url, size: entry?.size ?? null, mtime: entry?.mtime ?? null, error: link.error, unplayable: null }
     }
     const node = lookup(path)
     if (!node || node.type !== 'file') return { name, kind: 'file', url: null, size: null, mtime: null, error: path ? 'That file is not there (any more).' : 'Nothing to show.', unplayable: null }

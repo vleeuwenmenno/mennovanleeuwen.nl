@@ -3,7 +3,7 @@ import { useWM, type WinState } from '../os/wm'
 import { lookup, readFileText } from '../terminal/fs'
 import { fileKind, formatSize, kindOfName, prettyPath, stat } from '../terminal/vfs'
 import { isSf, libraryName, parseSf, sfPath, useFileLink } from '../data/seafile'
-import { useBrowserUrl } from '../data/media'
+import { streamOf, useBrowserUrl } from '../data/media'
 
 // Opens one file from the virtual filesystem: images are shown, text is shown as text, and the
 // large stand-in files (ISOs, music, video) explain politely why they will not play. Files kept
@@ -70,7 +70,11 @@ function LocalViewer({ path }: { path: string }) {
   )
 }
 
-/** A file in Seafile, from its file server: pictures, video, audio, PDFs and (asked for) text. */
+/**
+ * A file in Seafile, from its file server: pictures, video, audio, PDFs and (asked for) text.
+ * Video and audio stream through this site instead, so they can seek in encrypted libraries too
+ * (see streamOf); the download link is still asked for first, as the check that it is not locked.
+ */
 function SeafileViewer({ path }: { path: string }) {
   const wm = useWM()
   const at = parseSf(path)!
@@ -141,12 +145,12 @@ function SeafileViewer({ path }: { path: string }) {
         </div>
       ) : kind === 'video' ? (
         <div className="viewer-image">
-          <video src={url} controls autoPlay />
+          <video src={streamOf(path)!} controls autoPlay />
         </div>
       ) : kind === 'audio' ? (
         <div className="viewer-empty">
           <p className="viewer-big">{name}</p>
-          <audio src={url} controls autoPlay />
+          <audio src={streamOf(path)!} controls autoPlay />
         </div>
       ) : kind === 'pdf' ? (
         pdf ? <iframe className="viewer-frame" src={pdf} title={name} /> : <div className="viewer-empty muted">{text ?? 'Loading…'}</div>

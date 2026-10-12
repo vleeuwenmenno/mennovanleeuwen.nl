@@ -426,21 +426,95 @@ export async function rangeRead(user: User, repo: unknown, path: unknown, range:
   return { type: res.headers.get('content-type') ?? 'application/octet-stream', contentRange: res.headers.get('content-range') ?? '', body: await readCapped(res, span) }
 }
 
+/** What /api/seafile/stream answers: the status, its headers and the body to pipe (none for a 416). */
+export type Stream = { status: 200 | 206 | 416; type: string; length: string | null; contentRange: string | null; body: ReadableStream<Uint8Array> | null }
+
 /**
- * A file streamed through this server, for the music player: the browser asks for open ranges
- * while it plays, and the page's audio graph (the spectrum, the equalizer) only hears media
- * from its own origin. The answer is piped, never held in memory.
+ * A file streamed through this server, for the music player and the video player: the browser
+ * asks for open ranges while it plays (and for new ones when it seeks), and the page's audio
+ * graph (the spectrum, the equalizer) only hears media from its own origin. The answer is piped,
+ * never held in memory. `signal` is the browser's connection: when it goes, so does the request
+ * to Seafile.
+ *
+ * Seafile's file server ignores Range for encrypted libraries (it decrypts block by block and
+ * always answers 200 with the whole file: see `!repo.IsEncrypted && len(byteRanges) != 0` in
+ * seafile-server's fileserver/fileop.go). A browser that gets no 206 cannot seek, and snaps back
+ * to the start. So then the range is cut out here: the bytes before it are read and dropped,
+ * the ones in it piped, and the rest not asked for. Seeking far into a big encrypted file
+ * therefore reads everything before that point through this server, each time.
  */
-export async function streamFile(user: User, repo: unknown, path: unknown, range: string | undefined): Promise<Response> {
-  if (range !== undefined && !/^bytes=(\d+-\d*|-\d+)$/.test(range)) throw new HttpError(416, 'Ask for one byte range')
+export async function streamFile(user: User, repo: unknown, path: unknown, range: string | undefined, signal?: AbortSignal): Promise<Stream> {
+  const m = range === undefined ? null : /^bytes=(?:(\d+)-(\d*)|-(\d+))$/.exec(range)
+  if (range !== undefined && !m) throw new HttpError(416, 'Ask for one byte range')
   const { url } = await fileLink(user, repo, path, 'download')
-  const res = await guardedFetch(user, url, { headers: range ? { Range: range } : {} }).catch((e) => (rethrowEgress(e), null))
+  const res = await guardedFetch(user, url, { headers: range ? { Range: range } : {}, signal }).catch((e) => (rethrowEgress(e), null))
   if (!res) throw new HttpError(502, 'Seafile\'s file server did not answer')
-  if (res.status !== 200 && res.status !== 206) {
+  const type = res.headers.get('content-type') ?? ''
+  const unsatisfiable = (contentRange: string | null): Stream => ({ status: 416, type, length: null, contentRange, body: null })
+  if (res.status === 416) {
     await res.body?.cancel().catch(() => {})
-    throw new HttpError(res.status === 416 ? 416 : 502, `Seafile's file server answered ${res.status}`)
+    return unsatisfiable(res.headers.get('content-range'))
   }
-  return res
+  if (res.status !== 200 && res.status !== 206) {
+    const text = (await readCapped(res, 64 * 1024).catch(() => Buffer.alloc(0))).toString('utf8')
+    // Seafile forgot the library's password (after its hour) before this side's lock did.
+    if (/encrypted|password/i.test(text)) throw new HttpError(423, 'Locked')
+    throw new HttpError(502, `Seafile's file server answered ${res.status}`)
+  }
+  const passed = (): Stream => ({ status: res.status as 200 | 206, type, length: res.headers.get('content-length'), contentRange: res.headers.get('content-range'), body: res.body })
+  // No range asked for, or Seafile honoured it: as it is.
+  if (!m || res.status === 206) return passed()
+
+  // Seafile sends the size along (fileop.go's doFile); should a proxy drop it, its listing knows it.
+  let total = Number(res.headers.get('content-length') ?? NaN)
+  if (!Number.isSafeInteger(total) || total < 0) total = await fileSize(user, repo, path).catch(() => NaN)
+  if (!Number.isSafeInteger(total) || total < 0) {
+    await res.body?.cancel().catch(() => {})
+    throw new HttpError(502, 'Seafile did not say how big the file is')
+  }
+  const [, from, to, suffix] = m
+  const start = suffix !== undefined ? Math.max(0, total - Number(suffix)) : Number(from)
+  const end = suffix !== undefined ? total - 1 : to ? Math.min(Number(to), total - 1) : total - 1
+  if (start >= total || end < start || (suffix !== undefined && Number(suffix) === 0)) {
+    await res.body?.cancel().catch(() => {})
+    return unsatisfiable(`bytes */${total}`)
+  }
+  return { status: 206, type, length: String(end - start + 1), contentRange: `bytes ${start}-${end}/${total}`, body: res.body && slice(res.body, start, end) }
+}
+
+/** A file's size from Seafile's API (for when the file server's answer has no Content-Length). */
+async function fileSize(user: User, repo: unknown, path: unknown): Promise<number> {
+  const id = repoId(repo)
+  const p = seafPath(path)
+  const detail = await seafile<{ size?: number }>(user, `/api/v2.1/repos/${id}/file/detail/?p=${encodeURIComponent(p)}`)
+  return Number(detail.size)
+}
+
+/**
+ * Bytes `start` to `end` (inclusive) of a whole file's stream: what comes before is dropped, and
+ * once the range is out the rest is cancelled, which closes the connection to Seafile.
+ */
+function slice(body: ReadableStream<Uint8Array>, start: number, end: number): ReadableStream<Uint8Array> {
+  const reader = body.getReader()
+  let pos = 0 // bytes of the whole file read so far
+  return new ReadableStream<Uint8Array>({
+    async pull(out) {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) return out.error(new Error('The file ended before the range did'))
+        const at = pos
+        pos += value.length
+        if (pos <= start) continue
+        out.enqueue(value.subarray(Math.max(0, start - at), Math.min(value.length, end + 1 - at)))
+        if (pos > end) {
+          out.close()
+          await reader.cancel().catch(() => {})
+        }
+        return
+      }
+    },
+    cancel: (reason) => reader.cancel(reason),
+  })
 }
 
 /** How much of a file a resumable upload has stored so far, to carry on from there. */
