@@ -8,7 +8,16 @@ import { getNote } from './notes'
 export type Mode = 'quick' | 'deep'
 /** A step in the agent's plan for a long job. */
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission; queue: QueuedMessage[]; interrupted: Interruption | null }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission; queue: QueuedMessage[]; interrupted: Interruption | null; titleSource: 'auto' | 'user'; aliases: TitleAlias[]; checkingTitle: boolean }
+/**
+ * A title a thread had until `until`, newest first on the thread: the title model changed it when
+ * the conversation moved on, or the user renamed it. Shown as "also known as", and found by search.
+ */
+export type TitleAlias = { title: string; until: number }
+/** Whether a thread's title, or one of its earlier titles, has `query` in it (lower case already). */
+export const threadMatches = (t: Pick<Thread, 'title' | 'aliases'>, query: string) => !query || [t.title, ...(t.aliases ?? []).map((a) => a.title)].some((x) => x.toLowerCase().includes(query))
+/** "Also known as: A, B", or null when the thread never had another title. */
+export const alsoKnownAs = (t: Pick<Thread, 'aliases'>) => (t.aliases?.length ? `Also known as: ${t.aliases.map((a) => a.title).join(', ')}` : null)
 /**
  * How the last turn was cut short, when it was: the server restarted (a deploy) or stopped without
  * a word (a crash) while it ran, it failed, or it was stopped. Retry runs it again.
@@ -148,6 +157,11 @@ export type QuickAnswerInfo = { thread: Thread; question: string; answer: string
 export const listQuick = () => api<QuickAnswerInfo[]>('/api/agents/quick')
 export const clearQuick = () => api('/api/agents/quick', { method: 'DELETE' })
 export const suggestTitle = (id: string) => api<{ title: string | null }>(`/api/agents/threads/${id}/title`, { method: 'POST' })
+/**
+ * Regenerate title: a fresh title for what the thread talks about now, saved at once. The title
+ * model looks after the title again from then on, also when it was renamed by hand before.
+ */
+export const regenerateTitle = (id: string) => api<{ thread: Thread }>(`/api/agents/threads/${id}/retitle`, { method: 'POST' })
 
 export type ContextPart = { label: string; tokens: number }
 export type ContextInfo = { model: string; contextLength: number | null; measured: number | null; estimate: number; parts: ContextPart[] }
@@ -177,8 +191,14 @@ export type AgentSettings = {
   skillsFolder: { repo: string; path: string; label: string } | null
   /** Skills switched off: the agents do not see them */
   skillsOff: string[]
+  /** Titles are checked against the conversation now and then, and changed when it moved on (the server does it) */
+  titleRefresh: boolean
+  /** Every how many of your messages that check runs: one of TITLE_EVERY */
+  titleEvery: number
 }
-const settingsStore = synced<AgentSettings>('agents', { titleModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [] }, {
+/** The intervals for the title check that Settings offers, in your messages (server/agents.ts has the same). */
+export const TITLE_EVERY = [3, 4, 6, 10]
+const settingsStore = synced<AgentSettings>('agents', { titleModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 4 }, {
   normalize: (v) => {
     const s = (v ?? {}) as Partial<AgentSettings>
     return {
@@ -192,6 +212,8 @@ const settingsStore = synced<AgentSettings>('agents', { titleModel: null, quickM
       seenTools: ALL_TOOLS,
       skillsFolder: s.skillsFolder && typeof s.skillsFolder.repo === 'string' && typeof s.skillsFolder.path === 'string' ? { repo: s.skillsFolder.repo, path: s.skillsFolder.path, label: String(s.skillsFolder.label ?? s.skillsFolder.path) } : null,
       skillsOff: Array.isArray(s.skillsOff) ? s.skillsOff.filter((x): x is string => typeof x === 'string') : [],
+      titleRefresh: s.titleRefresh !== false,
+      titleEvery: TITLE_EVERY.includes(Number(s.titleEvery)) ? Number(s.titleEvery) : 4,
     }
   },
 })

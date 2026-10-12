@@ -216,7 +216,10 @@ function checkAttachments(v: unknown): Attachment[] {
 // --- threads -----------------------------------------------------------------------------------
 
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; projectId: number | null; pinned: boolean; todos: Todo[]; /** A title is being thought of */ titling: boolean; /** Tokens the last reply took up in the model's context, as Ollama counted them */ contextTokens: number | null; /** Tool groups it may use */ tools: ToolGroup[]; /** Asked from Spotlight and not continued in the app yet */ quick: boolean; /** The Seafile folder its file tools work in */ workdir: Workdir | null; /** How changes are allowed: ask each time, edits allowed, or read only while planning */ permission: Permission; /** Messages waiting to be sent when the running turn is done, in order */ queue: QueuedInfo[]; /** How the last turn was cut short, when it was: Retry runs it again */ interrupted: Interruption | null }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; projectId: number | null; pinned: boolean; todos: Todo[]; /** A title is being thought of */ titling: boolean; /** Tokens the last reply took up in the model's context, as Ollama counted them */ contextTokens: number | null; /** Tool groups it may use */ tools: ToolGroup[]; /** Asked from Spotlight and not continued in the app yet */ quick: boolean; /** The Seafile folder its file tools work in */ workdir: Workdir | null; /** How changes are allowed: ask each time, edits allowed, or read only while planning */ permission: Permission; /** Messages waiting to be sent when the running turn is done, in order */ queue: QueuedInfo[]; /** How the last turn was cut short, when it was: Retry runs it again */ interrupted: Interruption | null; /** Who set the title: the title model, or the user by hand (never changed automatically) */ titleSource: TitleSource; /** Titles it had before, newest first, for "also known as" */ aliases: TitleAlias[]; /** The title is being checked against what the thread talks about now, in the background */ checkingTitle: boolean }
+export type TitleSource = 'auto' | 'user'
+/** A title a thread had until `until`, when it was changed (by the title model or by hand). */
+export type TitleAlias = { title: string; until: number }
 /**
  * A turn that did not end with an answer: the server restarted (a deploy) or stopped without a
  * word (a crash) while it ran, it failed, or it was stopped.
@@ -225,7 +228,7 @@ export type Interruption = { reason: 'restart' | 'crash' | 'failed' | 'stopped';
 export type ToolCall = { name: string; arguments: Record<string, unknown> }
 export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; createdAt: number }
 
-type ThreadRow = { id: string; title: string; mode: string; model: string; archived: number; created_at: number; updated_at: number; context_tokens: number | null; tools: string | null; project_id: number | null; pinned: number; todos: string | null; quick: number; workdir: string | null; permission: string | null; queue: string | null; turn_at: number | null; interrupted: string | null }
+type ThreadRow = { id: string; title: string; mode: string; model: string; archived: number; created_at: number; updated_at: number; context_tokens: number | null; tools: string | null; project_id: number | null; pinned: number; todos: string | null; quick: number; workdir: string | null; permission: string | null; queue: string | null; turn_at: number | null; interrupted: string | null; title_source: string | null; title_history: string | null; title_mark: number | null }
 type MessageRow = { id: number; role: string; content: string; thinking: string | null; tool_calls: string | null; tool_name: string | null; attachments: string | null; created_at: number }
 
 const NEW_TITLE = 'New thread'
@@ -235,6 +238,8 @@ const runningFor = new Map<string, number>()
 const TURNS_PER_USER = 2
 const TURNS_TOTAL = 20
 const titling = new Set<string>()
+/** Threads whose title is being checked after a turn (keepTitleFresh), so one check runs at a time. */
+const checkingTitle = new Set<string>()
 
 /** A change waiting for the user: which reply asked for it (message and call index) and how to answer; `summary` says what it does where the call alone doesn't (a calendar change). */
 type Pending = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client'; form?: Form; call?: ToolCall; summary?: CallSummary; resolve: (answer: unknown) => void }
@@ -514,7 +519,8 @@ export function sendQueued(user: User, id: string, qid: string): { thread: Threa
   return { thread: toThread(ownThread(user, row.id)) }
 }
 
-const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: (r.tools ? toolGroups(JSON.parse(r.tools)) : null) ?? [...TOOL_GROUPS], quick: !!r.quick, workdir: r.workdir ? (JSON.parse(r.workdir) as Workdir) : null, permission: permissionOf(r.permission), queue: queueInfo(r.id, r.queue ? (JSON.parse(r.queue) as Queued[]) : []), interrupted: r.interrupted && !running.has(r.id) ? (JSON.parse(r.interrupted) as Interruption) : null })
+const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: (r.tools ? toolGroups(JSON.parse(r.tools)) : null) ?? [...TOOL_GROUPS], quick: !!r.quick, workdir: r.workdir ? (JSON.parse(r.workdir) as Workdir) : null, permission: permissionOf(r.permission), queue: queueInfo(r.id, r.queue ? (JSON.parse(r.queue) as Queued[]) : []), interrupted: r.interrupted && !running.has(r.id) ? (JSON.parse(r.interrupted) as Interruption) : null, titleSource: r.title_source === 'user' ? 'user' : 'auto', aliases: aliasesOf(r), checkingTitle: checkingTitle.has(r.id) })
+const aliasesOf = (r: ThreadRow): TitleAlias[] => (r.title_history ? (JSON.parse(r.title_history) as TitleAlias[]) : [])
 const permissionOf = (v: unknown): Permission => (PERMISSIONS.includes(v as Permission) ? (v as Permission) : 'default')
 /** With a work folder, its tools are switched on (a list saved before they existed lacks them). */
 const withFolderTools = (tools: ToolGroup[] | null, workdir: Workdir | null) => (tools && workdir ? [...new Set<ToolGroup>([...tools, 'files', 'terminal'])] : tools)
@@ -723,6 +729,9 @@ export async function updateThread(user: User, id: string, body: { title?: strin
   database()
     .prepare('UPDATE agent_threads SET title = ?, archived = ?, mode = ?, model = ?, tools = ?, pinned = ?, project_id = ?, quick = ?, workdir = ?, permission = ? WHERE id = ?')
     .run(title, archived, mode, model, tools, pinned, project, quick, workdir ? JSON.stringify(workdir) : null, permission, row.id)
+  // Renamed by hand: the title is the user's from now on, which the automatic check leaves alone
+  // (Regenerate title hands it back), and the old one stays findable as an alias.
+  if (title !== row.title) setTitle(row, title, 'user')
   return toThread(ownThread(user, row.id))
 }
 
@@ -760,16 +769,21 @@ export function stopThread(user: User, id: string) {
  * model that names threads, and where ~/AGENTS.md is in Seafile when Seafile is home (the window
  * works that out from /etc/fstab and keeps it up to date).
  */
-type AgentSettings = { titleModel: string | null; quickModel: string | null; deepModel: string | null; promptFile: { repo: string; path: string } | null; skillsFolder: Folder | null; skillsOff: string[] }
+type AgentSettings = { titleModel: string | null; quickModel: string | null; deepModel: string | null; promptFile: { repo: string; path: string } | null; skillsFolder: Folder | null; skillsOff: string[]; /** Whether titles are checked against the conversation now and then, and changed when it moved on */ titleRefresh: boolean; /** Every how many of the user's messages that check runs */ titleEvery: number }
+/** The intervals Settings offers for the title check, in messages from the user. */
+export const TITLE_EVERY = [3, 4, 6, 10]
 
 function agentSettings(user: User): AgentSettings {
-  const v = (readState(user).agents?.value ?? {}) as { titleModel?: unknown; quickModel?: unknown; deepModel?: unknown; promptFile?: { repo?: unknown; path?: unknown } | null; skillsFolder?: unknown; skillsOff?: unknown }
+  const v = (readState(user).agents?.value ?? {}) as { titleModel?: unknown; quickModel?: unknown; deepModel?: unknown; promptFile?: { repo?: unknown; path?: unknown } | null; skillsFolder?: unknown; skillsOff?: unknown; titleRefresh?: unknown; titleEvery?: unknown }
   const name = (x: unknown) => (typeof x === 'string' && /^[\w.:/-]{1,80}$/.test(x) ? x : null)
   const titleModel = name(v.titleModel)
   const f = v.promptFile
   const promptFile = f && typeof f.repo === 'string' && /^[0-9a-f-]{36}$/i.test(f.repo) && typeof f.path === 'string' && f.path.startsWith('/') && !f.path.split('/').includes('..') ? { repo: f.repo, path: f.path } : null
   const skillsOff = Array.isArray(v.skillsOff) ? v.skillsOff.filter((x): x is string => typeof x === 'string').slice(0, 500) : []
-  return { titleModel, quickModel: name(v.quickModel), deepModel: name(v.deepModel), promptFile, skillsFolder: folderOf(v.skillsFolder), skillsOff }
+  // On unless switched off: settings saved before the check existed have no say yet.
+  const titleRefresh = v.titleRefresh !== false
+  const titleEvery = TITLE_EVERY.includes(Number(v.titleEvery)) ? Number(v.titleEvery) : 4
+  return { titleModel, quickModel: name(v.quickModel), deepModel: name(v.deepModel), promptFile, skillsFolder: folderOf(v.skillsFolder), skillsOff, titleRefresh, titleEvery }
 }
 
 export type PromptInfo = { text: string; source: 'seafile' | 'builtin'; repo: string | null; path: string | null; missing: boolean; error: string | null }
@@ -838,39 +852,44 @@ export function cleanTitle(raw: string): string | null {
 }
 
 /** A title for the thread so far, from the title model (Settings in the app; a fast one otherwise). */
-async function makeTitle(user: User, key: string, thread: string): Promise<string | null> {
+async function makeTitle(user: User, key: string, thread: string, recent = false): Promise<string | null> {
   const msgs = messagesOf(thread)
   const first = msgs.find((m) => m.role === 'user')
   const firstAsk = [first?.content ?? '', ...(first?.attachments ?? []).map((a) => `(attached: ${a.name})`)].filter(Boolean).join(' ')
   const lastAsk = [...msgs].reverse().find((m) => m.role === 'user')?.content ?? ''
   const answer = [...msgs].reverse().find((m) => m.role === 'assistant' && m.content.trim())?.content ?? ''
   if (!firstAsk) return null
-  const convo = [`User: ${clip(firstAsk, 1500)}`, lastAsk !== firstAsk ? `User, later: ${clip(lastAsk, 800)}` : '', answer ? `Agent: ${clip(answer, 1500)}` : ''].filter(Boolean).join('\n\n')
-  const model = agentSettings(user).titleModel ?? (await defaultModel('quick'))
-  const info = (await models().catch(() => [] as ModelInfo[])).find((m) => m.name === model)
-  const think = info?.thinking ? (model.startsWith('gpt-oss') ? 'low' : false) : undefined
+  // A first title goes by how the thread started; a regenerated one by what it talks about now.
+  const convo = recent ? recentDigest(msgs) : [`User: ${clip(firstAsk, 1500)}`, lastAsk !== firstAsk ? `User, later: ${clip(lastAsk, 800)}` : '', answer ? `Agent: ${clip(answer, 1500)}` : ''].filter(Boolean).join('\n\n')
   const messages = [
     { role: 'system', content: TITLE_PROMPT },
     ...TITLE_SHOTS.flatMap(([q, title]) => [
       { role: 'user', content: `User: ${q}` },
       { role: 'assistant', content: JSON.stringify({ title }) },
     ]),
-    { role: 'user', content: convo },
+    { role: 'user', content: recent ? `${convo}\n\nName what this conversation is about now, at its end.` : convo },
   ]
   // Twice at most: a model that answers with a description of the request gets one more go.
   for (const temperature of [0.2, 0.6]) {
-    const body = { model, stream: false, options: { temperature, num_predict: 60 }, messages, ...(think === undefined ? {} : { think }) }
     // Structured output holds the model to {"title": "…"}; a model that refuses it is asked plainly.
     const format = { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] }
-    const res = await ollama(key, '/api/chat', { ...body, format }, AbortSignal.timeout(30_000)).catch((e) => {
-      if (e instanceof HttpError && e.status === 409) throw e // the key itself
-      return ollama(key, '/api/chat', body, AbortSignal.timeout(30_000))
-    })
-    const answer = (await res.json()) as { message?: { content?: string } }
-    const title = pickTitle(answer.message?.content ?? '')
+    const title = pickTitle(await askTitleModel(user, key, messages, format, temperature))
     if (title) return title
   }
   return null
+}
+
+/** One answer from the title model, held to `format` when the model takes structured output. */
+async function askTitleModel(user: User, key: string, messages: { role: string; content: string }[], format: object, temperature: number): Promise<string> {
+  const model = agentSettings(user).titleModel ?? (await defaultModel('quick'))
+  const info = (await models().catch(() => [] as ModelInfo[])).find((m) => m.name === model)
+  const think = info?.thinking ? (model.startsWith('gpt-oss') ? 'low' : false) : undefined
+  const body = { model, stream: false, options: { temperature, num_predict: 60 }, messages, ...(think === undefined ? {} : { think }) }
+  const res = await ollama(key, '/api/chat', { ...body, format }, AbortSignal.timeout(30_000)).catch((e) => {
+    if (e instanceof HttpError && e.status === 409) throw e // the key itself
+    return ollama(key, '/api/chat', body, AbortSignal.timeout(30_000))
+  })
+  return ((await res.json()) as { message?: { content?: string } }).message?.content ?? ''
 }
 
 /**
@@ -898,6 +917,136 @@ export function pickTitle(raw: string): string | null {
 export async function suggestTitle(user: User, id: string): Promise<{ title: string | null }> {
   const row = ownThread(user, id)
   return { title: await makeTitle(user, requireKey(user), row.id) }
+}
+
+// --- keeping titles up to date ----------------------------------------------------------------
+//
+// A thread's first title names how it started, and threads wander. Every few of the user's
+// messages (Settings: on by default, every 4), after the turn has answered, the title model gets the
+// current title and a short digest of the latest exchanges, and says whether the title still fits
+// or what fits better now. It is asked to keep the title unless the subject really changed, so a
+// title does not flip with each new detail. A title the user set by hand is never touched. Old
+// titles stay on the thread as aliases: the sidebar shows them on hover and its search finds them.
+
+const RETITLE_PROMPT = [
+  'You keep the title of a chat thread up to date. The title is shown in one short line of a sidebar, so the user can find the thread again.',
+  'You get the current title and the latest messages. Answer with JSON: {"keep": true} when the title still fits what the conversation is about, or {"title": "…"} with a better title when the conversation has clearly moved on to another subject.',
+  'Keep the title in almost every case: when the talk stays on the same subject, goes deeper into it, asks a follow-up or a related question, or only the wording or details change. Change it only when the title would now mislead someone looking for this conversation.',
+  'A new title is a noun phrase of 2 to 5 words, at most 40 characters, naming the subject itself, in the language of the conversation, capitalised like a headline. Never describe the conversation, the request or the people in it.',
+].join('\n')
+
+/** How many aliases a thread keeps: the latest ones. */
+const MAX_ALIASES = 5
+/** A thread that grew this much (characters of questions and answers) is checked sooner. */
+const TITLE_GROWTH = 24_000
+
+/**
+ * The latest exchanges, small: the user's last few messages and the start of each answer, no tool
+ * results or thinking. Enough to tell what the conversation is about now.
+ */
+function recentDigest(msgs: AgentMessage[]): string {
+  return msgs
+    .filter((m) => (m.role === 'user' || m.role === 'assistant') && (m.content.trim() || m.attachments?.length))
+    .slice(-8)
+    .map((m) =>
+      m.role === 'user'
+        ? `User: ${[clip(m.content.trim(), 500), ...(m.attachments ?? []).map((a) => `(attached: ${a.name})`)].filter(Boolean).join(' ')}`
+        : `Agent: ${clip(m.content.trim(), 300)}`,
+    )
+    .join('\n\n')
+}
+
+const lastMessageId = (thread: string) => (database().prepare('SELECT MAX(id) AS id FROM agent_messages WHERE thread_id = ?').get(thread) as { id: number | null }).id ?? 0
+
+/**
+ * Sets a thread's title and who set it; the old title becomes an alias (unless it was the
+ * placeholder), and the new one stops being one. The mark moves to the last message, so the next
+ * automatic check counts from here.
+ */
+function setTitle(row: ThreadRow, title: string, source: TitleSource) {
+  const old = row.title
+  const aliases = aliasesOf(row).filter((a) => a.title.toLowerCase() !== title.toLowerCase() && a.title.toLowerCase() !== old.toLowerCase())
+  const history = old !== title && old !== NEW_TITLE ? [{ title: old, until: Date.now() }, ...aliases] : aliases
+  database()
+    .prepare('UPDATE agent_threads SET title = ?, title_source = ?, title_history = ?, title_mark = ? WHERE id = ?')
+    .run(title, source, history.length ? JSON.stringify(history.slice(0, MAX_ALIASES)) : null, lastMessageId(row.id), row.id)
+}
+
+/** The check's answer: keep the title (null), or this one instead. Anything unclear keeps it. */
+export function pickRetitle(raw: string, current: string): string | null {
+  let parsed: { keep?: unknown; title?: unknown } | null = null
+  try {
+    parsed = JSON.parse(raw.replace(/<think>[\s\S]*?<\/think>/g, '').trim()) as { keep?: unknown; title?: unknown }
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object' || parsed.keep === true || typeof parsed.title !== 'string') return null
+  const title = pickTitle(JSON.stringify({ title: parsed.title }))
+  return title && title.toLowerCase() !== current.toLowerCase() ? title : null
+}
+
+/**
+ * After a turn answered: checks the title when enough was said since it was last decided on (the
+ * user's messages, or a lot of text), and changes it when the conversation moved on. Runs on its
+ * own, never holding up the answer or the next queued message; failures only go to the log. The
+ * thread says it is being checked, so windows look again until the check is done.
+ */
+function keepTitleFresh(user: User, key: string, thread: string, send: (e: TurnEvent) => void) {
+  const settings = agentSettings(user)
+  if (!settings.titleRefresh || checkingTitle.has(thread) || titling.has(thread)) return
+  const row = database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(thread) as ThreadRow | undefined
+  if (!row || row.title === NEW_TITLE || row.title_source === 'user' || row.quick) return
+  const since = database()
+    .prepare("SELECT COALESCE(SUM(role = 'user'), 0) AS asks, COALESCE(SUM(LENGTH(content)), 0) AS chars FROM agent_messages WHERE thread_id = ? AND id > ? AND role IN ('user', 'assistant')")
+    .get(thread, row.title_mark ?? 0) as { asks: number; chars: number }
+  if (since.asks < settings.titleEvery && !(since.asks >= 2 && since.chars >= TITLE_GROWTH)) return
+  checkingTitle.add(thread)
+  const messages = [
+    { role: 'system', content: RETITLE_PROMPT },
+    { role: 'user', content: `Current title: ${row.title}\n\nLatest messages:\n\n${recentDigest(messagesOf(thread))}` },
+  ]
+  const format = { type: 'object', properties: { keep: { type: 'boolean' }, title: { type: 'string' } } }
+  void askTitleModel(user, key, messages, format, 0.2)
+    .then((raw) => {
+      // Renamed by hand, or regenerated, while the model thought: that wins.
+      const now = database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(thread) as ThreadRow | undefined
+      if (!now || now.title !== row.title || now.title_source === 'user') return
+      const title = pickRetitle(raw, now.title)
+      if (title) setTitle(now, title, 'auto')
+      else database().prepare('UPDATE agent_threads SET title_mark = ? WHERE id = ?').run(lastMessageId(thread), thread)
+    })
+    .catch((e: Error) => {
+      console.warn('agents: title check failed:', e.message)
+      // Not asked again on the very next turn: the next try waits as long as a normal check.
+      database().prepare('UPDATE agent_threads SET title_mark = ? WHERE id = ?').run(lastMessageId(thread), thread)
+    })
+    .finally(() => {
+      checkingTitle.delete(thread)
+      const after = database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(thread) as ThreadRow | undefined
+      // The turn's stream when it is still open (a queued message running), and windows following.
+      if (after) (sinks.get(thread) ?? send)({ type: 'thread', thread: toThread(after) })
+    })
+}
+
+/**
+ * Regenerate title: a fresh title for what the thread talks about now, saved straight away. The
+ * title is the title model's again from here, so the automatic check looks after it once more.
+ */
+export async function regenerateTitle(user: User, id: string): Promise<{ thread: Thread }> {
+  const row = ownThread(user, id)
+  const key = requireKey(user)
+  if (titling.has(row.id)) throw new HttpError(409, 'A title is being thought of already')
+  titling.add(row.id)
+  try {
+    const title = await makeTitle(user, key, row.id, true)
+    if (!title) throw new HttpError(502, 'No title came to mind: try again')
+    setTitle(ownThread(user, row.id), title, 'auto')
+  } finally {
+    titling.delete(row.id)
+  }
+  const thread = toThread(ownThread(user, row.id))
+  sinks.get(row.id)?.({ type: 'thread', thread })
+  return { thread }
 }
 
 /** What the next turn sends the model, part by part, with a rough token count (about 4 characters a token). */
@@ -2000,7 +2149,8 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
     const info = (await models().catch(() => [] as ModelInfo[])).find((m) => m.name === row.model)
     // /name for a skill: its instructions go along as an attachment the window shows.
     const skillFile = text.startsWith('/') ? await skillInvocation(user, skillPlaces(user, toThread(row).workdir), text) : null
-    send({ type: 'message', message: addMessage(row.id, { role: 'user', content: text }, skillFile ? [...files, skillFile] : files) })
+    const asked = addMessage(row.id, { role: 'user', content: text }, skillFile ? [...files, skillFile] : files)
+    send({ type: 'message', message: asked })
     // A new thread gets its title from the title model, alongside the answer; the first line of
     // the question stands in if that fails.
     if (row.title === NEW_TITLE && !titling.has(row.id)) {
@@ -2010,7 +2160,8 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
         .catch(() => null)
         .then((title) => {
           const t = title || (firstLine.length > 60 ? `${firstLine.slice(0, 57)}…` : firstLine)
-          database().prepare('UPDATE agent_threads SET title = ? WHERE id = ? AND title = ?').run(t, row.id, NEW_TITLE)
+          // The automatic check counts the user's messages from this first one on.
+          database().prepare("UPDATE agent_threads SET title = ?, title_source = 'auto', title_mark = ? WHERE id = ? AND title = ?").run(t, asked.id, row.id, NEW_TITLE)
         })
         .finally(() => {
           titling.delete(row.id)
@@ -2184,6 +2335,8 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
       if (wrapUp) break
     }
     send({ type: 'done' })
+    // The title, checked now and then against what the thread talks about by now (in the background).
+    keepTitleFresh(user, key, row.id, send)
     return { outcome: 'answered' }
   } catch (e) {
     if (!ctl.signal.aborted) {
@@ -2318,7 +2471,8 @@ export async function rewind(user: User, id: string, body: { messageId?: unknown
   const message = { text: target.content, attachments: filesOf(row.id, target.id) }
   const { n } = database().prepare('SELECT COUNT(*) AS n FROM agent_messages WHERE thread_id = ? AND id >= ?').get(row.id, target.id) as { n: number }
   database().prepare('DELETE FROM agent_messages WHERE thread_id = ? AND id >= ?').run(row.id, target.id)
-  database().prepare('UPDATE agent_threads SET interrupted = NULL, context_tokens = NULL WHERE id = ?').run(row.id)
+  // The title check counts from its mark: kept within what is left, as message ids can come back.
+  database().prepare('UPDATE agent_threads SET interrupted = NULL, context_tokens = NULL, title_mark = MIN(COALESCE(title_mark, 0), ?) WHERE id = ?').run(lastMessageId(row.id), row.id)
   return { thread: toThread(ownThread(user, row.id)), removed: n, message }
 }
 

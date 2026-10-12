@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import { AGENTS_MD } from '../data/agentsPrompt'
 import { installSkills, listSkills, removeSkill, setSkillEnabled, type Skill } from '../data/agents'
 import { ask } from '../os/Dialogs'
-import { agentModels, getDefaults, getPrompt, listMemories, setAgentSettings, TOOL_GROUPS, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
+import { agentModels, getDefaults, getPrompt, listMemories, setAgentSettings, TITLE_EVERY, TOOL_GROUPS, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
 import { useMounts, whereIs } from '../data/mounts'
 import { syncAgentPlaces } from '../data/agentPlaces'
 import { getWebSearch, PROVIDERS, resetWebSearch, saveWebSearch, testWebSearch, type Provider, type ResultMap, type SearchResult, type WebSearchInput, type WebSearchView } from '../data/websearch'
@@ -46,7 +46,7 @@ const icon = (d: ReactNode) => (
 )
 const SECTIONS: { id: SectionId; label: string; blurb: string; icon: ReactNode }[] = [
   { id: 'general', label: 'General', blurb: 'The Ollama Cloud connection Agents runs on, and what it remembers.', icon: icon(<><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1" /></>) },
-  { id: 'models', label: 'Models', blurb: 'Which model a new Quick or Deep thread gets, and which one names threads.', icon: icon(<><rect x="4" y="4" width="16" height="16" /><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" /></>) },
+  { id: 'models', label: 'Models', blurb: 'Which model a new Quick or Deep thread gets, and which one names threads and keeps their titles up to date.', icon: icon(<><rect x="4" y="4" width="16" height="16" /><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" /></>) },
   { id: 'threads', label: 'New threads', blurb: 'The mode and tools a new thread starts with.', icon: icon(<path d="M4 5h16v11H9l-5 4z" />) },
   { id: 'search', label: 'Web search', blurb: 'Where the agent searches the web. Reading pages always goes through Ollama.', icon: icon(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>) },
   { id: 'skills', label: 'Skills', blurb: 'Instructions for kinds of tasks, in SKILL.md folders: the agent reads one when a task matches it, or you start one with /name.', icon: icon(<path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5z" />) },
@@ -211,6 +211,32 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
         </li>
       </ul>
       <p className="muted set-help">Ollama Cloud's models that can use tools, with their context window. A thread keeps the model it started with; change it in the thread's composer.</p>
+
+      <h4 className="set-subhead">Thread titles</h4>
+      <ul className="set-list">
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Keep thread titles up to date</strong>
+            <span className="muted">Now and then the title model checks whether a thread's title still fits, and renames it when the conversation moved on to something else. Titles you set yourself stay.</span>
+          </span>
+          <Toggle on={settings.titleRefresh} onChange={(titleRefresh) => setAgentSettings({ titleRefresh })} label="Keep thread titles up to date" />
+        </li>
+        <li className={`set-row ${settings.titleRefresh ? '' : 'is-off'}`}>
+          <span className="set-row-text">
+            <strong>Check every</strong>
+            <span className="muted">Of your messages in a thread; a thread that grows a lot is checked sooner</span>
+          </span>
+          <Select
+            className="set-select"
+            value={settings.titleEvery}
+            onChange={(titleEvery) => setAgentSettings({ titleEvery })}
+            disabled={!settings.titleRefresh}
+            aria-label="Check thread titles every"
+            options={TITLE_EVERY.map((n) => ({ value: n, label: `${n} messages` }))}
+          />
+        </li>
+      </ul>
+      <p className="muted set-help">Old titles are kept: hover a thread in the sidebar to see what it was called, and the sidebar's search finds them. Regenerate title, in a thread's menu, asks for a fresh one any time.</p>
 
       </>
     ),
