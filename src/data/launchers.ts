@@ -105,8 +105,8 @@ function fetchFolder(sf: string, maxAge = 30_000) {
     })
 }
 
-/** The entries of a folder (Seafile path or one in this browser), as far as known. */
-function entriesOf(at: string): { name: string; dir: boolean; mtime: number }[] {
+/** The entries of a folder (Seafile path or one in this browser); null until Seafile has answered once. */
+function entriesOf(at: string): { name: string; dir: boolean; mtime: number }[] | null {
   if (!isSf(at)) {
     const w = whereIs(at)
     return w.kind === 'browser' ? listBrowser(w.path).map((e) => ({ name: nameOf(e.path), dir: e.dir, mtime: e.mtime })) : []
@@ -117,7 +117,7 @@ function entriesOf(at: string): { name: string; dir: boolean; mtime: number }[] 
     return hit.listing.entries
   }
   fetchFolder(at)
-  return lastEntries.get(at) ?? []
+  return lastEntries.get(at) ?? (hit ? [] : null)
 }
 
 /** A .desktop file's text: undefined while it is being fetched. */
@@ -210,7 +210,10 @@ function compute(): Launcher[] {
     [h.desktop, true],
     [h.apps, false],
   ] as const) {
-    for (const e of entriesOf(dir)) {
+    const entries = entriesOf(dir)
+    // Not listed yet: what was shown last (or this browser's cache), rather than nothing for a moment.
+    if (!entries) return current.length ? current : (readCache() ?? current)
+    for (const e of entries) {
       if (e.dir || !isLauncherName(e.name)) continue
       const at = `${dir}/${e.name}`
       const text = textOf(at, e.mtime)
@@ -309,8 +312,14 @@ export const launcherPort: LauncherPort = {
       refreshDirs(w.sf.replace(/\/[^/]*$/, ''))
     }
   },
+  // Level by level, each looked up fresh first: Seafile numbers a folder made where one already
+  // is ("applications (1)"), and the terminal's cache may not have listed it yet.
   async mkdirp(dir) {
-    await makeDir('/', dir, true)
+    if (dir === '/' || (await launcherPort.list(dir))) return
+    await launcherPort.mkdirp(dir.replace(/\/[^/]*$/, '') || '/')
+    await makeDir('/', dir, false).catch((e: Error) => {
+      if (!/File exists/.test(e.message)) throw e
+    })
   },
 }
 
@@ -377,7 +386,7 @@ export function updateLauncher(id: string, patch: Partial<Omit<Launcher, 'id' | 
     if (patch.desktop !== undefined && patch.desktop !== l.desktop && h.kind === 'files') {
       const to = posixPath(patch.desktop === false ? h.apps : h.desktop)
       if (to) {
-        await makeDir('/', to, true)
+        await launcherPort.mkdirp(to)
         const taken = new Set(((await launcherPort.list(to)) ?? []).map((e) => e.name))
         const name = taken.has(nameOf(path)) ? launcherFileName(next.label, taken) : nameOf(path)
         await transfer('move', '/', path, `${to}/${name}`, true)

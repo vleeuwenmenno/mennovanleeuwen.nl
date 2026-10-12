@@ -459,7 +459,9 @@ function Dock() {
   const iconOf = (id: DockId, size = 48) => {
     const l = launcherOf(id)
     if (l?.app && !l.glyph) return <AppIcon app={l.app as AppId} size={size} tone />
-    return l ? <LauncherIcon url={l.url} glyph={l.glyph} image={l.image} size={size} /> : <AppIcon app={id as AppId} size={size} tone />
+    // A launcher whose file is not read (yet, or any more) still gets a launcher's tile.
+    if (isLauncherId(id)) return <LauncherIcon url={l?.url ?? ''} glyph={l ? l.glyph : '↗'} image={l?.image} size={size} />
+    return <AppIcon app={id as AppId} size={size} tone />
   }
 
   // Clicking an app: open it, or bring its window back (from being minimized, or from another
