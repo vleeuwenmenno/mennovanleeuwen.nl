@@ -289,7 +289,13 @@ function MessageCard({
         <Avatar person={sender} />
         <div className="ml-msg-who">
           <div>
-            {sender ? <PersonChip email={sender.email} name={sender.name ?? undefined} title={sender.name ? `${sender.name} <${sender.email}>` : sender.email} onMenu={(e) => showPerson(sender, e, searchFrom)} /> : <strong>(No sender)</strong>}
+            {sender ? (
+              <span onClick={(e) => e.stopPropagation()}>
+                <PersonChip email={sender.email} name={sender.name ?? undefined} title={sender.name ? `${sender.name} <${sender.email}>` : sender.email} onMenu={(e) => showPerson(sender, e, searchFrom)} />
+              </span>
+            ) : (
+              <strong>(No sender)</strong>
+            )}
             {sender?.name && <span className="muted ml-msg-addr"> &lt;{sender.email}&gt;</span>}
             {m.draft && <em className="ml-draft">Draft</em>}
           </div>

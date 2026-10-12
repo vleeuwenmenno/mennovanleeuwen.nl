@@ -1192,12 +1192,12 @@ export async function messageFacts(acc: Linked, emailId: unknown): Promise<Messa
   return { id: e.id, threadId: e.threadId, subject: String(e.subject ?? ''), from: addresses(e.from), to: addresses(e.to), cc: addresses(e.cc), receivedAt: String(e.receivedAt ?? ''), preview: String(e.preview ?? ''), messageId: mid, ics }
 }
 
-/** The latest conversations with any of these people (from, to or cc), outside Trash and Junk. */
+/** The latest conversations with any of these people (from, to or cc), outside Drafts, Trash and Junk. */
 export async function mailWith(acc: Linked, emails: string[], limit: number): Promise<ThreadRow[]> {
   const people = emails.filter((e) => EMAIL.test(e)).slice(0, 20)
   if (!people.length) return []
   const m = await meta(acc)
-  const away = [m.role('trash'), m.role('junk')].filter((x): x is string => !!x)
+  const away = [m.role('drafts'), m.role('trash'), m.role('junk')].filter((x): x is string => !!x)
   const anyone = { operator: 'OR', conditions: people.flatMap((email) => [{ from: email }, { to: email }, { cc: email }]) }
   const filter = away.length ? { operator: 'AND', conditions: [anyone, { inMailboxOtherThan: away }] } : anyone
   const r = await jmap(acc, [

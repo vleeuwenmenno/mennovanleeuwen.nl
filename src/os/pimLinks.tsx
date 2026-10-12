@@ -117,6 +117,7 @@ function toStatus(s: InviteState): InviteStatus {
   return {
     answer: s.status,
     calendar: s.where?.calendar ?? null,
+    event: s.where ? { title: s.where.title, start: s.where.start, allDay: s.where.allDay } : null,
     cancelled: !!s.where?.cancelled,
     canAnswer: s.canAnswer,
     organiser: s.organiser,

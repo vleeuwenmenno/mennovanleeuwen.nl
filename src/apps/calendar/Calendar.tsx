@@ -185,15 +185,16 @@ export function CalendarApp({ win }: { win: WinState }) {
       setEditing({ event: null, draft: { ...draft, title: req.title ?? '', guests: req.guests ?? [], description: req.description ?? '', location: req.location ?? '' } })
     }
     wantedUid.current = win.props.event ?? null
+    openWanted()
   }, [win.props.t]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    const uid = wantedUid.current
-    if (!uid || !data) return
-    const e = data.events.find((x) => x.uid === uid)
+  // The event asked for, once it is in what was fetched (now, or after the day it is on loads).
+  const openWanted = () => {
+    const e = wantedUid.current ? data?.events.find((x) => x.uid === wantedUid.current) : null
     if (!e) return
     wantedUid.current = null
     setEditing({ event: e, draft: draftFromEvent(e) })
-  }, [data])
+  }
+  useEffect(openWanted, [data]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const choose: Choose = useCallback((question, verb) => new Promise((resolve) => setAsking({ question, verb, resolve })), [])
   const answer = (a: 'one' | 'all' | null) => {

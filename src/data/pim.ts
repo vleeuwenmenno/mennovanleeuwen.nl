@@ -15,7 +15,7 @@ export type InviteState = {
   uid: string
   me: string | null
   status: Status | null
-  where: { source: 'caldav' | 'google'; calendarId: string; calendar: string; start: string | null; allDay: boolean; cancelled: boolean; organizer: string | null; guests: Guest[] } | null
+  where: { source: 'caldav' | 'google'; calendarId: string; calendar: string; title: string; start: string | null; allDay: boolean; cancelled: boolean; organizer: string | null; guests: Guest[] } | null
   organiser: boolean
   replies: (Guest & { current: Status | null; fromSender: boolean })[]
   canAnswer: boolean

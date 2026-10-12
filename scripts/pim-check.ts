@@ -12,6 +12,7 @@
 //     own event (only by the guest who sent it),
 //   - a contact's recent mail and upcoming events,
 //   - a task made from a message, with the link back to it, found again by its Message-ID,
+//   - the address a tapped push opens (a task reminder: that task),
 //   - another user, who reaches none of it.
 //
 //   node scripts/pim-check.ts
@@ -170,6 +171,7 @@ try {
   const replyBody = `UID:my-party@example.test\r\nDTSTAMP:20261002T080000Z\r\nORGANIZER:mailto:${ME.email}\r\nATTENDEE;CN=Dave;PARTSTAT=ACCEPTED:mailto:dave@example.test\r\n`
   const m8 = deliver('Accepted: My party', ical('REPLY', replyBody), dave)
   state = await api('GET', `/api/pim/invite?account=${acc}&email=${m8}`)
+  check('a reply, which often has no title or time, gets them from your event', state.where?.title === 'My party' && !!state.where?.start)
   check('a reply shows the answer and what your event says now', state.organiser && state.replies[0]?.email === 'dave@example.test' && state.replies[0].status === 'accepted' && state.replies[0].current === 'needs-action' && state.replies[0].fromSender)
   r = await api('POST', '/api/pim/invite', { account: acc, email: m8, action: 'apply' })
   text = object(`${EVENTS}my-party.ics`)
@@ -187,6 +189,7 @@ try {
   check(`a contact's recent mail, from any of their addresses (${subjects.join(' | ')})`, subjects[0] === 'From her work address' && subjects.includes('Re: Draft chapter') && recent.messages.every((m: J) => m.account === acc))
   check('one row per conversation, newest first', subjects.filter((s: string) => /Draft chapter/.test(s)).length === 1 && recent.messages.every((m: J, i: number, a: J[]) => i === 0 || a[i - 1].receivedAt >= m.receivedAt))
   check('nothing from Trash or Junk', (await api('GET', '/api/pim/mail-with?emails=old%40news.example')).messages.length === 0)
+  check('nor Drafts', !(await api('GET', '/api/pim/mail-with?emails=alice%40example.test')).messages.some((m: J) => m.subject === 'Half-written note'))
   put('with-carol.ics', ical(null, `UID:with-carol@example.test\r\nDTSTAMP:20261001T080000Z\r\nSUMMARY:Coffee with Carol\r\nDTSTART:${day(10)}T090000Z\r\nDTEND:${day(10)}T100000Z\r\nORGANIZER:mailto:${ME.email}\r\nATTENDEE;PARTSTAT=ACCEPTED:mailto:${ME.email}\r\nATTENDEE;PARTSTAT=ACCEPTED:mailto:carol@example.test\r\n`))
   put('far-off.ics', ical(null, `UID:far-off@example.test\r\nDTSTAMP:20261001T080000Z\r\nSUMMARY:Far off\r\nDTSTART:${day(80)}T090000Z\r\nDTEND:${day(80)}T100000Z\r\nATTENDEE:mailto:carol@example.test\r\n`))
   put('without-carol.ics', ical(null, `UID:without@example.test\r\nDTSTAMP:20261001T080000Z\r\nSUMMARY:Alone\r\nDTSTART:${day(4)}T090000Z\r\nDTEND:${day(4)}T100000Z\r\n`))
@@ -205,6 +208,11 @@ try {
   check('an unknown Message-ID is not found', (await status(sid, 'GET', '/api/pim/find-mail?messageId=nobody%40nowhere.test', undefined)) === 404)
   const list = (await api('GET', '/api/tasks')).tasks as J[]
   check('the task is in Tasks', list.some((t) => t.id === task.id && t.url === task.url))
+
+  // --- A tapped push opens what it is about ---------------------------------------------------------
+  const { actionUrl } = await import('../src/data/notifySources.ts')
+  check('a task reminder opens that task (/?open=tasks&task=…)', actionUrl({ app: 'tasks', props: { task: task.id } }) === `/?open=tasks&task=${encodeURIComponent(task.id)}`)
+  check('an Agents answer still opens its thread', actionUrl({ app: 'agents', props: { thread: 'abc' } }) === '/?open=agents&thread=abc')
 
   // --- Another user ----------------------------------------------------------------------------------
   check("another user can't read the invitation", (await status(otherSid, 'GET', `/api/pim/invite?account=${acc}&email=${m3}`)) === 404)

@@ -146,6 +146,7 @@ export function showPerson(person: Address, e: MouseEvent, more: MenuItem[] = []
   const handler = personHandlerOf()
   if (handler) {
     e.preventDefault()
+    e.stopPropagation()
     return handler(person, { x: e.clientX, y: e.clientY, anchor: e.currentTarget as Element, menu: e.type === 'contextmenu' }, more)
   }
   const label = person.name ? `${person.name} <${person.email}>` : person.email
@@ -205,15 +206,15 @@ const ANSWERED: Record<string, string> = { accepted: 'You accepted', tentative: 
  * and Decline for an invitation, removing a cancelled event, and writing a guest's reply onto your
  * own event.
  */
-export function InviteCard({ invite, message }: { invite: Invite; message: MessageRef }) {
+export function InviteCard({ invite: given, message }: { invite: Invite; message: MessageRef }) {
   const handler = inviteHandlerOf()
   const [busy, setBusy] = useState<string | null>(null)
   const [status, setStatus] = useState<InviteStatus | null>(null)
-  const label = invite.method === 'REQUEST' ? 'Invitation' : invite.method === 'CANCEL' ? 'Cancelled' : invite.method === 'REPLY' ? 'Reply' : invite.method === 'COUNTER' ? 'New time proposed' : invite.method.toLowerCase()
+  const label = given.method === 'REQUEST' ? 'Invitation' : given.method === 'CANCEL' ? 'Cancelled' : given.method === 'REPLY' ? 'Reply' : given.method === 'COUNTER' ? 'New time proposed' : given.method.toLowerCase()
   useEffect(() => {
     let live = true
     setStatus(null)
-    handler?.status?.(invite, message).then(
+    handler?.status?.(given, message).then(
       (s) => live && setStatus(s),
       () => live && setStatus(null),
     )
@@ -232,6 +233,9 @@ export function InviteCard({ invite, message }: { invite: Invite; message: Messa
       setBusy(null)
     }
   }
+  // A reply often leaves out the title and time: the event in your calendar has them.
+  const event = status?.event
+  const invite = event && (!given.start || given.title === '(No title)') ? { ...given, title: given.title === '(No title)' ? event.title : given.title, start: given.start ?? event.start, allDay: given.start ? given.allDay : event.allDay } : given
   const answer = status?.answer ?? null
   const where = status?.calendar
   const replies = status?.replies.length ? status.replies : invite.replies.map((r) => ({ email: r.email, name: r.name, answer: r.status.toLowerCase(), inCalendar: null, fromSender: true }))

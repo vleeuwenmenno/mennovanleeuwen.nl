@@ -107,12 +107,12 @@ async function locate(user: User, uid: string): Promise<Found | null> {
 }
 
 type Guest = { email: string; name: string | null; status: Status; organizer?: boolean }
-export type Where = { source: 'caldav' | 'google'; calendarId: string; calendar: string; start: string | null; allDay: boolean; cancelled: boolean; organizer: string | null; guests: Guest[] }
+export type Where = { source: 'caldav' | 'google'; calendarId: string; calendar: string; title: string; start: string | null; allDay: boolean; cancelled: boolean; organizer: string | null; guests: Guest[] }
 
 function describe(found: Found, uid: string): Where {
   if (found.source === 'google') {
     const e = found.event
-    return { source: 'google', calendarId: e.calendarId, calendar: e.calendar, start: e.start || null, allDay: e.allDay, cancelled: e.cancelled, organizer: e.attendees.find((a) => a.organizer)?.email ?? null, guests: e.attendees.map((a) => ({ email: a.email, name: a.name ?? null, status: a.status ?? 'needs-action', organizer: a.organizer })) }
+    return { source: 'google', calendarId: e.calendarId, calendar: e.calendar, title: e.title, start: e.start || null, allDay: e.allDay, cancelled: e.cancelled, organizer: e.attendees.find((a) => a.organizer)?.email ?? null, guests: e.attendees.map((a) => ({ email: a.email, name: a.name ?? null, status: a.status ?? 'needs-action', organizer: a.organizer })) }
   }
   const o = found.objects[0]
   const evs = eventsIn(o.ics).filter((ev) => getProp(ev, 'UID')?.value.trim() === uid)
@@ -124,6 +124,7 @@ function describe(found: Found, uid: string): Where {
     source: 'caldav',
     calendarId: o.calendar.id,
     calendar: o.calendar.name,
+    title: icalText(getProp(ev, 'SUMMARY')?.value ?? '').trim() || '(No title)',
     start: when?.iso ?? null,
     allDay: !!when?.allDay,
     cancelled: getProp(ev, 'STATUS')?.value.trim().toUpperCase() === 'CANCELLED',

@@ -289,8 +289,9 @@ export type InviteAnswer = 'accepted' | 'tentative' | 'declined'
 export type InviteStatus = {
   /** Your answer so far (from your calendar's copy when there is one). */
   answer: InviteAnswer | 'needs-action' | null
-  /** The calendar the event is in, if any, and whether it is cancelled there. */
+  /** The calendar the event is in, if any, what it is called and when it starts there (a reply often says neither), and whether it is cancelled there. */
   calendar: string | null
+  event?: { title: string; start: string | null; allDay: boolean } | null
   cancelled: boolean
   /** It can be answered (an invitation that lists you). */
   canAnswer: boolean
