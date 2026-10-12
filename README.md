@@ -372,6 +372,68 @@ of a repeating event it asks whether the change is for that one or the whole ser
 through [`server/calendars.ts`](server/calendars.ts): Google's API, or the event's own iCalendar
 text on the CalDAV server, written back with its ETag so other apps' properties stay.
 
+**Tasks** ([`src/apps/tasks`](src/apps/tasks), [`server/tasks.ts`](server/tasks.ts)) is a to-do app laid
+out like Apple's Reminders, for signed-in users. Its lists are the task lists of the CalDAV accounts in
+Settings → Calendar (the collections that take VTODOs: Fastmail's and Nextcloud's calendars, and
+iCloud's reminders lists as far as iCloud still serves them over CalDAV; lists moved to Apple's newer
+Reminders are not), and lists kept on the site itself, in SQLite, for accounts without CalDAV (those
+start with one, *Reminders*). Above the lists, grouped by account, are the smart lists *Today* (due
+today or overdue), *Scheduled* (by day), *All*, *Priority* and *Completed*. A task has a title, notes,
+a due date with or without a time, how it repeats, a priority (none, low, medium or high: iCalendar's
+9, 5 and 1, as Apple writes them), a link and subtasks. Type a new one at the top with its date at the
+end ("Call mum tomorrow 9am", "Report fri !!", "Plan next week", "Pay rent on 31 oct"): what was read
+shows beside it before Enter, with an × to keep the words as typed
+([`quickAdd.ts`](src/apps/tasks/quickAdd.ts)). Tick the circle to complete a task; a repeating one
+moves on to its next date instead (DUE, and DTSTART with it, one occurrence fewer for a counted rule),
+the way Apple's Reminders and Thunderbird do, and is completed for good when its rule runs out. Click
+a task for its details; right-click (or long-press) for its due date, priority, list, *Subtask of the
+one above* and Delete (its subtasks go with it). In a list, drag a task by its handle into your own
+order, kept as Apple's `X-APPLE-SORT-ORDER` so Reminders on an iPhone shows the same: the moved task
+gets a number between its neighbours', and only when there is no room is the list numbered again.
+*Show completed* adds the done ones (the newest 200 per list). Lists are made on a CalDAV account
+(MKCALENDAR, for VTODOs only) or on the site, renamed and recoloured (PROPPATCH) and deleted; a
+collection that holds events too is a calendar, and Tasks never deletes it. On a phone the sidebar is
+the first screen and a list opens over it.
+
+Changes work like the Calendar's: in the task's own iCalendar text, written back with its ETag, so
+whatever else is in there (alarms, other apps' properties) stays. A task that changed elsewhere
+between reading and writing (412) is read again and the change made once more on the new text; when it
+changed yet again, the app says so. Tasks on the site are kept the same way, as each task's VTODO text
+(tables `task_lists` and `task_items`), so one set of code handles both.
+
+In the **Calendar** app, tasks with a due date show on their day, all day or at their time, with a
+ring to tick them; dragging one changes its due date and opening one opens it in Tasks. The sidebar's
+*Tasks* section switches lists on and off (the same switch as *Show in Calendar* on a list in Tasks).
+The **Agenda** widget lists today's open tasks, overdue ones included, under Today.
+
+**Reminders** for tasks come through the notification hub (Settings → Notifications → Tasks): at a
+task's own alarms (VALARM, set in Apple's Reminders, say) when it has any, otherwise by the Tasks
+app's settings (⚙ in its sidebar): when a timed task is due or 5 to 60 minutes before, and in the
+morning of an all-day one at a set time (9:00 to begin with) in the browser's time zone. The watcher
+looks every minute, reads the lists again every five minutes (at once after a change made here) and
+sends each reminder once, up to an hour late after a restart. The settings are synced state `tasks`
+([`src/data/taskPrefs.ts`](src/data/taskPrefs.ts)), which the server reads like `notify`.
+
+**Google Tasks** is not included: the Google sign-in for the calendar has no Tasks scope (it would
+need `tasks` added to the OAuth client, another sensitive scope for Google to verify).
+
+**For other apps** ([`src/data/tasks.ts`](src/data/tasks.ts)): `createTask({ title, notes, due, url,
+listId })` makes a task and answers it, in `listId` or else the list picked under *New tasks* in the
+Tasks settings (or the first CalDAV list); `due` is a day ("2026-10-14") or an ISO time, and
+everything but the title may be left out. `openTask(id)` opens the Tasks app on a task, with its
+details. Mail's "Make a task from this email" is meant to use these, with a link to the message in
+`url`. Underneath is `/api/tasks`: `GET` (`?fresh=1` past the cache), `POST {list?, task}`, `PATCH
+{ref, task, list?}` and `DELETE {ref}`, `PUT /api/tasks/order`, and `POST`, `PATCH` and `DELETE` on
+`/api/tasks/lists`.
+
+```sh
+pnpm check:tasks   # Against a stand-in CalDAV server: discovery, changes that keep other apps' properties, repeating tasks, a 412, order, lists, reminders sent once, quick add
+```
+
+`node scripts/tasks-mock.ts 8800` runs the stand-in ([`scripts/tasks-mock.ts`](scripts/tasks-mock.ts))
+on its own, with user and password `mock`, to link from an admin account (admins may use internal
+addresses) while trying the app.
+
 The **Status** widget shows your [updown.io](https://updown.io) checks: up or down, uptime, the
 last day's response time and certificates that expire within two weeks
 ([`server/updown.ts`](server/updown.ts)). It uses updown's *read-only* API key, from
@@ -695,8 +757,9 @@ pop-up when one is in view; pages say whether they are with a heartbeat), and pu
 page is in view, unless do not disturb is on. Apps hand notifications in two ways: when something
 happens (`notify()`: an Agents answer or question, a finished unpack), or from a watcher that looks
 every so often (`registerWatcher()`): the Minecraft server (from its pinger), new activity on
-GitHub and git.mvl.sh (every 5 minutes, each item once, back as far as Settings says), and calendar
-reminders (Google and CalDAV, read every 5 minutes, a reminder 0–30 minutes before an event). The
+GitHub and git.mvl.sh (every 5 minutes, each item once, back as far as Settings says), calendar
+reminders (Google and CalDAV, read every 5 minutes, a reminder 0–30 minutes before an event) and due
+tasks (see Tasks above). The
 list of sources and the rules for the choices are one file both sides import
 ([`src/data/notifySources.ts`](src/data/notifySources.ts)), so Settings lists exactly what the
 server can send. Signed out, a visitor's pop-ups and list stay in that browser, from the page's
