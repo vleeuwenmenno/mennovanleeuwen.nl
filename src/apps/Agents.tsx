@@ -16,7 +16,6 @@ import {
   type Project,
   type Todo,
   answerApproval,
-  fileSize,
   toAttachment,
   textAttachment,
   MAX_MESSAGE,
@@ -88,6 +87,7 @@ import { mayTakeFocus } from '../os/overlays'
 import { allowNotifications } from '../os/agentWatch'
 import { AgentsSettings, usePromptLocation } from './AgentsSettings'
 import { openShareDialog } from './AgentsShare'
+import { AttachedFiles, memoryPicture, sentPicture } from './AgentsImages'
 import { MarkdownPreview } from './Zed'
 
 // Agents: a research assistant on Ollama Cloud (server/agents.ts). Threads on the left (and the
@@ -1735,7 +1735,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             <p className="muted agt-empty-tools">Tools on: {tools.length ? TOOL_GROUPS.filter((g) => tools.includes(g.id)).map((g) => g.name).join(', ') : 'none, just the model'}.</p>
           </div>
         )}
-        <Messages messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} />
+        <Messages threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} />
         {reconnecting ? (
           <p className="agt-wait muted">Reconnecting… the connection dropped, or the server is restarting for an update.</p>
         ) : live ? (
@@ -1792,17 +1792,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       >
         <div className="agt-box" onClick={(e) => e.target === e.currentTarget && input.current?.focus()}>
           {(files.length > 0 || reading > 0) && (
-            <ul className="agt-files">
-              {files.map((f, i) => (
-                <li key={`${f.name}-${i}`} title={f.source}>
-                  <span aria-hidden>{f.kind === 'image' ? '🖼' : '📄'}</span> {f.name} <span className="muted">{fileSize(f.size)}</span>
-                  <button type="button" onClick={() => setFiles((list) => list.filter((_, j) => j !== i))} aria-label={`Remove ${f.name}`}>
-                    ×
-                  </button>
-                </li>
-              ))}
-              {reading > 0 && <li className="muted">Reading {reading}…</li>}
-            </ul>
+            <AttachedFiles files={files} pictureOf={(f) => memoryPicture(f as Attachment)} onRemove={(i) => setFiles((list) => list.filter((_, j) => j !== i))} more={reading > 0 && <li className="muted">Reading {reading}…</li>} />
           )}
           {slashSkills.length > 0 && (
             <ul className="agt-slash" aria-label="Skills">
@@ -1942,7 +1932,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 }
 
 /** The conversation, with each assistant step's tool calls shown as cards beside their results. */
-function Messages({ messages, answering, approvals, onDecide, onAnswer, onRewind, onShare }: { messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
+function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare }: { /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
   const out: ReactNode[] = []
   // A turn's answer is its last message with text: Share sits under it, once the turn is done.
   const answers = new Set<number>()
@@ -1965,15 +1955,7 @@ function Messages({ messages, answering, approvals, onDecide, onAnswer, onRewind
                 <MarkdownPreview text={m.content} breaks />
               </div>
             )}
-            {!!m.attachments?.length && (
-              <ul className="agt-files is-sent">
-                {m.attachments.map((f, i) => (
-                  <li key={i} title={f.source}>
-                    <span aria-hidden>{f.kind === 'image' ? '🖼' : '📄'}</span> {f.name}
-                  </li>
-                ))}
-              </ul>
-            )}
+            {!!m.attachments?.length && <AttachedFiles files={m.attachments} pictureOf={threadId ? sentPicture(threadId, m) : () => null} sent />}
           </div>
           {/* Under each of your messages on hover (always on touch): copy it, or go back to it. */}
           <div className="agt-user-actions">
