@@ -902,7 +902,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
           } else if (e.by === ME) toast(`Our blockade at ${where} stopped an enemy fleet`, 'good', { k: 'system', id: e.system })
         } else if (e.k === 'payday' && e.owner === ME && e.amount > 0) {
           setPay({ id: Math.random(), amount: e.amount })
-          sound.salvaged()
+          if (getSettings().daySound) sound.payday()
         }
       }
       if (g.events.length) {

@@ -613,6 +613,14 @@ function bells(sr: number, root: number, chord: number[], len: number, stagger =
   )
 }
 
+/** A soft note: a sine with a gentle attack (no click) and a decay, plus a touch of its octave
+ * (`bright`), for something that happens often and must not nag. */
+function softNote(sr: number, f: number, attack: number, decay: number, secs: number, bright = 0.1) {
+  const o = new Osc()
+  const o2 = new Osc()
+  return render(sr, secs, (t) => (o.sin(f, sr) + o2.sin(f * 2, sr) * bright) * ad(t, attack, decay))
+}
+
 /** A brass-ish swell: saws through a filter that opens with the note. */
 function brass(sr: number, root: number, chords: [number[], number][], tail = 0.6) {
   const total = chords.reduce((s, [, d]) => s + d, 0) + tail
@@ -1065,6 +1073,10 @@ export class EmpiresSound {
   /** A wreck stripped bare: a last clang and the tally chime. */
   salvaged() {
     if (this.ready() && this.allow('salvaged', 1, 0.5)) this.ui('salvaged', (sr) => layers(sr, [{ data: metal(true)(sr, Math.random), gain: 0.5 }, { data: bells(sr, 330, [0, 7, 12], 0.7, 0.06), at: 0.12, gain: 0.6 }]), 0.5, 1)
+  }
+  /** A day ends in Galactic conquest (payday): it comes often, so one soft, round note, kept quiet. */
+  payday() {
+    if (this.ready() && this.allow('payday', 1, 0.5)) this.ui('payday', (sr) => softNote(sr, 1318, 0.015, 0.09, 0.35), 0.035, 1)
   }
   /** A ship ranked up: a short rising chime. */
   promoted() {
