@@ -1,4 +1,4 @@
-import { STATIONS, UNITS, dims, type Tier, type UnitType } from '../data.ts'
+import { STATIONS, UNITS, dims, stationType, type FactionId, type Tier, type UnitType } from '../data.ts'
 import { circle, hash, inPart, inPoly, jagged, rng, seedOf } from './kit.ts'
 import * as droid from './droid.ts'
 import * as republic from './republic.ts'
@@ -20,8 +20,19 @@ export type { HullState, Model } from './types.ts'
 /** The designs, by unit id. A station's id covers all its levels: the design grows with the level. */
 const DEFS: Record<string, ModelDef> = {
   'r-fighter': republic.fighter,
+  'r-bomber': republic.bomber,
+  'r-repair': republic.repair,
+  'r-picket': republic.picket,
+  'r-gunship': republic.gunship,
+  'r-corvette': republic.corvette,
   'r-frigate': republic.frigate,
+  'r-cruiser': republic.cruiser,
+  'r-capital': republic.capital,
   'r-station': republic.station,
+  'r-mine': republic.mine,
+  'r-defense': republic.defense,
+  'r-defense-flak': republic.defense,
+  'r-defense-gun': republic.defense,
   'd-fighter': droid.fighter,
 }
 
@@ -53,6 +64,14 @@ export function modelForSprite(sprite: string): Model | null {
 /** The ship type behind a wreck's sprite (wrecks only keep the sprite), if it has a model. */
 export function unitForSprite(sprite: string): UnitType | null {
   return modelForSprite(sprite) ? (bySprite.get(sprite) ?? null) : null
+}
+
+/** The unit type a sprite name stands for, a station by its stage (with only that level's own
+ * modules): for the menus and tiles that only know a sprite. */
+export function typeOfSprite(sprite: string): UnitType | null {
+  const st = /^(republic|droid)-station-(\d)$/.exec(sprite)
+  if (st) return stationType(st[1] as FactionId, Number(st[2]), [])
+  return UNITS.find((u) => u.sprite === sprite && u.tier !== 'station') ?? null
 }
 
 /** Which mounts blow off by default: small flak turrets. Heavy guns, shield generators, hangars and
@@ -90,7 +109,9 @@ export function buildModel(t: UnitType, style?: string): Model {
     .filter((m) => m.design !== 'engine')
     .map((m) => ({ id: `socket${m.hp}`, pts: circle(m.x, m.y, m.r * 1.1, 18), tone: 'dark' as const, z: 0.5, details: [{ k: 'line' as const, pts: circle(m.x, m.y, m.r * 0.92, 16) }] }))
   const parts = [...spec.parts.filter((p) => (p.level ?? 1) <= level), ...sockets].sort((a, b) => a.z - b.z)
-  const key = `${t.tier === 'station' ? `${t.id}:${level}:${t.hardpoints.map((p) => p.key).join(',')}` : t.id}${style ? `:${style}` : ''}`
+  // A mining platform with its Shield generator fitted is a type of its own with one more socket,
+  // so its key names its modules too, as a station's does.
+  const key = `${t.tier === 'station' ? `${t.id}:${level}:${t.hardpoints.map((p) => p.key).join(',')}` : t.tier === 'mine' ? `${t.id}:${t.hardpoints.map((p) => p.key).join(',')}` : t.id}${style ? `:${style}` : ''}`
   const seed = seedOf(t.tier === 'station' ? `${t.id}:${level}` : t.id)
   return {
     key,

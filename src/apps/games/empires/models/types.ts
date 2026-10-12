@@ -14,7 +14,7 @@ export type Pt = [number, number]
  * tones (lit, base and shadow), and which one a part gets depends on how its facet faces the
  * light, recomputed as the ship turns.
  */
-export type Tone = 'hull' | 'hull2' | 'accent' | 'metal' | 'dark' | 'glass' | 'glow' | 'char' | 'ember'
+export type Tone = 'hull' | 'hull2' | 'accent' | 'metal' | 'dark' | 'glass' | 'glow' | 'char' | 'ember' | 'aid' | 'trim'
 
 /** Surface detail drawn on top of a part and clipped to it. */
 export type Detail =
