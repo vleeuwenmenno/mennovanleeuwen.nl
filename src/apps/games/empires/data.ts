@@ -86,6 +86,11 @@ export type UnitType = {
   support?: { range: number; repair: number; max: number }
   /** Its job and counters, when they differ from its tier's (see ROLES). */
   role?: { role: string; strong: string[]; weak: string[] }
+  /** How hard it speeds up and brakes, on top of its tier's usual (1 when left out). */
+  accel?: number
+  /** Its Big ship-sizes version (models/sizes.ts bigType): bigger, heavier, and for the redesigned
+   * ships drawn with their bigger design. */
+  big?: boolean
 }
 
 export type Ability = { name: string; blurb: string; cooldown: number; duration: number; range?: number }

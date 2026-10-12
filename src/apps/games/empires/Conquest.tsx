@@ -1,3 +1,4 @@
+import { SHIP_SIZE_BLURB, SHIP_SIZE_NAMES, SHIP_SIZES, type ShipSizes } from './models/sizes.ts'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { RotateHint } from './RotateHint'
 import { DIFFICULTY, type Difficulty } from './ai'
@@ -35,6 +36,8 @@ export type ConquestBattle = {
   me: number
   ai: Difficulty
   names: string[]
+  /** The campaign's ship sizes (models/sizes.ts); left out, Classic. */
+  sizes?: ShipSizes
   onDone: (w: World, left: boolean) => void
   /** Saved mid-fight: the battle carries on from here. */
   resume?: BattleSnap | null
@@ -262,6 +265,7 @@ function ConquestSetup({ sound, onBack, onStart }: { sound: EmpiresSound; onBack
   const [name, setName] = useState('')
   const [blockadeRule, setBlockadeRule] = useState<BlockadeRule>('majority')
   const [frontline, setFrontline] = useState(true)
+  const [sizes, setSizes] = useState<ShipSizes>('classic')
   const choice: GalaxyChoice = kind === 'rim' ? { kind: 'rim' } : { kind: 'generated', seed }
   const preview = useMemo(() => newGalaxy({ choice, size, faction, difficulty, credits }), [kind, seed, size, faction, difficulty, credits]) // eslint-disable-line react-hooks/exhaustive-deps
   const click = (fn: () => void) => () => {
@@ -316,9 +320,13 @@ function ConquestSetup({ sound, onBack, onStart }: { sound: EmpiresSound; onBack
                 ? 'A fleet in a system its side doesn\'t control can\'t jump on into another enemy-held system: it must win the system first, or fall back. No hopping deep behind the lines.'
                 : 'Fleets may jump from any system straight into any enemy system next to it.'}
             </p>
+            <Field label="Ship sizes">
+              <Seg value={sizes} options={SHIP_SIZES.map((v) => [v, SHIP_SIZE_NAMES[v]] as [ShipSizes, string])} onChange={setSizes} />
+            </Field>
+            <p className="ew-muted ew-small">{SHIP_SIZE_BLURB[sizes]} Fleet battles are fought at these sizes.</p>
             <div className="ew-menu-list is-row">
               <button className="ew-menu-btn" onClick={click(onBack)}><Icon name="back" size={18} /> Back</button>
-              <button className="ew-menu-btn is-primary" onClick={click(() => onStart(newGalaxy({ choice, size, faction, difficulty, credits, name, blockade: blockadeRule, frontline })))}>
+              <button className="ew-menu-btn is-primary" onClick={click(() => onStart(newGalaxy({ choice, size, faction, difficulty, credits, name, blockade: blockadeRule, frontline, sizes })))}>
                 <Icon name="play" size={18} /> Start
               </button>
             </div>
@@ -1283,6 +1291,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       me: meSide,
       ai: g.sides[enemy].ai ?? 'medium',
       names: [factionName(g, c.holder), factionName(g, c.attacker)],
+      sizes: g.rules?.sizes,
       resume,
       // Kept for the window as it's fought, so a reload carries on with it.
       onSnap: (snap) => saveCampaignBattle(session, g.save.id, snap ? { planet: c.planet, snap } : null),

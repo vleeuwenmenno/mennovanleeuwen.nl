@@ -1,3 +1,4 @@
+import type { ShipSizes } from './models/sizes.ts'
 import type { Difficulty } from './ai.ts'
 import type { Cmd } from './commands.ts'
 import type { FactionId } from './data.ts'
@@ -40,6 +41,8 @@ export type MpLobby = {
   map: string
   gen: MapRules
   credits: number
+  /** Ship sizes for the battle (models/sizes.ts); left out: Classic. */
+  sizes?: ShipSizes
   slots: MpSlot[]
   state: 'open' | 'playing'
 }
@@ -86,8 +89,8 @@ export type ClientMsg =
   /** Move to another open spawn. */
   | { t: 'seat'; i: number }
   | { t: 'slot'; i: number; patch: SlotPatch }
-  /** Host only: the map, the generator's rules, starting credits. */
-  | { t: 'setup'; map?: string; gen?: MapRules; credits?: number }
+  /** Host only: the map, the generator's rules, starting credits, ship sizes. */
+  | { t: 'setup'; map?: string; gen?: MapRules; credits?: number; sizes?: ShipSizes }
   | { t: 'ready'; on: boolean }
   | { t: 'chat'; text: string }
   /** Host only: everyone's ready, go. */

@@ -370,6 +370,7 @@ function changeSlot(p: Player, l: MpLobby, i: number, patch: SlotPatch) {
 function changeSetup(p: Player, l: MpLobby, m: Extract<ClientMsg, { t: 'setup' }>) {
   if (l.host !== p.id) return send(p, { t: 'error', why: 'Only the host can change the map and rules.' })
   if (typeof m.credits === 'number' && CREDIT_STEPS.includes(m.credits)) l.credits = m.credits
+  if (m.sizes === 'classic' || m.sizes === 'big') l.sizes = m.sizes
   if (m.map !== undefined || m.gen !== undefined) {
     const id = m.map === undefined ? l.map : m.map === GENERATED || (typeof m.map === 'string' && Object.hasOwn(MAP, m.map)) ? m.map : null
     if (!id) return send(p, { t: 'error', why: 'No such map.' })
@@ -426,6 +427,7 @@ function start(p: Player, l: MpLobby) {
     map: l.map,
     gen: l.gen,
     credits: l.credits,
+    ...(l.sizes === 'big' ? { sizes: l.sizes } : {}),
     seats: l.slots.flatMap((s, spawn) =>
       s.kind === 'human' || s.kind === 'ai' ? [{ kind: s.kind, player: s.player, name: s.kind === 'ai' ? `${DIFFICULTY[s.difficulty].name} AI` : s.name, faction: s.faction, team: s.team, spawn, difficulty: s.difficulty }] : [],
     ),

@@ -69,8 +69,8 @@ export const hasSwarm = (t: UnitType) => t.id in SWARM_DEFS
 export const swarmName = (t: UnitType) => swarm.SWARM_NAMES[t.id] ?? t.name
 
 /**
- * Prototypes of bigger, more detailed warships (proto.ts), shown only in the Codex next to the
- * battle's designs, at the size classes in sizes.ts (protoType). Built with the style PROTO.
+ * The bigger redesigns (proto.ts) that ships have under Big ship sizes (sizes.ts): a Big unit type
+ * of one of these is built with them, as is any type asked for in the style PROTO (the Codex).
  */
 const PROTO_DEFS: Record<string, ModelDef> = { 'r-frigate': proto.frigate, 'r-capital': proto.capital }
 export const PROTO = 'proto'
@@ -122,6 +122,8 @@ const DETACH_BY_DEFAULT: MountDesign[] = ['flak']
 
 export function buildModel(t: UnitType, style?: string): Model {
   const concept = style === SWARM
+  // A Big battle's redesigned ship (sizes.ts) is its prototype design, the same as the Codex shows.
+  if (!concept && t.big && t.id in PROTO_DEFS) style = PROTO
   const def = concept ? SWARM_DEFS[t.id] : style === PROTO ? PROTO_DEFS[t.id] : DEFS[t.id]
   if (!def) throw new Error(`No ${concept ? 'Swarm ' : style === PROTO ? 'prototype ' : ''}model for ${t.id}`)
   let w: number
@@ -148,14 +150,10 @@ export function buildModel(t: UnitType, style?: string): Model {
     const { scale = 1, ...over } = spec.mount?.(i) ?? {}
     return { hp: i, x, y, r: (((hp.s ?? 0.05) * long) / 2) * scale, design, turns: !!hp.weapon, detach: DETACH_BY_DEFAULT.includes(design), ...over }
   })
-  for (const e of spec.extraMounts ?? []) {
-    const real = t.hardpoints[e.maps]
-    mounts.push({ hp: e.maps, x: e.x, y: e.y, r: e.r, design: e.design, turns: !!real?.weapon, detach: e.detach ?? DETACH_BY_DEFAULT.includes(e.design), extra: true })
-  }
   // Every mount sits in a socket: a dark recess in the plating, under the superstructure.
   const sockets: Part[] = mounts
     .filter((m) => m.design !== 'engine')
-    .map((m, i) => ({ id: m.extra ? `socketx${i}` : `socket${m.hp}`, pts: circle(m.x, m.y, m.r * 1.1, 18), tone: 'dark' as const, z: 0.5, details: [{ k: 'line' as const, pts: circle(m.x, m.y, m.r * 0.92, 16) }] }))
+    .map((m) => ({ id: `socket${m.hp}`, pts: circle(m.x, m.y, m.r * 1.1, 18), tone: 'dark' as const, z: 0.5, details: [{ k: 'line' as const, pts: circle(m.x, m.y, m.r * 0.92, 16) }] }))
   const parts = [...spec.parts.filter((p) => (p.level ?? 1) <= level), ...sockets].sort((a, b) => a.z - b.z)
   // A mining platform with its Shield generator fitted is a type of its own with one more socket,
   // so its key names its modules too, as a station's does.
@@ -401,8 +399,6 @@ export function pickAt(m: Model, x: number, y: number, detached: number, minR = 
   let bestD = Infinity
   for (let i = m.mounts.length - 1; i >= 0; i--) {
     const mt = m.mounts[i]
-    // Turrets for show answer to no hardpoint of their own.
-    if (mt.extra) continue
     const d = Math.hypot(x - mt.x, y - mt.y)
     if (mt.design !== 'engine' && d < Math.max(mt.r * 1.15, minR) && d < bestD) (best = i), (bestD = d)
   }

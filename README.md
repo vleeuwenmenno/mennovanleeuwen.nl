@@ -1087,8 +1087,12 @@ tan and violet palette. They are never used in battle; the Codex shows them unde
   the two nearest headings are crossfaded over the middle of each step, so the shading moves on
   smoothly instead of popping (`lightTuning` in paint.ts; a linear blend and the old snap can be
   compared there). Turrets get the same treatment in bitmaps of their own, because they turn to
-  aim. Only a hull more than 720 device pixels across (zoomed right in, so few fit on screen) is
-  painted live, with exact light.
+  aim, at most 128 pixels across (32 headings above 64 pixels), drawn larger up to 192 pixels on
+  screen and painted live past that. A hull (or a wreck's piece) whose bitmap would be more than
+  362 pixels on its long side (256 on phones) is painted live, with exact light: one heading of a
+  Big flagship at that size is about half a megabyte and a full turn paints 32, so caching it
+  filled about 53 MB of a 48 MB phone budget (`memTuning` in paint.ts; `legacy` puts the old 720-pixel rule back, to
+  measure against).
 - **Damage:** scorch marks spread as the hull drops (four levels, with burnt-through holes at the
   worst); parts come off at their hull share and fly away tumbling and smoking; wrecked mounts
   show broken. All of it follows from the battle's own state.
@@ -1108,19 +1112,38 @@ tan and violet palette. They are never used in battle; the Codex shows them unde
   shot-off one wrecked), painted once per look by `thumbnail` in paint.ts and kept as a data URL.
   A ship dragged from the fleet inventory is ghosted as its model too.
 
-**Bigger ships (prototype):** warships are being tried at bigger sizes, redesigned with more to
-them rather than just scaled. The size classes are one table, `SIZE_CLASSES` in
-[`sizes.ts`](src/apps/games/empires/models/sizes.ts): strike craft ×1, gunships and corvettes ×1.15,
-frigates ×1.4, cruisers ×1.7, flagships ×2.5, stations and platforms ×1 for now. The first two
-redesigns, the Republic's Warden frigate and Sovereign dreadnought, are in
-[`proto.ts`](src/apps/games/empires/models/proto.ts): layered armour plates, a raised deck with
-trenches and hangar bays, a stepped superstructure with masts and dishes, engine banks with
-auxiliary nozzles, greebles, and many smaller turrets for show (`extraMounts`, each standing for a
-real hardpoint: it aims where that gun aims and is wrecked with it). They keep every hardpoint where
-`data.ts` puts it, and the dreadnought breaks into four chunks (`cuts`). Only the Codex shows them:
-a *Current / New (prototype)* switch on those two ships, at true relative scale, and *Size classes*,
-which lays a fighter, frigate, cruiser and flagship out as they are now and at their proposed sizes.
-Battles still use today's sizes and designs.
+**Ship sizes: Classic or Big (preview).** Every battle is fought at one of two ship sizes, picked
+per match: in the skirmish setup (remembered with the other setup fields), by the host in the
+multiplayer lobby, and for a whole campaign in Galactic conquest's new-campaign setup. Classic is
+the battle as it always was; it's the default, and battles, matches, campaigns and saves from
+before the choice are Classic. The choice is part of the match config (`MatchInfo.sizes`,
+`World.sizes`), so every player's copy and the server referee run the same battle. Everything Big
+changes is in [`sizes.ts`](src/apps/games/empires/models/sizes.ts), and the sim, the renderer and
+the Codex all take their unit types from `bigType()`:
+
+- **Size** (`SIZE_CLASSES`): strike craft ×1, gunships and corvettes ×1.15, frigates ×1.4,
+  cruisers ×1.7, flagships ×2.5, stations and platforms ×1. The hit radius, collisions, the keep
+  apart spacing, spawning and jump-in spots, guard posts, Field repair orbits and turret and module
+  sizes all follow the hull; hardpoints stay where they are on its grid, so they move out with it.
+- **Handling** (`HANDLING`): turn rate ×0.9 / 0.8 / 0.72 / 0.65, acceleration and braking ×0.9 /
+  0.8 / 0.7 / 0.6, top speed ×1 / 0.95 / 0.92 / 0.88 for gunships / frigates / cruisers /
+  flagships. A Republic flagship crosses Kessar Belt from station to station in 206 s instead of
+  185 s, and turns 12° a second instead of 19°.
+- **Reach**: every gun reaches as far past its hull as it did, its range growing by as much as the
+  hull's radius grew (a Big flagship's turbolasers reach 1068 instead of 836, its flak 606 instead
+  of 374), so a 2.5× flagship doesn't spend half its range on its own hull. Formations and the
+  repair tenders' reach spread out by `BIG_SPREAD` (×1.3, or the biggest ship's class).
+- **Designs**: the Warden frigate and Sovereign dreadnought are redesigned in
+  [`proto.ts`](src/apps/games/empires/models/proto.ts) as big, calm hulls: long armour plates, a
+  raised deck with a trench, a strong stepped superstructure, a few masts and dishes, engine banks
+  and sparing lights, with one turret per gun spread out on its own pad or barbette (their Big
+  hardpoints are `BIG_LAYOUT`). Every other ship is its current model, bigger. The Sovereign
+  breaks into four chunks (`cuts`).
+
+The Codex shows any warship either way (*Classic / Big*, at true relative scale), and *Size
+classes* lays out a fighter, frigate, cruiser and flagship at both sizes. `pnpm check:empires-big`
+runs the multiplayer determinism check with Big ship sizes; `pnpm check:empires-models` checks
+every ship's Big look too, and that the redesigns' turrets have room between them.
 
 **Adding a unit's model:**
 
@@ -1163,6 +1186,7 @@ a module or part opens a wheel: Inspect, Damage, Destroy, Detach. On a phone the
 row of chips over the view and the numbers.
 
 ```sh
+pnpm check:empires-big      # the multiplayer determinism check, with Big ship sizes
 pnpm check:empires-models   # every unit has a model that builds, its mounts match the hardpoints, parts come off soundly, breaks are deterministic and weighted, small craft and structures burst into real fragments
 ```
 

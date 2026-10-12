@@ -4,7 +4,7 @@ import { info, sameSel, selName, targets, weaponLine, WEAPON_NAME, type Sel } fr
 import { Frame, HpIcon, Icon, Tips, fmt } from './Hud'
 import { HP_COLOR, hpName } from './icons'
 import { BREAK_WEIGHTS, PROTO, SWARM, hasModel, hasProto, hasSwarm, hullState, modelFor, modelStyles, pickAt, swarmName, type Model } from './models/index.ts'
-import { SIZE_CLASSES, protoType } from './models/sizes.ts'
+import { SIZE_CLASSES, bigType, protoType } from './models/sizes.ts'
 import { ModelFx } from './models/fx.ts'
 import { LIGHT, PALETTES } from './models/kit.ts'
 import { cacheStats, drawHull, drawMounts, liveEngines } from './models/paint.ts'
@@ -698,9 +698,9 @@ function Viewer({ t, fitSize, model, workshop, show, dmg, boom, hover, selected,
 }
 
 /**
- * The size classes being tried (models/sizes.ts): a fighter, frigate, cruiser and flagship of the
- * side, each as it is now and at its proposed size, side by side at one scale, nose up. A ship with
- * a prototype design (models/proto.ts) shows it; the others are their current model scaled up.
+ * The ship sizes (models/sizes.ts): a fighter, frigate, cruiser and flagship of the side, each as it
+ * is in Classic and in Big, side by side at one scale, nose up. A ship with a Big redesign
+ * (models/proto.ts) shows it; the others are their current model scaled up.
  */
 function SizeStrip({ faction, onClose }: { faction: FactionId; onClose: () => void }) {
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -722,7 +722,7 @@ function SizeStrip({ faction, onClose }: { faction: FactionId; onClose: () => vo
         const t = UNITS.find((u) => u.faction === faction && u.tier === tier && !u.kind)!
         const pt = protoType(t)
         return [
-          { t, m: modelFor(t), label: 'now', tier },
+          { t, m: modelFor(t), label: 'classic', tier },
           { t: pt, m: modelFor(pt, hasProto(t) ? PROTO : ''), label: hasProto(t) ? `×${SIZE_CLASSES[tier]}, new design` : `×${SIZE_CLASSES[tier]}, scaled only`, tier },
         ]
       })
@@ -770,12 +770,12 @@ function SizeStrip({ faction, onClose }: { faction: FactionId; onClose: () => vo
       g.textAlign = 'start'
       g.font = '13px system-ui, sans-serif'
       g.fillStyle = '#9aa6bd'
-      g.fillText('Now', 16, bases[0] - 4)
+      g.fillText('Classic', 16, bases[0] - 4)
       g.fillStyle = '#f2c14a'
-      g.fillText('Proposed', 16, bases[1] - 4)
+      g.fillText('Big', 16, bases[1] - 4)
       g.textAlign = 'start'
       g.fillStyle = '#9aa6bd'
-      g.fillText('Size classes, side by side at one scale (nose up). Battles still use today\'s sizes.', 16, 22)
+      g.fillText('Ship sizes, Classic and Big, side by side at one scale (nose up). Pick Big in a battle\'s setup to fight at these sizes.', 16, 22)
     }
     draw()
     const ro = new ResizeObserver(draw)
@@ -813,13 +813,14 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
   const base = list.find((u) => u.id === pickId) ?? list[0]
   const [level, setLevel] = useState(4)
   // A ship with a bigger prototype (models/proto.ts) can be shown either way, at true relative scale.
-  const canProto = !concept && hasProto(base)
+  // Every warship can be shown as it is under Big ship sizes (the Warden and Sovereign redesigned).
+  const canProto = !concept && bigType(base) !== base
   const [protoOn, setProtoOn] = useState(false)
   const now = shown(base, level)
   const t = canProto && protoOn ? protoType(now) : now
   const styles = concept || (canProto && protoOn) ? [] : modelStyles(t)
   const [style, setStyle] = useState('')
-  const model = modelFor(t, concept ? SWARM : canProto && protoOn ? PROTO : styles.includes(style) ? style : '')
+  const model = modelFor(t, concept ? SWARM : canProto && protoOn ? (hasProto(t) ? PROTO : '') : styles.includes(style) ? style : '')
   const [sizes, setSizes] = useState(false)
   const [workshop, setWorkshop] = useState(false)
   const [show, setShow] = useState<Show>({ hardpoints: false, ranges: false, glow: true, outlines: false, spin: false })
@@ -997,9 +998,9 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
               <div className="ew-cx-level">
                 {canProto && (
                   <Seg
-                    label="Version"
+                    label="Ship sizes"
                     value={protoOn ? 'new' : 'current'}
-                    options={[['current', 'Current'], ['new', `New (prototype, ×${SIZE_CLASSES[t.tier]})`]]}
+                    options={[['current', 'Classic'], ['new', hasProto(t) ? `Big: new design (×${SIZE_CLASSES[t.tier]})` : `Big (×${SIZE_CLASSES[t.tier]})`]]}
                     onChange={(v) => setProtoOn(v === 'new')}
                   />
                 )}

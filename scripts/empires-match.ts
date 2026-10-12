@@ -4,7 +4,9 @@
 // put right by the server), Bravo's connection drops and comes back (it must pick the battle up
 // again), and finally Bravo leaves (an AI takes over its fleet; Alpha carries on without drifting).
 //
-//   node scripts/empires-match.ts [seconds] [ws://localhost:5173/api/empires/ws]
+//   node scripts/empires-match.ts [seconds] [ws://localhost:5173/api/empires/ws] [big]
+//
+// With `big` the lobby picks Big ship sizes (models/sizes.ts).
 //
 // Exits 1 on a drift that isn't put right, a gap in the turns, or a missed step.
 
@@ -18,6 +20,7 @@ import type { Brain } from '../src/apps/games/empires/ai.ts'
 
 const seconds = Number(process.argv[2] ?? 40)
 const URL_ = process.argv[3] ?? 'ws://localhost:5173/api/empires/ws'
+const big = process.argv[4] === 'big'
 const ORIGIN = URL_.replace(/^ws/, 'http').replace(/\/api.*/, '')
 type Msg = Record<string, any>
 let failed = false
@@ -67,6 +70,7 @@ function handle(p: Player, m: Msg) {
     const info = m.match as MatchInfo
     if (p.w && p.me === m.me) return // the same battle, after a reconnect: a sync follows
     p.w = matchWorld(info)
+    if (big && p.w.sizes !== 'big') fail(`${p.name}: the match came without Big ship sizes`)
     p.brains = matchBrains(info)
     p.me = m.me
     p.send({ t: 'loaded' })
@@ -135,7 +139,7 @@ await new Promise<void>((done) => {
     lobbyId = l.id
     if (step === 0) {
       step = 1
-      a.send({ t: 'setup', map: 'vanth' })
+      a.send({ t: 'setup', map: 'vanth', ...(big ? { sizes: 'big' as const } : {}) })
     } else if (step === 1 && l.map === 'vanth') {
       step = 2
       a.send({ t: 'slot', i: 2, patch: { kind: 'ai', difficulty: 'hard' } })
