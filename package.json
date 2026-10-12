@@ -36,6 +36,7 @@
     "check:contacts": "node scripts/contacts-check.ts",
     "check:tasks": "node scripts/tasks-check.ts",
     "check:launchers": "node scripts/launchers-check.ts",
+    "check:pim-links": "node scripts/pim-check.ts",
     "empires:battle-ai": "node scripts/empires-battle-ai.ts",
     "empires:bot": "node scripts/empires-bot.ts",
     "start": "node server/index.ts"

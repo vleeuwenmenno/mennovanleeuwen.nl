@@ -845,8 +845,61 @@ export async function moveCaldavEvent(user: User, ref: CaldavRef, calendarId: st
 }
 
 // ---------------------------------------------------------------------------------------------
-// For server/tasks.ts, which keeps the VTODOs (reminders) of the same accounts with the same
-// WebDAV and iCalendar handling.
+// Invitations (server/pim.ts): finding an event by its iCalendar UID in any connected calendar,
+// and writing an object back as a whole, so an answer (PARTSTAT) or a guest's reply changes only
+// those lines. Servers that do scheduling (Fastmail's) send the organiser the reply themselves.
 
-export type { Account as CaldavAccount, Prop as IcalProp }
-export { accounts as caldavAccounts, calendarHome, dav, davTime, duration, esc, fold, getProp, hrefIn, icalText, icalTime, occurrences, own, parseLine, prop, request as davRequest, resolve as resolveHref, responses, setProp, timeLine, unescapeXml }
+/** An iCalendar object holding an event with this UID, in one of the user's CalDAV calendars. */
+export type CaldavObject = { calendar: CaldavCalendar; href: string; ics: Ics; etag: string | null }
+
+/** Every object with an event of this UID, across the user's CalDAV calendars (usually one). */
+export async function caldavByUid(user: User, uid: string): Promise<CaldavObject[]> {
+  if (!uid || uid.length > 1000) return []
+  const { calendars } = await caldavCalendars(user)
+  const xmlUid = uid.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const found = await Promise.all(
+    calendars.map(async (calendar) => {
+      const account = accounts(user).find((a) => a.id === calendar.account)
+      if (!account) return []
+      const xml = await dav(
+        account,
+        'REPORT',
+        calendar.href,
+        '1',
+        `<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:getetag/><c:calendar-data/></d:prop><c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"><c:prop-filter name="UID"><c:text-match collation="i;octet">${xmlUid}</c:text-match></c:prop-filter></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>`,
+      ).catch(() => null)
+      if (!xml) return []
+      return responses(xml).flatMap((r) => {
+        const ics = parseIcs(unescapeXml(prop(r.body, 'calendar-data') ?? ''))
+        // The server's filter is trusted only as far as it goes: the UID must really be in there.
+        if (!eventsIn(ics).some((ev) => getProp(ev, 'UID')?.value === uid)) return []
+        const etag = prop(r.body, 'getetag')
+        return [{ calendar, href: resolve(calendar.href, r.href), ics, etag: etag ? unescapeXml(etag.trim()) : null }]
+      })
+    }),
+  )
+  return found.flat()
+}
+
+/** Writes a whole object back (with the ETag it was read with), or a new one (`'new'`). */
+export async function writeCaldavObject(user: User, calendarId: string, href: string, ics: Ics, etag: string | null | 'new') {
+  const { account, calendar } = await calendarFor(user, calendarId)
+  await putObject(account, objectUrl(calendar, href), ics, etag)
+  clearCaldavCache(user)
+}
+
+/** A new object in a calendar, named after its UID; answers where it went. */
+export async function addCaldavObject(user: User, calendarId: string, uid: string, ics: Ics): Promise<string> {
+  const { calendar } = await calendarFor(user, calendarId)
+  const name = `${uid.replace(/[^\w.@-]/g, '_').slice(0, 120) || randomUUID()}.ics`
+  const href = `${calendar.href.endsWith('/') ? calendar.href : `${calendar.href}/`}${encodeURIComponent(name)}`
+  await writeCaldavObject(user, calendarId, href, ics, 'new')
+  return href
+}
+
+// ---------------------------------------------------------------------------------------------
+// For server/tasks.ts, which keeps the VTODOs (reminders) of the same accounts with the same
+// WebDAV and iCalendar handling, and server/pim.ts, which answers invitations.
+
+export type { Account as CaldavAccount, Ics, Prop as IcalProp }
+export { accounts as caldavAccounts, calendarHome, dav, davTime, duration, esc, eventsIn, fold, getProp, hrefIn, icalText, icalTime, occurrences, own, parseIcs, parseLine, printIcs, prop, request as davRequest, resolve as resolveHref, responses, setProp, timeLine, unescapeXml }

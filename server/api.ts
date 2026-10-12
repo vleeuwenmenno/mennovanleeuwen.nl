@@ -11,6 +11,7 @@ import { addCaldav, clearCaldavCache, listCaldav, removeCaldav } from './caldav.
 import { allCalendars, allEvents, createEvent, deleteEvent, updateEvent } from './calendars.ts'
 import { handleContactsApi } from './contacts.ts'
 import { handleTasksApi } from './tasks.ts'
+import { handlePimApi } from './pim.ts'
 import { empiresAway } from './empires.ts'
 import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, MAX_RANGE_DAYS, startGoogle } from './google.ts'
 import { inbox } from './inbox.ts'
@@ -388,6 +389,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/search' && read) return json(res, 200, await search(requireUser(req), url.searchParams.get('q') ?? '')), true
     // The Mail app over JMAP (server/jmap.ts): accounts, mailboxes, conversations, drafts, sending and attachments.
     if (path.startsWith('/api/mail/')) return await handleMailApi(req, res, url)
+    // Mail, Contacts, Calendar and Tasks together (server/pim.ts): invitations, a contact's mail and events, tasks from mail.
+    if (path.startsWith('/api/pim/') && (await handlePimApi(req, res, url, method, requireUser(req)))) return true
 
     throw new HttpError(404, 'Not found')
   } catch (e) {
