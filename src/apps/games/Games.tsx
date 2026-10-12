@@ -1,4 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from 'react'
+import { openContextMenu, type MenuItem } from '../../os/ContextMenu'
+import { notify } from '../../os/notify'
+import { playUrl } from '../../os/playMode'
 import { useWM, type WinState } from '../../os/wm'
 import { Breakout } from './Breakout'
 import { GAME_CATALOG } from './catalog'
@@ -30,7 +33,7 @@ const COMPONENTS: Record<string, ComponentType<{ win: WinState }>> = {
 
 export const GAMES = GAME_CATALOG.map((g) => ({ ...g, component: COMPONENTS[g.id] }))
 
-function readBest(id: string) {
+export function readBest(id: string) {
   try {
     const all = highScores.get()
     if (id === 'minesweeper') return all['minesweeper-easy'] !== undefined ? `${all['minesweeper-easy']}s` : null
@@ -70,7 +73,7 @@ function useGameFullscreen() {
  * way. Shown again by hovering the top edge or tapping the handle, it hides by itself after a few
  * seconds, or once the mouse leaves it.
  */
-function useGameBar() {
+export function useGameBar() {
   const [shown, setShown] = useState(true)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const later = useCallback((ms: number) => {
@@ -103,11 +106,30 @@ function useGameBar() {
 const FULL_ON_PHONES = new Set(['empires'])
 const isPhone = () => window.innerWidth < 720 || (window.matchMedia('(pointer: coarse)').matches && Math.min(window.innerWidth, window.innerHeight) < 500)
 
-const FullscreenIcon = ({ on }: { on: boolean }) => (
+export const FullscreenIcon = ({ on }: { on: boolean }) => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     {on ? <path d="M6 1v5H1M10 1v5h5M6 15v-5H1M10 15v-5h5" /> : <path d="M1 6V1h5M15 6V1h-5M1 10v5h5M15 10v5h-5" />}
   </svg>
 )
+
+/**
+ * A game's direct link (/play/<game>, Play.tsx): the game on a page of its own, without MvL OS.
+ * In the game window's menu and on its card in the arcade.
+ */
+export function gameLinkItems(id: string): MenuItem[] {
+  const url = playUrl(id)
+  return [
+    {
+      label: 'Copy direct link',
+      onSelect: () =>
+        void navigator.clipboard?.writeText(url).then(
+          () => notify({ title: 'Link copied', body: url, transient: true }),
+          () => notify({ title: 'Could not copy the link', body: url, transient: true }),
+        ),
+    },
+    { label: 'Open without MvL OS', onSelect: () => window.open(url, '_blank', 'noopener') },
+  ]
+}
 
 /**
  * The Games app: the arcade (a window without props.game), or one game in a window of its own
@@ -175,7 +197,13 @@ function Arcade() {
       </header>
       <div className="games-grid">
         {GAMES.map((g) => (
-          <button key={g.id} className="game-card" style={{ ['--p' as string]: g.color }} onClick={() => wm.open('games', { game: g.id })}>
+          <button
+            key={g.id}
+            className="game-card"
+            style={{ ['--p' as string]: g.color }}
+            onClick={() => wm.open('games', { game: g.id })}
+            onContextMenu={(e) => openContextMenu(e, [{ label: 'Play', onSelect: () => wm.open('games', { game: g.id }) }, { separator: true }, ...gameLinkItems(g.id)])}
+          >
             <span className="game-card-art">{g.glyph}</span>
             <strong>{g.name}</strong>
             <span className="muted">{g.blurb}</span>

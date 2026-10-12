@@ -7,6 +7,10 @@ import { startupPrefs } from '../../os/startup'
 // Closing the window throws it all away, so the game opens fresh next time; a reload restores the
 // window with the same id, so the game picks up where it was. Real save games (Empires' named
 // campaigns, Gladiator's careers), high scores and settings live elsewhere and are kept.
+//
+// A game opened by its direct link (/play/<game>, Play.tsx) has no window: the browser tab is its
+// window. Its session is kept for the tab (sessionStorage), and so is everything stored under it,
+// so a reload carries on and closing the tab ends the game, with no window layout to sweep against.
 
 const PREFIX = 'mvlos.gamewin.'
 const keyOf = (session: string, name: string) => `${PREFIX}${session}.${name}`
@@ -15,14 +19,34 @@ const LAYOUTS = 'mvlos.sync.windows:'
 
 export const newSession = () => `${Date.now().toString(36)}${Math.floor(Math.random() * 46656).toString(36)}`
 
+/** Sessions of games played by their direct link: the tab's, not a window's. */
+const PLAY = 'play-'
+const isPlay = (session: string) => session.startsWith(PLAY)
+
+/** The session of the game `id` played by its direct link in this tab: the same across reloads, a new one in a new tab. */
+export function playSession(id: string): string {
+  const key = `mvlos.play.session.${id}`
+  try {
+    const kept = sessionStorage.getItem(key)
+    if (kept) return kept
+    const made = PLAY + newSession()
+    sessionStorage.setItem(key, made)
+    return made
+  } catch {
+    // No storage for this tab: the game plays, and a reload starts it afresh.
+    return PLAY + newSession()
+  }
+}
+
 type Where = 'local' | 'tab'
-const storage = (where: Where) => (where === 'tab' ? sessionStorage : localStorage)
+// A direct link's game keeps everything for the tab: it ends when the tab closes.
+const storage = (where: Where, session: string) => (where === 'tab' || isPlay(session) ? sessionStorage : localStorage)
 
 /** What a game window keeps for itself under `name`, or null (also without a session). */
 export function sessionGet<T>(session: string | undefined, name: string, where: Where = 'local'): T | null {
   if (!session) return null
   try {
-    return JSON.parse(storage(where).getItem(keyOf(session, name)) ?? 'null') as T | null
+    return JSON.parse(storage(where, session).getItem(keyOf(session, name)) ?? 'null') as T | null
   } catch {
     return null
   }
@@ -32,8 +56,8 @@ export function sessionGet<T>(session: string | undefined, name: string, where: 
 export function sessionPut(session: string | undefined, name: string, v: unknown, where: Where = 'local') {
   if (!session) return
   try {
-    if (v === null) storage(where).removeItem(keyOf(session, name))
-    else storage(where).setItem(keyOf(session, name), JSON.stringify(v))
+    if (v === null) storage(where, session).removeItem(keyOf(session, name))
+    else storage(where, session).setItem(keyOf(session, name), JSON.stringify(v))
   } catch {
     // Storage full or blocked: a reload starts this game afresh.
   }
@@ -50,7 +74,11 @@ function sweep(drop: (session: string) => boolean) {
       for (let i = 0; i < s.length; i++) keys.push(s.key(i) ?? '')
       for (const k of keys) {
         if (RETIRED(k)) s.removeItem(k)
-        else if (k.startsWith(PREFIX) && drop(k.slice(PREFIX.length).split('.')[0])) s.removeItem(k)
+        else if (k.startsWith(PREFIX)) {
+          const session = k.slice(PREFIX.length).split('.')[0]
+          // A direct link's game is its tab's, never a window's: it goes when the tab does.
+          if (!isPlay(session) && drop(session)) s.removeItem(k)
+        }
       }
     } catch {
       // Storage blocked: there is nothing kept to remove either.

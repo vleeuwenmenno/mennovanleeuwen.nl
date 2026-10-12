@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { CalendarApp } from '../apps/calendar/Calendar'
 import { Contact } from '../apps/Contact'
 import { Cv } from '../apps/Cv'
-import { Games } from '../apps/games/Games'
+import { gameLinkItems, Games } from '../apps/games/Games'
 import { gameInfo } from '../apps/games/catalog'
 import { KeysNote } from '../apps/KeysNote'
 import { Notebook } from '../apps/Notebook'
@@ -57,6 +57,12 @@ const settingsMenu =
   }
 /** The games with settings of their own, in Settings → Apps → Games. */
 const GAMES_WITH_SETTINGS = new Set(['pool', 'gladiator', 'empires'])
+/** A game window's menu: its settings, and its direct link to play it without MvL OS. */
+const gamesMenu = (w: WinState, wm: ReturnType<typeof useWM>): MenuItem[] => {
+  const settings = settingsMenu((w) => gameInfo(w.props.game)?.name ?? 'Game', 'games', (w) => (w.props.game && GAMES_WITH_SETTINGS.has(w.props.game) ? w.props.game : null))(w, wm)
+  const game = gameInfo(w.props.game)
+  return game ? [...settings, ...(settings.length ? [{ separator: true as const }] : []), ...gameLinkItems(game.id)] : settings
+}
 
 export const APP_META: Record<AppId, AppMeta> = {
   terminal: { title: `${HANDLE}@mvlos: ~`, dock: 'Terminal', blurb: 'A shell that actually works', size: [760, 500], render: (w) => <Terminal win={w} />, menu: terminalMenu },
@@ -78,7 +84,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   recents: { title: 'Activity', dock: 'Activity', blurb: 'Live activity and contribution graph', size: [780, 680], render: () => <Recents /> },
   cv: { title: 'cv.md — Viewer', dock: 'CV', blurb: 'The printable version of me', size: [760, 680], render: () => <Cv /> },
   contact: { title: 'New message', dock: 'Contact', blurb: 'Get in touch', size: [560, 500], render: () => <Contact /> },
-  games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, Pool, Gladiator, Empires At War, Breakout', size: [720, 640], titleOf: (w) => gameInfo(w.props.game)?.name ?? 'Games', sizeOf: (p) => gameInfo(p.game)?.size, render: (w) => <Games win={w} />, menu: settingsMenu((w) => gameInfo(w.props.game)?.name ?? 'Game', 'games', (w) => (w.props.game && GAMES_WITH_SETTINGS.has(w.props.game) ? w.props.game : null)) },
+  games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, Pool, Gladiator, Empires At War, Breakout', size: [720, 640], titleOf: (w) => gameInfo(w.props.game)?.name ?? 'Games', sizeOf: (p) => gameInfo(p.game)?.size, render: (w) => <Games win={w} />, menu: gamesMenu },
   calendar: { title: 'Calendar', dock: 'Calendar', blurb: 'Your Google and CalDAV calendars: plan, move and invite', size: [1000, 660], render: (w) => <CalendarApp win={w} />, menu: settingsMenu('Calendar', 'calendar') },
   agents: { title: 'Agents', dock: 'Agents', blurb: 'Research assistant: quick answers or deep research, with memory', size: [920, 640], render: (w) => <Agents win={w} /> },
   notebook: { title: 'Notebook', dock: 'Notebook', blurb: 'Your notes, in Markdown, on any device', size: [860, 560], render: (w) => <Notebook win={w} /> },

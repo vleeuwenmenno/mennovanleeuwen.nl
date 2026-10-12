@@ -8,6 +8,7 @@ import { startAgents } from './agents.ts'
 import { startMinecraftWatch } from './minecraft.ts'
 import { startNotifications } from './watchers.ts'
 import { SECURITY } from './http.ts'
+import { GAME_CATALOG } from '../src/apps/games/catalog.ts'
 
 // Serves the built site and the /api routes in server/api.ts: live status, GitHub sign-in,
 // synced desktop state and code search, plus the Empires At War multiplayer WebSocket
@@ -61,12 +62,42 @@ const CV_NOSCRIPT = `<noscript>
         <p>Projects: Savuvo, Boltwarden, Pepper, Omasoloist. GitHub: <a href="https://github.com/vleeuwenmenno">vleeuwenmenno</a>.</p>
       </main>
     </noscript>`
-let cvPage: Buffer | null = null
-async function cvIndex(full: string): Promise<Buffer> {
-  if (cvPage) return cvPage
+
+// mennovanleeuwen.nl/play/<game> is one game on a page of its own (src/os/playMode.ts), and /play
+// the list of them: a shared link shows the game's name and what it is, not the desktop's card.
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+const PLAY_PATH = /^\/play(?:\/([^/]+))?\/?$/
+function playHead(path: string): { key: string; meta: string; noscript: string } | null {
+  const m = PLAY_PATH.exec(path)
+  if (!m) return null
+  const game = m[1] ? GAME_CATALOG.find((g) => g.id === m[1]) : undefined
+  const title = game ? `${game.name} · MvL OS` : 'Arcade · MvL OS'
+  const description = game ? `${game.blurb.replace(/[.!?]$/, '')}. Free to play in your browser, nothing to install.` : `Small games to play in your browser: ${GAME_CATALOG.map((g) => g.name).join(', ')}.`
+  return {
+    // A link to a game that doesn't exist gets the list (the page says so), so it shares the list's.
+    key: game ? `play:${game.id}` : 'play',
+    meta: `<title>${esc(title)}</title>
+    <meta name="description" content="${esc(description)}" />
+    <meta property="og:title" content="${esc(title)}" />
+    <meta property="og:description" content="${esc(description)}" />`,
+    noscript: `<noscript>
+      <main style="font-family:sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;color:#ddd">
+        <h1>${esc(game?.name ?? 'Arcade')}</h1>
+        <p>${game ? 'This game needs' : 'These games need'} JavaScript. Made by Menno van Leeuwen for <a href="/">MvL OS</a>.</p>
+      </main>
+    </noscript>`,
+  }
+}
+
+/** index.html with another page's title, description, link preview and noscript text, made once per page. */
+const swappedPages = new Map<string, Buffer>()
+async function swappedIndex(full: string, key: string, meta: string, noscript: string): Promise<Buffer> {
+  const hit = swappedPages.get(key)
+  if (hit) return hit
   const html = await readFile(full, 'utf8')
-  cvPage = Buffer.from(html.replace(/<!-- meta[^>]*-->[\s\S]*?<!-- \/meta -->/, CV_META).replace(/<!-- noscript -->[\s\S]*?<!-- \/noscript -->/, CV_NOSCRIPT))
-  return cvPage
+  const page = Buffer.from(html.replace(/<!-- meta[^>]*-->[\s\S]*?<!-- \/meta -->/, meta).replace(/<!-- noscript -->[\s\S]*?<!-- \/noscript -->/, noscript))
+  swappedPages.set(key, page)
+  return page
 }
 
 /** One request: an /api route, or a file of the built site. */
@@ -92,7 +123,7 @@ async function serve(req: IncomingMessage, res: ServerResponse) {
 
   let found = await file(path).catch(() => null)
   let served = path
-  // Unknown paths get the app (it has no client-side routes, but a stray link shouldn't 404).
+  // Unknown paths get the app: its own pages (/cv, /play/<game>) and stray links, which shouldn't 404.
   if (!found && !extname(path)) {
     found = await file('/index.html')
     served = '/index.html'
@@ -101,8 +132,9 @@ async function serve(req: IncomingMessage, res: ServerResponse) {
     res.writeHead(404, { 'Content-Type': 'text/plain', ...SECURITY }).end('Not found\n')
     return
   }
-  if (served === '/index.html' && /^\/cv\/?$/.test(path)) {
-    const body = await cvIndex(found.full)
+  const play = served === '/index.html' ? playHead(path) : null
+  if (served === '/index.html' && (play || /^\/cv\/?$/.test(path))) {
+    const body = play ? await swappedIndex(found.full, play.key, play.meta, play.noscript) : await swappedIndex(found.full, 'cv', CV_META, CV_NOSCRIPT)
     res.writeHead(200, { 'Content-Type': TYPES['.html'], 'Content-Length': body.length, 'Cache-Control': 'no-cache', ...SECURITY })
     res.end(req.method === 'HEAD' ? undefined : body)
     return

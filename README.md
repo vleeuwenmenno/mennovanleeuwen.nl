@@ -762,6 +762,27 @@ their slot as you play; load them from Galactic conquest → Load game), Gladiat
 scores and settings. A campaign battle cut off by closing the window waits in the loaded campaign,
 to be fought again from the start.
 
+### Direct links: games without MvL OS
+
+Every game also has a page of its own at **`/play/<game>`** (`/play/tetris`, `/play/pacman`,
+`/play/minecraft`, `/play/snake`, `/play/minesweeper`, `/play/pool`, `/play/gladiator`,
+`/play/empires`, `/play/breakout`; the ids are in
+[`src/apps/games/catalog.ts`](src/apps/games/catalog.ts)): just the game, filling the browser
+window, with no boot log, desktop, top bar or dock ([`src/os/playMode.ts`](src/os/playMode.ts),
+[`Play.tsx`](src/apps/games/Play.tsx)). The game bar slides in at the top edge (or with the
+handle on a touch screen) with the browser's real fullscreen, a link to the list and one back to
+MvL OS. **`/play`** lists the games; a link to a game that doesn't exist lands there with a note.
+The server gives each page the game's title and description for link previews
+([`server/index.ts`](server/index.ts)).
+
+The game window's menu (⋯ or right-click) and a right-click on a card in the arcade have **Copy
+direct link** and **Open without MvL OS**.
+
+Saves, settings and high scores are the same ones the OS uses (same site, same browser storage), so
+progress carries over both ways, and signing in from Gladiator comes back to the game's page.
+Multiplayer works the same. The game in progress belongs to the browser tab instead of a window: a
+reload carries on where it was, closing the tab ends it.
+
 ## Empires At War weapon ranges and repair craft
 
 Hovering a ship or structure in battle (ours, or an enemy we can see) rings it with its weapon

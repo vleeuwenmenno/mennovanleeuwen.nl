@@ -697,8 +697,8 @@ const AUTH_NOTICES: Record<string, { title: string; body?: string }> = {
   off: { title: 'Sign-in is not set up', body: 'This server has no GitHub OAuth app configured.' },
 }
 
-/** Sign-ins the server turned away (server/auth.ts finishLogin), shown as a dialog. */
-const REFUSED: Record<string, (reason: string | null) => { title: string; body: string }> = {
+/** Sign-ins the server turned away (server/auth.ts finishLogin), shown as a dialog (here, and on a game's direct link: Play.tsx). */
+export const REFUSED: Record<string, (reason: string | null) => { title: string; body: string }> = {
   full: () => ({ title: "We're full", body: 'MvL OS has room for a limited number of accounts, and they are all taken. Your GitHub account was not added. Try again later; you can keep using this desktop as a guest.' }),
   closed: () => ({ title: 'Sign-up is closed', body: 'New accounts are not being made right now. Your GitHub account was not added; you can keep using this desktop as a guest.' }),
   banned: (reason) => ({ title: 'This account is blocked', body: reason ? `The admin blocked this account: ${reason.slice(0, 200)}` : 'The admin blocked this account from signing in.' }),

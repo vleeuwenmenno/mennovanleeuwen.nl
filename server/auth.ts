@@ -100,6 +100,9 @@ export function requireAdmin(req: IncomingMessage): User {
   return user
 }
 
+/** The pages sign-in may come back to: the desktop, the CV page, and a game by its direct link (/play/<game>). Nothing else, so the link can't send anyone elsewhere. */
+const backTo = (path: string | null) => (path === '/cv' || (path && /^\/play(\/[a-z0-9-]{1,40})?$/.test(path)) ? path : '/')
+
 /** Off to GitHub. `?repo=1` also asks for private repositories (and remembers that), `?repo=0` stops asking. */
 export function startLogin(req: IncomingMessage, res: ServerResponse, url: URL) {
   if (!authEnabled()) return redirect(res, '/?auth=off')
@@ -113,8 +116,8 @@ export function startLogin(req: IncomingMessage, res: ServerResponse, url: URL) 
     state,
     allow_signup: 'false',
   })
-  // Where to come back to: the CV page when signing in from there, else the desktop.
-  const back = url.searchParams.get('back') === '/cv' ? '/cv' : '/'
+  // Where to come back to: the CV page or a game's direct link when signing in from there, else the desktop.
+  const back = backTo(url.searchParams.get('back'))
   const set = [setCookie(req, STATE_COOKIE, `${state} ${back}`, { maxAge: 600, path: '/api/auth' })]
   if (asked !== null) set.push(setCookie(req, REPO_COOKIE, repo ? '1' : '', { maxAge: repo ? 365 * 86400 : 0, path: '/api/auth' }))
   redirect(res, `https://github.com/login/oauth/authorize?${params}`, { 'Set-Cookie': set })
@@ -123,7 +126,7 @@ export function startLogin(req: IncomingMessage, res: ServerResponse, url: URL) 
 export async function finishLogin(req: IncomingMessage, res: ServerResponse, url: URL) {
   const clearState = setCookie(req, STATE_COOKIE, '', { maxAge: 0, path: '/api/auth' })
   const [expected, back = '/'] = (cookies(req)[STATE_COOKIE] ?? '').split(' ')
-  const home = back === '/cv' ? '/cv' : '/'
+  const home = backTo(back)
   const fail = (reason: string) => redirect(res, `${home}?auth=${reason}`, { 'Set-Cookie': clearState })
   if (!authEnabled()) return fail('off')
   const code = url.searchParams.get('code')

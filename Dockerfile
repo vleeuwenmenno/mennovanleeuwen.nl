@@ -26,6 +26,8 @@ COPY server ./server
 COPY src/data/normalize.ts src/data/code.ts src/data/zip.ts src/data/tar.ts src/data/archive.ts src/data/agentsPrompt.ts src/data/notifySources.ts ./src/data/
 # Empires At War multiplayer: names and messages now, the battle itself for refereeing matches.
 COPY src/apps/games/empires ./src/apps/games/empires
+# Games by their direct link (/play/<game>): the game list, for each page's title and link preview.
+COPY src/apps/games/catalog.ts ./src/apps/games/
 # The agents: the shell's parser (to tell read-only command lines apart) and its reference (the msh skill).
 COPY src/data/mshReference.ts ./src/data/
 COPY src/terminal/msh/parse.ts ./src/terminal/msh/
