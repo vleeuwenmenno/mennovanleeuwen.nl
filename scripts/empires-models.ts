@@ -2,6 +2,8 @@
 //
 //   node scripts/empires-models.ts
 //
+// 0. Every unit in data.ts has a model (full parity: nothing falls back to its sprite), and no two
+//    looks share a model key (the bitmap cache is keyed by it).
 // 1. Every unit with a model builds without errors (every station level too), and its geometry is
 //    sound: real polygons, no NaN, parts inside a sane box.
 // 2. Its mounts are the unit's hardpoints, one each and in the same order, sitting on the hull.
@@ -9,8 +11,11 @@
 //    exist, there are few enough to fit a state mask, and engine parts point at real engines.
 // 4. How a wreck breaks is deterministic for an id and seed, and over many wrecks follows the
 //    weights for its class; every break splits the hull into pieces that cover it.
+// 5. Frigates and up shed at least four parts as they are battered, and a part that goes with an
+//    engine hardpoint carries that engine's glow; strike craft, gunships and structures burst into
+//    three or more real fragments.
 
-import { STATIONS, TECHS, UNITS, stationType, type UnitType } from '../src/apps/games/empires/data.ts'
+import { STATIONS, TECHS, UNITS, mineType, stationType, type UnitType } from '../src/apps/games/empires/data.ts'
 import { BREAK_WEIGHTS, breakOutcome, breakPieces, buildModel, hasModel, hullState, modelStyles, onHull, wreckState } from '../src/apps/games/empires/models/index.ts'
 
 let failed = 0
@@ -22,7 +27,11 @@ const ok = (cond: boolean, msg: string) => {
   if (!cond) fail(msg)
 }
 
-// Every modelled unit, and every level of a modelled station with all its modules.
+// 0. Full parity: every unit in data.ts has a model, so none falls back to its sprite.
+for (const t of UNITS) ok(hasModel(t), `${t.id} (${t.name}) has no model`)
+
+// Every modelled unit, every level of a modelled station with and without its research modules,
+// and a mining platform with its shield dome fitted.
 const types: UnitType[] = []
 for (const t of UNITS) {
   if (!hasModel(t)) continue
@@ -33,8 +42,17 @@ for (const t of UNITS) {
       types.push(stationType(t.faction, lv, techs))
     }
   } else types.push(t)
+  if (t.tier === 'mine') types.push(mineType(t.faction, true))
 }
 console.log(`Models: ${types.length} unit types (${UNITS.filter(hasModel).map((t) => t.id).join(', ')})`)
+// Models are cached per look by key: two different types must never share one.
+const keys = new Map<string, UnitType>()
+for (const t of types) {
+  const k = buildModel(t).key
+  const other = keys.get(k)
+  ok(!other || (other.id === t.id && other.hardpoints.length === t.hardpoints.length), `${t.id}: model key ${k} is shared with another look`)
+  keys.set(k, t)
+}
 
 for (const [t, style] of types.flatMap((t) => [[t, undefined], ...modelStyles(t).map((s) => [t, s])] as [UnitType, string | undefined][])) {
   const label = `${t.id}${t.tier === 'station' ? ` (${t.sprite}, ${t.hardpoints.length} modules)` : ''}${style ? ` [${style}]` : ''}`
@@ -51,6 +69,9 @@ for (const [t, style] of types.flatMap((t) => [[t, undefined], ...modelStyles(t)
     const pts = [...p.pts, ...(p.holes ?? []).flat(), ...(p.details ?? []).flatMap((d) => d.pts)]
     ok(pts.every(([x, y]) => Number.isFinite(x) && Number.isFinite(y)), `${label}: part ${p.id} has a non-finite point`)
     ok(pts.every(([x, y]) => Math.abs(x) <= m.w * 0.75 && Math.abs(y) <= m.h * 0.75), `${label}: part ${p.id} reaches far outside the unit's box`)
+    // A hull's bitmap holds its box and a margin of 5% of its length: past that it would be cut off.
+    const edge = m.long * 0.045
+    ok(p.pts.every(([x, y]) => Math.abs(x) <= m.w / 2 + edge && Math.abs(y) <= m.h / 2 + edge), `${label}: part ${p.id} sticks out past the bitmap's margin`)
   }
   ok(new Set(m.parts.map((p) => p.id)).size === m.parts.length, `${label}: part ids are not unique`)
   // 2. Hardpoints.
@@ -99,6 +120,24 @@ for (const [t, style] of types.flatMap((t) => [[t, undefined], ...modelStyles(t)
     }
   }
   ok(JSON.stringify(wreckState(m, 77)) === JSON.stringify(wreckState(m, 77)), `${label}: wreck state isn't deterministic`)
+  // 5. What each class does when it is hit and dies. Frigates and up shed parts as they are
+  // battered (wing tips, antennae, dishes, engine pods) on top of their flak turrets, and leave a
+  // wreck that breaks; an engine hardpoint that is shot out takes a part with it where the design
+  // has one. Strike craft, gunships and structures burst into fragments (several, none a sliver).
+  if (BREAK_WEIGHTS[t.tier]) {
+    const shed = m.detachable.filter((i) => m.parts[i].detach!.hull !== undefined || m.parts[i].detach!.hp !== undefined).length
+    ok(shed >= 4, `${label}: only ${shed} parts come off as it is battered (want 4 or more)`)
+    for (const i of m.detachable) {
+      const d = m.parts[i].detach!
+      if (d.hp !== undefined) ok(t.hardpoints[d.hp].kind === 'engine' ? m.parts[i].engine !== undefined : true, `${label}: part ${m.parts[i].id} goes with engine ${d.hp} but carries no engine glow`)
+    }
+  } else {
+    for (let v = 0; v < 8; v++) {
+      const pieces = breakPieces(m, 'pieces', v)
+      ok(pieces.length >= 3, `${label}: bursts into only ${pieces.length} fragments`)
+      ok(pieces.every((p) => p.share > 0.02), `${label}: burst ${v} has a sliver of a fragment`)
+    }
+  }
   console.log(`  ok ${label}: ${m.parts.length} parts, ${m.mounts.length} mounts, ${m.detachable.length} detachable`)
 }
 

@@ -838,7 +838,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
                 {units.map((u) => (
                   <button key={u.id} className={u.id === base.id ? 'is-on' : ''} onClick={click(() => setPickId(u.id))}>
                     <span>{u.name}</span>
-                    {hasModel(u) && <em className="ew-cx-tag" data-tip="Drawn as a procedural model (the rest still use their sprites)">Model</em>}
+                    {hasModel(u) && <em className="ew-cx-tag" data-tip="Drawn as a procedural model (the setting Procedural models switches back to the sprites)">Model</em>}
                   </button>
                 ))}
               </section>
