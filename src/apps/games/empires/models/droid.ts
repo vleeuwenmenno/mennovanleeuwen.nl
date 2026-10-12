@@ -574,7 +574,7 @@ function clamps(x0: number, y0: number, x1: number, y1: number, z: number): Part
 }
 
 /**
- * Droid ore harvester: an industrial rig. Two drill housings on a gunmetal girder deck, a hub with
+ * Droid ore extractor: an industrial rig. Two drill housings on a gunmetal girder deck, a hub with
  * the ore silo, a landing block on top (where the shield dome goes) and a gun box below, an
  * antenna mast and a loading crane bolted on, clamped to its asteroid at the corners.
  */

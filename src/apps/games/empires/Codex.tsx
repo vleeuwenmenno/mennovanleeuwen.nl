@@ -3,7 +3,7 @@ import { ABILITIES, FACTIONS, STATIONS, TECH, TECHS, UNITS, moduleSprite, roleOf
 import { info, sameSel, selName, targets, weaponLine, WEAPON_NAME, type Sel } from './codexInfo'
 import { Frame, HpIcon, Icon, Tips, fmt } from './Hud'
 import { HP_COLOR, hpName } from './icons'
-import { BREAK_WEIGHTS, SWARM, hasModel, hasSwarm, hullState, modelFor, modelStyles, pickAt, type Model } from './models/index.ts'
+import { BREAK_WEIGHTS, SWARM, hasModel, hasSwarm, hullState, modelFor, modelStyles, pickAt, swarmName, type Model } from './models/index.ts'
 import { ModelFx } from './models/fx.ts'
 import { LIGHT, PALETTES } from './models/kit.ts'
 import { cacheStats, drawHull, drawMounts, liveEngines } from './models/paint.ts'
@@ -39,6 +39,8 @@ const TIER_GROUPS: { name: string; tiers: Tier[] }[] = [
   { name: 'Flagships', tiers: ['capital'] },
   { name: 'Structures', tiers: ['station', 'mine', 'defense'] },
 ]
+/** How the Codex names a design variant, where its id alone wouldn't say enough. */
+const STYLE_NAMES: Record<string, string> = { ring: 'Ring hull', carrier: 'Alt design: carrier' }
 const RANGE_RGB: Record<WeaponKind, string> = { laser: '255,128,112', flak: '255,196,92', turbo: '122,190,255', missile: '255,140,222', ion: '176,146,255' }
 const TAU = Math.PI * 2
 
@@ -126,12 +128,13 @@ function Stats({ t, concept = false, model, dmg, selected, hover, onSelect, onHo
   return (
     <div className="ew-cx-stats">
       <header>
-        <h3 style={{ color: FACTIONS[t.faction].color }}>{t.name}</h3>
+        <h3 style={{ color: FACTIONS[t.faction].color }}>{concept ? swarmName(t) : t.name}</h3>
         {role && <em>{role.role}</em>}
       </header>
       {concept && <p className="ew-cx-concept ew-small">Swarm concept design. The numbers below are the Confederacy {t.name}'s, which it mirrors; the Swarm has none of its own yet.</p>}
       {selected && <ModuleCard t={t} model={model} sel={selected} dmg={dmg} onClear={() => onSelect(null)} />}
-      <p className="ew-muted">{t.blurb}</p>
+      {/* The blurb describes the droid design; a Swarm concept has its own look. */}
+      {!concept && <p className="ew-muted">{t.blurb}</p>}
       <div className="ew-cx-grid">
         {row('Hull', fmt(t.hull))}
         {row('Shields', t.shield ? `${fmt(t.shield)} · +${t.regen}/s` : 'None')}
@@ -848,7 +851,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
                 <h5>{grp.name}</h5>
                 {units.map((u) => (
                   <button key={u.id} className={u.id === base.id ? 'is-on' : ''} onClick={click(() => setPickId(u.id))}>
-                    <span>{u.name}</span>
+                    <span>{concept ? swarmName(u) : u.name}</span>
                     {concept ? (
                       <em className="ew-cx-tag is-concept" data-tip="A design preview for a future faction, shown on this droid unit's numbers and hardpoints">Concept</em>
                     ) : (
@@ -881,7 +884,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
             {(t.tier === 'station' || styles.length > 0) && (
               <div className="ew-cx-level">
                 {t.tier === 'station' && <Seg label="Station level" value={level} options={STATIONS[t.faction].stages.map((_, i) => [i + 1, `Level ${i + 1}`] as [number, string])} onChange={(v) => setLevel(v)} />}
-                {styles.length > 0 && <Seg label={t.tier === 'station' ? 'Outer frame' : 'Design'} value={styles.includes(style) ? style : styles[0]} options={styles.map((s) => [s, s[0].toUpperCase() + s.slice(1)] as [string, string])} onChange={(v) => setStyle(v)} />}
+                {styles.length > 0 && <Seg label={t.tier === 'station' ? 'Outer frame' : 'Design'} value={styles.includes(style) ? style : styles[0]} options={styles.map((s) => [s, STYLE_NAMES[s] ?? s[0].toUpperCase() + s.slice(1)] as [string, string])} onChange={(v) => setStyle(v)} />}
               </div>
             )}
             <button className="ew-cx-reset" onClick={click(() => setResetKey((k) => k + 1))} data-tip="Back to nose up at the starting zoom">

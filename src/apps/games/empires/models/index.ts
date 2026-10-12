@@ -64,6 +64,8 @@ const SWARM_DEFS: Record<string, ModelDef> = Object.fromEntries(
 /** The style that builds a droid unit as its Swarm concept design. */
 export const SWARM = 'swarm'
 export const hasSwarm = (t: UnitType) => t.id in SWARM_DEFS
+/** A Swarm design's own name (the droid unit it mirrors has a droid-navy name). */
+export const swarmName = (t: UnitType) => swarm.SWARM_NAMES[t.id] ?? t.name
 
 export const hasModel = (t: UnitType) => t.id in DEFS
 

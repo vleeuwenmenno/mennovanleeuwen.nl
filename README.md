@@ -814,7 +814,7 @@ shows the averages. The setting *Show weapon ranges on hover* (on by default) is
 Settings and in Settings → Apps → Games → Empires At War.
 
 Each side has a repair squadron of two strike craft, the Republic's Suture repair fighter and the
-droids' Weaver repair droid ([`data.ts`](src/apps/games/empires/data.ts)). They launch from the
+droids' Tinker repair droid ([`data.ts`](src/apps/games/empires/data.ts)). They launch from the
 hangar like any fighter and need the research Engineer wing or Welder protocols (300 credits,
 25 s, station level 1) before the shipyard builds them. Their guns are next to useless; their
 ability, **Field repair** (35 s cooldown), sends them to a damaged station or a ship of gunship
@@ -835,7 +835,7 @@ its worst-hurt ship or station. Galactic conquest has no research, so there they
 any other ship.
 
 Every station also comes with a free **defense wing** (`DEFENSE_WING` in `data.ts`): the
-Republic's five Aegis pickets or the droids' six Gnat guard droids, smaller and frailer than line
+Republic's five Aegis pickets or the droids' six Bolt guard droids, smaller and frailer than line
 fighters. They cost nothing, take no fleet space and can't be built, retreat or escape with a
 conquest fleet. Their station is their parent, as a carrier's fighters are theirs, so when idle
 they circle it and take on whatever comes near, chasing it only so far. They can be ordered

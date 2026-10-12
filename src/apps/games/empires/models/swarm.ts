@@ -28,6 +28,22 @@ function crescent(cx: number, cy: number, rx: number, ry: number, a0: number, a1
 
 const deg = (d: number) => (d * Math.PI) / 180
 
+/** The names these designs were made under, for the Codex's Swarm tab: the droid units they mirror
+ * carry the droid navy's names now. */
+export const SWARM_NAMES: Record<string, string> = {
+  'd-fighter': 'Mantis droid fighter',
+  'd-bomber': 'Locust bomber',
+  'd-repair': 'Weaver repair droid',
+  'd-picket': 'Gnat guard droid',
+  'd-gunship': 'Trident gunship',
+  'd-ion': 'Disruptor frigate',
+  'd-frigate': 'Scarab frigate',
+  'd-cruiser': 'Manta cruiser',
+  'd-capital': 'Hive carrier',
+  'd-station': 'Foundry station',
+  'd-mine': 'Ore harvester',
+}
+
 /**
  * Mantis droid fighter: a beaked head with one violet eye, a segmented tail and two hooked claw
  * wings that sweep forward and down. The lower claws snap off as it is shot up.
