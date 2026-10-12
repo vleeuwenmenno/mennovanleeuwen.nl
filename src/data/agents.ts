@@ -22,7 +22,7 @@ export const alsoKnownAs = (t: Pick<Thread, 'aliases'>) => (t.aliases?.length ? 
  * How the last turn was cut short, when it was: the server restarted (a deploy) or stopped without
  * a word (a crash) while it ran, it failed, or it was stopped. Retry runs it again.
  */
-export type Interruption = { reason: 'restart' | 'crash' | 'failed' | 'stopped'; error?: string; at: number }
+export type Interruption = { reason: 'restart' | 'crash' | 'failed' | 'stopped'; error?: string; at: number; /** A /compact was cut short: Retry compacts again (nothing is removed) */ compact?: { instructions?: string } }
 /** What a cut-short turn says in the thread. */
 export const interruptionText = (i: Interruption) =>
   i.reason === 'restart' ? 'Interrupted: the server restarted (an update)' : i.reason === 'crash' ? 'Interrupted: the server stopped unexpectedly' : i.reason === 'failed' ? `Stopped by an error${i.error ? `: ${i.error}` : ''}` : 'Stopped'
@@ -47,8 +47,23 @@ export type ToolCall = { name: string; arguments: Record<string, unknown> }
 /** A file sent with a message: text files as text, pictures as base64 (for models that can see). */
 export type Attachment = { name: string; source: string; kind: 'text' | 'image'; mime: string; size: number; text?: string; data?: string }
 export type AttachmentInfo = Omit<Attachment, 'text' | 'data'>
-/** `checked` (tool results): why it ran without asking, such as a web read Auto's check cleared. */
-export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; checked?: string; createdAt: number }
+/**
+ * `checked` (tool results): why it ran without asking, such as a web read Auto's check cleared.
+ * Role 'compact': a compaction, its content the summary the model gets in place of everything
+ * before it (the window still shows all of it, with a divider here).
+ */
+export type AgentMessage = { id: number; role: 'user' | 'assistant' | 'tool' | 'compact'; content: string; thinking?: string; toolCalls?: ToolCall[]; toolName?: string; attachments?: AttachmentInfo[]; checked?: string; compact?: Compaction; createdAt: number }
+/**
+ * How a compaction came about (server/agents.ts): asked for with /compact (and what to focus on),
+ * or by itself, when the context passed the threshold or the model said it was too long; how many
+ * messages it stands in for, and roughly how many tokens they took against the summary's.
+ */
+export type Compaction = { auto: boolean; reason?: 'threshold' | 'overflow'; instructions?: string; messages: number; before: number; after: number; model: string; request?: string; files?: string[] }
+/** "Compacted by itself: the context was nearly full" and the like, for the divider. */
+export const compactionText = (c: Compaction | undefined) =>
+  !c?.auto ? 'Conversation compacted' : c.reason === 'overflow' ? 'Conversation compacted by itself: the model said it was too long' : 'Conversation compacted by itself: the context was nearly full'
+/** "/compact keep the API details": a compaction instead of a message (the server sees it the same way). */
+export const isCompact = (text: string) => /^\/compact(?:\s|$)/i.test(text.trim())
 
 /** What a thread may use, switched in the composer. */
 export type ToolGroup = 'web' | 'notes' | 'calendar' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills'
@@ -118,6 +133,8 @@ export type TurnEvent =
   /** The thread's queue changed */
   | { type: 'queue'; queue: QueuedMessage[] }
   | { type: 'error'; error: string }
+  /** A compaction began (its message follows, role 'compact'), or failed; `auto` when nobody asked for it */
+  | { type: 'compact'; state: 'start' | 'failed'; auto: boolean; error?: string }
   | { type: 'done' }
   /** First on a follow stream: the thread as it is, with the reply being written so far (null when not running) */
   | { type: 'snapshot'; thread: Thread; messages: AgentMessage[]; pending: PendingApproval[]; live: { content: string; thinking: string } | null }
@@ -171,7 +188,12 @@ export const suggestTitle = (id: string) => api<{ title: string | null }>(`/api/
 export const regenerateTitle = (id: string) => api<{ thread: Thread }>(`/api/agents/threads/${id}/retitle`, { method: 'POST' })
 
 export type ContextPart = { label: string; tokens: number }
-export type ContextInfo = { model: string; contextLength: number | null; measured: number | null; estimate: number; parts: ContextPart[] }
+/**
+ * `compaction`: the last one, when the thread has been compacted (how many messages before it the
+ * summary stands in for, and how many times in all); `autoCompact`: the threshold in percent of the
+ * window, null when compacting by itself is off.
+ */
+export type ContextInfo = { model: string; contextLength: number | null; measured: number | null; estimate: number; parts: ContextPart[]; compaction: { at: number; auto: boolean; hidden: number; times: number } | null; autoCompact: number | null }
 export const getContext = (id: string) => api<ContextInfo>(`/api/agents/threads/${id}/context`)
 
 export type PromptInfo = { text: string; source: 'seafile' | 'builtin'; repo: string | null; path: string | null; missing: boolean; error: string | null }
@@ -218,10 +240,16 @@ export type AgentSettings = {
   titleRefresh: boolean
   /** Every how many of your messages that check runs: one of TITLE_EVERY */
   titleEvery: number
+  /** Long threads are compacted by themselves when the context gets full (the server does it) */
+  autoCompact: boolean
+  /** How full, in percent of the model's context window: one of COMPACT_AT */
+  compactAt: number
 }
 /** The intervals for the title check that Settings offers, in your messages (server/agents.ts has the same). */
 export const TITLE_EVERY = [3, 4, 6, 10]
-const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 4 }, {
+/** How full the context may get before a thread is compacted by itself, as Settings offers it (server/agents.ts has the same). */
+export const COMPACT_AT = [60, 70, 80, 85, 90, 95]
+const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkModel: null, quickModel: null, deepModel: null, mode: 'quick', promptFile: null, tools: ALL_TOOLS, seenTools: ALL_TOOLS, skillsFolder: null, skillsOff: [], titleRefresh: true, titleEvery: 4, autoCompact: true, compactAt: 85 }, {
   normalize: (v) => {
     const s = (v ?? {}) as Partial<AgentSettings>
     return {
@@ -238,6 +266,8 @@ const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkM
       skillsOff: Array.isArray(s.skillsOff) ? s.skillsOff.filter((x): x is string => typeof x === 'string') : [],
       titleRefresh: s.titleRefresh !== false,
       titleEvery: TITLE_EVERY.includes(Number(s.titleEvery)) ? Number(s.titleEvery) : 4,
+      autoCompact: s.autoCompact !== false,
+      compactAt: COMPACT_AT.includes(Number(s.compactAt)) ? Number(s.compactAt) : 85,
     }
   },
 })

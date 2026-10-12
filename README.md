@@ -220,6 +220,11 @@ In a folder on Seafile, that folder becomes the thread's work folder:
 - `/title` shows the thread's title, who named it and the titles it had before (`/status` shows
   those too), `/title regen` asks the title model for a fresh one, and `/rename` sets your own,
   which is then kept as it is. See *Titles keep up to date* under Agents below.
+- `/compact` summarises the thread so far to free up the model's context window, and `/compact
+  keep the API details` says what the summary should keep; while the agent works it waits in the
+  queue. A rule across the screen marks the spot, `/summary` shows what was kept, and `/context`
+  and `/status` say when it was compacted and at what point it does so by itself. See
+  *Compaction* under Agents below.
 - `agents -c`/`-r` resume a thread, `agents -p` answers once for pipes, and `/help` lists the
   slash commands.
 
@@ -235,8 +240,11 @@ Agents → Skills).
 stand-in for Ollama and a mock Seafile. It has not yet run against real models, so the tool
 descriptions and system prompt are untuned. Known limits:
 
-- **Context.** There is no `/compact` and no summarising. Older tool output is cut to 1,500
-  characters, but a long coding session can still outgrow the model's context window.
+- **Context.** A summary is only as good as the model that writes it: details it leaves out are
+  gone for the agent (not for you: every message stays in the thread). The threshold works from an
+  estimate (about 4 characters a token), and a model whose window size Ollama does not report is
+  only compacted when it refuses a request as too long. A turn that is one huge message cannot be
+  compacted at all.
 - **Not in the TUI yet:**
   - Claude Code's undo/rewind, custom slash commands, hooks, MCP servers, subagents,
     background tasks and usage display
@@ -246,10 +254,10 @@ descriptions and system prompt are untuned. Known limits:
   messages queued while it works, `/export`, `/copy`, `/open`, `/delete`, `/archive`,
   `/projects`, `/tools`, Ctrl+O and Ctrl+L.
 - **Rendering.**
-  - The live block redraws whole on each streamed chunk, and a long reply only shows its tail
-    until it is done.
-  - Markdown has no syntax highlighting, and the terminal's markup does not nest (no bold in
-    colour).
+  - The live block is rebuilt whole on each streamed chunk (the terminal then only redraws the
+    lines that changed), and a long reply only shows its tail until it is done.
+  - Markdown has no syntax highlighting. The terminal's markup nests now (bold in colour), but
+    the TUI's text helpers still write it flat.
   - On phones, typing works, but Shift+Enter and Shift+Tab are hard to reach.
 - **Work folders.**
   - Seafile only: not the browser's own files or `/tmp`.
@@ -289,6 +297,84 @@ saved desk. There, links (Spotlight, launchers, `open github.com`, `go`) replace
 address bar would; elsewhere they open in a new tab. Settings → Links changes both. `reboot` and `shutdown` play the systemd
 shutdown log ([`src/os/Power.tsx`](src/os/Power.tsx)); a reboot starts from the opening layout again.
 
+### Streams and the VT emulator
+
+A Terminal window can hand itself to a byte stream: a program somewhere else (SSH, next) whose
+output is read by an xterm-compatible emulator ([`src/terminal/vt/screen.ts`](src/terminal/vt/screen.ts))
+and drawn by [`VtView`](src/terminal/vt/VtView.tsx), while every key goes to it. It covers what
+full-screen programs use: cursor movement, save and restore; erasing in the line and the display;
+inserting and deleting lines and characters; scroll regions and origin mode; the alternate
+screen; line wrap with xterm's pending wrap; tab stops and DEC line drawing; 16, 256 and
+truecolour foreground and background; bold, dim, italic, underline, inverse, strikethrough and
+overline; OSC 0/2 titles (the window's title follows) and OSC 8 links; bracketed paste,
+application cursor and keypad keys, mouse reporting (X10, normal, button and any-event tracking,
+SGR), focus events, cursor visibility and shape, synchronized output; the replies to device
+attribute, status, cursor position, mode and size requests; and resizing to the window's real
+columns and rows (lines are cut, not reflowed). Rows only redraw when they changed.
+
+Keys are sent as xterm sends them ([`src/terminal/vt/keys.ts`](src/terminal/vt/keys.ts)): Ctrl and
+Alt combinations, F1–F12, Home/End/PageUp/PageDown/Insert/Delete with modifiers, Shift+Tab, the
+keypad in application mode, and the extra keys row on touch screens. Ctrl+C with text selected
+and Ctrl+Shift+C copy, and Ctrl+V and Ctrl+Shift+V paste, instead. The left and middle buttons
+and the wheel are reported when the program asks; Shift keeps the mouse for selecting text, the
+right button keeps the menu, and on the alternate screen without mouse tracking the wheel sends
+arrow keys (less, man). Ctrl with the wheel and Ctrl + / − / 0 still zoom, and the screen redraws
+to the new size. When the stream ends, what it left on the normal screen stays in the scrollback,
+in colour, and msh's prompt comes back.
+
+A command gets the stream API as `ctx.attachStream()` (only in a terminal window, not in pipes),
+which returns a port ([`src/terminal/vt/session.ts`](src/terminal/vt/session.ts)):
+
+```ts
+const port = ctx.attachStream()
+port.write(bytes)                      // program output: Uint8Array (UTF-8) or string
+port.onData((keys) => send(keys))      // keys, pastes, mouse and the emulator's replies, as text
+port.onResize(({ cols, rows }) => …)   // the window changed size; port.size is the size now
+await port.detached                    // settles when either side ends it
+port.detach()                          // hands the window back to msh
+```
+
+Stop command in the right-click menu, closing the window, or the command returning also detach
+it. A program can pin the size it wants with `CSI 8 ; rows ; cols t`, as xterm allows.
+
+`vtdemo` (hidden, [`src/terminal/vt/demo.ts`](src/terminal/vt/demo.ts)) tries it without SSH:
+`vtdemo play nvim` (or `less`, `top`, `nano`, `tmux`) replays a recorded session at its own pace
+and pauses at each checkpoint (Space goes on, q quits), `vtdemo colors` shows every colour and
+look, and `vtdemo keys` echoes what each key, paste, click and focus change sends (Ctrl+D quits).
+
+`pnpm check:terminal-vt` ([`scripts/terminal-vt.ts`](scripts/terminal-vt.ts)) replays the recordings
+headlessly and compares, at every checkpoint, the screen's text, colours and looks, the cursor,
+the modes and the scroll region with what tmux showed at that moment; it also runs synthetic
+sequences for each feature, the key, mouse and paste encodings, and the markup below.
+[`scripts/terminal-vt-record.ts`](scripts/terminal-vt-record.ts) makes the recordings (in
+[`src/terminal/vt/fixtures`](src/terminal/vt/fixtures)): it runs Neovim, less, top, nano and tmux
+in a tmux pane of 80×24, catches every byte with pipe-pane, and asks tmux for its screen at each
+checkpoint. One known difference is kept on purpose: erasing to the end of the line while the
+cursor waits to wrap clears the last column, as in xterm (tmux leaves it).
+
+**Why our own emulator and not xterm.js.** xterm.js is a full terminal with its own renderer,
+input textarea, selection, scrollback and theme, in a canvas or WebGL. Everything msh does is DOM
+in the same window: the prompt with its fzf-style picker, links, `sl`, figlet, the agents TUI,
+the themes, text size and per-window zoom, and the extra keys. Using xterm.js would have meant
+either a second renderer that only shows up for streams, with all of that bridged into it, or
+rewriting msh as a byte stream. The emulator is about 1,200 lines (1,700 with keys, the port and
+the renderer) without dependencies. It draws with the same font, colours (the 16 ANSI colours
+follow the theme as `--ansi-0` … `--ansi-15`), zoom and selection as the rest of the terminal,
+and runs in plain node for the check script.
+
+**Markup.** Command output uses the terminal's markup ([`src/terminal/markup.ts`](src/terminal/markup.ts)):
+`{c:green}…{/}` for a colour or a look (bold, dim, italic, underline, strike, inverse),
+`{fg:#rrggbb}` and `{bg:#rrggbb}` (or `{fg:1}` for an ANSI colour of the theme), `{link:https://…}`
+and `{anim:sl}`. Tags nest, so `{c:bold}{fg:#ff0000}bold red{/}{/}` works; a tag that is not valid
+shows as text. `curl` of a page with ANSI colours (wttr.in) keeps backgrounds, bold, italic,
+underline and inverse ([`src/terminal/ansi.ts`](src/terminal/ansi.ts)).
+
+**Not done yet.** Reflowing wrapped lines on resize; double-width and double-height lines (DECDHL);
+sixel and other images; the kitty keyboard protocol; OSC 52 (clipboard) and OSC 4 (palette) are
+ignored; right-to-left text and grapheme clusters beyond combining marks (emoji ZWJ sequences
+take more than two cells). Not tried on a real phone yet, only in the browser's phone emulation:
+Android keyboards that send Backspace without a key event may not reach the program.
+
 ## Notes, launchers and sign-in (home page mode)
 
 Anyone can write notes and add launchers: **Notebook** (dock) lists every note in Markdown, and
@@ -300,7 +386,7 @@ accent), the dock, launchers, Spotlight, windows, links, notifications, go links
 integrations; then, under an **Apps** heading, one pane per app with settings of its own, with the
 app's dock icon ([`src/apps/AppSettings.tsx`](src/apps/AppSettings.tsx)); then sync, users and about.
 The Apps panes are Agents, Calendar (its accounts and calendars, the view it opens in and where new
-events go), Files (view, icon size, sort order, hidden files, sidebar), Games (Pool's helpers,
+events go), Contacts (address books and where new contacts go), Files (view, icon size, sort order, hidden files, sidebar), Games (Pool's helpers,
 sensitivity, computer and sound; Gladiator's sound and music; Empires At War's sound, battlefield,
 camera and a summary of its key bindings, with a button into the game's own key bindings and sound
 mix), Omamp (shuffle, repeat, equalizer and preset, visualizer, time, its windows), PDF (sidebar,
@@ -447,6 +533,68 @@ notes, calendar and guests (invited by email by Google or the CalDAV server). Fo
 of a repeating event it asks whether the change is for that one or the whole series. Changes go
 through [`server/calendars.ts`](server/calendars.ts): Google's API, or the event's own iCalendar
 text on the CalDAV server, written back with its ETag so other apps' properties stay.
+
+**Tasks** ([`src/apps/tasks`](src/apps/tasks), [`server/tasks.ts`](server/tasks.ts)) is a to-do app laid
+out like Apple's Reminders, for signed-in users. Its lists are the task lists of the CalDAV accounts in
+Settings → Calendar (the collections that take VTODOs: Fastmail's and Nextcloud's calendars, and
+iCloud's reminders lists as far as iCloud still serves them over CalDAV; lists moved to Apple's newer
+Reminders are not), and lists kept on the site itself, in SQLite, for accounts without CalDAV (those
+start with one, *Reminders*). Above the lists, grouped by account, are the smart lists *Today* (due
+today or overdue), *Scheduled* (by day), *All*, *Priority* and *Completed*. A task has a title, notes,
+a due date with or without a time, how it repeats, a priority (none, low, medium or high: iCalendar's
+9, 5 and 1, as Apple writes them), a link and subtasks. Type a new one at the top with its date at the
+end ("Call mum tomorrow 9am", "Report fri !!", "Plan next week", "Pay rent on 31 oct"): what was read
+shows beside it before Enter, with an × to keep the words as typed
+([`quickAdd.ts`](src/apps/tasks/quickAdd.ts)). Tick the circle to complete a task; a repeating one
+moves on to its next date instead (DUE, and DTSTART with it, one occurrence fewer for a counted rule),
+the way Apple's Reminders and Thunderbird do, and is completed for good when its rule runs out. Click
+a task for its details; right-click (or long-press) for its due date, priority, list, *Subtask of the
+one above* and Delete (its subtasks go with it). In a list, drag a task by its handle into your own
+order, kept as Apple's `X-APPLE-SORT-ORDER` so Reminders on an iPhone shows the same: the moved task
+gets a number between its neighbours', and only when there is no room is the list numbered again.
+*Show completed* adds the done ones (the newest 200 per list). Lists are made on a CalDAV account
+(MKCALENDAR, for VTODOs only) or on the site, renamed and recoloured (PROPPATCH) and deleted; a
+collection that holds events too is a calendar, and Tasks never deletes it. On a phone the sidebar is
+the first screen and a list opens over it.
+
+Changes work like the Calendar's: in the task's own iCalendar text, written back with its ETag, so
+whatever else is in there (alarms, other apps' properties) stays. A task that changed elsewhere
+between reading and writing (412) is read again and the change made once more on the new text; when it
+changed yet again, the app says so. Tasks on the site are kept the same way, as each task's VTODO text
+(tables `task_lists` and `task_items`), so one set of code handles both.
+
+In the **Calendar** app, tasks with a due date show on their day, all day or at their time, with a
+ring to tick them; dragging one changes its due date and opening one opens it in Tasks. The sidebar's
+*Tasks* section switches lists on and off (the same switch as *Show in Calendar* on a list in Tasks).
+The **Agenda** widget lists today's open tasks, overdue ones included, under Today.
+
+**Reminders** for tasks come through the notification hub (Settings → Notifications → Tasks): at a
+task's own alarms (VALARM, set in Apple's Reminders, say) when it has any, otherwise by the Tasks
+app's settings (⚙ in its sidebar): when a timed task is due or 5 to 60 minutes before, and in the
+morning of an all-day one at a set time (9:00 to begin with) in the browser's time zone. The watcher
+looks every minute, reads the lists again every five minutes (at once after a change made here) and
+sends each reminder once, up to an hour late after a restart. The settings are synced state `tasks`
+([`src/data/taskPrefs.ts`](src/data/taskPrefs.ts)), which the server reads like `notify`.
+
+**Google Tasks** is not included: the Google sign-in for the calendar has no Tasks scope (it would
+need `tasks` added to the OAuth client, another sensitive scope for Google to verify).
+
+**For other apps** ([`src/data/tasks.ts`](src/data/tasks.ts)): `createTask({ title, notes, due, url,
+listId })` makes a task and answers it, in `listId` or else the list picked under *New tasks* in the
+Tasks settings (or the first CalDAV list); `due` is a day ("2026-10-14") or an ISO time, and
+everything but the title may be left out. `openTask(id)` opens the Tasks app on a task, with its
+details. Mail's "Make a task from this email" is meant to use these, with a link to the message in
+`url`. Underneath is `/api/tasks`: `GET` (`?fresh=1` past the cache), `POST {list?, task}`, `PATCH
+{ref, task, list?}` and `DELETE {ref}`, `PUT /api/tasks/order`, and `POST`, `PATCH` and `DELETE` on
+`/api/tasks/lists`.
+
+```sh
+pnpm check:tasks   # Against a stand-in CalDAV server: discovery, changes that keep other apps' properties, repeating tasks, a 412, order, lists, reminders sent once, quick add
+```
+
+`node scripts/tasks-mock.ts 8800` runs the stand-in ([`scripts/tasks-mock.ts`](scripts/tasks-mock.ts))
+on its own, with user and password `mock`, to link from an admin account (admins may use internal
+addresses) while trying the app.
 
 The **Status** widget shows your [updown.io](https://updown.io) checks: up or down, uptime, the
 last day's response time and certificates that expire within two weeks
@@ -692,6 +840,43 @@ stopped first, the queue stays) and it comes back into the message box with its 
 tools did is not undone: memories, the plan, notes, calendar events and files the agent changed in
 the work folder stay as they are.
 
+**Compaction** ([`server/agents.ts`](server/agents.ts)): a long thread outgrows the model's context
+window, so it can be compacted. The thread's own model writes a structured summary of the
+conversation so far (the user's goals and requests, decisions, files and paths, the current state,
+open todos, errors and their fixes, the next step), which is saved in the thread as a boundary: a
+message with role `compact` (column `compact` holds how it came about). From then on each model
+call sends the system prompt, the summary (as a note from the app) and only the messages after the
+boundary; compacting again summarises the earlier summary with what came after it. Everything that
+is not a message reaches the model as before, in the system prompt: the todo list, plan mode and
+the permission mode, the work folder and its AGENTS.md, memory and skills. Files attached before the
+boundary are named in the note (their contents go), and a compaction in the middle of a turn keeps
+the message it was working on word for word. Ask for one with `/compact` (in the composer, with a
+suggestion as you type it, or the agents command), *Compact conversation…* in the thread's menus
+(with a box for what to keep) or *Compact now…* in the context breakdown; text after `/compact`
+steers what the summary keeps, as in Claude Code. It is sent like a message, so while a turn runs
+it waits in the queue (a `/compact` message to a thread that is answering gets 409, like any
+message), and one with nothing new since the last boundary does nothing. By itself (Settings →
+Agents → New threads → *Long threads*: on by default, at 85% of the window, 60 to 95% or off): a
+message that would take the estimate past the threshold compacts what came before it first, so the
+turn starts with the message and its files whole; within a turn, a model call past it compacts the
+turn's work so far; and a call the model refuses as too long is compacted and tried once more. The
+conversation keeps every message, with a *Conversation compacted* divider that opens to the
+summary; the context breakdown shows the summary as a part of its own, marks the threshold on its
+bar and says when the thread was last compacted. How it fits with the rest: **Retry** after a
+compaction answers the last message again, and a compaction after that message goes with it; Retry
+after a `/compact` that failed or was cut short (the thread's `interrupted` carries `compact`)
+compacts again and removes nothing. **Rewind** to a message before a boundary removes the
+compaction too, since it summarised messages that are gone, so the model gets the messages before
+it as they are again; rewinding to one after it keeps it. **Shared links** never carry a summary
+(it can hold what tools returned): they show the messages as before. **Spotlight**'s quick answers
+are threads like any other and compact the same way; the answer it shows is the agent's, never the
+summary. A **restart** keeps every boundary (they are messages); a restart in the middle of a
+`/compact` leaves the thread as it was, with Retry to compact again.
+
+```sh
+pnpm check:agents-compact   # /compact with and without instructions, what the next call gets, the threshold, a too-long refusal, /compact while a turn runs, Retry, Rewind, shares, a restart
+```
+
 **Pictures** you attach show as thumbnails in the message box and on your sent messages
 ([`src/apps/AgentsImages.tsx`](src/apps/AgentsImages.tsx)); other files stay chips with their name.
 A click opens the picture over the window: ← and → (or a swipe) go through the message's pictures,
@@ -726,7 +911,7 @@ deletes its links. The endpoints are `POST /api/agents/threads/:id/share` (`{kin
 expiresAt, …}` with the address from `PUBLIC_URL`), `GET /api/agents/shares` (`?thread=` for one
 thread's) and `DELETE /api/agents/shares/:token`.
 Settings → Agents (also the app's ⚙) picks the model for Quick, Deep and titles, whether titles
-keep up to date (and how often they are checked), what a new thread starts with, and shows the system prompt: `~/AGENTS.md`, your own from Seafile when Seafile is
+keep up to date (and how often they are checked), what a new thread starts with, whether and when long threads compact by themselves, and shows the system prompt: `~/AGENTS.md`, your own from Seafile when Seafile is
 home, otherwise a read-only built-in one ([`src/data/agentsPrompt.ts`](src/data/agentsPrompt.ts)).
 Spotlight takes questions too: *Ask Agents* is under the web search, and a `?` in front makes it
 the top hit. `OLLAMA_URL` points it at a stand-in for ollama.com when testing.
@@ -771,8 +956,9 @@ pop-up when one is in view; pages say whether they are with a heartbeat), and pu
 page is in view, unless do not disturb is on. Apps hand notifications in two ways: when something
 happens (`notify()`: an Agents answer or question, a finished unpack), or from a watcher that looks
 every so often (`registerWatcher()`): the Minecraft server (from its pinger), new activity on
-GitHub and git.mvl.sh (every 5 minutes, each item once, back as far as Settings says), and calendar
-reminders (Google and CalDAV, read every 5 minutes, a reminder 0–30 minutes before an event). The
+GitHub and git.mvl.sh (every 5 minutes, each item once, back as far as Settings says), calendar
+reminders (Google and CalDAV, read every 5 minutes, a reminder 0–30 minutes before an event) and due
+tasks (see Tasks above). The
 list of sources and the rules for the choices are one file both sides import
 ([`src/data/notifySources.ts`](src/data/notifySources.ts)), so Settings lists exactly what the
 server can send. Signed out, a visitor's pop-ups and list stay in that browser, from the page's
@@ -781,6 +967,124 @@ own watchers. `NOTIFY_WATCH=off` leaves the watchers off.
 The **Code inbox** widget lists pull requests waiting for your review, your own open pull requests
 and issues assigned to you, on GitHub and linked Gitea/Forgejo instances
 ([`server/inbox.ts`](server/inbox.ts)), with the access sign-in and linking already give.
+
+## Photos
+
+**Photos** ([`src/apps/photos`](src/apps/photos)) is a timeline of the photos and videos in your
+Seafile folders or your Immich library, by the day they were taken: months and days, newest first,
+with the years down the right edge to drag through. Ctrl+wheel, a pinch or the − and + buttons
+change the size of the squares. A photo opens in a lightbox: the arrow keys, a swipe or the side
+buttons go through the timeline, the wheel, a pinch, double-click, + and − zoom towards the pointer
+(drag to pan), I shows the details (when it was taken, camera, lens, exposure, size, and the
+coordinates when it has GPS: no map service is asked), the full stop makes it a favourite, and
+Escape or a swipe down goes back. Download, *Show in Files* (Seafile) and *Open in Immich* are in
+its bar; videos play in Player. *Albums* are the Seafile folders you chose, or Immich's albums;
+*Favourites* are kept in this server's database for Seafile and in Immich for Immich. With both set
+up, Seafile | Immich in the toolbar switches between them (remembered for your account); they are
+not mixed into one timeline. The grid only puts the rows on screen in the page, so 20,000 photos
+scroll like 20; thumbnails load six at a time, the newest wish first, and the browser keeps them.
+
+**Seafile** has no idea what a photo is, so the server keeps an index per account
+([`server/photos.ts`](server/photos.ts), in SQLite). The ⚙ view chooses the folders (any library,
+read-only ones too) and suggests folders named Photos, Pictures, Camera Uploads or DCIM. A walk
+lists them in the background, four requests at a time, and reads each new or changed photo's first
+128 KB with a byte range for its EXIF ([`server/exif.ts`](server/exif.ts), no library): JPEG,
+TIFF, PNG (eXIf), WebP (its EXIF chunk), HEIC, HEIF and AVIF (the Exif item, found through iinf
+and iloc, and the primary picture's size and rotation), and the creation time and size of MP4 and
+MOV (WebM and MKV keep the file's date). When what it needs is further on (a HEIC's Exif item, a
+WebP's EXIF chunk, a phone video's moov box at the end), a second range fetches exactly that.
+Walking again only reads files whose Seafile id or date changed, and skips a folder whose id did
+not change since the last full walk (Seafile's folder ids change when anything inside does);
+deleted files leave the index. The app walks again when it is opened and the index is over 15
+minutes old, or with *Look for new photos*. Caps: 100,000 photos and 20,000 folders per account,
+two walks at a time across the server. EXIF dates have no time zone, so a photo shows the time on
+the camera's clock; a file's date (no EXIF) and a video's creation time are shown in yours.
+Encrypted libraries are walked only while unlocked in Files, and their photos only show then;
+Seafile makes no thumbnails there, so the small preview the camera embedded in the EXIF stands in.
+Thumbnails come from Seafile's thumbnail API through the server (the token stays there), with an
+ETag and a week's Cache-Control; the full photo comes straight from Seafile's file server with a
+short-lived link, as in Files. Linking another Seafile account starts the index over.
+
+**Immich** is linked in Settings → Integrations or in Photos' ⚙ view, with its URL and an API key
+(Immich: *Account settings → API keys*; All, or at least asset.read, asset.view, asset.download,
+asset.update, album.read, timeline.read and user.read). Linking asks Immich for its version first
+and refuses anything but Immich 2 and 3. The key is stored encrypted and only ever sent from the
+server ([`server/immich.ts`](server/immich.ts)), without following redirects: thumbnails, the
+originals and video (with byte ranges, for seeking) come through the server. Immich indexes its
+own photos, so nothing is copied: the timeline is its month buckets, a photo's details its asset,
+favourites its own. Times are the photographer's clock, as Immich gives them.
+
+`pnpm check:photos` ([`scripts/photos-check.ts`](scripts/photos-check.ts)) checks the EXIF reader
+against small files made by Pillow, exiv2, ImageMagick and ffmpeg (and one written by hand,
+big-endian) in [`scripts/fixtures/photos`](scripts/fixtures/photos) (its `make.py` makes them
+again), then runs the real server against stand-ins for Seafile and Immich
+([`scripts/photos-mock.ts`](scripts/photos-mock.ts)): suggestions, the walk and its byte ranges,
+months in the viewer's time zone, thumbnails and 304s, walking again (nothing read when nothing
+changed; new, changed, deleted files and a deleted folder), encrypted libraries locked and
+unlocked, another account seeing nothing, and Immich (an old version and a wrong key refused, both
+of its bucket formats, thumbnails, albums, favourites, video ranges, the key never in an answer).
+`node scripts/photos-mock.ts [count]` starts both stand-ins with a big made-up library (Seafile on
+8810, Immich on 8815) for trying the app; they are on 127.0.0.1, so link them as an admin. Not
+yet tried against a real Seafile or Immich server, nor with HEIC files from a real phone.
+
+## Contacts
+
+The **Contacts** app ([`src/apps/contacts`](src/apps/contacts)) keeps everyone in one list: the
+address book on this site (in SQLite, for whoever has no CardDAV server) and every CardDAV address
+book linked in Settings → Integrations → Contacts (or Settings → Apps → Contacts): Fastmail (its
+URL is filled in), iCloud, Nextcloud, Radicale and any other, with an app password stored
+encrypted like CalDAV's. When a CalDAV account is linked already, the pane offers to use its login
+for contacts too (Fastmail's carddav host, iCloud's contacts host, the same URL elsewhere); the
+password never leaves the server. The address books are found the standard way (principal →
+addressbook-home-set → address books), and the server keeps each book's cards in memory by their
+ETags: a refresh lists the ETags and fetches only the cards that are new or changed
+(addressbook-multiget) ([`server/carddav.ts`](server/carddav.ts), with the WebDAV helpers in
+[`server/dav.ts`](server/dav.ts)).
+
+Search matches names, addresses, part of a phone number and organisations; the strip along the
+list jumps to a letter (a finger can slide along it). The sidebar has the address books, the groups
+(both kinds: Apple's and Fastmail's group cards, and CATEGORIES) and the birthdays and anniversaries
+of the coming 30 days. A card shows every way to reach someone, their dates (with the age they
+turn), groups, note and which address book it is in; Edit changes it in place, with a photo made
+small in the browser. Right-click a contact (or ⋯) to move it to another address book, export its
+vCard, or delete it (asked first). The ⋯ menu imports and exports .vcf files from and to this
+computer or Files (Seafile), and *Find duplicates* lists people who are in twice (the same address,
+or the same full name) to merge into one. On a phone the window shows the list or the card, with
+the address books and groups in a menu above the list.
+
+vCards are read and written directly ([`server/vcard.ts`](server/vcard.ts)): 3.0 and 4.0, folded
+lines, escapes, PHOTO inline or as an address, Apple's item groups and labels, and 2.1's
+quoted-printable on import. An edit sends the contact as it was loaded and as it is now; the server
+reads the card again, changes only the fields that differ, and writes it back with its ETag, so a
+change made elsewhere meanwhile stays and every property the app does not know (other apps' X-
+properties, keys, sounds) is kept. A 412 from the server answers "it changed somewhere else".
+New cards are vCard 3.0, which every server takes. `pnpm check:contacts`
+([`scripts/contacts-check.ts`](scripts/contacts-check.ts)) runs all of this against a stand-in
+CardDAV server, including another user who must see none of it.
+
+**For other apps** ([`src/data/contacts.ts`](src/data/contacts.ts)): the contacts are loaded once
+per page and shared, with an index by email address.
+
+| Call | Does |
+|------|------|
+| `searchContacts(q, limit?)` | contacts matching a name, address, phone or organisation, best first |
+| `contactByEmail(email)` | the contact with that address, or null |
+| `contactsByEmails(emails)` | a Map from lower-case address to contact, for many at once (one load for every caller) |
+| `peekContactByEmail(email)`, `useContactByEmail(email)` | the same without waiting, and as a hook |
+| `openContact(idOrEmail, name?)` | the Contacts app on that person; an unknown address gets a card with *Add to contacts* |
+| `addContact({ email, name, ...fields }, { book?, groups? })` | a new contact in the default address book (Settings), answers it |
+| `birthdays(from, to)` | birthdays and anniversaries in a range, with the years they mark, for a Birthdays calendar |
+| `registerContactSlot('recent-mail' \| 'upcoming-events', render)` | fills that section of the contact card (empty until an app registers it) |
+
+[`src/apps/contacts/people.tsx`](src/apps/contacts/people.tsx) has the components:
+`<PeoplePicker value onChange placeholder? exclude?>` is a recipient or guest field (chips; your
+contacts suggested while typing, picked with the arrow keys and Enter or Tab; a contact with
+several addresses opens them to choose from; a group adds everyone in it; any valid address as
+typed, after Enter, a comma or leaving the field; several pasted at once, `Name <address>` included;
+Backspace takes the last one off). `<PersonChip email name?>` shows a person by their contact's
+name and photo, a hover card with *Open contact* or *Add to contacts*, and opens the contact on a
+click. `<Avatar contact? email? name? size?>` is the photo or initials, and `parseAddresses(text)`
+turns pasted text into `{ email, name? }` people.
 
 ## Widgets
 

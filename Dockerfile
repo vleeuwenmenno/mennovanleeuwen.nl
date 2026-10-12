@@ -31,6 +31,8 @@ COPY src/apps/games/catalog.ts ./src/apps/games/
 # The agents: the shell's parser (to tell read-only command lines apart) and its reference (the msh skill).
 COPY src/data/mshReference.ts ./src/data/
 COPY src/terminal/msh/parse.ts ./src/terminal/msh/
+# Tasks: its settings, which the server's reminders read.
+COPY src/data/taskPrefs.ts ./src/data/
 # Agents shared links (/s/<token>): the Markdown parser and code colours, to render the page.
 COPY src/data/markdown/parse.ts src/data/markdown/highlight.ts ./src/data/markdown/
 # Sign-in sessions, linked instances and synced notes live here (a volume in compose.yml).

@@ -2330,6 +2330,107 @@ body.is-resizing iframe {
 .t-bold {
   font-weight: 700;
 }
+.t-dim {
+  opacity: 0.6;
+}
+.t-italic {
+  font-style: italic;
+}
+.t-underline {
+  text-decoration: underline;
+}
+.t-strike {
+  text-decoration: line-through;
+}
+/* The 16 ANSI colours of the terminal's markup and streams ({fg:1}, ESC[31m), from the theme. */
+.terminal,
+.t-vt {
+  --ansi-0: var(--bg-darker);
+  --ansi-1: var(--red);
+  --ansi-2: var(--green);
+  --ansi-3: var(--yellow);
+  --ansi-4: var(--blue);
+  --ansi-5: var(--magenta);
+  --ansi-6: var(--cyan);
+  --ansi-7: var(--fg);
+  --ansi-8: var(--muted);
+  --ansi-9: color-mix(in srgb, var(--red) 75%, white);
+  --ansi-10: color-mix(in srgb, var(--green) 75%, white);
+  --ansi-11: color-mix(in srgb, var(--yellow) 75%, white);
+  --ansi-12: color-mix(in srgb, var(--blue) 75%, white);
+  --ansi-13: color-mix(in srgb, var(--magenta) 75%, white);
+  --ansi-14: color-mix(in srgb, var(--cyan) 75%, white);
+  --ansi-15: var(--fg-bright);
+}
+/* On a light theme black is the text and white the paper, and the bright ones are darker. */
+:root[data-mode='light'] :is(.terminal, .t-vt) {
+  --ansi-0: var(--fg);
+  --ansi-7: var(--muted);
+  --ansi-8: color-mix(in srgb, var(--fg) 60%, var(--bg));
+  --ansi-9: color-mix(in srgb, var(--red) 80%, black);
+  --ansi-10: color-mix(in srgb, var(--green) 80%, black);
+  --ansi-11: color-mix(in srgb, var(--yellow) 80%, black);
+  --ansi-12: color-mix(in srgb, var(--blue) 80%, black);
+  --ansi-13: color-mix(in srgb, var(--magenta) 80%, black);
+  --ansi-14: color-mix(in srgb, var(--cyan) 80%, black);
+  --ansi-15: var(--bg-darker);
+}
+/* An attached stream (src/terminal/vt/VtView.tsx): a grid of rows, tighter than msh's lines so
+   box drawing joins up. The prompt stays focusable but out of sight; every key goes to the stream. */
+.t-vt {
+  position: relative;
+  line-height: 1.25;
+}
+.t-vt-row {
+  height: 1.25em;
+  white-space: pre;
+  overflow: hidden;
+}
+.t-vt-probe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 10ch;
+  height: 1.25em;
+  visibility: hidden;
+  pointer-events: none;
+  overflow: hidden;
+  white-space: pre;
+}
+.t-vt-wide {
+  display: inline-block;
+  width: 2ch;
+  text-align: center;
+}
+.t-vt-cursor.is-block {
+  box-shadow: inset 0 0 0 1px var(--fg-bright);
+}
+.t-vt-cursor.is-block.is-focused {
+  background: var(--fg-bright) !important;
+  color: var(--bg) !important;
+  box-shadow: none;
+}
+.t-vt-cursor.is-underline {
+  box-shadow: inset 0 -2px 0 var(--fg-bright);
+}
+.t-vt-cursor.is-bar {
+  box-shadow: inset 2px 0 0 var(--fg-bright);
+}
+.t-vt.is-reverse .t-vt-screen {
+  background: var(--fg);
+  color: var(--bg);
+}
+.terminal.is-vt .t-input {
+  position: absolute;
+  height: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+.terminal.is-vt .t-quick,
+.terminal.is-vt .t-picker {
+  display: none;
+}
 .terminal a {
   color: var(--cyan);
   text-decoration: underline;
