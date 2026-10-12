@@ -851,6 +851,7 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
       status: mailAccounts?.length ? `${mailAccounts.map((a) => a.username).join(', ')} · for the Mail app` : 'Fastmail or another JMAP server, for the Mail app',
       on: !!mailAccounts?.length,
     },
+    {
       id: 'immich',
       name: 'Immich',
       icon: <span className="set-glyph">🖼</span>,
