@@ -200,6 +200,13 @@ export function Player({ win }: { win: WinState }) {
   const onError = () => {
     const code = video.current?.error?.code
     setError(code === 4 ? 'This browser cannot play this file (its format or codec). Download it to play it elsewhere.' : code === 2 ? 'The file stopped coming in (the network?).' : 'It could not be played.')
+    // A library that locked while this played answers 423 to the next range, which the video
+    // element only reports as a file it cannot play: ask the stream route what it was.
+    const src = media.url
+    if (src && isSf(path))
+      fetch(src, { method: 'HEAD' })
+        .then((r) => r.status === 423 && video.current?.getAttribute('src') === src && setError('The library is locked: unlock it in Files first.'))
+        .catch(() => {})
   }
 
   // Focusing the window lets the keys work straight away.

@@ -232,17 +232,18 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       res.writeHead(206, { 'Content-Type': 'application/octet-stream', 'Content-Range': r.contentRange, 'Content-Length': String(r.body.length), 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : r.body)
       return true
     }
-    // A whole file, piped with whatever range the browser asks for (the music player).
+    // A whole file, piped with whatever range the browser asks for (the music and video players).
     if (path === '/api/seafile/stream' && read) {
       const range = req.headers.range
-      const r = await streamFile(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), typeof range === 'string' ? range : undefined)
+      // Scrubbing cancels range requests all the time: the request to Seafile goes with each one.
+      const gone = new AbortController()
+      res.on('close', () => gone.abort())
+      const r = await streamFile(requireUser(req), url.searchParams.get('repo'), url.searchParams.get('p'), typeof range === 'string' ? range : undefined, gone.signal)
+      if (r.status === 416) return res.writeHead(416, { ...(r.contentRange ? { 'Content-Range': r.contentRange } : {}), 'Cache-Control': 'no-store', ...SECURITY }).end(), true
       // Only media types pass: an HTML or SVG file served from this origin would run as the site.
-      const type = r.headers.get('content-type') ?? ''
-      const headers: Record<string, string> = { 'Content-Type': /^(audio|video)\//i.test(type) ? type : 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY, ...UNTRUSTED }
-      for (const h of ['content-length', 'content-range']) {
-        const v = r.headers.get(h)
-        if (v) headers[h.replace(/(^|-)\w/g, (c) => c.toUpperCase())] = v
-      }
+      const headers: Record<string, string> = { 'Content-Type': /^(audio|video)\//i.test(r.type) ? r.type : 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=600', ...SECURITY, ...UNTRUSTED }
+      if (r.length) headers['Content-Length'] = r.length
+      if (r.contentRange) headers['Content-Range'] = r.contentRange
       res.writeHead(r.status, headers)
       if (head || !r.body) {
         await r.body?.cancel().catch(() => {})

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { readTags, type AudioTags } from '../data/audioTags'
-import { folderOf, formatTime, nameOf, useMedia, useSiblings } from '../data/media'
-import { download, isSf, parseSf } from '../data/seafile'
+import { folderOf, formatTime, nameOf, streamOf, useMedia, useSiblings } from '../data/media'
+import { download, isSf } from '../data/seafile'
 import { AMP_PRESETS, ampPrefs, ampPresetOf, type AmpPrefs, type AmpRepeat, type AmpVis } from '../data/appPrefs'
 import { Select } from '../os/Select'
 import { useWM, type WinState } from '../os/wm'
@@ -22,11 +22,6 @@ type Repeat = AmpRepeat
 type Vis = AmpVis
 type Prefs = AmpPrefs
 
-/** Where the audio element loads a Seafile file from: through this site, for the audio graph. */
-const streamOf = (path: string) => {
-  const at = parseSf(path)
-  return at ? `/api/seafile/stream?repo=${encodeURIComponent(at.repo)}&p=${encodeURIComponent(at.p)}` : null
-}
 const baseName = (path: string) => nameOf(path).replace(/\.[^.]+$/, '')
 const extOf = (path: string) => (nameOf(path).match(/\.([^.]+)$/)?.[1] ?? '').toUpperCase()
 const display = (path: string, tags?: AudioTags) => (tags?.title ? (tags.artist ? `${tags.artist} – ${tags.title}` : tags.title) : baseName(path))
