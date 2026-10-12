@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { dayKey, type CalendarEvent } from '../../data/calendar'
+import { isTaskEvent, type TaskEvent } from './tasks'
 import { addDays, atMinutes, hhmm, layoutBars, layoutDay, minutesOf, moved, sameDay, SNAP, span, type Placed } from './time'
 
 // The day, 3-day and week views: all-day events in a lane on top, timed ones on a 24-hour grid.
@@ -22,6 +23,8 @@ type Props = {
   onDay: (d: Date) => void
   /** Right-click on an event, or on an empty spot (`at`). */
   onMenu: (ev: ReactMouseEvent, e: CalendarEvent | null, at: Date, allDay: boolean) => void
+  /** A task's ring ticked. */
+  onToggle?: (e: CalendarEvent) => void
 }
 
 type Drag =
@@ -48,7 +51,7 @@ function previewOf(drag: Drag | null, days: Date[]): { id: string; change: Chang
   return null
 }
 
-export function TimeGrid({ days, events, now, onOpen, onCreate, onChange, onDay, onMenu }: Props) {
+export function TimeGrid({ days, events, now, onOpen, onCreate, onChange, onDay, onMenu, onToggle }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const colsRef = useRef<HTMLDivElement>(null)
   const laneRef = useRef<HTMLDivElement>(null)
@@ -90,6 +93,8 @@ export function TimeGrid({ days, events, now, onOpen, onCreate, onChange, onDay,
   const down = (allDay: boolean) => (ev: ReactPointerEvent<HTMLDivElement>) => {
     if (ev.button !== 0) return
     const target = ev.target as HTMLElement
+    // A task's ring is a button of its own.
+    if (target.closest('button')) return
     const id = target.closest<HTMLElement>('[data-ev]')?.dataset.ev
     const e = id ? (byId.get(id) ?? null) : null
     const p = point(allDay ? laneRef.current : colsRef.current, ev.clientX, ev.clientY)
@@ -191,10 +196,11 @@ export function TimeGrid({ days, events, now, onOpen, onCreate, onChange, onDay,
             <div
               key={b.e.id}
               data-ev={b.e.id}
-              className={`ca-bar ${b.startsBefore ? 'cont-l' : ''} ${b.endsAfter ? 'cont-r' : ''} ${b.e.editable ? '' : 'is-ro'} ${dragging === b.e.id ? 'is-dragging' : ''}`}
+              className={`ca-bar ${b.startsBefore ? 'cont-l' : ''} ${b.endsAfter ? 'cont-r' : ''} ${isTaskEvent(b.e) ? `is-task ${b.e.task.completed ? 'is-done' : ''}` : ''} ${b.e.editable ? '' : 'is-ro'} ${dragging === b.e.id ? 'is-dragging' : ''}`}
               style={{ left: `calc(${(b.startCol / days.length) * 100}% + 2px)`, width: `calc(${((b.endCol - b.startCol) / days.length) * 100}% - 4px)`, top: b.row * 22 + 3, ['--c' as string]: b.e.color }}
               title={`${b.e.title} · ${b.e.calendar}`}
             >
+              {isTaskEvent(b.e) && <TaskCheck e={b.e} onToggle={onToggle} />}
               {b.e.recurring && '↻ '}
               {b.e.title}
             </div>
@@ -214,7 +220,7 @@ export function TimeGrid({ days, events, now, onOpen, onCreate, onChange, onDay,
             {days.map((d, i) => (
               <div key={dayKey(d)} className={`ca-col ${sameDay(d, now) ? 'is-today' : ''} ${d.getDay() % 6 === 0 ? 'is-weekend' : ''}`}>
                 {placed[i].map((p) => (
-                  <EventBlock key={p.e.id} p={p} past={span(p.e).end < now.getTime()} dragging={dragging === p.e.id} />
+                  <EventBlock key={p.e.id} p={p} past={span(p.e).end < now.getTime()} dragging={dragging === p.e.id} onToggle={onToggle} />
                 ))}
                 {drag?.kind === 'create' && drag.col === i && <Ghost from={drag.moved ? Math.min(drag.from, drag.to) : Math.floor(drag.from / 30) * 30} to={drag.moved ? Math.max(drag.from, drag.to) : Math.floor(drag.from / 30) * 30 + 60} />}
                 {sameDay(d, now) && <div className="ca-now" style={{ top: nowMin * PX }} />}
@@ -227,7 +233,25 @@ export function TimeGrid({ days, events, now, onOpen, onCreate, onChange, onDay,
   )
 }
 
-function EventBlock({ p, past, dragging }: { p: Placed; past: boolean; dragging: boolean }) {
+/** A task's ring in a view: ticks it (or back) without opening or dragging it. */
+export function TaskCheck({ e, onToggle }: { e: TaskEvent; onToggle?: (e: CalendarEvent) => void }) {
+  const done = e.task.completed
+  return (
+    <button
+      type="button"
+      className={`ca-task-check ${done ? 'is-on' : ''}`}
+      style={{ ['--c' as string]: e.color }}
+      disabled={!onToggle || (!e.editable && !done)}
+      onPointerDown={(ev) => ev.stopPropagation()}
+      onClick={(ev) => (ev.stopPropagation(), onToggle?.(e))}
+      role="checkbox"
+      aria-checked={done}
+      aria-label={done ? `Mark "${e.title}" as not completed` : `Complete "${e.title}"`}
+    />
+  )
+}
+
+function EventBlock({ p, past, dragging, onToggle }: { p: Placed; past: boolean; dragging: boolean; onToggle?: (e: CalendarEvent) => void }) {
   const { start, end } = span(p.e)
   const height = (p.bottom - p.top) * PX
   const style: CSSProperties & Record<string, string | number> = {
@@ -237,15 +261,17 @@ function EventBlock({ p, past, dragging }: { p: Placed; past: boolean; dragging:
     width: `calc(${100 / p.cols}% - 3px)`,
     '--c': p.e.color,
   }
-  const time = `${p.startsBefore ? '…' : hhmm(new Date(start))} – ${p.endsAfter ? '…' : hhmm(new Date(end))}`
+  const task = isTaskEvent(p.e) ? p.e : null
+  const time = task ? hhmm(new Date(start)) : `${p.startsBefore ? '…' : hhmm(new Date(start))} – ${p.endsAfter ? '…' : hhmm(new Date(end))}`
   return (
-    <div data-ev={p.e.id} className={`ca-ev ${height < 34 ? 'is-short' : height >= 64 ? 'is-tall' : ''} ${past ? 'is-past' : ''} ${p.e.editable ? '' : 'is-ro'} ${dragging ? 'is-dragging' : ''}`} style={style} title={`${p.e.title}\n${time} · ${p.e.calendar}${p.e.location ? `\n${p.e.location}` : ''}`}>
+    <div data-ev={p.e.id} className={`ca-ev ${height < 34 ? 'is-short' : height >= 64 ? 'is-tall' : ''} ${task ? `is-task ${task.task.completed ? 'is-done' : ''}` : ''} ${past ? 'is-past' : ''} ${p.e.editable ? '' : 'is-ro'} ${dragging ? 'is-dragging' : ''}`} style={style} title={`${p.e.title}\n${time} · ${p.e.calendar}${p.e.location ? `\n${p.e.location}` : ''}`}>
+      {task && <TaskCheck e={task} onToggle={onToggle} />}
       <span className="ca-ev-title">
         {p.e.recurring && <span className="ca-ev-repeat" aria-label="repeats">↻ </span>}
         {p.e.title}
       </span>
       <span className="ca-ev-time">{time}</span>
-      {p.e.editable && !p.endsAfter && <span className="ca-ev-grip" aria-hidden />}
+      {p.e.editable && !p.endsAfter && !task && <span className="ca-ev-grip" aria-hidden />}
     </div>
   )
 }

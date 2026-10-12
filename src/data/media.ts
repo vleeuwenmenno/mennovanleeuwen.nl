@@ -7,7 +7,8 @@ import { isSf, parseSf, sfPath, useDir, useFileLink } from './seafile'
 
 // Pictures, video and audio for Preview and Player, from the site's own filesystem, the files
 // kept in this browser (blob: addresses) or Seafile: which app opens what, the file's address,
-// and the files next to it (for previous and next).
+// and the files next to it (for previous and next). Player also plays Immich's videos, from the
+// Photos app: immich://<asset id>/<file name>, streamed through this site (server/photos.ts).
 
 /** The app that opens a kind of file by default, when it is not Zed or the Viewer. */
 export const MEDIA_APP: Partial<Record<FileKind, AppId>> = { image: 'preview', video: 'player', audio: 'amp', pdf: 'pdf' }
@@ -83,6 +84,9 @@ export const streamOf = (path: string) => {
   return at ? `/api/seafile/stream?repo=${encodeURIComponent(at.repo)}&p=${encodeURIComponent(at.p)}` : null
 }
 
+/** An Immich video's asset id, for an immich://<id>/<name> path; null for any other path. */
+const immichAsset = (path: string) => /^immich:\/\/([0-9a-f-]{36})\//i.exec(path)?.[1] ?? null
+
 /** A file to show or play: its address, size and date, wherever it lives. */
 export function useMedia(path: string): Media {
   const sf = isSf(path)
@@ -99,6 +103,8 @@ export function useMedia(path: string): Media {
       const url = link.url && (kind === 'video' || kind === 'audio') ? streamOf(path) : link.url
       return { name, kind, url, size: entry?.size ?? null, mtime: entry?.mtime ?? null, error: link.error, unplayable: null }
     }
+    const asset = immichAsset(path)
+    if (asset) return { name, kind: 'video', url: `/api/photos/immich/video?id=${asset}`, size: null, mtime: null, error: null, unplayable: null }
     const node = lookup(path)
     if (!node || node.type !== 'file') return { name, kind: 'file', url: null, size: null, mtime: null, error: path ? 'That file is not there (any more).' : 'Nothing to show.', unplayable: null }
     const kind = fileKind(node)

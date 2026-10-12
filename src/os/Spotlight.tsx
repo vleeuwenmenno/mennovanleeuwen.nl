@@ -4,7 +4,7 @@ import { openSticky } from '../apps/Sticky'
 import { MarkdownPreview } from '../apps/Zed'
 import { isCodeQuery, type BranchHit, type Hit, type IssueHit, type RepoHit } from '../data/code'
 import { forgetHit, hitKey, rememberHit, useRecentHits, weight } from '../data/spotlightRecent'
-import { faviconOf, launch, useLaunchers } from '../data/launchers'
+import { faviconOf, launch, launcherImage, useLaunchers } from '../data/launchers'
 import { createNote, noteTitle, NOTE_COLORS, useAllNotes } from '../data/notes'
 import { addWidget, widgetDefs } from '../widgets/registry'
 import { ENGINES, searchWeb, useSearchSettings, useSuggestions } from '../data/searchEngine'
@@ -572,7 +572,10 @@ export function Spotlight() {
       if (!appHere(app)) continue // the CV apps, away from /cv
       if (app === 'mcserver') continue // the Minecraft server's status entry opens it
       if (app === 'calendar' && account.status !== 'user') continue // the user's own calendars
+      if (app === 'mail' && account.status !== 'user') continue // the user's own mail
+      if (app === 'contacts' && account.status !== 'user') continue // the user's own contacts
       if (app === 'agents' && account.status !== 'user') continue // runs on the user's Ollama key
+      if (app === 'tasks' && account.status !== 'user') continue // the user's own lists
       const meta = APP_META[app]
       const open = wm.windows.filter((w) => w.app === app).length
       out.push({
@@ -750,8 +753,8 @@ export function Spotlight() {
         title: l.label,
         subtitle: l.url.replace(/^https?:\/\//, '').replace(/\/$/, ''),
         keywords: `launcher link bookmark ${l.url}`,
-        icon: l.glyph ? <Glyph>{l.glyph}</Glyph> : <Glyph><img className="sp-fav" src={faviconOf(l.url)} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} /></Glyph>,
-        run: () => launch(l),
+        icon: l.glyph ? <Glyph>{l.glyph}</Glyph> : <Glyph><img className="sp-fav" src={launcherImage(l)} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} /></Glyph>,
+        run: () => launch(l, wm),
         alt: { label: 'Copy link', run: () => copy(l.url, 'link') },
       })
 

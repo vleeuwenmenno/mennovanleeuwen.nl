@@ -68,8 +68,8 @@ function broadcast(userId: number, event: string, data: unknown) {
   for (const p of pages.get(userId)?.values() ?? []) if (!p.res.writableEnded) p.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
 }
 
-/** Tells the account's open pages that something they show changed (`calendar`: events), over the same live stream. */
-export const tellPages = (userId: number, event: 'calendar') => broadcast(userId, event, {})
+/** Tells the account's open pages that something they show changed (`calendar`: events; `mail`: an account's mail, `{ account }`), over the same live stream. */
+export const tellPages = (userId: number, event: 'calendar' | 'mail', data: unknown = {}) => broadcast(userId, event, data)
 
 /** GET /api/notifications/stream?page=<id>: the page's live stream (Server-Sent Events). */
 export function openStream(req: IncomingMessage, res: ServerResponse, user: User, pageId: string | null) {

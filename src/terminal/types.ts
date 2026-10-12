@@ -1,4 +1,5 @@
 import type { AppId, WinState } from '../os/wm'
+import type { TermPort } from './vt/session'
 
 /** A failure the shell prints as-is (in red, unless `raw` says the message is already formatted). */
 export class CmdError extends Error {
@@ -54,5 +55,11 @@ export type Ctx = {
   onKey: (handler: ((key: string, text?: string) => boolean) | null, opts?: { raw?: boolean; shift?: boolean }) => void
   /** Aborted by Ctrl+C. */
   signal: AbortSignal
+  /**
+   * Hands the window to a byte stream (SSH, `vtdemo`): its output goes through the VT emulator
+   * and keys go to it as xterm sends them, until the port detaches (see src/terminal/vt/session.ts).
+   * Only where the output goes to a terminal window; absent in pipes and the agents' terminal tool.
+   */
+  attachStream?: () => TermPort
 }
 

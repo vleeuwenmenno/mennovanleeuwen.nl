@@ -255,6 +255,16 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       </>
     ),
   },
+  mail: {
+    bg: 'linear-gradient(160deg,#7dcfff,#2f6fd6)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <rect x="9" y="14" width="30" height="21" rx="2" />
+        <path d="M10 16l14 11 14-11" />
+      </>
+    ),
+  },
   calendar: {
     bg: 'linear-gradient(180deg,#f7768e 0 30%,#fbfbf8 30% 100%)',
     fg: '#2a2f3d',
@@ -262,6 +272,40 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
       <>
         <rect x="11" y="12" width="26" height="25" rx="2" />
         <path d="M17 9v6M31 9v6M11 19h26M17 25h3M23 25h3M29 25h2M17 31h3M23 31h3" />
+      </>
+    ),
+  },
+  photos: {
+    bg: 'linear-gradient(160deg,#ffb36b,#e0537a 55%,#7a4fd0)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <rect x="10" y="13" width="28" height="22" rx="3" />
+        <circle cx="30" cy="20" r="2.5" />
+        <path d="M10 31l8-8 7 7 4-4 9 9" />
+      </>
+    ),
+  },
+  contacts: {
+    bg: 'linear-gradient(160deg,#c49a6c,#8a6038)',
+    fg: '#fff',
+    glyph: (
+      <>
+        <rect x="12" y="9" width="25" height="30" rx="2" />
+        <circle cx="24.5" cy="20" r="4.5" />
+        <path d="M17 33c1.2-4 4-6 7.5-6s6.3 2 7.5 6M9 15h3M9 24h3M9 33h3" />
+      </>
+    ),
+  },
+  tasks: {
+    bg: 'linear-gradient(160deg,#fbfbf8,#dcdfe6)',
+    fg: '#e0782f',
+    glyph: (
+      <>
+        <circle cx="15" cy="15" r="3.2" />
+        <circle cx="15" cy="24" r="3.2" />
+        <circle cx="15" cy="33" r="3.2" />
+        <path d="M22 15h14M22 24h14M22 33h10" />
       </>
     ),
   },
@@ -314,7 +358,11 @@ const HUES: Record<AppId, string> = {
   notebook: 'var(--orange)',
   widget: 'var(--yellow)',
   calendar: 'var(--red)',
+  mail: 'var(--blue)',
+  contacts: 'var(--orange)',
+  tasks: 'var(--orange)',
   agents: 'var(--magenta)',
+  photos: 'var(--orange)',
   settings: 'var(--text)',
   trash: 'var(--muted)',
 }

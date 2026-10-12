@@ -9,12 +9,15 @@ import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { addCaldav, clearCaldavCache, listCaldav, removeCaldav } from './caldav.ts'
 import { allCalendars, allEvents, createEvent, deleteEvent, updateEvent } from './calendars.ts'
+import { handleContactsApi } from './contacts.ts'
+import { handleTasksApi } from './tasks.ts'
 import { empiresAway } from './empires.ts'
 import { disconnectGoogle, finishGoogle, googleAccount, googleEnabled, MAX_RANGE_DAYS, startGoogle } from './google.ts'
 import { inbox } from './inbox.ts'
 import { linkPreview } from './preview.ts'
 import { cleanTrash, history, quota, setHistory, shareLink, createFile, fileLink, rangeRead, restore, streamFile, thumbnail, trash, trashDir, uploadedBytes, libraries, removeItems, rename, transfer, linkSeafile, listDir, lock, mkdir, unlock, unlocked, removeOffice, seafileInfo, setOffice, unlinkSeafile } from './seafile.ts'
 import { officeCallback, officeCheck, officeConfig } from './office.ts'
+import { handlePhotosApi } from './photos.ts'
 import { archiveFile, cancelExtract, extractStatus, listArchive, startExtract } from './unzip.ts'
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
 import { HttpError, json, readJson, redirect, sameOrigin, SECURITY, UNTRUSTED } from './http.ts'
@@ -26,6 +29,7 @@ import { suggest } from './suggest.ts'
 import { readState, writeState } from './state.ts'
 import { deleteUser } from './users.ts'
 import { createShare, deleteShare, isShareToken, listShares, serveShare } from './shares.ts'
+import { handleMailApi } from './jmap.ts'
 
 // Every /api route, shared by the production server (server/index.ts) and Vite's dev and
 // preview servers (vite.config.ts), plus the one page outside /api the server renders itself:
@@ -158,6 +162,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/caldav' && method === 'POST') return json(res, 200, await addCaldav(requireUser(req), await readJson(req, 8 * 1024))), true
     const caldavId = /^\/api\/caldav\/(\d+)$/.exec(path)?.[1]
     if (caldavId && method === 'DELETE') return removeCaldav(requireUser(req), Number(caldavId)), json(res, 200, { ok: true }), true
+    // The Contacts app (server/contacts.ts): the address book on this site and CardDAV ones.
+    if (path.startsWith('/api/contacts') && (await handleContactsApi(req, res, url, method, requireUser(req)))) return true
     if (path === '/api/calendar/calendars' && read) return json(res, 200, await allCalendars(requireUser(req))), true
     if (path === '/api/calendar/events' && read) {
       // ?from=&to= (ISO dates or times) for a range, or ?days=N from the start of today.
@@ -180,6 +186,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/calendar/events' && method === 'POST') return await createEvent(requireUser(req), await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true
     if (path === '/api/calendar/events' && method === 'PATCH') return await updateEvent(requireUser(req), await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true
     if (path === '/api/calendar/events' && method === 'DELETE') return await deleteEvent(requireUser(req), await readJson(req, 8 * 1024)), json(res, 200, { ok: true }), true
+    // The Tasks app (server/tasks.ts): CalDAV task lists and the ones on this site.
+    if ((path === '/api/tasks' || path.startsWith('/api/tasks/')) && (await handleTasksApi(req, res, url, method, requireUser(req)))) return true
     if (path === '/api/integrations/updown' && method === 'PUT') return await setUpdownKey(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true
     if (path === '/api/integrations/updown' && method === 'DELETE') return removeUpdownKey(requireUser(req)), json(res, 200, { ok: true }), true
     // Seafile, for the Files app (server/seafile.ts): link with { url, username, password, otp? }.
@@ -269,6 +277,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/seafile/unlock' && read) return json(res, 200, unlocked(requireUser(req))), true
     if (path === '/api/seafile/lock' && method === 'POST') return lock(requireUser(req), (await readJson<{ repo?: string }>(req, 1024)).repo), json(res, 200, { ok: true }), true
     if (path === '/api/updown' && read) return json(res, 200, await updownChecks(requireUser(req))), true
+    // The Photos app (server/photos.ts): its Seafile index and Immich, and linking Immich.
+    if ((path.startsWith('/api/photos/') || path === '/api/integrations/immich') && (await handlePhotosApi(req, res, url, method))) return true
 
     // The Agents app (server/agents.ts): Ollama Cloud's key, threads, a turn (streamed) and memory.
     if (path === '/api/integrations/ollama' && method === 'PUT') return await setOllamaKey(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true
@@ -376,6 +386,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/inbox' && read) return json(res, 200, await inbox(requireUser(req), url.searchParams.has('fresh'))), true
 
     if (path === '/api/search' && read) return json(res, 200, await search(requireUser(req), url.searchParams.get('q') ?? '')), true
+    // The Mail app over JMAP (server/jmap.ts): accounts, mailboxes, conversations, drafts, sending and attachments.
+    if (path.startsWith('/api/mail/')) return await handleMailApi(req, res, url)
 
     throw new HttpError(404, 'Not found')
   } catch (e) {

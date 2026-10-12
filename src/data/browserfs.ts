@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { getAccount, subscribeAccount } from '../os/account'
 import { kindOfName } from '../terminal/vfs'
+import type { VirtualFiles } from './launcherStore'
 
 // Files kept in this browser, for signed-in users without Seafile: the Terminal, Zed, Files and
 // the desktop write here when home is not in Seafile (data/mounts.ts mounts it on ~, or on
@@ -42,6 +43,21 @@ const emit = () => {
   version++
   listeners.forEach((l) => l())
 }
+
+/**
+ * Launchers: the .desktop files in ~/Desktop and ~/.local/share/applications are not kept here
+ * but in the synced launcher list, so every device has them (data/launcherStore.ts, set up by
+ * data/launchers.ts). Reading those folders lists them too; writing, deleting, renaming or moving
+ * a .desktop file there goes to the list.
+ */
+let virtual: VirtualFiles | null = null
+export function setVirtualFiles(v: VirtualFiles | null) {
+  virtual = v
+  emit()
+}
+/** The launcher list changed (here or on another device): its files show the change. */
+export const virtualFilesChanged = () => emit()
+const isVirtual = (path: string) => !nodes.has(path) && !!virtual?.has(path)
 
 /** Thrown for anything the store refuses: a missing folder, a name taken, a full disk. */
 export class BrowserFsError extends Error {}
@@ -200,12 +216,17 @@ export const subscribeBrowserFiles = (l: () => void) => {
 /** Re-renders whenever anything in the store changes. */
 export const useBrowserFiles = () => useSyncExternalStore(subscribeBrowserFiles, () => version)
 
-export const statBrowser = (path: string): BrowserEntry | null => nodes.get(path) ?? null
-export const listBrowser = (dir: string): BrowserEntry[] => [...(children.get(dir) ?? [])].map((p) => nodes.get(p)!).filter(Boolean)
+export const statBrowser = (path: string): BrowserEntry | null => nodes.get(path) ?? (state === 'ready' ? (virtual?.stat(path) ?? null) : null)
+export function listBrowser(dir: string): BrowserEntry[] {
+  const real = [...(children.get(dir) ?? [])].map((p) => nodes.get(p)!).filter(Boolean)
+  if (!virtual || state !== 'ready' || !nodes.get(dir)?.dir) return real
+  return [...real, ...virtual.list(dir).filter((e) => !nodes.has(e.path))]
+}
 /** A small text file's contents, from memory; null when it is not kept there. */
-export const browserText = (path: string): string | null => texts.get(path) ?? null
+export const browserText = (path: string): string | null => texts.get(path) ?? (isVirtual(path) ? virtual!.text(path) : null)
 
 export async function readBrowserBlob(path: string): Promise<Blob> {
+  if (isVirtual(path)) return new Blob([virtual!.text(path) ?? ''], { type: 'text/plain' })
   const e = nodes.get(path)
   if (!e || e.dir || !db) throw new BrowserFsError(`${path}: no such file`)
   const blob = await result(db.transaction(BLOBS, 'readonly').objectStore(BLOBS).get(path) as IDBRequest<Blob | undefined>)
@@ -243,6 +264,11 @@ function needFolder(dir: string) {
 export async function writeBrowserFile(path: string, data: Blob | string) {
   needFolder(parentOf(path))
   if (nodes.get(path)?.dir) throw new BrowserFsError(`${path}: is a folder`)
+  // A launcher in one of the launcher folders goes to the synced list (a plain file of that name goes).
+  if (virtual?.isPlace(path) && virtual.write(path, typeof data === 'string' ? data : await data.text())) {
+    if (nodes.has(path)) await removeBrowser(path)
+    return emit()
+  }
   const blob = typeof data === 'string' ? new Blob([data], { type: 'text/plain' }) : data
   persist()
   await put({ path, dir: false, size: blob.size, mtime: Date.now(), type: blob.type }, blob)
@@ -274,6 +300,10 @@ const subtree = (path: string) => [...nodes.keys()].filter((p) => p === path || 
 
 /** Deletes a file, or a folder with everything in it. For good: there is no trash here. */
 export async function removeBrowser(path: string) {
+  if (isVirtual(path)) {
+    virtual!.remove(path)
+    return emit()
+  }
   if (path === '/' || !nodes.has(path)) throw new BrowserFsError(`${path}: no such file or folder`)
   if (!db) throw new BrowserFsError('Files in this browser are not available')
   const all = subtree(path)
@@ -289,8 +319,25 @@ export async function removeBrowser(path: string) {
 
 /** Moves or copies a file or folder to a new path (which must not exist; its folder must). */
 export async function transferBrowser(op: 'move' | 'copy', from: string, to: string) {
+  if (nodes.has(to) || isVirtual(to)) throw new BrowserFsError(`${nameOf(to)} already exists there`)
+  // Launchers of the list: renamed or moved within it, or out of it as a plain file.
+  if (isVirtual(from)) {
+    if (to === from || to.startsWith(`${from}/`)) return
+    needFolder(parentOf(to))
+    if (virtual!.isPlace(to) && virtual!.rename(op, from, to)) return emit()
+    await writeBrowserFile(to, virtual!.text(from) ?? '')
+    if (op === 'move') virtual!.remove(from)
+    return emit()
+  }
   if (!nodes.has(from)) throw new BrowserFsError(`${from}: no such file or folder`)
-  if (nodes.has(to)) throw new BrowserFsError(`${nameOf(to)} already exists there`)
+  // A .desktop file moved into a launcher folder joins the list, if it is a launcher.
+  if (!nodes.get(from)!.dir && virtual?.isPlace(to)) {
+    needFolder(parentOf(to))
+    if (virtual.write(to, await readBrowserText(from))) {
+      if (op === 'move') await removeBrowser(from)
+      return emit()
+    }
+  }
   if (to === from || to.startsWith(`${from}/`)) throw new BrowserFsError('A folder cannot go inside itself')
   needFolder(parentOf(to))
   if (!db) throw new BrowserFsError('Files in this browser are not available')

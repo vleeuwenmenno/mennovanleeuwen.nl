@@ -29,6 +29,7 @@ import { manPages, mountCommands } from './mount'
 import { nanoCommands } from './nano'
 import { skillsCommands } from './skills'
 import { agentsCommands } from './agents'
+import { vtCommands } from './vt/demo'
 import { tarCommands } from './tar'
 import { unzipCommands } from './unzip'
 import { MEDIA_APP } from '../data/media'
@@ -37,13 +38,14 @@ import { MSH_MAN } from '../data/mshReference'
 
 export { runLine, type RunResult } from './msh/interp'
 
-// Output markup understood by the terminal renderer:
-//   {c:green}text{/}      colored span (green, red, yellow, blue, cyan, magenta, muted, accent, bold)
+// Output markup understood by the terminal renderer (src/terminal/markup.ts has all of it):
+//   {c:green}text{/}      colored span (green, red, yellow, blue, cyan, magenta, muted, accent, bold…)
+//   {fg:#rrggbb}text{/}   any colour; {bg:…} for the background
 //   {link:https://…}text{/}  clickable link
 //   {anim:sl}{/}          an animation component (only `sl` today)
-// Pipes and redirects receive the text with this markup stripped.
+// Tags nest. Pipes and redirects receive the text with this markup stripped.
 
-export const strip = (s: string) => s.replace(/\{anim:[^}]*\}\{\/\}/g, '').replace(/\{(?:c|link|fg):[^}]*\}|\{\/\}/g, '')
+export const strip = (s: string) => s.replace(/\{anim:[^}]*\}\{\/\}/g, '').replace(/\{(?:c|link|fg|bg):[^}]*\}|\{\/\}/g, '')
 const c = (color: string, s: string) => `{c:${color}}${s}{/}`
 const link = (url: string, text = url) => `{link:${url}}${text}{/}`
 
@@ -86,7 +88,7 @@ const APPS: Record<string, AppId> = {
   zed: 'zed',
   editor: 'zed',
   preview: 'preview',
-  photos: 'preview',
+  photos: 'photos',
   player: 'player',
   video: 'player',
   amp: 'amp',
@@ -96,6 +98,7 @@ const APPS: Record<string, AppId> = {
   trash: 'trash',
   notebook: 'notebook',
   agents: 'agents',
+  contacts: 'contacts',
   settings: 'settings',
   mcserver: 'mcserver',
 }
@@ -132,6 +135,10 @@ const APP_NAMES: Record<AppId, string> = {
   linkforge: 'link-forge',
   calendar: 'calendar',
   agents: 'agents',
+  mail: 'mail',
+  photos: 'photos',
+  contacts: 'contacts',
+  tasks: 'tasks',
 }
 
 /** What `man <name>` shows, and `<name> --help` / `<name> -h` for commands without their own. */
@@ -758,6 +765,15 @@ export const commands: Record<string, Command> = {
       const slug = target.replace(/\/$/, '').split('/').pop() ?? ''
       const abs = resolvePath(ctx.cwd, target)
       const node = lookup(abs)
+      // A launcher (.desktop, src/data/launchers.ts) opens what it points at, wherever the file is.
+      if (node?.type === 'file' && /\.desktop$/i.test(abs)) {
+        const { launch, readLauncherFile } = await import('../data/launchers')
+        const l = await readLauncherFile(abs)
+        if (l) {
+          launch(l, { open: (app, props) => ctx.openApp(app, props as Record<string, string>) })
+          return l.app ? undefined : `Opening ${link(l.url)}`
+        }
+      }
       // A file in Seafile opens the way Files would open it (PDF, Preview, Zed…).
       if (node?.type === 'file' && node.sf) {
         await openSeafile({ open: (app, props) => ctx.openApp(app, props as Record<string, string>), openNew: (app, props) => ctx.openNewApp(app, props as Record<string, string>) }, node.sf)
@@ -1209,7 +1225,7 @@ export const commands: Record<string, Command> = {
 }
 
 // The real-network and device tools live in extra.ts.
-Object.assign(commands, extraCommands, findCommands, mountCommands, nanoCommands, unzipCommands, tarCommands, skillsCommands, agentsCommands)
+Object.assign(commands, extraCommands, findCommands, mountCommands, nanoCommands, unzipCommands, tarCommands, skillsCommands, agentsCommands, vtCommands)
 // Menno's CV in the terminal: only on his CV page (src/os/cvMode.ts).
 if (!cvMode()) for (const name of ['cv', 'projects', 'contribs', 'recent', 'stars', 'contact', 'heatmap', 'minecraft', 'mc', 'headlines']) delete commands[name]
 // /bin lists them all, like a real one (hidden easter eggs included; not the odd names like :q).

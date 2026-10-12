@@ -7,15 +7,17 @@ import { clearHits, useRecentHits } from '../data/spotlightRecent'
 import { favouriteKey, moveFavourite, removeFavourite, useFavourites } from '../data/spotlightFavourites'
 import { ANSWERS_KEEP, CATEGORIES, RECENT_COUNTS, setInclude, setSpotlightPrefs, setStart, START_SECTIONS, useSpotlightPrefs, type Fallback } from '../data/spotlightPrefs'
 import { clearQuick } from '../data/agents'
-import { addLauncher, cleanUrl, faviconOf, moveLauncher, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
+import { addLauncher, cleanUrl, faviconOf, launcherImage, launchersAreFiles, moveLauncher, posixPath, removeLauncher, updateLauncher, useLaunchers, type Launcher } from '../data/launchers'
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { setSwing, useSwingPrefs } from '../os/swing'
 import { ask } from '../os/Dialogs'
 import { UsersSettings } from './UsersSettings'
 import { openAlert, useAlerts } from '../os/alerts'
-import { formatSize } from '../terminal/vfs'
+import { formatSize, prettyPath } from '../terminal/vfs'
 import { browserFilesState, browserTree, useBrowserFiles, wipeBrowserFiles } from '../data/browserfs'
 import { Select } from '../os/Select'
+import { useStatus as usePhotoStatus } from '../data/photos'
+import { ImmichLink } from './photos/PhotosSettings'
 import { libraryName, loadLibraries, primaryOf, setSeafilePrefs, useLibraries, useSeafilePrefs } from '../data/seafile'
 import { fstabEntries, isSeafileType, useMounts } from '../data/mounts'
 
@@ -36,16 +38,19 @@ import { ACCENTS, DARK_THEMES, LIGHT_THEMES, setAccent, setMode, setTheme, theme
 import { ReleaseStatus } from '../os/TopbarWidgets'
 import { useWM, type AppId, type WinState } from '../os/wm'
 import { AgentsSettings } from './AgentsSettings'
+import { ContactsSettings } from './contacts/ContactsSettings'
 import { AmpPane, CalendarAppPrefs, FilesPane, GamesPane, PdfPane, PreviewPane, TerminalPane } from './AppSettings'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
 import { BranchGlyph } from './LinkForge'
 import { SyncLine } from './Notebook'
+import { MailSettings } from './mail/MailSettings'
+import { useMailAccounts } from '../data/mail'
 
 // System settings, laid out like macOS: the account on top of a sidebar, one pane per topic.
 // Opened from the system menu, the desktop's right-click menu, Spotlight, the terminal and apps'
 // window menus; props.section picks the pane (account, appearance, dock, launchers, search
 // (Spotlight), windows, links, notifications, golinks, instances, integrations, then the apps:
-// agents, calendar, files, games, amp, pdf, preview, terminal; then sync, users, about) and
+// agents, calendar, contacts, files, games, amp, pdf, preview, terminal; then sync, users, about) and
 // props.sub a part of it. The account and service panes only show for the signed-in user.
 
 const SignInFirst = ({ what }: { what: string }) => {
@@ -621,13 +626,14 @@ function LauncherRow({ l, first, last }: { l: Launcher; first: boolean; last: bo
       <li className="set-row is-editing">
         <input className="set-emoji" value={draft.glyph ?? ''} onChange={(e) => setDraft({ ...draft, glyph: e.target.value.slice(0, 4) })} placeholder="🔗" aria-label="Emoji" />
         <input value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} aria-label="Label" />
-        <input value={draft.url} onChange={(e) => setDraft({ ...draft, url: e.target.value })} aria-label="URL" className={error ? 'is-bad' : ''} spellCheck={false} />
+        {!l.app && <input value={draft.url} onChange={(e) => setDraft({ ...draft, url: e.target.value })} aria-label="URL" className={error ? 'is-bad' : ''} spellCheck={false} />}
         <button
           className="btn btn-small btn-primary"
           onClick={() => {
-            const url = cleanUrl(draft.url)
-            if (!url || !draft.label.trim()) return setError(true)
-            updateLauncher(l.id, { label: draft.label.trim().slice(0, 40), url, glyph: draft.glyph?.trim() || undefined })
+            // A launcher that opens an app has no address to change.
+            const url = l.app ? '' : cleanUrl(draft.url)
+            if ((!url && !l.app) || !draft.label.trim()) return setError(true)
+            updateLauncher(l.id, { label: draft.label.trim().slice(0, 40), url: url ?? '', glyph: draft.glyph?.trim() || undefined })
             setEditing(false)
           }}
         >
@@ -640,12 +646,17 @@ function LauncherRow({ l, first, last }: { l: Launcher; first: boolean; last: bo
     )
   return (
     <li className="set-row">
-      {l.glyph ? <span className="set-glyph">{l.glyph}</span> : <img className="set-fav" src={faviconOf(l.url)} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />}
+      {l.glyph || !launcherImage(l) ? <span className="set-glyph">{l.glyph ?? '▦'}</span> : <img className="set-fav" src={launcherImage(l)} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />}
       <span className="set-row-text">
         <strong>{l.label}</strong>
-        <a className="muted" href={l.url} target="_blank" rel="noopener noreferrer">
-          {l.url.replace(/^https?:\/\//, '').replace(/\/$/, '')}
-        </a>
+        {l.app ? (
+          <span className="muted">Opens {l.app}</span>
+        ) : (
+          <a className="muted" href={l.url} target="_blank" rel="noopener noreferrer">
+            {l.url.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+          </a>
+        )}
+        {l.file && <span className="muted set-file">{prettyPath(posixPath(l.file) ?? l.file)}</span>}
       </span>
       <button className="btn btn-small btn-ghost" disabled={first} onClick={() => moveLauncher(l.id, -1)} aria-label="Move up">
         ↑
@@ -707,7 +718,7 @@ function DockSettings() {
   const icon = (id: DockId) => {
     if (!isLauncherId(id)) return <AppIcon app={id} size={22} tone />
     const l = launcherOf(id)
-    return l?.glyph ? <span className="set-glyph">{l.glyph}</span> : <img className="set-fav" src={l ? faviconOf(l.url) : undefined} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
+    return l?.glyph ? <span className="set-glyph">{l.glyph}</span> : <img className="set-fav" src={l ? launcherImage(l) : undefined} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
   }
   const move = (i: number, by: number) => {
     const next = dock.slice()
@@ -758,6 +769,7 @@ function DockSettings() {
 
 function Launchers() {
   const launchers = useLaunchers()
+  const files = launchersAreFiles()
   const [form, setForm] = useState({ label: '', url: '', glyph: '' })
   const [error, setError] = useState<string | null>(null)
   const submit = (e: FormEvent) => {
@@ -787,12 +799,19 @@ function Launchers() {
       </form>
       {error && <p className="t-red">{error}</p>}
       <p className="muted set-help">Launchers sit on the desktop and show up in All apps and Spotlight. Without an emoji they use the site's own icon.</p>
+      {files ? (
+        <p className="muted set-help">
+          Each one is a <code>.desktop</code> file in your home: those on the desktop in <code>~/Desktop</code>, the others in <code>~/.local/share/applications</code>. Drag them into folders like any file; the terminal shows the files themselves (<code>ls ~/Desktop</code>, <code>cat</code>, <code>open</code>).
+        </p>
+      ) : (
+        <p className="muted set-help">They are kept in this browser. Signed in, they become <code>.desktop</code> files in your home.</p>
+      )}
     </>
   )
 }
 
 /** Third-party services the widgets read from, with keys on the server: updown.io for Status. */
-type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice'
+type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice' | 'mail' | 'immich' | 'contacts'
 
 /** Third-party services, one row each; a row opens that service's own settings. */
 /** `sub` opens one service's settings straight away (Settings → Integrations → Seafile, from an alert). */
@@ -800,9 +819,11 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
   const account = useAccount()
   const [open, setOpen] = useState<IntegrationId | null>(null)
   useEffect(() => {
-    if (sub === 'updown' || sub === 'ollama' || sub === 'seafile' || sub === 'onlyoffice') setOpen(sub)
+    if (sub === 'updown' || sub === 'ollama' || sub === 'seafile' || sub === 'onlyoffice' || sub === 'contacts' || sub === 'mail') setOpen(sub)
   }, [sub, t])
   const { libraries } = useLibraries()
+  const { accounts: mailAccounts } = useMailAccounts()
+  const photos = usePhotoStatus().status
   if (account.status !== 'user') return <p className="muted">Sign in first to connect services for widgets and Files.</p>
   const seafile = account.seafile
   const host = (url: string) => url.replace(/^https?:\/\//, '')
@@ -837,6 +858,21 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
       on: !!seafile?.office,
       disabled: !seafile,
     },
+    {
+      id: 'mail',
+      name: 'Mail',
+      icon: <span className="set-glyph">✉</span>,
+      status: mailAccounts?.length ? `${mailAccounts.map((a) => a.username).join(', ')} · for the Mail app` : 'Fastmail or another JMAP server, for the Mail app',
+      on: !!mailAccounts?.length,
+    },
+    {
+      id: 'immich',
+      name: 'Immich',
+      icon: <span className="set-glyph">🖼</span>,
+      status: photos?.immich ? `${host(photos.immich.url)} · Immich ${photos.immich.version} · for Photos` : 'Your photo library, in the Photos app',
+      on: !!photos?.immich,
+    },
+    { id: 'contacts', name: 'Contacts (CardDAV)', icon: <span className="set-glyph">📇</span>, status: 'Fastmail, iCloud, Nextcloud and other address books, for Contacts', on: false },
   ]
 
   const current = rows.find((r) => r.id === open && !r.disabled)
@@ -851,7 +887,7 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
           <strong>{current.name}</strong>
           {current.on && <span className="set-badge">Connected</span>}
         </div>
-        {current.id === 'updown' ? <UpdownSettings /> : current.id === 'ollama' ? <OllamaSettings /> : current.id === 'seafile' ? <SeafileSettings /> : <OfficeSettings />}
+        {current.id === 'mail' ? <MailSettings /> : current.id === 'updown' ? <UpdownSettings /> : current.id === 'ollama' ? <OllamaSettings /> : current.id === 'seafile' ? <SeafileSettings /> : current.id === 'immich' ? <ImmichLink /> : current.id === 'contacts' ? <ContactsSettings /> : <OfficeSettings />}
       </>
     )
 
@@ -1652,7 +1688,7 @@ function LinkSettingsPane() {
   )
 }
 
-type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'integrations' | 'agents' | 'golinks' | 'terminal' | 'files' | 'amp' | 'pdf' | 'preview' | 'games' | 'sync' | 'users' | 'about'
+type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'contacts' | 'integrations' | 'agents' | 'golinks' | 'terminal' | 'files' | 'amp' | 'pdf' | 'preview' | 'games' | 'sync' | 'users' | 'about'
 /** `account`: only when signed in (accounts and services); visitors don't see it at all.
  * `admin`: only for admins (the server checks that on every request too). */
 type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; /** An app's pane (Settings → Apps) shows the app's own dock icon instead */ app?: AppId; keywords: string; blurb: string; account?: true; admin?: true; render: (opened: { sub?: string; t?: string }) => ReactNode }
@@ -1710,7 +1746,7 @@ const GROUPS: Group[] = [
   {
     panes: [
       { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', account: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
-      { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models storage', blurb: 'Services the widgets, Files and Agents use: updown.io for Status, Ollama Cloud, Seafile and OnlyOffice.', render: ({ sub, t }) => <Integrations sub={sub} t={t} /> },
+      { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models storage mail email jmap fastmail', blurb: 'Services the widgets, Files, Agents and Mail use: updown.io for Status, Ollama Cloud, Seafile, OnlyOffice and mail accounts.', render: ({ sub, t }) => <Integrations sub={sub} t={t} /> },
     ],
   },
   {
@@ -1718,6 +1754,7 @@ const GROUPS: Group[] = [
     panes: [
       { id: 'agents', label: 'Agents', hue: 'var(--magenta)', account: true, icon: null, app: 'agents', keywords: 'agents ai assistant ollama models quick deep research title thread system prompt agents.md tools memory', blurb: 'The Agents app: its models, what a new thread starts with, and its system prompt.', render: () => <AgentsSettings /> },
       { id: 'calendar', label: 'Calendar', hue: 'var(--red)', account: true, icon: null, app: 'calendar', keywords: 'calendar google agenda events caldav fastmail nextcloud icloud view week month day year default new events', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock; and how the Calendar app opens.', render: () => <CalendarSettings /> },
+      { id: 'contacts', label: 'Contacts', hue: 'var(--orange)', account: true, icon: null, app: 'contacts', keywords: 'contacts people address book carddav fastmail icloud nextcloud radicale vcard vcf birthdays groups', blurb: 'Address books: on this site, Fastmail, iCloud and other CardDAV; where new contacts go.', render: () => <ContactsSettings /> },
       { id: 'files', label: 'Files', hue: 'var(--blue)', icon: null, app: 'files', keywords: 'files file manager view list grid compact gallery icon size zoom sort order hidden dotfiles sidebar', blurb: 'How Files shows a folder: the view, icon size, sort order, hidden files and the sidebar.', render: () => <FilesPane /> },
       { id: 'games', label: 'Games', hue: 'var(--cyan)', icon: null, app: 'games', keywords: 'games arcade pool gladiator empires at war rts sound music volume mute helpers aim sensitivity difficulty computer health bars rings fog procedural models sprites camera edge scrolling key bindings keybinds keys multiplayer name online', blurb: 'Pool, Gladiator and Empires At War: how they play and sound.', render: ({ sub, t }) => <GamesPane sub={sub} t={t} /> },
       { id: 'amp', label: 'Omamp', hue: 'var(--green)', icon: null, app: 'amp', keywords: 'omamp music player audio winamp shuffle repeat equalizer eq preset visualizer spectrum oscilloscope time remaining playlist', blurb: 'The music player: shuffle and repeat, the equalizer, and what it shows.', render: () => <AmpPane /> },
