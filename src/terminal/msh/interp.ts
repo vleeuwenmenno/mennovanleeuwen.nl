@@ -23,6 +23,7 @@ export type ShellHooks = {
   asksHelp: (name: string, args: string[]) => boolean
   suggest: (name: string) => string
   strip: (s: string) => string
+  isAppName: (word: string, cwd: string) => boolean
 }
 let hooks: ShellHooks
 export const setShellHooks = (h: ShellHooks) => void (hooks = h)
@@ -1023,7 +1024,11 @@ class Shell {
     const stdin = io.stdin ? drain(io.stdin) : null
     try {
       const help = known !== null && hooks.asksHelp(known, args)
-      if (known && !help) await prepare(this.base.cwd, known, known === 'cd' && !args.length ? [HOME] : args)
+      if (known && !help) {
+        // `open photos` starts the app: no need to look for a folder of that name in Seafile.
+        const looked = known === 'cd' && !args.length ? [HOME] : known === 'open' ? args.filter((a) => !hooks.isAppName(a, this.base.cwd)) : args
+        await prepare(this.base.cwd, known, looked)
+      }
       io.out.flush?.()
       const out = help ? hooks.manPage(known!) : ((await cmd.run({ ...this.base, env: this.st.vars, args, stdin, tty: io.out.tty })) ?? '')
       if (out) io.out.write(out.endsWith('\n') ? out : `${out}\n`)
