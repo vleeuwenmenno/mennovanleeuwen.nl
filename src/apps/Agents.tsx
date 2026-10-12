@@ -1804,7 +1804,8 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
         ) : (
           answering && <p className="agt-wait muted">Working…</p>
         )}
-        {!answering && !reconnecting && thread && messages.some((m) => m.role === 'user') && (
+        {/* Not under a compaction that went well: Retry would answer the message before it again. */}
+        {!answering && !reconnecting && thread && messages.some((m) => m.role === 'user') && (dropped || !!thread.interrupted || messages.at(-1)?.role !== 'compact') && (
           <div className={`agt-cut ${dropped || thread.interrupted ? 'is-error' : ''}`}>
             {dropped ? <span>The connection dropped</span> : thread.interrupted && <span>{interruptionText(thread.interrupted)}</span>}
             <button type="button" className={dropped || thread.interrupted ? 'btn btn-small' : 'agt-retry'} onClick={() => void retry()} title="Run your last message again; what the agent wrote for it goes">

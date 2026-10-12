@@ -971,6 +971,7 @@
 }
 .agt-compact {
   max-width: 760px;
+  margin: 4px 0 10px;
   font-size: 12px;
 }
 .agt-compact summary {
@@ -1012,6 +1013,12 @@
 }
 .agt-compact-body > p {
   margin: 0 0 8px;
+}
+.agt-compact-body .agt-answer :is(h1, h2, h3) {
+  margin: 10px 0 4px;
+  padding: 0;
+  border: 0;
+  font-size: 12.5px;
 }
 .agt-compacting {
   color: var(--accent);
