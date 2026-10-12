@@ -15,11 +15,24 @@ import type { HullState, Model, Part, Pt } from './types.ts'
 // (64 headings on small bitmaps, 32 on big ones, painted as ships turn to them; the bitmap is
 // turned to the exact heading when drawn, and the two nearest headings are crossfaded so the
 // shading doesn't snap, see drawLit) and per damage state, and kept in one shared cache with a memory budget. Turrets
-// get bitmaps of their own, since they turn to aim. Only a hull bigger than LIVE pixels on screen,
-// where few can fit, is painted straight onto the screen, with exact light.
+// get bitmaps of their own, since they turn to aim. Only a hull (or a wreck's piece) whose bitmap
+// would be bigger than memTuning.hull pixels, where few can fit on screen, is painted straight onto
+// the screen, with exact light; turret bitmaps are capped at memTuning.mount pixels.
 
 const TAU = Math.PI * 2
-/** Above this many device pixels across, a hull is painted live instead of from a bitmap. */
+
+/**
+ * When a hull or a turret is painted live (straight onto the screen) instead of from cached
+ * bitmaps, and how big a turret's bitmap may get. A hull whose bitmap would be bigger than `hull`
+ * pixels on its long side (one heading of a flagship at that size is about half a megabyte, and a
+ * full turn paints 32 of them) is painted live: it is shown that big only zoomed in, or for the
+ * biggest ships, so few are on screen at once. A turret's bitmap is at most `mount` pixels across,
+ * drawn larger if need be up to `mountLive` pixels on screen, and painted live past that. `legacy`
+ * puts back the old rule (live only past 720 pixels on screen, turret bitmaps up to 512), to
+ * measure against. Phones, with their smaller budget, paint hulls live from 256 pixels.
+ */
+export const memTuning = { hull: typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 256 : 362, mount: 128, mountLive: 192, legacy: false }
+/** Before memTuning: above this many device pixels across, a hull was painted live. */
 const LIVE = 720
 
 // --- Paths -------------------------------------------------------------------------------------------
@@ -440,7 +453,7 @@ export function drawHull(ctx: CanvasRenderingContext2D, m: Model, x: number, y: 
   ctx.translate(x, y)
   ctx.rotate(rot)
   if (o.alpha !== undefined && o.alpha < 1) ctx.globalAlpha *= o.alpha
-  if (px > LIVE || o.debug) {
+  if ((memTuning.legacy ? px > LIVE : bucket(px) > memTuning.hull) || o.debug) {
     const k = size / m.long
     ctx.scale(k, k)
     paintModel(ctx, m, { light: lightFor(lr), ppu: px / m.long, state, debug: o.debug, wreckMounts: o.wreck })
@@ -502,12 +515,14 @@ export function drawMount(ctx: CanvasRenderingContext2D, faction: Model['faction
   ctx.translate(x, y)
   ctx.rotate(rot)
   if (alpha < 1) ctx.globalAlpha *= alpha
-  if (px > LIVE / 2) {
+  if (memTuning.legacy ? px > LIVE / 2 : px > memTuning.mountLive) {
     ctx.scale(r, r)
     paintParts(ctx, parts, pal, lightFor(rot), r * zdpr)
   } else {
-    const b = bucket(px)
-    const n = headings(b)
+    const b = memTuning.legacy ? bucket(px) : Math.min(bucket(px), memTuning.mount)
+    // A big turret bitmap gets 32 headings: a turret is small next to its hull, and the crossfade
+    // hides the steps.
+    const n = memTuning.legacy || b <= 64 ? headings(b) : Math.min(32, headings(b))
     const ppu = b / 2.4
     const cw = Math.ceil(b * 1.1 + 4)
     const s = (r * 2.4) / b
@@ -580,6 +595,18 @@ export function drawPiece(ctx: CanvasRenderingContext2D, m: Model, piece: Piece,
   const px = span * k * zdpr
   if (px < 1.5) return
   const b = bucket(px)
+  if (!memTuning.legacy && b > memTuning.hull) {
+    // A big piece seen close up: painted live, like a big hull.
+    ctx.save()
+    ctx.translate(x, y)
+    ctx.rotate(rot)
+    if (alpha < 1) ctx.globalAlpha *= alpha
+    ctx.scale(k, k)
+    ctx.translate(-piece.cx, -piece.cy)
+    paintModel(ctx, m, { light: lightFor(rot), ppu: k * zdpr, state, wreckMounts: true, region: piece.region, cuts: piece.cuts })
+    ctx.restore()
+    return
+  }
   const n = tumble ? 8 : headings(b)
   const ppu = b / span
   const pad = 3 + b * 0.04

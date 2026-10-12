@@ -1,7 +1,7 @@
 import { ABILITIES, LEVEL_UP, MAX_LEVEL, UNIT, UPGRADES, buildable, isShip, techsFor, unitOf, type Tier } from './data.ts'
 import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
-import { canRetreat, cantBuild, cantMend, cantRepair, cantResearch, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdDeploy, cmdGuard, cmdMove, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, fleet, foes, near, rand, sees, shieldMax, type Owner, type Unit, type World } from './sim.ts'
+import { canRetreat, cantBuild, cantMend, cantRepair, cantResearch, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdDeploy, cmdGuard, cmdMove, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, fleet, foes, near, radius, rand, sees, shieldMax, type Owner, type Unit, type World } from './sim.ts'
 import * as M from './detmath.ts'
 import { sq } from './detmath.ts'
 
@@ -409,7 +409,9 @@ export function think(w: World, b: Brain, dt: number) {
         if (hp >= 0 && act(b, () => cmdAttack(w, o, [u.id], e.id, hp))) continue
       }
     }
-    if (u.order.k === 'idle' || (u.order.k === 'move' && d2(u.order, goal) > sq(400))) go.push(u.id)
+    // A move ends clear of the structure it was aimed at (see offRocks in sim.ts), so a big hull's
+    // spot sits further from it: only a move really aimed elsewhere is given again.
+    if (u.order.k === 'idle' || (u.order.k === 'move' && d2(u.order, goal) > sq(400 + radius(u.t)))) go.push(u.id)
   }
   if (go.length) {
     const x = goal.x + (rand(w) - 0.5) * 300

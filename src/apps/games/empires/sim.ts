@@ -3,9 +3,10 @@ import { sq } from './detmath.ts'
 import { inside, mirrored, rng, type MapDef, type Pt } from './maps.ts'
 import { clearLine, findPath, navGrid, type NavGrid } from './nav.ts'
 import { mapDist, rangeDist } from './scale.ts'
+import { BIG_SPREAD, SIZE_CLASSES, sizedType, type ShipSizes } from './models/sizes.ts'
 import {
   ABILITIES, ARMOR_BONUS, BASE_POP, DEFENSE_WING, FIELD_REPAIR, MENDABLE, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
-  SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
+  SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind,
 } from './data.ts'
 
@@ -236,7 +237,11 @@ export type Beacon = { id: number; x: number; y: number } & Claimable
 export type Rock = { x: number; y: number; r: number; rot: number; spin: number; kind: number }
 /** A derelict hulk to strip for credits. `left` counts down as it's salvaged; battle wrecks also
  * drift off after `decay` seconds. `team` is who's salvaging it right now (-1 for nobody). */
-export type Wreck = { id: number; x: number; y: number; value: number; left: number; sprite: string; size: number; rot: number; decay: number; team: number }
+export type Wreck = {
+  id: number; x: number; y: number; value: number; left: number; sprite: string; size: number; rot: number; decay: number; team: number
+  /** The hulk of a Big ship (sizes.ts), drawn with its Big design. */
+  big?: boolean
+}
 /** How close (from the hulk's centre) a ship must park to salvage, and credits a second per ship (up to three). */
 export const SALVAGE_RANGE = 240
 /** Seconds failed shields stay down before they start to recharge. */
@@ -314,6 +319,9 @@ export type World = {
   /** A galactic conquest fleet battle: no mining or building, only the fleets (and the defender's
    * station). A side is beaten once it has nothing left on the field or waiting in orbit. */
   fleet?: FleetRules
+  /** Ship sizes, picked for the match (models/sizes.ts): 'big', or left out for Classic (battles
+   * saved before there was a choice are Classic). */
+  sizes?: ShipSizes
 }
 export type FleetRules = {
   /** Where each player's reinforcements may jump in, whether or not the fleet can see it. */
@@ -339,6 +347,14 @@ export function rand(w: World) {
 const wrap = (a: number) => ((a + Math.PI) % TAU + TAU) % TAU - Math.PI
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v)
 const d2 = (ax: number, ay: number, bx: number, by: number) => sq(ax - bx) + sq(ay - by)
+
+/** The unit type an id stands for in this battle: as written, or its Big version (sizes.ts). */
+export const typeOf = (w: World, id: string): UnitType => sizedType(id, w.sizes)
+/** How much further apart a group of ships keeps under Big: its biggest ship's size class, at
+ * least BIG_SPREAD. 1 in Classic. */
+const spreadOf = (w: World, us: Unit[]) => (w.sizes === 'big' ? Math.max(BIG_SPREAD, ...us.map((u) => SIZE_CLASSES[u.t.tier])) : 1)
+/** How hard a ship speeds up and brakes, before its tier's factor (see steer). */
+const accOf = (t: UnitType) => t.speed * (t.accel ?? 1)
 
 /** Rough body radius, for spacing, clicking and collisions. */
 export const radius = (t: UnitType) => {
@@ -472,7 +488,7 @@ const gunsOf = (w: World, t: UnitType): Gun[] =>
 
 export function spawn(w: World, id: string, owner: Owner, x: number, y: number, a: number, squad = 0): Unit {
   const p = w.players[owner]
-  const t = UNIT[id].tier === 'station' ? stationType(p.faction, p.level, p.techs) : UNIT[id]
+  const t = UNIT[id].tier === 'station' ? stationType(p.faction, p.level, p.techs) : typeOf(w, id)
   const mods = modsFor(p, t)
   const hullMax = t.hull * mods.hull
   const u: Unit = {
@@ -490,7 +506,7 @@ export function spawn(w: World, id: string, owner: Owner, x: number, y: number, 
 
 /** A whole order's worth: one ship, or a squadron of fighters in a loose vee. */
 export function spawnGroup(w: World, id: string, owner: Owner, x: number, y: number, a: number) {
-  const t = UNIT[id]
+  const t = typeOf(w, id)
   const squad = t.squad > 1 ? w.squadSeq++ : 0
   const out: Unit[] = []
   for (let i = 0; i < t.squad; i++) {
@@ -545,7 +561,7 @@ export function autoStart(w: World, area: { x: number; y: number; w: number; h: 
   return best ?? mid
 }
 
-export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; credits?: number; fleet?: boolean } = {}): World {
+export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; credits?: number; fleet?: boolean; sizes?: ShipSizes } = {}): World {
   const r = rng(opts.seed ?? map.seed)
   const W = map.w
   const H = map.h
@@ -554,6 +570,8 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
   const w: World = {
     w: W, h: H, time: 0, units: [], byId: new Map(), players: [], teams, map, nodes: [], beacons: [], rocks: [], wrecks: [], shots: [], events: [],
     nextId: 1, squadSeq: 1, wreckSeq: 1000, rs: ((opts.seed ?? map.seed) ^ 0x9e3779b9) >>> 0, winner: -1, grid: new Map(), seenT: 0, nav: new Map(), arrivals: [],
+    // Classic worlds don't carry the field at all, so they stay exactly as they were.
+    ...(opts.sizes === 'big' ? { sizes: 'big' as const } : {}),
   }
   w.players = seats.map((s) => {
     const sp = s.at ?? map.spawns[s.spawn]
@@ -639,22 +657,29 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
 /** A ship that takes orders: ours, and not spooling up to jump out. */
 const commandable = (u: Unit | undefined, owner: Owner): u is Unit => !!u && !u.dead && u.owner === owner && isShip(u.t) && u.retreat <= 0
 
-/** Spread a group's destinations around (x, y), keeping its shape (squeezed if it's spread out). */
-/** A spot a ship can actually reach: moved out to the edge of any rock it falls inside. */
+/**
+ * A spot a ship can actually reach: moved out to the edge of any rock it falls inside, and clear of
+ * every structure (station, platform), which never budge while a warship keeps HULL_GAP clear of
+ * every hull: a spot overlapping one could never be reached, and the ship would be pushed back from
+ * it for ever. Big ship sizes made that easy to run into. Two passes, for a spot between two.
+ */
 function offRocks(w: World, u: Unit, x: number, y: number): Pt {
   if (u.t.tier === 'fighter') return { x, y }
-  const clear = radius(u.t) * 0.7 + 10
-  for (const k of w.rocks) {
-    const R = k.r + clear
-    const dd = d2(x, y, k.x, k.y)
-    if (dd >= R * R) continue
+  const away = (cx: number, cy: number, R: number) => {
+    const dd = d2(x, y, cx, cy)
+    if (dd >= R * R) return
     const d = Math.sqrt(dd)
     // Dead centre: come out on the side the ship is coming from.
-    const nx = d > 1 ? (x - k.x) / d : (u.x - k.x) / (M.hypot(u.x - k.x, u.y - k.y) || 1)
-    const ny = d > 1 ? (y - k.y) / d : (u.y - k.y) / (M.hypot(u.x - k.x, u.y - k.y) || 1)
-    x = k.x + nx * R
-    y = k.y + ny * R
+    const nx = d > 1 ? (x - cx) / d : (u.x - cx) / (M.hypot(u.x - cx, u.y - cy) || 1)
+    const ny = d > 1 ? (y - cy) / d : (u.y - cy) / (M.hypot(u.x - cx, u.y - cy) || 1)
+    x = cx + nx * R
+    y = cy + ny * R
   }
+  const clear = radius(u.t) * 0.7 + 10
+  for (const k of w.rocks) away(k.x, k.y, k.r + clear)
+  const r0 = radius(u.t)
+  for (let pass = 0; pass < 2; pass++)
+    for (const o of w.units) if (!o.dead && !isShip(o.t)) away(o.x, o.y, r0 + radius(o.t) + HULL_GAP + 6)
   return { x: clamp(x, 40, w.w - 40), y: clamp(y, 40, w.h - 40) }
 }
 
@@ -712,7 +737,7 @@ function formation(w: World, owner: Owner, ids: number[], x: number, y: number, 
   const cx = us.reduce((s, u) => s + u.x, 0) / us.length
   const cy = us.reduce((s, u) => s + u.y, 0) / us.length
   const spread = Math.max(1, ...us.map((u) => M.hypot(u.x - cx, u.y - cy)))
-  const fit = Math.min(1, (90 + Math.sqrt(us.length) * 70) / spread)
+  const fit = Math.min(1, ((90 + Math.sqrt(us.length) * 70) * spreadOf(w, us)) / spread)
   // A group keeps the pace of its slowest ship.
   const pace = us.length > 1 ? Math.min(...us.map((u) => speedOf(u))) : Infinity
   for (const u of us) {
@@ -859,7 +884,7 @@ export function faceTargets(w: World, owner: Owner, ids: number[], x: number, y:
   const cx = all.reduce((s, u) => s + u.x, 0) / all.length
   const cy = all.reduce((s, u) => s + u.y, 0) / all.length
   const spread = Math.max(1, ...all.map((u) => M.hypot(u.x - cx, u.y - cy)))
-  const fit = Math.min(1, (90 + Math.sqrt(all.length) * 70) / spread)
+  const fit = Math.min(1, ((90 + Math.sqrt(all.length) * 70) * spreadOf(w, all)) / spread)
   // Turned from the way it would fly there to the way it should face.
   const turn = face - M.atan2(y - cy, x - cx)
   const c = M.cos(turn)
@@ -1294,7 +1319,7 @@ export function canSee(w: World, team: number, x: number, y: number) {
  * Asteroid fields and nebulas are allowed (a field costs hull on arrival).
  */
 export function cantWarp(w: World, owner: Owner, id: string, x: number, y: number): string | null {
-  const t = UNIT[id]
+  const t = typeOf(w, id)
   const r = radius(t)
   if (x < r + 40 || y < r + 40 || x > w.w - r - 40 || y > w.h - r - 40) return 'Off the map'
   const entry = w.fleet?.entry[owner]
@@ -1303,7 +1328,7 @@ export function cantWarp(w: World, owner: Owner, id: string, x: number, y: numbe
   if (w.rocks.some((k) => d2(x, y, k.x, k.y) < sq(k.r + r))) return 'An asteroid is in the way'
   if (w.nodes.some((n) => d2(x, y, n.x, n.y) < sq(n.r + r))) return 'An ore asteroid is in the way'
   if (w.units.some((u) => !u.dead && u.t.tier !== 'fighter' && d2(x, y, u.x, u.y) < sq((radius(u.t) + r) * 0.85))) return 'Something is in the way'
-  if (w.arrivals.some((a) => d2(x, y, a.x, a.y) < sq(radius(UNIT[a.unit]) + r))) return 'Another ship is jumping in there'
+  if (w.arrivals.some((a) => d2(x, y, a.x, a.y) < sq(radius(typeOf(w, a.unit)) + r))) return 'Another ship is jumping in there'
   return null
 }
 
@@ -1328,7 +1353,7 @@ export function cmdDeploy(w: World, owner: Owner, id: string, x: number, y: numb
  * the first clear spot round it. */
 function yardSpot(w: World, o: Owner, st: Unit, id: string) {
   const p = w.players[o]
-  const t = UNIT[id]
+  const t = typeOf(w, id)
   const toward = M.atan2(p.rally.y - st.y, p.rally.x - st.x)
   const reach = radius(st.t) + radius(t) + 70
   for (let ring = 0; ring < 4; ring++)
@@ -1340,7 +1365,7 @@ function yardSpot(w: World, o: Owner, st: Unit, id: string) {
       const blocked =
         w.rocks.some((k) => d2(x, y, k.x, k.y) < sq(k.r + radius(t))) ||
         w.units.some((u) => !u.dead && u !== st && u.t.tier !== 'fighter' && d2(x, y, u.x, u.y) < sq(radius(u.t) + radius(t))) ||
-        w.arrivals.some((a) => d2(x, y, a.x, a.y) < sq(radius(UNIT[a.unit]) + radius(t)))
+        w.arrivals.some((a) => d2(x, y, a.x, a.y) < sq(radius(typeOf(w, a.unit)) + radius(t)))
       if (!blocked) return { x: clamp(x, 60, w.w - 60), y: clamp(y, 60, w.h - 60), a: toward }
     }
   return { x: st.x + M.cos(toward) * reach, y: st.y + M.sin(toward) * reach, a: toward }
@@ -1608,7 +1633,7 @@ function launch(w: World, carrier: Unit, extra = false) {
 function leaveWreck(w: World, u: Unit) {
   if (u.t.tier !== 'frigate' && u.t.tier !== 'cruiser' && u.t.tier !== 'capital') return
   const value = Math.round((u.t.cost * 0.3) / 10) * 10
-  w.wrecks.push({ id: w.wreckSeq++, x: u.x, y: u.y, value, left: value, sprite: u.t.sprite, size: u.t.size, rot: u.a + Math.PI / 2, decay: 180, team: -1 })
+  w.wrecks.push({ id: w.wreckSeq++, x: u.x, y: u.y, value, left: value, sprite: u.t.sprite, size: u.t.size, rot: u.a + Math.PI / 2, decay: 180, team: -1, ...(u.t.big ? { big: true } : {}) })
 }
 
 /**
@@ -1795,7 +1820,7 @@ function steer(u: Unit, tx: number, ty: number, want: number, dt: number, inPlac
   const fighter = u.t.tier === 'fighter'
   const align = fighter ? 0.55 + 0.45 * Math.max(0, M.cos(diff)) : Math.max(inPlace ? 0 : 0.15, M.cos(diff))
   const target = want * align
-  const acc = u.t.speed * (fighter ? 1.6 : 0.6)
+  const acc = accOf(u.t) * (fighter ? 1.6 : 0.6)
   u.v += clamp(target - u.v, -acc * dt * 1.5, acc * dt)
 }
 
@@ -1872,6 +1897,18 @@ const ARC_MAX = (Math.PI * 2) / 3
 const RESLOT = 4
 /** The least room between two warships' hulls (see the end of moveUnit). */
 const HULL_GAP = 8
+/**
+ * How far round itself a warship looks for hulls to keep clear of, on top of its own radius: at
+ * least the biggest hull there can be (and the gap), so a small ship sees a big one coming as much
+ * as the big one sees it; otherwise a gunship would never make way for a Big flagship, and the
+ * flagship would be pushed back off it for ever.
+ */
+let bigReach = 0
+const keepApartReach = (w: World) => {
+  if (w.sizes !== 'big') return 240
+  if (!bigReach) bigReach = Math.max(240, ...UNITS.map((t) => radius(sizedType(t.id, 'big')) + HULL_GAP + 4))
+  return bigReach
+}
 /** Room a warship leaves either side of itself on the arc, on top of its hull. */
 const arcGap = (r: number) => 14 + r * 0.2
 
@@ -1970,7 +2007,7 @@ function closeIn(w: World, u: Unit, e: Unit, max: number, dt: number) {
   const g = e.t.tier === 'fighter' ? [u] : spotGroup(u, e)
   if (g.length < 2) {
     u.slot = null
-    const brake = Math.sqrt(2 * t.speed * 0.9 * Math.max(0, dist - stop))
+    const brake = Math.sqrt(2 * accOf(t) * 0.9 * Math.max(0, dist - stop))
     const p = dist > stop ? detour(w, u, e.x, e.y) : e
     steer(u, p.x, p.y, dist > stop ? Math.min(max, brake) : 0, dt, dist <= stop)
     return
@@ -1990,7 +2027,7 @@ function closeIn(w: World, u: Unit, e: Unit, max: number, dt: number) {
     steer(u, e.x, e.y, 0, dt, true)
     return
   }
-  const brake = Math.sqrt(2 * t.speed * 0.9 * off)
+  const brake = Math.sqrt(2 * accOf(t) * 0.9 * off)
   const p = detour(w, u, px, py)
   steer(u, p.x, p.y, Math.min(max, brake), dt)
 }
@@ -2113,7 +2150,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
       const wp = waypoint(w, u, o.x, o.y)
       const p = detour(w, u, wp.x, wp.y)
       steer(u, p.x, p.y, fighter ? max : Math.min(max, dist * 0.9 + 12), dt)
-    } else u.v = Math.max(0, u.v - t.speed * dt)
+    } else u.v = Math.max(0, u.v - accOf(t) * dt)
   } else if (u.order.k === 'move' || u.order.k === 'patrol') {
     const o = u.order
     const dist = M.hypot(o.x - u.x, o.y - u.y)
@@ -2151,7 +2188,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
     } else if (u.face !== null && Math.abs(wrap(u.face - u.a)) > 0.01) {
       // Swing round in place to the heading it was told to arrive with.
       steer(u, u.x + M.cos(u.face) * 100, u.y + M.sin(u.face) * 100, 0, dt, true)
-    } else u.v = Math.max(0, u.v - t.speed * dt)
+    } else u.v = Math.max(0, u.v - accOf(t) * dt)
   }
 
   u.x += M.cos(u.a) * u.v * dt
@@ -2174,7 +2211,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
     // or more into each other) is pushed out faster, as before.
     const bx = u.x
     const by = u.y
-    near(w, u.x, u.y, r0 + 240, (o, dd) => {
+    near(w, u.x, u.y, r0 + keepApartReach(w), (o, dd) => {
       if (o === u || o.t.tier === 'fighter') return
       const touch = r0 + radius(o.t)
       const min = touch + HULL_GAP
@@ -2914,8 +2951,8 @@ export type FleetSide = { faction: FactionId; team: number; ships: string[]; res
  * spawns. Each side starts with up to `cap` fleet size on the field, biggest ships first, and the
  * rest waits in orbit to be called in from the reserve, with any ships its fleets held back.
  */
-export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: number; cap?: number } = {}): World {
-  const w = newWorld(map, sides.map((s, i) => ({ faction: s.faction, team: s.team, spawn: i, incomeMul: 0 })), { seed: opts.seed, credits: 0, fleet: true })
+export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: number; cap?: number; sizes?: ShipSizes } = {}): World {
+  const w = newWorld(map, sides.map((s, i) => ({ faction: s.faction, team: s.team, spawn: i, incomeMul: 0 })), { seed: opts.seed, credits: 0, fleet: true, sizes: opts.sizes })
   const cap = opts.cap ?? FLEET_CAP
   const c = { x: w.w / 2, y: w.h / 2 }
   w.fleet = { entry: sides.map((_, i) => ({ x: map.spawns[i].x, y: map.spawns[i].y, r: mapDist(1300) })), cap, holder: sides[0].team, endT: 3 }
@@ -2949,7 +2986,7 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
     field.forEach((id, i) => {
       const row = Math.floor(i / perRow)
       const col = (i % perRow) - (Math.min(perRow, field.length - row * perRow) - 1) / 2
-      const gap = Math.max(170, radius(UNIT[id]) * 2.4)
+      const gap = Math.max(170, radius(typeOf(w, id)) * 2.4)
       const x = sp.x + fx * (ahead - row * 260) - fy * col * gap
       const y = sp.y + fy * (ahead - row * 260) + fx * col * gap
       // The holder is already there; the others arrive from hyperspace, a few at a time.

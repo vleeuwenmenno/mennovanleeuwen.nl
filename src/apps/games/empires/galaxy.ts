@@ -5,6 +5,7 @@
 // an undefended planet is taken by staying in its orbit for a while. The galaxy runs in real time,
 // in seconds; a day is DAY seconds. No DOM, so headless sims can load it.
 
+import type { ShipSizes } from './models/sizes.ts'
 import type { Difficulty } from './ai.ts'
 import { FACTIONS, UNIT, buildable, stationType, unitOf, type FactionId, type Tier } from './data.ts'
 import { rng } from './maps.ts'
@@ -155,7 +156,8 @@ export type Galaxy = {
   pending: number
   events: GalaxyEvent[]
   aiT: number[]
-  rules: { blockade: BlockadeRule; frontline: boolean }
+  /** `sizes`: the ship sizes its fleet battles are fought at (models/sizes.ts); left out, Classic. */
+  rules: { blockade: BlockadeRule; frontline: boolean; sizes?: ShipSizes }
 }
 
 export type GalaxySize = 'short' | 'standard' | 'long'
@@ -326,7 +328,7 @@ function farthestPair(n: number, lanes: [number, number][]) {
   return best
 }
 
-export type NewGalaxy = { choice: GalaxyChoice; size: GalaxySize; faction: FactionId; difficulty: Difficulty; credits: number; name?: string; blockade?: BlockadeRule; frontline?: boolean }
+export type NewGalaxy = { choice: GalaxyChoice; size: GalaxySize; faction: FactionId; difficulty: Difficulty; credits: number; name?: string; blockade?: BlockadeRule; frontline?: boolean; sizes?: ShipSizes }
 
 export function newGalaxy(opts: NewGalaxy): Galaxy {
   const seed = opts.choice.kind === 'generated' ? opts.choice.seed : 7
@@ -349,7 +351,7 @@ export function newGalaxy(opts: NewGalaxy): Galaxy {
     pending: -1,
     events: [],
     aiT: [0, 2],
-    rules: { blockade: opts.blockade ?? 'majority', frontline: opts.frontline ?? true },
+    rules: { blockade: opts.blockade ?? 'majority', frontline: opts.frontline ?? true, ...(opts.sizes === 'big' ? { sizes: opts.sizes } : {}) },
   }
   defs.forEach((d, id) => {
     const sys: StarSystem = { id, name: d.name, x: d.x, y: d.y, star: d.star, planets: [] }

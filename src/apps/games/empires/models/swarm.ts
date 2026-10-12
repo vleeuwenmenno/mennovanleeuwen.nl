@@ -13,7 +13,7 @@ import type { Detail, Part, Pt, Tone } from './types.ts'
  * back along a thinner arc inside it, the band tapering from `t0` of the radius at the start to
  * `t1` at the end.
  */
-function crescent(cx: number, cy: number, rx: number, ry: number, a0: number, a1: number, t0: number, t1: number, n = 14): Pt[] {
+export function crescent(cx: number, cy: number, rx: number, ry: number, a0: number, a1: number, t0: number, t1: number, n = 14): Pt[] {
   const outer: Pt[] = []
   const inner: Pt[] = []
   for (let i = 0; i <= n; i++) {
@@ -105,14 +105,14 @@ export const fighter: ModelDef = () => {
 // --- Shared droid parts ------------------------------------------------------------------------------
 
 /** A sensor eye: a violet lens with a glowing pupil. */
-const eye = (id: string, x: number, y: number, r: number, z: number, more: Partial<Part> = {}): Part =>
+export const eye = (id: string, x: number, y: number, r: number, z: number, more: Partial<Part> = {}): Part =>
   part(id, circle(x, y, r, 16), 'glass', z, { lift: 0.6, details: [{ k: 'lights', pts: [[x, y]], r: r * 0.48 }], ...more })
 
 /**
  * One vertebra of a segmented body, centred on (0, y), `h` long and `w` half-wide: a left and a right
  * shell (each lit on its own) with a violet seam down its side.
  */
-function vertebra(id: string, y: number, h: number, w: number, tone: Tone, z: number, more: Partial<Part> = {}, stripe = true): Part[] {
+export function vertebra(id: string, y: number, h: number, w: number, tone: Tone, z: number, more: Partial<Part> = {}, stripe = true): Part[] {
   const rows: [number, number][] = [[y - h / 2, w * 0.56], [y - h * 0.32, w * 0.93], [y, w], [y + h * 0.32, w * 0.93], [y + h / 2, w * 0.56]]
   const details: Detail[] = stripe ? [{ k: 'shape', pts: [[-w * 0.5, y - h * 0.28], [-w * 0.72, y - h * 0.24], [-w * 0.72, y + h * 0.24], [-w * 0.5, y + h * 0.28]], tone: 'accent' }] : []
   return sym(part(id, halfHull(rows), tone, z, { slope: [-0.5, 0], lift: 1, details, ...more }))
@@ -121,7 +121,7 @@ function vertebra(id: string, y: number, h: number, w: number, tone: Tone, z: nu
 /**
  * A droid engine pod: a rounded casing with a violet nozzle at the back, shaded as a cylinder.
  */
-function thruster(id: string, x: number, y0: number, y1: number, w: number, engine: number | undefined, z: number, more: Partial<Part> = {}): Part {
+export function thruster(id: string, x: number, y0: number, y1: number, w: number, engine: number | undefined, z: number, more: Partial<Part> = {}): Part {
   const h = w / 2
   const half = (s: number): Pt[] => [[x, y0], [x + s * h * 0.55, y0 + h * 0.15], [x + s * h, y0 + h], [x + s * h * 0.95, y1 - h * 0.6], [x + s * h * 0.6, y1], [x, y1]]
   const r = h * 0.62
@@ -134,13 +134,13 @@ function thruster(id: string, x: number, y0: number, y1: number, w: number, engi
 }
 
 /** A jointed limb along `pts` (shoulder, knees, tip), tapering: the joints dark. */
-function limb(id: string, pts: Pt[], w0: number, w1: number, tone: Tone, z: number, more: Partial<Part> = {}): Part {
+export function limb(id: string, pts: Pt[], w0: number, w1: number, tone: Tone, z: number, more: Partial<Part> = {}): Part {
   const joints: Detail[] = pts.slice(1, -1).map(([x, y]) => ({ k: 'shape', pts: circle(x, y, Math.max(w0, w1) * 0.42, 8), tone: 'dark' }))
   return part(id, thick(pts, w0, w1), tone, z, { lift: 0.8, ...more, details: [...joints, ...(more.details ?? [])] })
 }
 
 /** A closed organic outline through control points. */
-const blobby = (pts: Pt[], n = 4) => spline(pts, n, true)
+export const blobby = (pts: Pt[], n = 4) => spline(pts, n, true)
 
 // --- Strike craft ------------------------------------------------------------------------------------
 

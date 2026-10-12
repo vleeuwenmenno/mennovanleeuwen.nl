@@ -12,17 +12,17 @@ import type { Detail, Part, Pt, Tone } from './types.ts'
 // --- Shared parts ------------------------------------------------------------------------------------
 
 /** Sensor eyes: red lights with an amber core, glowing on their own. */
-const eyes = (pts: Pt[], r: number): Detail => ({ k: 'lights', pts, r, tone: 'glass' })
+export const eyes = (pts: Pt[], r: number): Detail => ({ k: 'lights', pts, r, tone: 'glass' })
 /** A row of rivets: tiny dark dots, only drawn where the bitmap is big enough to show them. */
-const rivets = (a: Pt, b: Pt, n: number): Detail => ({ k: 'lights', pts: along(a, b, n), r: 0.32, tone: 'dark' })
+export const rivets = (a: Pt, b: Pt, n: number): Detail => ({ k: 'lights', pts: along(a, b, n), r: 0.32, tone: 'dark' })
 /** Running lights in the engine colour. */
-const lamps = (pts: Pt[], r: number): Detail => ({ k: 'lights', pts, r })
+export const lamps = (pts: Pt[], r: number): Detail => ({ k: 'lights', pts, r })
 
 /**
  * A boxy engine block seen from above: a chamfered gunmetal box, lit as two faces, a rust band
  * across it, and a dark nozzle at the back with the engine's blue-white light in it.
  */
-function engineBlock(id: string, x: number, y0: number, y1: number, w: number, engine: number | undefined, z: number, more: Partial<Part> = {}): Part {
+export function engineBlock(id: string, x: number, y0: number, y1: number, w: number, engine: number | undefined, z: number, more: Partial<Part> = {}): Part {
   const h = w / 2
   const l = y1 - y0
   const details: Detail[] = [
@@ -45,7 +45,7 @@ function engineBlock(id: string, x: number, y0: number, y1: number, w: number, e
  * the long hard shadow it throws and in its two faces either side of the ridge, one lit and one in
  * shadow; a rust stripe runs along the top.
  */
-function sail(id: string, x: number, y0: number, y1: number, w: number, z: number, lift = 6, more: Partial<Part> = {}): Part {
+export function sail(id: string, x: number, y0: number, y1: number, w: number, z: number, lift = 6, more: Partial<Part> = {}): Part {
   const l = y1 - y0
   const half = (s: number): Pt[] => [[x, y0], [x + s * w * 0.55, y0 + l * 0.12], [x + s * w, y0 + l * 0.45], [x + s * w * 0.8, y1 - l * 0.06], [x, y1]]
   return part(id, [...half(-1), ...half(1).reverse()], 'hull', z, {
@@ -57,11 +57,11 @@ function sail(id: string, x: number, y0: number, y1: number, w: number, z: numbe
 }
 
 /** An antenna mast with a red tip light. */
-const mast = (id: string, a: Pt, b: Pt, w: number, z: number, more: Partial<Part> = {}): Part =>
+export const mast = (id: string, a: Pt, b: Pt, w: number, z: number, more: Partial<Part> = {}): Part =>
   part(id, thick([a, b], w, w * 0.55), 'dark', z, { lift: 1.4, details: [eyes([b], w * 0.55)], ...more })
 
 /** A small sensor dish, its bowl shaded as if tipped towards the light. */
-const dish = (id: string, x: number, y: number, r: number, z: number, more: Partial<Part> = {}): Part =>
+export const dish = (id: string, x: number, y: number, r: number, z: number, more: Partial<Part> = {}): Part =>
   part(id, circle(x, y, r, 16), 'hull2', z, { lift: 1, slope: [0.3, 0.3], details: [{ k: 'shape', pts: circle(x + r * 0.15, y + r * 0.15, r * 0.6, 12), tone: 'metal' }, { k: 'shape', pts: circle(x, y, r * 0.22, 8), tone: 'dark' }], ...more })
 
 /** A droid's wing-leg, for the left side: an upper segment, a knee joint and a lower segment out to
@@ -335,7 +335,7 @@ export const CAPITAL_DESIGNS: CapitalDesign[] = ['ring', 'carrier']
 export const CAPITAL_DESIGN: CapitalDesign = 'ring'
 
 /** A band of an ellipse between an outer and an inner one, from angle a0 to a1 (radians, y down). */
-function ellBand(cx: number, cy: number, rxo: number, ryo: number, rxi: number, ryi: number, a0: number, a1: number, n = 10): Pt[] {
+export function ellBand(cx: number, cy: number, rxo: number, ryo: number, rxi: number, ryi: number, a0: number, a1: number, n = 10): Pt[] {
   const out: Pt[] = []
   for (let i = 0; i <= n; i++) {
     const a = a0 + ((a1 - a0) * i) / n

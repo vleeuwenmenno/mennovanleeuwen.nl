@@ -2,6 +2,8 @@ import { STATIONS, UNITS, dims, stationType, type FactionId, type Tier, type Uni
 import { circle, hash, inPart, inPoly, jagged, rng, seedOf } from './kit.ts'
 import * as droid from './droid.ts'
 import * as proto from './proto.ts'
+import * as protoDroid from './proto-droid.ts'
+import * as protoSwarm from './proto-swarm.ts'
 import * as republic from './republic.ts'
 import * as swarm from './swarm.ts'
 import type { ModelDef } from './spec.ts'
@@ -69,12 +71,32 @@ export const hasSwarm = (t: UnitType) => t.id in SWARM_DEFS
 export const swarmName = (t: UnitType) => swarm.SWARM_NAMES[t.id] ?? t.name
 
 /**
- * Prototypes of bigger, more detailed warships (proto.ts), shown only in the Codex next to the
- * battle's designs, at the size classes in sizes.ts (protoType). Built with the style PROTO.
+ * The Big redesigns (proto.ts, proto-droid.ts, proto-swarm.ts): what every ship above strike craft
+ * looks like under Big ship sizes (sizes.ts). A Big unit type (bigType) is built with these, the
+ * Swarm's in the style SWARM.
  */
-const PROTO_DEFS: Record<string, ModelDef> = { 'r-frigate': proto.frigate, 'r-capital': proto.capital }
-export const PROTO = 'proto'
-export const hasProto = (t: UnitType) => t.id in PROTO_DEFS
+const BIG_DEFS: Record<string, ModelDef> = {
+  'r-gunship': proto.gunship,
+  'r-corvette': proto.corvette,
+  'r-frigate': proto.frigate,
+  'r-cruiser': proto.cruiser,
+  'r-capital': proto.capital,
+  'd-gunship': protoDroid.gunship,
+  'd-ion': protoDroid.ion,
+  'd-frigate': protoDroid.frigate,
+  'd-cruiser': protoDroid.cruiser,
+  'd-capital': protoDroid.capital,
+}
+const SWARM_BIG_DEFS: Record<string, ModelDef> = {
+  'd-gunship': protoSwarm.gunship,
+  'd-ion': protoSwarm.ion,
+  'd-frigate': protoSwarm.frigate,
+  'd-cruiser': protoSwarm.cruiser,
+  'd-capital': protoSwarm.capital,
+}
+/** Whether a unit has a Big redesign of its own (in the style `style`), rather than its Classic
+ * model drawn bigger. */
+export const hasBigDesign = (t: UnitType, style = '') => t.id in (style === SWARM ? SWARM_BIG_DEFS : BIG_DEFS)
 
 export const hasModel = (t: UnitType) => t.id in DEFS
 
@@ -86,7 +108,7 @@ export function modelFor(t: UnitType, style = ''): Model | null {
   let byStyle = built.get(t)
   if (!byStyle) built.set(t, (byStyle = new Map()))
   let m = byStyle.get(style)
-  if (m === undefined) byStyle.set(style, (m = (style === SWARM ? hasSwarm(t) : style === PROTO ? hasProto(t) : hasModel(t)) ? buildModel(t, style || undefined) : null))
+  if (m === undefined) byStyle.set(style, (m = (style === SWARM ? hasSwarm(t) : hasModel(t)) ? buildModel(t, style || undefined) : null))
   return m
 }
 
@@ -122,8 +144,9 @@ const DETACH_BY_DEFAULT: MountDesign[] = ['flak']
 
 export function buildModel(t: UnitType, style?: string): Model {
   const concept = style === SWARM
-  const def = concept ? SWARM_DEFS[t.id] : style === PROTO ? PROTO_DEFS[t.id] : DEFS[t.id]
-  if (!def) throw new Error(`No ${concept ? 'Swarm ' : style === PROTO ? 'prototype ' : ''}model for ${t.id}`)
+  // A Big unit type (sizes.ts) is built with its Big redesign where it has one.
+  const def = (t.big ? (concept ? SWARM_BIG_DEFS : BIG_DEFS)[t.id] : undefined) ?? (concept ? SWARM_DEFS : DEFS)[t.id]
+  if (!def) throw new Error(`No ${concept ? 'Swarm ' : ''}model for ${t.id}`)
   let w: number
   let h: number
   let level = 1
@@ -140,7 +163,7 @@ export function buildModel(t: UnitType, style?: string): Model {
     h = dh * k
   }
   const long = Math.max(w, h)
-  const spec = def({ t, w, h, level, style: concept || style === PROTO ? undefined : style })
+  const spec = def({ t, w, h, level, style: concept ? undefined : style })
   const grid = (gx: number, gy: number): Pt => [(gx / 10 - 0.5) * w, (gy / 10 - 0.5) * h]
   const mounts: Mount[] = t.hardpoints.map((hp, i) => {
     const [x, y] = grid(hp.x, hp.y)
@@ -148,18 +171,14 @@ export function buildModel(t: UnitType, style?: string): Model {
     const { scale = 1, ...over } = spec.mount?.(i) ?? {}
     return { hp: i, x, y, r: (((hp.s ?? 0.05) * long) / 2) * scale, design, turns: !!hp.weapon, detach: DETACH_BY_DEFAULT.includes(design), ...over }
   })
-  for (const e of spec.extraMounts ?? []) {
-    const real = t.hardpoints[e.maps]
-    mounts.push({ hp: e.maps, x: e.x, y: e.y, r: e.r, design: e.design, turns: !!real?.weapon, detach: e.detach ?? DETACH_BY_DEFAULT.includes(e.design), extra: true })
-  }
   // Every mount sits in a socket: a dark recess in the plating, under the superstructure.
   const sockets: Part[] = mounts
     .filter((m) => m.design !== 'engine')
-    .map((m, i) => ({ id: m.extra ? `socketx${i}` : `socket${m.hp}`, pts: circle(m.x, m.y, m.r * 1.1, 18), tone: 'dark' as const, z: 0.5, details: [{ k: 'line' as const, pts: circle(m.x, m.y, m.r * 0.92, 16) }] }))
+    .map((m) => ({ id: `socket${m.hp}`, pts: circle(m.x, m.y, m.r * 1.1, 18), tone: 'dark' as const, z: 0.5, details: [{ k: 'line' as const, pts: circle(m.x, m.y, m.r * 0.92, 16) }] }))
   const parts = [...spec.parts.filter((p) => (p.level ?? 1) <= level), ...sockets].sort((a, b) => a.z - b.z)
   // A mining platform with its Shield generator fitted is a type of its own with one more socket,
   // so its key names its modules too, as a station's does.
-  const key = `${t.tier === 'station' ? `${t.id}:${level}:${t.hardpoints.map((p) => p.key).join(',')}` : t.tier === 'mine' ? `${t.id}:${t.hardpoints.map((p) => p.key).join(',')}` : t.id}${style ? `:${style}` : ''}`
+  const key = `${t.tier === 'station' ? `${t.id}:${level}:${t.hardpoints.map((p) => p.key).join(',')}` : t.tier === 'mine' ? `${t.id}:${t.hardpoints.map((p) => p.key).join(',')}` : t.id}${t.big ? ':big' : ''}${style ? `:${style}` : ''}`
   const seed = seedOf(t.tier === 'station' ? `${t.id}:${level}` : t.id)
   return {
     key,
@@ -401,8 +420,6 @@ export function pickAt(m: Model, x: number, y: number, detached: number, minR = 
   let bestD = Infinity
   for (let i = m.mounts.length - 1; i >= 0; i--) {
     const mt = m.mounts[i]
-    // Turrets for show answer to no hardpoint of their own.
-    if (mt.extra) continue
     const d = Math.hypot(x - mt.x, y - mt.y)
     if (mt.design !== 'engine' && d < Math.max(mt.r * 1.15, minR) && d < bestD) (best = i), (bestD = d)
   }

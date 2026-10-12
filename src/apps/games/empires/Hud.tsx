@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { bigType, sizedType, type ShipSizes } from './models/sizes.ts'
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { battleLayout, type LayoutStore } from './layout'
 import {
   ABILITIES, DEFENSE_WING, FACTIONS, LEVEL_UP, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, moduleSprite, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
@@ -10,7 +11,7 @@ import { thumbnail } from './models/paint.ts'
 import { spriteUrl } from './render'
 import { keyName, useSettings } from './settings'
 import { LongPress, isTouch, shiftOf, useCoarse, useLongPressWheel } from './Touch'
-import { FIELD_DAMAGE, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
+import { FIELD_DAMAGE, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, typeOf, cantResearch, cantSite, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard, research and game speed; and along the bottom the tactical map, a details panel for
@@ -113,7 +114,7 @@ export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
 export function Tips({ live }: { live?: (id: number) => Unit | undefined } = {}) {
   const anchor = useRef<HTMLSpanElement>(null)
   const box = useRef<HTMLDivElement>(null)
-  const [tip, setTip] = useState<{ text: string; unit?: string; uid?: number; who?: string; rel?: string; x: number; top: number; bottom: number } | null>(null)
+  const [tip, setTip] = useState<{ text: string; unit?: string; big?: boolean; uid?: number; who?: string; rel?: string; x: number; top: number; bottom: number } | null>(null)
   useEffect(() => {
     const root = anchor.current?.parentElement
     if (!root) return
@@ -133,7 +134,7 @@ export function Tips({ live }: { live?: (id: number) => Unit | undefined } = {})
       const r = cur.getBoundingClientRect()
       const rr = root.getBoundingClientRect()
       setTip({
-        text: text ?? '', unit: unit ?? undefined, uid: Number(cur.getAttribute('data-tip-uid')) || undefined, who: cur.getAttribute('data-tip-who') ?? undefined, rel: cur.getAttribute('data-tip-rel') ?? undefined,
+        text: text ?? '', unit: unit ?? undefined, big: cur.hasAttribute('data-tip-big'), uid: Number(cur.getAttribute('data-tip-uid')) || undefined, who: cur.getAttribute('data-tip-who') ?? undefined, rel: cur.getAttribute('data-tip-rel') ?? undefined,
         x: r.left + r.width / 2 - rr.left, top: r.top - rr.top, bottom: r.bottom - rr.top,
       })
     }
@@ -215,7 +216,7 @@ export function Tips({ live }: { live?: (id: number) => Unit | undefined } = {})
       <span ref={anchor} hidden />
       {tip && (
         <div ref={box} className={`ew-tip ${tip.unit ? 'is-unit' : ''}`} role="tooltip" style={{ visibility: 'hidden' }}>
-          {tip.unit && UNIT[tip.unit] ? <UnitIntel t={UNIT[tip.unit]} who={tip.who} rel={tip.rel} note={tip.text || undefined} live={tip.uid ? live?.(tip.uid) : undefined} /> : tip.text}
+          {tip.unit && UNIT[tip.unit] ? <UnitIntel t={sizedType(tip.unit, tip.big ? 'big' : 'classic')} who={tip.who} rel={tip.rel} note={tip.text || undefined} live={tip.uid ? live?.(tip.uid) : undefined} /> : tip.text}
         </div>
       )}
     </>
@@ -263,10 +264,16 @@ const THUMB_PX = 192
  * A unit's picture by its sprite name, for the menus and tiles that only know the sprite: a still of
  * its procedural model where it has one and the setting is on, else the sprite itself.
  */
+/** The ship sizes the screen's battle or campaign is played at (models/sizes.ts), so pictures that
+ * only know a sprite show the ships as they are in it. */
+export const SizesContext = createContext<ShipSizes | undefined>(undefined)
+
 export function useUnitArt() {
   const { models } = useSettings()
+  const sizes = useContext(SizesContext)
   return (sprite: string) => {
-    const t = models ? typeOfSprite(sprite) : null
+    const plain = models ? typeOfSprite(sprite) : null
+    const t = plain && sizes === 'big' ? bigType(plain) : plain
     const m = t ? modelFor(t) : null
     return m ? thumbnail(m, THUMB_PX).url : spriteUrl(sprite)
   }
@@ -823,7 +830,8 @@ function StationDetail(p: DetailProps & { st: Unit }) {
   const { w, me, st, hud, faction } = p
   // Ships the station isn't upgraded for yet stay out of the shipyard, unless the setting shows them.
   const { lockedShips } = useSettings()
-  const all = buildable(faction).filter((t) => lockedShips || t.level <= hud.level)
+  // At the battle's ship sizes, so the cards and their tooltips show the numbers the sim uses.
+  const all = buildable(faction).map((t) => typeOf(w, t.id)).filter((t) => lockedShips || t.level <= hud.level)
   const queued = (id: string) => hud.queue.filter((q) => q.unit === id).length
   // Warships and strike craft on separate pages, picked on the left; the choice is remembered.
   const [page, setPage] = useState<'warships' | 'strike'>(() => {
@@ -1378,6 +1386,8 @@ export function ownerTag(w: World, me: Owner, owner: Owner) {
 /** The attributes that make an element's hover show the unit card for type `t`. */
 export const unitTip = (t: UnitType, who: { who: string; rel: string }, note?: string, live?: Unit) => ({
   'data-tip-unit': t.id,
+  // The card shows the type's numbers at the battle's ship sizes (models/sizes.ts).
+  ...(t.big ? { 'data-tip-big': '' } : {}),
   'data-tip-who': who.who,
   'data-tip-rel': who.rel,
   ...(note ? { 'data-tip': note } : {}),
@@ -1444,7 +1454,7 @@ export function UnitIntel({ t, who, rel, note, live }: { t: UnitType; who?: stri
       <dl className="ew-intel-stats">
         <div><dt>Hull{n > 1 ? ' (each)' : ''}</dt><dd>{Math.round(live ? live.hull : hull)}{live ? ` / ${Math.round(hull)}` : ''}</dd></div>
         <div><dt>Shields</dt><dd>{t.shield ? `${Math.round(live ? live.shield : t.shield)}${live ? ` / ${Math.round(shieldFull(live))}` : ''} · +${t.regen}/s` : 'none'}</dd></div>
-        <div><dt>Speed</dt><dd>{t.speed || 'fixed'}</dd></div>
+        <div><dt>Speed</dt><dd>{Math.round(t.speed) || 'fixed'}</dd></div>
         <div><dt>Range</dt><dd>{RANGE(t) || '—'}</dd></div>
         <div><dt>Sensors</dt><dd>{t.sensor}</dd></div>
         <div><dt>Fleet size</dt><dd>{t.pop}</dd></div>

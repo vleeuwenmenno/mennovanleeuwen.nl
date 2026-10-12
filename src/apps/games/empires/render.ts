@@ -3,6 +3,7 @@ import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
 import { RETREAT_TIME, atHome, building, foes, hpPos, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 import { BREAK_WEIGHTS, hullState, modelFor, unitForSprite, type HullState, type Model } from './models/index.ts'
+import { bigType, sizedType } from './models/sizes.ts'
 import { ModelFx } from './models/fx.ts'
 import { PALETTES } from './models/kit.ts'
 import { drawHull, drawMounts, liveEngines } from './models/paint.ts'
@@ -101,6 +102,10 @@ type CloudLayer = { img: HTMLCanvasElement; x: number; y: number; r: number; spi
 type TerrainArt = { map: MapDef; clouds: CloudLayer[]; rocks: FieldRock[]; fields: Patch[] }
 
 const TAU = Math.PI * 2
+/** A bolt's length and width in world units, by kind. Under Big ship sizes they are slimmer and
+ * longer, so they read as thin streaks of light next to the big hulls rather than fat dashes. */
+const BOLTS = { turbo: [46, 5], flak: [10, 2.2], laser: [22, 2.6] } as const
+const BOLTS_BIG = { turbo: [72, 3], flak: [15, 1.5], laser: [30, 1.7] } as const
 /** An undamaged hull. */
 const FRESH: HullState = { detached: 0, scorch: 0, variant: 0 }
 
@@ -300,6 +305,12 @@ export class Renderer {
   private deaths: { x: number; y: number; det: number; at: number }[] = []
   /** Whether units are drawn with their models this frame (the setting). */
   private modelsOn = true
+  /** The battle's ship sizes (sizes.ts), as of the last frame. */
+  private sizes: World['sizes'] = undefined
+  /** A unit type by id, at this battle's ship sizes. */
+  private typeOf(id: string) {
+    return sizedType(id, this.sizes)
+  }
 
   constructor(sprites: string[]) {
     for (const s of sprites) this.imgs.set(s, load(spriteUrl(s)))
@@ -383,6 +394,7 @@ export class Renderer {
 
   /** Turns the sim's events into effects. Only what the viewer can see makes sparks. */
   consume(events: SimEvent[], w: World, me: Owner) {
+    this.sizes = w.sizes
     const seen = (x: number, y: number) => {
       const team = w.players[me].team
       for (const u of w.units) if (w.players[u.owner].team === team && (u.x - x) ** 2 + (u.y - y) ** 2 < sensorOf(u) ** 2) return true
@@ -425,18 +437,18 @@ export class Renderer {
         }
       } else if (e.k === 'warp') {
         if (e.owner !== me && !seen(e.x, e.y)) continue
-        const t = UNIT[e.unit]
+        const t = this.typeOf(e.unit)
         this.warps.push({ x: e.x, y: e.y, a: e.a, size: t.size, sprite: t.sprite, unit: t.id, glow: FACTIONS[t.faction].glow, start: this.clock, at: this.clock + e.delay })
       } else if (e.k === 'retreated') {
         if (e.owner !== me && !seen(e.x, e.y)) continue
-        const t = UNIT[e.unit]
+        const t = this.typeOf(e.unit)
         const glow = FACTIONS[t.faction].glow
         this.departs.push({ x: e.x, y: e.y, a: e.a, size: t.size, sprite: t.sprite, unit: t.id, glow, start: this.clock })
         this.add({ kind: 'flash', x: e.x, y: e.y, life: 0.3, size: t.size * 0.7, grow: t.size * 0.4, color: glow })
         this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.6, size: t.size * 0.3, grow: t.size * 1.8, color: '#e8f6ff' })
       } else if (e.k === 'arrived') {
         if (e.owner !== me && !seen(e.x, e.y)) continue
-        this.arrival(e.x, e.y, e.a, UNIT[e.unit].size, FACTIONS[UNIT[e.unit].faction].glow, e.field)
+        this.arrival(e.x, e.y, e.a, this.typeOf(e.unit).size, FACTIONS[UNIT[e.unit].faction].glow, e.field)
       } else if (e.k === 'rankUp') {
         this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.8, size: 20, grow: 90, color: '#f2c14a' })
       } else if (e.k === 'hpdown') {
@@ -501,6 +513,7 @@ export class Renderer {
   }
 
   draw(ctx: CanvasRenderingContext2D, w: World, cam: Camera, vw: number, vh: number, view: View, dt: number) {
+    this.sizes = w.sizes
     this.step(dt, w)
     // Switched back on: start tracking afresh, so nothing that happened meanwhile bursts now.
     if (view.models !== false && !this.modelsOn) this.tracked.clear()
@@ -1113,8 +1126,7 @@ export class Renderer {
         ctx.fill()
         continue
       }
-      const len = s.kind === 'turbo' ? 46 : s.kind === 'flak' ? 10 : 22
-      const width = s.kind === 'turbo' ? 5 : s.kind === 'flak' ? 2.2 : 2.6
+      const [len, width] = (w.sizes === 'big' ? BOLTS_BIG : BOLTS)[s.kind === 'turbo' ? 'turbo' : s.kind === 'flak' ? 'flak' : 'laser']
       const min = 1.2 / z
       ctx.strokeStyle = s.kind === 'flak' ? '#ffcf70' : col
       ctx.globalAlpha = 0.45
@@ -1386,7 +1398,7 @@ export class Renderer {
   /** A ship type drawn whole and undamaged (its model where it has one and models are on, else its
    * sprite), optionally stretched along its length: for jumps into and out of hyperspace. */
   private drawShip(ctx: CanvasRenderingContext2D, unit: string, sprite: string, x: number, y: number, rot: number, size: number, z: number, alpha: number, stretch?: [number, number]) {
-    const t = UNIT[unit]
+    const t = UNIT[unit] ? this.typeOf(unit) : undefined
     const m = this.modelsOn && t ? modelFor(t) : null
     const zdpr = z * (window.devicePixelRatio || 1)
     if (!stretch) {
@@ -1455,8 +1467,9 @@ export class Renderer {
     for (const h of w.wrecks) {
       listed.add(h.id)
       if (this.fx.has(h.id)) continue
-      const t = unitForSprite(h.sprite)
-      if (!t) continue
+      const plain = unitForSprite(h.sprite)
+      if (!plain) continue
+      const t = h.big ? bigType(plain) : plain
       const d = this.deaths.find((q) => Math.abs(q.x - h.x) < 1 && Math.abs(q.y - h.y) < 1)
       this.fx.anchor(h.id, modelFor(t)!, t.tier, h.x, h.y, h.rot, h.size, w.map.seed, d?.det)
     }

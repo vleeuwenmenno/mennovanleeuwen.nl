@@ -15,12 +15,15 @@
 //    engine hardpoint carries that engine's glow; strike craft, gunships and structures burst into
 //    three or more real fragments.
 //
-// Every check runs on the bigger prototypes (proto.ts) too, and their turrets for show must each
-// stand for a real gun. Every check runs on the Swarm concept designs too (swarm.ts, shown only in the Codex): each droid
+// Every check runs on every ship as it is under Big ship sizes (models/sizes.ts bigType) too, the
+// Swarm's included: every ship bigger than strike craft has a Big redesign (proto*.ts), every one
+// with hardpoints has a Big layout, and its turrets have room between them. Every check runs on the Swarm concept designs too (swarm.ts, shown only in the Codex): each droid
 // unit built in the Swarm style, on that unit's own box and hardpoints.
 
 import { STATIONS, TECHS, UNITS, mineType, stationType, type UnitType } from '../src/apps/games/empires/data.ts'
-import { BREAK_WEIGHTS, PROTO, SWARM, breakOutcome, breakPieces, buildModel, hasModel, hasProto, hasSwarm, hullState, modelStyles, onHull, wreckState } from '../src/apps/games/empires/models/index.ts'
+import { BIG_LAYOUT, bigType } from '../src/apps/games/empires/models/sizes.ts'
+import { inPart } from '../src/apps/games/empires/models/kit.ts'
+import { BREAK_WEIGHTS, SWARM, breakOutcome, breakPieces, buildModel, hasBigDesign, hasModel, hasSwarm, hullState, modelStyles, onHull, wreckState } from '../src/apps/games/empires/models/index.ts'
 
 let failed = 0
 const fail = (msg: string) => {
@@ -51,17 +54,29 @@ for (const t of UNITS) {
 console.log(`Models: ${types.length} unit types (${UNITS.filter(hasModel).map((t) => t.id).join(', ')})`)
 // Models are cached per look by key: two different types must never share one.
 const keys = new Map<string, UnitType>()
-for (const [t, style] of types.flatMap((t) => [[t, undefined], ...(hasSwarm(t) ? [[t, SWARM]] : []), ...(hasProto(t) ? [[t, PROTO]] : [])] as [UnitType, string | undefined][])) {
+/** Every look of a unit type: as it is, its design variants, its Swarm concept, and as it is under
+ * Big (the redesign for the ships that have one, else scaled up). */
+const looksOf = (t: UnitType, variants: boolean) =>
+  [t, ...(bigType(t) !== t ? [bigType(t)] : [])].flatMap((u) => [[u, undefined], ...(variants ? modelStyles(u).map((s) => [u, s]) : []), ...(hasSwarm(u) ? [[u, SWARM]] : [])]) as [UnitType, string | undefined][]
+for (const [t, style] of types.flatMap((t) => looksOf(t, false))) {
   const k = buildModel(t, style).key
   const other = keys.get(k)
   ok(!other || (other.id === t.id && other.hardpoints.length === t.hardpoints.length), `${t.id}: model key ${k} is shared with another look`)
   keys.set(k, t)
 }
 
-const looks = types.flatMap((t) => [[t, undefined], ...modelStyles(t).map((s) => [t, s]), ...(hasSwarm(t) ? [[t, SWARM]] : []), ...(hasProto(t) ? [[t, PROTO]] : [])] as [UnitType, string | undefined][])
-console.log(`Looks: ${looks.length} (${looks.filter(([, s]) => s === SWARM).length} of them Swarm concepts, ${looks.filter(([, s]) => s === PROTO).length} bigger prototypes)`)
+const looks = types.flatMap((t) => looksOf(t, true))
+console.log(`Looks: ${looks.length} (${looks.filter(([, s]) => s === SWARM).length} of them Swarm concepts, ${looks.filter(([t]) => t.big).length} Big redesigns)`)
+// Every ship bigger than strike craft has a Big size and redesign, in every look it has (the Swarm's
+// too), and a Big layout for its hardpoints, one entry each.
+for (const t of UNITS.filter((u) => u.tier !== 'fighter' && u.tier !== 'station' && u.tier !== 'mine' && u.tier !== 'defense')) {
+  ok(bigType(t) !== t, `${t.id}: no Big size`)
+  ok(hasBigDesign(t), `${t.id}: no Big redesign`)
+  if (hasSwarm(t)) ok(hasBigDesign(t, SWARM), `${t.id}: no Big redesign of its Swarm concept`)
+  if (t.hardpoints.length) ok(BIG_LAYOUT[t.id]?.length === t.hardpoints.length, `${t.id}: its Big layout has ${BIG_LAYOUT[t.id]?.length ?? 0} entries for ${t.hardpoints.length} hardpoints`)
+}
 for (const [t, style] of looks) {
-  const label = `${t.id}${t.tier === 'station' ? ` (${t.sprite}, ${t.hardpoints.length} modules)` : ''}${style ? ` [${style}]` : ''}`
+  const label = `${t.id}${t.tier === 'station' ? ` (${t.sprite}, ${t.hardpoints.length} modules)` : ''}${t.big ? ' [big]' : ''}${style ? ` [${style}]` : ''}`
   let m
   try {
     m = buildModel(t, style)
@@ -80,15 +95,23 @@ for (const [t, style] of looks) {
     ok(p.pts.every(([x, y]) => Math.abs(x) <= m.w / 2 + edge && Math.abs(y) <= m.h / 2 + edge), `${label}: part ${p.id} sticks out past the bitmap's margin`)
   }
   ok(new Set(m.parts.map((p) => p.id)).size === m.parts.length, `${label}: part ids are not unique`)
-  // 2. Hardpoints.
-  const real = m.mounts.filter((mt) => !mt.extra)
-  ok(real.length === t.hardpoints.length && m.mounts.slice(0, real.length).every((mt) => !mt.extra), `${label}: ${real.length} mounts for ${t.hardpoints.length} hardpoints (the real ones first)`)
-  // Turrets for show stand for a real gun: on the hull, the same kind of mount as a gun the unit has.
-  for (const mt of m.mounts.filter((x) => x.extra)) {
-    const h = t.hardpoints[mt.hp]
-    ok(!!h, `${label}: an extra mount stands for hardpoint ${mt.hp}, which isn't there`)
-    if (h) ok(!!h.weapon && mt.turns, `${label}: an extra mount stands for ${h.kind} ${mt.hp}, which has no gun`)
-    ok(onHull(m, mt.x, mt.y), `${label}: an extra ${mt.design} mount at ${mt.x.toFixed(1)},${mt.y.toFixed(1)} is off the hull`)
+  // 2. Hardpoints: one mount each, in order, nothing more.
+  const real = m.mounts
+  ok(real.length === t.hardpoints.length, `${label}: ${real.length} mounts for ${t.hardpoints.length} hardpoints`)
+  // A Big redesign spreads its turrets out: no two closer than their radii together and half again
+  // (room for the pad round each), and none on a part that can be shot off.
+  if (t.big && hasBigDesign(t, style)) {
+    const guns = m.mounts.filter((mt) => mt.design !== 'engine')
+    for (let i = 0; i < guns.length; i++)
+      for (let j = i + 1; j < guns.length; j++) {
+        const [a, b] = [guns[i], guns[j]]
+        const d = Math.hypot(a.x - b.x, a.y - b.y)
+        ok(d >= (a.r + b.r) * 1.5, `${label}: mounts ${a.hp + 1} and ${b.hp + 1} are ${d.toFixed(1)} apart, crowded (radii ${a.r.toFixed(1)} + ${b.r.toFixed(1)})`)
+      }
+    for (const mt of guns) {
+      const under = m.parts.filter((p) => p.pts.length >= 3 && p.detach && !p.id.startsWith('socket') && inPart(p, mt.x, mt.y))
+      ok(!under.length, `${label}: mount ${mt.hp + 1} sits on ${under.map((p) => p.id).join(', ')}, which can be shot off`)
+    }
   }
   real.forEach((mt, i) => {
     const h = t.hardpoints[i]
