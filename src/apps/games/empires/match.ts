@@ -1,4 +1,4 @@
-import { DIFFICULTY, newBrain, think, type Brain, type Difficulty } from './ai.ts'
+import { DIFFICULTY, newBrain, profileOf, think, type Brain, type Difficulty, type Profile } from './ai.ts'
 import { runCmd, type Cmd } from './commands.ts'
 import { isShip, type FactionId } from './data.ts'
 import { GENERATED, MAP, MAPS, defaultArea, generateMap, type MapDef, type MapRules, type Pt } from './maps.ts'
@@ -9,7 +9,9 @@ import { STEP, autoStart, newWorld, tick, type Owner, type World } from './sim.t
 // built from the lobby, and how one turn (the orders given in one tick, then the AI, then the
 // tick itself) moves it on. Both sides run exactly this, in this order, so they never drift.
 
-export type MatchSeat = { kind: 'human' | 'ai'; player: string; name: string; faction: FactionId; team: 0 | 1; spawn: number; difficulty: Difficulty }
+/** `profile`: how an AI seat plays (ai.ts PROFILES); matches from before profiles have none, and
+ * their AI seats play Balanced. Part of the match config, so every copy runs the same admirals. */
+export type MatchSeat = { kind: 'human' | 'ai'; player: string; name: string; faction: FactionId; team: 0 | 1; spawn: number; difficulty: Difficulty; profile?: Profile }
 /** `sizes`: the ship sizes picked in the lobby (models/sizes.ts); left out (and in matches from
  * before there was a choice), Classic. */
 export type MatchInfo = { id: string; seed: number; map: string; gen: MapRules; credits: number; sizes?: ShipSizes; seats: MatchSeat[] }
@@ -31,7 +33,7 @@ export function matchWorld(m: MatchInfo): World {
   return newWorld(map, m.seats.map((s, i) => seat(s, starts[i])), opts)
 }
 
-export const matchBrains = (m: MatchInfo): Brain[] => m.seats.flatMap((s, i) => (s.kind === 'ai' ? [newBrain(i, s.difficulty)] : []))
+export const matchBrains = (m: MatchInfo): Brain[] => m.seats.flatMap((s, i) => (s.kind === 'ai' ? [newBrain(i, s.difficulty, profileOf(s.profile))] : []))
 
 /** Hands every ship of seat `from` (not its station, mines or defenses) and its credits to seat
  * `to`, a teammate. The base stays with `from`, for an AI admiral to run. Fighters out of a hangar

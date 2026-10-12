@@ -1,11 +1,11 @@
 import { SHIP_SIZE_BLURB, SHIP_SIZE_NAMES, SHIP_SIZES, type ShipSizes } from './models/sizes.ts'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { DIFFICULTY, type Difficulty } from './ai'
+import { DIFFICULTY, PROFILES, profileOf } from './ai'
 import { CREDIT_STEPS, FACTIONS, type FactionId } from './data'
 import { Frame, Icon, Tips } from './Hud'
 import { GENERATED, MAP, MAPS, MAX_SEED, generateMap, type MapDef } from './maps'
-import { GenControls, MapCard, MapLegend, MapPreview, Modal, Seg, mapSize, slotColor, type Slot } from './Menus'
+import { AiPicker, GenControls, MapCard, MapLegend, MapPreview, Modal, Seg, mapSize, slotColor, type Slot } from './Menus'
 import { NAME_MAX, nameProblem, randomName, tidyName } from './names'
 import { battleToRejoin, mpName, type Net, type NetView } from './net'
 import { CHAT_MAX, type MpLobby, type MpSlot, type SlotPatch } from './protocol'
@@ -283,6 +283,7 @@ function Room({ v, lobby, net, sound, children }: { v: NetView; lobby: MpLobby; 
         faction: s.faction,
         team: s.team === myTeam ? 0 : 1,
         difficulty: s.difficulty,
+        profile: profileOf(s.profile),
       })),
     [lobby.slots, mine, myTeam],
   )
@@ -471,15 +472,11 @@ function SlotRow({ s, i, color, me, mine, host, isHost, myTeam, onSlot, onSeat }
           </button>
           {s.kind === 'ai' ? (
             host ? (
-              <select value={s.difficulty} onChange={(e) => onSlot(i, { difficulty: e.target.value as Difficulty })} aria-label="Difficulty" data-tip={DIFFICULTY[s.difficulty].blurb}>
-                {(Object.keys(DIFFICULTY) as Difficulty[]).map((d) => (
-                  <option key={d} value={d}>
-                    {DIFFICULTY[d].name}
-                  </option>
-                ))}
-              </select>
+              <AiPicker difficulty={s.difficulty} profile={profileOf(s.profile)} onChange={(patch) => onSlot(i, patch)} />
             ) : (
-              <span className="ew-mp-state">{DIFFICULTY[s.difficulty].name} AI</span>
+              <span className="ew-mp-state" data-tip={PROFILES[profileOf(s.profile)].blurb}>
+                {DIFFICULTY[s.difficulty].name} AI · {PROFILES[profileOf(s.profile)].name}
+              </span>
             )
           ) : (
             <span className={`ew-mp-state ${s.away ? 'is-away' : isHost || s.ready ? 'is-ready' : ''}`}>{s.away ? 'Away' : isHost ? 'Host' : s.ready ? 'Ready' : 'Not ready'}</span>
