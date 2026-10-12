@@ -418,9 +418,13 @@ export class Renderer {
       } else if (e.k === 'boom') {
         if (!seen(e.x, e.y)) continue
         const color = e.owner === undefined ? '#888' : w.players[e.owner].faction === 'republic' ? '#d8d2c8' : '#c8b48c'
+        // A unit drawn with its model breaks into its own fragments (see trackModels): the old
+        // flecks of debris are only for sprites. The battle's event doesn't say which unit it was,
+        // so it is the one we were following that died on that spot.
+        const modelled = this.modelsOn && [...this.tracked.values()].some((tr) => tr.u.dead && Math.abs(tr.u.x - e.x) < 1 && Math.abs(tr.u.y - e.y) < 1)
         if (e.tier === 'fighter' || e.tier === 'gunship') {
           this.blast(e.x, e.y, e.size * 1.2)
-          this.debris(e.x, e.y, e.size * 2, color)
+          if (!modelled) this.debris(e.x, e.y, e.size * 2, color)
         } else {
           // Big ships come apart in a chain of blasts before the final one.
           const n = Math.round(3 + e.size / 40)
@@ -430,7 +434,7 @@ export class Renderer {
             this.pending.push({ at: this.clock + i * (0.12 + Math.random() * 0.1), x: e.x + Math.cos(a) * r, y: e.y + Math.sin(a) * r, size: e.size * (0.25 + Math.random() * 0.2), final: false })
           }
           this.pending.push({ at: this.clock + n * 0.17, x: e.x, y: e.y, size: e.size, final: true })
-          this.debris(e.x, e.y, e.size, color)
+          if (!modelled) this.debris(e.x, e.y, e.size, color)
         }
       } else if (e.k === 'warp') {
         if (e.owner !== me && !seen(e.x, e.y)) continue
@@ -1817,7 +1821,10 @@ export class Renderer {
     ctx.lineTo(g.x + Math.cos(g.a) * (r + 22 / z), g.y + Math.sin(g.a) * (r + 22 / z))
     ctx.stroke()
     ctx.restore()
-    this.drawSprite(ctx, g.sprite, g.x, g.y, g.a + Math.PI / 2, g.size, z, g.ok ? 0.55 : 0.3)
+    // Its model where it has one (the ghost only knows the sprite), else the sprite.
+    const t = unitForSprite(g.sprite)
+    if (t) this.drawShip(ctx, t.id, g.sprite, g.x, g.y, g.a + Math.PI / 2, g.size, z, g.ok ? 0.55 : 0.3)
+    else this.drawSprite(ctx, g.sprite, g.x, g.y, g.a + Math.PI / 2, g.size, z, g.ok ? 0.55 : 0.3)
     const label = !g.ok ? g.why : g.field ? `Asteroid field: arrives badly damaged` : null
     if (label) {
       ctx.save()

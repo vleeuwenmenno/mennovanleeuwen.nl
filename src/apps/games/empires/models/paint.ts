@@ -591,6 +591,56 @@ export function drawMounts(ctx: CanvasRenderingContext2D, m: Model, x: number, y
   }
 }
 
+// --- Thumbnails --------------------------------------------------------------------------------------
+
+const thumbs = new Map<string, { url: string; pad: number }>()
+const FRESH: HullState = { detached: 0, scorch: 0, variant: 0 }
+/**
+ * A small still picture of a unit for the menus, cards and tiles: its hull nose up under the world's
+ * light, every mount on it pointing forward (wrecked, or a burnt socket where it blew off, for each
+ * hardpoint `dead` marks). `px` is its long side in pixels. Returned as a data URL for an <img> or an
+ * SVG <image>, with `pad`: the margin painted round the unit's box (in model units, each side), so
+ * outlines aren't cut and the box can still be lined up with the hardpoints. Painted once per look
+ * and kept, so a card can ask for it on every render.
+ */
+export function thumbnail(m: Model, px: number, dead?: readonly boolean[]) {
+  const key = `${m.key}|${px}|${dead?.map((d) => (d ? 1 : 0)).join('') ?? ''}`
+  const hit = thumbs.get(key)
+  if (hit) {
+    thumbs.delete(key)
+    thumbs.set(key, hit)
+    return hit
+  }
+  const pad = m.long * 0.04
+  const ppu = px / (m.long + pad * 2)
+  const c = document.createElement('canvas')
+  c.width = Math.ceil((m.w + pad * 2) * ppu)
+  c.height = Math.ceil((m.h + pad * 2) * ppu)
+  const g = c.getContext('2d')!
+  g.translate(c.width / 2, c.height / 2)
+  g.scale(ppu, ppu)
+  const light = lightFor(0)
+  paintModel(g, m, { light, ppu, state: FRESH })
+  const pal = PALETTES[m.faction]
+  for (const mt of m.mounts) {
+    if (mt.design === 'engine') continue
+    const gone = !!dead?.[mt.hp]
+    g.save()
+    g.translate(mt.x, mt.y)
+    g.scale(mt.r, mt.r)
+    paintParts(g, mountParts(gone && mt.detach ? 'crater' : mt.design, m.faction, gone), pal, light, ppu * mt.r)
+    g.restore()
+  }
+  const out = { url: c.toDataURL('image/png'), pad }
+  thumbs.set(key, out)
+  // A few hundred is far more than any screen shows at once.
+  for (const k of thumbs.keys()) {
+    if (thumbs.size <= 400) break
+    thumbs.delete(k)
+  }
+  return out
+}
+
 /** Which of a unit's engine glows still burn: an engine part that came off takes its glow along. */
 export function liveEngines(m: Model, state: HullState) {
   const out = m.engines.map(() => true)

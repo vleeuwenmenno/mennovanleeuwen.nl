@@ -5,6 +5,8 @@ import {
   type UnitType,
 } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
+import { modelFor, typeOfSprite } from './models/index.ts'
+import { thumbnail } from './models/paint.ts'
 import { spriteUrl } from './render'
 import { keyName, useSettings } from './settings'
 import { LongPress, isTouch, shiftOf, useCoarse, useLongPressWheel } from './Touch'
@@ -253,14 +255,43 @@ export function Bar({ value, max, kind }: { value: number; max: number; kind: 'h
   )
 }
 
-/** The ship's sprite with its hardpoints marked where they sit, each showing its health. */
+/** How many pixels a menu thumbnail of a model is on its long side: sharp on a high-density screen at
+ * the size the biggest cards show it. */
+const THUMB_PX = 192
+
+/**
+ * A unit's picture by its sprite name, for the menus and tiles that only know the sprite: a still of
+ * its procedural model where it has one and the setting is on, else the sprite itself.
+ */
+export function useUnitArt() {
+  const { models } = useSettings()
+  return (sprite: string) => {
+    const t = models ? typeOfSprite(sprite) : null
+    const m = t ? modelFor(t) : null
+    return m ? thumbnail(m, THUMB_PX).url : spriteUrl(sprite)
+  }
+}
+
 /**
  * A ship or structure as it looks in battle: its hull with every module on it (shot-off ones
- * burnt), fitted into whatever box the CSS gives it like an image would be.
+ * burnt), fitted into whatever box the CSS gives it like an image would be. With procedural models
+ * on, a still of its model (the mounts painted on it); otherwise its sprite with the module sprites.
  */
 export function ShipArt({ t, hps, className = '' }: { t: UnitType; hps?: { hp: number }[]; className?: string }) {
   const W = t.aspect >= 1 ? 100 : 100 * t.aspect
   const H = t.aspect >= 1 ? 100 / t.aspect : 100
+  const { models } = useSettings()
+  const m = models ? modelFor(t) : null
+  if (m) {
+    const { url, pad } = thumbnail(m, THUMB_PX, hps?.map((h) => h.hp <= 0))
+    // The model's box is the viewBox; the picture's margin hangs over it.
+    const k = W / m.w
+    return (
+      <svg className={`ew-art ${className}`} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" overflow="visible" aria-hidden>
+        <image href={url} x={-pad * k} y={-pad * k} width={(m.w + pad * 2) * k} height={(m.h + pad * 2) * k} />
+      </svg>
+    )
+  }
   return (
     <svg className={`ew-art ${className}`} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" aria-hidden>
       <image href={spriteUrl(t.sprite)} width={W} height={H} />
@@ -543,6 +574,7 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
  * ships waiting there, and hovering shows what they are.
  */
 function FactionButton({ hud, faction, sector, onReserves }: { hud: Hud; faction: FactionId; sector: string; onReserves: () => void }) {
+  const art = useUnitArt()
   const [hover, setHover] = useState(false)
   const timer = useRef(0)
   const kinds = [...new Set(hud.reserve)]
@@ -581,7 +613,7 @@ function FactionButton({ hud, faction, sector, onReserves }: { hud: Hud; faction
             <span className="ew-fleettip-ships">
               {kinds.map((id) => (
                 <span key={id}>
-                  <img src={spriteUrl(UNIT[id].sprite)} alt="" />
+                  <img src={art(UNIT[id].sprite)} alt="" />
                   <small>×{hud.reserve.filter((x) => x === id).length}</small>
                 </span>
               ))}
@@ -1015,6 +1047,7 @@ const PROJECTORS = 5
  */
 export type QueueItem = { unit: string; left: number; total: number; reserve?: boolean; sprite?: string; name?: string }
 export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false }: { queue: QueueItem[]; onCancel: (i: number) => void; max?: number; campaign?: boolean }) {
+  const art = useUnitArt()
   return (
     <div className="ew-buildq" aria-label={`Build queue: ${queue.length} of ${max}`}>
       {Array.from({ length: PROJECTORS }, (_, i) => {
@@ -1035,8 +1068,8 @@ export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false 
             data-tip={`${name}, ${where}${i === 0 ? `: ${Math.round(done * 100)}%, ${Math.ceil(q.left)} s left` : `: waiting (${i + 1} in the queue)`}.\nClick to cancel and refund.`}>
             <span className="ew-holo-beam" />
             <span className="ew-holo-ship">
-              <img className="is-dim" src={spriteUrl(sprite)} alt="" draggable={false} />
-              <img className="is-lit" src={spriteUrl(sprite)} alt="" draggable={false} style={{ clipPath: `inset(${(1 - done) * 100}% 0 0 0)` }} />
+              <img className="is-dim" src={art(sprite)} alt="" draggable={false} />
+              <img className="is-lit" src={art(sprite)} alt="" draggable={false} style={{ clipPath: `inset(${(1 - done) * 100}% 0 0 0)` }} />
             </span>
             <span className="ew-holo-base" />
             {i === 0 && <em>{Math.ceil(q.left)}s</em>}
@@ -1054,6 +1087,7 @@ export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false 
  * the battlefield to call one in; it takes a moment to arrive.
  */
 export function ReserveTray({ reserve, onGrab, onClose }: { reserve: string[]; onGrab: (id: string, e: React.PointerEvent) => void; onClose: () => void }) {
+  const art = useUnitArt()
   const kinds = [...new Set(reserve)]
   return (
     <Floating id="reserve" title="Fleet inventory" at={{ left: 12, top: 56 }} onClose={onClose} className="ew-reserve">
@@ -1062,7 +1096,7 @@ export function ReserveTray({ reserve, onGrab, onClose }: { reserve: string[]; o
           <div className="ew-reserve-tiles">
             {kinds.map((id) => (
               <button key={id} className="ew-reserve-tile" onPointerDown={(e) => onGrab(id, e)} data-tip={`${UNIT[id].name}: drag onto the battlefield to call one in`}>
-                <img src={spriteUrl(UNIT[id].sprite)} alt="" draggable={false} />
+                <img src={art(UNIT[id].sprite)} alt="" draggable={false} />
                 <span>{UNIT[id].name}</span>
                 <b>×{reserve.filter((x) => x === id).length}</b>
               </button>
@@ -1469,6 +1503,7 @@ function orderText(w: World, u: Unit) {
 }
 
 function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
+  const art = useUnitArt()
   const { u, squad, me, w } = p
   const coarse = useCoarse()
   const t = u.t
@@ -1477,7 +1512,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
   return (
     <Frame className={`ew-detail is-unit ${mine ? '' : ally ? 'is-ally' : 'is-enemy'}`}>
       <div className="ew-detail-side">
-        {u.hps.length ? <Schematic u={u} size={104} tip={unitTip(t, ownerTag(w, me, u.owner), undefined, u)} /> : <img className="ew-portrait" src={spriteUrl(t.sprite)} alt="" {...unitTip(t, ownerTag(w, me, u.owner), undefined, u)} />}
+        {u.hps.length ? <Schematic u={u} size={104} tip={unitTip(t, ownerTag(w, me, u.owner), undefined, u)} /> : <img className="ew-portrait" src={art(t.sprite)} alt="" {...unitTip(t, ownerTag(w, me, u.owner), undefined, u)} />}
       </div>
       <div className="ew-detail-main">
         <header className="ew-unithead">
@@ -1517,6 +1552,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
 
 /** Several kinds of ship: a row per type. */
 function GroupDetail(p: DetailProps) {
+  const art = useUnitArt()
   const { sel } = p
   const coarse = useCoarse()
   const types = new Map<string, Unit[]>()
@@ -1534,7 +1570,7 @@ function GroupDetail(p: DetailProps) {
             const hull = us.reduce((s, u) => s + u.hull, 0) / us.reduce((s, u) => s + u.hullMax, 0)
             return (
               <button key={t.id} className="ew-fleetrow" onClick={(e) => p.onOnly(t.id, shiftOf(e))} data-tip={t.blurb}>
-                <img src={spriteUrl(t.sprite)} alt="" />
+                <img src={art(t.sprite)} alt="" />
                 <strong>{t.name}</strong>
                 <b>×{us.length}</b>
                 <Bar value={hull} max={1} kind="hull" />
@@ -1560,6 +1596,7 @@ export const nextStance = (s: Stance) => STANCES[(STANCES.indexOf(s) + 1) % STAN
 
 /** A control group's button: a tap selects it; on touch a long press sets it to the selection. */
 function GroupButton({ g, onGroup, onAssign, canAssign }: { g: Hud['groups'][number]; onGroup: (key: string) => void; onAssign?: (key: string, clear?: boolean) => void; canAssign: boolean }) {
+  const art = useUnitArt()
   const press = useLongPressWheel(
     () => [
       { id: 'set', label: 'Set to selection', icon: <Icon name="army" size={18} />, disabled: !canAssign && 'Select some of ours first', run: () => onAssign?.(g.key) },
@@ -1570,7 +1607,7 @@ function GroupButton({ g, onGroup, onAssign, canAssign }: { g: Hud['groups'][num
   return (
     <button {...(onAssign ? press : {})} onClick={() => onGroup(g.key)} data-tip={`Group ${g.key}: ${g.count} ships (press ${g.key}, twice to look)`}>
       <b>{g.key}</b>
-      {g.sprite && <img src={spriteUrl(g.sprite)} alt="" />}
+      {g.sprite && <img src={art(g.sprite)} alt="" />}
       <small>{g.count}</small>
     </button>
   )
@@ -1599,6 +1636,7 @@ export function SelectionPanel({ w, sel, me, mode, onCommand, onPick, groups, on
   onCommand: (c: Command) => void
   onPick: (id: number, shift: boolean) => void
 }) {
+  const art = useUnitArt()
   const mine = sel.filter((u) => u.owner === me)
   const ships = mine.filter((u) => isShip(u.t))
   const station = mine.some((u) => u.t.tier === 'station')
@@ -1652,7 +1690,7 @@ export function SelectionPanel({ w, sel, me, mode, onCommand, onPick, groups, on
           const hull = g.reduce((s, x) => s + x.hull, 0) / g.reduce((s, x) => s + x.hullMax, 0)
           return (
             <button key={u.id} className={`ew-seltile ${u.owner === me ? '' : 'is-enemy'}`} onClick={(e) => onPick(u.id, shiftOf(e))} {...unitTip(u.t, ownerTag(w, me, u.owner), `${g.length > 1 ? `${g.length} selected. ` : ''}Click to select only this, Shift-click to drop it.`, g.length === 1 ? u : undefined)}>
-              <img src={spriteUrl(u.t.sprite)} alt="" />
+              <img src={art(u.t.sprite)} alt="" />
               {g.length > 1 && <em>{g.length}</em>}
               <Bar value={hull} max={1} kind="hull" />
             </button>
