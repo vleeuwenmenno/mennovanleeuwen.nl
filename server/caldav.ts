@@ -153,7 +153,8 @@ const hrefIn = (body: string, name: string) => {
 
 const resolve = (base: string, href: string) => new URL(unescapeXml(href), base).href
 
-async function discover(account: Account): Promise<Calendar[]> {
+/** The account's calendar home: the collection its calendars (and task lists) are in. */
+async function calendarHome(account: Account): Promise<string> {
   const D = 'xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"'
   // The principal, from the URL given or from /.well-known/caldav.
   let principal: string | null = null
@@ -173,7 +174,12 @@ async function discover(account: Account): Promise<Calendar[]> {
   const homeXml = await dav(account, 'PROPFIND', principal, '0', `<d:propfind ${D}><d:prop><c:calendar-home-set/></d:prop></d:propfind>`)
   const homeHref = hrefIn(homeXml, 'calendar-home-set')
   if (!homeHref) throw new Error('That account has no calendars')
-  const home = resolve(principal, homeHref)
+  return resolve(principal, homeHref)
+}
+
+async function discover(account: Account): Promise<Calendar[]> {
+  const D = 'xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"'
+  const home = await calendarHome(account)
   const list = await dav(
     account,
     'PROPFIND',
@@ -837,3 +843,10 @@ export async function moveCaldavEvent(user: User, ref: CaldavRef, calendarId: st
   await deleteObject(from.account, url)
   clearCaldavCache(user)
 }
+
+// ---------------------------------------------------------------------------------------------
+// For server/tasks.ts, which keeps the VTODOs (reminders) of the same accounts with the same
+// WebDAV and iCalendar handling.
+
+export type { Account as CaldavAccount, Prop as IcalProp }
+export { accounts as caldavAccounts, calendarHome, dav, davTime, duration, esc, fold, getProp, hrefIn, icalText, icalTime, occurrences, own, parseLine, prop, request as davRequest, resolve as resolveHref, responses, setProp, timeLine, unescapeXml }

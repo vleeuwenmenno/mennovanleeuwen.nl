@@ -246,6 +246,25 @@ export function database(): DatabaseSync {
     PRIMARY KEY (user_id, host)
   )`)
   if (!cols('agent_messages').includes('checked')) db.exec('ALTER TABLE agent_messages ADD COLUMN checked TEXT')
+  // Tasks kept on the site itself (server/tasks.ts), for accounts without CalDAV task lists: lists,
+  // and each task as its own VTODO text, so it is read and changed like a CalDAV one. `etag` counts
+  // the task's versions.
+  db.exec(`CREATE TABLE IF NOT EXISTS task_lists (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`)
+  db.exec(`CREATE TABLE IF NOT EXISTS task_items (
+    list_id INTEGER NOT NULL REFERENCES task_lists(id) ON DELETE CASCADE,
+    uid TEXT NOT NULL,
+    ics TEXT NOT NULL,
+    etag INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (list_id, uid)
+  )`)
+
   // Added later: a compaction (server/agents.ts), saved as a message with role 'compact' whose
   // content is the summary; this says how it came about (JSON {auto, reason?, instructions?, …}).
   if (!cols('agent_messages').includes('compact')) db.exec('ALTER TABLE agent_messages ADD COLUMN compact TEXT')
