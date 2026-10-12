@@ -1342,7 +1342,7 @@ const LONG_ROUNDS = 150
 const LONG_TIME = 60 * 60_000
 
 const MODES = {
-  quick: { rounds: 4, think: 'low', pageChars: 8_000 },
+  quick: { rounds: 6, think: 'low', pageChars: 8_000 },
   deep: { rounds: 24, think: 'high', pageChars: 16_000 },
 } as const
 
@@ -2038,6 +2038,9 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
     // asked once to update or clear it when they finish a turn with items still open.
     let todoRound = -1
     let wrapUp = false
+    // A reply that only thought and wrote nothing (some models do this, most often on the last
+    // round when the tools are gone): asked once more for the answer itself.
+    let nudged = false
     for (let round = 0; ; round++) {
       const now = current()
       const tools = toolsNow(now)
@@ -2046,14 +2049,18 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
       // The mode's rounds (more in a work folder), or many more while a todo list has open items (within an hour).
       const open = openTodos(row.id)
       const budget = open ? LONG_ROUNDS : now.workdir ? Math.max(FOLDER_ROUNDS, MODES[mode].rounds) : MODES[mode].rounds
-      const last = round >= budget || Date.now() - started > LONG_TIME // out of rounds: answer with what was found
+      const last = nudged || round >= budget || Date.now() - started > LONG_TIME // out of rounds: answer with what was found
       const stale = open > 0 && !last && !wrapUp && round - todoRound > 3
       const system =
         (await systemPrompt(user, mode, row.project_id, todosOf(row.id), folderLines(now, offered.has('terminal'), instructions), offered.has('use_skill') ? await listSkills(user, skillPlaces(user, now.workdir)).catch(() => []) : [], {
           zone,
           calendar: now.tools.includes('calendar') ? calendarLines(user, zone) : '',
         })) +
-        (last ? '\n\nYou have used all your tool calls for this turn: answer now with what you have, and say what is left to do.' : '') +
+        (nudged
+          ? '\n\nYour last reply only thought and wrote nothing for the user. Write your answer now, in the reply itself (not in your thinking), from what you found so far; say what is still open. Do not call tools.'
+          : last
+            ? '\n\nYou have used all your tool calls for this turn: answer now with what you have, and say what is left to do.'
+            : '') +
         (stale ? `\n\nReminder: your todo list has ${open} open ${open === 1 ? 'item' : 'items'} and you have not updated it for a while. Update it with update_todos as you go, or clear it if it no longer fits.` : '') +
         (wrapUp ? `\n\nYou have answered, but your todo list still has ${open} open ${open === 1 ? 'item' : 'items'}. Call update_todos now: mark what is finished as done, or send an empty list to clear it if the job is over or the user has moved on. Do not repeat your answer.` : '')
       const offer = last ? [] : wrapUp ? todoTool : tools
@@ -2065,6 +2072,15 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
       if (wrapUp && !calls.length) break
       const saved = addMessage(row.id, { role: 'assistant', content: wrapUp ? '' : reply.content, thinking: reply.thinking, toolCalls: calls })
       send({ type: 'message', message: saved })
+      if (!calls.length && !wrapUp && !reply.content.trim()) {
+        // Thinking but no answer: once more, asking for the answer itself; then it's a failure the
+        // user can retry, rather than a turn that silently ends with nothing.
+        if (!nudged) {
+          nudged = true
+          continue
+        }
+        throw new HttpError(502, 'The model ended without writing an answer. Retry, or try Deep mode or another model.')
+      }
       if (!calls.length) {
         if (open > 0 && !last && todoTool.length && openTodos(row.id) > 0) {
           wrapUp = true

@@ -2393,7 +2393,7 @@ function Icon({ name, size = 15 }: { name: keyof typeof ICONS; size?: number }) 
 // --- modes -----------------------------------------------------------------------------------
 
 const MODE_HELP: Record<Mode, string> = {
-  quick: 'Answers straight away, searching the web or your files only when it needs to, in a few seconds. Up to 4 rounds of tools.',
+  quick: 'Answers straight away, searching the web or your files only when it needs to, in a few seconds. Up to 6 rounds of tools.',
   deep: 'Researches first: searches from several angles, reads the sources, compares them, then writes a structured answer with citations. Takes a minute or a few; up to 24 rounds of tools.',
 }
 
