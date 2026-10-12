@@ -23,6 +23,7 @@
     "check:empires-queue": "node scripts/empires-queue.ts",
     "check:empires-spacing": "node scripts/empires-spacing.ts",
     "check:empires-repair": "node scripts/empires-repair.ts",
+    "check:agents-roles": "node scripts/agents-roles.ts",
     "empires:battle-ai": "node scripts/empires-battle-ai.ts",
     "empires:bot": "node scripts/empires-bot.ts",
     "start": "node server/index.ts"

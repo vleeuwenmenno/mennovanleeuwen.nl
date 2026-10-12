@@ -544,6 +544,16 @@ in `FIELDS` ([`src/apps/Agents.tsx`](src/apps/Agents.tsx)) and an unknown type f
 field, so new types can be added one at a time. Threads get a title from a small model, can be renamed (with a
 suggestion), archived and deleted, and the sidebar folds to a rail.
 
+A reply that only thinks gets one more round asking for the answer, and an answer given while the
+todo list still has open items gets one asking to update it. Those asks go to the model as a user
+message marked as the app's (never saved or shown), not in the system prompt, because some models'
+servers (Mistral's) refuse a conversation that ends on the assistant's reply. As a safety net, any
+request that would still end there gets a short "Continue." after it.
+
+```sh
+pnpm check:agents-roles   # The nudge, the todo wrap-up and a restart mid-reply, against a stand-in Ollama that refuses a trailing assistant message
+```
+
 **Titles keep up to date** (Settings → Agents → Models → *Thread titles*, on by default). A first
 title names how a thread started, and threads wander, so every few of your messages (3, 4, 6 or 10;
 4 by default, sooner when a thread grows by more than about 24,000 characters over at least two
