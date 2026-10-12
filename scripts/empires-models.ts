@@ -15,11 +15,12 @@
 //    engine hardpoint carries that engine's glow; strike craft, gunships and structures burst into
 //    three or more real fragments.
 //
-// Every check runs on the Swarm concept designs too (swarm.ts, shown only in the Codex): each droid
+// Every check runs on the bigger prototypes (proto.ts) too, and their turrets for show must each
+// stand for a real gun. Every check runs on the Swarm concept designs too (swarm.ts, shown only in the Codex): each droid
 // unit built in the Swarm style, on that unit's own box and hardpoints.
 
 import { STATIONS, TECHS, UNITS, mineType, stationType, type UnitType } from '../src/apps/games/empires/data.ts'
-import { BREAK_WEIGHTS, SWARM, breakOutcome, breakPieces, buildModel, hasModel, hasSwarm, hullState, modelStyles, onHull, wreckState } from '../src/apps/games/empires/models/index.ts'
+import { BREAK_WEIGHTS, PROTO, SWARM, breakOutcome, breakPieces, buildModel, hasModel, hasProto, hasSwarm, hullState, modelStyles, onHull, wreckState } from '../src/apps/games/empires/models/index.ts'
 
 let failed = 0
 const fail = (msg: string) => {
@@ -50,15 +51,15 @@ for (const t of UNITS) {
 console.log(`Models: ${types.length} unit types (${UNITS.filter(hasModel).map((t) => t.id).join(', ')})`)
 // Models are cached per look by key: two different types must never share one.
 const keys = new Map<string, UnitType>()
-for (const [t, style] of types.flatMap((t) => [[t, undefined], ...(hasSwarm(t) ? [[t, SWARM]] : [])] as [UnitType, string | undefined][])) {
+for (const [t, style] of types.flatMap((t) => [[t, undefined], ...(hasSwarm(t) ? [[t, SWARM]] : []), ...(hasProto(t) ? [[t, PROTO]] : [])] as [UnitType, string | undefined][])) {
   const k = buildModel(t, style).key
   const other = keys.get(k)
   ok(!other || (other.id === t.id && other.hardpoints.length === t.hardpoints.length), `${t.id}: model key ${k} is shared with another look`)
   keys.set(k, t)
 }
 
-const looks = types.flatMap((t) => [[t, undefined], ...modelStyles(t).map((s) => [t, s]), ...(hasSwarm(t) ? [[t, SWARM]] : [])] as [UnitType, string | undefined][])
-console.log(`Looks: ${looks.length} (${looks.filter(([, s]) => s === SWARM).length} of them Swarm concepts)`)
+const looks = types.flatMap((t) => [[t, undefined], ...modelStyles(t).map((s) => [t, s]), ...(hasSwarm(t) ? [[t, SWARM]] : []), ...(hasProto(t) ? [[t, PROTO]] : [])] as [UnitType, string | undefined][])
+console.log(`Looks: ${looks.length} (${looks.filter(([, s]) => s === SWARM).length} of them Swarm concepts, ${looks.filter(([, s]) => s === PROTO).length} bigger prototypes)`)
 for (const [t, style] of looks) {
   const label = `${t.id}${t.tier === 'station' ? ` (${t.sprite}, ${t.hardpoints.length} modules)` : ''}${style ? ` [${style}]` : ''}`
   let m
@@ -80,8 +81,16 @@ for (const [t, style] of looks) {
   }
   ok(new Set(m.parts.map((p) => p.id)).size === m.parts.length, `${label}: part ids are not unique`)
   // 2. Hardpoints.
-  ok(m.mounts.length === t.hardpoints.length, `${label}: ${m.mounts.length} mounts for ${t.hardpoints.length} hardpoints`)
-  m.mounts.forEach((mt, i) => {
+  const real = m.mounts.filter((mt) => !mt.extra)
+  ok(real.length === t.hardpoints.length && m.mounts.slice(0, real.length).every((mt) => !mt.extra), `${label}: ${real.length} mounts for ${t.hardpoints.length} hardpoints (the real ones first)`)
+  // Turrets for show stand for a real gun: on the hull, the same kind of mount as a gun the unit has.
+  for (const mt of m.mounts.filter((x) => x.extra)) {
+    const h = t.hardpoints[mt.hp]
+    ok(!!h, `${label}: an extra mount stands for hardpoint ${mt.hp}, which isn't there`)
+    if (h) ok(!!h.weapon && mt.turns, `${label}: an extra mount stands for ${h.kind} ${mt.hp}, which has no gun`)
+    ok(onHull(m, mt.x, mt.y), `${label}: an extra ${mt.design} mount at ${mt.x.toFixed(1)},${mt.y.toFixed(1)} is off the hull`)
+  }
+  real.forEach((mt, i) => {
     const h = t.hardpoints[i]
     ok(mt.hp === i, `${label}: mount ${i} is for hardpoint ${mt.hp}`)
     const gx = (mt.x / m.w + 0.5) * 10

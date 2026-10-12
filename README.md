@@ -1088,6 +1088,20 @@ tan and violet palette. They are never used in battle; the Codex shows them unde
   shot-off one wrecked), painted once per look by `thumbnail` in paint.ts and kept as a data URL.
   A ship dragged from the fleet inventory is ghosted as its model too.
 
+**Bigger ships (prototype):** warships are being tried at bigger sizes, redesigned with more to
+them rather than just scaled. The size classes are one table, `SIZE_CLASSES` in
+[`sizes.ts`](src/apps/games/empires/models/sizes.ts): strike craft ×1, gunships and corvettes ×1.15,
+frigates ×1.4, cruisers ×1.7, flagships ×2.5, stations and platforms ×1 for now. The first two
+redesigns, the Republic's Warden frigate and Sovereign dreadnought, are in
+[`proto.ts`](src/apps/games/empires/models/proto.ts): layered armour plates, a raised deck with
+trenches and hangar bays, a stepped superstructure with masts and dishes, engine banks with
+auxiliary nozzles, greebles, and many smaller turrets for show (`extraMounts`, each standing for a
+real hardpoint: it aims where that gun aims and is wrecked with it). They keep every hardpoint where
+`data.ts` puts it, and the dreadnought breaks into four chunks (`cuts`). Only the Codex shows them:
+a *Current / New (prototype)* switch on those two ships, at true relative scale, and *Size classes*,
+which lays a fighter, frigate, cruiser and flagship out as they are now and at their proposed sizes.
+Battles still use today's sizes and designs.
+
 **Adding a unit's model:**
 
 1. In `data.ts`, give the unit its box (`aspect`, `size`) and its hardpoints and engines on the

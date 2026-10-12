@@ -1,6 +1,7 @@
 import { STATIONS, UNITS, dims, stationType, type FactionId, type Tier, type UnitType } from '../data.ts'
 import { circle, hash, inPart, inPoly, jagged, rng, seedOf } from './kit.ts'
 import * as droid from './droid.ts'
+import * as proto from './proto.ts'
 import * as republic from './republic.ts'
 import * as swarm from './swarm.ts'
 import type { ModelDef } from './spec.ts'
@@ -67,6 +68,14 @@ export const hasSwarm = (t: UnitType) => t.id in SWARM_DEFS
 /** A Swarm design's own name (the droid unit it mirrors has a droid-navy name). */
 export const swarmName = (t: UnitType) => swarm.SWARM_NAMES[t.id] ?? t.name
 
+/**
+ * Prototypes of bigger, more detailed warships (proto.ts), shown only in the Codex next to the
+ * battle's designs, at the size classes in sizes.ts (protoType). Built with the style PROTO.
+ */
+const PROTO_DEFS: Record<string, ModelDef> = { 'r-frigate': proto.frigate, 'r-capital': proto.capital }
+export const PROTO = 'proto'
+export const hasProto = (t: UnitType) => t.id in PROTO_DEFS
+
 export const hasModel = (t: UnitType) => t.id in DEFS
 
 const built = new WeakMap<UnitType, Map<string, Model | null>>()
@@ -77,7 +86,7 @@ export function modelFor(t: UnitType, style = ''): Model | null {
   let byStyle = built.get(t)
   if (!byStyle) built.set(t, (byStyle = new Map()))
   let m = byStyle.get(style)
-  if (m === undefined) byStyle.set(style, (m = (style === SWARM ? hasSwarm(t) : hasModel(t)) ? buildModel(t, style || undefined) : null))
+  if (m === undefined) byStyle.set(style, (m = (style === SWARM ? hasSwarm(t) : style === PROTO ? hasProto(t) : hasModel(t)) ? buildModel(t, style || undefined) : null))
   return m
 }
 
@@ -113,8 +122,8 @@ const DETACH_BY_DEFAULT: MountDesign[] = ['flak']
 
 export function buildModel(t: UnitType, style?: string): Model {
   const concept = style === SWARM
-  const def = concept ? SWARM_DEFS[t.id] : DEFS[t.id]
-  if (!def) throw new Error(`No ${concept ? 'Swarm ' : ''}model for ${t.id}`)
+  const def = concept ? SWARM_DEFS[t.id] : style === PROTO ? PROTO_DEFS[t.id] : DEFS[t.id]
+  if (!def) throw new Error(`No ${concept ? 'Swarm ' : style === PROTO ? 'prototype ' : ''}model for ${t.id}`)
   let w: number
   let h: number
   let level = 1
@@ -131,17 +140,22 @@ export function buildModel(t: UnitType, style?: string): Model {
     h = dh * k
   }
   const long = Math.max(w, h)
-  const spec = def({ t, w, h, level, style: concept ? undefined : style })
+  const spec = def({ t, w, h, level, style: concept || style === PROTO ? undefined : style })
   const grid = (gx: number, gy: number): Pt => [(gx / 10 - 0.5) * w, (gy / 10 - 0.5) * h]
   const mounts: Mount[] = t.hardpoints.map((hp, i) => {
     const [x, y] = grid(hp.x, hp.y)
     const design: MountDesign = hp.art ?? (hp.kind === 'engine' ? 'engine' : hp.kind === 'turret' ? 'turbo' : (hp.kind as MountDesign))
-    return { hp: i, x, y, r: ((hp.s ?? 0.05) * long) / 2, design, turns: !!hp.weapon, detach: DETACH_BY_DEFAULT.includes(design), ...spec.mount?.(i) }
+    const { scale = 1, ...over } = spec.mount?.(i) ?? {}
+    return { hp: i, x, y, r: (((hp.s ?? 0.05) * long) / 2) * scale, design, turns: !!hp.weapon, detach: DETACH_BY_DEFAULT.includes(design), ...over }
   })
+  for (const e of spec.extraMounts ?? []) {
+    const real = t.hardpoints[e.maps]
+    mounts.push({ hp: e.maps, x: e.x, y: e.y, r: e.r, design: e.design, turns: !!real?.weapon, detach: e.detach ?? DETACH_BY_DEFAULT.includes(e.design), extra: true })
+  }
   // Every mount sits in a socket: a dark recess in the plating, under the superstructure.
   const sockets: Part[] = mounts
     .filter((m) => m.design !== 'engine')
-    .map((m) => ({ id: `socket${m.hp}`, pts: circle(m.x, m.y, m.r * 1.1, 18), tone: 'dark' as const, z: 0.5, details: [{ k: 'line' as const, pts: circle(m.x, m.y, m.r * 0.92, 16) }] }))
+    .map((m, i) => ({ id: m.extra ? `socketx${i}` : `socket${m.hp}`, pts: circle(m.x, m.y, m.r * 1.1, 18), tone: 'dark' as const, z: 0.5, details: [{ k: 'line' as const, pts: circle(m.x, m.y, m.r * 0.92, 16) }] }))
   const parts = [...spec.parts.filter((p) => (p.level ?? 1) <= level), ...sockets].sort((a, b) => a.z - b.z)
   // A mining platform with its Shield generator fitted is a type of its own with one more socket,
   // so its key names its modules too, as a station's does.
@@ -158,6 +172,7 @@ export function buildModel(t: UnitType, style?: string): Model {
     engines: spec.engines ?? t.engines.map(([gx, gy]) => grid(gx, gy)),
     detachable: parts.flatMap((p, i) => (p.detach ? [i] : [])),
     breakStyle: spec.breakStyle ?? 'bands',
+    cuts: spec.cuts,
     core: spec.core,
     scorch: scorchSpots(parts, w, h, seed),
     seed,
@@ -322,7 +337,7 @@ function cutPieces(m: Model, kind: BreakKind, variant: number): Piece[] {
   } else {
     // Cut across the hull: one line for a half, two (three on the biggest ships) for pieces, kept
     // far enough apart that the jagged lines never cross.
-    const count = kind === 'half' ? 1 : m.long >= 300 ? 3 : 2
+    const count = kind === 'half' ? 1 : (m.cuts ?? (m.long >= 300 ? 3 : 2))
     const ys: number[] = []
     for (let i = 0; i < count; i++) {
       const lo = -0.32 + (0.64 * i) / count
@@ -386,6 +401,8 @@ export function pickAt(m: Model, x: number, y: number, detached: number, minR = 
   let bestD = Infinity
   for (let i = m.mounts.length - 1; i >= 0; i--) {
     const mt = m.mounts[i]
+    // Turrets for show answer to no hardpoint of their own.
+    if (mt.extra) continue
     const d = Math.hypot(x - mt.x, y - mt.y)
     if (mt.design !== 'engine' && d < Math.max(mt.r * 1.15, minR) && d < bestD) (best = i), (bestD = d)
   }

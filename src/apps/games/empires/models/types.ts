@@ -83,6 +83,11 @@ export type Mount = {
   /** Blown off when destroyed (flies away as debris, leaving a burnt socket); otherwise it stays
    * on the hull, broken and burnt. */
   detach: boolean
+  /** A turret the model adds beyond the unit's own hardpoints, for show (the bigger prototype ships
+   * carry more, smaller guns than the battle knows about). It follows the hardpoint `hp` it stands
+   * for: aims where that gun aims and is wrecked when it is. Extra mounts come after the real ones,
+   * so mount i is still hardpoint i for every real one. */
+  extra?: boolean
 }
 
 /** How a hull comes apart: cut across in bands (long ships), into wedges round the middle (round
@@ -115,6 +120,8 @@ export type Model = {
    * `detached` mask is the i-th of these). */
   detachable: number[]
   breakStyle: BreakStyle
+  /** How many lines a 'bands' break into pieces cuts across the hull (default 2, three pieces). */
+  cuts?: number
   /** For the 'ring' break: the core sphere's middle and radius, in model units. */
   core?: { x: number; y: number; r: number }
   scorch: Scorch[]

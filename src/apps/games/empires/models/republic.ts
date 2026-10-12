@@ -382,7 +382,7 @@ export const station: ModelDef = ({ level, style }) => {
  * An engine pod seen from above, shaded as a cylinder (two facets, so its shadow side turns with the
  * ship), a band round it and a glowing nozzle at the back. `engine` is the engine glow it carries.
  */
-function nacelle(id: string, x: number, y0: number, y1: number, w: number, engine: number | undefined, z: number, more: Partial<Part> = {}, band: Tone = 'accent'): Part {
+export function nacelle(id: string, x: number, y0: number, y1: number, w: number, engine: number | undefined, z: number, more: Partial<Part> = {}, band: Tone = 'accent'): Part {
   const h = w / 2
   const half = (s: number): Pt[] => [[x, y0], [x + s * h * 0.6, y0], [x + s * h, y0 + h * 0.8], [x + s * h, y1 - h * 0.35], [x + s * h * 0.7, y1], [x, y1]]
   const r = h * 0.72
@@ -652,7 +652,7 @@ export const corvette: ModelDef = () => {
 // --- Line ships --------------------------------------------------------------------------------------
 
 /** A red band along a hull's edge: the edge points, then the same points pulled `d` in. */
-const edgeBand = (rows: [number, number][], d: number): Pt[] => [...rows.map(([y, w]) => [-w, y] as Pt), ...rows.map(([y, w]) => [-w + d, y + d * 0.2] as Pt).reverse()]
+export const edgeBand = (rows: [number, number][], d: number): Pt[] => [...rows.map(([y, w]) => [-w, y] as Pt), ...rows.map(([y, w]) => [-w + d, y + d * 0.2] as Pt).reverse()]
 
 /**
  * Paladin cruiser: the line warship, long and heavy. A needle prow, a raised armoured spine carrying

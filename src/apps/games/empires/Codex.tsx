@@ -3,7 +3,8 @@ import { ABILITIES, FACTIONS, STATIONS, TECH, TECHS, UNITS, moduleSprite, roleOf
 import { info, sameSel, selName, targets, weaponLine, WEAPON_NAME, type Sel } from './codexInfo'
 import { Frame, HpIcon, Icon, Tips, fmt } from './Hud'
 import { HP_COLOR, hpName } from './icons'
-import { BREAK_WEIGHTS, SWARM, hasModel, hasSwarm, hullState, modelFor, modelStyles, pickAt, swarmName, type Model } from './models/index.ts'
+import { BREAK_WEIGHTS, PROTO, SWARM, hasModel, hasProto, hasSwarm, hullState, modelFor, modelStyles, pickAt, swarmName, type Model } from './models/index.ts'
+import { SIZE_CLASSES, protoType } from './models/sizes.ts'
 import { ModelFx } from './models/fx.ts'
 import { LIGHT, PALETTES } from './models/kit.ts'
 import { cacheStats, drawHull, drawMounts, liveEngines } from './models/paint.ts'
@@ -261,8 +262,11 @@ type Tool = 'inspect' | 'damage' | 'detach'
  * pointer hits are worked out from this, so they match what's on screen. */
 type ViewState = { rot: number; zoom: number; z: number; w: number; h: number }
 
-function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey, onHover, onClick, onLongPress, onNote }: {
+function Viewer({ t, fitSize, model, workshop, show, dmg, boom, hover, selected, resetKey, onHover, onClick, onLongPress, onNote }: {
   t: UnitType
+  /** Fit the view to a unit this long instead (so a ship and its bigger prototype show at their
+   * true relative scale). */
+  fitSize?: number
   model: Model | null
   workshop: boolean
   show: Show
@@ -283,8 +287,8 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
 }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const view = useRef<ViewState>({ rot: 0, zoom: 1, z: 1, w: 1, h: 1 })
-  const live = useRef({ t, model, workshop, show, dmg, boom, hover, selected, onNote })
-  live.current = { t, model, workshop, show, dmg, boom, hover, selected, onNote }
+  const live = useRef({ t, fitSize, model, workshop, show, dmg, boom, hover, selected, onNote })
+  live.current = { t, fitSize, model, workshop, show, dmg, boom, hover, selected, onNote }
   const fx = useMemo(() => new ModelFx(), [])
   const stars = useMemo(starfield, [])
   const imgs = useRef(new Map<string, HTMLImageElement>())
@@ -325,8 +329,9 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
   /** The scale that fits the unit (or its longest gun, with the ranges on) into the view. A selected
    * gun's reach doesn't change it: the view would jump; scrolling out shows the whole ring. */
   const fitOf = (w: number, h: number) => {
-    const { t, show } = live.current
-    const reach = show.ranges ? Math.max(t.size * 0.6, ...guns(t).map((x) => x.range)) * 2 : t.size * 1.25
+    const { t, show, fitSize } = live.current
+    const size = fitSize ?? t.size
+    const reach = show.ranges ? Math.max(size * 0.6, ...guns(t).map((x) => x.range)) * 2 : size * 1.25
     return (Math.min(w, h) * 0.86) / reach
   }
   /** A hardpoint's place in the view's world units, as drawn this frame. */
@@ -394,7 +399,7 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
             if (st.detached & (1 << i) && !(pm.det & (1 << i))) fx.flyPart(model, pi, 0, 0, rot, t.size, 0, 0, i * 31 + Math.floor(now))
           })
           model.mounts.forEach((mt, i) => {
-            if (mt.detach && deadNow[i] && !pm.hps[i]) fx.flyMount(model, i, 0, 0, rot, scan.get(i) ?? rot, t.size, 0, 0, i * 17 + Math.floor(now))
+            if (mt.detach && deadNow[mt.hp] && !pm.hps[mt.hp]) fx.flyMount(model, i, 0, 0, rot, scan.get(mt.hp) ?? rot, t.size, 0, 0, i * 17 + Math.floor(now))
           })
         }
         prevMask.current = { det: st.detached, hps: deadNow, unit: model.key }
@@ -692,6 +697,101 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
   )
 }
 
+/**
+ * The size classes being tried (models/sizes.ts): a fighter, frigate, cruiser and flagship of the
+ * side, each as it is now and at its proposed size, side by side at one scale, nose up. A ship with
+ * a prototype design (models/proto.ts) shows it; the others are their current model scaled up.
+ */
+function SizeStrip({ faction, onClose }: { faction: FactionId; onClose: () => void }) {
+  const canvas = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    const c = canvas.current!
+    const draw = () => {
+      const dpr = Math.min(2, window.devicePixelRatio || 1)
+      const W = c.clientWidth
+      const H = c.clientHeight
+      if (!W || !H) return
+      c.width = Math.round(W * dpr)
+      c.height = Math.round(H * dpr)
+      const g = c.getContext('2d')!
+      g.setTransform(dpr, 0, 0, dpr, 0, 0)
+      g.fillStyle = '#04060d'
+      g.fillRect(0, 0, W, H)
+      const tiers: Tier[] = ['fighter', 'frigate', 'cruiser', 'capital']
+      const items = tiers.flatMap((tier) => {
+        const t = UNITS.find((u) => u.faction === faction && u.tier === tier && !u.kind)!
+        const pt = protoType(t)
+        return [
+          { t, m: modelFor(t), label: 'now', tier },
+          { t: pt, m: modelFor(pt, hasProto(t) ? PROTO : ''), label: hasProto(t) ? `×${SIZE_CLASSES[tier]}, new design` : `×${SIZE_CLASSES[tier]}, scaled only`, tier },
+        ]
+      })
+      // One column per class, as wide as its bigger version; today's sizes in the top row, the
+      // proposed ones under them, everything at one scale.
+      const gap = 40
+      const dimsOf = (it: (typeof items)[number]) => (it.m ? [(it.m.w / it.m.long) * it.t.size, (it.m.h / it.m.long) * it.t.size] : [it.t.size, it.t.size])
+      const cols = tiers.map((_, i) => Math.max(dimsOf(items[i * 2])[0], dimsOf(items[i * 2 + 1])[0]))
+      const rowH = [Math.max(...tiers.map((_, i) => dimsOf(items[i * 2])[1])), Math.max(...tiers.map((_, i) => dimsOf(items[i * 2 + 1])[1]))]
+      const total = cols.reduce((a, b) => a + b, 0) + gap * (cols.length - 1)
+      const label = 52
+      const k = Math.min((W - 140) / total, (H - 70 - label * 2) / (rowH[0] + rowH[1]))
+      // Each column at least wide enough for its labels.
+      const colW = cols.map((c) => Math.max(c * k, 160))
+      const x0 = 120 + (W - 140 - colW.reduce((a, b) => a + b, 0) - gap * (cols.length - 1)) / 2
+      const bases = [50 + rowH[0] * k, 50 + rowH[0] * k + label + rowH[1] * k]
+      g.textAlign = 'center'
+      let x = x0
+      tiers.forEach((_, ci) => {
+        const cw = colW[ci]
+        for (const row of [0, 1]) {
+          const it = items[ci * 2 + row]
+          const [, h] = dimsOf(it)
+          const cx = x + cw / 2
+          const base = bases[row]
+          if (it.m) {
+            g.save()
+            g.translate(cx, base - (h * k) / 2)
+            g.scale(k, k)
+            drawHull(g, it.m, 0, 0, 0, it.t.size, k * dpr, { detached: 0, scorch: 0, variant: 0 })
+            drawMounts(g, it.m, 0, 0, 0, it.t.size, k * dpr, it.t.hardpoints.map((p) => ({ hp: p.hp })), () => 0)
+            g.restore()
+          }
+          g.font = '12px system-ui, sans-serif'
+          g.fillStyle = row ? '#f2c14a' : '#9aa6bd'
+          g.fillText(`${Math.round(it.t.size)} long${row ? `, ${it.label}` : ''}`, cx, base + 16)
+          if (row) {
+            g.fillStyle = '#d6dded'
+            g.font = '13px system-ui, sans-serif'
+            g.fillText(it.t.name, cx, base + 34)
+          }
+        }
+        x += cw + gap
+      })
+      g.textAlign = 'start'
+      g.font = '13px system-ui, sans-serif'
+      g.fillStyle = '#9aa6bd'
+      g.fillText('Now', 16, bases[0] - 4)
+      g.fillStyle = '#f2c14a'
+      g.fillText('Proposed', 16, bases[1] - 4)
+      g.textAlign = 'start'
+      g.fillStyle = '#9aa6bd'
+      g.fillText('Size classes, side by side at one scale (nose up). Battles still use today\'s sizes.', 16, 22)
+    }
+    draw()
+    const ro = new ResizeObserver(draw)
+    ro.observe(c)
+    return () => ro.disconnect()
+  }, [faction])
+  return (
+    <div className="ew-cx-sizes">
+      <canvas ref={canvas} />
+      <button className="ew-close" onClick={onClose} aria-label="Close the size classes">
+        ✕
+      </button>
+    </div>
+  )
+}
+
 export function Codex({ sound, onClose }: { sound: EmpiresSound; onClose: () => void }) {
   return (
     <div className="ew-root ew-deck ew-codex" onContextMenu={(e) => e.preventDefault()}>
@@ -712,10 +812,15 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
   const [pickId, setPickId] = useState<string>('r-frigate')
   const base = list.find((u) => u.id === pickId) ?? list[0]
   const [level, setLevel] = useState(4)
-  const t = shown(base, level)
-  const styles = concept ? [] : modelStyles(t)
+  // A ship with a bigger prototype (models/proto.ts) can be shown either way, at true relative scale.
+  const canProto = !concept && hasProto(base)
+  const [protoOn, setProtoOn] = useState(false)
+  const now = shown(base, level)
+  const t = canProto && protoOn ? protoType(now) : now
+  const styles = concept || (canProto && protoOn) ? [] : modelStyles(t)
   const [style, setStyle] = useState('')
-  const model = modelFor(t, concept ? SWARM : styles.includes(style) ? style : '')
+  const model = modelFor(t, concept ? SWARM : canProto && protoOn ? PROTO : styles.includes(style) ? style : '')
+  const [sizes, setSizes] = useState(false)
   const [workshop, setWorkshop] = useState(false)
   const [show, setShow] = useState<Show>({ hardpoints: false, ranges: false, glow: true, outlines: false, spin: false })
   const [tool, setTool] = useState<Tool>('inspect')
@@ -829,6 +934,11 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
             Swarm <small>(concept)</small>
           </button>
         </div>
+        {!concept && (
+          <button className={`ew-cx-ws ${sizes ? 'is-on' : ''}`} aria-pressed={sizes} onClick={click(() => setSizes(!sizes))} data-tip="The size classes being tried: each class now and at its proposed size, side by side at one scale">
+            Size classes
+          </button>
+        )}
         <button className={`ew-cx-ws ${workshop ? 'is-on' : ''}`} aria-pressed={workshop} onClick={click(() => setWorkshop(!workshop))} data-tip="Tools for checking the models: parts, hardpoints, damage and break-ups">
           <Icon name="gear" size={14} /> Workshop
         </button>
@@ -837,6 +947,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
         </button>
       </header>
       <div className="ew-cx-body">
+        {sizes && <SizeStrip faction={faction} onClose={() => setSizes(false)} />}
         <nav className="ew-cx-nav" aria-label="Units">
           {concept && (
             <p className="ew-cx-concept ew-small">
@@ -867,6 +978,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
           <div className="ew-cx-stage">
             <Viewer
               t={t}
+              fitSize={canProto ? protoType(now).size : undefined}
               model={model}
               workshop={workshop}
               show={show}
@@ -881,8 +993,16 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
               onNote={setNote}
             />
             {hover && !hover.fromList && <HoverTip t={t} model={model} sel={hover.sel} x={hover.x} y={hover.y} dmg={dmg} />}
-            {(t.tier === 'station' || styles.length > 0) && (
+            {(t.tier === 'station' || styles.length > 0 || canProto) && (
               <div className="ew-cx-level">
+                {canProto && (
+                  <Seg
+                    label="Version"
+                    value={protoOn ? 'new' : 'current'}
+                    options={[['current', 'Current'], ['new', `New (prototype, ×${SIZE_CLASSES[t.tier]})`]]}
+                    onChange={(v) => setProtoOn(v === 'new')}
+                  />
+                )}
                 {t.tier === 'station' && <Seg label="Station level" value={level} options={STATIONS[t.faction].stages.map((_, i) => [i + 1, `Level ${i + 1}`] as [number, string])} onChange={(v) => setLevel(v)} />}
                 {styles.length > 0 && <Seg label={t.tier === 'station' ? 'Outer frame' : 'Design'} value={styles.includes(style) ? style : styles[0]} options={styles.map((s) => [s, STYLE_NAMES[s] ?? s[0].toUpperCase() + s.slice(1)] as [string, string])} onChange={(v) => setStyle(v)} />}
               </div>

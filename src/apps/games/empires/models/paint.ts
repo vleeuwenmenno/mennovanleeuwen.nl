@@ -333,6 +333,11 @@ function cached(key: string, w: number, h: number, paint: (g: CanvasRenderingCon
 }
 /** How much the model bitmaps hold now, for the Codex's numbers. */
 export const cacheStats = () => ({ bitmaps: store.size, mb: bytes / 1048576 })
+/** Empties the cache, for measuring how much one scene fills it from nothing. */
+export function clearCache() {
+  store.clear()
+  bytes = 0
+}
 /** The same, split by what the bitmaps are of (hulls, turrets, wreck and fragment pieces, parts shot
  * off), for measuring a big battle. */
 export function cacheBreakdown() {

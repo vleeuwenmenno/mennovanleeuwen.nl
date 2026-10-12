@@ -1436,7 +1436,8 @@ export class Renderer {
           if (st.detached & (1 << i) && !(tr.det & (1 << i))) this.fx.flyPart(m, pi, u.x, u.y, rot, u.t.size, vx, vy, u.id * 977 + i)
         })
         m.mounts.forEach((mt, i) => {
-          if (mt.detach && dead[i] && !tr.dead[i]) this.fx.flyMount(m, i, u.x, u.y, rot, this.aims.get(u.id * 64 + i) ?? rot, u.t.size, vx, vy, u.id * 613 + i)
+          // A mount follows its hardpoint (a turret for show follows the one it stands for).
+          if (mt.detach && dead[mt.hp] && !tr.dead[mt.hp]) this.fx.flyMount(m, i, u.x, u.y, rot, this.aims.get(u.id * 64 + mt.hp) ?? rot, u.t.size, vx, vy, u.id * 613 + i)
         })
       }
       if (tr) Object.assign(tr, { u, m, det: st.detached, st, dead, vis })
