@@ -28,6 +28,7 @@ export const NOTIFY_SOURCES: NotifySource[] = [
     ],
   },
   { app: 'calendar', label: 'Calendar', icon: 'calendar', account: true, kinds: [{ id: 'reminder', label: 'Reminders', hint: 'An event is about to start' }] },
+  { app: 'mail', label: 'Mail', icon: 'mail', account: true, kinds: [{ id: 'new', label: 'New mail', hint: 'Unread mail arrives in an Inbox' }] },
   {
     app: 'minecraft',
     label: 'Minecraft server',

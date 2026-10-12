@@ -40,6 +40,8 @@ import { AmpPane, CalendarAppPrefs, FilesPane, GamesPane, PdfPane, PreviewPane, 
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
 import { BranchGlyph } from './LinkForge'
 import { SyncLine } from './Notebook'
+import { MailSettings } from './mail/MailSettings'
+import { useMailAccounts } from '../data/mail'
 
 // System settings, laid out like macOS: the account on top of a sidebar, one pane per topic.
 // Opened from the system menu, the desktop's right-click menu, Spotlight, the terminal and apps'
@@ -792,7 +794,7 @@ function Launchers() {
 }
 
 /** Third-party services the widgets read from, with keys on the server: updown.io for Status. */
-type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice'
+type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice' | 'mail'
 
 /** Third-party services, one row each; a row opens that service's own settings. */
 /** `sub` opens one service's settings straight away (Settings → Integrations → Seafile, from an alert). */
@@ -800,9 +802,10 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
   const account = useAccount()
   const [open, setOpen] = useState<IntegrationId | null>(null)
   useEffect(() => {
-    if (sub === 'updown' || sub === 'ollama' || sub === 'seafile' || sub === 'onlyoffice') setOpen(sub)
+    if (sub === 'updown' || sub === 'ollama' || sub === 'seafile' || sub === 'onlyoffice' || sub === 'mail') setOpen(sub)
   }, [sub, t])
   const { libraries } = useLibraries()
+  const { accounts: mailAccounts } = useMailAccounts()
   if (account.status !== 'user') return <p className="muted">Sign in first to connect services for widgets and Files.</p>
   const seafile = account.seafile
   const host = (url: string) => url.replace(/^https?:\/\//, '')
@@ -837,6 +840,13 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
       on: !!seafile?.office,
       disabled: !seafile,
     },
+    {
+      id: 'mail',
+      name: 'Mail',
+      icon: <span className="set-glyph">✉</span>,
+      status: mailAccounts?.length ? `${mailAccounts.map((a) => a.username).join(', ')} · for the Mail app` : 'Fastmail or another JMAP server, for the Mail app',
+      on: !!mailAccounts?.length,
+    },
   ]
 
   const current = rows.find((r) => r.id === open && !r.disabled)
@@ -851,7 +861,7 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
           <strong>{current.name}</strong>
           {current.on && <span className="set-badge">Connected</span>}
         </div>
-        {current.id === 'updown' ? <UpdownSettings /> : current.id === 'ollama' ? <OllamaSettings /> : current.id === 'seafile' ? <SeafileSettings /> : <OfficeSettings />}
+        {current.id === 'mail' ? <MailSettings /> : current.id === 'updown' ? <UpdownSettings /> : current.id === 'ollama' ? <OllamaSettings /> : current.id === 'seafile' ? <SeafileSettings /> : <OfficeSettings />}
       </>
     )
 
@@ -1710,7 +1720,7 @@ const GROUPS: Group[] = [
   {
     panes: [
       { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', account: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
-      { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models storage', blurb: 'Services the widgets, Files and Agents use: updown.io for Status, Ollama Cloud, Seafile and OnlyOffice.', render: ({ sub, t }) => <Integrations sub={sub} t={t} /> },
+      { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models storage mail email jmap fastmail', blurb: 'Services the widgets, Files, Agents and Mail use: updown.io for Status, Ollama Cloud, Seafile, OnlyOffice and mail accounts.', render: ({ sub, t }) => <Integrations sub={sub} t={t} /> },
     ],
   },
   {

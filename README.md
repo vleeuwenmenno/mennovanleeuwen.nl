@@ -372,6 +372,51 @@ of a repeating event it asks whether the change is for that one or the whole ser
 through [`server/calendars.ts`](server/calendars.ts): Google's API, or the event's own iCalendar
 text on the CalDAV server, written back with its ETag so other apps' properties stay.
 
+**Mail** ([`src/apps/mail`](src/apps/mail), [`server/jmap.ts`](server/jmap.ts)) reads and writes mail
+over [JMAP](https://jmap.io) (RFC 8620 and 8621): Fastmail, Stalwart and other servers that speak
+it. Settings → Integrations → Mail links an account with an API token (for Fastmail: Settings →
+Privacy & Security → Manage API tokens, with *Mail* and *Submission* access) and, for anything but
+Fastmail, the server's address, where the session is found through `/.well-known/jmap`. The token is
+checked once, stored encrypted and never sent to the browser: the server makes every JMAP call,
+through the same egress checks as the other integrations, batched with back-references. IMAP and
+SMTP are not supported. The app has mailboxes with unread counts, conversations (a list drawn only
+where it shows, loading more as it scrolls), the reading pane, search (words, or `from:`, `to:`,
+`cc:`, `subject:`, `has:attachment`, `is:unread`, `is:flagged`, `after:2026-01-31`,
+`before:2026-12-31`, across every mailbox but Trash and Junk), flags, archive, move (also by
+dragging a conversation onto a mailbox), junk, delete to Trash and, from Trash only and after an
+in-OS question, for good. Writing is plain text with attachments from the computer or from Files
+(Seafile); every change is saved as a draft after a pause, and Send submits it with the chosen
+identity (`EmailSubmission/set`, moved to Sent once the server has taken it). Attachments save to
+Files too. Keys: `j`/`k` (or the arrows) to move, Enter to open, `e` archive, `#` delete, `!` junk,
+`s` flag, `u` read or unread, `r` reply, `a` reply all, `f` forward, `c` compose, `/` search,
+Ctrl+Enter to send. In a narrow window or on a phone it shows one pane at a time: mailboxes, list,
+conversation, each with a way back.
+
+HTML mail is made safe on the server by an allow-list sanitiser of its own
+([`server/mailhtml.ts`](server/mailhtml.ts): no scripts, event handlers, forms, frames, SVG,
+`javascript:` links or CSS expressions; every tag balanced and every attribute re-escaped) and then
+shown in an iframe sandboxed without scripts or same-origin, under a Content-Security-Policy that
+allows nothing but its own styles and pictures. Remote images and CSS backgrounds are held back
+until *Load images* (or *Always for this sender*, a synced choice the server reads); tracking pixels
+stay out either way. Links open in a new tab without an opener or referrer, with the real address
+as their tooltip. Inline (`cid:`) pictures come along as `data:` URIs, or (big ones) through
+short-lived sealed links that need no cookie. Quoted text, in HTML and plain text alike, is folded
+away. Calendar invitations (a `text/calendar` part or an `.ics` file, iMIP REQUEST, REPLY or CANCEL,
+[`server/imip.ts`](server/imip.ts)) show as a card with what, when, where and the organiser.
+
+While mail notifications are on (Settings → Notifications → Mail) or Mail was used in the last half
+hour, the server keeps a JMAP EventSource open per account (and polls every two minutes for servers
+without one): new unread mail in an Inbox becomes a notification, pushed to devices when no page is
+in view, and open Mail windows update at once. `pnpm check:mail` tests the sanitiser against hostile
+mail and everything above against a stand-in JMAP server ([`scripts/mail-mock.ts`](scripts/mail-mock.ts),
+which also runs on its own with `pnpm mail:mock` for trying the app). For other apps,
+[`src/data/mail.ts`](src/data/mail.ts) has `composeMail({ to, cc, subject, body, attachments })` and
+`openMail(id)`, and hooks Contacts, Calendar and Tasks can take: `setSuggestProvider` (who the
+recipient fields suggest; recent correspondents until then), `setPersonHandler` (a click on a
+sender or recipient; copy the address or write to them until then), `setInviteHandler` (answering
+invitations; *Coming soon* until then) and `registerMessageAction` (the message menu, where *Make
+task from this email* and *Create event from this email* wait as `task` and `event`).
+
 The **Status** widget shows your [updown.io](https://updown.io) checks: up or down, uptime, the
 last day's response time and certificates that expire within two weeks
 ([`server/updown.ts`](server/updown.ts)). It uses updown's *read-only* API key, from

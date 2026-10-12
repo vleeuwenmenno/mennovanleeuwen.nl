@@ -1,0 +1,396 @@
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { getAccount } from '../../os/account'
+import { openContextMenu, openMenuAt, type MenuItem } from '../../os/ContextMenu'
+import { pickFolder } from '../../os/FolderPicker'
+import { notify } from '../../os/notify'
+import { uploadFiles } from '../../data/uploads'
+import {
+  act,
+  allowImagesFrom,
+  blobFile,
+  blobUrl,
+  fetchMessage,
+  fetchThread,
+  mailPrefs,
+  nameOf,
+  orderMailboxes,
+  useMailVersion,
+  useMessageActions,
+  type Attachment,
+  type Boot,
+  type Message,
+  type MessageRef,
+  type Op,
+} from '../../data/mail'
+import { Avatar, formatSize, htmlToText, InviteCard, longDate, MessageFrame, PersonName, PlainText } from './parts'
+
+// The reading pane: one conversation, oldest message first. Read and unread-but-old messages are
+// folded to a line; the newest and the unread ones are open. HTML mail shows in a sandboxed frame
+// (parts.tsx) with remote images held back until asked for.
+
+export type ReplyMode = 'reply' | 'replyAll' | 'forward' | 'draft'
+
+type Props = {
+  account: number
+  threadId: string
+  boot: Boot
+  /** The mailbox the conversation was opened from (moves take it out of there). */
+  mailbox: string | null
+  narrow: boolean
+  onBack: () => void
+  /** A change to the whole conversation (archive, delete…), done by the app so the list follows. */
+  onAction: (op: Op, opts?: { to?: string }) => void
+  onReply: (m: Message, mode: ReplyMode) => void
+  onSearch: (q: string) => void
+}
+
+/** What other apps get to see of a message (Make task, Create event, invitations). */
+export const messageRef = (account: number, m: Message): MessageRef => ({ account, id: m.id, threadId: m.threadId, subject: m.subject, from: m.from, to: m.to, receivedAt: m.receivedAt, text: m.text ?? (m.html ? htmlToText(m.html) : ''), invite: m.invite })
+
+export function Reader({ account, threadId, boot, mailbox, narrow, onBack, onAction, onReply, onSearch }: Props) {
+  const [messages, setMessages] = useState<Message[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [open, setOpen] = useState<Set<string>>(new Set())
+  const version = useMailVersion()
+  const marked = useRef(new Set<string>())
+  const scroller = useRef<HTMLDivElement>(null)
+  const extra = useMessageActions()
+
+  // Load (again after a change anywhere); messages shown with images keep them.
+  const withImages = useRef(new Set<string>())
+  useEffect(() => {
+    withImages.current = new Set()
+    marked.current = new Set()
+    setMessages(null)
+    setOpen(new Set())
+  }, [threadId, account])
+  useEffect(() => {
+    let live = true
+    setError(null)
+    fetchThread(account, threadId, [...withImages.current])
+      .then((t) => {
+        if (!live) return
+        setMessages(t.messages)
+        setOpen((o) => {
+          if (o.size) return o
+          // The newest, and anything unread, start open.
+          const next = new Set(t.messages.filter((m) => !m.seen).map((m) => m.id))
+          if (t.messages.length) next.add(t.messages[t.messages.length - 1].id)
+          return next
+        })
+        // Opened is read (Settings in the app's menu can switch that off).
+        if (mailPrefs().markRead && t.messages.some((m) => !m.seen) && !marked.current.has(threadId)) {
+          marked.current.add(threadId)
+          act(account, 'seen', { threadIds: [threadId] }).catch(() => {})
+        }
+      })
+      .catch((e: Error) => live && setError(e.message))
+    return () => {
+      live = false
+    }
+  }, [account, threadId, version])
+
+  // The reading pane's height, for frames that fill it.
+  useEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    const ro = new ResizeObserver(() => el.style.setProperty('--ml-reader-h', `${el.clientHeight}px`))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const loadImages = async (m: Message) => {
+    withImages.current.add(m.id)
+    try {
+      const fresh = await fetchMessage(account, m.id, true)
+      setMessages((list) => list?.map((x) => (x.id === m.id ? fresh : x)) ?? null)
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+  const alwaysImages = (m: Message) => {
+    const sender = m.from[0]?.email
+    if (!sender) return
+    allowImagesFrom(sender)
+    void loadImages(m)
+    notify({ title: 'Images from this sender will load', body: sender, transient: true })
+  }
+
+  const last = messages?.at(-1)
+  const subject = last?.subject || messages?.[0]?.subject || ''
+  const role = (r: string) => boot.mailboxes.find((b) => b.role === r)?.id ?? null
+  const inMailbox = (r: string) => !!messages?.some((m) => m.mailboxIds.includes(role(r) ?? '-'))
+  const inTrash = mailbox === role('trash')
+  const inJunk = mailbox === role('junk')
+  const flagged = !!messages?.some((m) => m.flagged)
+
+  const moveItems = (): MenuItem[] =>
+    orderMailboxes(boot.mailboxes)
+      .filter(({ box }) => box.id !== mailbox && box.role !== 'drafts')
+      .map(({ box, depth }) => ({ label: `${'  '.repeat(depth)}${box.name}`, onSelect: () => onAction('move', { to: box.id }) }))
+
+  /** A message's menu: answering, changes, other apps' actions, images. */
+  const messageMenu = (m: Message): MenuItem[] => {
+    const ref = messageRef(account, m)
+    const registered = new Map(extra.map((a) => [a.id, a]))
+    const plugin = (id: string, label: string): MenuItem => {
+      const a = registered.get(id)
+      return a ? { label: a.label, hint: a.hint, onSelect: () => a.run(ref) } : { label, hint: 'Coming soon', disabled: true }
+    }
+    return [
+      ...(m.draft ? [{ label: 'Edit draft', onSelect: () => onReply(m, 'draft') }] : []),
+      { label: 'Reply', shortcut: 'R', onSelect: () => onReply(m, 'reply') },
+      { label: 'Reply all', shortcut: 'A', onSelect: () => onReply(m, 'replyAll') },
+      { label: 'Forward', shortcut: 'F', onSelect: () => onReply(m, 'forward') },
+      { separator: true },
+      { label: m.seen ? 'Mark as unread' : 'Mark as read', onSelect: () => void act(account, m.seen ? 'unseen' : 'seen', { emailIds: [m.id] }).catch((e: Error) => setError(e.message)) },
+      { label: m.flagged ? 'Unflag' : 'Flag', onSelect: () => void act(account, m.flagged ? 'unflag' : 'flag', { emailIds: [m.id] }).catch((e: Error) => setError(e.message)) },
+      { separator: true },
+      plugin('task', 'Make task from this email'),
+      plugin('event', 'Create event from this email'),
+      ...extra.filter((a) => a.id !== 'task' && a.id !== 'event').map((a) => ({ label: a.label, hint: a.hint, onSelect: () => a.run(ref) })),
+      ...(m.blocked > 0 && !m.images
+        ? [{ separator: true as const }, { label: 'Load images', onSelect: () => void loadImages(m) }, ...(m.from[0] ? [{ label: `Always load images from ${m.from[0].email}`, onSelect: () => alwaysImages(m) }] : [])]
+        : []),
+    ]
+  }
+
+  const toolbar = (
+    <header className="ml-reader-bar">
+      {narrow && (
+        <button className="ml-icon" onClick={onBack} aria-label="Back to the list" title="Back (Esc)">
+          ‹
+        </button>
+      )}
+      <span className="nb-spacer" />
+      <button className="ml-icon" onClick={() => onAction('archive')} title="Archive (E)" aria-label="Archive" disabled={!role('archive') || mailbox === role('archive')}>
+        ⤓
+      </button>
+      <button className="ml-icon" onClick={() => onAction(inTrash ? 'destroy' : 'trash')} title={inTrash ? 'Delete for good (#)' : 'Delete (#)'} aria-label="Delete">
+        🗑
+      </button>
+      <button className="ml-icon" onClick={() => onAction(inJunk ? 'notjunk' : 'junk')} title={inJunk ? 'Not junk' : 'Junk'} aria-label={inJunk ? 'Not junk' : 'Mark as junk'}>
+        {inJunk ? '✓' : '⚠'}
+      </button>
+      <button className="ml-icon" onClick={(e) => openMenuAt(e.currentTarget, moveItems())} title="Move to" aria-label="Move to">
+        ⇢
+      </button>
+      <button className="ml-icon" onClick={() => onAction('unseen')} title="Mark as unread" aria-label="Mark as unread">
+        ●
+      </button>
+      <button className={`ml-icon ${flagged ? 'is-on' : ''}`} onClick={() => last && void act(account, flagged ? 'unflag' : 'flag', { emailIds: flagged ? messages!.filter((m) => m.flagged).map((m) => m.id) : [last.id] }).catch((e: Error) => setError(e.message))} title="Flag (S)" aria-label="Flag">
+        {flagged ? '★' : '☆'}
+      </button>
+      <button className="ml-icon" onClick={(e) => last && openMenuAt(e.currentTarget, messageMenu(last))} title="More" aria-label="More">
+        ⋯
+      </button>
+    </header>
+  )
+
+  return (
+    <section className="ml-reader" aria-label="Conversation">
+      {toolbar}
+      <div className="ml-reader-scroll" ref={scroller}>
+        {error && <p className="ml-problem">{error}</p>}
+        {!messages && !error && <p className="muted ml-loading">Loading…</p>}
+        {messages && (
+          <>
+            <h2 className="ml-subject">
+              {subject || '(No subject)'}
+              {messages.length > 1 && <span className="ml-count">{messages.length}</span>}
+              {inMailbox('junk') && !inJunk && <span className="ml-tag">Junk</span>}
+            </h2>
+            {messages.map((m, i) => (
+              <MessageCard
+                key={m.id}
+                account={account}
+                m={m}
+                open={open.has(m.id)}
+                tall={i === messages.length - 1 || messages.length === 1}
+                onToggle={() => setOpen((o) => (o.has(m.id) ? new Set([...o].filter((x) => x !== m.id)) : new Set([...o, m.id])))}
+                onReply={(mode) => onReply(m, mode)}
+                onMenu={(e) => openContextMenu(e, messageMenu(m))}
+                onMore={(e) => openMenuAt(e.currentTarget, messageMenu(m))}
+                onLoadImages={() => void loadImages(m)}
+                onAlwaysImages={() => alwaysImages(m)}
+                onSearch={onSearch}
+              />
+            ))}
+            {last && !last.draft && (
+              <div className="ml-answer">
+                <button className="btn btn-small" onClick={() => onReply(last, 'reply')}>
+                  ↩ Reply
+                </button>
+                <button className="btn btn-small" onClick={() => onReply(last, 'replyAll')}>
+                  ↩↩ Reply all
+                </button>
+                <button className="btn btn-small" onClick={() => onReply(last, 'forward')}>
+                  ↪ Forward
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function MessageCard({
+  account,
+  m,
+  open,
+  tall,
+  onToggle,
+  onReply,
+  onMenu,
+  onMore,
+  onLoadImages,
+  onAlwaysImages,
+  onSearch,
+}: {
+  account: number
+  m: Message
+  open: boolean
+  tall: boolean
+  onToggle: () => void
+  onReply: (mode: ReplyMode) => void
+  onMenu: (e: MouseEvent) => void
+  onMore: (e: MouseEvent<HTMLButtonElement>) => void
+  onLoadImages: () => void
+  onAlwaysImages: () => void
+  onSearch: (q: string) => void
+}) {
+  const sender = m.from[0]
+  const ref = useMemo(() => messageRef(account, m), [account, m])
+  const searchFrom = sender ? [{ label: `Mail from ${sender.email}`, onSelect: () => onSearch(`from:${sender.email}`) }] : []
+  if (!open)
+    return (
+      <article className={`ml-msg is-folded ${m.seen ? '' : 'is-unread'}`} onClick={onToggle} onContextMenu={onMenu}>
+        <Avatar person={sender} size={26} />
+        <strong className="ml-msg-from">{nameOf(sender)}</strong>
+        <span className="ml-msg-snippet">{m.draft ? <em className="ml-draft">Draft</em> : null} {m.preview}</span>
+        <time className="ml-msg-date">{longDate(m.receivedAt)}</time>
+      </article>
+    )
+  const recipients = (label: string, list: Message['to']) =>
+    list.length > 0 && (
+      <span>
+        {label}{' '}
+        {list.map((a, i) => (
+          <span key={a.email}>
+            {i > 0 && ', '}
+            <PersonName person={a} />
+          </span>
+        ))}
+      </span>
+    )
+  return (
+    <article className={`ml-msg ${m.seen ? '' : 'is-unread'}`} onContextMenu={(e) => !(e.target as Element).closest('a, input, textarea') && onMenu(e)}>
+      <header className="ml-msg-head" onClick={onToggle}>
+        <Avatar person={sender} />
+        <div className="ml-msg-who">
+          <div>
+            {sender ? <PersonName person={sender} more={searchFrom} /> : <strong>(No sender)</strong>}
+            {sender?.name && <span className="muted ml-msg-addr"> &lt;{sender.email}&gt;</span>}
+            {m.draft && <em className="ml-draft">Draft</em>}
+          </div>
+          <div className="ml-msg-to muted" onClick={(e) => e.stopPropagation()}>
+            {recipients('to', m.to)}
+            {m.cc.length > 0 && <> · {recipients('cc', m.cc)}</>}
+            {m.bcc.length > 0 && <> · {recipients('bcc', m.bcc)}</>}
+          </div>
+        </div>
+        <time className="ml-msg-date" title={longDate(m.receivedAt)}>
+          {longDate(m.receivedAt)}
+        </time>
+        {m.flagged && <span className="ml-flag" title="Flagged">★</span>}
+        <button className="ml-icon" onClick={(e) => (e.stopPropagation(), onReply(m.draft ? 'draft' : 'reply'))} title={m.draft ? 'Edit draft' : 'Reply'} aria-label={m.draft ? 'Edit draft' : 'Reply'}>
+          {m.draft ? '✎' : '↩'}
+        </button>
+        <button className="ml-icon" onClick={(e) => (e.stopPropagation(), onMore(e))} title="More" aria-label="More">
+          ⋯
+        </button>
+      </header>
+      {m.blocked > 0 && !m.images && (
+        <div className="ml-images">
+          <span>
+            Remote images are hidden ({m.blocked}), so the sender can't see that you opened this{m.trackers > 0 ? `; ${m.trackers} tracking ${m.trackers === 1 ? 'pixel stays' : 'pixels stay'} out either way` : ''}.
+          </span>
+          <button className="link-btn" onClick={onLoadImages}>
+            Load images
+          </button>
+          {sender && (
+            <button className="link-btn" onClick={onAlwaysImages}>
+              Always for {sender.email}
+            </button>
+          )}
+        </div>
+      )}
+      {m.images && m.trackers > 0 && <div className="ml-images muted">Images loaded; {m.trackers} tracking {m.trackers === 1 ? 'pixel was' : 'pixels were'} left out.</div>}
+      {m.invite && <InviteCard invite={m.invite} message={ref} />}
+      <div className="ml-msg-body">
+        {m.html !== null ? <MessageFrame html={m.html} images={m.images} tall={tall} /> : <PlainText text={m.text ?? ''} />}
+        {m.truncated && <p className="muted ml-truncated">This message is long: the end of it is not shown.</p>}
+      </div>
+      {m.attachments.length > 0 && <Attachments account={account} list={m.attachments} />}
+    </article>
+  )
+}
+
+/** Downloads a file the browser already has, by a link click. */
+function download(url: string, name: string) {
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  a.rel = 'noopener'
+  document.body.append(a)
+  a.click()
+  a.remove()
+}
+
+async function saveToSeafile(account: number, list: Attachment[]) {
+  const folder = await pickFolder({ title: list.length === 1 ? `Save ${list[0].name} to` : `Save ${list.length} attachments to` })
+  if (!folder) return
+  try {
+    const files = await Promise.all(list.map((a) => blobFile(account, a)))
+    await uploadFiles(
+      files.map((file) => ({ file, rel: '' })),
+      folder,
+    )
+  } catch (e) {
+    notify({ title: 'Could not save to Files', body: (e as Error).message, transient: true })
+  }
+}
+
+function Attachments({ account, list }: { account: number; list: Attachment[] }) {
+  const seafile = !!getAccount().seafile
+  const menu = (a: Attachment): MenuItem[] => [
+    { label: 'Download', onSelect: () => download(blobUrl(account, a), a.name) },
+    ...(/^image\//.test(a.type) ? [{ label: 'Open in a new tab', onSelect: () => window.open(blobUrl(account, a, true), '_blank', 'noopener,noreferrer') }] : []),
+    { label: 'Save to Files (Seafile)…', disabled: !seafile, hint: seafile ? undefined : 'Link Seafile in Settings first', onSelect: () => void saveToSeafile(account, [a]) },
+  ]
+  return (
+    <div className="ml-attachments">
+      {list.map((a) => (
+        <button key={a.blobId + a.name} className="ml-att" onClick={(e) => openMenuAt(e.currentTarget, menu(a))} onContextMenu={(e) => openContextMenu(e, menu(a))} title={`${a.name} · ${formatSize(a.size)}`}>
+          {/^image\/(png|jpe?g|gif|webp)$/i.test(a.type) && a.size < 8_000_000 ? <img src={blobUrl(account, a, true)} alt="" loading="lazy" /> : <span className="ml-att-ext">{(a.name.split('.').pop() ?? '').slice(0, 4).toUpperCase() || 'FILE'}</span>}
+          <span className="ml-att-name">{a.name}</span>
+          <span className="ml-att-size">{formatSize(a.size)}</span>
+        </button>
+      ))}
+      {list.length > 1 && (
+        <div className="ml-att-all">
+          <button className="link-btn" onClick={() => list.forEach((a) => download(blobUrl(account, a), a.name))}>
+            Download all
+          </button>
+          {seafile && (
+            <button className="link-btn" onClick={() => void saveToSeafile(account, list)}>
+              Save all to Files…
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
