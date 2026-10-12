@@ -1229,6 +1229,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         showRally: mySelection().some((u) => u.t.tier === 'station'),
         // A finger has no hover: the selection shows its ranges instead.
         ranges: settingsRef.current.ranges ? (touchLast.current ? 'selected' : 'hover') : 'off',
+        models: settingsRef.current.models,
       }
       renderer.current.draw(ctx, w, cm, vw, vh, v, dt * (paused.current ? 0 : speed.current))
       sound.ambience(paused.current ? 0 : dt)

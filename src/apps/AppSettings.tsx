@@ -391,6 +391,9 @@ function EmpiresSettings() {
         <Row title="Show weapon ranges on hover" hint="Rings for each gun's reach and the sensors round the ship or station under the pointer; on a touch screen, round the selected ones">
           <Toggle on={s.ranges} onChange={(ranges) => setEmpires({ ranges })} label="Show weapon ranges on hover" />
         </Row>
+        <Row title="Procedural models (preview)" hint="Ships and stations that have one are drawn as cel-shaded models with parts that break off; off, every unit shows its sprite">
+          <Toggle on={s.models} onChange={(models) => setEmpires({ models })} label="Procedural models (preview)" />
+        </Row>
         <Row title="Fog of war grid" hint={`Where sight ends, cell by cell · ${keyName(s.keys.fogGrid)} in a battle`}>
           <Toggle on={s.fogGrid} onChange={(fogGrid) => setEmpires({ fogGrid })} label="Fog of war grid" />
         </Row>

@@ -8,6 +8,7 @@ import { ALLY, ENEMY, OWN, drawTerrainOverview, relColor } from './render'
 import { ACTIONS, RESERVED, bindKey, keyName, keyOf, resetKeys, setSettings, useAskedPanel, useSettings, type Action, type Settings } from './settings'
 import { empiresMix, empiresMusic, empiresMuted, empiresVolume } from '../prefs'
 import { newWorld, type Owner, type World } from './sim'
+import { Codex } from './Codex'
 import { score } from './Scoreboard'
 import type { Bus, EmpiresSound } from './sound'
 import { TAP_SLOP, isTouch, useCoarse } from './Touch'
@@ -463,6 +464,10 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
         <Seg label="Weapon ranges" value={s.ranges} options={[[true, 'On'], [false, 'Off']]} onChange={(v) => set({ ranges: v })} />
       </div>
       <div className="ew-row">
+        <span>Procedural models (preview)</span>
+        <Seg label="Procedural models" value={s.models} options={[[true, 'On'], [false, 'Sprites']]} onChange={(v) => set({ models: v })} />
+      </div>
+      <div className="ew-row">
         <span>Messages</span>
         <Seg label="Messages" value={s.toasts} options={[[true, 'All'], [false, 'Alerts only']]} onChange={(v) => set({ toasts: v })} />
       </div>
@@ -588,7 +593,7 @@ export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, 
   saves?: number
   initial?: MenuScreen
 }) {
-  const [panel, setPanel] = useState<'settings' | 'keys' | 'howto' | null>(null)
+  const [panel, setPanel] = useState<'settings' | 'keys' | 'howto' | 'codex' | null>(null)
   // Settings → Apps → Games asked for the game's settings or key bindings.
   useAskedPanel(setPanel)
   // Fingers get no keybinds, and the notes that are tooltips for a mouse as text.
@@ -696,6 +701,9 @@ export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, 
           <button className="ew-menu-btn" onClick={click(() => setScreen('multi'))}>
             <Icon name="army" size={20} /> Multiplayer
           </button>
+          <button className="ew-menu-btn" onClick={click(() => setPanel('codex'))} data-tip="Every ship and structure of both sides: what they carry, what they cost and what they beat">
+            <Icon name="codex" size={20} /> Codex
+          </button>
           <button className="ew-menu-btn" onClick={click(() => setPanel('settings'))}>
             <Icon name="gear" size={20} /> Settings
           </button>
@@ -720,6 +728,7 @@ export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, 
           <KeybindsPanel />
         </Modal>
       )}
+      {panel === 'codex' && <Codex sound={sound} onClose={() => setPanel(null)} />}
       {panel === 'howto' && (
         <Modal title="How to play" onClose={() => setPanel(null)}>
           <HowToPlay />

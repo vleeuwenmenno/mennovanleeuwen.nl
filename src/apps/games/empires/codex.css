@@ -1,0 +1,278 @@
+/* The Codex: a list of units, a turning view of the one picked, and its numbers. It covers the main
+   menu; on a phone (or a narrow window on a touch screen) the three stack: units as a row of chips,
+   the view, then the numbers. */
+
+.ew-root.ew-codex {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  background: radial-gradient(ellipse at 50% 40%, #0b1426 0%, #04060d 70%);
+}
+.ew-cx-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(183, 154, 98, 0.3);
+  background: linear-gradient(180deg, rgba(16, 26, 50, 0.95), rgba(9, 15, 30, 0.95));
+}
+.ew-cx-top h2 {
+  font-size: 18px;
+  color: var(--ew-head);
+  text-transform: uppercase;
+  margin-right: 6px;
+}
+.ew-cx-top .ew-cx-ws {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ew-cx-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) 320px;
+}
+.ew-cx-nav {
+  overflow: auto;
+  padding: 10px;
+  border-right: 1px solid var(--ew-cell-line);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ew-cx-nav h5,
+.ew-cx-stats h5 {
+  margin: 0 0 4px;
+  font-family: var(--ew-display);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ew-head);
+}
+.ew-cx-nav section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ew-cx-nav button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  text-align: left;
+  padding: 6px 9px;
+}
+.ew-cx-tag {
+  font-style: normal;
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #04060d;
+  background: var(--ew-gold);
+}
+.ew-cx-view {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ew-cx-canvas {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: block;
+  touch-action: none;
+  cursor: grab;
+}
+.ew-cx-canvas.is-workshop {
+  cursor: crosshair;
+}
+.ew-cx-level {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.ew-cx-hint {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  margin: 0;
+  pointer-events: none;
+}
+.ew-cx-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--ew-cell-line);
+  background: rgba(9, 15, 30, 0.92);
+}
+.ew-cx-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.ew-cx-slider input {
+  flex: 1;
+  min-width: 120px;
+}
+.ew-cx-slider b {
+  width: 3.2em;
+  text-align: right;
+}
+.ew-cx-parts button {
+  font-size: 11.5px;
+  padding: 2px 7px;
+}
+.ew-cx-destroy {
+  background: linear-gradient(180deg, #b8402e, #7a2116) !important;
+  border-color: #ff8a70 !important;
+  color: #fff;
+  font-family: var(--ew-display);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.ew-cx-note {
+  margin: 0;
+  color: var(--ew-muted);
+}
+.ew-cx-side {
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+  border-left: 1px solid var(--ew-cell-line);
+}
+.ew-cx-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ew-cx-stats header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ew-cx-stats h3 {
+  font-size: 15px;
+}
+.ew-cx-stats header em {
+  font-style: normal;
+  color: var(--ew-muted);
+  font-size: 11.5px;
+}
+.ew-cx-stats p {
+  margin: 0;
+}
+.ew-cx-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+}
+.ew-cx-stat {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(110, 150, 220, 0.12);
+}
+.ew-cx-stat span {
+  color: var(--ew-muted);
+}
+.ew-cx-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ew-cx-list li {
+  display: grid;
+  grid-template-columns: 8px 1fr;
+  column-gap: 8px;
+  align-items: center;
+}
+.ew-cx-list i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.ew-cx-list small {
+  grid-column: 2;
+  color: var(--ew-muted);
+}
+.ew-cx-role {
+  line-height: 1.6;
+}
+.ew-bad-text {
+  color: var(--ew-bad);
+}
+
+/* Narrow: units as chips in a row, the view, then the numbers, all in one scrolling column. */
+@container (max-width: 860px) {
+  .ew-cx-body {
+    grid-template-columns: minmax(0, 1fr);
+    /* Each row as tall as what's in it: the body scrolls, the rows never squeeze. */
+    grid-template-rows: max-content max-content max-content;
+    overflow: auto;
+  }
+  .ew-cx-view,
+  .ew-cx-side {
+    min-height: auto;
+  }
+  .ew-cx-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    border-right: 0;
+    border-bottom: 1px solid var(--ew-cell-line);
+    padding: 8px 10px;
+  }
+  .ew-cx-nav section {
+    flex-direction: row;
+    align-items: center;
+  }
+  .ew-cx-nav h5 {
+    display: none;
+  }
+  .ew-cx-nav button {
+    white-space: nowrap;
+  }
+  .ew-cx-canvas {
+    height: min(52vh, 420px);
+    flex: none;
+  }
+  .ew-cx-side {
+    border-left: 0;
+    overflow: visible;
+  }
+  .ew-cx-top {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .ew-cx-hint {
+    top: auto;
+    bottom: 8px;
+  }
+  .ew-cx-view:has(.ew-cx-tools) .ew-cx-hint {
+    display: none;
+  }
+}
+@container (max-width: 520px) {
+  .ew-cx-grid {
+    grid-template-columns: 1fr;
+  }
+  .ew-cx-top h2 {
+    font-size: 15px;
+  }
+}
