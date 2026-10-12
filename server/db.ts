@@ -106,6 +106,9 @@ export function database(): DatabaseSync {
     CREATE INDEX IF NOT EXISTS mc_sessions_open ON mc_sessions (left_at);
     -- Players hiding their name used to be recorded as "Anonymous Player" (not a valid name).
     DELETE FROM mc_sessions WHERE name = 'Anonymous Player';
+    -- Nor are glued-together RCON answers ("There are 0 of a max of 20 players online:"): no real
+    -- name has a space or runs past 16 characters.
+    DELETE FROM mc_sessions WHERE name LIKE '% %' OR length(name) > 16;
     -- The Agents app (server/agents.ts): threads with their messages, and what the agent was asked
     -- to remember about the user across threads.
     CREATE TABLE IF NOT EXISTS agent_threads (
