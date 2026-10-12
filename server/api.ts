@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
-import { addMemory, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
+import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
 import { authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, startLogin } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
@@ -342,6 +342,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     const memoryId = /^\/api\/agents\/memories\/(\d+)$/.exec(path)?.[1]
     if (memoryId && method === 'PATCH') return json(res, 200, updateMemory(requireUser(req), memoryId, await readJson(req, 8192))), true
     if (memoryId && method === 'DELETE') return deleteMemory(requireUser(req), Number(memoryId)), json(res, 200, { ok: true }), true
+    // Web sites the user allowed for good: their threads read addresses there without asking.
+    if (path === '/api/agents/sites' && read) return json(res, 200, listSites(requireUser(req))), true
+    if (path === '/api/agents/sites' && method === 'POST') return json(res, 200, allowSite(requireUser(req), await readJson(req, 4096))), true
+    const siteHost = /^\/api\/agents\/sites\/([a-z0-9.-]{1,253})$/i.exec(path)?.[1]
+    if (siteHost && method === 'DELETE') return json(res, 200, removeSite(requireUser(req), siteHost)), true
     // The notification hub (server/notifier.ts): the account's list (the bell), changes to it, a
     // page's live stream and heartbeat, and notifications a page noticed itself.
     if (path === '/api/notifications' && read) return json(res, 200, { entries: listEntries(requireUser(req)) }), true

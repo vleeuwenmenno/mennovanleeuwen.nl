@@ -237,6 +237,15 @@ export function database(): DatabaseSync {
   db.exec('CREATE INDEX IF NOT EXISTS agent_shares_user ON agent_shares (user_id, created_at)')
   db.exec('CREATE INDEX IF NOT EXISTS agent_shares_thread ON agent_shares (thread_id)')
   db.exec('CREATE INDEX IF NOT EXISTS agent_shares_expiry ON agent_shares (expires_at) WHERE expires_at IS NOT NULL')
+  // Added later: web sites the user allowed for good ("Allow github.com" on a web read the agent
+  // asked about), for all their threads, and why a web read ran without asking (shown on its row).
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_domains (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    host TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, host)
+  )`)
+  if (!cols('agent_messages').includes('checked')) db.exec('ALTER TABLE agent_messages ADD COLUMN checked TEXT')
   key =Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())
   return db
