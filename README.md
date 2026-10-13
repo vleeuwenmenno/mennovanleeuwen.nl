@@ -50,7 +50,10 @@ For developers it is one rule, under *Text selection* at the top of
 [`src/styles.css`](src/styles.css): `body` is `user-select: none`, and fields, `code` and anything
 with the `selectable` class (or `data-selectable`; `copyable` for an error or notice) opt back in.
 Mark the element that holds the content, not each line. Ctrl+A and the picture drags are handled
-in [`src/os/selection.ts`](src/os/selection.ts).
+in [`src/os/selection.ts`](src/os/selection.ts). So is a Firefox quirk: once a text field has had
+the focus, a drag in selectable text inside a `user-select: none` page selects nothing, so for the
+frame in which a press in selectable text starts a selection the page is selectable (an
+`html[data-selecting]` rule), and the rules apply again right after.
 
 ## Workspaces and the dock
 
@@ -248,16 +251,44 @@ Spotlight takes `go <alias>` too, and lists matching aliases as you type (the mo
 ones after a bare `go `) from the golinks server's `/suggest`, asked straight from the browser so
 the token never passes through this site's server.
 
+### Tabs and selecting
+
+A Terminal window has tabs, like Ghostty's or Windows Terminal's
+([`src/apps/Terminal.tsx`](src/apps/Terminal.tsx), `TerminalTabs`). Each tab is its own shell
+(`TerminalSession`): its own working folder, history position, environment, scrollback and
+running program, and the tabs not in front keep running (a `watch` or `vtdemo` goes on drawing,
+at its own size). The strip shows from the second tab on (or always, in the settings); each tab
+is titled after what a program in it called itself, else what runs, else its folder, and the
+window's title follows the front tab. Keys, ahead of the shell and of full-screen programs:
+
+- Ctrl+Shift+T new tab (in the front tab's folder), Ctrl+Shift+W close it.
+- Ctrl+Tab / Ctrl+Shift+Tab and Ctrl+PageDown / Ctrl+PageUp next and previous, Ctrl+Shift+1…9
+  that tab (9 the last). Alt+1…9 stays with the workspaces. Browsers keep some of these for their
+  own tabs (Chrome never hands a page Ctrl+Tab, Ctrl+PageUp/Down or Ctrl+Shift+T/W); there the
+  strip, the menus and Ctrl+Shift+1…9 still work.
+- The mouse: + or a double-click on the empty strip opens one, a middle click closes one, a drag
+  moves one along the strip. The window menu and the right-click menu have *New tab* too.
+
+`exit` closes its tab only; the last tab's closes the window. Closing a tab in which a program
+runs asks first, and closing a window with more than one tab asks once ("Close 3 tabs?"), both
+in the desktop's own dialog. The tabs, their folders and which one was in front are kept in the
+window's props (`tabs`, `tab`), so a reload brings them back; what ran in them does not. A
+request from another app (*Open in terminal*) runs in the front tab.
+
+Selecting the scrollback (or a full-screen program's screen) leaves the selection in place until
+you click elsewhere or type; a plain click puts the caret on the prompt. Ctrl+Shift+C copies it
+(so does Ctrl+C with text selected, or the right-click menu), Ctrl+Shift+V pastes.
+
 ### Terminal settings
 
 The Terminal has its own settings sheet ([`src/terminal/TerminalSettings.tsx`](src/terminal/TerminalSettings.tsx)),
 opened from its window menu (Terminal settings…), its right-click menu, or `settings` at the prompt
-(`settings system` opens the Settings app instead). The same settings, less the per-window zoom,
+(`settings system` opens the Settings app instead). The same settings, less the per-tab zoom,
 are in Settings → Apps → Terminal, and the sheet's *Open in Settings…* goes there. They are kept in
 this browser and synced like notes when signed in ([`src/terminal/prefs.ts`](src/terminal/prefs.ts)):
 - **Text size**, separately for desktops and for phones (below the 720 px breakpoint, where
   windows fill the screen). Changes apply live. The single size saved before carries over to both.
-- **Zoom** for one window only, until it closes: Ctrl + / − / 0, Ctrl with the scroll wheel, or a
+- **Zoom** for one tab only, until it closes: Ctrl + / − / 0, Ctrl with the scroll wheel, or a
   two-finger pinch on a touch screen, with a badge showing the new size. It multiplies the text
   size. Full-screen programs (nano, htop, `agents`) redraw to the new rows and columns, which
   `stty size` prints.
@@ -267,6 +298,7 @@ this browser and synced like notes when signed in ([`src/terminal/prefs.ts`](src
   tapped twice, and apply while held; they also apply to letters typed on the keyboard (Ctrl, then
   c, is Ctrl+C). The keys go through the same handler as a real keyboard, so completion, history
   and full-screen programs get them as usual. The row can be turned off.
+- **Tab bar**: from the second tab on (the default, like Ghostty), or always.
 
 ### The shell, agents and skills
 

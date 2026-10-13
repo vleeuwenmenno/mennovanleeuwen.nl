@@ -2021,10 +2021,128 @@ body.is-resizing iframe {
   height: 100%;
   min-height: 0;
 }
-.term-wrap > .terminal {
+.term-wrap > .terminal,
+.term-tab > .terminal {
   flex: 1;
   min-height: 0;
   height: auto;
+}
+/* A window's tabs: each its own screen, stacked; those out of sight keep their size, so what
+   runs in them keeps drawing for it (src/apps/Terminal.tsx, TerminalTabs). */
+.term-stack {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.term-tab {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+.term-tab:not(.is-active) {
+  visibility: hidden;
+}
+/* The tab strip, under the title bar: tabs of one width that share the room, + after them. */
+.term-tabs {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  height: 30px;
+  background: var(--bg-dark);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.term-tabs-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 220px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 0 12px;
+  border-right: 1px solid var(--line);
+  border-top: 2px solid transparent;
+  color: var(--muted);
+  cursor: default;
+}
+.term-tabs-tab:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.term-tabs-tab.is-active {
+  border-top-color: var(--accent);
+  background: var(--bg);
+  color: var(--fg-bright);
+}
+.term-tabs-tab.is-dragging {
+  opacity: 0.75;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+}
+.term-tabs-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* Something runs in the tab. */
+.term-tabs-busy {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.term-tabs-close,
+.term-tabs-new {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  align-self: center;
+  color: var(--muted);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+}
+.term-tabs-close {
+  visibility: hidden;
+}
+.term-tabs-tab:hover .term-tabs-close,
+.term-tabs-tab.is-active .term-tabs-close {
+  visibility: visible;
+}
+.term-tabs-close:hover,
+.term-tabs-new:hover {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  color: var(--fg-bright);
+}
+.term-tabs-new {
+  width: 30px;
+  height: 100%;
+  font-size: 17px;
+}
+/* Fingers: taller tabs, every close button showing. */
+@media (pointer: coarse) {
+  .term-tabs {
+    height: 38px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .term-tabs-tab {
+    min-width: 96px;
+  }
+  .term-tabs-close {
+    visibility: visible;
+    width: 30px;
+    height: 30px;
+  }
+  .term-tabs-new {
+    width: 42px;
+  }
 }
 .terminal[data-drop-over] {
   outline: 2px dashed var(--accent);
@@ -2187,7 +2305,8 @@ body.is-resizing iframe {
 }
 /* Pinching zooms the terminal, not the page; one finger still scrolls. */
 @media (pointer: coarse) {
-  .term-wrap > .terminal {
+  .term-wrap > .terminal,
+  .term-tab > .terminal {
     touch-action: pan-x pan-y;
   }
 }
