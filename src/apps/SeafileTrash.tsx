@@ -211,9 +211,9 @@ export function SeafileTrash({ repo: startRepo = null, onOpenFolder, toast }: { 
         </button>
       </div>
 
-      {error && <p className="t-red st-note">{error === 'That library is locked: open it in Files and give its password first' ? `${error}.` : error}</p>}
+      {error && <p className="t-red st-note copyable">{error === 'That library is locked: open it in Files and give its password first' ? `${error}.` : error}</p>}
 
-      {!open && keep === 0 && <p className="t-red st-note">This library keeps no history: whatever is deleted from it is gone for good, and its trash stays empty. Pick how long to keep deleted things above.</p>}
+      {!open && keep === 0 && <p className="t-red st-note copyable">This library keeps no history: whatever is deleted from it is gone for good, and its trash stays empty. Pick how long to keep deleted things above.</p>}
 
       {open ? (
         <ul className="st-list">

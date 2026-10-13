@@ -105,7 +105,7 @@ export function UsersSettings() {
       <section className="set-section">
         <h4>Accounts</h4>
         <input className="set-search usr-search" type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by login or name" aria-label="Search accounts" />
-        {error && <p className="t-red">{error}</p>}
+        {error && <p className="t-red copyable">{error}</p>}
         {users === null ? (
           <p className="muted">Loading…</p>
         ) : users.length === 0 ? (
@@ -292,7 +292,7 @@ function UserDetail({ u, onBack, onChange }: { u: AdminUser; onBack: () => void;
           </li>
         </ul>
       )}
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
     </>
   )
 }

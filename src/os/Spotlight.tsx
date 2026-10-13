@@ -1375,7 +1375,7 @@ export function Spotlight() {
               )
             })}
           </div>
-          {prefs.preview && <aside className="sp-preview">{current?.preview ? current.preview() : current ? <DefaultPreview r={current} /> : null}</aside>}
+          {prefs.preview && <aside className="sp-preview selectable">{current?.preview ? current.preview() : current ? <DefaultPreview r={current} /> : null}</aside>}
         </div>
         )}
         {menuTarget && (

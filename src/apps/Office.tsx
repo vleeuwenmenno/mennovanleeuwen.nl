@@ -200,10 +200,10 @@ export function Office({ win, kind }: { win: WinState; kind?: NewKind }) {
           ) : check.busy ? (
             <span>Asking the document server to fetch {nameOf(path)}… (up to a minute)</span>
           ) : check.error ? (
-            <span className="t-red">{check.error}</span>
+            <span className="t-red copyable">{check.error}</span>
           ) : (
             check.result && (
-              <ul>
+              <ul className="copyable">
                 <li className={check.result.downloadOk ? 't-green' : 't-red'}>{check.result.downloadOk ? '✓' : '✗'} {check.result.download}</li>
                 <li className={check.result.callbackOk ? 't-green' : ''}>{check.result.callbackOk ? '✓' : '•'} {check.result.callback}</li>
                 <li className="muted">• {check.result.api}</li>
@@ -217,7 +217,7 @@ export function Office({ win, kind }: { win: WinState; kind?: NewKind }) {
           {error ? (
             <>
               <p className="pv-big">{path ? nameOf(path) : 'New document'}</p>
-              <p className="muted">{error}</p>
+              <p className="muted copyable">{error}</p>
               {path && isSf(path) && (
                 <span className="office-actions">
                   <button className="btn btn-small" onClick={() => void download(path).catch(() => {})}>

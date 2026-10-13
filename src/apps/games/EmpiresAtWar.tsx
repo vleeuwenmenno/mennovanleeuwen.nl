@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { RotateHint } from './empires/RotateHint'
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, fleetThink, newBrain, profileOf, think, type Brain } from './empires/ai'
-import { ALL_SPRITES, BUILD_RADIUS, FACTIONS, SITE_UPGRADES, TECH, UNIT, buildable, dims, isEngineer, isShip, yardOf, type HardpointKind, type Tier } from './empires/data'
+import { ALL_SPRITES, BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, UNIT, WORKS_NAME, buildable, dims, isEngineer, isShip, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type Tier } from './empires/data'
 import { SizesContext, DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, Icon, ReserveTray, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
-import { LongPress, TouchBar, WheelHost, getTouchMods, isTouch, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
+import { LongPress, TouchBar, WheelHost, getTouchMods, isTouch, useCoarse, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
 import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
 import { Multiplayer } from './empires/Multiplayer'
@@ -21,7 +20,7 @@ import { Renderer, relColor, type Camera, type View } from './empires/render'
 import { beginLayout } from './empires/layout'
 import { defaultArea, inRect, inside, type Pt } from './empires/maps'
 import {
-  STEP, RANKS, autoStart, REFUND_DELAY, canRetreat, canSee, cantConstruct, cantMend, closedLoop, cantWarp, typeOf, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, placement, startProblem, tick, type Owner, type SimEvent, type Unit, type World, stateHash,
+  STEP, RANKS, autoStart, REFUND_DELAY, canRetreat, canSee, cantConstruct, cantMend, closedLoop, cantWarp, typeOf, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, placement, startProblem, tick, wrapAngle, type Owner, type SimEvent, type Unit, type World, stateHash,
 } from './empires/sim'
 import { EmpiresSound, type OrderKind } from './empires/sound'
 import { TechTree } from './empires/TechTree'
@@ -395,11 +394,33 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   // Dev builds expose the battle for poking at from the console.
   if (import.meta.env.DEV) (window as unknown as { __ew: unknown }).__ew = { world: world.current, brains: brains.current, cam: cam.current }
   const selected = useRef(new Set<number>(resumed.current && resume ? resume.sel : []))
+  // Dev builds only: the cheat panel (empires/devCheats.tsx), loaded on demand and never in a
+  // multiplayer battle. The branch is gone from a production build, and the module with it.
+  const [dev, setDev] = useState<typeof import('./empires/devCheats') | null>(null)
+  const devRef = useRef(dev)
+  devRef.current = dev
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      if (online) return
+      let live = true
+      void import('./empires/devCheats').then((m) => {
+        if (!live) return
+        ;(window as unknown as { __ewDev: unknown }).__ewDev = m
+        setDev(m)
+      })
+      return () => {
+        live = false
+      }
+    }
+  }, [])
   const groups = useRef(new Map<string, number[]>(resumed.current && resume ? resume.groups : []))
   const mode = useRef<Mode>('normal')
   /** Hybrid bases: the yard being placed ('place' mode), the engineers who will build it, and on
    * touch the spot picked so far (it waits for the confirm button). */
-  const placing = useRef<{ unit: string; ids: number[]; at: Pt | null } | null>(null)
+  const placing = useRef<{ unit: string; ids: number[]; at: Pt | null; /** The way the mouth faces, once the player turns it (else away from the station). */ a: number | null } | null>(null)
+  /** Mouse: a press at the spot being dragged out to set the facing; the yard goes down on release. */
+  const placeDrag = useRef<{ at: Pt; sx: number; sy: number; turned: boolean } | null>(null)
+  const wheelAcc = useRef(0)
   /** An ore asteroid picked with nothing else selected: the command card offers to build on it. */
   const pickedNode = useRef(-1)
   const hover = useRef({ unit: 0, hp: -1, node: -1, wreck: 0 })
@@ -433,6 +454,11 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const [touchUi, setTouchUi] = useState(false)
   const wheel = useRef<(r: WheelRequest | null) => void>(() => {})
   const [mapOpen, setMapOpen] = useState(false)
+  // On a touch screen the selection is one small button; its panel opens from it and closes on a tap away.
+  const compact = useCoarse()
+  const [selOpen, setSelOpen] = useState(false)
+  const selOpenRef = useRef(false)
+  selOpenRef.current = compact && selOpen
 
   const root = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -799,7 +825,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       return
     }
     setMode('place')
-    placing.current = { unit, ids: crew.map((u) => u.id), at: null }
+    placing.current = { unit, ids: crew.map((u) => u.id), at: null, a: null }
     sound.arm()
   }
   /** Put the yard down at `at` (the order goes into the engineers' queues with `queued`). */
@@ -813,7 +839,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       setUi((u) => ({ ...u }))
       return
     }
-    const why = order('place', pl.ids, pl.unit, at.x, at.y, queued)
+    const why = order('place', pl.ids, pl.unit, at.x, at.y, queued, pl.a ?? undefined)
     if (why) {
       toast(why, 'bad')
       sound.error()
@@ -826,7 +852,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   }
   /** Touch (the action wheel): start placing a yard with its spot already pinned at `at`. */
   const pinYard = (at: Pt) => {
-    startPlace(yardOf(world.current.players[me].faction).id)
+    startPlace(nextYard())
     if (placing.current) placing.current.at = { x: at.x, y: at.y }
     setUi((u) => ({ ...u }))
   }
@@ -838,6 +864,13 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     touchLast.current = false
     place(at, shiftOf())
   }
+  /** Turn the yard being placed by `deg` degrees (positive: clockwise on screen). */
+  const rotatePlace = (deg: number) => {
+    const pl = placing.current
+    if (!pl) return
+    pl.a = wrapAngle((pl.a ?? placeGhost()?.a ?? 0) + (deg * Math.PI) / 180)
+    setUi((u) => ({ ...u }))
+  }
   /** The ghost of the yard being placed, for the renderer: under the pointer (or the pinned spot). */
   const placeGhost = () => {
     const pl = placing.current
@@ -846,8 +879,27 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const at = pl.at ?? (mouse.current.inside ? toWorld(mouse.current.x, mouse.current.y) : null)
     const st = w.byId.get(w.players[me].station)
     if (!at || !st) return null
-    const g = placement(w, me, pl.unit, at.x, at.y)
+    const g = placement(w, me, pl.unit, at.x, at.y, pl.a ?? undefined)
     return { t: typeOf(w, pl.unit), x: g.x, y: g.y, a: g.a, ok: !g.why, why: g.why, cost: g.cost, rebuild: !!g.ruin, ring: { x: st.x, y: st.y, r: BUILD_RADIUS } }
+  }
+  /** The yard to place next: the first of ours (the Frigate Yard, then the Capital Yard) we have
+   * neither standing nor going up and the station is upgraded for, else the Frigate Yard (its ghost
+   * then says why not). */
+  const nextYard = () => {
+    const w = world.current
+    const p = w.players[me]
+    const lacking = yardsFor(p.faction).filter((t) => !w.units.some((u) => !u.dead && u.owner === me && u.t.id === t.id))
+    return (lacking.find((t) => t.level <= p.level) ?? lacking[0] ?? yardOf(p.faction)).id
+  }
+  /** Select our Capital Yard and look at it. */
+  const selectCapitalYard = () => {
+    const w = world.current
+    const y = w.units.find((u) => !u.dead && u.owner === me && u.t.id === yardOf(myFaction, 'cyard').id)
+    if (!y) {
+      toast(w.hybrid ? 'No Capital Yard yet: engineers build one near the Command Station from station level 3' : 'No yards in this battle', 'info')
+      return sound.error()
+    }
+    selectOne(y.id)
   }
   /** Select one of our yards, the next one each time; asked again for the one selected, look at it. */
   const selectYard = () => {
@@ -1117,6 +1169,18 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       sound.error()
     } else sound.queued()
   }
+  /** Order an expansion on one of our buildings (hybrid bases), or call one off. */
+  const expand = (uid: number, id: ModuleId) => {
+    sound.unlock()
+    const why = order('expand', uid, id)
+    if (why) {
+      toast(why, 'bad')
+      sound.error()
+    } else sound.queued()
+  }
+  const cancelExpand = (uid: number, i: number) => {
+    if (!order('cancelExpand', uid, i)) sound.unqueued()
+  }
   /** Right-click on a ship card: drop the last one of that type from the queue. */
   const unqueue = (id: string, at = 0) => {
     const q = at ? (world.current.byId.get(at)?.yq ?? []) : world.current.players[me].queue
@@ -1232,9 +1296,10 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       } else if (!paused.current && !deploying.current && w.winner === -1) {
         acc += dt * speed.current
         let steps = 0
-        while (acc >= STEP && steps < 12) {
+        while (acc >= STEP && steps < (speed.current > 4 ? 24 : 12)) {
           for (const b of brains.current) (w.fleet ? fleetThink : think)(w, b, STEP)
           tick(w)
+          if (import.meta.env.DEV) devRef.current?.afterTick(w, me)
           events.push(...w.events)
           w.events.length = 0
           acc -= STEP
@@ -1291,12 +1356,12 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         else if (e.k === 'ability' && e.owner !== me) sound.ability(e.id, where(e.x, e.y))
         else if (e.k === 'hpdown') {
           sound.hardpointDown(where(e.x, e.y))
-          if (e.owner === me) toast(`${HP_NAME[e.what as HardpointKind]} destroyed on one of our ships`, 'bad', { x: e.x, y: e.y })
+          if (e.owner === me) toast(e.exp ? `${MODULE[e.exp].name} shot off: ${MODULE[e.exp].lost} Engineers weld it back.` : `${HP_NAME[e.what as HardpointKind]} destroyed on one of our ships`, 'bad', { x: e.x, y: e.y })
         } else if (e.k === 'built' && e.owner === me) {
           const t = UNIT[e.unit]
           if (t.tier === 'mine' || t.tier === 'defense' || t.tier === 'yard') sound.structureDone(t.tier)
           else sound.shipReady(myFaction, t.tier)
-          toast(t.tier === 'mine' ? `${t.name} is drilling` : t.tier === 'defense' ? `${t.name} online` : t.tier === 'yard' ? `${t.name} complete: frigates and corvettes are built there now` : `${t.name}${t.squad > 1 ? ' squadron' : ''} ready`, 'good', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
+          toast(t.tier === 'mine' ? `${t.name} is drilling` : t.tier === 'defense' ? `${t.name} online` : t.tier === 'yard' ? `${t.name} complete: ${worksOf(t) === 'cyard' ? 'cruisers' : 'frigates and corvettes'} are built there now` : `${t.name}${t.squad > 1 ? ' squadron' : ''} ready`, 'good', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
         } else if (e.k === 'warp') {
           if (e.owner === me || seesPoint(e.x, e.y)) sound.warp(where(e.x, e.y), e.delay)
         } else if (e.k === 'arrived') {
@@ -1355,15 +1420,21 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           const u = w.byId.get(e.unit)
           sound.promoted()
           if (u && u.t.tier !== 'fighter') toast(`${u.t.name} promoted: ${RANKS[e.rank]}`, 'good', { x: e.x, y: e.y, unit: u.id })
+        } else if (e.k === 'expanded' && e.owner === me) {
+          sound.structureDone('yard')
+          toast(`${MODULE[e.id].name} finished on the ${WORKS_NAME[MODULE[e.id].on]}`, 'good', { x: e.x, y: e.y, unit: e.unit })
         } else if (e.k === 'tech' && e.owner === me) {
           sound.researchDone()
           toast(`Research complete: ${TECH[e.id].name}`, 'good')
         } else if (e.k === 'level' && e.owner === me) {
           sound.levelUp()
           const unlocked = buildable(myFaction).filter((t) => t.level === e.level).map((t) => t.name)
-          // With hybrid bases level 2 unlocks the Frigate Yard, where the frigates are built.
-          const yard = w.hybrid && yardOf(myFaction).level === e.level
-          toast(`Station level ${e.level}${yard ? `: the ${yardOf(myFaction).name} unlocked, build it with engineers` : unlocked.length ? `: ${unlocked.join(', ')} unlocked` : ''}`, 'good')
+          // With hybrid bases a level unlocks a yard (level 2 the Frigate Yard, 3 the Capital Yard)
+          // and expansions (level 4 the Capital slip, the way to the flagships).
+          const yard = w.hybrid ? yardsFor(myFaction).find((t) => t.level === e.level) : undefined
+          const exps = w.hybrid ? MODULES.filter((m) => m.level === e.level).map((m) => m.name) : []
+          const news = w.hybrid ? [...(yard ? [`the ${yard.name} (build it with engineers)`] : []), ...(exps.length ? [`expansions: ${exps.join(', ')}`] : [])] : unlocked
+          toast(`Station level ${e.level}${news.length ? `: ${news.join('; ')} unlocked` : ''}`, 'good')
         }
       }
       // Drop dead ships from the selection.
@@ -1375,6 +1446,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         bars: settingsRef.current.bars,
         rings: settingsRef.current.rings,
         fogGrid: settingsRef.current.fogGrid,
+        reveal: import.meta.env.DEV ? devRef.current?.cheats.reveal : undefined,
         turretPick: turretPick.current && selected.current.has(turretPick.current.unit) ? turretPick.current : null,
         selected: selected.current,
         hover: h.unit,
@@ -1470,6 +1542,12 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         return
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return
+      // A yard being placed: [ and ] turn it (Shift: fine steps). Q and E are Stop and Attack move.
+      if (mode.current === 'place' && placing.current && (k === '[' || k === ']' || k === '{' || k === '}')) {
+        rotatePlace((k === '[' || k === '{' ? -1 : 1) * (e.shiftKey ? 5 : 15))
+        e.preventDefault()
+        return
+      }
       if (/^[1-9]$/.test(k)) recallGroup(k)
       else if (k === 'escape') {
         // Esc backs out of whatever is open, one step at a time, and finally opens the menu.
@@ -1485,9 +1563,10 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       else if (action === 'ability') useAbility()
       else if (action === 'station' || k === 'home') selectStation()
       else if (action === 'yard') selectYard()
+      else if (action === 'cyard') selectCapitalYard()
       else if (action === 'build') {
         // The yard's ghost follows the pointer; over our ruin of it, it snaps on and costs half.
-        if (mySelection().some((u) => isEngineer(u.t) || u.t.tier === 'station')) startPlace(yardOf(world.current.players[me].faction).id)
+        if (mySelection().some((u) => isEngineer(u.t) || u.t.tier === 'station')) startPlace(nextYard())
         else {
           toast('Select engineers (or the Command Station) to build a yard', 'bad')
           sound.error()
@@ -1547,6 +1626,32 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const r = canvas.current!.getBoundingClientRect()
     return { x: e.clientX - r.left, y: e.clientY - r.top }
   }
+
+  // A tap anywhere but the open selection panel only closes it: the pointer press is stopped before
+  // the battlefield (or another button) sees it, and so is the click that follows.
+  useEffect(() => {
+    const el = root.current
+    if (!el) return
+    let swallow = 0
+    const down = (e: PointerEvent) => {
+      if (!selOpenRef.current || (e.target as Element).closest('.ew-selpop, .ew-selchip')) return
+      swallow = performance.now()
+      e.stopPropagation()
+      setSelOpen(false)
+    }
+    const click = (e: Event) => {
+      if (!swallow || performance.now() - swallow > 800) return
+      swallow = 0
+      e.stopPropagation()
+      e.preventDefault()
+    }
+    el.addEventListener('pointerdown', down, true)
+    el.addEventListener('click', click, true)
+    return () => {
+      el.removeEventListener('pointerdown', down, true)
+      el.removeEventListener('click', click, true)
+    }
+  }, [ready])
 
   const onPointerDown = (e: React.PointerEvent) => {
     sound.unlock()
@@ -1619,6 +1724,13 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       }
       return
     }
+    // A yard being placed: press at the spot and drag towards where its mouth should point; it goes
+    // down on release (a click without a drag keeps the angle the wheel or keys gave it).
+    if (mode.current === 'place' && placing.current && e.button === 0) {
+      placeDrag.current = { at: pick(p.x, p.y).at, sx: p.x, sy: p.y, turned: false }
+      placing.current.at = placeDrag.current.at
+      return
+    }
     if (mode.current !== 'normal') {
       modeClick(p.x, p.y, mode.current, e.shiftKey)
       // Shift keeps the command armed for more clicks, each queued after the last. A yard being
@@ -1633,6 +1745,12 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const p = local(e)
     mouse.current = { ...p, inside: true }
     touchLast.current = isTouch(e)
+    const pd = placeDrag.current
+    if (pd && placing.current && (pd.turned || Math.hypot(p.x - pd.sx, p.y - pd.sy) > 12)) {
+      const to = toWorld(p.x, p.y)
+      pd.turned = true
+      placing.current.a = Math.atan2(to.y - pd.at.y, to.x - pd.at.x)
+    }
     if (e.pointerType === 'touch' && touches.current.has(e.pointerId)) {
       touches.current.set(e.pointerId, p)
       press.current.move(e)
@@ -1710,7 +1828,13 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         const now = performance.now()
         const dbl = lastClick.current.id === unit.id && now - lastClick.current.t < 350
         lastClick.current = { t: now, id: unit.id }
-        if (dbl) selectType(unit, add)
+        // Tapping the one thing that is selected (a ship, or its squadron) puts it away again.
+        const only = withSquads([unit.id])
+        if (!dbl && !add && selected.current.size === only.length && only.every((i) => selected.current.has(i))) {
+          selected.current.clear()
+          pickedNode.current = -1
+          sound.click()
+        } else if (dbl) selectType(unit, add)
         else if (add && selected.current.has(unit.id)) for (const id of withSquads([unit.id])) selected.current.delete(id)
         else select([unit.id], add)
         turretPick.current = !isShip(unit.t) && part >= 0 && unit.t.hardpoints[part]?.weapon && !add ? { unit: unit.id, hp: part } : null
@@ -1720,6 +1844,15 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       else if (!add) {
         selected.current.clear()
         pickedNode.current = node
+      }
+      return
+    }
+    if (placeDrag.current) {
+      const pd = placeDrag.current
+      placeDrag.current = null
+      if (placing.current) {
+        placing.current.at = null
+        place(pd.at, e.shiftKey)
       }
       return
     }
@@ -1819,6 +1952,16 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const p = local(e)
     // Lines or pages (some mice) rather than pixels: scale to about one notch's worth.
     const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY
+    // A yard being placed: the wheel turns it (15 degrees a notch, 5 with Shift) instead of zooming.
+    if (mode.current === 'place' && placing.current) {
+      wheelAcc.current += dy || e.deltaX
+      const n = Math.trunc(wheelAcc.current / 90)
+      if (n) {
+        wheelAcc.current -= n * 90
+        rotatePlace(n * (e.shiftKey ? 5 : 15))
+      }
+      return
+    }
     zoomTo(Math.exp(-dy * 0.0015), p.x, p.y)
   }
 
@@ -2115,7 +2258,6 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       <WheelHost>
         <WheelBridge to={wheel} />
         <Tips live={(id) => world.current.byId.get(id)} />
-        <RotateHint />
         {intel && <FieldIntel w={w} me={me} id={intel.id} x={intel.x} y={intel.y} />}
         <canvas
           ref={canvas}
@@ -2133,6 +2275,23 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           onWheel={onWheel}
         />
 
+        {import.meta.env.DEV && dev && !online && (
+          <dev.DevCheats
+            ctx={{
+              world: () => world.current,
+              me,
+              names: seats.map((x) => x.name),
+              selected: () => selected.current,
+              canvas: () => canvas.current,
+              toWorld,
+              camera: () => ({ x: cam.current.x, y: cam.current.y }),
+              setSpeed,
+              speed: () => speed.current,
+              focused: () => focusedRef.current,
+              toast,
+            }}
+          />
+        )}
         <TopBar hud={hud} faction={myFaction} sector={sector} ui={ui} onShipyard={selectStation} onYard={selectOne} onPause={online ? undefined : togglePause} onSpeed={online ? undefined : setSpeed}
           onMenu={() => (ui.menu ? closeMenu() : openMenu())}
           onTechTree={() => setTree(!ui.tree)}
@@ -2223,10 +2382,16 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
                   : ui.mode === 'place' ? `${UNIT[placing.current?.unit ?? yardOf(myFaction).id].name}: ${click} a spot inside the build ring round the Command Station.${touchUi ? ' Then build it here.' : ''}`
                   : `Rally point: ${click} where new ships should gather${rallyAt() ? ' from this yard' : ''}.`}{' '}
             {ui.mode === 'place'
-              ? touchUi ? 'Shift on: after the engineers\' other orders. ✕ to cancel.' : <>Shift-click: after the engineers' other orders. <kbd>Esc</kbd> or right-click to cancel.</>
+              ? touchUi ? 'Turn it with the buttons. Shift on: after the engineers\' other orders. ✕ to cancel.' : <>Wheel or <kbd>[</kbd> <kbd>]</kbd> turn it (Shift: finer), or drag to aim its mouth. Shift-click: after the engineers' other orders. <kbd>Esc</kbd> or right-click to cancel.</>
               : touchUi ? 'Turn on Shift to keep going, ✕ to cancel.' : <>Shift-click to keep going, <kbd>Esc</kbd> to cancel.</>}
-            {ui.mode === 'place' && placing.current?.at && (
+            {ui.mode === 'place' && touchUi && placing.current?.at && (
               <div className="ew-placebar">
+                <button className="ew-menu-btn ew-rot" onClick={() => rotatePlace(-15)} aria-label="Turn it anticlockwise" data-tip="Turn 15 degrees anticlockwise">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /></svg>
+                </button>
+                <button className="ew-menu-btn ew-rot" onClick={() => rotatePlace(15)} aria-label="Turn it clockwise" data-tip="Turn 15 degrees clockwise">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: 'scaleX(-1)' }}><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /></svg>
+                </button>
                 <button className="ew-go" onClick={confirmPlace} disabled={!placeGhost()?.ok}>
                   Build here
                 </button>
@@ -2257,7 +2422,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         {/* The bottom of the screen: a shade for the panels to sit on; the unit card (beside the map
             while it sits in its corner) and the selection float like the map, and can be moved. */}
         <div className="ew-dockshade" />
-        <Floating id="detail" bare at={{ left: mapRoom ? mapRoom + 12 : 6, bottom: 6 }} className="ew-detailfloat">
+        <Floating id="detail" bare at={{ left: mapRoom ? mapRoom + 12 : 6, bottom: 6 }} vars={{ '--ew-dleft': `${mapRoom ? mapRoom + 12 : 6}px` }} className="ew-detailfloat">
             <DetailPanel w={w} me={me} sel={sel} hud={hud} faction={myFaction}
               onOnly={(id, drop) => {
                 const keep = sel.filter((u) => (drop ? u.t.id !== id : u.t.id === id)).map((u) => u.id)
@@ -2275,6 +2440,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
                   sound.error()
                 } else sound.unqueued()
               }}
+              onExpand={expand}
+              onCancelExpand={cancelExpand}
               onResearch={research}
               onTechTree={() => setTree(true)}
               onSite={buildSite}
@@ -2312,21 +2479,54 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         <Floating id="selection" bare at={{ right: 6, bottom: 6 }} className="ew-selfloat" onMove={selMoved}>
             {/* Fingers only: the sticky Shift, box select, and a way to back out (no Esc on a phone). */}
             <TouchBar className="ew-battlebar"
-              extra={(ui.mode !== 'normal' || ui.draw || hud.sel.length > 0 || pickedNode.current >= 0) && (
+              extra={<>
+                {compact && hud.sel.length > 0 && !selOpen && (
+                  <span className="ew-selchip">
+                    <button className="ew-selchip-main" onClick={() => setSelOpen(true)} aria-label={`Selected units: ${hud.sel.length}. Open`} title="Selected units">
+                      <Icon name="fleet" size={22} />
+                      <b>{hud.sel.length}</b>
+                    </button>
+                    <button className="ew-selchip-x" onClick={() => (selected.current.clear(), (pickedNode.current = -1), sound.click())} aria-label="Deselect everything" title="Deselect">
+                      ✕
+                    </button>
+                  </span>
+                )}
+                {(ui.mode !== 'normal' || ui.draw || (!compact && (hud.sel.length > 0 || pickedNode.current >= 0))) && (
                 <button onClick={cancelTouch} title={ui.mode !== 'normal' || ui.draw ? 'Cancel the order' : 'Clear the selection'}>
                   ✕<span>{ui.mode !== 'normal' || ui.draw ? 'Cancel' : 'Clear'}</span>
                 </button>
-              )}
+                )}
+              </>}
             />
-            <SelectionPanel w={world.current} sel={sel} me={me} mode={ui.mode} onCommand={runCommand} groups={hud.groups} onGroup={recallGroup}
-              canAssign={sel.some((u) => u.owner === me)} onAssign={setGroup}
-              onPick={(id, shift) => {
-                const ids = withSquads([id])
-                if (shift) for (const i of ids) selected.current.delete(i)
-                else selected.current = new Set(ids)
-                sound.click()
-              }}
-            />
+            {(() => {
+              const panel = (
+                <SelectionPanel w={world.current} sel={sel} me={me} mode={ui.mode} onCommand={runCommand} groups={hud.groups} onGroup={recallGroup}
+                  canAssign={sel.some((u) => u.owner === me)} onAssign={setGroup}
+                  onPick={(id, shift) => {
+                    const ids = withSquads([id])
+                    if (shift) for (const i of ids) selected.current.delete(i)
+                    else selected.current = new Set(ids)
+                    sound.click()
+                  }}
+                />
+              )
+              if (!compact) return panel
+              if (!selOpen || !hud.sel.length) return null
+              return (
+                <div className="ew-selpop" data-nodrag>
+                  <div className="ew-selpop-head">
+                    <span className="ew-selpop-gap" />
+                    <button onClick={() => (selected.current.clear(), (pickedNode.current = -1), setSelOpen(false), sound.click())} aria-label="Deselect everything">
+                      ✕ Deselect
+                    </button>
+                    <button onClick={() => setSelOpen(false)} aria-label="Close">
+                      Close
+                    </button>
+                  </div>
+                  {panel}
+                </div>
+              )
+            })()}
         </Floating>
 
         {ui.deploy && !ui.menu && !ui.panel && (
@@ -2360,7 +2560,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
             </Frame>
           </div>
         )}
-        {ui.tree && hud.winner === -1 && <TechTree w={w} me={me} hud={hud} onResearch={research} onCancel={cancelResearch} onClose={() => setTree(false)} />}
+        {ui.tree && hud.winner === -1 && <TechTree w={w} me={me} hud={hud} onResearch={research} onCancel={cancelResearch} onClose={() => setTree(false)} onExpand={expand} onCancelExpand={cancelExpand} />}
         {ui.menu && !ui.panel && hud.winner === -1 && (
           <BattleMenu w={w} me={me} sound={sound} speed={ui.speed} onSpeed={setSpeed} onResume={closeMenu} onPanel={openMenu} onRestart={conquest || online ? undefined : onAgain} onExit={exit} campaign={!!conquest} online={!!online} />
         )}

@@ -11,6 +11,7 @@ import { applyDockReserve } from './os/dockPrefs'
 import { startNoteEventLinks } from './os/noteEventLinks'
 import { startPimLinks } from './os/pimLinks'
 import { registerServiceWorker } from './os/pwa'
+import { installSelectionRules } from './os/selection'
 import { trackVisualViewport } from './os/viewport'
 import { startSync } from './os/synced'
 import { startBrowserFiles } from './data/browserfs'
@@ -37,6 +38,8 @@ if (!play) startPimLinks()
 if (!play) startNoteEventLinks()
 installContextMenuFallback()
 installTouchContextMenu()
+// Only text meant to be read can be selected; Ctrl+A and dragged pictures follow (src/os/selection.ts).
+installSelectionRules()
 void loadAccount()
 
 // Saved windows of apps that don't exist on this page (the CV apps away from /cv) are dropped.

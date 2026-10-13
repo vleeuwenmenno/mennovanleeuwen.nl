@@ -175,7 +175,7 @@ export function QuickAnswerView({ answer, onAdopt }: { answer: QuickAnswer; onAd
   const thinking = !done && !live.content && !!live.thinking
 
   return (
-    <div className="sp-answer" ref={scroller} onScroll={(e) => (pinned.current = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 40)}>
+    <div className="sp-answer selectable" ref={scroller} onScroll={(e) => (pinned.current = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 40)}>
       <div className="sp-answer-head">
         <AppIcon app="agents" size={22} />
         <span className="sp-answer-q">{answer.question}</span>
@@ -198,7 +198,7 @@ export function QuickAnswerView({ answer, onAdopt }: { answer: QuickAnswer; onAd
         !error && !done && <p className="agt-wait muted">{!answer.thread ? 'Starting…' : thinking ? 'Thinking…' : steps.length ? 'Reading…' : 'Working…'}</p>
       )}
       {waiting && <p className="sp-answer-note">The agent is waiting for you: continue in Agents to answer it.</p>}
-      {error && <p className="sp-answer-note t-red">{error}</p>}
+      {error && <p className="sp-answer-note t-red copyable">{error}</p>}
       {done && !shown && !error && <p className="muted">No answer came back.</p>}
     </div>
   )

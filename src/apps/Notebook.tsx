@@ -33,7 +33,7 @@ export function SyncLine() {
         </button>
       </span>
     )
-  if (sync.state === 'error') return <span className="t-red">Sync failed: {sync.error}</span>
+  if (sync.state === 'error') return <span className="t-red copyable">Sync failed: {sync.error}</span>
   if (sync.state === 'syncing') return <span className="muted">Syncing…</span>
   return <span className="muted">Synced{sync.at ? ` · ${when(sync.at)}` : ''}</span>
 }
@@ -190,7 +190,7 @@ export function Notebook({ win }: { win: WinState }) {
             </div>
             {!note.deleted && chips?.(note, 'notebook')}
             {preview || note.deleted ? (
-              <article className="zed-preview nb-preview" onDoubleClick={() => !note.deleted && setPreview(false)}>
+              <article className="zed-preview nb-preview selectable" onDoubleClick={() => !note.deleted && setPreview(false)}>
                 {note.text.trim() ? <MarkdownPreview text={note.text} /> : <p className="muted">Empty note.</p>}
               </article>
             ) : (

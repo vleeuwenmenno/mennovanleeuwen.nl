@@ -241,7 +241,6 @@
   gap: 8px;
   padding: 7px 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
-  user-select: none;
 }
 .tk-row:hover {
   background: color-mix(in srgb, var(--fg) 3%, transparent);

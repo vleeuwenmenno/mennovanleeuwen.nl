@@ -328,7 +328,7 @@ export function Player({ win }: { win: WinState }) {
           {error && (
             <div className="pl-empty">
               <p className="pl-big">{media.name}</p>
-              <p className="muted">{error}</p>
+              <p className="muted copyable">{error}</p>
               {isSf(path) && (
                 <button className="btn btn-small" onClick={save}>
                   Download

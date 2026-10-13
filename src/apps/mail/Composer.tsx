@@ -316,7 +316,7 @@ export function Composer({ account, boot, init, narrow, onClose }: { account: nu
           ))}
         </ul>
       )}
-      {error && <p className="ml-problem">{error}</p>}
+      {error && <p className="ml-problem copyable">{error}</p>}
       <footer className="ml-compose-foot">
         <button className="btn btn-primary" onClick={() => void send()} disabled={sending} title={ctrlEnter ? 'Send (Ctrl+Enter)' : 'Send'}>
           {sending ? 'Sending…' : 'Send'}

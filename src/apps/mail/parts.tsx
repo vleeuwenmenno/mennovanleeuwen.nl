@@ -251,7 +251,7 @@ export function InviteCard({ invite: given, message }: { invite: Invite; message
           <strong>?</strong>
         )}
       </div>
-      <div className="ml-invite-body">
+      <div className="ml-invite-body selectable">
         <span className="ml-invite-kind">{label}</span>
         <strong className="ml-invite-title">{invite.title}</strong>
         <span>{inviteWhen(invite)}</span>

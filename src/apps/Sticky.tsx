@@ -62,7 +62,7 @@ function toggleLine(text: string, i: number) {
 function StickyView({ text, onToggle, onEdit }: { text: string; onToggle: (line: number) => void; onEdit: (line: number) => void }) {
   return (
     <div
-      className="sticky-view"
+      className="sticky-view selectable"
       onClick={(e) => {
         if (window.getSelection()?.toString()) return
         const line = (e.target as Element).closest<HTMLElement>('[data-line]')?.dataset.line

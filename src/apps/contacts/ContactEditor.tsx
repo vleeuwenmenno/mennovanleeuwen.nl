@@ -133,7 +133,7 @@ export function ContactEditor({ target, books, allGroups, onDone, onCancel }: { 
         </button>
       </header>
       <div className="ct-editor-body">
-        {error && <p className="t-red ct-error">{error}</p>}
+        {error && <p className="t-red ct-error copyable">{error}</p>}
         <div className="ct-photo-row">
           {photo ? <img className="pp-avatar" src={photo} alt="" style={{ width: 72, height: 72 }} /> : photo === null ? <Avatar name={f.fn || fullName(f)} size={72} /> : <Avatar contact={existing} name={f.fn || fullName(f)} size={72} />}
           <div className="ct-photo-actions">

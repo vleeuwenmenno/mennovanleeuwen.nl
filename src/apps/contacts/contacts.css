@@ -162,7 +162,6 @@
   justify-content: center;
   width: 16px;
   touch-action: none;
-  user-select: none;
 }
 .ct-az button {
   flex: 0 1 15px;
@@ -576,7 +575,6 @@
   place-items: center;
   border-radius: 50%;
   object-fit: cover;
-  user-select: none;
 }
 .pp-avatar.is-initials {
   background: hsl(var(--pp-hue, 220) 45% 42%);

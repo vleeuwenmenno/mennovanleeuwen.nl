@@ -33,6 +33,25 @@ bar, one monospace face, and colours from Omarchy's own theme palettes
 "auto" follows the OS. The sun/moon button in the bar toggles; right-click it (or the desktop)
 for every Omarchy theme and accent overrides. `theme list` / `theme <name>` in the terminal too.
 
+### Selecting text
+
+Like a desktop, the chrome can't be selected: dragging across title bars, the dock, menus,
+sidebars, toolbars, list rows, icons or a game, or double-clicking a label, highlights nothing, a
+long press on it gets no text callout and a tap no grey flash. Text that is there to be read and
+copied can: fields, the terminal, Zed and every Markdown preview, Agents' messages and tool output,
+the mail being read (subject, people, the message), notes and stickies, a contact's card, a
+read-only event's place and notes, PDF text, the Viewer, Preview's and Photos' info, Spotlight's
+previews, answers and sums, the CV page, inline code and error messages. Ctrl+A selects the text
+area you clicked in (or a field's text), never the whole page, and apps that select their own
+items with it (Files, Photos, Archive) still do. Pictures and links on the chrome don't drag out
+of the page; rows meant to be dragged still do.
+
+For developers it is one rule, under *Text selection* at the top of
+[`src/styles.css`](src/styles.css): `body` is `user-select: none`, and fields, `code` and anything
+with the `selectable` class (or `data-selectable`; `copyable` for an error or notice) opt back in.
+Mark the element that holds the content, not each line. Ctrl+A and the picture drags are handled
+in [`src/os/selection.ts`](src/os/selection.ts).
+
 ## Workspaces and the dock
 
 Like Omarchy, the desktop has workspaces ([`src/os/wm.tsx`](src/os/wm.tsx)): the numbers in the
@@ -1122,8 +1141,10 @@ With the Notes group on too, the agent can work with notes linked to events
 finds the event with `calendar_list_events` first), `link_note_to_event` and
 `unlink_note_from_event`, and, only looking, `notes_for_event` and `events_for_note`.
 `calendar_list_events` says how many notes each event has (`linked_notes`). Linking mails nobody and
-only adds a private backlink to the event, so these ask in *Ask first* and go ahead in Auto, Edits
-allowed and Bypass; Plan mode doesn't offer them. Their cards say which note and which event.
+only adds a private backlink to the event, but it is written into the event, so the three that
+change things ask in every mode (Auto, Edits allowed and Bypass too), like the other calendar tools;
+`notes_for_event` and `events_for_note` only read and run without asking. Plan mode doesn't offer
+the changing ones. Their cards say which note and which event.
 
 Web fetch reads an address straight away only when it came from outside the model: your own
 messages, search results, or the links of a page it already read, exactly as given. Any other
@@ -1434,7 +1455,8 @@ than known.
 
 ```sh
 pnpm check:pim-links   # Against stand-ins for JMAP, CalDAV and Google Calendar: invitations answered in each place (PARTSTAT, Google's API, an iMIP REPLY), cancellations, replies, a contact's mail and events, tasks from mail, another user seeing none of it
-pnpm check:note-links  # Against stand-ins for CalDAV, Google Calendar and Ollama: the backlink written with everything else kept, an ETag conflict, one occurrence against the series, guests left alone, Google's private property with sendUpdates=none, a deleted event, the Agents tools in Ask first and Auto, another user seeing none of it
+pnpm check:note-links  # Against stand-ins for CalDAV, Google Calendar and Ollama: the backlink written with everything else kept, an ETag conflict, one occurrence against the series, guests left alone, Google's private property with sendUpdates=none, a deleted event, the Agents note tools asking in every mode (Ask first, Auto, Bypass), another user seeing none of it
+pnpm check:window-props  # One-shot requests (event, task, contact, day, import, message) kept out of the saved window layout, so a reload never opens that editor again
 ```
 
 [`scripts/google-mock.ts`](scripts/google-mock.ts) is the Google Calendar stand-in: the server
@@ -1476,7 +1498,7 @@ follow the lift is dropped once a menu opened. Text fields keep the browser's ow
 (selection, paste), and so do places with a long press of their own: Empires At War, Minesweeper's
 flags, held game buttons and game canvases. Anything else can opt out with `data-no-touch-menu`.
 On coarse pointers the menu's items are taller, and the OS chrome (bar, dock, title bars, sidebars)
-does not select its labels or show the browser's callout.
+does not select its labels or show the browser's callout (see *Selecting text* above).
 
 On phones the notes and widgets go one under the other down a desktop that scrolls. Hold one by
 its top strip until it lifts (a swipe there just scrolls), then drag it up or down that column (the

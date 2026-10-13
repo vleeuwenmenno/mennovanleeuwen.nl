@@ -109,7 +109,7 @@ export function PhotosSettings() {
                 </ul>
               </>
             )}
-            {error && <p className="t-red">{error}</p>}
+            {error && <p className="t-red copyable">{error}</p>}
           </>
         )}
       </section>
@@ -135,7 +135,7 @@ export function JobStatus({ job, scannedAt }: { job: Job | null; scannedAt: numb
   }
   return (
     <div className="ph-job muted">
-      {job && job.state === 'failed' && <p className="t-red">The last look failed: {job.errors[0]}</p>}
+      {job && job.state === 'failed' && <p className="t-red copyable">The last look failed: {job.errors[0]}</p>}
       {job && job.capped && <p>Not everything fits: the index stops at 100,000 photos and 20,000 folders.</p>}
       {job?.skipped.map((s) => (
         <p key={s.repo}>
@@ -190,7 +190,7 @@ export function ImmichLink() {
             </button>
           </li>
         </ul>
-        {error && <p className="t-red">{error}</p>}
+        {error && <p className="t-red copyable">{error}</p>}
       </>
     )
   return (
@@ -207,7 +207,7 @@ export function ImmichLink() {
         Make a key in Immich under <em>Account settings → API keys</em>, with <em>All</em> permissions or at least asset.read, asset.view, asset.download, asset.update, album.read, timeline.read and user.read. It is checked once, then stored encrypted on this server and only used
         from here: thumbnails, photos and videos come through this server. Immich 2 and 3 work.
       </p>
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
       <button className="btn btn-primary" disabled={busy}>
         {busy ? 'Checking…' : 'Link Immich'}
       </button>

@@ -1638,7 +1638,7 @@ function Unlock({ repo }: { repo: string }) {
       <button className="btn btn-primary" disabled={busy}>
         {busy ? 'Unlocking…' : 'Unlock'}
       </button>
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
       <p className="muted">The password goes to Seafile and is not kept anywhere. It is asked again after the time set in Settings → Integrations.</p>
     </form>
   )

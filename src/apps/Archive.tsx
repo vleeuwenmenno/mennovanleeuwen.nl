@@ -504,7 +504,7 @@ export function Archive({ win }: { win: WinState }) {
       ) : error ? (
         <div className="pv-empty">
           <p className="pv-big">{media.name}</p>
-          <p className="muted">{error}</p>
+          <p className="muted copyable">{error}</p>
         </div>
       ) : !index ? (
         <div className="pv-loading">{format === 'tgz' ? `Reading ${media.name} through (a gzipped tar has no table of contents)…` : `Reading ${media.name}…`}</div>

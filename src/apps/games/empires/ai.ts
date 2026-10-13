@@ -1,8 +1,8 @@
-import { ABILITIES, BUILD_RADIUS, LEVEL_UP, MAX_LEVEL, REBUILD, SURVEY_RADIUS, TECHS, UNIT, UPGRADES, buildable, builtAt, isEngineer, isShip, unitOf, yardOf, type FactionId, type Tech, type Tier, type UnitType } from './data.ts'
+import { ABILITIES, BUILD_RADIUS, LEVEL_UP, MAX_LEVEL, MODULE, REBUILD, worksOf, type ModuleId, type Works, SURVEY_RADIUS, TECHS, UNIT, UPGRADES, buildable, builtAt, isEngineer, isShip, unitOf, yardOf, type FactionId, type Tech, type Tier, type UnitType } from './data.ts'
 import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import {
-  allQueued, building, canRetreat, cantBuild, cantMend, cantRepair, cantResearch, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite,
+  allQueued, building, canRetreat, cantBuild, cantExpand, cmdExpand, moduleRebuildCost, cantMend, cantRepair, cantResearch, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite,
   dpsVs, fleet, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
 } from './sim.ts'
 import * as M from './detmath.ts'
@@ -128,6 +128,11 @@ type Style = {
    * it keeps guarding the yard once it stands. */
   yardDelay: number
   yardGuards: number
+  /** Seconds after reaching station level 3 before it puts up its Capital Yard. */
+  cyardDelay: number
+  /** The expansions it wants, most wanted first (the Capital slip always comes first once it can:
+   * that's the way to the flagships). */
+  modules: ModuleId[]
   /** Fleet battles: an attacker pulls out below this share of the defender's strength... */
   bail: number
   /** ...and a holder goes out to meet attackers this much further from its station. */
@@ -139,19 +144,19 @@ export const PROFILES: Record<Profile, Style> = {
     name: 'Defensive',
     blurb: 'Turtles: more gun platforms and earlier station upgrades, strikes late with a big fleet, and counter-attacks as soon as your attack fails.',
     wave: 1.6, calm: 1.3, rest: 90, regroup: 0.5, outgunned: 1.2, recall: 0.35, edge: 1.5, beaconReach: 3800, hold: 1, turtle: true, platforms: 1, platPerLevel: 1, platMax: 3, levels: [130, 320, 540], levelArmy: 600, mines: 0, raiders: 0, counter: true, fortify: 3, keep: 300, mendAt: 0.5,
-    tiers: { capital: 1.25, cruiser: 1.1, frigate: 1.1, fighter: 0.8 }, yardDelay: 45, yardGuards: 3, bail: 0.4, sally: 0.8,
+    tiers: { capital: 1.25, cruiser: 1.1, frigate: 1.1, fighter: 0.8 }, yardDelay: 45, yardGuards: 3, cyardDelay: 20, modules: ['shieldCore', 'drydock', 'armourWorks', 'sensorArray', 'fighterWing', 'secondSlip', 'strikeHangar'], bail: 0.4, sally: 0.8,
   },
   balanced: {
     name: 'Balanced',
     blurb: 'A steady mix: expands, upgrades and researches as it goes, and attacks once it has gathered a fleet.',
     wave: 1, calm: 1, rest: 45, regroup: 0.4, outgunned: 1.5, recall: 0.6, edge: 1.25, beaconReach: 4300, hold: 0.85, turtle: false, platforms: 0, platPerLevel: 1, platMax: 1, levels: [170, 400, 680], levelArmy: 900, mines: 1, raiders: 0, counter: true, fortify: 1.2, keep: 200, mendAt: 0.35,
-    tiers: {}, yardDelay: 10, yardGuards: 2, bail: 0.3, sally: 1,
+    tiers: {}, yardDelay: 10, yardGuards: 2, cyardDelay: 40, modules: ['secondSlip', 'shieldCore', 'drydock', 'strikeHangar', 'armourWorks', 'sensorArray', 'fighterWing'], bail: 0.3, sally: 1,
   },
   offensive: {
     name: 'Offensive',
     blurb: 'Early pressure: raids your mines, attacks often and takes risks. Few platforms, later upgrades.',
     wave: 0.7, calm: 0.6, rest: 15, regroup: 0.25, outgunned: 2, recall: 1.2, edge: 0.9, beaconReach: 4800, hold: 0.6, turtle: false, platforms: 0, platPerLevel: 0.5, platMax: 1, levels: [200, 460, 800], levelArmy: 1000, mines: 1, raiders: 2, counter: false, fortify: 0.5, keep: 100, mendAt: 0.25,
-    tiers: { gunship: 1.25, fighter: 1.2, capital: 0.85 }, yardDelay: 0, yardGuards: 1, bail: 0.2, sally: 1.6,
+    tiers: { gunship: 1.25, fighter: 1.2, capital: 0.85 }, yardDelay: 0, yardGuards: 1, cyardDelay: 75, modules: ['secondSlip', 'strikeHangar', 'sensorArray', 'drydock', 'armourWorks', 'fighterWing', 'shieldCore'], bail: 0.2, sally: 1.6,
   },
 }
 /** The profile for a stored value: anything unknown (or missing, from before profiles) is Balanced. */
@@ -203,6 +208,8 @@ export type Brain = {
    * `engSeen`: its engineer craft at the last look; `engWait`: no new engineers before this (some
    * were just lost). */
   lv2: number
+  /** When it reached station level 3 (-1: not yet), for the Capital Yard. */
+  lv3: number
   guards: number[]
   engSeen: number
   engWait: number
@@ -221,7 +228,7 @@ const handsMax = (D: Level) => Math.max(3, D.apm / 12)
 
 export const newBrain = (o: Owner, diff: Difficulty, profile: Profile = 'balanced'): Brain => ({
   o, diff, profile, t: 2, wave: DIFFICULTY[diff].wave * PROFILES[profile].wave, attacking: false, peak: 0, scouts: new Set(), want: null, lastWave: 0, hands: handsMax(DIFFICULTY[diff]), acts: 0, alarm: -1,
-  muster: -1, home: 0, troops: [], raid: [], raidAt: -1, mending: [], focus: 0, foes: {}, threatPeak: 0, beaten: -1, threatPeakLast: 0, scoutWait: 0, lv2: -1, guards: [], engSeen: 0, engWait: 0,
+  muster: -1, home: 0, troops: [], raid: [], raidAt: -1, mending: [], focus: 0, foes: {}, threatPeak: 0, beaten: -1, threatPeakLast: 0, scoutWait: 0, lv2: -1, lv3: -1, guards: [], engSeen: 0, engWait: 0,
 })
 
 /** Its hands free up again with time (every tick, thinking or not). A brain saved before any of
@@ -246,6 +253,7 @@ function rest(b: Brain, dt: number) {
   b.threatPeakLast ??= 0
   b.scoutWait ??= 0
   b.lv2 ??= -1
+  b.lv3 ??= -1
   b.guards ??= []
   b.engSeen ??= 0
   b.engWait ??= 0
@@ -570,7 +578,10 @@ export function think(w: World, b: Brain, dt: number) {
   // the yard keeps one order going meanwhile.
   const saving = upgradeDue && !(threatValue > armyValue * 0.8) && p.credits + p.income * 45 >= next!.cost
   const lean = upgradeDue && !saving
-  const savingNow = saving
+  // Hybrid bases: the yards, their engineers and guards (yardSaving: it is saving up for one, so
+  // the extras below wait too).
+  const yardSaving = w.hybrid ? planYard(w, b, D, S, st, enemySt, army) && !(threatValue > armyValue * 0.8) : false
+  const savingNow = saving || yardSaving
 
   if (ours[0]) {
     // A gun platform goes where it covers most, on the claim nearest the enemy, once a couple of
@@ -609,24 +620,51 @@ export function think(w: World, b: Brain, dt: number) {
 
   // Research with a purpose, one at a time (the station's level shares the queue), once the yard
   // is busy (or it's saving up for a ship), keeping some credits in hand.
-  // Hybrid bases: the Frigate Yard, its engineers and guards (yardSaving: it is saving up for it).
-  const yardSaving = w.hybrid ? planYard(w, b, D, S, st, enemySt, army) && !(threatValue > armyValue * 0.8) : false
   const yards = w.units.filter((u) => !u.dead && u.owner === o && u.t.tier === 'yard' && !building(u)).length
   const queued = allQueued(w, o).length
 
-  if (D.research && !saving && p.research.length === 0 && queued >= 1 && w.time > 90) {
+  if (D.research && !saving && !yardSaving && p.research.length === 0 && queued >= 1 && w.time > 90) {
     const tech = pickTech(w, b, mines)
     const capitalSaved = !!b.want && UNIT[b.want].tier === 'capital'
     if (tech && p.credits >= tech.cost + S.keep + (capitalSaved ? 800 : 0) && !cantResearch(w, o, tech.id)) act(b, () => cmdResearch(w, o, tech.id), true)
   }
 
+  // Expansions for the station and the yards, by profile, with credits to spare.
+  const modSaving = w.hybrid && !saving && !yardSaving ? planModules(w, b, D, S, threatValue > armyValue * 0.8) : false
+
   // Keep two orders in the yard, saving up for the one we picked rather than buying whatever's cheap.
-  // A yard standing idle is saved up for first: its next ship is one of its own (frigates, corvettes).
-  const idleYard = w.units.some((u) => !u.dead && u.owner === o && u.t.tier === 'yard' && !!u.yq && !u.yq.length && !building(u))
-  if (idleYard && !saving && !yardSaving && !(b.want && builtAt(UNIT[b.want]) === 'yard')) b.want = pickShip(w, b, (t) => builtAt(t) === 'yard') ?? b.want
+  // A yard standing idle is saved up for first: its next ship is one of its own (frigates and
+  // corvettes at the Frigate Yard, cruisers and flagships at the Capital Yard).
+  // (The Capital Yard first: its ships are the ones worth saving for.)
+  const idleYard = w.units.filter((u) => !u.dead && u.owner === o && u.t.tier === 'yard' && !!u.yq && !u.yq.length && !building(u)).sort((x, y) => (worksOf(y.t) === 'cyard' ? 1 : 0) - (worksOf(x.t) === 'cyard' ? 1 : 0))[0]
+  const idleKind = idleYard ? worksOf(idleYard.t) : null
+  if (idleKind && !saving && !yardSaving && !(b.want && builtAt(UNIT[b.want]) === idleKind)) b.want = pickShip(w, b, (t) => builtAt(t) === idleKind) ?? b.want
+  // Hybrid bases: once the Capital slip stands, a flagship is what it saves for (within a minute's
+  // income, with a fleet worth guarding it and nothing attacking its base). With the fleet at its
+  // limit it sends its cheapest warships home through hyperspace (part of their price comes back,
+  // those not out with a wave first) to make room for it.
+  const flag = unitOf(p.faction, 'capital')
+  const full = 'Fleet at its limit: capture beacons or upgrade the station'
+  const flagWhy = w.hybrid && b.alarm < 0 && !saving && !yardSaving && armyValue >= 4000 && p.credits + p.income * 60 >= flag.cost ? cantBuild(w, o, flag.id) : 'no'
+  const flagship = flagWhy === null || flagWhy === 'Not enough credits' || flagWhy === full
+  if (flagship) b.want = flag.id
+  if (flagship && flagWhy === full && p.credits >= flag.cost) {
+    const room = p.popCap - p.pop - allQueued(w, o).reduce((sum, q) => sum + UNIT[q.unit].pop, 0)
+    const spare = army
+      .filter((u) => canRetreat(u) && u.retreat <= 0 && !mendingIds.has(u.id) && (u.t.tier === 'gunship' || u.t.tier === 'frigate' || u.t.tier === 'cruiser'))
+      .sort((x, y) => (b.troops.includes(x.id) ? 1 : 0) - (b.troops.includes(y.id) ? 1 : 0) || x.t.cost - y.t.cost || x.id - y.id)
+    const out: Unit[] = []
+    let freed = room
+    for (const u of spare) {
+      if (freed >= flag.pop) break
+      out.push(u)
+      freed += u.t.pop
+    }
+    if (freed >= flag.pop && out.length) act(b, () => cmdRetreat(w, o, out.map((u) => u.id)))
+  }
   // (A yard is one more to keep busy.)
-  if (queued < (savingForMine || lean ? 1 : 2) + yards && !saving && !yardSaving && !(savingForMine && p.credits < 500)) {
-    if (b.want && cantBuild(w, o, b.want) && cantBuild(w, o, b.want) !== 'Not enough credits') b.want = null
+  if (queued < (savingForMine || lean ? 1 : 2) + yards && !saving && !yardSaving && !modSaving && !(savingForMine && p.credits < 500)) {
+    if (b.want && cantBuild(w, o, b.want) && cantBuild(w, o, b.want) !== 'Not enough credits' && !(flagship && b.want === flag.id)) b.want = null
     b.want ??= pickShip(w, b)
     const want = b.want
     if (want && act(b, () => cmdBuild(w, o, want), true)) b.want = null
@@ -1044,12 +1082,33 @@ function planYard(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Uni
     if (p.credits >= eng.cost) act(b, () => cmdBuild(w, o, eng.id), true)
     return true
   }
-  if (mine && building(mine)) {
-    // A site: at least one squadron on it (new ones, if the last were lost).
+  if (p.level >= 3 && b.lv3 < 0) b.lv3 = w.time
+  // A site of ours: at least one squadron on it (new ones, if the last were lost).
+  const site = w.units.find((u) => !u.dead && u.owner === o && u.t.tier === 'yard' && building(u))
+  if (site) {
     if (!engineers.length) return hire()
-    if (!engineers.some((u) => u.order.k === 'construct' && u.order.id === mine.id)) act(b, () => cmdConstruct(w, o, engineers.map((u) => u.id), mine.id))
+    if (!engineers.some((u) => u.order.k === 'construct' && u.order.id === site.id)) act(b, () => cmdConstruct(w, o, engineers.map((u) => u.id), site.id))
     return false
   }
+  // A shot-off expansion is welded back by the engineers (for part of its price) when they're free.
+  const broken = w.units.find((u) => !u.dead && u.owner === o && (u.t.tier === 'station' || u.t.tier === 'yard') && u.t.hardpoints.some((h, i) => h.exp && u.hps[i].hp <= 0 && p.credits >= moduleRebuildCost(h.exp)))
+  if (broken && engineers.length && !engineers.some((u) => u.order.k === 'construct')) act(b, () => cmdConstruct(w, o, engineers.map((u) => u.id), broken.id), true)
+  // The Capital Yard, once its time has come after station level 3 (and the Frigate Yard stands).
+  const ct = yardOf(p.faction, 'cyard')
+  let saveCyard = false
+  if (mine && !building(mine) && !w.units.some((u) => !u.dead && u.owner === o && u.t.id === ct.id) && p.level >= 3 && w.time >= b.lv3 + S.cyardDelay * D.pace && b.alarm < 0) {
+    const ruin = (w.ruins ?? []).find((r) => r.owner === o && r.unit === ct.id)
+    const cost = ruin ? Math.round(ct.cost * REBUILD) : ct.cost
+    if (!engineers.length) saveCyard = hire()
+    // (It stops buying ships for it only once it's within 45 seconds' income.)
+    else if (p.credits < cost) saveCyard = p.credits + p.income * 45 >= cost
+    else {
+      const spot = ruin && !placement(w, o, ct.id, ruin.x, ruin.y).why ? ruin : yardSpot(w, o, st, enemySt, ct.id)
+      if (spot) act(b, () => cmdPlace(w, o, engineers.map((u) => u.id), ct.id, spot.x, spot.y), true)
+    }
+  }
+  const cyard = w.units.find((u) => !u.dead && u.owner === o && u.t.id === ct.id && !building(u))
+  if (cyard?.yr && sq(cyard.yr.x - p.rally.x) + sq(cyard.yr.y - p.rally.y) > sq(60)) act(b, () => cmdRally(w, o, p.rally.x, p.rally.y, cyard.id), true)
   if (mine) {
     // Its ships gather where the station's do, and a few warships stand guard over it.
     if (mine.yr && sq(mine.yr.x - p.rally.x) + sq(mine.yr.y - p.rally.y) > sq(60)) act(b, () => cmdRally(w, o, p.rally.x, p.rally.y, mine.id), true)
@@ -1068,7 +1127,7 @@ function planYard(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Uni
         .sort((a, z) => d2(a, mine) - d2(z, mine) || a.id - z.id)[0]
       if (pick && act(b, () => cmdGuard(w, o, [pick.id], mine.id))) b.guards.push(pick.id)
     }
-    return false
+    return saveCyard
   }
   b.guards = []
   const leveling = p.research.some((r) => r.id === LEVEL_UP)
@@ -1081,6 +1140,45 @@ function planYard(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Uni
   if (p.credits < cost) return true
   const spot = ruin && !placement(w, o, yt.id, ruin.x, ruin.y).why ? ruin : yardSpot(w, o, st, enemySt, yt.id)
   if (spot) act(b, () => cmdPlace(w, o, engineers.map((u) => u.id), yt.id, spot.x, spot.y), true)
+  return false
+}
+
+/**
+ * Hybrid bases: expansions for the Command Station and the yards. With spare credits (its profile's
+ * reserve kept back, and the base not under attack), one at a time, it orders the first one on its
+ * profile's list it can build now; the Capital slip comes first of all once the station reaches
+ * level 4, so an admiral who likes flagships gets to them: that one it saves up for once it's within
+ * half a minute's income (the answer: whether it is saving, so the ship purchases wait). The rest
+ * are cheap enough to skip: with no money to spare it simply goes on building ships.
+ */
+function planModules(w: World, b: Brain, D: Level, S: Style, attacked: boolean): boolean {
+  const o = b.o
+  const p = w.players[o]
+  if (!D.research || attacked || w.time < 150) return false
+  const works = w.units.filter((u) => !u.dead && u.owner === o && (u.t.tier === 'station' || u.t.tier === 'yard') && !building(u))
+  // One at a time: while one is under way it waits.
+  if (works.some((u) => u.xq?.length)) return false
+  const order: ModuleId[] = ['capitalSlip', ...S.modules.filter((id) => id !== 'capitalSlip')]
+  // The Capital slip and the first two on its list are worth saving up for once they're within
+  // reach (about twenty seconds' income); the rest wait for money to spare.
+  const keen = new Set<ModuleId>(['capitalSlip', ...S.modules.slice(0, 2)])
+  let next = 0
+  for (const id of order) {
+    const at = works.find((u) => worksOf(u.t) === (MODULE[id].on as Works))
+    if (!at) continue
+    const why = cantExpand(w, o, at.id, id)
+    if (why === 'Already built' || why?.startsWith('Needs station level')) continue
+    const cost = MODULE[id].cost
+    // (The rest also leave the ship it is saving for alone.)
+    const spare = keen.has(id) ? 100 : S.keep + 300 + (b.want ? UNIT[b.want].cost : 0)
+    if (!why && p.credits >= cost + spare) {
+      act(b, () => cmdExpand(w, o, at.id, id), true)
+      return false
+    }
+    if (keen.has(id) && (!why || why === 'Not enough credits')) return p.credits + p.income * 20 >= cost + spare
+    // Only the first two it can't have yet are looked at: it doesn't shop down the whole list.
+    if (++next >= 2) return false
+  }
   return false
 }
 

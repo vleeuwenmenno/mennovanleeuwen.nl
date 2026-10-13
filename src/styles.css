@@ -112,6 +112,39 @@ a:hover {
   text-decoration: underline;
 }
 
+/* ---------- Text selection ----------
+   Like a desktop: dragging or double-clicking the OS's chrome (title bars, the dock, menus,
+   sidebars, toolbars, list rows, icons, games) never highlights it, a long press on it gets no
+   callout, and a tap no grey flash. Text meant to be read and copied opts back in with the
+   `selectable` class (or a data-selectable attribute): the terminal, the editor, Agents' messages,
+   a mail being read, notes, a contact's card, PDF text, Markdown previews, the CV and so on.
+   `copyable` is the same for an error or notice someone may want to paste somewhere. Fields
+   (inputs, text areas, contenteditable) and inline code (outside buttons) always are. Buttons and summaries inside a
+   selectable area stay out of a selection (link-styled ones read as text, so they stay in).
+   Ctrl+A and dragged pictures are handled in src/os/selection.ts. */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+input,
+textarea,
+select,
+[contenteditable]:not([contenteditable='false']),
+code:not(button code),
+.selectable,
+.copyable,
+[data-selectable] {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+:is(.selectable, .copyable, [data-selectable]) :is(button, summary, [role='button']):not(.link-btn, .selectable) {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -338,7 +371,6 @@ body.is-resizing iframe {
   font-size: clamp(28px, 6vw, 84px);
   letter-spacing: -0.04em;
   color: color-mix(in srgb, var(--fg) 7%, transparent);
-  user-select: none;
 }
 .wp-sig span {
   color: color-mix(in srgb, var(--accent) 22%, transparent);
@@ -1304,7 +1336,6 @@ body.is-resizing iframe {
   border-radius: 0;
   border: 1px solid transparent;
   cursor: default;
-  user-select: none;
   touch-action: none;
   transition: left 0.18s ease, top 0.18s ease, transform 0.18s ease;
 }
@@ -1518,37 +1549,6 @@ body.is-resizing iframe {
   }
 }
 
-/* A long press on the OS's own chrome opens its menu (installTouchContextMenu in ContextMenu.tsx),
-   so the browser must not select its labels or show its callout first. Text in apps stays
-   selectable. */
-@media (pointer: coarse) {
-  .topbar,
-  .dock,
-  .dock-stack,
-  .dock-handle,
-  .desk,
-  .desk-icon,
-  .titlebar,
-  .note-grip,
-  .ctx-menu,
-  .om-row,
-  .nb-side,
-  .agt-rail,
-  .fm-side,
-  .fm-item,
-  .sp-item,
-  .nc-item {
-    -webkit-touch-callout: none;
-    -webkit-user-select: none;
-    user-select: none;
-  }
-  /* Fields in there (renaming an icon, a file or a thread; a sidebar's search) stay editable. */
-  :is(.topbar, .dock, .desk, .titlebar, .nb-side, .agt-rail, .fm-side, .fm-item) :is(input, textarea, [contenteditable]) {
-    -webkit-user-select: text;
-    user-select: text;
-  }
-}
-
 /* A finger is holding on something with a menu (installTouchContextMenu): nothing on the page
    may be selected or get the iOS callout until it lets go. Fields keep working. */
 .is-touch-holding,
@@ -1690,7 +1690,6 @@ body.is-resizing iframe {
   background: var(--bg-dark);
   border-bottom: 1px solid var(--line);
   cursor: grab;
-  user-select: none;
   touch-action: none;
 }
 .titlebar-title {
@@ -1803,14 +1802,6 @@ body.is-resizing iframe {
   box-shadow: 0 22px 40px -18px rgba(0, 0, 0, 0.7), 0 2px 4px rgba(0, 0, 0, 0.2);
   overflow: visible;
   animation: note-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.3);
-  /* Notes and widgets sit on the desktop like objects: a stray drag across them selects nothing.
-     Their text fields (a sticky being edited, widget settings) stay selectable. */
-  user-select: none;
-  -webkit-user-select: none;
-}
-.window.chrome-note :is(textarea, input, [contenteditable]) {
-  user-select: text;
-  -webkit-user-select: text;
 }
 @keyframes note-in {
   from {
@@ -2205,9 +2196,6 @@ body.is-resizing iframe {
   border-top: 1px solid var(--line);
   background: var(--bg-dark);
   font-family: var(--mono);
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-touch-callout: none;
   touch-action: none;
 }
 .t-key {
@@ -3394,7 +3382,6 @@ body.is-resizing iframe {
     border: 0;
     background: none;
     transform: translateX(-50%);
-    -webkit-tap-highlight-color: transparent;
   }
   .games-handle::before {
     content: '';
@@ -3636,7 +3623,6 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
   justify-content: center;
   gap: 18px;
   padding: 24px;
-  user-select: none;
 }
 .mc-studio {
   background: #ef323d;
@@ -3919,8 +3905,6 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
   border: 1px solid var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, var(--panel-2));
   touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
   /* The handle travels inside the track, not over its ends. */
   --thumb: 34px;
 }
@@ -4123,7 +4107,7 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
 .touch-only {
   display: none;
 }
-/* Game buttons for fingers: square like the rest, no double-tap zoom, no text selection. */
+/* Game buttons for fingers: square like the rest, no double-tap zoom. */
 .touch-pad button,
 .dpad button {
   border-radius: 0;
@@ -4131,10 +4115,6 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
   border: 1px solid var(--line-strong);
   color: var(--text);
   touch-action: manipulation;
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-touch-callout: none;
-  -webkit-tap-highlight-color: transparent;
 }
 .touch-pad button:active,
 .dpad button:active {
@@ -4233,7 +4213,6 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
 .mines-grid {
   display: grid;
   gap: 2px;
-  user-select: none;
 }
 .mine {
   width: var(--cell);
@@ -4562,7 +4541,6 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
   position: relative;
   border: 1px solid transparent;
   cursor: default;
-  user-select: none;
   color: var(--fg);
 }
 .fm-item:hover {
@@ -5046,7 +5024,6 @@ button.fm-dd-row:hover {
   padding: 5px 8px;
   border-bottom: 1px solid var(--line);
   background: var(--bg);
-  user-select: none;
 }
 .pv-title {
   min-width: 0;
@@ -5121,7 +5098,6 @@ button.fm-dd-row:hover {
   max-width: none;
   transform-origin: center;
   box-shadow: 0 10px 40px -12px rgba(0, 0, 0, 0.55);
-  user-select: none;
   will-change: transform;
 }
 .pv-loading,
@@ -5482,7 +5458,6 @@ button.fm-dd-row:hover {
   white-space: pre;
   cursor: text;
   transform-origin: 0% 0%;
-  user-select: text;
 }
 .pdf .textLayer > :not(.markedContent),
 .pdf .textLayer .markedContent span:not(.markedContent) {
@@ -5625,7 +5600,6 @@ button.fm-dd-row:hover {
   backdrop-filter: blur(18px) saturate(1.4);
   box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.6);
   transition: opacity 0.25s, transform 0.25s;
-  user-select: none;
 }
 .pl.is-idle .pl-bar {
   opacity: 0;
@@ -5931,9 +5905,6 @@ button.fm-dd-row:hover {
   padding: 3px 10px;
   font-variant-numeric: tabular-nums;
   cursor: default;
-  /* A file manager's rows, not text: dragging selects rows (the rubber band), never words. */
-  user-select: none;
-  -webkit-user-select: none;
 }
 /* A tar has no per-file compression: no Packed and Saved columns. */
 .ar.is-tar .ar-row {
@@ -6678,7 +6649,6 @@ button.fm-dd-row:hover {
   background: var(--bg);
   color: var(--muted);
   text-align: right;
-  user-select: none;
 }
 .zed-gutter .is-current {
   color: var(--fg-bright);
@@ -8921,7 +8891,6 @@ kbd {
   color: var(--text);
   font-family: var(--mono);
   font-size: 11px;
-  user-select: none;
 }
 .amp-panel {
   display: flex;

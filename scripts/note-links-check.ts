@@ -11,8 +11,8 @@
 //   - Google: the backlink in the private extended properties, other apps' properties and the
 //     guests kept, with sendUpdates=none;
 //   - a link followed to its event, and to a deleted one;
-//   - the Agents tools: a meeting note for an event (asked first in Ask first), linking in Auto
-//     (no asking), and reading the notes of an event and the events of a note;
+//   - the Agents tools: a meeting note, linking and unlinking asking in every mode (Ask first, Auto,
+//     Edits allowed, Bypass), and reading the notes of an event and the events of a note not asking;
 //   - another user, who reaches none of it.
 //
 //   node scripts/note-links-check.ts
@@ -300,18 +300,28 @@ try {
   t = await turn(ask.id, 'SCENARIO meeting Planning sync', false)
   check('declined, no second note is made', !!t.result('make_meeting_note').error && ((await api('GET', '/api/state')).notes.value as J[]).length === notes.length)
 
-  // Auto: linking goes ahead.
+  // Auto: linking asks too, like the calendar's tools; only the looking ones go ahead.
   const auto = await api('POST', '/api/agents/threads', { model: MODEL, mode: 'quick', permission: 'auto' })
   t = await turn(auto.id, `SCENARIO link standup|${N2}`, true)
   notes = (await api('GET', '/api/state')).notes.value as J[]
-  check(`Auto: linking runs without asking (${t.asked.length} asked)`, t.asked.length === 0 && t.result('link_note_to_event').linked?.event === 'Weekly standup')
+  check(`Auto: linking asks (${t.asked.map((a) => a.call?.name).join(', ')})`, t.asked.length === 1 && t.asked[0].call?.name === 'link_note_to_event' && t.result('link_note_to_event').linked?.event === 'Weekly standup')
   check('the note has the link, to that occurrence', notes.find((n) => n.id === N2)?.events?.some((l: J) => l.uid === 'series@check' && l.occurrence))
   t = await turn(auto.id, `SCENARIO lookup standup|${N2}`, true)
+  check(`Auto: notes_for_event and events_for_note run without asking (${t.asked.length} asked)`, t.asked.length === 0)
   check('notes_for_event finds the note on the event', t.result('notes_for_event').notes?.some((n: J) => n.id === N2 && n.title === 'Standup notes'))
   check('events_for_note finds the event, with its id', t.result('events_for_note').events?.some((e: J) => e.title === 'Weekly standup' && typeof e.id === 'string'))
   t = await turn(auto.id, `SCENARIO unlink standup|${N2}`, true)
+  check(`Auto: unlinking asks (${t.asked.map((a) => a.call?.name).join(', ')})`, t.asked.length === 1 && t.asked[0].call?.name === 'unlink_note_from_event')
   notes = (await api('GET', '/api/state')).notes.value as J[]
   check('unlink_note_from_event takes the link off the note and the event', !!t.result('unlink_note_from_event').unlinked && !notes.find((n) => n.id === N2)?.events?.length && !object('series.ics')!.text.includes('X-MVLOS-NOTE'))
+  for (const permission of ['acceptEdits', 'bypass']) {
+    const other = await api('POST', '/api/agents/threads', { model: MODEL, mode: 'quick', permission })
+    const before = ((await api('GET', '/api/state')).notes.value as J[]).length
+    t = await turn(other.id, 'SCENARIO meeting Planning sync', false)
+    check(`${permission}: a meeting note asks too, and declined makes none (${t.asked.length} asked)`, t.asked.length === 1 && t.asked[0].call?.name === 'make_meeting_note' && ((await api('GET', '/api/state')).notes.value as J[]).length === before)
+    t = await turn(other.id, `SCENARIO link standup|${N2}`, false)
+    check(`${permission}: linking asks too (${t.asked.length} asked)`, t.asked.length === 1 && t.asked[0].call?.name === 'link_note_to_event')
+  }
   const plan2 = await api('POST', '/api/agents/threads', { model: MODEL, mode: 'quick', permission: 'plan' })
   await turn(plan2.id, 'SCENARIO none', true)
   check('Plan: the changing ones are not offered, the looking ones are', !offered.at(-1)!.includes('make_meeting_note') && !offered.at(-1)!.includes('link_note_to_event') && offered.at(-1)!.includes('notes_for_event'))

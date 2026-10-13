@@ -92,7 +92,7 @@ export function MailSettings() {
           {busy ? 'Checking…' : 'Link mail account'}
         </button>
       </form>
-      {(error || listError) && <p className="t-red">{error ?? listError}</p>}
+      {(error || listError) && <p className="t-red copyable">{error ?? listError}</p>}
     </>
   )
 }

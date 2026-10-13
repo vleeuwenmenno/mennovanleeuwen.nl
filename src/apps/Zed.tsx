@@ -985,7 +985,7 @@ export function Zed({ win }: { win: WinState }) {
                   </div>
                 )}
                 {view !== 'edit' && (
-                  <article className="zed-preview">
+                  <article className="zed-preview selectable">
                     <MarkdownPreview text={buf.text} />
                   </article>
                 )}
