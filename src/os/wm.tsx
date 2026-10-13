@@ -2,7 +2,10 @@ import { snapReserve } from './dockPrefs'
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
 import { appHere } from './cvMode'
 import { synced } from './synced'
-import { startupPrefs } from './startup'
+import { startupPrefs, useStartupPrefs } from './startup'
+import { notify } from './notify'
+import { newTab } from './powerState'
+import { rememberedWorkspace, moveTabWorkspace, startTabWorkspaces, stopTabWorkspaces, tabWorkspacePrefs, tabWorkspacesSupported, useTabWorkspaces } from './tabWorkspaces'
 
 export type AppId = 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'pdf' | 'archive' | 'office' | 'newdoc' | 'newsheet' | 'newslides' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar' | 'agents' | 'amp' | 'tasks' | 'contacts' | 'photos' | 'mail'
 
@@ -102,10 +105,14 @@ type Action =
   | { type: 'setProps'; pid: number; props: WinState['props'] }
   | { type: 'restack'; pids: number[] }
   | { type: 'viewport'; width: number; height: number; layout: { app: AppId; geometry: Geometry }[] }
-  | { type: 'reset'; layout: { app: AppId; geometry: Geometry; props?: WinState['props'] }[] }
+  | { type: 'reset'; layout: { app: AppId; geometry: Geometry; props?: WinState['props'] }[]; ws?: number }
   | { type: 'restore'; windows: SavedWindow[] }
   | { type: 'workspace'; n: number }
   | { type: 'moveTo'; pid: number; n: number }
+  /** This tab got workspace n of its own (null: it did not, and shares them). See os/tabWorkspaces.ts. */
+  | { type: 'claim'; n: number | null }
+  /** The workspaces other tabs have, which this tab does not go to. */
+  | { type: 'away'; ws: number[] }
 
 /** `touched` flips once the visitor moves, resizes or opens something; until then a viewport
  * change re-applies the opening layout instead of just clamping. `focused` is the window that
@@ -123,6 +130,12 @@ type State = {
   /** Counts what the visitor did (open, close, move, focus...), not what the screen size did to
    * the windows: only those changes are saved, so two screens don't keep overwriting each other. */
   edits: number
+  /** Workspaces another tab of this browser has (one workspace per tab): this tab doesn't go
+   * there, and a window sent there goes without the screen following it. */
+  away: number[]
+  /** While this tab is still finding a workspace of its own, the windows opened meanwhile (a
+   * /?open= link): they go along to the workspace it gets. Null once it has one, or shares. */
+  unplaced: number[] | null
 }
 
 /** Actions that are the visitor's own doing (as opposed to a viewport change or a restore). */
@@ -161,9 +174,15 @@ function saveWorkspace(n: number) {
 }
 
 
-/** Opens the opening layout on an empty desk, as if nobody had touched it yet. */
-function fresh(layout: { app: AppId; geometry: Geometry; props?: WinState['props'] }[]): State {
-  let s: State = { windows: [], nextPid: 100, topZ: 10, touched: false, focused: null, ws: 1, phone: isPhone(), edits: 0 }
+/** Whether a window is on a workspace another tab has. */
+const isAway = (state: Pick<State, 'away'>, w: WinState) => {
+  const n = workspaceOf(w)
+  return n !== null && state.away.includes(n)
+}
+
+/** Opens the opening layout on an empty desk, as if nobody had touched it yet, on workspace `ws`. */
+function fresh(layout: { app: AppId; geometry: Geometry; props?: WinState['props'] }[], ws = 1): State {
+  let s: State = { windows: [], nextPid: 100, topZ: 10, touched: false, focused: null, ws, phone: isPhone(), edits: 0, away: [], unplaced: null }
   for (const w of layout) s = reducer(s, { type: 'open', app: w.app, geometry: w.geometry, props: w.props })
   return { ...s, touched: false, edits: 0 }
 }
@@ -228,7 +247,7 @@ function restored(saved: SavedWindow[], current: WinState[] = [], ws = 1): State
     return same ? { ...same, ...w, want, props: same.props, pid: same.pid, z: ++z } : { ...w, want, props: { ...w.props }, pid: pid++, z: ++z, openedAt: Date.now() }
   })
   const view = { ws, phone: isPhone() }
-  return { windows, nextPid: pid, topZ: z, touched: true, focused: topShown(view, windows)?.pid ?? null, ...view, edits: 0 }
+  return { windows, nextPid: pid, topZ: z, touched: true, focused: topShown(view, windows)?.pid ?? null, ...view, edits: 0, away: [], unplaced: null }
 }
 
 function reducer(state: State, action: Action): State {
@@ -239,34 +258,45 @@ function reducer(state: State, action: Action): State {
 function apply(state: State, action: Action): State {
   switch (action.type) {
     case 'reset':
-      return fresh(action.layout)
+      // A tab with a workspace of its own starts over on it.
+      return { ...fresh(action.layout, action.ws), away: state.away }
     case 'restore':
-      return restored(action.windows, state.windows, state.ws)
+      return { ...restored(action.windows, state.windows, state.ws), away: state.away, unplaced: state.unplaced }
     case 'workspace': {
       const n = Math.min(WORKSPACES, Math.max(1, action.n))
-      if (n === state.ws) return state
+      if (n === state.ws || state.away.includes(n)) return state
       return { ...state, ws: n, focused: topShown({ ...state, ws: n }, state.windows)?.pid ?? null }
     }
+    case 'claim': {
+      // Windows opened while the tab was still looking come along to its workspace.
+      const n = action.n
+      if (n === null) return state.unplaced ? { ...state, unplaced: null } : state
+      const along = new Set(state.unplaced)
+      const windows = along.size ? state.windows.map((w) => (along.has(w.pid) && !NOTE_APPS.has(w.app) ? { ...w, ws: n } : w)) : state.windows
+      return { ...state, ws: n, windows, unplaced: null, focused: topShown({ ...state, ws: n }, windows)?.pid ?? null }
+    }
+    case 'away':
+      return action.ws.join() === state.away.join() ? state : { ...state, away: action.ws }
     case 'moveTo': {
-      // Like Hyprland's movetoworkspace: the window goes, and the screen follows it there.
+      // Like Hyprland's movetoworkspace: the window goes, and the screen follows it there. To a
+      // workspace another tab has, the window goes to that tab and this one stays where it is.
       const target = state.windows.find((w) => w.pid === action.pid)
       const n = Math.min(WORKSPACES, Math.max(1, action.n))
       if (!target || NOTE_APPS.has(target.app)) return state
       const z = state.topZ + 1
       const windows = state.windows.map((w) => (w.pid === action.pid ? { ...w, ws: n, z } : w))
+      if (state.away.includes(n) && n !== state.ws) return { ...state, touched: true, topZ: z, windows, focused: topShown(state, windows)?.pid ?? null }
       return { ...state, touched: true, topZ: z, ws: n, windows, focused: target.minimized ? (topShown({ ...state, ws: n }, windows)?.pid ?? null) : target.pid }
     }
     case 'open': {
-      // Reuse the app's frontmost window unless a new one was asked for. An app with an instance
-      // prop only reuses the window showing the same thing, and a thing never gets a second window.
-      const key = INSTANCE_PROP[action.app]
-      const thing = key ? action.props?.[key] : undefined
-      const existing = action.newInstance && !SINGLE_INSTANCE.has(action.app) && thing === undefined
-        ? undefined
-        : state.windows.filter((w) => w.app === action.app && (!key || w.props[key] === thing)).sort((a, b) => b.z - a.z)[0]
+      const existing = reused(state, action.app, action.props, action.newInstance)
+      // That window is in another tab: the caller says so (and offers to bring it over).
+      if (existing && isAway(state, existing)) return state
       const z = state.topZ + 1
       if (existing) {
         // That window keeps its own props (a game's session), with the new ones on top.
+        const key = INSTANCE_PROP[action.app]
+        const thing = key ? action.props?.[key] : undefined
         const props = !action.props ? existing.props : thing !== undefined ? { ...existing.props, ...action.props } : { ...action.props }
         return {
           ...state,
@@ -290,7 +320,7 @@ function apply(state: State, action: Action): State {
         // New windows open on the workspace on screen; notes and widgets belong to all of them.
         ws: NOTE_APPS.has(action.app) ? undefined : state.ws,
       }
-      return { ...state, touched: true, focused: win.pid, windows: [...state.windows, win], nextPid: state.nextPid + 1, topZ: z }
+      return { ...state, touched: true, focused: win.pid, windows: [...state.windows, win], nextPid: state.nextPid + 1, topZ: z, unplaced: state.unplaced && [...state.unplaced, win.pid] }
     }
     case 'close':
       return { ...state, focused: state.focused === action.pid ? null : state.focused, windows: state.windows.filter((w) => w.pid !== action.pid) }
@@ -298,6 +328,8 @@ function apply(state: State, action: Action): State {
       const target = state.windows.find((w) => w.pid === action.pid)
       if (!target) return state
       const ws = workspaceOf(target) ?? state.ws
+      // On a workspace another tab has: the caller says so.
+      if (ws !== state.ws && state.away.includes(ws)) return state
       if (target.z === state.topZ && !target.minimized && ws === state.ws) return state.focused === action.pid ? state : { ...state, focused: action.pid }
       const z = state.topZ + 1
       // Focusing a window on another workspace (from the dock, Spotlight) goes there.
@@ -342,6 +374,21 @@ function apply(state: State, action: Action): State {
       }
     }
   }
+}
+
+/**
+ * The window opening `app` would bring forward instead of opening another: the app's frontmost
+ * one, unless a new one was asked for. An app with an instance prop only reuses the window
+ * showing the same thing, and a thing never gets a second window. An app that can have more
+ * windows leaves the ones in other tabs alone (it opens one here); one that can't (Settings, a
+ * game) still finds its window there.
+ */
+function reused(state: State, app: AppId, props: WinState['props'] | undefined, newInstance?: boolean): WinState | undefined {
+  const key = INSTANCE_PROP[app]
+  const thing = key ? props?.[key] : undefined
+  const single = SINGLE_INSTANCE.has(app) || thing !== undefined
+  if (newInstance && !single) return undefined
+  return state.windows.filter((w) => w.app === app && (!key || w.props[key] === thing) && (single || !isAway(state, w))).sort((a, b) => b.z - a.z)[0]
 }
 
 /** Notes (the headline note, the shortcuts, sticky and other widgets): the windows with note chrome. */
@@ -422,6 +469,9 @@ type WM = {
   shown: (w: WinState) => boolean
   /** Whether workspaces are in use: not on a phone. */
   workspaces: boolean
+  /** The workspaces other tabs of this browser have, while this tab has one of its own (one
+   * workspace per tab, os/tabWorkspaces.ts). This tab doesn't go there. */
+  elsewhere: number[]
 }
 
 const Ctx = createContext<WM | null>(null)
@@ -444,20 +494,26 @@ export function WindowManagerProvider({
   initial: relayout,
   placement,
   isApp,
+  nameOf = (w) => w.app,
 }: {
   children: ReactNode
   initial: () => { app: AppId; geometry: Geometry; props?: WinState['props'] }[]
   placement: (app: AppId, openCount: number, props?: WinState['props']) => Geometry
   /** Filters saved layouts down to apps that still exist. */
   isApp: (app: string) => boolean
+  /** A window's name, for telling where it is. */
+  nameOf?: (w: WinState) => string
 }) {
   const usable = useCallback((saved: SavedWindow[] | null) => saved?.map(migrate).filter((w) => isApp(w.app)) ?? null, [isApp])
   const [state, dispatch] = useReducer(reducer, null, () => {
     // Settings → Windows: last time's windows, the welcome windows, or an empty desktop.
     const start = startupPrefs().windows
     if (start === 'empty') return fresh([])
+    // One workspace per tab: a reload starts on the workspace it had (it is about to get it back).
+    const perTab = start === 'last' && tabWorkspacePrefs.get().perTab && tabWorkspacesSupported && !isPhone()
     const saved = start === 'last' ? usable(layoutStore().get()) : null
-    return saved ? restored(saved, [], savedWorkspace()) : fresh(relayout())
+    const s = saved ? restored(saved, [], (perTab && rememberedWorkspace()) || savedWorkspace()) : fresh(relayout())
+    return perTab ? { ...s, unplaced: [] } : s
   })
 
   // A phone shows every window as one workspace, so it leaves the desktop's choice alone.
@@ -467,6 +523,74 @@ export function WindowManagerProvider({
 
   const stateRef = useRef(state)
   stateRef.current = state
+
+  // One workspace per tab (os/tabWorkspaces.ts): only where the windows are one layout shared by
+  // the tabs (Last windows; otherwise each tab has windows of its own anyway), and not on a phone,
+  // which has the one workspace.
+  const tabPrefs = tabWorkspacePrefs.use()
+  const tabs = useTabWorkspaces()
+  const { windows: startWindows } = useStartupPrefs()
+  const perTab = tabPrefs.perTab && tabWorkspacesSupported && !state.phone && startWindows === 'last'
+  const claimed = useRef(false)
+  useEffect(() => {
+    if (!perTab) {
+      stopTabWorkspaces()
+      dispatch({ type: 'claim', n: null })
+      return
+    }
+    // Opening: the workspace from before a reload, waiting a moment for the page before it to let
+    // go of it. Turned on later: the workspace on screen, if no other tab has it.
+    const first = !claimed.current
+    claimed.current = true
+    const reload = (performance.getEntriesByType?.('navigation')[0] as PerformanceNavigationTiming | undefined)?.type === 'reload'
+    const pref = tabWorkspacePrefs.get()
+    void startTabWorkspaces({
+      prefer: first ? rememberedWorkspace() : stateRef.current.ws,
+      wait: first && reload ? 3000 : 0,
+      adopt: newTab ? pref.adoptNewTab : pref.adopt,
+      occupied: () => new Set(stateRef.current.windows.map(workspaceOf).filter((n): n is number => n !== null)),
+      count: WORKSPACES,
+      onClaim: (n) => dispatch({ type: 'claim', n }),
+    })
+  }, [perTab])
+  useEffect(() => dispatch({ type: 'away', ws: tabs.status === 'own' ? tabs.others : [] }), [tabs.status, tabs.others])
+  // Going to another workspace takes it for this tab, and leaves the one before (windows and all)
+  // for the next tab to adopt. Another tab got there first (rare: the bar knew it was free): back.
+  useEffect(() => {
+    if (tabs.status !== 'own' || tabs.mine === null || tabs.mine === state.ws || state.phone) return
+    const n = state.ws
+    const mine = tabs.mine
+    void moveTabWorkspace(n).then((ok) => {
+      if (ok) return
+      notify({ title: `Workspace ${n} is open in another tab`, transient: true })
+      if (stateRef.current.ws === n) dispatch({ type: 'claim', n: mine })
+    })
+  }, [state.ws, state.phone, tabs.status, tabs.mine])
+  // The browser tab says which workspace it has: "MvL OS · 3".
+  useEffect(() => {
+    if (tabs.status !== 'own' || tabs.mine === null) return
+    const base = document.title
+    document.title = `${base} · ${tabs.mine}`
+    return () => {
+      document.title = base
+    }
+  }, [tabs.status, tabs.mine])
+
+  /** A window in another tab, asked for here: say where it is, and bring it over on a click. */
+  const elsewhereNotice = useCallback(
+    (w: WinState, then: () => void) =>
+      notify({
+        title: `${nameOf(w)} is open in another tab`,
+        body: `It is on workspace ${workspaceOf(w)} there. Click to bring it here.`,
+        transient: true,
+        onClick: () => {
+          if (!stateRef.current.windows.some((x) => x.pid === w.pid)) return
+          dispatch({ type: 'moveTo', pid: w.pid, n: stateRef.current.ws })
+          then()
+        },
+      }),
+    [nameOf],
+  )
 
   // Save what the visitor did (debounced), not what fitting the windows to this screen did. A
   // newer layout from another device replaces this one unless there is an unsaved change here;
@@ -518,9 +642,13 @@ export function WindowManagerProvider({
       if (!appHere(app)) return location.assign(`/cv?open=${app}`)
       if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH, t: String(Date.now()) }, geometry: placement('files', state.windows.length) })
       if (ALWAYS_NEW.has(app)) return dispatch({ type: 'open', app, props: { ...props, create: String(Date.now()) }, newInstance: true, geometry: placement(app, state.windows.length, props) })
-      dispatch({ type: 'open', app, props, geometry: placement(app, state.windows.length, props) })
+      const action: Action = { type: 'open', app, props, geometry: placement(app, state.windows.length, props) }
+      // Its one window is in another tab (one workspace per tab).
+      const there = reused(stateRef.current, app, props)
+      if (there && isAway(stateRef.current, there)) return elsewhereNotice(there, () => dispatch(action))
+      dispatch(action)
     },
-    [placement, state.windows.length],
+    [placement, state.windows.length, elsewhereNotice],
   )
   const openNew = useCallback(
     (app: AppId, props?: WinState['props']) => {
@@ -567,7 +695,11 @@ export function WindowManagerProvider({
           .then((ok) => ok && dispatch({ type: 'close', pid }))
           .finally(() => asking.delete(pid))
       },
-      focus: (pid) => dispatch({ type: 'focus', pid }),
+      focus: (pid) => {
+        const target = state.windows.find((w) => w.pid === pid)
+        if (target && workspaceOf(target) !== state.ws && isAway(state, target)) return elsewhereNotice(target, () => dispatch({ type: 'focus', pid }))
+        dispatch({ type: 'focus', pid })
+      },
       minimize: (pid) => dispatch({ type: 'minimize', pid }),
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
       setGeometry: (pid, geometry) => dispatch({ type: 'setGeometry', pid, geometry }),
@@ -575,17 +707,26 @@ export function WindowManagerProvider({
       restack: (pids) => dispatch({ type: 'restack', pids }),
       refit: () => dispatch({ type: 'viewport', width: window.innerWidth, height: window.innerHeight, layout: relayout() }),
       workspace: state.ws,
-      setWorkspace: (n) => dispatch({ type: 'workspace', n }),
-      moveToWorkspace: (pid, n) => dispatch({ type: 'moveTo', pid, n }),
+      setWorkspace: (n) => {
+        // Another tab has it, and a page can't bring another browser tab forward: say so instead.
+        if (n !== state.ws && state.away.includes(n)) return notify({ title: `Workspace ${n} is open in another tab`, transient: true })
+        dispatch({ type: 'workspace', n })
+      },
+      moveToWorkspace: (pid, n) => {
+        dispatch({ type: 'moveTo', pid, n })
+        const w = state.windows.find((x) => x.pid === pid)
+        if (w && workspaceOf(w) !== null && n !== state.ws && state.away.includes(n)) notify({ title: `Moved to workspace ${n} (other tab)`, body: nameOf(w), transient: true })
+      },
       shown: (w) => onScreen(state, w),
       workspaces: !state.phone,
+      elsewhere: state.away,
       reset: (empty) => {
-        dispatch({ type: 'reset', layout: empty ? [] : relayout() })
+        dispatch({ type: 'reset', layout: empty ? [] : relayout(), ws: tabs.status === 'own' ? state.ws : undefined })
         savedEdits.current = 0
         layoutStore().set(null)
       },
     }
-  }, [state.windows, state.focused, state.ws, state.phone, open, openNew, relayout])
+  }, [state.windows, state.focused, state.ws, state.phone, state.away, open, openNew, relayout, elsewhereNotice, nameOf, tabs.status])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
@@ -618,6 +759,7 @@ export function SoloWindowProvider({ win, children }: { win: WinState; children:
       moveToWorkspace: none,
       shown: () => true,
       workspaces: false,
+      elsewhere: [],
     }
   }, [win])
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

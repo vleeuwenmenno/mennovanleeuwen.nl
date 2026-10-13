@@ -52,6 +52,26 @@ number in the bar moves it there. Each window's workspace is saved with the wind
 workspace is on screen is kept per browser. Phones have room for one workspace, so there the
 numbers don't show and every window is reachable as if there were just one.
 
+**One workspace per tab** ([`src/os/tabWorkspaces.ts`](src/os/tabWorkspaces.ts), on unless turned
+off in Settings → Windows): every open tab of MvL OS in a browser gets a workspace of its own, like
+monitors in Hyprland, and its browser tab title says which (`MvL OS · 3`). A tab owns its workspace
+by holding a [Web Lock](https://developer.mozilla.org/docs/Web/API/Web_Locks_API) named after it
+for as long as it is open; the browser lets go of it when the tab closes or crashes, so the other
+tabs always know which workspaces are taken (a BroadcastChannel and a waiting shared request on
+each taken lock tell them the moment that changes). The tab's workspace is kept in sessionStorage,
+so a reload gets the same one back; a duplicated tab finds it taken and looks for another. A tab
+that opens takes, in order: the workspace it had before a reload; the lowest workspace a closed tab
+left windows on (*Adopt left-behind workspaces*; on the new tab page, `/?newtab`, only when
+*…also as the new tab page* is on, since every Ctrl+T would otherwise take one over); the lowest
+empty one; any other free one. When all nine have a tab, it shares them as before. The bar marks
+the other tabs' workspaces with a dot; going to one is refused with a notification (a page can't
+bring another browser tab forward), and the arrow keys and the scroll wheel step past them. Moving
+a window to another tab's workspace sends it to that tab (the window layout is synced between
+tabs), and this tab stays where it is. A window asked for that is in another tab (from the dock,
+Spotlight, or an app that has one window, like Settings) offers to be brought over instead. This
+needs *Last windows*, where the tabs share one window layout, and is off on phones. Other devices
+are not involved: locks are per browser.
+
 The dock keeps the pinned apps and launchers, and every open app that isn't pinned gets an item of
 its own after them, past a thin divider, like macOS ([`src/os/Shell.tsx`](src/os/Shell.tsx),
 `Dock`). So a minimized window can always be brought back, on a phone too, where the dock comes
