@@ -11,7 +11,7 @@ import {
   blobUrl,
   fetchMessage,
   fetchThread,
-  mailPrefs,
+  useMailPrefs,
   nameOf,
   orderMailboxes,
   useMailVersion,
@@ -56,6 +56,7 @@ export function Reader({ account, threadId, boot, mailbox, narrow, onBack, onAct
   const marked = useRef(new Set<string>())
   const scroller = useRef<HTMLDivElement>(null)
   const extra = useMessageActions()
+  const prefs = useMailPrefs()
 
   // Load (again after a change anywhere); messages shown with images keep them.
   const withImages = useRef(new Set<string>())
@@ -79,17 +80,26 @@ export function Reader({ account, threadId, boot, mailbox, narrow, onBack, onAct
           if (t.messages.length) next.add(t.messages[t.messages.length - 1].id)
           return next
         })
-        // Opened is read (Settings in the app's menu can switch that off).
-        if (mailPrefs().markRead && t.messages.some((m) => !m.seen) && !marked.current.has(threadId)) {
-          marked.current.add(threadId)
-          act(account, 'seen', { threadIds: [threadId] }).catch(() => {})
-        }
       })
       .catch((e: Error) => live && setError(e.message))
     return () => {
       live = false
     }
   }, [account, threadId, version])
+
+  // Read as it opens, or a few seconds after, or never by itself (Settings → Apps → Mail). Once
+  // a conversation has been marked here it is not marked again, so "Mark as unread" stays.
+  const unseen = !!messages?.some((m) => !m.seen)
+  useEffect(() => {
+    if (!unseen || prefs.markRead === 'never' || marked.current.has(threadId)) return
+    const mark = () => {
+      marked.current.add(threadId)
+      act(account, 'seen', { threadIds: [threadId] }).catch(() => {})
+    }
+    if (prefs.markRead === 'open') return mark()
+    const t = setTimeout(mark, prefs.markReadAfter * 1000)
+    return () => clearTimeout(t)
+  }, [account, threadId, unseen, prefs.markRead, prefs.markReadAfter])
 
   // The reading pane's height, for frames that fill it.
   useEffect(() => {
@@ -109,12 +119,14 @@ export function Reader({ account, threadId, boot, mailbox, narrow, onBack, onAct
       setError((e as Error).message)
     }
   }
-  const alwaysImages = (m: Message) => {
+  /** "Always for" a sender or their whole domain: on the allow list, and this message loads now. */
+  const alwaysImages = (m: Message, domain = false) => {
     const sender = m.from[0]?.email
     if (!sender) return
-    allowImagesFrom(sender)
+    const who = domain ? sender.slice(sender.lastIndexOf('@')) : sender
+    allowImagesFrom(who)
     void loadImages(m)
-    notify({ title: 'Images from this sender will load', body: sender, transient: true })
+    notify({ title: domain ? 'Images from this domain will load' : 'Images from this sender will load', body: who, transient: true })
   }
 
   const last = messages?.at(-1)
@@ -151,7 +163,7 @@ export function Reader({ account, threadId, boot, mailbox, narrow, onBack, onAct
       plugin('event', 'Create event from this email'),
       ...extra.filter((a) => a.id !== 'task' && a.id !== 'event').map((a) => ({ label: a.label, hint: a.hint, onSelect: () => a.run(ref) })),
       ...(m.blocked > 0 && !m.images
-        ? [{ separator: true as const }, { label: 'Load images', onSelect: () => void loadImages(m) }, ...(m.from[0] ? [{ label: `Always load images from ${m.from[0].email}`, onSelect: () => alwaysImages(m) }] : [])]
+        ? [{ separator: true as const }, { label: 'Load images', onSelect: () => void loadImages(m) }, ...(m.from[0] ? [{ label: `Always load images from ${m.from[0].email}`, onSelect: () => alwaysImages(m) }, { label: `Always load images from @${m.from[0].email.split('@').pop()}`, onSelect: () => alwaysImages(m, true) }] : [])]
         : []),
     ]
   }
@@ -213,7 +225,8 @@ export function Reader({ account, threadId, boot, mailbox, narrow, onBack, onAct
                 onMenu={(e) => openContextMenu(e, messageMenu(m))}
                 onMore={(e) => openMenuAt(e.currentTarget, messageMenu(m))}
                 onLoadImages={() => void loadImages(m)}
-                onAlwaysImages={() => alwaysImages(m)}
+                onAlwaysImages={(domain) => alwaysImages(m, domain)}
+                quotes={prefs.quotes}
                 onSearch={onSearch}
               />
             ))}
@@ -248,6 +261,7 @@ function MessageCard({
   onMore,
   onLoadImages,
   onAlwaysImages,
+  quotes,
   onSearch,
 }: {
   account: number
@@ -259,7 +273,8 @@ function MessageCard({
   onMenu: (e: MouseEvent) => void
   onMore: (e: MouseEvent<HTMLButtonElement>) => void
   onLoadImages: () => void
-  onAlwaysImages: () => void
+  onAlwaysImages: (domain?: boolean) => void
+  quotes: 'collapsed' | 'expanded'
   onSearch: (q: string) => void
 }) {
   const sender = m.from[0]
@@ -325,8 +340,13 @@ function MessageCard({
             Load images
           </button>
           {sender && (
-            <button className="link-btn" onClick={onAlwaysImages}>
+            <button className="link-btn" onClick={() => onAlwaysImages()}>
               Always for {sender.email}
+            </button>
+          )}
+          {sender && (
+            <button className="link-btn" onClick={() => onAlwaysImages(true)}>
+              Always for @{sender.email.split('@').pop()}
             </button>
           )}
         </div>
@@ -334,7 +354,7 @@ function MessageCard({
       {m.images && m.trackers > 0 && <div className="ml-images muted">Images loaded; {m.trackers} tracking {m.trackers === 1 ? 'pixel was' : 'pixels were'} left out.</div>}
       {m.invite && <InviteCard invite={m.invite} message={ref} />}
       <div className="ml-msg-body">
-        {m.html !== null ? <MessageFrame html={m.html} images={m.images} tall={tall} /> : <PlainText text={m.text ?? ''} />}
+        {m.html !== null ? <MessageFrame html={m.html} images={m.images} tall={tall} quotes={quotes} /> : <PlainText text={m.text ?? ''} quotes={quotes} />}
         {m.truncated && <p className="muted ml-truncated">This message is long: the end of it is not shown.</p>}
       </div>
       {m.attachments.length > 0 && <Attachments account={account} list={m.attachments} />}

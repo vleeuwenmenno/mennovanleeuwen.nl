@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
+import { loadsRemote, readRemoteSettings, type RemoteSettings } from '../src/data/mailRemote.ts'
 import { allows, normalizePrefs } from '../src/data/notifySources.ts'
 import { accounts, isAdmin, requireUser, type User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
@@ -460,10 +461,13 @@ const MESSAGE_PROPS = [...ROW_PROPS, 'cc', 'bcc', 'replyTo', 'sentAt', 'messageI
 const BODY_ARGS = { fetchTextBodyValues: true, fetchHTMLBodyValues: true, maxBodyValueBytes: 1_000_000 }
 const escapeText = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-/** Senders whose remote images always load (the Mail app's "Always for this sender", synced state "mail"). */
-function imageSenders(user: User): Set<string> {
-  const v = readState(user).mail?.value as { imageSenders?: unknown } | undefined
-  return new Set(Array.isArray(v?.imageSenders) ? v.imageSenders.filter((x): x is string => typeof x === 'string').map((x) => x.toLowerCase()) : [])
+/**
+ * The remote-content settings (Settings → Apps → Mail, synced state "mail"): whether remote
+ * images and styles load without being asked, for everyone or for the senders on the allow list.
+ * Read here so that remote content stays blocked until the settings or a "Load images" say so.
+ */
+function remoteSettings(user: User): RemoteSettings {
+  return readRemoteSettings(readState(user).mail?.value)
 }
 
 /** Inline pictures up to this size each, and this much in all per message, go into its HTML as data: URIs. */
@@ -587,10 +591,10 @@ export async function getThread(acc: Linked, threadId: string, images: string[])
   ])
   const thread = (r.get('t', 'Thread/get').list as Json[])[0]
   if (!thread) throw new HttpError(404, 'That conversation is gone')
-  const senders = imageSenders(acc.user)
+  const settings = remoteSettings(acc.user)
   const emails = new Map((r.get('g', 'Email/get').list as Json[]).map((e) => [e.id, e]))
   const list = (thread.emailIds as string[]).map((id) => emails.get(id)).filter((e): e is Json => !!e)
-  const messages = await Promise.all(list.map((e) => render(acc, e, images.includes(e.id) || addresses(e.from).some((a) => senders.has(a.email.toLowerCase())))))
+  const messages = await Promise.all(list.map((e) => render(acc, e, images.includes(e.id) || loadsRemote(settings, addresses(e.from).map((a) => a.email)))))
   return { id: threadId, messages }
 }
 
@@ -600,7 +604,7 @@ export async function getMessage(acc: Linked, emailId: string, images: boolean):
   const r = await jmap(acc, [['Email/get', { ids: [emailId], properties: MESSAGE_PROPS, ...BODY_ARGS }, 'g']])
   const e = (r.get('g', 'Email/get').list as Json[])[0]
   if (!e) throw new HttpError(404, 'That message is gone')
-  return render(acc, e, images)
+  return render(acc, e, images || loadsRemote(remoteSettings(acc.user), addresses(e.from).map((a) => a.email)))
 }
 
 // ---------------------------------------------------------------------------------------------

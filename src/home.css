@@ -4787,3 +4787,45 @@ button.cal-day.is-picked:not(.is-today) {
 .fm-unlock .secret {
   width: 100%;
 }
+
+/* Settings → Apps → Mail (src/apps/mail/MailPane.tsx). */
+.mset-search {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  outline: 0;
+}
+.mset-search:focus,
+.mset-sig textarea:focus {
+  border-color: var(--accent);
+}
+.mset-allowed {
+  max-height: 320px;
+  overflow-y: auto;
+}
+.mset-sigs {
+  display: grid;
+  gap: 12px;
+}
+.mset-sig {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.mset-sig strong {
+  overflow-wrap: anywhere;
+}
+.mset-sig textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: 12.5px/1.45 var(--mono, monospace);
+  resize: vertical;
+  outline: 0;
+}

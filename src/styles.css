@@ -9440,3 +9440,24 @@ kbd {
 .sp-contact h4 {
   margin: 4px 0 0;
 }
+
+/* The text field of askText() (src/os/Dialogs.tsx). */
+.dlg-input {
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  outline: 0;
+}
+.dlg-input:focus {
+  border-color: var(--accent);
+}
+.dlg-input[aria-invalid='true'] {
+  border-color: var(--red);
+}
+.dlg-problem {
+  margin: 6px 0 0;
+}

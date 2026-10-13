@@ -16,7 +16,7 @@ import { composeMail, inviteHandlerOf, personHandlerOf, suggestPeople, type Addr
  * message's own inline pictures, data: pictures and its own styles, plus remote pictures once
  * images are on. Links open in a new tab (allow-popups), outside the sandbox.
  */
-export function frameDoc(html: string, images: boolean): string {
+export function frameDoc(html: string, images: boolean, quotes: 'collapsed' | 'expanded' = 'collapsed'): string {
   const self = `${location.origin}/api/mail/inline/`
   const csp = [`default-src 'none'`, `img-src data: ${self}${images ? ' https: http:' : ''}`, `style-src 'unsafe-inline'`, `font-src data:`, `form-action 'none'`, `base-uri 'none'`, `frame-src 'none'`, `media-src 'none'`].join('; ')
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer"><meta name="color-scheme" content="light"><base target="_blank"><style>
@@ -29,7 +29,7 @@ details.mail-quote > summary { display: inline-block; margin: 6px 0; padding: 0 
 details.mail-quote > summary::-webkit-details-marker { display: none; }
 details.mail-quote[open] > summary { margin-bottom: 8px; }
 .mail-blocked { display: inline-block; padding: 2px 6px; border: 1px dashed #d0d7de; color: #57606a; font-size: 12px; }
-</style></head><body>${html}</body></html>`
+</style></head><body>${quotes === 'expanded' ? html.replace(/<details class="mail-quote">/g, '<details class="mail-quote" open>') : html}</body></html>`
 }
 
 /**
@@ -41,8 +41,8 @@ const composeLinks = (html: string) =>
   html.replace(/href="(mailto:[^"]*)"/gi, (_, href: string) => `href="${location.origin}/?mailto=${encodeURIComponent(href.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'))}"`)
 
 /** HTML mail: a sandboxed frame (no scripts, no same-origin), as tall as the reading pane allows. */
-export function MessageFrame({ html, images, tall }: { html: string; images: boolean; tall: boolean }) {
-  const doc = useMemo(() => frameDoc(composeLinks(html), images), [html, images])
+export function MessageFrame({ html, images, tall, quotes }: { html: string; images: boolean; tall: boolean; quotes?: 'collapsed' | 'expanded' }) {
+  const doc = useMemo(() => frameDoc(composeLinks(html), images, quotes), [html, images, quotes])
   return <iframe className={`ml-frame ${tall ? 'is-tall' : ''}`} sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={doc} title="Message" referrerPolicy="no-referrer" />
 }
 
@@ -99,7 +99,7 @@ function linked(line: string, key: string): ReactNode[] {
  * Plain-text mail: links found, quoted lines ("> ", with the "On … wrote:" before them) folded
  * away once the message has said something of its own.
  */
-export function PlainText({ text }: { text: string }) {
+export function PlainText({ text, quotes }: { text: string; quotes?: 'collapsed' | 'expanded' }) {
   const blocks = useMemo(() => {
     const lines = text.replace(/\r\n/g, '\n').split('\n')
     const out: { quote: boolean; lines: string[] }[] = []
@@ -126,7 +126,7 @@ export function PlainText({ text }: { text: string }) {
           </span>
         ))
         return b.quote && own ? (
-          <details key={i} className="ml-quote">
+          <details key={i} className="ml-quote" open={quotes === 'expanded'}>
             <summary>Show quoted text</summary>
             {body}
           </details>

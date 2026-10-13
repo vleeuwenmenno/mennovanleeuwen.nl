@@ -19,19 +19,19 @@ import { empiresMusic, empiresMuted, empiresVolume, gladiatorMusic, gladiatorMut
 // open window follows a change here at once, and the other way round. Only real, lasting
 // preferences are here: not what a window remembers of itself (its size, the folder it was on).
 
-const SetGroup = ({ title, children }: { title: string; children: ReactNode }) => (
+export const SetGroup = ({ title, children }: { title: string; children: ReactNode }) => (
   <section className="set-section">
     <h4>{title}</h4>
     {children}
   </section>
 )
 
-function Toggle({ on, onChange, label }: { on: boolean; onChange: (on: boolean) => void; label: string }) {
+export function Toggle({ on, onChange, label }: { on: boolean; onChange: (on: boolean) => void; label: string }) {
   return <button role="switch" aria-checked={on} aria-label={label} className={`set-toggle ${on ? 'is-on' : ''}`} onClick={() => onChange(!on)} />
 }
 
 /** One choice of a few, as segmented buttons. */
-function Seg<T extends string | boolean>({ value, options, onChange, label }: { value: T; options: [T, string][]; onChange: (v: T) => void; label: string }) {
+export function Seg<T extends string | boolean>({ value, options, onChange, label }: { value: T; options: [T, string][]; onChange: (v: T) => void; label: string }) {
   return (
     <div className="seg set-seg" role="radiogroup" aria-label={label}>
       {options.map(([v, text]) => (
@@ -44,7 +44,7 @@ function Seg<T extends string | boolean>({ value, options, onChange, label }: { 
 }
 
 /** A row with a name, a line under it, and its control on the right. */
-function Row({ title, hint, children, stack }: { title: string; hint?: ReactNode; children: ReactNode; stack?: boolean }) {
+export function Row({ title, hint, children, stack }: { title: string; hint?: ReactNode; children: ReactNode; stack?: boolean }) {
   return (
     <li className={`set-row ${stack ? 'set-row-stack' : ''}`}>
       <span className="set-row-text">
