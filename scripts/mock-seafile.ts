@@ -4,14 +4,18 @@
 // upload and update (answered with CORS headers, like Seafile's file server, since the browser
 // talks to it directly), rename, delete into a trash, move and copy (a name that is taken gets
 // " (1)", as Seafile does; between libraries as a background task), history and share links.
+// Its file server answers byte ranges, as Seafile's does for libraries that are not encrypted.
+// Thumbnails it makes for no file, unless started with --video-thumbs: then videos get one (a
+// plain picture), as Seafile's do with ENABLE_VIDEO_THUMBNAIL.
 //
-//   node scripts/mock-seafile.ts [port]     (default 8840)
+//   node scripts/mock-seafile.ts [port] [--video-thumbs]     (default 8840)
 //
 // Link it as an admin in Settings → Integrations → Seafile (any username and password; the
 // address is a private one, which only admins may use), or write the link into the database the
 // way scripts/launchers-check.ts does. `import { startMockSeafile }` starts one in a script.
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http'
+import { deflateSync } from 'node:zlib'
 
 type Node = { dir: boolean; data: Buffer; mtime: number }
 export type MockRepo = { id: string; name: string; files: Map<string, Node>; trash: { path: string; node: Node; deleted: number }[] }
@@ -40,12 +44,44 @@ function seafileName(r: MockRepo, dir: string, name: string): string {
 
 const subtree = (r: MockRepo, p: string) => [...r.files.keys()].filter((k) => k === p || k.startsWith(`${p}/`))
 
-export async function startMockSeafile(port = 0, host = '127.0.0.1'): Promise<{ base: string; repos: Map<string, MockRepo>; server: Server; close: () => Promise<void> }> {
+/** A plain 64×36 PNG (Seafile's thumbnails are PNGs), in one colour. */
+function png(r: number, g: number, b: number): Buffer {
+  const w = 64
+  const h = 36
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    return c >>> 0
+  })
+  const crc = (buf: Buffer) => {
+    let c = 0xffffffff
+    for (const byte of buf) c = crcTable[(c ^ byte) & 0xff] ^ (c >>> 8)
+    return (c ^ 0xffffffff) >>> 0
+  }
+  const chunk = (type: string, data: Buffer) => {
+    const out = Buffer.alloc(12 + data.length)
+    out.writeUInt32BE(data.length, 0)
+    out.write(type, 4, 'ascii')
+    data.copy(out, 8)
+    out.writeUInt32BE(crc(out.subarray(4, 8 + data.length)), 8 + data.length)
+    return out
+  }
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(w, 0)
+  ihdr.writeUInt32BE(h, 4)
+  ihdr.set([8, 2, 0, 0, 0], 8)
+  const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(w * 3).map((_, i) => [r, g, b][i % 3])])
+  const pixels = Buffer.concat(Array.from({ length: h }, () => row))
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(pixels)), chunk('IEND', Buffer.alloc(0))])
+}
+
+export async function startMockSeafile(port = 0, host = '127.0.0.1', opts: { videoThumbs?: boolean } = {}): Promise<{ base: string; repos: Map<string, MockRepo>; server: Server; close: () => Promise<void> }> {
   const repos = new Map<string, MockRepo>([
     [MY_LIBRARY, repo(MY_LIBRARY, 'My Library', ['/Desktop', '/Documents', '/Downloads', '/Music', '/Pictures', '/Videos'])],
     [PHOTOS, repo(PHOTOS, 'Photos', ['/2024'])],
   ])
   const tasks = new Map<string, number>()
+  const VIDEO_THUMB = png(0x2e, 0x8b, 0x57)
   let base = ''
 
   const json = (res: ServerResponse, status: number, body: unknown) => void res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(body))
@@ -169,7 +205,16 @@ export async function startMockSeafile(port = 0, host = '127.0.0.1'): Promise<{ 
     if ((m = /^\/seafhttp\/files\/([0-9a-f-]{36})(\/.*)$/.exec(path))) {
       const f = repos.get(m[1])?.files.get(decodeURIComponent(m[2]))
       if (!f || f.dir) return void res.writeHead(404).end('not found')
-      return void res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': f.data.length }).end(f.data)
+      // One byte range, as Seafile's file server answers them (not in encrypted libraries).
+      const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ''))
+      if (range && (range[1] || range[2])) {
+        const size = f.data.length
+        const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]))
+        const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1
+        if (start >= size || end < start) return void res.writeHead(416, { 'Content-Range': `bytes */${size}` }).end()
+        return void res.writeHead(206, { 'Content-Type': 'application/octet-stream', 'Content-Length': end - start + 1, 'Content-Range': `bytes ${start}-${end}/${size}`, 'Accept-Ranges': 'bytes' }).end(f.data.subarray(start, end + 1))
+      }
+      return void res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': f.data.length, 'Accept-Ranges': 'bytes' }).end(f.data)
     }
     if ((m = /^\/seafhttp\/(upload|update)-api\/([0-9a-f-]{36})$/.exec(path)) && req.method === 'POST') {
       const r = repos.get(m[2])!
@@ -194,7 +239,11 @@ export async function startMockSeafile(port = 0, host = '127.0.0.1'): Promise<{ 
       r.files.set(join(dir, name), { dir: false, data, mtime: now() })
       return json(res, 200, [{ name, size: data.length }])
     }
-    if (/^\/api2\/repos\/[0-9a-f-]{36}\/thumbnail\/$/.test(path)) return void res.writeHead(404).end()
+    if ((m = /^\/api2\/repos\/([0-9a-f-]{36})\/thumbnail\/$/.exec(path))) {
+      const f = repos.get(m[1])?.files.get(p)
+      if (opts.videoThumbs && f && !f.dir && /\.(mp4|m4v|mov|webm|mkv)$/i.test(p)) return void res.writeHead(200, { 'Content-Type': 'image/png' }).end(VIDEO_THUMB)
+      return void res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error_msg: 'Failed to create thumbnail.' }))
+    }
 
     // --- history and trash ------------------------------------------------------------------------
     if (/^\/api2\/repos\/[0-9a-f-]{36}\/history-limit\/$/.test(path)) return json(res, 200, { keep_days: 30 })
@@ -234,7 +283,8 @@ export function putFile(r: MockRepo, path: string, text: string | Buffer) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const port = Number(process.argv[2] ?? 8840)
-  const mock = await startMockSeafile(port)
+  const args = process.argv.slice(2)
+  const port = Number(args.find((a) => !a.startsWith('--')) ?? 8840)
+  const mock = await startMockSeafile(port, '127.0.0.1', { videoThumbs: args.includes('--video-thumbs') })
   console.log(`mock Seafile on ${mock.base} (libraries: My Library ${MY_LIBRARY}, Photos ${PHOTOS})`)
 }

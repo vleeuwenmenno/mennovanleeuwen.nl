@@ -8,7 +8,15 @@ import { jsonPref } from '../os/localPref'
 
 export type FilesView = 'list' | 'grid' | 'compact' | 'gallery'
 export type FilesSort = 'az' | 'za' | 'newest' | 'oldest' | 'largest' | 'smallest' | 'type'
-export type FilesPrefs = { view: FilesView; zoom: number; sort: FilesSort; hidden: boolean; sidebar: boolean }
+export type FilesPrefs = {
+  view: FilesView
+  zoom: number
+  sort: FilesSort
+  hidden: boolean
+  sidebar: boolean
+  /** A frame from each video as its icon, in Files, on the desktop and in Photos (src/data/videoThumbs.ts) */
+  videoThumbs: boolean
+}
 
 export const FILES_VIEWS: [FilesView, string][] = [
   ['list', 'List'],
@@ -28,7 +36,7 @@ export const FILES_SORTS: [FilesSort, string][] = [
 export const FILES_ZOOM_MIN = 50
 export const FILES_ZOOM_MAX = 200
 
-export const filesPrefs = jsonPref<FilesPrefs>('mvlos.files.v1', { view: 'grid', zoom: 100, sort: 'az', hidden: false, sidebar: true })
+export const filesPrefs = jsonPref<FilesPrefs>('mvlos.files.v1', { view: 'grid', zoom: 100, sort: 'az', hidden: false, sidebar: true, videoThumbs: true })
 
 // --- Omamp --------------------------------------------------------------------------------------
 

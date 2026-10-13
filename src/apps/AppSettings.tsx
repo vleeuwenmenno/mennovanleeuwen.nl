@@ -123,6 +123,9 @@ export function FilesPane() {
         <Row title="Sidebar" hint="Places, libraries and bookmarks, in a wide window">
           <Toggle on={prefs.sidebar} onChange={(sidebar) => filesPrefs.patch({ sidebar })} label="Show the sidebar" />
         </Row>
+        <Row title="Video thumbnails" hint="A frame from each video, here, on the desktop and in Photos">
+          <Toggle on={prefs.videoThumbs} onChange={(videoThumbs) => filesPrefs.patch({ videoThumbs })} label="Video thumbnails" />
+        </Row>
       </ul>
       <p className="muted set-help">The same in every folder and every Files window. Saved in this browser.</p>
       {account.seafile && (
