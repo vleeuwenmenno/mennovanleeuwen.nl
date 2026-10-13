@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { RotateHint } from './empires/RotateHint'
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, fleetThink, newBrain, profileOf, think, type Brain } from './empires/ai'
 import { ALL_SPRITES, BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, UNIT, WORKS_NAME, buildable, dims, isEngineer, isShip, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type Tier } from './empires/data'
 import { SizesContext, DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, Icon, ReserveTray, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
-import { LongPress, TouchBar, WheelHost, getTouchMods, isTouch, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
+import { LongPress, TouchBar, WheelHost, getTouchMods, isTouch, useCoarse, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
 import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
 import { Multiplayer } from './empires/Multiplayer'
@@ -455,6 +454,11 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const [touchUi, setTouchUi] = useState(false)
   const wheel = useRef<(r: WheelRequest | null) => void>(() => {})
   const [mapOpen, setMapOpen] = useState(false)
+  // On a touch screen the selection is one small button; its panel opens from it and closes on a tap away.
+  const compact = useCoarse()
+  const [selOpen, setSelOpen] = useState(false)
+  const selOpenRef = useRef(false)
+  selOpenRef.current = compact && selOpen
 
   const root = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -1623,6 +1627,32 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     return { x: e.clientX - r.left, y: e.clientY - r.top }
   }
 
+  // A tap anywhere but the open selection panel only closes it: the pointer press is stopped before
+  // the battlefield (or another button) sees it, and so is the click that follows.
+  useEffect(() => {
+    const el = root.current
+    if (!el) return
+    let swallow = 0
+    const down = (e: PointerEvent) => {
+      if (!selOpenRef.current || (e.target as Element).closest('.ew-selpop, .ew-selchip')) return
+      swallow = performance.now()
+      e.stopPropagation()
+      setSelOpen(false)
+    }
+    const click = (e: Event) => {
+      if (!swallow || performance.now() - swallow > 800) return
+      swallow = 0
+      e.stopPropagation()
+      e.preventDefault()
+    }
+    el.addEventListener('pointerdown', down, true)
+    el.addEventListener('click', click, true)
+    return () => {
+      el.removeEventListener('pointerdown', down, true)
+      el.removeEventListener('click', click, true)
+    }
+  }, [ready])
+
   const onPointerDown = (e: React.PointerEvent) => {
     sound.unlock()
     dropIntel()
@@ -1798,7 +1828,13 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         const now = performance.now()
         const dbl = lastClick.current.id === unit.id && now - lastClick.current.t < 350
         lastClick.current = { t: now, id: unit.id }
-        if (dbl) selectType(unit, add)
+        // Tapping the one thing that is selected (a ship, or its squadron) puts it away again.
+        const only = withSquads([unit.id])
+        if (!dbl && !add && selected.current.size === only.length && only.every((i) => selected.current.has(i))) {
+          selected.current.clear()
+          pickedNode.current = -1
+          sound.click()
+        } else if (dbl) selectType(unit, add)
         else if (add && selected.current.has(unit.id)) for (const id of withSquads([unit.id])) selected.current.delete(id)
         else select([unit.id], add)
         turretPick.current = !isShip(unit.t) && part >= 0 && unit.t.hardpoints[part]?.weapon && !add ? { unit: unit.id, hp: part } : null
@@ -2222,7 +2258,6 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       <WheelHost>
         <WheelBridge to={wheel} />
         <Tips live={(id) => world.current.byId.get(id)} />
-        <RotateHint />
         {intel && <FieldIntel w={w} me={me} id={intel.id} x={intel.x} y={intel.y} />}
         <canvas
           ref={canvas}
@@ -2444,21 +2479,54 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         <Floating id="selection" bare at={{ right: 6, bottom: 6 }} className="ew-selfloat" onMove={selMoved}>
             {/* Fingers only: the sticky Shift, box select, and a way to back out (no Esc on a phone). */}
             <TouchBar className="ew-battlebar"
-              extra={(ui.mode !== 'normal' || ui.draw || hud.sel.length > 0 || pickedNode.current >= 0) && (
+              extra={<>
+                {compact && hud.sel.length > 0 && !selOpen && (
+                  <span className="ew-selchip">
+                    <button className="ew-selchip-main" onClick={() => setSelOpen(true)} aria-label={`Selected units: ${hud.sel.length}. Open`} title="Selected units">
+                      <Icon name="fleet" size={22} />
+                      <b>{hud.sel.length}</b>
+                    </button>
+                    <button className="ew-selchip-x" onClick={() => (selected.current.clear(), (pickedNode.current = -1), sound.click())} aria-label="Deselect everything" title="Deselect">
+                      ✕
+                    </button>
+                  </span>
+                )}
+                {(ui.mode !== 'normal' || ui.draw || (!compact && (hud.sel.length > 0 || pickedNode.current >= 0))) && (
                 <button onClick={cancelTouch} title={ui.mode !== 'normal' || ui.draw ? 'Cancel the order' : 'Clear the selection'}>
                   ✕<span>{ui.mode !== 'normal' || ui.draw ? 'Cancel' : 'Clear'}</span>
                 </button>
-              )}
+                )}
+              </>}
             />
-            <SelectionPanel w={world.current} sel={sel} me={me} mode={ui.mode} onCommand={runCommand} groups={hud.groups} onGroup={recallGroup}
-              canAssign={sel.some((u) => u.owner === me)} onAssign={setGroup}
-              onPick={(id, shift) => {
-                const ids = withSquads([id])
-                if (shift) for (const i of ids) selected.current.delete(i)
-                else selected.current = new Set(ids)
-                sound.click()
-              }}
-            />
+            {(() => {
+              const panel = (
+                <SelectionPanel w={world.current} sel={sel} me={me} mode={ui.mode} onCommand={runCommand} groups={hud.groups} onGroup={recallGroup}
+                  canAssign={sel.some((u) => u.owner === me)} onAssign={setGroup}
+                  onPick={(id, shift) => {
+                    const ids = withSquads([id])
+                    if (shift) for (const i of ids) selected.current.delete(i)
+                    else selected.current = new Set(ids)
+                    sound.click()
+                  }}
+                />
+              )
+              if (!compact) return panel
+              if (!selOpen || !hud.sel.length) return null
+              return (
+                <div className="ew-selpop" data-nodrag>
+                  <div className="ew-selpop-head">
+                    <span className="ew-selpop-gap" />
+                    <button onClick={() => (selected.current.clear(), (pickedNode.current = -1), setSelOpen(false), sound.click())} aria-label="Deselect everything">
+                      ✕ Deselect
+                    </button>
+                    <button onClick={() => setSelOpen(false)} aria-label="Close">
+                      Close
+                    </button>
+                  </div>
+                  {panel}
+                </div>
+              )
+            })()}
         </Floating>
 
         {ui.deploy && !ui.menu && !ui.panel && (

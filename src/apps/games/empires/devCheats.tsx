@@ -125,7 +125,9 @@ const CSS = `
 .ew-dev select { flex: 1; min-width: 0; }
 .ew-dev input[type=number] { width: 58px; }
 .ew-dev .ew-chip.is-on { background: linear-gradient(180deg, var(--ew-active-hi), var(--ew-active)); border-color: #8fbaff; color: #fff; }
-.ew-dev-chip { position: absolute; left: 50%; bottom: 6px; transform: translateX(-50%); z-index: 6; padding: 2px 8px; font-size: 10.5px; letter-spacing: 0.12em; }
+.ew-dev-chip { position: absolute; left: 50%; bottom: 6px; transform: translateX(-50%); z-index: 6; }
+@media (pointer: coarse) { .ew-dev-chip { bottom: auto; top: 54px; left: auto; right: 6px; transform: none; opacity: 0.7; } }
+.ew-dev-chip {  padding: 2px 8px; font-size: 10.5px; letter-spacing: 0.12em; }
 .ew-dev-hint { color: #f2c14a; }
 `
 

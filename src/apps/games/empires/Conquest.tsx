@@ -1,6 +1,5 @@
 import { SHIP_SIZE_BLURB, SHIP_SIZE_NAMES, SHIP_SIZES, sizedType, type ShipSizes } from './models/sizes.ts'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { RotateHint } from './RotateHint'
 import { DIFFICULTY, type Difficulty, type Profile } from './ai'
 import { FACTIONS, UNIT, buildable, isShip, type FactionId, type UnitType } from './data'
 import {
@@ -1706,7 +1705,6 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       <WheelHost>
         <WheelHook to={wheel} />
         <Tips />
-        <RotateHint />
         {/* The same top bar as a battle's, in the same order: faction, credits, fleet, planets; then
             on the right the shipyards, the time and the menu. */}
         <div className="ew-top ew-gtop">

@@ -250,3 +250,66 @@
   }
 }
 }
+
+/* --- The selection on a touch screen: one small button, its panel opening from it --- */
+@media (pointer: coarse) {
+  .ew-battle .ew-selchip {
+    position: relative;
+    display: inline-flex;
+  }
+  .ew-battle .ew-selchip-main {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 48px;
+    min-height: 44px;
+    padding: 4px 12px;
+    color: var(--ew-head);
+    border-color: color-mix(in srgb, var(--ew-accent) 60%, transparent);
+    background: color-mix(in srgb, var(--ew-accent) 18%, rgba(20, 30, 56, 0.92));
+  }
+  .ew-battle .ew-selchip-main b {
+    font-family: var(--ew-display);
+    font-size: 15px;
+  }
+  .ew-battle .ew-selchip {
+    gap: 3px;
+  }
+  .ew-battle .ew-selchip-x {
+    min-width: 40px;
+    min-height: 44px;
+    padding: 0;
+    font-size: 14px;
+    color: #ffc4be;
+    border-color: rgba(255, 106, 94, 0.5);
+  }
+  .ew-battle .ew-selpop {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-self: stretch;
+    min-height: 0;
+  }
+  .ew-battle .ew-selpop .ew-selframe {
+    flex: 1 1 auto;
+    width: 100%;
+    max-width: none;
+    align-self: stretch;
+    min-height: 0;
+    margin: 0;
+  }
+  .ew-battle .ew-selpop-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 2px;
+  }
+  .ew-battle .ew-selpop-gap {
+    flex: 1;
+  }
+  .ew-battle .ew-selpop-head button {
+    min-height: 36px;
+    padding: 4px 12px;
+    font-size: 12px;
+  }
+}
