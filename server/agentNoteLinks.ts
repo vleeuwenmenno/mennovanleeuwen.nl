@@ -9,9 +9,8 @@ import { cleanNoteEvents, linkMatches, MAX_NOTE_EVENTS, meetingNoteText, sameOcc
 // and an event, and a meeting note made for an event, already linked. Events are named by the ids
 // calendar_list_events gives (server/agentCalendar.ts), notes by the ids search_notes gives.
 //
-// Linking changes the note and adds a private backlink to the event (nobody is mailed and nothing
-// anyone else sees changes), so these ask in Ask first, and go ahead in Auto, Edits allowed and
-// Bypass (server/agents.ts decide). Like the calendar's, each call is checked and worked out
+// Linking changes the note and writes a backlink into the event, so these ask in every mode, like
+// the calendar's changes (server/agents.ts decide). Like those, each call is checked and worked out
 // first, so a mistake goes back to the model before the user is asked, and the card says exactly
 // which note and which event.
 

@@ -1689,7 +1689,7 @@ const STEERING_IN_LINE = /(AGENTS\.md|CLAUDE\.md|\.agents|\.claude)\b/i
  * mode only reads; accepting edits lets the file tools write in the work folder (deleting still
  * asks); the terminal runs read-only lines, and the commands the user said not to ask about again.
  * Auto decides like Ask first here (it only differs for web reads, webReadGate). Bypass runs
- * everything except what lasts beyond the thread: calendar changes (they can mail guests) and
+ * everything except what lasts beyond the thread: calendar changes (they can mail guests), note links (they write into the event) and
  * writes to the files that steer the agent. Exported for scripts/agents-permissions.ts.
  */
 export function decide(thread: string, permission: Permission, call: ToolCall): 'run' | 'ask' | 'refuse' {
@@ -1707,14 +1707,10 @@ export function decide(thread: string, permission: Permission, call: ToolCall): 
   }
   if (!changes(name)) return 'run'
   if (permission === 'plan') return 'refuse'
-  // Linking a note and an event (and a meeting note made linked) mails nobody and changes nothing
-  // anyone else sees (the event only gets a private backlink): it asks in Ask first, and goes
-  // ahead in the modes that let the agent get on with things.
-  if (NOTE_LINK_WRITES.has(name)) return permission === 'default' ? 'ask' : 'run'
   // AGENTS.md, CLAUDE.md, .agents/ and .claude/ steer later turns: a lasting injection, so always asked.
   const paths = ['path', 'from', 'to', 'to_folder', 'name'].map((k) => argString(call.arguments ?? {}, k)).filter(Boolean)
   if (paths.some((p) => STEERING.test(p))) return 'ask'
-  if (permission === 'bypass') return CALENDAR_WRITES.has(name) ? 'ask' : 'run'
+  if (permission === 'bypass') return CALENDAR_WRITES.has(name) || NOTE_LINK_WRITES.has(name) ? 'ask' : 'run'
   return FILE_WRITES.has(name) && permission === 'acceptEdits' ? 'run' : 'ask'
 }
 
