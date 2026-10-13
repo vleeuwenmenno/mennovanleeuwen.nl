@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, fleetThink, newBrain, profileOf, think, type Brain } from './empires/ai'
 import { ALL_SPRITES, BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, UNIT, WORKS_NAME, buildable, dims, isEngineer, isShip, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type Tier } from './empires/data'
-import { SizesContext, DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, Icon, ReserveTray, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
-import { LongPress, TouchBar, WheelHost, getTouchMods, isTouch, useCoarse, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
+import { SizesContext, DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, Icon, ReserveTray, SelChip, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
+import { LongPress, SELPOP_KEEP, TouchBar, WheelHost, getTouchMods, isTouch, useCoarse, useTapAway, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
 import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
 import { Multiplayer } from './empires/Multiplayer'
@@ -457,8 +457,6 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   // On a touch screen the selection is one small button; its panel opens from it and closes on a tap away.
   const compact = useCoarse()
   const [selOpen, setSelOpen] = useState(false)
-  const selOpenRef = useRef(false)
-  selOpenRef.current = compact && selOpen
 
   const root = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -1629,29 +1627,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
 
   // A tap anywhere but the open selection panel only closes it: the pointer press is stopped before
   // the battlefield (or another button) sees it, and so is the click that follows.
-  useEffect(() => {
-    const el = root.current
-    if (!el) return
-    let swallow = 0
-    const down = (e: PointerEvent) => {
-      if (!selOpenRef.current || (e.target as Element).closest('.ew-selpop, .ew-selchip')) return
-      swallow = performance.now()
-      e.stopPropagation()
-      setSelOpen(false)
-    }
-    const click = (e: Event) => {
-      if (!swallow || performance.now() - swallow > 800) return
-      swallow = 0
-      e.stopPropagation()
-      e.preventDefault()
-    }
-    el.addEventListener('pointerdown', down, true)
-    el.addEventListener('click', click, true)
-    return () => {
-      el.removeEventListener('pointerdown', down, true)
-      el.removeEventListener('click', click, true)
-    }
-  }, [ready])
+  useTapAway(root, compact && selOpen, () => setSelOpen(false), SELPOP_KEEP, [ready])
 
   const onPointerDown = (e: React.PointerEvent) => {
     sound.unlock()
@@ -2481,15 +2457,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
             <TouchBar className="ew-battlebar"
               extra={<>
                 {compact && hud.sel.length > 0 && !selOpen && (
-                  <span className="ew-selchip">
-                    <button className="ew-selchip-main" onClick={() => setSelOpen(true)} aria-label={`Selected units: ${hud.sel.length}. Open`} title="Selected units">
-                      <Icon name="fleet" size={22} />
-                      <b>{hud.sel.length}</b>
-                    </button>
-                    <button className="ew-selchip-x" onClick={() => (selected.current.clear(), (pickedNode.current = -1), sound.click())} aria-label="Deselect everything" title="Deselect">
-                      ✕
-                    </button>
-                  </span>
+                  <SelChip icon="fleet" count={hud.sel.length} title="Selected units" onOpen={() => setSelOpen(true)} onClear={() => (selected.current.clear(), (pickedNode.current = -1), sound.click())} />
                 )}
                 {(ui.mode !== 'normal' || ui.draw || (!compact && (hud.sel.length > 0 || pickedNode.current >= 0))) && (
                 <button onClick={cancelTouch} title={ui.mode !== 'normal' || ui.draw ? 'Cancel the order' : 'Clear the selection'}>

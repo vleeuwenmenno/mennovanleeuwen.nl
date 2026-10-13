@@ -121,3 +121,44 @@
   background: color-mix(in srgb, var(--ew-active, #6cb4ff) 35%, transparent);
   border-color: var(--ew-active-hi, #6cb4ff);
 }
+
+/* The compact selection on a touch screen (SelChip in Hud.tsx): one button with an icon, maybe a
+   short label, and a count, and a ✕ beside it. The same in a battle and on the galaxy map. */
+@media (pointer: coarse) {
+  .ew-root .ew-selchip {
+    position: relative;
+    display: inline-flex;
+    gap: 3px;
+  }
+  .ew-root .ew-selchip-main {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 48px;
+    min-height: 44px;
+    padding: 4px 12px;
+    color: var(--ew-head);
+    border-color: color-mix(in srgb, var(--ew-accent) 60%, transparent);
+    background: color-mix(in srgb, var(--ew-accent) 18%, rgba(20, 30, 56, 0.92));
+  }
+  .ew-root .ew-selchip-main b {
+    font-family: var(--ew-display);
+    font-size: 15px;
+  }
+  .ew-root .ew-selchip-label {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .ew-root .ew-selchip-x {
+    min-width: 40px;
+    min-height: 44px;
+    padding: 0;
+    font-size: 14px;
+    color: #ffc4be;
+    border-color: rgba(255, 106, 94, 0.5);
+  }
+}

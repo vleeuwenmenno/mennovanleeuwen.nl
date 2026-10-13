@@ -1,0 +1,432 @@
+// Checks the buildings of Galactic conquest (hybrid bases on the galaxy map), headless: yards and
+// expansions built through a planet's queue (prices, times, ruins, refunds), which ships each planet
+// can build, the Second slip, a battle at a planet starting with the planet's real buildings at the
+// same spots every time, what a battle leaves of them written back to the planet (a destroyed yard
+// a ruin, its expansions gone), auto-resolved battles fought with them, what a captured planet
+// keeps, campaigns saved before there were buildings, and the galaxy AI planning its planets by its
+// profile over long campaigns without ever running out of ways to build ships.
+//
+//   node scripts/empires-gc-buildings.ts [weeks]
+//
+// Every check prints a line; it exits with 1 if any of them failed.
+
+import { generateMap, DEFAULT_RULES } from '../src/apps/games/empires/maps.ts'
+import { BUILD_RADIUS, MODULE, REBUILD, UNIT, yardOf, type ModuleId } from '../src/apps/games/empires/data.ts'
+import { PROFILES, fleetThink, newBrain } from '../src/apps/games/empires/ai.ts'
+import { STEP, baseLeft, cantBuild, cmdExpand, newFleetBattle, placement, tick, type FleetSide, type World } from '../src/apps/games/empires/sim.ts'
+import * as G from '../src/apps/games/empires/galaxy.ts'
+import type { Galaxy, Planet } from '../src/apps/games/empires/galaxy.ts'
+
+// Saves go to localStorage, which Node only has with a file behind it: a plain map does here.
+const store = new Map<string, string>()
+;(globalThis as unknown as { localStorage: Storage }).localStorage = {
+  getItem: (k: string) => store.get(k) ?? null,
+  setItem: (k: string, v: string) => void store.set(k, String(v)),
+  removeItem: (k: string) => void store.delete(k),
+  clear: () => store.clear(),
+  key: (i: number) => [...store.keys()][i] ?? null,
+  get length() {
+    return store.size
+  },
+} as Storage
+// The same campaigns every time, even where the game itself rolls dice.
+let seed = 4242
+Math.random = () => {
+  seed = (seed * 1103515245 + 12345) % 2147483648
+  return seed / 2147483648
+}
+
+let failed = 0
+const check = (what: string, ok: boolean, detail = '') => {
+  console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}${detail ? `: ${detail}` : ''}`)
+  if (!ok) failed++
+}
+const campaign = (credits = 20000) => {
+  const g = G.newGalaxy({ choice: { kind: 'rim' }, size: 'standard', faction: 'republic', difficulty: 'medium', credits })
+  // (The AI sits these out unless a check wants it.)
+  g.aiT[1] = 1e9
+  const cap = g.planets.find((p) => p.owner === 0 && p.station === 3)!
+  const outpost = g.planets.find((p) => p.owner === 0 && p.station === 1)!
+  return { g, cap, outpost }
+}
+/** Run the galaxy until `done` (or `max` seconds), battles auto-resolved. */
+const run = (g: Galaxy, max: number, done: () => boolean = () => false) => {
+  for (let t = 0; t < max && !done(); t += 0.5) {
+    if (g.pending >= 0) G.settlePending(g, 'auto')
+    G.tickGalaxy(g, 0.5)
+  }
+}
+const credits = (g: Galaxy) => g.sides[0].credits
+
+// --- Building yards and expansions through the planet's queue ---------------------------------------
+{
+  const { g, cap, outpost } = campaign()
+  check('a new campaign: the capital has a level 3 station and a Frigate Yard, nothing else', cap.base.yards.yard === 'up' && !cap.base.yards.cyard && !cap.base.mods.length)
+  check('an outpost has nothing round its station', !outpost.base.yards.yard && !outpost.base.mods.length)
+  check('a Frigate Yard needs station level 2', G.cantWork(g, 0, outpost.id, 'yard') === 'Needs station level 2')
+  check('a yard expansion needs its yard', G.cantWork(g, 0, outpost.id, 'secondSlip') === 'Needs a Frigate Yard here')
+  check('the Capital slip needs station level 4', G.cantWork(g, 0, cap.id, 'cyard') === null && (G.workLock(g, 0, cap.id, 'capitalSlip') ?? '').startsWith('Needs a Capital Yard'))
+  const before = credits(g)
+  const cyard = yardOf('republic', 'cyard')
+  check('the Capital Yard queues at its skirmish price', G.buildWork(g, 0, cap.id, 'cyard') === null && credits(g) === before - cyard.cost, `${before} -> ${credits(g)}`)
+  check('its build time is its skirmish time on the galaxy clock', cap.queue[0].unit === 'cyard' && cap.queue[0].total === cyard.build * G.WORKS_TIME, `${cap.queue[0].total} s`)
+  check('it can only be queued once', G.cantWork(g, 0, cap.id, 'cyard') === 'Already being built')
+  check('its expansions wait for it', (G.cantWork(g, 0, cap.id, 'fighterWing') ?? '').includes('wait for it'))
+  check('cruisers wait for it too', (G.cantBuildAt(g, 0, cap.id, 'r-cruiser') ?? '').includes('wait for it'))
+  const c0 = credits(g)
+  G.cancelBuild(g, 0, cap.id, 0)
+  check('cancelling refunds it in full', credits(g) === c0 + cyard.cost && !cap.queue.length)
+  check('an expansion queues on a standing yard', G.buildWork(g, 0, cap.id, 'drydock') === null && G.buildWork(g, 0, cap.id, 'shieldCore') === null)
+  G.buildWork(g, 0, cap.id, 'cyard')
+  const events: string[] = []
+  for (let t = 0; t < 400 && cap.queue.length; t += 0.5) {
+    G.tickGalaxy(g, 0.5)
+    for (const e of g.events) if (e.k === 'works') events.push(e.what)
+    g.events.length = 0
+  }
+  check('they are built one after another', events.join() === 'drydock,shieldCore,cyard' && cap.base.mods.includes('drydock') && cap.base.mods.includes('shieldCore') && cap.base.yards.cyard === 'up', events.join())
+  check('then the Capital Yard takes its own expansions', G.cantWork(g, 0, cap.id, 'fighterWing') === null)
+  // A ruin is rebuilt at half price.
+  cap.base.yards.yard = 'ruin'
+  const yard = yardOf('republic', 'yard')
+  const c1 = credits(g)
+  check('a ruined yard is rebuilt for half', G.workCost(g, 0, cap, 'yard') === Math.round(yard.cost * REBUILD) && G.buildWork(g, 0, cap.id, 'yard') === null && credits(g) === c1 - Math.round(yard.cost * REBUILD))
+  G.cancelBuild(g, 0, cap.id, 0)
+  check('and a cancelled rebuild gives back what it cost', credits(g) === c1)
+  check('nothing on the queue past its size', (() => {
+    for (let i = 0; i < 6; i++) G.buildAt(g, 0, cap.id, 'r-fighter')
+    return G.cantWork(g, 0, cap.id, 'yard') === 'Shipyard queue full'
+  })())
+}
+
+// --- Which ships each planet builds ---------------------------------------------------------------
+{
+  const { g, cap, outpost } = campaign()
+  outpost.station = 4
+  const why = (p: Planet, id: string) => G.cantBuildAt(g, 0, p.id, id)
+  check('strike craft and gunships come from the station alone', why(outpost, 'r-fighter') === null && why(outpost, 'r-gunship') === null && why(outpost, 'r-repair') === null)
+  check('frigates and corvettes need a Frigate Yard', why(outpost, 'r-frigate') === 'Needs a Frigate Yard here' && why(outpost, 'r-corvette') === 'Needs a Frigate Yard here')
+  check('the capital has one', why(cap, 'r-frigate') === null && why(cap, 'r-corvette') === null)
+  check('cruisers need a Capital Yard', why(outpost, 'r-cruiser') === 'Needs a Capital Yard here' && why(cap, 'r-cruiser') === 'Needs a Capital Yard here')
+  outpost.base.yards.cyard = 'up'
+  check('with one, cruisers', why(outpost, 'r-cruiser') === null)
+  check('flagships need its Capital slip too', (why(outpost, 'r-capital') ?? '').startsWith('Needs the Capital slip'))
+  outpost.base.mods.push('capitalSlip')
+  check('and station level 4', why(outpost, 'r-capital') === null && (why(cap, 'r-capital') ?? '').startsWith('Needs station level 4'))
+  check('bombers need the Strike hangar', (why(outpost, 'r-bomber') ?? '').startsWith('Needs the Strike hangar'))
+  outpost.base.mods.push('strikeHangar')
+  check('with it, bombers', why(outpost, 'r-bomber') === null)
+  check('a ruin builds nothing', (() => {
+    outpost.base.yards.cyard = 'ruin'
+    return why(outpost, 'r-cruiser') === 'Needs a Capital Yard here'
+  })())
+  // The droids too: the ion frigate is a frigate.
+  const g2 = G.newGalaxy({ choice: { kind: 'rim' }, size: 'standard', faction: 'droid', difficulty: 'medium', credits: 20000 })
+  const out2 = g2.planets.find((p) => p.owner === 0 && p.station === 1)!
+  out2.station = 3
+  check('the droid frigates need a yard as well', G.cantBuildAt(g2, 0, out2.id, 'd-ion') === 'Needs a Frigate Yard here' && G.cantBuildAt(g2, 0, out2.id, 'd-frigate') === 'Needs a Frigate Yard here')
+}
+
+// --- The Second slip ---------------------------------------------------------------------------------
+{
+  const timeFor = (slip: boolean) => {
+    const { g, cap } = campaign()
+    if (slip) cap.base.mods.push('secondSlip')
+    G.buildAt(g, 0, cap.id, 'r-frigate')
+    G.buildAt(g, 0, cap.id, 'r-frigate')
+    const start = g.time
+    run(g, 400, () => !cap.queue.length)
+    return g.time - start
+  }
+  const one = timeFor(false)
+  const two = timeFor(true)
+  const frigate = UNIT['r-frigate'].build * G.SHIP_TIME
+  check('without a Second slip two frigates take twice as long as one', Math.abs(one - frigate * 2) <= 1, `${one} s`)
+  check('with it they are built at once', Math.abs(two - frigate) <= 1, `${two} s`)
+  const { g, cap } = campaign()
+  cap.base.mods.push('secondSlip')
+  G.buildAt(g, 0, cap.id, 'r-frigate')
+  G.buildWork(g, 0, cap.id, 'cyard')
+  G.tickGalaxy(g, 2)
+  check('a building in the queue still goes on its own', cap.queue[0].left === cap.queue[0].total - 2 && cap.queue[1].left === cap.queue[1].total)
+}
+
+// --- A battle at a planet starts with its buildings ---------------------------------------------------
+const battleAt = (base: G.PlanetBase, station = 3, attackers: string[] = ['d-frigate', 'd-frigate']) => {
+  const map = generateMap({ ...DEFAULT_RULES, seed: 11, players: 2, size: 'small', beacons: 0, wrecks: 'none' })
+  const sides: FleetSide[] = [
+    { faction: 'republic', team: 0, ships: ['r-frigate', 'r-gunship'], station, yards: G.YARD_KINDS.filter((k) => base.yards[k] === 'up'), exp: [...base.mods] },
+    { faction: 'droid', team: 1, ships: attackers },
+  ]
+  return { w: newFleetBattle(map, sides, { seed: 11 }), map }
+}
+{
+  const base: G.PlanetBase = { yards: { yard: 'up', cyard: 'up' }, mods: ['shieldCore', 'sensorArray', 'secondSlip', 'drydock', 'fighterWing'] }
+  const { w, map } = battleAt(base)
+  const st = w.byId.get(w.players[0].station)!
+  const yards = w.units.filter((u) => u.t.tier === 'yard')
+  const spots = (x: World) => x.units.filter((u) => u.t.tier === 'yard').map((u) => `${u.t.id}@${u.x.toFixed(2)},${u.y.toFixed(2)},${u.a.toFixed(3)}`).join(' ')
+  check('the battle has hybrid bases', !!w.hybrid && !!w.fleet)
+  check('both yards stand round the station', yards.length === 2 && yards.every((u) => u.owner === 0 && !u.site && Array.isArray(u.yq)), yards.map((u) => u.t.id).join())
+  check('inside the build radius', yards.every((u) => Math.hypot(u.x - st.x, u.y - st.y) <= BUILD_RADIUS))
+  const att = map.spawns[1]
+  check('on the side away from the attackers', yards.every((u) => Math.hypot(u.x - att.x, u.y - att.y) > Math.hypot(st.x - att.x, st.y - att.y) - 200), yards.map((u) => Math.round(Math.hypot(u.x - att.x, u.y - att.y) - Math.hypot(st.x - att.x, st.y - att.y))).join(','))
+  check('at the same spots every time', spots(w) === spots(battleAt(base).w), spots(w))
+  check('a placement there would have been allowed', yards.every((u) => {
+    // (Checked as a skirmish would, with the yard itself out of the way.)
+    const copy = { ...w, fleet: undefined, units: w.units.filter((x) => x !== u) } as World
+    copy.players = w.players.map((p) => ({ ...p, credits: 1e6, level: 4 }))
+    return !placement(copy, 0, u.t.id, u.x, u.y, u.a).why || placement(copy, 0, u.t.id, u.x, u.y, u.a).why === 'We already have a ' + u.t.name
+  }))
+  check('the station carries its expansions', JSON.stringify(st.xm) === JSON.stringify(['sensorArray', 'shieldCore']) && st.t.hardpoints.filter((h) => h.exp).length === 2)
+  const fy = yards.find((u) => u.t.id === 'r-yard')!
+  const cy = yards.find((u) => u.t.id === 'r-cyard')!
+  check('and each yard its own', JSON.stringify(fy.xm) === JSON.stringify(['secondSlip', 'drydock']) && JSON.stringify(cy.xm) === JSON.stringify(['fighterWing']))
+  check('the Fighter wing flies', w.units.some((u) => u.t.kind === 'wing' && u.parent === cy.id))
+  check('nothing is built during the battle', cantBuild(w, 0, 'r-engineer') !== null && cmdExpand(w, 0, st.id, 'strikeHangar') !== null)
+  const empty = battleAt(G.emptyBase()).w
+  check('a planet with no buildings: just the station (hybrid, nothing round it)', !!empty.hybrid && !empty.units.some((u) => u.t.tier === 'yard'))
+  check('a battle without them stays a plain fleet battle', !newFleetBattle(map, [{ faction: 'republic', team: 0, ships: ['r-frigate'], station: 2 }, { faction: 'droid', team: 1, ships: ['d-frigate'] }], { seed: 11 }).hybrid)
+  // The battle is fought: the same start plays out the same, and whatever falls is written back.
+  const fight = (x: World) => {
+    const brains = [newBrain(0, 'hard', 'balanced'), newBrain(1, 'hard', 'offensive')]
+    for (let i = 0; i < 300 / STEP && x.winner === -1; i++) {
+      for (const b of brains) fleetThink(x, b, STEP)
+      tick(x)
+    }
+    return x
+  }
+  const big = Array(10).fill('d-cruiser')
+  const a = fight(battleAt(base, 3, big).w)
+  const b = fight(battleAt(base, 3, big).w)
+  check('a battle at a planet plays out the same from the same start', a.time === b.time && a.units.length === b.units.length && a.units.every((u, i) => u.x === b.units[i].x && u.hull === b.units[i].hull), `${a.time.toFixed(1)} s`)
+  const left = baseLeft(a, 0, base.mods)
+  console.log(`     after ${a.time.toFixed(0)} s against ten cruisers: yards standing ${left.yards.join(',') || 'none'}, expansions ${left.mods.join(',') || 'none'}`)
+}
+
+// --- What a battle leaves, written back to the planet --------------------------------------------------
+{
+  const { g, cap } = campaign()
+  cap.base = { yards: { yard: 'up', cyard: 'up' }, mods: ['shieldCore', 'secondSlip', 'drydock', 'fighterWing'] }
+  G.buildWork(g, 0, cap.id, 'armourWorks')
+  const enemy = g.fleets.find((f) => f.owner === 1)!
+  enemy.planet = cap.id
+  enemy.system = cap.system
+  enemy.leg = null
+  enemy.route = []
+  const c = G.clashAt(g, cap.id)!
+  check('the clash carries the planet\'s buildings', !!c.base && c.base.yards.yard === 'up' && c.base.mods.length === 4)
+  // Fought in the battle view: the Frigate Yard fell, the Shield core was shot off.
+  const { w } = battleAt(c.base!)
+  const fy = w.units.find((u) => u.t.id === 'r-yard')!
+  fy.dead = true
+  const st = w.byId.get(w.players[0].station)!
+  st.t.hardpoints.forEach((h, i) => h.exp === 'shieldCore' && (st.hps[i].hp = 0))
+  const c0 = credits(g)
+  G.applyBattle(g, c, { winner: 0, survivors: { 0: c.holderShips, 1: [] }, escaped: { 0: [], 1: [] }, stationLeft: true, base: baseLeft(w, 0, c.base!.mods) }, false)
+  check('a destroyed yard is a ruin now', cap.base.yards.yard === 'ruin' && cap.base.yards.cyard === 'up')
+  check('its expansions are gone with it, and one shot off is lost', JSON.stringify(cap.base.mods) === JSON.stringify(['fighterWing']), cap.base.mods.join())
+  check('an expansion queued for it is refunded', !cap.queue.some((q) => q.unit === 'armourWorks') && credits(g) === c0 + MODULE.armourWorks.cost)
+  check('frigates wait for the yard to be rebuilt', G.cantBuildAt(g, 0, cap.id, 'r-frigate') === 'Needs a Frigate Yard here' && G.workCost(g, 0, cap, 'yard') === Math.round(yardOf('republic', 'yard').cost * REBUILD))
+  // The station falls: the whole base with it.
+  // (The same clash again: the attackers' fleet is gone from the last one.)
+  const c2: G.Clash = { ...c, base: G.copyBase(cap.base) }
+  G.applyBattle(g, c2, { winner: 1, survivors: { 0: [], 1: c2.attackerShips }, escaped: { 0: [], 1: [] }, stationLeft: false, base: { yards: ['cyard'], mods: ['fighterWing'] } }, false)
+  check('a base falls with its station: yards to ruins, expansions gone', cap.station === 0 && cap.base.yards.yard === 'ruin' && cap.base.yards.cyard === 'ruin' && !cap.base.mods.length)
+}
+
+// --- Auto-resolve fights with the buildings -------------------------------------------------------------
+{
+  const { g, cap } = campaign()
+  const attack = ['d-cruiser', 'd-cruiser', 'd-cruiser', 'd-cruiser', 'd-frigate', 'd-frigate', 'd-frigate', 'd-gunship', 'd-gunship']
+  const clash = (base?: G.PlanetBase): G.Clash => ({ planet: cap.id, holder: 0, attacker: 1, station: 3, holderShips: ['r-frigate', 'r-frigate', 'r-gunship'], holderHeld: [], attackerShips: attack, attackerHeld: [], ...(base ? { base } : {}) })
+  let bare = 0
+  let built = 0
+  let ruined = 0
+  let kept = 0
+  const full: G.PlanetBase = { yards: { yard: 'up', cyard: 'up' }, mods: ['shieldCore', 'armourWorks', 'drydock'] }
+  for (let s = 1; s <= 40; s++) {
+    const r0 = G.autoResolve(g, clash(), s)
+    const r1 = G.autoResolve(g, clash(full), s)
+    if (r0.winner === 0) bare++
+    if (r1.winner === 0) built++
+    if (r1.winner === 1) {
+      if (r1.base!.yards.length === 0 && r1.base!.mods.length === 0) ruined++
+    } else if (r1.base!.yards.length) kept++
+  }
+  check('yards and a Shield core make a planet harder to take', built > bare, `holder won ${bare}/40 bare, ${built}/40 with its buildings`)
+  check('a defender beaten in auto-resolve loses its yards and expansions', ruined === 40 - built, `${ruined} of ${40 - built}`)
+  check('one that holds keeps the yards that stood', kept > 0, `${kept} kept some`)
+  const res = G.autoResolve(g, clash(full), 3)
+  check('auto-resolve says what stands, and only the holder\'s buildings', !!res.base && res.survivors[0].every((id) => UNIT[id]) && !res.survivors[0].includes('yard'))
+  check('a battle without buildings has no word of them', G.autoResolve(g, clash(), 3).base === undefined)
+  // Written back through the clock: an AI attack on a planet, auto-resolved.
+  cap.base = copy(full)
+  const r = G.autoResolve(g, clash(cap.base), 5)
+  G.applyBattle(g, clash(cap.base), r, true)
+  check('auto-resolved losses are written back', G.YARD_KINDS.every((k) => (r.base!.yards.includes(k) ? cap.base.yards[k] === 'up' : cap.base.yards[k] === 'ruin')), JSON.stringify(cap.base))
+}
+function copy(b: G.PlanetBase): G.PlanetBase {
+  return { yards: { ...b.yards }, mods: [...b.mods] }
+}
+
+// --- Capture -------------------------------------------------------------------------------------------
+{
+  const { g, cap } = campaign()
+  // Beaten: the station is gone (so the base with it), and an enemy fleet holds the orbit.
+  cap.station = 0
+  cap.base = { yards: { yard: 'ruin', cyard: 'ruin' }, mods: [] }
+  for (const pid of g.systems[cap.system].planets) if (pid !== cap.id) g.planets[pid].owner = -1
+  g.fleets = g.fleets.filter((f) => f.planet !== cap.id)
+  const raider = g.fleets.find((f) => f.owner === 1)!
+  raider.planet = cap.id
+  raider.system = cap.system
+  raider.leg = null
+  raider.route = []
+  run(g, 30, () => cap.owner === 1)
+  check('a captured planet changes hands with its ruins', cap.owner === 1 && cap.base.yards.yard === 'ruin' && cap.base.yards.cyard === 'ruin' && !cap.base.mods.length && !cap.queue.length)
+  cap.station = 3
+  check('the new owner rebuilds them at half price', G.workCost(g, 1, cap, 'cyard') === Math.round(yardOf('droid', 'cyard').cost * REBUILD) && G.cantWork(g, 1, cap.id, 'cyard') === null)
+  check('the old owner saw it go, ruins and all', G.known(g, 0, cap).owner === 1 && G.known(g, 0, cap).base.yards.yard === 'ruin')
+}
+
+// --- Intel: another side's buildings are known only by looking ------------------------------------------
+{
+  const { g } = campaign()
+  const theirs = g.planets.find((p) => p.owner === 1 && p.station === 3)!
+  check('the pre-war charts show their capital\'s Frigate Yard', !G.known(g, 0, theirs).live && G.known(g, 0, theirs).base.yards.yard === 'up')
+  theirs.base.yards.cyard = 'up'
+  theirs.base.mods.push('shieldCore')
+  G.updateSight(g)
+  check('what they build out of sight stays hidden', !G.known(g, 0, theirs).base.yards.cyard && !G.known(g, 0, theirs).base.mods.length)
+  const scout = g.fleets.find((f) => f.owner === 0)!
+  scout.planet = g.systems[theirs.system].planets[1]
+  scout.system = theirs.system
+  G.updateSight(g)
+  check('a fleet there sees it', G.known(g, 0, theirs).live && G.known(g, 0, theirs).base.yards.cyard === 'up' && G.known(g, 0, theirs).base.mods.includes('shieldCore'))
+  scout.planet = g.planets.find((p) => p.owner === 0)!.id
+  scout.system = g.planets[scout.planet].system
+  theirs.base.yards.cyard = 'ruin'
+  G.updateSight(g)
+  check('gone again, it remembers what it saw', !G.known(g, 0, theirs).live && G.known(g, 0, theirs).base.yards.cyard === 'up')
+  // A Sensor array sees the systems next door.
+  const home = g.planets.find((p) => p.owner === 0 && p.station === 3)!
+  const next = G.neighbours(g, home.system).find((s) => !G.sees(g, 0, s))
+  home.base.mods.push('sensorArray')
+  G.updateSight(g)
+  check('a Sensor array sees the systems next door', next !== undefined && G.sees(g, 0, next))
+}
+
+// --- Saves from before planets had buildings -----------------------------------------------------------
+{
+  const { g } = campaign()
+  const old = JSON.parse(JSON.stringify({ ...g, events: [] })) as Record<string, unknown> & Galaxy
+  ;(old as { v: number }).v = 1
+  for (const p of old.planets) delete (p as Partial<Planet>).base
+  for (const s of old.sides) for (const i of s.intel ?? []) delete i.base
+  // A level 2 outpost, a level 4 one and a queued old-style upgrade.
+  const lv2 = old.planets.find((p) => p.owner === 0 && p.station === 1)!
+  lv2.station = 2
+  const lv4 = old.planets.find((p) => p.owner === 1 && p.station === 1)!
+  lv4.station = 4
+  lv2.queue = [{ unit: 'station', left: 10, total: 50 }, { unit: 'r-gunship', left: 21, total: 21 }]
+  store.set('mvlos.empires.save.old1', JSON.stringify(old))
+  const back = G.loadSave('old1')
+  check('an old save loads', !!back && back.v === 2)
+  const at = (id: number) => back!.planets[id]
+  check('a level 3 capital gets both yards it used to build from', at(g.planets.find((p) => p.owner === 0 && p.station === 3)!.id).base.yards.yard === 'up' && at(g.planets.find((p) => p.owner === 0 && p.station === 3)!.id).base.yards.cyard === 'up')
+  check('level 2: a Frigate Yard; level 4: both; level 1: none', at(lv2.id).base.yards.yard === 'up' && !at(lv2.id).base.yards.cyard && at(lv4.id).base.yards.cyard === 'up' && G.YARD_KINDS.every((k) => !back!.planets.find((p) => p.station === 1)?.base.yards[k]))
+  check('no expansions, and unowned planets have nothing', back!.planets.every((p) => !p.base.mods.length) && back!.planets.filter((p) => p.owner < 0).every((p) => !Object.keys(p.base.yards).length))
+  check('so it still builds what it could', G.cantBuildAt(back!, 0, at(lv2.id).id, 'r-frigate') !== 'Needs a Frigate Yard here' && (G.cantBuildAt(back!, 0, at(lv2.id).id, 'r-frigate') ?? '').indexOf('Yard') < 0)
+  check('the queue is kept', back!.planets[lv2.id].queue.map((q) => q.unit).join() === 'station,r-gunship')
+  check('old intel gets what that station level had', back!.sides[0].intel!.every((i, pid) => !!i.base && (i.station >= 2 && back!.planets[pid].owner >= 0 ? i.base.yards.yard === 'up' : true)))
+  // Broken buildings in a save never crash it.
+  const bad = JSON.parse(JSON.stringify(old)) as Galaxy
+  ;(bad as { v: number }).v = 2
+  bad.planets[0].base = { yards: { yard: 'rubble' as 'up', cyard: 'ruin' }, mods: ['nonsense' as ModuleId, 'drydock', 'drydock'] }
+  bad.planets[1].base = 7 as unknown as G.PlanetBase
+  bad.planets[2].queue = [{ unit: 'secondSlip', left: 3, total: 9, paid: 1000 }, { unit: 'gone-ship', left: 1, total: 1 }]
+  store.set('mvlos.empires.save.bad1', JSON.stringify(bad))
+  const b2 = G.loadSave('bad1')
+  check('broken buildings are cleaned up', !!b2 && JSON.stringify(b2.planets[0].base) === JSON.stringify({ yards: { cyard: 'ruin' }, mods: ['drydock'] }) && JSON.stringify(b2.planets[1].base) === JSON.stringify(G.emptyBase()) && b2.planets[2].queue.map((q) => q.unit).join() === 'secondSlip')
+  let ok = true
+  try {
+    run(b2!, 120)
+    run(back!, 120)
+  } catch (e) {
+    ok = false
+    console.error(e)
+  }
+  check('and both play on', ok)
+  check('a save round trip keeps the buildings', (() => {
+    G.saveGalaxy(back!)
+    const again = G.loadSave(back!.save.id)!
+    return JSON.stringify(again.planets.map((p) => p.base)) === JSON.stringify(back!.planets.map((p) => p.base))
+  })())
+}
+
+// --- The galaxy AI plans its planets ---------------------------------------------------------------------
+//
+// AI against AI (side 0 handed to an AI as well) on a few galaxies, battles auto-resolved, for a long
+// campaign. Per side: its profile, how many of its planets have each yard, the expansions standing,
+// and the ships it built (frigates and up, which need a yard). It must have built warships from its
+// yards, never have gone a third of the campaign without finishing a ship while it still held a
+// station, and plan the expansions its profile asks for.
+{
+  const weeks = Number(process.argv[2] ?? 30)
+  console.log(`\nAI campaigns: ${weeks} weeks each, AI against AI`)
+  console.log('galaxy        side  profile    planets  yard  cyard  ruins  expansions                                                   built(all/warships)  longest gap')
+  let stuck = 0
+  let noWarships = 0
+  let profiled = 0
+  const plans = { yard: 0, cyard: 0, mods: 0 }
+  for (const choice of [{ kind: 'rim' }, { kind: 'generated', seed: 11 }, { kind: 'generated', seed: 23 }, { kind: 'generated', seed: 41 }, { kind: 'generated', seed: 77 }] as G.GalaxyChoice[]) {
+    seed = 777
+    const g = G.newGalaxy({ choice, size: 'standard', faction: 'republic', difficulty: 'medium', credits: 2000 })
+    g.sides[0].ai = 'medium'
+    const built = [0, 0]
+    const war = [0, 0]
+    const last = [0, 0]
+    const gap = [0, 0]
+    const end = weeks * G.WEEK * G.DAY
+    while (g.time < end && g.winner === -1) {
+      if (g.pending >= 0) G.settlePending(g, 'auto')
+      G.tickGalaxy(g, 0.5)
+      for (const e of g.events)
+        if (e.k === 'built') {
+          built[e.owner]++
+          if (['frigate', 'cruiser', 'capital'].includes(UNIT[e.unit].tier) || UNIT[e.unit].kind === 'support') war[e.owner]++
+          last[e.owner] = g.time
+        }
+      g.events.length = 0
+      for (const o of [0, 1]) if (g.planets.some((p) => p.owner === o && p.station > 0)) gap[o] = Math.max(gap[o], g.time - last[o])
+    }
+    for (const o of [0, 1]) {
+      const prof = G.galaxyProfile(g, o)
+      const ps = g.planets.filter((p) => p.owner === o)
+      const mods = ps.flatMap((p) => p.base.mods)
+      const counts = Object.entries(mods.reduce<Record<string, number>>((m, id) => ((m[id] = (m[id] ?? 0) + 1), m), {})).map(([id, n]) => `${id}${n > 1 ? `x${n}` : ''}`).join(',')
+      const yard = ps.filter((p) => p.base.yards.yard === 'up').length
+      const cyard = ps.filter((p) => p.base.yards.cyard === 'up').length
+      const ruins = ps.reduce((n, p) => n + G.YARD_KINDS.filter((k) => p.base.yards[k] === 'ruin').length, 0)
+      console.log(`${(choice.kind === 'rim' ? 'rim' : `gen ${choice.seed}`).padEnd(13)} ${String(o).padStart(4)}  ${prof.padEnd(10)} ${String(ps.length).padStart(7)} ${String(yard).padStart(5)} ${String(cyard).padStart(6)} ${String(ruins).padStart(6)}  ${(counts || '-').padEnd(60)} ${`${built[o]}/${war[o]}`.padStart(19)}  ${gap[o].toFixed(0).padStart(5)} s${g.sides[o].alive ? '' : ' (beaten)'}`)
+      if (!g.sides[o].alive) continue
+      if (gap[o] > end / 3) stuck++
+      if (!war[o]) noWarships++
+      plans.yard += yard
+      plans.cyard += cyard
+      plans.mods += mods.length
+      // The first expansion its profile lists is among what it built (if it built any).
+      const first = PROFILES[prof].modules[0]
+      if (mods.length && (mods.includes(first) || g.planets.some((p) => p.owner === o && p.queue.some((q) => q.unit === first)))) profiled++
+      else if (mods.length) console.log(`     (side ${o} never built ${first}, its profile's first expansion)`)
+    }
+  }
+  check('no AI went a third of a campaign without finishing a ship', !stuck, `${stuck} stuck`)
+  check('every AI built warships from its yards', !noWarships, `${noWarships} without`)
+  check('the AIs built yards and expansions', plans.yard > 0 && plans.cyard > 0 && plans.mods > 0, JSON.stringify(plans))
+  check('they started with the expansion their profile puts first', profiled > 0, `${profiled} did`)
+}
+
+console.log(failed ? `${failed} check(s) failed` : 'All galactic conquest building checks passed')
+if (failed) process.exit(1)

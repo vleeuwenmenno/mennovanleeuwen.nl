@@ -285,9 +285,9 @@ if (!process.env.GALAXY && G.updateSight) {
 // Through a campaign at each difficulty, every 20 s the galaxy is copied twice, and in one copy
 // everything the AI can't see is changed: the player's fleets outside its sight get three cruisers
 // more, planets in systems it doesn't see change hands between the player and nobody and get other
-// stations and shipyard queues, and the player's credits triple. The AI then takes its look in both
-// copies; if it read anything hidden, its orders (fleet moves and splits, ships and stations queued)
-// or its plans would differ. A control does the same to what it does see, to show the comparison
+// stations, buildings and shipyard queues, and the player's credits triple. The AI then takes its
+// look in both copies; if it read anything hidden, its orders (fleet moves and splits, ships and
+// stations queued) or its plans would differ. A control does the same to what it does see, to show the comparison
 // notices a difference when there is one.
 if (!process.env.GALAXY && G.thinkAi) {
   const AI = 1
@@ -310,6 +310,8 @@ if (!process.env.GALAXY && G.thinkAi) {
       if (!visible) p.owner = p.owner === 0 ? -1 : 0
       p.station = (p.station + 2) % 5
       p.queue = [{ unit: 'r-frigate', left: 5, total: 30 }]
+      // (And other buildings round the station, where this copy of the galaxy has them.)
+      if (p.base) p.base = p.base.yards.cyard ? { yards: {}, mods: [] } : { yards: { yard: 'up', cyard: 'up' }, mods: ['shieldCore'] }
       changed++
     }
     if (!visible) g.sides[0].credits *= 3

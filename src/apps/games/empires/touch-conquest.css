@@ -205,3 +205,75 @@
     padding-bottom: 7px;
   }
 }
+
+/* The compact selection on a touch screen (Conquest.tsx GSelChip): the selected planet or fleets as
+   one button at the bottom of the map; open, a head over the sheet says what it is and lets go of
+   it (Deselect) or folds it away (Close). */
+.ew-root.ew-galaxy .ew-gselchipbar {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  z-index: 6;
+  max-width: calc(100% - 24px);
+}
+.ew-root.ew-galaxy .ew-selchip-img {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  object-fit: contain;
+  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.6));
+}
+.ew-root.ew-galaxy .ew-gselhead {
+  position: absolute;
+  top: 56px;
+  left: 6px;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 64px);
+  padding: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--ew-accent) 50%, transparent);
+  border-radius: 6px;
+  background: rgba(10, 16, 32, 0.94);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+.ew-root.ew-galaxy .ew-gselhead-what {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--ew-head);
+}
+.ew-root.ew-galaxy .ew-gselhead-what b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.ew-root.ew-galaxy .ew-gselhead-what em {
+  font-style: normal;
+  font-family: var(--ew-display);
+}
+.ew-root.ew-galaxy .ew-gselhead-what .ew-selchip-img {
+  width: 20px;
+  height: 20px;
+}
+.ew-root.ew-galaxy .ew-gselhead button {
+  flex: none;
+  min-height: 36px;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+/* (The fleets at the planet open below the head, not under it.) */
+.ew-root.ew-galaxy.has-sheet .ew-float.ew-inv {
+  top: 104px !important;
+}
+/* (The planet's shipyard on a phone: its tabs take a row of their own, so the card may grow up the
+   screen rather than cut off the second row of ships.) */
+@media (pointer: coarse), (max-width: 719px) {
+  .ew-root.ew-galaxy .ew-gdock .ew-detail.is-station {
+    max-height: 62vh;
+  }
+}

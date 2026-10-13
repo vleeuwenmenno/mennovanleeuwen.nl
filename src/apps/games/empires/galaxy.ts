@@ -6,8 +6,11 @@
 // in seconds; a day is DAY seconds. No DOM, so headless sims can load it.
 
 import type { ShipSizes } from './models/sizes.ts'
-import { PROFILE_IDS, type Difficulty, type Profile } from './ai.ts'
-import { FACTIONS, UNIT, buildable, stationType, unitOf, type FactionId, type Tier } from './data.ts'
+import { PROFILES, PROFILE_IDS, type Difficulty, type Profile } from './ai.ts'
+import {
+  FACTIONS, MODULE, MODULE_FX, REBUILD, UNIT, WORKS_NAME, buildable, builtAt, needsModule, stationType, unitOf, yardOf, yardType,
+  type FactionId, type ModuleId, type Tier, type UnitType, type Works,
+} from './data.ts'
 import { rng } from './maps.ts'
 import { dpsVs } from './sim.ts'
 
@@ -50,6 +53,31 @@ export const MAX_YARD = 5
 export const STATION_COST = [0, 1200, 1900, 2900, 4200]
 export const STATION_TIME = [0, 30, 40, 50, 60]
 export const SHIP_TIME = 1.5
+/** Yards and expansions take their skirmish build time (data.ts) times this on the galaxy clock, as
+ * ships do: a Frigate Yard goes up in about the time of a station upgrade. */
+export const WORKS_TIME = SHIP_TIME
+
+/** The yards a planet can have round its Command Station (hybrid bases: data.ts, Yards). */
+export type YardKind = 'yard' | 'cyard'
+export const YARD_KINDS: YardKind[] = ['yard', 'cyard']
+/**
+ * What a planet has built round its station, as in a skirmish with hybrid bases but without
+ * engineers: its yards, each standing ('up') or a ruin a battle left (rebuilt for REBUILD of its
+ * price), and the expansions standing on the station and its yards (MODULE[id].on says which). The
+ * Frigate Yard builds the planet's frigates and corvettes, the Capital Yard its cruisers, and with a
+ * Capital slip its flagships; bombers need the station's Strike hangar. Everything is ordered in
+ * the planet's queue, with a price and a build time, like a station upgrade.
+ */
+export type PlanetBase = { yards: Partial<Record<YardKind, 'up' | 'ruin'>>; mods: ModuleId[] }
+/** A yard or an expansion: what a planet's Buildings tab orders (a station level is 'station'). */
+export type WorkId = YardKind | ModuleId
+export const emptyBase = (): PlanetBase => ({ yards: {}, mods: [] })
+export const copyBase = (b: PlanetBase | undefined): PlanetBase => ({ yards: { ...(b?.yards ?? {}) }, mods: [...(b?.mods ?? [])] })
+export const isYard = (id: string): id is YardKind => id === 'yard' || id === 'cyard'
+export const isModule = (id: string): id is ModuleId => Object.hasOwn(MODULE, id)
+/** Whether a queue entry is work on the planet's buildings (a station level, a yard, an expansion)
+ * rather than a ship. */
+export const isWork = (unit: string) => unit === 'station' || isYard(unit) || isModule(unit)
 
 export type Planet = {
   id: number
@@ -62,13 +90,17 @@ export type Planet = {
   size: number
   owner: number
   station: number
+  /** Its yards and expansions (see PlanetBase). */
+  base: PlanetBase
   /** Credits a day before the station's bonus: its kind's, varied a little per planet. */
   income: number
   /** Credits it has paid its current owner since they took it. */
   earned: number
-  /** Ships (or a station level: 'station') being built here, first one in progress. A finished ship
-   * waits on its slip (`full`) while every fleet here is full and there are MAX_FLEETS of them. */
-  queue: { unit: string; left: number; total: number; full?: boolean }[]
+  /** Ships (or a station level: 'station', a yard or an expansion: its WorkId) being built here,
+   * first one in progress (the first two ships with a Second slip). A finished ship waits on its
+   * slip (`full`) while every fleet here is full and there are MAX_FLEETS of them. `paid`: what a
+   * yard or an expansion cost when it was queued (a ruin's rebuild is cheaper), for a refund. */
+  queue: { unit: string; left: number; total: number; full?: boolean; paid?: number }[]
   /** Who is taking it, and how far along (seconds). */
   capture: { owner: number; t: number } | null
 }
@@ -135,9 +167,11 @@ export type GalaxyEvent =
   | { k: 'blockaded'; fleet: number; owner: number; system: number; by: number }
   | { k: 'capturing'; planet: number; owner: number; from: number }
   | { k: 'yardFull'; planet: number; owner: number; unit: string }
+  | { k: 'works'; planet: number; owner: number; what: WorkId }
 
 export type Galaxy = {
-  v: 1
+  /** 2 since planets have buildings (yards and expansions); 1 before (see clean). */
+  v: 2
   /** The save slot it lives in, and the name the player gave it. */
   save: { id: string; name: string }
   name: string
@@ -335,7 +369,7 @@ export function newGalaxy(opts: NewGalaxy): Galaxy {
   const r = rng(seed * 31 + 17)
   const defs = opts.choice.kind === 'rim' ? RIM_WARS.filter((s) => s.tier <= (opts.size === 'short' ? 1 : opts.size === 'standard' ? 2 : 3)) : generatedDefs(seed, SIZES[opts.size].systems)
   const g: Galaxy = {
-    v: 1,
+    v: 2,
     save: { id: newSaveId(), name: opts.name?.trim() || `${opts.choice.kind === 'rim' ? GALAXIES.rim.name : `Sector ${seed}`}, ${FACTIONS[opts.faction].name}` },
     name: opts.choice.kind === 'rim' ? GALAXIES.rim.name : `Sector ${seed}`,
     seed,
@@ -358,7 +392,7 @@ export function newGalaxy(opts: NewGalaxy): Galaxy {
     d.planets.forEach(([name, kind], i) => {
       const pid = g.planets.length
       const income = Math.round((PLANET_KINDS[kind].income * (0.7 + r() * 0.6)) / 5) * 5
-      g.planets.push({ id: pid, system: id, name, kind, orbit: i, angle: r() * Math.PI * 2, size: GIANTS.includes(kind) ? 1.3 : kind === 'barren' ? 0.8 : 1, owner: -1, station: 0, income, earned: 0, queue: [], capture: null })
+      g.planets.push({ id: pid, system: id, name, kind, orbit: i, angle: r() * Math.PI * 2, size: GIANTS.includes(kind) ? 1.3 : kind === 'barren' ? 0.8 : 1, owner: -1, station: 0, base: emptyBase(), income, earned: 0, queue: [], capture: null })
       sys.planets.push(pid)
     })
     g.systems.push(sys)
@@ -368,7 +402,8 @@ export function newGalaxy(opts: NewGalaxy): Galaxy {
   const other: FactionId = opts.faction === 'republic' ? 'droid' : 'republic'
   const side = (faction: FactionId, ai: Difficulty | null): Side => ({ faction, credits: opts.credits, ai, alive: true, earned: 0, spent: { ships: 0, stations: 0 }, history: [], ledger: [] })
   g.sides = [side(opts.faction, null), side(other, opts.difficulty)]
-  // Home systems: the capital (its first planet gets a level 3 station) and a neighbour (level 1).
+  // Home systems: the capital (its first planet gets a level 3 station and a Frigate Yard) and a
+  // neighbour (level 1). The Capital Yard and the expansions are each side's own to build.
   const homes: number[][] = [[], []]
   if (opts.choice.kind === 'rim') {
     g.sides.forEach((s, o) => (homes[o] = RIM_START[s.faction].map((n) => g.systems.findIndex((x) => x.name === n)).filter((i) => i >= 0)))
@@ -386,6 +421,7 @@ export function newGalaxy(opts: NewGalaxy): Galaxy {
       for (const pid of g.systems[s].planets) g.planets[pid].owner = o
       const capital = g.planets[g.systems[s].planets[0]]
       capital.station = i === 0 ? 3 : 1
+      if (i === 0) capital.base.yards.yard = 'up'
       if (i === 0) capital.income = Math.round((capital.income * 1.5) / 5) * 5
     }),
   )
@@ -930,19 +966,21 @@ const enemyIn = (g: Galaxy, s: number, owner: number) => ownersIn(g, s, owner).s
 //
 // A side sees a star system while it owns a planet there, has a fleet there (in orbit, or flying
 // between its planets), or the system is contested for it (one of its planets being taken, or a
-// battle it's in; both mean it's there anyway). Everything else is hidden from it: it knows the
-// geography (stars, planets, their kinds) and what it last saw (Side.intel: who held each planet,
-// its station, the other side's ships in its orbit, and when), never live fleets, stations or
-// shipyards. A fleet flying through a system glimpses it on the way, which updates what it last
+// battle it's in; both mean it's there anyway), and the systems next door to a planet of its with
+// a Sensor array on its station. Everything else is hidden from it: it knows the geography (stars,
+// planets, their kinds) and what it last saw (Side.intel: who held each planet, its station, its
+// yards and expansions, the other side's ships in its orbit, and when), never live fleets, stations,
+// buildings or shipyards. A fleet flying through a system glimpses it on the way, which updates what it last
 // saw. Sight is worked out once a tick for every side (updateSight) and saved with the campaign; a
 // new campaign starts with the pre-war charts (who held what, no fleets). The galaxy AI plays by the
 // same rules: it reads the galaxy only through what its side sees and remembers.
 
-/** What a side last saw of a planet: who held it, its station level, the other side's ships in its
- * orbit (how many and what they cost; -1 ships: never seen) and when (galaxy seconds). */
-export type Intel = { owner: number; station: number; ships: number; value: number; t: number }
+/** What a side last saw of a planet: who held it, its station level and buildings, the other side's
+ * ships in its orbit (how many and what they cost; -1 ships: never seen) and when (galaxy seconds).
+ * `base` is missing from looks taken before planets had buildings: nothing seen. */
+export type Intel = { owner: number; station: number; base?: PlanetBase; ships: number; value: number; t: number }
 /** What a side knows of a planet now: live when it sees the system, else its last look. */
-export type Known = Intel & { live: boolean }
+export type Known = Intel & { base: PlanetBase; live: boolean }
 
 /** The system a fleet is in where others can see it: in orbit, or flying between planets of one
  * system (out on a lane between systems, it's in hyperspace: -1). */
@@ -965,18 +1003,18 @@ function garrison(g: Galaxy, o: number, pid: number) {
 }
 /** What side `o` knows of a planet: live when it sees the system, else its last look. */
 export function known(g: Galaxy, o: number, p: Planet): Known {
-  if (sees(g, o, p.system)) return { owner: p.owner, station: p.station, ...garrison(g, o, p.id), t: g.time, live: true }
+  if (sees(g, o, p.system)) return { owner: p.owner, station: p.station, base: p.base, ...garrison(g, o, p.id), t: g.time, live: true }
   const i = g.sides[o].intel?.[p.id]
-  return i ? { ...i, live: false } : { owner: -1, station: 0, ships: -1, value: 0, t: -1, live: false }
+  return i ? { ...i, base: i.base ?? emptyBase(), live: false } : { owner: -1, station: 0, base: emptyBase(), ships: -1, value: 0, t: -1, live: false }
 }
-/** The pre-war charts: who holds each planet and its station now, but no fleets. */
-const chartOf = (g: Galaxy): Intel[] => g.planets.map((p) => ({ owner: p.owner, station: p.station, ships: -1, value: 0, t: g.time }))
+/** The pre-war charts: who holds each planet, its station and buildings now, but no fleets. */
+const chartOf = (g: Galaxy): Intel[] => g.planets.map((p) => ({ owner: p.owner, station: p.station, base: copyBase(p.base), ships: -1, value: 0, t: g.time }))
 /** Side `o` takes a look at a planet now (it sees it, flies through, or hears how a battle ended). */
 function note(g: Galaxy, o: number, p: Planet) {
   const s = g.sides[o]
   if (!s) return
   s.intel ??= chartOf(g)
-  s.intel[p.id] = { owner: p.owner, station: p.station, ...garrison(g, o, p.id), t: g.time }
+  s.intel[p.id] = { owner: p.owner, station: p.station, base: copyBase(p.base), ...garrison(g, o, p.id), t: g.time }
 }
 /** A fleet passing through a system (or arriving in it) glimpses every planet there. */
 const glimpse = (g: Galaxy, o: number, s: number) => {
@@ -987,7 +1025,11 @@ export function updateSight(g: Galaxy) {
   g.sides.forEach((side, o) => {
     side.intel ??= chartOf(g)
     const sight = g.systems.map(() => false)
-    for (const p of g.planets) if (p.owner === o || p.capture?.owner === o) sight[p.system] = true
+    for (const p of g.planets) {
+      if (p.owner === o || p.capture?.owner === o) sight[p.system] = true
+      // A Sensor array looks down the lanes into the systems next door.
+      if (p.owner === o && p.station > 0 && p.base?.mods.includes('sensorArray')) for (const n of neighbours(g, p.system)) sight[n] = true
+    }
     for (const f of g.fleets) {
       if (f.owner !== o) continue
       const s = fleetSystem(f)
@@ -1171,8 +1213,24 @@ export function cantBuildAt(g: Galaxy, owner: number, planet: number, unit: stri
   // the upgrade has actually finished, because the level only rises then (queueing them early would be a promise the
   // shipyard might not keep if the upgrade is cancelled).
   if (t.level > p.station) return p.queue.some((q) => q.unit === 'station') ? `Needs station level ${t.level}: wait for the upgrade` : `Needs station level ${t.level}`
+  const lock = yardLock(p, t)
+  if (lock) return lock
   if (p.queue.length >= MAX_YARD) return 'Shipyard queue full'
   if (g.sides[owner].credits < t.cost) return 'Not enough credits'
+  return null
+}
+/**
+ * What a planet's buildings say about building a ship there, or null when they allow it: frigates
+ * and corvettes need its Frigate Yard, cruisers its Capital Yard, flagships the Capital slip on it
+ * too, and bombers the station's Strike hangar; strike craft, gunships and repair craft come from
+ * the station itself. As with a station upgrade, a building still in the queue is not there yet.
+ */
+export function yardLock(p: Planet, t: UnitType): string | null {
+  const queued = (id: string) => p.queue.some((q) => q.unit === id)
+  const where = builtAt(t)
+  if (where !== 'station' && p.base.yards[where] !== 'up') return queued(where) ? `Needs a ${WORKS_NAME[where]} here: wait for it` : `Needs a ${WORKS_NAME[where]} here`
+  const need = needsModule(t)
+  if (need && !p.base.mods.includes(need)) return queued(need) ? `Needs the ${MODULE[need].name}: wait for it` : `Needs the ${MODULE[need].name}: an expansion of the ${WORKS_NAME[MODULE[need].on]}`
   return null
 }
 export function buildAt(g: Galaxy, owner: number, planet: number, unit: string): string | null {
@@ -1212,25 +1270,113 @@ export function upgradeStation(g: Galaxy, owner: number, planet: number): string
   p.queue.push({ unit: 'station', left: time, total: time })
   return null
 }
+
+// --- Buildings: yards and expansions ------------------------------------------------------------------
+//
+// A planet's base grows as a skirmish one does (data.ts: the same yards, expansions, prices and
+// station levels), but there are no engineers on the galaxy map: a yard or an expansion is ordered
+// in the planet's queue like a station upgrade, paid when queued, and stands once its time is up
+// (its skirmish build time times WORKS_TIME). A yard's ruin is rebuilt for REBUILD of the price.
+
+/** What a yard or an expansion is called, for the queue and the ledger. */
+export const workName = (id: WorkId) => (isYard(id) ? WORKS_NAME[id] : MODULE[id].name)
+/** What a yard or an expansion costs at a planet: a yard's ruin is rebuilt for REBUILD of its price. */
+export function workCost(g: Galaxy, owner: number, p: Planet, id: WorkId) {
+  if (!isYard(id)) return MODULE[id].cost
+  const t = yardOf(g.sides[owner].faction, id)
+  return p.base.yards[id] === 'ruin' ? Math.round(t.cost * REBUILD) : t.cost
+}
+/** Seconds a yard or an expansion takes on the galaxy clock. */
+export const workTime = (g: Galaxy, owner: number, id: WorkId) => (isYard(id) ? yardOf(g.sides[owner].faction, id).build : MODULE[id].time) * WORKS_TIME
+/** The station level a yard or an expansion needs. */
+export const workLevel = (g: Galaxy, owner: number, id: WorkId) => (isYard(id) ? yardOf(g.sides[owner].faction, id).level : MODULE[id].level)
+/** Whether the building an expansion goes on stands at a planet (the station, or one of its yards). */
+export const worksUp = (p: Planet, on: Works) => (on === 'station' ? p.station > 0 : p.base.yards[on] === 'up')
+
+/**
+ * What rules a yard or an expansion out at a planet whatever the credits and the queue (the
+ * Buildings tab shows it locked, with this), or null: not ours, no station, already built or
+ * queued, the station level is short, or the yard an expansion goes on isn't there.
+ */
+export function workLock(g: Galaxy, owner: number, planet: number, id: WorkId): string | null {
+  const p = g.planets[planet]
+  if (p.owner !== owner) return 'Not our planet'
+  if (!p.station) return 'Needs a station'
+  const queued = (x: string) => p.queue.some((q) => q.unit === x)
+  if (isYard(id) ? p.base.yards[id] === 'up' : p.base.mods.includes(id)) return 'Already built'
+  if (queued(id)) return 'Already being built'
+  if (!isYard(id)) {
+    const on = MODULE[id].on
+    if (!worksUp(p, on)) return queued(on) ? `Needs the ${WORKS_NAME[on]}: wait for it` : `Needs a ${WORKS_NAME[on]} here`
+  }
+  const level = workLevel(g, owner, id)
+  if (level > p.station) return queued('station') ? `Needs station level ${level}: wait for the upgrade` : `Needs station level ${level}`
+  return null
+}
+export function cantWork(g: Galaxy, owner: number, planet: number, id: WorkId): string | null {
+  const lock = workLock(g, owner, planet, id)
+  if (lock) return lock
+  const p = g.planets[planet]
+  if (p.queue.length >= MAX_YARD) return 'Shipyard queue full'
+  if (g.sides[owner].credits < workCost(g, owner, p, id)) return 'Not enough credits'
+  return null
+}
+/** Order a yard (or its ruin rebuilt) or an expansion at a planet: paid now, built after its time. */
+export function buildWork(g: Galaxy, owner: number, planet: number, id: WorkId): string | null {
+  const why = cantWork(g, owner, planet, id)
+  if (why) return why
+  const p = g.planets[planet]
+  const s = g.sides[owner]
+  const cost = workCost(g, owner, p, id)
+  s.credits -= cost
+  s.spent.stations += cost
+  book(s, calendar(g.time).day, -cost, `${isYard(id) && p.base.yards[id] === 'ruin' ? 'Rebuilding the ' : ''}${workName(id)} at ${p.name}`)
+  const time = workTime(g, owner, id)
+  p.queue.push({ unit: id, left: time, total: time, paid: cost })
+  return null
+}
+/** What a queue entry gave back if it were cancelled now: what it cost when it was queued. */
+const queuedCost = (p: Planet, q: Planet['queue'][number]) => q.paid ?? (q.unit === 'station' ? STATION_COST[p.station + 1] : UNIT[q.unit]?.cost ?? 0)
 /** Cancel a queued ship or station work: the credits come back. */
 export function cancelBuild(g: Galaxy, owner: number, planet: number, i: number) {
   const p = g.planets[planet]
   const q = p.queue[i]
   if (!q || p.owner !== owner) return
-  const s = g.sides[owner]
-  const back = q.unit === 'station' ? STATION_COST[p.station + 1] : UNIT[q.unit].cost
-  s.credits += back
-  if (q.unit === 'station') s.spent.stations -= back
-  else s.spent.ships -= back
-  book(s, calendar(g.time).day, back, `Cancelled: ${q.unit === 'station' ? 'station work' : UNIT[q.unit].name}`)
+  refund(g, owner, p, q, 'Cancelled')
   p.queue.splice(i, 1)
+}
+function refund(g: Galaxy, owner: number, p: Planet, q: Planet['queue'][number], why: string) {
+  const s = g.sides[owner]
+  const back = queuedCost(p, q)
+  s.credits += back
+  if (isWork(q.unit)) s.spent.stations -= back
+  else s.spent.ships -= back
+  book(s, calendar(g.time).day, back, `${why}: ${q.unit === 'station' ? 'station work' : isWork(q.unit) ? workName(q.unit as WorkId) : UNIT[q.unit].name}`)
+}
+/**
+ * A base falls with its station: its yards are left as ruins (for whoever holds the planet next to
+ * rebuild at REBUILD of the price) and every expansion is gone.
+ */
+function razeBase(p: Planet) {
+  for (const k of YARD_KINDS) if (p.base.yards[k] === 'up') p.base.yards[k] = 'ruin'
+  p.base.mods = []
+}
+/** Expansions waiting in a planet's queue for a building that is gone now are refunded. */
+function dropOrphans(g: Galaxy, p: Planet) {
+  for (let i = p.queue.length - 1; i >= 0; i--) {
+    const u = p.queue[i].unit
+    if (!isModule(u) || worksUp(p, MODULE[u].on)) continue
+    if (p.owner >= 0) refund(g, p.owner, p, p.queue[i], `Lost with its yard`)
+    p.queue.splice(i, 1)
+  }
 }
 
 // --- Battles ---------------------------------------------------------------------------------------
 
 /** A battle waiting at a planet: who holds it, who attacks, and with what. The `Held` lists are
- * the part of each side's ships its fleets hold back in the reserve (included in `Ships`). */
-export type Clash = { planet: number; holder: number; attacker: number; station: number; holderShips: string[]; attackerShips: string[]; holderHeld: string[]; attackerHeld: string[] }
+ * the part of each side's ships its fleets hold back in the reserve (included in `Ships`). `base`:
+ * the holder's yards and expansions round its station (only when it owns the planet and has one). */
+export type Clash = { planet: number; holder: number; attacker: number; station: number; holderShips: string[]; attackerShips: string[]; holderHeld: string[]; attackerHeld: string[]; base?: PlanetBase }
 
 export function clashAt(g: Galaxy, planet: number): Clash | null {
   const p = g.planets[planet]
@@ -1244,7 +1390,8 @@ export function clashAt(g: Galaxy, planet: number): Clash | null {
   const attacker = [...owners].find((o) => o !== holder)!
   const ships = (o: number) => here.filter((f) => f.owner === o).flatMap((f) => f.ships)
   const held = (o: number) => here.filter((f) => f.owner === o).flatMap(heldShips)
-  return { planet, holder, attacker, station: p.owner === holder ? p.station : 0, holderShips: ships(holder), attackerShips: ships(attacker), holderHeld: held(holder), attackerHeld: held(attacker) }
+  const station = p.owner === holder ? p.station : 0
+  return { planet, holder, attacker, station, holderShips: ships(holder), attackerShips: ships(attacker), holderHeld: held(holder), attackerHeld: held(attacker), ...(station ? { base: copyBase(p.base) } : {}) }
 }
 
 /** Seconds into an auto-resolved battle before held back ships are called in (sooner when nothing
@@ -1252,8 +1399,9 @@ export function clashAt(g: Galaxy, planet: number): Clash | null {
 export const RESERVE_CALL = 4
 
 /** How a battle ended: the winning side, and what's left of each side. Ships that jumped out are
- * `escaped`: they go back where they came from. */
-export type BattleResult = { winner: number; survivors: Record<number, string[]>; escaped: Record<number, string[]>; stationLeft: boolean }
+ * `escaped`: they go back where they came from. `base`: the holder's yards still standing and the
+ * expansions not shot off (left out: its buildings came through as they were). */
+export type BattleResult = { winner: number; survivors: Record<number, string[]>; escaped: Record<number, string[]>; stationLeft: boolean; base?: { yards: YardKind[]; mods: ModuleId[] } }
 
 /**
  * A quick result without playing it out: both sides trade damage once a second, each ship firing at
@@ -1262,21 +1410,35 @@ export type BattleResult = { winner: number; survivors: Record<number, string[]>
  * as a player would call them in: after RESERVE_CALL seconds, or at once when nothing else of their
  * side is left fighting. A side that wins before then keeps them untouched; an attacker that pulls
  * out takes them along.
+ *
+ * The holder's buildings fight too: its yards add their hulls and guns (shot at as stations are),
+ * a Shield core gives the station 40% more shields and an Armour works its frigates and corvettes
+ * 20% more hull, as in a battle. Whatever of them is destroyed is lost (BattleResult.base): a
+ * yard's expansions go with it, the station's with the station.
  */
 export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
   const r = rng(Math.floor(seed * 1000) + c.planet)
-  type U = { side: number; id: string; tier: Tier; hp: number; max: number; dps: (tier: Tier) => number; station?: boolean; late?: boolean }
+  type U = { side: number; id: string; tier: Tier; hp: number; max: number; dps: (tier: Tier) => number; station?: boolean; yard?: YardKind; late?: boolean }
+  const mods = c.base?.mods ?? []
+  const plate = (o: number, t: UnitType) => (o === c.holder && mods.includes('armourWorks') && (t.tier === 'frigate' || t.kind === 'support') ? 1 + MODULE_FX.armour : 1)
   const mk = (side: number, id: string, late = false): U => {
     const t = UNIT[id]
-    const hp = (t.hull + t.shield) * t.squad
+    const hp = (t.hull * plate(side, t) + t.shield) * t.squad
     return { side, id, tier: t.tier, hp, max: hp, dps: (tier) => dpsVs(t, tier) * t.squad, ...(late ? { late } : {}) }
   }
   const side = (o: number, ships: string[], held: string[] = []) => [...withoutShips(ships, held).map((id) => mk(o, id)), ...held.map((id) => mk(o, id, true))]
   const us: U[] = [...side(c.holder, c.holderShips, c.holderHeld), ...side(c.attacker, c.attackerShips, c.attackerHeld)]
   if (c.station) {
-    const t = stationType(g.sides[c.holder].faction, c.station, [])
-    const hp = t.hull + t.shield
+    const faction = g.sides[c.holder].faction
+    const t = stationType(faction, c.station, [], mods.filter((id) => MODULE[id].on === 'station'))
+    const hp = t.hull + t.shield * (mods.includes('shieldCore') ? 1 + MODULE_FX.shield : 1)
     us.push({ side: c.holder, id: 'station', tier: 'station', hp, max: hp, dps: (tier) => dpsVs(t, tier), station: true })
+    for (const k of YARD_KINDS) {
+      if (c.base?.yards[k] !== 'up') continue
+      const y = yardType(yardOf(faction, k).id, mods)
+      const yhp = y.hull + y.shield
+      us.push({ side: c.holder, id: k, tier: 'station', hp: yhp, max: yhp, dps: (tier) => dpsVs(y, tier), yard: k })
+    }
   }
   // Luck: each side fights a little better or worse than on paper this time.
   const luck = { [c.holder]: 0.8 + r() * 0.4, [c.attacker]: 0.8 + r() * 0.4 } as Record<number, number>
@@ -1311,13 +1473,16 @@ export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
       break
     }
   }
-  const left = (side: number) => us.filter((u) => u.side === side && u.hp > 0 && !u.station).map((u) => u.id)
+  const left = (side: number) => us.filter((u) => u.side === side && u.hp > 0 && !u.station && !u.yard).map((u) => u.id)
   const holderLeft = us.some((u) => u.side === c.holder && u.hp > 0)
+  const stationLeft = us.some((u) => u.station && u.hp > 0)
+  const yards = us.filter((u) => u.yard && u.hp > 0).map((u) => u.yard!)
   return {
     winner: holderLeft ? c.holder : c.attacker,
     survivors: { [c.holder]: left(c.holder), [c.attacker]: left(c.attacker) },
     escaped: { [c.holder]: [], [c.attacker]: escaped },
-    stationLeft: us.some((u) => u.station && u.hp > 0),
+    stationLeft,
+    ...(c.base ? { base: { yards, mods: mods.filter((id) => (MODULE[id].on === 'station' ? stationLeft : yards.includes(MODULE[id].on as YardKind))) } } : {}),
   }
 }
 
@@ -1389,9 +1554,17 @@ export function applyBattle(g: Galaxy, c: Clash, res: BattleResult, auto: boolea
     // Out of the battle at once: flying to the fallback planet.
     for (const f of refill(g, o, c.planet, old, esc)) moveFleet(g, o, f.id, to)
   }
+  // The holder's buildings: a yard destroyed in the battle is a ruin now (its expansions gone with
+  // it), and an expansion shot off is lost; both are built again from the planet's queue.
+  if (c.station && res.base && p.owner === c.holder) {
+    for (const k of YARD_KINDS) if (p.base.yards[k] === 'up' && !res.base.yards.includes(k)) p.base.yards[k] = 'ruin'
+    p.base.mods = p.base.mods.filter((id) => res.base!.mods.includes(id) && worksUp(p, MODULE[id].on))
+    dropOrphans(g, p)
+  }
   if (c.station && !res.stationLeft) {
     p.station = 0
     p.queue = []
+    razeBase(p)
   }
   // Survivors of a beaten side that didn't jump out are lost; the winner takes an emptied planet
   // once it has held the orbit (the usual capture).
@@ -1435,27 +1608,40 @@ export function tickGalaxy(g: Galaxy, dt: number) {
       g.events.push({ k: 'payday', owner: o, amount: paid, day: today })
     })
   }
-  // Shipyards and station work.
+  // Shipyards, and work on the station and its buildings. With a Second slip standing, the first
+  // two ships in the queue are built at once (a building or an upgrade still goes on its own).
   for (const p of g.planets) {
-    const q = p.queue[0]
-    if (!q || p.owner < 0) continue
-    q.left -= dt
-    if (q.left > 0) continue
-    if (q.unit !== 'station' && !yardRoom(g, p.owner, p.id, q.unit)) {
-      // Every fleet here is full and there are MAX_FLEETS of them: the finished ship waits on its
-      // slip, holding up the queue behind it, until a fleet makes room or leaves (said once).
-      q.left = 0
-      if (!q.full) g.events.push({ k: 'yardFull', planet: p.id, owner: p.owner, unit: q.unit })
-      q.full = true
-      continue
-    }
-    p.queue.shift()
-    if (q.unit === 'station') {
-      p.station++
-      g.events.push({ k: 'station', planet: p.id, owner: p.owner, level: p.station })
-    } else {
-      dock(g, p.owner, p.id, [{ unit: q.unit }])
-      g.events.push({ k: 'built', planet: p.id, owner: p.owner, unit: q.unit })
+    if (!p.queue.length || p.owner < 0) continue
+    const two = p.base.mods.includes('secondSlip') && p.queue.length > 1 && !isWork(p.queue[0].unit) && !isWork(p.queue[1].unit)
+    for (const q of p.queue.slice(0, two ? 2 : 1)) {
+      q.left -= dt
+      if (q.left > 0) continue
+      if (!isWork(q.unit) && !yardRoom(g, p.owner, p.id, q.unit)) {
+        // Every fleet here is full and there are MAX_FLEETS of them: the finished ship waits on its
+        // slip, holding up the queue behind it, until a fleet makes room or leaves (said once).
+        q.left = 0
+        if (!q.full) g.events.push({ k: 'yardFull', planet: p.id, owner: p.owner, unit: q.unit })
+        q.full = true
+        continue
+      }
+      p.queue.splice(p.queue.indexOf(q), 1)
+      if (q.unit === 'station') {
+        p.station++
+        g.events.push({ k: 'station', planet: p.id, owner: p.owner, level: p.station })
+      } else if (isYard(q.unit)) {
+        p.base.yards[q.unit] = 'up'
+        g.events.push({ k: 'works', planet: p.id, owner: p.owner, what: q.unit })
+      } else if (isModule(q.unit)) {
+        const id = q.unit
+        if (!worksUp(p, MODULE[id].on)) refund(g, p.owner, p, q, 'Lost with its yard')
+        else if (!p.base.mods.includes(id)) {
+          p.base.mods.push(id)
+          g.events.push({ k: 'works', planet: p.id, owner: p.owner, what: id })
+        }
+      } else {
+        dock(g, p.owner, p.id, [{ unit: q.unit }])
+        g.events.push({ k: 'built', planet: p.id, owner: p.owner, unit: q.unit })
+      }
     }
   }
   // Fleets in flight.
@@ -1536,6 +1722,8 @@ export function tickGalaxy(g: Galaxy, dt: number) {
         p.earned = 0
         p.capture = null
         p.queue = []
+        // Its base fell with its station before it could be taken: the new owner finds the ruins.
+        razeBase(p)
         // The side that lost it knows, even if it sees nothing there any more.
         if (from >= 0) note(g, from, p)
         g.events.push({ k: 'captured', planet: p.id, owner: taker.owner, from })
@@ -1761,11 +1949,11 @@ function galaxyAi(g: Galaxy, o: number) {
     return path ? path.length - 1 : 99
   }
   /** What it believes holds a planet: in a system it sees, the enemy fleets there (half for those at
-   * other planets of the system) and the station; elsewhere what it saw there last (a guess where it
-   * never looked); all misjudged a little. */
+   * other planets of the system) and the station with the yards round it; elsewhere what it saw
+   * there last (a guess where it never looked); all misjudged a little. */
   const defence = (p: Planet) => {
     const k = known(g, o, p)
-    let v = hostile(k.owner) ? k.station * 1500 : 0
+    let v = hostile(k.owner) ? k.station * 1500 + (k.station ? baseGuard(k.base) : 0) : 0
     if (k.live) {
       for (const f of seen) if (!f.leg && f.system === p.system) v += fleetValue(f.ships) * (f.planet === p.id ? 1 : 0.5)
     } else v += k.ships < 0 ? (hostile(k.owner) ? FOG_GUESS : 0) : k.value
@@ -1922,13 +2110,14 @@ function galaxyAi(g: Galaxy, o: number) {
     }
   }
 
-  // 6. Stations, then ships with what orders are left. Ships come from the staging planet's yard
+  // 6. Buildings (see planBase), stations, then ships with what orders are left. Ships come from the staging planet's yard
   // (they join the main fleet right there, no order needed to send them), and from another yard
   // only while that one is full, builds bigger ships or money piles up. With few orders to spare it buys bigger ships
   // rather than many small ones, the more so the richer it is. A yard whose fleets have no room for
   // the ship is passed over (it would only wait on its slip).
   const spend = () => {
     const yards = mine.filter((p) => p.station > 0)
+    planBase(g, o, m, yards, order)
     if (yards.length < Math.ceil(mine.length / 3)) {
       const site = mine.filter((p) => !p.station && !p.queue.length).sort((a, b) => b.income - a.income)[0]
       if (site && s.credits > STATION_COST[1] + 400) order(() => upgradeStation(g, o, site.id))
@@ -1942,7 +2131,8 @@ function galaxyAi(g: Galaxy, o: number) {
         continue
       }
       if (p.id === m.stage ? p.queue.length >= 3 : p.queue.length >= 1 || !(stageFull || s.credits > 4000 || p.station > stage!.station)) continue
-      const can = buildable(s.faction).filter((t) => t.level <= p.station && t.cost <= s.credits - 300)
+      // (Only what this planet's yards build.)
+      const can = buildable(s.faction).filter((t) => t.level <= p.station && t.cost <= s.credits - 300 && !yardLock(p, t))
       if (!can.length) break
       const rich = Math.min(1, s.credits / 6000)
       const pick = can[Math.min(can.length - 1, Math.floor(Math.pow(roll(m), 0.6 - rich * 0.35) * can.length))]
@@ -1965,6 +2155,54 @@ function galaxyAi(g: Galaxy, o: number) {
 }
 /** The galaxy AI's look, for the check scripts (the clock calls it by itself). */
 export const thinkAi = galaxyAi
+
+/** What the AI reckons a planet's buildings add to its defence, in credits of ships: a yard's
+ * hull and guns, and the station's Shield core. */
+const baseGuard = (b: PlanetBase) => (b.yards.yard === 'up' ? 1200 : 0) + (b.yards.cyard === 'up' ? 2000 : 0) + (b.mods.includes('shieldCore') ? 500 : 0)
+
+/**
+ * The galaxy AI plans its planets' buildings by its profile, one order per look at most, and only
+ * with credits to spare beyond what it keeps for ships (a planet that builds no frigates yet comes
+ * first, as frigates are the line). Its staging planet (the front: the main fleet gathers there) is
+ * a frontier outpost: a Frigate Yard as soon as its station allows, and the profile's station
+ * expansions (a defensive admiral's Shield core first). Its forge world is its core: the yard with
+ * the biggest station, the one furthest from the enemy (as far as it knows) of those: a Frigate Yard
+ * too, then a Capital Yard once the station is level 3, and the Capital slip at level 4 for a
+ * flagship. The yards' expansions follow
+ * on whichever of the two has the yard, in its profile's order (ai.ts PROFILES `modules`: an
+ * offensive admiral starts with the Second slip and Strike hangar, a defensive one with the Shield
+ * core and Drydock). A ruined yard is rebuilt before anything new, as it costs half. Ships come
+ * from the station meanwhile (strike craft and gunships need no yard), so it never stalls.
+ */
+function planBase(g: Galaxy, o: number, m: GalaxyMind, yards: Planet[], order: (give: () => string | null) => boolean) {
+  const s = g.sides[o]
+  if (!yards.length || m.budget < 1) return
+  const hostile = (p: Planet) => ownerFor(g, o, p) >= 0 && ownerFor(g, o, p) !== o
+  const enemy = [...new Set(g.planets.filter(hostile).map((p) => p.system))]
+  const far = (p: Planet) => Math.min(99, ...enemy.map((sys) => lanePath(g, p.system, sys, o)?.length ?? 99))
+  const stage = yards.find((p) => p.id === m.stage) ?? yards[0]
+  const forge = yards.slice().sort((a, b) => b.station - a.station || far(b) - far(a) || a.id - b.id)[0]
+  const sites = forge === stage ? [stage] : [forge, stage]
+  const want: [Planet, WorkId][] = []
+  // Ruins first, then a Frigate Yard where there is none, then the Capital Yard and its slip.
+  for (const p of yards) for (const k of YARD_KINDS) if (p.base.yards[k] === 'ruin' && (k === 'yard' || p === forge)) want.push([p, k])
+  for (const p of sites) want.push([p, 'yard'])
+  want.push([forge, 'cyard'], [forge, 'capitalSlip'])
+  for (const id of PROFILES[galaxyProfile(g, o)].modules) {
+    const on = MODULE[id].on
+    const at = on === 'station' ? stage : sites.find((p) => worksUp(p, on)) ?? forge
+    want.push([at, id])
+  }
+  // The first it may build now (the rest waits for a later look), if the credits are there.
+  const none = !g.planets.some((p) => p.owner === o && p.base.yards.yard === 'up')
+  for (const [p, id] of want) {
+    if (workLock(g, o, p.id, id) || p.queue.length >= 2) continue
+    const cost = workCost(g, o, p, id)
+    if (s.credits < cost + (none && id === 'yard' ? 200 : 1200)) return
+    order(() => buildWork(g, o, p.id, id))
+    return
+  }
+}
 
 // --- Saving --------------------------------------------------------------------------------------------
 
@@ -2043,9 +2281,22 @@ export function saveGalaxy(g: Galaxy, as?: string): boolean {
   }
 }
 
+/** What a planet with a station of this level had before planets had buildings (version 1 saves):
+ * the yards that level allowed its ships from, level 2 a Frigate Yard and level 3 a Capital Yard
+ * too, and no expansions. */
+const baseOfOld = (station: number): PlanetBase => ({ yards: { ...(station >= 2 ? { yard: 'up' as const } : {}), ...(station >= 3 ? { cyard: 'up' as const } : {}) }, mods: [] })
+/** A planet's buildings as saved, made sound: only yards and expansions that exist. */
+function cleanBase(b: PlanetBase | undefined): PlanetBase | undefined {
+  if (!b || typeof b !== 'object') return undefined
+  const yards: PlanetBase['yards'] = {}
+  for (const k of YARD_KINDS) if (b.yards?.[k] === 'up' || b.yards?.[k] === 'ruin') yards[k] = b.yards[k]
+  return { yards, mods: Array.isArray(b.mods) ? [...new Set(b.mods.filter((id) => MODULE[id]))] : [] }
+}
+
 /** A saved campaign, made fit for this version of the game, or null. */
 function clean(v: Galaxy | null): Galaxy | null {
-  if (!v || v.v !== 1 || !Array.isArray(v.systems) || !Array.isArray(v.planets) || !Array.isArray(v.fleets)) return null
+  const version = (v as { v?: number } | null)?.v
+  if (!v || (version !== 1 && version !== 2) || !Array.isArray(v.systems) || !Array.isArray(v.planets) || !Array.isArray(v.fleets)) return null
   // Ships that no longer exist in the game are dropped.
   for (const f of v.fleets) {
     f.ships = (f.ships ?? []).filter((id) => UNIT[id])
@@ -2063,7 +2314,10 @@ function clean(v: Galaxy | null): Galaxy | null {
   // Saves from before the cap on fleets at a planet: the spare ones join up where they fit.
   capFleets(v)
   for (const p of v.planets) {
-    p.queue = p.queue.filter((q) => q.unit === 'station' || UNIT[q.unit])
+    // Saves from before planets had buildings: each owned planet keeps what its station level let
+    // it build (see baseOfOld), so nothing is lost.
+    p.base = cleanBase(p.base) ?? (version === 1 && p.owner >= 0 ? baseOfOld(p.station ?? 0) : emptyBase())
+    p.queue = (Array.isArray(p.queue) ? p.queue : []).filter((q) => q.unit === 'station' || UNIT[q.unit] || isWork(q.unit))
     if (!PLANET_KINDS[p.kind]) p.kind = 'barren'
     // Saves from before planets had their own income.
     p.income ??= PLANET_KINDS[p.kind].income
@@ -2081,6 +2335,9 @@ function clean(v: Galaxy | null): Galaxy | null {
   // Saves from before the fog of war: each side starts with the galaxy as it is now on its charts,
   // and its sight from what it holds and where its fleets are.
   for (const s of v.sides) if (!Array.isArray(s.intel) || s.intel.length !== v.planets.length) s.intel = chartOf(v)
+  // What each side last saw of a planet before there were buildings: what that station level had.
+  for (const s of v.sides) for (const i of s.intel!) if (i) i.base = cleanBase(i.base) ?? (version === 1 ? baseOfOld(i.station ?? 0) : emptyBase())
+  v.v = 2
   updateSight(v)
   return v
 }
