@@ -145,9 +145,6 @@
 .ph-canvas {
   position: relative;
   margin: 0 24px 0 8px;
-  /* Shift+click selects photos, not the headings' text. */
-  user-select: none;
-  -webkit-user-select: none;
 }
 .ph-month,
 .ph-day {
@@ -196,14 +193,12 @@
   background: color-mix(in srgb, var(--fg) 8%, transparent);
   overflow: hidden;
   cursor: pointer;
-  -webkit-touch-callout: none;
 }
 .ph-tile img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
-  user-select: none;
 }
 .ph-tile:hover img {
   filter: brightness(1.08);
@@ -387,7 +382,6 @@
   width: 24px;
   cursor: ns-resize;
   touch-action: none;
-  user-select: none;
   z-index: 2;
 }
 .ph-scrub-year {
@@ -551,7 +545,6 @@
   min-width: 0;
   overflow: hidden;
   touch-action: none;
-  user-select: none;
   cursor: zoom-in;
 }
 .ph-lb-img {
@@ -640,7 +633,6 @@
 }
 .ph-coords {
   font-family: var(--mono);
-  user-select: text;
 }
 .ph-path {
   font-family: var(--mono);

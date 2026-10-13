@@ -23,7 +23,6 @@
   color: var(--gl-ink);
   font-family: var(--gl-body);
   font-size: 14px;
-  user-select: none;
 }
 .gl-root.is-fight {
   background: #1c120a;
