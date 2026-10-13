@@ -717,12 +717,13 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       return
     }
     const target = unit && (foes(w, unit.owner, me) || friendly) ? unit : undefined
-    // Engineers: a right-click on one of our structures builds or repairs it, on our ruin of a yard
-    // rebuilds it; the rest of the selection carries on as usual.
+    // Engineers: a right-click on one of our structures builds or repairs it (and on a rush-launched
+    // warship of ours finishes it), on our ruin of a yard rebuilds it; the rest of the selection
+    // carries on as usual.
     const crew = ships.filter((u) => isEngineer(u.t))
     if (crew.length && !attackMove) {
       const ruin = (w.ruins ?? []).find((r) => r.owner === me && Math.hypot(r.x - at.x, r.y - at.y) < UNIT[r.unit].size * 0.45)
-      const job = unit && unit.owner === me && !isShip(unit.t) ? unit : undefined
+      const job = unit && unit.owner === me && (!isShip(unit.t) || unit.rush) ? unit : undefined
       if (job || (ruin && !unit)) {
         const why = job ? order('construct', crew.map((u) => u.id), job.id, queued) : order('place', crew.map((u) => u.id), ruin!.unit, ruin!.x, ruin!.y, queued)
         if (why) {
@@ -1054,7 +1055,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       // Engineers selected and this one of our structures needs building or mending.
       const crew = ships.filter((u) => isEngineer(u.t))
       if (crew.length && !cantConstruct(w, me, unit))
-        items.push(it('construct', unit.site ? 'Build it' : 'Repair it', 'slip', () => {
+        items.push(it('construct', unit.site ? 'Build it' : unit.rush ? 'Finish it' : 'Repair it', 'slip', () => {
           const why = order('construct', crew.map((u) => u.id), unit.id, shiftOf())
           if (why) {
             toast(why, 'bad')
@@ -1422,6 +1423,10 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           const u = w.byId.get(e.unit)
           sound.promoted()
           if (u && u.t.tier !== 'fighter') toast(`${u.t.name} promoted: ${RANKS[e.rank]}`, 'good', { x: e.x, y: e.y, unit: u.id })
+        } else if (e.k === 'finished' && e.owner === me) {
+          const u = w.byId.get(e.unit)
+          sound.structureDone('yard')
+          if (u) toast(`${u.t.name} finished: every turret installed`, 'good', { x: e.x, y: e.y, unit: u.id })
         } else if (e.k === 'expanded' && e.owner === me) {
           sound.structureDone('yard')
           toast(`${MODULE[e.id].name} finished on the ${WORKS_NAME[MODULE[e.id].on]}`, 'good', { x: e.x, y: e.y, unit: e.unit })
@@ -2420,6 +2425,17 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
               }}
               onExpand={expand}
               onCancelExpand={cancelExpand}
+              onRush={(id) => {
+                sound.unlock()
+                const why = order('rush', id)
+                if (why) {
+                  toast(why, 'bad')
+                  sound.error()
+                } else {
+                  toast('Rush launch: the ship jumps out unfinished. A Drydock, repair craft or engineers finish it.', 'info')
+                  sound.queued()
+                }
+              }}
               onResearch={research}
               onTechTree={() => setTree(true)}
               onSite={buildSite}

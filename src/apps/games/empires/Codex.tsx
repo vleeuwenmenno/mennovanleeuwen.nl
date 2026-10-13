@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ABILITIES, FACTIONS, REBUILD_MODULE, STATIONS, TECH, TECHS, UNITS, WORKS_NAME, isShip, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
+import { ABILITIES, FACTIONS, REBUILD_MODULE, RUSH, STATIONS, TECH, TECHS, techsFor, UNITS, WORKS_NAME, isShip, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
 import { info, sameSel, selName, targets, weaponLine, WEAPON_NAME, type Sel } from './codexInfo'
 import { Frame, HpIcon, Icon, Tips, fmt } from './Hud'
 import { HP_COLOR, hpName } from './icons'
@@ -228,6 +228,14 @@ function Stats({ t, concept = false, model, dmg, selected, hover, onSelect, onHo
               </li>
             ))}
           </ul>
+          {techsFor(t.id).map((x) => (
+            <div key={x.id}>
+              <h5>Research: {x.name}</h5>
+              <p className="ew-muted ew-small">
+                {x.blurb} {fmt(x.cost)} cr · {x.time} s · station level {x.level}. The Rush launch button shows on the yard's build queue once the ship in progress is {Math.round(RUSH.min * 100)}% built: it comes out with that share of its hull, no shields, and as many of its turrets and modules in scaffolding as are still to be built. Finishing it takes the build time it had left; a yard that rushed can't rush again for {RUSH.cooldown} s, and its next ship takes {Math.round(RUSH.slowdown * 100)}% longer.
+              </p>
+            </div>
+          ))}
         </>
       )}
       {t.support && <p className="ew-muted">Repairs up to {t.support.max} ships within {t.support.range}, {t.support.repair} hull a second each.</p>}

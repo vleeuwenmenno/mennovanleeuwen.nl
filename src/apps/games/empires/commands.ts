@@ -2,7 +2,7 @@ import { LEVEL_UP, MODULE, SITE_UPGRADES, TECH, UNIT, type ModuleId, type SiteUp
 import type { Pt } from './maps.ts'
 import {
   STANCES, cmdAbility, cmdArea, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdDeploy, cmdFace, cmdFocus, cmdGuard, cmdLine, cmdMove, cmdPatrol, cmdRally, cmdRepair, cmdResearch,
-  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdCancelSite, cmdExpand, cmdCancelExpand, wrapAngle, type Owner, type Stance, type World,
+  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdCancelSite, cmdExpand, cmdCancelExpand, cmdRush, wrapAngle, type Owner, type Stance, type World,
 } from './sim.ts'
 
 // Every order a player can give, as data: a name and its arguments. In multiplayer an order goes to
@@ -42,6 +42,8 @@ const TABLE = {
   // Expansions: order one on a building of ours (the Command Station or a yard), or call one off.
   expand: { run: cmdExpand, args: ['id', 'module'] },
   cancelExpand: { run: cmdCancelExpand, args: ['id', 'int'] },
+  // Rush launch: a Capital Yard sends out its ship in progress unfinished (Rushed construction).
+  rush: { run: cmdRush, args: ['id'] },
 } as const satisfies Record<string, { run: (w: World, owner: Owner, ...a: never[]) => unknown; args: readonly Arg[] }>
 
 export type CmdName = keyof typeof TABLE

@@ -1,7 +1,7 @@
 import { CYARD_SOCKETS, MODULE, STATION_SOCKETS, YARD_SOCKETS, FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
-import { RETREAT_TIME, atHome, building, foes, hpPos, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
+import { RETREAT_TIME, atHome, building, foes, hpPos, hullCap, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 import { BREAK_WEIGHTS, breakPieces, hullState, modelFor, unitForSprite, wreckState, type HullState, type Model } from './models/index.ts'
 import { YARD_BERTHS } from './models/base.ts'
 import { ModelFx } from './models/fx.ts'
@@ -479,12 +479,13 @@ export class Renderer {
       }
       for (const u of w.units) {
         u.hps.forEach((h, i) => {
-          if (h.hp > 0 || Math.random() > 0.5) return
+          // A rush-launched ship's parts not yet installed are scaffolding, not wreckage.
+          if (h.hp > 0 || Math.random() > 0.5 || u.rush?.parts.includes(i)) return
           const p = hpPos(u, i)
           this.add({ kind: 'smoke', x: p.x, y: p.y, vx: (Math.random() - 0.5) * 20, vy: (Math.random() - 0.5) * 20, life: 1.4, size: 5, grow: 26, color: 'rgba(50,50,58,1)' })
           if (Math.random() < 0.4) this.add({ kind: 'fire', x: p.x, y: p.y, life: 0.3, size: 4, grow: 6, color: '#ff8a3a' })
         })
-        if (u.hull < u.hullMax * 0.4 && u.t.tier !== 'fighter' && Math.random() < 0.5) {
+        if (u.hull < hullCap(u) * 0.4 && u.t.tier !== 'fighter' && Math.random() < 0.5) {
           const p = shipPoint(u, 2 + Math.random() * 6, 2 + Math.random() * 6)
           this.add({ kind: 'smoke', x: p.x, y: p.y, vx: 0, vy: 0, life: 1.2, size: 4, grow: radius(u.t) * 0.3, color: 'rgba(55,55,62,1)' })
         }
@@ -2096,6 +2097,50 @@ export class Renderer {
     if (on) ctx.restore()
   }
 
+  /**
+   * A rush-launched ship's parts not yet installed: a square frame of girders on each one's socket,
+   * cross-braced, in its side's working light, a work lamp blinking on a corner. The same style as a
+   * yard going up (drawSite): unfinished, not wrecked, so no smoke and no fire.
+   */
+  private drawScaffolds(ctx: CanvasRenderingContext2D, u: Unit, m: Model, size: number, z: number) {
+    const rgb = u.t.faction === 'republic' ? '130,205,255' : '255,186,120'
+    const k = size / m.long
+    const rot = u.a + Math.PI / 2
+    for (const i of u.rush!.parts) {
+      const mt = m.mounts[i]
+      if (!mt) continue
+      const p = hpPos(u, i)
+      const r = Math.max(mt.r * k * 1.05, 3 / z)
+      ctx.save()
+      ctx.translate(p.x, p.y)
+      ctx.rotate(rot)
+      ctx.fillStyle = 'rgba(8,12,24,0.55)'
+      ctx.fillRect(-r, -r, r * 2, r * 2)
+      ctx.beginPath()
+      // The frame, two uprights and two girders across inside it, and the braces.
+      ctx.rect(-r, -r, r * 2, r * 2)
+      for (const f of [-1 / 3, 1 / 3]) {
+        ctx.moveTo(f * r * 2, -r)
+        ctx.lineTo(f * r * 2, r)
+        ctx.moveTo(-r, f * r * 2)
+        ctx.lineTo(r, f * r * 2)
+      }
+      ctx.moveTo(-r, -r)
+      ctx.lineTo(r, r)
+      ctx.moveTo(r, -r)
+      ctx.lineTo(-r, r)
+      ctx.strokeStyle = `rgba(${rgb},0.85)`
+      ctx.lineWidth = Math.max(0.8 / z, r * 0.07)
+      ctx.stroke()
+      if (Math.sin(this.clock * 5 + i * 1.7 + u.id) > 0.2) {
+        ctx.fillStyle = '#ffd27a'
+        const l = Math.max(1.4 / z, r * 0.14)
+        ctx.fillRect(r - l, -r, l, l)
+      }
+      ctx.restore()
+    }
+  }
+
   /** A yard being placed: its ghost where it would go, the slipway's mouth marked, green where it can
    * go and red (with why) where it can't, and what it costs. */
   private drawPlace(ctx: CanvasRenderingContext2D, g: NonNullable<View['place']>, z: number) {
@@ -2275,7 +2320,8 @@ export class Renderer {
       const zdpr = z * (window.devicePixelRatio || 1)
       drawHull(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, st, { alpha })
       if (t.tier === 'yard') this.drawBerth(ctx, u, m, z, alpha)
-      if (m.mounts.length) drawMounts(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, u.hps, (i) => this.aim(u, i, w), alpha)
+      if (m.mounts.length) drawMounts(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, u.hps, (i) => this.aim(u, i, w), alpha, u.rush?.parts)
+      if (u.rush) this.drawScaffolds(ctx, u, m, size, z)
     }
     if (u.retreat > 0) this.drawCharge(ctx, u, z)
     // An expansion going up on its socket: a scaffold ring turning round it, filling as it's built.
@@ -2341,7 +2387,9 @@ export class Renderer {
         const st = u.hps[i]
         const hi = hov && view.hoverHp === i
         const r = Math.max(9 / z, t.size * 0.032) * (hi ? 1.25 : 1)
-        ctx.fillStyle = st.hp <= 0 ? 'rgba(60,8,8,0.8)' : 'rgba(6,10,22,0.78)'
+        // A rush-launched ship's part not yet installed: amber and dashed, not wrecked.
+        const unbuilt = !!u.rush?.parts.includes(i)
+        ctx.fillStyle = unbuilt ? 'rgba(40,26,6,0.8)' : st.hp <= 0 ? 'rgba(60,8,8,0.8)' : 'rgba(6,10,22,0.78)'
         ctx.beginPath()
         ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
         ctx.fill()
@@ -2351,13 +2399,22 @@ export class Renderer {
         const k2 = (r * 1.25) / 24
         ctx.scale(k2, k2)
         ctx.translate(-12, -12)
-        ctx.strokeStyle = st.hp <= 0 ? 'rgba(255,120,110,0.7)' : 'rgba(235,242,255,0.92)'
+        ctx.strokeStyle = unbuilt ? 'rgba(255,200,120,0.75)' : st.hp <= 0 ? 'rgba(255,120,110,0.7)' : 'rgba(235,242,255,0.92)'
         ctx.lineWidth = 2.2
         ctx.lineCap = 'round'
         ctx.lineJoin = 'round'
         ctx.stroke(iconPath(h.kind))
         ctx.restore()
         ctx.lineWidth = (hi ? 2.6 : 1.8) / z
+        if (unbuilt) {
+          ctx.strokeStyle = 'rgba(255,200,120,0.85)'
+          ctx.setLineDash([4 / z, 3 / z])
+          ctx.beginPath()
+          ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+          ctx.stroke()
+          ctx.setLineDash([])
+          return
+        }
         if (st.hp <= 0) {
           ctx.strokeStyle = 'rgba(255,80,70,0.9)'
           ctx.beginPath()

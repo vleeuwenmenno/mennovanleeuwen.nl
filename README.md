@@ -2107,6 +2107,38 @@ row of chips over the view and the numbers.
 pnpm check:empires-models   # every unit has a model that builds, its mounts match the hardpoints, parts come off soundly, breaks are deterministic and weighted, small craft and structures burst into real fragments
 ```
 
+## Empires At War rush launch
+
+A desperate measure for a base under attack. Once **Rushed construction** (the droids' **Hasty
+assembly protocols**) is researched (800 credits, 45 s, station level 3, and it needs a Capital Yard
+standing; it shows on the tech tree's Capital Yard line), the Capital Yard's build queue shows
+**Rush launch (62%)** once the ship in progress is at least half built. A click sends it out now; on
+a touch screen the button is held for 0.6 s (a ring fills round it) so a stray tap can't do it.
+
+- The ship jumps in with its hull at the share that was built, no shields, and as many of its
+  turrets and modules as were still to be built not yet installed: the ones furthest aft, drawn as
+  scaffolding (not smoke or fire), and they don't fire or work. Its card and tooltip say
+  "Rushed: 3 of 11 turrets and modules not yet installed · 23 s of work to finish it".
+- Finishing it takes the build time it had left, at the build pace, only while a Drydock, repair
+  craft or engineers work on it (engineers ordered onto it, or idle ones nearby by themselves);
+  several of them don't make it faster. Its unbuilt hull fills in and its parts go on one by one
+  (whole) as it goes, free of credits. Ordinary repairs (the Drydock's 2.5%/s, repair docks, repair
+  tenders, Field repair, the repair swarm) mend battle damage but never the unbuilt hull
+  (`hullCap`), so rushing never gets a ship out finished sooner.
+- The yard can't rush again for `RUSH.cooldown` (120 s), and the next ship it starts takes
+  `RUSH.slowdown` (25%) longer. `RUSH` in [`data.ts`](src/apps/games/empires/data.ts) holds the
+  numbers; in a dev build the F9 cheats can change them live on a local battle (`World.rushTune`).
+- It is an order like any other (`rush`), checked by the server and deterministic. The AI admirals
+  research it by profile (Defensive as soon as it can pay, Balanced with credits to spare, Offensive
+  only when rich) and rush only with their base under a real attack, or with the enemy's warships
+  near home well outnumbering theirs.
+- Galactic conquest has no research yet and its planet battles start with empty yard queues, so it
+  doesn't come up there.
+
+```sh
+pnpm check:empires-rush   # the gates, the ship as it launches, finishing it, cooldown and slowdown, save and restore, the AI
+```
+
 ## Empires At War on touch screens
 
 Phones and tablets play the whole game by touch ([`src/apps/games/empires/Touch.tsx`](src/apps/games/empires/Touch.tsx)),

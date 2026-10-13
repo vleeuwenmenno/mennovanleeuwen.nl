@@ -658,14 +658,16 @@ export function drawPiece(ctx: CanvasRenderingContext2D, m: Model, piece: Piece,
 
 /**
  * A modelled unit's mounts, each on its hardpoint: whole ones turned to `aim(i)` (a world angle, as
- * drawn), wrecked ones left where they last pointed, blown-off ones a burnt socket on the hull.
+ * drawn), wrecked ones left where they last pointed, blown-off ones a burnt socket on the hull; the
+ * hardpoints in `skip` left bare.
  */
-export function drawMounts(ctx: CanvasRenderingContext2D, m: Model, x: number, y: number, rot: number, size: number, zdpr: number, hps: readonly { hp: number }[], aim: (i: number) => number, alpha = 1) {
+export function drawMounts(ctx: CanvasRenderingContext2D, m: Model, x: number, y: number, rot: number, size: number, zdpr: number, hps: readonly { hp: number }[], aim: (i: number) => number, alpha = 1, skip?: readonly number[]) {
   const k = size / m.long
   const c = Math.cos(rot)
   const s = Math.sin(rot)
   for (const mt of m.mounts) {
-    if (mt.design === 'engine') continue
+    // (A rush-launched ship's parts not yet installed: the battle draws their scaffolding.)
+    if (mt.design === 'engine' || skip?.includes(mt.hp)) continue
     const r = mt.r * k
     if (r * 2 * zdpr < 2) continue
     const wx = x + (mt.x * c - mt.y * s) * k

@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
-import { FACTIONS, LEVEL_UP, MAX_LEVEL, TECH, UNIT, type FactionId } from './data'
+import { FACTIONS, LEVEL_UP, MAX_LEVEL, RUSH, TECH, UNIT, type FactionId } from './data'
 import { Floating } from './Hud'
 import { damage, shieldMax, spawn, spawnGroup, type Owner, type Unit, type World } from './sim'
 import type { Pt } from './maps'
@@ -130,6 +130,34 @@ const CSS = `
 .ew-dev-chip {  padding: 2px 8px; font-size: 10.5px; letter-spacing: 0.12em; }
 .ew-dev-hint { color: #f2c14a; }
 `
+
+/**
+ * The rush launch's numbers (data.ts RUSH), tried out live on this battle: they go on the local
+ * world (World.rushTune), which the sim reads in place of RUSH. Nothing of it reaches another player.
+ */
+function RushTune({ w, onChange }: { w: World; onChange: () => void }) {
+  const cur = w.rushTune ?? RUSH
+  const set = (patch: Partial<typeof RUSH>) => {
+    w.rushTune = { ...cur, ...patch }
+    onChange()
+  }
+  const num = (label: string, value: number, min: number, max: number, step: number, apply: (v: number) => void, tip: string) => (
+    <label className="ew-dev-row" data-tip={tip}>
+      {label}
+      <input type="number" min={min} max={max} step={step} value={value} onChange={(e) => Number.isFinite(e.target.valueAsNumber) && apply(Math.min(max, Math.max(min, e.target.valueAsNumber)))} aria-label={label} />
+    </label>
+  )
+  return (
+    <>
+      {num('Min %', Math.round(cur.min * 100), 0, 100, 5, (v) => set({ min: v / 100 }), 'How far the ship must be built before it can be rushed')}
+      {num('Cooldown s', cur.cooldown, 0, 1200, 10, (v) => set({ cooldown: v }), 'Seconds before the same yard can rush again')}
+      {num('Slowdown %', Math.round(cur.slowdown * 100), 0, 300, 5, (v) => set({ slowdown: v / 100 }), 'How much longer the yard\'s next ship takes')}
+      <button className="ew-chip" disabled={!w.rushTune} onClick={() => (delete w.rushTune, onChange())}>
+        Defaults
+      </button>
+    </>
+  )
+}
 
 /** The dev panel: its hotkey (F9), a small DEV button, the cheat toggles and the spawn menu. */
 export function DevCheats({ ctx }: { ctx: DevCtx }) {
@@ -292,6 +320,10 @@ export function DevCheats({ ctx }: { ctx: DevCtx }) {
             <button className="ew-chip" onClick={kill}>
               Kill selected
             </button>
+          </div>
+          <h5>Rush launch (playtest)</h5>
+          <div className="ew-dev-line">
+            <RushTune w={w} onChange={redraw} />
           </div>
           <h5>Spawn</h5>
           <div className="ew-dev-line">

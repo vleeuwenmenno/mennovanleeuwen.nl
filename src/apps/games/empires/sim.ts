@@ -5,7 +5,7 @@ import { clearLine, findPath, navGrid, type NavGrid } from './nav.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import { BIG_SPREAD, sizeClass } from './models/sizes.ts'
 import {
-  ABILITIES, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
+  ABILITIES, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind,
 } from './data.ts'
@@ -166,7 +166,22 @@ export type Unit = {
    * and in battles saved before expansions. */
   xm?: ModuleId[]
   xq?: ModuleJob[]
+  /** A warship rush-launched unfinished (see Rush). Absent once it is finished, and on every other unit. */
+  rush?: Rush
+  /** A yard that rush-launched: when it may rush again (World time). */
+  rushAt?: number
+  /** A yard that rush-launched with nothing else in its queue: the next ship it starts goes slower. */
+  slowNext?: boolean
 }
+
+/**
+ * A rush-launched warship still to be finished (data.ts RUSH): `left` seconds of its build still to
+ * do (of `total` when it launched), done only while a Drydock, repair craft or engineers work on it
+ * (`work`, set by them in the tick), at the build pace however many there are. `gap`: hull still
+ * unbuilt, which ordinary repairs can't mend (see hullCap). `parts`: its hardpoints not yet installed
+ * (hp 0: they don't fire or work), in the order they go on, `n` of them at launch.
+ */
+export type Rush = { left: number; total: number; gap: number; parts: number[]; n: number; work: boolean }
 
 /** An expansion being built onto its building: seconds left of its time. */
 export type ModuleJob = { id: ModuleId; left: number; total: number }
@@ -185,10 +200,14 @@ export type Ruin = { id: number; owner: Owner; unit: string; x: number; y: numbe
 export type Slot = { t: number; key: number; at: number; a: number; inset: number; held: boolean }
 
 /** A ship being built. `reserve`: it goes to the fleet reserve when done instead of jumping in. */
-export type QueueItem = { unit: string; left: number; total: number; reserve?: boolean }
+/** `slow`: the ship a yard started after a rush launch, built RUSH.slowdown slower. */
+export type QueueItem = { unit: string; left: number; total: number; reserve?: boolean; slow?: boolean }
 /** A ship on its way in from hyperspace: it drops out at (x, y), facing `a`, once the clock
  * reaches `at`. `rally`: a new ship from the shipyard, sent on to the rally point. */
-export type Arrival = { unit: string; owner: Owner; x: number; y: number; a: number; at: number; rally: boolean; /** From a yard: its rally point (else the station's). */ rx?: number; ry?: number }
+export type Arrival = { unit: string; owner: Owner; x: number; y: number; a: number; at: number; rally: boolean; /** From a yard: its rally point (else the station's). */ rx?: number; ry?: number
+  /** Rush-launched: the share of it that was built, and the seconds of its build left (see Rush). */
+  rush?: { built: number; left: number }
+}
 /** Research in progress: a tech id, or LEVEL_UP for the next station level. */
 export type ResearchItem = { id: string; left: number; total: number }
 export type Player = {
@@ -315,6 +334,10 @@ export type SimEvent =
   | { k: 'retreated'; owner: Owner; unit: string; x: number; y: number; a: number; refund: number }
   /** An expansion was finished on one of our buildings (`unit`). */
   | { k: 'expanded'; owner: Owner; unit: number; id: ModuleId; x: number; y: number }
+  /** A rush launch from a yard (at the yard); a rushed ship's part going on, and it finished. */
+  | { k: 'rushed'; owner: Owner; unit: string; x: number; y: number }
+  | { k: 'installed'; owner: Owner; unit: number; x: number; y: number }
+  | { k: 'finished'; owner: Owner; unit: number; x: number; y: number }
 
 export type World = {
   w: number
@@ -355,6 +378,8 @@ export type World = {
   hybrid?: boolean
   /** Ruined yards, where they were destroyed. */
   ruins?: Ruin[]
+  /** Dev cheats only (a local battle): the rush launch's numbers, tried out in place of RUSH. */
+  rushTune?: typeof RUSH
 }
 export type FleetRules = {
   /** Where each player's reinforcements may jump in, whether or not the fleet can see it. */
@@ -1425,8 +1450,8 @@ export function cantWarp(w: World, owner: Owner, id: string, x: number, y: numbe
   return null
 }
 
-function warpIn(w: World, owner: Owner, unit: string, x: number, y: number, a: number, delay: number, rally: boolean, to?: Pt) {
-  w.arrivals.push({ unit, owner, x, y, a, at: w.time + delay, rally, ...(to ? { rx: to.x, ry: to.y } : {}) })
+function warpIn(w: World, owner: Owner, unit: string, x: number, y: number, a: number, delay: number, rally: boolean, to?: Pt, rush?: Arrival['rush']) {
+  w.arrivals.push({ unit, owner, x, y, a, at: w.time + delay, rally, ...(to ? { rx: to.x, ry: to.y } : {}), ...(rush ? { rush } : {}) })
   w.events.push({ k: 'warp', owner, unit, x, y, a, delay })
 }
 
@@ -1478,6 +1503,7 @@ function arrivals(w: World) {
     const group = spawnGroup(w, a.unit, a.owner, a.x, a.y, a.a)
     for (const u of group) {
       u.v = u.t.speed * 0.6
+      if (a.rush) unfinished(u, a.rush.built, a.rush.left)
       if (field) {
         u.hull = Math.max(1, u.hull - u.hullMax * FIELD_DAMAGE)
         u.shield = 0
@@ -1535,6 +1561,9 @@ export function cantResearch(w: World, owner: Owner, id: string): string | null 
   if (!st || st.dead) return 'No station'
   const lock = researchLock(p, id)
   if (lock) return lock
+  // Research for a yard (Rushed construction) needs that yard standing.
+  const yard = id === LEVEL_UP ? undefined : UNIT[TECH[id].for]
+  if (yard?.tier === 'yard' && !w.units.some((u) => !u.dead && u.owner === owner && u.t.id === yard.id && !u.site)) return `Needs a ${WORKS_NAME[worksOf(yard)!]}`
   if (p.research.some((r) => r.id === id)) return 'Already in the queue'
   if (p.research.length >= MAX_RESEARCH) return 'Research queue full'
   if (p.credits < researchCost(p, id)!.cost) return 'Not enough credits'
@@ -1623,6 +1652,7 @@ function remod(w: World, u: Unit) {
   const shields = next.shield / u.mods.shield
   u.hullMax *= grow
   u.hull *= grow
+  if (u.rush) u.rush.gap *= grow
   u.mods = next
   u.shield = Math.min(shieldMax(u), u.shield * shields)
 }
@@ -1780,7 +1810,9 @@ export function cmdPlace(w: World, owner: Owner, ids: number[], unitId: string, 
 /** Why engineers of `owner` can't work on `t`, or null when they can: a construction site of ours,
  * or one of our finished structures with something to mend. */
 export function cantConstruct(w: World, owner: Owner, t: Unit | undefined): string | null {
-  if (!t || t.dead || t.owner !== owner || isShip(t.t) || w.byId.get(t.id) !== t) return 'Pick one of our structures'
+  if (!t || t.dead || t.owner !== owner || w.byId.get(t.id) !== t) return 'Pick one of our structures'
+  // A rush-launched warship: engineers finish it (see finishing).
+  if (isShip(t.t)) return t.rush ? null : 'Pick one of our structures'
   if (t.site) return null
   if (building(t)) return 'It is building itself'
   if (wear(t) < 0.002) return 'Nothing to repair'
@@ -1824,8 +1856,8 @@ function finishSite(w: World, t: Unit) {
   w.events.push({ k: 'built', owner: t.owner, unit: t.t.id, x: t.x, y: t.y })
 }
 
-/** Something for an idle engineer to do by itself near where it is: a site of ours being built,
- * else the most worn of our structures (a twentieth of it missing or more). Never where enemy
+/** Something for an idle engineer to do by itself near where it is: a site of ours being built (or a
+ * rush-launched warship of ours to finish), else the most worn of our structures (a twentieth of it missing or more). Never where enemy
  * warships or strike craft are in sight round it: unarmed crews don't fly into a fight unasked. */
 function jobNear(w: World, u: Unit): Unit | undefined {
   let best: Unit | undefined
@@ -1838,10 +1870,11 @@ function jobNear(w: World, u: Unit): Unit | undefined {
     return found
   }
   for (const t of w.units) {
-    if (t.dead || t.owner !== u.owner || isShip(t.t)) continue
+    if (t.dead || t.owner !== u.owner || (isShip(t.t) && !t.rush)) continue
     const dd = d2(t.x, t.y, u.x, u.y)
     let s = 0
-    if (t.site) s = dd < sq(rangeDist(1400)) ? 2 : 0
+    // A site, or a rush-launched warship to finish, first; then the most worn structure.
+    if (t.site || t.rush) s = dd < sq(rangeDist(1400)) ? 2 : 0
     else if (!building(t) && dd < sq(rangeDist(900))) {
       const need = wear(t)
       s = need >= 0.05 ? need : 0
@@ -1890,6 +1923,10 @@ function construction(w: World, dt: number) {
   }
   for (const [id, n] of crews) {
     const t = w.byId.get(id)!
+    if (t.rush) {
+      t.rush.work = true
+      continue
+    }
     const k = Math.min(n, ENGINEERS.crew)
     if (t.site) {
       t.site.started = true
@@ -1902,6 +1939,103 @@ function construction(w: World, dt: number) {
     t.hull = Math.min(t.hullMax, t.hull + (ENGINEERS.flat + ENGINEERS.share * t.hullMax) * k * dt)
     for (const h of t.hps) if (h.hp > 0 && h.hp < h.max) h.hp = Math.min(h.max, h.hp + h.max * ENGINEERS.share * k * dt)
     if (t.t.tier === 'station' || t.t.tier === 'yard') for (let i = 0; i < k; i++) rebuildModule(w, t, dt)
+  }
+}
+
+// --- Rush launch ------------------------------------------------------------------------------------------
+
+/** The rush launch's numbers in this battle: RUSH, or the dev cheats' (a local battle only). */
+export const rushRules = (w: World) => w.rushTune ?? RUSH
+
+/** How much of the ship a yard is working on is built (0-1), or -1 with nothing under way. */
+export const rushShare = (y: Unit) => (y.yq?.length ? Math.max(0, 1 - y.yq[0].left / Math.max(0.001, y.yq[0].total)) : -1)
+
+/** The most a unit's hull mends to: all of it, less what a rush launch left unbuilt (see Rush). */
+export const hullCap = (u: Unit) => u.hullMax - (u.rush?.gap ?? 0)
+
+/** Why yard `uid` can't rush-launch its ship now, or null when it can. */
+export function cantRush(w: World, owner: Owner, uid: number): string | null {
+  const y = w.byId.get(uid)
+  const p = w.players[owner]
+  if (!y || y.dead || y.owner !== owner || worksOf(y.t) !== 'cyard') return 'Only a Capital Yard can rush a launch'
+  if (!p.techs.includes(RUSH_TECH[p.faction])) return `Needs ${TECH[RUSH_TECH[p.faction]].name}`
+  if (y.site || building(y) || !y.yq?.length) return 'Nothing being built'
+  if (y.yq[0].reserve) return 'Built for the fleet inventory: it can\'t be rushed'
+  const rules = rushRules(w)
+  const share = rushShare(y)
+  if (share < rules.min) return `Not ${Math.round(rules.min * 100)}% built yet (${Math.floor(share * 100)}%)`
+  if ((y.rushAt ?? -Infinity) > w.time) return `Ready again in ${Math.ceil((y.rushAt ?? 0) - w.time)} s`
+  return null
+}
+
+/**
+ * Rush launch: the ship yard `uid` is building jumps out now, unfinished (see Rush and data.ts RUSH).
+ * The yard can't rush again for RUSH.cooldown seconds, and the next ship it starts goes slower.
+ */
+export function cmdRush(w: World, owner: Owner, uid: number): string | null {
+  const why = cantRush(w, owner, uid)
+  if (why) return why
+  const y = w.byId.get(uid)!
+  const p = w.players[owner]
+  const q = y.yq!.shift()!
+  const rules = rushRules(w)
+  const built = rushShare({ ...y, yq: [q] } as Unit)
+  p.stats.built++
+  y.rushAt = w.time + rules.cooldown
+  if (y.yq!.length) y.yq![0].slow = true
+  else y.slowNext = true
+  const rally = y.yr ?? p.rally
+  const at = yardSpot(w, owner, y, q.unit, rally)
+  // What was left of its build, at the yard's full pace.
+  warpIn(w, owner, q.unit, at.x, at.y, at.a, WARP_YARD, true, rally, { built, left: Math.max(0, q.left) })
+  w.events.push({ k: 'rushed', owner, unit: q.unit, x: y.x, y: y.y })
+  return null
+}
+
+/** A rush-launched ship as it drops out: `built` of its hull, no shields, and as many of its turrets
+ * and modules as are unbuilt not yet installed, the ones furthest aft first (they go on bow first). */
+function unfinished(u: Unit, built: number, left: number) {
+  const parts = u.t.hardpoints
+    .map((h, i) => ({ i, h }))
+    .filter(({ h }) => h.kind !== 'engine')
+    .sort((a, b) => b.h.y - a.h.y || a.h.x - b.h.x || a.i - b.i)
+  const n = Math.min(parts.length, Math.round(parts.length * (1 - built)))
+  const off = parts.slice(0, n).map((p) => p.i)
+  for (const i of off) u.hps[i].hp = 0
+  u.hull = Math.max(1, u.hullMax * built)
+  u.shield = 0
+  if (left <= 0) return
+  u.rush = { left, total: left, gap: u.hullMax - u.hull, parts: off.reverse(), n, work: false }
+}
+
+/**
+ * Rush-launched ships being finished: one with a Drydock, repair craft or engineers on it this tick
+ * gets on with its build at the build pace (however many of them there are), its unbuilt hull
+ * filling in as it goes and its parts going on one by one (whole); the rest wait. Finished, it is a
+ * ship like any other.
+ */
+function finishing(w: World, dt: number) {
+  for (const u of w.units) {
+    const r = u.rush
+    if (!r || u.dead) continue
+    if (!r.work) continue
+    r.work = false
+    const step = Math.min(r.left, dt)
+    const give = r.gap * (step / Math.max(step, r.left))
+    r.gap -= give
+    u.hull = Math.min(u.hullMax, u.hull + give)
+    r.left -= step
+    const still = r.left <= 1e-9 ? 0 : Math.ceil(r.n * (r.left / r.total))
+    while (r.parts.length > still) {
+      const i = r.parts.shift()!
+      u.hps[i].hp = u.hps[i].max
+      w.events.push({ k: 'installed', owner: u.owner, unit: u.id, x: u.x, y: u.y })
+    }
+    if (r.left <= 1e-9) {
+      u.hull = Math.min(u.hullMax, u.hull + r.gap)
+      delete u.rush
+      w.events.push({ k: 'finished', owner: u.owner, unit: u.id, x: u.x, y: u.y })
+    }
   }
 }
 
@@ -2164,7 +2298,8 @@ function gainXp(w: World, u: Unit, amount: number) {
     u.rank++
     const grow = (1 + RANK_BONUS * u.rank) / (1 + RANK_BONUS * (u.rank - 1))
     u.hullMax *= grow
-    u.hull = Math.min(u.hullMax, u.hull * grow + u.hullMax * 0.1)
+    if (u.rush) u.rush.gap *= grow
+    u.hull = Math.min(hullCap(u), u.hull * grow + u.hullMax * 0.1)
     w.events.push({ k: 'rankUp', owner: u.owner, unit: u.id, rank: u.rank, x: u.x, y: u.y })
   }
 }
@@ -3007,7 +3142,8 @@ function economy(w: World, dt: number) {
     const repair = moduleUp(st, 'dock') ? techBonus(p, st.t.id).repair : 0
     if (repair) dock(st.x, st.y, rangeDist(900), repair)
     if (w.hybrid) for (const y of w.units) if (!y.dead && y.owner === o && y.t.tier === 'yard' && expUp(y, 'drydock')) dock(y.x, y.y, radius(y.t) + MODULE_FX.reach, MODULE_FX.repair)
-    for (const [u, rate] of mend) u.hull = Math.min(u.hullMax, u.hull + u.hullMax * rate * dt)
+    if (w.hybrid) for (const y of w.units) if (!y.dead && y.owner === o && y.t.tier === 'yard' && expUp(y, 'drydock')) near(w, y.x, y.y, radius(y.t) + MODULE_FX.reach, (u) => u.rush && u.owner === o && (u.rush.work = true))
+    for (const [u, rate] of mend) u.hull = Math.min(hullCap(u), u.hull + u.hullMax * rate * dt)
     const q = p.queue[0]
     if (q) {
       q.left -= dt * (hangarsUp(st) ? 1 : 0.5)
@@ -3039,7 +3175,12 @@ function economy(w: World, dt: number) {
       if (y.dead || y.owner !== o || y.t.tier !== 'yard' || !y.yq?.length || building(y)) continue
       const slips = Math.min(y.yq.length, expUp(y, 'secondSlip') ? 2 : 1)
       const pace = dt * (moduleUp(y, 'dock') ? 1 : 0.5)
-      for (let i = 0; i < slips; i++) y.yq[i].left -= pace
+      // After a rush launch the next ship it starts goes slower (RUSH.slowdown).
+      if (y.slowNext) {
+        y.yq[0].slow = true
+        delete y.slowNext
+      }
+      for (let i = 0; i < slips; i++) y.yq[i].left -= y.yq[i].slow ? pace / (1 + rushRules(w).slowdown) : pace
       const done = y.yq.slice(0, slips).filter((q) => q.left <= 0)
       if (!done.length) continue
       y.yq = y.yq.filter((q) => !done.includes(q))
@@ -3435,7 +3576,8 @@ function fieldRepairs(w: World, dt: number) {
         continue
       }
       if (d2(t!.x, t!.y, u.x, u.y) > sq(mendReach(t!.t))) continue
-      t!.hull = Math.min(t!.hullMax, t!.hull + (FIELD_REPAIR.flat + FIELD_REPAIR.share * t!.hullMax) * dt)
+      t!.hull = Math.min(hullCap(t!), t!.hull + (FIELD_REPAIR.flat + FIELD_REPAIR.share * t!.hullMax) * dt)
+      if (t!.rush) t!.rush.work = true
       for (const h of t!.hps) if (h.hp > 0 && h.hp < h.max) h.hp = Math.min(h.max, h.hp + h.max * FIELD_REPAIR.share * dt)
       // Only the main station gets its shot-off modules rebuilt; ships keep theirs lost for now.
       if (t!.t.tier === 'station') rebuildModule(w, t!, dt)
@@ -3458,12 +3600,12 @@ function tenders(w: World, dt: number) {
     const team = w.players[u.owner].team
     const hurt: Unit[] = []
     near(w, u.x, u.y, sp.range, (o) => {
-      if (o !== u && !o.dead && isShip(o.t) && w.players[o.owner].team === team && o.hull < o.hullMax) hurt.push(o)
+      if (o !== u && !o.dead && isShip(o.t) && w.players[o.owner].team === team && o.hull < hullCap(o)) hurt.push(o)
     })
     hurt.sort((a, b) => a.hull / a.hullMax - b.hull / b.hullMax)
     const rate = sp.repair * (1 + (techBonus(w.players[u.owner], u.t.id).repair ?? 0)) * dt
     for (const o of hurt.slice(0, sp.max)) {
-      o.hull = Math.min(o.hullMax, o.hull + rate)
+      o.hull = Math.min(hullCap(o), o.hull + rate)
       u.mending.push(o.id)
     }
   }
@@ -3505,6 +3647,7 @@ export function tick(w: World, dt = STEP) {
   tenders(w, dt)
   fieldRepairs(w, dt)
   construction(w, dt)
+  finishing(w, dt)
   if (w.hybrid) expansions(w, dt)
   wings(w, dt)
   findSpotGroups(w)
@@ -3524,7 +3667,7 @@ export function tick(w: World, dt = STEP) {
     if (u.abilityCd > 0) u.abilityCd -= dt
     if (u.abilityOn > 0) {
       u.abilityOn -= dt
-      if (u.t.ability === 'repairSwarm') u.hull = Math.min(u.hullMax, u.hull + u.hullMax * 0.03 * dt)
+      if (u.t.ability === 'repairSwarm') u.hull = Math.min(hullCap(u), u.hull + u.hullMax * 0.03 * dt)
     }
     if (u.slow > 0) u.slow -= dt
     // Shields recharge, faster once out of the fight for a few seconds; terrain can stop that, and
@@ -3748,6 +3891,13 @@ export function stateHash(w: World): number {
       num(u.building)
       int(u.yq?.length ?? -1)
     }
+    // A rush-launched ship still being finished, and a yard's rush cooldown.
+    if (u.rush) {
+      num(u.rush.left)
+      num(u.rush.gap)
+      int(u.rush.parts.length)
+    }
+    if (u.rushAt !== undefined) num(u.rushAt)
     // Expansions built and under way on a Command Station or a yard.
     if (u.xm || u.xq) {
       int(u.xm?.length ?? -1)
