@@ -222,6 +222,14 @@ export const subscribeDirs = (l: () => void) => {
   return () => void dirListeners.delete(l)
 }
 
+/**
+ * Asks for a folder again while its listing stays on screen until the new one arrives (refreshDirs
+ * drops it first, which empties whatever shows it for a moment).
+ */
+export function revalidateDir(path: string) {
+  if (!dirCache.get(path)?.loading) fetchDir(path)
+}
+
 /** Lists again: the folder itself, or everything under a library or path prefix. */
 export function refreshDirs(prefix: string) {
   for (const key of [...dirCache.keys()]) if (key === prefix || key.startsWith(prefix.endsWith('/') ? prefix : prefix + '/')) dirCache.delete(key)
