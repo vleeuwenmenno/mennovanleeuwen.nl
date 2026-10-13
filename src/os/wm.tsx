@@ -1,4 +1,5 @@
 import { snapReserve } from './dockPrefs'
+import { persistentProps } from './windowProps'
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
 import { appHere } from './cvMode'
 import { synced } from './synced'
@@ -198,9 +199,6 @@ function migrate(w: SavedWindow): SavedWindow {
   return (w.app as string) === 'sticky' ? { ...w, app: 'widget', props: { kind: 'sticky', id: w.props.id } } : w
 }
 
-/** Props that only make sense once: commands to run, "open this now" stamps, placement hints. */
-const TRANSIENT_PROPS = new Set(['run', 't', 'under', 'create', 'unsaved'])
-
 type LayoutStore = ReturnType<typeof synced<SavedWindow[] | null>>
 let layout: LayoutStore | null = null
 /** The saved layout for the kind of screen this page loaded on (null: the opening layout). It
@@ -228,7 +226,7 @@ function serialize(windows: WinState[]): SavedWindow[] {
       restore: w.restore,
       stack: w.stack,
       ws: workspaceOf(w) ?? undefined,
-      props: Object.fromEntries(Object.entries(w.props).filter(([k, v]) => v !== undefined && !TRANSIENT_PROPS.has(k))),
+      props: persistentProps(w.app, w.props),
     }))
 }
 
@@ -236,7 +234,7 @@ function serialize(windows: WinState[]): SavedWindow[] {
  * their pid, so their app keeps running (a terminal keeps its history) and just moves. */
 function restored(saved: SavedWindow[], current: WinState[] = [], ws = 1): State {
   const unused = current.slice()
-  const key = (w: { app: AppId; props: WinState['props'] }) => `${w.app}|${JSON.stringify(Object.entries(w.props).filter(([k, v]) => v !== undefined && !TRANSIENT_PROPS.has(k)).sort())}`
+  const key = (w: { app: AppId; props: WinState['props'] }) => `${w.app}|${JSON.stringify(Object.entries(persistentProps(w.app, w.props)).sort())}`
   let pid = Math.max(100, ...current.map((w) => w.pid + 1))
   let z = 10
   const windows: WinState[] = saved.map((w) => {
@@ -244,7 +242,7 @@ function restored(saved: SavedWindow[], current: WinState[] = [], ws = 1): State
     const same = i >= 0 ? unused.splice(i, 1)[0] : null
     const want = { x: w.x, y: w.y, w: w.w, h: w.h }
     w = { ...w, ws: NOTE_APPS.has(w.app) ? undefined : Math.min(WORKSPACES, Math.max(1, Math.round(w.ws ?? 1))) }
-    return same ? { ...same, ...w, want, props: same.props, pid: same.pid, z: ++z } : { ...w, want, props: { ...w.props }, pid: pid++, z: ++z, openedAt: Date.now() }
+    return same ? { ...same, ...w, want, props: same.props, pid: same.pid, z: ++z } : { ...w, want, props: persistentProps(w.app, w.props), pid: pid++, z: ++z, openedAt: Date.now() }
   })
   const view = { ws, phone: isPhone() }
   return { windows, nextPid: pid, topZ: z, touched: true, focused: topShown(view, windows)?.pid ?? null, ...view, edits: 0, away: [], unplaced: null }
