@@ -395,6 +395,25 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   // Dev builds expose the battle for poking at from the console.
   if (import.meta.env.DEV) (window as unknown as { __ew: unknown }).__ew = { world: world.current, brains: brains.current, cam: cam.current }
   const selected = useRef(new Set<number>(resumed.current && resume ? resume.sel : []))
+  // Dev builds only: the cheat panel (empires/devCheats.tsx), loaded on demand and never in a
+  // multiplayer battle. The branch is gone from a production build, and the module with it.
+  const [dev, setDev] = useState<typeof import('./empires/devCheats') | null>(null)
+  const devRef = useRef(dev)
+  devRef.current = dev
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      if (online) return
+      let live = true
+      void import('./empires/devCheats').then((m) => {
+        if (!live) return
+        ;(window as unknown as { __ewDev: unknown }).__ewDev = m
+        setDev(m)
+      })
+      return () => {
+        live = false
+      }
+    }
+  }, [])
   const groups = useRef(new Map<string, number[]>(resumed.current && resume ? resume.groups : []))
   const mode = useRef<Mode>('normal')
   /** Hybrid bases: the yard being placed ('place' mode), the engineers who will build it, and on
@@ -1263,9 +1282,10 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       } else if (!paused.current && !deploying.current && w.winner === -1) {
         acc += dt * speed.current
         let steps = 0
-        while (acc >= STEP && steps < 12) {
+        while (acc >= STEP && steps < (speed.current > 4 ? 24 : 12)) {
           for (const b of brains.current) (w.fleet ? fleetThink : think)(w, b, STEP)
           tick(w)
+          if (import.meta.env.DEV) devRef.current?.afterTick(w, me)
           events.push(...w.events)
           w.events.length = 0
           acc -= STEP
@@ -1412,6 +1432,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         bars: settingsRef.current.bars,
         rings: settingsRef.current.rings,
         fogGrid: settingsRef.current.fogGrid,
+        reveal: import.meta.env.DEV ? devRef.current?.cheats.reveal : undefined,
         turretPick: turretPick.current && selected.current.has(turretPick.current.unit) ? turretPick.current : null,
         selected: selected.current,
         hover: h.unit,
@@ -2171,6 +2192,23 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           onWheel={onWheel}
         />
 
+        {import.meta.env.DEV && dev && !online && (
+          <dev.DevCheats
+            ctx={{
+              world: () => world.current,
+              me,
+              names: seats.map((x) => x.name),
+              selected: () => selected.current,
+              canvas: () => canvas.current,
+              toWorld,
+              camera: () => ({ x: cam.current.x, y: cam.current.y }),
+              setSpeed,
+              speed: () => speed.current,
+              focused: () => focusedRef.current,
+              toast,
+            }}
+          />
+        )}
         <TopBar hud={hud} faction={myFaction} sector={sector} ui={ui} onShipyard={selectStation} onYard={selectOne} onPause={online ? undefined : togglePause} onSpeed={online ? undefined : setSpeed}
           onMenu={() => (ui.menu ? closeMenu() : openMenu())}
           onTechTree={() => setTree(!ui.tree)}

@@ -51,6 +51,8 @@ export type View = {
   rings: boolean
   /** The fog grid overlay (F2): where our sight ends, cell by cell. */
   fogGrid?: boolean
+  /** Dev cheat: no fog of war. */
+  reveal?: boolean
   /** A structure's gun picked by clicking it, ringed. */
   turretPick?: { unit: number; hp: number } | null
   selected: Set<number>
@@ -1271,7 +1273,7 @@ export class Renderer {
     const f = this.fog.getContext('2d')!
     f.globalCompositeOperation = 'source-over'
     f.clearRect(0, 0, fw, fh)
-    f.fillStyle = 'rgba(2,4,12,0.55)'
+    f.fillStyle = view.reveal ? 'rgba(2,4,12,0)' : 'rgba(2,4,12,0.55)'
     f.fillRect(0, 0, fw, fh)
     f.globalCompositeOperation = 'destination-out'
     for (const u of w.units) {
