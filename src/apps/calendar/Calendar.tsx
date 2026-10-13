@@ -5,6 +5,7 @@ import {
   deleteEvent,
   fetchEvents,
   isShown,
+  knownUids,
   reloadCalendars,
   setCalendarShown,
   setLastCalendar,
@@ -19,7 +20,9 @@ import {
   type CalendarInfo,
 } from '../../data/calendar'
 import { openContact, useContacts } from '../../data/contacts'
-import { readBytes } from '../../data/fileOps'
+import { blobText } from '../../data/decodeText'
+import { importFileOf } from '../../data/fileOps'
+import { takeImport, isIcsName, type ImportFile } from '../../data/pimFiles'
 import { openLink } from '../../data/links'
 import { composeMail } from '../../data/mail'
 import { completeTask, deleteTask, openTask, setTaskPrefs, updateTask, useTaskPrefs, useTasks } from '../../data/tasks'
@@ -30,7 +33,7 @@ import { useDropTarget } from '../../os/dnd'
 import { notify } from '../../os/notify'
 import { useWM, type WinState } from '../../os/wm'
 import { BIRTHDAY_COLOR, BIRTHDAYS, birthdayEvents, isBirthdayEvent } from './birthdays'
-import { parseIcs, type IcsEvent } from './ics'
+import { explainIcs, readIcs, type IcsEvent } from './ics'
 import { isTaskEvent, taskEvents } from './tasks'
 import '../tasks/tasks.css'
 import { draftFromEvent, draftFromRange, EventEditor, type Choose, type Draft } from './EventEditor'
@@ -46,7 +49,8 @@ import { dayLoad, MiniMonth, YearView } from './YearView'
 // the sidebar are the same switches as in Settings → Apps → Calendar. Tasks with a due date show too
 // (src/apps/calendar/tasks.ts), per list as switched on under Tasks in the sidebar: tick them
 // there, drag them to another day or time, open them in the Tasks app. So do your contacts'
-// birthdays (src/apps/calendar/birthdays.ts), and .ics files dropped on it are imported.
+// birthdays (src/apps/calendar/birthdays.ts), and .ics files dropped on it or opened in it are
+// imported (props.import takes them: src/data/pimFiles.ts), skipping events it has already.
 //
 // props.date ("2026-10-09") and props.view open it on a day (from the clock's month), props.event
 // with an iCalendar UID opens that event there (an invitation in Mail), and props.compose takes a
@@ -315,12 +319,15 @@ export function CalendarApp({ win }: { win: WinState }) {
     openContextMenu(ev, items)
   }
 
-  // .ics files dropped on the calendar: their events, shown first, imported into the calendar picked.
-  const importIcs = async (files: { name: string; blob: Blob }[]) => {
+  // .ics files dropped on the calendar (from the computer, Files or the desktop) or opened in it:
+  // their events, shown first, imported into the calendar picked. What the picked calendar has
+  // already (the same UID) is skipped, so the same file can be imported twice.
+  const importIcs = async (files: { name: string; text: string }[]) => {
     const found: IcsEvent[] = []
-    for (const f of files) found.push(...parseIcs(await f.blob.text()))
-    if (!found.length) return notify({ title: 'Nothing to import', body: files.length === 1 ? `${files[0].name} has no events` : 'Those files have no events', transient: true })
-    if (!writable.length) return notify({ title: 'No calendar to import into', body: 'Connect a calendar that can be written to first', transient: true })
+    const reports = files.map((f) => readIcs(f.text))
+    for (const r of reports) found.push(...r.events)
+    if (!found.length) return notify({ title: 'Nothing to import', body: explainIcs(files.map((f) => f.name), reports), transient: true })
+    if (!writable.length) return notify({ title: 'No calendar to import into', body: 'Connect a calendar that can be written to first', action: { app: 'settings', props: { section: 'integrations', sub: 'calendars' } }, transient: true })
     let target = defaultCalendar()
     const when = (x: IcsEvent) => (x.allDay ? new Date(`${x.start}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : new Date(x.start).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }))
     const answer = await askWith({
@@ -350,7 +357,7 @@ export function CalendarApp({ win }: { win: WinState }) {
               ))}
             </select>
           </label>
-          <p className="muted">Guests are left out, so nobody is sent an invitation.</p>
+          <p className="muted">Guests are left out, so nobody is sent an invitation. Events the calendar has already are skipped.</p>
         </div>
       ),
       buttons: [
@@ -359,9 +366,29 @@ export function CalendarApp({ win }: { win: WinState }) {
       ],
     })
     if (answer !== 'import') return
+    // Skip what the calendar has (by UID); when that can't be told, import everything.
+    let known = new Set<string>()
+    let unchecked = false
+    const uids = found.flatMap((x) => (x.uid ? [x.uid] : []))
+    if (uids.length)
+      try {
+        known = new Set(await knownUids(target, uids))
+      } catch {
+        unchecked = true
+      }
+    const seen = new Set<string>()
+    const fresh = found.filter((x) => {
+      if (!x.uid) return true
+      if (known.has(x.uid) || seen.has(x.uid)) return false
+      seen.add(x.uid)
+      return true
+    })
+    const skipped = found.length - fresh.length
+    const calendarName = writable.find((c) => c.id === target)?.name
+    if (!fresh.length) return notify({ title: 'Nothing new to import', body: `${skipped === 1 ? 'That event is' : `All ${skipped} events are`} in ${calendarName ?? 'the calendar'} already`, transient: true })
     let done = 0
     const failed: string[] = []
-    for (const x of found) {
+    for (const x of fresh) {
       try {
         await createEvent(target, x)
         done++
@@ -370,20 +397,35 @@ export function CalendarApp({ win }: { win: WinState }) {
       }
     }
     setLastCalendar(target)
-    if (found[0]) setAnchor(startOfDay(new Date(found[0].allDay ? `${found[0].start}T00:00:00` : found[0].start)))
-    notify({ title: done === 1 ? 'Imported 1 event' : `Imported ${done} events`, body: failed.length ? `Not imported: ${failed.slice(0, 3).join('; ')}` : writable.find((c) => c.id === target)?.name, transient: !failed.length })
+    setAnchor(startOfDay(new Date(fresh[0].allDay ? `${fresh[0].start}T00:00:00` : fresh[0].start)))
+    const notes = [skipped ? `${skipped} skipped, already in ${calendarName ?? 'the calendar'}` : '', unchecked ? 'Could not check for events already there' : '', failed.length ? `Not imported: ${failed.slice(0, 3).join('; ')}` : '']
+    notify({ title: done === 1 ? 'Imported 1 event' : `Imported ${done} events`, body: [calendarName, ...notes].filter(Boolean).join(' · '), transient: !failed.length && !skipped && !unchecked })
   }
-  const isIcs = (name: string) => /\.(ics|ical|ifb|icalendar)$/i.test(name)
+  const textsOf = (files: ImportFile[]) => Promise.all(files.map(async (f) => ({ name: f.name, text: await blobText(await f.read()) })))
+
+  // Opened on files (Files, the desktop, the terminal, Spotlight, Mail): once the calendars are in,
+  // the same import as for a drop. With no calendar linked it waits, and the empty view says so.
+  const [queued, setQueued] = useState<ImportFile[] | null>(null)
+  useEffect(() => {
+    const files = takeImport(win.props.import)
+    if (files) setQueued(files)
+  }, [win.props.t]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!queued || !calendars) return
+    setQueued(null)
+    void textsOf(queued).then(importIcs).catch((e: Error) => notify({ title: 'Could not read the file', body: e.message, transient: true }))
+  }, [queued, calendars]) // eslint-disable-line react-hooks/exhaustive-deps
+
   useDropTarget(
     rootRef,
     {
-      accept: (d) => (d.os || d.items.some((i) => i.kind === 'file' && !i.dir && isIcs(i.name)) ? 'copy' : null),
+      accept: (d) => (d.os || d.items.some((i) => i.kind === 'file' && !i.dir && isIcsName(i.name)) ? 'copy' : null),
       drop: async (d) => {
-        const files: { name: string; blob: Blob }[] = []
-        if (d.os) for (const p of await d.files()) if (isIcs(p.file.name) || p.file.type === 'text/calendar') files.push({ name: p.file.name, blob: p.file })
-        for (const i of d.items) if (i.kind === 'file' && !i.dir && isIcs(i.name)) files.push({ name: i.name, blob: await readBytes(i.path) })
+        const files: ImportFile[] = []
+        if (d.os) for (const p of await d.files()) if (isIcsName(p.file.name) || p.file.type === 'text/calendar') files.push({ name: p.file.name, read: async () => p.file })
+        for (const i of d.items) if (i.kind === 'file' && !i.dir && isIcsName(i.name)) files.push(importFileOf(i.path))
         if (!files.length) return notify({ title: 'Only .ics files can be imported', transient: true })
-        await importIcs(files).catch((e: Error) => setError(e.message))
+        await textsOf(files).then(importIcs).catch((e: Error) => setError(e.message))
       },
     },
     connected,
@@ -420,6 +462,11 @@ export function CalendarApp({ win }: { win: WinState }) {
             </>
           ) : (
             <>
+              {queued && (
+                <p className="ca-empty-note">
+                  <strong>{queued.length === 1 ? queued[0].name : `${queued.length} files`}</strong> can be imported once a calendar is linked: connect one below (Integrations), and the import starts.
+                </p>
+              )}
               <p className="muted">Connect Google Calendar, Fastmail or another CalDAV calendar to see and plan your days here.</p>
               <div className="ca-connect">
                 {account.googleEnabled && (
@@ -428,7 +475,7 @@ export function CalendarApp({ win }: { win: WinState }) {
                   </button>
                 )}
                 <button className="btn" onClick={() => wm.open('settings', { section: 'integrations', sub: 'calendars', t: String(Date.now()) })}>
-                  Fastmail / CalDAV…
+                  {queued ? 'Integrations…' : 'Fastmail / CalDAV…'}
                 </button>
               </div>
             </>

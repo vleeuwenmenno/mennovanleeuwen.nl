@@ -9,6 +9,7 @@ import { addWidgetItems } from '../widgets/registry'
 import { projects } from '../data/profile'
 import { HOME, kindOfName, type FileKind } from '../terminal/vfs'
 import { pickAndUpload } from '../data/uploads'
+import { isIcsName, isVcfName } from '../data/pimFiles'
 import { getClipboard, setClipboard, openSeafile, refreshDirs, revalidateDir, setSeafilePrefs, useDir, useSeafileHome, useSeafilePrefs } from '../data/seafile'
 import { deleteNoteFor as deleteNote, downloadFile as download, makeFile as createFile, makeFolder as mkdir, removePaths as deleteItems, renamePath as renameItem, transferPaths as transferItems } from '../data/fileOps'
 import { dropIntoFolder, folderOp, undoLastMove, type Landed } from '../data/fileDrop'
@@ -543,6 +544,8 @@ export function Desktop() {
               {
                 label: 'Open with',
                 submenu: [
+                  ...(isIcsName(icon.path) ? [{ label: 'Calendar', onSelect: () => void openSeafile(wm, icon.path, { how: 'calendar' }) }] : []),
+                  ...(isVcfName(icon.path) ? [{ label: 'Contacts', onSelect: () => void openSeafile(wm, icon.path, { how: 'contacts' }) }] : []),
                   { label: 'Zed', onSelect: () => void openSeafile(wm, icon.path, { how: 'zed' }) },
                   { label: 'Viewer', onSelect: () => void openSeafile(wm, icon.path, { how: 'viewer' }) },
                   { label: 'Preview', onSelect: () => void openSeafile(wm, icon.path, { how: 'preview' }) },

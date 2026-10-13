@@ -359,9 +359,9 @@ export async function addContact(partial: Partial<ContactFields> & { email?: str
   return createContact(opts.book ?? bookForNew(), fields, { groups: opts.groups })
 }
 
-/** Cards from a .vcf (its text) into a book. */
-export async function importVcf(book: string, text: string): Promise<{ added: number; updated: number; failed: string[] }> {
-  const r = await api<{ added: number; updated: number; failed: string[] }>('/api/contacts/import', { method: 'POST', json: { book, text } })
+/** Cards from a .vcf (its text) into a book; cards the book has already (by UID, or by name and email) are skipped. */
+export async function importVcf(book: string, text: string): Promise<{ added: number; updated: number; skipped: number; failed: string[] }> {
+  const r = await api<{ added: number; updated: number; skipped: number; failed: string[] }>('/api/contacts/import', { method: 'POST', json: { book, text, skipDuplicates: true } })
   await loadContacts(true)
   return r
 }

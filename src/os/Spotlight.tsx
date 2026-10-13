@@ -5,6 +5,8 @@ import { MarkdownPreview } from '../apps/Zed'
 import { isCodeQuery, type BranchHit, type Hit, type IssueHit, type RepoHit } from '../data/code'
 import { forgetHit, hitKey, rememberHit, useRecentHits, weight } from '../data/spotlightRecent'
 import { faviconOf, launch, launcherImage, useLaunchers } from '../data/launchers'
+import { importFileOf } from '../data/fileOps'
+import { openImport, pimAppFor } from '../data/pimFiles'
 import { createNote, noteTitle, NOTE_COLORS, useAllNotes } from '../data/notes'
 import { addWidget, widgetDefs } from '../widgets/registry'
 import { ENGINES, searchWeb, useSearchSettings, useSuggestions } from '../data/searchEngine'
@@ -814,6 +816,7 @@ export function Spotlight() {
           if (node.open?.url) openLink(node.open.url)
           else if (node.open?.app) wm.open(node.open.app as AppId, node.open.props)
           else if (name.endsWith('.md')) wm.open('zed', { path, view: 'preview', t: String(Date.now()) })
+          else if (pimAppFor(name)) openImport(pimAppFor(name)!, [importFileOf(path)])
           else wm.openNew(MEDIA_APP[fileKind(node)] ?? 'viewer', { path })
         },
         alt: { label: 'Open in terminal', run: () => term(`cat ${prettyPath(path)}`, true) },

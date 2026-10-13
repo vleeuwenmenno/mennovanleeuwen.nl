@@ -5,6 +5,7 @@ import type { AppId, WinState } from '../os/wm'
 import { kindOfName, type FileKind } from '../terminal/vfs'
 import { seafileHome, setHomeMount, setPlaceMount, useMounts } from './mounts'
 import { isArchive } from './archive'
+import { openImport, pimAppFor } from './pimFiles'
 
 export { useSeafileHome } from './mounts'
 
@@ -434,11 +435,14 @@ export async function download(path: string) {
  * Opens a Seafile path the way Files and the desktop do: folders in Files, text and code in Zed,
  * pictures in Preview, video in Player, music in Omamp, PDFs in PDF; anything else downloads.
  */
-export function openSeafile(wm: Opener, path: string, opts: { dir?: boolean; how?: 'default' | 'zed' | 'viewer' | 'preview' | 'player' | 'amp' | 'pdf' | 'office' | 'archive' } = {}): Promise<void> {
+export function openSeafile(wm: Opener, path: string, opts: { dir?: boolean; how?: 'default' | 'zed' | 'viewer' | 'preview' | 'player' | 'amp' | 'pdf' | 'office' | 'archive' | 'calendar' | 'contacts' } = {}): Promise<void> {
   const name = path.split('/').pop() ?? ''
   const kind: FileKind = kindOfName(name, opts.dir)
   const how = opts.how ?? 'default'
   if (kind === 'folder') return Promise.resolve(wm.openNew('files', { path }))
+  // Calendar and address-book files go to the apps that import them, as when dropped there.
+  const pim = how === 'default' ? pimAppFor(name) : how === 'calendar' || how === 'contacts' ? how : null
+  if (pim) return Promise.resolve(openImport(pim, [{ name, read: () => readBlob(path) }]))
   if (how === 'zed' || (how === 'default' && (kind === 'text' || kind === 'markdown'))) return Promise.resolve(wm.open('zed', { path, view: kind === 'markdown' ? 'preview' : undefined, t: String(Date.now()) }))
   if (how === 'preview' || (how === 'default' && kind === 'image')) return Promise.resolve(wm.openNew('preview', { path }))
   if (how === 'amp' || (how === 'default' && kind === 'audio')) return Promise.resolve(wm.openNew('amp', { path, t: String(Date.now()) }))

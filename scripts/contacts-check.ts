@@ -319,11 +319,15 @@ try {
   check('import: a card without UID got one', all.contacts.some((c) => c.fn === 'Without Uid' && c.uid.length > 10))
   r = await call('/api/contacts/import', { method: 'POST', body: { book: 'local', text: vcf.replace('X-OLD-PHONE:keep', `UID:${jorg!.uid}\r\nX-OLD-PHONE:again`) } })
   check('import again: the same UID replaces the card', r.json?.updated === 1 && r.json.added === 1)
+  r = await call('/api/contacts/import', { method: 'POST', body: { book: 'local', text: vcf.replace('X-OLD-PHONE:keep', `UID:${jorg!.uid}\r\nX-OLD-PHONE:keep`), skipDuplicates: true } })
+  check('import skipping duplicates: the UID the book has, and the same name and email with no UID, are skipped', r.json?.skipped === 2 && r.json.added === 0 && r.json.updated === 0)
   r = await call('/api/contacts/export?book=local')
   check('export: a .vcf with every card of the book, unknown properties kept', r.status === 200 && /text\/vcard/.test(r.type ?? '') && (r.text.match(/BEGIN:VCARD/g) ?? []).length === 4 && r.text.includes('X-OLD-PHONE:again'))
   r = await call(`/api/contacts/export?ids=${encodeURIComponent(jane.id)}`)
   check('export: one CardDAV contact as stored', (r.text.match(/BEGIN:VCARD/g) ?? []).length === 1 && r.text.includes('X-UNKNOWN-THING'))
 
+  r = await call('/api/contacts/import', { method: 'POST', body: { book: 'local', text: '\uFEFFbegin:vcard\r\nversion:3.0\r\nfn:Unclosed Una\r\nemail:una@example.com\r\n' } })
+  check('import: a card that never closes is taken as it is', r.json?.added === 1 && (await list()).contacts.some((c) => c.fn === 'Unclosed Una' && c.emails[0]?.value === 'una@example.com'))
   r = await call('/api/contacts/move', { method: 'POST', body: { id: larry.id, book: personal.id } })
   check('move: from this site to the CardDAV book', r.status === 200 && r.json.book === personal.id && store.has(`${BOOK}${larry.uid}.vcf`) && !(await list()).contacts.some((c) => c.id === larry.id))
 

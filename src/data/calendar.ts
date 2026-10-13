@@ -153,7 +153,7 @@ export function useShownCalendarIds(): string[] | null {
 // Changes, from the Calendar app. Google and CalDAV send invitations to the guests themselves.
 
 /** A new or changed event: ISO times, or "YYYY-MM-DD" dates when all day (end exclusive). */
-export type EventInput = { title: string; start: string; end: string; allDay: boolean; location?: string; description?: string; attendees?: string[]; recurrence?: string }
+export type EventInput = { title: string; start: string; end: string; allDay: boolean; location?: string; description?: string; attendees?: string[]; recurrence?: string; /** An imported event's own iCalendar UID, kept so the same file is recognised again. */ uid?: string }
 
 const timeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone
 
@@ -165,6 +165,9 @@ async function change(method: 'POST' | 'PATCH' | 'DELETE', body: Record<string, 
     calendarChanged()
   }
 }
+
+/** Which of these iCalendar UIDs the calendar has already (an import skips those). */
+export const knownUids = (calendar: string, uids: string[]) => api<{ known: string[] }>('/api/calendar/known', { method: 'POST', json: { calendar, uids } }).then((r) => r.known)
 
 export const createEvent = (calendar: string, event: EventInput) => change('POST', { calendar, event: { ...event, timeZone: timeZone() } })
 

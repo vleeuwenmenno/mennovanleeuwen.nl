@@ -25,6 +25,8 @@ import { followGoLink, golinksSite, golinksTemplate, golinksUrl, maskGolinks, pa
 import { age, dynamic, fileKind, HOME, lookup as siteLookup, prettyPath, resolvePath, type DirNode, type Node } from './vfs'
 import { lookup, makeDir, removePath, touchFile, transfer, walk, writeFile } from './fs'
 import { openSeafile } from '../data/seafile'
+import { importFileOf } from '../data/fileOps'
+import { openImport, pimAppFor } from '../data/pimFiles'
 import { manPages, mountCommands } from './mount'
 import { nanoCommands } from './nano'
 import { skillsCommands } from './skills'
@@ -818,6 +820,11 @@ export const commands: Record<string, Command> = {
           launch(l, { open: (app, props) => ctx.openApp(app, props as Record<string, string>) })
           return l.app ? undefined : `Opening ${link(l.url)}`
         }
+      }
+      // Calendar and address-book files import into Calendar and Contacts, from Seafile or the browser's own files.
+      if (node?.type === 'file' && pimAppFor(node.name)) {
+        openImport(pimAppFor(node.name)!, [importFileOf(abs)])
+        return
       }
       // A file in Seafile opens the way Files would open it (PDF, Preview, Zed…).
       if (node?.type === 'file' && node.sf) {
