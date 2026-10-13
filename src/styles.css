@@ -4661,6 +4661,199 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
 .fm-main:focus-within {
   border-color: var(--accent);
 }
+/* The preview pane on the right of the list (FilesPreview.tsx), resized with the splitter beside it. */
+.fm-pv-split {
+  flex: none;
+  position: relative;
+  z-index: 1;
+  width: 6px;
+  margin: 0 -3px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.fm-pv-split::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  transition: background 0.12s;
+}
+.fm-pv-split:hover::after,
+.fm-pv-split:focus-visible::after,
+.fm-pv-split.is-dragging::after {
+  background: var(--accent);
+}
+.fm-pv-split:focus-visible {
+  outline: none;
+}
+.fm-pv {
+  flex: none;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-dark);
+  color: var(--fg);
+}
+.fm-pv-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.fm-pv-stage {
+  flex: 1 1 auto;
+  min-height: 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px;
+  overflow: auto;
+}
+.fm-pv-stage.is-doc {
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 0;
+}
+.fm-pv-stage.is-icon {
+  flex: 0 1 auto;
+  padding: 28px 14px 10px;
+}
+.fm-pv-trash {
+  font-size: 64px;
+  line-height: 1;
+  opacity: 0.7;
+}
+.fm-pv-img,
+.fm-pv-video,
+.fm-pv-pdf {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  min-height: 0;
+  object-fit: contain;
+  background: var(--bg);
+}
+.fm-pv-img {
+  /* A checkerboard behind transparent pictures. */
+  background: repeating-conic-gradient(color-mix(in srgb, var(--fg) 7%, transparent) 0% 25%, transparent 0% 50%) 50% / 16px 16px;
+}
+.fm-pv-pdf {
+  width: 100%;
+  height: auto;
+  background: #fff;
+  box-shadow: 0 2px 10px -4px rgba(0, 0, 0, 0.4);
+}
+.fm-pv-video {
+  width: 100%;
+  background: #000;
+}
+.fm-pv-audio {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.fm-pv-audio audio {
+  width: 100%;
+}
+.fm-pv-md.zed-preview,
+.fm-pv-code.zed-preview {
+  flex: 1;
+  padding: 12px 14px 18px;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow: visible;
+}
+.fm-pv-code pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.fm-pv-cut {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-style: italic;
+  font-family: inherit;
+}
+.fm-pv-hint {
+  margin: 0;
+  color: var(--muted);
+  text-align: center;
+}
+.fm-pv-zip {
+  list-style: none;
+  margin: 0;
+  padding: 8px 6px;
+}
+.fm-pv-zip li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+}
+.fm-pv-zip li.fm-pv-cut,
+.fm-pv-zip li.fm-pv-hint {
+  display: block;
+}
+.fm-pv-zip-icon {
+  display: grid;
+  place-items: center;
+}
+.fm-pv-zip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fm-pv-zip-size {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.fm-pv-info {
+  flex: none;
+  padding: 12px 14px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 10%, transparent);
+}
+.fm-pv-stage.is-icon + .fm-pv-info {
+  border-top: 0;
+  text-align: center;
+}
+.fm-pv-name {
+  display: block;
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}
+.fm-pv-info dl {
+  margin: 0;
+  display: grid;
+  gap: 4px;
+  text-align: left;
+}
+.fm-pv-info dl div {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 8px;
+}
+.fm-pv-info dt {
+  color: var(--muted);
+}
+.fm-pv-info dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.fm-pv-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+.fm-pv-stage.is-icon + .fm-pv-info .fm-pv-actions {
+  justify-content: center;
+}
 .fm-item {
   position: relative;
   border: 1px solid transparent;
@@ -4810,7 +5003,6 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
 .fm-list-head,
 .fm-view-list .fm-item {
   display: grid;
-  grid-template-columns: calc(var(--icon) + 8px) minmax(0, 1fr) 90px 140px 90px;
   align-items: center;
   gap: 8px;
   padding: 4px 12px;
@@ -4819,7 +5011,6 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
   position: sticky;
   top: 0;
   z-index: 1;
-  grid-template-columns: minmax(0, 1fr) 90px 140px 90px;
   padding-left: calc(32px + var(--icon));
   background: var(--bg);
   border-bottom: 1px solid var(--line);
@@ -4827,7 +5018,11 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
   color: var(--muted);
 }
 .fm-list-head button {
+  min-width: 0;
   text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .fm-list-head button.is-sorted {
   color: var(--fg);
@@ -5045,15 +5240,55 @@ button.fm-dd-row:hover {
   .fm-side {
     display: none;
   }
+}
+/* The list's columns go by the list's own width (the window and the preview pane both change it),
+   not the screen's: Name keeps at least 160px, and Type, then Modified, then Size make way. */
+.fm-view-list {
+  container: fm-list / inline-size;
+}
+.fm-list-head,
+.fm-view-list .fm-item {
+  grid-template-columns: calc(var(--icon) + 8px) minmax(160px, 1fr) 90px 140px 90px;
+}
+.fm-list-head {
+  grid-template-columns: minmax(160px, 1fr) 90px 140px 90px;
+}
+@container fm-list (max-width: 600px) {
   .fm-list-head,
   .fm-view-list .fm-item {
-    grid-template-columns: calc(var(--icon) + 8px) minmax(0, 1fr) 80px;
+    grid-template-columns: calc(var(--icon) + 8px) minmax(160px, 1fr) 80px 130px;
   }
   .fm-list-head {
-    grid-template-columns: minmax(0, 1fr) 80px;
+    grid-template-columns: minmax(160px, 1fr) 80px 130px;
   }
-  .fm-list-head button:nth-child(n + 3),
-  .fm-view-list .fm-col:nth-child(n + 4) {
+  .fm-list-head .fm-head-type,
+  .fm-view-list .fm-col-type {
+    display: none;
+  }
+}
+@container fm-list (max-width: 480px) {
+  .fm-list-head,
+  .fm-view-list .fm-item {
+    grid-template-columns: calc(var(--icon) + 8px) minmax(160px, 1fr) 80px;
+  }
+  .fm-list-head {
+    grid-template-columns: minmax(160px, 1fr) 80px;
+  }
+  .fm-list-head .fm-head-date,
+  .fm-view-list .fm-col-date {
+    display: none;
+  }
+}
+@container fm-list (max-width: 330px) {
+  .fm-list-head,
+  .fm-view-list .fm-item {
+    grid-template-columns: calc(var(--icon) + 8px) minmax(0, 1fr);
+  }
+  .fm-list-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .fm-list-head .fm-head-size,
+  .fm-view-list .fm-col-size {
     display: none;
   }
 }

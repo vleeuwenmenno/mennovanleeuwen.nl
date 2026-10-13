@@ -4,6 +4,9 @@
 //     globs, unicode and the like each come back from msh's parser as exactly one word, the
 //     same name.
 //   - Whether `open photos` means the app or a folder of that name.
+//   - The /dev devices and the byte commands: /dev/urandom, /dev/zero and /dev/null, the disks that
+//     refuse to be read, `ls -l /dev`, `open /dev/seafile/<library>`, `head -c`, `tail -c`, `xxd`,
+//     `hexdump -C`, `od`, and bytes that pass through pipes intact (src/terminal/bytes.ts).
 //   - `ls` with several arguments (GNU style: files first, then each folder under `name:`) and
 //     `open <app>`, run through the real command table (src/terminal/commands.ts), loaded by Vite
 //     the way the site loads it.
@@ -93,7 +96,9 @@ try {
   const { HOME } = (await vite.ssrLoadModule('/src/terminal/vfs.ts')) as typeof import('../src/terminal/vfs.ts')
   let cwd = HOME
   const opened: string[] = []
-  const run = async (text: string) => {
+  let openedProps: Record<string, string> | undefined
+  const { dynamic } = (await vite.ssrLoadModule('/src/terminal/vfs.ts')) as typeof import('../src/terminal/vfs.ts')
+  const run = async (text: string, root = false) => {
     const printed: string[] = []
     const base = {
       args: [],
@@ -104,7 +109,11 @@ try {
       history: [],
       windows: [],
       openApp: (app: string) => void opened.push(app),
-      openNewApp: (app: string) => void opened.push(`new ${app}`),
+      openNewApp: (app: string, props?: Record<string, string>) => {
+        opened.push(`new ${app}`)
+        openedProps = props
+      },
+      root,
       closeWindow() {},
       clear() {},
       exit() {},
@@ -117,7 +126,7 @@ try {
       onKey() {},
     }
     const results = await runLine(text, base as never)
-    return { out: strip(results.map((r) => r.output).join('\n')), ok: results.every((r) => r.ok) }
+    return { out: strip(results.map((r) => r.output).join('\n')), ok: results.every((r) => r.ok), printed: printed.join('\n') }
   }
   const out = async (line: string) => (await run(line)).out
   const kids = async (dir: string) => (await out(`ls -a ${dir} | cat`)).split('\n')
@@ -152,6 +161,162 @@ try {
   check(['photos', 'mail', 'contacts', 'tasks'].every((w) => new RegExp(`\\b${w}\\b`).test(helpText)), 'help lists the new apps', helpText)
   const apps = await out('open')
   check(['photos', 'mail', 'contacts', 'tasks'].every((w) => new RegExp(`\\b${w}\\b`).test(apps)), 'open without arguments lists the new apps', apps)
+
+  // --- /dev and bytes ---------------------------------------------------------------------------
+
+  const sp = (n: number) => ' '.repeat(n)
+  const hexOf = async (line: string) => (await out(`${line} | xxd -p`)).replace(/\n/g, '')
+  const urandom = await out('head -c 16 /dev/urandom | xxd')
+  check(/^00000000: (?:[0-9a-f]{4} ){7}[0-9a-f]{4} {2}.{16}$/.test(urandom), 'head -c 16 /dev/urandom | xxd: one line, 16 bytes', urandom)
+  eq(await out('head -c 4 /dev/zero | xxd -p'), '00000000', 'head -c 4 /dev/zero | xxd -p')
+  eq(await out("printf 'hello\\n' | xxd"), `00000000: 6865 6c6c 6f0a${sp(27)}hello.`, "printf 'hello\\n' | xxd: the classic line")
+  eq(await out('echo é | xxd -p'), 'c3a90a', 'echo é | xxd -p: UTF-8 bytes, like Linux')
+  eq(await out('echo é | xxd'), `00000000: c3a9 0a${sp(34)}...`, 'echo é | xxd: the dump')
+  eq(await out("printf 'hi' | xxd -p"), '6869', "printf 'hi' | xxd -p: no newline added")
+  eq(await out("printf 'hello\\n' | xxd -l 2 -s 1"), `00000001: 656c${sp(37)}el`, 'xxd -l 2 -s 1: two bytes from offset 1, shown at offset 1')
+  eq(await out("printf 'hello\\n' | xxd -s -2 -p"), '6f0a', 'xxd -s -2: counts from the end')
+  eq(await out("printf 'abc' | xxd -g 1"), `00000000: 61 62 63${sp(41)}abc`, 'xxd -g 1: groups of one byte')
+  eq(await out("printf 'abc' | xxd -g 0"), `00000000: 616263${sp(27)}abc`, 'xxd -g 0: no groups')
+  eq(await out("printf 'abcde' | xxd -c 2"), '00000000: 6162  ab\n00000002: 6364  cd\n00000004: 65    e', 'xxd -c 2: two bytes to a line')
+  eq(await out("printf 'abcde' | xxd -p -c 2"), '6162\n6364\n65', 'xxd -p -c 2')
+  eq(await out("printf '\\xab\\xcd' | xxd -u -p"), 'ABCD', 'xxd -u -p: upper case digits')
+  eq(await out("printf '\\xab\\xcd' | xxd -u"), `00000000: ABCD${sp(37)}..`, 'xxd -u: dump')
+  eq(await out("printf 'hello\\n' | xxd -p | xxd -r -p | xxd -p"), '68656c6c6f0a', 'xxd -p | xxd -r -p round trip')
+  eq(await out("printf 'hello\\n' | xxd | xxd -r | xxd -p"), '68656c6c6f0a', 'xxd | xxd -r round trip (a full dump)')
+  eq(await out('echo 68690a | xxd -r -p'), 'hi', 'xxd -r -p: plain hex to text')
+  eq((await out('head -c 300 /dev/urandom | xxd -p | xxd -r -p | wc -c')).trim(), '300', '300 random bytes survive xxd -p | xxd -r -p')
+  eq((await out('head -c 300 /dev/urandom | xxd | xxd -r | wc -c')).trim(), '300', '300 random bytes survive xxd | xxd -r')
+  eq(await out("printf '\\xc3\\xa9' | xxd -p"), 'c3a9', "printf '\\xc3\\xa9': two bytes that spell é")
+  eq(await out("printf '\\xc3\\xa9'"), 'é', "printf '\\xc3\\xa9' shows é")
+  eq(await out("printf '\\xff\\xfe\\x00' | xxd -p"), 'fffe00', 'bytes that are not UTF-8, and a NUL, go through a pipe')
+  eq(await out("printf '\\xff' | sha256sum"), 'a8100ae6aa1940d0b663bb31cd466142ebbdbd5187131b92d93818987832eb89  -', 'sha256sum sees the byte, not a replacement character')
+  eq((await out("printf 'é' | wc -c")).trim(), '2', 'wc -c counts bytes')
+  eq((await out('cat /dev/zero | wc -c')).trim(), '65536', 'cat /dev/zero stops at 64 KiB')
+  eq((await out('cat /dev/urandom | wc -c')).trim(), '65536', 'cat /dev/urandom stops at 64 KiB, byte for byte')
+  eq((await out('head -c 70000 /dev/zero | wc -c')).trim(), '65536', 'a read of a device is capped at 64 KiB')
+  eq(await out('head -c 100 /dev/zero | xxd -p -c 100'), '0'.repeat(200), '/dev/zero is all zeros')
+  check((await out('head -c 64 /dev/urandom | xxd -p')) !== (await out('head -c 64 /dev/urandom | xxd -p')), '/dev/urandom differs from read to read')
+  check((await hexOf('head -c 64 /dev/random')).length === 128, '/dev/random gives bytes too')
+  eq(await out('cat /dev/null'), '', 'cat /dev/null: nothing')
+  check((await run('cat /dev/null')).ok, 'cat /dev/null succeeds')
+  eq((await out('echo hi | cat /dev/null | wc -c')).trim(), '0', '/dev/null reads as empty')
+
+  // On the screen: bounded, with nothing that breaks the line view.
+  const screen = await run('cat /dev/urandom')
+  check(screen.ok && !/[\ud800-\udfff\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(screen.printed.replace(/[\ud800-\udbff][\udc00-\udfff]/g, '')) && screen.printed.length > 1000, 'cat /dev/urandom on the screen: bounded, no escapes or control characters', JSON.stringify(screen.printed.slice(0, 60)))
+  eq((await run('cat /dev/zero')).printed, '', 'cat /dev/zero on the screen shows nothing')
+
+  // The disks refuse.
+  for (const dev of ['/dev/nvme0n1', '/dev/nvme0n1p1', '/dev/nvme0n1p2']) {
+    for (const cmd of ['cat', 'head -c 4', 'tail -c 4', 'xxd', 'wc -c', 'grep x']) {
+      const r = await run(`${cmd} ${dev}`)
+      check(!r.ok && r.out === `${cmd.split(' ')[0]}: ${dev}: Permission denied`, `${cmd} ${dev}: Permission denied`, r.out)
+    }
+  }
+  const denied = await run('cat < /dev/nvme0n1')
+  check(!denied.ok && denied.out.includes('/dev/nvme0n1: Permission denied'), 'cat < /dev/nvme0n1: Permission denied', denied.out)
+  const rooted = await run('cat /dev/nvme0n1', true)
+  check(!rooted.ok && rooted.out.startsWith('cat: /dev/nvme0n1: No such device or address'), 'cat as root: still refused, with a reason', rooted.out)
+  check((await run('echo hi > /dev/null')).ok && (await run('echo hi > /dev/zero')).ok && (await run('echo hi > /dev/urandom')).ok, 'writes to /dev/null, zero and urandom are swallowed')
+  const refused = await run('echo hi > /dev/nvme0n1')
+  check(!refused.ok && refused.out.includes('/dev/nvme0n1: Permission denied'), 'echo hi > /dev/nvme0n1: Permission denied', refused.out)
+  check(!(await run('echo hi | tee /dev/nvme0n1p1')).ok, 'tee to a disk is refused')
+  eq((await run('grep -r zzzz /dev')).out, '', 'grep -r over /dev skips the devices')
+
+  // The Seafile libraries as devices (the libraries themselves are mocked: slug and id).
+  dynamic.devices = () => [
+    { slug: 'my-library', repo: 'repo-1' },
+    { slug: 'photos', repo: 'repo-2' },
+  ]
+  const seaf = await run('cat /dev/seafile/photos')
+  check(!seaf.ok && seaf.out === 'cat: /dev/seafile/photos: Permission denied', 'cat /dev/seafile/photos: Permission denied', seaf.out)
+  check((await run('cat /dev/seafile/photos', true)).out.includes('Operation not supported'), 'a library device as root: not supported')
+
+  // ls -l /dev
+  const long = (await out('ls -l /dev')).split('\n')
+  const row = (name: string) => long.find((l) => l.endsWith(`  ${name}`) || l.endsWith(`  ${name}/`)) ?? ''
+  const want: [string, RegExp][] = [
+    ['null', /^crw-rw-rw-\s.* 1, 3 {2}null$/],
+    ['zero', /^crw-rw-rw-\s.* 1, 5 {2}zero$/],
+    ['random', /^crw-rw-rw-\s.* 1, 8 {2}random$/],
+    ['urandom', /^crw-rw-rw-\s.* 1, 9 {2}urandom$/],
+    ['nvme0n1', /^brw-rw----\s.* 259, 0 {2}nvme0n1$/],
+    ['nvme0n1p1', /^brw-rw----\s.* 259, 1 {2}nvme0n1p1$/],
+    ['nvme0n1p2', /^brw-rw----\s.* 259, 2 {2}nvme0n1p2$/],
+    ['seafile', /^dr-xr-xr-x\s/],
+  ]
+  for (const [name, re] of want) check(re.test(row(name)), `ls -l /dev: ${name}`, JSON.stringify(row(name)))
+  const seafLong = (await out('ls -l /dev/seafile')).split('\n')
+  check(/^brw-rw----\s.* 252, 0 {2}my-library$/.test(seafLong[0]) && /^brw-rw----\s.* 252, 1 {2}photos$/.test(seafLong[1]), 'ls -l /dev/seafile: block devices numbered like lsblk', seafLong.join('|'))
+  check(/^crw-rw-rw-\s.* 1, 3 {2}null$/.test(await out('ls -l /dev/null')), 'ls -l /dev/null: one device named on the line')
+  check(/^-r--r--r--\s+root\s+5\s+hostname$/.test(await out('ls -l /etc/hostname')), 'ls -l of a plain file is unchanged')
+  eq((await out('find /dev -type c')).split('\n').sort(), ['/dev/null', '/dev/random', '/dev/urandom', '/dev/zero'], 'find /dev -type c')
+  eq((await out('find /dev -type b')).split('\n').sort(), ['/dev/nvme0n1', '/dev/nvme0n1p1', '/dev/nvme0n1p2', '/dev/seafile/my-library', '/dev/seafile/photos'], 'find /dev -type b')
+  eq(await out('find /dev -type f'), '', 'find /dev -type f: devices are not regular files')
+
+  // open
+  {
+    const n = opened.length
+    const r = await run('open /dev/seafile/photos')
+    check(r.ok && opened.slice(n).join() === 'new files' && openedProps?.path === 'seafile://repo-2', 'open /dev/seafile/photos opens that library in Files', `${opened.slice(n)} ${JSON.stringify(openedProps)}`)
+    const m = opened.length
+    for (const [dev, why] of [['/dev/null', 'swallows'], ['/dev/urandom', 'stream of bytes'], ['/dev/nvme0n1', 'not a document']] as const) {
+      const x = await run(`open ${dev}`)
+      check(!x.ok && x.out.startsWith(`open: ${dev}: `) && x.out.includes(why), `open ${dev} says why not`, x.out)
+    }
+    check(opened.length === m, 'open on the other devices opens nothing')
+    check(!(await run('open /dev/seafile/nope')).ok, 'open /dev/seafile/<unknown> fails')
+  }
+
+  // head and tail
+  const six = "printf 'hello\\n'"
+  eq(await out(`${six} | head -c 3`), 'hel', 'head -c 3')
+  eq(await out(`${six} | head -c3`), 'hel', 'head -c3')
+  eq(await out(`${six} | head --bytes=3`), 'hel', 'head --bytes=3')
+  eq(await out(`${six} | head --bytes 3`), 'hel', 'head --bytes 3')
+  eq(await hexOf(`${six} | head -c -2`), '68656c6c', 'head -c -2: all but the last two bytes')
+  eq(await hexOf(`${six} | head -c 0`), '', 'head -c 0')
+  eq(await hexOf(`${six} | head -c 1K`), '68656c6c6f0a', 'head -c 1K: units')
+  eq(await out(`${six} | tail -c 3`), 'lo', 'tail -c 3 (the newline is the last byte)')
+  eq(await hexOf(`${six} | tail -c 3`), '6c6f0a', 'tail -c 3: bytes')
+  eq(await hexOf(`${six} | tail -c +3`), '6c6c6f0a', 'tail -c +3: from the third byte')
+  eq(await hexOf(`${six} | tail --bytes=2`), '6f0a', 'tail --bytes=2')
+  eq(await hexOf(`${six} | tail -c2`), '6f0a', 'tail -c2')
+  eq(await hexOf('head -c 20 /dev/zero | tail -c 4'), '00000000', 'tail -c 4 of a pipe')
+  eq(await hexOf('tail -c 4 /dev/zero'), '00000000', 'tail -c 4 /dev/zero: on a file argument')
+  const abc = "printf 'a\\nb\\nc\\n'"
+  eq(await out(`${abc} | head -n 2`), 'a\nb', 'head -n 2 unchanged')
+  eq(await out(`${abc} | head -2`), 'a\nb', 'head -2 unchanged')
+  eq(await out(`${abc} | head -n2`), 'a\nb', 'head -n2')
+  eq(await out(`${abc} | head --lines=1`), 'a', 'head --lines=1')
+  eq(await out(`${abc} | head -n -1`), 'a\nb', 'head -n -1: all but the last line')
+  eq(await out(`${abc} | head`), 'a\nb\nc', 'head with no count: ten lines')
+  eq(await out(`${abc} | tail -n 2`), 'b\nc', 'tail -n 2 unchanged')
+  eq(await out(`${abc} | tail -2`), 'b\nc', 'tail -2 unchanged')
+  eq(await out(`${abc} | tail -n +2`), 'b\nc', 'tail -n +2: from the second line')
+  eq(await out(`${abc} | tail -n 0`), '', 'tail -n 0: nothing')
+  eq(await out('head -n 1 /etc/hostname /etc/motd'), '==> /etc/hostname <==\nmvlos\n\n==> /etc/motd <==\nWelcome to MvL OS. Nothing in here can hurt you, or me.', 'head over two files: headers')
+  eq(await out('head -q -n 1 /etc/hostname /etc/motd'), 'mvlos\nWelcome to MvL OS. Nothing in here can hurt you, or me.', 'head -q: no headers')
+  check((await run('head -c x /etc/hostname')).out.includes('invalid number of bytes'), 'head -c x: invalid number')
+  check(!(await run('head -z /etc/hostname')).ok, 'head: an unknown option fails')
+  eq(await out('cat /etc/hostname /etc/hostname'), 'mvlosmvlos', 'cat joins files with nothing between them')
+  eq(await hexOf(`${six} | cat -`), '68656c6c6f0a', 'cat - reads stdin')
+
+  // hexdump and od
+  eq(await out(`${six} | hexdump -C`), `00000000  ${'68 65 6c 6c 6f 0a'.padEnd(23)}  ${sp(23)}  |hello.|\n00000006`, 'hexdump -C')
+  eq(await out('head -c 64 /dev/zero | hexdump -C'), `00000000  ${Array(8).fill('00').join(' ')}  ${Array(8).fill('00').join(' ')}  |................|\n*\n00000040`, 'hexdump -C folds repeated lines into a *')
+  eq(await out(`${six} | od -An -tx1`), ' 68 65 6c 6c 6f 0a', 'od -An -tx1')
+  eq(await out(`${six} | od -An -tu1 -N 2`), ' 104 101', 'od -An -tu1 -N 2')
+  eq(await out(`${six} | od -An -c`), '   h   e   l   l   o  \\n', 'od -An -c')
+  eq(await out(`${six} | od -A x -t x1`), '000000 68 65 6c 6c 6f 0a\n000006', 'od -A x -t x1')
+
+  // help and Tab
+  check((await out('help')).includes('xxd'), 'help lists xxd')
+  check((await out('man xxd')).includes('hex dump'), 'man xxd')
+  check((await out('xxd --help')).includes('hex dump'), 'xxd --help')
+  const { completions } = (await vite.ssrLoadModule('/src/terminal/commands.ts')) as typeof import('../src/terminal/commands.ts')
+  check(completions('xx', HOME).items.some((i) => i.value === 'xxd'), 'Tab completes xxd')
+  check(completions('xxd -', HOME).items.some((i) => i.value === '-p'), 'Tab completes the options of xxd')
 } finally {
   await vite.close()
 }

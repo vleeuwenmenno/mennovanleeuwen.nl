@@ -5,6 +5,7 @@ import { md5, sha } from './hash'
 import { jq, JqError } from './jq'
 import { CmdError, type Ctx } from './types'
 import { lookup } from './fs'
+import { readFile as readText } from './read'
 import { age, lookup as siteLookup, resolvePath, walk as siteWalk, type Node } from './vfs'
 import { runLine, writeTmp } from './commands'
 import { browserMountPoint, deviceNames, isBind, isSeafileType, mounts, whereIs } from '../data/mounts'
@@ -25,13 +26,6 @@ const sleep = (ms: number, signal: AbortSignal) =>
     const t = setTimeout(resolve, ms)
     signal.addEventListener('abort', () => (clearTimeout(t), resolve()), { once: true })
   })
-
-function readText(ctx: Ctx, path: string, cmd: string) {
-  const node = lookup(resolvePath(ctx.cwd, path))
-  if (!node) throw new CmdError(`${cmd}: ${path}: No such file or directory`)
-  if (node.type === 'dir') throw new CmdError(`${cmd}: ${path}: Is a directory`)
-  return node.content()
-}
 
 const human = (bytes: number) => {
   const units = ['B', 'K', 'M', 'G', 'T']

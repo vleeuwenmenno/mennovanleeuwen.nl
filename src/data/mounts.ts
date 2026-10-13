@@ -97,7 +97,7 @@ export const getFstab = () => {
 }
 // The site's filesystem shows the same /etc/fstab and /dev/seafile/* (for Files and Zed too).
 dynamic.fstab = () => getFstab()
-dynamic.devices = () => [...deviceNames().values()]
+dynamic.devices = () => [...deviceNames()].map(([repo, slug]) => ({ slug, repo }))
 /** Replaces /etc/fstab (nano's save, Settings' edits). */
 export function setFstab(text: string) {
   store.set(text.endsWith('\n') ? text : `${text}\n`)
