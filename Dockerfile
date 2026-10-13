@@ -33,6 +33,8 @@ COPY src/data/mshReference.ts ./src/data/
 COPY src/terminal/msh/parse.ts ./src/terminal/msh/
 # Tasks: its settings, which the server's reminders read.
 COPY src/data/taskPrefs.ts ./src/data/
+# Mail: the remote-content rules (mode and allowed senders), which the server applies.
+COPY src/data/mailRemote.ts ./src/data/
 # Agents shared links (/s/<token>): the Markdown parser and code colours, to render the page.
 COPY src/data/markdown/parse.ts src/data/markdown/highlight.ts ./src/data/markdown/
 # Sign-in sessions, linked instances and synced notes live here (a volume in compose.yml).
