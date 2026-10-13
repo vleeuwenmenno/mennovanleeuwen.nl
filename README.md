@@ -1078,13 +1078,15 @@ up, Seafile | Immich in the toolbar switches between them (remembered for your a
 not mixed into one timeline. The grid only puts the rows on screen in the page, so 20,000 photos
 scroll like 20; thumbnails load six at a time, the newest wish first, and the browser keeps them.
 
-**Selecting** works as in Google Photos, Apple Photos and Immich: a click selects, Ctrl or Cmd
-adds or takes away, Shift adds everything from the last one clicked (in timeline order), and
-dragging over empty space draws a box, which scrolls on at the top and bottom edges. Each tile has
-a circle on hover (on all of them once anything is selected), and each day and month heading one
-that selects all of it. Ctrl+A selects everything loaded, Escape lets go, and double-click or Enter
-opens. On a touch screen a long press selects, taps then add and take away, and holding a selected
-photo drags the selection. The selection is kept as ids, not as tiles, so it outlives the rows
+**Selecting** is explicit, as in Google Photos and Immich: a click (or tap) opens a photo, and the
+circle that shows on each tile on hover selects it instead. Once anything is selected, a click
+anywhere on a tile takes it in or out (nothing opens, and the circles show on all of them) until
+the selection is empty again. Ctrl or Cmd+click adds or takes away, and Shift+click adds everything
+from the last one selected (in timeline order), with or without a selection. Dragging over empty
+space draws a box, which scrolls on at the top and bottom edges, and each day and month heading has
+a circle that selects all of it. Ctrl+A selects everything loaded, Escape lets go, and Enter opens
+the focused photo. On a touch screen a tap opens, a long press selects, taps then add and take
+away, and holding a selected photo drags the selection. The selection is kept as ids, not as tiles, so it outlives the rows
 that scroll away, and a range across 20,000 photos is one slice of the timeline. While anything is
 selected, a bar takes the toolbar's place with the count, ♡, download, the bin and ⋯
 ([`src/apps/photos/actions.tsx`](src/apps/photos/actions.tsx)).
