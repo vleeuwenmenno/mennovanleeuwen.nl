@@ -229,7 +229,19 @@ mounts: the account's quota and usage (`/api/seafile/quota`), and each library's
 what is left of the quota; `du` (`-a`, `-s`, `-c`, `-d`, `-h`, `-x`) adds up folders through the
 mounts, Seafile's included.
 
-`find` and `fd` ([`src/terminal/find.ts`](src/terminal/find.ts)) follow GNU findutils 4.10 and fd 10.2
+`/dev` behaves like one ([`src/terminal/devices.ts`](src/terminal/devices.ts)): `/dev/urandom` and
+`/dev/random` give random bytes, `/dev/zero` NULs, `/dev/null` nothing (and swallows writes). The
+real ones never end; here a read gives 64 KiB at most, so `cat /dev/urandom` stops. The disks
+(`/dev/nvme0n1*`, `/dev/seafile/*`) answer `Permission denied` to reads and writes, as for a normal
+user, and `ls -l /dev` shows `crw-rw-rw-` and `brw-rw----` with the major and minor numbers `lsblk`
+uses. `open /dev/seafile/<library>` opens that library in Files. Bytes travel through pipes as
+text with the invalid ones kept apart (Python's `surrogateescape`, [`src/terminal/bytes.ts`](src/terminal/bytes.ts)),
+so `head -c 16 /dev/urandom | xxd` shows 16 bytes and `echo é | xxd` shows `c3a9 0a`. `head`/`tail`
+take `-c` (GNU forms: `-c N`, `-cN`, `--bytes=N`, `-c -N`, `tail -c +N`) and several files, and
+`xxd` (`-l -s -c -g -p -u -r`), `hexdump -C` and `od -An -tx1` dump bytes
+([`src/terminal/bytecmds.ts`](src/terminal/bytecmds.ts)). `pnpm check:terminal-cmds` tests all of it.
+
+`find` and `fd` ([`src/terminal/find.ts`](src/terminal/find.ts)(src/terminal/find.ts)) follow GNU findutils 4.10 and fd 10.2
 over the site's filesystem: find's whole expression language (tests, `-printf`, `-ls`, `-exec … ;`
 and `{} +`, `-ok`, `-prune`, `-delete` in /tmp, operators and its warnings and errors), fd's options
 (smart case, globs, `-e`, `-t`, `-S`, `--changed-within`, `-x`/`-X`, `--format`, `-l`, ignore files),

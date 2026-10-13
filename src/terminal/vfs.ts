@@ -6,6 +6,7 @@ import { revealEmail } from '../data/email'
 import { BUILT, COMMIT, SHORT_VERSION, VERSION } from '../version'
 import { cvMode } from '../os/cvMode'
 import { HANDLE } from '../os/identity'
+import { randomText, zeroText, type DevInfo } from './devices'
 
 // A read-only, in-memory filesystem built from profile.ts. Nothing here touches the real
 // machine; "files" are strings and a few of them point at an app or URL for `open`. Menno's CV
@@ -28,6 +29,8 @@ export type FileNode = {
   exec?: boolean
   /** Where it really is, for files kept in this browser (data/browserfs.ts) */
   browser?: string
+  /** A device node in /dev (terminal/devices.ts): a stream or a disk, not a regular file */
+  dev?: DevInfo
 }
 export type DirNode = { type: 'dir'; name: string; children: Map<string, Node>; mtime?: number; sf?: string; ro?: boolean; browser?: string }
 export type Node = FileNode | DirNode
@@ -260,7 +263,7 @@ const homeNode = cvMode() ? cvHome : plainHome
  * Files whose contents live elsewhere: /etc/fstab and the Seafile devices in /dev come from the
  * mount table (data/mounts.ts fills these in), so Files, Zed and the terminal all see them.
  */
-export const dynamic = { fstab: () => '', devices: (): string[] => [], commands: (): { name: string; desc: string }[] => [] }
+export const dynamic = { fstab: () => '', devices: (): { slug: string; repo: string }[] => [], commands: (): { name: string; desc: string }[] => [] }
 
 /** A size that looks like a binary's, the same every time for the same name. */
 const binarySize = (name: string) => {
@@ -280,7 +283,7 @@ const binNode: DirNode = {
   },
 }
 
-const device = (name: string): FileNode => ({ type: 'file', name, content: () => '', size: 0 })
+const device = (name: string, dev: DevInfo, content: () => string = () => ''): FileNode => ({ type: 'file', name, content, size: 0, dev })
 const devNode: DirNode = {
   type: 'dir',
   name: 'dev',
@@ -289,10 +292,20 @@ const devNode: DirNode = {
       type: 'dir',
       name: 'seafile',
       get children() {
-        return new Map(dynamic.devices().map((d) => [d, device(d)] as [string, Node]))
+        // The same numbers lsblk shows: major 252, minor in library order.
+        return new Map(dynamic.devices().map(({ slug, repo }, i) => [slug, device(slug, { kind: 'block', major: 252, minor: i, repo })] as [string, Node]))
       },
     }
-    return new Map<string, Node>([...['null', 'zero', 'random', 'urandom', 'nvme0n1', 'nvme0n1p1', 'nvme0n1p2'].map((n) => [n, device(n)] as [string, Node]), ['seafile', seafile]])
+    return new Map<string, Node>([
+      device('null', { kind: 'char', major: 1, minor: 3 }),
+      device('zero', { kind: 'char', major: 1, minor: 5 }, zeroText),
+      device('random', { kind: 'char', major: 1, minor: 8 }, randomText),
+      device('urandom', { kind: 'char', major: 1, minor: 9 }, randomText),
+      device('nvme0n1', { kind: 'block', major: 259, minor: 0 }),
+      device('nvme0n1p1', { kind: 'block', major: 259, minor: 1 }),
+      device('nvme0n1p2', { kind: 'block', major: 259, minor: 2 }),
+      seafile,
+    ].map((n) => [n.name, n] as [string, Node]))
   },
 }
 

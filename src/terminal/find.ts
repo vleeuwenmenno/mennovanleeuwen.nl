@@ -21,10 +21,13 @@ const DIR_SIZE = 4096
 const isUnderTmp = (abs: string) => abs.startsWith('/tmp/')
 const owner = (abs: string) => (abs === HOME || abs.startsWith(`${HOME}/`) || isUnderTmp(abs) || sfOf(abs) ? HANDLE : 'root')
 const idOf = (abs: string) => (owner(abs) === 'root' ? 0 : 1000)
+/** find's -type letter: d, f, or c and b for the devices in /dev. */
+const typeLetter = (node: Node) => (node.type === 'dir' ? 'd' : node.dev ? (node.dev.kind === 'char' ? 'c' : 'b') : 'f')
 const isExecutable = (node: Node) => node.type === 'dir' || (node.type === 'file' && !!node.exec) || node.name.endsWith('.game')
 
 /** Read-only everywhere (0555 folders and runnable games, 0444 files), except /tmp. */
 function modeOf(abs: string, node: Node): number {
+  if (node.type === 'file' && node.dev) return node.dev.kind === 'char' ? 0o666 : 0o660
   if (node.sf) return node.ro ? (node.type === 'dir' ? 0o555 : 0o444) : node.type === 'dir' ? 0o755 : 0o644
   if (abs === '/tmp') return 0o1777
   if (isUnderTmp(abs)) return 0o644
@@ -35,7 +38,7 @@ function permString(abs: string, node: Node) {
   const m = modeOf(abs, node)
   const bits = [6, 3, 0].map((s) => `${m & (4 << s) ? 'r' : '-'}${m & (2 << s) ? 'w' : '-'}${m & (1 << s) ? 'x' : '-'}`).join('')
   const sticky = m & 0o1000 ? bits.slice(0, 8) + (bits[8] === 'x' ? 't' : 'T') : bits
-  return (node.type === 'dir' ? 'd' : '-') + sticky
+  return (node.type === 'dir' ? 'd' : node.dev ? (node.dev.kind === 'char' ? 'c' : 'b') : '-') + sticky
 }
 
 const sizeOf = (abs: string, node: Node) => (node.type === 'dir' ? DIR_SIZE : stat(abs, node).size)
@@ -675,7 +678,7 @@ class FindParser {
           if (k.length > 1) throw new FindError(`find: Must separate multiple arguments to ${pred} using: ','`)
           if (!'bcdpflsD'.includes(k)) throw new FindError(`find: Unknown argument to ${pred}: ${k}`)
         }
-        return test((e) => kinds.includes(e.node.type === 'dir' ? 'd' : 'f'))
+        return test((e) => kinds.includes(typeLetter(e.node)))
       }
       case '-size': {
         const a = this.arg(pred)
@@ -1568,6 +1571,7 @@ async function fd(ctx: Ctx): Promise<string> {
       if (!isEmpty(abs, node)) return false
       if (!wantFile && !wantDir) return true
     }
+    if (node.type === 'file' && node.dev) return (o.types.has('c') && node.dev.kind === 'char') || (o.types.has('b') && node.dev.kind === 'block')
     return (wantFile && node.type === 'file') || (wantDir && node.type === 'dir')
   }
 

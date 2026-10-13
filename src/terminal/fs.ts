@@ -4,6 +4,7 @@ import { cachedDir, createFile, deleteItems, errorStatus, getLibraries, historyD
 import { getAccount } from '../os/account'
 import { writeTmp } from './commands'
 import { CmdError } from './types'
+import { writeError } from './devices'
 import { kindOfName, lookup as siteLookup, resolvePath, type DirNode, type FileNode, type Node } from './vfs'
 
 // The filesystem as the terminal sees it: the site's own files (vfs.ts), with whatever /etc/fstab
@@ -309,6 +310,13 @@ const err = (msg: string) => new CmdError(msg)
 /** Writes a file: /tmp, Seafile, or /etc/fstab (root only). `append` adds to the end, like >>. */
 export async function writeFile(cwd: string, target: string, content: string, append: boolean, root = false, who = 'msh') {
   const abs = resolvePath(cwd, target)
+  // A device swallows what is written to it (the disks refuse it).
+  const written = abs.startsWith('/dev/') ? lookup(abs) : null
+  if (written?.type === 'file' && written.dev) {
+    const refused = writeError(who, target, written.dev, root)
+    if (refused) throw refused
+    return
+  }
   if (abs === '/etc/fstab') {
     if (!root) throw err(`${who}: permission denied: ${target}`)
     setFstab(append ? `${getFstab().replace(/\n?$/, '\n')}${content}` : content)
