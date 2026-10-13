@@ -2,7 +2,7 @@ import { LEVEL_UP, MODULE, SITE_UPGRADES, TECH, UNIT, type ModuleId, type SiteUp
 import type { Pt } from './maps.ts'
 import {
   STANCES, cmdAbility, cmdArea, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdDeploy, cmdFace, cmdFocus, cmdGuard, cmdLine, cmdMove, cmdPatrol, cmdRally, cmdRepair, cmdResearch,
-  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdCancelSite, cmdExpand, cmdCancelExpand, type Owner, type Stance, type World,
+  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdCancelSite, cmdExpand, cmdCancelExpand, wrapAngle, type Owner, type Stance, type World,
 } from './sim.ts'
 
 // Every order a player can give, as data: a name and its arguments. In multiplayer an order goes to
@@ -10,7 +10,7 @@ import {
 // to run at the same tick; a malformed order from a tampered client never reaches anyone. The
 // owner is never part of an order: the server fills in the sender's own seat.
 
-type Arg = 'ids' | 'id' | 'int' | 'x' | 'y' | 'num' | 'bool' | 'unit' | 'tech' | 'upgrade' | 'stance' | 'path' | 'module'
+type Arg = 'ids' | 'id' | 'int' | 'x' | 'y' | 'num' | 'bool' | 'unit' | 'tech' | 'upgrade' | 'stance' | 'path' | 'angle' | 'module'
 
 /** The functions, by order name, with what each argument must be. */
 const TABLE = {
@@ -36,7 +36,7 @@ const TABLE = {
   cancelResearch: { run: cmdCancelResearch, args: ['int'] },
   site: { run: cmdSite, args: ['int', 'unit'] },
   // Hybrid bases: engineers place a yard, build or repair a structure; a site can be called off.
-  place: { run: cmdPlace, args: ['ids', 'unit', 'x', 'y', 'bool'] },
+  place: { run: cmdPlace, args: ['ids', 'unit', 'x', 'y', 'bool', 'angle'] },
   construct: { run: cmdConstruct, args: ['ids', 'id', 'bool'] },
   cancelSite: { run: cmdCancelSite, args: ['id'] },
   // Expansions: order one on a building of ours (the Command Station or a yard), or call one off.
@@ -86,6 +86,10 @@ function cleanArg(kind: Arg, v: unknown, w: World): unknown {
       return typeof v === 'string' && (v === LEVEL_UP || Object.hasOwn(TECH, v)) ? v : null
     case 'upgrade':
       return typeof v === 'string' && SITE_UPGRADES.some((u) => u.id === v) ? (v as SiteUpgradeId) : null
+    case 'angle':
+      // A facing is optional: left out (or null, as JSON turns NaN), it's NaN, the old automatic one.
+      // Otherwise it has to be a finite number, and is brought into (-PI, PI].
+      return v === undefined || v === null ? NaN : typeof v === 'number' && Number.isFinite(v) ? wrapAngle(v) : null
     case 'stance':
       return typeof v === 'string' && STANCES.includes(v as Stance) ? v : null
     case 'module':

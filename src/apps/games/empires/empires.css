@@ -5654,3 +5654,10 @@ span.ew-teamtag {
   flex-basis: 100%;
   text-align: right;
 }
+
+/* Turning a yard being placed (touch): the rotate buttons beside Build here. */
+.ew-deck .ew-placebar .ew-rot {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  justify-content: center;
+}

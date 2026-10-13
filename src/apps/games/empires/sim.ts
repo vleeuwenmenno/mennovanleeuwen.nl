@@ -1674,7 +1674,44 @@ export function cmdSite(w: World, owner: Owner, node: number, id: string) {
  * lay), and why it can't go there, if it can't. The ghost under the cursor shows this. */
 export type Placement = { why: string | null; x: number; y: number; a: number; cost: number; ruin?: Ruin }
 
-export function placement(w: World, owner: Owner, unitId: string, x: number, y: number): Placement {
+/** An angle brought into (-PI, PI]. Plain arithmetic, so every copy of a battle gets the same one. */
+export const wrapAngle = (a: number) => a - Math.PI * 2 * Math.floor((a + Math.PI) / (Math.PI * 2))
+
+/** A yard's footprint: half its length along the way it faces (the slipway's axis) and half its width across. */
+export const yardBox = (t: UnitType): { hl: number; hw: number } => {
+  const [w, h] = dims(t)
+  return { hl: h / 2, hw: w / 2 }
+}
+
+/** How far a point is from a box (centre cx, cy; half sizes hl along the heading a, hw across): 0 inside. */
+function boxGap(px: number, py: number, cx: number, cy: number, a: number, hl: number, hw: number) {
+  const c = M.cos(a)
+  const s = M.sin(a)
+  const dx = px - cx
+  const dy = py - cy
+  const along = Math.max(0, Math.abs(dx * c + dy * s) - hl)
+  const across = Math.max(0, Math.abs(-dx * s + dy * c) - hw)
+  return M.hypot(along, across)
+}
+
+/** Whether two boxes come within `margin` of each other (separating axis test). */
+function boxesNear(ax: number, ay: number, aa: number, ahl: number, ahw: number, bx: number, by: number, ba: number, bhl: number, bhw: number, margin: number) {
+  const dx = bx - ax
+  const dy = by - ay
+  const axes = [aa, aa + Math.PI / 2, ba, ba + Math.PI / 2]
+  for (const t of axes) {
+    const nx = M.cos(t)
+    const ny = M.sin(t)
+    const ra = ahl * Math.abs(nx * M.cos(aa) + ny * M.sin(aa)) + ahw * Math.abs(-nx * M.sin(aa) + ny * M.cos(aa))
+    const rb = bhl * Math.abs(nx * M.cos(ba) + ny * M.sin(ba)) + bhw * Math.abs(-nx * M.sin(ba) + ny * M.cos(ba))
+    if (Math.abs(dx * nx + dy * ny) - ra - rb >= margin) return false
+  }
+  return true
+}
+
+/** `facing`: the way the yard faces, if its owner chose one (else away from the Command Station, as
+ * the AI's always do); a ruin keeps the way it lay. The overlap checks use the yard's box at that angle. */
+export function placement(w: World, owner: Owner, unitId: string, x: number, y: number, facing?: number): Placement {
   const p = w.players[owner]
   const t = UNIT[unitId]
   const st = w.byId.get(p.station)
@@ -1683,7 +1720,7 @@ export function placement(w: World, owner: Owner, unitId: string, x: number, y: 
     x = ruin.x
     y = ruin.y
   }
-  const a = ruin ? ruin.a : st ? M.atan2(y - st.y, x - st.x) : 0
+  const a = ruin ? ruin.a : facing !== undefined && Number.isFinite(facing) ? wrapAngle(facing) : st ? M.atan2(y - st.y, x - st.x) : 0
   const cost = t ? (ruin ? Math.round(t.cost * REBUILD) : t.cost) : 0
   const out = (why: string | null): Placement => ({ why, x, y, a, cost, ...(ruin ? { ruin } : {}) })
   if (!w.hybrid || w.fleet) return out('No yards in this battle')
@@ -1692,16 +1729,27 @@ export function placement(w: World, owner: Owner, unitId: string, x: number, y: 
   if (t.level > p.level) return out(`Needs station level ${t.level}`)
   if (w.units.filter((u) => !u.dead && u.owner === owner && u.t.id === unitId).length >= YARD_MAX) return out(`We already have a ${t.name}`)
   const r = radius(t)
+  const { hl, hw } = yardBox(t)
+  const gap = (px: number, py: number) => boxGap(px, py, x, y, a, hl, hw)
   if (d2(x, y, st.x, st.y) > sq(BUILD_RADIUS)) return out('Outside the build radius: keep it near the Command Station')
-  if (x < r + 120 || y < r + 120 || x > w.w - r - 120 || y > w.h - r - 120) return out('Too close to the edge of the map')
-  if (w.rocks.some((k) => d2(x, y, k.x, k.y) < sq(k.r + r + 30))) return out('An asteroid is in the way')
+  const ex = Math.abs(M.cos(a)) * hl + Math.abs(M.sin(a)) * hw
+  const ey = Math.abs(M.sin(a)) * hl + Math.abs(M.cos(a)) * hw
+  if (x < ex + 120 || y < ey + 120 || x > w.w - ex - 120 || y > w.h - ey - 120) return out('Too close to the edge of the map')
+  if (w.rocks.some((k) => gap(k.x, k.y) < k.r + 30)) return out('An asteroid is in the way')
   if (inside(w.map.fields, x, y, r)) return out('Inside an asteroid field')
-  if (w.nodes.some((n) => d2(x, y, n.x, n.y) < sq(n.r + r + 140))) return out('Too close to an ore asteroid')
-  if (w.beacons.some((b) => d2(x, y, b.x, b.y) < sq(r + 240))) return out('Too close to a beacon')
-  if (w.wrecks.some((h) => d2(x, y, h.x, h.y) < sq(h.size * 0.6 + r))) return out('A wreck is in the way')
-  // Kept clear of other structures by their longest side, a station by the size it grows to.
+  if (w.nodes.some((n) => gap(n.x, n.y) < n.r + 140)) return out('Too close to an ore asteroid')
+  if (w.beacons.some((b) => gap(b.x, b.y) < 240)) return out('Too close to a beacon')
+  if (w.wrecks.some((h) => gap(h.x, h.y) < h.size * 0.6)) return out('A wreck is in the way')
+  // Kept clear of other structures: a yard by its box, the rest by their longest side, a station by the size it grows to.
   const half = (o: UnitType) => Math.max(...dims(o.tier === 'station' ? stationType(o.faction, MAX_LEVEL, []) : o)) * 0.5
-  if (w.units.some((u) => !u.dead && !isShip(u.t) && !(planned(u) && u.owner !== owner) && d2(x, y, u.x, u.y) < sq(half(u.t) + half(t) + 60))) return out('Too close to another structure')
+  const crowded = (u: Unit) => {
+    if (u.t.tier === 'yard') {
+      const b = yardBox(u.t)
+      return boxesNear(x, y, a, hl, hw, u.x, u.y, u.a, b.hl, b.hw, 60)
+    }
+    return gap(u.x, u.y) < half(u.t) + 60
+  }
+  if (w.units.some((u) => !u.dead && !isShip(u.t) && !(planned(u) && u.owner !== owner) && crowded(u))) return out('Too close to another structure')
   if ((w.ruins ?? []).some((q) => q !== ruin && d2(x, y, q.x, q.y) < sq(r * 2))) return out('A ruin is in the way')
   if (p.credits < cost) return out('Not enough credits')
   return out(null)
@@ -1712,10 +1760,10 @@ export function placement(w: World, owner: Owner, unitId: string, x: number, y: 
  * fly there and build it (with `queued`, once their other orders are done). Placed on our own ruin
  * of it, it costs REBUILD of the price.
  */
-export function cmdPlace(w: World, owner: Owner, ids: number[], unitId: string, x: number, y: number, queued = false): string | null {
+export function cmdPlace(w: World, owner: Owner, ids: number[], unitId: string, x: number, y: number, queued = false, facing = NaN): string | null {
   const crew = ids.map((i) => w.byId.get(i)).filter((u): u is Unit => commandable(u, owner) && isEngineer(u.t))
   if (!crew.length) return 'Select engineers to build it'
-  const pl = placement(w, owner, unitId, x, y)
+  const pl = placement(w, owner, unitId, x, y, facing)
   if (pl.why) return pl.why
   const t = UNIT[unitId]
   spend(w, w.players[owner], pl.cost, 'structures', pl.ruin ? `Rebuilding: ${t.name}` : t.name)

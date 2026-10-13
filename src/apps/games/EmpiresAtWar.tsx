@@ -21,7 +21,7 @@ import { Renderer, relColor, type Camera, type View } from './empires/render'
 import { beginLayout } from './empires/layout'
 import { defaultArea, inRect, inside, type Pt } from './empires/maps'
 import {
-  STEP, RANKS, autoStart, REFUND_DELAY, canRetreat, canSee, cantConstruct, cantMend, closedLoop, cantWarp, typeOf, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, placement, startProblem, tick, type Owner, type SimEvent, type Unit, type World, stateHash,
+  STEP, RANKS, autoStart, REFUND_DELAY, canRetreat, canSee, cantConstruct, cantMend, closedLoop, cantWarp, typeOf, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, placement, startProblem, tick, wrapAngle, type Owner, type SimEvent, type Unit, type World, stateHash,
 } from './empires/sim'
 import { EmpiresSound, type OrderKind } from './empires/sound'
 import { TechTree } from './empires/TechTree'
@@ -418,7 +418,10 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const mode = useRef<Mode>('normal')
   /** Hybrid bases: the yard being placed ('place' mode), the engineers who will build it, and on
    * touch the spot picked so far (it waits for the confirm button). */
-  const placing = useRef<{ unit: string; ids: number[]; at: Pt | null } | null>(null)
+  const placing = useRef<{ unit: string; ids: number[]; at: Pt | null; /** The way the mouth faces, once the player turns it (else away from the station). */ a: number | null } | null>(null)
+  /** Mouse: a press at the spot being dragged out to set the facing; the yard goes down on release. */
+  const placeDrag = useRef<{ at: Pt; sx: number; sy: number; turned: boolean } | null>(null)
+  const wheelAcc = useRef(0)
   /** An ore asteroid picked with nothing else selected: the command card offers to build on it. */
   const pickedNode = useRef(-1)
   const hover = useRef({ unit: 0, hp: -1, node: -1, wreck: 0 })
@@ -818,7 +821,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       return
     }
     setMode('place')
-    placing.current = { unit, ids: crew.map((u) => u.id), at: null }
+    placing.current = { unit, ids: crew.map((u) => u.id), at: null, a: null }
     sound.arm()
   }
   /** Put the yard down at `at` (the order goes into the engineers' queues with `queued`). */
@@ -832,7 +835,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       setUi((u) => ({ ...u }))
       return
     }
-    const why = order('place', pl.ids, pl.unit, at.x, at.y, queued)
+    const why = order('place', pl.ids, pl.unit, at.x, at.y, queued, pl.a ?? undefined)
     if (why) {
       toast(why, 'bad')
       sound.error()
@@ -857,6 +860,13 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     touchLast.current = false
     place(at, shiftOf())
   }
+  /** Turn the yard being placed by `deg` degrees (positive: clockwise on screen). */
+  const rotatePlace = (deg: number) => {
+    const pl = placing.current
+    if (!pl) return
+    pl.a = wrapAngle((pl.a ?? placeGhost()?.a ?? 0) + (deg * Math.PI) / 180)
+    setUi((u) => ({ ...u }))
+  }
   /** The ghost of the yard being placed, for the renderer: under the pointer (or the pinned spot). */
   const placeGhost = () => {
     const pl = placing.current
@@ -865,7 +875,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const at = pl.at ?? (mouse.current.inside ? toWorld(mouse.current.x, mouse.current.y) : null)
     const st = w.byId.get(w.players[me].station)
     if (!at || !st) return null
-    const g = placement(w, me, pl.unit, at.x, at.y)
+    const g = placement(w, me, pl.unit, at.x, at.y, pl.a ?? undefined)
     return { t: typeOf(w, pl.unit), x: g.x, y: g.y, a: g.a, ok: !g.why, why: g.why, cost: g.cost, rebuild: !!g.ruin, ring: { x: st.x, y: st.y, r: BUILD_RADIUS } }
   }
   /** The yard to place next: the first of ours (the Frigate Yard, then the Capital Yard) we have
@@ -1528,6 +1538,12 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         return
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return
+      // A yard being placed: [ and ] turn it (Shift: fine steps). Q and E are Stop and Attack move.
+      if (mode.current === 'place' && placing.current && (k === '[' || k === ']' || k === '{' || k === '}')) {
+        rotatePlace((k === '[' || k === '{' ? -1 : 1) * (e.shiftKey ? 5 : 15))
+        e.preventDefault()
+        return
+      }
       if (/^[1-9]$/.test(k)) recallGroup(k)
       else if (k === 'escape') {
         // Esc backs out of whatever is open, one step at a time, and finally opens the menu.
@@ -1678,6 +1694,13 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       }
       return
     }
+    // A yard being placed: press at the spot and drag towards where its mouth should point; it goes
+    // down on release (a click without a drag keeps the angle the wheel or keys gave it).
+    if (mode.current === 'place' && placing.current && e.button === 0) {
+      placeDrag.current = { at: pick(p.x, p.y).at, sx: p.x, sy: p.y, turned: false }
+      placing.current.at = placeDrag.current.at
+      return
+    }
     if (mode.current !== 'normal') {
       modeClick(p.x, p.y, mode.current, e.shiftKey)
       // Shift keeps the command armed for more clicks, each queued after the last. A yard being
@@ -1692,6 +1715,12 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const p = local(e)
     mouse.current = { ...p, inside: true }
     touchLast.current = isTouch(e)
+    const pd = placeDrag.current
+    if (pd && placing.current && (pd.turned || Math.hypot(p.x - pd.sx, p.y - pd.sy) > 12)) {
+      const to = toWorld(p.x, p.y)
+      pd.turned = true
+      placing.current.a = Math.atan2(to.y - pd.at.y, to.x - pd.at.x)
+    }
     if (e.pointerType === 'touch' && touches.current.has(e.pointerId)) {
       touches.current.set(e.pointerId, p)
       press.current.move(e)
@@ -1779,6 +1808,15 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       else if (!add) {
         selected.current.clear()
         pickedNode.current = node
+      }
+      return
+    }
+    if (placeDrag.current) {
+      const pd = placeDrag.current
+      placeDrag.current = null
+      if (placing.current) {
+        placing.current.at = null
+        place(pd.at, e.shiftKey)
       }
       return
     }
@@ -1878,6 +1916,16 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const p = local(e)
     // Lines or pages (some mice) rather than pixels: scale to about one notch's worth.
     const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY
+    // A yard being placed: the wheel turns it (15 degrees a notch, 5 with Shift) instead of zooming.
+    if (mode.current === 'place' && placing.current) {
+      wheelAcc.current += dy || e.deltaX
+      const n = Math.trunc(wheelAcc.current / 90)
+      if (n) {
+        wheelAcc.current -= n * 90
+        rotatePlace(n * (e.shiftKey ? 5 : 15))
+      }
+      return
+    }
     zoomTo(Math.exp(-dy * 0.0015), p.x, p.y)
   }
 
@@ -2299,10 +2347,16 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
                   : ui.mode === 'place' ? `${UNIT[placing.current?.unit ?? yardOf(myFaction).id].name}: ${click} a spot inside the build ring round the Command Station.${touchUi ? ' Then build it here.' : ''}`
                   : `Rally point: ${click} where new ships should gather${rallyAt() ? ' from this yard' : ''}.`}{' '}
             {ui.mode === 'place'
-              ? touchUi ? 'Shift on: after the engineers\' other orders. ✕ to cancel.' : <>Shift-click: after the engineers' other orders. <kbd>Esc</kbd> or right-click to cancel.</>
+              ? touchUi ? 'Turn it with the buttons. Shift on: after the engineers\' other orders. ✕ to cancel.' : <>Wheel or <kbd>[</kbd> <kbd>]</kbd> turn it (Shift: finer), or drag to aim its mouth. Shift-click: after the engineers' other orders. <kbd>Esc</kbd> or right-click to cancel.</>
               : touchUi ? 'Turn on Shift to keep going, ✕ to cancel.' : <>Shift-click to keep going, <kbd>Esc</kbd> to cancel.</>}
-            {ui.mode === 'place' && placing.current?.at && (
+            {ui.mode === 'place' && touchUi && placing.current?.at && (
               <div className="ew-placebar">
+                <button className="ew-menu-btn ew-rot" onClick={() => rotatePlace(-15)} aria-label="Turn it anticlockwise" data-tip="Turn 15 degrees anticlockwise">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /></svg>
+                </button>
+                <button className="ew-menu-btn ew-rot" onClick={() => rotatePlace(15)} aria-label="Turn it clockwise" data-tip="Turn 15 degrees clockwise">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: 'scaleX(-1)' }}><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /></svg>
+                </button>
                 <button className="ew-go" onClick={confirmPlace} disabled={!placeGhost()?.ok}>
                   Build here
                 </button>
