@@ -489,7 +489,9 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
     for (const f of visible) {
       if (f.leg) continue
       const key = `${f.system}:${f.owner}`
-      parked.set(key, [...(parked.get(key) ?? []), f])
+      const group = parked.get(key)
+      if (group) group.push(f)
+      else parked.set(key, [f])
     }
   // Where the selected fleets are headed, on through any stops queued with Shift.
   // (Ours only: where the enemy's fleets are going is theirs to know.)

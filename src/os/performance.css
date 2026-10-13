@@ -1,0 +1,16 @@
+.performance-overlay {
+  position: fixed;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 2147483647;
+  display: grid;
+  gap: 2px;
+  padding: 6px 9px;
+  background: #10131bee;
+  color: #f4f5f7;
+  border: 1px solid #737b8b;
+  font: 11px/1.4 monospace;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  contain: layout paint style;
+}
