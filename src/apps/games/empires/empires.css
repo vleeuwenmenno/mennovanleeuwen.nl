@@ -5571,13 +5571,12 @@ span.ew-teamtag {
   margin: 0;
 }
 
-/* Blockades: a barrier ring round the system in the blockading side's colour, dashed and slowly
-   turning, thicker and red-tinged when it's against us. */
+/* Blockades: a static dashed barrier in the blockading side's colour, thicker and red-tinged
+   when it's against us. Animating this large SVG stroke repaints the map every display frame. */
 .ew-gblock circle {
   stroke-width: 2.5;
   stroke-dasharray: 7 5;
   opacity: 0.9;
-  animation: ew-route 1.6s linear infinite;
 }
 .ew-gblock.is-theirs circle {
   stroke-width: 3.5;

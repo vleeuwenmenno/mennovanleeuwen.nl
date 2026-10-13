@@ -1,4 +1,5 @@
 import { StrictMode } from 'react'
+import { PerformanceOverlay } from './os/PerformanceOverlay'
 import { createRoot } from 'react-dom/client'
 import { APP_META } from './os/apps'
 import { loadAccount } from './os/account'
@@ -47,6 +48,7 @@ const isApp = (app: string) => app in APP_META && app !== 'trash'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
+    <PerformanceOverlay />
     {play ? (
       <PlayPage />
     ) : (
