@@ -1405,13 +1405,13 @@ export function Files({ win }: { win: WinState }) {
             <div className="fm-list-head">
               {(
                 [
-                  ['Name', 'az', 'za'],
-                  ['Size', 'largest', 'smallest'],
-                  ['Modified', 'newest', 'oldest'],
-                  ['Type', 'type', 'type'],
-                ] as [string, Sort, Sort][]
-              ).map(([label, a, b]) => (
-                <button key={label} onClick={() => setPrefs({ sort: prefs.sort === a ? b : a })} className={prefs.sort === a || prefs.sort === b ? 'is-sorted' : ''}>
+                  ['Name', 'az', 'za', 'name'],
+                  ['Size', 'largest', 'smallest', 'size'],
+                  ['Modified', 'newest', 'oldest', 'date'],
+                  ['Type', 'type', 'type', 'type'],
+                ] as [string, Sort, Sort, string][]
+              ).map(([label, a, b, col]) => (
+                <button key={label} onClick={() => setPrefs({ sort: prefs.sort === a ? b : a })} className={`fm-head-${col} ${prefs.sort === a || prefs.sort === b ? 'is-sorted' : ''}`}>
                   {label}
                   {prefs.sort === a ? ' ↓' : prefs.sort === b && a !== b ? ' ↑' : ''}
                 </button>
@@ -1530,9 +1530,9 @@ export function Files({ win }: { win: WinState }) {
               )}
               {prefs.view === 'list' && (
                 <>
-                  <span className="fm-col">{item.kind === 'folder' ? (item.sf ? (item.sf.library ? formatSize(item.sf.library.size) : '') : `${item.size} items`) : formatSize(item.size)}</span>
-                  <span className="fm-col">{new Date(item.mtime).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
-                  <span className="fm-col">{launcherOf(item) ? 'Launcher' : KIND_LABEL[item.kind]}</span>
+                  <span className="fm-col fm-col-size">{item.kind === 'folder' ? (item.sf ? (item.sf.library ? formatSize(item.sf.library.size) : '') : `${item.size} items`) : formatSize(item.size)}</span>
+                  <span className="fm-col fm-col-date">{new Date(item.mtime).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                  <span className="fm-col fm-col-type">{launcherOf(item) ? 'Launcher' : KIND_LABEL[item.kind]}</span>
                 </>
               )}
               {search !== null && prefs.view !== 'list' && !item.sf && <span className="fm-where">{prettyPath(item.path.split('/').slice(0, -1).join('/') || '/')}</span>}

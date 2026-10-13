@@ -4879,7 +4879,6 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
 .fm-list-head,
 .fm-view-list .fm-item {
   display: grid;
-  grid-template-columns: calc(var(--icon) + 8px) minmax(0, 1fr) 90px 140px 90px;
   align-items: center;
   gap: 8px;
   padding: 4px 12px;
@@ -4888,7 +4887,6 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
   position: sticky;
   top: 0;
   z-index: 1;
-  grid-template-columns: minmax(0, 1fr) 90px 140px 90px;
   padding-left: calc(32px + var(--icon));
   background: var(--bg);
   border-bottom: 1px solid var(--line);
@@ -4896,7 +4894,11 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
   color: var(--muted);
 }
 .fm-list-head button {
+  min-width: 0;
   text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .fm-list-head button.is-sorted {
   color: var(--fg);
@@ -5114,15 +5116,55 @@ button.fm-dd-row:hover {
   .fm-side {
     display: none;
   }
+}
+/* The list's columns go by the list's own width (the window and the preview pane both change it),
+   not the screen's: Name keeps at least 160px, and Type, then Modified, then Size make way. */
+.fm-view-list {
+  container: fm-list / inline-size;
+}
+.fm-list-head,
+.fm-view-list .fm-item {
+  grid-template-columns: calc(var(--icon) + 8px) minmax(160px, 1fr) 90px 140px 90px;
+}
+.fm-list-head {
+  grid-template-columns: minmax(160px, 1fr) 90px 140px 90px;
+}
+@container fm-list (max-width: 600px) {
   .fm-list-head,
   .fm-view-list .fm-item {
-    grid-template-columns: calc(var(--icon) + 8px) minmax(0, 1fr) 80px;
+    grid-template-columns: calc(var(--icon) + 8px) minmax(160px, 1fr) 80px 130px;
   }
   .fm-list-head {
-    grid-template-columns: minmax(0, 1fr) 80px;
+    grid-template-columns: minmax(160px, 1fr) 80px 130px;
   }
-  .fm-list-head button:nth-child(n + 3),
-  .fm-view-list .fm-col:nth-child(n + 4) {
+  .fm-list-head .fm-head-type,
+  .fm-view-list .fm-col-type {
+    display: none;
+  }
+}
+@container fm-list (max-width: 480px) {
+  .fm-list-head,
+  .fm-view-list .fm-item {
+    grid-template-columns: calc(var(--icon) + 8px) minmax(160px, 1fr) 80px;
+  }
+  .fm-list-head {
+    grid-template-columns: minmax(160px, 1fr) 80px;
+  }
+  .fm-list-head .fm-head-date,
+  .fm-view-list .fm-col-date {
+    display: none;
+  }
+}
+@container fm-list (max-width: 330px) {
+  .fm-list-head,
+  .fm-view-list .fm-item {
+    grid-template-columns: calc(var(--icon) + 8px) minmax(0, 1fr);
+  }
+  .fm-list-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .fm-list-head .fm-head-size,
+  .fm-view-list .fm-col-size {
     display: none;
   }
 }
