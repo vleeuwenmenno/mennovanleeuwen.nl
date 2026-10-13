@@ -154,7 +154,7 @@ export function splitCards(text: string): Card[] {
   let depth = 0
   for (const line of logical) {
     if (!line.trim()) continue
-    const upper = line.toUpperCase()
+    const upper = line.trim().toUpperCase()
     if (upper === 'BEGIN:VCARD') {
       if (card) depth++
       else {
@@ -172,6 +172,8 @@ export function splitCards(text: string): Card[] {
       } else depth--
     }
   }
+  // A card the file never closes (some generators leave END:VCARD out at the end) is taken as it is.
+  if (card && card.length > 1) cards.push(upgrade21([...card, 'END:VCARD']))
   return cards
 }
 

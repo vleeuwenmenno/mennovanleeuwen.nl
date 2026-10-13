@@ -4,6 +4,7 @@ import { openContextMenu, openMenuAt, type MenuItem } from '../../os/ContextMenu
 import { pickFolder } from '../../os/FolderPicker'
 import { notify } from '../../os/notify'
 import { uploadFiles } from '../../data/uploads'
+import { openImport, pimAppFor } from '../../data/pimFiles'
 import {
   act,
   allowImagesFrom,
@@ -390,6 +391,8 @@ async function saveToSeafile(account: number, list: Attachment[]) {
 function Attachments({ account, list }: { account: number; list: Attachment[] }) {
   const seafile = !!getAccount().seafile
   const menu = (a: Attachment): MenuItem[] => [
+    // A calendar or address-book file imports into Calendar or Contacts, as when opened from Files.
+    ...(pimAppFor(a.name) ? [{ label: pimAppFor(a.name) === 'calendar' ? 'Open in Calendar' : 'Open in Contacts', onSelect: () => openImport(pimAppFor(a.name)!, [{ name: a.name, read: () => blobFile(account, a) }]) }] : []),
     { label: 'Download', onSelect: () => download(blobUrl(account, a), a.name) },
     ...(/^image\//.test(a.type) ? [{ label: 'Open in a new tab', onSelect: () => window.open(blobUrl(account, a, true), '_blank', 'noopener,noreferrer') }] : []),
     { label: 'Save to Files (Seafile)…', disabled: !seafile, hint: seafile ? undefined : 'Link Seafile in Settings first', onSelect: () => void saveToSeafile(account, [a]) },

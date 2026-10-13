@@ -6,7 +6,7 @@ import { installContextMenuFallback, installTouchContextMenu } from './os/Contex
 import { appHere } from './os/cvMode'
 import { playMode } from './os/playMode'
 import { PlayPage } from './apps/games/Play'
-import { initialLayout, placement, Shell } from './os/Shell'
+import { initialLayout, placement, Shell, winTitle } from './os/Shell'
 import { applyDockReserve } from './os/dockPrefs'
 import { startNoteEventLinks } from './os/noteEventLinks'
 import { startPimLinks } from './os/pimLinks'
@@ -47,7 +47,7 @@ createRoot(document.getElementById('root')!).render(
     {play ? (
       <PlayPage />
     ) : (
-      <WindowManagerProvider initial={initialLayout} placement={placement} isApp={isApp}>
+      <WindowManagerProvider initial={initialLayout} placement={placement} isApp={isApp} nameOf={winTitle}>
         <Shell />
       </WindowManagerProvider>
     )}

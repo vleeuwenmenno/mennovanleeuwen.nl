@@ -8,7 +8,7 @@ import { authEnabled, currentUser, finishLogin, logout, registration, requireAdm
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { addCaldav, clearCaldavCache, listCaldav, removeCaldav } from './caldav.ts'
-import { allCalendars, allEvents, createEvent, deleteEvent, updateEvent } from './calendars.ts'
+import { allCalendars, allEvents, createEvent, deleteEvent, knownUids, updateEvent } from './calendars.ts'
 import { findLinked, noteLinkApi } from './noteLinks.ts'
 import { handleContactsApi } from './contacts.ts'
 import { handleTasksApi } from './tasks.ts'
@@ -188,6 +188,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/calendar/events' && method === 'POST') return await createEvent(requireUser(req), await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true
     if (path === '/api/calendar/events' && method === 'PATCH') return await updateEvent(requireUser(req), await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true
     if (path === '/api/calendar/events' && method === 'DELETE') return await deleteEvent(requireUser(req), await readJson(req, 8 * 1024)), json(res, 200, { ok: true }), true
+    // Which of the UIDs of an .ics being imported the calendar has already: { calendar, uids } answers { known }.
+    if (path === '/api/calendar/known' && method === 'POST') return json(res, 200, { known: await knownUids(requireUser(req), await readJson(req, 256 * 1024)) }), true
     // Notes linked to events (server/noteLinks.ts): the event's backlink to a note, { ref | link, note, all?, unlink? }; and the event a note's link points at now, { uid, calendarId?, occurrence?, start?, fresh? }.
     if (path === '/api/calendar/note-link' && method === 'POST') return json(res, 200, await noteLinkApi(requireUser(req), await readJson(req, 16 * 1024))), true
     if (path === '/api/calendar/find' && method === 'POST') {

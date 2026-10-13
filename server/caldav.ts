@@ -710,7 +710,8 @@ async function deleteObject(account: Account, url: string) {
 /** Makes an event; answers where it now lives. */
 export async function createCaldavEvent(user: User, calendarId: string, input: EventInput): Promise<CaldavRef> {
   const { account, calendar } = await calendarFor(user, calendarId)
-  const uid = randomUUID()
+  // An imported event (an .ics dropped on the Calendar app) keeps the UID it came with, so the same file is recognised next time.
+  const uid = input.uid || randomUUID()
   const ev = ['BEGIN:VEVENT', `UID:${uid}`, `CREATED:${davTime(new Date())}`, 'END:VEVENT']
   // A repeating timed event is written in its time zone, not UTC, so "every Monday at 09:00" stays
   // at 09:00 after daylight saving changes: a DTSTART with the TZID goes in first, and applyInput
@@ -720,10 +721,20 @@ export async function createCaldavEvent(user: User, calendarId: string, input: E
   applyInput(ev, input, account.username.toLowerCase())
   if (input.recurrence) setProp(ev, 'RRULE', [`RRULE:${input.recurrence}`])
   setProp(ev, 'SEQUENCE', ['SEQUENCE:0'])
-  const href = `${calendar.href.endsWith('/') ? calendar.href : `${calendar.href}/`}${uid}.ics`
+  const href = `${calendar.href.endsWith('/') ? calendar.href : `${calendar.href}/`}${/^[\w.@-]{1,120}$/.test(uid) ? uid : randomUUID()}.ics`
   await putObject(account, href, ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//mvlos//Calendar//EN', 'CALSCALE:GREGORIAN', ev, 'END:VCALENDAR'], 'new')
   clearCaldavCache(user)
   return { k: 'c', c: calendarId, h: href, u: uid }
+}
+
+/** Which of these iCalendar UIDs a calendar already has (any event of the series counts). */
+export async function caldavKnownUids(user: User, calendarId: string, uids: string[]): Promise<string[]> {
+  const { account, calendar } = await calendarFor(user, calendarId)
+  const wanted = new Set(uids)
+  const xml = await dav(account, 'REPORT', calendar.href, '1', '<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><c:calendar-data/></d:prop><c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"/></c:comp-filter></c:filter></c:calendar-query>')
+  const known = new Set<string>()
+  for (const r of responses(xml)) for (const ev of rawEvents(unescapeXml(prop(r.body, 'calendar-data') ?? ''))) if (ev.props.UID && wanted.has(ev.props.UID.value)) known.add(ev.props.UID.value)
+  return [...known]
 }
 
 /** One event (or one occurrence of a series) as it is now, for the Agents app's changes. */

@@ -1,10 +1,11 @@
 import type { User } from './auth.ts'
-import { caldavCalendars, caldavEvents, createCaldavEvent, deleteCaldavEvent, getCaldavEvent, listCaldav, moveCaldavEvent, updateCaldavEvent, type CaldavRef } from './caldav.ts'
+import { caldavCalendars, caldavEvents, caldavKnownUids, createCaldavEvent, deleteCaldavEvent, getCaldavEvent, listCaldav, moveCaldavEvent, updateCaldavEvent, type CaldavRef } from './caldav.ts'
 import {
   createGoogleEvent,
   deleteGoogleEvent,
   getGoogleEvent,
   googleAccount,
+  googleKnownUids,
   listCalendars,
   listEvents,
   moveGoogleEvent,
@@ -32,7 +33,7 @@ export type AnyCalendar = CalendarInfo & { source: string }
  * exclusive). `recurrence` is an RRULE's value (FREQ=WEEKLY;BYDAY=MO), only for a new event: the
  * Agents app makes repeating events, the Calendar app doesn't yet.
  */
-export type EventInput = { title: string; start: string; end: string; allDay: boolean; location?: string; description?: string; attendees?: string[]; timeZone?: string; recurrence?: string }
+export type EventInput = { title: string; start: string; end: string; allDay: boolean; location?: string; description?: string; attendees?: string[]; timeZone?: string; recurrence?: string; uid?: string }
 
 export type Ref = GoogleRef | CaldavRef
 export const encodeRef = (r: Ref) => Buffer.from(JSON.stringify(r)).toString('base64url')
@@ -158,6 +159,8 @@ export function cleanInput(raw: unknown, partial: boolean): Partial<EventInput> 
     if (partial) throw new HttpError(400, 'How an event repeats can only be set when it is made')
     out.recurrence = cleanRule(r.recurrence)
   }
+  // An imported event's own iCalendar UID, only for a new one (so importing the same file again can skip what is there).
+  if (typeof r.uid === 'string' && !partial && /^[\x21-\x7e]{1,200}$/.test(r.uid) && !/[;,\\]/.test(r.uid)) out.uid = r.uid
   if (!partial && (out.start === undefined || out.title === undefined)) throw new HttpError(400, 'A new event needs a title, start and end')
   return out
 }
@@ -192,6 +195,14 @@ export async function createEvent(user: User, body: { calendar?: unknown; event?
     // another device did): fetch again. Also after a failure, which may have half happened.
     tellPages(user.id, 'calendar')
   }
+}
+
+/** Which of these iCalendar UIDs the calendar already has: an import skips those. */
+export async function knownUids(user: User, body: { calendar?: unknown; uids?: unknown }): Promise<string[]> {
+  const calendar = String(body.calendar ?? '')
+  const uids = Array.isArray(body.uids) ? [...new Set(body.uids.filter((u): u is string => typeof u === 'string' && u.length > 0 && u.length <= 200))].slice(0, 2000) : []
+  if (!calendar) throw new HttpError(400, 'Pick a calendar')
+  return uids.length ? (isCaldav(calendar) ? caldavKnownUids(user, calendar, uids) : googleKnownUids(user, calendar, uids)) : []
 }
 
 /**

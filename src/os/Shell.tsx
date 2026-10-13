@@ -111,8 +111,15 @@ export function initialLayout(): { app: AppId; geometry: Geometry; props?: WinSt
   return [{ app: 'terminal', geometry: { x: left + noteW + 40, y: top, w: termW, h: termH }, props: { motd: '1' } }, ...notes(left)]
 }
 
+/** The next workspace `by` (1 or -1) from the one on screen, up to `last`, past the ones other
+ * tabs have; the one on screen when there is none. */
+function stepWorkspace(wm: { workspace: number; elsewhere: number[] }, by: number, last: number) {
+  for (let n = wm.workspace + by; n >= 1 && n <= last; n += by) if (!wm.elsewhere.includes(n)) return n
+  return wm.workspace
+}
+
 /** A window's name in menus: its own title when it shows one thing, else its app's dock name. */
-const winTitle = (w: WinState) => APP_META[w.app].titleOf?.(w) ?? APP_META[w.app].dock
+export const winTitle = (w: WinState) => APP_META[w.app].titleOf?.(w) ?? APP_META[w.app].dock
 
 function TopBar() {
   const wm = useWM()
@@ -121,7 +128,9 @@ function TopBar() {
   // Workspaces, like Omarchy's bar: 1 to 5 always, and any later one that has windows on it.
   const onWs = (n: number) => wm.windows.filter((w) => workspaceOf(w) === n).sort((a, b) => a.pid - b.pid)
   const occupied = new Set(wm.windows.map(workspaceOf).filter((n): n is number => n !== null))
-  const count = Math.min(WORKSPACES, Math.max(5, wm.workspace, ...occupied))
+  // Workspaces other tabs have (one workspace per tab) show too, marked as theirs.
+  const count = Math.min(WORKSPACES, Math.max(5, wm.workspace, ...occupied, ...wm.elsewhere))
+  const elsewhere = (n: number) => wm.elsewhere.includes(n)
   const mine = wm.windows.filter((w) => wm.shown(w))
   // The bar's own menu, for its background and anything on it without a menu of its own.
   const barMenu = (): MenuItem[] => [
@@ -137,18 +146,18 @@ function TopBar() {
   const workspaceMenu = (n: number): MenuItem[] => {
     const wins = onWs(n)
     return [
-      { label: `Workspace ${n}`, disabled: true },
+      { label: elsewhere(n) ? `Workspace ${n} · open in another tab` : `Workspace ${n}`, disabled: true },
       { separator: true },
-      ...(n !== wm.workspace ? [{ label: 'Go to workspace', shortcut: `Alt ${n}`, onSelect: () => wm.setWorkspace(n) }] : []),
-      ...(focusedWin && workspaceOf(focusedWin) !== n ? [{ label: `Move ${winTitle(focusedWin)} here`, shortcut: `Alt Shift ${n}`, onSelect: () => wm.moveToWorkspace(focusedWin.pid, n) }] : []),
+      ...(n !== wm.workspace && !elsewhere(n) ? [{ label: 'Go to workspace', shortcut: `Alt ${n}`, onSelect: () => wm.setWorkspace(n) }] : []),
+      ...(focusedWin && workspaceOf(focusedWin) !== n ? [{ label: elsewhere(n) ? `Send ${winTitle(focusedWin)} to that tab` : `Move ${winTitle(focusedWin)} here`, shortcut: `Alt Shift ${n}`, onSelect: () => wm.moveToWorkspace(focusedWin.pid, n) }] : []),
       ...(wins.length ? [{ separator: true as const }, ...wins.map((w) => ({ label: `${winTitle(w)}${w.minimized ? ' (minimized)' : ''}`, onSelect: () => wm.focus(w.pid) }))] : [{ label: 'No windows', disabled: true }]),
       ...(wins.length ? [{ separator: true as const }, { label: wins.length > 1 ? `Close all ${wins.length} windows` : 'Close its window', danger: true, onSelect: () => wins.forEach((w) => wm.close(w.pid)) }] : []),
     ]
   }
-  // Scrolling over the numbers walks through the workspaces, as in Waybar.
+  // Scrolling over the numbers walks through the workspaces, as in Waybar, past other tabs' ones.
   const onWheel = (e: React.WheelEvent) => {
     const by = Math.sign(e.deltaY || e.deltaX)
-    if (by) wm.setWorkspace(Math.min(count, Math.max(1, wm.workspace + by)))
+    if (by) wm.setWorkspace(stepWorkspace(wm, by, count))
   }
   return (
     <header className="topbar" onContextMenu={(e) => openContextMenu(e, barMenu())}>
@@ -163,10 +172,10 @@ function TopBar() {
               <button
                 key={n}
                 data-ws={n}
-                className={`ws ${n === wm.workspace ? 'is-active' : ''} ${wins.length ? '' : 'is-empty'}`}
+                className={`ws ${n === wm.workspace ? 'is-active' : ''} ${wins.length ? '' : 'is-empty'} ${elsewhere(n) ? 'is-elsewhere' : ''}`}
                 onClick={() => wm.setWorkspace(n)}
                 onContextMenu={(e) => openContextMenu(e, workspaceMenu(n))}
-                title={`Workspace ${n} (Alt ${n})${wins.length ? ` · ${[...new Set(wins.map((w) => APP_META[w.app].dock))].join(', ')}` : ' · empty'}`}
+                title={elsewhere(n) ? `Workspace ${n} · Open in another tab` : `Workspace ${n} (Alt ${n})${wins.length ? ` · ${[...new Set(wins.map((w) => APP_META[w.app].dock))].join(', ')}` : ' · empty'}`}
                 aria-current={n === wm.workspace ? 'true' : undefined}
               >
                 {n}
@@ -472,7 +481,10 @@ function Dock() {
     const l = launcherOf(id)
     if (l) return void launchLink(l, wm)
     const app = id as AppId
-    const wins = wm.windows.filter((x) => x.app === app).sort((a, b) => a.pid - b.pid)
+    const all = wm.windows.filter((x) => x.app === app).sort((a, b) => a.pid - b.pid)
+    // Windows in other tabs (one workspace per tab) only when the app has none in this one.
+    const near = all.filter((w) => !wm.elsewhere.includes(workspaceOf(w) ?? 0))
+    const wins = near.length ? near : all
     if (!wins.length || app === 'trash') return wm.open(app)
     const focused = wins.find((x) => x.pid === wm.focusedPid && !x.minimized)
     if (focused && wins.length === 1) return wm.minimize(focused.pid)
@@ -860,7 +872,7 @@ export function Shell() {
       } else if (e.ctrlKey && !e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
         e.preventDefault()
         e.stopPropagation()
-        wm.setWorkspace(Math.min(WORKSPACES, Math.max(1, wm.workspace + (e.key === 'ArrowRight' ? 1 : -1))))
+        wm.setWorkspace(stepWorkspace(wm, e.key === 'ArrowRight' ? 1 : -1, WORKSPACES))
       }
     }
     window.addEventListener('keydown', onKey, true)

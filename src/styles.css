@@ -403,6 +403,25 @@ body.is-resizing iframe {
 .ws.is-empty:not(.is-active) {
   opacity: 0.45;
 }
+/* A workspace another tab of this browser has (one workspace per tab): dimmed, with a dot for
+   the tab it is open in. Clicking it says so instead of going there. */
+.ws.is-elsewhere {
+  position: relative;
+  cursor: default;
+}
+.ws.is-elsewhere:not(.is-active):not([data-drop]) {
+  opacity: 0.6;
+}
+.ws.is-elsewhere::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
 /* A window being dragged over this number goes to that workspace when let go. */
 .ws[data-drop] {
   opacity: 1;

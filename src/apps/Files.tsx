@@ -22,12 +22,13 @@ import { lookup as fsLookup, walk as fsWalk } from '../terminal/fs'
 import { browserMountPoint } from '../data/mounts'
 import { cvMode } from '../os/cvMode'
 import { browserBytes, useBrowserFiles } from '../data/browserfs'
-import { browserPathOf, canChange, canWriteFolder, deleteNoteFor, inBrowser, downloadFile, makeFile, makeFolder, removePaths, renamePath, transferPaths } from '../data/fileOps'
+import { browserPathOf, canChange, canWriteFolder, deleteNoteFor, importFileOf, inBrowser, downloadFile, makeFile, makeFolder, removePaths, renamePath, transferPaths } from '../data/fileOps'
 import { isArchive } from '../data/archive'
 import { besideArchive, extract } from '../data/extract'
 import { dropInTrash, dropIntoFolder, downloadUrl, folderOp, prepareDownload, trashOp, undoLastMove } from '../data/fileDrop'
 import { launch, launcherAt, launcherImage, renameLauncherFile, useLauncherFiles, type Launcher } from '../data/launchers'
 import { isLauncherName } from '../data/launcherFiles'
+import { isIcsName, isVcfName, openImport, pimAppFor } from '../data/pimFiles'
 import { holdToDrag, startNativeDrag, useDropTarget, type DragItem, type DropTarget } from '../os/dnd'
 import { useEdgeSwipe } from '../os/useEdgeSwipe'
 import { useMediaQuery } from '../os/useMediaQuery'
@@ -431,7 +432,7 @@ export function Files({ win }: { win: WinState }) {
 
   // --- actions ----------------------------------------------------------------------------------
 
-  const openItem = (item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' | 'preview' | 'player' | 'amp' | 'pdf' | 'office' | 'archive' = 'default') => {
+  const openItem = (item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' | 'preview' | 'player' | 'amp' | 'pdf' | 'office' | 'archive' | 'calendar' | 'contacts' = 'default') => {
     if (item.trash) {
       setToast(item.trash === 'desktop' ? 'Put it back first (right-click → Put back).' : 'That file is a cautionary tale. It stays in the trash.')
       return
@@ -453,6 +454,9 @@ export function Files({ win }: { win: WinState }) {
     remember(item)
     if (how === 'terminal') return wm.openNew('terminal', { run: `cat ${shq(prettyPath(toPosix(item.path) ?? item.path))}`, t: String(Date.now()) })
     if (how === 'viewer') return wm.openNew('viewer', { path: item.path })
+    // .ics and .vcf files import into Calendar and Contacts, as when dropped on them.
+    const pim = how === 'default' ? pimAppFor(item.name) : how === 'calendar' || how === 'contacts' ? how : null
+    if (pim) return openImport(pim, [importFileOf(item.path)])
     if (how === 'preview' || how === 'player' || how === 'pdf' || how === 'archive') return wm.openNew(how, { path: item.path })
     if (how === 'amp') return wm.openNew('amp', { path: item.path, t: String(Date.now()) })
     if (how === 'zed') return wm.open('zed', { path: item.path, view: 'preview', t: String(Date.now()) })
@@ -463,7 +467,7 @@ export function Files({ win }: { win: WinState }) {
   }
 
   /** Seafile: folders open here, files as everywhere else (see openSeafile). */
-  function openSeafileItem(item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' | 'preview' | 'player' | 'amp' | 'pdf' | 'office' | 'archive') {
+  function openSeafileItem(item: Item, how: 'default' | 'viewer' | 'zed' | 'terminal' | 'preview' | 'player' | 'amp' | 'pdf' | 'office' | 'archive' | 'calendar' | 'contacts') {
     const posix = toPosix(item.path)
     if (how === 'terminal' && posix) return wm.openNew('terminal', { run: item.kind === 'folder' ? `cd ${shq(prettyPath(posix))} && ls` : `cat ${shq(prettyPath(posix))}`, t: String(Date.now()) })
     if (item.kind === 'folder') return navigate(item.path, true, item.posix)
@@ -668,6 +672,8 @@ export function Files({ win }: { win: WinState }) {
                   { label: 'Default app', onSelect: () => openItem(item) },
                   { label: 'Zed', onSelect: () => openItem(item, 'zed') },
                   { label: 'Viewer', onSelect: () => openItem(item, 'viewer') },
+                  ...(isIcsName(item.name) ? [{ label: 'Calendar', onSelect: () => openItem(item, 'calendar') }] : []),
+                  ...(isVcfName(item.name) ? [{ label: 'Contacts', onSelect: () => openItem(item, 'contacts') }] : []),
                   ...(item.kind === 'image' ? [{ label: 'Preview', onSelect: () => openItem(item, 'preview') }] : []),
                   ...(item.kind === 'audio' ? [{ label: 'Omamp', onSelect: () => openItem(item, 'amp') }] : []),
                   ...(item.kind === 'video' || item.kind === 'audio' ? [{ label: 'Player', onSelect: () => openItem(item, 'player') }] : []),
@@ -719,6 +725,8 @@ export function Files({ win }: { win: WinState }) {
                 { label: 'Default app', onSelect: () => openItem(item) },
                 { label: 'Zed', onSelect: () => openItem(item, 'zed') },
                 { label: 'Viewer', onSelect: () => openItem(item, 'viewer') },
+                ...(isIcsName(item.name) ? [{ label: 'Calendar', onSelect: () => openItem(item, 'calendar') }] : []),
+                ...(isVcfName(item.name) ? [{ label: 'Contacts', onSelect: () => openItem(item, 'contacts') }] : []),
                 ...(item.kind === 'image' ? [{ label: 'Preview', onSelect: () => openItem(item, 'preview') }] : []),
                 ...(item.kind === 'audio' ? [{ label: 'Omamp', onSelect: () => openItem(item, 'amp') }] : []),
                 ...(item.kind === 'video' || item.kind === 'audio' ? [{ label: 'Player', onSelect: () => openItem(item, 'player') }] : []),
