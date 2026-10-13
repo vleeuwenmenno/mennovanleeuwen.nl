@@ -3,6 +3,7 @@ import {
   createEvent,
   dayKey,
   deleteEvent,
+  eventActions,
   fetchEvents,
   isShown,
   reloadCalendars,
@@ -19,6 +20,7 @@ import {
   type CalendarInfo,
 } from '../../data/calendar'
 import { openContact, useContacts } from '../../data/contacts'
+import { sameOccurrence } from '../../data/noteEvents'
 import { readBytes } from '../../data/fileOps'
 import { openLink } from '../../data/links'
 import { composeMail } from '../../data/mail'
@@ -49,7 +51,8 @@ import { dayLoad, MiniMonth, YearView } from './YearView'
 // birthdays (src/apps/calendar/birthdays.ts), and .ics files dropped on it are imported.
 //
 // props.date ("2026-10-09") and props.view open it on a day (from the clock's month), props.event
-// with an iCalendar UID opens that event there (an invitation in Mail), and props.compose takes a
+// with an iCalendar UID opens that event there (an invitation in Mail; props.occurrence picks one
+// occurrence of a repeating event, for a note linked to it), and props.compose takes a
 // new event to fill in from composeEvent() (Mail's "Create event from this email").
 
 /** The time now, once a minute. */
@@ -175,6 +178,7 @@ export function CalendarApp({ win }: { win: WinState }) {
 
   // Asked from another app: a new event filled in (composeEvent), or an event by its UID.
   const wantedUid = useRef<string | null>(null)
+  const wantedOccurrence = useRef<string | null>(null)
   useEffect(() => {
     const req = takeEventRequest(win.props.compose)
     if (req) {
@@ -185,11 +189,13 @@ export function CalendarApp({ win }: { win: WinState }) {
       setEditing({ event: null, draft: { ...draft, title: req.title ?? '', guests: req.guests ?? [], description: req.description ?? '', location: req.location ?? '' } })
     }
     wantedUid.current = win.props.event ?? null
+    wantedOccurrence.current = win.props.occurrence ?? null
     openWanted()
   }, [win.props.t]) // eslint-disable-line react-hooks/exhaustive-deps
   // The event asked for, once it is in what was fetched (now, or after the day it is on loads).
   const openWanted = () => {
-    const e = wantedUid.current ? data?.events.find((x) => x.uid === wantedUid.current) : null
+    const occurrence = wantedOccurrence.current
+    const e = wantedUid.current ? data?.events.find((x) => x.uid === wantedUid.current && (!occurrence || sameOccurrence(x.occurrence, occurrence))) : null
     if (!e) return
     wantedUid.current = null
     setEditing({ event: e, draft: draftFromEvent(e) })
@@ -303,6 +309,8 @@ export function CalendarApp({ win }: { win: WinState }) {
           ...(e.meet ? [{ label: 'Join the call', onSelect: () => openLink(e.meet!) }] : []),
           ...(e.url ? [{ label: 'Open in Google Calendar', onSelect: () => openLink(e.url!) }] : []),
           ...(guests.length ? [{ label: 'Email guests', onSelect: () => composeMail({ to: guests, subject: e.title }) }] : []),
+          // What other apps add (notes linked to it: src/os/noteEventLinks.tsx).
+          ...eventActions(e).map((a): MenuItem => (a.submenu ? { label: a.label, submenu: a.submenu(e).map((x) => ({ label: x.label, onSelect: x.run })) } : { label: a.label, onSelect: () => a.run?.(e) })),
           ...(e.editable && !e.recurring && writable.length > 1
             ? [{ label: 'Move to', submenu: writable.map((c) => ({ label: c.name, swatch: c.color, checked: c.id === e.calendarId, disabled: c.id === e.calendarId, onSelect: () => moveTo(e, c) })) }]
             : []),

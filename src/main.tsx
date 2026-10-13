@@ -8,6 +8,7 @@ import { playMode } from './os/playMode'
 import { PlayPage } from './apps/games/Play'
 import { initialLayout, placement, Shell } from './os/Shell'
 import { applyDockReserve } from './os/dockPrefs'
+import { startNoteEventLinks } from './os/noteEventLinks'
 import { startPimLinks } from './os/pimLinks'
 import { registerServiceWorker } from './os/pwa'
 import { trackVisualViewport } from './os/viewport'
@@ -32,6 +33,8 @@ startSync()
 if (!play) startBrowserFiles()
 // Mail, Contacts, Calendar and Tasks plugged into each other (src/os/pimLinks.tsx).
 if (!play) startPimLinks()
+// Notes linked to calendar events: meeting notes (src/os/noteEventLinks.tsx).
+if (!play) startNoteEventLinks()
 installContextMenuFallback()
 installTouchContextMenu()
 void loadAccount()

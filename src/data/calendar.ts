@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { api, hasCalendar, useAccount, type Account } from '../os/account'
 import { synced } from '../os/synced'
 
@@ -29,6 +29,10 @@ export type CalendarEvent = {
   ref?: string
   /** Its iCalendar UID (an invitation in Mail opens it by this). */
   uid?: string
+  /** One occurrence of a repeating event: when it was meant to start (ISO time, or "YYYY-MM-DD"). */
+  occurrence?: string
+  /** Ids of notes linked to it, as the event itself says (its backlinks; src/data/noteEvents.ts). */
+  notes?: string[]
 }
 
 const CACHE_MS = 2 * 60_000
@@ -83,8 +87,15 @@ export function fetchEvents(from: Date, to: Date, calendars: string[] | null = n
   if (!fresh && hit && Date.now() - hit.at < CACHE_MS) return hit.value
   const value = api<CalendarEvents>(`/api/calendar/events?${key}`)
   cache.set(key, { at: Date.now(), value })
-  value.catch(() => cache.delete(key))
+  value.then((r) => fetchListeners.forEach((l) => l(r.events)), () => cache.delete(key))
   return value
+}
+
+const fetchListeners = new Set<(events: CalendarEvent[]) => void>()
+/** Told every list of events that comes in (notes linked to them bring their copy of the title and time up to date). */
+export function onEventsFetched(l: (events: CalendarEvent[]) => void): () => void {
+  fetchListeners.add(l)
+  return () => fetchListeners.delete(l)
 }
 
 /** The events on one local day: timed ones that start that day, all-day ones that cover it. */
@@ -205,7 +216,67 @@ export function takeEventRequest(key: string | undefined): EventRequest | null {
   return r
 }
 
-/** Opens the Calendar app on a day, with the event of this iCalendar UID open when it is there. */
-export function openEventByUid(uid: string, date: Date) {
-  openCalendar({ date: dayKey(date), event: uid })
+/** Opens the Calendar app on a day, with the event of this iCalendar UID open when it is there (that occurrence, for a repeating one). */
+export function openEventByUid(uid: string, date: Date, occurrence?: string) {
+  openCalendar({ date: dayKey(date), event: uid, ...(occurrence ? { occurrence } : {}) })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Hooks for other apps (how Contacts and Mail take part, src/os/pimLinks.tsx): actions in an
+// event's menu and its editor, a section in the editor, and a mark beside the title in the
+// Calendar's views and the Agenda (notes linked to events, src/os/noteEventLinks.tsx).
+
+export type EventAction = { id: string; label: string; when?: (e: CalendarEvent) => boolean; run?: (e: CalendarEvent) => void; /** A submenu instead (in the event's menu). */ submenu?: (e: CalendarEvent) => { label: string; run: () => void }[] }
+/** A mark beside an event's title: a glyph, what it means, and what a click on it (where it can be clicked) does. */
+export type EventMark = { glyph: string; title: string; open?: () => void }
+
+const eventActionsById = new Map<string, EventAction>()
+const eventSlots = new Map<'notes', (e: CalendarEvent) => ReactNode>()
+let markOf: ((e: CalendarEvent) => EventMark | null) | null = null
+let hookVersion = 0
+const hookListeners = new Set<() => void>()
+const hooksChanged = () => {
+  hookVersion++
+  hookListeners.forEach((l) => l())
+}
+const useHooks = () =>
+  useSyncExternalStore(
+    (l) => (hookListeners.add(l), () => void hookListeners.delete(l)),
+    () => hookVersion,
+  )
+
+export function registerEventAction(a: EventAction): () => void {
+  eventActionsById.set(a.id, a)
+  hooksChanged()
+  return () => {
+    if (eventActionsById.get(a.id) === a) eventActionsById.delete(a.id)
+    hooksChanged()
+  }
+}
+/** What other apps offer for an event (one in a calendar, not a task or a birthday). */
+export const eventActions = (e: CalendarEvent) => [...eventActionsById.values()].filter((a) => !a.when || a.when(e))
+
+export function registerEventSlot(slot: 'notes', render: (e: CalendarEvent) => ReactNode): () => void {
+  eventSlots.set(slot, render)
+  hooksChanged()
+  return () => {
+    if (eventSlots.get(slot) === render) eventSlots.delete(slot)
+    hooksChanged()
+  }
+}
+export function useEventSlot(slot: 'notes') {
+  useHooks()
+  return eventSlots.get(slot) ?? null
+}
+
+/** Sets what marks events; call `changed` whenever its answers change (the views draw again). */
+export function registerEventMark(mark: (e: CalendarEvent) => EventMark | null): { changed: () => void; remove: () => void } {
+  markOf = mark
+  hooksChanged()
+  return { changed: hooksChanged, remove: () => (markOf === mark ? ((markOf = null), hooksChanged()) : undefined) }
+}
+/** The mark function, following its changes. */
+export function useEventMarks(): (e: CalendarEvent) => EventMark | null {
+  useHooks()
+  return (e) => markOf?.(e) ?? null
 }

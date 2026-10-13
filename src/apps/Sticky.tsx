@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
-import { createNote, getNote, NOTE_COLORS, randomTilt, trashNote, updateNote, useAllNotes, type Note, type NoteColor } from '../data/notes'
+import { createNote, getNote, NOTE_COLORS, noteActions, randomTilt, trashNote, updateNote, useAllNotes, useNoteSlot, type Note, type NoteColor } from '../data/notes'
 import type { MenuItem } from '../os/ContextMenu'
 import { useWindowMenu } from '../os/windowMenu'
 import { useWM, type WinState } from '../os/wm'
@@ -22,8 +22,9 @@ export const openSticky = (wm: WM, id: string) => openWidget(wm, 'sticky', id)
 export const closeStickies = (wm: WM, id: string) => closeWidget(wm, 'sticky', id)
 export const stickyOpen = (wm: WM, id: string) => widgetWindows(wm, 'sticky', id).length > 0
 
-/** Colour and slant choices, shared by the sticky's menu and the Notebook. */
+/** Colour and slant choices, and what other apps offer for a note (linking it to an event), shared by the sticky's menu and the Notebook. */
 export function noteMenu(note: Note, extra: MenuItem[] = []): MenuItem[] {
+  const more = noteActions(note).map((a): MenuItem => ({ label: a.label, onSelect: () => a.run(note) }))
   return [
     {
       label: 'Colour',
@@ -37,6 +38,7 @@ export function noteMenu(note: Note, extra: MenuItem[] = []): MenuItem[] {
         { label: 'Random', onSelect: () => updateNote(note.id, { tilt: randomTilt() }) },
       ],
     },
+    ...(more.length ? [{ separator: true as const }, ...more] : []),
     ...extra,
   ]
 }
@@ -123,6 +125,7 @@ export function Sticky({ win }: { win: WinState }) {
   // Showing the note (ticks work) or editing it (a textarea). Empty notes are edited.
   const [editing, setEditing] = useState(() => !note?.text.trim())
   const caret = useRef<number | null>(null)
+  const chips = useNoteSlot('chips')
   // Launchers dropped on the note are added to it as links, one per line.
   const root = useRef<HTMLDivElement>(null)
   useDropTarget(root, {
@@ -253,6 +256,7 @@ export function Sticky({ win }: { win: WinState }) {
           <StickyView text={note.text} onToggle={(i) => updateNote(note.id, { text: toggleLine(note.text, i) })} onEdit={edit} />
         </div>
       )}
+      {chips?.(note, 'sticky')}
     </div>
   )
 }

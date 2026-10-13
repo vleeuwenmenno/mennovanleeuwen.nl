@@ -5,6 +5,7 @@ import { connectGoogle, hasCalendar, signIn, useAccount } from '../os/account'
 import type { MenuItem } from '../os/ContextMenu'
 import { useWindowMenu } from '../os/windowMenu'
 import { useWM, type WinState } from '../os/wm'
+import { EventMark } from '../apps/calendar/EventMark'
 import { createWithTilt, setWidgetConfig, tiltMenu, useWidgetConfig } from './config'
 import type { WidgetDef } from './types'
 
@@ -174,6 +175,7 @@ export function Agenda({ id }: { win: WinState; id: string }) {
                   <a className="ag-title" href={e.url} target="_blank" rel="noopener noreferrer">
                     {e.title}
                   </a>
+                  <EventMark e={e} clickable />
                   {e.meet && (
                     <a className="ag-meet" href={e.meet} target="_blank" rel="noopener noreferrer" title="Join the video call">
                       🎥

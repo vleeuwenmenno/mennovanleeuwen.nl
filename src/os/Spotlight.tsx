@@ -821,15 +821,16 @@ export function Spotlight() {
       })
     }
 
-    // Your notes
+    // Your notes (a meeting's title finds the notes linked to it)
     for (const n of notes) {
       if (n.deleted || n.purged) continue
+      const meetings = (n.events ?? []).map((l) => l.title)
       out.push({
         id: `note-${n.id}`,
         group: 'Notes',
         title: noteTitle(n),
-        subtitle: n.text.split('\n').filter((l) => l.trim()).slice(1).join(' ').slice(0, 80) || 'Note',
-        keywords: `note ${n.text.slice(0, 2000)}`,
+        subtitle: `${meetings.length ? `📅 ${meetings.join(', ')} · ` : ''}${n.text.split('\n').filter((l) => l.trim()).slice(1).join(' ').slice(0, 80)}`.replace(/ · $/, '') || 'Note',
+        keywords: `note ${n.text.slice(0, 2000)}${meetings.length ? ` meeting event ${meetings.join(' ')}` : ''}`,
         icon: <Glyph color={NOTE_COLORS[n.color].bg}>✎</Glyph>,
         run: () => openSticky(wm, n.id),
         enterLabel: 'Show on desktop',

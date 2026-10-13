@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { createNote, NOTE_COLORS, noteTitle, purgeNote, restoreNote, trashNote, updateNote, useAllNotes, type Note, type NoteColor } from '../data/notes'
+import { createNote, NOTE_COLORS, noteTitle, purgeNote, restoreNote, trashNote, updateNote, useAllNotes, useNoteSlot, type Note, type NoteColor } from '../data/notes'
 import { timeAgo } from '../data/recents'
 import { signIn, useAccount } from '../os/account'
 import { openContextMenu } from '../os/ContextMenu'
@@ -9,7 +9,9 @@ import { closeStickies, noteMenu, openSticky, stickyOpen } from './Sticky'
 import { MarkdownPreview } from './Zed'
 
 // Every note in one place: search, write in Markdown, preview it, colour it, and put it on the
-// desktop as a sticky (or take it off again). Deleted notes wait in the trash.
+// desktop as a sticky (or take it off again). Deleted notes wait in the trash. Other apps add a
+// section under the toolbar and a mark in the list (the events a note is linked to,
+// src/os/noteEventLinks.tsx).
 
 const when = (ms: number) => timeAgo(new Date(ms).toISOString())
 
@@ -44,6 +46,8 @@ export function Notebook({ win }: { win: WinState }) {
   const [selected, setSelected] = useState<string | null>(win.props.id ?? null)
   const [preview, setPreview] = useState(false)
   const editor = useRef<HTMLTextAreaElement>(null)
+  const chips = useNoteSlot('chips')
+  const mark = useNoteSlot('mark')
 
   // "Open in Notebook" from a sticky selects that note.
   useEffect(() => {
@@ -123,6 +127,7 @@ export function Notebook({ win }: { win: WinState }) {
                 <span className="nb-swatch" style={{ background: NOTE_COLORS[n.color].bg }} />
                 <span className="nb-item-text">
                   <span className="nb-item-title">
+                    {mark?.(n, 'list')}
                     {noteTitle(n)}
                     {onDesktop(n.id) && <span className="nb-pin" title="On the desktop"> ◆</span>}
                   </span>
@@ -183,6 +188,7 @@ export function Notebook({ win }: { win: WinState }) {
                 </>
               )}
             </div>
+            {!note.deleted && chips?.(note, 'notebook')}
             {preview || note.deleted ? (
               <article className="zed-preview nb-preview" onDoubleClick={() => !note.deleted && setPreview(false)}>
                 {note.text.trim() ? <MarkdownPreview text={note.text} /> : <p className="muted">Empty note.</p>}
