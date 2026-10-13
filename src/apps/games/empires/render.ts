@@ -96,6 +96,62 @@ export type View = {
 type Particle = {
   kind: 'spark' | 'fire' | 'smoke' | 'ring' | 'flash' | 'debris' | 'muzzle'
   x: number; y: number; vx: number; vy: number; life: number; max: number; size: number; grow: number; color: string; rot: number; vr: number
+  /** A glowing one's glow (see glowSprite), looked up the first time it's drawn. */
+  glow?: HTMLCanvasElement
+}
+/** What a new particle may say; the rest takes defaults (see Renderer.add). */
+type ParticleSpec = { kind?: Particle['kind']; x: number; y: number; vx?: number; vy?: number; life?: number; size?: number; grow?: number; color?: string; rot?: number; vr?: number }
+
+/**
+ * Device pixels per CSS pixel on the battle canvas: the screen's, at most 2, as EmpiresAtWar sizes
+ * the canvas. Bitmaps are painted for this density: a phone's 3x would paint every one 2.25 times
+ * the pixels the canvas can show.
+ */
+const canvasDpr = () => Math.min(2, window.devicePixelRatio || 1)
+
+/**
+ * Soft glows (engines, fire, flashes, ion shots, beacons) as small bitmaps painted once per colour,
+ * instead of a radial gradient made for every glow on every frame: the same gradient, painted into
+ * a 128 px square once, then stretched to each glow's size (a soft gradient scales up cleanly).
+ * `stops` are the gradient's, from the middle out to the edge; `key` names the look.
+ */
+const glows = new Map<string, HTMLCanvasElement>()
+function glowSprite(key: string, stops: readonly (readonly [number, string])[]) {
+  let c = glows.get(key)
+  if (!c) {
+    c = document.createElement('canvas')
+    c.width = c.height = 128
+    const g = c.getContext('2d')!
+    const grd = g.createRadialGradient(64, 64, 0, 64, 64, 64)
+    for (const [at, col] of stops) grd.addColorStop(at, col)
+    g.fillStyle = grd
+    g.fillRect(0, 0, 128, 128)
+    glows.set(key, c)
+  }
+  return c
+}
+/** A glow with a white (or warm) heart, `color` from `mid` of the way out, fading to nothing. */
+const hotGlow = (heart: string, mid: number, color: string) => glowSprite(`${heart}|${mid}|${color}`, [[0, heart], [mid, color], [1, 'rgba(0,0,0,0)']])
+/** An engine's glow, by its colour (looked up for every engine on every frame, so by colour alone). */
+const engineGlows = new Map<string, HTMLCanvasElement>()
+const engineGlow = (color: string) => {
+  let c = engineGlows.get(color)
+  if (!c) engineGlows.set(color, (c = hotGlow('#ffffff', 0.3, color)))
+  return c
+}
+/** A particle's glow: fire has a warm heart, a flash or muzzle flash a white one. */
+const particleGlow = (q: Particle) => (q.glow ??= hotGlow(q.kind === 'flash' || q.kind === 'muzzle' ? '#ffffff' : '#fff2c0', 0.35, q.color))
+/** The nearest engine hardpoint to each engine glow of a unit type (-1 for none), worked out once
+ * per type: a glow goes dark with its hardpoint. */
+const nearEngines = new WeakMap<UnitType, number[]>()
+function enginesNear(t: UnitType) {
+  let out = nearEngines.get(t)
+  if (!out) {
+    const engines = t.hardpoints.flatMap((h, i) => (h.kind === 'engine' ? [i] : []))
+    out = t.engines.map(([gx, gy]) => engines.reduce((a, b) => (Math.hypot(t.hardpoints[b].x - gx, t.hardpoints[b].y - gy) < Math.hypot(t.hardpoints[a].x - gx, t.hardpoints[a].y - gy) ? b : a), engines[0] ?? -1))
+    nearEngines.set(t, out)
+  }
+  return out
 }
 type Pending = { at: number; x: number; y: number; size: number; final: boolean }
 /** One small rock in an asteroid field, circling slowly round its spot as it tumbles. */
@@ -353,9 +409,11 @@ export class Renderer {
     this.pings.push({ x, y, t: this.clock, color })
   }
 
-  private add(p: Partial<Particle> & { x: number; y: number }) {
+  private add(p: ParticleSpec) {
     if (this.parts.length > 2500) return
-    this.parts.push({ kind: 'spark', vx: 0, vy: 0, life: 0.5, size: 3, grow: 0, color: '#fff', rot: Math.random() * 6.28, vr: 0, ...p, max: p.life ?? 0.5 })
+    const life = p.life ?? 0.5
+    // Every field set here, in one order, so every particle has the same shape.
+    this.parts.push({ kind: p.kind ?? 'spark', x: p.x, y: p.y, vx: p.vx ?? 0, vy: p.vy ?? 0, life, max: life, size: p.size ?? 3, grow: p.grow ?? 0, color: p.color ?? '#fff', rot: p.rot ?? Math.random() * 6.28, vr: p.vr ?? 0, glow: undefined })
   }
 
   private blast(x: number, y: number, size: number) {
@@ -491,23 +549,32 @@ export class Renderer {
         }
       }
     }
-    for (const p of this.parts) {
+    // Moved on, and the spent ones dropped in place (no new array every frame).
+    const ps = this.parts
+    let n = 0
+    for (let i = 0; i < ps.length; i++) {
+      const p = ps[i]
       p.life -= dt
+      if (p.life <= 0) continue
       p.x += p.vx * dt
       p.y += p.vy * dt
       const drag = p.kind === 'smoke' ? 0.97 : p.kind === 'debris' ? 0.995 : 0.94
       p.vx *= drag
       p.vy *= drag
       p.rot += p.vr * dt
+      ps[n++] = p
     }
-    this.parts = this.parts.filter((p) => p.life > 0)
+    ps.length = n
   }
 
   draw(ctx: CanvasRenderingContext2D, w: World, cam: Camera, vw: number, vh: number, view: View, dt: number) {
     this.step(dt, w)
-    this.trackModels(w, view)
     const z = cam.zoom
-    const zdpr = z * (window.devicePixelRatio || 1)
+    // Models are followed (see trackModels) on the screen and a margin round it.
+    const nx = vw / 2 / z + 600
+    const ny = vh / 2 / z + 600
+    this.trackModels(w, view, (x, y, r) => Math.abs(x - cam.x) < nx + r && Math.abs(y - cam.y) < ny + r)
+    const zdpr = z * canvasDpr()
     ctx.save()
     ctx.fillStyle = '#04060d'
     ctx.fillRect(0, 0, vw, vh)
@@ -646,15 +713,10 @@ export class Renderer {
       ctx.setLineDash([])
       ctx.globalAlpha = 1
       // A pulsing glow in the holder's colour, so beacons stand out when zoomed out.
-      const glow = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, 150)
-      glow.addColorStop(0, b.owner === -1 ? '#c8d4ee' : col)
-      glow.addColorStop(1, 'rgba(0,0,0,0)')
+      const heart = b.owner === -1 ? '#c8d4ee' : col
       ctx.globalCompositeOperation = 'lighter'
       ctx.globalAlpha = 0.28 + Math.sin(this.clock * 2 + b.id) * 0.08
-      ctx.fillStyle = glow
-      ctx.beginPath()
-      ctx.arc(b.x, b.y, 150, 0, Math.PI * 2)
-      ctx.fill()
+      ctx.drawImage(glowSprite(`beacon|${heart}`, [[0, heart], [1, 'rgba(0,0,0,0)']]), b.x - 150, b.y - 150, 300, 300)
       ctx.globalAlpha = 1
       ctx.globalCompositeOperation = 'source-over'
       this.drawSprite(ctx, 'beacon', b.x, b.y, this.clock * 0.15 + b.id, 170, z)
@@ -1141,14 +1203,8 @@ export class Renderer {
         ctx.moveTo(s.x, s.y)
         ctx.lineTo(s.x - dx * 34, s.y - dy * 34)
         ctx.stroke()
-        const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, r * 1.6)
-        g.addColorStop(0, '#ffffff')
-        g.addColorStop(0.35, 'rgba(170,235,255,0.95)')
-        g.addColorStop(1, 'rgba(90,180,255,0)')
-        ctx.fillStyle = g
-        ctx.beginPath()
-        ctx.arc(s.x, s.y, r * 1.6, 0, Math.PI * 2)
-        ctx.fill()
+        const ion = glowSprite('ion', [[0, '#ffffff'], [0.35, 'rgba(170,235,255,0.95)'], [1, 'rgba(90,180,255,0)']])
+        ctx.drawImage(ion, s.x - r * 1.6, s.y - r * 1.6, r * 3.2, r * 3.2)
         continue
       }
       const [len, width] = BOLTS[s.kind === 'turbo' ? 'turbo' : s.kind === 'flak' ? 'flak' : 'laser']
@@ -1190,16 +1246,7 @@ export class Renderer {
         ctx.moveTo(q.x, q.y)
         ctx.lineTo(q.x - q.vx * 0.04, q.y - q.vy * 0.04)
         ctx.stroke()
-      } else {
-        const g = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, size)
-        g.addColorStop(0, q.kind === 'flash' || q.kind === 'muzzle' ? '#ffffff' : '#fff2c0')
-        g.addColorStop(0.35, q.color)
-        g.addColorStop(1, 'rgba(0,0,0,0)')
-        ctx.fillStyle = g
-        ctx.beginPath()
-        ctx.arc(q.x, q.y, size, 0, Math.PI * 2)
-        ctx.fill()
-      }
+      } else if (size > 0) ctx.drawImage(particleGlow(q), q.x - size, q.y - size, size * 2, size * 2)
     }
     ctx.globalCompositeOperation = 'source-over'
     for (const q of this.parts) {
@@ -1381,7 +1428,7 @@ export class Renderer {
       ctx.setLineDash([])
     }
     if (!art.rocks.length) return
-    const dpr = window.devicePixelRatio || 1
+    const dpr = canvasDpr()
     const imgs = [this.sprite('asteroid-1', 40 * z * dpr), this.sprite('asteroid-2', 40 * z * dpr)]
     // Zoomed far out, the smallest rocks would be specks: skip them and let the dust carry it.
     const minSize = 3 / z
@@ -1407,7 +1454,7 @@ export class Renderer {
   }
 
   private drawSprite(ctx: CanvasRenderingContext2D, name: string, x: number, y: number, rot: number, size: number, z: number, alpha = 1) {
-    const img = this.sprite(name, size * z * (window.devicePixelRatio || 1))
+    const img = this.sprite(name, size * z * canvasDpr())
     if (!img) return
     const nw = img instanceof HTMLImageElement ? img.naturalWidth : img.width
     const nh = img instanceof HTMLImageElement ? img.naturalHeight : img.height
@@ -1426,7 +1473,7 @@ export class Renderer {
     const t = UNIT[unit]
     const m = t ? modelFor(t) : null
     if (!m) return
-    const zdpr = z * (window.devicePixelRatio || 1)
+    const zdpr = z * canvasDpr()
     if (!stretch) return drawHull(ctx, m, x, y, rot, size, zdpr, FRESH, { alpha })
     ctx.save()
     ctx.translate(x, y)
@@ -1442,30 +1489,45 @@ export class Renderer {
    * burst into fragments, and a warship's hull is laid where the battle leaves its wreck, broken
    * the way the wreck's id says. Hulks whose wreck is gone (salvaged, drifted off) fade out.
    */
-  private trackModels(w: World, view: View) {
+  private trackModels(w: World, view: View, near: (x: number, y: number, r: number) => boolean) {
     const team = w.players[view.me].team
     for (const u of w.units) {
       if (u.dead) continue
+      // Only what we can see on or near the screen: nothing flies off or breaks up anywhere else,
+      // so the rest needn't be followed (one we stop following starts afresh if it comes back).
+      const vis = !!u.seen[team] && u.owner !== view.hideOwner && near(u.x, u.y, u.t.size)
+      if (!vis) {
+        this.tracked.delete(u.id)
+        continue
+      }
       const m = modelFor(u.t)
       if (!m) continue
       const st = hullState(m, u, u.t.tier)
-      const dead = u.hps.map((h) => h.hp <= 0)
-      const vis = !!u.seen[team] && u.owner !== view.hideOwner
       const tr = this.tracked.get(u.id)
-      if (tr && tr.m === m && vis) {
+      if (tr && tr.m === m && tr.u === u) {
         const rot = u.a + Math.PI / 2
         const vx = Math.cos(u.a) * u.v
         const vy = Math.sin(u.a) * u.v
-        m.detachable.forEach((pi, i) => {
-          if (st.detached & (1 << i) && !(tr.det & (1 << i))) this.fx.flyPart(m, pi, u.x, u.y, rot, u.t.size, vx, vy, u.id * 977 + i)
-        })
-        m.mounts.forEach((mt, i) => {
+        if (st.detached !== tr.det)
+          for (let i = 0; i < m.detachable.length; i++) {
+            if (st.detached & (1 << i) && !(tr.det & (1 << i))) this.fx.flyPart(m, m.detachable[i], u.x, u.y, rot, u.t.size, vx, vy, u.id * 977 + i)
+          }
+        for (let i = 0; i < m.mounts.length; i++) {
+          const mt = m.mounts[i]
           // A mount follows its hardpoint (a turret for show follows the one it stands for).
-          if (mt.detach && dead[mt.hp] && !tr.dead[mt.hp]) this.fx.flyMount(m, i, u.x, u.y, rot, this.aims.get(u.id * 64 + mt.hp) ?? rot, u.t.size, vx, vy, u.id * 613 + i)
-        })
-      }
-      if (tr) Object.assign(tr, { u, m, det: st.detached, st, dead, vis })
-      else this.tracked.set(u.id, { u, m, det: st.detached, st, dead, vis })
+          if (mt.detach && (u.hps[mt.hp]?.hp ?? 1) <= 0 && !tr.dead[mt.hp]) this.fx.flyMount(m, i, u.x, u.y, rot, this.aims.get(u.id * 64 + mt.hp) ?? rot, u.t.size, vx, vy, u.id * 613 + i)
+        }
+        // What's shot out now, in place.
+        tr.dead.length = u.hps.length
+        for (let i = 0; i < u.hps.length; i++) tr.dead[i] = u.hps[i].hp <= 0
+        tr.det = st.detached
+        tr.st = st
+        tr.vis = true
+      } else
+        this.tracked.set(
+          u.id,
+          { u, m, det: st.detached, st, dead: u.hps.map((h) => h.hp <= 0), vis: true },
+        )
     }
     for (const [id, tr] of this.tracked) {
       if (w.byId.get(id) === tr.u && !tr.u.dead) continue
@@ -1870,7 +1932,7 @@ export class Renderer {
    */
   private drawSite(ctx: CanvasRenderingContext2D, u: Unit, w: World, m: Model | null, size: number, z: number) {
     const t = u.t
-    const zdpr = z * (window.devicePixelRatio || 1)
+    const zdpr = z * canvasDpr()
     const rot = u.a + Math.PI / 2
     const [sw, sh] = dims(t)
     const planned = !u.site!.started
@@ -1995,7 +2057,7 @@ export class Renderer {
     const x = u.x - Math.sin(rot) * cy
     const y = u.y + Math.cos(rot) * cy
     const progress = Math.max(0, Math.min(1, 1 - q.left / Math.max(0.001, q.total)))
-    const zdpr = z * (window.devicePixelRatio || 1)
+    const zdpr = z * canvasDpr()
     const rgb = u.t.faction === 'republic' ? '130,205,255' : '255,186,120'
     ctx.save()
     ctx.translate(x, y)
@@ -2144,7 +2206,7 @@ export class Renderer {
   /** A yard being placed: its ghost where it would go, the slipway's mouth marked, green where it can
    * go and red (with why) where it can't, and what it costs. */
   private drawPlace(ctx: CanvasRenderingContext2D, g: NonNullable<View['place']>, z: number) {
-    const zdpr = z * (window.devicePixelRatio || 1)
+    const zdpr = z * canvasDpr()
     const col = g.ok ? '#7dffa0' : '#ff5a50'
     const rot = g.a + Math.PI / 2
     const [sw, sh] = dims(g.t)
@@ -2265,26 +2327,20 @@ export class Renderer {
       ctx.globalCompositeOperation = 'lighter'
       const thrust = 0.35 + 0.65 * Math.min(1, u.v / Math.max(1, t.speed))
       const flick = 0.85 + Math.random() * 0.15
-      const engines = t.hardpoints.flatMap((h, i) => (h.kind === 'engine' ? [i] : []))
-      for (const [ei, [gx, gy]] of t.engines.entries()) {
+      const near = enginesNear(t)
+      // A model's engines burn in its own palette's colour (the droid navy's blue-white).
+      const glow = engineGlow(m ? PALETTES[m.faction].engine : fac.glow)
+      for (let ei = 0; ei < t.engines.length; ei++) {
         // An engine pod blown off the model takes its glow with it.
         if (lit && !lit[ei]) continue
         // A glow belongs to the nearest engine hardpoint and goes dark with it.
-        const near = engines.reduce((a, b) => (Math.hypot(t.hardpoints[b].x - gx, t.hardpoints[b].y - gy) < Math.hypot(t.hardpoints[a].x - gx, t.hardpoints[a].y - gy) ? b : a), engines[0] ?? -1)
-        if (near >= 0 && u.hps[near].hp <= 0) continue
+        if (near[ei] >= 0 && u.hps[near[ei]].hp <= 0) continue
+        const [gx, gy] = t.engines[ei]
         const p = shipPoint(u, gx, gy)
         const ex = u.x + (p.x - u.x) * k
         const ey = u.y + (p.y - u.y) * k
         const r = Math.max(4 / z, size * (t.tier === 'fighter' ? 0.35 : 0.07)) * thrust * flick
-        const g = ctx.createRadialGradient(ex, ey, 0, ex, ey, r)
-        g.addColorStop(0, '#ffffff')
-        // A model's engines burn in its own palette's colour (the droid navy's blue-white).
-        g.addColorStop(0.3, m ? PALETTES[m.faction].engine : fac.glow)
-        g.addColorStop(1, 'rgba(0,0,0,0)')
-        ctx.fillStyle = g
-        ctx.beginPath()
-        ctx.arc(ex, ey, r, 0, Math.PI * 2)
-        ctx.fill()
+        ctx.drawImage(glow, ex - r, ey - r, r * 2, r * 2)
       }
       ctx.globalCompositeOperation = 'source-over'
     }
@@ -2317,7 +2373,7 @@ export class Renderer {
     const alpha = building(u) ? 0.55 : t.kind === 'wing' && !atHome(w, u) ? 0.45 : 1
     if (u.site) this.drawSite(ctx, u, w, m, size, z)
     else if (m && st) {
-      const zdpr = z * (window.devicePixelRatio || 1)
+      const zdpr = z * canvasDpr()
       drawHull(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, st, { alpha })
       if (t.tier === 'yard') this.drawBerth(ctx, u, m, z, alpha)
       if (m.mounts.length) drawMounts(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, u.hps, (i) => this.aim(u, i, w), alpha, u.rush?.parts)

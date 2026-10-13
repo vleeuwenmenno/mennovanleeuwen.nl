@@ -11,25 +11,28 @@ import type { HullState, Model, Part, Pt } from './types.ts'
 // inside, then panel lines, stripes and lights.
 //
 // Painting is too slow to repeat for every ship every frame, so a unit's hull is painted once into
-// a small bitmap per size bucket (powers of two, roughly the size it shows at), per light bucket
-// (64 headings on small bitmaps, 32 on big ones, painted as ships turn to them; the bitmap is
-// turned to the exact heading when drawn, and the two nearest headings are crossfaded so the
-// shading doesn't snap, see drawLit) and per damage state, and kept in one shared cache with a memory budget. Turrets
-// get bitmaps of their own, since they turn to aim. Only a hull (or a wreck's piece) whose bitmap
-// would be bigger than memTuning.hull pixels, where few can fit on screen, is painted straight onto
-// the screen, with exact light; turret bitmaps are capped at memTuning.mount pixels.
+// a small bitmap per size bucket (steps of √2, roughly the size it shows at), per light bucket
+// (64 headings on mid-sized bitmaps, 32 on small ones and phones, 16 on the biggest, painted as
+// ships turn to them; the bitmap is turned to the exact heading when drawn, and the two nearest
+// headings are crossfaded so the shading doesn't snap, see drawLit) and per part shot off, and kept
+// in one shared cache with a memory budget. A live hull's scorch marks don't depend on the light, so
+// they are one more bitmap drawn over it (see drawHull). Turrets get bitmaps of their own, since
+// they turn to aim. Only a hull (or a wreck's piece) shown more than one step past the biggest
+// bitmap (see bigK) is painted straight onto the screen, with exact light; turret bitmaps are capped
+// at memTuning.mount pixels.
 
 const TAU = Math.PI * 2
 
 /**
  * When a hull or a turret is painted live (straight onto the screen) instead of from cached
  * bitmaps, and how big a turret's bitmap may get. A hull whose bitmap would be bigger than `hull`
- * pixels on its long side (one heading of a flagship at that size is about half a megabyte, and a
- * full turn paints 32 of them) is painted live: it is shown that big only zoomed in, or for the
- * biggest ships, so few are on screen at once. A turret's bitmap is at most `mount` pixels across,
- * drawn larger if need be up to `mountLive` pixels on screen, and painted live past that. `legacy`
- * puts back the old rule (live only past 720 pixels on screen, turret bitmaps up to 512), to
- * measure against. Phones, with their smaller budget, paint hulls live from 256 pixels.
+ * pixels on its long side gets a bitmap one step (√2) bigger than that, 16 headings of it, drawn
+ * up to one more step bigger than it is (about 1.2 times at most), and is painted live past that:
+ * one heading of a flagship at that size is about half a megabyte, and it is shown that big only
+ * zoomed in, or for the biggest ships, so few are on screen at once. A turret's bitmap is at most
+ * `mount` pixels across, drawn larger if need be up to `mountLive` pixels on screen, and painted
+ * live past that. `legacy` puts back the old rule (live only past 720 pixels on screen, turret
+ * bitmaps up to 512), to measure against. Phones, with their smaller budget, step down a size.
  */
 export const memTuning = { hull: typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 256 : 362, mount: 128, mountLive: 192, legacy: false }
 /** Before memTuning: above this many device pixels across, a hull was painted live. */
@@ -217,53 +220,68 @@ export type PaintOpts = {
   debug?: boolean
 }
 
-/** A hull in its damage state: the parts still on it, scorch marks, burnt stumps where parts came
- * off, and for a wreck its wrecked mounts and break lines. */
-export function paintModel(g: CanvasRenderingContext2D, m: Model, o: PaintOpts) {
-  const pal = PALETTES[m.faction]
+/** The parts still on a hull in this state. */
+function partsLeft(m: Model, state: HullState) {
+  if (!state.detached) return m.parts
   const gone = new Set<number>()
-  for (let i = 0; i < m.detachable.length; i++) if (o.state.detached & (1 << i)) gone.add(m.detachable[i])
-  const parts = m.parts.filter((_, i) => !gone.has(i))
+  for (let i = 0; i < m.detachable.length; i++) if (state.detached & (1 << i)) gone.add(m.detachable[i])
+  return m.parts.filter((_, i) => !gone.has(i))
+}
+
+/**
+ * A hull's burns, clipped to `sil` (its silhouette as it is now): a burnt patch beside each part
+ * that came off, and scorch marks, lumpy burns from light damage on, more of them as it gets
+ * worse; at the worst, some burn through into holes with glowing edges. None of it depends on the
+ * light, which is what lets a cached hull carry its burns as one bitmap over every heading.
+ */
+function paintBurns(g: CanvasRenderingContext2D, m: Model, state: HullState, sil: Path2D, ppu: number) {
+  if (!(state.scorch > 0 || state.detached)) return
+  g.save()
+  g.clip(sil)
+  for (let i = 0; i < m.detachable.length; i++) {
+    if (!(state.detached & (1 << i))) continue
+    const pi = m.detachable[i]
+    const p = m.parts[pi]
+    if (p.pts.length < 3 || p.scar === false) continue
+    const b = bounds(p.pts)
+    const [cx, cy] = centroid(p.pts)
+    const r = Math.max(b.x1 - b.x0, b.y1 - b.y0) * 0.55
+    const rr = rng(m.seed + pi * 97)
+    g.fillStyle = 'rgba(30,22,16,0.62)'
+    g.fill(polyPath(blob(cx, cy, r, rr)))
+  }
+  for (const s of m.scorch) {
+    if (s.level > state.scorch) continue
+    const rr = rng(s.seed + state.variant * 7919)
+    const x = s.x + (rr() - 0.5) * s.r * 1.6
+    const y = s.y + (rr() - 0.5) * s.r * 1.6
+    g.fillStyle = 'rgba(34,26,20,0.42)'
+    g.fill(polyPath(blob(x, y, s.r, rr)))
+    g.fillStyle = 'rgba(22,16,12,0.5)'
+    g.fill(polyPath(blob(x, y, s.r * 0.55, rr)))
+    if (state.scorch >= 3 && s.level === 3 && s.seed % 3 === 0) {
+      const hole = polyPath(blob(x, y, s.r * 0.42, rr, 7))
+      g.fillStyle = '#0c0907'
+      g.fill(hole)
+      g.strokeStyle = 'rgba(255,146,60,0.95)'
+      g.lineWidth = Math.max(0.8, ppu * 0.5) / ppu
+      g.stroke(hole)
+    }
+  }
+  g.restore()
+}
+
+/** A hull in its damage state: the parts still on it, scorch marks, burnt stumps where parts came
+ * off, and for a wreck its wrecked mounts and break lines. `burns: false` leaves the scorch marks
+ * and stumps off, for a cached hull that carries them as a bitmap of their own (see drawHull). */
+export function paintModel(g: CanvasRenderingContext2D, m: Model, o: PaintOpts & { burns?: boolean }) {
+  const pal = PALETTES[m.faction]
+  const parts = partsLeft(m, o.state)
   g.save()
   if (o.region) g.clip(polyPath(o.region))
   paintParts(g, parts, pal, o.light, o.ppu, o.debug, o.wreckMounts)
   const sil = silhouette(parts)
-  if (o.state.scorch > 0 || gone.size) {
-    g.save()
-    g.clip(sil)
-    // Where a part came off: a burnt patch on the hull beside it.
-    for (const i of gone) {
-      const p = m.parts[i]
-      if (p.pts.length < 3 || p.scar === false) continue
-      const b = bounds(p.pts)
-      const [cx, cy] = centroid(p.pts)
-      const r = Math.max(b.x1 - b.x0, b.y1 - b.y0) * 0.55
-      const rr = rng(m.seed + i * 97)
-      g.fillStyle = 'rgba(30,22,16,0.62)'
-      g.fill(polyPath(blob(cx, cy, r, rr)))
-    }
-    // Scorch marks: lumpy burns from light damage on, more of them as it gets worse; at the worst,
-    // some burn through into holes with glowing edges.
-    for (const s of m.scorch) {
-      if (s.level > o.state.scorch) continue
-      const rr = rng(s.seed + o.state.variant * 7919)
-      const x = s.x + (rr() - 0.5) * s.r * 1.6
-      const y = s.y + (rr() - 0.5) * s.r * 1.6
-      g.fillStyle = 'rgba(34,26,20,0.42)'
-      g.fill(polyPath(blob(x, y, s.r, rr)))
-      g.fillStyle = 'rgba(22,16,12,0.5)'
-      g.fill(polyPath(blob(x, y, s.r * 0.55, rr)))
-      if (o.state.scorch >= 3 && s.level === 3 && s.seed % 3 === 0) {
-        const hole = polyPath(blob(x, y, s.r * 0.42, rr, 7))
-        g.fillStyle = '#0c0907'
-        g.fill(hole)
-        g.strokeStyle = 'rgba(255,146,60,0.95)'
-        g.lineWidth = Math.max(0.8, o.ppu * 0.5) / o.ppu
-        g.stroke(hole)
-      }
-    }
-    g.restore()
-  }
+  if (o.burns !== false) paintBurns(g, m, o.state, sil, o.ppu)
   if (o.wreckMounts) {
     for (const mt of m.mounts) {
       if (mt.design === 'engine') continue
@@ -309,9 +327,21 @@ export function paintModel(g: CanvasRenderingContext2D, m: Model, o: PaintOpts) 
 
 // --- The bitmap cache --------------------------------------------------------------------------------
 
-/** Every painted bitmap, least recently used first, and how many bytes they hold. */
-const store = new Map<string, HTMLCanvasElement>()
+/** What a cached bitmap is of, for the numbers (cacheBreakdown). */
+type Kind = 'hulls' | 'burns' | 'mounts' | 'pieces' | 'parts'
+/**
+ * One look of something at one size: its bitmaps, one per light heading (or one alone), painted as
+ * they're asked for. Looked up once per thing drawn (by numbers, not by building a string key), and
+ * then each heading is an array index.
+ */
+type Run = { s: (Entry | undefined)[]; parts?: Part[] }
+type Entry = { c: HTMLCanvasElement; used: number; bytes: number; kind: Kind; run: Run; i: number }
+
+/** Every painted bitmap, and how many bytes they hold. */
+const entries = new Set<Entry>()
 let bytes = 0
+/** Counts up on every use: an entry's `used` says how recently it was drawn. */
+let clock = 0
 // Phones get a smaller budget: their browsers cap how much canvas memory a page may hold.
 const PHONE = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
 const BUDGET = (PHONE ? 48 : 112) * 1024 * 1024
@@ -333,15 +363,28 @@ function mayPaint() {
   return spent < PAINT_MS
 }
 
-function cached(key: string, w: number, h: number, paint: (g: CanvasRenderingContext2D) => void): HTMLCanvasElement
-function cached(key: string, w: number, h: number, paint: (g: CanvasRenderingContext2D) => void, may: boolean): HTMLCanvasElement | null
-/** A bitmap from the cache, painted now if it isn't there (unless `may` is false: then null). */
-function cached(key: string, w: number, h: number, paint: (g: CanvasRenderingContext2D) => void, may = true) {
-  const hit = store.get(key)
+/** Over budget: the least recently drawn bitmaps go, down to 85% of it, so this (a sort of every
+ * entry) runs once in a while rather than for every bitmap painted. */
+function evict() {
+  if (bytes <= BUDGET) return
+  const list = [...entries].sort((a, b) => a.used - b.used)
+  for (const e of list) {
+    if (bytes <= BUDGET * 0.85) break
+    made.evicted++
+    entries.delete(e)
+    bytes -= e.bytes
+    if (e.run.s[e.i] === e) e.run.s[e.i] = undefined
+  }
+}
+
+function slot(run: Run, i: number, kind: Kind, w: number, h: number, paint: (g: CanvasRenderingContext2D) => void): HTMLCanvasElement
+function slot(run: Run, i: number, kind: Kind, w: number, h: number, paint: (g: CanvasRenderingContext2D) => void, may: boolean): HTMLCanvasElement | null
+/** Bitmap `i` of a run, painted now if it isn't there (unless `may` is false: then null). */
+function slot(run: Run, i: number, kind: Kind, w: number, h: number, paint: (g: CanvasRenderingContext2D) => void, may = true) {
+  const hit = run.s[i]
   if (hit) {
-    store.delete(key)
-    store.set(key, hit)
-    return hit
+    hit.used = ++clock
+    return hit.c
   }
   if (!may) return null
   const t0 = performance.now()
@@ -351,31 +394,52 @@ function cached(key: string, w: number, h: number, paint: (g: CanvasRenderingCon
   const g = c.getContext('2d')!
   paint(g)
   spent += performance.now() - t0
-  store.set(key, c)
-  bytes += c.width * c.height * 4
-  for (const [k, old] of store) {
-    if (bytes <= BUDGET) break
-    store.delete(k)
-    bytes -= old.width * old.height * 4
-  }
+  made[kind]++
+  const e: Entry = { c, used: ++clock, bytes: c.width * c.height * 4, kind, run, i }
+  run.s[i] = e
+  entries.add(e)
+  bytes += e.bytes
+  evict()
   return c
 }
+
+const runIn = <K>(map: Map<K, Run>, key: K) => {
+  let r = map.get(key)
+  if (!r) map.set(key, (r = { s: [] }))
+  return r
+}
+/** A model's runs, by a number made of its look and size (see drawHull). */
+const modelRuns = (store: WeakMap<Model, Map<number, Run>>, m: Model) => {
+  let r = store.get(m)
+  if (!r) store.set(m, (r = new Map()))
+  return r
+}
+const hullRuns = new WeakMap<Model, Map<number, Run>>()
+const burnRuns = new WeakMap<Model, Map<number, Run>>()
+/** Turret runs: by faction, then look, then a number for broken, size and headings. */
+const mountRuns = new Map<string, Map<string, Map<number, Run>>>()
+/** Wreck pieces and parts shot off, rarer: by a string key. */
+const otherRuns = new Map<string, Run>()
+
 /** How much the model bitmaps hold now, for the Codex's numbers. */
-export const cacheStats = () => ({ bitmaps: store.size, mb: bytes / 1048576 })
+/** How many bitmaps of each kind have been painted, and dropped for the budget, since the page
+ * loaded: for measuring how much a battle keeps painting. */
+export const made = { hulls: 0, burns: 0, mounts: 0, pieces: 0, parts: 0, evicted: 0 }
+export const cacheStats = () => ({ bitmaps: entries.size, mb: bytes / 1048576 })
 /** Empties the cache, for measuring how much one scene fills it from nothing. */
 export function clearCache() {
-  store.clear()
+  for (const e of entries) e.run.s[e.i] = undefined
+  entries.clear()
   bytes = 0
 }
-/** The same, split by what the bitmaps are of (hulls, turrets, wreck and fragment pieces, parts shot
- * off), for measuring a big battle. */
+/** The same, split by what the bitmaps are of (hulls, their burns, turrets, wreck and fragment
+ * pieces, parts shot off), for measuring a big battle. */
 export function cacheBreakdown() {
   const out: Record<string, { bitmaps: number; mb: number }> = {}
-  for (const [k, c] of store) {
-    const kind = k.startsWith('m|') ? 'mounts' : k.includes('|h|') ? 'hulls' : k.includes('|x|') ? 'pieces' : 'parts'
-    const o = (out[kind] ??= { bitmaps: 0, mb: 0 })
+  for (const e of entries) {
+    const o = (out[e.kind] ??= { bitmaps: 0, mb: 0 })
     o.bitmaps++
-    o.mb += (c.width * c.height * 4) / 1048576
+    o.mb += e.bytes / 1048576
   }
   return out
 }
@@ -384,19 +448,26 @@ export function cacheBreakdown() {
  * The size bucket for something `px` device pixels across: steps of √2 (32, 45, 64, 91, 128, 181,
  * 256…), so a bitmap is never much more than half as big again as it shows. Steps of two left a
  * cruiser just past one step painted at nearly twice its size, four times the memory, and a big
- * mixed battle seen up close overran the cache with them.
+ * mixed battle seen up close overran the cache with them. `bucketK` gives the step's number.
  */
-function bucket(px: number) {
+const BUCKETS = Array.from({ length: 11 }, (_, k) => Math.round(32 * Math.SQRT2 ** k))
+function bucketK(px: number) {
   let k = 0
   while (32 * Math.SQRT2 ** k < px * 1.15 && k < 10) k++
-  return Math.round(32 * Math.SQRT2 ** k)
+  return k
 }
+const bucket = (px: number) => BUCKETS[bucketK(px)]
+/** The step of the biggest bitmaps: one past memTuning.hull. A hull or piece that would want a
+ * bitmap bigger than memTuning.hull uses one of this size, drawn up to one step (√2) bigger than
+ * it is; past that it is painted live. */
+const bigK = () => bucketK(memTuning.hull / 1.15) + 1
 /**
  * How many light headings a bitmap `b` pixels across is painted for. A turning ship steps from
  * one to the next: 64 (under 6° apart) at the sizes frigates and stations show at in a battle;
  * 32 for specks of 64 px or less, where a step can't be seen, and for the few big ones (zoomed
  * right in), and on phones, to keep memory down; the crossfade below hides the steps. Each
- * heading is only painted when a ship first turns to it.
+ * heading is only painted when a ship first turns to it. The biggest bitmaps (see bigK) get
+ * lightTuning.big.
  */
 const headings = (b: number) => (lightTuning.coarse ? 16 : PHONE || b <= 64 || b > 256 ? 32 : 64)
 /**
@@ -406,9 +477,15 @@ const headings = (b: number) => (lightTuning.coarse ? 16 : PHONE || b <= 64 || b
  * (smoothstep): the cel tones stay crisp, with no doubled edges most of the time, and a facet
  * flipping from lit to shadow dissolves over a couple of degrees instead of snapping. 'linear'
  * (always blending by the fraction) was tried as well: smoother still, but every frame draws two
- * bitmaps and the slightly doubled outlines read as soft. 'none' is the old snap.
+ * bitmaps and the slightly doubled outlines read as soft. 'none' is the old snap. `big`: how many
+ * headings the biggest bitmaps get, and `bigBlend` how they blend (they step further apart).
  */
-export const lightTuning: { blend: 'window' | 'linear' | 'none'; /** The old 16 headings, to compare. */ coarse: boolean } = { blend: 'window', coarse: false }
+export const lightTuning: { blend: 'window' | 'linear' | 'none'; /** The old 16 headings, to compare. */ coarse: boolean; big: number; bigBlend: 'window' | 'linear' } = {
+  blend: 'window',
+  coarse: false,
+  big: 16,
+  bigBlend: 'window',
+}
 const smooth = (a: number, b: number, x: number) => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
   return t * t * (3 - 2 * t)
@@ -418,16 +495,15 @@ const smooth = (a: number, b: number, x: number) => {
  * the one above faded in over it (see lightTuning). `bitmap(step)` gives the bitmap for a heading and
  * `place` draws it. A see-through unit (alpha under 1) gets the nearest heading alone, since two
  * see-through layers would add up darker; so does anything drawn with `blend` off. `stand(step)`
- * may offer a bitmap of a look that is nearly the same (the hull a moment ago, before its latest
- * scorch mark or lost part), for when this frame has no time left to paint the new look.
+ * may offer a bitmap of a look that is nearly the same (the hull a moment ago, before the part it
+ * just lost came off), for when this frame has no time left to paint the new look.
  */
-function drawLit(ctx: CanvasRenderingContext2D, rot: number, n: number, bitmap: (step: number, may: boolean) => HTMLCanvasElement | null, place: (c: HTMLCanvasElement) => void, blend = true, stand?: (step: number) => HTMLCanvasElement | null) {
+function drawLit(ctx: CanvasRenderingContext2D, rot: number, n: number, bitmap: (step: number, may: boolean) => HTMLCanvasElement | null, place: (c: HTMLCanvasElement) => void, blend = true, stand?: (step: number) => HTMLCanvasElement | null, mode = lightTuning.blend) {
   const pos = ((((rot / TAU) * n) % n) + n) % n
   const i0 = Math.floor(pos)
   const i1 = (i0 + 1) % n
   const f = pos - i0
-  const b = lightTuning.blend
-  const w = b === 'linear' ? f : b === 'window' ? smooth(0.3, 0.7, f) : f < 0.5 ? 0 : 1
+  const w = mode === 'linear' ? f : mode === 'window' ? smooth(0.3, 0.7, f) : f < 0.5 ? 0 : 1
   // A heading's bitmap: painted if this frame still has time for it, else the nearest one that is
   // painted already; `must` paints it anyway when there is none (something has to be drawn).
   const pick = (i: number, must: boolean) => {
@@ -457,9 +533,19 @@ function drawLit(ctx: CanvasRenderingContext2D, rot: number, n: number, bitmap: 
 
 export type DrawOpts = { alpha?: number; debug?: boolean; wreck?: boolean; /** Light it as if turned this way (default: as drawn). */ lightRot?: number }
 
+/** A clean hull's look, for painting a cached hull without its burns. */
+const UNBURNT = { scorch: 0, variant: 0 }
+
 /**
  * A hull at (x, y) turned by `rot` (nose up at 0), `size` world units on its long side,
  * on a context scaled by `zdpr` device pixels per world unit.
+ *
+ * A live ship's hull bitmaps are painted clean (only the parts it has lost change them), and its
+ * burns, which don't depend on the light, are one more bitmap of their own drawn over whatever
+ * heading shows: so a fleet taking damage doesn't need every heading painted again for every scorch
+ * level and burn layout. Specks (64 px or less) carry their burns in the hull bitmap instead (one
+ * draw rather than two), in three levels and one layout, too small to tell apart. A wreck's hull
+ * carries its burns too: it never changes.
  */
 export function drawHull(ctx: CanvasRenderingContext2D, m: Model, x: number, y: number, rot: number, size: number, zdpr: number, state: HullState, o: DrawOpts = {}) {
   const px = size * zdpr
@@ -469,54 +555,138 @@ export function drawHull(ctx: CanvasRenderingContext2D, m: Model, x: number, y: 
   ctx.translate(x, y)
   ctx.rotate(rot)
   if (o.alpha !== undefined && o.alpha < 1) ctx.globalAlpha *= o.alpha
-  if ((memTuning.legacy ? px > LIVE : bucket(px) > memTuning.hull) || o.debug) {
-    const k = size / m.long
-    ctx.scale(k, k)
+  let k = bucketK(px)
+  const big = !memTuning.legacy && BUCKETS[k] > memTuning.hull
+  if (big && k <= bigK() + 1) k = bigK()
+  if ((memTuning.legacy ? px > LIVE : big && k > bigK()) || o.debug) {
+    const kk = size / m.long
+    ctx.scale(kk, kk)
     paintModel(ctx, m, { light: lightFor(lr), ppu: px / m.long, state, debug: o.debug, wreckMounts: o.wreck })
   } else {
-    const b = bucket(px)
-    const n = headings(b)
+    const b = BUCKETS[k]
+    const n = big ? lightTuning.big : headings(b)
     const ppu = b / m.long
     const pad = 4 + b * 0.05
     const cw = Math.ceil(m.w * ppu + pad * 2)
     const ch = Math.ceil(m.h * ppu + pad * 2)
     const s = size / b
-    const keyOf = (st: HullState, ls: number) => `${m.key}|h|${stateKey(st)}|${o.wreck ? 'w' : ''}|${ls}/${n}|${b}`
+    const wreck = !!o.wreck
+    // Burns baked in (wrecks, specks), or drawn over (see above).
+    const baked = wreck || b <= 64
+    const sc = !baked ? 0 : wreck ? state.scorch : state.scorch === 1 ? 2 : state.scorch
+    const va = wreck ? state.variant : 0
+    // The model's runs by look and size, as one number: what's come off, burns (when baked in),
+    // wreck or not, size step, headings.
+    const runs = modelRuns(hullRuns, m)
+    const keyOf = (det: number) => ((((det * 4 + sc) * 4 + va) * 2 + (wreck ? 1 : 0)) * 16 + k) * 128 + n
+    const look = (det: number) => runs.get(keyOf(det))
+    const run = runIn(runs, keyOf(state.detached))
+    const paintAs: HullState = baked ? { detached: state.detached, scorch: sc, variant: va } : { detached: state.detached, ...UNBURNT }
+    const place = (c: HTMLCanvasElement) => ctx.drawImage(c, (-cw / 2) * s, (-ch / 2) * s, cw * s, ch * s)
     drawLit(
       ctx,
       lr,
       n,
       (ls, may) =>
-        cached(
-          keyOf(state, ls),
+        slot(
+          run,
+          ls,
+          'hulls',
           cw,
           ch,
           (g) => {
             g.translate(cw / 2, ch / 2)
             g.scale(ppu, ppu)
-            paintModel(g, m, { light: lightFor((ls / n) * TAU), ppu, state, wreckMounts: o.wreck })
+            paintModel(g, m, { light: lightFor((ls / n) * TAU), ppu, state: paintAs, wreckMounts: wreck, burns: baked })
           },
           may,
         ),
-      (c) => ctx.drawImage(c, (-cw / 2) * s, (-ch / 2) * s, cw * s, ch * s),
+      place,
       true,
-      // In a big fight hulls take a new scorch mark or lose a part every few frames, and each new look
-      // would have to be painted at once, budget or not. The look it had a moment ago stands in (one
-      // scorch level less, or with the part it just lost) until a frame has time to paint the new one.
+      // In a big fight hulls lose a part every few frames, and each new look would have to be
+      // painted at once, budget or not. The look it had a moment ago (with the part it just lost)
+      // stands in until a frame has time to paint the new one.
       (ls) => {
-        const alts: HullState[] = []
-        if (state.scorch > 0) alts.push({ ...state, scorch: state.scorch - 1 })
-        for (let i = 0; i < m.detachable.length; i++) if (state.detached & (1 << i)) alts.push({ ...state, detached: state.detached & ~(1 << i) })
-        for (const alt of alts)
+        for (let i = 0; i < m.detachable.length; i++) {
+          if (!(state.detached & (1 << i))) continue
+          const alt = look(state.detached & ~(1 << i))
+          if (!alt) continue
           for (let d = 0; d <= n / 8; d++) {
-            const hit = cached(keyOf(alt, (ls + d) % n), cw, ch, () => {}, false) ?? cached(keyOf(alt, (ls - d + n) % n), cw, ch, () => {}, false)
-            if (hit) return hit
+            const hit = alt.s[(ls + d) % n] ?? alt.s[(ls - d + n) % n]
+            if (hit) return hit.c
           }
+        }
         return null
       },
+      big ? lightTuning.bigBlend : lightTuning.blend,
     )
+    if (!baked && (state.scorch > 0 || state.detached)) {
+      const burns = runIn(modelRuns(burnRuns, m), ((state.detached * 4 + state.scorch) * 4 + state.variant) * 16 + k)
+      place(
+        slot(burns, 0, 'burns', cw, ch, (g) => {
+          g.translate(cw / 2, ch / 2)
+          g.scale(ppu, ppu)
+          paintBurns(g, m, state, silhouette(partsLeft(m, state)), ppu)
+        }),
+      )
+    }
   }
   ctx.restore()
+}
+
+/** The run of turret bitmaps for one look at one size. */
+function mountRun(faction: Model['faction'], look: MountLook, broken: boolean, k: number, n: number) {
+  let byLook = mountRuns.get(faction)
+  if (!byLook) mountRuns.set(faction, (byLook = new Map()))
+  let runs = byLook.get(look)
+  if (!runs) byLook.set(look, (runs = new Map()))
+  const run = runIn(runs, ((broken ? 1 : 0) * 16 + k) * 128 + n)
+  run.parts ??= mountParts(look, faction, broken)
+  return run
+}
+
+/** Turrets smaller than this many device pixels across aren't drawn: a speck on the hull. */
+const MOUNT_MIN = 4
+/** Turrets smaller than this show their nearest light heading alone, without the crossfade. */
+const MOUNT_BLEND = 24
+
+/** A turret from its cached bitmaps, `px` device pixels across (no more than memTuning.mountLive),
+ * centred on the origin and turned by `rot` already, its light worked out for heading `rot`. */
+function drawMountCached(ctx: CanvasRenderingContext2D, faction: Model['faction'], look: MountLook, broken: boolean, rot: number, r: number, px: number) {
+  const k0 = bucketK(px)
+  const k = memTuning.legacy ? k0 : Math.min(k0, bucketK(memTuning.mount / 1.15))
+  const b = BUCKETS[k]
+  // A big turret bitmap gets 32 headings: a turret is small next to its hull, and the crossfade
+  // hides the steps.
+  const n = memTuning.legacy || b <= 64 ? headings(b) : Math.min(32, headings(b))
+  const run = mountRun(faction, look, broken, k, n)
+  const parts = run.parts!
+  if (!parts.length) return
+  const pal = PALETTES[faction]
+  const ppu = b / 2.4
+  const cw = Math.ceil(b * 1.1 + 4)
+  const s = (r * 2.4) / b
+  drawLit(
+    ctx,
+    rot,
+    n,
+    (ls, may) =>
+      slot(
+        run,
+        ls,
+        'mounts',
+        cw,
+        cw,
+        (g) => {
+          g.translate(cw / 2, cw / 2)
+          g.scale(ppu, ppu)
+          paintParts(g, parts, pal, lightFor((ls / n) * TAU), ppu)
+        },
+        may,
+      ),
+    (c) => ctx.drawImage(c, (-cw / 2) * s, (-cw / 2) * s, cw * s, cw * s),
+    px >= MOUNT_BLEND,
+  )
 }
 
 /** One mount (turret, shield generator, module) at (x, y), `r` world units in radius, turned by
@@ -524,43 +694,17 @@ export function drawHull(ctx: CanvasRenderingContext2D, m: Model, x: number, y: 
 export function drawMount(ctx: CanvasRenderingContext2D, faction: Model['faction'], look: MountLook, broken: boolean, x: number, y: number, rot: number, r: number, zdpr: number, alpha = 1) {
   const px = r * 2 * zdpr
   if (px < 2) return
-  const parts = mountParts(look, faction, broken)
-  if (!parts.length) return
-  const pal = PALETTES[faction]
   ctx.save()
   ctx.translate(x, y)
   ctx.rotate(rot)
   if (alpha < 1) ctx.globalAlpha *= alpha
   if (memTuning.legacy ? px > LIVE / 2 : px > memTuning.mountLive) {
-    ctx.scale(r, r)
-    paintParts(ctx, parts, pal, lightFor(rot), r * zdpr)
-  } else {
-    const b = memTuning.legacy ? bucket(px) : Math.min(bucket(px), memTuning.mount)
-    // A big turret bitmap gets 32 headings: a turret is small next to its hull, and the crossfade
-    // hides the steps.
-    const n = memTuning.legacy || b <= 64 ? headings(b) : Math.min(32, headings(b))
-    const ppu = b / 2.4
-    const cw = Math.ceil(b * 1.1 + 4)
-    const s = (r * 2.4) / b
-    drawLit(
-      ctx,
-      rot,
-      n,
-      (ls, may) =>
-        cached(
-          `m|${faction}|${look}|${broken ? 1 : 0}|${ls}/${n}|${b}`,
-          cw,
-          cw,
-          (g) => {
-            g.translate(cw / 2, cw / 2)
-            g.scale(ppu, ppu)
-            paintParts(g, parts, pal, lightFor((ls / n) * TAU), ppu)
-          },
-          may,
-        ),
-      (c) => ctx.drawImage(c, (-cw / 2) * s, (-cw / 2) * s, cw * s, cw * s),
-    )
-  }
+    const parts = mountParts(look, faction, broken)
+    if (parts.length) {
+      ctx.scale(r, r)
+      paintParts(ctx, parts, PALETTES[faction], lightFor(rot), r * zdpr)
+    }
+  } else drawMountCached(ctx, faction, look, broken, rot, r, px)
   ctx.restore()
 }
 
@@ -575,16 +719,17 @@ export function drawPart(ctx: CanvasRenderingContext2D, m: Model, index: number,
   const px = span * k * zdpr
   if (px < 1.5) return
   const b = bucket(px)
-  // Tumbling debris: the nearest of 16 headings is plenty, nobody can follow its light.
-  const ls = ((Math.round((rot / TAU) * 16) % 16) + 16) % 16
+  // Tumbling debris: the nearest of 8 headings is plenty, nobody can follow its light (and a burst
+  // of parts would otherwise paint every heading of each one as it spins).
+  const ls = ((Math.round((rot / TAU) * 8) % 8) + 8) % 8
   const ppu = b / span
   const pad = 3 + b * 0.06
   const cw = Math.ceil((b0.x1 - b0.x0) * ppu + pad * 2)
   const ch = Math.ceil((b0.y1 - b0.y0) * ppu + pad * 2)
-  const c = cached(`${m.key}|p|${index}|${ls}|${b}`, cw, ch, (g) => {
+  const c = slot(runIn(otherRuns, `${m.key}|p|${index}|${b}`), ls, 'parts', cw, ch, (g) => {
     g.translate(pad - b0.x0 * ppu, pad - b0.y0 * ppu)
     g.scale(ppu, ppu)
-    paintParts(g, [p], PALETTES[m.faction], lightFor((ls / 16) * TAU), ppu, false, true)
+    paintParts(g, [p], PALETTES[m.faction], lightFor((ls / 8) * TAU), ppu, false, true)
     // Torn off: burnt across.
     g.globalCompositeOperation = 'source-atop'
     g.fillStyle = 'rgba(30,20,14,0.35)'
@@ -603,15 +748,19 @@ export function drawPart(ctx: CanvasRenderingContext2D, m: Model, index: number,
  * One piece of a broken hull, its middle at (x, y), turned by `rot`. `key` names the break (the
  * wreck and the way it broke), since every break cuts its own pieces. `tumble`: a fragment spinning
  * away, lit from the nearest of 8 headings with no crossfade, since nobody can follow the light on
- * it, and a burst of them would otherwise fill the cache with every heading of every fragment.
+ * it, and a burst of them would otherwise fill the cache with every heading of every fragment. A
+ * big piece seen close up gets the biggest bitmaps, like a big hull (see drawHull), and past that
+ * is painted live.
  */
 export function drawPiece(ctx: CanvasRenderingContext2D, m: Model, piece: Piece, key: string, state: HullState, x: number, y: number, rot: number, size: number, zdpr: number, alpha = 1, tumble = false) {
   const k = size / m.long
   const span = Math.max(piece.x1 - piece.x0, piece.y1 - piece.y0)
   const px = span * k * zdpr
   if (px < 1.5) return
-  const b = bucket(px)
-  if (!memTuning.legacy && b > memTuning.hull) {
+  let bk = bucketK(px)
+  const big = !memTuning.legacy && BUCKETS[bk] > memTuning.hull
+  if (big && bk <= bigK() + 1) bk = bigK()
+  if (big && bk > bigK()) {
     // A big piece seen close up: painted live, like a big hull.
     ctx.save()
     ctx.translate(x, y)
@@ -623,12 +772,16 @@ export function drawPiece(ctx: CanvasRenderingContext2D, m: Model, piece: Piece,
     ctx.restore()
     return
   }
-  const n = tumble ? 8 : headings(b)
+  const b = BUCKETS[bk]
+  const n = tumble ? 8 : big ? lightTuning.big : headings(b)
   const ppu = b / span
   const pad = 3 + b * 0.04
   const cw = Math.ceil((piece.x1 - piece.x0) * ppu + pad * 2)
   const ch = Math.ceil((piece.y1 - piece.y0) * ppu + pad * 2)
-  const sk = stateKey(state)
+  // A tumbling fragment is burnt through and gone in a moment: drawn as if nothing had come off the
+  // craft first, so every craft of a type shares its fragments rather than each one painting its own.
+  const st = tumble ? { detached: 0, scorch: state.scorch, variant: 0 } : state
+  const run = runIn(otherRuns, `${m.key}|x|${key}|${stateKey(st)}|${n}|${b}`)
   const s = k / ppu
   ctx.save()
   ctx.translate(x, y)
@@ -639,19 +792,23 @@ export function drawPiece(ctx: CanvasRenderingContext2D, m: Model, piece: Piece,
     rot,
     n,
     (ls, may) =>
-      cached(
-        `${m.key}|x|${key}|${sk}|${ls}/${n}|${b}`,
+      slot(
+        run,
+        ls,
+        'pieces',
         cw,
         ch,
         (g) => {
           g.translate(pad - piece.x0 * ppu, pad - piece.y0 * ppu)
           g.scale(ppu, ppu)
-          paintModel(g, m, { light: lightFor((ls / n) * TAU), ppu, state, wreckMounts: true, region: piece.region, cuts: piece.cuts })
+          paintModel(g, m, { light: lightFor((ls / n) * TAU), ppu, state: st, wreckMounts: true, region: piece.region, cuts: piece.cuts })
         },
         may,
       ),
     (c) => ctx.drawImage(c, (piece.x0 - piece.cx) * k - pad * s, (piece.y0 - piece.cy) * k - pad * s, cw * s, ch * s),
     !tumble,
+    undefined,
+    big ? lightTuning.bigBlend : lightTuning.blend,
   )
   ctx.restore()
 }
@@ -659,23 +816,47 @@ export function drawPiece(ctx: CanvasRenderingContext2D, m: Model, piece: Piece,
 /**
  * A modelled unit's mounts, each on its hardpoint: whole ones turned to `aim(i)` (a world angle, as
  * drawn), wrecked ones left where they last pointed, blown-off ones a burnt socket on the hull; the
- * hardpoints in `skip` left bare.
+ * hardpoints in `skip` left bare. Specks under MOUNT_MIN pixels are left off. Each one is placed
+ * with one setTransform from the unit's own (no save and restore per turret).
  */
 export function drawMounts(ctx: CanvasRenderingContext2D, m: Model, x: number, y: number, rot: number, size: number, zdpr: number, hps: readonly { hp: number }[], aim: (i: number) => number, alpha = 1, skip?: readonly number[]) {
   const k = size / m.long
   const c = Math.cos(rot)
   const s = Math.sin(rot)
+  let base: DOMMatrix | null = null
+  const a0 = ctx.globalAlpha
   for (const mt of m.mounts) {
     // (A rush-launched ship's parts not yet installed: the battle draws their scaffolding.)
     if (mt.design === 'engine' || skip?.includes(mt.hp)) continue
     const r = mt.r * k
-    if (r * 2 * zdpr < 2) continue
+    const px = r * 2 * zdpr
+    if (px < MOUNT_MIN) continue
     const wx = x + (mt.x * c - mt.y * s) * k
     const wy = y + (mt.x * s + mt.y * c) * k
     const dead = (hps[mt.hp]?.hp ?? 1) <= 0
-    if (!dead) drawMount(ctx, m.faction, mt.design, false, wx, wy, mt.turns ? aim(mt.hp) : rot, r, zdpr, alpha)
-    else if (mt.detach) drawMount(ctx, m.faction, 'crater', true, wx, wy, rot, r, zdpr, alpha)
-    else drawMount(ctx, m.faction, mt.design, true, wx, wy, mt.turns ? aim(mt.hp) : rot, r, zdpr, alpha)
+    const look: MountLook = dead && mt.detach ? 'crater' : mt.design
+    const a = dead && mt.detach ? rot : mt.turns ? aim(mt.hp) : rot
+    if (memTuning.legacy || px > memTuning.mountLive) {
+      // Painted live, from the unit's own transform and alpha.
+      if (base) {
+        ctx.setTransform(base)
+        ctx.globalAlpha = a0
+      }
+      drawMount(ctx, m.faction, look, dead, wx, wy, a, r, zdpr, alpha)
+      continue
+    }
+    base ??= ctx.getTransform()
+    ctx.globalAlpha = a0 * alpha
+    // The unit's transform, moved to the hardpoint and turned to the turret's heading.
+    const ca = Math.cos(a)
+    const sa = Math.sin(a)
+    const { a: ta, b: tb, c: tc, d: td, e: te, f: tf } = base
+    ctx.setTransform(ta * ca + tc * sa, tb * ca + td * sa, tc * ca - ta * sa, td * ca - tb * sa, ta * wx + tc * wy + te, tb * wx + td * wy + tf)
+    drawMountCached(ctx, m.faction, look, dead, a, r, px)
+  }
+  if (base) {
+    ctx.setTransform(base)
+    ctx.globalAlpha = a0
   }
 }
 

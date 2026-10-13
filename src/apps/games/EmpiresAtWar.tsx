@@ -2264,15 +2264,27 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       speed: 1,
     })
   }
-  // Every few seconds, and the moment the page goes away.
+  // Every ten seconds, and the moment the page goes away. The snapshot of a big battle takes a
+  // frame's worth of time or more, so the regular one waits for a moment the page is idle (between
+  // frames, or at the latest two seconds on).
   useEffect(() => {
-    const id = window.setInterval(() => keepRef.current(), 4000)
+    let idle = 0
+    const later = () => {
+      if (idle) return
+      const run = () => {
+        idle = 0
+        keepRef.current()
+      }
+      idle = typeof requestIdleCallback === 'function' ? requestIdleCallback(run, { timeout: 2000 }) : window.setTimeout(run, 0)
+    }
+    const id = window.setInterval(later, 10000)
     const hide = () => keepRef.current()
     const hidden = () => document.visibilityState === 'hidden' && keepRef.current()
     window.addEventListener('pagehide', hide)
     document.addEventListener('visibilitychange', hidden)
     return () => {
       clearInterval(id)
+      if (idle) (typeof cancelIdleCallback === 'function' ? cancelIdleCallback : clearTimeout)(idle)
       window.removeEventListener('pagehide', hide)
       document.removeEventListener('visibilitychange', hidden)
     }
