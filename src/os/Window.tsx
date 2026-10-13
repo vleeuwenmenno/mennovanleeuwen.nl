@@ -620,7 +620,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
         : []),
       { label: 'Center on screen', onSelect: center },
       ...(ws !== null && wm.workspaces
-        ? [{ label: 'Move to workspace', submenu: Array.from({ length: WORKSPACES }, (_, i) => ({ label: `Workspace ${i + 1}`, shortcut: `Alt Shift ${i + 1}`, checked: ws === i + 1, onSelect: () => wm.moveToWorkspace(win.pid, i + 1) })) }]
+        ? [{ label: 'Move to workspace', submenu: Array.from({ length: WORKSPACES }, (_, i) => ({ label: `Workspace ${i + 1}${wm.elsewhere.includes(i + 1) ? ' (other tab)' : ''}`, shortcut: `Alt Shift ${i + 1}`, checked: ws === i + 1, onSelect: () => wm.moveToWorkspace(win.pid, i + 1) })) }]
         : []),
       ...(chrome === 'note' ? [{ label: 'Add widget', submenu: addWidgetItems(wm) }] : []),
       ...(!SINGLE_INSTANCE.has(win.app) && win.app !== 'widget' ? [{ separator: true as const }, { label: 'New window', onSelect: () => wm.openNew(win.app) }] : []),
