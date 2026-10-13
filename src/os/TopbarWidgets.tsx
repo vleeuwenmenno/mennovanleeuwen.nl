@@ -3,7 +3,7 @@ import { profile } from '../data/profile'
 import { timeAgo } from '../data/recents'
 import { fetchMinecraft, MC_ADDRESS, MC_PORT, mcNotificationsOn, setMcNotifications, useMinecraft, worldLine } from '../data/minecraft'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
-import { dayKey, eventsOn, eventTime, fetchEvents, startOfDay, useCalendarVersion, useShownCalendarIds, type CalendarEvent } from '../data/calendar'
+import { dayKey, eventsOn, eventTime, fetchEvents, openEvent, startOfDay, useCalendarVersion, useShownCalendarIds, type CalendarEvent } from '../data/calendar'
 import { connectGoogle, hasCalendar, signIn, signOut, useAccount } from './account'
 import { cvMode } from './cvMode'
 import { openContextMenu, type MenuItem } from './ContextMenu'
@@ -114,7 +114,18 @@ function DayAgenda({ day, events, error, close }: { day: Date; events: CalendarE
         <div key={e.id} className="cal-event" title={`${e.calendar}${e.location ? ` · ${e.location}` : ''}`}>
           <span className="ag-dot" style={{ background: e.color }} />
           <span className="cal-event-time">{eventTime(e)}</span>
-          <a href={e.url} target="_blank" rel="noopener noreferrer">
+          {/* Opens in the Calendar app; Ctrl-click or middle-click still opens the event's own page. */}
+          <a
+            href={e.url ?? '/?open=calendar'}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(ev) => {
+              if (ev.ctrlKey || ev.metaKey || ev.shiftKey) return
+              ev.preventDefault()
+              close()
+              openEvent(e)
+            }}
+          >
             {e.title}
           </a>
           {e.meet && (
