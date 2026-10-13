@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { contributions, projects, type Contribution, type Project } from '../data/profile'
 import { fetchStars, timeAgo, useRecents } from '../data/recents'
+import { cvMode } from '../os/cvMode'
 import { useWM, type WinState } from '../os/wm'
 
 type Item = { kind: 'project'; data: Project } | { kind: 'contrib'; data: Contribution }
@@ -74,9 +75,12 @@ function Detail({ item, onBack }: { item: Item; onBack: () => void }) {
             Try the CLI
           </button>
         )}
-        <button className="btn btn-ghost" onClick={() => wm.open('terminal', { run: `cat ~/${item.kind === 'project' ? 'projects' : 'contributions'}/${d.slug}/README.md` })}>
-          Open in terminal
-        </button>
+        {/* The READMEs are in the terminal's home folder on the CV page only (src/terminal/vfs.ts). */}
+        {cvMode() && (
+          <button className="btn btn-ghost" onClick={() => wm.open('terminal', { run: `cat ~/${item.kind === 'project' ? 'projects' : 'contributions'}/${d.slug}/README.md` })}>
+            Open in terminal
+          </button>
+        )}
       </div>
       {activity.length > 0 && (
         <>

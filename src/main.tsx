@@ -3,7 +3,6 @@ import { createRoot } from 'react-dom/client'
 import { APP_META } from './os/apps'
 import { loadAccount } from './os/account'
 import { installContextMenuFallback, installTouchContextMenu } from './os/ContextMenu'
-import { appHere } from './os/cvMode'
 import { playMode } from './os/playMode'
 import { PlayPage } from './apps/games/Play'
 import { initialLayout, placement, Shell, winTitle } from './os/Shell'
@@ -16,7 +15,7 @@ import { trackVisualViewport } from './os/viewport'
 import { startSync } from './os/synced'
 import { startBrowserFiles } from './data/browserfs'
 import { initTheme } from './os/theme'
-import { WindowManagerProvider, type AppId } from './os/wm'
+import { WindowManagerProvider } from './os/wm'
 import './styles.css'
 import './home.css'
 import './mobile.css'
@@ -42,8 +41,9 @@ installTouchContextMenu()
 installSelectionRules()
 void loadAccount()
 
-// Saved windows of apps that don't exist on this page (the CV apps away from /cv) are dropped.
-const isApp = (app: string) => app in APP_META && app !== 'trash' && appHere(app as AppId)
+// Saved windows of apps that no longer exist are dropped. (The CV apps' windows from /cv are kept
+// aside on the plain desktop by the window manager: see WinState.anywhere in src/os/wm.tsx.)
+const isApp = (app: string) => app in APP_META && app !== 'trash'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
