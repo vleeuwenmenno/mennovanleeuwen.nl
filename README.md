@@ -483,7 +483,7 @@ Immich, Seafile, OnlyOffice, Ollama Cloud and updown.io. The Apps panes keep onl
 app, and where an app needs an account they start with a small notice and a button that opens that
 integration (*Accounts for Calendar are linked in Integrations*, or *Link a calendar account to get
 started* when there is none). The Apps panes are Agents, Calendar (which calendars show, the view it
-opens in and where new events go), Contacts (where new contacts go), Files (view, icon size, sort order, hidden files, sidebar), Games (Pool's helpers,
+opens in and where new events go), Contacts (where new contacts go), Files (view, icon size, sort order, hidden files, sidebar, preview pane), Games (Pool's helpers,
 sensitivity, computer and sound; Gladiator's sound and music; Empires At War's sound, battlefield,
 camera and a summary of its key bindings, with a button into the game's own key bindings and sound
 mix), Mail (when mail counts as read, remote content, the allowed senders, quoted text, signatures and replies, with a pointer to Notifications for new-mail alerts), Omamp (shuffle, repeat, equalizer and preset, visualizer, time, its windows), PDF (sidebar,
@@ -875,6 +875,23 @@ in IndexedDB per account (at most 2,000 or 50 MB, the least recently shown going
 made once per browser; a video that gives none shows its icon and is left alone for a day. Encrypted
 libraries answer no byte ranges, so there only videos up to 64 MB get a frame. Settings → Apps →
 Files → *Video thumbnails* switches it off.
+
+Files' toolbar has the sidebar button at its left end and the **preview pane** button at its right
+end ([`src/apps/FilesPreview.tsx`](src/apps/FilesPreview.tsx)). The pane, on the right of the list,
+shows the selected file (the one last clicked, with several selected) with the same code the apps
+use: pictures as in Preview, video and audio through Player's addresses (with controls, muted and
+not playing by themselves), Markdown as Zed's preview renders it, code and text with the same
+highlighter (the first 200 KB or 2,000 lines), a PDF's first page with pdf.js, and the top level of
+a ZIP (or of a tar in Seafile) as the Archive app reads it. Office documents are never opened there,
+since that would mean loading OnlyOffice in the pane: they, and files of any other kind, show their
+icon, details and *Open*. Under every preview are its name, kind, size, date (and a picture's or a
+video's dimensions, a PDF's pages) and *Open*, which opens it as a double-click does. The arrow keys
+move the preview along with the selection, after a short pause so a held key reads nothing on the
+way. The splitter beside the pane drags its width (a double-click resets it), kept with the other
+Files preferences. Settings → Apps → Files → *Preview* switches the pane off altogether, says
+whether new windows start with it shown, and whether showing or hiding it in a window sets that
+(*Remember when I show or hide it*, on by default) or only changes that window. The Trash and phones
+have no preview.
 
 Uploads go straight from the browser to Seafile's file server: drop files or whole folders from the
 computer on a Files window (a folder, its empty space or the sidebar) or on the desktop, or use

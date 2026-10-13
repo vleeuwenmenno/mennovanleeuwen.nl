@@ -16,6 +16,14 @@ export type FilesPrefs = {
   sidebar: boolean
   /** A frame from each video as its icon, in Files, on the desktop and in Photos (src/data/videoThumbs.ts) */
   videoThumbs: boolean
+  /** The preview pane (src/apps/FilesPreview.tsx): its toolbar button and the pane itself */
+  preview: boolean
+  /** Whether a new Files window opens with the preview pane shown */
+  previewShow: boolean
+  /** Whether showing or hiding the pane in a window also sets previewShow, for the next window */
+  previewRemember: boolean
+  /** The pane's width in pixels, dragged with its splitter */
+  previewWidth: number
 }
 
 export const FILES_VIEWS: [FilesView, string][] = [
@@ -36,7 +44,7 @@ export const FILES_SORTS: [FilesSort, string][] = [
 export const FILES_ZOOM_MIN = 50
 export const FILES_ZOOM_MAX = 200
 
-export const filesPrefs = jsonPref<FilesPrefs>('mvlos.files.v1', { view: 'grid', zoom: 100, sort: 'az', hidden: false, sidebar: true, videoThumbs: true })
+export const filesPrefs = jsonPref<FilesPrefs>('mvlos.files.v1', { view: 'grid', zoom: 100, sort: 'az', hidden: false, sidebar: true, videoThumbs: true, preview: true, previewShow: false, previewRemember: true, previewWidth: 320 })
 
 // --- Omamp --------------------------------------------------------------------------------------
 
