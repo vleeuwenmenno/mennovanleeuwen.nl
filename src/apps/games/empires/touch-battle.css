@@ -205,3 +205,39 @@
     }
   }
 }
+
+/* Expansion cards on phones: one row high like the ship cards, with a small icon, so they fit the
+   shorter unit card. */
+@media (pointer: coarse), (max-width: 719px) {
+@container (max-width: 680px) {
+  .ew-battle .ew-yard .ew-shipcard.ew-modcard {
+    grid-row: auto;
+    height: 64px;
+    grid-template-rows: 22px auto auto;
+  }
+  .ew-battle .ew-modcard .ew-modicon {
+    width: 22px;
+    height: 22px;
+    border-width: 1px;
+  }
+  .ew-battle .ew-modcard .ew-modicon svg {
+    width: 13px;
+    height: 13px;
+  }
+  .ew-battle .ew-yard .ew-shipcard.ew-modcard strong {
+    min-height: 0;
+    white-space: nowrap;
+  }
+}
+}
+@media (pointer: coarse) and (max-height: 500px) {
+  .ew-battle .ew-yard .ew-shipcard.ew-modcard {
+    grid-row: auto;
+    height: 64px;
+    grid-template-rows: 22px auto auto;
+  }
+  .ew-battle .ew-modcard .ew-modicon {
+    width: 22px;
+    height: 22px;
+  }
+}

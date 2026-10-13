@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ABILITIES, FACTIONS, STATIONS, TECH, TECHS, UNITS, isShip, moduleSprite, roleOf, stationType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
+import { ABILITIES, FACTIONS, REBUILD_MODULE, STATIONS, TECH, TECHS, UNITS, WORKS_NAME, isShip, moduleSprite, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
 import { info, sameSel, selName, targets, weaponLine, WEAPON_NAME, type Sel } from './codexInfo'
 import { Frame, HpIcon, Icon, Tips, fmt } from './Hud'
 import { HP_COLOR, hpName } from './icons'
@@ -45,10 +45,12 @@ const STYLE_NAMES: Record<string, string> = { ring: 'Ring hull', carrier: 'Alt d
 const RANGE_RGB: Record<WeaponKind, string> = { laser: '255,128,112', flak: '255,196,92', turbo: '122,190,255', missile: '255,140,222', ion: '176,146,255' }
 const TAU = Math.PI * 2
 
-/** The unit as the Codex shows it: a station at the level picked, with every module it can have. */
+/** The unit as the Codex shows it: a station at the level picked, with every module it can have
+ * (its expansions too); a yard with every expansion fitted. */
 function shown(t: UnitType, level: number) {
+  if (t.tier === 'yard') return yardType(t.id, modulesFor(worksOf(t)!).map((m) => m.id))
   if (t.tier !== 'station') return t
-  return stationType(t.faction, level, TECHS.filter((x) => x.faction === t.faction).map((x) => x.id))
+  return stationType(t.faction, level, TECHS.filter((x) => x.faction === t.faction).map((x) => x.id), modulesFor('station').map((m) => m.id))
 }
 
 /** Every gun a unit carries, grouped by kind and numbers. */
@@ -210,6 +212,25 @@ function Stats({ t, concept = false, model, dmg, selected, hover, onSelect, onHo
         <>
           <h5>Ability: {ABILITIES[t.ability].name}</h5>
           <p className="ew-muted">{ABILITIES[t.ability].blurb}</p>
+        </>
+      )}
+      {worksOf(t) && (
+        <>
+          <h5>Expansions</h5>
+          <p className="ew-muted ew-small">
+            In skirmishes the {WORKS_NAME[worksOf(t)!]} builds these onto itself, one at a time, ordered from its panel. Each is a part of it with a hull of its own: shot off, its feature stops until engineers weld it back for {Math.round(REBUILD_MODULE * 100)}% of its price.{worksOf(t) !== 'station' ? ' A yard\'s expansions are lost with it.' : ''}
+          </p>
+          <ul className="ew-cx-list">
+            {modulesFor(worksOf(t)!).map((m) => (
+              <li key={m.id} data-tip={`${m.blurb}\nIf shot off: ${m.lost}`}>
+                <i style={{ background: HP_COLOR[m.kind] }} />
+                <span>{m.name}</span>
+                <small>
+                  {fmt(m.cost)} cr · {m.time} s{m.level > 1 ? ` · station level ${m.level}` : ''}
+                </small>
+              </li>
+            ))}
+          </ul>
         </>
       )}
       {t.support && <p className="ew-muted">Repairs up to {t.support.max} ships within {t.support.range}, {t.support.repair} hull a second each.</p>}

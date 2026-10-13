@@ -1,4 +1,4 @@
-import { STATIONS, TECH, accuracy, effect, type Tier, type UnitType, type Weapon, type WeaponKind } from './data'
+import { MODULE, REBUILD_MODULE, STATIONS, TECH, WORKS_NAME, accuracy, effect, type Tier, type UnitType, type Weapon, type WeaponKind } from './data'
 import { hpName } from './icons'
 import type { Model } from './models/index.ts'
 
@@ -115,6 +115,18 @@ export function info(t: UnitType, m: Model | null, s: Sel): Info {
   }
   const h = t.hardpoints[s.hp]
   const mt = m?.mounts[s.hp]
+  // An expansion module (hybrid bases): what it does, and what losing it costs.
+  if (h.exp) {
+    const x = MODULE[h.exp]
+    return {
+      title: `${x.name} #${s.hp + 1}`,
+      kind: `Expansion of the ${WORKS_NAME[x.on]}`,
+      hp: h.hp,
+      does: x.blurb,
+      lost: `${x.lost} Engineers weld it back for ${Math.round(REBUILD_MODULE * 100)}% of its price (${Math.round(x.cost * REBUILD_MODULE)} credits).`,
+      off: 'Comes off with its girder when destroyed: a burnt socket stays.',
+    }
+  }
   const same = t.hardpoints.filter((x) => x.kind === h.kind).length
   const station = t.tier === 'station'
   const tech = station && h.key ? STATIONS[t.faction].modules.find((x) => x.key === h.key)?.tech : undefined

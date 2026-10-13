@@ -42,7 +42,12 @@ export type Weapon = {
  * a share of the ship's longest side; engines have no art of their own. `key` names a station
  * module, so it keeps its damage while the station grows around it.
  */
-export type Hardpoint = { kind: HardpointKind; x: number; y: number; hp: number; weapon?: Weapon; art?: ModuleArt; s?: number; key?: string }
+export type Hardpoint = {
+  kind: HardpointKind; x: number; y: number; hp: number; weapon?: Weapon; art?: ModuleArt; s?: number; key?: string
+  /** An expansion module bolted onto a Command Station or a yard (see MODULES): what it is. Its
+   * feature works only while it stands; the kind is only for its icon and mount. */
+  exp?: ModuleId
+}
 
 export type UnitType = {
   id: string
@@ -296,8 +301,9 @@ function defensePlatform(faction: FactionId, kind: DefenseKind): UnitType {
  * rally point. A destroyed yard leaves its ruin where it stood, which its owner's engineers rebuild
  * for REBUILD of the price.
  *
- * Step 1 has the Frigate Yard (frigates and corvettes). Every yard has empty module sockets (`YARD_SOCKETS`)
- * where its expansions will go.
+ * There are two yards: the Frigate Yard (station level 2: frigates and corvettes) and the Capital
+ * Yard (station level 3: cruisers, and flagships once its Capital slip stands). The Command Station
+ * and both yards take expansion modules (MODULES) on their sockets.
  */
 export const BUILD_RADIUS = mapDist(1760)
 /** A ruined yard is rebuilt for this share of its price. */
@@ -315,12 +321,92 @@ export const ENGINEERS = { reach: 220, crew: 9, flat: 6, share: 0.004 }
  * less `wear` of it times how far along it was (a site just begun: 75%, one nearly done: 25%). */
 export const SITE_REFUND = { start: 0.75, wear: 0.5 }
 /**
- * The empty module sockets on each faction's yards (0-10 grid, as hardpoints), where step 2's
- * expansions attach: two on the flanks and one at the stern.
+ * The module sockets on each faction's yards (0-10 grid, as hardpoints), where the expansions
+ * attach: on the Frigate Yard two on the flanks and one at the stern; on the Capital Yard one on
+ * each flank (the stern one stays free for now).
  */
 export const YARD_SOCKETS: Record<FactionId, [number, number][]> = {
   republic: [[1.0, 6.1], [9.0, 6.1], [5, 9.45]],
   droid: [[0.95, 6.3], [9.05, 6.3], [5, 9.5]],
+}
+export const CYARD_SOCKETS: Record<FactionId, [number, number][]> = {
+  republic: [[1.15, 5.7], [8.85, 5.7], [5, 9.45]],
+  droid: [[1.15, 5.5], [8.85, 5.5], [5, 9.45]],
+}
+/** Where the Command Station's expansions sit, on the 0-10 grid of whatever stage it has grown to
+ * (so they move out with it): three of its corners, out past the core on struts. */
+export const STATION_SOCKETS: [number, number][] = [[1.2, 8.8], [8.9, 1.1], [1.1, 1.1]]
+
+// --- Expansion modules -----------------------------------------------------------------------------
+
+/** The buildings that take expansions: the Command Station and the two yards. */
+export type Works = 'station' | 'yard' | 'cyard'
+export type ModuleId = 'strikeHangar' | 'sensorArray' | 'shieldCore' | 'secondSlip' | 'drydock' | 'armourWorks' | 'capitalSlip' | 'fighterWing'
+/**
+ * An expansion: a module ordered from its building's panel and built by the building itself (no
+ * engineers needed), one at a time, queued like research. It goes onto socket `socket` of its
+ * building as a part of the structure with its own hull (`hp`, before TOUGHNESS) and can be shot
+ * off: then its feature stops until it is rebuilt (engineers or repair craft weld it back for
+ * REBUILD_MODULE of its price; a repair crew mends it with the rest). `level`: the station level
+ * it needs. `s`: its size, as a share of its building's longest side (on the station that of the
+ * stage it has grown to, so it grows with the station). `kind`/`art`: its icon and the mount on it.
+ */
+export type BaseModule = {
+  id: ModuleId; on: Works; name: string; blurb: string; lost: string; cost: number; time: number; level: number; hp: number
+  socket: number; s: number; kind: HardpointKind; art: ModuleArt
+}
+/** The whole table, building by building, to tune in one place. */
+export const MODULES: BaseModule[] = [
+  // Command Station
+  { id: 'strikeHangar', on: 'station', name: 'Strike hangar', blurb: 'A second hangar deck for heavy strike craft: bombers are ordered at the Command Station only while it stands, and launch from it.', lost: 'No new bombers can be ordered (those already queued still launch).', cost: 700, time: 40, level: 2, hp: 1300, socket: 0, s: 0.17, kind: 'hangar', art: 'hangar' },
+  { id: 'sensorArray', on: 'station', name: 'Sensor array', blurb: 'A long-range sensor mast: the station sees half as far again, well past the edge of the build radius.', lost: 'The station sees only its normal range.', cost: 500, time: 30, level: 1, hp: 900, socket: 1, s: 0.15, kind: 'sensor', art: 'sensor' },
+  { id: 'shieldCore', on: 'station', name: 'Shield core', blurb: 'A reactor feeding the station\'s shield generators: 40% more shields, recharging 60% faster.', lost: 'The station\'s shields fall back to what its generators give.', cost: 900, time: 45, level: 2, hp: 1500, socket: 2, s: 0.16, kind: 'shield', art: 'shield' },
+  // Frigate Yard
+  { id: 'secondSlip', on: 'yard', name: 'Second slip', blurb: 'A second slipway alongside the first: the yard builds the first two ships in its queue at once.', lost: 'The yard builds one ship at a time again.', cost: 1000, time: 45, level: 2, hp: 1300, socket: 0, s: 0.17, kind: 'dock', art: 'dock' },
+  { id: 'drydock', on: 'yard', name: 'Drydock', blurb: 'Repair cradles and work crews: our ships near the yard mend 2.5% of their hull a second. The station\'s Repair docks don\'t add to it: a ship near both gets the better of the two.', lost: 'Ships near the yard are no longer mended.', cost: 800, time: 40, level: 2, hp: 1100, socket: 1, s: 0.16, kind: 'dock', art: 'dock' },
+  { id: 'armourWorks', on: 'yard', name: 'Armour works', blurb: 'Rolls heavy plate for the fleet: every frigate and corvette of ours has 20% more hull while it stands (added to hull research, not multiplied with it).', lost: 'Our frigates and corvettes lose the extra hull (each keeps the same share of its hull it had).', cost: 900, time: 45, level: 2, hp: 1200, socket: 2, s: 0.15, kind: 'refinery', art: 'refinery' },
+  // Capital Yard
+  { id: 'capitalSlip', on: 'cyard', name: 'Capital slip', blurb: 'A slipway long enough for a flagship: the Capital Yard builds flagships while it stands.', lost: 'No new flagships can be ordered (one already queued is still finished).', cost: 1200, time: 60, level: 4, hp: 1800, socket: 0, s: 0.19, kind: 'dock', art: 'dock' },
+  { id: 'fighterWing', on: 'cyard', name: 'Fighter wing', blurb: 'A hangar with a defense wing of its own: a free squadron of interceptors guards the Capital Yard, and lost craft are rebuilt one at a time.', lost: 'Lost wing craft are no longer rebuilt; the ones still flying fight on.', cost: 800, time: 40, level: 3, hp: 1100, socket: 1, s: 0.15, kind: 'hangar', art: 'hangar' },
+]
+export const MODULE: Record<ModuleId, BaseModule> = Object.fromEntries(MODULES.map((m) => [m.id, m])) as Record<ModuleId, BaseModule>
+/** Expansions waiting or under way at one building, at most. */
+export const MODULE_QUEUE = 2
+/** A shot-off module is welded back by engineers (or repair craft) for this share of its price. */
+export const REBUILD_MODULE = 0.3
+/**
+ * What the expansions do, in numbers. Sensor array: the station's sight times `sensor`. Shield core:
+ * the station's shields `shield` more, recharging `regen` faster. Drydock: our ships within `reach`
+ * of the yard's hull mend `repair` of their hull a second. Armour works: `armour` more hull for every
+ * frigate and corvette, added to their hull research.
+ */
+export const MODULE_FX = { sensor: 1.5, shield: 0.4, regen: 0.6, reach: reach(650), repair: 0.025, armour: 0.2 }
+/** The expansions a building takes. */
+export const modulesFor = (on: Works) => MODULES.filter((m) => m.on === on)
+/** Which building a unit type is, for its expansions (null for everything else). */
+export const worksOf = (t: UnitType): Works | null => (t.tier === 'station' ? 'station' : t.tier === 'yard' ? (t.id.endsWith('cyard') ? 'cyard' : 'yard') : null)
+/** The hardpoint key a module goes on. */
+export const moduleKey = (id: ModuleId) => `x-${id}`
+/** The hardpoint a module is, on a building with the box `long` long (stations: in frame pixels). */
+const moduleHardpoint = (m: BaseModule, at: [number, number], s: number): Hardpoint => ({
+  kind: m.kind, art: m.art, x: at[0], y: at[1], s, hp: Math.round(m.hp * TOUGHNESS), key: moduleKey(m.id), exp: m.id,
+})
+
+const yardCache = new Map<string, UnitType>()
+/** A yard with the expansions in `mods` built onto it: its own type (like a grown station), its
+ * module hardpoints after the yard's own, in MODULES order. The same id, so orders still find it. */
+export function yardType(id: string, mods: readonly ModuleId[]): UnitType {
+  const base = UNIT[id]
+  const on = worksOf(base)
+  const have = MODULES.filter((m) => m.on === on && mods.includes(m.id))
+  if (!have.length) return base
+  const key = `${id}:${have.map((m) => m.id).join(',')}`
+  const hit = yardCache.get(key)
+  if (hit) return hit
+  const sockets = (on === 'cyard' ? CYARD_SOCKETS : YARD_SOCKETS)[base.faction]
+  const t: UnitType = { ...base, hardpoints: [...base.hardpoints, ...have.map((m) => moduleHardpoint(m, sockets[m.socket], m.s))] }
+  yardCache.set(key, t)
+  return t
 }
 
 /** A Frigate Yard: a slipway with its gantry (the hardpoint that builds: shot off, work goes at
@@ -350,6 +436,42 @@ function frigateYard(faction: FactionId): UnitType {
         ],
     engines: [],
     role: { role: 'Frigate yard', strong: ['building frigates and corvettes'], weak: ['bombers', 'cruisers', 'being left unguarded'] },
+  }
+}
+
+/** A Capital Yard: a long enclosed dock for the line's heaviest ships, bigger and better armed than
+ * the Frigate Yard. Its slipway gantry builds (shot off, work goes at half speed); a shield
+ * generator at the stern, a turbolaser at each bow corner and point defence at the stern corners. */
+function capitalYard(faction: FactionId): UnitType {
+  const r = faction === 'republic'
+  const pd = flak(6, 380, 0.4)
+  const tl = turbo(30, 760, 2.4, 2)
+  return {
+    id: r ? 'r-cyard' : 'd-cyard', faction, tier: 'yard', name: r ? 'Citadel capital yard' : 'Leviathan capital foundry',
+    blurb: r
+      ? 'A great enclosed dock raised by engineers within the Command Station\'s build radius, from station level 3: it builds cruisers, and flagships once its Capital slip is fitted. Its own queue and rally point; turbolasers, point defence and a shield generator guard it.'
+      : 'A cavernous droid foundry raised within the command foundry\'s build radius, from station level 3: it builds cruisers, and battleships once its Capital slip is fitted. Its own queue and rally point; cannons, point defence and a shield generator guard it.',
+    sprite: `${faction}-cyard`, aspect: r ? 0.7 : 0.74, size: 430, hull: r ? 7400 : 8200, shield: r ? 2400 : 1800, regen: r ? 22 : 17, speed: 0, turn: 0, pop: 0, cost: 2000, build: 48, level: 3, squad: 1, sensor: 1200,
+    weapons: [],
+    hardpoints: r
+      ? [
+          { ...M('dock', 'dock', 5, 4.2, 0.11, 1400), key: 'slip' },
+          { ...M('shield', 'shield', 5, 8.7, 0.085, 1100), key: 'shield' },
+          { ...gun('turbo', 1.7, 1.3, 0.07, 700, tl), key: 'tl1' },
+          { ...gun('turbo', 8.3, 1.3, 0.07, 700, tl), key: 'tl2' },
+          { ...gun('flak', 1.9, 9.1, 0.05, 320, pd), key: 'pd1' },
+          { ...gun('flak', 8.1, 9.1, 0.05, 320, pd), key: 'pd2' },
+        ]
+      : [
+          { ...M('dock', 'dock', 5, 4.4, 0.11, 1500), key: 'slip' },
+          { ...M('shield', 'shield', 5, 8.75, 0.085, 1000), key: 'shield' },
+          { ...gun('turbo', 1.75, 1.35, 0.07, 760, tl), key: 'tl1' },
+          { ...gun('turbo', 8.25, 1.35, 0.07, 760, tl), key: 'tl2' },
+          { ...gun('flak', 1.9, 9.1, 0.05, 340, pd), key: 'pd1' },
+          { ...gun('flak', 8.1, 9.1, 0.05, 340, pd), key: 'pd2' },
+        ],
+    engines: [],
+    role: { role: 'Capital yard', strong: ['building cruisers and flagships'], weak: ['bombers', 'flagships', 'being left unguarded'] },
   }
 }
 
@@ -451,11 +573,13 @@ export const STATIONS: Record<FactionId, StationPlan> = {
 const stationCache = new Map<string, UnitType>()
 /** A station as it stands at `level` with `techs` researched: its stage's sprite, size and hull, and
  * the modules built so far. The same id at every stage, so research and orders still find it. */
-export function stationType(faction: FactionId, level: number, techs: readonly string[]): UnitType {
+export function stationType(faction: FactionId, level: number, techs: readonly string[], exp: readonly ModuleId[] = []): UnitType {
   const plan = STATIONS[faction]
   const lv = Math.max(1, Math.min(plan.stages.length, level))
   const mods = plan.modules.filter((m) => (m.level ?? 1) <= lv && (!m.tech || techs.includes(m.tech)))
-  const id = `${faction}:${lv}:${mods.map((m) => m.key).join(',')}`
+  // Expansions (hybrid bases) go after the station's own modules, in MODULES order.
+  const xs = MODULES.filter((m) => m.on === 'station' && exp.includes(m.id))
+  const id = `${faction}:${lv}:${mods.map((m) => m.key).join(',')}${xs.length ? `|${xs.map((m) => m.id).join(',')}` : ''}`
   const hit = stationCache.get(id)
   if (hit) return hit
   const st = plan.stages[lv - 1]
@@ -471,6 +595,8 @@ export function stationType(faction: FactionId, level: number, techs: readonly s
     engines: [],
   }
   const tough = finish(t)
+  // (Already toughened, so they go on after.)
+  if (xs.length) tough.hardpoints = [...tough.hardpoints, ...xs.map((m) => moduleHardpoint(m, STATION_SOCKETS[m.socket], m.s))]
   stationCache.set(id, tough)
   return tough
 }
@@ -558,6 +684,7 @@ const WRITTEN: UnitType[] = [
   defensePlatform('republic', 'flak'),
   defensePlatform('republic', 'gun'),
   frigateYard('republic'),
+  capitalYard('republic'),
 
   // --- Droid Confederacy ------------------------------------------------------------------------
   {
@@ -640,6 +767,7 @@ const WRITTEN: UnitType[] = [
   defensePlatform('droid', 'flak'),
   defensePlatform('droid', 'gun'),
   frigateYard('droid'),
+  capitalYard('droid'),
 ]
 /** Every unit, toughened and scaled (stations come out of stationType that way already). */
 export const UNITS: UnitType[] = WRITTEN.map((u) => (u.tier === 'station' ? u : finish(u)))
@@ -683,10 +811,18 @@ export const buildable = (faction: FactionId) =>
 export const baseBuilds = (faction: FactionId) =>
   UNITS.filter((u) => u.faction === faction && SHIP_TIERS.includes(u.tier) && u.kind !== 'wing').sort((a, b) => a.level - b.level || a.cost - b.cost)
 /** Where a ship is built in a battle with hybrid bases: frigates and corvettes at a Frigate Yard,
- * everything else at the Command Station (cruisers and flagships too, until their own yard comes). */
-export const builtAt = (t: UnitType): 'station' | 'yard' => (t.tier === 'frigate' || t.kind === 'support' ? 'yard' : 'station')
-/** A faction's Frigate Yard. */
-export const yardOf = (faction: FactionId) => UNIT[faction === 'republic' ? 'r-yard' : 'd-yard']
+ * cruisers and flagships at a Capital Yard (flagships only once its Capital slip stands), and
+ * everything else (strike craft, gunships, engineers) at the Command Station. */
+export const builtAt = (t: UnitType): Works => (t.tier === 'frigate' || t.kind === 'support' ? 'yard' : t.tier === 'cruiser' || t.tier === 'capital' ? 'cyard' : 'station')
+/** A faction's Frigate Yard, or with `kind` 'cyard' its Capital Yard. */
+export const yardOf = (faction: FactionId, kind: 'yard' | 'cyard' = 'yard') => UNIT[`${faction === 'republic' ? 'r' : 'd'}-${kind}`]
+/** Both of a faction's yards, the Frigate Yard first. */
+export const yardsFor = (faction: FactionId) => [yardOf(faction, 'yard'), yardOf(faction, 'cyard')]
+/** What a ship needs before it can be ordered with hybrid bases, beyond the station level and
+ * research: the bombers the Command Station's Strike hangar, the flagships the Capital slip. */
+export const needsModule = (t: UnitType): ModuleId | null => (t.kind === 'bomber' ? 'strikeHangar' : t.tier === 'capital' ? 'capitalSlip' : null)
+/** A building's short name, for the HUD. */
+export const WORKS_NAME: Record<Works, string> = { station: 'Command Station', yard: 'Frigate Yard', cyard: 'Capital Yard' }
 /** Whether a unit is an engineer craft. */
 export const isEngineer = (t: UnitType) => t.kind === 'engineer'
 /** A ship's job and counters: its own, or its tier's. */

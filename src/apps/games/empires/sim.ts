@@ -5,7 +5,7 @@ import { clearLine, findPath, navGrid, type NavGrid } from './nav.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import { BIG_SPREAD, SIZE_CLASSES, sizedType, type ShipSizes } from './models/sizes.ts'
 import {
-  ABILITIES, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
+  ABILITIES, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, WORKS_NAME, needsModule, worksOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind,
 } from './data.ts'
@@ -161,7 +161,15 @@ export type Unit = {
    * (for a refund if it is cancelled), the ruin it went up on (given back if it is), and whether
    * building has started. Until it has, only its owner knows it is there. */
   site?: { paid: number; started: boolean; ruin?: Ruin }
+  /** A Command Station's or a yard's expansions (hybrid bases): the ones built onto it (its type
+   * carries their hardpoints), and the ones ordered, the first under way. Absent until it has any,
+   * and in battles saved before expansions. */
+  xm?: ModuleId[]
+  xq?: ModuleJob[]
 }
+
+/** An expansion being built onto its building: seconds left of its time. */
+export type ModuleJob = { id: ModuleId; left: number; total: number }
 
 /** Where a yard was destroyed: its owner's engineers can rebuild it there for REBUILD of its price. */
 export type Ruin = { id: number; owner: Owner; unit: string; x: number; y: number; a: number }
@@ -221,6 +229,9 @@ export type Player = {
   history: { t: number; credits: number; income: number }[]
   /** Fleet battles: ships that jumped out alive, back to the fleet they came from. */
   escaped: string[]
+  /** Hybrid bases: whether an Armour works of ours stands, as last applied to our frigates' and
+   * corvettes' hull (see armourWorks). Absent: no. */
+  armour?: boolean
 }
 export type EarnSource = 'station' | 'mines' | 'beacons' | 'salvage' | 'refunds'
 export type SpendKind = 'ships' | 'research' | 'structures' | 'repairs'
@@ -274,7 +285,7 @@ export type SimEvent =
   | { k: 'fire'; kind: WeaponKind; x: number; y: number; owner: Owner; light: boolean }
   | { k: 'hit'; kind: WeaponKind; x: number; y: number; shield: boolean; owner: Owner }
   | { k: 'boom'; x: number; y: number; tier: Tier; owner: Owner; size: number }
-  | { k: 'hpdown'; x: number; y: number; owner: Owner; what: string }
+  | { k: 'hpdown'; x: number; y: number; owner: Owner; what: string; /** An expansion module was shot off. */ exp?: ModuleId }
   | { k: 'built'; owner: Owner; unit: string; x: number; y: number }
   /** `owner` and `prev` are teams here. */
   | { k: 'beacon'; owner: number; prev: number; x: number; y: number }
@@ -304,6 +315,8 @@ export type SimEvent =
   | { k: 'refunded'; owner: Owner; unit: string; amount: number }
   /** It jumped out; `refund` credits follow in REFUND_DELAY seconds. */
   | { k: 'retreated'; owner: Owner; unit: string; x: number; y: number; a: number; refund: number }
+  /** An expansion was finished on one of our buildings (`unit`). */
+  | { k: 'expanded'; owner: Owner; unit: number; id: ModuleId; x: number; y: number }
 
 export type World = {
   w: number
@@ -409,16 +422,24 @@ export function shipPoint(u: Unit, gx: number, gy: number) {
 export const hpPos = (u: Unit, i: number) => shipPoint(u, u.t.hardpoints[i].x, u.t.hardpoints[i].y)
 const alive = (u: Unit, i: number) => u.hps[i].hp > 0
 
+/** The share of a unit's own modules of a kind still standing (expansions don't count: each does
+ * its own thing, see expUp). */
 function share(u: Unit, kind: string) {
-  const all = u.t.hardpoints.map((h, i) => (h.kind === kind ? i : -1)).filter((i) => i >= 0)
+  const all = u.t.hardpoints.map((h, i) => (h.kind === kind && !h.exp ? i : -1)).filter((i) => i >= 0)
   if (!all.length) return 1
   return all.filter((i) => alive(u, i)).length / all.length
 }
+/** Whether expansion `id` stands on `u`: built, and not shot off. */
+export const expUp = (u: Unit | undefined, id: ModuleId) => !!u && !u.dead && u.t.hardpoints.some((h, i) => h.exp === id && u.hps[i].hp > 0)
+/** The Command Station's Shield core, while it stands: more shields, recharging faster. */
+const coreUp = (u: Unit) => u.t.tier === 'station' && expUp(u, 'shieldCore')
 /** Shields with every generator up. */
-export const shieldFull = (u: Unit) => u.t.shield * u.mods.shield
+export const shieldFull = (u: Unit) => u.t.shield * u.mods.shield * (coreUp(u) ? 1 + MODULE_FX.shield : 1)
 export const shieldMax = (u: Unit) => shieldFull(u) * share(u, 'shield')
-/** How far a unit sees: half as far while building or inside a nebula. */
-export const sensorOf = (u: Unit) => (planned(u) ? 0 : u.t.sensor * (u.building > 0 ? 0.5 : 1) * (u.nebula ? NEBULA_SENSOR : 1))
+/** How far a unit sees: half as far while building or inside a nebula; a Command Station with its
+ * Sensor array standing half as far again. */
+export const sensorOf = (u: Unit) =>
+  planned(u) ? 0 : u.t.sensor * (u.building > 0 ? 0.5 : 1) * (u.nebula ? NEBULA_SENSOR : 1) * (u.t.tier === 'station' && expUp(u, 'sensorArray') ? MODULE_FX.sensor : 1)
 /** A construction site nobody has started on yet: only its owner knows it is there, nothing bumps
  * into it, and it sees nothing. */
 export const planned = (u: Unit) => !!u.site && !u.site.started
@@ -434,12 +455,17 @@ export function techBonus(p: Player, unitId: string): TechEffect {
   }
   return out
 }
+/** Whether the Armour works' extra hull goes to ships of this type: the ships the Frigate Yard builds. */
+const plated = (t: UnitType) => t.tier === 'frigate' || t.kind === 'support'
 function modsFor(p: Player, t: UnitType): Mods {
   const e = techBonus(p, t.id)
-  return { hull: 1 + (e.hull ?? 0), shield: 1 + (e.shield ?? 0), regen: 1 + (e.regen ?? 0), damage: 1 + (e.damage ?? 0), speed: 1 + (e.speed ?? 0), cooldown: 1 + (e.cooldown ?? 0), range: 1 + (e.range ?? 0) }
+  // The Armour works adds its plate to the hull research, rather than multiplying it.
+  const plate = p.armour && plated(t) ? MODULE_FX.armour : 0
+  return { hull: 1 + (e.hull ?? 0) + plate, shield: 1 + (e.shield ?? 0), regen: 1 + (e.regen ?? 0), damage: 1 + (e.damage ?? 0), speed: 1 + (e.speed ?? 0), cooldown: 1 + (e.cooldown ?? 0), range: 1 + (e.range ?? 0) }
 }
 const stationOf = (p: Player) => unitOf(p.faction, 'station').id
-const hangarsUp = (u: Unit) => u.t.hardpoints.some((h, i) => h.kind === 'hangar' && alive(u, i))
+/** Whether one of a unit's own hangars stands (a Strike hangar doesn't count: it only launches bombers). */
+const hangarsUp = (u: Unit) => u.t.hardpoints.some((h, i) => h.kind === 'hangar' && !h.exp && alive(u, i))
 export const building = (u: Unit) => u.building > 0
 
 /** Damage per second a type deals to each tier: for picking targets. */
@@ -1334,14 +1360,16 @@ export const FIELD_DAMAGE = 0.4
  * The queue a ship is built in: the station's, or with hybrid bases a yard's for the ships built at
  * one (`at`, or the player's first yard); or why there is none.
  */
-function queueFor(w: World, owner: Owner, id: string, at: number): QueueItem[] | string {
+function queueFor(w: World, owner: Owner, id: string, at: number): { q: QueueItem[]; yard?: Unit } | string {
   const p = w.players[owner]
-  if (!w.hybrid) return at ? 'No yards in this battle' : p.queue
-  if (builtAt(UNIT[id]) === 'station') return at ? 'Built at the Command Station' : p.queue
+  if (!w.hybrid) return at ? 'No yards in this battle' : { q: p.queue }
+  const where = builtAt(UNIT[id])
+  if (where === 'station') return at ? 'Built at the Command Station' : { q: p.queue }
   const given = at ? w.byId.get(at) : undefined
-  const yard = at ? (given && !given.dead && given.owner === owner && given.t.tier === 'yard' && given.yq ? given : undefined) : yardsOf(w, owner)[0]
-  if (!yard) return at ? 'That yard can\'t build it' : `Needs a Frigate Yard: build one with engineers`
-  return yard.yq!
+  const fits = (y: Unit) => !y.dead && y.owner === owner && y.t.tier === 'yard' && !!y.yq && worksOf(y.t) === where
+  const yard = at ? (given && fits(given) ? given : undefined) : yardsOf(w, owner).find(fits)
+  if (!yard) return at ? 'That yard can\'t build it' : `Needs a ${WORKS_NAME[where]}: build one with engineers`
+  return { q: yard.yq!, yard }
 }
 
 /** Why a ship can't be ordered right now, or null if it can. `at`: the yard to build it at (0: the
@@ -1355,10 +1383,13 @@ export function cantBuild(w: World, owner: Owner, id: string, reserve = false, a
   if (isEngineer(t) && !w.hybrid) return 'No engineers in this battle'
   if (t.level > p.level) return `Needs station level ${t.level}`
   if (t.tech && !p.techs.includes(t.tech)) return `Needs research: ${TECH[t.tech].name}`
-  const queue = queueFor(w, owner, id, at)
-  if (typeof queue === 'string') return queue
+  const where = queueFor(w, owner, id, at)
+  if (typeof where === 'string') return where
+  // Hybrid bases: bombers need the Command Station's Strike hangar, flagships the Capital slip.
+  const need = w.hybrid ? needsModule(t) : null
+  if (need && !expUp(where.yard ?? w.byId.get(p.station), need)) return `Needs the ${MODULE[need].name}: an expansion of the ${WORKS_NAME[MODULE[need].on]}`
   if (t.tier === 'capital' && capitals(w, owner) >= MAX_CAPITALS) return 'One flagship at a time'
-  if (queue.length >= MAX_QUEUE) return 'Queue full'
+  if (where.q.length >= MAX_QUEUE) return 'Queue full'
   if (p.pop + queuedPop(w, owner) + t.pop > p.popCap) return 'Fleet at its limit: capture beacons or upgrade the station'
   if (p.credits < t.cost) return 'Not enough credits'
   return null
@@ -1371,7 +1402,7 @@ export function cmdBuild(w: World, owner: Owner, id: string, reserve = false, at
   if (why) return why
   const p = w.players[owner]
   const t = UNIT[id]
-  const queue = queueFor(w, owner, id, at) as QueueItem[]
+  const queue = (queueFor(w, owner, id, at) as { q: QueueItem[] }).q
   spend(w, p, t.cost, 'ships', t.name)
   const time = t.build * (1 + (techBonus(p, id).build ?? 0))
   queue.push({ unit: id, left: time, total: time, ...(reserve ? { reserve: true } : {}) })
@@ -1551,7 +1582,7 @@ export function cmdCancelResearch(w: World, owner: Owner, index: number) {
  */
 function restation(w: World, u: Unit) {
   const p = w.players[u.owner]
-  const t = stationType(p.faction, p.level, p.techs)
+  const t = stationType(p.faction, p.level, p.techs, u.xm ?? [])
   if (t === u.t) return
   retype(w, u, t)
   const max = t.hull * u.mods.hull
@@ -1579,7 +1610,7 @@ function retype(w: World, u: Unit, t: UnitType, scale = 1) {
   u.guns = guns
 }
 /** Whether a station module of this kind stands: research that built one only helps while it does. */
-export const moduleUp = (u: Unit | undefined, kind: string) => !!u && !u.dead && u.t.hardpoints.some((h, i) => h.kind === kind && u.hps[i].hp > 0)
+export const moduleUp = (u: Unit | undefined, kind: string) => !!u && !u.dead && u.t.hardpoints.some((h, i) => h.kind === kind && !h.exp && u.hps[i].hp > 0)
 
 function finishResearch(w: World, o: Owner, id: string) {
   const p = w.players[o]
@@ -1587,16 +1618,22 @@ function finishResearch(w: World, o: Owner, id: string) {
   const forId = TECH[id].for
   for (const u of w.units) {
     if (u.dead || u.owner !== o || u.t.id !== forId) continue
-    const next = modsFor(p, u.t)
-    const grow = next.hull / u.mods.hull
-    const shields = next.shield / u.mods.shield
-    u.hullMax *= grow
-    u.hull *= grow
-    u.mods = next
-    u.shield = Math.min(shieldMax(u), u.shield * shields)
+    remod(w, u)
     if (u.t.tier === 'station') restation(w, u)
   }
   w.events.push({ k: 'tech', owner: o, id })
+}
+
+/** A unit's bonuses worked out again (research done, the Armour works up or down): hull and shields
+ * grow or shrink with them, keeping the share it has. */
+function remod(w: World, u: Unit) {
+  const next = modsFor(w.players[u.owner], u.t)
+  const grow = next.hull / u.mods.hull
+  const shields = next.shield / u.mods.shield
+  u.hullMax *= grow
+  u.hull *= grow
+  u.mods = next
+  u.shield = Math.min(shieldMax(u), u.shield * shields)
 }
 
 /** Why a structure (a mining or defense platform, by type id) can't go on this ore, or null if it can. */
@@ -1811,8 +1848,94 @@ function construction(w: World, dt: number) {
     }
     t.hull = Math.min(t.hullMax, t.hull + (ENGINEERS.flat + ENGINEERS.share * t.hullMax) * k * dt)
     for (const h of t.hps) if (h.hp > 0 && h.hp < h.max) h.hp = Math.min(h.max, h.hp + h.max * ENGINEERS.share * k * dt)
-    if (t.t.tier === 'station' || t.t.tier === 'yard') for (let i = 0; i < k; i++) rebuildModule(t, dt)
+    if (t.t.tier === 'station' || t.t.tier === 'yard') for (let i = 0; i < k; i++) rebuildModule(w, t, dt)
   }
+}
+
+// --- Hybrid bases: expansions ---------------------------------------------------------------------------
+
+/**
+ * What rules an expansion out on building `u` regardless of credits and queue space (the panels show
+ * these as locked): no expansions in this battle, not one of our buildings, the wrong building for
+ * it, still going up, already built or queued there, or the station level is short.
+ */
+export function moduleLock(w: World, owner: Owner, u: Unit | undefined, id: ModuleId): string | null {
+  const m = MODULE[id]
+  if (!w.hybrid || w.fleet) return 'No expansions in this battle'
+  if (!m) return 'Unknown expansion'
+  if (!u || u.dead || u.owner !== owner || worksOf(u.t) !== m.on) return `It goes on our ${WORKS_NAME[m.on]}`
+  if (u.site || building(u)) return 'Still under construction'
+  if (u.xm?.includes(id)) return 'Already built'
+  if (u.xq?.some((j) => j.id === id)) return 'Already in the queue'
+  if (m.level > w.players[owner].level) return `Needs station level ${m.level}`
+  return null
+}
+
+/** Why an expansion can't be ordered on building `uid` right now, or null if it can. */
+export function cantExpand(w: World, owner: Owner, uid: number, id: ModuleId): string | null {
+  const u = w.byId.get(uid)
+  const lock = moduleLock(w, owner, u, id)
+  if (lock) return lock
+  if ((u!.xq?.length ?? 0) >= MODULE_QUEUE) return 'Expansion queue full'
+  if (w.players[owner].credits < MODULE[id].cost) return 'Not enough credits'
+  return null
+}
+
+/** Order an expansion: paid now, built by the building itself after its time (one at a time). */
+export function cmdExpand(w: World, owner: Owner, uid: number, id: ModuleId): string | null {
+  const why = cantExpand(w, owner, uid, id)
+  if (why) return why
+  const u = w.byId.get(uid)!
+  const m = MODULE[id]
+  spend(w, w.players[owner], m.cost, 'structures', m.name)
+  ;(u.xq ??= []).push({ id, left: m.time, total: m.time })
+  return null
+}
+
+/** Call off an expansion ordered on building `uid` (refunded in full). */
+export function cmdCancelExpand(w: World, owner: Owner, uid: number, index: number): string | null {
+  const u = w.byId.get(uid)
+  const j = u && !u.dead && u.owner === owner ? u.xq?.[index] : undefined
+  if (!j) return 'Nothing to cancel'
+  giveBack(w, w.players[owner], MODULE[j.id].cost, 'structures', `Cancelled: ${MODULE[j.id].name}`)
+  u!.xq!.splice(index, 1)
+  return null
+}
+
+/** What welding a shot-off expansion back costs. */
+export const moduleRebuildCost = (id: ModuleId) => Math.round(MODULE[id].cost * REBUILD_MODULE)
+
+/** An expansion done: it goes onto its building (a type of its own, like a grown station), whole. */
+function finishModule(w: World, u: Unit, id: ModuleId) {
+  ;(u.xm ??= []).push(id)
+  if (u.t.tier === 'station') restation(w, u)
+  else retype(w, u, yardType(u.t.id, u.xm))
+  if (id === 'fighterWing') spawnWing(w, u)
+  w.events.push({ k: 'expanded', owner: u.owner, unit: u.id, id, x: u.x, y: u.y })
+}
+
+/**
+ * The buildings work on their expansions, one at a time each; and the Armour works' plate goes on
+ * (or comes off) our frigates and corvettes as it stands or falls.
+ */
+function expansions(w: World, dt: number) {
+  const armour = w.players.map(() => false)
+  for (const u of w.units) {
+    if (u.dead || (u.t.tier !== 'station' && u.t.tier !== 'yard')) continue
+    if (u.t.tier === 'yard' && expUp(u, 'armourWorks')) armour[u.owner] = true
+    const j = u.xq?.[0]
+    if (!j) continue
+    j.left -= dt
+    if (j.left > 0) continue
+    u.xq!.shift()
+    finishModule(w, u, j.id)
+  }
+  w.players.forEach((p, o) => {
+    if (!!p.armour === armour[o]) return
+    if (armour[o]) p.armour = true
+    else delete p.armour
+    for (const u of w.units) if (!u.dead && u.owner === o && plated(u.t)) remod(w, u)
+  })
 }
 
 // --- Simulation -----------------------------------------------------------------------------------
@@ -1951,11 +2074,13 @@ function kill(w: World, u: Unit, by: Owner | -1) {
   }
   leaveWreck(w, u)
   if (u.t.tier === 'yard') {
-    // A yard leaves its ruin, for its owner to rebuild at half price; ships still in its queue are
-    // paid back.
+    // A yard leaves its ruin, for its owner to rebuild at half price (its expansions are lost with
+    // it); ships still in its queue, and expansions not yet finished, are paid back.
     const p = w.players[u.owner]
     for (const q of u.yq ?? []) giveBack(w, p, UNIT[q.unit].cost, 'ships', `Lost with the yard: ${UNIT[q.unit].name}`)
+    for (const j of u.xq ?? []) giveBack(w, p, MODULE[j.id].cost, 'structures', `Lost with the yard: ${MODULE[j.id].name}`)
     u.yq = []
+    u.xq = []
     ;(w.ruins ??= []).push({ id: w.wreckSeq++, owner: u.owner, unit: u.t.id, x: u.x, y: u.y, a: u.a })
   }
   if (u.t.tier === 'station' && !w.fleet) {
@@ -2037,7 +2162,8 @@ export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: num
       h.hp = 0
       const p = hpPos(u, hp)
       const kindName = u.t.hardpoints[hp].kind
-      w.events.push({ k: 'hpdown', x: p.x, y: p.y, owner: u.owner, what: kindName })
+      const exp = u.t.hardpoints[hp].exp
+      w.events.push({ k: 'hpdown', x: p.x, y: p.y, owner: u.owner, what: kindName, ...(exp ? { exp } : {}) })
       if (kindName === 'shield') u.shield = Math.min(u.shield, shieldMax(u))
     }
   } else u.hull -= rest
@@ -2808,12 +2934,17 @@ function economy(w: World, dt: number) {
         } else finishResearch(w, o, r.id)
       }
     }
-    // Repair docks mend our ships parked near the station.
-    const repair = moduleUp(st, 'dock') ? techBonus(p, st.t.id).repair : 0
-    if (repair)
-      near(w, st.x, st.y, rangeDist(900), (u) => {
-        if (u.owner === o && isShip(u.t) && u.hull < u.hullMax) u.hull = Math.min(u.hullMax, u.hull + u.hullMax * repair * dt)
+    // Repair docks mend our ships parked near the station, and a yard's Drydock those near it; a
+    // ship near both gets the better rate, not the two added up.
+    const mend = new Map<Unit, number>()
+    const dock = (x: number, y: number, r: number, rate: number) =>
+      near(w, x, y, r, (u) => {
+        if (u.owner === o && isShip(u.t) && u.hull < u.hullMax) mend.set(u, Math.max(mend.get(u) ?? 0, rate))
       })
+    const repair = moduleUp(st, 'dock') ? techBonus(p, st.t.id).repair : 0
+    if (repair) dock(st.x, st.y, rangeDist(900), repair)
+    if (w.hybrid) for (const y of w.units) if (!y.dead && y.owner === o && y.t.tier === 'yard' && expUp(y, 'drydock')) dock(y.x, y.y, radius(y.t) + MODULE_FX.reach, MODULE_FX.repair)
+    for (const [u, rate] of mend) u.hull = Math.min(u.hullMax, u.hull + u.hullMax * rate * dt)
     const q = p.queue[0]
     if (q) {
       q.left -= dt * (hangarsUp(st) ? 1 : 0.5)
@@ -2821,7 +2952,9 @@ function economy(w: World, dt: number) {
         p.queue.shift()
         p.stats.built++
         if (fromHangar(UNIT[q.unit])) {
-          const bay = st.t.hardpoints.findIndex((h) => h.kind === 'hangar')
+          // Bombers launch from the Strike hangar while it stands.
+          const strike = UNIT[q.unit].kind === 'bomber' && expUp(st, 'strikeHangar')
+          const bay = st.t.hardpoints.findIndex((h) => (strike ? h.exp === 'strikeHangar' : h.kind === 'hangar' && !h.exp))
           const from = bay >= 0 ? hpPos(st, bay) : st
           const a = M.atan2(p.rally.y - from.y, p.rally.x - from.x)
           const group = spawnGroup(w, q.unit, o, from.x, from.y, a)
@@ -2837,21 +2970,26 @@ function economy(w: World, dt: number) {
         }
       }
     }
-    // The yards' own queues: work goes at half speed while a yard's slipway is shot off.
+    // The yards' own queues: work goes at half speed while a yard's slipway is shot off. A Frigate
+    // Yard with its Second slip standing works on the first two ships at once.
     if (w.hybrid) for (const y of w.units) {
       if (y.dead || y.owner !== o || y.t.tier !== 'yard' || !y.yq?.length || building(y)) continue
-      const yq = y.yq[0]
-      yq.left -= dt * (moduleUp(y, 'dock') ? 1 : 0.5)
-      if (yq.left > 0) continue
-      y.yq.shift()
-      p.stats.built++
-      if (yq.reserve) {
-        p.reserve.push(yq.unit)
-        w.events.push({ k: 'reserved', owner: o, unit: yq.unit })
-      } else {
-        const rally = y.yr ?? p.rally
-        const at = yardSpot(w, o, y, yq.unit, rally)
-        warpIn(w, o, yq.unit, at.x, at.y, at.a, WARP_YARD, true, rally)
+      const slips = Math.min(y.yq.length, expUp(y, 'secondSlip') ? 2 : 1)
+      const pace = dt * (moduleUp(y, 'dock') ? 1 : 0.5)
+      for (let i = 0; i < slips; i++) y.yq[i].left -= pace
+      const done = y.yq.slice(0, slips).filter((q) => q.left <= 0)
+      if (!done.length) continue
+      y.yq = y.yq.filter((q) => !done.includes(q))
+      for (const yq of done) {
+        p.stats.built++
+        if (yq.reserve) {
+          p.reserve.push(yq.unit)
+          w.events.push({ k: 'reserved', owner: o, unit: yq.unit })
+        } else {
+          const rally = y.yr ?? p.rally
+          const at = yardSpot(w, o, y, yq.unit, rally)
+          warpIn(w, o, yq.unit, at.x, at.y, at.a, WARP_YARD, true, rally)
+        }
       }
     }
   }
@@ -2998,8 +3136,17 @@ const WING_GUARD = { leash: 250, out: 80, park: 8 }
 /** The station a defense wing craft is guarding: its own, while it stands and the craft has no
  * orders of its own (none given, or all of them done). */
 function guarded(u: Unit, parent: Unit | undefined): Unit | undefined {
-  return u.t.kind === 'wing' && parent && !parent.dead && parent.t.tier === 'station' && u.order.k === 'idle' && !u.queue.length ? parent : undefined
+  return u.t.kind === 'wing' && parent && !parent.dead && wingHome(parent) && u.order.k === 'idle' && !u.queue.length ? parent : undefined
 }
+
+/** Whether a structure keeps a defense wing: every station, and a Capital Yard with its Fighter
+ * wing built (shot off or not: the craft already out stay with it). */
+const wingHome = (u: Unit) => u.t.tier === 'station' || (u.t.tier === 'yard' && !!u.xm?.includes('fighterWing'))
+/** Whether a structure's wing hangar stands, so it can send out new wing craft: the station's own
+ * hangars, the Capital Yard's Fighter wing. */
+const wingBayUp = (u: Unit) => (u.t.tier === 'station' ? hangarsUp(u) : expUp(u, 'fighterWing'))
+/** The hardpoints a structure's wing craft launch from. */
+const wingBays = (u: Unit) => u.t.hardpoints.map((h, i) => ((u.t.tier === 'station' ? h.kind === 'hangar' && !h.exp : h.exp === 'fighterWing') && alive(u, i) ? i : -1)).filter((i) => i >= 0)
 
 /** The first parking slot round a station that none of the rest of its wing has taken. */
 function freePost(w: World, u: Unit, st: Unit) {
@@ -3075,7 +3222,7 @@ export function wingState(w: World, st: Unit) {
   let left = 0
   for (const u of w.units) if (!u.dead && u.parent === st.id && u.t.kind === 'wing') left++
   const full = wingOf(st.t.faction).squad
-  return { left, full, next: left >= full ? null : hangarsUp(st) ? Math.max(0, st.hangarT || 0) : Infinity }
+  return { left, full, next: left >= full ? null : wingBayUp(st) ? Math.max(0, st.hangarT || 0) : Infinity }
 }
 
 /**
@@ -3086,7 +3233,7 @@ export function wingState(w: World, st: Unit) {
  */
 function wings(w: World, dt: number) {
   for (const st of w.units) {
-    if (st.dead || st.t.tier !== 'station' || building(st)) continue
+    if (st.dead || !wingHome(st) || building(st)) continue
     const t = wingOf(st.t.faction)
     let left = 0
     let squad = 0
@@ -3099,12 +3246,11 @@ function wings(w: World, dt: number) {
       st.hangarT = 0
       continue
     }
-    if (!hangarsUp(st)) continue
+    if (!wingBayUp(st)) continue
     st.hangarT = (st.hangarT || 0) - dt
     if (st.hangarT > 0) continue
     st.hangarT = DEFENSE_WING.every
-    const bays = st.t.hardpoints.map((h, i) => (h.kind === 'hangar' && alive(st, i) ? i : -1)).filter((i) => i >= 0)
-    const bay = hpPos(st, bays[0])
+    const bay = hpPos(st, wingBays(st)[0])
     const u = spawn(w, t.id, st.owner, bay.x, bay.y, st.a, squad || w.squadSeq++)
     u.parent = st.id
     u.v = t.speed * 0.5
@@ -3135,13 +3281,21 @@ function mendNeed(t: Unit) {
  * their place on the station, so every machine picks the same one. Progress stays on the module
  * between runs, so a lone craft finishes the job on its next run.
  */
-function rebuildModule(t: Unit, dt: number) {
+function rebuildModule(w: World, t: Unit, dt: number) {
+  const p = w.players[t.owner]
   let pick = -1
   t.hps.forEach((h, i) => {
-    if (h.hp <= 0 && (pick < 0 || h.max > t.hps[pick].max)) pick = i
+    if (h.hp > 0) return
+    // A shot-off expansion is welded back for part of its price, paid as the work on it starts;
+    // one we can't pay for yet waits.
+    const x = t.t.hardpoints[i].exp
+    if (x && !h.fix && p.credits < moduleRebuildCost(x)) return
+    if (pick < 0 || h.max > t.hps[pick].max) pick = i
   })
   if (pick < 0) return
   const h = t.hps[pick]
+  const x = t.t.hardpoints[pick].exp
+  if (x && !h.fix) spend(w, p, moduleRebuildCost(x), 'repairs', `Rebuilding: ${MODULE[x].name}`)
   h.fix = (h.fix ?? 0) + dt
   if (h.fix < FIELD_REPAIR.rebuild) return
   h.fix = 0
@@ -3221,7 +3375,7 @@ function fieldRepairs(w: World, dt: number) {
       t!.hull = Math.min(t!.hullMax, t!.hull + (FIELD_REPAIR.flat + FIELD_REPAIR.share * t!.hullMax) * dt)
       for (const h of t!.hps) if (h.hp > 0 && h.hp < h.max) h.hp = Math.min(h.max, h.hp + h.max * FIELD_REPAIR.share * dt)
       // Only the main station gets its shot-off modules rebuilt; ships keep theirs lost for now.
-      if (t!.t.tier === 'station') rebuildModule(t!, dt)
+      if (t!.t.tier === 'station') rebuildModule(w, t!, dt)
       u.mending.push(t!.id)
       continue
     }
@@ -3288,6 +3442,7 @@ export function tick(w: World, dt = STEP) {
   tenders(w, dt)
   fieldRepairs(w, dt)
   construction(w, dt)
+  if (w.hybrid) expansions(w, dt)
   wings(w, dt)
   findSpotGroups(w)
   for (const u of w.units) {
@@ -3313,7 +3468,7 @@ export function tick(w: World, dt = STEP) {
     // failed shields take a few seconds to come back at all, rather than flickering on and off.
     if (!terrain(w, u, dt) && w.time - u.shieldOut >= SHIELD_REBOOT) {
       const smax = shieldMax(u)
-      if (u.shield < smax) u.shield = Math.min(smax, u.shield + u.t.regen * u.mods.regen * (1 + RANK_BONUS * u.rank) * dt * (w.time - u.lastHit > 6 ? 2 : 1))
+      if (u.shield < smax) u.shield = Math.min(smax, u.shield + u.t.regen * u.mods.regen * (coreUp(u) ? 1 + MODULE_FX.regen : 1) * (1 + RANK_BONUS * u.rank) * dt * (w.time - u.lastHit > 6 ? 2 : 1))
     }
     if (u.t.carrier) {
       u.hangarT += dt
@@ -3451,6 +3606,12 @@ export function stateHash(w: World): number {
       num(u.building)
       int(u.yq?.length ?? -1)
     }
+    // Expansions built and under way on a Command Station or a yard.
+    if (u.xm || u.xq) {
+      int(u.xm?.length ?? -1)
+      int(u.t.hardpoints.length)
+      for (const j of u.xq ?? []) num(j.left)
+    }
   }
   int(w.ruins?.length ?? -1)
   int(w.shots.length)
@@ -3462,6 +3623,7 @@ export function stateHash(w: World): number {
     num(p.credits)
     int(p.queue.length)
     int(p.research.length)
+    int(p.armour ? 1 : 0)
   }
   return h >>> 0
 }

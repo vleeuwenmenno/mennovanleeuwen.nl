@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { RotateHint } from './empires/RotateHint'
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, fleetThink, newBrain, profileOf, think, type Brain } from './empires/ai'
-import { ALL_SPRITES, BUILD_RADIUS, FACTIONS, SITE_UPGRADES, TECH, UNIT, buildable, dims, isEngineer, isShip, yardOf, type HardpointKind, type Tier } from './empires/data'
+import { ALL_SPRITES, BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, UNIT, WORKS_NAME, buildable, dims, isEngineer, isShip, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type Tier } from './empires/data'
 import { SizesContext, DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, Icon, ReserveTray, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
 import { LongPress, TouchBar, WheelHost, getTouchMods, isTouch, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
 import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
@@ -826,7 +826,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   }
   /** Touch (the action wheel): start placing a yard with its spot already pinned at `at`. */
   const pinYard = (at: Pt) => {
-    startPlace(yardOf(world.current.players[me].faction).id)
+    startPlace(nextYard())
     if (placing.current) placing.current.at = { x: at.x, y: at.y }
     setUi((u) => ({ ...u }))
   }
@@ -848,6 +848,25 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     if (!at || !st) return null
     const g = placement(w, me, pl.unit, at.x, at.y)
     return { t: typeOf(w, pl.unit), x: g.x, y: g.y, a: g.a, ok: !g.why, why: g.why, cost: g.cost, rebuild: !!g.ruin, ring: { x: st.x, y: st.y, r: BUILD_RADIUS } }
+  }
+  /** The yard to place next: the first of ours (the Frigate Yard, then the Capital Yard) we have
+   * neither standing nor going up and the station is upgraded for, else the Frigate Yard (its ghost
+   * then says why not). */
+  const nextYard = () => {
+    const w = world.current
+    const p = w.players[me]
+    const lacking = yardsFor(p.faction).filter((t) => !w.units.some((u) => !u.dead && u.owner === me && u.t.id === t.id))
+    return (lacking.find((t) => t.level <= p.level) ?? lacking[0] ?? yardOf(p.faction)).id
+  }
+  /** Select our Capital Yard and look at it. */
+  const selectCapitalYard = () => {
+    const w = world.current
+    const y = w.units.find((u) => !u.dead && u.owner === me && u.t.id === yardOf(myFaction, 'cyard').id)
+    if (!y) {
+      toast(w.hybrid ? 'No Capital Yard yet: engineers build one near the Command Station from station level 3' : 'No yards in this battle', 'info')
+      return sound.error()
+    }
+    selectOne(y.id)
   }
   /** Select one of our yards, the next one each time; asked again for the one selected, look at it. */
   const selectYard = () => {
@@ -1117,6 +1136,18 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       sound.error()
     } else sound.queued()
   }
+  /** Order an expansion on one of our buildings (hybrid bases), or call one off. */
+  const expand = (uid: number, id: ModuleId) => {
+    sound.unlock()
+    const why = order('expand', uid, id)
+    if (why) {
+      toast(why, 'bad')
+      sound.error()
+    } else sound.queued()
+  }
+  const cancelExpand = (uid: number, i: number) => {
+    if (!order('cancelExpand', uid, i)) sound.unqueued()
+  }
   /** Right-click on a ship card: drop the last one of that type from the queue. */
   const unqueue = (id: string, at = 0) => {
     const q = at ? (world.current.byId.get(at)?.yq ?? []) : world.current.players[me].queue
@@ -1291,12 +1322,12 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         else if (e.k === 'ability' && e.owner !== me) sound.ability(e.id, where(e.x, e.y))
         else if (e.k === 'hpdown') {
           sound.hardpointDown(where(e.x, e.y))
-          if (e.owner === me) toast(`${HP_NAME[e.what as HardpointKind]} destroyed on one of our ships`, 'bad', { x: e.x, y: e.y })
+          if (e.owner === me) toast(e.exp ? `${MODULE[e.exp].name} shot off: ${MODULE[e.exp].lost} Engineers weld it back.` : `${HP_NAME[e.what as HardpointKind]} destroyed on one of our ships`, 'bad', { x: e.x, y: e.y })
         } else if (e.k === 'built' && e.owner === me) {
           const t = UNIT[e.unit]
           if (t.tier === 'mine' || t.tier === 'defense' || t.tier === 'yard') sound.structureDone(t.tier)
           else sound.shipReady(myFaction, t.tier)
-          toast(t.tier === 'mine' ? `${t.name} is drilling` : t.tier === 'defense' ? `${t.name} online` : t.tier === 'yard' ? `${t.name} complete: frigates and corvettes are built there now` : `${t.name}${t.squad > 1 ? ' squadron' : ''} ready`, 'good', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
+          toast(t.tier === 'mine' ? `${t.name} is drilling` : t.tier === 'defense' ? `${t.name} online` : t.tier === 'yard' ? `${t.name} complete: ${worksOf(t) === 'cyard' ? 'cruisers' : 'frigates and corvettes'} are built there now` : `${t.name}${t.squad > 1 ? ' squadron' : ''} ready`, 'good', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
         } else if (e.k === 'warp') {
           if (e.owner === me || seesPoint(e.x, e.y)) sound.warp(where(e.x, e.y), e.delay)
         } else if (e.k === 'arrived') {
@@ -1355,15 +1386,21 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           const u = w.byId.get(e.unit)
           sound.promoted()
           if (u && u.t.tier !== 'fighter') toast(`${u.t.name} promoted: ${RANKS[e.rank]}`, 'good', { x: e.x, y: e.y, unit: u.id })
+        } else if (e.k === 'expanded' && e.owner === me) {
+          sound.structureDone('yard')
+          toast(`${MODULE[e.id].name} finished on the ${WORKS_NAME[MODULE[e.id].on]}`, 'good', { x: e.x, y: e.y, unit: e.unit })
         } else if (e.k === 'tech' && e.owner === me) {
           sound.researchDone()
           toast(`Research complete: ${TECH[e.id].name}`, 'good')
         } else if (e.k === 'level' && e.owner === me) {
           sound.levelUp()
           const unlocked = buildable(myFaction).filter((t) => t.level === e.level).map((t) => t.name)
-          // With hybrid bases level 2 unlocks the Frigate Yard, where the frigates are built.
-          const yard = w.hybrid && yardOf(myFaction).level === e.level
-          toast(`Station level ${e.level}${yard ? `: the ${yardOf(myFaction).name} unlocked, build it with engineers` : unlocked.length ? `: ${unlocked.join(', ')} unlocked` : ''}`, 'good')
+          // With hybrid bases a level unlocks a yard (level 2 the Frigate Yard, 3 the Capital Yard)
+          // and expansions (level 4 the Capital slip, the way to the flagships).
+          const yard = w.hybrid ? yardsFor(myFaction).find((t) => t.level === e.level) : undefined
+          const exps = w.hybrid ? MODULES.filter((m) => m.level === e.level).map((m) => m.name) : []
+          const news = w.hybrid ? [...(yard ? [`the ${yard.name} (build it with engineers)`] : []), ...(exps.length ? [`expansions: ${exps.join(', ')}`] : [])] : unlocked
+          toast(`Station level ${e.level}${news.length ? `: ${news.join('; ')} unlocked` : ''}`, 'good')
         }
       }
       // Drop dead ships from the selection.
@@ -1485,9 +1522,10 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       else if (action === 'ability') useAbility()
       else if (action === 'station' || k === 'home') selectStation()
       else if (action === 'yard') selectYard()
+      else if (action === 'cyard') selectCapitalYard()
       else if (action === 'build') {
         // The yard's ghost follows the pointer; over our ruin of it, it snaps on and costs half.
-        if (mySelection().some((u) => isEngineer(u.t) || u.t.tier === 'station')) startPlace(yardOf(world.current.players[me].faction).id)
+        if (mySelection().some((u) => isEngineer(u.t) || u.t.tier === 'station')) startPlace(nextYard())
         else {
           toast('Select engineers (or the Command Station) to build a yard', 'bad')
           sound.error()
@@ -2275,6 +2313,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
                   sound.error()
                 } else sound.unqueued()
               }}
+              onExpand={expand}
+              onCancelExpand={cancelExpand}
               onResearch={research}
               onTechTree={() => setTree(true)}
               onSite={buildSite}
@@ -2360,7 +2400,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
             </Frame>
           </div>
         )}
-        {ui.tree && hud.winner === -1 && <TechTree w={w} me={me} hud={hud} onResearch={research} onCancel={cancelResearch} onClose={() => setTree(false)} />}
+        {ui.tree && hud.winner === -1 && <TechTree w={w} me={me} hud={hud} onResearch={research} onCancel={cancelResearch} onClose={() => setTree(false)} onExpand={expand} onCancelExpand={cancelExpand} />}
         {ui.menu && !ui.panel && hud.winner === -1 && (
           <BattleMenu w={w} me={me} sound={sound} speed={ui.speed} onSpeed={setSpeed} onResume={closeMenu} onPanel={openMenu} onRestart={conquest || online ? undefined : onAgain} onExit={exit} campaign={!!conquest} online={!!online} />
         )}

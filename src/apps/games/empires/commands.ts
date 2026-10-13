@@ -1,8 +1,8 @@
-import { LEVEL_UP, SITE_UPGRADES, TECH, UNIT, type SiteUpgradeId } from './data.ts'
+import { LEVEL_UP, MODULE, SITE_UPGRADES, TECH, UNIT, type ModuleId, type SiteUpgradeId } from './data.ts'
 import type { Pt } from './maps.ts'
 import {
   STANCES, cmdAbility, cmdArea, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdDeploy, cmdFace, cmdFocus, cmdGuard, cmdLine, cmdMove, cmdPatrol, cmdRally, cmdRepair, cmdResearch,
-  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdCancelSite, type Owner, type Stance, type World,
+  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdCancelSite, cmdExpand, cmdCancelExpand, type Owner, type Stance, type World,
 } from './sim.ts'
 
 // Every order a player can give, as data: a name and its arguments. In multiplayer an order goes to
@@ -10,7 +10,7 @@ import {
 // to run at the same tick; a malformed order from a tampered client never reaches anyone. The
 // owner is never part of an order: the server fills in the sender's own seat.
 
-type Arg = 'ids' | 'id' | 'int' | 'x' | 'y' | 'num' | 'bool' | 'unit' | 'tech' | 'upgrade' | 'stance' | 'path'
+type Arg = 'ids' | 'id' | 'int' | 'x' | 'y' | 'num' | 'bool' | 'unit' | 'tech' | 'upgrade' | 'stance' | 'path' | 'module'
 
 /** The functions, by order name, with what each argument must be. */
 const TABLE = {
@@ -39,6 +39,9 @@ const TABLE = {
   place: { run: cmdPlace, args: ['ids', 'unit', 'x', 'y', 'bool'] },
   construct: { run: cmdConstruct, args: ['ids', 'id', 'bool'] },
   cancelSite: { run: cmdCancelSite, args: ['id'] },
+  // Expansions: order one on a building of ours (the Command Station or a yard), or call one off.
+  expand: { run: cmdExpand, args: ['id', 'module'] },
+  cancelExpand: { run: cmdCancelExpand, args: ['id', 'int'] },
 } as const satisfies Record<string, { run: (w: World, owner: Owner, ...a: never[]) => unknown; args: readonly Arg[] }>
 
 export type CmdName = keyof typeof TABLE
@@ -85,6 +88,8 @@ function cleanArg(kind: Arg, v: unknown, w: World): unknown {
       return typeof v === 'string' && SITE_UPGRADES.some((u) => u.id === v) ? (v as SiteUpgradeId) : null
     case 'stance':
       return typeof v === 'string' && STANCES.includes(v as Stance) ? v : null
+    case 'module':
+      return typeof v === 'string' && Object.hasOwn(MODULE, v) ? (v as ModuleId) : null
     case 'path': {
       if (!Array.isArray(v) || v.length < 2 || v.length > MAX_PATH) return null
       const out: Pt[] = []

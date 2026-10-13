@@ -1,4 +1,4 @@
-import { FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, moduleSprite, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
+import { CYARD_SOCKETS, MODULE, STATION_SOCKETS, YARD_SOCKETS, FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, moduleSprite, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
 import { RETREAT_TIME, atHome, building, foes, hpPos, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
@@ -2221,6 +2221,30 @@ export class Renderer {
       if (t.hardpoints.some((h) => h.art)) this.drawModules(ctx, u, w, z)
     }
     if (u.retreat > 0) this.drawCharge(ctx, u, z)
+    // An expansion going up on its socket: a scaffold ring turning round it, filling as it's built.
+    const job = u.xq?.[0]
+    if (job && (u.owner === view.me || u.seen[w.players[view.me].team])) {
+      const x = MODULE[job.id]
+      const g = x.on === 'station' ? STATION_SOCKETS[x.socket] : (x.on === 'cyard' ? CYARD_SOCKETS : YARD_SOCKETS)[t.faction][x.socket]
+      const p = shipPoint(u, g[0], g[1])
+      const r = x.s * t.size * 0.62
+      const done = 1 - job.left / job.total
+      ctx.save()
+      ctx.strokeStyle = 'rgba(255,200,110,0.7)'
+      ctx.lineWidth = 1.5 / z
+      ctx.setLineDash([6 / z, 5 / z])
+      ctx.lineDashOffset = (-this.clock * 18) / z
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, r, 0, TAU)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.strokeStyle = '#ffc86e'
+      ctx.lineWidth = 3 / z
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, r + 4 / z, -Math.PI / 2, -Math.PI / 2 + done * TAU)
+      ctx.stroke()
+      ctx.restore()
+    }
 
     // Shield shimmer on the side that was hit.
     const since = w.time - u.shieldHit
