@@ -230,3 +230,198 @@ export async function readEntry(e: ZipEntry, range: (from: number, to: number) =
   const stream = new Blob([data as BlobPart]).stream().pipeThrough(new DecompressionStream('deflate-raw'))
   return new Uint8Array(await new Response(stream).arrayBuffer())
 }
+
+// --- Writing ------------------------------------------------------------------------------------
+//
+// A ZIP made as it is sent, for downloading several files at once (the Photos app's selection,
+// zipped on the server: server/photos.ts). Files are stored as they are (photos and videos do
+// not shrink), each one's CRC and size go in a data descriptor after it, and the table of contents
+// comes at the end, so nothing is held in memory but the piece passing through. ZIP64 records are
+// written where they are needed: a file over 4 GB (when its size is known up front) and anything
+// that starts past 4 GB into the archive. Names are UTF-8 (flag 11).
+
+/** One file to write, opened only when its turn comes; null (or a throw) leaves it out. */
+export type ZipInput = { name: string; mtime: number; open: () => Promise<{ body: AsyncIterable<Uint8Array> | Iterable<Uint8Array>; size: number | null; /** The name, when it is only known once opened */ name?: string; mtime?: number } | null> }
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256)
+  for (let n = 0; n < 256; n++) {
+    let c = n
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    t[n] = c >>> 0
+  }
+  return t
+})()
+
+/** CRC-32 of `data`, carrying on from `crc` (0 to start). The server passes node's own, which is faster. */
+export function crc32(data: Uint8Array, crc = 0): number {
+  let c = ~crc >>> 0
+  for (let i = 0; i < data.length; i++) c = CRC_TABLE[(c ^ data[i]) & 255] ^ (c >>> 8)
+  return ~c >>> 0
+}
+
+const MAX32 = 0xffffffff
+const encoder = new TextEncoder()
+
+function dosStamp(ms: number): { date: number; time: number } {
+  const d = new Date(ms || Date.now())
+  if (d.getFullYear() < 1980) return { date: (1 << 5) | 1, time: 0 }
+  return { date: ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate(), time: (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1) }
+}
+
+/** Names made unique within the archive: a second "a.jpg" becomes "a (2).jpg". */
+function uniqueName(name: string, taken: Set<string>): string {
+  const clean = name.replace(/[\\/]+/g, '_').replace(/^\.*$/, '_')
+  let out = clean
+  const dot = clean.lastIndexOf('.')
+  const [stem, ext] = dot > 0 ? [clean.slice(0, dot), clean.slice(dot)] : [clean, '']
+  for (let n = 2; taken.has(out.toLowerCase()); n++) out = `${stem} (${n})${ext}`
+  taken.add(out.toLowerCase())
+  return out
+}
+
+/**
+ * The archive's bytes, piece by piece, for `files` in order. Files that cannot be opened are
+ * left out and listed in a "Not included.txt" at the end. A file whose size was not known up
+ * front and turns out to be over 4 GB throws, as the archive would be wrong.
+ */
+export async function* writeZip(files: Iterable<ZipInput> | AsyncIterable<ZipInput>, opts: { crc?: (data: Uint8Array, crc: number) => number } = {}): AsyncGenerator<Uint8Array> {
+  const crcOf = opts.crc ?? crc32
+  const taken = new Set<string>()
+  const central: Uint8Array[] = []
+  const skipped: string[] = []
+  let offset = 0
+  let count = 0
+
+  async function* entry(name: string, mtime: number, body: AsyncIterable<Uint8Array> | Iterable<Uint8Array>, known: number | null): AsyncGenerator<Uint8Array> {
+    const raw = encoder.encode(name)
+    const { date, time } = dosStamp(mtime)
+    const big = known !== null && known >= MAX32
+    // The local header: the CRC and sizes follow the data (flag 3); a big file says so with a ZIP64 extra.
+    const local = new DataView(new ArrayBuffer(30 + raw.length + (big ? 20 : 0)))
+    local.setUint32(0, 0x04034b50, true)
+    local.setUint16(4, big ? 45 : 20, true)
+    local.setUint16(6, 0x0808, true)
+    local.setUint16(10, time, true)
+    local.setUint16(12, date, true)
+    local.setUint32(18, big ? MAX32 : 0, true)
+    local.setUint32(22, big ? MAX32 : 0, true)
+    local.setUint16(26, raw.length, true)
+    local.setUint16(28, big ? 20 : 0, true)
+    new Uint8Array(local.buffer).set(raw, 30)
+    if (big) {
+      local.setUint16(30 + raw.length, 1, true)
+      local.setUint16(32 + raw.length, 16, true)
+    }
+    const start = offset
+    yield new Uint8Array(local.buffer)
+    offset += local.byteLength
+
+    let crc = 0
+    let size = 0
+    for await (const piece of body) {
+      if (!piece.length) continue
+      crc = crcOf(piece, crc)
+      size += piece.length
+      if (!big && size >= MAX32) throw new Error(`${name} is over 4 GB`)
+      yield piece
+    }
+    offset += size
+
+    // The data descriptor: 8-byte sizes after a ZIP64 local header, 4-byte ones otherwise.
+    const desc = new DataView(new ArrayBuffer(big ? 24 : 16))
+    desc.setUint32(0, 0x08074b50, true)
+    desc.setUint32(4, crc, true)
+    if (big) {
+      desc.setBigUint64(8, BigInt(size), true)
+      desc.setBigUint64(16, BigInt(size), true)
+    } else {
+      desc.setUint32(8, size, true)
+      desc.setUint32(12, size, true)
+    }
+    yield new Uint8Array(desc.buffer)
+    offset += desc.byteLength
+
+    // Its entry in the table of contents, with a ZIP64 extra for whatever does not fit in 32 bits.
+    const extra: bigint[] = []
+    if (size >= MAX32) extra.push(BigInt(size), BigInt(size))
+    if (start >= MAX32) extra.push(BigInt(start))
+    const cd = new DataView(new ArrayBuffer(46 + raw.length + (extra.length ? 4 + extra.length * 8 : 0)))
+    cd.setUint32(0, 0x02014b50, true)
+    cd.setUint16(4, (3 << 8) | 45, true)
+    cd.setUint16(6, extra.length || big ? 45 : 20, true)
+    cd.setUint16(8, 0x0808, true)
+    cd.setUint16(12, time, true)
+    cd.setUint16(14, date, true)
+    cd.setUint32(16, crc, true)
+    cd.setUint32(20, size >= MAX32 ? MAX32 : size, true)
+    cd.setUint32(24, size >= MAX32 ? MAX32 : size, true)
+    cd.setUint16(28, raw.length, true)
+    cd.setUint16(30, extra.length ? 4 + extra.length * 8 : 0, true)
+    cd.setUint32(38, (0o100644 << 16) >>> 0, true)
+    cd.setUint32(42, start >= MAX32 ? MAX32 : start, true)
+    new Uint8Array(cd.buffer).set(raw, 46)
+    if (extra.length) {
+      let at = 46 + raw.length
+      cd.setUint16(at, 1, true)
+      cd.setUint16(at + 2, extra.length * 8, true)
+      at += 4
+      for (const v of extra) {
+        cd.setBigUint64(at, v, true)
+        at += 8
+      }
+    }
+    central.push(new Uint8Array(cd.buffer))
+    count++
+  }
+
+  for await (const f of files) {
+    let opened: Awaited<ReturnType<ZipInput['open']>> = null
+    let why = 'it could not be read'
+    try {
+      opened = await f.open()
+    } catch (e) {
+      why = (e as Error).message || why
+    }
+    if (!opened) {
+      skipped.push(`${f.name}: ${why}`)
+      continue
+    }
+    yield* entry(uniqueName(opened.name ?? f.name, taken), opened.mtime ?? f.mtime, opened.body, opened.size)
+  }
+  if (skipped.length) {
+    const note = encoder.encode(`These were not included:\n\n${skipped.join('\n')}\n`)
+    yield* entry(uniqueName('Not included.txt', taken), Date.now(), [note], note.length)
+  }
+
+  // The table of contents, then its end record (with ZIP64's in front when anything is past 4 GB).
+  const cdStart = offset
+  let cdSize = 0
+  for (const c of central) {
+    yield c
+    cdSize += c.length
+  }
+  offset += cdSize
+  if (cdStart >= MAX32 || count >= 0xffff) {
+    const rec = new DataView(new ArrayBuffer(56 + 20))
+    rec.setUint32(0, 0x06064b50, true)
+    rec.setBigUint64(4, 44n, true)
+    rec.setUint16(12, 45, true)
+    rec.setUint16(14, 45, true)
+    rec.setBigUint64(24, BigInt(count), true)
+    rec.setBigUint64(32, BigInt(count), true)
+    rec.setBigUint64(40, BigInt(cdSize), true)
+    rec.setBigUint64(48, BigInt(cdStart), true)
+    rec.setUint32(56, 0x07064b50, true)
+    rec.setBigUint64(64, BigInt(cdStart + cdSize), true)
+    rec.setUint32(72, 1, true)
+    yield new Uint8Array(rec.buffer)
+  }
+  const end = new DataView(new ArrayBuffer(22))
+  end.setUint32(0, 0x06054b50, true)
+  end.setUint16(8, Math.min(count, 0xffff), true)
+  end.setUint16(10, Math.min(count, 0xffff), true)
+  end.setUint32(12, cdSize >= MAX32 ? MAX32 : cdSize, true)
+  end.setUint32(16, cdStart >= MAX32 ? MAX32 : cdStart, true)
+  yield new Uint8Array(end.buffer)
+}

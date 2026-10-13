@@ -17,9 +17,16 @@
 //     changed and deleted files (and a deleted folder) found; favourites kept,
 //   - encrypted libraries: skipped while locked (and their photos hidden), indexed once unlocked,
 //   - another account seeing none of it, and linking another Seafile account starting over,
+//   - the selection: favourites for many at once, trash into the library's trash (the index rows
+//     gone at once) and undo (the files and rows back, ids and favourites kept), the undo token
+//     good once and for its own account only, batch caps, locked and read-only libraries refused,
+//     moving to another folder (the index following, a clash refused), and a streamed ZIP of the
+//     selection read back with the app's own ZIP reader,
 //   - Immich: an unsupported version and a wrong key refused, linking, months, a month's photos
 //     (Immich 3's format and Immich 2's), thumbnails, details, albums, favourites, video with
-//     Range, the original as a download; the key sent on every request and never in an answer.
+//     Range, the original as a download, the trash (force: false, never for good) and undo,
+//     someone else's photo refused, adding to an album, a ZIP; the key sent on every request
+//     and never in an answer.
 //
 //   node scripts/photos-check.ts
 //
@@ -29,6 +36,7 @@ import { randomBytes } from 'node:crypto'
 import { Server, check, finish, sleep } from './empires-harness.ts'
 import { fixture, immichMock, jpegTaken, seafileMock, type ImAsset, type SfLib } from './photos-mock.ts'
 import { HEAD, readMeta, readMore, type Meta } from '../server/exif.ts'
+import { readEntry, readZip } from '../src/data/zip.ts'
 
 // --- The EXIF reader --------------------------------------------------------------------------------
 
@@ -145,6 +153,7 @@ function parserChecks() {
 const PHOTOS = '11111111-1111-4111-8111-111111111111'
 const VAULT = '22222222-2222-4222-8222-222222222222'
 const DOCS = '33333333-3333-4333-8333-333333333333'
+const SHARED = '44444444-4444-4444-8444-444444444444'
 const PLAIN_MTIME = Date.UTC(2020, 2, 31, 23, 30) // 31 March in UTC, 1 April in Amsterdam
 
 const file = (bytes: Buffer, mtime = Date.UTC(2024, 0, 1)) => ({ bytes, mtime })
@@ -171,6 +180,7 @@ const libs: SfLib[] = [
   },
   { id: VAULT, name: 'Vault', encrypted: true, files: new Map([['/vault.jpg', file(fixture('vault.jpg'))]]) },
   { id: DOCS, name: 'Documents', encrypted: false, files: new Map([['/Camera Uploads/a.jpg', file(fixture('canon.jpg'))], ['/Work/x.jpg', file(fixture('plain.jpg'))]]) },
+  { id: SHARED, name: 'Shared with me', encrypted: false, perm: 'r', files: new Map([['/Holiday/beach.jpg', file(fixture('canon.jpg'))]]) },
 ]
 const sf = await seafileMock(libs)
 
@@ -237,6 +247,101 @@ async function waitScan(label: string) {
 }
 /** A photo's id, by its path. */
 const idOf = (repo: string, path: string) => String((database().prepare('SELECT id FROM photos WHERE user_id = 1 AND repo = ? AND path = ?').get(repo, path) as { id: number } | undefined)?.id ?? '')
+
+/** A ZIP's files by name, read with the app's own reader. */
+async function unzip(bytes: Buffer): Promise<Map<string, Buffer>> {
+  const blob = new Blob([bytes])
+  const index = await readZip(blob)
+  const out = new Map<string, Buffer>()
+  for (const e of index.entries) out.set(e.path, Buffer.from(await readEntry(e, async (from, to) => new Uint8Array(await blob.slice(from, to + 1).arrayBuffer()))))
+  return out
+}
+
+async function selectionChecks(vaultId: string) {
+  const photos = libs[0]
+  const july = (await call('/api/photos/seafile/bucket?tz=0&key=2023-07')).json as unknown[][]
+  const webp = july.find((i) => i[0] === idOf(PHOTOS, '/Trips/photo.webp'))
+  check(`a month's photos say where they are (got ${webp?.[6]})`, webp?.[6] === `${PHOTOS}/Trips/photo.webp`)
+
+  // Favourites for many at once.
+  const a = idOf(PHOTOS, '/big.jpg')
+  const b = idOf(PHOTOS, '/Trips/photo.webp')
+  const favs = await call('/api/photos/seafile/favourite', { method: 'PUT', body: { ids: [a, b], on: true } })
+  const both = (database().prepare('SELECT COUNT(*) AS n FROM photos WHERE user_id = 1 AND favourite = 1 AND id IN (?, ?)').get(Number(a), Number(b)) as { n: number }).n
+  check(`favourites for two at once (got ${favs.status}, ${both} favourites)`, favs.status === 200 && both === 2)
+  await call('/api/photos/seafile/favourite', { method: 'PUT', body: { ids: [a], on: false } })
+
+  // Into the trash: two photos in two folders, gone from the library and the index at once.
+  const before = await buckets()
+  const trash = await call('/api/photos/seafile/trash', { method: 'POST', body: { ids: [a, b] } })
+  check(`trash: 200, both taken, an undo token (got ${trash.status} ${trash.text.slice(0, 120)})`, trash.status === 200 && trash.json.trashed.length === 2 && typeof trash.json.undo === 'string' && trash.json.error === null)
+  check("trash: the files are in the library's trash on Seafile", !photos.files.has('/big.jpg') && !photos.files.has('/Trips/photo.webp') && (photos.trash ?? []).length === 2)
+  check('trash: deleted with batch-delete-item, one call per folder', sf.log.filter((l) => l.path === '/api/v2.1/repos/batch-delete-item/' && l.method === 'DELETE').length === 2)
+  const after = await buckets()
+  check(`trash: the index lost them at once, no walk needed (2023-07 ${before['2023-07']} → ${after['2023-07']})`, !idOf(PHOTOS, '/big.jpg') && !idOf(PHOTOS, '/Trips/photo.webp') && after['2023-07'] === before['2023-07'] - 2)
+
+  // Undo: only its own account, only once.
+  const stranger = await call('/api/photos/seafile/restore', { method: 'POST', body: { undo: trash.json.undo }, as: 2 })
+  check(`another account cannot use the undo (got ${stranger.status})`, stranger.status === 404 && !photos.files.has('/big.jpg'))
+  const undo = await call('/api/photos/seafile/restore', { method: 'POST', body: { undo: trash.json.undo } })
+  check(`undo: both restored from the library's trash (got ${undo.status} ${undo.text})`, undo.status === 200 && undo.json.restored.length === 2 && !undo.json.failed.length && photos.files.has('/big.jpg') && photos.files.has('/Trips/photo.webp'))
+  check(`undo: the index rows are back with their ids, the favourite kept (got ${idOf(PHOTOS, '/big.jpg')}, ${idOf(PHOTOS, '/Trips/photo.webp')})`, idOf(PHOTOS, '/big.jpg') === a && idOf(PHOTOS, '/Trips/photo.webp') === b && (database().prepare('SELECT favourite FROM photos WHERE id = ?').get(Number(b)) as { favourite: number }).favourite === 1)
+  check(`undo: the months are as before (got ${JSON.stringify(await buckets())})`, JSON.stringify(await buckets()) === JSON.stringify(before))
+  const twice = await call('/api/photos/seafile/restore', { method: 'POST', body: { undo: trash.json.undo } })
+  check(`an undo token works once (got ${twice.status})`, twice.status === 404)
+
+  // Caps and refusals.
+  const many = Array.from({ length: 201 }, (_, i) => String(i + 1))
+  const capped = await call('/api/photos/seafile/trash', { method: 'POST', body: { ids: many } })
+  const cappedFav = await call('/api/photos/seafile/favourite', { method: 'PUT', body: { ids: many, on: true } })
+  const cappedZip = await call('/api/photos/seafile/zip', { method: 'POST', body: { ids: Array.from({ length: 2001 }, (_, i) => String(i + 1)) } })
+  check(`batch caps: 201 to trash, 201 favourites, 2001 in a ZIP refused (got ${capped.status}, ${cappedFav.status}, ${cappedZip.status})`, capped.status === 413 && cappedFav.status === 413 && cappedZip.status === 413)
+  const empty = await call('/api/photos/seafile/trash', { method: 'POST', body: { ids: [] } })
+  check(`no ids: 400 (got ${empty.status})`, empty.status === 400)
+  const unknown = await call('/api/photos/seafile/trash', { method: 'POST', body: { ids: [a, '999999'] } })
+  check(`an id not in the index refuses the batch whole (got ${unknown.status})`, unknown.status === 404 && photos.files.has('/big.jpg'))
+  const deletes = () => sf.log.filter((l) => l.path === '/api/v2.1/repos/batch-delete-item/').length
+  const d0 = deletes()
+  const locked = await call('/api/photos/seafile/trash', { method: 'POST', body: { ids: [vaultId] } })
+  check(`a locked library refuses, and says to unlock it (got ${locked.status} ${locked.json?.error})`, locked.status === 423 && /unlock/i.test(locked.json?.error ?? '') && deletes() === d0 && libs[1].files.has('/vault.jpg'))
+
+  // A read-only library (shared for viewing): its photos show, but nothing in it changes.
+  await call('/api/photos/sources', { method: 'PUT', body: { sources: [{ repo: PHOTOS, path: '/' }, { repo: VAULT, path: '/' }, { repo: SHARED, path: '/' }] } })
+  await waitScan('walk with the read-only library')
+  const beach = idOf(SHARED, '/Holiday/beach.jpg')
+  const ro = await call('/api/photos/seafile/trash', { method: 'POST', body: { ids: [beach] } })
+  const roMove = await call('/api/photos/seafile/move', { method: 'POST', body: { ids: [beach], to: { repo: PHOTOS, path: '/Trips' } } })
+  const roInto = await call('/api/photos/seafile/move', { method: 'POST', body: { ids: [a], to: { repo: SHARED, path: '/Holiday' } } })
+  check(`read-only: trash and moves out or in refused, and say why (got ${ro.status}, ${roMove.status}, ${roInto.status}: ${ro.json?.error})`, !!beach && ro.status === 403 && roMove.status === 403 && roInto.status === 403 && /read-only/.test(ro.json?.error ?? '') && libs[3].files.has('/Holiday/beach.jpg') && deletes() === d0)
+  const roZip = await call('/api/photos/seafile/zip', { method: 'POST', body: { ids: [beach] } })
+  check(`read-only: downloading still works (got ${roZip.status})`, roZip.status === 200)
+
+  // Moving to another folder: the index follows (same id); a name already there is refused.
+  const plain = idOf(PHOTOS, '/plain.jpg')
+  const moved = await call('/api/photos/seafile/move', { method: 'POST', body: { ids: [plain], to: { repo: PHOTOS, path: '/Trips' } } })
+  check(`move: plain.jpg into /Trips, the index row follows (got ${moved.status} ${moved.text}, ${idOf(PHOTOS, '/Trips/plain.jpg')})`, moved.status === 200 && moved.json.moved === 1 && moved.json.kept === true && idOf(PHOTOS, '/Trips/plain.jpg') === plain && photos.files.has('/Trips/plain.jpg') && !photos.files.has('/plain.jpg'))
+  photos.files.set('/plain.jpg', file(Buffer.from('not the same')))
+  const clash = await call('/api/photos/seafile/move', { method: 'POST', body: { ids: [plain], to: { repo: PHOTOS, path: '/' } } })
+  check(`move: a name already there is refused (got ${clash.status} ${clash.json?.error})`, clash.status === 409 && /plain\.jpg/.test(clash.json?.error ?? '') && photos.files.has('/Trips/plain.jpg'))
+  photos.files.delete('/plain.jpg')
+  const back = await call('/api/photos/seafile/move', { method: 'POST', body: { ids: [plain], to: { repo: PHOTOS, path: '/' } } })
+  check(`move back (got ${back.status})`, back.status === 200 && idOf(PHOTOS, '/plain.jpg') === plain)
+
+  // A ZIP of the selection, streamed: each file as it is in Seafile.
+  const zip = await call('/api/photos/seafile/zip', { method: 'POST', body: { ids: [a, plain, b] } })
+  check(`zip: a download address (got ${zip.status} ${zip.text})`, zip.status === 200 && /^\/api\/photos\/zip\?t=/.test(zip.json?.url ?? ''))
+  const got = await call(zip.json.url)
+  check(`zip: 200 application/zip as an attachment (got ${got.status} ${got.headers.get('content-type')} ${got.headers.get('content-disposition')})`, got.status === 200 && got.headers.get('content-type') === 'application/zip' && /attachment/.test(got.headers.get('content-disposition') ?? ''))
+  const files = await unzip(got.bytes).catch((e) => (console.error(e), new Map<string, Buffer>()))
+  check(`zip: the three files, byte for byte (got ${[...files.keys()].join(', ')})`, files.size === 3 && !!files.get('big.jpg')?.equals(photos.files.get('/big.jpg')!.bytes) && !!files.get('plain.jpg')?.equals(photos.files.get('/plain.jpg')!.bytes) && !!files.get('photo.webp')?.equals(photos.files.get('/Trips/photo.webp')!.bytes))
+  const strangerZip = await call(zip.json.url, { as: 2 })
+  check(`zip: another account's session cannot fetch it (got ${strangerZip.status})`, strangerZip.status === 404)
+
+  // Back to the folders (and favourites) the rest of the checks expect.
+  await call('/api/photos/seafile/favourite', { method: 'PUT', body: { ids: [b], on: false } })
+  await call('/api/photos/sources', { method: 'PUT', body: { sources: [{ repo: PHOTOS, path: '/' }, { repo: VAULT, path: '/' }] } })
+  await waitScan('walk after the selection checks')
+}
 
 async function seafileChecks() {
   // Nothing chosen yet; suggestions.
@@ -340,6 +445,8 @@ async function seafileChecks() {
   const st = (await call('/api/photos/status')).json
   check(`status: the Vault says it is locked (got ${JSON.stringify(st.seafile.sources.map((s: { name: string; locked: boolean }) => [s.name, s.locked]))})`, st.seafile.sources.some((s: { repo: string; locked: boolean }) => s.repo === VAULT && s.locked))
 
+  await selectionChecks(vaultId)
+
   // Another account sees none of it.
   const other = await call(`/api/photos/seafile/info?id=${canonId}`, { as: 2 })
   check(`another account without Seafile: 409 (got ${other.status})`, other.status === 409)
@@ -350,6 +457,10 @@ async function seafileChecks() {
   check(`another account with Seafile: not this one's photos (info ${otherInfo.status}, thumbnail ${otherThumb.status}, ${otherBuckets.json?.length} months)`, otherInfo.status === 404 && otherThumb.status === 404 && otherBuckets.json?.length === 0)
   const otherFav = await call('/api/photos/seafile/favourite', { method: 'PUT', body: { id: canonId, on: false }, as: 2 })
   check(`another account cannot unfavourite it (got ${otherFav.status})`, otherFav.status === 404 && JSON.stringify(await buckets('&fav=1')) === '{"2018-01":1}')
+  const otherTrash = await call('/api/photos/seafile/trash', { method: 'POST', body: { ids: [canonId] }, as: 2 })
+  const otherZip = await call('/api/photos/seafile/zip', { method: 'POST', body: { ids: [canonId] }, as: 2 })
+  const otherMove = await call('/api/photos/seafile/move', { method: 'POST', body: { ids: [canonId], to: { repo: PHOTOS, path: '/Trips' } }, as: 2 })
+  check(`another account cannot trash, zip or move it (got ${otherTrash.status}, ${otherZip.status}, ${otherMove.status})`, otherTrash.status === 404 && otherZip.status === 404 && otherMove.status === 404 && libs[0].files.has('/canon.jpg') && !!idOf(PHOTOS, '/canon.jpg'))
   const signedOut = await fetch(`${server.origin}/api/photos/seafile/buckets?tz=0`)
   check(`signed out: 401 (got ${signedOut.status})`, signedOut.status === 401)
 
@@ -368,6 +479,52 @@ const assets: ImAsset[] = [
   { id: aid(2), name: 'DSCF0002.JPG', video: false, taken: '2025-08-01T23:30:00.000Z', offsetHours: -5, favourite: true, ratio: 0.667, albums: [], bytes: fixture('plain.jpg') },
   { id: aid(3), name: 'clip.mp4', video: true, taken: '2025-07-20T09:00:00.000Z', offsetHours: 0, favourite: false, ratio: 1.333, albums: [], bytes: fixture('clip.mp4') },
 ]
+
+async function immichSelectionChecks(im: Awaited<ReturnType<typeof immichMock>>) {
+  const months = async () => ((await call('/api/photos/immich/buckets?tz=0')).json as { month: string; count: number }[]).map((m) => `${m.month}×${m.count}`).join(',')
+  const before = await months()
+
+  // Into Immich's trash, never for good, and back.
+  const trash = await call('/api/photos/immich/trash', { method: 'POST', body: { ids: [aid(1)] } })
+  const del = im.log.findLast((l) => l.method === 'DELETE' && l.path === '/api/assets')
+  check(`Immich trash: DELETE /api/assets with force: false (got ${trash.status}, ${del?.body})`, trash.status === 200 && !!del && JSON.parse(del.body).force === false && JSON.parse(del.body).ids[0] === aid(1) && assets[0].trashed === true && assets.length === 3)
+  check(`Immich trash: gone from the timeline (got ${await months()})`, (await months()) === '2025-08×1,2025-07×1')
+  const stranger = await call('/api/photos/immich/restore', { method: 'POST', body: { undo: trash.json.undo }, as: 2 })
+  check(`Immich undo: not for another account (got ${stranger.status})`, stranger.status === 404 && assets[0].trashed === true)
+  const wrongSource = await call('/api/photos/seafile/restore', { method: 'POST', body: { undo: trash.json.undo } })
+  check(`Immich undo: not through the other source (got ${wrongSource.status})`, wrongSource.status === 404)
+  const undo = await call('/api/photos/immich/restore', { method: 'POST', body: { undo: trash.json.undo } })
+  const post = im.log.findLast((l) => l.path === '/api/trash/restore/assets')
+  check(`Immich undo: POST /api/trash/restore/assets (got ${undo.status} ${undo.text}, ${post?.body})`, undo.status === 200 && JSON.parse(post?.body ?? '{}').ids?.[0] === aid(1) && !assets[0].trashed && (await months()) === before)
+
+  // Someone else's photo (a partner's, a shared album's) is refused before Immich is asked to delete.
+  assets[1].owner = 'ffffffff-0000-4000-8000-000000000009'
+  const deletes = im.log.filter((l) => l.method === 'DELETE').length
+  const others = await call('/api/photos/immich/trash', { method: 'POST', body: { ids: [aid(1), aid(2)] } })
+  check(`Immich: a batch with someone else's photo refused whole (got ${others.status} ${others.json?.error})`, others.status === 403 && /someone else/.test(others.json?.error ?? '') && im.log.filter((l) => l.method === 'DELETE').length === deletes && !assets[0].trashed && !assets[1].trashed)
+  delete assets[1].owner
+  const bad = await call('/api/photos/immich/trash', { method: 'POST', body: { ids: ['../../users/me'] } })
+  const capped = await call('/api/photos/immich/trash', { method: 'POST', body: { ids: Array.from({ length: 201 }, (_, i) => aid(100 + i)) } })
+  check(`Immich: a bad id and 201 ids refused (got ${bad.status}, ${capped.status})`, bad.status === 400 && capped.status === 413)
+  const days = await call('/api/photos/immich/trashinfo')
+  check(`Immich: how long its trash keeps things (got ${days.text})`, days.status === 200 && days.json.days === 30)
+
+  // Favourites for many, in one request; adding to an album.
+  const favs = await call('/api/photos/immich/favourite', { method: 'PUT', body: { ids: [aid(2), aid(3)], on: true } })
+  const put = im.log.findLast((l) => l.method === 'PUT' && l.path === '/api/assets')
+  check(`Immich favourites for two: one PUT /api/assets (got ${favs.status}, ${put?.body})`, favs.status === 200 && !!put && assets[1].favourite && assets[2].favourite)
+  await call('/api/photos/immich/favourite', { method: 'PUT', body: { ids: [aid(3)], on: false } })
+  const album = 'bbbbbbbb-0000-4000-8000-000000000001'
+  const add = await call('/api/photos/immich/album', { method: 'POST', body: { album, ids: [aid(1), aid(2)] } })
+  check(`Immich: adding to an album, one already in it (got ${add.status} ${add.text})`, add.status === 200 && add.json.added === 1 && add.json.already === 1 && assets[1].albums.includes(album))
+  assets[1].albums = []
+
+  // A ZIP, with the names Immich gives.
+  const zip = await call('/api/photos/immich/zip', { method: 'POST', body: { ids: [aid(1), aid(3)] } })
+  const got = await call(zip.json.url)
+  const files = await unzip(got.bytes).catch((e) => (console.error(e), new Map<string, Buffer>()))
+  check(`Immich zip: DSCF0001.JPG and clip.mp4, byte for byte (got ${got.status}, ${[...files.keys()].join(', ')})`, got.status === 200 && !!files.get('DSCF0001.JPG')?.equals(assets[0].bytes) && !!files.get('clip.mp4')?.equals(assets[2].bytes))
+}
 
 async function immichChecks() {
   const im = await immichMock(assets, { key: KEY, version: { major: 1, minor: 140, patch: 1 }, albums: [{ id: 'bbbbbbbb-0000-4000-8000-000000000001', name: 'Summer' }] })
@@ -417,6 +574,8 @@ async function immichChecks() {
     check(`Immich favourite: PUT /api/assets/{id} with isFavorite (got ${fav.status}, ${im.log.at(-1)?.method} ${im.log.at(-1)?.body})`, fav.status === 200 && im.log.at(-1)!.method === 'PUT' && JSON.parse(im.log.at(-1)!.body).isFavorite === true && assets[0].favourite)
     const favs = (await call('/api/photos/immich/buckets?tz=0&fav=1')).json as { count: number }[]
     check(`Immich favourites (got ${favs.map((b) => b.count)})`, favs.reduce((n, b) => n + b.count, 0) === 2)
+
+    await immichSelectionChecks(im)
 
     const video = await call(`/api/photos/immich/video?id=${aid(3)}`, { headers: { Range: 'bytes=0-99' } })
     check(`Immich video with Range: 206, the exact bytes (got ${video.status} ${video.headers.get('content-range')}, ${video.bytes.length} bytes)`, video.status === 206 && video.headers.get('content-range') === `bytes 0-99/${fixture('clip.mp4').length}` && video.bytes.equals(fixture('clip.mp4').subarray(0, 100)) && video.headers.get('content-type') === 'video/mp4')

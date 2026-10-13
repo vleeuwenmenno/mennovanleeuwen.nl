@@ -89,7 +89,7 @@ async function fail(res: Response): Promise<never> {
   const message = await errorOf(res)
   if (res.status === 401) throw new HttpError(409, 'Immich no longer accepts the API key: link it again')
   // A key made with only some permissions: Immich names the one that is missing.
-  if (res.status === 403) throw new HttpError(403, `Immich refused: ${message}. The API key needs asset, album and timeline read access, asset.download and asset.update.`)
+  if (res.status === 403) throw new HttpError(403, `Immich refused: ${message}. The API key needs asset, album and timeline read access, asset.download and asset.update (and asset.delete for the trash, albumAsset.create for adding to albums).`)
   throw new HttpError(res.status === 404 || res.status === 400 ? res.status : 502, message)
 }
 
