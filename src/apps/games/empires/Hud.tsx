@@ -1,18 +1,16 @@
-import { bigType, sizedType, type ShipSizes } from './models/sizes.ts'
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { battleLayout, type LayoutStore } from './layout'
 import {
-  ENGINEERS, MODULE, REBUILD_MODULE, WORKS_NAME, modulesFor, needsModule, worksOf, yardsFor, type ModuleId,
-  ABILITIES, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, moduleSprite, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
+  ENGINEERS, MODULE, REBUILD_MODULE, WORKS_NAME, modulesFor, needsModule, stationType, worksOf, yardOf, yardType, yardsFor, type ModuleId,
+  ABILITIES, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
   type UnitType,
 } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { modelFor, typeOfSprite } from './models/index.ts'
-import { thumbnail } from './models/paint.ts'
-import { spriteUrl } from './render'
+import { moduleThumbnail, thumbnail } from './models/paint.ts'
 import { keyName, useSettings } from './settings'
 import { LongPress, isTouch, shiftOf, useCoarse, useLongPressWheel } from './Touch'
-import { FIELD_DAMAGE, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, typeOf, cantResearch, cantSite, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
+import { FIELD_DAMAGE, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard, research and game speed; and along the bottom the tactical map, a details panel for
@@ -171,7 +169,7 @@ export function Tips({ live }: { live?: (id: number) => Unit | undefined } = {})
       const r = cur.getBoundingClientRect()
       const rr = root.getBoundingClientRect()
       setTip({
-        text: text ?? '', unit: unit ?? undefined, big: cur.hasAttribute('data-tip-big'), uid: Number(cur.getAttribute('data-tip-uid')) || undefined, who: cur.getAttribute('data-tip-who') ?? undefined, rel: cur.getAttribute('data-tip-rel') ?? undefined,
+        text: text ?? '', unit: unit ?? undefined, uid: Number(cur.getAttribute('data-tip-uid')) || undefined, who: cur.getAttribute('data-tip-who') ?? undefined, rel: cur.getAttribute('data-tip-rel') ?? undefined,
         x: r.left + r.width / 2 - rr.left, top: r.top - rr.top, bottom: r.bottom - rr.top,
       })
     }
@@ -253,7 +251,7 @@ export function Tips({ live }: { live?: (id: number) => Unit | undefined } = {})
       <span ref={anchor} hidden />
       {tip && (
         <div ref={box} className={`ew-tip ${tip.unit ? 'is-unit' : ''}`} role="tooltip" style={{ visibility: 'hidden' }}>
-          {tip.unit && UNIT[tip.unit] ? <UnitIntel t={sizedType(tip.unit, tip.big ? 'big' : 'classic')} who={tip.who} rel={tip.rel} note={tip.text || undefined} live={tip.uid ? live?.(tip.uid) : undefined} /> : tip.text}
+          {tip.unit && UNIT[tip.unit] ? <UnitIntel t={UNIT[tip.unit]} who={tip.who} rel={tip.rel} note={tip.text || undefined} live={tip.uid ? live?.(tip.uid) : undefined} /> : tip.text}
         </div>
       )}
     </>
@@ -297,53 +295,40 @@ export function Bar({ value, max, kind }: { value: number; max: number; kind: 'h
  * the size the biggest cards show it. */
 const THUMB_PX = 192
 
-/**
- * A unit's picture by its sprite name, for the menus and tiles that only know the sprite: a still of
- * its procedural model where it has one and the setting is on, else the sprite itself.
- */
-/** The ship sizes the screen's battle or campaign is played at (models/sizes.ts), so pictures that
- * only know a sprite show the ships as they are in it. */
-export const SizesContext = createContext<ShipSizes | undefined>(undefined)
-
-export function useUnitArt() {
-  const { models } = useSettings()
-  const sizes = useContext(SizesContext)
-  return (sprite: string) => {
-    const plain = models ? typeOfSprite(sprite) : null
-    const t = plain && sizes === 'big' ? bigType(plain) : plain
-    const m = t ? modelFor(t) : null
-    return m ? thumbnail(m, THUMB_PX).url : spriteUrl(sprite)
+/** A unit's picture by its look's name (data.ts `sprite`, or moduleLook for an expansion module),
+ * for the menus and tiles that only know that: a still of its model, as a data URL (empty for a
+ * name nothing has). */
+export function unitArt(sprite: string) {
+  const mod = /^(republic|droid)-x-(\w+)$/.exec(sprite)
+  if (mod && MODULE[mod[2] as ModuleId]) {
+    // A module: on its own, cut from a building that has it.
+    const x = MODULE[mod[2] as ModuleId]
+    const f = mod[1] as FactionId
+    const t = x.on === 'station' ? stationType(f, 4, [], [x.id]) : yardType(yardOf(f, x.on).id, [x.id])
+    const m = modelFor(t)
+    const hp = t.hardpoints.findIndex((h) => h.exp === x.id)
+    return m && hp >= 0 ? moduleThumbnail(m, hp, THUMB_PX) : ''
   }
+  const t = typeOfSprite(sprite)
+  const m = t ? modelFor(t) : null
+  return m ? thumbnail(m, THUMB_PX).url : ''
 }
 
 /**
- * A ship or structure as it looks in battle: its hull with every module on it (shot-off ones
- * burnt), fitted into whatever box the CSS gives it like an image would be. With procedural models
- * on, a still of its model (the mounts painted on it); otherwise its sprite with the module sprites.
+ * A ship or structure as it looks in battle: a still of its model with every module on it (shot-off
+ * ones burnt), fitted into whatever box the CSS gives it like an image would be.
  */
 export function ShipArt({ t, hps, className = '' }: { t: UnitType; hps?: { hp: number }[]; className?: string }) {
   const W = t.aspect >= 1 ? 100 : 100 * t.aspect
   const H = t.aspect >= 1 ? 100 / t.aspect : 100
-  const { models } = useSettings()
-  const m = models ? modelFor(t) : null
-  if (m) {
-    const { url, pad } = thumbnail(m, THUMB_PX, hps?.map((h) => h.hp <= 0))
-    // The model's box is the viewBox; the picture's margin hangs over it.
-    const k = W / m.w
-    return (
-      <svg className={`ew-art ${className}`} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" overflow="visible" aria-hidden>
-        <image href={url} x={-pad * k} y={-pad * k} width={(m.w + pad * 2) * k} height={(m.h + pad * 2) * k} />
-      </svg>
-    )
-  }
+  const m = modelFor(t)
+  if (!m) return <svg className={`ew-art ${className}`} viewBox={`0 0 ${W} ${H}`} aria-hidden />
+  const { url, pad } = thumbnail(m, THUMB_PX, hps?.map((h) => h.hp <= 0))
+  // The model's box is the viewBox; the picture's margin hangs over it.
+  const k = W / m.w
   return (
-    <svg className={`ew-art ${className}`} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" aria-hidden>
-      <image href={spriteUrl(t.sprite)} width={W} height={H} />
-      {t.hardpoints.map((m, i) => {
-        if (!m.art) return null
-        const s = (m.s ?? 0.05) * 100
-        return <image key={i} className={hps && hps[i]?.hp <= 0 ? 'is-dead' : ''} href={spriteUrl(moduleSprite(t.faction, m.art))} x={(m.x / 10) * W - s / 2} y={(m.y / 10) * H - s / 2} width={s} height={s} />
-      })}
+    <svg className={`ew-art ${className}`} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" overflow="visible" aria-hidden>
+      <image href={url} x={-pad * k} y={-pad * k} width={(m.w + pad * 2) * k} height={(m.h + pad * 2) * k} />
     </svg>
   )
 }
@@ -634,7 +619,7 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
  * ships waiting there, and hovering shows what they are.
  */
 function FactionButton({ hud, faction, sector, onReserves }: { hud: Hud; faction: FactionId; sector: string; onReserves: () => void }) {
-  const art = useUnitArt()
+  const art = unitArt
   const [hover, setHover] = useState(false)
   const timer = useRef(0)
   const kinds = [...new Set(hud.reserve)]
@@ -1005,11 +990,10 @@ function StationDetail(p: DetailProps & { st: Unit }) {
   const { w, me, st, hud, faction } = p
   // Ships the station isn't upgraded for yet stay out of the shipyard, unless the setting shows them.
   const { lockedShips } = useSettings()
-  // At the battle's ship sizes, so the cards and their tooltips show the numbers the sim uses.
   // With hybrid bases the Command Station builds strike craft, gunships, engineers and (until their
   // yard comes) the heaviest ships; the frigates and corvettes come from the Frigate Yard.
   const list = w.hybrid ? baseBuilds(faction).filter((t) => builtAt(t) === 'station') : buildable(faction)
-  const all = list.map((t) => typeOf(w, t.id)).filter((t) => lockedShips || t.level <= hud.level)
+  const all = list.map((t) => UNIT[t.id]).filter((t) => lockedShips || t.level <= hud.level)
   const queued = (id: string) => hud.queue.filter((q) => q.unit === id).length
   // Strike craft and warships on separate pages (and, with hybrid bases, the yards and expansions),
   // Strike craft first; the choice is remembered (see storedPage).
@@ -1078,7 +1062,7 @@ function StationDetail(p: DetailProps & { st: Unit }) {
             <div className="ew-yard" ref={grid}>
                 {/* No warships at the Command Station with hybrid bases: a ghost card points the way. */}
                 {page === 'warships' && w.hybrid && !ships.length && (
-                  <GhostCard t={typeOf(w, unitOf(faction, 'frigate').id)} text={myYard ? `Built at the ${WORKS_NAME[worksOf(myYard.t) ?? 'yard']}` : 'Built at the Frigate Yard'}
+                  <GhostCard t={UNIT[unitOf(faction, 'frigate').id]} text={myYard ? `Built at the ${WORKS_NAME[worksOf(myYard.t) ?? 'yard']}` : 'Built at the Frigate Yard'}
                     go={myYard ? `Select the ${myYard.t.name}` : 'No yard yet: open Buildings › Yards to build one with engineers'}
                     onGo={() => (myYard ? p.onSelect(myYard.id) : pick('yards'))} />
                 )}
@@ -1248,7 +1232,7 @@ const PROJECTORS = 5
  */
 export type QueueItem = { unit: string; left: number; total: number; reserve?: boolean; sprite?: string; name?: string }
 export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false, at = 'the station' }: { queue: QueueItem[]; onCancel: (i: number) => void; max?: number; campaign?: boolean; /** Where its ships jump in: the station, or the yard it belongs to. */ at?: string }) {
-  const art = useUnitArt()
+  const art = unitArt
   return (
     <div className="ew-buildq" aria-label={`Build queue: ${queue.length} of ${max}`}>
       {Array.from({ length: PROJECTORS }, (_, i) => {
@@ -1288,7 +1272,7 @@ export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false,
  * the battlefield to call one in; it takes a moment to arrive.
  */
 export function ReserveTray({ reserve, onGrab, onClose }: { reserve: string[]; onGrab: (id: string, e: React.PointerEvent) => void; onClose: () => void }) {
-  const art = useUnitArt()
+  const art = unitArt
   const kinds = [...new Set(reserve)]
   return (
     <Floating id="reserve" title="Fleet inventory" at={{ left: 12, top: 56 }} onClose={onClose} className="ew-reserve">
@@ -1581,8 +1565,6 @@ export function ownerTag(w: World, me: Owner, owner: Owner) {
 /** The attributes that make an element's hover show the unit card for type `t`. */
 export const unitTip = (t: UnitType, who: { who: string; rel: string }, note?: string, live?: Unit) => ({
   'data-tip-unit': t.id,
-  // The card shows the type's numbers at the battle's ship sizes (models/sizes.ts).
-  ...(t.big ? { 'data-tip-big': '' } : {}),
   'data-tip-who': who.who,
   'data-tip-rel': who.rel,
   ...(note ? { 'data-tip': note } : {}),
@@ -1708,7 +1690,7 @@ function orderText(w: World, u: Unit) {
 }
 
 function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
-  const art = useUnitArt()
+  const art = unitArt
   const { keys } = useSettings()
   const { u, squad, me, w } = p
   const coarse = useCoarse()
@@ -1917,7 +1899,7 @@ function YardDetail(p: DetailProps & { y: Unit }) {
   const faction = y.t.faction
   const site = !!y.site
   const kind = worksOf(y.t) ?? 'yard'
-  const ships = baseBuilds(faction).filter((t) => builtAt(t) === kind).map((t) => typeOf(w, t.id)).filter((t) => lockedShips || t.level <= hud.level)
+  const ships = baseBuilds(faction).filter((t) => builtAt(t) === kind).map((t) => UNIT[t.id]).filter((t) => lockedShips || t.level <= hud.level)
   // Its ships or its expansions, on tabs down the left as the station's are; the choice is remembered.
   const [page, setPage] = useState<'ships' | 'expansions'>(() => {
     try {
@@ -1999,7 +1981,7 @@ function YardDetail(p: DetailProps & { y: Unit }) {
 
 /** Several kinds of ship: a row per type. */
 function GroupDetail(p: DetailProps) {
-  const art = useUnitArt()
+  const art = unitArt
   const { sel } = p
   const coarse = useCoarse()
   const types = new Map<string, Unit[]>()
@@ -2043,7 +2025,7 @@ export const nextStance = (s: Stance) => STANCES[(STANCES.indexOf(s) + 1) % STAN
 
 /** A control group's button: a tap selects it; on touch a long press sets it to the selection. */
 function GroupButton({ g, onGroup, onAssign, canAssign }: { g: Hud['groups'][number]; onGroup: (key: string) => void; onAssign?: (key: string, clear?: boolean) => void; canAssign: boolean }) {
-  const art = useUnitArt()
+  const art = unitArt
   const press = useLongPressWheel(
     () => [
       { id: 'set', label: 'Set to selection', icon: <Icon name="army" size={18} />, disabled: !canAssign && 'Select some of ours first', run: () => onAssign?.(g.key) },
@@ -2083,7 +2065,7 @@ export function SelectionPanel({ w, sel, me, mode, onCommand, onPick, groups, on
   onCommand: (c: Command) => void
   onPick: (id: number, shift: boolean) => void
 }) {
-  const art = useUnitArt()
+  const art = unitArt
   const mine = sel.filter((u) => u.owner === me)
   const ships = mine.filter((u) => isShip(u.t))
   const station = mine.some((u) => u.t.tier === 'station' || (u.t.tier === 'yard' && !!u.yq))

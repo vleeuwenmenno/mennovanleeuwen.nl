@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
-import { sizedType } from './models/sizes.ts'
 import {
   CAPTURE_TIME, GRID_H, GRID_W, MAX_FLEETS, arrangeFleet, canSee, cellsUsed, dropWhy, eta, factionName, fleetsAt, fleetsHere, holdFleet, holdItem, itemAt, mergeFleets, moveItem, stacks,
   type Fleet, type Galaxy, type Item, type ItemDrop, type ItemRef,
 } from './galaxy'
+import { UNIT } from './data'
 import { Floating, Icon, ShipArt, unitTip, type IconName } from './Hud'
 import { galaxyLayout } from './layout'
 import type { EmpiresSound } from './sound'
@@ -335,7 +335,7 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
     let title: string
     if (hit.item) {
       const it = hit.item
-      const t = sizedType(it.unit, g.rules?.sizes)
+      const t = UNIT[it.unit]
       title = `${t.name}${it.n > 1 ? ` ×${it.n}` : ''} · ${label(f)}${it.held ? ' · held back' : ''}`
       items = [
         { id: 'all', label: it.n > 1 ? 'Move all' : 'Move', icon: ic('move'), disabled: inFlight, run: () => pickUp(f, it, it.n) },
@@ -464,7 +464,7 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
     <div className="ew-inv-grid" data-inv-grid="" style={{ gridTemplateColumns: `repeat(${GRID_W}, var(--slot))`, gridTemplateRows: `repeat(${GRID_H}, var(--slot))` }}>
       {Array.from({ length: CELLS }, (_, i) => <div key={`c${i}`} className="ew-inv-cell" style={span(i % GRID_W, Math.floor(i / GRID_W), 1, 1)} />)}
       {f.items.map((it) => {
-        const t = sizedType(it.unit, g.rules?.sizes)
+        const t = UNIT[it.unit]
         const c = isCarried(f, it)
         const stack = stacks(it.unit)
         return (
@@ -490,8 +490,8 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
   }
   const strip = carry && !dragging ? (
     <div className="ew-inv-strip is-carry" onWheel={(e) => setCarry({ ...carry, n: clampTo(carry.n + (e.deltaY < 0 ? 1 : -1), 1, carry.of) })}>
-      <ShipArt t={sizedType(carry.unit, g.rules?.sizes)} />
-      <span>{sizedType(carry.unit, g.rules?.sizes).name}</span>
+      <ShipArt t={UNIT[carry.unit]} />
+      <span>{UNIT[carry.unit].name}</span>
       {carry.of > 1 && (
         <>
           <button onClick={() => setCarry({ ...carry, n: Math.max(1, carry.n - 1) })} aria-label="One fewer">−</button>
@@ -510,9 +510,9 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
     </div>
   ) : adjust ? (
     <div className="ew-inv-strip is-adjust">
-      <ShipArt t={sizedType(adjust.unit, g.rules?.sizes)} />
+      <ShipArt t={UNIT[adjust.unit]} />
       <span>
-        <b>{adjust.moved}</b> {sizedType(adjust.unit, g.rules?.sizes).name} {adjust.from.fleet === adjust.to.fleet ? 'moved' : `to ${where(adjust.to)}`}
+        <b>{adjust.moved}</b> {UNIT[adjust.unit].name} {adjust.from.fleet === adjust.to.fleet ? 'moved' : `to ${where(adjust.to)}`}
       </span>
       <button onClick={() => nudge(-1)} disabled={adjust.moved <= 0} aria-label="One fewer">−</button>
       <button onClick={() => nudge(1)} disabled={!itemOf(adjust.from, adjust.unit)} aria-label="One more">+</button>
@@ -572,7 +572,7 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
       {carry && at && !coarse && createPortal(
         <div className={`ew-inv-ghost ${carry.w > carry.h ? 'is-side' : ''} ${hover ? 'is-over' : ''}`}
           style={{ left: at.x - (carry.dx + 0.5) * slot.current, top: at.y - (carry.dy + 0.5) * slot.current, width: carry.w * slot.current, height: carry.h * slot.current, ['--gw' as string]: `${carry.w * slot.current}px`, ['--gh' as string]: `${carry.h * slot.current}px` }}>
-          <span className="ew-inv-art"><ShipArt t={sizedType(carry.unit, g.rules?.sizes)} /></span>
+          <span className="ew-inv-art"><ShipArt t={UNIT[carry.unit]} /></span>
           {carry.of > 1 && <em>{carry.n}</em>}
         </div>,
         document.body,

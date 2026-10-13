@@ -1,11 +1,10 @@
-import { SHIP_SIZE_BLURB, SHIP_SIZE_NAMES, SHIP_SIZES, type ShipSizes } from './models/sizes.ts'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { DIFFICULTY, PROFILES, profileOf } from './ai'
 import { CREDIT_STEPS, FACTIONS, type FactionId } from './data'
 import { Frame, Icon, Tips } from './Hud'
 import { GENERATED, MAP, MAPS, MAX_SEED, generateMap, type MapDef } from './maps'
-import { AiPicker, GenControls, MapCard, MapLegend, MapPreview, Modal, Seg, mapSize, slotColor, type Slot } from './Menus'
+import { AiPicker, GenControls, MapCard, MapLegend, MapPreview, Modal, mapSize, slotColor, type Slot } from './Menus'
 import { NAME_MAX, nameProblem, randomName, tidyName } from './names'
 import { battleToRejoin, mpName, type Net, type NetView } from './net'
 import { CHAT_MAX, type MpLobby, type MpSlot, type SlotPatch } from './protocol'
@@ -291,7 +290,7 @@ function Room({ v, lobby, net, sound, children }: { v: NetView; lobby: MpLobby; 
     sound.click()
     net.send({ t: 'slot', i, patch })
   }
-  const setup = (m: { map?: string; gen?: MpLobby['gen']; credits?: number; sizes?: ShipSizes }) => {
+  const setup = (m: { map?: string; gen?: MpLobby['gen']; credits?: number }) => {
     sound.click()
     net.send({ t: 'setup', ...m })
   }
@@ -335,13 +334,6 @@ function Room({ v, lobby, net, sound, children }: { v: NetView; lobby: MpLobby; 
             ) : (
               <p className="ew-mp-value">{lobby.credits.toLocaleString('en-US')}</p>
             )}
-            <h5>Ship sizes</h5>
-            {host ? (
-              <Seg label="Ship sizes" value={lobby.sizes ?? 'classic'} options={SHIP_SIZES.map((v) => [v, SHIP_SIZE_NAMES[v]])} onChange={(v) => setup({ sizes: v })} />
-            ) : (
-              <p className="ew-mp-value">{SHIP_SIZE_NAMES[lobby.sizes ?? 'classic']}</p>
-            )}
-            <p className="ew-muted ew-small">{SHIP_SIZE_BLURB[lobby.sizes ?? 'classic']}</p>
             <div className="ew-launch">
               <span className="ew-muted ew-small">{blocker ?? `${sides[0]} against ${sides[1]}. Ready to go.`}</span>
               {host ? (

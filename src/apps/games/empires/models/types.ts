@@ -3,9 +3,9 @@
 // models/fx.ts touch a canvas.
 //
 // Model space: the origin is the middle of the unit's box (dims() in data.ts), x runs right and y
-// runs down, so the nose of a ship points at negative y, the way the sprites face. Ships are
-// drawn on a box whose long side is 100 units; a station uses the pixels of the frame its sprites
-// were cut from, so its modules can be placed exactly where data.ts puts them.
+// runs down, so the nose of a ship points at negative y, the way ships face on the map at rest. Ships
+// are drawn on a box whose long side is 100 units; a station uses the pixels of its frame (data.ts
+// STATIONS), so its modules can be placed exactly where data.ts puts them.
 
 export type Pt = [number, number]
 

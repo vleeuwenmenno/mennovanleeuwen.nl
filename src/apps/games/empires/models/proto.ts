@@ -4,10 +4,10 @@ import { edgeBand, nacelle } from './republic.ts'
 import type { BuildCtx, ModelDef, ModelSpec } from './spec.ts'
 import type { Detail, Part, Pt, Tone } from './types.ts'
 
-// The Republic's ships as they are under Big ship sizes (sizes.ts): bigger redesigns, built on the
-// Big unit type, whose hardpoints sit where BIG_LAYOUT in sizes.ts puts them: one turret per gun,
-// spread over the bigger hull with room between them, each on its own pad or barbette. The helpers
-// here (plates, seats, calm) are shared with the droid navy's and the Swarm's Big designs.
+// The Republic's warships at their size (sizes.ts), their hardpoints where BIG_LAYOUT in sizes.ts puts
+// them: one turret per gun, spread over the hull with room between them, each on its own pad or
+// barbette. The helpers here (plates, seats, calm) are shared with the droid navy's and the Swarm's
+// warships.
 //
 // The look is meant to read as big and slow: large, quiet surfaces with a few crisp details. Long
 // armour plates down the flanks, a raised deck, a trench, a strong stepped superstructure with its
@@ -69,7 +69,7 @@ export function seat(id: string, c: BuildCtx, i: number, r: number, z: number, h
 /**
  * Quietens a design for its Big size: rows of lights thinned (at most about `lights` a row), and
  * small greebles (dark or metal patches under `greeble` square units) left out. For the small ships
- * that are only a little bigger under Big: their shape stays, their surface calms down.
+ * that are only a little bigger than written: their shape stays, their surface calms down.
  */
 export function calm(spec: ModelSpec, lights = 4, greeble = 6): ModelSpec {
   const quiet = (d: Detail): Detail | null => {

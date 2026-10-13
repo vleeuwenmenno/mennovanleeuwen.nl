@@ -5,10 +5,9 @@ import * as classic from './swarm.ts'
 import { blobby, eye, thruster, vertebra } from './swarm.ts'
 import type { Part, Pt } from './types.ts'
 
-// The Swarm's concept ships as they would be under Big ship sizes (sizes.ts), shown only in the
-// Codex: the same organic, insect-like shapes, calmer, with fewer and longer segments, one violet
-// band where there were several, and one gun per hardpoint in its own fleshy socket. They stand on
-// the droid units' Big layouts (BIG_LAYOUT), as the Classic concepts stand on their hardpoints.
+// The Swarm's concept warships at their size (sizes.ts), shown only in the Codex: organic,
+// insect-like shapes, calm, with long segments, one violet band, and one gun per hardpoint in its own
+// fleshy socket. They stand on the droid units' layouts (BIG_LAYOUT).
 
 /** Swarm seats: a shell-coloured socket, a heavier bone collar with a violet band. */
 const SWARM_SEAT: SeatLook = { pad: 'hull2', heavy: 'hull', band: 'accent' }

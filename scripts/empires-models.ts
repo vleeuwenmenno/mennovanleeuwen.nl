@@ -2,8 +2,8 @@
 //
 //   node scripts/empires-models.ts
 //
-// 0. Every unit in data.ts has a model (full parity: nothing falls back to its sprite), and no two
-//    looks share a model key (the bitmap cache is keyed by it).
+// 0. Every unit in data.ts has a model (there are no sprites to fall back to), and no two looks
+//    share a model key (the bitmap cache is keyed by it).
 // 1. Every unit with a model builds without errors (every station level too), and its geometry is
 //    sound: real polygons, no NaN, parts inside a sane box.
 // 2. Its mounts are the unit's hardpoints, one each and in the same order, sitting on the hull.
@@ -15,15 +15,15 @@
 //    engine hardpoint carries that engine's glow; strike craft, gunships and structures burst into
 //    three or more real fragments.
 //
-// Every check runs on every ship as it is under Big ship sizes (models/sizes.ts bigType) too, the
-// Swarm's included: every ship bigger than strike craft has a Big redesign (proto*.ts), every one
-// with hardpoints has a Big layout, and its turrets have room between them. Every check runs on the Swarm concept designs too (swarm.ts, shown only in the Codex): each droid
-// unit built in the Swarm style, on that unit's own box and hardpoints.
+// Every ship bigger than strike craft is built at its size (models/sizes.ts), with a layout for its
+// hardpoints (BIG_LAYOUT) and its turrets spread out with room between them. Every check runs on the
+// Swarm concept designs too (swarm.ts, proto-swarm.ts, shown only in the Codex): each droid unit
+// built in the Swarm style, on that unit's own box and hardpoints.
 
 import { STATIONS, TECHS, UNITS, mineType, modulesFor, stationType, worksOf, yardType, type UnitType } from '../src/apps/games/empires/data.ts'
-import { BIG_LAYOUT, bigType } from '../src/apps/games/empires/models/sizes.ts'
+import { BIG_LAYOUT, sizeClass } from '../src/apps/games/empires/models/sizes.ts'
 import { inPart } from '../src/apps/games/empires/models/kit.ts'
-import { BREAK_WEIGHTS, SWARM, breakOutcome, breakPieces, buildModel, hasBigDesign, hasModel, hasSwarm, hullState, modelStyles, onHull, wreckState } from '../src/apps/games/empires/models/index.ts'
+import { BREAK_WEIGHTS, SWARM, breakOutcome, breakPieces, buildModel, hasModel, hasSwarm, hullState, modelStyles, onHull, wreckState } from '../src/apps/games/empires/models/index.ts'
 
 let failed = 0
 const fail = (msg: string) => {
@@ -34,7 +34,7 @@ const ok = (cond: boolean, msg: string) => {
   if (!cond) fail(msg)
 }
 
-// 0. Full parity: every unit in data.ts has a model, so none falls back to its sprite.
+// 0. Every unit in data.ts has a model.
 for (const t of UNITS) ok(hasModel(t), `${t.id} (${t.name}) has no model`)
 
 // Every modelled unit, every level of a modelled station with and without its research modules,
@@ -64,10 +64,9 @@ for (const t of UNITS) {
 console.log(`Models: ${types.length} unit types (${UNITS.filter(hasModel).map((t) => t.id).join(', ')})`)
 // Models are cached per look by key: two different types must never share one.
 const keys = new Map<string, UnitType>()
-/** Every look of a unit type: as it is, its design variants, its Swarm concept, and as it is under
- * Big (the redesign for the ships that have one, else scaled up). */
+/** Every look of a unit type: as it is, its design variants and its Swarm concept. */
 const looksOf = (t: UnitType, variants: boolean) =>
-  [t, ...(bigType(t) !== t ? [bigType(t)] : [])].flatMap((u) => [[u, undefined], ...(variants ? modelStyles(u).map((s) => [u, s]) : []), ...(hasSwarm(u) ? [[u, SWARM]] : [])]) as [UnitType, string | undefined][]
+  [[t, undefined], ...(variants ? modelStyles(t).map((s) => [t, s]) : []), ...(hasSwarm(t) ? [[t, SWARM]] : [])] as [UnitType, string | undefined][]
 for (const [t, style] of types.flatMap((t) => looksOf(t, false))) {
   const k = buildModel(t, style).key
   const other = keys.get(k)
@@ -76,17 +75,15 @@ for (const [t, style] of types.flatMap((t) => looksOf(t, false))) {
 }
 
 const looks = types.flatMap((t) => looksOf(t, true))
-console.log(`Looks: ${looks.length} (${looks.filter(([, s]) => s === SWARM).length} of them Swarm concepts, ${looks.filter(([t]) => t.big).length} Big redesigns)`)
-// Every ship bigger than strike craft has a Big size and redesign, in every look it has (the Swarm's
-// too), and a Big layout for its hardpoints, one entry each.
-for (const t of UNITS.filter((u) => u.tier !== 'fighter' && u.tier !== 'station' && u.tier !== 'mine' && u.tier !== 'defense' && u.tier !== 'yard')) {
-  ok(bigType(t) !== t, `${t.id}: no Big size`)
-  ok(hasBigDesign(t), `${t.id}: no Big redesign`)
-  if (hasSwarm(t)) ok(hasBigDesign(t, SWARM), `${t.id}: no Big redesign of its Swarm concept`)
-  if (t.hardpoints.length) ok(BIG_LAYOUT[t.id]?.length === t.hardpoints.length, `${t.id}: its Big layout has ${BIG_LAYOUT[t.id]?.length ?? 0} entries for ${t.hardpoints.length} hardpoints`)
+console.log(`Looks: ${looks.length} (${looks.filter(([, s]) => s === SWARM).length} of them Swarm concepts)`)
+// Every ship bigger than strike craft is built bigger than written, with a layout for its
+// hardpoints, one entry each; the yards grow with what they build.
+for (const t of UNITS.filter((u) => u.tier !== 'fighter' && u.tier !== 'station' && u.tier !== 'mine' && u.tier !== 'defense')) {
+  ok(sizeClass(t) > 1, `${t.id}: not built at a size of its own`)
+  if (t.hardpoints.length && t.tier !== 'yard') ok(BIG_LAYOUT[t.id]?.length === t.hardpoints.length, `${t.id}: its layout has ${BIG_LAYOUT[t.id]?.length ?? 0} entries for ${t.hardpoints.length} hardpoints`)
 }
 for (const [t, style] of looks) {
-  const label = `${t.id}${t.tier === 'station' ? ` (${t.sprite}, ${t.hardpoints.length} modules)` : ''}${t.big ? ' [big]' : ''}${style ? ` [${style}]` : ''}`
+  const label = `${t.id}${t.tier === 'station' ? ` (${t.sprite}, ${t.hardpoints.length} modules)` : ''}${style ? ` [${style}]` : ''}`
   let m
   try {
     m = buildModel(t, style)
@@ -108,9 +105,9 @@ for (const [t, style] of looks) {
   // 2. Hardpoints: one mount each, in order, nothing more.
   const real = m.mounts
   ok(real.length === t.hardpoints.length, `${label}: ${real.length} mounts for ${t.hardpoints.length} hardpoints`)
-  // A Big redesign spreads its turrets out: no two closer than their radii together and half again
-  // (room for the pad round each), and none on a part that can be shot off.
-  if (t.big && hasBigDesign(t, style)) {
+  // A warship spreads its turrets out: no two closer than their radii together and half again (room
+  // for the pad round each), and none on a part that can be shot off.
+  if (BIG_LAYOUT[t.id]) {
     const guns = m.mounts.filter((mt) => mt.design !== 'engine')
     for (let i = 0; i < guns.length; i++)
       for (let j = i + 1; j < guns.length; j++) {

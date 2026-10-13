@@ -365,8 +365,8 @@ export function inset(pts: Pt[], d: number): Pt[] {
 export type Palette = Record<Tone, [string, string, string]> & { outline: string; smoke: string; debris: string; /** Engine light, for the glow drawn behind the nozzles. */ engine: string }
 
 /**
- * Republic warships are off-white with deep red bands, grey machinery and blue engine light, as
- * their sprites are. The droid navy is weathered sand and bone with rust-brown and dull blue-grey
+ * Republic warships are off-white with deep red bands, grey machinery and blue engine light. The
+ * droid navy is weathered sand and bone with rust-brown and dull blue-grey
  * plating over dark gunmetal, red and amber sensor eyes (its `glass`) and blue-white engines.
  * Shadows lean cool, the way the cartoon shades them. Two roles mark a job rather than a side:
  * `aid` is the green of repair craft, `trim` the gold of a station's own defense wing.

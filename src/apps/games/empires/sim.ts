@@ -3,7 +3,7 @@ import { sq } from './detmath.ts'
 import { inside, mirrored, rng, type MapDef, type Pt } from './maps.ts'
 import { clearLine, findPath, navGrid, type NavGrid } from './nav.ts'
 import { mapDist, rangeDist } from './scale.ts'
-import { BIG_SPREAD, SIZE_CLASSES, sizedType, type ShipSizes } from './models/sizes.ts'
+import { BIG_SPREAD, sizeClass } from './models/sizes.ts'
 import {
   ABILITIES, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
@@ -269,8 +269,6 @@ export type Rock = { x: number; y: number; r: number; rot: number; spin: number;
  * drift off after `decay` seconds. `team` is who's salvaging it right now (-1 for nobody). */
 export type Wreck = {
   id: number; x: number; y: number; value: number; left: number; sprite: string; size: number; rot: number; decay: number; team: number
-  /** The hulk of a Big ship (sizes.ts), drawn with its Big design. */
-  big?: boolean
 }
 /** How close (from the hulk's centre) a ship must park to salvage, and credits a second per ship (up to three). */
 export const SALVAGE_RANGE = 240
@@ -351,9 +349,6 @@ export type World = {
   /** A galactic conquest fleet battle: no mining or building, only the fleets (and the defender's
    * station). A side is beaten once it has nothing left on the field or waiting in orbit. */
   fleet?: FleetRules
-  /** Ship sizes, picked for the match (models/sizes.ts): 'big', or left out for Classic (battles
-   * saved before there was a choice are Classic). */
-  sizes?: ShipSizes
   /** Hybrid bases: the station is a Command Station and engineers build the yards round it (see
    * BUILD_RADIUS). Battles saved before there were yards, and galactic conquest's fleet battles,
    * don't have it: their station is the whole shipyard, as it always was. */
@@ -386,11 +381,9 @@ const wrap = (a: number) => ((a + Math.PI) % TAU + TAU) % TAU - Math.PI
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v)
 const d2 = (ax: number, ay: number, bx: number, by: number) => sq(ax - bx) + sq(ay - by)
 
-/** The unit type an id stands for in this battle: as written, or its Big version (sizes.ts). */
-export const typeOf = (w: World, id: string): UnitType => sizedType(id, w.sizes)
-/** How much further apart a group of ships keeps under Big: its biggest ship's size class, at
- * least BIG_SPREAD. 1 in Classic. */
-const spreadOf = (w: World, us: Unit[]) => (w.sizes === 'big' ? Math.max(BIG_SPREAD, ...us.map((u) => SIZE_CLASSES[u.t.tier])) : 1)
+/** How much further apart a group of ships keeps: its biggest ship's size class, at least
+ * BIG_SPREAD (models/sizes.ts). */
+const spreadOf = (us: Unit[]) => Math.max(BIG_SPREAD, ...us.map((u) => sizeClass(u.t)))
 /** How hard a ship speeds up and brakes, before its tier's factor (see steer). */
 const accOf = (t: UnitType) => t.speed * (t.accel ?? 1)
 
@@ -552,7 +545,7 @@ const gunsOf = (w: World, t: UnitType): Gun[] =>
 
 export function spawn(w: World, id: string, owner: Owner, x: number, y: number, a: number, squad = 0): Unit {
   const p = w.players[owner]
-  const t = UNIT[id].tier === 'station' ? stationType(p.faction, p.level, p.techs) : typeOf(w, id)
+  const t = UNIT[id].tier === 'station' ? stationType(p.faction, p.level, p.techs) : UNIT[id]
   const mods = modsFor(p, t)
   const hullMax = t.hull * mods.hull
   const u: Unit = {
@@ -570,7 +563,7 @@ export function spawn(w: World, id: string, owner: Owner, x: number, y: number, 
 
 /** A whole order's worth: one ship, or a squadron of fighters in a loose vee. */
 export function spawnGroup(w: World, id: string, owner: Owner, x: number, y: number, a: number) {
-  const t = typeOf(w, id)
+  const t = UNIT[id]
   const squad = t.squad > 1 ? w.squadSeq++ : 0
   const out: Unit[] = []
   for (let i = 0; i < t.squad; i++) {
@@ -625,7 +618,7 @@ export function autoStart(w: World, area: { x: number; y: number; w: number; h: 
   return best ?? mid
 }
 
-export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; credits?: number; fleet?: boolean; sizes?: ShipSizes } = {}): World {
+export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; credits?: number; fleet?: boolean } = {}): World {
   const r = rng(opts.seed ?? map.seed)
   const W = map.w
   const H = map.h
@@ -634,8 +627,6 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
   const w: World = {
     w: W, h: H, time: 0, units: [], byId: new Map(), players: [], teams, map, nodes: [], beacons: [], rocks: [], wrecks: [], shots: [], events: [],
     nextId: 1, squadSeq: 1, wreckSeq: 1000, rs: ((opts.seed ?? map.seed) ^ 0x9e3779b9) >>> 0, winner: -1, grid: new Map(), seenT: 0, nav: new Map(), arrivals: [],
-    // Classic worlds don't carry the field at all, so they stay exactly as they were.
-    ...(opts.sizes === 'big' ? { sizes: 'big' as const } : {}),
     // Skirmishes and multiplayer battles have hybrid bases; galactic conquest's fleet battles don't.
     ...(opts.fleet ? {} : { hybrid: true, ruins: [] }),
   }
@@ -659,15 +650,15 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
   w.nodes = map.ore.map((p, id) => ({ id, x: p.x, y: p.y, r: 75, rot: r() * TAU, site: 0, ...claim }))
   w.beacons = map.beacons.map((p, id) => ({ id, x: p.x, y: p.y, ...claim }))
   // Scattered rocks: each one is copied to every side by the map's symmetry, so nobody gets the
-  // better lanes. They keep clear of stations, ore, beacons, asteroid fields and the lanes into the
-  // middle.
+  // better lanes. They keep clear of ore, beacons, asteroid fields and the lanes into the middle, and
+  // of the ground round each station's start where its yards go up (the build radius).
   // Map wrecks: the big hulks of earlier battles, Republic or droid as the seed falls.
   w.wrecks = map.wrecks.map((h, i) => {
     const big = h.value >= 900
     const side = r() < 0.5 ? 'republic' : 'droid'
     return { id: i + 1, x: h.x, y: h.y, value: h.value, left: h.value, sprite: `${side}-${big ? 'capital' : 'cruiser'}`, size: big ? 340 : 220, rot: r() * TAU, decay: Infinity, team: -1 }
   })
-  const keepClear = [...w.wrecks.map((h) => [h.x, h.y, h.size * 0.6]), ...w.nodes.map((n) => [n.x, n.y, 260]), ...w.beacons.map((b) => [b.x, b.y, 330]), ...map.spawns.map((p) => [p.x, p.y, mapDist(700)])]
+  const keepClear = [...w.wrecks.map((h) => [h.x, h.y, h.size * 0.6]), ...w.nodes.map((n) => [n.x, n.y, 260]), ...w.beacons.map((b) => [b.x, b.y, 330]), ...map.spawns.map((p) => [p.x, p.y, BUILD_RADIUS])]
   const inLane = (x: number, y: number, rad: number) =>
     map.spawns.some((p) => {
       // Distance from the point to the segment between this spawn and the centre.
@@ -727,7 +718,7 @@ const commandable = (u: Unit | undefined, owner: Owner): u is Unit => !!u && !u.
  * A spot a ship can actually reach: moved out to the edge of any rock it falls inside, and clear of
  * every structure (station, platform), which never budge while a warship keeps HULL_GAP clear of
  * every hull: a spot overlapping one could never be reached, and the ship would be pushed back from
- * it for ever. Big ship sizes made that easy to run into. Two passes, for a spot between two.
+ * it for ever. Big hulls made that easy to run into. Two passes, for a spot between two.
  */
 function offRocks(w: World, u: Unit, x: number, y: number): Pt {
   if (u.t.tier === 'fighter') return { x, y }
@@ -803,7 +794,7 @@ function formation(w: World, owner: Owner, ids: number[], x: number, y: number, 
   const cx = us.reduce((s, u) => s + u.x, 0) / us.length
   const cy = us.reduce((s, u) => s + u.y, 0) / us.length
   const spread = Math.max(1, ...us.map((u) => M.hypot(u.x - cx, u.y - cy)))
-  const fit = Math.min(1, ((90 + Math.sqrt(us.length) * 70) * spreadOf(w, us)) / spread)
+  const fit = Math.min(1, ((90 + Math.sqrt(us.length) * 70) * spreadOf(us)) / spread)
   // A group keeps the pace of its slowest ship.
   const pace = us.length > 1 ? Math.min(...us.map((u) => speedOf(u))) : Infinity
   for (const u of us) {
@@ -950,7 +941,7 @@ export function faceTargets(w: World, owner: Owner, ids: number[], x: number, y:
   const cx = all.reduce((s, u) => s + u.x, 0) / all.length
   const cy = all.reduce((s, u) => s + u.y, 0) / all.length
   const spread = Math.max(1, ...all.map((u) => M.hypot(u.x - cx, u.y - cy)))
-  const fit = Math.min(1, ((90 + Math.sqrt(all.length) * 70) * spreadOf(w, all)) / spread)
+  const fit = Math.min(1, ((90 + Math.sqrt(all.length) * 70) * spreadOf(all)) / spread)
   // Turned from the way it would fly there to the way it should face.
   const turn = face - M.atan2(y - cy, x - cx)
   const c = M.cos(turn)
@@ -1420,7 +1411,7 @@ export function canSee(w: World, team: number, x: number, y: number) {
  * Asteroid fields and nebulas are allowed (a field costs hull on arrival).
  */
 export function cantWarp(w: World, owner: Owner, id: string, x: number, y: number): string | null {
-  const t = typeOf(w, id)
+  const t = UNIT[id]
   const r = radius(t)
   if (x < r + 40 || y < r + 40 || x > w.w - r - 40 || y > w.h - r - 40) return 'Off the map'
   const entry = w.fleet?.entry[owner]
@@ -1430,7 +1421,7 @@ export function cantWarp(w: World, owner: Owner, id: string, x: number, y: numbe
   if (w.nodes.some((n) => d2(x, y, n.x, n.y) < sq(n.r + r))) return 'An ore asteroid is in the way'
   // (Another side's yard nobody has started on isn't there yet, as far as we know.)
   if (w.units.some((u) => !u.dead && u.t.tier !== 'fighter' && !(planned(u) && u.owner !== owner) && d2(x, y, u.x, u.y) < sq((radius(u.t) + r) * 0.85))) return 'Something is in the way'
-  if (w.arrivals.some((a) => d2(x, y, a.x, a.y) < sq(radius(typeOf(w, a.unit)) + r))) return 'Another ship is jumping in there'
+  if (w.arrivals.some((a) => d2(x, y, a.x, a.y) < sq(radius(UNIT[a.unit]) + r))) return 'Another ship is jumping in there'
   return null
 }
 
@@ -1454,7 +1445,7 @@ export function cmdDeploy(w: World, owner: Owner, id: string, x: number, y: numb
 /** Where a new ship from the shipyard drops out: beside the station, towards the rally point, on
  * the first clear spot round it. */
 function yardSpot(w: World, o: Owner, st: Unit, id: string, rally: Pt = w.players[o].rally) {
-  const t = typeOf(w, id)
+  const t = UNIT[id]
   const toward = M.atan2(rally.y - st.y, rally.x - st.x)
   const reach = radius(st.t) + radius(t) + 70
   for (let ring = 0; ring < 4; ring++)
@@ -1466,7 +1457,7 @@ function yardSpot(w: World, o: Owner, st: Unit, id: string, rally: Pt = w.player
       const blocked =
         w.rocks.some((k) => d2(x, y, k.x, k.y) < sq(k.r + radius(t))) ||
         w.units.some((u) => !u.dead && u !== st && u.t.tier !== 'fighter' && d2(x, y, u.x, u.y) < sq(radius(u.t) + radius(t))) ||
-        w.arrivals.some((a) => d2(x, y, a.x, a.y) < sq(radius(typeOf(w, a.unit)) + radius(t)))
+        w.arrivals.some((a) => d2(x, y, a.x, a.y) < sq(radius(UNIT[a.unit]) + radius(t)))
       if (!blocked) return { x: clamp(x, 60, w.w - 60), y: clamp(y, 60, w.h - 60), a: toward }
     }
   return { x: st.x + M.cos(toward) * reach, y: st.y + M.sin(toward) * reach, a: toward }
@@ -2076,7 +2067,7 @@ function launch(w: World, carrier: Unit, extra = false) {
 function leaveWreck(w: World, u: Unit) {
   if (u.t.tier !== 'frigate' && u.t.tier !== 'cruiser' && u.t.tier !== 'capital') return
   const value = Math.round((u.t.cost * 0.3) / 10) * 10
-  w.wrecks.push({ id: w.wreckSeq++, x: u.x, y: u.y, value, left: value, sprite: u.t.sprite, size: u.t.size, rot: u.a + Math.PI / 2, decay: 180, team: -1, ...(u.t.big ? { big: true } : {}) })
+  w.wrecks.push({ id: w.wreckSeq++, x: u.x, y: u.y, value, left: value, sprite: u.t.sprite, size: u.t.size, rot: u.a + Math.PI / 2, decay: 180, team: -1 })
 }
 
 /**
@@ -2358,9 +2349,8 @@ const HULL_GAP = 8
  * flagship would be pushed back off it for ever.
  */
 let bigReach = 0
-const keepApartReach = (w: World) => {
-  if (w.sizes !== 'big') return 240
-  if (!bigReach) bigReach = Math.max(240, ...UNITS.map((t) => radius(sizedType(t.id, 'big')) + HULL_GAP + 4))
+const keepApartReach = () => {
+  if (!bigReach) bigReach = Math.max(240, ...UNITS.map((t) => radius(t) + HULL_GAP + 4))
   return bigReach
 }
 /** Room a warship leaves either side of itself on the arc, on top of its hull. */
@@ -2773,7 +2763,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
     const bx = u.x
     const by = u.y
     const mine = pushClass(u)
-    near(w, u.x, u.y, r0 + keepApartReach(w), (o, dd) => {
+    near(w, u.x, u.y, r0 + keepApartReach(), (o, dd) => {
       if (o === u || o.t.tier === 'fighter' || planned(o)) return
       const touch = r0 + radius(o.t)
       const min = touch + HULL_GAP
@@ -3601,8 +3591,8 @@ export type FleetSide = { faction: FactionId; team: number; ships: string[]; res
  * battle has no economy (cantBuild, placement and moduleLock refuse while `fleet` is set), so a
  * planet fights with what it has, and builds in the galaxy's queue.
  */
-export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: number; cap?: number; sizes?: ShipSizes } = {}): World {
-  const w = newWorld(map, sides.map((s, i) => ({ faction: s.faction, team: s.team, spawn: i, incomeMul: 0 })), { seed: opts.seed, credits: 0, fleet: true, sizes: opts.sizes })
+export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: number; cap?: number } = {}): World {
+  const w = newWorld(map, sides.map((s, i) => ({ faction: s.faction, team: s.team, spawn: i, incomeMul: 0 })), { seed: opts.seed, credits: 0, fleet: true })
   const cap = opts.cap ?? FLEET_CAP
   const c = { x: w.w / 2, y: w.h / 2 }
   w.fleet = { entry: sides.map((_, i) => ({ x: map.spawns[i].x, y: map.spawns[i].y, r: mapDist(1300) })), cap, holder: sides[0].team, endT: 3 }
@@ -3641,7 +3631,7 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
     field.forEach((id, i) => {
       const row = Math.floor(i / perRow)
       const col = (i % perRow) - (Math.min(perRow, field.length - row * perRow) - 1) / 2
-      const gap = Math.max(170, radius(typeOf(w, id)) * 2.4)
+      const gap = Math.max(170, radius(UNIT[id]) * 2.4)
       const x = sp.x + fx * (ahead - row * 260) - fy * col * gap
       const y = sp.y + fy * (ahead - row * 260) + fx * col * gap
       // The holder is already there; the others arrive from hyperspace, a few at a time.
@@ -3672,9 +3662,9 @@ export function baseSpots(w: World, st: Unit, kinds: ('yard' | 'cyard')[], attac
     const { hl, hw } = box(kind)
     const flank = kind === 'yard' ? 1 : -1
     let spot: { x: number; y: number; a: number } | null = null
-    for (const turn of [1.1, 1.45, 0.75, 1.8, 0.4, 2.2, 2.6, 0])
+    for (const turn of [1.1, 1.45, 0.75, 1.8, 0.4, 1.25, 0.95, 1.6, 0.6, 0.2, 2.2, 2.6, 0])
       for (const side of [flank, -flank])
-        for (const d of [mapDist(1150), mapDist(1450), mapDist(900), mapDist(1650)]) {
+        for (const d of [mapDist(1150), mapDist(1450), mapDist(900), mapDist(1650), mapDist(1300), mapDist(1000), mapDist(1740)]) {
           if (spot) break
           const b = away + side * turn
           const x = st.x + M.cos(b) * d

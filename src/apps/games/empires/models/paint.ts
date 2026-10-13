@@ -275,8 +275,8 @@ export function paintModel(g: CanvasRenderingContext2D, m: Model, o: PaintOpts) 
     }
   }
   if (o.wreckMounts) {
-    // A dead hulk: its lights out and the whole of it dimmed and browned, as the sprites' wrecks
-    // are, so it never reads as a live ship.
+    // A dead hulk: its lights out and the whole of it dimmed and browned, so it never reads as a
+    // live ship.
     g.save()
     g.clip(sil)
     g.fillStyle = 'rgba(26,18,14,0.5)'
@@ -458,7 +458,7 @@ function drawLit(ctx: CanvasRenderingContext2D, rot: number, n: number, bitmap: 
 export type DrawOpts = { alpha?: number; debug?: boolean; wreck?: boolean; /** Light it as if turned this way (default: as drawn). */ lightRot?: number }
 
 /**
- * A hull at (x, y) turned by `rot` (nose up at 0, as sprites), `size` world units on its long side,
+ * A hull at (x, y) turned by `rot` (nose up at 0), `size` world units on its long side,
  * on a context scaled by `zdpr` device pixels per world unit.
  */
 export function drawHull(ctx: CanvasRenderingContext2D, m: Model, x: number, y: number, rot: number, size: number, zdpr: number, state: HullState, o: DrawOpts = {}) {
@@ -725,6 +725,33 @@ export function thumbnail(m: Model, px: number, dead?: readonly boolean[]) {
     thumbs.delete(k)
   }
   return out
+}
+
+/**
+ * A small still picture of one expansion module on its own (the parts of model `m` that go with
+ * hardpoint `hp`), nose up, `px` on its long side, as a data URL: for the queues and cards that show
+ * a module being built. Painted once per look and kept with the other thumbnails.
+ */
+export function moduleThumbnail(m: Model, hp: number, px: number) {
+  const key = `${m.key}|x${hp}|${px}`
+  const hit = thumbs.get(key)
+  if (hit) return hit.url
+  const parts = m.parts.filter((p) => p.detach?.hp === hp && p.pts.length >= 3)
+  if (!parts.length) return ''
+  const b = bounds(parts.flatMap((p) => p.pts))
+  const span = Math.max(b.x1 - b.x0, b.y1 - b.y0)
+  const pad = span * 0.06
+  const ppu = px / (span + pad * 2)
+  const c = document.createElement('canvas')
+  c.width = Math.ceil((b.x1 - b.x0 + pad * 2) * ppu)
+  c.height = Math.ceil((b.y1 - b.y0 + pad * 2) * ppu)
+  const g = c.getContext('2d')!
+  g.scale(ppu, ppu)
+  g.translate(pad - b.x0, pad - b.y0)
+  paintParts(g, parts, PALETTES[m.faction], lightFor(0), ppu)
+  const url = c.toDataURL('image/png')
+  thumbs.set(key, { url, pad })
+  return url
 }
 
 /** Which of a unit's engine glows still burn: an engine part that came off takes its glow along. */

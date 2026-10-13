@@ -1,7 +1,7 @@
 // Checks Empires At War's hybrid bases (step 1: the Command Station, engineer squadrons and the
 // Frigate Yard), headless and deterministic:
 //
-//   node scripts/empires-yards.ts [big]
+//   node scripts/empires-yards.ts
 //
 // - Placement: inside the build radius and clear of everything it may go; outside the radius, on
 //   the station, on ore, at the map's edge, before station level 2 or a second one, it may not.
@@ -23,7 +23,6 @@ import {
   type Unit, type Wreck, type World,
 } from '../src/apps/games/empires/sim.ts'
 
-const big = process.argv[2] === 'big'
 let failed = 0
 const check = (what: string, ok: boolean, detail = '') => {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}${detail ? `: ${detail}` : ''}`)
@@ -35,7 +34,7 @@ const fresh = (): World => {
   const w = newWorld(map, [
     { faction: 'republic', team: 0, spawn: 0 },
     { faction: 'droid', team: 1, spawn: 1 },
-  ], { seed: 77, credits: 20000, ...(big ? { sizes: 'big' as const } : {}) })
+  ], { seed: 77, credits: 20000 })
   for (const p of w.players) p.level = 2
   return w
 }
@@ -185,7 +184,12 @@ const buildTime = (squads: number) => {
   const spot = spotFor(w)
   // Engineers far away, so the work hasn't started yet when it's cancelled.
   const eng = engineers(w)
-  for (const u of eng) u.x = Math.max(60, u.x - 1500)
+  const s0 = w.byId.get(p.station)!
+  const away = Math.atan2(s0.y - spot.y, s0.x - spot.x)
+  for (const u of eng) {
+    u.x = Math.min(w.w - 60, Math.max(60, s0.x + Math.cos(away) * 1500))
+    u.y = Math.min(w.h - 60, Math.max(60, s0.y + Math.sin(away) * 1500))
+  }
   cmdPlace(w, 0, ids(eng), RY, spot.x, spot.y)
   run(w, 1)
   const site = yardOn(w)!

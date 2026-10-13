@@ -22,17 +22,19 @@ import type { BreakKind, HullState, Model, Mount, MountDesign, Part, Pt, Scorch 
 
 export type { HullState, Model } from './types.ts'
 
-/** The designs, by unit id. A station's id covers all its levels: the design grows with the level. */
+/** The designs, by unit id. A station's id covers all its levels: the design grows with the level.
+ * The warships bigger than strike craft are drawn at their size (models/sizes.ts) with their guns
+ * spread out: their designs are in proto.ts and proto-droid.ts. */
 const DEFS: Record<string, ModelDef> = {
   'r-fighter': republic.fighter,
   'r-bomber': republic.bomber,
   'r-repair': republic.repair,
   'r-picket': republic.picket,
-  'r-gunship': republic.gunship,
-  'r-corvette': republic.corvette,
-  'r-frigate': republic.frigate,
-  'r-cruiser': republic.cruiser,
-  'r-capital': republic.capital,
+  'r-gunship': proto.gunship,
+  'r-corvette': proto.corvette,
+  'r-frigate': proto.frigate,
+  'r-cruiser': proto.cruiser,
+  'r-capital': proto.capital,
   'r-station': republic.station,
   'r-mine': republic.mine,
   'r-defense': republic.defense,
@@ -43,16 +45,16 @@ const DEFS: Record<string, ModelDef> = {
   'd-bomber': droid.bomber,
   'd-repair': droid.repair,
   'd-picket': droid.picket,
-  'd-gunship': droid.gunship,
-  'd-ion': droid.ion,
-  'd-frigate': droid.frigate,
-  'd-cruiser': droid.cruiser,
-  'd-capital': droid.capital,
+  'd-gunship': protoDroid.gunship,
+  'd-ion': protoDroid.ion,
+  'd-frigate': protoDroid.frigate,
+  'd-cruiser': protoDroid.cruiser,
+  'd-capital': protoDroid.capital,
   'd-mine': droid.mine,
   'd-defense': droid.defense,
   'd-defense-flak': droid.defense,
   'd-defense-gun': droid.defense,
-  // Hybrid bases: the engineers and the Frigate Yards (base.ts).
+  // Hybrid bases: the engineers and the yards (base.ts).
   'r-engineer': base.republicEngineer,
   'd-engineer': base.droidEngineer,
   'r-yard': base.republicYard,
@@ -62,49 +64,31 @@ const DEFS: Record<string, ModelDef> = {
 }
 
 /**
- * The Swarm: a concept kit for a future third faction (swarm.ts), one design for each droid unit,
- * on the same box and hardpoints. Never used in battle: the Codex shows them under "Swarm
- * (concept)", built with the style SWARM.
+ * The Swarm: a concept kit for a future third faction (swarm.ts, its warships in proto-swarm.ts),
+ * one design for each droid unit, on the same box and hardpoints. Never used in battle: the Codex
+ * shows them under "Swarm (concept)", built with the style SWARM.
  */
-const SWARM_DEFS: Record<string, ModelDef> = Object.fromEntries(
-  (['fighter', 'station', 'bomber', 'repair', 'picket', 'gunship', 'ion', 'frigate', 'cruiser', 'capital', 'mine', 'defense', 'defense-flak', 'defense-gun'] as const).map((k) => [
-    `d-${k}`,
-    k.startsWith('defense') ? swarm.defense : swarm[k as Exclude<typeof k, 'defense-flak' | 'defense-gun'>],
-  ]),
-)
-/** The style that builds a droid unit as its Swarm concept design. */
-export const SWARM = 'swarm'
-export const hasSwarm = (t: UnitType) => t.id in SWARM_DEFS
-/** A Swarm design's own name (the droid unit it mirrors has a droid-navy name). */
-export const swarmName = (t: UnitType) => swarm.SWARM_NAMES[t.id] ?? t.name
-
-/**
- * The Big redesigns (proto.ts, proto-droid.ts, proto-swarm.ts): what every ship above strike craft
- * looks like under Big ship sizes (sizes.ts). A Big unit type (bigType) is built with these, the
- * Swarm's in the style SWARM.
- */
-const BIG_DEFS: Record<string, ModelDef> = {
-  'r-gunship': proto.gunship,
-  'r-corvette': proto.corvette,
-  'r-frigate': proto.frigate,
-  'r-cruiser': proto.cruiser,
-  'r-capital': proto.capital,
-  'd-gunship': protoDroid.gunship,
-  'd-ion': protoDroid.ion,
-  'd-frigate': protoDroid.frigate,
-  'd-cruiser': protoDroid.cruiser,
-  'd-capital': protoDroid.capital,
-}
-const SWARM_BIG_DEFS: Record<string, ModelDef> = {
+const SWARM_DEFS: Record<string, ModelDef> = {
+  'd-fighter': swarm.fighter,
+  'd-station': swarm.station,
+  'd-bomber': swarm.bomber,
+  'd-repair': swarm.repair,
+  'd-picket': swarm.picket,
   'd-gunship': protoSwarm.gunship,
   'd-ion': protoSwarm.ion,
   'd-frigate': protoSwarm.frigate,
   'd-cruiser': protoSwarm.cruiser,
   'd-capital': protoSwarm.capital,
+  'd-mine': swarm.mine,
+  'd-defense': swarm.defense,
+  'd-defense-flak': swarm.defense,
+  'd-defense-gun': swarm.defense,
 }
-/** Whether a unit has a Big redesign of its own (in the style `style`), rather than its Classic
- * model drawn bigger. */
-export const hasBigDesign = (t: UnitType, style = '') => t.id in (style === SWARM ? SWARM_BIG_DEFS : BIG_DEFS)
+/** The style that builds a droid unit as its Swarm concept design. */
+export const SWARM = 'swarm'
+export const hasSwarm = (t: UnitType) => t.id in SWARM_DEFS
+/** A Swarm design's own name (the droid unit it mirrors has a droid-navy name). */
+export const swarmName = (t: UnitType) => swarm.SWARM_NAMES[t.id] ?? t.name
 
 export const hasModel = (t: UnitType) => t.id in DEFS
 
@@ -152,8 +136,7 @@ const DETACH_BY_DEFAULT: MountDesign[] = ['flak']
 
 export function buildModel(t: UnitType, style?: string): Model {
   const concept = style === SWARM
-  // A Big unit type (sizes.ts) is built with its Big redesign where it has one.
-  const def = (t.big ? (concept ? SWARM_BIG_DEFS : BIG_DEFS)[t.id] : undefined) ?? (concept ? SWARM_DEFS : DEFS)[t.id]
+  const def = (concept ? SWARM_DEFS : DEFS)[t.id]
   if (!def) throw new Error(`No ${concept ? 'Swarm ' : ''}model for ${t.id}`)
   let w: number
   let h: number
@@ -191,7 +174,7 @@ export function buildModel(t: UnitType, style?: string): Model {
   const parts = [...spec.parts.filter((p) => (p.level ?? 1) <= level), ...extra, ...sockets].sort((a, b) => a.z - b.z)
   // A mining platform with its Shield generator fitted, or a yard with expansions built onto it, is
   // a type of its own with more sockets, so its key names its modules too, as a station's does.
-  const key = `${t.tier === 'station' ? `${t.id}:${level}:${t.hardpoints.map((p) => p.key).join(',')}` : t.tier === 'mine' || t.tier === 'yard' ? `${t.id}:${t.hardpoints.map((p) => p.key).join(',')}` : t.id}${t.big ? ':big' : ''}${style ? `:${style}` : ''}`
+  const key = `${t.tier === 'station' ? `${t.id}:${level}:${t.hardpoints.map((p) => p.key).join(',')}` : t.tier === 'mine' || t.tier === 'yard' ? `${t.id}:${t.hardpoints.map((p) => p.key).join(',')}` : t.id}${style ? `:${style}` : ''}`
   const seed = seedOf(t.tier === 'station' ? `${t.id}:${level}` : t.id)
   return {
     key,

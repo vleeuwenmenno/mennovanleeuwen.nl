@@ -1,7 +1,7 @@
 // Checks Empires At War's hybrid bases, step 2 (the Capital Yard and the expansion modules),
 // headless and deterministic:
 //
-//   node scripts/empires-modules.ts [big]
+//   node scripts/empires-modules.ts
 //
 // - The Capital Yard: from station level 3, built by engineers; it builds the cruisers (the Command
 //   Station no longer does), and the flagships only with its Capital slip, which needs level 4.
@@ -26,7 +26,6 @@ import {
   spawn, spawnGroup, stateHash, tick, yardsOf, type Unit, type World,
 } from '../src/apps/games/empires/sim.ts'
 
-const big = process.argv[2] === 'big'
 let failed = 0
 const check = (what: string, ok: boolean, detail = '') => {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}${detail ? `: ${detail}` : ''}`)
@@ -39,7 +38,7 @@ const fresh = (level = 4): World => {
   const w = newWorld(map, [
     { faction: 'republic', team: 0, spawn: 0 },
     { faction: 'droid', team: 1, spawn: 1 },
-  ], { seed: 91, credits: 60000, ...(big ? { sizes: 'big' as const } : {}) })
+  ], { seed: 91, credits: 60000 })
   for (const p of w.players) p.level = level
   return w
 }
@@ -388,7 +387,7 @@ const throughput = (slip: boolean) => {
     }
     if (t % 30 === 0 && (stateHash(a) !== stateHash(c) || stateHash(a) !== stateHash(b))) same = false
   }
-  check(`a restored battle with expansions stays in sync${big ? ' (Big)' : ''}`, same, `hash ${stateHash(a).toString(16)}`)
+  check('a restored battle with expansions stays in sync', same, `hash ${stateHash(a).toString(16)}`)
   const y = yardsOf(c, 0).find((u) => u.t.id === 'r-yard')!
   check('and its expansions came through the save', !!y.xm?.includes('secondSlip') && !!y.xm?.includes('armourWorks') && !!yardsOf(c, 0).find((u) => u.t.id === 'r-cyard')?.xm?.includes('fighterWing'))
 }
@@ -418,5 +417,5 @@ const throughput = (slip: boolean) => {
   check('and runs', pre.time > 4.9)
 }
 
-console.log(failed ? `\n${failed} check(s) failed` : `\nAll module checks passed${big ? ' (Big ship sizes)' : ''}`)
+console.log(failed ? `\n${failed} check(s) failed` : '\nAll module checks passed')
 process.exit(failed ? 1 : 0)

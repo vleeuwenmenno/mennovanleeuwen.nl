@@ -1,17 +1,18 @@
 // Empires At War: the two factions, their ships and the numbers behind them. No DOM here, so the
 // headless balance sims can load it too.
 //
-// Sprites face up (nose at the top). Points on a ship (hardpoints, engine glows) are given on a
-// 0-10 grid over the trimmed sprite, x from the left edge and y from the nose, which is how they
-// were measured off the art.
+// Ships face up (nose at the top). Points on a ship (hardpoints, engine glows) are given on a 0-10
+// grid over its box (see dims), x from the left edge and y from the nose: where its model
+// (models/) puts its guns and modules.
 //
-// Frigates and everything bigger are clean hulls with empty sockets: every gun, shield generator,
-// hangar and station module is a hardpoint drawn as its own sprite (public/games/empires/modules),
-// so what a ship shows is exactly what it has. Engines stay part of the hull.
+// Frigates and everything bigger carry every gun, shield generator, hangar and station module as a
+// hardpoint, drawn as a mount of its own on the model (models/mounts.ts), so what a ship shows is
+// exactly what it has. Engines stay part of the hull.
 //
 // Ranges, sensors and speeds are written at the old battlefield scale; scale.ts stretches them
 // (see `reach` and `scaled`), so the numbers below stay the ones to balance against each other.
 
+import { sized } from './models/sizes.ts'
 import { RANGE_SCALE, SPEED_SCALE, mapDist } from './scale.ts'
 
 /** A gun's or a sensor's reach, as written, at the battlefield's range scale (see scale.ts). */
@@ -21,7 +22,7 @@ export type FactionId = 'republic' | 'droid'
 export type Tier = 'fighter' | 'gunship' | 'frigate' | 'cruiser' | 'capital' | 'station' | 'mine' | 'defense' | 'yard'
 export type WeaponKind = 'laser' | 'flak' | 'turbo' | 'missile' | 'ion'
 export type HardpointKind = 'turret' | 'shield' | 'engine' | 'hangar' | 'refinery' | 'dock' | 'sensor' | 'drill'
-/** A module's sprite: modules/<faction>-<art>.webp. */
+/** The mount a module is drawn with (models/mounts.ts). */
 export type ModuleArt = 'turbo' | 'flak' | 'ion' | 'shield' | 'hangar' | 'refinery' | 'dock' | 'sensor' | 'drill'
 export type AbilityId = 'flakBarrage' | 'repairSwarm' | 'shieldBoost' | 'tractor' | 'broadside' | 'launchSwarm' | 'fieldRepair'
 
@@ -38,8 +39,8 @@ export type Weapon = {
 }
 
 /**
- * A part of a ship that can be shot off. `art` is the module sprite drawn on it and `s` its size as
- * a share of the ship's longest side; engines have no art of their own. `key` names a station
+ * A part of a ship that can be shot off. `art` is the mount drawn on it and `s` its size as a share
+ * of the ship's longest side; engines have no mount of their own. `key` names a station
  * module, so it keeps its damage while the station grows around it.
  */
 export type Hardpoint = {
@@ -55,8 +56,10 @@ export type UnitType = {
   tier: Tier
   name: string
   blurb: string
+  /** The name of its look: what a wreck, a thumbnail or a station stage knows it by (stations
+   * <faction>-station-<level>). */
   sprite: string
-  /** Width / height of the trimmed sprite. */
+  /** Width / height of its box (dims): the hull's proportions, which its model is drawn on. */
   aspect: number
   /** Largest dimension in world units. */
   size: number
@@ -93,9 +96,6 @@ export type UnitType = {
   role?: { role: string; strong: string[]; weak: string[] }
   /** How hard it speeds up and brakes, on top of its tier's usual (1 when left out). */
   accel?: number
-  /** Its Big ship-sizes version (models/sizes.ts bigType): bigger, heavier, and for the redesigned
-   * ships drawn with their bigger design. */
-  big?: boolean
 }
 
 export type Ability = { name: string; blurb: string; cooldown: number; duration: number; range?: number }
@@ -192,7 +192,7 @@ const torpedo = (damage: number, range = 280, cooldown = 7): Weapon => ({ kind: 
 const ion = (damage: number, range = 620, cooldown = 2.4): Weapon => ({ kind: 'ion', damage, range: reach(range), cooldown, burst: 1 })
 
 const P = (kind: HardpointKind, x: number, y: number, hp: number, weapon?: Weapon): Hardpoint => ({ kind, x, y, hp, weapon })
-/** A module with its own sprite, `s` as a share of the ship's longest side. */
+/** A module with a mount of its own, `s` as a share of the ship's longest side. */
 const M = (kind: HardpointKind, art: ModuleArt, x: number, y: number, s: number, hp: number, weapon?: Weapon): Hardpoint => ({ kind, art, x, y, s, hp, weapon })
 const gun = (art: 'turbo' | 'flak' | 'ion', x: number, y: number, s: number, hp: number, weapon: Weapon) => M('turret', art, x, y, s, hp, weapon)
 
@@ -481,9 +481,9 @@ function capitalYard(faction: FactionId): UnitType {
 
 /**
  * A station grows with its level: a small core at level 1, a hub at 2, arms at 3 and the full
- * structure at 4, each stage its own sprite (ships/<faction>-station-<level>.webp). All four were
- * cut from one picture, so they share a frame: `box` is where a stage's sprite sits in it and
- * modules are placed in its pixels. A module appears at its `level`, or once its `tech` is
+ * structure at 4, each stage its own look (<faction>-station-<level>). All four share one frame,
+ * as the pictures they were first drawn from did: `box` is where a stage sits in it, and its model
+ * and modules are placed in its pixels. A module appears at its `level`, or once its `tech` is
  * researched, and keeps its place (and damage) as the station grows around it.
  */
 type StationModule = { key: string; kind: HardpointKind; art: ModuleArt; x: number; y: number; s: number; hp: number; weapon?: Weapon; level?: number; tech?: string }
@@ -573,7 +573,7 @@ export const STATIONS: Record<FactionId, StationPlan> = {
 }
 
 const stationCache = new Map<string, UnitType>()
-/** A station as it stands at `level` with `techs` researched: its stage's sprite, size and hull, and
+/** A station as it stands at `level` with `techs` researched: its stage's look, size and hull, and
  * the modules built so far. The same id at every stage, so research and orders still find it. */
 export function stationType(faction: FactionId, level: number, techs: readonly string[], exp: readonly ModuleId[] = []): UnitType {
   const plan = STATIONS[faction]
@@ -771,8 +771,9 @@ const WRITTEN: UnitType[] = [
   frigateYard('droid'),
   capitalYard('droid'),
 ]
-/** Every unit, toughened and scaled (stations come out of stationType that way already). */
-export const UNITS: UnitType[] = WRITTEN.map((u) => (u.tier === 'station' ? u : finish(u)))
+/** Every unit, toughened and scaled (stations come out of stationType that way already), at its
+ * size (models/sizes.ts). */
+export const UNITS: UnitType[] = WRITTEN.map((u) => (u.tier === 'station' ? u : sized(finish(u))))
 
 const SHIELDED_MINE: Record<FactionId, UnitType> = { republic: finish(minePlatform('republic', true)), droid: finish(minePlatform('droid', true)) }
 /** A faction's mining platform as built, or with its Shield generator fitted. */
@@ -790,18 +791,9 @@ export const ROLES: Partial<Record<Tier, { role: string; strong: string[]; weak:
 }
 
 export const UNIT: Record<string, UnitType> = Object.fromEntries(UNITS.map((u) => [u.id, u]))
-const MODULE_ART: ModuleArt[] = ['turbo', 'flak', 'ion', 'shield', 'hangar', 'refinery', 'dock', 'sensor', 'drill']
-/** A module's sprite name; a shot-off Republic turret has a wreck of its own. */
-export const moduleSprite = (faction: FactionId, art: ModuleArt | 'wreck') => `mod-${faction}-${art}`
-/** Every sprite a battle can draw. */
-export const ALL_SPRITES = [
-  ...new Set([
-    ...UNITS.map((u) => u.sprite),
-    ...(['republic', 'droid'] as const).flatMap((f) => [1, 2, 3, 4].map((l) => `${f}-station-${l}`)),
-    ...(['republic', 'droid'] as const).flatMap((f) => MODULE_ART.filter((a) => f === 'droid' || a !== 'ion').map((a) => moduleSprite(f, a))),
-    moduleSprite('republic', 'wreck'),
-  ]),
-]
+/** An expansion module's look's name, for the queues and cards that show one being built (Hud.tsx
+ * unitArt draws it). */
+export const moduleLook = (faction: FactionId, id: ModuleId) => `${faction}-x-${id}`
 export const SHIP_TIERS: Tier[] = ['fighter', 'gunship', 'frigate', 'cruiser', 'capital']
 export const unitOf = (faction: FactionId, tier: Tier) => UNIT[`${faction === 'republic' ? 'r' : 'd'}-${tier}`]
 /** The ships a faction can order from its station: by the station level they need, then cost. The

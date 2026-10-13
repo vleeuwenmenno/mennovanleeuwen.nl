@@ -1,7 +1,7 @@
 import { useRef } from 'react'
 import { LEVEL_UP, MAX_LEVEL, MAX_RESEARCH, MODULE, TECH, UPGRADES, WORKS_NAME, buildable, modulesFor, techsFor, unitOf, yardOf, type FactionId, type ModuleId, type UnitType, type Works } from './data'
 import { HP_COLOR } from './icons'
-import { HpIcon, Icon, TechIcon, fmt, levelBlurb, moduleState, moduleTip, researchName, techState, useUnitArt, type Hud, type TechStatus } from './Hud'
+import { HpIcon, Icon, TechIcon, fmt, levelBlurb, moduleState, moduleTip, researchName, techState, unitArt, type Hud, type TechStatus } from './Hud'
 import { Modal } from './Menus'
 import type { Owner, World } from './sim'
 import { LongPress, isTouch, useCoarse } from './Touch'
@@ -140,7 +140,7 @@ function ResearchQueue({ hud, onCancel }: { hud: Hud; onCancel: (index: number) 
  * price and time and where it stands. Click a tile to order it on the building, again to call it off.
  */
 function BaseLine({ kind, w, me, hud, faction, onExpand, onCancel }: { kind: Works; w: World; me: Owner; hud: Hud; faction: FactionId; onExpand: (uid: number, id: ModuleId) => void; onCancel: (uid: number, index: number) => void }) {
-  const art = useUnitArt()
+  const art = unitArt
   const mods = modulesFor(kind)
   const t = kind === 'station' ? unitOf(faction, 'station') : yardOf(faction, kind)
   const u = kind === 'station' ? w.byId.get(w.players[me].station) : w.units.find((x) => !x.dead && x.owner === me && x.t.id === t.id)
@@ -193,7 +193,7 @@ type LineProps = { line: Line; w: World; me: Owner; hud: Hud; faction: FactionId
 
 function TreeLine({ line, w, me, hud, faction, onResearch, onCancel }: LineProps) {
   const { t, nodes } = line
-  const art = useUnitArt()
+  const art = unitArt
   const station = t.tier === 'station'
   const { at, lanes, cols } = layout(nodes)
   const states = new Map(nodes.map((n) => [n.key, nodeState(w, me, hud, n)]))

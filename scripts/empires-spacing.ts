@@ -68,9 +68,6 @@ function line(w: World, id: string, n: number, x: number, y: number, gap: number
   return Array.from({ length: n }, (_, i) => spawn(w, id, 0, x, y + (i - (n - 1) / 2) * gap, 0))
 }
 
-/** The shortest reach of the guns that count against `e`, as written (with research). */
-const shortest = (u: Unit, e: Unit) => Math.min(...relevantGuns(u, e.t.tier).map((g) => g.w.range * u.mods.range))
-
 /** Whether every gun that counts against `e` reaches it from where it sits, the way `shoot` measures it. */
 function allReach(u: Unit, e: Unit) {
   return relevantGuns(u, e.t.tier).every((g) => {
@@ -92,9 +89,12 @@ function settled(name: string, ships: Unit[], e: Unit, arc = true, rows = false)
   if (ships.length > 1) check(`${name}: no two hulls overlap`, overlap >= 0, `closest gap ${overlap.toFixed(1)}`)
   const reach = ships.every((u) => allReach(u, e))
   check(`${name}: every gun that counts reaches`, reach)
-  const share = ships.map((u) => (Math.hypot(e.x - u.x, e.y - u.y) - radius(e.t)) / shortest(u, e))
+  // Measured the way the sim measures a gun's reach (stopDistance): from the ship's middle, to half
+  // way into the target's hull, the shortest gun's reach from where it sits on the hull. (A big hull
+  // carries its guns well forward of its middle.)
+  const share = ships.map((u) => Math.hypot(e.x - u.x, e.y - u.y) / stopDistance(u, e).reach)
   if (!rows) check(
-    `${name}: distance to the target's hull is 70-100% of the shortest gun that counts`,
+    `${name}: distance is 70-100% of the shortest gun that counts`,
     share.every((s) => s >= 0.7 && s <= 1),
     `from ${(Math.min(...share) * 100).toFixed(0)}% to ${(Math.max(...share) * 100).toFixed(0)}%`,
   )
@@ -173,7 +173,7 @@ function gunshipsOnCruiser(seed = 7, freezeAt = -1): { w: World; ships: Unit[]; 
   run(w, 60)
   settled('a flagship on a fighter', [u], e, false)
   const d = Math.hypot(e.x - u.x, e.y - u.y)
-  const flakReach = 340 + radius(e.t) * 0.5
+  const flakReach = stopDistance(u, e).reach
   check('a flagship closes to flak range on a fighter', d <= flakReach, `${d.toFixed(0)} from the centre, flak reaches ${flakReach.toFixed(0)}`)
 }
 

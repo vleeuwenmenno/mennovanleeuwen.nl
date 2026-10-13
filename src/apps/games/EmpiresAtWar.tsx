@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, fleetThink, newBrain, profileOf, think, type Brain } from './empires/ai'
-import { ALL_SPRITES, BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, UNIT, WORKS_NAME, buildable, dims, isEngineer, isShip, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type Tier } from './empires/data'
-import { SizesContext, DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, Icon, ReserveTray, SelChip, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
+import { BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, UNIT, WORKS_NAME, buildable, dims, isEngineer, isShip, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type Tier } from './empires/data'
+import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, Icon, ReserveTray, SelChip, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
 import { LongPress, SELPOP_KEEP, TouchBar, WheelHost, getTouchMods, isTouch, useCoarse, useTapAway, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
 import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
@@ -11,7 +11,7 @@ import { Net, REJOIN_WAIT, awayBattle, battleToRejoin, type NetView } from './em
 import { cmd as makeCmd, runCmd, thinPath, type CmdArgs, type CmdName, type CmdResult } from './empires/commands'
 import { matchBrains, matchMap, matchWorld, stepTurn, type MatchInfo } from './empires/match'
 import { HASH_EVERY } from './empires/protocol'
-import { restoreBrain, restoreWorld, snapBrain, snapshotWorld, type BattleSnap } from './empires/snapshot'
+import { outdatedSnapshot, restoreBrain, restoreWorld, snapBrain, snapshotWorld, type BattleSnap } from './empires/snapshot'
 import { listSaves, loadSave, type Galaxy } from './empires/galaxy'
 import { loadSkirmish, mpActive, resumeGalaxy, saveSkirmish } from './empires/keep'
 import { actionFor, getSettings, keyName, setSettings, useAskedPanel, useSettings } from './empires/settings'
@@ -20,7 +20,7 @@ import { Renderer, relColor, type Camera, type View } from './empires/render'
 import { beginLayout } from './empires/layout'
 import { defaultArea, inRect, inside, type Pt } from './empires/maps'
 import {
-  STEP, RANKS, autoStart, REFUND_DELAY, canRetreat, canSee, cantConstruct, cantMend, closedLoop, cantWarp, typeOf, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, placement, startProblem, tick, wrapAngle, type Owner, type SimEvent, type Unit, type World, stateHash,
+  STEP, RANKS, autoStart, REFUND_DELAY, canRetreat, canSee, cantConstruct, cantMend, closedLoop, cantWarp, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, placement, startProblem, tick, wrapAngle, type Owner, type SimEvent, type Unit, type World, stateHash,
 } from './empires/sim'
 import { EmpiresSound, type OrderKind } from './empires/sound'
 import { TechTree } from './empires/TechTree'
@@ -36,9 +36,7 @@ import './empires/touch-battle.css'
 // enemy station. This file holds the screens, the input and the HUD; the battle runs in
 // empires/sim.ts and is drawn by empires/render.ts.
 
-const SPRITES = ALL_SPRITES
-/** Closest the camera zooms in: near enough to read a frigate's guns and shield domes, while the
- * sprites stay sharp. */
+/** Closest the camera zooms in: near enough to read a frigate's guns and shield domes. */
 const MAX_ZOOM = 3
 
 /** Orbitron for the HUD headings, loaded only once the game is opened. */
@@ -265,7 +263,7 @@ function offlineSetup(info: MatchInfo, me: number): Setup {
     slots[s.spawn] = { kind: i === me ? 'you' : 'ai', faction: s.faction, team: s.team, difficulty: s.kind === 'ai' ? s.difficulty : OFFLINE_AI, profile: s.kind === 'ai' ? profileOf(s.profile) : 'balanced' }
     names[s.spawn] = i === me ? null : s.kind === 'ai' ? s.name : `${s.name} (AI)`
   })
-  return { map: info.map, gen: info.gen, credits: info.credits, slots, areas: [], names, sizes: info.sizes ?? 'classic' }
+  return { map: info.map, gen: info.gen, credits: info.credits, slots, areas: [], names }
 }
 
 // --- Battle ---------------------------------------------------------------------------------------
@@ -354,7 +352,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     newWorld(
       map,
       seats.map((s, i) => ({ faction: s.faction, team: s.team, spawn: s.spawn, at: at[i], incomeMul: s.kind === 'ai' ? DIFFICULTY[s.difficulty].income : 1 })),
-      { credits: setup?.credits, sizes: setup?.sizes },
+      { credits: setup?.credits },
     )
   /** Where each station starts. Everyone gets a sensible spot in their area to begin with; the
    * player may move theirs before the battle starts. */
@@ -367,7 +365,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     resumed.current = !!back
   }
   if (!world.current && online) world.current = matchWorld(online.info)
-  if (!world.current && conquest) world.current = newFleetBattle(map, conquest.sides, { seed: map.seed, sizes: conquest.sizes })
+  if (!world.current && conquest) world.current = newFleetBattle(map, conquest.sides, { seed: map.seed })
   if (!world.current) {
     const base = makeWorld(seats.map((s) => map.spawns[s.spawn]))
     for (const s of seats) starts.current.push(autoStart(base, s.area, map.spawns[s.spawn], starts.current))
@@ -386,7 +384,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const settingsRef = useRef(settings)
   settingsRef.current = settings
   const renderer = useRef<Renderer>(null as unknown as Renderer)
-  if (!renderer.current) renderer.current = new Renderer(SPRITES)
+  if (!renderer.current) renderer.current = new Renderer()
   const w0 = world.current
   // The camera starts on our station, or in a fleet battle where our fleet comes in.
   const st0 = w0.byId.get(w0.players[me].station) ?? w0.fleet?.entry[me] ?? { x: w0.w / 2, y: w0.h / 2 }
@@ -487,6 +485,12 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const toast = (text: string, tone: Toast['tone'] = 'info', at?: Toast['at']) =>
     (tone === 'bad' || getSettings().toasts) &&
     setToasts((ts) => [...ts.slice(-3), { id: toastId.current++, text, tone, t: performance.now(), at }])
+  // A battle kept from before there was one ship size (fought at Classic sizes) can't be carried on:
+  // say so, rather than quietly starting a new one.
+  useEffect(() => {
+    if (resume && !resumed.current && outdatedSnapshot(resume.world)) toast('This battle was saved by an older version of the game and can\'t be carried on: a new one starts.', 'bad')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   /** Where a clicked message points: the camera goes there, and the ship it's about is selected. */
   const lookAt = (at: NonNullable<Toast['at']>) => {
     const u = at.unit !== undefined ? world.current.byId.get(at.unit) : undefined
@@ -717,7 +721,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     // rebuilds it; the rest of the selection carries on as usual.
     const crew = ships.filter((u) => isEngineer(u.t))
     if (crew.length && !attackMove) {
-      const ruin = (w.ruins ?? []).find((r) => r.owner === me && Math.hypot(r.x - at.x, r.y - at.y) < typeOf(w, r.unit).size * 0.45)
+      const ruin = (w.ruins ?? []).find((r) => r.owner === me && Math.hypot(r.x - at.x, r.y - at.y) < UNIT[r.unit].size * 0.45)
       const job = unit && unit.owner === me && !isShip(unit.t) ? unit : undefined
       if (job || (ruin && !unit)) {
         const why = job ? order('construct', crew.map((u) => u.id), job.id, queued) : order('place', crew.map((u) => u.id), ruin!.unit, ruin!.x, ruin!.y, queued)
@@ -878,7 +882,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const st = w.byId.get(w.players[me].station)
     if (!at || !st) return null
     const g = placement(w, me, pl.unit, at.x, at.y, pl.a ?? undefined)
-    return { t: typeOf(w, pl.unit), x: g.x, y: g.y, a: g.a, ok: !g.why, why: g.why, cost: g.cost, rebuild: !!g.ruin, ring: { x: st.x, y: st.y, r: BUILD_RADIUS } }
+    return { t: UNIT[pl.unit], x: g.x, y: g.y, a: g.a, ok: !g.why, why: g.why, cost: g.cost, rebuild: !!g.ruin, ring: { x: st.x, y: st.y, r: BUILD_RADIUS } }
   }
   /** The yard to place next: the first of ours (the Frigate Yard, then the Capital Yard) we have
    * neither standing nor going up and the station is upgraded for, else the Frigate Yard (its ghost
@@ -1363,13 +1367,13 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         } else if (e.k === 'warp') {
           if (e.owner === me || seesPoint(e.x, e.y)) sound.warp(where(e.x, e.y), e.delay)
         } else if (e.k === 'arrived') {
-          if (e.owner === me || seesPoint(e.x, e.y)) sound.arrive(where(e.x, e.y), typeOf(w, e.unit).size)
+          if (e.owner === me || seesPoint(e.x, e.y)) sound.arrive(where(e.x, e.y), UNIT[e.unit].size)
           if (e.owner === me && e.field) toast(`${UNIT[e.unit].name} dropped out inside an asteroid field and took heavy damage`, 'bad', { x: e.x, y: e.y, unit: newest(e.unit, e.x, e.y) })
           else if (e.owner !== me && foes(w, e.owner, me) && seesPoint(e.x, e.y)) toast(`Enemy ${UNIT[e.unit].name.toLowerCase()} out of hyperspace`, 'bad', { x: e.x, y: e.y })
         } else if (e.k === 'retreating') {
           if (e.owner === me || seesPoint(e.x, e.y)) sound.warp(where(e.x, e.y), e.secs)
         } else if (e.k === 'retreated') {
-          if (e.owner === me || seesPoint(e.x, e.y)) sound.arrive(where(e.x, e.y), typeOf(w, e.unit).size)
+          if (e.owner === me || seesPoint(e.x, e.y)) sound.arrive(where(e.x, e.y), UNIT[e.unit].size)
           if (e.owner === me) toast(e.refund > 0 ? `${UNIT[e.unit].name} jumped out: +${Math.round(e.refund)} credits in ${REFUND_DELAY} s` : `${UNIT[e.unit].name} jumped out`, 'good')
           else if (foes(w, e.owner, me) && seesPoint(e.x, e.y)) toast(`An enemy ${UNIT[e.unit].name.toLowerCase()} escaped into hyperspace`, 'info', { x: e.x, y: e.y })
         } else if (e.k === 'upgraded' && e.owner === me) {
@@ -1461,7 +1465,6 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         showRally: mySelection().some((u) => u.t.tier === 'station'),
         // A finger has no hover: the selection shows its ranges instead.
         ranges: settingsRef.current.ranges ? (touchLast.current ? 'selected' : 'hover') : 'off',
-        models: settingsRef.current.models,
         place: placeGhost(),
         buildRing: w.hybrid && mySelection().some((u) => u.t.tier === 'station' || isEngineer(u.t)) ? (() => {
           const st = w.byId.get(w.players[me].station)
@@ -2021,7 +2024,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const d = reserveDrag.current
     if (!d || !mouse.current.inside) return null
     const at = toWorld(mouse.current.x, mouse.current.y)
-    const t = typeOf(world.current, d.unit)
+    const t = UNIT[d.unit]
     const why = cantWarp(world.current, me, d.unit, at.x, at.y)
     return { sprite: t.sprite, x: at.x, y: at.y, a: arrivalFacing(at.x, at.y), size: t.size, ok: !why, why, field: inside(world.current.map.fields, at.x, at.y) }
   }
@@ -2225,7 +2228,6 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const click = touchUi ? 'tap' : 'click'
   const Click = touchUi ? 'Tap' : 'Click'
   return (
-    <SizesContext.Provider value={w.sizes}>
     <div className={`ew-root ew-deck ew-battle ew-${myFaction}${mapOpen ? ' is-mapopen' : ''}`} ref={root} style={{ ['--ew-accent' as string]: fac.color }} onContextMenu={noMenu}
       onPointerDownCapture={(e) => {
         touchLast.current = isTouch(e)
@@ -2550,7 +2552,6 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         {hud.winner !== -1 && <Result w={w} me={me} names={seats.map((s) => s.name)} won={hud.winner === myTeam} onAgain={onAgain} onExit={exit} campaign={!!conquest} online={!!online} />}
       </WheelHost>
     </div>
-    </SizesContext.Provider>
   )
 }
 
