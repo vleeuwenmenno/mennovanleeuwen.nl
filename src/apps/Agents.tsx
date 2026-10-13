@@ -827,7 +827,7 @@ function MemoryView({ scope, projects, onScope, onBack }: { scope: number | null
         {items && !mine.length && editing !== 'new' && <p className="muted">{project ? `Nothing remembered about ${project.name} yet.` : 'Nothing remembered yet. Ask the agent to remember something, or add it here.'}</p>}
         {items && mine.length > 0 && !list.length && <p className="muted">Nothing matches.</p>}
         <div className="agt-mem-tree">{node(tree, 0)}</div>
-        {error && <p className="t-red">{error}</p>}
+        {error && <p className="t-red copyable">{error}</p>}
       </div>
     </>
   )
@@ -1804,7 +1804,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       </div>
 
       <div
-        className="agt-scroll"
+        className="agt-scroll selectable"
         ref={scroller}
         onContextMenu={convMenu}
         onScroll={(e) => {
@@ -1843,7 +1843,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             )}
           </div>
         )}
-        {error && <p className="agt-error t-red">{error}</p>}
+        {error && <p className="agt-error t-red copyable">{error}</p>}
       </div>
 
       {!!thread?.todos.length && (
@@ -2666,7 +2666,7 @@ function ContextPanel({ id, version, onCompact }: { id: string; version: number;
   useEffect(() => {
     getContext(id).then(setInfo, (e: Error) => setError(e.message))
   }, [id, version])
-  if (error) return <div className="agt-ctx-panel t-red">{error}</div>
+  if (error) return <div className="agt-ctx-panel t-red copyable">{error}</div>
   if (!info) return <div className="agt-ctx-panel muted">Adding it up…</div>
   const scale = info.contextLength ?? Math.max(info.estimate, info.measured ?? 0)
   return (

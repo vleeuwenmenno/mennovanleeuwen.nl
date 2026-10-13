@@ -39,10 +39,6 @@
     min-width: 32px;
     min-height: 32px;
   }
-  .ew-root.ew-galaxy .ew-gview {
-    -webkit-touch-callout: none;
-    -webkit-user-select: none;
-  }
 }
 
 /* Phones: the top bar fits, the map's buttons move to its top right, the selection and the planet

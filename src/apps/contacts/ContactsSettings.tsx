@@ -136,7 +136,7 @@ export function ContactsAccounts() {
         </>
       )}
       <CarddavForm onAdded={() => void reload()} />
-      {(error || errors.length > 0) && <p className="t-red">{[error, ...errors].filter(Boolean).join(' · ')}</p>}
+      {(error || errors.length > 0) && <p className="t-red copyable">{[error, ...errors].filter(Boolean).join(' · ')}</p>}
 
       <div className="set-actions">
         <button className="btn btn-small" onClick={() => wm.open('contacts', { t: String(Date.now()) })}>
@@ -217,7 +217,7 @@ function CarddavForm({ onAdded }: { onAdded: () => void }) {
         )}{' '}
         It is checked by finding your address books, then stored encrypted on this server; adding the same account again replaces its password.
       </p>
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
       <button className="btn btn-primary" disabled={busy}>
         {busy ? 'Finding your address books…' : `Add ${p.url ? p.label : 'CardDAV account'}`}
       </button>

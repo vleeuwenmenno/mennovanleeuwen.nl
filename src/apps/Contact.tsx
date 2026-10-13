@@ -15,7 +15,7 @@ export function Contact() {
     }
   }
   return (
-    <div className="contact">
+    <div className="contact selectable">
       <div className="mail-head">
         <div className="mail-field">
           <span className="muted">To</span>

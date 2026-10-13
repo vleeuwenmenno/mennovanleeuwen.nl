@@ -435,7 +435,7 @@ export function TasksApp({ win }: { win: WinState }) {
             <span className="tk-total">{shownCount}</span>
           </header>
           {problems.length > 0 && (
-            <p className="ca-problem">
+            <p className="ca-problem copyable">
               {problems.join(' · ')}
               {error && (
                 <button className="ca-x" onClick={() => setError(null)} aria-label="Dismiss">

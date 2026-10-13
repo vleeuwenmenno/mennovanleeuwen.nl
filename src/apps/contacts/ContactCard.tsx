@@ -38,7 +38,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="ct-row">
       <span className="ct-row-label">{label}</span>
-      <span className="ct-row-value">{children}</span>
+      <span className="ct-row-value selectable">{children}</span>
     </div>
   )
 }
@@ -73,9 +73,9 @@ export function ContactCard({ contact, book, onEdit, onMenu, onBack }: { contact
           </button>
         )}
         <Avatar contact={c} size={84} />
-        <h2 className="ct-name">{name}</h2>
-        {c.nickname && <p className="ct-sub">“{c.nickname}”</p>}
-        {work && <p className="ct-sub">{work}</p>}
+        <h2 className="ct-name selectable">{name}</h2>
+        {c.nickname && <p className="ct-sub selectable">“{c.nickname}”</p>}
+        {work && <p className="ct-sub selectable">{work}</p>}
         <div className="ct-actions">
           {firstEmail &&
             (mail ? (
@@ -200,8 +200,8 @@ export function UnknownCard({ email, name, onAdd, onBack }: { email: string; nam
           </button>
         )}
         <Avatar email={email} name={name} size={84} />
-        <h2 className="ct-name">{name || email}</h2>
-        <p className="ct-sub">Not in your contacts</p>
+        <h2 className="ct-name selectable">{name || email}</h2>
+        <p className="ct-sub selectable">Not in your contacts</p>
         <div className="ct-actions">
           <button className="btn btn-small btn-primary" onClick={onAdd}>
             Add to contacts

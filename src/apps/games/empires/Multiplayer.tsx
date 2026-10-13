@@ -496,7 +496,7 @@ function Chat({ v, net }: { v: NetView; net: Net }) {
   }, [v.chat])
   return (
     <Frame title="Chat" className="ew-mp-chat">
-      <div className="ew-mp-lines" ref={list} aria-live="polite">
+      <div className="ew-mp-lines selectable" ref={list} aria-live="polite">
         {v.chat.length === 0 && <p className="ew-muted ew-small">Say hello. Everyone in this battle sees it.</p>}
         {v.chat.map((c, i) =>
           c.from ? (

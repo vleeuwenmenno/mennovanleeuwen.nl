@@ -95,7 +95,7 @@ const mailIn = (notes: string) => {
   const m = MAIL_LINK.exec(notes)
   return m ? messageIdOf(m[1].replace(/[).,;]+$/, '')) : null
 }
-const STATUS: Record<string, [string, string]> = { accepted: ['✓', 'going'], declined: ['✕', 'not going'], tentative: ['?', 'maybe'], 'needs-action': ['…', 'not answered yet'] }
+export const STATUS: Record<string, [string, string]> = { accepted: ['✓', 'going'], declined: ['✕', 'not going'], tentative: ['?', 'maybe'], 'needs-action': ['…', 'not answered yet'] }
 
 type Props = {
   event: CalendarEvent | null
@@ -217,7 +217,7 @@ export function EventEditor({ event, initial, calendars, googleCanWrite, choose,
       <form className="ca-sheet" onSubmit={save} onKeyDown={onKey} role="dialog" aria-label={event ? 'Event' : 'New event'}>
         <div className="ca-sheet-head">
           <span className="ca-swatch" style={{ background: calendar?.color ?? event?.color ?? 'var(--accent)' }} />
-          <input ref={titleRef} className="ca-title-input" value={d.title} onChange={(e) => set({ title: e.target.value })} placeholder={event ? '(No title)' : 'New event'} disabled={readOnly} aria-label="Title" />
+          <input ref={titleRef} className="ca-title-input" value={d.title} onChange={(e) => set({ title: e.target.value })} placeholder={event ? '(No title)' : 'New event'} readOnly={readOnly} aria-label="Title" />
           <button type="button" className="ca-x" onClick={onClose} aria-label="Close">
             ×
           </button>
@@ -257,9 +257,10 @@ export function EventEditor({ event, initial, calendars, googleCanWrite, choose,
               {!d.allDay && <input type="time" step={900} value={d.endTime} onChange={(e) => set({ endTime: e.target.value })} required aria-label="End time" />}
             </span>
           </div>
+          {/* Read-only, the place and the notes are text (a disabled field can't be selected to copy). */}
           <label className="ca-field">
             <span>Where</span>
-            <input value={d.location} onChange={(e) => set({ location: e.target.value })} placeholder="Place or link" />
+            {readOnly ? <span className="ca-ro-text selectable">{d.location || <em className="muted">None</em>}</span> : <input value={d.location} onChange={(e) => set({ location: e.target.value })} placeholder="Place or link" />}
           </label>
           <div className="ca-field">
             <span>Guests</span>
@@ -282,7 +283,7 @@ export function EventEditor({ event, initial, calendars, googleCanWrite, choose,
           </div>
           <label className="ca-field ca-notes">
             <span>Notes</span>
-            <textarea value={d.description} onChange={(e) => set({ description: e.target.value })} rows={3} />
+            {readOnly ? <span className="ca-ro-text selectable">{d.description || <em className="muted">None</em>}</span> : <textarea value={d.description} onChange={(e) => set({ description: e.target.value })} rows={3} />}
           </label>
         </fieldset>
         {event && notesSlot?.(event)}
@@ -303,7 +304,7 @@ export function EventEditor({ event, initial, calendars, googleCanWrite, choose,
           </p>
         )}
         {d.guests.length > 0 && !readOnly && <p className="ca-hint">Guests get an invitation by email once you save.</p>}
-        {error && <p className="ca-hint t-red">{error}</p>}
+        {error && <p className="ca-hint t-red copyable">{error}</p>}
         <div className="ca-sheet-foot">
           {event?.url && (
             <a className="btn btn-small btn-ghost" href={event.url} target="_blank" rel="noopener noreferrer">

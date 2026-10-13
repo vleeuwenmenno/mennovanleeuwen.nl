@@ -312,7 +312,7 @@ export function Preview({ win }: { win: WinState }) {
           {media.error || failed ? (
             <div className="pv-empty">
               <p className="pv-big">{media.name || 'Preview'}</p>
-              <p className="muted">{failed ? 'This picture could not be shown here (a format the browser does not know?).' : media.error}</p>
+              <p className="muted copyable">{failed ? 'This picture could not be shown here (a format the browser does not know?).' : media.error}</p>
               {failed && isSf(path) && (
                 <button className="btn btn-small" onClick={save}>
                   Download
@@ -357,7 +357,7 @@ export function Preview({ win }: { win: WinState }) {
         {inspector && (
           <aside className="pv-inspector">
             <h4>Info</h4>
-            <dl>
+            <dl className="selectable">
               <dt>Name</dt>
               <dd>{media.name}</dd>
               <dt>Kind</dt>

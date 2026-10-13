@@ -19,7 +19,6 @@
   max-height: min(64vh, 560px);
   overflow: auto;
   touch-action: pan-y;
-  -webkit-touch-callout: none;
 }
 
 /* One fleet: a header, the slots that jump in, and the held back row. */

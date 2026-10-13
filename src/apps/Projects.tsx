@@ -25,7 +25,7 @@ function Detail({ item, onBack }: { item: Item; onBack: () => void }) {
   const accent = item.data.accent
 
   return (
-    <article className="detail" style={{ ['--p' as string]: accent }}>
+    <article className="detail selectable" style={{ ['--p' as string]: accent }}>
       <button className="back" onClick={onBack}>
         ← All
       </button>

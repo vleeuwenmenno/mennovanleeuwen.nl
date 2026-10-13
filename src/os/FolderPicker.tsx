@@ -143,7 +143,7 @@ function Picker({ request }: { request: Request }) {
           })}
           {listing.listing && !folders.length && !files.length && <li className="muted fp-note">{request.files ? 'Nothing in here.' : 'No folders in here.'}</li>}
         </ul>
-        {error && <p className="t-red">{error}</p>}
+        {error && <p className="t-red copyable">{error}</p>}
         <div className="dlg-actions">
           <button className="btn btn-small" onClick={() => close(null)}>
             Cancel

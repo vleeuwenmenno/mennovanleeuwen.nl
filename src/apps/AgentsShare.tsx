@@ -55,7 +55,7 @@ export function ShareLink({ share, onStopped, showTitle = false }: { share: Shar
           </button>
         </span>
       </div>
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
     </div>
   )
 }
@@ -116,7 +116,7 @@ function SharePanel({ thread, message }: { thread: Thread; message?: AgentMessag
           )}
         </>
       )}
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
     </div>
   )
 }
@@ -141,7 +141,7 @@ export function SharesSettings() {
           </li>
         ))}
       </ul>
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
       <p className="muted set-help">{SHARE_NOTE} A link is a snapshot from when it was made. Expired links are deleted; deleting a thread deletes its links.</p>
     </>
   )

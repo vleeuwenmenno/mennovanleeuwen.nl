@@ -19,7 +19,6 @@
   background: #04060d;
   color: var(--ew-text);
   font: 13px/1.35 system-ui, -apple-system, 'Segoe UI', sans-serif;
-  user-select: none;
   container-type: inline-size;
 }
 .ew-root button {
@@ -710,7 +709,6 @@ span.ew-teamtag {
   border: 1px solid var(--ew-cell-line);
   border-radius: 6px;
   padding: 7px 9px;
-  user-select: text;
 }
 .ew-deck .ew-mp-say input {
   font-size: 12.5px;
@@ -897,7 +895,6 @@ span.ew-teamtag {
   flex: 1;
   min-height: 60px;
   overflow-y: auto;
-  user-select: text;
 }
 .ew-mp-lines p {
   margin: 0 0 3px;
@@ -2780,7 +2777,6 @@ span.ew-teamtag {
   gap: 3px;
   cursor: grab;
   touch-action: none;
-  user-select: none;
 }
 .ew-deck .ew-reserve-tile:active {
   cursor: grabbing;
@@ -3218,7 +3214,6 @@ span.ew-teamtag {
 }
 .ew-float-head {
   cursor: grab;
-  user-select: none;
   touch-action: none;
   align-items: center;
 }
@@ -5806,7 +5801,6 @@ span.ew-teamtag {
   border: 1px solid var(--ew-cell-line);
   border-radius: 6px;
   padding: 4px 8px;
-  user-select: text;
 }
 .ew-mpname-edit input:focus {
   outline: none;

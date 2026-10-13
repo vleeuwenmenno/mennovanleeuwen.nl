@@ -353,7 +353,7 @@ export function PdfViewer({ win }: { win: WinState }) {
           {error ? (
             <div className="pv-empty">
               <p className="pv-big">{name}</p>
-              <p className="muted">{error}</p>
+              <p className="muted copyable">{error}</p>
               {isSf(path) && (
                 <button className="btn btn-small" onClick={() => void downloadFile(path).catch(() => {})}>
                   Download
@@ -468,7 +468,7 @@ function Page({ doc, number, top, size, scale, rotation, scroller, query, nth }:
   return (
     <div ref={el} className="pdf-page-box" style={{ top, width: size.w, height: size.h }} aria-label={`Page ${number}`}>
       <canvas ref={canvas} style={{ width: size.w, height: size.h }} />
-      <div ref={text} className="textLayer" />
+      <div ref={text} className="textLayer selectable" />
       {drawn === null && <span className="pdf-page-n">{number}</span>}
     </div>
   )

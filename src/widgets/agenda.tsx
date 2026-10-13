@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react'
-import { dayKey, eventsOn, eventTime, fetchEvents, isShown, startOfDay, useCalendarChoice, useCalendarList, useCalendarVersion, useShownCalendarIds, type CalendarEvent } from '../data/calendar'
+import { dayKey, eventsOn, eventTime, fetchEvents, isShown, openEvent, startOfDay, useCalendarChoice, useCalendarList, useCalendarVersion, useShownCalendarIds, type CalendarEvent } from '../data/calendar'
 import { completeTask, dueDay, openTask, useTaskPrefs, useTasks } from '../data/tasks'
 import { connectGoogle, hasCalendar, signIn, useAccount } from '../os/account'
 import type { MenuItem } from '../os/ContextMenu'
@@ -141,7 +141,7 @@ export function Agenda({ id }: { win: WinState; id: string }) {
   return (
     <div className="ag">
       {head}
-      {error && <p className="ag-note t-red">{error}</p>}
+      {error && <p className="ag-note t-red copyable">{error}</p>}
       {!events && !error && <p className="ag-note">Opening your calendar…</p>}
       {events &&
         byDay(events, config.days).map(([key, list]) => (
@@ -172,7 +172,18 @@ export function Agenda({ id }: { win: WinState; id: string }) {
                 <div key={e.id + key} className={`ag-event ${past ? 'is-past' : ''} ${live ? 'is-now' : ''}`} title={`${e.calendar}${e.location ? ` · ${e.location}` : ''}`}>
                   <span className="ag-dot" style={{ background: e.color }} />
                   <span className="ag-time">{eventTime(e)}</span>
-                  <a className="ag-title" href={e.url} target="_blank" rel="noopener noreferrer">
+                  {/* Opens in the Calendar app; Ctrl-click or middle-click still opens the event's own page. */}
+                  <a
+                    className="ag-title"
+                    href={e.url ?? '/?open=calendar'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(ev) => {
+                      if (ev.ctrlKey || ev.metaKey || ev.shiftKey) return
+                      ev.preventDefault()
+                      openEvent(e)
+                    }}
+                  >
                     {e.title}
                   </a>
                   <EventMark e={e} clickable />

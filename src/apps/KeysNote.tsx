@@ -37,7 +37,7 @@ export function KeysNote({ win }: { win: WinState }) {
   return (
     <div className="note keys-note">
       <p className="note-hello">Shortcuts ⌨</p>
-      <div className="keys-scroll">
+      <div className="keys-scroll selectable">
         {SHORTCUTS.map((group) => (
           <section key={group.area}>
             <p className="keys-area">{group.area}</p>
