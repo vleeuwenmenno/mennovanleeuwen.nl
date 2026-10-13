@@ -432,10 +432,11 @@ function SiteUpgrades({ w, me, u, onUpgrade }: { w: World; me: Owner; u: Unit; o
  * What a structure's guns are aimed at: its focus (with a button to let them choose again), the
  * guns with targets of their own, and the gun picked by clicking it, with how to aim it.
  */
-function FocusInfo({ w, u, pick, onClear }: { w: World; u: Unit; pick: { unit: number; hp: number } | null; onClear: (id: number) => void }) {
+function FocusInfo({ w, u, pick, onClear, quiet = false }: { w: World; u: Unit; pick: { unit: number; hp: number } | null; onClear: (id: number) => void; /** No hint while nothing is focused (a ⓘ has it). */ quiet?: boolean }) {
   const focus = u.focus ? w.byId.get(u.focus) : undefined
   const own = u.guns.filter((g) => g.focus && w.byId.get(g.focus))
   const picked = pick && pick.unit === u.id ? u.t.hardpoints[pick.hp] : null
+  if (quiet && !focus && !own.length && !picked) return null
   return (
     <div className="ew-focus">
       {focus || own.length ? (
@@ -890,19 +891,21 @@ function TechTreeButton({ hud, onOpen }: { hud: Hud; onOpen: () => void }) {
 }
 
 /** One page of a building's build panel: which of the two groups it belongs to, and how it looks. */
-type BpTab = { id: string; group: 'units' | 'buildings'; label: string; badge?: ReactNode; tip: string }
+export type BpTab = { id: string; group: 'units' | 'buildings'; label: string; badge?: ReactNode; tip: string }
 
 const BP_GROUP = {
-  units: { label: 'Units', icon: 'fleet' as IconName, tip: 'Units: the ships this building builds.' },
-  buildings: { label: 'Buildings', icon: 'yard' as IconName, tip: 'Buildings: yards for engineers to put up, and the expansions this building takes.' },
+  units: { label: 'Units', icon: 'fleet' as IconName, tip: 'Units: the ships built here.' },
+  buildings: { label: 'Buildings', icon: 'yard' as IconName, tip: 'Buildings: the yards, and the expansions each building takes.' },
 }
 
 /**
- * The same build panel on every building (Command Station, Frigate Yard, Capital Yard): two square
- * buttons down the left, Units and Buildings, and across the top of what is shown the pages of
- * whichever is picked. A group a building has nothing in isn't offered. `badges`: a small count on a group's button.
+ * The same build panel on every building (Command Station, Frigate Yard, Capital Yard, and a
+ * galaxy planet's shipyard): a slim rail of icons down the left, Units and Buildings (the picked
+ * one lit gold, a count as a badge, its name in the tooltip), and across the top of the cards the
+ * pages of the picked one as tabs, the open page underlined. A group with nothing in it isn't
+ * offered. `badges`: a small count on a group's icon.
  */
-function BuildPanel({ tabs, page, onPick, badges = {}, children }: { tabs: BpTab[]; page: string; onPick: (id: string) => void; badges?: Partial<Record<'units' | 'buildings', ReactNode>>; children: ReactNode }) {
+export function BuildPanel({ tabs, page, onPick, badges = {}, children }: { tabs: BpTab[]; page: string; onPick: (id: string) => void; badges?: Partial<Record<'units' | 'buildings', ReactNode>>; children: ReactNode }) {
   const cur = tabs.find((t) => t.id === page) ?? tabs[0]
   const groups = (['units', 'buildings'] as const).filter((g) => tabs.some((t) => t.group === g))
   // Each group opens on the page last used in it.
@@ -911,14 +914,13 @@ function BuildPanel({ tabs, page, onPick, badges = {}, children }: { tabs: BpTab
   const inGroup = tabs.filter((t) => t.group === cur.group)
   return (
     <div className="ew-yardbody ew-bp">
-      <div className="ew-bp-groups" role="tablist" aria-orientation="vertical" aria-label="Units or buildings">
+      <div className="ew-bp-rail" role="tablist" aria-orientation="vertical" aria-label="Units or buildings">
         {groups.map((g) => {
           const mine = tabs.filter((t) => t.group === g)
           return (
-            <button key={g} role="tab" aria-selected={cur.group === g} className={cur.group === g ? 'is-on' : ''} data-tip={BP_GROUP[g].tip}
+            <button key={g} role="tab" aria-selected={cur.group === g} aria-label={BP_GROUP[g].label} className={cur.group === g ? 'is-on' : ''} data-tip={BP_GROUP[g].tip}
               onClick={() => onPick(mine.find((t) => t.id === last.current[g])?.id ?? mine[0].id)}>
-              <Icon name={BP_GROUP[g].icon} size={22} />
-              <span>{BP_GROUP[g].label}</span>
+              <Icon name={BP_GROUP[g].icon} size={20} />
               {badges[g] !== undefined && <em>{badges[g]}</em>}
             </button>
           )
@@ -939,6 +941,66 @@ function BuildPanel({ tabs, page, onPick, badges = {}, children }: { tabs: BpTab
   )
 }
 
+/** Which page the Command Station's build panel opens on: the one picked last (remembered across
+ * battles, and with the galaxy map's planet panel), else Strike craft. Pages the panel doesn't have
+ * map to the nearest it does: with hybrid bases the station builds no warships, so Warships means
+ * Strike craft there; the galaxy's Buildings page means Yards. */
+export function storedPage<T extends string>(have: readonly T[], fallback: T, map: Partial<Record<string, T>> = {}): T {
+  try {
+    const v = localStorage.getItem('mvlos.empires.yardpage') ?? ''
+    const to = (map[v] ?? v) as T
+    return have.includes(to) ? to : fallback
+  } catch {
+    return fallback
+  }
+}
+export function storePage(page: string) {
+  try {
+    localStorage.setItem('mvlos.empires.yardpage', page)
+  } catch {
+    // Not remembered this time.
+  }
+}
+
+/** A small ⓘ beside a name: the longer story in its tooltip, so the column itself stays short. */
+export function InfoDot({ tip }: { tip: string }) {
+  return (
+    <span className="ew-infodot" tabIndex={0} role="note" aria-label={tip} data-tip={tip}>
+      i
+    </span>
+  )
+}
+
+/** The left column's head on a building: its name with the ⓘ beside it, and what it is. */
+function SideName({ w, me, u, sub, info }: { w: World; me: Owner; u: Unit; sub: string; info: string }) {
+  return (
+    <div className="ew-side-info">
+      <span className="ew-side-name">
+        <strong {...unitTip(u.t, ownerTag(w, me, u.owner), undefined, u)}>{u.t.name}</strong>
+        <InfoDot tip={info} />
+      </span>
+      <small className="ew-muted">{sub}</small>
+    </div>
+  )
+}
+
+/** What a structure's guns do and how to aim them: for the ⓘ. */
+const GUNS_TIP = 'Guns choose their own targets. Right-click an enemy to focus every gun on it (long-press on touch); click one gun on the picture first to aim just that one.'
+
+/** A ghost card in the shipyard's grid where a page has nothing to build here: what it would show,
+ * where it is built instead, and a way there. */
+function GhostCard({ t, text, go, onGo }: { t: UnitType; text: string; go: string; onGo: () => void }) {
+  return (
+    <div className="ew-shipcard ew-ghostcard">
+      <ShipArt t={t} />
+      <span className="ew-ghost-text">{text}</span>
+      <button className="ew-chip ew-ghost-go" onClick={onGo} data-tip={go}>
+        Go <Icon name="jump" size={12} />
+      </button>
+    </div>
+  )
+}
+
 function StationDetail(p: DetailProps & { st: Unit }) {
   const { w, me, st, hud, faction } = p
   // Ships the station isn't upgraded for yet stay out of the shipyard, unless the setting shows them.
@@ -949,25 +1011,17 @@ function StationDetail(p: DetailProps & { st: Unit }) {
   const list = w.hybrid ? baseBuilds(faction).filter((t) => builtAt(t) === 'station') : buildable(faction)
   const all = list.map((t) => typeOf(w, t.id)).filter((t) => lockedShips || t.level <= hud.level)
   const queued = (id: string) => hud.queue.filter((q) => q.unit === id).length
-  // Warships and strike craft on separate pages (and, with hybrid bases, the yards), picked on the
-  // left; the choice is remembered.
-  const [chosen, setPage] = useState<'warships' | 'strike' | 'yards' | 'expansions'>(() => {
-    try {
-      const v = localStorage.getItem('mvlos.empires.yardpage')
-      return v === 'strike' ? 'strike' : (v === 'yards' || v === 'expansions') && w.hybrid ? v : 'warships'
-    } catch {
-      return 'warships'
-    }
-  })
+  // Strike craft and warships on separate pages (and, with hybrid bases, the yards and expansions),
+  // Strike craft first; the choice is remembered (see storedPage).
+  type Page = 'strike' | 'warships' | 'yards' | 'expansions'
+  const [chosen, setPage] = useState<Page>(() =>
+    storedPage<Page>(w.hybrid ? ['strike', 'warships', 'yards', 'expansions'] : ['strike', 'warships'], 'strike', w.hybrid ? { warships: 'strike', buildings: 'yards' } : { buildings: 'strike' }),
+  )
   // The yards and expansions pages exist only with hybrid bases.
-  const page = !w.hybrid && (chosen === 'yards' || chosen === 'expansions') ? 'warships' : chosen
-  const pick = (pg: 'warships' | 'strike' | 'yards' | 'expansions') => {
+  const page = !w.hybrid && (chosen === 'yards' || chosen === 'expansions') ? 'strike' : chosen
+  const pick = (pg: Page) => {
     setPage(pg)
-    try {
-      localStorage.setItem('mvlos.empires.yardpage', pg)
-    } catch {
-      // Not remembered this time.
-    }
+    storePage(pg)
   }
   // Small craft on one page (fighters, bombers and gunships), the warships proper on the other.
   // Corvettes share the gunship tier but count as warships.
@@ -975,7 +1029,8 @@ function StationDetail(p: DetailProps & { st: Unit }) {
   const strike = all.filter(small)
   const warships = all.filter((t) => !small(t))
   const ships = page === 'strike' ? strike : warships
-  const myYard = w.units.find((u) => !u.dead && u.owner === me && u.t.tier === 'yard' && !u.site)
+  // (The Frigate Yard first: it builds the line's frigates.)
+  const myYard = w.units.filter((u) => !u.dead && u.owner === me && u.t.tier === 'yard' && !u.site).sort((a, b) => Number(worksOf(a.t) === 'cyard') - Number(worksOf(b.t) === 'cyard'))[0]
   const grid = useRef<HTMLDivElement>(null)
   // The wheel scrolls the cards sideways when they don't all fit.
   useEffect(() => {
@@ -995,53 +1050,45 @@ function StationDetail(p: DetailProps & { st: Unit }) {
       <Frame className="ew-detail is-station">
         <div className="ew-detail-side">
           <Schematic u={st} size={96} tip={unitTip(st.t, ownerTag(w, me, st.owner), undefined, st)} />
-          <div className="ew-side-info">
-            <strong {...unitTip(st.t, ownerTag(w, me, st.owner), undefined, st)}>{st.t.name}</strong>
-            <small className="ew-muted">{w.hybrid ? 'Command Station' : 'Production station'}</small>
-            <Pips level={hud.level} />
-          </div>
+          <SideName w={w} me={me} u={st} sub={w.hybrid ? 'Command Station' : 'Production station'} info={`${st.t.blurb}\n\n${GUNS_TIP}`} />
+          <Pips level={hud.level} />
           <Vitals u={st} now={w.time} />
           <HpSummary u={st} />
           <WingInfo w={w} st={st} />
-          <FocusInfo w={w} u={st} pick={p.turretPick} onClear={p.onClearFocus} />
+          <FocusInfo w={w} u={st} pick={p.turretPick} onClear={p.onClearFocus} quiet />
           <RepairButton w={w} me={me} u={st} onRepair={p.onRepair} />
         </div>
         <div className="ew-detail-main">
           <header className="ew-yardhead">
-            {w.hybrid ? <BaseTabs w={w} me={me} cur={st.id} onSelect={p.onSelect} /> : <h5 className="ew-yardtitle">Shipyard</h5>}
+            {w.hybrid ? <BaseTabs w={w} me={me} cur={st.id} onSelect={p.onSelect} onRuin={() => pick('yards')} /> : <h5 className="ew-yardtitle">Shipyard</h5>}
             <TechTreeButton hud={hud} onOpen={p.onTechTree} />
           </header>
           <BuildPanel
             tabs={[
-              { id: 'warships', group: 'units', label: 'Warships', badge: warships.length,
-                tip: w.hybrid ? 'Warships: none are built at the Command Station any more. Frigates and corvettes come from the Frigate Yard, cruisers and flagships from the Capital Yard.' : 'Warships: corvettes, frigates, cruisers and dreadnoughts. Built for the fleet inventory, or straight to the station with the small jump button.' },
               { id: 'strike', group: 'units', label: 'Strike craft', badge: strike.length,
                 tip: `Strike craft: fighters and bombers${w.hybrid ? ', and engineers,' : ''} launch from the station's hangar; gunships go to the fleet inventory, or jump in at the station with the small button.` },
+              { id: 'warships', group: 'units', label: 'Warships', badge: warships.length,
+                tip: w.hybrid ? 'Warships: none are built at the Command Station any more. Frigates and corvettes come from the Frigate Yard, cruisers and flagships from the Capital Yard.' : 'Warships: corvettes, frigates, cruisers and dreadnoughts. Built for the fleet inventory, or straight to the station with the small jump button.' },
               ...(w.hybrid ? [
                 { id: 'yards', group: 'buildings' as const, label: 'Yards', tip: "Yards: engineers build them within the Command Station's build radius. The Frigate Yard (station level 2) builds frigates and corvettes, the Capital Yard (level 3) cruisers and flagships." },
                 { id: 'expansions', group: 'buildings' as const, label: 'Expansions', badge: `${st.xm?.length ?? 0}/${modulesFor('station').length}`, tip: 'Expansions: modules the Command Station builds onto itself, one at a time: a Strike hangar for bombers, a Sensor array and a Shield core.' },
               ] : []),
             ]}
             page={page} onPick={(id) => pick(id as typeof page)} badges={w.hybrid ? { buildings: `${st.xm?.length ?? 0}/${modulesFor('station').length}` } : {}}>
-            {page === 'warships' && w.hybrid && !ships.length ? (
-              <div className="ew-bp-empty">
-                <span>Warships are built at your yards.</span>
-                {myYard ? (
-                  <button className="ew-chip" onClick={() => p.onSelect(myYard.id)}>Select the {myYard.t.name}</button>
-                ) : (
-                  <button className="ew-chip" onClick={() => pick('yards')}>Open Buildings › Yards</button>
+            <div className="ew-yard" ref={grid}>
+                {/* No warships at the Command Station with hybrid bases: a ghost card points the way. */}
+                {page === 'warships' && w.hybrid && !ships.length && (
+                  <GhostCard t={typeOf(w, unitOf(faction, 'frigate').id)} text={myYard ? `Built at the ${WORKS_NAME[worksOf(myYard.t) ?? 'yard']}` : 'Built at the Frigate Yard'}
+                    go={myYard ? `Select the ${myYard.t.name}` : 'No yard yet: open Buildings › Yards to build one with engineers'}
+                    onGo={() => (myYard ? p.onSelect(myYard.id) : pick('yards'))} />
                 )}
-              </div>
-            ) : (
-              <div className="ew-yard" ref={grid}>
                 {page === 'yards' && yardsFor(faction).map((t) => <YardCard key={t.id} w={w} me={me} t={t} onPlace={p.onPlace} onSelect={p.onSelect} />)}
                 {page === 'expansions' && <ExpansionCards w={w} me={me} u={st} onExpand={p.onExpand} onCancel={p.onCancelExpand} />}
                 {(page === 'warships' || page === 'strike') && ships.map((t) => (
                   <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id)} whyReserve={cantBuild(w, me, t.id, true)} level={hud.level} queued={queued(t.id)} onBuild={p.onBuild} onUnqueue={p.onUnqueue}
                     research={t.tech && !hud.techs.includes(t.tech) ? TECH[t.tech].name : null} need={moduleNeed(w, me, t, st)} />
                 ))}
-              </div>
-            )}
+            </div>
           </BuildPanel>
         </div>
       </Frame>
@@ -1053,11 +1100,11 @@ function StationDetail(p: DetailProps & { st: Unit }) {
 function WingInfo({ w, st }: { w: World; st: Unit }) {
   const s = wingState(w, st)
   const name = wingOf(st.t.faction).name
-  const line = s.next === null ? 'at full strength' : s.next === Infinity ? 'hangar down: no new craft until it is repaired' : `next in ${Math.ceil(s.next)} s`
+  const line = s.next === null ? 'At full strength.' : s.next === Infinity ? 'Hangar down: no new craft until it is repaired.' : `The next craft in ${Math.ceil(s.next)} s.`
   return (
     <small className="ew-muted ew-wing" data-tip-unit={wingOf(st.t.faction).id} data-tip-who="Yours" data-tip-rel="own"
-      data-tip={`${name}: the station's free defense wing. Lost craft come back from its hangar one at a time, every ${DEFENSE_WING.every} s, starting ${DEFENSE_WING.wait} s after the last loss, while a hangar stands.`}>
-      Defense wing {s.left}/{s.full} · {line}
+      data-tip={`${name}: the free defense wing, ${s.left} of ${s.full} craft. ${line}\nLost craft come back from its hangar one at a time, every ${DEFENSE_WING.every} s, starting ${DEFENSE_WING.wait} s after the last loss, while a hangar stands.`}>
+      <Icon name="fleet" size={12} /> Wing {s.left}/{s.full}{s.next === null ? '' : s.next === Infinity ? ' · hangar down' : ` · ${Math.ceil(s.next)}s`}
     </small>
   )
 }
@@ -1722,25 +1769,43 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
 
 /** Switches between the Command Station and our yards: one tab each, the one shown lit. A yard
  * still going up shows how far along it is. */
-function BaseTabs({ w, me, cur, onSelect }: { w: World; me: Owner; cur: number; onSelect: (id: number) => void }) {
+/**
+ * The building switcher over the build panel: a small picture tab for the Command Station and each
+ * of our yards (one going up shows how far along it is), and a dimmed one for a yard's ruin, which
+ * opens the station's Buildings › Yards to rebuild it.
+ */
+function BaseTabs({ w, me, cur, onSelect, onRuin }: { w: World; me: Owner; cur: number; onSelect: (id: number) => void; onRuin?: () => void }) {
   const { keys } = useSettings()
   const st = w.byId.get(w.players[me].station)
-  const yards = w.units.filter((u) => !u.dead && u.owner === me && u.t.tier === 'yard')
+  const yards = w.units.filter((u) => !u.dead && u.owner === me && u.t.tier === 'yard').sort((a, b) => Number(worksOf(a.t) === 'cyard') - Number(worksOf(b.t) === 'cyard'))
+  const ruins = (w.ruins ?? []).filter((r) => r.owner === me && !yards.some((y) => y.t.id === r.unit))
   return (
     <div className="ew-basetabs" role="tablist" aria-label="Station and yards">
       {st && (
         <button role="tab" aria-selected={cur === st.id} className={cur === st.id ? 'is-on' : ''} onClick={() => onSelect(st.id)} data-tip={`Command Station: strike craft, gunships and engineers, and its expansions (${keyName(keys.station)})`}>
-          <Icon name="yard" size={14} /> Command<span className="ew-opt"> Station</span>
+          <ShipArt t={st.t} />
+          <span>Command</span>
         </button>
       )}
       {yards.map((y) => {
         const cap = worksOf(y.t) === 'cyard'
+        const up = building(y)
         return (
-          <button key={y.id} role="tab" aria-selected={cur === y.id} className={cur === y.id ? 'is-on' : ''} onClick={() => onSelect(y.id)} data-tip={`${y.t.name}: ${cap ? 'cruisers and flagships' : 'frigates and corvettes'}, and its expansions (${keyName(cap ? keys.cyard : keys.yard)})`}>
-            <Icon name="slip" size={14} /> {cap ? 'Capital' : 'Frigate'}<span className="ew-opt"> Yard</span>{building(y) ? ` ${Math.round((1 - y.building / y.t.build) * 100)}%` : ''}
+          <button key={y.id} role="tab" aria-selected={cur === y.id} className={`${cur === y.id ? 'is-on' : ''} ${up ? 'is-site' : ''}`} onClick={() => onSelect(y.id)}
+            data-tip={`${y.t.name}: ${cap ? 'cruisers and flagships' : 'frigates and corvettes'}, and its expansions (${keyName(cap ? keys.cyard : keys.yard)})${up ? `\nUnder construction: ${Math.round((1 - y.building / y.t.build) * 100)}%` : ''}`}>
+            <ShipArt t={y.t} className={up ? 'is-site' : ''} />
+            <span>{cap ? 'Capital' : 'Frigate'}</span>
+            {up && <em>{Math.round((1 - y.building / y.t.build) * 100)}%</em>}
           </button>
         )
       })}
+      {ruins.map((r) => (
+        <button key={r.id} role="tab" aria-selected={false} className="is-ruin" onClick={onRuin} data-tip={`${UNIT[r.unit].name}: a ruin. Engineers rebuild it there for ${Math.round(REBUILD * 100)}% of the price (the station's Buildings › Yards).`}>
+          <ShipArt t={UNIT[r.unit]} className="is-ruin" />
+          <span>{r.unit.endsWith('cyard') ? 'Capital' : 'Frigate'}</span>
+          <em>Ruin</em>
+        </button>
+      ))}
     </div>
   )
 }
@@ -1871,19 +1936,16 @@ function YardDetail(p: DetailProps & { y: Unit }) {
       <Frame className="ew-detail is-station is-yard">
         <div className="ew-detail-side">
           <Schematic u={y} size={96} tip={unitTip(y.t, ownerTag(w, me, y.owner), undefined, y)} />
-          <div className="ew-side-info">
-            <strong {...unitTip(y.t, ownerTag(w, me, y.owner), undefined, y)}>{y.t.name}</strong>
-            <small className="ew-muted">{WORKS_NAME[kind]}</small>
-          </div>
+          <SideName w={w} me={me} u={y} sub={WORKS_NAME[kind]} info={`${y.t.blurb}\n\n${GUNS_TIP}`} />
           <Vitals u={y} now={w.time} />
           <HpSummary u={y} />
           {!site && y.xm?.includes('fighterWing') && <WingInfo w={w} st={y} />}
-          {!site && <FocusInfo w={w} u={y} pick={p.turretPick} onClear={p.onClearFocus} />}
+          {!site && <FocusInfo w={w} u={y} pick={p.turretPick} onClear={p.onClearFocus} quiet />}
           {!site && <RepairButton w={w} me={me} u={y} onRepair={p.onRepair} />}
         </div>
         <div className="ew-detail-main">
           <header className="ew-yardhead">
-            <BaseTabs w={w} me={me} cur={y.id} onSelect={p.onSelect} />
+            <BaseTabs w={w} me={me} cur={y.id} onSelect={p.onSelect} onRuin={() => (storePage('yards'), p.onSelect(w.players[me].station))} />
           </header>
           {site ? (
             <div className="ew-sitebox" data-tip="Engineers build a yard at one squadron's pace per three craft, up to three squadrons at once.">

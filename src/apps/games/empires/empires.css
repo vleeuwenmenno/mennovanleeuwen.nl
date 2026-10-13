@@ -3934,11 +3934,15 @@ span.ew-teamtag {
   min-width: 0;
   flex-wrap: wrap;
 }
+/* The building switcher: a small picture of each building with its short name (a ruin burnt, one
+   going up faded, with how far along it is). */
 .ew-deck .ew-basetabs button {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
+  gap: 6px;
+  min-height: 34px;
+  padding: 2px 10px 2px 4px;
   font-family: var(--ew-display);
   font-size: 10.5px;
   font-weight: 700;
@@ -3946,10 +3950,40 @@ span.ew-teamtag {
   text-transform: uppercase;
   color: var(--ew-muted);
 }
+.ew-basetabs button .ew-art {
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+.ew-basetabs button em {
+  font-style: normal;
+  font-size: 9.5px;
+  letter-spacing: 0;
+  color: var(--ew-gold);
+}
 .ew-deck .ew-basetabs button.is-on {
   color: var(--ew-head);
-  border-color: color-mix(in srgb, var(--ew-accent) 60%, transparent);
-  background: color-mix(in srgb, var(--ew-accent) 18%, rgba(20, 30, 56, 0.9));
+  border-color: rgba(242, 193, 74, 0.6);
+  background: linear-gradient(180deg, rgba(242, 193, 74, 0.2), rgba(20, 30, 56, 0.9));
+  box-shadow: 0 0 10px rgba(242, 193, 74, 0.22);
+}
+.ew-basetabs .ew-art.is-site {
+  opacity: 0.55;
+}
+.ew-basetabs .ew-art.is-ruin {
+  filter: grayscale(0.9) brightness(0.45) sepia(0.4);
+}
+.ew-deck .ew-basetabs button.is-ruin {
+  border-style: dashed;
+  color: #ffb27a;
+}
+.ew-basetabs button.is-ruin em {
+  color: #ffb27a;
+}
+@media (pointer: coarse), (max-width: 719px) {
+  .ew-deck .ew-basetabs button {
+    min-height: 40px;
+  }
 }
 .ew-deck .ew-yard .ew-shipcard.ew-yardcard {
   grid-row: 1 / span 2;
@@ -5357,6 +5391,41 @@ span.ew-teamtag {
 .ew-deck .ew-gbuild .ew-yardcard.is-queued {
   border-color: rgba(255, 200, 110, 0.55);
 }
+/* The planet's shipyard has its fleet chips and the tabs over the cards: room for both rows of cards. */
+.ew-detailfloat.ew-gdock .ew-detail.is-station {
+  max-height: 330px;
+}
+/* A planet's Expansions page: a group per building, its name running up the side. */
+.ew-yard.ew-gbuild.is-mods {
+  display: flex;
+  gap: 10px;
+}
+.ew-gmodgroup {
+  flex: none;
+  display: flex;
+  gap: 4px;
+}
+.ew-gmodgroup > small {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  text-align: center;
+  font-family: var(--ew-display);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ew-gold);
+  border-left: 1px solid rgba(183, 154, 98, 0.3);
+  padding-left: 2px;
+}
+.ew-gmodgroup > small.is-off {
+  color: var(--ew-muted);
+}
+.ew-gmodgroup > div {
+  display: grid;
+  grid-template-rows: repeat(2, 64px);
+  grid-auto-flow: column;
+  gap: 4px;
+}
 /* What we know of another side's planet's buildings: a row of chips. */
 .ew-gp-base {
   display: flex;
@@ -5748,90 +5817,244 @@ span.ew-teamtag {
   justify-content: center;
 }
 
-/* The build panel of the Command Station and the yards: Units and Buildings as two square buttons down
-   the left, the pages of the picked one as tabs across the top of the cards. */
+/* The build panel of the Command Station, the yards and a galaxy planet: a slim rail of icons down
+   the left (Units, Buildings; the picked one lit gold, a count as a badge), and the pages of the
+   picked one as underlined tabs across the top of the cards. */
 .ew-bp {
   align-items: stretch;
+  gap: 8px;
 }
-.ew-bp-groups {
+.ew-bp-rail {
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
+  padding: 2px 0;
 }
-.ew-deck .ew-bp-groups button {
+.ew-deck .ew-bp-rail button {
   position: relative;
-  width: 68px;
-  flex: 1;
-  min-height: 56px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  padding: 6px 4px;
-  font-size: 10.5px;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
   color: var(--ew-muted);
+  border-color: rgba(183, 154, 98, 0.22);
+  border-left: 3px solid transparent;
+  border-radius: 4px;
+  background: rgba(14, 22, 42, 0.75);
 }
-.ew-deck .ew-bp-groups button.is-on,
-.ew-deck .ew-bp-tabs button.is-on {
+.ew-deck .ew-bp-rail button:hover:not(:disabled) {
   color: var(--ew-head);
-  border-color: color-mix(in srgb, var(--ew-accent) 60%, transparent);
-  background: color-mix(in srgb, var(--ew-accent) 18%, rgba(20, 30, 56, 0.9));
 }
-.ew-bp-groups em,
-.ew-bp-tabs em {
-  font-style: normal;
-  font-size: 9.5px;
-  opacity: 0.75;
+.ew-deck .ew-bp-rail button.is-on {
+  color: var(--ew-gold);
+  border-color: rgba(242, 193, 74, 0.45);
+  border-left-color: var(--ew-gold);
+  background: linear-gradient(90deg, rgba(242, 193, 74, 0.22), rgba(20, 30, 56, 0.9) 75%);
+  box-shadow: 0 0 10px rgba(242, 193, 74, 0.28), inset 0 0 8px rgba(242, 193, 74, 0.12);
 }
-.ew-bp-groups em {
+.ew-bp-rail em {
   position: absolute;
-  top: 3px;
-  right: 5px;
+  top: -5px;
+  right: -7px;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-style: normal;
+  font-size: 9px;
+  line-height: 15px;
+  text-align: center;
+  color: #10131c;
+  background: var(--ew-gold);
+  box-shadow: 0 0 0 1px rgba(10, 14, 24, 0.9);
+  pointer-events: none;
 }
 .ew-bp-main {
   flex: 1;
-  min-width: 0;
+  min-width: min(300px, 100%);
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 .ew-bp-tabs {
   display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
+  gap: 2px;
+  min-width: 0;
+  border-bottom: 1px solid rgba(183, 154, 98, 0.25);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 .ew-deck .ew-bp-tabs button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 14px;
+  flex: none;
+  min-height: 28px;
+  margin-bottom: -1px;
+  padding: 3px 12px 4px;
+  font-family: var(--ew-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ew-muted);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+.ew-deck .ew-bp-tabs button:hover:not(:disabled) {
+  color: var(--ew-head);
+  background: none;
+  border-bottom-color: rgba(242, 193, 74, 0.35);
+}
+.ew-deck .ew-bp-tabs button.is-on {
+  color: var(--ew-head);
+  border-bottom-color: var(--ew-gold);
+  background: linear-gradient(0deg, rgba(242, 193, 74, 0.12), transparent 70%);
+  box-shadow: none;
+}
+.ew-bp-tabs em {
+  font-style: normal;
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: 0;
+  padding: 0 5px;
+  border-radius: 7px;
+  color: var(--ew-muted);
+  background: rgba(120, 160, 220, 0.14);
+}
+.ew-bp-tabs .is-on em {
+  color: var(--ew-gold);
+  background: rgba(242, 193, 74, 0.14);
+}
+/* A ghost card in the grid where a page has nothing to build here: where it is built, and Go. */
+.ew-deck .ew-yard .ew-shipcard.ew-ghostcard {
+  grid-row: 1 / span 2;
+  width: 176px;
+  height: auto;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+  border-style: dashed;
+  border-color: rgba(183, 154, 98, 0.35);
+  background: rgba(14, 22, 42, 0.45);
+  cursor: default;
+}
+.ew-yard:has(.ew-ghostcard) {
+  grid-auto-columns: 176px;
+}
+.ew-ghostcard .ew-art {
+  height: 46px;
+  opacity: 0.35;
+  filter: grayscale(1) brightness(1.4);
+}
+.ew-ghost-text {
   font-size: 11.5px;
+  text-align: center;
   color: var(--ew-muted);
 }
-/* An empty page: a line or two across the whole width, with a way on. */
-.ew-bp-empty {
+.ew-deck .ew-ghost-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 3px 16px;
+  color: var(--ew-head);
+  border-color: rgba(242, 193, 74, 0.5);
+}
+/* The left column of a building: a name with its ⓘ, nothing ever spilling out of the box. */
+.ew-side-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  min-width: 0;
+}
+.ew-side-name strong {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  text-align: center;
+  line-height: 1.2;
+}
+.ew-infodot {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid rgba(242, 193, 74, 0.6);
+  font-family: Georgia, serif;
+  font-size: 11px;
+  font-style: italic;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--ew-gold);
+  cursor: help;
+}
+.ew-infodot:hover,
+.ew-infodot:focus-visible {
+  background: rgba(242, 193, 74, 0.18);
+  outline: none;
+}
+.ew-detail.is-station .ew-detail-side {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.ew-detail.is-station .ew-detail-side > * {
+  max-width: 100%;
+  min-width: 0;
+}
+.ew-detail.is-station .ew-side-info small,
+.ew-detail.is-station .ew-wing,
+.ew-detail.is-station .ew-focus > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-detail.is-station .ew-wing {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  padding: 10px 4px;
-  font-size: 12.5px;
-  color: var(--ew-muted);
+  justify-content: center;
+  gap: 4px;
+}
+.ew-detail.is-station .ew-pips {
+  align-self: center;
+}
+/* The whole building in its portrait, never a cropped close-up. */
+.ew-detail.is-station .ew-schem-box {
+  overflow: hidden;
+}
+.ew-detail.is-station .ew-schem .ew-art {
+  overflow: hidden;
 }
 @media (pointer: coarse), (max-width: 719px) {
-  .ew-deck .ew-bp-groups button {
-    width: 58px;
-    min-height: 48px;
-    font-size: 10px;
+  .ew-deck .ew-bp-rail button {
+    width: 42px;
+    height: 42px;
   }
   .ew-deck .ew-bp-tabs button {
-    min-height: 36px;
+    min-height: 40px;
     padding: 6px 12px;
   }
-  .ew-deck .ew-bp-empty .ew-chip {
-    min-height: 36px;
+  .ew-deck .ew-ghost-go {
+    min-height: 40px;
+  }
+  .ew-infodot {
+    width: 22px;
+    height: 22px;
+    font-size: 13px;
   }
 }
 /* The rotate buttons and Cancel share one row that wraps on a small window instead of clipping. */
@@ -5846,10 +6069,6 @@ span.ew-teamtag {
 /* The tabs take a row, so the station's and yards' card is a little taller than the plain unit card. */
 .ew-detailfloat .ew-detail.is-station {
   max-height: 280px;
-}
-.ew-deck .ew-bp-tabs button {
-  padding: 3px 14px;
-  font-size: 11px;
 }
 
 /* Smaller windows: the station's and yards' card gives some room back, so it fits between the map and the selection. */
@@ -5869,15 +6088,18 @@ span.ew-teamtag {
   .ew-deck .ew-treebtn {
     padding: 4px 8px;
   }
-  .ew-deck .ew-bp-groups button {
-    width: 58px;
+  /* (Just the pictures: the names are in their tooltips.) */
+  .ew-deck .ew-basetabs button {
+    padding: 2px 4px;
   }
-  .ew-basetabs .ew-opt {
+  .ew-basetabs button > span {
     display: none;
   }
-  .ew-deck .ew-basetabs button {
-    padding: 3px 7px;
-    font-size: 10px;
-    letter-spacing: 0.05em;
+  .ew-basetabs {
+    flex-wrap: nowrap;
+  }
+  .ew-deck .ew-bp-tabs button {
+    padding: 3px 7px 4px;
+    letter-spacing: 0.03em;
   }
 }

@@ -274,3 +274,10 @@
 .ew-root.ew-galaxy.has-sheet .ew-float.ew-inv {
   top: 104px !important;
 }
+/* (The planet's shipyard on a phone: its tabs take a row of their own, so the card may grow up the
+   screen rather than cut off the second row of ships.) */
+@media (pointer: coarse), (max-width: 719px) {
+  .ew-root.ew-galaxy .ew-gdock .ew-detail.is-station {
+    max-height: 62vh;
+  }
+}
