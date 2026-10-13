@@ -13,13 +13,14 @@ import type { Timeline } from './useTimeline'
 // Zoom: Ctrl+wheel, a pinch, or the buttons (which set `zoom`). The scrubber on the right jumps
 // through the years: drag it, or click a year.
 //
-// Selection (kept as ids by the app, so it outlives the rows that scroll away): a click selects,
-// Ctrl or Cmd adds or takes away, Shift adds everything from the last one clicked, in timeline
-// order; the circle on a tile (on hover, and always once something is selected) and on each day
-// and month heading does the same for one or all of them. Dragging over empty space draws a box
+// Selection (kept as ids by the app, so it outlives the rows that scroll away): a click opens the
+// photo, until something is selected; the circle on a tile (on hover, and always once something
+// is selected) and on each day and month heading selects one or all of them, and from then on a
+// click takes a photo in or out. Ctrl or Cmd+click does that too, whatever is selected, and Shift
+// adds everything from the last one clicked, in timeline order. Dragging over empty space draws a box
 // (scrolling on at the edges), hit-tested against the layout, not the page, so it reaches rows
-// that are not drawn. On a touch screen a long press selects, and taps then add and take away;
-// holding a selected photo then drags the selection. Double-click opens.
+// that are not drawn. On a touch screen a tap opens, a long press selects, and taps then add and take
+// away; holding a selected photo then drags the selection.
 
 export const ZOOMS = [56, 84, 124, 180, 260]
 const GAP = 2
@@ -154,7 +155,6 @@ function enqueue(start: (done: () => void) => void): () => void {
 export type TileActions = {
   click: (item: Item, e: React.MouseEvent) => void
   check: (item: Item, e: React.MouseEvent) => void
-  open: (item: Item) => void
   menu: (item: Item, e: React.MouseEvent) => void
   drag: (item: Item, e: React.DragEvent) => void
   press: (item: Item, e: React.PointerEvent) => void
@@ -189,7 +189,6 @@ const Tile = memo(function Tile({ source, item, size, px, left, act, selected, s
       className={`ph-tile ${item.video ? 'is-video' : ''} ${selected ? 'is-selected' : ''}`}
       style={{ left, width: px, height: px }}
       onClick={(e) => act.current.click(item, e)}
-      onDoubleClick={() => act.current.open(item)}
       onContextMenu={(e) => act.current.menu(item, e)}
       onPointerDown={(e) => act.current.press(item, e)}
       draggable
@@ -215,7 +214,6 @@ const Tile = memo(function Tile({ source, item, size, px, left, act, selected, s
           e.stopPropagation()
           act.current.check(item, e)
         }}
-        onDoubleClick={(e) => e.stopPropagation()}
       >
         <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden>
           {CHECK}
