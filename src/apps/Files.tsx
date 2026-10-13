@@ -995,7 +995,7 @@ export function Files({ win }: { win: WinState }) {
     if (e.pointerType === 'touch') return setSelected(new Set())
     const box = main.current!.getBoundingClientRect()
     const start = { x: e.clientX - box.left + main.current!.scrollLeft, y: e.clientY - box.top + main.current!.scrollTop }
-    const base = e.ctrlKey || e.metaKey ? new Set(selected) : new Set<string>()
+    const base = e.ctrlKey || e.metaKey || e.shiftKey ? new Set(selected) : new Set<string>()
     setSelected(base)
     main.current!.focus({ preventScroll: true })
     const move = (ev: PointerEvent) => {

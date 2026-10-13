@@ -231,6 +231,8 @@ export function VtView({ session, focused, onCellSize, onDrawn }: { session: VtS
         className="t-vt-screen"
         ref={screenRef}
         style={{ width: `${vt.cols}ch` }}
+        // A program reading the mouse also gets Ctrl and Alt with it: no window dragging on top.
+        data-no-mod-drag={vt.modes.mouse !== 0 ? '' : undefined}
         onMouseDown={(e) => {
           if (!tracking(e) || e.button > 1) return
           const cell = cellAt(e)

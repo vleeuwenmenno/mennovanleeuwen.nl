@@ -81,6 +81,28 @@ window back, switching to that window's workspace; clicking again minimizes it, 
 windows brings the next one forward. Right-click (or long-press) an app for its windows by title,
 with their workspace. Its item goes when its last window closes. Notes and widgets never get one.
 
+## Moving windows with a key
+
+Like Hyprland, a window can be dragged by holding a key and dragging anywhere on it
+([`src/os/Window.tsx`](src/os/Window.tsx), `modPressDown`; the choice is in
+[`src/os/modDrag.ts`](src/os/modDrag.ts)). **Ctrl+left-drag** moves it, snapping and all, like
+dragging its title bar. **Ctrl+right-drag** resizes it from the corner nearest the pointer when you
+press: that corner follows the pointer and the opposite one stays put (there is no menu for it).
+Settings → Windows picks the key: Ctrl (the default), Alt, or off. A phone has no keys, so it
+never does this.
+
+Ctrl+click means something in apps (adding to a selection, opening a link in a new tab), so a press
+with the key only starts watching: within 4 px of where it went down, nothing has happened and the
+click reaches the app whole. Beyond that the window takes the drag: the app is told the gesture is
+off with a `pointercancel` on `window` (which ends a rubber band), it sees no more moves, the
+browser's own drags and text selection are held back, and the click after the release is
+swallowed. Files and Photos added to a selection with a box on Ctrl+drag over empty space; Shift+drag
+does that now. A file or photo dragged with the key held moves the window too (copy with Ctrl+C and
+Ctrl+V instead of Ctrl+drag). An app that uses the key with the mouse itself opts out: `ownsModifierDrag` in
+its `AppMeta` (`src/os/apps.tsx`, set for Games) or `data-no-mod-drag` on an element (the
+terminal's screen, while a program reads the mouse). A drag that starts over an iframe (the PDF
+viewer) never reaches the page, so it can't be taken.
+
 ## Drag and drop
 
 Things can be dragged wherever they make sense ([`src/os/dnd.ts`](src/os/dnd.ts)): desktop icons
