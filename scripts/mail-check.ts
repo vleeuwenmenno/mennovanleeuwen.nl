@@ -17,6 +17,7 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sanitizeHtml } from '../server/mailhtml.ts'
+import { isAllowed, parseSender } from '../src/data/mailRemote.ts'
 import { parseInvite } from '../server/imip.ts'
 import { HOSTILE_HTML, PNG, startMockJmap } from './mail-mock.ts'
 
@@ -254,6 +255,35 @@ async function endToEnd() {
     await call('PUT', '/api/state/mail', { value: { imageSenders: ['news@shop.example'] } })
     const always = (await call('GET', `/api/mail/${acc}/thread/${shop.threadId}`)).json.messages[0]
     check('Always for this sender: images load for them', always.images === true && always.html.includes('banner.jpg'))
+
+    // The Mail settings (Settings → Apps → Mail): the remote-content mode and the allow list, entries and domains.
+    const shown = async (value: unknown) => {
+      await call('PUT', '/api/state/mail', { value })
+      return (await call('GET', `/api/mail/${acc}/thread/${shop.threadId}`)).json.messages[0]
+    }
+    const allowedState = (value: unknown) => ({ remote: 'allowed', ...(value as object) })
+    const m1 = await shown({ remote: 'ask', allowed: [{ who: 'news@shop.example', at: 1 }] })
+    check('remote content "ask": blocked, even for an allowed sender', m1.images === false && m1.blocked >= 3 && !m1.html.includes('banner.jpg'), { images: m1.images, blocked: m1.blocked })
+    const m2 = await shown(allowedState({ allowed: [{ who: 'news@shop.example', at: 1 }] }))
+    check('remote content "allowed": an allowed address loads', m2.images === true && m2.html.includes('banner.jpg'))
+    const m3 = await shown(allowedState({ allowed: [{ who: 'other@shop.example', at: 1 }, { who: '@elsewhere.example', at: 2 }] }))
+    check('remote content "allowed": other senders and domains stay blocked', m3.images === false && !m3.html.includes('banner.jpg'), { images: m3.images })
+    const m4 = await shown(allowedState({ allowed: [{ who: '@shop.example', at: 1 }] }))
+    check('remote content "allowed": a domain entry covers its senders', m4.images === true && m4.html.includes('banner.jpg'))
+    const m5 = await shown(allowedState({ allowed: [] }))
+    check('remote content "allowed": removed (an empty list) blocks again', m5.images === false && !m5.html.includes('banner.jpg'))
+    const m6 = await shown({ remote: 'always', allowed: [] })
+    check('remote content "always": loads for everyone, trackers still out', m6.images === true && m6.html.includes('banner.jpg') && !m6.html.includes('open.gif') && !m6.html.includes('hidden.png') && m6.trackers >= 2, { images: m6.images, trackers: m6.trackers })
+    check('remote content "always": the single-message route agrees', (await call('GET', `/api/mail/${acc}/message/${shop.id}`)).json.images === true)
+    const m7 = await shown({ remote: 'ask', allowed: [], markRead: 'never', quotes: 'expanded', signatures: { '1:x': 'Me' } })
+    check('remote content "ask" again, other settings in the state do not matter', m7.images === false && !m7.html.includes('banner.jpg'))
+    const m8 = await shown({ imageSenders: ['@SHOP.example'] })
+    check('an older list (plain addresses, no mode) counts as "allowed"', m8.images === true)
+    const m9 = await shown({ remote: 'bogus', allowed: 'no' })
+    check('a damaged state blocks', m9.images === false)
+    check('parseSender: addresses and domains, tidied or refused', parseSender(' <News@Shop.Example> ') === 'news@shop.example' && parseSender('@Shop.example') === '@shop.example' && parseSender('shop') === null && parseSender('a b@c.d') === null && parseSender('@x') === null)
+    check('isAllowed: address, domain, nothing else', isAllowed([{ who: '@a.example', at: 0 }], 'x@A.example') && isAllowed([{ who: 'x@a.example', at: 0 }], 'x@a.example') && !isAllowed([{ who: 'x@a.example', at: 0 }], 'y@a.example') && !isAllowed([{ who: '@a.example', at: 0 }], 'x@sub.a.example'))
+    await call('PUT', '/api/state/mail', { value: { imageSenders: ['news@shop.example'] } })
 
     const invite = rows.find((r) => r.subject.startsWith('Invitation'))
     const inv = (await call('GET', `/api/mail/${acc}/thread/${invite.threadId}`)).json.messages[0]

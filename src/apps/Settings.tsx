@@ -39,6 +39,7 @@ import { ReleaseStatus } from '../os/TopbarWidgets'
 import { useWM, type AppId, type WinState } from '../os/wm'
 import { AgentsSettings } from './AgentsSettings'
 import { ContactsAccounts, ContactsSettings } from './contacts/ContactsSettings'
+import { MailPane } from './mail/MailPane'
 import { useContacts } from '../data/contacts'
 import { IntegrationNotice } from '../os/IntegrationNotice'
 import { AmpPane, CalendarAppPrefs, FilesPane, GamesPane, PdfPane, PreviewPane, TerminalPane } from './AppSettings'
@@ -53,7 +54,7 @@ import { SecretInput } from '../os/SecretInput'
 // Opened from the system menu, the desktop's right-click menu, Spotlight, the terminal and apps'
 // window menus; props.section picks the pane (account, appearance, dock, launchers, search
 // (Spotlight), windows, links, notifications, golinks, instances, integrations, then the apps:
-// agents, calendar, contacts, files, games, amp, pdf, preview, terminal; then sync, users, about) and
+// agents, calendar, contacts, files, games, mail, amp, pdf, preview, terminal; then sync, users, about) and
 // props.sub a part of it (Integrations: updown, ollama, seafile, onlyoffice, mail, immich, calendars,
 // contacts). Every account is linked in Integrations; an app's pane keeps the app's own settings and
 // points there (IntegrationNotice). The account and service panes only show for the signed-in user.
@@ -1732,7 +1733,7 @@ function LinkSettingsPane() {
   )
 }
 
-type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'contacts' | 'integrations' | 'agents' | 'golinks' | 'terminal' | 'files' | 'amp' | 'pdf' | 'preview' | 'games' | 'sync' | 'users' | 'about'
+type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'contacts' | 'integrations' | 'agents' | 'golinks' | 'terminal' | 'files' | 'games' | 'mail' | 'amp' | 'pdf' | 'preview' | 'sync' | 'users' | 'about'
 /** `account`: only when signed in (accounts and services); visitors don't see it at all.
  * `admin`: only for admins (the server checks that on every request too). */
 type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; /** An app's pane (Settings → Apps) shows the app's own dock icon instead */ app?: AppId; keywords: string; blurb: string; account?: true; admin?: true; render: (opened: { sub?: string; t?: string }) => ReactNode }
@@ -1801,6 +1802,7 @@ const GROUPS: Group[] = [
       { id: 'contacts', label: 'Contacts', hue: 'var(--orange)', account: true, icon: null, app: 'contacts', keywords: 'contacts people address book default new contacts carddav accounts vcard vcf birthdays groups', blurb: 'Where new contacts go. The address book accounts (Fastmail, iCloud…) are in Integrations.', render: () => <ContactsSettings /> },
       { id: 'files', label: 'Files', hue: 'var(--blue)', icon: null, app: 'files', keywords: 'files file manager view list grid compact gallery icon size zoom sort order hidden dotfiles sidebar', blurb: 'How Files shows a folder: the view, icon size, sort order, hidden files and the sidebar.', render: () => <FilesPane /> },
       { id: 'games', label: 'Games', hue: 'var(--cyan)', icon: null, app: 'games', keywords: 'games arcade pool gladiator empires at war rts sound music volume mute helpers aim sensitivity difficulty computer health bars rings fog procedural models sprites camera edge scrolling key bindings keybinds keys multiplayer name online', blurb: 'Pool, Gladiator and Empires At War: how they play and sound.', render: ({ sub, t }) => <GamesPane sub={sub} t={t} /> },
+      { id: 'mail', label: 'Mail', hue: 'var(--blue)', account: true, icon: null, app: 'mail', keywords: 'mail email jmap fastmail read mark as read remote content images allow list allowed senders domain tracking pixels quoted text signature reply all default account identity from ctrl enter send notifications', blurb: 'How Mail reads and writes: when mail counts as read, remote content and the senders you allowed, signatures and replies. The accounts are in Integrations.', render: () => <MailPane /> },
       { id: 'amp', label: 'Omamp', hue: 'var(--green)', icon: null, app: 'amp', keywords: 'omamp music player audio winamp shuffle repeat equalizer eq preset visualizer spectrum oscilloscope time remaining playlist', blurb: 'The music player: shuffle and repeat, the equalizer, and what it shows.', render: () => <AmpPane /> },
       { id: 'pdf', label: 'PDF', hue: 'var(--red)', icon: null, app: 'pdf', keywords: 'pdf viewer documents night mode dark sidebar thumbnails outline', blurb: 'The PDF viewer: its sidebar and night mode.', render: () => <PdfPane /> },
       { id: 'preview', label: 'Preview', hue: 'var(--blue)', icon: null, app: 'preview', keywords: 'preview pictures images photos viewer sidebar', blurb: 'The picture viewer: its sidebar.', render: () => <PreviewPane /> },

@@ -2,6 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import { api, subscribeAccount, getAccount } from '../os/account'
 import type { MenuItem } from '../os/ContextMenu'
 import { synced } from '../os/synced'
+import { ALLOWED_MAX, parseSender, readRemoteSettings, type RemoteSettings } from './mailRemote'
 
 // Mail for the browser: the Mail app (src/apps/mail) reads and changes mail through the site's
 // own API (server/jmap.ts holds the JMAP tokens and does the talking). Also the way in for other
@@ -218,19 +219,88 @@ export const useMailVersion = () =>
   )
 
 // ---------------------------------------------------------------------------------------------
-// Preferences (synced; the server reads imageSenders to load their pictures)
+// Preferences (Settings → Apps → Mail; synced). The server reads `remote` and `allowed` to decide
+// what a message is shown with (server/jmap.ts), the rest is the app's own.
 
-export type MailPrefs = { imageSenders: string[]; markRead: boolean }
-const prefs = synced<MailPrefs>('mail', { imageSenders: [], markRead: true }, {
-  normalize: (v) => {
-    const o = (v && typeof v === 'object' ? v : {}) as Partial<MailPrefs>
-    return { imageSenders: Array.isArray(o.imageSenders) ? o.imageSenders.filter((x): x is string => typeof x === 'string').slice(0, 2000) : [], markRead: o.markRead !== false }
-  },
+export type MarkRead = 'open' | 'after' | 'never'
+export const MARK_AFTER = [2, 5, 10]
+export type MailPrefs = RemoteSettings & {
+  /** When a conversation counts as read: as it opens, a few seconds after, or only by hand. */
+  markRead: MarkRead
+  markReadAfter: number
+  /** Whether quoted text in a message starts folded away. */
+  quotes: 'collapsed' | 'expanded'
+  /** What R does: reply, or reply to everyone. */
+  replyAll: boolean
+  ctrlEnter: boolean
+  /** The account Mail opens on (null: the first). */
+  defaultAccount: number | null
+  /** Per account (its id): the identity a new message is from. */
+  defaultIdentity: Record<string, string>
+  /** Per account and identity ("account:identity"): the signature text. Empty: the one the mail server keeps for the identity. */
+  signatures: Record<string, string>
+  signNew: boolean
+  signReply: boolean
+  signForward: boolean
+}
+const DEFAULT_PREFS: MailPrefs = { remote: 'ask', allowed: [], markRead: 'open', markReadAfter: 5, quotes: 'collapsed', replyAll: false, ctrlEnter: true, defaultAccount: null, defaultIdentity: {}, signatures: {}, signNew: true, signReply: true, signForward: true }
+
+const strings = (v: unknown, max: number): Record<string, string> =>
+  Object.fromEntries(Object.entries(v && typeof v === 'object' ? (v as Record<string, unknown>) : {}).filter((e): e is [string, string] => typeof e[1] === 'string').slice(0, 200).map(([k, x]) => [k, x.slice(0, max)]))
+
+function normalizePrefs(v: unknown): MailPrefs {
+  const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
+  const remote = readRemoteSettings(v)
+  // Before there were three choices this was a switch.
+  const markRead: MarkRead = o.markRead === 'after' || o.markRead === 'never' ? o.markRead : o.markRead === false ? 'never' : 'open'
+  const after = Number(o.markReadAfter)
+  return {
+    ...remote,
+    markRead,
+    markReadAfter: MARK_AFTER.includes(after) ? after : DEFAULT_PREFS.markReadAfter,
+    quotes: o.quotes === 'expanded' ? 'expanded' : 'collapsed',
+    replyAll: o.replyAll === true,
+    ctrlEnter: o.ctrlEnter !== false,
+    defaultAccount: typeof o.defaultAccount === 'number' ? o.defaultAccount : null,
+    defaultIdentity: strings(o.defaultIdentity, 200),
+    signatures: strings(o.signatures, 4000),
+    signNew: o.signNew !== false,
+    signReply: o.signReply !== false,
+    signForward: o.signForward !== false,
+  }
+}
+
+const prefs = synced<MailPrefs>('mail', DEFAULT_PREFS, {
+  normalize: normalizePrefs,
+  // Two devices changed it: this one's choices stand, but a sender allowed on either stays allowed.
+  merge: (local, remote) => ({ ...local, allowed: [...local.allowed, ...remote.allowed.filter((a) => !local.allowed.some((b) => b.who === a.who))] }),
 })
 export const useMailPrefs = prefs.use
 export const mailPrefs = prefs.get
 export const setMailPrefs = (patch: Partial<MailPrefs>) => prefs.set((p) => ({ ...p, ...patch }))
-export const allowImagesFrom = (email: string) => prefs.set((p) => (p.imageSenders.includes(email.toLowerCase()) ? p : { ...p, imageSenders: [...p.imageSenders, email.toLowerCase()] }))
+
+/** Puts a sender (an address or "@domain") on the allow list; false when it is not one. */
+export function allowSender(who: string): boolean {
+  const w = parseSender(who)
+  if (!w) return false
+  prefs.set((p) => (p.allowed.some((a) => a.who === w) ? p : { ...p, allowed: [...p.allowed, { who: w, at: Date.now() }].slice(-ALLOWED_MAX) }))
+  return true
+}
+export const removeAllowed = (who: string) => prefs.set((p) => ({ ...p, allowed: p.allowed.filter((a) => a.who !== who) }))
+/** "Always for this sender" (or domain) in a message: on the list, and in "ask" mode that is the choice to use the list. */
+export function allowImagesFrom(who: string) {
+  if (!allowSender(who)) return
+  if (prefs.get().remote === 'ask') setMailPrefs({ remote: 'allowed' })
+}
+
+/** The signature to start a message with, for the kind of message and the identity (from the pane, or else the one the mail server keeps). */
+export function signatureFor(kind: 'new' | 'reply' | 'forward', account: number, identity: Identity | undefined): string {
+  const p = prefs.get()
+  if (!identity || !(kind === 'new' ? p.signNew : kind === 'reply' ? p.signReply : p.signForward)) return ''
+  const own = p.signatures[`${account}:${identity.id}`]?.trim()
+  const sig = own || identity.textSignature?.trim()
+  return sig ? (/^--\s/.test(sig) ? sig : `-- \n${sig}`) : ''
+}
 
 // ---------------------------------------------------------------------------------------------
 // Hooks for other apps

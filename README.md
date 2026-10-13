@@ -412,7 +412,7 @@ started* when there is none). The Apps panes are Agents, Calendar (which calenda
 opens in and where new events go), Contacts (where new contacts go), Files (view, icon size, sort order, hidden files, sidebar), Games (Pool's helpers,
 sensitivity, computer and sound; Gladiator's sound and music; Empires At War's sound, battlefield,
 camera and a summary of its key bindings, with a button into the game's own key bindings and sound
-mix), Omamp (shuffle, repeat, equalizer and preset, visualizer, time, its windows), PDF (sidebar,
+mix), Mail (when mail counts as read, remote content, the allowed senders, quoted text, signatures and replies, with a pointer to Notifications for new-mail alerts), Omamp (shuffle, repeat, equalizer and preset, visualizer, time, its windows), PDF (sidebar,
 night mode), Preview (sidebar) and Terminal. Each pane reads and writes the very store the app uses
 ([`src/data/appPrefs.ts`](src/data/appPrefs.ts), [`src/apps/games/prefs.ts`](src/apps/games/prefs.ts),
 through [`src/os/localPref.ts`](src/os/localPref.ts) for what stays in this browser), so an open
@@ -595,7 +595,7 @@ in-OS question, for good. Writing is plain text with attachments from the comput
 identity (`EmailSubmission/set`, moved to Sent once the server has taken it). Attachments save to
 Files too. Keys: `j`/`k` (or the arrows) to move, Enter to open, `e` archive, `#` delete, `!` junk,
 `s` flag, `u` read or unread, `r` reply, `a` reply all, `f` forward, `c` compose, `/` search,
-Ctrl+Enter to send. In a narrow window or on a phone it shows one pane at a time: mailboxes, list,
+Ctrl+Enter to send (a setting). In a narrow window or on a phone it shows one pane at a time: mailboxes, list,
 conversation, each with a way back.
 
 HTML mail is made safe on the server by an allow-list sanitiser of its own
@@ -603,15 +603,36 @@ HTML mail is made safe on the server by an allow-list sanitiser of its own
 `javascript:` links or CSS expressions; every tag balanced and every attribute re-escaped) and then
 shown in an iframe sandboxed without scripts or same-origin, under a Content-Security-Policy that
 allows nothing but its own styles and pictures. Remote images and CSS backgrounds are held back
-until *Load images* (or *Always for this sender*, a synced choice the server reads); tracking pixels
+until *Load images* (or the remote-content setting, see Mail settings below); tracking pixels
 stay out either way. Links open in a new tab without an opener or referrer, with the real address
 as their tooltip. Inline (`cid:`) pictures come along as `data:` URIs, or (big ones) through
 short-lived sealed links that need no cookie. Quoted text, in HTML and plain text alike, is folded
-away. Calendar invitations (a `text/calendar` part or an `.ics` file, iMIP REQUEST, REPLY or CANCEL,
+away (or open, by setting). Calendar invitations (a `text/calendar` part or an `.ics` file, iMIP REQUEST, REPLY or CANCEL,
 [`server/imip.ts`](server/imip.ts)) show as a card with what, when, where and the organiser, and
 are answered from it (see *How the apps work together*). Senders and recipients show as your
 contacts, with their photos; mailto: links in HTML mail open the composer (in a new tab, as every
 link in a message does, since the message's frame runs no scripts).
+
+**Mail settings** (Settings → Apps → Mail, or *Mail settings…* in Mail's sidebar and window menu;
+[`src/apps/mail/MailPane.tsx`](src/apps/mail/MailPane.tsx)) are kept in the synced state `mail`
+([`src/data/mail.ts`](src/data/mail.ts)), so they follow you between devices, and an open Mail
+window follows a change at once. *Reading*: mark as read when opened (the default), after 2, 5 or 10
+seconds (leaving sooner keeps it unread) or never; the default for remote content (see below); and
+whether quoted text starts folded or open. *Writing*: the account Mail opens on and, per account, the
+identity new messages are from (when there are several); a plain-text signature per identity (empty:
+the one the mail server keeps for it), with a switch each for new messages, replies and forwards,
+added above any quote after the usual `-- ` line; what `r` does (reply, or reply all; `a` is
+always reply all); and whether Ctrl+Enter sends. *Notifications* points to Settings → Notifications
+→ Mail, where the switch is.
+
+Remote content has three modes: *Ask* (blocked, with a bar offering *Load images*, *Always for
+this sender* and *Always for @domain*), *Allowed senders* (loaded for the addresses and domains on the
+list, blocked for everyone else) and *Always load*. The server decides, from the synced state, so
+remote content stays out of the HTML until the mode, the list or a *Load images* says otherwise;
+tracking pixels stay out in every mode. The list shows when each entry was added, with *Remove*, a
+search box from eight entries, *Add sender or domain…* (an in-OS prompt, checked) and *Clear all*
+(after a question). Choosing *Always for this sender* while the mode is *Ask* switches it to
+*Allowed senders*, since that is the mode that uses the list.
 
 While mail notifications are on (Settings → Notifications → Mail) or Mail was used in the last half
 hour, the server keeps a JMAP EventSource open per account (and polls every two minutes for servers
