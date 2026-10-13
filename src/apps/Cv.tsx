@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { contributions, education, experience, hobbies, profile, projects, skills } from '../data/profile'
+import { cvMode } from '../os/cvMode'
 import { useWM } from '../os/wm'
 import { EmailReveal } from './EmailReveal'
 
@@ -12,9 +13,12 @@ export function Cv() {
       <div className="cv-toolbar">
         <span className="muted">cv.md</span>
         <span className="spacer" />
-        <button className="btn btn-small" onClick={() => wm.open('terminal', { run: 'cat ~/cv.md' })}>
-          View as text
-        </button>
+        {/* cv.md is in the terminal's home folder on the CV page only (src/terminal/vfs.ts). */}
+        {cvMode() && (
+          <button className="btn btn-small" onClick={() => wm.open('terminal', { run: 'cat ~/cv.md' })}>
+            View as text
+          </button>
+        )}
         <button
           className="btn btn-small btn-primary"
           onClick={() => {

@@ -140,7 +140,7 @@ export function Launchpad() {
         label: 'Apps',
         icon: ICONS.apps,
         children: () =>
-          // The Calendar, Mail, Tasks, Contacts and Agents apps only mean something when signed in; the CV apps only exist at /cv.
+          // The Calendar, Mail, Tasks, Contacts and Agents apps only mean something when signed in; the CV apps are only launched at /cv.
           APP_ORDER.filter((a) => APP_META[a] && appHere(a) && ((a !== 'calendar' && a !== 'agents' && a !== 'tasks' && a !== 'contacts' && a !== 'mail') || signedIn()) && (!ALWAYS_NEW.has(a) || !!getAccount().seafile?.office)).map((app) => ({
             label: APP_META[app].dock,
             icon: <AppIcon app={app} size={16} tone />,

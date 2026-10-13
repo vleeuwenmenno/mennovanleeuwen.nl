@@ -123,7 +123,7 @@ const APPS: Record<string, AppId> = {
   mcserver: 'mcserver',
 }
 
-// The CV apps only exist at /cv (src/os/cvMode.ts).
+// The CV apps are only launched at /cv (src/os/cvMode.ts).
 for (const [name, app] of Object.entries(APPS)) if (!appHere(app)) delete APPS[name]
 
 const APP_NAMES: Record<AppId, string> = {

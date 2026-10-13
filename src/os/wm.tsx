@@ -43,6 +43,12 @@ export type WinState = {
    * part of the desktop and show on every workspace. Windows saved before workspaces are on 1.
    */
   ws?: number
+  /**
+   * A CV app's window (src/os/cvMode.ts) opened away from /cv, by the Minecraft widget, a
+   * notification or the Activity button: it shows on every page. The CV apps' windows opened on
+   * /cv stay there: the plain desktop keeps them aside and saves them back untouched.
+   */
+  anywhere?: true
 }
 
 /** How many workspaces there are, numbered from 1 like Omarchy's (Alt+1 to Alt+9 reach them all). */
@@ -192,7 +198,11 @@ function fresh(layout: { app: AppId; geometry: Geometry; props?: WinState['props
 // Saved layouts: which windows are open, where, and what they show. Phones and bigger screens
 // keep separate layouts, since one rarely fits the other.
 
-export type SavedWindow = Geometry & Pick<WinState, 'app' | 'minimized' | 'maximized' | 'snap' | 'restore' | 'props' | 'stack' | 'ws'>
+export type SavedWindow = Geometry & Pick<WinState, 'app' | 'minimized' | 'maximized' | 'snap' | 'restore' | 'props' | 'stack' | 'ws' | 'anywhere'>
+
+/** Whether a saved window shows on this page: everything does at /cv; elsewhere a CV app's window
+ * only when it was opened away from /cv (see WinState.anywhere). */
+const belongsHere = (w: Pick<SavedWindow, 'app' | 'anywhere'>) => appHere(w.app) || !!w.anywhere
 
 /** Saved layouts from before widgets: a sticky was its own app. */
 function migrate(w: SavedWindow): SavedWindow {
@@ -226,6 +236,7 @@ function serialize(windows: WinState[]): SavedWindow[] {
       restore: w.restore,
       stack: w.stack,
       ws: workspaceOf(w) ?? undefined,
+      anywhere: w.anywhere,
       props: persistentProps(w.app, w.props),
     }))
 }
@@ -317,6 +328,8 @@ function apply(state: State, action: Action): State {
         openedAt: Date.now(),
         // New windows open on the workspace on screen; notes and widgets belong to all of them.
         ws: NOTE_APPS.has(action.app) ? undefined : state.ws,
+        // A CV app opened away from /cv (the Minecraft widget, a notification): here, on every page.
+        anywhere: appHere(action.app) ? undefined : true,
       }
       return { ...state, touched: true, focused: win.pid, windows: [...state.windows, win], nextPid: state.nextPid + 1, topZ: z, unplaced: state.unplaced && [...state.unplaced, win.pid] }
     }
@@ -502,7 +515,17 @@ export function WindowManagerProvider({
   /** A window's name, for telling where it is. */
   nameOf?: (w: WinState) => string
 }) {
-  const usable = useCallback((saved: SavedWindow[] | null) => saved?.map(migrate).filter((w) => isApp(w.app)) ?? null, [isApp])
+  // The saved windows that belong to another page (the CV apps' windows from /cv, on the plain
+  // desktop): not shown here, but saved back with this page's windows so /cv keeps them.
+  const held = useRef<SavedWindow[]>([])
+  const usable = useCallback(
+    (saved: SavedWindow[] | null) => {
+      const known = saved?.map(migrate).filter((w) => isApp(w.app)) ?? null
+      held.current = known?.filter((w) => !belongsHere(w)) ?? []
+      return known?.filter(belongsHere) ?? null
+    },
+    [isApp],
+  )
   const [state, dispatch] = useReducer(reducer, null, () => {
     // Settings → Windows: last time's windows, the welcome windows, or an empty desktop.
     const start = startupPrefs().windows
@@ -600,7 +623,7 @@ export function WindowManagerProvider({
     // when Last windows is chosen again (and other devices keep theirs).
     if (startupPrefs().windows !== 'last') return
     savedEdits.current = stateRef.current.edits
-    layoutStore().set(serialize(stateRef.current.windows))
+    layoutStore().set([...held.current, ...serialize(stateRef.current.windows)])
   }, [])
   useEffect(() => {
     if (state.edits === savedEdits.current) return
@@ -633,11 +656,18 @@ export function WindowManagerProvider({
     [usable],
   )
 
+  // A CV app opened away from /cv opens right here, on every page from then on (WinState.anywhere).
+  // Its window from /cv, if there is one and none is open here, makes way for it, so /cv doesn't
+  // end up with two.
+  const takeOver = useCallback((app: AppId, props?: WinState['props']) => {
+    if (appHere(app) || reused(stateRef.current, app, props)) return
+    held.current = held.current.filter((w) => w.app !== app)
+  }, [])
+
   // "Trash" is a place, not an app: it opens in Files (whose trash:// view lists trashed items).
   const open = useCallback(
     (app: AppId, props?: WinState['props']) => {
-      // A CV app asked for away from /cv (an old link, a widget): it lives on the CV page.
-      if (!appHere(app)) return location.assign(`/cv?open=${app}`)
+      takeOver(app, props)
       if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH, t: String(Date.now()) }, geometry: placement('files', state.windows.length) })
       if (ALWAYS_NEW.has(app)) return dispatch({ type: 'open', app, props: { ...props, create: String(Date.now()) }, newInstance: true, geometry: placement(app, state.windows.length, props) })
       const action: Action = { type: 'open', app, props, geometry: placement(app, state.windows.length, props) }
@@ -646,16 +676,15 @@ export function WindowManagerProvider({
       if (there && isAway(stateRef.current, there)) return elsewhereNotice(there, () => dispatch(action))
       dispatch(action)
     },
-    [placement, state.windows.length, elsewhereNotice],
+    [placement, state.windows.length, elsewhereNotice, takeOver],
   )
   const openNew = useCallback(
     (app: AppId, props?: WinState['props']) => {
-      // A CV app asked for away from /cv (an old link, a widget): it lives on the CV page.
-      if (!appHere(app)) return location.assign(`/cv?open=${app}`)
+      if (SINGLE_INSTANCE.has(app)) takeOver(app, props)
       if (app === 'trash') return dispatch({ type: 'open', app: 'files', props: { path: TRASH_PATH }, newInstance: true, geometry: placement('files', state.windows.length) })
       dispatch({ type: 'open', app, props: ALWAYS_NEW.has(app) ? { ...props, create: String(Date.now()) } : props, newInstance: true, geometry: placement(app, state.windows.length, props) })
     },
-    [placement, state.windows.length],
+    [placement, state.windows.length, takeOver],
   )
 
   useEffect(() => {
@@ -721,6 +750,7 @@ export function WindowManagerProvider({
       reset: (empty) => {
         dispatch({ type: 'reset', layout: empty ? [] : relayout(), ws: tabs.status === 'own' ? state.ws : undefined })
         savedEdits.current = 0
+        held.current = []
         layoutStore().set(null)
       },
     }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { MC_ADDRESS, MC_PORT, mcAdmin, mcAdminInfo, mcNotificationsOn, setMcNotifications, useMcOverview, useMinecraft, worldLine, type McAdminRequest, type McAdminResult, type McOverview, type McPlayerInfo, type McRange } from '../data/minecraft'
+import { dimension, MC_ADDRESS, MC_PORT, mcAdmin, mcAdminInfo, mcNotificationsOn, setMcNotifications, useMcOverview, useMinecraft, vitals, worldLine, type McAdminRequest, type McAdminResult, type McOverview, type McRange } from '../data/minecraft'
 import { timeAgo } from '../data/recents'
 import { useAccount } from '../os/account'
 import { ask } from '../os/Dialogs'
@@ -202,19 +202,10 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
   )
 }
 
-const DIMENSION: Record<string, string> = { overworld: 'Overworld', nether: 'Nether', end: 'End' }
-
 /** Where a player is: a small coloured chip (green Overworld, red Nether, purple End, grey otherwise). */
 function Dimension({ id }: { id: string }) {
-  const known = Object.hasOwn(DIMENSION, id)
-  return <span className={`mcs-dim is-${known ? id : 'other'}`}>{known ? DIMENSION[id] : id.replace(/_/g, ' ')}</span>
-}
-
-/** "Lv 30 · ♥ 10/10": hearts are two health points each. */
-function vitals(info: McPlayerInfo | undefined) {
-  if (!info) return null
-  const parts = [info.level !== undefined && `Lv ${info.level}`, info.health !== undefined && `♥ ${Math.round(info.health) / 2}/10`].filter(Boolean)
-  return parts.length ? parts.join(' · ') : null
+  const d = dimension(id)
+  return <span className={`mcs-dim is-${d.kind}`}>{d.label}</span>
 }
 
 function OnNow({ status, data, run }: { status: ReturnType<typeof useMinecraft>['status']; data: McOverview | null; run: Console['run'] | null }) {

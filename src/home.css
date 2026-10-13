@@ -3681,7 +3681,16 @@ button.cal-day.is-picked:not(.is-today) {
 .mcw-addr:hover {
   background: color-mix(in srgb, currentColor 7%, transparent);
 }
+.mcw-motd {
+  margin-top: -4px;
+  overflow: hidden;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.65;
+}
 .mcw-players {
+  position: relative; /* the heads' offset parent, for the bubble's arrow */
   display: flex;
   align-items: center;
   gap: 10px;
@@ -3703,23 +3712,120 @@ button.cal-day.is-picked:not(.is-today) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
 }
-.mcw-heads img {
+/* A player's head: a button that says who it is (the bubble below). */
+.mcw-face {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: none;
+  line-height: 0;
+  cursor: pointer;
+}
+.mcw-face img {
+  width: 24px;
+  height: 24px;
+  border-radius: 2px;
   image-rendering: pixelated;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 0.12s;
+}
+.mcw-face:hover img,
+.mcw-face.is-shown img {
+  transform: translateY(-1px) scale(1.08);
+}
+.mcw-face.is-shown,
+.mcw-face:focus-visible {
+  outline: 2px solid #2b2418;
+  outline-offset: 1px;
+}
+/* Who a head is, just above that head's line of heads (--face-top), its arrow at the head
+   (--arrow). Dark on the light widget, in either theme: the widget has its own colours. */
+.mcw-bubble {
+  position: absolute;
+  bottom: calc(100% - var(--face-top, 0px) + 8px);
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 9px;
+  border-radius: 5px;
+  background: #2b2418;
+  color: #f6efe2;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+  font-size: 12px;
+  line-height: 1.35;
+  cursor: default;
+}
+.mcw-bubble::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: calc(var(--arrow, 24px) - 4px);
+  width: 8px;
+  height: 8px;
+  background: inherit;
+  transform: rotate(45deg);
+}
+.mcw-bubble strong {
+  overflow-wrap: anywhere;
+}
+.mcw-bubble-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.mcw-dim {
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--d) 60%, transparent);
+  color: var(--d);
+  font-size: 10.5px;
+  line-height: 15px;
+  white-space: nowrap;
+  --d: #cfc5b3;
+}
+.mcw-dim.is-overworld {
+  --d: #8fd48a;
+}
+.mcw-dim.is-nether {
+  --d: #ff9384;
+}
+.mcw-dim.is-end {
+  --d: #d8a4ff;
+}
+.mcw-vitals {
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
 }
 .mcw-more,
 .mcw-muted {
   font-size: 11px;
   opacity: 0.65;
 }
-.mcw-world {
+.mcw-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   padding-top: 7px;
   border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
-  font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+.mcw-world {
+  font-size: 12px;
+}
+.mcw-meta {
+  overflow: hidden;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.65;
 }
 
 /* ---------- Calendar app (src/apps/calendar) ---------- */
