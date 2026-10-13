@@ -3,12 +3,15 @@ import { addAccount, defaultBook, listAccounts, removeAccount, useContacts, type
 import { signIn, useAccount } from '../../os/account'
 import { ask } from '../../os/Dialogs'
 import { Select } from '../../os/Select'
+import { IntegrationNotice } from '../../os/IntegrationNotice'
 import { useWM } from '../../os/wm'
+import { SecretInput } from '../../os/SecretInput'
 
-// Settings for Contacts (Settings → Integrations → Contacts, and Settings → Apps → Contacts): the
-// CardDAV accounts (Fastmail, iCloud, Nextcloud, Radicale or any other), a CalDAV login to use for
-// contacts too, and the address book new contacts go in. The address book on this site is always
-// there, for whoever has no CardDAV server.
+// Settings for Contacts. The accounts are linked in Settings → Integrations → Contacts
+// (ContactsAccounts): CardDAV (Fastmail, iCloud, Nextcloud, Radicale or any other), and a CalDAV
+// login to use for contacts too. The app's own setting, the address book new contacts go in, is in
+// Settings → Apps → Contacts (ContactsSettings), under a pointer to the accounts. The address book
+// on this site is always there, for whoever has no CardDAV server.
 
 type Provider = 'fastmail' | 'icloud' | 'nextcloud' | 'other'
 const PROVIDERS: { id: Provider; label: string; url?: string; placeholder?: string }[] = [
@@ -18,11 +21,53 @@ const PROVIDERS: { id: Provider; label: string; url?: string; placeholder?: stri
   { id: 'other', label: 'Other', placeholder: 'https://dav.example.com/' },
 ]
 
+/** Settings → Apps → Contacts: where new contacts go; the accounts are in Integrations. */
 export function ContactsSettings() {
+  const account = useAccount()
+  const { books } = useContacts()
+  const choice = defaultBook.use()
+  if (account.status !== 'user') return <SignInFirst />
+  const writable = books.filter((b) => b.writable)
+  return (
+    <>
+      <IntegrationNotice sub="contacts" linked={books.some((b) => b.account !== undefined)} app="Contacts" invite="Link a CardDAV account (Fastmail, iCloud, Nextcloud…) to bring its address books here." />
+      {writable.length > 1 ? (
+        <>
+          <h4 className="set-subhead">New contacts</h4>
+          <div className="set-row">
+            <span className="set-row-text">
+              <strong>Add new contacts to</strong>
+              <span className="muted">From the Contacts app's + New, and "Add to contacts" in other apps</span>
+            </span>
+            <Select value={writable.some((b) => b.id === choice) ? choice : 'local'} options={writable.map((b) => ({ value: b.id, label: b.name, note: b.id === 'local' ? undefined : b.source }))} onChange={(v) => defaultBook.set(v)} aria-label="Address book for new contacts" />
+          </div>
+        </>
+      ) : (
+        <p className="muted set-help">New contacts are kept on this site. With a second address book that can be changed, you pick here which one they go in.</p>
+      )}
+    </>
+  )
+}
+
+const SignInFirst = () => {
+  const account = useAccount()
+  return (
+    <div className="set-empty">
+      <p className="muted">Sign in first to keep contacts.</p>
+      {account.status === 'anon' && (
+        <button className="btn btn-primary" onClick={signIn}>
+          Sign in with GitHub
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** Settings → Integrations → Contacts: the CardDAV accounts. */
+export function ContactsAccounts() {
   const account = useAccount()
   const wm = useWM()
   const { books, errors } = useContacts()
-  const choice = defaultBook.use()
   const [data, setData] = useState<{ accounts: CarddavInfo[]; reusable: ReusableLogin[] } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<number | null>(null)
@@ -31,17 +76,7 @@ export function ContactsSettings() {
     if (account.status === 'user') void reload()
   }, [account.status])
 
-  if (account.status !== 'user')
-    return (
-      <div className="set-empty">
-        <p className="muted">Sign in first to keep contacts.</p>
-        {account.status === 'anon' && (
-          <button className="btn btn-primary" onClick={signIn}>
-            Sign in with GitHub
-          </button>
-        )}
-      </div>
-    )
+  if (account.status !== 'user') return <SignInFirst />
 
   const reuse = async (r: ReusableLogin) => {
     setBusy(r.caldav)
@@ -61,7 +96,6 @@ export function ContactsSettings() {
     await reload()
   }
 
-  const writable = books.filter((b) => b.writable)
   return (
     <>
       <h4 className="set-subhead">Address books</h4>
@@ -104,18 +138,6 @@ export function ContactsSettings() {
       <CarddavForm onAdded={() => void reload()} />
       {(error || errors.length > 0) && <p className="t-red">{[error, ...errors].filter(Boolean).join(' · ')}</p>}
 
-      {writable.length > 1 && (
-        <>
-          <h4 className="set-subhead">New contacts</h4>
-          <div className="set-row">
-            <span className="set-row-text">
-              <strong>Add new contacts to</strong>
-              <span className="muted">From the Contacts app's + New, and "Add to contacts" in other apps</span>
-            </span>
-            <Select value={writable.some((b) => b.id === choice) ? choice : 'local'} options={writable.map((b) => ({ value: b.id, label: b.name, note: b.id === 'local' ? undefined : b.source }))} onChange={(v) => defaultBook.set(v)} aria-label="Address book for new contacts" />
-          </div>
-        </>
-      )}
       <div className="set-actions">
         <button className="btn btn-small" onClick={() => wm.open('contacts', { t: String(Date.now()) })}>
           Open Contacts
@@ -169,7 +191,7 @@ function CarddavForm({ onAdded }: { onAdded: () => void }) {
       </label>
       <label>
         <span>App password</span>
-        <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="app password" required autoComplete="off" />
+        <SecretInput value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="app password" required />
       </label>
       <p className="muted set-help">
         {provider === 'fastmail' ? (

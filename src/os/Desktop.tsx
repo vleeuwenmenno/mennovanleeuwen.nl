@@ -8,7 +8,7 @@ import { addWidgetItems } from '../widgets/registry'
 import { projects } from '../data/profile'
 import { HOME, kindOfName, type FileKind } from '../terminal/vfs'
 import { pickAndUpload } from '../data/uploads'
-import { getClipboard, setClipboard, openSeafile, refreshDirs, setSeafilePrefs, useDir, useSeafileHome, useSeafilePrefs } from '../data/seafile'
+import { getClipboard, setClipboard, openSeafile, refreshDirs, revalidateDir, setSeafilePrefs, useDir, useSeafileHome, useSeafilePrefs } from '../data/seafile'
 import { deleteNoteFor as deleteNote, downloadFile as download, makeFile as createFile, makeFolder as mkdir, removePaths as deleteItems, renamePath as renameItem, transferPaths as transferItems } from '../data/fileOps'
 import { dropIntoFolder, folderOp, undoLastMove, type Landed } from '../data/fileDrop'
 import { beginPointerDrag, holdToDrag, keysOf, useDropTarget, type DragItem, type PointerDrag } from './dnd'
@@ -232,7 +232,7 @@ export function Desktop() {
   const sfDir = useDir(seafileDesktop, 15_000)
   useEffect(() => {
     if (!seafileDesktop) return
-    const again = () => document.visibilityState === 'visible' && refreshDirs(seafileDesktop)
+    const again = () => document.visibilityState === 'visible' && revalidateDir(seafileDesktop)
     const t = setInterval(again, 60_000)
     window.addEventListener('focus', again)
     return () => {

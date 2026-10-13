@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { ask } from '../../os/Dialogs'
 import { useWM } from '../../os/wm'
 import { linkMailAccount, unlinkMailAccount, useMailAccounts } from '../../data/mail'
+import { SecretInput } from '../../os/SecretInput'
 
 // Settings → Integrations → Mail: JMAP accounts for the Mail app. A session URL (Fastmail's when
 // left empty; a host is looked up at /.well-known/jmap) and an API token, checked by the server
@@ -73,7 +74,7 @@ export function MailSettings() {
         </label>
         <label>
           <span>API token</span>
-          <input type="password" value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} placeholder="API token" autoComplete="off" required />
+          <SecretInput value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} placeholder="API token" required />
         </label>
         <label>
           <span>Name</span>

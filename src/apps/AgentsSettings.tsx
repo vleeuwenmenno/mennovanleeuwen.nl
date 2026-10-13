@@ -13,6 +13,7 @@ import { useWM } from '../os/wm'
 import { writeFile } from '../terminal/fs'
 import { SharesSettings } from './AgentsShare'
 import { HOME } from '../terminal/vfs'
+import { SecretInput } from '../os/SecretInput'
 
 // The Agents app's settings, laid out like the rest of Settings: Ollama Cloud, the models, the web
 // search provider, what a new thread starts with, the system prompt in ~/AGENTS.md and the links
@@ -270,7 +271,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
             <li key={g.id} className={`set-row ${off ? 'is-off' : ''}`}>
               <span className="set-row-text">
                 <strong>{g.name}</strong>
-                <span className="muted">{g.calendar && !hasCalendar(account) ? `${g.detail}. Connect a calendar first, in Settings → Apps → Calendar` : g.detail}</span>
+                <span className="muted">{g.calendar && !hasCalendar(account) ? `${g.detail}. Connect a calendar first, in Settings → Integrations → Calendars` : g.detail}</span>
               </span>
               <Toggle
                 on={settings.tools.includes(g.id)}
@@ -576,19 +577,17 @@ function WebSearchSettings() {
             </label>
             <label>
               <span>Authorization</span>
-              <input type="password" value={draft.searxngAuth} onChange={(e) => edit({ searxngAuth: e.target.value })} placeholder={view.searxng.auth ? SAVED : 'optional, sent as the Authorization header'} autoComplete="off" />
+              <SecretInput value={draft.searxngAuth} onChange={(e) => edit({ searxngAuth: e.target.value })} placeholder={view.searxng.auth ? SAVED : 'optional, sent as the Authorization header'} />
             </label>
           </>
         )}
         {(p === 'brave' || p === 'kagi' || p === 'tavily') && (
           <label>
             <span>API key</span>
-            <input
-              type="password"
+            <SecretInput
               value={draft.keys[p]}
               onChange={(e) => edit({ keys: { ...draft.keys, [p]: e.target.value } })}
               placeholder={view[p].key ? SAVED : `${providerLabel(p)} API key`}
-              autoComplete="off"
               required={!view[p].key}
             />
           </label>
@@ -615,7 +614,7 @@ function WebSearchSettings() {
                 {draft.headers.map((h, i) => (
                   <div key={i} className="ws-row">
                     <input value={h.name} onChange={(e) => header(i, { name: e.target.value })} placeholder="Header" aria-label="Header name" spellCheck={false} autoComplete="off" />
-                    <input type="password" value={h.value} onChange={(e) => header(i, { value: e.target.value })} placeholder={h.set ? SAVED : 'value'} aria-label={`Value of ${h.name || 'the header'}`} autoComplete="off" />
+                    <SecretInput value={h.value} onChange={(e) => header(i, { value: e.target.value })} placeholder={h.set ? SAVED : 'value'} aria-label={`Value of ${h.name || 'the header'}`} />
                     <button type="button" className="btn btn-small" onClick={() => edit({ headers: draft.headers.filter((_, j) => j !== i) })} aria-label="Remove header">
                       ×
                     </button>

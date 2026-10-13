@@ -403,15 +403,24 @@ Settings: the account on top of a sidebar, then one pane each for appearance (mo
 accent), the dock, launchers, Spotlight, windows, links, notifications, go links, code hosts and
 integrations; then, under an **Apps** heading, one pane per app with settings of its own, with the
 app's dock icon ([`src/apps/AppSettings.tsx`](src/apps/AppSettings.tsx)); then sync, users and about.
-The Apps panes are Agents, Calendar (its accounts and calendars, the view it opens in and where new
-events go), Contacts (address books and where new contacts go), Files (view, icon size, sort order, hidden files, sidebar), Games (Pool's helpers,
+Every account is linked in **Integrations**, one row each with a green dot and a line about what is
+linked: calendars (Google Calendar and CalDAV, for Calendar and Tasks), contacts (CardDAV), Mail,
+Immich, Seafile, OnlyOffice, Ollama Cloud and updown.io. The Apps panes keep only what is about the
+app, and where an app needs an account they start with a small notice and a button that opens that
+integration (*Accounts for Calendar are linked in Integrations*, or *Link a calendar account to get
+started* when there is none). The Apps panes are Agents, Calendar (which calendars show, the view it
+opens in and where new events go), Contacts (where new contacts go), Files (view, icon size, sort order, hidden files, sidebar), Games (Pool's helpers,
 sensitivity, computer and sound; Gladiator's sound and music; Empires At War's sound, battlefield,
 camera and a summary of its key bindings, with a button into the game's own key bindings and sound
 mix), Omamp (shuffle, repeat, equalizer and preset, visualizer, time, its windows), PDF (sidebar,
 night mode), Preview (sidebar) and Terminal. Each pane reads and writes the very store the app uses
 ([`src/data/appPrefs.ts`](src/data/appPrefs.ts), [`src/apps/games/prefs.ts`](src/apps/games/prefs.ts),
 through [`src/os/localPref.ts`](src/os/localPref.ts) for what stays in this browser), so an open
-window follows a change at once and the other way round. Those apps' window menus have *… settings…*
+window follows a change at once and the other way round. Every field for a secret that belongs to another
+service (API tokens, app passwords, a library's password) is a
+[`SecretInput`](src/os/SecretInput.tsx): a text input masked with CSS and marked for password
+managers to leave alone, with a show/hide button, because browsers fill a saved password into any
+`type="password"` field and ignore `autocomplete="off"` there. Those apps' window menus have *… settings…*
 to jump to their pane.
 Settings → Spotlight picks what the empty Spotlight shows (favourites, recently visited websites,
 status, apps, your repositories) and how many recent items of each, which kinds of results it searches (your
@@ -533,7 +542,7 @@ Setup:
 
 Without the OAuth settings, sign-in is simply off and everything else works as before.
 
-**Google Calendar** attaches to the GitHub sign-in (system menu or Settings → Calendar) for the
+**Google Calendar** attaches to the GitHub sign-in (system menu or Settings → Integrations → Calendars) for the
 Calendar app, the Agenda widget and the clock: your calendars, shared ones included, with Google's
 refresh token stored encrypted next to the Gitea tokens ([`server/google.ts`](server/google.ts)). It
 needs `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from a Google Cloud OAuth client (type *Web
@@ -544,10 +553,10 @@ production*: in *Testing*, Google expires the access after seven days. The Calen
 "sensitive": until Google has verified the app, everyone connecting sees Google's "unverified app"
 screen and at most 100 accounts can connect (verification asks for the privacy page,
 `/privacy.html`). Accounts connected before
-the Calendar app stay read-only until connected again (Settings → Calendar → *Allow editing*).
+the Calendar app stay read-only until connected again (Settings → Integrations → Calendars → *Allow editing*).
 
 **CalDAV** calendars (Fastmail, Nextcloud, iCloud and others) work next to Google: Settings →
-Calendar → add an account with its server URL (Fastmail's is filled in), username and an app
+Integrations → Calendars → add an account with its server URL (Fastmail's is filled in), username and an app
 password, stored encrypted ([`server/caldav.ts`](server/caldav.ts)). Read-only is enough to look;
 the Calendar app needs read-write to change things (adding the same account again replaces its
 password). The calendars are found from the URL, and events are fetched by date range with the
@@ -571,7 +580,9 @@ text on the CalDAV server, written back with its ETag so other apps' properties 
 over [JMAP](https://jmap.io) (RFC 8620 and 8621): Fastmail, Stalwart and other servers that speak
 it. Settings → Integrations → Mail links an account with an API token (for Fastmail: Settings →
 Privacy & Security → Manage API tokens, with *Mail* and *Submission* access) and, for anything but
-Fastmail, the server's address, where the session is found through `/.well-known/jmap`. The token is
+Fastmail, the server's address, where the session is found through `/.well-known/jmap`. Fastmail's tokens
+all start with `fmu1-`: anything else is refused before it is sent, and a refusal from the server comes
+with its own short reason. The token is
 checked once, stored encrypted and never sent to the browser: the server makes every JMAP call,
 through the same egress checks as the other integrations, batched with back-references. IMAP and
 SMTP are not supported. The app has mailboxes with unread counts, conversations (a list drawn only
@@ -618,7 +629,7 @@ message menu's *Make task from this email* and *Create event from this email*, `
 
 **Tasks** ([`src/apps/tasks`](src/apps/tasks), [`server/tasks.ts`](server/tasks.ts)) is a to-do app laid
 out like Apple's Reminders, for signed-in users. Its lists are the task lists of the CalDAV accounts in
-Settings → Calendar (the collections that take VTODOs: Fastmail's and Nextcloud's calendars, and
+Settings → Integrations → Calendars (the collections that take VTODOs: Fastmail's and Nextcloud's calendars, and
 iCloud's reminders lists as far as iCloud still serves them over CalDAV; lists moved to Apple's newer
 Reminders are not), and lists kept on the site itself, in SQLite, for accounts without CalDAV (those
 start with one, *Reminders*). Above the lists, grouped by account, are the smart lists *Today* (due
@@ -999,7 +1010,7 @@ Spotlight takes questions too: *Ask Agents* is under the web search, and a `?` i
 the top hit. `OLLAMA_URL` points it at a stand-in for ollama.com when testing.
 
 The Calendar tools ([`server/agentCalendar.ts`](server/agentCalendar.ts)) work on the calendars
-connected in Settings → Apps → Calendar, Google and CalDAV, shared ones included, through the same
+connected in Settings → Integrations → Calendars, Google and CalDAV, shared ones included, through the same
 code as the Calendar app: `calendar_list_calendars` (ids, names, accounts, which can be changed,
 whose they are, the default for new events), `calendar_list_events` (a range, by default the next
 14 days, with an optional text search over title, description and place), and
@@ -1132,7 +1143,7 @@ Thumbnails come from Seafile's thumbnail API through the server (the token stays
 ETag and a week's Cache-Control; the full photo comes straight from Seafile's file server with a
 short-lived link, as in Files. Linking another Seafile account starts the index over.
 
-**Immich** is linked in Settings → Integrations or in Photos' ⚙ view, with its URL and an API key
+**Immich** is linked in Settings → Integrations (Photos' ⚙ view has a button to it), with its URL and an API key
 (Immich: *Account settings → API keys*; All, or at least asset.read, asset.view, asset.download,
 asset.update, album.read, timeline.read and user.read, plus asset.delete for the trash and
 albumAsset.create for *Add to album*). Linking asks Immich for its version first
@@ -1164,7 +1175,7 @@ yet tried against a real Seafile or Immich server, nor with HEIC files from a re
 
 The **Contacts** app ([`src/apps/contacts`](src/apps/contacts)) keeps everyone in one list: the
 address book on this site (in SQLite, for whoever has no CardDAV server) and every CardDAV address
-book linked in Settings → Integrations → Contacts (or Settings → Apps → Contacts): Fastmail (its
+book linked in Settings → Integrations → Contacts (Settings → Apps → Contacts keeps where new contacts go): Fastmail (its
 URL is filled in), iCloud, Nextcloud, Radicale and any other, with an app password stored
 encrypted like CalDAV's. When a CalDAV account is linked already, the pane offers to use its login
 for contacts too (Fastmail's carddav host, iCloud's contacts host, the same URL elsewhere); the

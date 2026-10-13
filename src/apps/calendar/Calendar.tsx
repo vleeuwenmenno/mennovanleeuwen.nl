@@ -43,7 +43,7 @@ import { dayLoad, MiniMonth, YearView } from './YearView'
 // week, month or year. Events can be made (click or drag on an empty spot), moved and stretched
 // (drag them), changed, moved to another calendar and deleted, with people invited by email;
 // Google and the CalDAV server keep them, so they show on your phone too. The calendars ticked in
-// the sidebar are the same switches as in Settings → Calendar. Tasks with a due date show too
+// the sidebar are the same switches as in Settings → Apps → Calendar. Tasks with a due date show too
 // (src/apps/calendar/tasks.ts), per list as switched on under Tasks in the sidebar: tick them
 // there, drag them to another day or time, open them in the Tasks app. So do your contacts'
 // birthdays (src/apps/calendar/birthdays.ts), and .ics files dropped on it are imported.
@@ -427,7 +427,7 @@ export function CalendarApp({ win }: { win: WinState }) {
                     Google Calendar
                   </button>
                 )}
-                <button className="btn" onClick={() => wm.open('settings', { section: 'calendar', t: String(Date.now()) })}>
+                <button className="btn" onClick={() => wm.open('settings', { section: 'integrations', sub: 'calendars', t: String(Date.now()) })}>
                   Fastmail / CalDAV…
                 </button>
               </div>
