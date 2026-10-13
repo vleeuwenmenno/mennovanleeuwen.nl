@@ -57,6 +57,8 @@ const DEFS: Record<string, ModelDef> = {
   'd-engineer': base.droidEngineer,
   'r-yard': base.republicYard,
   'd-yard': base.droidYard,
+  'r-cyard': base.republicCapitalYard,
+  'd-cyard': base.droidCapitalYard,
 }
 
 /**
@@ -181,10 +183,12 @@ export function buildModel(t: UnitType, style?: string): Model {
   const sockets: Part[] = mounts
     .filter((m) => m.design !== 'engine')
     .map((m) => ({ id: `socket${m.hp}`, pts: circle(m.x, m.y, m.r * 1.1, 18), tone: 'dark' as const, z: 0.5, details: [{ k: 'line' as const, pts: circle(m.x, m.y, m.r * 0.92, 16) }] }))
-  const parts = [...spec.parts.filter((p) => (p.level ?? 1) <= level), ...sockets].sort((a, b) => a.z - b.z)
-  // A mining platform with its Shield generator fitted is a type of its own with one more socket,
-  // so its key names its modules too, as a station's does.
-  const key = `${t.tier === 'station' ? `${t.id}:${level}:${t.hardpoints.map((p) => p.key).join(',')}` : t.tier === 'mine' ? `${t.id}:${t.hardpoints.map((p) => p.key).join(',')}` : t.id}${t.big ? ':big' : ''}${style ? `:${style}` : ''}`
+  // Expansion modules (hybrid bases) are built onto the structure as parts of their own.
+  const extra = base.expansionParts(t, w, h)
+  const parts = [...spec.parts.filter((p) => (p.level ?? 1) <= level), ...extra, ...sockets].sort((a, b) => a.z - b.z)
+  // A mining platform with its Shield generator fitted, or a yard with expansions built onto it, is
+  // a type of its own with more sockets, so its key names its modules too, as a station's does.
+  const key = `${t.tier === 'station' ? `${t.id}:${level}:${t.hardpoints.map((p) => p.key).join(',')}` : t.tier === 'mine' || t.tier === 'yard' ? `${t.id}:${t.hardpoints.map((p) => p.key).join(',')}` : t.id}${t.big ? ':big' : ''}${style ? `:${style}` : ''}`
   const seed = seedOf(t.tier === 'station' ? `${t.id}:${level}` : t.id)
   return {
     key,

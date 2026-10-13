@@ -1,4 +1,4 @@
-import type { Hardpoint, HardpointKind } from './data'
+import { MODULE, type Hardpoint, type HardpointKind } from './data'
 
 // Line icons for hardpoints, as SVG path data on a 24x24 grid. The HUD draws them as inline SVG
 // and the battlefield as Path2D, so both show the same symbols. Stroked, never filled.
@@ -25,4 +25,4 @@ export const HP_ICON: Record<HardpointKind, string> = {
 export const HP_NAME: Record<HardpointKind, string> = { turret: 'Turbolaser', shield: 'Shield generator', engine: 'Engines', hangar: 'Hangar', refinery: 'Refinery', dock: 'Repair dock', sensor: 'Targeting array', drill: 'Drill rig' }
 export const HP_COLOR: Record<HardpointKind, string> = { turret: '#ffb347', shield: '#59c8ff', engine: '#ffe066', hangar: '#7dffa0', refinery: '#e0b070', dock: '#c8a0ff', sensor: '#ff7fb0', drill: '#7ff0ff' }
 /** One hardpoint's name: turrets go by the gun they carry. */
-export const hpName = (h: Hardpoint) => (h.art === 'flak' ? 'Point defence' : h.art === 'ion' ? 'Ion cannon' : HP_NAME[h.kind])
+export const hpName = (h: Hardpoint) => (h.exp ? MODULE[h.exp].name : h.art === 'flak' ? 'Point defence' : h.art === 'ion' ? 'Ion cannon' : HP_NAME[h.kind])

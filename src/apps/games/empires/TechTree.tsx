@@ -1,6 +1,7 @@
 import { useRef } from 'react'
-import { LEVEL_UP, MAX_LEVEL, MAX_RESEARCH, TECH, UPGRADES, buildable, techsFor, unitOf, type FactionId, type UnitType } from './data'
-import { Icon, TechIcon, fmt, levelBlurb, researchName, techState, useUnitArt, type Hud, type TechStatus } from './Hud'
+import { LEVEL_UP, MAX_LEVEL, MAX_RESEARCH, MODULE, TECH, UPGRADES, WORKS_NAME, buildable, modulesFor, techsFor, unitOf, yardOf, type FactionId, type ModuleId, type UnitType, type Works } from './data'
+import { HP_COLOR } from './icons'
+import { HpIcon, Icon, TechIcon, fmt, levelBlurb, moduleState, moduleTip, researchName, techState, useUnitArt, type Hud, type TechStatus } from './Hud'
 import { Modal } from './Menus'
 import type { Owner, World } from './sim'
 import { LongPress, isTouch, useCoarse } from './Touch'
@@ -53,9 +54,14 @@ function layout(nodes: TreeNode[]) {
 const nodeX = (col: number) => HEAD_W + COL_GAP + col * (NODE_W + COL_GAP)
 const laneY = (lane: number) => lane * (NODE_H + LANE_GAP) + NODE_H / 2
 
-type Props = { w: World; me: Owner; hud: Hud; onResearch: (id: string) => void; onCancel: (index: number) => void; onClose: () => void }
+type Props = {
+  w: World; me: Owner; hud: Hud; onResearch: (id: string) => void; onCancel: (index: number) => void; onClose: () => void
+  /** Hybrid bases: order an expansion on building `uid`, or call off the one at `index` in its queue. */
+  onExpand?: (uid: number, id: ModuleId) => void
+  onCancelExpand?: (uid: number, index: number) => void
+}
 
-export function TechTree({ w, me, hud, onResearch, onCancel, onClose }: Props) {
+export function TechTree({ w, me, hud, onResearch, onCancel, onClose, onExpand, onCancelExpand }: Props) {
   const faction = w.players[me].faction
   const lines = linesFor(faction)
   const coarse = useCoarse()
@@ -66,6 +72,7 @@ export function TechTree({ w, me, hud, onResearch, onCancel, onClose }: Props) {
         {coarse ? 'Tap a tile to queue it; long-press it or tap ✕ to cancel and get the credits back.' : 'Click a tile to queue it, right-click or ✕ to cancel and get the credits back.'} Research runs one at a time, in order. The battle carries on while this is open.
       </p>
       <div className="ew-tt-scroll">
+        {w.hybrid && onExpand && onCancelExpand && (['station', 'yard', 'cyard'] as Works[]).map((k) => <BaseLine key={k} kind={k} w={w} me={me} hud={hud} faction={faction} onExpand={onExpand} onCancel={onCancelExpand} />)}
         {lines.map((line) => (
           <TreeLine key={line.t.id} line={line} w={w} me={me} hud={hud} faction={faction} onResearch={onResearch} onCancel={onCancel} />
         ))}
@@ -124,6 +131,61 @@ function ResearchQueue({ hud, onCancel }: { hud: Hud; onCancel: (index: number) 
         {fmt(hud.credits)}
       </span>
     </div>
+  )
+}
+
+/**
+ * Hybrid bases: one building's expansions as a line of the tree, the building at its head (with
+ * where it stands: built, going up, or what it needs) and a tile per module, with what it does, its
+ * price and time and where it stands. Click a tile to order it on the building, again to call it off.
+ */
+function BaseLine({ kind, w, me, hud, faction, onExpand, onCancel }: { kind: Works; w: World; me: Owner; hud: Hud; faction: FactionId; onExpand: (uid: number, id: ModuleId) => void; onCancel: (uid: number, index: number) => void }) {
+  const art = useUnitArt()
+  const mods = modulesFor(kind)
+  const t = kind === 'station' ? unitOf(faction, 'station') : yardOf(faction, kind)
+  const u = kind === 'station' ? w.byId.get(w.players[me].station) : w.units.find((x) => !x.dead && x.owner === me && x.t.id === t.id)
+  const head = kind === 'station' ? `Level ${hud.level} of ${MAX_LEVEL}` : !u ? (t.level > hud.level ? `Needs station level ${t.level}` : 'Not built yet: engineers build it') : u.site ? 'Going up' : 'Built'
+  const width = nodeX(mods.length) - COL_GAP
+  return (
+    <section className="ew-tt-line is-base" style={{ gridTemplateColumns: `${HEAD_W}px repeat(${mods.length}, ${NODE_W}px)`, gridTemplateRows: `${NODE_H}px`, columnGap: COL_GAP, width }}>
+      <div className={`ew-tt-head ${!u ? 'is-locked' : ''}`}>
+        <img src={art(t.sprite)} alt="" />
+        <strong>{WORKS_NAME[kind]}</strong>
+        <small>{head}</small>
+      </div>
+      {mods.map((m, i) => {
+        const s = moduleState(w, me, u, m.id)
+        const status: TechStatus = s.status === 'built' ? 'done' : s.status === 'lost' ? 'poor' : s.status === 'busy' ? 'busy' : s.status === 'queued' ? 'queued' : s.status
+        const queued = s.status === 'busy' || s.status === 'queued'
+        const label = s.status === 'built' ? '✓ Built' : s.status === 'lost' ? 'Shot off: engineers weld it back' : s.status === 'busy' ? `${Math.ceil(s.left)}s left` : s.status === 'queued' ? `Queued, #${s.slot + 1}` : s.status === 'poor' ? (s.why === 'Not enough credits' ? `Need ${fmt(MODULE[m.id].cost - hud.credits)} more` : s.why ?? '') : 'Build'
+        return (
+          <div key={m.id} className={`ew-tnode is-${status}`} style={{ gridColumn: i + 2, gridRow: 1 }}>
+            <button className="ew-tnode-main" disabled={s.status === 'built'} onClick={() => (queued ? onCancel(u!.id, s.slot) : u && (s.status === 'ready' || s.status === 'poor') ? onExpand(u.id, m.id) : undefined)}
+              data-tip={`${moduleTip(m.id)}${s.why && !queued ? `\n\n${s.why}` : queued ? '\n\nClick to call it off (refunded).' : ''}`}>
+              <span className="ew-modicon ew-tt-modicon" style={{ ['--c' as string]: HP_COLOR[m.kind] }}><HpIcon kind={m.kind} size={26} /></span>
+              <span className="ew-tnode-text">
+                <strong>{m.name}</strong>
+                <small>{m.blurb}</small>
+                <span className="ew-tnode-foot">
+                  {s.status === 'locked' ? <em className="is-why">{s.why}</em> : (
+                    <>
+                      {s.status !== 'built' && (
+                        <>
+                          <span className="ew-cost"><Icon name="credits" size={12} /> {m.cost}</span>
+                          <span className="ew-time"><Icon name="time" size={12} /> {m.time}s</span>
+                        </>
+                      )}
+                      <em>{label}</em>
+                    </>
+                  )}
+                </span>
+              </span>
+              {s.status === 'busy' && <i className="ew-tnode-bar" style={{ width: `${s.progress * 100}%` }} />}
+            </button>
+          </div>
+        )
+      })}
+    </section>
   )
 }
 

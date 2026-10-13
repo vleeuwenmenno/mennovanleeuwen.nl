@@ -19,8 +19,8 @@ import { MAPS } from '../src/apps/games/empires/maps.ts'
 import { restoreWorld, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
 import { cleanCmd, cmd, runCmd } from '../src/apps/games/empires/commands.ts'
 import {
-  STEP, allQueued, cantBuild, cmdBuild, cmdCancelSite, cmdConstruct, cmdPlace, damage, newWorld, placement, radius, siteRefund, spawnGroup, stateHash, tick, yardsOf,
-  type Unit, type World,
+  STEP, allQueued, cantBuild, cmdBuild, cmdCancelSite, cmdConstruct, cmdPlace, damage, newWorld, placement, radius, siteRefund, spawnGroup, stateHash, tick, yardBox, yardsOf,
+  type Unit, type Wreck, type World,
 } from '../src/apps/games/empires/sim.ts'
 
 const big = process.argv[2] === 'big'
@@ -259,6 +259,113 @@ const buildTime = (squads: number) => {
   }
   check('a restored battle stays in sync through the yard going up', same, `hash ${stateHash(a).toString(16)}`)
   check('and the yards finished in both', yardsOf(a, 0).length === 1 && yardsOf(c, 0).length === 1 && yardsOf(a, 1).length === 1)
+}
+
+// --- Engineers guard what they built ----------------------------------------------------------------------
+{
+  const w = fresh()
+  const spot = spotFor(w)
+  const eng = engineers(w)
+  check('engineers place a yard', cmdPlace(w, 0, ids(eng), RY, spot.x, spot.y) === null)
+  check('the yard goes up', run(w, 240, () => yardsOf(w, 0).length > 0))
+  run(w, 1)
+  const y = yardsOf(w, 0)[0]
+  check('the squad that finished it is on guard at it', eng.every((u) => u.order.k === 'guard' && u.order.id === y.id), eng.map((u) => u.order.k).join(','))
+  check('and unarmed engineers pick no fights', eng.every((u) => !u.target))
+  // Damaged, it is mended by the guards.
+  y.hull = y.hullMax * 0.6
+  run(w, 3)
+  const hurt = y.hull
+  run(w, 30)
+  check('a guard squad mends the yard after it takes damage', y.hull > hurt + 1, `${Math.round(hurt)} to ${Math.round(y.hull)} of ${Math.round(y.hullMax)}`)
+  check('and goes back on guard afterwards', run(w, 60, () => eng.every((u) => u.order.k === 'guard')))
+  // An enemy warship nearby doesn't draw them off.
+  const foe = spawnGroup(w, 'd-gunship', 1, y.x + 400, y.y, Math.PI)[0]
+  run(w, 10)
+  check('engineers do not go off to fight', eng.every((u) => (u.order.k === 'guard' || u.order.k === 'construct') && !u.target), eng.map((u) => u.order.k).join(','))
+  foe.dead = true
+
+  // Orders queued after the building still win: guard only once the queue is empty.
+  const w2 = fresh()
+  const spot2 = spotFor(w2)
+  const eng2 = engineers(w2)
+  cmdPlace(w2, 0, ids(eng2), RY, spot2.x, spot2.y)
+  const away = { x: st(w2).x - 300, y: st(w2).y }
+  runCmd(w2, 0, cmd('move', ids(eng2), away.x, away.y, false, true))
+  run(w2, 240, () => yardsOf(w2, 0).length > 0)
+  run(w2, 1)
+  check('a queued move after the build is taken instead of guarding', eng2.every((u) => u.order.k === 'move' || u.order.k === 'idle'), eng2.map((u) => u.order.k).join(','))
+}
+
+// --- Free rotation -----------------------------------------------------------------------------------------
+{
+  const w = fresh()
+  const s = st(w)
+  const ok = spotFor(w)
+  const auto = Math.atan2(ok.y - s.y, ok.x - s.x)
+  const wrap = (a: number) => a - Math.PI * 2 * Math.floor((a + Math.PI) / (Math.PI * 2))
+  const near = (a: number, b: number) => Math.abs(wrap(a - b)) < 1e-9
+  check('with no angle a yard faces away from the station, as before', near(placement(w, 0, RY, ok.x, ok.y).a, auto))
+  check('a chosen angle is the ghost\'s angle', near(placement(w, 0, RY, ok.x, ok.y, 1.0).a, 1.0) && near(placement(w, 0, RY, ok.x, ok.y, 1.0 + 7 * Math.PI).a, wrap(1.0 + 7 * Math.PI)))
+
+  // The footprint is the rotated box: a hulk just off the yard's long end blocks it, off its short side doesn't.
+  const { hl, hw } = yardBox(UNIT[RY])
+  check('the yard is longer one way than the other', Math.abs(hl - hw) > 10, `half length ${hl.toFixed(0)}, half width ${hw.toFixed(0)}`)
+  const size = 100
+  const D = Math.max(hl, hw) + size * 0.6 - 5
+  const hulk: Wreck = { id: 9001, x: ok.x + D, y: ok.y, value: 0, left: 99, sprite: 'x', size, rot: 0, decay: 0, team: 0 }
+  w.wrecks.push(hulk)
+  // Facing 0 has the length along x (towards the hulk); a quarter turn has the width there.
+  const long = hl >= hw ? 0 : Math.PI / 2
+  const blocked = placement(w, 0, RY, ok.x, ok.y, long)
+  const clear = placement(w, 0, RY, ok.x, ok.y, long + Math.PI / 2)
+  check('a long end towards a hulk is blocked', (blocked.why ?? '').includes('wreck'), blocked.why ?? 'allowed')
+  check('the same yard turned a quarter is clear', clear.why === null, clear.why ?? '')
+  check('turning it all the way round blocks it again', (placement(w, 0, RY, ok.x, ok.y, long + Math.PI).why ?? '').includes('wreck'))
+  w.wrecks.pop()
+
+  // The order carries the angle, and the yard goes up at it.
+  const eng = engineers(w)
+  const turn = 2.2
+  check('engineers place a yard at a chosen angle', cmdPlace(w, 0, ids(eng), RY, ok.x, ok.y, false, turn) === null)
+  const site = yardOn(w)!
+  check('the site faces the chosen angle', near(site.a, turn), `${site.a.toFixed(3)} vs ${turn}`)
+  check('and the finished yard keeps it', run(w, 240, () => yardsOf(w, 0).length > 0) && near(yardsOf(w, 0)[0].a, turn))
+
+  // A ruin keeps the way it lay, whatever the rebuild order says.
+  const y = yardsOf(w, 0)[0]
+  damage(w, y, 1e9, 'turbo', -1, y.x, y.y, 1)
+  run(w, 0.2)
+  const ruin = (w.ruins ?? []).find((r) => r.owner === 0)
+  check('the ruin remembers the angle', !!ruin && near(ruin.a, turn))
+  w.players[0].credits = 20000
+  check('rebuilding a ruin ignores a new angle', near(placement(w, 0, RY, ruin!.x, ruin!.y, -1).a, turn))
+  check('and the rebuilt yard faces as the ruin did', cmdPlace(w, 0, ids(eng), RY, ruin!.x, ruin!.y, false, -1) === null && near(yardOn(w)!.a, turn))
+
+  // The protocol: an angle is optional, must be a finite number, and is brought into (-PI, PI].
+  const base = [ids(eng), RY, ok.x, ok.y, false]
+  const clean = (...a: unknown[]) => cleanCmd({ f: 'place', a: [...base, ...a] }, w)
+  check('an order without an angle is accepted (old orders)', !!cleanCmd({ f: 'place', a: base }, w) && Number.isNaN(cleanCmd({ f: 'place', a: base }, w)!.a[5] as number))
+  check('a null angle (NaN on the wire) means the old default', Number.isNaN(clean(null)!.a[5] as number))
+  check('a finite angle is accepted and normalised', near(clean(9.5)!.a[5] as number, wrap(9.5)))
+  check('a string, Infinity or an object is refused', clean('1') === null && clean({}) === null && clean(Infinity) === null)
+  const w2 = fresh()
+  const e2 = engineers(w2)
+  const spot2 = spotFor(w2)
+  runCmd(w2, 0, cmd('place', ids(e2), RY, spot2.x, spot2.y, false, 0.5))
+  check('a command with an angle runs the same way', near(yardOn(w2)!.a, 0.5))
+  runCmd(w2, 1, cmd('place', ids(e2), 'd-yard', spot2.x, spot2.y, false))
+  check('and a shorter one still works', true)
+
+  // Both copies of a battle agree after a rotated yard (and its snapshot).
+  const w3 = fresh()
+  const e3 = engineers(w3)
+  cmdPlace(w3, 0, ids(e3), RY, spotFor(w3).x, spotFor(w3).y, false, 2.0)
+  run(w3, 10)
+  const copy = restoreWorld(snapshotWorld(w3))!
+  run(w3, 20)
+  run(copy, 20)
+  check('a restored battle with a rotated yard stays in sync', stateHash(w3) === stateHash(copy), `hash ${stateHash(w3).toString(16)}`)
 }
 
 // --- Battles from before yards -----------------------------------------------------------------------------
