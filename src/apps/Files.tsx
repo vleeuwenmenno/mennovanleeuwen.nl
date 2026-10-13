@@ -34,6 +34,7 @@ import { useEdgeSwipe } from '../os/useEdgeSwipe'
 import { useMediaQuery } from '../os/useMediaQuery'
 import { SecretInput } from '../os/SecretInput'
 import { VideoThumb } from '../os/VideoThumb'
+import { FilesPreview, PREVIEW_DEFAULT, PREVIEW_MAX, PREVIEW_MIN } from './FilesPreview'
 
 /** Quotes a path for a command line in the terminal. */
 const shq = (s: string) => (/^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
@@ -286,6 +287,38 @@ export function Files({ win }: { win: WinState }) {
   const tiles = useRef(new Map<string, HTMLElement>())
 
   const setPrefs = filesPrefs.patch
+
+  // The preview pane on the right (FilesPreview.tsx): Settings → Apps → Files switches it off, and
+  // says whether a new window starts with it shown and whether showing or hiding it here sets that.
+  const [paneShown, setPaneShown] = useState(() => filesPrefs.get().previewShow)
+  const pane = prefs.preview && !narrow && paneShown
+  const togglePane = () => {
+    const next = !paneShown
+    setPaneShown(next)
+    if (filesPrefs.get().previewRemember) setPrefs({ previewShow: next })
+  }
+  /** The pane's width while its splitter is dragged (saved when let go). */
+  const [dragWidth, setDragWidth] = useState<number | null>(null)
+  const body = useRef<HTMLDivElement>(null)
+  const maxPane = () => Math.max(PREVIEW_MIN, Math.min(PREVIEW_MAX, (body.current?.clientWidth ?? 1200) - 260))
+  const clampPane = (w: number) => Math.round(Math.min(maxPane(), Math.max(PREVIEW_MIN, w)))
+  const paneWidth = dragWidth ?? Math.min(prefs.previewWidth, maxPane())
+  const onSplitDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = paneWidth
+    let w = startW
+    const move = (ev: PointerEvent) => setDragWidth((w = clampPane(startW + startX - ev.clientX)))
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      setDragWidth(null)
+      if (w !== prefs.previewWidth) setPrefs({ previewWidth: w })
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
 
   // Re-read the filesystem when the window comes back to the front (the terminal may have written to /tmp).
   useEffect(() => setTick((t) => t + 1), [wm.focusedPid])
@@ -766,6 +799,7 @@ export function Files({ win }: { win: WinState }) {
         { separator: true } as MenuItem,
         { label: 'Show hidden files', checked: prefs.hidden, shortcut: 'Ctrl H', onSelect: () => setPrefs({ hidden: !prefs.hidden }) },
         { label: 'Sidebar', checked: prefs.sidebar, onSelect: () => setPrefs({ sidebar: !prefs.sidebar }) },
+        ...(prefs.preview && !narrow ? [{ label: 'Preview pane', checked: paneShown, onSelect: togglePane }] : []),
       ],
     },
     { label: 'Sort by', submenu: SORTS.map(([k, label]) => ({ label, checked: prefs.sort === k, onSelect: () => setPrefs({ sort: k }) })) },
@@ -932,7 +966,8 @@ export function Files({ win }: { win: WinState }) {
   }
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.target as HTMLElement).closest('input')) return
+    // Inputs, and the preview pane's own controls (a video's arrow keys seek).
+    if ((e.target as HTMLElement).closest('input, .fm-pv')) return
     const ctrl = e.ctrlKey || e.metaKey
     const sel = selectedItems()
     const store = isSf(path) || inBrowserHere
@@ -1071,6 +1106,17 @@ export function Files({ win }: { win: WinState }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, sfHome, libraries, toPosix(path)])
 
+  // The preview follows the selection: the item last clicked or moved to, or else the last one
+  // selected. It waits a moment, so holding an arrow key does not read every file on the way.
+  const focusPath = !pane || !selected.size ? null : anchor && selected.has(anchor) ? anchor : [...selected].pop()!
+  const [previewPath, setPreviewPath] = useState<string | null>(focusPath)
+  useEffect(() => {
+    if (focusPath === previewPath) return
+    const t = setTimeout(() => setPreviewPath(focusPath), focusPath && previewPath ? 140 : 0)
+    return () => clearTimeout(t)
+  }, [focusPath, previewPath])
+  const previewItem = (previewPath && items.find((i) => i.path === previewPath)) || null
+
   /** Emblems on Seafile's home folders, and on libraries (home, or a padlock). */
   const emblemOf = (item: Item): string | undefined => {
     if (!item.sf) return undefined
@@ -1172,6 +1218,18 @@ export function Files({ win }: { win: WinState }) {
   return (
     <div className="fm" ref={fmRoot} onKeyDown={onKeyDown}>
       <div className="fm-toolbar">
+        <button
+          className={`fm-tool fm-tool-sidebar ${(narrow ? drawer : prefs.sidebar) ? '' : 'is-off'}`}
+          onClick={() => (narrow ? setDrawer((d) => !d) : setPrefs({ sidebar: !prefs.sidebar }))}
+          title={narrow ? 'Places (or swipe in from the left)' : 'Show or hide the sidebar'}
+          aria-label={narrow ? 'Show places' : 'Toggle sidebar'}
+          aria-expanded={narrow ? drawer : undefined}
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+            <rect x="3" y="4" width="18" height="16" />
+            <path d="M9 4v16" />
+          </svg>
+        </button>
         <button className="fm-tool" onClick={goBack} disabled={!back.length} title="Back (Alt+←)" aria-label="Back">
           ←
         </button>
@@ -1264,18 +1322,6 @@ export function Files({ win }: { win: WinState }) {
           {menu === 'view' && <ViewMenu prefs={prefs} setPrefs={setPrefs} close={() => setMenu(null)} />}
         </div>
         <button
-          className={`fm-tool ${(narrow ? drawer : prefs.sidebar) ? '' : 'is-off'}`}
-          onClick={() => (narrow ? setDrawer((d) => !d) : setPrefs({ sidebar: !prefs.sidebar }))}
-          title={narrow ? 'Places (or swipe in from the left)' : 'Show or hide the sidebar'}
-          aria-label={narrow ? 'Show places' : 'Toggle sidebar'}
-          aria-expanded={narrow ? drawer : undefined}
-        >
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-            <rect x="3" y="4" width="18" height="16" />
-            <path d="M9 4v16" />
-          </svg>
-        </button>
-        <button
           className="fm-tool"
           title="Menu"
           aria-label="Menu"
@@ -1301,6 +1347,14 @@ export function Files({ win }: { win: WinState }) {
         >
           ≡
         </button>
+        {prefs.preview && !narrow && (
+          <button className={`fm-tool fm-tool-preview ${pane ? '' : 'is-off'}`} onClick={togglePane} title="Show or hide the preview" aria-label="Toggle preview pane" aria-pressed={pane}>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+              <rect x="3" y="4" width="18" height="16" />
+              <path d="M15 4v16" />
+            </svg>
+          </button>
+        )}
       </div>
 
       {inBrowserHere && (
@@ -1317,7 +1371,7 @@ export function Files({ win }: { win: WinState }) {
           )}
         </div>
       )}
-      <div className={`fm-body ${narrow && drawer ? 'has-drawer' : ''}`}>
+      <div className={`fm-body ${narrow && drawer ? 'has-drawer' : ''}`} ref={body}>
         {narrow && drawer && <div className="fm-scrim" onPointerDown={() => setDrawer(false)} aria-hidden />}
         {(narrow ? drawer : prefs.sidebar) && (
           <FilesSidebar
@@ -1490,6 +1544,39 @@ export function Files({ win }: { win: WinState }) {
           {isSf(path) && sfDir.loading && !sfDir.listing && !items.length && <p className="fm-empty">Loading…</p>}
           {marquee && <div className="fm-marquee" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} />}
         </div>
+        {pane && (
+          <>
+            <div
+              className={`fm-pv-split ${dragWidth !== null ? 'is-dragging' : ''}`}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize the preview"
+              aria-valuemin={PREVIEW_MIN}
+              aria-valuemax={PREVIEW_MAX}
+              aria-valuenow={paneWidth}
+              tabIndex={0}
+              onPointerDown={onSplitDown}
+              onDoubleClick={() => setPrefs({ previewWidth: PREVIEW_DEFAULT })}
+              onKeyDown={(e) => {
+                const step = e.shiftKey ? 50 : 10
+                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setPrefs({ previewWidth: clampPane(paneWidth + (e.key === 'ArrowLeft' ? step : -step)) })
+                }
+              }}
+            />
+            <aside className="fm-pv" style={{ width: paneWidth }} aria-label="Preview">
+              <FilesPreview
+                item={previewItem}
+                folder={{ name: crumbs[crumbs.length - 1]?.label ?? pretty(path), count: items.length }}
+                trash={path === TRASH}
+                onOpen={(i) => openItem(i as Item)}
+                openLabel={previewItem?.kind === 'folder' ? 'Open folder' : undefined}
+              />
+            </aside>
+          </>
+        )}
       </div>
 
       <footer className="fm-status">
