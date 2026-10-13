@@ -1116,8 +1116,10 @@ With the Notes group on too, the agent can work with notes linked to events
 finds the event with `calendar_list_events` first), `link_note_to_event` and
 `unlink_note_from_event`, and, only looking, `notes_for_event` and `events_for_note`.
 `calendar_list_events` says how many notes each event has (`linked_notes`). Linking mails nobody and
-only adds a private backlink to the event, so these ask in *Ask first* and go ahead in Auto, Edits
-allowed and Bypass; Plan mode doesn't offer them. Their cards say which note and which event.
+only adds a private backlink to the event, but it is written into the event, so the three that
+change things ask in every mode (Auto, Edits allowed and Bypass too), like the other calendar tools;
+`notes_for_event` and `events_for_note` only read and run without asking. Plan mode doesn't offer
+the changing ones. Their cards say which note and which event.
 
 Web fetch reads an address straight away only when it came from outside the model: your own
 messages, search results, or the links of a page it already read, exactly as given. Any other
@@ -1428,7 +1430,8 @@ than known.
 
 ```sh
 pnpm check:pim-links   # Against stand-ins for JMAP, CalDAV and Google Calendar: invitations answered in each place (PARTSTAT, Google's API, an iMIP REPLY), cancellations, replies, a contact's mail and events, tasks from mail, another user seeing none of it
-pnpm check:note-links  # Against stand-ins for CalDAV, Google Calendar and Ollama: the backlink written with everything else kept, an ETag conflict, one occurrence against the series, guests left alone, Google's private property with sendUpdates=none, a deleted event, the Agents tools in Ask first and Auto, another user seeing none of it
+pnpm check:note-links  # Against stand-ins for CalDAV, Google Calendar and Ollama: the backlink written with everything else kept, an ETag conflict, one occurrence against the series, guests left alone, Google's private property with sendUpdates=none, a deleted event, the Agents note tools asking in every mode (Ask first, Auto, Bypass), another user seeing none of it
+pnpm check:window-props  # One-shot requests (event, task, contact, day, import, message) kept out of the saved window layout, so a reload never opens that editor again
 ```
 
 [`scripts/google-mock.ts`](scripts/google-mock.ts) is the Google Calendar stand-in: the server
