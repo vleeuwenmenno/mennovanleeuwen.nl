@@ -15,6 +15,7 @@ import { UsersSettings } from './UsersSettings'
 import { openAlert, useAlerts } from '../os/alerts'
 import { formatSize, prettyPath } from '../terminal/vfs'
 import { browserFilesState, browserTree, useBrowserFiles, wipeBrowserFiles } from '../data/browserfs'
+import { wipeVideoThumbs } from '../data/videoThumbs'
 import { Select } from '../os/Select'
 import { useStatus as usePhotoStatus } from '../data/photos'
 import { ImmichLink } from './photos/PhotosSettings'
@@ -188,6 +189,7 @@ async function removeAccount(setError: (e: string | null) => void) {
   setError(null)
   // This browser's copy of its files goes too (the server never had them).
   await wipeBrowserFiles().catch(() => {})
+  await wipeVideoThumbs().catch(() => {})
   await deleteAccount().catch((e: Error) => setError(e.message))
 }
 
