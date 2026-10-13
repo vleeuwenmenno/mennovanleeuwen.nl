@@ -202,6 +202,12 @@ async function endToEnd() {
     // Linking: a wrong token is refused; a bare host finds the session through /.well-known/jmap.
     const bad = await call('POST', '/api/mail/accounts', { url: mock.origin, token: 'wrong' })
     check('linking: a wrong token is refused', bad.status === 400 && /refused the token/.test(bad.json.error), bad.json)
+    check("linking: the server's own reason comes with a refusal", /refused the token: Bad token$/.test(bad.json.error), bad.json)
+    // Fastmail's own address (the default when none is given): a token without fmu1- is refused before anything is sent.
+    const notFastmail = await call('POST', '/api/mail/accounts', { token: 'hunter2-saved-password' })
+    check('linking: a Fastmail token must start with fmu1-', notFastmail.status === 400 && /isn't a Fastmail API token: they start with fmu1-/.test(notFastmail.json.error) && /Manage API tokens/.test(notFastmail.json.error), notFastmail.json)
+    const notFastmailUrl = await call('POST', '/api/mail/accounts', { url: 'https://api.fastmail.com/jmap/session', token: 'wrong' })
+    check('linking: the same with Fastmail typed out', notFastmailUrl.status === 400 && /fmu1-/.test(notFastmailUrl.json.error), notFastmailUrl.json)
     const linkedNow = await call('POST', '/api/mail/accounts', { url: mock.origin, token: mock.token, label: 'Mock' })
     check('linking: found through /.well-known/jmap and stored', linkedNow.status === 200 && linkedNow.json.username === 'me@example.test' && linkedNow.json.url.endsWith('/jmap/session'), linkedNow.json)
     const acc = linkedNow.json.id as number
