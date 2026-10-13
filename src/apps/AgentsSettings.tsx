@@ -271,7 +271,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
             <li key={g.id} className={`set-row ${off ? 'is-off' : ''}`}>
               <span className="set-row-text">
                 <strong>{g.name}</strong>
-                <span className="muted">{g.calendar && !hasCalendar(account) ? `${g.detail}. Connect a calendar first, in Settings → Apps → Calendar` : g.detail}</span>
+                <span className="muted">{g.calendar && !hasCalendar(account) ? `${g.detail}. Connect a calendar first, in Settings → Integrations → Calendars` : g.detail}</span>
               </span>
               <Toggle
                 on={settings.tools.includes(g.id)}

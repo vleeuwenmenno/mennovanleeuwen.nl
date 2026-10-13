@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { AMP_PRESETS, ampPrefs, ampPresetOf, FILES_SORTS, FILES_VIEWS, FILES_ZOOM_MAX, FILES_ZOOM_MIN, filesPrefs, pdfPrefs, previewPrefs, type AmpRepeat, type AmpVis } from '../data/appPrefs'
 import { useCalendarList, useLastCalendar, setLastCalendar } from '../data/calendar'
 import { useAccount } from '../os/account'
+import { IntegrationNotice } from '../os/IntegrationNotice'
 import { Select } from '../os/Select'
 import { useWM } from '../os/wm'
 import { TerminalPrefsBody, ZOOM_HELP } from '../terminal/TerminalSettings'
@@ -90,10 +91,10 @@ export function TerminalPane() {
 export function FilesPane() {
   const prefs = filesPrefs.use()
   const account = useAccount()
-  const wm = useWM()
   const zoom = (z: number) => filesPrefs.patch({ zoom: Math.min(FILES_ZOOM_MAX, Math.max(FILES_ZOOM_MIN, z)) })
   return (
     <>
+      {account.status === 'user' && <IntegrationNotice sub="seafile" linked={!!account.seafile} app="Files" invite="Link Seafile to get your libraries in Files." />}
       <SetGroup title="View">
         <Seg label="View" value={prefs.view} options={FILES_VIEWS} onChange={(view) => filesPrefs.patch({ view })} />
         <p className="muted set-help">Ctrl+1 to Ctrl+4 in Files.</p>
@@ -126,11 +127,7 @@ export function FilesPane() {
       <p className="muted set-help">The same in every folder and every Files window. Saved in this browser.</p>
       {account.seafile && (
         <p className="muted set-help">
-          Seafile as home, its trash and where new Office files go are in{' '}
-          <button className="link-btn" onClick={() => wm.open('settings', { section: 'integrations', sub: 'seafile', t: now() })}>
-            Integrations → Seafile
-          </button>
-          .
+          Seafile as home, its trash and where new Office files go are in Integrations → Seafile.
         </p>
       )}
     </>

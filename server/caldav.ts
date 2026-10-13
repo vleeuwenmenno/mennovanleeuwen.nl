@@ -668,7 +668,7 @@ function objectUrl(calendar: CaldavCalendar, href: string): string {
 
 function refused(res: Response, url: string): never {
   const host = new URL(url).host
-  if (res.status === 401 || res.status === 403) throw new HttpError(403, `${host} refused the change; an app password that can write is needed (Settings → Calendar, add the account again)`)
+  if (res.status === 401 || res.status === 403) throw new HttpError(403, `${host} refused the change; an app password that can write is needed (Settings → Integrations → Calendars, add the account again)`)
   if (res.status === 404 || res.status === 410) throw new HttpError(404, 'That event is gone from the calendar')
   if (res.status === 412) throw new HttpError(409, 'It changed somewhere else meanwhile; try again')
   throw new HttpError(502, `${host} answered ${res.status}`)

@@ -1674,7 +1674,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             : g.id === 'terminal'
               ? 'Only from the agents command in the terminal'
               : g.calendar && !hasCalendar(account)
-                ? 'Connect a calendar first (Settings → Apps → Calendar)'
+                ? 'Connect a calendar first (Settings → Integrations → Calendars)'
                 : g.detail,
         onSelect: () => toggleTool(g.id),
       })),

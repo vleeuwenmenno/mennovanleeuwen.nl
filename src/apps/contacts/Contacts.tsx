@@ -387,7 +387,7 @@ export function ContactsApp({ win }: { win: WinState }) {
             <button className="btn" onClick={() => pcFile.current?.click()}>
               Import a .vcf…
             </button>
-            <button className="btn" onClick={() => wm.open('settings', { section: 'contacts', t: String(Date.now()) })}>
+            <button className="btn" onClick={() => wm.open('settings', { section: 'integrations', sub: 'contacts', t: String(Date.now()) })}>
               Fastmail / CardDAV…
             </button>
           </div>

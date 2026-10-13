@@ -95,7 +95,7 @@ export function eventsOn(events: CalendarEvent[], key: string): CalendarEvent[] 
 export const eventTime = (e: CalendarEvent) => (e.allDay ? 'all day' : new Date(e.start).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }))
 
 // ---------------------------------------------------------------------------------------------
-// Which calendars show: one switch per calendar in Settings → Calendar, for the clock and every
+// Which calendars show: one switch per calendar in Settings → Apps → Calendar, for the clock and every
 // Agenda widget that doesn't pick its own. Until switched, Google calendars follow Google
 // Calendar's own "shown" setting and CalDAV ones are on. Synced with the account.
 

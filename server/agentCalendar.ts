@@ -27,8 +27,8 @@ export type CallSummary = { title: string; rows: [string, string][] }
 /** A calendar call checked and ready: what the user is shown (for a change), and running it. */
 export type Prepared = { summary?: CallSummary; run: () => Promise<string> }
 
-export const NOT_CONNECTED = 'No calendar is connected. The user can connect Google Calendar or a CalDAV account (Fastmail, Nextcloud, iCloud...) in Settings → Apps → Calendar.'
-const READ_ONLY_GOOGLE = 'Google Calendar is connected read-only, so it cannot be changed from here. The user can reconnect Google in Settings → Apps → Calendar and allow editing events.'
+export const NOT_CONNECTED = 'No calendar is connected. The user can connect Google Calendar or a CalDAV account (Fastmail, Nextcloud, iCloud...) in Settings → Integrations → Calendars.'
+const READ_ONLY_GOOGLE = 'Google Calendar is connected read-only, so it cannot be changed from here. The user can reconnect Google in Settings → Integrations → Calendars and allow editing events.'
 
 export const calendarConnected = (user: User) => !!googleAccount(user) || listCaldav(user).length > 0
 
@@ -99,7 +99,7 @@ export function calendarTools(): ToolDef[] {
 
 /** What the system prompt says about calendars, when the group is on. */
 export function calendarLines(user: User, zone: string): string {
-  if (!calendarConnected(user)) return `Calendar: no calendar is connected. If the user asks about their calendar, tell them they can connect Google Calendar or a CalDAV account (Fastmail, Nextcloud, iCloud...) in Settings → Apps → Calendar.`
+  if (!calendarConnected(user)) return `Calendar: no calendar is connected. If the user asks about their calendar, tell them they can connect Google Calendar or a CalDAV account (Fastmail, Nextcloud, iCloud...) in Settings → Integrations → Calendars.`
   const now = wall(Date.now(), zone)
   return `Calendar: the calendar tools read and change the user's calendars. It is ${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())} now in ${zone}; work out relative dates ("next Friday", "tomorrow at 3") from today's date, and give times without an offset, in that zone. Before changing or deleting an event, find it with calendar_list_events. Unless the user names a calendar, new events go in their default one.`
 }
@@ -211,7 +211,7 @@ async function calendarsOf(user: User): Promise<{ calendars: AnyCalendar[]; erro
   return allCalendars(user)
 }
 
-/** The calendars switched on in Settings → Calendar (as src/data/calendar.ts decides). */
+/** The calendars switched on in Settings → Apps → Calendar (as src/data/calendar.ts decides). */
 function shownIn(user: User): (c: AnyCalendar) => boolean {
   const v = readState(user)['calendar-choice']?.value
   const picks = v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}

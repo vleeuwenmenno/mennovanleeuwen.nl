@@ -4766,3 +4766,21 @@ button.cal-day.is-picked:not(.is-today) {
 .secret-eye[aria-pressed='true'] {
   color: var(--fg-bright);
 }
+
+/* The pointer to Settings → Integrations at the top of an app's own settings (IntegrationNotice). */
+.set-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-bottom: 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+}
+.set-notice.is-invite {
+  border-color: var(--accent);
+  color: var(--fg);
+}

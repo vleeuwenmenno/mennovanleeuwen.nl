@@ -38,7 +38,9 @@ import { ACCENTS, DARK_THEMES, LIGHT_THEMES, setAccent, setMode, setTheme, theme
 import { ReleaseStatus } from '../os/TopbarWidgets'
 import { useWM, type AppId, type WinState } from '../os/wm'
 import { AgentsSettings } from './AgentsSettings'
-import { ContactsSettings } from './contacts/ContactsSettings'
+import { ContactsAccounts, ContactsSettings } from './contacts/ContactsSettings'
+import { useContacts } from '../data/contacts'
+import { IntegrationNotice } from '../os/IntegrationNotice'
 import { AmpPane, CalendarAppPrefs, FilesPane, GamesPane, PdfPane, PreviewPane, TerminalPane } from './AppSettings'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
 import { BranchGlyph } from './LinkForge'
@@ -52,7 +54,9 @@ import { SecretInput } from '../os/SecretInput'
 // window menus; props.section picks the pane (account, appearance, dock, launchers, search
 // (Spotlight), windows, links, notifications, golinks, instances, integrations, then the apps:
 // agents, calendar, contacts, files, games, amp, pdf, preview, terminal; then sync, users, about) and
-// props.sub a part of it. The account and service panes only show for the signed-in user.
+// props.sub a part of it (Integrations: updown, ollama, seafile, onlyoffice, mail, immich, calendars,
+// contacts). Every account is linked in Integrations; an app's pane keeps the app's own settings and
+// points there (IntegrationNotice). The account and service panes only show for the signed-in user.
 
 const SignInFirst = ({ what }: { what: string }) => {
   const account = useAccount()
@@ -811,8 +815,8 @@ function Launchers() {
   )
 }
 
-/** Third-party services the widgets read from, with keys on the server: updown.io for Status. */
-type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice' | 'mail' | 'immich' | 'contacts'
+/** Every account the desktop links to, and the keys it keeps for services: updown.io for Status, Ollama, Seafile, OnlyOffice, mail, Immich, calendars and address books. */
+type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice' | 'mail' | 'immich' | 'calendars' | 'contacts'
 
 /** Third-party services, one row each; a row opens that service's own settings. */
 /** `sub` opens one service's settings straight away (Settings → Integrations → Seafile, from an alert). */
@@ -820,14 +824,18 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
   const account = useAccount()
   const [open, setOpen] = useState<IntegrationId | null>(null)
   useEffect(() => {
-    if (sub === 'updown' || sub === 'ollama' || sub === 'seafile' || sub === 'onlyoffice' || sub === 'contacts' || sub === 'mail') setOpen(sub)
+    if (sub === 'updown' || sub === 'ollama' || sub === 'seafile' || sub === 'onlyoffice' || sub === 'contacts' || sub === 'mail' || sub === 'immich' || sub === 'calendars') setOpen(sub)
   }, [sub, t])
   const { libraries } = useLibraries()
   const { accounts: mailAccounts } = useMailAccounts()
   const photos = usePhotoStatus().status
+  const { books } = useContacts()
   if (account.status !== 'user') return <p className="muted">Sign in first to connect services for widgets and Files.</p>
   const seafile = account.seafile
   const host = (url: string) => url.replace(/^https?:\/\//, '')
+  const calendarLinks = [account.google?.email, ...account.caldav.map((c) => c.label)].filter((v): v is string => !!v)
+  // The address books of linked CardDAV accounts, by where they live (the one on this site is always there).
+  const carddav = [...new Set(books.filter((b) => b.account !== undefined).map((b) => b.source))]
 
   const rows: { id: IntegrationId; name: string; icon: ReactNode; status: string; on: boolean; disabled?: boolean }[] = [
     {
@@ -873,7 +881,20 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
       status: photos?.immich ? `${host(photos.immich.url)} · Immich ${photos.immich.version} · for Photos` : 'Your photo library, in the Photos app',
       on: !!photos?.immich,
     },
-    { id: 'contacts', name: 'Contacts (CardDAV)', icon: <span className="set-glyph">📇</span>, status: 'Fastmail, iCloud, Nextcloud and other address books, for Contacts', on: false },
+    {
+      id: 'calendars',
+      name: 'Calendars (Google, CalDAV)',
+      icon: <span className="set-glyph">📅</span>,
+      status: calendarLinks.length ? `${calendarLinks.join(', ')} · for Calendar and Tasks` : 'Google Calendar, Fastmail, Nextcloud and iCloud, for Calendar and Tasks',
+      on: calendarLinks.length > 0,
+    },
+    {
+      id: 'contacts',
+      name: 'Contacts (CardDAV)',
+      icon: <span className="set-glyph">📇</span>,
+      status: carddav.length ? `${carddav.join(', ')} · for Contacts` : 'Fastmail, iCloud, Nextcloud and other address books, for Contacts',
+      on: carddav.length > 0,
+    },
   ]
 
   const current = rows.find((r) => r.id === open && !r.disabled)
@@ -888,7 +909,7 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
           <strong>{current.name}</strong>
           {current.on && <span className="set-badge">Connected</span>}
         </div>
-        {current.id === 'mail' ? <MailSettings /> : current.id === 'updown' ? <UpdownSettings /> : current.id === 'ollama' ? <OllamaSettings /> : current.id === 'seafile' ? <SeafileSettings /> : current.id === 'immich' ? <ImmichLink /> : current.id === 'contacts' ? <ContactsSettings /> : <OfficeSettings />}
+        {current.id === 'mail' ? <MailSettings /> : current.id === 'updown' ? <UpdownSettings /> : current.id === 'ollama' ? <OllamaSettings /> : current.id === 'seafile' ? <SeafileSettings /> : current.id === 'immich' ? <ImmichLink /> : current.id === 'contacts' ? <ContactsAccounts /> : current.id === 'calendars' ? <CalendarAccounts /> : <OfficeSettings />}
       </>
     )
 
@@ -1287,11 +1308,11 @@ function OfficeSettings() {
   )
 }
 
-/** Google Calendar and CalDAV accounts, for the Calendar app, the Agenda widget and the clock; which calendars show; and how the Calendar app opens. */
-function CalendarSettings() {
+/** Settings → Integrations → Calendars: Google Calendar and CalDAV accounts, for the Calendar app, Tasks, the Agenda widget and the clock. */
+function CalendarAccounts() {
   const account = useAccount()
-  const { calendars, errors } = useCalendarList()
-  const picks = useCalendarChoice()
+  const wm = useWM()
+  const { errors } = useCalendarList()
   const [error, setError] = useState<string | null>(null)
   if (account.status !== 'user') return <SignInFirst what="connect a calendar" />
   return (
@@ -1347,6 +1368,28 @@ function CalendarSettings() {
       <CaldavForm />
 
       {(error || errors.length > 0) && <p className="t-red">{[error, ...errors].filter(Boolean).join(' · ')}</p>}
+      <div className="set-actions">
+        <button className="btn btn-small" onClick={() => wm.open('calendar', { t: String(Date.now()) })}>
+          Open Calendar
+        </button>
+        <button className="btn btn-small" onClick={() => wm.open('tasks', { t: String(Date.now()) })}>
+          Open Tasks
+        </button>
+      </div>
+    </>
+  )
+}
+
+/** Settings → Apps → Calendar: which calendars show, and how the Calendar app opens. The accounts are in Integrations. */
+function CalendarSettings() {
+  const account = useAccount()
+  const { calendars } = useCalendarList()
+  const picks = useCalendarChoice()
+  if (account.status !== 'user') return <SignInFirst what="connect a calendar" />
+  const linked = !!account.google || account.caldav.length > 0
+  return (
+    <>
+      <IntegrationNotice sub="calendars" linked={linked} app="Calendar" invite="Link a calendar account to get started." />
       {calendars && calendars.length > 0 && (
         <>
           <h4 className="set-subhead">Your calendars</h4>
@@ -1747,15 +1790,15 @@ const GROUPS: Group[] = [
   {
     panes: [
       { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', account: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
-      { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models storage mail email jmap fastmail', blurb: 'Services the widgets, Files, Agents and Mail use: updown.io for Status, Ollama Cloud, Seafile, OnlyOffice and mail accounts.', render: ({ sub, t }) => <Integrations sub={sub} t={t} /> },
+      { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations accounts link connect updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models storage mail email jmap fastmail immich photos calendar calendars google caldav tasks contacts carddav address book icloud nextcloud', blurb: 'Every account and key: calendars (Google, CalDAV), contacts (CardDAV), Mail, Immich, Seafile, OnlyOffice, Ollama Cloud and updown.io.', render: ({ sub, t }) => <Integrations sub={sub} t={t} /> },
     ],
   },
   {
     title: 'Apps',
     panes: [
       { id: 'agents', label: 'Agents', hue: 'var(--magenta)', account: true, icon: null, app: 'agents', keywords: 'agents ai assistant ollama models quick deep research title thread system prompt agents.md tools memory', blurb: 'The Agents app: its models, what a new thread starts with, and its system prompt.', render: () => <AgentsSettings /> },
-      { id: 'calendar', label: 'Calendar', hue: 'var(--red)', account: true, icon: null, app: 'calendar', keywords: 'calendar google agenda events caldav fastmail nextcloud icloud view week month day year default new events', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock; and how the Calendar app opens.', render: () => <CalendarSettings /> },
-      { id: 'contacts', label: 'Contacts', hue: 'var(--orange)', account: true, icon: null, app: 'contacts', keywords: 'contacts people address book carddav fastmail icloud nextcloud radicale vcard vcf birthdays groups', blurb: 'Address books: on this site, Fastmail, iCloud and other CardDAV; where new contacts go.', render: () => <ContactsSettings /> },
+      { id: 'calendar', label: 'Calendar', hue: 'var(--red)', account: true, icon: null, app: 'calendar', keywords: 'calendar agenda events view week month day year default new events which calendars show google caldav accounts', blurb: 'Which calendars show, how the Calendar app opens, and where new events go. The accounts are in Integrations.', render: () => <CalendarSettings /> },
+      { id: 'contacts', label: 'Contacts', hue: 'var(--orange)', account: true, icon: null, app: 'contacts', keywords: 'contacts people address book default new contacts carddav accounts vcard vcf birthdays groups', blurb: 'Where new contacts go. The address book accounts (Fastmail, iCloud…) are in Integrations.', render: () => <ContactsSettings /> },
       { id: 'files', label: 'Files', hue: 'var(--blue)', icon: null, app: 'files', keywords: 'files file manager view list grid compact gallery icon size zoom sort order hidden dotfiles sidebar', blurb: 'How Files shows a folder: the view, icon size, sort order, hidden files and the sidebar.', render: () => <FilesPane /> },
       { id: 'games', label: 'Games', hue: 'var(--cyan)', icon: null, app: 'games', keywords: 'games arcade pool gladiator empires at war rts sound music volume mute helpers aim sensitivity difficulty computer health bars rings fog procedural models sprites camera edge scrolling key bindings keybinds keys multiplayer name online', blurb: 'Pool, Gladiator and Empires At War: how they play and sound.', render: ({ sub, t }) => <GamesPane sub={sub} t={t} /> },
       { id: 'amp', label: 'Omamp', hue: 'var(--green)', icon: null, app: 'amp', keywords: 'omamp music player audio winamp shuffle repeat equalizer eq preset visualizer spectrum oscilloscope time remaining playlist', blurb: 'The music player: shuffle and repeat, the equalizer, and what it shows.', render: () => <AmpPane /> },
