@@ -177,11 +177,14 @@ export function buildModel(t: UnitType, style?: string): Model {
     const [x, y] = grid(hp.x, hp.y)
     const design: MountDesign = hp.art ?? (hp.kind === 'engine' ? 'engine' : hp.kind === 'turret' ? 'turbo' : (hp.kind as MountDesign))
     const { scale = 1, ...over } = spec.mount?.(i) ?? {}
+    // An expansion module is drawn as parts of the structure (base.ts): its mount is the collar
+    // that shows the stump once it is shot off.
+    if (hp.exp) return { hp: i, x, y, r: ((hp.s ?? 0.05) * long) / 2, design: 'collar' as const, turns: false, detach: false }
     return { hp: i, x, y, r: (((hp.s ?? 0.05) * long) / 2) * scale, design, turns: !!hp.weapon, detach: DETACH_BY_DEFAULT.includes(design), ...over }
   })
   // Every mount sits in a socket: a dark recess in the plating, under the superstructure.
   const sockets: Part[] = mounts
-    .filter((m) => m.design !== 'engine')
+    .filter((m) => m.design !== 'engine' && m.design !== 'collar')
     .map((m) => ({ id: `socket${m.hp}`, pts: circle(m.x, m.y, m.r * 1.1, 18), tone: 'dark' as const, z: 0.5, details: [{ k: 'line' as const, pts: circle(m.x, m.y, m.r * 0.92, 16) }] }))
   // Expansion modules (hybrid bases) are built onto the structure as parts of their own.
   const extra = base.expansionParts(t, w, h)

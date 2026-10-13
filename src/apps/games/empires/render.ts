@@ -2,11 +2,12 @@ import { CYARD_SOCKETS, MODULE, STATION_SOCKETS, YARD_SOCKETS, FACTIONS, REBUILD
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
 import { RETREAT_TIME, atHome, building, foes, hpPos, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
-import { BREAK_WEIGHTS, hullState, modelFor, unitForSprite, wreckState, type HullState, type Model } from './models/index.ts'
+import { BREAK_WEIGHTS, breakPieces, hullState, modelFor, unitForSprite, wreckState, type HullState, type Model } from './models/index.ts'
+import { YARD_BERTHS } from './models/base.ts'
 import { bigType, sizedType } from './models/sizes.ts'
 import { ModelFx } from './models/fx.ts'
-import { PALETTES } from './models/kit.ts'
-import { drawHull, drawMounts, liveEngines } from './models/paint.ts'
+import { PALETTES, hash, rng as seeded } from './models/kit.ts'
+import { drawHull, drawMounts, drawPiece, liveEngines, outlineOf } from './models/paint.ts'
 import { averageRings, moduleRing } from './ranges.ts'
 
 // Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, nebulas
@@ -1900,9 +1901,10 @@ export class Renderer {
 
   /**
    * A yard going up. Until engineers start on it, a blueprint: the whole structure faint, its
-   * outline dashed. Then it fills in from the stern: the part that's built drawn solid, a scaffold
-   * of girders over what's still to come, and a welding line along the front of the work that
-   * throws sparks while engineers are at it.
+   * outline dashed. Then its frame fills in from the stern: the part that's built drawn solid, and
+   * over what's still to come the structure's own frame (every plate's outline) with scaffolding,
+   * uprights, girders and braces, clipped to its shape, and a welding line along the front of the
+   * work that throws sparks while engineers are at it.
    */
   private drawSite(ctx: CanvasRenderingContext2D, u: Unit, w: World, m: Model | null, size: number, z: number) {
     const t = u.t
@@ -1912,12 +1914,12 @@ export class Renderer {
     const planned = !u.site!.started
     const progress = Math.max(0, Math.min(1, 1 - u.building / t.build))
     const rgb = t.faction === 'republic' ? '130,205,255' : '255,186,120'
-    if (m) drawHull(ctx, m, u.x, u.y, rot, size, zdpr, FRESH, { alpha: planned ? 0.3 : 0.18 })
+    if (m) drawHull(ctx, m, u.x, u.y, rot, size, zdpr, FRESH, { alpha: planned ? 0.3 : 0.12 })
     else this.drawSprite(ctx, t.sprite, u.x, u.y, rot, size, z, planned ? 0.3 : 0.18)
     ctx.save()
     ctx.translate(u.x, u.y)
     ctx.rotate(rot)
-    ctx.strokeStyle = `rgba(${rgb},${planned ? 0.8 : 0.45})`
+    ctx.strokeStyle = `rgba(${rgb},${planned ? 0.8 : 0.35})`
     ctx.lineWidth = 1.5 / z
     ctx.setLineDash([9 / z, 6 / z])
     ctx.lineDashOffset = (-this.clock * 20) / z
@@ -1932,7 +1934,22 @@ export class Renderer {
       if (m) drawHull(ctx, m, 0, 0, 0, size, zdpr, hullState(m, u, t.tier), { lightRot: rot })
       else this.drawSprite(ctx, t.sprite, 0, 0, 0, size, z)
       ctx.restore()
-      // The scaffold: uprights, cross girders and braces over what is still to be built.
+      // What's still to come: the structure's frame, and scaffolding over it, both clipped to its
+      // shape (the model's own silhouette) and to the part not built yet.
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(-sw, -sh, sw * 2, cut + sh)
+      ctx.clip()
+      if (m) {
+        const k = size / m.long
+        const o = outlineOf(m)
+        ctx.scale(k, k)
+        ctx.clip(o.solid)
+        ctx.strokeStyle = `rgba(${rgb},0.55)`
+        ctx.lineWidth = 1.1 / z / k
+        ctx.stroke(o.frame)
+        ctx.scale(1 / k, 1 / k)
+      }
       const cols = 6
       const rows = 10
       ctx.beginPath()
@@ -1959,9 +1976,10 @@ export class Renderer {
           }
         }
       }
-      ctx.strokeStyle = `rgba(${rgb},0.5)`
-      ctx.lineWidth = 1.1 / z
+      ctx.strokeStyle = `rgba(${rgb},${m ? 0.3 : 0.5})`
+      ctx.lineWidth = 1 / z
       ctx.stroke()
+      ctx.restore()
       // The welding front.
       const welding = w.units.some((e) => !e.dead && isEngineer(e.t) && e.mending.includes(u.id))
       const flick = welding ? 0.65 + 0.35 * Math.sin(this.clock * 23 + u.id) : 0.35
@@ -1993,6 +2011,48 @@ export class Renderer {
       ctx.fillText('Awaiting engineers', u.x, u.y + Math.max(sw, sh) * 0.55 + 16 / z)
       ctx.restore()
     }
+  }
+
+  /**
+   * The ship a yard is building, taking shape in its berth: its frame (every plate's outline) in the
+   * yard's working light, filled in solid from the stern as the work goes on. Drawn over the yard's
+   * hull and under its crane, nose to the yard's mouth, shrunk to fit if the berth is short for it.
+   */
+  private drawBerth(ctx: CanvasRenderingContext2D, u: Unit, ym: Model, z: number, alpha: number) {
+    const q = u.yq?.[0]
+    const b = YARD_BERTHS[u.t.id]
+    if (!q || !b || building(u)) return
+    const st = this.typeOf(q.unit)
+    const m = modelFor(st)
+    if (!m) return
+    const ky = u.t.size / ym.long
+    const [w0, h0] = dims(st)
+    const fit = Math.min(1, ((b.y1 - b.y0) * ky * 0.9) / h0, (b.hw * 2 * ky * 1.15) / w0)
+    const size = st.size * fit
+    const k = size / m.long
+    const rot = u.a + Math.PI / 2
+    const cy = ((b.y0 + b.y1) / 2) * ky
+    const x = u.x - Math.sin(rot) * cy
+    const y = u.y + Math.cos(rot) * cy
+    const progress = Math.max(0, Math.min(1, 1 - q.left / Math.max(0.001, q.total)))
+    const zdpr = z * (window.devicePixelRatio || 1)
+    const rgb = u.t.faction === 'republic' ? '130,205,255' : '255,186,120'
+    ctx.save()
+    ctx.translate(x, y)
+    ctx.rotate(rot)
+    ctx.globalAlpha *= alpha
+    const half = (m.h / 2) * k
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(-size, half - progress * half * 2, size * 2, size * 2)
+    ctx.clip()
+    drawHull(ctx, m, 0, 0, 0, size, zdpr, FRESH, { alpha: 0.85, lightRot: rot })
+    ctx.restore()
+    ctx.scale(k, k)
+    ctx.strokeStyle = `rgba(${rgb},0.5)`
+    ctx.lineWidth = 1 / z / k
+    ctx.stroke(outlineOf(m).frame)
+    ctx.restore()
   }
 
   /** A yard being placed: its ghost where it would go, the slipway's mouth marked, green where it can
@@ -2034,8 +2094,9 @@ export class Renderer {
     ctx.restore()
   }
 
-  /** Ruined yards: the burnt-out hull where each one fell, for its owner to rebuild (labelled with
-   * the price for them). Everyone else sees one once their ships have it in sight. */
+  /** Ruined yards: the burnt-out hull where each one fell, broken across in three and sagged apart,
+   * for its owner to rebuild (labelled with the price for them). Everyone else sees one once their
+   * ships have it in sight. */
   private drawRuins(ctx: CanvasRenderingContext2D, w: World, view: View, z: number, zdpr: number, onScreen: (x: number, y: number, r?: number) => boolean) {
     const team = w.players[view.me].team
     for (const r of w.ruins ?? []) {
@@ -2044,10 +2105,26 @@ export class Renderer {
       const ours = w.players[r.owner].team === team
       if (!ours && !w.units.some((u) => !u.dead && w.players[u.owner].team === team && (u.x - r.x) ** 2 + (u.y - r.y) ** 2 < sensorOf(u) ** 2)) continue
       const m = this.modelsOn ? modelFor(t) : null
-      ctx.filter = 'brightness(0.5) saturate(0.45)'
-      if (m) drawHull(ctx, m, r.x, r.y, r.a + Math.PI / 2, t.size, zdpr, wreckState(m, r.id), { alpha: 0.85, wreck: true })
-      else this.drawSprite(ctx, t.sprite, r.x, r.y, r.a + Math.PI / 2, t.size, z, 0.8)
-      ctx.filter = 'none'
+      const rot = r.a + Math.PI / 2
+      if (m) {
+        const st = wreckState(m, r.id)
+        const k = t.size / m.long
+        const c = Math.cos(rot)
+        const s = Math.sin(rot)
+        breakPieces(m, 'pieces', hash(r.id, 0x5e1d) % 1000).forEach((p, i) => {
+          // Each piece pushed a little out from the middle and turned a touch, as it settled.
+          const rr = seeded(hash(r.id, i, 0x2a7))
+          const l = Math.hypot(p.cx, p.cy) || 1
+          const push = m.long * (0.025 + rr() * 0.025)
+          const lx = (p.cx + (p.cx / l) * push) * k
+          const ly = (p.cy + (p.cy / l) * push) * k
+          drawPiece(ctx, m, p, `ruin${r.id}.${i}`, st, r.x + lx * c - ly * s, r.y + lx * s + ly * c, rot + (rr() - 0.5) * 0.1, t.size, zdpr, 0.92)
+        })
+      } else {
+        ctx.filter = 'brightness(0.5) saturate(0.45)'
+        this.drawSprite(ctx, t.sprite, r.x, r.y, rot, t.size, z, 0.8)
+        ctx.filter = 'none'
+      }
       if (r.owner === view.me && z > 0.15) {
         ctx.save()
         ctx.font = `600 ${12 / z}px system-ui, sans-serif`
@@ -2217,6 +2294,7 @@ export class Renderer {
     else if (m && st) {
       const zdpr = z * (window.devicePixelRatio || 1)
       drawHull(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, st, { alpha })
+      if (t.tier === 'yard') this.drawBerth(ctx, u, m, z, alpha)
       if (m.mounts.length) drawMounts(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, u.hps, (i) => this.aim(u, i, w), alpha)
     } else {
       this.drawSprite(ctx, t.sprite, u.x, u.y, u.a + Math.PI / 2, size, z, alpha)

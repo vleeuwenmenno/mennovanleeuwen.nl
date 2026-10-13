@@ -186,6 +186,22 @@ function silhouette(parts: Part[]) {
   return p
 }
 
+const outlines = new WeakMap<Model, { solid: Path2D; frame: Path2D }>()
+/**
+ * A model's whole silhouette and its wireframe (every solid part's outline), in model units, made
+ * once per model: what a structure going up is clipped to and drawn as, and the frame of a ship
+ * taking shape in a yard's berth.
+ */
+export function outlineOf(m: Model) {
+  let o = outlines.get(m)
+  if (!o) {
+    const frame = new Path2D()
+    for (const q of m.parts) if (q.pts.length >= 3 && !q.glow && !q.id.startsWith('socket')) frame.addPath(pathOf(q))
+    outlines.set(m, (o = { solid: silhouette(m.parts), frame }))
+  }
+  return o
+}
+
 export type PaintOpts = {
   /** Towards the light, in model space. */
   light: Pt
@@ -218,7 +234,7 @@ export function paintModel(g: CanvasRenderingContext2D, m: Model, o: PaintOpts) 
     // Where a part came off: a burnt patch on the hull beside it.
     for (const i of gone) {
       const p = m.parts[i]
-      if (p.pts.length < 3) continue
+      if (p.pts.length < 3 || p.scar === false) continue
       const b = bounds(p.pts)
       const [cx, cy] = centroid(p.pts)
       const r = Math.max(b.x1 - b.x0, b.y1 - b.y0) * 0.55
