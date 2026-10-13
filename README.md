@@ -606,7 +606,9 @@ password). The calendars are found from the URL, and events are fetched by date 
 server expanding repeating events, so everything shows both sources together.
 
 The **Calendar** app ([`src/apps/calendar`](src/apps/calendar)) shows the switched-on calendars by
-day, three days, week, month or year. Drag on an empty spot to make an event, drag an event to
+day, three days, week, month or year. Drag on an empty spot to make an event (into another day to make one that runs over days: in the week
+views from the time you press to the time you let go, in the all-day row and the month as an all-day event;
+backwards works too), drag an event to
 move it, drag its bottom edge to change its length; click one for a read-only card beside it (when,
 place, call link, calendar, guests with their answers, notes, linked notebook notes; *Edit* or `E`/`Enter`,
 *Delete* or `Del`, `Esc` or a click outside to close, a ⋯ menu with the right-click menu's items; a sheet
