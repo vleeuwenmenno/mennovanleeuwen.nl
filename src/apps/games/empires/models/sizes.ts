@@ -30,6 +30,7 @@ export const SIZE_CLASSES: Record<Tier, number> = {
   station: 1,
   mine: 1,
   defense: 1,
+  yard: 1,
 }
 
 /**
@@ -45,6 +46,7 @@ export const HANDLING: Record<Tier, { turn: number; accel: number; speed: number
   station: { turn: 1, accel: 1, speed: 1 },
   mine: { turn: 1, accel: 1, speed: 1 },
   defense: { turn: 1, accel: 1, speed: 1 },
+  yard: { turn: 1, accel: 1, speed: 1 },
 }
 
 /** How much further apart a Big fleet sits: formations and the repair tenders' reach grow by this. */

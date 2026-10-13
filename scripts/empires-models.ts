@@ -69,7 +69,7 @@ const looks = types.flatMap((t) => looksOf(t, true))
 console.log(`Looks: ${looks.length} (${looks.filter(([, s]) => s === SWARM).length} of them Swarm concepts, ${looks.filter(([t]) => t.big).length} Big redesigns)`)
 // Every ship bigger than strike craft has a Big size and redesign, in every look it has (the Swarm's
 // too), and a Big layout for its hardpoints, one entry each.
-for (const t of UNITS.filter((u) => u.tier !== 'fighter' && u.tier !== 'station' && u.tier !== 'mine' && u.tier !== 'defense')) {
+for (const t of UNITS.filter((u) => u.tier !== 'fighter' && u.tier !== 'station' && u.tier !== 'mine' && u.tier !== 'defense' && u.tier !== 'yard')) {
   ok(bigType(t) !== t, `${t.id}: no Big size`)
   ok(hasBigDesign(t), `${t.id}: no Big redesign`)
   if (hasSwarm(t)) ok(hasBigDesign(t, SWARM), `${t.id}: no Big redesign of its Swarm concept`)

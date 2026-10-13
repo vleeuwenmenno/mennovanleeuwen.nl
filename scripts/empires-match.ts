@@ -183,7 +183,7 @@ const busy = (p: Player) => {
       k++ % 3 === 0
         ? cmd('build', mine[k % mine.length].id)
         : cmd('move', ships.map((u) => u.id), Math.round(Math.random() * w.w), Math.round(Math.random() * w.h), k % 2 === 0)
-    p.sent.set(JSON.stringify({ f: c.f, a: c.f === 'build' ? [c.a[0], false] : [...c.a, false].slice(0, 5) }), { at: performance.now(), n: p.n })
+    p.sent.set(JSON.stringify({ f: c.f, a: c.f === 'build' ? [c.a[0], false, 0] : [...c.a, false].slice(0, 5) }), { at: performance.now(), n: p.n })
     p.send({ t: 'cmd', c })
     // A tampered client: a nonsense unit, garbage arguments. The server must drop these.
     if (k % 7 === 0) p.send({ t: 'cmd', c: { f: 'build', a: ['not-a-ship'] } })

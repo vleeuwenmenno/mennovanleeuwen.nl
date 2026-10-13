@@ -5,7 +5,7 @@ import { clearLine, findPath, navGrid, type NavGrid } from './nav.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import { BIG_SPREAD, SIZE_CLASSES, sizedType, type ShipSizes } from './models/sizes.ts'
 import {
-  ABILITIES, ARMOR_BONUS, BASE_POP, DEFENSE_WING, FIELD_REPAIR, MENDABLE, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
+  ABILITIES, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind,
 } from './data.ts'
@@ -51,6 +51,8 @@ export type Order =
   | { k: 'area'; x: number; y: number; r: number }
   /** Stay with a friendly ship or structure and fight off whatever comes near it. */
   | { k: 'guard'; id: number }
+  /** Engineers: build a construction site of ours, or weld one of our structures back together. */
+  | { k: 'construct'; id: number }
 
 /** Research multipliers for one ship, 1 meaning unchanged. */
 export type Mods = { hull: number; shield: number; regen: number; damage: number; speed: number; cooldown: number; range: number }
@@ -152,7 +154,17 @@ export type Unit = {
   /** How hard it is to shove aside, overriding its class's (see pushClass): the hook for an
    * ability that lets a ship push bigger hulls. Absent: its class's. */
   pushClass?: number
+  /** A yard's own build queue and rally point, once it is built. */
+  yq?: QueueItem[]
+  yr?: Pt
+  /** A construction site (a yard placed by engineers, until it is finished): what was paid for it
+   * (for a refund if it is cancelled), the ruin it went up on (given back if it is), and whether
+   * building has started. Until it has, only its owner knows it is there. */
+  site?: { paid: number; started: boolean; ruin?: Ruin }
 }
+
+/** Where a yard was destroyed: its owner's engineers can rebuild it there for REBUILD of its price. */
+export type Ruin = { id: number; owner: Owner; unit: string; x: number; y: number; a: number }
 
 /**
  * A warship's place round its target when several of its side's warships fight the same one: `a`
@@ -168,7 +180,7 @@ export type Slot = { t: number; key: number; at: number; a: number; inset: numbe
 export type QueueItem = { unit: string; left: number; total: number; reserve?: boolean }
 /** A ship on its way in from hyperspace: it drops out at (x, y), facing `a`, once the clock
  * reaches `at`. `rally`: a new ship from the shipyard, sent on to the rally point. */
-export type Arrival = { unit: string; owner: Owner; x: number; y: number; a: number; at: number; rally: boolean }
+export type Arrival = { unit: string; owner: Owner; x: number; y: number; a: number; at: number; rally: boolean; /** From a yard: its rally point (else the station's). */ rx?: number; ry?: number }
 /** Research in progress: a tech id, or LEVEL_UP for the next station level. */
 export type ResearchItem = { id: string; left: number; total: number }
 export type Player = {
@@ -329,6 +341,12 @@ export type World = {
   /** Ship sizes, picked for the match (models/sizes.ts): 'big', or left out for Classic (battles
    * saved before there was a choice are Classic). */
   sizes?: ShipSizes
+  /** Hybrid bases: the station is a Command Station and engineers build the yards round it (see
+   * BUILD_RADIUS). Battles saved before there were yards, and galactic conquest's fleet battles,
+   * don't have it: their station is the whole shipyard, as it always was. */
+  hybrid?: boolean
+  /** Ruined yards, where they were destroyed. */
+  ruins?: Ruin[]
 }
 export type FleetRules = {
   /** Where each player's reinforcements may jump in, whether or not the fleet can see it. */
@@ -370,7 +388,7 @@ const accOf = (t: UnitType) => t.speed * (t.accel ?? 1)
  * class's: the hook for an ability (a ram, a heavy tractor) that lets a ship push bigger ones.
  * Tractor lock only slows ships, so it doesn't touch this.
  */
-export const PUSH_CLASS: Record<Tier, number> = { fighter: 0, gunship: 1, frigate: 2, cruiser: 3, capital: 4, station: 10, mine: 10, defense: 10 }
+export const PUSH_CLASS: Record<Tier, number> = { fighter: 0, gunship: 1, frigate: 2, cruiser: 3, capital: 4, station: 10, mine: 10, defense: 10, yard: 10 }
 export const pushClass = (u: Unit) => (isShip(u.t) ? (u.pushClass ?? PUSH_CLASS[u.t.tier]) : Infinity)
 
 /** Rough body radius, for spacing, clicking and collisions. */
@@ -400,7 +418,10 @@ function share(u: Unit, kind: string) {
 export const shieldFull = (u: Unit) => u.t.shield * u.mods.shield
 export const shieldMax = (u: Unit) => shieldFull(u) * share(u, 'shield')
 /** How far a unit sees: half as far while building or inside a nebula. */
-export const sensorOf = (u: Unit) => u.t.sensor * (u.building > 0 ? 0.5 : 1) * (u.nebula ? NEBULA_SENSOR : 1)
+export const sensorOf = (u: Unit) => (planned(u) ? 0 : u.t.sensor * (u.building > 0 ? 0.5 : 1) * (u.nebula ? NEBULA_SENSOR : 1))
+/** A construction site nobody has started on yet: only its owner knows it is there, nothing bumps
+ * into it, and it sees nothing. */
+export const planned = (u: Unit) => !!u.site && !u.site.started
 export const speedOf = (u: Unit) => u.t.speed * u.mods.speed * (0.25 + 0.75 * share(u, 'engine')) * (u.slow > 0 ? 0.33 : 1)
 
 /** Everything a player has researched for one unit type (or for its station), added up. */
@@ -589,6 +610,8 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
     nextId: 1, squadSeq: 1, wreckSeq: 1000, rs: ((opts.seed ?? map.seed) ^ 0x9e3779b9) >>> 0, winner: -1, grid: new Map(), seenT: 0, nav: new Map(), arrivals: [],
     // Classic worlds don't carry the field at all, so they stay exactly as they were.
     ...(opts.sizes === 'big' ? { sizes: 'big' as const } : {}),
+    // Skirmishes and multiplayer battles have hybrid bases; galactic conquest's fleet battles don't.
+    ...(opts.fleet ? {} : { hybrid: true, ruins: [] }),
   }
   w.players = seats.map((s) => {
     const sp = s.at ?? map.spawns[s.spawn]
@@ -696,7 +719,7 @@ function offRocks(w: World, u: Unit, x: number, y: number): Pt {
   for (const k of w.rocks) away(k.x, k.y, k.r + clear)
   const r0 = radius(u.t)
   for (let pass = 0; pass < 2; pass++)
-    for (const o of w.units) if (!o.dead && !isShip(o.t)) away(o.x, o.y, r0 + radius(o.t) + HULL_GAP + 6)
+    for (const o of w.units) if (!o.dead && !isShip(o.t) && !planned(o)) away(o.x, o.y, r0 + radius(o.t) + HULL_GAP + 6)
   return { x: clamp(x, 40, w.w - 40), y: clamp(y, 40, w.h - 40) }
 }
 
@@ -722,7 +745,7 @@ function issue(u: Unit, o: Order, queued = false) {
 export function lastStop(w: World, u: Unit): Pt {
   for (const o of [...u.queue].reverse().concat(u.order)) {
     if (o.k === 'move' || o.k === 'patrol' || o.k === 'area') return { x: o.x, y: o.y }
-    if (o.k === 'guard') {
+    if (o.k === 'guard' || o.k === 'construct') {
       const t = w.byId.get(o.id)
       if (t && !t.dead) return { x: t.x, y: t.y }
     }
@@ -1101,14 +1124,25 @@ export function cmdAbility(w: World, owner: Owner, ids: number[], target = 0) {
   return used
 }
 
-export function cmdRally(w: World, owner: Owner, x: number, y: number) {
-  w.players[owner].rally = { x: clamp(x, 40, w.w - 40), y: clamp(y, 40, w.h - 40) }
+/** Set where new ships gather: the station's rally point, or with `at` one of our yards'. */
+export function cmdRally(w: World, owner: Owner, x: number, y: number, at = 0) {
+  const to = { x: clamp(x, 40, w.w - 40), y: clamp(y, 40, w.h - 40) }
+  if (!at) {
+    w.players[owner].rally = to
+    return
+  }
+  const yard = w.byId.get(at)
+  if (yard && !yard.dead && yard.owner === owner && yard.yq) yard.yr = to
 }
 
-const queuedPop = (p: Player) => p.queue.reduce((s, q) => s + UNIT[q.unit].pop, 0)
+/** A player's yards that are built and working, oldest first. */
+export const yardsOf = (w: World, o: Owner) => w.units.filter((u) => !u.dead && u.owner === o && u.t.tier === 'yard' && !building(u) && !!u.yq)
+/** Everything a player has queued: at the station, then at each of its yards. */
+export const allQueued = (w: World, o: Owner): QueueItem[] => [...w.players[o].queue, ...yardsOf(w, o).flatMap((y) => y.yq ?? [])]
+const queuedPop = (w: World, o: Owner) => allQueued(w, o).reduce((s, q) => s + UNIT[q.unit].pop, 0)
 const capitals = (w: World, o: Owner) =>
   w.units.filter((u) => !u.dead && u.owner === o && u.t.tier === 'capital').length +
-  [...w.players[o].queue.map((q) => q.unit), ...w.players[o].reserve, ...w.arrivals.filter((a) => a.owner === o).map((a) => a.unit)].filter((id) => UNIT[id].tier === 'capital').length
+  [...allQueued(w, o).map((q) => q.unit), ...w.players[o].reserve, ...w.arrivals.filter((a) => a.owner === o).map((a) => a.unit)].filter((id) => UNIT[id].tier === 'capital').length
 
 /** How much of its income a mining platform brings in, from its working drill rigs and silo. */
 export function mineOutput(u: Unit) {
@@ -1178,7 +1212,7 @@ function siteUpgrades(w: World, dt: number) {
 
 /** Seconds a repair crew takes to make a structure whole again. */
 export const REPAIR_TIME = 20
-const REPAIRABLE: Tier[] = ['station', 'mine', 'defense']
+const REPAIRABLE: Tier[] = ['station', 'mine', 'defense', 'yard']
 /** What a structure is worth when working out a repair's price (the station has no build cost). */
 const worth = (u: Unit) => u.t.cost || 2500
 
@@ -1296,32 +1330,51 @@ export const WARP_RESERVE = 2.4
 /** Share of its hull a ship loses dropping out inside an asteroid field (its shields go too). */
 export const FIELD_DAMAGE = 0.4
 
-/** Why a ship can't be ordered right now, or null if it can. */
-export function cantBuild(w: World, owner: Owner, id: string, reserve = false): string | null {
+/**
+ * The queue a ship is built in: the station's, or with hybrid bases a yard's for the ships built at
+ * one (`at`, or the player's first yard); or why there is none.
+ */
+function queueFor(w: World, owner: Owner, id: string, at: number): QueueItem[] | string {
+  const p = w.players[owner]
+  if (!w.hybrid) return at ? 'No yards in this battle' : p.queue
+  if (builtAt(UNIT[id]) === 'station') return at ? 'Built at the Command Station' : p.queue
+  const given = at ? w.byId.get(at) : undefined
+  const yard = at ? (given && !given.dead && given.owner === owner && given.t.tier === 'yard' && given.yq ? given : undefined) : yardsOf(w, owner)[0]
+  if (!yard) return at ? 'That yard can\'t build it' : `Needs a Frigate Yard: build one with engineers`
+  return yard.yq!
+}
+
+/** Why a ship can't be ordered right now, or null if it can. `at`: the yard to build it at (0: the
+ * station, or for a ship that is built at a yard, our first one). */
+export function cantBuild(w: World, owner: Owner, id: string, reserve = false, at = 0): string | null {
   const p = w.players[owner]
   const t = UNIT[id]
   if (w.fleet) return 'No shipyard work during a fleet battle'
   if (reserve && fromHangar(t)) return 'Strike craft launch from the hangar'
   if (!w.byId.get(p.station) || w.byId.get(p.station)!.dead) return 'No station'
+  if (isEngineer(t) && !w.hybrid) return 'No engineers in this battle'
   if (t.level > p.level) return `Needs station level ${t.level}`
   if (t.tech && !p.techs.includes(t.tech)) return `Needs research: ${TECH[t.tech].name}`
+  const queue = queueFor(w, owner, id, at)
+  if (typeof queue === 'string') return queue
   if (t.tier === 'capital' && capitals(w, owner) >= MAX_CAPITALS) return 'One flagship at a time'
-  if (p.queue.length >= MAX_QUEUE) return 'Queue full'
-  if (p.pop + queuedPop(p) + t.pop > p.popCap) return 'Fleet at its limit: capture beacons or upgrade the station'
+  if (queue.length >= MAX_QUEUE) return 'Queue full'
+  if (p.pop + queuedPop(w, owner) + t.pop > p.popCap) return 'Fleet at its limit: capture beacons or upgrade the station'
   if (p.credits < t.cost) return 'Not enough credits'
   return null
 }
 
-/** Order a ship: it jumps in next to the station when done, or with `reserve` waits in the fleet
- * reserve until called in. */
-export function cmdBuild(w: World, owner: Owner, id: string, reserve = false) {
-  const why = cantBuild(w, owner, id, reserve)
+/** Order a ship: it jumps in next to the station (or the yard that builds it) when done, or with
+ * `reserve` waits in the fleet reserve until called in. `at`: as for cantBuild. */
+export function cmdBuild(w: World, owner: Owner, id: string, reserve = false, at = 0) {
+  const why = cantBuild(w, owner, id, reserve, at)
   if (why) return why
   const p = w.players[owner]
   const t = UNIT[id]
+  const queue = queueFor(w, owner, id, at) as QueueItem[]
   spend(w, p, t.cost, 'ships', t.name)
   const time = t.build * (1 + (techBonus(p, id).build ?? 0))
-  p.queue.push({ unit: id, left: time, total: time, ...(reserve ? { reserve: true } : {}) })
+  queue.push({ unit: id, left: time, total: time, ...(reserve ? { reserve: true } : {}) })
   return null
 }
 
@@ -1344,13 +1397,14 @@ export function cantWarp(w: World, owner: Owner, id: string, x: number, y: numbe
   if (!atEntry && !canSee(w, w.players[owner].team, x, y)) return w.fleet ? 'Out of sight: ships jump in where the fleet can see, or at our entry point' : 'Out of sight: ships can only jump in where the fleet can see'
   if (w.rocks.some((k) => d2(x, y, k.x, k.y) < sq(k.r + r))) return 'An asteroid is in the way'
   if (w.nodes.some((n) => d2(x, y, n.x, n.y) < sq(n.r + r))) return 'An ore asteroid is in the way'
-  if (w.units.some((u) => !u.dead && u.t.tier !== 'fighter' && d2(x, y, u.x, u.y) < sq((radius(u.t) + r) * 0.85))) return 'Something is in the way'
+  // (Another side's yard nobody has started on isn't there yet, as far as we know.)
+  if (w.units.some((u) => !u.dead && u.t.tier !== 'fighter' && !(planned(u) && u.owner !== owner) && d2(x, y, u.x, u.y) < sq((radius(u.t) + r) * 0.85))) return 'Something is in the way'
   if (w.arrivals.some((a) => d2(x, y, a.x, a.y) < sq(radius(typeOf(w, a.unit)) + r))) return 'Another ship is jumping in there'
   return null
 }
 
-function warpIn(w: World, owner: Owner, unit: string, x: number, y: number, a: number, delay: number, rally: boolean) {
-  w.arrivals.push({ unit, owner, x, y, a, at: w.time + delay, rally })
+function warpIn(w: World, owner: Owner, unit: string, x: number, y: number, a: number, delay: number, rally: boolean, to?: Pt) {
+  w.arrivals.push({ unit, owner, x, y, a, at: w.time + delay, rally, ...(to ? { rx: to.x, ry: to.y } : {}) })
   w.events.push({ k: 'warp', owner, unit, x, y, a, delay })
 }
 
@@ -1368,10 +1422,9 @@ export function cmdDeploy(w: World, owner: Owner, id: string, x: number, y: numb
 
 /** Where a new ship from the shipyard drops out: beside the station, towards the rally point, on
  * the first clear spot round it. */
-function yardSpot(w: World, o: Owner, st: Unit, id: string) {
-  const p = w.players[o]
+function yardSpot(w: World, o: Owner, st: Unit, id: string, rally: Pt = w.players[o].rally) {
   const t = typeOf(w, id)
-  const toward = M.atan2(p.rally.y - st.y, p.rally.x - st.x)
+  const toward = M.atan2(rally.y - st.y, rally.x - st.x)
   const reach = radius(st.t) + radius(t) + 70
   for (let ring = 0; ring < 4; ring++)
     for (const off of [0, 0.45, -0.45, 0.9, -0.9, 1.4, -1.4, 2, -2, 2.6, -2.6, Math.PI]) {
@@ -1411,7 +1464,7 @@ function arrivals(w: World) {
       }
     }
     if (a.rally) {
-      cmdMove(w, a.owner, group.map((u) => u.id), p.rally.x, p.rally.y, true)
+      cmdMove(w, a.owner, group.map((u) => u.id), a.rx ?? p.rally.x, a.ry ?? p.rally.y, true)
       w.events.push({ k: 'built', owner: a.owner, unit: a.unit, x: a.x, y: a.y })
     }
     w.events.push({ k: 'arrived', owner: a.owner, unit: a.unit, x: a.x, y: a.y, a: a.a, field })
@@ -1419,12 +1472,15 @@ function arrivals(w: World) {
   w.arrivals = keep
 }
 
-export function cmdCancel(w: World, owner: Owner, index: number) {
+/** Cancel a ship in the station's queue, or with `at` in one of our yards' (refunded in full). */
+export function cmdCancel(w: World, owner: Owner, index: number, at = 0) {
   const p = w.players[owner]
-  const q = p.queue[index]
+  const yard = at ? w.byId.get(at) : undefined
+  const queue = !at ? p.queue : yard && !yard.dead && yard.owner === owner ? yard.yq : undefined
+  const q = queue?.[index]
   if (!q) return
   giveBack(w, p, UNIT[q.unit].cost, 'ships', `Cancelled: ${UNIT[q.unit].name}`)
-  p.queue.splice(index, 1)
+  queue!.splice(index, 1)
 }
 
 /** What a piece of research (or the next station level) costs. */
@@ -1574,6 +1630,191 @@ export function cmdSite(w: World, owner: Owner, node: number, id: string) {
   return null
 }
 
+// --- Hybrid bases: yards and engineers ------------------------------------------------------------------
+
+/** Where a yard would go and what it would cost: the spot (snapped onto our own ruin of it, when the
+ * point is on one), the way it faces (its slipway opening away from the station, or as the ruin
+ * lay), and why it can't go there, if it can't. The ghost under the cursor shows this. */
+export type Placement = { why: string | null; x: number; y: number; a: number; cost: number; ruin?: Ruin }
+
+export function placement(w: World, owner: Owner, unitId: string, x: number, y: number): Placement {
+  const p = w.players[owner]
+  const t = UNIT[unitId]
+  const st = w.byId.get(p.station)
+  const ruin = t && (w.ruins ?? []).find((r) => r.owner === owner && r.unit === unitId && d2(x, y, r.x, r.y) < sq(radius(t) * 0.8))
+  if (ruin) {
+    x = ruin.x
+    y = ruin.y
+  }
+  const a = ruin ? ruin.a : st ? M.atan2(y - st.y, x - st.x) : 0
+  const cost = t ? (ruin ? Math.round(t.cost * REBUILD) : t.cost) : 0
+  const out = (why: string | null): Placement => ({ why, x, y, a, cost, ...(ruin ? { ruin } : {}) })
+  if (!w.hybrid || w.fleet) return out('No yards in this battle')
+  if (!t || t.tier !== 'yard' || t.faction !== p.faction) return out('That can\'t be built here')
+  if (!st || st.dead) return out('No station')
+  if (t.level > p.level) return out(`Needs station level ${t.level}`)
+  if (w.units.filter((u) => !u.dead && u.owner === owner && u.t.id === unitId).length >= YARD_MAX) return out(`We already have a ${t.name}`)
+  const r = radius(t)
+  if (d2(x, y, st.x, st.y) > sq(BUILD_RADIUS)) return out('Outside the build radius: keep it near the Command Station')
+  if (x < r + 120 || y < r + 120 || x > w.w - r - 120 || y > w.h - r - 120) return out('Too close to the edge of the map')
+  if (w.rocks.some((k) => d2(x, y, k.x, k.y) < sq(k.r + r + 30))) return out('An asteroid is in the way')
+  if (inside(w.map.fields, x, y, r)) return out('Inside an asteroid field')
+  if (w.nodes.some((n) => d2(x, y, n.x, n.y) < sq(n.r + r + 140))) return out('Too close to an ore asteroid')
+  if (w.beacons.some((b) => d2(x, y, b.x, b.y) < sq(r + 240))) return out('Too close to a beacon')
+  if (w.wrecks.some((h) => d2(x, y, h.x, h.y) < sq(h.size * 0.6 + r))) return out('A wreck is in the way')
+  // Kept clear of other structures by their longest side, a station by the size it grows to.
+  const half = (o: UnitType) => Math.max(...dims(o.tier === 'station' ? stationType(o.faction, MAX_LEVEL, []) : o)) * 0.5
+  if (w.units.some((u) => !u.dead && !isShip(u.t) && !(planned(u) && u.owner !== owner) && d2(x, y, u.x, u.y) < sq(half(u.t) + half(t) + 60))) return out('Too close to another structure')
+  if ((w.ruins ?? []).some((q) => q !== ruin && d2(x, y, q.x, q.y) < sq(r * 2))) return out('A ruin is in the way')
+  if (p.credits < cost) return out('Not enough credits')
+  return out(null)
+}
+
+/**
+ * Engineers put up a yard: it is paid for now and its site marked out; the engineers among `ids`
+ * fly there and build it (with `queued`, once their other orders are done). Placed on our own ruin
+ * of it, it costs REBUILD of the price.
+ */
+export function cmdPlace(w: World, owner: Owner, ids: number[], unitId: string, x: number, y: number, queued = false): string | null {
+  const crew = ids.map((i) => w.byId.get(i)).filter((u): u is Unit => commandable(u, owner) && isEngineer(u.t))
+  if (!crew.length) return 'Select engineers to build it'
+  const pl = placement(w, owner, unitId, x, y)
+  if (pl.why) return pl.why
+  const t = UNIT[unitId]
+  spend(w, w.players[owner], pl.cost, 'structures', pl.ruin ? `Rebuilding: ${t.name}` : t.name)
+  const site = spawn(w, unitId, owner, pl.x, pl.y, pl.a)
+  site.building = t.build
+  site.hull = site.hullMax * 0.1
+  site.shield = 0
+  site.site = { paid: pl.cost, started: false, ...(pl.ruin ? { ruin: pl.ruin } : {}) }
+  if (pl.ruin) w.ruins = (w.ruins ?? []).filter((r) => r !== pl.ruin)
+  for (const u of crew) issue(u, { k: 'construct', id: site.id }, queued)
+  return null
+}
+
+/** Why engineers of `owner` can't work on `t`, or null when they can: a construction site of ours,
+ * or one of our finished structures with something to mend. */
+export function cantConstruct(w: World, owner: Owner, t: Unit | undefined): string | null {
+  if (!t || t.dead || t.owner !== owner || isShip(t.t) || w.byId.get(t.id) !== t) return 'Pick one of our structures'
+  if (t.site) return null
+  if (building(t)) return 'It is building itself'
+  if (wear(t) < 0.002) return 'Nothing to repair'
+  return null
+}
+
+/** Engineers build a construction site of ours, or weld one of our structures back together. */
+export function cmdConstruct(w: World, owner: Owner, ids: number[], id: number, queued = false): string | null {
+  const t = w.byId.get(id)
+  const why = cantConstruct(w, owner, t)
+  if (why) return why
+  const crew = ids.map((i) => w.byId.get(i)).filter((u): u is Unit => commandable(u, owner) && isEngineer(u.t))
+  if (!crew.length) return 'Only engineers build and repair structures'
+  for (const u of crew) issue(u, { k: 'construct', id }, queued)
+  return null
+}
+
+/** What cancelling a construction site gives back now: all of it before work has started, then
+ * less the further along it is (see SITE_REFUND). */
+export const siteRefund = (u: Unit) =>
+  !u.site ? 0 : !u.site.started ? u.site.paid : Math.round(u.site.paid * (SITE_REFUND.start - SITE_REFUND.wear * (1 - u.building / u.t.build)))
+
+/** Call off a yard still being built: refunded (see siteRefund), and the ruin it stood on is back. */
+export function cmdCancelSite(w: World, owner: Owner, id: number): string | null {
+  const u = w.byId.get(id)
+  if (!u || u.dead || u.owner !== owner || !u.site) return 'Nothing to cancel'
+  giveBack(w, w.players[owner], siteRefund(u), 'structures', `Cancelled: ${u.t.name}`)
+  if (u.site.ruin) (w.ruins ??= []).push(u.site.ruin)
+  u.dead = true
+  w.byId.delete(u.id)
+  return null
+}
+
+/** A yard finished: its queue opens, its rally point out in front of its slipway. */
+function finishSite(w: World, t: Unit) {
+  t.building = 0
+  delete t.site
+  t.yq = []
+  const d = radius(t.t) + 280
+  t.yr = { x: clamp(t.x + M.cos(t.a) * d, 40, w.w - 40), y: clamp(t.y + M.sin(t.a) * d, 40, w.h - 40) }
+  w.events.push({ k: 'built', owner: t.owner, unit: t.t.id, x: t.x, y: t.y })
+}
+
+/** Something for an idle engineer to do by itself near where it is: a site of ours being built,
+ * else the most worn of our structures (a twentieth of it missing or more). Never where enemy
+ * warships or strike craft are in sight round it: unarmed crews don't fly into a fight unasked. */
+function jobNear(w: World, u: Unit): Unit | undefined {
+  let best: Unit | undefined
+  let score = 0
+  const hot = (t: Unit) => {
+    let found = false
+    near(w, t.x, t.y, radius(t.t) + rangeDist(800), (e) => {
+      if (!found && isShip(e.t) && foes(w, e.owner, u.owner) && sees(w, u.owner, e)) found = true
+    })
+    return found
+  }
+  for (const t of w.units) {
+    if (t.dead || t.owner !== u.owner || isShip(t.t)) continue
+    const dd = d2(t.x, t.y, u.x, u.y)
+    let s = 0
+    if (t.site) s = dd < sq(rangeDist(1400)) ? 2 : 0
+    else if (!building(t) && dd < sq(rangeDist(900))) {
+      const need = wear(t)
+      s = need >= 0.05 ? need : 0
+    }
+    s /= 1 + Math.sqrt(dd) / 1000
+    if (s > score && !hot(t)) {
+      score = s
+      best = t
+    }
+  }
+  return best
+}
+
+/**
+ * Engineers at work: each one within reach of its job welds, up to ENGINEERS.crew of them on one
+ * structure. A site goes up at one squadron's pace per three craft, its hull growing with it, and
+ * opens for work when done; a finished structure gets its hull and damaged modules mended (and a
+ * station's or yard's shot-off modules rebuilt, one at a time). Idle engineers look round now and
+ * then for a site or a worn structure of ours nearby and get on with it by themselves.
+ */
+function construction(w: World, dt: number) {
+  const look = Math.round(w.time / STEP) % Math.round(MEND_LOOK / STEP) === 0
+  const crews = new Map<number, number>()
+  for (const u of w.units) {
+    if (u.dead || !isEngineer(u.t)) continue
+    u.mending = []
+    if (u.order.k === 'construct') {
+      const t = w.byId.get(u.order.id)
+      if (cantConstruct(w, u.owner, t)) {
+        nextOrder(u, u.x, u.y)
+        continue
+      }
+      if (d2(t!.x, t!.y, u.x, u.y) > sq(radius(t!.t) + ENGINEERS.reach)) continue
+      crews.set(t!.id, (crews.get(t!.id) ?? 0) + 1)
+      u.mending.push(t!.id)
+      continue
+    }
+    if (!look || (u.order.k !== 'idle' && u.order.k !== 'guard') || u.queue.length) continue
+    const job = jobNear(w, u)
+    if (job) issue(u, { k: 'construct', id: job.id })
+  }
+  for (const [id, n] of crews) {
+    const t = w.byId.get(id)!
+    const k = Math.min(n, ENGINEERS.crew)
+    if (t.site) {
+      t.site.started = true
+      const step = Math.min(t.building, (dt * k) / 3)
+      t.building -= step
+      t.hull = Math.min(t.hullMax, t.hull + (t.hullMax * 0.9 * step) / t.t.build)
+      if (t.building <= 1e-9) finishSite(w, t)
+      continue
+    }
+    t.hull = Math.min(t.hullMax, t.hull + (ENGINEERS.flat + ENGINEERS.share * t.hullMax) * k * dt)
+    for (const h of t.hps) if (h.hp > 0 && h.hp < h.max) h.hp = Math.min(h.max, h.hp + h.max * ENGINEERS.share * k * dt)
+    if (t.t.tier === 'station' || t.t.tier === 'yard') for (let i = 0; i < k; i++) rebuildModule(t, dt)
+  }
+}
+
 // --- Simulation -----------------------------------------------------------------------------------
 
 const CELL = 320
@@ -1709,6 +1950,14 @@ function kill(w: World, u: Unit, by: Owner | -1) {
     if (prev !== -1) w.events.push({ k: 'survey', owner: -1, prev, node: n.id, x: n.x, y: n.y, razed: true })
   }
   leaveWreck(w, u)
+  if (u.t.tier === 'yard') {
+    // A yard leaves its ruin, for its owner to rebuild at half price; ships still in its queue are
+    // paid back.
+    const p = w.players[u.owner]
+    for (const q of u.yq ?? []) giveBack(w, p, UNIT[q.unit].cost, 'ships', `Lost with the yard: ${UNIT[q.unit].name}`)
+    u.yq = []
+    ;(w.ruins ??= []).push({ id: w.wreckSeq++, owner: u.owner, unit: u.t.id, x: u.x, y: u.y, a: u.a })
+  }
   if (u.t.tier === 'station' && !w.fleet) {
     // A player whose station falls is out; the last team with a station standing wins.
     w.players[u.owner].alive = false
@@ -1745,7 +1994,7 @@ function gainXp(w: World, u: Unit, amount: number) {
 function alarm(w: World, u: Unit) {
   const p = w.players[u.owner]
   if (w.time - p.lastAlarm < 20) return
-  if (u.t.tier !== 'station' && u.t.tier !== 'mine' && u.t.tier !== 'defense' && u.t.tier !== 'capital') return
+  if (u.t.tier !== 'station' && u.t.tier !== 'mine' && u.t.tier !== 'defense' && u.t.tier !== 'yard' && u.t.tier !== 'capital') return
   p.lastAlarm = w.time
   w.events.push({ k: 'alarm', owner: u.owner, x: u.x, y: u.y, what: u.t.name })
 }
@@ -2182,7 +2431,8 @@ function moveUnit(w: World, u: Unit, dt: number) {
   } else if (u.retarget <= 0) {
     u.retarget = 0.4 + rand(w) * 0.3
     const guarding = u.order.k === 'guard'
-    const engage = u.order.k === 'idle' || guarding || u.order.k === 'patrol' || (u.order.k === 'move' && u.order.attack)
+    // Engineers have no guns: they never pick fights.
+    const engage = !isEngineer(t) && (u.order.k === 'idle' || guarding || u.order.k === 'patrol' || (u.order.k === 'move' && u.order.attack))
     const cur = valid(w, u.target, u.owner)
     const hold = u.stance === 'hold'
     const roam = u.stance === 'roam'
@@ -2206,7 +2456,9 @@ function moveUnit(w: World, u: Unit, dt: number) {
     }
   }
   // On a Field repair run the patient comes first: no chasing anything.
-  const mend = mendTarget(w, u)
+  // So is an engineer's job.
+  const job = u.order.k === 'construct' ? w.byId.get(u.order.id) : undefined
+  const mend = mendTarget(w, u) ?? (job && !job.dead ? job : undefined)
   if (mend) u.target = 0
   const tgt = u.target ? w.byId.get(u.target) : undefined
 
@@ -2323,7 +2575,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
     const by = u.y
     const mine = pushClass(u)
     near(w, u.x, u.y, r0 + keepApartReach(w), (o, dd) => {
-      if (o === u || o.t.tier === 'fighter') return
+      if (o === u || o.t.tier === 'fighter' || planned(o)) return
       const touch = r0 + radius(o.t)
       const min = touch + HULL_GAP
       if (dd >= min * min) return
@@ -2585,6 +2837,23 @@ function economy(w: World, dt: number) {
         }
       }
     }
+    // The yards' own queues: work goes at half speed while a yard's slipway is shot off.
+    if (w.hybrid) for (const y of w.units) {
+      if (y.dead || y.owner !== o || y.t.tier !== 'yard' || !y.yq?.length || building(y)) continue
+      const yq = y.yq[0]
+      yq.left -= dt * (moduleUp(y, 'dock') ? 1 : 0.5)
+      if (yq.left > 0) continue
+      y.yq.shift()
+      p.stats.built++
+      if (yq.reserve) {
+        p.reserve.push(yq.unit)
+        w.events.push({ k: 'reserved', owner: o, unit: yq.unit })
+      } else {
+        const rally = y.yr ?? p.rally
+        const at = yardSpot(w, o, y, yq.unit, rally)
+        warpIn(w, o, yq.unit, at.x, at.y, at.a, WARP_YARD, true, rally)
+      }
+    }
   }
 }
 
@@ -2665,6 +2934,11 @@ function sight(w: World) {
       // Stations are always on the map: everyone knows where they are.
       if (t === own || u.t.tier === 'station') {
         u.seen[t] = true
+        continue
+      }
+      // A yard nobody has started on is only marked out on its owner's maps.
+      if (planned(u)) {
+        u.seen[t] = false
         continue
       }
       let s = false
@@ -3013,10 +3287,13 @@ export function tick(w: World, dt = STEP) {
   salvage(w, dt)
   tenders(w, dt)
   fieldRepairs(w, dt)
+  construction(w, dt)
   wings(w, dt)
   findSpotGroups(w)
   for (const u of w.units) {
     if (u.dead) continue
+    // A yard goes up only as fast as engineers build it (see construction).
+    if (u.site) continue
     if (u.building > 0) {
       u.building -= dt
       u.hull = Math.min(u.hullMax, u.hull + (u.hullMax * 0.75 * dt) / u.t.build)
@@ -3170,7 +3447,12 @@ export function stateHash(w: World): number {
     num(u.hull)
     num(u.shield)
     int(u.target)
+    if (u.t.tier === 'yard') {
+      num(u.building)
+      int(u.yq?.length ?? -1)
+    }
   }
+  int(w.ruins?.length ?? -1)
   int(w.shots.length)
   for (const s of w.shots) {
     num(s.x)

@@ -10,7 +10,7 @@ export type Sel = { hp: number } | { part: number }
 export const sameSel = (a: Sel | null, b: Sel | null) => !!a && !!b && ('hp' in a ? 'hp' in b && a.hp === b.hp : 'part' in b && a.part === b.part)
 
 export const WEAPON_NAME: Record<WeaponKind, string> = { laser: 'Lasers', flak: 'Flak', turbo: 'Turbolaser', missile: 'Torpedoes', ion: 'Ion cannon' }
-const TIER_NAME: Record<Tier, string> = { fighter: 'fighters', gunship: 'gunships', frigate: 'frigates', cruiser: 'cruisers', capital: 'flagships', station: 'stations', mine: 'mining platforms', defense: 'defense platforms' }
+const TIER_NAME: Record<Tier, string> = { fighter: 'fighters', gunship: 'gunships', frigate: 'frigates', cruiser: 'cruisers', capital: 'flagships', station: 'stations', mine: 'mining platforms', defense: 'defense platforms', yard: 'yards' }
 const TIERS = Object.keys(TIER_NAME) as Tier[]
 
 /** What a gun is good and poor against: its damage against each class times how often it hits. */
@@ -54,7 +54,7 @@ const DROID_NAMES: [string, string][] = [
 export function partName(m: Model, i: number, t: UnitType) {
   const id = m.parts[i].id
   const station = t.tier === 'station'
-  const structure = t.tier === 'mine' || t.tier === 'defense'
+  const structure = t.tier === 'mine' || t.tier === 'defense' || t.tier === 'yard'
   if (m.faction === 'droid') {
     if (id.startsWith('pod') && !id.startsWith('podGun')) return station ? 'Gun pod' : t.id === 'd-repair' ? 'Tool pod' : t.id === 'd-gunship' ? 'Cannon pod' : 'Engine block'
     if (/Strut$/.test(id)) return 'Strut'

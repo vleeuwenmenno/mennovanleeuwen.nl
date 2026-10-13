@@ -25,6 +25,7 @@
     "check:empires-spacing": "node scripts/empires-spacing.ts",
     "check:empires-repair": "node scripts/empires-repair.ts",
     "check:empires-models": "node scripts/empires-models.ts",
+    "check:empires-yards": "node scripts/empires-yards.ts && node scripts/empires-yards.ts big",
     "check:agents-roles": "node scripts/agents-roles.ts",
     "check:agents-permissions": "node scripts/agents-permissions.ts",
     "check:agents-compact": "node scripts/agents-compact.ts",

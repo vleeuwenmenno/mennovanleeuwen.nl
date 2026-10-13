@@ -1,8 +1,8 @@
-import { FACTIONS, SURVEY_RADIUS, UNIT, dims, isShip, moduleSprite, type HardpointKind, type Tier, type WeaponKind } from './data'
+import { FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, moduleSprite, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
 import { RETREAT_TIME, atHome, building, foes, hpPos, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
-import { BREAK_WEIGHTS, hullState, modelFor, unitForSprite, type HullState, type Model } from './models/index.ts'
+import { BREAK_WEIGHTS, hullState, modelFor, unitForSprite, wreckState, type HullState, type Model } from './models/index.ts'
 import { bigType, sizedType } from './models/sizes.ts'
 import { ModelFx } from './models/fx.ts'
 import { PALETTES } from './models/kit.ts'
@@ -88,6 +88,11 @@ export type View = {
   ranges?: 'hover' | 'selected' | 'off'
   /** Draw units that have a procedural model with it (the default), or every unit as its sprite. */
   models?: boolean
+  /** Hybrid bases: a yard being placed, its ghost where it would go (green where it can, red with
+   * why where it can't) and the Command Station's build radius round it. */
+  place?: { t: UnitType; x: number; y: number; a: number; ok: boolean; why: string | null; cost: number; rebuild: boolean; ring: { x: number; y: number; r: number } } | null
+  /** The build radius, faintly, while the station or engineers are selected. */
+  buildRing?: { x: number; y: number; r: number } | null
 }
 
 type Particle = {
@@ -226,7 +231,7 @@ const RANGE_STYLE: Record<WeaponKind, { rgb: string; dash: number[]; name: strin
   missile: { rgb: '255,140,222', dash: [3, 6], name: 'Missiles' },
   ion: { rgb: '176,146,255', dash: [14, 5, 3, 5], name: 'Ion cannon' },
 }
-const TIER_ORDER: Record<Tier, number> = { station: 0, mine: 1, defense: 1, capital: 2, cruiser: 3, frigate: 4, gunship: 5, fighter: 6 }
+const TIER_ORDER: Record<Tier, number> = { station: 0, yard: 0.5, mine: 1, defense: 1, capital: 2, cruiser: 3, frigate: 4, gunship: 5, fighter: 6 }
 const ICON_PATH = new Map<HardpointKind, Path2D>()
 const iconPath = (k: HardpointKind) => {
   let p = ICON_PATH.get(k)
@@ -722,6 +727,7 @@ export class Renderer {
     }
     // Hulks whose wreck was just salvaged or drifted off, fading out.
     if (this.modelsOn) this.fx.drawFading(ctx, zdpr)
+    this.drawRuins(ctx, w, view, z, zdpr, onScreen)
 
     // Ore, with its survey ring: dashed while unclaimed, in the holder's colour once surveyed, and
     // an arc for a survey under way.
@@ -844,6 +850,44 @@ export class Renderer {
       ctx.lineTo(p.rally.x, p.rally.y - 30)
       ctx.fill()
       ctx.fillRect(p.rally.x - 1.5, p.rally.y - 46, 3, 46)
+    }
+    // Selected yards' own rally points, in the yard colour.
+    for (const id of view.selected) {
+      const y = w.byId.get(id)
+      if (!y || y.owner !== view.me || y.t.tier !== 'yard' || !y.yr) continue
+      ctx.strokeStyle = 'rgba(255,200,110,0.55)'
+      ctx.lineWidth = 1.5 / z
+      ctx.setLineDash([8 / z, 8 / z])
+      ctx.beginPath()
+      ctx.moveTo(y.x, y.y)
+      ctx.lineTo(y.yr.x, y.yr.y)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = '#ffc86e'
+      ctx.beginPath()
+      ctx.moveTo(y.yr.x, y.yr.y)
+      ctx.lineTo(y.yr.x, y.yr.y - 46)
+      ctx.lineTo(y.yr.x + 28, y.yr.y - 38)
+      ctx.lineTo(y.yr.x, y.yr.y - 30)
+      ctx.fill()
+      ctx.fillRect(y.yr.x - 1.5, y.yr.y - 46, 3, 46)
+    }
+    // The build radius round the Command Station: faint while the station or engineers are
+    // selected, bright while a yard is being placed.
+    const ring = view.place?.ring ?? view.buildRing
+    if (ring) {
+      const on = !!view.place
+      ctx.save()
+      ctx.fillStyle = on ? 'rgba(125,255,160,0.05)' : 'rgba(125,255,160,0.025)'
+      ctx.strokeStyle = on ? 'rgba(125,255,160,0.65)' : 'rgba(125,255,160,0.28)'
+      ctx.lineWidth = (on ? 2.5 : 1.5) / z
+      ctx.setLineDash([18 / z, 12 / z])
+      ctx.lineDashOffset = (-this.clock * 24) / z
+      ctx.beginPath()
+      ctx.arc(ring.x, ring.y, ring.r, 0, TAU)
+      ctx.fill()
+      ctx.stroke()
+      ctx.restore()
     }
     ctx.lineWidth = 1.5 / z
     /** Selected ships' patrols: where they start and end, labelled once for the lot. */
@@ -1072,6 +1116,7 @@ export class Renderer {
     this.drawDeparts(ctx, z)
     for (const t of tags) this.tag(...t)
     if (view.warpGhost) this.drawWarpGhost(ctx, view.warpGhost, z)
+    if (view.place) this.drawPlace(ctx, view.place, z)
     // The gun picked on one of our structures: a pulsing ring round it.
     const tp = view.turretPick ? w.byId.get(view.turretPick.unit) : undefined
     if (tp && !tp.dead && view.turretPick) {
@@ -1851,6 +1896,167 @@ export class Renderer {
     }
   }
 
+  /**
+   * A yard going up. Until engineers start on it, a blueprint: the whole structure faint, its
+   * outline dashed. Then it fills in from the stern: the part that's built drawn solid, a scaffold
+   * of girders over what's still to come, and a welding line along the front of the work that
+   * throws sparks while engineers are at it.
+   */
+  private drawSite(ctx: CanvasRenderingContext2D, u: Unit, w: World, m: Model | null, size: number, z: number) {
+    const t = u.t
+    const zdpr = z * (window.devicePixelRatio || 1)
+    const rot = u.a + Math.PI / 2
+    const [sw, sh] = dims(t)
+    const planned = !u.site!.started
+    const progress = Math.max(0, Math.min(1, 1 - u.building / t.build))
+    const rgb = t.faction === 'republic' ? '130,205,255' : '255,186,120'
+    if (m) drawHull(ctx, m, u.x, u.y, rot, size, zdpr, FRESH, { alpha: planned ? 0.3 : 0.18 })
+    else this.drawSprite(ctx, t.sprite, u.x, u.y, rot, size, z, planned ? 0.3 : 0.18)
+    ctx.save()
+    ctx.translate(u.x, u.y)
+    ctx.rotate(rot)
+    ctx.strokeStyle = `rgba(${rgb},${planned ? 0.8 : 0.45})`
+    ctx.lineWidth = 1.5 / z
+    ctx.setLineDash([9 / z, 6 / z])
+    ctx.lineDashOffset = (-this.clock * 20) / z
+    ctx.strokeRect(-sw / 2, -sh / 2, sw, sh)
+    ctx.setLineDash([])
+    if (!planned) {
+      const cut = sh / 2 - progress * sh
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(-sw, cut, sw * 2, sh * 1.5)
+      ctx.clip()
+      if (m) drawHull(ctx, m, 0, 0, 0, size, zdpr, hullState(m, u, t.tier), { lightRot: rot })
+      else this.drawSprite(ctx, t.sprite, 0, 0, 0, size, z)
+      ctx.restore()
+      // The scaffold: uprights, cross girders and braces over what is still to be built.
+      const cols = 6
+      const rows = 10
+      ctx.beginPath()
+      for (let i = 0; i <= cols; i++) {
+        const x = -sw / 2 + (sw * i) / cols
+        ctx.moveTo(x, -sh / 2)
+        ctx.lineTo(x, cut)
+      }
+      for (let j = 0; j < rows; j++) {
+        const y0 = -sh / 2 + (sh * j) / rows
+        if (y0 >= cut) break
+        const y1 = Math.min(cut, y0 + sh / rows)
+        ctx.moveTo(-sw / 2, y0)
+        ctx.lineTo(sw / 2, y0)
+        for (let i = 0; i < cols; i++) {
+          const x0 = -sw / 2 + (sw * i) / cols
+          const x1 = x0 + sw / cols
+          if ((i + j) % 2) {
+            ctx.moveTo(x0, y0)
+            ctx.lineTo(x1, y1)
+          } else {
+            ctx.moveTo(x1, y0)
+            ctx.lineTo(x0, y1)
+          }
+        }
+      }
+      ctx.strokeStyle = `rgba(${rgb},0.5)`
+      ctx.lineWidth = 1.1 / z
+      ctx.stroke()
+      // The welding front.
+      const welding = w.units.some((e) => !e.dead && isEngineer(e.t) && e.mending.includes(u.id))
+      const flick = welding ? 0.65 + 0.35 * Math.sin(this.clock * 23 + u.id) : 0.35
+      ctx.strokeStyle = `rgba(255,224,150,${flick})`
+      ctx.lineWidth = 3 / z
+      ctx.beginPath()
+      ctx.moveTo(-sw / 2, cut)
+      ctx.lineTo(sw / 2, cut)
+      ctx.stroke()
+      ctx.restore()
+      if (welding && Math.random() < 0.5) {
+        const f = Math.random() - 0.5
+        const c = Math.cos(rot)
+        const s = Math.sin(rot)
+        const px = u.x + c * f * sw - s * cut
+        const py = u.y + s * f * sw + c * cut
+        for (let i = 0; i < 3; i++) {
+          const b = Math.random() * TAU
+          const v = 40 + Math.random() * 110
+          this.add({ kind: 'spark', x: px, y: py, vx: Math.cos(b) * v, vy: Math.sin(b) * v, life: 0.25 + Math.random() * 0.3, size: 1.4, color: '#ffd27a' })
+        }
+      }
+    } else ctx.restore()
+    if (planned && z > 0.12) {
+      ctx.save()
+      ctx.font = `600 ${12 / z}px system-ui, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.fillStyle = `rgba(${rgb},0.9)`
+      ctx.fillText('Awaiting engineers', u.x, u.y + Math.max(sw, sh) * 0.55 + 16 / z)
+      ctx.restore()
+    }
+  }
+
+  /** A yard being placed: its ghost where it would go, the slipway's mouth marked, green where it can
+   * go and red (with why) where it can't, and what it costs. */
+  private drawPlace(ctx: CanvasRenderingContext2D, g: NonNullable<View['place']>, z: number) {
+    const zdpr = z * (window.devicePixelRatio || 1)
+    const col = g.ok ? '#7dffa0' : '#ff5a50'
+    const rot = g.a + Math.PI / 2
+    const [sw, sh] = dims(g.t)
+    const m = this.modelsOn ? modelFor(g.t) : null
+    if (m) drawHull(ctx, m, g.x, g.y, rot, g.t.size, zdpr, FRESH, { alpha: g.ok ? 0.6 : 0.3 })
+    else this.drawSprite(ctx, g.t.sprite, g.x, g.y, rot, g.t.size, z, g.ok ? 0.6 : 0.3)
+    ctx.save()
+    ctx.translate(g.x, g.y)
+    ctx.rotate(rot)
+    ctx.fillStyle = g.ok ? 'rgba(125,255,160,0.1)' : 'rgba(255,90,80,0.12)'
+    ctx.strokeStyle = col
+    ctx.lineWidth = 2 / z
+    ctx.fillRect(-sw / 2, -sh / 2, sw, sh)
+    ctx.strokeRect(-sw / 2, -sh / 2, sw, sh)
+    // The slipway's mouth: where its ships come out.
+    ctx.beginPath()
+    ctx.moveTo(-14 / z, -sh / 2 - 6 / z)
+    ctx.lineTo(0, -sh / 2 - 22 / z)
+    ctx.lineTo(14 / z, -sh / 2 - 6 / z)
+    ctx.stroke()
+    ctx.restore()
+    const label = g.ok ? `${g.rebuild ? 'Rebuild' : g.t.name}: ${g.cost} credits` : (g.why ?? '')
+    ctx.save()
+    ctx.font = `600 ${12 / z}px system-ui, sans-serif`
+    ctx.textAlign = 'center'
+    const tw = ctx.measureText(label).width + 14 / z
+    const ly = g.y + Math.max(sw, sh) * 0.55 + 10 / z
+    ctx.fillStyle = 'rgba(6,10,22,0.85)'
+    ctx.fillRect(g.x - tw / 2, ly, tw, 20 / z)
+    ctx.fillStyle = col
+    ctx.textBaseline = 'middle'
+    ctx.fillText(label, g.x, ly + 10 / z)
+    ctx.restore()
+  }
+
+  /** Ruined yards: the burnt-out hull where each one fell, for its owner to rebuild (labelled with
+   * the price for them). Everyone else sees one once their ships have it in sight. */
+  private drawRuins(ctx: CanvasRenderingContext2D, w: World, view: View, z: number, zdpr: number, onScreen: (x: number, y: number, r?: number) => boolean) {
+    const team = w.players[view.me].team
+    for (const r of w.ruins ?? []) {
+      const t = UNIT[r.unit]
+      if (!t || !onScreen(r.x, r.y, t.size)) continue
+      const ours = w.players[r.owner].team === team
+      if (!ours && !w.units.some((u) => !u.dead && w.players[u.owner].team === team && (u.x - r.x) ** 2 + (u.y - r.y) ** 2 < sensorOf(u) ** 2)) continue
+      const m = this.modelsOn ? modelFor(t) : null
+      ctx.filter = 'brightness(0.5) saturate(0.45)'
+      if (m) drawHull(ctx, m, r.x, r.y, r.a + Math.PI / 2, t.size, zdpr, wreckState(m, r.id), { alpha: 0.85, wreck: true })
+      else this.drawSprite(ctx, t.sprite, r.x, r.y, r.a + Math.PI / 2, t.size, z, 0.8)
+      ctx.filter = 'none'
+      if (r.owner === view.me && z > 0.15) {
+        ctx.save()
+        ctx.font = `600 ${12 / z}px system-ui, sans-serif`
+        ctx.textAlign = 'center'
+        ctx.fillStyle = 'rgba(255,200,110,0.85)'
+        ctx.fillText(`Ruined yard: engineers rebuild it for ${Math.round(t.cost * REBUILD)}`, r.x, r.y + t.size * 0.6 + 14 / z)
+        ctx.restore()
+      }
+    }
+  }
+
   /** A sprite with its colour knocked out to a burnt dark, for a module that was shot off. */
   private burnt(name: string) {
     let c = this.dark.get(name)
@@ -2005,7 +2211,8 @@ export class Renderer {
 
     // A defense wing craft far from its station fights at a fraction of its strength: drawn faded.
     const alpha = building(u) ? 0.55 : t.kind === 'wing' && !atHome(w, u) ? 0.45 : 1
-    if (m && st) {
+    if (u.site) this.drawSite(ctx, u, w, m, size, z)
+    else if (m && st) {
       const zdpr = z * (window.devicePixelRatio || 1)
       drawHull(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, st, { alpha })
       if (m.mounts.length) drawMounts(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, u.hps, (i) => this.aim(u, i, w), alpha)
@@ -2269,8 +2476,8 @@ export class Renderer {
       const col = relColor(w, me, u.owner)
       const x = X(u.x)
       const y = Y(u.y)
-      if (u.t.tier === 'station' || u.t.tier === 'mine' || u.t.tier === 'defense') {
-        const r = u.t.tier === 'station' ? 6 : u.t.tier === 'defense' ? 4 : 3.5
+      if (u.t.tier === 'station' || u.t.tier === 'mine' || u.t.tier === 'defense' || u.t.tier === 'yard') {
+        const r = u.t.tier === 'station' ? 6 : u.t.tier === 'yard' ? 5 : u.t.tier === 'defense' ? 4 : 3.5
         ctx.fillStyle = 'rgba(0,0,0,0.6)'
         ctx.fillRect(x - r - 1, y - r - 1, r * 2 + 2, r * 2 + 2)
         ctx.strokeStyle = col

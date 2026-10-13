@@ -12,13 +12,13 @@
 // Ranges, sensors and speeds are written at the old battlefield scale; scale.ts stretches them
 // (see `reach` and `scaled`), so the numbers below stay the ones to balance against each other.
 
-import { RANGE_SCALE, SPEED_SCALE } from './scale.ts'
+import { RANGE_SCALE, SPEED_SCALE, mapDist } from './scale.ts'
 
 /** A gun's or a sensor's reach, as written, at the battlefield's range scale (see scale.ts). */
 const reach = (r: number) => Math.round(r * RANGE_SCALE)
 
 export type FactionId = 'republic' | 'droid'
-export type Tier = 'fighter' | 'gunship' | 'frigate' | 'cruiser' | 'capital' | 'station' | 'mine' | 'defense'
+export type Tier = 'fighter' | 'gunship' | 'frigate' | 'cruiser' | 'capital' | 'station' | 'mine' | 'defense' | 'yard'
 export type WeaponKind = 'laser' | 'flak' | 'turbo' | 'missile' | 'ion'
 export type HardpointKind = 'turret' | 'shield' | 'engine' | 'hangar' | 'refinery' | 'dock' | 'sensor' | 'drill'
 /** A module's sprite: modules/<faction>-<art>.webp. */
@@ -79,7 +79,7 @@ export type UnitType = {
   carrier?: { unit: string; every: number; max: number }
   /** What sets it apart from the other ships of its tier: bombers go for big hulls, support ships
    * mend the fleet, ion ships strip shields. Steers the AI and the target picking. */
-  kind?: 'bomber' | 'support' | 'ion' | 'repair' | 'wing'
+  kind?: 'bomber' | 'support' | 'ion' | 'repair' | 'wing' | 'engineer'
   /** Research that has to be done before it can be built (on top of the station level). */
   tech?: string
   /** Repairs allied ships within `range`: `repair` hull points a second each, up to `max` ships. */
@@ -133,7 +133,7 @@ export const wingOf = (faction: FactionId) => UNIT[faction === 'republic' ? 'r-p
 
 /** What field repairs work on: stations, and ships of gunship class and up. Strike craft and the
  * platforms on the ore are left to their own (platforms have repair crews of their own). */
-export const MENDABLE: Tier[] = ['gunship', 'frigate', 'cruiser', 'capital', 'station']
+export const MENDABLE: Tier[] = ['gunship', 'frigate', 'cruiser', 'capital', 'station', 'yard']
 
 export const FACTIONS: Record<FactionId, { name: string; long: string; blurb: string; color: string; bolt: string; glow: string }> = {
   republic: {
@@ -156,21 +156,22 @@ export const FACTIONS: Record<FactionId, { name: string; long: string; blurb: st
 
 // Damage against each kind of target. Fighter guns barely scratch big hulls, flak shreds small
 // craft, turbolasers are too slow to track fighters, missiles go through shields (see sim).
+// Yards take hits as stations do.
 const VS: Record<WeaponKind, Record<Tier, number>> = {
-  laser: { fighter: 1, gunship: 0.9, frigate: 0.35, cruiser: 0.25, capital: 0.2, station: 0.2, mine: 0.4, defense: 0.25 },
-  flak: { fighter: 2.2, gunship: 1.4, frigate: 0.3, cruiser: 0.2, capital: 0.15, station: 0.15, mine: 0.3, defense: 0.2 },
-  turbo: { fighter: 0.5, gunship: 0.7, frigate: 1, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1 },
-  missile: { fighter: 0.25, gunship: 0.6, frigate: 1.1, cruiser: 1, capital: 0.9, station: 0.8, mine: 1, defense: 1 },
+  laser: { fighter: 1, gunship: 0.9, frigate: 0.35, cruiser: 0.25, capital: 0.2, station: 0.2, mine: 0.4, defense: 0.25, yard: 0.2 },
+  flak: { fighter: 2.2, gunship: 1.4, frigate: 0.3, cruiser: 0.2, capital: 0.15, station: 0.15, mine: 0.3, defense: 0.2, yard: 0.15 },
+  turbo: { fighter: 0.5, gunship: 0.7, frigate: 1, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1, yard: 1 },
+  missile: { fighter: 0.25, gunship: 0.6, frigate: 1.1, cruiser: 1, capital: 0.9, station: 0.8, mine: 1, defense: 1, yard: 0.8 },
   // Against shields; ion barely touches a hull (see the sim's damage).
-  ion: { fighter: 0.3, gunship: 0.8, frigate: 1.2, cruiser: 1.3, capital: 1.3, station: 1.2, mine: 0.5, defense: 1.2 },
+  ion: { fighter: 0.3, gunship: 0.8, frigate: 1.2, cruiser: 1.3, capital: 1.3, station: 1.2, mine: 0.5, defense: 1.2, yard: 1.2 },
 }
 /** Chance a shot connects: big guns can't follow fighters. */
 const ACCURACY: Record<WeaponKind, Record<Tier, number>> = {
-  laser: { fighter: 0.55, gunship: 0.7, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1 },
-  flak: { fighter: 0.75, gunship: 0.8, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1 },
-  turbo: { fighter: 0.15, gunship: 0.35, frigate: 0.85, cruiser: 0.95, capital: 1, station: 1, mine: 1, defense: 0.95 },
-  missile: { fighter: 0.3, gunship: 0.7, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1 },
-  ion: { fighter: 0.15, gunship: 0.45, frigate: 0.9, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1 },
+  laser: { fighter: 0.55, gunship: 0.7, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1, yard: 1 },
+  flak: { fighter: 0.75, gunship: 0.8, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1, yard: 1 },
+  turbo: { fighter: 0.15, gunship: 0.35, frigate: 0.85, cruiser: 0.95, capital: 1, station: 1, mine: 1, defense: 0.95, yard: 1 },
+  missile: { fighter: 0.3, gunship: 0.7, frigate: 0.95, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1, yard: 1 },
+  ion: { fighter: 0.15, gunship: 0.45, frigate: 0.9, cruiser: 1, capital: 1, station: 1, mine: 1, defense: 1, yard: 1 },
 }
 export const effect = (w: WeaponKind, t: Tier) => VS[w][t]
 export const accuracy = (w: WeaponKind, t: Tier) => ACCURACY[w][t]
@@ -286,6 +287,72 @@ function defensePlatform(faction: FactionId, kind: DefenseKind): UnitType {
   }
 }
 
+// --- Yards ------------------------------------------------------------------------------------------
+
+/**
+ * Hybrid bases: the starting station is a Command Station, and the yards for the bigger ships are
+ * built round it by engineer squadrons, anywhere within BUILD_RADIUS of it (clear of rocks, asteroid
+ * fields, ore, beacons, other structures and the map's edge). Each yard has its own build queue and
+ * rally point. A destroyed yard leaves its ruin where it stood, which its owner's engineers rebuild
+ * for REBUILD of the price.
+ *
+ * Step 1 has the Frigate Yard (frigates and corvettes). Every yard has empty module sockets (`YARD_SOCKETS`)
+ * where its expansions will go.
+ */
+export const BUILD_RADIUS = mapDist(1760)
+/** A ruined yard is rebuilt for this share of its price. */
+export const REBUILD = 0.5
+/** Yards of one kind a player may have at a time (standing, being built, or planned). */
+export const YARD_MAX = 1
+/**
+ * Engineer squadrons at work: how close to a structure's hull an engineer has to be to weld, how
+ * many craft can work on one structure at once (more add nothing), and what each craft mends on a
+ * finished structure a second: `flat` hull points plus `share` of its full hull, and the same share
+ * of every damaged module. A yard's `build` time is one squadron's (three craft's) work.
+ */
+export const ENGINEERS = { reach: 220, crew: 9, flat: 6, share: 0.004 }
+/** A construction site cancelled once building has started gives back this share of its price,
+ * less `wear` of it times how far along it was (a site just begun: 75%, one nearly done: 25%). */
+export const SITE_REFUND = { start: 0.75, wear: 0.5 }
+/**
+ * The empty module sockets on each faction's yards (0-10 grid, as hardpoints), where step 2's
+ * expansions attach: two on the flanks and one at the stern.
+ */
+export const YARD_SOCKETS: Record<FactionId, [number, number][]> = {
+  republic: [[1.0, 6.1], [9.0, 6.1], [5, 9.45]],
+  droid: [[0.95, 6.3], [9.05, 6.3], [5, 9.5]],
+}
+
+/** A Frigate Yard: a slipway with its gantry (the hardpoint that builds: shot off, work goes at
+ * half speed), a shield generator at the stern and a point-defence flak turret at each bow corner. */
+function frigateYard(faction: FactionId): UnitType {
+  const r = faction === 'republic'
+  const pd = flak(6, 380, 0.4)
+  return {
+    id: r ? 'r-yard' : 'd-yard', faction, tier: 'yard', name: r ? 'Bastion frigate yard' : 'Crucible frigate yard',
+    blurb: r
+      ? 'A slipway raised by engineers within the Command Station\'s build radius: it builds frigates and corvettes, with its own queue and rally point. Two point-defence turrets and a shield generator keep raiders off it.'
+      : 'A droid foundry slipway raised by engineers within the Command Station\'s build radius: it builds the frigates, with its own queue and rally point. Two point-defence turrets and a shield generator keep raiders off it.',
+    sprite: `${faction}-yard`, aspect: r ? 0.62 : 0.66, size: 320, hull: r ? 4600 : 5200, shield: r ? 1500 : 1100, regen: r ? 16 : 12, speed: 0, turn: 0, pop: 0, cost: 900, build: 32, level: 2, squad: 1, sensor: 1100,
+    weapons: [],
+    hardpoints: r
+      ? [
+          { ...M('dock', 'dock', 5, 4.6, 0.1, 900), key: 'slip' },
+          { ...M('shield', 'shield', 5, 8.35, 0.085, 800), key: 'shield' },
+          { ...gun('flak', 1.55, 1.7, 0.055, 300, pd), key: 'pd1' },
+          { ...gun('flak', 8.45, 1.7, 0.055, 300, pd), key: 'pd2' },
+        ]
+      : [
+          { ...M('dock', 'dock', 5, 4.8, 0.1, 1000), key: 'slip' },
+          { ...M('shield', 'shield', 5, 8.6, 0.085, 750), key: 'shield' },
+          { ...gun('flak', 1.7, 1.6, 0.055, 320, pd), key: 'pd1' },
+          { ...gun('flak', 8.3, 1.6, 0.055, 320, pd), key: 'pd2' },
+        ],
+    engines: [],
+    role: { role: 'Frigate yard', strong: ['building frigates and corvettes'], weak: ['bombers', 'cruisers', 'being left unguarded'] },
+  }
+}
+
 // --- Stations ---------------------------------------------------------------------------------------
 
 /**
@@ -315,8 +382,8 @@ const sPart = (key: string, kind: HardpointKind, art: ModuleArt, x: number, y: n
 export const STATIONS: Record<FactionId, StationPlan> = {
   republic: {
     id: 'r-station',
-    name: 'Bastion station',
-    blurb: 'Your shipyard and command post. It starts as a small core and grows with every upgrade. Lose it and the battle is lost.',
+    name: 'Bastion command station',
+    blurb: 'Your command post. It builds strike craft, gunships and engineers; the engineers raise the yards for bigger ships round it. It starts as a small core and grows with every upgrade. Lose it and the battle is lost.',
     perPx: 460 / 1196,
     regen: 22,
     stages: [
@@ -348,8 +415,8 @@ export const STATIONS: Record<FactionId, StationPlan> = {
   },
   droid: {
     id: 'd-station',
-    name: 'Crucible foundry station',
-    blurb: 'The droid foundry. It starts as a small core and grows with every upgrade. Lose it and the battle is lost.',
+    name: 'Crucible command foundry',
+    blurb: 'The droid command foundry. It builds strike craft, gunships and constructor droids; the droids raise the yards for bigger ships round it. It starts as a small core and grows with every upgrade. Lose it and the battle is lost.',
     perPx: 460 / 1148,
     regen: 20,
     stages: [
@@ -440,6 +507,12 @@ const WRITTEN: UnitType[] = [
     role: { role: 'Home defense', strong: ['fighters', 'bombers near the station'], weak: ['warships', 'being sent away from home'] },
   },
   {
+    id: 'r-engineer', faction: 'republic', tier: 'fighter', kind: 'engineer', name: 'Mason engineer', blurb: 'Clone engineers in three boxy utility craft. Unarmed and fragile: they build the yards round the Command Station and weld structures back together.',
+    sprite: 'republic-engineer', aspect: 0.82, size: 30, hull: 60, shield: 15, regen: 1.5, speed: 215, turn: 3.6, pop: 1, cost: 300, build: 14, level: 1, squad: 3, sensor: 700,
+    weapons: [], hardpoints: [], engines: [[3.3, 9.3], [6.7, 9.3]],
+    role: { role: 'Construction', strong: ['building yards', 'repairing structures'], weak: ['anything that shoots'] },
+  },
+  {
     id: 'r-corvette', faction: 'republic', tier: 'gunship', kind: 'support', name: 'Mercy corvette', blurb: 'Repair tender: its work crews patch up the hulls of nearby ships. Lightly armed; keep it behind the line.',
     sprite: 'republic-corvette', aspect: 0.653, size: 86, hull: 520, shield: 260, regen: 8, speed: 135, turn: 1.8, pop: 2, cost: 550, build: 18, level: 2, squad: 1, sensor: 900,
     weapons: [flak(5, 280, 0.4)], hardpoints: [], engines: [[3.5, 9.4], [5, 9.5], [6.6, 9.4]],
@@ -484,6 +557,7 @@ const WRITTEN: UnitType[] = [
   defensePlatform('republic', 'balanced'),
   defensePlatform('republic', 'flak'),
   defensePlatform('republic', 'gun'),
+  frigateYard('republic'),
 
   // --- Droid Confederacy ------------------------------------------------------------------------
   {
@@ -513,6 +587,12 @@ const WRITTEN: UnitType[] = [
     sprite: 'droid-picket', aspect: 0.989, size: 20, hull: 26, shield: 0, regen: 0, speed: 275, turn: 5, pop: 0, cost: 0, build: 0, level: 1, squad: 6, sensor: 620,
     weapons: [laser(3.5, 210, 0.42)], hardpoints: [], engines: [[5, 8]],
     role: { role: 'Home defense', strong: ['fighters', 'bombers near the station'], weak: ['warships', 'being sent away from home'] },
+  },
+  {
+    id: 'd-engineer', faction: 'droid', tier: 'fighter', kind: 'engineer', name: 'Rivet constructor droid', blurb: 'Three spindly constructor droids with cutting arms. Unarmed and fragile: they build the yards round the command foundry and weld structures back together.',
+    sprite: 'droid-engineer', aspect: 0.86, size: 30, hull: 72, shield: 0, regen: 0, speed: 210, turn: 3.6, pop: 1, cost: 300, build: 14, level: 1, squad: 3, sensor: 650,
+    weapons: [], hardpoints: [], engines: [[5, 9.2]],
+    role: { role: 'Construction', strong: ['building yards', 'repairing structures'], weak: ['anything that shoots'] },
   },
   {
     id: 'd-ion', faction: 'droid', tier: 'frigate', kind: 'ion', name: 'Disruptor frigate', blurb: 'One huge ion cannon that tears down shields in a few shots, leaving the hull open to everything else. Barely scratches bare armour.',
@@ -559,6 +639,7 @@ const WRITTEN: UnitType[] = [
   defensePlatform('droid', 'balanced'),
   defensePlatform('droid', 'flak'),
   defensePlatform('droid', 'gun'),
+  frigateYard('droid'),
 ]
 /** Every unit, toughened and scaled (stations come out of stationType that way already). */
 export const UNITS: UnitType[] = WRITTEN.map((u) => (u.tier === 'station' ? u : finish(u)))
@@ -594,12 +675,23 @@ export const ALL_SPRITES = [
 export const SHIP_TIERS: Tier[] = ['fighter', 'gunship', 'frigate', 'cruiser', 'capital']
 export const unitOf = (faction: FactionId, tier: Tier) => UNIT[`${faction === 'republic' ? 'r' : 'd'}-${tier}`]
 /** The ships a faction can order from its station: by the station level they need, then cost. The
- * station's defense wing comes with it and is never ordered. */
+ * station's defense wing comes with it and is never ordered. Engineers aren't in it: they only exist
+ * where bases are built (see `baseBuilds`), so galactic conquest never offers them. */
 export const buildable = (faction: FactionId) =>
+  UNITS.filter((u) => u.faction === faction && SHIP_TIERS.includes(u.tier) && u.kind !== 'wing' && u.kind !== 'engineer').sort((a, b) => a.level - b.level || a.cost - b.cost)
+/** Every ship a faction can order in a battle with hybrid bases, engineers included. */
+export const baseBuilds = (faction: FactionId) =>
   UNITS.filter((u) => u.faction === faction && SHIP_TIERS.includes(u.tier) && u.kind !== 'wing').sort((a, b) => a.level - b.level || a.cost - b.cost)
+/** Where a ship is built in a battle with hybrid bases: frigates and corvettes at a Frigate Yard,
+ * everything else at the Command Station (cruisers and flagships too, until their own yard comes). */
+export const builtAt = (t: UnitType): 'station' | 'yard' => (t.tier === 'frigate' || t.kind === 'support' ? 'yard' : 'station')
+/** A faction's Frigate Yard. */
+export const yardOf = (faction: FactionId) => UNIT[faction === 'republic' ? 'r-yard' : 'd-yard']
+/** Whether a unit is an engineer craft. */
+export const isEngineer = (t: UnitType) => t.kind === 'engineer'
 /** A ship's job and counters: its own, or its tier's. */
 export const roleOf = (t: UnitType) => t.role ?? ROLES[t.tier]
-export const isShip = (t: UnitType) => t.tier !== 'station' && t.tier !== 'mine' && t.tier !== 'defense'
+export const isShip = (t: UnitType) => t.tier !== 'station' && t.tier !== 'mine' && t.tier !== 'defense' && t.tier !== 'yard'
 /** What can go on a surveyed ore asteroid, one structure each: the mining platform, then the
  * defense platforms (balanced first). */
 export const siteOptions = (faction: FactionId) => UNITS.filter((u) => u.faction === faction && (u.tier === 'mine' || u.tier === 'defense'))
