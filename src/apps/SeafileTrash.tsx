@@ -173,11 +173,11 @@ export function SeafileTrash({ repo: startRepo = null, onOpenFolder, toast }: { 
   }
 
   return (
-    <div className="st">
-      <div className="st-bar">
+    <div className="sft">
+      <div className="sft-bar">
         <Select className="set-select" value={current ?? ''} onChange={setRepo} aria-label="Library" options={writable.map((l) => ({ value: l.id, label: `${l.name}${l.encrypted ? ' 🔒' : ''}` }))} />
         {!open && keep !== undefined && (
-          <label className="st-keep">
+          <label className="sft-keep">
             Keep deleted
             <Select
               className="set-select"
@@ -191,7 +191,7 @@ export function SeafileTrash({ repo: startRepo = null, onOpenFolder, toast }: { 
           </label>
         )}
         {open && (
-          <span className="st-crumb">
+          <span className="sft-crumb">
             <button onClick={() => setOpen(null)}>Trash</button> › {open.path}
           </span>
         )}
@@ -211,19 +211,19 @@ export function SeafileTrash({ repo: startRepo = null, onOpenFolder, toast }: { 
         </button>
       </div>
 
-      {error && <p className="t-red st-note copyable">{error === 'That library is locked: open it in Files and give its password first' ? `${error}.` : error}</p>}
+      {error && <p className="t-red sft-note copyable">{error === 'That library is locked: open it in Files and give its password first' ? `${error}.` : error}</p>}
 
-      {!open && keep === 0 && <p className="t-red st-note copyable">This library keeps no history: whatever is deleted from it is gone for good, and its trash stays empty. Pick how long to keep deleted things above.</p>}
+      {!open && keep === 0 && <p className="t-red sft-note copyable">This library keeps no history: whatever is deleted from it is gone for good, and its trash stays empty. Pick how long to keep deleted things above.</p>}
 
       {open ? (
-        <ul className="st-list">
-          {inside === null && <li className="st-note muted">Loading…</li>}
+        <ul className="sft-list">
+          {inside === null && <li className="sft-note muted">Loading…</li>}
           {inside?.map((e) => (
-            <li key={e.name} className="st-row">
-              <span className="st-icon">{e.dir ? '📁' : '📄'}</span>
-              <span className="st-name">{e.name}</span>
-              <span className="st-meta muted">{e.dir ? 'Folder' : formatSize(e.size)}</span>
-              <span className="st-actions">
+            <li key={e.name} className="sft-row">
+              <span className="sft-icon">{e.dir ? '📁' : '📄'}</span>
+              <span className="sft-name">{e.name}</span>
+              <span className="sft-meta muted">{e.dir ? 'Folder' : formatSize(e.size)}</span>
+              <span className="sft-actions">
                 {e.dir && (
                   <button className="btn btn-small" onClick={() => setOpen({ item: open.item, path: `${open.path}/${e.name}` })}>
                     Open
@@ -235,29 +235,29 @@ export function SeafileTrash({ repo: startRepo = null, onOpenFolder, toast }: { 
               </span>
             </li>
           ))}
-          {inside?.length === 0 && <li className="st-note muted">It was empty.</li>}
+          {inside?.length === 0 && <li className="sft-note muted">It was empty.</li>}
         </ul>
       ) : keep === 0 && items?.length === 0 ? null : (
-        <ul className="st-list">
-          {items === null && !error && <li className="st-note muted">Loading the trash…</li>}
+        <ul className="sft-list">
+          {items === null && !error && <li className="sft-note muted">Loading the trash…</li>}
           {items?.map((t) => (
-            <li key={key(t)} className={`st-row ${selected.has(key(t)) ? 'is-selected' : ''}`} onDoubleClick={() => t.dir && setOpen({ item: t, path: pathOf(t) })}>
+            <li key={key(t)} className={`sft-row ${selected.has(key(t)) ? 'is-selected' : ''}`} onDoubleClick={() => t.dir && setOpen({ item: t, path: pathOf(t) })}>
               <input type="checkbox" checked={selected.has(key(t))} onChange={(e) => toggle(t, e.target.checked)} aria-label={`Select ${t.name}`} />
-              <span className="st-icon">{t.dir ? '📁' : kindOfName(t.name) === 'image' ? '🖼️' : '📄'}</span>
-              <span className="st-name" title={pathOf(t)}>
+              <span className="sft-icon">{t.dir ? '📁' : kindOfName(t.name) === 'image' ? '🖼️' : '📄'}</span>
+              <span className="sft-name" title={pathOf(t)}>
                 {t.name}
-                <span className="muted st-from">
+                <span className="muted sft-from">
                   {' '}
                   in{' '}
-                  <button className="st-link" onClick={() => current && onOpenFolder(sfPath(current, t.parent.replace(/\/$/, '') || '/'))}>
+                  <button className="sft-link" onClick={() => current && onOpenFolder(sfPath(current, t.parent.replace(/\/$/, '') || '/'))}>
                     {t.parent === '/' ? 'the library' : t.parent.replace(/\/$/, '')}
                   </button>
                 </span>
               </span>
-              <span className="st-meta muted">
+              <span className="sft-meta muted">
                 {t.dir ? 'Folder' : formatSize(t.size)} · {ago(t.deleted)}
               </span>
-              <span className="st-actions">
+              <span className="sft-actions">
                 {t.dir && (
                   <button className="btn btn-small" onClick={() => setOpen({ item: t, path: pathOf(t) })}>
                     Open
@@ -269,9 +269,9 @@ export function SeafileTrash({ repo: startRepo = null, onOpenFolder, toast }: { 
               </span>
             </li>
           ))}
-          {items?.length === 0 && <li className="st-note muted">The trash of this library is empty.</li>}
+          {items?.length === 0 && <li className="sft-note muted">The trash of this library is empty.</li>}
           {more && (
-            <li className="st-note">
+            <li className="sft-note">
               <button className="btn btn-small" disabled={loading} onClick={() => load(more)}>
                 {loading ? 'Loading…' : 'Show older'}
               </button>
@@ -282,14 +282,14 @@ export function SeafileTrash({ repo: startRepo = null, onOpenFolder, toast }: { 
 
       {!open && trashedIcons.length > 0 && (
         <>
-          <p className="st-head">Desktop icons</p>
-          <ul className="st-list">
+          <p className="sft-head">Desktop icons</p>
+          <ul className="sft-list">
             {trashedIcons.map((i) => (
-              <li key={i.id} className="st-row">
-                <span className="st-icon">{i.glyph}</span>
-                <span className="st-name">{desk.names[i.id] ?? i.label}</span>
-                <span className="st-meta muted">The site's own</span>
-                <span className="st-actions">
+              <li key={i.id} className="sft-row">
+                <span className="sft-icon">{i.glyph}</span>
+                <span className="sft-name">{desk.names[i.id] ?? i.label}</span>
+                <span className="sft-meta muted">The site's own</span>
+                <span className="sft-actions">
                   <button className="btn btn-small" onClick={() => restoreIcons([i.id])}>
                     Put back
                   </button>
@@ -299,7 +299,7 @@ export function SeafileTrash({ repo: startRepo = null, onOpenFolder, toast }: { 
           </ul>
         </>
       )}
-      <p className="st-note muted">Seafile keeps deleted things in each library's history; emptying the trash removes them for good. A restored item goes back where it was.</p>
+      <p className="sft-note muted">Seafile keeps deleted things in each library's history; emptying the trash removes them for good. A restored item goes back where it was.</p>
     </div>
   )
 }
