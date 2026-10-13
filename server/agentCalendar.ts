@@ -3,7 +3,9 @@ import type { User } from './auth.ts'
 import { listCaldav } from './caldav.ts'
 import { allCalendars, allEvents, cleanInput, createEvent, decodeRef, deleteEvent, encodeRef, getEvent, updateEvent, type AnyCalendar, type EventInput, type EventNow, type Ref } from './calendars.ts'
 import { googleAccount, MAX_RANGE_DAYS } from './google.ts'
+import { readNotes } from './noteLinks.ts'
 import { readState } from './state.ts'
+import { linkMatches } from '../src/data/noteEvents.ts'
 
 // The Agents app's calendar tools: the user's connected calendars (Google Calendar and CalDAV, so
 // also calendars others share with them), through the same code the Calendar app uses
@@ -46,7 +48,7 @@ export function calendarTools(): ToolDef[] {
     tool('calendar_list_calendars', "The user's connected calendars (Google Calendar and CalDAV accounts, calendars shared with them included): each one's id, name, account, whether it can be changed, who it belongs to when that is known, and which one new events go in by default.", {}),
     tool(
       'calendar_list_events',
-      "Events in the user's calendars from `from` to `to` (default: now until 14 days ahead), by start time. With `query`, only events whose title, description or location contain all its words (then without from and to it looks from 30 days ago to a year ahead). Looks in the calendars the user shows in the Calendar app unless `calendars` names others. Each event has the id calendar_update_event and calendar_delete_event take; all-day events have dates, `end` being the last day.",
+      "Events in the user's calendars from `from` to `to` (default: now until 14 days ahead), by start time. With `query`, only events whose title, description or location contain all its words (then without from and to it looks from 30 days ago to a year ahead). Looks in the calendars the user shows in the Calendar app unless `calendars` names others. Each event has the id calendar_update_event and calendar_delete_event (and the note tools) take; all-day events have dates, `end` being the last day; `linked_notes` says how many of the user's notes are linked to it.",
       {
         from: time('Start'),
         to: time('End (a date includes that whole day)'),
@@ -158,7 +160,7 @@ const dayName = (d: Date, year: boolean) => `${DAYS[d.getUTCDay()]} ${d.getUTCDa
 const clock = (d: Date) => `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`
 
 /** When an event is, in a few words: "Tue 14 Oct, 10:00–11:00", "Fri 17 – Sun 19 Oct, all day". */
-function whenText(e: { start: string; end: string; allDay: boolean }, zone: string): string {
+export function whenText(e: { start: string; end: string; allDay: boolean }, zone: string): string {
   const thisYear = wall(Date.now(), zone).getUTCFullYear()
   if (e.allDay) {
     const first = e.start.slice(0, 10)
@@ -194,6 +196,9 @@ function parseTime(raw: unknown, zone: string, field: string): Time {
 
 const dateOf = (t: Time, zone: string) => ('date' in t ? t.date : dateIn(t.ms, zone))
 
+/** The day an event is on, with the year: "Tue 14 Oct 2026" (a meeting note's heading). */
+export const eventDay = (e: { start: string; allDay: boolean }, zone: string) => dayName(e.allDay ? new Date(`${e.start.slice(0, 10)}T00:00:00Z`) : wall(Date.parse(e.start), zone), true)
+
 // --- calendars and ids --------------------------------------------------------------------------
 
 const keyOf = (calendarId: string) => createHash('sha256').update(calendarId).digest('hex').slice(0, 8)
@@ -206,7 +211,7 @@ const calendarHref = (calendarId: string) => {
 
 const ACCESS = { owner: 'yours', writer: 'shared with the user, can edit', reader: 'shared with the user, read only' } as const
 
-async function calendarsOf(user: User): Promise<{ calendars: AnyCalendar[]; errors: string[] }> {
+export async function calendarsOf(user: User): Promise<{ calendars: AnyCalendar[]; errors: string[] }> {
   if (!calendarConnected(user)) throw new Error(NOT_CONNECTED)
   return allCalendars(user)
 }
@@ -246,7 +251,7 @@ function mustWrite(user: User, c: AnyCalendar) {
 const b64 = (parts: string[]) => Buffer.from(JSON.stringify(parts)).toString('base64url')
 
 /** An event's ref (calendars.ts) as a compact id for the model: the calendar's short id, then the rest. */
-function eventId(rawRef: string): string {
+export function eventId(rawRef: string): string {
   const r = decodeRef(rawRef)
   if (r.k === 'g') return `${keyOf(r.c)}.${b64(['g', r.e, r.m ?? ''])}`
   const base = calendarHref(r.c)
@@ -254,7 +259,7 @@ function eventId(rawRef: string): string {
 }
 
 /** An id from the model back to a ref, only within the user's own calendars. */
-function refOf(id: unknown, calendars: AnyCalendar[]): { ref: string; calendar: AnyCalendar } {
+export function refOf(id: unknown, calendars: AnyCalendar[]): { ref: string; calendar: AnyCalendar } {
   const bad = new Error('Unknown event id: use an id exactly as calendar_list_events gave it')
   const m = /^([0-9a-f]{8})\.([\w-]+)$/.exec(String(id ?? '').trim())
   if (!m) throw bad
@@ -348,6 +353,8 @@ export async function prepareCalendarCall(user: User, name: string, args: Record
         const limit = Math.min(200, Math.max(1, Math.round(Number(args.limit) || 50)))
         const found = pick.length ? await allEvents(user, pick.map((c) => c.id), { from: new Date(from), to: new Date(to) }) : { events: [], errors: [] }
         const byId = new Map(calendars.map((c) => [c.id, c]))
+        const notes = readNotes(user).filter((n) => !n.deleted && !n.purged)
+        const notesOn = (e: (typeof found.events)[number]) => notes.filter((n) => (n.events ?? []).some((l) => linkMatches(l, e)) || e.notes?.includes(n.id)).length
         const hits = found.events.filter((e) => words.every((w) => `${e.title}\n${e.description ?? ''}\n${e.location ?? ''}`.toLowerCase().includes(w)))
         return JSON.stringify({
           time_zone: zone,
@@ -366,6 +373,7 @@ export async function prepareCalendarCall(user: User, name: string, args: Record
             ...(e.description ? { description: clip(e.description.trim(), 300) } : {}),
             ...(e.recurring ? { repeats: true } : {}),
             ...(e.attendees?.length ? { guests: e.attendees.length } : {}),
+            ...(notesOn(e) ? { linked_notes: notesOn(e) } : {}),
             ...(e.editable ? {} : { read_only: true }),
           })),
           ...(hits.length > limit ? { more: hits.length - limit, note: 'Narrow the range or the query, or raise the limit, to see the rest' } : {}),
