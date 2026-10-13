@@ -74,7 +74,7 @@ export function LinkForge({ win }: { win: WinState }) {
         )}{' '}
         on the instance, with <em>read</em> access to repository, issue, user and organization. It is checked once, then stored encrypted on this server.
       </p>
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
       <footer className="lf-foot">
         <button type="button" className="btn" onClick={() => wm.close(win.pid)}>
           Cancel

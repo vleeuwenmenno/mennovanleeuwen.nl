@@ -25,7 +25,7 @@ export function Cv() {
           Print / PDF
         </button>
       </div>
-      <article className="cv" id="cv-print">
+      <article className="cv selectable" id="cv-print">
         <header className="cv-head">
           <div>
             <h1>{profile.name}</h1>

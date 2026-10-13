@@ -64,7 +64,7 @@ function LocalViewer({ path }: { path: string }) {
           <p className="muted">{UNPLAYABLE[kind]}</p>
         </div>
       ) : (
-        <pre className="viewer-text">{stored ? (text ?? 'Loading…') : node.content()}</pre>
+        <pre className="viewer-text selectable">{stored ? (text ?? 'Loading…') : node.content()}</pre>
       )}
     </div>
   )
@@ -135,7 +135,7 @@ function SeafileViewer({ path }: { path: string }) {
       {error ? (
         <div className="viewer-empty">
           <p className="viewer-big">{name}</p>
-          <p className="muted">{status === 423 ? 'The library is locked: unlock it in Files first.' : error}</p>
+          <p className="muted copyable">{status === 423 ? 'The library is locked: unlock it in Files first.' : error}</p>
         </div>
       ) : !url ? (
         <div className="viewer-empty muted">Loading…</div>
@@ -155,7 +155,7 @@ function SeafileViewer({ path }: { path: string }) {
       ) : kind === 'pdf' ? (
         pdf ? <iframe className="viewer-frame" src={pdf} title={name} /> : <div className="viewer-empty muted">{text ?? 'Loading…'}</div>
       ) : (
-        <pre className="viewer-text">{text ?? 'Loading…'}</pre>
+        <pre className="viewer-text selectable">{text ?? 'Loading…'}</pre>
       )}
     </div>
   )

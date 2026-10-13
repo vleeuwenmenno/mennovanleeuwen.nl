@@ -11,7 +11,7 @@ export function Notes() {
 function Headlines() {
   const wm = useWM()
   return (
-    <div className="note">
+    <div className="note selectable">
       <p className="note-hello">Hi, I'm {profile.name.split(' ')[0]} 👋</p>
       <ul className="note-list">
         {headlines.map((h) => (
@@ -33,7 +33,7 @@ function Welcome() {
   const account = useAccount()
   const u = account.user
   return (
-    <div className="note">
+    <div className="note selectable">
       <p className="note-hello">{u ? `Hi, ${(u.name ?? u.login).split(' ')[0]} 👋` : 'Welcome to MvL OS 👋'}</p>
       <ul className="note-list">
         <li>A desktop in your browser: terminal, files, an editor, music, games</li>

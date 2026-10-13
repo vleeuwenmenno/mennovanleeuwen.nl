@@ -117,7 +117,7 @@ export function CodeInbox({ id }: { win: WinState; id: string }) {
               {box[key].length > SHOWN && <p className="ib-empty">and {box[key].length - SHOWN} more</p>}
             </section>
           ))}
-          {box.errors.length > 0 && <p className="ib-note t-red">{box.errors.join(' · ')}</p>}
+          {box.errors.length > 0 && <p className="ib-note t-red copyable">{box.errors.join(' · ')}</p>}
         </>
       )}
     </div>

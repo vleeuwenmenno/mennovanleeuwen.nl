@@ -100,7 +100,7 @@ function DayAgenda({ day, events, error, close }: { day: Date; events: CalendarE
       </h4>
       {!list && <p className="muted">Opening your calendar…</p>}
       {error && (
-        <p className="t-red">
+        <p className="t-red copyable">
           {error}{' '}
           {/connect again/.test(error) && (
             <button className="link-btn" onClick={connectGoogle}>

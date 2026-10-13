@@ -828,7 +828,6 @@
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
-  user-select: none;
 }
 .agt-lightbox-nav {
   position: absolute;
@@ -4019,7 +4018,6 @@ button.cal-day.is-picked:not(.is-today) {
   position: relative;
   flex: 1;
   min-width: 0;
-  user-select: none;
 }
 .ca-lane-cells {
   position: absolute;
@@ -4091,7 +4089,6 @@ button.cal-day.is-picked:not(.is-today) {
     repeating-linear-gradient(to bottom, var(--line) 0 1px, transparent 1px 48px),
     repeating-linear-gradient(to bottom, transparent 0 24px, color-mix(in srgb, var(--line) 45%, transparent) 24px 25px, transparent 25px 48px);
   touch-action: pan-y;
-  user-select: none;
 }
 .ca-col {
   position: relative;
@@ -4248,7 +4245,6 @@ button.cal-day.is-picked:not(.is-today) {
   grid-template-rows: repeat(6, minmax(0, 1fr));
   min-width: 0;
   touch-action: pan-y;
-  user-select: none;
 }
 .ca-cell {
   display: flex;
@@ -4451,6 +4447,16 @@ button.cal-day.is-picked:not(.is-today) {
 .ca-notes textarea {
   min-height: 60px;
   resize: vertical;
+}
+/* A read-only event's place and notes (EventEditor), as text to read and copy. */
+.ca-ro-text {
+  max-height: 40vh;
+  overflow: auto;
+  padding: 5px 0;
+  color: var(--fg-bright);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .ca-guests {
   display: flex;

@@ -141,7 +141,7 @@ export function Agenda({ id }: { win: WinState; id: string }) {
   return (
     <div className="ag">
       {head}
-      {error && <p className="ag-note t-red">{error}</p>}
+      {error && <p className="ag-note t-red copyable">{error}</p>}
       {!events && !error && <p className="ag-note">Opening your calendar…</p>}
       {events &&
         byDay(events, config.days).map(([key, list]) => (
