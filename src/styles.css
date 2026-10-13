@@ -5772,80 +5772,80 @@ button.fm-dd-row:hover {
 
 /* ---------- Seafile's trash, in Files ---------- */
 
-.st {
+.sft {
   grid-column: 1 / -1;
   display: grid;
   align-content: start;
   gap: 8px;
   padding: 2px 4px 12px;
 }
-.st-bar {
+.sft-bar {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
 }
-.st-bar .set-select {
+.sft-bar .set-select {
   max-width: 220px;
 }
-.st-keep {
+.sft-keep {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
   color: var(--muted);
 }
-.st-crumb button,
-.st-link {
+.sft-crumb button,
+.sft-link {
   padding: 0;
   color: var(--accent);
 }
-.st-crumb button:hover,
-.st-link:hover {
+.sft-crumb button:hover,
+.sft-link:hover {
   text-decoration: underline;
 }
-.st-list {
+.sft-list {
   margin: 0;
   padding: 0;
   list-style: none;
   border: 1px solid var(--line);
 }
-.st-row {
+.sft-row {
   display: grid;
   grid-template-columns: auto auto 1fr auto auto;
   align-items: center;
   gap: 8px;
   padding: 5px 8px;
 }
-.st-row + .st-row {
+.sft-row + .sft-row {
   border-top: 1px solid var(--line);
 }
-.st-row.is-selected {
+.sft-row.is-selected {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
-.st-list .st-row:not(:has(input)) {
+.sft-list .sft-row:not(:has(input)) {
   grid-template-columns: auto 1fr auto auto;
 }
-.st-name {
+.sft-name {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.st-meta {
+.sft-meta {
   font-size: 11px;
   white-space: nowrap;
 }
-.st-actions {
+.sft-actions {
   display: flex;
   gap: 4px;
 }
-.st-note {
+.sft-note {
   padding: 8px;
   margin: 0;
   font-size: 12px;
 }
-.st-head {
+.sft-head {
   margin: 6px 0 0;
   font-size: 11px;
   color: var(--muted);

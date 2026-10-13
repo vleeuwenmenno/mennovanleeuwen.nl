@@ -224,6 +224,13 @@ export function openEventByUid(uid: string, date: Date, occurrence?: string) {
   openCalendar({ date: dayKey(date), event: uid, ...(occurrence ? { occurrence } : {}) })
 }
 
+/** Opens the Calendar app at `e`: the event itself when it has a UID, else just its day. */
+export function openEvent(e: CalendarEvent) {
+  const date = new Date(e.allDay || e.start.length === 10 ? `${e.start.slice(0, 10)}T00:00:00` : e.start)
+  if (e.uid) openEventByUid(e.uid, date, e.occurrence)
+  else openCalendar({ date: dayKey(date) })
+}
+
 // ---------------------------------------------------------------------------------------------
 // Hooks for other apps (how Contacts and Mail take part, src/os/pimLinks.tsx): actions in an
 // event's menu and its editor, a section in the editor, and a mark beside the title in the
