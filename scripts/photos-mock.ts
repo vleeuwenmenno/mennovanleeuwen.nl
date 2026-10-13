@@ -7,9 +7,11 @@
 // Seafile: libraries, folder listings (with folder ids that change when anything inside does,
 // as Seafile's do), download links, a file server that honours Range in plain libraries and
 // ignores it in encrypted ones (as Seafile's does), set-password, and thumbnails (a PNG in a
-// colour of the file's own; none in encrypted libraries). Immich: the server version, the
+// colour of the file's own; none in encrypted libraries), deleting into a library's trash, its
+// trash listing and restoring from it, moving and copying, and read-only libraries. Immich: the server version, the
 // account, timeline buckets and their assets (in Immich 2's or 3's format), an asset's details,
-// thumbnails, originals and video with Range, albums and favourites, all behind its x-api-key.
+// thumbnails, originals and video with Range, albums and favourites, its trash (and restoring
+// from it), adding to albums, and assets that belong to someone else, all behind its x-api-key.
 
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -92,7 +94,7 @@ export function jpegTaken(when: Date): Buffer {
 // --- Seafile ----------------------------------------------------------------------------------------
 
 export type SfFile = { bytes: Buffer; mtime: number }
-export type SfLib = { id: string; name: string; encrypted: boolean; files: Map<string, SfFile>; dirs?: Set<string> }
+export type SfLib = { id: string; name: string; encrypted: boolean; files: Map<string, SfFile>; dirs?: Set<string>; /** Read-only for the account ('r'), as a library shared for viewing is */ perm?: 'r' | 'rw'; /** What was deleted, newest last */ trash?: { path: string; file: SfFile; deleted: number; commit: string }[] }
 export type SeafileMock = {
   base: string
   server: Server
@@ -132,16 +134,23 @@ export async function seafileMock(libs: SfLib[], port = 0): Promise<SeafileMock>
   }
   const dirId = (l: SfLib, dir: string): string => sha1(JSON.stringify(list(l, dir)))
 
-  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+  let commits = 0
+  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', 'http://x')
     const path = url.pathname
+    const pieces: Buffer[] = []
+    for await (const c of req) pieces.push(c as Buffer)
+    const bytes = Buffer.concat(pieces)
+    const raw = bytes.toString('utf8')
+    const body = () => JSON.parse(raw || '{}')
+    const form = () => new URLSearchParams(raw)
     const auth = typeof req.headers.authorization === 'string' ? req.headers.authorization : null
     log.push({ method: req.method ?? 'GET', path: `${path}${url.search}`, range: typeof req.headers.range === 'string' ? req.headers.range : null, token: auth })
     const json = (status: number, body: unknown) => void res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(body))
     if (path.startsWith('/api') && auth !== 'Token stand-in-token') return json(401, { detail: 'Invalid token' })
 
     if (path === '/api/v2.1/repos/') {
-      return json(200, { repos: libs.map((l) => ({ repo_id: l.id, repo_name: l.name, type: 'mine', owner_email: 'me@example.com', encrypted: l.encrypted, permission: 'rw', size: 0, last_modified: new Date().toISOString() })) })
+      return json(200, { repos: libs.map((l) => ({ repo_id: l.id, repo_name: l.name, type: 'mine', owner_email: 'me@example.com', encrypted: l.encrypted, permission: l.perm ?? 'rw', size: 0, last_modified: new Date().toISOString() })) })
     }
     let m = /^\/api\/v2\.1\/repos\/([0-9a-f-]{36})\/$/.exec(path)
     if (m && lib(m[1])) return json(200, { repo_id: m[1], encrypted: lib(m[1])!.encrypted })
@@ -153,7 +162,82 @@ export async function seafileMock(libs: SfLib[], port = 0): Promise<SeafileMock>
     m = /^\/api\/v2\.1\/repos\/([0-9a-f-]{36})\/dir\/$/.exec(path)
     if (m && lib(m[1])) {
       const p = url.searchParams.get('p') ?? '/'
-      return json(200, { user_perm: 'rw', dirent_list: list(lib(m[1])!, p.replace(/(.)\/$/, '$1')) })
+      return json(200, { user_perm: lib(m[1])!.perm ?? 'rw', dirent_list: list(lib(m[1])!, p.replace(/(.)\/$/, '$1')) })
+    }
+    // Deleting goes into the library's trash, each call one commit; restoring puts files back from it.
+    if (path === '/api/v2.1/repos/batch-delete-item/' && req.method === 'DELETE') {
+      const b = body() as { repo_id: string; parent_dir: string; dirents: string[] }
+      const l = lib(b.repo_id)
+      if (!l) return json(404, { error_msg: 'Library not found' })
+      if (l.perm === 'r') return json(403, { error_msg: 'Permission denied.' })
+      const commit = sha1(`commit ${++commits}`)
+      for (const n of b.dirents) {
+        const p = `${b.parent_dir === '/' ? '' : b.parent_dir}/${n}`
+        const f = l.files.get(p)
+        if (!f) continue
+        ;(l.trash ??= []).push({ path: p, file: f, deleted: Date.now(), commit })
+        l.files.delete(p)
+      }
+      return json(200, { success: true })
+    }
+    m = /^\/api\/v2\.1\/repos\/([0-9a-f-]{36})\/trash\/$/.exec(path)
+    if (m && lib(m[1]) && req.method === 'GET') {
+      const p = url.searchParams.get('path') ?? '/'
+      const list = [...(lib(m[1])!.trash ?? [])].reverse().filter((t) => p === '/' || t.path.startsWith(`${p}/`))
+      return json(200, { data: list.map((t) => ({ obj_name: t.path.split('/').pop(), parent_dir: `${t.path.split('/').slice(0, -1).join('/')}/`, is_dir: false, size: t.file.bytes.length, deleted_time: new Date(t.deleted).toISOString(), commit_id: t.commit })), more: false, scan_stat: null })
+    }
+    m = /^\/api\/v2\.1\/repos\/([0-9a-f-]{36})\/trash\/revert-dirents\/$/.exec(path)
+    if (m && lib(m[1]) && req.method === 'POST') {
+      const l = lib(m[1])!
+      const f = form()
+      const success: { path: string }[] = []
+      const failed: { path: string; error_msg: string }[] = []
+      for (const p of f.getAll('path')) {
+        const at = (l.trash ?? []).findIndex((t) => t.path === p && t.commit === f.get('commit_id'))
+        if (at < 0 || l.files.has(p)) {
+          failed.push({ path: p, error_msg: 'Not in the trash' })
+          continue
+        }
+        l.files.set(p, l.trash![at].file)
+        l.trash!.splice(at, 1)
+        success.push({ path: p })
+      }
+      return json(200, { success, failed })
+    }
+    if (path === '/api/v2.1/query-copy-move-progress/') return json(200, { done: true, failed: false, canceled: false })
+    m = /^\/api\/v2\.1\/repos\/(sync|async)-batch-(move|copy)-item\/$/.exec(path)
+    if (m && req.method === 'POST') {
+      const b = body() as { src_repo_id: string; src_parent_dir: string; src_dirents: string[]; dst_repo_id: string; dst_parent_dir: string }
+      const from = lib(b.src_repo_id)
+      const to = lib(b.dst_repo_id)
+      if (!from || !to) return json(404, { error_msg: 'Library not found' })
+      if (from.perm === 'r' || to.perm === 'r') return json(403, { error_msg: 'Permission denied.' })
+      for (const n of b.src_dirents) {
+        const p = `${b.src_parent_dir === '/' ? '' : b.src_parent_dir}/${n}`
+        const f = from.files.get(p)
+        if (!f) continue
+        if (m[2] === 'move') from.files.delete(p)
+        to.files.set(`${b.dst_parent_dir === '/' ? '' : b.dst_parent_dir}/${n}`, m[2] === 'move' ? f : { ...f })
+      }
+      return json(200, m[1] === 'async' ? { task_id: `task-${Date.now()}` } : { success: true })
+    }
+    // Uploads (a drop of Immich photos on Files, say): a link, then a multipart POST to it.
+    m = /^\/api2\/repos\/([0-9a-f-]{36})\/upload-link\/$/.exec(path)
+    if (m && lib(m[1])) return json(200, `${base}/upload-api/${m[1]}`)
+    m = /^\/upload-api\/([0-9a-f-]{36})$/.exec(path)
+    // The browser posts there itself, from the site's origin (as to Seafile's file server).
+    if (m) {
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      res.setHeader('Access-Control-Allow-Headers', '*')
+    }
+    if (m && req.method === 'OPTIONS') return void res.writeHead(204).end()
+    if (m && lib(m[1]) && req.method === 'POST') {
+      const parts = await new Request('http://x', { method: 'POST', headers: { 'content-type': String(req.headers['content-type']) }, body: bytes }).formData()
+      const f = parts.get('file') as File | null
+      if (!f) return json(400, { error: 'no file' })
+      const dir = String(parts.get('parent_dir') ?? '/')
+      lib(m[1])!.files.set(`${dir === '/' ? '' : dir.replace(/\/$/, '')}/${f.name}`, { bytes: Buffer.from(await f.arrayBuffer()), mtime: Date.now() })
+      return json(200, [{ name: f.name, size: f.size }])
     }
     m = /^\/api2\/repos\/([0-9a-f-]{36})\/file\/$/.exec(path)
     if (m && lib(m[1])) {
@@ -226,7 +310,7 @@ export async function seafileMock(libs: SfLib[], port = 0): Promise<SeafileMock>
 
 // --- Immich ---------------------------------------------------------------------------------------------
 
-export type ImAsset = { id: string; name: string; video: boolean; taken: string; offsetHours: number; favourite: boolean; ratio: number; albums: string[]; bytes: Buffer }
+export type ImAsset = { id: string; name: string; video: boolean; taken: string; offsetHours: number; favourite: boolean; ratio: number; albums: string[]; bytes: Buffer; /** Someone else's (a partner's, or in a shared album): the account's own when left out */ owner?: string; trashed?: boolean }
 export type ImmichMock = {
   base: string
   server: Server
@@ -236,6 +320,9 @@ export type ImmichMock = {
   log: { method: string; path: string; key: string | null; body: string }[]
   close: () => void
 }
+
+/** The account's own id in the Immich stand-in. */
+export const ME = 'eeeeeeee-0000-4000-8000-000000000001'
 
 export async function immichMock(assets: ImAsset[], opts: { key: string; version?: { major: number; minor: number; patch: number }; albums?: { id: string; name: string }[]; port?: number }): Promise<ImmichMock> {
   const mock = { assets, version: opts.version ?? { major: 3, minor: 3, patch: 1 }, key: opts.key, log: [] as ImmichMock['log'] }
@@ -251,11 +338,45 @@ export async function immichMock(assets: ImAsset[], opts: { key: string; version
     if (path === '/api/server/version') return json(200, { ...mock.version, prerelease: 0 })
     if (!path.startsWith('/api/')) return void res.writeHead(404).end()
     if (key !== mock.key) return json(401, { message: 'Invalid API key', error: 'Unauthorized', statusCode: 401 })
-    if (path === '/api/users/me') return json(200, { id: 'u1', name: 'Check Person', email: 'check@example.com' })
+    if (path === '/api/users/me') return json(200, { id: ME, name: 'Check Person', email: 'check@example.com' })
+    if (path === '/api/server/config') return json(200, { trashDays: 30, userDeleteDelay: 7 })
+    // The trash: DELETE /api/assets ({ ids, force }) and POST /api/trash/restore/assets ({ ids }).
+    if (path === '/api/assets' && req.method === 'DELETE') {
+      const b = JSON.parse(body || '{}') as { ids?: string[]; force?: boolean }
+      const list = (b.ids ?? []).map((id) => assets.find((a) => a.id === id))
+      if (list.some((a) => !a || (a.owner ?? ME) !== ME)) return json(400, { message: 'Not found or no asset.delete access', error: 'Bad Request', statusCode: 400 })
+      if (b.force) {
+        for (const a of list) assets.splice(assets.indexOf(a!), 1)
+      } else for (const a of list) a!.trashed = true
+      return void res.writeHead(204).end()
+    }
+    if (path === '/api/trash/restore/assets' && req.method === 'POST') {
+      const b = JSON.parse(body || '{}') as { ids?: string[] }
+      let count = 0
+      for (const a of assets) if (b.ids?.includes(a.id) && a.trashed && (a.owner ?? ME) === ME) (a.trashed = false), count++
+      return json(200, { count })
+    }
+    if (path === '/api/assets' && req.method === 'PUT') {
+      const b = JSON.parse(body || '{}') as { ids?: string[]; isFavorite?: boolean }
+      for (const a of assets) if (b.ids?.includes(a.id) && typeof b.isFavorite === 'boolean') a.favourite = b.isFavorite
+      return void res.writeHead(204).end()
+    }
+    const albumAdd = /^\/api\/albums\/([0-9a-f-]{36})\/assets$/.exec(path)
+    if (albumAdd && req.method === 'PUT') {
+      if (!albums.some((al) => al.id === albumAdd[1])) return json(404, { message: 'Not found' })
+      const b = JSON.parse(body || '{}') as { ids?: string[] }
+      return json(200, (b.ids ?? []).map((id) => {
+        const a = assets.find((x) => x.id === id)
+        if (!a) return { id, success: false, error: 'not_found' }
+        if (a.albums.includes(albumAdd[1])) return { id, success: false, error: 'duplicate' }
+        a.albums.push(albumAdd[1])
+        return { id, success: true }
+      }))
+    }
 
     const q = url.searchParams
     const v3 = mock.version.major >= 3
-    const filtered = assets.filter((a) => (!q.get('albumId') || a.albums.includes(q.get('albumId')!)) && (q.get('isFavorite') !== 'true' || a.favourite))
+    const filtered = assets.filter((a) => !a.trashed && (!q.get('albumId') || a.albums.includes(q.get('albumId')!)) && (q.get('isFavorite') !== 'true' || a.favourite))
     /** The month a photo's bucket is (by its UTC time, as Immich groups). */
     const bucketOf = (a: ImAsset) => (v3 ? `${a.taken.slice(0, 7)}-01T00:00:00.000Z` : `${a.taken.slice(0, 7)}-01`)
     if (path === '/api/timeline/buckets') {
@@ -298,6 +419,7 @@ export async function immichMock(assets: ImAsset[], opts: { key: string; version
       const local = new Date(Date.parse(a.taken) + a.offsetHours * 3600_000).toISOString()
       return json(200, {
         id: a.id,
+        ownerId: a.owner ?? ME,
         type: a.video ? 'VIDEO' : 'IMAGE',
         originalFileName: a.name,
         fileCreatedAt: a.taken,

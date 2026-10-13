@@ -94,8 +94,9 @@ export function folderOp(drag: Drag, into: string): DropOp | null {
   const paths = filePaths(items)
   if (paths.length) {
     if (isInside(paths, into)) return null
-    // Only what may change can move; the site's own files copy.
-    const fallback = paths.every(canChange) ? dropOpFor(paths, into, {}) : 'copy'
+    // Only what may change can move; the site's own files copy, and so do photos dragged out of
+    // the Photos app (taking one out of the timeline by dragging it would surprise).
+    const fallback = paths.every(canChange) && drag.source !== 'photos' ? dropOpFor(paths, into, {}) : 'copy'
     const op = keyOp(drag.keys, fallback)
     if (op === 'move' && !paths.every(canChange)) return 'copy'
     if (op === 'move' && paths.every((p) => folderOfPath(p) === into)) return null

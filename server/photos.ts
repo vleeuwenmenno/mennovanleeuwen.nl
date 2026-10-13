@@ -1,12 +1,15 @@
+import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
+import { crc32 } from 'node:zlib'
+import { writeZip, type ZipInput } from '../src/data/zip.ts'
 import type { User } from './auth.ts'
 import { requireUser } from './auth.ts'
 import { database, onUserGone } from './db.ts'
 import { HEAD, photoKind, readMeta, readMore, type Meta } from './exif.ts'
 import { HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
 import { immich, immichFile, immichInfo, linkImmich, unlinkImmich, type ImmichInfo } from './immich.ts'
-import { fileLink, libraries, listDir, repoId, seafileInfo, seafPath, streamFile, thumbnail, unlocked, type Library } from './seafile.ts'
+import { fileLink, libraries, listDir, removeItems, repoId, restore as restoreTrash, seafileInfo, seafPath, streamFile, thumbnail, transfer, trash as listTrash, unlocked, type Library } from './seafile.ts'
 
 // The Photos app: a timeline of the photos and videos in the user's Seafile folders, or their
 // Immich library, or both (the app switches between them; they are not merged).
@@ -34,8 +37,12 @@ const MAX_JOBS = 2
 /** How old the index may get before opening the app walks again. */
 const STALE = 15 * 60_000
 
-/** A photo on the timeline: its id, when (wall clock), VIDEO and FAVOURITE, width / height, a video's seconds, and its version (for the thumbnail's address). */
-export type Item = [id: string, wall: number, flags: number, ratio: number, duration: number | null, version: string]
+/**
+ * A photo on the timeline: its id, when (wall clock), VIDEO and FAVOURITE, width / height, a
+ * video's seconds, its version (for the thumbnail's address), and for Seafile where it is (the
+ * library's id followed by the path).
+ */
+export type Item = [id: string, wall: number, flags: number, ratio: number, duration: number | null, version: string, where?: string]
 /** Item flags. */
 const VIDEO = 1
 const FAVOURITE = 2
@@ -87,8 +94,19 @@ interface Source {
   thumb(user: User, id: string, size: Size, etag: string | null): Promise<Thumb>
   info(user: User, id: string): Promise<Info>
   albums(user: User): Promise<Album[]>
-  favourite(user: User, id: string, on: boolean): Promise<void>
+  favourite(user: User, ids: string[], on: boolean): Promise<void>
+  /** Into the source's own trash: Seafile's library trash, Immich's trash. Never for good. */
+  trash(user: User, ids: string[]): Promise<Trashed>
+  /** Puts back what one trash call took. */
+  restore(user: User, undo: Undo): Promise<{ restored: string[]; failed: string[] }>
+  /** A file for a ZIP of the selection, opened when its turn comes. */
+  file(user: User, id: string, signal: AbortSignal): ZipInput
 }
+
+/** What a trash call did: the ids it took, what to keep for undoing it, and what went wrong partway. */
+type Trashed = { ids: string[]; undo: Undo; error: string | null }
+/** What undoing a trash call needs: Seafile's index rows as they were (to put back, ids and favourites included), Immich's ids. */
+type Undo = { rows?: (Row & { thumb: Uint8Array | null })[]; ids?: string[] }
 
 const db = () => database()
 const ratioOf = (w: number | null, h: number | null, orientation: number | null) => (w && h ? Math.round(((orientation ?? 1) >= 5 ? h / w : w / h) * 1000) / 1000 : 1)
@@ -537,9 +555,10 @@ const seafileSource: Source = {
     const to = Date.UTC(Number(m[1]), Number(m[2]), 1)
     const w = await seafileWhere(user, opts)
     const rows = db()
-      .prepare(`SELECT id, kind, width, height, orientation, favourite, file_id, ${WALL} AS wall FROM photos WHERE ${w.sql} AND ${WALL} >= ? AND ${WALL} < ? ORDER BY wall DESC, path DESC`)
-      .all(opts.tz * 60_000, ...w.params, opts.tz * 60_000, from, opts.tz * 60_000, to) as { id: number; kind: string; width: number | null; height: number | null; orientation: number | null; favourite: number; file_id: string; wall: number }[]
-    return rows.map((r) => [String(r.id), r.wall, (r.kind === 'video' ? VIDEO : 0) | (r.favourite ? FAVOURITE : 0), ratioOf(r.width, r.height, r.orientation), null, r.file_id.slice(0, 10)])
+      .prepare(`SELECT id, repo, path, kind, width, height, orientation, favourite, file_id, ${WALL} AS wall FROM photos WHERE ${w.sql} AND ${WALL} >= ? AND ${WALL} < ? ORDER BY wall DESC, path DESC`)
+      .all(opts.tz * 60_000, ...w.params, opts.tz * 60_000, from, opts.tz * 60_000, to) as { id: number; repo: string; path: string; kind: string; width: number | null; height: number | null; orientation: number | null; favourite: number; file_id: string; wall: number }[]
+    // Where each one is goes along: dragging a selection to Files needs its paths there and then.
+    return rows.map((r) => [String(r.id), r.wall, (r.kind === 'video' ? VIDEO : 0) | (r.favourite ? FAVOURITE : 0), ratioOf(r.width, r.height, r.orientation), null, r.file_id.slice(0, 10), `${r.repo}${r.path}`])
   },
   async thumb(user, id, size, etag) {
     const row = rowOf(user, id)
@@ -595,10 +614,123 @@ const seafileSource: Source = {
     }
     return out
   },
-  async favourite(user, id, on) {
-    const row = rowOf(user, id)
-    db().prepare('UPDATE photos SET favourite = ? WHERE id = ?').run(on ? 1 : 0, row.id)
+  async favourite(user, ids, on) {
+    // Every id is checked first: one that is not this account's refuses the lot.
+    const rows = ids.map((id) => rowOf(user, id))
+    const set = db().prepare('UPDATE photos SET favourite = ? WHERE id = ? AND user_id = ?')
+    for (const r of rows) set.run(on ? 1 : 0, r.id, user.id)
   },
+  async trash(user, ids) {
+    const rows = ids.map((id) => rowOf(user, id))
+    await changeable(user, rows.map((r) => r.repo))
+    // Seafile deletes per folder; each folder's photos leave the index as soon as Seafile has them.
+    const done: typeof rows = []
+    let error: string | null = null
+    const drop = db().prepare('DELETE FROM photos WHERE id = ? AND user_id = ?')
+    for (const g of byFolder(rows)) {
+      try {
+        await removeItems(user, { repo: g.repo, parent: g.parent, names: g.rows.map((r) => nameOf(r.path)) })
+      } catch (e) {
+        error = (e as Error).message
+        break
+      }
+      for (const r of g.rows) drop.run(r.id, user.id)
+      done.push(...g.rows)
+    }
+    if (!done.length) throw new HttpError(502, error ?? 'Seafile did not delete them')
+    return { ids: done.map((r) => String(r.id)), undo: { rows: done }, error }
+  },
+  async restore(user, undo) {
+    requireSeafile(user)
+    const rows = undo.rows ?? []
+    await changeable(user, rows.map((r) => r.repo))
+    const restored: string[] = []
+    const failed: string[] = []
+    for (const g of byFolder(rows)) {
+      // The library's trash, newest first, has each one with the commit that deleted it: the
+      // newest deletion of that name in that folder is the one this put there.
+      const found = new Map<string, { commit: string; deleted: number }>()
+      let scan: string | null = null
+      for (let page = 0; page < 5; page++) {
+        const list = await listTrash(user, g.repo, g.parent, scan)
+        for (const t of list.items) {
+          if (t.dir || (t.parent.replace(/(.)\/+$/, '$1') || '/') !== g.parent) continue
+          const was = found.get(t.name)
+          if (!was || t.deleted > was.deleted) found.set(t.name, { commit: t.commit, deleted: t.deleted })
+        }
+        if (!list.more || g.rows.every((r) => found.has(nameOf(r.path)))) break
+        scan = list.scan
+      }
+      const byCommit = new Map<string, Row[]>()
+      for (const r of g.rows) {
+        const f = found.get(nameOf(r.path))
+        if (!f) failed.push(nameOf(r.path))
+        else byCommit.set(f.commit, [...(byCommit.get(f.commit) ?? []), r])
+      }
+      for (const [commit, list] of byCommit) {
+        const res = await restoreTrash(user, { repo: g.repo, commit, paths: list.map((r) => r.path) }).catch((e: Error) => ({ restored: [] as string[], failed: list.map((r) => ({ path: r.path, error: e.message })) }))
+        const back = new Set(res.restored.map((p) => p.replace(/(.)\/+$/, '$1')))
+        for (const r of list) {
+          if (back.has(r.path)) {
+            putBack(user, r as Row & { thumb: Uint8Array | null })
+            restored.push(String(r.id))
+          } else failed.push(nameOf(r.path))
+        }
+      }
+    }
+    return { restored, failed }
+  },
+  file(user, id, signal) {
+    const row = rowOf(user, id)
+    return {
+      name: nameOf(row.path),
+      mtime: row.mtime,
+      open: async () => {
+        const r = await streamFile(user, row.repo, row.path, undefined, signal)
+        return r.body ? { body: r.body as unknown as AsyncIterable<Uint8Array>, size: Number(r.length) || row.size || null } : null
+      },
+    }
+  },
+}
+
+const nameOf = (path: string) => path.split('/').pop()!
+
+/** Index rows grouped by the folder they are in, as Seafile's batch calls want them. */
+function byFolder<R extends { repo: string; path: string }>(rows: R[]): { repo: string; parent: string; rows: R[] }[] {
+  const groups = new Map<string, { repo: string; parent: string; rows: R[] }>()
+  for (const r of rows) {
+    const parent = r.path.split('/').slice(0, -1).join('/') || '/'
+    const key = `${r.repo}${parent}`
+    if (!groups.has(key)) groups.set(key, { repo: r.repo, parent, rows: [] })
+    groups.get(key)!.rows.push(r)
+  }
+  return [...groups.values()]
+}
+
+/**
+ * Refuses changes in libraries that cannot take them: encrypted ones that are locked (their photos
+ * do not even show then), and read-only ones (shared with the account for viewing only).
+ */
+async function changeable(user: User, repos: string[]) {
+  const list = await libs(user, true)
+  const open = unlocked(user)
+  for (const repo of new Set(repos)) {
+    const lib = list.find((l) => l.id === repo)
+    if (!lib) throw new HttpError(404, 'That library is gone from Seafile')
+    if (lib.encrypted && !open[repo]) throw new HttpError(423, `${lib.name} is encrypted and locked: unlock it in Files first`)
+    if (lib.permission !== 'rw') throw new HttpError(403, `${lib.name} is read-only for you, so nothing in it can be changed or deleted`)
+  }
+}
+
+const COLUMNS = ['id', 'user_id', 'repo', 'path', 'kind', 'size', 'mtime', 'file_id', 'taken_at', 'taken_src', 'taken_offset', 'width', 'height', 'orientation', 'make', 'model', 'lens', 'exposure', 'fnumber', 'iso', 'focal', 'focal35', 'lat', 'lon', 'alt', 'thumb', 'favourite'] as const
+
+/** An index row back as it was (its id too, unless a new photo took it), unless a walk found the file again first. */
+function putBack(user: User, row: Row & { thumb: Uint8Array | null }) {
+  const values = COLUMNS.map((c) => (c === 'user_id' ? user.id : ((row as unknown as Record<string, unknown>)[c] ?? null))) as (string | number | Uint8Array | null)[]
+  const d = db()
+  const withId = d.prepare(`INSERT OR IGNORE INTO photos (${COLUMNS.join(', ')}) VALUES (${COLUMNS.map(() => '?').join(', ')})`).run(...values)
+  if (Number(withId.changes)) return
+  d.prepare(`INSERT OR IGNORE INTO photos (${COLUMNS.slice(1).join(', ')}) VALUES (${COLUMNS.slice(1).map(() => '?').join(', ')})`).run(...values.slice(1))
 }
 
 // =================================================================================================
@@ -732,9 +864,157 @@ const immichSource: Source = {
     const rows = await immich<{ id: string; albumName: string; assetCount: number; albumThumbnailAssetId: string | null; shared?: boolean }[]>(user, '/albums')
     return rows.map((a) => ({ id: a.id, name: a.albumName, count: a.assetCount, cover: a.albumThumbnailAssetId, detail: a.shared ? 'Shared' : null }))
   },
-  async favourite(user, id, on) {
-    await immich(user, `/assets/${uuid(id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ isFavorite: on }) })
+  async favourite(user, ids, on) {
+    ids.forEach(uuid)
+    if (ids.length === 1) await immich(user, `/assets/${ids[0]}`, { method: 'PUT', headers: JSON_TYPE, body: JSON.stringify({ isFavorite: on }) })
+    else await immich(user, '/assets', { method: 'PUT', headers: JSON_TYPE, body: JSON.stringify({ ids, isFavorite: on }) })
   },
+  async trash(user, ids) {
+    ids.forEach(uuid)
+    // Only the account's own: a partner's photos and those of shared albums are someone else's to delete.
+    const me = await immichMe(user)
+    const others: string[] = []
+    await pool(ids, 6, async (id) => {
+      const a = await immich<{ ownerId?: string }>(user, `/assets/${id}`)
+      if (a.ownerId !== me) others.push(id)
+    })
+    if (others.length) throw new HttpError(403, `${others.length === ids.length ? (ids.length === 1 ? 'That one belongs' : 'They belong') : `${others.length} of them belong`} to someone else in Immich (shared with you): only its owner can delete it`)
+    // force: false is Immich's trash; true would delete for good, which this never asks for.
+    await immich(user, '/assets', { method: 'DELETE', headers: JSON_TYPE, body: JSON.stringify({ ids, force: false }) })
+    return { ids, undo: { ids }, error: null }
+  },
+  async restore(user, undo) {
+    const ids = (undo.ids ?? []).map(uuid)
+    await immich<{ count: number }>(user, '/trash/restore/assets', { method: 'POST', headers: JSON_TYPE, body: JSON.stringify({ ids }) })
+    return { restored: ids, failed: [] }
+  },
+  file(user, id, signal) {
+    uuid(id)
+    return {
+      name: `${id}.jpg`,
+      mtime: Date.now(),
+      open: async () => {
+        const r = await immichFile(user, `/assets/${id}/original`, { signal })
+        if (!r.ok || !r.body) return null
+        const name = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(r.headers.get('content-disposition') ?? '')?.[1]
+        const modified = Date.parse(r.headers.get('last-modified') ?? '')
+        return { body: r.body as unknown as AsyncIterable<Uint8Array>, size: Number(r.headers.get('content-length')) || null, name: name ? safeDecode(name) : undefined, mtime: modified || undefined }
+      },
+    }
+  },
+}
+
+const JSON_TYPE = { 'Content-Type': 'application/json' }
+const safeDecode = (s: string) => {
+  try {
+    return decodeURIComponent(s)
+  } catch {
+    return s
+  }
+}
+
+/** The linked Immich account's own id, briefly kept (per link: linking another account asks again). */
+const meCache = new Map<string, { id: string; at: number }>()
+async function immichMe(user: User): Promise<string> {
+  const link = immichInfo(user)
+  const key = `${user.id}|${link?.url}|${link?.email}`
+  const hit = meCache.get(key)
+  if (hit && Date.now() - hit.at < 10 * 60_000) return hit.id
+  const me = await immich<{ id: string }>(user, '/users/me')
+  meCache.set(key, { id: me.id, at: Date.now() })
+  return me.id
+}
+
+// =================================================================================================
+// Changing things in bulk: the selection's trash (and undo), albums, moving, and a ZIP of it
+
+/** The most ids one request may name; the app sends a big selection in batches of this. */
+export const MAX_BATCH = 200
+/** The most photos one ZIP may hold. */
+const MAX_ZIP = 2000
+
+/** The ids in a request body: strings, at least one, at most `cap`, each once. */
+function idsOf(v: unknown, cap = MAX_BATCH): string[] {
+  if (!Array.isArray(v) || !v.length) throw new HttpError(400, 'No photos named')
+  if (v.length > cap) throw new HttpError(413, `At most ${cap} photos at a time`)
+  return [...new Set(v.map((x) => String(x)))]
+}
+
+// What one trash call took, for its Undo, kept here (not in the browser, so an undo cannot name
+// anything else) for half an hour: a token per call, only good for the account that made it.
+const UNDO_MS = 30 * 60_000
+const undos = new Map<string, { user: number; source: string; at: number; undo: Undo }>()
+const tokens = () => randomBytes(18).toString('base64url')
+function keepUndo(user: User, source: string, undo: Undo): string {
+  for (const [k, u] of undos) if (Date.now() - u.at > UNDO_MS) undos.delete(k)
+  const token = tokens()
+  undos.set(token, { user: user.id, source, at: Date.now(), undo })
+  return token
+}
+
+// A ZIP of the selection: asked for with the ids (a POST), then fetched by the browser's own
+// download with a short-lived token, so the file streams to disk instead of into the page.
+const zips = new Map<string, { user: number; source: string; ids: string[]; at: number }>()
+const ZIP_MS = 10 * 60_000
+
+onUserGone((id) => {
+  for (const m of [undos, zips]) for (const [k, v] of m) if (v.user === id) m.delete(k)
+  for (const k of meCache.keys()) if (k.startsWith(`${id}|`)) meCache.delete(k)
+})
+
+/** Seafile: moves photos to another folder, and the index with them (or out of it, when that folder is not one of the chosen). */
+async function moveSeafile(user: User, body: { ids?: unknown; to?: { repo?: string; path?: string } }) {
+  const rows = idsOf(body.ids).map((id) => rowOf(user, id))
+  const to = { repo: repoId(body.to?.repo), path: seafPath(body.to?.path ?? '/').replace(/(.)\/+$/, '$1') }
+  await changeable(user, [...rows.map((r) => r.repo), to.repo])
+  // Seafile would rename a clash to "name (1)": it is refused instead, so the index stays right.
+  const there = new Set((await listDir(user, to.repo, to.path)).entries.map((e) => e.name.toLowerCase()))
+  const moving = rows.filter((r) => !(r.repo === to.repo && (r.path.split('/').slice(0, -1).join('/') || '/') === to.path))
+  const clash = moving.filter((r) => there.has(nameOf(r.path).toLowerCase()))
+  if (clash.length) throw new HttpError(409, `Already in that folder: ${clash.slice(0, 3).map((r) => nameOf(r.path)).join(', ')}${clash.length > 3 ? ` and ${clash.length - 3} more` : ''}`)
+  const kept = sourcesOf(user).some((s) => s.repo === to.repo && under(to.path, s.path))
+  let moved = 0
+  for (const g of byFolder(moving)) {
+    await transfer(user, { op: 'move', from: { repo: g.repo, parent: g.parent }, names: g.rows.map((r) => nameOf(r.path)), to: { repo: to.repo, parent: to.path } })
+    const d = db()
+    for (const r of g.rows) {
+      if (kept) d.prepare('UPDATE OR REPLACE photos SET repo = ?, path = ? WHERE id = ? AND user_id = ?').run(to.repo, `${to.path === '/' ? '' : to.path}/${nameOf(r.path)}`, r.id, user.id)
+      else d.prepare('DELETE FROM photos WHERE id = ? AND user_id = ?').run(r.id, user.id)
+    }
+    moved += g.rows.length
+  }
+  return { moved, kept }
+}
+
+/** Immich: adds photos to one of the account's albums. */
+async function addToAlbum(user: User, body: { album?: unknown; ids?: unknown }) {
+  const album = uuid(String(body.album ?? ''))
+  const ids = idsOf(body.ids).map(uuid)
+  const res = await immich<{ id: string; success: boolean; error?: string }[]>(user, `/albums/${album}/assets`, { method: 'PUT', headers: JSON_TYPE, body: JSON.stringify({ ids }) })
+  return { added: res.filter((r) => r.success).length, already: res.filter((r) => r.error === 'duplicate').length, failed: res.filter((r) => !r.success && r.error !== 'duplicate').length }
+}
+
+/** Streams the ZIP a token names: each file is fetched when its turn comes and piped on. */
+async function sendZip(req: IncomingMessage, res: ServerResponse, token: string) {
+  const user = requireUser(req)
+  const z = zips.get(token)
+  if (!z || z.user !== user.id || Date.now() - z.at > ZIP_MS) throw new HttpError(404, 'That download has expired: ask for it again')
+  const source = SOURCES[z.source]
+  const gone = new AbortController()
+  res.on('close', () => gone.abort())
+  const inputs = z.ids.map((id) => source.file(user, id, gone.signal))
+  const stamp = new Date().toISOString().slice(0, 10)
+  res.writeHead(200, {
+    'Content-Type': 'application/zip',
+    'Content-Disposition': `attachment; filename="Photos ${stamp} (${z.ids.length}).zip"`,
+    'Cache-Control': 'no-store',
+    ...SECURITY,
+    ...UNTRUSTED,
+  })
+  const stream = Readable.from(writeZip(inputs, { crc: (data, c) => crc32(data, c) }))
+  stream.on('error', () => res.destroy())
+  res.on('close', () => stream.destroy())
+  stream.pipe(res)
 }
 
 const SOURCES: Record<string, Source> = { seafile: seafileSource, immich: immichSource }
@@ -789,7 +1069,9 @@ export async function handlePhotosApi(req: IncomingMessage, res: ServerResponse,
     return json(res, 200, startScan(user)), true
   }
 
-  const m = /^\/api\/photos\/(seafile|immich)\/(buckets|bucket|thumb|info|albums|favourite|original|video)$/.exec(path)
+  if (path === '/api/photos/zip' && read) return await sendZip(req, res, q('t') ?? ''), true
+
+  const m = /^\/api\/photos\/(seafile|immich)\/(buckets|bucket|thumb|info|albums|favourite|original|video|trash|restore|zip|move|album|trashinfo)$/.exec(path)
   if (!m) return false
   const user = requireUser(req)
   const [, name, op] = m
@@ -802,10 +1084,42 @@ export async function handlePhotosApi(req: IncomingMessage, res: ServerResponse,
   if (op === 'albums' && read) return json(res, 200, await source.albums(user)), true
   if (op === 'info' && read) return json(res, 200, await source.info(user, id)), true
   if (op === 'favourite' && method === 'PUT') {
-    const body = await readJson<{ id?: string; on?: boolean }>(req, 1024)
-    await source.favourite(user, String(body.id ?? ''), !!body.on)
+    // One ({ id }) or many ({ ids }).
+    const body = await readJson<{ id?: string; ids?: unknown; on?: boolean }>(req, 64 * 1024)
+    await source.favourite(user, body.ids !== undefined ? idsOf(body.ids) : [String(body.id ?? '')], !!body.on)
     return json(res, 200, { ok: true }), true
   }
+  // The selection into the source's trash; the answer's token undoes it (POST restore).
+  if (op === 'trash' && method === 'POST') {
+    const body = await readJson<{ ids?: unknown }>(req, 64 * 1024)
+    const done = await source.trash(user, idsOf(body.ids))
+    return json(res, 200, { trashed: done.ids, undo: keepUndo(user, name, done.undo), error: done.error }), true
+  }
+  if (op === 'restore' && method === 'POST') {
+    const body = await readJson<{ undo?: string }>(req, 1024)
+    const kept = undos.get(String(body.undo ?? ''))
+    if (!kept || kept.user !== user.id || kept.source !== name || Date.now() - kept.at > UNDO_MS) throw new HttpError(404, 'Too late to undo here: restore them from the trash instead')
+    undos.delete(String(body.undo))
+    return json(res, 200, await source.restore(user, kept.undo)), true
+  }
+  // How long the trash keeps things, for the question before trashing: Immich's setting (Seafile's is per library, asked by the app).
+  if (op === 'trashinfo' && read && name === 'immich') {
+    const config = await immich<{ trashDays?: number }>(user, '/server/config').catch(() => null)
+    return json(res, 200, { days: typeof config?.trashDays === 'number' ? config.trashDays : null }), true
+  }
+  if (op === 'zip' && method === 'POST') {
+    const body = await readJson<{ ids?: unknown }>(req, 256 * 1024)
+    const ids = idsOf(body.ids, MAX_ZIP)
+    // Checked now, so a download never starts for someone else's photos.
+    if (name === 'seafile') ids.forEach((i) => rowOf(user, i))
+    else ids.forEach(uuid)
+    const token = tokens()
+    for (const [k, z] of zips) if (Date.now() - z.at > ZIP_MS) zips.delete(k)
+    zips.set(token, { user: user.id, source: name, ids, at: Date.now() })
+    return json(res, 200, { url: `/api/photos/zip?t=${token}` }), true
+  }
+  if (op === 'move' && method === 'POST' && name === 'seafile') return json(res, 200, await moveSeafile(user, await readJson(req, 64 * 1024))), true
+  if (op === 'album' && method === 'POST' && name === 'immich') return json(res, 200, await addToAlbum(user, await readJson(req, 64 * 1024))), true
   if (op === 'thumb' && read) {
     const size: Size = q('size') === 'large' ? 'large' : q('size') === 'medium' ? 'medium' : 'small'
     const t = await source.thumb(user, id, size, typeof req.headers['if-none-match'] === 'string' ? req.headers['if-none-match'] : null)

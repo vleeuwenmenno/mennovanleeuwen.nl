@@ -64,8 +64,8 @@ with their workspace. Its item goes when its last window closes. Notes and widge
 ## Drag and drop
 
 Things can be dragged wherever they make sense ([`src/os/dnd.ts`](src/os/dnd.ts)): desktop icons
-(several at once, as a pile with a count), rows in Files, apps and launchers in All apps, and rows
-in Archive. They land on desktop folders and the desktop itself, Files windows (a folder, the
+(several at once, as a pile with a count), rows in Files, apps and launchers in All apps, rows
+in Archive, and photos in Photos (see Photos below). They land on desktop folders and the desktop itself, Files windows (a folder, the
 folder on show, a place in the sidebar, the Trash), the dock, and the windows of apps that show
 files: Preview, Player, Omamp, PDF, the Viewer, Archive and Zed show what is dropped on them, and
 a sticky note takes a launcher as a link. A message being written in Mail attaches the files dropped
@@ -1078,6 +1078,50 @@ up, Seafile | Immich in the toolbar switches between them (remembered for your a
 not mixed into one timeline. The grid only puts the rows on screen in the page, so 20,000 photos
 scroll like 20; thumbnails load six at a time, the newest wish first, and the browser keeps them.
 
+**Selecting** works as in Google Photos, Apple Photos and Immich: a click selects, Ctrl or Cmd
+adds or takes away, Shift adds everything from the last one clicked (in timeline order), and
+dragging over empty space draws a box, which scrolls on at the top and bottom edges. Each tile has
+a circle on hover (on all of them once anything is selected), and each day and month heading one
+that selects all of it. Ctrl+A selects everything loaded, Escape lets go, and double-click or Enter
+opens. On a touch screen a long press selects, taps then add and take away, and holding a selected
+photo drags the selection. The selection is kept as ids, not as tiles, so it outlives the rows
+that scroll away, and a range across 20,000 photos is one slice of the timeline. While anything is
+selected, a bar takes the toolbar's place with the count, ♡, download, the bin and ⋯
+([`src/apps/photos/actions.tsx`](src/apps/photos/actions.tsx)).
+
+**Right-click** a photo (the menu key or Shift+F10 too) for *Open*, *Favourite*, *Download* (several
+as one ZIP), *Show in Files* or *Open in Immich*, *Copy share link* (Seafile) or *Copy link*
+(Immich), *Move to folder…* (Seafile, with the folder picker; the index follows, and a name already
+there is refused rather than renamed) or *Add to album* (Immich's albums), *Info* (I), and *Move to
+trash* (Delete); on a selected photo it acts on the whole selection. Empty space has *Select all*,
+*Look for new photos* (Seafile) or *Refresh* (Immich), and *Grid size*. The lightbox has the same
+menu (right-click, or ⋯) and a bin. Several photos download as **one ZIP made on the server as it
+streams** (stored, since photos do not shrink; ZIP64 past 4 GB; up to 2,000 photos), fetched by the
+browser's own download, so it goes to disk instead of into the page: the writer is in
+[`src/data/zip.ts`](src/data/zip.ts), next to the reader. A file that cannot be read is left out and
+named in a *Not included.txt* in the ZIP.
+
+**The trash** asks first, saying how many and where they go: Seafile's photos go to the library's
+own trash, where *Files → Trash* restores them (or, in a library that keeps no history, are deleted
+for good, which the question says); Immich's go to Immich's trash (`DELETE /api/assets` with
+`force: false`, never for good), and the question says how many days Immich keeps it. The grid
+updates at once without asking for the timeline again (Seafile's index rows go straight away, no
+walk needed), the lightbox goes on to the next photo, and a note offers **Undo** for ten seconds:
+Seafile's are restored from the library's trash (by the commit that deleted them) with their index
+rows, ids and favourites put back; Immich's with `POST /api/trash/restore/assets`. What undo needs
+stays on the server for half an hour, behind a token that only works once, for the account and
+source that made it. Locked encrypted libraries and read-only ones (shared for viewing) refuse,
+and say so. The server checks every id against the account (Seafile: its own index; Immich: the
+asset's owner, so a partner's or a shared album's photo is refused) and takes at most 200 at a time,
+which the app sends a bigger selection in.
+
+**Dragging** a selection ([`src/os/dnd.ts`](src/os/dnd.ts)) reaches everything that takes files:
+Files and the desktop, a message being written in Mail, and the Agents composer. Seafile's photos
+go as the files they are, so Files copies them on Seafile itself (a drag out of Photos copies by
+default; Shift moves). Immich's are no file anywhere here: they travel the way files from the
+computer do, downloaded through the server when they are dropped (the first 50), so every target
+that takes those takes them.
+
 **Seafile** has no idea what a photo is, so the server keeps an index per account
 ([`server/photos.ts`](server/photos.ts), in SQLite). The ⚙ view chooses the folders (any library,
 read-only ones too) and suggests folders named Photos, Pictures, Camera Uploads or DCIM. A walk
@@ -1101,7 +1145,8 @@ short-lived link, as in Files. Linking another Seafile account starts the index 
 
 **Immich** is linked in Settings → Integrations (Photos' ⚙ view has a button to it), with its URL and an API key
 (Immich: *Account settings → API keys*; All, or at least asset.read, asset.view, asset.download,
-asset.update, album.read, timeline.read and user.read). Linking asks Immich for its version first
+asset.update, album.read, timeline.read and user.read, plus asset.delete for the trash and
+albumAsset.create for *Add to album*). Linking asks Immich for its version first
 and refuses anything but Immich 2 and 3. The key is stored encrypted and only ever sent from the
 server ([`server/immich.ts`](server/immich.ts)), without following redirects: thumbnails, the
 originals and video (with byte ranges, for seeking) come through the server. Immich indexes its
@@ -1117,6 +1162,11 @@ months in the viewer's time zone, thumbnails and 304s, walking again (nothing re
 changed; new, changed, deleted files and a deleted folder), encrypted libraries locked and
 unlocked, another account seeing nothing, and Immich (an old version and a wrong key refused, both
 of its bucket formats, thumbnails, albums, favourites, video ranges, the key never in an answer).
+The selection's side too: favourites for many, the trash and undo on both sources (the index rows
+gone and back with their ids, the undo token once only and for its own account), batch caps,
+another account's ids refused, locked and read-only libraries refused, someone else's Immich photo
+refused, moving to a folder, adding to an album, and the streamed ZIP read back with the app's own
+ZIP reader.
 `node scripts/photos-mock.ts [count]` starts both stand-ins with a big made-up library (Seafile on
 8810, Immich on 8815) for trying the app; they are on 127.0.0.1, so link them as an admin. Not
 yet tried against a real Seafile or Immich server, nor with HEIC files from a real phone.

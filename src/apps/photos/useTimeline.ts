@@ -14,8 +14,10 @@ export type Timeline = {
   flat: Item[]
   /** Asks for these months first */
   want: (keys: string[]) => void
-  /** Changes one photo in place (a favourite) */
-  patch: (id: string, change: Partial<Item>) => void
+  /** Changes photos in place (a favourite, a new path) */
+  patch: (ids: string | Iterable<string>, change: Partial<Item>) => void
+  /** Takes photos out at once (trashed, moved away), months' counts with them: no new answers needed */
+  remove: (ids: Set<string>) => void
 }
 
 export function useTimeline(source: SourceId | null, filter: Filter, refresh: number): Timeline {
@@ -103,17 +105,29 @@ export function useTimeline(source: SourceId | null, filter: Filter, refresh: nu
     pump.current()
   }, [])
 
-  const patch = useCallback((id: string, change: Partial<Item>) => {
+  const patch = useCallback((ids: string | Iterable<string>, change: Partial<Item>) => {
+    const set = new Set(typeof ids === 'string' ? [ids] : ids)
     setLoaded((old) => {
       const next = new Map(old)
-      for (const [k, items] of old) {
-        const i = items.findIndex((x) => x.id === id)
-        if (i >= 0) next.set(k, items.map((x, j) => (j === i ? { ...x, ...change } : x)))
-      }
+      for (const [k, items] of old) if (items.some((x) => set.has(x.id))) next.set(k, items.map((x) => (set.has(x.id) ? { ...x, ...change } : x)))
       return next
     })
   }, [])
 
+  const remove = useCallback((ids: Set<string>) => {
+    const gone = new Map<string, number>()
+    const next = new Map(loadedRef.current)
+    for (const [k, items] of loadedRef.current) {
+      const kept = items.filter((x) => !ids.has(x.id))
+      if (kept.length === items.length) continue
+      gone.set(k, items.length - kept.length)
+      next.set(k, kept)
+    }
+    if (!gone.size) return
+    setLoaded(next)
+    setBuckets((old) => old && old.map((b) => (gone.has(b.key) ? { ...b, count: b.count - gone.get(b.key)! } : b)).filter((b) => b.count > 0))
+  }, [])
+
   const flat = useMemo(() => (buckets ?? []).flatMap((b) => loaded.get(b.key) ?? []), [buckets, loaded])
-  return { buckets: source ? buckets : null, loaded, error, flat, want, patch }
+  return { buckets: source ? buckets : null, loaded, error, flat, want, patch, remove }
 }
