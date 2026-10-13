@@ -5,6 +5,8 @@
 // byte stream for pipes, $(…) and files (markup stripped) and into lines for the screen.
 
 import { CmdError, type Ctx } from '../types'
+import { printable, settle } from '../bytes'
+import { readError, writeError } from '../devices'
 import { HOME, resolvePath } from '../vfs'
 import { lookup, prepare, prepareFolder, readFileText, writeFile } from '../fs'
 import { arith } from './arith'
@@ -94,7 +96,7 @@ function screen(print: (text: string) => void) {
     tty: true,
     flush,
     write(t) {
-      pending += t
+      pending += printable(t)
       const i = pending.lastIndexOf('\n')
       if (i < 0) return
       print(pending.slice(0, i) || ' ')
@@ -104,11 +106,11 @@ function screen(print: (text: string) => void) {
   return sink
 }
 
-/** The rest of stdin, used up. */
-function drain(stdin: Stdin): string {
+/** The rest of stdin, used up. Commands get it byte for byte (`exact`), a script without its last newline. */
+function drain(stdin: Stdin, exact = false): string {
   const s = stdin.data.slice(stdin.pos)
   stdin.pos = stdin.data.length
-  return s.replace(/\n$/, '')
+  return exact ? s : s.replace(/\n$/, '')
 }
 
 function readLine(stdin: Stdin): string | null {
@@ -169,6 +171,9 @@ class Fields {
   }
 }
 
+/** What \xHH and \NNN make: a byte, so 0x80 and up are escapes (bytes.ts) until `settle` joins them into characters. */
+const byteChar = (n: number) => (n & 255) >= 0x80 ? String.fromCharCode(0xdc00 + (n & 255)) : String.fromCharCode(n & 255)
+
 /** The escapes echo -e and printf understand. `stop` is \c: print nothing more. */
 function escapes(s: string): { text: string; stop: boolean } {
   let text = ''
@@ -185,12 +190,12 @@ function escapes(s: string): { text: string; stop: boolean } {
       // \0NNN (echo) and \NNN (printf)
       const start = ch === '0' ? i + 1 : i
       const m = /^[0-7]{0,3}/.exec(s.slice(start))![0]
-      text += String.fromCharCode(parseInt(m || '0', 8))
+      text += byteChar(parseInt(m || '0', 8))
       i = start + m.length - 1
     } else if (ch === 'x') {
       const m = /^[0-9a-fA-F]{1,2}/.exec(s.slice(i + 1))?.[0]
       if (m) {
-        text += String.fromCharCode(parseInt(m, 16))
+        text += byteChar(parseInt(m, 16))
         i += m.length
       } else text += '\\x'
     } else text += `\\${ch}`
@@ -869,12 +874,18 @@ class Shell {
           const node = lookup(abs)
           if (!node) throw new ShellError(`${target}: No such file or directory`)
           if (node.type === 'dir') throw new ShellError(`${target}: Is a directory`)
+          const denied = readError('msh', target, node.dev, !!this.base.root)
+          if (denied) throw new ShellError(denied.message.split('\n')[0].replace(/^msh: /, ''))
           const text = (await readFileText(abs).catch(() => null))?.text ?? node.content()
           if (r.fd === 0) next.stdin = { data: text, pos: 0 }
           continue
         }
         // > >> >| &>
-        const sink = target === '/dev/null' ? null : bufferSink()
+        const written = target === '/dev/null' ? null : lookup(resolvePath(this.base.cwd, target))
+        const refused = written?.type === 'file' ? writeError('msh', target, written.dev, !!this.base.root) : null
+        if (refused) throw new ShellError(refused.message.replace(/^msh: /, ''))
+        // The character devices swallow what is written to them.
+        const sink = target === '/dev/null' || (written?.type === 'file' && written.dev) ? null : bufferSink()
         if (sink) files.push({ target, append: r.op === '>>', sink })
         const to = sink ?? nullSink
         if (r.op === '&>') next.out = next.err = to
@@ -1021,7 +1032,7 @@ class Shell {
       return 127
     }
     const known = hooks.commands[name] ? name : (Object.keys(hooks.commands).find((k) => hooks.commands[k] === cmd) ?? null)
-    const stdin = io.stdin ? drain(io.stdin) : null
+    const stdin = io.stdin ? drain(io.stdin, true) : null
     try {
       const help = known !== null && hooks.asksHelp(known, args)
       if (known && !help) {
@@ -1030,7 +1041,7 @@ class Shell {
         await prepare(this.base.cwd, known, looked)
       }
       io.out.flush?.()
-      const out = help ? hooks.manPage(known!) : ((await cmd.run({ ...this.base, env: this.st.vars, args, stdin, tty: io.out.tty })) ?? '')
+      const out = help ? hooks.manPage(known!) : ((await cmd.run({ ...this.base, env: this.st.vars, args, stdin, tty: io.out.tty, raw: (t) => io.out.write(t) })) ?? '')
       if (out) io.out.write(out.endsWith('\n') ? out : `${out}\n`)
       return 0
     } catch (err) {
@@ -1243,7 +1254,7 @@ const BUILTINS: Record<string, Builtin> = {
     let s = args.join(' ')
     if (esc) {
       const r = escapes(s)
-      s = r.text
+      s = settle(r.text)
       if (r.stop) newline = false
     }
     io.out.write(newline ? `${s}\n` : s)
@@ -1251,7 +1262,7 @@ const BUILTINS: Record<string, Builtin> = {
   },
   printf: (_sh, args, io) => {
     if (!args.length) return fail(io, 'printf: usage: printf format [arguments]', 2)
-    io.out.write(printf(args[0], args.slice(1)))
+    io.out.write(settle(printf(args[0], args.slice(1))))
     return 0
   },
   test: (sh, args, io) => test(sh, args, io, false),
