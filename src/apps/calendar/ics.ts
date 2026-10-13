@@ -72,37 +72,46 @@ export function parseIcs(ics: string): IcsEvent[] {
   const out: IcsEvent[] = []
   let ev: Record<string, { value: string; params: Record<string, string> }> | null = null
   let depth = 0
+  // Some generators leave out END:VEVENT (and END:VCALENDAR): an event still open when the next
+  // one begins, the calendar ends or the file does is taken as it is, as other calendar apps do.
+  const finish = () => {
+    if (!ev) return
+    const start = ev.DTSTART && when(ev.DTSTART.value, ev.DTSTART.params)
+    if (start && ev.STATUS?.value.toUpperCase() !== 'CANCELLED' && !ev['RECURRENCE-ID']) {
+      const endProp = ev.DTEND && when(ev.DTEND.value, ev.DTEND.params)
+      let end = endProp?.iso
+      if (!end || end <= start.iso) {
+        const length = ev.DURATION ? duration(ev.DURATION.value) : 0
+        end = start.allDay ? nextDay(start.iso, Math.max(1, Math.round(length / 864e5))) : new Date(Date.parse(start.iso) + (length || 3600_000)).toISOString()
+      }
+      const rule = ev.RRULE?.value.replace(/^RRULE:/i, '')
+      out.push({
+        title: text(ev.SUMMARY?.value ?? '') || '(No title)',
+        start: start.iso,
+        end: start.allDay ? end.slice(0, 10) : end,
+        allDay: start.allDay,
+        location: ev.LOCATION ? text(ev.LOCATION.value) : '',
+        description: ev.DESCRIPTION ? text(ev.DESCRIPTION.value) : '',
+        ...(rule && /^FREQ=(DAILY|WEEKLY|MONTHLY|YEARLY)/.test(rule) ? { recurrence: rule } : {}),
+      })
+    }
+    ev = null
+  }
   for (const l of lines(ics.slice(0, 5 * 1024 * 1024))) {
-    if (l.name === 'BEGIN' && l.value.trim().toUpperCase() === 'VEVENT') {
+    const what = l.value.trim().toUpperCase()
+    if (l.name === 'BEGIN' && what === 'VEVENT') {
+      finish()
       ev = {}
       depth = 0
       continue
     }
     if (!ev) continue
-    if (l.name === 'BEGIN') depth++
+    if (l.name === 'END' && what === 'VCALENDAR') finish()
+    else if (l.name === 'BEGIN') depth++
     else if (l.name === 'END' && depth > 0) depth--
-    else if (l.name === 'END') {
-      const start = ev.DTSTART && when(ev.DTSTART.value, ev.DTSTART.params)
-      if (start && ev.STATUS?.value.toUpperCase() !== 'CANCELLED' && !ev['RECURRENCE-ID']) {
-        const endProp = ev.DTEND && when(ev.DTEND.value, ev.DTEND.params)
-        let end = endProp?.iso
-        if (!end || end <= start.iso) {
-          const length = ev.DURATION ? duration(ev.DURATION.value) : 0
-          end = start.allDay ? nextDay(start.iso, Math.max(1, Math.round(length / 864e5))) : new Date(Date.parse(start.iso) + (length || 3600_000)).toISOString()
-        }
-        const rule = ev.RRULE?.value.replace(/^RRULE:/i, '')
-        out.push({
-          title: text(ev.SUMMARY?.value ?? '') || '(No title)',
-          start: start.iso,
-          end: start.allDay ? end.slice(0, 10) : end,
-          allDay: start.allDay,
-          location: ev.LOCATION ? text(ev.LOCATION.value) : '',
-          description: ev.DESCRIPTION ? text(ev.DESCRIPTION.value) : '',
-          ...(rule && /^FREQ=(DAILY|WEEKLY|MONTHLY|YEARLY)/.test(rule) ? { recurrence: rule } : {}),
-        })
-      }
-      ev = null
-    } else if (depth === 0 && !(l.name in ev)) ev[l.name] = { value: l.value, params: l.params }
+    else if (l.name === 'END') finish()
+    else if (depth === 0 && !(l.name in ev)) ev[l.name] = { value: l.value, params: l.params }
   }
+  finish()
   return out
 }
