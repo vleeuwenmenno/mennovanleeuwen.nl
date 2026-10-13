@@ -5303,6 +5303,91 @@ span.ew-teamtag {
   line-height: 1.45;
   color: #b9c9e2;
 }
+/* A planet's Buildings tab: each building a tall card with its expansions after it, a little gap
+   before the next building. A ruined yard is drawn dark and burnt. */
+.ew-yard.ew-gbuild {
+  grid-auto-columns: auto;
+  max-width: 940px;
+}
+.ew-deck .ew-gbuild .ew-shipcard.ew-yardcard {
+  width: 112px;
+}
+/* (Expansions as small as ship cards, two to a column beside their building.) */
+.ew-deck .ew-yard.ew-gbuild .ew-shipcard.ew-modcard {
+  grid-row: auto;
+  width: 108px;
+  height: 64px;
+  align-self: auto;
+  grid-template-rows: 24px auto auto;
+}
+.ew-gbuild .ew-modcard .ew-modicon {
+  width: 24px;
+  height: 24px;
+  border-width: 1.5px;
+}
+.ew-gbuild .ew-modcard .ew-modicon svg {
+  width: 14px;
+  height: 14px;
+}
+.ew-yard.ew-gbuild .ew-shipcard.ew-modcard strong {
+  min-height: 0;
+  white-space: nowrap;
+}
+.ew-deck .ew-gbuild .ew-yardcard:not(:first-child) {
+  margin-left: 10px;
+}
+.ew-gbuild .ew-yardcard .ew-modline {
+  justify-self: center;
+}
+.ew-gbuild .ew-yardcard strong {
+  text-align: center;
+}
+.ew-deck .ew-gbuild .ew-yardcard.is-ruin {
+  border-color: rgba(255, 150, 90, 0.55);
+  background: linear-gradient(180deg, rgba(60, 30, 18, 0.9), rgba(22, 12, 10, 0.95));
+}
+.ew-gbuild .ew-yardcard.is-ruin .ew-modline {
+  color: #ffb27a;
+}
+.ew-art.is-ruin,
+.ew-gp-bchip.is-ruin .ew-art {
+  filter: grayscale(0.9) brightness(0.45) sepia(0.4);
+}
+.ew-deck .ew-gbuild .ew-yardcard.is-busy,
+.ew-deck .ew-gbuild .ew-yardcard.is-queued {
+  border-color: rgba(255, 200, 110, 0.55);
+}
+/* What we know of another side's planet's buildings: a row of chips. */
+.ew-gp-base {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin-top: 6px;
+  max-width: 460px;
+  font-size: 11px;
+}
+.ew-gp-base > small {
+  width: 100%;
+}
+.ew-gp-bchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px 2px 3px;
+  border: 1px solid rgba(120, 170, 230, 0.3);
+  border-radius: 4px;
+  background: rgba(14, 22, 42, 0.8);
+  color: #cfdcf0;
+}
+.ew-gp-bchip .ew-art {
+  width: 22px;
+  height: 22px;
+}
+.ew-gp-bchip.is-ruin {
+  color: #ffb27a;
+  border-color: rgba(255, 150, 90, 0.4);
+}
 
 /* The galaxy's top bar is the battle's, in the page flow above the map. */
 .ew-galaxy .ew-gtop {

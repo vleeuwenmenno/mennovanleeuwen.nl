@@ -1,14 +1,16 @@
 import { SHIP_SIZE_BLURB, SHIP_SIZE_NAMES, SHIP_SIZES, sizedType, type ShipSizes } from './models/sizes.ts'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DIFFICULTY, type Difficulty, type Profile } from './ai'
-import { FACTIONS, UNIT, buildable, isShip, type FactionId, type UnitType } from './data'
+import { FACTIONS, MODULE, REBUILD, UNIT, WORKS_NAME, buildable, isShip, modulesFor, moduleSprite, stationType, yardOf, yardType, type FactionId, type ModuleId, type UnitType, type Works } from './data'
 import {
   BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GALAXY_AI, GIANTS, blockadeIn, canSee, contested, known, ownerFor, sees, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
-  autoResolve, buildAt, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
+  autoResolve, buildAt, buildWork, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, cantWork, isWork, isYard, workCost, workLock, workName, workTime, yardLock, YARD_KINDS, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
   galaxyProfile, settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw, withoutShips,
-  type BattleResult, type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetKind, type Side, type StarSystem,
+  type BattleResult, type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetBase, type PlanetKind, type Side, type StarSystem, type WorkId, type YardKind,
 } from './galaxy'
-import { BuildQueue, Floating, Frame, Icon, Pips, ShipArt, ShipCard, SizesContext, Tips, unitTip, type IconName } from './Hud'
+import { BuildQueue, Floating, Frame, HpIcon, Icon, Pips, ShipArt, ShipCard, SizesContext, Tips, unitTip, type IconName } from './Hud'
+import { HP_COLOR } from './icons'
+import { baseLeft } from './sim'
 import { FleetInventory } from './Inventory'
 import { galaxyLayout } from './layout'
 import type { BattleSnap } from './snapshot'
@@ -910,6 +912,9 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
           // The new ship joins our fleet at the planet: clicking picks that fleet.
           toast(`${UNIT[e.unit].name} ready at ${g.planets[e.planet].name}`, 'info', { k: 'fleetAt', planet: e.planet })
           sound.shipReady(myFaction, UNIT[e.unit].tier)
+        } else if (e.k === 'works' && e.owner === ME) {
+          toast(`${g.planets[e.planet].name}: ${workName(e.what)} built`, 'good', { k: 'planet', id: e.planet })
+          sound.levelUp()
         } else if (e.k === 'station' && e.owner === ME) {
           toast(`${g.planets[e.planet].name}: station level ${e.level}`, 'good', { k: 'planet', id: e.planet })
           sound.levelUp()
@@ -1283,7 +1288,8 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     const map: MapDef = { ...base, id: 'conquest', name: p.name, ore: [], beacons: [], wrecks: [], planet: { kind: p.kind, x: base.w / 2 + (sp.x - base.w / 2) * 0.5, y: base.h / 2 + mapDist(1500), r: 560 } }
     // Ships the fleets hold back start in the battle's reserve, to be called in from there.
     const sides: FleetSide[] = [
-      { faction: g.sides[c.holder].faction, team: 0, ships: withoutShips(c.holderShips, c.holderHeld), reserve: c.holderHeld, station: c.station },
+      // The planet's yards and expansions stand round its station (see newFleetBattle).
+      { faction: g.sides[c.holder].faction, team: 0, ships: withoutShips(c.holderShips, c.holderHeld), reserve: c.holderHeld, station: c.station, ...(c.base ? { yards: YARD_KINDS.filter((k) => c.base!.yards[k] === 'up'), exp: [...c.base.mods] } : {}) },
       { faction: g.sides[c.attacker].faction, team: 1, ships: withoutShips(c.attackerShips, c.attackerHeld), reserve: c.attackerHeld },
     ]
     const meSide = c.holder === ME ? 0 : 1
@@ -1742,7 +1748,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
             {/* The shipyards: a bar filling as the next ship comes off a slip, a badge counting
                 what's queued across every planet; a click looks at the busiest yard. */}
             <button className={`ew-top-cell ew-jobbtn ${nextJob ? 'is-busy' : ''}`} onClick={showYard} aria-label="Shipyards"
-              data-tip={nextJob ? `Shipyards: ${nextJob.q.unit === 'station' ? 'station work' : UNIT[nextJob.q.unit].name} at ${nextJob.p.name}, ${Math.ceil(nextJob.q.left)} s left${queued > 1 ? `, ${queued - 1} more queued` : ''}.\nClick to look at the next yard.` : 'Shipyards idle.\nClick to look at a planet with a station.'}>
+              data-tip={nextJob ? `Shipyards: ${nextJob.q.unit === 'station' ? 'station work' : isWork(nextJob.q.unit) ? workName(nextJob.q.unit as WorkId) : UNIT[nextJob.q.unit].name} at ${nextJob.p.name}, ${Math.ceil(nextJob.q.left)} s left${queued > 1 ? `, ${queued - 1} more queued` : ''}.\nClick to look at the next yard.` : 'Shipyards idle.\nClick to look at a planet with a station.'}>
               <Icon name="yard" size={18} />
               {queued > 0 && <em>{queued}</em>}
               {nextJob && <i style={{ transform: `scaleX(${1 - nextJob.q.left / nextJob.q.total})` }} />}
@@ -2203,14 +2209,15 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
   const fac = g.sides[ME].faction
   // At the campaign's ship sizes, so the cards and their tooltips show the numbers its battles use.
   const all = buildable(fac).map((t) => sizedType(t.id, g.rules?.sizes)).filter((t) => lockedShips || t.level <= p.station)
-  const [page, setPage] = useState<'warships' | 'strike'>(() => {
+  const [page, setPage] = useState<YardPage>(() => {
     try {
-      return localStorage.getItem('mvlos.empires.yardpage') === 'strike' ? 'strike' : 'warships'
+      const v = localStorage.getItem('mvlos.empires.yardpage')
+      return v === 'strike' || v === 'buildings' ? v : 'warships'
     } catch {
       return 'warships'
     }
   })
-  const pickPage = (pg: 'warships' | 'strike') => {
+  const pickPage = (pg: YardPage) => {
     setPage(pg)
     try {
       localStorage.setItem('mvlos.empires.yardpage', pg)
@@ -2268,7 +2275,14 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
   }
   const here = seenAt(g, p.id)
   const who = { who: `Yours · ${FACTIONS[fac].long}`, rel: 'own' }
-  const queue = p.queue.map((q) => (q.unit === 'station' ? { ...q, sprite: `${fac}-station-${Math.min(4, p.station + 1)}`, name: p.station ? `Station level ${p.station + 1}` : 'A new station' } : q))
+  const queue = p.queue.map((q) =>
+    q.unit === 'station' ? { ...q, sprite: `${fac}-station-${Math.min(4, p.station + 1)}`, name: p.station ? `Station level ${p.station + 1}` : 'A new station' }
+      : isYard(q.unit) ? { ...q, sprite: yardOf(fac, q.unit).sprite, name: WORKS_NAME[q.unit] }
+        : isWork(q.unit) ? { ...q, sprite: moduleSprite(fac, MODULE[q.unit as ModuleId].art), name: MODULE[q.unit as ModuleId].name }
+          : q,
+  )
+  const built = YARD_KINDS.filter((k) => p.base.yards[k] === 'up').length + 1 + p.base.mods.length
+  const allWorks = 3 + modulesFor('station').length + modulesFor('yard').length + modulesFor('cyard').length
   const stationBtn = p.station < 4 && (
     <button className={`ew-gp-up ${upWhy ? 'is-off' : ''}`} onClick={upgrade}
       data-tip={`${p.station ? `Upgrade to level ${p.station + 1}: bigger ships, a tougher station, +${Math.round(STATION_INCOME * 100)}% income` : `Build a station: it defends the planet, builds ships and adds ${Math.round(STATION_INCOME * 100)}% income`}. ${STATION_TIME[p.station + 1]} s.${p.queue.some((q) => q.unit !== 'station') && !upWhy ? ' Starts after the ships in the queue.' : ''}${upWhy ? `\n${upWhy}` : ''}`}>
@@ -2345,28 +2359,198 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
                     <span>Strike craft</span>
                     <em>{strike.length}</em>
                   </button>
+                  <button role="tab" aria-selected={page === 'buildings'} className={page === 'buildings' ? 'is-on' : ''} onClick={() => pickPage('buildings')}
+                    data-tip="Buildings: the Command Station, the Frigate Yard (frigates and corvettes) and the Capital Yard (cruisers and flagships), and the expansions on each. Built in this planet's queue.">
+                    <Icon name="yard" size={16} />
+                    <span>Buildings</span>
+                    <em>{built}/{allWorks}</em>
+                  </button>
                 </div>
-                <div className="ew-yard" ref={grid}>
-                  {ships.map((t) => (
-                    <ShipCard key={t.id} t={t} who={who} why={cantBuildAt(g, ME, p.id, t.id)} whyReserve={cantBuildAt(g, ME, p.id, t.id)} level={p.station} queued={p.queue.filter((q) => q.unit === t.id).length} onBuild={build} onUnqueue={unqueue} campaign />
-                  ))}
-                </div>
+                {page === 'buildings' ? (
+                  <PlanetBuildings g={g} p={p} sound={sound} toast={toast} grid={grid} />
+                ) : (
+                  <div className="ew-yard" ref={grid}>
+                    {ships.map((t) => {
+                      const why = yardLock(p, t)
+                      return (
+                        <ShipCard key={t.id} t={t} who={who} why={cantBuildAt(g, ME, p.id, t.id)} whyReserve={cantBuildAt(g, ME, p.id, t.id)} level={p.station} queued={p.queue.filter((q) => q.unit === t.id).length} onBuild={build} onUnqueue={unqueue} campaign
+                          lock={why && t.level <= p.station ? { text: why, badge: why.includes('Yard') ? 'Yard' : 'Expansion' } : null} />
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             ) : ours ? (
               <p className="ew-gp-note">Build a station here to defend {p.name} and build ships at it. Each station level also adds {Math.round(STATION_INCOME * 100)}% to what the planet pays.</p>
             ) : !kn.live ? (
-              <p className="ew-gp-note">
-                {k.blurb} {lastSeen(g, p)} Send a fleet to find out what holds it now. {coarse ? 'Select a fleet, then long-press the planet to send it.' : 'Select a fleet and right-click the planet to send it.'}
-              </p>
+              <>
+                <p className="ew-gp-note">
+                  {k.blurb} {lastSeen(g, p)} Send a fleet to find out what holds it now. {coarse ? 'Select a fleet, then long-press the planet to send it.' : 'Select a fleet and right-click the planet to send it.'}
+                </p>
+                <KnownBase faction={kn.owner >= 0 ? g.sides[kn.owner].faction : fac} station={kn.station} base={kn.base} live={false} />
+              </>
             ) : (
-              <p className="ew-gp-note">
-                {k.blurb} {theirs ? (p.station ? `Its level ${p.station} station defends it: bring a fleet strong enough to beat it.` : 'No station defends it: a fleet that holds its orbit takes it.') : 'Unclaimed: a fleet that holds its orbit for a few seconds takes it.'} {coarse ? 'Select a fleet, then long-press the planet to send it.' : 'Select a fleet and right-click the planet to send it.'}
-              </p>
+              <>
+                <p className="ew-gp-note">
+                  {k.blurb} {theirs ? (p.station ? `Its level ${p.station} station defends it${YARD_KINDS.some((x) => p.base.yards[x] === 'up') ? ', with its yards' : ''}: bring a fleet strong enough to beat it.` : 'No station defends it: a fleet that holds its orbit takes it.') : 'Unclaimed: a fleet that holds its orbit for a few seconds takes it.'} {coarse ? 'Select a fleet, then long-press the planet to send it.' : 'Select a fleet and right-click the planet to send it.'}
+                </p>
+                <KnownBase faction={kn.owner >= 0 ? g.sides[kn.owner].faction : fac} station={kn.station} base={kn.base} live />
+              </>
             )}
           </div>
         </Frame>
       </div>
     </Floating>
+  )
+}
+
+type YardPage = 'warships' | 'strike' | 'buildings'
+
+/** Where a yard or an expansion stands at one of our planets: built, being built (with how far),
+ * waiting in the queue, a ruin to rebuild, ready to order, held back by credits or a full queue
+ * ('poor'), or locked (with why). */
+type WorkState = { status: 'built' | 'busy' | 'queued' | 'ruin' | 'ready' | 'poor' | 'locked'; why: string | null; slot: number; progress: number; left: number }
+function workState(g: Galaxy, p: Planet, id: WorkId): WorkState {
+  const slot = p.queue.findIndex((q) => q.unit === id)
+  const q = p.queue[slot]
+  const base = { slot, progress: q ? 1 - q.left / q.total : 0, left: q?.left ?? 0 }
+  if (isYard(id) ? p.base.yards[id] === 'up' : p.base.mods.includes(id)) return { ...base, status: 'built', why: null }
+  if (q) return { ...base, status: slot === 0 ? 'busy' : 'queued', why: null }
+  const lock = workLock(g, ME, p.id, id)
+  if (lock) return { ...base, status: 'locked', why: lock }
+  const why = cantWork(g, ME, p.id, id)
+  if (isYard(id) && p.base.yards[id] === 'ruin') return { ...base, status: 'ruin', why }
+  return { ...base, status: why ? 'poor' : 'ready', why }
+}
+
+/**
+ * The Buildings tab of one of our planets: the Command Station, the Frigate Yard and the Capital
+ * Yard, each a card with its expansions beside it. Click a card to build it (a ruin: rebuild it, for
+ * half), click one in the queue to call it off (refunded); a locked one says what it waits for.
+ */
+function PlanetBuildings({ g, p, sound, toast, grid }: { g: Galaxy; p: Planet; sound: EmpiresSound; toast: (t: string, tone?: GToast['tone']) => void; grid: React.RefObject<HTMLDivElement | null> }) {
+  const fac = g.sides[ME].faction
+  const order = (id: WorkId) => {
+    const s = workState(g, p, id)
+    if (s.status === 'built') return
+    if (s.status === 'busy' || s.status === 'queued') {
+      cancelBuild(g, ME, p.id, s.slot)
+      sound.unqueued()
+      return
+    }
+    const why = buildWork(g, ME, p.id, id)
+    if (why) {
+      sound.error()
+      toast(why, 'bad')
+    } else sound.constructing()
+  }
+  const line = (s: WorkState) => (s.status === 'built' ? '✓ Built' : s.status === 'busy' ? `${Math.ceil(s.left)}s left` : s.status === 'queued' ? `Queued #${s.slot + 1}` : null)
+  const cost = (id: WorkId) => (
+    <>
+      <span className="ew-cost"><Icon name="credits" size={11} /> {workCost(g, ME, p, id)}</span>
+      <span className="ew-time"><Icon name="time" size={11} /> {Math.round(workTime(g, ME, id))}s</span>
+    </>
+  )
+  const what = (s: WorkState) =>
+    s.status === 'built' ? 'It stands.' : s.status === 'busy' || s.status === 'queued' ? 'Click to call it off (refunded).' : s.status === 'ruin' ? `A ruin: click to rebuild it for ${Math.round(REBUILD * 100)}% of the price.${s.why ? `
+${s.why}` : ''}` : s.status === 'ready' ? 'Click to build it here.' : s.why ?? ''
+  const modCards = (on: Works) =>
+    modulesFor(on).map((m) => {
+      const s = workState(g, p, m.id)
+      const l = line(s)
+      return (
+        <button key={m.id} className={`ew-shipcard ew-modcard is-${s.status} ${s.status === 'locked' ? 'is-locked' : s.status === 'poor' ? 'is-off' : ''}`} onClick={() => order(m.id)}
+          data-tip={`${m.name}: an expansion of the ${WORKS_NAME[on]}
+${m.blurb}
+${galaxyEffect(m.id)}
+${workCost(g, ME, p, m.id)} credits, ${Math.round(workTime(g, ME, m.id))} s${m.level > 1 ? `, station level ${m.level}` : ''}. Lost if it is shot off in a battle here, or with its building.
+
+${what(s)}`}
+          aria-label={`${m.name}: ${s.status}`}>
+          <span className="ew-modicon" style={{ ['--c' as string]: HP_COLOR[m.kind] }}><HpIcon kind={m.kind} size={22} /></span>
+          <strong>{m.name}</strong>
+          {l ? <span className="ew-modline">{l}</span> : cost(m.id)}
+          {s.status === 'locked' && <span className="ew-lock">{s.why?.startsWith('Needs station level') ? `Lv${m.level}` : 'Locked'}</span>}
+          {s.status === 'busy' && <i className="ew-modbar" style={{ transform: `scaleX(${s.progress})` }} />}
+        </button>
+      )
+    })
+  const yardCard = (k: YardKind) => {
+    const t = yardOf(fac, k)
+    const s = workState(g, p, k)
+    const l = line(s) ?? (s.status === 'ruin' ? 'Ruin: rebuild' : null)
+    return (
+      <button key={k} className={`ew-shipcard ew-yardcard is-${s.status} ${s.status === 'built' ? 'is-built' : ''} ${s.status === 'locked' ? 'is-locked' : s.status === 'poor' ? 'is-off' : ''}`} onClick={() => order(k)}
+        {...unitTip(yardType(t.id, p.base.mods), { who: `Yours · ${FACTIONS[fac].long}`, rel: 'own' }, `${WORKS_NAME[k]}: it builds ${k === 'yard' ? 'frigates and corvettes' : 'cruisers, and flagships once its Capital slip stands'} at ${p.name}. Here: ${workCost(g, ME, p, k)} credits, ${Math.round(workTime(g, ME, k))} s on the galaxy clock, station level ${t.level}. A yard destroyed in a battle leaves a ruin, rebuilt for ${Math.round(REBUILD * 100)}% (its expansions are lost with it).
+
+${what(s)}`)}
+        aria-label={`${WORKS_NAME[k]}: ${s.status}`}>
+        <ShipArt t={s.status === 'built' ? yardType(t.id, p.base.mods) : t} className={s.status === 'ruin' ? 'is-ruin' : ''} />
+        <strong>{WORKS_NAME[k]}</strong>
+        {l ? <span className="ew-modline">{l}</span> : cost(k)}
+        {s.status === 'locked' && <span className="ew-lock">{s.why?.startsWith('Needs station level') ? `Lv${t.level}` : 'Locked'}</span>}
+        {s.status === 'busy' && <i className="ew-modbar" style={{ transform: `scaleX(${s.progress})` }} />}
+      </button>
+    )
+  }
+  const st = stationType(fac, p.station, [], p.base.mods.filter((id) => MODULE[id].on === 'station'))
+  return (
+    <div className="ew-yard ew-gbuild" ref={grid}>
+      <div className="ew-shipcard ew-yardcard is-built" {...unitTip(st, { who: `Yours · ${FACTIONS[fac].long}`, rel: 'own' }, `The Command Station at level ${p.station}: it builds strike craft, gunships and repair craft, and the yards round it build the warships. Upgrade it with the button above.`)}>
+        <ShipArt t={st} />
+        <strong>Command Station</strong>
+        <span className="ew-modline">Level {p.station}</span>
+      </div>
+      {modCards('station')}
+      {yardCard('yard')}
+      {modCards('yard')}
+      {yardCard('cyard')}
+      {modCards('cyard')}
+    </div>
+  )
+}
+
+/** What an expansion does on the galaxy map, as opposed to in a battle at its planet. */
+function galaxyEffect(id: ModuleId) {
+  switch (id) {
+    case 'secondSlip':
+      return 'Here: the first two ships in the queue are built at once.'
+    case 'sensorArray':
+      return 'Here: we see the systems next door, down every lane from this one.'
+    case 'strikeHangar':
+      return 'Here: bombers can be built at this planet.'
+    case 'capitalSlip':
+      return 'Here: flagships can be built at this planet.'
+    case 'drydock':
+      return 'Fleets carry no damage between battles, so it mends ships only in a battle here.'
+    default:
+      return 'It works in battles here, and in auto-resolved ones.'
+  }
+}
+
+/** A planet's buildings as we know them (live, or as last seen): for planets that aren't ours. */
+function KnownBase({ faction, station, base, live }: { faction: FactionId; station: number; base: PlanetBase; live: boolean }) {
+  const yards = YARD_KINDS.filter((k) => base.yards[k])
+  if (!station && !yards.length) return null
+  return (
+    <div className="ew-gp-base" data-tip={live ? 'What stands there now.' : 'What stood there when we last looked: it may have changed since.'}>
+      <small className="ew-muted">{live ? 'Buildings' : 'Buildings, as last seen'}</small>
+      {station > 0 && (
+        <span className="ew-gp-bchip" {...unitTip(stationType(faction, station, [], base.mods.filter((id) => MODULE[id].on === 'station')), { who: FACTIONS[faction].long, rel: 'enemy' })}>
+          <ShipArt t={stationType(faction, station, [], base.mods.filter((id) => MODULE[id].on === 'station'))} /> Station Lv{station}
+        </span>
+      )}
+      {yards.map((k) => (
+        <span key={k} className={`ew-gp-bchip ${base.yards[k] === 'ruin' ? 'is-ruin' : ''}`}>
+          <ShipArt t={yardOf(faction, k)} /> {WORKS_NAME[k]}{base.yards[k] === 'ruin' ? ' (ruin)' : ''}
+        </span>
+      ))}
+      {base.mods.map((id) => (
+        <span key={id} className="ew-gp-bchip" data-tip={`${MODULE[id].name}: ${MODULE[id].blurb}`}>
+          <HpIcon kind={MODULE[id].kind} size={14} /> {MODULE[id].name}
+        </span>
+      ))}
+    </div>
   )
 }
 
@@ -2531,7 +2715,7 @@ function GalaxyEconomy({ g, onClose, onPlanet, onSystem }: { g: Galaxy; onClose:
       <div className="ew-gecon-foot">
         <span>Earned <b>{fmt(s.earned)}</b></span>
         <span>Ships <b>{fmt(s.spent.ships)}</b></span>
-        <span>Stations <b>{fmt(s.spent.stations)}</b></span>
+        <span data-tip="Stations, yards and expansions">Buildings <b>{fmt(s.spent.stations)}</b></span>
         <span className="ew-muted" data-tip="How many planets the enemy holds is known; what they pay is our guess, from the planets and stations we last saw">Enemy: {enemyPlanets} planets, about +{fmt(enemyIncome)} a day</span>
       </div>
     </Floating>
@@ -2565,7 +2749,8 @@ function resultOf(w: World, c: Clash, meSide: number, left: boolean): BattleResu
     escaped[o].push(...p.escaped)
   })
   const st = w.byId.get(w.players[0].station)
-  return { winner: owners[winSide] ?? c.holder, survivors, escaped, stationLeft: !!st && !st.dead }
+  // The holder's yards still standing, and the expansions not shot off (see applyBattle).
+  return { winner: owners[winSide] ?? c.holder, survivors, escaped, stationLeft: !!st && !st.dead, ...(c.base ? { base: baseLeft(w, 0, c.base.mods) } : {}) }
 }
 
 // --- Panels ---------------------------------------------------------------------------------------------

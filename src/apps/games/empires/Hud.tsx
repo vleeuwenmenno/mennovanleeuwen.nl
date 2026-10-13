@@ -1095,7 +1095,7 @@ export function moduleNeed(w: World, me: Owner, t: UnitType, at: Unit | undefine
   return MODULE[id].name
 }
 
-export function ShipCard({ t, who, why, whyReserve, level, queued, onBuild, onUnqueue, campaign = false, research = null, need = null, where = 'the station' }: {
+export function ShipCard({ t, who, why, whyReserve, level, queued, onBuild, onUnqueue, campaign = false, research = null, need = null, lock = null, where = 'the station' }: {
   t: UnitType; who: { who: string; rel: string }; why: string | null; whyReserve: string | null; level: number; queued: number; onBuild: (id: string, times: number, reserve?: boolean) => void; onUnqueue: (id: string) => void
   /** Where a ship that jumps in straight away arrives: beside the station, or the yard building it. */
   where?: string
@@ -1105,9 +1105,12 @@ export function ShipCard({ t, who, why, whyReserve, level, queued, onBuild, onUn
   research?: string | null
   /** The expansion it still waits for, by name (see moduleNeed). */
   need?: string | null
+  /** Anything else that keeps it from being built here (a galaxy planet without the yard for it),
+   * and the word on its badge. */
+  lock?: { text: string; badge: string } | null
 }) {
-  const locked = t.level > level || !!research || !!need
-  const lockText = t.level > level ? `Needs station level ${t.level}.` : research ? `Needs research: ${research}. Find it in the tech tree.` : `Needs the ${need}: an expansion, ordered from its building's Expansions tab.`
+  const locked = t.level > level || !!research || !!need || !!lock
+  const lockText = t.level > level ? `Needs station level ${t.level}.` : research ? `Needs research: ${research}. Find it in the tech tree.` : need ? `Needs the ${need}: an expansion, ordered from its building's Expansions tab.` : `${lock?.text}.`
   // A finger has no Shift-click or right-click: a long press offers them on a wheel.
   const press = useLongPressWheel(
     () =>
@@ -1136,7 +1139,7 @@ export function ShipCard({ t, who, why, whyReserve, level, queued, onBuild, onUn
       <strong>{t.name}</strong>
       <span className="ew-cost"><Icon name="credits" size={11} /> {t.cost}</span>
       <span className="ew-time"><Icon name="time" size={11} /> {t.build}s</span>
-      {locked && <span className="ew-lock">{t.level > level ? `Lv${t.level}` : research ? 'Research' : 'Expansion'}</span>}
+      {locked && <span className="ew-lock">{t.level > level ? `Lv${t.level}` : research ? 'Research' : need ? 'Expansion' : lock?.badge}</span>}
       {queued > 0 && <span className="ew-qbadge">{queued}</span>}
     </button>
   )

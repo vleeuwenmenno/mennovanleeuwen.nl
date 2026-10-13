@@ -5,7 +5,7 @@ import { clearLine, findPath, navGrid, type NavGrid } from './nav.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import { BIG_SPREAD, SIZE_CLASSES, sizedType, type ShipSizes } from './models/sizes.ts'
 import {
-  ABILITIES, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, WORKS_NAME, needsModule, worksOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
+  ABILITIES, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind,
 } from './data.ts'
@@ -1728,18 +1728,28 @@ export function placement(w: World, owner: Owner, unitId: string, x: number, y: 
   if (!st || st.dead) return out('No station')
   if (t.level > p.level) return out(`Needs station level ${t.level}`)
   if (w.units.filter((u) => !u.dead && u.owner === owner && u.t.id === unitId).length >= YARD_MAX) return out(`We already have a ${t.name}`)
+  const why = siteProblem(w, owner, t, st, x, y, a, ruin)
+  if (why) return out(why)
+  if (p.credits < cost) return out('Not enough credits')
+  return out(null)
+}
+
+/** Why yard `t` can't stand at (x, y) facing `a` round station `st`, or null when it can: inside the
+ * build radius, clear of the map's edge, rocks, fields, ore, beacons, wrecks, other structures and
+ * ruins (but `ruin`, the one it goes up on). */
+function siteProblem(w: World, owner: Owner, t: UnitType, st: Unit, x: number, y: number, a: number, ruin?: Ruin): string | null {
   const r = radius(t)
   const { hl, hw } = yardBox(t)
   const gap = (px: number, py: number) => boxGap(px, py, x, y, a, hl, hw)
-  if (d2(x, y, st.x, st.y) > sq(BUILD_RADIUS)) return out('Outside the build radius: keep it near the Command Station')
+  if (d2(x, y, st.x, st.y) > sq(BUILD_RADIUS)) return 'Outside the build radius: keep it near the Command Station'
   const ex = Math.abs(M.cos(a)) * hl + Math.abs(M.sin(a)) * hw
   const ey = Math.abs(M.sin(a)) * hl + Math.abs(M.cos(a)) * hw
-  if (x < ex + 120 || y < ey + 120 || x > w.w - ex - 120 || y > w.h - ey - 120) return out('Too close to the edge of the map')
-  if (w.rocks.some((k) => gap(k.x, k.y) < k.r + 30)) return out('An asteroid is in the way')
-  if (inside(w.map.fields, x, y, r)) return out('Inside an asteroid field')
-  if (w.nodes.some((n) => gap(n.x, n.y) < n.r + 140)) return out('Too close to an ore asteroid')
-  if (w.beacons.some((b) => gap(b.x, b.y) < 240)) return out('Too close to a beacon')
-  if (w.wrecks.some((h) => gap(h.x, h.y) < h.size * 0.6)) return out('A wreck is in the way')
+  if (x < ex + 120 || y < ey + 120 || x > w.w - ex - 120 || y > w.h - ey - 120) return 'Too close to the edge of the map'
+  if (w.rocks.some((k) => gap(k.x, k.y) < k.r + 30)) return 'An asteroid is in the way'
+  if (inside(w.map.fields, x, y, r)) return 'Inside an asteroid field'
+  if (w.nodes.some((n) => gap(n.x, n.y) < n.r + 140)) return 'Too close to an ore asteroid'
+  if (w.beacons.some((b) => gap(b.x, b.y) < 240)) return 'Too close to a beacon'
+  if (w.wrecks.some((h) => gap(h.x, h.y) < h.size * 0.6)) return 'A wreck is in the way'
   // Kept clear of other structures: a yard by its box, the rest by their longest side, a station by the size it grows to.
   const half = (o: UnitType) => Math.max(...dims(o.tier === 'station' ? stationType(o.faction, MAX_LEVEL, []) : o)) * 0.5
   const crowded = (u: Unit) => {
@@ -1749,10 +1759,9 @@ export function placement(w: World, owner: Owner, unitId: string, x: number, y: 
     }
     return gap(u.x, u.y) < half(u.t) + 60
   }
-  if (w.units.some((u) => !u.dead && !isShip(u.t) && !(planned(u) && u.owner !== owner) && crowded(u))) return out('Too close to another structure')
-  if ((w.ruins ?? []).some((q) => q !== ruin && d2(x, y, q.x, q.y) < sq(r * 2))) return out('A ruin is in the way')
-  if (p.credits < cost) return out('Not enough credits')
-  return out(null)
+  if (w.units.some((u) => !u.dead && !isShip(u.t) && !(planned(u) && u.owner !== owner) && crowded(u))) return 'Too close to another structure'
+  if ((w.ruins ?? []).some((q) => q !== ruin && d2(x, y, q.x, q.y) < sq(r * 2))) return 'A ruin is in the way'
+  return null
 }
 
 /**
@@ -3563,20 +3572,33 @@ function fleetEnd(w: World, dt: number) {
 
 /** One side of a fleet battle: its ships (type ids; a fighter id is a whole squadron), and for the
  * side holding the planet, its station's level (0: none). `reserve`: more ships, held back by the
- * fleet's orders: they start in the reserve, to be called in during the battle. */
-export type FleetSide = { faction: FactionId; team: number; ships: string[]; reserve?: string[]; station?: number; techs?: string[] }
+ * fleet's orders: they start in the reserve, to be called in during the battle. `yards` and `exp`:
+ * the holder's buildings round its station (a conquest planet's yards and the expansions on them
+ * and on the station); given, the battle has hybrid bases (see newFleetBattle). */
+export type FleetSide = { faction: FactionId; team: number; ships: string[]; reserve?: string[]; station?: number; techs?: string[]; yards?: ('yard' | 'cyard')[]; exp?: ModuleId[] }
 
 /**
  * A galactic conquest battle over a planet. The first side holds it: its station (if any) sits at
  * the first spawn with its fleet in front; the other fleets drop out of hyperspace at the other
  * spawns. Each side starts with up to `cap` fleet size on the field, biggest ships first, and the
  * rest waits in orbit to be called in from the reserve, with any ships its fleets held back.
+ *
+ * A holder that brings its buildings (FleetSide `yards`, `exp`) fights with hybrid bases: its
+ * Command Station carries its expansions and its yards stand round it (see baseSpots) with theirs,
+ * so a Drydock mends, an Armour works plates the frigates, a Shield core feeds the station's
+ * shields and a Fighter wing flies, as in a skirmish. Nothing is built during the battle: a fleet
+ * battle has no economy (cantBuild, placement and moduleLock refuse while `fleet` is set), so a
+ * planet fights with what it has, and builds in the galaxy's queue.
  */
 export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: number; cap?: number; sizes?: ShipSizes } = {}): World {
   const w = newWorld(map, sides.map((s, i) => ({ faction: s.faction, team: s.team, spawn: i, incomeMul: 0 })), { seed: opts.seed, credits: 0, fleet: true, sizes: opts.sizes })
   const cap = opts.cap ?? FLEET_CAP
   const c = { x: w.w / 2, y: w.h / 2 }
   w.fleet = { entry: sides.map((_, i) => ({ x: map.spawns[i].x, y: map.spawns[i].y, r: mapDist(1300) })), cap, holder: sides[0].team, endT: 3 }
+  if (sides[0].station && (sides[0].yards || sides[0].exp)) {
+    w.hybrid = true
+    w.ruins = []
+  }
   sides.forEach((s, o) => {
     const p = w.players[o]
     p.techs = [...(s.techs ?? [])]
@@ -3587,6 +3609,7 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
       const st = spawn(w, unitOf(p.faction, 'station').id, o, sp.x, sp.y, face - Math.PI / 2)
       p.station = st.id
       spawnWing(w, st)
+      if (w.hybrid) raiseBase(w, st, s.yards ?? [], s.exp ?? [], map.spawns.slice(1, sides.length))
     }
     // Biggest first onto the field, up to the cap; the rest waits in orbit.
     const order = [...s.ships].sort((a, b) => UNIT[b].pop - UNIT[a].pop)
@@ -3621,8 +3644,73 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
   return w
 }
 
+/**
+ * Where a conquest planet's yards stand round its station: on the side away from where the
+ * attackers come in, inside the build radius, each facing away from the station (as an AI's yards
+ * do). Each takes the first clear spot (see siteProblem) from a fixed list of bearings and
+ * distances, the Frigate Yard trying one flank first and the Capital Yard the other, so the same
+ * planet on the same map always looks the same, and nothing is left to chance (no `rand`).
+ */
+export function baseSpots(w: World, st: Unit, kinds: ('yard' | 'cyard')[], attackers: Pt[]): { kind: 'yard' | 'cyard'; x: number; y: number; a: number }[] {
+  const from = attackers.length ? { x: attackers.reduce((s, q) => s + q.x, 0) / attackers.length, y: attackers.reduce((s, q) => s + q.y, 0) / attackers.length } : { x: w.w / 2, y: w.h / 2 }
+  const away = M.atan2(st.y - from.y, st.x - from.x)
+  const out: { kind: 'yard' | 'cyard'; x: number; y: number; a: number }[] = []
+  const box = (kind: 'yard' | 'cyard') => yardBox(yardOf(st.t.faction, kind))
+  for (const kind of kinds) {
+    const t = yardOf(st.t.faction, kind)
+    const { hl, hw } = box(kind)
+    const flank = kind === 'yard' ? 1 : -1
+    let spot: { x: number; y: number; a: number } | null = null
+    for (const turn of [1.1, 1.45, 0.75, 1.8, 0.4, 2.2, 2.6, 0])
+      for (const side of [flank, -flank])
+        for (const d of [mapDist(1150), mapDist(1450), mapDist(900), mapDist(1650)]) {
+          if (spot) break
+          const b = away + side * turn
+          const x = st.x + M.cos(b) * d
+          const y = st.y + M.sin(b) * d
+          const a = M.atan2(y - st.y, x - st.x)
+          // (Clear of the yards placed before it, too.)
+          if (siteProblem(w, st.owner, t, st, x, y, a) || out.some((q) => boxesNear(x, y, a, hl, hw, q.x, q.y, q.a, box(q.kind).hl, box(q.kind).hw, 60))) continue
+          spot = { x, y, a }
+        }
+    if (spot) out.push({ kind, ...spot })
+  }
+  return out
+}
+
+/** A conquest planet's base as it stands when the battle starts: the station's expansions, then each
+ * yard at its spot, finished, with its own expansions (and a Fighter wing's squadron). */
+function raiseBase(w: World, st: Unit, yards: ('yard' | 'cyard')[], exp: ModuleId[], attackers: Pt[]) {
+  const ids = Object.keys(MODULE) as ModuleId[]
+  const onStation = ids.filter((id) => exp.includes(id) && MODULE[id].on === 'station')
+  if (onStation.length) {
+    st.xm = onStation
+    restation(w, st)
+  }
+  for (const s of baseSpots(w, st, yards, attackers)) {
+    const y = spawn(w, yardOf(st.t.faction, s.kind).id, st.owner, s.x, s.y, s.a)
+    // Standing from the start: its queue open, but it says nothing of being built.
+    finishSite(w, y)
+    w.events.pop()
+    const mods = ids.filter((id) => exp.includes(id) && MODULE[id].on === s.kind)
+    if (!mods.length) continue
+    y.xm = mods
+    retype(w, y, yardType(y.t.id, y.xm))
+    if (mods.includes('fighterWing')) spawnWing(w, y)
+  }
+}
+
+/** What of player `o`'s base stands at the end of a battle: its yards, and of the expansions `had`
+ * the ones still on a building that stands and not shot off. */
+export function baseLeft(w: World, o: Owner, had: readonly ModuleId[]): { yards: ('yard' | 'cyard')[]; mods: ModuleId[] } {
+  const st = w.byId.get(w.players[o].station)
+  const yards = w.units.filter((u) => !u.dead && u.owner === o && u.t.tier === 'yard' && !u.site)
+  const on = (id: ModuleId) => (MODULE[id].on === 'station' ? [st] : yards.filter((u) => worksOf(u.t) === MODULE[id].on))
+  return { yards: yards.map((u) => worksOf(u.t) as 'yard' | 'cyard'), mods: had.filter((id) => on(id).some((u) => expUp(u, id))) }
+}
+
 /** Ships a player owns, for selection helpers and the AI. */
-export const fleet = (w: World, o: Owner) => w.units.filter((u) => !u.dead && u.owner === o && isShip(u.t))
+export const fleet =(w: World, o: Owner) => w.units.filter((u) => !u.dead && u.owner === o && isShip(u.t))
 
 const hashView = new DataView(new ArrayBuffer(8))
 /**
