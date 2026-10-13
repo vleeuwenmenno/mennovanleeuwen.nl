@@ -390,7 +390,8 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
   useEffect(() => {
     if (!onLogout) return
     const focusPrompt = () => inputRef.current?.focus({ preventScroll: true })
-    const onUp = () => !window.getSelection()?.toString() && focusPrompt()
+    // A moment later: a click inside a selection only collapses it after the mouse-up.
+    const onUp = () => setTimeout(() => !window.getSelection()?.toString() && focusPrompt())
     const onKey = (e: globalThis.KeyboardEvent) => {
       const active = document.activeElement
       if (active === inputRef.current || active?.matches('input, textarea, [contenteditable="true"]')) return
@@ -1040,7 +1041,11 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
       style={fontPx === null ? undefined : { fontSize: fontPx }}
       onContextMenu={onMenu}
       onMouseUp={(e) => {
-        if (e.button === 0 && !window.getSelection()?.toString()) inputRef.current?.focus({ preventScroll: true })
+        // A click puts the caret on the prompt; a selection stays. A click inside an earlier
+        // selection only collapses it after the mouse-up (it could have been a drag of the
+        // selected text), so this looks a moment later.
+        if (e.button !== 0) return
+        setTimeout(() => !window.getSelection()?.toString() && inputRef.current?.focus({ preventScroll: true }))
       }}
     >
       {entries.map((e) => (

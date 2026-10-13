@@ -128,6 +128,11 @@ body {
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
 }
+/* For one frame while a press in selectable text starts a selection (Firefox, see selection.ts). */
+html[data-selecting] body {
+  -webkit-user-select: text;
+  user-select: text;
+}
 input,
 textarea,
 select,
