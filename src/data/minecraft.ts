@@ -43,6 +43,19 @@ const PHASE_ICON: Record<McWorld['phase'], string> = { day: '☀', dusk: '◐', 
 /** "☀ Day 412 · 14:20", for the window's header, the top bar popup and the widget. */
 export const worldLine = (w: McWorld) => `${PHASE_ICON[w.phase]} Day ${w.day} · ${w.clock}`
 
+const DIMENSION: Record<string, string> = { overworld: 'Overworld', nether: 'Nether', end: 'End' }
+/** Where a player is: its name, and `kind` for colouring it (a datapack's own dimension is "other"). */
+export function dimension(id: string): { kind: 'overworld' | 'nether' | 'end' | 'other'; label: string } {
+  return Object.hasOwn(DIMENSION, id) ? { kind: id as 'overworld' | 'nether' | 'end', label: DIMENSION[id] } : { kind: 'other', label: id.replace(/_/g, ' ') }
+}
+
+/** "Lv 30 · ♥ 10/10": hearts are two health points each. Null when there is neither. */
+export function vitals(info: McPlayerInfo | undefined): string | null {
+  if (!info) return null
+  const parts = [info.level !== undefined && `Lv ${info.level}`, info.health !== undefined && `♥ ${Math.round(info.health) / 2}/10`].filter(Boolean)
+  return parts.length ? parts.join(' · ') : null
+}
+
 type State = { status: McStatus | null; error?: string; loading: boolean }
 
 let state: State = { status: null, loading: false }
