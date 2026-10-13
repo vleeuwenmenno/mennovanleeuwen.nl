@@ -32,6 +32,7 @@ import { holdToDrag, startNativeDrag, useDropTarget, type DragItem, type DropTar
 import { useEdgeSwipe } from '../os/useEdgeSwipe'
 import { useMediaQuery } from '../os/useMediaQuery'
 import { SecretInput } from '../os/SecretInput'
+import { VideoThumb } from '../os/VideoThumb'
 
 /** Quotes a path for a command line in the terminal. */
 const shq = (s: string) => (/^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
@@ -181,6 +182,21 @@ function Thumb({ item, size, gallery = false, emblem, launcher }: { item: Item; 
       </span>
     )
   }
+  // Videos in Seafile or kept in this browser show a frame from themselves, made in this browser
+  // (src/data/videoThumbs.ts); the icon while that is made, or when it cannot be.
+  if (item.kind === 'video' && !item.trash && (item.sf || (item.node?.type === 'file' && item.node.browser)))
+    return (
+      <VideoThumb
+        path={item.path}
+        version={`${item.mtime}-${item.size}`}
+        size={item.size}
+        badge={size >= 36}
+        className={gallery ? 'is-gallery' : ''}
+        imgClassName="fm-thumb is-photo"
+        style={gallery ? undefined : { width: Math.round(size * 1.35), height: size }}
+        fallback={<FileIcon size={size} kind={item.kind} name={item.name} />}
+      />
+    )
   // An explicit box: SVGs with only a viewBox have no dependable intrinsic size.
   if (src && !broken)
     return <img className={`fm-thumb ${item.sf ? 'is-photo' : ''}`} src={src} alt="" loading="lazy" onError={() => setBroken(true)} style={gallery ? undefined : { width: Math.round(size * 1.35), height: size }} draggable={false} />

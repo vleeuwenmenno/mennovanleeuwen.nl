@@ -212,6 +212,11 @@
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+.ph-tile-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 .ph-tile-none {
   display: grid;
   place-items: center;
