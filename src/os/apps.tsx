@@ -46,6 +46,8 @@ export type AppMeta = {
   render: (w: WinState) => ReactNode
   /** The app's own items at the top of its window menu */
   menu?: (w: WinState, wm: ReturnType<typeof useWM>) => MenuItem[]
+  /** The app uses Ctrl or Alt with the mouse itself (a game's orders), so those keys don't move or resize its window */
+  ownsModifierDrag?: boolean
 }
 
 /**
@@ -88,7 +90,7 @@ export const APP_META: Record<AppId, AppMeta> = {
   recents: { title: 'Activity', dock: 'Activity', blurb: 'Live activity and contribution graph', size: [780, 680], render: () => <Recents /> },
   cv: { title: 'cv.md — Viewer', dock: 'CV', blurb: 'The printable version of me', size: [760, 680], render: () => <Cv /> },
   contact: { title: 'New message', dock: 'Contact', blurb: 'Get in touch', size: [560, 500], render: () => <Contact /> },
-  games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, Pool, Gladiator, Empires At War, Breakout', size: [720, 640], titleOf: (w) => gameInfo(w.props.game)?.name ?? 'Games', sizeOf: (p) => gameInfo(p.game)?.size, render: (w) => <Games win={w} />, menu: gamesMenu },
+  games: { title: 'Games', dock: 'Games', blurb: 'Tetris, Pac-Man, Snake, Minesweeper, Pool, Gladiator, Empires At War, Breakout', size: [720, 640], titleOf: (w) => gameInfo(w.props.game)?.name ?? 'Games', sizeOf: (p) => gameInfo(p.game)?.size, render: (w) => <Games win={w} />, menu: gamesMenu, ownsModifierDrag: true },
   calendar: { title: 'Calendar', dock: 'Calendar', blurb: 'Your Google and CalDAV calendars: plan, move and invite', size: [1000, 660], render: (w) => <CalendarApp win={w} />, menu: settingsMenu('Calendar', 'calendar') },
   mail: { title: 'Mail', dock: 'Mail', blurb: 'Your Fastmail (JMAP) mail: read, search, write and send', size: [1100, 680], render: (w) => <Mail win={w} />, menu: mailMenu },
   contacts: { title: 'Contacts', dock: 'Contacts', blurb: 'Your people: on this site, Fastmail, iCloud and other CardDAV', size: [920, 620], render: (w) => <ContactsApp win={w} />, menu: settingsMenu('Contacts', 'contacts') },

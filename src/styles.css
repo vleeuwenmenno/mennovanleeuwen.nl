@@ -130,6 +130,19 @@ body.is-resizing,
 body.is-resizing * {
   user-select: none;
 }
+/* A resize started with the drag key held can be from any corner: the cursor says which. */
+body[data-rz='nw'],
+body[data-rz='nw'] *,
+body[data-rz='se'],
+body[data-rz='se'] * {
+  cursor: nwse-resize !important;
+}
+body[data-rz='ne'],
+body[data-rz='ne'] *,
+body[data-rz='sw'],
+body[data-rz='sw'] * {
+  cursor: nesw-resize !important;
+}
 /* An app's frame (OnlyOffice) would swallow the pointer mid-drag. */
 body.is-dragging iframe,
 body.is-resizing iframe {

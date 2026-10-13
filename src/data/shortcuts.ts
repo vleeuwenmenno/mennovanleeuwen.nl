@@ -18,6 +18,7 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
     keys: [
       ['Double-click title', 'maximize / restore'],
       ['Drag title / Drag edge', 'move / resize'],
+      ['Ctrl drag / Ctrl right-drag', 'move the window / resize it from the nearest corner (Alt or off in Settings)'],
       ['Drag to a side edge', 'snap to half the screen'],
       ['Drag to a corner', 'snap to a quarter'],
       ['Drag to top edge', 'maximize'],
@@ -80,6 +81,7 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
       ['Backspace', 'up one folder'],
       ['Alt ↵', 'properties'],
       ['Arrows / Shift', 'move / extend selection'],
+      ['Shift drag on empty space', 'add to the selection with a box'],
     ],
   },
   {

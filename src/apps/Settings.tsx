@@ -28,6 +28,7 @@ import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
 import { DOCK_MODES, getDockMode, setDockMode, type DockMode } from '../os/dockPrefs'
+import { DRAG_KEYS, dragKeyPref } from '../os/modDrag'
 import { AppIcon } from '../os/icons'
 import { setStartupPrefs, START_WINDOWS, useStartupPrefs } from '../os/startup'
 import { clearEntries, pruneEntries, useEntries } from '../os/notify'
@@ -1665,6 +1666,27 @@ function SpotlightSettings() {
  * Where web links open, and whether the browser's new tab page (/?newtab) always uses this tab
  * and starts in Spotlight.
  */
+/** Settings → Windows: which key, held while dragging, moves and resizes a window from anywhere on it. */
+function DragKeySettings() {
+  const key = dragKeyPref.use()
+  return (
+    <SetGroup title="Drag windows with a key">
+      <div className="seg set-seg" role="radiogroup" aria-label="Drag windows with a key">
+        {DRAG_KEYS.map(([id, label]) => (
+          <button key={id} role="radio" aria-checked={key === id} className={key === id ? 'is-active' : ''} onClick={() => dragKeyPref.set(id)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <p className="muted set-help">
+        {key === 'off'
+          ? 'Windows move and resize by their title bar and edges only.'
+          : `Hold ${key === 'alt' ? 'Alt' : 'Ctrl'} and drag anywhere on a window with the left button to move it, or with the right button to resize it from the nearest corner, as in Hyprland. A plain ${key === 'alt' ? 'Alt' : 'Ctrl'}-click still goes to the app. Games and programs in the terminal that read the mouse keep the key for themselves. Alt is the key this site already uses for workspaces. In Files and Photos, Shift-drag adds to the selection with a box. Not on phones. Saved in this browser.`}
+      </p>
+    </SetGroup>
+  )
+}
+
 /** Settings → Windows: what the desktop shows when MvL OS opens again. */
 function WindowsSettings() {
   const { windows } = useStartupPrefs()
@@ -1684,6 +1706,7 @@ function WindowsSettings() {
           {windows !== 'last' && " While this is chosen, MvL OS doesn't save which windows are open."}
         </p>
       </SetGroup>
+      <DragKeySettings />
       <SetGroup title="Right now">
         <ul className="set-list">
           <li className="set-row">
@@ -1784,7 +1807,7 @@ const GROUPS: Group[] = [
   {
     panes: [
       { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal favourites favorites starred', blurb: 'What Spotlight shows when it opens, what it searches, and what it remembers.', render: () => <SpotlightSettings /> },
-      { id: 'windows', label: 'Windows', hue: 'var(--yellow)', icon: svg(<><rect x="3" y="5" width="12" height="10" /><rect x="9" y="9" width="12" height="10" /></>), keywords: 'windows restore reopen startup start open last session layout tabs welcome empty desktop reset start over', blurb: 'What the desktop shows when MvL OS opens again.', render: () => <WindowsSettings /> },
+      { id: 'windows', label: 'Windows', hue: 'var(--yellow)', icon: svg(<><rect x="3" y="5" width="12" height="10" /><rect x="9" y="9" width="12" height="10" /></>), keywords: 'windows restore reopen startup start open last session layout tabs welcome empty desktop reset start over drag move resize modifier key ctrl alt hyprland corner mouse', blurb: 'What the desktop shows when MvL OS opens again.', render: () => <WindowsSettings /> },
       { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page spotlight', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
       { id: 'notifications', label: 'Notifications', hue: 'var(--red)', icon: svg(<><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></>), keywords: 'notifications alerts notification center bell pop-ups do not disturb dnd keep history clear minecraft activity agents uploads unpacking updates system browser', blurb: 'Pop-ups, the notification center, and which apps may notify.', render: () => <Notifications /> },
       { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal spotlight suggestions mvl.sh token', blurb: "The golinks account that go <alias> follows, in Spotlight and the terminal.", render: () => <GoLinks /> },
