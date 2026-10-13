@@ -4542,6 +4542,16 @@ button.cal-day.is-picked:not(.is-today) {
   justify-content: center;
   gap: 8px;
 }
+/* A file opened in Calendar or Contacts that waits for an account to import into. */
+.ca-empty-note {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+}
 .ca.is-narrow .ca-toolbar {
   gap: 4px;
   padding: 6px 8px;

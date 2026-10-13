@@ -1,5 +1,7 @@
 import { isArchive } from '../data/archive'
 import { posixOf } from '../data/mounts'
+import { importFileOf } from '../data/fileOps'
+import { isIcsName, isVcfName, openImport } from '../data/pimFiles'
 import { isSf, openSeafile } from '../data/seafile'
 import { getAccount } from './account'
 import { kindOfName } from '../terminal/vfs'
@@ -39,6 +41,10 @@ export function opensFile(app: AppId, item: FileItem): boolean {
       return kind === 'document' && isSf(item.path) && !!getAccount().seafile?.office
     case 'files':
       return true
+    case 'calendar':
+      return isIcsName(item.name)
+    case 'contacts':
+      return isVcfName(item.name)
     default:
       return false
   }
@@ -59,6 +65,7 @@ export function openWith(wm: Opener, app: AppId, item: FileItem) {
     const at = isSf(item.path) ? posixOf(item.path) : item.path
     return at ? wm.openNew('terminal', { run: `cd ${shq(at)} && ls`, t: String(Date.now()) }) : undefined
   }
+  if (app === 'calendar' || app === 'contacts') return openImport(app, [importFileOf(item.path)])
   const how = HOW[app]
   if (!how) return
   if (isSf(item.path)) return void openSeafile(wm, item.path, { how })

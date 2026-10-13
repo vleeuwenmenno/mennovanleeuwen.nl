@@ -321,9 +321,26 @@ const eventPath = (calendar: string, event: string) => `/calendars/${encodeURICo
 
 /** Makes an event; answers where it now lives. */
 export async function createGoogleEvent(user: User, calendar: string, input: EventInput): Promise<GoogleRef> {
-  const made = await calendarApi<GoogleEvent>(user, `/calendars/${encodeURIComponent(calendar)}/events?sendUpdates=all`, { method: 'POST', body: googleBody(input) })
+  // An imported event keeps its UID, which only Google's import call takes (and it invites nobody).
+  const made = input.uid
+    ? await calendarApi<GoogleEvent>(user, `/calendars/${encodeURIComponent(calendar)}/events/import`, { method: 'POST', body: { ...googleBody(input), iCalUID: input.uid } })
+    : await calendarApi<GoogleEvent>(user, `/calendars/${encodeURIComponent(calendar)}/events?sendUpdates=all`, { method: 'POST', body: googleBody(input) })
   clearGoogleCache(user)
   return { k: 'g', c: calendar, e: made.id }
+}
+
+/** Which of these iCalendar UIDs a calendar already has (Google answers one UID at a time). */
+export async function googleKnownUids(user: User, calendar: string, uids: string[]): Promise<string[]> {
+  const known: string[] = []
+  const queue = uids.slice(0, 500)
+  const worker = async () => {
+    for (let uid = queue.shift(); uid; uid = queue.shift()) {
+      const d = await calendarApi<{ items?: GoogleEvent[] }>(user, `/calendars/${encodeURIComponent(calendar)}/events?${new URLSearchParams({ iCalUID: uid, maxResults: '1' })}`).catch(() => null)
+      if (d?.items?.some((e) => e.status !== 'cancelled')) known.push(uid)
+    }
+  }
+  await Promise.all(Array.from({ length: 5 }, worker))
+  return known
 }
 
 /** One event (or one occurrence of a series) as it is now, for the Agents app's changes. */

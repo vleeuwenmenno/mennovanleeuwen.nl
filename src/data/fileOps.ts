@@ -1,6 +1,7 @@
 import { prepare, removePath, transfer as fsTransfer, makeDir, lookup as fsLookup } from '../terminal/fs'
 import { browserFilesReady, browserParent, mkdirBrowser, readBrowserBlob, statBrowser, writeBrowserFile } from './browserfs'
 import { posixOf, whereIs } from './mounts'
+import type { ImportFile } from './pimFiles'
 import { createFile, deleteItems, deleteNote, download, getLibrary, isSf, mkdir, parseSf, readBlob, renameItem, SF, transferItems } from './seafile'
 
 // Changing files from Files, Zed and the desktop, wherever they are: Seafile (seafile:// paths)
@@ -144,6 +145,9 @@ export async function readBytes(path: string): Promise<Blob> {
   if (node.sf) return readBlob(node.sf)
   return new Blob([node.content()], { type: 'text/plain' })
 }
+
+/** A file as Calendar and Contacts take it to import (data/pimFiles.ts): read when they need it. */
+export const importFileOf = (path: string): ImportFile => ({ name: nameOf(path), read: () => readBytes(path) })
 
 /**
  * An editor's save into the browser: the text exactly as typed. One of the site's own files

@@ -70,7 +70,8 @@ folder on show, a place in the sidebar, the Trash), the dock, and the windows of
 files: Preview, Player, Omamp, PDF, the Viewer, Archive and Zed show what is dropped on them, and
 a sticky note takes a launcher as a link. A message being written in Mail attaches the files dropped
 on it (from the computer, Files or the desktop) and takes a launcher as its link in the text, and
-the Calendar imports the events of a dropped `.ics` file (shown first, into the calendar you pick).
+the Calendar imports the events of a dropped `.ics` file (shown first, into the calendar you pick) and
+Contacts the cards of a dropped `.vcf`, whether they come from the computer, Files or the desktop.
 Within one library (or within this browser) files move;
 between Seafile's libraries and this browser they copy, and Ctrl or Alt copies, Shift moves.
 What a drop would do shows on the cursor (+ copy, → move, ↗ link or pin, ⏎ open, 🗑 delete), and
@@ -570,9 +571,17 @@ server; *Email guests* writes to them all). For one occurrence
 of a repeating event it asks whether the change is for that one or the whole series. The sidebar
 has a *Birthdays* calendar under Contacts: your contacts' birthdays and anniversaries as all-day
 events with the age they turn, read-only, on until switched off there; opening one opens the
-contact. A `.ics` file dropped on the calendar is imported: its events (title, time in its own
-zone, place, notes, how it repeats) are listed first, then made in the calendar picked, without
-their guests so nobody gets an invitation from you (a file imported twice makes its events twice). Changes go
+contact. A `.ics` file dropped on the calendar (from the computer, Files or the desktop), or opened in it
+from Files, the desktop, Spotlight, a Mail attachment or the terminal's `open file.ics`, is imported: its
+events (title, time in its own zone, place, notes, how it repeats) are listed first, then made in the
+calendar picked, without their guests so nobody gets an invitation from you. Events the calendar has
+already, by their UID, are skipped, and the notice says how many (the UID is kept when the event is made,
+`POST /api/calendar/known` asks the server which ones a calendar has). The reader
+([`src/apps/calendar/ics.ts`](src/apps/calendar/ics.ts)) is forgiving: a file that never closes its event,
+a UTF-8 or UTF-16 text (BOM or not, [`src/data/decodeText.ts`](src/data/decodeText.ts)), lowercase names, `VALUE=DATE-TIME`, a
+quoted TZID, `X-WR-TIMEZONE` for times with no zone, and extended ISO dates (`2026-10-15T14:00:00+02:00`).
+When nothing can be imported the notice says why (`1 event found, but its start time couldn't be read (...)`).
+With no calendar linked the Calendar says so, with a button to Integrations, and keeps the file for when one is. `pnpm check:ics` covers the reader. Changes go
 through [`server/calendars.ts`](server/calendars.ts): Google's API, or the event's own iCalendar
 text on the CalDAV server, written back with its ETag so other apps' properties stay.
 
@@ -722,7 +731,9 @@ token Seafile hands out, encrypted, which shows up in Seafile's Devices as the s
 primary library (My Library unless you pick another) is home unless you switch that off: Places'
 Desktop, Documents, Downloads and so on are its folders, and the desktop shows its Desktop folder.
 Text, code and config open in Zed and save back with Ctrl+S; pictures, video, audio and PDFs open in
-the Viewer; the rest downloads. Encrypted libraries ask for their password in the window and lock
+the Viewer; `.ics` (also `.ical`, `.ifb`) and `.vcf` (`.vcard`) files open in Calendar and Contacts and
+bring up their import dialog (see Calendar and Contacts), from Files, the desktop, Spotlight, the
+terminal's `open` and a Mail attachment's menu; *Open with* has Calendar or Contacts for them too, and Zed for the raw text; the rest downloads. Encrypted libraries ask for their password in the window and lock
 again after the minutes set in Settings (the password is never stored). Seahub's API sends no CORS
 headers, so it goes through the server; files themselves go straight between the browser and
 Seafile's file server, with links the server hands out. The sidebar's sections and items can be
@@ -1229,7 +1240,11 @@ of the coming 30 days. A card shows every way to reach someone, their dates (wit
 turn), groups, note and which address book it is in; Edit changes it in place, with a photo made
 small in the browser. Right-click a contact (or ⋯) to move it to another address book, export its
 vCard, or delete it (asked first). The ⋯ menu imports and exports .vcf files from and to this
-computer or Files (Seafile), and *Find duplicates* lists people who are in twice (the same address,
+computer or Files (Seafile); a .vcf dropped on the window (from the computer, Files or the desktop) or opened
+from Files, the desktop, Spotlight, a Mail attachment or the terminal's `open` lists the cards it holds
+(UTF-16 and a byte order mark read too, a card that never closes is taken as it is), then imports them into the
+address book you pick, skipping the ones it has already (the same UID, or with none the same name and email) and
+saying how many. *Find duplicates* lists people who are in twice (the same address,
 or the same full name) to merge into one. On a phone the window shows the list or the card, with
 the address books and groups in a menu above the list.
 
