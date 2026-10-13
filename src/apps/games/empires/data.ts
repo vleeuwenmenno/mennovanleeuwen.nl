@@ -299,7 +299,7 @@ function defensePlatform(faction: FactionId, kind: DefenseKind): UnitType {
  * Step 1 has the Frigate Yard (frigates and corvettes). Every yard has empty module sockets (`YARD_SOCKETS`)
  * where its expansions will go.
  */
-export const BUILD_RADIUS = mapDist(1408)
+export const BUILD_RADIUS = mapDist(1760)
 /** A ruined yard is rebuilt for this share of its price. */
 export const REBUILD = 0.5
 /** Yards of one kind a player may have at a time (standing, being built, or planned). */
