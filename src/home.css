@@ -4746,7 +4746,7 @@ button.cal-day.is-picked:not(.is-today) {
 .set-form label .secret {
   color: inherit;
 }
-.secret input {
+.secret > input[type] {
   padding-right: 30px;
 }
 .secret-mask {
@@ -4783,4 +4783,7 @@ button.cal-day.is-picked:not(.is-today) {
 .set-notice.is-invite {
   border-color: var(--accent);
   color: var(--fg);
+}
+.fm-unlock .secret {
+  width: 100%;
 }
