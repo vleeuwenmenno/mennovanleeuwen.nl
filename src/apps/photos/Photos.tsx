@@ -363,7 +363,7 @@ export function Photos({ win }: { win: WinState }) {
       ) : current === 'albums' && !album ? (
         <Albums source={source!} onOpen={setAlbum} />
       ) : timeline.error ? (
-        <div className="ph-blank t-red">{timeline.error}</div>
+        <div className="ph-blank t-red copyable">{timeline.error}</div>
       ) : !timeline.buckets ? (
         <div className="ph-blank muted">Loading…</div>
       ) : (
@@ -415,7 +415,7 @@ function Albums({ source, onOpen }: { source: SourceId; onOpen: (a: Album) => vo
     setAlbums(null)
     getAlbums(source).then(setAlbums, (e: Error) => setError(e.message))
   }, [source])
-  if (error) return <div className="ph-blank t-red">{error}</div>
+  if (error) return <div className="ph-blank t-red copyable">{error}</div>
   if (!albums) return <div className="ph-blank muted">Loading…</div>
   if (!albums.length) return <div className="ph-blank muted">{source === 'immich' ? 'No albums in Immich yet.' : 'No folders chosen yet.'}</div>
   return (

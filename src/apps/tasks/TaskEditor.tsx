@@ -196,7 +196,7 @@ export function TaskEditor({ task, defaults = {}, lists, onClose }: Props) {
         {task?.alarms?.length ? <p className="ca-hint">Reminds at {task.alarms.map((a) => new Date(a).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })).join(', ')} (its own reminder).</p> : null}
         {d.hasDate && d.repeat && <p className="ca-hint">Completing it moves it on to the next date.</p>}
         {readOnly && <p className="ca-hint">This list is read-only here.</p>}
-        {error && <p className="ca-hint t-red">{error}</p>}
+        {error && <p className="ca-hint t-red copyable">{error}</p>}
         <div className="ca-sheet-foot">
           {task && !readOnly && (
             <button type="button" className="btn btn-small btn-danger" onClick={remove} disabled={busy}>

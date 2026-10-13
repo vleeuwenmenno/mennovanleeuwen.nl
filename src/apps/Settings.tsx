@@ -148,7 +148,7 @@ function Account() {
           </button>
         </li>
       </ul>
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
       <p className="muted set-help">
         What is stored and who can see it: <a href="/privacy.html" target="_blank" rel="noopener">privacy</a>.
       </p>
@@ -516,7 +516,7 @@ function GoLinks() {
         <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="https://mvl.sh/r/%s?token=…" aria-label="Search URL" className={error ? 'is-bad' : ''} spellCheck={false} autoComplete="off" />
         <button className="btn btn-primary">{template ? 'Replace' : 'Save'}</button>
       </form>
-      {error && <p className="t-red">That is not a golinks search URL (…/r/%s?token=…), or a token.</p>}
+      {error && <p className="t-red copyable">That is not a golinks search URL (…/r/%s?token=…), or a token.</p>}
       <p className="muted set-help">
         Then <code>go &lt;alias&gt;</code> in Spotlight or the terminal opens that link; Spotlight suggests your aliases as you type. {account.status === 'user' ? 'Synced to your account.' : 'Saved in this browser.'}
       </p>
@@ -615,7 +615,7 @@ function Instances() {
           </li>
         ))}
       </ul>
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
       <button className="btn btn-primary" onClick={() => wm.open('linkforge', { t: String(Date.now()) })}>
         Link an instance…
       </button>
@@ -807,7 +807,7 @@ function Launchers() {
         <input value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder="Name (optional)" aria-label="Name" />
         <button className="btn btn-primary">Add</button>
       </form>
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
       <p className="muted set-help">Launchers sit on the desktop and show up in All apps and Spotlight. Without an emoji they use the site's own icon.</p>
       {files ? (
         <p className="muted set-help">
@@ -992,7 +992,7 @@ function UpdownSettings() {
           </button>
         </form>
       )}
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
     </>
   )
 }
@@ -1050,7 +1050,7 @@ function OllamaSettings() {
           </button>
         </form>
       )}
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
     </>
   )
 }
@@ -1114,7 +1114,7 @@ function SeafileSettings() {
         <p className="muted set-help">
           Your libraries in Files. The password is used once to sign in and is not kept: this server stores only the token Seafile hands out, encrypted. It shows in Seafile under <em>Settings → Devices</em> as {`"mennovanleeuwen.nl"`}, where you can revoke it.
         </p>
-        {error && <p className="t-red">{error}</p>}
+        {error && <p className="t-red copyable">{error}</p>}
         <button className="btn btn-primary" disabled={busy}>
           {busy ? 'Signing in…' : askOtp ? 'Verify and link' : 'Link Seafile'}
         </button>
@@ -1203,14 +1203,14 @@ function SeafileSettings() {
         </li>
       </ul>
       {libsError && (
-        <p className="t-red">
+        <p className="t-red copyable">
           {libsError}{' '}
           <button className="btn btn-small" onClick={() => loadLibraries(true)}>
             Try again
           </button>
         </p>
       )}
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
     </>
   )
 }
@@ -1280,7 +1280,7 @@ function OfficeSettings() {
           </li>
         </ul>
         <p className="muted set-help">Pick another folder from Files: right-click it → New documents go here.</p>
-        {error && <p className="t-red">{error}</p>}
+        {error && <p className="t-red copyable">{error}</p>}
       </>
     )
   return (
@@ -1305,7 +1305,7 @@ function OfficeSettings() {
       <p className="muted set-help">
         The document server Seafile opens Office files with, to edit them in a window here. The secret is <em>ONLYOFFICE_JWT_SECRET</em> from Seafile's <em>.env</em> (or <em>seahub_settings.py</em>). The URL is checked by loading its editor, then both are stored encrypted on this server.
       </p>
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
       <button className="btn btn-primary" disabled={busy}>
         {busy ? 'Checking…' : 'Add OnlyOffice'}
       </button>
@@ -1372,7 +1372,7 @@ function CalendarAccounts() {
       )}
       <CaldavForm />
 
-      {(error || errors.length > 0) && <p className="t-red">{[error, ...errors].filter(Boolean).join(' · ')}</p>}
+      {(error || errors.length > 0) && <p className="t-red copyable">{[error, ...errors].filter(Boolean).join(' · ')}</p>}
       <div className="set-actions">
         <button className="btn btn-small" onClick={() => wm.open('calendar', { t: String(Date.now()) })}>
           Open Calendar
@@ -1483,7 +1483,7 @@ function CaldavForm() {
         )}{' '}
         It is checked by finding your calendars, then stored encrypted on this server.
       </p>
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
       <button className="btn btn-primary" disabled={busy}>
         {busy ? 'Finding your calendars…' : `Add ${provider === 'fastmail' ? 'Fastmail' : 'CalDAV account'}`}
       </button>

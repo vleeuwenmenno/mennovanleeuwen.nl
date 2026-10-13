@@ -473,7 +473,7 @@ export function Mail({ win }: { win: WinState }) {
               </button>
             </>
           )}
-          {accountsError && <p className="ml-problem">{accountsError}</p>}
+          {accountsError && <p className="ml-problem copyable">{accountsError}</p>}
         </div>
       </div>
     )
@@ -541,7 +541,7 @@ export function Mail({ win }: { win: WinState }) {
         </button>
       </header>
       {error && (
-        <p className="ml-problem">
+        <p className="ml-problem copyable">
           {error}
           <button className="ca-x" onClick={() => setError(null)} aria-label="Dismiss">
             ×

@@ -1030,7 +1030,7 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
 
   const screen = (
     <div
-      className={`terminal ${onLogout ? 'is-console' : ''} ${alt || (session && vtAlt) ? 'is-alt' : ''} ${takeover ? 'is-takeover' : ''} ${session ? 'is-vt' : ''} ${readOnly ? 'is-readonly' : ''} ${showKeys ? 'has-keys' : ''}`}
+      className={`terminal selectable ${onLogout ? 'is-console' : ''} ${alt || (session && vtAlt) ? 'is-alt' : ''} ${takeover ? 'is-takeover' : ''} ${session ? 'is-vt' : ''} ${readOnly ? 'is-readonly' : ''} ${showKeys ? 'has-keys' : ''}`}
       ref={scrollRef}
       onScroll={(e) => {
         if (!sessionRef.current) return

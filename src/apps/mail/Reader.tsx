@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { getAccount } from '../../os/account'
-import { openContextMenu, openMenuAt, type MenuItem } from '../../os/ContextMenu'
+import { openContextMenu, openMenuAt, selectionIn, type MenuItem } from '../../os/ContextMenu'
 import { pickFolder } from '../../os/FolderPicker'
 import { notify } from '../../os/notify'
 import { uploadFiles } from '../../data/uploads'
@@ -205,11 +205,11 @@ export function Reader({ account, threadId, boot, mailbox, narrow, onBack, onAct
     <section className="ml-reader" aria-label="Conversation">
       {toolbar}
       <div className="ml-reader-scroll" ref={scroller}>
-        {error && <p className="ml-problem">{error}</p>}
+        {error && <p className="ml-problem copyable">{error}</p>}
         {!messages && !error && <p className="muted ml-loading">Loading…</p>}
         {messages && (
           <>
-            <h2 className="ml-subject">
+            <h2 className="ml-subject selectable">
               {subject || '(No subject)'}
               {messages.length > 1 && <span className="ml-count">{messages.length}</span>}
               {inMailbox('junk') && !inJunk && <span className="ml-tag">Junk</span>}
@@ -301,9 +301,10 @@ function MessageCard({
     )
   return (
     <article className={`ml-msg ${m.seen ? '' : 'is-unread'}`} onContextMenu={(e) => !(e.target as Element).closest('a, input, textarea') && onMenu(e)}>
-      <header className="ml-msg-head" onClick={onToggle}>
+      {/* Not when the click ends a drag that selected the sender's address. */}
+      <header className="ml-msg-head" onClick={(e) => !selectionIn(e.currentTarget) && onToggle()}>
         <Avatar person={sender} />
-        <div className="ml-msg-who">
+        <div className="ml-msg-who selectable">
           <div>
             {sender ? (
               <span onClick={(e) => e.stopPropagation()}>
@@ -354,7 +355,7 @@ function MessageCard({
       )}
       {m.images && m.trackers > 0 && <div className="ml-images muted">Images loaded; {m.trackers} tracking {m.trackers === 1 ? 'pixel was' : 'pixels were'} left out.</div>}
       {m.invite && <InviteCard invite={m.invite} message={ref} />}
-      <div className="ml-msg-body">
+      <div className="ml-msg-body selectable">
         {m.html !== null ? <MessageFrame html={m.html} images={m.images} tall={tall} quotes={quotes} /> : <PlainText text={m.text ?? ''} quotes={quotes} />}
         {m.truncated && <p className="muted ml-truncated">This message is long: the end of it is not shown.</p>}
       </div>

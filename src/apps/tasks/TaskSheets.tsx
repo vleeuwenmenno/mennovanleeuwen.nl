@@ -66,7 +66,7 @@ export function ListSheet({ list, onClose, onMade }: { list: TaskList | null; on
           )}
         </fieldset>
         {list && !list.local && <p className="ca-hint">Renamed on {list.source} too.</p>}
-        {error && <p className="ca-hint t-red">{error}</p>}
+        {error && <p className="ca-hint t-red copyable">{error}</p>}
         <div className="ca-sheet-foot">
           <span className="nb-spacer" />
           <button type="button" className="btn btn-small" onClick={onClose}>

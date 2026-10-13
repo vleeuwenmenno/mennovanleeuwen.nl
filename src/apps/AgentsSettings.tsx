@@ -347,7 +347,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
       {prompt && (
         <details className="agt-prompt-box">
           <summary className="muted">Show the prompt</summary>
-          <pre className="agt-prompt">{prompt.text}</pre>
+          <pre className="agt-prompt selectable">{prompt.text}</pre>
         </details>
       )}
 
@@ -370,7 +370,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
         <h3 className="agt-set-title">{current.label}</h3>
         <p className="muted set-help">{current.blurb}</p>
         {pages[section]}
-        {error && <p className="t-red">{error}</p>}
+        {error && <p className="t-red copyable">{error}</p>}
       </div>
     </div>
   )
@@ -428,7 +428,7 @@ function PermissionSettings() {
           </form>
         </li>
       </ul>
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
       <p className="muted set-help">
         The agent reads addresses on these sites without asking, in every thread and every mode. Only the site itself counts (www. too), not its subdomains. An address it was given (in your messages, a search result or a page it read) never asks anyway.
       </p>
@@ -509,7 +509,7 @@ function WebSearchSettings() {
     )
   }, [])
 
-  if (!view || !draft) return error ? <p className="t-red">{error}</p> : null
+  if (!view || !draft) return error ? <p className="t-red copyable">{error}</p> : null
 
   // A test result belongs to the provider it came from: switching clears it.
   const edit = (patch: Partial<Draft>) => {
@@ -675,7 +675,7 @@ function WebSearchSettings() {
         )}
         Keys and header values are stored encrypted and never shown again. Reading pages always goes through Ollama.
       </p>
-      {error && <p className="t-red">{error}</p>}
+      {error && <p className="t-red copyable">{error}</p>}
 
       <form className="set-form set-form-row ws-test" onSubmit={test}>
         <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Try a search with these settings" aria-label="Test search" />
@@ -683,7 +683,7 @@ function WebSearchSettings() {
           {testing ? 'Searching…' : 'Test'}
         </button>
       </form>
-      {testError && <p className="t-red">{testError}</p>}
+      {testError && <p className="t-red copyable">{testError}</p>}
       {found && (
         <>
           <p className="muted set-help">

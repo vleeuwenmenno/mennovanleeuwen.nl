@@ -315,12 +315,12 @@ export function Lightbox({
         </div>
         {panel && (
           <aside className="ph-info" aria-label="Details">
-            {infoError && <p className="t-red">{infoError}</p>}
+            {infoError && <p className="t-red copyable">{infoError}</p>}
             {!info && !infoError && <p className="muted">Loading…</p>}
             {info && (
               <>
-                <h3>{info.name}</h3>
-                <dl>
+                <h3 className="selectable">{info.name}</h3>
+                <dl className="selectable">
                   <dt>Taken</dt>
                   <dd>
                     {fullDate(when)}

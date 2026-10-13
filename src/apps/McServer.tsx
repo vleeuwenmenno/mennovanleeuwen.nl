@@ -528,7 +528,7 @@ function AdminPanel({ log }: { log: Console }) {
               </form>
             )}
           </div>
-          {error && <p className="mcs-err">{error}</p>}
+          {error && <p className="mcs-err copyable">{error}</p>}
           <div className="mcs-console" ref={scroll} onClick={() => input.current?.focus()}>
             {log.log.length === 0 && <div className="muted">Commands typed here go straight to the server, as if typed in its console. ↑ goes back through them.</div>}
             {log.log.map((l) => (

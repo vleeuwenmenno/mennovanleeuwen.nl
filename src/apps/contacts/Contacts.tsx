@@ -493,7 +493,7 @@ export function ContactsApp({ win }: { win: WinState }) {
         </button>
       </header>
       {problems.length > 0 && (
-        <p className="ca-problem">
+        <p className="ca-problem copyable">
           {problems.join(' · ')}
           {error && (
             <button className="ca-x" onClick={() => setError(null)} aria-label="Dismiss">

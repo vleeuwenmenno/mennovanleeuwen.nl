@@ -62,7 +62,7 @@ export async function askText(d: { title: string; body?: ReactNode; label?: stri
               if (e.key === 'Enter') e.currentTarget.closest('.dlg')?.querySelector<HTMLButtonElement>('.btn-primary')?.click()
             }}
           />
-          {problem && <p className="t-red dlg-problem">{problem}</p>}
+          {problem && <p className="t-red dlg-problem copyable">{problem}</p>}
         </>
       ),
       buttons: [
