@@ -8,7 +8,7 @@
 // as Seafile's do), download links, a file server that honours Range in plain libraries and
 // ignores it in encrypted ones (as Seafile's does), set-password, and thumbnails (a PNG in a
 // colour of the file's own; none in encrypted libraries), deleting into a library's trash, its
-// trash listing and restoring from it, moving, and read-only libraries. Immich: the server version, the
+// trash listing and restoring from it, moving and copying, and read-only libraries. Immich: the server version, the
 // account, timeline buckets and their assets (in Immich 2's or 3's format), an asset's details,
 // thumbnails, originals and video with Range, albums and favourites, its trash (and restoring
 // from it), adding to albums, and assets that belong to someone else, all behind its x-api-key.
@@ -138,8 +138,10 @@ export async function seafileMock(libs: SfLib[], port = 0): Promise<SeafileMock>
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', 'http://x')
     const path = url.pathname
-    let raw = ''
-    for await (const c of req) raw += c
+    const pieces: Buffer[] = []
+    for await (const c of req) pieces.push(c as Buffer)
+    const bytes = Buffer.concat(pieces)
+    const raw = bytes.toString('utf8')
     const body = () => JSON.parse(raw || '{}')
     const form = () => new URLSearchParams(raw)
     const auth = typeof req.headers.authorization === 'string' ? req.headers.authorization : null
@@ -202,7 +204,8 @@ export async function seafileMock(libs: SfLib[], port = 0): Promise<SeafileMock>
       }
       return json(200, { success, failed })
     }
-    m = /^\/api\/v2\.1\/repos\/sync-batch-move-item\/$/.exec(path)
+    if (path === '/api/v2.1/query-copy-move-progress/') return json(200, { done: true, failed: false, canceled: false })
+    m = /^\/api\/v2\.1\/repos\/(sync|async)-batch-(move|copy)-item\/$/.exec(path)
     if (m && req.method === 'POST') {
       const b = body() as { src_repo_id: string; src_parent_dir: string; src_dirents: string[]; dst_repo_id: string; dst_parent_dir: string }
       const from = lib(b.src_repo_id)
@@ -213,10 +216,28 @@ export async function seafileMock(libs: SfLib[], port = 0): Promise<SeafileMock>
         const p = `${b.src_parent_dir === '/' ? '' : b.src_parent_dir}/${n}`
         const f = from.files.get(p)
         if (!f) continue
-        from.files.delete(p)
-        to.files.set(`${b.dst_parent_dir === '/' ? '' : b.dst_parent_dir}/${n}`, f)
+        if (m[2] === 'move') from.files.delete(p)
+        to.files.set(`${b.dst_parent_dir === '/' ? '' : b.dst_parent_dir}/${n}`, m[2] === 'move' ? f : { ...f })
       }
-      return json(200, { success: true })
+      return json(200, m[1] === 'async' ? { task_id: `task-${Date.now()}` } : { success: true })
+    }
+    // Uploads (a drop of Immich photos on Files, say): a link, then a multipart POST to it.
+    m = /^\/api2\/repos\/([0-9a-f-]{36})\/upload-link\/$/.exec(path)
+    if (m && lib(m[1])) return json(200, `${base}/upload-api/${m[1]}`)
+    m = /^\/upload-api\/([0-9a-f-]{36})$/.exec(path)
+    // The browser posts there itself, from the site's origin (as to Seafile's file server).
+    if (m) {
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      res.setHeader('Access-Control-Allow-Headers', '*')
+    }
+    if (m && req.method === 'OPTIONS') return void res.writeHead(204).end()
+    if (m && lib(m[1]) && req.method === 'POST') {
+      const parts = await new Request('http://x', { method: 'POST', headers: { 'content-type': String(req.headers['content-type']) }, body: bytes }).formData()
+      const f = parts.get('file') as File | null
+      if (!f) return json(400, { error: 'no file' })
+      const dir = String(parts.get('parent_dir') ?? '/')
+      lib(m[1])!.files.set(`${dir === '/' ? '' : dir.replace(/\/$/, '')}/${f.name}`, { bytes: Buffer.from(await f.arrayBuffer()), mtime: Date.now() })
+      return json(200, [{ name: f.name, size: f.size }])
     }
     m = /^\/api2\/repos\/([0-9a-f-]{36})\/file\/$/.exec(path)
     if (m && lib(m[1])) {
