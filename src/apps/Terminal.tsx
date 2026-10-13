@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { useGoSuggestionState, useGolinksTemplate } from '../data/golinks'
 import { cvMode } from '../os/cvMode'
 import { browserMountPoint, useMounts } from '../data/mounts'
@@ -13,7 +13,7 @@ import { uploadFiles } from '../data/uploads'
 import { setAccent } from '../os/theme'
 import { useIsMobile } from '../os/useIsMobile'
 import { useMediaQuery } from '../os/useMediaQuery'
-import { useWM, type WinState } from '../os/wm'
+import { setCloseGuard, useWM, type WinState } from '../os/wm'
 import { complete, completions, escapeArg, fastfetch, runLine, WORD_RE, type Completion } from '../terminal/commands'
 import { ExtraKeys, useStickyMods, type ModKeys } from '../terminal/ExtraKeys'
 import { prepareFolder } from '../terminal/fs'
@@ -128,8 +128,34 @@ function Prompt({ cwd }: { cwd: string }) {
 
 let nextId = 1
 
-// Zoom for one window only, like a browser tab's: it scales the text size from the settings
-// (src/terminal/prefs.ts) and is forgotten when the window closes.
+/** Props a terminal sets on its own window: never requests from other apps. */
+const OWN_PROPS = ['vtTitle', 'tabs', 'tab']
+
+/**
+ * Other apps ask a terminal window to run something by setting its `run` prop ("Open in
+ * terminal" buttons). Each request runs once: React's dev-mode double effects, re-renders and
+ * the terminal's own props (a program's title, its tabs) must not repeat it; the same request
+ * made again does.
+ */
+function useRunRequests(win: WinState, run: (line: string) => void, off = false) {
+  const handled = useRef<WinState['props'] | null>(null)
+  const runRef = useRef(run)
+  runRef.current = run
+  useEffect(() => {
+    if (off) return
+    const prev = handled.current
+    const p = win.props
+    const others = (x: WinState['props']) => Object.keys(x).filter((k) => !OWN_PROPS.includes(k))
+    const ownOnly = !!prev && OWN_PROPS.some((k) => prev[k] !== p[k]) && others(prev).length === others(p).length && others(prev).every((k) => prev[k] === p[k])
+    if (ownOnly) handled.current = p
+    if (!p.run || handled.current === p) return
+    handled.current = p
+    runRef.current(p.run)
+  }, [win.props, off])
+}
+
+// Zoom for one tab only, like a browser tab's: it scales the text size from the settings
+// (src/terminal/prefs.ts) and is forgotten when the tab closes.
 const ZOOM_MIN = 0.5
 const ZOOM_MAX = 3
 const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3]
@@ -137,15 +163,60 @@ const clampZoom = (z: number) => Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN
 /** The next step up or down from `z`, which may sit between steps after a pinch. */
 const stepZoom = (z: number, dir: 1 | -1) => (dir > 0 ? (ZOOM_STEPS.find((s) => s > z + 0.001) ?? ZOOM_MAX) : ([...ZOOM_STEPS].reverse().find((s) => s < z - 0.001) ?? ZOOM_MIN))
 
-// "Terminal settings…" in a terminal window's menu (apps.tsx) opens the sheet in that window.
+// "Terminal settings…" in a terminal window's menu (apps.tsx) opens the sheet in that window's
+// front tab; "New tab" opens one.
 const settingsOpeners = new Map<number, () => void>()
-export const terminalMenu = (w: WinState): MenuItem[] => [{ label: 'Terminal settings…', onSelect: () => settingsOpeners.get(w.pid)?.() }]
+const tabOpeners = new Map<number, () => void>()
+export const terminalMenu = (w: WinState): MenuItem[] => [
+  { label: 'New tab', shortcut: 'Ctrl Shift T', onSelect: () => tabOpeners.get(w.pid)?.() },
+  { label: 'Terminal settings…', onSelect: () => settingsOpeners.get(w.pid)?.() },
+]
 
 /** What the key handling reads from a key press: a real one, or one from the extra keys row. */
 type KeyLike = Pick<KeyboardEvent<HTMLInputElement>, 'key' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey' | 'preventDefault' | 'stopPropagation'> & { code?: string }
 
-/** The window title a program set (OSC 0/2) while a stream is attached; else the usual (apps.tsx). */
-export const terminalTitle = (w: WinState) => (w.props.vtTitle ? String(w.props.vtTitle) : undefined)
+/** A window's tabs as saved in its props (`tabs`, `tab`): where each one was, and which was in front. */
+type SavedTab = { cwd: string; title: string }
+function savedTabs(props: WinState['props']): { tabs: SavedTab[]; active: number } {
+  try {
+    const list: unknown = JSON.parse(props.tabs ?? '[]')
+    if (Array.isArray(list) && list.length) {
+      const tabs = list.slice(0, 50).map((t: Partial<SavedTab> | null) => ({
+        cwd: typeof t?.cwd === 'string' && t.cwd.startsWith('/') ? t.cwd : HOME,
+        title: typeof t?.title === 'string' ? t.title : '',
+      }))
+      return { tabs, active: Math.min(tabs.length - 1, Math.max(0, Math.floor(Number(props.tab)) || 0)) }
+    }
+  } catch {
+    /* a broken list: start over with one tab */
+  }
+  return { tabs: [{ cwd: HOME, title: '' }], active: 0 }
+}
+
+/**
+ * The window's title: what a program in the front tab called itself (OSC 0/2), else where the
+ * front tab's shell is; else the usual (apps.tsx).
+ */
+export const terminalTitle = (w: WinState) => {
+  if (w.props.vtTitle) return String(w.props.vtTitle)
+  if (!w.props.tabs) return undefined
+  const { tabs, active } = savedTabs(w.props)
+  return `${HANDLE}@mvlos: ${prettyPath(tabs[active].cwd)}`
+}
+
+/**
+ * Ctrl+Shift+C copies the terminal's selection and Ctrl+Shift+V pastes, as in other terminals,
+ * also when selecting the scrollback took the focus out of the prompt. True when it took the key.
+ */
+function terminalCopyPaste(e: globalThis.KeyboardEvent, shell: TabShell): boolean {
+  if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return false
+  const k = e.key.toLowerCase()
+  if (k === 'c') return shell.copy()
+  // In the prompt, the browser pastes (and the prompt hands it on to a program that reads keys).
+  if (k !== 'v' || document.activeElement?.matches('input, textarea, [contenteditable="true"]')) return false
+  shell.paste()
+  return true
+}
 
 /** A theme colour (set by src/os/theme.ts) for programs that ask for the terminal's colours. */
 const themeColor = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
@@ -171,11 +242,36 @@ function loadHistory(): string[] {
  * the keyboard on its own there, since the app around it has its own fields. */
 export type EmbeddedTerminal = { cwd: string; onExit: () => void }
 
-export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?: () => void; embedded?: EmbeddedTerminal }) {
+/** What a tab's shell tells its window: where it is, the title a program set, what runs. */
+type TabReport = { cwd: string; program: string; command: string | null }
+/** What the window asks of the shell in its front tab (the keys it takes before the shell). */
+type TabShell = { copy: () => boolean; paste: () => void; focus: () => void }
+/** How one tab's shell and its window's tab strip (TerminalTabs, below) talk. */
+type TabLink = {
+  id: string
+  /** On screen; the others keep running out of sight. */
+  active: boolean
+  /** The boot terminal's greeting, in its first tab only. */
+  motd: boolean
+  /** Where the shell starts (a restored tab's own folder). */
+  cwd: string
+  /** A command another app asked the window to run (WinState.props.run), for the front tab. */
+  request: { id: number; line: string } | null
+  exit: () => void
+  newTab: () => void
+  report: (id: string, patch: Partial<TabReport>) => void
+  shell: (id: string, shell: TabShell | null) => void
+}
+
+function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLogout?: () => void; embedded?: EmbeddedTerminal; tab?: TabLink }) {
   const wm = useWM()
+  const active = tab?.active ?? true
+  const tabRef = useRef(tab)
+  tabRef.current = tab
+  const motd = !!win.props.motd && (tab?.motd ?? true)
   // Only the terminal that opens at boot greets the visitor; any terminal opened later starts clean.
   const [entries, setEntries] = useState<Entry[]>(() =>
-    win.props.motd
+    motd
       ? [
           { id: nextId++, kind: 'out', text: fastfetch({ windows: wm.windows }) },
           {
@@ -193,14 +289,16 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
   const mountsVersion = useMounts()
   const toldBrowser = useRef(false)
   useEffect(() => {
-    if (!win.props.motd || toldBrowser.current || browserMountPoint() !== HOME) return
+    if (!motd || toldBrowser.current || browserMountPoint() !== HOME) return
     toldBrowser.current = true
     setEntries((list) => [...list, { id: nextId++, kind: 'out', text: `{c:yellow}~ is kept in this browser only{/}: clearing the site's data deletes it. Link Seafile in Settings → Integrations to keep files for good ({c:green}df -h{/} shows the space).\n` }])
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mountsVersion])
-  const [cwd, setCwd] = useState(embedded?.cwd ?? HOME)
+  const [cwd, setCwd] = useState(embedded?.cwd ?? tab?.cwd ?? HOME)
   const [value, setValue] = useState('')
   const [running, setRunning] = useState(false)
+  // The command line last run, for the tab's title while it runs.
+  const [command, setCommand] = useState('')
   // A full-screen program (htop, cmatrix, watch) is drawing: no "working…" line under it.
   const [drawing, setDrawing] = useState(false)
   // An animation (sl) holds the prompt until it finishes, like the real one.
@@ -234,10 +332,10 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
   // The settings sheet, from the window menu, the right-click menu or `settings`.
   const [settingsOpen, setSettingsOpen] = useState(false)
   useEffect(() => {
-    if (embedded || onLogout) return
+    if (embedded || onLogout || !active) return
     settingsOpeners.set(win.pid, () => setSettingsOpen(true))
     return () => void settingsOpeners.delete(win.pid)
-  }, [win.pid, embedded, onLogout])
+  }, [win.pid, embedded, onLogout, active])
 
   // Tab opens a picker, like fzf: after `go <alias>` your go links, otherwise the commands, files
   // and folders the word could become (once there is more than one). It narrows as you type; Tab
@@ -293,6 +391,8 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
   propsRef.current = win.props
   const setVtTitle = (title: string | null) => {
     if (embedded || onLogout) return
+    // In a tab, the strip shows it, and the window's title is the front tab's.
+    if (tabRef.current) return tabRef.current.report(tabRef.current.id, { program: title ?? '' })
     if ((propsRef.current.vtTitle ?? '') === (title ?? '')) return
     wm.setProps(win.pid, { vtTitle: title ?? '' })
   }
@@ -338,12 +438,18 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
     return s
   }
 
-  // The window closing ends the stream.
-  useEffect(() => () => sessionRef.current?.detach(), [])
+  // The window (or the tab) closing ends the stream, and stops the command that runs.
+  useEffect(
+    () => () => {
+      sessionRef.current?.detach()
+      abortRef.current?.abort()
+    },
+    [],
+  )
 
   // A title left over from a stream before a reload goes.
   useEffect(() => {
-    if (win.props.vtTitle && !sessionRef.current) setVtTitle(null)
+    if (!tab && win.props.vtTitle && !sessionRef.current) setVtTitle(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -390,7 +496,8 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
   useEffect(() => {
     if (!onLogout) return
     const focusPrompt = () => inputRef.current?.focus({ preventScroll: true })
-    const onUp = () => !window.getSelection()?.toString() && focusPrompt()
+    // A moment later: a click inside a selection only collapses it after the mouse-up.
+    const onUp = () => setTimeout(() => !window.getSelection()?.toString() && focusPrompt())
     const onKey = (e: globalThis.KeyboardEvent) => {
       const active = document.activeElement
       if (active === inputRef.current || active?.matches('input, textarea, [contenteditable="true"]')) return
@@ -410,7 +517,7 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
   // of Firefox's find as you type, and the prompt takes focus again when the page gets it back
   // (from the address bar). Only printable keys, and only while this terminal is the front
   // window, so a game in front keeps its keys and the desktop keeps Delete, F2, Enter.
-  const front = !embedded && wm.focusedPid === win.pid
+  const front = !embedded && wm.focusedPid === win.pid && active
   const frontRef = useRef(front)
   frontRef.current = front
   useEffect(() => {
@@ -422,6 +529,8 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (!frontRef.current || e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey || !idle()) return
       if (document.querySelector('.spotlight, .om-panel, .ctx-menu, .t-sheet')) return // an overlay has the keys
+      // Typing ends a selection in the scrollback, as in any terminal.
+      if (selectedText()) window.getSelection()?.removeAllRanges()
       inputRef.current?.focus({ preventScroll: true })
     }
     const onFocus = () => frontRef.current && idle() && inputRef.current?.focus({ preventScroll: true })
@@ -505,33 +614,37 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
   }, [onLogout])
 
   // Focus the prompt whenever this window comes to the front (not on touch, where it pops the keyboard).
+  // The same when it becomes the front tab.
   useEffect(() => {
-    if (embedded || wm.focusedPid !== win.pid || matchMedia('(pointer: coarse)').matches) return
+    if (embedded || !active || wm.focusedPid !== win.pid || matchMedia('(pointer: coarse)').matches) return
     // Hover focus must not pull the caret out of something else being typed in (Spotlight, a rename).
-    const active = document.activeElement
-    if (active && active !== document.body && !active.closest('.window')) return
+    const el = document.activeElement
+    if (el && el !== document.body && !el.closest('.window')) return
     inputRef.current?.focus({ preventScroll: true })
-  }, [wm.focusedPid, win.pid])
+  }, [wm.focusedPid, win.pid, active])
 
-  // Other apps can ask the terminal to run something (e.g. "Open in terminal" buttons).
-  // Run each request once: React's dev-mode double effects (and re-renders) must not repeat it.
-  const handledProps = useRef<WinState['props'] | null>(null)
+  // Other apps can ask the terminal to run something (e.g. "Open in terminal" buttons). In a
+  // window with tabs, the window hands the request to its front tab.
+  useRunRequests(win, (line) => submit(line), !!tab)
+  const handledRequest = useRef<number | null>(null)
   useEffect(() => {
-    // A program's title changes the props too, but is not a new request.
-    const prev = handledProps.current
-    const keys = (p: WinState['props']) => Object.keys(p).filter((k) => k !== 'vtTitle')
-    const titleOnly = !!prev && prev.vtTitle !== win.props.vtTitle && keys(prev).length === keys(win.props).length && keys(prev).every((k) => prev[k] === win.props[k])
-    if (titleOnly) handledProps.current = win.props
-    if (!win.props.run || handledProps.current === win.props) return
-    handledProps.current = win.props
-    submit(win.props.run)
+    const req = tab?.request
+    if (!req || handledRequest.current === req.id) return
+    handledRequest.current = req.id
+    submit(req.line)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [win.props])
+  }, [tab?.request])
 
   useEffect(() => {
-    if (!embedded && !animating && wm.focusedPid === win.pid && !matchMedia('(pointer: coarse)').matches) inputRef.current?.focus({ preventScroll: true })
+    if (!embedded && active && !animating && wm.focusedPid === win.pid && !matchMedia('(pointer: coarse)').matches) inputRef.current?.focus({ preventScroll: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [animating])
+
+  // The tab strip's title and the window's: where the shell is, what runs, what a program called itself.
+  useEffect(() => {
+    const t = tabRef.current
+    t?.report(t.id, { cwd, command: busy ? command : null })
+  }, [cwd, busy, command])
 
   env.current.PWD = cwd
 
@@ -572,6 +685,7 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
     }
     abortRef.current = new AbortController()
     const signal = abortRef.current.signal
+    setCommand(trimmed)
     setRunning(true)
     // The size follows the window while the command runs, for programs that redraw (agents).
     const size = termSize()
@@ -594,7 +708,8 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
       openNewApp: wm.openNew,
       closeWindow: wm.close,
       clear: () => setEntries([]),
-      exit: () => setTimeout(() => (onLogout ? onLogout() : embedded ? embedded.onExit() : wm.close(win.pid)), 120),
+      // In a window with tabs, only this tab closes (the last one closes the window).
+      exit: () => setTimeout(() => (onLogout ? onLogout() : embedded ? embedded.onExit() : tabRef.current ? tabRef.current.exit() : wm.close(win.pid)), 120),
       console: !!onLogout,
       openSettings: onLogout ? undefined : () => setSettingsOpen(true),
       startx: onLogout
@@ -918,6 +1033,38 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
     })
   }
 
+  /** Copies the selection, if there is one here; true when it did. */
+  function copy() {
+    const text = selectedText()
+    if (!text) return false
+    void navigator.clipboard?.writeText(text).catch(() => {})
+    return true
+  }
+  const shellRef = useRef<TabShell>({ copy, paste, focus: () => {} })
+  shellRef.current = { copy, paste, focus: () => inputRef.current?.focus({ preventScroll: true }) }
+
+  // Ctrl+Shift+C copies and Ctrl+Shift+V pastes, as in other terminals, also with the focus out
+  // of the prompt (selecting the scrollback takes it). In a window with tabs, the window takes
+  // them for its front tab (TerminalTabs).
+  useEffect(() => {
+    if (tab || embedded) return
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (!(frontRef.current || onLogout) || !terminalCopyPaste(e, shellRef.current)) return
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => {
+    const t = tabRef.current
+    if (!t) return
+    t.shell(t.id, { copy: () => shellRef.current.copy(), paste: () => shellRef.current.paste(), focus: () => shellRef.current.focus() })
+    return () => t.shell(t.id, null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Files and folders dropped on the terminal paste their paths, quoted, like on a real one. Those
   // from the computer have no path here: they upload into the working folder first, if asked.
   useDropTarget(
@@ -1022,6 +1169,7 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
                 { label: 'Actual size', shortcut: 'Ctrl 0', disabled: zoom === 1, onSelect: () => zoomBy(1) },
               ],
             },
+            ...(tab ? [{ label: 'New tab', shortcut: 'Ctrl Shift T', onSelect: tab.newTab }] : []),
             { label: 'Terminal settings…', onSelect: () => setSettingsOpen(true) },
           ]),
     ]
@@ -1040,7 +1188,11 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
       style={fontPx === null ? undefined : { fontSize: fontPx }}
       onContextMenu={onMenu}
       onMouseUp={(e) => {
-        if (e.button === 0 && !window.getSelection()?.toString()) inputRef.current?.focus({ preventScroll: true })
+        // A click puts the caret on the prompt; a selection stays. A click inside an earlier
+        // selection only collapses it after the mouse-up (it could have been a drag of the
+        // selected text), so this looks a moment later.
+        if (e.button !== 0) return
+        setTimeout(() => !window.getSelection()?.toString() && inputRef.current?.focus({ preventScroll: true }))
       }}
     >
       {entries.map((e) => (
@@ -1182,7 +1334,8 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
     if (!coarse) inputRef.current?.focus({ preventScroll: true })
   }
   return (
-    <div className="term-wrap">
+    // A tab out of sight keeps its size (programs in it keep drawing for it), but not the keys.
+    <div className={tab ? `term-tab ${active ? 'is-active' : ''}` : 'term-wrap'} inert={!active} data-tab={tab?.id}>
       {screen}
       {zoomBadge && (
         <div className="t-zoom-badge" aria-live="polite">
@@ -1205,6 +1358,301 @@ export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?
           }}
         />
       )}
+    </div>
+  )
+}
+
+/**
+ * A terminal: in a window, with tabs (TerminalTabs); as the boot screen's text console or inside
+ * another app (Zed's panel), one shell on its own.
+ */
+export function Terminal({ win, onLogout, embedded }: { win: WinState; onLogout?: () => void; embedded?: EmbeddedTerminal }) {
+  return onLogout || embedded ? <TerminalSession win={win} onLogout={onLogout} embedded={embedded} /> : <TerminalTabs win={win} />
+}
+
+/** One tab of a terminal window. Its shell (cwd, scrollback, what runs) lives in its TerminalSession. */
+type Tab = TabReport & { id: string; n: number }
+
+let nextTab = 1
+const makeTab = (cwd: string): Tab => ({ id: `tab${nextTab}`, n: nextTab++, cwd, program: '', command: null })
+
+/** The folder as a tab shows it: its last part, ~ at home, / at the root. */
+function folderName(cwd: string) {
+  const p = prettyPath(cwd)
+  return p === '~' || p === '/' ? p : p.slice(p.lastIndexOf('/') + 1)
+}
+
+/** A tab's title: what a program in it called itself, else the program that runs, else its folder. */
+const tabTitle = (t: Tab) => t.program || t.command?.replace(/^sudo\s+/, '').split(/\s+/)[0] || folderName(t.cwd)
+
+/**
+ * A terminal window's tabs, like Ghostty's or Windows Terminal's: each one its own shell, all of
+ * them running whether in front or not. The strip shows with two or more (or always, in the
+ * settings). The tabs and their folders are kept in the window's props, so a reload brings them
+ * back (not what ran in them).
+ */
+function TerminalTabs({ win }: { win: WinState }) {
+  const wm = useWM()
+  const prefs = useTerminalPrefs()
+  const [first] = useState(() => {
+    const saved = savedTabs(win.props)
+    const list = saved.tabs.map((t) => makeTab(t.cwd))
+    return { list, active: list[saved.active].id }
+  })
+  const [tabs, setTabs] = useState<Tab[]>(first.list)
+  const [activeId, setActiveId] = useState(first.active)
+  const [dragId, setDragId] = useState<string | null>(null)
+  const tabsRef = useRef(tabs)
+  tabsRef.current = tabs
+  const activeRef = useRef(activeId)
+  activeRef.current = activeId
+  const front = tabs.find((t) => t.id === activeId) ?? tabs[0]
+  const shells = useRef(new Map<string, TabShell>())
+  const stripRef = useRef<HTMLDivElement>(null)
+
+  const report = useCallback((id: string, patch: Partial<TabReport>) => {
+    setTabs((list) => {
+      const i = list.findIndex((t) => t.id === id)
+      if (i < 0 || (Object.keys(patch) as (keyof TabReport)[]).every((k) => list[i][k] === patch[k])) return list
+      const next = list.slice()
+      next[i] = { ...list[i], ...patch }
+      return next
+    })
+  }, [])
+  const shell = useCallback((id: string, s: TabShell | null) => void (s ? shells.current.set(id, s) : shells.current.delete(id)), [])
+
+  /** Brings a tab to the front, its prompt focused (not on touch, where that pops the keyboard). */
+  const select = (id: string) => {
+    setActiveId(id)
+    requestAnimationFrame(() => !matchMedia('(pointer: coarse)').matches && shells.current.get(id)?.focus())
+  }
+  /** A new tab at the end, in the front tab's folder. */
+  const addTab = () => {
+    const t = makeTab(tabsRef.current.find((x) => x.id === activeRef.current)?.cwd ?? HOME)
+    setTabs((list) => [...list, t])
+    select(t.id)
+  }
+  /** Closes a tab without asking (`exit`); the last one closes the window. */
+  const removeTab = (id: string) => {
+    const list = tabsRef.current
+    const i = list.findIndex((t) => t.id === id)
+    if (i < 0) return
+    if (list.length === 1) return wm.close(win.pid)
+    const next = list.filter((t) => t.id !== id)
+    tabsRef.current = next
+    setTabs(next)
+    if (activeRef.current === id) select(next[Math.min(i, next.length - 1)].id)
+  }
+  /** Closes a tab, asking first when a program runs in it. */
+  const closeTab = async (id: string) => {
+    const t = tabsRef.current.find((x) => x.id === id)
+    if (!t) return
+    if (t.command) {
+      const ok = await ask({
+        title: `Close “${tabTitle(t)}”?`,
+        body: (
+          <>
+            <code>{t.command}</code> is still running in this tab. Closing the tab stops it.
+          </>
+        ),
+        confirm: 'Close tab',
+        danger: true,
+      })
+      if (!ok) return
+    }
+    removeTab(id)
+  }
+  /** The next tab (1) or the one before (-1), round the end. */
+  const step = (by: number) => {
+    const list = tabsRef.current
+    const i = list.findIndex((t) => t.id === activeRef.current)
+    select(list[(i + by + list.length) % list.length].id)
+  }
+  const actions = useRef({ addTab, closeTab, step, select })
+  actions.current = { addTab, closeTab, step, select }
+
+  // The window's menu opens a tab here.
+  useEffect(() => {
+    tabOpeners.set(win.pid, () => actions.current.addTab())
+    return () => void tabOpeners.delete(win.pid)
+  }, [win.pid])
+
+  // Other apps' requests go to the tab in front.
+  const [request, setRequest] = useState<{ id: number; line: string; tab: string } | null>(null)
+  const requests = useRef(0)
+  useRunRequests(win, (line) => setRequest({ id: ++requests.current, line, tab: activeRef.current }))
+
+  // The tabs, the front one and its program's title, kept with the window (restored on reload).
+  const propsRef = useRef(win.props)
+  propsRef.current = win.props
+  useEffect(() => {
+    const saved = JSON.stringify(tabs.map((t): SavedTab => ({ cwd: t.cwd, title: folderName(t.cwd) })))
+    const at = String(Math.max(0, tabs.findIndex((t) => t.id === activeId)))
+    const p = propsRef.current
+    if (p.tabs === saved && p.tab === at && (p.vtTitle ?? '') === front.program) return
+    wm.setProps(win.pid, { tabs: saved, tab: at, vtTitle: front.program })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabs, activeId])
+
+  // Closing the window with more than one tab asks once.
+  useEffect(() => {
+    setCloseGuard(win.pid, () => {
+      const list = tabsRef.current
+      if (list.length < 2) return true
+      const busy = list.filter((t) => t.command).length
+      return ask({
+        title: `Close ${list.length} tabs?`,
+        body: busy ? `${busy === 1 ? 'A program is' : `${busy} programs are`} still running in them, and stop.` : 'Their shells and scrollback close with the window.',
+        confirm: 'Close all',
+        danger: true,
+      })
+    })
+    return () => setCloseGuard(win.pid, null)
+  }, [win.pid])
+
+  // The keys, while this window is in front: ahead of the shell and of programs, as in other
+  // terminals. Ctrl+Shift+T new tab, Ctrl+Shift+W close it, Ctrl+Tab / Ctrl+Shift+Tab and
+  // Ctrl+PageDown / PageUp next and previous, Ctrl+Shift+1…9 that tab (9 the last).
+  const frontRef = useRef(false)
+  frontRef.current = wm.focusedPid === win.pid
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (!frontRef.current || !e.ctrlKey || e.metaKey || e.altKey) return
+      if (document.querySelector('.spotlight, .om-panel, .ctx-menu, .dlg-modal')) return
+      // A field outside this window (Spotlight, a rename) keeps its keys.
+      const target = e.target instanceof Element ? e.target : null
+      if (target && target !== document.body && !target.closest(`.window[data-pid="${win.pid}"]`)) return
+      const a = actions.current
+      const k = e.key.toLowerCase()
+      const digit = /^Digit([1-9])$/.exec(e.code)
+      let act: (() => void) | null = null
+      if (e.shiftKey && k === 't') act = a.addTab
+      else if (e.shiftKey && k === 'w') act = () => void a.closeTab(activeRef.current)
+      else if (e.key === 'Tab') act = () => a.step(e.shiftKey ? -1 : 1)
+      else if (!e.shiftKey && (e.key === 'PageDown' || e.key === 'PageUp')) act = () => a.step(e.key === 'PageDown' ? 1 : -1)
+      else if (e.shiftKey && digit) {
+        const list = tabsRef.current
+        const n = Number(digit[1])
+        const t = n === 9 ? list[list.length - 1] : list[n - 1]
+        act = () => t && a.select(t.id)
+      } else {
+        const s = shells.current.get(activeRef.current)
+        if (!s || !terminalCopyPaste(e, s)) return
+      }
+      e.preventDefault()
+      e.stopPropagation()
+      act?.()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [win.pid])
+
+  /** A press on a tab: brings it to the front; with the mouse, dragging it along the strip moves it. */
+  const onTabDown = (e: ReactPointerEvent<HTMLDivElement>, id: string) => {
+    if (e.button !== 0 || e.pointerType !== 'mouse') return
+    select(id)
+    const el = e.currentTarget
+    const x0 = e.clientX
+    let moving = false
+    try {
+      el.setPointerCapture(e.pointerId)
+    } catch {
+      /* the button is already up */
+    }
+    const move = (ev: PointerEvent) => {
+      if (!moving && Math.abs(ev.clientX - x0) < 6) return
+      if (!moving) setDragId(id)
+      moving = true
+      // The tab takes the place of the one under the pointer (all tabs are as wide).
+      const over = [...(stripRef.current?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])].find((t) => {
+        const r = t.getBoundingClientRect()
+        return ev.clientX >= r.left && ev.clientX < r.right
+      })?.dataset.tab
+      if (!over || over === id) return
+      setTabs((list) => {
+        const from = list.findIndex((t) => t.id === id)
+        const to = list.findIndex((t) => t.id === over)
+        if (from < 0 || to < 0) return list
+        const next = list.slice()
+        next.splice(to, 0, ...next.splice(from, 1))
+        return next
+      })
+    }
+    const up = () => {
+      el.removeEventListener('pointermove', move)
+      el.removeEventListener('pointerup', up)
+      el.removeEventListener('pointercancel', up)
+      setDragId(null)
+    }
+    el.addEventListener('pointermove', move)
+    el.addEventListener('pointerup', up)
+    el.addEventListener('pointercancel', up)
+  }
+
+  const showStrip = tabs.length > 1 || prefs.tabBar === 'always'
+  // The shells stay in the order they were opened, so moving a tab never moves (and resets) one.
+  const byAge = [...tabs].sort((a, b) => a.n - b.n)
+  return (
+    <div className="term-wrap">
+      {showStrip && (
+        <div
+          className="term-tabs"
+          role="tablist"
+          aria-label="Tabs"
+          ref={stripRef}
+          onDoubleClick={(e) => e.target === e.currentTarget && addTab()}
+          // On Linux, letting go of the middle button pastes the last selected text into the prompt.
+          onMouseUp={(e) => e.button === 1 && e.preventDefault()}
+        >
+          {tabs.map((t) => {
+            const title = tabTitle(t)
+            return (
+              <div
+                key={t.id}
+                role="tab"
+                aria-selected={t.id === activeId}
+                data-tab={t.id}
+                className={`term-tabs-tab ${t.id === activeId ? 'is-active' : ''} ${t.id === dragId ? 'is-dragging' : ''}`}
+                title={title}
+                onPointerDown={(e) => onTabDown(e, t.id)}
+                // Keeps the focus in the shell; the middle button would start scrolling.
+                onMouseDown={(e) => e.button !== 2 && e.preventDefault()}
+                onClick={() => t.id !== activeId && select(t.id)}
+                onAuxClick={(e) => e.button === 1 && void closeTab(t.id)}
+                onDoubleClick={(e) => e.stopPropagation()}
+              >
+                {t.command && <span className="term-tabs-busy" aria-label="running" />}
+                <span className="term-tabs-title">{title}</span>
+                <button type="button" className="term-tabs-close" aria-label={`Close ${title}`} onPointerDown={(e) => e.stopPropagation()} onClick={() => void closeTab(t.id)}>
+                  ×
+                </button>
+              </div>
+            )
+          })}
+          <button type="button" className="term-tabs-new" aria-label="New tab" title="New tab (Ctrl+Shift+T)" onMouseDown={(e) => e.preventDefault()} onClick={addTab}>
+            +
+          </button>
+        </div>
+      )}
+      <div className="term-stack">
+        {byAge.map((t) => (
+          <TerminalSession
+            key={t.id}
+            win={win}
+            tab={{
+              id: t.id,
+              active: t.id === activeId,
+              motd: t.id === first.list[0].id,
+              cwd: t.cwd,
+              request: request?.tab === t.id ? request : null,
+              exit: () => removeTab(t.id),
+              newTab: addTab,
+              report,
+              shell,
+            }}
+          />
+        ))}
+      </div>
     </div>
   )
 }

@@ -79,7 +79,7 @@ export function TerminalPane() {
       onAppearance={() => wm.open('settings', { section: 'appearance', t: now() })}
       zoom={
         <SetGroup title="Zoom">
-          <p className="muted set-help">Zoom is for one terminal window at a time, until it closes: {ZOOM_HELP} The window's own settings (its menu → Terminal settings…, or the settings command) show it too.</p>
+          <p className="muted set-help">Zoom is for one terminal tab at a time, until it closes: {ZOOM_HELP} The window's own settings (its menu → Terminal settings…, or the settings command) show it too.</p>
         </SetGroup>
       }
     />
