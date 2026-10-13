@@ -860,6 +860,56 @@ function TechTreeButton({ hud, onOpen }: { hud: Hud; onOpen: () => void }) {
   )
 }
 
+/** One page of a building's build panel: which of the two groups it belongs to, and how it looks. */
+type BpTab = { id: string; group: 'units' | 'buildings'; label: string; badge?: ReactNode; tip: string }
+
+const BP_GROUP = {
+  units: { label: 'Units', icon: 'fleet' as IconName, tip: 'Units: the ships this building builds.' },
+  buildings: { label: 'Buildings', icon: 'yard' as IconName, tip: 'Buildings: yards for engineers to put up, and the expansions this building takes.' },
+}
+
+/**
+ * The same build panel on every building (Command Station, Frigate Yard, Capital Yard): two square
+ * buttons down the left, Units and Buildings, and across the top of what is shown the pages of
+ * whichever is picked. A group a building has nothing in isn't offered. `badges`: a small count on a group's button.
+ */
+function BuildPanel({ tabs, page, onPick, badges = {}, children }: { tabs: BpTab[]; page: string; onPick: (id: string) => void; badges?: Partial<Record<'units' | 'buildings', ReactNode>>; children: ReactNode }) {
+  const cur = tabs.find((t) => t.id === page) ?? tabs[0]
+  const groups = (['units', 'buildings'] as const).filter((g) => tabs.some((t) => t.group === g))
+  // Each group opens on the page last used in it.
+  const last = useRef<Partial<Record<'units' | 'buildings', string>>>({})
+  last.current[cur.group] = cur.id
+  const inGroup = tabs.filter((t) => t.group === cur.group)
+  return (
+    <div className="ew-yardbody ew-bp">
+      <div className="ew-bp-groups" role="tablist" aria-orientation="vertical" aria-label="Units or buildings">
+        {groups.map((g) => {
+          const mine = tabs.filter((t) => t.group === g)
+          return (
+            <button key={g} role="tab" aria-selected={cur.group === g} className={cur.group === g ? 'is-on' : ''} data-tip={BP_GROUP[g].tip}
+              onClick={() => onPick(mine.find((t) => t.id === last.current[g])?.id ?? mine[0].id)}>
+              <Icon name={BP_GROUP[g].icon} size={22} />
+              <span>{BP_GROUP[g].label}</span>
+              {badges[g] !== undefined && <em>{badges[g]}</em>}
+            </button>
+          )
+        })}
+      </div>
+      <div className="ew-bp-main">
+        <div className="ew-bp-tabs" role="tablist" aria-label={BP_GROUP[cur.group].label}>
+          {inGroup.map((t) => (
+            <button key={t.id} role="tab" aria-selected={t.id === cur.id} className={t.id === cur.id ? 'is-on' : ''} onClick={() => onPick(t.id)} data-tip={t.tip}>
+              <span>{t.label}</span>
+              {t.badge !== undefined && <em>{t.badge}</em>}
+            </button>
+          ))}
+        </div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
 function StationDetail(p: DetailProps & { st: Unit }) {
   const { w, me, st, hud, faction } = p
   // Ships the station isn't upgraded for yet stay out of the shipyard, unless the setting shows them.
@@ -872,7 +922,7 @@ function StationDetail(p: DetailProps & { st: Unit }) {
   const queued = (id: string) => hud.queue.filter((q) => q.unit === id).length
   // Warships and strike craft on separate pages (and, with hybrid bases, the yards), picked on the
   // left; the choice is remembered.
-  const [page, setPage] = useState<'warships' | 'strike' | 'yards' | 'expansions'>(() => {
+  const [chosen, setPage] = useState<'warships' | 'strike' | 'yards' | 'expansions'>(() => {
     try {
       const v = localStorage.getItem('mvlos.empires.yardpage')
       return v === 'strike' ? 'strike' : (v === 'yards' || v === 'expansions') && w.hybrid ? v : 'warships'
@@ -880,6 +930,8 @@ function StationDetail(p: DetailProps & { st: Unit }) {
       return 'warships'
     }
   })
+  // The yards and expansions pages exist only with hybrid bases.
+  const page = !w.hybrid && (chosen === 'yards' || chosen === 'expansions') ? 'warships' : chosen
   const pick = (pg: 'warships' | 'strike' | 'yards' | 'expansions') => {
     setPage(pg)
     try {
@@ -894,6 +946,7 @@ function StationDetail(p: DetailProps & { st: Unit }) {
   const strike = all.filter(small)
   const warships = all.filter((t) => !small(t))
   const ships = page === 'strike' ? strike : warships
+  const myYard = w.units.find((u) => !u.dead && u.owner === me && u.t.tier === 'yard' && !u.site)
   const grid = useRef<HTMLDivElement>(null)
   // The wheel scrolls the cards sideways when they don't all fit.
   useEffect(() => {
@@ -929,46 +982,38 @@ function StationDetail(p: DetailProps & { st: Unit }) {
             {w.hybrid ? <BaseTabs w={w} me={me} cur={st.id} onSelect={p.onSelect} /> : <h5 className="ew-yardtitle">Shipyard</h5>}
             <TechTreeButton hud={hud} onOpen={p.onTechTree} />
           </header>
-          <div className="ew-yardbody">
-            <div className="ew-yardtabs" role="tablist" aria-label="Which ships">
-              <button role="tab" aria-selected={page === 'warships'} className={page === 'warships' ? 'is-on' : ''} onClick={() => pick('warships')}
-                data-tip={w.hybrid ? 'Warships: none are built at the Command Station any more. Frigates and corvettes come from the Frigate Yard, cruisers and flagships from the Capital Yard.' : 'Warships: corvettes, frigates, cruisers and dreadnoughts. Built for the fleet inventory, or straight to the station with the small jump button.'}>
-                <Icon name="fleet" size={16} />
-                <span>Warships</span>
-                <em>{warships.length}</em>
-              </button>
-              <button role="tab" aria-selected={page === 'strike'} className={page === 'strike' ? 'is-on' : ''} onClick={() => pick('strike')}
-                data-tip={`Strike craft: fighters and bombers${w.hybrid ? ', and engineers,' : ''} launch from the station's hangar; gunships go to the fleet inventory, or jump in at the station with the small button.`}>
-                <Icon name="attack" size={16} />
-                <span>Strike craft</span>
-                <em>{strike.length}</em>
-              </button>
-              {w.hybrid && (
-                <button role="tab" aria-selected={page === 'yards'} className={page === 'yards' ? 'is-on' : ''} onClick={() => pick('yards')}
-                  data-tip="Yards: engineers build them within the Command Station's build radius. The Frigate Yard (station level 2) builds frigates and corvettes, the Capital Yard (level 3) cruisers and flagships.">
-                  <Icon name="slip" size={16} />
-                  <span>Yards</span>
-                </button>
-              )}
-              {w.hybrid && (
-                <button role="tab" aria-selected={page === 'expansions'} className={page === 'expansions' ? 'is-on' : ''} onClick={() => pick('expansions')}
-                  data-tip="Expansions: modules the Command Station builds onto itself, one at a time: a Strike hangar for bombers, a Sensor array and a Shield core.">
-                  <Icon name="yard" size={16} />
-                  <span>Expansions</span>
-                  <em>{st.xm?.length ?? 0}/{modulesFor('station').length}</em>
-                </button>
-              )}
-            </div>
-            <div className="ew-yard" ref={grid}>
-              {page === 'yards' && yardsFor(faction).map((t) => <YardCard key={t.id} w={w} me={me} t={t} onPlace={p.onPlace} onSelect={p.onSelect} />)}
-              {page === 'expansions' && <ExpansionCards w={w} me={me} u={st} onExpand={p.onExpand} onCancel={p.onCancelExpand} />}
-              {(page === 'warships' || page === 'strike') && ships.map((t) => (
-                <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id)} whyReserve={cantBuild(w, me, t.id, true)} level={hud.level} queued={queued(t.id)} onBuild={p.onBuild} onUnqueue={p.onUnqueue}
-                  research={t.tech && !hud.techs.includes(t.tech) ? TECH[t.tech].name : null} need={moduleNeed(w, me, t, st)} />
-              ))}
-              {page === 'warships' && w.hybrid && !ships.length && <span className="ew-muted ew-small ew-yardnote">Warships come from the yards: the Frigate Yard builds frigates and corvettes, the Capital Yard cruisers and flagships. Engineers build them (Yards tab).</span>}
-            </div>
-          </div>
+          <BuildPanel
+            tabs={[
+              { id: 'warships', group: 'units', label: 'Warships', badge: warships.length,
+                tip: w.hybrid ? 'Warships: none are built at the Command Station any more. Frigates and corvettes come from the Frigate Yard, cruisers and flagships from the Capital Yard.' : 'Warships: corvettes, frigates, cruisers and dreadnoughts. Built for the fleet inventory, or straight to the station with the small jump button.' },
+              { id: 'strike', group: 'units', label: 'Strike craft', badge: strike.length,
+                tip: `Strike craft: fighters and bombers${w.hybrid ? ', and engineers,' : ''} launch from the station's hangar; gunships go to the fleet inventory, or jump in at the station with the small button.` },
+              ...(w.hybrid ? [
+                { id: 'yards', group: 'buildings' as const, label: 'Yards', tip: "Yards: engineers build them within the Command Station's build radius. The Frigate Yard (station level 2) builds frigates and corvettes, the Capital Yard (level 3) cruisers and flagships." },
+                { id: 'expansions', group: 'buildings' as const, label: 'Expansions', badge: `${st.xm?.length ?? 0}/${modulesFor('station').length}`, tip: 'Expansions: modules the Command Station builds onto itself, one at a time: a Strike hangar for bombers, a Sensor array and a Shield core.' },
+              ] : []),
+            ]}
+            page={page} onPick={(id) => pick(id as typeof page)} badges={w.hybrid ? { buildings: `${st.xm?.length ?? 0}/${modulesFor('station').length}` } : {}}>
+            {page === 'warships' && w.hybrid && !ships.length ? (
+              <div className="ew-bp-empty">
+                <span>Warships are built at your yards.</span>
+                {myYard ? (
+                  <button className="ew-chip" onClick={() => p.onSelect(myYard.id)}>Select the {myYard.t.name}</button>
+                ) : (
+                  <button className="ew-chip" onClick={() => pick('yards')}>Open Buildings › Yards</button>
+                )}
+              </div>
+            ) : (
+              <div className="ew-yard" ref={grid}>
+                {page === 'yards' && yardsFor(faction).map((t) => <YardCard key={t.id} w={w} me={me} t={t} onPlace={p.onPlace} onSelect={p.onSelect} />)}
+                {page === 'expansions' && <ExpansionCards w={w} me={me} u={st} onExpand={p.onExpand} onCancel={p.onCancelExpand} />}
+                {(page === 'warships' || page === 'strike') && ships.map((t) => (
+                  <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id)} whyReserve={cantBuild(w, me, t.id, true)} level={hud.level} queued={queued(t.id)} onBuild={p.onBuild} onUnqueue={p.onUnqueue}
+                    research={t.tech && !hud.techs.includes(t.tech) ? TECH[t.tech].name : null} need={moduleNeed(w, me, t, st)} />
+                ))}
+              </div>
+            )}
+          </BuildPanel>
         </div>
       </Frame>
     </div>
@@ -1201,7 +1246,7 @@ const NO_DRAG = 'button, input, select, textarea, canvas, a, [data-nodrag]'
  * battle. Double-clicking an empty part puts it back. `bare` leaves the frame to the content (a
  * panel that draws its own); otherwise it gets one with `title` in its header.
  */
-export function Floating({ id, title, at, onClose, aside, onMove, bare, className = '', layout = battleLayout, children }: {
+export function Floating({ id, title, at, onClose, aside, onMove, bare, className = '', layout = battleLayout, vars, children }: {
   id: string
   /** Where its position is kept: the battle's layout, or the galaxy map's. */
   layout?: LayoutStore
@@ -1212,6 +1257,8 @@ export function Floating({ id, title, at, onClose, aside, onMove, bare, classNam
   onMove?: (box: { x: number; y: number; w: number; h: number }, root: { w: number; h: number }) => void
   bare?: boolean
   className?: string
+  /** CSS custom properties for its stylesheet rules (the unit card's room beside the map, say). */
+  vars?: Record<`--${string}`, string>
   children: ReactNode
 }) {
   layout.useLayoutVersion()
@@ -1269,7 +1316,7 @@ export function Floating({ id, title, at, onClose, aside, onMove, bare, classNam
     if (lastPointer.current === 'touch') return
     if (!(e.target as Element).closest(NO_DRAG)) layout.setPanelPos(id, undefined)
   }
-  const style: React.CSSProperties = pos ? { left: pos.x, top: pos.y } : at
+  const style: React.CSSProperties = { ...(pos ? { left: pos.x, top: pos.y } : at), ...vars }
   return (
     <div ref={box} className={`ew-float ${bare ? 'is-bare' : ''} ${pos ? 'is-moved' : ''} ${className}`} style={style} onPointerDown={grab} onDoubleClick={reset}>
       {bare ? (
@@ -1651,14 +1698,14 @@ function BaseTabs({ w, me, cur, onSelect }: { w: World; me: Owner; cur: number; 
     <div className="ew-basetabs" role="tablist" aria-label="Station and yards">
       {st && (
         <button role="tab" aria-selected={cur === st.id} className={cur === st.id ? 'is-on' : ''} onClick={() => onSelect(st.id)} data-tip={`Command Station: strike craft, gunships and engineers, and its expansions (${keyName(keys.station)})`}>
-          <Icon name="yard" size={14} /> Command Station
+          <Icon name="yard" size={14} /> Command<span className="ew-opt"> Station</span>
         </button>
       )}
       {yards.map((y) => {
         const cap = worksOf(y.t) === 'cyard'
         return (
           <button key={y.id} role="tab" aria-selected={cur === y.id} className={cur === y.id ? 'is-on' : ''} onClick={() => onSelect(y.id)} data-tip={`${y.t.name}: ${cap ? 'cruisers and flagships' : 'frigates and corvettes'}, and its expansions (${keyName(cap ? keys.cyard : keys.yard)})`}>
-            <Icon name="slip" size={14} /> {cap ? 'Capital Yard' : 'Frigate Yard'}{building(y) ? ` ${Math.round((1 - y.building / y.t.build) * 100)}%` : ''}
+            <Icon name="slip" size={14} /> {cap ? 'Capital' : 'Frigate'}<span className="ew-opt"> Yard</span>{building(y) ? ` ${Math.round((1 - y.building / y.t.build) * 100)}%` : ''}
           </button>
         )
       })}
@@ -1824,21 +1871,14 @@ function YardDetail(p: DetailProps & { y: Unit }) {
               {cantConstruct(w, me, y) === null && !crews && !coming && <small className="ew-muted">Select engineers and right-click it (long-press on touch).</small>}
             </div>
           ) : (
-            <div className="ew-yardbody">
-              <div className="ew-yardtabs" role="tablist" aria-label="Ships or expansions">
-                <button role="tab" aria-selected={page === 'ships'} className={page === 'ships' ? 'is-on' : ''} onClick={() => pick('ships')}
-                  data-tip={kind === 'cyard' ? 'Ships: cruisers, and flagships once the Capital slip stands (station level 4).' : 'Ships: frigates and corvettes.'}>
-                  <Icon name="fleet" size={16} />
-                  <span>Ships</span>
-                  <em>{ships.length}</em>
-                </button>
-                <button role="tab" aria-selected={page === 'expansions'} className={page === 'expansions' ? 'is-on' : ''} onClick={() => pick('expansions')}
-                  data-tip={`Expansions: modules the yard builds onto itself, one at a time (${modulesFor(kind).map((m) => m.name).join(', ')}).`}>
-                  <Icon name="yard" size={16} />
-                  <span>Expansions</span>
-                  <em>{y.xm?.length ?? 0}/{modulesFor(kind).length}</em>
-                </button>
-              </div>
+            <BuildPanel
+              tabs={[
+                { id: 'ships', group: 'units', label: 'Warships', badge: ships.length,
+                  tip: kind === 'cyard' ? 'Warships: cruisers, and flagships once the Capital slip stands (station level 4).' : 'Warships: frigates and corvettes.' },
+                { id: 'expansions', group: 'buildings', label: 'Expansions', badge: `${y.xm?.length ?? 0}/${modulesFor(kind).length}`,
+                  tip: `Expansions: modules the yard builds onto itself, one at a time (${modulesFor(kind).map((m) => m.name).join(', ')}).` },
+              ]}
+              page={page} onPick={(id) => pick(id as typeof page)}>
               <div className="ew-yard">
                 {page === 'expansions' && <ExpansionCards w={w} me={me} u={y} onExpand={p.onExpand} onCancel={p.onCancelExpand} />}
                 {page === 'ships' && ships.map((t) => (
@@ -1847,7 +1887,7 @@ function YardDetail(p: DetailProps & { y: Unit }) {
                     research={t.tech && !hud.techs.includes(t.tech) ? TECH[t.tech].name : null} need={moduleNeed(w, me, t, y)} />
                 ))}
               </div>
-            </div>
+            </BuildPanel>
           )}
         </div>
       </Frame>

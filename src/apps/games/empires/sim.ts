@@ -1871,7 +1871,12 @@ function construction(w: World, dt: number) {
     if (u.order.k === 'construct') {
       const t = w.byId.get(u.order.id)
       if (cantConstruct(w, u.owner, t)) {
+        // Done (built, rebuilt or mended whole) with nothing queued after it: stay by the structure, on
+        // guard, which keeps them mending it and the ones near it when they are hurt (see jobNear).
+        // Unarmed, they never chase anyone from there.
+        const stay = !u.queue.length && !!t && !t.dead && t.owner === u.owner && !isShip(t.t)
         nextOrder(u, u.x, u.y)
+        if (stay) issue(u, { k: 'guard', id: t!.id })
         continue
       }
       if (d2(t!.x, t!.y, u.x, u.y) > sq(radius(t!.t) + ENGINEERS.reach)) continue

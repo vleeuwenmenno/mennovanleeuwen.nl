@@ -241,3 +241,12 @@
     height: 22px;
   }
 }
+
+/* The build panel's tabs take a row of the short phone sheet: one row of cards, scrolling sideways. */
+@media (pointer: coarse), (max-width: 719px) {
+@container (max-width: 680px) {
+  .ew-battle .ew-detailfloat .ew-yard {
+    grid-template-rows: 64px;
+  }
+}
+}

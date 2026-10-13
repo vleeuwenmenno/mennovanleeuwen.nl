@@ -261,6 +261,42 @@ const buildTime = (squads: number) => {
   check('and the yards finished in both', yardsOf(a, 0).length === 1 && yardsOf(c, 0).length === 1 && yardsOf(a, 1).length === 1)
 }
 
+// --- Engineers guard what they built ----------------------------------------------------------------------
+{
+  const w = fresh()
+  const spot = spotFor(w)
+  const eng = engineers(w)
+  check('engineers place a yard', cmdPlace(w, 0, ids(eng), RY, spot.x, spot.y) === null)
+  check('the yard goes up', run(w, 240, () => yardsOf(w, 0).length > 0))
+  run(w, 1)
+  const y = yardsOf(w, 0)[0]
+  check('the squad that finished it is on guard at it', eng.every((u) => u.order.k === 'guard' && u.order.id === y.id), eng.map((u) => u.order.k).join(','))
+  check('and unarmed engineers pick no fights', eng.every((u) => !u.target))
+  // Damaged, it is mended by the guards.
+  y.hull = y.hullMax * 0.6
+  run(w, 3)
+  const hurt = y.hull
+  run(w, 30)
+  check('a guard squad mends the yard after it takes damage', y.hull > hurt + 1, `${Math.round(hurt)} to ${Math.round(y.hull)} of ${Math.round(y.hullMax)}`)
+  check('and goes back on guard afterwards', run(w, 60, () => eng.every((u) => u.order.k === 'guard')))
+  // An enemy warship nearby doesn't draw them off.
+  const foe = spawnGroup(w, 'd-gunship', 1, y.x + 400, y.y, Math.PI)[0]
+  run(w, 10)
+  check('engineers do not go off to fight', eng.every((u) => (u.order.k === 'guard' || u.order.k === 'construct') && !u.target), eng.map((u) => u.order.k).join(','))
+  foe.dead = true
+
+  // Orders queued after the building still win: guard only once the queue is empty.
+  const w2 = fresh()
+  const spot2 = spotFor(w2)
+  const eng2 = engineers(w2)
+  cmdPlace(w2, 0, ids(eng2), RY, spot2.x, spot2.y)
+  const away = { x: st(w2).x - 300, y: st(w2).y }
+  runCmd(w2, 0, cmd('move', ids(eng2), away.x, away.y, false, true))
+  run(w2, 240, () => yardsOf(w2, 0).length > 0)
+  run(w2, 1)
+  check('a queued move after the build is taken instead of guarding', eng2.every((u) => u.order.k === 'move' || u.order.k === 'idle'), eng2.map((u) => u.order.k).join(','))
+}
+
 // --- Free rotation -----------------------------------------------------------------------------------------
 {
   const w = fresh()

@@ -2387,7 +2387,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         {/* The bottom of the screen: a shade for the panels to sit on; the unit card (beside the map
             while it sits in its corner) and the selection float like the map, and can be moved. */}
         <div className="ew-dockshade" />
-        <Floating id="detail" bare at={{ left: mapRoom ? mapRoom + 12 : 6, bottom: 6 }} className="ew-detailfloat">
+        <Floating id="detail" bare at={{ left: mapRoom ? mapRoom + 12 : 6, bottom: 6 }} vars={{ '--ew-dleft': `${mapRoom ? mapRoom + 12 : 6}px` }} className="ew-detailfloat">
             <DetailPanel w={w} me={me} sel={sel} hud={hud} faction={myFaction}
               onOnly={(id, drop) => {
                 const keep = sel.filter((u) => (drop ? u.t.id !== id : u.t.id === id)).map((u) => u.id)
