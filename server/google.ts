@@ -138,7 +138,7 @@ async function calendarApi<T>(user: User, path: string, init: { method?: string;
   if (res.status === 401) throw new HttpError(409, 'Google access was revoked; connect again')
   if (res.status === 403 && init.method && init.method !== 'GET') {
     const reason = ((await res.json().catch(() => null)) as { error?: { errors?: { reason?: string }[] } } | null)?.error?.errors?.[0]?.reason
-    throw new HttpError(403, reason === 'insufficientPermissions' ? 'Google only allowed reading: connect Google Calendar again (Settings → Calendar) to edit' : 'Google refused: you cannot change this calendar')
+    throw new HttpError(403, reason === 'insufficientPermissions' ? 'Google only allowed reading: connect Google Calendar again (Settings → Integrations → Calendars) to edit' : 'Google refused: you cannot change this calendar')
   }
   if (res.status === 404 || res.status === 410) throw new HttpError(404, 'That event is gone from Google Calendar')
   if (!res.ok) throw new HttpError(502, `Google Calendar answered ${res.status}`)

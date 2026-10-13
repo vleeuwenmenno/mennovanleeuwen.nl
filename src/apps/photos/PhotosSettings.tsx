@@ -5,9 +5,12 @@ import { pickFolder } from '../../os/FolderPicker'
 import { useWM } from '../../os/wm'
 import { libraryName, parseSf } from '../../data/seafile'
 import { linkImmich, loadStatus, rescan, setSources, suggestFolders, unlinkImmich, useStatus, type Job } from '../../data/photos'
+import { SecretInput } from '../../os/SecretInput'
+import { IntegrationNotice } from '../../os/IntegrationNotice'
 
 // Where Photos finds photos: Seafile folders (any library; folders named like photo folders are
-// suggested), and an Immich server. Shown in the app; ImmichLink is Settings → Integrations' too.
+// suggested), and whether an Immich server is linked. Shown in the app; the Seafile and Immich
+// accounts themselves are linked in Settings → Integrations (ImmichLink is its Immich pane).
 
 export function PhotosSettings() {
   const account = useAccount()
@@ -112,7 +115,8 @@ export function PhotosSettings() {
       </section>
       <section>
         <h2>Immich</h2>
-        <ImmichLink />
+        <IntegrationNotice sub="immich" linked={!!status?.immich} app="Photos" invite="Link an Immich server to show its photos." />
+        {status?.immich && <p className="muted">{`${status.immich.url.replace(/^https?:\/\//, '')} · Immich ${status.immich.version}`}</p>}
       </section>
     </div>
   )
@@ -197,7 +201,7 @@ export function ImmichLink() {
       </label>
       <label>
         <span>API key</span>
-        <input type="password" value={form.key} onChange={(e) => setForm({ ...form, key: e.target.value })} placeholder="API key" required autoComplete="off" />
+        <SecretInput value={form.key} onChange={(e) => setForm({ ...form, key: e.target.value })} placeholder="API key" required />
       </label>
       <p className="muted set-help">
         Make a key in Immich under <em>Account settings → API keys</em>, with <em>All</em> permissions or at least asset.read, asset.view, asset.download, asset.update, album.read, timeline.read and user.read. It is checked once, then stored encrypted on this server and only used

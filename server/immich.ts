@@ -135,7 +135,10 @@ export async function linkImmich(user: User, body: { url?: string; key?: string 
   if (!SUPPORTED.includes(version.major)) throw new HttpError(400, `Immich ${name} is not supported: Photos works with Immich ${SUPPORTED.join(' and ')} (major versions)`)
 
   const me = await call(user, url, key, '/users/me')
-  if (me.status === 401) throw new HttpError(400, 'Immich did not accept that API key')
+  if (me.status === 401) {
+    const why = await errorOf(me)
+    throw new HttpError(400, `Immich did not accept that API key${/^Immich answered/.test(why) ? '' : `: ${why.slice(0, 120)}`}`)
+  }
   if (!me.ok) throw new HttpError(400, me.status === 403 ? 'The API key needs the user.read permission (or All)' : await errorOf(me))
   const account = (await readCapped(me, 256 * 1024).then((b) => JSON.parse(b.toString('utf8'))).catch(() => null)) as { name?: string; email?: string } | null
   const timeline = await call(user, url, key, '/timeline/buckets?visibility=timeline')

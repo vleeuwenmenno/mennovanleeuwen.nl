@@ -296,7 +296,7 @@ export function EventEditor({ event, initial, calendars, googleCanWrite, choose,
         {!event && !writable.length && (
           <p className="ca-hint">
             No calendar can be written to yet. For Google, connect again to allow editing; for Fastmail, add the account again with an app password that can read and write
-            (Settings → Calendar).
+            (Settings → Integrations → Calendars).
           </p>
         )}
         {d.guests.length > 0 && !readOnly && <p className="ca-hint">Guests get an invitation by email once you save.</p>}

@@ -10,7 +10,7 @@ import type { WidgetDef } from './types'
 
 // The Agenda widget: today and the coming days from Google Calendar and CalDAV accounts
 // (server/calendars.ts): the calendars switched on in Settings, or its own pick. Signed-in users only: it
-// needs the GitHub sign-in with a calendar connected (Settings → Calendar). Today also lists the
+// needs the GitHub sign-in with a calendar connected (Settings → Integrations → Calendars). Today also lists the
 // tasks due today or overdue (src/data/tasks.ts), from the lists the Calendar shows, to tick off.
 
 type Config = { calendars: string[] | null; days: number; tilt: number }
@@ -128,7 +128,7 @@ export function Agenda({ id }: { win: WinState; id: string }) {
               📅 Google Calendar
             </button>
           )}
-          <button className="btn btn-small" onClick={() => wm.open('settings', { section: 'calendar', t: String(Date.now()) })}>
+          <button className="btn btn-small" onClick={() => wm.open('settings', { section: 'integrations', sub: 'calendars', t: String(Date.now()) })}>
             🗓 Fastmail / CalDAV
           </button>
         </div>

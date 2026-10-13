@@ -31,6 +31,7 @@ import { isLauncherName } from '../data/launcherFiles'
 import { holdToDrag, startNativeDrag, useDropTarget, type DragItem, type DropTarget } from '../os/dnd'
 import { useEdgeSwipe } from '../os/useEdgeSwipe'
 import { useMediaQuery } from '../os/useMediaQuery'
+import { SecretInput } from '../os/SecretInput'
 
 /** Quotes a path for a command line in the terminal. */
 const shq = (s: string) => (/^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
@@ -1609,7 +1610,7 @@ function Unlock({ repo }: { repo: string }) {
       <p>
         <strong>{libraryName(repo)}</strong> is encrypted.
       </p>
-      <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Library password" autoFocus autoComplete="off" required onKeyDown={(e) => e.stopPropagation()} />
+      <SecretInput value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Library password" autoFocus required onKeyDown={(e) => e.stopPropagation()} />
       <button className="btn btn-primary" disabled={busy}>
         {busy ? 'Unlocking…' : 'Unlock'}
       </button>

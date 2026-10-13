@@ -97,7 +97,11 @@ export async function addMail(user: User, body: { url?: string; token?: string; 
   const token = body.token?.trim()
   if (!token) throw new HttpError(400, 'An API token is required')
   if (token.length > 4096 || /\s/.test(token)) throw new HttpError(400, 'That does not look like an API token')
-  const { session, url } = await readSession(user, sessionUrl(body.url), token)
+  const start = sessionUrl(body.url)
+  // Fastmail tokens all start with fmu1-: anything else is the wrong string (a saved password
+  // autofilled, an app password), and Fastmail only answers that with a bare 401.
+  if (/(^|\.)fastmail\.com$/.test(new URL(start).hostname) && !token.startsWith('fmu1-')) throw new HttpError(400, "That isn't a Fastmail API token: they start with fmu1-. Make one at Settings → Privacy & Security → Manage API tokens.")
+  const { session, url } = await readSession(user, start, token)
   const label = (body.label?.trim() || (/fastmail/.test(url) ? 'Fastmail' : new URL(url).host)).slice(0, 40)
   const db = table()
   const existing = db.prepare('SELECT id FROM jmap_accounts WHERE user_id = ? AND session_url = ? AND username = ?').get(user.id, url, session.username) as { id: number } | undefined
@@ -159,6 +163,25 @@ const hostOf = (url: string) => {
   }
 }
 
+/** The server's own reason for a refusal, from the first line of its text body (or the message of a JSON one), as plain text; empty when it gave none. */
+async function reasonOf(res: Response): Promise<string> {
+  const raw = await readCapped(res, 4096).then((b) => b.toString('utf8')).catch(() => '')
+  let line = raw.split('\n').find((l) => l.trim()) ?? ''
+  if (line.trimStart().startsWith('{')) {
+    try {
+      const j = JSON.parse(raw) as Record<string, unknown>
+      line = [j.detail, j.description, j.message, j.error, j.title].find((v): v is string => typeof v === 'string') ?? ''
+    } catch {
+      line = ''
+    }
+  }
+  // Markup is an error page, not a reason.
+  if (/^\s*</.test(line)) return ''
+  // eslint-disable-next-line no-control-regex
+  line = line.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()
+  return line.length > 120 ? `${line.slice(0, 119)}…` : line
+}
+
 /** Reads a session, following redirects (/.well-known/jmap points elsewhere) with the token kept, over https only. */
 async function readSession(user: User, start: string, token: string): Promise<{ session: Session; url: string }> {
   let at = start
@@ -173,7 +196,10 @@ async function readSession(user: User, start: string, token: string): Promise<{ 
       at = next.href
       continue
     }
-    if (res.status === 401 || res.status === 403) throw new HttpError(400, `${hostOf(at)} refused the token`)
+    if (res.status === 401 || res.status === 403) {
+      const why = await reasonOf(res)
+      throw new HttpError(400, `${hostOf(at)} refused the token${why ? `: ${why}` : ''}`)
+    }
     if (!res.ok) throw new HttpError(400, `${hostOf(at)} answered ${res.status}: is that a JMAP server?`)
     let body: Record<string, unknown>
     try {
@@ -266,8 +292,8 @@ async function jmap(acc: Linked, calls: Call[]): Promise<Answers> {
   if (!res) throw new HttpError(502, `${acc.label} did not answer`)
   if (res.status === 401 || res.status === 403) {
     sessions.delete(acc.id)
-    await res.body?.cancel().catch(() => {})
-    throw new HttpError(502, `${acc.label} refused the token: link it again in Settings → Integrations → Mail`)
+    const why = await reasonOf(res)
+    throw new HttpError(502, `${acc.label} refused the token${why ? ` (${why})` : ''}: link it again in Settings → Integrations → Mail`)
   }
   const text = (await readCapped(res, 64 * 1024 * 1024)).toString('utf8')
   let body: Json
