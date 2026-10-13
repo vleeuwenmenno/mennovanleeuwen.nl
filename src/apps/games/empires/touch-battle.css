@@ -252,37 +252,8 @@
 }
 
 /* --- The selection on a touch screen: one small button, its panel opening from it --- */
+/* (The button itself, SelChip, is styled in touch.css: the galaxy map has it too.) */
 @media (pointer: coarse) {
-  .ew-battle .ew-selchip {
-    position: relative;
-    display: inline-flex;
-  }
-  .ew-battle .ew-selchip-main {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 48px;
-    min-height: 44px;
-    padding: 4px 12px;
-    color: var(--ew-head);
-    border-color: color-mix(in srgb, var(--ew-accent) 60%, transparent);
-    background: color-mix(in srgb, var(--ew-accent) 18%, rgba(20, 30, 56, 0.92));
-  }
-  .ew-battle .ew-selchip-main b {
-    font-family: var(--ew-display);
-    font-size: 15px;
-  }
-  .ew-battle .ew-selchip {
-    gap: 3px;
-  }
-  .ew-battle .ew-selchip-x {
-    min-width: 40px;
-    min-height: 44px;
-    padding: 0;
-    font-size: 14px;
-    color: #ffc4be;
-    border-color: rgba(255, 106, 94, 0.5);
-  }
   .ew-battle .ew-selpop {
     display: flex;
     flex-direction: column;

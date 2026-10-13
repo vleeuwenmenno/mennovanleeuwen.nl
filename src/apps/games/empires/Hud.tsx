@@ -111,6 +111,35 @@ export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
   )
 }
 
+/**
+ * The selection on a touch screen, kept small (Touch.tsx useTapAway): one button with an icon (or a
+ * picture), a short label and a count that opens its panel, and a ✕ beside it that lets go of the
+ * selection. The same in a battle and on the galaxy map.
+ */
+export function SelChip({ icon, label, count, title, className = '', onOpen, onClear }: {
+  icon: IconName | ReactNode
+  label?: string
+  count?: number | string
+  /** What it is, for screen readers and the tooltip. */
+  title: string
+  className?: string
+  onOpen: () => void
+  onClear: () => void
+}) {
+  return (
+    <span className={`ew-selchip ${className}`}>
+      <button className="ew-selchip-main" onClick={onOpen} aria-label={`${title}${count !== undefined ? `: ${count}` : ''}. Open`} title={title}>
+        {typeof icon === 'string' ? <Icon name={icon as IconName} size={22} /> : icon}
+        {label && <span className="ew-selchip-label">{label}</span>}
+        {count !== undefined && <b>{count}</b>}
+      </button>
+      <button className="ew-selchip-x" onClick={onClear} aria-label="Deselect" title="Deselect">
+        ✕
+      </button>
+    </span>
+  )
+}
+
 /** A panel with a bevelled metal rim and clipped corners. */
 /**
  * The game's own tooltips, in place of the browser's: anything inside this screen with a

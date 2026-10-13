@@ -106,6 +106,49 @@ export function TouchBar({ className = '', box = true, extra }: { className?: st
   )
 }
 
+// --- the compact selection ----------------------------------------------------------------------
+//
+// On a touch screen what is selected (in a battle, or on the galaxy map) starts as one small button
+// (SelChip in Hud.tsx); tapping it opens the full panel, and a tap anywhere else only closes it.
+
+/** Where the selection's popover lives (with the chip itself and the action wheel a long press in it
+ * opens): a press there is the popover's own. */
+export const SELPOP_KEEP = '.ew-selpop, .ew-selchip, .ew-wheel-layer'
+
+/**
+ * While `open`, a press anywhere in `root` outside `keep` only calls `close`: it is stopped before
+ * the map, the battlefield or another button sees it, and so is the click that follows, so that tap
+ * gives no order and changes no selection.
+ */
+export function useTapAway(root: { current: HTMLElement | null }, open: boolean, close: () => void, keep = SELPOP_KEEP, deps: unknown[] = []) {
+  const state = useRef({ open, close })
+  state.current = { open, close }
+  useEffect(() => {
+    const el = root.current
+    if (!el) return
+    let swallow = 0
+    const down = (e: PointerEvent) => {
+      if (!state.current.open || (e.target as Element).closest(keep)) return
+      swallow = performance.now()
+      e.stopPropagation()
+      state.current.close()
+    }
+    const click = (e: Event) => {
+      if (!swallow || performance.now() - swallow > 800) return
+      swallow = 0
+      e.stopPropagation()
+      e.preventDefault()
+    }
+    el.addEventListener('pointerdown', down, true)
+    el.addEventListener('click', click, true)
+    return () => {
+      el.removeEventListener('pointerdown', down, true)
+      el.removeEventListener('click', click, true)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keep, ...deps])
+}
+
 // --- the action wheel --------------------------------------------------------------------------
 
 export type WheelItem = {

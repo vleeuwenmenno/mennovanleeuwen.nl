@@ -8,7 +8,7 @@ import {
   galaxyProfile, settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw, withoutShips,
   type BattleResult, type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetBase, type PlanetKind, type Side, type StarSystem, type WorkId, type YardKind,
 } from './galaxy'
-import { BuildQueue, Floating, Frame, HpIcon, Icon, Pips, ShipArt, ShipCard, SizesContext, Tips, unitTip, type IconName } from './Hud'
+import { BuildQueue, Floating, Frame, HpIcon, Icon, Pips, SelChip, ShipArt, ShipCard, SizesContext, Tips, unitTip, type IconName } from './Hud'
 import { HP_COLOR } from './icons'
 import { baseLeft } from './sim'
 import { FleetInventory } from './Inventory'
@@ -21,7 +21,7 @@ import { LayoutSection, Modal, SettingsPanel } from './Menus'
 import { actionFor, getSettings, keyName, useSettings, type Action } from './settings'
 import type { FleetSide, World } from './sim'
 import type { EmpiresSound } from './sound'
-import { LongPress, TAP_SLOP, TouchBar, WheelHost, getTouchMods, isTouch, setTouchMod, shiftOf, useCoarse, useLongPressWheel, useWheel, type WheelItem, type WheelRequest } from './Touch'
+import { LongPress, SELPOP_KEEP, TAP_SLOP, TouchBar, WheelHost, getTouchMods, isTouch, setTouchMod, shiftOf, useCoarse, useLongPressWheel, useTapAway, useWheel, type WheelItem, type WheelRequest } from './Touch'
 import './touch-conquest.css'
 
 // Galactic conquest's screens: the setup, then the galaxy map (systems, lanes and fleets), the
@@ -722,7 +722,8 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   const [economy, setEconomy] = useState(false)
   const [toasts, setToasts] = useState<GToast[]>([])
   const [pay, setPay] = useState<{ id: number; amount: number } | null>(null)
-  const [fleetsOpen, setFleetsOpen] = useState(true)
+  // (On a touch screen the list starts closed: the faction button at the top left opens it.)
+  const [fleetsOpen, setFleetsOpen] = useState(() => typeof matchMedia === 'undefined' || !matchMedia('(pointer: coarse)').matches)
   /** The fleet inventory closed for this planet (or fleet in flight): it opens again for the next one. */
   const [invClosed, setInvClosed] = useState<string | null>(null)
   /** 'move': the next click on the map sends the selected fleets there (as a right-click would). */
@@ -751,6 +752,20 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   const held = useRef(new Set<string>())
   const mouse = useRef({ x: 0, y: 0, inside: false })
   const rootEl = useRef<HTMLDivElement>(null)
+  // On a touch screen what is selected is one small button (SelChip); its panels (the selection, the
+  // planet's dock, the fleets at the planet) open from it as a sheet, and a tap anywhere else only
+  // closes them again, giving no order and changing no selection, as in a battle.
+  const compact = useCoarse()
+  const [selOpen, setSelOpen] = useState(false)
+  const sheetOpen = compact && selOpen && !!sel
+  useTapAway(rootEl, sheetOpen, () => setSelOpen(false), GSHEET_KEEP)
+  useEffect(() => {
+    if (!sel) setSelOpen(false)
+  }, [sel])
+  // Move mode waits for a tap on the map: the sheet folds away for it.
+  useEffect(() => {
+    if (mode === 'move') setSelOpen(false)
+  }, [mode])
   const state = useRef({ paused, speed, menu, mode })
   state.current = { paused, speed, menu, mode }
   useSettings()
@@ -1707,7 +1722,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   const nearPlanet = near && cam.k > 30 ? near.planets.map((p) => g.planets[p]).reduce((b, p) => (Math.hypot(planetAt(g, p).x - cam.x, planetAt(g, p).y - cam.y) < Math.hypot(planetAt(g, b).x - cam.x, planetAt(g, b).y - cam.y) ? p : b)) : null
 
   return (
-    <div ref={rootEl} className={`ew-root ew-deck ew-galaxy ew-${myFaction} ${selPlanet ? 'has-dock' : ''} ${mapOpen ? 'is-map-open' : ''}`} style={{ ['--ew-accent' as string]: FACTIONS[myFaction].color }} onContextMenu={noMenu}>
+    <div ref={rootEl} className={`ew-root ew-deck ew-galaxy ew-${myFaction} ${selPlanet ? 'has-dock' : ''} ${mapOpen ? 'is-map-open' : ''} ${sheetOpen ? 'has-sheet' : ''}`} style={{ ['--ew-accent' as string]: FACTIONS[myFaction].color }} onContextMenu={noMenu}>
       <WheelHost>
         <WheelHook to={wheel} />
         <Tips />
@@ -1803,10 +1818,20 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
                 if (dragged.current) return
                 sound.click()
                 if (double) showPlanet(p.id, 70)
+                // A finger tapping the planet that is selected puts it away again.
+                else if (compact && sel?.kind === 'planet' && sel.id === p.id) setSel(null)
                 else setSel({ kind: 'planet', id: p.id })
               },
-              fleet: pickFleet,
-              fleets: (fs) => !dragged.current && pickFleets(fs),
+              fleet: (f) => {
+                if (compact && !dragged.current && sel?.kind === 'fleet' && sel.id === f.id) return (setSel(null), sound.click())
+                pickFleet(f)
+              },
+              fleets: (fs) => {
+                if (dragged.current) return
+                const had = selectedIds(sel)
+                if (compact && had.size === fs.length && fs.every((f) => had.has(f.id))) return (setSel(null), sound.click())
+                pickFleets(fs)
+              },
             }}
           />
           {box && <div className="ew-gbox" style={{ left: Math.min(box.x0, box.x1), top: Math.min(box.y0, box.y1), width: Math.abs(box.x1 - box.x0), height: Math.abs(box.y1 - box.y0) }} />}
@@ -1826,6 +1851,9 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
             <Icon name="move" size={16} /><span>{mode === 'move' ? 'Cancel' : 'Move'}</span>
           </button>
         } />
+
+        {compact && sel && (sheetOpen ? <GSheetHead g={g} sel={sel} onDeselect={() => (setSel(null), sound.click())} onClose={() => (setSelOpen(false), sound.click())} />
+          : <div className="ew-gselchipbar"><GSelChip g={g} sel={sel} onOpen={() => (setSelOpen(true), sound.click())} onClear={() => (setSel(null), sound.click())} /></div>)}
 
         {/* Our fleets, to find them quickly. */}
         {fleetsOpen && <Floating id="gFleets" title="Our fleets" at={{ left: 6, top: 56 }} className="ew-gfleets" layout={galaxyLayout} onClose={() => setFleetsOpen(false)} aside={<b className="ew-selcount">{myFleets.length || ''}</b>}>
@@ -1867,7 +1895,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
           onEconomy={() => (sound.click(), setEconomy(!economy))}
         />
 
-        <GalaxySelection
+        {(!compact || sheetOpen) && <GalaxySelection
           g={g}
           fleets={selFleet ? [selFleet] : selFleets}
           planets={sel?.kind === 'planets' ? selPlanets : []}
@@ -1898,8 +1926,8 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
             if (c === 'drop') return fs.some((f) => f.waypoints?.length)
             return fs.length > 0
           }}
-        />
-        {showInv && (
+        />}
+        {showInv && (!compact || sheetOpen) && (
           <FleetInventory
             key={invKey}
             g={g}
@@ -1925,7 +1953,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
             onClose={() => setInvClosed(invKey)}
           />
         )}
-        {selPlanet && (
+        {selPlanet && (!compact || sheetOpen) && (
           <PlanetDock
             g={g}
             p={selPlanet}
@@ -2719,6 +2747,44 @@ function GalaxyEconomy({ g, onClose, onPlanet, onSystem }: { g: Galaxy; onClose:
         <span className="ew-muted" data-tip="How many planets the enemy holds is known; what they pay is our guess, from the planets and stations we last saw">Enemy: {enemyPlanets} planets, about +{fmt(enemyIncome)} a day</span>
       </div>
     </Floating>
+  )
+}
+
+/** What the open sheet is made of on a touch screen: a press there is the sheet's own (see useTapAway). */
+const GSHEET_KEEP = `${SELPOP_KEEP}, .ew-gselfloat, .ew-gdock, .ew-inv`
+
+/** What is selected, in a few words, for the compact selection: an icon, a label and a count. */
+function selSummary(g: Galaxy, sel: NonNullable<Sel>): { icon: ReactNode; label: string; count?: number; title: string } {
+  if (sel.kind === 'planet') {
+    const p = g.planets[sel.id]
+    return { icon: <img className="ew-selchip-img" src={PLANET_ART(p.kind)} alt="" />, label: p.name, title: `Planet ${p.name}` }
+  }
+  if (sel.kind === 'planets') return { icon: 'radar', label: 'planets', count: sel.ids.length, title: 'Selected planets' }
+  const fs = g.fleets.filter((f) => (sel.kind === 'fleet' ? f.id === sel.id : sel.ids.includes(f.id)))
+  const ships = fs.reduce((n, f) => n + f.ships.length, 0)
+  const ours = fs.every((f) => f.owner === ME)
+  return { icon: 'fleet', label: `${ships} ship${ships === 1 ? '' : 's'}`, count: fs.length > 1 ? fs.length : undefined, title: fs.length > 1 ? `${fs.length} fleets` : ours ? 'Our fleet' : 'Enemy fleet' }
+}
+
+/** The compact selection on a touch screen: the selected planet or fleets as one button. */
+function GSelChip({ g, sel, onOpen, onClear }: { g: Galaxy; sel: NonNullable<Sel>; onOpen: () => void; onClear: () => void }) {
+  const s = selSummary(g, sel)
+  return <SelChip icon={s.icon} label={s.label} count={s.count} title={s.title} onOpen={onOpen} onClear={onClear} />
+}
+
+/** Over the open sheet: what it shows, and buttons to let go of it or fold it away again. */
+function GSheetHead({ g, sel, onDeselect, onClose }: { g: Galaxy; sel: NonNullable<Sel>; onDeselect: () => void; onClose: () => void }) {
+  const s = selSummary(g, sel)
+  return (
+    <div className="ew-selpop ew-gselhead" data-nodrag>
+      <span className="ew-gselhead-what">
+        {typeof s.icon === 'string' ? <Icon name={s.icon as IconName} size={18} /> : s.icon}
+        <b>{s.label}</b>
+        {s.count !== undefined && <em>{s.count}</em>}
+      </span>
+      <button onClick={onDeselect} aria-label="Deselect">✕ Deselect</button>
+      <button onClick={onClose} aria-label="Close">Close</button>
+    </div>
   )
 }
 
