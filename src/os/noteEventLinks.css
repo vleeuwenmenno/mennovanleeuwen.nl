@@ -1,0 +1,262 @@
+/* Notes linked to calendar events (src/os/noteEventLinks.tsx): the marks, the pickers, the
+   event editor's notes and the note's event chips. */
+
+/* The 📝 beside an event's title in the Calendar's views and the Agenda. */
+.ev-mark {
+  flex: none;
+  margin-left: 3px;
+  font-size: 0.9em;
+  line-height: 1;
+}
+.ev-mark.is-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.ag-event:has(.ev-mark) {
+  grid-template-columns: 8px 3.8em minmax(0, 1fr) auto auto;
+}
+.nel-mark {
+  font-size: 0.85em;
+}
+
+/* Pickers, in the desktop's dialog. */
+.nel-picker {
+  display: grid;
+  gap: 8px;
+  color: var(--fg);
+}
+.nel-range {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.nel-range label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.nel-range input {
+  padding: 3px 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+}
+.nel-list {
+  max-height: min(320px, 45vh);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--line);
+}
+.nel-row {
+  display: grid;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+.nel-row:hover,
+.nel-row.is-on {
+  background: var(--panel-2);
+}
+.nel-row.is-on {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.nel-row-title {
+  overflow: hidden;
+  color: var(--fg-bright);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.nel-row-sub {
+  overflow: hidden;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.nel-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.nel-empty {
+  padding: 10px 8px;
+  font-size: 12px;
+}
+
+/* The event editor's notes. */
+.nel-event {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.nel-event-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+.nel-event-head > span:first-child {
+  width: 70px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.nel-event-list {
+  display: grid;
+  gap: 2px;
+  margin: 0 0 0 78px;
+  padding: 0;
+  list-style: none;
+}
+.nel-event-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.nel-note {
+  min-width: 0;
+  overflow: hidden;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--fg-bright);
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.nel-note:hover .nel-note-title {
+  text-decoration: underline;
+}
+.nel-note-scope {
+  font-size: 11px;
+}
+.nel-unlink {
+  flex: none;
+  margin-left: auto;
+  font-size: 11px;
+}
+
+/* The note's events: chips under the Notebook's toolbar and at the bottom of a sticky. */
+.nel-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.nel-chip {
+  display: inline-flex;
+  align-items: stretch;
+  max-width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--panel);
+  font-size: 11.5px;
+}
+.nel-chip-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 2px 4px 2px 9px;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  cursor: pointer;
+}
+.nel-chip-open:disabled {
+  cursor: default;
+}
+.nel-chip-open:not(:disabled):hover .nel-chip-title {
+  text-decoration: underline;
+}
+.nel-chip-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-bright);
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.nel-chip-when {
+  flex: none;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.nel-chip.is-gone .nel-chip-title {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+.nel-chip-x {
+  padding: 0 8px 0 4px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.nel-chip-x:hover {
+  color: var(--red);
+}
+/* On a sticky: on the paper, smaller, with the time under the title. */
+.nel-chips.is-compact {
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+}
+.nel-chips.is-compact .nel-chip {
+  border-color: rgba(0, 0, 0, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.45);
+  color: inherit;
+  font-size: 11px;
+}
+.nel-chips.is-compact .nel-chip-open {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 5px;
+  padding: 3px 2px 3px 8px;
+  text-align: left;
+}
+.nel-chips.is-compact .nel-chip-when {
+  grid-column: 2;
+}
+.nel-chips.is-compact .nel-chip-title,
+.nel-chips.is-compact .nel-chip-open {
+  color: inherit;
+}
+.nel-chips.is-compact .nel-chip-when {
+  color: inherit;
+  opacity: 0.7;
+}
+
+@media (max-width: 640px) {
+  .nel-event-list {
+    margin-left: 0;
+  }
+  .nel-event-head > span:first-child {
+    width: auto;
+  }
+  .nel-chip-open {
+    flex-wrap: wrap;
+    row-gap: 0;
+  }
+}

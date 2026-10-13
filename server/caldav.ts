@@ -35,6 +35,8 @@ export type CaldavEvent = {
   description?: string
   meet?: string
   attendees?: CaldavAttendee[]
+  /** Notes linked to it in MvL OS (X-MVLOS-NOTE, server/noteLinks.ts): their ids. */
+  notes?: string[]
 }
 
 export const FASTMAIL_URL = 'https://caldav.fastmail.com/dav/'
@@ -257,8 +259,8 @@ const icalText = (s: string) => s.replace(/\\n/gi, '\n').replace(/\\([,;\\])/g, 
 const MEETING = /https:\/\/(?:meet\.google\.com|[\w.-]*zoom\.us|teams\.microsoft\.com|teams\.live\.com|[\w.-]*whereby\.com|meet\.jit\.si)\/[^\s"<>]+/i
 
 type Prop = { value: string; params: Record<string, string> }
-/** One VEVENT's properties (the first of each name), plus every EXDATE value and attendee. */
-type RawEvent = { props: Record<string, Prop>; exdates: string[]; attendees: Prop[] }
+/** One VEVENT's properties (the first of each name), plus every EXDATE value, attendee and linked note. */
+type RawEvent = { props: Record<string, Prop>; exdates: string[]; attendees: Prop[]; notes?: Prop[] }
 
 /** The VEVENTs in an iCalendar text, unparsed (alarms inside them skipped). */
 function rawEvents(ics: string): RawEvent[] {
@@ -268,7 +270,7 @@ function rawEvents(ics: string): RawEvent[] {
   let depth = 0
   for (const line of lines) {
     if (line === 'BEGIN:VEVENT') {
-      ev = { props: {}, exdates: [], attendees: [] }
+      ev = { props: {}, exdates: [], attendees: [], notes: [] }
       depth = 0
       continue
     }
@@ -286,6 +288,7 @@ function rawEvents(ics: string): RawEvent[] {
     if (!p) continue
     if (p.name === 'EXDATE') ev.exdates.push(...p.value.split(','))
     else if (p.name === 'ATTENDEE') ev.attendees.push({ value: p.value, params: p.params })
+    else if (p.name === NOTE_PROP) (ev.notes ??= []).push({ value: p.value, params: p.params })
     else if (!(p.name in ev.props)) ev.props[p.name] = { value: p.value, params: p.params }
   }
   return out
@@ -332,10 +335,19 @@ function toEvent(raw: RawEvent, startValue?: string): CaldavEvent | null {
   const location = ev.LOCATION ? icalText(ev.LOCATION.value) : undefined
   const rid = ev['RECURRENCE-ID']
   const organizer = ev.ORGANIZER && mailto(ev.ORGANIZER.value)
+  const recurrence = rid ? icalTime(rid.value, rid.params)?.iso : startValue ? start.iso : undefined
+  // Linked notes: those for the whole event or series, and those for this one occurrence.
+  const notes = (raw.notes ?? [])
+    .filter((p) => {
+      const only = p.params[OCCURRENCE_PARAM]
+      return !only || (!!recurrence && sameStart(icalTime(only, {})?.iso, recurrence))
+    })
+    .map((p) => p.value.trim())
+    .filter(Boolean)
   return {
     uid: `${ev.UID?.value ?? ''}|${rid?.value ?? startValue ?? start.iso}`,
     icalUid: ev.UID?.value ?? '',
-    recurrence: rid ? icalTime(rid.value, rid.params)?.iso : startValue ? start.iso : undefined,
+    recurrence,
     title: icalText(ev.SUMMARY?.value ?? '') || '(No title)',
     start: start.iso,
     end,
@@ -346,6 +358,7 @@ function toEvent(raw: RawEvent, startValue?: string): CaldavEvent | null {
     attendees: raw.attendees.length
       ? raw.attendees.map((a) => ({ email: mailto(a.value), name: a.params.CN, status: PARTSTAT[a.params.PARTSTAT ?? ''], organizer: mailto(a.value) === organizer || undefined }))
       : undefined,
+    ...(notes.length ? { notes: [...new Set(notes)] } : {}),
   }
 }
 
@@ -853,6 +866,71 @@ export async function moveCaldavEvent(user: User, ref: CaldavRef, calendarId: st
   await putObject(to.account, `${to.calendar.href.endsWith('/') ? to.calendar.href : `${to.calendar.href}/`}${name}`, ics, 'new')
   await deleteObject(from.account, url)
   clearCaldavCache(user)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Notes linked to events (server/noteLinks.ts): a private backlink in the event itself, one
+// X-MVLOS-NOTE line per note with the note's id. For one occurrence of a repeating event it goes
+// on that occurrence when it was changed on its own (it has its own VEVENT), otherwise on the
+// series with X-MVLOS-OCCURRENCE saying which occurrence, so no exception is made just for this.
+// Nothing else in the object changes: no SEQUENCE or DTSTAMP (it is not a change to the meeting),
+// only LAST-MODIFIED. Events with guests are left alone: a server that does scheduling could
+// take any change to one as a reason to mail them, and the link on the note is enough.
+
+export const NOTE_PROP = 'X-MVLOS-NOTE'
+const OCCURRENCE_PARAM = 'X-MVLOS-OCCURRENCE'
+/** Why an event with guests gets no backlink. */
+export const GUESTS_SKIP = 'It has guests, so the event itself is left as it is (a calendar server could mail them about any change); the link is kept on the note'
+
+/** Adds (or with `unlink` takes out) a note's backlink in an event; `all`: for the whole series. Retries when the event changed elsewhere meanwhile. */
+export async function markCaldavNote(user: User, ref: CaldavRef, noteId: string, opts: { all: boolean; unlink: boolean }): Promise<{ mirrored: boolean; why?: string }> {
+  const { account, calendar } = await calendarFor(user, ref.c)
+  if (!calendar.writable) return { mirrored: false, why: 'The calendar is read-only' }
+  const url = objectUrl(calendar, ref.h)
+  for (let attempt = 0; ; attempt++) {
+    const { ics, etag } = await getObject(account, url)
+    const mine = eventsIn(ics).filter((ev) => getProp(ev, 'UID')?.value === ref.u)
+    if (!mine.length) throw new HttpError(404, 'That event is gone from the calendar')
+    if (mine.some((ev) => own(ev, 'ATTENDEE').length > 0)) return { mirrored: false, why: GUESTS_SKIP }
+    const { master, override } = find(ics, ref.u, ref.r)
+    const only = ref.r && !opts.all ? ref.r : null
+    const onlyValue = only ? (only.length === 10 ? only.replace(/-/g, '') : davTime(new Date(only))) : null
+    const lineIs = (line: string, scoped: boolean) => {
+      const p = parseLine(line)
+      if (!p || p.value.trim() !== noteId) return false
+      const at = p.params[OCCURRENCE_PARAM]
+      return scoped ? !!at && !!only && sameStart(icalTime(at, {})?.iso, only) : !at
+    }
+    const changed: string[][] = []
+    if (opts.unlink) {
+      // The series: every line of this note. One occurrence: its own VEVENT's, and the series' line for it.
+      for (const ev of only ? [override, master].filter((x): x is string[] => !!x) : mine) {
+        const at = own(ev, NOTE_PROP).filter((i) => (only ? (ev === override ? lineIs(ev[i], false) : lineIs(ev[i], true)) : parseLine(ev[i])?.value.trim() === noteId))
+        for (const i of [...at].reverse()) ev.splice(i, 1)
+        if (at.length) changed.push(ev)
+      }
+    } else {
+      const target = only ? (override ?? master) : master
+      if (!target) throw new HttpError(409, 'The series itself is not in this calendar')
+      const scoped = !!only && target === master
+      if (!own(target, NOTE_PROP).some((i) => lineIs(target[i], scoped))) {
+        target.splice(insertPoint(target), 0, scoped ? `${NOTE_PROP};${OCCURRENCE_PARAM}=${onlyValue}:${noteId}` : `${NOTE_PROP}:${noteId}`)
+        changed.push(target)
+      }
+    }
+    if (!changed.length) return { mirrored: true }
+    const now = davTime(new Date())
+    for (const ev of changed) setProp(ev, 'LAST-MODIFIED', [`LAST-MODIFIED:${now}`])
+    try {
+      await putObject(account, url, ics, etag)
+      clearCaldavCache(user)
+      return { mirrored: true }
+    } catch (e) {
+      // 412: changed somewhere else since it was read. Read it again and redo the change on that.
+      if (e instanceof HttpError && e.status === 409 && attempt < 2) continue
+      throw e
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

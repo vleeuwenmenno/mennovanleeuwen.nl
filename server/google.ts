@@ -172,6 +172,10 @@ export type CalendarEvent = {
   ref?: string
   /** Its iCalendar UID, the same in every calendar it is in (an invitation in Mail finds it by this). */
   uid?: string
+  /** One occurrence of a repeating event: when it was meant to start (ISO time, or "YYYY-MM-DD"). */
+  occurrence?: string
+  /** Notes linked to it in MvL OS (its private backlinks, server/noteLinks.ts): their ids. */
+  notes?: string[]
 }
 
 const cache = new Map<string, { at: number; value: Promise<unknown> }>()
@@ -226,7 +230,14 @@ type GoogleEvent = {
   htmlLink?: string
   hangoutLink?: string
   attendees?: GooglePerson[]
+  extendedProperties?: { private?: Record<string, string>; shared?: Record<string, string> }
 }
+
+/** The private extended property that holds the ids of the notes linked to an event. */
+const NOTES_KEY = 'mvlosNotes'
+const notesOf = (e: GoogleEvent) => [...new Set((e.extendedProperties?.private?.[NOTES_KEY] ?? '').split(',').map((x) => x.trim()).filter(Boolean))]
+/** When an occurrence was meant to start, as an ISO time or a date. */
+const occurrenceOf = (e: GoogleEvent) => (!e.recurringEventId ? undefined : e.originalStartTime?.dateTime ? new Date(e.originalStartTime.dateTime).toISOString() : e.originalStartTime?.date)
 
 const STATUS: Record<string, Attendee['status']> = { accepted: 'accepted', declined: 'declined', tentative: 'tentative', needsAction: 'needs-action' }
 
@@ -282,6 +293,8 @@ export async function listEvents(user: User, ids: string[] | null, range: { from
             editable: cal.writable,
             ref: ref({ k: 'g', c: cal.id, e: e.id, m: e.recurringEventId }),
             uid: e.iCalUID,
+            ...(occurrenceOf(e) ? { occurrence: occurrenceOf(e) } : {}),
+            ...(notesOf(e).length ? { notes: notesOf(e) } : {}),
           }))
       }).catch(() => [] as CalendarEvent[]),
     ),
@@ -397,6 +410,52 @@ export async function moveGoogleEvent(user: User, ref: GoogleRef, destination: s
 export async function deleteGoogleEvent(user: User, ref: GoogleRef, all: boolean) {
   await calendarApi(user, `${eventPath(ref.c, all && ref.m ? ref.m : ref.e)}?sendUpdates=all`, { method: 'DELETE' })
   clearGoogleCache(user)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Notes linked to events (server/noteLinks.ts): the notes' ids in a private extended property,
+// which only this account's copy of the event has, changed with sendUpdates=none and nothing else
+// in the body (the guests and everything else stay as they are, and nobody is mailed). For one
+// occurrence it goes on that occurrence; for the series, on the series.
+
+/** What a link needs from an event, and what a meeting note shows. */
+export async function googleEventInfo(user: User, ref: GoogleRef) {
+  const e = await calendarApi<GoogleEvent>(user, eventPath(ref.c, ref.e))
+  if (e.status === 'cancelled') throw new HttpError(404, 'That event is gone from Google Calendar')
+  return {
+    uid: e.iCalUID ?? '',
+    occurrence: occurrenceOf(e),
+    recurring: !!e.recurringEventId || !!e.recurrence?.length,
+    title: e.summary || '(No title)',
+    start: e.start.dateTime ?? e.start.date ?? '',
+    end: e.end.dateTime ?? e.end.date ?? '',
+    allDay: !e.start.dateTime,
+    location: e.location,
+    attendees: (e.attendees ?? []).filter((a) => a.email).map((a) => ({ email: a.email!.toLowerCase(), name: a.displayName, organizer: a.organizer || undefined, self: a.self || undefined })),
+    notes: notesOf(e),
+  }
+}
+
+/** Adds (or with `unlink` takes out) a note's id in the event's private property; `all`: on the series. */
+export async function markGoogleNote(user: User, ref: GoogleRef, noteId: string, opts: { all: boolean; unlink: boolean }): Promise<{ mirrored: boolean; why?: string }> {
+  const account = googleAccount(user)
+  if (!account) throw new HttpError(409, 'Google Calendar is not connected')
+  if (!account.canWrite) return { mirrored: false, why: 'Google Calendar is connected read-only' }
+  const calendar = (await listCalendars(user)).find((c) => c.id === ref.c)
+  if (!calendar) throw new HttpError(404, 'That calendar is not connected')
+  if (!calendar.writable) return { mirrored: false, why: 'The calendar is read-only' }
+  const id = opts.all && ref.m ? ref.m : ref.e
+  const e = await calendarApi<GoogleEvent>(user, eventPath(ref.c, id))
+  if (e.status === 'cancelled') throw new HttpError(404, 'That event is gone from Google Calendar')
+  const ids = notesOf(e)
+  const next = opts.unlink ? ids.filter((x) => x !== noteId) : ids.includes(noteId) ? ids : [...ids, noteId]
+  if (next.length === ids.length && next.every((x, i) => x === ids[i])) return { mirrored: true }
+  // The whole private map (and the shared one as it is) goes back, so a stand-in that replaces
+  // objects keeps other apps' properties as Google's patch, which merges them, does.
+  const extendedProperties = { private: { ...(e.extendedProperties?.private ?? {}), [NOTES_KEY]: next.join(',') }, ...(e.extendedProperties?.shared ? { shared: e.extendedProperties.shared } : {}) }
+  await calendarApi(user, `${eventPath(ref.c, id)}?sendUpdates=none`, { method: 'PATCH', body: { extendedProperties } })
+  clearGoogleCache(user)
+  return { mirrored: true }
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -1088,6 +1088,15 @@ agent knows today's date and the time where you are, and times go both ways in t
 connections from before editing existed are read-only: the agent says to connect Google again. The
 group is only offered with a calendar connected.
 
+With the Notes group on too, the agent can work with notes linked to events
+([`server/agentNoteLinks.ts`](server/agentNoteLinks.ts), see *Notes and calendar events* below):
+`make_meeting_note` (a meeting note for an event, already linked: "make notes for my 2pm meeting"
+finds the event with `calendar_list_events` first), `link_note_to_event` and
+`unlink_note_from_event`, and, only looking, `notes_for_event` and `events_for_note`.
+`calendar_list_events` says how many notes each event has (`linked_notes`). Linking mails nobody and
+only adds a private backlink to the event, so these ask in *Ask first* and go ahead in Auto, Edits
+allowed and Bypass; Plan mode doesn't offer them. Their cards say which note and which event.
+
 Web fetch reads an address straight away only when it came from outside the model: your own
 messages, search results, or the links of a page it already read, exactly as given. Any other
 address waits for *Allow*, shown in full, while the thread holds anything private (memories, notes,
@@ -1347,8 +1356,57 @@ user's own account):
   by a search (the words and `from:` … filters Mail takes) shows the newest matching messages
   from every account, Enter opening one. Settings → Spotlight switches both off.
 
+### Notes and calendar events
+
+Meeting notes: a note in the Notebook can be linked to calendar events, and an event to notes
+([`src/os/noteEventLinks.tsx`](src/os/noteEventLinks.tsx) plugs the Calendar and the Notebook into
+each other through the hooks in [`src/data/calendar.ts`](src/data/calendar.ts) and
+[`src/data/notes.ts`](src/data/notes.ts)).
+
+- **From an event** (its right-click menu, and the event editor's *Notebook* row): *New meeting
+  note* makes a note titled with the event and its day, with when, where, the guests (names from
+  the invitation or your contacts) and headings for the agenda, notes and action items, linked and
+  opened in the Notebook; *Link a note…* picks one (search, arrows and Enter); the editor lists
+  the linked notes, each to open or unlink, and the menu has them under *Linked notes*. Events with
+  notes have a 📝 beside their title in every Calendar view and in the Agenda widget (a click there
+  opens the note).
+- **From a note** (the Notebook's ⋯ and right-click menus, and the sticky's menu): *Link to an
+  event…* picks an event from two weeks back to a month ahead, by title, with the dates to change.
+  The note shows a chip per event with its date and time, which opens the Calendar at that event
+  (that occurrence, for a repeating one), and × to unlink. Linked notes have a 📅 in the Notebook's
+  list, and Spotlight finds a note by the title of its meeting.
+- **A repeating event** asks whether the note is for this occurrence or every one.
+
+Where the link lives: on the note, in the synced notes, as the event's iCalendar UID (the same in
+every calendar app, kept when the event is renamed, moved or edited elsewhere), which occurrence
+(its RECURRENCE-ID, which also stays when that occurrence moves) or none for the whole series, the
+calendar it was in, and a copy of its title and time to show when the event can't be read. Notes
+sync, so the link is on every device; the copy is brought up to date whenever the event is seen,
+and a link is looked up again now and then (and on a click), so a moved event shows its new time.
+The event also gets a private backlink ([`server/noteLinks.ts`](server/noteLinks.ts)), so it says
+it has notes as soon as it is read, even before the notes have synced: in CalDAV an
+`X-MVLOS-NOTE:<note id>` line, written into the event's own text with its ETag (a conflict is read
+again and redone, up to three times) without touching anything else, SEQUENCE and DTSTAMP included
+(it is not a change to the meeting); for one occurrence it goes on that occurrence's own VEVENT
+when it has one, otherwise on the series with `X-MVLOS-OCCURRENCE=<its start>`, so no exception is
+made for it. Events with guests get no backlink in CalDAV, as a server that does scheduling could
+mail them about any change. In Google it is a private extended property (`mvlosNotes`), only on
+your copy of the event, with `sendUpdates=none`. The link works without the backlink (a read-only
+calendar, guests).
+
+A deleted event keeps its link, crossed out, until it is unlinked (the chip says so when clicked);
+a note in the trash keeps its links (restored, they are back) and doesn't count on the event; a
+note deleted for good takes its backlinks out of its events. Signed out, the notes (and so the
+links) leave the browser with the rest of the account's state. The endpoints are `POST
+/api/calendar/note-link` (`{ref | link, note, all?, unlink?}`) and `POST /api/calendar/find`
+(`{uid, calendarId?, occurrence?, start?, fresh?}`, the event a link points at now, or `gone`).
+Not yet tried against real Google or Fastmail: Google merges a patch's private properties (the
+whole map is sent anyway), and whether Fastmail mails guests about an X- property is avoided rather
+than known.
+
 ```sh
 pnpm check:pim-links   # Against stand-ins for JMAP, CalDAV and Google Calendar: invitations answered in each place (PARTSTAT, Google's API, an iMIP REPLY), cancellations, replies, a contact's mail and events, tasks from mail, another user seeing none of it
+pnpm check:note-links  # Against stand-ins for CalDAV, Google Calendar and Ollama: the backlink written with everything else kept, an ETag conflict, one occurrence against the series, guests left alone, Google's private property with sendUpdates=none, a deleted event, the Agents tools in Ask first and Auto, another user seeing none of it
 ```
 
 [`scripts/google-mock.ts`](scripts/google-mock.ts) is the Google Calendar stand-in: the server

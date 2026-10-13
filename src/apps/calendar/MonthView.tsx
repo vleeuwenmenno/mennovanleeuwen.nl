@@ -3,6 +3,7 @@ import { dayKey, eventsOn, startOfDay, type CalendarEvent } from '../../data/cal
 import { addDays, atMinutes, hhmm, isoWeek, moved, sameDay, span } from './time'
 import { isTaskEvent } from './tasks'
 import { TaskCheck, type Change } from './TimeGrid'
+import { EventMark } from './EventMark'
 
 // Six weeks around the month. Each day lists its all-day events, then its timed ones, as far as
 // they fit, then "+3 more" (which opens that day). Drag an event to another day to move it there
@@ -170,6 +171,7 @@ export function MonthView({ days, month, events, now, onOpen, onCreate, onChange
                     {isTaskEvent(e) && <TaskCheck e={e} onToggle={onToggle} />}
                     {!e.allDay && <span className="ca-chip-time">{hhmm(new Date(e.start))}</span>}
                     <span className="ca-chip-title">{e.title}</span>
+                    <EventMark e={e} />
                   </div>
                 ))}
                 {list.length > fits && (

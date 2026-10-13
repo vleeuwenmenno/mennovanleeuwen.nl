@@ -7,9 +7,11 @@ import { search as codeSearch } from './search.ts'
 import { guardedFetch } from './egress.ts'
 import { checkRoom } from './quota.ts'
 import { fileLink, libraries, listDir, mkdir, removeItems, rename, seafile, seafileInfo, transfer, type Library } from './seafile.ts'
-import { readState, writeState } from './state.ts'
+import { readState } from './state.ts'
 import { webSearch } from './websearch.ts'
 import { CALENDAR_TOOLS, CALENDAR_WRITES, calendarConnected, calendarLines, calendarTools, NOT_CONNECTED, prepareCalendarCall, zoneOf, type CallSummary, type Prepared } from './agentCalendar.ts'
+import { NOTE_LINK_LINES, NOTE_LINK_TOOLS, NOTE_LINK_WRITES, noteLinkTools, prepareNoteLinkCall } from './agentNoteLinks.ts'
+import { readNotes as readNoteRows, writeNotes as writeNoteRows } from './noteLinks.ts'
 import { notify } from './notifier.ts'
 import { isShuttingDown, onShutdown } from './shutdown.ts'
 import { AGENTS_MD } from '../src/data/agentsPrompt.ts'
@@ -158,6 +160,8 @@ const GROUP_OF: Record<string, ToolGroup> = {
   update_note: 'notes',
   delete_note: 'notes',
   ...Object.fromEntries([...CALENDAR_TOOLS].map((t) => [t, 'calendar'])),
+  // Notes linked to events: offered with the calendar, and only while notes are on too (toolsFor).
+  ...Object.fromEntries([...NOTE_LINK_TOOLS].map((t) => [t, 'calendar'])),
   search_code: 'code',
   seafile_list: 'seafile',
   seafile_search: 'seafile',
@@ -1346,7 +1350,7 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
     tool('delete_note', "Move one of the user's notes to the Notebook's trash, by its id (the user is asked first).", { id: str('The note id') }, ['id']),
     tool('search_code', "Search the user's code hosts (GitHub and linked Gitea/Forgejo): repositories by name, and issues and pull requests. `repo#text` searches one repository's issues, `repo@text` its branches.", { query: str('The search') }, ['query']),
   ]
-  if (calendarConnected(user)) tools.push(...calendarTools())
+  if (calendarConnected(user)) tools.push(...calendarTools(), ...noteLinkTools())
   if (seafileInfo(user)) {
     const lib = str('Library name or id')
     tools.push(
@@ -1418,7 +1422,7 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
   if (opts.terminal) tools.push(terminalTool())
   if (opts.permission === 'plan') tools.push(exitPlanTool())
   // update_todos and ask_user belong to no group: they are always there. Planning only reads.
-  return tools.filter((t) => (!GROUP_OF[t.function.name] || groups.includes(GROUP_OF[t.function.name])) && !(opts.permission === 'plan' && changes(t.function.name)))
+  return tools.filter((t) => (!GROUP_OF[t.function.name] || groups.includes(GROUP_OF[t.function.name])) && (!NOTE_LINK_TOOLS.has(t.function.name) || groups.includes('notes')) && !(opts.permission === 'plan' && changes(t.function.name)))
 }
 
 // --- reading addresses the agent was not given -------------------------------------------------
@@ -1476,7 +1480,7 @@ function givenUrls(thread: string): Set<string> {
   return given
 }
 
-const PRIVATE_TOOLS = new Set(['search_notes', 'search_code', 'seafile_list', 'seafile_search', 'seafile_read', 'create_note', 'update_note', 'read_file', 'list_dir', 'glob', 'grep', 'terminal', ...CALENDAR_TOOLS])
+const PRIVATE_TOOLS = new Set(['search_notes', 'search_code', 'seafile_list', 'seafile_search', 'seafile_read', 'create_note', 'update_note', 'read_file', 'list_dir', 'glob', 'grep', 'terminal', ...CALENDAR_TOOLS, ...NOTE_LINK_TOOLS])
 /** Whether the model has anything private in front of it: memories, private tool results, attachments. */
 function holdsPrivate(user: User, thread: string): boolean {
   if (listMemories(user).length) return true
@@ -1674,7 +1678,7 @@ async function webReadGate(user: User, key: string, thread: string, permission: 
  * event lands in a calendar others may share, and can mail its guests.
  */
 const NEEDS_APPROVAL = new Set(['seafile_mkdir', 'seafile_write', 'seafile_rename', 'seafile_move', 'seafile_delete', 'update_note', 'delete_note', ...CALENDAR_WRITES])
-const changes = (name: string) => NEEDS_APPROVAL.has(name) || FILE_WRITES.has(name) || name === FILE_DELETE
+const changes = (name: string) => NEEDS_APPROVAL.has(name) || NOTE_LINK_WRITES.has(name) || FILE_WRITES.has(name) || name === FILE_DELETE
 const FILE_TOOL_SET = new Set<string>(FILE_TOOLS)
 
 /** A command line that names a file steering the agent: even Bypass asks before it runs. */
@@ -1703,6 +1707,10 @@ export function decide(thread: string, permission: Permission, call: ToolCall): 
   }
   if (!changes(name)) return 'run'
   if (permission === 'plan') return 'refuse'
+  // Linking a note and an event (and a meeting note made linked) mails nobody and changes nothing
+  // anyone else sees (the event only gets a private backlink): it asks in Ask first, and goes
+  // ahead in the modes that let the agent get on with things.
+  if (NOTE_LINK_WRITES.has(name)) return permission === 'default' ? 'ask' : 'run'
   // AGENTS.md, CLAUDE.md, .agents/ and .claude/ steer later turns: a lasting injection, so always asked.
   const paths = ['path', 'from', 'to', 'to_folder', 'name'].map((k) => argString(call.arguments ?? {}, k)).filter(Boolean)
   if (paths.some((p) => STEERING.test(p))) return 'ask'
@@ -1806,12 +1814,9 @@ const threadProject = (thread: string) => (database().prepare('SELECT project_id
 /** The Notebook's notes, as synced desktop state (src/data/notes.ts keeps the same shape). */
 type NoteRow = { id: string; text: string; color?: string; tilt?: number; created?: number; updated?: number; deleted?: number; purged?: boolean }
 const NOTE_COLORS = ['yellow', 'pink', 'blue', 'green', 'purple', 'orange', 'white'] as const
-const readNotes = (user: User): NoteRow[] => {
-  const v = readState(user).notes?.value
-  return Array.isArray(v) ? (v as NoteRow[]).filter((n) => n && typeof n.id === 'string') : []
-}
-/** Changes the notes on the server; the browser merges them in by id on its next sync. */
-const writeNotes = (user: User, change: (all: NoteRow[]) => NoteRow[]) => void writeState(user, 'notes', { value: change(readNotes(user)) })
+const readNotes = (user: User): NoteRow[] => readNoteRows(user)
+/** Changes the notes on the server; open pages load them again and merge them in by id. */
+const writeNotes = (user: User, change: (all: NoteRow[]) => NoteRow[]) => writeNoteRows(user, change)
 
 /** A calendar failure as the model is told it: a missing calendar says how to connect one. */
 const calendarError = (e: unknown) => (e instanceof HttpError && e.status === 409 && /not connected/i.test(e.message) ? NOT_CONNECTED : (e as Error).message)
@@ -2712,7 +2717,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
       const system =
         (await systemPrompt(user, mode, row.project_id, todosOf(row.id), folderLines(now, offered.has('terminal'), instructions), offered.has('use_skill') ? await listSkills(user, skillPlaces(user, now.workdir)).catch(() => []) : [], {
           zone,
-          calendar: now.tools.includes('calendar') ? calendarLines(user, zone) : '',
+          calendar: now.tools.includes('calendar') ? `${calendarLines(user, zone)}${now.tools.includes('notes') && calendarConnected(user) ? `\n${NOTE_LINK_LINES}` : ''}` : '',
         })) +
         (last && !nudged ? '\n\nYou have used all your tool calls for this turn: answer now with what you have, and say what is left to do.' : '') +
         (stale ? `\n\nReminder: your todo list has ${open} open ${open === 1 ? 'item' : 'items'} and you have not updated it for a while. Update it with update_todos as you go, or clear it if it no longer fits.` : '')
@@ -2804,9 +2809,9 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
           // A calendar call is checked first (and a change worked out in full), so a mistake goes
           // back to the model before the user is asked, and they see what will happen.
           let calendar: Prepared | null = null
-          if (CALENDAR_TOOLS.has(c.name)) {
+          if (CALENDAR_TOOLS.has(c.name) || NOTE_LINK_TOOLS.has(c.name)) {
             try {
-              calendar = await prepareCalendarCall(user, c.name, c.arguments ?? {}, zone)
+              calendar = CALENDAR_TOOLS.has(c.name) ? await prepareCalendarCall(user, c.name, c.arguments ?? {}, zone) : await prepareNoteLinkCall(user, c.name, c.arguments ?? {}, zone)
             } catch (e) {
               if (ctl.signal.aborted) throw e
               return JSON.stringify({ error: calendarError(e) })
