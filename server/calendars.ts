@@ -105,6 +105,8 @@ export async function allEvents(user: User, ids: string[] | null, range: { from:
               editable: cal.writable,
               ref: encodeRef({ k: 'c', c: cal.id, h: e.href, u: e.icalUid, r: e.recurrence }),
               uid: e.icalUid || undefined,
+              ...(e.recurrence ? { occurrence: e.recurrence } : {}),
+              ...(e.notes?.length ? { notes: e.notes } : {}),
             })),
           )
           .catch((e) => (errors.push(message(cal.name, e)), [] as CalendarEvent[])),

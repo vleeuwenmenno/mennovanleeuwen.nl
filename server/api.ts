@@ -9,6 +9,7 @@ import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { addCaldav, clearCaldavCache, listCaldav, removeCaldav } from './caldav.ts'
 import { allCalendars, allEvents, createEvent, deleteEvent, updateEvent } from './calendars.ts'
+import { findLinked, noteLinkApi } from './noteLinks.ts'
 import { handleContactsApi } from './contacts.ts'
 import { handleTasksApi } from './tasks.ts'
 import { handlePimApi } from './pim.ts'
@@ -187,6 +188,15 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/calendar/events' && method === 'POST') return await createEvent(requireUser(req), await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true
     if (path === '/api/calendar/events' && method === 'PATCH') return await updateEvent(requireUser(req), await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true
     if (path === '/api/calendar/events' && method === 'DELETE') return await deleteEvent(requireUser(req), await readJson(req, 8 * 1024)), json(res, 200, { ok: true }), true
+    // Notes linked to events (server/noteLinks.ts): the event's backlink to a note, { ref | link, note, all?, unlink? }; and the event a note's link points at now, { uid, calendarId?, occurrence?, start?, fresh? }.
+    if (path === '/api/calendar/note-link' && method === 'POST') return json(res, 200, await noteLinkApi(requireUser(req), await readJson(req, 16 * 1024))), true
+    if (path === '/api/calendar/find' && method === 'POST') {
+      const body = await readJson<{ uid?: unknown; calendarId?: unknown; occurrence?: unknown; start?: unknown; fresh?: unknown }>(req, 8 * 1024)
+      const text = (v: unknown) => (typeof v === 'string' && v ? v.slice(0, 1000) : undefined)
+      const uid = text(body?.uid)
+      if (!uid) throw new HttpError(400, 'Which event?')
+      return json(res, 200, await findLinked(requireUser(req), { uid, calendarId: text(body.calendarId), occurrence: text(body.occurrence), start: text(body.start) }, body.fresh === true)), true
+    }
     // The Tasks app (server/tasks.ts): CalDAV task lists and the ones on this site.
     if ((path === '/api/tasks' || path.startsWith('/api/tasks/')) && (await handleTasksApi(req, res, url, method, requireUser(req)))) return true
     if (path === '/api/integrations/updown' && method === 'PUT') return await setUpdownKey(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true

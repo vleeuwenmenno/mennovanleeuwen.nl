@@ -37,6 +37,8 @@ COPY src/data/taskPrefs.ts ./src/data/
 COPY src/data/mailRemote.ts ./src/data/
 # Agents shared links (/s/<token>): the Markdown parser and code colours, to render the page.
 COPY src/data/markdown/parse.ts src/data/markdown/highlight.ts ./src/data/markdown/
+# Notes linked to calendar events: how a link is kept, and the meeting note's template.
+COPY src/data/noteEvents.ts ./src/data/
 # Sign-in sessions, linked instances and synced notes live here (a volume in compose.yml).
 RUN mkdir -p /app/data && chown node:node /app/data
 ENV DATA_DIR=/app/data
