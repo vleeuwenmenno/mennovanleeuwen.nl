@@ -248,7 +248,7 @@ export function Photos({ win }: { win: WinState }) {
         )}
       </div>
     )
-  if (!status) return <div className="ph-blank muted">{error ?? 'Loading…'}</div>
+  if (!status) return <div className="ph-blank muted copyable">{error ?? 'Loading…'}</div>
 
   const nothing = !available.length
   const noFolders = source === 'seafile' && !status.seafile?.sources.length

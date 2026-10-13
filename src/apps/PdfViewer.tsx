@@ -353,7 +353,7 @@ export function PdfViewer({ win }: { win: WinState }) {
           {error ? (
             <div className="pv-empty">
               <p className="pv-big">{name}</p>
-              <p className="muted">{error}</p>
+              <p className="muted copyable">{error}</p>
               {isSf(path) && (
                 <button className="btn btn-small" onClick={() => void downloadFile(path).catch(() => {})}>
                   Download
