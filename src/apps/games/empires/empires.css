@@ -1429,6 +1429,9 @@ span.ew-teamtag {
   flex: 1;
   min-width: 0;
   height: 100%;
+  /* Its size comes from the panel, never from its pixels: the canvas is resized to its box times the
+     screen's pixel ratio, and without this that grew the box again on every frame. */
+  contain: size;
   display: block;
   border-radius: 4px;
   border: 1px solid rgba(110, 150, 220, 0.3);
