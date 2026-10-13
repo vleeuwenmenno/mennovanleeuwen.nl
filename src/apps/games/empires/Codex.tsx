@@ -516,7 +516,19 @@ function Viewer({ t, fitSize, model, workshop, show, dmg, boom, hover, selected,
           g.strokeStyle = strong ? `rgba(127,240,255,${0.75 + 0.25 * Math.sin(now / 160)})` : 'rgba(127,240,255,0.6)'
           g.lineWidth = (strong ? 2.6 : 1.8) / z
           g.lineJoin = 'round'
-          if ('hp' in s) {
+          const own = 'hp' in s && model && t.hardpoints[s.hp]?.exp && (dmg.hps[s.hp]?.hp ?? 1) > 0 ? model.parts.filter((p) => p.detach?.hp === s.hp && p.pts.length >= 3) : []
+          if (own.length) {
+            // An expansion module: the outline of every part of it.
+            g.rotate(rot)
+            g.scale(k, k)
+            g.lineWidth /= k
+            g.beginPath()
+            for (const p of own) {
+              p.pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)))
+              g.closePath()
+            }
+            g.stroke()
+          } else if ('hp' in s) {
             const [x, y] = hpAt(s.hp)
             const hp = t.hardpoints[s.hp]
             const r = Math.max(9 / z, (model?.mounts[s.hp]?.r ?? ((hp.s ?? 0.05) * t.size) / 2 / k) * k * 1.3)

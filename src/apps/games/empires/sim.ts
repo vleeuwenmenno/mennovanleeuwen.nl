@@ -2652,7 +2652,18 @@ function moveUnit(w: World, u: Unit, dt: number) {
 
   // Holding ships on the move keep going, guns firing at whatever they pass.
   const fighting = !!tgt && !tgt.dead && (u.order.k !== 'move' || (u.order.attack && u.stance !== 'hold'))
-  if (mend) {
+  if (mend && mend === job && isEngineer(t)) {
+    // Engineers at work circle the structure slowly, each craft on its own place round the ring
+    // (spread by the golden angle, so a squadron and the next fan out round it): straight to its
+    // place from further out, then along the ring with it, welding as they go.
+    const R = radius(mend.t) + 70 + (u.id % 3) * 16
+    const ang = w.time * ENGINEERS.orbit + u.id * 2.39996
+    const sx = mend.x + M.cos(ang) * R
+    const sy = mend.y + M.sin(ang) * R
+    const d = M.hypot(sx - u.x, sy - u.y)
+    const along = d > 90 ? 0 : 0.35
+    steer(u, mend.x + M.cos(ang + along) * R, mend.y + M.sin(ang + along) * R, Math.min(max * 0.8, R * ENGINEERS.orbit + d * 1.6), dt)
+  } else if (mend) {
     // Circle the patient just outside its hull: aim a little ahead round it from where we are, so
     // the craft orbit rather than ram, and fly straight at it from further out.
     const R = radius(mend.t) + 60 + (u.id % 3) * 15

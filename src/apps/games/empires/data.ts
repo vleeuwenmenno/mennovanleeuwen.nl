@@ -314,9 +314,11 @@ export const YARD_MAX = 1
  * Engineer squadrons at work: how close to a structure's hull an engineer has to be to weld, how
  * many craft can work on one structure at once (more add nothing), and what each craft mends on a
  * finished structure a second: `flat` hull points plus `share` of its full hull, and the same share
- * of every damaged module. A yard's `build` time is one squadron's (three craft's) work.
+ * of every damaged module. A yard's `build` time is one squadron's (three craft's) work, so two
+ * squadrons build it in half the time and three in a third. While they work the craft circle the
+ * structure slowly, `orbit` radians a second, each on its own place round it.
  */
-export const ENGINEERS = { reach: 220, crew: 9, flat: 6, share: 0.004 }
+export const ENGINEERS = { reach: 220, crew: 9, flat: 6, share: 0.004, orbit: 0.14 }
 /** A construction site cancelled once building has started gives back this share of its price,
  * less `wear` of it times how far along it was (a site just begun: 75%, one nearly done: 25%). */
 export const SITE_REFUND = { start: 0.75, wear: 0.5 }

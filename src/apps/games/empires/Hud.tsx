@@ -2,7 +2,7 @@ import { bigType, sizedType, type ShipSizes } from './models/sizes.ts'
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { battleLayout, type LayoutStore } from './layout'
 import {
-  MODULE, REBUILD_MODULE, WORKS_NAME, modulesFor, needsModule, worksOf, yardsFor, type ModuleId,
+  ENGINEERS, MODULE, REBUILD_MODULE, WORKS_NAME, modulesFor, needsModule, worksOf, yardsFor, type ModuleId,
   ABILITIES, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, moduleSprite, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
   type UnitType,
 } from './data'
@@ -1899,6 +1899,14 @@ export function ExpansionCards({ w, me, u, onExpand, onCancel }: { w: World; me:
   )
 }
 
+/** Who is welding a site: whole squadrons where they are, else craft (more than three squadrons add
+ * nothing, see ENGINEERS.crew). */
+const siteCrew = (craft: number) => {
+  const sq = craft / 3
+  const n = Number.isInteger(sq) ? `${sq} squadron${sq === 1 ? '' : 's'}` : `${craft} engineer craft`
+  return craft > ENGINEERS.crew ? `${n} (only ${ENGINEERS.crew / 3} count)` : n
+}
+
 /**
  * One of our yards: while it goes up, its progress, who is building it and a way to call it off
  * (with the refund); once built, its own queue and build cards, as the station's shipyard has.
@@ -1948,14 +1956,14 @@ function YardDetail(p: DetailProps & { y: Unit }) {
             <BaseTabs w={w} me={me} cur={y.id} onSelect={p.onSelect} onRuin={() => (storePage('yards'), p.onSelect(w.players[me].station))} />
           </header>
           {site ? (
-            <div className="ew-sitebox" data-tip="Engineers build a yard at one squadron's pace per three craft, up to three squadrons at once.">
+            <div className="ew-sitebox" data-tip={`Engineers build a yard at one squadron's pace per three craft, up to three squadrons at once: this one takes ${y.t.build} s with one squadron, ${Math.round(y.t.build / 2)} s with two, ${Math.round(y.t.build / 3)} s with three.`}>
               <span className="ew-muted">
                 {!y.site!.started
                   ? coming
                     ? `Engineers on their way (${coming} craft).`
                     : 'Waiting for engineers: send some to build it.'
                   : crews
-                    ? `Under construction: ${Math.round(progress * 100)}%, ${crews} engineer craft welding.`
+                    ? `Under construction: ${Math.round(progress * 100)}%, ${siteCrew(crews)} welding · ${Math.ceil(y.building / (Math.min(crews, ENGINEERS.crew) / 3))} s left.`
                     : `Under construction: ${Math.round(progress * 100)}%, nobody welding.`}
               </span>
               <Bar value={progress} max={1} kind="shield" />

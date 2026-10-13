@@ -1080,10 +1080,11 @@ export class Renderer {
     }
 
     // Support ships' repair beams: a faint green tether to each ship being patched, pulsing.
+    // (Engineers weld with beams of their own, see drawWelds.)
     const myTeamB = w.players[view.me].team
     ctx.lineWidth = 2 / z
     for (const u of w.units) {
-      if (!u.mending.length || !u.seen[myTeamB]) continue
+      if (!u.mending.length || !u.seen[myTeamB] || isEngineer(u.t)) continue
       for (const id of u.mending) {
         const o = w.byId.get(id)
         if (!o || !onScreen((u.x + o.x) / 2, (u.y + o.y) / 2, 600)) continue
@@ -1113,6 +1114,7 @@ export class Renderer {
     const shown = w.units.filter((u) => u.seen[myTeam] && u.owner !== view.hideOwner && onScreen(u.x, u.y, u.t.size))
     shown.sort((a, b) => TIER_ORDER[a.t.tier] - TIER_ORDER[b.t.tier])
     for (const u of shown) this.drawUnit(ctx, u, w, z, view)
+    this.drawWelds(ctx, w, z, myTeam, onScreen)
     // Parts blown off and fragments of small craft, over the ships.
     if (this.modelsOn) this.fx.draw(ctx, zdpr, onScreen)
     this.drawWarps(ctx, z)
@@ -2055,6 +2057,88 @@ export class Renderer {
     ctx.restore()
   }
 
+  /**
+   * Engineers at work: each craft at its job fires a welding beam from its nose at a spot on the
+   * structure, a bright core in a soft glow (blue-white for the Republic, orange for the droids),
+   * with a flickering flash where it hits. The spot wanders over the hull on the side facing the
+   * craft (on a site going up, along the welding front), so it reads as welding. Drawn over the
+   * ships, with nothing made per frame but the paths.
+   */
+  private drawWelds(ctx: CanvasRenderingContext2D, w: World, z: number, team: number, onScreen: (x: number, y: number, r?: number) => boolean) {
+    let on = false
+    for (const u of w.units) {
+      if (u.dead || !u.mending.length || !isEngineer(u.t) || !u.seen[team] || !onScreen(u.x, u.y, 400)) continue
+      const o = w.byId.get(u.mending[0])
+      if (!o || o.dead) continue
+      if (!on) {
+        on = true
+        ctx.save()
+        ctx.globalCompositeOperation = 'lighter'
+        ctx.lineCap = 'round'
+      }
+      const rep = u.t.faction === 'republic'
+      const glow = rep ? '110,190,255' : '255,140,50'
+      const core = rep ? '232,246,255' : '255,232,190'
+      // Where it hits, in the structure's own frame (x across it, y along it, nose up): on a site the
+      // welding front, else a spot that wanders over the side facing the craft.
+      const [sw, sh] = dims(o.t)
+      const rot = o.a + Math.PI / 2
+      const c = Math.cos(rot)
+      const s = Math.sin(rot)
+      const t = this.clock
+      // The craft in that frame, scaled to the hull's half-size.
+      const dx = u.x - o.x
+      const dy = u.y - o.y
+      const cx = Math.max(-1, Math.min(1, (dx * c + dy * s) / (sw / 2)))
+      const cy = Math.max(-1, Math.min(1, (-dx * s + dy * c) / (sh / 2)))
+      let lx: number
+      let ly: number
+      if (o.site && o.building > 0) {
+        lx = (cx * 0.3 + Math.sin(t * 0.9 + u.id * 1.7) * 0.14) * sw
+        ly = sh / 2 - (1 - o.building / o.t.build) * sh
+      } else {
+        lx = (cx * 0.3 + Math.sin(t * 0.8 + u.id * 2.1) * 0.12) * sw
+        ly = (cy * 0.3 + Math.sin(t * 0.63 + u.id * 1.3) * 0.12) * sh
+      }
+      const hx = o.x + lx * c - ly * s
+      const hy = o.y + lx * s + ly * c
+      const nose = u.t.size * 0.45
+      const nx = u.x + Math.cos(u.a) * nose
+      const ny = u.y + Math.sin(u.a) * nose
+      const flick = 0.7 + 0.3 * Math.sin(t * 37 + u.id * 3.1)
+      ctx.strokeStyle = `rgba(${glow},${0.28 * flick})`
+      ctx.lineWidth = 6 / z
+      ctx.beginPath()
+      ctx.moveTo(nx, ny)
+      ctx.lineTo(hx, hy)
+      ctx.stroke()
+      ctx.strokeStyle = `rgba(${core},${0.9 * flick})`
+      ctx.lineWidth = 1.7 / z
+      ctx.stroke()
+      // The flash where it hits: a soft disc and a little turning star of sparks.
+      const r = (4 + 2.5 * flick) / z
+      ctx.fillStyle = `rgba(${glow},${0.35 * flick})`
+      ctx.beginPath()
+      ctx.arc(hx, hy, r * 1.8, 0, TAU)
+      ctx.fill()
+      ctx.fillStyle = `rgba(${core},${0.85 * flick})`
+      ctx.beginPath()
+      ctx.arc(hx, hy, r * 0.55, 0, TAU)
+      ctx.fill()
+      const a0 = t * 9 + u.id
+      ctx.beginPath()
+      for (let k = 0; k < 4; k++) {
+        const a = a0 + (k * Math.PI) / 2
+        const l = r * (1.4 + 1.2 * Math.abs(Math.sin(t * 23 + k + u.id)))
+        ctx.moveTo(hx + Math.cos(a) * r * 0.5, hy + Math.sin(a) * r * 0.5)
+        ctx.lineTo(hx + Math.cos(a) * l, hy + Math.sin(a) * l)
+      }
+      ctx.lineWidth = 1.2 / z
+      ctx.stroke()
+    }
+    if (on) ctx.restore()
+  }
+
   /** A yard being placed: its ghost where it would go, the slipway's mouth marked, green where it can
    * go and red (with why) where it can't, and what it costs. */
   private drawPlace(ctx: CanvasRenderingContext2D, g: NonNullable<View['place']>, z: number) {
@@ -2115,10 +2199,10 @@ export class Renderer {
           // Each piece pushed a little out from the middle and turned a touch, as it settled.
           const rr = seeded(hash(r.id, i, 0x2a7))
           const l = Math.hypot(p.cx, p.cy) || 1
-          const push = m.long * (0.025 + rr() * 0.025)
+          const push = m.long * (0.04 + rr() * 0.03)
           const lx = (p.cx + (p.cx / l) * push) * k
           const ly = (p.cy + (p.cy / l) * push) * k
-          drawPiece(ctx, m, p, `ruin${r.id}.${i}`, st, r.x + lx * c - ly * s, r.y + lx * s + ly * c, rot + (rr() - 0.5) * 0.1, t.size, zdpr, 0.92)
+          drawPiece(ctx, m, p, `ruin${r.id}.${i}`, st, r.x + lx * c - ly * s, r.y + lx * s + ly * c, rot + (rr() - 0.5) * 0.16, t.size, zdpr, 0.92)
         })
       } else {
         ctx.filter = 'brightness(0.5) saturate(0.45)'
