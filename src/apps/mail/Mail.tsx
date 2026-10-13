@@ -69,6 +69,19 @@ export function Mail({ win }: { win: WinState }) {
   const [rows, setRows] = useState<ThreadRow[]>([])
   const [total, setTotal] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
+  // Refresh spins for at least a turn, so a quick answer still shows that it looked.
+  const [refreshing, setRefreshing] = useState(false)
+  const spunSince = useRef(0)
+  useEffect(() => {
+    if (!refreshing) return
+    if (!spunSince.current) spunSince.current = Date.now()
+    if (loading) return
+    const t = setTimeout(() => {
+      spunSince.current = 0
+      setRefreshing(false)
+    }, Math.max(0, 700 - (Date.now() - spunSince.current)))
+    return () => clearTimeout(t)
+  }, [refreshing, loading])
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null) // a thread id
   const [compose, setCompose] = useState<ComposeInit | null>(null)
@@ -506,15 +519,17 @@ export function Mail({ win }: { win: WinState }) {
         {loading && <span className="ca-spin" aria-label="Loading" />}
         <span className="nb-spacer" />
         <button
-          className="ml-icon"
+          className={`ml-icon ml-refresh ${refreshing ? 'is-spinning' : ''}`}
           onClick={() => {
             setError(null)
+            setRefreshing(true)
             mailChangedElsewhere()
           }}
           aria-label="Refresh"
+          aria-busy={refreshing}
           title="Refresh"
         >
-          ↻
+          <span aria-hidden="true">↻</span>
         </button>
         <button className="btn btn-small btn-primary" onClick={() => startCompose({ title: 'New message' })} title="New message (C)" disabled={!boot}>
           ✎ {narrow ? '' : 'New'}
