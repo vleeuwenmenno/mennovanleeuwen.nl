@@ -39,6 +39,7 @@ import { explainIcs, readIcs, type IcsEvent } from './ics'
 import { isTaskEvent, taskEvents } from './tasks'
 import '../tasks/tasks.css'
 import { draftFromEvent, draftFromRange, EventEditor, type Choose, type Draft } from './EventEditor'
+import { EventPreview } from './EventPreview'
 import { MonthView } from './MonthView'
 import { TimeGrid, type Change } from './TimeGrid'
 import { addDays, atMinutes, calendarView, isView, parseDay, step, VIEWS, viewRange, viewTitle, type View } from './time'
@@ -53,6 +54,10 @@ import { dayLoad, MiniMonth, YearView } from './YearView'
 // there, drag them to another day or time, open them in the Tasks app. So do your contacts'
 // birthdays (src/apps/calendar/birthdays.ts), and .ics files dropped on it or opened in it are
 // imported (props.import takes them: src/data/pimFiles.ts), skipping events it has already.
+//
+// A click on an event shows it first, as a card beside it (EventPreview.tsx; a sheet from the bottom
+// in a narrow window): Edit there, a double click, or the Edit item of its menu opens the editor.
+// Events asked for from other apps (props.event) show that card too.
 //
 // props.date ("2026-10-09") and props.view open it on a day (from the clock's month), props.event
 // with an iCalendar UID opens that event there (an invitation in Mail; props.occurrence picks one
@@ -70,6 +75,10 @@ function useNow() {
 }
 
 type Editing = { event: CalendarEvent | null; draft: Draft }
+/** The event whose card is open, and where it was clicked (`near`; none when asked for from outside, `reveal`). */
+type Previewing = { id: string; near: { x: number; y: number } | null; reveal: boolean }
+/** Two clicks on an event within this long are a double click: straight to the editor. */
+const DOUBLE_MS = 450
 type Asking = { question: string; verb: string; resolve: (a: 'one' | 'all' | null) => void }
 
 export function CalendarApp({ win }: { win: WinState }) {
@@ -84,6 +93,9 @@ export function CalendarApp({ win }: { win: WinState }) {
   const [narrow, setNarrow] = useState(false)
   const [sidebar, setSidebar] = useState(true)
   const [editing, setEditing] = useState<Editing | null>(null)
+  const [preview, setPreview] = useState<Previewing | null>(null)
+  const pointer = useRef<{ x: number; y: number } | null>(null)
+  const lastOpened = useRef({ id: '', at: 0 })
   const [asking, setAsking] = useState<Asking | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [optimistic, setOptimistic] = useState<Record<string, Change | 'deleted'>>({})
@@ -202,7 +214,7 @@ export function CalendarApp({ win }: { win: WinState }) {
     const e = wantedUid.current ? data?.events.find((x) => x.uid === wantedUid.current && (!occurrence || sameOccurrence(x.occurrence, occurrence))) : null
     if (!e) return
     wantedUid.current = null
-    setEditing({ event: e, draft: draftFromEvent(e) })
+    setPreview({ id: e.id, near: null, reveal: true })
   }
   useEffect(openWanted, [data]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -218,7 +230,28 @@ export function CalendarApp({ win }: { win: WinState }) {
     if (writable.some((c) => c.id === lastCalendar)) return lastCalendar!
     return (writable.find((c) => c.primary) ?? writable[0])?.id ?? ''
   }
-  const open = (e: CalendarEvent) => (isTaskEvent(e) ? openTask(e.task.id) : isBirthdayEvent(e) ? openContact(e.person.contact.id) : setEditing({ event: e, draft: draftFromEvent(e) }))
+  const edit = (e: CalendarEvent) => {
+    setPreview(null)
+    setEditing({ event: e, draft: draftFromEvent(e) })
+  }
+  /** A click on an event: its card (moving it from another event's); a second click on it, soon enough, the editor. */
+  const open = (e: CalendarEvent) => {
+    if (isTaskEvent(e)) return openTask(e.task.id)
+    if (isBirthdayEvent(e)) return openContact(e.person.contact.id)
+    const double = lastOpened.current.id === e.id && Date.now() - lastOpened.current.at < DOUBLE_MS
+    lastOpened.current = { id: e.id, at: double ? 0 : Date.now() }
+    if (double) return edit(e)
+    setPreview({ id: e.id, near: pointer.current, reveal: false })
+  }
+  const closePreview = useCallback((focus: boolean) => {
+    setPreview(null)
+    if (focus) rootRef.current?.focus({ preventScroll: true })
+  }, [])
+  const previewed = preview ? (events.find((x) => x.id === preview.id) ?? null) : null
+  // Gone from what is shown (deleted, or another range loaded without it): the card goes too.
+  useEffect(() => {
+    if (preview && !previewed && !loading) setPreview(null)
+  }, [preview, previewed, loading])
   const create = (start: Date, end: Date, allDay: boolean) => setEditing({ event: null, draft: draftFromRange(start, end, allDay, defaultCalendar()) })
   const newEvent = () => {
     // The next whole hour today, or 09:00 on the day in view.
@@ -229,6 +262,7 @@ export function CalendarApp({ win }: { win: WinState }) {
 
   /** A drag ended: move or stretch the event there (asking first for a repeating one). */
   const change = async (e: CalendarEvent, c: Change) => {
+    setPreview(null)
     // A task dragged to another day or time: that is its new due date.
     if (isTaskEvent(e)) {
       setError(null)
@@ -250,14 +284,25 @@ export function CalendarApp({ win }: { win: WinState }) {
     }
   }
 
-  const remove = async (e: CalendarEvent) => {
+  const remove = async (e: CalendarEvent, confirm = false) => {
     if (isTaskEvent(e)) return deleteTask(e.task).catch((err: Error) => setError(err.message))
     let all = false
     if (e.recurring) {
       const a = await choose('This event repeats. Delete only this one, or all of them?', 'Delete')
       if (!a) return
       all = a === 'all'
+    } else if (confirm) {
+      const a = await askWith({
+        title: 'Delete this event?',
+        body: `“${e.title || '(No title)'}” is removed from ${e.calendar}.`,
+        buttons: [
+          { id: 'cancel', label: 'Cancel' },
+          { id: 'delete', label: 'Delete', primary: true, danger: true },
+        ],
+      })
+      if (a !== 'delete') return
     }
+    setPreview(null)
     setOptimistic((o) => ({ ...o, [e.id]: 'deleted' }))
     try {
       await deleteEvent(e, all)
@@ -288,13 +333,13 @@ export function CalendarApp({ win }: { win: WinState }) {
     completeTask(e.task, !e.task.completed).catch((err: Error) => setError(err.message))
   }
 
-  /** Right-click: on an event, what can be done with it; on an empty spot, a new event there. */
-  const menu = (ev: MouseEvent, e: CalendarEvent | null, at: Date, allDay: boolean) => {
+  /** What can be done with an event, or with an empty spot (a new event there): the right-click menu, and the card's ⋯. */
+  const menuItems = (e: CalendarEvent | null, at: Date, allDay: boolean): MenuItem[] => {
     const writableTask = e && isTaskEvent(e) && !!taskLists?.find((l) => l.id === e.task.list)?.writable
     const guests = e ? (e.attendees ?? []).filter((a) => !a.self).map((a) => a.email) : []
     if (e && isBirthdayEvent(e)) {
       const email = e.person.contact.emails[0]?.value
-      return openContextMenu(ev, [{ label: 'Open contact', onSelect: () => open(e) }, ...(email ? [{ label: `Email ${email}`, onSelect: () => composeMail({ to: [email] }) }] : [])])
+      return [{ label: 'Open contact', onSelect: () => open(e) }, ...(email ? [{ label: `Email ${email}`, onSelect: () => composeMail({ to: [email] }) }] : [])]
     }
     const items: MenuItem[] = e && isTaskEvent(e)
       ? [
@@ -309,7 +354,7 @@ export function CalendarApp({ win }: { win: WinState }) {
         ]
       : e
       ? [
-          { label: e.editable ? 'Open' : 'Show details', onSelect: () => open(e) },
+          { label: e.editable ? 'Edit' : 'Show details', onSelect: () => (e.editable ? edit(e) : setPreview({ id: e.id, near: pointer.current, reveal: false })) },
           ...(e.meet ? [{ label: 'Join the call', onSelect: () => openLink(e.meet!) }] : []),
           ...(e.url ? [{ label: 'Open in Google Calendar', onSelect: () => openLink(e.url!) }] : []),
           ...(guests.length ? [{ label: 'Email guests', onSelect: () => composeMail({ to: guests, subject: e.title }) }] : []),
@@ -324,8 +369,9 @@ export function CalendarApp({ win }: { win: WinState }) {
           { label: allDay ? 'New all-day event' : `New event at ${at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}`, onSelect: () => (allDay ? create(at, addDays(at, 1), true) : create(at, new Date(at.getTime() + 3600_000), false)) },
           ...(shownView !== 'day' ? [{ label: 'Show this day', onSelect: () => showDay(at) }] : []),
         ]
-    openContextMenu(ev, items)
+    return items
   }
+  const menu = (ev: MouseEvent, e: CalendarEvent | null, at: Date, allDay: boolean) => openContextMenu(ev, menuItems(e, at, allDay))
 
   // .ics files dropped on the calendar (from the computer, Files or the desktop) or opened in it:
   // their events, shown first, imported into the calendar picked. What the picked calendar has
@@ -441,6 +487,7 @@ export function CalendarApp({ win }: { win: WinState }) {
 
   const onKey = (e: KeyboardEvent) => {
     if (editing || asking || e.metaKey || e.ctrlKey || e.altKey) return
+    if (preview) return void (e.key === 'Escape' && (e.preventDefault(), closePreview(true)))
     if ((e.target as HTMLElement).closest('input, textarea, select')) return
     const v = VIEWS.find((x) => x.key === e.key.toLowerCase())
     if (v) setView(v.id)
@@ -496,7 +543,7 @@ export function CalendarApp({ win }: { win: WinState }) {
   const sources = [...new Set((calendars ?? []).map((c) => c.source ?? 'Google'))]
 
   return (
-    <div ref={rootRef} className={`ca ${narrow ? 'is-narrow' : ''}`} tabIndex={-1} onKeyDown={onKey}>
+    <div ref={rootRef} className={`ca ${narrow ? 'is-narrow' : ''}`} tabIndex={-1} onKeyDown={onKey} onPointerDownCapture={(e) => (pointer.current = { x: e.clientX, y: e.clientY })}>
       <header className="ca-toolbar">
         <button className={`ca-icon ${sidebar && !narrow ? 'is-on' : ''}`} onClick={() => setSidebar((s) => !s)} aria-label="Show the sidebar" title="Sidebar">
           ☰
@@ -617,6 +664,20 @@ export function CalendarApp({ win }: { win: WinState }) {
           )}
         </div>
       </div>
+      {previewed && !editing && (
+        <EventPreview
+          event={previewed}
+          calendar={calendars?.find((c) => c.id === previewed.calendarId)}
+          rootRef={rootRef}
+          near={preview!.near}
+          reveal={preview!.reveal}
+          sheet={narrow}
+          onEdit={() => edit(previewed)}
+          onDelete={() => void remove(previewed, true)}
+          onMenu={(at) => openContextMenu({ clientX: at.x, clientY: at.y, preventDefault() {}, stopPropagation() {} }, menuItems(previewed, new Date(), false).slice(1))}
+          onClose={closePreview}
+        />
+      )}
       {editing && (
         <EventEditor
           key={editing.event?.id ?? `new-${editing.draft.startDate}-${editing.draft.startTime}`}

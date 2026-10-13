@@ -4515,6 +4515,102 @@ button.cal-day.is-picked:not(.is-today) {
   gap: 6px;
 }
 
+/* An event's card (src/apps/calendar/EventPreview.tsx): beside the event, or a sheet from the bottom when narrow. */
+.ca-pv {
+  position: absolute;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 330px;
+  max-width: calc(100% - 16px);
+  max-height: calc(100% - 16px);
+  padding: 12px 14px;
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  outline: 0;
+  background: var(--panel-solid);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4);
+}
+.ca-pv-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.ca-pv-head .ca-swatch {
+  margin-top: 5px;
+}
+.ca-pv-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--fg-bright);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.ca-pv-when {
+  color: var(--text);
+  font-size: 12px;
+}
+.ca-pv-rows {
+  display: grid;
+  gap: 6px;
+}
+.ca-pv-row {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+}
+.ca-pv-row > span:first-child {
+  color: var(--muted);
+  font-size: 11px;
+}
+.ca-pv-row .btn {
+  justify-self: start;
+}
+.ca-pv-text {
+  overflow-wrap: anywhere;
+}
+.ca-pv-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 2px;
+}
+.ca-pv-guests {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ca-pv-desc {
+  max-height: 140px;
+  overflow: auto;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.ca-pv-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ca-pv-back {
+  place-items: end center;
+  padding: 0;
+}
+.ca-pv.is-sheet {
+  position: relative;
+  width: 100%;
+  max-width: none;
+  max-height: 80%;
+  padding-bottom: 16px;
+}
+
 /* Not signed in, or nothing connected yet. */
 .ca-empty {
   display: grid;

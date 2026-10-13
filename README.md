@@ -607,7 +607,11 @@ server expanding repeating events, so everything shows both sources together.
 
 The **Calendar** app ([`src/apps/calendar`](src/apps/calendar)) shows the switched-on calendars by
 day, three days, week, month or year. Drag on an empty spot to make an event, drag an event to
-move it, drag its bottom edge to change its length; open one to change its title, time, place,
+move it, drag its bottom edge to change its length; click one for a read-only card beside it (when,
+place, call link, calendar, guests with their answers, notes, linked notebook notes; *Edit* or `E`/`Enter`,
+*Delete* or `Del`, `Esc` or a click outside to close, a ⋯ menu with the right-click menu's items; a sheet
+from the bottom in a narrow window; also what opens when another app sends you to an event), and double-click
+it, or press *Edit*, to change its title, time, place,
 notes, calendar and guests (picked from your contacts, invited by email by Google or the CalDAV
 server; *Email guests* writes to them all). For one occurrence
 of a repeating event it asks whether the change is for that one or the whole series. The sidebar
