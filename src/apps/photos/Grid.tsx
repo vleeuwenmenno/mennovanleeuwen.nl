@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { dayTitle, duration, monthTitle, thumbUrl, type Bucket, type Item, type SourceId, type ThumbSize } from '../../data/photos'
 import { useIsMobile } from '../../os/useIsMobile'
+import { VideoThumb } from '../../os/VideoThumb'
 import type { Timeline } from './useTimeline'
 
 // The timeline's grid: months, then days, then square tiles, newest first. Only the rows on
@@ -198,7 +199,13 @@ const Tile = memo(function Tile({ source, item, size, px, left, act, selected, s
       data-id={item.id}
     >
       {src && !failed && <img src={src} alt="" draggable={false} onLoad={() => settle(true)} onError={() => settle(false)} />}
-      {failed && <span className="ph-tile-none" aria-hidden>{item.video ? '▶' : '🖼'}</span>}
+      {/* A Seafile video Seafile made no thumbnail for: a frame from it, made in this browser (src/data/videoThumbs.ts). */}
+      {failed &&
+        (item.video && item.path ? (
+          <VideoThumb path={item.path} version={item.v} seafileFirst={false} badge={false} className="ph-tile-frame" fallback={<span className="ph-tile-none" aria-hidden>▶</span>} />
+        ) : (
+          <span className="ph-tile-none" aria-hidden>{item.video ? '▶' : '🖼'}</span>
+        ))}
       {item.video && <span className="ph-badge">{item.duration ? duration(item.duration) : '▶'}</span>}
       {item.fav && (
         <svg className="ph-fav" viewBox="0 0 24 24" width="14" height="14" aria-label="Favourite">

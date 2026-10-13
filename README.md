@@ -752,6 +752,19 @@ picture and full screen; it hides while playing. Keys: Space or K, J and L, the 
 9, comma and full stop for single frames, < and > for speed. Seafile's thumbnails come through the
 server ([`server/seafile.ts`](server/seafile.ts)) for Files' grid and Preview's sidebar.
 
+**Videos** (mp4, m4v, mov, webm, mkv, ogv) show a frame from themselves, with a ▶ and their length,
+in Files' grid, list and gallery, on the desktop, and in Photos when Seafile made no thumbnail
+([`src/data/videoThumbs.ts`](src/data/videoThumbs.ts)). Seafile is asked first (it makes them only
+with `ENABLE_VIDEO_THUMBNAIL` and ffmpeg on its server, and stops being asked after three refusals);
+otherwise the browser makes one: a hidden, muted video, never played, reads the file's header through
+`/api/seafile/stream` (same origin, byte ranges) or a blob for files kept in this browser, seeks a
+tenth of the way in (a second into short clips) and keeps that frame as a small WebP. Only tiles on
+screen ask, two at a time, and scrolling away or closing the window stops the work. Frames are kept
+in IndexedDB per account (at most 2,000 or 50 MB, the least recently shown going first), so each is
+made once per browser; a video that gives none shows its icon and is left alone for a day. Encrypted
+libraries answer no byte ranges, so there only videos up to 64 MB get a frame. Settings → Apps →
+Files → *Video thumbnails* switches it off.
+
 Uploads go straight from the browser to Seafile's file server: drop files or whole folders from the
 computer on a Files window (a folder, its empty space or the sidebar) or on the desktop, or use
 *Upload files* / *Upload folder* in Files' menus. Three go at a time; a panel in the corner shows the
@@ -1143,7 +1156,8 @@ Encrypted libraries are walked only while unlocked in Files, and their photos on
 Seafile makes no thumbnails there, so the small preview the camera embedded in the EXIF stands in.
 Thumbnails come from Seafile's thumbnail API through the server (the token stays there), with an
 ETag and a week's Cache-Control; the full photo comes straight from Seafile's file server with a
-short-lived link, as in Files. Linking another Seafile account starts the index over.
+short-lived link, as in Files. Videos Seafile made no thumbnail for show a frame the browser takes
+from them, as in Files. Linking another Seafile account starts the index over.
 
 **Immich** is linked in Settings → Integrations (Photos' ⚙ view has a button to it), with its URL and an API key
 (Immich: *Account settings → API keys*; All, or at least asset.read, asset.view, asset.download,
