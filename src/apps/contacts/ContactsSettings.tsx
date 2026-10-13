@@ -4,6 +4,7 @@ import { signIn, useAccount } from '../../os/account'
 import { ask } from '../../os/Dialogs'
 import { Select } from '../../os/Select'
 import { useWM } from '../../os/wm'
+import { SecretInput } from '../../os/SecretInput'
 
 // Settings for Contacts (Settings → Integrations → Contacts, and Settings → Apps → Contacts): the
 // CardDAV accounts (Fastmail, iCloud, Nextcloud, Radicale or any other), a CalDAV login to use for
@@ -169,7 +170,7 @@ function CarddavForm({ onAdded }: { onAdded: () => void }) {
       </label>
       <label>
         <span>App password</span>
-        <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="app password" required autoComplete="off" />
+        <SecretInput value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="app password" required />
       </label>
       <p className="muted set-help">
         {provider === 'fastmail' ? (

@@ -4735,3 +4735,34 @@ button.cal-day.is-picked:not(.is-today) {
   color: var(--fg-bright);
   font: inherit;
 }
+
+/* SecretInput (src/os/SecretInput.tsx): a masked text field with a show/hide button on its right. */
+.secret {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+.set-form label .secret {
+  color: inherit;
+}
+.secret input {
+  padding-right: 30px;
+}
+.secret-mask {
+  -webkit-text-security: disc;
+}
+.secret-eye {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  color: var(--muted);
+}
+.secret-eye:hover,
+.secret-eye[aria-pressed='true'] {
+  color: var(--fg-bright);
+}

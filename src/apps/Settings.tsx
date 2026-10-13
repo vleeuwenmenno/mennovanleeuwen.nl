@@ -45,6 +45,7 @@ import { BranchGlyph } from './LinkForge'
 import { SyncLine } from './Notebook'
 import { MailSettings } from './mail/MailSettings'
 import { useMailAccounts } from '../data/mail'
+import { SecretInput } from '../os/SecretInput'
 
 // System settings, laid out like macOS: the account on top of a sidebar, one pane per topic.
 // Opened from the system menu, the desktop's right-click menu, Spotlight, the terminal and apps'
@@ -951,7 +952,7 @@ function UpdownSettings() {
         <form className="set-form" onSubmit={save}>
           <label>
             <span>Read-only API key</span>
-            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="read-only API key" autoComplete="off" required />
+            <SecretInput value={key} onChange={(e) => setKey(e.target.value)} placeholder="read-only API key" required />
           </label>
           <p className="muted set-help">
             Use the <em>read-only</em> key from{' '}
@@ -1009,7 +1010,7 @@ function OllamaSettings() {
         <form className="set-form" onSubmit={save}>
           <label>
             <span>API key</span>
-            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Ollama API key" autoComplete="off" required />
+            <SecretInput value={key} onChange={(e) => setKey(e.target.value)} placeholder="Ollama API key" required />
           </label>
           <p className="muted set-help">
             Make one at{' '}
@@ -1076,7 +1077,7 @@ function SeafileSettings() {
         </label>
         <label>
           <span>Password</span>
-          <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="password" required autoComplete="off" />
+          <SecretInput value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="password" required />
         </label>
         {askOtp && (
           <label>
@@ -1273,7 +1274,7 @@ function OfficeSettings() {
       </label>
       <label>
         <span>JWT secret</span>
-        <input type="password" value={form.secret} onChange={(e) => setForm({ ...form, secret: e.target.value })} placeholder="ONLYOFFICE_JWT_SECRET" required autoComplete="off" />
+        <SecretInput value={form.secret} onChange={(e) => setForm({ ...form, secret: e.target.value })} placeholder="ONLYOFFICE_JWT_SECRET" required />
       </label>
       <p className="muted set-help">
         The document server Seafile opens Office files with, to edit them in a window here. The secret is <em>ONLYOFFICE_JWT_SECRET</em> from Seafile's <em>.env</em> (or <em>seahub_settings.py</em>). The URL is checked by loading its editor, then both are stored encrypted on this server.
@@ -1418,7 +1419,7 @@ function CaldavForm() {
       </label>
       <label>
         <span>App password</span>
-        <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="app password" required autoComplete="off" />
+        <SecretInput value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="app password" required />
       </label>
       <p className="muted set-help">
         {provider === 'fastmail' ? (
