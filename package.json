@@ -31,6 +31,7 @@
     "check:agents-permissions": "node scripts/agents-permissions.ts",
     "check:agents-compact": "node scripts/agents-compact.ts",
     "check:seafile-stream": "node scripts/seafile-stream.ts",
+    "check:ics": "node scripts/ics-check.ts",
     "check:mail": "node scripts/mail-check.ts",
     "mail:mock": "node scripts/mail-mock.ts",
     "check:photos": "node scripts/photos-check.ts",
@@ -40,6 +41,7 @@
     "check:tasks": "node scripts/tasks-check.ts",
     "check:launchers": "node scripts/launchers-check.ts",
     "check:pim-links": "node scripts/pim-check.ts",
+    "check:note-links": "node scripts/note-links-check.ts",
     "empires:battle-ai": "node scripts/empires-battle-ai.ts",
     "empires:bot": "node scripts/empires-bot.ts",
     "start": "node server/index.ts"

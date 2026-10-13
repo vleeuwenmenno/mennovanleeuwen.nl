@@ -90,6 +90,16 @@ export function toolTitle(call: ToolCall): [string, string] {
       return ['Change Event', s(call, 'title')]
     case 'calendar_delete_event':
       return ['Delete Event', '']
+    case 'notes_for_event':
+      return ['Event Notes', '']
+    case 'events_for_note':
+      return ['Note Events', '']
+    case 'link_note_to_event':
+      return ['Link Note', '']
+    case 'unlink_note_from_event':
+      return ['Unlink Note', '']
+    case 'make_meeting_note':
+      return ['Meeting Note', '']
     default:
       return [toolLabel(call), '']
   }
@@ -244,6 +254,22 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
       const done = (obj?.created ?? obj?.updated ?? obj?.deleted) as { title?: string; when?: string; calendar?: string } | undefined
       const verb = obj?.created ? 'Added' : obj?.updated ? 'Changed' : 'Deleted'
       return ok([under(done ? `${verb} ${done.title ?? ''}, ${done.when ?? ''} (${done.calendar ?? ''})${typeof obj?.applied_to === 'string' ? `, ${obj.applied_to}` : ''}` : 'Done')])
+    }
+    case 'notes_for_event': {
+      const list = Array.isArray(obj?.notes) ? (obj.notes as { title?: string }[]) : []
+      return ok([under(`${list.length} note${list.length === 1 ? '' : 's'} on ${String((obj?.event as { title?: string } | undefined)?.title ?? 'the event')}`), ...list.slice(0, max).map((n) => clipLine([seg('     '), seg(n.title ?? '')], w)), ...more(list.length - max, verbose)])
+    }
+    case 'events_for_note': {
+      const list = Array.isArray(obj?.events) ? (obj.events as { title?: string; when?: string; deleted?: boolean }[]) : []
+      return ok([under(`${list.length} event${list.length === 1 ? '' : 's'}`), ...list.slice(0, max).map((e) => clipLine([seg('     '), seg(e.when ?? '', 'muted'), seg(`  ${e.title ?? ''}`), ...(e.deleted ? [seg('  deleted', 'red')] : [])], w)), ...more(list.length - max, verbose)])
+    }
+    case 'link_note_to_event':
+    case 'unlink_note_from_event':
+    case 'make_meeting_note': {
+      const done = (obj?.linked ?? obj?.unlinked ?? obj?.linked_to) as { note?: string; event?: string; title?: string; when?: string } | undefined
+      const made = obj?.note && typeof obj.note === 'object' ? (obj.note as { title?: string }).title : null
+      const text = call.name === 'make_meeting_note' ? `Made “${made ?? 'a note'}” for ${done?.title ?? 'the event'}, ${done?.when ?? ''}` : `${call.name === 'link_note_to_event' ? 'Linked' : 'Unlinked'} “${done?.note ?? ''}” ${call.name === 'link_note_to_event' ? 'to' : 'from'} ${done?.event ?? ''}, ${done?.when ?? ''}`
+      return ok([under(text)])
     }
     case 'use_skill':
       return ok([under(`Read the skill${/Files: (.*)/.exec(result)?.[1] ? ` (${/Files: (.*)/.exec(result)![1]})` : ''}`)])

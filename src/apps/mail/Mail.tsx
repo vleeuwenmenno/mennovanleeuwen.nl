@@ -12,7 +12,7 @@ import {
   mailChangedElsewhere,
   nameOf,
   orderMailboxes,
-  setMailPrefs,
+  signatureFor,
   takeCompose,
   toAddresses,
   useMailAccounts,
@@ -20,6 +20,7 @@ import {
   useMailVersion,
   type Address,
   type Boot,
+  type Identity,
   type Mailbox,
   type Message,
   type Op,
@@ -60,7 +61,7 @@ export function Mail({ win }: { win: WinState }) {
   const [narrow, setNarrow] = useState(false)
   const [view, setView] = useState<View>('list')
   const [accountId, setAccountId] = useState<number | null>(() => (win.props.account ? Number(win.props.account) : null))
-  const account = accounts?.find((a) => a.id === accountId) ?? accounts?.[0] ?? null
+  const account = accounts?.find((a) => a.id === accountId) ?? accounts?.find((a) => a.id === prefs.defaultAccount) ?? accounts?.[0] ?? null
   const acc = account?.id ?? null
   const [boot, setBoot] = useState<Boot | null>(null)
   const [mailbox, setMailbox] = useState<string | null>(null)
@@ -69,6 +70,19 @@ export function Mail({ win }: { win: WinState }) {
   const [rows, setRows] = useState<ThreadRow[]>([])
   const [total, setTotal] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
+  // Refresh spins for at least a turn, so a quick answer still shows that it looked.
+  const [refreshing, setRefreshing] = useState(false)
+  const spunSince = useRef(0)
+  useEffect(() => {
+    if (!refreshing) return
+    if (!spunSince.current) spunSince.current = Date.now()
+    if (loading) return
+    const t = setTimeout(() => {
+      spunSince.current = 0
+      setRefreshing(false)
+    }, Math.max(0, 700 - (Date.now() - spunSince.current)))
+    return () => clearTimeout(t)
+  }, [refreshing, loading])
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null) // a thread id
   const [compose, setCompose] = useState<ComposeInit | null>(null)
@@ -237,18 +251,22 @@ export function Mail({ win }: { win: WinState }) {
   // --- Writing ---------------------------------------------------------------------------------
   const own = useMemo(() => new Set((boot?.identities ?? []).map((i) => i.email.toLowerCase())), [boot])
   const startCompose = (c: Partial<ComposeInit> & { title: string }) => {
-    setCompose({ key: crypto.randomUUID(), to: [], cc: [], bcc: [], subject: '', text: signature(c.identityId), attachments: [], focus: c.to?.length ? 'text' : 'to', ...c })
+    const identity = identityOf(c.identityId)
+    setCompose({ key: crypto.randomUUID(), to: [], cc: [], bcc: [], subject: '', text: signature('new', identity), attachments: [], focus: c.to?.length ? 'text' : 'to', ...c, identityId: identity?.id })
     setView('compose')
   }
-  const signature = (identityId?: string) => {
-    const sig = (boot?.identities.find((i) => i.id === identityId) ?? boot?.identities[0])?.textSignature?.trim()
-    return sig ? `\n\n${/^--\s/.test(sig) ? sig : `-- \n${sig}`}` : ''
+  /** The identity asked for, or the one set as the default for this account in Settings → Apps → Mail. */
+  const identityOf = (id?: string) => boot?.identities.find((i) => i.id === id) ?? boot?.identities.find((i) => i.id === prefs.defaultIdentity[String(acc)]) ?? boot?.identities[0]
+  /** The signature as it starts a message of this kind (above any quote), or nothing. */
+  const signature = (kind: 'new' | 'reply' | 'forward', identity: Identity | undefined) => {
+    const sig = acc === null ? '' : signatureFor(kind, acc, identity)
+    return sig ? `\n\n${sig}` : ''
   }
   const reply = (m: Message, mode: ReplyMode) => {
     const body = m.text ?? (m.html ? htmlToText(m.html) : '')
     const sender = m.from[0]
     // Answer from the identity the message was sent to.
-    const identity = boot?.identities.find((i) => [...m.to, ...m.cc, ...m.bcc].some((a) => a.email.toLowerCase() === i.email.toLowerCase())) ?? boot?.identities[0]
+    const identity = boot?.identities.find((i) => [...m.to, ...m.cc, ...m.bcc].some((a) => a.email.toLowerCase() === i.email.toLowerCase())) ?? identityOf()
     const notMe = (list: Address[]) => list.filter((a) => !own.has(a.email.toLowerCase()))
     const subject = (prefix: string) => (new RegExp(`^${prefix}:`, 'i').test(m.subject.trim()) ? m.subject : `${prefix}: ${m.subject}`)
     if (mode === 'draft') {
@@ -256,7 +274,7 @@ export function Mail({ win }: { win: WinState }) {
     }
     if (mode === 'forward') {
       const head = ['---------- Forwarded message ---------', `From: ${sender ? (sender.name ? `${sender.name} <${sender.email}>` : sender.email) : ''}`, `Date: ${new Date(m.receivedAt).toLocaleString()}`, `Subject: ${m.subject}`, `To: ${m.to.map((a) => a.email).join(', ')}`].join('\n')
-      return startCompose({ title: 'Forward', identityId: identity?.id, subject: subject('Fwd'), text: `${signature(identity?.id)}\n\n${head}\n\n${body}`, attachments: m.attachments.map((a) => ({ key: a.blobId, name: a.name, type: a.type, size: a.size, blobId: a.blobId })), forwardOf: m.id, focus: 'to' })
+      return startCompose({ title: 'Forward', identityId: identity?.id, subject: subject('Fwd'), text: `${signature('forward', identity)}\n\n${head}\n\n${body}`, attachments: m.attachments.map((a) => ({ key: a.blobId, name: a.name, type: a.type, size: a.size, blobId: a.blobId })), forwardOf: m.id, focus: 'to' })
     }
     const back = m.replyTo.length ? m.replyTo : m.from
     const fromMe = sender && own.has(sender.email.toLowerCase())
@@ -271,7 +289,7 @@ export function Mail({ win }: { win: WinState }) {
       to,
       cc: mode === 'replyAll' ? notMe([...(fromMe ? [] : m.to), ...m.cc]).filter((a) => !to.some((t) => t.email.toLowerCase() === a.email.toLowerCase())) : [],
       subject: subject('Re'),
-      text: `\n${signature(identity?.id)}\n\n${quoted}`,
+      text: `\n${signature('reply', identity)}\n\n${quoted}`,
       inReplyTo: m.messageId,
       references: [...m.references, ...m.messageId],
       replyOf: m.id,
@@ -346,7 +364,7 @@ export function Mail({ win }: { win: WinState }) {
         void change(mailbox === roleOf('junk') ? 'notjunk' : 'junk', sel)
         break
       case 'r':
-        void replyToSelected('reply')
+        void replyToSelected(prefs.replyAll ? 'replyAll' : 'reply')
         break
       case 'a':
         void replyToSelected('replyAll')
@@ -506,15 +524,17 @@ export function Mail({ win }: { win: WinState }) {
         {loading && <span className="ca-spin" aria-label="Loading" />}
         <span className="nb-spacer" />
         <button
-          className="ml-icon"
+          className={`ml-icon ml-refresh ${refreshing ? 'is-spinning' : ''}`}
           onClick={() => {
             setError(null)
+            setRefreshing(true)
             mailChangedElsewhere()
           }}
           aria-label="Refresh"
+          aria-busy={refreshing}
           title="Refresh"
         >
-          ↻
+          <span aria-hidden="true">↻</span>
         </button>
         <button className="btn btn-small btn-primary" onClick={() => startCompose({ title: 'New message' })} title="New message (C)" disabled={!boot}>
           ✎ {narrow ? '' : 'New'}
@@ -552,11 +572,8 @@ export function Mail({ win }: { win: WinState }) {
               ))}
             </nav>
             <div className="ml-side-foot">
-              <label className="ml-check" title="Opening a conversation marks it as read">
-                <input type="checkbox" checked={prefs.markRead} onChange={(e) => setMailPrefs({ markRead: e.target.checked })} /> Mark as read when opened
-              </label>
-              <button className="link-btn" onClick={() => wm.open('settings', { section: 'integrations', sub: 'mail', t: String(Date.now()) })}>
-                Mail accounts…
+              <button className="link-btn" onClick={() => wm.open('settings', { section: 'mail', t: String(Date.now()) })}>
+                Mail settings…
               </button>
             </div>
           </aside>
@@ -713,4 +730,7 @@ function ThreadList(props: {
 }
 
 /** For the window menu: compose from the app's own menu, and its settings. */
-export const mailMenu = (_w: WinState, wm: ReturnType<typeof useWM>): MenuItem[] => [{ label: 'Mail accounts…', onSelect: () => wm.open('settings', { section: 'integrations', sub: 'mail', t: String(Date.now()) }) }]
+export const mailMenu = (_w: WinState, wm: ReturnType<typeof useWM>): MenuItem[] => [
+  { label: 'Mail settings…', onSelect: () => wm.open('settings', { section: 'mail', t: String(Date.now()) }) },
+  { label: 'Mail accounts…', onSelect: () => wm.open('settings', { section: 'integrations', sub: 'mail', t: String(Date.now()) }) },
+]

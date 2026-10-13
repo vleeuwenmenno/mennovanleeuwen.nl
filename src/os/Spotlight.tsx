@@ -5,6 +5,8 @@ import { MarkdownPreview } from '../apps/Zed'
 import { isCodeQuery, type BranchHit, type Hit, type IssueHit, type RepoHit } from '../data/code'
 import { forgetHit, hitKey, rememberHit, useRecentHits, weight } from '../data/spotlightRecent'
 import { faviconOf, launch, launcherImage, useLaunchers } from '../data/launchers'
+import { importFileOf } from '../data/fileOps'
+import { openImport, pimAppFor } from '../data/pimFiles'
 import { createNote, noteTitle, NOTE_COLORS, useAllNotes } from '../data/notes'
 import { addWidget, widgetDefs } from '../widgets/registry'
 import { ENGINES, searchWeb, useSearchSettings, useSuggestions } from '../data/searchEngine'
@@ -22,7 +24,7 @@ import { signIn, useAccount } from './account'
 import { appHere, cvMode } from './cvMode'
 import { APP_META } from './apps'
 import { useCodeSearch } from './codeSearch'
-import { asWebAddress, useLinkPreview, type LinkPreview } from './linkPreview'
+import { asWebAddress, isLocalAddress, useLinkPreview, type LinkPreview } from './linkPreview'
 import { openLink } from '../data/links'
 import { displayName, matchScore, openContact, useContacts, type Contact } from '../data/contacts'
 import { composeMail, fetchThreads, openMail, useMailAccounts, type ThreadRow } from '../data/mail'
@@ -180,13 +182,14 @@ function FilePreview({ path }: { path: string }) {
 /** "Go to example.com": the top hit whenever the query is a web address. */
 function goToRow(url: string, page: LinkPreview | null, open: (url: string) => void, copy: (text: string, label: string) => void): Result {
   const shown = url.replace(/^https?:\/\//, '').replace(/\/$/, '')
-  const icon = page?.icon ?? (() => {
+  // No favicon guess for local addresses: fetching one could make the browser ask for local network access.
+  const icon = page?.icon ?? (isLocalAddress(url) ? null : (() => {
     try {
       return `${new URL(url).origin}/favicon.ico`
     } catch {
       return null
     }
-  })()
+  })())
   return {
     id: 'goto',
     group: 'Top hit',
@@ -814,6 +817,7 @@ export function Spotlight() {
           if (node.open?.url) openLink(node.open.url)
           else if (node.open?.app) wm.open(node.open.app as AppId, node.open.props)
           else if (name.endsWith('.md')) wm.open('zed', { path, view: 'preview', t: String(Date.now()) })
+          else if (pimAppFor(name)) openImport(pimAppFor(name)!, [importFileOf(path)])
           else wm.openNew(MEDIA_APP[fileKind(node)] ?? 'viewer', { path })
         },
         alt: { label: 'Open in terminal', run: () => term(`cat ${prettyPath(path)}`, true) },
@@ -821,15 +825,16 @@ export function Spotlight() {
       })
     }
 
-    // Your notes
+    // Your notes (a meeting's title finds the notes linked to it)
     for (const n of notes) {
       if (n.deleted || n.purged) continue
+      const meetings = (n.events ?? []).map((l) => l.title)
       out.push({
         id: `note-${n.id}`,
         group: 'Notes',
         title: noteTitle(n),
-        subtitle: n.text.split('\n').filter((l) => l.trim()).slice(1).join(' ').slice(0, 80) || 'Note',
-        keywords: `note ${n.text.slice(0, 2000)}`,
+        subtitle: `${meetings.length ? `📅 ${meetings.join(', ')} · ` : ''}${n.text.split('\n').filter((l) => l.trim()).slice(1).join(' ').slice(0, 80)}`.replace(/ · $/, '') || 'Note',
+        keywords: `note ${n.text.slice(0, 2000)}${meetings.length ? ` meeting event ${meetings.join(' ')}` : ''}`,
         icon: <Glyph color={NOTE_COLORS[n.color].bg}>✎</Glyph>,
         run: () => openSticky(wm, n.id),
         enterLabel: 'Show on desktop',

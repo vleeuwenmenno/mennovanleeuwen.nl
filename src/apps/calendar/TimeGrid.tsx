@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import { dayKey, type CalendarEvent } from '../../data/calendar'
 import { isTaskEvent, type TaskEvent } from './tasks'
 import { addDays, atMinutes, hhmm, layoutBars, layoutDay, minutesOf, moved, sameDay, SNAP, span, type Placed } from './time'
+import { EventMark } from './EventMark'
 
 // The day, 3-day and week views: all-day events in a lane on top, timed ones on a 24-hour grid.
 // With a mouse: drag on an empty spot to make an event there, drag an event to move it (to
@@ -203,6 +204,7 @@ export function TimeGrid({ days, events, now, onOpen, onCreate, onChange, onDay,
               {isTaskEvent(b.e) && <TaskCheck e={b.e} onToggle={onToggle} />}
               {b.e.recurring && '↻ '}
               {b.e.title}
+              <EventMark e={b.e} />
             </div>
           ))}
         </div>
@@ -269,6 +271,7 @@ function EventBlock({ p, past, dragging, onToggle }: { p: Placed; past: boolean;
       <span className="ca-ev-title">
         {p.e.recurring && <span className="ca-ev-repeat" aria-label="repeats">↻ </span>}
         {p.e.title}
+        <EventMark e={p.e} />
       </span>
       <span className="ca-ev-time">{time}</span>
       {p.e.editable && !p.endsAfter && !task && <span className="ca-ev-grip" aria-hidden />}

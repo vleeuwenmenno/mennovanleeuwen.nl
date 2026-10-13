@@ -7,6 +7,7 @@ import { setSnapPreview } from './snapPreview'
 import { useSwing } from './swing'
 import { WindowMenuContext } from './windowMenu'
 import { useDropTarget } from './dnd'
+import { dragKeyHeld } from './modDrag'
 import { filesFor, SHOWS_FILE } from './appDrops'
 import { drawnHeight, fitNote, setDrawnHeight, SINGLE_INSTANCE, snapRect, stackOrder, useWM, workspaceOf, WORKSPACES, type Geometry, type SnapZone, type WinState } from './wm'
 
@@ -14,6 +15,7 @@ const TOP_BAR = 28
 const MIN_W = 280
 const MIN_H = 180
 const EDGE = 14 // how close to a screen edge the pointer must be to snap
+const MOD_SLOP = 4 // how far the pointer must move, with the drag key held, before the window takes the drag
 const CORNER = 110 // within this distance of the top or bottom, a side edge means a quarter
 
 type Props = {
@@ -48,6 +50,8 @@ type Drag = {
   hold?: { timer: ReturnType<typeof setTimeout> | null; armed: boolean; given: boolean; y: number; /** Where the finger was when the note lifted */ at: number }
 }
 type Target = SnapZone | 'max' | null
+/** What a drag reads of a pointer event: React's, or the browser's own (a drag started with a key held). */
+type Ptr = { clientX: number; clientY: number; pointerId: number; type: string; currentTarget: EventTarget | null }
 
 // ---------------------------------------------------------------------------------------------
 // Phones stack the notes in one column down a desktop that scrolls (styles.css, stackOrder in
@@ -239,6 +243,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     }
     el.setPointerCapture(e.pointerId)
     document.body.classList.add(mode === 'resize' ? 'is-resizing' : 'is-dragging')
+    if (mode === 'resize') document.body.dataset.rz = edge
     // No text gets selected on the way, whatever the browser does with the pointer.
     document.addEventListener('selectstart', noSelect)
   }
@@ -356,7 +361,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     requestAnimationFrame(() => sectionRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }))
   }
 
-  const onMove = (e: ReactPointerEvent) => {
+  const onMove = (e: Ptr) => {
     const d = drag.current
     if (!d) return
     const dx = e.clientX - d.startX
@@ -422,12 +427,18 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
         g.w = w
         g.x = d.x + (d.w - w)
       }
+      if (d.edge.includes('n')) {
+        // The bottom edge stays put, and the top one stays under the top bar.
+        const top = Math.min(Math.max(d.y + dy, TOP_BAR), d.y + d.h - MIN_H)
+        g.y = top
+        g.h = d.y + d.h - top
+      }
       // Resizing a snapped window makes it a normal one again.
       wm.setGeometry(win.pid, { ...g, snap: undefined, restore: undefined })
     }
   }
 
-  const end = (e: ReactPointerEvent) => {
+  const end = (e: Ptr) => {
     const d = drag.current
     drag.current = null
     if (d?.hold?.timer) clearTimeout(d.hold.timer)
@@ -447,6 +458,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     }
     swing.end()
     document.body.classList.remove('is-dragging', 'is-resizing')
+    delete document.body.dataset.rz
     document.removeEventListener('selectstart', noSelect)
     setSnapPreview(null)
     clearWorkspaceDrop()
@@ -462,6 +474,108 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
   }
 
   const handlers = { onPointerMove: onMove, onPointerUp: end, onPointerCancel: end }
+
+  // --- moving and resizing with a key held (modDrag.ts) ---
+  //
+  // The key and the left button drag the window from anywhere on it; the key and the right button
+  // resize it from the corner nearest the pointer. But the key and a click mean other things in
+  // apps (Ctrl+click selects more, on a link it opens a new tab), and the app sees the press
+  // before any move. So the press only starts watching: while the pointer stays within MOD_SLOP of
+  // where it went down, nothing has happened and the click reaches the app whole. Once it goes
+  // further, the window takes the drag: the app is told the gesture is off (a pointercancel on
+  // window, which ends its rubber band), no more moves reach it, the browser's own drags (links,
+  // images, files) and text selection are held back, and the click that would follow is eaten.
+
+  // The handlers are rebuilt on every render (they close over the window); the ones on `window`
+  // call whichever is newest.
+  const latest = useRef({ onMove, end })
+  latest.current = { onMove, end }
+  const modPress = useRef<(() => void) | null>(null)
+  useEffect(() => () => modPress.current?.(), [])
+
+  /** What the held key does with this button here: the left one moves, the right one resizes. */
+  const modModeOf = (e: { button: number; ctrlKey: boolean; altKey: boolean; metaKey: boolean; target: EventTarget | null }): Drag['mode'] | null => {
+    if (window.innerWidth < 720 || !dragKeyHeld(e) || APP_META[win.app].ownsModifierDrag || (e.target as HTMLElement).closest('[data-no-mod-drag]')) return null
+    if (e.button === 0) return 'move'
+    return e.button === 2 && chrome === 'default' && !win.maximized ? 'resize' : null
+  }
+
+  const modPressDown = (e: ReactPointerEvent) => {
+    const el = sectionRef.current
+    const mode = e.pointerType === 'mouse' && el ? modModeOf(e) : null
+    // The title bar, the note's strip and the handles already take a plain left drag themselves.
+    if (!el || !mode || (mode === 'move' && (e.target as HTMLElement).closest('.titlebar, .note-grip, .rz'))) return
+    modPress.current?.()
+    const box = el.getBoundingClientRect()
+    // Resizing moves the corner the pointer is nearest to; the opposite one stays where it is.
+    const edge = mode === 'resize' ? `${e.clientY > box.top + box.height / 2 ? 's' : 'n'}${e.clientX > box.left + box.width / 2 ? 'e' : 'w'}` : ''
+    const press = { id: e.pointerId, x: e.clientX, y: e.clientY, taken: false }
+    const on = { capture: true }
+    const ours = (ev: PointerEvent) => ev.isTrusted && ev.pointerId === press.id
+    const take = () => {
+      press.taken = true
+      drag.current = { mode, edge, startX: press.x, startY: press.y, x: win.x, y: win.y, w: win.w, h: win.h, moved: false }
+      try {
+        el.setPointerCapture(press.id)
+      } catch {
+        /* the pointer is already gone: the release below ends it */
+      }
+      document.body.classList.add(mode === 'resize' ? 'is-resizing' : 'is-dragging')
+      if (mode === 'resize') document.body.dataset.rz = edge
+      document.addEventListener('selectstart', noSelect)
+      window.getSelection()?.removeAllRanges()
+      window.dispatchEvent(new PointerEvent('pointercancel', { pointerId: press.id, pointerType: 'mouse', bubbles: true }))
+    }
+    const noDrag = (ev: Event) => {
+      ev.preventDefault()
+      ev.stopPropagation()
+    }
+    const move = (ev: PointerEvent) => {
+      if (!ours(ev)) return
+      ev.stopPropagation()
+      if (!press.taken) {
+        if (Math.hypot(ev.clientX - press.x, ev.clientY - press.y) < MOD_SLOP) return
+        take()
+      }
+      latest.current.onMove(ev)
+    }
+    const stop = () => {
+      window.removeEventListener('pointermove', move, on)
+      window.removeEventListener('pointerup', finish, on)
+      window.removeEventListener('pointercancel', finish, on)
+      window.removeEventListener('dragstart', noDrag, on)
+      modPress.current = null
+    }
+    const finish = (ev: PointerEvent) => {
+      if (!ours(ev)) return
+      stop()
+      if (!press.taken) return
+      latest.current.end(ev)
+      // The click (or, on Windows, the menu) that follows the release is not meant for the app.
+      const swallow = (c: Event) => {
+        c.preventDefault()
+        c.stopPropagation()
+      }
+      const kinds = ['click', 'auxclick', 'contextmenu']
+      kinds.forEach((k) => window.addEventListener(k, swallow, on))
+      setTimeout(() => kinds.forEach((k) => window.removeEventListener(k, swallow, on)), 250)
+    }
+    modPress.current = () => {
+      stop()
+      if (press.taken) latest.current.end({ clientX: press.x, clientY: press.y, pointerId: press.id, type: 'pointercancel', currentTarget: null })
+    }
+    window.addEventListener('pointermove', move, on)
+    window.addEventListener('pointerup', finish, on)
+    window.addEventListener('pointercancel', finish, on)
+    window.addEventListener('dragstart', noDrag, on)
+  }
+
+  // No menu for a right-drag that resizes (the browser's would come up at the press).
+  const modContextMenu = (e: React.MouseEvent) => {
+    if (e.button !== 2 || modModeOf(e) !== 'resize') return
+    e.preventDefault()
+    e.stopPropagation()
+  }
 
   // Right-clicking the title bar (or a note's top strip): quick window actions instead of the
   // browser's own menu.
@@ -506,7 +620,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
         : []),
       { label: 'Center on screen', onSelect: center },
       ...(ws !== null && wm.workspaces
-        ? [{ label: 'Move to workspace', submenu: Array.from({ length: WORKSPACES }, (_, i) => ({ label: `Workspace ${i + 1}`, shortcut: `Alt Shift ${i + 1}`, checked: ws === i + 1, onSelect: () => wm.moveToWorkspace(win.pid, i + 1) })) }]
+        ? [{ label: 'Move to workspace', submenu: Array.from({ length: WORKSPACES }, (_, i) => ({ label: `Workspace ${i + 1}${wm.elsewhere.includes(i + 1) ? ' (other tab)' : ''}`, shortcut: `Alt Shift ${i + 1}`, checked: ws === i + 1, onSelect: () => wm.moveToWorkspace(win.pid, i + 1) })) }]
         : []),
       ...(chrome === 'note' ? [{ label: 'Add widget', submenu: addWidgetItems(wm) }] : []),
       ...(!SINGLE_INSTANCE.has(win.app) && win.app !== 'widget' ? [{ separator: true as const }, { label: 'New window', onSelect: () => wm.openNew(win.app) }] : []),
@@ -537,6 +651,8 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
       // --stack: the note's place in the phone layout's column (only that layout reads it).
       style={{ ...style, left: win.x, top: win.y, width: win.w, height: win.h, zIndex: win.z, ...(chrome === 'note' ? { ['--stack' as string]: stackOrder(wm.windows).indexOf(win.pid) } : {}) }}
       onPointerDown={() => wm.focus(win.pid)}
+      onPointerDownCapture={modPressDown}
+      onContextMenuCapture={modContextMenu}
       onContextMenu={onBodyMenu}
       role="dialog"
       aria-label={title}

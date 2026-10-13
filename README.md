@@ -52,6 +52,26 @@ number in the bar moves it there. Each window's workspace is saved with the wind
 workspace is on screen is kept per browser. Phones have room for one workspace, so there the
 numbers don't show and every window is reachable as if there were just one.
 
+**One workspace per tab** ([`src/os/tabWorkspaces.ts`](src/os/tabWorkspaces.ts), on unless turned
+off in Settings → Windows): every open tab of MvL OS in a browser gets a workspace of its own, like
+monitors in Hyprland, and its browser tab title says which (`MvL OS · 3`). A tab owns its workspace
+by holding a [Web Lock](https://developer.mozilla.org/docs/Web/API/Web_Locks_API) named after it
+for as long as it is open; the browser lets go of it when the tab closes or crashes, so the other
+tabs always know which workspaces are taken (a BroadcastChannel and a waiting shared request on
+each taken lock tell them the moment that changes). The tab's workspace is kept in sessionStorage,
+so a reload gets the same one back; a duplicated tab finds it taken and looks for another. A tab
+that opens takes, in order: the workspace it had before a reload; the lowest workspace a closed tab
+left windows on (*Adopt left-behind workspaces*; on the new tab page, `/?newtab`, only when
+*…also as the new tab page* is on, since every Ctrl+T would otherwise take one over); the lowest
+empty one; any other free one. When all nine have a tab, it shares them as before. The bar marks
+the other tabs' workspaces with a dot; going to one is refused with a notification (a page can't
+bring another browser tab forward), and the arrow keys and the scroll wheel step past them. Moving
+a window to another tab's workspace sends it to that tab (the window layout is synced between
+tabs), and this tab stays where it is. A window asked for that is in another tab (from the dock,
+Spotlight, or an app that has one window, like Settings) offers to be brought over instead. This
+needs *Last windows*, where the tabs share one window layout, and is off on phones. Other devices
+are not involved: locks are per browser.
+
 The dock keeps the pinned apps and launchers, and every open app that isn't pinned gets an item of
 its own after them, past a thin divider, like macOS ([`src/os/Shell.tsx`](src/os/Shell.tsx),
 `Dock`). So a minimized window can always be brought back, on a phone too, where the dock comes
@@ -61,16 +81,39 @@ window back, switching to that window's workspace; clicking again minimizes it, 
 windows brings the next one forward. Right-click (or long-press) an app for its windows by title,
 with their workspace. Its item goes when its last window closes. Notes and widgets never get one.
 
+## Moving windows with a key
+
+Like Hyprland, a window can be dragged by holding a key and dragging anywhere on it
+([`src/os/Window.tsx`](src/os/Window.tsx), `modPressDown`; the choice is in
+[`src/os/modDrag.ts`](src/os/modDrag.ts)). **Ctrl+left-drag** moves it, snapping and all, like
+dragging its title bar. **Ctrl+right-drag** resizes it from the corner nearest the pointer when you
+press: that corner follows the pointer and the opposite one stays put (there is no menu for it).
+Settings → Windows picks the key: Ctrl (the default), Alt, or off. A phone has no keys, so it
+never does this.
+
+Ctrl+click means something in apps (adding to a selection, opening a link in a new tab), so a press
+with the key only starts watching: within 4 px of where it went down, nothing has happened and the
+click reaches the app whole. Beyond that the window takes the drag: the app is told the gesture is
+off with a `pointercancel` on `window` (which ends a rubber band), it sees no more moves, the
+browser's own drags and text selection are held back, and the click after the release is
+swallowed. Files and Photos added to a selection with a box on Ctrl+drag over empty space; Shift+drag
+does that now. A file or photo dragged with the key held moves the window too (copy with Ctrl+C and
+Ctrl+V instead of Ctrl+drag). An app that uses the key with the mouse itself opts out: `ownsModifierDrag` in
+its `AppMeta` (`src/os/apps.tsx`, set for Games) or `data-no-mod-drag` on an element (the
+terminal's screen, while a program reads the mouse). A drag that starts over an iframe (the PDF
+viewer) never reaches the page, so it can't be taken.
+
 ## Drag and drop
 
 Things can be dragged wherever they make sense ([`src/os/dnd.ts`](src/os/dnd.ts)): desktop icons
-(several at once, as a pile with a count), rows in Files, apps and launchers in All apps, and rows
-in Archive. They land on desktop folders and the desktop itself, Files windows (a folder, the
+(several at once, as a pile with a count), rows in Files, apps and launchers in All apps, rows
+in Archive, and photos in Photos (see Photos below). They land on desktop folders and the desktop itself, Files windows (a folder, the
 folder on show, a place in the sidebar, the Trash), the dock, and the windows of apps that show
 files: Preview, Player, Omamp, PDF, the Viewer, Archive and Zed show what is dropped on them, and
 a sticky note takes a launcher as a link. A message being written in Mail attaches the files dropped
 on it (from the computer, Files or the desktop) and takes a launcher as its link in the text, and
-the Calendar imports the events of a dropped `.ics` file (shown first, into the calendar you pick).
+the Calendar imports the events of a dropped `.ics` file (shown first, into the calendar you pick) and
+Contacts the cards of a dropped `.vcf`, whether they come from the computer, Files or the desktop.
 Within one library (or within this browser) files move;
 between Seafile's libraries and this browser they copy, and Ctrl or Alt copies, Shift moves.
 What a drop would do shows on the cursor (+ copy, → move, ↗ link or pin, ⏎ open, 🗑 delete), and
@@ -403,15 +446,24 @@ Settings: the account on top of a sidebar, then one pane each for appearance (mo
 accent), the dock, launchers, Spotlight, windows, links, notifications, go links, code hosts and
 integrations; then, under an **Apps** heading, one pane per app with settings of its own, with the
 app's dock icon ([`src/apps/AppSettings.tsx`](src/apps/AppSettings.tsx)); then sync, users and about.
-The Apps panes are Agents, Calendar (its accounts and calendars, the view it opens in and where new
-events go), Contacts (address books and where new contacts go), Files (view, icon size, sort order, hidden files, sidebar), Games (Pool's helpers,
+Every account is linked in **Integrations**, one row each with a green dot and a line about what is
+linked: calendars (Google Calendar and CalDAV, for Calendar and Tasks), contacts (CardDAV), Mail,
+Immich, Seafile, OnlyOffice, Ollama Cloud and updown.io. The Apps panes keep only what is about the
+app, and where an app needs an account they start with a small notice and a button that opens that
+integration (*Accounts for Calendar are linked in Integrations*, or *Link a calendar account to get
+started* when there is none). The Apps panes are Agents, Calendar (which calendars show, the view it
+opens in and where new events go), Contacts (where new contacts go), Files (view, icon size, sort order, hidden files, sidebar), Games (Pool's helpers,
 sensitivity, computer and sound; Gladiator's sound and music; Empires At War's sound, battlefield,
 camera and a summary of its key bindings, with a button into the game's own key bindings and sound
-mix), Omamp (shuffle, repeat, equalizer and preset, visualizer, time, its windows), PDF (sidebar,
+mix), Mail (when mail counts as read, remote content, the allowed senders, quoted text, signatures and replies, with a pointer to Notifications for new-mail alerts), Omamp (shuffle, repeat, equalizer and preset, visualizer, time, its windows), PDF (sidebar,
 night mode), Preview (sidebar) and Terminal. Each pane reads and writes the very store the app uses
 ([`src/data/appPrefs.ts`](src/data/appPrefs.ts), [`src/apps/games/prefs.ts`](src/apps/games/prefs.ts),
 through [`src/os/localPref.ts`](src/os/localPref.ts) for what stays in this browser), so an open
-window follows a change at once and the other way round. Those apps' window menus have *… settings…*
+window follows a change at once and the other way round. Every field for a secret that belongs to another
+service (API tokens, app passwords, a library's password) is a
+[`SecretInput`](src/os/SecretInput.tsx): a text input masked with CSS and marked for password
+managers to leave alone, with a show/hide button, because browsers fill a saved password into any
+`type="password"` field and ignore `autocomplete="off"` there. Those apps' window menus have *… settings…*
 to jump to their pane.
 Settings → Spotlight picks what the empty Spotlight shows (favourites, recently visited websites,
 status, apps, your repositories) and how many recent items of each, which kinds of results it searches (your
@@ -533,7 +585,7 @@ Setup:
 
 Without the OAuth settings, sign-in is simply off and everything else works as before.
 
-**Google Calendar** attaches to the GitHub sign-in (system menu or Settings → Calendar) for the
+**Google Calendar** attaches to the GitHub sign-in (system menu or Settings → Integrations → Calendars) for the
 Calendar app, the Agenda widget and the clock: your calendars, shared ones included, with Google's
 refresh token stored encrypted next to the Gitea tokens ([`server/google.ts`](server/google.ts)). It
 needs `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from a Google Cloud OAuth client (type *Web
@@ -544,10 +596,10 @@ production*: in *Testing*, Google expires the access after seven days. The Calen
 "sensitive": until Google has verified the app, everyone connecting sees Google's "unverified app"
 screen and at most 100 accounts can connect (verification asks for the privacy page,
 `/privacy.html`). Accounts connected before
-the Calendar app stay read-only until connected again (Settings → Calendar → *Allow editing*).
+the Calendar app stay read-only until connected again (Settings → Integrations → Calendars → *Allow editing*).
 
 **CalDAV** calendars (Fastmail, Nextcloud, iCloud and others) work next to Google: Settings →
-Calendar → add an account with its server URL (Fastmail's is filled in), username and an app
+Integrations → Calendars → add an account with its server URL (Fastmail's is filled in), username and an app
 password, stored encrypted ([`server/caldav.ts`](server/caldav.ts)). Read-only is enough to look;
 the Calendar app needs read-write to change things (adding the same account again replaces its
 password). The calendars are found from the URL, and events are fetched by date range with the
@@ -561,9 +613,17 @@ server; *Email guests* writes to them all). For one occurrence
 of a repeating event it asks whether the change is for that one or the whole series. The sidebar
 has a *Birthdays* calendar under Contacts: your contacts' birthdays and anniversaries as all-day
 events with the age they turn, read-only, on until switched off there; opening one opens the
-contact. A `.ics` file dropped on the calendar is imported: its events (title, time in its own
-zone, place, notes, how it repeats) are listed first, then made in the calendar picked, without
-their guests so nobody gets an invitation from you (a file imported twice makes its events twice). Changes go
+contact. A `.ics` file dropped on the calendar (from the computer, Files or the desktop), or opened in it
+from Files, the desktop, Spotlight, a Mail attachment or the terminal's `open file.ics`, is imported: its
+events (title, time in its own zone, place, notes, how it repeats) are listed first, then made in the
+calendar picked, without their guests so nobody gets an invitation from you. Events the calendar has
+already, by their UID, are skipped, and the notice says how many (the UID is kept when the event is made,
+`POST /api/calendar/known` asks the server which ones a calendar has). The reader
+([`src/apps/calendar/ics.ts`](src/apps/calendar/ics.ts)) is forgiving: a file that never closes its event,
+a UTF-8 or UTF-16 text (BOM or not, [`src/data/decodeText.ts`](src/data/decodeText.ts)), lowercase names, `VALUE=DATE-TIME`, a
+quoted TZID, `X-WR-TIMEZONE` for times with no zone, and extended ISO dates (`2026-10-15T14:00:00+02:00`).
+When nothing can be imported the notice says why (`1 event found, but its start time couldn't be read (...)`).
+With no calendar linked the Calendar says so, with a button to Integrations, and keeps the file for when one is. `pnpm check:ics` covers the reader. Changes go
 through [`server/calendars.ts`](server/calendars.ts): Google's API, or the event's own iCalendar
 text on the CalDAV server, written back with its ETag so other apps' properties stay.
 
@@ -571,7 +631,9 @@ text on the CalDAV server, written back with its ETag so other apps' properties 
 over [JMAP](https://jmap.io) (RFC 8620 and 8621): Fastmail, Stalwart and other servers that speak
 it. Settings → Integrations → Mail links an account with an API token (for Fastmail: Settings →
 Privacy & Security → Manage API tokens, with *Mail* and *Submission* access) and, for anything but
-Fastmail, the server's address, where the session is found through `/.well-known/jmap`. The token is
+Fastmail, the server's address, where the session is found through `/.well-known/jmap`. Fastmail's tokens
+all start with `fmu1-`: anything else is refused before it is sent, and a refusal from the server comes
+with its own short reason. The token is
 checked once, stored encrypted and never sent to the browser: the server makes every JMAP call,
 through the same egress checks as the other integrations, batched with back-references. IMAP and
 SMTP are not supported. The app has mailboxes with unread counts, conversations (a list drawn only
@@ -584,7 +646,7 @@ in-OS question, for good. Writing is plain text with attachments from the comput
 identity (`EmailSubmission/set`, moved to Sent once the server has taken it). Attachments save to
 Files too. Keys: `j`/`k` (or the arrows) to move, Enter to open, `e` archive, `#` delete, `!` junk,
 `s` flag, `u` read or unread, `r` reply, `a` reply all, `f` forward, `c` compose, `/` search,
-Ctrl+Enter to send. In a narrow window or on a phone it shows one pane at a time: mailboxes, list,
+Ctrl+Enter to send (a setting). In a narrow window or on a phone it shows one pane at a time: mailboxes, list,
 conversation, each with a way back.
 
 HTML mail is made safe on the server by an allow-list sanitiser of its own
@@ -592,15 +654,36 @@ HTML mail is made safe on the server by an allow-list sanitiser of its own
 `javascript:` links or CSS expressions; every tag balanced and every attribute re-escaped) and then
 shown in an iframe sandboxed without scripts or same-origin, under a Content-Security-Policy that
 allows nothing but its own styles and pictures. Remote images and CSS backgrounds are held back
-until *Load images* (or *Always for this sender*, a synced choice the server reads); tracking pixels
+until *Load images* (or the remote-content setting, see Mail settings below); tracking pixels
 stay out either way. Links open in a new tab without an opener or referrer, with the real address
 as their tooltip. Inline (`cid:`) pictures come along as `data:` URIs, or (big ones) through
 short-lived sealed links that need no cookie. Quoted text, in HTML and plain text alike, is folded
-away. Calendar invitations (a `text/calendar` part or an `.ics` file, iMIP REQUEST, REPLY or CANCEL,
+away (or open, by setting). Calendar invitations (a `text/calendar` part or an `.ics` file, iMIP REQUEST, REPLY or CANCEL,
 [`server/imip.ts`](server/imip.ts)) show as a card with what, when, where and the organiser, and
 are answered from it (see *How the apps work together*). Senders and recipients show as your
 contacts, with their photos; mailto: links in HTML mail open the composer (in a new tab, as every
 link in a message does, since the message's frame runs no scripts).
+
+**Mail settings** (Settings → Apps → Mail, or *Mail settings…* in Mail's sidebar and window menu;
+[`src/apps/mail/MailPane.tsx`](src/apps/mail/MailPane.tsx)) are kept in the synced state `mail`
+([`src/data/mail.ts`](src/data/mail.ts)), so they follow you between devices, and an open Mail
+window follows a change at once. *Reading*: mark as read when opened (the default), after 2, 5 or 10
+seconds (leaving sooner keeps it unread) or never; the default for remote content (see below); and
+whether quoted text starts folded or open. *Writing*: the account Mail opens on and, per account, the
+identity new messages are from (when there are several); a plain-text signature per identity (empty:
+the one the mail server keeps for it), with a switch each for new messages, replies and forwards,
+added above any quote after the usual `-- ` line; what `r` does (reply, or reply all; `a` is
+always reply all); and whether Ctrl+Enter sends. *Notifications* points to Settings → Notifications
+→ Mail, where the switch is.
+
+Remote content has three modes: *Ask* (blocked, with a bar offering *Load images*, *Always for
+this sender* and *Always for @domain*), *Allowed senders* (loaded for the addresses and domains on the
+list, blocked for everyone else) and *Always load*. The server decides, from the synced state, so
+remote content stays out of the HTML until the mode, the list or a *Load images* says otherwise;
+tracking pixels stay out in every mode. The list shows when each entry was added, with *Remove*, a
+search box from eight entries, *Add sender or domain…* (an in-OS prompt, checked) and *Clear all*
+(after a question). Choosing *Always for this sender* while the mode is *Ask* switches it to
+*Allowed senders*, since that is the mode that uses the list.
 
 While mail notifications are on (Settings → Notifications → Mail) or Mail was used in the last half
 hour, the server keeps a JMAP EventSource open per account (and polls every two minutes for servers
@@ -618,7 +701,7 @@ message menu's *Make task from this email* and *Create event from this email*, `
 
 **Tasks** ([`src/apps/tasks`](src/apps/tasks), [`server/tasks.ts`](server/tasks.ts)) is a to-do app laid
 out like Apple's Reminders, for signed-in users. Its lists are the task lists of the CalDAV accounts in
-Settings → Calendar (the collections that take VTODOs: Fastmail's and Nextcloud's calendars, and
+Settings → Integrations → Calendars (the collections that take VTODOs: Fastmail's and Nextcloud's calendars, and
 iCloud's reminders lists as far as iCloud still serves them over CalDAV; lists moved to Apple's newer
 Reminders are not), and lists kept on the site itself, in SQLite, for accounts without CalDAV (those
 start with one, *Reminders*). Above the lists, grouped by account, are the smart lists *Today* (due
@@ -690,7 +773,9 @@ token Seafile hands out, encrypted, which shows up in Seafile's Devices as the s
 primary library (My Library unless you pick another) is home unless you switch that off: Places'
 Desktop, Documents, Downloads and so on are its folders, and the desktop shows its Desktop folder.
 Text, code and config open in Zed and save back with Ctrl+S; pictures, video, audio and PDFs open in
-the Viewer; the rest downloads. Encrypted libraries ask for their password in the window and lock
+the Viewer; `.ics` (also `.ical`, `.ifb`) and `.vcf` (`.vcard`) files open in Calendar and Contacts and
+bring up their import dialog (see Calendar and Contacts), from Files, the desktop, Spotlight, the
+terminal's `open` and a Mail attachment's menu; *Open with* has Calendar or Contacts for them too, and Zed for the raw text; the rest downloads. Encrypted libraries ask for their password in the window and lock
 again after the minutes set in Settings (the password is never stored). Seahub's API sends no CORS
 headers, so it goes through the server; files themselves go straight between the browser and
 Seafile's file server, with links the server hands out. The sidebar's sections and items can be
@@ -740,6 +825,19 @@ a timeline to hover and scrub with what is buffered, play and skip, volume, spee
 picture and full screen; it hides while playing. Keys: Space or K, J and L, the arrows, M, F, 0 to
 9, comma and full stop for single frames, < and > for speed. Seafile's thumbnails come through the
 server ([`server/seafile.ts`](server/seafile.ts)) for Files' grid and Preview's sidebar.
+
+**Videos** (mp4, m4v, mov, webm, mkv, ogv) show a frame from themselves, with a ▶ and their length,
+in Files' grid, list and gallery, on the desktop, and in Photos when Seafile made no thumbnail
+([`src/data/videoThumbs.ts`](src/data/videoThumbs.ts)). Seafile is asked first (it makes them only
+with `ENABLE_VIDEO_THUMBNAIL` and ffmpeg on its server, and stops being asked after three refusals);
+otherwise the browser makes one: a hidden, muted video, never played, reads the file's header through
+`/api/seafile/stream` (same origin, byte ranges) or a blob for files kept in this browser, seeks a
+tenth of the way in (a second into short clips) and keeps that frame as a small WebP. Only tiles on
+screen ask, two at a time, and scrolling away or closing the window stops the work. Frames are kept
+in IndexedDB per account (at most 2,000 or 50 MB, the least recently shown going first), so each is
+made once per browser; a video that gives none shows its icon and is left alone for a day. Encrypted
+libraries answer no byte ranges, so there only videos up to 64 MB get a frame. Settings → Apps →
+Files → *Video thumbnails* switches it off.
 
 Uploads go straight from the browser to Seafile's file server: drop files or whole folders from the
 computer on a Files window (a folder, its empty space or the sidebar) or on the desktop, or use
@@ -999,7 +1097,7 @@ Spotlight takes questions too: *Ask Agents* is under the web search, and a `?` i
 the top hit. `OLLAMA_URL` points it at a stand-in for ollama.com when testing.
 
 The Calendar tools ([`server/agentCalendar.ts`](server/agentCalendar.ts)) work on the calendars
-connected in Settings → Apps → Calendar, Google and CalDAV, shared ones included, through the same
+connected in Settings → Integrations → Calendars, Google and CalDAV, shared ones included, through the same
 code as the Calendar app: `calendar_list_calendars` (ids, names, accounts, which can be changed,
 whose they are, the default for new events), `calendar_list_events` (a range, by default the next
 14 days, with an optional text search over title, description and place), and
@@ -1011,6 +1109,15 @@ unless the agent asks for the whole series. The window sends its time zone with 
 agent knows today's date and the time where you are, and times go both ways in that zone. Google
 connections from before editing existed are read-only: the agent says to connect Google again. The
 group is only offered with a calendar connected.
+
+With the Notes group on too, the agent can work with notes linked to events
+([`server/agentNoteLinks.ts`](server/agentNoteLinks.ts), see *Notes and calendar events* below):
+`make_meeting_note` (a meeting note for an event, already linked: "make notes for my 2pm meeting"
+finds the event with `calendar_list_events` first), `link_note_to_event` and
+`unlink_note_from_event`, and, only looking, `notes_for_event` and `events_for_note`.
+`calendar_list_events` says how many notes each event has (`linked_notes`). Linking mails nobody and
+only adds a private backlink to the event, so these ask in *Ask first* and go ahead in Auto, Edits
+allowed and Bypass; Plan mode doesn't offer them. Their cards say which note and which event.
 
 Web fetch reads an address straight away only when it came from outside the model: your own
 messages, search results, or the links of a page it already read, exactly as given. Any other
@@ -1067,6 +1174,52 @@ up, Seafile | Immich in the toolbar switches between them (remembered for your a
 not mixed into one timeline. The grid only puts the rows on screen in the page, so 20,000 photos
 scroll like 20; thumbnails load six at a time, the newest wish first, and the browser keeps them.
 
+**Selecting** is explicit, as in Google Photos and Immich: a click (or tap) opens a photo, and the
+circle that shows on each tile on hover selects it instead. Once anything is selected, a click
+anywhere on a tile takes it in or out (nothing opens, and the circles show on all of them) until
+the selection is empty again. Ctrl or Cmd+click adds or takes away, and Shift+click adds everything
+from the last one selected (in timeline order), with or without a selection. Dragging over empty
+space draws a box, which scrolls on at the top and bottom edges, and each day and month heading has
+a circle that selects all of it. Ctrl+A selects everything loaded, Escape lets go, and Enter opens
+the focused photo. On a touch screen a tap opens, a long press selects, taps then add and take
+away, and holding a selected photo drags the selection. The selection is kept as ids, not as tiles, so it outlives the rows
+that scroll away, and a range across 20,000 photos is one slice of the timeline. While anything is
+selected, a bar takes the toolbar's place with the count, ♡, download, the bin and ⋯
+([`src/apps/photos/actions.tsx`](src/apps/photos/actions.tsx)).
+
+**Right-click** a photo (the menu key or Shift+F10 too) for *Open*, *Favourite*, *Download* (several
+as one ZIP), *Show in Files* or *Open in Immich*, *Copy share link* (Seafile) or *Copy link*
+(Immich), *Move to folder…* (Seafile, with the folder picker; the index follows, and a name already
+there is refused rather than renamed) or *Add to album* (Immich's albums), *Info* (I), and *Move to
+trash* (Delete); on a selected photo it acts on the whole selection. Empty space has *Select all*,
+*Look for new photos* (Seafile) or *Refresh* (Immich), and *Grid size*. The lightbox has the same
+menu (right-click, or ⋯) and a bin. Several photos download as **one ZIP made on the server as it
+streams** (stored, since photos do not shrink; ZIP64 past 4 GB; up to 2,000 photos), fetched by the
+browser's own download, so it goes to disk instead of into the page: the writer is in
+[`src/data/zip.ts`](src/data/zip.ts), next to the reader. A file that cannot be read is left out and
+named in a *Not included.txt* in the ZIP.
+
+**The trash** asks first, saying how many and where they go: Seafile's photos go to the library's
+own trash, where *Files → Trash* restores them (or, in a library that keeps no history, are deleted
+for good, which the question says); Immich's go to Immich's trash (`DELETE /api/assets` with
+`force: false`, never for good), and the question says how many days Immich keeps it. The grid
+updates at once without asking for the timeline again (Seafile's index rows go straight away, no
+walk needed), the lightbox goes on to the next photo, and a note offers **Undo** for ten seconds:
+Seafile's are restored from the library's trash (by the commit that deleted them) with their index
+rows, ids and favourites put back; Immich's with `POST /api/trash/restore/assets`. What undo needs
+stays on the server for half an hour, behind a token that only works once, for the account and
+source that made it. Locked encrypted libraries and read-only ones (shared for viewing) refuse,
+and say so. The server checks every id against the account (Seafile: its own index; Immich: the
+asset's owner, so a partner's or a shared album's photo is refused) and takes at most 200 at a time,
+which the app sends a bigger selection in.
+
+**Dragging** a selection ([`src/os/dnd.ts`](src/os/dnd.ts)) reaches everything that takes files:
+Files and the desktop, a message being written in Mail, and the Agents composer. Seafile's photos
+go as the files they are, so Files copies them on Seafile itself (a drag out of Photos copies by
+default; Shift moves). Immich's are no file anywhere here: they travel the way files from the
+computer do, downloaded through the server when they are dropped (the first 50), so every target
+that takes those takes them.
+
 **Seafile** has no idea what a photo is, so the server keeps an index per account
 ([`server/photos.ts`](server/photos.ts), in SQLite). The ⚙ view chooses the folders (any library,
 read-only ones too) and suggests folders named Photos, Pictures, Camera Uploads or DCIM. A walk
@@ -1086,11 +1239,13 @@ Encrypted libraries are walked only while unlocked in Files, and their photos on
 Seafile makes no thumbnails there, so the small preview the camera embedded in the EXIF stands in.
 Thumbnails come from Seafile's thumbnail API through the server (the token stays there), with an
 ETag and a week's Cache-Control; the full photo comes straight from Seafile's file server with a
-short-lived link, as in Files. Linking another Seafile account starts the index over.
+short-lived link, as in Files. Videos Seafile made no thumbnail for show a frame the browser takes
+from them, as in Files. Linking another Seafile account starts the index over.
 
-**Immich** is linked in Settings → Integrations or in Photos' ⚙ view, with its URL and an API key
+**Immich** is linked in Settings → Integrations (Photos' ⚙ view has a button to it), with its URL and an API key
 (Immich: *Account settings → API keys*; All, or at least asset.read, asset.view, asset.download,
-asset.update, album.read, timeline.read and user.read). Linking asks Immich for its version first
+asset.update, album.read, timeline.read and user.read, plus asset.delete for the trash and
+albumAsset.create for *Add to album*). Linking asks Immich for its version first
 and refuses anything but Immich 2 and 3. The key is stored encrypted and only ever sent from the
 server ([`server/immich.ts`](server/immich.ts)), without following redirects: thumbnails, the
 originals and video (with byte ranges, for seeking) come through the server. Immich indexes its
@@ -1106,6 +1261,11 @@ months in the viewer's time zone, thumbnails and 304s, walking again (nothing re
 changed; new, changed, deleted files and a deleted folder), encrypted libraries locked and
 unlocked, another account seeing nothing, and Immich (an old version and a wrong key refused, both
 of its bucket formats, thumbnails, albums, favourites, video ranges, the key never in an answer).
+The selection's side too: favourites for many, the trash and undo on both sources (the index rows
+gone and back with their ids, the undo token once only and for its own account), batch caps,
+another account's ids refused, locked and read-only libraries refused, someone else's Immich photo
+refused, moving to a folder, adding to an album, and the streamed ZIP read back with the app's own
+ZIP reader.
 `node scripts/photos-mock.ts [count]` starts both stand-ins with a big made-up library (Seafile on
 8810, Immich on 8815) for trying the app; they are on 127.0.0.1, so link them as an admin. Not
 yet tried against a real Seafile or Immich server, nor with HEIC files from a real phone.
@@ -1114,7 +1274,7 @@ yet tried against a real Seafile or Immich server, nor with HEIC files from a re
 
 The **Contacts** app ([`src/apps/contacts`](src/apps/contacts)) keeps everyone in one list: the
 address book on this site (in SQLite, for whoever has no CardDAV server) and every CardDAV address
-book linked in Settings → Integrations → Contacts (or Settings → Apps → Contacts): Fastmail (its
+book linked in Settings → Integrations → Contacts (Settings → Apps → Contacts keeps where new contacts go): Fastmail (its
 URL is filled in), iCloud, Nextcloud, Radicale and any other, with an app password stored
 encrypted like CalDAV's. When a CalDAV account is linked already, the pane offers to use its login
 for contacts too (Fastmail's carddav host, iCloud's contacts host, the same URL elsewhere); the
@@ -1131,7 +1291,11 @@ of the coming 30 days. A card shows every way to reach someone, their dates (wit
 turn), groups, note and which address book it is in; Edit changes it in place, with a photo made
 small in the browser. Right-click a contact (or ⋯) to move it to another address book, export its
 vCard, or delete it (asked first). The ⋯ menu imports and exports .vcf files from and to this
-computer or Files (Seafile), and *Find duplicates* lists people who are in twice (the same address,
+computer or Files (Seafile); a .vcf dropped on the window (from the computer, Files or the desktop) or opened
+from Files, the desktop, Spotlight, a Mail attachment or the terminal's `open` lists the cards it holds
+(UTF-16 and a byte order mark read too, a card that never closes is taken as it is), then imports them into the
+address book you pick, skipping the ones it has already (the same UID, or with none the same name and email) and
+saying how many. *Find duplicates* lists people who are in twice (the same address,
 or the same full name) to merge into one. On a phone the window shows the list or the card, with
 the address books and groups in a menu above the list.
 
@@ -1214,8 +1378,57 @@ user's own account):
   by a search (the words and `from:` … filters Mail takes) shows the newest matching messages
   from every account, Enter opening one. Settings → Spotlight switches both off.
 
+### Notes and calendar events
+
+Meeting notes: a note in the Notebook can be linked to calendar events, and an event to notes
+([`src/os/noteEventLinks.tsx`](src/os/noteEventLinks.tsx) plugs the Calendar and the Notebook into
+each other through the hooks in [`src/data/calendar.ts`](src/data/calendar.ts) and
+[`src/data/notes.ts`](src/data/notes.ts)).
+
+- **From an event** (its right-click menu, and the event editor's *Notebook* row): *New meeting
+  note* makes a note titled with the event and its day, with when, where, the guests (names from
+  the invitation or your contacts) and headings for the agenda, notes and action items, linked and
+  opened in the Notebook; *Link a note…* picks one (search, arrows and Enter); the editor lists
+  the linked notes, each to open or unlink, and the menu has them under *Linked notes*. Events with
+  notes have a 📝 beside their title in every Calendar view and in the Agenda widget (a click there
+  opens the note).
+- **From a note** (the Notebook's ⋯ and right-click menus, and the sticky's menu): *Link to an
+  event…* picks an event from two weeks back to a month ahead, by title, with the dates to change.
+  The note shows a chip per event with its date and time, which opens the Calendar at that event
+  (that occurrence, for a repeating one), and × to unlink. Linked notes have a 📅 in the Notebook's
+  list, and Spotlight finds a note by the title of its meeting.
+- **A repeating event** asks whether the note is for this occurrence or every one.
+
+Where the link lives: on the note, in the synced notes, as the event's iCalendar UID (the same in
+every calendar app, kept when the event is renamed, moved or edited elsewhere), which occurrence
+(its RECURRENCE-ID, which also stays when that occurrence moves) or none for the whole series, the
+calendar it was in, and a copy of its title and time to show when the event can't be read. Notes
+sync, so the link is on every device; the copy is brought up to date whenever the event is seen,
+and a link is looked up again now and then (and on a click), so a moved event shows its new time.
+The event also gets a private backlink ([`server/noteLinks.ts`](server/noteLinks.ts)), so it says
+it has notes as soon as it is read, even before the notes have synced: in CalDAV an
+`X-MVLOS-NOTE:<note id>` line, written into the event's own text with its ETag (a conflict is read
+again and redone, up to three times) without touching anything else, SEQUENCE and DTSTAMP included
+(it is not a change to the meeting); for one occurrence it goes on that occurrence's own VEVENT
+when it has one, otherwise on the series with `X-MVLOS-OCCURRENCE=<its start>`, so no exception is
+made for it. Events with guests get no backlink in CalDAV, as a server that does scheduling could
+mail them about any change. In Google it is a private extended property (`mvlosNotes`), only on
+your copy of the event, with `sendUpdates=none`. The link works without the backlink (a read-only
+calendar, guests).
+
+A deleted event keeps its link, crossed out, until it is unlinked (the chip says so when clicked);
+a note in the trash keeps its links (restored, they are back) and doesn't count on the event; a
+note deleted for good takes its backlinks out of its events. Signed out, the notes (and so the
+links) leave the browser with the rest of the account's state. The endpoints are `POST
+/api/calendar/note-link` (`{ref | link, note, all?, unlink?}`) and `POST /api/calendar/find`
+(`{uid, calendarId?, occurrence?, start?, fresh?}`, the event a link points at now, or `gone`).
+Not yet tried against real Google or Fastmail: Google merges a patch's private properties (the
+whole map is sent anyway), and whether Fastmail mails guests about an X- property is avoided rather
+than known.
+
 ```sh
 pnpm check:pim-links   # Against stand-ins for JMAP, CalDAV and Google Calendar: invitations answered in each place (PARTSTAT, Google's API, an iMIP REPLY), cancellations, replies, a contact's mail and events, tasks from mail, another user seeing none of it
+pnpm check:note-links  # Against stand-ins for CalDAV, Google Calendar and Ollama: the backlink written with everything else kept, an ETag conflict, one occurrence against the series, guests left alone, Google's private property with sendUpdates=none, a deleted event, the Agents tools in Ask first and Auto, another user seeing none of it
 ```
 
 [`scripts/google-mock.ts`](scripts/google-mock.ts) is the Google Calendar stand-in: the server

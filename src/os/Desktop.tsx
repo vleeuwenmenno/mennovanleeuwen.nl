@@ -3,12 +3,14 @@ import { openSticky } from '../apps/Sticky'
 import { addLauncher, isLauncherApp, launch, launcherAt, launcherImage, launchersAreFiles, removeLauncher, updateLauncher, useLauncherFiles, useLaunchers, type Launcher } from '../data/launchers'
 import { isLauncherName } from '../data/launcherFiles'
 import { AppIcon } from './icons'
+import { VideoThumb } from './VideoThumb'
 import { createNote } from '../data/notes'
 import { addWidgetItems } from '../widgets/registry'
 import { projects } from '../data/profile'
 import { HOME, kindOfName, type FileKind } from '../terminal/vfs'
 import { pickAndUpload } from '../data/uploads'
-import { getClipboard, setClipboard, openSeafile, refreshDirs, setSeafilePrefs, useDir, useSeafileHome, useSeafilePrefs } from '../data/seafile'
+import { isIcsName, isVcfName } from '../data/pimFiles'
+import { getClipboard, setClipboard, openSeafile, refreshDirs, revalidateDir, setSeafilePrefs, useDir, useSeafileHome, useSeafilePrefs } from '../data/seafile'
 import { deleteNoteFor as deleteNote, downloadFile as download, makeFile as createFile, makeFolder as mkdir, removePaths as deleteItems, renamePath as renameItem, transferPaths as transferItems } from '../data/fileOps'
 import { dropIntoFolder, folderOp, undoLastMove, type Landed } from '../data/fileDrop'
 import { beginPointerDrag, holdToDrag, keysOf, useDropTarget, type DragItem, type PointerDrag } from './dnd'
@@ -46,6 +48,8 @@ export type DesktopIcon = {
   sf?: { dir: boolean }
   /** A launcher of your own; with `sf`, the .desktop file it is read from */
   launcher?: Launcher
+  /** A video in the Desktop folder, shown as a frame from it (src/data/videoThumbs.ts): its version and bytes */
+  video?: { version: string; size: number }
 }
 
 /** Emoji for what is in the Seafile Desktop folder, by kind. */
@@ -232,7 +236,7 @@ export function Desktop() {
   const sfDir = useDir(seafileDesktop, 15_000)
   useEffect(() => {
     if (!seafileDesktop) return
-    const again = () => document.visibilityState === 'visible' && refreshDirs(seafileDesktop)
+    const again = () => document.visibilityState === 'visible' && revalidateDir(seafileDesktop)
     const t = setInterval(again, 60_000)
     window.addEventListener('focus', again)
     return () => {
@@ -240,7 +244,7 @@ export function Desktop() {
       window.removeEventListener('focus', again)
     }
   }, [seafileDesktop])
-  const entries = browserDesk?.kind === 'browser' ? listBrowser(browserDesk.path).map((e) => ({ name: e.path.split('/').pop()!, dir: e.dir, mtime: e.mtime })) : (sfDir.listing?.entries ?? [])
+  const entries = browserDesk?.kind === 'browser' ? listBrowser(browserDesk.path).map((e) => ({ name: e.path.split('/').pop()!, dir: e.dir, mtime: e.mtime, size: e.size })) : (sfDir.listing?.entries ?? [])
   const byFile = new Map(launchers.filter((l) => l.file).map((l) => [l.file!, l]))
   const sfIcons = entries
     .filter((e) => !e.name.startsWith('.'))
@@ -256,7 +260,8 @@ export function Desktop() {
       const kind = kindOfName(e.name, e.dir)
       // Spreadsheets and presentations get their own picture; other Office files the document one.
       const glyph = /\.(xlsx?|xlsm|ods|csv|numbers)$/i.test(e.name) ? '📊' : /\.(pptx?|ppsx|odp|key)$/i.test(e.name) ? '📽️' : (SF_GLYPH[kind] ?? '📄')
-      return [{ id: `sf:${e.name}`, label: e.name, glyph, kind: e.dir ? 'folder' : 'file', path: `${sfDesktop}/${e.name}`, open: { app: 'files' }, terminal: '', sf: { dir: e.dir } } satisfies DesktopIcon]
+      const video = !e.dir && kind === 'video' ? { version: `${e.mtime}-${e.size}`, size: e.size } : undefined
+      return [{ id: `sf:${e.name}`, label: e.name, glyph, kind: e.dir ? 'folder' : 'file', path: `${sfDesktop}/${e.name}`, open: { app: 'files' }, terminal: '', sf: { dir: e.dir }, video } satisfies DesktopIcon]
     })
   // The site's own icons stay unless switched off (then the desktop is just the Seafile Desktop folder and launchers).
   const siteShown = !seafileDesktop || siteIcons
@@ -539,6 +544,8 @@ export function Desktop() {
               {
                 label: 'Open with',
                 submenu: [
+                  ...(isIcsName(icon.path) ? [{ label: 'Calendar', onSelect: () => void openSeafile(wm, icon.path, { how: 'calendar' }) }] : []),
+                  ...(isVcfName(icon.path) ? [{ label: 'Contacts', onSelect: () => void openSeafile(wm, icon.path, { how: 'contacts' }) }] : []),
                   { label: 'Zed', onSelect: () => void openSeafile(wm, icon.path, { how: 'zed' }) },
                   { label: 'Viewer', onSelect: () => void openSeafile(wm, icon.path, { how: 'viewer' }) },
                   { label: 'Preview', onSelect: () => void openSeafile(wm, icon.path, { how: 'preview' }) },
@@ -691,6 +698,8 @@ export function Desktop() {
               <span className="desk-glyph">
                 <AppIcon app={icon.launcher.app as AppId} size={44} tone />
               </span>
+            ) : icon.video ? (
+              <VideoThumb path={icon.path} version={icon.video.version} size={icon.video.size} className="desk-video" imgClassName="desk-thumb" fallback={<span className="desk-glyph">{icon.glyph}</span>} />
             ) : icon.image && !broken.has(icon.id) ? (
               <img className={`desk-img ${icon.kind === 'link' && !icon.launcher?.image ? 'is-favicon' : ''}`} src={icon.image} alt="" draggable={false} onError={() => setBroken((b) => new Set(b).add(icon.id))} />
             ) : (

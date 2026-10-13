@@ -23,6 +23,18 @@
   font-size: 15px;
   line-height: 1;
 }
+.ml-refresh > span {
+  display: inline-block;
+}
+.ml-refresh.is-spinning > span {
+  animation: ca-spin 0.7s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ml-refresh.is-spinning > span {
+    animation: none;
+    opacity: 0.5;
+  }
+}
 .ml-icon:hover:not(:disabled),
 .ml-icon.is-on {
   border-color: var(--line-strong);

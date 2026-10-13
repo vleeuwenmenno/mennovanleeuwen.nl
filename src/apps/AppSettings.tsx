@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { AMP_PRESETS, ampPrefs, ampPresetOf, FILES_SORTS, FILES_VIEWS, FILES_ZOOM_MAX, FILES_ZOOM_MIN, filesPrefs, pdfPrefs, previewPrefs, type AmpRepeat, type AmpVis } from '../data/appPrefs'
 import { useCalendarList, useLastCalendar, setLastCalendar } from '../data/calendar'
 import { useAccount } from '../os/account'
+import { IntegrationNotice } from '../os/IntegrationNotice'
 import { Select } from '../os/Select'
 import { useWM } from '../os/wm'
 import { TerminalPrefsBody, ZOOM_HELP } from '../terminal/TerminalSettings'
@@ -18,19 +19,19 @@ import { empiresMusic, empiresMuted, empiresVolume, gladiatorMusic, gladiatorMut
 // open window follows a change here at once, and the other way round. Only real, lasting
 // preferences are here: not what a window remembers of itself (its size, the folder it was on).
 
-const SetGroup = ({ title, children }: { title: string; children: ReactNode }) => (
+export const SetGroup = ({ title, children }: { title: string; children: ReactNode }) => (
   <section className="set-section">
     <h4>{title}</h4>
     {children}
   </section>
 )
 
-function Toggle({ on, onChange, label }: { on: boolean; onChange: (on: boolean) => void; label: string }) {
+export function Toggle({ on, onChange, label }: { on: boolean; onChange: (on: boolean) => void; label: string }) {
   return <button role="switch" aria-checked={on} aria-label={label} className={`set-toggle ${on ? 'is-on' : ''}`} onClick={() => onChange(!on)} />
 }
 
 /** One choice of a few, as segmented buttons. */
-function Seg<T extends string | boolean>({ value, options, onChange, label }: { value: T; options: [T, string][]; onChange: (v: T) => void; label: string }) {
+export function Seg<T extends string | boolean>({ value, options, onChange, label }: { value: T; options: [T, string][]; onChange: (v: T) => void; label: string }) {
   return (
     <div className="seg set-seg" role="radiogroup" aria-label={label}>
       {options.map(([v, text]) => (
@@ -43,7 +44,7 @@ function Seg<T extends string | boolean>({ value, options, onChange, label }: { 
 }
 
 /** A row with a name, a line under it, and its control on the right. */
-function Row({ title, hint, children, stack }: { title: string; hint?: ReactNode; children: ReactNode; stack?: boolean }) {
+export function Row({ title, hint, children, stack }: { title: string; hint?: ReactNode; children: ReactNode; stack?: boolean }) {
   return (
     <li className={`set-row ${stack ? 'set-row-stack' : ''}`}>
       <span className="set-row-text">
@@ -90,10 +91,10 @@ export function TerminalPane() {
 export function FilesPane() {
   const prefs = filesPrefs.use()
   const account = useAccount()
-  const wm = useWM()
   const zoom = (z: number) => filesPrefs.patch({ zoom: Math.min(FILES_ZOOM_MAX, Math.max(FILES_ZOOM_MIN, z)) })
   return (
     <>
+      {account.status === 'user' && <IntegrationNotice sub="seafile" linked={!!account.seafile} app="Files" invite="Link Seafile to get your libraries in Files." />}
       <SetGroup title="View">
         <Seg label="View" value={prefs.view} options={FILES_VIEWS} onChange={(view) => filesPrefs.patch({ view })} />
         <p className="muted set-help">Ctrl+1 to Ctrl+4 in Files.</p>
@@ -122,15 +123,14 @@ export function FilesPane() {
         <Row title="Sidebar" hint="Places, libraries and bookmarks, in a wide window">
           <Toggle on={prefs.sidebar} onChange={(sidebar) => filesPrefs.patch({ sidebar })} label="Show the sidebar" />
         </Row>
+        <Row title="Video thumbnails" hint="A frame from each video, here, on the desktop and in Photos">
+          <Toggle on={prefs.videoThumbs} onChange={(videoThumbs) => filesPrefs.patch({ videoThumbs })} label="Video thumbnails" />
+        </Row>
       </ul>
       <p className="muted set-help">The same in every folder and every Files window. Saved in this browser.</p>
       {account.seafile && (
         <p className="muted set-help">
-          Seafile as home, its trash and where new Office files go are in{' '}
-          <button className="link-btn" onClick={() => wm.open('settings', { section: 'integrations', sub: 'seafile', t: now() })}>
-            Integrations → Seafile
-          </button>
-          .
+          Seafile as home, its trash and where new Office files go are in Integrations → Seafile.
         </p>
       )}
     </>

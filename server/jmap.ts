@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
+import { loadsRemote, readRemoteSettings, type RemoteSettings } from '../src/data/mailRemote.ts'
 import { allows, normalizePrefs } from '../src/data/notifySources.ts'
 import { accounts, isAdmin, requireUser, type User } from './auth.ts'
 import { database, decrypt, encrypt, onUserGone } from './db.ts'
@@ -97,7 +98,11 @@ export async function addMail(user: User, body: { url?: string; token?: string; 
   const token = body.token?.trim()
   if (!token) throw new HttpError(400, 'An API token is required')
   if (token.length > 4096 || /\s/.test(token)) throw new HttpError(400, 'That does not look like an API token')
-  const { session, url } = await readSession(user, sessionUrl(body.url), token)
+  const start = sessionUrl(body.url)
+  // Fastmail tokens all start with fmu1-: anything else is the wrong string (a saved password
+  // autofilled, an app password), and Fastmail only answers that with a bare 401.
+  if (/(^|\.)fastmail\.com$/.test(new URL(start).hostname) && !token.startsWith('fmu1-')) throw new HttpError(400, "That isn't a Fastmail API token: they start with fmu1-. Make one at Settings → Privacy & Security → Manage API tokens.")
+  const { session, url } = await readSession(user, start, token)
   const label = (body.label?.trim() || (/fastmail/.test(url) ? 'Fastmail' : new URL(url).host)).slice(0, 40)
   const db = table()
   const existing = db.prepare('SELECT id FROM jmap_accounts WHERE user_id = ? AND session_url = ? AND username = ?').get(user.id, url, session.username) as { id: number } | undefined
@@ -159,6 +164,25 @@ const hostOf = (url: string) => {
   }
 }
 
+/** The server's own reason for a refusal, from the first line of its text body (or the message of a JSON one), as plain text; empty when it gave none. */
+async function reasonOf(res: Response): Promise<string> {
+  const raw = await readCapped(res, 4096).then((b) => b.toString('utf8')).catch(() => '')
+  let line = raw.split('\n').find((l) => l.trim()) ?? ''
+  if (line.trimStart().startsWith('{')) {
+    try {
+      const j = JSON.parse(raw) as Record<string, unknown>
+      line = [j.detail, j.description, j.message, j.error, j.title].find((v): v is string => typeof v === 'string') ?? ''
+    } catch {
+      line = ''
+    }
+  }
+  // Markup is an error page, not a reason.
+  if (/^\s*</.test(line)) return ''
+  // eslint-disable-next-line no-control-regex
+  line = line.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()
+  return line.length > 120 ? `${line.slice(0, 119)}…` : line
+}
+
 /** Reads a session, following redirects (/.well-known/jmap points elsewhere) with the token kept, over https only. */
 async function readSession(user: User, start: string, token: string): Promise<{ session: Session; url: string }> {
   let at = start
@@ -173,7 +197,10 @@ async function readSession(user: User, start: string, token: string): Promise<{ 
       at = next.href
       continue
     }
-    if (res.status === 401 || res.status === 403) throw new HttpError(400, `${hostOf(at)} refused the token`)
+    if (res.status === 401 || res.status === 403) {
+      const why = await reasonOf(res)
+      throw new HttpError(400, `${hostOf(at)} refused the token${why ? `: ${why}` : ''}`)
+    }
     if (!res.ok) throw new HttpError(400, `${hostOf(at)} answered ${res.status}: is that a JMAP server?`)
     let body: Record<string, unknown>
     try {
@@ -266,8 +293,8 @@ async function jmap(acc: Linked, calls: Call[]): Promise<Answers> {
   if (!res) throw new HttpError(502, `${acc.label} did not answer`)
   if (res.status === 401 || res.status === 403) {
     sessions.delete(acc.id)
-    await res.body?.cancel().catch(() => {})
-    throw new HttpError(502, `${acc.label} refused the token: link it again in Settings → Integrations → Mail`)
+    const why = await reasonOf(res)
+    throw new HttpError(502, `${acc.label} refused the token${why ? ` (${why})` : ''}: link it again in Settings → Integrations → Mail`)
   }
   const text = (await readCapped(res, 64 * 1024 * 1024)).toString('utf8')
   let body: Json
@@ -434,10 +461,13 @@ const MESSAGE_PROPS = [...ROW_PROPS, 'cc', 'bcc', 'replyTo', 'sentAt', 'messageI
 const BODY_ARGS = { fetchTextBodyValues: true, fetchHTMLBodyValues: true, maxBodyValueBytes: 1_000_000 }
 const escapeText = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-/** Senders whose remote images always load (the Mail app's "Always for this sender", synced state "mail"). */
-function imageSenders(user: User): Set<string> {
-  const v = readState(user).mail?.value as { imageSenders?: unknown } | undefined
-  return new Set(Array.isArray(v?.imageSenders) ? v.imageSenders.filter((x): x is string => typeof x === 'string').map((x) => x.toLowerCase()) : [])
+/**
+ * The remote-content settings (Settings → Apps → Mail, synced state "mail"): whether remote
+ * images and styles load without being asked, for everyone or for the senders on the allow list.
+ * Read here so that remote content stays blocked until the settings or a "Load images" say so.
+ */
+function remoteSettings(user: User): RemoteSettings {
+  return readRemoteSettings(readState(user).mail?.value)
 }
 
 /** Inline pictures up to this size each, and this much in all per message, go into its HTML as data: URIs. */
@@ -561,10 +591,10 @@ export async function getThread(acc: Linked, threadId: string, images: string[])
   ])
   const thread = (r.get('t', 'Thread/get').list as Json[])[0]
   if (!thread) throw new HttpError(404, 'That conversation is gone')
-  const senders = imageSenders(acc.user)
+  const settings = remoteSettings(acc.user)
   const emails = new Map((r.get('g', 'Email/get').list as Json[]).map((e) => [e.id, e]))
   const list = (thread.emailIds as string[]).map((id) => emails.get(id)).filter((e): e is Json => !!e)
-  const messages = await Promise.all(list.map((e) => render(acc, e, images.includes(e.id) || addresses(e.from).some((a) => senders.has(a.email.toLowerCase())))))
+  const messages = await Promise.all(list.map((e) => render(acc, e, images.includes(e.id) || loadsRemote(settings, addresses(e.from).map((a) => a.email)))))
   return { id: threadId, messages }
 }
 
@@ -574,7 +604,7 @@ export async function getMessage(acc: Linked, emailId: string, images: boolean):
   const r = await jmap(acc, [['Email/get', { ids: [emailId], properties: MESSAGE_PROPS, ...BODY_ARGS }, 'g']])
   const e = (r.get('g', 'Email/get').list as Json[])[0]
   if (!e) throw new HttpError(404, 'That message is gone')
-  return render(acc, e, images)
+  return render(acc, e, images || loadsRemote(remoteSettings(acc.user), addresses(e.from).map((a) => a.email)))
 }
 
 // ---------------------------------------------------------------------------------------------

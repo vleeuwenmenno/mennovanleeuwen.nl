@@ -4542,6 +4542,16 @@ button.cal-day.is-picked:not(.is-today) {
   justify-content: center;
   gap: 8px;
 }
+/* A file opened in Calendar or Contacts that waits for an account to import into. */
+.ca-empty-note {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+}
 .ca.is-narrow .ca-toolbar {
   gap: 4px;
   padding: 6px 8px;
@@ -4734,4 +4744,98 @@ button.cal-day.is-picked:not(.is-today) {
   background: var(--bg-dark);
   color: var(--fg-bright);
   font: inherit;
+}
+
+/* SecretInput (src/os/SecretInput.tsx): a masked text field with a show/hide button on its right. */
+.secret {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+.set-form label .secret {
+  color: inherit;
+}
+.secret > input[type] {
+  padding-right: 30px;
+}
+.secret-mask {
+  -webkit-text-security: disc;
+}
+.secret-eye {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  color: var(--muted);
+}
+.secret-eye:hover,
+.secret-eye[aria-pressed='true'] {
+  color: var(--fg-bright);
+}
+
+/* The pointer to Settings → Integrations at the top of an app's own settings (IntegrationNotice). */
+.set-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-bottom: 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+}
+.set-notice.is-invite {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+.fm-unlock .secret {
+  width: 100%;
+}
+
+/* Settings → Apps → Mail (src/apps/mail/MailPane.tsx). */
+.mset-search {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  outline: 0;
+}
+.mset-search:focus,
+.mset-sig textarea:focus {
+  border-color: var(--accent);
+}
+.mset-allowed {
+  max-height: 320px;
+  overflow-y: auto;
+}
+.mset-sigs {
+  display: grid;
+  gap: 12px;
+}
+.mset-sig {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.mset-sig strong {
+  overflow-wrap: anywhere;
+}
+.mset-sig textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: 12.5px/1.45 var(--mono, monospace);
+  resize: vertical;
+  outline: 0;
 }

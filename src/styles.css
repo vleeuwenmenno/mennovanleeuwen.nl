@@ -130,6 +130,19 @@ body.is-resizing,
 body.is-resizing * {
   user-select: none;
 }
+/* A resize started with the drag key held can be from any corner: the cursor says which. */
+body[data-rz='nw'],
+body[data-rz='nw'] *,
+body[data-rz='se'],
+body[data-rz='se'] * {
+  cursor: nwse-resize !important;
+}
+body[data-rz='ne'],
+body[data-rz='ne'] *,
+body[data-rz='sw'],
+body[data-rz='sw'] * {
+  cursor: nesw-resize !important;
+}
 /* An app's frame (OnlyOffice) would swallow the pointer mid-drag. */
 body.is-dragging iframe,
 body.is-resizing iframe {
@@ -402,6 +415,25 @@ body.is-resizing iframe {
 /* A workspace with no windows on it, as Waybar dims them. */
 .ws.is-empty:not(.is-active) {
   opacity: 0.45;
+}
+/* A workspace another tab of this browser has (one workspace per tab): dimmed, with a dot for
+   the tab it is open in. Clicking it says so instead of going there. */
+.ws.is-elsewhere {
+  position: relative;
+  cursor: default;
+}
+.ws.is-elsewhere:not(.is-active):not([data-drop]) {
+  opacity: 0.6;
+}
+.ws.is-elsewhere::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
 }
 /* A window being dragged over this number goes to that workspace when let go. */
 .ws[data-drop] {
@@ -1335,6 +1367,21 @@ body.is-resizing iframe {
   height: 36px;
   filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.45));
   pointer-events: none;
+}
+.desk-video {
+  pointer-events: none;
+}
+/* Just the ▶ on the desktop: its length would cover most of the small frame. */
+.desk-video .vthumb-time {
+  display: none;
+}
+.desk-thumb {
+  display: block;
+  width: 52px;
+  height: 38px;
+  object-fit: cover;
+  border-radius: 4px;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.45));
 }
 .desk-label {
   /* May be wider than the icon (centred over it) so names like "Contributions" stay on one line. */
@@ -4544,6 +4591,43 @@ body:has(.games-play.is-page-full) :is(.dock, .dock-handle) {
 }
 .fm-view-gallery .fm-thumb.is-photo {
   object-fit: contain;
+}
+/* A video's frame (src/os/VideoThumb.tsx), with a small ▶ and its length in a corner. */
+.vthumb {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+}
+.vthumb-badge {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 9px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+.vthumb-time {
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.fm-view-gallery .vthumb {
+  width: 100%;
+  height: 100%;
+}
+.fm-view-gallery .vthumb-badge {
+  right: 6px;
+  bottom: 6px;
+  font-size: 11px;
+}
+.fm-view-gallery .vthumb-time {
+  font-size: 11.5px;
 }
 .fm-where {
   font-size: 10.5px;
@@ -9387,4 +9471,25 @@ kbd {
 }
 .sp-contact h4 {
   margin: 4px 0 0;
+}
+
+/* The text field of askText() (src/os/Dialogs.tsx). */
+.dlg-input {
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-dark);
+  color: var(--fg-bright);
+  font: inherit;
+  outline: 0;
+}
+.dlg-input:focus {
+  border-color: var(--accent);
+}
+.dlg-input[aria-invalid='true'] {
+  border-color: var(--red);
+}
+.dlg-problem {
+  margin: 6px 0 0;
 }

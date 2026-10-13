@@ -2,6 +2,7 @@ import { signedIn, subscribeAccount } from './account'
 import { applyChange, receive, setAccountList } from './notify'
 import { calendarChangedElsewhere } from '../data/calendar'
 import { mailChangedElsewhere } from '../data/mail'
+import { pullAll } from './synced'
 
 // The live line to the server's notification hub (server/notifier.ts) while signed in: new
 // notifications for the account (a pop-up when this page is in view), and other pages reading or
@@ -40,6 +41,8 @@ function connect() {
   stream.addEventListener('calendar', () => calendarChangedElsewhere())
   // New mail, or mail changed elsewhere (server/jmap.ts): Mail windows fetch again.
   stream.addEventListener('mail', (e) => mailChangedElsewhere(JSON.parse((e as MessageEvent).data)))
+  // Synced state the server changed itself (an agent made or linked a note): load it now, not at the next poll.
+  stream.addEventListener('state', () => void pullAll())
   document.addEventListener('visibilitychange', onVisibility)
   beat = setInterval(() => inView() && presence(), HEARTBEAT_MS)
 }

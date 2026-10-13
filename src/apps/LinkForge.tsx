@@ -3,6 +3,7 @@ import { cleanUrl } from '../data/launchers'
 import { linkForge, useAccount } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import { useWM, type WinState } from '../os/wm'
+import { SecretInput } from '../os/SecretInput'
 
 // Linking a Gitea or Forgejo instance, in a window of its own (opened from Settings → Code hosts).
 // It closes itself once the token checks out and brings Settings back to the list.
@@ -59,7 +60,7 @@ export function LinkForge({ win }: { win: WinState }) {
         </label>
         <label className="set-field">
           <span>Access token</span>
-          <input type="password" value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} placeholder="personal access token" required autoComplete="off" />
+          <SecretInput value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} placeholder="personal access token" required />
         </label>
       </div>
       <p className="muted set-help">

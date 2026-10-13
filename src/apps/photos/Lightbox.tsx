@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { download, sfPath } from '../../data/seafile'
 import { coordinates, duration, exposureText, fullDate, getInfo, originalUrl, setFavourite, thumbUrl, wallOf, webShows, type Info, type Item, type SourceId } from '../../data/photos'
 import { formatSize } from '../../terminal/vfs'
+import { openContextMenu, openMenuAt, type MenuItem } from '../../os/ContextMenu'
 import { useWM } from '../../os/wm'
 
 // One photo at a time, over the timeline. The large thumbnail shows at once and the original
@@ -9,7 +10,8 @@ import { useWM } from '../../os/wm'
 // thumbnail). Zoom with the wheel, a pinch, double-click or + and −, towards the pointer; drag to
 // pan when zoomed in. Arrow keys, swipes and the side buttons go through the timeline, Escape or a
 // swipe down closes, I shows the details (camera, lens, exposure, size, place), full stop makes
-// it a favourite. Videos play in Player.
+// it a favourite, Delete (or the bin) moves it to the trash and goes on to the next one, and
+// right-click (or ⋯) has the same menu as in the grid. Videos play in Player.
 
 const MAX = 8
 
@@ -22,21 +24,46 @@ const Icon = ({ d, fill }: { d: string; fill?: boolean }) => (
 const HEART = 'M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z'
 const INFO = 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v6M12 7.5v.5'
 const SAVE = 'M12 4v11M7 10l5 5 5-5M5 20h14'
+const BIN = 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3'
 type View = { s: number; x: number; y: number }
 const FIT: View = { s: 1, x: 0, y: 0 }
 
-export function Lightbox({ source, items, index, onIndex, onClose, onFavourite, phone }: { source: SourceId; items: Item[]; index: number; onIndex: (i: number) => void; onClose: () => void; onFavourite: (id: string, on: boolean) => void; phone: boolean }) {
+export function Lightbox({
+  source,
+  items,
+  index,
+  onIndex,
+  onClose,
+  onFavourite,
+  phone,
+  info: startWithInfo = false,
+  menu,
+  onTrash,
+}: {
+  source: SourceId
+  items: Item[]
+  index: number
+  onIndex: (i: number) => void
+  onClose: () => void
+  onFavourite: (id: string, on: boolean) => void
+  phone: boolean
+  /** Opened with Info: the details shown */
+  info?: boolean
+  /** The photo's menu, as in the grid */
+  menu: (id: string) => MenuItem[]
+  onTrash: (id: string) => void
+}) {
   const wm = useWM()
   const item = items[index]
   const [info, setInfo] = useState<Info | null>(null)
   const [infoError, setInfoError] = useState<string | null>(null)
-  const [panel, setPanel] = useState(!phone && (() => {
+  const [panel, setPanel] = useState(startWithInfo || (!phone && (() => {
     try {
       return localStorage.getItem('mvlos.photos.info') === '1'
     } catch {
       return false
     }
-  })())
+  })()))
   const [view, setView] = useState<View>(FIT)
   const [full, setFull] = useState<string | null>(null)
   const stage = useRef<HTMLDivElement>(null)
@@ -207,7 +234,11 @@ export function Lightbox({ source, items, index, onIndex, onClose, onFavourite, 
     else if (k === '-') zoomTo(view.s / 1.5)
     else if (k === '0') setView(FIT)
     else if ((k === ' ' || k === 'Enter') && item.video) play()
-    else return
+    else if (k === 'Delete') onTrash(item.id)
+    else if (k === 'ContextMenu' || (e.shiftKey && k === 'F10')) {
+      const r = stage.current?.getBoundingClientRect()
+      if (r) openContextMenu({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, preventDefault() {}, stopPropagation() {} }, menu(item.id))
+    } else return
     e.preventDefault()
     e.stopPropagation()
   }
@@ -237,6 +268,9 @@ export function Lightbox({ source, items, index, onIndex, onClose, onFavourite, 
         <button className="ph-lb-btn" onClick={save} disabled={!info} aria-label="Download" title="Download">
           <Icon d={SAVE} />
         </button>
+        <button className="ph-lb-btn" onClick={() => onTrash(item.id)} aria-label="Move to trash" title="Move to trash (Del)">
+          <Icon d={BIN} />
+        </button>
         {source === 'seafile' ? (
           <button className="ph-lb-btn ph-lb-text" onClick={showInFiles} disabled={!info?.path}>
             {phone ? 'Files' : 'Show in Files'}
@@ -248,9 +282,12 @@ export function Lightbox({ source, items, index, onIndex, onClose, onFavourite, 
             </a>
           )
         )}
+        <button className="ph-lb-btn" onClick={(e) => openMenuAt(e.currentTarget, menu(item.id))} aria-label="More" title="More">
+          ⋯
+        </button>
       </div>
       <div className="ph-lb-main">
-        <div className="ph-lb-stage" ref={stage} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onDoubleClick={(e) => (view.s > 1 ? setView(FIT) : zoomTo(2.5, e.clientX, e.clientY))} data-no-touch-menu>
+        <div className="ph-lb-stage" ref={stage} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onDoubleClick={(e) => (view.s > 1 ? setView(FIT) : zoomTo(2.5, e.clientX, e.clientY))} onContextMenu={(e) => openContextMenu(e, menu(item.id))} data-no-touch-menu>
           <img
             key={item.id}
             className="ph-lb-img"

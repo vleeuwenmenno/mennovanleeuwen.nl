@@ -21,24 +21,31 @@ import {
   type ContactFields,
 } from '../../data/contacts'
 import { openMailto } from '../../data/links'
-import { readBlob, uploadBlob } from '../../data/seafile'
+import { blobText } from '../../data/decodeText'
+import { importFileOf } from '../../data/fileOps'
+import { isVcfName, takeImport, type ImportFile } from '../../data/pimFiles'
+import { uploadBlob } from '../../data/seafile'
 import { signIn, useAccount } from '../../os/account'
 import { openContextMenu, openMenuAt, type MenuItem } from '../../os/ContextMenu'
 import { ask, choose, tell } from '../../os/Dialogs'
 import { pickFiles, pickFolder } from '../../os/FolderPicker'
+import { useDropTarget } from '../../os/dnd'
 import { useWM, type WinState } from '../../os/wm'
 import { ContactCard, UnknownCard, formatDate } from './ContactCard'
 import { ContactEditor, type EditorTarget } from './ContactEditor'
 import { Avatar } from './people'
+import { readVcf } from './vcf'
 import './contacts.css'
 
 // The Contacts app: everyone in the address book on this site and the CardDAV ones (Fastmail,
 // iCloud, Nextcloud...) in one list, with search, an A–Z strip, address books and groups in the
-// sidebar, and a card to read and edit. Imports and exports .vcf files from the computer or Files,
-// and finds people who are in it twice. Narrow windows (phones) show the list or the card.
+// sidebar, and a card to read and edit. Imports and exports .vcf files from the computer or Files
+// (dropped on it, opened in it from Files or the terminal, or from the ⋯ menu; people already in the
+// book are skipped), and finds people who are in it twice. Narrow windows (phones) show the list or the card.
 //
 // props.contact (an id) opens on that contact; props.email (and props.name) on whoever has that
-// address, or a card to add them (src/data/contacts.ts: openContact).
+// address, or a card to add them (src/data/contacts.ts: openContact); props.import takes .vcf files
+// to import (src/data/pimFiles.ts: openImport).
 
 type Filter = { kind: 'all' } | { kind: 'book'; id: string } | { kind: 'group'; name: string } | { kind: 'duplicates' }
 type View = { kind: 'none' } | { kind: 'contact'; id: string } | { kind: 'unknown'; email: string; name?: string } | { kind: 'edit'; target: EditorTarget }
@@ -190,30 +197,94 @@ export function ContactsApp({ win }: { win: WinState }) {
     })
   }
 
-  /** Asks which writable address book, when there is more than one. */
-  const pickBook = async (title: string): Promise<string | null> => {
+  // .vcf files from the computer, Files or the desktop (dropped here or opened in Contacts), or picked
+  // from the menu: the cards they hold, shown first, into the address book picked. Cards the book
+  // has already (the same UID, or the same name and email address) are skipped.
+  const importVcfFiles = async (files: { name: string; text: string }[]) => {
+    const cards = files.flatMap((f) => readVcf(f.text))
+    if (!cards.length) return void (await tell({ title: 'Nothing to import', body: files.length === 1 ? `${files[0].name} has no contacts.` : 'Those files have no contacts.' }))
     const writable = books.filter((b) => b.writable)
-    if (writable.length <= 1) return writable[0]?.id ?? 'local'
-    const preferred = filter.kind === 'book' && writable.some((b) => b.id === filter.id) ? filter.id : bookForNew()
-    return choose({ title, buttons: [{ id: 'cancel', label: 'Cancel' }, ...writable.map((b) => ({ id: b.id, label: b.id === 'local' ? b.name : `${b.name} (${b.source})`, primary: b.id === preferred }))] }).then((id) => (id && id !== 'cancel' ? id : null))
-  }
-
-  const importText = async (text: string) => {
-    const book = await pickBook('Import into which address book?')
-    if (!book) return
+    let book = filter.kind === 'book' && writable.some((b) => b.id === filter.id) ? filter.id : bookForNew()
+    if (!writable.some((b) => b.id === book)) book = writable[0]?.id ?? 'local'
+    const answer = await choose({
+      title: cards.length === 1 ? 'Import this contact?' : `Import ${cards.length} contacts?`,
+      body: (
+        <div className="ca-import">
+          <ul className="ca-import-list">
+            {cards.slice(0, 12).map((c, i) => (
+              <li key={i}>
+                <strong>{c.name}</strong>
+                {c.detail && <span className="muted">{c.detail}</span>}
+              </li>
+            ))}
+            {cards.length > 12 && <li className="muted">and {cards.length - 12} more</li>}
+          </ul>
+          {writable.length > 1 ? (
+            <label className="ca-import-into">
+              Into
+              <select defaultValue={book} onChange={(e) => (book = e.target.value)}>
+                {writable.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.id === 'local' ? b.name : `${b.name} · ${b.source}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <p className="muted">Into {writable[0]?.name ?? 'your address book on this site'}.</p>
+          )}
+          <p className="muted">Contacts the address book has already are skipped.</p>
+        </div>
+      ),
+      buttons: [
+        { id: 'cancel', label: 'Cancel' },
+        { id: 'import', label: 'Import', primary: true },
+      ],
+    })
+    if (answer !== 'import') return
     await run(async () => {
-      const r = await importVcf(book, text)
+      const r = await importVcf(book, files.map((f) => f.text).join('\r\n'))
+      const did = r.added + r.updated
       await tell({
-        title: r.added + r.updated ? `Imported ${r.added + r.updated} contact${r.added + r.updated === 1 ? '' : 's'}` : 'Nothing imported',
+        title: did ? `Imported ${did} contact${did === 1 ? '' : 's'}` : r.skipped ? 'Nothing new to import' : 'Nothing imported',
         body: (
           <>
-            {r.added} added, {r.updated} updated (the same contact was there already).
+            {r.added} added{r.updated ? `, ${r.updated} updated` : ''}{r.skipped ? `, ${r.skipped} skipped (${r.skipped === 1 ? 'it was' : 'they were'} in the address book already)` : ''}.
             {r.failed.length > 0 && <span className="ct-failed">{r.failed.slice(0, 5).join('\n')}{r.failed.length > 5 ? `\n…and ${r.failed.length - 5} more` : ''}</span>}
           </>
         ),
       })
     })
   }
+  const textsOf = (files: ImportFile[]) => Promise.all(files.map(async (f) => ({ name: f.name, text: await blobText(await f.read()) })))
+  const importFiles = (files: ImportFile[]) => run(() => textsOf(files).then(importVcfFiles))
+
+  // Opened on files (Files, the desktop, the terminal, Spotlight, Mail): the same import as for a
+  // drop, once the address books are in.
+  const [queued, setQueued] = useState<ImportFile[] | null>(null)
+  useEffect(() => {
+    const files = takeImport(win.props.import)
+    if (files) setQueued(files)
+  }, [win.props.t]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!queued || status !== 'ready' || account.status !== 'user') return
+    setQueued(null)
+    void importFiles(queued)
+  }, [queued, status, account.status]) // eslint-disable-line react-hooks/exhaustive-deps
+  useDropTarget(
+    root,
+    {
+      accept: (d) => (d.os || d.items.some((i) => i.kind === 'file' && !i.dir && isVcfName(i.name)) ? 'copy' : null),
+      drop: async (d) => {
+        const files: ImportFile[] = []
+        if (d.os) for (const p of await d.files()) if (isVcfName(p.file.name) || /^text\/(x-)?vcard$/.test(p.file.type)) files.push({ name: p.file.name, read: async () => p.file })
+        for (const i of d.items) if (i.kind === 'file' && !i.dir && isVcfName(i.name)) files.push(importFileOf(i.path))
+        if (!files.length) return void (await tell({ title: 'Only .vcf files can be imported' }))
+        await importFiles(files)
+      },
+    },
+    account.status === 'user',
+  )
 
   /** What an export takes: the address book or group in view, or everything. */
   const exportScope = (): { which: { book?: string; ids?: string[] }; name: string } => {
@@ -279,7 +350,7 @@ export function ContactsApp({ win }: { win: WinState }) {
         disabled: !account.seafile,
         onSelect: () =>
           void pickFiles({ title: 'Import contacts (.vcf)' }).then((paths) => {
-            if (paths?.length) void run(async () => importText((await Promise.all(paths.map((p) => readBlob(p).then((b) => b.text())))).join('\r\n')))
+            if (paths?.length) void importFiles(paths.map(importFileOf))
           }),
       },
       { label: `Export ${filter.kind === 'book' ? 'this address book' : filter.kind === 'group' ? 'this group' : 'everyone'}`, onSelect: () => void exportTo('pc') },
@@ -338,6 +409,11 @@ export function ContactsApp({ win }: { win: WinState }) {
         <div className="ct-empty-box">
           <span className="ct-empty-glyph">👥</span>
           <h3>Contacts</h3>
+          {queued && (
+            <p className="ca-empty-note">
+              <strong>{queued.length === 1 ? queued[0].name : `${queued.length} files`}</strong> can be imported once you sign in.
+            </p>
+          )}
           <p className="muted">Your contacts show here once you sign in: an address book on this site, and Fastmail, iCloud or any CardDAV one.</p>
           {account.status === 'anon' && (
             <button className="btn btn-primary" onClick={signIn}>
@@ -387,7 +463,7 @@ export function ContactsApp({ win }: { win: WinState }) {
             <button className="btn" onClick={() => pcFile.current?.click()}>
               Import a .vcf…
             </button>
-            <button className="btn" onClick={() => wm.open('settings', { section: 'contacts', t: String(Date.now()) })}>
+            <button className="btn" onClick={() => wm.open('settings', { section: 'integrations', sub: 'contacts', t: String(Date.now()) })}>
               Fastmail / CardDAV…
             </button>
           </div>
@@ -552,7 +628,7 @@ export function ContactsApp({ win }: { win: WinState }) {
         onChange={(e) => {
           const files = [...(e.target.files ?? [])]
           e.target.value = ''
-          if (files.length) void run(async () => importText((await Promise.all(files.map((f) => f.text()))).join('\r\n')))
+          if (files.length) void importFiles(files.map((f) => ({ name: f.name, read: async () => f })))
         }}
       />
     </div>

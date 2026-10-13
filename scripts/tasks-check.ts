@@ -193,6 +193,17 @@ try {
   await api('DELETE', '/api/tasks/lists', { id: local.id })
   check('a list on this site is deleted with its tasks', !(await all()).lists.some((l) => l.id === local.id) && (database().prepare('SELECT COUNT(*) AS n FROM task_items').get() as { n: number }).n === 0)
 
+  // --- Importing events: the UID is kept, and a calendar says which UIDs it has --------------------------
+  const calendars = (await api<{ calendars: { id: string; name: string }[] }>('GET', '/api/calendar/calendars')).calendars
+  const events = calendars.find((c) => c.name === 'Events')!
+  await api('POST', '/api/calendar/events', { calendar: events.id, event: { title: 'Imported viewing', start: '2026-10-15T08:00:00.000Z', end: '2026-10-15T08:30:00.000Z', allDay: false, uid: 'imported-1@example.com', timeZone: 'Europe/Amsterdam' } })
+  const imported = [...(mock.collections.get('/cal/mock/events/')?.objects.entries() ?? [])].find(([, o]) => o.text.includes('SUMMARY:Imported viewing'))
+  check('an imported event keeps its own UID', !!imported && imported[1].text.includes('UID:imported-1@example.com\r\n') && imported[0] === '/cal/mock/events/imported-1@example.com.ics')
+  const known = await api<{ known: string[] }>('POST', '/api/calendar/known', { calendar: events.id, uids: ['imported-1@example.com', 'never-seen@example.com'] })
+  check('the calendar says which UIDs it has', known.known.length === 1 && known.known[0] === 'imported-1@example.com')
+  await api('POST', '/api/calendar/events', { calendar: events.id, event: { title: 'Odd UID', start: '2026-10-16T08:00:00.000Z', end: '2026-10-16T08:30:00.000Z', allDay: false, uid: 'has;semicolon' } })
+  check('a UID that is no safe token is not kept', [...(mock.collections.get('/cal/mock/events/')?.objects.values() ?? [])].some((o) => o.text.includes('SUMMARY:Odd UID') && !o.text.includes('has;semicolon')))
+
   // --- Quick add ------------------------------------------------------------------------------------------
   const { parseQuick } = await import('../src/apps/tasks/quickAdd.ts')
   const base = new Date(2026, 9, 12, 14, 0) // Monday 12 October 2026, 14:00

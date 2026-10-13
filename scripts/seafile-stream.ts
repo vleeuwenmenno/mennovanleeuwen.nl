@@ -14,6 +14,11 @@
 // It also checks that the request to Seafile goes when the browser hangs up halfway (and when a
 // cut-out range is done), and that a locked library still answers 423.
 //
+// Files' video thumbnails (src/data/videoThumbs.ts) read their frame through this route and ask
+// /api/seafile/thumb first, so both are checked for refusing a visitor without a session and an
+// account without Seafile (which must never reach the first account's Seafile), and the thumbnail
+// route for a video with and without Seafile making video thumbnails (ENABLE_VIDEO_THUMBNAIL).
+//
 //   node scripts/seafile-stream.ts
 //
 // Exits 1 on any failure.
@@ -50,6 +55,11 @@ const downloads: Download[] = []
 let detailAsked = 0
 /** Seafile has forgotten the encrypted libraries' password (its hour is up). */
 let forgotten = false
+/** Seafile makes video thumbnails (ENABLE_VIDEO_THUMBNAIL, with ffmpeg on its server). */
+let videoThumbs = false
+let thumbsAsked = 0
+/** The start of a PNG: enough for a thumbnail the server only passes on. */
+const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0])
 
 const seafile = createServer((req: IncomingMessage, res: ServerResponse) => {
   const url = new URL(req.url ?? '/', 'http://x')
@@ -66,6 +76,13 @@ const seafile = createServer((req: IncomingMessage, res: ServerResponse) => {
     detailAsked++
     const p = url.searchParams.get('p') ?? ''
     return json(200, { name: p.slice(1), size: p === '/big.mp4' ? BIG : SMALL })
+  }
+  // Seahub makes none in encrypted libraries, and of videos only when set up for it.
+  m = /^\/api2\/repos\/([0-9a-f-]{36})\/thumbnail\/$/.exec(path)
+  if (m) {
+    thumbsAsked++
+    if (m[1] === PLAIN && videoThumbs && url.searchParams.get('p') === '/small.mp4') return void res.writeHead(200, { 'Content-Type': 'image/png' }).end(PNG)
+    return json(400, { error_msg: 'Failed to create thumbnail.' })
   }
   m = /^\/files\/([0-9a-f-]{36})\/(small\.mp4|big\.mp4|page\.html)$/.exec(path)
   if (m) return serve(m[1], m[2], req, res)
@@ -136,12 +153,17 @@ database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) V
 database()
   .prepare('INSERT INTO integrations (user_id, name, secret, created_at) VALUES (1, ?, ?, ?)')
   .run('seafile', encrypt(JSON.stringify({ url: base, username: 'check@example.com', token: 'stand-in-token', name: 'Check', version: '12.0.0' })), now)
+// A second account, signed in, without Seafile.
+const otherSid = randomBytes(24).toString('hex')
+database().prepare('INSERT INTO users (id, github_id, login, github_token, created_at, updated_at) VALUES (2, 2, ?, ?, ?, ?)').run('stream-other', encrypt('none'), now, now)
+database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, 2, ?, ?)').run(sha256(otherSid), now, now + 86400_000)
 await server.start()
 
 const cookie = { Cookie: `mvlos_sid=${sid}` }
 const post = (path: string, body: unknown) => fetch(`${server.origin}${path}`, { method: 'POST', headers: { ...cookie, 'Content-Type': 'application/json', Origin: server.origin }, body: JSON.stringify(body) })
 const stream = (repo: string, file: string, init: { range?: string; method?: string; signal?: AbortSignal } = {}) =>
   fetch(`${server.origin}/api/seafile/stream?repo=${repo}&p=${encodeURIComponent(`/${file}`)}`, { method: init.method ?? 'GET', signal: init.signal, headers: { ...cookie, ...(init.range ? { Range: init.range } : {}) } })
+const thumb = (repo: string, file: string, headers: Record<string, string> = cookie) => fetch(`${server.origin}/api/seafile/thumb?repo=${repo}&p=${encodeURIComponent(`/${file}`)}&size=512`, { headers })
 const same = (a: Uint8Array, b: Uint8Array) => a.length === b.length && Buffer.from(a).equals(Buffer.from(b))
 /** The newest download of `file` from the stand-in, once it has started. */
 const lastDownload = async (file: string, since: number) => {
@@ -244,6 +266,35 @@ try {
   const forgot = await stream(ENC, 'small.mp4', { range: 'bytes=1000-' })
   check(`Seafile forgot the password: 423 (got ${forgot.status})`, forgot.status === 423)
   forgotten = false
+
+  // Whose Seafile: nobody's without a session, and not the first account's for the second one.
+  const asked = { downloads: downloads.length, thumbs: thumbsAsked }
+  for (const [who, headers, status] of [
+    ['no session', {}, 401],
+    ['another account without Seafile', { Cookie: `mvlos_sid=${otherSid}` }, 409],
+  ] as const) {
+    const s = await fetch(`${server.origin}/api/seafile/stream?repo=${PLAIN}&p=${encodeURIComponent('/small.mp4')}`, { headers: { ...headers, Range: 'bytes=0-99' } })
+    await s.arrayBuffer()
+    check(`${who}: stream ${status} (got ${s.status})`, s.status === status)
+    const t = await thumb(PLAIN, 'small.mp4', headers)
+    await t.arrayBuffer()
+    check(`${who}: thumbnail ${status} (got ${t.status})`, t.status === status)
+  }
+  check('...and Seafile was not asked for them', downloads.length === asked.downloads && thumbsAsked === asked.thumbs)
+
+  // A video's thumbnail: 404 when Seafile makes none (the browser makes a frame itself then), the
+  // picture when it does; none in an encrypted library either way.
+  const none = await thumb(PLAIN, 'small.mp4')
+  await none.arrayBuffer()
+  check(`video thumbnail, Seafile makes none: 404 (got ${none.status})`, none.status === 404)
+  videoThumbs = true
+  const made = await thumb(PLAIN, 'small.mp4')
+  const png = Buffer.from(await made.arrayBuffer())
+  check(`video thumbnail, Seafile makes one: 200 image/png (got ${made.status} ${made.headers.get('content-type')})`, made.status === 200 && made.headers.get('content-type') === 'image/png' && png.equals(PNG))
+  const encrypted = await thumb(ENC, 'small.mp4')
+  await encrypted.arrayBuffer()
+  check(`video thumbnail in an encrypted library: 404 (got ${encrypted.status})`, encrypted.status === 404)
+  videoThumbs = false
 
   // Locked again: 423 again.
   check('locking again', (await post('/api/seafile/lock', { repo: ENC })).ok)

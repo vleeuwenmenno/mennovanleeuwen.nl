@@ -17,6 +17,7 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sanitizeHtml } from '../server/mailhtml.ts'
+import { isAllowed, parseSender } from '../src/data/mailRemote.ts'
 import { parseInvite } from '../server/imip.ts'
 import { HOSTILE_HTML, PNG, startMockJmap } from './mail-mock.ts'
 
@@ -202,6 +203,12 @@ async function endToEnd() {
     // Linking: a wrong token is refused; a bare host finds the session through /.well-known/jmap.
     const bad = await call('POST', '/api/mail/accounts', { url: mock.origin, token: 'wrong' })
     check('linking: a wrong token is refused', bad.status === 400 && /refused the token/.test(bad.json.error), bad.json)
+    check("linking: the server's own reason comes with a refusal", /refused the token: Bad token$/.test(bad.json.error), bad.json)
+    // Fastmail's own address (the default when none is given): a token without fmu1- is refused before anything is sent.
+    const notFastmail = await call('POST', '/api/mail/accounts', { token: 'hunter2-saved-password' })
+    check('linking: a Fastmail token must start with fmu1-', notFastmail.status === 400 && /isn't a Fastmail API token: they start with fmu1-/.test(notFastmail.json.error) && /Manage API tokens/.test(notFastmail.json.error), notFastmail.json)
+    const notFastmailUrl = await call('POST', '/api/mail/accounts', { url: 'https://api.fastmail.com/jmap/session', token: 'wrong' })
+    check('linking: the same with Fastmail typed out', notFastmailUrl.status === 400 && /fmu1-/.test(notFastmailUrl.json.error), notFastmailUrl.json)
     const linkedNow = await call('POST', '/api/mail/accounts', { url: mock.origin, token: mock.token, label: 'Mock' })
     check('linking: found through /.well-known/jmap and stored', linkedNow.status === 200 && linkedNow.json.username === 'me@example.test' && linkedNow.json.url.endsWith('/jmap/session'), linkedNow.json)
     const acc = linkedNow.json.id as number
@@ -248,6 +255,35 @@ async function endToEnd() {
     await call('PUT', '/api/state/mail', { value: { imageSenders: ['news@shop.example'] } })
     const always = (await call('GET', `/api/mail/${acc}/thread/${shop.threadId}`)).json.messages[0]
     check('Always for this sender: images load for them', always.images === true && always.html.includes('banner.jpg'))
+
+    // The Mail settings (Settings → Apps → Mail): the remote-content mode and the allow list, entries and domains.
+    const shown = async (value: unknown) => {
+      await call('PUT', '/api/state/mail', { value })
+      return (await call('GET', `/api/mail/${acc}/thread/${shop.threadId}`)).json.messages[0]
+    }
+    const allowedState = (value: unknown) => ({ remote: 'allowed', ...(value as object) })
+    const m1 = await shown({ remote: 'ask', allowed: [{ who: 'news@shop.example', at: 1 }] })
+    check('remote content "ask": blocked, even for an allowed sender', m1.images === false && m1.blocked >= 3 && !m1.html.includes('banner.jpg'), { images: m1.images, blocked: m1.blocked })
+    const m2 = await shown(allowedState({ allowed: [{ who: 'news@shop.example', at: 1 }] }))
+    check('remote content "allowed": an allowed address loads', m2.images === true && m2.html.includes('banner.jpg'))
+    const m3 = await shown(allowedState({ allowed: [{ who: 'other@shop.example', at: 1 }, { who: '@elsewhere.example', at: 2 }] }))
+    check('remote content "allowed": other senders and domains stay blocked', m3.images === false && !m3.html.includes('banner.jpg'), { images: m3.images })
+    const m4 = await shown(allowedState({ allowed: [{ who: '@shop.example', at: 1 }] }))
+    check('remote content "allowed": a domain entry covers its senders', m4.images === true && m4.html.includes('banner.jpg'))
+    const m5 = await shown(allowedState({ allowed: [] }))
+    check('remote content "allowed": removed (an empty list) blocks again', m5.images === false && !m5.html.includes('banner.jpg'))
+    const m6 = await shown({ remote: 'always', allowed: [] })
+    check('remote content "always": loads for everyone, trackers still out', m6.images === true && m6.html.includes('banner.jpg') && !m6.html.includes('open.gif') && !m6.html.includes('hidden.png') && m6.trackers >= 2, { images: m6.images, trackers: m6.trackers })
+    check('remote content "always": the single-message route agrees', (await call('GET', `/api/mail/${acc}/message/${shop.id}`)).json.images === true)
+    const m7 = await shown({ remote: 'ask', allowed: [], markRead: 'never', quotes: 'expanded', signatures: { '1:x': 'Me' } })
+    check('remote content "ask" again, other settings in the state do not matter', m7.images === false && !m7.html.includes('banner.jpg'))
+    const m8 = await shown({ imageSenders: ['@SHOP.example'] })
+    check('an older list (plain addresses, no mode) counts as "allowed"', m8.images === true)
+    const m9 = await shown({ remote: 'bogus', allowed: 'no' })
+    check('a damaged state blocks', m9.images === false)
+    check('parseSender: addresses and domains, tidied or refused', parseSender(' <News@Shop.Example> ') === 'news@shop.example' && parseSender('@Shop.example') === '@shop.example' && parseSender('shop') === null && parseSender('a b@c.d') === null && parseSender('@x') === null)
+    check('isAllowed: address, domain, nothing else', isAllowed([{ who: '@a.example', at: 0 }], 'x@A.example') && isAllowed([{ who: 'x@a.example', at: 0 }], 'x@a.example') && !isAllowed([{ who: 'x@a.example', at: 0 }], 'y@a.example') && !isAllowed([{ who: '@a.example', at: 0 }], 'x@sub.a.example'))
+    await call('PUT', '/api/state/mail', { value: { imageSenders: ['news@shop.example'] } })
 
     const invite = rows.find((r) => r.subject.startsWith('Invitation'))
     const inv = (await call('GET', `/api/mail/${acc}/thread/${invite.threadId}`)).json.messages[0]

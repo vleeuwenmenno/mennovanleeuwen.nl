@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { dayTitle, duration, monthTitle, thumbUrl, type Bucket, type Item, type SourceId, type ThumbSize } from '../../data/photos'
 import { useIsMobile } from '../../os/useIsMobile'
+import { VideoThumb } from '../../os/VideoThumb'
 import type { Timeline } from './useTimeline'
 
 // The timeline's grid: months, then days, then square tiles, newest first. Only the rows on
@@ -12,6 +13,15 @@ import type { Timeline } from './useTimeline'
 //
 // Zoom: Ctrl+wheel, a pinch, or the buttons (which set `zoom`). The scrubber on the right jumps
 // through the years: drag it, or click a year.
+//
+// Selection (kept as ids by the app, so it outlives the rows that scroll away): a click opens the
+// photo, until something is selected; the circle on a tile (on hover, and always once something
+// is selected) and on each day and month heading selects one or all of them, and from then on a
+// click takes a photo in or out. Ctrl or Cmd+click does that too, whatever is selected, and Shift
+// adds everything from the last one clicked, in timeline order. Dragging over empty space draws a box
+// (scrolling on at the edges), hit-tested against the layout, not the page, so it reaches rows
+// that are not drawn. On a touch screen a tap opens, a long press selects, and taps then add and take
+// away; holding a selected photo then drags the selection.
 
 export const ZOOMS = [56, 84, 124, 180, 260]
 const GAP = 2
@@ -20,7 +30,7 @@ const DAY_H = 34
 
 type Row =
   | { kind: 'month'; top: number; height: number; bucket: number; month: string }
-  | { kind: 'day'; top: number; height: number; bucket: number; wall: number; count: number }
+  | { kind: 'day'; top: number; height: number; bucket: number; wall: number; count: number; first: number }
   | { kind: 'tiles'; top: number; height: number; bucket: number; items: Item[]; first: number }
   | { kind: 'pending'; top: number; height: number; bucket: number }
 
@@ -53,7 +63,7 @@ function layout(buckets: Bucket[], loaded: Map<string, Item[]>, width: number, z
         const day = Math.floor(items[i].wall / 86_400_000)
         let j = i
         while (j < items.length && Math.floor(items[j].wall / 86_400_000) === day) j++
-        rows.push({ kind: 'day', top: y, height: DAY_H, bucket: bi, wall: items[i].wall, count: j - i })
+        rows.push({ kind: 'day', top: y, height: DAY_H, bucket: bi, wall: items[i].wall, count: j - i, first: i })
         y += DAY_H
         for (let k = i; k < j; k += cols) {
           rows.push({ kind: 'tiles', top: y, height: tile + GAP, bucket: bi, items: items.slice(k, Math.min(j, k + cols)), first: k })
@@ -65,6 +75,20 @@ function layout(buckets: Bucket[], loaded: Map<string, Item[]>, width: number, z
     heights.push(y - start)
   })
   return { rows, tops, heights, total: y, tile, cols }
+}
+
+/** The photos whose tiles a box (in the canvas's own coordinates) touches. */
+function inBox(l: Layout, box: { x0: number; y0: number; x1: number; y1: number }): string[] {
+  const out: string[] = []
+  for (let i = rowAt(l.rows, box.y0); i < l.rows.length && l.rows[i].top < box.y1; i++) {
+    const r = l.rows[i]
+    if (r.kind !== 'tiles' || r.top + l.tile < box.y0) continue
+    r.items.forEach((item, k) => {
+      const x = k * (l.tile + GAP)
+      if (x < box.x1 && x + l.tile > box.x0) out.push(item.id)
+    })
+  }
+  return out
 }
 
 /** The first row whose bottom is below `y`. */
@@ -128,7 +152,18 @@ function enqueue(start: (done: () => void) => void): () => void {
   }
 }
 
-const Tile = memo(function Tile({ source, item, size, px, left, onOpen, index }: { source: SourceId; item: Item; size: ThumbSize; px: number; left: number; onOpen: (i: number) => void; index: number }) {
+/** What a tile does when it is clicked, held or dragged: the grid's, through one stable object so the tiles need not draw again. */
+export type TileActions = {
+  click: (item: Item, e: React.MouseEvent) => void
+  check: (item: Item, e: React.MouseEvent) => void
+  menu: (item: Item, e: React.MouseEvent) => void
+  drag: (item: Item, e: React.DragEvent) => void
+  press: (item: Item, e: React.PointerEvent) => void
+}
+
+const CHECK = <path d="M6 12.5l4 4 8-9" />
+
+const Tile = memo(function Tile({ source, item, size, px, left, act, selected, selecting }: { source: SourceId; item: Item; size: ThumbSize; px: number; left: number; act: { current: TileActions }; selected: boolean; selecting: boolean }) {
   const [src, setSrc] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   const done = useRef<(() => void) | null>(null)
@@ -151,21 +186,92 @@ const Tile = memo(function Tile({ source, item, size, px, left, onOpen, index }:
     if (!ok) setFailed(true)
   }
   return (
-    <button className={`ph-tile ${item.video ? 'is-video' : ''}`} style={{ left, width: px, height: px }} onClick={() => onOpen(index)} aria-label={item.video ? 'Video' : 'Photo'} data-id={item.id}>
+    <button
+      className={`ph-tile ${item.video ? 'is-video' : ''} ${selected ? 'is-selected' : ''}`}
+      style={{ left, width: px, height: px }}
+      onClick={(e) => act.current.click(item, e)}
+      onContextMenu={(e) => act.current.menu(item, e)}
+      onPointerDown={(e) => act.current.press(item, e)}
+      draggable
+      onDragStart={(e) => act.current.drag(item, e)}
+      aria-label={item.video ? 'Video' : 'Photo'}
+      aria-pressed={selecting ? selected : undefined}
+      data-id={item.id}
+    >
       {src && !failed && <img src={src} alt="" draggable={false} onLoad={() => settle(true)} onError={() => settle(false)} />}
-      {failed && <span className="ph-tile-none" aria-hidden>{item.video ? '▶' : '🖼'}</span>}
+      {/* A Seafile video Seafile made no thumbnail for: a frame from it, made in this browser (src/data/videoThumbs.ts). */}
+      {failed &&
+        (item.video && item.path ? (
+          <VideoThumb path={item.path} version={item.v} seafileFirst={false} badge={false} className="ph-tile-frame" fallback={<span className="ph-tile-none" aria-hidden>▶</span>} />
+        ) : (
+          <span className="ph-tile-none" aria-hidden>{item.video ? '▶' : '🖼'}</span>
+        ))}
       {item.video && <span className="ph-badge">{item.duration ? duration(item.duration) : '▶'}</span>}
       {item.fav && (
         <svg className="ph-fav" viewBox="0 0 24 24" width="14" height="14" aria-label="Favourite">
           <path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z" />
         </svg>
       )}
+      <span
+        className="ph-check"
+        role="checkbox"
+        aria-checked={selected}
+        aria-label={selected ? 'Selected' : 'Select'}
+        onClick={(e) => {
+          e.stopPropagation()
+          act.current.check(item, e)
+        }}
+      >
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden>
+          {CHECK}
+        </svg>
+      </span>
     </button>
   )
 })
 
-export function Grid({ source, timeline, zoom, onZoom, onOpen, empty }: { source: SourceId; timeline: Timeline; zoom: number; onZoom: (z: number) => void; onOpen: (index: number) => void; empty: React.ReactNode }) {
+/** A day's or month's "select all" circle: filled when all of them are selected. */
+function HeadCheck({ on, disabled, onToggle, label }: { on: boolean; disabled?: boolean; onToggle: (e: React.MouseEvent) => void; label: string }) {
+  return (
+    <button
+      className={`ph-check ph-check-all ${on ? 'is-on' : ''}`}
+      role="checkbox"
+      aria-checked={on}
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation()
+        onToggle(e)
+      }}
+    >
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden>
+        {CHECK}
+      </svg>
+    </button>
+  )
+}
+
+/** What the grid needs from the app's selection. */
+export type GridSelection = {
+  selected: Set<string>
+  /** Taps on a touch screen add and take away (something is selected) */
+  selecting: boolean
+  act: { current: TileActions }
+  /** Selects these, or (when all of them are) takes them away */
+  toggleAll: (ids: string[]) => void
+  /** A box drawn over the grid: these, on top of `base` */
+  box: (ids: string[], base: Set<string>) => void
+  /** A click on empty space (no box drawn) */
+  emptyClick: (e: React.PointerEvent) => void
+  /** Right-click (or the menu key) on empty space */
+  emptyMenu: (e: React.MouseEvent) => void
+}
+
+export function Grid({ source, timeline, zoom, onZoom, sel, empty }: { source: SourceId; timeline: Timeline; zoom: number; onZoom: (z: number) => void; sel: GridSelection; empty: React.ReactNode }) {
   const scroller = useRef<HTMLDivElement>(null)
+  const canvas = useRef<HTMLDivElement>(null)
   const [box, setBox] = useState({ w: 0, h: 0 })
   const [scrollTop, setScrollTop] = useState(0)
   const { buckets, loaded } = timeline
@@ -245,9 +351,62 @@ export function Grid({ source, timeline, zoom, onZoom, onOpen, empty }: { source
     return Math.hypot(a.x - b.x, a.y - b.y)
   }
   const onPointerDown = (e: React.PointerEvent) => {
-    if (e.pointerType !== 'touch') return
+    if (e.pointerType !== 'touch') return startBox(e)
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
     if (pointers.current.size === 2) pinch.current = dist()
+  }
+
+  // The box: dragged from empty space with a mouse or pen. Its corners are kept in the canvas's
+  // coordinates, so scrolling (by the wheel, or on its own at the edges) carries it along.
+  const [band, setBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  const selRef = useRef(sel)
+  selRef.current = sel
+  const startBox = (e: React.PointerEvent) => {
+    const el = scroller.current
+    const c = canvas.current
+    if (e.button !== 0 || !el || !c || (e.target as HTMLElement).closest('.ph-tile, .ph-check, .ph-scrub')) return
+    const r0 = c.getBoundingClientRect()
+    const start = { x: e.clientX - r0.left, y: e.clientY - r0.top }
+    const base = e.ctrlKey || e.metaKey || e.shiftKey ? new Set(selRef.current.selected) : new Set<string>()
+    let at = { x: e.clientX, y: e.clientY }
+    let drawn = false
+    let timer: ReturnType<typeof setInterval> | null = null
+    const update = () => {
+      const r = c.getBoundingClientRect()
+      const x = Math.max(0, Math.min(r.width, at.x - r.left))
+      const y = Math.max(0, Math.min(r.height, at.y - r.top))
+      if (!drawn && Math.abs(x - start.x) < 5 && Math.abs(y - start.y) < 5) return
+      drawn = true
+      const box = { x0: Math.min(start.x, x), y0: Math.min(start.y, y), x1: Math.max(start.x, x), y1: Math.max(start.y, y) }
+      setBand({ x: box.x0, y: box.y0, w: box.x1 - box.x0, h: box.y1 - box.y0 })
+      selRef.current.box(inBox(last.current ?? l, box), base)
+    }
+    // Near the top or bottom edge the grid scrolls on, faster the closer the pointer is.
+    const tick = () => {
+      const r = el.getBoundingClientRect()
+      const edge = 48
+      const speed = at.y < r.top + edge ? -Math.ceil((r.top + edge - at.y) / 3) : at.y > r.bottom - edge ? Math.ceil((at.y - (r.bottom - edge)) / 3) : 0
+      if (drawn && speed) {
+        el.scrollTop += Math.max(-40, Math.min(40, speed))
+        update()
+      }
+    }
+    timer = setInterval(tick, 16)
+    const move = (ev: PointerEvent) => {
+      at = { x: ev.clientX, y: ev.clientY }
+      update()
+    }
+    const up = (ev: PointerEvent) => {
+      if (timer) clearInterval(timer)
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      setBand(null)
+      if (!drawn && ev.type === 'pointerup') selRef.current.emptyClick(e)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
   }
   const onPointerMove = (e: React.PointerEvent) => {
     if (!pointers.current.has(e.pointerId)) return
@@ -265,21 +424,7 @@ export function Grid({ source, timeline, zoom, onZoom, onOpen, empty }: { source
     if (pointers.current.size < 2) pinch.current = null
   }
 
-  // Each loaded photo's place in the flat list, for the lightbox.
-  const offsets = useMemo(() => {
-    const m = new Map<string, number>()
-    let n = 0
-    for (const b of buckets ?? []) {
-      m.set(b.key, n)
-      n += loaded.get(b.key)?.length ?? 0
-    }
-    return m
-  }, [buckets, loaded])
-
-  // The same function for every render, so the tiles (memo) do not draw again for nothing.
-  const openRef = useRef(onOpen)
-  openRef.current = onOpen
-  const open = useCallback((i: number) => openRef.current(i), [])
+  const allOn = (ids: string[]) => ids.length > 0 && ids.every((id) => sel.selected.has(id))
 
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
   const size: ThumbSize = l.tile * dpr <= 256 ? 'small' : l.tile * dpr <= 600 ? 'medium' : 'large'
@@ -287,36 +432,55 @@ export function Grid({ source, timeline, zoom, onZoom, onOpen, empty }: { source
   const rows = l.rows.slice(from, to + 1)
   return (
     <div className="ph-grid-wrap">
-      <div className="ph-scroll" ref={scroller} onScroll={onScroll} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} data-no-touch-menu>
+      <div
+        className="ph-scroll"
+        ref={scroller}
+        onScroll={onScroll}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onContextMenu={(e) => !(e.target as HTMLElement).closest('.ph-tile') && sel.emptyMenu(e)}
+        data-no-touch-menu
+      >
         {buckets && !buckets.length ? (
           empty
         ) : (
-        <div className="ph-canvas" style={{ height: l.total }}>
+        <div className={`ph-canvas ${sel.selecting ? 'is-selecting' : ''}`} ref={canvas} style={{ height: l.total }}>
           {rows.map((r) => {
             const bucket = buckets![r.bucket]
-            if (r.kind === 'month')
+            const items = loaded.get(bucket.key)
+            if (r.kind === 'month') {
+              const ids = items?.map((i) => i.id) ?? []
+              const on = allOn(ids)
               return (
                 <h2 key={`m${bucket.key}`} className="ph-month" style={{ top: r.top, height: r.height }}>
+                  <HeadCheck on={on} disabled={!items} onToggle={() => sel.toggleAll(ids)} label={on ? `Deselect ${monthTitle(r.month)}` : `Select all of ${monthTitle(r.month)}`} />
                   {monthTitle(r.month)}
                 </h2>
               )
-            if (r.kind === 'day')
+            }
+            if (r.kind === 'day') {
+              const ids = (items ?? []).slice(r.first, r.first + r.count).map((i) => i.id)
+              const on = allOn(ids)
               return (
                 <h3 key={`d${bucket.key}${r.top}`} className="ph-day" style={{ top: r.top, height: r.height }}>
+                  <HeadCheck on={on} onToggle={() => sel.toggleAll(ids)} label={on ? `Deselect ${dayTitle(r.wall)}` : `Select all of ${dayTitle(r.wall)}`} />
                   {dayTitle(r.wall)}
                   <span className="muted">{r.count}</span>
                 </h3>
               )
+            }
             if (r.kind === 'pending') return <div key={`p${bucket.key}`} className="ph-pending" style={{ top: r.top, height: r.height, ['--tile' as string]: `${l.tile + GAP}px` }} />
-            const base = (offsets.get(bucket.key) ?? 0) + r.first
             return (
               <div key={`t${bucket.key}${r.first}`} className="ph-row" style={{ top: r.top, height: l.tile }}>
                 {r.items.map((item, i) => (
-                  <Tile key={item.id} source={source} item={item} size={size} px={l.tile} left={i * (l.tile + GAP)} index={base + i} onOpen={open} />
+                  <Tile key={item.id} source={source} item={item} size={size} px={l.tile} left={i * (l.tile + GAP)} act={sel.act} selected={sel.selected.has(item.id)} selecting={sel.selecting} />
                 ))}
               </div>
             )
           })}
+          {band && <div className="ph-band" style={{ left: band.x, top: band.y, width: band.w, height: band.h }} />}
         </div>
         )}
       </div>

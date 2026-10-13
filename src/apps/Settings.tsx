@@ -15,6 +15,7 @@ import { UsersSettings } from './UsersSettings'
 import { openAlert, useAlerts } from '../os/alerts'
 import { formatSize, prettyPath } from '../terminal/vfs'
 import { browserFilesState, browserTree, useBrowserFiles, wipeBrowserFiles } from '../data/browserfs'
+import { wipeVideoThumbs } from '../data/videoThumbs'
 import { Select } from '../os/Select'
 import { useStatus as usePhotoStatus } from '../data/photos'
 import { ImmichLink } from './photos/PhotosSettings'
@@ -27,8 +28,10 @@ import { clearCodeSearch } from '../os/codeSearch'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
 import { DOCK_MODES, getDockMode, setDockMode, type DockMode } from '../os/dockPrefs'
+import { DRAG_KEYS, dragKeyPref } from '../os/modDrag'
 import { AppIcon } from '../os/icons'
 import { setStartupPrefs, START_WINDOWS, useStartupPrefs } from '../os/startup'
+import { tabWorkspacePrefs, tabWorkspacesSupported, useTabWorkspaces } from '../os/tabWorkspaces'
 import { clearEntries, pruneEntries, useEntries } from '../os/notify'
 import { ACTIVITY_WINDOWS, CALENDAR_LEADS, isOff, KEEP, setNotifyPrefs, setOn, useNotifyPrefs, visibleSources, type NotifySource as NotifySourceDef } from '../os/notifyPrefs'
 import { disablePush, enablePush, pushState, sendTestPush, type PushState } from '../os/push'
@@ -38,20 +41,26 @@ import { ACCENTS, DARK_THEMES, LIGHT_THEMES, setAccent, setMode, setTheme, theme
 import { ReleaseStatus } from '../os/TopbarWidgets'
 import { useWM, type AppId, type WinState } from '../os/wm'
 import { AgentsSettings } from './AgentsSettings'
-import { ContactsSettings } from './contacts/ContactsSettings'
+import { ContactsAccounts, ContactsSettings } from './contacts/ContactsSettings'
+import { MailPane } from './mail/MailPane'
+import { useContacts } from '../data/contacts'
+import { IntegrationNotice } from '../os/IntegrationNotice'
 import { AmpPane, CalendarAppPrefs, FilesPane, GamesPane, PdfPane, PreviewPane, TerminalPane } from './AppSettings'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
 import { BranchGlyph } from './LinkForge'
 import { SyncLine } from './Notebook'
 import { MailSettings } from './mail/MailSettings'
 import { useMailAccounts } from '../data/mail'
+import { SecretInput } from '../os/SecretInput'
 
 // System settings, laid out like macOS: the account on top of a sidebar, one pane per topic.
 // Opened from the system menu, the desktop's right-click menu, Spotlight, the terminal and apps'
 // window menus; props.section picks the pane (account, appearance, dock, launchers, search
 // (Spotlight), windows, links, notifications, golinks, instances, integrations, then the apps:
-// agents, calendar, contacts, files, games, amp, pdf, preview, terminal; then sync, users, about) and
-// props.sub a part of it. The account and service panes only show for the signed-in user.
+// agents, calendar, contacts, files, games, mail, amp, pdf, preview, terminal; then sync, users, about) and
+// props.sub a part of it (Integrations: updown, ollama, seafile, onlyoffice, mail, immich, calendars,
+// contacts). Every account is linked in Integrations; an app's pane keeps the app's own settings and
+// points there (IntegrationNotice). The account and service panes only show for the signed-in user.
 
 const SignInFirst = ({ what }: { what: string }) => {
   const account = useAccount()
@@ -183,6 +192,7 @@ async function removeAccount(setError: (e: string | null) => void) {
   setError(null)
   // This browser's copy of its files goes too (the server never had them).
   await wipeBrowserFiles().catch(() => {})
+  await wipeVideoThumbs().catch(() => {})
   await deleteAccount().catch((e: Error) => setError(e.message))
 }
 
@@ -810,8 +820,8 @@ function Launchers() {
   )
 }
 
-/** Third-party services the widgets read from, with keys on the server: updown.io for Status. */
-type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice' | 'mail' | 'immich' | 'contacts'
+/** Every account the desktop links to, and the keys it keeps for services: updown.io for Status, Ollama, Seafile, OnlyOffice, mail, Immich, calendars and address books. */
+type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice' | 'mail' | 'immich' | 'calendars' | 'contacts'
 
 /** Third-party services, one row each; a row opens that service's own settings. */
 /** `sub` opens one service's settings straight away (Settings → Integrations → Seafile, from an alert). */
@@ -819,14 +829,18 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
   const account = useAccount()
   const [open, setOpen] = useState<IntegrationId | null>(null)
   useEffect(() => {
-    if (sub === 'updown' || sub === 'ollama' || sub === 'seafile' || sub === 'onlyoffice' || sub === 'contacts' || sub === 'mail') setOpen(sub)
+    if (sub === 'updown' || sub === 'ollama' || sub === 'seafile' || sub === 'onlyoffice' || sub === 'contacts' || sub === 'mail' || sub === 'immich' || sub === 'calendars') setOpen(sub)
   }, [sub, t])
   const { libraries } = useLibraries()
   const { accounts: mailAccounts } = useMailAccounts()
   const photos = usePhotoStatus().status
+  const { books } = useContacts()
   if (account.status !== 'user') return <p className="muted">Sign in first to connect services for widgets and Files.</p>
   const seafile = account.seafile
   const host = (url: string) => url.replace(/^https?:\/\//, '')
+  const calendarLinks = [account.google?.email, ...account.caldav.map((c) => c.label)].filter((v): v is string => !!v)
+  // The address books of linked CardDAV accounts, by where they live (the one on this site is always there).
+  const carddav = [...new Set(books.filter((b) => b.account !== undefined).map((b) => b.source))]
 
   const rows: { id: IntegrationId; name: string; icon: ReactNode; status: string; on: boolean; disabled?: boolean }[] = [
     {
@@ -872,7 +886,20 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
       status: photos?.immich ? `${host(photos.immich.url)} · Immich ${photos.immich.version} · for Photos` : 'Your photo library, in the Photos app',
       on: !!photos?.immich,
     },
-    { id: 'contacts', name: 'Contacts (CardDAV)', icon: <span className="set-glyph">📇</span>, status: 'Fastmail, iCloud, Nextcloud and other address books, for Contacts', on: false },
+    {
+      id: 'calendars',
+      name: 'Calendars (Google, CalDAV)',
+      icon: <span className="set-glyph">📅</span>,
+      status: calendarLinks.length ? `${calendarLinks.join(', ')} · for Calendar and Tasks` : 'Google Calendar, Fastmail, Nextcloud and iCloud, for Calendar and Tasks',
+      on: calendarLinks.length > 0,
+    },
+    {
+      id: 'contacts',
+      name: 'Contacts (CardDAV)',
+      icon: <span className="set-glyph">📇</span>,
+      status: carddav.length ? `${carddav.join(', ')} · for Contacts` : 'Fastmail, iCloud, Nextcloud and other address books, for Contacts',
+      on: carddav.length > 0,
+    },
   ]
 
   const current = rows.find((r) => r.id === open && !r.disabled)
@@ -887,7 +914,7 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
           <strong>{current.name}</strong>
           {current.on && <span className="set-badge">Connected</span>}
         </div>
-        {current.id === 'mail' ? <MailSettings /> : current.id === 'updown' ? <UpdownSettings /> : current.id === 'ollama' ? <OllamaSettings /> : current.id === 'seafile' ? <SeafileSettings /> : current.id === 'immich' ? <ImmichLink /> : current.id === 'contacts' ? <ContactsSettings /> : <OfficeSettings />}
+        {current.id === 'mail' ? <MailSettings /> : current.id === 'updown' ? <UpdownSettings /> : current.id === 'ollama' ? <OllamaSettings /> : current.id === 'seafile' ? <SeafileSettings /> : current.id === 'immich' ? <ImmichLink /> : current.id === 'contacts' ? <ContactsAccounts /> : current.id === 'calendars' ? <CalendarAccounts /> : <OfficeSettings />}
       </>
     )
 
@@ -951,7 +978,7 @@ function UpdownSettings() {
         <form className="set-form" onSubmit={save}>
           <label>
             <span>Read-only API key</span>
-            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="read-only API key" autoComplete="off" required />
+            <SecretInput value={key} onChange={(e) => setKey(e.target.value)} placeholder="read-only API key" required />
           </label>
           <p className="muted set-help">
             Use the <em>read-only</em> key from{' '}
@@ -1009,7 +1036,7 @@ function OllamaSettings() {
         <form className="set-form" onSubmit={save}>
           <label>
             <span>API key</span>
-            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Ollama API key" autoComplete="off" required />
+            <SecretInput value={key} onChange={(e) => setKey(e.target.value)} placeholder="Ollama API key" required />
           </label>
           <p className="muted set-help">
             Make one at{' '}
@@ -1076,7 +1103,7 @@ function SeafileSettings() {
         </label>
         <label>
           <span>Password</span>
-          <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="password" required autoComplete="off" />
+          <SecretInput value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="password" required />
         </label>
         {askOtp && (
           <label>
@@ -1273,7 +1300,7 @@ function OfficeSettings() {
       </label>
       <label>
         <span>JWT secret</span>
-        <input type="password" value={form.secret} onChange={(e) => setForm({ ...form, secret: e.target.value })} placeholder="ONLYOFFICE_JWT_SECRET" required autoComplete="off" />
+        <SecretInput value={form.secret} onChange={(e) => setForm({ ...form, secret: e.target.value })} placeholder="ONLYOFFICE_JWT_SECRET" required />
       </label>
       <p className="muted set-help">
         The document server Seafile opens Office files with, to edit them in a window here. The secret is <em>ONLYOFFICE_JWT_SECRET</em> from Seafile's <em>.env</em> (or <em>seahub_settings.py</em>). The URL is checked by loading its editor, then both are stored encrypted on this server.
@@ -1286,11 +1313,11 @@ function OfficeSettings() {
   )
 }
 
-/** Google Calendar and CalDAV accounts, for the Calendar app, the Agenda widget and the clock; which calendars show; and how the Calendar app opens. */
-function CalendarSettings() {
+/** Settings → Integrations → Calendars: Google Calendar and CalDAV accounts, for the Calendar app, Tasks, the Agenda widget and the clock. */
+function CalendarAccounts() {
   const account = useAccount()
-  const { calendars, errors } = useCalendarList()
-  const picks = useCalendarChoice()
+  const wm = useWM()
+  const { errors } = useCalendarList()
   const [error, setError] = useState<string | null>(null)
   if (account.status !== 'user') return <SignInFirst what="connect a calendar" />
   return (
@@ -1346,6 +1373,28 @@ function CalendarSettings() {
       <CaldavForm />
 
       {(error || errors.length > 0) && <p className="t-red">{[error, ...errors].filter(Boolean).join(' · ')}</p>}
+      <div className="set-actions">
+        <button className="btn btn-small" onClick={() => wm.open('calendar', { t: String(Date.now()) })}>
+          Open Calendar
+        </button>
+        <button className="btn btn-small" onClick={() => wm.open('tasks', { t: String(Date.now()) })}>
+          Open Tasks
+        </button>
+      </div>
+    </>
+  )
+}
+
+/** Settings → Apps → Calendar: which calendars show, and how the Calendar app opens. The accounts are in Integrations. */
+function CalendarSettings() {
+  const account = useAccount()
+  const { calendars } = useCalendarList()
+  const picks = useCalendarChoice()
+  if (account.status !== 'user') return <SignInFirst what="connect a calendar" />
+  const linked = !!account.google || account.caldav.length > 0
+  return (
+    <>
+      <IntegrationNotice sub="calendars" linked={linked} app="Calendar" invite="Link a calendar account to get started." />
       {calendars && calendars.length > 0 && (
         <>
           <h4 className="set-subhead">Your calendars</h4>
@@ -1418,7 +1467,7 @@ function CaldavForm() {
       </label>
       <label>
         <span>App password</span>
-        <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="app password" required autoComplete="off" />
+        <SecretInput value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="app password" required />
       </label>
       <p className="muted set-help">
         {provider === 'fastmail' ? (
@@ -1618,6 +1667,27 @@ function SpotlightSettings() {
  * Where web links open, and whether the browser's new tab page (/?newtab) always uses this tab
  * and starts in Spotlight.
  */
+/** Settings → Windows: which key, held while dragging, moves and resizes a window from anywhere on it. */
+function DragKeySettings() {
+  const key = dragKeyPref.use()
+  return (
+    <SetGroup title="Drag windows with a key">
+      <div className="seg set-seg" role="radiogroup" aria-label="Drag windows with a key">
+        {DRAG_KEYS.map(([id, label]) => (
+          <button key={id} role="radio" aria-checked={key === id} className={key === id ? 'is-active' : ''} onClick={() => dragKeyPref.set(id)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <p className="muted set-help">
+        {key === 'off'
+          ? 'Windows move and resize by their title bar and edges only.'
+          : `Hold ${key === 'alt' ? 'Alt' : 'Ctrl'} and drag anywhere on a window with the left button to move it, or with the right button to resize it from the nearest corner, as in Hyprland. A plain ${key === 'alt' ? 'Alt' : 'Ctrl'}-click still goes to the app. Games and programs in the terminal that read the mouse keep the key for themselves. Alt is the key this site already uses for workspaces. In Files and Photos, Shift-drag adds to the selection with a box. Not on phones. Saved in this browser.`}
+      </p>
+    </SetGroup>
+  )
+}
+
 /** Settings → Windows: what the desktop shows when MvL OS opens again. */
 function WindowsSettings() {
   const { windows } = useStartupPrefs()
@@ -1637,6 +1707,8 @@ function WindowsSettings() {
           {windows !== 'last' && " While this is chosen, MvL OS doesn't save which windows are open."}
         </p>
       </SetGroup>
+      <TabWorkspacesGroup lastWindows={windows === 'last'} />
+      <DragKeySettings />
       <SetGroup title="Right now">
         <ul className="set-list">
           <li className="set-row">
@@ -1651,6 +1723,58 @@ function WindowsSettings() {
         </ul>
       </SetGroup>
     </>
+  )
+}
+
+/** Settings → Windows → Workspaces: one workspace per tab of this browser (src/os/tabWorkspaces.ts). */
+function TabWorkspacesGroup({ lastWindows }: { lastWindows: boolean }) {
+  const prefs = tabWorkspacePrefs.use()
+  const tabs = useTabWorkspaces()
+  const wm = useWM()
+  const now = !tabWorkspacesSupported
+    ? "This browser can't tell which of its tabs are open (no Web Locks), so every tab shows the same workspace."
+    : !prefs.perTab
+      ? 'Every tab shows the same workspace.'
+      : !lastWindows
+        ? 'This needs Last windows above: with the other choices every tab has windows of its own.'
+        : !wm.workspaces
+          ? 'A phone has the one workspace.'
+          : tabs.status === 'own'
+            ? `This tab has workspace ${tabs.mine}.`
+            : tabs.status === 'shared'
+              ? 'Every workspace was open in another tab when this one opened, so this tab shares them.'
+              : ''
+  return (
+    <SetGroup title="Workspaces">
+      <ul className="set-list">
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>One workspace per tab</strong>
+            <span className="muted">Every open tab of MvL OS gets a workspace of its own</span>
+          </span>
+          <Toggle on={prefs.perTab} onChange={(on) => tabWorkspacePrefs.patch({ perTab: on })} label="One workspace per tab" />
+        </li>
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Adopt left-behind workspaces</strong>
+            <span className="muted">A new tab takes over the windows a closed tab left</span>
+          </span>
+          <Toggle on={prefs.adopt} onChange={(on) => tabWorkspacePrefs.patch({ adopt: on })} label="Adopt left-behind workspaces" />
+        </li>
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>…also as the new tab page</strong>
+            <span className="muted">
+              Off: <code>/?newtab</code> starts on an empty workspace
+            </span>
+          </span>
+          <Toggle on={prefs.adoptNewTab} onChange={(on) => tabWorkspacePrefs.patch({ adoptNewTab: on })} label="Adopt left-behind workspaces on the new tab page" />
+        </li>
+      </ul>
+      <p className="muted set-help">
+        {now && `${now} `}The bar marks the workspaces open in other tabs with a dot. Going to one is refused, since a page can't bring another tab forward; a window sent there moves to that tab. The new tab page leaves old workspaces alone unless the last switch is on, or every Ctrl+T would take one over. Saved in this browser.
+      </p>
+    </SetGroup>
   )
 }
 
@@ -1688,7 +1812,7 @@ function LinkSettingsPane() {
   )
 }
 
-type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'contacts' | 'integrations' | 'agents' | 'golinks' | 'terminal' | 'files' | 'amp' | 'pdf' | 'preview' | 'games' | 'sync' | 'users' | 'about'
+type PaneId = 'account' | 'appearance' | 'dock' | 'launchers' | 'search' | 'windows' | 'links' | 'notifications' | 'instances' | 'calendar' | 'contacts' | 'integrations' | 'agents' | 'golinks' | 'terminal' | 'files' | 'games' | 'mail' | 'amp' | 'pdf' | 'preview' | 'sync' | 'users' | 'about'
 /** `account`: only when signed in (accounts and services); visitors don't see it at all.
  * `admin`: only for admins (the server checks that on every request too). */
 type Pane = { id: PaneId; label: string; hue: string; icon: ReactNode; /** An app's pane (Settings → Apps) shows the app's own dock icon instead */ app?: AppId; keywords: string; blurb: string; account?: true; admin?: true; render: (opened: { sub?: string; t?: string }) => ReactNode }
@@ -1737,7 +1861,7 @@ const GROUPS: Group[] = [
   {
     panes: [
       { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal favourites favorites starred', blurb: 'What Spotlight shows when it opens, what it searches, and what it remembers.', render: () => <SpotlightSettings /> },
-      { id: 'windows', label: 'Windows', hue: 'var(--yellow)', icon: svg(<><rect x="3" y="5" width="12" height="10" /><rect x="9" y="9" width="12" height="10" /></>), keywords: 'windows restore reopen startup start open last session layout tabs welcome empty desktop reset start over', blurb: 'What the desktop shows when MvL OS opens again.', render: () => <WindowsSettings /> },
+      { id: 'windows', label: 'Windows', hue: 'var(--yellow)', icon: svg(<><rect x="3" y="5" width="12" height="10" /><rect x="9" y="9" width="12" height="10" /></>), keywords: 'windows restore reopen startup start open last session layout tabs welcome empty desktop reset start over workspaces workspace per tab browser tabs adopt left behind closed tab newtab new tab page drag move resize modifier key ctrl alt hyprland corner mouse', blurb: 'What the desktop shows when MvL OS opens again, one workspace per browser tab, and dragging windows with a key.', render: () => <WindowsSettings /> },
       { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page spotlight', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
       { id: 'notifications', label: 'Notifications', hue: 'var(--red)', icon: svg(<><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></>), keywords: 'notifications alerts notification center bell pop-ups do not disturb dnd keep history clear minecraft activity agents uploads unpacking updates system browser', blurb: 'Pop-ups, the notification center, and which apps may notify.', render: () => <Notifications /> },
       { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal spotlight suggestions mvl.sh token', blurb: "The golinks account that go <alias> follows, in Spotlight and the terminal.", render: () => <GoLinks /> },
@@ -1746,17 +1870,18 @@ const GROUPS: Group[] = [
   {
     panes: [
       { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', account: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories', blurb: 'GitHub, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
-      { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models storage mail email jmap fastmail', blurb: 'Services the widgets, Files, Agents and Mail use: updown.io for Status, Ollama Cloud, Seafile, OnlyOffice and mail accounts.', render: ({ sub, t }) => <Integrations sub={sub} t={t} /> },
+      { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations accounts link connect updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models storage mail email jmap fastmail immich photos calendar calendars google caldav tasks contacts carddav address book icloud nextcloud', blurb: 'Every account and key: calendars (Google, CalDAV), contacts (CardDAV), Mail, Immich, Seafile, OnlyOffice, Ollama Cloud and updown.io.', render: ({ sub, t }) => <Integrations sub={sub} t={t} /> },
     ],
   },
   {
     title: 'Apps',
     panes: [
       { id: 'agents', label: 'Agents', hue: 'var(--magenta)', account: true, icon: null, app: 'agents', keywords: 'agents ai assistant ollama models quick deep research title thread system prompt agents.md tools memory', blurb: 'The Agents app: its models, what a new thread starts with, and its system prompt.', render: () => <AgentsSettings /> },
-      { id: 'calendar', label: 'Calendar', hue: 'var(--red)', account: true, icon: null, app: 'calendar', keywords: 'calendar google agenda events caldav fastmail nextcloud icloud view week month day year default new events', blurb: 'Google Calendar and CalDAV (Fastmail…), for the Calendar app, the Agenda widget and the clock; and how the Calendar app opens.', render: () => <CalendarSettings /> },
-      { id: 'contacts', label: 'Contacts', hue: 'var(--orange)', account: true, icon: null, app: 'contacts', keywords: 'contacts people address book carddav fastmail icloud nextcloud radicale vcard vcf birthdays groups', blurb: 'Address books: on this site, Fastmail, iCloud and other CardDAV; where new contacts go.', render: () => <ContactsSettings /> },
+      { id: 'calendar', label: 'Calendar', hue: 'var(--red)', account: true, icon: null, app: 'calendar', keywords: 'calendar agenda events view week month day year default new events which calendars show google caldav accounts', blurb: 'Which calendars show, how the Calendar app opens, and where new events go. The accounts are in Integrations.', render: () => <CalendarSettings /> },
+      { id: 'contacts', label: 'Contacts', hue: 'var(--orange)', account: true, icon: null, app: 'contacts', keywords: 'contacts people address book default new contacts carddav accounts vcard vcf birthdays groups', blurb: 'Where new contacts go. The address book accounts (Fastmail, iCloud…) are in Integrations.', render: () => <ContactsSettings /> },
       { id: 'files', label: 'Files', hue: 'var(--blue)', icon: null, app: 'files', keywords: 'files file manager view list grid compact gallery icon size zoom sort order hidden dotfiles sidebar', blurb: 'How Files shows a folder: the view, icon size, sort order, hidden files and the sidebar.', render: () => <FilesPane /> },
       { id: 'games', label: 'Games', hue: 'var(--cyan)', icon: null, app: 'games', keywords: 'games arcade pool gladiator empires at war rts sound music volume mute helpers aim sensitivity difficulty computer health bars rings fog procedural models sprites camera edge scrolling key bindings keybinds keys multiplayer name online', blurb: 'Pool, Gladiator and Empires At War: how they play and sound.', render: ({ sub, t }) => <GamesPane sub={sub} t={t} /> },
+      { id: 'mail', label: 'Mail', hue: 'var(--blue)', account: true, icon: null, app: 'mail', keywords: 'mail email jmap fastmail read mark as read remote content images allow list allowed senders domain tracking pixels quoted text signature reply all default account identity from ctrl enter send notifications', blurb: 'How Mail reads and writes: when mail counts as read, remote content and the senders you allowed, signatures and replies. The accounts are in Integrations.', render: () => <MailPane /> },
       { id: 'amp', label: 'Omamp', hue: 'var(--green)', icon: null, app: 'amp', keywords: 'omamp music player audio winamp shuffle repeat equalizer eq preset visualizer spectrum oscilloscope time remaining playlist', blurb: 'The music player: shuffle and repeat, the equalizer, and what it shows.', render: () => <AmpPane /> },
       { id: 'pdf', label: 'PDF', hue: 'var(--red)', icon: null, app: 'pdf', keywords: 'pdf viewer documents night mode dark sidebar thumbnails outline', blurb: 'The PDF viewer: its sidebar and night mode.', render: () => <PdfPane /> },
       { id: 'preview', label: 'Preview', hue: 'var(--blue)', icon: null, app: 'preview', keywords: 'preview pictures images photos viewer sidebar', blurb: 'The picture viewer: its sidebar.', render: () => <PreviewPane /> },

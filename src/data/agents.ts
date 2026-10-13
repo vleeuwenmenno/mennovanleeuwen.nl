@@ -460,10 +460,27 @@ function calendarOutcome(result: string | undefined): { done: 'created' | 'updat
   return null
 }
 
+/** A note-and-event tool's result (server/agentNoteLinks.ts): which event, and when. */
+function linkOutcome(result: string | undefined): { event: string; when: string } | null {
+  if (!result) return null
+  try {
+    const r = JSON.parse(result) as Record<string, { event?: unknown; title?: unknown; when?: unknown } | undefined>
+    const done = r.linked ?? r.unlinked ?? r.linked_to
+    const event = done?.event ?? done?.title
+    if (typeof event === 'string') return { event, when: String(done?.when ?? '') }
+  } catch {
+    /* not JSON */
+  }
+  return null
+}
+
 /** What a tool call did, in a few words, for its card; `result`, when it is in, can say more (a calendar event's title). */
 export function toolLabel(call: ToolCall, result?: string): string {
   const a = call.arguments ?? {}
   const s = (k: string) => (typeof a[k] === 'string' ? (a[k] as string) : '')
+  const note = () => noteName(getNote(s('note_id'))?.text ?? '') || 'a note'
+  const linked = linkOutcome(result)
+  const event = linked ? `“${linked.event}”${linked.when ? `, ${linked.when}` : ''}` : 'an event'
   const made = call.name.startsWith('calendar_') ? calendarOutcome(result) : null
   if (made) return `${made.done === 'created' ? 'Created' : made.done === 'updated' ? 'Changed' : 'Deleted'} event: ${made.title}${made.when ? `, ${made.when}` : ''}`
   switch (call.name) {
@@ -499,6 +516,16 @@ export function toolLabel(call: ToolCall, result?: string): string {
       return `${a.append === true ? 'Add to' : 'Change'} the note “${noteName(getNote(s('id'))?.text ?? '') || 'a note'}”`
     case 'delete_note':
       return `Move the note “${noteName(getNote(s('id'))?.text ?? '') || 'a note'}” to the trash`
+    case 'notes_for_event':
+      return 'Looked at the notes linked to an event'
+    case 'events_for_note':
+      return `Looked at the events “${note()}” is linked to`
+    case 'link_note_to_event':
+      return `${linked ? 'Linked' : 'Link'} “${note()}” to ${event}`
+    case 'unlink_note_from_event':
+      return `${linked ? 'Unlinked' : 'Unlink'} “${note()}” from ${event}`
+    case 'make_meeting_note':
+      return `${linked ? 'Made' : 'Make'} a meeting note for ${event}`
     case 'calendar_list_calendars':
       return 'Looked at your calendars'
     case 'calendar_list_events': {

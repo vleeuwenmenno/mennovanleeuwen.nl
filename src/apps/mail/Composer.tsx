@@ -8,7 +8,7 @@ import { notify } from '../../os/notify'
 import { Select } from '../../os/Select'
 import { readBytes } from '../../data/fileOps'
 import { fileLink, parseSf } from '../../data/seafile'
-import { discardDraft, saveDraft, sendMail, uploadBlob, type Address, type Boot, type ComposeAttachment, type DraftBody } from '../../data/mail'
+import { discardDraft, saveDraft, sendMail, uploadBlob, useMailPrefs, type Address, type Boot, type ComposeAttachment, type DraftBody } from '../../data/mail'
 import { formatSize, RecipientField } from './parts'
 
 // Writing a message: a new one, a reply, a forward or a draft picked up again. Plain text, with
@@ -51,6 +51,7 @@ const SAVE_AFTER = 2000
 
 export function Composer({ account, boot, init, narrow, onClose }: { account: number; boot: Boot; init: ComposeInit; narrow: boolean; onClose: () => void }) {
   const me = useAccount()
+  const { ctrlEnter } = useMailPrefs()
   const [identityId, setIdentityId] = useState(init.identityId ?? boot.identities[0]?.id ?? '')
   const [to, setTo] = useState(init.to)
   const [cc, setCc] = useState(init.cc)
@@ -220,7 +221,7 @@ export function Composer({ account, boot, init, narrow, onClose }: { account: nu
 
   const onKey = (e: KeyboardEvent) => {
     e.stopPropagation() // the app's own keys (j, k, e…) are text here
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    if (ctrlEnter && (e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault()
       void send()
     } else if (e.key === 'Escape') {
@@ -317,7 +318,7 @@ export function Composer({ account, boot, init, narrow, onClose }: { account: nu
       )}
       {error && <p className="ml-problem">{error}</p>}
       <footer className="ml-compose-foot">
-        <button className="btn btn-primary" onClick={() => void send()} disabled={sending} title="Send (Ctrl+Enter)">
+        <button className="btn btn-primary" onClick={() => void send()} disabled={sending} title={ctrlEnter ? 'Send (Ctrl+Enter)' : 'Send'}>
           {sending ? 'Sending…' : 'Send'}
         </button>
         <button className="btn btn-small" onClick={(e) => attachMenu(e.currentTarget)} title="Attach files">

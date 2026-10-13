@@ -307,17 +307,29 @@ export async function moveContact(user: User, body: Body): Promise<Contact> {
  * Cards from a .vcf into a book: one with a UID the book already has replaces that card, the rest
  * are added. Group cards come along. Four at a time to a CardDAV server.
  */
-export async function importCards(user: User, body: { book?: string; text?: string }): Promise<{ added: number; updated: number; failed: string[] }> {
+export async function importCards(user: User, body: { book?: string; text?: string; skipDuplicates?: boolean }): Promise<{ added: number; updated: number; skipped: number; failed: string[] }> {
   const { book, dav } = await bookFor(user, String(body.book ?? 'local'))
   if (!book.writable) throw new HttpError(403, `${book.name} is read-only`)
   const cards = splitCards(String(body.text ?? ''))
   if (!cards.length) throw new HttpError(400, 'No contacts in that file')
   if (cards.length > 5000) throw new HttpError(413, 'At most 5000 contacts at a time')
   const existing = new Map((book.id === 'local' ? localCards(user) : (await allCards(user, 0)).stored.filter((s) => s.book.id === book.id)).map((s) => [uidOf(s.card) || s.name, s]))
-  const out = { added: 0, updated: 0, failed: [] as string[] }
+  const out = { added: 0, updated: 0, skipped: 0, failed: [] as string[] }
+  // With skipDuplicates (the Contacts app's import) a card the book has already is left alone: the same
+  // UID, or with no UID the same name and email address.
+  const person = (c: Card) => {
+    const f = readFields(c)
+    return `${f.fn.trim().toLowerCase()}|${f.emails.map((e) => e.value.trim().toLowerCase()).sort().join(',')}`
+  }
+  const people = body.skipDuplicates ? new Set([...existing.values()].map((s) => person(s.card))) : null
   const queue = [...cards]
   const worker = async () => {
     for (let card = queue.shift(); card; card = queue.shift()) {
+      const hadUid = !!uidOf(card)
+      if (people && (hadUid ? existing.has(uidOf(card)) : person(card) !== '|' && people.has(person(card)))) {
+        out.skipped++
+        continue
+      }
       const uid = ensureUid(card, randomUUID)
       const fields = readFields(card)
       // FN (and 3.0's N) filled in when the card lacks them; nothing else is touched.

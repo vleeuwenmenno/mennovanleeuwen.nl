@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { createEvent, dayKey, deleteEvent, setLastCalendar, updateEvent, type CalendarEvent, type CalendarInfo, type EventInput } from '../../data/calendar'
+import { createEvent, dayKey, deleteEvent, setLastCalendar, updateEvent, useEventSlot, type CalendarEvent, type CalendarInfo, type EventInput } from '../../data/calendar'
 import { connectGoogle } from '../../os/account'
 import { Select } from '../../os/Select'
 import { composeMail, openMailByMessageId } from '../../data/mail'
@@ -11,7 +11,8 @@ import { addDays, hhmm, parseDay, span } from './time'
 // are picked from your contacts (Contacts' people picker) and get an invitation by email from
 // Google or the CalDAV server; Email guests writes to them all. For one occurrence of a repeating
 // event, saving and deleting ask whether it is about that one or the whole series. Notes that link
-// back to a mail (an event made from one) get a button that opens it in Mail.
+// back to a mail (an event made from one) get a button that opens it in Mail. Notebook notes
+// linked to the event (meeting notes) are listed under it, from src/os/noteEventLinks.tsx.
 
 export type Draft = {
   title: string
@@ -129,6 +130,7 @@ export function EventEditor({ event, initial, calendars, googleCanWrite, choose,
     ) : null
   }
   const mailMessage = mailIn(d.description)
+  const notesSlot = useEventSlot('notes')
 
   useEffect(() => {
     if (!readOnly) titleRef.current?.focus()
@@ -283,6 +285,7 @@ export function EventEditor({ event, initial, calendars, googleCanWrite, choose,
             <textarea value={d.description} onChange={(e) => set({ description: e.target.value })} rows={3} />
           </label>
         </fieldset>
+        {event && notesSlot?.(event)}
         {roReason === 'google' && (
           <p className="ca-hint">
             Google only lets this site read your calendars so far.{' '}
@@ -296,7 +299,7 @@ export function EventEditor({ event, initial, calendars, googleCanWrite, choose,
         {!event && !writable.length && (
           <p className="ca-hint">
             No calendar can be written to yet. For Google, connect again to allow editing; for Fastmail, add the account again with an app password that can read and write
-            (Settings → Calendar).
+            (Settings → Integrations → Calendars).
           </p>
         )}
         {d.guests.length > 0 && !readOnly && <p className="ca-hint">Guests get an invitation by email once you save.</p>}

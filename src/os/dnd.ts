@@ -43,6 +43,12 @@ export type DragItem =
   | { kind: 'entries'; zip: string; entries: string[]; base: string; label: string }
   /** One of the site's own desktop icons (only the trash takes these). */
   | { kind: 'icon'; id: string; label: string; glyph?: string }
+  /**
+   * A photo from Immich, which is no file anywhere here: the drag carries its bytes as files from
+   * the computer would (`os`, `files()`, downloaded at the drop), so every target that takes those
+   * takes it. This item only draws the ghost (with its thumbnail).
+   */
+  | { kind: 'photo'; id: string; label: string; image?: string }
 
 export type Keys = { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean }
 
@@ -74,7 +80,8 @@ export const DRAG_ITEMS = 'application/x-mvlos-items'
 const SPRING_MS = 800
 
 const targets = new Map<Element, { current: DropTarget }>()
-let payload: { items: DragItem[]; source: string } | null = null
+/** `files`: the drag's files, made at the drop (Immich photos), which makes it look like files from the computer to the targets. */
+let payload: { items: DragItem[]; source: string; files?: () => Promise<Picked[]> } | null = null
 const noKeys: Keys = { ctrl: false, alt: false, shift: false, meta: false }
 export const keysOf = (e: { ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean; metaKey?: boolean }): Keys => ({ ctrl: !!e.ctrlKey, alt: !!e.altKey, shift: !!e.shiftKey, meta: !!e.metaKey })
 
@@ -156,7 +163,7 @@ function dragOf(e: DragEvent): Drag | null {
   const dt = e.dataTransfer
   if (!dt) return null
   const keys = keysOf(e)
-  if (payload && dt.types.includes(DRAG_ITEMS)) return { ...payload, os: false, keys, files: async () => [] }
+  if (payload && dt.types.includes(DRAG_ITEMS)) return { items: payload.items, source: payload.source, os: !!payload.files, keys, files: payload.files ?? (async () => []) }
   // Older drags that only set the dragged paths (Zed's tree).
   const legacy = getDragged()
   if (legacy && dt.types.includes(DRAG_FILES)) return { items: legacy.map((p) => ({ kind: 'file', path: p, name: p.split('/').pop() ?? p, dir: false })), source: 'legacy', os: false, keys, files: async () => [] }
@@ -195,8 +202,9 @@ function install() {
     clear()
     if (!drag || !hit) return
     e.preventDefault()
-    // The computer's files must be read now: the browser forgets them after the drop.
-    if (drag.os) {
+    // The computer's files must be read now: the browser forgets them after the drop. (A drag
+    // that makes its files itself, Immich's photos, brings its own.)
+    if (drag.os && drag.source === 'computer') {
       const files = droppedFiles(e.dataTransfer!)
       drag.files = () => files
     }
@@ -219,10 +227,10 @@ function endDrag() {
  * the first icons in a stack, with how many there are. `download` lets Chrome save a file where
  * it is let go outside the browser ("type:name:url").
  */
-export function startNativeDrag(e: DragEvent | React.DragEvent, items: DragItem[], source: string, opts: { text?: string; download?: string | null; ghost?: boolean } = {}) {
+export function startNativeDrag(e: DragEvent | React.DragEvent, items: DragItem[], source: string, opts: { text?: string; download?: string | null; ghost?: boolean; files?: () => Promise<Picked[]> } = {}) {
   install()
   const dt = e.dataTransfer!
-  payload = { items, source }
+  payload = { items, source, files: opts.files }
   dt.effectAllowed = 'all'
   dt.setData(DRAG_ITEMS, JSON.stringify(items))
   const paths = filePaths(items)
@@ -255,6 +263,7 @@ function pictureOf(i: DragItem): { glyph?: string; image?: string } {
   if (i.kind === 'launcher') return i.glyph ? { glyph: i.glyph } : i.image ? { image: i.image } : { glyph: '🔗' }
   if (i.kind === 'entries') return { glyph: '🗜️' }
   if (i.kind === 'icon') return { glyph: i.glyph ?? '📄' }
+  if (i.kind === 'photo') return i.image ? { image: i.image } : { glyph: '🖼️' }
   return { glyph: '▦' }
 }
 
@@ -319,9 +328,9 @@ function elementAt(x: number, y: number): Element | null {
  * 'away' only once they are off `home` (the desktop draws its own icons on the move), with what a
  * drop would do on the cursor either way.
  */
-export function beginPointerDrag(items: DragItem[], source: string, opts: { ghost?: 'always' | 'away'; home?: Element | null } = {}): PointerDrag {
+export function beginPointerDrag(items: DragItem[], source: string, opts: { ghost?: 'always' | 'away'; home?: Element | null; files?: () => Promise<Picked[]> } = {}): PointerDrag {
   install()
-  payload = { items, source }
+  payload = { items, source, files: opts.files }
   const paths = filePaths(items)
   if (paths.length) setDragged(paths)
   const ghost = ghostElement(items)
@@ -329,7 +338,7 @@ export function beginPointerDrag(items: DragItem[], source: string, opts: { ghos
   document.body.append(ghost)
   let last = { x: 0, y: 0, keys: noKeys }
   let done = false
-  const drag = (): Drag => ({ items, source, os: false, keys: last.keys, files: async () => [] })
+  const drag = (): Drag => ({ items, source, os: !!opts.files, keys: last.keys, files: opts.files ?? (async () => []) })
   const place = (x: number, y: number, op: DropOp | null, el: Element | null) => {
     ghost.style.transform = `translate(${x}px, ${y}px)`
     ghost.dataset.op = op ?? ''
@@ -387,7 +396,7 @@ const SLOP = 10
  * item's menu (the long press of ContextMenu.tsx); moving after that closes the menu and drags.
  * Call it from onPointerDown; `items` is asked at the moment the drag starts.
  */
-export function holdToDrag(e: React.PointerEvent | PointerEvent, items: () => DragItem[] | null, source: string) {
+export function holdToDrag(e: React.PointerEvent | PointerEvent, items: () => DragItem[] | null, source: string, files?: () => Promise<Picked[]>) {
   if (e.pointerType !== 'touch' || !e.isPrimary) return
   const el = e.currentTarget as HTMLElement | null
   const id = e.pointerId
@@ -419,7 +428,7 @@ export function holdToDrag(e: React.PointerEvent | PointerEvent, items: () => Dr
       if (!list?.length) return stop()
       releaseTouchPress()
       closeContextMenu()
-      drag = beginPointerDrag(list, source, { ghost: 'always' })
+      drag = beginPointerDrag(list, source, { ghost: 'always', files })
     }
     drag?.move(ev.clientX, ev.clientY, keysOf(ev))
   }

@@ -5,6 +5,7 @@ import { useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react'
 //
 //   if (await ask({ title: 'Delete it?', body: '…', confirm: 'Delete', danger: true })) …
 //   const choice = await choose({ title, body, buttons: [{ id: 'keep', label: 'Keep both' }, …] })
+//   const name = await askText({ title: 'Add a sender', placeholder: 'news@example.com', validate: (v) => (v ? null : 'Type something.') })
 
 export type Button = { id: string; label: string; primary?: boolean; danger?: boolean }
 type Dialog = { title: string; body?: ReactNode; buttons: Button[]; resolve: (id: string | null) => void }
@@ -32,6 +33,47 @@ export async function ask(d: { title: string; body?: ReactNode; confirm?: string
     ],
   })
   return id === 'ok'
+}
+
+/**
+ * One line of text asked for. Answers what was typed (trimmed), or null for Cancel / Escape. `validate`
+ * answers a problem to show (the question stays open) or null when the text will do.
+ */
+export async function askText(d: { title: string; body?: ReactNode; label?: string; placeholder?: string; value?: string; confirm?: string; validate?: (text: string) => string | null }): Promise<string | null> {
+  let text = d.value ?? ''
+  let problem: string | null = null
+  for (;;) {
+    const id = await choose({
+      title: d.title,
+      body: (
+        <>
+          {d.body && <div>{d.body}</div>}
+          <input
+            className="dlg-input"
+            data-autofocus=""
+            defaultValue={text}
+            placeholder={d.placeholder}
+            aria-label={d.label ?? d.title}
+            aria-invalid={!!problem}
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(e) => (text = e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.closest('.dlg')?.querySelector<HTMLButtonElement>('.btn-primary')?.click()
+            }}
+          />
+          {problem && <p className="t-red dlg-problem">{problem}</p>}
+        </>
+      ),
+      buttons: [
+        { id: 'cancel', label: 'Cancel' },
+        { id: 'ok', label: d.confirm ?? 'OK', primary: true },
+      ],
+    })
+    if (id !== 'ok') return null
+    problem = d.validate?.(text.trim()) ?? null
+    if (!problem) return text.trim()
+  }
 }
 
 /** Just telling: one button. */
@@ -64,7 +106,7 @@ export function Dialogs() {
     }
     window.addEventListener('keydown', onKey, true)
     // The safe button has the focus: Enter never deletes by accident.
-    requestAnimationFrame(() => box.current?.querySelector<HTMLButtonElement>('[data-default]')?.focus())
+    requestAnimationFrame(() => (box.current?.querySelector<HTMLElement>('[data-autofocus]') ?? box.current?.querySelector<HTMLElement>('[data-default]'))?.focus())
     return () => window.removeEventListener('keydown', onKey, true)
   }, [current])
   if (!current) return null

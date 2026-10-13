@@ -145,6 +145,9 @@
 .ph-canvas {
   position: relative;
   margin: 0 24px 0 8px;
+  /* Shift+click selects photos, not the headings' text. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .ph-month,
 .ph-day {
@@ -209,6 +212,11 @@
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+.ph-tile-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 .ph-tile-none {
   display: grid;
   place-items: center;
@@ -235,6 +243,139 @@
   fill: #fff;
   filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.7));
   pointer-events: none;
+}
+
+/* Selection: a circle on each tile (on hover, and on all of them once something is selected),
+   the selected ones drawn in from the edges with the accent around them, and the box. */
+.ph-check {
+  position: absolute;
+  left: 5px;
+  top: 5px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.25);
+  color: transparent;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.ph-check svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ph-tile:hover .ph-check,
+.ph-canvas.is-selecting .ph-check,
+.ph-tile:focus-visible .ph-check {
+  opacity: 1;
+}
+.ph-tile:hover .ph-check:hover {
+  color: #fff;
+}
+.ph-tile.is-selected .ph-check,
+.ph-check-all.is-on {
+  opacity: 1;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.ph-tile img {
+  transition: transform 0.12s ease-out;
+}
+.ph-tile.is-selected {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.ph-tile.is-selected img {
+  transform: scale(0.86);
+  border-radius: 3px;
+}
+.ph-tile.is-selected::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--accent);
+  pointer-events: none;
+}
+.ph-tile[data-lifted] {
+  opacity: 0.6;
+}
+/* A day's or month's circle sits before its title and shows on hover (always while selecting). */
+.ph-check-all {
+  position: static;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-bottom: 1px;
+  border-color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+}
+.ph-month .ph-check-all {
+  margin-bottom: 4px;
+}
+.ph-month:hover .ph-check-all,
+.ph-day:hover .ph-check-all,
+.ph-canvas.is-selecting .ph-check-all {
+  opacity: 1;
+}
+.ph-check-all:hover:not(.is-on) {
+  color: var(--muted);
+}
+.ph-check-all:disabled {
+  cursor: default;
+  opacity: 0 !important;
+}
+.ph-band {
+  position: absolute;
+  z-index: 3;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  pointer-events: none;
+}
+.ph-selbar {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+}
+.ph-selbar .ph-lb-btn {
+  color: var(--fg-bright);
+}
+.ph-selbar .ph-lb-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+.ph-bar[hidden] {
+  display: none;
+}
+.ph-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  z-index: 6;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+  padding: 8px 8px 8px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg-bright);
+  font-size: 12px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
+}
+.ph-toast-x {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
 }
 
 /* The scrubber: the years down the right edge. */
