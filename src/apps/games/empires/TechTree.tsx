@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import { LEVEL_UP, MAX_LEVEL, MAX_RESEARCH, MODULE, TECH, UPGRADES, WORKS_NAME, buildable, modulesFor, techsFor, unitOf, yardOf, type FactionId, type ModuleId, type UnitType, type Works } from './data'
+import { LEVEL_UP, MAX_LEVEL, MAX_RESEARCH, MODULE, TECH, UPGRADES, WORKS_NAME, buildable, modulesFor, techsFor, unitOf, worksOf, yardOf, type FactionId, type ModuleId, type UnitType, type Works } from './data'
 import { HP_COLOR } from './icons'
 import { HpIcon, Icon, TechIcon, fmt, levelBlurb, moduleState, moduleTip, researchName, techState, unitArt, type Hud, type TechStatus } from './Hud'
 import { Modal } from './Menus'
@@ -23,12 +23,14 @@ const HEAD_W = 132
 type TreeNode = { key: string; id: string; requires: string[]; level?: number }
 type Line = { t: UnitType; nodes: TreeNode[] }
 
-function linesFor(faction: FactionId): Line[] {
+/** `hybrid`: a battle with yards, where the Capital Yard's research (Rushed construction) gets a line. */
+function linesFor(faction: FactionId, hybrid: boolean): Line[] {
   const st = unitOf(faction, 'station')
   const levels: TreeNode[] = []
   for (let l = 2; l <= MAX_LEVEL; l++) levels.push({ key: `level-${l}`, id: LEVEL_UP, requires: l > 2 ? [`level-${l - 1}`] : [], level: l })
   const techs = (unitId: string): TreeNode[] => techsFor(unitId).map((t) => ({ key: t.id, id: t.id, requires: t.requires ?? [] }))
-  return [{ t: st, nodes: [...levels, ...techs(st.id)] }, ...buildable(faction).map((t) => ({ t, nodes: techs(t.id) }))]
+  const cyard = yardOf(faction, 'cyard')
+  return [{ t: st, nodes: [...levels, ...techs(st.id)] }, ...(hybrid ? [{ t: cyard, nodes: techs(cyard.id) }] : []), ...buildable(faction).map((t) => ({ t, nodes: techs(t.id) }))]
 }
 
 /**
@@ -63,7 +65,7 @@ type Props = {
 
 export function TechTree({ w, me, hud, onResearch, onCancel, onClose, onExpand, onCancelExpand }: Props) {
   const faction = w.players[me].faction
-  const lines = linesFor(faction)
+  const lines = linesFor(faction, !!w.hybrid)
   const coarse = useCoarse()
   return (
     <Modal title="Tech tree" onClose={onClose} className="is-tree">
@@ -231,8 +233,8 @@ function TreeLine({ line, w, me, hud, faction, onResearch, onCancel }: LineProps
       </svg>
       <div className={`ew-tt-head ${locked ? 'is-locked' : ''}`} style={{ gridRow: `1 / span ${lanes}` }}>
         <img src={art(t.sprite)} alt="" />
-        <strong>{station ? 'Station' : t.name}</strong>
-        <small>{station ? `Level ${hud.level} of ${MAX_LEVEL}` : locked ? `Needs station level ${t.level}` : t.squad > 1 ? `Squadron of ${t.squad}` : `${t.tier[0].toUpperCase()}${t.tier.slice(1)}`}</small>
+        <strong>{station ? 'Station' : t.tier === 'yard' ? WORKS_NAME[worksOf(t) ?? 'cyard'] : t.name}</strong>
+        <small>{station ? `Level ${hud.level} of ${MAX_LEVEL}` : locked ? `Needs station level ${t.level}` : t.tier === 'yard' ? (w.units.some((u) => !u.dead && u.owner === me && u.t.id === t.id && !u.site) ? 'Standing' : 'Not built yet') : t.squad > 1 ? `Squadron of ${t.squad}` : `${t.tier[0].toUpperCase()}${t.tier.slice(1)}`}</small>
       </div>
       {nodes.map((n) => {
         const p = at.get(n.key)!

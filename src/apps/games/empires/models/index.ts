@@ -218,14 +218,17 @@ function scorchSpots(parts: Part[], w: number, h: number, seed: number): Scorch[
 
 // --- Damage state ------------------------------------------------------------------------------------
 
-/** What the battle knows about a unit that its looks depend on. */
-export type Damage = { id: number; hull: number; hullMax: number; hps: readonly { hp: number }[] }
+/** What the battle knows about a unit that its looks depend on. `rush`: a rush-launched ship's hull
+ * still unbuilt (sim.ts Rush), which is no damage: it looks as battered as it is short of the rest. */
+export type Damage = { id: number; hull: number; hullMax: number; hps: readonly { hp: number }[]; rush?: { gap: number } }
+/** How much of its hull a unit has, of what it can have (a rush-launched ship's unbuilt hull aside). */
+const hullShare = (d: Damage) => d.hull / Math.max(1, d.hullMax - (d.rush?.gap ?? 0))
 
 /** Whether detachable part `i` (an index into model.detachable) is gone. */
 export function partGone(m: Model, i: number, d: Damage) {
   const det = m.parts[m.detachable[i]].detach!
   if (det.hp !== undefined && (d.hps[det.hp]?.hp ?? 1) <= 0) return true
-  return det.hull !== undefined && d.hull / Math.max(1, d.hullMax) < det.hull
+  return det.hull !== undefined && hullShare(d) < det.hull
 }
 
 /** A unit's hull state now: what has come off, how burnt it is, and which burn layout it has.
@@ -233,7 +236,7 @@ export function partGone(m: Model, i: number, d: Damage) {
 export function hullState(m: Model, d: Damage, tier: Tier): HullState {
   let detached = 0
   for (let i = 0; i < m.detachable.length; i++) if (partGone(m, i, d)) detached |= 1 << i
-  const f = d.hull / Math.max(1, d.hullMax)
+  const f = hullShare(d)
   // Strike craft and gunships share one burn layout: there are many of them and they're small, and
   // four layouts each would mean four times the bitmaps for every heading they turn through.
   return { detached, scorch: f > 0.75 ? 0 : f > 0.5 ? 1 : f > 0.25 ? 2 : 3, variant: tier === 'fighter' || tier === 'gunship' ? 0 : d.id & 3 }

@@ -6106,3 +6106,63 @@ span.ew-teamtag {
     letter-spacing: 0.03em;
   }
 }
+
+/* Rush launch (a Capital Yard with Rushed construction): beside its build queue. On a touch screen it
+   is held down to confirm, the ring round its icon filling as it is held. */
+.ew-deck .ew-rush {
+  pointer-events: auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+  padding: 6px 11px 6px 8px;
+  border: 1px solid rgba(255, 196, 110, 0.75);
+  border-radius: 6px;
+  background: linear-gradient(180deg, rgba(150, 82, 20, 0.92), rgba(92, 46, 12, 0.92));
+  color: #ffe2b0;
+  font: 600 12px system-ui, sans-serif;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 0 10px rgba(255, 160, 60, 0.25);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ew-deck .ew-rush:hover:not(:disabled) {
+  background: linear-gradient(180deg, rgba(180, 100, 26, 0.95), rgba(110, 56, 14, 0.95));
+}
+.ew-deck .ew-rush:disabled {
+  cursor: default;
+  opacity: 0.6;
+  filter: saturate(0.4);
+}
+.ew-rush-ring {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.ew-rush-ring circle {
+  fill: rgba(255, 220, 160, 0.15);
+  stroke: #ffd27a;
+  stroke-width: 2.4;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  transform: rotate(-90deg);
+  transform-origin: center;
+}
+.ew-rush.is-holding .ew-rush-ring circle {
+  stroke-dashoffset: 1;
+  animation: ew-rush-hold linear forwards;
+}
+@keyframes ew-rush-hold {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+/* A rush-launched ship's card and tooltip: how far it is from finished. */
+.ew-intel-rush,
+.ew-deck .ew-rushnote {
+  color: #ffc878;
+  font-size: 12px;
+}

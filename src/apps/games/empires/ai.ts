@@ -1,8 +1,8 @@
-import { ABILITIES, BUILD_RADIUS, LEVEL_UP, MAX_LEVEL, MODULE, REBUILD, worksOf, type ModuleId, type Works, SURVEY_RADIUS, TECHS, UNIT, UPGRADES, buildable, builtAt, isEngineer, isShip, unitOf, yardOf, type FactionId, type Tech, type Tier, type UnitType } from './data.ts'
+import { ABILITIES, BUILD_RADIUS, LEVEL_UP, MAX_LEVEL, MODULE, REBUILD, RUSH_TECH, worksOf, type ModuleId, type Works, SURVEY_RADIUS, TECH, TECHS, UNIT, UPGRADES, buildable, builtAt, isEngineer, isShip, unitOf, yardOf, type FactionId, type Tech, type Tier, type UnitType } from './data.ts'
 import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import {
-  allQueued, building, canRetreat, cantBuild, cantExpand, cmdExpand, moduleRebuildCost, cantMend, cantRepair, cantResearch, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite,
+  allQueued, building, canRetreat, cantBuild, cantExpand, cantRush, cmdExpand, cmdRush, moduleRebuildCost, cantMend, cantRepair, cantResearch, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite,
   dpsVs, fleet, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
 } from './sim.ts'
 import * as M from './detmath.ts'
@@ -457,6 +457,9 @@ function pickTech(w: World, b: Brain, mines: number): Tech | null {
       if (e.mines) s = mines >= 2 ? 2.5 + mines : 0.3
       else if (e.damage) s = b.alarm >= 0 || (b.beaten >= 0 && w.time - b.beaten < 120) ? S.fortify * 2 : p.level >= 2 ? S.fortify : 0
       else if (e.repair) s = heavy ? 4 : warships >= 2 ? 1.2 : 0.2
+    } else if (t.id === RUSH_TECH[p.faction]) {
+      // Rushed construction is decided on its own (see think): not weighed against the upgrades.
+      s = 0
     } else if (!Object.keys(e).length) {
       // An unlock: the repair craft.
       s = warships >= 2 || (st && st.hull < st.hullMax * 0.8) ? 0.6 + D.menders * 12 : 0
@@ -567,6 +570,19 @@ export function think(w: World, b: Brain, dt: number) {
   const army = fleet(w, o).filter((u) => !u.parent)
   const armyValue = value(army)
 
+  // Rush launch: a desperate measure. With its base under a real attack, or the enemy's warships
+  // near home well outnumbering ours there, the Capital Yard sends out its ship half built rather
+  // than lose it unfinished; never otherwise (a rushed ship costs build time and the yard's pace).
+  if (w.hybrid) {
+    const cy = w.units.find((u) => !u.dead && u.owner === o && worksOf(u.t) === 'cyard' && !u.site)
+    if (cy && !cantRush(w, o, cy.id)) {
+      const R = rangeDist(2500)
+      const theirs = value(visibleEnemies(w, o, st.x, st.y, R))
+      const mine = value(army.filter((u) => d2(u, st) < sq(R)))
+      if ((threat && threatValue >= 500) || theirs > Math.max(600, mine * 2)) act(b, () => cmdRush(w, o, cy.id), true)
+    }
+  }
+
   // The station goes up a level on its profile's timetable (or sooner when rich), once there's a
   // fleet to protect the investment. When it's due, it saves for it first.
   const next = UPGRADES[p.level + 1]
@@ -627,6 +643,15 @@ export function think(w: World, b: Brain, dt: number) {
     const tech = pickTech(w, b, mines)
     const capitalSaved = !!b.want && UNIT[b.want].tier === 'capital'
     if (tech && p.credits >= tech.cost + S.keep + (capitalSaved ? 800 : 0) && !cantResearch(w, o, tech.id)) act(b, () => cmdResearch(w, o, tech.id), true)
+  }
+
+  // Rushed construction: insurance for the Capital Yard, once it stands. A defensive admiral takes
+  // it out as soon as it can pay for it, a balanced one with credits to spare, an offensive one only
+  // when it is rich.
+  const rushTech = RUSH_TECH[p.faction]
+  if (D.research && w.hybrid && p.research.length === 0 && !saving && !p.techs.includes(rushTech) && !cantResearch(w, o, rushTech)) {
+    const spare = S.fortify >= 2 ? 0 : S.fortify >= 1 ? 600 : 1800
+    if (p.credits >= TECH[rushTech].cost + spare) act(b, () => cmdResearch(w, o, rushTech), true)
   }
 
   // Expansions for the station and the yards, by profile, with credits to spare.

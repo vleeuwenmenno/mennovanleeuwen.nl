@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { battleLayout, type LayoutStore } from './layout'
 import {
-  ENGINEERS, MODULE, REBUILD_MODULE, WORKS_NAME, modulesFor, needsModule, stationType, worksOf, yardOf, yardType, yardsFor, type ModuleId,
+  ENGINEERS, MODULE, REBUILD_MODULE, RUSH_TECH, WORKS_NAME, modulesFor, needsModule, stationType, worksOf, yardOf, yardType, yardsFor, type ModuleId,
   ABILITIES, DEFENSE_WING, FACTIONS, LEVEL_UP, REBUILD, baseBuilds, builtAt, isEngineer, wingOf, SITE_UPGRADES, type SiteUpgradeId, YIELD_PER_LEVEL, roleOf, siteOptions, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, SURVEY_TIME, TECH, UNIT, buildable, isShip, techsFor, unitOf, type FactionId, type HardpointKind,
   type UnitType,
 } from './data'
@@ -10,7 +10,7 @@ import { modelFor, typeOfSprite } from './models/index.ts'
 import { moduleThumbnail, thumbnail } from './models/paint.ts'
 import { keyName, useSettings } from './settings'
 import { LongPress, isTouch, shiftOf, useCoarse, useLongPressWheel } from './Touch'
-import { FIELD_DAMAGE, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
+import { FIELD_DAMAGE, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard, research and game speed; and along the bottom the tactical map, a details panel for
@@ -466,8 +466,10 @@ function HpSummary({ u }: { u: Unit }) {
         const all = u.t.hardpoints.map((h, i) => (hpName(h) === n ? i : -1)).filter((i) => i >= 0)
         const up = all.filter((i) => u.hps[i].hp > 0).length
         const k = u.t.hardpoints[all[0]].kind
+        // A rush-launched ship's parts not yet installed.
+        const unbuilt = all.filter((i) => u.rush?.parts.includes(i)).length
         return (
-          <span key={n} className={`ew-hpchip ${up === 0 ? 'is-dead' : up < all.length ? 'is-hurt' : ''}`} style={{ ['--c' as string]: HP_COLOR[k] }} data-tip={`${n}: ${up} of ${all.length} working`}>
+          <span key={n} className={`ew-hpchip ${up === 0 ? 'is-dead' : up < all.length ? 'is-hurt' : ''}`} style={{ ['--c' as string]: HP_COLOR[k] }} data-tip={`${n}: ${up} of ${all.length} working${unbuilt ? `, ${unbuilt} not yet installed` : ''}`}>
             <HpIcon kind={k} size={13} />
             {up} / {all.length}
           </span>
@@ -757,6 +759,8 @@ type DetailProps = {
   /** Order an expansion on building `uid`, or call off the one at `index` in its queue. */
   onExpand: (uid: number, id: ModuleId) => void
   onCancelExpand: (uid: number, index: number) => void
+  /** Rush launch: the Capital Yard `uid` sends out its ship in progress unfinished. */
+  onRush: (uid: number) => void
   onResearch: (id: string) => void
   onTechTree: () => void
   onSite: (node: number, id: string) => void
@@ -1231,7 +1235,12 @@ const PROJECTORS = 5
  * Click a hologram to cancel that ship (refunded).
  */
 export type QueueItem = { unit: string; left: number; total: number; reserve?: boolean; sprite?: string; name?: string }
-export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false, at = 'the station' }: { queue: QueueItem[]; onCancel: (i: number) => void; max?: number; campaign?: boolean; /** Where its ships jump in: the station, or the yard it belongs to. */ at?: string }) {
+export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false, at = 'the station', rush }: {
+  queue: QueueItem[]; onCancel: (i: number) => void; max?: number; campaign?: boolean; /** Where its ships jump in: the station, or the yard it belongs to. */ at?: string
+  /** A Capital Yard with Rushed construction researched and its ship far enough along: the Rush
+   * launch button (see RushButton). */
+  rush?: RushProps
+}) {
   const art = unitArt
   return (
     <div className="ew-buildq" aria-label={`Build queue: ${queue.length} of ${max}`}>
@@ -1263,8 +1272,68 @@ export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false,
         )
       })}
       {queue.length > PROJECTORS && <span className="ew-holo-more" data-tip={`${queue.length - PROJECTORS} more queued`}>+{queue.length - PROJECTORS}</span>}
+      {rush && <RushButton {...rush} />}
     </div>
   )
+}
+
+/** How long a finger holds Rush launch down to confirm it. */
+const RUSH_HOLD_MS = 600
+type RushProps = { share: number; why: string | null; onRush: () => void }
+/**
+ * Rush launch: sends the Capital Yard's ship out now, unfinished. A click with a mouse; on a touch
+ * screen it has to be held (a ring fills round it) so a stray tap can't throw a ship away. Disabled
+ * while the yard's cooldown runs, with the time left on it.
+ */
+function RushButton({ share, why, onRush }: RushProps) {
+  const [hold, setHold] = useState(false)
+  const timer = useRef(0)
+  const touched = useRef(false)
+  useEffect(() => () => clearTimeout(timer.current), [])
+  const label = why?.startsWith('Ready again in ') ? `Rush launch · ${why.slice('Ready again in '.length)}` : `Rush launch (${Math.floor(share * 100)}%)`
+  const stop = () => {
+    clearTimeout(timer.current)
+    setHold(false)
+  }
+  return (
+    <button
+      className={`ew-rush ${hold ? 'is-holding' : ''}`}
+      disabled={!!why}
+      onPointerDown={(e) => {
+        touched.current = false
+        if (why || !isTouch(e)) return
+        touched.current = true
+        setHold(true)
+        timer.current = window.setTimeout(() => {
+          setHold(false)
+          onRush()
+        }, RUSH_HOLD_MS)
+      }}
+      onPointerUp={stop}
+      onPointerLeave={stop}
+      onPointerCancel={stop}
+      onContextMenu={(e) => e.preventDefault()}
+      onClick={() => {
+        // A finger confirms by holding (above), not by the tap that ends the hold.
+        if (touched.current) return void (touched.current = false)
+        onRush()
+      }}
+      data-tip={`Rush launch: the ship in progress jumps out now, ${Math.floor(share * 100)}% built. It comes out with that share of its hull, no shields and its last turrets in scaffolding (they don't fire); a Drydock, repair craft or engineers finish it, taking the build time it had left. The yard then can't rush for a while, and its next ship builds slower.${why ? `\n\n${why}` : ''}${'\n\nOn a touch screen: hold it down to confirm.'}`}
+    >
+      <svg className="ew-rush-ring" viewBox="0 0 20 20" aria-hidden>
+        <circle cx="10" cy="10" r="8" pathLength={1} style={{ animationDuration: `${RUSH_HOLD_MS}ms` }} />
+      </svg>
+      {label}
+    </button>
+  )
+}
+
+/** A rush-launched ship's state, for its card and tooltip (null when it is finished). */
+export function rushNote(u: Unit) {
+  if (!u.rush) return null
+  const all = u.t.hardpoints.filter((h) => h.kind !== 'engine')
+  const noun = all.every((h) => h.weapon) ? 'turrets' : 'turrets and modules'
+  return `Rushed: ${u.rush.parts.length} of ${all.length} ${noun} not yet installed · ${Math.ceil(u.rush.left)} s of work to finish it (a Drydock, repair craft or engineers)`
 }
 
 /**
@@ -1622,6 +1691,7 @@ export function UnitIntel({ t, who, rel, note, live }: { t: UnitType; who?: stri
         </div>
       </header>
       <p>{t.blurb}</p>
+      {live?.rush && <p className="ew-intel-rush">{rushNote(live)}</p>}
       {r && (
         <div className="ew-intel-vs">
           <span className="is-strong"><b>Strong vs</b> {r.strong.join(', ')}</span>
@@ -1723,6 +1793,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
           </div>
         )}
         <span className="ew-muted ew-small">{t.blurb}</span>
+        {u.rush && <span className="ew-rushnote">{rushNote(u)}</span>}
         <Counters t={t} />
         <Vitals u={u} squad={squad} now={w.time} />
         {u.hps.length > 0 && <HpSummary u={u} />}
@@ -1920,9 +1991,12 @@ function YardDetail(p: DetailProps & { y: Unit }) {
   const crews = w.units.filter((u) => !u.dead && isEngineer(u.t) && u.mending.includes(y.id)).length
   const coming = w.units.filter((u) => !u.dead && u.owner === me && isEngineer(u.t) && u.order.k === 'construct' && u.order.id === y.id).length
   const progress = 1 - y.building / y.t.build
+  // Rush launch: once Rushed construction is done and the ship in progress is far enough along.
+  const share = rushShare(y)
+  const rush = !site && kind === 'cyard' && y.owner === me && hud.techs.includes(RUSH_TECH[faction]) && share >= rushRules(w).min ? { share, why: cantRush(w, me, y.id), onRush: () => p.onRush(y.id) } : undefined
   return (
     <div className="ew-stationwrap">
-      {!site && <BuildQueue queue={queue} onCancel={(i) => p.onCancel(i, y.id)} at="the yard" />}
+      {!site && <BuildQueue queue={queue} onCancel={(i) => p.onCancel(i, y.id)} at="the yard" rush={rush} />}
       <Frame className="ew-detail is-station is-yard">
         <div className="ew-detail-side">
           <Schematic u={y} size={96} tip={unitTip(y.t, ownerTag(w, me, y.owner), undefined, y)} />

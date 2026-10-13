@@ -383,6 +383,20 @@ export const REBUILD_MODULE = 0.3
  * frigate and corvette, added to their hull research.
  */
 export const MODULE_FX = { sensor: 1.5, shield: 0.4, regen: 0.6, reach: reach(650), repair: 0.025, armour: 0.2 }
+
+/**
+ * Rush launch (research RUSH_TECH): a Capital Yard's ship in progress sent out unfinished, once it is
+ * at least `min` built. It comes out with that share of its hull, no shields, and as many of its
+ * turrets and modules as are still to be built not yet installed (scaffolding: they don't fire or
+ * work). Finishing it takes the build time it had left, at the build pace, while a Drydock, repair
+ * craft or engineers work on it (one at a time: more of them don't speed it up), free of credits;
+ * ordinary repairs mend battle damage but never the unbuilt hull. A yard that rushed can't rush again
+ * for `cooldown` seconds, and its next ship takes `slowdown` longer to build (0.25: a quarter).
+ * One place to tune it; the dev cheats can override it on a local battle (World.rushTune).
+ */
+export const RUSH = { min: 0.5, cooldown: 120, slowdown: 0.25 }
+/** The research that allows a rush launch, by faction. */
+export const RUSH_TECH: Record<FactionId, string> = { republic: 'r-yd-rush', droid: 'd-yd-rush' }
 /** The expansions a building takes. */
 export const modulesFor = (on: Works) => MODULES.filter((m) => m.on === on)
 /** Which building a unit type is, for its expansions (null for everything else). */
@@ -899,6 +913,7 @@ export const TECHS: Tech[] = [
   tech('republic', 'r-cruiser', 'r-cr-armour', 'Armour plating', 'Paladins get 25% more hull.', 800, 45, 3, { hull: 0.25 }, ['r-cr-cap']),
   tech('republic', 'r-capital', 'r-ca-range', 'Fleet targeting array', 'Sovereign guns reach 15% further.', 1200, 60, 4, { range: 0.15 }),
   tech('republic', 'r-capital', 'r-ca-bulbs', 'Reinforced shield bulbs', 'Sovereign shields 30% stronger, recharging faster.', 1200, 60, 4, { shield: 0.3, regen: 0.3 }, ['r-ca-range']),
+  tech('republic', 'r-cyard', 'r-yd-rush', 'Rushed construction', 'Crews trained to launch a warship before it is finished: the Capital Yard can rush out the ship it is building once it is half done (Rush launch). It comes out damaged, with turrets still in scaffolding, and needs repair crews to be finished. Needs a Capital Yard.', 800, 45, 3, {}),
   // Droid Confederacy
   tech('droid', 'd-station', 'd-st-guns', 'Foundry cannons', 'A sensor eye on the station: its cannons hit 25% harder while the eye stands.', 700, 45, 1, { damage: 0.25 }),
   tech('droid', 'd-station', 'd-st-ore', 'Ore processors', 'An ore processor on the station: extractors bring in 25% more credits while it stands.', 600, 40, 1, { mines: 0.25 }),
@@ -916,6 +931,7 @@ export const TECHS: Tech[] = [
   tech('droid', 'd-cruiser', 'd-cr-thrust', 'Thruster refit', 'Anvils fly 20% faster.', 700, 40, 3, { speed: 0.2 }, ['d-cr-ray']),
   tech('droid', 'd-capital', 'd-ca-hangar', 'Expanded hangars', 'Gyre battleships launch faster and keep one more squadron out.', 1200, 60, 4, { hangar: 1 }),
   tech('droid', 'd-capital', 'd-ca-armour', 'Ring armour', 'Gyre battleships get 25% more hull.', 1200, 60, 4, { hull: 0.25 }, ['d-ca-hangar']),
+  tech('droid', 'd-cyard', 'd-yd-rush', 'Hasty assembly protocols', 'The foundry\'s droids are told to ship hulls before they are done: the Capital foundry can rush out the warship it is building once it is half done (Rush launch). It comes out damaged, with guns still in scaffolding, and needs welders to be finished. Needs a Capital foundry.', 800, 45, 3, {}),
 ]
 export const TECH: Record<string, Tech> = Object.fromEntries(TECHS.map((t) => [t.id, t]))
 export const techsFor = (unitId: string) => TECHS.filter((t) => t.for === unitId)
