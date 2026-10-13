@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react'
-import { dayKey, eventsOn, eventTime, fetchEvents, isShown, openEvent, startOfDay, useCalendarChoice, useCalendarList, useCalendarVersion, useShownCalendarIds, type CalendarEvent } from '../data/calendar'
+import { dayKey, eventsOn, eventTime, fetchEvents, isShown, openEvent, startOfDay, useCalendarChoice, useCalendarList, useCalendarVersion, useHiddenCalendars, useShownCalendarIds, type CalendarEvent } from '../data/calendar'
 import { completeTask, dueDay, openTask, useTaskPrefs, useTasks } from '../data/tasks'
 import { connectGoogle, hasCalendar, signIn, useAccount } from '../os/account'
 import type { MenuItem } from '../os/ContextMenu'
@@ -24,7 +24,9 @@ function useEvents(config: Config, enabled: boolean) {
   // Its own pick, or what Settings has switched on (known once the calendar list is in).
   const shown = useShownCalendarIds()
   const version = useCalendarVersion()
-  const ids = config.calendars ?? shown
+  // Hidden calendars stay out, also from a widget's own pick.
+  const hidden = useHiddenCalendars()
+  const ids = config.calendars ? config.calendars.filter((id) => !hidden.includes(id)) : shown
   const key = `${ids?.join(',') ?? '…'}|${config.days}`
   useEffect(() => {
     if (!enabled || !ids) return
@@ -58,9 +60,10 @@ function useEvents(config: Config, enabled: boolean) {
 function useTodaysTasks() {
   const { lists, tasks } = useTasks()
   const { hiddenInCalendar } = useTaskPrefs()
+  const hidden = useHiddenCalendars()
   const today = dayKey(new Date())
   const colors = new Map((lists ?? []).map((l) => [l.id, l.color]))
-  return tasks.filter((t) => !t.completed && t.due && dueDay(t)! <= today && colors.has(t.list) && !hiddenInCalendar.includes(t.list)).map((t) => ({ task: t, color: colors.get(t.list)! }))
+  return tasks.filter((t) => !t.completed && t.due && dueDay(t)! <= today && colors.has(t.list) && !hiddenInCalendar.includes(t.list) && !hidden.includes(t.list)).map((t) => ({ task: t, color: colors.get(t.list)! }))
 }
 
 function dayLabel(key: string) {

@@ -6,6 +6,7 @@ import { accounts as allAccounts, type User } from './auth.ts'
 import {
   caldavAccounts,
   calendarHome,
+  calendarTitle,
   dav,
   davRequest,
   davTime,
@@ -495,7 +496,7 @@ async function discoverLists(account: CaldavAccount): Promise<DavList[]> {
           id: `caldav:${account.id}:${href}`,
           account: account.id,
           href,
-          name: unescapeXml(prop(r.body, 'displayname')?.trim() || decodeURIComponent(r.href.split('/').filter(Boolean).pop() ?? 'Tasks')),
+          name: calendarTitle(prop(r.body, 'displayname'), r.href, 'Tasks'),
           color: /^#[0-9a-f]{6}/i.test(color) ? color.slice(0, 7) : '#e0af68',
           source: account.label,
           writable: !privileges || /<(?:[\w-]+:)?(?:write|write-content|all)\b/.test(privileges),
