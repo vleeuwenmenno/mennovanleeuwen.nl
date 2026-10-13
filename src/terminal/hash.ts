@@ -1,17 +1,19 @@
 // Checksums for sha1sum, sha256sum, sha384sum, sha512sum (Web Crypto) and md5sum (Web Crypto
 // has no MD5, so it is implemented here, RFC 1321).
 
+import { textToBytes } from './bytes'
+
 const toHex = (bytes: Uint8Array) => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
 
 export async function sha(algo: 'SHA-1' | 'SHA-256' | 'SHA-384' | 'SHA-512', text: string) {
-  return toHex(new Uint8Array(await crypto.subtle.digest(algo, new TextEncoder().encode(text))))
+  return toHex(new Uint8Array(await crypto.subtle.digest(algo, textToBytes(text))))
 }
 
 const S = [7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21]
 const K = Array.from({ length: 64 }, (_, i) => Math.floor(Math.abs(Math.sin(i + 1)) * 2 ** 32) >>> 0)
 
 export function md5(text: string): string {
-  const msg = new TextEncoder().encode(text)
+  const msg = textToBytes(text)
   const len = (((msg.length + 8) >>> 6) + 1) * 64
   const buf = new Uint8Array(len)
   buf.set(msg)

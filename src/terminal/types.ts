@@ -35,6 +35,11 @@ export type Ctx = {
   print: (text: string) => void
   /** True when output goes to the screen rather than into a pipe or redirect. */
   tty: boolean
+  /**
+   * Writes text to the output exactly as given. A command's returned text gets a newline added when
+   * it lacks one; cat, head -c and tail -c use this to pass bytes through untouched.
+   */
+  raw?: (text: string) => void
   /** Running as root (sudo, for the signed-in user): may write /etc/fstab and mount */
   root?: boolean
   /** Redraws one block of output in place (htop, watch, cmatrix); null removes it again. */
