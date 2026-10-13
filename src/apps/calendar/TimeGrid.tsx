@@ -5,8 +5,8 @@ import { addDays, atMinutes, hhmm, layoutBars, layoutDay, minutesOf, moved, same
 import { EventMark } from './EventMark'
 
 // The day, 3-day and week views: all-day events in a lane on top, timed ones on a 24-hour grid.
-// With a mouse: drag on an empty spot to make an event there, drag an event to move it (to
-// another day too), drag its bottom edge to make it longer or shorter; a click opens it. On a
+// With a mouse: drag on an empty spot to make an event there (into another day's column for one
+// that runs over days), drag an event to move it (to another day too), drag its bottom edge to make it longer or shorter; a click opens it. On a
 // touch screen a tap does the same as a click, and swiping scrolls.
 
 export const HOUR = 48
@@ -29,7 +29,7 @@ type Props = {
 }
 
 type Drag =
-  | { kind: 'create'; col: number; from: number; to: number; moved: boolean }
+  | { kind: 'create'; col: number; from: number; to: number; toCol: number; moved: boolean }
   | { kind: 'move'; e: CalendarEvent; grabCol: number; grabMin: number; col: number; min: number; moved: boolean }
   | { kind: 'resize'; e: CalendarEvent; col: number; min: number }
   | { kind: 'create-day'; from: number; to: number }
@@ -38,6 +38,19 @@ type Drag =
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
 const snap = (m: number) => Math.round(m / SNAP) * SNAP
+
+/**
+ * What a drag on an empty spot makes: from where it started to where it is, backwards too, over
+ * the days between (`first` to `last`; `a` and `b` are minutes into those two days, on the grid's
+ * steps, and at least one step apart).
+ */
+function createRange(d: { col: number; from: number; to: number; toCol: number }) {
+  const back = d.toCol < d.col || (d.toCol === d.col && d.to < d.from)
+  const [first, last] = back ? [d.toCol, d.col] : [d.col, d.toCol]
+  const [x, y] = back ? [d.to, d.from] : [d.from, d.to]
+  const a = Math.floor(x / SNAP) * SNAP
+  return { first, last, a, b: first === last ? Math.max(Math.ceil(y / SNAP) * SNAP, a + SNAP) : Math.ceil(y / SNAP) * SNAP }
+}
 
 /** What a drag in progress would make of an event, to draw it there already. */
 function previewOf(drag: Drag | null, days: Date[]): { id: string; change: Change } | null {
@@ -111,7 +124,7 @@ export function TimeGrid({ days, events, now, onOpen, onCreate, onChange, onDay,
     if (allDay) setDrag(e ? { kind: 'move-day', e, grabCol: p.col, col: p.col, moved: false } : { kind: 'create-day', from: p.col, to: p.col })
     else if (e && target.closest('.ca-ev-grip')) setDrag({ kind: 'resize', e, col: p.col, min: p.min })
     else if (e) setDrag({ kind: 'move', e, grabCol: p.col, grabMin: p.min, col: p.col, min: p.min, moved: false })
-    else setDrag({ kind: 'create', col: p.col, from: p.min, to: p.min, moved: false })
+    else setDrag({ kind: 'create', col: p.col, from: p.min, to: p.min, toCol: p.col, moved: false })
   }
 
   const move = (ev: ReactPointerEvent<HTMLDivElement>) => {
@@ -124,7 +137,7 @@ export function TimeGrid({ days, events, now, onOpen, onCreate, onChange, onDay,
       return setDrag(d.kind === 'create-day' ? { ...d, to: p.col } : { ...d, col: p.col, moved: d.moved || far })
     }
     const p = point(colsRef.current, ev.clientX, ev.clientY)
-    if (d.kind === 'create') setDrag({ ...d, to: p.min, moved: d.moved || far })
+    if (d.kind === 'create') setDrag({ ...d, to: p.min, toCol: p.col, moved: d.moved || far })
     else if (d.kind === 'move') setDrag({ ...d, col: p.col, min: p.min, moved: d.moved || far })
     else setDrag({ ...d, col: p.col, min: p.min })
     // Near the top or bottom edge: scroll along.
@@ -148,9 +161,8 @@ export function TimeGrid({ days, events, now, onOpen, onCreate, onChange, onDay,
         const at = Math.floor(d.from / 30) * 30
         return onCreate(atMinutes(days[d.col], at), atMinutes(days[d.col], at + 60), false)
       }
-      const a = Math.floor(Math.min(d.from, d.to) / SNAP) * SNAP
-      const b = Math.max(Math.ceil(Math.max(d.from, d.to) / SNAP) * SNAP, a + SNAP)
-      return onCreate(atMinutes(days[d.col], a), atMinutes(days[d.col], b), false)
+      const r = createRange(d)
+      return onCreate(atMinutes(days[r.first], r.a), atMinutes(days[r.last], r.b), false)
     }
     if (d.kind === 'create-day') {
       const [a, b] = [Math.min(d.from, d.to), Math.max(d.from, d.to)]
@@ -167,6 +179,16 @@ export function TimeGrid({ days, events, now, onOpen, onCreate, onChange, onDay,
     onMenu(ev, id ? (byId.get(id) ?? null) : null, allDay ? days[p.col] : atMinutes(days[p.col], Math.floor(p.min / 30) * 30), allDay)
   }
 
+  /** The ghost of a new event on day `i`: the whole of it, or its part of that day when it runs over days. */
+  const ghostOn = (drag: Extract<Drag, { kind: 'create' }>, i: number) => {
+    if (!drag.moved && drag.col === i) return <Ghost from={Math.floor(drag.from / 30) * 30} to={Math.floor(drag.from / 30) * 30 + 60} />
+    if (!drag.moved) return null
+    const r = createRange(drag)
+    if (i < r.first || i > r.last) return null
+    if (r.first === r.last) return <Ghost from={r.a} to={r.b} />
+    if (i === r.last && r.b === 0) return null
+    return <Ghost from={i === r.first ? r.a : 0} to={i === r.last ? r.b : 1440} text={i === r.first ? `${clock(r.a)} →` : i === r.last ? `→ ${clock(r.b)}` : ''} />
+  }
   const handlers = (allDay: boolean) => ({ onPointerDown: down(allDay), onPointerMove: move, onPointerUp: up, onPointerCancel: () => setDrag(null), onContextMenu: context(allDay) })
   const dragging = drag && drag.kind !== 'tap' && drag.kind !== 'create' && drag.kind !== 'create-day' ? drag.e.id : null
   const nowMin = minutesOf(now)
@@ -224,7 +246,7 @@ export function TimeGrid({ days, events, now, onOpen, onCreate, onChange, onDay,
                 {placed[i].map((p) => (
                   <EventBlock key={p.e.id} p={p} past={span(p.e).end < now.getTime()} dragging={dragging === p.e.id} onToggle={onToggle} />
                 ))}
-                {drag?.kind === 'create' && drag.col === i && <Ghost from={drag.moved ? Math.min(drag.from, drag.to) : Math.floor(drag.from / 30) * 30} to={drag.moved ? Math.max(drag.from, drag.to) : Math.floor(drag.from / 30) * 30 + 60} />}
+                {drag?.kind === 'create' && ghostOn(drag, i)}
                 {sameDay(d, now) && <div className="ca-now" style={{ top: nowMin * PX }} />}
               </div>
             ))}
@@ -279,13 +301,14 @@ function EventBlock({ p, past, dragging, onToggle }: { p: Placed; past: boolean;
   )
 }
 
-function Ghost({ from, to }: { from: number; to: number }) {
+const clock = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+
+function Ghost({ from, to, text }: { from: number; to: number; text?: string }) {
   const a = Math.floor(from / SNAP) * SNAP
   const b = Math.max(Math.ceil(to / SNAP) * SNAP, a + SNAP)
-  const label = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
   return (
     <div className="ca-ghost" style={{ top: a * PX, height: (b - a) * PX - 1 }}>
-      {label(a)} – {label(b)}
+      {text ?? `${clock(a)} – ${clock(b)}`}
     </div>
   )
 }

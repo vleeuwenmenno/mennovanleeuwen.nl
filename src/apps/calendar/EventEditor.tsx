@@ -95,7 +95,7 @@ const mailIn = (notes: string) => {
   const m = MAIL_LINK.exec(notes)
   return m ? messageIdOf(m[1].replace(/[).,;]+$/, '')) : null
 }
-const STATUS: Record<string, [string, string]> = { accepted: ['✓', 'going'], declined: ['✕', 'not going'], tentative: ['?', 'maybe'], 'needs-action': ['…', 'not answered yet'] }
+export const STATUS: Record<string, [string, string]> = { accepted: ['✓', 'going'], declined: ['✕', 'not going'], tentative: ['?', 'maybe'], 'needs-action': ['…', 'not answered yet'] }
 
 type Props = {
   event: CalendarEvent | null
