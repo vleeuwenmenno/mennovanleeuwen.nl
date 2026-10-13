@@ -5285,7 +5285,9 @@ span.ew-teamtag {
 
 /* The planet dock, beside the galaxy map: the skirmish's station panel for a planet. */
 .ew-gdock {
-  max-width: calc(100% - 381px);
+  /* Clear of the selection panel on the right (measured where it is, see GalaxyMap), else of
+     its usual place. */
+  max-width: var(--ew-gdock-max, calc(100% - 381px - 330px));
 }
 @container (max-width: 760px) {
   .ew-gdock {
@@ -5390,6 +5392,14 @@ span.ew-teamtag {
 .ew-deck .ew-gbuild .ew-yardcard.is-busy,
 .ew-deck .ew-gbuild .ew-yardcard.is-queued {
   border-color: rgba(255, 200, 110, 0.55);
+}
+/* A small window: between the galaxy map and the selection there is no room for the planet's
+   picture column, so it folds away and the planet's name moves into the header. */
+.ew-galaxy.has-narrow-dock .ew-gplanet .ew-detail-side {
+  display: none;
+}
+.ew-galaxy.has-narrow-dock .ew-gp-headname {
+  display: inline;
 }
 /* The planet's shipyard has its fleet chips and the tabs over the cards: room for both rows of cards. */
 .ew-detailfloat.ew-gdock .ew-detail.is-station {

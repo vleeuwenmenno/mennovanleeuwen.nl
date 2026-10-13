@@ -752,6 +752,20 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   const held = useRef(new Set<string>())
   const mouse = useRef({ x: 0, y: 0, inside: false })
   const rootEl = useRef<HTMLDivElement>(null)
+  // The planet's dock keeps clear of the selection panel on its right: as wide as the room between
+  // the dock's left edge and the panel (wherever either has been moved to), measured after each draw.
+  useLayoutEffect(() => {
+    const root = rootEl.current
+    const dock = root?.querySelector<HTMLElement>('.ew-gdock')
+    const selp = root?.querySelector<HTMLElement>('.ew-gselfloat')
+    if (!root || !dock) return
+    const d = dock.getBoundingClientRect()
+    const s = selp?.getBoundingClientRect()
+    const room = s && s.width && s.left > d.left + 200 ? `${Math.floor(s.left - d.left - 8)}px` : ''
+    if (root.style.getPropertyValue('--ew-gdock-max') !== room) root.style.setProperty('--ew-gdock-max', room || null)
+    // Little room (a small window): the planet's picture column folds away, its name goes in the header.
+    root.classList.toggle('has-narrow-dock', !!s && s.width > 0 && s.left - d.left < 480)
+  })
   // On a touch screen what is selected is one small button (SelChip); its panels (the selection, the
   // planet's dock, the fleets at the planet) open from it as a sheet, and a tap anywhere else only
   // closes them again, giving no order and changing no selection, as in a battle.
