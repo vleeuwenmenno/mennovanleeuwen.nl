@@ -50,7 +50,10 @@ For developers it is one rule, under *Text selection* at the top of
 [`src/styles.css`](src/styles.css): `body` is `user-select: none`, and fields, `code` and anything
 with the `selectable` class (or `data-selectable`; `copyable` for an error or notice) opt back in.
 Mark the element that holds the content, not each line. Ctrl+A and the picture drags are handled
-in [`src/os/selection.ts`](src/os/selection.ts).
+in [`src/os/selection.ts`](src/os/selection.ts). So is a Firefox quirk: once a text field has had
+the focus, a drag in selectable text inside a `user-select: none` page selects nothing, so for the
+frame in which a press in selectable text starts a selection the page is selectable (an
+`html[data-selecting]` rule), and the rules apply again right after.
 
 ## Workspaces and the dock
 
@@ -229,7 +232,19 @@ mounts: the account's quota and usage (`/api/seafile/quota`), and each library's
 what is left of the quota; `du` (`-a`, `-s`, `-c`, `-d`, `-h`, `-x`) adds up folders through the
 mounts, Seafile's included.
 
-`find` and `fd` ([`src/terminal/find.ts`](src/terminal/find.ts)) follow GNU findutils 4.10 and fd 10.2
+`/dev` behaves like one ([`src/terminal/devices.ts`](src/terminal/devices.ts)): `/dev/urandom` and
+`/dev/random` give random bytes, `/dev/zero` NULs, `/dev/null` nothing (and swallows writes). The
+real ones never end; here a read gives 64 KiB at most, so `cat /dev/urandom` stops. The disks
+(`/dev/nvme0n1*`, `/dev/seafile/*`) answer `Permission denied` to reads and writes, as for a normal
+user, and `ls -l /dev` shows `crw-rw-rw-` and `brw-rw----` with the major and minor numbers `lsblk`
+uses. `open /dev/seafile/<library>` opens that library in Files. Bytes travel through pipes as
+text with the invalid ones kept apart (Python's `surrogateescape`, [`src/terminal/bytes.ts`](src/terminal/bytes.ts)),
+so `head -c 16 /dev/urandom | xxd` shows 16 bytes and `echo é | xxd` shows `c3a9 0a`. `head`/`tail`
+take `-c` (GNU forms: `-c N`, `-cN`, `--bytes=N`, `-c -N`, `tail -c +N`) and several files, and
+`xxd` (`-l -s -c -g -p -u -r`), `hexdump -C` and `od -An -tx1` dump bytes
+([`src/terminal/bytecmds.ts`](src/terminal/bytecmds.ts)). `pnpm check:terminal-cmds` tests all of it.
+
+`find` and `fd` ([`src/terminal/find.ts`](src/terminal/find.ts)(src/terminal/find.ts)) follow GNU findutils 4.10 and fd 10.2
 over the site's filesystem: find's whole expression language (tests, `-printf`, `-ls`, `-exec … ;`
 and `{} +`, `-ok`, `-prune`, `-delete` in /tmp, operators and its warnings and errors), fd's options
 (smart case, globs, `-e`, `-t`, `-S`, `--changed-within`, `-x`/`-X`, `--format`, `-l`, ignore files),
@@ -248,16 +263,44 @@ Spotlight takes `go <alias>` too, and lists matching aliases as you type (the mo
 ones after a bare `go `) from the golinks server's `/suggest`, asked straight from the browser so
 the token never passes through this site's server.
 
+### Tabs and selecting
+
+A Terminal window has tabs, like Ghostty's or Windows Terminal's
+([`src/apps/Terminal.tsx`](src/apps/Terminal.tsx), `TerminalTabs`). Each tab is its own shell
+(`TerminalSession`): its own working folder, history position, environment, scrollback and
+running program, and the tabs not in front keep running (a `watch` or `vtdemo` goes on drawing,
+at its own size). The strip shows from the second tab on (or always, in the settings); each tab
+is titled after what a program in it called itself, else what runs, else its folder, and the
+window's title follows the front tab. Keys, ahead of the shell and of full-screen programs:
+
+- Ctrl+Shift+T new tab (in the front tab's folder), Ctrl+Shift+W close it.
+- Ctrl+Tab / Ctrl+Shift+Tab and Ctrl+PageDown / Ctrl+PageUp next and previous, Ctrl+Shift+1…9
+  that tab (9 the last). Alt+1…9 stays with the workspaces. Browsers keep some of these for their
+  own tabs (Chrome never hands a page Ctrl+Tab, Ctrl+PageUp/Down or Ctrl+Shift+T/W); there the
+  strip, the menus and Ctrl+Shift+1…9 still work.
+- The mouse: + or a double-click on the empty strip opens one, a middle click closes one, a drag
+  moves one along the strip. The window menu and the right-click menu have *New tab* too.
+
+`exit` closes its tab only; the last tab's closes the window. Closing a tab in which a program
+runs asks first, and closing a window with more than one tab asks once ("Close 3 tabs?"), both
+in the desktop's own dialog. The tabs, their folders and which one was in front are kept in the
+window's props (`tabs`, `tab`), so a reload brings them back; what ran in them does not. A
+request from another app (*Open in terminal*) runs in the front tab.
+
+Selecting the scrollback (or a full-screen program's screen) leaves the selection in place until
+you click elsewhere or type; a plain click puts the caret on the prompt. Ctrl+Shift+C copies it
+(so does Ctrl+C with text selected, or the right-click menu), Ctrl+Shift+V pastes.
+
 ### Terminal settings
 
 The Terminal has its own settings sheet ([`src/terminal/TerminalSettings.tsx`](src/terminal/TerminalSettings.tsx)),
 opened from its window menu (Terminal settings…), its right-click menu, or `settings` at the prompt
-(`settings system` opens the Settings app instead). The same settings, less the per-window zoom,
+(`settings system` opens the Settings app instead). The same settings, less the per-tab zoom,
 are in Settings → Apps → Terminal, and the sheet's *Open in Settings…* goes there. They are kept in
 this browser and synced like notes when signed in ([`src/terminal/prefs.ts`](src/terminal/prefs.ts)):
 - **Text size**, separately for desktops and for phones (below the 720 px breakpoint, where
   windows fill the screen). Changes apply live. The single size saved before carries over to both.
-- **Zoom** for one window only, until it closes: Ctrl + / − / 0, Ctrl with the scroll wheel, or a
+- **Zoom** for one tab only, until it closes: Ctrl + / − / 0, Ctrl with the scroll wheel, or a
   two-finger pinch on a touch screen, with a badge showing the new size. It multiplies the text
   size. Full-screen programs (nano, htop, `agents`) redraw to the new rows and columns, which
   `stty size` prints.
@@ -267,6 +310,7 @@ this browser and synced like notes when signed in ([`src/terminal/prefs.ts`](src
   tapped twice, and apply while held; they also apply to letters typed on the keyboard (Ctrl, then
   c, is Ctrl+C). The keys go through the same handler as a real keyboard, so completion, history
   and full-screen programs get them as usual. The row can be turned off.
+- **Tab bar**: from the second tab on (the default, like Ghostty), or always.
 
 ### The shell, agents and skills
 
@@ -471,7 +515,7 @@ Immich, Seafile, OnlyOffice, Ollama Cloud and updown.io. The Apps panes keep onl
 app, and where an app needs an account they start with a small notice and a button that opens that
 integration (*Accounts for Calendar are linked in Integrations*, or *Link a calendar account to get
 started* when there is none). The Apps panes are Agents, Calendar (which calendars show, the view it
-opens in and where new events go), Contacts (where new contacts go), Files (view, icon size, sort order, hidden files, sidebar), Games (Pool's helpers,
+opens in and where new events go), Contacts (where new contacts go), Files (view, icon size, sort order, hidden files, sidebar, preview pane), Games (Pool's helpers,
 sensitivity, computer and sound; Gladiator's sound and music; Empires At War's sound, battlefield,
 camera and a summary of its key bindings, with a button into the game's own key bindings and sound
 mix), Mail (when mail counts as read, remote content, the allowed senders, quoted text, signatures and replies, with a pointer to Notifications for new-mail alerts), Omamp (shuffle, repeat, equalizer and preset, visualizer, time, its windows), PDF (sidebar,
@@ -863,6 +907,23 @@ in IndexedDB per account (at most 2,000 or 50 MB, the least recently shown going
 made once per browser; a video that gives none shows its icon and is left alone for a day. Encrypted
 libraries answer no byte ranges, so there only videos up to 64 MB get a frame. Settings → Apps →
 Files → *Video thumbnails* switches it off.
+
+Files' toolbar has the sidebar button at its left end and the **preview pane** button at its right
+end ([`src/apps/FilesPreview.tsx`](src/apps/FilesPreview.tsx)). The pane, on the right of the list,
+shows the selected file (the one last clicked, with several selected) with the same code the apps
+use: pictures as in Preview, video and audio through Player's addresses (with controls, muted and
+not playing by themselves), Markdown as Zed's preview renders it, code and text with the same
+highlighter (the first 200 KB or 2,000 lines), a PDF's first page with pdf.js, and the top level of
+a ZIP (or of a tar in Seafile) as the Archive app reads it. Office documents are never opened there,
+since that would mean loading OnlyOffice in the pane: they, and files of any other kind, show their
+icon, details and *Open*. Under every preview are its name, kind, size, date (and a picture's or a
+video's dimensions, a PDF's pages) and *Open*, which opens it as a double-click does. The arrow keys
+move the preview along with the selection, after a short pause so a held key reads nothing on the
+way. The splitter beside the pane drags its width (a double-click resets it), kept with the other
+Files preferences. Settings → Apps → Files → *Preview* switches the pane off altogether, says
+whether new windows start with it shown, and whether showing or hiding it in a window sets that
+(*Remember when I show or hide it*, on by default) or only changes that window. The Trash and phones
+have no preview.
 
 Uploads go straight from the browser to Seafile's file server: drop files or whole folders from the
 computer on a Files window (a folder, its empty space or the sidebar) or on the desktop, or use

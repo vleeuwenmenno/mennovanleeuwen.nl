@@ -79,7 +79,7 @@ export function TerminalPane() {
       onAppearance={() => wm.open('settings', { section: 'appearance', t: now() })}
       zoom={
         <SetGroup title="Zoom">
-          <p className="muted set-help">Zoom is for one terminal window at a time, until it closes: {ZOOM_HELP} The window's own settings (its menu → Terminal settings…, or the settings command) show it too.</p>
+          <p className="muted set-help">Zoom is for one terminal tab at a time, until it closes: {ZOOM_HELP} The window's own settings (its menu → Terminal settings…, or the settings command) show it too.</p>
         </SetGroup>
       }
     />
@@ -127,6 +127,23 @@ export function FilesPane() {
           <Toggle on={prefs.videoThumbs} onChange={(videoThumbs) => filesPrefs.patch({ videoThumbs })} label="Video thumbnails" />
         </Row>
       </ul>
+      <SetGroup title="Preview">
+        <ul className="set-list">
+          <Row title="Preview pane" hint="A button at the right of the toolbar shows the selected file: pictures, video, audio, Markdown, code and text, PDFs and archives">
+            <Toggle on={prefs.preview} onChange={(preview) => filesPrefs.patch({ preview })} label="Preview pane" />
+          </Row>
+          {prefs.preview && (
+            <>
+              <Row title="Show the preview pane in new windows" hint="Files windows opened from now on start with it shown">
+                <Toggle on={prefs.previewShow} onChange={(previewShow) => filesPrefs.patch({ previewShow })} label="Show the preview pane in new windows" />
+              </Row>
+              <Row title="Remember when I show or hide it" hint="Showing or hiding it in a window also sets the one above. Off: only that window changes">
+                <Toggle on={prefs.previewRemember} onChange={(previewRemember) => filesPrefs.patch({ previewRemember })} label="Remember when I show or hide it" />
+              </Row>
+            </>
+          )}
+        </ul>
+      </SetGroup>
       <p className="muted set-help">The same in every folder and every Files window. Saved in this browser.</p>
       {account.seafile && (
         <p className="muted set-help">

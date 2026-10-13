@@ -24,7 +24,7 @@ function Stepper({ value, onChange, label }: { value: number; onChange: (px: num
  * The Terminal's settings themselves: text size per kind of screen, the extra keys on touch
  * screens, and where its colours come from. Shown in the sheet over a terminal window and in
  * Settings → Apps → Terminal, so both always show the same thing. `zoom` goes after the text
- * size: the sheet's zoom for its own window, or the pane's note that zoom is per window.
+ * size: the sheet's zoom for its own tab, or the pane's note that zoom is per tab.
  * Changes apply as they are made, to every terminal window.
  */
 export function TerminalPrefsBody({ zoom, onAppearance }: { zoom: ReactNode; onAppearance: () => void }) {
@@ -57,6 +57,15 @@ export function TerminalPrefsBody({ zoom, onAppearance }: { zoom: ReactNode; onA
       {zoom}
 
       <section className="set-section">
+        <h4>Tabs</h4>
+        <label className="set-check">
+          <input type="checkbox" checked={prefs.tabBar === 'always'} onChange={(e) => setTerminalPrefs({ tabBar: e.target.checked ? 'always' : 'auto' })} />
+          Show the tab bar with a single tab too
+        </label>
+        <p className="muted set-help">Otherwise it shows from the second tab on. Ctrl+Shift+T opens a tab, Ctrl+Shift+W closes it, Ctrl+Tab and Ctrl+PageDown go to the next one.</p>
+      </section>
+
+      <section className="set-section">
         <h4>Touch screens</h4>
         <label className="set-check">
           <input type="checkbox" checked={prefs.extraKeys} onChange={(e) => setTerminalPrefs({ extraKeys: e.target.checked })} />
@@ -76,7 +85,7 @@ export function TerminalPrefsBody({ zoom, onAppearance }: { zoom: ReactNode; onA
   )
 }
 
-/** How to zoom one window, for where there is no window to zoom (Settings). */
+/** How to zoom one tab, for where there is no tab to zoom (Settings). */
 export const ZOOM_HELP = 'Ctrl + / − / 0, Ctrl with the scroll wheel, or pinch with two fingers on a touch screen.'
 
 /**
@@ -131,7 +140,7 @@ export function TerminalSettings({ zoom, onZoom, onClose, onAppearance, onAllSet
                   </button>
                 </span>
               </div>
-              <p className="muted set-help">Only this window, until it closes. {ZOOM_HELP}</p>
+              <p className="muted set-help">Only this tab, until it closes. {ZOOM_HELP}</p>
             </section>
           }
         />

@@ -52,6 +52,7 @@ import { SyncLine } from './Notebook'
 import { MailSettings } from './mail/MailSettings'
 import { useMailAccounts } from '../data/mail'
 import { SecretInput } from '../os/SecretInput'
+import { performanceOverlayPref } from '../os/PerformanceOverlay'
 
 // System settings, laid out like macOS: the account on top of a sidebar, one pane per topic.
 // Opened from the system menu, the desktop's right-click menu, Spotlight, the terminal and apps'
@@ -200,6 +201,7 @@ async function removeAccount(setError: (e: string | null) => void) {
 function Appearance() {
   const t = useTheme()
   const swing = useSwingPrefs()
+  const performanceOverlay = performanceOverlayPref.use()
   const modes: [Mode, string][] = [
     ['auto', 'Auto'],
     ['light', 'Light'],
@@ -258,6 +260,13 @@ function Appearance() {
         </label>
       </SetGroup>
       <p className="muted set-help">The themes are Omarchy's own palettes. Saved in this browser.</p>
+      <SetGroup title="Performance">
+        <label className="set-check">
+          <input type="checkbox" checked={performanceOverlay} onChange={(e) => performanceOverlayPref.set(e.target.checked)} />
+          Show FPS and frame time
+        </label>
+        <p className="muted set-help">Shows page animation timing across the desktop, apps and games, including fullscreen. Follows the browser's refresh rate; game simulation and content updates may run at a different rate. Saved in this browser.</p>
+      </SetGroup>
     </>
   )
 }
@@ -1853,7 +1862,7 @@ function SyncPane() {
 const GROUPS: Group[] = [
   {
     panes: [
-      { id: 'appearance', label: 'Appearance', hue: 'var(--blue)', icon: svg(<><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" /></>), keywords: 'theme dark light mode accent color omarchy motion wiggle swing animation', blurb: 'Light and dark mode, themes, the accent color and motion.', render: () => <Appearance /> },
+      { id: 'appearance', label: 'Appearance', hue: 'var(--blue)', icon: svg(<><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" /></>), keywords: 'theme dark light mode accent color omarchy motion wiggle swing animation performance fps frame time counter', blurb: 'Light and dark mode, themes, the accent color, motion and frame timing.', render: () => <Appearance /> },
       { id: 'dock', label: 'Dock', hue: 'var(--cyan)', icon: svg(<><rect x="3" y="4" width="18" height="16" /><path d="M7 16h10" /></>), keywords: 'dock hide pin apps order', blurb: 'When the dock shows, and what is in it.', render: () => <DockSettings /> },
       { id: 'launchers', label: 'Launchers', hue: 'var(--magenta)', icon: svg(<><rect x="4" y="4" width="6" height="6" /><rect x="14" y="4" width="6" height="6" /><rect x="4" y="14" width="6" height="6" /><rect x="14" y="14" width="6" height="6" /></>), keywords: 'launchers links bookmarks desktop shortcuts', blurb: 'Links on the desktop, in All apps and in Spotlight.', render: () => <Launchers /> },
     ],
@@ -1879,7 +1888,7 @@ const GROUPS: Group[] = [
       { id: 'agents', label: 'Agents', hue: 'var(--magenta)', account: true, icon: null, app: 'agents', keywords: 'agents ai assistant ollama models quick deep research title thread system prompt agents.md tools memory', blurb: 'The Agents app: its models, what a new thread starts with, and its system prompt.', render: () => <AgentsSettings /> },
       { id: 'calendar', label: 'Calendar', hue: 'var(--red)', account: true, icon: null, app: 'calendar', keywords: 'calendar agenda events view week month day year default new events which calendars show google caldav accounts', blurb: 'Which calendars show, how the Calendar app opens, and where new events go. The accounts are in Integrations.', render: () => <CalendarSettings /> },
       { id: 'contacts', label: 'Contacts', hue: 'var(--orange)', account: true, icon: null, app: 'contacts', keywords: 'contacts people address book default new contacts carddav accounts vcard vcf birthdays groups', blurb: 'Where new contacts go. The address book accounts (Fastmail, iCloud…) are in Integrations.', render: () => <ContactsSettings /> },
-      { id: 'files', label: 'Files', hue: 'var(--blue)', icon: null, app: 'files', keywords: 'files file manager view list grid compact gallery icon size zoom sort order hidden dotfiles sidebar', blurb: 'How Files shows a folder: the view, icon size, sort order, hidden files and the sidebar.', render: () => <FilesPane /> },
+      { id: 'files', label: 'Files', hue: 'var(--blue)', icon: null, app: 'files', keywords: 'files file manager view list grid compact gallery icon size zoom sort order hidden dotfiles sidebar preview pane quick look new windows remember', blurb: 'How Files shows a folder: the view, icon size, sort order, hidden files, the sidebar and the preview pane.', render: () => <FilesPane /> },
       { id: 'games', label: 'Games', hue: 'var(--cyan)', icon: null, app: 'games', keywords: 'games arcade pool gladiator empires at war rts sound music volume mute helpers aim sensitivity difficulty computer health bars rings fog camera edge scrolling key bindings keybinds keys multiplayer name online', blurb: 'Pool, Gladiator and Empires At War: how they play and sound.', render: ({ sub, t }) => <GamesPane sub={sub} t={t} /> },
       { id: 'mail', label: 'Mail', hue: 'var(--blue)', account: true, icon: null, app: 'mail', keywords: 'mail email jmap fastmail read mark as read remote content images allow list allowed senders domain tracking pixels quoted text signature reply all default account identity from ctrl enter send notifications', blurb: 'How Mail reads and writes: when mail counts as read, remote content and the senders you allowed, signatures and replies. The accounts are in Integrations.', render: () => <MailPane /> },
       { id: 'amp', label: 'Omamp', hue: 'var(--green)', icon: null, app: 'amp', keywords: 'omamp music player audio winamp shuffle repeat equalizer eq preset visualizer spectrum oscilloscope time remaining playlist', blurb: 'The music player: shuffle and repeat, the equalizer, and what it shows.', render: () => <AmpPane /> },

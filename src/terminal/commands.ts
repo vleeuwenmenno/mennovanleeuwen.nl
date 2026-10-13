@@ -24,10 +24,14 @@ import { getAccount, signedIn } from '../os/account'
 import { followGoLink, golinksSite, golinksTemplate, golinksUrl, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { age, dynamic, fileKind, HOME, lookup as siteLookup, prettyPath, resolvePath, type DirNode, type Node } from './vfs'
 import { lookup, makeDir, removePath, touchFile, transfer, walk, writeFile } from './fs'
-import { openSeafile } from '../data/seafile'
+import { loadLibraries, getLibraries, openSeafile, sfPath } from '../data/seafile'
 import { importFileOf } from '../data/fileOps'
 import { openImport, pimAppFor } from '../data/pimFiles'
 import { manPages, mountCommands } from './mount'
+import { byteCommands } from './bytecmds'
+import { byteLength } from './bytes'
+import { modeString } from './devices'
+import { readFile } from './read'
 import { nanoCommands } from './nano'
 import { skillsCommands } from './skills'
 import { agentsCommands } from './agents'
@@ -189,14 +193,6 @@ function flags(args: string[]) {
   return { has: (f: string) => set.has(f), rest }
 }
 
-function readFile(ctx: Ctx, path: string, cmd: string): string {
-  const abs = resolvePath(ctx.cwd, path)
-  const node = lookup(abs)
-  if (!node) throw new CmdError(`${cmd}: ${path}: No such file or directory`)
-  if (node.type === 'dir') throw new CmdError(`${cmd}: ${path}: Is a directory`)
-  return node.content()
-}
-
 /** Input text for filters: stdin from a pipe, or the named files. */
 function input(ctx: Ctx, files: string[], cmd: string): string {
   if (files.length) return files.map((f) => readFile(ctx, f, cmd)).join('\n')
@@ -218,6 +214,7 @@ const plainName = (node: Node) => quoteName(node.name) + (node.type === 'dir' ? 
 function colorName(node: Node) {
   const name = quoteName(node.name)
   if (node.type === 'dir') return c('blue', name + '/')
+  if (node.type === 'file' && node.dev) return c('yellow', name)
   if (node.type === 'file' && (node.exec || node.name.endsWith('.game'))) return c('green', name)
   if (node.name.endsWith('.url')) return c('cyan', name)
   if (node.name.startsWith('.')) return c('muted', name)
@@ -356,7 +353,7 @@ export const commands: Record<string, Command> = {
         ['Apps', ['photos', 'mail', 'contacts', 'tasks', 'games']],
         ['About me', ['whoami', 'cv', 'projects', 'pepper', 'contribs', 'recent', 'git', 'heatmap', 'stars', 'contact']],
         ['Files', ['nano', 'touch', 'mkdir', 'cp', 'mv', 'rm', 'tee', 'unzip', 'tar', 'mount', 'umount', 'findmnt', 'lsblk', 'fscrypt']],
-        ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
+        ['Text', ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'xxd', 'echo', 'calc', 'jq', 'sha256sum', 'md5sum']],
         ['Network', ['curl', 'wget', 'whois', 'ping', 'dig', 'host', 'nslookup', 'minecraft']],
         ['Device', ['htop', 'df', 'du', 'free', 'nproc', 'lscpu', 'xrandr', 'ip', 'watch']],
         ['Shell', ['msh', 'test', 'printf', 'read', 'source', 'type', 'sleep', 'seq', 'basename', 'dirname']],
@@ -391,13 +388,15 @@ export const commands: Record<string, Command> = {
       // One entry per line in a pipe (ls | wc -l), columns on the screen, or the long listing.
       const render = (rows: { node: Node; abs: string }[]) => {
         if (!f.has('l')) return ctx.tty ? lsColumns(rows.map((r) => r.node), ctx.size.cols) : rows.map((r) => r.node.name).join('\n')
+        // Devices show `major, minor` where a file shows its size.
+        const sizes = rows.map(({ node: k }) => (k.type === 'file' && k.dev ? `${k.dev.major}, ${k.dev.minor}` : String(k.type === 'file' ? (k.size ?? k.content().length) : 4096)))
+        const sizeWidth = rows.some(({ node: k }) => k.type === 'file' && k.dev) ? Math.max(6, ...sizes.map((x) => x.length)) : 6
         return rows
-          .map(({ node: k, abs: kAbs }) => {
-            const size = k.type === 'file' ? (k.size ?? k.content().length) : 4096
+          .map(({ node: k, abs: kAbs }, i) => {
             const rw = (k.sf && !k.ro) || kAbs.startsWith('/tmp/')
-            const perm = k.type === 'dir' ? (rw ? 'drwxr-xr-x' : 'dr-xr-xr-x') : k.exec ? '-r-xr-xr-x' : rw ? '-rw-r--r--' : '-r--r--r--'
+            const perm = k.type === 'dir' ? (rw ? 'drwxr-xr-x' : 'dr-xr-xr-x') : k.dev ? modeString(k.dev) : k.exec ? '-r-xr-xr-x' : rw ? '-rw-r--r--' : '-r--r--r--'
             const owner = k.sf || kAbs.startsWith(`${HOME}/`) || kAbs.startsWith('/srv/site/') || kAbs.startsWith('/tmp/') ? HANDLE : 'root'
-            return `${perm}  ${owner.padEnd(Math.max(HANDLE.length, 4))}  ${String(size).padStart(6)}  ${colorName(k)}`
+            return `${perm}  ${owner.padEnd(Math.max(HANDLE.length, 4))}  ${sizes[i].padStart(sizeWidth)}  ${colorName(k)}`
           })
           .join('\n')
       }
@@ -419,7 +418,7 @@ export const commands: Record<string, Command> = {
       // Like GNU ls: files named on the line first, then each folder under its own `name:` heading.
       const files = targets.filter((x) => x.node.type === 'file')
       const dirs = targets.filter((x): x is typeof x & { node: DirNode } => x.node.type === 'dir')
-      if (files.length === 1 && !dirs.length && !missing.length) return ctx.tty ? colorName(files[0].node) : files[0].node.name
+      if (files.length === 1 && !dirs.length && !missing.length && !f.has('l')) return ctx.tty ? colorName(files[0].node) : files[0].node.name
       const blocks: string[] = []
       if (files.length) blocks.push(render(files.map((x) => ({ node: x.node, abs: x.abs }))))
       for (const d of dirs) {
@@ -449,49 +448,25 @@ export const commands: Record<string, Command> = {
   pwd: { desc: 'print working directory', run: (ctx) => ctx.cwd },
   cat: {
     desc: 'print files',
-    usage: 'cat <file>...',
-    run: (ctx) => input(ctx, ctx.args, 'cat'),
+    usage: 'cat [file | -]...',
+    run: (ctx) => {
+      // The files one after the other, byte for byte: no newline between them or after the last.
+      const parts = ctx.args.length ? ctx.args.map((f) => (f === '-' && ctx.stdin !== null ? ctx.stdin : readFile(ctx, f, 'cat'))) : [input(ctx, [], 'cat')]
+      const text = parts.join('')
+      if (ctx.raw) return void ctx.raw(text)
+      return text
+    },
   },
   less: { desc: 'alias for cat (no pager here)', hidden: true, run: (ctx) => commands.cat.run(ctx) },
   more: { desc: 'alias for cat', hidden: true, run: (ctx) => commands.cat.run(ctx) },
   bat: { desc: 'alias for cat', hidden: true, run: (ctx) => commands.cat.run(ctx) },
-  head: {
-    desc: 'first lines of input',
-    usage: 'head [-n N] [file]',
-    run: (ctx) => {
-      let n = 10
-      const files: string[] = []
-      for (let i = 0; i < ctx.args.length; i++) {
-        const a = ctx.args[i]
-        if (a === '-n') n = parseInt(ctx.args[++i], 10)
-        else if (/^-\d+$/.test(a)) n = parseInt(a.slice(1), 10)
-        else files.push(a)
-      }
-      return lines(input(ctx, files, 'head')).slice(0, n).join('\n')
-    },
-  },
-  tail: {
-    desc: 'last lines of input',
-    usage: 'tail [-n N] [file]',
-    run: (ctx) => {
-      let n = 10
-      const files: string[] = []
-      for (let i = 0; i < ctx.args.length; i++) {
-        const a = ctx.args[i]
-        if (a === '-n') n = parseInt(ctx.args[++i], 10)
-        else if (/^-\d+$/.test(a)) n = parseInt(a.slice(1), 10)
-        else files.push(a)
-      }
-      return lines(input(ctx, files, 'tail')).slice(-n).join('\n')
-    },
-  },
   wc: {
     desc: 'count lines, words, bytes',
     usage: 'wc [-l|-w|-c] [file]',
     run: (ctx) => {
       const f = flags(ctx.args)
       const text = input(ctx, f.rest, 'wc')
-      const counts = { l: lines(text).length, w: text.split(/\s+/).filter(Boolean).length, c: new TextEncoder().encode(text).length }
+      const counts = { l: lines(text).length, w: text.split(/\s+/).filter(Boolean).length, c: byteLength(text) }
       const picked = (['l', 'w', 'c'] as const).filter((k) => f.has(k))
       return (picked.length ? picked : (['l', 'w', 'c'] as const)).map((k) => String(counts[k]).padStart(6)).join(' ')
     },
@@ -521,7 +496,7 @@ export const commands: Record<string, Command> = {
         for (const r of roots) {
           for (const path of walk(resolvePath(ctx.cwd, r))) {
             const node = lookup(path)
-            if (node?.type !== 'file') continue
+            if (node?.type !== 'file' || node.dev) continue
             lines(node.content()).forEach((l, i) => {
               if (match(l)) out.push(`${c('magenta', prettyPath(path))}:${f.has('n') ? c('green', String(i + 1)) + ':' : ''}${hi(l)}`)
             })
@@ -812,6 +787,17 @@ export const commands: Record<string, Command> = {
       const slug = target.replace(/\/$/, '').split('/').pop() ?? ''
       const abs = resolvePath(ctx.cwd, target)
       const node = lookup(abs)
+      // /dev/seafile/<library> is the library as a device: Files shows what is in it. The other devices say why not.
+      if (node?.type === 'file' && node.dev) {
+        const { dev } = node
+        if (dev.repo) {
+          if (getAccount().seafile && !getLibraries()) await loadLibraries().catch(() => {})
+          ctx.openNewApp('files', { path: sfPath(dev.repo) })
+          return `Opening ${getLibraries()?.find((l) => l.id === dev.repo)?.name ?? slug} in Files`
+        }
+        if (dev.kind === 'block') throw new CmdError(`open: ${target}: a disk is not a document (lsblk lists the disks, Files shows what is mounted)`)
+        throw new CmdError(`open: ${target}: ${node.name === 'null' ? 'nothing to open, it swallows everything' : `a stream of bytes, not a document (try: head -c 16 ${target} | xxd)`}`)
+      }
       // A launcher (.desktop, src/data/launchers.ts) opens what it points at, wherever the file is.
       if (node?.type === 'file' && /\.desktop$/i.test(abs)) {
         const { launch, readLauncherFile } = await import('../data/launchers')
@@ -1281,7 +1267,7 @@ export const commands: Record<string, Command> = {
 }
 
 // The real-network and device tools live in extra.ts.
-Object.assign(commands, extraCommands, findCommands, mountCommands, nanoCommands, unzipCommands, tarCommands, skillsCommands, agentsCommands, vtCommands)
+Object.assign(commands, extraCommands, byteCommands, findCommands, mountCommands, nanoCommands, unzipCommands, tarCommands, skillsCommands, agentsCommands, vtCommands)
 // Menno's CV in the terminal: only on his CV page (src/os/cvMode.ts).
 if (!cvMode()) for (const name of ['cv', 'projects', 'contribs', 'recent', 'stars', 'contact', 'heatmap', 'minecraft', 'mc', 'headlines']) delete commands[name]
 // /bin lists them all, like a real one (hidden easter eggs included; not the odd names like :q).

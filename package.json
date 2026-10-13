@@ -10,6 +10,7 @@
     "data": "node scripts/fetch-data.ts",
     "build:full": "node scripts/fetch-data.ts && tsc -b && tsc -p tsconfig.server.json && vite build",
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
+    "check:frames": "node scripts/frame-stats-check.ts",
     "check:push": "node scripts/webpush-check.ts",
     "check:markdown": "node scripts/markdown-check.ts",
     "icons:notify": "node scripts/notify-icons.ts",

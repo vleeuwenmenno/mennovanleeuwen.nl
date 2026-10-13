@@ -8,6 +8,7 @@
 // - Pictures and links on the OS's chrome can't be dragged out as files or addresses. Rows that
 //   are meant to be dragged (draggable="true": Files, Photos, Archive, the sidebar) still are, and
 //   so are pictures and links in text people read.
+// - A press in selectable text can always start a selection, in Firefox too (onPressText).
 
 const REGION = '.selectable, .copyable, [data-selectable]'
 
@@ -52,7 +53,25 @@ function onDragStart(e: DragEvent) {
   e.preventDefault()
 }
 
+/**
+ * Firefox can't start a drag selection in a selectable area when the page around it is
+ * user-select: none and a text field had the focus before (the terminal's prompt always has
+ * it): the drag selects nothing and the terminal's mouse-up, seeing no selection, puts the caret
+ * back on the prompt. For the press that starts it, the page is selectable; the frame after,
+ * the rules apply again, so dragging on into the chrome still selects none of it.
+ */
+function onPressText(e: MouseEvent) {
+  if (e.button !== 0) return
+  const target = e.target instanceof Element ? e.target : null
+  if (!target?.closest(REGION) || editable(target)) return
+  const root = document.documentElement
+  if (root.dataset.selecting !== undefined) return
+  root.dataset.selecting = ''
+  requestAnimationFrame(() => delete root.dataset.selecting)
+}
+
 export function installSelectionRules() {
   document.addEventListener('keydown', onSelectAll)
   document.addEventListener('dragstart', onDragStart)
+  document.addEventListener('mousedown', onPressText, true)
 }
