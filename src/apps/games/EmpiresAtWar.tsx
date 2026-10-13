@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { WinState } from '../../os/wm'
 import { DIFFICULTY, fleetThink, newBrain, profileOf, think, type Brain } from './empires/ai'
 import { BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, UNIT, WORKS_NAME, buildable, dims, isEngineer, isShip, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type Tier } from './empires/data'
@@ -276,6 +276,77 @@ const TURN_BUFFER = 2
  * structure it's about, followed to where it is now and selected (if it's still there and ours). */
 type Toast = { id: number; text: string; tone: 'good' | 'bad' | 'info'; t: number; at?: { x: number; y: number; unit?: number } }
 
+/** How long a message stays up, in ms. */
+const TOAST_MS = 4500
+
+/**
+ * The battle's messages, kept apart from the battle's own state: a big fight can bring several a
+ * second, and each one redrawing the whole battle screen (every panel and card) cost more than the
+ * messages themselves. Only the ToastStack redraws for them.
+ */
+class ToastStore {
+  private list: Toast[] = []
+  private subs = new Set<() => void>()
+  private set(next: Toast[]) {
+    this.list = next
+    this.subs.forEach((l) => l())
+  }
+  push(t: Toast) {
+    this.set([...this.list.slice(-3), t])
+  }
+  dismiss(id: number) {
+    this.set(this.list.filter((x) => x.id !== id))
+  }
+  /** Drops the messages that have been up long enough (no redraw when none has). */
+  prune(now: number) {
+    if (this.list.some((x) => now - x.t >= TOAST_MS)) this.set(this.list.filter((x) => now - x.t < TOAST_MS))
+  }
+  subscribe = (l: () => void) => {
+    this.subs.add(l)
+    return () => void this.subs.delete(l)
+  }
+  get = () => this.list
+}
+
+/** The messages down the side of the battle. `look` takes the camera to what a message is about. */
+const ToastStack = memo(function ToastStack({ store, low, look }: { store: ToastStore; low: boolean; look: React.RefObject<(at: NonNullable<Toast['at']>) => void> }) {
+  const toasts = useSyncExternalStore(store.subscribe, store.get)
+  // Old toasts fade out.
+  useEffect(() => {
+    if (!toasts.length) return
+    const t = setTimeout(() => store.prune(performance.now()), 1000)
+    return () => clearTimeout(t)
+  }, [toasts, store])
+  return (
+    <div className={`ew-toasts ${low ? 'is-low' : ''}`} aria-live="polite">
+      {toasts.map((t) => {
+        const dismiss = () => store.dismiss(t.id)
+        // A message about a place takes the camera there (click, tap, or Enter), and is done with.
+        const at = t.at
+        const go = at ? () => (look.current(at), dismiss()) : undefined
+        return (
+          // Right-click, or the × that shows on hover, puts it away.
+          <section
+            key={t.id}
+            className={`ew-frame ew-toast is-${t.tone}${go ? ' is-link' : ''}`}
+            role={go ? 'button' : undefined}
+            tabIndex={go ? 0 : undefined}
+            onClick={go}
+            onKeyDown={go && ((e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), e.stopPropagation(), go()))}
+            onContextMenu={(e) => (e.preventDefault(), dismiss())}
+          >
+            <div className="ew-frame-in">
+              {go && <i className="ew-toast-go" aria-hidden>⌖</i>}
+              <span>{t.text}</span>
+              <button className="ew-toast-x" onClick={(e) => (e.stopPropagation(), dismiss())} aria-label="Dismiss">×</button>
+            </div>
+          </section>
+        )
+      })}
+    </div>
+  )
+})
+
 function snapshot(w: World, me: Owner, sel: Set<number>, groups: Map<string, number[]>): Hud {
   const p = w.players[me]
   const RANKED: Tier[] = ['fighter', 'gunship', 'frigate', 'cruiser', 'capital']
@@ -461,7 +532,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const mini = useRef<HTMLCanvasElement>(null)
   const [ready, setReady] = useState(false)
   const [hud, setHud] = useState<Hud>(() => snapshot(world.current, me, selected.current, groups.current))
-  const [toasts, setToasts] = useState<Toast[]>([])
+  const [toasts] = useState(() => new ToastStore())
   const [ui, setUi] = useState({ paused: false, speed: speed.current, mode: 'normal' as Mode, draw: null as 'line' | 'face' | null, menu: false, panel: null as 'settings' | 'keys' | 'howto' | null, tree: false, deploy: deploying.current, placed: placed.current, reserves: !!conquest, economy: false, players: false })
   /** Whether the game was paused before a menu opened (menus pause it, closing them restores that). */
   const pausedBefore = useRef(false)
@@ -482,9 +553,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   bestRef.current = best
   const toastId = useRef(1)
 
-  const toast = (text: string, tone: Toast['tone'] = 'info', at?: Toast['at']) =>
-    (tone === 'bad' || getSettings().toasts) &&
-    setToasts((ts) => [...ts.slice(-3), { id: toastId.current++, text, tone, t: performance.now(), at }])
+  const toast = (text: string, tone: Toast['tone'] = 'info', at?: Toast['at']) => {
+    if (tone === 'bad' || getSettings().toasts) toasts.push({ id: toastId.current++, text, tone, t: performance.now(), at })
+  }
   // A battle kept from before there was one ship size (fought at Classic sizes) can't be carried on:
   // say so, rather than quietly starting a new one.
   useEffect(() => {
@@ -502,6 +573,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       }
     } else centerOn(at.x, at.y)
   }
+  const lookRef = useRef(lookAt)
+  lookRef.current = lookAt
   const setMode = (m: Mode) => {
     mode.current = m
     if (m !== 'place') placing.current = null
@@ -1256,6 +1329,12 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     let last = performance.now()
     let acc = 0
     let hudT = 0
+    // The tactical map is redrawn ten times a second (an alert's pulse included), and at once
+    // whenever what it shows of the view changes (the camera, the filter, its size): ships crawl
+    // across it, so a redraw every frame bought nothing but drawing time.
+    let miniT = 0
+    const miniWas = [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN]
+    let miniFilter = mapFilterRef.current
     let ended = false
     const loop = (now: number) => {
       const dt = Math.min(0.1, (now - last) / 1000)
@@ -1473,7 +1552,15 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       }
       renderer.current.draw(ctx, w, cm, vw, vh, v, dt * (paused.current ? 0 : speed.current))
       sound.ambience(paused.current ? 0 : dt)
-      renderer.current.minimap(mctx, w, me, cm, vw, vh, m.clientWidth, m.clientHeight, lastAlarm.current, mapFilterRef.current, deploying.current && !placed.current ? me : -1)
+      miniT -= dt
+      const hideMine = deploying.current && !placed.current ? me : -1
+      const miniNow = [cm.x, cm.y, cm.zoom, vw, vh, m.clientWidth, m.clientHeight, hideMine]
+      if (miniT <= 0 || miniNow.some((v, i) => v !== miniWas[i]) || mapFilterRef.current !== miniFilter) {
+        miniT = 0.1
+        miniNow.forEach((v, i) => (miniWas[i] = v))
+        miniFilter = mapFilterRef.current
+        renderer.current.minimap(mctx, w, me, cm, vw, vh, m.clientWidth, m.clientHeight, lastAlarm.current, mapFilterRef.current, hideMine)
+      }
 
       hudT -= dt
       if (hudT <= 0 || (w.winner !== -1 && !ended)) {
@@ -1501,13 +1588,6 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready])
-
-  // Old toasts fade out.
-  useEffect(() => {
-    if (!toasts.length) return
-    const t = setTimeout(() => setToasts((ts) => ts.filter((x) => performance.now() - x.t < 4500)), 1000)
-    return () => clearTimeout(t)
-  }, [toasts])
 
   // Keyboard, only while this window is focused.
   useEffect(() => {
@@ -2323,32 +2403,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         {ui.economy && hud.winner === -1 && <EconomyPanel w={w} me={me} onClose={() => setUi((u) => ({ ...u, economy: false }))} />}
         {ui.reserves && hud.winner === -1 && <ReserveTray reserve={hud.reserve} onGrab={grabReserve} onClose={() => setUi((u) => ({ ...u, reserves: false }))} />}
 
-        <div className={`ew-toasts ${ui.paused && !ui.menu && !ui.panel ? 'is-low' : ''}`} aria-live="polite">
-          {toasts.map((t) => {
-            const dismiss = () => setToasts((ts) => ts.filter((x) => x.id !== t.id))
-            // A message about a place takes the camera there (click, tap, or Enter), and is done with.
-            const at = t.at
-            const go = at ? () => (lookAt(at), dismiss()) : undefined
-            return (
-              // Right-click, or the × that shows on hover, puts it away.
-              <section
-                key={t.id}
-                className={`ew-frame ew-toast is-${t.tone}${go ? ' is-link' : ''}`}
-                role={go ? 'button' : undefined}
-                tabIndex={go ? 0 : undefined}
-                onClick={go}
-                onKeyDown={go && ((e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), e.stopPropagation(), go()))}
-                onContextMenu={(e) => (e.preventDefault(), dismiss())}
-              >
-                <div className="ew-frame-in">
-                  {go && <i className="ew-toast-go" aria-hidden>⌖</i>}
-                  <span>{t.text}</span>
-                  <button className="ew-toast-x" onClick={(e) => (e.stopPropagation(), dismiss())} aria-label="Dismiss">×</button>
-                </div>
-              </section>
-            )
-          })}
-        </div>
+        <ToastStack store={toasts} low={ui.paused && !ui.menu && !ui.panel} look={lookRef} />
         {ui.mode !== 'normal' && (
           <div className="ew-modehint">
             {ui.mode === 'attack' && !mySelection().some((u) => isShip(u.t))

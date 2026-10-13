@@ -816,7 +816,8 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     setToasts((ts) => [...ts.slice(-4), t])
   }
   useEffect(() => {
-    const id = window.setInterval(() => setToasts((ts) => ts.filter((t) => performance.now() - t.t < 7000)), 1000)
+    // The same list back when none has run out, so a quiet second doesn't redraw the whole map.
+    const id = window.setInterval(() => setToasts((ts) => (ts.some((t) => performance.now() - t.t >= 7000) ? ts.filter((t) => performance.now() - t.t < 7000) : ts)), 1000)
     return () => clearInterval(id)
   }, [])
 
@@ -834,6 +835,19 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     }
   }, [g])
 
+  /** Whether the player clicked, tapped, typed or scrolled since the last redraw (see the clock). */
+  const poked = useRef(true)
+  useEffect(() => {
+    const poke = () => {
+      poked.current = true
+    }
+    const kinds = ['pointerdown', 'pointerup', 'click', 'keydown', 'keyup', 'wheel'] as const
+    for (const k of kinds) window.addEventListener(k, poke, { capture: true, passive: true })
+    return () => {
+      for (const k of kinds) window.removeEventListener(k, poke, { capture: true })
+    }
+  }, [])
+
   // The clock: the galaxy runs while nothing holds it; the camera glides to where it was sent.
   useEffect(() => {
     let raf = 0
@@ -845,7 +859,8 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       const dt = Math.min(1, (now - last) / 1000)
       last = now
       const st = state.current
-      if (!st.paused && !st.menu && g.pending < 0 && g.winner === -1) {
+      const running = !st.paused && !st.menu && g.pending < 0 && g.winner === -1
+      if (running) {
         tickGalaxy(g, dt * st.speed)
         saveT += dt
         if (saveT > 20) {
@@ -968,14 +983,21 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
           if (getSettings().daySound) sound.payday()
         }
       }
-      if (g.events.length) {
+      const news = g.events.length > 0
+      if (news) {
         g.events.length = 0
         saveGalaxy(g)
       }
       drawT -= dt
       if (drawT <= 0) {
         drawT = 0.1
-        setFrame((n) => n + 1)
+        // With the clock held (paused, a menu, a battle waiting) the galaxy only changes when the
+        // player does something, and some orders change it without a redraw of their own: redraw
+        // after any input then, rather than ten times a second for nothing.
+        if (running || news || poked.current) {
+          poked.current = false
+          setFrame((n) => n + 1)
+        }
       }
       raf = requestAnimationFrame(loop)
     }
