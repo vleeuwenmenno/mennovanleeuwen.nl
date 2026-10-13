@@ -152,23 +152,20 @@ export function Photos({ win }: { win: WinState }) {
   const tileActs: TileActions = {
     click: (item, e) => {
       if (suppressClick.current) return void (suppressClick.current = false)
-      const touch = lastPointer.current === 'touch'
-      if (touch) return selecting ? toggle(item.id) : openPhoto(item.id)
+      // Shift and Ctrl/Cmd select whatever is selected; a plain click or tap opens, or (once
+      // something is selected) takes the photo in or out. The circle is how selecting starts.
       if (e.shiftKey) addRange(item.id)
-      else if (e.ctrlKey || e.metaKey) toggle(item.id)
-      else setSel({ ids: new Set([item.id]), anchor: item.id })
+      else if (e.ctrlKey || e.metaKey || selecting) toggle(item.id)
+      else openPhoto(item.id)
     },
     check: (item, e) => (e.shiftKey && sel.anchor ? addRange(item.id) : toggle(item.id)),
-    open: (item) => lastPointer.current !== 'touch' && openPhoto(item.id),
     menu: (item, e) => {
       // A finger's long press selects (below); the browser's own menu for it is not wanted.
       if (lastPointer.current === 'touch') return e.preventDefault()
-      if (!sel.ids.has(item.id)) setSel({ ids: new Set([item.id]), anchor: item.id })
       openContextMenu(e, photoMenu(ctx, targetOf(item.id)))
     },
     drag: (item, e) => {
       const ids = targetOf(item.id)
-      if (!sel.ids.has(item.id)) setSel({ ids: new Set([item.id]), anchor: item.id })
       const d = dragOf(ctx, ids)
       if (!d.items.length) return e.preventDefault()
       startNativeDrag(e, d.items, 'photos', { files: d.files, text: ids.length === 1 ? (d.items[0].kind === 'file' ? d.items[0].path : '') : undefined })
