@@ -3,9 +3,9 @@
 // models/fx.ts touch a canvas.
 //
 // Model space: the origin is the middle of the unit's box (dims() in data.ts), x runs right and y
-// runs down, so the nose of a ship points at negative y, the way the sprites face. Ships are
-// drawn on a box whose long side is 100 units; a station uses the pixels of the frame its sprites
-// were cut from, so its modules can be placed exactly where data.ts puts them.
+// runs down, so the nose of a ship points at negative y, the way ships face on the map at rest. Ships
+// are drawn on a box whose long side is 100 units; a station uses the pixels of its frame (data.ts
+// STATIONS), so its modules can be placed exactly where data.ts puts them.
 
 export type Pt = [number, number]
 
@@ -63,13 +63,18 @@ export type Part = {
   noOutline?: boolean
   /** Only on a station from this level up. */
   level?: number
+  /** False: leaves no burnt patch on the hull where it came off (a module's own parts, whose
+   * socket shows the damage instead). */
+  scar?: false
 }
 
 /**
- * What sits on a hardpoint: a turret, shield generator, hangar or station module. Mounts are
+ * What sits on a hardpoint: a turret, shield generator, hangar or station module. An expansion
+ * module (hybrid bases) is drawn as parts of the structure instead, its mount a 'collar' that shows
+ * nothing until the module is shot off, then a burnt stump on its socket. Mounts are
  * painted on their own (turrets turn to aim), one per hardpoint, in the unit's hardpoint order.
  */
-export type MountDesign = 'flak' | 'turbo' | 'ion' | 'shield' | 'hangar' | 'refinery' | 'dock' | 'sensor' | 'drill' | 'engine'
+export type MountDesign = 'flak' | 'turbo' | 'ion' | 'shield' | 'hangar' | 'refinery' | 'dock' | 'sensor' | 'drill' | 'engine' | 'collar'
 export type Mount = {
   /** The hardpoint's index in the unit's `hardpoints`. */
   hp: number

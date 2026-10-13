@@ -5,7 +5,6 @@
 // an undefended planet is taken by staying in its orbit for a while. The galaxy runs in real time,
 // in seconds; a day is DAY seconds. No DOM, so headless sims can load it.
 
-import type { ShipSizes } from './models/sizes.ts'
 import { PROFILES, PROFILE_IDS, type Difficulty, type Profile } from './ai.ts'
 import {
   FACTIONS, MODULE, MODULE_FX, REBUILD, UNIT, WORKS_NAME, buildable, builtAt, needsModule, stationType, unitOf, yardOf, yardType,
@@ -190,8 +189,7 @@ export type Galaxy = {
   pending: number
   events: GalaxyEvent[]
   aiT: number[]
-  /** `sizes`: the ship sizes its fleet battles are fought at (models/sizes.ts); left out, Classic. */
-  rules: { blockade: BlockadeRule; frontline: boolean; sizes?: ShipSizes }
+  rules: { blockade: BlockadeRule; frontline: boolean }
 }
 
 export type GalaxySize = 'short' | 'standard' | 'long'
@@ -362,7 +360,7 @@ function farthestPair(n: number, lanes: [number, number][]) {
   return best
 }
 
-export type NewGalaxy = { choice: GalaxyChoice; size: GalaxySize; faction: FactionId; difficulty: Difficulty; credits: number; name?: string; blockade?: BlockadeRule; frontline?: boolean; sizes?: ShipSizes }
+export type NewGalaxy = { choice: GalaxyChoice; size: GalaxySize; faction: FactionId; difficulty: Difficulty; credits: number; name?: string; blockade?: BlockadeRule; frontline?: boolean }
 
 export function newGalaxy(opts: NewGalaxy): Galaxy {
   const seed = opts.choice.kind === 'generated' ? opts.choice.seed : 7
@@ -385,7 +383,7 @@ export function newGalaxy(opts: NewGalaxy): Galaxy {
     pending: -1,
     events: [],
     aiT: [0, 2],
-    rules: { blockade: opts.blockade ?? 'majority', frontline: opts.frontline ?? true, ...(opts.sizes === 'big' ? { sizes: opts.sizes } : {}) },
+    rules: { blockade: opts.blockade ?? 'majority', frontline: opts.frontline ?? true },
   }
   defs.forEach((d, id) => {
     const sys: StarSystem = { id, name: d.name, x: d.x, y: d.y, star: d.star, planets: [] }
@@ -2308,6 +2306,9 @@ function clean(v: Galaxy | null): Galaxy | null {
     if (typeof f.join !== 'number') delete f.join
   }
   v.fleets = v.fleets.filter((f) => f.ships.length)
+  // Saves from when campaigns picked their ship sizes: every campaign is fought at the one size now
+  // (models/sizes.ts), a Classic one too. Its fleets carry over as they are.
+  if (v.rules) delete (v.rules as { sizes?: unknown }).sizes
   // Saves from before the grid: every fleet is laid out, biggest ships first, its held back ships
   // still held back; what doesn't fit makes another fleet beside it.
   layoutFleets(v)

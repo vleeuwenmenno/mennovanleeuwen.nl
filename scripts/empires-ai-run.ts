@@ -1,4 +1,4 @@
-// AI sanity run: whole AI-vs-AI skirmishes (Big ship sizes) to the end, headless. Reports the winner,
+// AI sanity run: whole AI-vs-AI skirmishes to the end, headless. Reports the winner,
 // how long it took, and each side's peak fleet (pop and ship count) against its cap.
 //
 //   node scripts/empires-ai-run.ts [minutes]
@@ -19,7 +19,7 @@ for (const [diff, pa, pb, seed] of runs) {
   const w = newWorld(map, [
     { faction: 'republic', team: 0, spawn: 0, incomeMul: DIFFICULTY[diff].income },
     { faction: 'droid', team: 1, spawn: 1, incomeMul: DIFFICULTY[diff].income },
-  ], { seed, sizes: 'big' })
+  ], { seed })
   const brains = [newBrain(0, diff, pa), newBrain(1, diff, pb)]
   const peakPop = [0, 0]
   const peakShips = [0, 0]

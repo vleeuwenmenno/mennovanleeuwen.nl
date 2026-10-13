@@ -1,4 +1,3 @@
-import { SHIP_SIZE_BLURB, SHIP_SIZE_NAMES, SHIP_SIZES, type ShipSizes } from './models/sizes.ts'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DIFFICULTY, PROFILES, PROFILE_IDS, profileOf, type Difficulty, type Profile } from './ai'
 import { CREDIT_STEPS, FACTIONS, type FactionId } from './data'
@@ -28,8 +27,7 @@ export type Slot = { kind: SlotKind; faction: FactionId; team: 0 | 1; difficulty
 /** `map` is a fixed map's id, or GENERATED to build one from `gen`. `areas` are the start areas
  * drawn in the lobby, by slot; a slot without one starts round its spawn point. `names`, by slot:
  * who plays there, for a multiplayer battle carried on offline (otherwise "You", "Enemy 2"…). */
-/** `sizes`: the battle's ship sizes (models/sizes.ts); left out, Classic. */
-export type Setup = { map: string; slots: Slot[]; credits: number; gen: MapRules; areas: (Rect | null)[]; areasFor?: string; names?: (string | null)[]; sizes?: ShipSizes }
+export type Setup = { map: string; slots: Slot[]; credits: number; gen: MapRules; areas: (Rect | null)[]; areasFor?: string; names?: (string | null)[] }
 
 /** Which map, at which size, start areas were drawn for: areas saved for anything else (another
  * map, or this one before it was resized) are dropped rather than landing in the wrong place. */
@@ -76,11 +74,9 @@ function lastSetup(): Setup {
       slots: slotsFor(map, slots.slice(0, map.spawns.length)).map((s, i) => (i ? { ...s, kind: s.kind === 'you' ? 'ai' : s.kind } : s)),
       credits,
       gen,
-      // Big is the default; a setup that chose Classic keeps it.
-      sizes: v?.sizes === 'classic' ? 'classic' : 'big',
     }
   } catch {
-    return { map: MAPS[0].id, slots: slotsFor(MAPS[0]), credits: 1600, gen: { ...DEFAULT_RULES }, areas: [], sizes: 'big' }
+    return { map: MAPS[0].id, slots: slotsFor(MAPS[0]), credits: 1600, gen: { ...DEFAULT_RULES }, areas: [] }
   }
 }
 
@@ -490,10 +486,6 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
       <div className="ew-row">
         <span>{coarse ? 'Weapon ranges of selected ships' : 'Show weapon ranges on hover'}</span>
         <Seg label="Weapon ranges" value={s.ranges} options={[[true, 'On'], [false, 'Off']]} onChange={(v) => set({ ranges: v })} />
-      </div>
-      <div className="ew-row">
-        <span>Procedural models (preview)</span>
-        <Seg label="Procedural models" value={s.models} options={[[true, 'On'], [false, 'Sprites']]} onChange={(v) => set({ models: v })} />
       </div>
       <div className="ew-row">
         <span>Messages</span>
@@ -1270,9 +1262,6 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
             <input type="range" min={0} max={CREDIT_STEPS.length - 1} step={1} value={step} onChange={(e) => update({ ...setup, credits: CREDIT_STEPS[Number(e.target.value)] })} aria-label="Starting credits" />
             <b>{setup.credits.toLocaleString('en-US')}</b>
           </label>
-          <h5>Ship sizes</h5>
-          <Seg label="Ship sizes" value={setup.sizes ?? 'classic'} options={SHIP_SIZES.map((v) => [v, SHIP_SIZE_NAMES[v]])} onChange={(v) => (sound.click(), update({ ...setup, sizes: v }))} />
-          <p className="ew-muted ew-small">{SHIP_SIZE_BLURB[setup.sizes ?? 'classic']}</p>
           <div className="ew-launch">
             <span className="ew-muted ew-small">
               {enemies ? `You${allies ? ` and ${allies} ${allies === 1 ? 'ally' : 'allies'}` : ''} against ${enemies} ${enemies === 1 ? 'enemy' : 'enemies'}` : 'Add at least one enemy.'}

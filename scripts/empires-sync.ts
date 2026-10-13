@@ -1,9 +1,7 @@
 // Checks that Empires At War battles are deterministic, which multiplayer depends on: every
 // player's machine runs the same battle from the same commands, so two copies must never drift.
 //
-//   node scripts/empires-sync.ts [minutes] [big]
-//
-// With `big` (pnpm check:empires-big) the battle is fought with Big ship sizes (models/sizes.ts).
+//   node scripts/empires-sync.ts [minutes]
 //
 // 1. Two copies of the same AI-only battle run side by side and must hash the same every second.
 //    This catches state kept outside the world (module-level counters, Math.random).
@@ -14,17 +12,16 @@
 import { MAPS } from '../src/apps/games/empires/maps.ts'
 import { STEP, newWorld, stateHash, tick, type World } from '../src/apps/games/empires/sim.ts'
 import { PROFILE_IDS, newBrain, think, type Brain } from '../src/apps/games/empires/ai.ts'
-import { restoreBrain, restoreWorld, snapBrain, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
+import { outdatedSnapshot, restoreBrain, restoreWorld, snapBrain, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
 
 const minutes = Number(process.argv[2] ?? 6)
-const big = process.argv[3] === 'big'
 const ticks = Math.round((minutes * 60) / STEP)
 const map = MAPS.find((m) => m.spawns.length === 4) ?? MAPS[0]
 const seats = map.spawns.map((_, i) => ({ faction: i % 2 ? ('droid' as const) : ('republic' as const), team: i % 2, spawn: i }))
 
 type Copy = { w: World; brains: Brain[] }
 const make = (): Copy => ({
-  w: newWorld(map, seats, { seed: 4242, ...(big ? { sizes: 'big' as const } : {}) }),
+  w: newWorld(map, seats, { seed: 4242 }),
   // Every AI profile plays in it: defensive and balanced on one side, offensive and balanced on the other.
   brains: seats.map((_, i) => newBrain(i, i % 2 ? 'hard' : 'medium', PROFILE_IDS[[0, 2, 1, 1][i % 4]])),
 })
@@ -65,7 +62,20 @@ for (let t = 1; t <= ticks && a.w.winner === -1; t++) {
 }
 const secs = (performance.now() - started) / 1000
 const alive = a.w.units.filter((u) => !u.dead).length
-console.log(`${map.name}${big ? ' (Big ship sizes)' : ''}: ${(a.w.time / 60).toFixed(1)} min simulated in ${secs.toFixed(1)} s (3 copies), ${alive} units alive, winner ${a.w.winner}`)
+console.log(`${map.name}: ${(a.w.time / 60).toFixed(1)} min simulated in ${secs.toFixed(1)} s (3 copies), ${alive} units alive, winner ${a.w.winner}`)
 console.log(`final hash ${stateHash(a.w).toString(16)}`)
+// Battles saved before there was one ship size: one fought at Big sizes (snapshot version 1 with
+// `sizes: 'big'`) carries on; one fought at Classic sizes is refused, and said to be outdated.
+const saved = JSON.parse(snapshotWorld(a.w))
+const asOld = (sizes?: string) => JSON.stringify({ ...saved, v: 1, ...(sizes ? { sizes } : {}) })
+const oldBig = restoreWorld(asOld('big'))
+if (!oldBig || stateHash(oldBig) !== stateHash(a.w) || outdatedSnapshot(asOld('big'))) {
+  console.error('a battle saved at Big ship sizes before there was only one no longer carries on')
+  failed = true
+}
+if (restoreWorld(asOld()) || restoreWorld(asOld('classic')) || !outdatedSnapshot(asOld()) || outdatedSnapshot(snapshotWorld(a.w))) {
+  console.error('a battle saved at Classic ship sizes is not refused as outdated')
+  failed = true
+}
 if (failed) process.exit(1)
-console.log('in sync')
+console.log('in sync; old saves: Big carries on, Classic is refused')

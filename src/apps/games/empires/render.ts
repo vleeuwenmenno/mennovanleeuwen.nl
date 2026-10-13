@@ -1,23 +1,21 @@
-import { CYARD_SOCKETS, MODULE, STATION_SOCKETS, YARD_SOCKETS, FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, moduleSprite, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
+import { CYARD_SOCKETS, MODULE, STATION_SOCKETS, YARD_SOCKETS, FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
 import { RETREAT_TIME, atHome, building, foes, hpPos, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
-import { BREAK_WEIGHTS, hullState, modelFor, unitForSprite, wreckState, type HullState, type Model } from './models/index.ts'
-import { bigType, sizedType } from './models/sizes.ts'
+import { BREAK_WEIGHTS, breakPieces, hullState, modelFor, unitForSprite, wreckState, type HullState, type Model } from './models/index.ts'
+import { YARD_BERTHS } from './models/base.ts'
 import { ModelFx } from './models/fx.ts'
-import { PALETTES } from './models/kit.ts'
-import { drawHull, drawMounts, liveEngines } from './models/paint.ts'
+import { PALETTES, hash, rng as seeded } from './models/kit.ts'
+import { drawHull, drawMounts, drawPiece, liveEngines, outlineOf } from './models/paint.ts'
 import { averageRings, moduleRing } from './ranges.ts'
 
 // Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, nebulas
-// and asteroid fields, ore, rocks and beacons, the ships (procedural cel-shaded models where a unit
-// has one, see models/, otherwise generated sprites rotated in code; with engine glow, shield
-// shimmer and hardpoint markers), laser bolts, explosions and smoke, then fog of war on top. The
-// minimap is drawn here too.
+// and asteroid fields, ore, rocks and beacons, the ships and structures (procedural cel-shaded
+// models, see models/; with engine glow, shield shimmer and hardpoint markers), laser bolts,
+// explosions and smoke, then fog of war on top. The minimap is drawn here too. The only pictures it
+// loads are the world's: the backdrop, the rocks, ore and beacons, and the planets.
 
 const BASE = '/games/empires/'
-export const spriteUrl = (name: string) =>
-  name.startsWith('mod-') ? `${BASE}modules/${name.slice(4)}.webp` : `${BASE}${/^(mine|defense)-/.test(name) ? 'world' : 'ships'}/${name}.webp`
 /** The order icons on map tags, the same shapes as the order cursors (32 px boxes). Made on first
  * use: Path2D only exists in a browser. */
 const TAG_PATHS = {
@@ -88,8 +86,6 @@ export type View = {
   /** Weapon range rings: round the ship or structure under the pointer, round the selected ones
    * (touch, which has no hover), or none (the setting is off). */
   ranges?: 'hover' | 'selected' | 'off'
-  /** Draw units that have a procedural model with it (the default), or every unit as its sprite. */
-  models?: boolean
   /** Hybrid bases: a yard being placed, its ghost where it would go (green where it can, red with
    * why where it can't) and the Command Station's build radius round it. */
   place?: { t: UnitType; x: number; y: number; a: number; ok: boolean; why: string | null; cost: number; rebuild: boolean; ring: { x: number; y: number; r: number } } | null
@@ -109,10 +105,9 @@ type CloudLayer = { img: HTMLCanvasElement; x: number; y: number; r: number; spi
 type TerrainArt = { map: MapDef; clouds: CloudLayer[]; rocks: FieldRock[]; fields: Patch[] }
 
 const TAU = Math.PI * 2
-/** A bolt's length and width in world units, by kind. Under Big ship sizes they are slimmer and
- * longer, so they read as thin streaks of light next to the big hulls rather than fat dashes. */
-const BOLTS = { turbo: [46, 5], flak: [10, 2.2], laser: [22, 2.6] } as const
-const BOLTS_BIG = { turbo: [72, 3], flak: [15, 1.5], laser: [30, 1.7] } as const
+/** A bolt's length and width in world units, by kind: slim and long, so they read as thin streaks
+ * of light next to the big hulls rather than fat dashes. */
+const BOLTS = { turbo: [72, 3], flak: [15, 1.5], laser: [30, 1.7] } as const
 /** An undamaged hull. */
 const FRESH: HullState = { detached: 0, scorch: 0, variant: 0 }
 
@@ -219,7 +214,7 @@ export function drawTerrainOverview(g: CanvasRenderingContext2D, map: MapDef, ox
 }
 type Ping = { x: number; y: number; t: number; color: string }
 /** A ship jumping in, on the renderer's clock: charging from `start`, dropping out at `at`. */
-type Warp = { x: number; y: number; a: number; size: number; sprite: string; unit: string; glow: string; start: number; at: number }
+type Warp = { x: number; y: number; a: number; size: number; unit: string; glow: string; start: number; at: number }
 /** Seconds of the streak in before a ship drops out, and of the glow it leaves after. */
 const STREAK = 0.32
 const AFTER = 1.1
@@ -301,7 +296,6 @@ export class Renderer {
   private warps: Warp[] = []
   /** Ships jumping out, on the renderer's clock from when they went. */
   private departs: Omit<Warp, 'at'>[] = []
-  private dark = new Map<string, HTMLCanvasElement>()
   /** Procedural models' debris and broken hulls (all on screen only, see models/fx.ts). */
   private fx = new ModelFx()
   /** Every modelled unit seen last frame, with what had come off it then, so a part that comes
@@ -310,21 +304,11 @@ export class Renderer {
   /** Modelled warships that just died where we could see, until their wreck shows up: what had
    * already come off them carries over to the hulk. */
   private deaths: { x: number; y: number; det: number; at: number }[] = []
-  /** Whether units are drawn with their models this frame (the setting). */
-  private modelsOn = true
-  /** The battle's ship sizes (sizes.ts), as of the last frame. */
-  private sizes: World['sizes'] = undefined
-  /** A unit type by id, at this battle's ship sizes. */
-  private typeOf(id: string) {
-    return sizedType(id, this.sizes)
-  }
-
-  constructor(sprites: string[]) {
-    for (const s of sprites) this.imgs.set(s, load(spriteUrl(s)))
+  constructor() {
     for (const s of WORLD_SPRITES) this.imgs.set(s, load(`${BASE}world/${s}.webp`))
   }
 
-  /** Resolves once every sprite has loaded (or failed), for a loading screen. */
+  /** Resolves once the world's pictures have loaded (or failed), for a loading screen. */
   ready() {
     return Promise.all([...this.imgs.values()].map((i) => (i.complete ? Promise.resolve() : new Promise<void>((r) => ((i.onload = () => r()), (i.onerror = () => r()))))))
   }
@@ -401,7 +385,6 @@ export class Renderer {
 
   /** Turns the sim's events into effects. Only what the viewer can see makes sparks. */
   consume(events: SimEvent[], w: World, me: Owner) {
-    this.sizes = w.sizes
     const seen = (x: number, y: number) => {
       const team = w.players[me].team
       for (const u of w.units) if (w.players[u.owner].team === team && (u.x - x) ** 2 + (u.y - y) ** 2 < sensorOf(u) ** 2) return true
@@ -424,10 +407,10 @@ export class Renderer {
       } else if (e.k === 'boom') {
         if (!seen(e.x, e.y)) continue
         const color = e.owner === undefined ? '#888' : w.players[e.owner].faction === 'republic' ? '#d8d2c8' : '#c8b48c'
-        // A unit drawn with its model breaks into its own fragments (see trackModels): the old
-        // flecks of debris are only for sprites. The battle's event doesn't say which unit it was,
-        // so it is the one we were following that died on that spot.
-        const modelled = this.modelsOn && [...this.tracked.values()].some((tr) => tr.u.dead && Math.abs(tr.u.x - e.x) < 1 && Math.abs(tr.u.y - e.y) < 1)
+        // A unit we saw breaks into its own fragments (see trackModels); flecks of debris for one we
+        // weren't following. The battle's event doesn't say which unit it was, so it is the one we
+        // were following that died on that spot.
+        const modelled = [...this.tracked.values()].some((tr) => tr.u.dead && Math.abs(tr.u.x - e.x) < 1 && Math.abs(tr.u.y - e.y) < 1)
         if (e.tier === 'fighter' || e.tier === 'gunship') {
           this.blast(e.x, e.y, e.size * 1.2)
           if (!modelled) this.debris(e.x, e.y, e.size * 2, color)
@@ -444,18 +427,18 @@ export class Renderer {
         }
       } else if (e.k === 'warp') {
         if (e.owner !== me && !seen(e.x, e.y)) continue
-        const t = this.typeOf(e.unit)
-        this.warps.push({ x: e.x, y: e.y, a: e.a, size: t.size, sprite: t.sprite, unit: t.id, glow: FACTIONS[t.faction].glow, start: this.clock, at: this.clock + e.delay })
+        const t = UNIT[e.unit]
+        this.warps.push({ x: e.x, y: e.y, a: e.a, size: t.size, unit: t.id, glow: FACTIONS[t.faction].glow, start: this.clock, at: this.clock + e.delay })
       } else if (e.k === 'retreated') {
         if (e.owner !== me && !seen(e.x, e.y)) continue
-        const t = this.typeOf(e.unit)
+        const t = UNIT[e.unit]
         const glow = FACTIONS[t.faction].glow
-        this.departs.push({ x: e.x, y: e.y, a: e.a, size: t.size, sprite: t.sprite, unit: t.id, glow, start: this.clock })
+        this.departs.push({ x: e.x, y: e.y, a: e.a, size: t.size, unit: t.id, glow, start: this.clock })
         this.add({ kind: 'flash', x: e.x, y: e.y, life: 0.3, size: t.size * 0.7, grow: t.size * 0.4, color: glow })
         this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.6, size: t.size * 0.3, grow: t.size * 1.8, color: '#e8f6ff' })
       } else if (e.k === 'arrived') {
         if (e.owner !== me && !seen(e.x, e.y)) continue
-        this.arrival(e.x, e.y, e.a, this.typeOf(e.unit).size, FACTIONS[UNIT[e.unit].faction].glow, e.field)
+        this.arrival(e.x, e.y, e.a, UNIT[e.unit].size, FACTIONS[UNIT[e.unit].faction].glow, e.field)
       } else if (e.k === 'rankUp') {
         this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.8, size: 20, grow: 90, color: '#f2c14a' })
       } else if (e.k === 'hpdown') {
@@ -520,12 +503,8 @@ export class Renderer {
   }
 
   draw(ctx: CanvasRenderingContext2D, w: World, cam: Camera, vw: number, vh: number, view: View, dt: number) {
-    this.sizes = w.sizes
     this.step(dt, w)
-    // Switched back on: start tracking afresh, so nothing that happened meanwhile bursts now.
-    if (view.models !== false && !this.modelsOn) this.tracked.clear()
-    this.modelsOn = view.models !== false
-    if (this.modelsOn) this.trackModels(w, view)
+    this.trackModels(w, view)
     const z = cam.zoom
     const zdpr = z * (window.devicePixelRatio || 1)
     ctx.save()
@@ -692,13 +671,9 @@ export class Renderer {
     for (const h of w.wrecks) {
       if (!onScreen(h.x, h.y, h.size)) continue
       const fade = Math.min(1, h.decay / 20)
-      // A modelled warship's hull lies here as it broke; anything else is its sprite, burnt dark.
+      // The warship's hull lies here as it broke.
       this.fx.setAlpha(h.id, fade)
-      if (!this.modelsOn || !this.fx.drawHulk(ctx, h.id, zdpr)) {
-        ctx.filter = 'brightness(0.42) saturate(0.35) sepia(0.25)'
-        this.drawSprite(ctx, h.sprite, h.x, h.y, h.rot + this.clock * 0.012 * (h.id % 2 ? 1 : -1), h.size, z, 0.95 * fade)
-        ctx.filter = 'none'
-      }
+      this.fx.drawHulk(ctx, h.id, zdpr)
       const rr = h.size * 0.55 + 20
       ctx.globalAlpha = fade
       ctx.strokeStyle = h.team === myTeamW ? '#f2c14a' : 'rgba(242,193,74,0.4)'
@@ -728,7 +703,7 @@ export class Renderer {
       ctx.globalAlpha = 1
     }
     // Hulks whose wreck was just salvaged or drifted off, fading out.
-    if (this.modelsOn) this.fx.drawFading(ctx, zdpr)
+    this.fx.drawFading(ctx, zdpr)
     this.drawRuins(ctx, w, view, z, zdpr, onScreen)
 
     // Ore, with its survey ring: dashed while unclaimed, in the holder's colour once surveyed, and
@@ -1079,10 +1054,11 @@ export class Renderer {
     }
 
     // Support ships' repair beams: a faint green tether to each ship being patched, pulsing.
+    // (Engineers weld with beams of their own, see drawWelds.)
     const myTeamB = w.players[view.me].team
     ctx.lineWidth = 2 / z
     for (const u of w.units) {
-      if (!u.mending.length || !u.seen[myTeamB]) continue
+      if (!u.mending.length || !u.seen[myTeamB] || isEngineer(u.t)) continue
       for (const id of u.mending) {
         const o = w.byId.get(id)
         if (!o || !onScreen((u.x + o.x) / 2, (u.y + o.y) / 2, 600)) continue
@@ -1112,8 +1088,9 @@ export class Renderer {
     const shown = w.units.filter((u) => u.seen[myTeam] && u.owner !== view.hideOwner && onScreen(u.x, u.y, u.t.size))
     shown.sort((a, b) => TIER_ORDER[a.t.tier] - TIER_ORDER[b.t.tier])
     for (const u of shown) this.drawUnit(ctx, u, w, z, view)
+    this.drawWelds(ctx, w, z, myTeam, onScreen)
     // Parts blown off and fragments of small craft, over the ships.
-    if (this.modelsOn) this.fx.draw(ctx, zdpr, onScreen)
+    this.fx.draw(ctx, zdpr, onScreen)
     this.drawWarps(ctx, z)
     this.drawDeparts(ctx, z)
     for (const t of tags) this.tag(...t)
@@ -1173,7 +1150,7 @@ export class Renderer {
         ctx.fill()
         continue
       }
-      const [len, width] = (w.sizes === 'big' ? BOLTS_BIG : BOLTS)[s.kind === 'turbo' ? 'turbo' : s.kind === 'flak' ? 'flak' : 'laser']
+      const [len, width] = BOLTS[s.kind === 'turbo' ? 'turbo' : s.kind === 'flak' ? 'flak' : 'laser']
       const min = 1.2 / z
       ctx.strokeStyle = s.kind === 'flak' ? '#ffcf70' : col
       ctx.globalAlpha = 0.45
@@ -1442,32 +1419,19 @@ export class Renderer {
     ctx.restore()
   }
 
-  /** A ship type drawn whole and undamaged (its model where it has one and models are on, else its
-   * sprite), optionally stretched along its length: for jumps into and out of hyperspace. */
-  private drawShip(ctx: CanvasRenderingContext2D, unit: string, sprite: string, x: number, y: number, rot: number, size: number, z: number, alpha: number, stretch?: [number, number]) {
-    const t = UNIT[unit] ? this.typeOf(unit) : undefined
-    const m = this.modelsOn && t ? modelFor(t) : null
+  /** A ship type drawn whole and undamaged, optionally stretched along its length: for jumps into
+   * and out of hyperspace. */
+  private drawShip(ctx: CanvasRenderingContext2D, unit: string, x: number, y: number, rot: number, size: number, z: number, alpha: number, stretch?: [number, number]) {
+    const t = UNIT[unit]
+    const m = t ? modelFor(t) : null
+    if (!m) return
     const zdpr = z * (window.devicePixelRatio || 1)
-    if (!stretch) {
-      if (m) drawHull(ctx, m, x, y, rot, size, zdpr, FRESH, { alpha })
-      else this.drawSprite(ctx, sprite, x, y, rot, size, z, alpha)
-      return
-    }
+    if (!stretch) return drawHull(ctx, m, x, y, rot, size, zdpr, FRESH, { alpha })
     ctx.save()
     ctx.translate(x, y)
     ctx.rotate(rot)
     ctx.scale(stretch[0], stretch[1])
-    if (m) drawHull(ctx, m, 0, 0, 0, size, zdpr, FRESH, { alpha, lightRot: rot })
-    else {
-      const img = this.sprite(sprite, size * zdpr)
-      if (img) {
-        const nw = img instanceof HTMLImageElement ? img.naturalWidth : img.width
-        const nh = img instanceof HTMLImageElement ? img.naturalHeight : img.height
-        const sc = size / Math.max(nw, nh)
-        ctx.globalAlpha = alpha
-        ctx.drawImage(img, (-nw * sc) / 2, (-nh * sc) / 2, nw * sc, nh * sc)
-      }
-    }
+    drawHull(ctx, m, 0, 0, 0, size, zdpr, FRESH, { alpha, lightRot: rot })
     ctx.restore()
   }
 
@@ -1514,9 +1478,8 @@ export class Renderer {
     for (const h of w.wrecks) {
       listed.add(h.id)
       if (this.fx.has(h.id)) continue
-      const plain = unitForSprite(h.sprite)
-      if (!plain) continue
-      const t = h.big ? bigType(plain) : plain
+      const t = unitForSprite(h.sprite)
+      if (!t) continue
       const d = this.deaths.find((q) => Math.abs(q.x - h.x) < 1 && Math.abs(q.y - h.y) < 1)
       this.fx.anchor(h.id, modelFor(t)!, t.tier, h.x, h.y, h.rot, h.size, w.map.seed, d?.det)
     }
@@ -1631,7 +1594,7 @@ export class Renderer {
         }
         ctx.setLineDash([])
         // Its outline flickering into being.
-        this.drawShip(ctx, v.unit, v.sprite, v.x, v.y, v.a + Math.PI / 2, v.size, z, (0.08 + charge * 0.22) * (0.6 + 0.4 * Math.random()))
+        this.drawShip(ctx, v.unit, v.x, v.y, v.a + Math.PI / 2, v.size, z, (0.08 + charge * 0.22) * (0.6 + 0.4 * Math.random()))
         // Streaks of light reaching back along the way it comes.
         const len = v.size * (2 + charge * 7)
         for (let i = 0; i < 9; i++) {
@@ -1658,7 +1621,7 @@ export class Renderer {
           const cx = v.x - dx * v.size * 9 * k
           const cy = v.y - dy * v.size * 9 * k
           const stretch = 1 + 7 * k
-          this.drawShip(ctx, v.unit, v.sprite, cx, cy, v.a + Math.PI / 2, v.size, z, 0.9, [1 - 0.35 * k, stretch])
+          this.drawShip(ctx, v.unit, cx, cy, v.a + Math.PI / 2, v.size, z, 0.9, [1 - 0.35 * k, stretch])
           // The bright wake it pulls behind it.
           const wl = ctx.createLinearGradient(cx, cy, cx - dx * v.size * 12, cy - dy * v.size * 12)
           wl.addColorStop(0, 'rgba(255,255,255,0.95)')
@@ -1760,7 +1723,7 @@ export class Renderer {
       const p = Math.min(1, (now - v.start) / STREAK)
       const cx = v.x + dx * v.size * 10 * p * p
       const cy = v.y + dy * v.size * 10 * p * p
-      if (p < 1) this.drawShip(ctx, v.unit, v.sprite, cx, cy, v.a + Math.PI / 2, v.size, z, 1 - p * 0.6, [1 - 0.35 * p, 1 + 7 * p])
+      if (p < 1) this.drawShip(ctx, v.unit, cx, cy, v.a + Math.PI / 2, v.size, z, 1 - p * 0.6, [1 - 0.35 * p, 1 + 7 * p])
       // The wake from where it was to where it went, fading.
       const fade = (1 - q) ** 2
       const wl = ctx.createLinearGradient(v.x, v.y, cx, cy)
@@ -1879,10 +1842,9 @@ export class Renderer {
     ctx.lineTo(g.x + Math.cos(g.a) * (r + 22 / z), g.y + Math.sin(g.a) * (r + 22 / z))
     ctx.stroke()
     ctx.restore()
-    // Its model where it has one (the ghost only knows the sprite), else the sprite.
+    // The ghost knows its ship by its look's name.
     const t = unitForSprite(g.sprite)
-    if (t) this.drawShip(ctx, t.id, g.sprite, g.x, g.y, g.a + Math.PI / 2, g.size, z, g.ok ? 0.55 : 0.3)
-    else this.drawSprite(ctx, g.sprite, g.x, g.y, g.a + Math.PI / 2, g.size, z, g.ok ? 0.55 : 0.3)
+    if (t) this.drawShip(ctx, t.id, g.x, g.y, g.a + Math.PI / 2, g.size, z, g.ok ? 0.55 : 0.3)
     const label = !g.ok ? g.why : g.field ? `Asteroid field: arrives badly damaged` : null
     if (label) {
       ctx.save()
@@ -1900,9 +1862,10 @@ export class Renderer {
 
   /**
    * A yard going up. Until engineers start on it, a blueprint: the whole structure faint, its
-   * outline dashed. Then it fills in from the stern: the part that's built drawn solid, a scaffold
-   * of girders over what's still to come, and a welding line along the front of the work that
-   * throws sparks while engineers are at it.
+   * outline dashed. Then its frame fills in from the stern: the part that's built drawn solid, and
+   * over what's still to come the structure's own frame (every plate's outline) with scaffolding,
+   * uprights, girders and braces, clipped to its shape, and a welding line along the front of the
+   * work that throws sparks while engineers are at it.
    */
   private drawSite(ctx: CanvasRenderingContext2D, u: Unit, w: World, m: Model | null, size: number, z: number) {
     const t = u.t
@@ -1912,12 +1875,11 @@ export class Renderer {
     const planned = !u.site!.started
     const progress = Math.max(0, Math.min(1, 1 - u.building / t.build))
     const rgb = t.faction === 'republic' ? '130,205,255' : '255,186,120'
-    if (m) drawHull(ctx, m, u.x, u.y, rot, size, zdpr, FRESH, { alpha: planned ? 0.3 : 0.18 })
-    else this.drawSprite(ctx, t.sprite, u.x, u.y, rot, size, z, planned ? 0.3 : 0.18)
+    if (m) drawHull(ctx, m, u.x, u.y, rot, size, zdpr, FRESH, { alpha: planned ? 0.3 : 0.12 })
     ctx.save()
     ctx.translate(u.x, u.y)
     ctx.rotate(rot)
-    ctx.strokeStyle = `rgba(${rgb},${planned ? 0.8 : 0.45})`
+    ctx.strokeStyle = `rgba(${rgb},${planned ? 0.8 : 0.35})`
     ctx.lineWidth = 1.5 / z
     ctx.setLineDash([9 / z, 6 / z])
     ctx.lineDashOffset = (-this.clock * 20) / z
@@ -1930,9 +1892,23 @@ export class Renderer {
       ctx.rect(-sw, cut, sw * 2, sh * 1.5)
       ctx.clip()
       if (m) drawHull(ctx, m, 0, 0, 0, size, zdpr, hullState(m, u, t.tier), { lightRot: rot })
-      else this.drawSprite(ctx, t.sprite, 0, 0, 0, size, z)
       ctx.restore()
-      // The scaffold: uprights, cross girders and braces over what is still to be built.
+      // What's still to come: the structure's frame, and scaffolding over it, both clipped to its
+      // shape (the model's own silhouette) and to the part not built yet.
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(-sw, -sh, sw * 2, cut + sh)
+      ctx.clip()
+      if (m) {
+        const k = size / m.long
+        const o = outlineOf(m)
+        ctx.scale(k, k)
+        ctx.clip(o.solid)
+        ctx.strokeStyle = `rgba(${rgb},0.55)`
+        ctx.lineWidth = 1.1 / z / k
+        ctx.stroke(o.frame)
+        ctx.scale(1 / k, 1 / k)
+      }
       const cols = 6
       const rows = 10
       ctx.beginPath()
@@ -1959,9 +1935,10 @@ export class Renderer {
           }
         }
       }
-      ctx.strokeStyle = `rgba(${rgb},0.5)`
-      ctx.lineWidth = 1.1 / z
+      ctx.strokeStyle = `rgba(${rgb},${m ? 0.3 : 0.5})`
+      ctx.lineWidth = 1 / z
       ctx.stroke()
+      ctx.restore()
       // The welding front.
       const welding = w.units.some((e) => !e.dead && isEngineer(e.t) && e.mending.includes(u.id))
       const flick = welding ? 0.65 + 0.35 * Math.sin(this.clock * 23 + u.id) : 0.35
@@ -1995,6 +1972,130 @@ export class Renderer {
     }
   }
 
+  /**
+   * The ship a yard is building, taking shape in its berth: its frame (every plate's outline) in the
+   * yard's working light, filled in solid from the stern as the work goes on. Drawn over the yard's
+   * hull and under its crane, nose to the yard's mouth, shrunk to fit if the berth is short for it.
+   */
+  private drawBerth(ctx: CanvasRenderingContext2D, u: Unit, ym: Model, z: number, alpha: number) {
+    const q = u.yq?.[0]
+    const b = YARD_BERTHS[u.t.id]
+    if (!q || !b || building(u)) return
+    const st = UNIT[q.unit]
+    const m = modelFor(st)
+    if (!m) return
+    const ky = u.t.size / ym.long
+    const [w0, h0] = dims(st)
+    const fit = Math.min(1, ((b.y1 - b.y0) * ky * 0.9) / h0, (b.hw * 2 * ky * 1.15) / w0)
+    const size = st.size * fit
+    const k = size / m.long
+    const rot = u.a + Math.PI / 2
+    const cy = ((b.y0 + b.y1) / 2) * ky
+    const x = u.x - Math.sin(rot) * cy
+    const y = u.y + Math.cos(rot) * cy
+    const progress = Math.max(0, Math.min(1, 1 - q.left / Math.max(0.001, q.total)))
+    const zdpr = z * (window.devicePixelRatio || 1)
+    const rgb = u.t.faction === 'republic' ? '130,205,255' : '255,186,120'
+    ctx.save()
+    ctx.translate(x, y)
+    ctx.rotate(rot)
+    ctx.globalAlpha *= alpha
+    const half = (m.h / 2) * k
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(-size, half - progress * half * 2, size * 2, size * 2)
+    ctx.clip()
+    drawHull(ctx, m, 0, 0, 0, size, zdpr, FRESH, { alpha: 0.85, lightRot: rot })
+    ctx.restore()
+    ctx.scale(k, k)
+    ctx.strokeStyle = `rgba(${rgb},0.5)`
+    ctx.lineWidth = 1 / z / k
+    ctx.stroke(outlineOf(m).frame)
+    ctx.restore()
+  }
+
+  /**
+   * Engineers at work: each craft at its job fires a welding beam from its nose at a spot on the
+   * structure, a bright core in a soft glow (blue-white for the Republic, orange for the droids),
+   * with a flickering flash where it hits. The spot wanders over the hull on the side facing the
+   * craft (on a site going up, along the welding front), so it reads as welding. Drawn over the
+   * ships, with nothing made per frame but the paths.
+   */
+  private drawWelds(ctx: CanvasRenderingContext2D, w: World, z: number, team: number, onScreen: (x: number, y: number, r?: number) => boolean) {
+    let on = false
+    for (const u of w.units) {
+      if (u.dead || !u.mending.length || !isEngineer(u.t) || !u.seen[team] || !onScreen(u.x, u.y, 400)) continue
+      const o = w.byId.get(u.mending[0])
+      if (!o || o.dead) continue
+      if (!on) {
+        on = true
+        ctx.save()
+        ctx.globalCompositeOperation = 'lighter'
+        ctx.lineCap = 'round'
+      }
+      const rep = u.t.faction === 'republic'
+      const glow = rep ? '110,190,255' : '255,140,50'
+      const core = rep ? '232,246,255' : '255,232,190'
+      // Where it hits, in the structure's own frame (x across it, y along it, nose up): on a site the
+      // welding front, else a spot that wanders over the side facing the craft.
+      const [sw, sh] = dims(o.t)
+      const rot = o.a + Math.PI / 2
+      const c = Math.cos(rot)
+      const s = Math.sin(rot)
+      const t = this.clock
+      // The craft in that frame, scaled to the hull's half-size.
+      const dx = u.x - o.x
+      const dy = u.y - o.y
+      const cx = Math.max(-1, Math.min(1, (dx * c + dy * s) / (sw / 2)))
+      const cy = Math.max(-1, Math.min(1, (-dx * s + dy * c) / (sh / 2)))
+      let lx: number
+      let ly: number
+      if (o.site && o.building > 0) {
+        lx = (cx * 0.3 + Math.sin(t * 0.9 + u.id * 1.7) * 0.14) * sw
+        ly = sh / 2 - (1 - o.building / o.t.build) * sh
+      } else {
+        lx = (cx * 0.3 + Math.sin(t * 0.8 + u.id * 2.1) * 0.12) * sw
+        ly = (cy * 0.3 + Math.sin(t * 0.63 + u.id * 1.3) * 0.12) * sh
+      }
+      const hx = o.x + lx * c - ly * s
+      const hy = o.y + lx * s + ly * c
+      const nose = u.t.size * 0.45
+      const nx = u.x + Math.cos(u.a) * nose
+      const ny = u.y + Math.sin(u.a) * nose
+      const flick = 0.7 + 0.3 * Math.sin(t * 37 + u.id * 3.1)
+      ctx.strokeStyle = `rgba(${glow},${0.28 * flick})`
+      ctx.lineWidth = 6 / z
+      ctx.beginPath()
+      ctx.moveTo(nx, ny)
+      ctx.lineTo(hx, hy)
+      ctx.stroke()
+      ctx.strokeStyle = `rgba(${core},${0.9 * flick})`
+      ctx.lineWidth = 1.7 / z
+      ctx.stroke()
+      // The flash where it hits: a soft disc and a little turning star of sparks.
+      const r = (4 + 2.5 * flick) / z
+      ctx.fillStyle = `rgba(${glow},${0.35 * flick})`
+      ctx.beginPath()
+      ctx.arc(hx, hy, r * 1.8, 0, TAU)
+      ctx.fill()
+      ctx.fillStyle = `rgba(${core},${0.85 * flick})`
+      ctx.beginPath()
+      ctx.arc(hx, hy, r * 0.55, 0, TAU)
+      ctx.fill()
+      const a0 = t * 9 + u.id
+      ctx.beginPath()
+      for (let k = 0; k < 4; k++) {
+        const a = a0 + (k * Math.PI) / 2
+        const l = r * (1.4 + 1.2 * Math.abs(Math.sin(t * 23 + k + u.id)))
+        ctx.moveTo(hx + Math.cos(a) * r * 0.5, hy + Math.sin(a) * r * 0.5)
+        ctx.lineTo(hx + Math.cos(a) * l, hy + Math.sin(a) * l)
+      }
+      ctx.lineWidth = 1.2 / z
+      ctx.stroke()
+    }
+    if (on) ctx.restore()
+  }
+
   /** A yard being placed: its ghost where it would go, the slipway's mouth marked, green where it can
    * go and red (with why) where it can't, and what it costs. */
   private drawPlace(ctx: CanvasRenderingContext2D, g: NonNullable<View['place']>, z: number) {
@@ -2002,9 +2103,8 @@ export class Renderer {
     const col = g.ok ? '#7dffa0' : '#ff5a50'
     const rot = g.a + Math.PI / 2
     const [sw, sh] = dims(g.t)
-    const m = this.modelsOn ? modelFor(g.t) : null
+    const m = modelFor(g.t)
     if (m) drawHull(ctx, m, g.x, g.y, rot, g.t.size, zdpr, FRESH, { alpha: g.ok ? 0.6 : 0.3 })
-    else this.drawSprite(ctx, g.t.sprite, g.x, g.y, rot, g.t.size, z, g.ok ? 0.6 : 0.3)
     ctx.save()
     ctx.translate(g.x, g.y)
     ctx.rotate(rot)
@@ -2034,8 +2134,9 @@ export class Renderer {
     ctx.restore()
   }
 
-  /** Ruined yards: the burnt-out hull where each one fell, for its owner to rebuild (labelled with
-   * the price for them). Everyone else sees one once their ships have it in sight. */
+  /** Ruined yards: the burnt-out hull where each one fell, broken across in three and sagged apart,
+   * for its owner to rebuild (labelled with the price for them). Everyone else sees one once their
+   * ships have it in sight. */
   private drawRuins(ctx: CanvasRenderingContext2D, w: World, view: View, z: number, zdpr: number, onScreen: (x: number, y: number, r?: number) => boolean) {
     const team = w.players[view.me].team
     for (const r of w.ruins ?? []) {
@@ -2043,11 +2144,23 @@ export class Renderer {
       if (!t || !onScreen(r.x, r.y, t.size)) continue
       const ours = w.players[r.owner].team === team
       if (!ours && !w.units.some((u) => !u.dead && w.players[u.owner].team === team && (u.x - r.x) ** 2 + (u.y - r.y) ** 2 < sensorOf(u) ** 2)) continue
-      const m = this.modelsOn ? modelFor(t) : null
-      ctx.filter = 'brightness(0.5) saturate(0.45)'
-      if (m) drawHull(ctx, m, r.x, r.y, r.a + Math.PI / 2, t.size, zdpr, wreckState(m, r.id), { alpha: 0.85, wreck: true })
-      else this.drawSprite(ctx, t.sprite, r.x, r.y, r.a + Math.PI / 2, t.size, z, 0.8)
-      ctx.filter = 'none'
+      const m = modelFor(t)
+      const rot = r.a + Math.PI / 2
+      if (m) {
+        const st = wreckState(m, r.id)
+        const k = t.size / m.long
+        const c = Math.cos(rot)
+        const s = Math.sin(rot)
+        breakPieces(m, 'pieces', hash(r.id, 0x5e1d) % 1000).forEach((p, i) => {
+          // Each piece pushed a little out from the middle and turned a touch, as it settled.
+          const rr = seeded(hash(r.id, i, 0x2a7))
+          const l = Math.hypot(p.cx, p.cy) || 1
+          const push = m.long * (0.04 + rr() * 0.03)
+          const lx = (p.cx + (p.cx / l) * push) * k
+          const ly = (p.cy + (p.cy / l) * push) * k
+          drawPiece(ctx, m, p, `ruin${r.id}.${i}`, st, r.x + lx * c - ly * s, r.y + lx * s + ly * c, rot + (rr() - 0.5) * 0.16, t.size, zdpr, 0.92)
+        })
+      }
       if (r.owner === view.me && z > 0.15) {
         ctx.save()
         ctx.font = `600 ${12 / z}px system-ui, sans-serif`
@@ -2057,24 +2170,6 @@ export class Renderer {
         ctx.restore()
       }
     }
-  }
-
-  /** A sprite with its colour knocked out to a burnt dark, for a module that was shot off. */
-  private burnt(name: string) {
-    let c = this.dark.get(name)
-    if (c) return c
-    const img = this.imgs.get(name)
-    if (!img || !img.complete || !img.naturalWidth) return null
-    c = document.createElement('canvas')
-    c.width = img.naturalWidth
-    c.height = img.naturalHeight
-    const g = c.getContext('2d')!
-    g.drawImage(img, 0, 0)
-    g.globalCompositeOperation = 'source-atop'
-    g.fillStyle = 'rgba(22,16,14,0.72)'
-    g.fillRect(0, 0, c.width, c.height)
-    this.dark.set(name, c)
-    return c
   }
 
   /**
@@ -2103,44 +2198,6 @@ export class Renderer {
     return rot
   }
 
-  /**
-   * Every module on a hull: guns, shield generators, hangars and station parts, each its own sprite
-   * on its socket. Guns turn towards what they shoot at and ease back along the hull; a module that
-   * was shot off shows as a burnt wreck.
-   */
-  private drawModules(ctx: CanvasRenderingContext2D, u: Unit, w: World, z: number) {
-    const t = u.t
-    const ahead = u.a + Math.PI / 2
-    // Faded with the hull while it's still being built.
-    const fade = building(u) ? 0.55 : 1
-    for (let i = 0; i < t.hardpoints.length; i++) {
-      const h = t.hardpoints[i]
-      if (!h.art) continue
-      const size = (h.s ?? 0.05) * t.size
-      if (size * z < 2) continue
-      const p = hpPos(u, i)
-      const dead = u.hps[i].hp <= 0
-      const rot = h.weapon ? this.aim(u, i, w) : ahead
-      if (!dead) {
-        this.drawSprite(ctx, moduleSprite(t.faction, h.art), p.x, p.y, rot, size, z, fade)
-        continue
-      }
-      // The Republic's turrets have a wreck of their own; everything else is burnt where it stands.
-      if (h.weapon && t.faction === 'republic') {
-        this.drawSprite(ctx, moduleSprite('republic', 'wreck'), p.x, p.y, rot, size, z)
-        continue
-      }
-      const img = this.burnt(moduleSprite(t.faction, h.art))
-      if (!img) continue
-      const k = size / Math.max(img.width, img.height)
-      ctx.save()
-      ctx.translate(p.x, p.y)
-      ctx.rotate(rot)
-      ctx.drawImage(img, (-img.width * k) / 2, (-img.height * k) / 2, img.width * k, img.height * k)
-      ctx.restore()
-    }
-  }
-
   private drawUnit(ctx: CanvasRenderingContext2D, u: Unit, w: World, z: number, view: View) {
     const t = u.t
     const fac = FACTIONS[t.faction]
@@ -2152,7 +2209,7 @@ export class Renderer {
     const sel = view.selected.has(u.id)
     const hov = view.hover === u.id
     const rel = relColor(w, view.me, u.owner)
-    const m = this.modelsOn ? modelFor(t) : null
+    const m = modelFor(t)
     // Worked out this frame already while keeping up with the models (see trackModels).
     const tr = m ? this.tracked.get(u.id) : undefined
     const st: HullState | null = m ? (tr && tr.u === u && tr.m === m ? tr.st : hullState(m, u, t.tier)) : null
@@ -2217,10 +2274,8 @@ export class Renderer {
     else if (m && st) {
       const zdpr = z * (window.devicePixelRatio || 1)
       drawHull(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, st, { alpha })
+      if (t.tier === 'yard') this.drawBerth(ctx, u, m, z, alpha)
       if (m.mounts.length) drawMounts(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, u.hps, (i) => this.aim(u, i, w), alpha)
-    } else {
-      this.drawSprite(ctx, t.sprite, u.x, u.y, u.a + Math.PI / 2, size, z, alpha)
-      if (t.hardpoints.some((h) => h.art)) this.drawModules(ctx, u, w, z)
     }
     if (u.retreat > 0) this.drawCharge(ctx, u, z)
     // An expansion going up on its socket: a scaffold ring turning round it, filling as it's built.

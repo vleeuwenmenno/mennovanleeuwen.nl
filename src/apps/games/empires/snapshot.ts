@@ -7,6 +7,10 @@ import type { World } from './sim.ts'
 // wrecks), the AI admirals' plans, and where the player was looking with what selected. The world
 // is plain data apart from its lookup tables, which are rebuilt; ship types are stored once each,
 // since grown stations and upgraded platforms carry types of their own.
+//
+// Version 2 is the one ship size there is now (models/sizes.ts). A version-1 battle fought at Big
+// ship sizes is the same game and carries on; one fought at Classic sizes can't (its ships would sit
+// on top of each other at their real size), so it is refused (see outdatedSnapshot).
 
 export type BattleSnap = {
   world: string
@@ -42,13 +46,14 @@ export function snapshotWorld(w: World): string {
   delete rest.grid
   delete rest.nav
   delete rest.units
-  return JSON.stringify({ v: 1, ...rest, units, types }, write)
+  return JSON.stringify({ v: 2, ...rest, units, types }, write)
 }
 
 export function restoreWorld(s: string): World | null {
   try {
     const o = JSON.parse(s, read) as Record<string, unknown> & { v: number; types: UnitType[]; units: (Omit<World['units'][number], 't'> & { t: number })[] }
-    if (o?.v !== 1 || !Array.isArray(o.units) || !Array.isArray(o.types)) return null
+    if (!(o?.v === 2 || (o?.v === 1 && o.sizes === 'big')) || !Array.isArray(o.units) || !Array.isArray(o.types)) return null
+    delete o.sizes
     const units = o.units.map((u) => ({ ...u, t: o.types[u.t] }))
     const w = { ...o, units, byId: new Map(units.map((u) => [u.id, u])), grid: new Map(), nav: new Map() } as unknown as World & { v?: number; types?: unknown }
     delete w.v
@@ -60,6 +65,17 @@ export function restoreWorld(s: string): World | null {
     return w
   } catch {
     return null
+  }
+}
+
+/** Whether a saved battle is from before there was only one ship size, fought at Classic sizes:
+ * restoreWorld refuses it, and the battle says so instead of quietly starting afresh. */
+export function outdatedSnapshot(s: string) {
+  try {
+    const o = JSON.parse(s) as { v?: number; sizes?: string }
+    return o?.v === 1 && o.sizes !== 'big'
+  } catch {
+    return false
   }
 }
 

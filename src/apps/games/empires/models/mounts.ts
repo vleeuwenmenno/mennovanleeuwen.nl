@@ -143,6 +143,16 @@ function build(design: MountLook, faction: Faction, broken: boolean): Part[] {
         part('well', circle(0, 0, 0.95, 16), broken ? 'char' : 'dark', 0, {}),
         part('bit', circle(0, 0, 0.55, 8), broken ? 'dark' : 'metal', 1, { lift: 0.2, details: broken ? [] : [{ k: 'shape', pts: box(0, 0, 0.9, 0.16), tone: 'accent' }] }),
       ]
+    case 'collar':
+      // An expansion module's socket: the module itself is parts of the hull (base.ts), so nothing
+      // shows here until it is shot off, and then a torn, burnt stump with embers in it.
+      if (!broken) return []
+      return [
+        part('stump', circle(0, 0, 0.42, 10).map(([x, y], i) => [x * (i % 2 ? 0.8 : 1), y * (i % 2 ? 0.8 : 1)] as Pt), 'char', 0, { lift: 0.06 }),
+        part('pit', circle(0.03, 0.04, 0.24, 9), 'dark', 1, { noOutline: true }),
+        part('spar', turn(box(0.18, -0.3, 0.1, 0.36), 0.6, 0.18, -0.15), 'metal', 2),
+        embers([[-0.2, -0.12], [0.22, 0.1], [-0.06, 0.24]]),
+      ]
     case 'engine':
       return []
   }

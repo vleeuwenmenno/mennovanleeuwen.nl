@@ -1906,7 +1906,7 @@ Balanced. Every profile plays the same game, with a purpose:
 | Heavy ships go home to mend below | 50% hull | 35% | 25% |
 | Fleet battles: pulls out below / meets attackers at | 40% / 0.8× | 30% / 1× | 20% / 1.6× |
 
-How it fares, headless (Big ship sizes, medium, Kessar Belt and Cinder Gate × 5 seeds, both
+How it fares, headless (medium, Kessar Belt and Cinder Gate × 5 seeds, both
 sides): these admirals beat the earlier one in 51 of 60 battles (Defensive 17, Balanced 18,
 Offensive 16 of 20), where the earlier one against itself wins 5 of 6 for the Republic side. Head to
 head, Balanced and Offensive edge out Defensive (22-14, 20-16, 12-24 over 36 battles each).
@@ -1922,9 +1922,9 @@ pnpm empires:battle-ai [games] [minutes]                  # AI-only battles: win
 Every ship and structure of both sides is drawn as a procedural model built from parts
 ([`src/apps/games/empires/models/`](src/apps/games/empires/models)), cel-shaded like the
 cartoon: flat fills in three hard tones, a heavy dark outline, panel lines, stripes, windows and
-engine light. The setting *Procedural models (preview)* (on by default, in the game's Settings and
-in Settings → Apps → Games → Empires At War) switches back to the generated sprites, which stay as
-a fallback for now.
+engine light. They are the only pictures of the ships and structures: the game loads no sprites for
+them (the pictures in `public/games/empires/` are the world's: the backdrop, rocks, ore, beacons,
+planets, the emblems, the title and the research icons).
 
 Each side is a family. The **Republic** builds angular off-white wedges with deep red bands, grey
 machinery and blue engines: the Lance interceptor, the blunt twin-engine Hammer bomber with its
@@ -1966,11 +1966,11 @@ tan and violet palette. They are never used in battle; the Codex shows them unde
   from what's under it: a hard drop shadow and lit and shadowed rims), details (panel lines,
   stripes, lights) and a reason to come off (`detach`: when a hardpoint is destroyed, below a hull
   share, or only at death). Ships are drawn on a box 100 units on the long side, nose up; the
-  station in the pixels of the frame its sprites were cut from. The helpers in
+  station in the pixels of its frame (`STATIONS` in data.ts). The helpers in
   [`kit.ts`](src/apps/games/empires/models/kit.ts) build wedge hulls, outlines from half-width
   rows (`halfHull`), tapered sections, wings, engine pods, capsules, smooth organic outlines
   (`spline`), tapering bands along a line for limbs and spars (`thick`), rings, chamfered blocks
-  and mirrored pairs (`sym`), and hold each faction's palette (taken from its sprites: off-white,
+  and mirrored pairs (`sym`), and hold each faction's palette (off-white,
   deep red and blue light for the Republic; bone tan and violet for the droids; plus green for
   repair craft and gold for a station's own defense wing).
 - **Hardpoints:** turrets, shield generators, hangars and station modules are mounts placed by
@@ -2004,7 +2004,7 @@ tan and violet palette. They are never used in battle; the Codex shows them unde
   show broken. All of it follows from the battle's own state.
 - **Death and wrecks** ([`fx.ts`](src/apps/games/empires/models/fx.ts)): fighters, gunships
   and structures burst into fragments that fade (a station's and a platform's slabs tumble slowly
-  and linger); the old flecks of debris are only drawn for units shown as sprites. Frigates,
+  and linger); flecks of debris are only drawn for a unit that died out of sight. Frigates,
   cruisers and flagships leave the battle's wreck as before (`leaveWreck`, salvage, decay are
   unchanged), and the hull lies there
   in one scorched piece, broken in half or in several pieces drifting slowly apart, until the wreck
@@ -2012,61 +2012,56 @@ tan and violet palette. They are never used in battle; the Codex shows them unde
   integer maths (`breakOutcome`, weights per class in `BREAK_WEIGHTS`), so every player in a
   multiplayer battle sees the same break. Nothing of this touches the battle itself.
 
-- **Menus** ([`Hud.tsx`](src/apps/games/empires/Hud.tsx) `ShipArt`, `useUnitArt`): unit cards,
+- **Menus** ([`Hud.tsx`](src/apps/games/empires/Hud.tsx) `ShipArt`, `unitArt`): unit cards,
   the shipyard, the fleet inventory and its tiles, Galactic conquest's fleet grids, tooltips and
   the tech tree show a still of the model (nose up, under the world's light, with its mounts, a
-  shot-off one wrecked), painted once per look by `thumbnail` in paint.ts and kept as a data URL.
+  shot-off one wrecked), painted once per look by `thumbnail` in paint.ts and kept as a data URL;
+  an expansion module in a queue shows on its own (`moduleThumbnail`).
   A ship dragged from the fleet inventory is ghosted as its model too.
 
-**Ship sizes: Big or Classic.** Every battle is fought at one of two ship sizes, picked per match:
-in the skirmish setup (remembered with the other setup fields), by the host in the multiplayer
-lobby, and for a whole campaign in Galactic conquest's new-campaign setup. Big is the default for
-new setups, lobbies and campaigns; Classic (the battle as it was before) stays an option, a setup
-that chose it keeps it, and battles, matches, campaigns and saves from before the choice load as
-Classic. The choice is part of the match config (`MatchInfo.sizes`, `World.sizes`), so every
-player's copy and the server referee run the same battle. Everything Big changes is in
-[`sizes.ts`](src/apps/games/empires/models/sizes.ts): the sim, the renderer, the Codex and every
-card and tooltip take their unit types from `sizedType()` / `bigType()` (the sim's `typeOf`), so
-the numbers shown are the numbers the battle uses.
+**Ship sizes.** Every ship bigger than strike craft is built bigger than its numbers in
+[`data.ts`](src/apps/games/empires/data.ts) were first written for, by its class, and that is the
+only size there is: `data.ts` applies [`sizes.ts`](src/apps/games/empires/models/sizes.ts)'s
+`sized()` to every unit once, so the sim, the renderer, the Codex and every card and tooltip use the
+same unit types. (Battles, lobbies and campaigns once offered a choice of *Classic* sizes, the
+numbers as written. A campaign saved as Classic loads at today's sizes; a battle saved mid-fight at
+Classic sizes can't be carried on, and says so when it would be resumed, see `outdatedSnapshot` in
+[`snapshot.ts`](src/apps/games/empires/snapshot.ts); the server drops such a battle kept over a
+restart.)
 
-- **Size** (`SIZE_CLASSES`): strike craft ×1, gunships and corvettes ×1.15, frigates ×1.4,
-  cruisers ×1.7, flagships ×2.5, stations and platforms ×1. The hit radius, collisions, the keep
-  apart spacing, spawning and jump-in spots, guard posts, Field repair orbits and turret and module
-  sizes all follow the hull. A warship looks round itself for hulls to keep clear of as far as the
-  biggest hull there can be, so a gunship makes way for a Big flagship as much as the other way.
-- **Hardpoints** (`BIG_LAYOUT`): every warship with hardpoints has a Big layout on its 0-10 grid,
-  one turret per gun, spread over the hull with room between them, about the size the guns were in
-  Classic (a little bigger on the flagships). Carrier fighters launch from the hangars where they
-  sit now.
+- **Size** (`SIZE_CLASSES`, `sizeClass`): strike craft ×1, gunships and corvettes ×1.15, frigates
+  ×1.4, cruisers ×1.7, flagships ×2.5, stations and platforms ×1. The yards grow with what they
+  build: the Frigate Yard ×1.4, the Capital Yard ×2.5. The hit radius, collisions, the keep apart
+  spacing, spawning and jump-in spots, guard posts, Field repair orbits, building placement and
+  turret and module sizes all follow the hull. A warship looks round itself for hulls to keep clear
+  of as far as the biggest hull there can be, so a gunship makes way for a flagship as much as the
+  other way. Scattered rocks keep clear of each start's build radius, so the yards have room.
+- **Hardpoints** (`BIG_LAYOUT`): every warship with hardpoints has a layout on its 0-10 grid, one
+  turret per gun, spread over the hull with room between them. Carrier fighters launch from the
+  hangars where they sit.
 - **Handling** (`HANDLING`): turn rate ×0.9 / 0.8 / 0.72 / 0.65, acceleration and braking ×0.9 /
   0.8 / 0.7 / 0.6, top speed ×1 / 0.95 / 0.92 / 0.88 for gunships / frigates / cruisers /
-  flagships. A Republic flagship crosses Kessar Belt from station to station in about 206 s
-  instead of 185 s, and turns 12° a second instead of 19°.
+  flagships, on the numbers as written.
 - **Reach**: every gun reaches as far past its hull as it did, its range growing by as much as the
-  hull's radius grew (a Big flagship's turbolasers reach 1068 instead of 836, a Paladin's 768
-  instead of 715), so a 2.5× flagship doesn't spend half its range on its own hull. Formations and
-  the repair tenders' reach spread out by `BIG_SPREAD` (×1.3, or the biggest ship's class).
-- **Designs**: every ship bigger than strike craft has a Big redesign in the same calm style, for
-  all three sides: the Republic's in [`proto.ts`](src/apps/games/empires/models/proto.ts), the
-  droid navy's in [`proto-droid.ts`](src/apps/games/empires/models/proto-droid.ts) (the Gyre in both
-  its ring and carrier designs) and the Swarm concept's in
+  hull's radius grew, so a 2.5× flagship doesn't spend half its range on its own hull. Formations
+  and the repair tenders' reach spread out by `BIG_SPREAD` (×1.3, or the biggest ship's class).
+- **Designs**: every ship bigger than strike craft is drawn in the same calm style, for all three
+  sides: the Republic's in [`proto.ts`](src/apps/games/empires/models/proto.ts), the droid navy's
+  in [`proto-droid.ts`](src/apps/games/empires/models/proto-droid.ts) (the Gyre in both its ring
+  and carrier designs) and the Swarm concept's in
   [`proto-swarm.ts`](src/apps/games/empires/models/proto-swarm.ts). Big, quiet surfaces (long
   armour plates, trenches, a few lights), strong superstructures, and each gun on its own pad or
-  barbette. The gunships, only a little bigger, keep their shape with a calmer surface (`calm`).
-  Cruisers break into three chunks, the flagships into four, the Gyre's ring into segments round
-  its core.
-- **Bolts**: slimmer and longer under Big (`BOLTS_BIG` in render.ts), so they read as streaks of
-  light next to the big hulls; Classic keeps its bolts.
+  barbette. The gunships keep their shape with a calmer surface (`calm`). Cruisers break into three
+  chunks, the flagships into four, the Gyre's ring into segments round its core.
+- **Bolts**: slim and long (`BOLTS` in render.ts), so they read as streaks of light next to the
+  big hulls.
 
 A move order never ends on top of a station or platform: the spot is moved out to the first place
-clear of its hull (`offRocks` in sim.ts), in both sizes, so a big hull arrives instead of being
-pushed back for ever.
+clear of its hull (`offRocks` in sim.ts), so a big hull arrives instead of being pushed back for
+ever.
 
-The Codex shows any ship either way (*Classic / Big*, Big first, with its numbers), and *Size
-classes* lays out every ship of a side (the Swarm's too) at both sizes on one scale.
-`pnpm check:empires-big` runs the multiplayer determinism check with Big ship sizes;
-`pnpm check:empires-models` checks every ship's Big look too: that it has a redesign and a layout,
-and that its turrets have room between them.
+The Codex's *Size classes* lays out every ship of a side (the Swarm's too) on one scale.
+`pnpm check:empires-models` checks every ship's layout, and that its turrets have room between them.
 
 **Adding a unit's model:**
 
@@ -2087,8 +2082,8 @@ and that its turrets have room between them.
 **The Codex** (main menu → Codex, [`Codex.tsx`](src/apps/games/empires/Codex.tsx)) lists every
 ship and structure of both sides with its numbers: hull, shields, speed, turn rate, sensors, fleet
 space, cost, build time, station level, firepower, each weapon (damage, burst, range, reload),
-hardpoints, what it beats and what beats it, and its ability, next to a view of its model (or
-sprite), nose up. Drag to turn it, scroll or pinch to zoom, **Reset view** to go back; a station
+hardpoints, what it beats and what beats it, and its ability, next to a view of its model, nose
+up. Drag to turn it, scroll or pinch to zoom, **Reset view** to go back; a station
 has a level switch and, at level 4, a switch between the two outer frames.
 
 Every module and named part can be looked at ([`codexInfo.ts`](src/apps/games/empires/codexInfo.ts)
@@ -2109,7 +2104,6 @@ a module or part opens a wheel: Inspect, Damage, Destroy, Detach. On a phone the
 row of chips over the view and the numbers.
 
 ```sh
-pnpm check:empires-big      # the multiplayer determinism check, with Big ship sizes
 pnpm check:empires-models   # every unit has a model that builds, its mounts match the hardpoints, parts come off soundly, breaks are deterministic and weighted, small craft and structures burst into real fragments
 ```
 

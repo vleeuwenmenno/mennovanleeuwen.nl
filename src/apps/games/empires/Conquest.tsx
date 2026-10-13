@@ -1,14 +1,13 @@
-import { SHIP_SIZE_BLURB, SHIP_SIZE_NAMES, SHIP_SIZES, sizedType, type ShipSizes } from './models/sizes.ts'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DIFFICULTY, type Difficulty, type Profile } from './ai'
-import { FACTIONS, MODULE, REBUILD, UNIT, WORKS_NAME, buildable, isShip, modulesFor, moduleSprite, stationType, yardOf, yardType, type FactionId, type ModuleId, type UnitType, type Works } from './data'
+import { FACTIONS, MODULE, REBUILD, UNIT, WORKS_NAME, buildable, isShip, modulesFor, moduleLook, stationType, yardOf, yardType, type FactionId, type ModuleId, type UnitType, type Works } from './data'
 import {
   BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GALAXY_AI, GIANTS, blockadeIn, canSee, contested, known, ownerFor, sees, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
   autoResolve, buildAt, buildWork, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, cantWork, isWork, isYard, worksUp, workCost, workLock, workName, workTime, yardLock, YARD_KINDS, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
   galaxyProfile, settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw, withoutShips,
   type BattleResult, type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetBase, type PlanetKind, type Side, type StarSystem, type WorkId, type YardKind,
 } from './galaxy'
-import { BuildPanel, BuildQueue, Floating, Frame, HpIcon, Icon, Pips, SelChip, ShipArt, ShipCard, SizesContext, Tips, storePage, storedPage, unitTip, type IconName } from './Hud'
+import { BuildPanel, BuildQueue, Floating, Frame, HpIcon, Icon, Pips, SelChip, ShipArt, ShipCard, Tips, storePage, storedPage, unitTip, type IconName } from './Hud'
 import { HP_COLOR } from './icons'
 import { baseLeft } from './sim'
 import { FleetInventory } from './Inventory'
@@ -39,8 +38,6 @@ export type ConquestBattle = {
   /** How the AI empire plays (galaxyProfile); left out, Balanced. */
   profile?: Profile
   names: string[]
-  /** The campaign's ship sizes (models/sizes.ts); left out, Classic. */
-  sizes?: ShipSizes
   onDone: (w: World, left: boolean) => void
   /** Saved mid-fight: the battle carries on from here. */
   resume?: BattleSnap | null
@@ -135,7 +132,6 @@ export function Conquest({ g, setG, session, sound, onExit, onBattle, start = 'n
     return <ConquestSetup sound={sound} onBack={leave} onStart={open} />
   }
   return (
-    <SizesContext.Provider value={g.rules?.sizes}>
     <GalaxyMap
       key={opened}
       g={g}
@@ -160,7 +156,6 @@ export function Conquest({ g, setG, session, sound, onExit, onBattle, start = 'n
       onLoad={open}
       onBattle={onBattle}
     />
-    </SizesContext.Provider>
   )
 }
 
@@ -270,7 +265,6 @@ function ConquestSetup({ sound, onBack, onStart }: { sound: EmpiresSound; onBack
   const [name, setName] = useState('')
   const [blockadeRule, setBlockadeRule] = useState<BlockadeRule>('majority')
   const [frontline, setFrontline] = useState(true)
-  const [sizes, setSizes] = useState<ShipSizes>('big')
   const choice: GalaxyChoice = kind === 'rim' ? { kind: 'rim' } : { kind: 'generated', seed }
   const preview = useMemo(() => newGalaxy({ choice, size, faction, difficulty, credits }), [kind, seed, size, faction, difficulty, credits]) // eslint-disable-line react-hooks/exhaustive-deps
   const click = (fn: () => void) => () => {
@@ -325,13 +319,9 @@ function ConquestSetup({ sound, onBack, onStart }: { sound: EmpiresSound; onBack
                 ? 'A fleet in a system its side doesn\'t control can\'t jump on into another enemy-held system: it must win the system first, or fall back. No hopping deep behind the lines.'
                 : 'Fleets may jump from any system straight into any enemy system next to it.'}
             </p>
-            <Field label="Ship sizes">
-              <Seg value={sizes} options={SHIP_SIZES.map((v) => [v, SHIP_SIZE_NAMES[v]] as [ShipSizes, string])} onChange={setSizes} />
-            </Field>
-            <p className="ew-muted ew-small">{SHIP_SIZE_BLURB[sizes]} Fleet battles are fought at these sizes.</p>
             <div className="ew-menu-list is-row">
               <button className="ew-menu-btn" onClick={click(onBack)}><Icon name="back" size={18} /> Back</button>
-              <button className="ew-menu-btn is-primary" onClick={click(() => onStart(newGalaxy({ choice, size, faction, difficulty, credits, name, blockade: blockadeRule, frontline, sizes })))}>
+              <button className="ew-menu-btn is-primary" onClick={click(() => onStart(newGalaxy({ choice, size, faction, difficulty, credits, name, blockade: blockadeRule, frontline })))}>
                 <Icon name="play" size={18} /> Start
               </button>
             </div>
@@ -1332,7 +1322,6 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       ai: g.sides[enemy].ai ?? 'medium',
       profile: galaxyProfile(g, enemy),
       names: [factionName(g, c.holder), factionName(g, c.attacker)],
-      sizes: g.rules?.sizes,
       resume,
       // Kept for the window as it's fought, so a reload carries on with it.
       onSnap: (snap) => saveCampaignBattle(session, g.save.id, snap ? { planet: c.planet, snap } : null),
@@ -2251,8 +2240,7 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
   const { lockedShips } = useSettings()
   const coarse = useCoarse()
   const fac = g.sides[ME].faction
-  // At the campaign's ship sizes, so the cards and their tooltips show the numbers its battles use.
-  const all = buildable(fac).map((t) => sizedType(t.id, g.rules?.sizes)).filter((t) => lockedShips || t.level <= p.station)
+  const all = buildable(fac).map((t) => UNIT[t.id]).filter((t) => lockedShips || t.level <= p.station)
   // Strike craft first, as at a battle's Command Station; the page picked last is remembered (shared
   // with the battle's build panel, see storedPage).
   const [page, setPage] = useState<YardPage>(() => storedPage<YardPage>(['strike', 'warships', 'yards', 'expansions'], 'strike', { buildings: 'yards' }))
@@ -2313,7 +2301,7 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
   const queue = p.queue.map((q) =>
     q.unit === 'station' ? { ...q, sprite: `${fac}-station-${Math.min(4, p.station + 1)}`, name: p.station ? `Station level ${p.station + 1}` : 'A new station' }
       : isYard(q.unit) ? { ...q, sprite: yardOf(fac, q.unit).sprite, name: WORKS_NAME[q.unit] }
-        : isWork(q.unit) ? { ...q, sprite: moduleSprite(fac, MODULE[q.unit as ModuleId].art), name: MODULE[q.unit as ModuleId].name }
+        : isWork(q.unit) ? { ...q, sprite: moduleLook(fac, q.unit as ModuleId), name: MODULE[q.unit as ModuleId].name }
           : q,
   )
   const yardsUp = YARD_KINDS.filter((k) => p.base.yards[k] === 'up').length
@@ -2827,7 +2815,7 @@ function resultOf(w: World, c: Clash, meSide: number, left: boolean): BattleResu
 // --- Panels ---------------------------------------------------------------------------------------------
 
 function ShipRow({ g, owner, id, n, children }: { g: Galaxy; owner: number; id: string; n: number; children?: ReactNode }) {
-  const t = sizedType(id, g.rules?.sizes)
+  const t = UNIT[id]
   return (
     <div className="ew-gship" {...unitTip(t, { who: owner === ME ? `Yours · ${FACTIONS[g.sides[owner].faction].long}` : `Enemy · ${FACTIONS[g.sides[owner].faction].long}`, rel: owner === ME ? 'own' : 'enemy' })}>
       <ShipArt t={t} />
@@ -2945,7 +2933,7 @@ function GalaxySelection({ g, fleets, planets, take, setTake, mode, onCommand, o
                 </HoldButton>
                 <div className="ew-seltiles">
                   {grouped(gr.fleets.flatMap((f) => f.ships)).map(([id, n]) => {
-                    const t = sizedType(id, g.rules?.sizes)
+                    const t = UNIT[id]
                     const k = split ? Math.min(n, take[id] ?? n) : n
                     const set = (v: number) => setTake({ ...take, [id]: clamp(v, 0, n) })
                     const only = () => setTake(Object.fromEntries(grouped(split!.ships).map(([x, c]) => [x, x === id ? c : 0])))
