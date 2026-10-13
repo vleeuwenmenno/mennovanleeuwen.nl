@@ -30,6 +30,7 @@ import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setD
 import { DOCK_MODES, getDockMode, setDockMode, type DockMode } from '../os/dockPrefs'
 import { AppIcon } from '../os/icons'
 import { setStartupPrefs, START_WINDOWS, useStartupPrefs } from '../os/startup'
+import { tabWorkspacePrefs, tabWorkspacesSupported, useTabWorkspaces } from '../os/tabWorkspaces'
 import { clearEntries, pruneEntries, useEntries } from '../os/notify'
 import { ACTIVITY_WINDOWS, CALENDAR_LEADS, isOff, KEEP, setNotifyPrefs, setOn, useNotifyPrefs, visibleSources, type NotifySource as NotifySourceDef } from '../os/notifyPrefs'
 import { disablePush, enablePush, pushState, sendTestPush, type PushState } from '../os/push'
@@ -1684,6 +1685,7 @@ function WindowsSettings() {
           {windows !== 'last' && " While this is chosen, MvL OS doesn't save which windows are open."}
         </p>
       </SetGroup>
+      <TabWorkspacesGroup lastWindows={windows === 'last'} />
       <SetGroup title="Right now">
         <ul className="set-list">
           <li className="set-row">
@@ -1698,6 +1700,58 @@ function WindowsSettings() {
         </ul>
       </SetGroup>
     </>
+  )
+}
+
+/** Settings → Windows → Workspaces: one workspace per tab of this browser (src/os/tabWorkspaces.ts). */
+function TabWorkspacesGroup({ lastWindows }: { lastWindows: boolean }) {
+  const prefs = tabWorkspacePrefs.use()
+  const tabs = useTabWorkspaces()
+  const wm = useWM()
+  const now = !tabWorkspacesSupported
+    ? "This browser can't tell which of its tabs are open (no Web Locks), so every tab shows the same workspace."
+    : !prefs.perTab
+      ? 'Every tab shows the same workspace.'
+      : !lastWindows
+        ? 'This needs Last windows above: with the other choices every tab has windows of its own.'
+        : !wm.workspaces
+          ? 'A phone has the one workspace.'
+          : tabs.status === 'own'
+            ? `This tab has workspace ${tabs.mine}.`
+            : tabs.status === 'shared'
+              ? 'Every workspace was open in another tab when this one opened, so this tab shares them.'
+              : ''
+  return (
+    <SetGroup title="Workspaces">
+      <ul className="set-list">
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>One workspace per tab</strong>
+            <span className="muted">Every open tab of MvL OS gets a workspace of its own</span>
+          </span>
+          <Toggle on={prefs.perTab} onChange={(on) => tabWorkspacePrefs.patch({ perTab: on })} label="One workspace per tab" />
+        </li>
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Adopt left-behind workspaces</strong>
+            <span className="muted">A new tab takes over the windows a closed tab left</span>
+          </span>
+          <Toggle on={prefs.adopt} onChange={(on) => tabWorkspacePrefs.patch({ adopt: on })} label="Adopt left-behind workspaces" />
+        </li>
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>…also as the new tab page</strong>
+            <span className="muted">
+              Off: <code>/?newtab</code> starts on an empty workspace
+            </span>
+          </span>
+          <Toggle on={prefs.adoptNewTab} onChange={(on) => tabWorkspacePrefs.patch({ adoptNewTab: on })} label="Adopt left-behind workspaces on the new tab page" />
+        </li>
+      </ul>
+      <p className="muted set-help">
+        {now && `${now} `}The bar marks the workspaces open in other tabs with a dot. Going to one is refused, since a page can't bring another tab forward; a window sent there moves to that tab. The new tab page leaves old workspaces alone unless the last switch is on, or every Ctrl+T would take one over. Saved in this browser.
+      </p>
+    </SetGroup>
   )
 }
 
@@ -1784,7 +1838,7 @@ const GROUPS: Group[] = [
   {
     panes: [
       { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal favourites favorites starred', blurb: 'What Spotlight shows when it opens, what it searches, and what it remembers.', render: () => <SpotlightSettings /> },
-      { id: 'windows', label: 'Windows', hue: 'var(--yellow)', icon: svg(<><rect x="3" y="5" width="12" height="10" /><rect x="9" y="9" width="12" height="10" /></>), keywords: 'windows restore reopen startup start open last session layout tabs welcome empty desktop reset start over', blurb: 'What the desktop shows when MvL OS opens again.', render: () => <WindowsSettings /> },
+      { id: 'windows', label: 'Windows', hue: 'var(--yellow)', icon: svg(<><rect x="3" y="5" width="12" height="10" /><rect x="9" y="9" width="12" height="10" /></>), keywords: 'windows restore reopen startup start open last session layout tabs welcome empty desktop reset start over workspaces workspace per tab browser tabs adopt left behind closed tab newtab new tab page', blurb: 'What the desktop shows when MvL OS opens again, and one workspace per browser tab.', render: () => <WindowsSettings /> },
       { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page spotlight', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
       { id: 'notifications', label: 'Notifications', hue: 'var(--red)', icon: svg(<><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></>), keywords: 'notifications alerts notification center bell pop-ups do not disturb dnd keep history clear minecraft activity agents uploads unpacking updates system browser', blurb: 'Pop-ups, the notification center, and which apps may notify.', render: () => <Notifications /> },
       { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal spotlight suggestions mvl.sh token', blurb: "The golinks account that go <alias> follows, in Spotlight and the terminal.", render: () => <GoLinks /> },
