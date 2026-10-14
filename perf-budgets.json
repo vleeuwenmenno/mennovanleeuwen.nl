@@ -1,0 +1,282 @@
+{
+  "about": "pnpm check:perf budgets: written by `pnpm check:perf --update`. Counts are machine-independent; times are soft (see README, Performance guardrails).",
+  "visual": {
+    "mean": 1.5,
+    "changed": 0.01
+  },
+  "scenes": {
+    "skirmish-200": {
+      "canvas draw calls / frame": {
+        "baseline": 3999.72,
+        "budget": 4600,
+        "kind": "count"
+      },
+      "canvas drawImage / frame": {
+        "baseline": 1592.7,
+        "budget": 1832,
+        "kind": "count"
+      },
+      "canvas fill+stroke / frame": {
+        "baseline": 2255.88,
+        "budget": 2595,
+        "kind": "count"
+      },
+      "canvas save+restore / frame": {
+        "baseline": 1053.03,
+        "budget": 1211,
+        "kind": "count"
+      },
+      "canvas gradients / frame": {
+        "baseline": 4,
+        "budget": 6,
+        "kind": "count"
+      },
+      "canvas filters+shadows / frame": {
+        "baseline": 0,
+        "budget": 0,
+        "kind": "strict"
+      },
+      "canvas pixel reads / frame": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "offscreen draw calls / frame": {
+        "baseline": 612.57,
+        "budget": 705,
+        "kind": "count"
+      },
+      "new canvases / sim s": {
+        "baseline": 257,
+        "budget": 296,
+        "kind": "count"
+      },
+      "bitmap cache MB": {
+        "baseline": 24.46,
+        "budget": 29,
+        "kind": "count"
+      },
+      "React commits / sim s": {
+        "baseline": 12,
+        "budget": 14,
+        "kind": "count"
+      },
+      "DOM nodes": {
+        "baseline": 207,
+        "budget": 239,
+        "kind": "count"
+      },
+      "main thread ms / frame": {
+        "budget": 52,
+        "kind": "time"
+      }
+    },
+    "skirmish-300": {
+      "canvas draw calls / frame": {
+        "baseline": 5243.83,
+        "budget": 6031,
+        "kind": "count"
+      },
+      "canvas drawImage / frame": {
+        "baseline": 2172.25,
+        "budget": 2499,
+        "kind": "count"
+      },
+      "canvas fill+stroke / frame": {
+        "baseline": 2911.9,
+        "budget": 3349,
+        "kind": "count"
+      },
+      "canvas save+restore / frame": {
+        "baseline": 1245.7,
+        "budget": 1433,
+        "kind": "count"
+      },
+      "canvas gradients / frame": {
+        "baseline": 4,
+        "budget": 6,
+        "kind": "count"
+      },
+      "canvas filters+shadows / frame": {
+        "baseline": 0,
+        "budget": 0,
+        "kind": "strict"
+      },
+      "canvas pixel reads / frame": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "offscreen draw calls / frame": {
+        "baseline": 678.57,
+        "budget": 781,
+        "kind": "count"
+      },
+      "new canvases / sim s": {
+        "baseline": 289,
+        "budget": 333,
+        "kind": "count"
+      },
+      "bitmap cache MB": {
+        "baseline": 25.26,
+        "budget": 30,
+        "kind": "count"
+      },
+      "React commits / sim s": {
+        "baseline": 12,
+        "budget": 14,
+        "kind": "count"
+      },
+      "DOM nodes": {
+        "baseline": 207,
+        "budget": 239,
+        "kind": "count"
+      },
+      "main thread ms / frame": {
+        "budget": 70,
+        "kind": "time"
+      }
+    },
+    "galaxy-start": {
+      "React commits / sim s, zooming": {
+        "baseline": 5.83,
+        "budget": 8,
+        "kind": "count"
+      },
+      "React commits / sim s, panning": {
+        "baseline": 1,
+        "budget": 3,
+        "kind": "count"
+      },
+      "map DOM nodes": {
+        "baseline": 461,
+        "budget": 531,
+        "kind": "count"
+      },
+      "DOM nodes": {
+        "baseline": 734,
+        "budget": 845,
+        "kind": "count"
+      },
+      "filtered map elements": {
+        "baseline": 19,
+        "budget": 19,
+        "kind": "strict"
+      },
+      "canvas draw calls / frame, zooming": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "new canvases / sim s, zooming": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "main thread ms / frame, zooming": {
+        "budget": 3,
+        "kind": "time"
+      },
+      "main thread ms / frame, panning": {
+        "budget": 2,
+        "kind": "time"
+      }
+    },
+    "galaxy-late": {
+      "React commits / sim s, zooming": {
+        "baseline": 5.83,
+        "budget": 8,
+        "kind": "count"
+      },
+      "React commits / sim s, panning": {
+        "baseline": 1,
+        "budget": 3,
+        "kind": "count"
+      },
+      "map DOM nodes": {
+        "baseline": 874,
+        "budget": 1006,
+        "kind": "count"
+      },
+      "DOM nodes": {
+        "baseline": 1257,
+        "budget": 1446,
+        "kind": "count"
+      },
+      "filtered map elements": {
+        "baseline": 14,
+        "budget": 14,
+        "kind": "strict"
+      },
+      "canvas draw calls / frame, zooming": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "new canvases / sim s, zooming": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "main thread ms / frame, zooming": {
+        "budget": 7,
+        "kind": "time"
+      },
+      "main thread ms / frame, panning": {
+        "budget": 2,
+        "kind": "time"
+      }
+    },
+    "desktop-idle": {
+      "DOM nodes": {
+        "baseline": 1158,
+        "budget": 1332,
+        "kind": "count"
+      },
+      "frame callbacks / frame": {
+        "baseline": 0,
+        "budget": 0,
+        "kind": "strict"
+      },
+      "timer callbacks / s": {
+        "baseline": 0.2,
+        "budget": 3,
+        "kind": "count"
+      },
+      "live intervals": {
+        "baseline": 7,
+        "budget": 9,
+        "kind": "count"
+      },
+      "React commits / s": {
+        "baseline": 0.25,
+        "budget": 3,
+        "kind": "count"
+      },
+      "canvas draw calls / frame": {
+        "baseline": 0,
+        "budget": 2,
+        "kind": "count"
+      },
+      "hidden: frame callbacks / frame": {
+        "baseline": 0,
+        "budget": 0,
+        "kind": "strict"
+      },
+      "hidden: timer callbacks / s": {
+        "baseline": 0.08,
+        "budget": 0.08,
+        "kind": "strict"
+      },
+      "hidden: React commits / s": {
+        "baseline": 0.03,
+        "budget": 0.03,
+        "kind": "strict"
+      },
+      "main thread ms / frame": {
+        "budget": 1,
+        "kind": "time"
+      }
+    }
+  }
+}

@@ -12,5 +12,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["server", "scripts/dev-proxy.ts"]
+  "include": ["server", "scripts/dev-proxy.ts", "scripts/perf/*.ts"]
 }

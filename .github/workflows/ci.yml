@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -17,6 +18,42 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+
+  # pnpm check:perf: fixed scenes in headless Chrome held to perf-budgets.json and the pixel
+  # snapshots in scripts/perf/baselines (README, Performance guardrails). Chrome for Testing is
+  # pinned to the version the snapshots were made with and cached; it draws in software here
+  # (no GPU), as the check does everywhere, so the counts match any machine's.
+  perf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CHROME_VERSION: 152.0.7977.82
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - id: chrome
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/perf-chrome
+          key: chrome-for-testing-${{ env.CHROME_VERSION }}
+      - if: steps.chrome.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.cache/perf-chrome
+          curl -fsSL -o "$RUNNER_TEMP/chrome.zip" "https://storage.googleapis.com/chrome-for-testing-public/$CHROME_VERSION/linux64/chrome-linux64.zip"
+          unzip -q "$RUNNER_TEMP/chrome.zip" -d ~/.cache/perf-chrome
+      - run: PERF_CHROME="$HOME/.cache/perf-chrome/chrome-linux64/chrome" PERF_ACTUAL_DIR="$RUNNER_TEMP/perf-actual" pnpm check:perf
+      # A snapshot that no longer matches: the new pictures, to look at.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-snapshots
+          path: ${{ runner.temp }}/perf-actual
+          if-no-files-found: ignore
 
   # The runtime image copies the server and the few src/ files it imports one by one: start it
   # and ask /healthz, so a file the server needs but the image lacks fails here, not in production.

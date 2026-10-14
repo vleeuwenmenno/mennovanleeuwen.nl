@@ -22,6 +22,7 @@ pnpm install
 pnpm dev          # http://localhost:5173
 pnpm typecheck
 pnpm build        # static site in dist/
+pnpm check:perf   # performance budgets and pixel snapshots (see Performance guardrails)
 ```
 
 ## Look and themes
@@ -2275,6 +2276,92 @@ pnpm check:empires-rejoin                                       # stepping away:
 pnpm empires:bot "Bot Rook"                                     # an opponent that joins your battle
 ```
 
+## Performance guardrails
+
+The bar is the display's full refresh rate (up to 240 Hz) without giving up anything on screen.
+`pnpm check:perf` ([`scripts/perf/`](scripts/perf)) keeps new features to it: it runs fixed scenes
+in headless Chromium and holds them to [`perf-budgets.json`](perf-budgets.json) and to pixel
+snapshots in [`scripts/perf/baselines/`](scripts/perf/baselines), and CI runs it on every pull
+request.
+
+```sh
+pnpm check:perf                      # every scene: a table of metric, budget, actual, result
+pnpm check:perf --only galaxy-late   # one scene (or a comma-separated few)
+pnpm check:perf --update             # after an intended change: new budgets and snapshots, diff printed
+pnpm check:perf --json out.json      # everything measured, raw counters included
+pnpm check:perf --fixtures           # rebuild the galaxy saves in scripts/perf/fixtures
+```
+
+**The scenes.** A skirmish with 200 and with 300 ships fighting (spawned through the sim in the
+middle of the map, the camera panning across); the galactic conquest map of a new and a late
+campaign (saves in `scripts/perf/fixtures`), zoomed with the wheel and dragged round a circle; and
+the desktop with a few apps open, left idle, then hidden.
+
+**Deterministic.** The check starts its own Vite dev server (no `/api`, no network) and
+[`harness.js`](scripts/perf/harness.js) goes into every page first: from the moment a scene starts,
+`performance.now()`, `requestAnimationFrame` and the timers run on a clock the check steps by hand,
+a fixed 1/60 s a frame, and `Math.random` starts from a fixed seed. Loading waits in real time with
+the clock stopped. So every run draws the same frames, whatever the machine: the counts come out
+identical on a fast desktop and on CI's software rendering. Nothing of this is in the app; the
+scenes reach into the game through its modules and the dev-only `window.__ew`.
+
+**What's measured**, per scene: canvas calls per frame (draw calls, `drawImage`, fills and strokes,
+save/restore, gradients, filters and shadows, pixel reads, and what's drawn off screen into bitmap
+caches), new canvases per second, the model bitmap cache's size, React commits per second (while
+zooming and panning, the galaxy map should hardly render), DOM nodes, map elements drawn through a
+CSS filter, and, idle, frame callbacks, timer callbacks and live intervals, shown and hidden.
+Budgets are the measurement plus 15%, or plus 2 for counts near zero.
+
+The main thread's time per frame (input, timers, frame callbacks and the style and layout they
+leave) is measured too, but only as a soft budget of three times the measurement: it never fails
+the check, since machines differ.
+
+**Pixels.** Each battle and galaxy scene is also a 320×180 snapshot, compared with a tolerance
+(mean difference 1.5/255, and at most 1% of pixels clearly changed): the battle's canvas, and the
+galaxy map's layers without the panels round them. Text is left out of both (canvas text isn't
+drawn, SVG and HTML text is made transparent), since fonts render differently from machine to
+machine; animations and transitions are off. A failing snapshot's picture is saved next to the
+message, to compare.
+
+**Updating.** A failure names the scene and the metric, and how far over it went. If the new cost is
+the point of the change (more ships drawn, a new effect), run `pnpm check:perf --update`, look at
+the printed before and after, and commit `perf-budgets.json` and the snapshots with the change.
+Never update to make a regression go away.
+
+**CI.** The `perf` job in [`ci.yml`](.github/workflows/ci.yml) downloads the Chrome for Testing
+build the snapshots were made with (pinned, cached) and runs `pnpm check:perf` with software
+rendering. Counts don't depend on the machine; time budgets are soft there as everywhere.
+
+### Do's and don'ts
+
+- **Cache big drawings as bitmaps.** A ship, a station or a sprite is painted once into an off-screen
+  canvas at the size it shows (steps of √2, see `models/paint.ts`) and drawn with one `drawImage`
+  a frame; painting paths every frame is what costs.
+- **Cap the canvas DPR at 2.** A 3× phone screen at full density is 2.25 times the pixels of 2× for
+  no visible gain; the battle canvas uses `Math.min(2, devicePixelRatio)`.
+- **Glow sprites, not gradients.** A radial gradient made per particle per frame is slow; draw a
+  glow once into a small canvas and stamp it with `drawImage` (scaled, tinted, faded).
+- **No React state for anything that changes every frame.** The camera and animations live in refs
+  and move in a `requestAnimationFrame` loop that sets styles or draws directly; React renders only
+  when what's shown changes (the galaxy map's `CamView` and `zoomBand`).
+- **No filters or blur on huge or zoomed shapes.** A CSS `filter` (drop-shadow, blur) or a canvas
+  `filter`/`shadowBlur` is a pass of its own every frame, as big as the shape on screen; fake the
+  glow with a few soft strokes or a sprite (the galaxy's blockade rings, `glowRings`).
+- **Register CSS variables as not inherited, and set them only where they're used.** A variable
+  set on a map's root restyles every element under it each frame; `@property … inherits: false` set
+  on the few elements that read it restyles only those (`scaleVars` in `Conquest.tsx`).
+- **Keep text out of transformed SVG.** SVG text inside a zoomed SVG is laid out again at every step
+  of a zoom; put labels in an HTML layer over it (the galaxy's `.ew-gover` pins).
+- **No allocations per frame.** Reuse arrays and objects in the frame loop, and drop dead entries by
+  compacting in place (a write index, then `length =`) instead of `filter()` making a new array.
+- **Pause timers and loops when hidden.** On `visibilitychange`, stop intervals and animation loops
+  that only update the screen; a hidden tab should do next to nothing (the idle scene checks it).
+- **Measure with the FPS overlay.** Settings → Performance → *Show FPS and frame time* shows the
+  page's frame rate and p50/p95 frame times anywhere, fullscreen included: try the change at your
+  display's refresh rate before and after.
+- **Run `pnpm check:perf` before a pull request,** and update the budgets only for a cost you meant
+  to add.
+
 ## Installable app
 
 The site is a PWA: [`public/manifest.webmanifest`](public/manifest.webmanifest) makes it
@@ -2288,7 +2375,7 @@ configuration that builds and serves one on port 4180.
 ## Releases and hosting
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) typechecks and builds every push to
-`main` and every pull request.
+`main` and every pull request, and runs `pnpm check:perf` on them (see Performance guardrails).
 
 Publishing a GitHub release with a semver tag (`v1.2.3`) runs
 [`.github/workflows/release.yml`](.github/workflows/release.yml): it refreshes the activity
