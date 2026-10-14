@@ -1,12 +1,30 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { parseMarkdown, type Block, type Inline } from './parse.ts'
 import { highlight, knownLanguage } from './highlight.ts'
+import { useFurigana } from '../furigana.ts'
 
 // Markdown as React elements, for Zed's preview, Notebook, Spotlight and the Agents app's
 // answers. The parsing is in parse.ts (CommonMark with GitHub's tables, task lists and
 // strikethrough) and the code colouring in highlight.ts; this file only maps the tree to elements,
 // so nothing from the text is ever injected as HTML. Zed.tsx re-exports MarkdownPreview, where it
 // used to live.
+
+/**
+ * Furigana, {漢字|かんじ} in the text. How it shows is Settings → Language (Always, On hover, Off):
+ * a data attribute on the root that the rules in styles.css read. <rp> keeps "漢字(かんじ)"
+ * readable where ruby is not drawn. In On hover the word can be focused, so a keyboard reaches it.
+ */
+function Ruby({ base, reading }: { base: string; reading: string }) {
+  const hover = useFurigana() === 'hover'
+  return (
+    <ruby tabIndex={hover ? 0 : undefined}>
+      {base}
+      <rp>(</rp>
+      <rt>{reading}</rt>
+      <rp>)</rp>
+    </ruby>
+  )
+}
 
 function inlines(nodes: Inline[], key: string): ReactNode[] {
   return nodes.map((n, i) => {
@@ -21,6 +39,8 @@ function inlines(nodes: Inline[], key: string): ReactNode[] {
         return <br key={k} />
       case 'code':
         return <code key={k}>{n.text}</code>
+      case 'ruby':
+        return <Ruby key={k} base={n.base} reading={n.reading} />
       case 'em':
         return <em key={k}>{inlines(n.children, k)}</em>
       case 'strong':

@@ -249,6 +249,8 @@ function inlineHtml(nodes: Inline[], breaks: boolean): string {
           return '<br>'
         case 'code':
           return `<code>${esc(n.text)}</code>`
+        case 'ruby':
+          return `<ruby>${esc(n.base)}<rp>(</rp><rt>${esc(n.reading)}</rt><rp>)</rp></ruby>`
         case 'em':
         case 'strong':
         case 'del':
