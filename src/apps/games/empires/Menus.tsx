@@ -9,6 +9,7 @@ import { DEFAULT_RULES, GENERATED, MAP, MAPS, MAX_BEACONS, MAX_SEED, cleanRules,
 import { ALLY, ENEMY, OWN, drawTerrainOverview, relColor } from './render'
 import { ACTIONS, RESERVED, bindKey, keyName, keyOf, resetKeys, setSettings, useAskedPanel, useSettings, type Action, type Settings } from './settings'
 import { empiresMix, empiresMusic, empiresMuted, empiresVolume } from '../prefs'
+import { performanceOverlayPref } from '../../../os/PerformanceOverlay'
 import { newWorld, type Owner, type World } from './sim'
 import { MAP_SCALE } from './scale'
 import { Codex } from './Codex'
@@ -415,6 +416,8 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
   const muted = empiresMuted.use()
   const mix = empiresMix.use()
   const music = empiresMusic.use()
+  // The page-wide frame timing box (Settings → Appearance), here too since a game on its own has no OS settings.
+  const fps = performanceOverlayPref.use()
   const [testing, setTesting] = useState(false)
   // Scroll speed and edge scrolling are for mice: a finger drags the view.
   const coarse = useCoarse()
@@ -490,6 +493,10 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
       <div className="ew-row">
         <span>Messages</span>
         <Seg label="Messages" value={s.toasts} options={[[true, 'All'], [false, 'Alerts only']]} onChange={(v) => set({ toasts: v })} />
+      </div>
+      <div className="ew-row">
+        <span>Show FPS and frame time</span>
+        <Seg label="Show FPS and frame time" value={fps} options={[[true, 'On'], [false, 'Off']]} onChange={(v) => performanceOverlayPref.set(v)} />
       </div>
       <h5>Shipyard</h5>
       <div className="ew-row">
