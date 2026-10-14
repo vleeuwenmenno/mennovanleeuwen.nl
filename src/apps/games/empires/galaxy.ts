@@ -1396,6 +1396,13 @@ export function clashAt(g: Galaxy, planet: number): Clash | null {
  * else of their side is left out there). */
 export const RESERVE_CALL = 4
 
+/** Yards in an auto-resolved battle: spread round the build radius, they are never all in the
+ * fight. Each stands with `hull` of its hull and shields, and is shot at that much less readily
+ * than a ship or the station (`aim`); once the station and the holder's ships are gone, the yards
+ * fall with them. A whole base, yards and expansions, is then worth about as much to its holder as
+ * two thirds of a cruiser at station level 2, one and a half at levels 3 and 4. */
+export const AUTO_YARD = { hull: 0.35, aim: 0.85 }
+
 /** How a battle ended: the winning side, and what's left of each side. Ships that jumped out are
  * `escaped`: they go back where they came from. `base`: the holder's yards still standing and the
  * expansions not shot off (left out: its buildings came through as they were). */
@@ -1409,10 +1416,11 @@ export type BattleResult = { winner: number; survivors: Record<number, string[]>
  * side is left fighting. A side that wins before then keeps them untouched; an attacker that pulls
  * out takes them along.
  *
- * The holder's buildings fight too: its yards add their hulls and guns (shot at as stations are),
- * a Shield core gives the station 40% more shields and an Armour works its frigates and corvettes
- * 20% more hull, as in a battle. Whatever of them is destroyed is lost (BattleResult.base): a
- * yard's expansions go with it, the station's with the station.
+ * The holder's buildings fight too: its yards add their guns and part of their hulls (AUTO_YARD;
+ * shot at as stations are, if less readily, and they fall with the station), a Shield core gives
+ * the station 40% more shields and an Armour works its frigates and corvettes 20% more hull, as in
+ * a battle. Whatever of them is destroyed is lost (BattleResult.base): a yard's expansions go with
+ * it, the station's with the station.
  */
 export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
   const r = rng(Math.floor(seed * 1000) + c.planet)
@@ -1434,7 +1442,7 @@ export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
     for (const k of YARD_KINDS) {
       if (c.base?.yards[k] !== 'up') continue
       const y = yardType(yardOf(faction, k).id, mods)
-      const yhp = y.hull + y.shield
+      const yhp = (y.hull + y.shield) * AUTO_YARD.hull
       us.push({ side: c.holder, id: k, tier: 'station', hp: yhp, max: yhp, dps: (tier) => dpsVs(y, tier), yard: k })
     }
   }
@@ -1447,7 +1455,8 @@ export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
     // The reserve is called in.
     for (const u of us) if (u.late && (t >= RESERVE_CALL || !us.some((x) => x.side === u.side && !x.late && x.hp > 0))) u.late = false
     const alive = us.filter((u) => u.hp > 0)
-    if (!alive.some((u) => u.side === c.holder) || !alive.some((u) => u.side === c.attacker)) break
+    // (The yards don't hold the planet on their own: they fall with the station.)
+    if (!alive.some((u) => u.side === c.holder && !u.yard) || !alive.some((u) => u.side === c.attacker)) break
     const field = alive.filter((u) => !u.late)
     const dmg = new Map<U, number>()
     for (const a of field) {
@@ -1455,7 +1464,7 @@ export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
       let best = foes[0]
       let bs = -1
       for (const e of foes) {
-        const s = a.dps(e.tier) * (0.7 + r() * 0.6) * (1 + (1 - e.hp / e.max) * 0.5)
+        const s = a.dps(e.tier) * (0.7 + r() * 0.6) * (1 + (1 - e.hp / e.max) * 0.5) * (e.yard ? AUTO_YARD.aim : 1)
         if (s > bs) {
           bs = s
           best = e
@@ -1472,7 +1481,8 @@ export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
     }
   }
   const left = (side: number) => us.filter((u) => u.side === side && u.hp > 0 && !u.station && !u.yard).map((u) => u.id)
-  const holderLeft = us.some((u) => u.side === c.holder && u.hp > 0)
+  const holderLeft = us.some((u) => u.side === c.holder && u.hp > 0 && !u.yard)
+  if (!holderLeft) for (const u of us) if (u.yard) u.hp = 0
   const stationLeft = us.some((u) => u.station && u.hp > 0)
   const yards = us.filter((u) => u.yard && u.hp > 0).map((u) => u.yard!)
   return {
@@ -2155,8 +2165,9 @@ function galaxyAi(g: Galaxy, o: number) {
 export const thinkAi = galaxyAi
 
 /** What the AI reckons a planet's buildings add to its defence, in credits of ships: a yard's
- * hull and guns, and the station's Shield core. */
-const baseGuard = (b: PlanetBase) => (b.yards.yard === 'up' ? 1200 : 0) + (b.yards.cyard === 'up' ? 2000 : 0) + (b.mods.includes('shieldCore') ? 500 : 0)
+ * hull and guns, and the station's Shield core (as they count in an auto-resolved battle, AUTO_YARD:
+ * the whole base a little over a cruiser's worth). */
+const baseGuard = (b: PlanetBase) => (b.yards.yard === 'up' ? 900 : 0) + (b.yards.cyard === 'up' ? 1000 : 0) + (b.mods.includes('shieldCore') ? 250 : 0)
 
 /**
  * The galaxy AI plans its planets' buildings by its profile, one order per look at most, and only
