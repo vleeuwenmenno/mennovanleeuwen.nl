@@ -15,7 +15,11 @@
   position: relative;
   flex: 1;
   min-height: 0;
+  /* Clipped, never scrolled: overflow: hidden alone still lets the browser scroll it (bringing a
+     focused control or a found word into view), and every panel laid out round another (the unit
+     card beside the tactical map) would then be measured against a screen that has moved. */
   overflow: hidden;
+  overflow: clip;
   background: #04060d;
   color: var(--ew-text);
   font: 13px/1.35 system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -3828,6 +3832,13 @@ span.ew-teamtag {
 }
 .ew-detailfloat .ew-detail {
   max-height: 240px;
+  /* Its inside is held to that height (its main column scrolls), rather than running out of the
+     bottom of the screen: a percentage max-height of an auto-height box holds nothing. */
+  display: flex;
+  flex-direction: column;
+}
+.ew-detailfloat .ew-detail > .ew-frame-in {
+  min-height: 0;
 }
 .ew-stationwrap {
   display: flex;

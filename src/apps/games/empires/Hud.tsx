@@ -1508,15 +1508,40 @@ export function Floating({ id, title, at, onClose, aside, onMove, bare, classNam
     if (!el || !root) return { x, y }
     return { x: Math.max(0, Math.min(root.clientWidth - el.offsetWidth, x)), y: Math.max(50, Math.min(root.clientHeight - Math.min(el.offsetHeight, 40), y)) }
   }
-  // Tell whoever lays out round it where it is, after every change.
-  useLayoutEffect(() => {
+  // Tell whoever lays out round it where it is, after every change. Whoever that is may move other
+  // panels in turn, so this must settle: only a box that changed by a whole pixel is reported, in
+  // the screen's own coordinates (however it got scrolled), and a box that keeps changing as fast as
+  // it's reported (laying out round it moves it again) is reported at most once a frame until it
+  // holds still, rather than over and over until React gives up ("Maximum update depth exceeded").
+  const report = useRef({ key: '', onMove, t: 0, n: 0, slow: false, raf: 0 })
+  const tell = (fromFrame = false) => {
     const el = box.current
     const root = el?.parentElement
+    const g = report.current
     if (!el || !root || !onMove) return
     const r = el.getBoundingClientRect()
     const rr = root.getBoundingClientRect()
-    onMove({ x: r.left - rr.left, y: r.top - rr.top, w: r.width, h: r.height }, { w: rr.width, h: rr.height })
-  })
+    const b = { x: r.left - rr.left + root.scrollLeft, y: r.top - rr.top + root.scrollTop, w: r.width, h: r.height }
+    const key = [b.x, b.y, b.w, b.h, rr.width, rr.height].map(Math.round).join()
+    if (key === g.key && onMove === g.onMove) {
+      g.slow = false
+      return
+    }
+    const now = performance.now()
+    if (now - g.t > 50) (g.t = now), (g.n = 0)
+    if ((g.slow || ++g.n > 8) && !fromFrame) {
+      g.slow = true
+      g.raf ||= requestAnimationFrame(() => ((g.raf = 0), tellRef.current(true)))
+      return
+    }
+    g.key = key
+    g.onMove = onMove
+    onMove(b, { w: rr.width, h: rr.height })
+  }
+  const tellRef = useRef(tell)
+  tellRef.current = tell
+  useLayoutEffect(() => tell())
+  useEffect(() => () => cancelAnimationFrame(report.current.raf), [])
   const lastPointer = useRef('mouse')
   const grab = (e: React.PointerEvent) => {
     lastPointer.current = e.pointerType

@@ -2158,10 +2158,16 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const [mapRoom, setMapRoom] = useState(0)
   const mapMoved = useCallback((b: { x: number; y: number; w: number; h: number }, root: { w: number; h: number }) => {
     const docked = b.x < 60 && b.y + b.h > root.h - 60
-    setMapRoom(docked ? b.w : 0)
+    const room = docked ? Math.round(b.w) : 0
+    // Whole pixels, and only a real change: a sub-pixel wobble is no reason to lay the dock out again.
+    setMapRoom((was) => (Math.abs(was - room) <= 1 ? was : room))
   }, [])
   /** Phones stack the unit card above the selection: it needs the selection's height. */
-  const selMoved = useCallback((b: { h: number }) => root.current?.style.setProperty('--ew-selh', `${Math.round(b.h)}px`), [])
+  const selMoved = useCallback((b: { h: number }) => {
+    const el = root.current
+    const h = `${Math.round(b.h)}px`
+    if (el && el.style.getPropertyValue('--ew-selh') !== h) el.style.setProperty('--ew-selh', h)
+  }, [])
   /** A structure's gun picked by clicking it: right-clicking an enemy aims that gun alone. */
   const turretPick = useRef<{ unit: number; hp: number } | null>(null)
   /** Whether the fleet inventory has been opened for its first ship this battle. */

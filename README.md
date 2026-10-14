@@ -2382,7 +2382,10 @@ pnpm check:perf --fixtures           # rebuild the galaxy saves in scripts/perf/
 ```
 
 **The scenes.** A skirmish with 200 and with 300 ships fighting (spawned through the sim in the
-middle of the map, the camera panning across); the galactic conquest map of a new and a late
+middle of the map, the camera panning across); a skirmish reloaded from the tab's resume snapshot
+with engineers selected, looked at in five window sizes with the unit card's contents scrolled into
+view (the battle screen must never scroll, and the panels laid out round each other must settle:
+no React update loop, few commits); the galactic conquest map of a new and a late
 campaign (saves in `scripts/perf/fixtures`), zoomed with the wheel and dragged round a circle; and
 the desktop with a few apps open, left idle, then hidden.
 
