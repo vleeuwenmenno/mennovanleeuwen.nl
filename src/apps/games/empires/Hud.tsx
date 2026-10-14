@@ -1095,6 +1095,11 @@ export function InfoDot({ tip }: { tip: string }) {
   )
 }
 
+/** How many columns a building's cards take in the battle's build panel: up to three side by side
+ * in one row, more in two rows; the grid shares out the width between them (see empires.css,
+ * .ew-bp .ew-yard). */
+const cardCols = (n: number) => ({ ['--cols' as string]: String(n <= 3 ? Math.max(1, n) : Math.ceil(n / 2)) })
+
 /** The left column's head on a building: its name with the ⓘ beside it, and what it is. */
 function SideName({ w, me, u, sub, info }: { w: World; me: Owner; u: Unit; sub: string; info: string }) {
   return (
@@ -1184,7 +1189,8 @@ function StationDetail(p: DetailProps & { st: Unit }) {
           <RepairButton w={w} me={me} u={st} onRepair={p.onRepair} />
         </div>
         <div className="ew-detail-main">
-          <header className="ew-yardhead">
+          {/* With a yard (or a ruin) beside the station, the tech tree button keeps to its icon and count. */}
+          <header className={`ew-yardhead ${w.hybrid && (w.units.some((u) => !u.dead && u.owner === me && u.t.tier === 'yard') || (w.ruins ?? []).some((r) => r.owner === me)) ? 'is-tight' : ''}`}>
             {w.hybrid ? <BaseTabs w={w} me={me} cur={st.id} onSelect={p.onSelect} onRuin={() => !p.onEngineers() && pick('strike')} /> : <h5 className="ew-yardtitle">Shipyard</h5>}
             <TechTreeButton hud={hud} onOpen={p.onTechTree} />
           </header>
@@ -1201,7 +1207,7 @@ function StationDetail(p: DetailProps & { st: Unit }) {
               ] : []),
             ]}
             page={page} onPick={(id) => pick(id as typeof page)} badges={w.hybrid ? { buildings: `${st.xm?.length ?? 0}/${modulesFor('station').length}` } : {}}>
-            <div className="ew-yard" ref={grid}>
+            <div className="ew-yard" ref={grid} style={cardCols(page === 'expansions' ? modulesFor('station').length : page === 'warships' && w.hybrid && !ships.length ? 4 : ships.length)}>
                 {/* No warships at the Command Station with hybrid bases: a ghost card points the way. */}
                 {page === 'warships' && w.hybrid && !ships.length && (
                   <GhostCard t={UNIT[unitOf(faction, 'frigate').id]} text={myYard ? `Built at the ${WORKS_NAME[worksOf(myYard.t) ?? 'yard']}` : 'Built at the Frigate Yard'}
@@ -2093,8 +2099,10 @@ function BaseTabs({ w, me, cur, onSelect, onRuin }: { w: World; me: Owner; cur: 
   const st = w.byId.get(w.players[me].station)
   const yards = w.units.filter((u) => !u.dead && u.owner === me && u.t.tier === 'yard').sort((a, b) => Number(worksOf(a.t) === 'cyard') - Number(worksOf(b.t) === 'cyard'))
   const ruins = (w.ruins ?? []).filter((r) => r.owner === me && !yards.some((y) => y.t.id === r.unit))
+  // Three or more: the pictures alone (names in the tooltips), so the row never wraps.
+  const many = (st ? 1 : 0) + yards.length + ruins.length >= 3
   return (
-    <div className="ew-basetabs" role="tablist" aria-label="Station and yards">
+    <div className={`ew-basetabs ${many ? 'is-compact' : ''}`} role="tablist" aria-label="Station and yards">
       {st && (
         <button role="tab" aria-selected={cur === st.id} className={cur === st.id ? 'is-on' : ''} onClick={() => onSelect(st.id)} data-tip={`Command Station: strike craft, gunships and engineers, and its expansions (${keyName(keys.station)})`}>
           <ShipArt t={st.t} />
@@ -2340,7 +2348,7 @@ function YardDetail(p: DetailProps & { y: Unit }) {
                   tip: `Expansions: modules the yard builds onto itself, one at a time (${modulesFor(kind).map((m) => m.name).join(', ')}).` },
               ]}
               page={page} onPick={(id) => pick(id as typeof page)}>
-              <div className="ew-yard">
+              <div className="ew-yard" style={cardCols(page === 'expansions' ? modulesFor(kind).length : ships.length)}>
                 {page === 'expansions' && <ExpansionCards w={w} me={me} u={y} onExpand={p.onExpand} onCancel={p.onCancelExpand} />}
                 {page === 'ships' && ships.map((t) => (
                   <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id, false, y.id)} whyReserve={cantBuild(w, me, t.id, true, y.id)} level={hud.level} queued={queue.filter((q) => q.unit === t.id).length}

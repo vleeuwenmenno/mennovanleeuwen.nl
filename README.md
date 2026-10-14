@@ -2251,7 +2251,13 @@ to spare, called in a little back from the fight, towards home.
 
 ```sh
 pnpm check:empires-launch   # out of the right yard or the hangar to the rally point, a blocked mouth, reinforcements and their price, the lobby's variants, old saves, save and restore, the AI
+pnpm check:empires-panels http://localhost:5173   # against a running dev server: the station's and yards' build panels at five window sizes and a phone, nothing scrolling, wrapping or cut off
 ```
+
+The build panels of the Command Station and the yards fit their card at every window size: the
+building tabs keep to one row (with three or more, their pictures alone, names in the tooltips),
+and the ship and expansion cards share out the width side by side, at most two rows of them, at
+one compact height.
 
 ## Empires At War rush launch
 
