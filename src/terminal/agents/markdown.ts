@@ -5,7 +5,7 @@ import { seg, width, wrap, type Line, type Seg } from './text'
 // colour, fenced blocks indented, lists with their marks, quotes with a bar, tables drawn with box
 // lines (or left as they are when too wide), links clickable.
 
-// Furigana, {漢字|かんじ}: drawn as 漢字(かんじ), or as 漢字 alone when Settings → Language says Off.
+// Furigana, {漢字|かんじ}: drawn as 漢字(かんじ), or as 漢字 alone when Settings → Language & region says Off.
 // Same shape as the one in src/data/markdown/parse.ts.
 const RUBY = /(?<![${])\{([^{}|\n\\`]{1,60})\|([^{}|\n\\`]{1,120})\}(?!\})/g
 const furigana = (t: string) =>

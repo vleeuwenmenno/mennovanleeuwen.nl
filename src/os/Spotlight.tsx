@@ -34,7 +34,8 @@ import { revealEmail } from '../data/email'
 import { cachedRates, loadRates, smartCalc, type CalcResult } from './smartcalc'
 import { resetLayout } from './desktopStore'
 import { AppIcon } from './icons'
-import { setOverlay } from './overlays'
+import { clearSpotlightQuery, setOverlay, spotlightStartQuery } from './overlays'
+import { useHomeCurrency } from '../data/currency'
 import { answerText, QuickAnswerView, useQuickAnswer } from './SpotlightAnswer'
 import type { QuickAnswerInfo } from '../data/agents'
 import { THEMES } from './omarchyThemes'
@@ -544,7 +545,8 @@ const mailRow = (r: MailHit, many: boolean, label: string | undefined): Result =
 
 export function Spotlight() {
   const wm = useWM()
-  const [q, setQ] = useState('')
+  // Empty, or what openSpotlight was given (an amount in an Agents reply).
+  const [q, setQ] = useState(spotlightStartQuery)
   // A list opened inside Spotlight (Add widget…); the search box then filters that list.
   const [sub, setSub] = useState<'widgets' | null>(null)
   const openSub = (s: 'widgets' | null) => {
@@ -593,6 +595,7 @@ export function Spotlight() {
   }
 
   useEffect(() => {
+    clearSpotlightQuery()
     input.current?.focus()
     fetchMinecraft()
   }, [])
@@ -870,7 +873,8 @@ export function Spotlight() {
 
   // Calculator, units and currencies. Exchange rates load the first time a currency appears.
   const [rates, setRates] = useState(cachedRates)
-  const calc = useMemo(() => (sub ? null : smartCalc(q, rates)), [q, rates, sub])
+  const home = useHomeCurrency()
+  const calc = useMemo(() => (sub ? null : smartCalc(q, rates, home)), [q, rates, sub, home])
   // The search engine's suggestions, for plain text (not maths, #123 or repo@branch).
   const suggestions = useSuggestions(q, !sub && !calc && !isCodeQuery(q) && goAlias === null)
   useEffect(() => {

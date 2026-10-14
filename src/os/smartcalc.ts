@@ -93,9 +93,10 @@ for (const [aliases, factor, offset, label] of [
 ] as [string[], number, number, string][])
   for (const a of aliases) UNITS.set(a, { dim: 'temp', factor, offset, label })
 
-const SYMBOLS: Record<string, string> = { '€': 'EUR', $: 'USD', '£': 'GBP', '¥': 'JPY', '₹': 'INR', '₩': 'KRW', '₺': 'TRY', '₽': 'RUB', '₪': 'ILS', '฿': 'THB', '₱': 'PHP', zł: 'PLN' }
-const CURRENCY_SIGN: Record<string, string> = Object.fromEntries(Object.entries(SYMBOLS).map(([s, c]) => [c, s]))
-const KNOWN_CURRENCIES = new Set(['EUR', 'USD', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD', 'NZD', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'HUF', 'RON', 'BGN', 'TRY', 'CNY', 'HKD', 'SGD', 'INR', 'KRW', 'BRL', 'MXN', 'ZAR', 'ILS', 'IDR', 'MYR', 'PHP', 'THB', 'ISK', 'AED', 'SAR', 'ARS', 'CLP', 'COP', 'EGP', 'NGN', 'PKR', 'TWD', 'UAH', 'VND', 'RUB'])
+/** Currency signs to ISO codes; src/data/money.ts reads amounts in Agents replies with these too. */
+export const SYMBOLS: Record<string, string> = { '€': 'EUR', $: 'USD', '£': 'GBP', '¥': 'JPY', '₹': 'INR', '₩': 'KRW', '₺': 'TRY', '₽': 'RUB', '₪': 'ILS', '฿': 'THB', '₱': 'PHP', zł: 'PLN' }
+export const CURRENCY_SIGN: Record<string, string> = Object.fromEntries(Object.entries(SYMBOLS).map(([s, c]) => [c, s]))
+export const KNOWN_CURRENCIES = new Set(['EUR', 'USD', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD', 'NZD', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'HUF', 'RON', 'BGN', 'TRY', 'CNY', 'HKD', 'SGD', 'INR', 'KRW', 'BRL', 'MXN', 'ZAR', 'ILS', 'IDR', 'MYR', 'PHP', 'THB', 'ISK', 'AED', 'SAR', 'ARS', 'CLP', 'COP', 'EGP', 'NGN', 'PKR', 'TWD', 'UAH', 'VND', 'RUB'])
 
 const FUNCS: Record<string, (x: number) => number> = { sqrt: Math.sqrt, abs: Math.abs, round: Math.round, floor: Math.floor, ceil: Math.ceil, sin: Math.sin, cos: Math.cos, tan: Math.tan, log: Math.log10, ln: Math.log }
 const CONSTS: Record<string, number> = { pi: Math.PI, π: Math.PI, e: Math.E }
@@ -103,45 +104,82 @@ const CONSTS: Record<string, number> = { pi: Math.PI, π: Math.PI, e: Math.E }
 // ---------------------------------------------------------------------------------------------
 // Exchange rates (units of currency per 1 EUR), cached for the visit and a few hours in storage.
 
-export type Rates = { base: 'EUR'; date: string; source: string; rates: Record<string, number> }
+export type Rates = { base: 'EUR'; date: string; source: string; rates: Record<string, number>; /** Codes only the wider source (exchangerate-api.com) has */ wide?: string[] }
 const RATES_KEY = 'mvlos.fx.v1'
 let ratesCache: Rates | null = null
 let ratesPromise: Promise<Rates | null> | null = null
 
 export const cachedRates = () => ratesCache
 
+const isRates = (v: unknown): v is Rates => !!v && typeof v === 'object' && !!(v as Rates).rates && typeof (v as Rates).rates === 'object' && Object.keys((v as Rates).rates).length > 1
+
+/**
+ * The site's shared copy (/api/fx, server/fx.ts: the same two sources, fetched once for everyone
+ * and kept for six hours), or the two sources directly when there is no server (a static build,
+ * or the API failing).
+ */
+async function fetchRates(): Promise<Rates | null> {
+  try {
+    const r = await fetch('/api/fx', { headers: { Accept: 'application/json' } })
+    if (r.ok) {
+      const data = await r.json()
+      if (isRates(data)) return { base: 'EUR', date: data.date, source: data.source, rates: data.rates, wide: data.wide }
+    }
+  } catch {
+    /* no server: ask the sources */
+  }
+  // ECB reference rates via Frankfurter, topped up with open.er-api.com for currencies the ECB does not publish.
+  const [ecb, wide] = await Promise.allSettled([
+    fetch('https://api.frankfurter.dev/v1/latest?base=EUR').then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
+    fetch('https://open.er-api.com/v6/latest/EUR').then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
+  ])
+  const ecbRates: Record<string, number> = ecb.status === 'fulfilled' ? (ecb.value.rates ?? {}) : {}
+  const rates: Record<string, number> = { ...(wide.status === 'fulfilled' ? wide.value.rates : {}), ...ecbRates, EUR: 1 }
+  if (Object.keys(rates).length < 2) return null
+  return {
+    base: 'EUR',
+    date: ecb.status === 'fulfilled' ? ecb.value.date : new Date().toISOString().slice(0, 10),
+    source: ecb.status === 'fulfilled' ? 'European Central Bank' : 'exchangerate-api.com',
+    rates,
+    wide: ecb.status === 'fulfilled' ? Object.keys(rates).filter((c) => c !== 'EUR' && !(c in ecbRates)) : undefined,
+  }
+}
+
 export function loadRates(): Promise<Rates | null> {
   if (ratesCache) return Promise.resolve(ratesCache)
   try {
     const raw = JSON.parse(sessionStorage.getItem(RATES_KEY) ?? 'null')
-    if (raw && Date.now() - raw.at < 6 * 3600_000) return Promise.resolve((ratesCache = raw.data))
+    if (raw && Date.now() - raw.at < 6 * 3600_000 && isRates(raw.data)) return Promise.resolve((ratesCache = raw.data))
   } catch {
     /* fetch instead */
   }
-  ratesPromise ??= (async () => {
-    // ECB reference rates via Frankfurter, topped up with open.er-api.com for currencies the ECB does not publish.
-    const [ecb, wide] = await Promise.allSettled([
-      fetch('https://api.frankfurter.dev/v1/latest?base=EUR').then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
-      fetch('https://open.er-api.com/v6/latest/EUR').then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
-    ])
-    const rates: Record<string, number> = { ...(wide.status === 'fulfilled' ? wide.value.rates : {}), ...(ecb.status === 'fulfilled' ? ecb.value.rates : {}), EUR: 1 }
-    if (Object.keys(rates).length < 2) return null
-    const data: Rates = {
-      base: 'EUR',
-      date: ecb.status === 'fulfilled' ? ecb.value.date : new Date().toISOString().slice(0, 10),
-      source: ecb.status === 'fulfilled' ? 'European Central Bank' : 'exchangerate-api.com',
-      rates,
-    }
-    ratesCache = data
-    try {
-      sessionStorage.setItem(RATES_KEY, JSON.stringify({ at: Date.now(), data }))
-    } catch {
-      /* fine */
-    }
-    return data
-  })().catch(() => null)
+  ratesPromise ??= fetchRates()
+    .catch(() => null)
+    .then((data) => {
+      // A failure is not remembered: the next ask tries again.
+      if (!data) {
+        ratesPromise = null
+        return null
+      }
+      ratesCache = data
+      try {
+        sessionStorage.setItem(RATES_KEY, JSON.stringify({ at: Date.now(), data }))
+      } catch {
+        /* fine */
+      }
+      return data
+    })
   return ratesPromise
 }
+
+/** Where a rate between two currencies comes from: the ECB, unless either is one only the wider source has. */
+export const rateSource = (r: Rates, a: string, b: string) => (r.wide?.includes(a) || r.wide?.includes(b) ? 'exchangerate-api.com' : r.source)
+
+// The home currency (Settings → Language & region, src/data/currency.ts): what money converts to
+// when no target is named. Set from there, so this file stays free of the settings store.
+let home = 'EUR'
+export const setCalcHomeCurrency = (code: string) => void (home = code)
+export const calcHomeCurrency = () => home
 
 // ---------------------------------------------------------------------------------------------
 // Tokens and parsing
@@ -395,10 +433,14 @@ const readableUnits = (q: Q, units: string[], exclude: string[]) => {
 }
 
 // Currencies quoted without minor units.
-const NO_CENTS = new Set(['JPY', 'KRW', 'HUF', 'ISK', 'IDR', 'CLP', 'VND', 'COP'])
+export const NO_CENTS = new Set(['JPY', 'KRW', 'HUF', 'ISK', 'IDR', 'CLP', 'VND', 'COP'])
 
 export function formatMoney(eur: number, code: string, rates: Rates) {
-  const v = eur * (rates.rates[code] ?? NaN)
+  return formatCurrency(eur * (rates.rates[code] ?? NaN), code)
+}
+
+/** An amount in its own currency: "€1,234.50", "¥60,000", "1,234.50 CHF". */
+export function formatCurrency(v: number, code: string) {
   const digits = Math.abs(v) >= 100000 || NO_CENTS.has(code) ? 0 : 2
   const num = v.toLocaleString('en-GB', { minimumFractionDigits: digits, maximumFractionDigits: digits })
   return CURRENCY_SIGN[code] && code !== 'PLN' ? `${CURRENCY_SIGN[code]}${num}` : `${num} ${code}`
@@ -427,7 +469,7 @@ export type CalcResult =
   | { kind: 'ok'; expression: string; value: string; copy: string; alternatives: string[]; note?: string; usesRates: boolean }
 
 /** Returns null when the text does not look like a calculation at all (so Spotlight can ignore it). */
-export function smartCalc(input: string, rates: Rates | null = ratesCache): CalcResult | null {
+export function smartCalc(input: string, rates: Rates | null = ratesCache, homeCurrency = home): CalcResult | null {
   const text = input.trim()
   if (!text || text.length > 200) return null
   // "… to X" / "… in X" / "… as X" / "… = X" names the target when X is a unit or currency.
@@ -477,7 +519,9 @@ export function smartCalc(input: string, rates: Rates | null = ratesCache): Calc
     const to = target?.kind === 'cur' ? target.v : null
     if (target && target.kind !== 'cur') return { kind: 'error', expression: text, message: `money cannot become ${target.v}` }
     if (to && !r.rates[to]) return { kind: 'error', expression: text, message: `No exchange rate for ${to}` }
-    const main = to ?? (from === 'EUR' ? 'USD' : 'EUR')
+    // Without a target: the home currency, or from it to the dollar (the euro when home is the dollar).
+    const homeCode = r.rates[homeCurrency] ? homeCurrency : 'EUR'
+    const main = to ?? (from !== homeCode ? homeCode : homeCode === 'USD' ? 'EUR' : 'USD')
     const value = formatMoney(q.v, main, r)
     const others = ['EUR', 'USD', 'GBP', 'JPY', 'CHF'].filter((c) => c !== main && c !== from).slice(0, 3)
     const rate = r.rates[main] / (r.rates[from] ?? 1)
@@ -487,7 +531,7 @@ export function smartCalc(input: string, rates: Rates | null = ratesCache): Calc
       value: `= ${value}`,
       copy: (q.v * r.rates[main]).toFixed(2),
       alternatives: [...(from !== main ? [`${formatMoney(q.v, from, r)} (in ${from})`] : []), ...others.map((c) => formatMoney(q.v, c, r))],
-      note: `1 ${from} = ${formatNumber(rate, 6)} ${main} · ${r.source}, ${r.date}`,
+      note: `1 ${from} = ${formatNumber(rate, 6)} ${main} · ${rateSource(r, from, main)}, ${r.date}`,
       usesRates,
     }
   }

@@ -35,6 +35,7 @@
     "check:agents-permissions": "node scripts/agents-permissions.ts",
     "check:agents-compact": "node scripts/agents-compact.ts",
     "check:agents-mail": "node scripts/agents-mail-check.ts",
+    "check:money": "node scripts/money-check.ts",
     "check:seafile-stream": "node scripts/seafile-stream.ts",
     "check:ics": "node scripts/ics-check.ts",
     "check:mail": "node scripts/mail-check.ts",

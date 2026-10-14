@@ -7276,6 +7276,166 @@ ruby > rt {
   line-height: 1.9;
   border: 1px solid var(--line-strong);
 }
+/* Amounts of money in Agents replies (MarkdownPreview with `money`, src/os/MoneyAmount.tsx):
+   text with a dotted underline that opens the exchange rates. */
+.md-money {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  text-align: inherit;
+  text-decoration: underline dotted;
+  text-decoration-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  text-underline-offset: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.md-money:hover,
+.md-money.is-open {
+  color: var(--fg-bright);
+  text-decoration-style: solid;
+  text-decoration-color: var(--accent);
+}
+.md-money:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.fx-pop {
+  position: fixed;
+  z-index: 300000;
+  box-sizing: border-box;
+  padding: 10px 12px 12px;
+  background: var(--bg);
+  color: var(--fg);
+  border: var(--border) solid var(--accent);
+  box-shadow: 0 16px 36px -12px rgba(0, 0, 0, 0.45);
+  font-size: 12.5px;
+  animation: ctx-in 0.08s ease-out;
+  outline: none;
+}
+.fx-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+}
+.fx-from {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fx-close {
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.fx-close:hover {
+  color: var(--fg-bright);
+}
+.fx-big {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+/* Already in the home currency: no line under the amount, so the list keeps its distance. */
+.fx-big + .fx-rows {
+  margin-top: 8px;
+}
+.fx-big-value {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg-bright);
+  font-size: 24px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.fx-big-note {
+  margin: 2px 0 8px;
+}
+.fx-rows {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line-strong);
+}
+.fx-rows li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line-strong);
+}
+.fx-code {
+  width: 3.2em;
+  flex: none;
+  color: var(--muted);
+}
+.fx-value {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg-bright);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.fx-copy,
+.fx-btn {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.fx-copy:hover,
+.fx-btn:hover,
+.fx-copy:focus-visible,
+.fx-btn:focus-visible {
+  color: var(--fg-bright);
+  border-color: var(--accent);
+}
+.fx-copy.is-done {
+  color: var(--green);
+}
+.fx-note {
+  margin: 0 0 10px;
+  font-size: 11px;
+}
+.fx-state {
+  margin: 10px 0;
+}
+.fx-state p {
+  margin: 0 0 8px;
+}
+.fx-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.fx-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+@media (pointer: coarse) {
+  .fx-copy,
+  .fx-btn {
+    min-height: 32px;
+  }
+}
 /* Markdown tables (MarkdownPreview): scroll sideways inside their own box when too wide. */
 .zed-preview .md-table {
   max-width: 100%;

@@ -101,6 +101,8 @@ import { AgentsSettings, showAgentsSection, usePromptLocation } from './AgentsSe
 import { openShareDialog } from './AgentsShare'
 import { AttachedFiles, memoryPicture, sentPicture } from './AgentsImages'
 import { MarkdownPreview } from './Zed'
+import { currenciesIn } from '../data/money'
+import { MoneyThread } from '../os/MoneyAmount'
 
 // Agents: a research assistant on Ollama Cloud (server/agents.ts). Threads on the left (and the
 // archived ones, and what the agent remembers), the conversation on the right with each tool call
@@ -978,6 +980,8 @@ type ConversationProps = {
 function Conversation({ id, draftProject, projects, listThread, ask, onAsked, onBack, onCreated, onChanged, onArchive, onDelete }: ConversationProps) {
   const [thread, setThread] = useState<Thread | null>(null)
   const [messages, setMessages] = useState<AgentMessage[]>([])
+  // The currencies the answers mention, offered when you open an amount in one (src/os/MoneyAmount.tsx).
+  const threadCurrencies = useMemo(() => currenciesIn(messages.filter((m) => m.role === 'assistant' && m.content).map((m) => m.content)), [messages])
   const [models, setModels] = useState<ModelInfo[]>([])
   const [draftMode, setDraftMode] = useState<Mode>(() => ask?.mode ?? agentSettings().mode)
   const [approvals, setApprovals] = useState<PendingApproval[]>([])
@@ -1835,13 +1839,17 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             <p className="muted agt-empty-tools">Tools on: {tools.length ? TOOL_GROUPS.filter((g) => tools.includes(g.id)).map((g) => g.name).join(', ') : 'none, just the model'}.</p>
           </div>
         )}
-        <Messages mailAlways={!!thread?.mailReadsAlways} threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} />
+        <MoneyThread currencies={threadCurrencies}>
+          <Messages mailAlways={!!thread?.mailReadsAlways} threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} />
+        </MoneyThread>
         {reconnecting ? (
           <p className="agt-wait muted">Reconnecting… the connection dropped, or the server is restarting for an update.</p>
         ) : compacting ? (
           <p className="agt-wait muted agt-compacting">{compacting.auto ? 'The context is nearly full: compacting the conversation…' : 'Compacting the conversation…'}</p>
         ) : live ? (
-          <LiveReply live={live} />
+          <MoneyThread currencies={threadCurrencies}>
+            <LiveReply live={live} />
+          </MoneyThread>
         ) : (
           answering && <p className="agt-wait muted">Working…</p>
         )}
@@ -2095,7 +2103,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
         {m.content.trim() && (
           <div className="agt-answer-wrap" data-msg={m.id}>
             <article className="zed-preview agt-answer">
-              <MarkdownPreview text={m.content} />
+              <MarkdownPreview text={m.content} money />
             </article>
             {/* Under each answer on hover (always on touch): share it as a link. */}
             {answers.has(m.id) && (
@@ -2140,7 +2148,7 @@ function CompactDivider({ m }: { m: AgentMessage }) {
           {c ? ` (about ${tokenCount(c.before)} tokens down to ${tokenCount(c.after)})` : ''}. They stay here for you to read.
         </p>
         <article className="zed-preview agt-answer">
-          <MarkdownPreview text={m.content} />
+          <MarkdownPreview text={m.content} money />
         </article>
       </div>
     </details>
@@ -2172,7 +2180,7 @@ function LiveReply({ live }: { live: Live }) {
       {live.thinking && <Thinking text={live.thinking} live={!live.content} />}
       {live.content && (
         <article className="zed-preview agt-answer">
-          <MarkdownPreview text={live.content} />
+          <MarkdownPreview text={live.content} money />
         </article>
       )}
     </>

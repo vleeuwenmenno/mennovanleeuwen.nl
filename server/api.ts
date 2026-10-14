@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
+import { fxRates } from './fx.ts'
 import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
 import { authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, startLogin } from './auth.ts'
@@ -64,6 +65,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     }
     if (read && path === '/api/suggest') {
       json(res, 200, { suggestions: await suggest(url.searchParams.get('engine') ?? '', url.searchParams.get('q') ?? '') })
+      return true
+    }
+    // Exchange rates, shared by everyone, guests too (server/fx.ts).
+    if (read && path === '/api/fx') {
+      const fx = await fxRates()
+      if (!fx) return json(res, 503, { error: 'Exchange rates are unavailable right now' }), true
+      const body = JSON.stringify({ ...fx.rates, stale: fx.stale })
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${fx.maxAge}`, ...SECURITY }).end(head ? undefined : body)
       return true
     }
     if (read && path === '/api/version') {
