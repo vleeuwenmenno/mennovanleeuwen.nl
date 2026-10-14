@@ -719,8 +719,15 @@ where it shows, loading more as it scrolls), the reading pane, search (words, or
 dragging a conversation onto a mailbox), junk, delete to Trash and, from Trash only and after an
 in-OS question, for good. Writing is plain text with attachments from the computer or from Files
 (Seafile); every change is saved as a draft after a pause, and Send submits it with the chosen
-identity (`EmailSubmission/set`, moved to Sent once the server has taken it). Attachments save to
-Files too. Keys: `j`/`k` (or the arrows) to move, Enter to open, `e` archive, `#` delete, `!` junk,
+identity (`EmailSubmission/set`, moved to Sent once the server has taken it). A PDF attachment
+opens at a click in MvL OS's PDF window, a picture in Preview, and audio or video in Player
+(titled with the file's name, its Download saving it), never in a new browser tab: they are read
+through this site with the session (`/api/mail/<account>/blob/…`, only for the account's owner;
+PDF.js reads the bytes of the download, which is always `application/octet-stream`; pictures,
+audio and video of a few known types come inline, and audio and video with byte ranges for
+seeking; every answer has `nosniff` and a sandboxing CSP). The chip's ⤓ button, its right-click
+menu and *Download all* still download. Other attachments (Office files and the rest) download as
+before. Attachments save to Files too. Keys: `j`/`k` (or the arrows) to move, Enter to open, `e` archive, `#` delete, `!` junk,
 `s` flag, `u` read or unread, `r` reply, `a` reply all, `f` forward, `c` compose, `/` search,
 Ctrl+Enter to send (a setting). In a narrow window or on a phone it shows one pane at a time: mailboxes, list,
 conversation, each with a way back.

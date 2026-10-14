@@ -25,12 +25,29 @@ const PAD = 16
 const MIN = 0.25
 const MAX = 6
 
-export const pdfTitle = (w: WinState) => (w.props.path ? nameOf(w.props.path) : 'PDF')
+export const pdfTitle = (w: WinState) => (w.props.path ? nameOf(w.props.path) : w.props.name || 'PDF')
+
+/** A PDF at an address of this site instead of a file (`src`: a mail attachment): only paths here, never another site. */
+const addressOf = (src: string | undefined) => (src && /^\/(?!\/)/.test(src) ? src : null)
+
+/** Saves the PDF at an address as a file, by a link click (the address serves it as a download). */
+function saveAddress(src: string, name: string) {
+  const a = document.createElement('a')
+  a.href = src
+  a.download = name
+  a.rel = 'noopener'
+  document.body.append(a)
+  a.click()
+  a.remove()
+}
 
 export function PdfViewer({ win }: { win: WinState }) {
   const wm = useWM()
-  const path = win.props.path ?? ''
-  const name = nameOf(path)
+  // A file (Seafile or this browser's), or a PDF at an address with its name and where it is from (props src, name and from).
+  const address = addressOf(win.props.src)
+  const path = address ? '' : (win.props.path ?? '')
+  const name = address ? win.props.name || 'PDF' : nameOf(path)
+  const download = () => (address ? saveAddress(address, name) : void downloadFile(path).catch(() => {}))
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [sizes, setSizes] = useState<Size[]>([])
@@ -56,7 +73,7 @@ export function PdfViewer({ win }: { win: WinState }) {
   // --- loading --------------------------------------------------------------------------------
 
   useEffect(() => {
-    if (!path) return setError('Nothing to show.')
+    if (!path && !address) return setError('Nothing to show.')
     let live = true
     let task: { destroy: () => Promise<void> } | null = null
     setDoc(null)
@@ -65,11 +82,19 @@ export function PdfViewer({ win }: { win: WinState }) {
     setOutline(null)
     texts.current = null
     ;(async () => {
-      // A window opened again at boot asks before this browser's files have loaded.
-      if (!isSf(path)) await browserFilesReady()
-      if (!isSf(path) && !inBrowser(path)) throw new Error('only PDFs in Seafile or kept in this browser open here')
-      // Seafile's file server, or this browser's own store.
-      const data = new Uint8Array(await (await readBytes(path)).arrayBuffer())
+      let data: Uint8Array
+      if (address) {
+        // This site's own address (a mail attachment, read with the session): the bytes, whatever type they are served as.
+        const res = await fetch(address, { credentials: 'same-origin' })
+        if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `it answered ${res.status}`)
+        data = new Uint8Array(await res.arrayBuffer())
+      } else {
+        // A window opened again at boot asks before this browser's files have loaded.
+        if (!isSf(path)) await browserFilesReady()
+        if (!isSf(path) && !inBrowser(path)) throw new Error('only PDFs in Seafile or kept in this browser open here')
+        // Seafile's file server, or this browser's own store.
+        data = new Uint8Array(await (await readBytes(path)).arrayBuffer())
+      }
       if (!live) return
       const m = await pdfjs()
       const loading = m.getDocument({ data })
@@ -92,7 +117,7 @@ export function PdfViewer({ win }: { win: WinState }) {
       live = false
       void task?.destroy()
     }
-  }, [path])
+  }, [path, address])
 
   useLayoutEffect(() => {
     const el = scroller.current
@@ -235,7 +260,7 @@ export function PdfViewer({ win }: { win: WinState }) {
   }
 
   const at = parseSf(path)
-  const where = at ? `${libraryName(at.repo)}${at.p.split('/').slice(0, -1).join('/') || '/'}` : prettyPath(folderOf(path))
+  const where = address ? win.props.from || 'This site' : at ? `${libraryName(at.repo)}${at.p.split('/').slice(0, -1).join('/') || '/'}` : prettyPath(folderOf(path))
   const current = find?.matches[find.current]
   /** Which match on its page the current one is (0 for the first). */
   const nth = current && find ? find.matches.slice(0, find.current).filter((m) => m.page === current.page).length : -1
@@ -321,7 +346,7 @@ export function PdfViewer({ win }: { win: WinState }) {
         <Tool label={full ? 'Exit full screen (F)' : 'Full screen (F)'} onClick={toggleFull}>
           {full ? <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /> : <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />}
         </Tool>
-        <Tool label="Download" onClick={() => void downloadFile(path).catch(() => {})}>
+        <Tool label="Download" onClick={download}>
           <path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14" />
         </Tool>
       </div>
@@ -354,8 +379,8 @@ export function PdfViewer({ win }: { win: WinState }) {
             <div className="pv-empty">
               <p className="pv-big">{name}</p>
               <p className="muted copyable">{error}</p>
-              {isSf(path) && (
-                <button className="btn btn-small" onClick={() => void downloadFile(path).catch(() => {})}>
+              {(isSf(path) || address) && (
+                <button className="btn btn-small" onClick={download}>
                   Download
                 </button>
               )}

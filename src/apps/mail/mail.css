@@ -698,6 +698,23 @@
   color: var(--muted);
   font-size: 11px;
 }
+/* One that opens in MvL OS (PDF, Preview, Player) at a click, with its own download button. */
+.ml-att-item {
+  position: relative;
+  display: flex;
+}
+.ml-att-item.is-openable .ml-att {
+  padding-right: 32px;
+}
+.ml-att-dl {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  font-size: 14px;
+  transform: translateY(-50%);
+}
 .ml-att-all {
   display: flex;
   flex-basis: 100%;
@@ -939,6 +956,7 @@
 .ml.is-narrow .ml-msg-head .ml-msg-date {
   display: none;
 }
+.ml.is-narrow .ml-att-item,
 .ml.is-narrow .ml-att {
   width: 100%;
 }

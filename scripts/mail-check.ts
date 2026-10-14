@@ -307,6 +307,18 @@ async function endToEnd() {
     check('attachments: downloaded through the server, as a download', dl.status === 200 && (await dl.text()) === '%PDF-1.4 mock' && /^attachment/.test(dl.headers.get('content-disposition') ?? '') && dl.headers.get('content-type') === 'application/octet-stream')
     const theirBlob = await fetch(`${origin}/api/mail/${acc}/blob/${pdf.blobId}?name=x`, { headers: { Cookie: `mvlos_sid=${other}` } })
     check('attachments: not for another user', theirBlob.status === 404)
+    check('attachments: served with nosniff and a sandbox', dl.headers.get('x-content-type-options') === 'nosniff' && /sandbox/.test(dl.headers.get('content-security-policy') ?? ''))
+    // Audio and video for Player: inline with their own type (an allowed one), seeking by ranges.
+    const sound = Buffer.from(Array.from({ length: 1000 }, (_, i) => i % 256))
+    mock.blobs.set('Bsound1', { type: 'audio/wav', data: sound })
+    const cookie = { Cookie: `mvlos_sid=${sid}` }
+    const whole = await fetch(`${origin}/api/mail/${acc}/blob/Bsound1?name=a.wav&type=audio/wav&inline=1`, { headers: cookie })
+    check('attachments: audio plays inline, with its type', whole.status === 200 && whole.headers.get('content-type') === 'audio/wav' && /^inline/.test(whole.headers.get('content-disposition') ?? '') && whole.headers.get('accept-ranges') === 'bytes' && Buffer.from(await whole.arrayBuffer()).equals(sound), [...whole.headers])
+    const part = await fetch(`${origin}/api/mail/${acc}/blob/Bsound1?name=a.wav&type=audio/wav&inline=1`, { headers: { ...cookie, Range: 'bytes=100-199' } })
+    check('attachments: a range of it, for seeking', part.status === 206 && part.headers.get('content-range') === 'bytes 100-199/1000' && Buffer.from(await part.arrayBuffer()).equals(sound.subarray(100, 200)), [part.status, ...part.headers])
+    const html = await fetch(`${origin}/api/mail/${acc}/blob/Bsound1?name=a.html&type=text/html&inline=1`, { headers: cookie })
+    check('attachments: HTML is never served inline', html.status === 200 && html.headers.get('content-type') === 'application/octet-stream' && /^attachment/.test(html.headers.get('content-disposition') ?? ''))
+    await html.arrayBuffer()
 
     // Search.
     const from = await call('GET', `/api/mail/${acc}/threads?q=${encodeURIComponent('from:alice')}`)
