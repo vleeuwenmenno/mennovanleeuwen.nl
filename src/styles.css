@@ -2170,6 +2170,21 @@ body.is-resizing iframe {
   opacity: 0;
   pointer-events: none;
 }
+/* A program painting the text area itself (cmatrix, ctx.paint): all of it, nothing to scroll. */
+.t-paint {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  user-select: none;
+}
+/* On the text console the terminal has no height of its own: the rain takes the whole screen. */
+.terminal.is-console .t-paint {
+  position: fixed;
+  inset: 0;
+  height: auto;
+  z-index: 1;
+  background: #07080b;
+}
 .t-inverse {
   background: var(--fg);
   color: var(--bg);

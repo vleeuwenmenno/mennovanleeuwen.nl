@@ -4,6 +4,7 @@ import { ansiToMarkup, plain, rainbow } from './ansi'
 import { md5, sha } from './hash'
 import { jq, JqError } from './jq'
 import { CmdError, type Ctx } from './types'
+import { cmatrix, USAGE as CMATRIX_USAGE } from './cmatrix'
 import { lookup } from './fs'
 import { readFile as readText } from './read'
 import { age, lookup as siteLookup, resolvePath, walk as siteWalk, type Node } from './vfs'
@@ -15,7 +16,7 @@ import { getAccount } from '../os/account'
 // Real tools that work from the browser: curl/wget/whois against the live internet, git log on the
 // real repos, htop and friends with real numbers from this device, jq, checksums, cmatrix, figlet.
 
-type Command = { desc: string; usage?: string; hidden?: boolean; run: (ctx: Ctx) => string | void | Promise<string | void> }
+type Command = { desc: string; usage?: string; hidden?: boolean; man?: string; run: (ctx: Ctx) => string | void | Promise<string | void> }
 
 const c = (color: string, s: string) => `{c:${color}}${s}{/}`
 const link = (url: string, text = url) => `{link:${url}}${text}{/}`
@@ -481,59 +482,6 @@ async function htop(ctx: Ctx, title = 'htop'): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// cmatrix
-
-async function cmatrix(ctx: Ctx): Promise<string> {
-  if (!ctx.tty) throw new CmdError('cmatrix: not a terminal')
-  let quit = false
-  ctx.onKey((k) => {
-    if (k === 'q' || k === 'Q' || k === 'Escape') quit = true
-    return true
-  })
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$%&*+=<>?/\\|'
-  const pick = () => chars[Math.floor(Math.random() * chars.length)]
-  const { cols, rows } = ctx.size
-  type Drop = { y: number; len: number; speed: number; tick: number }
-  const grid: string[][] = Array.from({ length: rows }, () => Array(cols).fill(' '))
-  const drops: (Drop | null)[] = Array(cols).fill(null)
-  try {
-    while (!quit && !ctx.signal.aborted) {
-      for (let x = 0; x < cols; x += 1) {
-        let d = drops[x]
-        if (!d && Math.random() < 0.02) d = drops[x] = { y: 0, len: 4 + Math.floor(Math.random() * rows * 0.6), speed: 1 + Math.floor(Math.random() * 2), tick: 0 }
-        if (!d) continue
-        if (++d.tick % d.speed) continue
-        if (d.y < rows) grid[d.y][x] = pick()
-        const tail = d.y - d.len
-        if (tail >= 0 && tail < rows) grid[tail][x] = ' '
-        d.y++
-        if (tail >= rows) drops[x] = null
-      }
-      const lines = grid.map((row, y) => {
-        let out = ''
-        let run = ''
-        for (let x = 0; x < cols; x++) {
-          const d = drops[x]
-          const head = d && d.y - 1 === y
-          if (head) {
-            if (run) out += c('green', run)
-            run = ''
-            out += `{fg:#e8ffe8}${row[x]}{/}`
-          } else run += row[x]
-        }
-        return out + (run.trim() ? c('green', run) : run)
-      })
-      ctx.live(lines.join('\n'))
-      await sleep(60, ctx.signal)
-    }
-  } finally {
-    ctx.onKey(null)
-    ctx.live(null)
-  }
-  return ''
-}
-
-// ---------------------------------------------------------------------------
 // watch
 
 async function watch(ctx: Ctx): Promise<string> {
@@ -923,7 +871,7 @@ export const extraCommands: Record<string, Command> = {
   htop: { desc: 'live processes and load', run: (ctx) => htop(ctx) },
   top: { desc: 'alias for htop', hidden: true, run: (ctx) => htop(ctx, 'top') },
   btop: { desc: 'alias for htop', hidden: true, run: (ctx) => htop(ctx, 'btop') },
-  cmatrix: { desc: 'follow the white rabbit', run: cmatrix },
+  cmatrix: { desc: 'follow the white rabbit', usage: 'cmatrix [-aksrh] [-C color] [-u delay]', man: `cmatrix - the digital rain from The Matrix, in katakana\n\n${CMATRIX_USAGE}`, run: cmatrix },
   watch: { desc: 'rerun a command every few seconds', usage: 'watch [-n secs] <command>', run: watch },
   df: { desc: 'disk usage, with your real browser storage and Seafile quota', usage: 'df [-h]', run: df },
   du: { desc: 'what folders take, Seafile included', usage: 'du [-ahscx] [-d N] [path]...', run: du },

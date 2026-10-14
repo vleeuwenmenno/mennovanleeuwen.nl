@@ -50,8 +50,19 @@ function Matched({ name, query }: { name: string; query: string }) {
   )
 }
 
-/** `vt`: what an attached stream (SSH, vtdemo) left on the screen when it detached. */
-type Entry = { id: number; kind: 'cmd'; cwd: string; text: string } | { id: number; kind: 'out'; text: string; alt?: boolean } | { id: number; kind: 'vt'; lines: Line[] }
+/** `vt`: what an attached stream (SSH, vtdemo) left on the screen when it detached. `paint`: a program drawing the text area itself (ctx.paint). */
+type Entry =
+  | { id: number; kind: 'cmd'; cwd: string; text: string }
+  | { id: number; kind: 'out'; text: string; alt?: boolean }
+  | { id: number; kind: 'vt'; lines: Line[] }
+  | { id: number; kind: 'paint'; mount: (host: HTMLElement) => () => void }
+
+/** The element a painting program (cmatrix) draws in: the whole text area, on the alternate screen. */
+const PaintArea = memo(function PaintArea({ mount }: { mount: (host: HTMLElement) => () => void }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => (ref.current ? mount(ref.current) : undefined), [mount])
+  return <div className="t-paint t-alt" ref={ref} />
+})
 
 /** One node of the markup tree (src/terminal/markup.ts) as React. */
 function renderNode(node: MarkupNode, key: number, onAnimationEnd?: () => void): ReactNode {
@@ -683,6 +694,21 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
         setEntries((e) => e.map((x) => (x.id === id ? { ...x, text, alt: opts?.alt } : x)))
       }
     }
+    // ctx.paint: the text area for a program that draws it (cmatrix), until it hands it back.
+    let paintId: number | null = null
+    const paint = (mount: (host: HTMLElement) => () => void) => {
+      const id = (paintId = nextId++)
+      setDrawing(true)
+      setAlt(true)
+      setEntries((e) => [...e, { id, kind: 'paint', mount }])
+      return () => {
+        if (paintId !== id) return
+        paintId = null
+        setDrawing(false)
+        setAlt(false)
+        setEntries((e) => e.filter((x) => x.id !== id))
+      }
+    }
     abortRef.current = new AbortController()
     const signal = abortRef.current.signal
     setCommand(trimmed)
@@ -724,6 +750,7 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
       setAccent,
       print,
       live,
+      paint,
       size,
       onResize: (h) => void (resizeHandler.current = h),
       onKey: (h, opts) => {
@@ -739,8 +766,12 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
         return port
       },
     })
-    // A stream outlives nothing: the command that attached it is done.
+    // A stream outlives nothing: the command that attached it is done. Nor does a painted area.
     sessionRef.current?.detach()
+    if (paintId !== null) {
+      const id = paintId
+      setEntries((e) => e.filter((x) => x.id !== id))
+    }
     watcher.disconnect()
     sizeCheck.current = null
     resizeHandler.current = null
@@ -1204,6 +1235,8 @@ function TerminalSession({ win, onLogout, embedded, tab }: { win: WinState; onLo
             </div>
           ) : e.kind === 'vt' ? (
             <VtLines lines={e.lines} />
+          ) : e.kind === 'paint' ? (
+            <PaintArea mount={e.mount} />
           ) : (
             <pre className={`t-out ${e.alt ? 't-alt' : ''}`}>
               <Markup text={e.text} onAnimationEnd={() => setAnimating(false)} />

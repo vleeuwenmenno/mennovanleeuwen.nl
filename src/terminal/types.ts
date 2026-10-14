@@ -66,5 +66,12 @@ export type Ctx = {
    * Only where the output goes to a terminal window; absent in pipes and the agents' terminal tool.
    */
   attachStream?: () => TermPort
+  /**
+   * Hands the window's text area to a program that paints it itself, every frame (cmatrix): it
+   * goes to the alternate screen, and `mount` gets an empty element filling the area once that is
+   * in the page (it inherits the terminal's font). What `mount` returns is called when the
+   * program gives the area back by calling the function this returns. Only in a terminal window.
+   */
+  paint?: (mount: (host: HTMLElement) => () => void) => () => void
 }
 
