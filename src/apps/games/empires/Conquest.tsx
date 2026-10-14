@@ -440,7 +440,8 @@ function fleetScreen(g: Galaxy, f: Fleet, cam: Cam, size: { w: number; h: number
 }
 
 /**
- * The map's camera, kept out of React. Moving it re-aims the map (`aimMap`) and sets the CSS
+ * The map's camera, kept out of React. Moving it re-aims the map (`placeRegion`, and at a zoom
+ * `drawRegion`: see Region) and sets the CSS
  * variables its drawing scales by (`scaleVars`), so zooming and panning re-render nothing; only
  * what switches at a step of the zoom (`zoomBand`) and the few readouts that follow the camera (the
  * bar's place name, the minimap's frame) listen, and they redraw only when what they show changes.
@@ -449,6 +450,7 @@ class CamView {
   cam: Cam
   size = { w: 800, h: 520 }
   private subs = new Set<() => void>()
+  private ticks = new Set<() => void>()
   constructor(cam: Cam) {
     this.cam = cam
   }
@@ -460,6 +462,17 @@ class CamView {
     this.subs.add(f)
     return () => {
       this.subs.delete(f)
+    }
+  }
+  /** The galaxy's clock moved on (every frame while it runs, between the map's redraws ten times a
+   * second): what moves by itself (the fleets in flight) follows it here, without a render. */
+  tick() {
+    for (const f of this.ticks) f()
+  }
+  onTick = (f: () => void) => {
+    this.ticks.add(f)
+    return () => {
+      this.ticks.delete(f)
     }
   }
 }
@@ -481,13 +494,70 @@ function zoomBand(k: number) {
 /** The setup's preview: the whole galaxy, at no zoom (and no planet names). */
 const MINI_BAND = zoomBand(1) & ~B_NAMES
 
-/** Points the map at the camera: the SVG's view, and the transform of the layers under and over it,
- * all in map units. */
-function aimMap(svg: SVGSVGElement, under: HTMLElement, over: HTMLElement, c: Cam, size: { w: number; h: number }) {
-  svg.setAttribute('viewBox', `${c.x - size.w / 2 / c.k} ${c.y - size.h / 2 / c.k} ${size.w / c.k} ${size.h / c.k}`)
-  const t = `translate(${size.w / 2}px, ${size.h / 2}px) scale(${c.k}) translate(${-c.x}px, ${-c.y}px)`
+/**
+ * What the map's moving layer (.ew-gpan) has drawn: a region of the map (in map units) at the zoom
+ * `k`, from (x0, y0), `w` by `h` screen pixels. A pan that stays inside it only moves the layer,
+ * which is the compositor's work: nothing is laid out, painted or rastered again, however much is on
+ * the map. A zoom draws it again at the new zoom, round the view and little more (`ZOOM_REACH`);
+ * once the zoom has settled (`WIDEN_MS`), or a pan leaves it, it's drawn again reaching well past
+ * the view on every side (`panReach`), ready for the next pan.
+ */
+type Region = { x0: number; y0: number; w: number; h: number; k: number; wide: boolean }
+/** Screen pixels past the view the region reaches while zooming: enough to cover the layer's
+ * rounding to whole pixels. */
+const ZOOM_REACH = 24
+/** How long after the last step of a zoom the region widens for panning. */
+const WIDEN_MS = 160
+/** Screen pixels past the view the region reaches for panning, across and down: half a view each
+ * way (a pan leaving that draws it again round where it got to). */
+const panReach = (size: { w: number; h: number }) => ({ x: Math.max(400, Math.round(size.w / 2)), y: Math.max(300, Math.round(size.h / 2)) })
+const dpr = () => (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1)
+/** A screen length rounded to whole device pixels: the layer moves by those, so it's never drawn
+ * between pixels (which would blur its lines and text). */
+const snap = (v: number) => Math.round(v * dpr()) / dpr()
+function regionAt(c: Cam, size: { w: number; h: number }, wide: boolean): Region {
+  const reach = wide ? panReach(size) : { x: ZOOM_REACH, y: ZOOM_REACH }
+  // No further than any view at this zoom can go: the camera's centre stays on the galaxy.
+  const hw = size.w / 2 / c.k
+  const hh = size.h / 2 / c.k
+  const z = ZOOM_REACH / c.k
+  const x0 = Math.max(c.x - hw - reach.x / c.k, Math.min(c.x, 0) - hw - z)
+  const y0 = Math.max(c.y - hh - reach.y / c.k, Math.min(c.y, 0) - hh - z)
+  const x1 = Math.min(c.x + hw + reach.x / c.k, Math.max(c.x, W) + hw + z)
+  const y1 = Math.min(c.y + hh + reach.y / c.k, Math.max(c.y, H) + hh + z)
+  // Its corner on a whole pixel of the screen as the camera is now, so it starts out sharp.
+  const sx = snap((x0 - c.x) * c.k + size.w / 2)
+  const sy = snap((y0 - c.y) * c.k + size.h / 2)
+  const r = { x0: c.x + (sx - size.w / 2) / c.k, y0: c.y + (sy - size.h / 2) / c.k }
+  return { ...r, w: Math.ceil((x1 - r.x0) * c.k), h: Math.ceil((y1 - r.y0) * c.k), k: c.k, wide }
+}
+/** Whether the region covers what the camera shows. */
+const covers = (r: Region, c: Cam, size: { w: number; h: number }) => {
+  if (r.k !== c.k) return false
+  const x = (r.x0 - c.x) * c.k + size.w / 2
+  const y = (r.y0 - c.y) * c.k + size.h / 2
+  // (A pixel to spare: the layer moves by whole pixels.)
+  return x <= -1 && y <= -1 && x + r.w >= size.w + 1 && y + r.h >= size.h + 1
+}
+/** Draws the region: the SVG's view of it, and the transform of the layers under and over it, in
+ * map units from its corner. */
+function drawRegion(svg: SVGSVGElement, under: HTMLElement, over: HTMLElement, r: Region) {
+  svg.setAttribute('viewBox', `${r.x0} ${r.y0} ${r.w / r.k} ${r.h / r.k}`)
+  const w = `${r.w}px`
+  const h = `${r.h}px`
+  for (const el of [svg, under.parentElement!, over.parentElement!] as (HTMLElement | SVGSVGElement)[])
+    if (el.style.width !== w || el.style.height !== h) {
+      el.style.width = w
+      el.style.height = h
+    }
+  const t = `scale(${r.k}) translate(${-r.x0}px, ${-r.y0}px)`
   under.style.transform = t
   over.style.transform = t
+}
+/** Moves the layer so the region sits where the camera has it. */
+function placeRegion(pan: HTMLElement, r: Region, c: Cam, size: { w: number; h: number }) {
+  const t = `translate(${snap((r.x0 - c.x) * c.k + size.w / 2)}px, ${snap((r.y0 - c.y) * c.k + size.h / 2)}px)`
+  if (pan.style.transform !== t) pan.style.transform = t
 }
 
 /**
@@ -536,17 +606,19 @@ function laneEnds(g: Galaxy, d: number) {
   })
 }
 
-/** Something on the map that is left out (display: none) while it's well off screen, so a close
- * view restyles and lays out only what it shows as the camera moves: at (x, y), reaching r map
- * units, and CULL_PX screen pixels further for its markers and text. */
+/** Something on the map that is left out (display: none) while it's well outside what the map's
+ * layer has drawn (see Region), so a close view restyles, lays out and paints only round what it
+ * shows: at (x, y), reaching r map units, and CULL_PX screen pixels further for its markers and text. */
 type Culled = { el: Element; x: number; y: number; r: number }
 const CULL_PX = 160
-function cull(list: Culled[], c: Cam, size: { w: number; h: number }) {
-  const m = CULL_PX / c.k
-  const hw = size.w / 2 / c.k + m
-  const hh = size.h / 2 / c.k + m
+function cull(list: Culled[], reg: Region) {
+  const m = CULL_PX / reg.k
+  const x0 = reg.x0 - m
+  const y0 = reg.y0 - m
+  const x1 = reg.x0 + reg.w / reg.k + m
+  const y1 = reg.y0 + reg.h / reg.k + m
   for (const { el, x, y, r } of list) {
-    const off = Math.abs(x - c.x) > hw + r || Math.abs(y - c.y) > hh + r
+    const off = x + r < x0 || x - r > x1 || y + r < y0 || y - r > y1
     if (off !== el.hasAttribute('data-off')) {
       if (off) el.setAttribute('data-off', '')
       else el.removeAttribute('data-off')
@@ -589,6 +661,8 @@ const css = (o: Record<string, string>) => o as React.CSSProperties
  * that many map units times the zoom's detail; `then` is more transform after the scaling. */
 const pin = (x: number, y: number, up = 0, then = '', more: Record<string, string> = {}) =>
   css({ transform: `translate(${n4(x)}px, ${up ? `calc(${n4(y)}px - var(--d) * ${n4(up)}px)` : `${n4(y)}px`}) scale(var(--ik))${then}`, ...more })
+/** Where a fleet in flight's badge goes: a `pin` at its place (see `fly` in GalaxyView). */
+const flyingAt = (p: { x: number; y: number }) => `translate(${n4(p.x)}px, ${n4(p.y)}px) scale(var(--ik))`
 /** `n` screen pixels, in map units. */
 const spx = (n: number) => `calc(var(--ik) * ${n4(n)}px)`
 
@@ -611,8 +685,10 @@ const starGlow = (hex: string, alpha: number) => {
  * The camera (`view`) doesn't re-render this: everything that follows the zoom is drawn in map
  * units with CSS sizes in terms of the variables `scaleVars` sets (`spx`, `pin`, var(--d)), and
  * only a step of the zoom (`zoomBand`) or the camera leaving what was drawn (`Area`) renders it
- * again. Under the SVG, the big fills are HTML boxes (.ew-gunder); over it, the markers and names
- * (.ew-gover); what's well off screen is left out (`cull`).
+ * again. All of it is in one layer (.ew-gpan) covering a region round the view (`Region`): a pan
+ * only moves that layer, and a zoom draws the region again. Under the SVG, the big fills are HTML
+ * boxes (.ew-gunder); over it, the markers and names (.ew-gover); what's well outside the region is
+ * left out (`cull`). The fleets in flight glide every frame of the clock (`fly`), between renders.
  */
 function GalaxyView({ g, view, sel, mini = false, on }: {
   g: Galaxy
@@ -628,9 +704,12 @@ function GalaxyView({ g, view, sel, mini = false, on }: {
 }) {
   const band = useSyncExternalStore(view?.sub ?? noSub, () => (view ? zoomBand(view.cam.k) : MINI_BAND))
   const box = useRef<HTMLDivElement>(null)
+  const pan = useRef<HTMLDivElement>(null)
   const svg = useRef<SVGSVGElement>(null)
   const world = useRef<HTMLDivElement>(null)
   const world2 = useRef<HTMLDivElement>(null)
+  // What the moving layer has drawn (see Region).
+  const region = useRef<Region | null>(null)
   // The lanes stop short of opened-up systems by the zoom's detail: drawn for it here, and moved
   // by the camera (only while it changes, between zooms of 2.4 and 5).
   const lanes = useRef<SVGGElement>(null)
@@ -644,6 +723,9 @@ function GalaxyView({ g, view, sel, mini = false, on }: {
   // each render.
   const cullable = useRef<Culled[]>([])
   const users = useRef<ScaleUser[]>([])
+  // The fleets in flight (their badges, and the selected ones' routes), moved every frame of the
+  // clock by `fly` rather than at the map's redraws.
+  const flying = useRef<{ f: Fleet; el: HTMLElement; route: SVGPolylineElement | null; rest: string }[]>([])
   useLayoutEffect(() => {
     drawn.current = { g, d: laneD }
     drawnArea.current = area
@@ -653,18 +735,64 @@ function GalaxyView({ g, view, sel, mini = false, on }: {
       const [x, y, r] = el.getAttribute('data-cull')!.split(' ').map(Number)
       return { el, x, y, r }
     })
-    cull(cullable.current, view.cam, view.size)
+    if (region.current) cull(cullable.current, region.current)
     users.current = scaleUsers(b)
     scaleVars(users.current, view.cam.k)
+    flying.current = [...b.querySelectorAll<HTMLElement>('.ew-gfleet.is-moving[data-fid]')].flatMap((el) => {
+      const f = g.fleets.find((x) => String(x.id) === el.dataset.fid)
+      const route = b.querySelector<SVGPolylineElement>(`.ew-groute[data-fid="${el.dataset.fid}"]`)
+      return f ? [{ f, el, route, rest: route?.getAttribute('points')?.split(' ').slice(1).join(' ') ?? '' }] : []
+    })
   })
+  // Each frame of the clock: the fleets in flight glide on (between the map's redraws, ten a second,
+  // they would step). Only their transforms change: a few small repaints.
+  useEffect(() => {
+    if (!view) return
+    const fly = () => {
+      for (const m of flying.current) {
+        if (!m.f.leg) continue
+        const p = fleetAt(g, m.f)
+        const t = flyingAt(p)
+        if (m.el.style.transform !== t) m.el.style.transform = t
+        if (m.route) {
+          const pts = `${n4(p.x)},${n4(p.y)}${m.rest ? ` ${m.rest}` : ''}`
+          if (m.route.getAttribute('points') !== pts) m.route.setAttribute('points', pts)
+        }
+      }
+    }
+    return view.onTick(fly)
+  }, [view, g])
   // Aimed before the first paint, and at each move of the camera.
   useLayoutEffect(() => {
-    const [b, el, wo, wo2] = [box.current, svg.current, world.current, world2.current]
-    if (!view || !b || !el || !wo || !wo2) return
+    const [b, pn, el, wo, wo2] = [box.current, pan.current, svg.current, world.current, world2.current]
+    if (!view || !b || !pn || !el || !wo || !wo2) return
+    let widen = 0
+    const draw = (wide: boolean) => {
+      const r = regionAt(view.cam, view.size, wide)
+      region.current = r
+      drawRegion(el, wo, wo2, r)
+      cull(cullable.current, r)
+    }
     const aim = () => {
-      aimMap(el, wo, wo2, view.cam, view.size)
-      cull(cullable.current, view.cam, view.size)
-      scaleVars(users.current, view.cam.k)
+      const c = view.cam
+      const r = region.current
+      if (!r || !covers(r, c, view.size)) {
+        // A zoom draws round the view; a pan that left the region, or the first aim, a wide one.
+        const zooming = !!r && r.k !== c.k
+        draw(!zooming)
+        clearTimeout(widen)
+        if (zooming)
+          widen = window.setTimeout(() => {
+            const now = region.current
+            if (now && !now.wide && now.k === view.cam.k) {
+              draw(true)
+              placeRegion(pn, region.current!, view.cam, view.size)
+              scaleVars(users.current, view.cam.k)
+            }
+          }, WIDEN_MS)
+      }
+      placeRegion(pn, region.current!, c, view.size)
+      scaleVars(users.current, c.k)
       const a = drawnArea.current
       const v = areaAt(view.cam, view.size, 1)
       if (a && (v.x0 < a.x0 || v.x1 > a.x1 || v.y0 < a.y0 || v.y1 > a.y1)) {
@@ -686,7 +814,11 @@ function GalaxyView({ g, view, sel, mini = false, on }: {
       }
     }
     aim()
-    return view.sub(aim)
+    const unsub = view.sub(aim)
+    return () => {
+      unsub()
+      clearTimeout(widen)
+    }
   }, [view])
   const has = (b: number) => (band & b) !== 0
   const selIds = selectedIds(sel ?? null)
@@ -746,7 +878,7 @@ function GalaxyView({ g, view, sel, mini = false, on }: {
         })}
       </g>
       {routes.map((route, i) => (
-        <polyline key={i} className="ew-groute" points={route.map((p) => `${p.x},${p.y}`).join(' ')} vectorEffect="non-scaling-stroke" />
+        <polyline key={i} className="ew-groute" data-fid={headed[i].id} points={route.map((p) => `${p.x},${p.y}`).join(' ')} vectorEffect="non-scaling-stroke" />
       ))}
 
       {g.systems.map((s) => {
@@ -902,7 +1034,7 @@ function GalaxyView({ g, view, sel, mini = false, on }: {
           if (!within(area, p.x, p.y, f.planet >= 0 && !f.leg ? planetR(g.planets[f.planet]) : 0)) return null
           // In orbit, beside its planet (several stack downwards): past the planet's edge, then a
           // little further on screen.
-          let place = pin(p.x, p.y)
+          let place = f.leg ? css({ transform: flyingAt(p) }) : pin(p.x, p.y)
           if (!f.leg && f.planet >= 0) {
             const i = seenAt(g, f.planet).indexOf(f)
             place = css({ transform: `translate(${n4(p.x + planetR(g.planets[f.planet]))}px, ${n4(p.y)}px) scale(var(--ik)) translate(26px, ${-8 + i * 22}px)` })
@@ -946,22 +1078,24 @@ function GalaxyView({ g, view, sel, mini = false, on }: {
   // the lanes stop short of the systems) the stars' glows.
   return (
     <div ref={box} className="ew-gmap">
-      <div className="ew-gunder" aria-hidden="true">
-        <div ref={world} className="ew-gworld">
-          {g.systems.map((s) => {
-            const o = systemOwner(g, s.id, ME)
-            // (Its opacity in the colour, not as `opacity`: that would be a layer of its own.)
-            const tint = `rgb(${rgbOf(color(g, o))} / calc(${n4(0.12 * (sees(g, ME, s.id) ? 1 : 0.5))} * (1 - var(--d) * 0.5)))`
-            return o >= 0 && within(area, s.x, s.y, 46) ? <i key={`t${s.id}`} className="ew-gterr" data-cull={cullAt(s.x, s.y, 46)} style={css({ transform: `translate(${n4(s.x - 46)}px, ${n4(s.y - 46)}px)`, background: `radial-gradient(closest-side, ${tint} calc(100% - var(--ik) * 1px), transparent 100%)` })} /> : null
-          })}
-          {!has(B_DOTS) && g.systems.filter((s) => within(area, s.x, s.y, 7)).map((s) => (
-            <i key={`s${s.id}`} className="ew-gstar" data-cull={cullAt(s.x, s.y, 7)} style={css({ transform: `translate(${n4(s.x - 7)}px, ${n4(s.y - 7)}px)`, background: starGlow(STAR_COLOR[s.star], sees(g, ME, s.id) ? 1 : 0.6) })} />
-          ))}
+      <div ref={pan} className="ew-gpan">
+        <div className="ew-gunder" aria-hidden="true">
+          <div ref={world} className="ew-gworld">
+            {g.systems.map((s) => {
+              const o = systemOwner(g, s.id, ME)
+              // (Its opacity in the colour, not as `opacity`: that would be a layer of its own.)
+              const tint = `rgb(${rgbOf(color(g, o))} / calc(${n4(0.12 * (sees(g, ME, s.id) ? 1 : 0.5))} * (1 - var(--d) * 0.5)))`
+              return o >= 0 && within(area, s.x, s.y, 46) ? <i key={`t${s.id}`} className="ew-gterr" data-cull={cullAt(s.x, s.y, 46)} style={css({ transform: `translate(${n4(s.x - 46)}px, ${n4(s.y - 46)}px)`, background: `radial-gradient(closest-side, ${tint} calc(100% - var(--ik) * 1px), transparent 100%)` })} /> : null
+            })}
+            {!has(B_DOTS) && g.systems.filter((s) => within(area, s.x, s.y, 7)).map((s) => (
+              <i key={`s${s.id}`} className="ew-gstar" data-cull={cullAt(s.x, s.y, 7)} style={css({ transform: `translate(${n4(s.x - 7)}px, ${n4(s.y - 7)}px)`, background: starGlow(STAR_COLOR[s.star], sees(g, ME, s.id) ? 1 : 0.6) })} />
+            ))}
+          </div>
         </div>
-      </div>
-      {map}
-      <div className="ew-gover">
-        <div ref={world2} className="ew-gworld">{pins}</div>
+        {map}
+        <div className="ew-gover">
+          <div ref={world2} className="ew-gworld">{pins}</div>
+        </div>
       </div>
     </div>
   )
@@ -1182,6 +1316,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
       const running = !st.paused && !st.menu && g.pending < 0 && g.winner === -1
       if (running) {
         tickGalaxy(g, dt * st.speed)
+        view.tick()
         saveT += dt
         if (saveT > 20) {
           saveT = 0
@@ -2519,30 +2654,36 @@ function GalaxyMinimap({ g, view, onLook, onCapital, onIdle, idle, onEconomy, ec
           </button>
           <button className={economy ? 'is-on' : ''} onClick={onEconomy} data-tip="The economy" aria-label="Economy"><Icon name="credits" size={17} /></button>
         </div>
-        <svg className="ew-mini ew-gmini" data-nodrag viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" onPointerDown={look} onPointerMove={(e) => e.buttons === 1 && look(e)}>
-          {g.systems.map((s) => {
-            const o = systemOwner(g, s.id, ME)
-            return o >= 0 && showSystem(s) ? <circle key={`t${s.id}`} cx={s.x} cy={s.y} r={40} fill={color(g, o)} opacity={sees(g, ME, s.id) ? 0.18 : 0.08} /> : null
-          })}
-          {g.lanes.map(([a, b], i) => (
-            <line key={i} x1={g.systems[a].x} y1={g.systems[a].y} x2={g.systems[b].x} y2={g.systems[b].y} stroke="rgba(140,180,240,0.3)" strokeWidth={2} />
-          ))}
-          {g.systems.map((s) =>
-            showSystem(s) ? (
-              <circle key={s.id} cx={s.x} cy={s.y} r={9} fill={color(g, systemOwner(g, s.id, ME))} stroke={sees(g, ME, s.id) ? '#000' : 'rgba(200,215,240,0.5)'} strokeWidth={2} strokeDasharray={sees(g, ME, s.id) ? undefined : '3 3'} opacity={sees(g, ME, s.id) ? 1 : 0.55} />
-            ) : <circle key={s.id} cx={s.x} cy={s.y} r={5} fill="rgba(160,180,210,0.35)" />,
-          )}
-          {g.fleets.filter(showFleet).map((f) => {
-            const p = fleetAt(g, f)
-            return <rect key={f.id} x={p.x - 7 + (f.leg ? 0 : f.owner === ME ? -16 : 16)} y={p.y - 7 - (f.leg ? 0 : 14)} width={14} height={14} fill={color(g, f.owner)} stroke="#fff" strokeWidth={f.owner === ME ? 2 : 0} transform={`rotate(45 ${p.x + (f.leg ? 0 : f.owner === ME ? -16 : 16)} ${p.y - (f.leg ? 0 : 14)})`} />
-          })}
-          {g.systems.map((s) => {
-            const b = blockade(g, s.id)
-            return b ? <circle key={`b${s.id}`} cx={s.x} cy={s.y} r={17} fill="none" stroke={color(g, b.by)} strokeWidth={3.5} strokeDasharray="6 4" /> : null
-          })}
-          {g.pending >= 0 && <circle cx={g.systems[g.planets[g.pending].system].x} cy={g.systems[g.planets[g.pending].system].y} r={22} className="ew-gbattle" />}
-          <MiniFrame view={view} />
-        </svg>
+        <div className="ew-gmini-box">
+          <svg className="ew-mini ew-gmini" data-nodrag viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" onPointerDown={look} onPointerMove={(e) => e.buttons === 1 && look(e)}>
+            {g.systems.map((s) => {
+              const o = systemOwner(g, s.id, ME)
+              return o >= 0 && showSystem(s) ? <circle key={`t${s.id}`} cx={s.x} cy={s.y} r={40} fill={color(g, o)} opacity={sees(g, ME, s.id) ? 0.18 : 0.08} /> : null
+            })}
+            {g.lanes.map(([a, b], i) => (
+              <line key={i} x1={g.systems[a].x} y1={g.systems[a].y} x2={g.systems[b].x} y2={g.systems[b].y} stroke="rgba(140,180,240,0.3)" strokeWidth={2} />
+            ))}
+            {g.systems.map((s) =>
+              showSystem(s) ? (
+                <circle key={s.id} cx={s.x} cy={s.y} r={9} fill={color(g, systemOwner(g, s.id, ME))} stroke={sees(g, ME, s.id) ? '#000' : 'rgba(200,215,240,0.5)'} strokeWidth={2} strokeDasharray={sees(g, ME, s.id) ? undefined : '3 3'} opacity={sees(g, ME, s.id) ? 1 : 0.55} />
+              ) : <circle key={s.id} cx={s.x} cy={s.y} r={5} fill="rgba(160,180,210,0.35)" />,
+            )}
+            {g.fleets.filter(showFleet).map((f) => {
+              const p = fleetAt(g, f)
+              return <rect key={f.id} x={p.x - 7 + (f.leg ? 0 : f.owner === ME ? -16 : 16)} y={p.y - 7 - (f.leg ? 0 : 14)} width={14} height={14} fill={color(g, f.owner)} stroke="#fff" strokeWidth={f.owner === ME ? 2 : 0} transform={`rotate(45 ${p.x + (f.leg ? 0 : f.owner === ME ? -16 : 16)} ${p.y - (f.leg ? 0 : 14)})`} />
+            })}
+            {g.systems.map((s) => {
+              const b = blockade(g, s.id)
+              return b ? <circle key={`b${s.id}`} cx={s.x} cy={s.y} r={17} fill="none" stroke={color(g, b.by)} strokeWidth={3.5} strokeDasharray="6 4" /> : null
+            })}
+            {g.pending >= 0 && <circle cx={g.systems[g.planets[g.pending].system].x} cy={g.systems[g.planets[g.pending].system].y} r={22} className="ew-gbattle" />}
+          </svg>
+          {/* The frame round what the map shows, over the minimap in a layer of its own: it follows
+              the camera every frame, and alone it's all that is drawn again. */}
+          <svg className="ew-gmini-over" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+            <MiniFrame view={view} />
+          </svg>
+        </div>
       </div>
       <div className="ew-mapfilters" role="tablist" aria-label="Show on the map">
         {filters.map(([f, label]) => (
