@@ -16,14 +16,13 @@
 //    three or more real fragments.
 //
 // Every ship bigger than strike craft is built at its size (models/sizes.ts), with a layout for its
-// hardpoints (BIG_LAYOUT) and its turrets spread out with room between them. Every check runs on the
-// Swarm concept designs too (swarm.ts, proto-swarm.ts, shown only in the Codex): each droid unit
-// built in the Swarm style, on that unit's own box and hardpoints.
+// hardpoints (its faction's `layout`, data.ts BIG_LAYOUT) and its turrets spread out with room
+// between them. Every faction's units are checked, the Swarm's (still placeholders) too.
 
-import { STATIONS, TECHS, UNITS, mineType, modulesFor, stationType, worksOf, yardType, type UnitType } from '../src/apps/games/empires/data.ts'
-import { BIG_LAYOUT, sizeClass } from '../src/apps/games/empires/models/sizes.ts'
+import { BIG_LAYOUT, STATIONS, TECHS, UNITS, mineType, modulesFor, stationType, worksOf, yardType, type UnitType } from '../src/apps/games/empires/data.ts'
+import { sizeClass } from '../src/apps/games/empires/models/sizes.ts'
 import { inPart } from '../src/apps/games/empires/models/kit.ts'
-import { BREAK_WEIGHTS, SWARM, breakOutcome, breakPieces, buildModel, hasModel, hasSwarm, hullState, modelStyles, onHull, wreckState } from '../src/apps/games/empires/models/index.ts'
+import { BREAK_WEIGHTS, breakOutcome, breakPieces, buildModel, hasModel, hullState, modelStyles, onHull, wreckState } from '../src/apps/games/empires/models/index.ts'
 
 let failed = 0
 const fail = (msg: string) => {
@@ -64,9 +63,8 @@ for (const t of UNITS) {
 console.log(`Models: ${types.length} unit types (${UNITS.filter(hasModel).map((t) => t.id).join(', ')})`)
 // Models are cached per look by key: two different types must never share one.
 const keys = new Map<string, UnitType>()
-/** Every look of a unit type: as it is, its design variants and its Swarm concept. */
-const looksOf = (t: UnitType, variants: boolean) =>
-  [[t, undefined], ...(variants ? modelStyles(t).map((s) => [t, s]) : []), ...(hasSwarm(t) ? [[t, SWARM]] : [])] as [UnitType, string | undefined][]
+/** Every look of a unit type: as it is, and its design variants. */
+const looksOf = (t: UnitType, variants: boolean) => [[t, undefined], ...(variants ? modelStyles(t).map((s) => [t, s]) : [])] as [UnitType, string | undefined][]
 for (const [t, style] of types.flatMap((t) => looksOf(t, false))) {
   const k = buildModel(t, style).key
   const other = keys.get(k)
@@ -75,7 +73,7 @@ for (const [t, style] of types.flatMap((t) => looksOf(t, false))) {
 }
 
 const looks = types.flatMap((t) => looksOf(t, true))
-console.log(`Looks: ${looks.length} (${looks.filter(([, s]) => s === SWARM).length} of them Swarm concepts)`)
+console.log(`Looks: ${looks.length} (${looks.filter(([t]) => t.faction === 'swarm').length} of them the Swarm's)`)
 // Every ship bigger than strike craft is built bigger than written, with a layout for its
 // hardpoints, one entry each; the yards grow with what they build.
 for (const t of UNITS.filter((u) => u.tier !== 'fighter' && u.tier !== 'station' && u.tier !== 'mine' && u.tier !== 'defense')) {
@@ -127,7 +125,8 @@ for (const [t, style] of looks) {
     const gy = (mt.y / m.h + 0.5) * 10
     ok(Math.abs(gx - h.x) < 1e-6 && Math.abs(gy - h.y) < 1e-6, `${label}: mount ${i} at grid ${gx.toFixed(2)},${gy.toFixed(2)}, hardpoint at ${h.x},${h.y}`)
     ok(mt.design !== 'engine' ? onHull(m, mt.x, mt.y) : true, `${label}: mount ${i} (${mt.design}) is off the hull`)
-    ok(mt.turns === !!h.weapon, `${label}: mount ${i} turns=${mt.turns} but the hardpoint ${h.weapon ? 'has' : 'has no'} weapon`)
+    // A turret turns to aim; a spinal gun is fixed along the keel (the whole ship aims it).
+    ok(mt.turns === (!!h.weapon && !h.weapon.spinal), `${label}: mount ${i} turns=${mt.turns} but the hardpoint ${h.weapon ? (h.weapon.spinal ? 'has a spinal' : 'has a') : 'has no'} weapon`)
   })
   // 3. Detachable parts.
   ok(m.detachable.length <= 30, `${label}: ${m.detachable.length} detachable parts don't fit a state mask`)

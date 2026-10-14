@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { UNIT } from '../src/apps/games/empires/data.ts'
 import { cmd } from '../src/apps/games/empires/commands.ts'
 import { matchBrains, matchWorld, stepTurn, type MatchInfo } from '../src/apps/games/empires/match.ts'
-import { HASH_EVERY } from '../src/apps/games/empires/protocol.ts'
+import { HASH_EVERY, PROTOCOL } from '../src/apps/games/empires/protocol.ts'
 import { restoreBrain, restoreWorld } from '../src/apps/games/empires/snapshot.ts'
 import { stateHash, type World } from '../src/apps/games/empires/sim.ts'
 import type { Brain } from '../src/apps/games/empires/ai.ts'
@@ -137,7 +137,7 @@ export class Bot {
     const ws = new WebSocket(this.server.url, { headers: { Origin: this.server.origin } } as any)
     this.ws = ws
     this.closeCode = 0
-    ws.onopen = () => this.send({ t: 'hello', ...(token ? { token } : {}), ...(stored ? { stored } : {}) })
+    ws.onopen = () => this.send({ t: 'hello', v: PROTOCOL, ...(token ? { token } : {}), ...(stored ? { stored } : {}) })
     ws.onmessage = (e) => this.handle(JSON.parse(String(e.data)))
     ws.onclose = (e) => (this.closeCode = e.code)
     return this

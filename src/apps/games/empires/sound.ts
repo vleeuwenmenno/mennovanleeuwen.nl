@@ -1,4 +1,4 @@
-import type { AbilityId, FactionId, Tier, WeaponKind } from './data'
+import { FACTIONS, type AbilityId, type FactionId, type Tier, type WeaponKind } from './data'
 import { RETREAT_TIME, WARP_RESERVE, WARP_YARD } from './sim'
 import { empiresMix, empiresMusic, empiresMuted, empiresVolume, type EmpiresBus, type EmpiresMix } from '../prefs'
 
@@ -521,7 +521,8 @@ function chatter(sr: number, r: Rnd, count: number, contour: number, base = 380)
 const ack = (kind: OrderKind | 'select', faction: FactionId, tier: Tier = 'frigate'): Recipe => (sr, r) => {
   // Small craft answer higher and quicker, flagships lower.
   const shift = { fighter: 4, gunship: 2, frigate: 0, cruiser: -2, capital: -4, station: -5, mine: 0, defense: 0, yard: -3 }[tier]
-  if (faction === 'droid') {
+  // Each faction's crews have their own voice (FactionInfo `sound`): clone crews beep, droids chatter.
+  if (FACTIONS[faction].sound.voice === 'droid') {
     const contour = { select: 0, move: 1, attack: -1, attackMove: -0.5, patrol: 0.5, hold: 0, stop: -1, rally: 1, target: 1.5 }[kind]
     const count = kind === 'select' ? 2 + Math.floor(r() * 2) : 3 + Math.floor(r() * 2)
     return radio(sr, chatter(sr, r, count, contour, 262 * semi(shift)), false)
@@ -954,9 +955,9 @@ export class EmpiresSound {
     if (where.gain < 0.03) return
     if (kind === 'laser' && light) {
       // Dry: reverb would draw the snap out into a whoosh.
-      if (this.allow('pew', 4)) this.play(`pew-${faction}`, fighterBlaster(faction === 'droid'), { where, gain: 0.32, verb: 0.08, takes: 4 })
-    } else if (kind === 'laser' && this.allow('laser', 3)) this.play(`laser-${faction}`, blaster(faction === 'droid'), { where, gain: 0.5, takes: 4 })
-    else if (kind === 'turbo' && this.allow('turbo', 3, 0.1)) this.play('turbo', turbolaser, { where, gain: 0.8, rate: faction === 'droid' ? 0.92 : 1, takes: 4 })
+      if (this.allow('pew', 4)) this.play(`pew-${faction}`, fighterBlaster(FACTIONS[faction].sound.blaster === 'droid'), { where, gain: 0.32, verb: 0.08, takes: 4 })
+    } else if (kind === 'laser' && this.allow('laser', 3)) this.play(`laser-${faction}`, blaster(FACTIONS[faction].sound.blaster === 'droid'), { where, gain: 0.5, takes: 4 })
+    else if (kind === 'turbo' && this.allow('turbo', 3, 0.1)) this.play('turbo', turbolaser, { where, gain: 0.8, rate: FACTIONS[faction].sound.turbo, takes: 4 })
     else if (kind === 'flak' && this.allow('flak', 3)) this.play('flak', flak, { where, gain: 0.55, takes: 4 })
     else if (kind === 'missile' && this.allow('missile', 2, 0.15)) this.play('missile', missile, { where, gain: 0.6 })
     else if (kind === 'ion' && this.allow('ion', 2, 0.15)) this.play('ion', ionShot, { where, gain: 0.55, takes: 3 })

@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DIFFICULTY, PROFILES, PROFILE_IDS, profileOf, type Difficulty, type Profile } from './ai'
 import { CREDIT_STEPS, FACTIONS, type FactionId } from './data'
+import { pickable, usePickable } from './factions'
 import { Frame, Icon, Tips } from './Hud'
 import { battleLayout, type LayoutStore } from './layout'
 import { NAME_MAX, nameProblem, tidyName } from './names'
 import { REJOIN_WAIT, mpName } from './net'
 import { DEFAULT_RULES, GENERATED, MAP, MAPS, MAX_BEACONS, MAX_SEED, cleanRules, defaultArea, generateMap, type Amount, type MapDef, type MapRules, type Rect } from './maps'
 import { ALLY, ENEMY, OWN, drawTerrainOverview, relColor } from './render'
-import { ACTIONS, GROUP_MODS, RESERVED, bindKey, keyName, keyOf, modName, resetKeys, setGroupMod, setSettings, useAskedPanel, useSettings, type Action, type Settings } from './settings'
+import { ACTIONS, GROUP_MODS, RESERVED, bindKey, getSettings, keyName, keyOf, modName, resetKeys, setGroupMod, setSettings, useAskedPanel, useSettings, type Action, type Settings } from './settings'
 import { empiresMix, empiresMusic, empiresMuted, empiresVolume } from '../prefs'
 import { performanceOverlayPref } from '../../../os/PerformanceOverlay'
 import { REINFORCE, SURCHARGE_MAX, cleanReinforce, newWorld, type Owner, type Reinforce, type World } from './sim'
@@ -62,8 +63,10 @@ function lastSetup(): Setup {
     // Setups saved before the generator existed have no rules: they get the defaults.
     const gen = cleanRules(v?.gen)
     const map = v?.map === GENERATED ? generateMap(gen) : v?.map && MAP[v.map] ? MAP[v.map] : MAPS[0]
+    // A faction in preview (factions.ts) only while the preview is on.
+    const sides = pickable(getSettings().swarmPreview)
     const ok = (s: Partial<Slot>): s is Slot =>
-      !!s && (s.kind === 'ai' || s.kind === 'closed' || s.kind === 'you') && (s.faction === 'republic' || s.faction === 'droid') && (s.team === 0 || s.team === 1) && !!s.difficulty && s.difficulty in DIFFICULTY
+      !!s && (s.kind === 'ai' || s.kind === 'closed' || s.kind === 'you') && !!s.faction && sides.includes(s.faction) && (s.team === 0 || s.team === 1) && !!s.difficulty && s.difficulty in DIFFICULTY
     // Setups saved before profiles: their AIs play Balanced.
     const slots = Array.isArray(v?.slots) ? v.slots.filter(ok).map((s) => ({ ...s, profile: profileOf(s.profile) })) : []
     if (slots[0]) slots[0] = { ...slots[0], kind: 'you', team: 0 }
@@ -217,7 +220,7 @@ export function BattleMenu({ w, me, sound, speed, onSpeed, onResume, onPanel, on
       <div className="ew-modal ew-battlemenu" onClick={(e) => e.stopPropagation()}>
         <Frame>
           <header className="ew-bm-head">
-            <img src={`/games/empires/world/emblem-${p.faction}.webp`} alt="" />
+            <img src={FACTIONS[p.faction].emblem} alt="" />
             <div>
               <strong>{w.map.name}</strong>
               <small className="ew-muted">{fac.long} · {mins} · {online ? 'the battle goes on' : 'battle paused'}</small>
@@ -546,6 +549,17 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
       <MpNameRow sound={sound} />
       <h5>Sound test</h5>
       {testing ? <SoundTest sound={sound} /> : <button className="ew-soundtest-open" onClick={() => (sound.unlock(), setTesting(true))}>Play every sound in the game…</button>}
+      {import.meta.env.DEV && (
+        <>
+          <h5>Developer</h5>
+          <div className="ew-row">
+            <span>
+              Swarm faction <small className="ew-muted">· preview, dev builds only</small>
+            </span>
+            <Seg label="Swarm faction preview" value={s.swarmPreview} options={[[false, 'Hidden'], [true, 'Playable']]} onChange={(v) => set({ swarmPreview: v })} />
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -1215,6 +1229,8 @@ export function GenControls({ rules, onChange, onReroll }: { rules: MapRules; on
 
 export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack: () => void; onLaunch: (s: Setup) => void }) {
   const [setup, setSetup] = useState(lastSetup)
+  // The factions to pick from: every one (bar a preview's, see factions.ts), and any a slot has.
+  const factions = usePickable(setup.slots.map((s) => s.faction))
   const [picker, setPicker] = useState(false)
   /** Whose start area a drag on the map redraws. */
   const [active, setActive] = useState(0)
@@ -1295,9 +1311,9 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
                 ) : (
                   <>
                     <div className="ew-seg ew-factionseg" role="group" aria-label="Faction">
-                      {(['republic', 'droid'] as FactionId[]).map((f) => (
-                        <button key={f} className={s.faction === f ? 'is-on' : ''} onClick={() => setSlot(i, { faction: f })} data-tip={FACTIONS[f].long} aria-pressed={s.faction === f}>
-                          <img src={`/games/empires/world/emblem-${f}.webp`} alt="" />
+                      {factions.map((f) => (
+                        <button key={f} className={s.faction === f ? 'is-on' : ''} onClick={() => setSlot(i, { faction: f })} data-tip={FACTIONS[f].preview ? `${FACTIONS[f].long} (preview)` : FACTIONS[f].long} aria-pressed={s.faction === f}>
+                          <img src={FACTIONS[f].emblem} alt="" />
                           <span>{FACTIONS[f].name}</span>
                         </button>
                       ))}

@@ -10,6 +10,16 @@ import type { BattleSnap } from './snapshot.ts'
 // MP_PATH, as JSON text. Shared by both sides (types only, nothing to run).
 
 export const MP_PATH = '/api/empires/ws'
+/**
+ * The version of the battle both sides run. Bump it whenever the sim, the factions' data or the
+ * orders change in a way that would make copies from before and after drift apart (version 2: the
+ * third faction and the faction mechanics). The server turns away a client of another version,
+ * closing with OUTDATED_CODE, and the game asks the player to reload. Clients from before there was
+ * a version send none: they count as version 1.
+ */
+export const PROTOCOL = 2
+/** WebSocket close code for a client whose PROTOCOL isn't the server's. */
+export const OUTDATED_CODE = 4001
 export const CHAT_MAX = 240
 /** Every this many ticks, players send the server a fingerprint of their battle to compare. */
 export const HASH_EVERY = 30
@@ -79,7 +89,7 @@ export type ClientMsg =
    * browser's last one rather than this tab's own (the tab was closed): it is only taken back if
    * nobody is connected with it right now. Without a token to resume, a signed-in player gets back
    * their own player who isn't connected (from another device or browser), if there is one. */
-  | { t: 'hello'; token?: string; stored?: boolean }
+  | { t: 'hello'; token?: string; stored?: boolean; /** Its PROTOCOL (none before there was one). */ v?: number }
   /** Take a name (also to change it later). */
   | { t: 'claim'; name: string }
   /** For the round trip time; answered with `pong` straight away. `rtt` is our last measure of

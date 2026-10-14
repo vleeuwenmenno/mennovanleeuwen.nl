@@ -1,94 +1,32 @@
-import { STATIONS, UNITS, dims, stationType, type FactionId, type Tier, type UnitType } from '../data.ts'
+import { FACTION_IDS, STATIONS, UNITS, dims, stationType, type FactionId, type Tier, type UnitType } from '../data.ts'
+import { MODELS as droid } from './droid/index.ts'
+import { expansionParts } from './expansions.ts'
 import { circle, hash, inPart, inPoly, jagged, rng, seedOf } from './kit.ts'
-import * as base from './base.ts'
-import * as droid from './droid.ts'
-import * as proto from './proto.ts'
-import * as protoDroid from './proto-droid.ts'
-import * as protoSwarm from './proto-swarm.ts'
-import * as republic from './republic.ts'
-import * as swarm from './swarm.ts'
-import type { ModelDef } from './spec.ts'
+import { MODELS as republic } from './republic/index.ts'
+import type { FactionModels, ModelDef } from './spec.ts'
+import { MODELS as swarm } from './swarm/index.ts'
 import type { BreakKind, HullState, Model, Mount, MountDesign, Part, Pt, Scorch } from './types.ts'
 
 // Procedural models: which units have one, building a model for a unit type, its damage state, and
 // how it breaks apart when destroyed. No DOM here (see models/paint.ts for the drawing), so the
 // headless check builds every model in Node.
 //
-// Adding a unit's model: write a ModelDef in the faction's file (republic.ts, droid.ts) that returns
-// its parts on the unit's box (100 units on the long side, nose up), then list it in DEFS below.
-// Its turrets, shield generators and hangars are placed for it on the unit's hardpoints from
-// data.ts, so they always sit where the battle aims at them. Run `pnpm check:empires-models`, then
-// look at it in the main menu's Codex (Workshop mode shows the parts, hardpoints and break-up).
+// Each faction's designs are its own, in models/<faction>/ (craft.ts, warships.ts, base.ts, its
+// mounts and its palette), listed by unit id in its index.ts; this file merges them and is shared.
+// Adding a unit's model: write a ModelDef in the faction's folder that returns its parts on the
+// unit's box (100 units on the long side, nose up), then list it in the faction's index.ts. Its
+// turrets, shield generators and hangars are placed for it on the unit's hardpoints from its data
+// (data/<faction>.ts), so they always sit where the battle aims at them. Run `pnpm
+// check:empires-models`, then look at it in the main menu's Codex (Workshop mode shows the parts,
+// hardpoints and break-up).
 
 export type { HullState, Model } from './types.ts'
 
-/** The designs, by unit id. A station's id covers all its levels: the design grows with the level.
- * The warships bigger than strike craft are drawn at their size (models/sizes.ts) with their guns
- * spread out: their designs are in proto.ts and proto-droid.ts. */
-const DEFS: Record<string, ModelDef> = {
-  'r-fighter': republic.fighter,
-  'r-bomber': republic.bomber,
-  'r-repair': republic.repair,
-  'r-picket': republic.picket,
-  'r-gunship': proto.gunship,
-  'r-corvette': proto.corvette,
-  'r-frigate': proto.frigate,
-  'r-cruiser': proto.cruiser,
-  'r-capital': proto.capital,
-  'r-station': republic.station,
-  'r-mine': republic.mine,
-  'r-defense': republic.defense,
-  'r-defense-flak': republic.defense,
-  'r-defense-gun': republic.defense,
-  'd-fighter': droid.fighter,
-  'd-station': droid.station,
-  'd-bomber': droid.bomber,
-  'd-repair': droid.repair,
-  'd-picket': droid.picket,
-  'd-gunship': protoDroid.gunship,
-  'd-ion': protoDroid.ion,
-  'd-frigate': protoDroid.frigate,
-  'd-cruiser': protoDroid.cruiser,
-  'd-capital': protoDroid.capital,
-  'd-mine': droid.mine,
-  'd-defense': droid.defense,
-  'd-defense-flak': droid.defense,
-  'd-defense-gun': droid.defense,
-  // Hybrid bases: the engineers and the yards (base.ts).
-  'r-engineer': base.republicEngineer,
-  'd-engineer': base.droidEngineer,
-  'r-yard': base.republicYard,
-  'd-yard': base.droidYard,
-  'r-cyard': base.republicCapitalYard,
-  'd-cyard': base.droidCapitalYard,
-}
-
-/**
- * The Swarm: a concept kit for a future third faction (swarm.ts, its warships in proto-swarm.ts),
- * one design for each droid unit, on the same box and hardpoints. Never used in battle: the Codex
- * shows them under "Swarm (concept)", built with the style SWARM.
- */
-const SWARM_DEFS: Record<string, ModelDef> = {
-  'd-fighter': swarm.fighter,
-  'd-station': swarm.station,
-  'd-bomber': swarm.bomber,
-  'd-repair': swarm.repair,
-  'd-picket': swarm.picket,
-  'd-gunship': protoSwarm.gunship,
-  'd-ion': protoSwarm.ion,
-  'd-frigate': protoSwarm.frigate,
-  'd-cruiser': protoSwarm.cruiser,
-  'd-capital': protoSwarm.capital,
-  'd-mine': swarm.mine,
-  'd-defense': swarm.defense,
-  'd-defense-flak': swarm.defense,
-  'd-defense-gun': swarm.defense,
-}
-/** The style that builds a droid unit as its Swarm concept design. */
-export const SWARM = 'swarm'
-export const hasSwarm = (t: UnitType) => t.id in SWARM_DEFS
-/** A Swarm design's own name (the droid unit it mirrors has a droid-navy name). */
-export const swarmName = (t: UnitType) => swarm.SWARM_NAMES[t.id] ?? t.name
+/** Each faction's models. */
+const FACTION_MODELS: Record<FactionId, FactionModels> = { republic, droid, swarm }
+/** The designs, by unit id, every faction's. A station's id covers all its levels: the design grows
+ * with the level. */
+const DEFS: Record<string, ModelDef> = Object.assign({}, ...FACTION_IDS.map((f) => FACTION_MODELS[f].defs))
 
 export const hasModel = (t: UnitType) => t.id in DEFS
 
@@ -100,14 +38,13 @@ export function modelFor(t: UnitType, style = ''): Model | null {
   let byStyle = built.get(t)
   if (!byStyle) built.set(t, (byStyle = new Map()))
   let m = byStyle.get(style)
-  if (m === undefined) byStyle.set(style, (m = (style === SWARM ? hasSwarm(t) : hasModel(t)) ? buildModel(t, style || undefined) : null))
+  if (m === undefined) byStyle.set(style, (m = hasModel(t) ? buildModel(t, style || undefined) : null))
   return m
 }
 
 /** The design variants a unit's model can be shown in (the Codex offers them): the Republic
- * station's level-4 frame, the droid flagship's ring or carrier hull. */
-export const modelStyles = (t: UnitType): string[] =>
-  t.id === 'r-station' && /-4$/.test(t.sprite) ? [...republic.STATION_FRAMES] : t.id === 'd-capital' ? [...droid.CAPITAL_DESIGNS] : []
+ * station's level-4 frame, the droid flagship's ring or carrier hull (each faction's own). */
+export const modelStyles = (t: UnitType): string[] => FACTION_MODELS[t.faction].styles?.(t) ?? []
 
 const bySprite = new Map<string, UnitType | null>()
 /** The model behind a wreck, which only knows the sprite of the ship it was. */
@@ -125,8 +62,8 @@ export function unitForSprite(sprite: string): UnitType | null {
 /** The unit type a sprite name stands for, a station by its stage (with only that level's own
  * modules): for the menus and tiles that only know a sprite. */
 export function typeOfSprite(sprite: string): UnitType | null {
-  const st = /^(republic|droid)-station-(\d)$/.exec(sprite)
-  if (st) return stationType(st[1] as FactionId, Number(st[2]), [])
+  const st = /^(\w+)-station-(\d)$/.exec(sprite)
+  if (st && (FACTION_IDS as string[]).includes(st[1])) return stationType(st[1] as FactionId, Number(st[2]), [])
   return UNITS.find((u) => u.sprite === sprite && u.tier !== 'station') ?? null
 }
 
@@ -135,9 +72,8 @@ export function typeOfSprite(sprite: string): UnitType | null {
 const DETACH_BY_DEFAULT: MountDesign[] = ['flak']
 
 export function buildModel(t: UnitType, style?: string): Model {
-  const concept = style === SWARM
-  const def = (concept ? SWARM_DEFS : DEFS)[t.id]
-  if (!def) throw new Error(`No ${concept ? 'Swarm ' : ''}model for ${t.id}`)
+  const def = DEFS[t.id]
+  if (!def) throw new Error(`No model for ${t.id}`)
   let w: number
   let h: number
   let level = 1
@@ -154,7 +90,7 @@ export function buildModel(t: UnitType, style?: string): Model {
     h = dh * k
   }
   const long = Math.max(w, h)
-  const spec = def({ t, w, h, level, style: concept ? undefined : style })
+  const spec = def({ t, w, h, level, style })
   const grid = (gx: number, gy: number): Pt => [(gx / 10 - 0.5) * w, (gy / 10 - 0.5) * h]
   const mounts: Mount[] = t.hardpoints.map((hp, i) => {
     const [x, y] = grid(hp.x, hp.y)
@@ -163,14 +99,15 @@ export function buildModel(t: UnitType, style?: string): Model {
     // An expansion module is drawn as parts of the structure (base.ts): its mount is the collar
     // that shows the stump once it is shot off.
     if (hp.exp) return { hp: i, x, y, r: ((hp.s ?? 0.05) * long) / 2, design: 'collar' as const, turns: false, detach: false }
-    return { hp: i, x, y, r: (((hp.s ?? 0.05) * long) / 2) * scale, design, turns: !!hp.weapon, detach: DETACH_BY_DEFAULT.includes(design), ...over }
+    // A spinal gun is fixed along the keel: the ship turns to aim it, its mount doesn't.
+    return { hp: i, x, y, r: (((hp.s ?? 0.05) * long) / 2) * scale, design, turns: !!hp.weapon && !hp.weapon.spinal, detach: DETACH_BY_DEFAULT.includes(design), ...over }
   })
   // Every mount sits in a socket: a dark recess in the plating, under the superstructure.
   const sockets: Part[] = mounts
     .filter((m) => m.design !== 'engine' && m.design !== 'collar')
     .map((m) => ({ id: `socket${m.hp}`, pts: circle(m.x, m.y, m.r * 1.1, 18), tone: 'dark' as const, z: 0.5, details: [{ k: 'line' as const, pts: circle(m.x, m.y, m.r * 0.92, 16) }] }))
   // Expansion modules (hybrid bases) are built onto the structure as parts of their own.
-  const extra = base.expansionParts(t, w, h)
+  const extra = expansionParts(t, w, h, FACTION_MODELS[t.faction].expansion)
   const parts = [...spec.parts.filter((p) => (p.level ?? 1) <= level), ...extra, ...sockets].sort((a, b) => a.z - b.z)
   // A mining platform with its Shield generator fitted, or a yard with expansions built onto it, is
   // a type of its own with more sockets, so its key names its modules too, as a station's does.
@@ -178,7 +115,7 @@ export function buildModel(t: UnitType, style?: string): Model {
   const seed = seedOf(t.tier === 'station' ? `${t.id}:${level}` : t.id)
   return {
     key,
-    faction: concept ? 'swarm' : t.faction,
+    faction: t.faction,
     w,
     h,
     long,

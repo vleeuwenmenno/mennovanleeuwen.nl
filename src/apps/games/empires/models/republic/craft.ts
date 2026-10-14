@@ -1,6 +1,6 @@
-import { along, box, capsule, chamfer, circle, halfHull, part, pod, rect, rounded, sym, turn } from './kit.ts'
-import type { ModelDef } from './spec.ts'
-import type { Detail, Part, Pt, Tone } from './types.ts'
+import { along, box, capsule, chamfer, circle, halfHull, part, pod, rect, rounded, sym, turn } from '../kit.ts'
+import type { ModelDef } from '../spec.ts'
+import type { Detail, Part, Pt, Tone } from '../types.ts'
 
 // The Republic's style kit: angular wedges and chamfered blocks, off-white plating with deep red
 // bands, grey machinery, blue windows and engine light. Hulls are split down the middle into two

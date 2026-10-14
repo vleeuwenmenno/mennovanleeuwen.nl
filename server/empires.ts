@@ -16,7 +16,7 @@ import { CREDIT_STEPS, FACTIONS, START_CREDITS } from '../src/apps/games/empires
 import { DEFAULT_RULES, GENERATED, MAP, MAPS, cleanRules, generateMap, type MapDef } from '../src/apps/games/empires/maps.ts'
 import { matchBrains, matchWorld, stepTurn, type MatchInfo, type Turn } from '../src/apps/games/empires/match.ts'
 import { nameKey, nameProblem, randomName, tidyName } from '../src/apps/games/empires/names.ts'
-import { CHAT_MAX, HASH_EVERY, MP_PATH, REJOIN_MS as REJOIN_DEFAULT_MS, type AwaySeat, type AwayVote, type ClientMsg, type LobbyInfo, type MpLobby, type MpSlot, type RosterSeat, type ServerMsg, type SlotPatch } from '../src/apps/games/empires/protocol.ts'
+import { CHAT_MAX, HASH_EVERY, MP_PATH, OUTDATED_CODE, PROTOCOL, REJOIN_MS as REJOIN_DEFAULT_MS, type AwaySeat, type AwayVote, type ClientMsg, type LobbyInfo, type MpLobby, type MpSlot, type RosterSeat, type ServerMsg, type SlotPatch } from '../src/apps/games/empires/protocol.ts'
 import { REINFORCE, STEP, cantGive, cleanReinforce, stateHash, type Owner, type World } from '../src/apps/games/empires/sim.ts'
 import { restoreBrain, restoreWorld, snapBrain, snapshotWorld, type BattleSnap } from '../src/apps/games/empires/snapshot.ts'
 
@@ -828,6 +828,8 @@ function onMessage(ws: WsConnection, conn: { p: Player | null; login: string | n
 
   if (!conn.p) {
     if (m.t !== 'hello') return ws.close(1008, 'hello first')
+    // Another version of the game would play another battle: it has to reload first.
+    if ((m.v ?? 1) !== PROTOCOL) return ws.close(OUTDATED_CODE, 'outdated')
     hello(ws, conn, m.token, m.stored === true)
     return
   }

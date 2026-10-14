@@ -1,5 +1,6 @@
 import { breakOutcome, breakPieces, wreckState, type Piece } from './index.ts'
-import { PALETTES, hash, rng } from './kit.ts'
+import { hash, rng } from './kit.ts'
+import { PALETTES } from './palettes.ts'
 import { drawHull, drawMount, drawPart, drawPiece } from './paint.ts'
 import type { BreakKind, HullState, Model } from './types.ts'
 import type { Tier } from '../data.ts'

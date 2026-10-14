@@ -1,6 +1,7 @@
 import type { Piece } from './index.ts'
 import { stateKey } from './index.ts'
-import { PALETTES, blob, bounds, centroid, lightFor, rng, toneIndex, type Palette } from './kit.ts'
+import { blob, bounds, centroid, lightFor, rng, toneIndex, type Palette } from './kit.ts'
+import { PALETTES } from './palettes.ts'
 import { mountParts, type MountLook } from './mounts.ts'
 import type { HullState, Model, Part, Pt } from './types.ts'
 

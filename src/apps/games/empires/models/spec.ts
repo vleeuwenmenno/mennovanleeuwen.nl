@@ -1,4 +1,5 @@
 import type { UnitType } from '../data.ts'
+import type { Expansion } from './expansions.ts'
 import type { BreakStyle, Mount, Part, Pt } from './types.ts'
 
 /** What a design is given to build from: the unit type, its box in model units, for a station the
@@ -25,3 +26,13 @@ export type ModelSpec = {
 }
 
 export type ModelDef = (c: BuildCtx) => ModelSpec
+
+/** One faction's models (models/<faction>/index.ts), merged by models/index.ts. */
+export type FactionModels = {
+  /** Its designs, by unit id. A station's id covers all its levels: the design grows with the level. */
+  defs: Record<string, ModelDef>
+  /** Its expansion modules (models/expansions.ts places them). */
+  expansion: Expansion
+  /** The design variants a unit's model can be shown in (the Codex offers them); none when left out. */
+  styles?: (t: UnitType) => string[]
+}

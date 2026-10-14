@@ -1,4 +1,4 @@
-import { ABILITIES, BUILD_RADIUS, LEVEL_UP, MAX_LEVEL, MODULE, REBUILD, RUSH_TECH, worksOf, type ModuleId, type Works, SURVEY_RADIUS, TECH, TECHS, UNIT, UPGRADES, buildable, builtAt, isEngineer, isShip, unitOf, yardOf, type FactionId, type Tech, type Tier, type UnitType } from './data.ts'
+import { ABILITIES, BUILD_RADIUS, LEVEL_UP, MAX_LEVEL, MODULE, REBUILD, RUSH_TECH, worksOf, type ModuleId, type Works, SURVEY_RADIUS, TECH, TECHS, UNIT, UPGRADES, buildable, builtAt, isEngineer, isShip, prefixOf, unitOf, yardOf, type FactionId, type Tech, type Tier, type UnitType } from './data.ts'
 import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import {
@@ -1304,7 +1304,7 @@ function planYard(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Uni
   if (p.level >= 2 && b.lv2 < 0) b.lv2 = w.time
   const mine = w.units.find((u) => !u.dead && u.owner === o && u.t.id === yt.id)
   const engineers = army.filter((u) => isEngineer(u.t))
-  const eng = UNIT[`${p.faction === 'republic' ? 'r' : 'd'}-engineer`]
+  const eng = UNIT[`${prefixOf(p.faction)}-engineer`]
   // Engineers lost: a minute before it sends more the same way.
   if (engineers.length < b.engSeen) b.engWait = w.time + 60
   b.engSeen = engineers.length
@@ -1454,7 +1454,7 @@ function defenseFor(w: World, o: Owner): string {
     else big += u.t.pop
   }
   const id = small > big * 1.6 ? 'defense-flak' : big > small * 1.6 ? 'defense-gun' : 'defense'
-  return `${p.faction === 'republic' ? 'r' : 'd'}-${id}`
+  return `${prefixOf(p.faction)}-${id}`
 }
 
 // --- Fleet battles ---------------------------------------------------------------------------------

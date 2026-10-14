@@ -1,16 +1,19 @@
 // The AI profiles against each other: AI-only 1v1 skirmishes, headless and deterministic, for
 // balancing. Every pairing of the profiles (mirrors too), at each difficulty, on both two-player
-// maps, a few seeds each, every game played twice with the factions swapped (a mirror: the spawns).
+// maps, a few seeds each, for every pairing of factions, every game played twice with the profiles
+// swapped between the factions (a mirror: the spawns).
 //
-//   node scripts/empires-tournament.ts [minutes] [seeds] [difficulties]
+//   node scripts/empires-tournament.ts [minutes] [seeds] [difficulties] [factions]
 //
 //   minutes       how long a game may run before it counts as a stall (default 40)
 //   seeds         seeds per map (default 3)
 //   difficulties  comma separated (default medium,hard)
+//   factions      the faction pairings, comma separated, each two factions joined by a dash
+//                 (default every pairing: republic-droid,republic-swarm,droid-swarm)
 //
 // It reports each profile's wins and losses in games played out to the end (a station destroyed)
 // and in stalls (no winner by the time limit: then the side with clearly more fleet and structure
-// value left leads); each pairing; when the first frigate came out; who researched Rushed
+// value left leads); each pairing; each faction pairing (which faction led); when the first frigate came out; who researched Rushed
 // construction and how often it rushed; which expansions each profile built; the defense wing
 // craft lost; and the waves sent out. Games run in parallel worker threads (TOURNAMENT_WORKERS sets
 // how many). EMPIRES=path/to/empires runs another copy of the game, to compare.
@@ -18,7 +21,7 @@
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads'
 import { availableParallelism } from 'node:os'
 
-type Job = { i: number; map: string; seed: number; diff: string; profiles: [string, string]; spawns: number[]; minutes: number; dir: string }
+type Job = { i: number; map: string; seed: number; diff: string; profiles: [string, string]; factions: [string, string]; spawns: number[]; minutes: number; dir: string }
 type Side = { profile: string; faction: string; frigate: number; rushTech: number; rushes: number; mods: string[]; wingLost: number; waves: number; techs: number; level: number; worth: number }
 type Result = { job: Job; winner: number; time: number; sides: Side[] }
 
@@ -31,7 +34,7 @@ async function play(job: Job): Promise<Result> {
   const { DIFFICULTY, newBrain, think } = await import(`${job.dir}ai.ts`)
   const { UNIT } = await import(`${job.dir}data.ts`)
   const map = MAPS.find((m: { name: string }) => m.name === job.map)
-  const factions = ['republic', 'droid']
+  const factions = job.factions
   const w = newWorld(map, factions.map((f, i) => ({ faction: f, team: i, spawn: job.spawns[i], incomeMul: DIFFICULTY[job.diff].income })), { seed: job.seed })
   const brains = job.profiles.map((p, i) => newBrain(i, job.diff, p))
   const sides: Side[] = job.profiles.map((p, i) => ({ profile: p, faction: factions[i], frigate: -1, rushTech: -1, rushes: 0, mods: [], wingLost: 0, waves: 0, techs: 0, level: 1, worth: 0 }))
@@ -77,20 +80,26 @@ if (!isMainThread) {
   const minutes = Number(process.argv[2] ?? 40)
   const seeds = Number(process.argv[3] ?? 3)
   const diffs = (process.argv[4] ?? 'medium,hard').split(',')
+  const { FACTION_IDS } = await import(`${dir}data.ts`)
+  const ids: string[] = FACTION_IDS ?? ['republic', 'droid']
+  const sides: [string, string][] = process.argv[5]
+    ? process.argv[5].split(',').map((p) => p.split('-') as [string, string])
+    : ids.flatMap((a, i) => ids.slice(i + 1).map((b) => [a, b] as [string, string]))
   const { MAPS } = await import(`${dir}maps.ts`)
   const maps: string[] = MAPS.filter((m: { spawns: unknown[] }) => m.spawns.length === 2).map((m: { name: string }) => m.name)
   const P = ['defensive', 'balanced', 'offensive']
   const pairs: [string, string][] = []
   for (let a = 0; a < P.length; a++) for (let b = a; b < P.length; b++) pairs.push([P[a], P[b]])
   const jobs: Job[] = []
-  for (const diff of diffs)
-    for (const map of maps)
-      for (let s = 1; s <= seeds; s++)
-        for (const [a, b] of pairs)
-          // (A mirror swaps the spawns instead: the same profiles swapped would be the same game.)
-          for (const swap of [false, true]) jobs.push({ i: jobs.length, map, seed: s * 101 + maps.indexOf(map) * 7, diff, profiles: swap && a !== b ? [b, a] : [a, b], spawns: swap && a === b ? [1, 0] : [0, 1], minutes, dir })
+  for (const factions of sides)
+    for (const diff of diffs)
+      for (const map of maps)
+        for (let s = 1; s <= seeds; s++)
+          for (const [a, b] of pairs)
+            // (A mirror swaps the spawns instead: the same profiles swapped would be the same game.)
+            for (const swap of [false, true]) jobs.push({ i: jobs.length, map, seed: s * 101 + maps.indexOf(map) * 7, diff, profiles: swap && a !== b ? [b, a] : [a, b], factions, spawns: swap && a === b ? [1, 0] : [0, 1], minutes, dir })
   const n = Math.min(jobs.length, Number(process.env.TOURNAMENT_WORKERS ?? Math.max(1, availableParallelism() - 4)))
-  console.log(`${jobs.length} games (${pairs.length} pairings x ${diffs.join('/')} x ${maps.join(', ')} x ${seeds} seeds x both factions), up to ${minutes} min each, ${n} workers`)
+  console.log(`${jobs.length} games (${sides.map((f) => f.join(' v ')).join(', ')} x ${pairs.length} pairings x ${diffs.join('/')} x ${maps.join(', ')} x ${seeds} seeds x both sides), up to ${minutes} min each, ${n} workers`)
   const results: Result[] = []
   const t0 = Date.now()
   await new Promise<void>((done) => {
@@ -148,7 +157,7 @@ if (!isMainThread) {
       }
       console.log(`${p.padEnd(12)} ${String(gm).padStart(5)}  ${`${w}-${l}`.padStart(16)}  ${`${sw}-${sl}-${se}`.padStart(22)}  ${`${w + sw}-${l + sl}`.padStart(16)}  ${pct(cw, cg).padStart(6)}`)
     }
-    console.log('pairing                   ended(A-B)  stalls  avg min   by faction (republic side wins)')
+    console.log('pairing                   ended(A-B)  stalls  avg min   first faction of its pairing leads')
     for (const [a, b] of pairs) {
       const ps = rs.filter((r) => [...r.job.profiles].sort().join() === [a, b].sort().join())
       let aw = 0, bw = 0, st = 0, rep = 0
@@ -160,6 +169,19 @@ if (!isMainThread) {
       }
       const avg = ps.reduce((s, r) => s + r.time, 0) / Math.max(1, ps.length) / 60
       console.log(`${`${a} v ${b}`.padEnd(25)} ${`${aw}-${bw}`.padStart(11)}  ${String(st).padStart(6)}  ${avg.toFixed(1).padStart(7)}   ${rep}/${ps.length}`)
+    }
+    console.log('factions                  games  first-second-even (led)  ended  avg min')
+    for (const f of sides) {
+      const fs = rs.filter((r) => r.job.factions.join() === f.join())
+      if (!fs.length) continue
+      let a = 0, b = 0, e = 0
+      for (const r of fs) {
+        const x = lead(r)
+        if (x === -1) e++
+        else x === 0 ? a++ : b++
+      }
+      const avg = fs.reduce((t, r) => t + r.time, 0) / fs.length / 60
+      console.log(`${f.join(' v ').padEnd(25)} ${String(fs.length).padStart(5)}  ${`${a}-${b}-${e}`.padStart(23)}  ${String(fs.filter((r) => r.winner >= 0).length).padStart(5)}  ${avg.toFixed(1).padStart(7)}`)
     }
     console.log('profile      1st frigate (median)  rush researched (median at)  rushes/game  wing lost/game  waves/game  techs/game  level at end')
     for (const p of P) {

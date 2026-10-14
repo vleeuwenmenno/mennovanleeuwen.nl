@@ -11,7 +11,7 @@
 import { UNIT } from '../src/apps/games/empires/data.ts'
 import { cmd } from '../src/apps/games/empires/commands.ts'
 import { matchBrains, matchWorld, stepTurn } from '../src/apps/games/empires/match.ts'
-import { HASH_EVERY, type ClientMsg, type ServerMsg } from '../src/apps/games/empires/protocol.ts'
+import { HASH_EVERY, PROTOCOL, type ClientMsg, type ServerMsg } from '../src/apps/games/empires/protocol.ts'
 import { restoreBrain, restoreWorld } from '../src/apps/games/empires/snapshot.ts'
 import { stateHash, type World } from '../src/apps/games/empires/sim.ts'
 import type { Brain } from '../src/apps/games/empires/ai.ts'
@@ -34,7 +34,7 @@ let rtt = 0
 const pings = new Map<number, number>()
 let pingN = 0
 ws.onopen = () => {
-  send({ t: 'hello' })
+  send({ t: 'hello', v: PROTOCOL })
   setInterval(() => {
     pings.set(++pingN, performance.now())
     send({ t: 'ping', n: pingN, ...(rtt ? { rtt: Math.round(rtt) } : {}) })

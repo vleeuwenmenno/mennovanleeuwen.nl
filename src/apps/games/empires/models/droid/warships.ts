@@ -1,14 +1,14 @@
-import { along, box, chamfer, circle, halfHull, part, rect, sym, turn } from './kit.ts'
-import * as classic from './droid.ts'
-import { dish, ellBand, engineBlock, eyes, lamps, mast, rivets, sail } from './droid.ts'
-import { calm, seat, type SeatLook } from './proto.ts'
-import type { BuildCtx, ModelDef, ModelSpec } from './spec.ts'
-import type { Detail, Part, Pt, Tone } from './types.ts'
+import { along, box, chamfer, circle, halfHull, part, rect, sym, turn } from '../kit.ts'
+import * as classic from './craft.ts'
+import { dish, ellBand, engineBlock, eyes, lamps, mast, rivets, sail } from './craft.ts'
+import { calm, seat, type SeatLook } from '../proto.ts'
+import type { BuildCtx, ModelDef, ModelSpec } from '../spec.ts'
+import type { Detail, Part, Pt, Tone } from '../types.ts'
 
 // The droid navy's warships at their size (sizes.ts), in the same calm style as the Republic's
-// (proto.ts): big quiet plates over the gunmetal frames, a single row of rivets, a few eyes and lamps,
-// and one gun per hardpoint on its own seat, the hardpoints where BIG_LAYOUT puts them. The Swarm's
-// warships (proto-swarm.ts) use the same layouts.
+// (models/republic/warships.ts): big quiet plates over the gunmetal frames, a single row of rivets,
+// a few eyes and lamps, and one gun per hardpoint on its own seat, the hardpoints where its `layout`
+// (data/droid.ts) puts them.
 
 /** Droid seats: a gunmetal pad, a heavier sand-plated barbette with a rust band. */
 export const DROID_SEAT: SeatLook = { pad: 'metal', heavy: 'hull2', band: 'accent' }

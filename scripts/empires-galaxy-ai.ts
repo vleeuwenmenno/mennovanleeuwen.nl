@@ -1,7 +1,9 @@
 // How the galactic conquest AI plays, headless: a few campaigns at every difficulty against a
 // simple scripted player, with numbers on how busy and how purposeful the AI is.
 //
-//   node scripts/empires-galaxy-ai.ts [weeks] [runs] [turtle|expand]
+//   node scripts/empires-galaxy-ai.ts [weeks] [runs] [turtle|expand] [factions]
+//
+//   factions  the scripted player's faction and the AI's, joined by a dash (default republic-droid)
 //
 // The scripted player keeps its best shipyard busy and has its battles auto-resolved. A turtle
 // leaves every fleet at home; an expander sends its biggest fleet to the nearest planet it doesn't
@@ -19,9 +21,11 @@
 // by a blockade they couldn't see (the fog of war) as none: the "pulled" column counts those.
 //
 // Then the fog of war: its rules checked one by one, and the AI's decisions compared between two
-// copies of a campaign that differ only in what it can't see (they must be the same).
+// copies of a campaign that differ only in what it can't see (they must be the same). And the Rim
+// Wars' sides: where each faction starts, the Swarm's Deep only there when the Swarm fights, any
+// faction against any other, and a Swarm campaign played for a while.
 
-import { buildable } from '../src/apps/games/empires/data.ts'
+import { FACTIONS, buildable, type FactionId } from '../src/apps/games/empires/data.ts'
 import type { Difficulty } from '../src/apps/games/empires/ai.ts'
 import type { Fleet, Galaxy, GalaxyChoice } from '../src/apps/games/empires/galaxy.ts'
 
@@ -29,6 +33,7 @@ const G: typeof import('../src/apps/games/empires/galaxy.ts') = await import(pro
 const weeks = Number(process.argv[2] ?? 12)
 const runs = Number(process.argv[3] ?? 2)
 const mode = process.argv[4] === 'turtle' ? 'turtle' : 'expand'
+const [youAre, theyAre] = (process.argv[5] ?? 'republic-droid').split('-') as [FactionId, FactionId]
 const STEP = 0.5
 
 // The same campaigns every time, even where the game itself rolls dice.
@@ -77,8 +82,8 @@ let crowded = 0
 type Stats = { orders: number; moves: number; retargets: number; bounces: number; lone: number; fleets: number; ships: number; flying: number; samples: number; planets: number; credits: number; playerPlanets: number; won: number; lost: number; pulled: number }
 const zero = (): Stats => ({ orders: 0, moves: 0, retargets: 0, bounces: 0, lone: 0, fleets: 0, ships: 0, flying: 0, samples: 0, planets: 0, credits: 0, playerPlanets: 0, won: 0, lost: 0, pulled: 0 })
 
-function run(choice: GalaxyChoice, diff: Difficulty): Stats {
-  const g = G.newGalaxy({ choice, size: 'standard', faction: 'republic', difficulty: diff, credits: 2000 })
+function run(choice: GalaxyChoice, diff: Difficulty, faction: FactionId = youAre, rival: FactionId = theyAre): Stats {
+  const g = G.newGalaxy({ choice, size: 'standard', faction, rival, difficulty: diff, credits: 2000 })
   const st = zero()
   const AI = 1
   const heading = new Map<number, { to: number; moving: boolean }>()
@@ -361,6 +366,41 @@ if (!process.env.GALAXY && G.thinkAi) {
     console.error('FAIL: the fog check changed nothing hidden, so it proved nothing')
     over = true
   }
+}
+
+// --- The Rim Wars' sides ----------------------------------------------------------------------------------
+if (!process.env.GALAXY) {
+  const ok = (what: string, pass: boolean, detail = '') => {
+    console.log(`${pass ? 'ok  ' : 'FAIL'} sides: ${what}${detail ? `: ${detail}` : ''}`)
+    if (!pass) over = true
+  }
+  const rim = (faction: FactionId, rival?: FactionId, size: 'short' | 'standard' | 'long' = 'standard') => G.newGalaxy({ choice: { kind: 'rim' }, size, faction, rival, difficulty: 'medium', credits: 2000 })
+  const holder = (g: Galaxy, name: string) => {
+    const s = g.systems.find((x) => x.name === name)
+    return s ? g.planets[s.planets[0]].owner : -2
+  }
+  const has = (g: Galaxy, name: string) => g.systems.some((x) => x.name === name)
+  const rd = rim('republic')
+  ok('the Republic fights the Confederacy unless told otherwise', rd.sides[1].faction === 'droid' && holder(rd, 'Corvanis') === 0 && holder(rd, 'Geonar') === 1)
+  ok('without the Swarm there is no Deep', !has(rd, 'Vharsk') && !has(rd, 'Ossuar') && !has(rim('droid'), 'Vharsk'))
+  const sr = rim('swarm')
+  ok('the Swarm starts in the Deep', sr.sides[0].faction === 'swarm' && holder(sr, 'Vharsk') === 0 && holder(sr, 'Ossuar') === 0 && g0station(sr, 'Vharsk') === 3)
+  ok('against its usual rival, the Republic, in the west', sr.sides[1].faction === 'republic' && holder(sr, 'Corvanis') === 1)
+  const rs = rim('republic', 'swarm')
+  ok('any side can pick another: the Republic against the Swarm', rs.sides[1].faction === 'swarm' && holder(rs, 'Vharsk') === 1 && holder(rs, 'Corvanis') === 0)
+  const ds = rim('droid', 'swarm', 'short')
+  ok('the Deep is there at every length', ds.sides[1].faction === 'swarm' && holder(ds, 'Vharsk') === 1 && holder(ds, 'Geonar') === 0)
+  ok('never against itself: the usual rival instead', rim('swarm', 'swarm').sides[1].faction === 'republic')
+  ok('both sides start with their own ships', [sr, rs, ds].every((g) => g.fleets.every((f) => f.ships.every((id) => id.startsWith(`${FACTIONS[g.sides[f.owner].faction].prefix}-`)))))
+  const t0 = Date.now()
+  const st = run({ kind: 'rim' }, 'medium', 'republic', 'swarm')
+  ok('a campaign against the Swarm plays out', st.samples > 0 && Number.isFinite(st.credits), `${st.planets.toFixed(1)} planets for the Swarm AI, ${st.playerPlanets.toFixed(1)} for the player, ${((Date.now() - t0) / 1000).toFixed(1)} s`)
+}
+
+/** The station level of a system's first planet. */
+function g0station(g: Galaxy, name: string) {
+  const s = g.systems.find((x) => x.name === name)
+  return s ? g.planets[s.planets[0]].station : -1
 }
 
 // Older copies of the model (GALAXY=...) may have no cap.

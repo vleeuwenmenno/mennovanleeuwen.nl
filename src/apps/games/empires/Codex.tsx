@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ABILITIES, FACTIONS, REBUILD_MODULE, RUSH, STATIONS, TECH, TECHS, techsFor, UNITS, WORKS_NAME, isShip, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
+import { ABILITIES, FACTIONS, REBUILD_MODULE, RUSH, STATIONS, TECH, TECHS, techsFor, UNIT, UNITS, WORKS_NAME, isShip, modulesFor, roleOf, stationType, worksOf, yardType, type FactionId, type Tier, type UnitType, type WeaponKind } from './data'
 import { info, sameSel, selName, targets, weaponLine, WEAPON_NAME, type Sel } from './codexInfo'
 import { Frame, HpIcon, Icon, Tips, fmt } from './Hud'
 import { HP_COLOR, hpName } from './icons'
-import { BREAK_WEIGHTS, SWARM, hasSwarm, hullState, modelFor, modelStyles, pickAt, swarmName, type Model } from './models/index.ts'
+import { BREAK_WEIGHTS, hullState, modelFor, modelStyles, pickAt, type Model } from './models/index.ts'
+import { usePickable } from './factions.ts'
 import { ModelFx } from './models/fx.ts'
-import { LIGHT, PALETTES } from './models/kit.ts'
+import { LIGHT } from './models/kit.ts'
+import { PALETTES } from './models/palettes.ts'
 import { cacheStats, drawHull, drawMounts, liveEngines } from './models/paint.ts'
 import type { BreakKind } from './models/types.ts'
 import { averageRings, moduleRing } from './ranges.ts'
@@ -41,6 +43,8 @@ const TIER_GROUPS: { name: string; tiers: Tier[] }[] = [
 const STYLE_NAMES: Record<string, string> = { ring: 'Ring hull', carrier: 'Alt design: carrier' }
 const RANGE_RGB: Record<WeaponKind, string> = { laser: '255,128,112', flak: '255,196,92', turbo: '122,190,255', missile: '255,140,222', ion: '176,146,255' }
 const TAU = Math.PI * 2
+/** A share as a whole percentage: 0.15 is 15%. */
+const pct = (v: number) => `${Math.round(v * 100)}%`
 
 /** The unit as the Codex shows it: a station at the level picked, with every module it can have
  * (its expansions too); a yard with every expansion fitted. */
@@ -53,11 +57,12 @@ function shown(t: UnitType, level: number) {
 /** Every gun a unit carries, grouped by kind and numbers. */
 function guns(t: UnitType) {
   const all = [...t.weapons.map((w) => ({ w, hp: false })), ...t.hardpoints.flatMap((h) => (h.weapon ? [{ w: h.weapon, hp: true }] : []))]
-  const groups: { kind: WeaponKind; dmg: number; burst: number; range: number; cd: number; n: number; turret: boolean }[] = []
+  const groups: { kind: WeaponKind; dmg: number; burst: number; range: number; cd: number; n: number; turret: boolean; spinal: boolean }[] = []
   for (const { w, hp } of all) {
-    const g = groups.find((x) => x.kind === w.kind && x.dmg === w.damage && x.range === w.range && x.cd === w.cooldown && x.turret === hp)
+    const spinal = !!w.spinal
+    const g = groups.find((x) => x.kind === w.kind && x.dmg === w.damage && x.range === w.range && x.cd === w.cooldown && x.turret === hp && x.spinal === spinal)
     if (g) g.n++
-    else groups.push({ kind: w.kind, dmg: w.damage, burst: w.burst ?? 1, range: w.range, cd: w.cooldown, n: 1, turret: hp })
+    else groups.push({ kind: w.kind, dmg: w.damage, burst: w.burst ?? 1, range: w.range, cd: w.cooldown, n: 1, turret: hp, spinal })
   }
   return groups
 }
@@ -103,10 +108,8 @@ function ModuleCard({ t, model, sel, dmg, onClear }: { t: UnitType; model: Model
   )
 }
 
-function Stats({ t, concept = false, model, dmg, selected, hover, onSelect, onHover }: {
+function Stats({ t, model, dmg, selected, hover, onSelect, onHover }: {
   t: UnitType
-  /** A Swarm concept design: the numbers are the droid unit's it mirrors. */
-  concept?: boolean
   model: Model | null
   dmg: Damage
   selected: Sel | null
@@ -125,16 +128,16 @@ function Stats({ t, concept = false, model, dmg, selected, hover, onSelect, onHo
     </div>
   )
   const ship = isShip(t)
+  const preview = !!FACTIONS[t.faction].preview
   return (
     <div className="ew-cx-stats">
       <header>
-        <h3 style={{ color: FACTIONS[t.faction].color }}>{concept ? swarmName(t) : t.name}</h3>
+        <h3 style={{ color: FACTIONS[t.faction].color }}>{t.name}</h3>
         {role && <em>{role.role}</em>}
       </header>
-      {concept && <p className="ew-cx-concept ew-small">Swarm concept design. The numbers below are the Confederacy {t.name}'s, which it mirrors; the Swarm has none of its own yet.</p>}
+      {preview && <p className="ew-cx-concept ew-small">{FACTIONS[t.faction].name} preview: still being made. Its numbers are placeholders (the Confederacy unit's in the same slot).</p>}
       {selected && <ModuleCard t={t} model={model} sel={selected} dmg={dmg} onClear={() => onSelect(null)} />}
-      {/* The blurb describes the droid design; a Swarm concept has its own look. */}
-      {!concept && <p className="ew-muted">{t.blurb}</p>}
+      <p className="ew-muted">{t.blurb}</p>
       <div className="ew-cx-grid">
         {row('Hull', fmt(t.hull))}
         {row('Shields', t.shield ? `${fmt(t.shield)} · +${t.regen}/s` : 'None')}
@@ -148,6 +151,11 @@ function Stats({ t, concept = false, model, dmg, selected, hover, onSelect, onHo
         {t.squad > 1 && row('Squadron', `${t.squad} craft`)}
         {dps > 0 && row('Firepower', `${dps.toFixed(1)} dps`, 'Damage a second with every gun firing, before shields, armour and accuracy')}
         {tech && row('Research', tech.name, tech.blurb)}
+        {/* The faction mechanics (sim.ts), where a unit has them. */}
+        {t.regrow && row('Living hull', `+${pct(t.regrow.rate)}/s`, `Out of the fight for ${t.regrow.delay} s, the hull grows back by ${pct(t.regrow.rate)} of its full hull a second`)}
+        {t.drain && row('Drain', `${fmt(t.drain.dps)}/s · ${fmt(t.drain.radius)} reach`, `Drains the hull of every enemy in reach, past their shields; ${pct(t.drain.heal)} of it mends our damaged ships in reach`)}
+        {t.fireControl && row('Fire control', `+${pct(t.fireControl.bonus)} damage`, `Our ships within ${fmt(t.fireControl.radius)} hit ${pct(t.fireControl.bonus)} harder (the best of several auras counts)`)}
+        {t.tier === 'station' && t.carrier && row('Brood', `${UNIT[t.carrier.unit]?.name ?? t.carrier.unit} every ${t.carrier.every} s`, `Launches a squadron every ${t.carrier.every} s while fewer than ${t.carrier.max} of them are out`)}
       </div>
       {g.length > 0 && (
         <>
@@ -159,7 +167,7 @@ function Stats({ t, concept = false, model, dmg, selected, hover, onSelect, onHo
                 <span>
                   {x.n > 1 ? `${x.n}× ` : ''}
                   {WEAPON_NAME[x.kind]}
-                  {x.turret ? ' turret' : ''}
+                  {x.spinal ? ' (spinal)' : x.turret ? ' turret' : ''}
                 </span>
                 <small>
                   {x.dmg}
@@ -694,10 +702,9 @@ function Viewer({ t, model, workshop, show, dmg, boom, hover, selected, resetKey
 
 /**
  * The ship sizes (models/sizes.ts): the side's fighter and every ship bigger than strike craft, side
- * by side at one scale, nose up. `concept`: the
- * Swarm's designs, on the droid units they mirror.
+ * by side at one scale, nose up.
  */
-function SizeStrip({ faction, concept, onClose }: { faction: FactionId; concept: boolean; onClose: () => void }) {
+function SizeStrip({ faction, onClose }: { faction: FactionId; onClose: () => void }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
     const c = canvas.current!
@@ -712,8 +719,7 @@ function SizeStrip({ faction, concept, onClose }: { faction: FactionId; concept:
       g.setTransform(dpr, 0, 0, dpr, 0, 0)
       g.fillStyle = '#04060d'
       g.fillRect(0, 0, W, H)
-      const style = concept ? SWARM : ''
-      const items = UNITS.filter((u) => u.faction === faction && isShip(u) && (u.tier !== 'fighter' || !u.kind) && (!concept || hasSwarm(u))).map((t) => ({ t, m: modelFor(t, style) }))
+      const items = UNITS.filter((u) => u.faction === faction && isShip(u) && (u.tier !== 'fighter' || !u.kind)).map((t) => ({ t, m: modelFor(t) }))
       // One column per ship, everything at one scale, standing on one line.
       const gap = 28
       const dimsOf = (it: (typeof items)[number]) => (it.m ? [(it.m.w / it.m.long) * it.t.size, (it.m.h / it.m.long) * it.t.size] : [it.t.size, it.t.size])
@@ -744,7 +750,7 @@ function SizeStrip({ faction, concept, onClose }: { faction: FactionId; concept:
         g.fillText(`${Math.round(it.t.size)} long`, cx, base + 16)
         g.fillStyle = '#d6dded'
         g.font = '13px system-ui, sans-serif'
-        g.fillText(concept ? swarmName(it.t) : it.t.name, cx, base + 34)
+        g.fillText(it.t.name, cx, base + 34)
         x += cw + gap
       })
       g.textAlign = 'start'
@@ -756,7 +762,7 @@ function SizeStrip({ faction, concept, onClose }: { faction: FactionId; concept:
     const ro = new ResizeObserver(draw)
     ro.observe(c)
     return () => ro.disconnect()
-  }, [faction, concept])
+  }, [faction])
   return (
     <div className="ew-cx-sizes">
       <canvas ref={canvas} />
@@ -778,19 +784,19 @@ export function Codex({ sound, onClose }: { sound: EmpiresSound; onClose: () => 
 }
 
 function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => void }) {
-  // The tabs: the two sides, and the Swarm, a concept for a future faction shown on the droid units
-  // it mirrors (their numbers, their hardpoints), never used in battle.
-  const [side, setSide] = useState<FactionId | 'swarm'>('republic')
-  const concept = side === 'swarm'
-  const faction: FactionId = concept ? 'droid' : side
-  const list = useMemo(() => UNITS.filter((u) => u.faction === faction && (!concept || hasSwarm(u))), [faction, concept])
+  // The tabs: one per faction (the Swarm only with its preview on, see factions.ts).
+  const [side, setSide] = useState<FactionId>('republic')
+  const sides = usePickable([side])
+  const faction: FactionId = side
+  const preview = !!FACTIONS[faction].preview
+  const list = useMemo(() => UNITS.filter((u) => u.faction === faction), [faction])
   const [pickId, setPickId] = useState<string>('r-frigate')
   const base = list.find((u) => u.id === pickId) ?? list[0]
   const [level, setLevel] = useState(4)
   const t = shown(base, level)
-  const styles = concept ? [] : modelStyles(t)
+  const styles = modelStyles(t)
   const [style, setStyle] = useState('')
-  const model = modelFor(t, concept ? SWARM : styles.includes(style) ? style : '')
+  const model = modelFor(t, styles.includes(style) ? style : '')
   const [sizes, setSizes] = useState(false)
   const [workshop, setWorkshop] = useState(false)
   const [show, setShow] = useState<Show>({ hardpoints: false, ranges: false, glow: true, outlines: false, spin: false })
@@ -896,14 +902,12 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
       <header className="ew-cx-top">
         <h2>Codex</h2>
         <div className="ew-seg" role="group" aria-label="Side">
-          {(['republic', 'droid'] as const).map((f) => (
-            <button key={f} className={side === f ? 'is-on' : ''} onClick={click(() => setSide(f))}>
+          {sides.map((f) => (
+            <button key={f} className={side === f ? 'is-on' : ''} onClick={click(() => setSide(f))} data-tip={FACTIONS[f].preview ? `${FACTIONS[f].name} (preview): still being made, placeholder numbers` : undefined}>
               {FACTIONS[f].name}
+              {FACTIONS[f].preview && <small> (preview)</small>}
             </button>
           ))}
-          <button className={concept ? 'is-on' : ''} onClick={click(() => setSide('swarm'))} data-tip="Swarm (concept): design previews for a possible future faction. Not in the game.">
-            Swarm <small>(concept)</small>
-          </button>
         </div>
         <button className={`ew-cx-ws ${sizes ? 'is-on' : ''}`} aria-pressed={sizes} onClick={click(() => setSizes(!sizes))} data-tip="Ship sizes: every ship of the side, side by side at one scale">
           Size classes
@@ -916,11 +920,11 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
         </button>
       </header>
       <div className="ew-cx-body">
-        {sizes && <SizeStrip faction={faction} concept={concept} onClose={() => setSizes(false)} />}
+        {sizes && <SizeStrip faction={faction} onClose={() => setSizes(false)} />}
         <nav className="ew-cx-nav" aria-label="Units">
-          {concept && (
+          {preview && (
             <p className="ew-cx-concept ew-small">
-              <b>Swarm (concept)</b> · design previews for a possible future faction, not in the game. Each is shown on the numbers and hardpoints of the Confederacy unit it mirrors.
+              <b>{FACTIONS[faction].name} (preview)</b> · still being made: placeholder numbers (the Confederacy's), and models from its concept designs where there are any.
             </p>
           )}
           {TIER_GROUPS.map((grp) => {
@@ -931,8 +935,7 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
                 <h5>{grp.name}</h5>
                 {units.map((u) => (
                   <button key={u.id} className={u.id === base.id ? 'is-on' : ''} onClick={click(() => setPickId(u.id))}>
-                    <span>{concept ? swarmName(u) : u.name}</span>
-                    {concept && <em className="ew-cx-tag is-concept" data-tip="A design preview for a future faction, shown on this droid unit's numbers and hardpoints">Concept</em>}
+                    <span>{u.name}</span>
                   </button>
                 ))}
               </section>
@@ -1039,7 +1042,6 @@ function CodexBody({ sound, onClose }: { sound: EmpiresSound; onClose: () => voi
           <Frame title="Specifications">
             <Stats
               t={t}
-              concept={concept}
               model={model}
               dmg={dmg}
               selected={selected}

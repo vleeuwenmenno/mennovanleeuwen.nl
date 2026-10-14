@@ -67,19 +67,6 @@
   text-align: left;
   padding: 6px 9px;
 }
-.ew-cx-tag {
-  font-style: normal;
-  font-size: 9.5px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  padding: 1px 5px;
-  border-radius: 3px;
-  color: #04060d;
-  background: var(--ew-gold);
-}
-.ew-cx-tag.is-concept {
-  background: #b9a3e6;
-}
 .ew-cx-concept {
   margin: 0 0 8px;
   padding: 6px 8px;

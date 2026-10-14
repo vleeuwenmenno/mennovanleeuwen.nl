@@ -514,7 +514,7 @@ function Vitals({ u, squad = [u], now, compact = false }: { u: Unit; squad?: Uni
             <small>{fmt(u.shield)} / {fmt(shieldFull(u))}{weak ? ' ⚠' : ''}</small>
           </span>
         )}
-        {u.nebula && <p className="ew-terrain-note">In a nebula: shields down, sensors at half range</p>}
+        {u.nebula && <p className="ew-terrain-note">{t.shield > 0 ? 'In a nebula: shields down, sensors at half range' : 'In a nebula: sensors at half range'}</p>}
         {!u.nebula && t.shield > 0 && reboot > 0 && <p className="ew-terrain-note">Shields failed: back online in {Math.ceil(reboot)} s</p>}
       </div>
     )
@@ -535,7 +535,7 @@ function Vitals({ u, squad = [u], now, compact = false }: { u: Unit; squad?: Uni
           </small>
         </>
       )}
-      {u.nebula && <p className="ew-terrain-note">In a nebula: shields down, sensors at half range</p>}
+      {u.nebula && <p className="ew-terrain-note">{t.shield > 0 ? 'In a nebula: shields down, sensors at half range' : 'In a nebula: sensors at half range'}</p>}
       {!u.nebula && t.shield > 0 && reboot > 0 && <p className="ew-terrain-note">Shields failed: back online in {Math.ceil(reboot)} s</p>}
     </div>
   )
@@ -687,7 +687,7 @@ function FactionButton({ hud, faction, sector, onReserves }: { hud: Hud; faction
         aria-label={`Open the fleet inventory: ${hud.reserve.length} ships waiting`}
       >
         <span className="ew-emblem">
-          <img src={`/games/empires/world/emblem-${faction}.webp`} alt="" />
+          <img src={FACTIONS[faction].emblem} alt="" />
           {hud.reserve.length > 0 && <em>{hud.reserve.length}</em>}
         </span>
         <div>
@@ -759,7 +759,7 @@ export function GiftPanel({ credits, allies, onSend, onClose }: {
         <div className="ew-giftallies" role="radiogroup" aria-label="Ally">
           {allies.map((a) => (
             <button key={a.seat} role="radio" aria-checked={a.seat === ally?.seat} className={a.seat === ally?.seat ? 'is-on' : ''} onClick={() => (setTo(a.seat), setNote(null))}>
-              <img src={`/games/empires/world/emblem-${a.faction}.webp`} alt="" />
+              <img src={FACTIONS[a.faction].emblem} alt="" />
               <span>
                 <b>{a.name}</b>
                 <small>{a.ai ? 'AI ally' : 'Ally'} · <span className="ew-gold">{fmt(a.credits)}</span> credits</small>
@@ -927,8 +927,8 @@ export function Pips({ level }: { level: number }) {
 
 export const researchName = (id: string, level: number) => (id === LEVEL_UP ? `Station level ${level + 1}` : TECH[id].name)
 
-/** The generated icon for a piece of research; every station level shares one. */
-export const techIconUrl = (id: string) => `/games/empires/tech/${id === LEVEL_UP ? 'level' : id}.webp`
+/** The generated icon for a piece of research (or the one it borrows, Tech `icon`); every station level shares one. */
+export const techIconUrl = (id: string) => `/games/empires/tech/${id === LEVEL_UP ? 'level' : (TECH[id]?.icon ?? id)}.webp`
 
 /** What reaching a station level brings, for its tile in the tech tree. */
 export function levelBlurb(faction: FactionId, level: number) {
