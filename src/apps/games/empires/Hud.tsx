@@ -11,7 +11,7 @@ import { moduleThumbnail, thumbnail } from './models/paint.ts'
 import { keyName, modName, useSettings, type Action } from './settings'
 import { freeGroup, type GroupInfo } from './groups'
 import { LongPress, isTouch, shiftOf, useCoarse, useLongPressWheel } from './Touch'
-import { FIELD_DAMAGE, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
+import { FIELD_DAMAGE, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, escorts, escortsOf, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard, research and game speed; and along the bottom the tactical map, a details panel for
@@ -1836,6 +1836,17 @@ export function UnitIntel({ t, who, rel, note, live }: { t: UnitType; who?: stri
   )
 }
 
+/** "Escorted by 3" on a ship card: the ships flying over it as its escort (one ship's card). */
+function EscortLine({ w, u }: { w: World; u: Unit }) {
+  const n = isShip(u.t) && u.t.tier !== 'fighter' ? escortsOf(w, u).length : 0
+  if (!n) return null
+  return (
+    <span className="ew-escorted" data-tip="Ships told to guard this one fly over its hull as its escort: they move with it, take on what comes near it, and repair ships mend it first.">
+      <Icon name="hold" size={12} /> Escorted by {n}
+    </span>
+  )
+}
+
 function orderText(w: World, u: Unit) {
   if (building(u)) return `Under construction: ${Math.ceil(u.building)} s`
   const o = u.order
@@ -1846,7 +1857,7 @@ function orderText(w: World, u: Unit) {
   if (o.k === 'patrol') return 'Patrolling'
   if (o.k === 'guard') {
     const g = w.byId.get(o.id)
-    return g ? `Guarding ${g.t.name}` : 'Guarding'
+    return g ? `${escorts(u, g) ? 'Escorting' : 'Guarding'} ${g.t.name}` : 'Guarding'
   }
   if (o.k === 'area') {
     const t = u.target ? w.byId.get(u.target) : undefined
@@ -1894,6 +1905,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
             <span className="ew-muted ew-small">{coarse ? 'Tap the card, then a spot in the build ring. Long-press one of our structures to repair it.' : `Click the card (${keyName(keys.build)}), then a spot in the build ring. Right-click one of our structures to repair it.`}</span>
           </div>
         )}
+        {mine && squad.length === 1 && <EscortLine w={w} u={u} />}
         <span className="ew-muted ew-small">{t.blurb}</span>
         {u.rush && <span className="ew-rushnote">{rushNote(u)}</span>}
         <Counters t={t} />
@@ -2365,7 +2377,7 @@ export function SelectionPanel({ w, sel, me, mode, onCommand, onPick }: {
           )
         })()}
         <button className={`ew-cmdbtn ${mode === 'guard' ? 'is-on' : ''}`} disabled={!ships.length} onClick={() => onCommand('guard')}
-          data-tip={`Guard (${keyName(keys.guard)}): click one of our ships or structures; the selected ships stay with it and fight off whatever comes near.`}>
+          data-tip={`Guard (${keyName(keys.guard)}): click one of our ships or structures; the selected ships stay with it and fight off whatever comes near. A ship two classes bigger they escort: they fly over its hull, move with it, and repair ships mend it first.`}>
           <Icon name="hold" size={20} />
           <span>Guard</span>
           <kbd>{keyName(keys.guard)}</kbd>

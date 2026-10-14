@@ -531,7 +531,12 @@ function drawLit(ctx: CanvasRenderingContext2D, rot: number, n: number, bitmap: 
   ctx.globalAlpha = a
 }
 
-export type DrawOpts = { alpha?: number; debug?: boolean; wreck?: boolean; /** Light it as if turned this way (default: as drawn). */ lightRot?: number }
+/** A shadow cast under the hull onto whatever is below it: shifted (dx, dy) world units, at `alpha`. */
+export type Shadow = { dx: number; dy: number; alpha: number }
+export type DrawOpts = { alpha?: number; debug?: boolean; wreck?: boolean; /** Light it as if turned this way (default: as drawn). */ lightRot?: number
+  /** Its soft shadow first, on the hull it flies over (see drawShadow): drawn in the hull's own
+   * save and restore, so it costs one drawImage. */
+  shadow?: Shadow | null }
 
 /** A clean hull's look, for painting a cached hull without its burns. */
 const UNBURNT = { scorch: 0, variant: 0 }
@@ -555,6 +560,7 @@ export function drawHull(ctx: CanvasRenderingContext2D, m: Model, x: number, y: 
   ctx.translate(x, y)
   ctx.rotate(rot)
   if (o.alpha !== undefined && o.alpha < 1) ctx.globalAlpha *= o.alpha
+  if (o.shadow) drawShadow(ctx, m, rot, size, o.shadow)
   let k = bucketK(px)
   const big = !memTuning.legacy && BUCKETS[k] > memTuning.hull
   if (big && k <= bigK() + 1) k = bigK()
@@ -632,6 +638,57 @@ export function drawHull(ctx: CanvasRenderingContext2D, m: Model, x: number, y: 
     }
   }
   ctx.restore()
+}
+
+/**
+ * A ship's soft shadow, for where it flies over a bigger hull: its silhouette in black, painted once
+ * per model into a small bitmap (SHADOW_PX on its long side) as a few overlapping fills a pixel or
+ * two apart, so its edge is soft, and stretched to the ship's size when drawn, which softens it more.
+ * No blur filter, no gradient: one bitmap per model, one drawImage per shadow.
+ */
+const SHADOW_PX = 48
+const shadows = new WeakMap<Model, HTMLCanvasElement>()
+function shadowOf(m: Model) {
+  let c = shadows.get(m)
+  if (!c) {
+    const ppu = SHADOW_PX / m.long
+    const pad = 4
+    c = document.createElement('canvas')
+    c.width = Math.ceil(m.w * ppu + pad * 2)
+    c.height = Math.ceil(m.h * ppu + pad * 2)
+    const g = c.getContext('2d')!
+    g.translate(c.width / 2, c.height / 2)
+    g.scale(ppu, ppu)
+    const sil = outlineOf(m).solid
+    g.fillStyle = 'rgba(0,0,0,0.2)'
+    const r = 1.6 / ppu
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * TAU
+      g.save()
+      g.translate(Math.cos(a) * r, Math.sin(a) * r)
+      g.fill(sil)
+      g.restore()
+    }
+    g.fillStyle = 'rgba(0,0,0,0.5)'
+    g.fill(sil)
+    shadows.set(m, c)
+  }
+  return c
+}
+
+/** The model's shadow, on a context already moved to the hull and turned by `rot` (see drawHull):
+ * `size` world units long, shifted by `shadow.dx, dy` in world space, at `shadow.alpha`. */
+function drawShadow(ctx: CanvasRenderingContext2D, m: Model, rot: number, size: number, shadow: Shadow) {
+  const c = shadowOf(m)
+  const k = size / SHADOW_PX
+  const cs = Math.cos(rot)
+  const sn = Math.sin(rot)
+  const lx = shadow.dx * cs + shadow.dy * sn
+  const ly = shadow.dy * cs - shadow.dx * sn
+  const a = ctx.globalAlpha
+  ctx.globalAlpha = a * shadow.alpha
+  ctx.drawImage(c, lx - (c.width / 2) * k, ly - (c.height / 2) * k, c.width * k, c.height * k)
+  ctx.globalAlpha = a
 }
 
 /** The run of turret bitmaps for one look at one size. */

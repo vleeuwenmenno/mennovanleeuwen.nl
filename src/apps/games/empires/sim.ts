@@ -3652,16 +3652,17 @@ function findEscorts(w: World) {
 export const escortsOf = (w: World, g: Unit) => w.units.filter((u) => wardOf(w, u) === g)
 
 /**
- * Where escort `i` of `n` keeps station over `g`: down both flanks in turn, spread evenly from the
- * bow to the stern, a little inside the hull's edge so it rides over it. The slots are fixed to the
- * hull, so they move and turn with it, and the escorts re-form round it as it turns.
+ * Where escort `i` of `n` keeps station over `g`: down both flanks in turn, spread evenly from
+ * just ahead of the middle to well aft, close in to the spine (hulls taper towards the bow, and are
+ * widest aft), so it rides over the hull. The slots are fixed to the hull, so they move and turn
+ * with it, and the escorts re-form round it as it turns.
  */
 export function escortSlot(g: Unit, i: number, n: number): Pt & { a: number } {
   const [gw, gh] = dims(g.t)
   const rows = Math.ceil(n / 2)
   const row = Math.floor(i / 2)
-  const side = (i % 2 ? -1 : 1) * gw * 0.4
-  const fwd = rows > 1 ? gh * (0.3 - (0.6 * row) / (rows - 1)) : 0
+  const side = (i % 2 ? -1 : 1) * gw * 0.2
+  const fwd = gh * (rows > 1 ? 0.1 - (0.4 * row) / (rows - 1) : -0.05)
   const c = M.cos(g.a)
   const s = M.sin(g.a)
   return { x: g.x + c * fwd - s * side, y: g.y + s * fwd + c * side, a: g.a }

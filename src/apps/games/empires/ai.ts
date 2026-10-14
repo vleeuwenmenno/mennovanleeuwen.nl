@@ -221,6 +221,8 @@ export type Brain = {
   /** When it reached station level 3 (-1: not yet), for the Capital Yard. */
   lv3: number
   guards: number[]
+  /** The ships escorting its flagship (see escort). */
+  escort: number[]
   engSeen: number
   engWait: number
 }
@@ -238,7 +240,7 @@ const handsMax = (D: Level) => Math.max(3, D.apm / 12)
 
 export const newBrain = (o: Owner, diff: Difficulty, profile: Profile = 'balanced'): Brain => ({
   o, diff, profile, t: 2, wave: DIFFICULTY[diff].wave * PROFILES[profile].wave, attacking: false, peak: 0, scouts: new Set(), want: null, lastWave: 0, hands: handsMax(DIFFICULTY[diff]), acts: 0, alarm: -1,
-  muster: -1, home: 0, troops: [], raid: [], raidAt: -1, mending: [], focus: 0, siege: -1, storm: false, allIn: false, foes: {}, walls: {}, threatPeak: 0, beaten: -1, threatPeakLast: 0, scoutWait: 0, lv2: -1, lv3: -1, guards: [], engSeen: 0, engWait: 0,
+  muster: -1, home: 0, troops: [], raid: [], raidAt: -1, mending: [], focus: 0, siege: -1, storm: false, allIn: false, foes: {}, walls: {}, threatPeak: 0, beaten: -1, threatPeakLast: 0, scoutWait: 0, lv2: -1, lv3: -1, guards: [], escort: [], engSeen: 0, engWait: 0,
 })
 
 /** Its hands free up again with time (every tick, thinking or not). A brain saved before any of
@@ -269,6 +271,7 @@ function rest(b: Brain, dt: number) {
   b.lv2 ??= -1
   b.lv3 ??= -1
   b.guards ??= []
+  b.escort ??= []
   b.engSeen ??= 0
   b.engWait ??= 0
 }
@@ -749,6 +752,7 @@ export function think(w: World, b: Brain, dt: number) {
   }
 
   mend(w, b, army, st)
+  escort(w, b, army, mendingIds)
 
   // Cruisers and flagships badly hurt go home to be mended (by the station's repair dock, or its
   // repair craft) rather than fight on to the end, and rejoin once they're whole.
@@ -776,7 +780,8 @@ export function think(w: World, b: Brain, dt: number) {
   if (b.scouts.size < scoutsBefore && w.time > 60) b.scoutWait = w.time + 45
   b.raid = b.raid.filter((id) => w.byId.get(id) && !mendingIds.has(id))
   const raiders = new Set(b.raid)
-  const guards = new Set(b.guards)
+  // (Escorts go wherever their flagship goes: they keep out of the waves' orders too.)
+  const guards = new Set([...b.guards, ...b.escort])
   const main = army.filter((u) => !b.scouts.has(u.id) && !raiders.has(u.id) && !mendingIds.has(u.id) && !guards.has(u.id) && !worker(u))
   const mainValue = value(main)
   if (threat && w.time - b.alarm >= D.react) {
@@ -893,7 +898,7 @@ function raid(w: World, b: Brain, army: Unit[], st: Unit, enemySt: Unit, n: numb
   const o = b.o
   const p = w.players[o]
   if (b.raid.length < n) {
-    const taken = new Set([...b.raid, ...b.scouts, ...b.mending, ...b.troops, ...b.guards])
+    const taken = new Set([...b.raid, ...b.scouts, ...b.mending, ...b.troops, ...b.guards, ...b.escort])
     const spare = army.find((u) => (u.t.tier === 'gunship' || (u.t.tier === 'fighter' && !worker(u))) && u.t.kind !== 'support' && !taken.has(u.id))
     if (spare) for (const u of army.filter((x) => x === spare || (spare.squad && x.squad === spare.squad))) b.raid.push(u.id)
   }
@@ -1178,6 +1183,44 @@ function mend(w: World, b: Brain, army: Unit[], st: Unit) {
   }
 }
 
+/** What escorts its flagship: a repair tender and two gunships. */
+const ESCORTS = { tenders: 1, gunships: 2 }
+
+/**
+ * Escorts: with a flagship out, a repair tender (where its side has one) and a couple of gunships
+ * fly over it as its escort (a guard order on a ship two classes bigger, see sim.ts escorts), going
+ * where it goes, fighting off what comes near it and patching it up. Only the flagship, and only a
+ * few: the rest of the fleet is the waves'. When the flagship is lost the escorts go back to the
+ * fleet.
+ */
+function escort(w: World, b: Brain, army: Unit[], mendingIds: Set<number>) {
+  const o = b.o
+  const flag = army.filter((u) => u.t.tier === 'capital' && u.retreat <= 0).sort((a, c) => c.t.cost - a.t.cost || a.id - c.id)[0]
+  if (!flag) {
+    b.escort = []
+    return
+  }
+  b.escort = b.escort.filter((id) => {
+    const u = w.byId.get(id)
+    return !!u && !u.dead && u.owner === o && u.retreat <= 0 && !mendingIds.has(id)
+  })
+  // Back on the job: an escort whose orders were dropped (or that was given others) guards it again.
+  for (const id of b.escort) {
+    const u = w.byId.get(id)!
+    if (!(u.order.k === 'guard' && u.order.id === flag.id)) act(b, () => cmdGuard(w, o, [u.id], flag.id))
+  }
+  const have = b.escort.map((id) => w.byId.get(id)!)
+  const taken = new Set([...b.guards, ...b.scouts, ...b.raid, ...b.mending, ...b.escort])
+  const free = army.filter((u) => u.t.tier === 'gunship' && !taken.has(u.id) && u.retreat <= 0).sort((a, z) => d2(a, flag) - d2(z, flag) || a.id - z.id)
+  const tender = have.filter((u) => u.t.kind === 'support').length < ESCORTS.tenders ? free.find((u) => u.t.kind === 'support') : undefined
+  const gun = have.filter((u) => u.t.kind !== 'support').length < ESCORTS.gunships ? free.find((u) => u.t.kind !== 'support') : undefined
+  for (const pick of [tender, gun]) {
+    if (!pick || !act(b, () => cmdGuard(w, o, [pick.id], flag.id), true)) continue
+    b.escort.push(pick.id)
+    b.troops = b.troops.filter((id) => id !== pick.id)
+  }
+}
+
 /**
  * Hybrid bases: the Frigate Yard. Once its profile says it's time (some seconds after station level
  * 2; an offensive admiral buys its engineers while the upgrade is still under way), it buys an
@@ -1249,7 +1292,7 @@ function planYard(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Uni
       if (u.order.k === 'idle' && d2(u, mine) > sq(radius(mine.t) + 600)) act(b, () => cmdGuard(w, o, [u.id], mine.id))
     }
     if (b.guards.length < S.yardGuards) {
-      const taken = new Set([...b.guards, ...b.scouts, ...b.raid, ...b.troops, ...b.mending])
+      const taken = new Set([...b.guards, ...b.scouts, ...b.raid, ...b.troops, ...b.mending, ...b.escort])
       const pick = army
         .filter((u) => (u.t.tier === 'gunship' || u.t.tier === 'frigate') && u.t.kind !== 'support' && !taken.has(u.id) && u.retreat <= 0)
         .sort((a, z) => d2(a, mine) - d2(z, mine) || a.id - z.id)[0]

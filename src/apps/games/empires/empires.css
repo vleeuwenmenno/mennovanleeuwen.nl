@@ -1664,6 +1664,15 @@ span.ew-teamtag {
 .ew-orders {
   margin-left: auto;
 }
+/* "Escorted by 3" on a ship's card, in the map's guard colour. */
+.ew-escorted {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  font-size: 11px;
+  color: #5fe6d0;
+}
 .ew-deck .ew-tag {
   font-size: 10px;
   text-transform: uppercase;
