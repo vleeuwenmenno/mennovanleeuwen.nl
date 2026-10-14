@@ -240,6 +240,13 @@
 .ew-row > span:first-child {
   color: #c4d0e4;
 }
+/* Keybinds: a control group modifier, its label over its three choices. */
+.ew-row.ew-modrow {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding-top: 4px;
+}
 .ew-seg {
   display: flex;
   gap: 3px;
@@ -2393,28 +2400,50 @@ span.ew-teamtag {
   font-family: var(--ew-display);
   color: var(--ew-head);
 }
-.ew-groups {
+/* Control groups (GroupBar in Hud.tsx): a strip of chips standing on the selection panel, in the
+   top bar's cut-corner cells: the key in gold, the main unit's picture, and the count. */
+.ew-groupbar {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 3px;
+  max-width: 100%;
+  pointer-events: auto;
 }
-.ew-deck .ew-groups button {
+.ew-deck .ew-gchip {
   display: flex;
   align-items: center;
-  gap: 3px;
-  padding: 1px 6px 1px 4px;
-  font-size: 11px;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 11px 0 9px;
+  font-size: 11.5px;
+  background: linear-gradient(180deg, rgba(18, 28, 54, 0.98), rgba(8, 13, 28, 0.98));
+  border: 1px solid rgba(183, 154, 98, 0.45);
+  border-radius: 0;
+  clip-path: polygon(6px 0, calc(100% - 6px) 0, 100% 50%, calc(100% - 6px) 100%, 6px 100%, 0 50%);
 }
-.ew-groups b {
+.ew-deck .ew-gchip:hover:not(:disabled) {
+  border-color: var(--ew-gold);
+  background: linear-gradient(180deg, rgba(30, 46, 86, 0.98), rgba(12, 20, 42, 0.98));
+}
+.ew-gchip b {
   font-family: var(--ew-display);
+  font-size: 12.5px;
   color: var(--ew-gold);
 }
-.ew-groups img {
-  width: 16px;
-  height: 16px;
+.ew-gchip img {
+  width: 20px;
+  height: 20px;
   object-fit: contain;
 }
-.ew-groups small {
+.ew-gchip small {
+  color: var(--ew-head);
+  font-variant-numeric: tabular-nums;
+}
+.ew-gadd b {
+  color: var(--ew-good);
+}
+.ew-gadd small {
   color: var(--ew-muted);
 }
 .ew-deck .ew-badged {
@@ -3636,9 +3665,13 @@ span.ew-teamtag {
 .ew-detailfloat > .ew-detail {
   max-height: 240px;
 }
-/* The selection: at least the old dock's height, growing upward when it needs to. */
+/* The selection: at least the old dock's height, growing upward when it needs to; the control
+   groups stand on top of it. */
 .ew-selfloat {
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
 }
 .ew-selfloat > .ew-selframe {
   min-height: 240px;
@@ -6252,5 +6285,97 @@ span.ew-teamtag {
 .ew-intel-rush,
 .ew-deck .ew-rushnote {
   color: #ffc878;
+  font-size: 12px;
+}
+
+/* --- Credits for allies (GiftPanel in Hud.tsx): the top bar's send button and its panel. --- */
+.ew-top-cell.ew-giftbtn {
+  padding: 0 12px;
+}
+.ew-top-cell.ew-giftbtn.is-on {
+  border-color: var(--ew-gold);
+}
+.ew-giftpop {
+  position: absolute;
+  top: 52px;
+  left: 190px;
+  width: min(340px, calc(100% - 12px));
+  z-index: 6;
+}
+.ew-giftpop .ew-frame-in {
+  gap: 9px;
+}
+.ew-deck .ew-giftx {
+  padding: 0 7px;
+  line-height: 18px;
+  font-size: 16px;
+}
+.ew-giftallies {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ew-deck .ew-giftallies button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 9px;
+  text-align: left;
+}
+.ew-giftallies img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+.ew-giftallies button > span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ew-giftallies b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-giftallies small {
+  display: block;
+  color: var(--ew-muted);
+  font-variant-numeric: tabular-nums;
+}
+.ew-giftallies button.is-on small {
+  color: #dbe6ff;
+}
+.ew-giftamts {
+  display: grid;
+  grid-template-columns: repeat(5, auto);
+  gap: 4px;
+}
+.ew-deck .ew-giftamts button {
+  padding: 5px 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ew-giftcustom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.ew-deck .ew-giftcustom input {
+  width: 120px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ew-text);
+  background: var(--ew-cell);
+  border: 1px solid var(--ew-cell-line);
+  border-radius: 5px;
+  padding: 5px 8px;
+  font-variant-numeric: tabular-nums;
+}
+.ew-giftsend {
+  align-self: stretch;
+}
+.ew-giftpop small[role='status'] {
   font-size: 12px;
 }
