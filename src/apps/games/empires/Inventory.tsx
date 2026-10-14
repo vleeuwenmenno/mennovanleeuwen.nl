@@ -469,10 +469,11 @@ export function FleetInventory({ g, planet, flight, selected, sound, toast, onSe
         const stack = stacks(it.unit)
         return (
           <div key={`${it.x},${it.y}`} role="button" tabIndex={0} data-inv-item="" data-longpress=""
-            className={`ew-inv-item ${it.held ? 'is-held' : ''} ${c ? 'is-carried' : ''} ${it.w > it.h ? 'is-side' : ''} ${it.w * it.h > 1 ? 'is-big' : ''}`}
+            className={`ew-inv-item ${it.held ? 'is-held' : ''} ${it.rush ? 'is-rushed' : ''} ${c ? 'is-carried' : ''} ${it.w > it.h ? 'is-side' : ''} ${it.w * it.h > 1 ? 'is-big' : ''}`}
             style={{ ...span(it.x, it.y, it.w, it.h), ['--w' as string]: it.w, ['--h' as string]: it.h }}
             {...unitTip(t, { who: 'Ours', rel: 'own' }, `${stack ? `${it.n} squadron${it.n > 1 ? 's' : ''} (up to 3 share a cell)` : `${it.w}×${it.h} cells`}, ${it.held ? 'held back: they wait in the reserve when a battle starts, to be called in' : 'jump in when a battle starts'}. ${coarse ? 'Tap to pick up, long-press for more.' : `Drag to a spot (R or right-click turns it)${stack ? '; Shift: half, Ctrl: one' : ''}. Double-click: to the next fleet.`}`)}>
             <span className="ew-inv-art"><ShipArt t={t} /></span>
+            {it.rush && <b className="ew-inv-rush" data-tip={`Rushed: launched ${Math.floor(it.rush.done * 100)}% built, scaffolding on its last turrets. It fights as that share of a ship until it is finished: ${Math.ceil(it.rush.left)} s of building left, done while its fleet is parked at one of our planets with a Capital Yard or a Drydock.`}><i aria-hidden /> Rushed · {Math.floor(it.rush.done * 100)}%</b>}
             {stack && <em>{c && carry!.n < it.n ? `${it.n - carry!.n}` : it.n}</em>}
             <i className={`ew-inv-hold ${it.held ? 'is-held' : ''}`} data-inv-toggle="" data-longpress="" data-tip={it.held ? 'Held back. Click to deploy' : 'Click to hold back'}>
               <Icon name={it.held ? 'hold' : 'attack'} size={11} />
