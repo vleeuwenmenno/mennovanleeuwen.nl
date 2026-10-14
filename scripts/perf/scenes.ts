@@ -91,7 +91,7 @@ async function pageShot(page: Page, selector: string, only: string): Promise<Ima
   const box = await page.eval<{ x: number; y: number; w: number; h: number }>(`(() => {
     const s = document.createElement('style')
     s.id = 'perf-shot'
-    s.textContent = '*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; color: transparent !important; text-shadow: none !important } text, tspan { fill: transparent !important; stroke: transparent !important } body *:not(${only}, ${only} *) { visibility: hidden !important } ${only} { visibility: visible !important }'
+    s.textContent = '*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; color: transparent !important; text-shadow: none !important } text, tspan { fill: transparent !important; stroke: transparent !important } body *:not(${only}, ${only} *) { visibility: hidden !important } ${only} { visibility: visible !important } html, body { background: #000 !important }'
     document.head.appendChild(s)
     const b = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect()
     return { x: b.x, y: b.y, w: b.width, h: b.height }

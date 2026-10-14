@@ -128,7 +128,8 @@ export async function newPage(b: Browser, width: number, height: number, inject:
   await s('Page.enable')
   await s('Runtime.enable')
   await s('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false })
-  // The same time zone and language on any machine.
+  // The same colour scheme, motion, time zone and language on any machine.
+  await s('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }, { name: 'prefers-reduced-motion', value: 'no-preference' }] })
   await s('Emulation.setTimezoneOverride', { timezoneId: 'Europe/Amsterdam' })
   await s('Emulation.setLocaleOverride', { locale: 'en-GB' })
   await s('Page.addScriptToEvaluateOnNewDocument', { source: inject })
