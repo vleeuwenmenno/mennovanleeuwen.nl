@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { AGENTS_MD } from '../data/agentsPrompt'
-import { allowSite, installSkills, listSites, listSkills, removeSite, removeSkill, setSkillEnabled, type AllowedSite, type Skill } from '../data/agents'
+import { allowSite, getMailReads, installSkills, listSites, listSkills, MAIL_READS_EVENT, removeSite, removeSkill, setMailReads, setSkillEnabled, type AllowedSite, type MailReadsMode, type Skill } from '../data/agents'
 import { ask } from '../os/Dialogs'
 import { agentModels, COMPACT_AT, getDefaults, getPrompt, listMemories, setAgentSettings, TITLE_EVERY, TOOL_GROUPS, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
 import { useMounts, whereIs } from '../data/mounts'
@@ -40,7 +40,7 @@ export function usePromptLocation() {
 }
 
 /** The categories, in order: each a page of its own, picked from a sidebar or tabs. */
-type SectionId = 'general' | 'models' | 'threads' | 'permissions' | 'search' | 'skills' | 'prompt' | 'shares'
+export type SectionId = 'general' | 'models' | 'threads' | 'permissions' | 'search' | 'skills' | 'prompt' | 'shares'
 const icon = (d: ReactNode) => (
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     {d}
@@ -50,7 +50,7 @@ const SECTIONS: { id: SectionId; label: string; blurb: string; icon: ReactNode }
   { id: 'general', label: 'General', blurb: 'The Ollama Cloud connection Agents runs on, and what it remembers.', icon: icon(<><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1" /></>) },
   { id: 'models', label: 'Models', blurb: 'Which model a new Quick or Deep thread gets, which one names threads and keeps their titles up to date, and which one checks web addresses in Auto.', icon: icon(<><rect x="4" y="4" width="16" height="16" /><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" /></>) },
   { id: 'threads', label: 'New threads', blurb: 'The mode and tools a new thread starts with, and how a long thread makes room in the model’s context window.', icon: icon(<path d="M4 5h16v11H9l-5 4z" />) },
-  { id: 'permissions', label: 'Permissions', blurb: 'What the agent may do without asking you: the web sites you allowed for good. Each thread picks its own mode in its toolbar (Ask first, Auto, Edits allowed, Plan, Bypass).', icon: icon(<path d="M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6z" />) },
+  { id: 'permissions', label: 'Permissions', blurb: 'What the agent may do without asking you: mail reads, and the web sites you allowed for good. Each thread picks its own mode in its toolbar (Ask first, Auto, Edits allowed, Plan, Bypass).', icon: icon(<path d="M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6z" />) },
   { id: 'search', label: 'Web search', blurb: 'Where the agent searches the web. Reading pages always goes through Ollama.', icon: icon(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>) },
   { id: 'skills', label: 'Skills', blurb: 'Instructions for kinds of tasks, in SKILL.md folders: the agent reads one when a task matches it, or you start one with /name.', icon: icon(<path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5z" />) },
   { id: 'prompt', label: 'System prompt', blurb: 'The instructions every thread starts with, from ~/AGENTS.md.', icon: icon(<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5" />) },
@@ -65,6 +65,17 @@ const storedSection = (): SectionId => {
     return 'general'
   }
 }
+/** Said on window to show a section in the settings already open (openAgentsSettings). */
+const SECTION_EVENT = 'mvlos:agents-settings-section'
+/** Remembers `id` as the section to show, and shows it in any agents settings already open. */
+export function showAgentsSection(id: SectionId) {
+  try {
+    localStorage.setItem(SECTION_KEY, id)
+  } catch {
+    /* not remembered */
+  }
+  window.dispatchEvent(new CustomEvent(SECTION_EVENT, { detail: id }))
+}
 
 /**
  * The settings, by category: a sidebar of their own in the Agents window, tabs inside Settings
@@ -72,6 +83,11 @@ const storedSection = (): SectionId => {
  */
 export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs' }) {
   const [section, setSection] = useState<SectionId>(storedSection)
+  useEffect(() => {
+    const on = (e: Event) => setSection((e as CustomEvent<SectionId>).detail)
+    window.addEventListener(SECTION_EVENT, on)
+    return () => window.removeEventListener(SECTION_EVENT, on)
+  }, [])
   const pick = (id: SectionId) => {
     setSection(id)
     try {
@@ -380,14 +396,27 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
 
 // --- permissions -----------------------------------------------------------------------------------
 
-/** The web sites you allowed for good ("Allow github.com" on a web read), with a way to add and remove them. */
+/**
+ * Whether the agent's mail searches and reads ask (the default) or are always allowed, and the
+ * web sites you allowed for good ("Allow github.com" on a web read), with a way to add and remove them.
+ */
 function PermissionSettings() {
   const [sites, setSites] = useState<AllowedSite[] | null>(null)
+  const [mailReads, setMailReadsMode] = useState<MailReadsMode | null>(null)
   const [draft, setDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
     listSites().then(setSites, (e: Error) => setError(e.message))
+    getMailReads().then((r) => setMailReadsMode(r.mode), (e: Error) => setError(e.message))
+    // Changed elsewhere (a read card's "Always allow mail reads"), shown here at once.
+    const on = (e: Event) => setMailReadsMode((e as CustomEvent<MailReadsMode>).detail)
+    window.addEventListener(MAIL_READS_EVENT, on)
+    return () => window.removeEventListener(MAIL_READS_EVENT, on)
   }, [])
+  const pickMailReads = (mode: MailReadsMode) => {
+    setError(null)
+    setMailReads(mode).then((r) => setMailReadsMode(r.mode), (err: Error) => setError(err.message))
+  }
   const add = (e: FormEvent) => {
     e.preventDefault()
     if (!draft.trim()) return
@@ -403,6 +432,27 @@ function PermissionSettings() {
   }
   return (
     <>
+      <h4 className="set-subhead">Mail</h4>
+      <ul className="set-list">
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong>Mail searches and reads</strong>
+            <span className="muted">{mailReads === 'always' ? 'Run without asking, in every thread and every mode' : 'Ask you each time, unless you allow them for 15 minutes in a thread'}</span>
+          </span>
+          <Select
+            className="set-select"
+            value={mailReads}
+            onChange={pickMailReads}
+            disabled={!mailReads}
+            aria-label="Mail searches and reads"
+            options={[
+              { value: 'ask' as MailReadsMode, label: 'Ask (default)' },
+              { value: 'always' as MailReadsMode, label: 'Always allow' },
+            ]}
+          />
+        </li>
+      </ul>
+      <p className="muted set-help">Drafts, sends and changes to your mail (archive, move, flag…) always ask, in every mode, Bypass too. What email says is never taken as instructions either way.</p>
       <h4 className="set-subhead">Allowed web sites</h4>
       <ul className="set-list agt-sites">
         {sites?.map((s) => (
