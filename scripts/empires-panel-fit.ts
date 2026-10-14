@@ -5,6 +5,10 @@
 // a building tab wraps onto a second row, a card is cut off, its cards stand in one column with room
 // for two, or two or three of them don't share a row where they would fit.
 //
+// Unit cards too: a gunship, a frigate, engineers with their build cards, an escorted flagship, a
+// rushed cruiser and a mine with its upgrades must not scroll; and at 1440x900 and up the simple ones
+// (the gunship and the frigate) must show their description and role line (see useFitLines).
+//
 //   node scripts/empires-panel-fit.ts [http://localhost:5173] [screenshot dir]
 //
 // SIZE=1280x720 checks one size; a third argument picks the scenes whose name has it.
@@ -59,7 +63,34 @@ const SETUP = `(async () => {
     return true
   }
   window.__show([])
-  return { st: st.id, fy: fy.id, cy: cy.id, site: site.id }
+  // Unit cards: a gunship, a frigate, engineers, a flagship escorted by three gunships, a cruiser
+  // rush-launched (by hand: hull, parts not yet installed) and a mine with an upgrade.
+  const far = (turn, d) => at(turn, d)
+  const g = far(-2.2, 700)
+  const gun = sim.spawn(w, p.faction === 'droid' ? 'd-gunship' : 'r-gunship', 0, g.x, g.y, g.a)
+  const f = far(-1.6, 900)
+  const frig = sim.spawn(w, p.faction === 'droid' ? 'd-frigate' : 'r-frigate', 0, f.x, f.y, f.a)
+  const e = far(-1.9, 450)
+  const eng = sim.spawnGroup(w, p.faction === 'droid' ? 'd-engineer' : 'r-engineer', 0, e.x, e.y, 0)
+  const fa = far(0.1, 2600)
+  const flag = sim.spawn(w, p.faction === 'droid' ? 'd-capital' : 'r-capital', 0, fa.x, fa.y, fa.a)
+  flag.hull = flag.hullMax * 0.6
+  const esc = [0, 1, 2].map((i) => sim.spawn(w, p.faction === 'droid' ? 'd-gunship' : 'r-gunship', 0, fa.x + 300 + i * 80, fa.y + 700, 0))
+  sim.cmdGuard(w, 0, esc.map((u) => u.id), flag.id)
+  const ra = far(-0.3, 2000)
+  const cr = sim.spawn(w, p.faction === 'droid' ? 'd-cruiser' : 'r-cruiser', 0, ra.x, ra.y, ra.a)
+  const parts = cr.t.hardpoints.map((h, i) => (h.kind !== 'engine' ? i : -1)).filter((i) => i >= 0).slice(-3)
+  for (const i of parts) cr.hps[i].hp = 0
+  cr.hull = cr.hullMax * 0.55
+  cr.rush = { left: 14, total: 14, gap: cr.hullMax * 0.45, parts, n: parts.length, work: false }
+  const n = [...w.nodes].sort((a, b) => Math.hypot(a.x - st.x, a.y - st.y) - Math.hypot(b.x - st.x, b.y - st.y))[0]
+  n.owner = p.team
+  const m = sim.spawn(w, p.faction === 'droid' ? 'd-mine' : 'r-mine', 0, n.x, n.y, n.rot)
+  n.site = m.id
+  m.node = n.id
+  m.upg = { yield: 1 }
+  m.hull = m.hullMax * 0.7
+  return { st: st.id, fy: fy.id, cy: cy.id, site: site.id, gun: gun.id, frig: frig.id, eng: eng[0].id, flag: flag.id, rush: cr.id, mine: m.id }
 })()`
 
 /** Name, buildings shown, the one to select, and the page (localStorage) to open on. */
@@ -78,7 +109,16 @@ const SCENES: [string, string[], string, string | null][] = [
   ['3-site-capital', ['fy', 'site'], 'site', null],
   ['3-ruin-station', ['fy', 'ruin'], 'st', null],
   ['3-ruin-frigate', ['fy', 'ruin'], 'fy', 'ships'],
+  // Unit cards (with three buildings, so the engineers' yards are built or going up).
+  ['unit-gunship', ['fy', 'cy'], 'gun', null],
+  ['unit-frigate', ['fy', 'cy'], 'frig', null],
+  ['unit-engineers', ['fy', 'site'], 'eng', null],
+  ['unit-flagship', ['fy', 'cy'], 'flag', null],
+  ['unit-rushed', ['fy', 'cy'], 'rush', null],
+  ['unit-mine', ['fy', 'cy'], 'mine', null],
 ]
+/** Unit cards that must show their description and role line on a big enough window. */
+const SIMPLE = ['unit-gunship', 'unit-frigate']
 
 async function startBattle(page: Page) {
   await page.send('Page.navigate', { url: `${URL_}/play/empires` })
@@ -103,19 +143,26 @@ async function startBattle(page: Page) {
   }
 }
 
+/** Selects unit `id` with a click (a tap on a phone) on it: on its middle, or failing that (a small
+ * craft flying over it took the click) further along its hull, until its card is the one showing. */
 async function select(page: Page, id: number, phone: boolean, zoom: number) {
   await page.eval(`(() => { const u = __ew.world.byId.get(${id}); Object.assign(__ew.cam, { x: u.x, y: u.y, zoom: ${zoom} }); return true })()`)
   await sleep(350)
-  const spot = await page.eval<{ x: number; y: number }>(`(() => {
-    const u = __ew.world.byId.get(${id})
-    const b = document.querySelector('canvas.ew-canvas').getBoundingClientRect()
-    return { x: b.x + b.width / 2 + (u.x - __ew.cam.x) * __ew.cam.zoom, y: b.y + b.height / 2 + (u.y - __ew.cam.y) * __ew.cam.zoom }
-  })()`)
-  if (phone) {
-    await page.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: spot.x, y: spot.y }] })
-    await page.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
-  } else await page.click(spot.x, spot.y)
-  await sleep(800)
+  for (const along of [0, -0.3, 0.3, -0.15, 0.15]) {
+    const spot = await page.eval<{ x: number; y: number }>(`(() => {
+      const u = __ew.world.byId.get(${id})
+      const b = document.querySelector('canvas.ew-canvas').getBoundingClientRect()
+      const d = u.t.size * ${along}
+      const x = u.x + Math.cos(u.a) * d, y = u.y + Math.sin(u.a) * d
+      return { x: b.x + b.width / 2 + (x - __ew.cam.x) * __ew.cam.zoom, y: b.y + b.height / 2 + (y - __ew.cam.y) * __ew.cam.zoom }
+    })()`)
+    if (phone) {
+      await page.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: spot.x, y: spot.y }] })
+      await page.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    } else await page.click(spot.x, spot.y)
+    await sleep(800)
+    if (await page.eval<boolean>(`(() => { const u = __ew.world.byId.get(${id}); const d = document.querySelector('.ew-detailfloat'); return !!d && d.textContent.includes(u.t.name) })()`)) return
+  }
 }
 
 /** What's wrong with the panel on screen: scrolling, wrapped tabs, cut-off cards, one column with room for two. */
@@ -144,7 +191,8 @@ const MEASURE = (phone: boolean) => `(() => {
     // Two or three cards go side by side in one row, where there is room for them.
     if (cards.length > 1 && cards.length <= 3 && yb.width >= cards.length * 66 + (cards.length - 1) * 4 && new Set(cards.map((r) => Math.round(r.top))).size > 1) bad.push(cards.length + ' cards on more than one row')
   }
-  return { w: Math.round(db.width), h: Math.round(db.height), cards: cards.length, bad, rect: { x: db.x, y: db.y, w: db.width, h: db.height } }
+  const shown = (sel) => { const e = d.querySelector(sel); return !!e && !e.hidden && e.getClientRects().length > 0 }
+  return { w: Math.round(db.width), h: Math.round(db.height), cards: cards.length, bad, desc: shown('.ew-fit-desc'), role: shown('.ew-fit-role'), rect: { x: db.x, y: db.y, w: db.width, h: db.height } }
 })()`
 
 async function main() {
@@ -169,9 +217,10 @@ async function main() {
         await page.eval(`(() => { const st = __ew.world.byId.get(${ids.st}); return true })()`)
         const away = await page.eval<number>(`__ew.world.units.find((u) => !u.dead && u.owner === 0 && u.t.tier === 'gunship')?.id ?? 0`)
         if (away) await select(page, away, phone, 0.6)
-        await select(page, ids[key], phone, key === 'st' ? 0.6 : 0.3)
+        await select(page, ids[key], phone, key === 'st' ? 0.6 : key === 'flag' ? 0.15 : key === 'eng' || key === 'gun' ? 0.8 : 0.3)
         const m = await page.eval<any>(MEASURE(phone))
         const tag = `${name}-${W}x${H}`
+        if (!m.none && SIMPLE.includes(name) && W >= 1440 && !(m.desc && m.role)) m.bad.push(`the ${m.desc ? '' : 'description'}${!m.desc && !m.role ? ' and ' : ''}${m.role ? '' : 'role line'} hidden with room to spare`)
         if (m.none) {
           console.log(`FAIL ${tag}: no panel`)
           failures++
@@ -183,7 +232,8 @@ async function main() {
         const { data } = await page.send('Page.captureScreenshot', { format: 'png', clip })
         if (OUT) writeFileSync(`${OUT}/${tag}.png`, Buffer.from(data, 'base64'))
         if (m.bad.length) failures++
-        console.log(`${m.bad.length ? 'FAIL' : 'ok  '} ${tag}: ${m.w}x${m.h}, ${m.cards} cards${m.bad.length ? ': ' + m.bad.join('; ') : ''}`)
+        const text = name.startsWith('unit-') ? `, text: ${m.desc ? 'description' : '-'}/${m.role ? 'role' : '-'}` : ''
+        console.log(`${m.bad.length ? 'FAIL' : 'ok  '} ${tag}: ${m.w}x${m.h}, ${m.cards} cards${text}${m.bad.length ? ': ' + m.bad.join('; ') : ''}`)
       }
       if (page.errors.length) console.log('errors', page.errors)
     } finally {

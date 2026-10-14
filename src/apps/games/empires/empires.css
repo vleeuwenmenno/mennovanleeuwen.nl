@@ -6793,12 +6793,6 @@ span.ew-teamtag {
     max-width: calc(100% - var(--ew-dleft, 6px) - 162px);
   }
 }
-@container (max-width: 1180px) {
-  /* A narrow unit card: the research tiles get the whole row. */
-  .ew-detail.is-unit .ew-unittech > span {
-    display: none;
-  }
-}
 
 /* --- The battle's build panels (the Command Station and the yards) fit without scrolling or
    clipping: the building tabs keep to one row (three or more show their pictures alone, names in
@@ -6942,4 +6936,37 @@ span.ew-teamtag {
       grid-template-columns: repeat(auto-fill, minmax(66px, 1fr));
     }
   }
+}
+
+/* The unit card's description and role line come and go with the room there is (useFitLines in
+   Hud.tsx sets `hidden`); whatever their class says about display. */
+.ew-detail [data-fit][hidden] {
+  display: none !important;
+}
+/* The research row measures itself: the Tech tree button's label and the "Upgrades" label show
+   while the row has room for them. */
+.ew-detail.is-unit .ew-unittech {
+  container: unittech / inline-size;
+  width: 100%;
+}
+@container unittech (max-width: 430px) {
+  .ew-unittree > span {
+    display: none;
+  }
+}
+@container unittech (max-width: 330px) {
+  .ew-unittech > .ew-muted {
+    display: none;
+  }
+}
+/* The engineers' yard cards give a little width rather than scroll on a narrow card. */
+.ew-engbuild .ew-engbuild-cards {
+  grid-auto-columns: minmax(0, 132px);
+  overflow: hidden;
+}
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard,
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard.is-locked,
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard.is-poor {
+  width: 100%;
+  min-width: 0;
 }

@@ -2251,13 +2251,17 @@ to spare, called in a little back from the fight, towards home.
 
 ```sh
 pnpm check:empires-launch   # out of the right yard or the hangar to the rally point, a blocked mouth, reinforcements and their price, the lobby's variants, old saves, save and restore, the AI
-pnpm check:empires-panels http://localhost:5173   # against a running dev server: the station's and yards' build panels at five window sizes and a phone, nothing scrolling, wrapping or cut off
+pnpm check:empires-panels http://localhost:5173   # against a running dev server: the build panels and unit cards at five window sizes and a phone, nothing scrolling, wrapping or cut off, simple cards with their text
 ```
 
 The build panels of the Command Station and the yards fit their card at every window size: the
 building tabs keep to one row (with three or more, their pictures alone, names in the tooltips),
 and the ship and expansion cards share out the width side by side, at most two rows of them, at
-one compact height.
+one compact height. A unit card shows its description and role line (strong and weak against)
+whenever they fit; when its rows would not (engineers with their yards, an escorted flagship, a
+rushed ship), the description gives way first, then the role line, and its ⓘ always has both
+(`useFitLines` in [`Hud.tsx`](src/apps/games/empires/Hud.tsx) measures when the card's rows change
+or it is resized, never per frame).
 
 ## Empires At War rush launch
 

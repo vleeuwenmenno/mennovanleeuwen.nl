@@ -2018,6 +2018,31 @@ function unitInfo(w: World, me: Owner, u: Unit, coarse: boolean) {
 }
 
 /**
+ * Lines of a card that give way when it runs out of height: each element marked `data-fit` is hidden
+ * (lowest number first) while the column `ref` would otherwise scroll, and shown again when there is
+ * room. It measures when the card's rows change (`key`) and when the column is resized, never per
+ * frame, and sets the `hidden` attribute itself: no React state, so no extra renders.
+ */
+function useFitLines(ref: { current: HTMLElement | null }, key: string) {
+  useLayoutEffect(() => {
+    const col = ref.current
+    if (!col) return
+    const fit = () => {
+      const lines = [...col.querySelectorAll<HTMLElement>('[data-fit]')].sort((a, b) => Number(a.dataset.fit) - Number(b.dataset.fit))
+      for (const l of lines) l.hidden = false
+      for (const l of lines) {
+        if (col.scrollHeight <= col.clientHeight + 1) break
+        l.hidden = true
+      }
+    }
+    fit()
+    const ro = new ResizeObserver(fit)
+    ro.observe(col)
+    return () => ro.disconnect()
+  }, [ref, key])
+}
+
+/**
  * One kind of unit selected (a ship, a squadron, several of a type, a platform): a few short rows,
  * so the card fits its 240 px without scrolling. The header has its name, class, rank, a ⓘ with the
  * longer story (see unitInfo), what it is doing and Retreat; then thin hull and shield bars, its
@@ -2034,12 +2059,19 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
   const one = squad.length === 1
   const earning = mine && one && t.tier === 'mine' && !building(u) ? mineEarning(w, me, u) : null
   const techs = mine ? techsFor(t.id) : []
+  const r = roleOf(t)
+  // The description and the role line show while they fit (the ⓘ has them too): what decides that
+  // is which rows the card has, so it is measured again only when that changes.
+  const col = useRef<HTMLDivElement>(null)
+  const escorted = mine && one && isShip(t) && t.tier !== 'fighter' ? escortsOf(w, u).length > 0 : false
+  const reboot = t.shield > 0 && SHIELD_REBOOT - (w.time - u.shieldOut) > 0
+  useFitLines(col, [t.id, squad.length, mine, !!u.rush, escorted, u.nebula, reboot, !!earning, building(u), u.repair > 0, u.focus, !!p.turretPick, u.hps.some((h) => h.hp < h.max)].join('|'))
   return (
     <Frame className={`ew-detail is-unit ${mine ? '' : ally ? 'is-ally' : 'is-enemy'}`}>
       <div className="ew-detail-side">
         {u.hps.length ? <Schematic u={u} size={104} tip={unitTip(t, ownerTag(w, me, u.owner), undefined, u)} /> : <img className="ew-portrait" src={art(t.sprite)} alt="" {...unitTip(t, ownerTag(w, me, u.owner), undefined, u)} />}
       </div>
-      <div className="ew-detail-main">
+      <div className="ew-detail-main" ref={col}>
         <header className="ew-unithead">
           <strong {...unitTip(t, ownerTag(w, me, u.owner), undefined, u)}>
             {t.name}
@@ -2057,6 +2089,15 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
           )}
           {mine && <RetreatIcon ships={squad.filter((x) => x.owner === me)} onRetreat={p.onRetreat} />}
         </header>
+        {/* Given up first when room runs out: the description, then the role line. */}
+        <span className="ew-muted ew-small ew-fit-desc" data-fit="1">{t.blurb}</span>
+        {r && (
+          <span className="ew-counters ew-fit-role" data-fit="2">
+            <b>{r.role}</b>
+            <span className="is-strong">Strong vs {r.strong.join(', ')}</span>
+            <span className="is-weak">Weak vs {r.weak.join(', ')}</span>
+          </span>
+        )}
         <Vitals u={u} squad={squad} now={w.time} compact />
         {u.rush && <span className="ew-rushnote" data-tip={rushNote(u) ?? undefined}>{rushShort(u)}</span>}
         {(u.hps.length > 0 || (mine && one && (t.tier === 'mine' || t.tier === 'defense'))) && (
@@ -2077,6 +2118,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
             ))}
             <button className="ew-unittree" onClick={p.onTechTree} data-tip="Open the tech tree" aria-label="Tech tree">
               <Icon name="tree" size={15} />
+              <span>Tech tree</span>
             </button>
           </div>
         )}
