@@ -4774,11 +4774,6 @@ span.ew-teamtag {
   inherits: false;
   initial-value: 0;
 }
-@property --glow {
-  syntax: '<number>';
-  inherits: false;
-  initial-value: 1;
-}
 
 /* The galaxy map (GalaxyView): clipped to the view, and holding the layer the camera moves. */
 .ew-gmap {
@@ -4828,6 +4823,10 @@ span.ew-teamtag {
   display: block;
   overflow: visible;
   pointer-events: auto;
+}
+/* (The planets' dots round a star: what's under them takes the clicks.) */
+.ew-pin.is-deco > svg {
+  pointer-events: none;
 }
 /* Well off screen (see cull in Conquest.tsx). */
 .ew-gmap [data-off] {
@@ -5802,14 +5801,15 @@ span.ew-teamtag {
 
 /* Blockades: a static dashed barrier in the blockading side's colour, thicker and red-tinged
    when it's against us. Animating this large SVG stroke repaints the map every display frame.
-   The glow (glowRings in Conquest.tsx) is a blur in map units: zoomed in it spreads so wide it
-   can't be seen, so it fades out by a zoom of 6 and is left out past it (--glow, B_GLOW). */
-.ew-gblock .ew-gring {
+   The rings and glows of all the blockades are a few paths (placeBlockades in Conquest.tsx), over
+   the systems. The glow (glowRings) is a blur in map units: zoomed in it spreads
+   so wide it can't be seen, so it fades out by a zoom of 6 and is left out past it (B_GLOW). */
+.ew-gring {
   stroke-width: 2.5;
   stroke-dasharray: 7 5;
   opacity: 0.9;
 }
-.ew-gblock.is-theirs .ew-gring {
+.ew-gring.is-theirs {
   stroke-width: 3.5;
 }
 .ew-gp-block {
@@ -5831,7 +5831,7 @@ span.ew-teamtag {
 .ew-groute,
 .ew-sorbit,
 .ew-sring,
-.ew-gblock circle,
+.ew-gblocks,
 .ew-gbattle,
 .ew-gcap {
   pointer-events: none;

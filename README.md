@@ -2439,6 +2439,12 @@ rendering. Counts don't depend on the machine; time budgets are soft there as ev
 - **Register CSS variables as not inherited, and set them only where they're used.** A variable
   set on a map's root restyles every element under it each frame; `@property … inherits: false` set
   on the few elements that read it restyles only those (`scaleVars` in `Conquest.tsx`).
+- **Fewer elements that change with the zoom.** Each element a step of a zoom restyles costs about
+  10 µs of the frame. Draw many alike shapes that change together as one path whose data is set
+  from the camera (the galaxy's blockade rings and glows, `placeBlockades`: a few paths, not five
+  circles a blockade); put a marker's parts in one pin rather than sizing each (a system's planet
+  dots); and give a size that is `max()` of screen and map units a floor on `--ik` (`data-ik-lo`), so
+  it stops restyling once the map units take over.
 - **Keep text out of transformed SVG.** SVG text inside a zoomed SVG is laid out again at every step
   of a zoom; put labels in an HTML layer over it (the galaxy's `.ew-gover` pins).
 - **Pan by moving a layer, not by drawing again.** Changing an SVG's `viewBox` (or a transform
