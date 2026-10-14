@@ -367,7 +367,7 @@ function galaxy(which: 'start' | 'late'): Scene {
           const s = getComputedStyle(el)
           if (s.display !== 'none' && ((s.filter && s.filter !== 'none') || (s.backdropFilter && s.backdropFilter !== 'none'))) filtered++
         }
-        return { all: document.getElementsByTagName('*').length, map: map.getElementsByTagName('*').length, filtered, blockades: map.querySelectorAll('.ew-gblock').length }
+        return { all: document.getElementsByTagName('*').length, map: map.getElementsByTagName('*').length, filtered, blockades: map.querySelectorAll('.ew-gshield').length }
       })()`)
       const shot = await pageShot(page, '.ew-gview', '.ew-gmap')
       return {
