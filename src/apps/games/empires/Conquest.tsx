@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { DIFFICULTY, type Difficulty, type Profile } from './ai'
 import { FACTIONS, MODULE, REBUILD, UNIT, WORKS_NAME, buildable, modulesFor, moduleLook, stationType, yardOf, yardType, type FactionId, type ModuleId, type UnitType, type Works } from './data'
 import {
@@ -440,16 +440,183 @@ function fleetScreen(g: Galaxy, f: Fleet, cam: Cam, size: { w: number; h: number
 }
 
 /**
+ * The map's camera, kept out of React. Moving it re-aims the map (`aimMap`) and sets the CSS
+ * variables its drawing scales by (`scaleVars`), so zooming and panning re-render nothing; only
+ * what switches at a step of the zoom (`zoomBand`) and the few readouts that follow the camera (the
+ * bar's place name, the minimap's frame) listen, and they redraw only when what they show changes.
+ */
+class CamView {
+  cam: Cam
+  size = { w: 800, h: 520 }
+  private subs = new Set<() => void>()
+  constructor(cam: Cam) {
+    this.cam = cam
+  }
+  set(c: Cam) {
+    this.cam = c
+    for (const f of this.subs) f()
+  }
+  sub = (f: () => void) => {
+    this.subs.add(f)
+    return () => {
+      this.subs.delete(f)
+    }
+  }
+}
+const noSub = () => () => {}
+
+/** What changes only at a step of the zoom, as bits: what is drawn, rather than how big. */
+const B_OPEN = 1 // the systems open up into their planets (detail > 0)
+const B_DOTS = 2 // the planets still show as dots round the star (detail < 1)
+const B_BIG = 4 // the system's name goes over its planets (detail > 0.3)
+const B_PARKED = 8 // the fleets in a system show as one badge a side (detail < 0.5)
+const B_NEAR = 16 // a system takes clicks round its planets, not only its star (detail > 0.5)
+const B_CAPRING = 32 // a planet being taken shows as a ring round the system (detail < 0.6)
+const B_NAMES = 64 // the planets' names show (zoom > 7)
+const B_GLOW = 128 // the blockade's glow shows (zoom < 6; see glowRings)
+function zoomBand(k: number) {
+  const d = detail(k)
+  return (d > 0 ? B_OPEN : 0) | (d < 1 ? B_DOTS : 0) | (d > 0.3 ? B_BIG : 0) | (d < 0.5 ? B_PARKED : 0) | (d > 0.5 ? B_NEAR : 0) | (d < 0.6 ? B_CAPRING : 0) | (k > 7 ? B_NAMES : 0) | (k < 6 ? B_GLOW : 0)
+}
+/** The setup's preview: the whole galaxy, at no zoom (and no planet names). */
+const MINI_BAND = zoomBand(1) & ~B_NAMES
+
+/** Points the map at the camera: the SVG's view, and the transform of the layers under and over it,
+ * all in map units. */
+function aimMap(svg: SVGSVGElement, under: HTMLElement, over: HTMLElement, c: Cam, size: { w: number; h: number }) {
+  svg.setAttribute('viewBox', `${c.x - size.w / 2 / c.k} ${c.y - size.h / 2 / c.k} ${size.w / c.k} ${size.h / c.k}`)
+  const t = `translate(${size.w / 2}px, ${size.h / 2}px) scale(${c.k}) translate(${-c.x}px, ${-c.y}px)`
+  under.style.transform = t
+  over.style.transform = t
+}
+
+/**
+ * The variables the map's drawing scales by: --ik, one over the zoom (markers and text keep their
+ * size on screen); --d, how far into the systems the view is (see `detail`); --nm, how far the
+ * planets' names have faded in; --glow, the blockade's glow. They are registered as not inherited
+ * (see empires.css) and set on each element that uses them, not once on the map: a variable that
+ * changes on the map's root restyles every element under it, every frame of a zoom (about 3 ms a
+ * frame in a late game), where this restyles only the elements that use them, and only those
+ * on screen.
+ */
+type ScaleUser = { el: HTMLElement | SVGElement; root: Element | null; uses: boolean[]; set: string[] }
+const VARS = ['--ik', '--d', '--nm', '--glow'] as const
+const varsAt = (k: number) => [String(1 / k), String(detail(k)), String(clamp((k - 7) / 4, 0, 1)), String(clamp((6 - k) / 2, 0, 1))]
+/** The elements that use the variables (their inline style does), which of them each uses (setting
+ * one it doesn't use still restyles it, and an SVG text lays itself out again), and the culled
+ * thing each is in. */
+function scaleUsers(box: Element): ScaleUser[] {
+  return [...box.querySelectorAll<HTMLElement | SVGElement>('[style*="var(--"]')].map((el) => {
+    const style = el.getAttribute('style') ?? ''
+    return { el, root: el.closest('[data-cull]'), uses: VARS.map((v) => style.includes(`var(${v})`)), set: ['', '', '', ''] }
+  })
+}
+function scaleVars(users: ScaleUser[], k: number) {
+  const v = varsAt(k)
+  for (const u of users) {
+    if (u.root?.hasAttribute('data-off')) continue
+    for (let i = 0; i < 4; i++)
+      if (u.uses[i] && u.set[i] !== v[i]) {
+        u.el.style.setProperty(VARS[i], v[i])
+        u.set[i] = v[i]
+      }
+  }
+}
+
+/** Where each lane is drawn at the zoom's detail `d`: opened-up systems, it starts at the edge of
+ * each one's planets. */
+function laneEnds(g: Galaxy, d: number) {
+  return g.lanes.map(([a, b]) => {
+    const A = g.systems[a]
+    const B = g.systems[b]
+    const len = Math.hypot(B.x - A.x, B.y - A.y) || 1
+    const ta = (d * reach(g, a)) / len
+    const tb = (d * reach(g, b)) / len
+    return [A.x + (B.x - A.x) * ta, A.y + (B.y - A.y) * ta, B.x - (B.x - A.x) * tb, B.y - (B.y - A.y) * tb]
+  })
+}
+
+/** Something on the map that is left out (display: none) while it's well off screen, so a close
+ * view restyles and lays out only what it shows as the camera moves: at (x, y), reaching r map
+ * units, and CULL_PX screen pixels further for its markers and text. */
+type Culled = { el: Element; x: number; y: number; r: number }
+const CULL_PX = 160
+function cull(list: Culled[], c: Cam, size: { w: number; h: number }) {
+  const m = CULL_PX / c.k
+  const hw = size.w / 2 / c.k + m
+  const hh = size.h / 2 / c.k + m
+  for (const { el, x, y, r } of list) {
+    const off = Math.abs(x - c.x) > hw + r || Math.abs(y - c.y) > hh + r
+    if (off !== el.hasAttribute('data-off')) {
+      if (off) el.setAttribute('data-off', '')
+      else el.removeAttribute('data-off')
+    }
+  }
+}
+const cullAt = (x: number, y: number, r: number) => `${n4(x)} ${n4(y)} ${n4(r)}`
+/** What a render draws, in map units: three views across round the camera of the time (so a close
+ * view doesn't draw the whole galaxy at each tick of the clock), with the culling's margin. When
+ * what the camera shows (with that margin) leaves it, the map is drawn again. */
+type Area = { x0: number; x1: number; y0: number; y1: number }
+const areaAt = (c: Cam, size: { w: number; h: number }, views: number): Area => {
+  const hw = (views * size.w) / 2 / c.k + CULL_PX / c.k
+  const hh = (views * size.h) / 2 / c.k + CULL_PX / c.k
+  return { x0: c.x - hw, x1: c.x + hw, y0: c.y - hh, y1: c.y + hh }
+}
+const within = (a: Area | null, x: number, y: number, r: number) => !a || (x + r > a.x0 && x - r < a.x1 && y + r > a.y0 && y - r < a.y1)
+
+/** A blockade ring's glow, as its old CSS drop-shadow drew it (a blur with a standard deviation
+ * of 4 map units, in the side's glow colour) but as rings rather than a filter: a filter
+ * is a pass of its own for each ring, every frame of a zoom. Blurred that wide, the dashed stroke
+ * is a gaussian band round the ring: here four nested rings (widths in screen pixels per unit of
+ * zoom, as the blur's), and its strength, which falls with the zoom (alphas per unit of 1/zoom). */
+function glowRings(alpha: number, stroke: number) {
+  const sigma = 4 // map units (drop-shadow's length is the deviation): screen pixels per unit of zoom
+  // The dashes' share of the ring, blurred; at the ring's 0.9 opacity, which the shadow took too.
+  const peak = (0.9 * alpha * (7 / 12) * stroke) / (sigma * Math.sqrt(2 * Math.PI))
+  // Half-widths in deviations, and each ring's share of the bell's height (they stack).
+  const steps: [number, number][] = [[2.4, 0.15], [1.6, 0.32], [1, 0.32], [0.5, 0.17]]
+  return steps.map(([h, a]): [number, number] => [+(2 * h * sigma).toFixed(4), +(a * peak).toFixed(4)])
+}
+const GLOW_THEIRS = glowRings(0.6, 3.5)
+const GLOW_OURS = glowRings(0.45, 2.5)
+
+/** A number for a CSS value: no exponents (a CSS length can't take 1e-16). */
+const n4 = (v: number) => +v.toFixed(4)
+/** Inline style with CSS geometry (r, cx, cy) and transforms, which React's types don't list. */
+const css = (o: Record<string, string>) => o as React.CSSProperties
+/** A screen-sized thing at (x, y) on the map: the same size on screen at any zoom. `up` lifts it by
+ * that many map units times the zoom's detail; `then` is more transform after the scaling. */
+const pin = (x: number, y: number, up = 0, then = '', more: Record<string, string> = {}) =>
+  css({ transform: `translate(${n4(x)}px, ${up ? `calc(${n4(y)}px - var(--d) * ${n4(up)}px)` : `${n4(y)}px`}) scale(var(--ik))${then}`, ...more })
+/** `n` screen pixels, in map units. */
+const spx = (n: number) => `calc(var(--ik) * ${n4(n)}px)`
+
+/** A #rrggbb colour as "r g b", for rgb(… / alpha). */
+const rgbOf = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(' ')
+/** A star's glow as a CSS gradient: the same stops as its SVG one (star-…, in GalaxyView), at
+ * `alpha` (a hidden system's star is dimmed). */
+const starGlow = (hex: string, alpha: number) => {
+  const c = rgbOf(hex)
+  return `radial-gradient(closest-side, rgb(255 255 255 / ${alpha}) 0%, rgb(${c} / ${alpha}) 30%, rgb(${c} / ${n4(0.3 * alpha)}) 60%, rgb(${c} / 0) 100%)`
+}
+
+/**
  * The galaxy, at any zoom. Zoomed out, each system is a star with a dot per planet and fleets are
  * badges beside it; zooming in, the systems open up into their planets on their orbits, with
  * stations, captures and the fleets in orbit beside each planet. Markers and text keep their
- * on-screen size; the planets and stars grow. Without `cam` it shows the whole galaxy (the setup's
- * preview).
+ * on-screen size; the planets and stars grow. Without `view` it shows the whole galaxy (the
+ * setup's preview).
+ *
+ * The camera (`view`) doesn't re-render this: everything that follows the zoom is drawn in map
+ * units with CSS sizes in terms of the variables `scaleVars` sets (`spx`, `pin`, var(--d)), and
+ * only a step of the zoom (`zoomBand`) or the camera leaving what was drawn (`Area`) renders it
+ * again. Under the SVG, the big fills are HTML boxes (.ew-gunder); over it, the markers and names
+ * (.ew-gover); what's well off screen is left out (`cull`).
  */
-function GalaxyView({ g, cam, size, sel, mini = false, on }: {
+function GalaxyView({ g, view, sel, mini = false, on }: {
   g: Galaxy
-  cam?: Cam
-  size?: { w: number; h: number }
+  view?: CamView
   sel?: Sel
   mini?: boolean
   on?: {
@@ -459,23 +626,76 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
     fleets?: (fs: Fleet[]) => void
   }
 }) {
-  const k = cam ? cam.k : 1
-  const px = (n: number) => n / k
-  const vb = cam && size ? `${cam.x - size.w / 2 / k} ${cam.y - size.h / 2 / k} ${size.w / k} ${size.h / k}` : `0 0 ${W} ${H}`
-  const d = mini ? 0 : detail(k)
+  const band = useSyncExternalStore(view?.sub ?? noSub, () => (view ? zoomBand(view.cam.k) : MINI_BAND))
+  const box = useRef<HTMLDivElement>(null)
+  const svg = useRef<SVGSVGElement>(null)
+  const world = useRef<HTMLDivElement>(null)
+  const world2 = useRef<HTMLDivElement>(null)
+  // The lanes stop short of opened-up systems by the zoom's detail: drawn for it here, and moved
+  // by the camera (only while it changes, between zooms of 2.4 and 5).
+  const lanes = useRef<SVGGElement>(null)
+  const laneD = view ? detail(view.cam.k) : 0
+  const drawn = useRef({ g, d: laneD })
+  // What this render draws (see Area), and a redraw for when the camera leaves it.
+  const area = view ? areaAt(view.cam, view.size, 3) : null
+  const drawnArea = useRef<Area | null>(null)
+  const [, redraw] = useReducer((n: number) => n + 1, 0)
+  // What can be culled (data-cull), and what scales with the zoom (ScaleUser), found again after
+  // each render.
+  const cullable = useRef<Culled[]>([])
+  const users = useRef<ScaleUser[]>([])
+  useLayoutEffect(() => {
+    drawn.current = { g, d: laneD }
+    drawnArea.current = area
+    const b = box.current
+    if (!view || !b) return
+    cullable.current = [...b.querySelectorAll<Element>('[data-cull]')].map((el) => {
+      const [x, y, r] = el.getAttribute('data-cull')!.split(' ').map(Number)
+      return { el, x, y, r }
+    })
+    cull(cullable.current, view.cam, view.size)
+    users.current = scaleUsers(b)
+    scaleVars(users.current, view.cam.k)
+  })
+  // Aimed before the first paint, and at each move of the camera.
+  useLayoutEffect(() => {
+    const [b, el, wo, wo2] = [box.current, svg.current, world.current, world2.current]
+    if (!view || !b || !el || !wo || !wo2) return
+    const aim = () => {
+      aimMap(el, wo, wo2, view.cam, view.size)
+      cull(cullable.current, view.cam, view.size)
+      scaleVars(users.current, view.cam.k)
+      const a = drawnArea.current
+      const v = areaAt(view.cam, view.size, 1)
+      if (a && (v.x0 < a.x0 || v.x1 > a.x1 || v.y0 < a.y0 || v.y1 > a.y1)) {
+        drawnArea.current = null
+        redraw()
+      }
+      const d = detail(view.cam.k)
+      const at = drawn.current
+      if (d === at.d || !lanes.current) return
+      at.d = d
+      const ends = laneEnds(at.g, d)
+      const lines = lanes.current.children
+      for (let i = 0; i < lines.length && i < ends.length; i++) {
+        const [x1, y1, x2, y2] = ends[i]
+        lines[i].setAttribute('x1', String(x1))
+        lines[i].setAttribute('y1', String(y1))
+        lines[i].setAttribute('x2', String(x2))
+        lines[i].setAttribute('y2', String(y2))
+      }
+    }
+    aim()
+    return view.sub(aim)
+  }, [view])
+  const has = (b: number) => (band & b) !== 0
   const selIds = selectedIds(sel ?? null)
   const selPs = selectedPlanets(sel ?? null)
-  // What's on screen, so a close view doesn't draw the whole galaxy.
-  const view = cam && size ? { x0: cam.x - size.w / 2 / k - 40, x1: cam.x + size.w / 2 / k + 40, y0: cam.y - size.h / 2 / k - 40, y1: cam.y + size.h / 2 / k + 40 } : null
-  const shown = (x: number, y: number) => !view || (x > view.x0 && x < view.x1 && y > view.y0 && y < view.y1)
-  const label = (x: number, y: number, children: ReactNode, cls = '', key?: string) => (
-    <g key={key} transform={`translate(${x} ${y}) scale(${1 / k})`} className={cls}>{children}</g>
-  )
   // Only the fleets we can see: ours, and others in systems we see (see the fog of war in galaxy.ts).
   const visible = g.fleets.filter((f) => canSee(g, ME, f))
   // Zoomed out, the fleets parked in a system show as one badge per side.
   const parked = new Map<string, Fleet[]>()
-  if (d < 0.5)
+  if (has(B_PARKED))
     for (const f of visible) {
       if (f.leg) continue
       const key = `${f.system}:${f.owner}`
@@ -488,10 +708,23 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
   const headed = g.fleets.filter((f) => f.owner === ME && selIds.has(f.id) && (f.leg || f.route.length || f.waypoints?.length))
   const routes = headed.map((f) => [fleetAt(g, f), ...plannedHops(g, f).map((h) => (h.planet >= 0 ? planetAt(g, g.planets[h.planet]) : g.systems[h.system]))])
   const stops = headed.flatMap((f) => (f.waypoints ?? []).map((pid, i) => ({ key: `${f.id}:${i}`, at: planetAt(g, g.planets[pid]), r: planetR(g.planets[pid]), n: i + 1 })))
+  // The screen-sized things (markers, badges, names: see `pin`) go over the map in an HTML layer
+  // (.ew-gover), each a small SVG of its own, in the order they come: an SVG text inside the map's
+  // own SVG is laid out again at every step of a zoom (its scale on screen changes), a few tenths
+  // of a millisecond each, where a box's transform changes nothing but where it's drawn.
+  const pins: ReactNode[] = []
+  const over = (key: string, style: React.CSSProperties, at: string, children: ReactNode, props: Record<string, unknown> = {}) => {
+    pins.push(
+      <div key={key} {...props} className={`ew-pin ${(props.className as string | undefined) ?? ''}`} style={style} data-cull={at}>
+        <svg width="1" height="1">{children}</svg>
+      </div>,
+    )
+    return null
+  }
   // On the things below, a finger's long press opens the map's action wheel rather than their tip
   // (data-longpress); mice still hover for the tips.
-  return (
-    <svg className={`ew-gsvg ${mini ? 'is-mini' : ''}`} viewBox={vb} preserveAspectRatio="xMidYMid meet">
+  const map = (
+    <svg ref={svg} className={`ew-gsvg ${mini ? 'is-mini' : ''}`} viewBox={view ? undefined : `0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet">
       <defs>
         {(Object.keys(STAR_COLOR) as (keyof typeof STAR_COLOR)[]).map((s) => (
           <radialGradient key={s} id={`star-${s}`}>
@@ -502,56 +735,57 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
           </radialGradient>
         ))}
       </defs>
-      {g.systems.map((s) => {
+      {!view && g.systems.map((s) => {
         const o = systemOwner(g, s.id, ME)
-        return o >= 0 && shown(s.x, s.y) ? <circle key={`t${s.id}`} cx={s.x} cy={s.y} r={46} fill={color(g, o)} opacity={0.12 * (1 - d * 0.5) * (sees(g, ME, s.id) ? 1 : 0.5)} /> : null
+        return o >= 0 ? <circle key={`t${s.id}`} cx={s.x} cy={s.y} r={46} fill={color(g, o)} style={css({ opacity: `calc(${n4(0.12 * (sees(g, ME, s.id) ? 1 : 0.5))} * (1 - var(--d) * 0.5))` })} /> : null
       })}
-      {g.lanes.map(([a, b], i) => {
-        const A = g.systems[a]
-        const B = g.systems[b]
-        // Opened-up systems: the lane starts at the edge of each one's planets.
-        const len = Math.hypot(B.x - A.x, B.y - A.y) || 1
-        const ta = (d * reach(g, a)) / len
-        const tb = (d * reach(g, b)) / len
-        return (
-          <line key={i} x1={A.x + (B.x - A.x) * ta} y1={A.y + (B.y - A.y) * ta} x2={B.x - (B.x - A.x) * tb} y2={B.y - (B.y - A.y) * tb} className="ew-glane" vectorEffect="non-scaling-stroke" />
-        )
-      })}
+      <g ref={lanes}>
+        {laneEnds(g, laneD).map(([x1, y1, x2, y2], i) => {
+          const [A, B] = g.lanes[i].map((s) => g.systems[s])
+          return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} className="ew-glane" vectorEffect="non-scaling-stroke" data-cull={cullAt((A.x + B.x) / 2, (A.y + B.y) / 2, Math.hypot(B.x - A.x, B.y - A.y) / 2)} />
+        })}
+      </g>
       {routes.map((route, i) => (
         <polyline key={i} className="ew-groute" points={route.map((p) => `${p.x},${p.y}`).join(' ')} vectorEffect="non-scaling-stroke" />
       ))}
 
       {g.systems.map((s) => {
-        if (!shown(s.x, s.y)) return null
+        const R = reach(g, s.id)
+        if (!within(area, s.x, s.y, R + 4)) return null
         const battle = g.pending >= 0 && g.planets[g.pending].system === s.id
         const block = mini ? null : blockade(g, s.id)
-        const R = reach(g, s.id)
         // Hidden from us: what's drawn there is what we last saw, faded.
         const fog = !sees(g, ME, s.id)
         const lastLook = fog ? Math.max(...s.planets.map((pid) => known(g, ME, g.planets[pid]).t)) : 0
+        // The blockade's ring: round the star zoomed out, round the planets zoomed in.
+        const ringR = `max(${spx(26)}, calc(var(--d) * ${n4(R + 2)}px))`
+        const sysAt = cullAt(s.x, s.y, R + 4)
         return (
-          <g key={s.id} className={`ew-gsys ${fog ? 'is-fog' : ''}`}>
+          <g key={s.id} className={`ew-gsys ${fog ? 'is-fog' : ''}`} data-cull={sysAt}>
             <g
               className="ew-gsys-hit"
               data-sid={s.id}
               data-longpress=""
               onClick={() => on?.system(s.id)}
-              data-tip={mini || d > 0.5 ? undefined : `${s.name}: ${s.planets.map((p) => g.planets[p].name).join(', ')}.${fog ? ` Hidden: we have no planet or fleet there; what shows is what we last saw (${lastLook <= 0 ? 'the pre-war charts' : `day ${dayOf(lastLook)}`}).` : ''}${blockadeTip(g, s.id)} Click to zoom in; right-click to send the selected fleet (Shift to add a stop).`}
+              data-tip={mini || has(B_NEAR) ? undefined : `${s.name}: ${s.planets.map((p) => g.planets[p].name).join(', ')}.${fog ? ` Hidden: we have no planet or fleet there; what shows is what we last saw (${lastLook <= 0 ? 'the pre-war charts' : `day ${dayOf(lastLook)}`}).` : ''}${blockadeTip(g, s.id)} Click to zoom in; right-click to send the selected fleet (Shift to add a stop).`}
             >
-              <circle cx={s.x} cy={s.y} r={d > 0.5 ? px(30) : Math.max(px(22), 4)} fill="transparent" />
-              <circle cx={s.x} cy={s.y} r={Math.max(px(13), 7)} fill={`url(#star-${s.star})`} />
-              <circle cx={s.x} cy={s.y} r={Math.max(px(3.2), 1.6)} fill="#fff" />
+              <circle cx={s.x} cy={s.y} fill="transparent" style={css({ r: has(B_NEAR) ? spx(30) : `max(${spx(22)}, 4px)` })} />
+              {(!view || has(B_DOTS)) && <circle cx={s.x} cy={s.y} fill={`url(#star-${s.star})`} style={css({ r: `max(${spx(13)}, 7px)` })} />}
+              <circle cx={s.x} cy={s.y} fill="#fff" style={css({ r: `max(${spx(3.2)}, 1.6px)` })} />
             </g>
             {/* Zoomed out: a dot per planet in its owner's colour. */}
-            {d < 1 &&
+            {has(B_DOTS) &&
               s.planets.map((pid, i) => {
                 const p = g.planets[pid]
                 const a = -Math.PI / 2 + (i - (s.planets.length - 1) / 2) * 0.55
-                return <circle key={pid} cx={s.x + Math.cos(a) * px(15)} cy={s.y + Math.sin(a) * px(15)} r={px(2.6)} fill={color(g, ownerFor(g, ME, p))} stroke="#000" strokeWidth={px(0.6)} opacity={(1 - d) * (fog ? 0.55 : 1)} />
+                return (
+                  <circle key={pid} fill={color(g, ownerFor(g, ME, p))} stroke="#000"
+                    style={css({ cx: `calc(${n4(s.x)}px + var(--ik) * ${n4(Math.cos(a) * 15)}px)`, cy: `calc(${n4(s.y)}px + var(--ik) * ${n4(Math.sin(a) * 15)}px)`, r: spx(2.6), strokeWidth: spx(0.6), opacity: `calc((1 - var(--d)) * ${fog ? 0.55 : 1})` })} />
+                )
               })}
             {/* Zoomed in: the planets on their orbits. */}
-            {d > 0 && (
-              <g opacity={d}>
+            {has(B_OPEN) && (
+              <g style={css({ opacity: 'var(--d)' })}>
                 {s.planets.map((pid) => {
                   const o = orbitOf(g.planets[pid].orbit)
                   return <ellipse key={pid} cx={s.x} cy={s.y} rx={o.rx} ry={o.ry} className="ew-sorbit" vectorEffect="non-scaling-stroke" />
@@ -564,23 +798,31 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
                   const capture = p.capture ? p.capture.t / CAPTURE_TIME : 0
                   // What we know of it: as it is, or (hidden) as we last saw it.
                   const k = known(g, ME, p)
+                  // The planet takes the clicks, on its markers over the map too.
+                  const hit = {
+                    'data-pid': pid,
+                    'data-longpress': '',
+                    onClick: (e: React.MouseEvent) => (e.stopPropagation(), on?.planet(p, e.detail > 1)),
+                    'data-tip': k.live
+                      ? `${p.name}: ${PLANET_KINDS[p.kind].name}, ${planetIncome(g, p)} credits a day. ${p.owner < 0 ? 'Unclaimed.' : `Held by the ${factionName(g, p.owner)}.`} Double-click to zoom in; right-click to send the selected fleet (Shift to add a stop).`
+                      : `${p.name}: ${PLANET_KINDS[p.kind].name}, about ${knownIncome(p, k.station)} credits a day. ${lastSeen(g, p)} Double-click to zoom in; right-click to send the selected fleet (Shift to add a stop).`,
+                  }
+                  // (They fade in with the planets, as the group round these did.)
+                  const fade = { opacity: 'var(--d)' }
                   return (
-                    <g key={pid} className={`ew-splanet ${on2 ? 'is-sel' : ''} ${k.live ? '' : 'is-fog'}`} data-pid={pid} data-longpress=""
-                      onClick={(e) => (e.stopPropagation(), on?.planet(p, e.detail > 1))}
-                      data-tip={k.live
-                        ? `${p.name}: ${PLANET_KINDS[p.kind].name}, ${planetIncome(g, p)} credits a day. ${p.owner < 0 ? 'Unclaimed.' : `Held by the ${factionName(g, p.owner)}.`} Double-click to zoom in; right-click to send the selected fleet (Shift to add a stop).`
-                        : `${p.name}: ${PLANET_KINDS[p.kind].name}, about ${knownIncome(p, k.station)} credits a day. ${lastSeen(g, p)} Double-click to zoom in; right-click to send the selected fleet (Shift to add a stop).`}>
-                      <circle cx={q.x} cy={q.y} r={r + Math.max(px(6), r * 0.18)} fill="none" stroke={color(g, k.owner)} strokeWidth={k.owner < 0 ? 1 : 2.5} strokeDasharray={k.owner < 0 || !k.live ? '3 4' : undefined} vectorEffect="non-scaling-stroke" className="ew-sring" />
+                    <g key={pid} className={`ew-splanet ${on2 ? 'is-sel' : ''} ${k.live ? '' : 'is-fog'}`} {...hit}>
+                      <circle cx={q.x} cy={q.y} fill="none" stroke={color(g, k.owner)} strokeWidth={k.owner < 0 ? 1 : 2.5} strokeDasharray={k.owner < 0 || !k.live ? '3 4' : undefined} vectorEffect="non-scaling-stroke" className="ew-sring"
+                        style={css({ r: `calc(${n4(r)}px + max(${spx(6)}, ${n4(r * 0.18)}px))` })} />
                       <image href={PLANET_ART(p.kind)} x={q.x - r} y={q.y - r} width={r * 2} height={r * 2} />
                       {k.live && p.capture && (
                         <>
                           {/* Being taken: a track round the planet filling in the taker's colour, and a tag. */}
-                          <circle cx={q.x} cy={q.y} r={r + Math.max(px(11), r * 0.3)} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth={4} vectorEffect="non-scaling-stroke" className="ew-gcap" />
-                          <circle cx={q.x} cy={q.y} r={r + Math.max(px(11), r * 0.3)} fill="none" stroke={color(g, p.capture.owner)} strokeWidth={4} vectorEffect="non-scaling-stroke" pathLength={1} strokeDasharray={`${capture} 1`} transform={`rotate(-90 ${q.x} ${q.y})`} className="ew-gcap" />
-                          {label(q.x, q.y - r, <CaptureTag g={g} p={p} />)}
+                          <circle cx={q.x} cy={q.y} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth={4} vectorEffect="non-scaling-stroke" className="ew-gcap" style={css({ r: `calc(${n4(r)}px + max(${spx(11)}, ${n4(r * 0.3)}px))` })} />
+                          <circle cx={q.x} cy={q.y} fill="none" stroke={color(g, p.capture.owner)} strokeWidth={4} vectorEffect="non-scaling-stroke" pathLength={1} strokeDasharray={`${capture} 1`} transform={`rotate(-90 ${q.x} ${q.y})`} className="ew-gcap" style={css({ r: `calc(${n4(r)}px + max(${spx(11)}, ${n4(r * 0.3)}px))` })} />
+                          {over(`cap${pid}`, pin(q.x, q.y - r, 0, '', fade), sysAt, <CaptureTag g={g} p={p} />, { ...hit, className: 'ew-splanet' })}
                         </>
                       )}
-                      {label(q.x - r * 0.75, q.y - r * 0.75, (
+                      {(k.station > 0 || (k.live && p.queue.length > 0)) && over(`st${pid}`, pin(q.x - r * 0.75, q.y - r * 0.75, 0, '', fade), sysAt, (
                         <>
                           {k.station > 0 && (
                             <g transform="translate(-10 -10)" opacity={k.live ? 1 : 0.6}>
@@ -590,33 +832,37 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
                           )}
                           {k.live && p.queue.length > 0 && <circle cx={k.station ? 6 : -6} cy={-16} r={4} className="ew-sbusy" />}
                         </>
-                      ))}
-                      {cam && cam.k > 7 && label(q.x, q.y + r, <text y={20} className="ew-spname" opacity={clamp((cam.k - 7) / 4, 0, 1)}>{p.name}</text>)}
-                      {!k.live && cam && cam.k > 7 && label(q.x, q.y + r, <text y={34} className="ew-spseen" opacity={clamp((cam.k - 7) / 4, 0, 1) * 0.85}>{k.t <= 0 ? 'Pre-war charts' : `Last seen day ${dayOf(k.t)}`}{k.ships > 0 ? ` · ${k.ships} ships` : ''}</text>)}
+                      ), { ...hit, className: 'ew-splanet' })}
+                      {has(B_NAMES) && over(`nm${pid}`, pin(q.x, q.y + r, 0, '', { opacity: 'var(--nm)' }), sysAt, <text y={20} className="ew-spname">{p.name}</text>)}
+                      {!k.live && has(B_NAMES) && over(`ls${pid}`, pin(q.x, q.y + r, 0, '', { opacity: 'calc(var(--nm) * 0.85)' }), sysAt, <text y={34} className="ew-spseen">{k.t <= 0 ? 'Pre-war charts' : `Last seen day ${dayOf(k.t)}`}{k.ships > 0 ? ` · ${k.ships} ships` : ''}</text>)}
                     </g>
                   )
                 })}
               </g>
             )}
-            {battle && <circle cx={s.x} cy={s.y} r={Math.max(px(20), d * R)} className="ew-gbattle" vectorEffect="non-scaling-stroke" />}
+            {battle && <circle cx={s.x} cy={s.y} className="ew-gbattle" vectorEffect="non-scaling-stroke" style={css({ r: `max(${spx(20)}, calc(var(--d) * ${n4(R)}px))` })} />}
             {/* Zoomed out: a ring round a system with picked planets (solid when it's all of them). */}
-            {!mini && d < 1 && s.planets.some((pid) => selPs.has(pid)) && (
-              <circle cx={s.x} cy={s.y} r={px(23)} className={`ew-gsyssel ${s.planets.every((pid) => selPs.has(pid)) ? 'is-whole' : ''}`} opacity={1 - d} vectorEffect="non-scaling-stroke" />
+            {!mini && has(B_DOTS) && s.planets.some((pid) => selPs.has(pid)) && (
+              <circle cx={s.x} cy={s.y} className={`ew-gsyssel ${s.planets.every((pid) => selPs.has(pid)) ? 'is-whole' : ''}`} vectorEffect="non-scaling-stroke" style={css({ r: spx(23), opacity: 'calc(1 - var(--d))' })} />
             )}
             {/* Zoomed out: a planet being taken shows as a filling ring round the system and its percentage. */}
-            {!mini && !fog && d < 0.6 && s.planets.map((pid) => g.planets[pid]).filter((p) => p.capture).slice(0, 1).map((p) => (
-              <g key={`c${p.id}`} opacity={1 - d / 0.6}>
-                <circle cx={s.x} cy={s.y} r={px(19)} fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth={3.5} vectorEffect="non-scaling-stroke" className="ew-gcap" />
-                <circle cx={s.x} cy={s.y} r={px(19)} fill="none" stroke={color(g, p.capture!.owner)} strokeWidth={3.5} vectorEffect="non-scaling-stroke" pathLength={1} strokeDasharray={`${p.capture!.t / CAPTURE_TIME} 1`} transform={`rotate(-90 ${s.x} ${s.y})`} className="ew-gcap" />
-                {label(s.x, s.y, <text x={0} y={-26} className={`ew-gcaptext ${p.capture!.owner === ME ? 'is-ours' : 'is-theirs'}`}>{p.capture!.owner === ME ? 'Taking' : 'Losing'} {p.name} {Math.floor((p.capture!.t / CAPTURE_TIME) * 100)}%</text>)}
+            {!mini && !fog && has(B_CAPRING) && s.planets.map((pid) => g.planets[pid]).filter((p) => p.capture).slice(0, 1).map((p) => (
+              <g key={`c${p.id}`} style={css({ opacity: 'calc(1 - var(--d) / 0.6)' })}>
+                <circle cx={s.x} cy={s.y} fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth={3.5} vectorEffect="non-scaling-stroke" className="ew-gcap" style={css({ r: spx(19) })} />
+                <circle cx={s.x} cy={s.y} fill="none" stroke={color(g, p.capture!.owner)} strokeWidth={3.5} vectorEffect="non-scaling-stroke" pathLength={1} strokeDasharray={`${p.capture!.t / CAPTURE_TIME} 1`} transform={`rotate(-90 ${s.x} ${s.y})`} className="ew-gcap" style={css({ r: spx(19) })} />
+                {over(`ct${s.id}`, pin(s.x, s.y, 0, '', { opacity: 'calc(1 - var(--d) / 0.6)' }), sysAt, <text x={0} y={-26} className={`ew-gcaptext ${p.capture!.owner === ME ? 'is-ours' : 'is-theirs'}`}>{p.capture!.owner === ME ? 'Taking' : 'Losing'} {p.name} {Math.floor((p.capture!.t / CAPTURE_TIME) * 100)}%</text>)}
               </g>
             ))}
             {/* A blockade: a barrier ring round the system in the blockading side's colour, and a
                 shield on it; red-edged when it's against us. */}
             {block && (
               <g className={`ew-gblock ${block.by === ME ? 'is-ours' : 'is-theirs'}`}>
-                <circle cx={s.x} cy={s.y} r={Math.max(px(26), d * (R + 2))} fill="none" stroke={color(g, block.by)} vectorEffect="non-scaling-stroke" />
-                {label(s.x + Math.max(px(26), d * (R + 2)) * 0.7071, s.y - Math.max(px(26), d * (R + 2)) * 0.7071, (
+                {has(B_GLOW) && (block.by === ME ? GLOW_OURS : GLOW_THEIRS).map(([width, alpha], i) => (
+                  <circle key={i} cx={s.x} cy={s.y} fill="none" stroke={block.by === ME ? 'rgb(125, 255, 160)' : 'rgb(255, 90, 80)'} vectorEffect="non-scaling-stroke" className="ew-gglow"
+                    style={css({ r: ringR, strokeWidth: `calc(${width}px / var(--ik))`, strokeOpacity: `calc(var(--glow) * var(--ik) * ${alpha})` })} />
+                ))}
+                <circle cx={s.x} cy={s.y} fill="none" stroke={color(g, block.by)} vectorEffect="non-scaling-stroke" className="ew-gring" style={css({ r: ringR })} />
+                {over(`bk${s.id}`, css({ transform: `translate(calc(${n4(s.x)}px + 0.7071 * ${ringR}), calc(${n4(s.y)}px - 0.7071 * ${ringR})) scale(var(--ik))` }), sysAt, (
                   <g data-tip={`${block.by === ME ? 'Our' : 'Enemy'} blockade.${blockadeTip(g, s.id)}`} data-longpress="">
                     <path d="M0,-9 L8,-5 L8,1 C8,6 4,9 0,11 C-4,9 -8,6 -8,1 L-8,-5 Z" fill="#0b1226" stroke={color(g, block.by)} strokeWidth={1.6} />
                     <path d="M-4,-1 L4,-1 M-4,3 L4,3" stroke={block.by === ME ? '#7dffa0' : '#ff6a5e'} strokeWidth={1.6} strokeLinecap="round" />
@@ -624,7 +870,7 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
                 ))}
               </g>
             )}
-            {!mini && label(s.x, s.y - (d > 0.3 ? R * d : 0), <text y={d > 0.3 ? -10 : 27} className={`ew-gname ${d > 0.3 ? 'is-big' : ''}`}>{s.name}</text>)}
+            {!mini && over(`nm${s.id}s`, pin(s.x, s.y, has(B_BIG) ? R : 0), sysAt, <text y={has(B_BIG) ? -10 : 27} className={`ew-gname ${has(B_BIG) ? 'is-big' : ''}`}>{s.name}</text>)}
           </g>
         )
       })}
@@ -632,34 +878,37 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
         [...parked.entries()].map(([key, fs]) => {
           const [sys, owner] = key.split(':').map(Number)
           const s = g.systems[sys]
-          if (!shown(s.x, s.y)) return null
+          if (!within(area, s.x, s.y, 0)) return null
           const n = fs.reduce((v, f) => v + f.ships.length, 0)
           const lead = fs.slice().sort((a, b) => b.ships.length - a.ships.length)[0]
           const on2 = fs.some((f) => selIds.has(f.id))
-          return (
-            <g key={key} className={`ew-gfleet ${on2 ? 'is-sel' : ''}`} data-fid={lead.id} data-longpress="" transform={`translate(${s.x} ${s.y}) scale(${1 / k}) translate(${owner === ME ? -24 : 24} -16)`}
-              onClick={(e) => (e.stopPropagation(), fs.length > 1 && on?.fleets ? on.fleets(fs) : on?.fleet(lead))}
-              data-tip={`${factionName(g, owner)} fleet${fs.length > 1 ? `s (${fs.length})` : ''}: ${n} ships`}>
+          return over(`pk${key}`, pin(s.x, s.y, 0, ` translate(${owner === ME ? -24 : 24}px, -16px)`), cullAt(s.x, s.y, 0), (
+            <>
               <rect x={-11} y={-7} width={22} height={14} rx={3} fill={color(g, owner)} />
               <text y={3.5}>{n}</text>
-            </g>
-          )
+            </>
+          ), {
+            className: `ew-gfleet ${on2 ? 'is-sel' : ''}`,
+            'data-fid': lead.id,
+            'data-longpress': '',
+            onClick: (e: React.MouseEvent) => (e.stopPropagation(), fs.length > 1 && on?.fleets ? on.fleets(fs) : on?.fleet(lead)),
+            'data-tip': `${factionName(g, owner)} fleet${fs.length > 1 ? `s (${fs.length})` : ''}: ${n} ships`,
+          })
         })}
       {!mini &&
         visible.map((f) => {
-          if (!f.leg && d < 0.5) return null
+          if (!f.leg && has(B_PARKED)) return null
           const p = fleetAt(g, f)
-          if (!shown(p.x, p.y)) return null
-          // In orbit, beside its planet (several stack downwards).
-          let off = { x: 0, y: 0 }
+          if (!within(area, p.x, p.y, f.planet >= 0 && !f.leg ? planetR(g.planets[f.planet]) : 0)) return null
+          // In orbit, beside its planet (several stack downwards): past the planet's edge, then a
+          // little further on screen.
+          let place = pin(p.x, p.y)
           if (!f.leg && f.planet >= 0) {
-            const pl = g.planets[f.planet]
             const i = seenAt(g, f.planet).indexOf(f)
-            off = { x: planetR(pl) * k + 26, y: -8 + i * 22 }
+            place = css({ transform: `translate(${n4(p.x + planetR(g.planets[f.planet]))}px, ${n4(p.y)}px) scale(var(--ik)) translate(26px, ${-8 + i * 22}px)` })
           }
-          return (
-            <g key={f.id} className={`ew-gfleet ${f.leg ? 'is-moving' : 'is-orbit'} ${selIds.has(f.id) ? 'is-sel' : ''}`} data-fid={f.id} data-longpress="" transform={`translate(${p.x} ${p.y}) scale(${1 / k}) translate(${off.x} ${off.y})`} onClick={(e) => (e.stopPropagation(), on?.fleet(f))}
-              data-tip={`${factionName(g, f.owner)} fleet: ${f.ships.length} ships${f.leg ? `, ${secs(eta(f))} to go` : ''}`}>
+          return over(`f${f.id}`, place, cullAt(p.x, p.y, f.planet >= 0 && !f.leg ? planetR(g.planets[f.planet]) : 0), (
+            <>
               {f.leg ? (
                 <>
                   <path d="M-9,-7 L9,0 L-9,7 L-4,0 Z" transform={`rotate(${(p.angle * 180) / Math.PI})`} fill={color(g, f.owner)} stroke="#000" strokeWidth={0.8} />
@@ -672,18 +921,85 @@ function GalaxyView({ g, cam, size, sel, mini = false, on }: {
                   <text x={4} y={4}>{f.ships.length}</text>
                 </>
               )}
-            </g>
-          )
+            </>
+          ), {
+            className: `ew-gfleet ${f.leg ? 'is-moving' : 'is-orbit'} ${selIds.has(f.id) ? 'is-sel' : ''}`,
+            'data-fid': f.id,
+            'data-longpress': '',
+            onClick: (e: React.MouseEvent) => (e.stopPropagation(), on?.fleet(f)),
+            'data-tip': `${factionName(g, f.owner)} fleet: ${f.ships.length} ships${f.leg ? `, ${secs(eta(f))} to go` : ''}`,
+          })
         })}
       {/* The stops queued with Shift, numbered in order, just above each planet. */}
-      {!mini && stops.map((w) => label(w.at.x, w.at.y, (
-        <g className="ew-gwaypt" transform={`translate(0 ${-(w.r * k * d + 12)})`}>
+      {!mini && stops.map((w) => over(`w${w.key}`, pin(w.at.x, w.at.y, w.r), cullAt(w.at.x, w.at.y, w.r), (
+        <g className="ew-gwaypt" transform="translate(0 -12)">
           <circle r={8} />
           <text y={3.5}>{w.n}</text>
         </g>
-      ), '', w.key))}
+      )))}
     </svg>
   )
+  if (!view) return map
+  // Under the SVG, as plain boxes in one transformed layer (see .ew-gunder): what fills most of the
+  // screen zoomed in. Big SVG shapes are drawn on the CPU every frame of a zoom in Firefox; boxes
+  // and gradients are the compositor's. The territories under everything, and zoomed in (where
+  // the lanes stop short of the systems) the stars' glows.
+  return (
+    <div ref={box} className="ew-gmap">
+      <div className="ew-gunder" aria-hidden="true">
+        <div ref={world} className="ew-gworld">
+          {g.systems.map((s) => {
+            const o = systemOwner(g, s.id, ME)
+            // (Its opacity in the colour, not as `opacity`: that would be a layer of its own.)
+            const tint = `rgb(${rgbOf(color(g, o))} / calc(${n4(0.12 * (sees(g, ME, s.id) ? 1 : 0.5))} * (1 - var(--d) * 0.5)))`
+            return o >= 0 && within(area, s.x, s.y, 46) ? <i key={`t${s.id}`} className="ew-gterr" data-cull={cullAt(s.x, s.y, 46)} style={css({ transform: `translate(${n4(s.x - 46)}px, ${n4(s.y - 46)}px)`, background: `radial-gradient(closest-side, ${tint} calc(100% - var(--ik) * 1px), transparent 100%)` })} /> : null
+          })}
+          {!has(B_DOTS) && g.systems.filter((s) => within(area, s.x, s.y, 7)).map((s) => (
+            <i key={`s${s.id}`} className="ew-gstar" data-cull={cullAt(s.x, s.y, 7)} style={css({ transform: `translate(${n4(s.x - 7)}px, ${n4(s.y - 7)}px)`, background: starGlow(STAR_COLOR[s.star], sees(g, ME, s.id) ? 1 : 0.6) })} />
+          ))}
+        </div>
+      </div>
+      {map}
+      <div className="ew-gover">
+        <div ref={world2} className="ew-gworld">{pins}</div>
+      </div>
+    </div>
+  )
+}
+
+/** Where the map is looking, for the bar: the nearest system once zoomed in, and planet once close.
+ * It follows the camera by itself, redrawing only when the name changes. */
+function MapWhere({ g, view }: { g: Galaxy; view: CamView }) {
+  const where = useSyncExternalStore(view.sub, () => whereOf(g, view.cam))
+  return <>{g.name}{where}</>
+}
+function whereOf(g: Galaxy, cam: Cam) {
+  const dist = (x: number, y: number) => Math.hypot(x - cam.x, y - cam.y)
+  const near = detail(cam.k) > 0.5 ? g.systems.reduce((b, s) => (dist(s.x, s.y) < dist(b.x, b.y) ? s : b)) : null
+  if (!near) return ''
+  const nearPlanet = cam.k > 30 ? near.planets.map((p) => g.planets[p]).reduce((b, p) => (dist(planetAt(g, p).x, planetAt(g, p).y) < dist(planetAt(g, b).x, planetAt(g, b).y) ? p : b)) : null
+  return ` › ${near.name}${nearPlanet && nearPlanet.name !== near.name ? ` › ${nearPlanet.name}` : ''}`
+}
+
+/** The minimap's frame round what the map shows: it follows the camera by itself. */
+function MiniFrame({ view }: { view: CamView }) {
+  const el = useRef<SVGRectElement>(null)
+  useLayoutEffect(() => {
+    const put = () => {
+      const r = el.current
+      if (!r) return
+      const c = view.cam
+      const vw = view.size.w / c.k
+      const vh = view.size.h / c.k
+      r.setAttribute('x', String(c.x - vw / 2))
+      r.setAttribute('y', String(c.y - vh / 2))
+      r.setAttribute('width', String(vw))
+      r.setAttribute('height', String(vh))
+    }
+    put()
+    return view.sub(put)
+  }, [view])
+  return <rect ref={el} className="ew-gmini-view" />
 }
 
 /** The week: six bars, one a day, filling as the day goes; planets pay as each one fills. */
@@ -724,13 +1040,13 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
   const [mapOpen, setMapOpen] = useState(false)
   const viewEl = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 800, h: 520 })
-  const [cam, setCam] = useState<Cam>({ x: W / 2, y: H / 2, k: 0.8 })
-  const camRef = useRef(cam)
-  camRef.current = cam
+  // The camera lives outside React (see CamView): moving it redraws none of this screen.
+  const [view] = useState(() => new CamView({ x: W / 2, y: H / 2, k: 0.8 }))
+  const camRef = useRef(view.cam)
   /** Moves the camera now: the ref at once, so moves in the same frame build on each other. */
   const moveCam = (c: Cam) => {
     camRef.current = c
-    setCam(c)
+    view.set(c)
   }
   const camGoal = useRef<Cam | null>(null)
   /** A wheel zoom under way: the zoom it's heading for, and the world point (wx, wy) that was under
@@ -798,15 +1114,18 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     const measure = () => {
       const s = { w: el.clientWidth || 800, h: el.clientHeight || 520 }
       setSize(s)
+      view.size = s
       if (!fitted.current) {
         fitted.current = true
-        setCam({ x: W / 2, y: H / 2, k: fitK(s.w, s.h) })
+        moveCam({ x: W / 2, y: H / 2, k: fitK(s.w, s.h) })
         // A small touch screen starts with the map clear: the fleet list opens from the top bar.
         if (matchMedia('(pointer: coarse)').matches && (s.w <= 680 || matchMedia('(max-height: 500px)').matches)) setFleetsOpen(false)
       }
     }
     measure()
-    const ro = new ResizeObserver(measure)
+    // The map re-aimed at the new size.
+    view.set(camRef.current)
+    const ro = new ResizeObserver(() => (measure(), view.set(camRef.current)))
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
@@ -841,7 +1160,8 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     const poke = () => {
       poked.current = true
     }
-    const kinds = ['pointerdown', 'pointerup', 'click', 'keydown', 'keyup', 'wheel'] as const
+    // (Not the wheel: it only moves the camera, which redraws the map by itself.)
+    const kinds = ['pointerdown', 'pointerup', 'click', 'keydown', 'keyup'] as const
     for (const k of kinds) window.addEventListener(k, poke, { capture: true, passive: true })
     return () => {
       for (const k of kinds) window.removeEventListener(k, poke, { capture: true })
@@ -1743,10 +2063,6 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     }
     wheel.current({ x: cx, y: cy, title, items })
   }
-  // Where we're looking, for the bar: the nearest system once zoomed in, and planet once close.
-  const d = detail(cam.k)
-  const near = d > 0.5 ? g.systems.reduce((b, s) => (Math.hypot(s.x - cam.x, s.y - cam.y) < Math.hypot(b.x - cam.x, b.y - cam.y) ? s : b)) : null
-  const nearPlanet = near && cam.k > 30 ? near.planets.map((p) => g.planets[p]).reduce((b, p) => (Math.hypot(planetAt(g, p).x - cam.x, planetAt(g, p).y - cam.y) < Math.hypot(planetAt(g, b).x - cam.x, planetAt(g, b).y - cam.y) ? p : b)) : null
 
   return (
     <div ref={rootEl} className={`ew-root ew-deck ew-galaxy ew-${myFaction} ${selPlanet ? 'has-dock' : ''} ${mapOpen ? 'is-map-open' : ''} ${sheetOpen ? 'has-sheet' : ''}`} style={{ ['--ew-accent' as string]: FACTIONS[myFaction].color }} onContextMenu={noMenu}>
@@ -1764,7 +2080,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
             </span>
             <div>
               <strong>{FACTIONS[myFaction].name} <em className="ew-beta" data-tip="Galactic conquest is still being built: expect rough edges, and changes to come">Beta</em></strong>
-              <small>{g.name}{near ? ` › ${near.name}` : ''}{nearPlanet && nearPlanet.name !== near?.name ? ` › ${nearPlanet.name}` : ''}</small>
+              <small><MapWhere g={g} view={view} /></small>
             </div>
           </button>
           <button className={`ew-top-cell ew-creditcell ${economy ? 'is-on' : ''}`} onClick={() => (sound.click(), setEconomy(!economy))}
@@ -1831,8 +2147,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
         >
           <GalaxyView
             g={g}
-            cam={cam}
-            size={size}
+            view={view}
             sel={sel}
             on={{
               system: (s) => {
@@ -1863,8 +2178,8 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
           />
           {box && <div className="ew-gbox" style={{ left: Math.min(box.x0, box.x1), top: Math.min(box.y0, box.y1), width: Math.abs(box.x1 - box.x0), height: Math.abs(box.y1 - box.y0) }} />}
           <div className="ew-gzoom">
-            <button onClick={() => flyTo(cam.x, cam.y, cam.k * 2)} data-tip={`Zoom in (${keyName(getSettings().keys.zoomIn)} or the wheel)`}>+</button>
-            <button onClick={() => flyTo(cam.x, cam.y, cam.k / 2)} data-tip={`Zoom out (${keyName(getSettings().keys.zoomOut)} or the wheel)`}>−</button>
+            <button onClick={() => flyTo(camRef.current.x, camRef.current.y, camRef.current.k * 2)} data-tip={`Zoom in (${keyName(getSettings().keys.zoomIn)} or the wheel)`}>+</button>
+            <button onClick={() => flyTo(camRef.current.x, camRef.current.y, camRef.current.k / 2)} data-tip={`Zoom out (${keyName(getSettings().keys.zoomOut)} or the wheel)`}>−</button>
             <button onClick={flyOut} data-tip="The whole galaxy (Esc)"><Icon name="radar" size={14} /></button>
             {/* Phones and short screens: the galaxy map, hidden there until asked for. */}
             <button className={`ew-gmapbtn ${mapOpen ? 'is-on' : ''}`} onClick={() => (sound.click(), setMapOpen(!mapOpen), mapOpen || setFleetsOpen(false))} aria-pressed={mapOpen} aria-label="Galaxy map" data-tip="Show or hide the galaxy map">
@@ -1907,8 +2222,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
 
         <GalaxyMinimap
           g={g}
-          cam={cam}
-          size={size}
+          view={view}
           onLook={(x, y) => {
             camGoal.current = null
             zoomTo.current = null
@@ -2149,10 +2463,9 @@ type GMapFilter = 'all' | 'fleets' | 'planets' | 'enemies'
  * fog of war it shows the fleets we can see and, for systems we don't, who held them when we last
  * looked (faded); how many planets each side holds is public knowledge.
  */
-function GalaxyMinimap({ g, cam, size, onLook, onCapital, onIdle, idle, onEconomy, economy, onWhole }: {
+function GalaxyMinimap({ g, view, onLook, onCapital, onIdle, idle, onEconomy, economy, onWhole }: {
   g: Galaxy
-  cam: Cam
-  size: { w: number; h: number }
+  view: CamView
   onLook: (x: number, y: number) => void
   onCapital: () => void
   onIdle: () => void
@@ -2184,8 +2497,6 @@ function GalaxyMinimap({ g, cam, size, onLook, onCapital, onIdle, idle, onEconom
     const oy = (r.height - H * s) / 2
     onLook(clamp((e.clientX - r.left - ox) / s, 0, W), clamp((e.clientY - r.top - oy) / s, 0, H))
   }
-  const vw = size.w / cam.k
-  const vh = size.h / cam.k
   // Only what we can see, and what we last saw where we can't (faded).
   const showFleet = (f: Fleet) => canSee(g, ME, f) && (filter === 'all' || filter === 'fleets' || (filter === 'enemies' && f.owner !== ME))
   const showSystem = (s: StarSystem) => filter !== 'fleets' && (filter !== 'enemies' || s.planets.some((p) => ownerFor(g, ME, g.planets[p]) >= 0 && ownerFor(g, ME, g.planets[p]) !== ME))
@@ -2230,7 +2541,7 @@ function GalaxyMinimap({ g, cam, size, onLook, onCapital, onIdle, idle, onEconom
             return b ? <circle key={`b${s.id}`} cx={s.x} cy={s.y} r={17} fill="none" stroke={color(g, b.by)} strokeWidth={3.5} strokeDasharray="6 4" /> : null
           })}
           {g.pending >= 0 && <circle cx={g.systems[g.planets[g.pending].system].x} cy={g.systems[g.planets[g.pending].system].y} r={22} className="ew-gbattle" />}
-          <rect x={cam.x - vw / 2} y={cam.y - vh / 2} width={vw} height={vh} className="ew-gmini-view" />
+          <MiniFrame view={view} />
         </svg>
       </div>
       <div className="ew-mapfilters" role="tablist" aria-label="Show on the map">

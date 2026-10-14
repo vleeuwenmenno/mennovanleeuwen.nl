@@ -4637,7 +4637,9 @@ span.ew-teamtag {
   stroke-width: 2.2;
 }
 
-/* Inside a system. */
+/* Inside a system. (The planets' pictures had a drop-shadow: black at 0.6, but blurred by 10 map
+   units round a planet about a unit across, it darkened anything by two levels of 255 at most,
+   yet zoomed in it filtered thousands of pixels every frame.) */
 .ew-sorbit {
   fill: none;
   stroke: rgba(150, 190, 255, 0.16);
@@ -4646,8 +4648,96 @@ span.ew-teamtag {
 .ew-splanet {
   cursor: pointer;
 }
-.ew-splanet image {
-  filter: drop-shadow(0 0 10px rgba(0, 0, 0, 0.6));
+/* The variables the galaxy map scales by as the camera moves (ScaleUser in Conquest.tsx): not
+   inherited, so setting them restyles only the element that uses them. The initial values are the
+   setup's preview, at no zoom. */
+@property --ik {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 1;
+}
+@property --d {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0;
+}
+@property --nm {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0;
+}
+@property --glow {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 1;
+}
+
+/* The map's underlay (GalaxyView): the big fills, as boxes in one layer moved by the camera, in
+   map units (a pixel is a map unit before the zoom's scale). */
+.ew-gmap,
+.ew-gunder {
+  position: absolute;
+  inset: 0;
+}
+/* Its own compositor layer (it never moves, so it stays sharp): a frame of a zoom then repaints the
+   map alone, not the backdrop under it as well. */
+.ew-gmap {
+  will-change: transform;
+}
+.ew-gunder {
+  overflow: hidden;
+  pointer-events: none;
+}
+.ew-gmap > .ew-gsvg {
+  position: absolute;
+  inset: 0;
+}
+/* Over the map: its markers, badges and names, each a small SVG at a point of the map, kept its size
+   on screen (GalaxyView's `over`). Only what they draw takes clicks. */
+.ew-gover {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.ew-pin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+}
+.ew-pin > svg {
+  display: block;
+  overflow: visible;
+  pointer-events: auto;
+}
+/* Well off screen (see cull in Conquest.tsx). */
+.ew-gmap [data-off] {
+  display: none;
+}
+.ew-gworld {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+/* Round by their gradients, not border-radius: a rounded clip on a box thousands of pixels wide
+   costs Firefox a mask every frame. A territory's edge is one screen pixel of fade, as an
+   antialiased circle's. */
+.ew-gworld > i {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+.ew-gterr {
+  width: 92px;
+  height: 92px;
+}
+.ew-gstar {
+  width: 14px;
+  height: 14px;
 }
 .ew-splanet:hover > .ew-sring,
 .ew-splanet.is-sel > .ew-sring {
@@ -4675,7 +4765,7 @@ span.ew-teamtag {
 }
 .ew-splanet.is-fog image {
   opacity: 0.55;
-  filter: grayscale(0.6) drop-shadow(0 0 10px rgba(0, 0, 0, 0.6));
+  filter: grayscale(0.6);
 }
 .ew-splanet.is-fog > .ew-sring {
   opacity: 0.55;
@@ -5572,18 +5662,16 @@ span.ew-teamtag {
 }
 
 /* Blockades: a static dashed barrier in the blockading side's colour, thicker and red-tinged
-   when it's against us. Animating this large SVG stroke repaints the map every display frame. */
-.ew-gblock circle {
+   when it's against us. Animating this large SVG stroke repaints the map every display frame.
+   The glow (glowRings in Conquest.tsx) is a blur in map units: zoomed in it spreads so wide it
+   can't be seen, so it fades out by a zoom of 6 and is left out past it (--glow, B_GLOW). */
+.ew-gblock .ew-gring {
   stroke-width: 2.5;
   stroke-dasharray: 7 5;
   opacity: 0.9;
 }
-.ew-gblock.is-theirs circle {
+.ew-gblock.is-theirs .ew-gring {
   stroke-width: 3.5;
-  filter: drop-shadow(0 0 4px rgba(255, 90, 80, 0.6));
-}
-.ew-gblock.is-ours circle {
-  filter: drop-shadow(0 0 4px rgba(125, 255, 160, 0.45));
 }
 .ew-gp-block {
   font-weight: 600;
