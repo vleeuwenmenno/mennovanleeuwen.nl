@@ -155,6 +155,8 @@ export type Unit = {
   /** How hard it is to shove aside, overriding its class's (see pushClass): the hook for an
    * ability that lets a ship push bigger hulls. Absent: its class's. */
   pushClass?: number
+  /** How high it flies over other ships, overriding its class's (see heightOf). Absent: its class's. */
+  height?: number
   /** A yard's own build queue and rally point, once it is built. */
   yq?: QueueItem[]
   yr?: Pt
@@ -414,9 +416,18 @@ const wrap = (a: number) => ((a + Math.PI) % TAU + TAU) % TAU - Math.PI
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v)
 const d2 = (ax: number, ay: number, bx: number, by: number) => sq(ax - bx) + sq(ay - by)
 
-/** How much further apart a group of ships keeps: its biggest ship's size class, at least
- * BIG_SPREAD (models/sizes.ts). */
-const spreadOf = (us: Unit[]) => Math.max(BIG_SPREAD, ...us.map((u) => sizeClass(u.t)))
+/** How much further apart a group of ships keeps: the size class of its biggest ship that needs room
+ * of its own, at least BIG_SPREAD (models/sizes.ts). A ship needs room when the group has another
+ * ship it can't fly over (see overlaps): a lone flagship among gunships doesn't, since they cross
+ * its hull, so it no longer spreads the whole group out as wide as two flagships would need. */
+const spreadOf = (us: Unit[]) => {
+  let s = BIG_SPREAD
+  for (const u of us) {
+    const c = sizeClass(u.t)
+    if (c > s && us.some((o) => o !== u && !overlaps(u, o))) s = c
+  }
+  return s
+}
 /** How hard a ship speeds up and brakes, before its tier's factor (see steer). */
 const accOf = (t: UnitType) => t.speed * (t.accel ?? 1)
 
@@ -429,6 +440,23 @@ const accOf = (t: UnitType) => t.speed * (t.accel ?? 1)
  */
 export const PUSH_CLASS: Record<Tier, number> = { fighter: 0, gunship: 1, frigate: 2, cruiser: 3, capital: 4, station: 10, mine: 10, defense: 10, yard: 10 }
 export const pushClass = (u: Unit) => (isShip(u.t) ? (u.pushClass ?? PUSH_CLASS[u.t.tier]) : Infinity)
+
+/**
+ * How high a ship flies over the others: its class, in PUSH_CLASS's order (fighter 0 to capital 4),
+ * or its own `height` (the hook for something that changes that). Ships OVERLAP_GAP or more apart
+ * pass over each other, friend or foe, as fighters always have over everything: a gunship or a
+ * corvette over a cruiser or a flagship, a frigate over a flagship. Neither keeps the hull gap from
+ * the other nor pushes it (see the end of moveUnit), so small ships no longer pile up round a big
+ * hull or get shoved about by it. Closer classes and the same class stay solid; so do structures,
+ * for everything but fighters.
+ */
+export const heightOf = (u: Unit) => u.height ?? PUSH_CLASS[u.t.tier]
+export const OVERLAP_GAP = 2
+/** Whether two ships pass over each other (see heightOf). */
+export const overlaps = (a: Unit, b: Unit) => isShip(a.t) && isShip(b.t) && Math.abs(heightOf(a) - heightOf(b)) >= OVERLAP_GAP
+/** Whether `u` guarding `g` escorts it: `g` is a ship at least OVERLAP_GAP classes bigger, which
+ * `u` keeps station over (see escortSlot). Guarding anything else is the plain guard. */
+export const escorts = (u: Unit, g: Unit) => isShip(u.t) && isShip(g.t) && heightOf(g) - heightOf(u) >= OVERLAP_GAP
 
 /** Rough body radius, for spacing, clicking and collisions. */
 export const radius = (t: UnitType) => {
@@ -2511,7 +2539,7 @@ const ARC_MAX = (Math.PI * 2) / 3
  * they follow a target that moves round. */
 const RESLOT = 4
 /** The least room between two warships' hulls (see the end of moveUnit). */
-const HULL_GAP = 8
+export const HULL_GAP = 8
 /**
  * How far round itself a warship looks for hulls to keep clear of, on top of its own radius: at
  * least the biggest hull there can be (and the gap), so a small ship sees a big one coming as much
@@ -2757,7 +2785,13 @@ function moveUnit(w: World, u: Unit, dt: number) {
   // A defense wing craft with no orders of its own guards its station.
   const home = guarded(u, parent)
   if (home && u.post === undefined) u.post = freePost(w, u, home)
-  if (u.order.k === 'guard') {
+  // Escorting a big ship: its slot over the hull is its post (see keepStation).
+  const ward = wardOf(w, u)
+  if (ward) {
+    const s = stationOver(u, ward)
+    u.ax = s.x
+    u.ay = s.y
+  } else if (u.order.k === 'guard') {
     const g = w.byId.get(u.order.id)
     if (!g || g.dead || foes(w, g.owner, u.owner)) nextOrder(u, u.x, u.y)
     else {
@@ -2788,6 +2822,18 @@ function moveUnit(w: World, u: Unit, dt: number) {
       u.retarget = 0.4 + rand(w) * 0.3
       const cur = valid(w, u.target, u.owner)
       u.target = cur && inGuardZone(home, cur, WING_GUARD.leash) ? cur.id : guardPick(w, u, home)?.id ?? 0
+    }
+  } else if (ward) {
+    // Escorting: anything that comes within reach of our guns of the ship we escort, chased only a
+    // little past that. Holding escorts never leave their slot: they fire on what their guns reach.
+    if (u.retarget <= 0) {
+      u.retarget = 0.4 + rand(w) * 0.3
+      const cur = valid(w, u.target, u.owner)
+      if (isEngineer(t)) u.target = 0
+      else if (u.stance === 'hold') {
+        const look = fightRange(t) * u.mods.range + (fighter ? 0 : 100)
+        u.target = (cur && d2(cur.x, cur.y, u.x, u.y) < sq(look) ? cur : pickTarget(w, u, look))?.id ?? 0
+      } else u.target = cur && inEscortZone(u, ward, cur, ESCORT.leash) ? cur.id : escortPick(w, u, ward)?.id ?? 0
     }
   } else if (u.retarget <= 0) {
     u.retarget = 0.4 + rand(w) * 0.3
@@ -2842,7 +2888,7 @@ function moveUnit(w: World, u: Unit, dt: number) {
     const R = radius(mend.t) + 60 + (u.id % 3) * 15
     const ang = M.atan2(u.y - mend.y, u.x - mend.x) + 0.7
     steer(u, mend.x + M.cos(ang) * R, mend.y + M.sin(ang) * R, max * 0.8, dt)
-  } else if (fighting) {
+  } else if (fighting && !(ward && u.stance === 'hold')) {
     const e = tgt!
     if (fighter && e.t.tier !== 'fighter') {
       // Strafing runs on anything bigger: dive in guns-first, pull away past the hull, and fly out
@@ -2904,7 +2950,8 @@ function moveUnit(w: World, u: Unit, dt: number) {
       const facing = M.cos(wrap(M.atan2(s.y - u.y, s.x - u.x) - u.a))
       steer(u, s.x, s.y, Math.min(max, Math.sqrt(t.speed * 1.2 * dist)) * clamp(facing, 0.1, 1), dt)
     } else steer(u, u.x + M.cos(s.a) * 100, u.y + M.sin(s.a) * 100, 0, dt, true)
-  } else {
+  } else if (ward) keepStation(w, u, ward, max, dt)
+  else {
     // Idle: fighters circle their spot, everything else drifts back to it and waits.
     const dist = M.hypot(u.ax - u.x, u.ay - u.y)
     if (fighter) {
@@ -2943,11 +2990,13 @@ function moveUnit(w: World, u: Unit, dt: number) {
     // Who gives way goes by class (see pushClass): a smaller hull never moves a bigger one. It
     // takes the whole push itself and slides off round the bigger hull, and a bigger ship coming
     // through moves it aside out of its path rather than shoving it along ahead.
+    // Ships two or more classes apart don't touch at all: the small one flies straight across the
+    // big hull, and the big one doesn't move it (see overlaps).
     const bx = u.x
     const by = u.y
     const mine = pushClass(u)
     near(w, u.x, u.y, r0 + keepApartReach(), (o, dd) => {
-      if (o === u || o.t.tier === 'fighter' || planned(o)) return
+      if (o === u || o.t.tier === 'fighter' || planned(o) || overlaps(u, o)) return
       const touch = r0 + radius(o.t)
       const min = touch + HULL_GAP
       if (dd >= min * min) return
@@ -3511,6 +3560,142 @@ function wings(w: World, dt: number) {
   }
 }
 
+// --- Escorts -----------------------------------------------------------------------------------------
+
+/**
+ * Escorts: ships told to guard a friendly ship at least OVERLAP_GAP classes bigger (see escorts),
+ * which they fly over. Each keeps station on a slot of its own over the big hull (escortSlot),
+ * moving and turning with it. Enemies that come within reach of its guns of the ship it escorts it
+ * takes on, chasing them at most `leash` further out, as a defense wing does round its station, and
+ * it goes back to its slot once they're dealt with or gone. Repair escorts mend their ship first:
+ * Field repair crews start a run on it once it has lost `mend` of itself, and tenders patch it before
+ * anyone else. When the ship is lost, its escorts carry on with their next orders, or wait where they
+ * are.
+ */
+export const ESCORT = { leash: 300, mend: 0.03 }
+
+/** The ship `u` escorts: the one its guard order is on, while that's a friendly ship it escorts. */
+export function wardOf(w: World, u: Unit): Unit | undefined {
+  if (u.dead || u.order.k !== 'guard') return undefined
+  const g = w.byId.get(u.order.id)
+  return g && !g.dead && !foes(w, g.owner, u.owner) && escorts(u, g) ? g : undefined
+}
+
+/**
+ * Every escorted ship's escorts by its id, in id order, which is how they share out the slots:
+ * worked out afresh at the start of every tick from the orders themselves, like spotGroups, so it
+ * carries nothing from one tick to the next (and nothing a snapshot would miss).
+ */
+let escortGroups = new Map<number, Unit[]>()
+function findEscorts(w: World) {
+  escortGroups = new Map()
+  for (const u of w.units) {
+    const g = wardOf(w, u)
+    if (!g) continue
+    const list = escortGroups.get(g.id)
+    if (list) list.push(u)
+    else escortGroups.set(g.id, [u])
+  }
+  for (const list of escortGroups.values()) list.sort((a, b) => a.id - b.id)
+}
+
+/** The ships escorting `g` right now (for the HUD and the map). */
+export const escortsOf = (w: World, g: Unit) => w.units.filter((u) => wardOf(w, u) === g)
+
+/**
+ * Where escort `i` of `n` keeps station over `g`: down both flanks in turn, spread evenly from the
+ * bow to the stern, a little inside the hull's edge so it rides over it. The slots are fixed to the
+ * hull, so they move and turn with it, and the escorts re-form round it as it turns.
+ */
+export function escortSlot(g: Unit, i: number, n: number): Pt & { a: number } {
+  const [gw, gh] = dims(g.t)
+  const rows = Math.ceil(n / 2)
+  const row = Math.floor(i / 2)
+  const side = (i % 2 ? -1 : 1) * gw * 0.4
+  const fwd = rows > 1 ? gh * (0.3 - (0.6 * row) / (rows - 1)) : 0
+  const c = M.cos(g.a)
+  const s = M.sin(g.a)
+  return { x: g.x + c * fwd - s * side, y: g.y + s * fwd + c * side, a: g.a }
+}
+
+/** Where `u` keeps station over `g`, by its place among the ship's escorts. */
+function stationOver(u: Unit, g: Unit) {
+  const list = escortGroups.get(g.id)
+  const i = list ? list.indexOf(u) : -1
+  const n = list?.length ?? 0
+  return i >= 0 ? escortSlot(g, i, n) : escortSlot(g, n, n + 1)
+}
+
+/** How far from the middle of the ship it escorts an escort takes on enemies: its guns' reach from
+ * the big hull's edge (its radius), plus half the enemy's own hull, and `extra`. */
+function inEscortZone(u: Unit, g: Unit, e: Unit, extra = 0) {
+  const r = fightRange(u.t) * u.mods.range + radius(g.t) + radius(e.t) * 0.5 + extra
+  return d2(e.x, e.y, g.x, g.y) <= r * r
+}
+
+/** The best enemy for an escort to take on: one inside its zone round the ship it escorts, scored
+ * as pickTarget does, and more so if it's going for that ship or this one. */
+function escortPick(w: World, u: Unit, g: Unit): Unit | undefined {
+  let best: Unit | undefined
+  let score = 0
+  near(w, g.x, g.y, fightRange(u.t) * u.mods.range + radius(g.t) + keepApartReach(), (e) => {
+    if (!foes(w, e.owner, u.owner) || !sees(w, u.owner, e) || !inEscortZone(u, g, e)) return
+    const threat = e.target === g.id || e.target === u.id || u.hitBy === e.id ? 1.5 : 1
+    const s = ((dpsVs(u.t, e.t.tier) + 0.01) / (Math.sqrt(d2(e.x, e.y, u.x, u.y)) + 250)) * (e.t.tier === 'mine' ? 0.6 : 1) * threat
+    if (s > score) {
+      score = s
+      best = e
+    }
+  })
+  return best
+}
+
+/**
+ * An escort with nothing to fight keeps station on its slot: from further off it flies there flat
+ * out, led by how far the ship it escorts will have got meanwhile; on its slot it matches that ship's
+ * heading and pace, closing what is left of the gap, and turns with it where it stands. Strike craft
+ * can't hover: they circle their slot as it goes.
+ */
+function keepStation(w: World, u: Unit, g: Unit, max: number, dt: number) {
+  const t = u.t
+  const s = stationOver(u, g)
+  const ca = M.cos(g.a)
+  const sa = M.sin(g.a)
+  if (t.tier === 'fighter') {
+    const ang = w.time * 1.2 + u.id
+    const r = 40 + (u.id % 4) * 14
+    steer(u, s.x + M.cos(ang) * r + ca * g.v * 0.5, s.y + M.sin(ang) * r + sa * g.v * 0.5, Math.min(max, max * 0.6 + g.v), dt)
+    return
+  }
+  const dx = s.x - u.x
+  const dy = s.y - u.y
+  const dist = M.hypot(dx, dy)
+  const close = 24 + radius(t) * 0.3
+  if (g.v < 4) {
+    // The ship is waiting: fly to the slot, braking in time to stop on it and slowing right down
+    // while not yet pointed at it (so it turns in tight rather than looping round), then turn to
+    // the ship's heading where it stands.
+    if (dist > close * 0.4) {
+      unsettle(u)
+      const facing = M.cos(wrap(M.atan2(dy, dx) - u.a))
+      steer(u, s.x, s.y, Math.min(max, Math.sqrt(accOf(t) * 1.2 * dist)) * clamp(facing, 0.1, 1), dt)
+    } else if (Math.abs(wrap(g.a - u.a)) > 0.01) steer(u, u.x + ca * 100, u.y + sa * 100, 0, dt, true)
+    else u.v = Math.max(0, u.v - accOf(t) * dt)
+    return
+  }
+  if (dist > close * 3) {
+    unsettle(u)
+    const lead = Math.min(2, dist / Math.max(1, max)) * g.v
+    const p = detour(w, u, s.x + ca * lead, s.y + sa * lead)
+    steer(u, p.x, p.y, Math.min(max, g.v + Math.sqrt(accOf(t) * 1.2 * dist)), dt)
+    return
+  }
+  // On station: the ship's own heading and pace, plus a little to close the gap along it; the aim
+  // point well ahead along its heading pulls the escort back onto its line from either side.
+  const along = dx * ca + dy * sa
+  steer(u, s.x + ca * (120 + g.v), s.y + sa * (120 + g.v), clamp(g.v + along * 1.5, 0, max), dt)
+}
+
 // --- Field repair ------------------------------------------------------------------------------------
 
 /** How much of a ship's hull is missing, plus a little for modules that are hurt but still standing,
@@ -3634,7 +3819,9 @@ function fieldRepairs(w: World, dt: number) {
       continue
     }
     if (!look || u.abilityCd > 0 || building(u) || (u.order.k !== 'idle' && u.order.k !== 'guard')) continue
-    const to = mendPick(w, u, rangeDist(900), 0.1)
+    // An escort mends the ship it escorts first, at the first real damage.
+    const ward = wardOf(w, u)
+    const to = ward && !cantMend(w, u.owner, ward) && mendNeed(ward) >= ESCORT.mend ? ward : mendPick(w, u, rangeDist(900), 0.1)
     if (to) startMend(w, u, to)
   }
 }
@@ -3652,6 +3839,10 @@ function tenders(w: World, dt: number) {
       if (o !== u && !o.dead && isShip(o.t) && w.players[o.owner].team === team && o.hull < hullCap(o)) hurt.push(o)
     })
     hurt.sort((a, b) => a.hull / a.hullMax - b.hull / b.hullMax)
+    // An escort patches the ship it escorts before anyone else.
+    const ward = wardOf(w, u)
+    const wi = ward ? hurt.indexOf(ward) : -1
+    if (wi > 0) hurt.unshift(...hurt.splice(wi, 1))
     const rate = sp.repair * (1 + (techBonus(w.players[u.owner], u.t.id).repair ?? 0)) * dt
     for (const o of hurt.slice(0, sp.max)) {
       o.hull = Math.min(hullCap(o), o.hull + rate)
@@ -3700,6 +3891,7 @@ export function tick(w: World, dt = STEP) {
   if (w.hybrid) expansions(w, dt)
   wings(w, dt)
   findSpotGroups(w)
+  findEscorts(w)
   for (const u of w.units) {
     if (u.dead) continue
     // A yard goes up only as fast as engineers build it (see construction).
