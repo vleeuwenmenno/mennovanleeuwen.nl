@@ -61,6 +61,7 @@ import {
   type TurnEvent,
   type Workdir,
   siteOf,
+  MAIL_READ_TOOLS,
 } from '../../data/agents'
 import { seafileAt } from '../../data/agentPlaces'
 import { getAccount, hasCalendar } from '../../os/account'
@@ -509,7 +510,12 @@ export class Session {
       const body = a.summary.body === undefined ? [] : [[], ...filePreview(a.summary.body || '(no text)', inner, 40)]
       const MAIL_VERBS: Record<string, string> = { mail_send: 'Send this email?', mail_draft: 'Save this draft?', mail_read: 'Let it read this?', mail_search: 'Let it search your mail?', mail_list_accounts: 'Let it look at your mail accounts?', mail_update: 'Make this change?' }
       const verb = MAIL_VERBS[call.name] ?? (call.name === 'calendar_delete_event' ? 'Delete this event?' : call.name === 'calendar_create_event' ? 'Add this event?' : 'Make this change?')
-      return { title: a.summary.title, preview: [...rows, ...body], question: verb, options: [{ label: 'Yes', run: allow() }, no] }
+      // A mail search or read: also mail reads in this thread for 15 minutes, or (after No, out of
+      // the way) always, in every thread. Drafts, sends and changes still ask either way.
+      const reads = MAIL_READ_TOOLS.has(call.name)
+      const forAWhile: Option[] = reads ? [{ label: 'Yes, and allow mail reads in this thread for 15 min', hint: 'sends still ask', run: allow({ always: 'mail_reads' }) }] : []
+      const always: Option[] = reads ? [{ label: 'Yes, and always allow mail reads', hint: 'every thread; change in Settings → Agents → Permissions', run: allow({ always: 'mail_reads_always' }) }] : []
+      return { title: a.summary.title, preview: [...rows, ...body], question: verb, options: [{ label: 'Yes', run: allow() }, ...forAWhile, no, ...always] }
     }
     switch (call.name) {
       case 'edit_file':
@@ -574,6 +580,8 @@ export class Session {
     this.draw()
     try {
       await answerApproval(this.thread!.id, a.callId, allow, extra)
+      if (extra.always === 'mail_reads') this.say('Mail searches and reads run without asking in this thread for 15 minutes. Drafts, sends and changes still ask.', 'muted')
+      if (extra.always === 'mail_reads_always') this.say('Mail searches and reads run without asking from now on, in every thread (Settings → Agents → Permissions changes it). Drafts, sends and changes still ask.', 'muted')
     } catch (e) {
       this.say(`Could not answer: ${(e as Error).message}`, 'red')
     }
@@ -596,7 +604,8 @@ export class Session {
     else if (k === 'ArrowDown' || k === '^N' || k === 'Tab') m.sel = (m.sel + 1) % spec.options.length
     else if (k === 'Enter') spec.options[m.sel].run()
     else if (/^[1-9]$/.test(k) && Number(k) <= spec.options.length) spec.options[Number(k) - 1].run()
-    else if (k === 'Escape') spec.options[spec.options.length - 1].run()
+    // Esc is No (the option marked esc), wherever it sits: a lasting choice may come after it.
+    else if (k === 'Escape') (spec.options.find((o) => o.hint === 'esc') ?? spec.options[spec.options.length - 1]).run()
     else if (k === 'S-Tab' && spec.options.some((o) => o.hint === 'shift+tab')) spec.options.find((o) => o.hint === 'shift+tab')!.run()
     else if (k === '^C') return this.ctrlCKey(), true
     this.draw()

@@ -246,6 +246,13 @@ export function database(): DatabaseSync {
     PRIMARY KEY (user_id, host)
   )`)
   if (!cols('agent_messages').includes('checked')) db.exec('ALTER TABLE agent_messages ADD COLUMN checked TEXT')
+  // Added later: mail reads (searches and reads of the Agents app's mail tools) the user allowed
+  // always, for all their threads (Settings → Agents → Permissions). No row: they ask (the default).
+  db.exec(`CREATE TABLE IF NOT EXISTS agent_mail_reads (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    always INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`)
   // The Photos app (server/photos.ts): the Seafile folders chosen as photo sources, the index of
   // the photos and videos in them (what EXIF says, read from each file's first bytes), and the
   // folders' Seafile ids from the last full walk (an unchanged id means nothing in it changed).
