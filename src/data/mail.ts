@@ -138,10 +138,27 @@ export const fetchThread = (account: number, threadId: string, images: string[] 
 export const fetchMessage = (account: number, id: string, images: boolean) => api<Message>(`${base(account)}/message/${encodeURIComponent(id)}${images ? '?images=1' : ''}`)
 
 export type Op = 'seen' | 'unseen' | 'flag' | 'unflag' | 'move' | 'archive' | 'trash' | 'junk' | 'notjunk' | 'destroy'
+/** How many conversations (and messages) one request may name; the server makes one Email/set of them all. */
+const ACT_THREADS = 200
+const ACT_EMAILS = 500
+/**
+ * A change to messages, or to every message of conversations: one request (one JMAP Email/set
+ * on the server) for as many as one request may name, a few one after the other for more.
+ */
 export async function act(account: number, op: Op, target: { emailIds?: string[]; threadIds?: string[]; to?: string; from?: string | null }) {
-  const r = await api<{ changed: number }>(`${base(account)}/act`, { method: 'POST', json: { op, ...target, from: target.from ?? undefined } })
-  mailChanged(account)
-  return r
+  const threadIds = target.threadIds ?? []
+  const emailIds = target.emailIds ?? []
+  let changed = 0
+  try {
+    for (let t = 0, e = 0; t < threadIds.length || e < emailIds.length || (t === 0 && e === 0); t += ACT_THREADS, e += ACT_EMAILS) {
+      const part = { threadIds: threadIds.slice(t, t + ACT_THREADS), emailIds: emailIds.slice(e, e + ACT_EMAILS) }
+      const r = await api<{ changed: number }>(`${base(account)}/act`, { method: 'POST', json: { op, ...(part.threadIds.length ? { threadIds: part.threadIds } : {}), ...(part.emailIds.length ? { emailIds: part.emailIds } : {}), to: target.to, from: target.from ?? undefined } })
+      changed += r.changed
+    }
+  } finally {
+    mailChanged(account)
+  }
+  return { changed }
 }
 
 export type DraftBody = {

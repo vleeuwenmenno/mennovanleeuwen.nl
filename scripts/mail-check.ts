@@ -341,6 +341,12 @@ async function endToEnd() {
     check('delete for good: from Trash', gone.status === 200 && !mock.emails.has(update1.id), gone.json)
     const badMove = await call('POST', `/api/mail/${acc}/act`, { op: 'move', emailIds: [lunch.id], to: 'nope' })
     check('move: an unknown mailbox is refused', badMove.status === 400)
+    // Several conversations at once (Mail's selection): one Email/set naming every message.
+    const many = ['Update number 2', 'Update number 3', 'Update number 4'].map((s) => rows.find((r) => r.subject === s))
+    const setsBefore = mock.methodCalls.filter(([n]) => n === 'Email/set').length
+    await call('POST', `/api/mail/${acc}/act`, { op: 'seen', threadIds: many.map((r) => r.threadId) })
+    const sets = mock.methodCalls.filter(([n]) => n === 'Email/set').slice(setsBefore)
+    check('several: one Email/set for them all', sets.length === 1 && many.every((r) => sets[0][1].update?.[r.id]?.['keywords/$seen'] === true), sets)
 
     // Blobs: upload needs the custom header.
     const bytes = new Uint8Array(Buffer.from('attachment body'))

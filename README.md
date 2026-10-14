@@ -725,6 +725,16 @@ Files too. Keys: `j`/`k` (or the arrows) to move, Enter to open, `e` archive, `#
 Ctrl+Enter to send (a setting). In a narrow window or on a phone it shows one pane at a time: mailboxes, list,
 conversation, each with a way back.
 
+Several conversations can be selected at once, as in Files and Photos: Ctrl or Cmd+click (or the
+circle over a sender's picture) takes one in or out, Shift+click or Shift+↑/↓ a range, Ctrl+A every
+conversation loaded, Esc none; on a touch screen a long press starts selecting and taps then add
+and take away. With two or more, the reading pane says how many (a bar over the list on a phone)
+with Archive, Delete, Mark as junk or Not junk, Mark as read or unread, Flag or Unflag, and Move to…;
+the keys above, the right-click menu on a selected row and dragging a selected row onto a mailbox
+(the drag shows how many) act on all of them. A selected conversation is all its messages, and each
+action is one request, one `Email/set` on the server. The selection stays when new mail comes in and
+goes with a change of mailbox or a search.
+
 HTML mail is made safe on the server by an allow-list sanitiser of its own
 ([`server/mailhtml.ts`](server/mailhtml.ts): no scripts, event handlers, forms, frames, SVG,
 `javascript:` links or CSS expressions; every tag balanced and every attribute re-escaped) and then

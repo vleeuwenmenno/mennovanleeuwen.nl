@@ -320,6 +320,126 @@
     display: flex;
   }
 }
+
+/* Selecting several: a circle over the sender's picture (on hover, and on every row while
+   several are selected), filled on those selected. */
+.ml-row.is-picked {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.ml-row-pic {
+  position: relative;
+  flex: none;
+  width: 30px;
+  height: 30px;
+}
+.ml-check {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--panel-solid);
+  color: transparent;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.ml-check svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+@media (hover: hover) {
+  .ml-row:hover .ml-check {
+    opacity: 1;
+  }
+  .ml-check:hover {
+    border-color: var(--accent);
+    color: var(--muted);
+  }
+}
+.ml-list.is-picking .ml-check {
+  opacity: 1;
+}
+.ml-list.is-picking .ml-row[aria-selected='true'] .ml-check {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.ml-sel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+}
+.ml-sel-stack {
+  position: relative;
+  width: 72px;
+  height: 64px;
+  margin-bottom: 4px;
+}
+.ml-sel-stack span {
+  position: absolute;
+  top: 10px;
+  left: 14px;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  color: var(--accent);
+  font-size: 22px;
+}
+.ml-sel-stack span:nth-child(1) {
+  transform: translate(-10px, -6px) rotate(-10deg);
+}
+.ml-sel-stack span:nth-child(2) {
+  transform: translate(10px, -4px) rotate(8deg);
+}
+.ml-sel-title {
+  margin: 0;
+  color: var(--fg-bright);
+  font-size: 17px;
+}
+.ml-sel-facts {
+  margin: 0;
+}
+.ml-sel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  max-width: 460px;
+  margin: 6px 0 4px;
+}
+.ml-sel-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.ml-sel-bar .ml-icon {
+  flex: none;
+}
+.ml-sel-count {
+  padding: 0 6px;
+  color: var(--fg-bright);
+  font-size: 13px;
+  white-space: nowrap;
+}
 .ml-more {
   position: absolute;
   right: 0;

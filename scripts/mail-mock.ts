@@ -40,6 +40,8 @@ export type MockJmap = {
   submissions: J[]
   /** Every method call, in order. */
   calls: string[]
+  /** Every method call with its arguments (as sent, before back-references), in order. */
+  methodCalls: [string, J][]
   /** Open EventSource connections. */
   streams: () => number
   deliver: (e: Partial<SeedEmail>) => Email
@@ -82,6 +84,7 @@ export async function startMockJmap(opts: { port?: number; token?: string; host?
   const values = new Map<string, string>() // blobId of a text part → its text
   const submissions: J[] = []
   const calls: string[] = []
+  const methodCalls: [string, J][] = []
   const changes: { state: number; created: string[]; updated: string[]; destroyed: string[] }[] = []
   let emailState = 1
   let mailboxState = 1
@@ -256,6 +259,7 @@ export async function startMockJmap(opts: { port?: number; token?: string; host?
     }
     for (const [name, rawArgs, callId] of body.methodCalls as [string, J, string][]) {
       calls.push(name)
+      methodCalls.push([name, rawArgs])
       const args = resolve(rawArgs)
       if (typeof args === 'string') {
         responses.push(['error', { type: args }, callId])
@@ -541,6 +545,7 @@ export async function startMockJmap(opts: { port?: number; token?: string; host?
     blobs,
     submissions,
     calls,
+    methodCalls,
     streams: () => streams.size,
     deliver: (e) => make({ from: [{ name: 'Erin Sender', email: 'erin@example.test' }], subject: 'A new message', text: 'Fresh in.', ...e } as SeedEmail),
     state: () => String(emailState),
