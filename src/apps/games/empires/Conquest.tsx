@@ -1,15 +1,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DIFFICULTY, type Difficulty, type Profile } from './ai'
-import { FACTIONS, MODULE, REBUILD, UNIT, WORKS_NAME, buildable, isShip, modulesFor, moduleLook, stationType, yardOf, yardType, type FactionId, type ModuleId, type UnitType, type Works } from './data'
+import { FACTIONS, MODULE, REBUILD, UNIT, WORKS_NAME, buildable, modulesFor, moduleLook, stationType, yardOf, yardType, type FactionId, type ModuleId, type UnitType, type Works } from './data'
 import {
   BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GALAXY_AI, GIANTS, blockadeIn, canSee, contested, known, ownerFor, sees, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
-  autoResolve, buildAt, buildWork, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, cantWork, isWork, isYard, worksUp, workCost, workLock, workName, workTime, yardLock, YARD_KINDS, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
+  autoResolve, buildAt, buildWork, cantRushAt, queueShare, rushIntoBattle, rushLaunch, rushOffered, rushSlot, RUSH_GC, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, cantWork, isWork, isYard, worksUp, workCost, workLock, workName, workTime, yardLock, YARD_KINDS, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
   galaxyProfile, settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw, withoutShips,
-  type BattleResult, type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetBase, type PlanetKind, type Side, type StarSystem, type WorkId, type YardKind,
+  type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetBase, type PlanetKind, type Side, type StarSystem, type WorkId, type YardKind,
 } from './galaxy'
 import { BuildPanel, BuildQueue, Floating, Frame, HpIcon, Icon, Pips, SelChip, ShipArt, ShipCard, Tips, storePage, storedPage, unitTip, type IconName } from './Hud'
 import { HP_COLOR } from './icons'
-import { baseLeft } from './sim'
+import { resultOf } from './result'
 import { FleetInventory } from './Inventory'
 import { galaxyLayout } from './layout'
 import type { BattleSnap } from './snapshot'
@@ -1332,8 +1332,8 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
     // Ships the fleets hold back start in the battle's reserve, to be called in from there.
     const sides: FleetSide[] = [
       // The planet's yards and expansions stand round its station (see newFleetBattle).
-      { faction: g.sides[c.holder].faction, team: 0, ships: withoutShips(c.holderShips, c.holderHeld), reserve: c.holderHeld, station: c.station, ...(c.base ? { yards: YARD_KINDS.filter((k) => c.base!.yards[k] === 'up'), exp: [...c.base.mods] } : {}) },
-      { faction: g.sides[c.attacker].faction, team: 1, ships: withoutShips(c.attackerShips, c.attackerHeld), reserve: c.attackerHeld },
+      { faction: g.sides[c.holder].faction, team: 0, ships: withoutShips(c.holderShips, c.holderHeld), reserve: c.holderHeld, rushed: rushIntoBattle(c.holderRush), station: c.station, ...(c.base ? { yards: YARD_KINDS.filter((k) => c.base!.yards[k] === 'up'), exp: [...c.base.mods] } : {}) },
+      { faction: g.sides[c.attacker].faction, team: 1, ships: withoutShips(c.attackerShips, c.attackerHeld), reserve: c.attackerHeld, rushed: rushIntoBattle(c.attackerRush) },
     ]
     const meSide = c.holder === ME ? 0 : 1
     const enemy = meSide === 0 ? c.attacker : c.holder
@@ -2326,6 +2326,20 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
         : isWork(q.unit) ? { ...q, sprite: moduleLook(fac, q.unit as ModuleId), name: MODULE[q.unit as ModuleId].name }
           : q,
   )
+  // Rush launch: the Capital Yard ship being built, once its planet can rush (a Capital Yard, station level 3).
+  const rushAt = rushSlot(p)
+  const rush = ours && rushOffered(p) ? {
+    share: queueShare(p.queue[rushAt]),
+    why: cantRushAt(g, ME, p.id, rushAt),
+    onRush: () => {
+      const why = rushLaunch(g, ME, p.id, rushAt)
+      if (why) {
+        sound.error()
+        toast(why, 'bad')
+      } else sound.constructing()
+    },
+    tip: `Rush launch: ${UNIT[p.queue[rushAt].unit].name} joins the fleet in orbit now, ${Math.floor(queueShare(p.queue[rushAt]) * 100)}% built. It fights as that share of a ship: that much hull, no shields, its last turrets in scaffolding (they don't fire). It finishes by itself, in ${Math.ceil(p.queue[rushAt].left)} s, while its fleet is parked at one of our planets with a Capital Yard or a Drydock; not while flying. This planet then can't rush for ${Math.round(RUSH_GC.cooldown)} s, and its next Capital Yard ship builds ${Math.round(RUSH_GC.slowdown * 100)}% slower.`,
+  } : undefined
   const yardsUp = YARD_KINDS.filter((k) => p.base.yards[k] === 'up').length
   const allMods = modulesFor('station').length + modulesFor('yard').length + modulesFor('cyard').length
   const stationBtn = p.station < 4 && (
@@ -2337,7 +2351,7 @@ function PlanetDock({ g, p, sound, onClose, onFleet, onLook, toast }: { g: Galax
   return (
     <Floating id="gDock" bare at={{ left: 375, bottom: 6 }} className="ew-detailfloat ew-gdock" layout={galaxyLayout}>
       <div className="ew-stationwrap">
-        {ours && (p.station > 0 || p.queue.length > 0) && <BuildQueue queue={queue} max={MAX_YARD} campaign onCancel={(i) => (cancelBuild(g, ME, p.id, i), sound.unqueued())} />}
+        {ours && (p.station > 0 || p.queue.length > 0) && <BuildQueue queue={queue} max={MAX_YARD} campaign rush={rush} onCancel={(i) => (cancelBuild(g, ME, p.id, i), sound.unqueued())} />}
         <Frame className={`ew-detail is-station ew-gplanet ${theirs ? 'is-enemy' : ''}`}>
           <div className="ew-detail-side">
             <button className="ew-gp-look" onClick={onLook} data-tip="Zoom in on it">
@@ -2801,37 +2815,6 @@ function GSheetHead({ g, sel, onDeselect, onClose }: { g: Galaxy; sel: NonNullab
       <button onClick={onClose} aria-label="Close">Close</button>
     </div>
   )
-}
-
-/** The battle that's over: who won, what's left on each side, and who jumped out. */
-function resultOf(w: World, c: Clash, meSide: number, left: boolean): BattleResult {
-  const owners = [c.holder, c.attacker]
-  const winSide = left ? 1 - meSide : w.winner
-  const survivors: Record<number, string[]> = { [c.holder]: [], [c.attacker]: [] }
-  const escaped: Record<number, string[]> = { [c.holder]: [], [c.attacker]: [] }
-  owners.forEach((o, side) => {
-    const won = side === winSide
-    const p = w.players[side]
-    // A fighter squadron is one fleet entry while any of it lives.
-    const squads = new Set<number>()
-    for (const u of w.units) {
-      if (u.dead || u.owner !== side || !isShip(u.t) || u.parent) continue
-      if (u.squad) {
-        if (squads.has(u.squad)) continue
-        squads.add(u.squad)
-      }
-      if (u.retreat > 0 || (!won && left && side === meSide)) escaped[o].push(u.t.id)
-      else if (won) survivors[o].push(u.t.id)
-    }
-    // Ships that never made it onto the field: still with the fleet, or gone with it.
-    const waiting = [...p.reserve, ...w.arrivals.filter((a) => a.owner === side).map((a) => a.unit)]
-    if (won) survivors[o].push(...waiting)
-    else escaped[o].push(...waiting.filter((id) => UNIT[id].tier !== 'fighter'))
-    escaped[o].push(...p.escaped)
-  })
-  const st = w.byId.get(w.players[0].station)
-  // The holder's yards still standing, and the expansions not shot off (see applyBattle).
-  return { winner: owners[winSide] ?? c.holder, survivors, escaped, stationLeft: !!st && !st.dead, ...(c.base ? { base: baseLeft(w, 0, c.base.mods) } : {}) }
 }
 
 // --- Panels ---------------------------------------------------------------------------------------------

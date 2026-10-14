@@ -7,11 +7,11 @@
 
 import { PROFILES, PROFILE_IDS, type Difficulty, type Profile } from './ai.ts'
 import {
-  FACTIONS, MODULE, MODULE_FX, REBUILD, UNIT, WORKS_NAME, buildable, builtAt, needsModule, stationType, unitOf, yardOf, yardType,
+  FACTIONS, MODULE, MODULE_FX, REBUILD, RUSH, UNIT, WORKS_NAME, buildable, builtAt, needsModule, stationType, unitOf, yardOf, yardType,
   type FactionId, type ModuleId, type Tier, type UnitType, type Works,
 } from './data.ts'
 import { rng } from './maps.ts'
-import { dpsVs } from './sim.ts'
+import { dpsVs, type RushedIn } from './sim.ts'
 
 export type PlanetKind = 'desert' | 'ice' | 'lava' | 'ocean' | 'jungle' | 'city' | 'gas' | 'barren' | 'icegiant' | 'stormgiant' | 'toxic' | 'swamp' | 'crystal' | 'tundra'
 /** Gas giants: big, and their clouds fill a battle over them with nebulas. */
@@ -56,6 +56,31 @@ export const SHIP_TIME = 1.5
  * ships do: a Frigate Yard goes up in about the time of a station upgrade. */
 export const WORKS_TIME = SHIP_TIME
 
+/**
+ * Rush launch on the galaxy map (the skirmish's data.ts RUSH, without its research): a planet with a
+ * Capital Yard and a station of level `station` or more can launch the cruiser or flagship it is
+ * building once it is `min` built. Its yard then waits `cooldown` before it can rush again, and its
+ * next Capital Yard ship builds `slowdown` slower. The cooldown is RUSH's, times SHIP_TIME like every
+ * build time here (a ship's build takes SHIP_TIME times its skirmish time on this clock).
+ */
+export const RUSH_GC = { min: RUSH.min, cooldown: RUSH.cooldown * SHIP_TIME, slowdown: RUSH.slowdown, station: 3 }
+/**
+ * A ship launched before it was finished: `done`, the share of it that was built (its hull in a
+ * battle; its strength in an auto-resolved one) and `left`, the seconds of building still to do on
+ * the galaxy clock. Done only while its fleet is parked at a planet of ours with a Capital Yard or a
+ * Drydock, at the pace of a normal build (so it never finishes sooner than building it would have
+ * taken); not while flying, nor at any other planet.
+ */
+export type Rushed = { done: number; left: number }
+/** A rushed ship in a battle's lists (the ship itself is in the `Ships` list as any other). */
+export type RushedShip = Rushed & { unit: string; held?: boolean }
+/** A clash's rushed ships as a battle takes them (FleetSide.rushed): the battle's clock is SHIP_TIMEs faster than the galaxy's. */
+export const rushIntoBattle = (list: RushedShip[] = []): RushedIn[] => list.map((r) => ({ unit: r.unit, built: r.done, left: r.left / SHIP_TIME, ...(r.held ? { held: true } : {}) }))
+/** A battle's still unfinished ship (`left` of the battle's seconds) as a clash's list has it. */
+export const rushFromBattle = (unit: string, left: number, held = false): RushedShip => ({ unit, done: Math.max(0, Math.min(1, 1 - left / Math.max(0.001, UNIT[unit].build))), left: left * SHIP_TIME, ...(held ? { held: true } : {}) })
+/** The share of a ship built when `left` seconds of its (galaxy clock) build time remain. */
+export const rushDone = (unit: string, left: number) => Math.max(0, Math.min(1, 1 - left / Math.max(0.001, UNIT[unit].build * SHIP_TIME)))
+
 /** The yards a planet can have round its Command Station (hybrid bases: data.ts, Yards). */
 export type YardKind = 'yard' | 'cyard'
 export const YARD_KINDS: YardKind[] = ['yard', 'cyard']
@@ -99,7 +124,11 @@ export type Planet = {
    * first one in progress (the first two ships with a Second slip). A finished ship waits on its
    * slip (`full`) while every fleet here is full and there are MAX_FLEETS of them. `paid`: what a
    * yard or an expansion cost when it was queued (a ruin's rebuild is cheaper), for a refund. */
-  queue: { unit: string; left: number; total: number; full?: boolean; paid?: number }[]
+  queue: { unit: string; left: number; total: number; full?: boolean; paid?: number; /** Built RUSH_GC.slowdown slower: the ship started after a rush launch. */ slow?: boolean }[]
+  /** Rush launch: when this planet's Capital Yard may rush a ship again (galaxy time), and a rush
+   * with nothing else queued: the next Capital Yard ship it queues goes slower. */
+  rushAt?: number
+  slowNext?: boolean
   /** Who is taking it, and how far along (seconds). */
   capture: { owner: number; t: number } | null
 }
@@ -169,8 +198,9 @@ export type GalaxyEvent =
   | { k: 'works'; planet: number; owner: number; what: WorkId }
 
 export type Galaxy = {
-  /** 2 since planets have buildings (yards and expansions); 1 before (see clean). */
-  v: 2
+  /** 3 since ships can be rush-launched unfinished (Item.rush, Planet.rushAt); 2 since planets have
+   * buildings (yards and expansions); 1 before (see clean). */
+  v: 3
   /** The save slot it lives in, and the name the player gave it. */
   save: { id: string; name: string }
   name: string
@@ -367,7 +397,7 @@ export function newGalaxy(opts: NewGalaxy): Galaxy {
   const r = rng(seed * 31 + 17)
   const defs = opts.choice.kind === 'rim' ? RIM_WARS.filter((s) => s.tier <= (opts.size === 'short' ? 1 : opts.size === 'standard' ? 2 : 3)) : generatedDefs(seed, SIZES[opts.size].systems)
   const g: Galaxy = {
-    v: 2,
+    v: 3,
     save: { id: newSaveId(), name: opts.name?.trim() || `${opts.choice.kind === 'rim' ? GALAXIES.rim.name : `Sector ${seed}`}, ${FACTIONS[opts.faction].name}` },
     name: opts.choice.kind === 'rim' ? GALAXIES.rim.name : `Sector ${seed}`,
     seed,
@@ -465,7 +495,7 @@ export const GRID_H = 4
 export const STACK = 3
 /** One thing on a fleet's grid: a ship, or a stack of strike craft of one type, at (x, y) from the
  * top left, `w` cells wide and `h` tall (a ship turned on its side has the two swapped). */
-export type Item = { unit: string; n: number; x: number; y: number; w: number; h: number; held?: boolean }
+export type Item = { unit: string; n: number; x: number; y: number; w: number; h: number; held?: boolean; /** A ship rush-launched unfinished (always a single ship, never a stack). */ rush?: Rushed }
 
 /**
  * The cells a ship takes up by tier, wide by tall as it sits upright: strike craft and gunships one
@@ -511,7 +541,7 @@ const cloneItems = (items: Item[]) => items.map((i) => ({ ...i }))
 
 /** Puts up to `n` ships of a type into a layout: strike craft top up the stacks of their type (held
  * back with held back) first, then everything takes the first free spot. Returns how many went in. */
-function place(items: Item[], unit: string, n: number, held = false): number {
+function place(items: Item[], unit: string, n: number, held = false, rush?: Rushed): number {
   let left = n
   if (stacks(unit))
     for (const it of items) {
@@ -526,7 +556,7 @@ function place(items: Item[], unit: string, n: number, held = false): number {
     const at = spotFor(items, w, h)
     if (!at) break
     const k = stacks(unit) ? Math.min(STACK, left) : 1
-    items.push({ unit, n: k, ...at, ...(held ? { held: true } : {}) })
+    items.push({ unit, n: k, ...at, ...(held ? { held: true } : {}), ...(rush && !stacks(unit) ? { rush: { ...rush } } : {}) })
     left -= k
   }
   return n - left
@@ -534,22 +564,24 @@ function place(items: Item[], unit: string, n: number, held = false): number {
 /** How many ships of a type (`n` at most) a fleet still has room for. */
 export const roomFor = (f: Fleet, unit: string, n = 1, held = false) => place(cloneItems(f.items), unit, n, held)
 
-type Loose = { unit: string; held?: boolean }
+type Loose = { unit: string; held?: boolean; rush?: Rushed }
 /** Ships laid out from scratch, biggest first (held back ones as their own stacks); what doesn't fit
  * is `rest`. */
 export function pack(ships: Loose[]): { items: Item[]; rest: Loose[] } {
-  const groups = new Map<string, { unit: string; held: boolean; n: number }>()
+  const groups = new Map<string, { unit: string; held: boolean; n: number; rush?: Rushed }>()
+  let lone = 0
   for (const s of ships) {
-    const key = `${s.unit}|${s.held ? 1 : 0}`
+    // A rushed ship is a group of its own (it carries its state).
+    const key = s.rush ? `${s.unit}|${s.held ? 1 : 0}|r${lone++}` : `${s.unit}|${s.held ? 1 : 0}`
     const gr = groups.get(key)
     if (gr) gr.n++
-    else groups.set(key, { unit: s.unit, held: !!s.held, n: 1 })
+    else groups.set(key, { unit: s.unit, held: !!s.held, n: 1, ...(s.rush ? { rush: s.rush } : {}) })
   }
   const items: Item[] = []
   const rest: Loose[] = []
-  for (const gr of [...groups.values()].sort((a, b) => bigFirst(a.unit, b.unit) || Number(a.held) - Number(b.held))) {
-    const k = place(items, gr.unit, gr.n, gr.held)
-    for (let i = k; i < gr.n; i++) rest.push({ unit: gr.unit, held: gr.held })
+  for (const gr of [...groups.values()].sort((a, b) => bigFirst(a.unit, b.unit) || Number(a.held) - Number(b.held) || Number(!!a.rush) - Number(!!b.rush))) {
+    const k = place(items, gr.unit, gr.n, gr.held, gr.rush)
+    for (let i = k; i < gr.n; i++) rest.push({ unit: gr.unit, held: gr.held, ...(gr.rush ? { rush: gr.rush } : {}) })
   }
   return { items, rest }
 }
@@ -561,7 +593,7 @@ export function sync(f: Fleet) {
 /** Cells of a fleet's grid in use. */
 export const cellsUsed = (f: Fleet) => f.items.reduce((s, i) => s + i.w * i.h, 0)
 /** A fleet's ships as loose ships: what each is and whether it's held back. */
-const looseOf = (f: Fleet): Loose[] => f.items.flatMap((i) => Array.from({ length: i.n }, () => ({ unit: i.unit, held: !!i.held })))
+const looseOf = (f: Fleet): Loose[] => f.items.flatMap((i) => Array.from({ length: i.n }, (): Loose => ({ unit: i.unit, held: !!i.held, ...(i.rush ? { rush: { ...i.rush } } : {}) })))
 
 /** A new, empty fleet of ours in orbit of a planet (no orders). */
 function newFleet(g: Galaxy, owner: number, planet: number, arrived = g.time): Fleet {
@@ -585,7 +617,7 @@ const dockOrder = (fs: Fleet[]) => fs.slice().sort((a, b) => Number(!!a.waypoint
 function dock(g: Galaxy, owner: number, planet: number, ships: Loose[], spill = false): Loose[] {
   let rest = ships.slice().sort((a, b) => bigFirst(a.unit, b.unit))
   for (const f of dockOrder(fleetsHere(g, owner, planet))) {
-    rest = rest.filter((s) => place(f.items, s.unit, 1, !!s.held) === 0)
+    rest = rest.filter((s) => place(f.items, s.unit, 1, !!s.held, s.rush) === 0)
     sync(f)
   }
   while (rest.length && (spill || fleetsHere(g, owner, planet).length < MAX_FLEETS)) {
@@ -668,7 +700,7 @@ function splitOff(g: Galaxy, f: Fleet, take: string[]): Fleet {
   nf.from = f.from
   for (const [id, n] of grouped(take)) {
     let left = n
-    for (const it of f.items.filter((i) => i.unit === id).sort((a, b) => Number(!!a.held) - Number(!!b.held))) {
+    for (const it of f.items.filter((i) => i.unit === id).sort((a, b) => Number(!!a.held) - Number(!!b.held) || Number(!!a.rush) - Number(!!b.rush))) {
       if (!left) break
       const k = Math.min(left, it.n)
       nf.items.push({ ...it, n: k })
@@ -738,14 +770,14 @@ export function moveItem(g: Galaxy, owner: number, from: ItemRef, to: ItemDrop, 
       if (!fitsAt(b.items, w, h, to.x, to.y, b === a && whole ? it : undefined)) return 'No room there'
       if (b === a && whole) Object.assign(it, { x: to.x, y: to.y, w, h })
       else {
-        b.items.push({ unit: it.unit, n: k, x: to.x, y: to.y, w, h, ...(it.held ? { held: true } : {}) })
+        b.items.push({ unit: it.unit, n: k, x: to.x, y: to.y, w, h, ...(it.held ? { held: true } : {}), ...(it.rush ? { rush: { ...it.rush } } : {}) })
         it.n -= k
       }
     }
   } else if (b !== a) {
     // Anywhere it fits (a new fleet takes it at the top left, the way it was turned).
     const at = fresh ? { x: 0, y: 0, w, h } : null
-    const went = at ? (b.items.push({ unit: it.unit, n: k, ...at, ...(it.held ? { held: true } : {}) }), k) : place(b.items, it.unit, k, !!it.held)
+    const went = at ? (b.items.push({ unit: it.unit, n: k, ...at, ...(it.held ? { held: true } : {}), ...(it.rush ? { rush: { ...it.rush } } : {}) }), k) : place(b.items, it.unit, k, !!it.held, it.rush)
     if (!went) return `No room for ${UNIT[it.unit].name} in that fleet`
     it.n -= went
   }
@@ -821,10 +853,14 @@ export function layoutFleets(g: Galaxy) {
     // Held back: each item's own mark, or (old saves) the counts by type.
     const held: Record<string, number> = { ...(f.reserve ?? {}) }
     for (const i of items) if (i.held) held[i.unit] = (held[i.unit] ?? 0) + i.n
+    // A rushed ship keeps its state (old saves have none).
+    const rushes = new Map<string, Rushed[]>()
+    for (const i of items) if (i.rush) rushes.set(i.unit, [...(rushes.get(i.unit) ?? []), i.rush])
     const loose = (f.ships ?? []).map((unit): Loose => {
       const h = (held[unit] ?? 0) > 0
       if (h) held[unit]--
-      return { unit, held: h }
+      const rush = rushes.get(unit)?.shift()
+      return { unit, held: h, ...(rush ? { rush } : {}) }
     })
     delete f.reserve
     let r = pack(loose)
@@ -1240,9 +1276,74 @@ export function buildAt(g: Galaxy, owner: number, planet: number, unit: string):
   s.spent.ships += t.cost
   book(s, calendar(g.time).day, -t.cost, `${t.name} at ${g.planets[planet].name}`)
   const time = t.build * SHIP_TIME
-  g.planets[planet].queue.push({ unit, left: time, total: time })
+  const p = g.planets[planet]
+  // The ship a Capital Yard starts after a rush launch builds slower (RUSH_GC.slowdown).
+  const slow = p.slowNext && builtAt(t) === 'cyard'
+  if (slow) p.slowNext = false
+  p.queue.push({ unit, left: time, total: time, ...(slow ? { slow: true } : {}) })
   return null
 }
+
+// --- Rush launch ------------------------------------------------------------------------------------------
+
+/** How many of a planet's queue entries are being built at once: two ships with a Second slip, else
+ * the first (a building or an upgrade goes on its own). */
+export function activeSlots(p: Planet) {
+  if (!p.queue.length) return 0
+  return p.base.mods.includes('secondSlip') && p.queue.length > 1 && !isWork(p.queue[0].unit) && !isWork(p.queue[1].unit) ? 2 : 1
+}
+/** The queue entry a planet's rush launch would send out: the first being built that is a Capital
+ * Yard ship (a cruiser or flagship), or -1 when there is none. */
+export function rushSlot(p: Planet) {
+  const n = activeSlots(p)
+  for (let i = 0; i < n; i++) if (!isWork(p.queue[i].unit) && UNIT[p.queue[i].unit] && builtAt(UNIT[p.queue[i].unit]) === 'cyard') return i
+  return -1
+}
+/** The share (0-1) built of a queue entry. */
+export const queueShare = (q: Planet['queue'][number]) => Math.max(0, 1 - q.left / Math.max(0.001, q.total))
+/** Whether the Rush launch button shows on a planet at all: its Capital Yard stands, its station is
+ * level RUSH_GC.station or more and a Capital Yard ship is being built. */
+export const rushOffered = (p: Planet) => p.base.yards.cyard === 'up' && p.station >= RUSH_GC.station && rushSlot(p) >= 0
+
+/** Why planet `planet` of ours can't rush-launch the Capital Yard ship in its queue (at `index`, by
+ * default the first being built) now, or null when it can. */
+export function cantRushAt(g: Galaxy, owner: number, planet: number, index?: number): string | null {
+  const p = g.planets[planet]
+  if (!p || p.owner !== owner) return 'Not our planet'
+  if (p.base.yards.cyard !== 'up') return 'Needs a Capital Yard here'
+  if (p.station < RUSH_GC.station) return `Needs station level ${RUSH_GC.station}`
+  const i = index ?? rushSlot(p)
+  const q = p.queue[i]
+  if (!q || i < 0 || i >= activeSlots(p) || isWork(q.unit) || !UNIT[q.unit] || builtAt(UNIT[q.unit]) !== 'cyard') return 'No Capital Yard ship being built'
+  const share = queueShare(q)
+  if (q.left <= 0) return 'Already finished'
+  if (share < RUSH_GC.min) return `Not ${Math.round(RUSH_GC.min * 100)}% built yet (${Math.floor(share * 100)}%)`
+  if ((p.rushAt ?? -Infinity) > g.time) return `Ready again in ${Math.ceil((p.rushAt ?? 0) - g.time)} s`
+  if (!yardRoom(g, owner, planet, q.unit)) return 'Every fleet here is full'
+  return null
+}
+
+/**
+ * Rush launch: the Capital Yard ship being built at a planet joins the fleets in its orbit now,
+ * unfinished (see Rushed). The planet's yard can't rush again for RUSH_GC.cooldown seconds, and the
+ * next Capital Yard ship it builds goes slower.
+ */
+export function rushLaunch(g: Galaxy, owner: number, planet: number, index?: number): string | null {
+  const why = cantRushAt(g, owner, planet, index)
+  if (why) return why
+  const p = g.planets[planet]
+  const i = index ?? rushSlot(p)
+  const q = p.queue.splice(i, 1)[0]
+  const done = queueShare(q)
+  dock(g, owner, planet, [{ unit: q.unit, rush: { done, left: q.left } }])
+  p.rushAt = g.time + RUSH_GC.cooldown
+  const next = p.queue.find((x) => !isWork(x.unit) && UNIT[x.unit] && builtAt(UNIT[x.unit]) === 'cyard')
+  if (next) next.slow = true
+  else p.slowNext = true
+  g.events.push({ k: 'built', planet, owner, unit: q.unit })
+  return null
+}
+
 /** Upgrading a station can be queued behind the ships already building: it goes to the back of the queue, so it
  * starts once everything ahead of it is done, and its credits are charged when it is queued, like a ship's. Only one
  * upgrade can sit in a planet's queue at a time. */
@@ -1374,7 +1475,9 @@ function dropOrphans(g: Galaxy, p: Planet) {
 /** A battle waiting at a planet: who holds it, who attacks, and with what. The `Held` lists are
  * the part of each side's ships its fleets hold back in the reserve (included in `Ships`). `base`:
  * the holder's yards and expansions round its station (only when it owns the planet and has one). */
-export type Clash = { planet: number; holder: number; attacker: number; station: number; holderShips: string[]; attackerShips: string[]; holderHeld: string[]; attackerHeld: string[]; base?: PlanetBase }
+export type Clash = { planet: number; holder: number; attacker: number; station: number; holderShips: string[]; attackerShips: string[]; holderHeld: string[]; attackerHeld: string[]; base?: PlanetBase
+  /** The ships among them rush-launched unfinished (see Rushed), by side. */
+  holderRush?: RushedShip[]; attackerRush?: RushedShip[] }
 
 export function clashAt(g: Galaxy, planet: number): Clash | null {
   const p = g.planets[planet]
@@ -1389,7 +1492,10 @@ export function clashAt(g: Galaxy, planet: number): Clash | null {
   const ships = (o: number) => here.filter((f) => f.owner === o).flatMap((f) => f.ships)
   const held = (o: number) => here.filter((f) => f.owner === o).flatMap(heldShips)
   const station = p.owner === holder ? p.station : 0
-  return { planet, holder, attacker, station, holderShips: ships(holder), attackerShips: ships(attacker), holderHeld: held(holder), attackerHeld: held(attacker), ...(station ? { base: copyBase(p.base) } : {}) }
+  const rushed = (o: number): RushedShip[] => here.filter((f) => f.owner === o).flatMap((f) => f.items.flatMap((i) => (i.rush ? [{ unit: i.unit, ...i.rush, ...(i.held ? { held: true } : {}) }] : [])))
+  const hr = rushed(holder)
+  const ar = rushed(attacker)
+  return { planet, holder, attacker, station, holderShips: ships(holder), attackerShips: ships(attacker), holderHeld: held(holder), attackerHeld: held(attacker), ...(station ? { base: copyBase(p.base) } : {}), ...(hr.length ? { holderRush: hr } : {}), ...(ar.length ? { attackerRush: ar } : {}) }
 }
 
 /** Seconds into an auto-resolved battle before held back ships are called in (sooner when nothing
@@ -1406,7 +1512,10 @@ export const AUTO_YARD = { hull: 0.35, aim: 0.85 }
 /** How a battle ended: the winning side, and what's left of each side. Ships that jumped out are
  * `escaped`: they go back where they came from. `base`: the holder's yards still standing and the
  * expansions not shot off (left out: its buildings came through as they were). */
-export type BattleResult = { winner: number; survivors: Record<number, string[]>; escaped: Record<number, string[]>; stationLeft: boolean; base?: { yards: YardKind[]; mods: ModuleId[] } }
+export type BattleResult = { winner: number; survivors: Record<number, string[]>; escaped: Record<number, string[]>; stationLeft: boolean; base?: { yards: YardKind[]; mods: ModuleId[] }
+  /** The ships among the survivors and the escaped still unfinished, by side, and how far along
+   * (see Rushed). Absent: the fleets' rushed ships are left as they were. */
+  rushed?: Record<number, RushedShip[]> }
 
 /**
  * A quick result without playing it out: both sides trade damage once a second, each ship firing at
@@ -1424,16 +1533,27 @@ export type BattleResult = { winner: number; survivors: Record<number, string[]>
  */
 export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
   const r = rng(Math.floor(seed * 1000) + c.planet)
-  type U = { side: number; id: string; tier: Tier; hp: number; max: number; dps: (tier: Tier) => number; station?: boolean; yard?: YardKind; late?: boolean }
+  type U = { side: number; id: string; tier: Tier; hp: number; max: number; dps: (tier: Tier) => number; station?: boolean; yard?: YardKind; late?: boolean; rush?: RushedShip }
   const mods = c.base?.mods ?? []
   const plate = (o: number, t: UnitType) => (o === c.holder && mods.includes('armourWorks') && (t.tier === 'frigate' || t.kind === 'support') ? 1 + MODULE_FX.armour : 1)
-  const mk = (side: number, id: string, late = false): U => {
+  // A rushed ship counts at its built share: that much hull, no shields, that much of its guns.
+  const mk = (side: number, id: string, late = false, rush?: RushedShip): U => {
     const t = UNIT[id]
-    const hp = (t.hull * plate(side, t) + t.shield) * t.squad
-    return { side, id, tier: t.tier, hp, max: hp, dps: (tier) => dpsVs(t, tier) * t.squad, ...(late ? { late } : {}) }
+    const share = rush ? Math.max(0.05, Math.min(1, rush.done)) : 1
+    const hp = rush ? t.hull * plate(side, t) * share * t.squad : (t.hull * plate(side, t) + t.shield) * t.squad
+    return { side, id, tier: t.tier, hp, max: hp, dps: (tier) => dpsVs(t, tier) * t.squad * share, ...(late ? { late } : {}), ...(rush ? { rush } : {}) }
   }
-  const side = (o: number, ships: string[], held: string[] = []) => [...withoutShips(ships, held).map((id) => mk(o, id)), ...held.map((id) => mk(o, id, true))]
-  const us: U[] = [...side(c.holder, c.holderShips, c.holderHeld), ...side(c.attacker, c.attackerShips, c.attackerHeld)]
+  const side = (o: number, ships: string[], held: string[] = [], rushed: RushedShip[] = []) => {
+    const pool = rushed.slice()
+    // Each of the side's rushed ships is one of its ships of that type (a held back one among the held back first).
+    const take = (id: string, heldBack: boolean) => {
+      let i = pool.findIndex((r) => r.unit === id && !!r.held === heldBack)
+      if (i < 0) i = pool.findIndex((r) => r.unit === id)
+      return i >= 0 ? pool.splice(i, 1)[0] : undefined
+    }
+    return [...withoutShips(ships, held).map((id) => mk(o, id, false, take(id, false))), ...held.map((id) => mk(o, id, true, take(id, true)))]
+  }
+  const us: U[] = [...side(c.holder, c.holderShips, c.holderHeld, c.holderRush), ...side(c.attacker, c.attackerShips, c.attackerHeld, c.attackerRush)]
   if (c.station) {
     const faction = g.sides[c.holder].faction
     const t = stationType(faction, c.station, [], mods.filter((id) => MODULE[id].on === 'station'))
@@ -1451,6 +1571,7 @@ export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
   const total = (side: number) => us.filter((u) => u.side === side && u.hp > 0).reduce((s, u) => s + u.hp, 0)
   const start = { [c.holder]: total(c.holder), [c.attacker]: total(c.attacker) } as Record<number, number>
   let escaped: string[] = []
+  const escapedSet = new Set<U>()
   for (let t = 0; t < 900; t++) {
     // The reserve is called in.
     for (const u of us) if (u.late && (t >= RESERVE_CALL || !us.some((x) => x.side === u.side && !x.late && x.hp > 0))) u.late = false
@@ -1475,12 +1596,17 @@ export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
     for (const [u, d] of dmg) u.hp -= d
     // A beaten attacker jumps out with what's left (fighters can't make the jump).
     if (t > 20 && total(c.attacker) < start[c.attacker] * 0.3 && total(c.holder) > start[c.holder] * 0.5) {
-      escaped = us.filter((u) => u.side === c.attacker && u.hp > 0 && u.tier !== 'fighter').map((u) => u.id)
+      const out = us.filter((u) => u.side === c.attacker && u.hp > 0 && u.tier !== 'fighter')
+      escaped = out.map((u) => u.id)
+      for (const u of out) escapedSet.add(u)
       for (const u of us) if (u.side === c.attacker) u.hp = 0
       break
     }
   }
   const left = (side: number) => us.filter((u) => u.side === side && u.hp > 0 && !u.station && !u.yard).map((u) => u.id)
+  // Rushed ships that came through are still unfinished (nothing is built in a battle played this way);
+  // the attacker's that jumped out took their state along (their hp is zeroed at that point).
+  const rushedOf = (side: number) => us.filter((u) => u.side === side && u.rush && (u.hp > 0 || (escaped.length && escapedSet.has(u)))).map((u) => ({ unit: u.id, done: u.rush!.done, left: u.rush!.left }))
   const holderLeft = us.some((u) => u.side === c.holder && u.hp > 0 && !u.yard)
   if (!holderLeft) for (const u of us) if (u.yard) u.hp = 0
   const stationLeft = us.some((u) => u.station && u.hp > 0)
@@ -1490,6 +1616,7 @@ export function autoResolve(g: Galaxy, c: Clash, seed = g.time): BattleResult {
     survivors: { [c.holder]: left(c.holder), [c.attacker]: left(c.attacker) },
     escaped: { [c.holder]: [], [c.attacker]: escaped },
     stationLeft,
+    ...(c.holderRush?.length || c.attackerRush?.length ? { rushed: { [c.holder]: rushedOf(c.holder), [c.attacker]: rushedOf(c.attacker) } } : {}),
     ...(c.base ? { base: { yards, mods: mods.filter((id) => (MODULE[id].on === 'station' ? stationLeft : yards.includes(MODULE[id].on as YardKind))) } } : {}),
   }
 }
@@ -1520,7 +1647,7 @@ function fallback(g: Galaxy, owner: number, prefer: number, not: number) {
  * layouts, stops and held back ships; fleets with nothing left are gone. Ships without a place of
  * their own (a station's side has no fleet there) dock as new fleets.
  */
-function refill(g: Galaxy, owner: number, planet: number, old: Fleet[], ships: string[]): Fleet[] {
+function refill(g: Galaxy, owner: number, planet: number, old: Fleet[], ships: string[], rushed?: RushedShip[]): Fleet[] {
   const left = new Map(grouped(ships))
   for (const f of old) {
     for (const it of f.items.slice().sort((a, b) => Number(!!b.held) - Number(!!a.held))) {
@@ -1534,7 +1661,17 @@ function refill(g: Galaxy, owner: number, planet: number, old: Fleet[], ships: s
   const before = new Set(g.fleets)
   const rest = [...left].flatMap(([unit, n]) => Array.from({ length: Math.max(0, n) }, () => ({ unit })))
   if (rest.length) dock(g, owner, planet, rest, true)
-  return [...old.filter((f) => f.items.length), ...g.fleets.filter((f) => !before.has(f))]
+  const out = [...old.filter((f) => f.items.length), ...g.fleets.filter((f) => !before.has(f))]
+  // A battle that says which ships are still unfinished: those, and no others, are (the ones that
+  // finished during it, or died, are not).
+  if (rushed) {
+    for (const f of out) for (const it of f.items) delete it.rush
+    for (const r of rushed) {
+      const it = out.flatMap((f) => f.items).find((i) => i.unit === r.unit && !i.rush && !stacks(i.unit) && !!i.held === !!r.held) ?? out.flatMap((f) => f.items).find((i) => i.unit === r.unit && !i.rush && !stacks(i.unit))
+      if (it) it.rush = { done: r.done, left: r.left }
+    }
+  }
+  return out
 }
 
 /** Settle a battle: survivors stay (the winner keeps or takes the planet), escaped ships fly back. */
@@ -1551,7 +1688,7 @@ export function applyBattle(g: Galaxy, c: Clash, res: BattleResult, auto: boolea
     if (ships.length) {
       // Survivors stay, with any of theirs that jumped out (they're back with the fleet), and carry
       // on with the stops their fleets had queued.
-      for (const f of refill(g, o, c.planet, old, [...ships, ...esc])) f.arrived = o === c.holder ? g.time - 1 : g.time
+      for (const f of refill(g, o, c.planet, old, [...ships, ...esc], res.rushed?.[o])) f.arrived = o === c.holder ? g.time - 1 : g.time
       continue
     }
     const to = esc.length ? fallback(g, o, back, c.planet) : -1
@@ -1560,7 +1697,7 @@ export function applyBattle(g: Galaxy, c: Clash, res: BattleResult, auto: boolea
       continue
     }
     // Out of the battle at once: flying to the fallback planet.
-    for (const f of refill(g, o, c.planet, old, esc)) moveFleet(g, o, f.id, to)
+    for (const f of refill(g, o, c.planet, old, esc, res.rushed?.[o])) moveFleet(g, o, f.id, to)
   }
   // The holder's buildings: a yard destroyed in the battle is a ruin now (its expansions gone with
   // it), and an expansion shot off is lost; both are built again from the planet's queue.
@@ -1620,9 +1757,8 @@ export function tickGalaxy(g: Galaxy, dt: number) {
   // two ships in the queue are built at once (a building or an upgrade still goes on its own).
   for (const p of g.planets) {
     if (!p.queue.length || p.owner < 0) continue
-    const two = p.base.mods.includes('secondSlip') && p.queue.length > 1 && !isWork(p.queue[0].unit) && !isWork(p.queue[1].unit)
-    for (const q of p.queue.slice(0, two ? 2 : 1)) {
-      q.left -= dt
+    for (const q of p.queue.slice(0, activeSlots(p))) {
+      q.left -= q.slow ? dt / (1 + RUSH_GC.slowdown) : dt
       if (q.left > 0) continue
       if (!isWork(q.unit) && !yardRoom(g, p.owner, p.id, q.unit)) {
         // Every fleet here is full and there are MAX_FLEETS of them: the finished ship waits on its
@@ -1650,6 +1786,19 @@ export function tickGalaxy(g: Galaxy, dt: number) {
         dock(g, p.owner, p.id, [{ unit: q.unit }])
         g.events.push({ k: 'built', planet: p.id, owner: p.owner, unit: q.unit })
       }
+    }
+  }
+  // Rushed ships get finished while their fleet is parked at a planet of ours with a Capital Yard or
+  // a Drydock standing, at the pace of a normal build (never while flying or anywhere else).
+  for (const f of g.fleets) {
+    if (f.leg || f.planet < 0 || !f.items.some((i) => i.rush)) continue
+    const at = g.planets[f.planet]
+    if (at.owner !== f.owner || !(at.base.yards.cyard === 'up' || at.base.mods.includes('drydock'))) continue
+    for (const it of f.items) {
+      if (!it.rush) continue
+      it.rush.left -= dt
+      if (it.rush.left <= 0) delete it.rush
+      else it.rush.done = rushDone(it.unit, it.rush.left)
     }
   }
   // Fleets in flight.
@@ -1730,6 +1879,8 @@ export function tickGalaxy(g: Galaxy, dt: number) {
         p.earned = 0
         p.capture = null
         p.queue = []
+        delete p.rushAt
+        delete p.slowNext
         // Its base fell with its station before it could be taken: the new owner finds the ruins.
         razeBase(p)
         // The side that lost it knows, even if it sees nothing there any more.
@@ -2118,6 +2269,20 @@ function galaxyAi(g: Galaxy, o: number) {
     }
   }
 
+  // A rush launch of the Capital Yard ship in the queue when its planet is threatened: an enemy fleet
+  // it can see in the system or next to it, worth more than what holds the planet (its fleets there
+  // and its yards, as defence() counts them). It reads fleets only through what its side sees.
+  const rushOut = () => {
+    for (const p of mine) {
+      if (!rushOffered(p) || cantRushAt(g, o, p.id)) continue
+      const near = new Set([p.system, ...neighbours(g, p.system)])
+      let foe = 0
+      for (const f of seen) if (near.has(f.leg ? f.leg.system : f.system)) foe += fleetValue(f.ships)
+      const held = fleetsHere(g, o, p.id).reduce((v, f) => v + fleetValue(f.ships), 0) + baseGuard(p.base)
+      if (foe > held) order(() => rushLaunch(g, o, p.id))
+    }
+  }
+
   // 6. Buildings (see planBase), stations, then ships with what orders are left. Ships come from the staging planet's yard
   // (they join the main fleet right there, no order needed to send them), and from another yard
   // only while that one is full, builds bigger ships or money piles up. With few orders to spare it buys bigger ships
@@ -2125,6 +2290,7 @@ function galaxyAi(g: Galaxy, o: number) {
   // the ship is passed over (it would only wait on its slip).
   const spend = () => {
     const yards = mine.filter((p) => p.station > 0)
+    rushOut()
     planBase(g, o, m, yards, order)
     if (yards.length < Math.ceil(mine.length / 3)) {
       const site = mine.filter((p) => !p.station && !p.queue.length).sort((a, b) => b.income - a.income)[0]
@@ -2305,12 +2471,18 @@ function cleanBase(b: PlanetBase | undefined): PlanetBase | undefined {
 /** A saved campaign, made fit for this version of the game, or null. */
 function clean(v: Galaxy | null): Galaxy | null {
   const version = (v as { v?: number } | null)?.v
-  if (!v || (version !== 1 && version !== 2) || !Array.isArray(v.systems) || !Array.isArray(v.planets) || !Array.isArray(v.fleets)) return null
+  if (!v || (version !== 1 && version !== 2 && version !== 3) || !Array.isArray(v.systems) || !Array.isArray(v.planets) || !Array.isArray(v.fleets)) return null
   // Ships that no longer exist in the game are dropped.
   for (const f of v.fleets) {
     f.ships = (f.ships ?? []).filter((id) => UNIT[id])
     if (Array.isArray(f.items)) {
       f.items = f.items.filter((i) => UNIT[i.unit] && i.n > 0)
+      // Rushed ships (version 3): only a single ship with a sound state keeps it; saves from before have none.
+      for (const i of f.items) {
+        const r = i.rush as Partial<Rushed> | undefined
+        if (r && typeof r === 'object' && Number.isFinite(r.done) && Number.isFinite(r.left) && r.left! > 0 && !stacks(i.unit)) i.rush = { done: Math.max(0, Math.min(1, r.done!)), left: r.left! }
+        else delete i.rush
+      }
       sync(f)
     }
     if (f.reserve && typeof f.reserve !== 'object') delete f.reserve
@@ -2330,6 +2502,9 @@ function clean(v: Galaxy | null): Galaxy | null {
     // it build (see baseOfOld), so nothing is lost.
     p.base = cleanBase(p.base) ?? (version === 1 && p.owner >= 0 ? baseOfOld(p.station ?? 0) : emptyBase())
     p.queue = (Array.isArray(p.queue) ? p.queue : []).filter((q) => q.unit === 'station' || UNIT[q.unit] || isWork(q.unit))
+    if (typeof p.rushAt !== 'number') delete p.rushAt
+    if (!p.slowNext) delete p.slowNext
+    for (const q of p.queue) if (!q.slow) delete q.slow
     if (!PLANET_KINDS[p.kind]) p.kind = 'barren'
     // Saves from before planets had their own income.
     p.income ??= PLANET_KINDS[p.kind].income
@@ -2349,7 +2524,7 @@ function clean(v: Galaxy | null): Galaxy | null {
   for (const s of v.sides) if (!Array.isArray(s.intel) || s.intel.length !== v.planets.length) s.intel = chartOf(v)
   // What each side last saw of a planet before there were buildings: what that station level had.
   for (const s of v.sides) for (const i of s.intel!) if (i) i.base = cleanBase(i.base) ?? (version === 1 ? baseOfOld(i.station ?? 0) : emptyBase())
-  v.v = 2
+  v.v = 3
   updateSight(v)
   return v
 }

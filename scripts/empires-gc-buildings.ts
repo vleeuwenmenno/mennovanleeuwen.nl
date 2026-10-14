@@ -4,7 +4,10 @@
 // same spots every time, what a battle leaves of them written back to the planet (a destroyed yard
 // a ruin, its expansions gone), auto-resolved battles fought with them, what a captured planet
 // keeps, campaigns saved before there were buildings, and the galaxy AI planning its planets by its
-// profile over long campaigns without ever running out of ways to build ships.
+// profile over long campaigns without ever running out of ways to build ships. Also the rush launch
+// on the galaxy map: the button's gating, rushed ships in the fleet inventory, finishing over galaxy
+// time at a Capital Yard or Drydock planet only, a battle spawning a rushed ship and writing its
+// progress back, auto-resolve counting its built share, the AI rushing under threat, and old saves.
 //
 //   node scripts/empires-gc-buildings.ts [weeks]
 //
@@ -13,7 +16,8 @@
 import { generateMap, DEFAULT_RULES } from '../src/apps/games/empires/maps.ts'
 import { BUILD_RADIUS, MODULE, REBUILD, UNIT, yardOf, type ModuleId } from '../src/apps/games/empires/data.ts'
 import { PROFILES, fleetThink, newBrain } from '../src/apps/games/empires/ai.ts'
-import { STEP, baseLeft, cantBuild, cmdExpand, newFleetBattle, placement, tick, type FleetSide, type World } from '../src/apps/games/empires/sim.ts'
+import { resultOf } from '../src/apps/games/empires/result.ts'
+import { STEP, baseLeft, cantBuild, cmdDeploy, cmdExpand, newFleetBattle, placement, tick, type FleetSide, type World } from '../src/apps/games/empires/sim.ts'
 import * as G from '../src/apps/games/empires/galaxy.ts'
 import type { Galaxy, Planet } from '../src/apps/games/empires/galaxy.ts'
 
@@ -337,7 +341,7 @@ function copy(b: G.PlanetBase): G.PlanetBase {
   lv2.queue = [{ unit: 'station', left: 10, total: 50 }, { unit: 'r-gunship', left: 21, total: 21 }]
   store.set('mvlos.empires.save.old1', JSON.stringify(old))
   const back = G.loadSave('old1')
-  check('an old save loads', !!back && back.v === 2)
+  check('an old save loads', !!back && back.v === 3)
   const at = (id: number) => back!.planets[id]
   check('a level 3 capital gets both yards it used to build from', at(g.planets.find((p) => p.owner === 0 && p.station === 3)!.id).base.yards.yard === 'up' && at(g.planets.find((p) => p.owner === 0 && p.station === 3)!.id).base.yards.cyard === 'up')
   check('level 2: a Frigate Yard; level 4: both; level 1: none', at(lv2.id).base.yards.yard === 'up' && !at(lv2.id).base.yards.cyard && at(lv4.id).base.yards.cyard === 'up' && G.YARD_KINDS.every((k) => !back!.planets.find((p) => p.station === 1)?.base.yards[k]))
@@ -431,6 +435,395 @@ function copy(b: G.PlanetBase): G.PlanetBase {
   check('every AI built warships from its yards', !noWarships, `${noWarships} without`)
   check('the AIs built yards and expansions', plans.yard > 0 && plans.cyard > 0 && plans.mods > 0, JSON.stringify(plans))
   check('they started with the expansion their profile puts first', profiled > 0, `${profiled} did`)
+}
+
+// --- Rush launch on the galaxy map ----------------------------------------------------------------------
+{
+  const near = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol
+  /** A campaign whose capital has a Capital Yard and a cruiser at 62% in its queue. */
+  const rushCampaign = (share = 0.62) => {
+    const c = campaign()
+    c.cap.base = { yards: { yard: 'up', cyard: 'up' }, mods: [] }
+    G.buildAt(c.g, 0, c.cap.id, 'r-cruiser')
+    c.cap.queue[0].left = c.cap.queue[0].total * (1 - share)
+    return c
+  }
+  const items = (g: Galaxy, planet: number, owner = 0) => G.fleetsHere(g, owner, planet).flatMap((f) => f.items)
+  const rushed = (g: Galaxy, planet: number, owner = 0) => items(g, planet, owner).filter((i) => i.rush)
+  const cruiserTotal = UNIT['r-cruiser'].build * G.SHIP_TIME
+
+  // The button's gating: a Capital Yard, station level 3, a Capital Yard ship at least half built, no cooldown.
+  {
+    const { g, cap } = rushCampaign(0.3)
+    check('under 50% built: no rush, and it says how far along', /^Not 50% built yet \(30%\)/.test(G.cantRushAt(g, 0, cap.id) ?? ''), String(G.cantRushAt(g, 0, cap.id)))
+    check('the button shows for it all the same (disabled)', G.rushOffered(cap))
+    cap.queue[0].left = cap.queue[0].total * 0.38
+    check('at 62% built it can rush', G.cantRushAt(g, 0, cap.id) === null && near(G.queueShare(cap.queue[0]), 0.62, 0.001))
+    check('the enemy can\'t rush our planet\'s ship', G.cantRushAt(g, 1, cap.id) === 'Not our planet')
+    delete cap.base.yards.cyard
+    check('no Capital Yard: no rush, no button', G.cantRushAt(g, 0, cap.id) === 'Needs a Capital Yard here' && !G.rushOffered(cap))
+    cap.base.yards.cyard = 'ruin'
+    check('a ruined Capital Yard is none', G.cantRushAt(g, 0, cap.id) === 'Needs a Capital Yard here')
+    cap.base.yards.cyard = 'up'
+    cap.station = 2
+    check('station below level 3: no rush, no button', G.cantRushAt(g, 0, cap.id) === `Needs station level ${G.RUSH_GC.station}` && !G.rushOffered(cap))
+    cap.station = 3
+    cap.queue.unshift({ unit: 'r-frigate', left: 5, total: 10 })
+    check('a Frigate Yard ship is not rushable, and offers no button', G.cantRushAt(g, 0, cap.id) === 'No Capital Yard ship being built' && !G.rushOffered(cap))
+    cap.queue.shift()
+    cap.queue.unshift({ unit: 'drydock', left: 5, total: 10 })
+    check('nor is a building going up', G.cantRushAt(g, 0, cap.id) === 'No Capital Yard ship being built')
+    cap.queue.shift()
+    check('standing again, the same ship can rush', G.cantRushAt(g, 0, cap.id) === null)
+  }
+
+  // Launching it: the ship joins the fleet in orbit with its state; the planet gets a cooldown and a slowdown.
+  {
+    const { g, cap } = rushCampaign()
+    G.buildAt(g, 0, cap.id, 'r-cruiser')
+    const total = cap.queue[0].total
+    const left = cap.queue[0].left
+    const fleet = G.fleetsHere(g, 0, cap.id)[0]
+    const before = fleet.ships.length
+    check('rush works', G.rushLaunch(g, 0, cap.id) === null && cap.queue.length === 1)
+    const it = rushed(g, cap.id)[0]
+    check('the ship is in a fleet at the planet, rushed', !!it && it.unit === 'r-cruiser' && G.fleetsHere(g, 0, cap.id).reduce((n, f) => n + f.ships.length, 0) === before + 1)
+    check('it carries what was built and what was left', !!it && near(it.rush!.done, 0.62, 0.001) && near(it.rush!.left, left, 1e-6), JSON.stringify(it?.rush))
+    check('its build time is the skirmish time on the galaxy clock', near(total, cruiserTotal, 1e-6) && near(G.rushDone('r-cruiser', left), 0.62, 0.001))
+    check('the cooldown is the skirmish cooldown on the galaxy clock', near(cap.rushAt! - g.time, G.RUSH_GC.cooldown, 1e-6) && G.RUSH_GC.cooldown === 120 * G.SHIP_TIME, `${G.RUSH_GC.cooldown} s`)
+    check('the next Capital Yard ship in its queue builds slower', cap.queue[0].slow === true)
+    const q = cap.queue[0]
+    const l0 = q.left
+    G.tickGalaxy(g, 10)
+    check('25% slower', near(l0 - q.left, 10 / (1 + G.RUSH_GC.slowdown), 1e-6), `${(l0 - q.left).toFixed(3)} s of work in 10 s`)
+    q.left = q.total * 0.2
+    check('on cooldown, no rush (and the time left shows)', /^Ready again in \d+ s/.test(G.cantRushAt(g, 0, cap.id) ?? '') && !G.rushOffered(cap) === false, String(G.cantRushAt(g, 0, cap.id)))
+    g.time += G.RUSH_GC.cooldown
+    check('the cooldown runs out', G.cantRushAt(g, 0, cap.id) === null)
+    // With nothing else queued the slowdown waits for the next ship.
+    const { g: g2, cap: c2 } = rushCampaign()
+    G.rushLaunch(g2, 0, c2.id)
+    check('with nothing else queued, the next ship it queues is the slow one', c2.slowNext === true && !c2.queue.length && (G.buildAt(g2, 0, c2.id, 'r-cruiser'), c2.queue[0].slow === true && !c2.slowNext))
+    check('a ship not from the Capital Yard is not slowed', (() => {
+      const { g: g3, cap: c3 } = rushCampaign()
+      G.rushLaunch(g3, 0, c3.id)
+      G.buildAt(g3, 0, c3.id, 'r-frigate')
+      return !c3.queue[0].slow && c3.slowNext === true
+    })())
+    check('every fleet full: no rush (the ship would have nowhere to go)', (() => {
+      const { g: g4, cap: c4 } = rushCampaign()
+      g4.fleets = g4.fleets.filter((f) => !(f.owner === 0 && f.planet === c4.id))
+      for (let i = 0; i < G.MAX_FLEETS; i++) g4.fleets.push({ id: g4.nextId++, owner: 0, ships: Array(6).fill('r-cruiser'), items: [], planet: c4.id, system: c4.system, from: c4.id, leg: null, route: [], waypoints: [], arrived: g4.time })
+      G.layoutFleets(g4)
+      return G.fleetsHere(g4, 0, c4.id).length === G.MAX_FLEETS && G.cantRushAt(g4, 0, c4.id) === 'Every fleet here is full'
+    })())
+  }
+
+  // The state lives in the inventory and travels with the ship.
+  {
+    const { g, cap } = rushCampaign()
+    G.rushLaunch(g, 0, cap.id)
+    const f = G.fleetsHere(g, 0, cap.id).find((x) => x.items.some((i) => i.rush))!
+    const it = f.items.find((i) => i.rush)!
+    const state = { ...it.rush! }
+    const moved = G.moveItem(g, 0, { fleet: f.id, x: it.x, y: it.y }, { fleet: 'new' })
+    check('moving it to a new fleet takes its state along', typeof moved !== 'string' && moved.items.length === 1 && JSON.stringify(moved.items[0].rush) === JSON.stringify(state), typeof moved === 'string' ? moved : '')
+    const nf = typeof moved === 'string' ? f : moved
+    check('the flat ship list is unchanged by it', nf.ships.length === 1 && nf.ships[0] === 'r-cruiser')
+    const back = G.mergeFleets(g, 0, nf.id, f.id)
+    check('merging fleets keeps it', typeof back !== 'string' && G.fleetsHere(g, 0, cap.id).flatMap((x) => x.items).filter((i) => i.rush).length === 1)
+    const fl = G.fleetsHere(g, 0, cap.id).find((x) => x.items.some((i) => i.rush))!
+    check('arranging a fleet keeps it', G.arrangeFleet(g, 0, fl.id) !== 'Not our fleet')
+    const arranged = G.fleetsHere(g, 0, cap.id).flatMap((x) => x.items).filter((i) => i.rush)
+    check('still one rushed ship, same state', arranged.length === 1 && JSON.stringify(arranged[0].rush) === JSON.stringify(state))
+    const { g: g2, cap: c2 } = rushCampaign()
+    G.buildAt(g2, 0, c2.id, 'r-cruiser')
+    c2.queue[0].left = 0
+    G.tickGalaxy(g2, 0.1)
+    c2.queue[0].left = c2.queue[0].total * 0.38
+    G.rushLaunch(g2, 0, c2.id)
+    const all = G.fleetsHere(g2, 0, c2.id).flatMap((x) => x.items)
+    check('a rushed cruiser sits beside a plain one as its own item', all.filter((i) => i.unit === 'r-cruiser').length === 2 && all.filter((i) => i.unit === 'r-cruiser' && i.rush).length === 1 && all.every((i) => !i.rush || i.n === 1))
+  }
+
+  // Finishing over galaxy time: parked at a planet of ours with a Capital Yard or a Drydock, at the normal pace; never elsewhere.
+  {
+    const { g, cap, outpost } = rushCampaign()
+    G.rushLaunch(g, 0, cap.id)
+    const left0 = rushed(g, cap.id)[0].rush!.left
+    G.tickGalaxy(g, 10)
+    const r1 = rushed(g, cap.id)[0].rush!
+    check('at the Capital Yard planet it finishes over galaxy time, at the build pace', near(r1.left, left0 - 10, 1e-6) && near(r1.done, G.rushDone('r-cruiser', r1.left), 1e-6) && r1.done > 0.62, `${left0.toFixed(1)} -> ${r1.left.toFixed(1)} s, ${(r1.done * 100).toFixed(1)}%`)
+    // It never finishes sooner than building it normally would have.
+    const total = cruiserTotal
+    check('what is left is what the build had left (never sooner)', near(left0, total * 0.38, 1e-6) && r1.left > 0)
+    const f = G.fleetsHere(g, 0, cap.id).find((x) => x.items.some((i) => i.rush))!
+    // Away at a planet without a yard or a Drydock: nothing happens.
+    outpost.base = G.emptyBase()
+    const lone = G.moveItem(g, 0, { fleet: f.id, x: f.items.find((i) => i.rush)!.x, y: f.items.find((i) => i.rush)!.y }, { fleet: 'new' })
+    const rf = typeof lone === 'string' ? f : lone
+    rf.planet = outpost.id
+    rf.system = outpost.system
+    rf.from = outpost.id
+    outpost.owner = 0
+    const l1 = rf.items[0].rush!.left
+    G.tickGalaxy(g, 20)
+    check('at a planet with neither, it does not progress', near(rf.items[0].rush!.left, l1, 1e-9))
+    outpost.base.mods.push('drydock')
+    G.tickGalaxy(g, 5)
+    check('a Drydock alone finishes it too', near(rf.items[0].rush!.left, l1 - 5, 1e-6))
+    outpost.base.mods = []
+    outpost.base.yards.cyard = 'ruin'
+    G.tickGalaxy(g, 5)
+    check('a ruined Capital Yard does not', near(rf.items[0].rush!.left, l1 - 5, 1e-6))
+    outpost.base.yards.cyard = 'up'
+    outpost.owner = 1
+    G.tickGalaxy(g, 5)
+    check('a yard that is not ours does not either', near(rf.items[0].rush!.left, l1 - 5, 1e-6))
+    outpost.owner = 0
+    // Flying: nothing.
+    const dest = g.planets.find((p) => p.owner === 0 && p.id !== outpost.id && p.id !== cap.id)
+    const target = dest ?? cap
+    const before = rf.items[0].rush!.left
+    check('sent off', G.moveFleet(g, 0, rf.id, target.id) === null && !!rf.leg)
+    g.aiT[1] = 1e9
+    G.tickGalaxy(g, 3)
+    check('while flying, it does not progress', !!rf.leg && near(rf.items[0].rush!.left, before, 1e-9), `${before.toFixed(2)} -> ${rf.items[0].rush!.left.toFixed(2)}`)
+    // And it's done with at the yard: the state clears.
+    const { g: g2, cap: c2 } = rushCampaign()
+    G.rushLaunch(g2, 0, c2.id)
+    const left = rushed(g2, c2.id)[0].rush!.left
+    let steps = 0
+    for (; steps < 400 && rushed(g2, c2.id).length; steps++) G.tickGalaxy(g2, 0.5)
+    check('it is finished when its time is up, not sooner', !rushed(g2, c2.id).length && near(steps * 0.5, Math.ceil(left / 0.5) * 0.5, 0.51), `${(steps * 0.5).toFixed(1)} s for ${left.toFixed(1)} s`)
+    check('a finished ship is a plain ship in the fleet', items(g2, c2.id).some((i) => i.unit === 'r-cruiser' && !i.rush))
+  }
+
+  // A battle at the planet: the rushed ship spawns rushed (hull = share built, missing parts uninstalled), finishes beside a
+  // Drydock, and what it got done is written back to the fleet.
+  {
+    const { g, cap } = rushCampaign()
+    cap.base = { yards: { yard: 'up', cyard: 'up' }, mods: ['drydock'] }
+    G.rushLaunch(g, 0, cap.id)
+    const spare = G.fleetsHere(g, 0, cap.id)[0]
+    g.fleets.push({ id: g.nextId++, owner: 1, ships: ['d-frigate'], items: [], planet: cap.id, system: cap.system, from: cap.id, leg: null, route: [], waypoints: [], arrived: g.time })
+    G.layoutFleets(g)
+    const c = G.clashAt(g, cap.id)!
+    const rs = c.holderRush ?? []
+    check('the clash knows the rushed ship', rs.length === 1 && rs[0].unit === 'r-cruiser' && near(rs[0].done, 0.62, 0.001) && !c.attackerRush && c.holderShips.includes('r-cruiser'), JSON.stringify(rs))
+    const map = generateMap({ ...DEFAULT_RULES, seed: 11, players: 2, size: 'small', beacons: 0, wrecks: 'none' })
+    const side = (cl: G.Clash): FleetSide[] => [
+      { faction: 'republic', team: 0, ships: G.withoutShips(cl.holderShips, cl.holderHeld), reserve: cl.holderHeld, rushed: G.rushIntoBattle(cl.holderRush), station: cl.station, yards: G.YARD_KINDS.filter((k) => cl.base!.yards[k] === 'up'), exp: [...cl.base!.mods] },
+      { faction: 'droid', team: 1, ships: G.withoutShips(cl.attackerShips, cl.attackerHeld), reserve: cl.attackerHeld, rushed: G.rushIntoBattle(cl.attackerRush) },
+    ]
+    const w = newFleetBattle(map, side(c), { seed: 11 })
+    const u = w.units.find((x) => x.rush && x.owner === 0)!
+    check('it spawns as a skirmish rushed ship', !!u && u.t.id === 'r-cruiser')
+    check('its hull is the share that was built', near(u.hull / u.hullMax, 0.62, 0.01), `${((u.hull / u.hullMax) * 100).toFixed(1)}%`)
+    const parts = u.t.hardpoints.filter((h) => h.kind !== 'engine').length
+    check('its unbuilt turrets are uninstalled (scaffolding, they don\'t fire)', u.rush!.parts.length === Math.round(parts * 0.38) && u.rush!.parts.every((i) => u.hps[i].hp === 0), `${u.rush!.parts.length} of ${parts}`)
+    check('with the battle\'s seconds of work left (the galaxy\'s over the ship build ratio)', near(u.rush!.left, rs[0].left / G.SHIP_TIME, 1e-6), `${u.rush!.left.toFixed(1)} s`)
+    check('only that cruiser is rushed (the others are whole)', w.units.filter((x) => x.rush).length === 1)
+    // Beside its Drydock, a few seconds of work.
+    const dd = w.units.find((x) => x.t.tier === 'yard' && x.t.id === 'r-yard')!
+    const stand = () => {
+      u.x = dd.x + 150
+      u.y = dd.y
+      u.v = 0
+    }
+    stand()
+    const l0 = u.rush!.left
+    for (let i = 0; i < 6 / STEP; i++) {
+      stand()
+      tick(w)
+      w.events.length = 0
+    }
+    check('a Drydock finishes it during the battle', !!u.rush && near(l0 - u.rush.left, 6, 0.3), `${(l0 - u.rush.left).toFixed(2)} s done`)
+    w.winner = 0
+    const res = resultOf(w, c, 0, false)
+    const listed = res.rushed?.[0]?.[0]
+    check('what is left of its build is in the result', !!listed && listed.unit === 'r-cruiser' && near(listed.left, u.rush!.left * G.SHIP_TIME, 1e-6) && listed.done > 0.62, JSON.stringify(listed))
+    G.applyBattle(g, c, res, false)
+    const back = rushed(g, cap.id)
+    check('written back to the fleet', back.length === 1 && near(back[0].rush!.left, u.rush!.left * G.SHIP_TIME, 1e-6) && near(back[0].rush!.done, G.rushDone('r-cruiser', back[0].rush!.left), 1e-6), JSON.stringify(back[0]?.rush))
+    check('the fleet\'s other ships are untouched', items(g, cap.id).filter((i) => !i.rush).every((i) => !i.rush))
+    void spare
+    // A second battle: it gets finished in the battle, so it comes back a plain ship.
+    g.fleets.push({ id: g.nextId++, owner: 1, ships: ['d-frigate'], items: [], planet: cap.id, system: cap.system, from: cap.id, leg: null, route: [], waypoints: [], arrived: g.time })
+    G.layoutFleets(g)
+    const c2 = G.clashAt(g, cap.id)!
+    const w2 = newFleetBattle(map, side(c2), { seed: 11 })
+    const u2 = w2.units.find((x) => x.rush && x.owner === 0)!
+    const dd2 = w2.units.find((x) => x.t.tier === 'yard' && x.t.id === 'r-yard')!
+    for (let i = 0; i < 200 / STEP && u2.rush; i++) {
+      u2.x = dd2.x + 150
+      u2.y = dd2.y
+      u2.v = 0
+      tick(w2)
+      w2.events.length = 0
+    }
+    check('finished in the battle', !u2.rush && u2.hull >= u2.hullMax * 0.99)
+    w2.winner = 0
+    const res2 = resultOf(w2, c2, 0, false)
+    G.applyBattle(g, c2, res2, false)
+    check('it comes back a plain ship', !rushed(g, cap.id).length && items(g, cap.id).some((i) => i.unit === 'r-cruiser'))
+    // A rushed ship held back in the reserve: called in still unfinished.
+    const { g: g3, cap: c3 } = rushCampaign()
+    c3.base = { yards: { yard: 'up', cyard: 'up' }, mods: [] }
+    G.rushLaunch(g3, 0, c3.id)
+    const held = G.fleetsHere(g3, 0, c3.id).find((f) => f.items.some((i) => i.rush))!
+    G.holdFleet(g3, 0, held.id, true)
+    g3.fleets.push({ id: g3.nextId++, owner: 1, ships: ['d-frigate'], items: [], planet: c3.id, system: c3.system, from: c3.id, leg: null, route: [], waypoints: [], arrived: g3.time })
+    G.layoutFleets(g3)
+    const c4 = G.clashAt(g3, c3.id)!
+    check('a held back rushed ship is listed as held', !!c4.holderRush?.[0]?.held)
+    const w3 = newFleetBattle(map, side({ ...c4, base: c4.base ?? { yards: {}, mods: [] } }), { seed: 11 })
+    check('it waits in the reserve, rushed', !w3.units.some((x) => x.rush) && w3.players[0].reserve.includes('r-cruiser') && (w3.players[0].rushRes ?? []).length === 1)
+    const dep = w3.players[0]
+    const stt = w3.byId.get(dep.station)!
+    const why = cmdDeploy(w3, 0, 'r-cruiser', stt.x + 700, stt.y, 0)
+    for (let i = 0; i < 20 / STEP; i++) tick(w3)
+    check('calling it in brings it in unfinished', !why && w3.units.some((x) => x.rush && x.owner === 0 && !x.dead && x.t.id === 'r-cruiser' && x.hull < x.hullMax), String(why))
+  }
+
+  // Auto-resolve: a rushed ship counts at its built share of strength; unfinished ones come through unfinished.
+  {
+    const { g, cap } = rushCampaign()
+    const mk = (done: number): G.Clash => ({ planet: cap.id, holder: 0, attacker: 1, station: 0, holderShips: ['r-cruiser', 'r-cruiser'], holderHeld: [], attackerShips: ['d-cruiser', 'd-cruiser'], attackerHeld: [], ...(done < 1 ? { holderRush: [{ unit: 'r-cruiser', done, left: 40 }] } : {}) })
+    let whole = 0
+    let half = 0
+    let thin = 0
+    const trials = 40
+    for (let s = 0; s < trials; s++) {
+      if (G.autoResolve(g, mk(1), 100 + s).winner === 0) whole++
+      if (G.autoResolve(g, mk(0.5), 100 + s).winner === 0) half++
+      if (G.autoResolve(g, mk(0.05), 100 + s).winner === 0) thin++
+    }
+    check('a rushed ship counts for less in an auto-resolved battle', whole > half && half >= thin && whole - thin >= 3, `wins of ${trials}: whole ${whole}, 50% ${half}, 5% ${thin}`)
+    const weak: G.Clash = { planet: cap.id, holder: 0, attacker: 1, station: 0, holderShips: ['r-cruiser', 'r-cruiser', 'r-cruiser'], holderHeld: [], attackerShips: ['d-gunship'], attackerHeld: [], holderRush: [{ unit: 'r-cruiser', done: 0.6, left: 33 }] }
+    const r = G.autoResolve(g, weak, 5)
+    check('it comes through still rushed, as far along as it was', r.winner === 0 && r.survivors[0].length === 3 && r.rushed?.[0]?.length === 1 && r.rushed[0][0].done === 0.6 && r.rushed[0][0].left === 33, JSON.stringify(r.rushed))
+    // Applied to the galaxy (through a real clash).
+    const { g: g2, cap: c2 } = rushCampaign()
+    G.rushLaunch(g2, 0, c2.id)
+    g2.fleets.push({ id: g2.nextId++, owner: 1, ships: ['d-gunship'], items: [], planet: c2.id, system: c2.system, from: c2.id, leg: null, route: [], waypoints: [], arrived: g2.time })
+    G.layoutFleets(g2)
+    const clash = G.clashAt(g2, c2.id)!
+    const res = G.autoResolve(g2, clash, 9)
+    G.applyBattle(g2, clash, res, true)
+    check('auto-resolved, the survivor stays rushed in its fleet', res.winner === 0 && rushed(g2, c2.id).length === 1 && near(rushed(g2, c2.id)[0].rush!.done, 0.62, 0.001))
+  }
+
+  // The galaxy AI rushes under threat: an enemy fleet it sees in the system or next door, worth more than its garrison.
+  {
+    const aiSetup = () => {
+      const c = campaign()
+      const g = c.g
+      g.sides[1].credits = 30000
+      const home = g.planets.find((p) => p.owner === 1 && p.station === 3)!
+      home.base = { yards: { yard: 'up', cyard: 'up' }, mods: [] }
+      for (const f of [...g.fleets]) if (f.owner === 1 && f.planet === home.id) f.items = []
+      g.fleets = g.fleets.filter((f) => f.items.length || f.owner !== 1 || f.planet !== home.id)
+      g.sides[1].credits -= 0
+      G.buildAt(g, 1, home.id, 'd-cruiser')
+      home.queue[0].left = home.queue[0].total * 0.38
+      return { g, home }
+    }
+    const fleetOf = (g: Galaxy, owner: number, planet: number, ships: string[]) => {
+      g.fleets.push({ id: g.nextId++, owner, ships, items: [], planet, system: g.planets[planet].system, from: planet, leg: null, route: [], waypoints: [], arrived: g.time })
+      G.layoutFleets(g)
+    }
+    const think = (g: Galaxy) => {
+      g.sides[1].mind = undefined
+      G.updateSight(g)
+      for (let i = 0; i < 3; i++) {
+        g.time += 5
+        G.thinkAi(g, 1)
+      }
+    }
+    {
+      const { g, home } = aiSetup()
+      think(g)
+      check('with nobody near, the AI does not rush', !G.fleetsHere(g, 1, home.id).some((f) => f.items.some((i) => i.rush)) && home.queue.some((q) => q.unit === 'd-cruiser'))
+    }
+    {
+      const { g, home } = aiSetup()
+      fleetOf(g, 0, home.id, Array(6).fill('r-cruiser'))
+      think(g)
+      const rushedHere = G.fleetsHere(g, 1, home.id).flatMap((f) => f.items).filter((i) => i.rush)
+      check('an enemy fleet at its planet, stronger than the garrison: the AI rushes its cruiser', rushedHere.length === 1 && rushedHere[0].unit === 'd-cruiser' && near(rushedHere[0].rush!.done, 0.62, 0.02), JSON.stringify(rushedHere.map((i) => i.rush)))
+      check('and its planet is on cooldown now', !!home.rushAt && home.rushAt > g.time)
+    }
+    {
+      const { g, home } = aiSetup()
+      fleetOf(g, 0, home.id, ['r-fighter'])
+      think(g)
+      check('a weak enemy (the garrison holds): no rush', !G.fleetsHere(g, 1, home.id).some((f) => f.items.some((i) => i.rush)))
+    }
+    {
+      // Next door and seen: a system the AI holds a planet in. Unseen next door: it can't know.
+      const { g, home } = aiSetup()
+      const sys = g.systems[home.system]
+      const next = G.neighbours(g, sys.id)
+      let seenDoor = -1
+      let blind = -1
+      G.updateSight(g)
+      for (const n of next) {
+        const pid = g.systems[n].planets[0]
+        if (G.sees(g, 1, n)) seenDoor = seenDoor < 0 ? pid : seenDoor
+        else blind = blind < 0 ? pid : blind
+      }
+      if (blind >= 0) {
+        const b = aiSetup()
+        const bp = b.g.systems[g.planets[blind].system].planets[0]
+        fleetOf(b.g, 0, bp, Array(6).fill('r-cruiser'))
+        think(b.g)
+        check('an enemy fleet next door that the AI cannot see: no rush (fog of war)', !G.fleetsHere(b.g, 1, b.home.id).some((f) => f.items.some((i) => i.rush)) && !G.sees(b.g, 1, b.g.planets[bp].system))
+      } else check('(no unseen neighbour system to test the fog with here)', true)
+      if (seenDoor >= 0) {
+        const b = aiSetup()
+        fleetOf(b.g, 0, seenDoor, Array(6).fill('r-cruiser'))
+        b.g.fleets[b.g.fleets.length - 1].arrived = b.g.time
+        think(b.g)
+        check('an enemy fleet next door that the AI sees: it rushes', G.fleetsHere(b.g, 1, b.home.id).some((f) => f.items.some((i) => i.rush)))
+      } else check('(no seen neighbour system to test next-door threats with here)', true)
+    }
+  }
+
+  // Saves: old ones load as normal ships; the new shape survives a save; broken rush state is dropped.
+  {
+    const { g, cap } = rushCampaign()
+    G.rushLaunch(g, 0, cap.id)
+    g.sides[0].credits = 1
+    check('a save is version 3', G.saveGalaxy(g) && g.v === 3)
+    const key = `mvlos.empires.save.${g.save.id}`
+    const loaded = G.loadSave(g.save.id)!
+    const it = loaded.fleets.flatMap((f) => f.items).find((i) => i.rush)
+    check('a rushed ship and the planet\'s cooldown survive a save', !!it && near(it.rush!.done, 0.62, 0.001) && loaded.planets[cap.id].rushAt === cap.rushAt && loaded.v === 3, JSON.stringify(it?.rush))
+    const old = JSON.parse(store.get(key)!) as Galaxy & { v: number }
+    old.v = 2
+    for (const f of old.fleets) for (const i of f.items) delete i.rush
+    for (const p of old.planets) {
+      delete p.rushAt
+      delete p.slowNext
+    }
+    store.set(key, JSON.stringify(old))
+    const o = G.loadSave(g.save.id)!
+    check('a version 2 save loads, every ship a normal ship', !!o && o.v === 3 && o.fleets.every((f) => f.items.every((i) => !i.rush)) && o.fleets.reduce((n, f) => n + f.ships.length, 0) === g.fleets.reduce((n, f) => n + f.ships.length, 0))
+    const ok = G.autoResolve(o, { planet: cap.id, holder: 0, attacker: 1, station: 0, holderShips: ['r-cruiser'], holderHeld: [], attackerShips: ['d-gunship'], attackerHeld: [] }, 3)
+    check('and plays (a battle without rushed ships has no word of them)', ok.rushed === undefined)
+    const bad = JSON.parse(store.get(key)!) as Galaxy & { v: number }
+    bad.v = 3
+    const cruiserItem = bad.fleets.flatMap((f) => f.items).find((i) => i.unit === 'r-cruiser')!
+    cruiserItem.rush = { done: Number.NaN, left: 5 }
+    store.set(key, JSON.stringify(bad))
+    check('a rushed ship with a broken state loads as a normal ship', !G.loadSave(g.save.id)!.fleets.flatMap((f) => f.items).some((i) => i.rush))
+    const stack = JSON.parse(store.get(key)!) as Galaxy & { v: number }
+    const fighter = stack.fleets.flatMap((f) => f.items).find((i) => i.unit === 'r-fighter')
+    if (fighter) fighter.rush = { done: 0.5, left: 5 }
+    store.set(key, JSON.stringify(stack))
+    check('and a strike craft stack can\'t carry one', !G.loadSave(g.save.id)!.fleets.flatMap((f) => f.items).some((i) => i.rush && i.unit === 'r-fighter'))
+  }
 }
 
 console.log(failed ? `${failed} check(s) failed` : 'All galactic conquest building checks passed')

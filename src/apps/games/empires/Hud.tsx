@@ -1279,13 +1279,13 @@ export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false,
 
 /** How long a finger holds Rush launch down to confirm it. */
 const RUSH_HOLD_MS = 600
-type RushProps = { share: number; why: string | null; onRush: () => void }
+export type RushProps = { share: number; why: string | null; onRush: () => void; /** Its tooltip, where the default (a skirmish yard's) doesn't fit. */ tip?: string }
 /**
  * Rush launch: sends the Capital Yard's ship out now, unfinished. A click with a mouse; on a touch
  * screen it has to be held (a ring fills round it) so a stray tap can't throw a ship away. Disabled
  * while the yard's cooldown runs, with the time left on it.
  */
-function RushButton({ share, why, onRush }: RushProps) {
+function RushButton({ share, why, onRush, tip }: RushProps) {
   const [hold, setHold] = useState(false)
   const timer = useRef(0)
   const touched = useRef(false)
@@ -1318,7 +1318,7 @@ function RushButton({ share, why, onRush }: RushProps) {
         if (touched.current) return void (touched.current = false)
         onRush()
       }}
-      data-tip={`Rush launch: the ship in progress jumps out now, ${Math.floor(share * 100)}% built. It comes out with that share of its hull, no shields and its last turrets in scaffolding (they don't fire); a Drydock, repair craft or engineers finish it, taking the build time it had left. The yard then can't rush for a while, and its next ship builds slower.${why ? `\n\n${why}` : ''}${'\n\nOn a touch screen: hold it down to confirm.'}`}
+      data-tip={tip ? `${tip}${why ? `\n\n${why}` : ''}\n\nOn a touch screen: hold it down to confirm.` : `Rush launch: the ship in progress jumps out now, ${Math.floor(share * 100)}% built. It comes out with that share of its hull, no shields and its last turrets in scaffolding (they don't fire); a Drydock, repair craft or engineers finish it, taking the build time it had left. The yard then can't rush for a while, and its next ship builds slower.${why ? `\n\n${why}` : ''}${'\n\nOn a touch screen: hold it down to confirm.'}`}
     >
       <svg className="ew-rush-ring" viewBox="0 0 20 20" aria-hidden>
         <circle cx="10" cy="10" r="8" pathLength={1} style={{ animationDuration: `${RUSH_HOLD_MS}ms` }} />

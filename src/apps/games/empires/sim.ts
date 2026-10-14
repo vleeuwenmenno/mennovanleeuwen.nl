@@ -182,6 +182,9 @@ export type Unit = {
  * unbuilt, which ordinary repairs can't mend (see hullCap). `parts`: its hardpoints not yet installed
  * (hp 0: they don't fire or work), in the order they go on, `n` of them at launch.
  */
+/** A fleet battle's ship that was rush-launched in the galaxy: `built` of it done, `left` seconds of its build still
+ * to do (the battle's seconds), `held`: it waits in the fleet's reserve. */
+export type RushedIn = { unit: string; built: number; left: number; held?: boolean }
 export type Rush = { left: number; total: number; gap: number; parts: number[]; n: number; work: boolean }
 
 /** An expansion being built onto its building: seconds left of its time. */
@@ -249,6 +252,10 @@ export type Player = {
   history: { t: number; credits: number; income: number }[]
   /** Fleet battles: ships that jumped out alive, back to the fleet they came from. */
   escaped: string[]
+  /** Fleet battles: ships of ours rush-launched unfinished that are waiting in the reserve (called in
+   * still unfinished: see cmdDeploy), and the ones that jumped out unfinished (state kept for the fleet). */
+  rushRes?: RushedIn[]
+  escapedRush?: RushedIn[]
   /** Hybrid bases: whether an Armour works of ours stands, as last applied to our frigates' and
    * corvettes' hull (see armourWorks). Absent: no. */
   armour?: boolean
@@ -1361,7 +1368,10 @@ function retreating(w: World, u: Unit, dt: number) {
   const p = w.players[u.owner]
   // In a fleet battle the ship itself is saved: it rejoins its fleet.
   const refund = w.fleet ? 0 : retreatRefund(u)
-  if (w.fleet) p.escaped.push(u.t.id)
+  if (w.fleet) {
+    p.escaped.push(u.t.id)
+    if (u.rush) (p.escapedRush ??= []).push({ unit: u.t.id, built: 1 - u.rush.left / u.t.build, left: u.rush.left })
+  }
   if (refund > 0) p.refunds.push({ at: w.time + REFUND_DELAY, amount: refund, unit: u.t.id })
   u.dead = true
   w.events.push({ k: 'retreated', owner: u.owner, unit: u.t.id, x: u.x, y: u.y, a: u.a, refund })
@@ -1468,7 +1478,10 @@ export function cmdDeploy(w: World, owner: Owner, id: string, x: number, y: numb
   const why = cantWarp(w, owner, id, x, y)
   if (why) return why
   p.reserve.splice(i, 1)
-  warpIn(w, owner, id, x, y, a, WARP_RESERVE, false)
+  // A ship that was rush-launched in the galaxy comes in still unfinished.
+  const ri = p.rushRes?.findIndex((r) => r.unit === id) ?? -1
+  const rush = ri >= 0 ? p.rushRes!.splice(ri, 1)[0] : undefined
+  warpIn(w, owner, id, x, y, a, WARP_RESERVE, false, undefined, rush ? { built: rush.built, left: rush.left } : undefined)
   return null
 }
 
@@ -3755,7 +3768,7 @@ function fleetEnd(w: World, dt: number) {
  * fleet's orders: they start in the reserve, to be called in during the battle. `yards` and `exp`:
  * the holder's buildings round its station (a conquest planet's yards and the expansions on them
  * and on the station); given, the battle has hybrid bases (see newFleetBattle). */
-export type FleetSide = { faction: FactionId; team: number; ships: string[]; reserve?: string[]; station?: number; techs?: string[]; yards?: ('yard' | 'cyard')[]; exp?: ModuleId[] }
+export type FleetSide = { faction: FactionId; team: number; ships: string[]; reserve?: string[]; /** Among `ships` and `reserve`, those rush-launched unfinished (see RushedIn); `held`: one of the reserve. */ rushed?: RushedIn[]; station?: number; techs?: string[]; yards?: ('yard' | 'cyard')[]; exp?: ModuleId[] }
 
 /**
  * A galactic conquest battle over a planet. The first side holds it: its station (if any) sits at
@@ -3802,12 +3815,22 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
       } else p.reserve.push(id)
     }
     p.reserve.push(...(s.reserve ?? []))
+    // Rush-launched ships: the ones sent onto the field come out unfinished; the others wait in the reserve as such.
+    const pool = (s.rushed ?? []).map((r) => ({ ...r }))
+    const takeRush = (id: string, heldBack: boolean) => {
+      let i = pool.findIndex((r) => r.unit === id && !!r.held === heldBack)
+      if (i < 0) i = pool.findIndex((r) => r.unit === id)
+      return i >= 0 ? pool.splice(i, 1)[0] : undefined
+    }
+    const fieldRush = field.map((id) => takeRush(id, false))
+    if (pool.length) p.rushRes = pool
     // A loose block facing the middle: rows across, big ships in the middle rows.
     const fx = M.cos(face)
     const fy = M.sin(face)
     const ahead = o === 0 && s.station ? 650 : 0
     const perRow = 5
     field.forEach((id, i) => {
+      const rush = fieldRush[i]
       const row = Math.floor(i / perRow)
       const col = (i % perRow) - (Math.min(perRow, field.length - row * perRow) - 1) / 2
       const gap = Math.max(170, radius(UNIT[id]) * 2.4)
@@ -3816,8 +3839,11 @@ export function newFleetBattle(map: MapDef, sides: FleetSide[], opts: { seed?: n
       // The holder is already there; the others arrive from hyperspace, a few at a time.
       if (o === 0) {
         const g = spawnGroup(w, id, o, x, y, face)
-        for (const u of g) u.stance = 'maneuver'
-      } else warpIn(w, o, id, x, y, face, 1 + i * 0.25, false)
+        for (const u of g) {
+          u.stance = 'maneuver'
+          if (rush) unfinished(u, rush.built, rush.left)
+        }
+      } else warpIn(w, o, id, x, y, face, 1 + i * 0.25, false, undefined, rush ? { built: rush.built, left: rush.left } : undefined)
     })
   })
   refreshPlayers(w)

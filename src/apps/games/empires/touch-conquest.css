@@ -277,3 +277,31 @@
     max-height: 62vh;
   }
 }
+/* (Rush launch beside a planet's queue: the queue is five projectors wide, so on a phone the button
+   takes the row above them, full width, a big target to hold down.) */
+@media (pointer: coarse), (max-width: 719px) {
+  .ew-root.ew-galaxy .ew-gdock .ew-buildq {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 74px;
+    row-gap: 6px;
+    margin-left: 10px;
+    margin-right: 10px;
+    margin-bottom: 2px;
+  }
+  .ew-root.ew-galaxy .ew-gdock .ew-buildq .ew-rush {
+    order: -1;
+    flex: 1 0 100%;
+    justify-content: center;
+    margin: 0;
+    padding: 10px 11px;
+    font-size: 13px;
+  }
+  /* The badge on a fleet card says "Rushed" and the share, small enough for a one-cell card. */
+  .ew-root.ew-galaxy .ew-inv-rush {
+    font-size: 8px;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.05;
+  }
+}
