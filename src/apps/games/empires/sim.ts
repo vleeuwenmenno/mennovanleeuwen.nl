@@ -261,18 +261,26 @@ export type Player = {
   /** Hybrid bases: whether an Armour works of ours stands, as last applied to our frigates' and
    * corvettes' hull (see armourWorks). Absent: no. */
   armour?: boolean
+  /** Credits between allies: when this player last sent some (the battle clock), and how many it
+   * sent and got in all. Absent until the first gift. */
+  lastGift?: number
+  gave?: number
+  got?: number
 }
 export type EarnSource = 'station' | 'mines' | 'beacons' | 'salvage' | 'refunds'
 export type SpendKind = 'ships' | 'research' | 'structures' | 'repairs'
 /** One line in the economy log: + for money in, - for money out. */
-export type LedgerEntry = { t: number; amount: number; what: string; kind: SpendKind | 'salvage' | 'refund' | 'cancel' }
+export type LedgerEntry = { t: number; amount: number; what: string; kind: SpendKind | 'salvage' | 'refund' | 'cancel' | 'gift'
+  /** A gift: the ally it went to or came from. */
+  seat?: Owner
+}
 const LEDGER_SIZE = 40
 export const HISTORY_STEP = 5
 /** Seconds after a retreated ship jumps out before its refund arrives. */
 export const REFUND_DELAY = 15
 
-function note(w: World, p: Player, amount: number, kind: LedgerEntry['kind'], what: string) {
-  p.ledger.push({ t: w.time, amount, kind, what })
+function note(w: World, p: Player, amount: number, kind: LedgerEntry['kind'], what: string, seat?: Owner) {
+  p.ledger.push({ t: w.time, amount, kind, what, ...(seat !== undefined ? { seat } : {}) })
   if (p.ledger.length > LEDGER_SIZE) p.ledger.shift()
 }
 /** Pay for something: taken off the credits, counted under its kind, and logged. */
@@ -348,6 +356,8 @@ export type SimEvent =
   | { k: 'rushed'; owner: Owner; unit: string; x: number; y: number }
   | { k: 'installed'; owner: Owner; unit: number; x: number; y: number }
   | { k: 'finished'; owner: Owner; unit: number; x: number; y: number }
+  /** Credits sent from one ally to another. */
+  | { k: 'gift'; from: Owner; to: Owner; amount: number }
 
 export type World = {
   w: number
@@ -1288,6 +1298,45 @@ function siteUpgrades(w: World, dt: number) {
     }
     w.events.push({ k: 'upgraded', owner: u.owner, unit: u.id, id, level: u.upg[id]! })
   }
+}
+
+// --- Credits between allies -------------------------------------------------------------------------
+
+/** The fewest seconds between two gifts from the same player, so a gift can't be spammed. */
+export const GIFT_COOLDOWN = 1
+/** The most one gift can carry: a sanity limit for what comes over the wire. */
+export const GIFT_MAX = 10_000_000
+
+/** Why `owner` can't send `amount` credits to `to` right now, or null when it can: only whole
+ * credits above 0, only to a teammate still in the battle, at most what we have, and not again
+ * within GIFT_COOLDOWN of the last one. Fleet battles (galactic conquest) have no allies. */
+export function cantGive(w: World, owner: Owner, to: Owner, amount: number): string | null {
+  const from = w.players[owner]
+  const them = w.players[to]
+  if (!Number.isInteger(amount) || amount <= 0 || amount > GIFT_MAX) return 'Send a whole number of credits, more than 0'
+  if (!from || !them || to === owner || w.fleet) return 'Pick an ally to send credits to'
+  if (foes(w, owner, to)) return 'Credits can only go to an ally'
+  if (!them.alive) return 'That ally is out of the battle'
+  if (amount > Math.floor(from.credits)) return `Not enough credits: you have ${Math.floor(from.credits).toLocaleString('en-US')}`
+  if (from.lastGift !== undefined && w.time - from.lastGift < GIFT_COOLDOWN) return 'Wait a moment before sending more credits'
+  return null
+}
+
+/** Send `amount` credits to the ally in seat `to`. */
+export function cmdGive(w: World, owner: Owner, to: Owner, amount: number): string | null {
+  const why = cantGive(w, owner, to, amount)
+  if (why) return why
+  const from = w.players[owner]
+  const them = w.players[to]
+  from.credits -= amount
+  them.credits += amount
+  from.lastGift = w.time
+  from.gave = (from.gave ?? 0) + amount
+  them.got = (them.got ?? 0) + amount
+  note(w, from, -amount, 'gift', 'Sent to an ally', to)
+  note(w, them, amount, 'gift', 'From an ally', owner)
+  w.events.push({ k: 'gift', from: owner, to, amount })
+  return null
 }
 
 // --- Repairs ---------------------------------------------------------------------------------------

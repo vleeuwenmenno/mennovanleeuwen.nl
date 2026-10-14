@@ -7,6 +7,14 @@ export type Action =
   | 'panUp' | 'panDown' | 'panLeft' | 'panRight' | 'zoomIn' | 'zoomOut'
   | 'move' | 'attack' | 'stop' | 'patrol' | 'hold' | 'rally' | 'ability' | 'retreat' | 'guard'
   | 'station' | 'yard' | 'cyard' | 'build' | 'idle' | 'focus' | 'alert' | 'techTree' | 'pause' | 'fogGrid'
+  | GroupAction
+
+/** Control groups 1 to 9 and 0: the key selects the group; with the set or add modifier
+ * (Settings.groupSet, groupAdd) it sets the group to the selection, or adds the selection to it. */
+export type GroupAction = 'group1' | 'group2' | 'group3' | 'group4' | 'group5' | 'group6' | 'group7' | 'group8' | 'group9' | 'group0'
+export const GROUP_ACTIONS: GroupAction[] = ['group1', 'group2', 'group3', 'group4', 'group5', 'group6', 'group7', 'group8', 'group9', 'group0']
+/** The group an action selects: '1' to '9', or '0'. */
+export const groupOf = (a: GroupAction) => a.slice(5)
 
 export const ACTIONS: { id: Action; label: string; group: string }[] = [
   { id: 'panUp', label: 'Camera up', group: 'Camera' },
@@ -34,6 +42,7 @@ export const ACTIONS: { id: Action; label: string; group: string }[] = [
   { id: 'techTree', label: 'Tech tree', group: 'Game' },
   { id: 'fogGrid', label: 'Fog of war grid', group: 'Game' },
   { id: 'pause', label: 'Pause', group: 'Game' },
+  ...GROUP_ACTIONS.map((id) => ({ id, label: `Control group ${groupOf(id)}`, group: 'Control groups' })),
 ]
 
 // The orders used most sit around WASD, so the left hand never leaves it: Q stop, E attack move,
@@ -42,6 +51,7 @@ export const DEFAULT_KEYS: Record<Action, string> = {
   panUp: 'w', panDown: 's', panLeft: 'a', panRight: 'd', zoomIn: '=', zoomOut: '-',
   move: 'm', attack: 'e', stop: 'q', patrol: 'r', hold: 'g', rally: 'y', ability: 'f', retreat: 'j', guard: 'v',
   station: 'h', yard: 'u', cyard: 'o', build: 'b', idle: 'i', focus: 'c', alert: ' ', techTree: 'k', pause: 'p', fogGrid: 'f2',
+  group1: '1', group2: '2', group3: '3', group4: '4', group5: '5', group6: '6', group7: '7', group8: '8', group9: '9', group0: '0',
 }
 
 /** The defaults before they moved next to WASD. Saved keys that still match them all move along;
@@ -53,7 +63,28 @@ function migrateKeys(keys: Record<Action, string>): Record<Action, string> {
 }
 
 /** Keys that can't be bound: they already mean something everywhere in the game. */
-export const RESERVED = new Set(['escape', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'tab', ...'123456789'])
+export const RESERVED = new Set(['escape', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'tab'])
+
+/** The modifiers for setting a control group and adding to one. Alt is never one: the OS uses
+ * Alt+number for workspaces (and Firefox on Linux for its tabs). Ctrl stands for Cmd on a Mac. */
+export type GroupMod = 'ctrl' | 'shift' | 'ctrl+shift'
+export const GROUP_MODS: GroupMod[] = ['ctrl', 'shift', 'ctrl+shift']
+export const modName = (m: GroupMod) => (m === 'ctrl' ? 'Ctrl' : m === 'shift' ? 'Shift' : 'Ctrl+Shift')
+/** The modifiers held with a key: '' for none, null for a mix that means nothing to groups (Alt). */
+export function modOf(e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }): GroupMod | '' | null {
+  if (e.altKey) return null
+  const ctrl = e.ctrlKey || e.metaKey
+  return ctrl && e.shiftKey ? 'ctrl+shift' : ctrl ? 'ctrl' : e.shiftKey ? 'shift' : ''
+}
+/** The control group a key press is about ('1' to '9', '0'), whatever modifiers are held: by the
+ * key bound to it, or for a number-row (or keypad) binding, by where the key is, since Shift turns
+ * the number row into symbols ('!' for 1). */
+export function groupKeyOf(keys: Record<Action, string>, e: { key: string; code?: string }): string | null {
+  const k = e.key.toLowerCase()
+  const digit = /^(?:Digit|Numpad)(\d)$/.exec(e.code ?? '')?.[1]
+  for (const a of GROUP_ACTIONS) if (keys[a] === k || (digit !== undefined && keys[a] === digit)) return groupOf(a)
+  return null
+}
 
 /** A key as stored: lower-case letters, everything else as the browser names it. */
 export const keyOf = (e: KeyboardEvent) => (e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase())
@@ -80,10 +111,13 @@ export type Settings = {
   /** Galactic conquest's soft tick when a day ends (payday): it comes often, so it can be switched off. */
   daySound: boolean
   keys: Record<Action, string>
+  /** Control groups: the modifier that sets a group to the selection, and the one that adds to it. */
+  groupSet: GroupMod
+  groupAdd: GroupMod
 }
 
 const KEY = 'mvlos.empires.settings'
-const DEFAULTS: Settings = { cameraSpeed: 1, edgeScroll: 'fullscreen', bars: 'damaged', rings: true, toasts: true, fogGrid: false, lockedShips: true, ranges: true, daySound: true, keys: { ...DEFAULT_KEYS } }
+const DEFAULTS: Settings = { cameraSpeed: 1, edgeScroll: 'fullscreen', bars: 'damaged', rings: true, toasts: true, fogGrid: false, lockedShips: true, ranges: true, daySound: true, keys: { ...DEFAULT_KEYS }, groupSet: 'ctrl', groupAdd: 'shift' }
 
 function read(): Settings {
   try {
@@ -100,10 +134,25 @@ function read(): Settings {
       ranges: v.ranges !== false,
       daySound: v.daySound !== false,
       keys: migrateKeys({ ...DEFAULT_KEYS, ...(v.keys && typeof v.keys === 'object' ? v.keys : {}) }),
+      ...groupMods(v.groupSet, v.groupAdd),
     }
   } catch {
     return DEFAULTS
   }
+}
+
+/** Saved modifiers, or the defaults; the two are never the same. */
+function groupMods(set: unknown, add: unknown): Pick<Settings, 'groupSet' | 'groupAdd'> {
+  const ok = (m: unknown): m is GroupMod => GROUP_MODS.includes(m as GroupMod)
+  const s = ok(set) ? set : DEFAULTS.groupSet
+  const a = ok(add) ? add : DEFAULTS.groupAdd
+  return s === a ? { groupSet: DEFAULTS.groupSet, groupAdd: DEFAULTS.groupAdd } : { groupSet: s, groupAdd: a }
+}
+
+/** Pick the modifier for setting (or adding to) groups; if the other one used it, they swap. */
+export function setGroupMod(which: 'groupSet' | 'groupAdd', m: GroupMod) {
+  const other = which === 'groupSet' ? 'groupAdd' : 'groupSet'
+  setSettings(current[other] === m ? { [which]: m, [other]: current[which] } : { [which]: m })
 }
 
 let current = read()
@@ -119,7 +168,7 @@ export function setSettings(next: Partial<Settings>) {
   }
   for (const l of listeners) l()
 }
-export const resetKeys = () => setSettings({ keys: { ...DEFAULT_KEYS } })
+export const resetKeys = () => setSettings({ keys: { ...DEFAULT_KEYS }, groupSet: DEFAULTS.groupSet, groupAdd: DEFAULTS.groupAdd })
 
 /** Bind a key to an action; whatever had that key before gets this action's old key. */
 export function bindKey(action: Action, key: string) {

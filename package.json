@@ -31,6 +31,8 @@
     "check:empires-modules": "node scripts/empires-modules.ts",
     "check:empires-gc-buildings": "node scripts/empires-gc-buildings.ts",
     "check:empires-rush": "node scripts/empires-rush.ts",
+    "check:empires-allies": "node scripts/empires-allies.ts",
+    "check:empires-groups": "node scripts/empires-groups.ts",
     "check:agents-roles": "node scripts/agents-roles.ts",
     "check:agents-permissions": "node scripts/agents-permissions.ts",
     "check:agents-compact": "node scripts/agents-compact.ts",

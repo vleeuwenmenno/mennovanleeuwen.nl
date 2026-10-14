@@ -7,7 +7,7 @@ import { NAME_MAX, nameProblem, tidyName } from './names'
 import { REJOIN_WAIT, mpName } from './net'
 import { DEFAULT_RULES, GENERATED, MAP, MAPS, MAX_BEACONS, MAX_SEED, cleanRules, defaultArea, generateMap, type Amount, type MapDef, type MapRules, type Rect } from './maps'
 import { ALLY, ENEMY, OWN, drawTerrainOverview, relColor } from './render'
-import { ACTIONS, RESERVED, bindKey, keyName, keyOf, resetKeys, setSettings, useAskedPanel, useSettings, type Action, type Settings } from './settings'
+import { ACTIONS, GROUP_MODS, RESERVED, bindKey, keyName, keyOf, modName, resetKeys, setGroupMod, setSettings, useAskedPanel, useSettings, type Action, type Settings } from './settings'
 import { empiresMix, empiresMusic, empiresMuted, empiresVolume } from '../prefs'
 import { performanceOverlayPref } from '../../../os/PerformanceOverlay'
 import { newWorld, type Owner, type World } from './sim'
@@ -583,7 +583,7 @@ export function KeybindsPanel() {
   const groups = [...new Set(ACTIONS.map((a) => a.group))]
   return (
     <div className="ew-form">
-      <p className="ew-muted ew-small">Click a binding, then press the new key. A key that's already used swaps places. Arrow keys always move the camera; 1–9 are control groups.</p>
+      <p className="ew-muted ew-small">Click a binding, then press the new key. A key that's already used swaps places. Arrow keys always move the camera.</p>
       <div className="ew-keys">
         {groups.map((g) => (
           <section key={g}>
@@ -596,6 +596,25 @@ export function KeybindsPanel() {
                 </button>
               </div>
             ))}
+            {g === 'Control groups' && (
+              <>
+                {(['groupSet', 'groupAdd'] as const).map((which) => (
+                  <div key={which} className="ew-row ew-modrow">
+                    <span>{which === 'groupSet' ? 'Set a group to the selection' : 'Add the selection to a group'}</span>
+                    <span className="ew-seg ew-modseg" role="group" aria-label={which === 'groupSet' ? 'Modifier to set a group' : 'Modifier to add to a group'}>
+                      {GROUP_MODS.map((m) => (
+                        <button key={m} className={s[which] === m ? 'is-on' : ''} aria-pressed={s[which] === m} onClick={() => setGroupMod(which, m)}>
+                          {modName(m)}
+                        </button>
+                      ))}
+                    </span>
+                  </div>
+                ))}
+                <p className="ew-muted ew-small">
+                  {modName(s.groupSet)}+{keyName(s.keys.group1)} sets group {keyName(s.keys.group1)}, {modName(s.groupAdd)}+{keyName(s.keys.group1)} adds to it, {keyName(s.keys.group1)} selects it, and pressing it twice quickly looks at it. Ctrl+number is also the browser's tab switch: the game keeps it while it has the keyboard. If your browser still switches tabs, pick Ctrl+Shift for setting groups.
+                </p>
+              </>
+            )}
           </section>
         ))}
       </div>
@@ -609,6 +628,7 @@ export function KeybindsPanel() {
 export function HowToPlay() {
   const { keys } = useSettings()
   const k = (a: Action) => <kbd>{keyName(keys[a])}</kbd>
+  const { groupSet, groupAdd } = useSettings()
   const coarse = useCoarse()
   return (
     <div className="ew-form ew-howto">
@@ -622,6 +642,7 @@ export function HowToPlay() {
             <li>Double-tap a ship to select every ship of its kind. Long-press a ship card in the shipyard to build five or take one out of the queue.</li>
             <li>On the galaxy map, tap a planet or a fleet to select it, and long-press for its orders.</li>
             <li>In the lobby, tap Draw areas, then drag on the map to draw where each player may start. In the tech tree, long-press a queued tile to cancel it.</li>
+            <li>Control groups: tap + Group above the selection to save what's selected as a group. Tap a group to select it, double-tap to look at it, and long-press it to set it again, add to it or clear it.</li>
             <li>Long-press anything with a tip to read it.</li>
           </ul>
           <h5>How the battle works</h5>
@@ -633,6 +654,8 @@ export function HowToPlay() {
         <li>Drag to select ships. Right-click to move, or to attack what's under the cursor. Hold the right button and draw a line to spread the ships evenly along it, or draw a loop to ring them round it. Hold Ctrl as you draw to attack-move. Hold Shift with a click order to queue it after the ones the ships already have.</li>
         <li>With one ship or squadron selected, right-drag from where it should go towards where it should face; hold Alt to do that with the whole selection, which keeps its formation. Shift and right-drag draws a circle: every enemy inside it gets attacked, the targets shared out between your ships.</li>
         <li>Ships built at the station (other than fighters and bombers) wait in the fleet inventory: click your faction's emblem at the top left to open it, and drag one to any spot your fleet can see to call it in from hyperspace. The small jump button on a shipyard card sends one straight to the station instead.</li>
+        <li>Control groups: {modName(groupSet)}+{k('group1')} puts the selection in group 1 (ships, a yard or the station), {modName(groupAdd)}+{k('group1')} adds the selection to it, and {k('group1')} selects it; press it twice quickly to look at it. The same for 2 to 9 and 0. The groups show above the selection: click one to select it, double-click to look at it.</li>
+        <li>In a team battle, the send button beside your credits gives credits to an ally. AI allies take them gladly, and one with plenty to spare helps out a player on its team who's broke.</li>
         <li>Click your credits for the economy: income by source, a chart over the battle, what you've earned and spent, and the latest purchases. The economy and fleet inventory panels can be dragged by their title bars.</li>
         <li>Ships steer round asteroid fields and nebulas on their own; click inside one to send them in.</li>
         <li>Select a mining platform to upgrade it: Deeper drills (twice) for more credits, Armour plating, and a Shield generator, since platforms start without shields. Upgrades belong to that platform: lose it and a new one starts from scratch. Every platform has a small flak turret that can just about hold off one fighter squadron.</li>
@@ -653,7 +676,7 @@ export function HowToPlay() {
         Commands: {k('move')} move, {k('attack')} attack move, {k('patrol')} patrol, {k('hold')} stance (hold, maneuver, roam), {k('stop')} stop, {k('ability')} ability, {k('rally')} rally point. Camera: {k('panUp')}
         {k('panLeft')}
         {k('panDown')}
-        {k('panRight')} or arrows, wheel to zoom. Ctrl+1–9 sets a control group. {k('pause')} pauses, Esc opens the menu.
+        {k('panRight')} or arrows, wheel to zoom. {modName(groupSet)}+number sets a control group, the number selects it. {k('pause')} pauses, Esc opens the menu.
       </p>
     </div>
   )

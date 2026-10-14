@@ -2202,6 +2202,43 @@ a touch screen the button is held for 0.6 s (a ring fills round it) so a stray t
 pnpm check:empires-rush   # the gates, the ship as it launches, finishing it, cooldown and slowdown, save and restore, the AI
 ```
 
+## Empires At War control groups and credits for allies
+
+**Control groups** ([`groups.ts`](src/apps/games/empires/groups.ts)), as in classic RTS games:
+**Ctrl+1…9 or 0** puts the selection in that group (ships, a yard, the station), **Shift+number**
+adds the selection to it, the **number** selects it, and pressing it twice within 300 ms also brings
+the camera to it. A group of one yard or the station opens its build panel, as selecting it does.
+The groups that hold anything show as a strip of chips on the selection panel (key, the main unit's
+picture, how many): a click selects, a double click looks. On a touch screen the strip sits by the
+touch bar: tap to select, double-tap to look, long-press for Set to selection, Add selection and
+Clear group, and "+ Group" saves the selection as the next free group.
+- They are the player's own view, never orders: they never go through the lockstep protocol, units
+  that die or change hands drop out, and a saved battle keeps them with the selection.
+- The group keys and both modifiers are in Keybinds (Ctrl, Shift or Ctrl+Shift; picking the other's
+  modifier swaps them). Alt is never one: the OS uses Alt+number for workspaces.
+- Ctrl+number is also the browser's tab switch. The battle takes the key press (`preventDefault`),
+  which stops Chromium switching tabs (Firefox on Linux uses Alt+number for tabs, so Ctrl+number
+  reaches the page anyway); in the browser's own fullscreen the number keys are also locked to the
+  page with the Keyboard Lock API where it exists. A browser that still switches tabs: set groups
+  with Ctrl+Shift instead.
+
+**Credits for allies:** in a team battle (multiplayer or a skirmish with AI allies) the send button
+beside the credits opens a panel: pick an ally (their credits show), an amount (+250, +500, +1,000,
+Half, All but 100, or typed) and send. The ally gets "Vex sent you 1,000 credits" with a sound, the
+sender a message too, and both see it in the economy panel.
+- It is an order (`give`), deterministic: whole credits above 0, only to a teammate still in the
+  battle, at most what the sender has, and one a second at most (`GIFT_COOLDOWN`). The server
+  refuses the rest before they reach the turn, with the reason as a message, and takes one a tick.
+- AI allies take gifts like anyone. An AI admiral with 3,000 credits or more also sends a teammate
+  who is a person and down to under 200 credits 500 of its own, at most once in 90 s (`AID` in
+  [`ai.ts`](src/apps/games/empires/ai.ts)).
+- No allies (one against one, every player for themselves) or galactic conquest: no button.
+
+```sh
+pnpm check:empires-groups   # set, add, select, dead units dropping out, the bar, a double press, the keys
+pnpm check:empires-allies   # the sim's rules and the AI, then a 2 v 2 on a real server: a gift in sync, refusals, a burst
+```
+
 ## Empires At War on touch screens
 
 Phones and tablets play the whole game by touch ([`src/apps/games/empires/Touch.tsx`](src/apps/games/empires/Touch.tsx)),

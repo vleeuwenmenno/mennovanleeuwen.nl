@@ -2,7 +2,7 @@ import { LEVEL_UP, MODULE, SITE_UPGRADES, TECH, UNIT, type ModuleId, type SiteUp
 import type { Pt } from './maps.ts'
 import {
   STANCES, cmdAbility, cmdArea, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdDeploy, cmdFace, cmdFocus, cmdGuard, cmdLine, cmdMove, cmdPatrol, cmdRally, cmdRepair, cmdResearch,
-  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdCancelSite, cmdExpand, cmdCancelExpand, cmdRush, wrapAngle, type Owner, type Stance, type World,
+  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdCancelSite, cmdExpand, cmdCancelExpand, cmdRush, cmdGive, GIFT_MAX, wrapAngle, type Owner, type Stance, type World,
 } from './sim.ts'
 
 // Every order a player can give, as data: a name and its arguments. In multiplayer an order goes to
@@ -10,7 +10,7 @@ import {
 // to run at the same tick; a malformed order from a tampered client never reaches anyone. The
 // owner is never part of an order: the server fills in the sender's own seat.
 
-type Arg = 'ids' | 'id' | 'int' | 'x' | 'y' | 'num' | 'bool' | 'unit' | 'tech' | 'upgrade' | 'stance' | 'path' | 'angle' | 'module'
+type Arg = 'ids' | 'id' | 'int' | 'x' | 'y' | 'num' | 'bool' | 'unit' | 'tech' | 'upgrade' | 'stance' | 'path' | 'angle' | 'module' | 'seat' | 'credits'
 
 /** The functions, by order name, with what each argument must be. */
 const TABLE = {
@@ -44,6 +44,8 @@ const TABLE = {
   cancelExpand: { run: cmdCancelExpand, args: ['id', 'int'] },
   // Rush launch: a Capital Yard sends out its ship in progress unfinished (Rushed construction).
   rush: { run: cmdRush, args: ['id'] },
+  // Credits for an ally: whose seat, and how many (whole credits; the sim says whether they may).
+  give: { run: cmdGive, args: ['seat', 'credits'] },
 } as const satisfies Record<string, { run: (w: World, owner: Owner, ...a: never[]) => unknown; args: readonly Arg[] }>
 
 export type CmdName = keyof typeof TABLE
@@ -94,6 +96,10 @@ function cleanArg(kind: Arg, v: unknown, w: World): unknown {
       return v === undefined || v === null ? NaN : typeof v === 'number' && Number.isFinite(v) ? wrapAngle(v) : null
     case 'stance':
       return typeof v === 'string' && STANCES.includes(v as Stance) ? v : null
+    case 'seat':
+      return int(v, 0, w.players.length - 1)
+    case 'credits':
+      return int(v, 1, GIFT_MAX)
     case 'module':
       return typeof v === 'string' && Object.hasOwn(MODULE, v) ? (v as ModuleId) : null
     case 'path': {

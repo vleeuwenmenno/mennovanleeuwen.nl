@@ -1,4 +1,4 @@
-import { DIFFICULTY, newBrain, profileOf, think, type Brain, type Difficulty, type Profile } from './ai.ts'
+import { DIFFICULTY, aidAllies, newBrain, profileOf, think, type Brain, type Difficulty, type Profile } from './ai.ts'
 import { runCmd, type Cmd } from './commands.ts'
 import { isShip, type FactionId } from './data.ts'
 import { GENERATED, MAP, MAPS, defaultArea, generateMap, type MapDef, type MapRules, type Pt } from './maps.ts'
@@ -50,7 +50,7 @@ export function giveFleet(w: World, from: Owner, to: Owner) {
 }
 
 /** Moves the battle one tick on: fleets handed to teammates, new AI admirals, the turn's orders,
- * then the AI, then the sim. `onRun` hears what each order answered (a player's own refusals
+ * then the AI (and its gifts to broke teammates), then the sim. `onRun` hears what each order answered (a player's own refusals
  * become toasts). */
 export function stepTurn(w: World, brains: Brain[], turn: Pick<Turn, 'c' | 'ai' | 'give'>, onRun?: (seat: Owner, c: Cmd, result: unknown) => void) {
   for (const [from, to] of turn.give ?? []) giveFleet(w, from, to)
@@ -60,5 +60,6 @@ export function stepTurn(w: World, brains: Brain[], turn: Pick<Turn, 'c' | 'ai' 
     onRun?.(seat, c, r)
   }
   for (const b of brains) think(w, b, STEP)
+  aidAllies(w, brains)
   tick(w)
 }
