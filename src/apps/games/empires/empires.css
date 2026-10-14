@@ -6544,3 +6544,258 @@ span.ew-teamtag {
 .ew-giftpop small[role='status'] {
   font-size: 12px;
 }
+
+/* --- The unit card fits its 240 px without scrolling (UnitDetail in Hud.tsx): a header row with the
+   name, class, a ⓘ for the longer story and what it is doing; thin hull and shield bars side by
+   side; then short rows (hardpoints, a rushed ship's state, engineers' yards, a platform's upgrades,
+   the research for its type). --- */
+.ew-detail.is-unit .ew-detail-main {
+  gap: 6px;
+}
+.ew-detail.is-unit .ew-unithead {
+  align-items: center;
+  gap: 3px 8px;
+}
+.ew-detail.is-unit .ew-unithead .ew-orders {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-detail.is-unit .ew-unithead .ew-escorted {
+  align-self: center;
+}
+.ew-bars.is-compact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 14px;
+  font-size: 10.5px;
+}
+.ew-barcell {
+  flex: 1 1 170px;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 38px 1fr auto;
+  align-items: center;
+  gap: 6px;
+}
+.ew-bars.is-compact .ew-bar {
+  height: 5px;
+  min-width: 30px;
+}
+.ew-bars.is-compact small {
+  font-size: 10.5px;
+}
+.ew-bars.is-compact .ew-terrain-note {
+  flex-basis: 100%;
+  font-size: 10.5px;
+}
+.ew-deck .ew-detail.is-unit .ew-rushnote {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ew-unitrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.ew-deck .ew-unitrow .ew-repair {
+  align-self: center;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.ew-detail.is-unit .ew-hpsum {
+  gap: 3px;
+}
+.ew-detail.is-unit .ew-hpchip {
+  padding: 1px 6px 1px 4px;
+  font-size: 10.5px;
+}
+.ew-detail.is-unit .ew-unittech {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.ew-detail.is-unit .ew-unittech .ew-tech {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  max-width: 180px;
+}
+.ew-deck .ew-detail.is-unit .ew-unittree {
+  flex: none;
+  padding: 6px 7px;
+}
+.ew-detail.is-unit .ew-siteupg > div {
+  flex-wrap: nowrap;
+}
+.ew-deck .ew-detail.is-unit .ew-siteupg-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 3px 7px;
+  font-size: 11px;
+}
+.ew-detail.is-unit .ew-siteupg-btn strong {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Engineers' Build row: the yards side by side, smaller; a station too low dims a card a little and
+   says the level it needs in a chip in the corner (the reason is in the tooltip). */
+.ew-engbuild {
+  margin-top: 0;
+  gap: 3px;
+}
+.ew-engbuild > header {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.ew-engbuild > header span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-engbuild .ew-engbuild-cards {
+  grid-template-rows: 64px;
+  grid-auto-columns: 132px;
+  gap: 6px;
+}
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard,
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard.is-locked,
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard.is-poor {
+  width: 132px;
+  height: 64px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 26px auto auto;
+  gap: 2px;
+  padding: 3px 5px;
+}
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard .ew-art,
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard.is-locked img {
+  height: 26px;
+}
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard strong {
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ew-yc-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+.ew-yc-line .ew-cost,
+.ew-yc-line .ew-time {
+  gap: 2px;
+  font-size: 9.5px;
+}
+.ew-yardcard .ew-yc-line .ew-yc-crew {
+  grid-column: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ew-yc-line.is-state {
+  color: var(--ew-good);
+}
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard.is-locked .ew-art,
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard.is-locked .ew-yc-line {
+  opacity: 0.6;
+}
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard.is-locked strong {
+  opacity: 0.8;
+}
+.ew-yc-lv {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  padding: 0 5px;
+  border-radius: 6px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  color: var(--ew-gold);
+  background: rgba(8, 12, 26, 0.85);
+  border: 1px solid rgba(242, 193, 74, 0.5);
+}
+
+/* The station's and yards' cards: the page tabs never scroll up and down, the build panel fits the
+   column it has (its rail beside it), and a yard's card is wide enough for its panel. */
+.ew-bp-tabs {
+  overflow-y: hidden;
+}
+.ew-bp-main {
+  min-width: min(300px, calc(100% - 52px));
+}
+.ew-detail.is-yard .ew-detail-main {
+  width: 340px;
+}
+@container (max-width: 1180px) {
+  .ew-detail.is-station .ew-hpsum {
+    gap: 3px;
+  }
+  .ew-detail.is-station .ew-hpchip {
+    gap: 2px;
+    padding: 1px 4px 1px 3px;
+    font-size: 10px;
+  }
+  .ew-detail.is-station .ew-hpchip svg {
+    width: 11px;
+    height: 11px;
+  }
+}
+/* The unit card stops short of the selection panel, which is 320 px wide on a big window (260 px,
+   210 px and 150 px as the window narrows, see above), rather than running under it. */
+.ew-detailfloat {
+  max-width: calc(100% - var(--ew-dleft, 6px) - 332px);
+}
+@container (max-width: 1180px) {
+  .ew-detailfloat {
+    max-width: calc(100% - var(--ew-dleft, 6px) - 272px);
+  }
+  /* The page tabs tighter, so both fit a narrow station card; past that a label is cut short
+     (its tooltip names it) rather than the row scrolling. */
+  .ew-deck .ew-bp-tabs button {
+    flex: 0 1 auto;
+    min-width: 0;
+    gap: 4px;
+    padding: 3px 5px 4px;
+    font-size: 10px;
+    letter-spacing: 0;
+  }
+  /* (The counts go: the cards under them show as much.) */
+  .ew-bp-tabs button > em {
+    display: none;
+  }
+  .ew-bp-tabs button > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+@container (max-width: 940px) {
+  .ew-detailfloat {
+    max-width: calc(100% - var(--ew-dleft, 6px) - 222px);
+  }
+}
+@container (max-width: 680px) {
+  .ew-detailfloat {
+    max-width: calc(100% - var(--ew-dleft, 6px) - 162px);
+  }
+}
+@container (max-width: 1180px) {
+  /* A narrow unit card: the research tiles get the whole row. */
+  .ew-detail.is-unit .ew-unittech > span {
+    display: none;
+  }
+}
