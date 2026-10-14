@@ -295,6 +295,11 @@ function giveBack(w: World, p: Player, amount: number, kind: SpendKind, what: st
   p.spentBy[kind] -= amount
   note(w, p, amount, 'cancel', what)
 }
+/** An upgrade called off: its whole price back, and an event so the player sees the refund. */
+function cancelUpgrade(w: World, p: Player, amount: number, kind: SpendKind, what: string) {
+  giveBack(w, p, amount, kind, `Cancelled: ${what}`)
+  w.events.push({ k: 'cancelled', owner: w.players.indexOf(p), amount, what })
+}
 /** Something teams take by parking ships at it. `owner` is the team holding it (-1 for nobody);
  * `claim` is the team the progress bar (0 to 1) belongs to. */
 export type Claimable = { owner: number; claim: number; progress: number }
@@ -340,6 +345,8 @@ export type SimEvent =
   | { k: 'arrived'; owner: Owner; unit: string; x: number; y: number; a: number; field: boolean }
   /** A ship finished for the reserve. */
   | { k: 'reserved'; owner: Owner; unit: string }
+  /** An upgrade (research, an expansion or a platform upgrade) was cancelled: `amount` credits came back in full. */
+  | { k: 'cancelled'; owner: Owner; amount: number; what: string }
   /** A platform finished fitting an upgrade. */
   | { k: 'upgraded'; owner: Owner; unit: number; id: SiteUpgradeId; level: number }
   /** A structure's repair crew finished. */
@@ -1273,6 +1280,17 @@ export function cmdUpgradeSite(w: World, owner: Owner, unitId: number, id: SiteU
   return null
 }
 
+/** The upgrade being fitted to a platform, called off: what it cost comes back in full, nothing of it is applied. */
+export function cmdCancelSiteUpgrade(w: World, owner: Owner, unitId: number): string | null {
+  const u = w.byId.get(unitId)
+  if (!u || u.dead || u.owner !== owner || !u.upgrading) return 'Nothing to cancel'
+  const up = SITE_UPGRADES.find((x) => x.id === u.upgrading!.id)!
+  const level = (u.upg[up.id] ?? 0) + 1
+  cancelUpgrade(w, w.players[owner], up.cost[level - 1], 'structures', `${up.name}${up.levels > 1 ? ` ${level}` : ''}: ${u.t.name}`)
+  u.upgrading = null
+  return null
+}
+
 function siteUpgrades(w: World, dt: number) {
   for (const u of w.units) {
     if (u.dead || !u.upgrading) continue
@@ -1675,11 +1693,11 @@ export function cmdResearch(w: World, owner: Owner, id: string) {
   return null
 }
 
-export function cmdCancelResearch(w: World, owner: Owner, index: number) {
+export function cmdCancelResearch(w: World, owner: Owner, index: number): string | null {
   const p = w.players[owner]
   const r = p.research[index]
-  if (!r) return
-  giveBack(w, p, r.id === LEVEL_UP ? UPGRADES[p.level + 1]!.cost : TECH[r.id].cost, 'research', `Cancelled: ${r.id === LEVEL_UP ? `Station level ${p.level + 1}` : TECH[r.id].name}`)
+  if (!r) return 'Nothing to cancel'
+  cancelUpgrade(w, p, r.id === LEVEL_UP ? UPGRADES[p.level + 1]!.cost : TECH[r.id].cost, 'research', r.id === LEVEL_UP ? `Station level ${p.level + 1}` : TECH[r.id].name)
   p.research.splice(index, 1)
   // Whatever was queued on the strength of it can never start now: cancel and refund that too.
   // Back to front, so a cascade only ever removes entries we've already looked at.
@@ -1687,6 +1705,7 @@ export function cmdCancelResearch(w: World, owner: Owner, index: number) {
     const q = p.research[i]
     if (q && q.id !== LEVEL_UP && TECH[q.id].requires?.includes(r.id)) cmdCancelResearch(w, owner, i)
   }
+  return null
 }
 
 /** Research is done: apply it to every ship of that type already flying. */
@@ -1923,6 +1942,25 @@ export function cmdConstruct(w: World, owner: Owner, ids: number[], id: number, 
   if (!crew.length) return 'Only engineers build and repair structures'
   for (const u of crew) issue(u, { k: 'construct', id }, queued)
   return null
+}
+
+/**
+ * What a yard card in the engineers' Build section shows for yard type `t` and `craft` selected
+ * engineer craft (three to a squadron): what it costs (less on our ruin of it), the station level
+ * it needs, the reason it can't be started (a locked level, or credits), whether we already have
+ * it (standing, or going up), and how many seconds the selected crew take (a squadron welds at the
+ * yard's build time, up to ENGINEERS.crew craft on one job).
+ */
+export function yardOffer(w: World, owner: Owner, t: UnitType, craft: number) {
+  const p = w.players[owner]
+  const ours = w.units.find((u) => !u.dead && u.owner === owner && u.t.id === t.id)
+  const ruin = (w.ruins ?? []).find((r) => r.owner === owner && r.unit === t.id)
+  const cost = ruin ? Math.round(t.cost * REBUILD) : t.cost
+  const locked = !ours && t.level > p.level
+  const poor = !ours && !locked && p.credits < cost
+  const why = ours ? null : locked ? `Needs station level ${t.level}` : poor ? `Not enough credits: ${Math.ceil(cost - p.credits)} more` : null
+  const secs = Math.ceil(t.build / (Math.min(Math.max(craft, 1), ENGINEERS.crew) / 3))
+  return { ours, ruin: !!ruin, cost, locked, poor, why, secs }
 }
 
 /** What cancelling a construction site gives back now: all of it before work has started, then
@@ -2179,7 +2217,7 @@ export function cmdCancelExpand(w: World, owner: Owner, uid: number, index: numb
   const u = w.byId.get(uid)
   const j = u && !u.dead && u.owner === owner ? u.xq?.[index] : undefined
   if (!j) return 'Nothing to cancel'
-  giveBack(w, w.players[owner], MODULE[j.id].cost, 'structures', `Cancelled: ${MODULE[j.id].name}`)
+  cancelUpgrade(w, w.players[owner], MODULE[j.id].cost, 'structures', MODULE[j.id].name)
   u!.xq!.splice(index, 1)
   return null
 }

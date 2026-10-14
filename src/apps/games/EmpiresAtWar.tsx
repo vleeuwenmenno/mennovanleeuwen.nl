@@ -1004,6 +1004,20 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     centerOn(u.x + 150, u.y + 80)
     sound.click()
   }
+  /** Select every engineer of ours and look at them: their Build section has the yards. False (with
+   * a message) when there are none. */
+  const selectEngineers = () => {
+    const eng = world.current.units.filter((u) => !u.dead && u.owner === me && isEngineer(u.t))
+    if (!eng.length) {
+      toast('Build engineers first', 'bad')
+      sound.error()
+      return false
+    }
+    select(eng.map((u) => u.id))
+    centerOn(eng.reduce((s, u) => s + u.x, 0) / eng.length, eng.reduce((s, u) => s + u.y, 0) / eng.length)
+    sound.click()
+    return true
+  }
   /** Select the station (where ships are built) and look at it. */
   const selectStation = () => {
     const st = world.current.byId.get(world.current.players[me].station)
@@ -1483,6 +1497,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           const site = w.byId.get(e.unit)
           sound.researchDone()
           toast(`${up.name}${up.levels > 1 ? ` ${e.level}` : ''} fitted`, 'good', site && { x: site.x, y: site.y, unit: site.id })
+        } else if (e.k === 'cancelled' && e.owner === me) {
+          toast(`+${Math.round(e.amount)} refunded: ${e.what}`, 'good')
         } else if (e.k === 'refunded' && e.owner === me) {
           toast(`Retreat refund: +${Math.round(e.amount)} credits for the ${UNIT[e.unit].name}`, 'good')
         } else if (e.k === 'repaired' && e.owner === me) {
@@ -2276,8 +2292,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     setUi((u) => ({ ...u, tree: open }))
   }
   const cancelResearch = (i: number) => {
-    order('cancelResearch', i)
-    sound.unqueued()
+    if (!order('cancelResearch', i)) sound.unqueued()
   }
   const setSpeed = (s: number) => {
     speed.current = s
@@ -2582,6 +2597,14 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
               onResearch={research}
               onTechTree={() => setTree(true)}
               onSite={buildSite}
+              onCancelUpgradeSite={(id) => {
+                const why = order('cancelUpgradeSite', id)
+                if (why) {
+                  toast(why, 'bad')
+                  sound.error()
+                } else sound.unqueued()
+              }}
+              onEngineers={selectEngineers}
               onUpgradeSite={(id, upgrade) => {
                 const why = order('upgradeSite', id, upgrade)
                 if (why) {

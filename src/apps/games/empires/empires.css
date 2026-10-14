@@ -4120,24 +4120,90 @@ span.ew-teamtag {
 .ew-deck .ew-sitebox .ew-repair {
   align-self: flex-start;
 }
-.ew-engtools {
+/* Engineers' Build section: the yards as cards in full colour. A station that is too low shows an
+   overlay with the reason (never a greyed-out picture); short of credits turns the price red. */
+.ew-engbuild {
   display: flex;
   flex-direction: column;
   gap: 4px;
   margin-top: 4px;
 }
-.ew-engtools .ew-yard {
-  grid-template-rows: 64px;
-  grid-auto-columns: 88px;
+.ew-engbuild > header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
 }
-.ew-deck .ew-engtools .ew-yard .ew-shipcard.ew-yardcard {
+.ew-engbuild > header strong {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ew-gold);
+}
+.ew-engbuild .ew-engbuild-cards {
+  grid-template-rows: 90px;
+  grid-auto-columns: 132px;
+  gap: 6px;
+}
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard,
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard.is-locked,
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard.is-poor {
   grid-row: auto;
-  width: 88px;
-  height: 64px;
-  grid-template-rows: 26px auto auto;
+  width: 132px;
+  height: 90px;
+  opacity: 1;
+  filter: none;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: 32px auto auto auto;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(26, 40, 74, 0.95), rgba(12, 18, 36, 0.95));
+  border-color: rgba(120, 170, 230, 0.35);
 }
-.ew-deck .ew-engtools .ew-yard .ew-yardcard .ew-art {
-  height: 26px;
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard:hover:not(:disabled) {
+  background: linear-gradient(180deg, rgba(40, 62, 110, 0.98), rgba(16, 24, 48, 0.98));
+}
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard.is-built {
+  border-color: rgba(125, 255, 160, 0.45);
+}
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard.is-ruin {
+  border-color: rgba(255, 178, 122, 0.55);
+}
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard .ew-art,
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard.is-locked img {
+  height: 32px;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.6));
+}
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard strong {
+  white-space: nowrap;
+  min-height: 0;
+}
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard.is-locked .ew-cost,
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard.is-locked .ew-time {
+  visibility: visible;
+}
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard.is-poor .ew-cost {
+  color: #ff8a7a;
+}
+.ew-yardcard .ew-yc-crew {
+  grid-column: 1 / -1;
+  font-size: 9.5px;
+  color: #b9c8e0;
+  white-space: nowrap;
+}
+.ew-yardcard .ew-yc-lock {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--ew-gold);
+  background: linear-gradient(180deg, rgba(8, 12, 26, 0.35), rgba(8, 12, 26, 0.78) 55%);
+  text-shadow: 0 1px 3px #000;
 }
 .ew-placebar {
   display: flex;

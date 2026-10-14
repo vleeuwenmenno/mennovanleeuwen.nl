@@ -10,8 +10,8 @@ import { modelFor, typeOfSprite } from './models/index.ts'
 import { moduleThumbnail, thumbnail } from './models/paint.ts'
 import { keyName, modName, useSettings, type Action } from './settings'
 import { freeGroup, type GroupInfo } from './groups'
-import { LongPress, isTouch, shiftOf, useCoarse, useLongPressWheel } from './Touch'
-import { FIELD_DAMAGE, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, escorts, escortsOf, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
+import { LongPress, isTouch, shiftOf, useCancelPress, useCoarse, useLongPressWheel } from './Touch'
+import { FIELD_DAMAGE, yardOffer, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, escorts, escortsOf, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard, research and game speed; and along the bottom the tactical map, a details panel for
@@ -389,8 +389,9 @@ function RetreatIcon({ ships, onRetreat }: { ships: Unit[]; onRetreat: (ids: num
 
 /** A mining platform's own upgrades: what it earns now, and a button per upgrade with its level
  * pips and price, or its progress while it's being fitted. */
-function SiteUpgrades({ w, me, u, onUpgrade }: { w: World; me: Owner; u: Unit; onUpgrade: (id: number, upgrade: SiteUpgradeId) => void }) {
+function SiteUpgrades({ w, me, u, onUpgrade, onCancel }: { w: World; me: Owner; u: Unit; onUpgrade: (id: number, upgrade: SiteUpgradeId) => void; onCancel: (id: number) => void }) {
   const p = w.players[me]
+  const press = useCancelPress()
   const perMin = (MINE_INCOME * mineOutput(u) * p.incomeMul * 60) | 0
   return (
     <div className="ew-siteupg">
@@ -402,8 +403,13 @@ function SiteUpgrades({ w, me, u, onUpgrade }: { w: World; me: Owner; u: Unit; o
           const busy = u.upgrading?.id === up.id ? u.upgrading : null
           const why = cantUpgradeSite(w, me, u, up.id)
           return (
-            <button key={up.id} className={`ew-siteupg-btn ${busy ? 'is-busy' : !next ? 'is-done' : why ? 'is-off' : ''}`} onClick={() => onUpgrade(u.id, up.id)}
-              data-tip={`${up.name}: ${up.blurb}\nThis platform only: rebuilt, it starts again.${next ? `\nLevel ${next.level}: ${next.cost} credits, ${next.time} s.` : '\nFully upgraded.'}${why && next && !busy ? `\n\n${why}` : ''}`}>
+            <button key={up.id} className={`ew-siteupg-btn ${busy ? 'is-busy' : !next ? 'is-done' : why ? 'is-off' : ''}`} onClick={() => !busy && onUpgrade(u.id, up.id)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                if (busy && !press.touched()) onCancel(u.id)
+              }}
+              {...press.handlers(busy ? () => onCancel(u.id) : null)}
+              data-tip={`${up.name}: ${up.blurb}\nThis platform only: rebuilt, it starts again.${next ? `\nLevel ${next.level}: ${next.cost} credits, ${next.time} s.` : '\nFully upgraded.'}${why && next && !busy ? `\n\n${why}` : ''}${busy ? '\n\nRight-click to cancel (full refund). Long-press on touch.' : ''}`}>
               <strong>{up.name}</strong>
               <span className="ew-pips">{Array.from({ length: up.levels }, (_, i) => <i key={i} className={i < have ? 'is-on' : ''} />)}</span>
               <small>{busy ? `Fitting… ${Math.ceil(busy.left)}s` : next ? <><Icon name="credits" size={11} /> {next.cost}</> : 'Done'}</small>
@@ -855,6 +861,10 @@ type DetailProps = {
   onSite: (node: number, id: string) => void
   onRepair: (id: number) => void
   onUpgradeSite: (id: number, upgrade: SiteUpgradeId) => void
+  /** Call off the upgrade being fitted to a mining platform (full refund). */
+  onCancelUpgradeSite: (id: number) => void
+  /** Select our engineers (for their Build section); false when there are none. */
+  onEngineers: () => boolean
   /** Retreat these ships into hyperspace (or call it off). */
   onRetreat: (ids: number[]) => void
   /** A structure's gun picked by clicking it, if any. */
@@ -1090,12 +1100,13 @@ function StationDetail(p: DetailProps & { st: Unit }) {
   const queued = (id: string) => hud.queue.filter((q) => q.unit === id).length
   // Strike craft and warships on separate pages (and, with hybrid bases, the yards and expansions),
   // Strike craft first; the choice is remembered (see storedPage).
-  type Page = 'strike' | 'warships' | 'yards' | 'expansions'
+  // (Yards are built by engineers: their Build section has the cards, the station has no page for them.)
+  type Page = 'strike' | 'warships' | 'expansions'
   const [chosen, setPage] = useState<Page>(() =>
-    storedPage<Page>(w.hybrid ? ['strike', 'warships', 'yards', 'expansions'] : ['strike', 'warships'], 'strike', w.hybrid ? { warships: 'strike', buildings: 'yards' } : { buildings: 'strike' }),
+    storedPage<Page>(w.hybrid ? ['strike', 'warships', 'expansions'] : ['strike', 'warships'], 'strike', w.hybrid ? { warships: 'strike', buildings: 'expansions' } : { buildings: 'strike' }),
   )
-  // The yards and expansions pages exist only with hybrid bases.
-  const page = !w.hybrid && (chosen === 'yards' || chosen === 'expansions') ? 'strike' : chosen
+  // The expansions page exists only with hybrid bases.
+  const page = !w.hybrid && chosen === 'expansions' ? 'strike' : chosen
   const pick = (pg: Page) => {
     setPage(pg)
     storePage(pg)
@@ -1108,6 +1119,7 @@ function StationDetail(p: DetailProps & { st: Unit }) {
   const ships = page === 'strike' ? strike : warships
   // (The Frigate Yard first: it builds the line's frigates.)
   const myYard = w.units.filter((u) => !u.dead && u.owner === me && u.t.tier === 'yard' && !u.site).sort((a, b) => Number(worksOf(a.t) === 'cyard') - Number(worksOf(b.t) === 'cyard'))[0]
+  const hasEngineers = w.units.some((u) => !u.dead && u.owner === me && isEngineer(u.t))
   const grid = useRef<HTMLDivElement>(null)
   // The wheel scrolls the cards sideways when they don't all fit.
   useEffect(() => {
@@ -1137,7 +1149,7 @@ function StationDetail(p: DetailProps & { st: Unit }) {
         </div>
         <div className="ew-detail-main">
           <header className="ew-yardhead">
-            {w.hybrid ? <BaseTabs w={w} me={me} cur={st.id} onSelect={p.onSelect} onRuin={() => pick('yards')} /> : <h5 className="ew-yardtitle">Shipyard</h5>}
+            {w.hybrid ? <BaseTabs w={w} me={me} cur={st.id} onSelect={p.onSelect} onRuin={() => !p.onEngineers() && pick('strike')} /> : <h5 className="ew-yardtitle">Shipyard</h5>}
             <TechTreeButton hud={hud} onOpen={p.onTechTree} />
           </header>
           <BuildPanel
@@ -1147,7 +1159,6 @@ function StationDetail(p: DetailProps & { st: Unit }) {
               { id: 'warships', group: 'units', label: 'Warships', badge: warships.length,
                 tip: w.hybrid ? 'Warships: none are built at the Command Station any more. Frigates and corvettes come from the Frigate Yard, cruisers and flagships from the Capital Yard.' : 'Warships: corvettes, frigates, cruisers and dreadnoughts. Built for the fleet inventory, or straight to the station with the small jump button.' },
               ...(w.hybrid ? [
-                { id: 'yards', group: 'buildings' as const, label: 'Yards', tip: "Yards: engineers build them within the Command Station's build radius. The Frigate Yard (station level 2) builds frigates and corvettes, the Capital Yard (level 3) cruisers and flagships." },
                 { id: 'expansions', group: 'buildings' as const, label: 'Expansions', badge: `${st.xm?.length ?? 0}/${modulesFor('station').length}`, tip: 'Expansions: modules the Command Station builds onto itself, one at a time: a Strike hangar for bombers, a Sensor array and a Shield core.' },
               ] : []),
             ]}
@@ -1156,10 +1167,9 @@ function StationDetail(p: DetailProps & { st: Unit }) {
                 {/* No warships at the Command Station with hybrid bases: a ghost card points the way. */}
                 {page === 'warships' && w.hybrid && !ships.length && (
                   <GhostCard t={UNIT[unitOf(faction, 'frigate').id]} text={myYard ? `Built at the ${WORKS_NAME[worksOf(myYard.t) ?? 'yard']}` : 'Built at the Frigate Yard'}
-                    go={myYard ? `Select the ${myYard.t.name}` : 'No yard yet: open Buildings › Yards to build one with engineers'}
-                    onGo={() => (myYard ? p.onSelect(myYard.id) : pick('yards'))} />
+                    go={myYard ? `Select the ${myYard.t.name}` : hasEngineers ? 'No yard yet: selects your engineers, their Build section has the yards' : 'No yard yet, and no engineers: build engineers first'}
+                    onGo={() => (myYard ? p.onSelect(myYard.id) : !p.onEngineers() && pick('strike'))} />
                 )}
-                {page === 'yards' && yardsFor(faction).map((t) => <YardCard key={t.id} w={w} me={me} t={t} onPlace={p.onPlace} onSelect={p.onSelect} />)}
                 {page === 'expansions' && <ExpansionCards w={w} me={me} u={st} onExpand={p.onExpand} onCancel={p.onCancelExpand} />}
                 {(page === 'warships' || page === 'strike') && ships.map((t) => (
                   <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id)} whyReserve={cantBuild(w, me, t.id, true)} level={hud.level} queued={queued(t.id)} onBuild={p.onBuild} onUnqueue={p.onUnqueue}
@@ -1348,7 +1358,11 @@ export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false,
         const where = !t ? `at ${at}` : campaign ? 'joins the fleet in orbit' : q.reserve ? 'for the fleet inventory' : fromHangar(t) ? 'from the hangar' : `jumps in at ${at}`
         return (
           <button key={i} className={`ew-holo ${i === 0 ? 'is-building' : ''}`} onClick={() => onCancel(i)}
-            data-tip={`${name}, ${where}${i === 0 ? `: ${Math.round(done * 100)}%, ${Math.ceil(q.left)} s left` : `: waiting (${i + 1} in the queue)`}.\nClick to cancel and refund.`}>
+            onContextMenu={(e) => {
+              e.preventDefault()
+              onCancel(i)
+            }}
+            data-tip={`${name}, ${where}${i === 0 ? `: ${Math.round(done * 100)}%, ${Math.ceil(q.left)} s left` : `: waiting (${i + 1} in the queue)`}.\nClick or right-click to cancel (full refund).`}>
             <span className="ew-holo-beam" />
             <span className="ew-holo-ship">
               <img className="is-dim" src={art(sprite)} alt="" draggable={false} />
@@ -1874,7 +1888,6 @@ function orderText(w: World, u: Unit) {
 
 function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
   const art = unitArt
-  const { keys } = useSettings()
   const { u, squad, me, w } = p
   const coarse = useCoarse()
   const t = u.t
@@ -1896,15 +1909,8 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
           {mine && <span className="ew-muted ew-small ew-orders">{orderText(w, u)}{u.kills > 0 ? ` · ${u.kills} kills` : ''}</span>}
           {mine && <RetreatIcon ships={squad.filter((x) => x.owner === me)} onRetreat={p.onRetreat} />}
         </header>
-        {/* Engineers: their job first, the yard they can build and how. */}
-        {mine && isEngineer(t) && w.hybrid && (
-          <div className="ew-engtools">
-            <div className="ew-yard">
-              {yardsFor(u.t.faction).map((yt) => <YardCard key={yt.id} w={w} me={me} t={yt} onPlace={p.onPlace} onSelect={p.onSelect} />)}
-            </div>
-            <span className="ew-muted ew-small">{coarse ? 'Tap the card, then a spot in the build ring. Long-press one of our structures to repair it.' : `Click the card (${keyName(keys.build)}), then a spot in the build ring. Right-click one of our structures to repair it.`}</span>
-          </div>
-        )}
+        {/* Engineers: their job first, the yards they can build and how. */}
+        {mine && isEngineer(t) && w.hybrid && <EngineerBuild w={w} me={me} crew={squad.filter((x) => x.owner === me && isEngineer(x.t))} onPlace={p.onPlace} onSelect={p.onSelect} />}
         {mine && squad.length === 1 && <EscortLine w={w} u={u} />}
         <span className="ew-muted ew-small">{t.blurb}</span>
         {u.rush && <span className="ew-rushnote">{rushNote(u)}</span>}
@@ -1912,7 +1918,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
         <Vitals u={u} squad={squad} now={w.time} />
         {u.hps.length > 0 && <HpSummary u={u} />}
         {mine && squad.length === 1 && !isShip(t) && u.guns.length > 0 && !building(u) && <FocusInfo w={w} u={u} pick={p.turretPick} onClear={p.onClearFocus} />}
-        {mine && squad.length === 1 && t.tier === 'mine' && !building(u) && <SiteUpgrades w={w} me={me} u={u} onUpgrade={p.onUpgradeSite} />}
+        {mine && squad.length === 1 && t.tier === 'mine' && !building(u) && <SiteUpgrades w={w} me={me} u={u} onUpgrade={p.onUpgradeSite} onCancel={p.onCancelUpgradeSite} />}
         {mine && squad.length === 1 && (t.tier === 'mine' || t.tier === 'defense') && <RepairButton w={w} me={me} u={u} onRepair={p.onRepair} />}
         {mine && techsFor(t.id).length > 0 && (
           <div className="ew-unittech">
@@ -1939,7 +1945,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
 /**
  * The building switcher over the build panel: a small picture tab for the Command Station and each
  * of our yards (one going up shows how far along it is), and a dimmed one for a yard's ruin, which
- * opens the station's Buildings › Yards to rebuild it.
+ * selects the engineers, whose Build section rebuilds it.
  */
 function BaseTabs({ w, me, cur, onSelect, onRuin }: { w: World; me: Owner; cur: number; onSelect: (id: number) => void; onRuin?: () => void }) {
   const { keys } = useSettings()
@@ -1967,7 +1973,7 @@ function BaseTabs({ w, me, cur, onSelect, onRuin }: { w: World; me: Owner; cur: 
         )
       })}
       {ruins.map((r) => (
-        <button key={r.id} role="tab" aria-selected={false} className="is-ruin" onClick={onRuin} data-tip={`${UNIT[r.unit].name}: a ruin. Engineers rebuild it there for ${Math.round(REBUILD * 100)}% of the price (the station's Buildings › Yards).`}>
+        <button key={r.id} role="tab" aria-selected={false} className="is-ruin" onClick={onRuin} data-tip={`${UNIT[r.unit].name}: a ruin. Engineers rebuild it there for ${Math.round(REBUILD * 100)}% of the price (click: select them, their Build section has it).`}>
           <ShipArt t={UNIT[r.unit]} className="is-ruin" />
           <span>{r.unit.endsWith('cyard') ? 'Capital' : 'Frigate'}</span>
           <em>Ruin</em>
@@ -1977,26 +1983,55 @@ function BaseTabs({ w, me, cur, onSelect, onRuin }: { w: World; me: Owner; cur: 
   )
 }
 
-/** A yard as something to build: its price and what it needs, or how ours is doing (standing,
- * going up, or a ruin to rebuild for less). Click to place it, or to select the one we have. */
-export function YardCard({ w, me, t, onPlace, onSelect }: { w: World; me: Owner; t: UnitType; onPlace: (unit: string) => void; onSelect: (id: number) => void }) {
-  const p = w.players[me]
-  const ours = w.units.find((u) => !u.dead && u.owner === me && u.t.id === t.id)
-  const ruin = (w.ruins ?? []).find((r) => r.owner === me && r.unit === t.id)
-  const engineers = w.units.some((u) => !u.dead && u.owner === me && isEngineer(u.t))
-  const cost = ruin ? Math.round(t.cost * REBUILD) : t.cost
-  const locked = t.level > p.level
-  const why = ours ? null : locked ? `Needs station level ${t.level}` : !engineers ? 'Needs engineers: build a squadron at the Command Station' : p.credits < cost ? 'Not enough credits' : null
-  const state = ours ? (building(ours) ? `Going up: ${Math.round((1 - ours.building / ours.t.build) * 100)}%` : 'Built') : ruin ? `Rebuild: ${cost}` : null
-  const tip = `${t.name}\n${t.blurb}\nEngineers build it within the Command Station\'s build radius, in ${t.build} s for one squadron (more go faster). A destroyed yard leaves its ruin: rebuilt there, it costs ${Math.round(REBUILD * 100)}% (its expansions are lost with it).\nExpansions it takes: ${modulesFor(worksOf(t) ?? 'yard').map((m) => m.name).join(', ')}.${ours ? '\n\nClick to select it.' : why ? `\n\n${why}` : '\n\nClick, then pick a spot inside the build ring.'}`
+/** Who is welding, for a crew of `craft` engineer craft: whole squadrons (three craft each) where they are, else craft. */
+const crewName = (craft: number) => {
+  const sq = craft / 3
+  return Number.isInteger(sq) ? `${sq} squadron${sq === 1 ? '' : 's'}` : `${craft} engineer craft`
+}
+
+/** One yard as something to build: its price, the station level it needs (an overlay with its
+ * reason when the station is short; the picture stays in colour), its build time with the selected
+ * crew, or how ours is doing (standing or going up), or a ruin to rebuild for less. Click to place
+ * it with the selected engineers, or to select the one we have. */
+export function YardCard({ w, me, t, crew, onPlace, onSelect }: { w: World; me: Owner; t: UnitType; crew: number; onPlace: (unit: string) => void; onSelect: (id: number) => void }) {
+  const { ours, ruin, cost, locked, poor, why, secs } = yardOffer(w, me, t, crew)
+  const state = ours ? (building(ours) ? `Going up: ${Math.round((1 - ours.building / ours.t.build) * 100)}%` : 'Built') : null
+  const tip = `${t.name}\n${t.blurb}\nEngineers build it within the Command Station's build radius: ${t.build} s for one squadron, more go faster (up to ${ENGINEERS.crew / 3}). A destroyed yard leaves its ruin: rebuilt there, it costs ${Math.round(REBUILD * 100)}% (its expansions are lost with it).\nExpansions it takes: ${modulesFor(worksOf(t) ?? 'yard').map((m) => m.name).join(', ')}.${ours ? '\n\nClick to select it.' : why ? `\n\n${why}` : '\n\nClick, then pick a spot inside the build ring (B works too).'}`
   return (
-    <button className={`ew-shipcard ew-yardcard ${locked ? 'is-locked' : why ? 'is-off' : ''} ${ours ? 'is-built' : ''}`} onClick={() => (ours ? onSelect(ours.id) : onPlace(t.id))} {...unitTip(t, ownerTag(w, me, me), tip)}>
+    <button className={`ew-shipcard ew-yardcard ${locked ? 'is-locked' : poor ? 'is-poor' : ''} ${ours ? 'is-built' : ''} ${ruin ? 'is-ruin' : ''}`} onClick={() => (ours ? onSelect(ours.id) : onPlace(t.id))} {...unitTip(t, ownerTag(w, me, me), tip)}>
       <ShipArt t={t} />
-      <strong>{t.name.replace(/^\S+ /, '')}</strong>
-      {state ? <span className="ew-cost">{state}</span> : <span className="ew-cost"><Icon name="credits" size={11} /> {cost}</span>}
+      <strong>{t.name.replace(/^\S+ /, '')}{ruin && !ours ? ' (ruin)' : ''}</strong>
+      {state ? <span className="ew-cost">{state}</span> : <span className="ew-cost"><Icon name="credits" size={11} /> {ruin ? `Rebuild ${cost}` : cost}</span>}
       {!state && <span className="ew-time"><Icon name="time" size={11} /> {t.build}s</span>}
-      {locked && <span className="ew-lock">Lv{t.level}</span>}
+      {!state && <span className="ew-yc-crew">{crewName(crew)} · {secs} s</span>}
+      {locked && <span className="ew-yc-lock">{why}</span>}
     </button>
+  )
+}
+
+/**
+ * The Build section of selected engineers: the yards they can put up as cards (the Frigate Yard and
+ * the Capital Yard, one of them a ruin to rebuild if it was destroyed), each with its price, the
+ * level it needs, and how long the selected squadrons take. Shown wherever engineers are in the
+ * selection, alone or with others.
+ */
+export function EngineerBuild({ w, me, crew, onPlace, onSelect }: { w: World; me: Owner; crew: Unit[]; onPlace: (unit: string) => void; onSelect: (id: number) => void }) {
+  const { keys } = useSettings()
+  const coarse = useCoarse()
+  if (!crew.length || !w.hybrid) return null
+  const faction = crew[0].t.faction
+  return (
+    <section className="ew-engbuild" aria-label="Build">
+      <header>
+        <strong>Build</strong>
+        <span className="ew-muted ew-small" data-tip={coarse ? 'Tap a card, then a spot in the build ring. Long-press one of our structures to repair it.' : `Click a card (${keyName(keys.build)}), then a spot in the build ring. Right-click one of our structures to repair it.`}>
+          {coarse ? 'Tap a card, then a spot in the build ring' : `Click a card (${keyName(keys.build)}), then a spot in the build ring`}
+        </span>
+      </header>
+      <div className="ew-yard ew-engbuild-cards">
+        {yardsFor(faction).map((yt) => <YardCard key={yt.id} w={w} me={me} t={yt} crew={crew.length} onPlace={onPlace} onSelect={onSelect} />)}
+      </div>
+    </section>
   )
 }
 
@@ -2024,11 +2059,12 @@ export const moduleTip = (id: ModuleId) => {
 
 /**
  * A building's expansions as a row of cards: each one built (or shot off), being built, queued,
- * ready to order or locked with the reason, with its price and time. Click one to order it, click
- * one queued or under way to call it off (refunded).
+ * ready to order or locked with the reason, with its price and time. Click one to order it;
+ * right-click one queued or under way to cancel it (a full refund).
  */
 export function ExpansionCards({ w, me, u, onExpand, onCancel }: { w: World; me: Owner; u: Unit; onExpand: (uid: number, id: ModuleId) => void; onCancel: (uid: number, index: number) => void }) {
   const kind = worksOf(u.t)
+  const press = useCancelPress()
   if (!kind) return null
   return (
     <>
@@ -2042,12 +2078,17 @@ export function ExpansionCards({ w, me, u, onExpand, onCancel }: { w: World; me:
                   : null
         const what = s.status === 'built' ? 'It stands: its feature works.'
           : s.status === 'lost' ? `Shot off: its feature is down. Engineers weld it back for ${moduleRebuildCost(m.id)} credits (right-click the building with them), or send a repair crew.`
-            : s.status === 'busy' || s.status === 'queued' ? 'Click to call it off (refunded).'
+            : s.status === 'busy' || s.status === 'queued' ? `Right-click to cancel (full refund: ${MODULE[m.id].cost} credits). Long-press on touch.`
               : s.status === 'ready' ? 'Click to build it.'
                 : s.why ?? ''
         return (
           <button key={m.id} className={`ew-shipcard ew-modcard is-${s.status} ${s.status === 'locked' ? 'is-locked' : s.status === 'poor' ? 'is-off' : ''}`}
-            onClick={() => (s.status === 'busy' || s.status === 'queued' ? onCancel(u.id, s.slot) : s.status === 'ready' || s.status === 'poor' ? onExpand(u.id, m.id) : undefined)}
+            onClick={() => (s.status === 'ready' || s.status === 'poor' ? onExpand(u.id, m.id) : undefined)}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              if ((s.status === 'busy' || s.status === 'queued') && !press.touched()) onCancel(u.id, s.slot)
+            }}
+            {...press.handlers(s.status === 'busy' || s.status === 'queued' ? () => onCancel(u.id, s.slot) : null)}
             data-tip={`${moduleTip(m.id)}\n\n${what}`} aria-label={`${m.name}: ${s.status}`}>
             <span className="ew-modicon" style={{ ['--c' as string]: HP_COLOR[m.kind] }}><HpIcon kind={m.kind} size={22} /></span>
             <strong>{m.name}</strong>
@@ -2123,7 +2164,7 @@ function YardDetail(p: DetailProps & { y: Unit }) {
         </div>
         <div className="ew-detail-main">
           <header className="ew-yardhead">
-            <BaseTabs w={w} me={me} cur={y.id} onSelect={p.onSelect} onRuin={() => (storePage('yards'), p.onSelect(w.players[me].station))} />
+            <BaseTabs w={w} me={me} cur={y.id} onSelect={p.onSelect} onRuin={() => p.onEngineers()} />
           </header>
           {site ? (
             <div className="ew-sitebox" data-tip={`Engineers build a yard at one squadron's pace per three craft, up to three squadrons at once: this one takes ${y.t.build} s with one squadron, ${Math.round(y.t.build / 2)} s with two, ${Math.round(y.t.build / 3)} s with three.`}>
@@ -2170,7 +2211,7 @@ function YardDetail(p: DetailProps & { y: Unit }) {
 /** Several kinds of ship: a row per type. */
 function GroupDetail(p: DetailProps) {
   const art = unitArt
-  const { sel } = p
+  const { sel, w } = p
   const coarse = useCoarse()
   const types = new Map<string, Unit[]>()
   for (const u of sel) types.set(u.t.id, [...(types.get(u.t.id) ?? []), u])
@@ -2181,6 +2222,7 @@ function GroupDetail(p: DetailProps) {
           <strong>Fleet</strong>
           <span className="ew-muted ew-small">{coarse ? 'Tap a type to keep only those; with Shift on, a tap drops them.' : 'Click a type to keep only those, Shift-click to drop them.'}</span>
         </header>
+        {w.hybrid && p.sel.some((u) => u.owner === p.me && isEngineer(u.t)) && <EngineerBuild w={w} me={p.me} crew={p.sel.filter((u) => u.owner === p.me && isEngineer(u.t))} onPlace={p.onPlace} onSelect={p.onSelect} />}
         <div className="ew-fleet">
           {[...types.values()].map((us) => {
             const t = us[0].t
