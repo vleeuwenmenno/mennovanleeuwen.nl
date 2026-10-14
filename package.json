@@ -25,6 +25,7 @@
     "check:empires-fleets": "node scripts/empires-fleets.ts",
     "check:empires-queue": "node scripts/empires-queue.ts",
     "check:empires-spacing": "node scripts/empires-spacing.ts",
+    "check:empires-overlap": "node scripts/empires-overlap.ts",
     "check:empires-repair": "node scripts/empires-repair.ts",
     "check:empires-models": "node scripts/empires-models.ts",
     "check:empires-yards": "node scripts/empires-yards.ts",

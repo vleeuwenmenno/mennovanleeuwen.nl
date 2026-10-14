@@ -1889,8 +1889,38 @@ out of its path, smoothly, a little each tick. Ships of the same class share the
 A unit's own `pushClass` overrides its class's: the hook for a later ability that lets a ship
 shove bigger hulls. Tractor lock only slows ships, so it doesn't touch this.
 
+**Flying over.** Ships two or more classes apart don't touch at all (`overlaps`, `heightOf` in
+sim.ts), friend or foe, the way strike craft have always flown over everything: gunships and
+corvettes cross cruisers and flagships, frigates cross flagships. The small one flies straight
+across, the big one doesn't shove it, so a flagship no longer gathers a clump of gunships pressed
+against its hull. Gunship and frigate, frigate and cruiser, cruiser and flagship, and the same
+class stay solid, and so do structures for everything but fighters. A unit's own `height`
+overrides its class's. Formations no longer spread out to make room for a lone big ship among
+small ones that fly over it (`spreadOf`). On screen a smaller ship is always drawn over a bigger
+one (`drawRank` in render.ts: by class, then by id), with a faint soft shadow on the hull under it,
+offset away from the light: its own silhouette, painted once per model into a small bitmap
+(`drawShadow` in models/paint.ts), one `drawImage` per ship over a hull. A click picks the topmost
+ship under the pointer, so a gunship over a flagship is picked, and the flagship's hull round it
+picks the flagship; a hardpoint marker under a smaller ship gives way to it too.
+
+**Escorts.** Guard (V) on a friendly ship two classes bigger escorts it (`escorts`, `wardOf`,
+`escortSlot`, `keepStation` in sim.ts): each escort takes a slot of its own over the hull, down
+both flanks in turn from bow to stern, handed out by id each tick, so several never stack; the
+slots are fixed to the hull, so the escorts move and turn with it, matching its heading and pace.
+An enemy that comes within reach of an escort's guns of the ship (measured from its hull's edge) is
+engaged, chased at most `ESCORT.leash` further, and then the escort comes back to its slot; a
+holding escort only fires from its slot. Repair escorts mend their ship first: tenders patch it
+before anyone else, Field repair crews start a run on it once it has lost 3% of itself. When the
+ship is lost its escorts take their next queued order, or wait where they are. It is the ordinary
+guard order, so it goes through `commands.ts` and the server unchanged. The map tags the escorted
+ship "Escorting" and a selected escorted ship "Escorted by 3" (its card says so too), selected
+escorts show a faint tether to it, and with Guard armed a ship the selection would escort is tagged
+"Escort" (on touch, the wheel offers *Escort it*). The AI gives its flagship a repair tender and two
+gunships as an escort, kept out of its waves.
+
 ```sh
 pnpm check:empires-spacing   # the arc, the stopping distances, following a target that moves, determinism
+pnpm check:empires-overlap   # flying over, still solid, escort slots, engaging and returning, repairs, losing the ship, determinism
 ```
 
 ## Empires At War messages and AI

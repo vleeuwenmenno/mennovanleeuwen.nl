@@ -31,7 +31,7 @@ export const ACTIONS: { id: Action; label: string; group: string }[] = [
   { id: 'rally', label: 'Rally point', group: 'Commands' },
   { id: 'ability', label: 'Use ability', group: 'Commands' },
   { id: 'retreat', label: 'Hyperspace retreat (gunships and up)', group: 'Commands' },
-  { id: 'guard', label: 'Guard a ship or structure', group: 'Commands' },
+  { id: 'guard', label: 'Guard or escort a ship or structure', group: 'Commands' },
   { id: 'station', label: 'Select station', group: 'Selection' },
   { id: 'yard', label: 'Select yard (again: the next one)', group: 'Selection' },
   { id: 'cyard', label: 'Select the Capital Yard', group: 'Selection' },

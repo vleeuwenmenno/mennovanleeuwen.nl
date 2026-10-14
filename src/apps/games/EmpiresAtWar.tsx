@@ -17,11 +17,11 @@ import { loadSkirmish, mpActive, resumeGalaxy, saveSkirmish } from './empires/ke
 import { actionFor, getSettings, groupKeyOf, keyName, modOf, setSettings, useAskedPanel, useSettings } from './empires/settings'
 import { DoublePress, addToGroup, groupInfo, members, setGroup as putGroup, type Groups } from './empires/groups'
 import { HP_NAME, hpName } from './empires/icons'
-import { Renderer, relColor, type Camera, type View } from './empires/render'
+import { Renderer, drawRank, relColor, type Camera, type View } from './empires/render'
 import { beginLayout } from './empires/layout'
 import { defaultArea, inRect, inside, type Pt } from './empires/maps'
 import {
-  STEP, RANKS, autoStart, REFUND_DELAY, canRetreat, canSee, cantConstruct, cantMend, closedLoop, cantWarp, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, placement, startProblem, tick, wrapAngle, type Owner, type SimEvent, type Unit, type World, stateHash,
+  STEP, RANKS, autoStart, REFUND_DELAY, canRetreat, canSee, cantConstruct, cantMend, closedLoop, cantWarp, escorts, faceTargets, lineGroups, lineTargets, foes, hpPos, newFleetBattle, newWorld, placement, startProblem, tick, wrapAngle, type Owner, type SimEvent, type Unit, type World, stateHash,
 } from './empires/sim'
 import { EmpiresSound, type OrderKind } from './empires/sound'
 import { TechTree } from './empires/TechTree'
@@ -635,7 +635,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   }
   const mySelection = () => [...selected.current].map((i) => world.current.byId.get(i)).filter((u): u is Unit => !!u && u.owner === me)
 
-  /** The unit under a screen point, small craft first; plus the hardpoint, if one is close. */
+  /** The unit under a screen point, the topmost first (smaller ships are drawn over bigger ones, see
+   * drawRank: a gunship over a flagship's hull is picked, the flagship's hull round it picks the
+   * flagship); plus the hardpoint, if one is close and nothing is drawn over it there. */
   const pick = (sx: number, sy: number) => {
     const w = world.current
     const p = toWorld(sx, sy)
@@ -662,9 +664,9 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         }
       }
     }
-    if (best) bestScore = -1
+    const onHp = best
+    best = undefined
     for (const u of w.units) {
-      if (bestScore < 0) break
       if (!u.seen[myTeam]) continue
       const [uw, uh] = dims(u.t)
       const minR = 12 / z
@@ -678,17 +680,27 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       // A little wider than the hull's box, so its edges still count.
       const inside = Math.abs(lx) <= Math.max(uw * 0.55, minR) && Math.abs(ly) <= Math.max(uh * 0.55, minR)
       if (!inside) continue
-      const score = u.t.size + Math.hypot(dx, dy) * 0.1
+      const score = -drawRank(u) * 1e6 + u.t.size + Math.hypot(dx, dy) * 0.1
       if (score < bestScore) {
         bestScore = score
         best = u
       }
     }
+    // A hardpoint counts unless a ship drawn over its hull is under the point too.
+    if (onHp && (!best || drawRank(best) <= drawRank(onHp))) best = onHp
+    else hp = -1
 
     let node = -1
     for (const n of w.nodes) if (Math.hypot(n.x - p.x, n.y - p.y) < 130) node = n.id
     const wreck = w.wrecks.find((h) => Math.hypot(h.x - p.x, h.y - p.y) < h.size * 0.55 + 20)?.id ?? 0
     return { unit: best, hp, node, wreck, at: p }
+  }
+
+  /** Guard armed: the ship under the pointer, when one of the selection would escort it (a friendly
+   * ship two classes bigger), for its "Escort" tag. */
+  const escortHint = (id: number) => {
+    const g = id ? world.current.byId.get(id) : undefined
+    return g && !g.dead && !foes(world.current, g.owner, me) && mySelection().some((u) => u !== g && escorts(u, g)) ? g.id : undefined
   }
 
   /** Gives an order. In single player it runs at once. Online it goes to the server and runs on
@@ -1147,7 +1159,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       // Repair craft selected and this one hurt: Field repair on it.
       const menders = ships.filter((u) => u.t.ability === 'fieldRepair')
       if (menders.length && !cantMend(w, me, unit)) items.push(it('repair', 'Repair it', 'ability', () => useAbility(unit.id), !menders.some((u) => u.abilityCd <= 0) && 'Not ready yet'))
-      items.push(it('guard', 'Guard it', 'hold', arm('guard')), it('only', 'Select only this', 'target', only(unit)), it('type', 'Select all of type', 'fleet', () => selectType(unit, shiftOf())), ...info)
+      items.push(it('guard', ships.some((u) => escorts(u, unit)) ? 'Escort it' : 'Guard it', 'hold', arm('guard')), it('only', 'Select only this', 'target', only(unit)), it('type', 'Select all of type', 'fleet', () => selectType(unit, shiftOf())), ...info)
     } else if (ships.length) {
       // Empty space (or an ally). One ship or squadron turns to face the drag; more spread along it,
       // or keep their formation and turn to face it.
@@ -1565,6 +1577,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         // A finger has no hover: the selection shows its ranges instead.
         ranges: settingsRef.current.ranges ? (touchLast.current ? 'selected' : 'hover') : 'off',
         place: placeGhost(),
+        escortHint: mode.current === 'guard' ? escortHint(h.unit) : undefined,
         buildRing: w.hybrid && mySelection().some((u) => u.t.tier === 'station' || isEngineer(u.t)) ? (() => {
           const st = w.byId.get(w.players[me].station)
           return st ? { x: st.x, y: st.y, r: BUILD_RADIUS } : null
@@ -2491,7 +2504,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
               : ui.mode === 'attack' ? touchUi ? 'Attack move: tap where to go. Ships fight whatever they meet; tap one of ours to open fire on it.' : 'Attack move: click where to go. Ships fight whatever they meet. Drag a circle (either button) to attack everything in it; click one of ours to open fire on it.'
               : ui.mode === 'move' ? `Move: ${click} where to go. Ships ignore enemies on the way.`
                 : ui.mode === 'patrol' ? `Patrol: ${click} the far end. Ships fly back and forth, fighting what they meet.`
-                : ui.mode === 'guard' ? `Guard: ${click} one of our ships or structures. The selection stays with it and fights off what comes near.`
+                : ui.mode === 'guard' ? `Guard: ${click} one of our ships or structures. The selection stays with it and fights off what comes near. On a ship two classes bigger it escorts it: flies over its hull and moves with it.`
                   : ui.mode === 'place' ? `${UNIT[placing.current?.unit ?? yardOf(myFaction).id].name}: ${click} a spot inside the build ring round the Command Station.${touchUi ? ' Then build it here.' : ''}`
                   : `Rally point: ${click} where new ships should gather${rallyAt() ? ' from this yard' : ''}.`}{' '}
             {ui.mode === 'place'

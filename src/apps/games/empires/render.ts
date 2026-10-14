@@ -1,12 +1,12 @@
 import { CYARD_SOCKETS, MODULE, STATION_SOCKETS, YARD_SOCKETS, FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
-import { RETREAT_TIME, atHome, building, foes, hpPos, hullCap, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
+import { RETREAT_TIME, atHome, building, escorts, foes, hpPos, hullCap, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 import { BREAK_WEIGHTS, breakPieces, hullState, modelFor, unitForSprite, wreckState, type HullState, type Model } from './models/index.ts'
 import { YARD_BERTHS } from './models/base.ts'
 import { ModelFx } from './models/fx.ts'
 import { PALETTES, hash, rng as seeded } from './models/kit.ts'
-import { drawHull, drawMounts, drawPiece, liveEngines, outlineOf } from './models/paint.ts'
+import { drawHull, drawMounts, drawPiece, liveEngines, outlineOf, type Shadow } from './models/paint.ts'
 import { averageRings, moduleRing } from './ranges.ts'
 
 // Drawing the battle on a 2D canvas: the painted backdrop and two star layers in parallax, nebulas
@@ -91,6 +91,8 @@ export type View = {
   place?: { t: UnitType; x: number; y: number; a: number; ok: boolean; why: string | null; cost: number; rebuild: boolean; ring: { x: number; y: number; r: number } } | null
   /** The build radius, faintly, while the station or engineers are selected. */
   buildRing?: { x: number; y: number; r: number } | null
+  /** Guard armed, and the ship under the pointer is one the selection would escort: tagged "Escort". */
+  escortHint?: number
 }
 
 type Particle = {
@@ -285,6 +287,13 @@ const RANGE_STYLE: Record<WeaponKind, { rgb: string; dash: number[]; name: strin
   ion: { rgb: '176,146,255', dash: [14, 5, 3, 5], name: 'Ion cannon' },
 }
 const TIER_ORDER: Record<Tier, number> = { station: 0, yard: 0.5, mine: 1, defense: 1, capital: 2, cruiser: 3, frigate: 4, gunship: 5, fighter: 6 }
+/** How high a unit is drawn: structures lowest, then ships from the biggest class up to fighters, so
+ * a smaller ship is always drawn over a bigger one it flies over. Equals go by id (the order they
+ * came), so the stacking never flickers. Clicks pick the same way: the topmost first. */
+export const drawRank = (u: Unit) => TIER_ORDER[u.t.tier]
+const byDrawRank = (a: Unit, b: Unit) => TIER_ORDER[a.t.tier] - TIER_ORDER[b.t.tier] || a.id - b.id
+/** Whether fighters cast shadows on the hulls they fly over too (see shadowOver). */
+const FIGHTER_SHADOWS = true
 const ICON_PATH = new Map<HardpointKind, Path2D>()
 const iconPath = (k: HardpointKind) => {
   let p = ICON_PATH.get(k)
@@ -349,6 +358,12 @@ export class Renderer {
   private terrain: TerrainArt | null = null
   /** Where each turret points, eased towards its target: by unit id * 64 + hardpoint. */
   private aims = new Map<number, number>()
+  /** The hulls drawn so far this frame, for shadows (reused, see shadowOver). */
+  private hulls: Unit[] = []
+  /** Selected escorts and the ships they escort, in pairs, for their tethers (reused). */
+  private tethers: Unit[] = []
+  /** The shadow being drawn (reused: one at a time). */
+  private shadow: Shadow = { dx: 0, dy: 0, alpha: 0 }
   private warps: Warp[] = []
   /** Ships jumping out, on the renderer's clock from when they went. */
   private departs: Omit<Warp, 'at'>[] = []
@@ -932,6 +947,9 @@ export class Renderer {
     ctx.lineWidth = 1.5 / z
     /** Selected ships' patrols: where they start and end, labelled once for the lot. */
     const patrolEnds: { s: Pt; e: Pt }[] = []
+    /** Selected escorts and the ships they escort, in pairs. */
+    const tethers = this.tethers
+    tethers.length = 0
     for (const id of view.selected) {
       const u = w.byId.get(id)
       if (!u || u.owner !== view.me) continue
@@ -1027,7 +1045,9 @@ export class Renderer {
         }
       } else if (o.k === 'guard') {
         const g = w.byId.get(o.id)
-        if (g && !g.dead) {
+        // An escort's tether is drawn over the ships (below): it runs across the hull it rides over.
+        if (g && !g.dead && escorts(u, g)) tethers.push(u, g)
+        else if (g && !g.dead) {
           ctx.strokeStyle = 'rgba(125,255,160,0.35)'
           ctx.setLineDash([6 / z, 6 / z])
           ctx.beginPath()
@@ -1100,21 +1120,32 @@ export class Renderer {
       tags.push([ctx, mid(patrolEnds.map((p) => p.s)), 12, 'Patrol', 'patrol', '143,208,255', z])
       tags.push([ctx, mid(patrolEnds.map((p) => p.e)), 12, 'Patrol', 'patrol', '143,208,255', z])
     }
-    const guarded = new Map<number, number>()
+    // (An escorted ship's say "Escorting" and "Escorted by": see escorts.)
+    const guarded = new Map<number, boolean>()
     for (const id of view.selected) {
       const u = w.byId.get(id)
-      if (u && u.owner === view.me && u.order.k === 'guard') guarded.set(u.order.id, (guarded.get(u.order.id) ?? 0) + 1)
+      const g = u && u.owner === view.me && u.order.k === 'guard' ? w.byId.get(u.order.id) : undefined
+      if (g && !g.dead) guarded.set(g.id, (guarded.get(g.id) ?? false) || escorts(u!, g))
     }
-    for (const [id] of guarded) {
-      const g = w.byId.get(id)
-      if (g && !g.dead) tags.push([ctx, g, Math.hypot(...dims(g.t)) * 0.5 * z + 10, 'Guarding', 'guard', '95,230,208', z])
+    for (const [id, escort] of guarded) {
+      const g = w.byId.get(id)!
+      tags.push([ctx, g, Math.hypot(...dims(g.t)) * 0.5 * z + 10, escort ? 'Escorting' : 'Guarding', 'guard', '95,230,208', z])
     }
     for (const id of view.selected) {
       const u = w.byId.get(id)
       if (!u || u.owner !== view.me || guarded.has(id)) continue
-      const by = w.units.filter((m) => !m.dead && m.owner === view.me && m.order.k === 'guard' && m.order.id === id && !m.parent).length
-      if (by) tags.push([ctx, u, Math.hypot(...dims(u.t)) * 0.5 * z + 10, `Guarded by ${by}`, 'guard', '95,230,208', z])
+      let by = 0
+      let escorted = 0
+      for (const m of w.units) {
+        if (m.dead || m.owner !== view.me || m.order.k !== 'guard' || m.order.id !== id || m.parent) continue
+        by++
+        if (escorts(m, u)) escorted++
+      }
+      if (by) tags.push([ctx, u, Math.hypot(...dims(u.t)) * 0.5 * z + 10, escorted === by ? `Escorted by ${by}` : `Guarded by ${by}`, 'guard', '95,230,208', z])
     }
+    // Guard armed over a ship the selection would escort: what the click will do.
+    const hint = view.escortHint ? w.byId.get(view.escortHint) : undefined
+    if (hint && !hint.dead && !guarded.has(hint.id)) tags.push([ctx, hint, Math.hypot(...dims(hint.t)) * 0.5 * z + 10, 'Escort', 'guard', '95,230,208', z])
 
     // Support ships' repair beams: a faint green tether to each ship being patched, pulsing.
     // (Engineers weld with beams of their own, see drawWelds.)
@@ -1146,11 +1177,32 @@ export class Renderer {
       for (const id of view.selected) if (n++ < 6) this.drawRanges(ctx, w, view, z, id, view.selected.size === 1, view.turretPick?.unit === id ? view.turretPick.hp : -1)
     }
 
-    // Ships and stations, big ones first so fighters fly over them.
+    // Ships and stations, big ones first so smaller ships fly over them (see drawRank), each with a
+    // faint shadow on the hull it's over.
     const myTeam = w.players[view.me].team
     const shown = w.units.filter((u) => u.seen[myTeam] && u.owner !== view.hideOwner && onScreen(u.x, u.y, u.t.size))
-    shown.sort((a, b) => TIER_ORDER[a.t.tier] - TIER_ORDER[b.t.tier])
-    for (const u of shown) this.drawUnit(ctx, u, w, z, view)
+    shown.sort(byDrawRank)
+    // The hulls drawn so far, which the next ships may be over.
+    const hulls = this.hulls
+    hulls.length = 0
+    for (const u of shown) {
+      const sh = hulls.length && isShip(u.t) && (FIGHTER_SHADOWS || u.t.tier !== 'fighter') ? this.shadowOver(u, hulls, z) : null
+      this.drawUnit(ctx, u, w, z, view, sh)
+      if (u.t.tier !== 'fighter' && !u.site) hulls.push(u)
+    }
+    hulls.length = 0
+    // Selected escorts: a faint tether to the middle of the ship each rides over.
+    if (tethers.length) {
+      ctx.strokeStyle = 'rgba(95,230,208,0.5)'
+      ctx.lineWidth = 1.5 / z
+      ctx.beginPath()
+      for (let i = 0; i < tethers.length; i += 2) {
+        ctx.moveTo(tethers[i].x, tethers[i].y)
+        ctx.lineTo(tethers[i + 1].x, tethers[i + 1].y)
+      }
+      ctx.stroke()
+      tethers.length = 0
+    }
     this.drawWelds(ctx, w, z, myTeam, onScreen)
     // Parts blown off and fragments of small craft, over the ships.
     this.fx.draw(ctx, zdpr, onScreen)
@@ -2305,7 +2357,49 @@ export class Renderer {
     return rot
   }
 
-  private drawUnit(ctx: CanvasRenderingContext2D, u: Unit, w: World, z: number, view: View) {
+  /**
+   * A ship over a bigger hull drawn before it casts a faint shadow on it: its own silhouette, soft,
+   * dark only, offset away from the light (which comes from the top left of the screen, as the models
+   * are lit), fading in over the first part of the way in from the hull's edge so it doesn't pop. One
+   * cached bitmap per model and one drawImage per ship that is over something, drawn with its hull
+   * (see drawHull's `shadow`). `hulls` are the ones drawn so far, lowest first: only those drawn
+   * lower than this ship count. Null when it's over none.
+   */
+  private shadowOver(u: Unit, hulls: Unit[], z: number): Shadow | null {
+    const t = u.t
+    if (u.retreat > 0) return null
+    const rank = TIER_ORDER[t.tier]
+    const minPx = t.tier === 'fighter' ? 9 : t.tier === 'gunship' ? 14 : 0
+    const size = Math.max(t.size, minPx / z)
+    const r = radius(t) * (size / t.size)
+    // Offset down and to the right, more for a bigger ship (it flies higher over the hull).
+    const off = 5 + size * 0.12
+    const sx = u.x + off
+    const sy = u.y + off
+    let best = 0
+    for (const h of hulls) {
+      if (TIER_ORDER[h.t.tier] >= rank) break
+      const [hw, hh] = dims(h.t)
+      const dx = sx - h.x
+      const dy = sy - h.y
+      if (dx * dx + dy * dy > (hw + hh) * (hw + hh) * 0.25) continue
+      const c = Math.cos(h.a)
+      const sn = Math.sin(h.a)
+      const fwd = dx * c + dy * sn
+      const side = dy * c - dx * sn
+      // How far in from the edge of the hull's box (its corners trimmed off a little).
+      const depth = Math.min(hh * 0.45 - Math.abs(fwd), hw * 0.42 - Math.abs(side))
+      if (depth > 0) best = Math.max(best, Math.min(1, depth / (r + 6)))
+    }
+    if (best <= 0.02) return null
+    const sh = this.shadow
+    sh.dx = off
+    sh.dy = off
+    sh.alpha = (t.tier === 'fighter' ? 0.45 : 0.6) * best
+    return sh
+  }
+
+  private drawUnit(ctx: CanvasRenderingContext2D, u: Unit, w: World, z: number, view: View, shadow: Shadow | null = null) {
     const t = u.t
     const fac = FACTIONS[t.faction]
     // Small craft keep a minimum size on screen when zoomed far out, so fleets stay readable.
@@ -2374,7 +2468,7 @@ export class Renderer {
     if (u.site) this.drawSite(ctx, u, w, m, size, z)
     else if (m && st) {
       const zdpr = z * canvasDpr()
-      drawHull(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, st, { alpha })
+      drawHull(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, st, { alpha, shadow })
       if (t.tier === 'yard') this.drawBerth(ctx, u, m, z, alpha)
       if (m.mounts.length) drawMounts(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, u.hps, (i) => this.aim(u, i, w), alpha, u.rush?.parts)
       if (u.rush) this.drawScaffolds(ctx, u, m, size, z)
