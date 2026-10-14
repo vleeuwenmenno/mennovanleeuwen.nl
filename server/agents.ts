@@ -10,6 +10,7 @@ import { fileLink, libraries, listDir, mkdir, removeItems, rename, seafile, seaf
 import { readState } from './state.ts'
 import { webSearch } from './websearch.ts'
 import { CALENDAR_TOOLS, CALENDAR_WRITES, calendarConnected, calendarLines, calendarTools, NOT_CONNECTED, prepareCalendarCall, zoneOf, type CallSummary, type Prepared } from './agentCalendar.ts'
+import { MAIL_TOOLS, MAIL_WRITES, mailError, mailLinked, mailLines, mailTools, prepareMailCall } from './agentMail.ts'
 import { NOTE_LINK_LINES, NOTE_LINK_TOOLS, NOTE_LINK_WRITES, noteLinkTools, prepareNoteLinkCall } from './agentNoteLinks.ts'
 import { readNotes as readNoteRows, writeNotes as writeNoteRows } from './noteLinks.ts'
 import { notify } from './notifier.ts'
@@ -24,7 +25,7 @@ import { commandNames, exitPlanTool, FILE_DELETE, readBody, STEERING, FILE_TOOLS
 //
 // Most tools only read: the web through Ollama's own search and fetch, the user's notes, code
 // hosts, Seafile and calendars (server/agentCalendar.ts, which also adds, changes and deletes
-// events, each asked first). `remember` and `update_memory` keep the agent's memory, either
+// events, each asked first), and mail (server/agentMail.ts: every call, a read too, asked first). `remember` and `update_memory` keep the agent's memory, either
 // about the user or about the thread's project, sorted into categories; the Memory view shows and
 // edits it.
 // `update_todos` keeps a plan for long jobs, which lets a turn run for many more rounds. The Seafile tools that change something (a folder, a file written, renamed, moved or
@@ -150,7 +151,7 @@ export async function automaticModels(): Promise<{ quick: string; deep: string; 
 // --- tool groups -----------------------------------------------------------------------------
 
 /** What a thread may use, switched in the window: each group is one or more tools. */
-export const TOOL_GROUPS = ['web', 'notes', 'calendar', 'code', 'seafile', 'seafile_write', 'memory', 'projects', 'files', 'terminal', 'skills'] as const
+export const TOOL_GROUPS = ['web', 'notes', 'calendar', 'mail', 'code', 'seafile', 'seafile_write', 'memory', 'projects', 'files', 'terminal', 'skills'] as const
 export type ToolGroup = (typeof TOOL_GROUPS)[number]
 const GROUP_OF: Record<string, ToolGroup> = {
   web_search: 'web',
@@ -162,6 +163,7 @@ const GROUP_OF: Record<string, ToolGroup> = {
   ...Object.fromEntries([...CALENDAR_TOOLS].map((t) => [t, 'calendar'])),
   // Notes linked to events: offered with the calendar, and only while notes are on too (toolsFor).
   ...Object.fromEntries([...NOTE_LINK_TOOLS].map((t) => [t, 'calendar'])),
+  ...Object.fromEntries([...MAIL_TOOLS].map((t) => [t, 'mail'])),
   search_code: 'code',
   seafile_list: 'seafile',
   seafile_search: 'seafile',
@@ -183,6 +185,22 @@ const GROUP_OF: Record<string, ToolGroup> = {
   read_skill_file: 'skills',
 }
 const toolGroups = (v: unknown): ToolGroup[] | null => (Array.isArray(v) ? TOOL_GROUPS.filter((g) => v.includes(g)) : null)
+/** Groups added after threads first stored their choice as a bare list: a list from then doesn't know them, so they are on. */
+const LATER_GROUPS: ToolGroup[] = ['mail']
+/**
+ * A thread's stored groups: `{ on, seen }`, `seen` being the groups there were when it was saved,
+ * so any group added since starts switched on, like it does for a new thread. A bare list is from
+ * before that, and knew every group but LATER_GROUPS.
+ */
+function storedGroups(raw: string | null): ToolGroup[] | null {
+  if (!raw) return null
+  const v = JSON.parse(raw) as unknown
+  const stored = Array.isArray(v) ? { on: v, seen: TOOL_GROUPS.filter((g) => !LATER_GROUPS.includes(g)) as string[] } : v && typeof v === 'object' && Array.isArray((v as { on?: unknown }).on) ? (v as { on: unknown[]; seen?: unknown }) : null
+  if (!stored) return null
+  const seen = Array.isArray(stored.seen) ? (stored.seen as unknown[]) : [...TOOL_GROUPS]
+  return TOOL_GROUPS.filter((g) => stored.on.includes(g) || !seen.includes(g))
+}
+const storeGroups = (groups: ToolGroup[]) => JSON.stringify({ on: groups, seen: TOOL_GROUPS })
 
 // --- attachments -------------------------------------------------------------------------------
 
@@ -532,7 +550,7 @@ export function sendQueued(user: User, id: string, qid: string): { thread: Threa
   return { thread: toThread(ownThread(user, row.id)) }
 }
 
-const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: (r.tools ? toolGroups(JSON.parse(r.tools)) : null) ?? [...TOOL_GROUPS], quick: !!r.quick, workdir: r.workdir ? (JSON.parse(r.workdir) as Workdir) : null, permission: permissionOf(r.permission), queue: queueInfo(r.id, r.queue ? (JSON.parse(r.queue) as Queued[]) : []), interrupted: r.interrupted && !running.has(r.id) ? (JSON.parse(r.interrupted) as Interruption) : null, titleSource: r.title_source === 'user' ? 'user' : 'auto', aliases: aliasesOf(r), checkingTitle: checkingTitle.has(r.id) })
+const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: storedGroups(r.tools) ?? [...TOOL_GROUPS], quick: !!r.quick, workdir: r.workdir ? (JSON.parse(r.workdir) as Workdir) : null, permission: permissionOf(r.permission), queue: queueInfo(r.id, r.queue ? (JSON.parse(r.queue) as Queued[]) : []), interrupted: r.interrupted && !running.has(r.id) ? (JSON.parse(r.interrupted) as Interruption) : null, titleSource: r.title_source === 'user' ? 'user' : 'auto', aliases: aliasesOf(r), checkingTitle: checkingTitle.has(r.id) })
 const aliasesOf = (r: ThreadRow): TitleAlias[] => (r.title_history ? (JSON.parse(r.title_history) as TitleAlias[]) : [])
 /** A stored or asked-for mode; threads from before the modes (no value) ask first. New threads start in Auto (createThread). */
 const permissionOf = (v: unknown): Permission => (PERMISSIONS.includes(v as Permission) ? (v as Permission) : 'default')
@@ -670,7 +688,7 @@ export async function createThread(user: User, body: { mode?: string; model?: st
   const id = randomUUID()
   database()
     .prepare('INSERT INTO agent_threads (id, user_id, title, mode, model, archived, created_at, updated_at, tools, project_id, quick, workdir, permission) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)')
-    .run(id, user.id, NEW_TITLE, mode, model, now, now, tools ? JSON.stringify(tools) : null, project, body.quick === true ? 1 : 0, workdir ? JSON.stringify(workdir) : null, body.permission === undefined ? 'auto' : permissionOf(body.permission))
+    .run(id, user.id, NEW_TITLE, mode, model, now, now, tools ? storeGroups(tools) : null, project, body.quick === true ? 1 : 0, workdir ? JSON.stringify(workdir) : null, body.permission === undefined ? 'auto' : permissionOf(body.permission))
   return toThread(ownThread(user, id))
 }
 
@@ -736,8 +754,8 @@ export async function updateThread(user: User, id: string, body: { title?: strin
   const workdir = body.workdir === undefined ? (row.workdir ? (JSON.parse(row.workdir) as Workdir) : null) : workdirOf(body.workdir)
   // A new work folder switches its tools on.
   const newFolder = body.workdir !== undefined && workdir && row.workdir !== JSON.stringify(workdir)
-  const groups = body.tools === undefined ? (row.tools ? toolGroups(JSON.parse(row.tools)) : null) : (toolGroups(body.tools) ?? [...TOOL_GROUPS])
-  const tools = groups === null ? null : JSON.stringify(newFolder ? withFolderTools(groups, workdir) : groups)
+  const groups = body.tools === undefined ? storedGroups(row.tools) : (toolGroups(body.tools) ?? [...TOOL_GROUPS])
+  const tools = groups === null ? null : storeGroups((newFolder ? withFolderTools(groups, workdir) : groups) ?? groups)
   const pinned = body.pinned === undefined ? row.pinned : body.pinned ? 1 : 0
   const project = body.projectId === undefined ? row.project_id : projectRef(user, body.projectId)
   const quick = body.quick === false ? 0 : row.quick
@@ -1095,6 +1113,7 @@ export async function contextOf(user: User, id: string, terminal = terminals.has
     { label: `Memories (${memories.length})`, tokens: tokens(memoryLines(memories)) },
     { label: `Tool definitions (${tools.length})`, tokens: tokens(JSON.stringify(tools)) },
     ...(thread.workdir || thread.permission === 'plan' || thread.permission === 'bypass' ? [{ label: 'Work folder and mode', tokens: tokens(folderLines(thread, terminal, null)) }] : []),
+    ...(thread.tools.includes('mail') ? [{ label: 'Mail accounts', tokens: tokens(mailLines(user)) }] : []),
     ...(boundary ? [{ label: 'Summary of earlier messages', tokens: tokens(all[0].content) }] : []),
     { label: `Your messages (${count('user')})`, tokens: sum('user') },
     { label: `Replies (${count('assistant')})`, tokens: sum('assistant', (m) => m.content + JSON.stringify(m.tool_calls ?? '')) },
@@ -1351,6 +1370,7 @@ function toolsFor(user: User, groups: readonly ToolGroup[] = TOOL_GROUPS, inProj
     tool('search_code', "Search the user's code hosts (GitHub and linked Gitea/Forgejo): repositories by name, and issues and pull requests. `repo#text` searches one repository's issues, `repo@text` its branches.", { query: str('The search') }, ['query']),
   ]
   if (calendarConnected(user)) tools.push(...calendarTools(), ...noteLinkTools())
+  if (mailLinked(user)) tools.push(...mailTools())
   if (seafileInfo(user)) {
     const lib = str('Library name or id')
     tools.push(
@@ -1480,7 +1500,7 @@ function givenUrls(thread: string): Set<string> {
   return given
 }
 
-const PRIVATE_TOOLS = new Set(['search_notes', 'search_code', 'seafile_list', 'seafile_search', 'seafile_read', 'create_note', 'update_note', 'read_file', 'list_dir', 'glob', 'grep', 'terminal', ...CALENDAR_TOOLS, ...NOTE_LINK_TOOLS])
+const PRIVATE_TOOLS = new Set(['search_notes', 'search_code', 'seafile_list', 'seafile_search', 'seafile_read', 'create_note', 'update_note', 'read_file', 'list_dir', 'glob', 'grep', 'terminal', ...CALENDAR_TOOLS, ...NOTE_LINK_TOOLS, ...MAIL_TOOLS])
 /** Whether the model has anything private in front of it: memories, private tool results, attachments. */
 function holdsPrivate(user: User, thread: string): boolean {
   if (listMemories(user).length) return true
@@ -1673,12 +1693,13 @@ async function webReadGate(user: User, key: string, thread: string, permission: 
 }
 
 /**
- * Tools that change the user's files or calendars: each call waits for the user to allow it.
+ * Tools that change the user's files, calendars or mail: each call waits for the user to allow it.
  * Accepting edits doesn't cover calendar changes: it is about files in the work folder, while an
- * event lands in a calendar others may share, and can mail its guests.
+ * event lands in a calendar others may share, and can mail its guests. (Mail asks for every call,
+ * reads too: see decide.)
  */
 const NEEDS_APPROVAL = new Set(['seafile_mkdir', 'seafile_write', 'seafile_rename', 'seafile_move', 'seafile_delete', 'update_note', 'delete_note', ...CALENDAR_WRITES])
-const changes = (name: string) => NEEDS_APPROVAL.has(name) || NOTE_LINK_WRITES.has(name) || FILE_WRITES.has(name) || name === FILE_DELETE
+const changes = (name: string) => NEEDS_APPROVAL.has(name) || NOTE_LINK_WRITES.has(name) || MAIL_WRITES.has(name) || FILE_WRITES.has(name) || name === FILE_DELETE
 const FILE_TOOL_SET = new Set<string>(FILE_TOOLS)
 
 /** A command line that names a file steering the agent: even Bypass asks before it runs. */
@@ -1690,11 +1711,15 @@ const STEERING_IN_LINE = /(AGENTS\.md|CLAUDE\.md|\.agents|\.claude)\b/i
  * asks); the terminal runs read-only lines, and the commands the user said not to ask about again.
  * Auto decides like Ask first here (it only differs for web reads, webReadGate). Bypass runs
  * everything except what lasts beyond the thread: calendar changes (they can mail guests), note links (they write into the event) and
- * writes to the files that steer the agent. Exported for scripts/agents-permissions.ts.
+ * writes to the files that steer the agent. Mail always asks, in every mode and for every call (a
+ * search or a read too): it is private, written by strangers, and what is sent can't be taken
+ * back; Plan refuses its changes. No "allow from now on" reaches it either. Exported for
+ * scripts/agents-permissions.ts.
  */
 export function decide(thread: string, permission: Permission, call: ToolCall): 'run' | 'ask' | 'refuse' {
   const name = call.name
   if (name === 'exit_plan_mode') return permission === 'plan' ? 'ask' : 'refuse'
+  if (MAIL_TOOLS.has(name)) return permission === 'plan' && MAIL_WRITES.has(name) ? 'refuse' : 'ask'
   if (name === 'terminal') {
     const line = argString(call.arguments ?? {}, 'command')
     if (readOnlyCommand(line)) return 'run'
@@ -2017,7 +2042,7 @@ function dateLine(zone: string): string {
 const zoneFor = (v: unknown) => zoneOf(v) ?? Intl.DateTimeFormat().resolvedOptions().timeZone
 
 /** AGENTS.md, then today's date, the mode, how to work, the project and the memories. */
-async function systemPrompt(user: User, mode: Mode, projectId: number | null = null, todos: Todo[] = [], folder = '', skills: Skill[] = [], more: { zone?: string; calendar?: string } = {}): Promise<string> {
+async function systemPrompt(user: User, mode: Mode, projectId: number | null = null, todos: Todo[] = [], folder = '', skills: Skill[] = [], more: { zone?: string; calendar?: string; mail?: string } = {}): Promise<string> {
   const all = listMemories(user)
   const name = user.name || user.login
   // {{owner}}: what older AGENTS.md files say, from before anyone could sign up.
@@ -2037,6 +2062,7 @@ async function systemPrompt(user: User, mode: Mode, projectId: number | null = n
     mine.length ? `What you remember about ${name} (user memory; the [#id] is for update_memory):\n${memoryLines(mine)}` : `You do not remember anything about ${name} yet.`,
     project ? (theirs.length ? `What you remember about the project "${project.name}":\n${memoryLines(theirs)}` : `Nothing is remembered about the project "${project.name}" yet.`) : '',
     more.calendar ?? '',
+    more.mail ?? '',
     folder,
     skillLines(skills),
     todoLines(todos),
@@ -2087,7 +2113,7 @@ function folderLines(t: Thread, terminal: boolean, instructions: { name: string;
   else if (t.permission === 'acceptEdits' && t.workdir) lines.push('Edits are allowed: file changes in the work folder go through without asking; deleting, and terminal commands that change something, still ask.')
   else if (t.permission === 'bypass')
     lines.push(
-      'Bypass is on: your tool calls run without the user allowing each one, including file edits, deletes, terminal commands, note changes and web reads, so be careful and do only what the task needs. Calendar changes, and writes to AGENTS.md, CLAUDE.md, .agents/ or .claude/, still wait for the user.',
+      'Bypass is on: your tool calls run without the user allowing each one, including file edits, deletes, terminal commands, note changes and web reads, so be careful and do only what the task needs. Calendar changes, every mail tool call (reads too), and writes to AGENTS.md, CLAUDE.md, .agents/ or .claude/, still wait for the user.',
     )
   else if (t.workdir) lines.push('Each change (a file edit, a write, a command that changes something) waits for the user to allow it, and they may say why not: then do what they ask instead.')
   if (instructions) lines.push(`The work folder's ${instructions.name}, the project's own instructions (follow them):\n<instructions>\n${instructions.text}\n</instructions>`)
@@ -2714,6 +2740,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
         (await systemPrompt(user, mode, row.project_id, todosOf(row.id), folderLines(now, offered.has('terminal'), instructions), offered.has('use_skill') ? await listSkills(user, skillPlaces(user, now.workdir)).catch(() => []) : [], {
           zone,
           calendar: now.tools.includes('calendar') ? `${calendarLines(user, zone)}${now.tools.includes('notes') && calendarConnected(user) ? `\n${NOTE_LINK_LINES}` : ''}` : '',
+          mail: now.tools.includes('mail') ? mailLines(user) : '',
         })) +
         (last && !nudged ? '\n\nYou have used all your tool calls for this turn: answer now with what you have, and say what is left to do.' : '') +
         (stale ? `\n\nReminder: your todo list has ${open} open ${open === 1 ? 'item' : 'items'} and you have not updated it for a while. Update it with update_todos as you go, or clear it if it no longer fits.` : '')
@@ -2813,6 +2840,16 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
               return JSON.stringify({ error: calendarError(e) })
             }
           }
+          // A mail call likewise, every one of them: the card says which account, which messages,
+          // who it goes to and the exact text, and the user's answer covers only that.
+          if (MAIL_TOOLS.has(c.name)) {
+            try {
+              calendar = await prepareMailCall(user, c.name, c.arguments ?? {}, zone)
+            } catch (e) {
+              if (ctl.signal.aborted) throw e
+              return JSON.stringify({ error: mailError(e) })
+            }
+          }
           if (decision === 'ask' || unknownPage) {
             const v = await askOwner(row.id, assistant, index, c, ctl.signal, send, calendar?.summary, checkSaid)
             if (c.name === 'exit_plan_mode') {
@@ -2824,7 +2861,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
               return JSON.stringify({ approved: true, permission: next, note: next === 'acceptEdits' ? 'Go ahead: file edits in the work folder no longer ask.' : 'Go ahead: each change still asks the user.' })
             }
             if (!v.allow)
-              return JSON.stringify({ error: unknownPage ? "The user did not allow reading that address. Read addresses from search results, pages you read or the user's messages, exactly as given." : v.feedback ? `The user declined this and said: ${v.feedback}` : 'The user declined this change. Ask what they want instead, or try another way.' })
+              return JSON.stringify({ error: unknownPage ? "The user did not allow reading that address. Read addresses from search results, pages you read or the user's messages, exactly as given." : v.feedback ? `The user declined this and said: ${v.feedback}` : MAIL_TOOLS.has(c.name) ? 'The user did not allow this mail call, so nothing was read or changed. Ask what they want instead.' : 'The user declined this change. Ask what they want instead, or try another way.' })
             if (v.always === 'edits' && FILE_WRITES.has(c.name)) {
               setPermission(row.id, 'acceptEdits')
               send({ type: 'thread', thread: current() })
@@ -2875,7 +2912,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
               return await calendar.run()
             } catch (e) {
               if (ctl.signal.aborted) throw e
-              return JSON.stringify({ error: calendarError(e) })
+              return JSON.stringify({ error: MAIL_TOOLS.has(c.name) ? mailError(e) : calendarError(e) })
             }
           }
           if (c.name === 'ask_user') {

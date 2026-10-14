@@ -64,6 +64,7 @@ import {
 } from '../../data/agents'
 import { seafileAt } from '../../data/agentPlaces'
 import { getAccount, hasCalendar } from '../../os/account'
+import { loadMailAccounts, mailAccountsNow } from '../../data/mail'
 import { lookup, prepareFolder, readFileText, writeFile } from '../fs'
 import type { Ctx } from '../types'
 import { HOME, prettyPath, resolvePath } from '../vfs'
@@ -504,8 +505,11 @@ export class Session {
     if (a.summary) {
       const labelW = Math.min(12, Math.max(...a.summary.rows.map(([l]) => l.length)) + 2)
       const rows = a.summary.rows.flatMap(([label, value]) => wrap([seg(value)], inner, [seg(label.padEnd(labelW), 'muted')], [seg(' '.repeat(labelW))]))
-      const verb = call.name === 'calendar_delete_event' ? 'Delete this event?' : call.name === 'calendar_create_event' ? 'Add this event?' : 'Make this change?'
-      return { title: a.summary.title, preview: rows, question: verb, options: [{ label: 'Yes', run: allow() }, no] }
+      // An email's text, whole (up to 40 lines here; the window shows all of it).
+      const body = a.summary.body === undefined ? [] : [[], ...filePreview(a.summary.body || '(no text)', inner, 40)]
+      const MAIL_VERBS: Record<string, string> = { mail_send: 'Send this email?', mail_draft: 'Save this draft?', mail_read: 'Let it read this?', mail_search: 'Let it search your mail?', mail_list_accounts: 'Let it look at your mail accounts?', mail_update: 'Make this change?' }
+      const verb = MAIL_VERBS[call.name] ?? (call.name === 'calendar_delete_event' ? 'Delete this event?' : call.name === 'calendar_create_event' ? 'Add this event?' : 'Make this change?')
+      return { title: a.summary.title, preview: [...rows, ...body], question: verb, options: [{ label: 'Yes', run: allow() }, no] }
     }
     switch (call.name) {
       case 'edit_file':
@@ -1676,7 +1680,7 @@ export class Session {
       }
       case '/permissions':
       case '/permission': {
-        const names: Record<Permission, string> = { default: 'Ask before each change', auto: 'Auto: web addresses it builds are checked for you', acceptEdits: 'Accept edits in the work folder', plan: 'Plan first (read only)', bypass: 'Bypass: nothing asks (but calendar changes and AGENTS.md)' }
+        const names: Record<Permission, string> = { default: 'Ask before each change', auto: 'Auto: web addresses it builds are checked for you', acceptEdits: 'Accept edits in the work folder', plan: 'Plan first (read only)', bypass: 'Bypass: nothing asks (but calendar changes, mail and AGENTS.md)' }
         const p = (ALL_MODES as string[]).includes(arg) ? (arg as Permission) : (await this.choose('Permissions', ALL_MODES.map((m) => ({ value: m, label: names[m], checked: m === this.permission }))))?.[0]
         if (p) await this.setPermission(p as Permission)
         return true
@@ -1685,7 +1689,9 @@ export class Session {
         const current = this.thread?.tools ?? this.tools
         const seafile = !!getAccount().seafile
         const calendar = hasCalendar(getAccount())
-        const picked = await this.choose('Tools', TOOL_GROUPS.filter((g) => (!g.seafile || seafile) && (!g.calendar || calendar)).map((g) => ({ value: g.id, label: g.name, hint: g.detail, checked: current.includes(g.id) })), true)
+        if (mailAccountsNow() === null) await loadMailAccounts()
+        const mail = !!mailAccountsNow()?.length
+        const picked = await this.choose('Tools', TOOL_GROUPS.filter((g) => (!g.seafile || seafile) && (!g.calendar || calendar) && (!g.mail || mail)).map((g) => ({ value: g.id, label: g.name, hint: g.detail, checked: current.includes(g.id) })), true)
         if (!picked) return true
         this.tools = picked as ToolGroup[]
         await this.patch({ tools: this.tools })

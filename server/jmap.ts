@@ -1261,6 +1261,94 @@ export async function findByMessageId(acc: Linked, messageId: string): Promise<{
   return e ? { id: e.id, threadId: e.threadId } : null
 }
 
+// ---------------------------------------------------------------------------------------------
+// For the Agents app (server/agentMail.ts): an account's mailboxes and identities, and messages
+// with their bodies as the server's own text parts (no HTML rendering, no pictures, nothing
+// fetched but the message itself, and nothing marked read).
+
+/** The account's mailboxes and the addresses it sends as, and whether its token may send. */
+export async function mailMeta(acc: Linked): Promise<{ mailboxes: Mailbox[]; identities: Identity[]; canSend: boolean }> {
+  const [m, s] = await Promise.all([meta(acc), session(acc)])
+  return { mailboxes: m.mailboxes, identities: m.identities, canSend: s.submission }
+}
+
+export type PlainMessage = {
+  id: string
+  threadId: string
+  mailboxIds: string[]
+  subject: string
+  from: Address[]
+  to: Address[]
+  cc: Address[]
+  bcc: Address[]
+  replyTo: Address[]
+  receivedAt: string
+  seen: boolean
+  flagged: boolean
+  draft: boolean
+  messageId: string[]
+  references: string[]
+  /** The body parts the server picked for reading as text, in order (HTML when a message has no plain text). */
+  body: { type: 'text' | 'html'; value: string }[]
+  truncated: boolean
+  attachments: { blobId: string; name: string; type: string; size: number }[]
+}
+
+/**
+ * Messages by id, or every message of the given conversations (oldest first), with their text
+ * parts when `bodies`. `missing` names the ids the account does not have.
+ */
+export async function plainMessages(acc: Linked, target: { emailIds?: string[]; threadIds?: string[] }, bodies: boolean): Promise<{ messages: PlainMessage[]; missing: string[] }> {
+  const emailIds = idList(target.emailIds, 100)
+  const threadIds = idList(target.threadIds, 50)
+  const props = ['id', 'threadId', 'mailboxIds', 'keywords', 'from', 'to', 'cc', 'bcc', 'replyTo', 'subject', 'receivedAt', 'messageId', 'references', 'attachments', ...(bodies ? ['textBody', 'bodyValues'] : [])]
+  const args = { properties: props, ...(bodies ? { fetchTextBodyValues: true, maxBodyValueBytes: 256 * 1024 } : {}) }
+  const calls: Call[] = []
+  if (threadIds.length) {
+    calls.push(['Thread/get', { ids: threadIds }, 't'])
+    calls.push(['Email/get', { '#ids': { resultOf: 't', name: 'Thread/get', path: '/list/*/emailIds' }, ...args }, 'te'])
+  }
+  if (emailIds.length) calls.push(['Email/get', { ids: emailIds, ...args }, 'e'])
+  if (!calls.length) return { messages: [], missing: [] }
+  const r = await jmap(acc, calls)
+  const threads = threadIds.length ? (r.get('t', 'Thread/get').list as Json[]) : []
+  const order = new Map<string, number>()
+  threads.forEach((t) => (t.emailIds as string[]).forEach((id) => order.set(id, order.size)))
+  const found = [...(threadIds.length ? (r.get('te', 'Email/get').list as Json[]) : []), ...(emailIds.length ? (r.get('e', 'Email/get').list as Json[]) : [])]
+  const byId = new Map(found.map((e) => [String(e.id), e]))
+  const missing = [...emailIds.filter((id) => !byId.has(id)), ...threadIds.filter((id) => !threads.some((t) => t.id === id))]
+  const list = [...byId.values()].sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity) || String(a.receivedAt).localeCompare(String(b.receivedAt)))
+  const messages = list.map((e): PlainMessage => {
+    const values = (e.bodyValues ?? {}) as Record<string, { value?: string; isTruncated?: boolean }>
+    const k = e.keywords ?? {}
+    return {
+      id: String(e.id),
+      threadId: String(e.threadId),
+      mailboxIds: Object.keys(e.mailboxIds ?? {}),
+      subject: String(e.subject ?? ''),
+      from: addresses(e.from),
+      to: addresses(e.to),
+      cc: addresses(e.cc),
+      bcc: addresses(e.bcc),
+      replyTo: addresses(e.replyTo),
+      receivedAt: String(e.receivedAt ?? ''),
+      seen: !!k.$seen,
+      flagged: !!k.$flagged,
+      draft: !!k.$draft,
+      messageId: messageIds(e.messageId),
+      references: messageIds(e.references),
+      body: (Array.isArray(e.textBody) ? (e.textBody as Json[]) : [])
+        .filter((p) => /^text\/(plain|html)\b/i.test(String(p.type)) && typeof values[p.partId]?.value === 'string')
+        .map((p) => ({ type: /^text\/html\b/i.test(String(p.type)) ? 'html' : 'text', value: values[p.partId].value! })),
+      truncated: Object.values(values).some((v) => v.isTruncated),
+      attachments: (Array.isArray(e.attachments) ? (e.attachments as Json[]) : [])
+        .filter((p) => typeof p.blobId === 'string' && ID.test(p.blobId))
+        .map((p) => ({ blobId: p.blobId, name: String(p.name ?? '') || 'attachment', type: String(p.type ?? 'application/octet-stream'), size: Number(p.size) || 0 })),
+    }
+  })
+  return { messages, missing }
+}
+
 /** A header's words: as they are when plain ASCII, otherwise an RFC 2047 encoded word. */
 const headerWords = (s: string) => {
   const clean = s.replace(/[\r\n]+/g, ' ').trim()

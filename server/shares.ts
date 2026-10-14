@@ -99,6 +99,17 @@ export function stepLabel(name: string, args: Record<string, unknown>): string {
       return 'Changed a calendar event'
     case 'calendar_delete_event':
       return 'Deleted a calendar event'
+    case 'mail_list_accounts':
+    case 'mail_search':
+      return 'Looked through mail'
+    case 'mail_read':
+      return 'Read an email'
+    case 'mail_draft':
+      return 'Drafted an email'
+    case 'mail_send':
+      return 'Sent an email'
+    case 'mail_update':
+      return 'Filed email'
     case 'search_code':
       return 'Searched code'
     case 'seafile_list':

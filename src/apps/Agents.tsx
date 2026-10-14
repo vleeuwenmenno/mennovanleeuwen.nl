@@ -85,6 +85,7 @@ import { notify } from '../os/notify'
 import { pickFiles, pickFolder } from '../os/FolderPicker'
 import { Select } from '../os/Select'
 import { hasCalendar, signIn, useAccount } from '../os/account'
+import { useMailAccounts } from '../data/mail'
 import { fieldMenu, linkAt, linkMenu, openContextMenu, openMenuAt, selectionIn, tidyMenu, type MenuItem } from '../os/ContextMenu'
 import { searchWeb } from '../data/searchEngine'
 import { ask, ask as confirmDialog, choose, tell } from '../os/Dialogs'
@@ -982,6 +983,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const settingsNow = useAgentSettings()
   const [draftTools, setDraftTools] = useState<ToolGroup[]>(settingsNow.tools)
   const account = useAccount()
+  const { accounts: mailAccounts } = useMailAccounts()
   const pcFiles = useRef<HTMLInputElement>(null)
   const [draftModel, setDraftModel] = useState<string | null>(null)
   const [draftWorkdir, setDraftWorkdir] = useState<Workdir | null>(null)
@@ -1667,7 +1669,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       ...TOOL_GROUPS.map((g) => ({
         label: g.name,
         checked: tools.includes(g.id),
-        disabled: (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.id === 'files' && !workdir) || g.id === 'terminal',
+        disabled: (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.mail && !mailAccounts?.length) || (g.id === 'files' && !workdir) || g.id === 'terminal',
         hint:
           g.id === 'files' && !workdir
             ? 'Choose a work folder first (the folder button above)'
@@ -1675,7 +1677,9 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
               ? 'Only from the agents command in the terminal'
               : g.calendar && !hasCalendar(account)
                 ? 'Connect a calendar first (Settings → Integrations → Calendars)'
-                : g.detail,
+                : g.mail && !mailAccounts?.length
+                  ? 'Link a mail account first (Settings → Integrations → Mail)'
+                  : g.detail,
         onSelect: () => toggleTool(g.id),
       })),
       { separator: true },
@@ -2196,6 +2200,8 @@ function codeBlockEnter(el: HTMLTextAreaElement): boolean {
 type SearchHit = { title: string; url: string; snippet?: string }
 /** An event as calendar_list_events gives it to the model (server/agentCalendar.ts). */
 type CalendarHit = { id?: string; title: string; when: string; calendar: string }
+/** A conversation as mail_search gives it to the model (server/agentMail.ts). */
+type MailHit = { message_id?: string; subject: string; from: string; date: string }
 
 /** One tool call: what it did in a line, and when opened, what it was given and what came back. */
 function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, summary, check }: { tag: string; call: ToolCall; result?: string; /** Why it ran without asking (a checked web read) */ checked?: string; pending: boolean; approval?: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; inTerminal?: boolean; summary?: CallSummary; /** What Auto's check said about a web read it would not clear */ check?: string }) {
@@ -2208,6 +2214,7 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
   const failed = !!parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'error' in parsed
   const hits = call.name === 'web_search' && Array.isArray(parsed) ? (parsed as SearchHit[]) : null
   const events = call.name === 'calendar_list_events' && parsed && typeof parsed === 'object' && Array.isArray((parsed as { events?: unknown }).events) ? (parsed as { events: CalendarHit[]; more?: number }) : null
+  const mails = call.name === 'mail_search' && parsed && typeof parsed === 'object' && Array.isArray((parsed as { results?: unknown }).results) ? (parsed as { results: { account: string; conversations?: MailHit[] }[] }).results.flatMap((r) => r.conversations ?? []) : null
   if (approval)
     return (
       <div className="agt-tool is-asking" role="group" aria-label="Allow this change?" data-tool={tag}>
@@ -2227,6 +2234,8 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
             ))}
           </dl>
         )}
+        {summary?.body !== undefined && <pre className="agt-tool-body agt-ask-mail">{summary.body || '(no text)'}</pre>}
+        {call.name.startsWith('mail_') && <p className="muted agt-ask-why">Mail always asks you first, in every mode: what it reads and sends is private.</p>}
         {call.name === 'seafile_write' && typeof call.arguments.content === 'string' && <pre className="agt-tool-body">{call.arguments.content.slice(0, 4000)}</pre>}
         {call.name === 'update_note' && typeof call.arguments.text === 'string' && <pre className="agt-tool-body">{call.arguments.text.slice(0, 4000)}</pre>}
         {call.name === 'web_fetch' && typeof call.arguments.url === 'string' && (
@@ -2261,6 +2270,12 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
             · {events.events.length + (events.more ?? 0)} {events.events.length + (events.more ?? 0) === 1 ? 'event' : 'events'}
           </span>
         )}
+        {mails && (
+          <span className="muted">
+            {' '}
+            · {mails.length} {mails.length === 1 ? 'conversation' : 'conversations'}
+          </span>
+        )}
         {failed && <span className="t-red"> · {String((parsed as { error: unknown }).error)}</span>}
       </summary>
       {hits ? (
@@ -2276,6 +2291,18 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
                 <span>{h.title || h.url}</span>
               )}
               <span className="muted"> {h.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}</span>
+            </li>
+          ))}
+        </ul>
+      ) : mails?.length ? (
+        <ul className="agt-hits">
+          {mails.map((m, i) => (
+            <li key={m.message_id ?? i}>
+              <span>{m.subject || '(no subject)'}</span>
+              <span className="muted">
+                {' '}
+                {m.from} · {m.date}
+              </span>
             </li>
           ))}
         </ul>
@@ -2305,7 +2332,7 @@ const PERMISSION_HELP: Record<Permission, string> = {
   auto: 'Web addresses it made up are checked for you (rules, then the safety check model); changes still ask',
   acceptEdits: 'File edits in the work folder go through and web reads are checked like Auto; deleting and commands still ask',
   plan: 'Read only: it looks around, then shows you a plan to approve',
-  bypass: 'Nothing asks: edits, deletes, commands and web reads all run. Calendar changes and AGENTS.md, CLAUDE.md, .agents/ and .claude/ still ask',
+  bypass: 'Nothing asks: edits, deletes, commands and web reads all run. Calendar changes, mail, and AGENTS.md, CLAUDE.md, .agents/ and .claude/ still ask',
 }
 const FILE_EDITS = new Set(['write_file', 'edit_file', 'multi_edit', 'make_dir', 'move_path'])
 

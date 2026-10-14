@@ -66,12 +66,13 @@ export const compactionText = (c: Compaction | undefined) =>
 export const isCompact = (text: string) => /^\/compact(?:\s|$)/i.test(text.trim())
 
 /** What a thread may use, switched in the composer. */
-export type ToolGroup = 'web' | 'notes' | 'calendar' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills'
-/** `seafile` and `calendar`: only with Seafile linked, or a calendar connected. */
-export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile?: boolean; calendar?: boolean }[] = [
+export type ToolGroup = 'web' | 'notes' | 'calendar' | 'mail' | 'code' | 'seafile' | 'seafile_write' | 'memory' | 'projects' | 'files' | 'terminal' | 'skills'
+/** `seafile`, `calendar` and `mail`: only with Seafile linked, a calendar connected, or a mail account linked. */
+export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile?: boolean; calendar?: boolean; mail?: boolean }[] = [
   { id: 'web', name: 'Web', detail: 'Search the web and read pages' },
   { id: 'notes', name: 'Notes', detail: 'Search and make notes; changing or deleting one asks you first' },
   { id: 'calendar', name: 'Calendar', detail: 'Look through your calendars; adding, changing or deleting an event asks you first', calendar: true },
+  { id: 'mail', name: 'Mail', detail: 'Search, read, draft, send and file email in your linked accounts; every call asks you first, in every mode', mail: true },
   { id: 'code', name: 'Code hosts', detail: 'Repositories, issues and pull requests' },
   { id: 'seafile', name: 'Seafile', detail: 'Find and read files', seafile: true },
   { id: 'seafile_write', name: 'Seafile changes', detail: 'Folders, writing, renaming, moving, deleting; asks you first', seafile: true },
@@ -115,7 +116,7 @@ export type Question = {
 export type Form = { title: string; intro?: string; questions: Question[]; submit?: string }
 
 /** What a change does, worked out by the server where the call alone doesn't say (a calendar change): a headline and label/value rows. */
-export type CallSummary = { title: string; rows: [string, string][] }
+export type CallSummary = { title: string; rows: [string, string][]; /** A text shown whole: the body of an email that would go out */ body?: string }
 /** Something the agent waits on: a change to allow, or a form to answer; which reply asked and which call. `check`: what Auto's check said about a web read it would not clear. */
 export type PendingApproval = { callId: string; messageId: number; index: number; kind: 'approval' | 'question' | 'client'; form?: Form; call?: ToolCall; summary?: CallSummary; check?: string }
 
@@ -538,6 +539,21 @@ export function toolLabel(call: ToolCall, result?: string): string {
       return `Change an event${s('title') ? ` to “${s('title')}”` : ''}${s('start') ? `, ${calendarTime(s('start'))}` : ''}`
     case 'calendar_delete_event':
       return a.all_occurrences === true ? 'Delete a repeating event' : 'Delete an event'
+    case 'mail_list_accounts':
+      return 'Looked at your mail accounts'
+    case 'mail_search':
+      return s('query') ? `Searched mail for “${s('query')}”` : `Looked at ${s('mailbox') || 'the Inbox'}`
+    case 'mail_read':
+      return s('thread_id') && !s('message_id') ? 'Read a conversation' : 'Read an email'
+    case 'mail_draft':
+      return `${s('forward') ? 'Draft a forward' : s('reply_to') ? 'Draft a reply' : 'Draft an email'}${s('subject') ? `: “${s('subject')}”` : ''}`
+    case 'mail_send':
+      return `${s('forward') ? 'Forward an email' : s('reply_to') ? 'Reply' : 'Send an email'}${s('subject') ? `: “${s('subject')}”` : ''}`
+    case 'mail_update': {
+      const n = (Array.isArray(a.message_ids) ? a.message_ids.length : 0) + (Array.isArray(a.thread_ids) ? a.thread_ids.length : 0)
+      const verb: Record<string, string> = { archive: 'Archive', trash: 'Trash', move: `Move to ${s('mailbox')}:`, mark_read: 'Mark read:', mark_unread: 'Mark unread:', flag: 'Flag', unflag: 'Unflag', junk: 'Mark as junk:', not_junk: 'Not junk:' }
+      return `${verb[s('action')] ?? 'Change'} ${n || ''} ${n === 1 ? 'email' : 'emails'}`.replace(/\s+/g, ' ')
+    }
     case 'search_code':
       return `Searched code for “${s('query')}”`
     case 'seafile_list':

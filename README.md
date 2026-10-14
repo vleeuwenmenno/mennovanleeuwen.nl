@@ -1220,6 +1220,22 @@ agent knows today's date and the time where you are, and times go both ways in t
 connections from before editing existed are read-only: the agent says to connect Google again. The
 group is only offered with a calendar connected.
 
+The Mail tools ([`server/agentMail.ts`](server/agentMail.ts)) work on the JMAP accounts linked in
+Settings → Integrations → Mail (Fastmail and other JMAP servers), through the same code as the Mail
+app ([`server/jmap.ts`](server/jmap.ts)): `mail_list_accounts` (accounts, send-as addresses,
+mailboxes), `mail_search` (the Mail app's search syntax, in one account or all of them),
+`mail_read` (a message or a whole conversation as plain text: no HTML, no pictures, nothing marked
+read), `mail_draft` and `mail_send` (new, reply or forward, threaded) and `mail_update` (archive,
+trash, move, read/unread, flag, junk; nothing deleted for good). Every mail call waits for *Allow*,
+searches and reads too, in every permission mode, Auto, Edits allowed and Bypass included (plan mode
+offers only the reads, which ask as well), and no "allow from now on" reaches it. Each call is
+checked first (the account, the ids, the recipients, the mailbox) and the card shows what will
+happen: for a send the account, From, To, Cc, Bcc, Subject and the whole text that goes out.
+Message ids are the account's number and the server's own id, so they only resolve within your own
+accounts. What mail says comes back marked as third-party content, never instructions. The group is
+on by default (threads from before it too) and offered once an account is linked; the prompt names
+the accounts. `pnpm check:agents-mail` checks it against the JMAP stand-in.
+
 With the Notes group on too, the agent can work with notes linked to events
 ([`server/agentNoteLinks.ts`](server/agentNoteLinks.ts), see *Notes and calendar events* below):
 `make_meeting_note` (a meeting note for an event, already linked: "make notes for my 2pm meeting"

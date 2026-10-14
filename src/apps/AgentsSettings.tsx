@@ -8,6 +8,7 @@ import { syncAgentPlaces } from '../data/agentPlaces'
 import { getWebSearch, PROVIDERS, resetWebSearch, saveWebSearch, testWebSearch, type Provider, type ResultMap, type SearchResult, type WebSearchInput, type WebSearchView } from '../data/websearch'
 import { getLibraries, useLibraries } from '../data/seafile'
 import { hasCalendar, useAccount } from '../os/account'
+import { useMailAccounts } from '../data/mail'
 import { Select } from '../os/Select'
 import { useWM } from '../os/wm'
 import { writeFile } from '../terminal/fs'
@@ -81,6 +82,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
   }
   const wm = useWM()
   const account = useAccount()
+  const { accounts: mailAccounts } = useMailAccounts()
   const settings = useAgentSettings()
   const [models, setModels] = useState<ModelInfo[]>([])
   const [auto, setAuto] = useState<{ quick: string; deep: string; title: string; check: string } | null>(null)
@@ -266,12 +268,12 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
           />
         </li>
         {TOOL_GROUPS.map((g) => {
-          const off = (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account))
+          const off = (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.mail && !mailAccounts?.length)
           return (
             <li key={g.id} className={`set-row ${off ? 'is-off' : ''}`}>
               <span className="set-row-text">
                 <strong>{g.name}</strong>
-                <span className="muted">{g.calendar && !hasCalendar(account) ? `${g.detail}. Connect a calendar first, in Settings → Integrations → Calendars` : g.detail}</span>
+                <span className="muted">{g.calendar && !hasCalendar(account) ? `${g.detail}. Connect a calendar first, in Settings → Integrations → Calendars` : g.mail && !mailAccounts?.length ? `${g.detail}. Link a mail account first, in Settings → Integrations → Mail` : g.detail}</span>
               </span>
               <Toggle
                 on={settings.tools.includes(g.id)}
