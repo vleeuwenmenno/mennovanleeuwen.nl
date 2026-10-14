@@ -1,5 +1,31 @@
 # Notes for coding agents
 
+## MvL OS in short
+
+MvL OS is a browser desktop (React + TypeScript, Vite) with a small Node server. README.md is the
+documentation of record: when you change how something behaves, update its README section in the
+same change.
+
+**Where things live**
+- `src/os/`: the shell (desktop, windows, dock, top bar, Spotlight, dialogs, notifications) and shared stores.
+- `src/apps/`: the apps. They are registered in `APP_META` in `src/os/apps.tsx`.
+- `src/terminal/`: the terminal and its shell (msh) and commands.
+- `src/widgets/`: desktop widgets.
+- `src/data/`: shared logic, some of it also imported by the server (see the Dockerfile rule below).
+- `server/`: the Node server, run directly as TypeScript (`node server/index.ts`, no build step).
+  - Only erasable syntax is allowed there (`erasableSyntaxOnly`): no enums, namespaces or parameter properties.
+  - Imports need explicit `.ts` extensions.
+
+**Conventions**
+- **Settings that follow the account** across devices use `synced()` (`src/os/synced.ts`). Per-browser preferences use `localPref`/`flagPref` (`src/os/localPref.ts`).
+- **Browser storage** can be blocked or empty, so code must keep working without it.
+- **OS settings** live in `src/apps/Settings.tsx`. App settings go in its Apps group, with search keywords, and can also have their own panel in the app.
+- **Colours** come from the Omarchy theme palettes via CSS variables. Never hard-code colours, so light and dark themes and accents keep working.
+- **Touch and phones:** every feature must work with touch and on a phone-sized screen (see "Touch screens" in README.md). Use the existing helpers (`useIsMobile`, the coarse-pointer checks) rather than new detection.
+- **Keyboard:** Alt+1…9 switches workspaces. Don't bind it in apps or games.
+- **Games** also run on their own at `/play/<id>` (see `src/os/playMode.ts`), where the OS shell and its settings are absent. Anything a game needs must be reachable from the game itself.
+- **Account-gated features:** some features belong to the signed-in owner or admins only (`user.admin` on the server). Keep checks server-side; the UI only hides things.
+
 ## Testing: proportional, not exhaustive
 
 The repo has many checks (`pnpm check:*`) and a slow performance suite. Run what the change can break,
