@@ -17,7 +17,7 @@ const when = (ms: number) => timeAgo(new Date(ms).toISOString())
 
 function excerpt(n: Note) {
   const lines = n.text.split('\n').filter((l) => l.trim())
-  return lines.slice(1).join(' ').slice(0, 90)
+  return lines.slice(1).join(' ').replace(/\{([^{}|\n]+)\|[^{}|\n]+\}/g, '$1').slice(0, 90)
 }
 
 export function SyncLine() {

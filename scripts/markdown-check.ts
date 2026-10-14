@@ -20,6 +20,8 @@ function inl(nodes: Inline[]): string {
           return '<br>'
         case 'code':
           return `<code>${esc(n.text)}</code>`
+        case 'ruby':
+          return `<ruby>${esc(n.base)}<rp>(</rp><rt>${esc(n.reading)}</rt><rp>)</rp></ruby>`
         case 'em':
         case 'strong':
         case 'del':
@@ -133,6 +135,27 @@ const cases: [name: string, md: string, want: string][] = [
   ['table without outer pipes, then text', 'Name | Value\n--- | ---\nk | v\n\nafter', '<table><tr><th>Name</th><th>Value</th></tr><tr><td>k</td><td>v</td></tr></table><p>after</p>'],
   ['table after a paragraph line', 'Intro\n| a | b |\n|---|---|\n| 1 | 2 |', '<p>Intro</p><table><tr><th>a</th><th>b</th></tr><tr><td>1</td><td>2</td></tr></table>'],
   ['mismatched delimiter row is no table', '| a | b |\n|---|', '<p>| a | b |\n|---|</p>'],
+  // Furigana: {base|reading} becomes ruby
+  ['furigana', '{漢字|かんじ}', '<p><ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby></p>'],
+  ['furigana, several in a line', '{日本語|にほんご}を{勉強|べんきょう}する', '<p><ruby>日本語<rp>(</rp><rt>にほんご</rt><rp>)</rp></ruby>を<ruby>勉強<rp>(</rp><rt>べんきょう</rt><rp>)</rp></ruby>する</p>'],
+  ['furigana over a few words', '{東京 大学|とうきょう だいがく}', '<p><ruby>東京 大学<rp>(</rp><rt>とうきょう だいがく</rt><rp>)</rp></ruby></p>'],
+  ['furigana over plain text', '{Tokyo|toh-kyoh}', '<p><ruby>Tokyo<rp>(</rp><rt>toh-kyoh</rt><rp>)</rp></ruby></p>'],
+  ['furigana in bold, em and a link', '**{漢字|かんじ}** *{字|じ}* [{本|ほん}](https://a.example)', '<p><strong><ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby></strong> <em><ruby>字<rp>(</rp><rt>じ</rt><rp>)</rp></ruby></em> <a href="https://a.example"><ruby>本<rp>(</rp><rt>ほん</rt><rp>)</rp></ruby></a></p>'],
+  ['furigana inside bold between Japanese text', '私は**{日本語|にほんご}**を*{勉強|べんきょう}*する', '<p>私は<strong><ruby>日本語<rp>(</rp><rt>にほんご</rt><rp>)</rp></ruby></strong>を<em><ruby>勉強<rp>(</rp><rt>べんきょう</rt><rp>)</rp></ruby></em>する</p>'],
+  ['furigana in strikethrough', '~~{字|じ}~~', '<p><del><ruby>字<rp>(</rp><rt>じ</rt><rp>)</rp></ruby></del></p>'],
+  ['furigana in a heading and a list', '# {題|だい}\n\n- {項|こう}', '<h1><ruby>題<rp>(</rp><rt>だい</rt><rp>)</rp></ruby></h1><ul><li><ruby>項<rp>(</rp><rt>こう</rt><rp>)</rp></ruby></li></ul>'],
+  ['furigana in table cells', '| {漢字|かんじ} | b |\n|---|---|\n| {本|ほん} | {字|じ}x |', '<table><tr><th><ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby></th><th>b</th></tr><tr><td><ruby>本<rp>(</rp><rt>ほん</rt><rp>)</rp></ruby></td><td><ruby>字<rp>(</rp><rt>じ</rt><rp>)</rp></ruby>x</td></tr></table>'],
+  ['furigana in a table without outer pipes', '{a|b} | c\n--- | ---\n{d|e} | f', '<table><tr><th><ruby>a<rp>(</rp><rt>b</rt><rp>)</rp></ruby></th><th>c</th></tr><tr><td><ruby>d<rp>(</rp><rt>e</rt><rp>)</rp></ruby></td><td>f</td></tr></table>'],
+  ['not in a code span', '`{漢字|かんじ}` and {漢字|かんじ}', '<p><code>{漢字|かんじ}</code> and <ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby></p>'],
+  ['not in a code block', '```\n{漢字|かんじ}\n```', '<pre>{漢字|かんじ}</pre>'],
+  ['not in an indented code block', '    {漢字|かんじ}', '<pre>{漢字|かんじ}</pre>'],
+  ['an escaped brace stays literal', '\\{漢字|かんじ}', '<p>{漢字|かんじ}</p>'],
+  ['html in furigana is text', '{<b>x</b>|<img src=x onerror=alert(1)>} {"a"|&amp;}', '<p><ruby>&lt;b&gt;x&lt;/b&gt;<rp>(</rp><rt>&lt;img src=x onerror=alert(1)&gt;</rt><rp>)</rp></ruby> <ruby>&quot;a&quot;<rp>(</rp><rt>&amp;amp;</rt><rp>)</rp></ruby></p>'],
+  ['an empty base or reading stays literal', '{|かな} {漢字|} {  |  } {|}', '<p>{|かな} {漢字|} {  |  } {|}</p>'],
+  ['malformed furigana stays literal', '{漢字} {漢字|かな {a|b|c} {a|{b}} {\n|x} {漢字}かな|', '<p>{漢字} {漢字|かな {a|b|c} {a|{b}} {\n|x} {漢字}かな|</p>'],
+  ['a shell or template ${a|b} is not furigana', 'echo ${HOME|x} and {{a|b}}', '<p>echo ${HOME|x} and {{a|b}}</p>'],
+  ['streaming: furigana still open', '{漢字|かん', '<p>{漢字|かん</p>'],
+  ['braces and pipes elsewhere are untouched', 'obj = {a: 1} | b {x} and a|b', '<p>obj = {a: 1} | b {x} and a|b</p>'],
   // Streaming
   ['streaming: open strong', 'This is **impor', '<p>This is **impor</p>'],
   ['streaming: open link', 'see [the docs](https://a.exa', '<p>see [the docs](<a href="https://a.exa">https://a.exa</a></p>'],
@@ -181,7 +204,7 @@ const tryParse = (md: string) => {
 for (let i = 0; i <= sample.length; i += 3) tryParse(sample.slice(0, i))
 let seed = 7
 const rand = (n: number) => ((seed = (seed * 1103515245 + 12345) % 2147483648), seed % n)
-const soup = ['*', '**', '_', '`', '```', '~~', '[', ']', '(', ')', '!', '<', '>', '\\', '#', '-', '+', '1.', '|', ':', ' ', '  ', '\t', '\n', '\n\n', 'a', 'word', 'https://x.y', '&amp;', '[x]', '    ']
+const soup = ['*', '**', '_', '`', '```', '~~', '[', ']', '(', ')', '!', '<', '>', '\\', '#', '-', '+', '1.', '|', ':', ' ', '  ', '\t', '\n', '\n\n', 'a', 'word', 'https://x.y', '&amp;', '[x]', '    ', '{', '}', '{a|b}', '{漢|か}']
 for (let i = 0; i < 3000; i++) tryParse(Array.from({ length: 5 + rand(60) }, () => soup[rand(soup.length)]).join(''))
 if (crashes) failed++
 

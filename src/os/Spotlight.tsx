@@ -952,7 +952,7 @@ export function Spotlight() {
 
   /** A quick answer asked from here before: Enter shows it again, the side action continues it in Agents. */
   const answerRow = (a: QuickAnswerInfo): Result => {
-    const firstLine = (t: string) => t.split('\n').find((l) => l.trim())?.replace(/[#*_`>]/g, '').trim() ?? ''
+    const firstLine = (t: string) => t.split('\n').find((l) => l.trim())?.replace(/\{([^{}|\n]+)\|[^{}|\n]+\}/g, '$1').replace(/[#*_`>]/g, '').trim() ?? ''
     return {
       id: `answer-${a.thread.id}`,
       group: 'Answers',

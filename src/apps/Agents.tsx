@@ -16,6 +16,10 @@ import {
   type Project,
   type Todo,
   answerApproval,
+  MAIL_READ_TOOLS,
+  MAIL_READS_EVENT,
+  mailReadsLeft,
+  revokeMailReads,
   toAttachment,
   textAttachment,
   MAX_MESSAGE,
@@ -93,7 +97,7 @@ import { setCloseGuard, useWM, type WinState } from '../os/wm'
 import { pullAll } from '../os/synced'
 import { mayTakeFocus } from '../os/overlays'
 import { allowNotifications } from '../os/agentWatch'
-import { AgentsSettings, usePromptLocation } from './AgentsSettings'
+import { AgentsSettings, showAgentsSection, usePromptLocation } from './AgentsSettings'
 import { openShareDialog } from './AgentsShare'
 import { AttachedFiles, memoryPicture, sentPicture } from './AgentsImages'
 import { MarkdownPreview } from './Zed'
@@ -1032,6 +1036,13 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     )
   }, [listThread?.title, listThread?.titling, listThread?.aliases.length, listThread?.titleSource])
 
+  // Mail reads always allowed or not, changed in Settings or on a card: open threads show it at once.
+  useEffect(() => {
+    const on = (e: Event) => setThread((t) => (t ? { ...t, mailReadsAlways: (e as CustomEvent<string>).detail === 'always' } : t))
+    window.addEventListener(MAIL_READS_EVENT, on)
+    return () => window.removeEventListener(MAIL_READS_EVENT, on)
+  }, [])
+
   // What a turn streams, whether this window started it or joined it later.
   const onEvent = (e: TurnEvent) => {
     if (e.type === 'snapshot') {
@@ -1783,6 +1794,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             <Icon name="folder" size={13} /> <span className="agt-chip-label">{workdir ? workdir.label : 'No folder'}</span>
           </button>
         )}
+        {thread && <MailReadsChip thread={thread} onChange={setThread} onError={setError} />}
         <button className={`agt-chip is-${permission}`} onClick={permissionMenu} title={PERMISSION_HELP[permission]}>
           {PERMISSION_LABEL[permission]}
         </button>
@@ -1823,7 +1835,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             <p className="muted agt-empty-tools">Tools on: {tools.length ? TOOL_GROUPS.filter((g) => tools.includes(g.id)).map((g) => g.name).join(', ') : 'none, just the model'}.</p>
           </div>
         )}
-        <Messages threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} />
+        <Messages mailAlways={!!thread?.mailReadsAlways} threadId={thread?.id ?? null} messages={messages} answering={answering} approvals={approvals} onDecide={decide} onAnswer={respond} onRewind={(m, edit) => void rewindTo(m, edit)} onShare={(m) => thread && void openShareDialog(thread, m)} />
         {reconnecting ? (
           <p className="agt-wait muted">Reconnecting… the connection dropped, or the server is restarting for an update.</p>
         ) : compacting ? (
@@ -2023,7 +2035,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 }
 
 /** The conversation, with each assistant step's tool calls shown as cards beside their results. */
-function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare }: { /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
+function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways }: { /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
   const out: ReactNode[] = []
   // A turn's answer is its last message with text: Share sits under it, once the turn is done.
   const answers = new Set<number>()
@@ -2099,7 +2111,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
           const wait = approvals.find((a) => a.messageId === m.id && a.index === j)
           if (wait?.kind === 'question' && wait.form) return <QuestionForm key={wait.callId} form={wait.form} onAnswer={(answers) => onAnswer(wait.callId, answers)} />
           if (c.name === 'ask_user' && results[j]) return <AnsweredForm key={j} tag={`${m.id}:${j}`} call={c} result={results[j].content} />
-          return <ToolCard key={j} tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />
+          return <ToolCard key={j} tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />
         })}
       </Fragment>,
     )
@@ -2204,7 +2216,7 @@ type CalendarHit = { id?: string; title: string; when: string; calendar: string 
 type MailHit = { message_id?: string; subject: string; from: string; date: string }
 
 /** One tool call: what it did in a line, and when opened, what it was given and what came back. */
-function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, summary, check }: { tag: string; call: ToolCall; result?: string; /** Why it ran without asking (a checked web read) */ checked?: string; pending: boolean; approval?: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; inTerminal?: boolean; summary?: CallSummary; /** What Auto's check said about a web read it would not clear */ check?: string }) {
+function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, summary, check, mailAlways }: { /** Mail reads are always allowed already */ mailAlways?: boolean; tag: string; call: ToolCall; result?: string; /** Why it ran without asking (a checked web read) */ checked?: string; pending: boolean; approval?: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; inTerminal?: boolean; summary?: CallSummary; /** What Auto's check said about a web read it would not clear */ check?: string }) {
   let parsed: unknown = null
   try {
     parsed = result ? JSON.parse(result) : null
@@ -2235,7 +2247,9 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
           </dl>
         )}
         {summary?.body !== undefined && <pre className="agt-tool-body agt-ask-mail">{summary.body || '(no text)'}</pre>}
-        {call.name.startsWith('mail_') && <p className="muted agt-ask-why">Mail always asks you first, in every mode: what it reads and sends is private.</p>}
+        {call.name.startsWith('mail_') && (
+          <p className="muted agt-ask-why">{MAIL_READ_TOOLS.has(call.name) ? 'Mail asks you first, in every mode: what it reads is private. You can let it search and read mail in this thread for 15 minutes, or always; sending and changes still ask.' : 'Mail always asks you first, in every mode: what it reads and sends is private.'}</p>
+        )}
         {call.name === 'seafile_write' && typeof call.arguments.content === 'string' && <pre className="agt-tool-body">{call.arguments.content.slice(0, 4000)}</pre>}
         {call.name === 'update_note' && typeof call.arguments.text === 'string' && <pre className="agt-tool-body">{call.arguments.text.slice(0, 4000)}</pre>}
         {call.name === 'web_fetch' && typeof call.arguments.url === 'string' && (
@@ -2246,7 +2260,7 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
           </>
         )}
         <ApprovalPreview call={call} />
-        <ApprovalActions call={call} decide={approval} />
+        <ApprovalActions call={call} decide={approval} mailAlways={mailAlways} />
       </div>
     )
   return (
@@ -2371,8 +2385,47 @@ function ApprovalPreview({ call }: { call: ToolCall }) {
   return null
 }
 
-/** Allow, allow from now on, or decline (with what to do instead), by what is asked. */
-function ApprovalActions({ call, decide }: { call: ToolCall; decide: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void }) {
+/**
+ * Mail reads the user allowed in this thread for a while, with the minutes left and an × to end it
+ * early; gone when it runs out (the server stops honouring it then, whatever this shows). With
+ * mail reads always allowed, says so instead, and opens Settings → Agents → Permissions to change it.
+ */
+function MailReadsChip({ thread, onChange, onError }: { thread: Thread; onChange: (t: Thread) => void; onError: (e: string) => void }) {
+  const wm = useWM()
+  // Ticks to count the minutes down; the time itself is read as it draws.
+  const [, tick] = useState(0)
+  const until = thread.mailReadsUntil ?? 0
+  useEffect(() => {
+    if (until <= Date.now()) return
+    const timer = window.setInterval(() => tick((n) => n + 1), 10_000)
+    // And once more right when it runs out, so the chip goes on time.
+    const end = window.setTimeout(() => tick((n) => n + 1), until - Date.now() + 50)
+    return () => (window.clearInterval(timer), window.clearTimeout(end))
+  }, [until])
+  const left = mailReadsLeft(thread)
+  if (thread.mailReadsAlways)
+    return (
+      <button
+        className="agt-chip agt-chip-grant"
+        title="Mail searches and reads run without asking in every thread. Drafts, sends and changes still ask. Click to change it in Settings → Agents → Permissions."
+        onClick={() => (showAgentsSection('permissions'), wm.open('settings', { section: 'agents', t: String(Date.now()) }))}
+      >
+        <span className="agt-chip-label">Mail reads always allowed</span>
+      </button>
+    )
+  if (!left) return null
+  return (
+    <span className="agt-chip agt-chip-grant" title="Mail searches and reads run without asking in this thread until then. Drafts, sends and changes still ask.">
+      <span className="agt-chip-label">Mail reads allowed · {left} min</span>
+      <button className="agt-chip-x" aria-label="Stop allowing mail reads" title="Stop allowing mail reads now" onClick={() => revokeMailReads(thread.id).then(onChange, (e: Error) => onError(e.message))}>
+        ×
+      </button>
+    </span>
+  )
+}
+
+/** Allow, allow from now on, or decline (with what to do instead), by what is asked. `mailAlways`: mail reads are always allowed already. */
+function ApprovalActions({ call, decide, mailAlways }: { call: ToolCall; decide: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; mailAlways?: boolean }) {
   const [feedback, setFeedback] = useState('')
   const plan = call.name === 'exit_plan_mode'
   return (
@@ -2402,6 +2455,11 @@ function ApprovalActions({ call, decide }: { call: ToolCall; decide: (allow: boo
                 Allow {siteOf(call.arguments.url)}
               </button>
             )}
+            {MAIL_READ_TOOLS.has(call.name) && !mailAlways && (
+              <button className="btn btn-small" onClick={() => decide(true, { always: 'mail_reads' })} title="Searches and reads of your mail run without asking in this thread for 15 minutes. Drafts, sends and changes still ask every time.">
+                Allow mail reads for 15 min
+              </button>
+            )}
             {call.name === 'terminal' && typeof call.arguments?.command === 'string' && canAlwaysAllow(call.arguments.command) && (
               <button className="btn btn-small" onClick={() => decide(true, { always: 'command' })} title="Commands like this one run without asking in this thread">
                 Always allow this command
@@ -2412,6 +2470,11 @@ function ApprovalActions({ call, decide }: { call: ToolCall; decide: (allow: boo
         <button className="btn btn-small" onClick={() => decide(false, feedback.trim() ? { feedback: feedback.trim() } : {})}>
           {plan ? 'Keep planning' : 'Decline'}
         </button>
+        {MAIL_READ_TOOLS.has(call.name) && !mailAlways && (
+          <button className="btn btn-small btn-ghost agt-ask-quiet" onClick={() => (decide(true, { always: 'mail_reads_always' }), window.dispatchEvent(new CustomEvent(MAIL_READS_EVENT, { detail: 'always' })))} title="Searches and reads of your mail run without asking from now on, in every thread and mode (change it in Settings → Agents → Permissions). Drafts, sends and changes still ask every time.">
+            Always allow mail reads
+          </button>
+        )}
       </div>
       <input
         className="agt-ask-feedback"

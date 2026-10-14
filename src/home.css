@@ -1334,8 +1334,13 @@ textarea.agt-q-input {
 }
 .agt-ask-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 6px;
+}
+/* A lasting choice offered on a card (always allow mail reads): there, but out of the way. */
+.agt-ask-quiet {
+  margin-left: auto;
 }
 
 @container (max-width: 620px) {
@@ -1904,6 +1909,27 @@ textarea.agt-q-input {
 .agt-chip.is-bypass:hover:not(:disabled) {
   color: var(--red);
   border-color: var(--red);
+}
+/* Mail reads allowed in the thread for a while: the minutes left, and an × to end it now. */
+.agt-chip-grant {
+  cursor: default;
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  max-width: 40%;
+}
+.agt-chip-x {
+  flex: none;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+.agt-chip-x:hover {
+  color: var(--text);
 }
 /* Why a web read ran without asking (Auto's check, an allowed site): small, on the tool's row. */
 .agt-tool-checked {

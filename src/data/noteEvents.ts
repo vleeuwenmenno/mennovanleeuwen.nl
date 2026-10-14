@@ -82,7 +82,8 @@ export function cleanNoteEvents(v: unknown): NoteEvent[] | undefined {
 /** A note's title: its first line, without Markdown heading or list marks. */
 export function textTitle(text: string): string {
   const line = text.split('\n').find((l) => l.trim()) ?? ''
-  return line.replace(/^\s*(#{1,6}\s+|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+)/, '').trim().slice(0, 80) || 'New note'
+  // Furigana, {漢字|かんじ}, counts as its characters.
+  return line.replace(/\{([^{}|\n]+)\|[^{}|\n]+\}/g, '$1').replace(/^\s*(#{1,6}\s+|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+)/, '').trim().slice(0, 80) || 'New note'
 }
 
 /**
