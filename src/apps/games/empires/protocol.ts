@@ -3,6 +3,7 @@ import type { Cmd } from './commands.ts'
 import type { FactionId } from './data.ts'
 import type { MapRules } from './maps.ts'
 import type { MatchInfo, Turn } from './match.ts'
+import type { Reinforce } from './sim.ts'
 import type { BattleSnap } from './snapshot.ts'
 
 // What the Empires At War multiplayer client and server say to each other over the WebSocket at
@@ -42,6 +43,9 @@ export type MpLobby = {
   map: string
   gen: MapRules
   credits: number
+  /** Reinforcements: which classes may be bought as one, and the surcharge (sim.ts Reinforce).
+   * Lobbies from before them have none: the defaults. */
+  reinforce?: Reinforce
   slots: MpSlot[]
   state: 'open' | 'playing'
 }
@@ -88,8 +92,9 @@ export type ClientMsg =
   /** Move to another open spawn. */
   | { t: 'seat'; i: number }
   | { t: 'slot'; i: number; patch: SlotPatch }
-  /** Host only: the map, the generator's rules, starting credits. */
-  | { t: 'setup'; map?: string; gen?: MapRules; credits?: number }
+  /** Host only: the map, the generator's rules, starting credits, the reinforcement rules (any of
+   * them; the server cleans them, see cleanReinforce). */
+  | { t: 'setup'; map?: string; gen?: MapRules; credits?: number; reinforce?: Partial<Reinforce> }
   | { t: 'ready'; on: boolean }
   | { t: 'chat'; text: string }
   /** Host only: everyone's ready, go. */

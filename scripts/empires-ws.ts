@@ -184,6 +184,24 @@ check('a profile that doesn\'t exist is ignored', unknown.slots[2].profile === '
 guest.send({ t: 'slot', i: 2, patch: { profile: 'defensive' } })
 const refusedStyle = await until(guest, 'error')
 check("a guest can't change an AI seat's profile", /host/.test(refusedStyle.why), refusedStyle)
+// Reinforcements: defaults on a new lobby; the server cleans whatever the host sends, and only the
+// host may change them (a tampered client can't make them free or negative).
+check('a new lobby has the default reinforcement rules', made.reinforce?.strike === true && made.reinforce?.ships === true && made.reinforce?.surcharge === 15, made.reinforce)
+host.send({ t: 'setup', reinforce: { surcharge: 999 } })
+const capped = (await until(guest, 'lobby', (m) => m.lobby.reinforce?.surcharge !== 15)).lobby
+check('a surcharge over 50% is brought down to 50%', capped.reinforce.surcharge === 50, capped.reinforce)
+host.send({ t: 'setup', reinforce: { surcharge: -40 } })
+const floored = (await until(guest, 'lobby', (m) => m.lobby.reinforce?.surcharge !== 50)).lobby
+check('a negative surcharge becomes 0%', floored.reinforce.surcharge === 0, floored.reinforce)
+host.send({ t: 'setup', reinforce: { surcharge: 13, strike: false } })
+const stepped = (await until(guest, 'lobby', (m) => m.lobby.reinforce?.strike === false)).lobby
+check('a surcharge goes onto its 5% steps, strike craft off, warships still on', stepped.reinforce.surcharge === 15 && stepped.reinforce.strike === false && stepped.reinforce.ships === true, stepped.reinforce)
+host.send({ t: 'setup', reinforce: { ships: 'yes', surcharge: 'free' } })
+const junk = (await until(guest, 'lobby')).lobby
+check('junk switches and surcharges fall back to the defaults', junk.reinforce.ships === true && junk.reinforce.surcharge === 15, junk.reinforce)
+guest.send({ t: 'setup', reinforce: { surcharge: 0 } })
+const notTheirs = await until(guest, 'error')
+check("a guest can't change the reinforcement rules", /host/.test(notTheirs.why), notTheirs)
 host.send({ t: 'slot', i: 1, patch: { kind: 'open' } })
 const kicked = await until(guest, 'kicked')
 check('host can take a player out', /host/.test(kicked.why), kicked)

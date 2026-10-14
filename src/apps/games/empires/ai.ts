@@ -3,7 +3,7 @@ import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import {
   allQueued, building, canRetreat, cantBuild, cantExpand, cantRush, cmdExpand, cmdRush, moduleRebuildCost, cantMend, cantRepair, cantResearch, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, cmdGive,
-  canSee, dpsVs, fleet, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
+  canSee, cantReinforce, dpsVs, fleet, shipPrice, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
 } from './sim.ts'
 import * as M from './detmath.ts'
 import { sq } from './detmath.ts'
@@ -225,6 +225,71 @@ export type Brain = {
   escort: number[]
   engSeen: number
   engWait: number
+  /** No reinforcement bought before this (see reinforcements); absent in brains saved before them. */
+  reinfAt?: number
+}
+
+/** How far from home something has to be before the AI calls a reinforcement in from hyperspace
+ * rather than wait for a ship to fly out to it; and the least time between two it buys. */
+export const REINFORCE_AI = { far: mapDist(3200), every: 60 }
+
+/**
+ * Where a reinforcement would help, or null: one of our mines or platforms, or a beacon we hold, far
+ * from home with enemy ships at it; or the wave out now, far from home and fighting something about
+ * its match or more. The spot is a little back from the fight, towards home, where our side sees.
+ */
+function reinforceSpot(w: World, b: Brain, st: Unit, army: Unit[]): { x: number; y: number; face: number } | null {
+  const o = b.o
+  const team = w.players[o].team
+  const far = (x: number, y: number) => sq(x - st.x) + sq(y - st.y) > sq(REINFORCE_AI.far)
+  const back = (x: number, y: number, by: number) => {
+    const a = M.atan2(st.y - y, st.x - x)
+    return { x: x + M.cos(a) * by, y: y + M.sin(a) * by, face: a + Math.PI }
+  }
+  for (const u of w.units) {
+    if (u.dead || u.owner !== o || (u.t.tier !== 'mine' && u.t.tier !== 'defense') || !far(u.x, u.y)) continue
+    if (threatAt(w, o, u.x, u.y) >= 600) return back(u.x, u.y, radius(u.t) + 300)
+  }
+  for (const bc of w.beacons) {
+    if (bc.owner !== team || !far(bc.x, bc.y)) continue
+    if (threatAt(w, o, bc.x, bc.y) >= 600) return back(bc.x, bc.y, 350)
+  }
+  const wave = b.attacking ? army.filter((u) => b.troops.includes(u.id)) : []
+  if (wave.length) {
+    const c = centre(wave)
+    const there = threatAt(w, o, c.x, c.y, rangeDist(1200))
+    if (far(c.x, c.y) && there > 0 && there >= value(wave) * 0.7) return back(c.x, c.y, rangeDist(500))
+  }
+  return null
+}
+
+/**
+ * Reinforcements (a battle with the lobby's reinforcement rules): ships fly out of the yards as a
+ * rule, and only where that is too slow (see reinforceSpot) does the admiral pay the surcharge for
+ * one called in from hyperspace: a medium or harder one, at most one a minute, with credits to spare,
+ * a warship off its usual list (no flagships). Whatever waits in the reserve is called in at once,
+ * to where it is needed, or failing that next to the rally point.
+ */
+function reinforcements(w: World, b: Brain, st: Unit, army: Unit[]) {
+  const R = w.reinforce
+  if (!R || !w.hybrid || w.fleet) return
+  const o = b.o
+  const p = w.players[o]
+  const spot = reinforceSpot(w, b, st, army)
+  for (const id of p.reserve.slice(0, 2)) {
+    const at = spot ?? { x: p.rally.x, y: p.rally.y, face: M.atan2(w.h / 2 - p.rally.y, w.w / 2 - p.rally.x) }
+    for (let i = 0; i < 8; i++) {
+      const a = rand(w) * Math.PI * 2
+      const d = 120 + rand(w) * 380
+      if (act(b, () => cmdDeploy(w, o, id, at.x + M.cos(a) * d, at.y + M.sin(a) * d, at.face))) break
+      if (b.hands < 1) break
+    }
+  }
+  if (!spot || !R.ships || b.diff === 'veryEasy' || b.diff === 'easy' || p.reserve.length) return
+  if (w.time < (b.reinfAt ?? 0) || allQueued(w, o).some((q) => q.reserve)) return
+  const id = pickShip(w, b, (t) => t.tier !== 'fighter' && t.tier !== 'capital' && !cantReinforce(w, t.id))
+  if (!id || cantBuild(w, o, id, true) || p.credits < shipPrice(w, id, true) + PROFILES[b.profile].keep) return
+  if (act(b, () => cmdBuild(w, o, id, true), true)) b.reinfAt = w.time + REINFORCE_AI.every
 }
 
 /** The quiet start before it attacks anything of ours: its difficulty's, stretched or shortened
@@ -734,6 +799,9 @@ export function think(w: World, b: Brain, dt: number) {
     const want = b.want
     if (want && act(b, () => cmdBuild(w, o, want), true)) b.want = null
   }
+
+  // Reinforcements from hyperspace, for the surcharge, only where flying out from home is too slow.
+  reinforcements(w, b, st, army)
 
   // Abilities, when they'd help.
   for (const u of army) {

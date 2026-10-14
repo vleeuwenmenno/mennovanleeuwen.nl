@@ -10,7 +10,7 @@ import { ALLY, ENEMY, OWN, drawTerrainOverview, relColor } from './render'
 import { ACTIONS, GROUP_MODS, RESERVED, bindKey, keyName, keyOf, modName, resetKeys, setGroupMod, setSettings, useAskedPanel, useSettings, type Action, type Settings } from './settings'
 import { empiresMix, empiresMusic, empiresMuted, empiresVolume } from '../prefs'
 import { performanceOverlayPref } from '../../../os/PerformanceOverlay'
-import { newWorld, type Owner, type World } from './sim'
+import { REINFORCE, SURCHARGE_MAX, cleanReinforce, newWorld, type Owner, type Reinforce, type World } from './sim'
 import { MAP_SCALE } from './scale'
 import { Codex } from './Codex'
 import { score } from './Scoreboard'
@@ -28,7 +28,10 @@ export type Slot = { kind: SlotKind; faction: FactionId; team: 0 | 1; difficulty
 /** `map` is a fixed map's id, or GENERATED to build one from `gen`. `areas` are the start areas
  * drawn in the lobby, by slot; a slot without one starts round its spawn point. `names`, by slot:
  * who plays there, for a multiplayer battle carried on offline (otherwise "You", "Enemy 2"…). */
-export type Setup = { map: string; slots: Slot[]; credits: number; gen: MapRules; areas: (Rect | null)[]; areasFor?: string; names?: (string | null)[] }
+export type Setup = { map: string; slots: Slot[]; credits: number; gen: MapRules; areas: (Rect | null)[]; areasFor?: string; names?: (string | null)[]
+  /** Reinforcements (sim.ts Reinforce); setups saved before them get the defaults. */
+  reinforce?: Reinforce
+}
 
 /** Which map, at which size, start areas were drawn for: areas saved for anything else (another
  * map, or this one before it was resized) are dropped rather than landing in the wrong place. */
@@ -75,9 +78,11 @@ function lastSetup(): Setup {
       slots: slotsFor(map, slots.slice(0, map.spawns.length)).map((s, i) => (i ? { ...s, kind: s.kind === 'you' ? 'ai' : s.kind } : s)),
       credits,
       gen,
+      // Setups saved before reinforcements had rules: the defaults.
+      reinforce: cleanReinforce(v?.reinforce),
     }
   } catch {
-    return { map: MAPS[0].id, slots: slotsFor(MAPS[0]), credits: 1600, gen: { ...DEFAULT_RULES }, areas: [] }
+    return { map: MAPS[0].id, slots: slotsFor(MAPS[0]), credits: 1600, gen: { ...DEFAULT_RULES }, areas: [], reinforce: { ...REINFORCE } }
   }
 }
 
@@ -127,6 +132,40 @@ export function Seg<T extends string | number | boolean>({ value, options, onCha
           {text}
         </button>
       ))}
+    </div>
+  )
+}
+
+/**
+ * The reinforcement rules, for the skirmish setup and the multiplayer lobby (where only the host
+ * changes them, `onChange` absent for the others): whether strike craft and warships may be bought
+ * as reinforcements, and the surcharge. New ships always fly out of the yards; a reinforcement is
+ * only ever the red button's choice on a ship's card.
+ */
+export function ReinforceOptions({ value, onChange }: { value: Reinforce; onChange?: (patch: Partial<Reinforce>) => void }) {
+  const r = cleanReinforce(value)
+  const set = onChange ?? (() => {})
+  const off = !onChange
+  const onOff = (label: string, v: boolean, key: 'strike' | 'ships', tip: string) => (
+    <label className="ew-genfield" data-tip={tip}>
+      <span>{label}</span>
+      {off ? <b className="ew-reinf-ro">{v ? 'On' : 'Off'}</b> : <Seg label={label} value={v} options={[[true, 'On'], [false, 'Off']]} onChange={(x) => set({ [key]: x })} />}
+    </label>
+  )
+  return (
+    <div className="ew-reinf">
+      <div className="ew-reinf-row">
+        {onOff('Strike craft', r.strike, 'strike', 'Fighters, bombers, repair craft and engineers can be called in from hyperspace')}
+        {onOff('Warships', r.ships, 'ships', 'Gunships, corvettes, frigates, cruisers and flagships can be called in from hyperspace')}
+      </div>
+      <label className="ew-range">
+        <span className="ew-small ew-muted">Surcharge</span>
+        <input type="range" min={0} max={SURCHARGE_MAX} step={5} value={r.surcharge} disabled={off} onChange={(e) => set({ surcharge: Number(e.target.value) })} aria-label="Reinforcement surcharge" />
+        <b>+{r.surcharge}%</b>
+      </label>
+      <p className="ew-muted ew-small">
+        New ships fly out of their yard or the station's hangar. A ship's red button buys it as a reinforcement instead: built the same way, it waits in hyperspace to be called in anywhere your fleet can see{r.surcharge ? `, for ${r.surcharge}% more` : ', at no extra cost'}.
+      </p>
     </div>
   )
 }
@@ -653,7 +692,7 @@ export function HowToPlay() {
         <li>In the lobby, drag on the map to draw where each player may start. Before the battle, click inside your area to place your station, then start.</li>
         <li>Drag to select ships. Right-click to move, or to attack what's under the cursor. Hold the right button and draw a line to spread the ships evenly along it, or draw a loop to ring them round it. Hold Ctrl as you draw to attack-move. Hold Shift with a click order to queue it after the ones the ships already have.</li>
         <li>With one ship or squadron selected, right-drag from where it should go towards where it should face; hold Alt to do that with the whole selection, which keeps its formation. Shift and right-drag draws a circle: every enemy inside it gets attacked, the targets shared out between your ships.</li>
-        <li>Ships built at the station (other than fighters and bombers) wait in the fleet inventory: click your faction's emblem at the top left to open it, and drag one to any spot your fleet can see to call it in from hyperspace. The small jump button on a shipyard card sends one straight to the station instead.</li>
+        <li>New ships fly out of the yard that builds them (or the station's hangar) to its rally point. The small red button on a ship's card buys it as a reinforcement instead, for a surcharge (15% unless the lobby says otherwise): it waits in the fleet inventory, so click your faction's emblem at the top left to open it, and drag it to any spot your fleet can see to call it in from hyperspace.</li>
         <li>Control groups: {modName(groupSet)}+{k('group1')} puts the selection in group 1 (ships, a yard or the station), {modName(groupAdd)}+{k('group1')} adds the selection to it, and {k('group1')} selects it; press it twice quickly to look at it. The same for 2 to 9 and 0. The groups show above the selection: click one to select it, double-click to look at it.</li>
         <li>In a team battle, the send button beside your credits gives credits to an ally. AI allies take them gladly, and one with plenty to spare helps out a player on its team who's broke.</li>
         <li>Click your credits for the economy: income by source, a chart over the battle, what you've earned and spent, and the latest purchases. The economy and fleet inventory panels can be dragged by their title bars.</li>
@@ -1293,6 +1332,8 @@ export function Lobby({ sound, onBack, onLaunch }: { sound: EmpiresSound; onBack
             <input type="range" min={0} max={CREDIT_STEPS.length - 1} step={1} value={step} onChange={(e) => update({ ...setup, credits: CREDIT_STEPS[Number(e.target.value)] })} aria-label="Starting credits" />
             <b>{setup.credits.toLocaleString('en-US')}</b>
           </label>
+          <h5>Reinforcements</h5>
+          <ReinforceOptions value={setup.reinforce ?? REINFORCE} onChange={(patch) => update({ ...setup, reinforce: cleanReinforce({ ...cleanReinforce(setup.reinforce), ...patch }) })} />
           <div className="ew-launch">
             <span className="ew-muted ew-small">
               {enemies ? `You${allies ? ` and ${allies} ${allies === 1 ? 'ally' : 'allies'}` : ''} against ${enemies} ${enemies === 1 ? 'enemy' : 'enemies'}` : 'Add at least one enemy.'}

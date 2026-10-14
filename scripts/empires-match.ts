@@ -3,6 +3,9 @@
 // fly, and orders must come back quickly. Along the way Bravo's game is tampered with (it must be
 // put right by the server), Bravo's connection drops and comes back (it must pick the battle up
 // again), and finally Bravo leaves (an AI takes over its fleet; Alpha carries on without drifting).
+// The host sets a tampered reinforcement surcharge and turns warships off: the battle must get the
+// surcharge cleaned (50%), and the server must drop warship reinforcements while strike craft ones
+// go through.
 //
 //   node scripts/empires-match.ts [seconds] [ws://localhost:5173/api/empires/ws]
 //
@@ -43,6 +46,10 @@ type Player = {
   lastTurnAt: number
   seen: Msg[]
   takeovers: number
+  /** The battle as the server set it up. */
+  info?: MatchInfo
+  /** Reinforcement orders of ours that came back in a turn, by class: strike craft and warships. */
+  reinforced: { strike: number; ships: number }
   onLobby?: (l: Msg) => void
   started?: () => void
   welcomed?: () => void
@@ -66,6 +73,7 @@ function handle(p: Player, m: Msg) {
   else if (m.t === 'match') {
     const info = m.match as MatchInfo
     if (p.w && p.me === m.me) return // the same battle, after a reconnect: a sync follows
+    p.info = info
     p.w = matchWorld(info)
     p.brains = matchBrains(info)
     p.me = m.me
@@ -85,6 +93,7 @@ function handle(p: Player, m: Msg) {
     if (m.ai) p.takeovers += m.ai.length
     for (const [seat, c] of m.c as [number, Cmd][]) {
       const key = JSON.stringify(c)
+      if (seat === p.me && c.f === 'build' && c.a[1] === true) p.reinforced[UNIT[c.a[0] as string].tier === 'fighter' ? 'strike' : 'ships']++
       if (seat === p.me && p.sent.has(key)) {
         p.rtts.push(now - p.sent.get(key)!.at)
         p.sent.delete(key)
@@ -102,7 +111,7 @@ function handle(p: Player, m: Msg) {
 }
 
 function player(name: string): Promise<Player> {
-  const p: Player = { name, ws: null as unknown as WebSocket, token: '', send: () => {}, n: 0, hashes: new Map(), sent: new Map(), rtts: [], gaps: [], lastTurnAt: 0, seen: [], takeovers: 0 }
+  const p: Player = { name, ws: null as unknown as WebSocket, token: '', send: () => {}, n: 0, hashes: new Map(), sent: new Map(), rtts: [], gaps: [], lastTurnAt: 0, seen: [], takeovers: 0, reinforced: { strike: 0, ships: 0 } }
   return new Promise((resolve) => {
     p.welcomed = () => {
       p.welcomed = undefined
@@ -136,6 +145,8 @@ await new Promise<void>((done) => {
     if (step === 0) {
       step = 1
       a.send({ t: 'setup', map: 'vanth' })
+      // A tampered surcharge (the server brings it down to 50%), and no warship reinforcements.
+      a.send({ t: 'setup', reinforce: { surcharge: 999, ships: false } })
     } else if (step === 1 && l.map === 'vanth') {
       step = 2
       a.send({ t: 'slot', i: 2, patch: { kind: 'ai', difficulty: 'hard' } })
@@ -165,6 +176,11 @@ const started = Promise.all([a, b].map((p) => new Promise<void>((r) => (p.starte
 a.send({ t: 'start' })
 await started
 console.log(`battle ${lobbyId} started: ${seconds} s of play`)
+for (const p of [a, b]) {
+  const r = p.info?.reinforce
+  if (r?.surcharge === 50 && r.ships === false && r.strike === true && p.w?.reinforce?.surcharge === 50) ok(`${p.name}'s battle has the cleaned reinforcement rules (50%, no warships)`)
+  else fail(`${p.name}'s reinforcement rules: ${JSON.stringify(r)}`)
+}
 
 // Each player keeps busy: builds ships, sends the fleet about, now and then something odd.
 const busy = (p: Player) => {
@@ -174,11 +190,14 @@ const busy = (p: Player) => {
     if (!w || p.ws.readyState !== WebSocket.OPEN) return
     const mine = Object.values(UNIT).filter((u) => u.faction === w.players[p.me!].faction && (u.tier === 'fighter' || u.tier === 'gunship') && u.level === 1)
     const ships = w.units.filter((u) => !u.dead && u.owner === p.me && u.t.tier !== 'station' && u.t.tier !== 'mine')
+    // Every other build is a reinforcement: strike craft ones go through, warship ones (off in this
+    // battle) the server drops.
     const c =
       k++ % 3 === 0
-        ? cmd('build', mine[k % mine.length].id)
+        ? cmd('build', mine[k % mine.length].id, k % 2 === 1)
         : cmd('move', ships.map((u) => u.id), Math.round(Math.random() * w.w), Math.round(Math.random() * w.h), k % 2 === 0)
-    p.sent.set(JSON.stringify({ f: c.f, a: c.f === 'build' ? [c.a[0], false, 0] : [...c.a, false].slice(0, 5) }), { at: performance.now(), n: p.n })
+    const dropped = c.f === 'build' && c.a[1] === true && UNIT[c.a[0] as string].tier !== 'fighter'
+    if (!dropped) p.sent.set(JSON.stringify({ f: c.f, a: c.f === 'build' ? [c.a[0], c.a[1] ?? false, 0] : [...c.a, false].slice(0, 5) }), { at: performance.now(), n: p.n })
     p.send({ t: 'cmd', c })
     // A tampered client: a nonsense unit, garbage arguments. The server must drop these.
     if (k % 7 === 0) p.send({ t: 'cmd', c: { f: 'build', a: ['not-a-ship'] } })
@@ -230,5 +249,9 @@ if (differ.length) fail(`players differ at ticks ${differ.slice(0, 5).join(', ')
 else ok(`${common.length} fingerprints after the last sync equal between the players`)
 if (a.seen.some((m) => m.t === 'desync')) fail('Alpha drifted from the server')
 else ok("Alpha never drifted from the server's battle (it checked every fingerprint)")
+const strike = a.reinforced.strike + b.reinforced.strike
+const ships = a.reinforced.ships + b.reinforced.ships
+if (strike > 0 && ships === 0) ok(`strike craft reinforcements went through (${strike}), warship ones were dropped by the server`)
+else fail(`reinforcement orders in the turns: ${strike} strike craft, ${ships} warships`)
 a.send({ t: 'leave' })
 setTimeout(() => process.exit(failed ? 1 : 0), 300)

@@ -5,7 +5,7 @@ import { clearLine, findPath, navGrid, type NavGrid } from './nav.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import { BIG_SPREAD, sizeClass } from './models/sizes.ts'
 import {
-  ABILITIES, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
+  ABILITIES, YARD_BERTHS, MODULE, MODULE_FX, MODULE_QUEUE, REBUILD_MODULE, RUSH, RUSH_TECH, WORKS_NAME, needsModule, worksOf, yardOf, yardType, type ModuleId, ARMOR_BONUS, BASE_POP, BUILD_RADIUS, DEFENSE_WING, ENGINEERS, FIELD_REPAIR, MENDABLE, REBUILD, SITE_REFUND, YARD_MAX, builtAt, isEngineer, mineType, STATIONS, wingOf, type SiteUpgradeId, BEACON_INCOME, SITE_UPGRADES, YIELD_PER_LEVEL, BEACON_POP, LEVEL_UP, MAX_CAPITALS, MAX_LEVEL, MAX_QUEUE, MAX_RESEARCH, MINE_INCOME, POP_PER_LEVEL, START_CREDITS, STATION_INCOME,
   SURVEY_RADIUS, SURVEY_TIME, TECH, UNIT, UNITS, UPGRADES, accuracy, dims, effect, isShip, stationType, unitOf, type AbilityId, type FactionId, type TechEffect, type Tier, type UnitType, type Weapon,
   type WeaponKind,
 } from './data.ts'
@@ -175,7 +175,19 @@ export type Unit = {
   rushAt?: number
   /** A yard that rush-launched with nothing else in its queue: the next ship it starts goes slower. */
   slowNext?: boolean
+  /** A new ship flying out of the yard's berth or the station's hangar door (see Launch). Absent once
+   * it is out, and on every other unit. */
+  launch?: Launch
 }
+
+/**
+ * A new ship leaving where it was built: it sits at (x0, y0) facing `a` while its engines spool up
+ * and the docking lights blink (`spool` seconds), then slides out along `a` to (x1, y1) in `slide`
+ * seconds, and flies on under its own power. `t` is the seconds it has been at it; `wait` the seconds
+ * it has held back because the way out was blocked (see LAUNCH.wait). `from`: the yard or station.
+ * `end`: its speed as it comes clear, in units a second.
+ */
+export type Launch = { from: number; t: number; wait: number; spool: number; slide: number; x0: number; y0: number; x1: number; y1: number; a: number; end: number }
 
 /**
  * A rush-launched warship still to be finished (data.ts RUSH): `left` seconds of its build still to
@@ -207,7 +219,8 @@ export type Slot = { t: number; key: number; at: number; a: number; inset: numbe
 
 /** A ship being built. `reserve`: it goes to the fleet reserve when done instead of jumping in. */
 /** `slow`: the ship a yard started after a rush launch, built RUSH.slowdown slower. */
-export type QueueItem = { unit: string; left: number; total: number; reserve?: boolean; slow?: boolean }
+/** `paid`: what it cost, when that isn't its plain price (a reinforcement's surcharge), for a refund. */
+export type QueueItem = { unit: string; left: number; total: number; reserve?: boolean; slow?: boolean; paid?: number }
 /** A ship on its way in from hyperspace: it drops out at (x, y), facing `a`, once the clock
  * reaches `at`. `rally`: a new ship from the shipyard, sent on to the rally point. */
 export type Arrival = { unit: string; owner: Owner; x: number; y: number; a: number; at: number; rally: boolean; /** From a yard: its rally point (else the station's). */ rx?: number; ry?: number
@@ -407,7 +420,52 @@ export type World = {
   ruins?: Ruin[]
   /** Dev cheats only (a local battle): the rush launch's numbers, tried out in place of RUSH. */
   rushTune?: typeof RUSH
+  /** New ships fly out of the yards (and the station's hangar), and calling one in from hyperspace
+   * as a reinforcement is a paid extra, by these rules (see Reinforce). Absent in a battle saved
+   * before that (and in fleet battles, which build nothing): new ships jump in beside their yard, as
+   * they always did there, and the reserve costs nothing extra. */
+  reinforce?: Reinforce
 }
+
+/**
+ * Reinforcements, a battle's rules set in the lobby: whether strike craft (fighter-class: fighters,
+ * bombers, repair craft, engineers) and warships (gunships and up) may be bought as reinforcements
+ * (built, then waiting in the reserve to be called in anywhere the fleet can see), and what that
+ * costs on top of the plain price, in percent (0 to 50, in steps of 5).
+ */
+export type Reinforce = { strike: boolean; ships: boolean; surcharge: number }
+export const REINFORCE: Reinforce = { strike: true, ships: true, surcharge: 15 }
+export const SURCHARGE_MAX = 50
+/** Lobby rules as received (old matches have none, a tampered client anything): the defaults for
+ * what is missing, a surcharge brought onto the 5% steps between 0 and SURCHARGE_MAX. */
+export function cleanReinforce(raw: unknown): Reinforce {
+  const o = (raw && typeof raw === 'object' ? raw : {}) as Partial<Record<keyof Reinforce, unknown>>
+  const pct = typeof o.surcharge === 'number' && Number.isFinite(o.surcharge) ? Math.round(clamp(o.surcharge, 0, SURCHARGE_MAX) / 5) * 5 : REINFORCE.surcharge
+  return { strike: typeof o.strike === 'boolean' ? o.strike : REINFORCE.strike, ships: typeof o.ships === 'boolean' ? o.ships : REINFORCE.ships, surcharge: pct }
+}
+/** What calling a ship in as a reinforcement costs on top of its price: the surcharge's share of it,
+ * rounded to 5 credits, and at least 25 (none at 0%). Old battles (no rules): nothing. */
+export function surcharge(w: World, id: string) {
+  const pct = w.reinforce?.surcharge ?? 0
+  if (pct <= 0) return 0
+  return Math.max(25, Math.round((UNIT[id].cost * pct) / 100 / 5) * 5)
+}
+/** What a ship costs: as a reinforcement (`reserve`), with the surcharge. */
+export const shipPrice = (w: World, id: string, reserve = false) => UNIT[id].cost + (reserve ? surcharge(w, id) : 0)
+/** Why a ship can't be bought as a reinforcement in this battle (its class is off in the lobby), or
+ * null. Battles from before the rules: strike craft can't, as then. */
+export function cantReinforce(w: World, id: string): string | null {
+  const t = UNIT[id]
+  const strike = t.tier === 'fighter'
+  const r = w.reinforce
+  if (!r) return strike ? 'Strike craft launch from the hangar' : null
+  if (strike && !r.strike) return 'Reinforcements for strike craft are off in this battle'
+  if (!strike && !r.ships) return 'Reinforcements for warships are off in this battle'
+  return null
+}
+/** Whether new ships fly out of their yard (or the station's hangar) rather than jump in beside it. */
+export const launches = (w: World) => !!w.hybrid && !!w.reinforce && !w.fleet
+
 export type FleetRules = {
   /** Where each player's reinforcements may jump in, whether or not the fleet can see it. */
   entry: { x: number; y: number; r: number }[]
@@ -696,7 +754,8 @@ export function autoStart(w: World, area: { x: number; y: number; w: number; h: 
   return best ?? mid
 }
 
-export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; credits?: number; fleet?: boolean } = {}): World {
+/** `reinforce`: the lobby's reinforcement rules (REINFORCE when left out). */
+export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; credits?: number; fleet?: boolean; reinforce?: Reinforce } = {}): World {
   const r = rng(opts.seed ?? map.seed)
   const W = map.w
   const H = map.h
@@ -706,7 +765,8 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
     w: W, h: H, time: 0, units: [], byId: new Map(), players: [], teams, map, nodes: [], beacons: [], rocks: [], wrecks: [], shots: [], events: [],
     nextId: 1, squadSeq: 1, wreckSeq: 1000, rs: ((opts.seed ?? map.seed) ^ 0x9e3779b9) >>> 0, winner: -1, grid: new Map(), seenT: 0, nav: new Map(), arrivals: [],
     // Skirmishes and multiplayer battles have hybrid bases; galactic conquest's fleet battles don't.
-    ...(opts.fleet ? {} : { hybrid: true, ruins: [] }),
+    // New ships fly out of the yards, and reinforcements cost extra (see Reinforce).
+    ...(opts.fleet ? {} : { hybrid: true, ruins: [], reinforce: cleanReinforce(opts.reinforce) }),
   }
   w.players = seats.map((s) => {
     const sp = s.at ?? map.spawns[s.spawn]
@@ -1504,7 +1564,10 @@ export function cantBuild(w: World, owner: Owner, id: string, reserve = false, a
   const p = w.players[owner]
   const t = UNIT[id]
   if (w.fleet) return 'No shipyard work during a fleet battle'
-  if (reserve && fromHangar(t)) return 'Strike craft launch from the hangar'
+  if (reserve) {
+    const why = cantReinforce(w, id)
+    if (why) return why
+  }
   if (!w.byId.get(p.station) || w.byId.get(p.station)!.dead) return 'No station'
   if (isEngineer(t) && !w.hybrid) return 'No engineers in this battle'
   if (t.level > p.level) return `Needs station level ${t.level}`
@@ -1517,21 +1580,23 @@ export function cantBuild(w: World, owner: Owner, id: string, reserve = false, a
   if (t.tier === 'capital' && capitals(w, owner) >= MAX_CAPITALS) return 'One flagship at a time'
   if (where.q.length >= MAX_QUEUE) return 'Queue full'
   if (p.pop + queuedPop(w, owner) + t.pop > p.popCap) return 'Fleet at its limit: capture beacons or upgrade the station'
-  if (p.credits < t.cost) return 'Not enough credits'
+  if (p.credits < shipPrice(w, id, reserve)) return 'Not enough credits'
   return null
 }
 
-/** Order a ship: it jumps in next to the station (or the yard that builds it) when done, or with
- * `reserve` waits in the fleet reserve until called in. `at`: as for cantBuild. */
+/** Order a ship: when done it flies out of the yard that builds it (or the station's hangar), or in
+ * a battle from before that jumps in beside it; with `reserve` it is a reinforcement, waiting in the
+ * fleet reserve until called in, for the surcharge on top. `at`: as for cantBuild. */
 export function cmdBuild(w: World, owner: Owner, id: string, reserve = false, at = 0) {
   const why = cantBuild(w, owner, id, reserve, at)
   if (why) return why
   const p = w.players[owner]
   const t = UNIT[id]
   const queue = (queueFor(w, owner, id, at) as { q: QueueItem[] }).q
-  spend(w, p, t.cost, 'ships', t.name)
+  const price = shipPrice(w, id, reserve)
+  spend(w, p, price, 'ships', reserve && price > t.cost ? `${t.name} (reinforcement)` : t.name)
   const time = t.build * (1 + (techBonus(p, id).build ?? 0))
-  queue.push({ unit: id, left: time, total: time, ...(reserve ? { reserve: true } : {}) })
+  queue.push({ unit: id, left: time, total: time, ...(reserve ? { reserve: true } : {}), ...(price !== t.cost ? { paid: price } : {}) })
   return null
 }
 
@@ -1601,6 +1666,140 @@ function yardSpot(w: World, o: Owner, st: Unit, id: string, rally: Pt = w.player
   return { x: st.x + M.cos(toward) * reach, y: st.y + M.sin(toward) * reach, a: toward }
 }
 
+// --- Launch ------------------------------------------------------------------------------------------
+
+/**
+ * A new ship's way out, in seconds: its engines spool up (the docking lights blinking) before it
+ * moves; then it slides out of a yard's berth in `slide` plus `perUnit` for every unit of the way
+ * out, at most `slideMax`, or out of the station's hangar door (`hangarSpool`, `hangar`). With
+ * something solid in the way out it holds back, but no longer than `wait`. `gap`: room it leaves
+ * past the mouth. `end`: its share of its top speed as it comes clear. `stagger`: between the craft
+ * of a squadron.
+ */
+export const LAUNCH = { spool: 0.8, slide: 1.1, perUnit: 1 / 800, slideMax: 2.1, hangarSpool: 0.35, hangar: 0.9, stagger: 0.15, wait: 6, gap: 30, end: 0.7 }
+
+/** The middle of a yard's berth, and how far out along its heading the mouth is from there. */
+export function berthOf(y: Unit): { x: number; y: number; mouth: number } {
+  const b = YARD_BERTHS[y.t.id] ?? { hw: 15, y0: -45, y1: 25 }
+  const k = y.t.size / 100
+  const mid = (-(b.y0 + b.y1) / 2) * k
+  return { x: y.x + M.cos(y.a) * mid, y: y.y + M.sin(y.a) * mid, mouth: -b.y0 * k - mid }
+}
+
+/** Where a station's ship leaves from: the bay of its hangar (the Strike hangar's for bombers, while
+ * it stands), and the heading out of it, away from the station's middle (towards the rally point
+ * when the bay is in the middle). */
+function hangarDoor(st: Unit, id: string, rally: Pt) {
+  const strike = UNIT[id].kind === 'bomber' && expUp(st, 'strikeHangar')
+  const bay = st.t.hardpoints.findIndex((h) => (strike ? h.exp === 'strikeHangar' : h.kind === 'hangar' && !h.exp))
+  const from = bay >= 0 ? hpPos(st, bay) : { x: st.x, y: st.y }
+  const off = M.hypot(from.x - st.x, from.y - st.y)
+  const a = off > 8 ? M.atan2(from.y - st.y, from.x - st.x) : M.atan2(rally.y - st.y, rally.x - st.x)
+  return { x: from.x, y: from.y, a, off }
+}
+
+/**
+ * A finished ship (or squadron) flies out of where it was built: a yard's ship from the middle of its
+ * berth out through the mouth, a station's out of its hangar door, then on to `rally` (attack-move,
+ * as a new ship always went). Fighters of a squadron leave one after another. `rush`: a rush launch,
+ * unfinished (see Rush).
+ */
+function launchFrom(w: World, o: Owner, id: string, from: Unit, rally: Pt, rush?: { built: number; left: number }): Unit[] {
+  const t = UNIT[id]
+  const yard = from.t.tier === 'yard'
+  const len = dims(t)[1] / 2
+  let x0: number, y0: number, a: number, dist: number
+  if (yard) {
+    const b = berthOf(from)
+    x0 = b.x
+    y0 = b.y
+    a = from.a
+    dist = b.mouth + len + LAUNCH.gap
+  } else {
+    const d = hangarDoor(from, id, rally)
+    x0 = d.x
+    y0 = d.y
+    a = d.a
+    dist = Math.max(0, radius(from.t) - d.off) + len + LAUNCH.gap
+  }
+  const group = spawnGroup(w, id, o, x0, y0, a)
+  group.forEach((u, i) => {
+    if (rush) unfinished(u, rush.built, rush.left)
+    const sx = u.x
+    const sy = u.y
+    u.launch = {
+      from: from.id, t: -i * LAUNCH.stagger, wait: 0,
+      spool: yard ? LAUNCH.spool : LAUNCH.hangarSpool,
+      slide: yard ? Math.min(LAUNCH.slideMax, LAUNCH.slide + dist * LAUNCH.perUnit) : LAUNCH.hangar,
+      x0: sx, y0: sy, x1: sx + M.cos(a) * dist, y1: sy + M.sin(a) * dist, a,
+      end: speedOf(u) * LAUNCH.end,
+    }
+  })
+  cmdMove(w, o, group.map((u) => u.id), rally.x, rally.y, true)
+  w.events.push({ k: 'built', owner: o, unit: id, x: x0, y: y0 })
+  return group
+}
+
+/** Whether something solid is in a launching ship's way out: where it comes clear, or half way there;
+ * or a ship that left the same place before it is still on its way out. Fighters fly over
+ * everything, and a ship over one two classes away (see overlaps). */
+function launchBlocked(w: World, u: Unit) {
+  const L = u.launch!
+  if (u.t.tier === 'fighter') return false
+  const r = radius(u.t)
+  const mx = (L.x0 + L.x1) / 2
+  const my = (L.y0 + L.y1) / 2
+  for (const o of w.units) {
+    if (o === u || o.dead || o.id === L.from || o.t.tier === 'fighter' || planned(o) || overlaps(u, o)) continue
+    if (o.launch && o.launch.from === L.from) {
+      if (o.id < u.id) return true
+      continue
+    }
+    const min = sq((r + radius(o.t)) * 0.8)
+    if (d2(o.x, o.y, L.x1, L.y1) < min || d2(o.x, o.y, mx, my) < min) return true
+  }
+  return false
+}
+
+/** Where along its way out a launching ship is at `s` (0 to 1) of the time, and its speed there (as
+ * shares of the way over the time): a smooth start from rest, leaving at `m` in the same terms. */
+const launchCurve = (s: number, m: number) => ({ p: s * s * (3 - 2 * s) + m * (s * s * s - s * s), v: 6 * s * (1 - s) + m * (3 * s * s - 2 * s) })
+
+/** A ship on its way out (see Launch): held in place while it spools up or waits for the way to
+ * clear, then slid out; it neither steers nor fires until it is clear. If where it was built is
+ * destroyed, it is clear at once. */
+function launching(w: World, u: Unit, dt: number) {
+  const L = u.launch!
+  const from = w.byId.get(L.from)
+  if (!from || from.dead) return launched(u)
+  u.a = L.a
+  if (L.t < L.spool || (L.t === L.spool && L.wait < LAUNCH.wait && launchBlocked(w, u))) {
+    if (L.t === L.spool) L.wait += dt
+    L.t = Math.min(L.spool, L.t + dt)
+    u.x = L.x0
+    u.y = L.y0
+    u.v = 0
+    return
+  }
+  L.t += dt
+  const dist = M.hypot(L.x1 - L.x0, L.y1 - L.y0) || 1
+  const s = Math.min(1, (L.t - L.spool) / L.slide)
+  const c = launchCurve(s, (L.end * L.slide) / dist)
+  u.x = L.x0 + (L.x1 - L.x0) * c.p
+  u.y = L.y0 + (L.y1 - L.y0) * c.p
+  u.v = (c.v * dist) / L.slide
+  if (s >= 1) launched(u)
+}
+
+/** Out and clear: it flies on under its own power. */
+function launched(u: Unit) {
+  const L = u.launch!
+  delete u.launch
+  u.v = L.end
+  u.ax = u.x
+  u.ay = u.y
+}
+
 /** Ships whose jump is done drop out of hyperspace; into an asteroid field, they pay for it. */
 function arrivals(w: World) {
   if (!w.arrivals.length) return
@@ -1640,7 +1839,7 @@ export function cmdCancel(w: World, owner: Owner, index: number, at = 0) {
   const queue = !at ? p.queue : yard && !yard.dead && yard.owner === owner ? yard.yq : undefined
   const q = queue?.[index]
   if (!q) return
-  giveBack(w, p, UNIT[q.unit].cost, 'ships', `Cancelled: ${UNIT[q.unit].name}`)
+  giveBack(w, p, q.paid ?? UNIT[q.unit].cost, 'ships', `Cancelled: ${UNIT[q.unit].name}`)
   queue!.splice(index, 1)
 }
 
@@ -2118,9 +2317,13 @@ export function cmdRush(w: World, owner: Owner, uid: number): string | null {
   if (y.yq!.length) y.yq![0].slow = true
   else y.slowNext = true
   const rally = y.yr ?? p.rally
-  const at = yardSpot(w, owner, y, q.unit, rally)
-  // What was left of its build, at the yard's full pace.
-  warpIn(w, owner, q.unit, at.x, at.y, at.a, WARP_YARD, true, rally, { built, left: Math.max(0, q.left) })
+  // What was left of its build, at the yard's full pace. It flies out of the berth, scaffolding and
+  // all (or in a battle from before launches, jumps in beside the yard).
+  if (launches(w)) launchFrom(w, owner, q.unit, y, rally, { built, left: Math.max(0, q.left) })
+  else {
+    const at = yardSpot(w, owner, y, q.unit, rally)
+    warpIn(w, owner, q.unit, at.x, at.y, at.a, WARP_YARD, true, rally, { built, left: Math.max(0, q.left) })
+  }
   w.events.push({ k: 'rushed', owner, unit: q.unit, x: y.x, y: y.y })
   return null
 }
@@ -2397,7 +2600,7 @@ function kill(w: World, u: Unit, by: Owner | -1) {
     // A yard leaves its ruin, for its owner to rebuild at half price (its expansions are lost with
     // it); ships still in its queue, and expansions not yet finished, are paid back.
     const p = w.players[u.owner]
-    for (const q of u.yq ?? []) giveBack(w, p, UNIT[q.unit].cost, 'ships', `Lost with the yard: ${UNIT[q.unit].name}`)
+    for (const q of u.yq ?? []) giveBack(w, p, q.paid ?? UNIT[q.unit].cost, 'ships', `Lost with the yard: ${UNIT[q.unit].name}`)
     for (const j of u.xq ?? []) giveBack(w, p, MODULE[j.id].cost, 'structures', `Lost with the yard: ${MODULE[j.id].name}`)
     u.yq = []
     u.xq = []
@@ -3335,7 +3538,11 @@ function economy(w: World, dt: number) {
       if (q.left <= 0) {
         p.queue.shift()
         p.stats.built++
-        if (fromHangar(UNIT[q.unit])) {
+        if (q.reserve) {
+          p.reserve.push(q.unit)
+          w.events.push({ k: 'reserved', owner: o, unit: q.unit })
+        } else if (launches(w)) launchFrom(w, o, q.unit, st, p.rally)
+        else if (fromHangar(UNIT[q.unit])) {
           // Bombers launch from the Strike hangar while it stands.
           const strike = UNIT[q.unit].kind === 'bomber' && expUp(st, 'strikeHangar')
           const bay = st.t.hardpoints.findIndex((h) => (strike ? h.exp === 'strikeHangar' : h.kind === 'hangar' && !h.exp))
@@ -3345,9 +3552,6 @@ function economy(w: World, dt: number) {
           for (const u of group) u.v = u.t.speed * 0.5
           cmdMove(w, o, group.map((u) => u.id), p.rally.x, p.rally.y, true)
           w.events.push({ k: 'built', owner: o, unit: q.unit, x: from.x, y: from.y })
-        } else if (q.reserve) {
-          p.reserve.push(q.unit)
-          w.events.push({ k: 'reserved', owner: o, unit: q.unit })
         } else {
           const at = yardSpot(w, o, st, q.unit)
           warpIn(w, o, q.unit, at.x, at.y, at.a, WARP_YARD, true)
@@ -3374,7 +3578,8 @@ function economy(w: World, dt: number) {
         if (yq.reserve) {
           p.reserve.push(yq.unit)
           w.events.push({ k: 'reserved', owner: o, unit: yq.unit })
-        } else {
+        } else if (launches(w)) launchFrom(w, o, yq.unit, y, y.yr ?? p.rally)
+        else {
           const rally = y.yr ?? p.rally
           const at = yardSpot(w, o, y, yq.unit, rally)
           warpIn(w, o, yq.unit, at.x, at.y, at.a, WARP_YARD, true, rally)
@@ -4005,6 +4210,11 @@ export function tick(w: World, dt = STEP) {
       const smax = shieldMax(u)
       if (u.shield < smax) u.shield = Math.min(smax, u.shield + u.t.regen * u.mods.regen * (coreUp(u) ? 1 + MODULE_FX.regen : 1) * (1 + RANK_BONUS * u.rank) * dt * (w.time - u.lastHit > 6 ? 2 : 1))
     }
+    // A new ship on its way out of its yard or the station's hangar: nothing else until it's clear.
+    if (u.launch) {
+      launching(w, u, dt)
+      continue
+    }
     if (u.t.carrier) {
       u.hangarT += dt
       if (u.hangarT >= u.t.carrier.every * (techBonus(w.players[u.owner], u.t.id).hangar ? 0.7 : 1)) {
@@ -4240,6 +4450,11 @@ export function stateHash(w: World): number {
       int(u.rush.parts.length)
     }
     if (u.rushAt !== undefined) num(u.rushAt)
+    // A new ship on its way out.
+    if (u.launch) {
+      num(u.launch.t)
+      num(u.launch.wait)
+    }
     // Expansions built and under way on a Command Station or a yard.
     if (u.xm || u.xq) {
       int(u.xm?.length ?? -1)

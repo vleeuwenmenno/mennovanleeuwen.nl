@@ -2785,6 +2785,31 @@ span.ew-teamtag {
 .ew-deck .ew-reservebtn.is-off {
   opacity: 0.4;
 }
+.ew-deck .ew-reservebtn.is-price b {
+  font-weight: 600;
+}
+/* The reinforcement rules in the skirmish setup and the multiplayer lobby. */
+.ew-reinf {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ew-reinf-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.ew-reinf .ew-genfield .ew-seg button {
+  flex: 1;
+}
+.ew-reinf p {
+  margin: 0;
+}
+.ew-reinf-ro {
+  font-family: var(--ew-display);
+  font-size: 13px;
+  color: var(--ew-gold);
+}
 .ew-deck .ew-slot.is-jump {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ew-accent) 70%, transparent);
 }
@@ -3972,6 +3997,29 @@ span.ew-teamtag {
   width: 17px;
   height: 17px;
   border-radius: 4px;
+}
+/* The reinforcement button with its price: a small pill over the card's top-left corner. */
+.ew-deck .ew-yard .ew-reservebtn.is-price,
+.ew-deck .ew-reservebtn.is-price {
+  width: auto;
+  height: 16px;
+  left: 3px;
+  top: 3px;
+  padding: 0 4px 0 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 5px;
+  color: #fff;
+  background: color-mix(in srgb, var(--ew-accent) 30%, rgba(6, 12, 28, 0.92));
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.ew-yard .ew-reservebtn.is-price svg {
+  width: 10px;
+  height: 10px;
+  color: var(--ew-accent);
 }
 
 /* Hybrid bases: the Command Station's and the yards' tabs, a yard card, a site under way, the
@@ -6495,4 +6543,430 @@ span.ew-teamtag {
 }
 .ew-giftpop small[role='status'] {
   font-size: 12px;
+}
+
+/* --- The unit card fits its 240 px without scrolling (UnitDetail in Hud.tsx): a header row with the
+   name, class, a ⓘ for the longer story and what it is doing; thin hull and shield bars side by
+   side; then short rows (hardpoints, a rushed ship's state, engineers' yards, a platform's upgrades,
+   the research for its type). --- */
+.ew-detail.is-unit .ew-detail-main {
+  gap: 6px;
+}
+.ew-detail.is-unit .ew-unithead {
+  align-items: center;
+  gap: 3px 8px;
+}
+.ew-detail.is-unit .ew-unithead .ew-orders {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-detail.is-unit .ew-unithead .ew-escorted {
+  align-self: center;
+}
+.ew-bars.is-compact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 14px;
+  font-size: 10.5px;
+}
+.ew-barcell {
+  flex: 1 1 170px;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 38px 1fr auto;
+  align-items: center;
+  gap: 6px;
+}
+.ew-bars.is-compact .ew-bar {
+  height: 5px;
+  min-width: 30px;
+}
+.ew-bars.is-compact small {
+  font-size: 10.5px;
+}
+.ew-bars.is-compact .ew-terrain-note {
+  flex-basis: 100%;
+  font-size: 10.5px;
+}
+.ew-deck .ew-detail.is-unit .ew-rushnote {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ew-unitrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.ew-deck .ew-unitrow .ew-repair {
+  align-self: center;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.ew-detail.is-unit .ew-hpsum {
+  gap: 3px;
+}
+.ew-detail.is-unit .ew-hpchip {
+  padding: 1px 6px 1px 4px;
+  font-size: 10.5px;
+}
+.ew-detail.is-unit .ew-unittech {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.ew-detail.is-unit .ew-unittech .ew-tech {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  max-width: 180px;
+}
+.ew-deck .ew-detail.is-unit .ew-unittree {
+  flex: none;
+  padding: 6px 7px;
+}
+.ew-detail.is-unit .ew-siteupg > div {
+  flex-wrap: nowrap;
+}
+.ew-deck .ew-detail.is-unit .ew-siteupg-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 3px 7px;
+  font-size: 11px;
+}
+.ew-detail.is-unit .ew-siteupg-btn strong {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Engineers' Build row: the yards side by side, smaller; a station too low dims a card a little and
+   says the level it needs in a chip in the corner (the reason is in the tooltip). */
+.ew-engbuild {
+  margin-top: 0;
+  gap: 3px;
+}
+.ew-engbuild > header {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.ew-engbuild > header span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-engbuild .ew-engbuild-cards {
+  grid-template-rows: 64px;
+  grid-auto-columns: 132px;
+  gap: 6px;
+}
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard,
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard.is-locked,
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard.is-poor {
+  width: 132px;
+  height: 64px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 26px auto auto;
+  gap: 2px;
+  padding: 3px 5px;
+}
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard .ew-art,
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard.is-locked img {
+  height: 26px;
+}
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard strong {
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ew-yc-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+.ew-yc-line .ew-cost,
+.ew-yc-line .ew-time {
+  gap: 2px;
+  font-size: 9.5px;
+}
+.ew-yardcard .ew-yc-line .ew-yc-crew {
+  grid-column: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ew-yc-line.is-state {
+  color: var(--ew-good);
+}
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard.is-locked .ew-art,
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard.is-locked .ew-yc-line {
+  opacity: 0.6;
+}
+.ew-deck .ew-engbuild .ew-yard .ew-yardcard.is-locked strong {
+  opacity: 0.8;
+}
+.ew-yc-lv {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  padding: 0 5px;
+  border-radius: 6px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  color: var(--ew-gold);
+  background: rgba(8, 12, 26, 0.85);
+  border: 1px solid rgba(242, 193, 74, 0.5);
+}
+
+/* The station's and yards' cards: the page tabs never scroll up and down, the build panel fits the
+   column it has (its rail beside it), and a yard's card is wide enough for its panel. */
+.ew-bp-tabs {
+  overflow-y: hidden;
+}
+.ew-bp-main {
+  min-width: min(300px, calc(100% - 52px));
+}
+.ew-detail.is-yard .ew-detail-main {
+  width: 340px;
+}
+@container (max-width: 1180px) {
+  .ew-detail.is-station .ew-hpsum {
+    gap: 3px;
+  }
+  .ew-detail.is-station .ew-hpchip {
+    gap: 2px;
+    padding: 1px 4px 1px 3px;
+    font-size: 10px;
+  }
+  .ew-detail.is-station .ew-hpchip svg {
+    width: 11px;
+    height: 11px;
+  }
+}
+/* The unit card stops short of the selection panel, which is 320 px wide on a big window (260 px,
+   210 px and 150 px as the window narrows, see above), rather than running under it. */
+.ew-detailfloat {
+  max-width: calc(100% - var(--ew-dleft, 6px) - 332px);
+}
+@container (max-width: 1180px) {
+  .ew-detailfloat {
+    max-width: calc(100% - var(--ew-dleft, 6px) - 272px);
+  }
+  /* The page tabs tighter, so both fit a narrow station card; past that a label is cut short
+     (its tooltip names it) rather than the row scrolling. */
+  .ew-deck .ew-bp-tabs button {
+    flex: 0 1 auto;
+    min-width: 0;
+    gap: 4px;
+    padding: 3px 5px 4px;
+    font-size: 10px;
+    letter-spacing: 0;
+  }
+  /* (The counts go: the cards under them show as much.) */
+  .ew-bp-tabs button > em {
+    display: none;
+  }
+  .ew-bp-tabs button > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+@container (max-width: 940px) {
+  .ew-detailfloat {
+    max-width: calc(100% - var(--ew-dleft, 6px) - 222px);
+  }
+}
+@container (max-width: 680px) {
+  .ew-detailfloat {
+    max-width: calc(100% - var(--ew-dleft, 6px) - 162px);
+  }
+}
+
+/* --- The battle's build panels (the Command Station and the yards) fit without scrolling or
+   clipping: the building tabs keep to one row (three or more show their pictures alone, names in
+   the tooltips), and the cards fill the width row by row, side by side, at one compact height for
+   ships and expansions alike. Phones keep their one row of cards scrolling sideways. --- */
+.ew-basetabs {
+  flex-wrap: nowrap;
+}
+.ew-basetabs.is-compact button > span {
+  display: none;
+}
+.ew-deck .ew-basetabs.is-compact button {
+  padding: 2px 5px;
+}
+.ew-basetabs.is-compact button em {
+  position: absolute;
+  right: 2px;
+  bottom: 1px;
+  font-size: 9px;
+  line-height: 1;
+  text-shadow: 0 1px 2px #000;
+}
+@media (not (pointer: coarse)) and (min-width: 720px) {
+  .ew-battle .ew-detail.is-station .ew-bp .ew-yard {
+    grid-auto-flow: row;
+    grid-template-rows: none;
+    grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+    grid-auto-columns: auto;
+    grid-auto-rows: 84px;
+    max-width: none;
+    overflow: hidden;
+  }
+  .ew-battle .ew-detail.is-station .ew-bp .ew-yard .ew-shipwrap {
+    min-width: 0;
+  }
+  .ew-deck.ew-battle .ew-detail.is-station .ew-bp .ew-yard .ew-shipcard,
+  .ew-battle .ew-deck .ew-detail.is-station .ew-bp .ew-yard .ew-shipcard,
+  .ew-deck .ew-battle .ew-detail.is-station .ew-bp .ew-yard .ew-shipcard {
+    width: 100%;
+    min-width: 0;
+  }
+  /* Expansions: the same square as a ship card, a smaller icon over the name and its price. */
+  .ew-deck .ew-battle .ew-detail.is-station .ew-bp .ew-yard .ew-shipcard.ew-modcard,
+  .ew-deck.ew-battle .ew-detail.is-station .ew-bp .ew-yard .ew-shipcard.ew-modcard {
+    grid-row: auto;
+    height: 84px;
+    align-self: auto;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: 30px 1fr auto;
+  }
+  .ew-battle .ew-detail.is-station .ew-bp .ew-modcard .ew-modicon {
+    width: 28px;
+    height: 28px;
+    border-width: 1px;
+  }
+  .ew-battle .ew-detail.is-station .ew-bp .ew-modcard .ew-modicon svg {
+    width: 16px;
+    height: 16px;
+  }
+  .ew-battle .ew-detail.is-station .ew-bp .ew-yard .ew-shipcard.ew-modcard strong {
+    min-height: 0;
+    font-size: 10px;
+    line-height: 1.15;
+    white-space: normal;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .ew-deck .ew-battle .ew-detail.is-station .ew-bp .ew-yard .ew-shipcard.ew-ghostcard,
+  .ew-deck.ew-battle .ew-detail.is-station .ew-bp .ew-yard .ew-shipcard.ew-ghostcard {
+    grid-column: 1 / -1;
+    grid-row: span 2;
+    width: auto;
+  }
+}
+/* The station's header with its yards' tabs: the tech tree button keeps to its icon and count. */
+.ew-yardhead.is-tight .ew-treebtn > span,
+.ew-yardhead.is-tight .ew-treebtn kbd {
+  display: none;
+}
+.ew-deck .ew-yardhead.is-tight .ew-treebtn {
+  padding: 4px 8px;
+}
+.ew-yardhead .ew-basetabs {
+  flex: 0 1 auto;
+}
+@media (not (pointer: coarse)) and (min-width: 720px) {
+  /* Two rows of cards under the tabs, within the card's height. */
+  .ew-battle .ew-detail.is-station .ew-bp .ew-yard {
+    grid-auto-rows: 78px;
+  }
+  .ew-deck.ew-battle .ew-detail.is-station .ew-bp .ew-yard .ew-shipcard,
+  .ew-deck.ew-battle .ew-detail.is-station .ew-bp .ew-yard .ew-shipcard.ew-modcard {
+    height: 78px;
+    grid-template-rows: 28px 1fr auto;
+  }
+  .ew-battle .ew-detail.is-station .ew-bp .ew-yard .ew-shipcard .ew-art,
+  .ew-battle .ew-detail.is-station .ew-bp .ew-yard .ew-shipcard img {
+    height: 28px;
+  }
+  .ew-battle .ew-detail.is-station .ew-bp .ew-modcard .ew-modicon {
+    width: 26px;
+    height: 26px;
+  }
+}
+@media (not (pointer: coarse)) and (min-width: 720px) {
+  /* As many columns as two rows of its cards need (--cols, set by the panel), sharing the width. */
+  .ew-battle .ew-detail.is-station .ew-bp .ew-yard {
+    grid-template-columns: repeat(var(--cols, 3), minmax(var(--ew-card, 84px), 140px));
+    justify-content: start;
+  }
+}
+@container (max-width: 1180px) {
+  /* A narrow station card: slimmer cards, a slimmer side column with a smaller picture. */
+  .ew-battle .ew-detail.is-station .ew-bp .ew-yard {
+    --ew-card: 66px;
+  }
+  .ew-detail.is-station:not(.is-yard) .ew-detail-side {
+    width: 120px;
+  }
+  .ew-detail.is-station:not(.is-yard) .ew-detail-side .ew-schem-box {
+    zoom: 0.8;
+  }
+  .ew-detail.is-station .ew-frame-in {
+    gap: 10px;
+  }
+}
+/* A narrow window: the station's and yards' card takes all the room it has, and its cards wrap
+   onto a second row where they don't fit side by side. */
+@media (not (pointer: coarse)) and (min-width: 720px) {
+  @container (max-width: 1180px) {
+    .ew-battle .ew-detailfloat:has(> .ew-stationwrap) {
+      width: 100cqw;
+    }
+    .ew-battle .ew-detailfloat:has(> .ew-stationwrap) > .ew-stationwrap {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .ew-battle .ew-detail.is-station .ew-bp .ew-yard {
+      grid-template-columns: repeat(auto-fill, minmax(66px, 1fr));
+    }
+  }
+}
+
+/* The unit card's description and role line come and go with the room there is (useFitLines in
+   Hud.tsx sets `hidden`); whatever their class says about display. */
+.ew-detail [data-fit][hidden] {
+  display: none !important;
+}
+/* The research row measures itself: the Tech tree button's label and the "Upgrades" label show
+   while the row has room for them. */
+.ew-detail.is-unit .ew-unittech {
+  container: unittech / inline-size;
+  width: 100%;
+}
+@container unittech (max-width: 430px) {
+  .ew-unittree > span {
+    display: none;
+  }
+}
+@container unittech (max-width: 330px) {
+  .ew-unittech > .ew-muted {
+    display: none;
+  }
+}
+/* The engineers' yard cards give a little width rather than scroll on a narrow card. */
+.ew-engbuild .ew-engbuild-cards {
+  grid-auto-columns: minmax(0, 132px);
+  overflow: hidden;
+}
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard,
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard.is-locked,
+.ew-deck .ew-engbuild .ew-yard .ew-shipcard.ew-yardcard.is-poor {
+  width: 100%;
+  min-width: 0;
 }

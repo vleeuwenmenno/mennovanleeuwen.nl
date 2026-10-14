@@ -2,7 +2,7 @@ import { LEVEL_UP, MODULE, SITE_UPGRADES, TECH, UNIT, type ModuleId, type SiteUp
 import type { Pt } from './maps.ts'
 import {
   STANCES, cmdAbility, cmdArea, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdCancelSiteUpgrade, cmdDeploy, cmdFace, cmdFocus, cmdGuard, cmdLine, cmdMove, cmdPatrol, cmdRally, cmdRepair, cmdResearch,
-  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdCancelSite, cmdExpand, cmdCancelExpand, cmdRush, cmdGive, GIFT_MAX, wrapAngle, type Owner, type Stance, type World,
+  cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdCancelSite, cmdExpand, cmdCancelExpand, cmdRush, cmdGive, GIFT_MAX, cantReinforce, wrapAngle, type Owner, type Stance, type World,
 } from './sim.ts'
 
 // Every order a player can give, as data: a name and its arguments. In multiplayer an order goes to
@@ -130,6 +130,8 @@ export function cleanCmd(raw: unknown, w: World): Cmd | null {
     if (v === null) return null
     out.push(v)
   }
+  // A reinforcement of a class the lobby turned off is no order at all (the sim refuses it too).
+  if (f === 'build' && out[1] === true && cantReinforce(w, out[0] as string)) return null
   return { f: f as CmdName, a: out }
 }
 

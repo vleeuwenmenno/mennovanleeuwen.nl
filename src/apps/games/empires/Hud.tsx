@@ -11,7 +11,7 @@ import { moduleThumbnail, thumbnail } from './models/paint.ts'
 import { keyName, modName, useSettings, type Action } from './settings'
 import { freeGroup, type GroupInfo } from './groups'
 import { CANCEL_TIP, LongPress, isTouch, shiftOf, useCancelPress, useCoarse, useLongPressWheel } from './Touch'
-import { FIELD_DAMAGE, yardOffer, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, escorts, escortsOf, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
+import { FIELD_DAMAGE, cantReinforce, shipPrice, yardOffer, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, escorts, escortsOf, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
 // shipyard, research and game speed; and along the bottom the tactical map, a details panel for
@@ -389,13 +389,16 @@ function RetreatIcon({ ships, onRetreat }: { ships: Unit[]; onRetreat: (ids: num
 
 /** A mining platform's own upgrades: what it earns now, and a button per upgrade with its level
  * pips and price, or its progress while it's being fitted. */
+/** What a mining platform earns: "+296/min" for its card's header, and the longer line for its tooltip. */
+function mineEarning(w: World, me: Owner, u: Unit) {
+  const perMin = (MINE_INCOME * mineOutput(u) * w.players[me].incomeMul * 60) | 0
+  return { short: `+${fmt(perMin)}/min`, long: `Earning +${fmt(perMin)} credits a minute${(u.upg.yield ?? 0) ? `, drills at +${Math.round(YIELD_PER_LEVEL * 100 * (u.upg.yield ?? 0))}%` : ''}.` }
+}
+
 function SiteUpgrades({ w, me, u, onUpgrade, onCancel }: { w: World; me: Owner; u: Unit; onUpgrade: (id: number, upgrade: SiteUpgradeId) => void; onCancel: (id: number) => void }) {
-  const p = w.players[me]
   const press = useCancelPress()
-  const perMin = (MINE_INCOME * mineOutput(u) * p.incomeMul * 60) | 0
   return (
     <div className="ew-siteupg">
-      <span className="ew-muted ew-small">Earning +{fmt(perMin)} credits a minute{(u.upg.yield ?? 0) ? `, drills at +${Math.round(YIELD_PER_LEVEL * 100 * (u.upg.yield ?? 0))}%` : ''}.</span>
       <div>
         {SITE_UPGRADES.map((up) => {
           const have = u.upg[up.id] ?? 0
@@ -488,11 +491,33 @@ function HpSummary({ u }: { u: Unit }) {
   )
 }
 
-function Vitals({ u, squad = [u], now }: { u: Unit; squad?: Unit[]; now: number }) {
+/** Hull and shield bars. `compact` (the unit card): thin bars side by side, wrapping under each other
+ * when the card is narrow. */
+function Vitals({ u, squad = [u], now, compact = false }: { u: Unit; squad?: Unit[]; now: number; compact?: boolean }) {
   const reboot = SHIELD_REBOOT - (now - u.shieldOut)
   const t = u.t
   const hull = squad.reduce((s, x) => s + x.hull, 0)
   const max = squad.reduce((s, x) => s + x.hullMax, 0)
+  const weak = shieldMax(u) < shieldFull(u)
+  if (compact)
+    return (
+      <div className="ew-bars is-compact">
+        <span className="ew-barcell">
+          <span>Hull</span>
+          <Bar value={hull} max={max} kind="hull" />
+          <small>{fmt(hull)} / {fmt(max)}</small>
+        </span>
+        {t.shield > 0 && (
+          <span className="ew-barcell" data-tip={weak ? 'Shield generators damaged: the shields cannot fully recharge' : undefined}>
+            <span>Shield</span>
+            <Bar value={u.shield} max={shieldFull(u)} kind="shield" />
+            <small>{fmt(u.shield)} / {fmt(shieldFull(u))}{weak ? ' ⚠' : ''}</small>
+          </span>
+        )}
+        {u.nebula && <p className="ew-terrain-note">In a nebula: shields down, sensors at half range</p>}
+        {!u.nebula && t.shield > 0 && reboot > 0 && <p className="ew-terrain-note">Shields failed: back online in {Math.ceil(reboot)} s</p>}
+      </div>
+    )
   return (
     <div className="ew-bars">
       <span>Hull</span>
@@ -1070,6 +1095,11 @@ export function InfoDot({ tip }: { tip: string }) {
   )
 }
 
+/** How many columns a building's cards take in the battle's build panel: up to three side by side
+ * in one row, more in two rows; the grid shares out the width between them (see empires.css,
+ * .ew-bp .ew-yard). */
+const cardCols = (n: number) => ({ ['--cols' as string]: String(n <= 3 ? Math.max(1, n) : Math.ceil(n / 2)) })
+
 /** The left column's head on a building: its name with the ⓘ beside it, and what it is. */
 function SideName({ w, me, u, sub, info }: { w: World; me: Owner; u: Unit; sub: string; info: string }) {
   return (
@@ -1146,7 +1176,7 @@ function StationDetail(p: DetailProps & { st: Unit }) {
   }, [])
   return (
     <div className="ew-stationwrap">
-      <BuildQueue queue={hud.queue} onCancel={p.onCancel} />
+      <BuildQueue queue={hud.queue} onCancel={p.onCancel} launch={!!w.reinforce} />
       <Frame className="ew-detail is-station">
         <div className="ew-detail-side">
           <Schematic u={st} size={96} tip={unitTip(st.t, ownerTag(w, me, st.owner), undefined, st)} />
@@ -1159,14 +1189,17 @@ function StationDetail(p: DetailProps & { st: Unit }) {
           <RepairButton w={w} me={me} u={st} onRepair={p.onRepair} />
         </div>
         <div className="ew-detail-main">
-          <header className="ew-yardhead">
+          {/* With a yard (or a ruin) beside the station, the tech tree button keeps to its icon and count. */}
+          <header className={`ew-yardhead ${w.hybrid && (w.units.some((u) => !u.dead && u.owner === me && u.t.tier === 'yard') || (w.ruins ?? []).some((r) => r.owner === me)) ? 'is-tight' : ''}`}>
             {w.hybrid ? <BaseTabs w={w} me={me} cur={st.id} onSelect={p.onSelect} onRuin={() => !p.onEngineers() && pick('strike')} /> : <h5 className="ew-yardtitle">Shipyard</h5>}
             <TechTreeButton hud={hud} onOpen={p.onTechTree} />
           </header>
           <BuildPanel
             tabs={[
               { id: 'strike', group: 'units', label: 'Strike craft', badge: strike.length,
-                tip: `Strike craft: fighters and bombers${w.hybrid ? ', and engineers,' : ''} launch from the station's hangar; gunships go to the fleet inventory, or jump in at the station with the small button.` },
+                tip: w.reinforce
+                  ? `Strike craft: fighters, bombers, gunships${w.hybrid ? ', engineers' : ''} and repair craft fly out of the station's hangar.${w.reinforce.strike || w.reinforce.ships ? ' The red corner button calls one in as a reinforcement instead, anywhere your fleet can see.' : ''}`
+                  : `Strike craft: fighters and bombers${w.hybrid ? ', and engineers,' : ''} launch from the station's hangar; gunships go to the fleet inventory, or jump in at the station with the small button.` },
               { id: 'warships', group: 'units', label: 'Warships', badge: warships.length,
                 tip: w.hybrid ? 'Warships: none are built at the Command Station any more. Frigates and corvettes come from the Frigate Yard, cruisers and flagships from the Capital Yard.' : 'Warships: corvettes, frigates, cruisers and dreadnoughts. Built for the fleet inventory, or straight to the station with the small jump button.' },
               ...(w.hybrid ? [
@@ -1174,7 +1207,7 @@ function StationDetail(p: DetailProps & { st: Unit }) {
               ] : []),
             ]}
             page={page} onPick={(id) => pick(id as typeof page)} badges={w.hybrid ? { buildings: `${st.xm?.length ?? 0}/${modulesFor('station').length}` } : {}}>
-            <div className="ew-yard" ref={grid}>
+            <div className="ew-yard" ref={grid} style={cardCols(page === 'expansions' ? modulesFor('station').length : page === 'warships' && w.hybrid && !ships.length ? 4 : ships.length)}>
                 {/* No warships at the Command Station with hybrid bases: a ghost card points the way. */}
                 {page === 'warships' && w.hybrid && !ships.length && (
                   <GhostCard t={UNIT[unitOf(faction, 'frigate').id]} text={myYard ? `Built at the ${WORKS_NAME[worksOf(myYard.t) ?? 'yard']}` : 'Built at the Frigate Yard'}
@@ -1183,7 +1216,7 @@ function StationDetail(p: DetailProps & { st: Unit }) {
                 )}
                 {page === 'expansions' && <ExpansionCards w={w} me={me} u={st} onExpand={p.onExpand} onCancel={p.onCancelExpand} />}
                 {(page === 'warships' || page === 'strike') && ships.map((t) => (
-                  <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id)} whyReserve={cantBuild(w, me, t.id, true)} level={hud.level} queued={queued(t.id)} onBuild={p.onBuild} onUnqueue={p.onUnqueue}
+                  <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id)} whyReserve={cantBuild(w, me, t.id, true)} level={hud.level} queued={queued(t.id)} onBuild={p.onBuild} onUnqueue={p.onUnqueue} reinf={reinforceOffer(w, t.id)}
                     research={t.tech && !hud.techs.includes(t.tech) ? TECH[t.tech].name : null} need={moduleNeed(w, me, t, st)} />
                 ))}
             </div>
@@ -1269,7 +1302,15 @@ export function moduleNeed(w: World, me: Owner, t: UnitType, at: Unit | undefine
   return MODULE[id].name
 }
 
-export function ShipCard({ t, who, why, whyReserve, level, queued, onBuild, onUnqueue, campaign = false, research = null, need = null, lock = null, where = 'the station' }: {
+/** A ship card's reinforcement, in a battle with the lobby's reinforcement rules: its price (with
+ * the surcharge), or null when the lobby turned reinforcements off for its class. */
+export type ReinforceOffer = { price: number; pct: number } | null
+/** What a ship card offers as a reinforcement in this battle: undefined in a battle from before the
+ * rules (the old cards: the inventory, or the jump button), else see ReinforceOffer. */
+export const reinforceOffer = (w: World, id: string): ReinforceOffer | undefined =>
+  !w.reinforce ? undefined : cantReinforce(w, id) ? null : { price: shipPrice(w, id, true), pct: w.reinforce.surcharge }
+
+export function ShipCard({ t, who, why, whyReserve, level, queued, onBuild, onUnqueue, campaign = false, research = null, need = null, lock = null, where = 'the station', reinf }: {
   t: UnitType; who: { who: string; rel: string }; why: string | null; whyReserve: string | null; level: number; queued: number; onBuild: (id: string, times: number, reserve?: boolean) => void; onUnqueue: (id: string) => void
   /** Where a ship that jumps in straight away arrives: beside the station, or the yard building it. */
   where?: string
@@ -1282,44 +1323,81 @@ export function ShipCard({ t, who, why, whyReserve, level, queued, onBuild, onUn
   /** Anything else that keeps it from being built here (a galaxy planet without the yard for it),
    * and the word on its badge. */
   lock?: { text: string; badge: string } | null
+  /** Battles with reinforcement rules (see reinforceOffer): a click builds a ship that flies out of
+   * where it is built, and the red corner button, showing its price, buys it as a reinforcement.
+   * Undefined: a battle from before them, with the old cards. */
+  reinf?: ReinforceOffer
 }) {
   const locked = t.level > level || !!research || !!need || !!lock
   const lockText = t.level > level ? `Needs station level ${t.level}.` : research ? `Needs research: ${research}. Find it in the tech tree.` : need ? `Needs the ${need}: an expansion, ordered from its building's Expansions tab.` : `${lock?.text}.`
+  // Battles with reinforcement rules: a click launches, the red button is the reinforcement.
+  const launch = reinf !== undefined && !campaign
+  const out = where === 'the station' ? "the station's hangar" : where
+  // The old cards: strike craft from the hangar; anything else to the inventory, the button jumps in.
+  const toInventory = !launch && !fromHangar(t) && !campaign
+  const cardWhy = launch ? why : toInventory ? whyReserve : why
   // A finger has no Shift-click or right-click: a long press offers them on a wheel.
   const press = useLongPressWheel(
     () =>
       locked
         ? []
         : [
-            { id: 'one', label: 'Build 1', run: () => onBuild(t.id, 1, !fromHangar(t) && !campaign) },
-            { id: 'five', label: 'Build 5', run: () => onBuild(t.id, 5, !fromHangar(t) && !campaign) },
-            ...(!fromHangar(t) && !campaign ? [{ id: 'jump', label: 'Jump in', disabled: why ?? undefined, run: () => onBuild(t.id, 1, false) }] : []),
+            { id: 'one', label: 'Build 1', run: () => onBuild(t.id, 1, toInventory) },
+            { id: 'five', label: 'Build 5', run: () => onBuild(t.id, 5, toInventory) },
+            ...(launch && reinf ? [{ id: 'jump', label: 'Reinforce', disabled: whyReserve ?? undefined, run: () => onBuild(t.id, 1, true) }] : []),
+            ...(toInventory ? [{ id: 'jump', label: 'Jump in', disabled: why ?? undefined, run: () => onBuild(t.id, 1, false) }] : []),
             { id: 'less', label: 'Remove 1', disabled: queued ? undefined : 'Nothing queued', danger: true, run: () => onUnqueue(t.id) },
           ],
     t.name,
   )
+  const how = launch
+    ? `Click to build: it flies out of ${out} to the rally point.${reinf ? ` The red corner button calls one in as a reinforcement instead, for ${reinf.price} (+${reinf.pct}%): it waits in the fleet inventory, to be called in anywhere your fleet can see.` : ''}`
+    : campaign ? 'Click to build it here: it joins the fleet in orbit.' : fromHangar(t) ? 'Click to build: it launches from the hangar.' : `Click to build it for the fleet inventory, then drag it out to any spot your fleet can see. The small corner button builds one that jumps in beside ${where}.`
   const card = (
     <button
       {...press}
-      className={`ew-shipcard ${locked ? 'is-locked' : (fromHangar(t) ? why : whyReserve) ? 'is-off' : ''}`}
-      onClick={(e) => onBuild(t.id, shiftOf(e) ? 5 : 1, !fromHangar(t))}
+      className={`ew-shipcard ${locked ? 'is-locked' : cardWhy ? 'is-off' : ''}`}
+      onClick={(e) => onBuild(t.id, shiftOf(e) ? 5 : 1, toInventory)}
       onContextMenu={(e) => {
         e.preventDefault()
         onUnqueue(t.id)
       }}
-      {...unitTip(t, who, `${locked ? lockText : campaign ? 'Click to build it here: it joins the fleet in orbit.' : fromHangar(t) ? 'Click to build: it launches from the hangar.' : `Click to build it for the fleet inventory, then drag it out to any spot your fleet can see. The small corner button builds one that jumps in beside ${where}.`}${locked ? '' : ' Shift-click for five, right-click to remove one.'}${!locked && (fromHangar(t) ? why : whyReserve) ? `\n${fromHangar(t) ? why : whyReserve}` : ''}`)}
+      {...unitTip(t, who, `${locked ? lockText : how}${locked ? '' : ' Shift-click for five, right-click to remove one.'}${!locked && cardWhy ? `\n${cardWhy}` : ''}`)}
     >
       <ShipArt t={t} />
       <strong>{t.name}</strong>
-      <span className="ew-cost"><Icon name="credits" size={11} /> {t.cost}</span>
+      <span className="ew-cost" {...(launch ? { 'aria-label': `Launch: ${t.cost} credits` } : {})}><Icon name="credits" size={11} /> {t.cost}</span>
       <span className="ew-time"><Icon name="time" size={11} /> {t.build}s</span>
       {locked && <span className="ew-lock">{t.level > level ? `Lv${t.level}` : research ? 'Research' : need ? 'Expansion' : lock?.badge}</span>}
       {queued > 0 && <span className="ew-qbadge">{queued}</span>}
     </button>
   )
-  // Strike craft launch from the hangar; everything else goes to the fleet inventory, or with the
-  // small button jumps straight in beside the station.
-  if (fromHangar(t) || locked || campaign) return card
+  if (locked || campaign) return card
+  if (launch) {
+    // No reinforcements for its class in this battle: the card alone.
+    if (!reinf) return card
+    return (
+      <div className="ew-shipwrap">
+        {card}
+        <button
+          className={`ew-reservebtn is-price ${whyReserve ? 'is-off' : ''}`}
+          onClick={(e) => onBuild(t.id, shiftOf(e) ? 5 : 1, true)}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            onUnqueue(t.id)
+          }}
+          data-tip={`Call in reinforcement: ${t.name} for ${reinf.price} credits (${t.cost} + ${reinf.pct}%). It is built as usual, then waits in hyperspace (the fleet inventory) until you drag it onto any spot your fleet can see. Shift-click for five, right-click to remove one.${whyReserve ? `\n\n${whyReserve}` : ''}`}
+          aria-label={`Call in reinforcement: ${t.name}, ${reinf.price} credits`}
+        >
+          <Icon name="jump" size={10} />
+          <b>{reinf.price}</b>
+        </button>
+      </div>
+    )
+  }
+  // The old cards: strike craft launch from the hangar; everything else goes to the fleet inventory,
+  // or with the small button jumps straight in beside the station.
+  if (fromHangar(t)) return card
   return (
     <div className="ew-shipwrap">
       {card}
@@ -1345,8 +1423,10 @@ const PROJECTORS = 5
  * Click a hologram to cancel that ship (refunded).
  */
 export type QueueItem = { unit: string; left: number; total: number; reserve?: boolean; sprite?: string; name?: string }
-export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false, at = 'the station', rush }: {
+export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false, at = 'the station', rush, launch = false }: {
   queue: QueueItem[]; onCancel: (i: number) => void; max?: number; campaign?: boolean; /** Where its ships jump in: the station, or the yard it belongs to. */ at?: string
+  /** New ships fly out (a battle with reinforcement rules): a reinforcement is the one marked. */
+  launch?: boolean
   /** A Capital Yard with Rushed construction researched and its ship far enough along: the Rush
    * launch button (see RushButton). */
   rush?: RushProps
@@ -1366,7 +1446,7 @@ export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false,
         const sprite = q.sprite ?? t?.sprite ?? ''
         const name = q.name ?? t?.name ?? q.unit
         const done = i === 0 ? 1 - q.left / q.total : 0
-        const where = !t ? `at ${at}` : campaign ? 'joins the fleet in orbit' : q.reserve ? 'for the fleet inventory' : fromHangar(t) ? 'from the hangar' : `jumps in at ${at}`
+        const where = !t ? `at ${at}` : campaign ? 'joins the fleet in orbit' : q.reserve ? (launch ? 'a reinforcement, for the fleet inventory' : 'for the fleet inventory') : launch ? `flies out of ${at === 'the station' ? "the station's hangar" : at}` : fromHangar(t) ? 'from the hangar' : `jumps in at ${at}`
         return (
           <button key={i} className={`ew-holo ${i === 0 ? 'is-building' : ''}`} onClick={() => onCancel(i)}
             onContextMenu={(e) => {
@@ -1381,7 +1461,7 @@ export function BuildQueue({ queue, onCancel, max = MAX_QUEUE, campaign = false,
             </span>
             <span className="ew-holo-base" />
             {i === 0 && <em>{Math.ceil(q.left)}s</em>}
-            {!campaign && t && !q.reserve && !fromHangar(t) && <Icon name="jump" size={10} />}
+            {!campaign && t && (launch ? !!q.reserve : !q.reserve && !fromHangar(t)) && <Icon name="jump" size={10} />}
           </button>
         )
       })}
@@ -1443,6 +1523,12 @@ function RushButton({ share, why, onRush, tip }: RushProps) {
 }
 
 /** A rush-launched ship's state, for its card and tooltip (null when it is finished). */
+/** A rushed ship's state in a few words, for its card (rushNote has the whole of it, for the tooltip). */
+export function rushShort(u: Unit) {
+  if (!u.rush) return null
+  const all = u.t.hardpoints.filter((h) => h.kind !== 'engine').length
+  return `Rushed: ${u.rush.parts.length} of ${all} parts to install · ${Math.ceil(u.rush.left)} s of work`
+}
 export function rushNote(u: Unit) {
   if (!u.rush) return null
   const all = u.t.hardpoints.filter((h) => h.kind !== 'engine')
@@ -1454,7 +1540,10 @@ export function rushNote(u: Unit) {
  * The fleet inventory: ships built and waiting in hyperspace, one tile per type. Drag a tile onto
  * the battlefield to call one in; it takes a moment to arrive.
  */
-export function ReserveTray({ reserve, onGrab, onClose }: { reserve: string[]; onGrab: (id: string, e: React.PointerEvent) => void; onClose: () => void }) {
+export function ReserveTray({ reserve, onGrab, onClose, launch = false }: { reserve: string[]; onGrab: (id: string, e: React.PointerEvent) => void; onClose: () => void
+  /** A battle with reinforcement rules: what waits here are the reinforcements bought. */
+  launch?: boolean
+}) {
   const art = unitArt
   const kinds = [...new Set(reserve)]
   return (
@@ -1473,7 +1562,7 @@ export function ReserveTray({ reserve, onGrab, onClose }: { reserve: string[]; o
           <small className="ew-muted">Drag a ship to any open spot your fleet can see. Nebulas are fine; an asteroid field costs {Math.round(FIELD_DAMAGE * 100)}% of its hull.</small>
         </>
       ) : (
-        <small className="ew-muted">Empty. Ships you build at the station (except fighters and bombers) wait here until you call them in.</small>
+        <small className="ew-muted">{launch ? 'Empty. Reinforcements (the red corner button on a ship\'s card) wait here, built, until you call them in.' : 'Empty. Ships you build at the station (except fighters and bombers) wait here until you call them in.'}</small>
       )}
     </Floating>
   )
@@ -1764,17 +1853,6 @@ export function EconomyPanel({ w, me, onClose, names }: { w: World; me: Owner; o
 }
 
 /** "Strong against cruisers, flagships · weak against gunships": the counter loop at a glance. */
-function Counters({ t }: { t: UnitType }) {
-  const r = roleOf(t)
-  if (!r) return null
-  return (
-    <span className="ew-counters">
-      <b>{r.role}</b>
-      <span className="is-strong">Strong vs {r.strong.join(', ')}</span>
-      <span className="is-weak">Weak vs {r.weak.join(', ')}</span>
-    </span>
-  )
-}
 /** Who a unit belongs to, as the unit card names it: ours, an ally's or an enemy's, and which side. */
 export function ownerTag(w: World, me: Owner, owner: Owner) {
   const p = w.players[owner]
@@ -1922,6 +2000,55 @@ function orderText(w: World, u: Unit) {
   return u.stance === 'hold' ? 'Holding position' : 'Idle'
 }
 
+/** The longer story of a unit, for the ⓘ on its card: what it is, a rushed ship's state, what it is
+ * strong and weak against, a mine's earnings, how its guns pick targets (our structures) and how to
+ * aim at an enemy's hardpoints. The card itself keeps to a few short rows. */
+function unitInfo(w: World, me: Owner, u: Unit, coarse: boolean) {
+  const t = u.t
+  const mine = u.owner === me
+  const enemy = w.players[u.owner].team !== w.players[me].team
+  const r = roleOf(t)
+  const out: string[] = [t.blurb]
+  if (u.rush) out.push(rushNote(u)!)
+  if (r) out.push(`${r.role}\nStrong vs ${r.strong.join(', ')}\nWeak vs ${r.weak.join(', ')}`)
+  if (mine && t.tier === 'mine' && !building(u)) out.push(mineEarning(w, me, u).long)
+  if (mine && !isShip(t) && u.guns.length > 0) out.push(GUNS_TIP)
+  if (enemy && u.hps.length > 0) out.push(coarse ? 'Select your ships, then long-press a marker on this one and pick Attack to target that hardpoint.' : 'Select your ships, hover this one and right-click a marker to target that hardpoint.')
+  return out.join('\n\n')
+}
+
+/**
+ * Lines of a card that give way when it runs out of height: each element marked `data-fit` is hidden
+ * (lowest number first) while the column `ref` would otherwise scroll, and shown again when there is
+ * room. It measures when the card's rows change (`key`) and when the column is resized, never per
+ * frame, and sets the `hidden` attribute itself: no React state, so no extra renders.
+ */
+function useFitLines(ref: { current: HTMLElement | null }, key: string) {
+  useLayoutEffect(() => {
+    const col = ref.current
+    if (!col) return
+    const fit = () => {
+      const lines = [...col.querySelectorAll<HTMLElement>('[data-fit]')].sort((a, b) => Number(a.dataset.fit) - Number(b.dataset.fit))
+      for (const l of lines) l.hidden = false
+      for (const l of lines) {
+        if (col.scrollHeight <= col.clientHeight + 1) break
+        l.hidden = true
+      }
+    }
+    fit()
+    const ro = new ResizeObserver(fit)
+    ro.observe(col)
+    return () => ro.disconnect()
+  }, [ref, key])
+}
+
+/**
+ * One kind of unit selected (a ship, a squadron, several of a type, a platform): a few short rows,
+ * so the card fits its 240 px without scrolling. The header has its name, class, rank, a ⓘ with the
+ * longer story (see unitInfo), what it is doing and Retreat; then thin hull and shield bars, its
+ * hardpoints, and what it can do: engineers' yards to build, a platform's upgrades, the research for
+ * its type.
+ */
 function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
   const art = unitArt
   const { u, squad, me, w } = p
@@ -1929,12 +2056,22 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
   const t = u.t
   const mine = u.owner === me
   const ally = !mine && w.players[u.owner].team === w.players[me].team
+  const one = squad.length === 1
+  const earning = mine && one && t.tier === 'mine' && !building(u) ? mineEarning(w, me, u) : null
+  const techs = mine ? techsFor(t.id) : []
+  const r = roleOf(t)
+  // The description and the role line show while they fit (the ⓘ has them too): what decides that
+  // is which rows the card has, so it is measured again only when that changes.
+  const col = useRef<HTMLDivElement>(null)
+  const escorted = mine && one && isShip(t) && t.tier !== 'fighter' ? escortsOf(w, u).length > 0 : false
+  const reboot = t.shield > 0 && SHIELD_REBOOT - (w.time - u.shieldOut) > 0
+  useFitLines(col, [t.id, squad.length, mine, !!u.rush, escorted, u.nebula, reboot, !!earning, building(u), u.repair > 0, u.focus, !!p.turretPick, u.hps.some((h) => h.hp < h.max)].join('|'))
   return (
     <Frame className={`ew-detail is-unit ${mine ? '' : ally ? 'is-ally' : 'is-enemy'}`}>
       <div className="ew-detail-side">
         {u.hps.length ? <Schematic u={u} size={104} tip={unitTip(t, ownerTag(w, me, u.owner), undefined, u)} /> : <img className="ew-portrait" src={art(t.sprite)} alt="" {...unitTip(t, ownerTag(w, me, u.owner), undefined, u)} />}
       </div>
-      <div className="ew-detail-main">
+      <div className="ew-detail-main" ref={col}>
         <header className="ew-unithead">
           <strong {...unitTip(t, ownerTag(w, me, u.owner), undefined, u)}>
             {t.name}
@@ -1942,33 +2079,49 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
           </strong>
           <span className={`ew-tag ${mine ? '' : ally ? 'is-ally' : 'is-enemy'}`}>{mine ? t.tier : `${ally ? 'allied' : 'enemy'} ${t.tier}`}</span>
           {u.rank > 0 && <span className="ew-rank" data-tip={`${RANKS[u.rank]}: +${Math.round(RANK_BONUS * u.rank * 100)}% damage, hull and shield recharge`}>{'⌃'.repeat(u.rank)} {RANKS[u.rank]}</span>}
-          {mine && <span className="ew-muted ew-small ew-orders">{orderText(w, u)}{u.kills > 0 ? ` · ${u.kills} kills` : ''}</span>}
+          <InfoDot tip={unitInfo(w, me, u, coarse)} />
+          {mine && one && <EscortLine w={w} u={u} />}
+          {mine && (
+            <span className="ew-muted ew-small ew-orders" data-tip={earning?.long}>
+              {earning ? earning.short : orderText(w, u)}
+              {u.kills > 0 ? ` · ${u.kills} kills` : ''}
+            </span>
+          )}
           {mine && <RetreatIcon ships={squad.filter((x) => x.owner === me)} onRetreat={p.onRetreat} />}
         </header>
-        {/* Engineers: their job first, the yards they can build and how. */}
+        {/* Given up first when room runs out: the description, then the role line. */}
+        <span className="ew-muted ew-small ew-fit-desc" data-fit="1">{t.blurb}</span>
+        {r && (
+          <span className="ew-counters ew-fit-role" data-fit="2">
+            <b>{r.role}</b>
+            <span className="is-strong">Strong vs {r.strong.join(', ')}</span>
+            <span className="is-weak">Weak vs {r.weak.join(', ')}</span>
+          </span>
+        )}
+        <Vitals u={u} squad={squad} now={w.time} compact />
+        {u.rush && <span className="ew-rushnote" data-tip={rushNote(u) ?? undefined}>{rushShort(u)}</span>}
+        {(u.hps.length > 0 || (mine && one && (t.tier === 'mine' || t.tier === 'defense'))) && (
+          <div className="ew-unitrow">
+            {u.hps.length > 0 && <HpSummary u={u} />}
+            {mine && one && (t.tier === 'mine' || t.tier === 'defense') && <RepairButton w={w} me={me} u={u} onRepair={p.onRepair} />}
+          </div>
+        )}
+        {/* Engineers: the yards they can build, and how. */}
         {mine && isEngineer(t) && w.hybrid && <EngineerBuild w={w} me={me} crew={squad.filter((x) => x.owner === me && isEngineer(x.t))} onPlace={p.onPlace} onSelect={p.onSelect} />}
-        {mine && squad.length === 1 && <EscortLine w={w} u={u} />}
-        <span className="ew-muted ew-small">{t.blurb}</span>
-        {u.rush && <span className="ew-rushnote">{rushNote(u)}</span>}
-        <Counters t={t} />
-        <Vitals u={u} squad={squad} now={w.time} />
-        {u.hps.length > 0 && <HpSummary u={u} />}
-        {mine && squad.length === 1 && !isShip(t) && u.guns.length > 0 && !building(u) && <FocusInfo w={w} u={u} pick={p.turretPick} onClear={p.onClearFocus} />}
-        {mine && squad.length === 1 && t.tier === 'mine' && !building(u) && <SiteUpgrades w={w} me={me} u={u} onUpgrade={p.onUpgradeSite} onCancel={p.onCancelUpgradeSite} />}
-        {mine && squad.length === 1 && (t.tier === 'mine' || t.tier === 'defense') && <RepairButton w={w} me={me} u={u} onRepair={p.onRepair} />}
-        {mine && techsFor(t.id).length > 0 && (
+        {mine && one && !isShip(t) && u.guns.length > 0 && !building(u) && <FocusInfo w={w} u={u} pick={p.turretPick} onClear={p.onClearFocus} quiet />}
+        {mine && one && t.tier === 'mine' && !building(u) && <SiteUpgrades w={w} me={me} u={u} onUpgrade={p.onUpgradeSite} onCancel={p.onCancelUpgradeSite} />}
+        {techs.length > 0 && (
           <div className="ew-unittech">
             <span className="ew-muted ew-small">Upgrades</span>
-            {techsFor(t.id).map((x) => (
+            {techs.map((x) => (
               <TechTile key={x.id} id={x.id} w={w} me={me} hud={p.hud} onResearch={p.onResearch} onCancel={p.onCancelResearch} />
             ))}
-            <button className="ew-unittree" onClick={p.onTechTree} data-tip="Open the tech tree">
+            <button className="ew-unittree" onClick={p.onTechTree} data-tip="Open the tech tree" aria-label="Tech tree">
               <Icon name="tree" size={15} />
-              Tech tree
+              <span>Tech tree</span>
             </button>
           </div>
         )}
-        {!mine && !ally && u.hps.length > 0 && <span className="ew-muted ew-small">{coarse ? 'Select your ships, then long-press a marker on this one and pick Attack to target that hardpoint.' : 'Select your ships, hover this one and right-click a marker to target that hardpoint.'}</span>}
       </div>
     </Frame>
   )
@@ -1988,8 +2141,10 @@ function BaseTabs({ w, me, cur, onSelect, onRuin }: { w: World; me: Owner; cur: 
   const st = w.byId.get(w.players[me].station)
   const yards = w.units.filter((u) => !u.dead && u.owner === me && u.t.tier === 'yard').sort((a, b) => Number(worksOf(a.t) === 'cyard') - Number(worksOf(b.t) === 'cyard'))
   const ruins = (w.ruins ?? []).filter((r) => r.owner === me && !yards.some((y) => y.t.id === r.unit))
+  // Three or more: the pictures alone (names in the tooltips), so the row never wraps.
+  const many = (st ? 1 : 0) + yards.length + ruins.length >= 3
   return (
-    <div className="ew-basetabs" role="tablist" aria-label="Station and yards">
+    <div className={`ew-basetabs ${many ? 'is-compact' : ''}`} role="tablist" aria-label="Station and yards">
       {st && (
         <button role="tab" aria-selected={cur === st.id} className={cur === st.id ? 'is-on' : ''} onClick={() => onSelect(st.id)} data-tip={`Command Station: strike craft, gunships and engineers, and its expansions (${keyName(keys.station)})`}>
           <ShipArt t={st.t} />
@@ -2025,22 +2180,30 @@ const crewName = (craft: number) => {
   return Number.isInteger(sq) ? `${sq} squadron${sq === 1 ? '' : 's'}` : `${craft} engineer craft`
 }
 
-/** One yard as something to build: its price, the station level it needs (an overlay with its
- * reason when the station is short; the picture stays in colour), its build time with the selected
- * crew, or how ours is doing (standing or going up), or a ruin to rebuild for less. Click to place
- * it with the selected engineers, or to select the one we have. */
-export function YardCard({ w, me, t, crew, onPlace, onSelect }: { w: World; me: Owner; t: UnitType; crew: number; onPlace: (unit: string) => void; onSelect: (id: number) => void }) {
+/** One yard as something to build: its name, and in one short line its price (or the rebuild price
+ * for a ruin), how long the selected crew takes and who that is; or how ours is doing (standing or
+ * going up). A station too low for it dims the card a little and puts its level in a chip in the
+ * corner, the reason in the tooltip. Click to place it with the selected engineers, or to select the
+ * one we have. */
+export function YardCard({ w, me, t, crew, onPlace, onSelect, hint }: { w: World; me: Owner; t: UnitType; crew: number; onPlace: (unit: string) => void; onSelect: (id: number) => void; /** How to place one, for the tooltip. */ hint: string }) {
   const { ours, ruin, cost, locked, poor, why, secs } = yardOffer(w, me, t, crew)
   const state = ours ? (building(ours) ? `Going up: ${Math.round((1 - ours.building / ours.t.build) * 100)}%` : 'Built') : null
-  const tip = `${t.name}\n${t.blurb}\nEngineers build it within the Command Station's build radius: ${t.build} s for one squadron, more go faster (up to ${ENGINEERS.crew / 3}). A destroyed yard leaves its ruin: rebuilt there, it costs ${Math.round(REBUILD * 100)}% (its expansions are lost with it).\nExpansions it takes: ${modulesFor(worksOf(t) ?? 'yard').map((m) => m.name).join(', ')}.${ours ? '\n\nClick to select it.' : why ? `\n\n${why}` : '\n\nClick, then pick a spot inside the build ring (B works too).'}`
+  const tip = `${t.name}\n${t.blurb}\nEngineers build it within the Command Station's build radius: ${t.build} s for one squadron, more go faster (up to ${ENGINEERS.crew / 3}). A destroyed yard leaves its ruin: rebuilt there, it costs ${Math.round(REBUILD * 100)}% (its expansions are lost with it).\nExpansions it takes: ${modulesFor(worksOf(t) ?? 'yard').map((m) => m.name).join(', ')}.${ours ? '\n\nClick to select it.' : why ? `\n\n${why}` : `\n\n${hint}.`}`
+  const lv = locked && why?.startsWith('Needs station level') ? `Lv ${t.level}` : 'Locked'
   return (
     <button className={`ew-shipcard ew-yardcard ${locked ? 'is-locked' : poor ? 'is-poor' : ''} ${ours ? 'is-built' : ''} ${ruin ? 'is-ruin' : ''}`} onClick={() => (ours ? onSelect(ours.id) : onPlace(t.id))} {...unitTip(t, ownerTag(w, me, me), tip)}>
       <ShipArt t={t} />
       <strong>{t.name.replace(/^\S+ /, '')}{ruin && !ours ? ' (ruin)' : ''}</strong>
-      {state ? <span className="ew-cost">{state}</span> : <span className="ew-cost"><Icon name="credits" size={11} /> {ruin ? `Rebuild ${cost}` : cost}</span>}
-      {!state && <span className="ew-time"><Icon name="time" size={11} /> {t.build}s</span>}
-      {!state && <span className="ew-yc-crew">{crewName(crew)} · {secs} s</span>}
-      {locked && <span className="ew-yc-lock">{why}</span>}
+      {state ? (
+        <span className="ew-yc-line is-state">{state}</span>
+      ) : (
+        <span className="ew-yc-line">
+          <span className="ew-cost"><Icon name="credits" size={10} /> {ruin ? `Rebuild ${cost}` : cost}</span>
+          <span className="ew-time"><Icon name="time" size={10} /> {secs}s</span>
+          <span className="ew-yc-crew">{crewName(crew)}</span>
+        </span>
+      )}
+      {locked && <span className="ew-yc-lv">{lv}</span>}
     </button>
   )
 }
@@ -2056,16 +2219,15 @@ export function EngineerBuild({ w, me, crew, onPlace, onSelect }: { w: World; me
   const coarse = useCoarse()
   if (!crew.length || !w.hybrid) return null
   const faction = crew[0].t.faction
+  const hint = coarse ? 'Tap a card, then a spot in the build ring' : `Click a card (${keyName(keys.build)}), then a spot in the build ring`
   return (
     <section className="ew-engbuild" aria-label="Build">
       <header>
         <strong>Build</strong>
-        <span className="ew-muted ew-small" data-tip={coarse ? 'Tap a card, then a spot in the build ring. Long-press one of our structures to repair it.' : `Click a card (${keyName(keys.build)}), then a spot in the build ring. Right-click one of our structures to repair it.`}>
-          {coarse ? 'Tap a card, then a spot in the build ring' : `Click a card (${keyName(keys.build)}), then a spot in the build ring`}
-        </span>
+        <span className="ew-muted ew-small" data-tip={`${hint}. ${coarse ? 'Long-press' : 'Right-click'} one of our structures to repair it.`}>{hint}</span>
       </header>
       <div className="ew-yard ew-engbuild-cards">
-        {yardsFor(faction).map((yt) => <YardCard key={yt.id} w={w} me={me} t={yt} crew={crew.length} onPlace={onPlace} onSelect={onSelect} />)}
+        {yardsFor(faction).map((yt) => <YardCard key={yt.id} w={w} me={me} t={yt} crew={crew.length} onPlace={onPlace} onSelect={onSelect} hint={hint} />)}
       </div>
     </section>
   )
@@ -2187,7 +2349,7 @@ function YardDetail(p: DetailProps & { y: Unit }) {
   const rush = !site && kind === 'cyard' && y.owner === me && hud.techs.includes(RUSH_TECH[faction]) && share >= rushRules(w).min ? { share, why: cantRush(w, me, y.id), onRush: () => p.onRush(y.id) } : undefined
   return (
     <div className="ew-stationwrap">
-      {!site && <BuildQueue queue={queue} onCancel={(i) => p.onCancel(i, y.id)} at="the yard" rush={rush} />}
+      {!site && <BuildQueue queue={queue} onCancel={(i) => p.onCancel(i, y.id)} at="the yard" rush={rush} launch={!!w.reinforce} />}
       <Frame className="ew-detail is-station is-yard">
         <div className="ew-detail-side">
           <Schematic u={y} size={96} tip={unitTip(y.t, ownerTag(w, me, y.owner), undefined, y)} />
@@ -2228,11 +2390,11 @@ function YardDetail(p: DetailProps & { y: Unit }) {
                   tip: `Expansions: modules the yard builds onto itself, one at a time (${modulesFor(kind).map((m) => m.name).join(', ')}).` },
               ]}
               page={page} onPick={(id) => pick(id as typeof page)}>
-              <div className="ew-yard">
+              <div className="ew-yard" style={cardCols(page === 'expansions' ? modulesFor(kind).length : ships.length)}>
                 {page === 'expansions' && <ExpansionCards w={w} me={me} u={y} onExpand={p.onExpand} onCancel={p.onCancelExpand} />}
                 {page === 'ships' && ships.map((t) => (
                   <ShipCard key={t.id} t={t} who={ownerTag(w, me, me)} why={cantBuild(w, me, t.id, false, y.id)} whyReserve={cantBuild(w, me, t.id, true, y.id)} level={hud.level} queued={queue.filter((q) => q.unit === t.id).length}
-                    onBuild={(id, n, reserve) => p.onBuild(id, n, reserve, y.id)} onUnqueue={(id) => p.onUnqueue(id, y.id)} where="the yard"
+                    onBuild={(id, n, reserve) => p.onBuild(id, n, reserve, y.id)} onUnqueue={(id) => p.onUnqueue(id, y.id)} where="the yard" reinf={reinforceOffer(w, t.id)}
                     research={t.tech && !hud.techs.includes(t.tech) ? TECH[t.tech].name : null} need={moduleNeed(w, me, t, y)} />
                 ))}
               </div>

@@ -199,14 +199,7 @@ function truss(id: string, x0: number, x1: number, y0: number, y1: number, z: nu
   return part(id, rect(x0, y0, x1 - x0, y1 - y0), 'metal', z, { lift: 2.2, holes, details })
 }
 
-/** Each yard's berth, in its model's units (the box 100 long, nose up): half its width and where it
- * runs from the mouth (y0) to the stern (y1). The battle draws the ship being built in it. */
-export const YARD_BERTHS: Record<string, { hw: number; y0: number; y1: number }> = {
-  'r-yard': { hw: 15.5, y0: -47, y1: 27 },
-  'd-yard': { hw: 16, y0: -46, y1: 27 },
-  'r-cyard': { hw: 18, y0: -48, y1: 32 },
-  'd-cyard': { hw: 18, y0: -47, y1: 33 },
-}
+export { YARD_BERTHS } from '../data.ts'
 
 // --- Frigate Yards -----------------------------------------------------------------------------------
 
