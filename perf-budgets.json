@@ -57,8 +57,8 @@
         "kind": "count"
       },
       "React commits / sim s": {
-        "baseline": 12,
-        "budget": 14,
+        "baseline": 6,
+        "budget": 8,
         "kind": "count"
       },
       "DOM nodes": {
@@ -123,8 +123,8 @@
         "kind": "count"
       },
       "React commits / sim s": {
-        "baseline": 12,
-        "budget": 14,
+        "baseline": 6,
+        "budget": 8,
         "kind": "count"
       },
       "DOM nodes": {
@@ -134,6 +134,22 @@
       },
       "main thread ms / frame": {
         "budget": 59,
+        "kind": "time"
+      }
+    },
+    "skirmish-resume": {
+      "React commits / sim s": {
+        "baseline": 6.6,
+        "budget": 9,
+        "kind": "count"
+      },
+      "battle screen scrolled px": {
+        "baseline": 0,
+        "budget": 0,
+        "kind": "strict"
+      },
+      "main thread ms / frame": {
+        "budget": 7,
         "kind": "time"
       }
     },
@@ -149,18 +165,18 @@
         "kind": "count"
       },
       "map DOM nodes": {
-        "baseline": 461,
-        "budget": 531,
+        "baseline": 462,
+        "budget": 532,
         "kind": "count"
       },
       "DOM nodes": {
-        "baseline": 734,
-        "budget": 845,
+        "baseline": 737,
+        "budget": 848,
         "kind": "count"
       },
       "filtered map elements": {
-        "baseline": 19,
-        "budget": 19,
+        "baseline": 27,
+        "budget": 27,
         "kind": "strict"
       },
       "canvas draw calls / frame, zooming": {
@@ -174,7 +190,7 @@
         "kind": "count"
       },
       "main thread ms / frame, zooming": {
-        "budget": 4,
+        "budget": 3,
         "kind": "time"
       },
       "main thread ms / frame, panning": {
@@ -194,18 +210,18 @@
         "kind": "count"
       },
       "map DOM nodes": {
-        "baseline": 874,
-        "budget": 1006,
+        "baseline": 875,
+        "budget": 1007,
         "kind": "count"
       },
       "DOM nodes": {
-        "baseline": 1257,
-        "budget": 1446,
+        "baseline": 1260,
+        "budget": 1449,
         "kind": "count"
       },
       "filtered map elements": {
-        "baseline": 14,
-        "budget": 14,
+        "baseline": 23,
+        "budget": 23,
         "kind": "strict"
       },
       "canvas draw calls / frame, zooming": {
@@ -219,7 +235,7 @@
         "kind": "count"
       },
       "main thread ms / frame, zooming": {
-        "budget": 7,
+        "budget": 6,
         "kind": "time"
       },
       "main thread ms / frame, panning": {

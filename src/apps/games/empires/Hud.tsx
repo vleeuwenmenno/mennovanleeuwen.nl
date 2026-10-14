@@ -10,7 +10,7 @@ import { modelFor, typeOfSprite } from './models/index.ts'
 import { moduleThumbnail, thumbnail } from './models/paint.ts'
 import { keyName, modName, useSettings, type Action } from './settings'
 import { freeGroup, type GroupInfo } from './groups'
-import { LongPress, isTouch, shiftOf, useCancelPress, useCoarse, useLongPressWheel } from './Touch'
+import { CANCEL_TIP, LongPress, isTouch, shiftOf, useCancelPress, useCoarse, useLongPressWheel } from './Touch'
 import { FIELD_DAMAGE, cantReinforce, shipPrice, yardOffer, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, escorts, escortsOf, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
@@ -857,6 +857,8 @@ type DetailProps = {
   /** Rush launch: the Capital Yard `uid` sends out its ship in progress unfinished. */
   onRush: (uid: number) => void
   onResearch: (id: string) => void
+  /** Call off the research at this queue slot (full refund). */
+  onCancelResearch: (index: number) => void
   onTechTree: () => void
   onSite: (node: number, id: string) => void
   onRepair: (id: number) => void
@@ -935,8 +937,10 @@ export function TechIcon({ id, size = 40, progress = 0, status }: { id: string; 
 }
 
 /** One piece of research as a compact tile: icon, name and where it stands. Click to research. */
-function TechTile({ id, w, me, hud, onResearch }: { id: string; w: World; me: Owner; hud: Hud; onResearch: (id: string) => void }) {
+function TechTile({ id, w, me, hud, onResearch, onCancel }: { id: string; w: World; me: Owner; hud: Hud; onResearch: (id: string) => void; onCancel: (index: number) => void }) {
+  const press = useCancelPress()
   const s = techState(w, me, hud, id)
+  const queued = s.slot >= 0
   const cost = researchCost(w.players[me], id)
   const blurb = id === LEVEL_UP ? levelBlurb(w.players[me].faction, hud.level + 1) : TECH[id].blurb
   const line =
@@ -949,9 +953,16 @@ function TechTile({ id, w, me, hud, onResearch }: { id: string; w: World; me: Ow
   return (
     <button
       className={`ew-tech is-${s.status}`}
-      onClick={() => onResearch(id)}
+      onClick={() => {
+        if (!queued) onResearch(id)
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        if (queued && !press.touched()) onCancel(s.slot)
+      }}
+      {...press.handlers(queued ? () => onCancel(s.slot) : null)}
       disabled={s.status === 'done'}
-      data-tip={`${researchName(id, hud.level)}\n${blurb}${s.why && s.status !== 'done' && s.status !== 'busy' && s.status !== 'queued' ? `\n\n${s.why}` : ''}`}
+      data-tip={`${researchName(id, hud.level)}\n${blurb}${s.why && s.status !== 'done' && !queued ? `\n\n${s.why}` : queued ? `\n\n${CANCEL_TIP}` : ''}`}
     >
       <TechIcon id={id} size={30} progress={s.progress} status={s.status} />
       <strong>{researchName(id, hud.level)}</strong>
@@ -1560,15 +1571,40 @@ export function Floating({ id, title, at, onClose, aside, onMove, bare, classNam
     if (!el || !root) return { x, y }
     return { x: Math.max(0, Math.min(root.clientWidth - el.offsetWidth, x)), y: Math.max(50, Math.min(root.clientHeight - Math.min(el.offsetHeight, 40), y)) }
   }
-  // Tell whoever lays out round it where it is, after every change.
-  useLayoutEffect(() => {
+  // Tell whoever lays out round it where it is, after every change. Whoever that is may move other
+  // panels in turn, so this must settle: only a box that changed by a whole pixel is reported, in
+  // the screen's own coordinates (however it got scrolled), and a box that keeps changing as fast as
+  // it's reported (laying out round it moves it again) is reported at most once a frame until it
+  // holds still, rather than over and over until React gives up ("Maximum update depth exceeded").
+  const report = useRef({ key: '', onMove, t: 0, n: 0, slow: false, raf: 0 })
+  const tell = (fromFrame = false) => {
     const el = box.current
     const root = el?.parentElement
+    const g = report.current
     if (!el || !root || !onMove) return
     const r = el.getBoundingClientRect()
     const rr = root.getBoundingClientRect()
-    onMove({ x: r.left - rr.left, y: r.top - rr.top, w: r.width, h: r.height }, { w: rr.width, h: rr.height })
-  })
+    const b = { x: r.left - rr.left + root.scrollLeft, y: r.top - rr.top + root.scrollTop, w: r.width, h: r.height }
+    const key = [b.x, b.y, b.w, b.h, rr.width, rr.height].map(Math.round).join()
+    if (key === g.key && onMove === g.onMove) {
+      g.slow = false
+      return
+    }
+    const now = performance.now()
+    if (now - g.t > 50) (g.t = now), (g.n = 0)
+    if ((g.slow || ++g.n > 8) && !fromFrame) {
+      g.slow = true
+      g.raf ||= requestAnimationFrame(() => ((g.raf = 0), tellRef.current(true)))
+      return
+    }
+    g.key = key
+    g.onMove = onMove
+    onMove(b, { w: rr.width, h: rr.height })
+  }
+  const tellRef = useRef(tell)
+  tellRef.current = tell
+  useLayoutEffect(() => tell())
+  useEffect(() => () => cancelAnimationFrame(report.current.raf), [])
   const lastPointer = useRef('mouse')
   const grab = (e: React.PointerEvent) => {
     lastPointer.current = e.pointerType
@@ -1976,7 +2012,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
           <div className="ew-unittech">
             <span className="ew-muted ew-small">Upgrades</span>
             {techsFor(t.id).map((x) => (
-              <TechTile key={x.id} id={x.id} w={w} me={me} hud={p.hud} onResearch={p.onResearch} />
+              <TechTile key={x.id} id={x.id} w={w} me={me} hud={p.hud} onResearch={p.onResearch} onCancel={p.onCancelResearch} />
             ))}
             <button className="ew-unittree" onClick={p.onTechTree} data-tip="Open the tech tree">
               <Icon name="tree" size={15} />

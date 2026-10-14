@@ -108,13 +108,44 @@ const press = (page: Page, sel: string, text: string) =>
  * pictures) arrives in real time, and anything set to run at once runs, but no frame is drawn, so
  * what comes after starts at the same moment of the stepped clock however long loading took. */
 async function settleUntil(page: Page, expr: string, ms = 60_000) {
-  const ok = await page.eval<boolean>(`(async () => { const t0 = Date.now(); while (Date.now() - t0 < ${ms}) { await __perf.settle(); if (${expr}) return true; await __perf.realSleep(10) } return false })()`)
+  // Counted in real sleeps: the page's Date stands still with its clock.
+  const ok = await page.eval<boolean>(`(async () => { for (let i = 0; i < ${Math.ceil(ms / 10)}; i++) { await __perf.settle(); if (${expr}) return true; await __perf.realSleep(10) } return false })()`)
   if (!ok) throw new Error(`Never happened: ${expr}`)
 }
 
 const MENU = `[...document.querySelectorAll('.ew-menu-btn')].some((b) => b.textContent.includes('Single player'))`
 
 // --- A skirmish battle ---
+
+/** A skirmish from the main menu to its first frames: our station placed, the battle started, on
+ * the stepped clock from launch (seeded with `seed`). Returns the canvas's box. */
+async function startSkirmish(page: Page, url: string, seed: number) {
+  await page.send('Page.navigate', { url: `${url}/play/empires` })
+  await page.waitFor(MENU)
+  await press(page, '.ew-menu-btn', 'Single player')
+  await page.waitFor(`[...document.querySelectorAll('.ew-menu-btn')].some((b) => b.textContent.includes('Skirmish'))`)
+  await press(page, '.ew-menu-btn', 'Skirmish')
+  await page.waitFor(`!!document.querySelector('.ew-go')`)
+  // From here the clock is ours: the battle starts on the stepped clock, its loop waiting for
+  // the first stepped frame.
+  await page.eval(`__perf.manual(${seed})`)
+  await press(page, '.ew-go', 'Launch battle')
+  // Its art loads on the stepped clock; the loop starts by sizing the canvas to the page.
+  await settleUntil(page, `!!window.__ew && document.querySelector('canvas.ew-canvas')?.width === document.querySelector('canvas.ew-canvas')?.clientWidth && !!document.querySelector('.ew-deploybox')`)
+  await page.eval(`__perf.frames(2)`)
+  // Our station: the first spot in the start area that takes it, clicked on the canvas.
+  const box = await page.eval<{ x: number; y: number; w: number; h: number }>(`(() => { const b = document.querySelector('canvas.ew-canvas').getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height } })()`)
+  for (const [fx, fy] of [[0.5, 0.42], [0.45, 0.4], [0.55, 0.45], [0.5, 0.3], [0.4, 0.5], [0.6, 0.35]]) {
+    await page.click(box.x + box.w * fx, box.y + box.h * fy)
+    await page.eval(`__perf.frames(1)`)
+    if (await page.eval(`!document.querySelector('.ew-deploybox .ew-go')?.disabled`)) break
+  }
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.x + box.w / 2, y: box.y + 40 })
+  await press(page, '.ew-deploybox .ew-go', 'Start battle')
+  await page.eval(`__perf.frames(2)`)
+  if (await page.eval(`!!document.querySelector('.ew-deploybox')`)) throw new Error('The battle did not start')
+  return box
+}
 
 /** Two fleets of `n` craft in all, spawned through the sim in the middle of the map, attack-moving
  * at each other; the camera pans across the fight. */
@@ -123,30 +154,7 @@ function skirmish(n: number): Scene {
     name: `skirmish-${n}`,
     about: `Skirmish, ${n} ships fighting, camera panning`,
     async run(page, url) {
-      await page.send('Page.navigate', { url: `${url}/play/empires` })
-      await page.waitFor(MENU)
-      await press(page, '.ew-menu-btn', 'Single player')
-      await page.waitFor(`[...document.querySelectorAll('.ew-menu-btn')].some((b) => b.textContent.includes('Skirmish'))`)
-      await press(page, '.ew-menu-btn', 'Skirmish')
-      await page.waitFor(`!!document.querySelector('.ew-go')`)
-      // From here the clock is ours: the battle starts on the stepped clock, its loop waiting for
-      // the first stepped frame.
-      await page.eval(`__perf.manual(${n})`)
-      await press(page, '.ew-go', 'Launch battle')
-      // Its art loads on the stepped clock; the loop starts by sizing the canvas to the page.
-      await settleUntil(page, `!!window.__ew && document.querySelector('canvas.ew-canvas')?.width === document.querySelector('canvas.ew-canvas')?.clientWidth && !!document.querySelector('.ew-deploybox')`)
-      await page.eval(`__perf.frames(2)`)
-      // Our station: the first spot in the start area that takes it, clicked on the canvas.
-      const box = await page.eval<{ x: number; y: number; w: number; h: number }>(`(() => { const b = document.querySelector('canvas.ew-canvas').getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height } })()`)
-      for (const [fx, fy] of [[0.5, 0.42], [0.45, 0.4], [0.55, 0.45], [0.5, 0.3], [0.4, 0.5], [0.6, 0.35]]) {
-        await page.click(box.x + box.w * fx, box.y + box.h * fy)
-        await page.eval(`__perf.frames(1)`)
-        if (await page.eval(`!document.querySelector('.ew-deploybox .ew-go')?.disabled`)) break
-      }
-      await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.x + box.w / 2, y: box.y + 40 })
-      await press(page, '.ew-deploybox .ew-go', 'Start battle')
-      await page.eval(`__perf.frames(2)`)
-      if (await page.eval(`!!document.querySelector('.ew-deploybox')`)) throw new Error('The battle did not start')
+      await startSkirmish(page, url, n)
       const spawned = await page.eval<number>(`(async () => {
         const sim = await import('/src/apps/games/empires/sim.ts')
         const w = __ew.world
@@ -206,6 +214,95 @@ function skirmish(n: number): Scene {
       }
     },
   }
+}
+
+// --- A skirmish picked up again after a reload ---
+
+/** The window sizes the resumed battle is looked at in: a laptop, a small window (the map and the
+ * unit card side by side with little room), a big screen, and one too narrow for the map. */
+const RESUME_SIZES = [
+  [1000, 820],
+  [900, 640],
+  [1280, 720],
+  [1920, 1080],
+  [600, 900],
+] as const
+
+/**
+ * A skirmish kept for the tab (the resume snapshot, saved as the page goes away) with engineers
+ * selected, and the page reloaded into it: the battle comes back where it was. Then, at each of a
+ * few window sizes, whatever is in the unit card is scrolled into view, as focusing a control in
+ * it or finding a word on the page does. The battle screen never scrolls, and the panels laid out
+ * round each other (the unit card beside the tactical map) settle: this once looped until React
+ * gave up ("Maximum update depth exceeded", which fails the check as the page throwing).
+ */
+const skirmishResume: Scene = {
+  name: 'skirmish-resume',
+  about: 'Skirmish reloaded from its resume snapshot, engineers selected, at 5 window sizes',
+  async run(page, url) {
+    await startSkirmish(page, url, 5)
+    // Engineers by our station, so the unit card shows them with their Build section (its tallest),
+    // the camera on them, and one clicked: they're selected.
+    const at = await page.eval<{ x: number; y: number } | null>(`(async () => {
+      const sim = await import('/src/apps/games/empires/sim.ts')
+      const w = __ew.world
+      const p = w.players[0]
+      const st = w.byId.get(p.station)
+      const crew = sim.spawnGroup(w, p.faction === 'droid' ? 'd-engineer' : 'r-engineer', 0, st.x + 300, st.y, 0)
+      if (!crew.length) return null
+      Object.assign(__ew.cam, { x: crew[0].x, y: crew[0].y, zoom: 0.8 })
+      return { x: crew[0].x, y: crew[0].y }
+    })()`)
+    if (!at) throw new Error('No engineers to select')
+    await page.eval(`__perf.frames(10)`)
+    const spot = await page.eval<{ x: number; y: number }>(`(() => {
+      const u = __ew.world.units.find((u) => !u.dead && u.owner === 0 && u.t.kind === 'engineer')
+      const b = document.querySelector('canvas.ew-canvas').getBoundingClientRect()
+      return { x: b.x + b.width / 2 + (u.x - __ew.cam.x) * __ew.cam.zoom, y: b.y + b.height / 2 + (u.y - __ew.cam.y) * __ew.cam.zoom }
+    })()`)
+    await page.click(spot.x, spot.y)
+    await page.eval(`__perf.frames(30)`)
+    if (await page.eval<boolean>(`!document.querySelector('.ew-engbuild')`)) throw new Error('The engineers were not selected')
+    // The page goes away (the reload): the battle is kept for the tab, and comes back.
+    await page.eval(`window.__stale = true`)
+    await page.send('Page.reload')
+    // Back on real time until the battle is up again (its loading may wait on frames), then the
+    // stepped clock.
+    await page.waitFor(`!window.__stale && !!window.__ew && document.querySelector('canvas.ew-canvas')?.width === document.querySelector('canvas.ew-canvas')?.clientWidth && !!document.querySelector('.ew-detailfloat')`)
+    await page.eval(`__perf.manual(5)`)
+    await page.eval(`__perf.frames(30)`)
+    if (await page.eval<boolean>(`!document.querySelector('.ew-engbuild')`)) throw new Error('The battle did not come back with its engineers selected')
+    let frames = 0
+    let commits = 0
+    let scrolled = 0
+    let ms: number[] = []
+    for (const [w, h] of RESUME_SIZES) {
+      await page.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+      await page.eval(`__perf.frames(20)`)
+      // What a focused control or a found word does: brought into view, by scrolling whatever can be.
+      await page.eval(`(() => {
+        const root = document.querySelector('.ew-battle')
+        document.querySelector('.ew-engbuild')?.scrollIntoView({ block: 'start' })
+        document.querySelector('.ew-detailfloat .ew-detail')?.scrollIntoView({ block: 'end', inline: 'end' })
+        root.scrollTop = 400
+        root.scrollLeft = 400
+      })()`)
+      const raw = await measure(page, 60)
+      frames += 60
+      commits += raw.counts.commits ?? 0
+      ms = ms.concat(raw.frameMs)
+      if (await page.eval<boolean>(`!document.querySelector('.ew-battle')`)) throw new Error(`The battle is gone at ${w}x${h}`)
+      scrolled = Math.max(scrolled, await page.eval<number>(`(() => { const r = document.querySelector('.ew-battle'); return r.scrollTop + r.scrollLeft })()`))
+    }
+    return {
+      metrics: {
+        'React commits / sim s': count((commits * FPS) / frames),
+        'battle screen scrolled px': strict(scrolled),
+        'main thread ms / frame': { value: r2(mean(ms)), kind: 'time' },
+      },
+      shots: {},
+    }
+  },
 }
 
 // --- The galactic conquest map ---
@@ -356,7 +453,7 @@ const desktop: Scene = {
   },
 }
 
-export const SCENES: Scene[] = [skirmish(200), skirmish(300), galaxy('start'), galaxy('late'), desktop].map((s) => ({
+export const SCENES: Scene[] = [skirmish(200), skirmish(300), skirmishResume, galaxy('start'), galaxy('late'), desktop].map((s) => ({
   ...s,
   run: (page: Page, url: string) => ((current = s.name), s.run(page, url)),
 }))

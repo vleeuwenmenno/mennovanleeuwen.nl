@@ -2435,7 +2435,10 @@ pnpm check:perf --fixtures           # rebuild the galaxy saves in scripts/perf/
 ```
 
 **The scenes.** A skirmish with 200 and with 300 ships fighting (spawned through the sim in the
-middle of the map, the camera panning across); the galactic conquest map of a new and a late
+middle of the map, the camera panning across); a skirmish reloaded from the tab's resume snapshot
+with engineers selected, looked at in five window sizes with the unit card's contents scrolled into
+view (the battle screen must never scroll, and the panels laid out round each other must settle:
+no React update loop, few commits); the galactic conquest map of a new and a late
 campaign (saves in `scripts/perf/fixtures`), zoomed with the wheel and dragged round a circle; and
 the desktop with a few apps open, left idle, then hidden.
 
@@ -2494,6 +2497,20 @@ rendering. Counts don't depend on the machine; time budgets are soft there as ev
   on the few elements that read it restyles only those (`scaleVars` in `Conquest.tsx`).
 - **Keep text out of transformed SVG.** SVG text inside a zoomed SVG is laid out again at every step
   of a zoom; put labels in an HTML layer over it (the galaxy's `.ew-gover` pins).
+- **Pan by moving a layer, not by drawing again.** Changing an SVG's `viewBox` (or a transform
+  inside a layer) to pan repaints and rasters the whole view every frame, about 5 ms of GPU time on a
+  5120×1440 screen. Draw a region a little past the view into one `will-change: transform` layer and
+  move that layer by whole pixels (fractions blur it); draw again only when the zoom changes or the
+  view leaves the region (the galaxy's `Region`, `.ew-gpan`).
+- **Give a small thing that moves every frame a layer of its own.** Anything that changes inside a
+  big layer has its tiles rastered again; the minimap's view frame sits in its own small layer over
+  the minimap (`.ew-gmini-over`) for that.
+- **Move what moves by itself every frame, outside React.** A render ten times a second makes
+  moving things step on a fast screen; set their transforms from the frame loop instead (the
+  galaxy's fleets in flight, `CamView.tick`).
+- **Don't judge smoothness with `--disable-gpu-vsync --disable-frame-rate-limit`.** Chromium then
+  runs `requestAnimationFrame` as fast as it can while far fewer frames reach the screen: an FPS
+  counter shows 200+ while the picture lags. Measure at the display's own rate.
 - **No allocations per frame.** Reuse arrays and objects in the frame loop, and drop dead entries by
   compacting in place (a write index, then `length =`) instead of `filter()` making a new array.
 - **Pause timers and loops when hidden.** On `visibilitychange`, stop intervals and animation loops

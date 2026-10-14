@@ -15,7 +15,11 @@
   position: relative;
   flex: 1;
   min-height: 0;
+  /* Clipped, never scrolled: overflow: hidden alone still lets the browser scroll it (bringing a
+     focused control or a found word into view), and every panel laid out round another (the unit
+     card beside the tactical map) would then be measured against a screen that has moved. */
   overflow: hidden;
+  overflow: clip;
   background: #04060d;
   color: var(--ew-text);
   font: 13px/1.35 system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -3853,6 +3857,13 @@ span.ew-teamtag {
 }
 .ew-detailfloat .ew-detail {
   max-height: 240px;
+  /* Its inside is held to that height (its main column scrolls), rather than running out of the
+     bottom of the screen: a percentage max-height of an auto-height box holds nothing. */
+  display: flex;
+  flex-direction: column;
+}
+.ew-detailfloat .ew-detail > .ew-frame-in {
+  min-height: 0;
 }
 .ew-stationwrap {
   display: flex;
@@ -4828,31 +4839,39 @@ span.ew-teamtag {
   initial-value: 1;
 }
 
-/* The map's underlay (GalaxyView): the big fills, as boxes in one layer moved by the camera, in
-   map units (a pixel is a map unit before the zoom's scale). */
-.ew-gmap,
-.ew-gunder {
+/* The galaxy map (GalaxyView): clipped to the view, and holding the layer the camera moves. */
+.ew-gmap {
   position: absolute;
   inset: 0;
+  overflow: hidden;
+  contain: strict;
 }
-/* Its own compositor layer (it never moves, so it stays sharp): a frame of a zoom then repaints the
-   map alone, not the backdrop under it as well. */
-.ew-gmap {
+/* The map's moving layer: a region of the map drawn round the view (Region in Conquest.tsx), its own
+   compositor layer, so a pan moves it as a whole (by whole pixels, so it stays sharp) and redraws
+   nothing, and a frame of a zoom repaints the map alone, not the backdrop under it as well. Its three
+   parts are as big as the region (set as it's drawn). */
+.ew-gpan {
+  position: absolute;
+  left: 0;
+  top: 0;
   will-change: transform;
 }
+.ew-gpan > .ew-gsvg,
+.ew-gunder,
+.ew-gover {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+/* The map's underlay: the big fills, as boxes in one layer moved by the camera, in map units (a
+   pixel is a map unit before the zoom's scale). */
 .ew-gunder {
   overflow: hidden;
   pointer-events: none;
 }
-.ew-gmap > .ew-gsvg {
-  position: absolute;
-  inset: 0;
-}
 /* Over the map: its markers, badges and names, each a small SVG at a point of the map, kept its size
    on screen (GalaxyView's `over`). Only what they draw takes clicks. */
 .ew-gover {
-  position: absolute;
-  inset: 0;
   overflow: hidden;
   pointer-events: none;
 }
@@ -5509,6 +5528,29 @@ span.ew-teamtag {
 /* The galaxy minimap: the battle's tactical map, drawn in SVG. */
 .ew-gmini {
   background: radial-gradient(ellipse at 50% 50%, rgba(40, 60, 120, 0.3), transparent 75%), #03050c;
+}
+/* The minimap and, over it in a layer of its own, the frame round what the map shows (it moves with
+   every frame of a pan or zoom: alone, it's all that is drawn again). */
+.ew-gmini-box {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  contain: size;
+}
+.ew-gmini-box > .ew-gmini {
+  width: 100%;
+}
+.ew-gmini-over {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  pointer-events: none;
+  will-change: transform;
 }
 .ew-gmini-view {
   fill: rgba(255, 255, 255, 0.05);
