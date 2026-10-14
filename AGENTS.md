@@ -51,6 +51,7 @@ and run the heavy suites once, at the end, not after every edit.
 - Full measurement matrices (many viewports, both browsers, uncapped fps): only for dedicated
   performance work, not for features.
 - `check:empires-panels` (needs a dev server): only when changing the build panel or unit card layout.
+- `check:empires-gui-fit` (needs a dev server): only when changing where floating GUI goes (tooltips, popovers, panels, `fit.ts`).
 
 Don't re-run a suite that already passed unless the code it covers changed since. If a heavy check
 fails for a reason unrelated to the change, say so rather than rerunning it repeatedly.

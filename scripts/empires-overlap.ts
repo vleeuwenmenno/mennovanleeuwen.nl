@@ -13,11 +13,12 @@
 //    slots once it is gone; one far off is left alone.
 // 6. A repair escort mends the ship it escorts first, even with a worse hurt ship next to it.
 // 7. When the flagship is lost, its escorts wait where they are.
+// 4b. Escorts on a narrow cruiser keep clear of each other, standing off the spine by their size.
 // 8. The same escort battle run twice, and once frozen to a snapshot and thawed midway, ends on the
 //    same state hash: what multiplayer needs.
 
 import { MAPS } from '../src/apps/games/empires/maps.ts'
-import { UNIT, type UnitType } from '../src/apps/games/empires/data.ts'
+import { UNIT, dims, type UnitType } from '../src/apps/games/empires/data.ts'
 import { STEP, cmdGuard, cmdMove, damage, escortSlot, escortsOf, radius, spawn, stateHash, tick, wardOf, type Unit, type World, newWorld } from '../src/apps/games/empires/sim.ts'
 import { restoreWorld, snapshotWorld } from '../src/apps/games/empires/snapshot.ts'
 
@@ -123,7 +124,7 @@ function escorted(seed = 7) {
   return { w, cap, escorts, why }
 }
 /** How far each escort is from its own slot. */
-const offSlots = (cap: Unit, escorts: Unit[]) => escorts.map((u, i) => dist(u, escortSlot(cap, i, escorts.length)))
+const offSlots = (cap: Unit, escorts: Unit[]) => escorts.map((u, i) => dist(u, escortSlot(cap, i, escorts.length, radius(u.t))))
 
 {
   const { w, cap, escorts, why } = escorted()
@@ -151,6 +152,22 @@ const offSlots = (cap: Unit, escorts: Unit[]) => escorts.map((u, i) => dist(u, e
   off = offSlots(cap, escorts)
   check('after the turn the escorts re-formed on their slots', off.every((d) => d < 30), off.map((d) => d.toFixed(0)).join(', '))
   check('and face the way the flagship does', escorts.every((u) => Math.abs(Math.atan2(Math.sin(u.a - cap.a), Math.cos(u.a - cap.a))) < 0.2), escorts.map((u) => (((u.a - cap.a) * 180) / Math.PI).toFixed(0)).join(', '))
+}
+
+{
+  // A narrow hull: four gunships and a Mercy escorting a cruiser. Their slots stand off the spine
+  // by the escort's own size, so the two of a pair don't touch, and stay over the hull.
+  const w = field()
+  const cru = unarmed(w, 'r-cruiser', 0, 2600, 2300, 0)
+  const escorts = [...[0, 1, 2, 3].map((k) => spawn(w, 'r-gunship', 0, 2200, 2000 + k * 150, 0)), spawn(w, 'r-corvette', 0, 2100, 2600, 0)]
+  cmdGuard(w, 0, escorts.map((u) => u.id), cru.id)
+  run(w, 25)
+  const off = offSlots(cru, escorts)
+  check('on a cruiser: each escort sits on its own slot', off.every((d) => d < 25), off.map((d) => d.toFixed(0)).join(', '))
+  let apart = Infinity
+  for (let i = 0; i < escorts.length; i++) for (let j = i + 1; j < escorts.length; j++) apart = Math.min(apart, dist(escorts[i], escorts[j]) - radius(escorts[i].t) - radius(escorts[j].t))
+  check('on a cruiser: the escorts keep clear of each other', apart >= 0, `closest gap ${apart.toFixed(0)}`)
+  check('on a cruiser: they ride over its hull', escorts.every((u) => dist(u, cru) < dims(cru.t)[1] / 2), escorts.map((u) => dist(u, cru).toFixed(0)).join(', '))
 }
 
 // --- 5. Engaging, and coming back -----------------------------------------------------------------------------
