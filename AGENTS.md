@@ -29,6 +29,42 @@ and run the heavy suites once, at the end, not after every edit.
 Don't re-run a suite that already passed unless the code it covers changed since. If a heavy check
 fails for a reason unrelated to the change, say so rather than rerunning it repeatedly.
 
+## Dev servers and the dev proxy
+
+- Run your own Vite dev server for browser checks: `DATA_DIR=<scratch dir> ./node_modules/.bin/vite --port <port> --strictPort`.
+  - Use a port in **5170–5299** and a scratch `DATA_DIR`, never the real data.
+  - One server per task. Stop it when you're done, and stop any helper servers you started.
+- `pnpm dev:proxy` (`scripts/dev-proxy.ts`) listens on 127.0.0.1:5200. It lists every dev server on 5170–5299 at `http://localhost:5200/` and proxies to them, WebSockets included. Someone working remotely only has to tunnel that one port.
+  - When you hand over a server, give the proxy link `http://<port>.localhost:5200/` (for example `http://5251.localhost:5200/play/empires`), not a bare port.
+  - Start the proxy if nothing is listening on 5200.
+  - Start servers from your git worktree, not a copied folder, so the dashboard shows the branch.
+- Mute sound in every browser tab you test in, unless the test is about sound.
+
+## Worktrees and other sessions
+
+- Work in a git worktree. Symlink the main checkout's `node_modules` into it **before** running any pnpm command, so pnpm doesn't install a second copy.
+- Several sessions may work in this repo at once. Never touch another session's worktree, branch, server or uncommitted changes.
+  - Clean up only what you created, by name.
+  - Keep the main checkout clean.
+
+## Code rules worth knowing
+
+- **Empires At War lockstep:**
+  - The sim (`sim.ts`, `ai.ts`, `galaxy.ts` and what they call) must stay deterministic: no `Math.random`, no `Date`, no order-dependent iteration surprises. Use the sim's seeded RNG.
+  - Player actions are orders through `commands.ts` and the protocol, validated by the server referee (`server/empires.ts`).
+  - `check:empires` must report "in sync".
+  - Saved battles and campaigns from earlier versions must keep loading: give new state safe defaults, and bump the save version where its pattern says to.
+- **Server imports:** the Dockerfile copies only specific `src/` files into the server image. If server code starts importing another file from `src/`, add it to the Dockerfile `COPY` list. The CI `image` job boots the image and catches a missing one.
+- **Dialogs:** never use `window.alert`, `confirm` or `prompt`. Use the OS's own dialogs.
+- **Dev-only tools** (such as the Empires F9 cheat panel) go behind `import.meta.env.DEV`. Before merging, grep `dist/` to prove they aren't in the production build.
+
+## Merging and releasing
+
+- Before merging a PR, wait until all three CI checks have run and passed: `build`, `image` and `perf`. "No checks reported" means they haven't started yet; it's not a pass.
+- Releases are GitHub releases named `MvL OS X.Y.Z`. Other sessions release too, so work out the next version from the latest release at the moment you create yours.
+- Release notes are written for players and users, not developers.
+- A release goes live within minutes.
+
 ## Performance
 
 Read "Performance guardrails" in README.md before changing rendering. Use `check:perf --update`
