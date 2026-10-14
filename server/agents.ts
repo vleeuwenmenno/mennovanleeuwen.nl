@@ -2498,6 +2498,7 @@ async function compactTurn(user: User, thread: string, instructions: string | un
 /** One line of an answer for a push message, without Markdown's marks. */
 const pushLine = (s: string) =>
   s
+    .replace(/\{([^{}|\n]+)\|[^{}|\n]+\}/g, '$1')
     .replace(/[#*_`>[\]]/g, '')
     .replace(/\(https?:[^)]*\)/g, '')
     .split('\n')

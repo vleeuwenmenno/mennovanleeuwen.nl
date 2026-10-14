@@ -18,6 +18,8 @@ export type Inline =
   | { type: 'em' | 'strong' | 'del'; children: Inline[] }
   | { type: 'link'; href: string; title?: string; children: Inline[] }
   | { type: 'image'; src: string; alt: string; title?: string }
+  /** Furigana, written {漢字|かんじ}: the base text with its reading above it (a <ruby>). */
+  | { type: 'ruby'; base: string; reading: string }
   /** A hard line break: two trailing spaces or a backslash at the end of a line. */
   | { type: 'br' }
   /** A plain line break inside a paragraph, which reads as a space unless `breaks` is on. */
@@ -149,12 +151,38 @@ const SETEXT = /^(?:=+|-{2,})[ \t]*$/
 const TABLE_SEP = /^\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/
 const hasPipe = (s: string) => /(^|[^\\])\|/.test(s)
 
+// Furigana: {base|reading}, both non-empty, with no braces, pipes, backslashes, backticks or line
+// breaks inside. Braces around it ("{{a|b}}") or a "$" before it ("${a|b}") are template or shell
+// syntax, not ruby.
+const RUBY = /^\{([^{}|\n\\`]{1,60})\|([^{}|\n\\`]{1,120})\}/
+
+/** The furigana starting at `pos` in `s`, as the match of RUBY, or null. */
+function rubyAt(s: string, pos: number): RegExpExecArray | null {
+  if (s[pos] !== '{' || s[pos - 1] === '$' || s[pos - 1] === '{') return null
+  const m = RUBY.exec(s.slice(pos, pos + 200))
+  return m && m[1].trim() && m[2].trim() && s[pos + m[0].length] !== '}' ? m : null
+}
+
 function tableCells(line: string): string[] {
   let t = line.trim()
   if (t.startsWith('|')) t = t.slice(1)
   if (t.endsWith('|') && !t.endsWith('\\|')) t = t.slice(0, -1)
+  // Cells split at every pipe that is not written \|, except the one inside furigana ({a|b}).
+  const cells: string[] = []
+  let cur = ''
+  for (let i = 0; i < t.length; i++) {
+    const ruby = t[i] === '{' && t[i - 1] !== '\\' ? rubyAt(t, i) : null
+    if (ruby) {
+      cur += ruby[0]
+      i += ruby[0].length - 1
+    } else if (t[i] === '|' && t[i - 1] !== '\\') {
+      cells.push(cur)
+      cur = ''
+    } else cur += t[i]
+  }
+  cells.push(cur)
   // \| is a pipe inside a cell, code spans included (as GitHub does), so it is unescaped here.
-  return t.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
+  return cells.map((c) => c.trim().replace(/\\\|/g, '|'))
 }
 
 class BlockParser {
@@ -549,7 +577,7 @@ function unescape(s: string) {
 }
 
 // Characters that may start something other than plain text, and the bare URLs GitHub links.
-const SPECIAL = /[\n\\`*_~[\]!<&]|https?:\/\//g
+const SPECIAL = /[\n\\`*_~[\]!<&{]|https?:\/\//g
 
 class InlineParser {
   s = ''
@@ -557,6 +585,8 @@ class InlineParser {
   root = inode('text')
   delims: Delim | null = null
   brackets: Bracket | null = null
+  /** Where the last furigana ended: its braces count as letters, not punctuation, for emphasis. */
+  rubyEnd = -1
   refs: Map<string, { href: string; title?: string }>
 
   constructor(refs: Map<string, { href: string; title?: string }>) {
@@ -569,6 +599,7 @@ class InlineParser {
     this.root = inode('text')
     this.delims = null
     this.brackets = null
+    this.rubyEnd = -1
     while (this.pos < s.length) this.step()
     this.processEmphasis(null)
     return convert(this.root, false)
@@ -620,6 +651,17 @@ class InlineParser {
       }
     }
     if (c === 'h' && this.bareUrl()) return
+    if (c === '{') {
+      const m = rubyAt(s, this.pos)
+      if (m) {
+        const n = inode('ruby', m[1].trim())
+        n.title = m[2].trim()
+        appendChild(this.root, n)
+        this.pos += m[0].length
+        this.rubyEnd = this.pos
+        return
+      }
+    }
     // Plain text up to the next character that could mean something.
     SPECIAL.lastIndex = this.pos + 1
     const next = SPECIAL.exec(s)
@@ -668,8 +710,10 @@ class InlineParser {
     let end = this.pos
     while (s[end] === ch) end++
     const count = end - this.pos
-    const before = this.pos === 0 ? '\n' : s[this.pos - 1]
-    const after = end >= s.length ? '\n' : s[end]
+    // Furigana next to a delimiter reads as a word, so **{漢字|かんじ}**を is bold as it would be
+    // with the bare characters.
+    const before = this.pos === 0 ? '\n' : this.rubyEnd === this.pos ? 'a' : s[this.pos - 1]
+    const after = end >= s.length ? '\n' : rubyAt(s, end) ? 'a' : s[end]
     const afterSpace = SPACE.test(after)
     const afterPunct = PUNCT.test(after)
     const beforeSpace = SPACE.test(before)
@@ -897,6 +941,9 @@ function convert(parent: INode, inLink: boolean): Inline[] {
       case 'soft':
         push({ type: n.type })
         break
+      case 'ruby':
+        push({ type: 'ruby', base: n.text, reading: n.title! })
+        break
       case 'em':
       case 'strong':
       case 'del':
@@ -926,6 +973,7 @@ export function plain(nodes: Inline[]): string {
     .map((n) => {
       if (n.type === 'text' || n.type === 'code') return n.text
       if (n.type === 'image') return n.alt
+      if (n.type === 'ruby') return n.base
       if (n.type === 'br' || n.type === 'soft') return ' '
       return 'children' in n ? plain(n.children) : ''
     })
