@@ -16,6 +16,7 @@ import { trackVisualViewport } from './os/viewport'
 import { startSync } from './os/synced'
 import { startBrowserFiles } from './data/browserfs'
 import { initTheme } from './os/theme'
+import { initFurigana } from './data/furigana'
 import { WindowManagerProvider } from './os/wm'
 import './styles.css'
 import './home.css'
@@ -27,6 +28,7 @@ import './mobile.css'
 const play = playMode()
 
 initTheme()
+initFurigana()
 if (!play) applyDockReserve()
 registerServiceWorker()
 trackVisualViewport()

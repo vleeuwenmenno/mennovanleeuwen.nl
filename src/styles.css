@@ -7243,6 +7243,39 @@ button.fm-dd-row:hover {
   background: color-mix(in srgb, var(--orange) 55%, transparent);
   outline: 1px solid var(--orange);
 }
+/* Furigana ({漢字|かんじ} in Markdown, a <ruby>), as Settings → Language chooses; initFurigana
+   (src/data/furigana.ts) puts the choice on the root as data-furigana. Always is the default and
+   needs no rule. On hover keeps the room for the readings (visibility, not display) so nothing
+   shifts when one appears; a tap on touch screens counts as hover, and the words can be focused. */
+ruby {
+  ruby-position: over;
+  ruby-align: center;
+}
+ruby > rt {
+  font-size: 0.55em;
+  line-height: 1.1;
+  font-weight: 400;
+  letter-spacing: 0;
+  user-select: none;
+}
+:root[data-furigana='off'] rt,
+:root[data-furigana='off'] rp {
+  display: none;
+}
+:root[data-furigana='hover'] ruby:not(:hover, :focus-visible, :active) > rt {
+  visibility: hidden;
+}
+:root[data-furigana='hover'] ruby:focus-visible {
+  outline: none;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.set-furigana-sample {
+  margin: 14px 0 6px;
+  padding: 10px 14px;
+  font-size: 22px;
+  line-height: 1.9;
+  border: 1px solid var(--line-strong);
+}
 /* Markdown tables (MarkdownPreview): scroll sideways inside their own box when too wide. */
 .zed-preview .md-table {
   max-width: 100%;

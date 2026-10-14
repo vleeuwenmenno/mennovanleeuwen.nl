@@ -1,36 +1,53 @@
+import { furiganaMode } from '../../data/furigana'
 import { seg, width, wrap, type Line, type Seg } from './text'
 
 // Markdown as terminal lines, the way a CLI agent prints a reply: headings in bold, `code` in
 // colour, fenced blocks indented, lists with their marks, quotes with a bar, tables drawn with box
 // lines (or left as they are when too wide), links clickable.
 
-/** Inline Markdown: **bold**, *em*, `code`, [text](url), bare URLs. */
+// Furigana, {漢字|かんじ}: drawn as 漢字(かんじ), or as 漢字 alone when Settings → Language says Off.
+// Same shape as the one in src/data/markdown/parse.ts.
+const RUBY = /(?<![${])\{([^{}|\n\\`]{1,60})\|([^{}|\n\\`]{1,120})\}(?!\})/g
+const furigana = (t: string) =>
+  t.replace(RUBY, (all, base: string, reading: string) => (!base.trim() || !reading.trim() ? all : furiganaMode() === 'off' ? base.trim() : `${base.trim()}(${reading.trim()})`))
+
+/** Inline Markdown: **bold**, *em*, `code`, [text](url), bare URLs, furigana. */
 export function inline(text: string, base?: string): Seg[] {
   const out: Seg[] = []
   const re = /(`+)([\s\S]+?)\1|\*\*([^*]+)\*\*|__([^_]+)__|(?<![\w*])\*([^*\s][^*]*?)\*(?!\w)|(?<![\w_])_([^_\s][^_]*?)_(?!\w)|~~([^~]+)~~|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g
   let last = 0
   for (const m of text.matchAll(re)) {
-    if (m.index! > last) out.push(seg(text.slice(last, m.index), base))
+    if (m.index! > last) out.push(seg(furigana(text.slice(last, m.index)), base))
     if (m[2] !== undefined) out.push(seg(m[2], 'cyan'))
-    else if (m[3] !== undefined || m[4] !== undefined) out.push(seg(m[3] ?? m[4], 'bold'))
-    else if (m[5] !== undefined || m[6] !== undefined) out.push(seg(m[5] ?? m[6], base ?? 'yellow'))
-    else if (m[7] !== undefined) out.push(seg(m[7], 'muted'))
-    else if (m[8] !== undefined) out.push({ t: m[8], link: m[9] })
+    else if (m[3] !== undefined || m[4] !== undefined) out.push(seg(furigana(m[3] ?? m[4]), 'bold'))
+    else if (m[5] !== undefined || m[6] !== undefined) out.push(seg(furigana(m[5] ?? m[6]), base ?? 'yellow'))
+    else if (m[7] !== undefined) out.push(seg(furigana(m[7]), 'muted'))
+    else if (m[8] !== undefined) out.push({ t: furigana(m[8]), link: m[9] })
     else if (m[10] !== undefined) out.push({ t: m[10], link: m[10] })
     last = m.index! + m[0].length
   }
-  if (last < text.length) out.push(seg(text.slice(last), base))
+  if (last < text.length) out.push(seg(furigana(text.slice(last)), base))
   return out
 }
 
 const TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/
-const cells = (row: string) =>
-  row
-    .trim()
-    .replace(/^\|/, '')
-    .replace(/\|$/, '')
-    .split(/(?<!\\)\|/)
-    .map((c) => c.trim())
+// A pipe inside furigana ({a|b}) does not split a cell.
+function cells(row: string): string[] {
+  const t = row.trim().replace(/^\|/, '').replace(/\|$/, '')
+  const out: string[] = []
+  let cur = ''
+  for (let i = 0; i < t.length; i++) {
+    const ruby = t[i] === '{' && t[i - 1] !== '\\' ? /^\{[^{}|\n\\`]{1,60}\|[^{}|\n\\`]{1,120}\}/.exec(t.slice(i, i + 200)) : null
+    if (ruby) {
+      cur += ruby[0]
+      i += ruby[0].length - 1
+    } else if (t[i] === '|' && t[i - 1] !== '\\') {
+      out.push(cur.trim())
+      cur = ''
+    } else cur += t[i]
+  }
+  return [...out, cur.trim()]
+}
 
 function table(rows: string[], max: number): Line[] | null {
   const head = cells(rows[0])
