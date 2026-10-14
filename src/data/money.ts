@@ -12,8 +12,20 @@ import { KNOWN_CURRENCIES, SYMBOLS } from '../os/smartcalc.ts'
 // as Spotlight does; the specific forms (A$, C$, HK$, CN¥, RMB, 元…) name the others.
 //
 // Numbers: "1,234.56" and "1.234,56" both work. With both separators the last one is the decimal
-// point; a single separator followed by exactly three digits groups thousands ("¥1.500" is 1500,
-// "€0.945" stays a fraction since thousands never start with 0); anything else is a decimal point.
+// point, and the same separator more than once groups thousands ("1.234.567", "1,234,567"). A
+// single separator is where the currency matters (readNumber):
+//   - a comma followed by exactly three digits groups thousands ("$1,234", "€1,234");
+//   - a dot followed by exactly three digits is a decimal point for currencies written with a
+//     decimal dot, the dollars, the pound, the yuan, the rupee and so on ("$3.459/gal" is 3.459),
+//     and groups thousands for the rest: the euro and other continental styles ("€1.234" is 1234)
+//     and currencies without minor units ("¥1.234" is 1234);
+//   - after a leading 0 it is always a fraction ("€0.945"), since thousands never start with 0;
+//   - with one, two or four and more digits after it, it is a decimal point ("€1,5", "$1.50").
+//
+// A year is not an amount: "in 2026 USD", "since 1999 EUR", "October 2026 USD" (a 4-digit year,
+// 1900–2099, written plainly, with only a code next to it, after a month, a date or a word like
+// in, since, from, until, by, of, tot, sinds, vanaf). "2000 USD" and "costs 2026 USD" still count,
+// and so does "$2026": a sign always means money.
 
 export type MoneyHit = {
   /** Where the amount is in the text: [start, end) */
@@ -84,8 +96,18 @@ const MAGNITUDE: [RegExp, (m: string) => number][] = [
 // Between the two ends of a range: a dash, a tilde or 〜, with at most a space on either side.
 const RANGE = /^[  ]?(?:[-–—~〜])[  ]?$/
 
-/** A number as written, or null when its separators don't make one (a version, a date). */
-export function readNumber(raw: string): number | null {
+/**
+ * Currencies written with a decimal dot and a thousands comma: a lone ".xyz" after one of these is
+ * a fraction ("$3.459"). Every other currency reads it as thousands ("€1.234", "¥1.234").
+ */
+const DOT_DECIMAL = new Set(['USD', 'GBP', 'AUD', 'CAD', 'NZD', 'HKD', 'SGD', 'TWD', 'CNY', 'INR', 'PKR', 'LKR', 'NPR', 'BDT', 'MXN', 'PHP', 'THB', 'MYR', 'ILS', 'CHF', 'AED', 'SAR', 'QAR', 'KWD', 'BHD', 'OMR', 'JOD', 'EGP', 'NGN', 'KES', 'GHS', 'JMD', 'TTD', 'BSD', 'BBD', 'BZD', 'BMD', 'KYD', 'XCD', 'FJD', 'PGK', 'SBD', 'WST', 'TOP'])
+
+/**
+ * A number as written, or null when its separators don't make one (a version, a date). The
+ * currency decides a lone dot before three digits (see the top of this file); without one it
+ * groups thousands.
+ */
+export function readNumber(raw: string, currency?: string | null): number | null {
   const seps = raw.match(/\D/g) ?? []
   if (!seps.length) return Number(raw)
   const groups = raw.split(/\D/)
@@ -96,7 +118,8 @@ export function readNumber(raw: string): number | null {
     const before = seps.slice(0, -1)
     if (before.includes(last)) decimal = false // 1,234,567 or 1.234.567
     else if (before.length) decimal = true // 1,234.56, 1.234,56, 1 234,56
-    else decimal = tail.length !== 3 || /^0+$/.test(groups[0]) // 1,5 and 0.945; 1,500 groups thousands
+    // 1,5 and 0.945 are fractions; 1,500 groups thousands; 3.459 is a fraction in dollars, 1.234 euros are 1234.
+    else decimal = tail.length !== 3 || /^0+$/.test(groups[0]) || (last === '.' && !!currency && DOT_DECIMAL.has(currency))
   }
   const whole = decimal ? groups.slice(0, -1) : groups
   const thousands = decimal ? seps.slice(0, -1) : seps
@@ -109,27 +132,35 @@ export function readNumber(raw: string): number | null {
 
 const WORD = /[A-Za-z0-9_]/
 
+const MONTHS = 'january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec|januari|februari|maart|mei|juni|juli|augustus|oktober|mrt|okt'
+const YEAR_WORDS = 'in|since|from|until|till|through|by|of|before|after|during|year|tot|sinds|vanaf|van|voor|na|jaar|t/m'
+// What comes right before a year: a month (with or without its day), a date, or a word that takes one.
+const YEAR_CONTEXT = new RegExp(`(?:(?:^|[^A-Za-z])(?:${MONTHS})\\.?(?:\\s+\\d{1,2}(?:st|nd|rd|th)?,?)?|(?:^|[^A-Za-z/])(?:${YEAR_WORDS})|\\d{1,2}[-/.]\\d{1,2}[-/.]?|\\d{1,2}(?:st|nd|rd|th))\\s+$|\\d{1,2}[-/]\\d{1,2}[-/]$`, 'i')
+
 /** Every amount of money in plain text (no Markdown: see moneyInMarkdown), in order. */
 export function findMoney(text: string): MoneyHit[] {
   const hits: MoneyHit[] = []
   // The number before this one that had no currency, for "1,000–2,000円".
-  let loose: { start: number; end: number; value: number; text: string } | null = null
+  let loose: { start: number; end: number; raw: string; scale: number; text: string } | null = null
+  /** The value once the currency is known: it decides a lone ".xyz" (readNumber). */
+  const valueOf = (raw: string, scale: number, currency: string) => (readNumber(raw, currency) ?? NaN) * scale
   for (const m of text.matchAll(NUMBER)) {
+    const raw = m[0]
     const numStart = m.index!
-    const numEnd = numStart + m[0].length
+    const numEnd = numStart + raw.length
     // A trailing separator belongs to the sentence ("costs €5." / "€1,"); the regex never takes one.
-    let value = readNumber(m[0])
-    if (value === null) {
+    if (readNumber(raw) === null) {
       loose = null
       continue
     }
     // Magnitude.
     let after = text.slice(numEnd)
     let magEnd = numEnd
+    let scale = 1
     for (const [re, mul] of MAGNITUDE) {
       const mm = re.exec(after)
       if (mm) {
-        value *= mul(mm[1] ?? mm[0])
+        scale = mul(mm[1] ?? mm[0])
         magEnd = numEnd + mm[0].length
         break
       }
@@ -138,6 +169,8 @@ export function findMoney(text: string): MoneyHit[] {
 
     // A sign or code before it.
     let currency: string | null = null
+    /** Named by an ISO code rather than a sign */
+    let byCode = false
     let start = numStart
     const head = text.slice(Math.max(0, numStart - 6), numStart)
     const b = BEFORE.exec(head)
@@ -147,6 +180,7 @@ export function findMoney(text: string): MoneyHit[] {
       // "USD/EUR 1.08" is a pair, not an amount.
       if (c && text[signStart - 1] !== '/') {
         currency = c
+        byCode = !PREFIX[b[1]]
         start = signStart
       }
     }
@@ -170,6 +204,7 @@ export function findMoney(text: string): MoneyHit[] {
         end = magEnd + s[0].length
       } else if (c && codeOf(c[1]) && text[magEnd + c[0].length] !== '/') {
         currency = codeOf(c[1])
+        byCode = true
         end = magEnd + c[0].length
       }
     }
@@ -181,6 +216,12 @@ export function findMoney(text: string): MoneyHit[] {
       continue
     }
 
+    // A year next to a code, after a month, a date or "in"/"since"/…: "in 2026 USD" is about a year.
+    if (byCode && scale === 1 && /^(?:19|20)\d\d$/.test(raw) && YEAR_CONTEXT.test(text.slice(Math.max(0, start - 40), start))) {
+      loose = null
+      continue
+    }
+
     // The second end of a range takes the first one's currency ("¥167–170", "€0.94–0.96").
     const prev = hits[hits.length - 1]
     const gapPrev = prev ? text.slice(prev.end, start) : ''
@@ -188,22 +229,22 @@ export function findMoney(text: string): MoneyHit[] {
     if (!currency && ranged) currency = prev.currency
     // The first end takes the second's ("1,000–2,000円", "5-10 EUR").
     if (currency && !ranged && loose && start === numStart && RANGE.test(text.slice(loose.end, numStart))) {
-      hits.push({ start: loose.start, end: loose.end, text: loose.text, value: loose.value, currency })
+      hits.push({ start: loose.start, end: loose.end, text: loose.text, value: valueOf(loose.raw, loose.scale, currency), currency })
     }
 
     // A minus before it, not a range's dash: "-€5", "−$300", "-5 EUR".
     const minus = text[start - 1]
     if ((minus === '-' || minus === '−') && !ranged && (start === 1 || /[\s(]/.test(text[start - 2]))) {
       start -= 1
-      value = -value
+      scale = -scale
     }
 
     if (!currency) {
-      loose = { start, end: magEnd, value, text: text.slice(start, magEnd) }
+      loose = { start, end: magEnd, raw, scale, text: text.slice(start, magEnd) }
       continue
     }
     loose = null
-    hits.push({ start, end, text: text.slice(start, end), value, currency })
+    hits.push({ start, end, text: text.slice(start, end), value: valueOf(raw, scale, currency), currency })
   }
   return hits
 }

@@ -7350,7 +7350,13 @@ ruby > rt {
   gap: 8px;
   margin-top: 4px;
 }
+/* Already in the home currency: no line under the amount, so the list keeps its distance. */
+.fx-big + .fx-rows {
+  margin-top: 8px;
+}
 .fx-big-value {
+  flex: 1;
+  min-width: 0;
   color: var(--fg-bright);
   font-size: 24px;
   font-weight: 600;

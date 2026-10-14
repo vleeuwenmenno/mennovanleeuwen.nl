@@ -145,6 +145,13 @@ function MoneyPopover({ anchor, hit, onClose }: { anchor: RefObject<HTMLButtonEl
   const big = rates && fromRate ? formatCurrency(from === target ? hit.value : eur * rates.rates[target], from === target ? from : target) : ''
   const original = formatCurrency(hit.value, from)
   const toSpotlight = from === target ? (target === 'USD' ? 'EUR' : 'USD') : target
+  // Already in the home currency: the amount shows once, large, without a line repeating it.
+  const same = !!rates && !!fromRate && from === target
+  const close = (
+    <button type="button" className="fx-close" onClick={() => onClose(true)} aria-label="Close" title="Close">
+      ×
+    </button>
+  )
 
   let body: ReactNode
   if (!rates)
@@ -165,8 +172,9 @@ function MoneyPopover({ anchor, hit, onClose }: { anchor: RefObject<HTMLButtonEl
         <div className="fx-big">
           <span className="fx-big-value">{big}</span>
           <CopyButton text={big} copied={copied === big} onCopy={copy} />
+          {same && close}
         </div>
-        <p className="fx-big-note muted">{from === target ? 'In your home currency' : `${original} in your home currency, ${target}`}</p>
+        {!same && <p className="fx-big-note muted">{`${original} in your home currency, ${target}`}</p>}
         {codes.length > 0 && (
           <ul className="fx-rows">
             {codes.map((c) => {
@@ -182,7 +190,7 @@ function MoneyPopover({ anchor, hit, onClose }: { anchor: RefObject<HTMLButtonEl
           </ul>
         )}
         <p className="fx-note muted">
-          1 {from} = {formatNumber(rates.rates[target === from ? toSpotlight : target] / fromRate, 6)} {target === from ? toSpotlight : target} · {rateSource(rates, from, target)}, {rates.date}
+          1 {from} = {formatNumber(rates.rates[target === from ? toSpotlight : target] / fromRate, 6)} {target === from ? toSpotlight : target} · {rateSource(rates, from, toSpotlight)}, {rates.date}
         </p>
       </>
     )
@@ -197,12 +205,12 @@ function MoneyPopover({ anchor, hit, onClose }: { anchor: RefObject<HTMLButtonEl
       style={pos ? { left: pos.left, top: pos.top, width: pos.width } : { left: -9999, top: 0 }}
       onContextMenu={(e) => e.stopPropagation()}
     >
-      <div className="fx-head">
-        <span className="fx-from">{original}</span>
-        <button type="button" className="fx-close" onClick={() => onClose(true)} aria-label="Close" title="Close">
-          ×
-        </button>
-      </div>
+      {!same && (
+        <div className="fx-head">
+          <span className="fx-from">{original}</span>
+          {close}
+        </div>
+      )}
       {body}
       <div className="fx-actions">
         <button

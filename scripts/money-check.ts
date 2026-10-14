@@ -62,6 +62,33 @@ const CASES: [string, string, string][] = [
   ['comma decimal', '€1,5 per kilo', '€1,5=1.5 EUR'],
   ['zero point three digits stays a fraction', '€0.945/kWh', '€0.945=0.945 EUR'],
   ['yen thousands with dots', '¥1.234.567', '¥1.234.567=1234567 JPY'],
+  // A lone dot before three digits: a decimal point in dot-decimal currencies, thousands elsewhere.
+  ['dollars per gallon, three decimals', 'Gas is $3.459/gal', '$3.459=3.459 USD'],
+  ['US$ with three decimals', 'US$3.459', 'US$3.459=3.459 USD'],
+  ['A$, C$, HK$ with three decimals', 'A$1.299, C$2.005, HK$9.999', 'A$1.299=1.299 AUD | C$2.005=2.005 CAD | HK$9.999=9.999 HKD'],
+  ['pound with three decimals', '£1.250 a litre', '£1.250=1.25 GBP'],
+  ['dot-decimal codes', '3.459 USD, CNY 1.234, 1.500 INR', '3.459 USD=3.459 USD | CNY 1.234=1.234 CNY | 1.500 INR=1.5 INR'],
+  ['dollar range with three decimals', '$3.459–3.499', '$3.459=3.459 USD | 3.499=3.499 USD'],
+  ['backward range in a dot-decimal code', '3.459-3.499 USD', '3.459=3.459 USD | 3.499 USD=3.499 USD'],
+  ['euro dot still thousands', '€1.234 and 1.500 EUR', '€1.234=1234 EUR | 1.500 EUR=1500 EUR'],
+  ['krone and złoty dot thousands', 'DKK 1.234 and 2.500 zł', 'DKK 1.234=1234 DKK | 2.500 zł=2500 PLN'],
+  ['yen, won and dong dot thousands', '¥1.234, ₩5.000, VND 250.000', '¥1.234=1234 JPY | ₩5.000=5000 KRW | VND 250.000=250000 VND'],
+  ['unambiguous forms in dollars unchanged', '$1,234 / $1,234.56 / $1.234.567 / $1.234,56', '$1,234=1234 USD | $1,234.56=1234.56 USD | $1.234.567=1234567 USD | $1.234,56=1234.56 USD'],
+  // Years next to a code.
+  ['a year after in', 'Prices in 2026 USD terms', ''],
+  ['a year after since and from', 'since 1999 EUR, from 2010 GBP', ''],
+  ['a year after until and by', 'until 2030 USD; by 2035 EUR', ''],
+  ['a year after of', 'the budget of 2027 EUR', ''],
+  ['a year after a month', 'October 2026 USD and Sept 2025 EUR', ''],
+  ['a year after a month and day', 'March 14, 2026 USD', ''],
+  ['a year after a Dutch date', '14 oktober 2026 EUR, mrt 2025 EUR', ''],
+  ['a year after Dutch words', 'tot 2030 EUR, sinds 2020 EUR, vanaf 2027 EUR', ''],
+  ['a year after a numeric date', '14/10/2026 USD and 14-10-2026 EUR', ''],
+  ['a year amount alone', '2000 USD', '2000 USD=2000 USD'],
+  ['a year amount after costs', 'It costs 2026 USD', '2026 USD=2026 USD'],
+  ['a year-like amount with a sign', 'in $2026 and since €1999', '$2026=2026 USD | €1999=1999 EUR'],
+  ['not a year: decimals or thousands', 'in 2026.50 USD and in 2,026 USD', '2026.50 USD=2026.5 USD | 2,026 USD=2026 USD'],
+  ['not a year: out of range', 'in 2100 USD and in 1899 EUR', '2100 USD=2100 USD | 1899 EUR=1899 EUR'],
   // Magnitudes.
   ['k and M', '¥60k, $1.2M', '¥60k=60000 JPY | $1.2M=1200000 USD'],
   ['bn and million', '$3bn or €2 million', '$3bn=3000000000 USD | €2 million=2000000 EUR'],
@@ -110,6 +137,7 @@ for (const [what, md, want] of CASES) {
 }
 check(`detection table has at least 40 cases (${CASES.length})`, CASES.length >= 40)
 check('readNumber: 1,234.56 / 1.234,56 / 1,5 / 1.2.3', readNumber('1,234.56') === 1234.56 && readNumber('1.234,56') === 1234.56 && readNumber('1,5') === 1.5 && readNumber('1.2.3') === null)
+check('readNumber: a lone dot before three digits follows the currency', readNumber('3.459', 'USD') === 3.459 && readNumber('3.459', 'GBP') === 3.459 && readNumber('1.234', 'EUR') === 1234 && readNumber('1.234', 'JPY') === 1234 && readNumber('1.234') === 1234 && readNumber('1,234', 'USD') === 1234 && readNumber('0.945', 'EUR') === 0.945)
 check('findMoney gives positions', JSON.stringify(findMoney('a €5 b').map((h) => [h.start, h.end])) === '[[2,4]]')
 
 // --- The rate sources' stand-ins ------------------------------------------------------------------
