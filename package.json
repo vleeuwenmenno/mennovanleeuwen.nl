@@ -30,6 +30,7 @@
     "check:empires-models": "node scripts/empires-models.ts",
     "check:empires-yards": "node scripts/empires-yards.ts",
     "check:empires-modules": "node scripts/empires-modules.ts",
+    "check:empires-cancel": "node scripts/empires-cancel.ts",
     "check:empires-gc-buildings": "node scripts/empires-gc-buildings.ts",
     "check:empires-rush": "node scripts/empires-rush.ts",
     "check:empires-allies": "node scripts/empires-allies.ts",

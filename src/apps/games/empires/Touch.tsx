@@ -64,6 +64,39 @@ export class LongPress {
   }
 }
 
+/**
+ * A finger's way to cancel something queued (research, an expansion, a platform upgrade): a long
+ * press (with `cancel`; without one the handlers only watch). The click that follows it is
+ * swallowed, so a cancelled tile isn't ordered again at once, and `touched` tells the context
+ * menu, which some phones open on a long press too, to leave it be. The data-longpress mark keeps
+ * the long-press tooltip from showing as well.
+ */
+export function useCancelPress() {
+  const lp = useRef(new LongPress())
+  const touch = useRef(false)
+  return {
+    touched: () => touch.current,
+    handlers: (cancel: (() => void) | null) => ({
+      ...(cancel ? { 'data-longpress': '' } : {}),
+      onPointerDown: (e: React.PointerEvent) => {
+        touch.current = isTouch(e)
+        lp.current.fired = false
+        if (cancel && isTouch(e)) lp.current.start(e, cancel)
+      },
+      onPointerMove: (e: React.PointerEvent) => void (isTouch(e) && lp.current.move(e)),
+      onPointerUp: () => lp.current.cancel(),
+      onPointerCancel: () => lp.current.cancel(),
+      onClickCapture: (e: React.MouseEvent) => {
+        if (lp.current.fired) {
+          lp.current.fired = false
+          e.preventDefault()
+          e.stopPropagation()
+        }
+      },
+    }),
+  }
+}
+
 // --- sticky modifiers (the touch bar) ----------------------------------------------------------
 
 type Mods = { shift: boolean; box: boolean }

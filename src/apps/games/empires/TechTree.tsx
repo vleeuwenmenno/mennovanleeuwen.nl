@@ -1,10 +1,11 @@
-import { useRef } from 'react'
 import { LEVEL_UP, MAX_LEVEL, MAX_RESEARCH, MODULE, TECH, UPGRADES, WORKS_NAME, buildable, modulesFor, techsFor, unitOf, worksOf, yardOf, type FactionId, type ModuleId, type UnitType, type Works } from './data'
 import { HP_COLOR } from './icons'
 import { HpIcon, Icon, TechIcon, fmt, levelBlurb, moduleState, moduleTip, researchName, techState, unitArt, type Hud, type TechStatus } from './Hud'
 import { Modal } from './Menus'
 import type { Owner, World } from './sim'
-import { LongPress, isTouch, useCoarse } from './Touch'
+import { useCancelPress, useCoarse } from './Touch'
+
+const CANCEL_TIP = 'Right-click to cancel (full refund). Long-press on touch.'
 
 // The tech tree: everything a faction can research, one line for the station (its levels and its
 // own upgrades) and one per ship type, with prerequisites drawn as connectors. It opens over the
@@ -121,7 +122,7 @@ function ResearchQueue({ hud, onCancel }: { hud: Hud; onCancel: (index: number) 
               <strong>{researchName(r.id, hud.level)}</strong>
               <small>{i === 0 ? `${Math.ceil(r.left)}s left` : `Starts in ${Math.ceil(starts)}s`}</small>
             </span>
-            <button className="ew-close" onClick={() => onCancel(i)} data-tip="Cancel and refund" aria-label={`Cancel ${researchName(r.id, hud.level)}`}>
+            <button className="ew-close" onClick={() => onCancel(i)} data-tip={CANCEL_TIP} aria-label={`Cancel ${researchName(r.id, hud.level)}`}>
               ✕
             </button>
             {i === 0 && <i style={{ width: `${(1 - r.left / r.total) * 100}%` }} />}
@@ -139,10 +140,11 @@ function ResearchQueue({ hud, onCancel }: { hud: Hud; onCancel: (index: number) 
 /**
  * Hybrid bases: one building's expansions as a line of the tree, the building at its head (with
  * where it stands: built, going up, or what it needs) and a tile per module, with what it does, its
- * price and time and where it stands. Click a tile to order it on the building, again to call it off.
+ * price and time and where it stands. Click a tile to order it on the building, right-click one queued to cancel it (a full refund).
  */
 function BaseLine({ kind, w, me, hud, faction, onExpand, onCancel }: { kind: Works; w: World; me: Owner; hud: Hud; faction: FactionId; onExpand: (uid: number, id: ModuleId) => void; onCancel: (uid: number, index: number) => void }) {
   const art = unitArt
+  const press = useCancelPress()
   const mods = modulesFor(kind)
   const t = kind === 'station' ? unitOf(faction, 'station') : yardOf(faction, kind)
   const u = kind === 'station' ? w.byId.get(w.players[me].station) : w.units.find((x) => !x.dead && x.owner === me && x.t.id === t.id)
@@ -162,8 +164,13 @@ function BaseLine({ kind, w, me, hud, faction, onExpand, onCancel }: { kind: Wor
         const label = s.status === 'built' ? '✓ Built' : s.status === 'lost' ? 'Shot off: engineers weld it back' : s.status === 'busy' ? `${Math.ceil(s.left)}s left` : s.status === 'queued' ? `Queued, #${s.slot + 1}` : s.status === 'poor' ? (s.why === 'Not enough credits' ? `Need ${fmt(MODULE[m.id].cost - hud.credits)} more` : s.why ?? '') : 'Build'
         return (
           <div key={m.id} className={`ew-tnode is-${status}`} style={{ gridColumn: i + 2, gridRow: 1 }}>
-            <button className="ew-tnode-main" disabled={s.status === 'built'} onClick={() => (queued ? onCancel(u!.id, s.slot) : u && (s.status === 'ready' || s.status === 'poor') ? onExpand(u.id, m.id) : undefined)}
-              data-tip={`${moduleTip(m.id)}${s.why && !queued ? `\n\n${s.why}` : queued ? '\n\nClick to call it off (refunded).' : ''}`}>
+            <button className="ew-tnode-main" disabled={s.status === 'built'} onClick={() => (u && (s.status === 'ready' || s.status === 'poor') ? onExpand(u.id, m.id) : undefined)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                if (queued && !press.touched()) onCancel(u!.id, s.slot)
+              }}
+              {...press.handlers(queued ? () => onCancel(u!.id, s.slot) : null)}
+              data-tip={`${moduleTip(m.id)}${s.why && !queued ? `\n\n${s.why}` : queued ? `\n\n${CANCEL_TIP}` : ''}`}>
               <span className="ew-modicon ew-tt-modicon" style={{ ['--c' as string]: HP_COLOR[m.kind] }}><HpIcon kind={m.kind} size={26} /></span>
               <span className="ew-tnode-text">
                 <strong>{m.name}</strong>
@@ -284,7 +291,7 @@ function Tile({ n, s, hud, faction, col, lane, onResearch, onCancel }: {
           if (queued && !press.touched()) onCancel(s.slot)
         }}
         {...press.handlers(queued ? () => onCancel(s.slot) : null)}
-        data-tip={`${name}\n${blurb}${s.why && s.status !== 'done' && !queued ? `\n\n${s.why}` : ''}`}
+        data-tip={`${name}\n${blurb}${s.why && s.status !== 'done' && !queued ? `\n\n${s.why}` : queued ? `\n\n${CANCEL_TIP}` : ''}`}
       >
         <TechIcon id={n.id} size={52} progress={s.progress} status={s.status} />
         <span className="ew-tnode-text">
@@ -309,42 +316,10 @@ function Tile({ n, s, hud, faction, col, lane, onResearch, onCancel }: {
         {s.status === 'busy' && <i className="ew-tnode-bar" style={{ width: `${s.progress * 100}%` }} />}
       </button>
       {queued && (
-        <button className="ew-tnode-x" onClick={() => onCancel(s.slot)} data-tip="Cancel and refund" aria-label={`Cancel ${name}`}>
+        <button className="ew-tnode-x" onClick={() => onCancel(s.slot)} data-tip={CANCEL_TIP} aria-label={`Cancel ${name}`}>
           ✕
         </button>
       )}
     </div>
   )
-}
-
-/**
- * A finger's way to cancel research: a long press (with `cancel`; without one the handlers only
- * watch). The click that follows it is swallowed, so a cancelled tile isn't queued again at once,
- * and `touched` tells the context menu, which some phones open on a long press too, to leave it be.
- * The data-longpress mark keeps the long-press tooltip from showing as well.
- */
-function useCancelPress() {
-  const lp = useRef(new LongPress())
-  const touch = useRef(false)
-  return {
-    touched: () => touch.current,
-    handlers: (cancel: (() => void) | null) => ({
-      ...(cancel ? { 'data-longpress': '' } : {}),
-      onPointerDown: (e: React.PointerEvent) => {
-        touch.current = isTouch(e)
-        lp.current.fired = false
-        if (cancel && isTouch(e)) lp.current.start(e, cancel)
-      },
-      onPointerMove: (e: React.PointerEvent) => void (isTouch(e) && lp.current.move(e)),
-      onPointerUp: () => lp.current.cancel(),
-      onPointerCancel: () => lp.current.cancel(),
-      onClickCapture: (e: React.MouseEvent) => {
-        if (lp.current.fired) {
-          lp.current.fired = false
-          e.preventDefault()
-          e.stopPropagation()
-        }
-      },
-    }),
-  }
 }
