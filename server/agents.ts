@@ -2093,6 +2093,21 @@ async function runTool(user: User, key: string, thread: string, mode: Mode, call
 
 type ChatMessage = { role: string; content: string; thinking?: string; tool_calls?: { function: ToolCall }[]; tool_name?: string; images?: string[] }
 
+/**
+ * How to write furigana, from the user's choice in Settings → Language & region (synced state
+ * "furigana", src/data/furigana.ts). Always added, so it holds with the user's own AGENTS.md too:
+ * without it models fall back to HTML <ruby>, which the parser only reads as a fallback.
+ */
+export function furiganaLine(user: User): string {
+  const mode = readState(user).furigana?.value
+  if (mode === 'off')
+    return 'Furigana (readings above kanji) is off in the user\'s settings, so readings do not show: do not add furigana. If the user asks for readings, give them in parentheses after the word, and mention that furigana can be turned on in Settings → Language & region.'
+  return [
+    'Furigana: write a reading as {漢字|かんじ} (the characters, a pipe, the reading, in braces); it shows as ruby text above the characters, in paragraphs, lists, bold text and table cells alike. Never write HTML such as <ruby>, <rt> or <rp>, and do not repeat the reading in parentheses next to it.',
+    'The user has furigana turned on: when a reply teaches or explains Japanese (vocabulary, kanji, readings, grammar examples), add furigana to the kanji without being asked. Elsewhere, add it only when the user asks or Memory says so.',
+  ].join(' ')
+}
+
 const modeLine = (mode: Mode) =>
   mode === 'quick'
     ? 'Mode: Quick. Answer quickly and directly. Use a tool only when the answer depends on current or specific facts you do not know; one or two searches is usually enough. Keep the answer short.'
@@ -2122,6 +2137,7 @@ async function systemPrompt(user: User, mode: Mode, projectId: number | null = n
     base.trim(),
     dateLine(more.zone ?? zoneFor(null)),
     modeLine(mode),
+    furiganaLine(user),
     'When you need a decision, a choice or details from the user, ask with ask_user (a small form: choices, multiple choice, yes or no, text, numbers, ratings, dates) rather than asking in prose, and use the answers. Keep forms short. Ask before creating, renaming or moving projects unless the user already asked for it.',
     'Long jobs (many items or many steps, such as importing a long list, research in many parts or a batch of file changes): write a todo list with update_todos first, then work through it, keeping it up to date; while items are open you can keep going for many rounds. Batch where tools allow it (remember takes up to 50 facts per call), and report briefly at the end.',
     project

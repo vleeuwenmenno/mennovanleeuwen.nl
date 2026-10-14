@@ -163,6 +163,41 @@ function rubyAt(s: string, pos: number): RegExpExecArray | null {
   return m && m[1].trim() && m[2].trim() && s[pos + m[0].length] !== '}' ? m : null
 }
 
+// Furigana written as HTML, which models reach for when they do not know {…|…}:
+// <ruby>漢字<rt>かんじ</rt></ruby>, optionally with <rp>(</rp>…<rp>)</rp> around the reading or <rb>
+// around the base, and several base/reading pairs in one ruby (<ruby>漢<rt>かん</rt>字<rt>じ</rt></ruby>).
+// Tags take no attributes and any case. Only the text comes through, as ruby nodes, never the
+// HTML itself; anything malformed stays plain text. Same limits and characters as RUBY.
+const HTML_RUBY = /^<ruby>([^\n]{1,600}?)<\/ruby>/i
+const HTML_RUBY_PAIR = /^[ \t]*(?:<rb>([^<>\n]*)<\/rb>|([^<>\n]*))[ \t]*(?:<rp>[^<>\n]{0,4}<\/rp>)?<rt>([^<>\n]*)<\/rt>(?:<rp>[^<>\n]{0,4}<\/rp>)?[ \t]*/i
+const RUBY_TEXT = /^[^{}|\n\\`<>]+$/
+
+export type RubyPair = { base: string; reading: string }
+
+/** The HTML ruby starting at `pos` in `s`: how long it is and its base/reading pairs, or null. */
+export function htmlRubyAt(s: string, pos: number): { length: number; pairs: RubyPair[] } | null {
+  if (s[pos] !== '<' || (s[pos + 1] !== 'r' && s[pos + 1] !== 'R')) return null
+  const m = HTML_RUBY.exec(s.slice(pos, pos + 640))
+  if (!m) return null
+  const pairs: RubyPair[] = []
+  let body = m[1]
+  while (body.trim()) {
+    const p = HTML_RUBY_PAIR.exec(body)
+    if (!p || !p[0]) return null
+    const base = decodeEntities(p[1] ?? p[2]).trim()
+    const reading = decodeEntities(p[3]).trim()
+    if (!base || !reading || base.length > 60 || reading.length > 120 || !RUBY_TEXT.test(base) || !RUBY_TEXT.test(reading)) return null
+    pairs.push({ base, reading })
+    body = body.slice(p[0].length)
+  }
+  return pairs.length ? { length: m[0].length, pairs } : null
+}
+
+/** Entities (&amp;, &#x6F22;) in the text of an HTML ruby. */
+function decodeEntities(s: string) {
+  return s.replace(/&(?:#[xX][0-9a-fA-F]{1,6}|#[0-9]{1,7}|[a-zA-Z][a-zA-Z0-9]{1,31});/g, (all) => entity(all) ?? all)
+}
+
 function tableCells(line: string): string[] {
   let t = line.trim()
   if (t.startsWith('|')) t = t.slice(1)
@@ -641,7 +676,20 @@ class InlineParser {
       return
     }
     if (c === ']') return this.closeBracket()
-    if (c === '<' && this.autolink()) return
+    if (c === '<') {
+      const r = htmlRubyAt(s, this.pos)
+      if (r) {
+        for (const p of r.pairs) {
+          const n = inode('ruby', p.base)
+          n.title = p.reading
+          appendChild(this.root, n)
+        }
+        this.pos += r.length
+        this.rubyEnd = this.pos
+        return
+      }
+      if (this.autolink()) return
+    }
     if (c === '&') {
       const m = /^&(?:#[xX][0-9a-fA-F]{1,6}|#[0-9]{1,7}|[a-zA-Z][a-zA-Z0-9]{1,31});/.exec(s.slice(this.pos, this.pos + 40))
       const e = m && entity(m[0])
@@ -713,7 +761,7 @@ class InlineParser {
     // Furigana next to a delimiter reads as a word, so **{漢字|かんじ}**を is bold as it would be
     // with the bare characters.
     const before = this.pos === 0 ? '\n' : this.rubyEnd === this.pos ? 'a' : s[this.pos - 1]
-    const after = end >= s.length ? '\n' : rubyAt(s, end) ? 'a' : s[end]
+    const after = end >= s.length ? '\n' : rubyAt(s, end) || htmlRubyAt(s, end) ? 'a' : s[end]
     const afterSpace = SPACE.test(after)
     const afterPunct = PUNCT.test(after)
     const beforeSpace = SPACE.test(before)
