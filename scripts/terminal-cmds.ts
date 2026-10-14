@@ -10,6 +10,8 @@
 //   - `ls` with several arguments (GNU style: files first, then each folder under `name:`) and
 //     `open <app>`, run through the real command table (src/terminal/commands.ts), loaded by Vite
 //     the way the site loads it.
+//   - cmatrix: its flags, its usage, refusing a pipe, quitting on q, Esc, Ctrl+C and (with -s)
+//     any key, and the rain itself staying inside its grid through resizes.
 //
 // Exits 1 on any failure.
 
@@ -317,6 +319,138 @@ try {
   const { completions } = (await vite.ssrLoadModule('/src/terminal/commands.ts')) as typeof import('../src/terminal/commands.ts')
   check(completions('xx', HOME).items.some((i) => i.value === 'xxd'), 'Tab completes xxd')
   check(completions('xxd -', HOME).items.some((i) => i.value === '-p'), 'Tab completes the options of xxd')
+
+  // --- cmatrix ------------------------------------------------------------------------------------
+
+  const mx = (await vite.ssrLoadModule('/src/terminal/cmatrix.ts')) as typeof import('../src/terminal/cmatrix.ts')
+  const opts = (line: string) => {
+    const o = mx.parseMatrixArgs(line.split(' ').filter(Boolean))
+    return [o.ascii, o.color, o.rainbow, o.speed, o.screensaver, o.help]
+  }
+  eq(opts(''), [false, 'green', false, 4, false, false], 'cmatrix: katakana, green, speed 4 by default')
+  eq(opts('-a'), [true, 'green', false, 4, false, false], 'cmatrix -a: ascii')
+  eq(opts('-a -k'), [false, 'green', false, 4, false, false], 'cmatrix -a -k: katakana again')
+  eq(opts('-ars'), [true, 'green', true, 4, true, false], 'cmatrix -ars: flags cluster')
+  eq(opts('-u 7'), [false, 'green', false, 7, false, false], 'cmatrix -u 7')
+  eq(opts('-u0'), [false, 'green', false, 0, false, false], 'cmatrix -u0')
+  eq(opts('-C red'), [false, 'red', false, 4, false, false], 'cmatrix -C red')
+  eq(opts('-sCcyan'), [false, 'cyan', false, 4, true, false], 'cmatrix -sCcyan')
+  eq(opts('-C Blue -r'), [false, 'blue', true, 4, false, false], 'cmatrix -C Blue -r')
+  for (const [line, want] of [
+    ['cmatrix -u 12', '-u takes a delay from 0 to 9'],
+    ['cmatrix -u', "option requires an argument -- 'u'"],
+    ['cmatrix -C pink', "invalid color 'pink'"],
+    ['cmatrix -x', "invalid option -- 'x'"],
+    ['cmatrix now', "unexpected argument 'now'"],
+  ]) {
+    const r = await run(line)
+    check(!r.ok && r.out.includes(want), `${line}: ${want}`, r.out)
+  }
+  const usage = await run('cmatrix -h')
+  check(usage.ok && usage.out.includes('Usage: cmatrix') && usage.out.includes('-C color'), 'cmatrix -h: usage', usage.out)
+  check((await out('cmatrix -r -h')).includes('Usage: cmatrix'), 'cmatrix -r -h: usage too')
+  check((await out('man cmatrix')).includes('-u delay'), 'man cmatrix lists the options')
+  const piped = await run('cmatrix | cat')
+  check(piped.out.includes('cmatrix: not a terminal'), 'cmatrix | cat: not a terminal', piped.out)
+  const noScreen = await run('cmatrix')
+  check(!noScreen.ok && noScreen.out === 'cmatrix: needs a terminal window', 'cmatrix with no window to paint (here, Node): says so', noScreen.out)
+
+  // Running: the area is taken, q gives it back and the command ends; Ctrl+C too.
+  const session = (args: string[]) => {
+    let key: ((k: string) => boolean) | null = null
+    const log: string[] = []
+    const abort = new AbortController()
+    const ctx = {
+      args,
+      tty: true,
+      signal: abort.signal,
+      onKey: (h: ((k: string) => boolean) | null) => void ((key = h), log.push(h ? 'keys' : 'no keys')),
+      paint: () => (log.push('paint'), () => void log.push('released')),
+    }
+    const done = mx.cmatrix(ctx as never)
+    return { done, log, press: (k: string) => key?.(k), abort: () => abort.abort() }
+  }
+  const settled = (p: Promise<unknown>) => Promise.race([p.then(() => true), new Promise((r) => setTimeout(() => r(false), 200))])
+  {
+    const s = session([])
+    eq(s.log, ['keys', 'paint'], 'cmatrix takes the keys and the area')
+    s.press('5')
+    s.press(' ')
+    s.press('!')
+    check(!(await settled(s.done)), 'speed, pause and colour keys do not quit')
+    check(s.press('q') === true, 'q is swallowed')
+    check(await settled(s.done), 'q ends it')
+    eq(s.log, ['keys', 'paint', 'no keys', 'released'], 'and hands keys and area back')
+  }
+  {
+    const s = session([])
+    s.press('Escape')
+    check(await settled(s.done), 'Esc ends it')
+  }
+  {
+    const s = session([])
+    s.abort()
+    check(await settled(s.done), 'Ctrl+C ends it')
+    check(s.log.includes('released'), 'Ctrl+C hands the area back')
+  }
+  {
+    const s = session(['-s'])
+    s.press('Shift')
+    check(!(await settled(s.done)), 'cmatrix -s: Shift alone does not quit')
+    s.press('x')
+    check(await settled(s.done), 'cmatrix -s: any other key quits')
+  }
+  {
+    const s = session([])
+    s.press('x')
+    check(!(await settled(s.done)), 'without -s, other keys do not quit')
+    s.press('Q')
+    await s.done
+  }
+
+  // The rain itself: any size, resized while it runs, stays inside its grid.
+  {
+    const rain = new mx.Rain(200, 60, 67, 4, 7)
+    const sane = (what: string) => {
+      const { cols, rows } = rain
+      const size = cols * rows
+      let ok = rain.glyph.length === size && rain.bright.length === size && rain.wait.length === cols && rain.n <= rain.dx.length
+      for (let i = 0; i < size && ok; i++) ok = rain.glyph[i] < 67 && rain.bright[i] <= 1 && rain.hue[i] < 7
+      for (let k = 0; k < rain.n && ok; k++) ok = rain.dx[k] >= 0 && rain.dx[k] < cols && rain.dy[k] < rows + 1
+      check(ok, what)
+    }
+    for (let i = 0; i < 600; i++) rain.step(1 / 144)
+    sane('rain: 200×60 after 600 frames at 144 Hz')
+    let lit = 0
+    for (let i = 0; i < rain.bright.length; i++) if (rain.bright[i] > 0) lit++
+    check(lit > 200 * 60 * 0.1 && lit < 200 * 60 * 0.9, 'rain: a good part of the screen is lit, not all of it', String(lit))
+    rain.resize(40, 10)
+    for (let i = 0; i < 100; i++) rain.step(1 / 60)
+    sane('rain: shrunk to 40×10 while running')
+    rain.resize(250, 70)
+    for (let i = 0; i < 100; i++) rain.step(1 / 240)
+    sane('rain: grown to 250×70')
+    rain.resize(1, 1)
+    rain.step(0.1)
+    sane('rain: 1×1')
+    const shades = new Set<number>()
+    for (const b of [1, 0.99, 0.5, 0.01, 0, -0.2]) shades.add(mx.shadeOf(b))
+    eq([...shades], [12, 6, 1, 0], 'shades: full, half, nearly gone, empty')
+    const paused = new mx.Rain(30, 20, 67, 4)
+    for (let i = 0; i < 100; i++) paused.step(1 / 60)
+    const before = paused.glyph.join() + paused.bright.join()
+    paused.paused = true
+    for (let i = 0; i < 100; i++) paused.step(1 / 60)
+    check(paused.glyph.join() + paused.bright.join() === before, 'rain: paused, nothing moves')
+    // The same distance per second at any refresh rate.
+    const fall = (hz: number) => {
+      const r = new mx.Rain(1, 1000, 67, 4, 1, () => 0.5)
+      r.wait[0] = 0
+      for (let i = 0; i < hz; i++) r.step(1 / hz)
+      return r.dy[0]
+    }
+    check(Math.abs(fall(60) - fall(240)) < 0.5, 'rain: falls as far in a second at 60 Hz as at 240 Hz', `${fall(60)} ${fall(240)}`)
+  }
 } finally {
   await vite.close()
 }

@@ -233,6 +233,18 @@ mounts: the account's quota and usage (`/api/seafile/quota`), and each library's
 what is left of the quota; `du` (`-a`, `-s`, `-c`, `-d`, `-h`, `-x`) adds up folders through the
 mounts, Seafile's included.
 
+`cmatrix` ([`src/terminal/cmatrix.ts`](src/terminal/cmatrix.ts)) is the film's rain: mirrored
+half-width katakana with digits and a few symbols, a glowing head, a trail that fades through a
+dozen shades into the background, characters that flicker while they fade, drops at their own
+speeds. The flags follow the real one: `-a` the old ASCII look, `-C <color>` (green, red, blue,
+cyan, magenta, yellow, white), `-r` rainbow, `-u 0-9` speed, `-s` screensaver (any key quits),
+`-h` help; while it runs, `0`–`9` change the speed, `p` or space pauses, `!@#$%^&` change the
+colour, and `q` or Esc quits. It paints a canvas through `ctx.paint` (a full-window area on the
+alternate screen) rather than text: a frame redraws only the cells whose character or shade
+changed, copied from a sheet of glyphs drawn once, with the heads and their glow on a second
+canvas, so it keeps up with 144 and 240 Hz screens. The rain runs on time, not frames, so the
+speed is the same at any refresh rate.
+
 `/dev` behaves like one ([`src/terminal/devices.ts`](src/terminal/devices.ts)): `/dev/urandom` and
 `/dev/random` give random bytes, `/dev/zero` NULs, `/dev/null` nothing (and swallows writes). The
 real ones never end; here a read gives 64 KiB at most, so `cat /dev/urandom` stops. The disks
