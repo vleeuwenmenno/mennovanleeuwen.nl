@@ -3271,6 +3271,11 @@ input.is-bad {
   height: 12px;
   border-radius: 99px;
 }
+/* A calendar hidden everywhere: dimmed, its switch stays clear. */
+.set-row.is-hidden > .set-swatch,
+.set-row.is-hidden > .set-row-text {
+  opacity: 0.5;
+}
 
 /* ---------- Agenda and Code inbox widgets ---------- */
 

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { isShown, setCalendarShown, useCalendarChoice, useCalendarList } from '../data/calendar'
+import { isShown, setCalendarHidden, setCalendarShown, useAllCalendars, useCalendarChoice, useCalendarList, useHiddenCalendars } from '../data/calendar'
+import { useTasks } from '../data/tasks'
+import { BIRTHDAY_COLOR, BIRTHDAYS } from './calendar/birthdays'
 import { ENGINES, setSearchSettings, useSearchSettings, type EngineId } from '../data/searchEngine'
 import { setLinkSettings, useLinkSettings } from '../data/links'
 import { clearVisits, useVisits } from '../data/siteHistory'
@@ -1404,6 +1406,7 @@ function CalendarSettings() {
   return (
     <>
       <IntegrationNotice sub="calendars" linked={linked} app="Calendar" invite="Link a calendar account to get started." />
+      {linked && <HiddenCalendars />}
       {calendars && calendars.length > 0 && (
         <>
           <h4 className="set-subhead">Your calendars</h4>
@@ -1426,6 +1429,44 @@ function CalendarSettings() {
         </>
       )}
       <CalendarAppPrefs />
+    </>
+  )
+}
+
+/** Settings → Apps → Calendar: every calendar by account, with a switch to leave it out of MvL OS altogether (the same calendar twice, say, through Google and Fastmail). */
+function HiddenCalendars() {
+  const { calendars } = useAllCalendars()
+  const { lists } = useTasks()
+  const hidden = useHiddenCalendars()
+  const groups: { title: string; items: { id: string; name: string; sub?: string; color: string }[] }[] = []
+  const add = (title: string, item: { id: string; name: string; sub?: string; color: string }) => {
+    const group = groups.find((g) => g.title === title)
+    if (group) group.items.push(item)
+    else groups.push({ title, items: [item] })
+  }
+  for (const c of calendars ?? []) add(c.source ?? 'Google', { id: c.id, name: c.name, sub: [c.primary ? 'your calendar' : '', c.writable === false ? 'read-only' : ''].filter(Boolean).join(' · ') || undefined, color: c.color })
+  add('Contacts', { id: BIRTHDAYS, name: 'Birthdays', sub: 'read-only', color: BIRTHDAY_COLOR })
+  for (const l of lists ?? []) if (!(calendars ?? []).some((c) => c.id === l.id)) add('Tasks', { id: l.id, name: l.name, sub: l.source, color: l.color })
+  return (
+    <>
+      <h4 className="set-subhead">Show in MvL OS</h4>
+      <p className="muted set-help">Hidden calendars are left out everywhere: the Calendar, pickers, widgets and Spotlight. Untick one in the Calendar's sidebar to just filter it from view.</p>
+      {groups.map((g) => (
+        <SetGroup key={g.title} title={g.title}>
+          <ul className="set-list set-calendars">
+            {g.items.map((c) => (
+              <li key={c.id} className={`set-row ${hidden.includes(c.id) ? 'is-hidden' : ''}`}>
+                <span className="set-swatch" style={{ background: c.color }} />
+                <span className="set-row-text">
+                  <strong>{c.name}</strong>
+                  {c.sub && <span className="muted">{c.sub}</span>}
+                </span>
+                <Toggle on={!hidden.includes(c.id)} onChange={(on) => setCalendarHidden(c.id, !on)} label={`Show ${c.name} in MvL OS`} />
+              </li>
+            ))}
+          </ul>
+        </SetGroup>
+      ))}
     </>
   )
 }
@@ -1886,7 +1927,7 @@ const GROUPS: Group[] = [
     title: 'Apps',
     panes: [
       { id: 'agents', label: 'Agents', hue: 'var(--magenta)', account: true, icon: null, app: 'agents', keywords: 'agents ai assistant ollama models quick deep research title thread system prompt agents.md tools memory', blurb: 'The Agents app: its models, what a new thread starts with, and its system prompt.', render: () => <AgentsSettings /> },
-      { id: 'calendar', label: 'Calendar', hue: 'var(--red)', account: true, icon: null, app: 'calendar', keywords: 'calendar agenda events view week month day year default new events which calendars show google caldav accounts', blurb: 'Which calendars show, how the Calendar app opens, and where new events go. The accounts are in Integrations.', render: () => <CalendarSettings /> },
+      { id: 'calendar', label: 'Calendar', hue: 'var(--red)', account: true, icon: null, app: 'calendar', keywords: 'calendar agenda events view week month day year default new events which calendars show google caldav accounts hide hidden calendar duplicate duplicates fastmail show in mvl os', blurb: 'Which calendars show, how the Calendar app opens, and where new events go. The accounts are in Integrations.', render: () => <CalendarSettings /> },
       { id: 'contacts', label: 'Contacts', hue: 'var(--orange)', account: true, icon: null, app: 'contacts', keywords: 'contacts people address book default new contacts carddav accounts vcard vcf birthdays groups', blurb: 'Where new contacts go. The address book accounts (Fastmail, iCloud…) are in Integrations.', render: () => <ContactsSettings /> },
       { id: 'files', label: 'Files', hue: 'var(--blue)', icon: null, app: 'files', keywords: 'files file manager view list grid compact gallery icon size zoom sort order hidden dotfiles sidebar preview pane quick look new windows remember', blurb: 'How Files shows a folder: the view, icon size, sort order, hidden files, the sidebar and the preview pane.', render: () => <FilesPane /> },
       { id: 'games', label: 'Games', hue: 'var(--cyan)', icon: null, app: 'games', keywords: 'games arcade pool gladiator empires at war rts sound music volume mute helpers aim sensitivity difficulty computer health bars rings fog camera edge scrolling key bindings keybinds keys multiplayer name online', blurb: 'Pool, Gladiator and Empires At War: how they play and sound.', render: ({ sub, t }) => <GamesPane sub={sub} t={t} /> },

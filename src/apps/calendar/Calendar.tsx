@@ -8,6 +8,7 @@ import {
   isShown,
   knownUids,
   reloadCalendars,
+  setCalendarHidden,
   setCalendarShown,
   setLastCalendar,
   startOfDay,
@@ -16,6 +17,7 @@ import {
   useCalendarChoice,
   useCalendarList,
   useCalendarVersion,
+  useHiddenCalendars,
   useLastCalendar,
   type CalendarEvent,
   type CalendarInfo,
@@ -141,6 +143,7 @@ export function CalendarApp({ win }: { win: WinState }) {
   // Events of the ticked calendars, for the range in view.
   const { calendars, errors: listErrors } = useCalendarList()
   const picks = useCalendarChoice()
+  const hidden = useHiddenCalendars()
   const shown = calendars?.filter((c) => isShown(c, picks)).map((c) => c.id) ?? null
   const version = useCalendarVersion()
   const [tick, setTick] = useState(0)
@@ -177,13 +180,14 @@ export function CalendarApp({ win }: { win: WinState }) {
   }, [])
 
   // Tasks due in the range, from the lists switched on for the calendar.
-  const { lists: taskLists, tasks } = useTasks()
+  const { lists: allTaskLists, tasks } = useTasks()
   const taskPrefs = useTaskPrefs()
+  const taskLists = useMemo(() => allTaskLists && allTaskLists.filter((l) => !hidden.includes(l.id)), [allTaskLists, hidden])
   const dueTasks = useMemo(() => taskEvents(tasks, taskLists ?? [], taskPrefs.hiddenInCalendar, from, to), [tasks, taskLists, taskPrefs.hiddenInCalendar, from, to])
 
   // Your contacts' birthdays and anniversaries, unless switched off.
   const { contacts } = useContacts()
-  const birthdaysOn = picks[BIRTHDAYS] !== false
+  const birthdaysOn = picks[BIRTHDAYS] !== false && !hidden.includes(BIRTHDAYS)
   const birthdays = useMemo(() => (birthdaysOn ? birthdayEvents(contacts, from, to) : []), [contacts, birthdaysOn, from, to])
 
   const events = useMemo(
@@ -230,6 +234,12 @@ export function CalendarApp({ win }: { win: WinState }) {
     if (writable.some((c) => c.id === lastCalendar)) return lastCalendar!
     return (writable.find((c) => c.primary) ?? writable[0])?.id ?? ''
   }
+  /** The sidebar's right-click menu on a calendar: leave it out of MvL OS altogether (Settings → Apps → Calendar brings it back). */
+  const hideMenu = (ev: MouseEvent, id: string, name: string) =>
+    openContextMenu(ev, [
+      { label: 'Hide everywhere', hint: `Leave ${name} out of MvL OS`, onSelect: () => setCalendarHidden(id, true) },
+      { label: 'Calendar settings…', onSelect: () => wm.open('settings', { section: 'calendar', t: String(Date.now()) }) },
+    ])
   const edit = (e: CalendarEvent) => {
     setPreview(null)
     setEditing({ event: e, draft: draftFromEvent(e) })
@@ -599,7 +609,7 @@ export function CalendarApp({ win }: { win: WinState }) {
                 {(calendars ?? [])
                   .filter((c) => (c.source ?? 'Google') === source)
                   .map((c) => (
-                    <label key={c.id} className="ca-cal" title={c.writable ? c.name : `${c.name} (read-only)`}>
+                    <label key={c.id} className="ca-cal" title={c.writable ? c.name : `${c.name} (read-only)`} onContextMenu={(e) => hideMenu(e, c.id, c.name)}>
                       <input type="checkbox" checked={isShown(c, picks)} onChange={(e) => setCalendarShown(c.id, e.target.checked)} style={{ accentColor: c.color }} />
                       <span className="ca-cal-name">{c.name}</span>
                       {!c.writable && <span className="ca-ro">read-only</span>}
@@ -607,19 +617,21 @@ export function CalendarApp({ win }: { win: WinState }) {
                   ))}
               </section>
             ))}
+            {!hidden.includes(BIRTHDAYS) && (
             <section className="ca-cals">
               <h4>Contacts</h4>
-              <label className="ca-cal" title="Your contacts' birthdays and anniversaries (read-only)">
+              <label className="ca-cal" title="Your contacts' birthdays and anniversaries (read-only)" onContextMenu={(e) => hideMenu(e, BIRTHDAYS, 'Birthdays')}>
                 <input type="checkbox" checked={birthdaysOn} onChange={(e) => setCalendarShown(BIRTHDAYS, e.target.checked)} style={{ accentColor: BIRTHDAY_COLOR }} />
                 <span className="ca-cal-name">Birthdays</span>
                 <span className="ca-ro">read-only</span>
               </label>
             </section>
+            )}
             {!!taskLists?.length && (
               <section className="ca-cals">
                 <h4>Tasks</h4>
                 {taskLists.map((l) => (
-                  <label key={l.id} className="ca-cal" title={`${l.name} · ${l.source}`}>
+                  <label key={l.id} className="ca-cal" title={`${l.name} · ${l.source}`} onContextMenu={(e) => hideMenu(e, l.id, l.name)}>
                     <input
                       type="checkbox"
                       checked={!taskPrefs.hiddenInCalendar.includes(l.id)}

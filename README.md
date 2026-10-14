@@ -514,7 +514,7 @@ linked: calendars (Google Calendar and CalDAV, for Calendar and Tasks), contacts
 Immich, Seafile, OnlyOffice, Ollama Cloud and updown.io. The Apps panes keep only what is about the
 app, and where an app needs an account they start with a small notice and a button that opens that
 integration (*Accounts for Calendar are linked in Integrations*, or *Link a calendar account to get
-started* when there is none). The Apps panes are Agents, Calendar (which calendars show, the view it
+started* when there is none). The Apps panes are Agents, Calendar (which calendars show, which are hidden everywhere, the view it
 opens in and where new events go), Contacts (where new contacts go), Files (view, icon size, sort order, hidden files, sidebar, preview pane), Games (Pool's helpers,
 sensitivity, computer and sound; Gladiator's sound and music; Empires At War's sound, battlefield,
 camera and a summary of its key bindings, with a button into the game's own key bindings and sound
@@ -692,6 +692,13 @@ already, by their UID, are skipped, and the notice says how many (the UID is kep
 a UTF-8 or UTF-16 text (BOM or not, [`src/data/decodeText.ts`](src/data/decodeText.ts)), lowercase names, `VALUE=DATE-TIME`, a
 quoted TZID, `X-WR-TIMEZONE` for times with no zone, and extended ISO dates (`2026-10-15T14:00:00+02:00`).
 When nothing can be imported the notice says why (`1 event found, but its start time couldn't be read (...)`).
+Calendars can be **hidden** in Settings → Apps → Calendar (*Show in MvL OS*, one switch per calendar, grouped by account, with the
+Contacts birthdays and the task lists too; also *Hide everywhere* in the right-click menu of a calendar in the Calendar's sidebar). That is
+stronger than unticking one in the sidebar, which only filters it from the views: a hidden calendar is left out everywhere, so the
+duplicates of Google calendars that Fastmail also lists can go. Gone are the sidebar, the views, every calendar picker (the event editor, where new events
+go, the import), the Agenda widget, the clock, reminders, and the Agents app's calendar tools. A note's link to an event in a hidden calendar
+still finds it. The ids are synced with the account (`calendar-hidden`, [`src/data/calendar.ts`](src/data/calendar.ts)); the server reads them
+too ([`server/calendars.ts`](server/calendars.ts)). A CalDAV task list that the server never named (Fastmail's `DEFAULT_TASK_CALENDAR_…`) shows as *Tasks*.
 With no calendar linked the Calendar says so, with a button to Integrations, and keeps the file for when one is. `pnpm check:ics` covers the reader. Changes go
 through [`server/calendars.ts`](server/calendars.ts): Google's API, or the event's own iCalendar
 text on the CalDAV server, written back with its ETag so other apps' properties stay.

@@ -1,6 +1,6 @@
 import type { User } from './auth.ts'
 import { caldavByUid, clearCaldavCache, getCaldavEvent, listCaldav, markCaldavNote } from './caldav.ts'
-import { allCalendars, allEvents, decodeRef, encodeRef } from './calendars.ts'
+import { allCalendars, allEvents, decodeRef, encodeRef, hiddenCalendars } from './calendars.ts'
 import { clearGoogleCache, googleByUid, googleEventInfo, markGoogleNote, type CalendarEvent } from './google.ts'
 import { HttpError } from './http.ts'
 import { tellPages } from './notifier.ts'
@@ -139,7 +139,9 @@ export async function findLinked(user: User, link: { uid: string; calendarId?: s
   const at = Date.parse(link.occurrence ?? link.start ?? '')
   const base = Math.floor((isNaN(at) ? Date.now() : at) / DAY) * DAY
   const range = { from: new Date(base - 62 * DAY), to: new Date(base + 63 * DAY) }
-  const { calendars, errors } = await allCalendars(user)
+  // A hidden calendar still answers for the calendar a link names (it may be a calendar the user hid since), but is not searched otherwise.
+  const { calendars, errors } = await allCalendars(user, true)
+  const hidden = hiddenCalendars(user)
   let failed = errors.length > 0
   const pick = (events: CalendarEvent[]) => {
     const hits = events.filter((e) => linkMatches(link, e))
@@ -149,7 +151,7 @@ export async function findLinked(user: User, link: { uid: string; calendarId?: s
     return hits.find((e) => Date.parse(e.allDay ? `${e.end}T00:00:00Z` : e.end) > now) ?? hits[hits.length - 1]
   }
   const first = calendars.filter((c) => c.id === link.calendarId).map((c) => c.id)
-  const rest = calendars.filter((c) => c.id !== link.calendarId).map((c) => c.id)
+  const rest = calendars.filter((c) => c.id !== link.calendarId && !hidden.has(c.id)).map((c) => c.id)
   for (const ids of [first, rest]) {
     if (!ids.length) continue
     const found = await allEvents(user, ids, range)

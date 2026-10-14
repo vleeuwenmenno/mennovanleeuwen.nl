@@ -155,6 +155,17 @@ const hrefIn = (body: string, name: string) => {
 
 const resolve = (base: string, href: string) => new URL(unescapeXml(href), base).href
 
+/**
+ * A calendar's or task list's name to show: the server's display name, else the last part of its
+ * address. Servers that never named their default task list (Fastmail) leave DEFAULT_TASK_CALENDAR_<id>:
+ * it shows as `fallback`.
+ */
+export function calendarTitle(display: string | null | undefined, href: string, fallback: string): string {
+  const raw = unescapeXml(display?.trim() || decodeURIComponent(href.split('/').filter(Boolean).pop() ?? '')).trim()
+  if (!raw || /^DEFAULT_TASK_CALENDAR/i.test(raw)) return fallback
+  return raw
+}
+
 /** The account's calendar home: the collection its calendars (and task lists) are in. */
 async function calendarHome(account: Account): Promise<string> {
   const D = 'xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"'
@@ -204,7 +215,7 @@ async function discover(account: Account): Promise<Calendar[]> {
         ...(/<(?:[\w-]+:)?shared\b(?!-)/.test(type) ? { shared: 'with-you' as const } : /<(?:[\w-]+:)?shared-owner\b/.test(type) ? { shared: 'by-you' as const } : {}),
         writable: !privileges || /<(?:[\w-]+:)?(?:write|write-content|all)\b/.test(privileges),
         href: resolve(home, r.href),
-        name: unescapeXml(prop(r.body, 'displayname')?.trim() || decodeURIComponent(r.href.split('/').filter(Boolean).pop() ?? 'Calendar')),
+        name: calendarTitle(prop(r.body, 'displayname'), r.href, 'Calendar'),
         // Apple's colour is #RRGGBBAA; CSS wants #RRGGBB.
         color: /^#[0-9a-f]{6}/i.test(color) ? color.slice(0, 7) : '#7aa2f7',
       }

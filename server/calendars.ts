@@ -16,6 +16,7 @@ import {
 } from './google.ts'
 import { HttpError } from './http.ts'
 import { tellPages } from './notifier.ts'
+import { readState } from './state.ts'
 
 // Every calendar the user connected, Google and CalDAV together, for the Agenda widget, the
 // clock and the Calendar app: one list of calendars (CalDAV ids start with "caldav:") and one list
@@ -49,7 +50,21 @@ export function decodeRef(raw: unknown): Ref {
 
 const message = (source: string, e: unknown) => `${source}: ${e instanceof Error ? e.message : String(e)}`
 
-export async function allCalendars(user: User): Promise<{ calendars: AnyCalendar[]; errors: string[] }> {
+/** The ids of the calendars hidden in Settings → Apps → Calendar (synced as "calendar-hidden", src/data/calendar.ts). */
+export function hiddenCalendars(user: User): Set<string> {
+  const v = readState(user)['calendar-hidden']?.value
+  return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+}
+
+/** Every connected calendar, except the hidden ones unless `withHidden` (the browser filters those itself; a note's link may still resolve in one). */
+export async function allCalendars(user: User, withHidden = false): Promise<{ calendars: AnyCalendar[]; errors: string[] }> {
+  const { calendars, errors } = await connectedCalendars(user)
+  if (withHidden) return { calendars, errors }
+  const hidden = hiddenCalendars(user)
+  return { calendars: hidden.size ? calendars.filter((c) => !hidden.has(c.id)) : calendars, errors }
+}
+
+async function connectedCalendars(user: User): Promise<{ calendars: AnyCalendar[]; errors: string[] }> {
   const labels = new Map(listCaldav(user).map((a) => [a.id, a.label]))
   const errors: string[] = []
   const [google, caldav] = await Promise.all([
@@ -75,8 +90,16 @@ export async function allCalendars(user: User): Promise<{ calendars: AnyCalendar
   }
 }
 
-/** Events in range from the given calendars (default: Google's shown ones and every CalDAV one). */
+/**
+ * Events in range from the given calendars (default: Google's shown ones and every CalDAV one,
+ * without the hidden ones; calendars asked for by id are taken as asked, the caller leaves out hidden ones).
+ */
 export async function allEvents(user: User, ids: string[] | null, range: { from: Date; to: Date }): Promise<{ events: CalendarEvent[]; errors: string[] }> {
+  const hidden = ids ? null : hiddenCalendars(user)
+  if (hidden?.size) {
+    const { calendars } = await connectedCalendars(user)
+    ids = calendars.filter((c) => !hidden.has(c.id) && (c.source !== 'Google' || c.selected)).map((c) => c.id)
+  }
   const caldavIds = ids?.filter((id) => id.startsWith('caldav:')) ?? null
   const googleIds = ids?.filter((id) => !id.startsWith('caldav:')) ?? null
   const { calendars: cals, errors } = await caldavCalendars(user)

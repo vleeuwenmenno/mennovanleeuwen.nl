@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { api, hasCalendar, useAccount, type Account } from '../os/account'
 import { synced } from '../os/synced'
 
@@ -118,11 +118,22 @@ export const useCalendarChoice = choice.use
 export const setCalendarShown = (id: string, shown: boolean) => choice.set((c) => ({ ...c, [id]: shown }))
 export const isShown = (c: CalendarInfo, picks: Record<string, boolean>) => picks[c.id] ?? (c.source && c.source !== 'Google' ? true : c.selected)
 
+// Hidden calendars: a stronger "off" than the checkbox above (which only filters the views). A hidden
+// calendar is left out everywhere: the Calendar's sidebar and views, every picker, the Agenda widget,
+// the clock, Spotlight, reminders and the Agents app (the server leaves them out too, server/calendars.ts).
+// Settings → Apps → Calendar switches them; ids are the calendars' own (Google's id, "caldav:<account>:<address>"),
+// "birthdays" for the contacts' birthdays and a task list's id. Synced with the account.
+const hiddenIds = synced<string[]>('calendar-hidden', [], { normalize: (v) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 500) : []) })
+
+export const useHiddenCalendars = hiddenIds.use
+export const setCalendarHidden = (id: string, hide: boolean) => hiddenIds.set((l) => (hide ? (l.includes(id) ? l : [...l, id]) : l.filter((x) => x !== id)))
+
 // The connected calendars, asked again when the connected accounts change.
 let listCache: { signature: string; value: Promise<{ calendars: CalendarInfo[]; errors: string[] }> } | null = null
 const signatureOf = (a: Account) => `${a.google?.email ?? ''}${a.google?.canWrite ? '+w' : ''}|${a.caldav.map((c) => `${c.id}:${c.username}`).join(',')}`
 
-export function calendarList(a: Account) {
+/** Every connected calendar, hidden ones too (Settings lists them to switch them back). */
+function allCalendarList(a: Account) {
   const signature = signatureOf(a)
   if (listCache?.signature !== signature) {
     const value = api<{ calendars: CalendarInfo[]; errors: string[] }>('/api/calendar/calendars')
@@ -132,8 +143,11 @@ export function calendarList(a: Account) {
   return listCache.value
 }
 
-/** Every connected calendar (null while loading), and per-source problems. */
-export function useCalendarList(): { calendars: CalendarInfo[] | null; errors: string[] } {
+/** The connected calendars that are not hidden. */
+export const calendarList = (a: Account) => allCalendarList(a).then((r) => ({ ...r, calendars: r.calendars.filter((c) => !hiddenIds.get().includes(c.id)) }))
+
+/** Every connected calendar (null while loading), hidden ones too, and per-source problems: for Settings. */
+export function useAllCalendars(): { calendars: CalendarInfo[] | null; errors: string[] } {
   const account = useAccount()
   const connected = hasCalendar(account)
   const signature = signatureOf(account)
@@ -141,7 +155,7 @@ export function useCalendarList(): { calendars: CalendarInfo[] | null; errors: s
   useEffect(() => {
     if (!connected) return
     let live = true
-    calendarList(account).then(
+    allCalendarList(account).then(
       (r) => live && setState({ signature, calendars: r.calendars, errors: r.errors }),
       (e: Error) => live && setState({ signature, calendars: [], errors: [e.message] }),
     )
@@ -151,6 +165,13 @@ export function useCalendarList(): { calendars: CalendarInfo[] | null; errors: s
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, signature])
   return connected && state.signature === signature ? state : { calendars: null, errors: [] }
+}
+
+/** The connected calendars that are not hidden (null while loading), and per-source problems. */
+export function useCalendarList(): { calendars: CalendarInfo[] | null; errors: string[] } {
+  const { calendars, errors } = useAllCalendars()
+  const hidden = useHiddenCalendars()
+  return useMemo(() => ({ calendars: calendars && (hidden.length ? calendars.filter((c) => !hidden.includes(c.id)) : calendars), errors }), [calendars, errors, hidden])
 }
 
 /** The ids of the calendars switched on in Settings (null while the list loads). */
