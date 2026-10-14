@@ -1,7 +1,7 @@
 import { LEVEL_UP, MODULE, SITE_UPGRADES, TECH, UNIT, type ModuleId, type SiteUpgradeId } from './data.ts'
 import type { Pt } from './maps.ts'
 import {
-  STANCES, cmdAbility, cmdArea, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdDeploy, cmdFace, cmdFocus, cmdGuard, cmdLine, cmdMove, cmdPatrol, cmdRally, cmdRepair, cmdResearch,
+  STANCES, cmdAbility, cmdArea, cmdAttack, cmdBuild, cmdCancel, cmdCancelResearch, cmdCancelSiteUpgrade, cmdDeploy, cmdFace, cmdFocus, cmdGuard, cmdLine, cmdMove, cmdPatrol, cmdRally, cmdRepair, cmdResearch,
   cmdRetreat, cmdSite, cmdStance, cmdStop, cmdUpgradeSite, cmdPlace, cmdConstruct, cmdCancelSite, cmdExpand, cmdCancelExpand, cmdRush, cmdGive, GIFT_MAX, wrapAngle, type Owner, type Stance, type World,
 } from './sim.ts'
 
@@ -27,6 +27,7 @@ const TABLE = {
   ability: { run: cmdAbility, args: ['ids', 'id'] },
   rally: { run: cmdRally, args: ['x', 'y', 'id'] },
   upgradeSite: { run: cmdUpgradeSite, args: ['id', 'upgrade'] },
+  cancelUpgradeSite: { run: cmdCancelSiteUpgrade, args: ['id'] },
   repair: { run: cmdRepair, args: ['id'] },
   retreat: { run: cmdRetreat, args: ['ids'] },
   build: { run: cmdBuild, args: ['unit', 'bool', 'id'] },
