@@ -127,8 +127,9 @@ export type Unit = {
   aid: number
   /** Strike craft on a strafing run: pulling away after a pass, until far enough out to turn. */
   breakOff: boolean
-  /** Waypoints round the rocks to where the ship is going (x, y), found when it set off. */
-  route: { x: number; y: number; pts: Pt[]; obs: { x: number; y: number; r: number }[] } | null
+  /** Waypoints round the rocks to where the ship is going (x, y), found when it set off (from fx,
+   * fy; found again from where it is when it was pushed off its line, see waypoint). */
+  route: { x: number; y: number; pts: Pt[]; obs: { x: number; y: number; r: number }[]; fx?: number; fy?: number } | null
   /** The heading an idle ship turns to at its spot, from a move given one; null to stay as it is. */
   face: number | null
   /** Seconds left on a structure's repair, 0 when none is under way. */
@@ -675,8 +676,11 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
   w.nodes = map.ore.map((p, id) => ({ id, x: p.x, y: p.y, r: 75, rot: r() * TAU, site: 0, ...claim }))
   w.beacons = map.beacons.map((p, id) => ({ id, x: p.x, y: p.y, ...claim }))
   // Scattered rocks: each one is copied to every side by the map's symmetry, so nobody gets the
-  // better lanes. They keep clear of ore, beacons, asteroid fields and the lanes into the middle, and
-  // of the ground round each station's start where its yards go up (the build radius).
+  // better lanes. They keep clear of ore, beacons, asteroid fields and the lanes into the middle
+  // (wide enough for the biggest flagship to fly down, with a cell of the path finding's grid to
+  // spare: without them a Big flagship often found no way through at all and sat at the first
+  // gap too narrow for it), and of the ground round each station's start where its yards go up
+  // (the build radius).
   // Map wrecks: the big hulks of earlier battles, Republic or droid as the seed falls.
   w.wrecks = map.wrecks.map((h, i) => {
     const big = h.value >= 900
@@ -684,13 +688,14 @@ export function newWorld(map: MapDef, seats: Seat[], opts: { seed?: number; cred
     return { id: i + 1, x: h.x, y: h.y, value: h.value, left: h.value, sprite: `${side}-${big ? 'capital' : 'cruiser'}`, size: big ? 340 : 220, rot: r() * TAU, decay: Infinity, team: -1 }
   })
   const keepClear = [...w.wrecks.map((h) => [h.x, h.y, h.size * 0.6]), ...w.nodes.map((n) => [n.x, n.y, 260]), ...w.beacons.map((b) => [b.x, b.y, 330]), ...map.spawns.map((p) => [p.x, p.y, BUILD_RADIUS])]
+  const lane = Math.max(240, ...UNITS.filter(isShip).map((t) => navClear(t) + 100))
   const inLane = (x: number, y: number, rad: number) =>
     map.spawns.some((p) => {
       // Distance from the point to the segment between this spawn and the centre.
       const vx = c.x - p.x
       const vy = c.y - p.y
       const t = clamp(((x - p.x) * vx + (y - p.y) * vy) / (vx * vx + vy * vy), 0, 1)
-      return d2(x, y, p.x + vx * t, p.y + vy * t) < sq(240 + rad)
+      return d2(x, y, p.x + vx * t, p.y + vy * t) < sq(lane + rad)
     })
   let tries = 0
   while (w.rocks.length < map.rocks && tries++ < 4000) {
@@ -2442,6 +2447,12 @@ function detour(w: World, u: Unit, tx: number, ty: number) {
   return { x: best.x - uy * s * R, y: best.y + ux * s * R }
 }
 
+/** How far a ship moves from where it last found its way before it may look for it again. */
+const REPATH = 80
+/** How far a ship's path keeps from rocks (its hull may graze one by a third of its radius), sized
+ * to 20-unit steps so similar ships share a grid. */
+const navClear = (t: UnitType) => Math.ceil((radius(t) * 0.7 + 20) / 20) * 20
+
 /**
  * Where to head for next on the way to (tx, ty): the next waypoint round the rocks, found once per
  * destination and dropped as each one comes into view. Asteroid fields and nebulas are steered
@@ -2451,16 +2462,27 @@ function detour(w: World, u: Unit, tx: number, ty: number) {
 function waypoint(w: World, u: Unit, tx: number, ty: number): Pt {
   const patches = [...w.map.fields, ...w.map.nebulas]
   if ((!w.rocks.length && !patches.length) || u.t.tier === 'fighter') return { x: tx, y: ty }
-  // Sized to 20-unit steps so similar ships share a grid.
-  const clear = Math.ceil((radius(u.t) * 0.7 + 20) / 20) * 20
-  if (!u.route || u.route.x !== tx || u.route.y !== ty) {
+  const clear = navClear(u.t)
+  // Pushed off its line (by other hulls, or round a rock) with rocks in the way of where it heads
+  // next now: the way is found again from here, once it has moved on from where it was last found.
+  // (Else it flew straight at the rocks and sat there for good.)
+  const next = u.route?.pts[0] ?? { x: tx, y: ty }
+  const lost = !!u.route && d2(u.x, u.y, u.route.fx ?? -1e6, u.route.fy ?? -1e6) > sq(REPATH) && !clearLine(u.route.obs, u.x, u.y, next.x, next.y, clear)
+  if (!u.route || u.route.x !== tx || u.route.y !== ty || lost) {
     const within = (p: { x: number; y: number; r: number }, x: number, y: number) => sq(x - p.x) + sq(y - p.y) < sq(p.r)
     const keepOut = patches.map((p, i) => (within(p, tx, ty) || within(p, u.x, u.y) ? -1 : i)).filter((i) => i >= 0)
-    const obs = [...w.rocks, ...keepOut.map((i) => patches[i])]
-    const key = `${clear}:${keepOut.join(',')}`
-    let g = w.nav.get(key)
-    if (!g) w.nav.set(key, (g = navGrid(obs, w.w, w.h, clear)))
-    u.route = { x: tx, y: ty, pts: findPath(g, obs, clear, u.x, u.y, tx, ty), obs }
+    const find = (out: number[]) => {
+      const obs = [...w.rocks, ...out.map((i) => patches[i])]
+      const key = `${clear}:${out.join(',')}`
+      let g = w.nav.get(key)
+      if (!g) w.nav.set(key, (g = navGrid(obs, w.w, w.h, clear)))
+      return { pts: findPath(g, obs, clear, u.x, u.y, tx, ty), obs }
+    }
+    let way = find(keepOut)
+    // No way round the fields and nebulas for a hull this big: through them, rather than straight
+    // at the rocks.
+    if (!way.pts.length && keepOut.length && !clearLine(way.obs, u.x, u.y, tx, ty, clear)) way = find([])
+    u.route = { x: tx, y: ty, ...way, fx: u.x, fy: u.y }
   }
   const { pts, obs } = u.route
   while (pts.length > 1 && (d2(u.x, u.y, pts[0].x, pts[0].y) < sq(60) || clearLine(obs, u.x, u.y, pts[1].x, pts[1].y, clear))) pts.shift()
@@ -2672,7 +2694,7 @@ function closeIn(w: World, u: Unit, e: Unit, max: number, dt: number) {
       return
     }
     const brake = Math.sqrt(2 * accOf(t) * 0.9 * Math.max(0, dist - stop))
-    const p = detour(w, u, e.x, e.y)
+    const p = closingOn(w, u, e.x, e.y, dist - stop)
     steer(u, p.x, p.y, Math.min(max, brake), dt)
     return
   }
@@ -2691,9 +2713,22 @@ function closeIn(w: World, u: Unit, e: Unit, max: number, dt: number) {
     return
   }
   const brake = Math.sqrt(2 * accOf(t) * 0.9 * off)
-  const p = detour(w, u, px, py)
+  const p = closingOn(w, u, px, py, off)
   steer(u, p.x, p.y, Math.min(max, brake), dt)
 }
+
+/** Where a warship closing in on a spot `left` away heads for next: from far off the way round the
+ * rocks, as a move goes (to the spot rounded to CLOSE_GRID, so the path found holds while a moving
+ * target stays about where it was), near it straight there round the first rock in the way. A
+ * fleet sent at a target far behind a cluster of rocks sat on the first of them for ever. */
+function closingOn(w: World, u: Unit, x: number, y: number, left: number) {
+  if (left > CLOSE_GRID * 3) {
+    const wp = waypoint(w, u, Math.round(x / CLOSE_GRID) * CLOSE_GRID, Math.round(y / CLOSE_GRID) * CLOSE_GRID)
+    return detour(w, u, wp.x, wp.y)
+  }
+  return detour(w, u, x, y)
+}
+const CLOSE_GRID = 160
 
 function moveUnit(w: World, u: Unit, dt: number) {
   const t = u.t
@@ -2986,6 +3021,7 @@ function fire(w: World, u: Unit, g: Gun, e: Unit) {
   if (u.abilityOn > 0 && u.t.ability === 'broadside' && g.w.kind === 'turbo') dmg *= 1.6
   dmg *= (u.t.tier === 'station' && !moduleUp(u, 'sensor') ? 1 : u.mods.damage) * (1 + RANK_BONUS * u.rank)
   if (u.t.kind === 'wing' && !atHome(w, u)) dmg *= DEFENSE_WING.away
+  if (e.t.kind === 'wing' && atHome(w, e)) dmg *= DEFENSE_WING.guard
   w.shots.push({
     x: from.x, y: from.y, vx: (ax - from.x) / Math.max(t, 0.001), vy: (ay - from.y) / Math.max(t, 0.001), left: hit ? t : t * 1.6,
     kind: g.w.kind, owner: u.owner, target: e.id, hp, dmg, hit, sx: from.x, sy: from.y, age: 0, from: u.id,

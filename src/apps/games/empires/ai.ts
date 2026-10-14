@@ -3,7 +3,7 @@ import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import {
   allQueued, building, canRetreat, cantBuild, cantExpand, cantRush, cmdExpand, cmdRush, moduleRebuildCost, cantMend, cantRepair, cantResearch, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite,
-  dpsVs, fleet, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
+  canSee, dpsVs, fleet, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
 } from './sim.ts'
 import * as M from './detmath.ts'
 import { sq } from './detmath.ts'
@@ -142,9 +142,9 @@ type Style = {
 export const PROFILES: Record<Profile, Style> = {
   defensive: {
     name: 'Defensive',
-    blurb: 'Turtles: more gun platforms and earlier station upgrades, strikes late with a big fleet, and counter-attacks as soon as your attack fails.',
-    wave: 1.6, calm: 1.3, rest: 90, regroup: 0.5, outgunned: 1.2, recall: 0.35, edge: 1.5, beaconReach: 3800, hold: 1, turtle: true, platforms: 1, platPerLevel: 1, platMax: 3, levels: [130, 320, 540], levelArmy: 600, mines: 0, raiders: 0, counter: true, fortify: 3, keep: 300, mendAt: 0.5,
-    tiers: { capital: 1.25, cruiser: 1.1, frigate: 1.1, fighter: 0.8 }, yardDelay: 45, yardGuards: 3, cyardDelay: 20, modules: ['shieldCore', 'drydock', 'armourWorks', 'sensorArray', 'fighterWing', 'secondSlip', 'strikeHangar'], bail: 0.4, sally: 0.8,
+    blurb: 'Turtles: more gun platforms and a fortified station, strikes late with a big fleet, and counter-attacks as soon as your attack fails.',
+    wave: 1.6, calm: 1.3, rest: 60, regroup: 0.5, outgunned: 1.2, recall: 0.35, edge: 1.25, beaconReach: 3800, hold: 0.85, turtle: true, platforms: 1, platPerLevel: 1, platMax: 3, levels: [170, 400, 680], levelArmy: 900, mines: 0, raiders: 0, counter: true, fortify: 3, keep: 300, mendAt: 0.5,
+    tiers: { capital: 1.25, cruiser: 1.1, frigate: 1.1, fighter: 0.8 }, yardDelay: 45, yardGuards: 2, cyardDelay: 20, modules: ['shieldCore', 'drydock', 'armourWorks', 'sensorArray', 'fighterWing', 'secondSlip', 'strikeHangar'], bail: 0.4, sally: 0.8,
   },
   balanced: {
     name: 'Balanced',
@@ -194,8 +194,18 @@ export type Brain = {
   mending: number[]
   /** The enemy the wave's guns are on. */
   focus: number
+  /** When the wave out now went for the enemy station (-1: it hasn't; it keeps to it until it turns
+   * back), and whether it has gathered and gone in. */
+  siege: number
+  storm: boolean
+  /** The wave out now set out with the fleet at its limit: with nothing more to wait for, it
+   * fights on longer before it turns back (see ALL_IN). */
+  allIn: boolean
   /** The enemy ships it has seen, by type: the most of each it has seen at once, fading. */
   foes: Record<string, number>
+  /** The enemy structures with guns it has seen, by id: where they stand and what their guns are
+   * worth (see guns), kept while it can't see them, until it sees the spot without them. */
+  walls: Record<number, [number, number, number]>
   /** The most it has seen attacking its base during the alarm now, and when an attack on its base
    * was last beaten off (-1: never). */
   threatPeak: number
@@ -228,7 +238,7 @@ const handsMax = (D: Level) => Math.max(3, D.apm / 12)
 
 export const newBrain = (o: Owner, diff: Difficulty, profile: Profile = 'balanced'): Brain => ({
   o, diff, profile, t: 2, wave: DIFFICULTY[diff].wave * PROFILES[profile].wave, attacking: false, peak: 0, scouts: new Set(), want: null, lastWave: 0, hands: handsMax(DIFFICULTY[diff]), acts: 0, alarm: -1,
-  muster: -1, home: 0, troops: [], raid: [], raidAt: -1, mending: [], focus: 0, foes: {}, threatPeak: 0, beaten: -1, threatPeakLast: 0, scoutWait: 0, lv2: -1, lv3: -1, guards: [], engSeen: 0, engWait: 0,
+  muster: -1, home: 0, troops: [], raid: [], raidAt: -1, mending: [], focus: 0, siege: -1, storm: false, allIn: false, foes: {}, walls: {}, threatPeak: 0, beaten: -1, threatPeakLast: 0, scoutWait: 0, lv2: -1, lv3: -1, guards: [], engSeen: 0, engWait: 0,
 })
 
 /** Its hands free up again with time (every tick, thinking or not). A brain saved before any of
@@ -247,7 +257,11 @@ function rest(b: Brain, dt: number) {
   b.raidAt ??= -1
   b.mending ??= []
   b.focus ??= 0
+  if (typeof b.siege !== 'number') b.siege = -1
+  b.storm ??= false
+  b.allIn ??= false
   b.foes ??= {}
+  b.walls ??= {}
   b.threatPeak ??= 0
   b.beaten ??= -1
   b.threatPeakLast ??= 0
@@ -339,6 +353,27 @@ function remember(w: World, b: Brain) {
     if (b.foes[id] < 30 && !now[id]) delete b.foes[id]
   }
   for (const [id, v] of Object.entries(now)) b.foes[id] = Math.max(b.foes[id] ?? 0, v)
+  // The structures with guns: as last seen, until the spot is in sight with nothing there.
+  const team = w.players[b.o].team
+  for (const u of w.units) if (!u.dead && foes(w, u.owner, b.o) && !isShip(u.t) && sees(w, b.o, u) && u.t.tier !== 'mine') b.walls[u.id] = [u.x, u.y, guns(u)]
+  for (const [id, [x, y]] of Object.entries(b.walls)) {
+    const u = w.byId.get(Number(id))
+    if ((!u || u.dead || !sees(w, b.o, u)) && canSee(w, team, x, y)) delete b.walls[Number(id)]
+  }
+}
+
+/** What it believes guards a spot: what it sees there now (forceAt), and the guns of the enemy
+ * structures round it it has seen before and can't see now. A wave that judged a base by its
+ * station alone found the platforms and yards round it on arrival, turned back, forgot them, and
+ * came again. */
+function knownForce(w: World, b: Brain, x: number, y: number, r: number) {
+  let v = forceAt(w, b.o, x, y, r)
+  for (const [id, [wx, wy, g]] of Object.entries(b.walls)) {
+    const u = w.byId.get(Number(id))
+    if (u && !u.dead && sees(w, b.o, u)) continue
+    if (sq(wx - x) + sq(wy - y) < sq(r)) v += g
+  }
+  return v
 }
 
 /** The enemy fleet it believes in: what it remembers, or with nothing seen yet, a guess at an even
@@ -532,8 +567,10 @@ export function think(w: World, b: Brain, dt: number) {
   const mineGoal = D.mines + (D.research ? S.mines : 0) + (p.level >= 3 && D.research ? 1 : 0)
   const platGoal = D.defenses ? Math.min(S.platMax, S.platforms + Math.floor(Math.max(0, p.level - 2) * S.platPerLevel)) : 0
   // Surveyed ore with nothing on it is money left on the table: save for a mine before more ships.
-  // (A gun platform goes up once a couple of mines are: then the last free claim is its.)
-  const platNext = platforms < platGoal && mines >= 2
+  // (A gun platform goes up once a couple of mines are and there is a claim to spare for it, or
+  // once every mine it wants is up: then the last free claim is its. A claim kept for a platform
+  // the money never came for left a turtle mining on two asteroids all game.)
+  const platNext = platforms < platGoal && mines >= 2 && (ours.length >= 2 || mines >= mineGoal)
   const savingForMine = !!ours[0] && mines < mineGoal && !(platNext && ours.length === 1)
   // What is attacking our station, mines or platforms right now (as far as we can see).
   const assets = w.units.filter((u) => u.owner === o && (u.t.tier === 'station' || u.t.tier === 'mine' || u.t.tier === 'defense' || u.t.tier === 'yard'))
@@ -743,8 +780,17 @@ export function think(w: World, b: Brain, dt: number) {
   const main = army.filter((u) => !b.scouts.has(u.id) && !raiders.has(u.id) && !mendingIds.has(u.id) && !guards.has(u.id) && !worker(u))
   const mainValue = value(main)
   if (threat && w.time - b.alarm >= D.react) {
-    // A wave out while something big hits home: called back, the more readily the more defensive.
-    if (b.attacking && threatValue > mainValue * S.recall) {
+    // A wave out while something big hits home: called back, the more readily the more defensive;
+    // but only when it is more than the guns there and the ships at home can hold off by themselves,
+    // and for an outlying mine or platform only when it is bigger than the wave (a wave called back
+    // from every raid never gets anywhere).
+    const base = !!hit && (hit.t.tier === 'station' || hit.t.tier === 'yard')
+    let guard = 0
+    if (b.attacking && hit)
+      near(w, hit.x, hit.y, rangeDist(1100), (u) => {
+        if (u.owner === o && !u.dead) guard += isShip(u.t) ? (b.troops.includes(u.id) || worker(u) ? 0 : value([u])) : guns(u)
+      })
+    if (b.attacking && threatValue > mainValue * (base ? S.recall : Math.max(1, S.recall)) && threatValue > guard) {
       b.attacking = false
       b.home = w.time
       b.troops = []
@@ -878,6 +924,18 @@ function raid(w: World, b: Brain, army: Unit[], st: Unit, enemySt: Unit, n: numb
   if (idle.length) act(b, () => cmdMove(w, o, idle.map((u) => u.id), goal!.x, goal!.y, true))
 }
 
+/** A wave that set out with the fleet at its limit turns back only once it is down to its profile's
+ * share of what it set out with divided by this, or meets this many times more than it otherwise
+ * would: a fleet that can't grow any more has nothing to gain by waiting, and games between two
+ * capped fleets went on for ever with every wave turning back half way. */
+const ALL_IN = 2
+/** Late in a long battle every wave presses on harder, as if it set out all in: from `from` seconds
+ * its grit (see ALL_IN) grows by one every `ramp` seconds, up to `max`. Two admirals each strong
+ * enough at home to beat off the other's waves would otherwise trade them until the end of time. */
+const LATE = { from: 1200, ramp: 600, max: 3 }
+/** Seconds a wave going for the enemy station waits at most for its ships to gather (see waves). */
+const SIEGE_GATHER = 40
+
 /**
  * Attack waves. Once the fleet is big enough (or the yard is full, or it has waited long enough,
  * or there's a chance to strike back), it first gathers at the rally point, then goes out together.
@@ -891,8 +949,7 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
   const p = w.players[o]
   const team = p.team
   // Waves go out once the fleet is big enough, or the yard is full, or (so poor maps don't stall)
-  // after four quiet minutes with at least half a wave ready.
-  const restless = w.time - Math.max(b.lastWave, calmOf(b)) > 240 && mainValue >= b.wave * 0.5
+  // after four quiet minutes with at least half a wave ready (see below).
   // An ally already pushing into enemy space: go with them rather than one wave at a time.
   const pushing: Unit[] = []
   for (const u of w.units) {
@@ -905,13 +962,19 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
   // Striking back: just after an attack on its base was beaten off, or when what it has seen of
   // the enemy's fleet is small next to its own.
   const seenFoes = Object.values(b.foes).reduce((s, v) => s + v, 0)
+  // (A restless wave, too, is at least a match for what it has seen of the enemy fleet: sent out
+  // short of that, it only fed the enemy, and kept both sides too poor to ever finish the other.)
+  const restless = w.time - Math.max(b.lastWave, calmOf(b)) > 240 && mainValue >= b.wave * 0.5 && mainValue >= seenFoes
   const counter =
     S.counter &&
     mainValue >= b.wave * 0.6 &&
     ((b.beaten >= 0 && w.time - b.beaten < 40 && mainValue >= b.threatPeakLast * 1.3) || (S.turtle && seenFoes > 0 && mainValue >= seenFoes * 2.5))
   // A wave waits until it is bigger than what it has seen of the enemy fleet, by its profile's
-  // margin, unless the yard is full or it has waited long enough.
-  const ahead = mainValue >= seenFoes * S.edge
+  // margin, and than the guns round the enemy station it has found (a wave short of those only
+  // bounced off the base, again and again), unless the yard is full or it has waited long enough.
+  let walls = 0
+  for (const [wx, wy, g] of Object.values(b.walls)) if (enemySt && sq(wx - enemySt.x) + sq(wy - enemySt.y) < sq(rangeDist(1400))) walls += g
+  const ahead = mainValue >= Math.max(seenFoes, walls) * S.edge
   const ready = !calm && w.time - b.home >= S.rest && ((mainValue >= b.wave && ahead) || p.pop >= p.popCap - 2 || restless || joinAlly || counter)
   if (!b.attacking) {
     if (!ready) {
@@ -935,6 +998,9 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
       return
     }
     b.attacking = true
+    b.siege = -1
+    b.storm = false
+    b.allIn = p.pop >= p.popCap - 2
     b.muster = -1
     b.lastWave = w.time
     b.peak = mainValue
@@ -946,8 +1012,11 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
   const troops = b.troops.map((id) => w.byId.get(id)!)
   const troopValue = value(troops)
   const c = troops.length ? centre(troops) : centre(main)
-  const outgunned = forceAt(w, o, c.x, c.y, rangeDist(1100)) > troopValue * S.outgunned && d2(c, st) > sq(mapDist(1800))
-  if (!troops.length || troopValue < b.peak * S.regroup || outgunned) {
+  // (And the longer the battle has gone on, the harder its waves press on: see LATE.)
+  const late = 1 + Math.min(LATE.max - 1, Math.max(0, w.time - LATE.from) / LATE.ramp)
+  const grit = Math.max(b.allIn ? ALL_IN : 1, late)
+  const outgunned = forceAt(w, o, c.x, c.y, rangeDist(1100)) > troopValue * S.outgunned * grit && d2(c, st) > sq(mapDist(1800))
+  if (!troops.length || troopValue < (b.peak * S.regroup) / grit || outgunned) {
     b.attacking = false
     b.home = w.time
     b.wave = Math.min(9000, b.wave * 1.15)
@@ -969,7 +1038,10 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
   }
   // Pick a goal: enemy mines nearest our fleet (or the ally we're backing up), then beacons, then
   // the station; but only one it can take: what guards it (ships and guns we can see) must be well
-  // short of the wave. With nothing it can take, the nearest anyway.
+  // short of the wave. With nothing it can take, the nearest anyway. Once it could take the enemy
+  // station, the wave goes for it and keeps to it until it turns back: that ends the battle, where
+  // mines, yards and beacons only bleed the enemy (a wave going back and forth between them and
+  // the station as what it sees changes never got anywhere).
   const from = push ?? c
   const targets = [
     // Yards count as targets too: raiding the enemy's production is worth a wave.
@@ -977,10 +1049,31 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
     ...w.beacons.filter((bc) => bc.owner !== team),
   ].sort((a, z) => d2(a, from) - d2(z, from))
   const takeable = (g: { x: number; y: number }) => forceAt(w, o, g.x, g.y, rangeDist(1100)) < troopValue * 0.8
-  const goal = targets.find(takeable) ?? (enemySt && takeable(enemySt) ? enemySt : undefined) ?? targets[0] ?? enemySt
+  if (enemySt && b.siege < 0 && knownForce(w, b, enemySt.x, enemySt.y, rangeDist(1400)) < troopValue * 0.8) b.siege = w.time
+  // Before it goes in, the wave gathers just out of the station's reach, so its ships (spread out
+  // on the way, the slow ones behind) go in together rather than one by one into its guns; for
+  // SIEGE_GATHER seconds at most.
+  if (enemySt && b.siege >= 0 && !b.storm) {
+    const out = radius(enemySt.t) + Math.max(0, ...enemySt.t.hardpoints.map((h) => h.weapon?.range ?? 0)) + 250
+    const dx = c.x - enemySt.x
+    const dy = c.y - enemySt.y
+    const dd = M.hypot(dx, dy) || 1
+    const spot = { x: Math.min(w.w - 150, Math.max(150, enemySt.x + (dx / dd) * out)), y: Math.min(w.h - 150, Math.max(150, enemySt.y + (dy / dd) * out)) }
+    if (value(troops.filter((u) => d2(u, spot) < sq(mapDist(700)))) >= troopValue * 0.8 || w.time - b.siege > SIEGE_GATHER) b.storm = true
+    else {
+      const go = troops.filter((u) => u.order.k !== 'attack' && d2(u, spot) > sq(mapDist(500)) && !(u.order.k === 'move' && d2(u.order, spot) < sq(400))).map((u) => u.id)
+      if (go.length) act(b, () => cmdMove(w, o, go, spot.x, spot.y, true))
+      return
+    }
+  }
+  const goal = (b.siege >= 0 ? enemySt : undefined) ?? targets.find(takeable) ?? (enemySt && takeable(enemySt) ? enemySt : undefined) ?? targets[0] ?? enemySt
   if (!goal) return
-  // Focus fire: the wave's guns on one target at a time, kept until it's dead or gone.
-  if (D.focus) focusFire(w, b, troops, c)
+  // Focus fire: the wave's guns on one target at a time, kept until it's dead or gone. Storming the
+  // station with no enemy warships about, on the station itself: left to themselves the ships shot
+  // at whatever was nearest, the yards and platforms round it soaking up the whole wave's fire.
+  const storming = b.storm && goal === enemySt && !visibleEnemies(w, o, c.x, c.y, rangeDist(1150)).some((e) => e.t.tier !== 'fighter')
+  if (D.focus && storming) stormFire(w, b, troops, enemySt!)
+  else if (D.focus) focusFire(w, b, troops, c)
   // The ships not yet on their way there go together, as one order.
   const go: number[] = []
   for (const u of troops) {
@@ -1030,6 +1123,16 @@ function focusFire(w: World, b: Brain, troops: Unit[], c: { x: number; y: number
   const gun = target.hps.length ? target.t.hardpoints.findIndex((h, i) => h.kind === 'turret' && target.hps[i].hp > 0) : -1
   const hp = gen >= 0 ? gen : gun
   act(b, () => cmdAttack(w, o, shooters.map((u) => u.id), target.id, hp))
+}
+
+/** A wave storming the enemy station: its warships near it fire on it, its shield generators first
+ * while they stand, then its guns. */
+function stormFire(w: World, b: Brain, troops: Unit[], st: Unit) {
+  const shooters = troops.filter((u) => u.t.tier !== 'fighter' && !(u.order.k === 'attack' && u.order.id === st.id) && d2(u, st) < sq(rangeDist(1600)) && dpsVs(u.t, 'station') > 0)
+  if (!shooters.length) return
+  const gen = st.t.hardpoints.findIndex((h, i) => h.kind === 'shield' && st.hps[i]?.hp > 0)
+  const gun = st.t.hardpoints.findIndex((h, i) => h.kind === 'turret' && st.hps[i]?.hp > 0)
+  act(b, () => cmdAttack(w, b.o, shooters.map((u) => u.id), st.id, gen >= 0 ? gen : gun))
 }
 
 /** The ship or station of ours most worth a Field repair near (x, y): the most damaged, weighted by

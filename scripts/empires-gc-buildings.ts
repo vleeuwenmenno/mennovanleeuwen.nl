@@ -238,12 +238,15 @@ const battleAt = (base: G.PlanetBase, station = 3, attackers: string[] = ['d-fri
 // --- Auto-resolve fights with the buildings -------------------------------------------------------------
 {
   const { g, cap } = campaign()
-  const attack = ['d-cruiser', 'd-cruiser', 'd-cruiser', 'd-cruiser', 'd-frigate', 'd-frigate', 'd-frigate', 'd-gunship', 'd-gunship']
-  const clash = (base?: G.PlanetBase): G.Clash => ({ planet: cap.id, holder: 0, attacker: 1, station: 3, holderShips: ['r-frigate', 'r-frigate', 'r-gunship'], holderHeld: [], attackerShips: attack, attackerHeld: [], ...(base ? { base } : {}) })
+  // Three cruisers and escorts against a level 3 station with two frigates and a gunship: the
+  // buildings round it tip the fight, by about what a cruiser more would (G.AUTO_YARD).
+  const attack = ['d-cruiser', 'd-cruiser', 'd-cruiser', 'd-frigate', 'd-frigate', 'd-frigate', 'd-gunship', 'd-gunship']
+  const clash = (base?: G.PlanetBase, extra: string[] = []): G.Clash => ({ planet: cap.id, holder: 0, attacker: 1, station: 3, holderShips: ['r-frigate', 'r-frigate', 'r-gunship', ...extra], holderHeld: [], attackerShips: attack, attackerHeld: [], ...(base ? { base } : {}) })
   let bare = 0
   let built = 0
   let ruined = 0
   let kept = 0
+  const plus = [0, 0, 0]
   const full: G.PlanetBase = { yards: { yard: 'up', cyard: 'up' }, mods: ['shieldCore', 'armourWorks', 'drydock'] }
   for (let s = 1; s <= 40; s++) {
     const r0 = G.autoResolve(g, clash(), s)
@@ -253,8 +256,10 @@ const battleAt = (base: G.PlanetBase, station = 3, attackers: string[] = ['d-fri
     if (r1.winner === 1) {
       if (r1.base!.yards.length === 0 && r1.base!.mods.length === 0) ruined++
     } else if (r1.base!.yards.length) kept++
+    for (const k of [1, 2]) if (G.autoResolve(g, clash(undefined, Array(k).fill('r-cruiser')), s).winner === 0) plus[k]++
   }
   check('yards and a Shield core make a planet harder to take', built > bare, `holder won ${bare}/40 bare, ${built}/40 with its buildings`)
+  check('a whole base counts for about a cruiser more, short of two', plus[1] * 0.75 <= built && built < plus[2], `holder won ${plus[1]}/40 bare with a cruiser more, ${plus[2]}/40 with two`)
   check('a defender beaten in auto-resolve loses its yards and expansions', ruined === 40 - built, `${ruined} of ${40 - built}`)
   check('one that holds keeps the yards that stood', kept > 0, `${kept} kept some`)
   const res = G.autoResolve(g, clash(full), 3)
