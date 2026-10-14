@@ -155,6 +155,16 @@ const cases: [name: string, md: string, want: string][] = [
   ['malformed furigana stays literal', '{漢字} {漢字|かな {a|b|c} {a|{b}} {\n|x} {漢字}かな|', '<p>{漢字} {漢字|かな {a|b|c} {a|{b}} {\n|x} {漢字}かな|</p>'],
   ['a shell or template ${a|b} is not furigana', 'echo ${HOME|x} and {{a|b}}', '<p>echo ${HOME|x} and {{a|b}}</p>'],
   ['streaming: furigana still open', '{漢字|かん', '<p>{漢字|かん</p>'],
+  // Furigana as HTML ruby, which models write when they do not know {…|…}: the same ruby node
+  ['html ruby', '<ruby>私<rt>わたし</rt></ruby>は', '<p><ruby>私<rp>(</rp><rt>わたし</rt><rp>)</rp></ruby>は</p>'],
+  ['html ruby with rp, any case', '<RUBY>我々<rp>(</rp><RT>われわれ</RT><rp>)</rp></RUBY>', '<p><ruby>我々<rp>(</rp><rt>われわれ</rt><rp>)</rp></ruby></p>'],
+  ['html ruby with rb and entities', '<ruby><rb>漢字</rb><rt>かん&amp;じ</rt></ruby>', '<p><ruby>漢字<rp>(</rp><rt>かん&amp;じ</rt><rp>)</rp></ruby></p>'],
+  ['html ruby, several pairs', '<ruby>漢<rt>かん</rt>字<rt>じ</rt></ruby>', '<p><ruby>漢<rp>(</rp><rt>かん</rt><rp>)</rp></ruby><ruby>字<rp>(</rp><rt>じ</rt><rp>)</rp></ruby></p>'],
+  ['html ruby in bold, em and a link', '私は**<ruby>日本語<rt>にほんご</rt></ruby>**を*<ruby>字<rt>じ</rt></ruby>* [<ruby>本<rt>ほん</rt></ruby>](https://a.example)', '<p>私は<strong><ruby>日本語<rp>(</rp><rt>にほんご</rt><rp>)</rp></ruby></strong>を<em><ruby>字<rp>(</rp><rt>じ</rt><rp>)</rp></ruby></em> <a href="https://a.example"><ruby>本<rp>(</rp><rt>ほん</rt><rp>)</rp></ruby></a></p>'],
+  ['html ruby in table cells', '| Word | Reading |\n|---|---|\n| <ruby>私<rt>わたし</rt></ruby> | {我々|われわれ} |', '<table><tr><th>Word</th><th>Reading</th></tr><tr><td><ruby>私<rp>(</rp><rt>わたし</rt><rp>)</rp></ruby></td><td><ruby>我々<rp>(</rp><rt>われわれ</rt><rp>)</rp></ruby></td></tr></table>'],
+  ['html ruby not in a code span or block', '`<ruby>私<rt>わたし</rt></ruby>`\n\n```\n<ruby>私<rt>わたし</rt></ruby>\n```', '<p><code>&lt;ruby&gt;私&lt;rt&gt;わたし&lt;/rt&gt;&lt;/ruby&gt;</code></p><pre>&lt;ruby&gt;私&lt;rt&gt;わたし&lt;/rt&gt;&lt;/ruby&gt;</pre>'],
+  ['malformed html ruby stays text', '<ruby>私<rt>わたし</rt> <ruby>私</ruby> <ruby>私<rt></rt></ruby> <ruby><rt>わ</rt></ruby> <ruby class="x">私<rt>わ</rt></ruby> <ruby>a<rt>b<b>c</b></rt></ruby>', '<p>&lt;ruby&gt;私&lt;rt&gt;わたし&lt;/rt&gt; &lt;ruby&gt;私&lt;/ruby&gt; &lt;ruby&gt;私&lt;rt&gt;&lt;/rt&gt;&lt;/ruby&gt; &lt;ruby&gt;&lt;rt&gt;わ&lt;/rt&gt;&lt;/ruby&gt; &lt;ruby class=&quot;x&quot;&gt;私&lt;rt&gt;わ&lt;/rt&gt;&lt;/ruby&gt; &lt;ruby&gt;a&lt;rt&gt;b&lt;b&gt;c&lt;/b&gt;&lt;/rt&gt;&lt;/ruby&gt;</p>'],
+  ['streaming: html ruby still open', '<ruby>私<rt>わた', '<p>&lt;ruby&gt;私&lt;rt&gt;わた</p>'],
   ['braces and pipes elsewhere are untouched', 'obj = {a: 1} | b {x} and a|b', '<p>obj = {a: 1} | b {x} and a|b</p>'],
   // Streaming
   ['streaming: open strong', 'This is **impor', '<p>This is **impor</p>'],

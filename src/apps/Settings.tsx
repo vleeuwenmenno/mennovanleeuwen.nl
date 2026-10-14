@@ -4,7 +4,7 @@ import { useTasks } from '../data/tasks'
 import { BIRTHDAY_COLOR, BIRTHDAYS } from './calendar/birthdays'
 import { ENGINES, setSearchSettings, useSearchSettings, type EngineId } from '../data/searchEngine'
 import { setLinkSettings, useLinkSettings } from '../data/links'
-import { FURIGANA_MODES, setFurigana, useFurigana } from '../data/furigana'
+import { FURIGANA_MODES, FURIGANA_SIZES, setFurigana, setFuriganaSize, useFurigana, useFuriganaSize } from '../data/furigana'
 import { HOME_CURRENCIES, setHomeCurrency, useHomeCurrency } from '../data/currency'
 import { clearVisits, useVisits } from '../data/siteHistory'
 import { clearHits, useRecentHits } from '../data/spotlightRecent'
@@ -1865,6 +1865,7 @@ function RegionGroup() {
 
 function FuriganaGroup() {
   const mode = useFurigana()
+  const size = useFuriganaSize()
   const account = useAccount()
   const shown = FURIGANA_MODES.find(([id]) => id === mode)!
   return (
@@ -1877,6 +1878,19 @@ function FuriganaGroup() {
           </label>
         ))}
       </div>
+      {mode !== 'off' && (
+        <>
+          <h4 className="set-subhead">Reading size</h4>
+          <div className="set-choices" role="radiogroup" aria-label="Furigana reading size">
+            {FURIGANA_SIZES.map(([id, label]) => (
+              <label key={id} className={`set-choice ${size === id ? 'is-on' : ''}`}>
+                <input type="radio" name="furigana-size" checked={size === id} onChange={() => setFuriganaSize(id)} />
+                {label}
+              </label>
+            ))}
+          </div>
+        </>
+      )}
       <p className="set-furigana-sample" lang="ja">
         <ruby>
           日本語<rp>(</rp>
@@ -1984,7 +1998,7 @@ const GROUPS: Group[] = [
       { id: 'search', label: 'Spotlight', hue: 'var(--green)', icon: svg(<><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></>), keywords: 'spotlight search engine suggestions duckduckgo kagi google history recent visited websites preview start empty fallback terminal favourites favorites starred', blurb: 'What Spotlight shows when it opens, what it searches, and what it remembers.', render: () => <SpotlightSettings /> },
       { id: 'windows', label: 'Windows', hue: 'var(--yellow)', icon: svg(<><rect x="3" y="5" width="12" height="10" /><rect x="9" y="9" width="12" height="10" /></>), keywords: 'windows restore reopen startup start open last session layout tabs welcome empty desktop reset start over workspaces workspace per tab browser tabs adopt left behind closed tab newtab new tab page drag move resize modifier key ctrl alt hyprland corner mouse', blurb: 'What the desktop shows when MvL OS opens again, one workspace per browser tab, and dragging windows with a key.', render: () => <WindowsSettings /> },
       { id: 'links', label: 'Links', hue: 'var(--blue)', icon: svg(<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>), keywords: 'links open new tab same tab browser newtab home page spotlight', blurb: 'Whether links open in a new tab or this one.', render: () => <LinkSettingsPane /> },
-      { id: 'language', label: 'Language & region', hue: 'var(--magenta)', icon: svg(<><path d="M4 6h9M8.5 3v3M6 6c.5 3 3 5.5 6 6.5M12 6c-.5 3-3 5.5-6 6.5" /><path d="M13 20l3.5-8 3.5 8M14.3 17h4.4" /></>), keywords: 'language region furigana ruby reading readings kanji japanese hiragana hover show hide currency home money exchange rate euro dollar yen', blurb: 'Furigana, the readings above Japanese characters, and your home currency.', render: () => <LanguagePane /> },
+      { id: 'language', label: 'Language & region', hue: 'var(--magenta)', icon: svg(<><path d="M4 6h9M8.5 3v3M6 6c.5 3 3 5.5 6 6.5M12 6c-.5 3-3 5.5-6 6.5" /><path d="M13 20l3.5-8 3.5 8M14.3 17h4.4" /></>), keywords: 'language region furigana ruby reading readings kanji japanese hiragana hover show hide size small medium large bigger currency home money exchange rate euro dollar yen', blurb: 'Furigana, the readings above Japanese characters, and your home currency.', render: () => <LanguagePane /> },
       { id: 'notifications', label: 'Notifications', hue: 'var(--red)', icon: svg(<><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" /><path d="M10 21h4" /></>), keywords: 'notifications alerts notification center bell pop-ups do not disturb dnd keep history clear minecraft activity agents uploads unpacking updates system browser', blurb: 'Pop-ups, the notification center, and which apps may notify.', render: () => <Notifications /> },
       { id: 'golinks', label: 'Go links', hue: 'var(--yellow)', icon: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>), keywords: 'go links golinks terminal spotlight suggestions mvl.sh token', blurb: "The golinks account that go <alias> follows, in Spotlight and the terminal.", render: () => <GoLinks /> },
     ],
