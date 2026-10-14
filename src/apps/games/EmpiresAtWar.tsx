@@ -2595,6 +2595,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
                 }
               }}
               onResearch={research}
+              onCancelResearch={cancelResearch}
               onTechTree={() => setTree(true)}
               onSite={buildSite}
               onCancelUpgradeSite={(id) => {

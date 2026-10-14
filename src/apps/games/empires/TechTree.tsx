@@ -3,9 +3,8 @@ import { HP_COLOR } from './icons'
 import { HpIcon, Icon, TechIcon, fmt, levelBlurb, moduleState, moduleTip, researchName, techState, unitArt, type Hud, type TechStatus } from './Hud'
 import { Modal } from './Menus'
 import type { Owner, World } from './sim'
-import { useCancelPress, useCoarse } from './Touch'
+import { CANCEL_TIP, useCancelPress, useCoarse } from './Touch'
 
-const CANCEL_TIP = 'Right-click to cancel (full refund). Long-press on touch.'
 
 // The tech tree: everything a faction can research, one line for the station (its levels and its
 // own upgrades) and one per ship type, with prerequisites drawn as connectors. It opens over the
