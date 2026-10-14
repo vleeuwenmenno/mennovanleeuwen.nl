@@ -4793,6 +4793,12 @@ button.cal-day.is-picked:not(.is-today) {
   white-space: pre-wrap;
   word-break: break-all;
 }
+/* An email the agent wants to send or save (server/agentMail.ts): its text, whole, in the mail's own font size. */
+.agt-ask-mail {
+  max-height: 360px;
+  font-size: 12px;
+  line-height: 1.45;
+}
 
 /* A hint long enough to need two lines (Settings → Notifications, push on this device). */
 .set-row-text > .set-row-wrap {
