@@ -149,18 +149,18 @@
         "kind": "count"
       },
       "map DOM nodes": {
-        "baseline": 461,
-        "budget": 531,
+        "baseline": 462,
+        "budget": 532,
         "kind": "count"
       },
       "DOM nodes": {
-        "baseline": 734,
-        "budget": 845,
+        "baseline": 737,
+        "budget": 848,
         "kind": "count"
       },
       "filtered map elements": {
-        "baseline": 19,
-        "budget": 19,
+        "baseline": 27,
+        "budget": 27,
         "kind": "strict"
       },
       "canvas draw calls / frame, zooming": {
@@ -174,7 +174,7 @@
         "kind": "count"
       },
       "main thread ms / frame, zooming": {
-        "budget": 4,
+        "budget": 3,
         "kind": "time"
       },
       "main thread ms / frame, panning": {
@@ -194,18 +194,18 @@
         "kind": "count"
       },
       "map DOM nodes": {
-        "baseline": 874,
-        "budget": 1006,
+        "baseline": 875,
+        "budget": 1007,
         "kind": "count"
       },
       "DOM nodes": {
-        "baseline": 1257,
-        "budget": 1446,
+        "baseline": 1260,
+        "budget": 1449,
         "kind": "count"
       },
       "filtered map elements": {
-        "baseline": 14,
-        "budget": 14,
+        "baseline": 23,
+        "budget": 23,
         "kind": "strict"
       },
       "canvas draw calls / frame, zooming": {
@@ -219,7 +219,7 @@
         "kind": "count"
       },
       "main thread ms / frame, zooming": {
-        "budget": 7,
+        "budget": 6,
         "kind": "time"
       },
       "main thread ms / frame, panning": {
