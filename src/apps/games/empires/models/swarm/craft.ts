@@ -1,12 +1,12 @@
-import { along, capsule, circle, halfHull, part, spline, sym, thick, turn, turnPart } from './kit.ts'
-import type { ModelDef } from './spec.ts'
-import type { Detail, Part, Pt, Tone } from './types.ts'
+import { along, capsule, circle, halfHull, part, spline, sym, thick, turn, turnPart } from '../kit.ts'
+import type { ModelDef } from '../spec.ts'
+import type { Detail, Part, Pt, Tone } from '../types.ts'
 
-// The Swarm: a concept for a future third faction, not used in battle. Organic, insect-like curves
-// instead of plates, bone-tan shells with violet accents, a glowing sensor eye and violet engine
-// light, built from arcs and tapering segments rather than wedges. These were the Confederacy's
-// first designs; they are kept here as they were, one for each droid unit (same ids, same box and
-// hardpoints), and the Codex shows them under "Swarm (concept)".
+// The Swarm's style kit: organic, insect-like curves instead of plates, bone-tan shells with violet
+// accents, a glowing sensor eye and violet engine light, built from arcs and tapering segments
+// rather than wedges. These were the Confederacy's first designs, kept as the Swarm's concept: one
+// for each Confederacy unit, on the same box and hardpoints, now the Swarm's own units' models
+// (placeholders until the Swarm is designed properly; see data/swarm.ts).
 
 /**
  * A crescent: points along an elliptical arc (centre cx, cy, radii rx, ry) from angle a0 to a1, and
@@ -27,22 +27,6 @@ export function crescent(cx: number, cy: number, rx: number, ry: number, a0: num
 }
 
 const deg = (d: number) => (d * Math.PI) / 180
-
-/** The names these designs were made under, for the Codex's Swarm tab: the droid units they mirror
- * carry the droid navy's names now. */
-export const SWARM_NAMES: Record<string, string> = {
-  'd-fighter': 'Mantis droid fighter',
-  'd-bomber': 'Locust bomber',
-  'd-repair': 'Weaver repair droid',
-  'd-picket': 'Gnat guard droid',
-  'd-gunship': 'Trident gunship',
-  'd-ion': 'Disruptor frigate',
-  'd-frigate': 'Scarab frigate',
-  'd-cruiser': 'Manta cruiser',
-  'd-capital': 'Hive carrier',
-  'd-station': 'Foundry station',
-  'd-mine': 'Ore harvester',
-}
 
 /**
  * Mantis droid fighter: a beaked head with one violet eye, a segmented tail and two hooked claw
@@ -278,7 +262,7 @@ export const gunship: ModelDef = ({ h }) => {
   return { parts, breakStyle: 'bands' }
 }
 
-// --- Warships: their designs are in proto-swarm.ts ---------------------------------------------------
+// --- Warships: their designs are in warships.ts -----------------------------------------------------
 
 // --- Station -----------------------------------------------------------------------------------------
 

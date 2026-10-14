@@ -55,10 +55,13 @@ export function partName(m: Model, i: number, t: UnitType) {
   const id = m.parts[i].id
   const station = t.tier === 'station'
   const structure = t.tier === 'mine' || t.tier === 'defense' || t.tier === 'yard'
+  // Some parts are named by the unit they are on: the Confederacy's, and the Swarm's in the same
+  // slot (its concept designs were first drawn on the Confederacy's units).
+  const like = (slot: string) => t.faction !== 'republic' && t.id.slice(t.id.indexOf('-') + 1) === slot
   if (m.faction === 'droid') {
-    if (id.startsWith('pod') && !id.startsWith('podGun')) return station ? 'Gun pod' : t.id === 'd-repair' ? 'Tool pod' : t.id === 'd-gunship' ? 'Cannon pod' : 'Engine block'
+    if (id.startsWith('pod') && !id.startsWith('podGun')) return station ? 'Gun pod' : like('repair') ? 'Tool pod' : like('gunship') ? 'Cannon pod' : 'Engine block'
     if (/Strut$/.test(id)) return 'Strut'
-    if (id.startsWith('arm')) return station ? 'Docking arm' : t.id === 'd-gunship' ? 'Gun arm' : 'Manipulator arm'
+    if (id.startsWith('arm')) return station ? 'Docking arm' : like('gunship') ? 'Gun arm' : 'Manipulator arm'
     if (id.startsWith('frame') && !station) return 'Bay frame'
     if (id.startsWith('claw')) return structure ? 'Anchor claw' : 'Manipulator claw'
     if (id.startsWith('block') || id.startsWith('engine')) return 'Engine block'
@@ -70,15 +73,15 @@ export function partName(m: Model, i: number, t: UnitType) {
     if (hit) return hit[1]
   }
   if (id.startsWith('podGun')) return 'Gun pod barrels'
-  if (id.startsWith('pod')) return station ? 'Docking pod' : t.id === 'd-bomber' ? 'Bomb pod' : t.id === 'd-gunship' ? 'Gun pod' : 'Engine pod'
+  if (id.startsWith('pod')) return station ? 'Docking pod' : like('bomber') ? 'Bomb pod' : like('gunship') ? 'Gun pod' : 'Engine pod'
   if (id.startsWith('block') && station) return id === 'block' ? 'Command block' : 'Frame block'
   if (id.startsWith('deck') && station) return 'Deck plate'
   if (id.startsWith('well')) return t.tier === 'mine' ? 'Drill well' : 'Repair bay'
-  if (id.startsWith('ring')) return t.id === 'd-picket' ? 'Guard ring' : 'Repair ring'
+  if (id.startsWith('ring')) return like('picket') ? 'Guard ring' : 'Repair ring'
   if (id.startsWith('hub')) return structure ? 'Hub' : 'Repair hub'
-  if (id.startsWith('claw')) return structure ? 'Anchor claw' : t.id === 'd-fighter' ? 'Claw wing' : t.id === 'd-capital' ? 'Arm claw' : 'Manipulator claw'
-  if (id.startsWith('hook') && !id.startsWith('hookC')) return t.id === 'd-cruiser' ? 'Wing hook' : 'Lower claw'
-  if (id.startsWith('arm')) return station ? (t.faction === 'droid' ? 'Arm segment' : 'Arm') : t.id === 'r-repair' ? 'Manipulator arm' : t.id === 'd-gunship' ? 'Gun arm' : t.id === 'd-capital' ? 'Hangar arm' : 'Girder arm'
+  if (id.startsWith('claw')) return structure ? 'Anchor claw' : like('fighter') ? 'Claw wing' : like('capital') ? 'Arm claw' : 'Manipulator claw'
+  if (id.startsWith('hook') && !id.startsWith('hookC')) return like('cruiser') ? 'Wing hook' : 'Lower claw'
+  if (id.startsWith('arm')) return station ? (t.faction !== 'republic' ? 'Arm segment' : 'Arm') : t.id === 'r-repair' ? 'Manipulator arm' : like('gunship') ? 'Gun arm' : like('capital') ? 'Hangar arm' : 'Girder arm'
   if (id.startsWith('leg') && !/^leg[FMB]/.test(id)) return structure ? 'Anchor leg' : 'Leg'
   if (id.startsWith('plate')) return station ? 'Shell plate' : 'Leg plate'
   if (id.startsWith('core')) return 'Hive core'
@@ -88,7 +91,7 @@ export function partName(m: Model, i: number, t: UnitType) {
   if (id.startsWith('horn')) return station ? 'Arm bud' : 'Horn'
   if (id.startsWith('spine')) return /^spine\d/.test(id) ? 'Side spine' : 'Spine'
   if (id.startsWith('sac')) return structure ? 'Ammunition sac' : 'Hive sac'
-  if (id.startsWith('web')) return t.id === 'd-cruiser' ? 'Wing membrane' : 'Web strand'
+  if (id.startsWith('web')) return like('cruiser') ? 'Wing membrane' : 'Web strand'
   return PART_NAMES.find(([p]) => id.startsWith(p))?.[1] ?? id
 }
 

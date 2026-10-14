@@ -248,7 +248,8 @@ const skirmishResume: Scene = {
       const w = __ew.world
       const p = w.players[0]
       const st = w.byId.get(p.station)
-      const crew = sim.spawnGroup(w, p.faction === 'droid' ? 'd-engineer' : 'r-engineer', 0, st.x + 300, st.y, 0)
+      const data = await import('/src/apps/games/empires/data.ts')
+      const crew = sim.spawnGroup(w, data.FACTIONS[p.faction].prefix + '-engineer', 0, st.x + 300, st.y, 0)
       if (!crew.length) return null
       Object.assign(__ew.cam, { x: crew[0].x, y: crew[0].y, zoom: 0.8 })
       return { x: crew[0].x, y: crew[0].y }

@@ -33,6 +33,7 @@ const SETUP = `(async () => {
   const data = await import('/src/apps/games/empires/data.ts')
   const w = __ew.world
   const p = w.players[0]
+  const pre = data.FACTIONS[p.faction].prefix
   p.credits = 90000
   p.level = 4
   const st = w.byId.get(p.station)
@@ -67,25 +68,25 @@ const SETUP = `(async () => {
   // rush-launched (by hand: hull, parts not yet installed) and a mine with an upgrade.
   const far = (turn, d) => at(turn, d)
   const g = far(-2.2, 700)
-  const gun = sim.spawn(w, p.faction === 'droid' ? 'd-gunship' : 'r-gunship', 0, g.x, g.y, g.a)
+  const gun = sim.spawn(w, pre + '-gunship', 0, g.x, g.y, g.a)
   const f = far(-1.6, 900)
-  const frig = sim.spawn(w, p.faction === 'droid' ? 'd-frigate' : 'r-frigate', 0, f.x, f.y, f.a)
+  const frig = sim.spawn(w, pre + '-frigate', 0, f.x, f.y, f.a)
   const e = far(-1.9, 450)
-  const eng = sim.spawnGroup(w, p.faction === 'droid' ? 'd-engineer' : 'r-engineer', 0, e.x, e.y, 0)
+  const eng = sim.spawnGroup(w, pre + '-engineer', 0, e.x, e.y, 0)
   const fa = far(0.1, 2600)
-  const flag = sim.spawn(w, p.faction === 'droid' ? 'd-capital' : 'r-capital', 0, fa.x, fa.y, fa.a)
+  const flag = sim.spawn(w, pre + '-capital', 0, fa.x, fa.y, fa.a)
   flag.hull = flag.hullMax * 0.6
-  const esc = [0, 1, 2].map((i) => sim.spawn(w, p.faction === 'droid' ? 'd-gunship' : 'r-gunship', 0, fa.x + 300 + i * 80, fa.y + 700, 0))
+  const esc = [0, 1, 2].map((i) => sim.spawn(w, pre + '-gunship', 0, fa.x + 300 + i * 80, fa.y + 700, 0))
   sim.cmdGuard(w, 0, esc.map((u) => u.id), flag.id)
   const ra = far(-0.3, 2000)
-  const cr = sim.spawn(w, p.faction === 'droid' ? 'd-cruiser' : 'r-cruiser', 0, ra.x, ra.y, ra.a)
+  const cr = sim.spawn(w, pre + '-cruiser', 0, ra.x, ra.y, ra.a)
   const parts = cr.t.hardpoints.map((h, i) => (h.kind !== 'engine' ? i : -1)).filter((i) => i >= 0).slice(-3)
   for (const i of parts) cr.hps[i].hp = 0
   cr.hull = cr.hullMax * 0.55
   cr.rush = { left: 14, total: 14, gap: cr.hullMax * 0.45, parts, n: parts.length, work: false }
   const n = [...w.nodes].sort((a, b) => Math.hypot(a.x - st.x, a.y - st.y) - Math.hypot(b.x - st.x, b.y - st.y))[0]
   n.owner = p.team
-  const m = sim.spawn(w, p.faction === 'droid' ? 'd-mine' : 'r-mine', 0, n.x, n.y, n.rot)
+  const m = sim.spawn(w, pre + '-mine', 0, n.x, n.y, n.rot)
   n.site = m.id
   m.node = n.id
   m.upg = { yield: 1 }

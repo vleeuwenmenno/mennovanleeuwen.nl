@@ -4,6 +4,9 @@
 //   node scripts/empires-ws.ts [ws://localhost:5173/api/empires/ws]
 //
 // Names stay taken for 30 s after a test player leaves, so wait that long between runs.
+
+import { OUTDATED_CODE, PROTOCOL } from '../src/apps/games/empires/protocol.ts'
+
 const URL_ = process.argv[2] ?? 'ws://localhost:5173/api/empires/ws'
 const ORIGIN = URL_.replace(/^ws/, 'http').replace(/\/api.*/, '')
 type Msg = Record<string, any>
@@ -46,7 +49,7 @@ const check = (label: string, ok: boolean, detail: unknown = '') => {
 
 const a = client()
 check('a connects', await a.opened)
-a.send({ t: 'hello' })
+a.send({ t: 'hello', v: PROTOCOL })
 const ready = await a.next()
 check('ready with a suggestion', ready.t === 'ready' && typeof ready.suggestion === 'string', ready)
 a.send({ t: 'claim', name: '  Rex   Vane ' })
@@ -55,7 +58,7 @@ check('a claims "Rex Vane" (tidied)', wa.t === 'welcome' && wa.name === 'Rex Van
 
 const b = client()
 await b.opened
-b.send({ t: 'hello' })
+b.send({ t: 'hello', v: PROTOCOL })
 await b.next()
 b.send({ t: 'claim', name: 'rex-vane' })
 const rb = await b.next()
@@ -80,7 +83,7 @@ a.ws.close()
 await a.closed()
 const a2 = client()
 await a2.opened
-a2.send({ t: 'hello', token: wa.token })
+a2.send({ t: 'hello', v: PROTOCOL, token: wa.token })
 const back = await a2.next()
 check('a resumes as "Rex Vane" with its token', back.t === 'welcome' && back.resumed && back.name === 'Rex Vane' && back.id === wa.id, back)
 
@@ -96,7 +99,7 @@ check('foreign Origin is refused', !(await evil.opened))
 
 const big = client()
 await big.opened
-big.send({ t: 'hello' })
+big.send({ t: 'hello', v: PROTOCOL })
 await big.next()
 big.ws.send('x'.repeat(20000))
 const bc = await big.closed()
@@ -104,7 +107,7 @@ check('oversized message closes 1009', bc.code === 1009, bc)
 
 const spam = client()
 await spam.opened
-spam.send({ t: 'hello' })
+spam.send({ t: 'hello', v: PROTOCOL })
 await spam.next()
 for (let i = 0; i < 400; i++) spam.send({ t: 'ping', n: i })
 const sc = await spam.closed()
@@ -116,10 +119,17 @@ rude.send({ t: 'claim', name: 'Skipper' })
 const rc = await rude.closed()
 check('claim before hello closes 1008', rc.code === 1008, rc)
 
+// A client of another version (or from before there were versions) would play another battle.
+const old = client()
+await old.opened
+old.send({ t: 'hello' })
+const oc = await old.closed()
+check(`a hello without the protocol version closes ${OUTDATED_CODE}`, oc.code === OUTDATED_CODE, oc)
+
 // Fragmented and large-but-allowed message (over 126 bytes: 16-bit length path).
 const c = client()
 await c.opened
-c.send({ t: 'hello' })
+c.send({ t: 'hello', v: PROTOCOL })
 await c.next()
 c.send({ t: 'claim', name: 'Commodore Test', pad: 'y'.repeat(9000) })
 const wc = await c.next()
@@ -132,7 +142,7 @@ const tag = Math.floor(Math.random() * 900 + 100)
 async function named(name: string) {
   const x = client(ORIGIN, [])
   await x.opened
-  x.send({ t: 'hello' })
+  x.send({ t: 'hello', v: PROTOCOL })
   await x.next()
   x.send({ t: 'claim', name })
   await x.next() // welcome

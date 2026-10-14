@@ -243,7 +243,9 @@ export const SIZES: Record<GalaxySize, { label: string; systems: number; blurb: 
 
 // --- The handcrafted galaxy ------------------------------------------------------------------------
 
-type SystemDef = { name: string; x: number; y: number; star: StarKind; tier: 1 | 2 | 3; planets: [string, PlanetKind][] }
+/** `only`: a system that is there only when that faction fights in the campaign (the Swarm's
+ * Deep, below), so the galaxy the other two fight over stays as it was. */
+type SystemDef = { name: string; x: number; y: number; star: StarKind; tier: 1 | 2 | 3; planets: [string, PlanetKind][]; only?: FactionId }
 
 /**
  * The Rim Wars: Republic core worlds in the west, the Confederacy's foundry worlds in the far east,
@@ -277,9 +279,14 @@ const RIM_WARS: SystemDef[] = [
   { name: 'Saluca', x: 700, y: 610, star: 'orange', tier: 3, planets: [['Saluca', 'stormgiant'], ['Saluca Minor', 'lava']] },
   { name: 'Seraxis', x: 960, y: 580, star: 'red', tier: 3, planets: [['Seraxis', 'lava']] },
   { name: 'Hyperis', x: 470, y: 620, star: 'red', tier: 3, planets: [['Hyperis', 'toxic']] },
+  // The Deep, along the southern edge, between the two empires: where the Swarm comes from. Only
+  // there when the Swarm fights (`only`), at every size.
+  { name: 'Vharsk', x: 615, y: 632, star: 'red', tier: 1, planets: [['Vharsk', 'toxic'], ['Vharsk Brood', 'swamp']], only: 'swarm' },
+  { name: 'Ossuar', x: 390, y: 645, star: 'orange', tier: 1, planets: [['Ossuar', 'swamp'], ['Ossuar Husk', 'barren']], only: 'swarm' },
 ]
-/** Where each side starts in the Rim Wars: the capital system first. */
-const RIM_START: Record<FactionId, string[]> = { republic: ['Corvanis', 'Kuvaar'], droid: ['Geonar', 'Catonis'] }
+/** Where each side starts in the Rim Wars: the capital system first. The Republic holds the west,
+ * the Confederacy the east, the Swarm the Deep along the southern edge. */
+const RIM_START: Record<FactionId, string[]> = { republic: ['Corvanis', 'Kuvaar'], droid: ['Geonar', 'Catonis'], swarm: ['Vharsk', 'Ossuar'] }
 
 export type GalaxyChoice = { kind: 'rim' } | { kind: 'generated'; seed: number }
 export const GALAXIES = { rim: { name: 'The Rim Wars', blurb: 'Republic core worlds in the west, Confederacy foundries in the east, trade worlds to fight over between.' } }
@@ -390,12 +397,17 @@ function farthestPair(n: number, lanes: [number, number][]) {
   return best
 }
 
-export type NewGalaxy = { choice: GalaxyChoice; size: GalaxySize; faction: FactionId; difficulty: Difficulty; credits: number; name?: string; blockade?: BlockadeRule; frontline?: boolean }
+/** `rival`: the faction the AI plays (another than the player's): when left out, the player's
+ * faction's usual rival (FACTIONS rival). */
+export type NewGalaxy = { choice: GalaxyChoice; size: GalaxySize; faction: FactionId; rival?: FactionId; difficulty: Difficulty; credits: number; name?: string; blockade?: BlockadeRule; frontline?: boolean }
+/** The faction the AI plays in a new campaign: the one picked, unless that is the player's own. */
+export const rivalOf = (opts: Pick<NewGalaxy, 'faction' | 'rival'>): FactionId => (opts.rival && opts.rival !== opts.faction ? opts.rival : FACTIONS[opts.faction].rival)
 
 export function newGalaxy(opts: NewGalaxy): Galaxy {
   const seed = opts.choice.kind === 'generated' ? opts.choice.seed : 7
   const r = rng(seed * 31 + 17)
-  const defs = opts.choice.kind === 'rim' ? RIM_WARS.filter((s) => s.tier <= (opts.size === 'short' ? 1 : opts.size === 'standard' ? 2 : 3)) : generatedDefs(seed, SIZES[opts.size].systems)
+  const other = rivalOf(opts)
+  const defs = opts.choice.kind === 'rim' ? RIM_WARS.filter((s) => s.tier <= (opts.size === 'short' ? 1 : opts.size === 'standard' ? 2 : 3) && (!s.only || s.only === opts.faction || s.only === other)) : generatedDefs(seed, SIZES[opts.size].systems)
   const g: Galaxy = {
     v: 3,
     save: { id: newSaveId(), name: opts.name?.trim() || `${opts.choice.kind === 'rim' ? GALAXIES.rim.name : `Sector ${seed}`}, ${FACTIONS[opts.faction].name}` },
@@ -427,7 +439,6 @@ export function newGalaxy(opts: NewGalaxy): Galaxy {
   })
   g.lanes = laneGraph(g.systems)
   // The sides: the player first, then the AI on the other faction.
-  const other: FactionId = opts.faction === 'republic' ? 'droid' : 'republic'
   const side = (faction: FactionId, ai: Difficulty | null): Side => ({ faction, credits: opts.credits, ai, alive: true, earned: 0, spent: { ships: 0, stations: 0 }, history: [], ledger: [] })
   g.sides = [side(opts.faction, null), side(other, opts.difficulty)]
   // Home systems: the capital (its first planet gets a level 3 station and a Frigate Yard) and a

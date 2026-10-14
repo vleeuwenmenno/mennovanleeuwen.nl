@@ -1,13 +1,13 @@
-import { circle, halfHull, part, spline, sym, thick } from './kit.ts'
-import { calm, seat, type SeatLook } from './proto.ts'
-import type { ModelDef, ModelSpec } from './spec.ts'
-import * as classic from './swarm.ts'
-import { blobby, eye, thruster, vertebra } from './swarm.ts'
-import type { Part, Pt } from './types.ts'
+import { circle, halfHull, part, spline, sym, thick } from '../kit.ts'
+import { calm, seat, type SeatLook } from '../proto.ts'
+import type { ModelDef, ModelSpec } from '../spec.ts'
+import * as classic from './craft.ts'
+import { blobby, eye, thruster, vertebra } from './craft.ts'
+import type { Part, Pt } from '../types.ts'
 
-// The Swarm's concept warships at their size (sizes.ts), shown only in the Codex: organic,
-// insect-like shapes, calm, with long segments, one violet band, and one gun per hardpoint in its own
-// fleshy socket. They stand on the droid units' layouts (BIG_LAYOUT).
+// The Swarm's warships at their size (sizes.ts), from its concept designs: organic, insect-like
+// shapes, calm, with long segments, one violet band, and one gun per hardpoint in its own fleshy
+// socket. They stand on the layouts in data/swarm.ts (for now the Confederacy's).
 
 /** Swarm seats: a shell-coloured socket, a heavier bone collar with a violet band. */
 const SWARM_SEAT: SeatLook = { pad: 'hull2', heavy: 'hull', band: 'accent' }

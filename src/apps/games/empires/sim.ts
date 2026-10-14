@@ -97,6 +97,9 @@ export type Unit = {
   /** Carriers: seconds since the last launch. Stations: seconds until the hangar sends out the next
    * defense wing craft (see wings). */
   hangarT: number
+  /** A station that launches strike craft as a carrier does (StationPlan carrier): seconds since
+   * its last brood (its hangarT is the defense wing's). Absent until it first has one. */
+  broodT?: number
   /** Seconds left on construction (mining platforms). */
   building: number
   node: number
@@ -2521,7 +2524,8 @@ function launch(w: World, carrier: Unit, extra = false) {
   const c = carrier.t.carrier
   if (!c || !hangarsUp(carrier)) return
   if (!extra) {
-    const out = new Set(w.units.filter((u) => !u.dead && u.parent === carrier.id).map((u) => u.squad))
+    // (A station's defense wing is its own: only its brood counts here.)
+    const out = new Set(w.units.filter((u) => !u.dead && u.parent === carrier.id && u.t.kind !== 'wing').map((u) => u.squad))
     if (out.size >= c.max + (techBonus(w.players[carrier.owner], carrier.t.id).hangar ?? 0)) return
   }
   const bays = carrier.t.hardpoints.map((h, i) => (h.kind === 'hangar' && alive(carrier, i) ? i : -1)).filter((i) => i >= 0)
@@ -2691,15 +2695,18 @@ export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: num
       if (kindName === 'shield') u.shield = Math.min(u.shield, shieldMax(u))
     }
   } else u.hull -= rest
-  if (u.hull <= 0) {
-    u.hull = 0
-    // Our own side's kills don't count, and earn no experience.
-    kill(w, u, own ? -1 : by)
-    const killer = own ? undefined : w.byId.get(shooter)
-    if (killer && !killer.dead) {
-      killer.kills++
-      gainXp(w, killer, u.t.cost / u.t.squad)
-    }
+  if (u.hull <= 0) hullGone(w, u, own, by, shooter)
+}
+
+/** A unit whose hull has run out: destroyed, and the kill counted for whoever did it. */
+function hullGone(w: World, u: Unit, own: boolean, by: Owner, shooter: number) {
+  u.hull = 0
+  // Our own side's kills don't count, and earn no experience.
+  kill(w, u, own ? -1 : by)
+  const killer = own ? undefined : w.byId.get(shooter)
+  if (killer && !killer.dead) {
+    killer.kills++
+    gainXp(w, killer, u.t.cost / u.t.squad)
   }
 }
 
@@ -3374,6 +3381,7 @@ function fire(w: World, u: Unit, g: Gun, e: Unit) {
   dmg *= (u.t.tier === 'station' && !moduleUp(u, 'sensor') ? 1 : u.mods.damage) * (1 + RANK_BONUS * u.rank)
   if (u.t.kind === 'wing' && !atHome(w, u)) dmg *= DEFENSE_WING.away
   if (e.t.kind === 'wing' && atHome(w, e)) dmg *= DEFENSE_WING.guard
+  if (fireControl.length) dmg *= 1 + controlBonus(w, u)
   w.shots.push({
     x: from.x, y: from.y, vx: (ax - from.x) / Math.max(t, 0.001), vy: (ay - from.y) / Math.max(t, 0.001), left: hit ? t : t * 1.6,
     kind: g.w.kind, owner: u.owner, target: e.id, hp, dmg, hit, sx: from.x, sy: from.y, age: 0, from: u.id,
@@ -4160,6 +4168,70 @@ function terrain(w: World, u: Unit, dt: number) {
   return true
 }
 
+// --- Faction mechanics -----------------------------------------------------------------------------------
+//
+// What a unit's type can switch on (data/kit.ts UnitType): living hulls that grow back, a drain aura,
+// a fire-control aura. A station that launches strike craft is a carrier (see tick and launch); a
+// spinal gun is a hardpoint weapon with an arc (see shoot and bearing). Each is off unless a unit
+// sets it, and none of them draws a random number, so every copy of a battle agrees.
+
+/** Living hulls (UnitType regrow): out of the fight for `delay` seconds, the hull grows back by
+ * `rate` of its full hull a second, as far as it can go (a rush-launched ship's unbuilt hull stays
+ * unbuilt). Only the hull: modules are mended as ever. */
+function regrow(w: World, u: Unit, dt: number) {
+  const g = u.t.regrow!
+  if (w.time - u.lastHit < g.delay) return
+  const cap = hullCap(u)
+  if (u.hull < cap) u.hull = Math.min(cap, u.hull + u.hullMax * g.rate * dt)
+}
+
+/**
+ * Drain auras (UnitType drain): each one takes `dps` hull points a second off every enemy it can
+ * see within `radius`, straight off the hull past shields and modules, and gives `heal` of what it
+ * took to our damaged ships within `radius` (itself included), shared out evenly. What one can't
+ * use (it's mended full) is lost, not passed on.
+ */
+function drains(w: World, dt: number) {
+  for (const u of w.units) {
+    const d = u.t.drain
+    if (!d || u.dead || building(u) || u.site || u.launch) continue
+    let took = 0
+    near(w, u.x, u.y, d.radius, (e) => {
+      if (!foes(w, e.owner, u.owner) || !sees(w, u.owner, e) || planned(e)) return
+      const bite = Math.min(e.hull, d.dps * dt)
+      if (bite <= 0) return
+      took += bite
+      e.lastHit = w.time
+      e.hitBy = u.id
+      alarm(w, e)
+      e.hull -= bite
+      if (e.hull <= 0) hullGone(w, e, false, u.owner, u.id)
+    })
+    if (took <= 0 || d.heal <= 0) continue
+    const hurt: Unit[] = []
+    near(w, u.x, u.y, d.radius, (a) => {
+      if (!foes(w, a.owner, u.owner) && isShip(a.t) && !a.launch && a.hull < hullCap(a)) hurt.push(a)
+    })
+    const each = (took * d.heal) / Math.max(1, hurt.length)
+    for (const a of hurt) a.hull = Math.min(hullCap(a), a.hull + each)
+  }
+}
+
+/** The fire-control auras standing this tick (UnitType fireControl): worked out once a tick, so a
+ * shot only looks through these few. Only ever read during a tick, which fills it afresh. */
+const fireControl: Unit[] = []
+/** How much harder `u` hits under fire control: the best aura of its side it is within (auras
+ * don't stack), 0 when none. Only ships are directed. */
+function controlBonus(w: World, u: Unit) {
+  if (!isShip(u.t)) return 0
+  let best = 0
+  for (const a of fireControl) {
+    const f = a.t.fireControl!
+    if (f.bonus > best && !a.dead && !foes(w, a.owner, u.owner) && d2(a.x, a.y, u.x, u.y) <= f.radius * f.radius) best = f.bonus
+  }
+  return best
+}
+
 export function tick(w: World, dt = STEP) {
   if (w.winner !== -1) return
   w.time += dt
@@ -4179,12 +4251,15 @@ export function tick(w: World, dt = STEP) {
   salvage(w, dt)
   tenders(w, dt)
   fieldRepairs(w, dt)
+  drains(w, dt)
   construction(w, dt)
   finishing(w, dt)
   if (w.hybrid) expansions(w, dt)
   wings(w, dt)
   findSpotGroups(w)
   findEscorts(w)
+  fireControl.length = 0
+  for (const u of w.units) if (u.t.fireControl && !u.dead && !building(u) && !u.site) fireControl.push(u)
   for (const u of w.units) {
     if (u.dead) continue
     // A yard goes up only as fast as engineers build it (see construction).
@@ -4210,16 +4285,27 @@ export function tick(w: World, dt = STEP) {
       const smax = shieldMax(u)
       if (u.shield < smax) u.shield = Math.min(smax, u.shield + u.t.regen * u.mods.regen * (coreUp(u) ? 1 + MODULE_FX.regen : 1) * (1 + RANK_BONUS * u.rank) * dt * (w.time - u.lastHit > 6 ? 2 : 1))
     }
+    if (u.t.regrow) regrow(w, u, dt)
     // A new ship on its way out of its yard or the station's hangar: nothing else until it's clear.
     if (u.launch) {
       launching(w, u, dt)
       continue
     }
     if (u.t.carrier) {
-      u.hangarT += dt
-      if (u.hangarT >= u.t.carrier.every * (techBonus(w.players[u.owner], u.t.id).hangar ? 0.7 : 1)) {
-        u.hangarT = 0
-        launch(w, u)
+      // A station's brood keeps a clock of its own: its hangarT is its defense wing's.
+      const every = u.t.carrier.every * (techBonus(w.players[u.owner], u.t.id).hangar ? 0.7 : 1)
+      if (u.t.tier === 'station') {
+        u.broodT = (u.broodT ?? 0) + dt
+        if (u.broodT >= every) {
+          u.broodT = 0
+          launch(w, u)
+        }
+      } else {
+        u.hangarT += dt
+        if (u.hangarT >= every) {
+          u.hangarT = 0
+          launch(w, u)
+        }
       }
     }
     if (u.retreat > 0) {

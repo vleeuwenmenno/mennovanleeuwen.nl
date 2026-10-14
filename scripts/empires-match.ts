@@ -14,7 +14,7 @@
 import { UNIT } from '../src/apps/games/empires/data.ts'
 import { cmd, type Cmd } from '../src/apps/games/empires/commands.ts'
 import { matchBrains, matchWorld, stepTurn, type MatchInfo } from '../src/apps/games/empires/match.ts'
-import { HASH_EVERY } from '../src/apps/games/empires/protocol.ts'
+import { HASH_EVERY, PROTOCOL } from '../src/apps/games/empires/protocol.ts'
 import { restoreBrain, restoreWorld } from '../src/apps/games/empires/snapshot.ts'
 import { stateHash, type World } from '../src/apps/games/empires/sim.ts'
 import type { Brain } from '../src/apps/games/empires/ai.ts'
@@ -59,7 +59,7 @@ function connect(p: Player, token?: string) {
   const ws = new WebSocket(URL_, { headers: { Origin: ORIGIN } } as any)
   p.ws = ws
   p.send = (m) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(m))
-  ws.onopen = () => p.send({ t: 'hello', ...(token ? { token } : {}) })
+  ws.onopen = () => p.send({ t: 'hello', v: PROTOCOL, ...(token ? { token } : {}) })
   ws.onmessage = (e) => handle(p, JSON.parse(String(e.data)))
 }
 

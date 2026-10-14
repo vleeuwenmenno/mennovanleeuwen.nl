@@ -2,7 +2,7 @@ import { api, getAccount, subscribeAccount } from '../../../os/account'
 import { pullAll, synced } from '../../../os/synced'
 import type { MatchInfo, Turn } from './match'
 import type { BattleSnap } from './snapshot'
-import { MP_PATH, REJOIN_MS, type AwaySeat, type AwayVote, type ClientMsg, type LobbyInfo, type MpLobby, type RosterSeat, type ServerMsg } from './protocol'
+import { MP_PATH, OUTDATED_CODE, PROTOCOL, REJOIN_MS, type AwaySeat, type AwayVote, type ClientMsg, type LobbyInfo, type MpLobby, type RosterSeat, type ServerMsg } from './protocol'
 
 // The game's end of the multiplayer WebSocket. One connection per tab, kept open while the
 // multiplayer screens are up: it reconnects by itself after a drop (resuming the same player with
@@ -40,6 +40,9 @@ export type NetView = {
   away: AwaySeat[]
   /** The server said it was restarting as it closed the connection: we wait for it to come back. */
   restarting: boolean
+  /** The server runs another version of the game (protocol.ts PROTOCOL): reloading the page is the
+   * only way in, so it doesn't try again. */
+  outdated: boolean
   /** The server no longer has the battle or lobby we were in: why, to show until dismissed. */
   lost: { why: string } | null
   /** The remembered name being claimed by itself on connecting (the join screen waits for it);
@@ -143,7 +146,7 @@ export class Net {
   name = ''
   id = ''
   view: NetView = {
-    status: 'connecting', me: null, suggestion: '', login: null, lobbies: [], lobby: null, chat: [], problem: null, rtt: 0, match: null, roster: null, away: [], restarting: false, lost: null, claiming: null, nameNote: null,
+    status: 'connecting', me: null, suggestion: '', login: null, lobbies: [], lobby: null, chat: [], problem: null, rtt: 0, match: null, roster: null, away: [], restarting: false, outdated: false, lost: null, claiming: null, nameNote: null,
   }
   /** The battle's turns not yet played, oldest first. Kept out of `view`: they come 30 a second
    * and the battle screen takes them straight from here. */
@@ -338,7 +341,7 @@ export class Net {
     this.setStatus('connecting')
     ws.onopen = () => {
       this.retry = 0
-      ws.send(JSON.stringify({ t: 'hello', ...readToken() } satisfies ClientMsg))
+      ws.send(JSON.stringify({ t: 'hello', v: PROTOCOL, ...readToken() } satisfies ClientMsg))
       clearInterval(this.pingTimer)
       this.ping()
       this.pingTimer = window.setInterval(() => this.ping(), 2000)
@@ -383,6 +386,12 @@ export class Net {
       this.pings.clear()
       // 4000: another connection of ours took over (a reload); this one is done.
       if (e.code === 4000) this.closed = true
+      // Another version of the game than the server's: trying again won't help, reloading will.
+      if (e.code === OUTDATED_CODE) {
+        this.closed = true
+        this.patch({ outdated: true })
+        this.setStatus('offline')
+      }
       if (this.closed) return
       if (e.code === RESTART_CODE) this.patch({ restarting: true })
       this.setStatus('offline')

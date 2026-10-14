@@ -7,6 +7,8 @@
 // are drawn on a box whose long side is 100 units; a station uses the pixels of its frame (data.ts
 // STATIONS), so its modules can be placed exactly where data.ts puts them.
 
+import type { FactionId } from '../data.ts'
+
 export type Pt = [number, number]
 
 /**
@@ -104,9 +106,8 @@ export type Scorch = { x: number; y: number; r: number; level: number; seed: num
 export type Model = {
   /** The unit type it was built for (a station's level and modules make it a type of its own). */
   key: string
-  /** Whose look it has: its palette and mount style. 'swarm' is the concept kit (swarm.ts), shown
-   * only in the Codex. */
-  faction: 'republic' | 'droid' | 'swarm'
+  /** Whose look it has: its palette and mount style. */
+  faction: FactionId
   /** The box in model units (the unit's dims, scaled). */
   w: number
   h: number

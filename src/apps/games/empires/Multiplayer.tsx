@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { DIFFICULTY, PROFILES, profileOf } from './ai'
-import { CREDIT_STEPS, FACTIONS, type FactionId } from './data'
+import { CREDIT_STEPS, FACTIONS } from './data'
+import { usePickable } from './factions'
 import { Frame, Icon, Tips } from './Hud'
 import { GENERATED, MAP, MAPS, MAX_SEED, generateMap, type MapDef } from './maps'
 import { AiPicker, GenControls, MapCard, MapLegend, MapPreview, Modal, ReinforceOptions, mapSize, slotColor, type Slot } from './Menus'
@@ -137,6 +138,7 @@ function NameField({ v, net, sound, initial, onDone }: { v: NetView; net: Net; s
 
 function Status({ v }: { v: NetView }) {
   if (v.status === 'online') return null
+  if (v.outdated) return <p className="ew-mp-status">The server runs a newer version of the game. Reload the page to play online.</p>
   if (v.restarting) return <p className="ew-mp-status">The server is restarting for an update. You'll be back where you were in a moment…</p>
   return <p className="ew-mp-status">{v.status === 'connecting' ? 'Connecting to the server…' : "Can't reach the server. Trying again…"}</p>
 }
@@ -422,6 +424,8 @@ function SlotRow({ s, i, color, me, mine, host, isHost, myTeam, onSlot, onSeat }
   const canFaction = mine || (host && s.kind === 'ai')
   const canTeam = mine || (host && filled)
   const side = s.team === myTeam ? (mine ? 'Your team' : 'Ally') : 'Enemy'
+  // Every faction (bar a preview's, see factions.ts), and the one this seat has, whoever set it.
+  const factions = usePickable([s.faction])
   let who: ReactNode
   if (s.kind === 'human' && (mine || !host)) who = (
       <strong className="ew-slotwho ew-mp-who" title={s.player === me ? `${s.name} (you)` : s.name}>
@@ -455,9 +459,9 @@ function SlotRow({ s, i, color, me, mine, host, isHost, myTeam, onSlot, onSeat }
       ) : (
         <>
           <div className="ew-seg ew-factionseg" role="group" aria-label="Faction">
-            {(['republic', 'droid'] as FactionId[]).map((f) => (
-              <button key={f} className={s.faction === f ? 'is-on' : ''} disabled={!canFaction && s.faction !== f} onClick={() => canFaction && onSlot(i, { faction: f })} data-tip={FACTIONS[f].long} aria-label={FACTIONS[f].name} aria-pressed={s.faction === f}>
-                <img src={`/games/empires/world/emblem-${f}.webp`} alt="" />
+            {factions.map((f) => (
+              <button key={f} className={s.faction === f ? 'is-on' : ''} disabled={!canFaction && s.faction !== f} onClick={() => canFaction && onSlot(i, { faction: f })} data-tip={FACTIONS[f].preview ? `${FACTIONS[f].long} (preview)` : FACTIONS[f].long} aria-label={FACTIONS[f].name} aria-pressed={s.faction === f}>
+                <img src={FACTIONS[f].emblem} alt="" />
                 <span>{FACTIONS[f].name}</span>
               </button>
             ))}

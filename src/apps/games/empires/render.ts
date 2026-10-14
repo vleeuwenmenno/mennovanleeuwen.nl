@@ -1,11 +1,12 @@
-import { CYARD_SOCKETS, MODULE, STATION_SOCKETS, YARD_GANTRIES, YARD_SOCKETS, FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
+import { CYARD_SOCKETS, FACTION_IDS, MODULE, STATION_SOCKETS, YARD_GANTRIES, YARD_SOCKETS, FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, type FactionId, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
 import { RETREAT_TIME, atHome, building, escorts, foes, hpPos, hullCap, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 import { BREAK_WEIGHTS, breakPieces, hullState, modelFor, unitForSprite, wreckState, type HullState, type Model } from './models/index.ts'
 import { YARD_BERTHS } from './data'
 import { ModelFx } from './models/fx.ts'
-import { PALETTES, hash, rng as seeded } from './models/kit.ts'
+import { hash, rng as seeded } from './models/kit.ts'
+import { PALETTES } from './models/palettes.ts'
 import { drawHull, drawMounts, drawPiece, liveEngines, outlineOf, type Shadow } from './models/paint.ts'
 import { averageRings, moduleRing } from './ranges.ts'
 
@@ -175,13 +176,17 @@ type WeldLook = { glow: string; core: string; key: string; stops: readonly (read
 /** A welding beam's size in world units: its glow's width and its core's, and its flash's radius. */
 type WeldSize = { glow: number; core: number; flash: number }
 /**
- * Welding beams: the engineers' (blue-white for the Republic, orange for the droids) and a yard's
- * gantries' (small and green), sized in world units so they shrink with the ships when zoomed out.
- * The flash is left out below `minFlashPx` on screen, its sparks below `minSparkPx`.
+ * Welding beams: the engineers' (each faction's own colours, FactionInfo `weld`: blue-white for the
+ * Republic, orange for the droids) and a yard's gantries' (small and green), sized in world units so
+ * they shrink with the ships when zoomed out. The flash is left out below `minFlashPx` on screen, its
+ * sparks below `minSparkPx`.
  */
 const WELD = {
-  rep: { glow: 'rgb(110,190,255)', core: 'rgb(232,246,255)', key: 'weld-rep', stops: [[0, '#ffffff'], [0.3, 'rgba(150,210,255,0.9)'], [1, 'rgba(110,190,255,0)']] } as WeldLook,
-  droid: { glow: 'rgb(255,140,50)', core: 'rgb(255,232,190)', key: 'weld-droid', stops: [[0, '#ffffff'], [0.3, 'rgba(255,190,120,0.9)'], [1, 'rgba(255,140,50,0)']] } as WeldLook,
+  /** Each faction's engineers' beam. */
+  side: Object.fromEntries(FACTION_IDS.map((f) => {
+    const c = FACTIONS[f].weld
+    return [f, { glow: c.glow, core: c.core, key: `weld-${f}`, stops: [[0, '#ffffff'], [0.3, c.mid], [1, c.edge]] } as WeldLook]
+  })) as Record<FactionId, WeldLook>,
   yard: { glow: 'rgb(80,255,140)', core: 'rgb(205,255,215)', key: 'weld-yard', stops: [[0, '#f4fff6'], [0.3, 'rgba(120,255,160,0.85)'], [1, 'rgba(60,255,120,0)']] } as WeldLook,
   engineer: { glow: 4.5, core: 1.3, flash: 5 } as WeldSize,
   gantry: { glow: 4, core: 1.2, flash: 4.5 } as WeldSize,
@@ -503,7 +508,7 @@ export class Renderer {
         }
       } else if (e.k === 'boom') {
         if (!seen(e.x, e.y)) continue
-        const color = e.owner === undefined ? '#888' : w.players[e.owner].faction === 'republic' ? '#d8d2c8' : '#c8b48c'
+        const color = e.owner === undefined ? '#888' : FACTIONS[w.players[e.owner].faction].debris
         // A unit we saw breaks into its own fragments (see trackModels); flecks of debris for one we
         // weren't following. The battle's event doesn't say which unit it was, so it is the one we
         // were following that died on that spot.
@@ -2020,7 +2025,7 @@ export class Renderer {
     const [sw, sh] = dims(t)
     const planned = !u.site!.started
     const progress = Math.max(0, Math.min(1, 1 - u.building / t.build))
-    const rgb = t.faction === 'republic' ? '130,205,255' : '255,186,120'
+    const rgb = FACTIONS[t.faction].work
     if (m) drawHull(ctx, m, u.x, u.y, rot, size, zdpr, FRESH, { alpha: planned ? 0.3 : 0.12 })
     ctx.save()
     ctx.translate(u.x, u.y)
@@ -2143,7 +2148,7 @@ export class Renderer {
     const y = u.y + Math.cos(rot) * cy
     const progress = Math.max(0, Math.min(1, 1 - q.left / Math.max(0.001, q.total)))
     const zdpr = z * canvasDpr()
-    const rgb = u.t.faction === 'republic' ? '130,205,255' : '255,186,120'
+    const rgb = FACTIONS[u.t.faction].work
     ctx.save()
     ctx.translate(x, y)
     ctx.rotate(rot)
@@ -2184,8 +2189,7 @@ export class Renderer {
         ctx.globalCompositeOperation = 'lighter'
         ctx.lineCap = 'round'
       }
-      const rep = u.t.faction === 'republic'
-      const look = rep ? WELD.rep : WELD.droid
+      const look = WELD.side[u.t.faction]
       // Where it hits, in the structure's own frame (x across it, y along it, nose up): on a site the
       // welding front, else a spot that wanders over the side facing the craft.
       const [sw, sh] = dims(o.t)
@@ -2393,7 +2397,7 @@ export class Renderer {
    * yard going up (drawSite): unfinished, not wrecked, so no smoke and no fire.
    */
   private drawScaffolds(ctx: CanvasRenderingContext2D, u: Unit, m: Model, size: number, z: number) {
-    const rgb = u.t.faction === 'republic' ? '130,205,255' : '255,186,120'
+    const rgb = FACTIONS[u.t.faction].work
     const k = size / m.long
     const rot = u.a + Math.PI / 2
     for (const i of u.rush!.parts) {

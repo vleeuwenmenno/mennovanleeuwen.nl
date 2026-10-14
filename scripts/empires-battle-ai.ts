@@ -1,7 +1,9 @@
 // How busy the battle AI's hands are, and whether the difficulties still rank: AI-only 1v1
 // skirmishes on the two-player map, headless and deterministic.
 //
-//   node scripts/empires-battle-ai.ts [games] [minutes]
+//   node scripts/empires-battle-ai.ts [games] [minutes] [factions]
+//
+//   factions  the two factions that fight, joined by a dash (default republic-droid)
 //
 // For each pairing it plays `games` battles (a seed each, sides swapped every other game) for up
 // to `minutes`, and reports the wins, and each difficulty's actions a minute (every command its
@@ -12,9 +14,11 @@
 import { MAPS } from '../src/apps/games/empires/maps.ts'
 import { STEP, newWorld, tick } from '../src/apps/games/empires/sim.ts'
 import { DIFFICULTY, newBrain, think, type Difficulty } from '../src/apps/games/empires/ai.ts'
+import type { FactionId } from '../src/apps/games/empires/data.ts'
 
 const games = Number(process.argv[2] ?? 8)
 const minutes = Number(process.argv[3] ?? 20)
+const factions = (process.argv[4] ?? 'republic-droid').split('-') as [FactionId, FactionId]
 const map = MAPS.find((m) => m.spawns.length === 2) ?? MAPS[0]
 const pairs: [Difficulty, Difficulty][] = [
   ['hard', 'medium'],
@@ -30,7 +34,7 @@ for (const [a, b] of pairs) {
   let time = 0
   for (let n = 1; n <= games; n++) {
     const diffs = n % 2 ? [a, b] : [b, a]
-    const seats = diffs.map((d, i) => ({ faction: i ? ('droid' as const) : ('republic' as const), team: i, spawn: i, incomeMul: DIFFICULTY[d].income }))
+    const seats = diffs.map((d, i) => ({ faction: factions[i], team: i, spawn: i, incomeMul: DIFFICULTY[d].income }))
     const w = newWorld(map, seats, { seed: n * 101 })
     const brains = diffs.map((d, i) => newBrain(i, d))
     // Actions taken so far, every 10 s: the busiest minute is the biggest rise over six samples.

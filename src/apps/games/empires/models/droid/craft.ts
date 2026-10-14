@@ -1,6 +1,6 @@
-import { along, box, chamfer, circle, fullHull, halfHull, part, rect, sym, thick, turn, turnPart } from './kit.ts'
-import type { ModelDef } from './spec.ts'
-import type { Detail, Part, Pt } from './types.ts'
+import { along, box, chamfer, circle, fullHull, halfHull, part, rect, sym, thick, turn, turnPart } from '../kit.ts'
+import type { ModelDef } from '../spec.ts'
+import type { Detail, Part, Pt } from '../types.ts'
 
 // The droid navy's style kit: an industrial, mass-produced fleet. Weathered sand and bone plating
 // over dark gunmetal frames, rust-brown and dull blue-grey panels, riveted, a little lopsided
@@ -219,7 +219,7 @@ export const gunship: ModelDef = ({ h }) => {
   return { parts, breakStyle: 'bands' }
 }
 
-// --- Warships: their designs are in proto-droid.ts ---------------------------------------------------
+// --- Warships: their designs are in warships.ts -----------------------------------------------------
 
 /** The flagship's two designs: the battle uses CAPITAL_DESIGN; the Codex shows both. */
 export type CapitalDesign = 'ring' | 'carrier'

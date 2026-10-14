@@ -1,4 +1,4 @@
-import { isShip } from './data'
+import { FACTIONS, isShip } from './data'
 import { Floating, fmt, pingClass } from './Hud'
 import type { RosterSeat, SeatStatus } from './protocol'
 import { relColor } from './render'
@@ -52,7 +52,7 @@ export function Scoreboard({ w, me, names, roster, onClose }: { w: World; me: Ow
                 <tr key={i} className={`${p.alive ? '' : 'is-out'} ${i === me ? 'is-me' : ''}`}>
                   <td>
                     <i className="ew-dot" style={{ background: relColor(w, me, i) }} />
-                    <img src={`/games/empires/world/emblem-${p.faction}.webp`} alt="" />
+                    <img src={FACTIONS[p.faction].emblem} alt="" />
                     {names[i]}
                     {i === me && <small className="ew-muted"> (you)</small>}
                   </td>

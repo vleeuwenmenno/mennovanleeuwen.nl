@@ -4,10 +4,11 @@ import { FACTIONS, MODULE, REBUILD, UNIT, WORKS_NAME, buildable, modulesFor, mod
 import {
   BLOCKADES, CAPTURE_TIME, DAY, GALAXIES, GALAXY_AI, GIANTS, blockadeIn, canSee, contested, known, ownerFor, sees, type BlockadeRule, H, MAX_YARD, PLANET_KINDS, SIZES, STAR_COLOR, STATION_COST, STATION_INCOME, STATION_TIME, W, WEEK,
   autoResolve, buildAt, buildWork, cantRushAt, queueShare, rushIntoBattle, rushLaunch, rushOffered, rushSlot, RUSH_GC, calendar, cancelBuild, cantBuildAt, cantUpgradeStation, cantWork, isWork, isYard, worksUp, workCost, workLock, workName, workTime, yardLock, YARD_KINDS, clashAt, deleteSave, dropWaypoint, eta, factionName, fleetsAt, incomeOf, listSaves, loadSave, moveFleet, plannedHops, renameSave, routeTo, newGalaxy, planetIncome, saveGalaxy,
-  galaxyProfile, settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw, withoutShips,
+  galaxyProfile, rivalOf, settlePending, stopFleet, systemOwner, tickGalaxy, upgradeStation, withdraw, withoutShips,
   type Clash, type Fleet, type Galaxy, type GalaxyChoice, type GalaxySize, type Planet, type PlanetBase, type PlanetKind, type Side, type StarSystem, type WorkId, type YardKind,
 } from './galaxy'
 import { BuildPanel, BuildQueue, Floating, Frame, HpIcon, Icon, Pips, SelChip, ShipArt, ShipCard, Tips, storePage, storedPage, unitTip, type IconName } from './Hud'
+import { usePickable } from './factions'
 import { HP_COLOR } from './icons'
 import { resultOf } from './result'
 import { FleetInventory } from './Inventory'
@@ -209,7 +210,7 @@ function SaveList({ sound, onLoad, current }: { sound: EmpiresSound; onLoad: (g:
     <div className="ew-saves">
       {saves.map((s) => (
         <div key={s.id} className={`ew-save ${s.id === current ? 'is-current' : ''}`}>
-          <img src={`/games/empires/world/emblem-${s.faction}.webp`} alt="" />
+          <img src={FACTIONS[s.faction].emblem} alt="" />
           {renaming?.id === s.id ? (
             <form className="ew-save-name" onSubmit={(e) => {
               e.preventDefault()
@@ -260,13 +261,18 @@ function ConquestSetup({ sound, onBack, onStart }: { sound: EmpiresSound; onBack
   const [seed, setSeed] = useState(() => 1 + Math.floor(Math.random() * 9999))
   const [size, setSize] = useState<GalaxySize>('standard')
   const [faction, setFaction] = useState<FactionId>('republic')
+  // The AI's side: picked, or (null) the player's side's usual rival. Never the player's own.
+  const [rivalPick, setRival] = useState<FactionId | null>(null)
+  const rival = rivalOf({ faction, rival: rivalPick ?? undefined })
+  // The sides to pick from (a preview's only with the preview on, see factions.ts).
+  const sides = usePickable([faction, rival])
   const [difficulty, setDifficulty] = useState<Difficulty>('easy')
   const [credits, setCredits] = useState(3000)
   const [name, setName] = useState('')
   const [blockadeRule, setBlockadeRule] = useState<BlockadeRule>('majority')
   const [frontline, setFrontline] = useState(true)
   const choice: GalaxyChoice = kind === 'rim' ? { kind: 'rim' } : { kind: 'generated', seed }
-  const preview = useMemo(() => newGalaxy({ choice, size, faction, difficulty, credits }), [kind, seed, size, faction, difficulty, credits]) // eslint-disable-line react-hooks/exhaustive-deps
+  const preview = useMemo(() => newGalaxy({ choice, size, faction, rival, difficulty, credits }), [kind, seed, size, faction, rival, difficulty, credits]) // eslint-disable-line react-hooks/exhaustive-deps
   const click = (fn: () => void) => () => {
     sound.unlock()
     sound.click()
@@ -297,7 +303,10 @@ function ConquestSetup({ sound, onBack, onStart }: { sound: EmpiresSound; onBack
             </Field>
             <p className="ew-muted ew-small">{SIZES[size].blurb}. {preview.systems.length} systems, {preview.planets.length} planets.</p>
             <Field label="Your side">
-              <Seg value={faction} options={[['republic', FACTIONS.republic.name], ['droid', FACTIONS.droid.name]]} onChange={setFaction} />
+              <Seg value={faction} options={sides.map((f) => [f, FACTIONS[f].name] as [FactionId, string])} onChange={setFaction} />
+            </Field>
+            <Field label="Enemy side">
+              <Seg value={rival} options={sides.filter((f) => f !== faction).map((f) => [f, FACTIONS[f].name] as [FactionId, string])} onChange={setRival} />
             </Field>
             <Field label="Enemy admiral">
               <select value={difficulty} onChange={(e) => setDifficulty(e.target.value as Difficulty)} data-tip={GALAXY_AI[difficulty].blurb}>
@@ -321,7 +330,7 @@ function ConquestSetup({ sound, onBack, onStart }: { sound: EmpiresSound; onBack
             </p>
             <div className="ew-menu-list is-row">
               <button className="ew-menu-btn" onClick={click(onBack)}><Icon name="back" size={18} /> Back</button>
-              <button className="ew-menu-btn is-primary" onClick={click(() => onStart(newGalaxy({ choice, size, faction, difficulty, credits, name, blockade: blockadeRule, frontline })))}>
+              <button className="ew-menu-btn is-primary" onClick={click(() => onStart(newGalaxy({ choice, size, faction, rival, difficulty, credits, name, blockade: blockadeRule, frontline })))}>
                 <Icon name="play" size={18} /> Start
               </button>
             </div>
@@ -2284,7 +2293,7 @@ function GalaxyMap({ g, session, sound, onExit, onAbandon, onEnd, onLoad, onBatt
           <button className={`ew-top-cell ew-top-faction ${fleetsOpen ? 'is-on' : ''}`} onClick={() => (sound.click(), setFleetsOpen(!fleetsOpen), setMapOpen(false))}
             data-tip={`Our fleets: ${myFleets.length}. Click to show or hide the list.`} aria-label="Our fleets">
             <span className="ew-emblem">
-              <img src={`/games/empires/world/emblem-${myFaction}.webp`} alt="" />
+              <img src={FACTIONS[myFaction].emblem} alt="" />
               {myFleets.length > 0 && <em>{myFleets.length}</em>}
             </span>
             <div>

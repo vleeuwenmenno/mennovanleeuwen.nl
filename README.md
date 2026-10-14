@@ -1681,6 +1681,75 @@ progress carries over both ways, and signing in from Gladiator comes back to the
 Multiplayer works the same. The game in progress belongs to the browser tab instead of a window: a
 reload carries on where it was, closing the tab ends it.
 
+## Empires At War factions
+
+Three factions: the **Republic** (`republic`, unit ids `r-…`), the **Confederacy** (`droid`, ids
+`d-…`: the id stays `droid` so saves and multiplayer keep working) and the **Swarm** (`swarm`, ids
+`s-…`), a bio-mechanical hive that is still being made.
+
+Everything that belongs to one faction is in files of its own, so the factions can be worked on
+side by side without touching each other's:
+
+- **Its data**, [`data/<faction>.ts`](src/apps/games/empires/data/): its ships, its Command Station
+  at every level, its mining and defense platforms and yards, its research, its yards' sockets,
+  berths and gantries, its warships' hardpoint layouts at their size, and how it looks and sounds
+  outside its models (`info`: its name, colours, emblem, welding light, voices, id prefix and its
+  usual rival in Galactic conquest). It is written in the types and helpers of
+  [`data/kit.ts`](src/apps/games/empires/data/kit.ts); [`data.ts`](src/apps/games/empires/data.ts)
+  merges the three into the tables the rest of the game reads (`UNITS`, `UNIT`, `TECHS`,
+  `STATIONS`, `FACTIONS`, …), toughens, scales and sizes them, and holds what all factions share.
+- **Its models**, [`models/<faction>/`](src/apps/games/empires/models/): `craft.ts` (strike
+  craft, station, platforms), `warships.ts` (everything bigger, at its size), `base.ts` (engineers,
+  yards and expansion modules), `mounts.ts` (its turrets and modules), `palette.ts`, and `index.ts`,
+  which lists its designs by unit id. [`models/index.ts`](src/apps/games/empires/models/index.ts)
+  merges them; the geometry ([`kit.ts`](src/apps/games/empires/models/kit.ts)), the warship
+  helpers ([`proto.ts`](src/apps/games/empires/models/proto.ts)), painting and break-ups are shared.
+
+Code that once asked "Republic or droid?" looks the faction up instead (`FACTIONS[f].prefix`,
+`unitOf`, `yardOf`, `wingOf`, the faction's palette and sounds), so a new faction needs no change
+there.
+
+**Faction mechanics** ([`sim.ts`](src/apps/games/empires/sim.ts), set on a unit type in its
+faction's data; all off unless a unit sets them, and none draws a random number):
+
+- `regrow` (`{ rate, delay }`): living hulls. Once `delay` seconds have passed since an enemy last
+  hit it, the hull grows back by `rate` of its full hull a second (0.02: 2%), as far as it can go.
+  A station gets it from a level on (`StationPlan.regrow`, with `level`).
+- `drain` (`{ radius, dps, heal }`): every enemy it sees within `radius` loses `dps` hull points a
+  second, straight off the hull past shields; `heal` of what it took (0.5: half) mends our damaged
+  ships within `radius`, shared evenly.
+- `fireControl` (`{ radius, bonus }`): our ships within `radius` deal `bonus` more damage (0.15:
+  15%); auras don't stack, the best counts.
+- A brood: a station launches strike craft as a flagship carrier does (`StationPlan.carrier`:
+  `{ unit, every, max, level }`, from that level on), on a clock of its own beside its defense wing.
+- A spinal gun (`spinal(weapon, degrees)` in data/kit.ts): fixed along the keel, it fires only
+  within `degrees` either side of the nose, so the whole ship turns to aim it; its mount doesn't
+  turn on the model.
+- No shields: `shield: 0` with no shield generators works everywhere (the HUD shows no shield
+  bar, ion barely scratches the hull, shield research does nothing).
+
+Radii are written at the old battlefield scale and stretched like gun ranges (and spread out with
+the fleet for the bigger hulls, as repair tenders are). `pnpm check:empires-mechanics` switches
+each one on for a test unit and checks what it does.
+
+**The Swarm preview.** Until the Swarm is finished its units are placeholders: the Confederacy's
+numbers in every slot, under Swarm names, drawn with its concept designs (and copies of the
+Confederacy's engineers and yards where there is no concept), its research borrowing the
+Confederacy's pictures, its emblem the Confederacy's. It is hidden from players
+([`factions.ts`](src/apps/games/empires/factions.ts)): the skirmish and multiplayer lobbies, the
+Galactic conquest setup and the Codex only offer it with the `swarmPreview` setting on, whose
+toggle is under Settings → Developer in dev builds. The battle and the server take any faction, so
+a lobby set to the Swarm by a host with the preview on plays normally for everyone.
+
+In Galactic conquest the player picks the enemy's side too (any other faction; by default its usual
+rival). In the Rim Wars the Republic holds the west, the Confederacy the east and the Swarm the Deep
+along the southern edge, two systems that are only there when the Swarm fights.
+
+The multiplayer client and server check each other's `PROTOCOL` version
+([`protocol.ts`](src/apps/games/empires/protocol.ts)) when a connection opens: a copy of the game
+from another version would play another battle, so the server turns it away and the game asks for a
+reload.
+
 ## Empires At War battlefield scale
 
 Three dials in [`scale.ts`](src/apps/games/empires/scale.ts) set how big a battle feels:
@@ -2029,9 +2098,9 @@ with a flight-deck trench and twin bridge towers. Its Bastion station is a squar
 platform of plates and girders that grows with its level: a compact eight-sided core at level 1,
 short arms with docking pods and a girder frame at level 2, long arms, big pods and dry docks at
 level 3, and a great outer frame on struts at level 4, square with corner bastions or octagonal
-(the battle uses `STATION_FRAME` in [`republic.ts`](src/apps/games/empires/models/republic.ts);
+(the battle uses `STATION_FRAME` in [`republic/craft.ts`](src/apps/games/empires/models/republic/craft.ts);
 the Codex shows both). The **Confederacy** is an industrial droid navy
-([`droid.ts`](src/apps/games/empires/models/droid.ts)): weathered sand and bone plating over dark
+([`droid/craft.ts`](src/apps/games/empires/models/droid/craft.ts)): weathered sand and bone plating over dark
 gunmetal, rust-brown and dull blue-grey panels, rivets, red and amber sensor eyes and blue-white
 engines, long spines with heavy forward sections, tall sails, boxy engine blocks and rings and
 spheres for the biggest hulls. Its fighter is a flying droid with a row of eyes and folding
@@ -2047,11 +2116,11 @@ plate, gaining ring arcs and docking arms at level 2, the closed ring with hanga
 pods at level 3, and an outer frame joining gun towers with antenna spires at level 4. The platforms
 of both sides stand on clamp legs that hold them to their asteroid.
 
-The Confederacy's first, insect-like designs are kept in
-[`swarm.ts`](src/apps/games/empires/models/swarm.ts) as the **Swarm**, a concept for a possible
-future third faction: one design for each droid unit on that unit's box and hardpoints, in their
-tan and violet palette. They are never used in battle; the Codex shows them under *Swarm
-(concept)*, on the droid units' numbers, and `check:empires-models` checks them like the rest.
+The Confederacy's first, insect-like designs are the **Swarm**'s models for now
+([`swarm/craft.ts`](src/apps/games/empires/models/swarm/craft.ts) and
+[`swarm/warships.ts`](src/apps/games/empires/models/swarm/warships.ts)): one design for each
+Confederacy unit, on the Swarm unit in the same slot (the same box and hardpoints), in their tan
+and violet palette, until the Swarm is designed properly (see *Empires At War factions*).
 
 - **The format** ([`types.ts`](src/apps/games/empires/models/types.ts)): a model is a list of
   parts, each a polygon (with holes for rings) in a colour role (`hull`, `accent`, `metal`…), a z
@@ -2063,15 +2132,17 @@ tan and violet palette. They are never used in battle; the Codex shows them unde
   [`kit.ts`](src/apps/games/empires/models/kit.ts) build wedge hulls, outlines from half-width
   rows (`halfHull`), tapered sections, wings, engine pods, capsules, smooth organic outlines
   (`spline`), tapering bands along a line for limbs and spars (`thick`), rings, chamfered blocks
-  and mirrored pairs (`sym`), and hold each faction's palette (off-white,
-  deep red and blue light for the Republic; bone tan and violet for the droids; plus green for
-  repair craft and gold for a station's own defense wing).
+  and mirrored pairs (`sym`). Each faction's palette is its own (`models/<faction>/palette.ts`:
+  off-white, deep red and blue light for the Republic; sand, rust and gunmetal for the droids; bone
+  tan and violet for the Swarm; plus green for repair craft and gold for a station's own defense
+  wing).
 - **Hardpoints:** turrets, shield generators, hangars and station modules are mounts placed by
   the model builder on the unit's own hardpoints from [`data.ts`](src/apps/games/empires/data.ts),
   one per hardpoint and in the same order, so they sit exactly where the battle aims and the
   markers show. Destroyed flak turrets blow off (a burnt socket stays); heavy guns, shield
-  generators and modules stay on, wrecked. Mount designs are in
-  [`mounts.ts`](src/apps/games/empires/models/mounts.ts).
+  generators and modules stay on, wrecked. Each faction draws its own mounts
+  (`models/<faction>/mounts.ts`); [`mounts.ts`](src/apps/games/empires/models/mounts.ts) builds
+  and keeps them.
 - **Lighting and caching** ([`paint.ts`](src/apps/games/empires/models/paint.ts)): the light
   comes from the top left of the screen, so a facet's tone (lit, base or shadow) is worked out for
   the ship's heading. A hull is painted once into a bitmap per size bucket (steps of √2 from 32
@@ -2129,7 +2200,8 @@ restart.)
   turret and module sizes all follow the hull. A warship looks round itself for hulls to keep clear
   of as far as the biggest hull there can be, so a gunship makes way for a flagship as much as the
   other way. Scattered rocks keep clear of each start's build radius, so the yards have room.
-- **Hardpoints** (`BIG_LAYOUT`): every warship with hardpoints has a layout on its 0-10 grid, one
+- **Hardpoints** (each faction's `layout`, merged as `BIG_LAYOUT` in data.ts): every warship with
+  hardpoints has a layout on its 0-10 grid, one
   turret per gun, spread over the hull with room between them. Carrier fighters launch from the
   hangars where they sit.
 - **Handling** (`HANDLING`): turn rate ×0.9 / 0.8 / 0.72 / 0.65, acceleration and braking ×0.9 /
@@ -2139,10 +2211,11 @@ restart.)
   hull's radius grew, so a 2.5× flagship doesn't spend half its range on its own hull. Formations
   and the repair tenders' reach spread out by `BIG_SPREAD` (×1.3, or the biggest ship's class).
 - **Designs**: every ship bigger than strike craft is drawn in the same calm style, for all three
-  sides: the Republic's in [`proto.ts`](src/apps/games/empires/models/proto.ts), the droid navy's
-  in [`proto-droid.ts`](src/apps/games/empires/models/proto-droid.ts) (the Gyre in both its ring
-  and carrier designs) and the Swarm concept's in
-  [`proto-swarm.ts`](src/apps/games/empires/models/proto-swarm.ts). Big, quiet surfaces (long
+  sides: the Republic's in [`republic/warships.ts`](src/apps/games/empires/models/republic/warships.ts),
+  the droid navy's in [`droid/warships.ts`](src/apps/games/empires/models/droid/warships.ts) (the
+  Gyre in both its ring and carrier designs) and the Swarm's in
+  [`swarm/warships.ts`](src/apps/games/empires/models/swarm/warships.ts), with the shared helpers in
+  [`proto.ts`](src/apps/games/empires/models/proto.ts). Big, quiet surfaces (long
   armour plates, trenches, a few lights), strong superstructures, and each gun on its own pad or
   barbette. The gunships keep their shape with a calmer surface (`calm`). Cruisers break into three
   chunks, the flagships into four, the Gyre's ring into segments round its core.
@@ -2158,17 +2231,16 @@ The Codex's *Size classes* lays out every ship of a side (the Swarm's too) on on
 
 **Adding a unit's model:**
 
-1. In `data.ts`, give the unit its box (`aspect`, `size`) and its hardpoints and engines on the
-   0-10 grid, as before.
-2. Write a `ModelDef` in the faction's file
-   ([`republic.ts`](src/apps/games/empires/models/republic.ts),
-   [`droid.ts`](src/apps/games/empires/models/droid.ts)) that returns its parts on the unit's box,
+1. In its faction's data (`data/<faction>.ts`), give the unit its box (`aspect`, `size`) and its
+   hardpoints and engines on the 0-10 grid, as before.
+2. Write a `ModelDef` in the faction's models folder (`models/<faction>/craft.ts` or
+   `warships.ts`) that returns its parts on the unit's box,
    100 units on the long side, nose up (a hardpoint at grid (gx, gy) sits at
    ((gx / 10 − 0.5) × w, (gy / 10 − 0.5) × h)). Leave solid hull under every hardpoint, give
    frigates and bigger at least four parts that come off as they are battered, and tie engine
    pods to engine hardpoints (`detach: { hp }`) or engine glows (`engine`).
-3. List it in `DEFS` in [`index.ts`](src/apps/games/empires/models/index.ts), and give any new
-   part names a friendly name in [`codexInfo.ts`](src/apps/games/empires/codexInfo.ts).
+3. List it in the faction's `models/<faction>/index.ts`, and give any new part names a friendly
+   name in [`codexInfo.ts`](src/apps/games/empires/codexInfo.ts).
 4. Run `pnpm check:empires-models` (it fails for any unit without a model), and look at it in the
    Codex's Workshop: damage it, detach its parts and destroy it a few times.
 
