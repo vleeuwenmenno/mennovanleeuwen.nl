@@ -1,15 +1,28 @@
 import { furiganaMode } from '../../data/furigana'
+import { htmlRubyAt } from '../../data/markdown/parse'
 import { seg, width, wrap, type Line, type Seg } from './text'
 
 // Markdown as terminal lines, the way a CLI agent prints a reply: headings in bold, `code` in
 // colour, fenced blocks indented, lists with their marks, quotes with a bar, tables drawn with box
 // lines (or left as they are when too wide), links clickable.
 
-// Furigana, {漢字|かんじ}: drawn as 漢字(かんじ), or as 漢字 alone when Settings → Language & region says Off.
-// Same shape as the one in src/data/markdown/parse.ts.
+// Furigana, {漢字|かんじ} or HTML <ruby>漢字<rt>かんじ</rt></ruby>: drawn as 漢字(かんじ), or as 漢字 alone
+// when Settings → Language & region says Off. Same shapes as in src/data/markdown/parse.ts.
 const RUBY = /(?<![${])\{([^{}|\n\\`]{1,60})\|([^{}|\n\\`]{1,120})\}(?!\})/g
-const furigana = (t: string) =>
-  t.replace(RUBY, (all, base: string, reading: string) => (!base.trim() || !reading.trim() ? all : furiganaMode() === 'off' ? base.trim() : `${base.trim()}(${reading.trim()})`))
+const ruby = (base: string, reading: string) => (furiganaMode() === 'off' ? base : `${base}(${reading})`)
+const curly = (t: string) => t.replace(RUBY, (all, base: string, reading: string) => (!base.trim() || !reading.trim() ? all : ruby(base.trim(), reading.trim())))
+function furigana(t: string) {
+  let out = ''
+  let last = 0
+  for (let i = t.indexOf('<'); i !== -1; i = t.indexOf('<', i + 1)) {
+    const r = htmlRubyAt(t, i)
+    if (!r) continue
+    out += curly(t.slice(last, i)) + r.pairs.map((p) => ruby(p.base, p.reading)).join('')
+    last = i + r.length
+    i = last - 1
+  }
+  return out + curly(t.slice(last))
+}
 
 /** Inline Markdown: **bold**, *em*, `code`, [text](url), bare URLs, furigana. */
 export function inline(text: string, base?: string): Seg[] {
