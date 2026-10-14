@@ -8,7 +8,8 @@ import {
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { modelFor, typeOfSprite } from './models/index.ts'
 import { moduleThumbnail, thumbnail } from './models/paint.ts'
-import { keyName, useSettings } from './settings'
+import { keyName, modName, useSettings, type Action } from './settings'
+import { freeGroup, type GroupInfo } from './groups'
 import { LongPress, isTouch, shiftOf, useCoarse, useLongPressWheel } from './Touch'
 import { FIELD_DAMAGE, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
@@ -19,8 +20,8 @@ import { FIELD_DAMAGE, cantExpand, expUp, moduleLock, moduleRebuildCost, cantCon
 // (TechTree.tsx); the tiles here only show a ship type's own upgrades.
 
 export type Hud = {
-  /** Control groups that still have ships: their key, size, and the sprite of the biggest. */
-  groups: { key: string; count: number; sprite: string }[]
+  /** Control groups that still hold anything: their key, size, and the picture of the main unit. */
+  groups: GroupInfo[]
   /** Our warships with nothing to do. */
   idle: number
   credits: number
@@ -98,6 +99,8 @@ const ICONS = {
   slip: 'M5 3v18 M19 3v18 M5 8h14 M9.5 21v-7l2.5-4l2.5 4v7',
   // Hyperspace: streaks closing in on a point.
   jump: 'M12 12m-2.5 0a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0 M2 12h5 M17 12h5 M4.5 5.5l3.5 3 M19.5 18.5l-3.5-3 M4.5 18.5l3.5-3 M19.5 5.5l-3.5 3',
+  // Credits handed across: a coin and an arrow on its way.
+  give: 'M7.5 12m-4.5 0a4.5 4.5 0 1 0 9 0a4.5 4.5 0 1 0 -9 0 M7.5 9.5v5 M14 12h7.5 M18.5 9l3 3l-3 3',
 } as const
 export type IconName = keyof typeof ICONS
 
@@ -509,7 +512,7 @@ function Vitals({ u, squad = [u], now }: { u: Unit; squad?: Unit[]; now: number 
 
 // --- Top bar ----------------------------------------------------------------------------------------
 
-export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onShipyard, onYard, onTechTree, onReserves, onEconomy, onPlayers, onMap, mapOpen, ping }: {
+export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onShipyard, onYard, onTechTree, onReserves, onEconomy, onPlayers, onMap, mapOpen, ping, onGift, giftOpen }: {
   hud: Hud
   /** Select one of our yards (hybrid bases). */
   onYard?: (id: number) => void
@@ -531,6 +534,9 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
   /** Phones hide the tactical map: this shows it again (the button only shows on phones). */
   onMap?: () => void
   mapOpen?: boolean
+  /** Team battles: opens the panel to send credits to an ally (left out without allies). */
+  onGift?: () => void
+  giftOpen?: boolean
 }) {
   const q = hud.queue[0]
   const r = hud.research[0]
@@ -543,6 +549,11 @@ export function TopBar({ hud, faction, sector, ui, onPause, onSpeed, onMenu, onS
         <b className="ew-big">{fmt(hud.credits)}</b>
         <small className="ew-good">+{fmt(hud.income * 60)} / min</small>
       </button>
+      {onGift && (
+        <button className={`ew-top-cell ew-top-btn ew-giftbtn ${giftOpen ? 'is-on' : ''}`} onClick={onGift} aria-pressed={!!giftOpen} aria-label="Send credits to an ally" data-tip="Send credits to an ally">
+          <span className="ew-gold"><Icon name="give" size={18} /></span>
+        </button>
+      )}
       <div className={`ew-top-cell ${hud.pop >= hud.popCap ? 'is-full' : ''}`} data-tip="Fleet size / capacity. Capture beacons and upgrade the station for more.">
         <Icon name="fleet" size={20} />
         <b className="ew-big">{hud.pop}</b>
@@ -671,6 +682,84 @@ function FactionButton({ hud, faction, sector, onReserves }: { hud: Hud; faction
         </span>
       )}
     </span>
+  )
+}
+
+// --- Credits for allies -------------------------------------------------------------------------------
+
+/** An ally credits can go to: their seat, name, side and (teammates see it) credits. */
+export type Ally = { seat: Owner; name: string; faction: FactionId; credits: number; ai: boolean }
+/** What the amount buttons add. */
+const GIFT_STEPS = [250, 500, 1000]
+/** "All but": what the last button keeps back. */
+const GIFT_KEEP = 100
+
+/**
+ * The panel the top bar's send button opens in a team battle: pick an ally (with their credits), an
+ * amount (+250, +500, +1000 add up; Half and All but 100 set it; or type it), and send. `onSend`
+ * answers why not, or null once it's on its way; the message log (and the ally's) confirms it when
+ * it lands.
+ */
+export function GiftPanel({ credits, allies, onSend, onClose }: {
+  credits: number
+  allies: Ally[]
+  onSend: (seat: Owner, amount: number) => string | null
+  onClose: () => void
+}) {
+  const [to, setTo] = useState(allies[0]?.seat ?? -1)
+  const [amount, setAmount] = useState(0)
+  const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null)
+  const have = Math.floor(credits)
+  const ally = allies.find((a) => a.seat === to) ?? allies[0]
+  const amt = Math.max(0, Math.min(amount, have))
+  const pick = (n: number) => {
+    setAmount(Math.max(0, Math.min(have, Math.floor(n))))
+    setNote(null)
+  }
+  const send = () => {
+    if (!ally || amt <= 0) return
+    const why = onSend(ally.seat, amt)
+    setNote(why ? { text: why, ok: false } : { text: `${fmt(amt)} credits sent to ${ally.name}`, ok: true })
+    if (!why) setAmount(0)
+  }
+  return (
+    <div className="ew-giftpop" data-nodrag role="dialog" aria-label="Send credits">
+      <Frame title="Send credits" aside={<button className="ew-giftx" onClick={onClose} aria-label="Close">×</button>}>
+        <div className="ew-giftallies" role="radiogroup" aria-label="Ally">
+          {allies.map((a) => (
+            <button key={a.seat} role="radio" aria-checked={a.seat === ally?.seat} className={a.seat === ally?.seat ? 'is-on' : ''} onClick={() => (setTo(a.seat), setNote(null))}>
+              <img src={`/games/empires/world/emblem-${a.faction}.webp`} alt="" />
+              <span>
+                <b>{a.name}</b>
+                <small>{a.ai ? 'AI ally' : 'Ally'} · <span className="ew-gold">{fmt(a.credits)}</span> credits</small>
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="ew-giftamts">
+          {GIFT_STEPS.map((n) => (
+            <button key={n} onClick={() => pick(amt + n)} disabled={amt >= have}>+{fmt(n)}</button>
+          ))}
+          <button onClick={() => pick(have / 2)} disabled={have < 2}>Half</button>
+          <button onClick={() => pick(have - GIFT_KEEP)} disabled={have <= GIFT_KEEP}>All but {GIFT_KEEP}</button>
+        </div>
+        <label className="ew-giftcustom">
+          <span className="ew-muted">Amount</span>
+          <input type="number" inputMode="numeric" min={0} max={have} step={50} value={amt || ''} placeholder="0"
+            onChange={(e) => pick(Number(e.target.value) || 0)}
+            onKeyDown={(e) => {
+              e.stopPropagation()
+              if (e.key === 'Enter') send()
+              else if (e.key === 'Escape') onClose()
+            }} />
+          <small className="ew-muted">of {fmt(have)}</small>
+        </label>
+        <button className="ew-go ew-giftsend" onClick={send} disabled={!ally || amt <= 0}>
+          {ally && amt > 0 ? `Send ${fmt(amt)} to ${ally.name}` : 'Pick an amount'}
+        </button>
+        {note && <small className={note.ok ? 'ew-good' : 'ew-bad'} role="status">{note.text}</small>}
+      </Frame>
+    </div>
   )
 }
 
@@ -1482,7 +1571,7 @@ const SPEND: [SpendKind, string, string][] = [
   ['structures', 'Platforms', '#7dffa0'],
   ['repairs', 'Repairs', '#ffd36e'],
 ]
-const LEDGER_COLOR: Record<LedgerEntry['kind'], string> = { ships: '#ff9a6e', research: '#b08cff', structures: '#7dffa0', repairs: '#ffd36e', salvage: '#f2c14a', refund: '#c890ff', cancel: '#9fb0c8' }
+const LEDGER_COLOR: Record<LedgerEntry['kind'], string> = { ships: '#ff9a6e', research: '#b08cff', structures: '#7dffa0', repairs: '#ffd36e', salvage: '#f2c14a', refund: '#c890ff', cancel: '#9fb0c8', gift: '#59c8ff' }
 
 /** Credits and income over the battle: credits as a gold area, income per minute as a green line,
  * each on its own scale. */
@@ -1535,7 +1624,11 @@ function Breakdown({ rows }: { rows: { label: string; color: string; value: numb
  * The economy: credits now and coming in, where the income comes from, credits over the battle,
  * what was earned and spent by kind, refunds on their way, and the latest purchases and payouts.
  */
-export function EconomyPanel({ w, me, onClose }: { w: World; me: Owner; onClose: () => void }) {
+/** A ledger line as the economy shows it: a gift names the ally. */
+const ledgerWhat = (e: LedgerEntry, names?: string[]) =>
+  e.kind === 'gift' && e.seat !== undefined && names?.[e.seat] ? (e.amount < 0 ? `Sent to ${names[e.seat]}` : `From ${names[e.seat]}`) : e.what
+
+export function EconomyPanel({ w, me, onClose, names }: { w: World; me: Owner; onClose: () => void; /** Players' names by seat, for gifts. */ names?: string[] }) {
   const p = w.players[me]
   const parts = p.incomeParts
   const mines = w.units.filter((u) => u.owner === me && !u.dead && u.t.tier === 'mine').length
@@ -1567,6 +1660,15 @@ export function EconomyPanel({ w, me, onClose }: { w: World; me: Owner; onClose:
         { label: 'Mining', color: '#4fe3d8', value: parts.mines * 60, note: `${mines} platform${mines === 1 ? '' : 's'}` },
         { label: 'Beacons', color: '#c8d4ee', value: parts.beacons * 60, note: `${beacons} held` },
       ]} />
+      {(p.gave || p.got) && (
+        <>
+        <h5>Shared with allies</h5>
+        <Breakdown rows={[
+          { label: 'Sent to allies', color: '#59c8ff', value: p.gave ?? 0 },
+          { label: 'From allies', color: '#7dffa0', value: p.got ?? 0 },
+        ]} />
+        </>
+      )}
       <h5>Over the battle</h5>
       <EconomyChart history={p.history} now={w.time} />
       <div className="ew-econ-cols">
@@ -1599,7 +1701,7 @@ export function EconomyPanel({ w, me, onClose }: { w: World; me: Owner; onClose:
           {[...p.ledger].reverse().slice(0, 12).map((e, i) => (
             <li key={i}>
               <span className="ew-muted">{clock(e.t)}</span>
-              <span><i style={{ background: LEDGER_COLOR[e.kind] }} /> {e.what}</span>
+              <span><i style={{ background: LEDGER_COLOR[e.kind] }} /> {ledgerWhat(e, names)}</span>
               <b className={e.amount >= 0 ? 'ew-good' : 'ew-spent'}>{e.amount >= 0 ? '+' : '−'}{fmt(Math.abs(e.amount))}</b>
             </li>
           ))}
@@ -2097,20 +2199,59 @@ export const STANCE_INFO: Record<Stance, { label: string; icon: IconName; blurb:
 /** The stance after this one, for the button and its key. */
 export const nextStance = (s: Stance) => STANCES[(STANCES.indexOf(s) + 1) % STANCES.length]
 
-/** A control group's button: a tap selects it; on touch a long press sets it to the selection. */
-function GroupButton({ g, onGroup, onAssign, canAssign }: { g: Hud['groups'][number]; onGroup: (key: string) => void; onAssign?: (key: string, clear?: boolean) => void; canAssign: boolean }) {
-  const art = unitArt
+// --- Control groups ---------------------------------------------------------------------------------
+
+/** How a control group changes: set to the selection, the selection added, or emptied. */
+export type GroupEdit = 'set' | 'add' | 'clear'
+
+/**
+ * The control groups that hold anything, as a strip of chips above the selection: the group's key,
+ * the picture of its main unit and how many it holds. A click (a tap) selects the group, a double
+ * click (a double tap) looks at it too. Keyboards set and add with the group modifiers; fingers
+ * long-press a chip to set it to the selection, add to it or clear it, and tap "+ Group" to save
+ * the selection as the next free group. Nothing shows while there are no groups.
+ */
+export function GroupBar({ groups, onGroup, onEdit, canAssign }: {
+  groups: GroupInfo[]
+  onGroup: (key: string) => void
+  onEdit: (key: string, how: GroupEdit) => void
+  /** Whether there is anything of ours selected to put in a group. */
+  canAssign: boolean
+}) {
+  const coarse = useCoarse()
+  const free = coarse && canAssign ? freeGroup(groups) : undefined
+  if (!groups.length && !free) return null
+  return (
+    <div className="ew-groupbar" role="group" aria-label="Control groups" data-nodrag>
+      {groups.map((g) => (
+        <GroupChip key={g.key} g={g} onGroup={onGroup} onEdit={onEdit} canAssign={canAssign} />
+      ))}
+      {free && (
+        <button className="ew-gchip ew-gadd" onClick={() => onEdit(free, 'set')} data-tip={`Save the selection as group ${free}. Long-press a group to set it again, add to it or clear it.`}>
+          <b>+</b>
+          <small>Group</small>
+        </button>
+      )}
+    </div>
+  )
+}
+
+function GroupChip({ g, onGroup, onEdit, canAssign }: { g: GroupInfo; onGroup: (key: string) => void; onEdit: (key: string, how: GroupEdit) => void; canAssign: boolean }) {
+  const { keys, groupSet, groupAdd } = useSettings()
+  const key = keyName(keys[`group${g.key}` as Action])
   const press = useLongPressWheel(
     () => [
-      { id: 'set', label: 'Set to selection', icon: <Icon name="army" size={18} />, disabled: !canAssign && 'Select some of ours first', run: () => onAssign?.(g.key) },
-      { id: 'clear', label: 'Clear group', icon: <Icon name="stop" size={18} />, danger: true, run: () => onAssign?.(g.key, true) },
+      { id: 'set', label: 'Set to selection', icon: <Icon name="army" size={18} />, disabled: !canAssign && 'Select some of ours first', run: () => onEdit(g.key, 'set') },
+      { id: 'add', label: 'Add selection', icon: <Icon name="fleet" size={18} />, disabled: !canAssign && 'Select some of ours first', run: () => onEdit(g.key, 'add') },
+      { id: 'clear', label: 'Clear group', icon: <Icon name="stop" size={18} />, danger: true, run: () => onEdit(g.key, 'clear') },
     ],
     `Group ${g.key}`,
   )
   return (
-    <button {...(onAssign ? press : {})} onClick={() => onGroup(g.key)} data-tip={`Group ${g.key}: ${g.count} ships (press ${g.key}, twice to look)`}>
+    <button className="ew-gchip" {...press} onClick={() => onGroup(g.key)} aria-label={`Group ${g.key}: ${g.count}`}
+      data-tip={`Group ${g.key}: ${g.count} ${g.count === 1 ? 'unit' : 'units'}. Click to select it (${key}), double-click to look at it.\n${modName(groupSet)}+${key} sets it to the selection, ${modName(groupAdd)}+${key} adds the selection.`}>
       <b>{g.key}</b>
-      {g.sprite && <img src={art(g.sprite)} alt="" />}
+      {g.sprite && <img src={unitArt(g.sprite)} alt="" />}
       <small>{g.count}</small>
     </button>
   )
@@ -2125,14 +2266,8 @@ const COMMANDS: { id: Command; label: string; icon: IconName }[] = [
   { id: 'rally', label: 'Rally point', icon: 'rally' },
 ]
 
-export function SelectionPanel({ w, sel, me, mode, onCommand, onPick, groups, onGroup, canAssign = false, onAssign }: {
+export function SelectionPanel({ w, sel, me, mode, onCommand, onPick }: {
   w: World
-  groups: Hud['groups']
-  onGroup: (key: string) => void
-  /** Whether there is anything of ours selected to put in a control group. */
-  canAssign?: boolean
-  /** Touch: set a control group to the selection (or clear it); keyboards use Ctrl+digit. */
-  onAssign?: (key: string, clear?: boolean) => void
   sel: Unit[]
   me: Owner
   mode: Mode
@@ -2169,24 +2304,8 @@ export function SelectionPanel({ w, sel, me, mode, onCommand, onPick, groups, on
   // The keys as bound in Settings, not the defaults.
   const { keys } = useSettings()
   const keyFor = (c: Command) => keyName(keys[c])
-  // Fingers have no Ctrl+digit: a button saves the selection as the next free group.
-  const coarse = useCoarse()
-  const free = onAssign && coarse && canAssign ? ['1', '2', '3', '4', '5', '6', '7', '8', '9'].find((k) => !groups.some((g) => g.key === k)) : undefined
   return (
     <Frame className="ew-selframe" title="Selected units" aside={<b className="ew-selcount">{sel.length || ''}</b>}>
-      {(groups.length > 0 || free) && (
-        <div className="ew-groups" aria-label="Control groups">
-          {groups.map((g) => (
-            <GroupButton key={g.key} g={g} onGroup={onGroup} onAssign={onAssign} canAssign={canAssign} />
-          ))}
-          {free && (
-            <button className="ew-groupadd" onClick={() => onAssign!(free)} data-tip={`Save the selection as group ${free}. Long-press a group to set it again.`}>
-              <b>+</b>
-              <small>Group</small>
-            </button>
-          )}
-        </div>
-      )}
       <div className="ew-seltiles">
         {shown.map((g) => {
           const u = g[0]

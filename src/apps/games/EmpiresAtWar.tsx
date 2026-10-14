@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { WinState } from '../../os/wm'
-import { DIFFICULTY, fleetThink, newBrain, profileOf, think, type Brain } from './empires/ai'
+import { DIFFICULTY, aidAllies, fleetThink, newBrain, profileOf, think, type Brain } from './empires/ai'
 import { BUILD_RADIUS, FACTIONS, MODULE, MODULES, SITE_UPGRADES, TECH, UNIT, WORKS_NAME, buildable, dims, isEngineer, isShip, worksOf, yardOf, yardsFor, type HardpointKind, type ModuleId, type Tier } from './empires/data'
-import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, Icon, ReserveTray, SelChip, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, nextStance, type Command, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
+import { DetailPanel, EconomyPanel, FieldIntel, Floating, Frame, GiftPanel, GroupBar, Icon, ReserveTray, SelChip, Tips, STANCE_INFO, SelectionPanel, TacticalMap, TopBar, fmt, nextStance, type Ally, type Command, type GroupEdit, type Hud, type IconName, type MapFilter, type Mode } from './empires/Hud'
 import { LongPress, SELPOP_KEEP, TouchBar, WheelHost, getTouchMods, isTouch, useCoarse, useTapAway, setTouchMod, shiftOf, useWheel, type WheelItem, type WheelRequest } from './empires/Touch'
 import { BattleMenu, HowToPlay, KeybindsPanel, Lobby, MainMenu, Modal, Result, SettingsPanel, setupAreas, setupMap, slotName, type MenuScreen, type Setup, type Slot } from './empires/Menus'
 import { Conquest, type ConquestBattle } from './empires/Conquest'
@@ -14,7 +14,8 @@ import { HASH_EVERY } from './empires/protocol'
 import { outdatedSnapshot, restoreBrain, restoreWorld, snapBrain, snapshotWorld, type BattleSnap } from './empires/snapshot'
 import { listSaves, loadSave, type Galaxy } from './empires/galaxy'
 import { loadSkirmish, mpActive, resumeGalaxy, saveSkirmish } from './empires/keep'
-import { actionFor, getSettings, keyName, setSettings, useAskedPanel, useSettings } from './empires/settings'
+import { actionFor, getSettings, groupKeyOf, keyName, modOf, setSettings, useAskedPanel, useSettings } from './empires/settings'
+import { DoublePress, addToGroup, groupInfo, members, setGroup as putGroup, type Groups } from './empires/groups'
 import { HP_NAME, hpName } from './empires/icons'
 import { Renderer, relColor, type Camera, type View } from './empires/render'
 import { beginLayout } from './empires/layout'
@@ -347,18 +348,10 @@ const ToastStack = memo(function ToastStack({ store, low, look }: { store: Toast
   )
 })
 
-function snapshot(w: World, me: Owner, sel: Set<number>, groups: Map<string, number[]>): Hud {
+function snapshot(w: World, me: Owner, sel: Set<number>, groups: Groups): Hud {
   const p = w.players[me]
-  const RANKED: Tier[] = ['fighter', 'gunship', 'frigate', 'cruiser', 'capital']
   return {
-    groups: [...groups.entries()]
-      .map(([key, ids]) => {
-        const us = ids.map((i) => w.byId.get(i)).filter((u): u is Unit => !!u && !u.dead)
-        const lead = us.reduce<Unit | null>((b, u) => (!b || RANKED.indexOf(u.t.tier) > RANKED.indexOf(b.t.tier) ? u : b), null)
-        return { key, count: us.length, sprite: lead?.t.sprite ?? '' }
-      })
-      .filter((g) => g.count)
-      .sort((a, b) => a.key.localeCompare(b.key)),
+    groups: groupInfo(w, me, groups),
     idle: w.units.filter((u) => u.owner === me && isShip(u.t) && !u.parent && u.order.k === 'idle' && !u.target && u.stance !== 'hold').length,
     credits: p.credits, income: p.income, pop: p.pop, popCap: p.popCap, level: p.level,
     queue: p.queue.map((q) => ({ ...q })), reserve: [...p.reserve], research: p.research.map((r) => ({ ...r })), techs: [...p.techs], time: w.time, sel: [...sel], winner: w.winner,
@@ -533,7 +526,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   const [ready, setReady] = useState(false)
   const [hud, setHud] = useState<Hud>(() => snapshot(world.current, me, selected.current, groups.current))
   const [toasts] = useState(() => new ToastStore())
-  const [ui, setUi] = useState({ paused: false, speed: speed.current, mode: 'normal' as Mode, draw: null as 'line' | 'face' | null, menu: false, panel: null as 'settings' | 'keys' | 'howto' | null, tree: false, deploy: deploying.current, placed: placed.current, reserves: !!conquest, economy: false, players: false })
+  const [ui, setUi] = useState({ paused: false, speed: speed.current, mode: 'normal' as Mode, draw: null as 'line' | 'face' | null, menu: false, panel: null as 'settings' | 'keys' | 'howto' | null, tree: false, deploy: deploying.current, placed: placed.current, reserves: !!conquest, economy: false, players: false, gift: false })
   /** Whether the game was paused before a menu opened (menus pause it, closing them restores that). */
   const pausedBefore = useRef(false)
   const uiRef = useRef(ui)
@@ -1015,17 +1008,22 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     if (idle.length) sound.select(myFaction, voice())
     else sound.error()
   }
-  /** Select a control group; asking for the one already selected looks at it. */
+  /** Select a control group (its key, a click or a tap on its chip); twice in quick succession also
+   * looks at it. A group of one yard (or the station) opens its build panel, as selecting it does. */
+  const groupPress = useRef(new DoublePress())
   const recallGroup = (k: string) => {
     const w = world.current
-    const ids = (groups.current.get(k) ?? []).filter((i) => w.byId.get(i))
-    if (!ids.length) return
-    const again = ids.length === selected.current.size && ids.every((i) => selected.current.has(i))
-    select(ids)
-    if (again) {
-      const us = ids.map((i) => w.byId.get(i)!)
-      centerOn(us.reduce((s, u) => s + u.x, 0) / us.length, us.reduce((s, u) => s + u.y, 0) / us.length)
-    } else sound.select(myFaction, voice())
+    const us = members(w, me, groups.current, k)
+    if (!us.length) {
+      groupPress.current.hit('', 0)
+      return
+    }
+    select(us.map((u) => u.id))
+    if (groupPress.current.hit(k, performance.now())) {
+      // Where most of it is: the middle of the group, or the one structure in it.
+      const one = us.length === 1 && !isShip(us[0].t)
+      centerOn(us.reduce((s, u) => s + u.x, 0) / us.length + (one ? 150 : 0), us.reduce((s, u) => s + u.y, 0) / us.length + (one ? 80 : 0))
+    } else pickedSound(us.reduce((b, u) => (u.t.size > b.t.size ? u : b), us[0]))
   }
   const selectArmy = () => {
     select(world.current.units.filter((u) => u.owner === me && isShip(u.t)).map((u) => u.id))
@@ -1051,11 +1049,22 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
   }
   /** The crew of what was just picked answers (structures just click). */
   const pickedSound = (u: Unit) => (isShip(u.t) || u.t.tier === 'station' ? sound.select(myFaction, u.t.tier) : sound.click())
-  const setGroup = (k: string, clear = false) => {
-    if (clear) groups.current.delete(k)
-    else groups.current.set(k, mySelection().map((u) => u.id))
-    toast(clear ? `Group ${k} cleared` : `Group ${k} set`, 'info')
+  /** Set group `k` to the selection, add the selection to it, or clear it (Ctrl or Shift with its
+   * key, or a long press on its chip). */
+  const editGroup = (k: string, how: GroupEdit) => {
+    const ids = mySelection().map((u) => u.id)
+    if (how !== 'clear' && !ids.length) {
+      toast('Select some of ours first, then put them in a group', 'bad')
+      return sound.error()
+    }
+    if (how === 'clear') putGroup(groups.current, k, [])
+    else if (how === 'set') putGroup(groups.current, k, ids)
+    else addToGroup(groups.current, k, ids)
+    const n = members(world.current, me, groups.current, k).length
+    toast(how === 'clear' ? `Group ${k} cleared` : `Group ${k}${how === 'add' ? ' now' : ''}: ${n} ${n === 1 ? 'unit' : 'units'}`, 'info')
     sound.click()
+    // The bar shows it at once, not at the next HUD refresh.
+    setHud(snapshot(world.current, me, selected.current, groups.current))
   }
 
   /**
@@ -1380,6 +1389,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         let steps = 0
         while (acc >= STEP && steps < (speed.current > 4 ? 24 : 12)) {
           for (const b of brains.current) (w.fleet ? fleetThink : think)(w, b, STEP)
+          aidAllies(w, brains.current)
           tick(w)
           if (import.meta.env.DEV) devRef.current?.afterTick(w, me)
           events.push(...w.events)
@@ -1509,6 +1519,11 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         } else if (e.k === 'expanded' && e.owner === me) {
           sound.structureDone('yard')
           toast(`${MODULE[e.id].name} finished on the ${WORKS_NAME[MODULE[e.id].on]}`, 'good', { x: e.x, y: e.y, unit: e.unit })
+        } else if (e.k === 'gift' && (e.to === me || e.from === me)) {
+          if (e.to === me) {
+            sound.payday()
+            toast(`${seats[e.from].name} sent you ${fmt(e.amount)} credits`, 'good')
+          } else toast(`You sent ${seats[e.to].name} ${fmt(e.amount)} credits`, 'good')
         } else if (e.k === 'tech' && e.owner === me) {
           sound.researchDone()
           toast(`Research complete: ${TECH[e.id].name}`, 'good')
@@ -1609,16 +1624,25 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         beginBattle()
         return
       }
+      // Control groups: the key selects; with the set or add modifier (Ctrl and Shift unless
+      // rebound) it sets or adds. Ctrl+number is also the browser's tab switch: taking the key
+      // press here keeps the browser from switching (and in fullscreen the keys are locked, below).
+      const gk = groupKeyOf(keymap, e)
+      if (gk) {
+        const mod = modOf(e)
+        const how = mod === settingsRef.current.groupSet ? 'set' : mod === settingsRef.current.groupAdd ? 'add' : mod === '' ? 'select' : null
+        if (how) {
+          e.preventDefault()
+          if (e.repeat) return
+          if (how === 'select') recallGroup(gk)
+          else editGroup(gk, how)
+          return
+        }
+      }
       const action = !e.ctrlKey && !e.metaKey && !e.altKey ? actionFor(keymap, k) : undefined
       // Panning keys are held, not pressed.
       if (k.startsWith('arrow') || action === 'panUp' || action === 'panDown' || action === 'panLeft' || action === 'panRight') {
         keys.current.add(k)
-        e.preventDefault()
-        return
-      }
-      if (e.ctrlKey && /^[1-9]$/.test(k)) {
-        groups.current.set(k, mySelection().map((u) => u.id))
-        toast(`Group ${k} set`, 'info')
         e.preventDefault()
         return
       }
@@ -1634,10 +1658,10 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         e.preventDefault()
         return
       }
-      if (/^[1-9]$/.test(k)) recallGroup(k)
-      else if (k === 'escape') {
+      if (k === 'escape') {
         // Esc backs out of whatever is open, one step at a time, and finally opens the menu.
         if (uiRef.current.menu || uiRef.current.panel) closeMenu()
+        else if (uiRef.current.gift) setUi((u) => ({ ...u, gift: false }))
         else if (uiRef.current.tree) setTree(false)
         else if (mode.current !== 'normal') setMode('normal')
         else if (turretPick.current) turretPick.current = null
@@ -1682,6 +1706,22 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focused])
+
+  // In the browser's fullscreen (the game's own page), lock the number keys to the page where the
+  // browser offers it (Keyboard Lock, Chromium): Ctrl+number then reaches the game even in a browser
+  // that would otherwise switch tabs with it. Esc isn't locked, so it still leaves fullscreen.
+  useEffect(() => {
+    const kb = (navigator as Navigator & { keyboard?: { lock?: (codes?: string[]) => Promise<void>; unlock?: () => void } }).keyboard
+    if (!kb?.lock || !kb.unlock) return
+    const codes = [...'1234567890'].map((d) => `Digit${d}`)
+    const sync = () => (document.fullscreenElement ? kb.lock!(codes).catch(() => {}) : kb.unlock!())
+    sync()
+    document.addEventListener('fullscreenchange', sync)
+    return () => {
+      document.removeEventListener('fullscreenchange', sync)
+      kb.unlock!()
+    }
+  }, [])
 
   /** Where a wheel or key zoom is heading: the frame loop eases towards it, around the point that
    * was under the pointer, so wheel notches don't show as jumps. */
@@ -2310,8 +2350,29 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [net?.roster])
+  // Online: an order the server turned down (credits that can't go, say) says why.
+  const problemSeen = useRef(net?.problem?.n ?? 0)
+  useEffect(() => {
+    const p = net?.problem
+    if (!p || p.n === problemSeen.current) return
+    problemSeen.current = p.n
+    toast(p.why, 'bad')
+    sound.error()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [net?.problem])
 
   const w = world.current
+  // Team battles: the allies credits can go to (teammates still in it; none in a fleet battle).
+  const allies: Ally[] = w.fleet ? [] : w.players.flatMap((p, i) => (i !== me && p.team === myTeam && p.alive ? [{ seat: i, name: seats[i].name, faction: p.faction, credits: p.credits, ai: seats[i].kind !== 'you' && (!online || online.info.seats[i].kind === 'ai' || brains.current.some((b) => b.o === i)) }] : []))
+  /** Send credits to an ally: at once offline; online through the server, which answers with the
+   * turn (or says why not). */
+  const sendCredits = (seat: Owner, amount: number) => {
+    sound.unlock()
+    const why = order('give', seat, Math.floor(amount))
+    if (why) sound.error()
+    else sound.click()
+    return why
+  }
   const fac = FACTIONS[myFaction]
   if (!ready)
     return (
@@ -2368,6 +2429,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
           />
         )}
         <TopBar hud={hud} faction={myFaction} sector={sector} ui={ui} onShipyard={selectStation} onYard={selectOne} onPause={online ? undefined : togglePause} onSpeed={online ? undefined : setSpeed}
+          onGift={allies.length ? () => setUi((u) => ({ ...u, gift: !u.gift })) : undefined} giftOpen={ui.gift}
           onMenu={() => (ui.menu ? closeMenu() : openMenu())}
           onTechTree={() => setTree(!ui.tree)}
           onReserves={() => setUi((u) => ({ ...u, reserves: !u.reserves }))}
@@ -2417,7 +2479,8 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
             </div>
           </div>
         )}
-        {ui.economy && hud.winner === -1 && <EconomyPanel w={w} me={me} onClose={() => setUi((u) => ({ ...u, economy: false }))} />}
+        {ui.economy && hud.winner === -1 && <EconomyPanel w={w} me={me} names={seats.map((s) => s.name)} onClose={() => setUi((u) => ({ ...u, economy: false }))} />}
+        {ui.gift && allies.length > 0 && hud.winner === -1 && <GiftPanel credits={hud.credits} allies={allies} onSend={sendCredits} onClose={() => setUi((u) => ({ ...u, gift: false }))} />}
         {ui.reserves && hud.winner === -1 && <ReserveTray reserve={hud.reserve} onGrab={grabReserve} onClose={() => setUi((u) => ({ ...u, reserves: false }))} />}
 
         <ToastStack store={toasts} low={ui.paused && !ui.menu && !ui.panel} look={lookRef} />
@@ -2551,10 +2614,10 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
                 )}
               </>}
             />
+            <GroupBar groups={hud.groups} onGroup={recallGroup} onEdit={editGroup} canAssign={sel.some((u) => u.owner === me)} />
             {(() => {
               const panel = (
-                <SelectionPanel w={world.current} sel={sel} me={me} mode={ui.mode} onCommand={runCommand} groups={hud.groups} onGroup={recallGroup}
-                  canAssign={sel.some((u) => u.owner === me)} onAssign={setGroup}
+                <SelectionPanel w={world.current} sel={sel} me={me} mode={ui.mode} onCommand={runCommand}
                   onPick={(id, shift) => {
                     const ids = withSquads([id])
                     if (shift) for (const i of ids) selected.current.delete(i)

@@ -27,12 +27,11 @@
   .ew-battle .ew-cmdbtn kbd {
     display: none;
   }
-  .ew-battle.ew-deck .ew-groups button {
-    min-height: 34px;
-    padding: 2px 8px 2px 6px;
-  }
-  .ew-battle .ew-groupadd b {
-    color: var(--ew-good);
+  .ew-battle.ew-deck .ew-gchip {
+    min-height: 40px;
+    min-width: 52px;
+    padding: 0 13px 0 11px;
+    justify-content: center;
   }
   .ew-battle.ew-deck .ew-maptools button {
     width: 40px;
@@ -154,10 +153,16 @@
     display: flex;
   }
 
-  /* The touch bar stands beside the selection rather than on top of it. */
+  /* The touch bar (and the control groups) stand beside the selection rather than on top of it. */
   .ew-battle .ew-selfloat {
     flex-direction: row;
     align-items: flex-end;
+  }
+  .ew-battle .ew-groupbar {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    max-height: 100%;
+    overflow-y: auto;
   }
   .ew-battle .ew-battlebar {
     flex-direction: column;
@@ -283,4 +288,22 @@
     padding: 4px 12px;
     font-size: 12px;
   }
+}
+
+/* Phones: the credits panel across the top, under the top bar. */
+@media (pointer: coarse), (max-width: 719px) {
+@container (max-width: 680px) {
+  .ew-battle .ew-giftpop {
+    left: 6px;
+    right: 6px;
+    width: auto;
+  }
+  .ew-battle .ew-giftamts {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .ew-battle.ew-deck .ew-giftamts button,
+  .ew-battle.ew-deck .ew-giftallies button {
+    min-height: 40px;
+  }
+}
 }

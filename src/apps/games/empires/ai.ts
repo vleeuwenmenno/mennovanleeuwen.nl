@@ -2,7 +2,7 @@ import { ABILITIES, BUILD_RADIUS, LEVEL_UP, MAX_LEVEL, MODULE, REBUILD, RUSH_TEC
 import { inside } from './maps.ts'
 import { mapDist, rangeDist } from './scale.ts'
 import {
-  allQueued, building, canRetreat, cantBuild, cantExpand, cantRush, cmdExpand, cmdRush, moduleRebuildCost, cantMend, cantRepair, cantResearch, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite,
+  allQueued, building, canRetreat, cantBuild, cantExpand, cantRush, cmdExpand, cmdRush, moduleRebuildCost, cantMend, cantRepair, cantResearch, cantSite, cantUpgradeSite, cmdUpgradeSite, cmdAbility, cmdAttack, cmdBuild, cmdConstruct, cmdDeploy, cmdGuard, cmdMove, cmdPlace, cmdRally, cmdRepair, cmdResearch, cmdRetreat, cmdSite, cmdGive,
   canSee, dpsVs, fleet, foes, moduleUp, near, placement, radius, rand, researchLock, sees, shieldMax, type Owner, type Unit, type World,
 } from './sim.ts'
 import * as M from './detmath.ts'
@@ -1420,5 +1420,34 @@ export function fleetThink(w: World, b: Brain, dt: number) {
   for (const [e, ids] of groups) {
     const to = e ?? enemyEntry
     if (!act(b, () => cmdMove(w, o, ids, to.x, to.y, true))) break
+  }
+}
+
+// --- Teamwork ---------------------------------------------------------------------------------------
+
+/** An AI admiral with credits to spare helps out a player on its team who's broke. */
+export const AID = {
+  /** It has at least this many credits... */
+  rich: 3000,
+  /** ...and a teammate without an admiral (a person) has fewer than this... */
+  broke: 200,
+  /** ...so it sends them this many... */
+  amount: 500,
+  /** ...at most once in this many seconds. */
+  every: 90,
+}
+
+/**
+ * The AI admirals' gifts for the turn: modest and rare, so an admiral still fights its own battle,
+ * and all on the battle's clock, so every copy of a multiplayer battle sends the same. Only people
+ * get them (the seats without an admiral in `brains`); fleet battles have no allies.
+ */
+export function aidAllies(w: World, brains: Brain[]) {
+  if (w.fleet) return
+  for (const b of brains) {
+    const p = w.players[b.o]
+    if (!p?.alive || p.credits < AID.rich || (p.lastGift !== undefined && w.time - p.lastGift < AID.every)) continue
+    const needy = w.players.findIndex((q, i) => i !== b.o && q.alive && q.team === p.team && q.credits < AID.broke && !brains.some((x) => x.o === i))
+    if (needy >= 0) cmdGive(w, b.o, needy, AID.amount)
   }
 }
