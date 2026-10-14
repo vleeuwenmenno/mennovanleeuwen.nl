@@ -71,6 +71,9 @@ export class LongPress {
  * menu, which some phones open on a long press too, to leave it be. The data-longpress mark keeps
  * the long-press tooltip from showing as well.
  */
+/** Tooltip line for anything queued that a right-click (long-press on touch) calls off. */
+export const CANCEL_TIP = 'Right-click to cancel (full refund). Long-press on touch.'
+
 export function useCancelPress() {
   const lp = useRef(new LongPress())
   const touch = useRef(false)

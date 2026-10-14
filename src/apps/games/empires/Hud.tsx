@@ -10,7 +10,7 @@ import { modelFor, typeOfSprite } from './models/index.ts'
 import { moduleThumbnail, thumbnail } from './models/paint.ts'
 import { keyName, modName, useSettings, type Action } from './settings'
 import { freeGroup, type GroupInfo } from './groups'
-import { LongPress, isTouch, shiftOf, useCancelPress, useCoarse, useLongPressWheel } from './Touch'
+import { CANCEL_TIP, LongPress, isTouch, shiftOf, useCancelPress, useCoarse, useLongPressWheel } from './Touch'
 import { FIELD_DAMAGE, yardOffer, cantExpand, expUp, moduleLock, moduleRebuildCost, cantConstruct, cantRush, rushRules, rushShare, siteRefund, dpsVs, cantUpgradeSite, mineOutput, siteUpgradeNext, REFUND_DELAY, REPAIR_TIME, RETREAT_REFUND, canRetreat, cantRepair, repairCost, retreatRefund, RANKS, RANK_BONUS, SHIELD_REBOOT, STANCES, building, cantBuild, fromHangar, cantResearch, cantSite, escorts, escortsOf, mendTarget, wingState, researchCost, researchLock, shieldFull, shieldMax, techBonus, type EarnSource, type LedgerEntry, type OreNode, type Owner, type SpendKind, type ResearchItem, type Stance, type Unit, type World } from './sim'
 
 // The battle HUD, framed like a ship's command deck: a top bar with the faction, credits, fleet,
@@ -857,6 +857,8 @@ type DetailProps = {
   /** Rush launch: the Capital Yard `uid` sends out its ship in progress unfinished. */
   onRush: (uid: number) => void
   onResearch: (id: string) => void
+  /** Call off the research at this queue slot (full refund). */
+  onCancelResearch: (index: number) => void
   onTechTree: () => void
   onSite: (node: number, id: string) => void
   onRepair: (id: number) => void
@@ -935,8 +937,10 @@ export function TechIcon({ id, size = 40, progress = 0, status }: { id: string; 
 }
 
 /** One piece of research as a compact tile: icon, name and where it stands. Click to research. */
-function TechTile({ id, w, me, hud, onResearch }: { id: string; w: World; me: Owner; hud: Hud; onResearch: (id: string) => void }) {
+function TechTile({ id, w, me, hud, onResearch, onCancel }: { id: string; w: World; me: Owner; hud: Hud; onResearch: (id: string) => void; onCancel: (index: number) => void }) {
+  const press = useCancelPress()
   const s = techState(w, me, hud, id)
+  const queued = s.slot >= 0
   const cost = researchCost(w.players[me], id)
   const blurb = id === LEVEL_UP ? levelBlurb(w.players[me].faction, hud.level + 1) : TECH[id].blurb
   const line =
@@ -949,9 +953,16 @@ function TechTile({ id, w, me, hud, onResearch }: { id: string; w: World; me: Ow
   return (
     <button
       className={`ew-tech is-${s.status}`}
-      onClick={() => onResearch(id)}
+      onClick={() => {
+        if (!queued) onResearch(id)
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        if (queued && !press.touched()) onCancel(s.slot)
+      }}
+      {...press.handlers(queued ? () => onCancel(s.slot) : null)}
       disabled={s.status === 'done'}
-      data-tip={`${researchName(id, hud.level)}\n${blurb}${s.why && s.status !== 'done' && s.status !== 'busy' && s.status !== 'queued' ? `\n\n${s.why}` : ''}`}
+      data-tip={`${researchName(id, hud.level)}\n${blurb}${s.why && s.status !== 'done' && !queued ? `\n\n${s.why}` : queued ? `\n\n${CANCEL_TIP}` : ''}`}
     >
       <TechIcon id={id} size={30} progress={s.progress} status={s.status} />
       <strong>{researchName(id, hud.level)}</strong>
@@ -1924,7 +1935,7 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
           <div className="ew-unittech">
             <span className="ew-muted ew-small">Upgrades</span>
             {techsFor(t.id).map((x) => (
-              <TechTile key={x.id} id={x.id} w={w} me={me} hud={p.hud} onResearch={p.onResearch} />
+              <TechTile key={x.id} id={x.id} w={w} me={me} hud={p.hud} onResearch={p.onResearch} onCancel={p.onCancelResearch} />
             ))}
             <button className="ew-unittree" onClick={p.onTechTree} data-tip="Open the tech tree">
               <Icon name="tree" size={15} />
