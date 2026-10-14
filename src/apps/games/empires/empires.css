@@ -2781,6 +2781,31 @@ span.ew-teamtag {
 .ew-deck .ew-reservebtn.is-off {
   opacity: 0.4;
 }
+.ew-deck .ew-reservebtn.is-price b {
+  font-weight: 600;
+}
+/* The reinforcement rules in the skirmish setup and the multiplayer lobby. */
+.ew-reinf {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ew-reinf-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.ew-reinf .ew-genfield .ew-seg button {
+  flex: 1;
+}
+.ew-reinf p {
+  margin: 0;
+}
+.ew-reinf-ro {
+  font-family: var(--ew-display);
+  font-size: 13px;
+  color: var(--ew-gold);
+}
 .ew-deck .ew-slot.is-jump {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ew-accent) 70%, transparent);
 }
@@ -3961,6 +3986,29 @@ span.ew-teamtag {
   width: 17px;
   height: 17px;
   border-radius: 4px;
+}
+/* The reinforcement button with its price: a small pill over the card's top-left corner. */
+.ew-deck .ew-yard .ew-reservebtn.is-price,
+.ew-deck .ew-reservebtn.is-price {
+  width: auto;
+  height: 16px;
+  left: 3px;
+  top: 3px;
+  padding: 0 4px 0 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 5px;
+  color: #fff;
+  background: color-mix(in srgb, var(--ew-accent) 30%, rgba(6, 12, 28, 0.92));
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.ew-yard .ew-reservebtn.is-price svg {
+  width: 10px;
+  height: 10px;
+  color: var(--ew-accent);
 }
 
 /* Hybrid bases: the Command Station's and the yards' tabs, a yard card, a site under way, the

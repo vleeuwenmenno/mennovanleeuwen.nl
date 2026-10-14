@@ -17,7 +17,7 @@ import { DEFAULT_RULES, GENERATED, MAP, MAPS, cleanRules, generateMap, type MapD
 import { matchBrains, matchWorld, stepTurn, type MatchInfo, type Turn } from '../src/apps/games/empires/match.ts'
 import { nameKey, nameProblem, randomName, tidyName } from '../src/apps/games/empires/names.ts'
 import { CHAT_MAX, HASH_EVERY, MP_PATH, REJOIN_MS as REJOIN_DEFAULT_MS, type AwaySeat, type AwayVote, type ClientMsg, type LobbyInfo, type MpLobby, type MpSlot, type RosterSeat, type ServerMsg, type SlotPatch } from '../src/apps/games/empires/protocol.ts'
-import { STEP, cantGive, stateHash, type Owner, type World } from '../src/apps/games/empires/sim.ts'
+import { REINFORCE, STEP, cantGive, cleanReinforce, stateHash, type Owner, type World } from '../src/apps/games/empires/sim.ts'
 import { restoreBrain, restoreWorld, snapBrain, snapshotWorld, type BattleSnap } from '../src/apps/games/empires/snapshot.ts'
 
 // Empires At War multiplayer: the players online, their names, the lobbies they gather in, and
@@ -279,6 +279,7 @@ function create(p: Player) {
     map: map.id,
     gen: { ...DEFAULT_RULES },
     credits: START_CREDITS,
+    reinforce: { ...REINFORCE },
     slots: slotsFor(map, [])!,
     state: 'open',
   }
@@ -371,6 +372,9 @@ function changeSlot(p: Player, l: MpLobby, i: number, patch: SlotPatch) {
 function changeSetup(p: Player, l: MpLobby, m: Extract<ClientMsg, { t: 'setup' }>) {
   if (l.host !== p.id) return send(p, { t: 'error', why: 'Only the host can change the map and rules.' })
   if (typeof m.credits === 'number' && CREDIT_STEPS.includes(m.credits)) l.credits = m.credits
+  // Reinforcements: whatever is sent is cleaned (a surcharge onto its 5% steps from 0 to 50%, the
+  // switches true or false), so a tampered client can't set a free or negative one.
+  if (m.reinforce && typeof m.reinforce === 'object') l.reinforce = cleanReinforce({ ...cleanReinforce(l.reinforce), ...m.reinforce })
   if (m.map !== undefined || m.gen !== undefined) {
     const id = m.map === undefined ? l.map : m.map === GENERATED || (typeof m.map === 'string' && Object.hasOwn(MAP, m.map)) ? m.map : null
     if (!id) return send(p, { t: 'error', why: 'No such map.' })
@@ -427,6 +431,7 @@ function start(p: Player, l: MpLobby) {
     map: l.map,
     gen: l.gen,
     credits: l.credits,
+    reinforce: cleanReinforce(l.reinforce),
     seats: l.slots.flatMap((s, spawn) =>
       s.kind === 'human' || s.kind === 'ai' ? [{ kind: s.kind, player: s.player, name: s.kind === 'ai' ? `${DIFFICULTY[s.difficulty].name} ${PROFILES[profileOf(s.profile)].name.toLowerCase()} AI` : s.name, faction: s.faction, team: s.team, spawn, difficulty: s.difficulty, ...(s.kind === 'ai' ? { profile: profileOf(s.profile) } : {}) }] : [],
     ),

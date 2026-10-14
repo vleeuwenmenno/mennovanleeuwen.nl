@@ -4,12 +4,13 @@ import { DIFFICULTY, PROFILES, profileOf } from './ai'
 import { CREDIT_STEPS, FACTIONS, type FactionId } from './data'
 import { Frame, Icon, Tips } from './Hud'
 import { GENERATED, MAP, MAPS, MAX_SEED, generateMap, type MapDef } from './maps'
-import { AiPicker, GenControls, MapCard, MapLegend, MapPreview, Modal, mapSize, slotColor, type Slot } from './Menus'
+import { AiPicker, GenControls, MapCard, MapLegend, MapPreview, Modal, ReinforceOptions, mapSize, slotColor, type Slot } from './Menus'
 import { NAME_MAX, nameProblem, randomName, tidyName } from './names'
 import { battleToRejoin, mpName, type Net, type NetView } from './net'
 import { CHAT_MAX, type MpLobby, type MpSlot, type SlotPatch } from './protocol'
 import type { EmpiresSound } from './sound'
 import { useCoarse } from './Touch'
+import { REINFORCE, type Reinforce } from './sim'
 
 // The multiplayer screens: pick a name, browse the battles being set up (or host one), and the
 // lobby itself, where the host picks the map and everyone their spawn, faction and side. All of it
@@ -290,7 +291,7 @@ function Room({ v, lobby, net, sound, children }: { v: NetView; lobby: MpLobby; 
     sound.click()
     net.send({ t: 'slot', i, patch })
   }
-  const setup = (m: { map?: string; gen?: MpLobby['gen']; credits?: number }) => {
+  const setup = (m: { map?: string; gen?: MpLobby['gen']; credits?: number; reinforce?: Partial<Reinforce> }) => {
     sound.click()
     net.send({ t: 'setup', ...m })
   }
@@ -334,6 +335,8 @@ function Room({ v, lobby, net, sound, children }: { v: NetView; lobby: MpLobby; 
             ) : (
               <p className="ew-mp-value">{lobby.credits.toLocaleString('en-US')}</p>
             )}
+            <h5>Reinforcements</h5>
+            <ReinforceOptions value={lobby.reinforce ?? REINFORCE} onChange={host ? (patch) => setup({ reinforce: patch }) : undefined} />
             <div className="ew-launch">
               <span className="ew-muted ew-small">{blocker ?? `${sides[0]} against ${sides[1]}. Ready to go.`}</span>
               {host ? (

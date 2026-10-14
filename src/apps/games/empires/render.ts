@@ -1,9 +1,9 @@
-import { CYARD_SOCKETS, MODULE, STATION_SOCKETS, YARD_SOCKETS, FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
+import { CYARD_SOCKETS, MODULE, STATION_SOCKETS, YARD_GANTRIES, YARD_SOCKETS, FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
 import { RETREAT_TIME, atHome, building, escorts, foes, hpPos, hullCap, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 import { BREAK_WEIGHTS, breakPieces, hullState, modelFor, unitForSprite, wreckState, type HullState, type Model } from './models/index.ts'
-import { YARD_BERTHS } from './models/base.ts'
+import { YARD_BERTHS } from './data'
 import { ModelFx } from './models/fx.ts'
 import { PALETTES, hash, rng as seeded } from './models/kit.ts'
 import { drawHull, drawMounts, drawPiece, liveEngines, outlineOf, type Shadow } from './models/paint.ts'
@@ -168,6 +168,28 @@ const TAU = Math.PI * 2
 const BOLTS = { turbo: [72, 3], flak: [15, 1.5], laser: [30, 1.7] } as const
 /** An undamaged hull. */
 const FRESH: HullState = { detached: 0, scorch: 0, variant: 0 }
+
+/** A welding beam's colours: its glow and core (fixed, faded with globalAlpha), and its flash's
+ * glow sprite (`key`, `stops`, see glowSprite). */
+type WeldLook = { glow: string; core: string; key: string; stops: readonly (readonly [number, string])[] }
+/** A welding beam's size in world units: its glow's width and its core's, and its flash's radius. */
+type WeldSize = { glow: number; core: number; flash: number }
+/**
+ * Welding beams: the engineers' (blue-white for the Republic, orange for the droids) and a yard's
+ * gantries' (small and green), sized in world units so they shrink with the ships when zoomed out.
+ * The flash is left out below `minFlashPx` on screen, its sparks below `minSparkPx`.
+ */
+const WELD = {
+  rep: { glow: 'rgb(110,190,255)', core: 'rgb(232,246,255)', key: 'weld-rep', stops: [[0, '#ffffff'], [0.3, 'rgba(150,210,255,0.9)'], [1, 'rgba(110,190,255,0)']] } as WeldLook,
+  droid: { glow: 'rgb(255,140,50)', core: 'rgb(255,232,190)', key: 'weld-droid', stops: [[0, '#ffffff'], [0.3, 'rgba(255,190,120,0.9)'], [1, 'rgba(255,140,50,0)']] } as WeldLook,
+  yard: { glow: 'rgb(80,255,140)', core: 'rgb(205,255,215)', key: 'weld-yard', stops: [[0, '#f4fff6'], [0.3, 'rgba(120,255,160,0.85)'], [1, 'rgba(60,255,120,0)']] } as WeldLook,
+  engineer: { glow: 4.5, core: 1.3, flash: 5 } as WeldSize,
+  gantry: { glow: 4, core: 1.2, flash: 4.5 } as WeldSize,
+  minFlashPx: 2.5,
+  minSparkPx: 4,
+}
+/** A launch's docking light: a small amber glow sprite. */
+const LAUNCH_LIGHT = { key: 'launch-light', stops: [[0, '#ffffff'], [0.25, 'rgba(255,214,120,0.95)'], [1, 'rgba(255,170,60,0)']] as const }
 
 /**
  * A nebula patch painted once into a small canvas (a quarter of world size; it's soft anyway):
@@ -360,6 +382,8 @@ export class Renderer {
   private aims = new Map<number, number>()
   /** The hulls drawn so far this frame, for shadows (reused, see shadowOver). */
   private hulls: Unit[] = []
+  /** Yards (and stations) with a new ship still sitting in them on its way out, this frame. */
+  private launchingFrom = new Set<number>()
   /** Selected escorts and the ships they escort, in pairs, for their tethers (reused). */
   private tethers: Unit[] = []
   /** The shadow being drawn (reused: one at a time). */
@@ -1150,15 +1174,17 @@ export class Renderer {
     // Support ships' repair beams: a faint green tether to each ship being patched, pulsing.
     // (Engineers weld with beams of their own, see drawWelds.)
     const myTeamB = w.players[view.me].team
-    ctx.lineWidth = 2 / z
+    // In world units, so they thin out with the ships when zoomed out (never under a pixel).
+    ctx.lineWidth = Math.max(1 / z, 2)
+    ctx.strokeStyle = 'rgb(125,255,160)'
     for (const u of w.units) {
       if (!u.mending.length || !u.seen[myTeamB] || isEngineer(u.t)) continue
       for (const id of u.mending) {
         const o = w.byId.get(id)
         if (!o || !onScreen((u.x + o.x) / 2, (u.y + o.y) / 2, 600)) continue
-        ctx.strokeStyle = `rgba(125,255,160,${0.25 + 0.15 * Math.sin(this.clock * 6 + id)})`
-        ctx.setLineDash([6 / z, 10 / z])
-        ctx.lineDashOffset = -this.clock * 40 / z
+        ctx.globalAlpha = 0.25 + 0.15 * Math.sin(this.clock * 6 + id)
+        ctx.setLineDash([Math.max(6, 3 / z), Math.max(10, 5 / z)])
+        ctx.lineDashOffset = -this.clock * 40
         ctx.beginPath()
         ctx.moveTo(u.x, u.y)
         ctx.lineTo(o.x, o.y)
@@ -1167,6 +1193,7 @@ export class Renderer {
     }
     ctx.setLineDash([])
     ctx.lineDashOffset = 0
+    ctx.globalAlpha = 1
 
     // Weapon ranges, under the ships.
     // Pointing at a gun (or, by touch, having picked one) rings just that gun.
@@ -1180,6 +1207,8 @@ export class Renderer {
     // Ships and stations, big ones first so smaller ships fly over them (see drawRank), each with a
     // faint shadow on the hull it's over.
     const myTeam = w.players[view.me].team
+    this.launchingFrom.clear()
+    for (const u of w.units) if (u.launch && u.launch.t <= u.launch.spool) this.launchingFrom.add(u.launch.from)
     const shown = w.units.filter((u) => u.seen[myTeam] && u.owner !== view.hideOwner && onScreen(u.x, u.y, u.t.size))
     shown.sort(byDrawRank)
     // The hulls drawn so far, which the next ships may be over.
@@ -1203,7 +1232,9 @@ export class Renderer {
       ctx.stroke()
       tethers.length = 0
     }
-    this.drawWelds(ctx, w, z, myTeam, onScreen)
+    this.drawWelds(ctx, w, z, myTeam, onScreen, view.hideOwner)
+    this.drawYardWelds(ctx, w, z, myTeam, onScreen, view.hideOwner)
+    this.drawLaunches(ctx, w, z, myTeam, onScreen, view.hideOwner)
     // Parts blown off and fragments of small craft, over the ships.
     this.fx.draw(ctx, zdpr, onScreen)
     this.drawWarps(ctx, z)
@@ -2058,13 +2089,14 @@ export class Renderer {
       const welding = w.units.some((e) => !e.dead && isEngineer(e.t) && e.mending.includes(u.id))
       const flick = welding ? 0.65 + 0.35 * Math.sin(this.clock * 23 + u.id) : 0.35
       ctx.strokeStyle = `rgba(255,224,150,${flick})`
-      ctx.lineWidth = 3 / z
+      ctx.lineWidth = Math.max(1 / z, 3)
       ctx.beginPath()
       ctx.moveTo(-sw / 2, cut)
       ctx.lineTo(sw / 2, cut)
       ctx.stroke()
       ctx.restore()
-      if (welding && Math.random() < 0.5) {
+      // Sparks off it, while they'd be more than a speck.
+      if (welding && Math.random() < 0.5 && z >= 0.25) {
         const f = Math.random() - 0.5
         const c = Math.cos(rot)
         const s = Math.sin(rot)
@@ -2095,7 +2127,8 @@ export class Renderer {
   private drawBerth(ctx: CanvasRenderingContext2D, u: Unit, ym: Model, z: number, alpha: number) {
     const q = u.yq?.[0]
     const b = YARD_BERTHS[u.t.id]
-    if (!q || !b || building(u)) return
+    // (Not while the ship before it still sits in the berth, about to fly out.)
+    if (!q || !b || building(u) || this.launchingFrom.has(u.id)) return
     const st = UNIT[q.unit]
     const m = modelFor(st)
     if (!m) return
@@ -2133,13 +2166,16 @@ export class Renderer {
    * Engineers at work: each craft at its job fires a welding beam from its nose at a spot on the
    * structure, a bright core in a soft glow (blue-white for the Republic, orange for the droids),
    * with a flickering flash where it hits. The spot wanders over the hull on the side facing the
-   * craft (on a site going up, along the welding front), so it reads as welding. Drawn over the
-   * ships, with nothing made per frame but the paths.
+   * craft (on a site going up, along the welding front), so it reads as welding. Sized in world
+   * units, so it shrinks with the ships as the camera pulls back (the core never thinner than a
+   * pixel; the glow, the flash and its star of sparks left out once they'd be a few pixels). Drawn
+   * over the ships with fixed colours and a glow sprite: nothing made per frame but the paths.
    */
-  private drawWelds(ctx: CanvasRenderingContext2D, w: World, z: number, team: number, onScreen: (x: number, y: number, r?: number) => boolean) {
+  private drawWelds(ctx: CanvasRenderingContext2D, w: World, z: number, team: number, onScreen: (x: number, y: number, r?: number) => boolean, hide?: number) {
     let on = false
+    const px = 1 / z
     for (const u of w.units) {
-      if (u.dead || !u.mending.length || !isEngineer(u.t) || !u.seen[team] || !onScreen(u.x, u.y, 400)) continue
+      if (u.dead || !u.mending.length || !isEngineer(u.t) || !u.seen[team] || u.owner === hide || !onScreen(u.x, u.y, 400)) continue
       const o = w.byId.get(u.mending[0])
       if (!o || o.dead) continue
       if (!on) {
@@ -2149,8 +2185,7 @@ export class Renderer {
         ctx.lineCap = 'round'
       }
       const rep = u.t.faction === 'republic'
-      const glow = rep ? '110,190,255' : '255,140,50'
-      const core = rep ? '232,246,255' : '255,232,190'
+      const look = rep ? WELD.rep : WELD.droid
       // Where it hits, in the structure's own frame (x across it, y along it, nose up): on a site the
       // welding front, else a spot that wanders over the side facing the craft.
       const [sw, sh] = dims(o.t)
@@ -2178,35 +2213,176 @@ export class Renderer {
       const nx = u.x + Math.cos(u.a) * nose
       const ny = u.y + Math.sin(u.a) * nose
       const flick = 0.7 + 0.3 * Math.sin(t * 37 + u.id * 3.1)
-      ctx.strokeStyle = `rgba(${glow},${0.28 * flick})`
-      ctx.lineWidth = 6 / z
+      this.beam(ctx, nx, ny, hx, hy, look, WELD.engineer, flick, px, z, u.id)
+    }
+    if (on) ctx.restore()
+  }
+
+  /**
+   * One welding beam from (x0, y0) to where it hits (x1, y1), in world units (`size`): a soft glow
+   * round a bright core, never thinner than a pixel (`px`), and where it hits a flash (a glow sprite)
+   * with a little turning star of sparks, both left out once they'd be under a few pixels on screen.
+   * Fixed colours, faded with globalAlpha: nothing is made per frame but the paths.
+   */
+  private beam(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number, look: WeldLook, size: WeldSize, flick: number, px: number, z: number, seed: number) {
+    const a0 = ctx.globalAlpha
+    if (size.glow * z >= 1.5) {
+      ctx.strokeStyle = look.glow
+      ctx.globalAlpha = a0 * 0.28 * flick
+      ctx.lineWidth = size.glow
       ctx.beginPath()
-      ctx.moveTo(nx, ny)
-      ctx.lineTo(hx, hy)
+      ctx.moveTo(x0, y0)
+      ctx.lineTo(x1, y1)
       ctx.stroke()
-      ctx.strokeStyle = `rgba(${core},${0.9 * flick})`
-      ctx.lineWidth = 1.7 / z
-      ctx.stroke()
-      // The flash where it hits: a soft disc and a little turning star of sparks.
-      const r = (4 + 2.5 * flick) / z
-      ctx.fillStyle = `rgba(${glow},${0.35 * flick})`
-      ctx.beginPath()
-      ctx.arc(hx, hy, r * 1.8, 0, TAU)
-      ctx.fill()
-      ctx.fillStyle = `rgba(${core},${0.85 * flick})`
-      ctx.beginPath()
-      ctx.arc(hx, hy, r * 0.55, 0, TAU)
-      ctx.fill()
-      const a0 = t * 9 + u.id
-      ctx.beginPath()
-      for (let k = 0; k < 4; k++) {
-        const a = a0 + (k * Math.PI) / 2
-        const l = r * (1.4 + 1.2 * Math.abs(Math.sin(t * 23 + k + u.id)))
-        ctx.moveTo(hx + Math.cos(a) * r * 0.5, hy + Math.sin(a) * r * 0.5)
-        ctx.lineTo(hx + Math.cos(a) * l, hy + Math.sin(a) * l)
+    }
+    ctx.strokeStyle = look.core
+    ctx.globalAlpha = a0 * 0.9 * flick
+    ctx.lineWidth = Math.max(px, size.core)
+    ctx.beginPath()
+    ctx.moveTo(x0, y0)
+    ctx.lineTo(x1, y1)
+    ctx.stroke()
+    const r = size.flash * (0.75 + 0.35 * flick)
+    if (r * z >= WELD.minFlashPx) {
+      ctx.globalAlpha = a0 * 0.9 * flick
+      const g = glowSprite(look.key, look.stops)
+      ctx.drawImage(g, x1 - r * 1.8, y1 - r * 1.8, r * 3.6, r * 3.6)
+      if (r * z >= WELD.minSparkPx) {
+        const t = this.clock
+        const a = t * 9 + seed
+        ctx.strokeStyle = look.core
+        ctx.globalAlpha = a0 * 0.85 * flick
+        ctx.lineWidth = Math.max(px, size.core * 0.7)
+        ctx.beginPath()
+        for (let k = 0; k < 4; k++) {
+          const b = a + (k * Math.PI) / 2
+          const l = r * (1.4 + 1.2 * Math.abs(Math.sin(t * 23 + k + seed)))
+          ctx.moveTo(x1 + Math.cos(b) * r * 0.5, y1 + Math.sin(b) * r * 0.5)
+          ctx.lineTo(x1 + Math.cos(b) * l, y1 + Math.sin(b) * l)
+        }
+        ctx.stroke()
       }
-      ctx.lineWidth = 1.2 / z
-      ctx.stroke()
+    }
+    ctx.globalAlpha = a0
+  }
+
+  /**
+   * A yard at work: its gantry cranes (the droids' ring frames) weld the ship in its berth with small
+   * green beams, from the gantries either side of the welding front down onto it, a flash and a few
+   * green sparks where they hit. The same cheap beams as the engineers' (see beam), in world units.
+   */
+  private drawYardWelds(ctx: CanvasRenderingContext2D, w: World, z: number, team: number, onScreen: (x: number, y: number, r?: number) => boolean, hide?: number) {
+    let on = false
+    const px = 1 / z
+    for (const y of w.units) {
+      if (y.dead || y.t.tier !== 'yard' || y.site || building(y) || !y.yq?.length || !y.seen[team] || y.owner === hide || !onScreen(y.x, y.y, y.t.size)) continue
+      // Hidden while the ship before it still sits in the berth on its way out.
+      if (this.launchingFrom.has(y.id)) continue
+      const b = YARD_BERTHS[y.t.id]
+      const gantries = YARD_GANTRIES[y.t.id]
+      const q = y.yq[0]
+      const st = UNIT[q.unit]
+      const m = st && modelFor(st)
+      if (!b || !gantries || !m) continue
+      if (!on) {
+        on = true
+        ctx.save()
+        ctx.globalCompositeOperation = 'lighter'
+        ctx.lineCap = 'round'
+      }
+      const ky = y.t.size / 100
+      const [w0, h0] = dims(st)
+      const fit = Math.min(1, ((b.y1 - b.y0) * ky * 0.9) / h0, (b.hw * 2 * ky * 1.15) / w0)
+      const rot = y.a + Math.PI / 2
+      const c = Math.cos(rot)
+      const s = Math.sin(rot)
+      const progress = Math.max(0, Math.min(1, 1 - q.left / Math.max(0.001, q.total)))
+      // The welding front, in the yard's units along the berth (stern to mouth as it goes).
+      const half = (h0 * fit) / 2 / ky
+      const mid = (b.y0 + b.y1) / 2
+      const front = mid + half - progress * half * 2
+      const t = this.clock
+      // The two gantries nearest the front, one beam from each, from alternate sides.
+      let g1 = gantries[0]
+      let g2 = gantries[1] ?? gantries[0]
+      for (const g of gantries) {
+        if (Math.abs(g - front) < Math.abs(g1 - front)) {
+          g2 = g1
+          g1 = g
+        } else if (g !== g1 && Math.abs(g - front) < Math.abs(g2 - front)) g2 = g
+      }
+      const shipHalfW = (w0 * fit) / 2 / ky
+      for (let i = 0; i < 2; i++) {
+        const gy = i ? g2 : g1
+        const side = (i + Math.floor(t * 0.7 + y.id)) % 2 ? 1 : -1
+        const gx = side * b.hw * 0.86
+        const wob = Math.sin(t * (1.3 + i * 0.4) + y.id * 1.9 + i * 2.1)
+        const hxL = side * shipHalfW * (0.15 + 0.3 * Math.abs(wob))
+        const hyL = front + wob * 1.5
+        const x0 = y.x + (gx * c - gy * s) * ky
+        const y0 = y.y + (gx * s + gy * c) * ky
+        const x1 = y.x + (hxL * c - hyL * s) * ky
+        const y1 = y.y + (hxL * s + hyL * c) * ky
+        const flick = 0.65 + 0.35 * Math.sin(t * 31 + y.id * 2.3 + i * 1.7)
+        this.beam(ctx, x0, y0, x1, y1, WELD.yard, WELD.gantry, flick, px, z, y.id + i * 7)
+        // A few sparks off the hit, while they'd show.
+        if (WELD.gantry.flash * z >= WELD.minSparkPx && Math.random() < 0.18) {
+          const a = Math.random() * TAU
+          const v = 30 + Math.random() * 70
+          this.add({ kind: 'spark', x: x1, y: y1, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.2 + Math.random() * 0.25, size: 1, color: '#9dffb8' })
+        }
+      }
+    }
+    if (on) ctx.restore()
+  }
+
+  /**
+   * New ships on their way out (sim.ts Launch): the yard's docking lights at its mouth (the hangar
+   * door's for the station) blink while one spools up and slides out. Glow sprites in world units,
+   * at least a couple of pixels, faded with globalAlpha.
+   */
+  private drawLaunches(ctx: CanvasRenderingContext2D, w: World, z: number, team: number, onScreen: (x: number, y: number, r?: number) => boolean, hide?: number) {
+    let on = false
+    for (const u of w.units) {
+      const L = u.launch
+      if (!L || u.dead || !u.seen[team] || u.owner === hide) continue
+      const from = w.byId.get(L.from)
+      if (!from || from.dead || !onScreen(L.x0, L.y0, from.t.size)) continue
+      if (!on) {
+        on = true
+        ctx.save()
+        ctx.globalCompositeOperation = 'lighter'
+      }
+      const ca = Math.cos(L.a)
+      const sa = Math.sin(L.a)
+      // The two lights either side of the way out: at a yard's mouth, or past the hangar door.
+      let mx: number, my: number, half: number
+      if (from.t.tier === 'yard') {
+        const b = YARD_BERTHS[from.t.id]
+        const ky = from.t.size / 100
+        mx = from.x + ca * -(b?.y0 ?? -45) * ky
+        my = from.y + sa * -(b?.y0 ?? -45) * ky
+        half = (b?.hw ?? 15) * ky
+      } else {
+        mx = L.x0
+        my = L.y0
+        half = Math.max(radius(u.t), 14)
+      }
+      const t = this.clock
+      const blink = Math.sin(t * 10 + u.id) > 0 ? 1 : 0.25
+      const r = Math.max(2.5 / z, half * 0.16)
+      const g = glowSprite(LAUNCH_LIGHT.key, LAUNCH_LIGHT.stops)
+      for (const side of [-1, 1]) {
+        const lx = mx - sa * half * side
+        const ly = my + ca * half * side
+        // The near pair blinks with the far pair a beat behind, so the lights run outwards.
+        for (let j = 0; j < 2; j++) {
+          ctx.globalAlpha = (j ? 1.25 - blink : blink) * 0.9
+          const ox = lx + ca * j * r * 3
+          const oy = ly + sa * j * r * 3
+          ctx.drawImage(g, ox - r, oy - r, r * 2, r * 2)
+        }
+      }
     }
     if (on) ctx.restore()
   }
@@ -2419,8 +2595,10 @@ export class Renderer {
     // Engine glow, stronger at speed.
     if (t.engines.length && isShip(t)) {
       ctx.globalCompositeOperation = 'lighter'
-      const thrust = 0.35 + 0.65 * Math.min(1, u.v / Math.max(1, t.speed))
-      const flick = 0.85 + Math.random() * 0.15
+      // A new ship spooling up in its berth: the engines light up as it gets ready to go.
+      const spool = u.launch ? Math.min(1, Math.max(0, u.launch.t / Math.max(0.01, u.launch.spool))) : 0
+      const thrust = Math.max(0.35 + 0.65 * Math.min(1, u.v / Math.max(1, t.speed)), u.launch ? 0.15 + 0.85 * spool : 0)
+      const flick = u.launch && spool < 1 ? 0.6 + Math.random() * 0.4 : 0.85 + Math.random() * 0.15
       const near = enginesNear(t)
       // A model's engines burn in its own palette's colour (the droid navy's blue-white).
       const glow = engineGlow(m ? PALETTES[m.faction].engine : fac.glow)

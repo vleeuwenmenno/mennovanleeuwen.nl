@@ -337,6 +337,23 @@ export const CYARD_SOCKETS: Record<FactionId, [number, number][]> = {
   republic: [[1.15, 5.7], [8.85, 5.7], [5, 9.45]],
   droid: [[1.15, 5.5], [8.85, 5.5], [5, 9.45]],
 }
+/** Each yard's berth, in its model's units (the box 100 long, nose up): half its width and where it
+ * runs from the mouth (y0) to the stern (y1). The battle draws the ship being built in it, and a new
+ * ship flies out of it through the mouth (sim.ts launchFrom). */
+export const YARD_BERTHS: Record<string, { hw: number; y0: number; y1: number }> = {
+  'r-yard': { hw: 15.5, y0: -47, y1: 27 },
+  'd-yard': { hw: 16, y0: -46, y1: 27 },
+  'r-cyard': { hw: 18, y0: -48, y1: 32 },
+  'd-cyard': { hw: 18, y0: -47, y1: 33 },
+}
+/** Where the gantry cranes (Republic) or ring frames (droids) span each yard's berth, in the same
+ * units: the welding beams come down from them onto the ship being built. */
+export const YARD_GANTRIES: Record<string, number[]> = {
+  'r-yard': [-22, -4, 16],
+  'd-yard': [-25, -2, 22],
+  'r-cyard': [-27, -8, 11, 25],
+  'd-cyard': [-24, -6, 15, 28.4],
+}
 /** Where the Command Station's expansions sit, on the 0-10 grid of whatever stage it has grown to
  * (so they move out with it): three of its corners, out past the core on struts. */
 export const STATION_SOCKETS: [number, number][] = [[1.2, 8.8], [8.9, 1.1], [1.1, 1.1]]

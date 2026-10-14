@@ -2200,6 +2200,59 @@ row of chips over the view and the numbers.
 pnpm check:empires-models   # every unit has a model that builds, its mounts match the hardpoints, parts come off soundly, breaks are deterministic and weighted, small craft and structures burst into real fragments
 ```
 
+## Empires At War launching from the yards and reinforcements
+
+New ships no longer jump in from hyperspace: they fly out of where they were built
+([`sim.ts`](src/apps/games/empires/sim.ts), *Launch*). A frigate or corvette slides out of the
+Frigate Yard's berth through its mouth, a cruiser or flagship out of the Capital Yard's; fighters,
+bombers, gunships, engineers and repair craft come out of the Command Station's hangar door (the
+craft of a squadron one after another). Rush-launched ships come out the same way, scaffolding and
+all. The docking lights at the mouth blink while the engines spool up (`LAUNCH.spool`, 0.8 s), then
+the ship slides out in 1.1 to 2.1 s by its way out (`LAUNCH.slide`, `perUnit`, `slideMax`), comes
+clear at 70% of its top speed and flies on to the yard's rally point. It neither steers nor fires
+until it is clear, and a destroyed yard lets it go at once. Something solid in the way out (where it
+comes clear, or half way there) holds it back, but never longer than `LAUNCH.wait` (6 s); a ship two
+classes smaller flies out over a big one (see overlaps), fighters over everything, and two ships
+finished at once by a Second slip leave one after the other. It is all in the sim, so lockstep
+battles stay in step.
+
+While a yard builds, its gantry cranes (the droids' ring frames) weld the ship in its berth with
+small green beams, from the two gantries nearest the welding front, a flash and a few green sparks
+where they hit. These and the engineers' welding beams are sized in world units, so they shrink
+with the ships as the camera pulls back: the core is never thinner than a pixel, and the flash and
+its star of sparks are left out once they would be a few pixels (`WELD` in
+[`render.ts`](src/apps/games/empires/render.ts)). The support ships' repair tethers and a site's
+welding front are in world units too. All of them are fixed colours faded with `globalAlpha` and
+glow sprites, with nothing made per frame.
+
+**Call in reinforcement.** The small red button on a ship's card (now showing its price, the card
+itself showing the plain one) buys the ship as a reinforcement: it is built as usual, then waits in
+the fleet inventory, to be dragged onto any spot your fleet can see, as the reserve always worked.
+Choosing where it arrives is the advantage, so it costs a surcharge: 15% by default, rounded to
+5 credits and at least 25 (a frigate 820 + 125, a fighter squadron 260 + 40). A cancelled one is
+refunded in full, surcharge included. Strike craft can be reinforcements too. A click on the card
+always builds a ship that flies out; a reinforcement is only ever the red button's choice.
+
+**Lobby options**, in the skirmish setup and the multiplayer lobby (the host's to change), part of
+the match config and remembered with the skirmish setup: *Strike craft* On/Off, *Warships*
+(gunships and up) On/Off, and the *Surcharge*, 0 to 50% in steps of 5. With a class off, its cards
+have no red button, the sim refuses the order and the server's order cleaning drops it
+(`cleanCmd`); the server cleans the lobby's rules as they come in and again when the battle starts
+(`cleanReinforce`), so a tampered client can't set a free or negative one. Matches and setups from
+before the options get the defaults. A battle saved mid-fight before them (its world has no
+`reinforce`) keeps its old ways: new ships jump in beside their yard, the reserve costs nothing
+extra and strike craft can't go in it.
+
+**The AI** builds ships to fly out as before, and pays for a reinforcement only where flying out
+from home is too slow: a mine, platform or beacon of its own more than `REINFORCE_AI.far` from its
+station with enemy ships at it, or the wave out now far from home and fighting something about its
+match. Medium and harder admirals only, at most one a minute, a warship (no flagships) with credits
+to spare, called in a little back from the fight, towards home.
+
+```sh
+pnpm check:empires-launch   # out of the right yard or the hangar to the rally point, a blocked mouth, reinforcements and their price, the lobby's variants, old saves, save and restore, the AI
+```
+
 ## Empires At War rush launch
 
 A desperate measure for a base under attack. Once **Rushed construction** (the droids' **Hasty
@@ -2208,7 +2261,7 @@ standing; it shows on the tech tree's Capital Yard line), the Capital Yard's bui
 **Rush launch (62%)** once the ship in progress is at least half built. A click sends it out now; on
 a touch screen the button is held for 0.6 s (a ring fills round it) so a stray tap can't do it.
 
-- The ship jumps in with its hull at the share that was built, no shields, and as many of its
+- The ship flies out of the berth with its hull at the share that was built, no shields, and as many of its
   turrets and modules as were still to be built not yet installed: the ones furthest aft, drawn as
   scaffolding (not smoke or fire), and they don't fire or work. Its card and tooltip say
   "Rushed: 3 of 11 turrets and modules not yet installed · 23 s of work to finish it".

@@ -264,7 +264,7 @@ function offlineSetup(info: MatchInfo, me: number): Setup {
     slots[s.spawn] = { kind: i === me ? 'you' : 'ai', faction: s.faction, team: s.team, difficulty: s.kind === 'ai' ? s.difficulty : OFFLINE_AI, profile: s.kind === 'ai' ? profileOf(s.profile) : 'balanced' }
     names[s.spawn] = i === me ? null : s.kind === 'ai' ? s.name : `${s.name} (AI)`
   })
-  return { map: info.map, gen: info.gen, credits: info.credits, slots, areas: [], names }
+  return { map: info.map, gen: info.gen, credits: info.credits, slots, areas: [], names, ...(info.reinforce ? { reinforce: info.reinforce } : {}) }
 }
 
 // --- Battle ---------------------------------------------------------------------------------------
@@ -416,7 +416,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     newWorld(
       map,
       seats.map((s, i) => ({ faction: s.faction, team: s.team, spawn: s.spawn, at: at[i], incomeMul: s.kind === 'ai' ? DIFFICULTY[s.difficulty].income : 1 })),
-      { credits: setup?.credits },
+      { credits: setup?.credits, reinforce: setup?.reinforce },
     )
   /** Where each station starts. Everyone gets a sensible spot in their area to begin with; the
    * player may move theirs before the battle starts. */
@@ -2509,7 +2509,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
         )}
         {ui.economy && hud.winner === -1 && <EconomyPanel w={w} me={me} names={seats.map((s) => s.name)} onClose={() => setUi((u) => ({ ...u, economy: false }))} />}
         {ui.gift && allies.length > 0 && hud.winner === -1 && <GiftPanel credits={hud.credits} allies={allies} onSend={sendCredits} onClose={() => setUi((u) => ({ ...u, gift: false }))} />}
-        {ui.reserves && hud.winner === -1 && <ReserveTray reserve={hud.reserve} onGrab={grabReserve} onClose={() => setUi((u) => ({ ...u, reserves: false }))} />}
+        {ui.reserves && hud.winner === -1 && <ReserveTray reserve={hud.reserve} onGrab={grabReserve} onClose={() => setUi((u) => ({ ...u, reserves: false }))} launch={!!world.current.reinforce} />}
 
         <ToastStack store={toasts} low={ui.paused && !ui.menu && !ui.panel} look={lookRef} />
         {ui.mode !== 'normal' && (

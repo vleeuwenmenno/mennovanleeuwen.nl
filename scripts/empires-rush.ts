@@ -112,7 +112,7 @@ const newest = (w: World, id: string, o = 0) => w.units.filter((u) => !u.dead &&
   check('the yard can\'t rush again at once', /^Nothing being built|^Ready again/.test(cantRush(w, 0, y.id) ?? ''))
   run(w, 8, () => !!newest(w, 'r-cruiser'))
   const u = newest(w, 'r-cruiser')
-  check('the rushed cruiser jumps in', !!u)
+  check('the rushed cruiser flies out', !!u)
   if (u) {
     check('its hull is the share that was built', near(u.hull / u.hullMax, share, 0.01), `${((u.hull / u.hullMax) * 100).toFixed(1)}%`)
     check('its shields start empty', u.shield < shieldMax(u) * 0.1, `${u.shield.toFixed(0)} of ${shieldMax(u).toFixed(0)}`)
@@ -162,7 +162,8 @@ const rushed = (share = 0.5, drydock = false) => {
   run(w, 1)
   y.yq![0].left = y.yq![0].total * (1 - share)
   cmdRush(w, 0, y.id)
-  run(w, 8, () => !!newest(w, 'r-cruiser'))
+  // Out of the berth and clear (it flies out of the yard, see check:empires-launch).
+  run(w, 8, () => !!newest(w, 'r-cruiser') && !newest(w, 'r-cruiser').launch)
   return { w, y, u: newest(w, 'r-cruiser') }
 }
 {
