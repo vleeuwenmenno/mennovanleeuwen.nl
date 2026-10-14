@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
     "preview": "vite preview",
+    "dev:proxy": "node scripts/dev-proxy.ts",
     "data": "node scripts/fetch-data.ts",
     "build:full": "node scripts/fetch-data.ts && tsc -b && tsc -p tsconfig.server.json && vite build",
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
