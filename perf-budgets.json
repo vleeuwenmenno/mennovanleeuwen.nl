@@ -165,13 +165,13 @@
         "kind": "count"
       },
       "map DOM nodes": {
-        "baseline": 462,
-        "budget": 532,
+        "baseline": 485,
+        "budget": 558,
         "kind": "count"
       },
       "DOM nodes": {
-        "baseline": 737,
-        "budget": 848,
+        "baseline": 760,
+        "budget": 874,
         "kind": "count"
       },
       "filtered map elements": {
@@ -210,13 +210,13 @@
         "kind": "count"
       },
       "map DOM nodes": {
-        "baseline": 875,
-        "budget": 1007,
+        "baseline": 806,
+        "budget": 927,
         "kind": "count"
       },
       "DOM nodes": {
-        "baseline": 1260,
-        "budget": 1449,
+        "baseline": 1191,
+        "budget": 1370,
         "kind": "count"
       },
       "filtered map elements": {
@@ -235,7 +235,7 @@
         "kind": "count"
       },
       "main thread ms / frame, zooming": {
-        "budget": 6,
+        "budget": 5,
         "kind": "time"
       },
       "main thread ms / frame, panning": {

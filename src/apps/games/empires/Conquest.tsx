@@ -563,33 +563,38 @@ function placeRegion(pan: HTMLElement, r: Region, c: Cam, size: { w: number; h: 
 /**
  * The variables the map's drawing scales by: --ik, one over the zoom (markers and text keep their
  * size on screen); --d, how far into the systems the view is (see `detail`); --nm, how far the
- * planets' names have faded in; --glow, the blockade's glow. They are registered as not inherited
+ * planets' names have faded in. They are registered as not inherited
  * (see empires.css) and set on each element that uses them, not once on the map: a variable that
  * changes on the map's root restyles every element under it, every frame of a zoom (about 3 ms a
  * frame in a late game), where this restyles only the elements that use them, and only those
  * on screen.
  */
-type ScaleUser = { el: HTMLElement | SVGElement; root: Element | null; uses: boolean[]; set: string[] }
-const VARS = ['--ik', '--d', '--nm', '--glow'] as const
-const varsAt = (k: number) => [String(1 / k), String(detail(k)), String(clamp((k - 7) / 4, 0, 1)), String(clamp((6 - k) / 2, 0, 1))]
+type ScaleUser = { el: HTMLElement | SVGElement; root: Element | null; uses: boolean[]; set: string[]; lo: number }
+const VARS = ['--ik', '--d', '--nm'] as const
+const varsAt = (k: number) => [String(1 / k), String(detail(k)), String(clamp((k - 7) / 4, 0, 1))]
 /** The elements that use the variables (their inline style does), which of them each uses (setting
  * one it doesn't use still restyles it, and an SVG text lays itself out again), and the culled
- * thing each is in. */
+ * thing each is in. An element with `data-ik-lo` takes --ik no lower than that: a size of
+ * `n * --ik` pixels on screen but at least `n * lo` map units, as `max()` would have it, except that
+ * once the zoom has passed where the map units take over its --ik stays put, and zooming further
+ * doesn't restyle it at all. */
 function scaleUsers(box: Element): ScaleUser[] {
   return [...box.querySelectorAll<HTMLElement | SVGElement>('[style*="var(--"]')].map((el) => {
     const style = el.getAttribute('style') ?? ''
-    return { el, root: el.closest('[data-cull]'), uses: VARS.map((v) => style.includes(`var(${v})`)), set: ['', '', '', ''] }
+    return { el, root: el.closest('[data-cull]'), uses: VARS.map((v) => style.includes(`var(${v})`)), set: VARS.map(() => ''), lo: Number(el.getAttribute('data-ik-lo') ?? 0) }
   })
 }
 function scaleVars(users: ScaleUser[], k: number) {
   const v = varsAt(k)
   for (const u of users) {
     if (u.root?.hasAttribute('data-off')) continue
-    for (let i = 0; i < 4; i++)
-      if (u.uses[i] && u.set[i] !== v[i]) {
-        u.el.style.setProperty(VARS[i], v[i])
-        u.set[i] = v[i]
+    for (let i = 0; i < VARS.length; i++) {
+      const val = i === 0 && u.lo > 1 / k ? String(u.lo) : v[i]
+      if (u.uses[i] && u.set[i] !== val) {
+        u.el.style.setProperty(VARS[i], val)
+        u.set[i] = val
       }
+    }
   }
 }
 
@@ -640,10 +645,11 @@ const within = (a: Area | null, x: number, y: number, r: number) => !a || (x + r
 /** A blockade ring's glow, as its old CSS drop-shadow drew it (a blur with a standard deviation
  * of 4 map units, in the side's glow colour) but as rings rather than a filter: a filter
  * is a pass of its own for each ring, every frame of a zoom. Blurred that wide, the dashed stroke
- * is a gaussian band round the ring: here four nested rings (widths in screen pixels per unit of
- * zoom, as the blur's), and its strength, which falls with the zoom (alphas per unit of 1/zoom). */
+ * is a gaussian band round the ring: here four nested rings (widths in map units, as the blur's),
+ * and its strength, which falls with the zoom (alphas per unit of 1/zoom). They are drawn for all
+ * the blockades at once (`placeBlockades`). */
 function glowRings(alpha: number, stroke: number) {
-  const sigma = 4 // map units (drop-shadow's length is the deviation): screen pixels per unit of zoom
+  const sigma = 4 // map units (drop-shadow's length is the deviation)
   // The dashes' share of the ring, blurred; at the ring's 0.9 opacity, which the shadow took too.
   const peak = (0.9 * alpha * (7 / 12) * stroke) / (sigma * Math.sqrt(2 * Math.PI))
   // Half-widths in deviations, and each ring's share of the bell's height (they stack).
@@ -652,6 +658,52 @@ function glowRings(alpha: number, stroke: number) {
 }
 const GLOW_THEIRS = glowRings(0.6, 3.5)
 const GLOW_OURS = glowRings(0.45, 2.5)
+const GLOW_COLOR = { ours: 'rgb(125, 255, 160)', theirs: 'rgb(255, 90, 80)' }
+/** A blockade, as `placeBlockades` draws it: the system's star, how far its planets reach, and
+ * who blockades it. */
+type Block = { x: number; y: number; R: number; by: number }
+/** A blockade ring's radius in map units at the zoom `k`: round the star zoomed out (26 pixels on
+ * screen), round the planets zoomed in (`ringR` in GalaxyView, as CSS). */
+const ringAt = (R: number, k: number) => Math.max(26 / k, detail(k) * (R + 2))
+/** A circle as path data, from its right-hand point clockwise (where a <circle> starts its dashes). */
+const circlePath = (x: number, y: number, r: number) => {
+  const R = n4(r)
+  return `M${n4(x + r)} ${n4(y)}a${R} ${R} 0 1 1 ${n4(-2 * r)} 0a${R} ${R} 0 1 1 ${n4(2 * r)} 0z`
+}
+/**
+ * The blockades' rings and glows at the zoom `k`, as a few paths that each hold every blockade's
+ * circle: a ring for each blockading side, and for the glow (zoomed out) one for each of its rings
+ * and each side. So a step of a zoom changes a handful of elements' path data rather than restyling,
+ * through the scale variables, five circles a blockade. The glows' widths are in map units (the
+ * map's scale widens them with the zoom, as the blur did); the rings are drawn at a width on screen.
+ * Blockades well outside what the map's layer has drawn (`reg`, as `cull` reckons it) are left out.
+ * `at` is what they were last drawn for: a pan that keeps the region changes nothing.
+ */
+type BlocksAt = { list: Block[] | null; k: number; reg: Region | null }
+function placeBlockades(el: SVGGElement, list: Block[], k: number, reg: Region | null, at: BlocksAt) {
+  if (at.list === list && at.k === k && at.reg === reg) return
+  Object.assign(at, { list, k, reg })
+  const m = CULL_PX / k
+  const d = new Map<string, string>()
+  const add = (key: string, path: string) => d.set(key, (d.get(key) ?? '') + path)
+  for (const b of list) {
+    const r = ringAt(b.R, k)
+    if (reg && (b.x + r < reg.x0 - m || b.x - r > reg.x0 + reg.w / reg.k + m || b.y + r < reg.y0 - m || b.y - r > reg.y0 + reg.h / reg.k + m)) continue
+    const c = circlePath(b.x, b.y, r)
+    add(`ring${b.by}`, c)
+    add(b.by === ME ? 'ours' : 'theirs', c)
+  }
+  const fade = clamp((6 - k) / 2, 0, 1) / k
+  for (const p of el.children) {
+    const key = p.getAttribute('data-key')!
+    const path = d.get(key) ?? ''
+    if (p.getAttribute('d') !== path) p.setAttribute('d', path)
+    const ring = p.getAttribute('data-ring')
+    if (ring === null) continue
+    const alpha = String(n4(fade * (key === 'ours' ? GLOW_OURS : GLOW_THEIRS)[Number(ring)][1]))
+    if (p.getAttribute('stroke-opacity') !== alpha) p.setAttribute('stroke-opacity', alpha)
+  }
+}
 
 /** A number for a CSS value: no exponents (a CSS length can't take 1e-16). */
 const n4 = (v: number) => +v.toFixed(4)
@@ -714,6 +766,10 @@ function GalaxyView({ g, view, sel, mini = false, on }: {
   // by the camera (only while it changes, between zooms of 2.4 and 5).
   const lanes = useRef<SVGGElement>(null)
   const laneD = view ? detail(view.cam.k) : 0
+  // The blockades' rings and glows (see placeBlockades), drawn for the zoom by the camera too.
+  const blocks = useRef<SVGGElement>(null)
+  const blockList = useRef<Block[]>([])
+  const blocksAt = useRef<BlocksAt>({ list: null, k: 0, reg: null })
   const drawn = useRef({ g, d: laneD })
   // What this render draws (see Area), and a redraw for when the camera leaves it.
   const area = view ? areaAt(view.cam, view.size, 3) : null
@@ -738,6 +794,8 @@ function GalaxyView({ g, view, sel, mini = false, on }: {
     if (region.current) cull(cullable.current, region.current)
     users.current = scaleUsers(b)
     scaleVars(users.current, view.cam.k)
+    blockList.current = blocked
+    if (blocks.current) placeBlockades(blocks.current, blocked, view.cam.k, region.current, blocksAt.current)
     flying.current = [...b.querySelectorAll<HTMLElement>('.ew-gfleet.is-moving[data-fid]')].flatMap((el) => {
       const f = g.fleets.find((x) => String(x.id) === el.dataset.fid)
       const route = b.querySelector<SVGPolylineElement>(`.ew-groute[data-fid="${el.dataset.fid}"]`)
@@ -788,11 +846,13 @@ function GalaxyView({ g, view, sel, mini = false, on }: {
               draw(true)
               placeRegion(pn, region.current!, view.cam, view.size)
               scaleVars(users.current, view.cam.k)
+              if (blocks.current) placeBlockades(blocks.current, blockList.current, view.cam.k, region.current, blocksAt.current)
             }
           }, WIDEN_MS)
       }
       placeRegion(pn, region.current!, c, view.size)
       scaleVars(users.current, c.k)
+      if (blocks.current) placeBlockades(blocks.current, blockList.current, c.k, region.current, blocksAt.current)
       const a = drawnArea.current
       const v = areaAt(view.cam, view.size, 1)
       if (a && (v.x0 < a.x0 || v.x1 > a.x1 || v.y0 < a.y0 || v.y1 > a.y1)) {
@@ -821,6 +881,13 @@ function GalaxyView({ g, view, sel, mini = false, on }: {
     }
   }, [view])
   const has = (b: number) => (band & b) !== 0
+  // The blockades drawn, for their rings and glows.
+  const blocked: Block[] = mini ? [] : g.systems.flatMap((s) => {
+    const R = reach(g, s.id)
+    const b = within(area, s.x, s.y, R + 4) ? blockade(g, s.id) : null
+    return b ? [{ x: s.x, y: s.y, R, by: b.by }] : []
+  })
+  const blockers = [...new Set(blocked.map((b) => b.by))]
   const selIds = selectedIds(sel ?? null)
   const selPs = selectedPlanets(sel ?? null)
   // Only the fleets we can see: ours, and others in systems we see (see the fog of war in galaxy.ts).
@@ -901,20 +968,22 @@ function GalaxyView({ g, view, sel, mini = false, on }: {
               onClick={() => on?.system(s.id)}
               data-tip={mini || has(B_NEAR) ? undefined : `${s.name}: ${s.planets.map((p) => g.planets[p].name).join(', ')}.${fog ? ` Hidden: we have no planet or fleet there; what shows is what we last saw (${lastLook <= 0 ? 'the pre-war charts' : `day ${dayOf(lastLook)}`}).` : ''}${blockadeTip(g, s.id)} Click to zoom in; right-click to send the selected fleet (Shift to add a stop).`}
             >
-              <circle cx={s.x} cy={s.y} fill="transparent" style={css({ r: has(B_NEAR) ? spx(30) : `max(${spx(22)}, 4px)` })} />
-              {(!view || has(B_DOTS)) && <circle cx={s.x} cy={s.y} fill={`url(#star-${s.star})`} style={css({ r: `max(${spx(13)}, 7px)` })} />}
-              <circle cx={s.x} cy={s.y} fill="#fff" style={css({ r: `max(${spx(3.2)}, 1.6px)` })} />
+              <circle cx={s.x} cy={s.y} fill="transparent" style={css({ r: spx(has(B_NEAR) ? 30 : 22) })} data-ik-lo={has(B_NEAR) ? undefined : n4(4 / 22)} />
+              {(!view || has(B_DOTS)) && <circle cx={s.x} cy={s.y} fill={`url(#star-${s.star})`} style={css({ r: spx(13) })} data-ik-lo={n4(7 / 13)} />}
+              <circle cx={s.x} cy={s.y} fill="#fff" style={css({ r: spx(3.2) })} data-ik-lo={0.5} />
             </g>
-            {/* Zoomed out: a dot per planet in its owner's colour. */}
-            {has(B_DOTS) &&
-              s.planets.map((pid, i) => {
-                const p = g.planets[pid]
+            {/* Zoomed out: a dot per planet in its owner's colour, over the star. All of a system's
+                dots are one pin (a step of the zoom moves one box, rather than restyling and laying
+                out a circle a planet); in the setup's preview, at no zoom, they're in the map. */}
+            {has(B_DOTS) && (() => {
+              const dots = s.planets.map((pid, i) => {
                 const a = -Math.PI / 2 + (i - (s.planets.length - 1) / 2) * 0.55
-                return (
-                  <circle key={pid} fill={color(g, ownerFor(g, ME, p))} stroke="#000"
-                    style={css({ cx: `calc(${n4(s.x)}px + var(--ik) * ${n4(Math.cos(a) * 15)}px)`, cy: `calc(${n4(s.y)}px + var(--ik) * ${n4(Math.sin(a) * 15)}px)`, r: spx(2.6), strokeWidth: spx(0.6), opacity: `calc((1 - var(--d)) * ${fog ? 0.55 : 1})` })} />
-                )
-              })}
+                return <circle key={pid} cx={n4(Math.cos(a) * 15)} cy={n4(Math.sin(a) * 15)} r={2.6} strokeWidth={0.6} fill={color(g, ownerFor(g, ME, g.planets[pid]))} stroke="#000" />
+              })
+              return view
+                ? over(`dt${s.id}`, pin(s.x, s.y, 0, '', { opacity: `calc((1 - var(--d)) * ${fog ? 0.55 : 1})` }), sysAt, dots, { className: 'is-deco' })
+                : <g transform={`translate(${n4(s.x)} ${n4(s.y)})`} opacity={fog ? 0.55 : 1}>{dots}</g>
+            })()}
             {/* Zoomed in: the planets on their orbits. */}
             {has(B_OPEN) && (
               <g style={css({ opacity: 'var(--d)' })}>
@@ -944,13 +1013,13 @@ function GalaxyView({ g, view, sel, mini = false, on }: {
                   return (
                     <g key={pid} className={`ew-splanet ${on2 ? 'is-sel' : ''} ${k.live ? '' : 'is-fog'}`} {...hit}>
                       <circle cx={q.x} cy={q.y} fill="none" stroke={color(g, k.owner)} strokeWidth={k.owner < 0 ? 1 : 2.5} strokeDasharray={k.owner < 0 || !k.live ? '3 4' : undefined} vectorEffect="non-scaling-stroke" className="ew-sring"
-                        style={css({ r: `calc(${n4(r)}px + max(${spx(6)}, ${n4(r * 0.18)}px))` })} />
+                        style={css({ r: `calc(${n4(r)}px + ${spx(6)})` })} data-ik-lo={n4((r * 0.18) / 6)} />
                       <image href={PLANET_ART(p.kind)} x={q.x - r} y={q.y - r} width={r * 2} height={r * 2} />
                       {k.live && p.capture && (
                         <>
                           {/* Being taken: a track round the planet filling in the taker's colour, and a tag. */}
-                          <circle cx={q.x} cy={q.y} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth={4} vectorEffect="non-scaling-stroke" className="ew-gcap" style={css({ r: `calc(${n4(r)}px + max(${spx(11)}, ${n4(r * 0.3)}px))` })} />
-                          <circle cx={q.x} cy={q.y} fill="none" stroke={color(g, p.capture.owner)} strokeWidth={4} vectorEffect="non-scaling-stroke" pathLength={1} strokeDasharray={`${capture} 1`} transform={`rotate(-90 ${q.x} ${q.y})`} className="ew-gcap" style={css({ r: `calc(${n4(r)}px + max(${spx(11)}, ${n4(r * 0.3)}px))` })} />
+                          <circle cx={q.x} cy={q.y} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth={4} vectorEffect="non-scaling-stroke" className="ew-gcap" style={css({ r: `calc(${n4(r)}px + ${spx(11)})` })} data-ik-lo={n4((r * 0.3) / 11)} />
+                          <circle cx={q.x} cy={q.y} fill="none" stroke={color(g, p.capture.owner)} strokeWidth={4} vectorEffect="non-scaling-stroke" pathLength={1} strokeDasharray={`${capture} 1`} transform={`rotate(-90 ${q.x} ${q.y})`} className="ew-gcap" style={css({ r: `calc(${n4(r)}px + ${spx(11)})` })} data-ik-lo={n4((r * 0.3) / 11)} />
                           {over(`cap${pid}`, pin(q.x, q.y - r, 0, '', fade), sysAt, <CaptureTag g={g} p={p} />, { ...hit, className: 'ew-splanet' })}
                         </>
                       )}
@@ -985,27 +1054,32 @@ function GalaxyView({ g, view, sel, mini = false, on }: {
                 {over(`ct${s.id}`, pin(s.x, s.y, 0, '', { opacity: 'calc(1 - var(--d) / 0.6)' }), sysAt, <text x={0} y={-26} className={`ew-gcaptext ${p.capture!.owner === ME ? 'is-ours' : 'is-theirs'}`}>{p.capture!.owner === ME ? 'Taking' : 'Losing'} {p.name} {Math.floor((p.capture!.t / CAPTURE_TIME) * 100)}%</text>)}
               </g>
             ))}
-            {/* A blockade: a barrier ring round the system in the blockading side's colour, and a
-                shield on it; red-edged when it's against us. */}
-            {block && (
-              <g className={`ew-gblock ${block.by === ME ? 'is-ours' : 'is-theirs'}`}>
-                {has(B_GLOW) && (block.by === ME ? GLOW_OURS : GLOW_THEIRS).map(([width, alpha], i) => (
-                  <circle key={i} cx={s.x} cy={s.y} fill="none" stroke={block.by === ME ? 'rgb(125, 255, 160)' : 'rgb(255, 90, 80)'} vectorEffect="non-scaling-stroke" className="ew-gglow"
-                    style={css({ r: ringR, strokeWidth: `calc(${width}px / var(--ik))`, strokeOpacity: `calc(var(--glow) * var(--ik) * ${alpha})` })} />
-                ))}
-                <circle cx={s.x} cy={s.y} fill="none" stroke={color(g, block.by)} vectorEffect="non-scaling-stroke" className="ew-gring" style={css({ r: ringR })} />
-                {over(`bk${s.id}`, css({ transform: `translate(calc(${n4(s.x)}px + 0.7071 * ${ringR}), calc(${n4(s.y)}px - 0.7071 * ${ringR})) scale(var(--ik))` }), sysAt, (
+            {/* A blockade: a barrier ring round the system in the blockading side's colour (with the
+                others, after the systems: see placeBlockades), and a shield on it; red-edged when
+                it's against us. */}
+            {block &&
+                over(`bk${s.id}`, css({ transform: `translate(calc(${n4(s.x)}px + 0.7071 * ${ringR}), calc(${n4(s.y)}px - 0.7071 * ${ringR})) scale(var(--ik))` }), sysAt, (
                   <g data-tip={`${block.by === ME ? 'Our' : 'Enemy'} blockade.${blockadeTip(g, s.id)}`} data-longpress="">
                     <path d="M0,-9 L8,-5 L8,1 C8,6 4,9 0,11 C-4,9 -8,6 -8,1 L-8,-5 Z" fill="#0b1226" stroke={color(g, block.by)} strokeWidth={1.6} />
                     <path d="M-4,-1 L4,-1 M-4,3 L4,3" stroke={block.by === ME ? '#7dffa0' : '#ff6a5e'} strokeWidth={1.6} strokeLinecap="round" />
                   </g>
-                ))}
-              </g>
-            )}
+                ), { className: 'ew-gshield' })}
             {!mini && over(`nm${s.id}s`, pin(s.x, s.y, has(B_BIG) ? R : 0), sysAt, <text y={has(B_BIG) ? -10 : 27} className={`ew-gname ${has(B_BIG) ? 'is-big' : ''}`}>{s.name}</text>)}
           </g>
         )
       })}
+      {/* The blockades' glows and rings, each in a few paths for them all (see placeBlockades),
+          drawn for the zoom by the camera: a glow under its ring, as a drop-shadow was. */}
+      {blocked.length > 0 && (
+        <g ref={blocks} className="ew-gblocks">
+          {has(B_GLOW) && (['theirs', 'ours'] as const).flatMap((side) => blockers.some((by) => (by === ME) === (side === 'ours'))
+            ? (side === 'ours' ? GLOW_OURS : GLOW_THEIRS).map(([width], i) => <path key={`${side}${i}`} data-key={side} data-ring={i} fill="none" stroke={GLOW_COLOR[side]} strokeWidth={width} />)
+            : [])}
+          {blockers.map((by) => (
+            <path key={`ring${by}`} data-key={`ring${by}`} fill="none" stroke={color(g, by)} vectorEffect="non-scaling-stroke" className={`ew-gring ${by === ME ? 'is-ours' : 'is-theirs'}`} />
+          ))}
+        </g>
+      )}
       {!mini &&
         [...parked.entries()].map(([key, fs]) => {
           const [sys, owner] = key.split(':').map(Number)
