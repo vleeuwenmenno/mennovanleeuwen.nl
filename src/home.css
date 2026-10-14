@@ -1334,8 +1334,13 @@ textarea.agt-q-input {
 }
 .agt-ask-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 6px;
+}
+/* A lasting choice offered on a card (always allow mail reads): there, but out of the way. */
+.agt-ask-quiet {
+  margin-left: auto;
 }
 
 @container (max-width: 620px) {

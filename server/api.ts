@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
-import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, revokeMailReads, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
+import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
 import { authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, startLogin } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
@@ -375,6 +375,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     const memoryId = /^\/api\/agents\/memories\/(\d+)$/.exec(path)?.[1]
     if (memoryId && method === 'PATCH') return json(res, 200, updateMemory(requireUser(req), memoryId, await readJson(req, 8192))), true
     if (memoryId && method === 'DELETE') return deleteMemory(requireUser(req), Number(memoryId)), json(res, 200, { ok: true }), true
+    // Mail reads (the agent's mail searches and reads): ask each time (the default), or always allowed.
+    if (path === '/api/agents/mail-reads' && read) return json(res, 200, getMailReads(requireUser(req))), true
+    if (path === '/api/agents/mail-reads' && method === 'PUT') return json(res, 200, setMailReads(requireUser(req), await readJson(req, 1024))), true
     // Web sites the user allowed for good: their threads read addresses there without asking.
     if (path === '/api/agents/sites' && read) return json(res, 200, listSites(requireUser(req))), true
     if (path === '/api/agents/sites' && method === 'POST') return json(res, 200, allowSite(requireUser(req), await readJson(req, 4096))), true

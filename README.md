@@ -1233,7 +1233,12 @@ round it is on a search or read card: *Allow mail reads for 15 min* lets `mail_l
 `mail_search` and `mail_read` run without a card in that thread only, in every mode, for 15 minutes
 from then (kept on the server, which checks the time; a restart ends it). The thread shows a chip
 with the minutes left and an × to end it early (`DELETE /api/agents/threads/:id/mail-reads`), and
-the prompt says so; drafts, sends and changes ask every time all the same. Each call is
+the prompt says so; drafts, sends and changes ask every time all the same. Or for good: Settings →
+Agents → Permissions has *Mail searches and reads: Ask (default) / Always allow*, per user (table
+`agent_mail_reads`, `GET`/`PUT /api/agents/mail-reads`), also set by the quieter *Always allow mail
+reads* on a read's card. With it on, reads run without a card in every thread and mode, the
+15-minute button goes away and the thread's chip says *Mail reads always allowed* (it opens that
+setting); drafts, sends and changes still ask, Bypass included. Each call is
 checked first (the account, the ids, the recipients, the mailbox) and the card shows what will
 happen: for a send the account, From, To, Cc, Bcc, Subject and the whole text that goes out.
 Message ids are the account's number and the server's own id, so they only resolve within your own
