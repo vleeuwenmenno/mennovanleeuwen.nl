@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { parseMarkdown, type Block, type Inline } from './parse.ts'
 import { highlight, knownLanguage } from './highlight.ts'
 import { useFurigana } from '../furigana.ts'
+import { joinText, moneyPieces } from '../money.ts'
+import { MoneyAmount } from '../../os/MoneyAmount.tsx'
 
 // Markdown as React elements, for Zed's preview, Notebook, Spotlight and the Agents app's
 // answers. The parsing is in parse.ts (CommonMark with GitHub's tables, task lists and
@@ -10,7 +12,7 @@ import { useFurigana } from '../furigana.ts'
 // used to live.
 
 /**
- * Furigana, {漢字|かんじ} in the text. How it shows is Settings → Language (Always, On hover, Off):
+ * Furigana, {漢字|かんじ} in the text. How it shows is Settings → Language & region (Always, On hover, Off):
  * a data attribute on the root that the rules in styles.css read. <rp> keeps "漢字(かんじ)"
  * readable where ruby is not drawn. In On hover the word can be focused, so a keyboard reaches it.
  */
@@ -26,12 +28,20 @@ function Ruby({ base, reading }: { base: string; reading: string }) {
   )
 }
 
-function inlines(nodes: Inline[], key: string): ReactNode[] {
-  return nodes.map((n, i) => {
+/** Amounts of money in plain text as buttons that open their exchange rates (src/data/money.ts). */
+function moneyText(text: string, key: string): ReactNode {
+  const pieces = moneyPieces(text)
+  if (pieces.length === 1 && typeof pieces[0] === 'string') return text
+  return pieces.map((p) => (typeof p === 'string' ? p : <MoneyAmount key={`${key}m${p.start}`} hit={p} />))
+}
+
+/** `money`: amounts in the text are clickable; never inside a link (its words or address) or code. */
+function inlines(nodes: Inline[], key: string, money = false): ReactNode[] {
+  return (money ? joinText(nodes) : nodes).map((n, i) => {
     const k = `${key}.${i}`
     switch (n.type) {
       case 'text':
-        return n.text
+        return money ? <Fragment key={k}>{moneyText(n.text, k)}</Fragment> : n.text
       // A plain line break is a space in a paragraph; with `breaks` the paragraph keeps it (pre-wrap).
       case 'soft':
         return '\n'
@@ -42,11 +52,11 @@ function inlines(nodes: Inline[], key: string): ReactNode[] {
       case 'ruby':
         return <Ruby key={k} base={n.base} reading={n.reading} />
       case 'em':
-        return <em key={k}>{inlines(n.children, k)}</em>
+        return <em key={k}>{inlines(n.children, k, money)}</em>
       case 'strong':
-        return <strong key={k}>{inlines(n.children, k)}</strong>
+        return <strong key={k}>{inlines(n.children, k, money)}</strong>
       case 'del':
-        return <del key={k}>{inlines(n.children, k)}</del>
+        return <del key={k}>{inlines(n.children, k, money)}</del>
       case 'link':
         return (
           <a key={k} href={n.href} title={n.title} target="_blank" rel="noopener noreferrer">
@@ -59,28 +69,28 @@ function inlines(nodes: Inline[], key: string): ReactNode[] {
   })
 }
 
-function blocks(nodes: Block[], breaks: boolean, key: string, tight = false): ReactNode[] {
+function blocks(nodes: Block[], breaks: boolean, key: string, tight = false, money = false): ReactNode[] {
   return nodes.map((b, i) => {
     const k = `${key}.${i}`
     switch (b.type) {
       case 'paragraph':
         // Items of a tight list hold their text directly, without the spacing of a paragraph.
-        if (tight) return <span key={k}>{inlines(b.children, k)}</span>
+        if (tight) return <span key={k}>{inlines(b.children, k, money)}</span>
         return (
           <p key={k} className={breaks ? 'md-breaks' : undefined}>
-            {inlines(b.children, k)}
+            {inlines(b.children, k, money)}
           </p>
         )
       case 'heading': {
         const Tag = `h${b.level}` as const
-        return <Tag key={k}>{inlines(b.children, k)}</Tag>
+        return <Tag key={k}>{inlines(b.children, k, money)}</Tag>
       }
       case 'hr':
         return <hr key={k} />
       case 'code':
         return <CodeBlock key={k} lang={b.lang} code={b.text} />
       case 'quote':
-        return <blockquote key={k}>{blocks(b.children, breaks, k)}</blockquote>
+        return <blockquote key={k}>{blocks(b.children, breaks, k, false, money)}</blockquote>
       case 'list': {
         const items = b.items.map((item, j) => {
           const ik = `${k}.${j}`
@@ -93,25 +103,25 @@ function blocks(nodes: Block[], breaks: boolean, key: string, tight = false): Re
             const lead = b.tight ? (
               <span key="lead">
                 {box}
-                {inlines(first.children, `${ik}.0`)}
+                {inlines(first.children, `${ik}.0`, money)}
               </span>
             ) : (
               <p key="lead" className={breaks ? 'md-breaks' : undefined}>
                 {box}
-                {inlines(first.children, `${ik}.0`)}
+                {inlines(first.children, `${ik}.0`, money)}
               </p>
             )
             return (
               <li key={j} className={`md-task ${item.checked ? 'is-done' : ''}`}>
                 {lead}
-                {blocks(rest, breaks, `${ik}r`, b.tight)}
+                {blocks(rest, breaks, `${ik}r`, b.tight, money)}
               </li>
             )
           }
           return (
             <li key={j} className={task ? `md-task ${item.checked ? 'is-done' : ''}` : undefined}>
               {box}
-              {blocks(kids, breaks, ik, b.tight)}
+              {blocks(kids, breaks, ik, b.tight, money)}
             </li>
           )
         })
@@ -131,7 +141,7 @@ function blocks(nodes: Block[], breaks: boolean, key: string, tight = false): Re
                 <tr>
                   {b.head.map((c, j) => (
                     <th key={j} style={{ textAlign: b.align[j] ?? undefined }}>
-                      {inlines(c, `${k}h${j}`)}
+                      {inlines(c, `${k}h${j}`, money)}
                     </th>
                   ))}
                 </tr>
@@ -141,7 +151,7 @@ function blocks(nodes: Block[], breaks: boolean, key: string, tight = false): Re
                   <tr key={n}>
                     {r.map((c, j) => (
                       <td key={j} style={{ textAlign: b.align[j] ?? undefined }}>
-                        {inlines(c, `${k}r${n}c${j}`)}
+                        {inlines(c, `${k}r${n}c${j}`, money)}
                       </td>
                     ))}
                   </tr>
@@ -187,7 +197,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
  * Markdown as React nodes. `breaks` keeps a paragraph's line breaks and spacing, like a chat
  * message (the Agents app's own messages); otherwise its lines join into one, as Markdown does.
  */
-export function MarkdownPreview({ text, breaks = false }: { text: string; breaks?: boolean }) {
+export function MarkdownPreview({ text, breaks = false, money = false }: { text: string; breaks?: boolean; /** Amounts of money open their exchange rates (the Agents app's answers) */ money?: boolean }) {
   const tree = useMemo(() => parseMarkdown(text), [text])
-  return <>{blocks(tree, breaks, 'b')}</>
+  return <>{blocks(tree, breaks, 'b', false, money)}</>
 }

@@ -17,7 +17,20 @@ export function setOverlay(o: Overlay) {
  * launcher is up, which a window restored at start-up (?newtab) would otherwise type into. */
 export const mayTakeFocus = () => current === null
 
-export const toggleOverlay = (o: Exclude<Overlay, null>) => setOverlay(current === o ? null : o)
+// What Spotlight starts with when opened through openSpotlight (an amount's "Open in Spotlight").
+let spotlightQuery = ''
+
+/** Opens Spotlight with `query` already typed. */
+export function openSpotlight(query = '') {
+  spotlightQuery = query
+  setOverlay('spotlight')
+}
+
+/** The text Spotlight opens with; cleared once it has opened (clearSpotlightQuery), so the next time is empty. */
+export const spotlightStartQuery = () => spotlightQuery
+export const clearSpotlightQuery = () => void (spotlightQuery = '')
+
+export const toggleOverlay =(o: Exclude<Overlay, null>) => setOverlay(current === o ? null : o)
 
 export function useOverlay() {
   return useSyncExternalStore(

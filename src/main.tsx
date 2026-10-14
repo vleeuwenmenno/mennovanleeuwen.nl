@@ -17,6 +17,7 @@ import { startSync } from './os/synced'
 import { startBrowserFiles } from './data/browserfs'
 import { initTheme } from './os/theme'
 import { initFurigana } from './data/furigana'
+import { initHomeCurrency } from './data/currency'
 import { WindowManagerProvider } from './os/wm'
 import './styles.css'
 import './home.css'
@@ -29,6 +30,7 @@ const play = playMode()
 
 initTheme()
 initFurigana()
+initHomeCurrency()
 if (!play) applyDockReserve()
 registerServiceWorker()
 trackVisualViewport()
