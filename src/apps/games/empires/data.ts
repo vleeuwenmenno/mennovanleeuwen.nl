@@ -129,10 +129,12 @@ export const FIELD_REPAIR = { flat: 8, share: 0.005, reach: 200, rebuild: 20, ba
 /**
  * A station's defense wing: one free squadron of small fighters that every station starts with and
  * keeps up. Away from home (more than `radius` from their station, or once it's gone) their guns do
- * `away` of their damage. The station rebuilds lost craft one at a time, every `every` seconds,
- * starting `wait` seconds after the last one was lost, while its hangar stands.
+ * `away` of their damage; at home, under the station's cover, they take `guard` of the damage shot
+ * at them (without it a pair of gunships' flak wiped a whole wing in five seconds). The station
+ * rebuilds lost craft one at a time, every `every` seconds, starting `wait` seconds after the last
+ * one was lost, while its hangar stands.
  */
-export const DEFENSE_WING = { radius: reach(1400), away: 0.3, every: 25, wait: 15 }
+export const DEFENSE_WING = { radius: reach(1400), away: 0.3, guard: 0.25, every: 25, wait: 15 }
 /** A faction's defense wing fighter. */
 export const wingOf = (faction: FactionId) => UNIT[faction === 'republic' ? 'r-picket' : 'd-picket']
 
