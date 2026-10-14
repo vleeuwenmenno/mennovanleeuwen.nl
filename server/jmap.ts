@@ -859,12 +859,16 @@ async function upload(acc: Linked, req: IncomingMessage, type: string | null): P
   return { blobId: body.blobId, type: String(body.type ?? contentType), size: Number(body.size) || size }
 }
 
-async function fetchBlob(acc: Linked, blobId: string, name: string, type: string): Promise<Response> {
+/** `range`: a byte range asked for by a player seeking in audio or video (passed on as it is). */
+async function fetchBlob(acc: Linked, blobId: string, name: string, type: string, range: string | null = null): Promise<Response> {
   if (!ID.test(blobId)) throw new HttpError(400, 'Bad attachment')
   const s = await session(acc)
-  const res = await guardedFetch(acc.user, fill(s.downloadUrl, { accountId: s.accountId, blobId, name: name || 'attachment', type: type || 'application/octet-stream' }), { headers: bearer(acc.token), signal: AbortSignal.timeout(120_000) }).catch((e) => (rethrowEgress(e), null))
+  const headers: Record<string, string> = { ...bearer(acc.token) }
+  if (range) headers.Range = range
+  const res = await guardedFetch(acc.user, fill(s.downloadUrl, { accountId: s.accountId, blobId, name: name || 'attachment', type: type || 'application/octet-stream' }), { headers, signal: AbortSignal.timeout(120_000) }).catch((e) => (rethrowEgress(e), null))
   if (!res) throw new HttpError(502, `${acc.label} did not answer`)
   if (res.status === 404) throw new HttpError(404, 'That attachment is gone')
+  if (res.status === 416) throw new HttpError(416, 'Range not satisfiable')
   if (!res.ok) throw new HttpError(502, `${acc.label} answered ${res.status}`)
   return res
 }
@@ -875,9 +879,11 @@ async function blobText(acc: Linked, blobId: string, max: number): Promise<strin
 
 /** Pictures the browser may show as they are; anything else is a download. Never SVG or HTML. */
 const SHOWABLE = /^image\/(png|jpe?g|gif|webp|bmp|avif)$/i
+/** Audio and video that Player plays from the attachment's address (and seeks in): only these, never a type a browser renders as a page. */
+const PLAYABLE = /^(audio\/(mpeg|mp3|mp4|aac|ogg|opus|wav|x-wav|wave|webm|flac|x-flac|x-m4a)|video\/(mp4|webm|ogg|quicktime))$/i
 
 async function pipeBlob(res: ServerResponse, blob: Response, name: string, type: string, inline: boolean, head: boolean) {
-  const show = inline && SHOWABLE.test(type)
+  const show = inline && (SHOWABLE.test(type) || PLAYABLE.test(type))
   const headers: Record<string, string> = {
     'Content-Type': show ? type.toLowerCase() : 'application/octet-stream',
     'Content-Disposition': `${show ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name || 'attachment')}`,
@@ -887,7 +893,12 @@ async function pipeBlob(res: ServerResponse, blob: Response, name: string, type:
   }
   const length = blob.headers.get('content-length')
   if (length && /^\d+$/.test(length)) headers['Content-Length'] = length
-  res.writeHead(200, headers)
+  // Part of it (a player seeking), when the mail server answered the range asked for.
+  const range = blob.headers.get('content-range') ?? ''
+  const partial = blob.status === 206 && /^bytes \d+-\d+\/(\d+|\*)$/.test(range)
+  if (partial) headers['Content-Range'] = range
+  if (show && PLAYABLE.test(type)) headers['Accept-Ranges'] = partial || blob.headers.get('accept-ranges') === 'bytes' ? 'bytes' : 'none'
+  res.writeHead(partial ? 206 : 200, headers)
   if (head || !blob.body) {
     await blob.body?.cancel().catch(() => {})
     return res.end()
@@ -1360,7 +1371,10 @@ export async function handleMailApi(req: IncomingMessage, res: ServerResponse, u
   if (what === 'blob' && read && id) {
     const name = (q('name') ?? 'attachment').slice(0, 200)
     const type = (q('type') ?? 'application/octet-stream').slice(0, 100)
-    return await pipeBlob(res, await fetchBlob(acc, id, name, type), name, type, q('inline') === '1', head), true
+    const shown = q('inline') === '1'
+    // Seeking in audio or video: the range goes on to the mail server (only for what plays inline).
+    const range = shown && PLAYABLE.test(type) && /^bytes=\d*-\d*$/.test(req.headers.range ?? '') ? req.headers.range! : null
+    return await pipeBlob(res, await fetchBlob(acc, id, name, type, range), name, type, shown, head), true
   }
   if (what === 'suggest' && read) return json(res, 200, { people: await suggest(acc, (q('q') ?? '').slice(0, 100)) }), true
   throw new HttpError(404, 'Not found')

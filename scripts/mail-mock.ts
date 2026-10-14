@@ -40,6 +40,8 @@ export type MockJmap = {
   submissions: J[]
   /** Every method call, in order. */
   calls: string[]
+  /** Every method call with its arguments (as sent, before back-references), in order. */
+  methodCalls: [string, J][]
   /** Open EventSource connections. */
   streams: () => number
   deliver: (e: Partial<SeedEmail>) => Email
@@ -82,6 +84,7 @@ export async function startMockJmap(opts: { port?: number; token?: string; host?
   const values = new Map<string, string>() // blobId of a text part → its text
   const submissions: J[] = []
   const calls: string[] = []
+  const methodCalls: [string, J][] = []
   const changes: { state: number; created: string[]; updated: string[]; destroyed: string[] }[] = []
   let emailState = 1
   let mailboxState = 1
@@ -256,6 +259,7 @@ export async function startMockJmap(opts: { port?: number; token?: string; host?
     }
     for (const [name, rawArgs, callId] of body.methodCalls as [string, J, string][]) {
       calls.push(name)
+      methodCalls.push([name, rawArgs])
       const args = resolve(rawArgs)
       if (typeof args === 'string') {
         responses.push(['error', { type: args }, callId])
@@ -515,7 +519,17 @@ export async function startMockJmap(opts: { port?: number; token?: string; host?
     if (down) {
       const b = blobs.get(decodeURIComponent(down[2]))
       if (!b) return send(res, 404, { type: 'notFound' })
-      return res.writeHead(200, { 'Content-Type': url.searchParams.get('accept') ?? b.type, 'Content-Length': String(b.data.length) }).end(b.data)
+      const type = url.searchParams.get('accept') ?? b.type
+      // A byte range (a player seeking), as Fastmail answers one.
+      const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? '')
+      if (range && (range[1] || range[2])) {
+        const size = b.data.length
+        const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]))
+        const end = range[1] && range[2] ? Math.min(size - 1, Number(range[2])) : size - 1
+        if (start >= size || end < start) return res.writeHead(416, { 'Content-Range': `bytes */${size}` }).end()
+        return res.writeHead(206, { 'Content-Type': type, 'Content-Length': String(end - start + 1), 'Content-Range': `bytes ${start}-${end}/${size}`, 'Accept-Ranges': 'bytes' }).end(b.data.subarray(start, end + 1))
+      }
+      return res.writeHead(200, { 'Content-Type': type, 'Content-Length': String(b.data.length), 'Accept-Ranges': 'bytes' }).end(b.data)
     }
     if (url.pathname === '/jmap/eventsource/') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' })
@@ -541,6 +555,7 @@ export async function startMockJmap(opts: { port?: number; token?: string; host?
     blobs,
     submissions,
     calls,
+    methodCalls,
     streams: () => streams.size,
     deliver: (e) => make({ from: [{ name: 'Erin Sender', email: 'erin@example.test' }], subject: 'A new message', text: 'Fresh in.', ...e } as SeedEmail),
     state: () => String(emailState),

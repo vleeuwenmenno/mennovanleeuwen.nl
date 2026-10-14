@@ -269,7 +269,20 @@ function pictureOf(i: DragItem): { glyph?: string; image?: string } {
 
 const OP_MARK: Record<DropOp, string> = { move: '→', copy: '+', link: '↗', open: '⏎', trash: '🗑' }
 
-function ghostElement(items: DragItem[]): HTMLElement {
+/**
+ * The OS's drag ghost for a browser drag of something that is not a DragItem (an app's own drag,
+ * such as Mail's messages onto its mailboxes): a stack of `glyph`, the label and, past one, the count.
+ */
+export function setDragGhost(e: DragEvent | React.DragEvent, glyph: string, label: string, count: number) {
+  const icons = Array.from({ length: Math.min(3, Math.max(1, count)) }, (_, k): DragItem => ({ kind: 'icon', id: String(k), label, glyph }))
+  const g = ghostElement(icons, label, count)
+  g.classList.add('is-image')
+  document.body.append(g)
+  e.dataTransfer!.setDragImage(g, 18, 18)
+  setTimeout(() => g.remove(), 0)
+}
+
+function ghostElement(items: DragItem[], label_?: string, count_?: number): HTMLElement {
   const g = document.createElement('div')
   g.className = 'dnd-ghost'
   g.setAttribute('aria-hidden', 'true')
@@ -292,12 +305,13 @@ function ghostElement(items: DragItem[]): HTMLElement {
   const label = document.createElement('span')
   label.className = 'dnd-ghost-label'
   const one = items[0]
-  label.textContent = items.length > 1 ? `${items.length} items` : one.kind === 'file' ? (one.launcher?.label ?? one.name) : one.label
+  const n = count_ ?? items.length
+  label.textContent = label_ ?? (items.length > 1 ? `${items.length} items` : one.kind === 'file' ? (one.launcher?.label ?? one.name) : one.label)
   g.append(label)
-  if (items.length > 1) {
+  if (n > 1) {
     const count = document.createElement('span')
     count.className = 'dnd-ghost-count'
-    count.textContent = String(items.length)
+    count.textContent = String(n)
     g.append(count)
   }
   const op = document.createElement('span')

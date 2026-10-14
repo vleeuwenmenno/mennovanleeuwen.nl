@@ -719,11 +719,28 @@ where it shows, loading more as it scrolls), the reading pane, search (words, or
 dragging a conversation onto a mailbox), junk, delete to Trash and, from Trash only and after an
 in-OS question, for good. Writing is plain text with attachments from the computer or from Files
 (Seafile); every change is saved as a draft after a pause, and Send submits it with the chosen
-identity (`EmailSubmission/set`, moved to Sent once the server has taken it). Attachments save to
-Files too. Keys: `j`/`k` (or the arrows) to move, Enter to open, `e` archive, `#` delete, `!` junk,
+identity (`EmailSubmission/set`, moved to Sent once the server has taken it). A PDF attachment
+opens at a click in MvL OS's PDF window, a picture in Preview, and audio or video in Player
+(titled with the file's name, its Download saving it), never in a new browser tab: they are read
+through this site with the session (`/api/mail/<account>/blob/…`, only for the account's owner;
+PDF.js reads the bytes of the download, which is always `application/octet-stream`; pictures,
+audio and video of a few known types come inline, and audio and video with byte ranges for
+seeking; every answer has `nosniff` and a sandboxing CSP). The chip's ⤓ button, its right-click
+menu and *Download all* still download. Other attachments (Office files and the rest) download as
+before. Attachments save to Files too. Keys: `j`/`k` (or the arrows) to move, Enter to open, `e` archive, `#` delete, `!` junk,
 `s` flag, `u` read or unread, `r` reply, `a` reply all, `f` forward, `c` compose, `/` search,
 Ctrl+Enter to send (a setting). In a narrow window or on a phone it shows one pane at a time: mailboxes, list,
 conversation, each with a way back.
+
+Several conversations can be selected at once, as in Files and Photos: Ctrl or Cmd+click (or the
+circle over a sender's picture) takes one in or out, Shift+click or Shift+↑/↓ a range, Ctrl+A every
+conversation loaded, Esc none; on a touch screen a long press starts selecting and taps then add
+and take away. With two or more, the reading pane says how many (a bar over the list on a phone)
+with Archive, Delete, Mark as junk or Not junk, Mark as read or unread, Flag or Unflag, and Move to…;
+the keys above, the right-click menu on a selected row and dragging a selected row onto a mailbox
+(the drag shows how many) act on all of them. A selected conversation is all its messages, and each
+action is one request, one `Email/set` on the server. The selection stays when new mail comes in and
+goes with a change of mailbox or a search.
 
 HTML mail is made safe on the server by an allow-list sanitiser of its own
 ([`server/mailhtml.ts`](server/mailhtml.ts): no scripts, event handlers, forms, frames, SVG,

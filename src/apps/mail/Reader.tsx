@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { getAccount } from '../../os/account'
 import { openContextMenu, openMenuAt, selectionIn, type MenuItem } from '../../os/ContextMenu'
 import { pickFolder } from '../../os/FolderPicker'
+import { useWM } from '../../os/wm'
 import { notify } from '../../os/notify'
 import { uploadFiles } from '../../data/uploads'
 import { openImport, pimAppFor } from '../../data/pimFiles'
@@ -389,24 +390,68 @@ async function saveToSeafile(account: number, list: Attachment[]) {
   }
 }
 
+/** Pictures Preview shows, and audio and video Player plays, from the attachment's address (as server/jmap.ts serves them inline). */
+const SHOWABLE = /^image\/(png|jpe?g|gif|webp|bmp|avif)$/i
+const PLAYABLE = /^(audio\/(mpeg|mp3|mp4|aac|ogg|opus|wav|x-wav|wave|webm|flac|x-flac|x-m4a)|video\/(mp4|webm|ogg|quicktime))$/i
+type Viewer = { app: 'pdf' | 'preview' | 'player'; label: string }
+/** Which of MvL OS's own viewers opens an attachment, if one does (anything else downloads). */
+function viewerOf(a: Attachment): Viewer | null {
+  if (/^application\/(x-)?pdf$/i.test(a.type) || (/^application\/octet-stream$/i.test(a.type) && /\.pdf$/i.test(a.name))) return { app: 'pdf', label: 'Open in PDF' }
+  if (SHOWABLE.test(a.type)) return { app: 'preview', label: 'Open in Preview' }
+  if (PLAYABLE.test(a.type)) return { app: 'player', label: 'Open in Player' }
+  return null
+}
+
 function Attachments({ account, list }: { account: number; list: Attachment[] }) {
+  const wm = useWM()
   const seafile = !!getAccount().seafile
-  const menu = (a: Attachment): MenuItem[] => [
-    // A calendar or address-book file imports into Calendar or Contacts, as when opened from Files.
-    ...(pimAppFor(a.name) ? [{ label: pimAppFor(a.name) === 'calendar' ? 'Open in Calendar' : 'Open in Contacts', onSelect: () => openImport(pimAppFor(a.name)!, [{ name: a.name, read: () => blobFile(account, a) }]) }] : []),
-    { label: 'Download', onSelect: () => download(blobUrl(account, a), a.name) },
-    ...(/^image\//.test(a.type) ? [{ label: 'Open in a new tab', onSelect: () => window.open(blobUrl(account, a, true), '_blank', 'noopener,noreferrer') }] : []),
-    { label: 'Save to Files (Seafile)…', disabled: !seafile, hint: seafile ? undefined : 'Link Seafile in Settings first', onSelect: () => void saveToSeafile(account, [a]) },
-  ]
+  /**
+   * In a window of MvL OS's own, read through this site with the session (never a new browser
+   * tab): PDF.js reads the bytes of the download (served as application/octet-stream), Preview
+   * and Player the address that serves pictures, audio and video inline.
+   */
+  const open = (a: Attachment, v: Viewer) => {
+    const name = a.name || 'attachment'
+    if (v.app === 'pdf') wm.openNew('pdf', { src: blobUrl(account, { ...a, type: 'application/pdf' }), name, from: 'Mail' })
+    else if (v.app === 'preview') wm.openNew('preview', { src: blobUrl(account, a, true), name, from: 'Mail' })
+    else wm.openNew('player', { src: blobUrl(account, a, true), name, kind: /^audio\//i.test(a.type) ? 'audio' : 'video' })
+  }
+  const menu = (a: Attachment): MenuItem[] => {
+    const v = viewerOf(a)
+    return [
+      ...(v ? [{ label: v.label, onSelect: () => open(a, v) }] : []),
+      // A calendar or address-book file imports into Calendar or Contacts, as when opened from Files.
+      ...(pimAppFor(a.name) ? [{ label: pimAppFor(a.name) === 'calendar' ? 'Open in Calendar' : 'Open in Contacts', onSelect: () => openImport(pimAppFor(a.name)!, [{ name: a.name, read: () => blobFile(account, a) }]) }] : []),
+      { label: 'Download', onSelect: () => download(blobUrl(account, a), a.name) },
+      { label: 'Save to Files (Seafile)…', disabled: !seafile, hint: seafile ? undefined : 'Link Seafile in Settings first', onSelect: () => void saveToSeafile(account, [a]) },
+    ]
+  }
   return (
     <div className="ml-attachments">
-      {list.map((a) => (
-        <button key={a.blobId + a.name} className="ml-att" onClick={(e) => openMenuAt(e.currentTarget, menu(a))} onContextMenu={(e) => openContextMenu(e, menu(a))} title={`${a.name} · ${formatSize(a.size)}`}>
-          {/^image\/(png|jpe?g|gif|webp)$/i.test(a.type) && a.size < 8_000_000 ? <img src={blobUrl(account, a, true)} alt="" loading="lazy" /> : <span className="ml-att-ext">{(a.name.split('.').pop() ?? '').slice(0, 4).toUpperCase() || 'FILE'}</span>}
-          <span className="ml-att-name">{a.name}</span>
-          <span className="ml-att-size">{formatSize(a.size)}</span>
-        </button>
-      ))}
+      {list.map((a) => {
+        const v = viewerOf(a)
+        return (
+          <div key={a.blobId + a.name} className={`ml-att-item ${v ? 'is-openable' : ''}`}>
+            <button
+              className="ml-att"
+              data-viewer={v?.app}
+              // What opens in MvL OS opens at a click; anything else shows its menu.
+              onClick={(e) => (v ? open(a, v) : openMenuAt(e.currentTarget, menu(a)))}
+              onContextMenu={(e) => openContextMenu(e, menu(a))}
+              title={`${a.name} · ${formatSize(a.size)}${v ? ` · ${v.label}` : ''}`}
+            >
+              {/^image\/(png|jpe?g|gif|webp)$/i.test(a.type) && a.size < 8_000_000 ? <img src={blobUrl(account, a, true)} alt="" loading="lazy" /> : <span className="ml-att-ext">{(a.name.split('.').pop() ?? '').slice(0, 4).toUpperCase() || 'FILE'}</span>}
+              <span className="ml-att-name">{a.name}</span>
+              <span className="ml-att-size">{formatSize(a.size)}</span>
+            </button>
+            {v && (
+              <button className="ml-att-dl ml-icon" onClick={() => download(blobUrl(account, a), a.name)} aria-label={`Download ${a.name}`} title="Download">
+                ⤓
+              </button>
+            )}
+          </div>
+        )
+      })}
       {list.length > 1 && (
         <div className="ml-att-all">
           <button className="link-btn" onClick={() => list.forEach((a) => download(blobUrl(account, a), a.name))}>

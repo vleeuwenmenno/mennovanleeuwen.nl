@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { download, isSf } from '../data/seafile'
 import { folderOf, formatTime, nameOf, useMedia, useSiblings } from '../data/media'
 import { useWM, type WinState } from '../os/wm'
@@ -21,7 +21,11 @@ function loadPrefs(): { volume: number; muted: boolean } {
   }
 }
 
-export const playerTitle = (w: WinState) => (w.props.path ? nameOf(w.props.path) : 'Player')
+export const playerTitle = (w: WinState) => (w.props.path ? nameOf(w.props.path) : w.props.name || 'Player')
+
+/** Audio or video at an address of this site instead of a file (`src`: a mail attachment): only paths here, never another site. */
+const addressOf = (src: string | undefined) => (src && /^\/(?!\/)/.test(src) ? src : null)
+const NONE: string[] = []
 
 export function Player({ win }: { win: WinState }) {
   const wm = useWM()
@@ -35,8 +39,13 @@ export function Player({ win }: { win: WinState }) {
     wm.setProps(win.pid, { path: p })
   }
 
-  const media = useMedia(path)
-  const siblings = useSiblings(path, ['video', 'audio'])
+  // At an address (props src, name, and kind 'audio' or 'video'): played alone, no folder to go through.
+  const address = addressOf(win.props.src)
+  const fileMedia = useMedia(address ? '' : path)
+  const folder = useSiblings(address ? '' : path, ['video', 'audio'])
+  const addressKind = win.props.kind === 'audio' ? 'audio' : 'video'
+  const media = useMemo<typeof fileMedia>(() => (address ? { name: win.props.name || 'Player', kind: addressKind, url: address, size: null, mtime: null, error: null, unplayable: null } : fileMedia), [address, addressKind, win.props.name, fileMedia])
+  const siblings = address ? NONE : folder
   const index = siblings.indexOf(path)
   const audio = media.kind === 'audio'
 
@@ -273,7 +282,7 @@ export function Player({ win }: { win: WinState }) {
     if (scrubbing.current) seek(at.t)
   }
 
-  const save = () => (isSf(path) ? download(path).catch(() => {}) : undefined)
+  const save = () => (address ? Object.assign(document.createElement('a'), { href: address, download: media.name }).click() : isSf(path) ? download(path).catch(() => {}) : undefined)
   const played = duration ? (time / duration) * 100 : 0
   const loaded = duration ? (buffered / duration) * 100 : 0
   const vol = prefs.muted ? 0 : prefs.volume
@@ -329,7 +338,7 @@ export function Player({ win }: { win: WinState }) {
             <div className="pl-empty">
               <p className="pl-big">{media.name}</p>
               <p className="muted copyable">{error}</p>
-              {isSf(path) && (
+              {(isSf(path) || address) && (
                 <button className="btn btn-small" onClick={save}>
                   Download
                 </button>
@@ -422,11 +431,13 @@ export function Player({ win }: { win: WinState }) {
                     <button role="menuitemcheckbox" aria-checked={loop} onClick={() => (setLoop(!loop), setMenu(false))}>
                       <span>{loop ? '✓' : ''}</span>Loop
                     </button>
-                    <button role="menuitem" onClick={() => (wm.openNew('files', { path: folderOf(path), select: path }), setMenu(false))}>
-                      <span />
-                      Show in Files
-                    </button>
-                    {isSf(path) && (
+                    {!address && (
+                      <button role="menuitem" onClick={() => (wm.openNew('files', { path: folderOf(path), select: path }), setMenu(false))}>
+                        <span />
+                        Show in Files
+                      </button>
+                    )}
+                    {(isSf(path) || address) && (
                       <button role="menuitem" onClick={() => (save(), setMenu(false))}>
                         <span />
                         Download
