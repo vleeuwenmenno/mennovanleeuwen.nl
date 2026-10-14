@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
-import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
+import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, answer, approve, retryTurn, rewind, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, revokeMailReads, listMemories, listThreads, models as agentModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
 import { authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, startLogin } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
@@ -310,7 +310,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       res.writeHead(200, { 'Content-Type': p.type, 'Content-Length': String(p.body.length), 'Cache-Control': 'private, max-age=86400', ...SECURITY, ...UNTRUSTED }).end(head ? undefined : p.body)
       return true
     }
-    const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/follow|\/stop|\/approve|\/answer|\/result|\/title|\/retitle|\/context|\/queue|\/override|\/retry|\/rewind|\/share|\/queue\/[0-9a-f-]{36}(?:\/send|\/move)?)?$/.exec(path)
+    const agentThread = /^\/api\/agents\/threads\/([0-9a-f-]{36})(\/messages|\/follow|\/stop|\/approve|\/answer|\/result|\/title|\/retitle|\/context|\/queue|\/override|\/retry|\/rewind|\/share|\/mail-reads|\/queue\/[0-9a-f-]{36}(?:\/send|\/move)?)?$/.exec(path)
     if (agentThread) {
       const [, tid, sub] = agentThread
       if (!sub && read) return json(res, 200, getThread(requireUser(req), tid)), true
@@ -328,6 +328,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       if (sub === '/context' && read) return json(res, 200, await contextOf(requireUser(req), tid)), true
       if (sub === '/answer' && method === 'POST') return answer(requireUser(req), tid, await readJson(req, 64 * 1024)), json(res, 200, { ok: true }), true
       if (sub === '/approve' && method === 'POST') return approve(requireUser(req), tid, await readJson(req, 8192)), json(res, 200, { ok: true }), true
+      // Mail reads allowed for a while (from a read's card) end now: the × on the thread's chip.
+      if (sub === '/mail-reads' && method === 'DELETE') return json(res, 200, revokeMailReads(requireUser(req), tid)), true
       // Retry runs the last turn again (streamed like a message); Rewind cuts the thread back to one of your messages.
       if (sub === '/retry' && method === 'POST') {
         const user = requireUser(req)

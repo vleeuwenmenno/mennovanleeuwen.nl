@@ -10,7 +10,11 @@
 //     reads (which ask too), and Auto's safety check model never called;
 //   - declined: nothing sent, drafted or changed; allowed: what goes out is exactly what the
 //     card showed (To, Subject, body), replies threaded;
-//   - made-up ids, another user's account and bad addresses refused before anyone is asked.
+//   - made-up ids, another user's account and bad addresses refused before anyone is asked;
+//   - "Allow mail reads for 15 min" (shortened here with MAIL_READ_GRANT_MS): only from a read's
+//     card, it lets reads run without a card in that thread in every mode, Plan too, while drafts,
+//     sends and changes still ask; other threads still ask; it ends when revoked or run out, and
+//     can't be made from a write's card, a declined card, or by another user.
 //
 //   node scripts/agents-mail-check.ts
 //
@@ -18,7 +22,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { Server, check, finish } from './empires-harness.ts'
+import { Server, check, finish, sleep } from './empires-harness.ts'
 import { startMockJmap } from './mail-mock.ts'
 
 type J = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -54,6 +58,7 @@ const SCENARIOS: Record<string, Step[]> = {
   thread: [(_, [thread]) => [{ name: 'mail_read', arguments: { thread_id: thread } }]],
   update: [(_, [action, msg, mailbox]) => [{ name: 'mail_update', arguments: { action, message_ids: [msg], ...(mailbox ? { mailbox } : {}) } }]],
   badsend: [(_, [to]) => [{ name: 'mail_send', arguments: { to: [to], subject: 'x', body: 'y' } }]],
+  draft: [() => [{ name: 'mail_draft', arguments: { to: ['ann@example.test'], subject: 'A draft', body: 'Draft text' } }]],
   none: [],
 }
 const mains: ChatBody[] = []
@@ -104,6 +109,7 @@ await new Promise<void>((r) => ollama.listen(0, '127.0.0.1', r))
 // --- Stand-ins and the site -------------------------------------------------------------------------
 
 const mock = await startMockJmap({ fill: 5, eventSource: false })
+const GRANT_MS = 8000
 const LOGIN = 'mail-agent-check'
 const OTHER = 'mail-agent-other'
 const server = new Server({
@@ -114,6 +120,8 @@ const server = new Server({
   MAIL_POLL_MS: '600000',
   OLLAMA_URL: `http://127.0.0.1:${(ollama.address() as { port: number }).port}`,
   OLLAMA_API_KEY: 'fake-key',
+  // Mail reads allowed "for 15 minutes" last this long here, so running out can be checked.
+  MAIL_READ_GRANT_MS: String(GRANT_MS),
 })
 process.env.DATA_DIR = server.data
 const { database, encrypt, sha256 } = await import('../server/db.ts')
@@ -135,9 +143,13 @@ const call = async <T = J>(who: string, method: string, path: string, body?: unk
 const api = <T = J>(method: string, path: string, body?: unknown) => call<T>(sid, method, path, body)
 const newThread = (permission: string, extra: J = {}) => api('POST', '/api/agents/threads', { model: MODEL, mode: 'quick', permission, ...extra })
 
-/** One turn, read as it streams; each approval answered by `allow`. Answers the approvals asked and the turn's tool results. */
-async function turn(id: string, text: string, allow: boolean | ((e: J) => boolean)) {
+/**
+ * One turn, read as it streams; each approval answered by `allow` (an object: that answer as sent,
+ * `always` and all). Answers the approvals asked and the turn's tool results.
+ */
+async function turn(id: string, text: string, allow: boolean | J | ((e: J) => boolean | J)) {
   const asked: J[] = []
+  let granted = false
   const res = await fetch(`${server.origin}/api/agents/threads/${id}/messages`, { method: 'POST', headers: { Cookie: `mvlos_sid=${sid}`, 'Content-Type': 'application/json', Origin: server.origin }, body: JSON.stringify({ text, zone: 'Europe/Amsterdam' }) })
   if (!res.ok) throw new Error(`turn: ${res.status} ${await res.text()}`)
   const reader = res.body!.getReader()
@@ -157,9 +169,12 @@ async function turn(id: string, text: string, allow: boolean | ((e: J) => boolea
       if (e.type === 'error') error = e.error
       if (e.type === 'approval') {
         asked.push(e)
-        const yes = typeof allow === 'function' ? allow(e) : allow
+        const given = typeof allow === 'function' ? allow(e) : allow
         // "Allow from now on" is offered nowhere for mail: even if asked for, it must not stick.
-        void api('POST', `/api/agents/threads/${id}/approve`, { callId: e.callId, allow: yes, ...(yes ? { always: 'domain' } : {}) }).catch((err: Error) => check(`answering an approval worked (${err.message})`, false))
+        const body = typeof given === 'object' ? given : { allow: given, ...(given ? { always: 'domain' } : {}) }
+        if (body.always === 'mail_reads') granted = true
+        // Mail reads allowed answer the other reads waiting: those may be gone by the time they're answered.
+        void api('POST', `/api/agents/threads/${id}/approve`, { callId: e.callId, ...body }).catch((err: Error) => check(`answering an approval worked (${err.message})`, granted && /404/.test(err.message)))
       }
     }
   }
@@ -301,7 +316,78 @@ try {
   t = await turn(ask.id, `SCENARIO update move|${MSG}|Nowhere`, true)
   check(`an unknown mailbox: refused without asking (${t.result('mail_update').error?.slice(0, 60)})`, !t.asked.length && /no mailbox/.test(t.result('mail_update').error ?? ''))
 
-  // 10. Unlinked again: no tools.
+  // 10. Mail reads for a while (GRANT_MS here, 15 minutes for real).
+  const GRANT = { allow: true, always: 'mail_reads' }
+  const ran = (r: Awaited<ReturnType<typeof turn>>, name: string) => r.tools.some((m) => m.toolName === name && !JSON.parse(m.content).error)
+  const grantOf = async (id: string) => (await api('GET', `/api/agents/threads/${id}`)).thread.mailReadsUntil as number | null
+  const g = await newThread('default')
+  const h = await newThread('default')
+  check('a new thread has no mail reads allowed', g.mailReadsUntil === null)
+  // Given from a read's card: both reads of that reply run (the other card is answered with it).
+  let at = Date.now()
+  t = await turn(g.id, `SCENARIO reads ${MSG}`, (e) => (e.call?.name === 'mail_search' ? GRANT : true))
+  let until = await grantOf(g.id)
+  check(`given from a search card: the thread says until when (${until && until - at} ms)`, !!until && until >= at + GRANT_MS - 50 && until <= Date.now() + GRANT_MS + 50)
+  check(`given: the search and the read both ran (${names(t.asked)})`, ran(t, 'mail_search') && ran(t, 'mail_read'))
+  check('given: the window hears of it as it happens', t.thread.mailReadsUntil === until)
+  // Every mode, Plan included: reads run without a card, and say why on their row.
+  for (const permission of ['default', 'auto', 'acceptEdits', 'bypass', 'plan']) {
+    await api('PATCH', `/api/agents/threads/${g.id}`, { permission })
+    const checksBefore = checks.length
+    t = await turn(g.id, `SCENARIO reads ${MSG}`, false)
+    check(`given, ${permission}: reads ran without a card (${names(t.asked) || 'none asked'})`, !t.asked.length && ran(t, 'mail_search') && ran(t, 'mail_read'))
+    check(`given, ${permission}: their rows say why`, t.tools.every((m) => /allowed mail reads/.test(m.checked ?? '')))
+    check(`given, ${permission}: the prompt says reads run until then, and the rest still asks`, /allowed mail reads in this thread until [0-9]{2}:[0-9]{2}/.test(lastPrompt()) && /mail_draft, mail_send and mail_update still wait for the user/.test(lastPrompt()))
+    check(`given, ${permission}: the safety check model was never asked`, checks.length === checksBefore)
+  }
+  // Drafts, sends and changes still ask, Bypass too.
+  for (const permission of ['default', 'bypass']) {
+    await api('PATCH', `/api/agents/threads/${g.id}`, { permission })
+    const before = sends().length
+    t = await turn(g.id, `SCENARIO all ${MSG}|${THREAD}`, false)
+    check(`given, ${permission}: the writes still asked, the reads did not (${names(t.asked)})`, names(t.asked) === 'mail_draft, mail_send, mail_update' && ran(t, 'mail_read') && ran(t, 'mail_search') && ran(t, 'mail_list_accounts'))
+    check(`given, ${permission}: declined, nothing written`, sends().length === before)
+  }
+  check(`given: all that within its time (${until! - Date.now()} ms left)`, until! > Date.now())
+  // Other threads still ask.
+  t = await turn(h.id, `SCENARIO read ${MSG}`, false)
+  check(`another thread still asks (${names(t.asked)})`, names(t.asked) === 'mail_read')
+  // Not from a write's card (allowed), a declined read card, a made-up card, or another user.
+  t = await turn(h.id, 'SCENARIO draft', GRANT)
+  check(`a write's card can't give it: the draft asked and was saved (${t.result('mail_draft').error ?? 'saved'}), nothing more`, names(t.asked) === 'mail_draft' && !t.result('mail_draft').error && (await grantOf(h.id)) === null)
+  t = await turn(h.id, `SCENARIO read ${MSG}`, { allow: false, always: 'mail_reads' })
+  check('a declined read card gives nothing', names(t.asked) === 'mail_read' && !!t.result('mail_read').error && (await grantOf(h.id)) === null)
+  t = await turn(h.id, `SCENARIO read ${MSG}`, false)
+  check(`so that thread still asks (${names(t.asked)})`, names(t.asked) === 'mail_read')
+  const refused = (who: string, method: string, path: string, body?: unknown) => call(who, method, path, body).then(() => false, (e: Error) => /404/.test(e.message))
+  check('a made-up card gives nothing', (await refused(sid, 'POST', `/api/agents/threads/${h.id}/approve`, { callId: randomUUID(), allow: true, always: 'mail_reads' })) && (await grantOf(h.id)) === null)
+  check("another user can't answer cards in the thread", await refused(otherSid, 'POST', `/api/agents/threads/${h.id}/approve`, { callId: 'x', allow: true, always: 'mail_reads' }))
+  check("another user can't end it", await refused(otherSid, 'DELETE', `/api/agents/threads/${g.id}/mail-reads`))
+  check("another user can't see it", await refused(otherSid, 'GET', `/api/agents/threads/${g.id}`))
+  check('the thread still has it after all that', (await grantOf(g.id)) === until)
+  // Ended by hand: reads ask again, and the prompt says so.
+  await api('PATCH', `/api/agents/threads/${g.id}`, { permission: 'default' })
+  const ended = await api('DELETE', `/api/agents/threads/${g.id}/mail-reads`)
+  check('ended by hand: the thread says so', ended.mailReadsUntil === null && (await grantOf(g.id)) === null)
+  t = await turn(g.id, `SCENARIO read ${MSG}`, false)
+  check(`ended by hand: reads ask again (${names(t.asked)})`, names(t.asked) === 'mail_read')
+  check('ended by hand: the prompt says every mail call waits again', /Every mail tool call, even a search or a read, waits for the user/.test(lastPrompt()))
+  // Run out: given again, then waited out.
+  at = Date.now()
+  t = await turn(g.id, `SCENARIO read ${MSG}`, GRANT)
+  until = await grantOf(g.id)
+  check(`given again from a read card (${until && until - at} ms)`, ran(t, 'mail_read') && !!until)
+  t = await turn(g.id, `SCENARIO read ${MSG}`, false)
+  check('given again: reads run without a card', !t.asked.length && ran(t, 'mail_read'))
+  await sleep(Math.max(0, (until ?? 0) - Date.now()) + 300)
+  check('run out: the thread no longer says so', (await grantOf(g.id)) === null)
+  t = await turn(g.id, `SCENARIO reads ${MSG}`, false)
+  check(`run out: reads ask again (${names(t.asked)})`, names(t.asked) === 'mail_read, mail_search')
+  await api('PATCH', `/api/agents/threads/${g.id}`, { permission: 'plan' })
+  t = await turn(g.id, `SCENARIO read ${MSG}`, false)
+  check(`run out, Plan: reads ask again (${names(t.asked)})`, names(t.asked) === 'mail_read')
+
+  // 11. Unlinked again: no tools.
   await api('DELETE', `/api/mail/accounts/${linked.id}`)
   t = await turn(ask.id, `SCENARIO read ${MSG}`, true)
   check('unlinked: no mail tool is offered any more', !lastOffered().some((n) => n.startsWith('mail_')) && !t.asked.length)

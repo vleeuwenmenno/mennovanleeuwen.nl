@@ -1228,7 +1228,12 @@ mailboxes), `mail_search` (the Mail app's search syntax, in one account or all o
 read), `mail_draft` and `mail_send` (new, reply or forward, threaded) and `mail_update` (archive,
 trash, move, read/unread, flag, junk; nothing deleted for good). Every mail call waits for *Allow*,
 searches and reads too, in every permission mode, Auto, Edits allowed and Bypass included (plan mode
-offers only the reads, which ask as well), and no "allow from now on" reaches it. Each call is
+offers only the reads, which ask as well), and no "allow from now on" reaches it. The one way
+round it is on a search or read card: *Allow mail reads for 15 min* lets `mail_list_accounts`,
+`mail_search` and `mail_read` run without a card in that thread only, in every mode, for 15 minutes
+from then (kept on the server, which checks the time; a restart ends it). The thread shows a chip
+with the minutes left and an × to end it early (`DELETE /api/agents/threads/:id/mail-reads`), and
+the prompt says so; drafts, sends and changes ask every time all the same. Each call is
 checked first (the account, the ids, the recipients, the mailbox) and the card shows what will
 happen: for a send the account, From, To, Cc, Bcc, Subject and the whole text that goes out.
 Message ids are the account's number and the server's own id, so they only resolve within your own

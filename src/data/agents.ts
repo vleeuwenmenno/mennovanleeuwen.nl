@@ -8,7 +8,7 @@ import { getNote } from './notes'
 export type Mode = 'quick' | 'deep'
 /** A step in the agent's plan for a long job. */
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission; queue: QueuedMessage[]; interrupted: Interruption | null; titleSource: 'auto' | 'user'; aliases: TitleAlias[]; checkingTitle: boolean }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; titling: boolean; contextTokens: number | null; tools: ToolGroup[]; projectId: number | null; pinned: boolean; todos: Todo[]; quick: boolean; workdir: Workdir | null; permission: Permission; queue: QueuedMessage[]; interrupted: Interruption | null; titleSource: 'auto' | 'user'; aliases: TitleAlias[]; checkingTitle: boolean; /** Until when (server time) mail reads run without asking in this thread, while the user allowed them for a while */ mailReadsUntil?: number | null }
 /**
  * A title a thread had until `until`, newest first on the thread: the title model changed it when
  * the conversation moved on, or the user renamed it. Shown as "also known as", and found by search.
@@ -72,7 +72,7 @@ export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile
   { id: 'web', name: 'Web', detail: 'Search the web and read pages' },
   { id: 'notes', name: 'Notes', detail: 'Search and make notes; changing or deleting one asks you first' },
   { id: 'calendar', name: 'Calendar', detail: 'Look through your calendars; adding, changing or deleting an event asks you first', calendar: true },
-  { id: 'mail', name: 'Mail', detail: 'Search, read, draft, send and file email in your linked accounts; every call asks you first, in every mode', mail: true },
+  { id: 'mail', name: 'Mail', detail: 'Search, read, draft, send and file email in your linked accounts; every call asks you first, in every mode (reads can be allowed for 15 minutes in a thread)', mail: true },
   { id: 'code', name: 'Code hosts', detail: 'Repositories, issues and pull requests' },
   { id: 'seafile', name: 'Seafile', detail: 'Find and read files', seafile: true },
   { id: 'seafile_write', name: 'Seafile changes', detail: 'Folders, writing, renaming, moving, deleting; asks you first', seafile: true },
@@ -146,12 +146,19 @@ export const getThread = (id: string) => api<{ thread: Thread; messages: AgentMe
 export const answerForm = (id: string, callId: string, answers: Record<string, unknown> | null) =>
   api(`/api/agents/threads/${id}/answer`, { method: 'POST', json: answers ? { callId, answers } : { callId, skip: true } })
 /**
- * Allows or declines a change. `always`: allow edits from now on, this command, or (a web read)
- * the address's site for good, in all threads; `feedback`: why not, for the agent; `mode`: the
- * permission mode a plan starts in (exit_plan_mode).
+ * Allows or declines a change. `always`: allow edits from now on, this command, (a web read) the
+ * address's site for good, in all threads, or (a mail search or read) mail reads in this thread for
+ * 15 minutes; `feedback`: why not, for the agent; `mode`: the permission mode a plan starts in
+ * (exit_plan_mode).
  */
-export const answerApproval = (id: string, callId: string, allow: boolean, extra: { always?: 'edits' | 'command' | 'domain'; feedback?: string; mode?: Permission } = {}) =>
+export const answerApproval = (id: string, callId: string, allow: boolean, extra: { always?: 'edits' | 'command' | 'domain' | 'mail_reads'; feedback?: string; mode?: Permission } = {}) =>
   api(`/api/agents/threads/${id}/approve`, { method: 'POST', json: { callId, allow, ...extra } })
+/** The mail tools that only read: their cards offer "allow mail reads for 15 minutes" in the thread (server/agents.ts). */
+export const MAIL_READ_TOOLS = new Set(['mail_list_accounts', 'mail_search', 'mail_read'])
+/** Ends the mail reads allowed in a thread before their time. */
+export const revokeMailReads = (id: string) => api<Thread>(`/api/agents/threads/${id}/mail-reads`, { method: 'DELETE' })
+/** Whole minutes left of mail reads allowed in a thread (rounded up), or 0 when there are none. */
+export const mailReadsLeft = (t: Pick<Thread, 'mailReadsUntil'> | null | undefined, now = Date.now()) => (t?.mailReadsUntil && t.mailReadsUntil > now ? Math.ceil((t.mailReadsUntil - now) / 60_000) : 0)
 /** What the terminal printed for a terminal tool call. */
 export const sendClientResult = (id: string, callId: string, output: string, status: number) => api(`/api/agents/threads/${id}/result`, { method: 'POST', json: { callId, output, status } })
 /** `todos: null` dismisses the thread's plan (for the agent too). */

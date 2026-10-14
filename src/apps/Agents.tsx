@@ -16,6 +16,9 @@ import {
   type Project,
   type Todo,
   answerApproval,
+  MAIL_READ_TOOLS,
+  mailReadsLeft,
+  revokeMailReads,
   toAttachment,
   textAttachment,
   MAX_MESSAGE,
@@ -1783,6 +1786,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             <Icon name="folder" size={13} /> <span className="agt-chip-label">{workdir ? workdir.label : 'No folder'}</span>
           </button>
         )}
+        {thread && <MailReadsChip thread={thread} onChange={setThread} onError={setError} />}
         <button className={`agt-chip is-${permission}`} onClick={permissionMenu} title={PERMISSION_HELP[permission]}>
           {PERMISSION_LABEL[permission]}
         </button>
@@ -2235,7 +2239,9 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
           </dl>
         )}
         {summary?.body !== undefined && <pre className="agt-tool-body agt-ask-mail">{summary.body || '(no text)'}</pre>}
-        {call.name.startsWith('mail_') && <p className="muted agt-ask-why">Mail always asks you first, in every mode: what it reads and sends is private.</p>}
+        {call.name.startsWith('mail_') && (
+          <p className="muted agt-ask-why">{MAIL_READ_TOOLS.has(call.name) ? 'Mail asks you first, in every mode: what it reads is private. You can let it search and read mail in this thread for 15 minutes; sending and changes still ask.' : 'Mail always asks you first, in every mode: what it reads and sends is private.'}</p>
+        )}
         {call.name === 'seafile_write' && typeof call.arguments.content === 'string' && <pre className="agt-tool-body">{call.arguments.content.slice(0, 4000)}</pre>}
         {call.name === 'update_note' && typeof call.arguments.text === 'string' && <pre className="agt-tool-body">{call.arguments.text.slice(0, 4000)}</pre>}
         {call.name === 'web_fetch' && typeof call.arguments.url === 'string' && (
@@ -2372,6 +2378,33 @@ function ApprovalPreview({ call }: { call: ToolCall }) {
 }
 
 /** Allow, allow from now on, or decline (with what to do instead), by what is asked. */
+/**
+ * Mail reads the user allowed in this thread for a while, with the minutes left and an × to end it
+ * early. Gone when it runs out (the server stops honouring it then, whatever this shows).
+ */
+function MailReadsChip({ thread, onChange, onError }: { thread: Thread; onChange: (t: Thread) => void; onError: (e: string) => void }) {
+  // Ticks to count the minutes down; the time itself is read as it draws.
+  const [, tick] = useState(0)
+  const until = thread.mailReadsUntil ?? 0
+  useEffect(() => {
+    if (until <= Date.now()) return
+    const timer = window.setInterval(() => tick((n) => n + 1), 10_000)
+    // And once more right when it runs out, so the chip goes on time.
+    const end = window.setTimeout(() => tick((n) => n + 1), until - Date.now() + 50)
+    return () => (window.clearInterval(timer), window.clearTimeout(end))
+  }, [until])
+  const left = mailReadsLeft(thread)
+  if (!left) return null
+  return (
+    <span className="agt-chip agt-chip-grant" title="Mail searches and reads run without asking in this thread until then. Drafts, sends and changes still ask.">
+      <span className="agt-chip-label">Mail reads allowed · {left} min</span>
+      <button className="agt-chip-x" aria-label="Stop allowing mail reads" title="Stop allowing mail reads now" onClick={() => revokeMailReads(thread.id).then(onChange, (e: Error) => onError(e.message))}>
+        ×
+      </button>
+    </span>
+  )
+}
+
 function ApprovalActions({ call, decide }: { call: ToolCall; decide: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void }) {
   const [feedback, setFeedback] = useState('')
   const plan = call.name === 'exit_plan_mode'
@@ -2400,6 +2433,11 @@ function ApprovalActions({ call, decide }: { call: ToolCall; decide: (allow: boo
             {call.name === 'web_fetch' && typeof call.arguments?.url === 'string' && siteOf(call.arguments.url) && (
               <button className="btn btn-small" onClick={() => decide(true, { always: 'domain' })} title={`Reads on ${siteOf(call.arguments.url)} go through without asking from now on, in all your threads (Settings → Agents → Permissions)`}>
                 Allow {siteOf(call.arguments.url)}
+              </button>
+            )}
+            {MAIL_READ_TOOLS.has(call.name) && (
+              <button className="btn btn-small" onClick={() => decide(true, { always: 'mail_reads' })} title="Searches and reads of your mail run without asking in this thread for 15 minutes. Drafts, sends and changes still ask every time.">
+                Allow mail reads for 15 min
               </button>
             )}
             {call.name === 'terminal' && typeof call.arguments?.command === 'string' && canAlwaysAllow(call.arguments.command) && (

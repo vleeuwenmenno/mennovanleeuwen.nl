@@ -10,7 +10,7 @@ import { fileLink, libraries, listDir, mkdir, removeItems, rename, seafile, seaf
 import { readState } from './state.ts'
 import { webSearch } from './websearch.ts'
 import { CALENDAR_TOOLS, CALENDAR_WRITES, calendarConnected, calendarLines, calendarTools, NOT_CONNECTED, prepareCalendarCall, zoneOf, type CallSummary, type Prepared } from './agentCalendar.ts'
-import { MAIL_TOOLS, MAIL_WRITES, mailError, mailLinked, mailLines, mailTools, prepareMailCall } from './agentMail.ts'
+import { MAIL_READS, MAIL_TOOLS, MAIL_WRITES, mailError, mailLinked, mailLines, mailTools, prepareMailCall } from './agentMail.ts'
 import { NOTE_LINK_LINES, NOTE_LINK_TOOLS, NOTE_LINK_WRITES, noteLinkTools, prepareNoteLinkCall } from './agentNoteLinks.ts'
 import { readNotes as readNoteRows, writeNotes as writeNoteRows } from './noteLinks.ts'
 import { notify } from './notifier.ts'
@@ -238,7 +238,7 @@ function checkAttachments(v: unknown): Attachment[] {
 // --- threads -----------------------------------------------------------------------------------
 
 export type Todo = { text: string; status: 'pending' | 'active' | 'done' }
-export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; projectId: number | null; pinned: boolean; todos: Todo[]; /** A title is being thought of */ titling: boolean; /** Tokens the last reply took up in the model's context, as Ollama counted them */ contextTokens: number | null; /** Tool groups it may use */ tools: ToolGroup[]; /** Asked from Spotlight and not continued in the app yet */ quick: boolean; /** The Seafile folder its file tools work in */ workdir: Workdir | null; /** How changes are allowed: ask each time, Auto (web addresses it built are checked), edits allowed, read only while planning, or Bypass */ permission: Permission; /** Messages waiting to be sent when the running turn is done, in order */ queue: QueuedInfo[]; /** How the last turn was cut short, when it was: Retry runs it again */ interrupted: Interruption | null; /** Who set the title: the title model, or the user by hand (never changed automatically) */ titleSource: TitleSource; /** Titles it had before, newest first, for "also known as" */ aliases: TitleAlias[]; /** The title is being checked against what the thread talks about now, in the background */ checkingTitle: boolean }
+export type Thread = { id: string; title: string; mode: Mode; model: string; archived: boolean; createdAt: number; updatedAt: number; running: boolean; projectId: number | null; pinned: boolean; todos: Todo[]; /** A title is being thought of */ titling: boolean; /** Tokens the last reply took up in the model's context, as Ollama counted them */ contextTokens: number | null; /** Tool groups it may use */ tools: ToolGroup[]; /** Asked from Spotlight and not continued in the app yet */ quick: boolean; /** The Seafile folder its file tools work in */ workdir: Workdir | null; /** How changes are allowed: ask each time, Auto (web addresses it built are checked), edits allowed, read only while planning, or Bypass */ permission: Permission; /** Messages waiting to be sent when the running turn is done, in order */ queue: QueuedInfo[]; /** How the last turn was cut short, when it was: Retry runs it again */ interrupted: Interruption | null; /** Who set the title: the title model, or the user by hand (never changed automatically) */ titleSource: TitleSource; /** Titles it had before, newest first, for "also known as" */ aliases: TitleAlias[]; /** The title is being checked against what the thread talks about now, in the background */ checkingTitle: boolean; /** Until when (server time) the user allowed mail reads in this thread without asking, while they do (mailReadsUntil) */ mailReadsUntil: number | null }
 export type TitleSource = 'auto' | 'user'
 /** A title a thread had until `until`, when it was changed (by the title model or by hand). */
 export type TitleAlias = { title: string; until: number }
@@ -299,8 +299,38 @@ const writesFile = (line: string) => /(^|[^<>&0-9])(\d?>{1,2}|&>)\s*(?!&|\/dev\/
 onUserGone((id) => {
   for (const [thread, a] of allowedCommands) if (a.user === id) allowedCommands.delete(thread)
 })
-/** How the user answered a change: allowed or not, and what came with it. */
-type Verdict = { allow: boolean; always?: 'edits' | 'command' | 'domain'; feedback?: string; mode?: Permission }
+/**
+ * Mail reads the user allowed in a thread for a while (from a search or read card: "Allow mail
+ * reads for 15 min"), by thread: until when, server time, fixed from when it was given. While it
+ * lasts, mail_list_accounts, mail_search and mail_read run without a card in that thread, in every
+ * mode; drafts, sends and changes ask all the same, and no other thread is touched. Kept in memory:
+ * a restart ends it. MAIL_READ_GRANT_MS can only make it shorter (the checks use that).
+ */
+const mailGrants = new Map<string, { user: number; until: number }>()
+const MAIL_GRANT_MS = 15 * 60_000
+const mailGrantMs = () => {
+  const ms = Number(process.env.MAIL_READ_GRANT_MS)
+  return ms > 0 ? Math.min(ms, MAIL_GRANT_MS) : MAIL_GRANT_MS
+}
+/** Until when mail reads run without asking in this thread, or null. */
+function mailReadsUntil(thread: string): number | null {
+  const g = mailGrants.get(thread)
+  if (!g) return null
+  if (g.until > Date.now()) return g.until
+  mailGrants.delete(thread)
+  return null
+}
+onUserGone((id) => {
+  for (const [thread, g] of mailGrants) if (g.user === id) mailGrants.delete(thread)
+})
+/** Ends the mail reads allowed in a thread before their time (the × on its chip). */
+export function revokeMailReads(user: User, id: string): Thread {
+  const row = ownThread(user, id)
+  mailGrants.delete(row.id)
+  return toThread(row)
+}
+/** How the user answered a change: allowed or not, and what came with it. `mail_reads`: and mail reads in this thread for a while. */
+type Verdict = { allow: boolean; always?: 'edits' | 'command' | 'domain' | 'mail_reads'; feedback?: string; mode?: Permission }
 
 // --- the queue ---------------------------------------------------------------------------------
 
@@ -550,7 +580,7 @@ export function sendQueued(user: User, id: string, qid: string): { thread: Threa
   return { thread: toThread(ownThread(user, row.id)) }
 }
 
-const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: storedGroups(r.tools) ?? [...TOOL_GROUPS], quick: !!r.quick, workdir: r.workdir ? (JSON.parse(r.workdir) as Workdir) : null, permission: permissionOf(r.permission), queue: queueInfo(r.id, r.queue ? (JSON.parse(r.queue) as Queued[]) : []), interrupted: r.interrupted && !running.has(r.id) ? (JSON.parse(r.interrupted) as Interruption) : null, titleSource: r.title_source === 'user' ? 'user' : 'auto', aliases: aliasesOf(r), checkingTitle: checkingTitle.has(r.id) })
+const toThread = (r: ThreadRow): Thread => ({ id: r.id, title: r.title, mode: r.mode === 'deep' ? 'deep' : 'quick', model: r.model, archived: !!r.archived, createdAt: r.created_at, updatedAt: r.updated_at, running: running.has(r.id), projectId: r.project_id ?? null, pinned: !!r.pinned, todos: r.todos ? (JSON.parse(r.todos) as Todo[]) : [], titling: titling.has(r.id), contextTokens: r.context_tokens ?? null, tools: storedGroups(r.tools) ?? [...TOOL_GROUPS], quick: !!r.quick, workdir: r.workdir ? (JSON.parse(r.workdir) as Workdir) : null, permission: permissionOf(r.permission), queue: queueInfo(r.id, r.queue ? (JSON.parse(r.queue) as Queued[]) : []), interrupted: r.interrupted && !running.has(r.id) ? (JSON.parse(r.interrupted) as Interruption) : null, titleSource: r.title_source === 'user' ? 'user' : 'auto', aliases: aliasesOf(r), checkingTitle: checkingTitle.has(r.id), mailReadsUntil: mailReadsUntil(r.id) })
 const aliasesOf = (r: ThreadRow): TitleAlias[] => (r.title_history ? (JSON.parse(r.title_history) as TitleAlias[]) : [])
 /** A stored or asked-for mode; threads from before the modes (no value) ask first. New threads start in Auto (createThread). */
 const permissionOf = (v: unknown): Permission => (PERMISSIONS.includes(v as Permission) ? (v as Permission) : 'default')
@@ -707,9 +737,19 @@ export function approve(user: User, id: string, body: { callId?: string; allow?:
   if (!p) throw new HttpError(404, 'Nothing is waiting for that')
   const verdict: Verdict = {
     allow: body.allow === true,
-    ...(body.always === 'edits' || body.always === 'command' || body.always === 'domain' ? { always: body.always } : {}),
+    ...(body.always === 'edits' || body.always === 'command' || body.always === 'domain' || body.always === 'mail_reads' ? { always: body.always } : {}),
     ...(typeof body.feedback === 'string' && body.feedback.trim() ? { feedback: body.feedback.trim().slice(0, 4000) } : {}),
     ...(PERMISSIONS.includes(body.mode as Permission) ? { mode: body.mode as Permission } : {}),
+  }
+  // Mail reads for a while: only from the card of a mail read, allowed, in this (the user's own)
+  // thread. Asked for on any other card, it is ignored: that card's answer stands on its own.
+  if (verdict.always === 'mail_reads' && !(verdict.allow && p.call && MAIL_READS.has(p.call.name))) delete verdict.always
+  if (verdict.always === 'mail_reads') {
+    mailGrants.set(row.id, { user: user.id, until: Date.now() + mailGrantMs() })
+    p.resolve(verdict)
+    // Other mail reads of the same reply waiting on a card are covered now too.
+    for (const other of [...(pending.get(row.id) ?? [])]) if (other.kind === 'approval' && other.call && MAIL_READS.has(other.call.name)) other.resolve({ allow: true })
+    return
   }
   p.resolve(verdict)
 }
@@ -774,6 +814,7 @@ export function deleteThread(user: User, id: string) {
   sendNext.delete(row.id)
   running.get(row.id)?.abort()
   allowedCommands.delete(row.id)
+  mailGrants.delete(row.id)
   editing.delete(row.id)
   clearTimeout(held.get(row.id)?.timer)
   held.delete(row.id)
@@ -1113,7 +1154,7 @@ export async function contextOf(user: User, id: string, terminal = terminals.has
     { label: `Memories (${memories.length})`, tokens: tokens(memoryLines(memories)) },
     { label: `Tool definitions (${tools.length})`, tokens: tokens(JSON.stringify(tools)) },
     ...(thread.workdir || thread.permission === 'plan' || thread.permission === 'bypass' ? [{ label: 'Work folder and mode', tokens: tokens(folderLines(thread, terminal, null)) }] : []),
-    ...(thread.tools.includes('mail') ? [{ label: 'Mail accounts', tokens: tokens(mailLines(user)) }] : []),
+    ...(thread.tools.includes('mail') ? [{ label: 'Mail accounts', tokens: tokens(mailLines(user, thread.mailReadsUntil)) }] : []),
     ...(boundary ? [{ label: 'Summary of earlier messages', tokens: tokens(all[0].content) }] : []),
     { label: `Your messages (${count('user')})`, tokens: sum('user') },
     { label: `Replies (${count('assistant')})`, tokens: sum('assistant', (m) => m.content + JSON.stringify(m.tool_calls ?? '')) },
@@ -1713,13 +1754,17 @@ const STEERING_IN_LINE = /(AGENTS\.md|CLAUDE\.md|\.agents|\.claude)\b/i
  * everything except what lasts beyond the thread: calendar changes (they can mail guests), note links (they write into the event) and
  * writes to the files that steer the agent. Mail always asks, in every mode and for every call (a
  * search or a read too): it is private, written by strangers, and what is sent can't be taken
- * back; Plan refuses its changes. No "allow from now on" reaches it either. Exported for
- * scripts/agents-permissions.ts.
+ * back; Plan refuses its changes. No "allow from now on" reaches it either. The one exception:
+ * mail reads the user allowed in this thread for a while (mailGrants) run, in every mode; drafts,
+ * sends and changes still ask. Exported for scripts/agents-permissions.ts.
  */
 export function decide(thread: string, permission: Permission, call: ToolCall): 'run' | 'ask' | 'refuse' {
   const name = call.name
   if (name === 'exit_plan_mode') return permission === 'plan' ? 'ask' : 'refuse'
-  if (MAIL_TOOLS.has(name)) return permission === 'plan' && MAIL_WRITES.has(name) ? 'refuse' : 'ask'
+  if (MAIL_TOOLS.has(name)) {
+    if (MAIL_WRITES.has(name)) return permission === 'plan' ? 'refuse' : 'ask'
+    return mailReadsUntil(thread) ? 'run' : 'ask'
+  }
   if (name === 'terminal') {
     const line = argString(call.arguments ?? {}, 'command')
     if (readOnlyCommand(line)) return 'run'
@@ -2113,7 +2158,7 @@ function folderLines(t: Thread, terminal: boolean, instructions: { name: string;
   else if (t.permission === 'acceptEdits' && t.workdir) lines.push('Edits are allowed: file changes in the work folder go through without asking; deleting, and terminal commands that change something, still ask.')
   else if (t.permission === 'bypass')
     lines.push(
-      'Bypass is on: your tool calls run without the user allowing each one, including file edits, deletes, terminal commands, note changes and web reads, so be careful and do only what the task needs. Calendar changes, every mail tool call (reads too), and writes to AGENTS.md, CLAUDE.md, .agents/ or .claude/, still wait for the user.',
+      'Bypass is on: your tool calls run without the user allowing each one, including file edits, deletes, terminal commands, note changes and web reads, so be careful and do only what the task needs. Calendar changes, every mail tool call (reads too, unless the user allowed mail reads in this thread for a while; drafts, sends and mail changes always), and writes to AGENTS.md, CLAUDE.md, .agents/ or .claude/, still wait for the user.',
     )
   else if (t.workdir) lines.push('Each change (a file edit, a write, a command that changes something) waits for the user to allow it, and they may say why not: then do what they ask instead.')
   if (instructions) lines.push(`The work folder's ${instructions.name}, the project's own instructions (follow them):\n<instructions>\n${instructions.text}\n</instructions>`)
@@ -2740,7 +2785,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
         (await systemPrompt(user, mode, row.project_id, todosOf(row.id), folderLines(now, offered.has('terminal'), instructions), offered.has('use_skill') ? await listSkills(user, skillPlaces(user, now.workdir)).catch(() => []) : [], {
           zone,
           calendar: now.tools.includes('calendar') ? `${calendarLines(user, zone)}${now.tools.includes('notes') && calendarConnected(user) ? `\n${NOTE_LINK_LINES}` : ''}` : '',
-          mail: now.tools.includes('mail') ? mailLines(user) : '',
+          mail: now.tools.includes('mail') ? mailLines(user, now.mailReadsUntil, zone) : '',
         })) +
         (last && !nudged ? '\n\nYou have used all your tool calls for this turn: answer now with what you have, and say what is left to do.' : '') +
         (stale ? `\n\nReminder: your todo list has ${open} open ${open === 1 ? 'item' : 'items'} and you have not updated it for a while. Update it with update_todos as you go, or clear it if it no longer fits.` : '')
@@ -2849,6 +2894,7 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
               if (ctl.signal.aborted) throw e
               return JSON.stringify({ error: mailError(e) })
             }
+            if (decision === 'run') notes[index] = 'You allowed mail reads in this thread for a while'
           }
           if (decision === 'ask' || unknownPage) {
             const v = await askOwner(row.id, assistant, index, c, ctl.signal, send, calendar?.summary, checkSaid)
@@ -2862,6 +2908,8 @@ async function turn(user: User, thread: string, ask: Ask, ctl: AbortController, 
             }
             if (!v.allow)
               return JSON.stringify({ error: unknownPage ? "The user did not allow reading that address. Read addresses from search results, pages you read or the user's messages, exactly as given." : v.feedback ? `The user declined this and said: ${v.feedback}` : MAIL_TOOLS.has(c.name) ? 'The user did not allow this mail call, so nothing was read or changed. Ask what they want instead.' : 'The user declined this change. Ask what they want instead, or try another way.' })
+            // Mail reads for a while (approve set it, from this read's card): every window shows the chip.
+            if (v.always === 'mail_reads' && MAIL_READS.has(c.name)) send({ type: 'thread', thread: current() })
             if (v.always === 'edits' && FILE_WRITES.has(c.name)) {
               setPermission(row.id, 'acceptEdits')
               send({ type: 'thread', thread: current() })
