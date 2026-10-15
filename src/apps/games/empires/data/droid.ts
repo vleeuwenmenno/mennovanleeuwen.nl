@@ -338,15 +338,13 @@ export const DROID: FactionData = {
     tech('droid', 'd-corvette', 'd-co-crews', 'Salvage crews', 'Reclaimers repair 30% faster.', 550, 35, 2, { repair: 0.3 }),
     tech('droid', 'd-ion', 'd-io-coils', 'Supercooled lance', 'Breaker guns fire 20% faster.', 700, 40, 2, { cooldown: -0.2 }),
     tech('droid', 'd-ion', 'd-io-range', 'Focusing array', 'Breaker guns reach 15% further.', 650, 40, 2, { range: 0.15 }, ['d-io-coils']),
-    // No picture of its own yet: it borrows the Supercooled lance's.
-    { ...tech('droid', 'd-ion', 'd-io-break', 'Shield breakers', 'Breaker guns tear into shields 30% harder; the hull underneath takes the same as before.', 700, 40, 2, { shieldDamage: 0.3 }, ['d-io-coils']), icon: 'd-io-coils' },
+    tech('droid', 'd-ion', 'd-io-break', 'Shield breakers', 'Breaker guns tear into shields 30% harder; the hull underneath takes the same as before.', 700, 40, 2, { shieldDamage: 0.3 }, ['d-io-coils']),
     tech('droid', 'd-frigate', 'd-fr-prong', 'Boom accelerators', 'Lancer guns deal 20% more damage.', 650, 40, 2, { damage: 0.2 }),
     tech('droid', 'd-frigate', 'd-fr-plate', 'Bolted armour', 'Lancers get 25% more hull.', 600, 40, 2, { hull: 0.25 }, ['d-fr-prong']),
     tech('droid', 'd-cruiser', 'd-cr-ray', 'Siege capacitors', 'Harrow guns deal 20% more damage.', 900, 50, 3, { damage: 0.2 }),
     tech('droid', 'd-cruiser', 'd-cr-thrust', 'Flanking drives', 'Harrows fly 20% faster.', 700, 40, 3, { speed: 0.2 }, ['d-cr-ray']),
     tech('droid', 'd-battleship', 'd-bs-net', 'Battle network', 'Tyrant guns reach 15% further.', 1100, 55, 4, { range: 0.15 }),
-    // No picture of its own yet: it borrows the hub's Fire-control mast.
-    { ...tech('droid', 'd-battleship', 'd-bs-fire', 'Fire-control net', 'The Tyrant\'s fire-control tower links more of the fleet: its aura reaches 20% further and adds 5% more damage.', 1100, 55, 4, { aura: 0.05, auraRadius: 0.2 }, ['d-bs-net']), icon: 'd-st-guns' },
+    tech('droid', 'd-battleship', 'd-bs-fire', 'Fire-control net', 'The Tyrant\'s fire-control tower links more of the fleet: its aura reaches 20% further and adds 5% more damage.', 1100, 55, 4, { aura: 0.05, auraRadius: 0.2 }, ['d-bs-net']),
     tech('droid', 'd-capital', 'd-ca-hangar', 'Assault hangars', 'Dominators launch Talons faster and keep one more squadron out.', 1200, 60, 4, { hangar: 1 }),
     tech('droid', 'd-capital', 'd-ca-armour', 'Overcharged batteries', 'Dominator guns fire 15% faster.', 1200, 60, 4, { cooldown: -0.15 }, ['d-ca-hangar']),
     tech('droid', 'd-cyard', 'd-yd-rush', 'Hot-launch protocols', 'The yard crews are paid to ship hulls before they are done: the Dominion Shipworks can rush out the warship it is building once it is half done (Rush launch). It comes out damaged, with guns still in scaffolding, and needs repair craft to be finished. Needs a Dominion Shipworks.', 800, 45, 3, {}),
