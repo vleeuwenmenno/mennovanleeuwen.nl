@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 
 // Which full-screen overlay is showing: the app launcher, Spotlight, or neither. A tiny store so
-// the dock, the top bar and the global Ctrl+K shortcut can all toggle them.
+// the dock, the top bar and the global Ctrl+K / Ctrl+Space shortcuts can all toggle them.
 
 export type Overlay = 'launchpad' | 'spotlight' | null
 

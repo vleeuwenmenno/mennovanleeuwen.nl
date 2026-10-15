@@ -7,6 +7,7 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
     area: 'Everywhere',
     keys: [
       ['Ctrl K', 'Spotlight: search, maths, units, currencies'],
+      ['Ctrl Space', 'All apps (best-effort; some OSes take it)'],
       ['Esc', 'close menus, Spotlight, launcher'],
       ['Right-click', 'a menu almost anywhere: windows, notes, dock, bar'],
       ['Shift right-click', "the browser's own menu"],
