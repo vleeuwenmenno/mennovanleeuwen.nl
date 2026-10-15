@@ -1,13 +1,20 @@
 // Every keyboard and mouse shortcut on the site, for the shortcuts sticky note and `keys`.
 // Keep this in step with the handlers when adding one. " / " separates alternatives; within one,
 // spaces separate keys pressed together. Alternatives mentioning click, drag or hover are mouse hints.
+// Ctrl+K and Ctrl+Space follow Settings → Spotlight (default: Space is Spotlight, K is All apps).
 
-export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
+import { spotlightPrefs, type CtrlSpace } from './spotlightPrefs'
+
+export type ShortcutGroup = { area: string; keys: [string, string][] }
+
+export function shortcuts(ctrlSpace: CtrlSpace = spotlightPrefs().ctrlSpace): ShortcutGroup[] {
+  const spaceOpensSpotlight = ctrlSpace !== 'launchpad'
+  return [
   {
     area: 'Everywhere',
     keys: [
-      ['Ctrl K', 'Spotlight: search, maths, units, currencies'],
-      ['Ctrl Space', 'All apps (best-effort; some OSes take it)'],
+      ['Ctrl K', spaceOpensSpotlight ? 'All apps' : 'Spotlight: search, maths, units, currencies'],
+      ['Ctrl Space', spaceOpensSpotlight ? 'Spotlight: search, maths, units, currencies (best-effort; some OSes take it)' : 'All apps (best-effort; some OSes take it)'],
       ['Esc', 'close menus, Spotlight, launcher'],
       ['Right-click', 'a menu almost anywhere: windows, notes, dock, bar'],
       ['Shift right-click', "the browser's own menu"],
@@ -127,4 +134,5 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
       ['Right-click', 'flag in Minesweeper'],
     ],
   },
-]
+  ]
+}
