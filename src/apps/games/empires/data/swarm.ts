@@ -7,8 +7,7 @@
 // Its doctrine is attrition and numbers: no shields anywhere (more hull instead), living hulls that
 // grow back once out of the fight (UnitType and StationPlan `regrow`), cheap hulls that hatch fast,
 // fragile strike craft, the Leech corvette's drain aura (UnitType `drain`) and broods of Stingers
-// from the Leviathan and the fully grown Hive (`carrier`). Players only see it with the Swarm preview
-// on (see factions.ts).
+// from the Leviathan and the fully grown Hive (`carrier`).
 //
 // Its weapon organs are its own mount looks (Hardpoint `look`, drawn in models/swarm/mounts.ts): a
 // tendril lance is a turbolaser, an acid sprayer flak, a spore cannon a missile launcher, a bio-turret

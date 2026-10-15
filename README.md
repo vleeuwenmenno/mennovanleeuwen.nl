@@ -1696,7 +1696,21 @@ reload carries on where it was, closing the tab ends it.
 
 Three factions: the **Republic** (`republic`, unit ids `r-…`), the **Confederacy** (`droid`, ids
 `d-…`: the id stays `droid` so saves and multiplayer keep working) and the **Swarm** (`swarm`, ids
-`s-…`), a bio-mechanical hive that is still being made.
+`s-…`), a bio-mechanical hive. All three are playable in skirmishes, multiplayer, Galactic
+conquest and the Codex. They form a soft triangle, each pairing close to even (about 45-55% in the
+AI tournament): the Confederacy's alpha strikes and shield-breaking edge out the Republic, the
+Republic's shields and turbolasers edge out the Swarm, and the Swarm's numbers and regrowth wear
+down the Confederacy's thin shields.
+
+- **Republic**: tough, shielded warships with strong repair; fewer ships, each worth more.
+- **Confederacy**: heavy guns that hit hard and early, missiles and the Breaker's spinal ion lance
+  for shields, fast strike craft; thin shields and weaker repairs. Its two flagships are the
+  Dominator dreadnought (carrier, Alpha strike) and the Tyrant battleship, whose fire-control aura
+  makes the guns round it hit harder.
+- **Swarm**: no shields anywhere (more hull instead), living hulls that grow back out of combat,
+  cheap ships that hatch fast, the Leech corvette's drain aura, and broods of Stingers from the
+  Leviathan and the fully grown Hive Nexus. Its mining platform's "Shield generator" upgrade is a
+  Hardened carapace (more hull, faster regrowth), and its station takes no Shield core.
 
 Everything that belongs to one faction is in files of its own, so the factions can be worked on
 side by side without touching each other's:
@@ -1704,8 +1718,11 @@ side by side without touching each other's:
 - **Its data**, [`data/<faction>.ts`](src/apps/games/empires/data/): its ships, its Command Station
   at every level, its mining and defense platforms and yards, its research, its yards' sockets,
   berths and gantries, its warships' hardpoint layouts at their size, and how it looks and sounds
-  outside its models (`info`: its name, colours, emblem, welding light, voices, id prefix and its
-  usual rival in Galactic conquest). It is written in the types and helpers of
+  outside its models (`info`: its name, colours, emblem, welding light, id prefix, its usual rival
+  in Galactic conquest, and `names`: what it calls the shared things, see below). Its station's
+  `stages` each carry the name it goes by at that level (Bastion Outpost … Citadel, Dominion
+  Outpost … Fortress, Hive Seed … Hive Nexus), shown on the HUD's station card, the upgrade in the
+  tech tree and the Codex's level picker. It is written in the types and helpers of
   [`data/kit.ts`](src/apps/games/empires/data/kit.ts); [`data.ts`](src/apps/games/empires/data.ts)
   merges the three into the tables the rest of the game reads (`UNITS`, `UNIT`, `TECHS`,
   `STATIONS`, `FACTIONS`, …), toughens, scales and sizes them, and holds what all factions share.
@@ -1756,21 +1773,35 @@ fractions): on the unit type a tech is `for`, `shieldDamage` (its guns hit shiel
 harder), `aura` (added to its fire-control bonus) and `auraRadius`, `regrow` (faster regrowth) and
 `regrowDelay` (negative: a shorter wait), `drain` (its drain's dps) and `drainHeal`; on the
 station, `fleetBuild` (every ship of the faction built that much faster, -0.1 for 10%, on top of
-each ship's own `build` research). The AI weighs them like the rest.
+each ship's own `build` research), and `regrow`/`regrowDelay` there reach every living hull of the
+side, ships and structures, on top of their own. The AI weighs them like the rest. The research
+that uses them: the Confederacy's Shield breakers (Breaker, `shieldDamage`) and Fire-control net
+(Tyrant, `aura` and `auraRadius`), the Swarm's Rapid regrowth (Hive Nexus, for the whole Swarm),
+Deeper tendrils (Leech, `drain` and `drainHeal`) and Hive surge (Hive Nexus, `fleetBuild`).
+
+**Names per faction** (FactionInfo `names` in data/kit.ts): its guns by kind (`weapon`, the Codex's
+weapon lists), turrets by the gun on them (`mount`), its other hardpoints (`part`), its mount looks
+(`look`), its mining platform's upgrades (`site`) and its abilities (`ability`: the same ability
+under its own name, so the Confederacy's `broadside` is Alpha strike, the Swarm's `tractor` Tendril
+grip). Each falls back to the shared name; only the words change. `hpName` (icons.ts),
+`weaponName` (codexInfo.ts), `abilityOf` and `siteUpgradeOf` (data.ts) look them up.
 
 **Sound sets** ([`sound.ts`](src/apps/games/empires/sound.ts) `SET`, by faction id): the Republic's
 clone crews and blasters; the Confederacy's machine-shop military (plasma guns, cannons with
 clanking breeches, a command net of relays and pulse tones, no droid chatter); the Swarm's living
 ships (spit, wet pulses, spore thuds, acid hisses, chitters, and the groans of its big ships, which
-also thud wetly when hit and tear rather than shear when they die). FactionInfo `sound.turbo` still
-tunes the heavy guns' pitch. Settings → Sound test plays every faction's set.
+also thud wetly when hit and tear rather than shear when they die). Each faction's crews answer in
+their own voice (`VOICE`): the Republic's clone radio beeps, the Confederacy's command net (a relay
+clack, then bit-crushed data-burst tones, with a servo whine under its big ships), the Swarm's
+chitter. FactionInfo `sound.turbo` still tunes the heavy guns' pitch. Settings → Sound test plays every faction's set.
 
 **AI doctrine** (ai.ts `DOCTRINE`, on top of the admiral's profile): the Confederacy concentrates
 its fire from further off and sends its fast warships round the flank of a goal where that is
 clear; the Swarm leans to small, quickly built ships (and build-time research), in skirmishes and
 Galactic conquest. Every side pulls living-hull ships back out of a wave to grow back, keeps drain
 ships in among the enemy with its wave, values fire-control and spinal ships, and with more than one
-flagship to choose from (the Confederacy's Gyre and Tyrant) settles on one by what its fleet needs.
+flagship to choose from (the Confederacy's Dominator and Tyrant) settles on one by what its fleet
+needs, so both appear. A side without shields never orders a Shield core.
 
 **For a faction's model files** (all additive, no shared file to change):
 
@@ -1785,15 +1816,6 @@ flagship to choose from (the Confederacy's Gyre and Tyrant) settles on one by wh
 - *Part names*: a faction's `models/<faction>/index.ts` may give `partNames` ([prefix, name]
   pairs, longest prefix wins) or `partName(id, t)` on its `MODELS`; the Codex looks there before
   the shared names.
-
-**The Swarm preview.** Until the Swarm is finished its units are placeholders: the Confederacy's
-numbers in every slot, under Swarm names, drawn with its concept designs (and copies of the
-Confederacy's engineers and yards where there is no concept), its research borrowing the
-Confederacy's pictures, its emblem the Confederacy's. It is hidden from players
-([`factions.ts`](src/apps/games/empires/factions.ts)): the skirmish and multiplayer lobbies, the
-Galactic conquest setup and the Codex only offer it with the `swarmPreview` setting on, whose
-toggle is under Settings → Developer in dev builds. The battle and the server take any faction, so
-a lobby set to the Swarm by a host with the preview on plays normally for everyone.
 
 In Galactic conquest the player picks the enemy's side too (any other faction; by default its usual
 rival). In the Rim Wars the Republic holds the west, the Confederacy the east and the Swarm the Deep
@@ -2207,11 +2229,10 @@ plate, gaining ring arcs and docking arms at level 2, the closed ring with hanga
 pods at level 3, and an outer frame joining gun towers with antenna spires at level 4. The platforms
 of both sides stand on clamp legs that hold them to their asteroid.
 
-The Confederacy's first, insect-like designs are the **Swarm**'s models for now
-([`swarm/craft.ts`](src/apps/games/empires/models/swarm/craft.ts) and
-[`swarm/warships.ts`](src/apps/games/empires/models/swarm/warships.ts)): one design for each
-Confederacy unit, on the Swarm unit in the same slot (the same box and hardpoints), in their tan
-and violet palette, until the Swarm is designed properly (see *Empires At War factions*).
+The **Swarm**'s models ([`swarm/craft.ts`](src/apps/games/empires/models/swarm/craft.ts) and
+[`swarm/warships.ts`](src/apps/games/empires/models/swarm/warships.ts)) are living organisms in
+chitin and violet, with weapon organs of their own (tendril lances, acid sprayers, spore cannons,
+brood chambers) drawn in [`swarm/mounts.ts`](src/apps/games/empires/models/swarm/mounts.ts).
 
 - **The format** ([`types.ts`](src/apps/games/empires/models/types.ts)): a model is a list of
   parts, each a polygon (with holes for rings) in a colour role (`hull`, `accent`, `metal`…), a z
