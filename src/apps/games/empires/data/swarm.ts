@@ -287,7 +287,7 @@ export const SWARM: FactionData = {
       id: 's-corvette', faction: 'swarm', tier: 'gunship', kind: 'support', name: 'Leech corvette', blurb: 'A segmented support hunter. Its feeding tendrils drain the hull of every enemy near it, past their shields, and pass the biomass on to our wounded ships. Lightly armed; keep it close behind the line.',
       sprite: 'swarm-corvette', aspect: 0.7, size: 84, hull: 600, shield: 0, regen: 0, speed: 140, turn: 1.8, pop: 2, cost: 520, build: 16, level: 2, squad: 1, sensor: 900,
       weapons: [laser(5, 260, 0.5)], hardpoints: [], engines: [[3.9, 9.4], [6.1, 9.4]],
-      drain: { radius: 420, dps: 5, heal: 1.4 },
+      drain: { radius: 420, dps: 6, heal: 1.4 },
       regrow: REGROW.ship,
       role: { role: 'Drain support', strong: ['long fights', 'shielded ships'], weak: ['fighters', 'anything that catches it alone'] },
     },

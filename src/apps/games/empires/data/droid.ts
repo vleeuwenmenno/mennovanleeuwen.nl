@@ -173,7 +173,7 @@ export const DROID: FactionData = {
     {
       id: 'd-gunship', faction: 'droid', tier: 'gunship', name: 'Raptor gunship', blurb: 'A forward weapon platform: flak against fighters, and a missile rack up front that slips past shields. Fast, thinly shielded.',
       sprite: 'droid-gunship', aspect: 0.95, size: 64, hull: 350, shield: 60, regen: 4, speed: 188, turn: 2.7, pop: 2, cost: 400, build: 13, level: 1, squad: 1, sensor: 800,
-      weapons: [flak(6.5, 290, 0.28), missile(32, 420, 3.6)], hardpoints: [], engines: [[3.6, 9.4], [6.4, 9.4]],
+      weapons: [flak(7, 290, 0.28), missile(32, 420, 3.6)], hardpoints: [], engines: [[3.6, 9.4], [6.4, 9.4]],
     },
     {
       id: 'd-corvette', faction: 'droid', tier: 'gunship', kind: 'support', name: 'Reclaimer corvette', blurb: 'A salvage tender: its crane crews patch up nearby ships from scrap. Slower work than a Republic tender, and lightly armed; keep it behind the line.',
@@ -211,7 +211,7 @@ export const DROID: FactionData = {
       sprite: 'droid-ion', aspect: 0.26, size: 150, hull: 1000, shield: 300, regen: 7, speed: 80, turn: 1.0, pop: 3, cost: 800, build: 22, level: 2, squad: 1, sensor: 1050,
       weapons: [],
       hardpoints: [
-        gun('ion', BREAKER[0].x, BREAKER[0].y, 0.09, 360, spinal(ion(120, 700, 2.8), 12)),
+        gun('ion', BREAKER[0].x, BREAKER[0].y, 0.09, 360, spinal(ion(90, 700, 2.8), 12)),
         gun('turbo', BREAKER[1].x, BREAKER[1].y, 0.075, 260, turbo(18, 540, 1.8, 2)),
         gun('turbo', BREAKER[2].x, BREAKER[2].y, 0.075, 260, turbo(18, 540, 1.8, 2)),
         M('shield', 'shield', BREAKER[3].x, BREAKER[3].y, 0.07, 260),
@@ -222,12 +222,12 @@ export const DROID: FactionData = {
     },
     {
       id: 'd-frigate', faction: 'droid', tier: 'frigate', name: 'Lancer frigate', blurb: 'A split-bow escort: a dual cannon on each boom for concentrated fire, flak aft. Overcharge its cannons for a killing broadside.',
-      sprite: 'droid-frigate', aspect: 0.5, size: 135, hull: 1000, shield: 400, regen: 8, speed: 84, turn: 1.1, pop: 3, cost: 780, build: 21, level: 2, squad: 1, sensor: 980,
+      sprite: 'droid-frigate', aspect: 0.5, size: 135, hull: 1000, shield: 400, regen: 8, speed: 84, turn: 1.1, pop: 3, cost: 830, build: 21, level: 2, squad: 1, sensor: 980,
       weapons: [],
       hardpoints: [
-        gun('turbo', LANCER[0].x, LANCER[0].y, 0.07, 260, turbo(22, 540, 1.8, 2)), gun('turbo', LANCER[1].x, LANCER[1].y, 0.07, 260, turbo(22, 540, 1.8, 2)),
+        gun('turbo', LANCER[0].x, LANCER[0].y, 0.07, 260, turbo(20, 540, 1.8, 2)), gun('turbo', LANCER[1].x, LANCER[1].y, 0.07, 260, turbo(20, 540, 1.8, 2)),
         M('shield', 'shield', LANCER[2].x, LANCER[2].y, 0.07, 280),
-        gun('flak', LANCER[3].x, LANCER[3].y, 0.055, 160, flak(6, 320, 0.33)), gun('flak', LANCER[4].x, LANCER[4].y, 0.055, 160, flak(6, 320, 0.33)),
+        gun('flak', LANCER[3].x, LANCER[3].y, 0.055, 160, flak(7.5, 320, 0.33)), gun('flak', LANCER[4].x, LANCER[4].y, 0.055, 160, flak(7.5, 320, 0.33)),
       ],
       engines: [[3.6, 9.5], [5, 9.6], [6.4, 9.5]],
       ability: 'broadside',
@@ -237,7 +237,7 @@ export const DROID: FactionData = {
       sprite: 'droid-cruiser', aspect: 0.5, size: 250, hull: 2400, shield: 850, regen: 14, speed: 56, turn: 0.6, pop: 5, cost: 1550, build: 33, level: 3, squad: 1, sensor: 1200,
       weapons: [],
       hardpoints: [
-        ...HARROW.slice(0, 2).map((p) => ({ ...gun('turbo', p.x, p.y, 0.08, 520, turbo(36)), look: 'triple' as const })),
+        ...HARROW.slice(0, 2).map((p) => ({ ...gun('turbo', p.x, p.y, 0.08, 520, turbo(33)), look: 'triple' as const })),
         ...HARROW.slice(2, 4).map((p) => ({ ...gun('turbo', p.x, p.y, 0.07, 320, cells(24, 520)), look: 'missileBox' as const })),
         gun('flak', HARROW[4].x, HARROW[4].y, 0.055, 200, flak(6, 320, 0.6)), gun('flak', HARROW[5].x, HARROW[5].y, 0.055, 200, flak(6, 320, 0.6)),
         M('shield', 'shield', HARROW[6].x, HARROW[6].y, 0.07, 480),

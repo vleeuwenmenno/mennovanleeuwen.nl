@@ -28,7 +28,7 @@ function minePlatform(shielded = false): UnitType {
   return {
     id: 'r-mine', faction: 'republic', tier: 'mine', name: 'Mining Platform',
     blurb: 'Drills an ore asteroid for credits: two drill rigs and an ore silo, each worth part of the income while it works, and a small flak turret that can hold off a fighter squadron.',
-    sprite: 'mine-republic', aspect: 1.051, size: 120, hull: 1000, shield: shielded ? 600 : 0, regen: shielded ? 10 : 0, speed: 0, turn: 0, pop: 0, cost: 500, build: 24, level: 1, squad: 1, sensor: 600,
+    sprite: 'mine-republic', aspect: 1.051, size: 120, hull: 1000, shield: shielded ? 600 : 0, regen: shielded ? 10 : 0, speed: 0, turn: 0, pop: 0, cost: 460, build: 24, level: 1, squad: 1, sensor: 600,
     weapons: [],
     hardpoints: [
       { ...M('drill', 'drill', d.wells[0][0], d.wells[0][1], 0.3, 400), key: 'drill1' },
@@ -175,13 +175,13 @@ const SHIPS: UnitType[] = [
   },
   {
     id: 'r-frigate', faction: 'republic', tier: 'frigate', name: 'Warden frigate', blurb: 'Escort bristling with point defence. Fighters melt around it.',
-    sprite: 'republic-frigate', aspect: 0.671, size: 130, hull: 950, shield: 650, regen: 14, speed: 76, turn: 1.0, pop: 3, cost: 820, build: 22, level: 2, squad: 1, sensor: 1000,
+    sprite: 'republic-frigate', aspect: 0.671, size: 130, hull: 1020, shield: 650, regen: 14, speed: 76, turn: 1.0, pop: 3, cost: 820, build: 22, level: 2, squad: 1, sensor: 1000,
     weapons: [],
     // Six turrets in three pairs (the turbolaser battery split over the forward pair), two shield
     // bulbs amidships, sharing the one generator's strength, and three engine pods, each of which
     // can be shot off.
     hardpoints: [
-      gun('turbo', 3.65, 3.6, 0.06, 150, turbo(14, 560, 2.2, 1)), gun('turbo', 6.35, 3.6, 0.06, 150, turbo(14, 560, 2.2, 1)),
+      gun('turbo', 3.65, 3.6, 0.06, 150, turbo(16, 560, 2.2, 1)), gun('turbo', 6.35, 3.6, 0.06, 150, turbo(16, 560, 2.2, 1)),
       gun('flak', 3.35, 6.3, 0.05, 160, flak(6, 340, 0.3)), gun('flak', 6.65, 6.3, 0.05, 160, flak(6, 340, 0.3)),
       { ...gun('flak', 1.95, 7.9, 0.05, 160, flak(6, 340, 0.3)), look: 'pd' }, { ...gun('flak', 8.05, 7.9, 0.05, 160, flak(6, 340, 0.3)), look: 'pd' },
       M('shield', 'shield', 2.9, 4.9, 0.065, 160), M('shield', 'shield', 7.1, 4.9, 0.065, 160),
@@ -192,12 +192,12 @@ const SHIPS: UnitType[] = [
   },
   {
     id: 'r-cruiser', faction: 'republic', tier: 'cruiser', name: 'Paladin cruiser', blurb: 'Line warship with heavy turbolasers. Knock out its shield bulbs first.',
-    sprite: 'republic-cruiser', aspect: 0.376, size: 220, hull: 2300, shield: 1500, regen: 24, speed: 52, turn: 0.6, pop: 5, cost: 1650, build: 34, level: 3, squad: 1, sensor: 1200,
+    sprite: 'republic-cruiser', aspect: 0.376, size: 220, hull: 2500, shield: 1500, regen: 24, speed: 52, turn: 0.6, pop: 5, cost: 1650, build: 34, level: 3, squad: 1, sensor: 1200,
     weapons: [],
     // Two turbolasers on the forward hull, two on the wings, flak aft on the wings, two shield
     // bulbs down the spine, and three engine pods sharing what were two engines' strength.
     hardpoints: [
-      gun('turbo', 3.75, 3.5, 0.05, 300, turbo(22)), gun('turbo', 6.25, 3.5, 0.05, 300, turbo(22)), gun('turbo', 2.2, 6.0, 0.055, 300, turbo(22)), gun('turbo', 7.8, 6.0, 0.055, 300, turbo(22)),
+      gun('turbo', 3.75, 3.5, 0.05, 300, turbo(24)), gun('turbo', 6.25, 3.5, 0.05, 300, turbo(24)), gun('turbo', 2.2, 6.0, 0.055, 300, turbo(24)), gun('turbo', 7.8, 6.0, 0.055, 300, turbo(24)),
       { ...gun('flak', 2.6, 7.75, 0.04, 200, flak(6, 320, 0.8)), look: 'pd' }, { ...gun('flak', 7.4, 7.75, 0.04, 200, flak(6, 320, 0.8)), look: 'pd' },
       M('shield', 'shield', 5, 4.85, 0.06, 460), M('shield', 'shield', 5, 6.55, 0.06, 460), P('engine', 3.3, 9.05, 280), P('engine', 5, 9.1, 280), P('engine', 6.7, 9.05, 280),
     ],

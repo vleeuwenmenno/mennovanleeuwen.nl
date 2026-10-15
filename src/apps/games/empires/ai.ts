@@ -569,8 +569,9 @@ export function pickShip(w: World, b: Brain, only?: (t: UnitType) => boolean): s
     let v = tierPref(t) * (0.1 + eff.get(t)! / effMax)
     // Ion barely scratches a hull, whatever its numbers say: one ship to strip shields for every
     // few warships, and only against shields.
-    // (A spinal lance is its side's shield breaker of choice: worth a little more.)
-    if (t.kind === 'ion') v *= ((shielded > 0.4 ? 0.6 : 0.15) * (spinalOn(t) ? 1.5 : 1)) / (1 + count(t.id))
+    // (A spinal lance is its side's shield breaker of choice: worth a little more.) Against a side
+    // with next to no shields (the Swarm) it is close to worthless.
+    if (t.kind === 'ion') v *= ((shielded > 0.4 ? 0.6 : shielded > 0.1 ? 0.15 : 0.02) * (spinalOn(t) ? 1.5 : 1)) / (1 + count(t.id))
     if (t.kind === 'bomber') v *= 1 - small * 0.6
     // A fire-control ship makes every warship round it hit harder: worth more the more there are.
     if (t.fireControl) v *= 1 + Math.min(1.5, warships / 6) * t.fireControl.bonus * 4
