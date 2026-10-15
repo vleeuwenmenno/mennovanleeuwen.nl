@@ -124,9 +124,8 @@ export function bioTurret(id: string, x: number, y: number, r: number, z: number
 export const fighter: ModelDef = () => {
   const parts: Part[] = [
     ...sym(part('membrane', [[-5, -8], [-27, 10], [-24, 24], [-5, 18]], 'metal', 0.5, { lift: 0.3 })),
-    ...sym(plate('wing', band([[-5, -14], [-20, -6], [-34, 12], [-33, 32]], 13, 2.4), 'hull', 1, [-0.4, -0.1], {
-      details: [{ k: 'shape', pts: band([[-12, -8], [-24, 2], [-31, 16]], 2.6, 1), tone: 'accent' }],
-    })),
+    ...sym(blade('wing', [[-5, -16], [-20, -8], [-34, 10], [-33, 34]], 13, 'hull', 1, [-0.4, -0.1])),
+    ...sym(blade('hook', [[-6, 4], [-16, 12], [-20, 26]], 7, 'hull2', 0.9, [-0.4, 0.2], {}, false)),
     engineSac('sac', 0, 30, 47, 10, 0, 1.2, {}, false),
     ...sym(plate('body', halfHull([[-48, 0.5], [-40, 3.4], [-26, 6.4], [-10, 8.4], [6, 7.2], [20, 5.4], [33, 3]]), 'hull2', 2, [-0.5, 0], {
       details: [{ k: 'line', pts: [[0, -18], [-6.6, -14]] }],
@@ -230,16 +229,17 @@ export const engineer: ModelDef = () => {
  */
 export const gunship: ModelDef = () => {
   const parts: Part[] = [
+    part('under', blobby([[0, -46], [-10, -30], [-18, -8], [-20, 14], [-12, 34], [0, 40], [12, 34], [20, 14], [18, -8], [10, -30]], 3), 'metal', 0.3, { lift: 0.5 }),
     ...sym(tendril('tendril', [[-6, 26], [-12, 38], [-10, 48]], 3.2, 0.4)),
     ...sym(part('limb', band([[-6, -14], [-20, -18], [-26, -28]], 6, 4), 'metal', 0.8, { lift: 0.8 })),
-    ...sym(plate('blade', band([[-8, 4], [-26, 6], [-36, 20], [-34, 32]], 10, 2), 'hull2', 1, [-0.4, 0.1], {
-      details: [{ k: 'shape', pts: band([[-14, 6], [-26, 10], [-32, 20]], 2, 0.8), tone: 'accent' }],
-    })),
-    engineSac('sacL', -8.25, 32, 49, 9, 0, 1.1),
-    engineSac('sacR', 8.25, 32, 49, 9, 1, 1.1),
-    ...spine('seg', [[-30, 7, 14], [-16, 9, 14], [-2, 10, 14], [12, 9, 14], [25, 7, 12]], 'hull', 2),
-    ...sym(plate('head', halfHull([[-50, 0.5], [-46, 4], [-38, 7], [-34, 6]]), 'hull', 2.3, [-0.5, -0.3])),
-    ...sym(plate('jaw', band([[-4, -42], [-10, -48], [-7, -51]], 3.4, 1), 'hull', 2.2, [-0.4, -0.3])),
+    ...sym(blade('aft', [[-6, 16], [-16, 26], [-20, 40]], 10, 'hull', 1, [-0.4, 0.3])),
+    ...sym(blade('flank', [[-7, -4], [-22, 4], [-33, 18], [-33, 32]], 12, 'hull2', 1.1, [-0.45, 0.05])),
+    engineSac('sacL', -8.25, 32, 49, 9, 0, 1.2),
+    engineSac('sacR', 8.25, 32, 49, 9, 1, 1.2),
+    ...sym(blade('shoulder', [[-5, -26], [-14, -18], [-18, -6]], 9, 'hull', 1.4, [-0.45, -0.1])),
+    ...spine('seg', [[-30, 5.6, 12], [-17, 7, 13], [-3, 7.6, 13], [11, 7, 13], [24, 5.6, 11]], 'hull', 2),
+    ...sym(blade('head', [[-2, -50], [-6, -42], [-8, -30]], 7, 'hull', 2.3, [-0.4, -0.3], {}, false)),
+    ...sym(blade('jaw', [[-4, -42], [-10, -48], [-7, -52]], 3.4, 'hull2', 2.2, [-0.4, -0.3], {}, false)),
     ...acidOrgan('acidL', -25, -27, 6, 2.5),
     ...acidOrgan('acidR', 25, -27, 6, 2.5),
     ...core('core', 0, -18, 3.4, 4.4, 2.6, false),
@@ -256,14 +256,17 @@ export const gunship: ModelDef = () => {
  */
 export const corvette: ModelDef = () => {
   const parts: Part[] = [
-    ...sym(part('feeder', band([[-10, -26], [-24, -36], [-26, -48]], 4, 1.4), 'metal', 0.6, { lift: 0.6, details: [glands([[-26, -47]], 1.4)] })),
+    part('under', blobby([[0, -40], [-14, -30], [-20, -6], [-18, 20], [-10, 36], [0, 40], [10, 36], [18, 20], [20, -6], [14, -30]], 3), 'metal', 0.3, { lift: 0.5 }),
+    ...sym(part('feeder', band([[-10, -24], [-24, -28], [-31, -38]], 4, 1.4), 'metal', 0.6, { lift: 0.6, details: [glands([[-31, -37]], 1.4)] })),
     ...sym(tendril('tail', [[-5, 30], [-14, 40], [-18, 50]], 3, 0.4)),
-    ...sym(plate('flap', band([[-10, -6], [-28, 2], [-34, 18], [-26, 28]], 9, 2), 'hull2', 1, [-0.4, 0.1], {
-      details: [{ k: 'line', pts: [[-18, 2], [-28, 14]] }, glands([[-26, 8], [-29, 18]], 0.9)],
-    })),
-    engineSac('sacL', -7.7, 32, 48, 8, 0, 1.1),
-    engineSac('sacR', 7.7, 32, 48, 8, 1, 1.1),
-    ...spine('seg', [[-30, 11, 12], [-18, 13, 13], [-5, 14, 14], [9, 13, 14], [22, 10, 12]], 'hull', 2),
+    // Pincers round the sucker mouth, then blades swept back down the flanks.
+    ...sym(blade('pincer', [[-8, -30], [-17, -38], [-16, -47], [-9, -52]], 7, 'hull', 1, [-0.4, -0.3], {}, false)),
+    ...sym(blade('hind', [[-7, 16], [-15, 26], [-18, 40]], 8, 'hull2', 1.05, [-0.4, 0.3])),
+    ...sym(blade('flank', [[-8, 0], [-22, 8], [-30, 24]], 10, 'hull', 1.1, [-0.45, 0.05], { details: [glands([[-20, 10]], 0.9)] })),
+    ...sym(blade('fore', [[-8, -18], [-22, -12], [-31, 0]], 10, 'hull2', 1.15, [-0.45, -0.05])),
+    engineSac('sacL', -7.7, 32, 48, 8, 0, 1.2),
+    engineSac('sacR', 7.7, 32, 48, 8, 1, 1.2),
+    ...spine('seg', [[-30, 9, 12], [-18, 10.4, 13], [-5, 11, 14], [9, 10.4, 14], [22, 8.6, 12]], 'hull', 2),
     part('mouth', circle(0, -41, 9.6, 20), 'hull', 2.4, { lift: 1, slope: [0, -0.4], holes: [circle(0, -41, 6, 16)] }),
     part('gullet', circle(0, -41, 6.4, 16), 'dark', 2.3, { details: [{ k: 'shape', pts: circle(0, -41, 3.4, 10), tone: 'glow' }, ...Array.from({ length: 6 }, (_, i): Detail => ({ k: 'shape', pts: turn([[-1, -6.2], [1, -6.2], [0, -3.8]], (i / 6) * Math.PI * 2, 0, 0).map(([x, y]) => [x, y - 41] as Pt), tone: 'hull' }))] }),
     ...sym(plate('leaf', blobby([[0, -2], [-9, 2], [-11, 12], [-6, 20], [0, 22]], 3), 'hull', 2.6, [-0.45, 0])),

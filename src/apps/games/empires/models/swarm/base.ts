@@ -3,7 +3,7 @@ import { at, type Expansion } from '../expansions.ts'
 import { along, circle, part, sym } from '../kit.ts'
 import type { ModelDef } from '../spec.ts'
 import type { Detail, Part, Pt, Tone } from '../types.ts'
-import { band, blobby, core, glands, plate, sparks, tendril } from './craft.ts'
+import { band, blade, blobby, core, glands, plate, sparks, tendril } from './craft.ts'
 
 // The Swarm's structures: the Hive Nexus (its Command Station, grown through four stages), the
 // Feeding Node on the ore, the three defense nodes, the Brood Nursery (its Frigate Yard), the
@@ -119,7 +119,7 @@ export const station: ModelDef = ({ level }) => {
   // --- Level 2: brood nest ----------------------------------------------------------------------------
   if (level >= 2) {
     // Tissue web that ties the limbs to the nucleus.
-    parts.push(part('web', blobby([[0, -300], [200, -150], [300, -70], [270, 40], [240, 240], [0, 310], [-240, 240], [-270, 40], [-300, -70], [-200, -150]], 4), 'dark', 2, { lift: 2 }))
+    parts.push(part('web', blobby([[0, -230], [150, -150], [235, -95], [225, 40], [190, 190], [0, 240], [-190, 190], [-225, 40], [-235, -95], [-150, -150]], 4), 'dark', 2, { lift: 2 }))
     for (const s of [-1, 1]) {
       const side = s < 0 ? 'L' : 'R'
       // The side limbs, out to the level-2 guns.
@@ -205,7 +205,10 @@ export const mine: ModelDef = ({ h }) => {
 export const defense: ModelDef = ({ t, h }) => {
   const kind = t.id.endsWith('flak') ? 'flak' : t.id.endsWith('gun') ? 'gun' : 'balanced'
   const y = (g: number) => (g / 10 - 0.5) * h
-  const corners: Pt[] = [[-24, y(2.9)], [24, y(2.9)], [-24, y(7.2)], [24, y(7.2)]]
+  // The corner cradles that carry a weapon node (the gun deck leaves its forward pair bare, the
+  // guardian its hind pair).
+  const used = (p: Pt) => t.hardpoints.some((hp) => Math.hypot((hp.x / 10 - 0.5) * 100 - p[0], y(hp.y) - p[1]) < 3)
+  const corners: Pt[] = ([[-24, y(2.9)], [24, y(2.9)], [-24, y(7.2)], [24, y(7.2)]] as Pt[]).filter(used)
   const parts: Part[] = [
     ...roots(-26, -30, [-40, -38], [-47, -47], 8, 0),
     part('rim', blobby(Array.from({ length: 12 }, (_, i) => polar((i / 12) * Math.PI * 2, i % 2 ? 41 : 46)), 3), 'metal', 1, { lift: 2.2, holes: [circle(0, 0, 34, 24)] }),
@@ -285,6 +288,7 @@ export const yard: ModelDef = (c) => {
     pool('bed', 17, -46, 28, 0.4),
     ...sym(tendril('root', [[-24, 30], [-30, 40], [-32, 50]], 4), { detach: { hull: 0.4 } }),
     ...sym(wall('wall', -31, -17, -42, 30, 1.2)),
+    ...[-24, -4, 16].flatMap((y0, j) => sym(blade(`spur${j}`, [[-29, y0], [-33, y0 + 8], [-34, y0 + 18]], 6, 'hull2', 1.1, [-0.45, 0.1], {}, false))),
     ...sym(plate('horn', band([[-24, -36], [pd[0] - 2, pd[1] - 6], [-16, -50]], 9, 2, 3), 'hull2', 2, [-0.4, -0.3], { lift: 2.6 })),
     ...sym(part('hornPad', circle(pd[0], pd[1], 5.4, 16), 'metal', 2.2, { lift: 2.6 })),
     ...rib('ribF', -25, 4.4, 26, 3.4),
@@ -317,6 +321,7 @@ export const capitalYard: ModelDef = (c) => {
     pool('bed', 19, -47, 34, 0.4),
     ...sym(tendril('root', [[-30, 38], [-34, 46], [-36, 53]], 4), { detach: { hull: 0.4 } }),
     ...sym(wall('wall', -36, -19, -42, 36, 1.2)),
+    ...[-26, -6, 14].flatMap((y0, j) => sym(blade(`spur${j}`, [[-34, y0], [-38, y0 + 8], [-39, y0 + 19]], 6.4, 'hull2', 1.1, [-0.45, 0.1], {}, false))),
     ...sym(plate('horn', band([[-28, -32], [tl[0], tl[1] - 4], [-20, -51]], 11, 2, 3), 'hull2', 2, [-0.4, -0.3], { lift: 2.6 })),
     ...sym(part('knuckle', circle(tl[0], tl[1], 6.6, 18), 'hull', 2.2, { lift: 2.8, sphere: true })),
     ...rib('ribF', -26, 4.6, 30, 3.4),
