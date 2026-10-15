@@ -17,7 +17,7 @@ import { DEFAULT_RULES, GENERATED, MAP, MAPS, cleanRules, generateMap, type MapD
 import { matchBrains, matchWorld, stepTurn, type MatchInfo, type Turn } from '../src/apps/games/empires/match.ts'
 import { nameKey, nameProblem, randomName, tidyName } from '../src/apps/games/empires/names.ts'
 import { CHAT_MAX, HASH_EVERY, MP_PATH, OUTDATED_CODE, PROTOCOL, REJOIN_MS as REJOIN_DEFAULT_MS, type AwaySeat, type AwayVote, type ClientMsg, type LobbyInfo, type MpLobby, type MpSlot, type RosterSeat, type ServerMsg, type SlotPatch } from '../src/apps/games/empires/protocol.ts'
-import { REINFORCE, STEP, cantGive, cleanReinforce, stateHash, type Owner, type World } from '../src/apps/games/empires/sim.ts'
+import { REINFORCE, STEP, cantGive, cantMendOn, cleanReinforce, stateHash, type Owner, type World } from '../src/apps/games/empires/sim.ts'
 import { restoreBrain, restoreWorld, snapBrain, snapshotWorld, type BattleSnap } from '../src/apps/games/empires/snapshot.ts'
 
 // Empires At War multiplayer: the players online, their names, the lobbies they gather in, and
@@ -703,6 +703,11 @@ function order(p: Player, m: Match, raw: unknown) {
   // checks again when it runs, deterministically, on every copy.
   if (c.f === 'give') {
     const why = m.pending.some(([s, x]) => s === seat && x.f === 'give') ? 'Wait a moment before sending more credits' : cantGive(m.w, seat, c.a[0] as number, c.a[1] as number)
+    if (why) return send(p, { t: 'error', why })
+  }
+  // A repair order on an enemy's ship or structure is refused here already; the sim refuses it too.
+  if (c.f === 'mend') {
+    const why = cantMendOn(m.w, seat, c.a[1] as number)
     if (why) return send(p, { t: 'error', why })
   }
   m.pending.push([seat, c])

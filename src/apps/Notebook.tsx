@@ -3,6 +3,7 @@ import { createNote, NOTE_COLORS, noteTitle, purgeNote, restoreNote, trashNote, 
 import { timeAgo } from '../data/recents'
 import { signIn, useAccount } from '../os/account'
 import { openContextMenu } from '../os/ContextMenu'
+import { useIsMobile } from '../os/useIsMobile'
 import { useSyncStatus } from '../os/synced'
 import { useWM, type WinState } from '../os/wm'
 import { closeStickies, noteMenu, openSticky, stickyOpen } from './Sticky'
@@ -40,6 +41,9 @@ export function SyncLine() {
 
 export function Notebook({ win }: { win: WinState }) {
   const wm = useWM()
+  const mobile = useIsMobile()
+  const [detail, setDetail] = useState(!!win.props.id)
+  const list = useRef<HTMLUListElement>(null)
   const all = useAllNotes()
   const [q, setQ] = useState('')
   const [tab, setTab] = useState<'notes' | 'trash'>('notes')
@@ -54,6 +58,7 @@ export function Notebook({ win }: { win: WinState }) {
     if (win.props.id) {
       setSelected(win.props.id)
       setTab('notes')
+      setDetail(true)
     }
   }, [win.props.id, win.props.t])
 
@@ -66,6 +71,11 @@ export function Notebook({ win }: { win: WinState }) {
       .sort((a, b) => b.updated - a.updated)
   }, [live, q, tab])
   const note = live.find((n) => n.id === selected && (tab === 'trash' ? n.deleted : !n.deleted)) ?? notes[0]
+  const showingDetail = detail && !!note
+  const back = () => {
+    setDetail(false)
+    requestAnimationFrame(() => list.current?.querySelector<HTMLButtonElement>('.is-active')?.focus())
+  }
   const onDesktop = (id: string) => stickyOpen(wm, id)
   const trashCount = live.filter((n) => n.deleted).length
 
@@ -74,6 +84,7 @@ export function Notebook({ win }: { win: WinState }) {
     setTab('notes')
     setQ('')
     setSelected(n.id)
+    setDetail(true)
     setPreview(false)
     setTimeout(() => editor.current?.focus(), 0)
   }
@@ -81,10 +92,11 @@ export function Notebook({ win }: { win: WinState }) {
   const remove = (n: Note) => {
     closeStickies(wm, n.id)
     trashNote(n.id)
+    setDetail(false)
   }
 
   return (
-    <div className="nb">
+    <div className={`nb notebook ${showingDetail ? 'is-detail' : 'is-list'}`}>
       <aside className="nb-side">
         <div className="nb-search">
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search notes" aria-label="Search notes" spellCheck={false} />
@@ -100,13 +112,13 @@ export function Notebook({ win }: { win: WinState }) {
             Trash {trashCount ? `(${trashCount})` : ''}
           </button>
         </div>
-        <ul className="nb-list">
+        <ul className="nb-list" ref={list}>
           {notes.map((n) => (
             <li key={n.id}>
               <button
                 className={`nb-item ${n.id === note?.id ? 'is-active' : ''}`}
-                onClick={() => setSelected(n.id)}
-                onDoubleClick={() => tab === 'notes' && openSticky(wm, n.id)}
+                onClick={() => { setSelected(n.id); setDetail(true); setPreview(false) }}
+                onDoubleClick={() => !mobile && tab === 'notes' && openSticky(wm, n.id)}
                 onContextMenu={(e) =>
                   openContextMenu(
                     e,
@@ -149,6 +161,7 @@ export function Notebook({ win }: { win: WinState }) {
       </aside>
 
       <section className="nb-main">
+        {mobile && showingDetail && <button className="nb-back" onClick={back}>← {tab === 'trash' ? 'Trash' : 'Notes'}</button>}
         {note ? (
           <>
             <div className="nb-toolbar">
@@ -170,10 +183,10 @@ export function Notebook({ win }: { win: WinState }) {
               <span className="nb-spacer" />
               {note.deleted ? (
                 <>
-                  <button className="btn btn-small" onClick={() => restoreNote(note.id)}>
+                  <button className="btn btn-small" onClick={() => { restoreNote(note.id); setDetail(false) }}>
                     Put back
                   </button>
-                  <button className="btn btn-small is-danger" onClick={() => purgeNote(note.id)}>
+                  <button className="btn btn-small is-danger" onClick={() => { purgeNote(note.id); setDetail(false) }}>
                     Delete forever
                   </button>
                 </>
