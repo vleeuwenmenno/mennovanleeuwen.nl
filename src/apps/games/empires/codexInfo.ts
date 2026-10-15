@@ -1,6 +1,6 @@
-import { MODULE, REBUILD_MODULE, STATIONS, TECH, WORKS_NAME, accuracy, effect, type Tier, type UnitType, type Weapon, type WeaponKind } from './data'
+import { MODULE, REBUILD_MODULE, STATIONS, TECH, UNIT, WORKS_NAME, accuracy, effect, type Tier, type UnitType, type Weapon, type WeaponKind } from './data'
 import { hpName } from './icons'
-import type { Model } from './models/index.ts'
+import { factionModels, type Model } from './models/index.ts'
 
 // What the Codex says about one module or part of a unit: its name, what it does, its numbers, and
 // what losing it costs. Kept apart from the Codex's drawing so the words are easy to find.
@@ -51,8 +51,22 @@ const DROID_NAMES: [string, string][] = [
   ['collar', 'Collar'], ['gunbox', 'Gun box'], ['claw', 'Claw'],
 ]
 
+/** A part's name from its faction's own table (FactionModels partName and partNames), if it has one. */
+function ownName(m: Model, id: string, t: UnitType) {
+  const own = factionModels(m.faction)
+  const byFn = own.partName?.(id, t)
+  if (byFn) return byFn
+  let best: [string, string] | undefined
+  for (const pair of own.partNames ?? []) if (id.startsWith(pair[0]) && (!best || pair[0].length > best[0].length)) best = pair
+  return best?.[1]
+}
+
+/** What the Codex calls part `i` of a model: its faction's own name for it (models/<faction>/
+ * index.ts `partNames`), else the shared names below, else its id. */
 export function partName(m: Model, i: number, t: UnitType) {
   const id = m.parts[i].id
+  const own = ownName(m, id, t)
+  if (own) return own
   const station = t.tier === 'station'
   const structure = t.tier === 'mine' || t.tier === 'defense' || t.tier === 'yard'
   // Some parts are named by the unit they are on: the Confederacy's, and the Swarm's in the same
@@ -177,4 +191,27 @@ export function info(t: UnitType, m: Model | null, s: Sel): Info {
     lost,
     off: mt ? (mt.detach ? 'Blown clean off when destroyed: a burnt socket stays.' : 'Stays on the hull when destroyed, wrecked.') : '',
   }
+}
+
+/** One of a unit's faction mechanics (sim.ts; see "Faction mechanics" in README.md), as the Codex,
+ * the unit cards and their tips show it: a short name, a value, and the whole story for the tip. */
+export type Trait = { name: string; value: string; tip: string }
+const pc = (v: number) => `${Math.round(v * 100)}%`
+
+/** What sets a unit apart beyond its numbers: living hull, drain, fire control, a spinal gun, a
+ * brood or carrier, no shields. Empty for most units. */
+export function traits(t: UnitType): Trait[] {
+  const out: Trait[] = []
+  if (t.regrow) out.push({ name: 'Living hull', value: `+${pc(t.regrow.rate)}/s`, tip: `Living hull: out of the fight for ${t.regrow.delay} s (no enemy has hit it), its hull grows back by ${pc(t.regrow.rate)} of its full hull a second. Shot-off modules don't grow back.` })
+  if (t.drain) out.push({ name: 'Drain', value: `${Math.round(t.drain.dps)}/s`, tip: `Drain: every enemy it sees within ${Math.round(t.drain.radius)} loses ${Math.round(t.drain.dps)} hull a second, straight past its shields; ${pc(t.drain.heal)} of what it drains mends our damaged ships in reach, shared out.` })
+  if (t.fireControl) out.push({ name: 'Fire control', value: `+${pc(t.fireControl.bonus)}`, tip: `Fire control: our ships within ${Math.round(t.fireControl.radius)}, itself included, hit ${pc(t.fireControl.bonus)} harder. Auras don't stack: the best one counts.` })
+  const spine = [...t.weapons, ...t.hardpoints.flatMap((h) => (h.weapon ? [h.weapon] : []))].find((x) => x.spinal)
+  if (spine) {
+    const deg = Math.round(((spine.arc ?? 0) * 180) / Math.PI)
+    out.push({ name: 'Spinal gun', value: `±${deg}°`, tip: `Spinal ${WEAPON_NAME[spine.kind].toLowerCase()}: built along the keel, it only fires within ${deg}° either side of the nose, so the whole ship turns to aim it. It can't answer what is behind it.` })
+  }
+  if (t.tier === 'station' && t.carrier) out.push({ name: 'Brood', value: `every ${t.carrier.every} s`, tip: `Brood spawning: the station grows a squadron of ${UNIT[t.carrier.unit]?.name ?? 'strike craft'} every ${t.carrier.every} s while fewer than ${t.carrier.max} of them are out, beside its defense wing.` })
+  else if (t.carrier) out.push({ name: 'Carrier', value: `every ${t.carrier.every} s`, tip: `Carrier: launches a squadron every ${t.carrier.every} s from its hangars while fewer than ${t.carrier.max} are out; with every hangar shot off it launches no more.` })
+  if (!t.shield && !t.hardpoints.some((h) => h.kind === 'shield') && t.tier !== 'fighter' && t.tier !== 'mine') out.push({ name: 'No shields', value: 'armour only', tip: 'No shields: every hit goes straight to its hull and modules. Ion weapons barely scratch it, and shield research does nothing for it.' })
+  return out
 }

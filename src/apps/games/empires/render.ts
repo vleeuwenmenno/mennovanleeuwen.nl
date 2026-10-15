@@ -1,7 +1,7 @@
 import { CYARD_SOCKETS, FACTION_IDS, MODULE, STATION_SOCKETS, YARD_GANTRIES, YARD_SOCKETS, FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, type FactionId, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
-import { RETREAT_TIME, atHome, building, escorts, foes, hpPos, hullCap, radius, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
+import { RETREAT_TIME, atHome, auraOf, building, drainOf, escorts, foes, hpPos, hullCap, near, radius, regrowOf, SALVAGE_RANGE, sensorOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 import { BREAK_WEIGHTS, breakPieces, hullState, modelFor, unitForSprite, wreckState, type HullState, type Model } from './models/index.ts'
 import { YARD_BERTHS } from './data'
 import { ModelFx } from './models/fx.ts'
@@ -199,6 +199,32 @@ const WELD = {
 }
 /** A launch's docking light: a small amber glow sprite. */
 const LAUNCH_LIGHT = { key: 'launch-light', stops: [[0, '#ffffff'], [0.25, 'rgba(255,214,120,0.95)'], [1, 'rgba(255,170,60,0)']] as const }
+
+/**
+ * The faction mechanics' effects (sim.ts; see "Faction mechanics" in README.md), each in its side's
+ * own colours: its bolts (FactionInfo `bolt`) and its engines (the palette's `engine`). A drain ship's
+ * tendrils reach out to the enemies it bites, at most `tendrils` of them, and heal sparks rise off
+ * the allies it mends; a fire-control ship rings its reach and, while selected or seen up close,
+ * lines to what its ships are firing on (at most `lines`); a living hull growing back glows; a
+ * spinal gun gathers charge at its muzzle (from `chargeFrom` of its reload, on ships at least `minPx`
+ * on screen) and fires as a lance of light (`beamLife` seconds); a Swarm brood bursts from its sac.
+ * All drawn only on screen, a few calls per ship that has one, so a big battle (where few ships
+ * have them) pays next to nothing.
+ */
+const MECH = { tendrils: 6, lines: 8, sparkEvery: 0.18, beamLife: 0.22, chargeFrom: 0.55, minPx: 18 }
+/** Factions whose ships are alive: their launches hatch, with a wet burst instead of a ring. */
+const ORGANIC: Partial<Record<FactionId, true>> = { swarm: true }
+/** A living hull's glow, by faction: its engine colour, rimmed in its bolt colour. */
+const regrowGlow = (f: FactionId) => glowSprite(`regrow|${f}`, [[0, 'rgba(0,0,0,0)'], [0.45, PALETTES[f].engine], [0.75, FACTIONS[f].bolt], [1, 'rgba(0,0,0,0)']])
+/** A spinal gun's charge, by faction: a white heart in its bolt colour. */
+const chargeGlow = (f: FactionId) => hotGlow('#ffffff', 0.3, FACTIONS[f].bolt)
+/** Which hardpoints of a type carry a spinal gun (Weapon spinal), worked out once per type. */
+const spinalHps = new WeakMap<UnitType, number[]>()
+function spinalsOf(t: UnitType) {
+  let out = spinalHps.get(t)
+  if (!out) spinalHps.set(t, (out = t.hardpoints.flatMap((h, i) => (h.weapon?.spinal ? [i] : []))))
+  return out
+}
 
 /**
  * A nebula patch painted once into a small canvas (a quarter of world size; it's soft anyway):
@@ -400,6 +426,8 @@ export class Renderer {
   /** The shadow being drawn (reused: one at a time). */
   private shadow: Shadow = { dx: 0, dy: 0, alpha: 0 }
   private warps: Warp[] = []
+  /** Seconds until the next round of heal sparks off ships a drain is mending (see drawDrains). */
+  private sparkT = 0
   /** Ships jumping out, on the renderer's clock from when they went. */
   private departs: Omit<Warp, 'at'>[] = []
   /** Procedural models' debris and broken hulls (all on screen only, see models/fx.ts). */
@@ -551,6 +579,17 @@ export class Renderer {
         this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.8, size: 20, grow: 90, color: '#f2c14a' })
       } else if (e.k === 'hpdown') {
         this.blast(e.x, e.y, 34)
+      } else if (e.k === 'launch' && ORGANIC[w.players[e.owner]?.faction]) {
+        // A brood hatching from its sac: a wet burst in the side's engine colour, a ring in its bolts'.
+        if (!seen(e.x, e.y)) continue
+        const f = w.players[e.owner].faction
+        this.add({ kind: 'flash', x: e.x, y: e.y, life: 0.3, size: 26, color: PALETTES[f].engine })
+        this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.55, size: 8, grow: 70, color: FACTIONS[f].bolt })
+        for (let i = 0; i < 8; i++) {
+          const a = Math.random() * TAU
+          const v = 40 + Math.random() * 110
+          this.add({ kind: 'fire', x: e.x, y: e.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.35 + Math.random() * 0.3, size: 3 + Math.random() * 3, grow: 6, color: i % 2 ? PALETTES[f].engine : FACTIONS[f].bolt })
+        }
       } else if (e.k === 'built' || e.k === 'launch') {
         this.add({ kind: 'ring', x: e.x, y: e.y, life: 0.5, size: 10, grow: 60, color: '#9fe8ff' })
       } else if (e.k === 'ability') {
@@ -1231,6 +1270,9 @@ export class Renderer {
       for (const id of view.selected) if (n++ < 6) this.drawRanges(ctx, w, view, z, id, view.selected.size === 1, view.turretPick?.unit === id ? view.turretPick.hp : -1)
     }
 
+    // Fire-control auras, under the ships.
+    this.drawAuras(ctx, w, view, z, onScreen)
+
     // Ships and stations, big ones first so smaller ships fly over them (see drawRank), each with a
     // faint shadow on the hull it's over.
     const myTeam = w.players[view.me].team
@@ -1259,6 +1301,7 @@ export class Renderer {
       ctx.stroke()
       tethers.length = 0
     }
+    this.drawDrains(ctx, w, z, myTeam, onScreen, dt)
     this.drawWelds(ctx, w, z, myTeam, onScreen, view.hideOwner)
     this.drawYardWelds(ctx, w, z, myTeam, onScreen, view.hideOwner)
     this.drawLaunches(ctx, w, z, myTeam, onScreen, view.hideOwner)
@@ -1303,6 +1346,23 @@ export class Renderer {
         ctx.arc(s.x, s.y, 3, 0, Math.PI * 2)
         ctx.fill()
         continue
+      }
+      // A spinal gun's shot: a lance of light from its muzzle, fading fast, ahead of its bolt.
+      const lancer = s.age < MECH.beamLife ? w.byId.get(s.from) : undefined
+      if (lancer && spinalsOf(lancer.t).some((i) => lancer.t.hardpoints[i].weapon!.kind === s.kind)) {
+        const k = 1 - s.age / MECH.beamLife
+        ctx.strokeStyle = col
+        ctx.globalAlpha = 0.5 * k
+        ctx.lineWidth = Math.max(3 / z, 10 * k)
+        ctx.beginPath()
+        ctx.moveTo(s.sx, s.sy)
+        ctx.lineTo(s.x, s.y)
+        ctx.stroke()
+        ctx.globalAlpha = k
+        ctx.strokeStyle = '#ffffff'
+        ctx.lineWidth = Math.max(1.2 / z, 3 * k)
+        ctx.stroke()
+        ctx.globalAlpha = 1
       }
       // Ion: a fat, pale-blue ball of crackling charge with a short fading tail.
       if (s.kind === 'ion') {
@@ -1837,6 +1897,157 @@ export class Renderer {
       }
     }
     ctx.restore()
+  }
+
+  /** A living hull growing back (sim.ts regrow: out of the fight and short of its hull): a soft glow
+   * pulsing over it in its side's colours. One glow sprite, drawn additively. */
+  private drawRegrow(ctx: CanvasRenderingContext2D, u: Unit, w: World, size: number) {
+    const g = regrowOf(u)
+    if (!g || u.hull >= hullCap(u) || w.time - u.lastHit < g.delay || building(u)) return
+    const pulse = 0.5 + 0.5 * Math.sin(this.clock * 3 + u.id)
+    const r = size * 0.62
+    ctx.globalCompositeOperation = 'lighter'
+    ctx.globalAlpha = 0.16 + 0.16 * pulse
+    ctx.drawImage(regrowGlow(u.t.faction), u.x - r, u.y - r, r * 2, r * 2)
+    ctx.globalAlpha = 1
+    ctx.globalCompositeOperation = 'source-over'
+  }
+
+  /** A spinal gun gathering charge before it fires: light growing at its muzzle as its reload runs
+   * out, while it has a target. (The shot itself is the lance drawn with the bolts.) */
+  private drawSpinalCharge(ctx: CanvasRenderingContext2D, u: Unit, z: number) {
+    for (const g of u.guns) {
+      if (g.hp < 0 || !g.target || !g.w.spinal || u.hps[g.hp]?.hp <= 0) continue
+      const full = g.w.cooldown * u.mods.cooldown
+      const k = 1 - Math.max(0, g.cd) / Math.max(0.01, full)
+      if (k < MECH.chargeFrom) continue
+      const c = (k - MECH.chargeFrom) / (1 - MECH.chargeFrom)
+      const h = u.t.hardpoints[g.hp]
+      const p = hpPos(u, g.hp)
+      // At the muzzle: ahead of the mount along the keel.
+      const ahead = (h.s ?? 0.05) * u.t.size * 0.6
+      const x = p.x + Math.cos(u.a) * ahead
+      const y = p.y + Math.sin(u.a) * ahead
+      const r = Math.max(3 / z, (h.s ?? 0.05) * u.t.size * (0.25 + 0.55 * c)) * (0.9 + 0.1 * Math.sin(this.clock * 30))
+      ctx.globalCompositeOperation = 'lighter'
+      ctx.globalAlpha = 0.35 + 0.6 * c
+      ctx.drawImage(chargeGlow(u.t.faction), x - r, y - r, r * 2, r * 2)
+      ctx.globalAlpha = 1
+      ctx.globalCompositeOperation = 'source-over'
+    }
+  }
+
+  /**
+   * Fire-control auras (sim.ts fireControl): a slowly turning dashed ring at the aura's reach in its
+   * side's bolt colour, faint; while the ship is selected or hovered, or seen close up, thin lines
+   * from it to what the ships in its reach are firing on, each ringed.
+   */
+  private drawAuras(ctx: CanvasRenderingContext2D, w: World, view: View, z: number, onScreen: (x: number, y: number, r?: number) => boolean) {
+    const team = w.players[view.me].team
+    for (const u of w.units) {
+      if (!u.t.fireControl || u.dead || u.site || building(u) || !u.seen[team] || u.owner === view.hideOwner) continue
+      const a = auraOf(u)!
+      if (!onScreen(u.x, u.y, a.radius)) continue
+      ctx.save()
+      ctx.strokeStyle = FACTIONS[u.t.faction].bolt
+      ctx.globalAlpha = 0.22
+      ctx.lineWidth = Math.max(1.5 / z, 2.5)
+      ctx.setLineDash([a.radius * 0.08, a.radius * 0.05])
+      ctx.lineDashOffset = -this.clock * a.radius * 0.03
+      ctx.beginPath()
+      ctx.arc(u.x, u.y, a.radius, 0, TAU)
+      ctx.stroke()
+      ctx.setLineDash([])
+      if (view.selected.has(u.id) || view.hover === u.id || z >= 0.6) {
+        // What its ships are firing on, each once.
+        const on = new Set<number>()
+        ctx.globalAlpha = 0.35
+        ctx.lineWidth = Math.max(1 / z, 1.5)
+        ctx.setLineDash([8 / z, 6 / z])
+        ctx.beginPath()
+        near(w, u.x, u.y, a.radius, (o) => {
+          if (o.owner !== u.owner || on.size >= MECH.lines) return
+          for (const g of o.guns) {
+            if (!g.target || on.has(g.target) || on.size >= MECH.lines) continue
+            const e = w.byId.get(g.target)
+            if (!e || e.dead || !e.seen[team]) continue
+            on.add(g.target)
+            ctx.moveTo(u.x, u.y)
+            ctx.lineTo(e.x, e.y)
+          }
+        })
+        ctx.stroke()
+        ctx.setLineDash([])
+        for (const id of on) {
+          const e = w.byId.get(id)!
+          ctx.beginPath()
+          ctx.arc(e.x, e.y, Math.max(8 / z, radius(e.t) * 0.7), 0, TAU)
+          ctx.stroke()
+        }
+      }
+      ctx.restore()
+    }
+  }
+
+  /**
+   * Drain auras (sim.ts drain): a tendril from the drain ship to each enemy in its reach that it
+   * sees (at most MECH.tendrils), wavering, with a bead of light running back along it; and heal
+   * sparks rising off our damaged ships in its reach, a few every MECH.sparkEvery seconds.
+   */
+  private drawDrains(ctx: CanvasRenderingContext2D, w: World, z: number, team: number, onScreen: (x: number, y: number, r?: number) => boolean, dt: number) {
+    this.sparkT -= dt
+    const sparks = this.sparkT <= 0
+    if (sparks) this.sparkT = MECH.sparkEvery
+    for (const u of w.units) {
+      if (!u.t.drain || u.dead || u.site || building(u) || u.launch || !u.seen[team]) continue
+      const d = drainOf(u)!
+      if (!onScreen(u.x, u.y, d.radius)) continue
+      const col = FACTIONS[u.t.faction].bolt
+      const heal = PALETTES[u.t.faction].engine
+      const theirs = w.players[u.owner].team
+      let n = 0
+      ctx.save()
+      ctx.globalCompositeOperation = 'lighter'
+      ctx.lineCap = 'round'
+      near(w, u.x, u.y, d.radius, (e) => {
+        if (e === u) return
+        if (foes(w, e.owner, u.owner)) {
+          if (n >= MECH.tendrils || !e.seen[theirs] || !e.seen[team]) return
+          n++
+          // A wavering curve: its middle swung to one side and back.
+          const dx = e.x - u.x
+          const dy = e.y - u.y
+          const sw = Math.sin(this.clock * 4 + e.id) * 0.18
+          const cx = (u.x + e.x) / 2 - dy * sw
+          const cy = (u.y + e.y) / 2 + dx * sw
+          ctx.strokeStyle = col
+          ctx.globalAlpha = 0.28
+          ctx.lineWidth = Math.max(2 / z, 5)
+          ctx.beginPath()
+          ctx.moveTo(u.x, u.y)
+          ctx.quadraticCurveTo(cx, cy, e.x, e.y)
+          ctx.stroke()
+          ctx.globalAlpha = 0.6
+          ctx.lineWidth = Math.max(1 / z, 1.6)
+          ctx.stroke()
+          // A bead of what it drained, running back to the ship.
+          const t = 1 - ((this.clock * 0.9 + e.id * 0.37) % 1)
+          const bx = (1 - t) * (1 - t) * u.x + 2 * (1 - t) * t * cx + t * t * e.x
+          const by = (1 - t) * (1 - t) * u.y + 2 * (1 - t) * t * cy + t * t * e.y
+          const r = Math.max(2.5 / z, 6)
+          ctx.globalAlpha = 0.9
+          ctx.drawImage(hotGlow('#ffffff', 0.3, col), bx - r, by - r, r * 2, r * 2)
+        } else if (sparks && isShip(e.t) && e.hull < hullCap(e) && e.seen[team]) {
+          // Heal sparks rising off a damaged ally it mends.
+          for (let i = 0; i < 2; i++) {
+            const a = Math.random() * TAU
+            const rr = radius(e.t) * 0.5 * Math.random()
+            this.add({ kind: 'spark', x: e.x + Math.cos(a) * rr, y: e.y + Math.sin(a) * rr, vx: (Math.random() - 0.5) * 20, vy: -30 - Math.random() * 30, life: 0.5 + Math.random() * 0.3, size: 1.6, color: heal })
+          }
+        }
+      })
+      ctx.restore()
+    }
   }
 
   /**
@@ -2685,6 +2896,8 @@ export class Renderer {
       if (m.mounts.length) drawMounts(ctx, m, u.x, u.y, u.a + Math.PI / 2, size, zdpr, u.hps, (i) => this.aim(u, i, w), alpha, u.rush?.parts)
       if (u.rush) this.drawScaffolds(ctx, u, m, size, z)
     }
+    if (t.regrow && !u.site) this.drawRegrow(ctx, u, w, size)
+    if (u.guns.length && spinalsOf(t).length && size * z >= MECH.minPx) this.drawSpinalCharge(ctx, u, z)
     if (u.retreat > 0) this.drawCharge(ctx, u, z)
     // An expansion going up on its socket: a scaffold ring turning round it, filling as it's built.
     const job = u.xq?.[0]

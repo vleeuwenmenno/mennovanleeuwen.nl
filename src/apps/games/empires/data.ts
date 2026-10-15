@@ -37,11 +37,11 @@ const merged = <T>(f: (k: FactionData) => Record<string, T>) => Object.assign({}
 
 export const ABILITIES: Record<AbilityId, Ability> = {
   flakBarrage: { name: 'Flak barrage', blurb: 'Point defence fires twice as fast for 8 s.', cooldown: 40, duration: 8 },
-  repairSwarm: { name: 'Repair swarm', blurb: 'Repair droids restore 30% hull over 10 s.', cooldown: 60, duration: 10 },
+  repairSwarm: { name: 'Damage control', blurb: 'Its repair crews restore 30% of its hull over 10 s.', cooldown: 60, duration: 10 },
   shieldBoost: { name: 'Shield boost', blurb: 'Instantly restores half the shields.', cooldown: 45, duration: 0 },
   tractor: { name: 'Tractor lock', blurb: 'Enemy ships nearby crawl at a third of their speed for 7 s.', cooldown: 45, duration: 7, range: reach(650) },
   broadside: { name: 'Full broadside', blurb: 'Turbolasers deal 60% more damage for 10 s.', cooldown: 50, duration: 10 },
-  launchSwarm: { name: 'Launch swarm', blurb: 'Empties the hangars: two extra droid squadrons at once.', cooldown: 60, duration: 0 },
+  launchSwarm: { name: 'Scramble', blurb: 'Empties the hangars: two extra squadrons of its strike craft at once.', cooldown: 60, duration: 0 },
   fieldRepair: {
     name: 'Field repair',
     blurb: 'Flies to a damaged station, or a ship of gunship class or bigger, and welds it back together for 15 s: hull and damaged modules, and it rebuilds destroyed station modules one at a time (a ship\'s shot-off modules stay lost). Aims at the ship under the cursor, else the most damaged one nearby. Idle crews do it by themselves.',
@@ -181,7 +181,7 @@ export const CYARD_SOCKETS: Record<FactionId, [number, number][]> = byFaction((k
  * runs from the mouth (y0) to the stern (y1). The battle draws the ship being built in it, and a new
  * ship flies out of it through the mouth (sim.ts launchFrom). */
 export const YARD_BERTHS: Record<string, Berth> = merged((k) => k.berths)
-/** Where the gantry cranes (Republic) or ring frames (droids) span each yard's berth, in the same
+/** Where the gantry cranes (Republic) or ring frames (Confederacy) span each yard's berth, in the same
  * units: the welding beams come down from them onto the ship being built. */
 export const YARD_GANTRIES: Record<string, number[]> = merged((k) => k.gantries)
 

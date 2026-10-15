@@ -7,6 +7,7 @@ import {
   type UnitType,
 } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
+import { traits } from './codexInfo'
 import { modelFor, typeOfSprite } from './models/index.ts'
 import { moduleThumbnail, thumbnail } from './models/paint.ts'
 import { keyName, modName, useSettings, type Action } from './settings'
@@ -1973,6 +1974,7 @@ export function UnitIntel({ t, who, rel, note, live }: { t: UnitType; who?: stri
         ))}
       </div>
       {ab && <p className="ew-intel-ab"><b>{ab.name}:</b> {ab.blurb}</p>}
+      {traits(t).map((x) => <p key={x.name} className="ew-intel-ab">{x.tip}</p>)}
       {t.kind === 'wing' && (
         <p className="ew-intel-ab">
           <b>Home defense:</b> weaker away from the station. Within {fmt(DEFENSE_WING.radius)} of it full strength; further out, or once it's gone, {Math.round(DEFENSE_WING.away * 100)}% damage. Free, no fleet space, and rebuilt by the station's hangar when lost.
@@ -2041,6 +2043,7 @@ function unitInfo(w: World, me: Owner, u: Unit, coarse: boolean) {
   const out: string[] = [t.blurb]
   if (u.rush) out.push(rushNote(u)!)
   if (r) out.push(`${r.role}\nStrong vs ${r.strong.join(', ')}\nWeak vs ${r.weak.join(', ')}`)
+  for (const x of traits(t)) out.push(x.tip)
   if (mine && t.tier === 'mine' && !building(u)) out.push(mineEarning(w, me, u).long)
   if (mine && !isShip(t) && u.guns.length > 0) out.push(GUNS_TIP)
   if (mine && (t.support || t.ability === 'fieldRepair'))
@@ -2121,6 +2124,13 @@ function UnitDetail(p: DetailProps & { u: Unit; squad: Unit[] }) {
           )}
           {mine && <RetreatIcon ships={squad.filter((x) => x.owner === me)} onRetreat={p.onRetreat} />}
         </header>
+        {/* What sets it apart (faction mechanics): a chip each, the whole story in its tip; given up
+            after the description and the role line when room runs out. */}
+        {traits(t).length > 0 && (
+          <span className="ew-traits" data-fit="3">
+            {traits(t).map((x) => <span key={x.name} className="ew-tag" data-tip={x.tip}>{x.name} {x.value}</span>)}
+          </span>
+        )}
         {/* Given up first when room runs out: the description, then the role line. */}
         <span className="ew-muted ew-small ew-fit-desc" data-fit="1">{t.blurb}</span>
         {r && (

@@ -2,7 +2,7 @@ import type { Piece } from './index.ts'
 import { stateKey } from './index.ts'
 import { blob, bounds, centroid, lightFor, rng, toneIndex, type Palette } from './kit.ts'
 import { PALETTES } from './palettes.ts'
-import { mountParts, type MountLook } from './mounts.ts'
+import { mountParts, type AnyLook } from './mounts.ts'
 import type { HullState, Model, Part, Pt } from './types.ts'
 
 // Painting procedural models on a canvas, cel-shaded: flat fills in three hard tones per colour,
@@ -21,8 +21,27 @@ import type { HullState, Model, Part, Pt } from './types.ts'
 // they turn to aim. Only a hull (or a wreck's piece) shown more than one step past the biggest
 // bitmap (see bigK) is painted straight onto the screen, with exact light; turret bitmaps are capped
 // at memTuning.mount pixels.
+//
+// Level of detail (Lod in types.ts): a part or a detail with `minPx` is only painted once the whole
+// thing it belongs to is at least that many device pixels across: a hull's long side (paintModel,
+// thumbnails, a piece of a broken hull at its hull's scale) or a mount's diameter (turrets and
+// modules, painted on a mount of radius 1). So a design can carry dense detail for the big bitmaps
+// and keep small ones to silhouette and colour, e.g.
+//
+//   part('vent', pts, 'metal', 6, { minPx: 140 })                    // a greeble from 140 px up
+//   { k: 'line', pts, minPx: 90 }                                     // a panel line from 90 px
+//   { k: 'lights', pts, r: 0.3, tone: 'glow', minPx: 200 }            // window rows from 200 px
+//
+// Good thresholds: 60-90 px for raised plates and big stripes, 120-180 for panel lines and small
+// lights, 220+ for the finest. (Panel lines already need ppu 0.9, about 90 px on a ship.) Only the
+// painting looks at it, and every cached bitmap is painted for one size bucket at a fixed ppu, so
+// the cache keys stay right as they are: a bucket either has the detail or doesn't.
 
 const TAU = Math.PI * 2
+/** A mount is drawn on radius 1: two units across (what its parts' `minPx` is measured against). */
+const MOUNT_SPAN = 2
+/** Whether a part or detail with level of detail `minPx` shows on something `px` pixels across. */
+const shows = (minPx: number | undefined, px: number) => minPx === undefined || px >= minPx
 
 /**
  * When a hull or a turret is painted live (straight onto the screen) instead of from cached
@@ -70,9 +89,13 @@ const shifted = (p: Path2D, dx: number, dy: number) => {
 /**
  * Paints parts in order, in model units (the context already scaled so one unit is `ppu` device
  * pixels). `light` points towards the light in model space. `lightsOut`: a dead hulk, its windows
- * and engine lights dark (embers in its wreckage still glow).
+ * and engine lights dark (embers in its wreckage still glow). `span`: how many model units the whole
+ * thing is across (a hull's long side; a mount's two units, the default), for the level of detail:
+ * parts and details whose `minPx` is more than `span * ppu` are left out.
  */
-export function paintParts(g: CanvasRenderingContext2D, parts: Part[], pal: Palette, light: Pt, ppu: number, debug = false, lightsOut = false) {
+export function paintParts(g: CanvasRenderingContext2D, all: Part[], pal: Palette, light: Pt, ppu: number, debug = false, lightsOut = false, span = MOUNT_SPAN) {
+  const px = span * ppu
+  const parts = all.some((p) => p.minPx !== undefined) ? all.filter((p) => shows(p.minPx, px)) : all
   // Outline widths in device pixels, thicker on big bitmaps, never under one pixel.
   const ow = Math.min(2.6, Math.max(1, 0.8 + ppu * 0.32)) / ppu
   const fine = ppu >= 0.9
@@ -127,6 +150,7 @@ export function paintParts(g: CanvasRenderingContext2D, parts: Part[], pal: Pale
         }
       }
       for (const d of p.details ?? []) {
+        if (d.minPx !== undefined && px < d.minPx) continue
         if (d.k === 'shape') {
           g.fillStyle = pal[d.tone][p.glow ? 1 : ti]
           g.fill(polyPath(d.pts))
@@ -160,7 +184,7 @@ export function paintParts(g: CanvasRenderingContext2D, parts: Part[], pal: Pale
     }
     // Lights glow on their own: drawn over everything, unclipped, at least a pixel big.
     for (const d of p.details ?? []) {
-      if (d.k !== 'lights' || (lightsOut && d.tone !== 'ember')) continue
+      if (d.k !== 'lights' || (lightsOut && d.tone !== 'ember') || (d.minPx !== undefined && px < d.minPx)) continue
       const t = pal[d.tone ?? 'glow']
       const r = Math.max(d.r, 0.55 / ppu)
       g.fillStyle = t[1]
@@ -174,7 +198,7 @@ export function paintParts(g: CanvasRenderingContext2D, parts: Part[], pal: Pale
   if (debug) {
     g.lineWidth = 1.2 / ppu
     g.setLineDash([4 / ppu, 3 / ppu])
-    for (const p of parts) {
+    for (const p of all) {
       if (p.pts.length < 3) continue
       g.strokeStyle = p.detach ? '#ffa040' : p.engine !== undefined ? '#5fd0ff' : p.glow ? '#ffe060' : 'rgba(120,255,200,0.75)'
       g.stroke(pathOf(p))
@@ -280,7 +304,7 @@ export function paintModel(g: CanvasRenderingContext2D, m: Model, o: PaintOpts &
   const parts = partsLeft(m, o.state)
   g.save()
   if (o.region) g.clip(polyPath(o.region))
-  paintParts(g, parts, pal, o.light, o.ppu, o.debug, o.wreckMounts)
+  paintParts(g, parts, pal, o.light, o.ppu, o.debug, o.wreckMounts, m.long)
   const sil = silhouette(parts)
   if (o.burns !== false) paintBurns(g, m, o.state, sil, o.ppu)
   if (o.wreckMounts) {
@@ -693,7 +717,7 @@ function drawShadow(ctx: CanvasRenderingContext2D, m: Model, rot: number, size: 
 }
 
 /** The run of turret bitmaps for one look at one size. */
-function mountRun(faction: Model['faction'], look: MountLook, broken: boolean, k: number, n: number) {
+function mountRun(faction: Model['faction'], look: AnyLook, broken: boolean, k: number, n: number) {
   let byLook = mountRuns.get(faction)
   if (!byLook) mountRuns.set(faction, (byLook = new Map()))
   let runs = byLook.get(look)
@@ -710,7 +734,7 @@ const MOUNT_BLEND = 24
 
 /** A turret from its cached bitmaps, `px` device pixels across (no more than memTuning.mountLive),
  * centred on the origin and turned by `rot` already, its light worked out for heading `rot`. */
-function drawMountCached(ctx: CanvasRenderingContext2D, faction: Model['faction'], look: MountLook, broken: boolean, rot: number, r: number, px: number) {
+function drawMountCached(ctx: CanvasRenderingContext2D, faction: Model['faction'], look: AnyLook, broken: boolean, rot: number, r: number, px: number) {
   const k0 = bucketK(px)
   const k = memTuning.legacy ? k0 : Math.min(k0, bucketK(memTuning.mount / 1.15))
   const b = BUCKETS[k]
@@ -749,7 +773,7 @@ function drawMountCached(ctx: CanvasRenderingContext2D, faction: Model['faction'
 
 /** One mount (turret, shield generator, module) at (x, y), `r` world units in radius, turned by
  * `rot`: intact, broken, or a burnt socket ('crater'). */
-export function drawMount(ctx: CanvasRenderingContext2D, faction: Model['faction'], look: MountLook, broken: boolean, x: number, y: number, rot: number, r: number, zdpr: number, alpha = 1) {
+export function drawMount(ctx: CanvasRenderingContext2D, faction: Model['faction'], look: AnyLook, broken: boolean, x: number, y: number, rot: number, r: number, zdpr: number, alpha = 1) {
   const px = r * 2 * zdpr
   if (px < 2) return
   ctx.save()
@@ -787,7 +811,7 @@ export function drawPart(ctx: CanvasRenderingContext2D, m: Model, index: number,
   const c = slot(runIn(otherRuns, `${m.key}|p|${index}|${b}`), ls, 'parts', cw, ch, (g) => {
     g.translate(pad - b0.x0 * ppu, pad - b0.y0 * ppu)
     g.scale(ppu, ppu)
-    paintParts(g, [p], PALETTES[m.faction], lightFor((ls / 8) * TAU), ppu, false, true)
+    paintParts(g, [p], PALETTES[m.faction], lightFor((ls / 8) * TAU), ppu, false, true, m.long)
     // Torn off: burnt across.
     g.globalCompositeOperation = 'source-atop'
     g.fillStyle = 'rgba(30,20,14,0.35)'
@@ -892,7 +916,7 @@ export function drawMounts(ctx: CanvasRenderingContext2D, m: Model, x: number, y
     const wx = x + (mt.x * c - mt.y * s) * k
     const wy = y + (mt.x * s + mt.y * c) * k
     const dead = (hps[mt.hp]?.hp ?? 1) <= 0
-    const look: MountLook = dead && mt.detach ? 'crater' : mt.design
+    const look: AnyLook = dead && mt.detach ? 'crater' : mt.design
     const a = dead && mt.detach ? rot : mt.turns ? aim(mt.hp) : rot
     if (memTuning.legacy || px > memTuning.mountLive) {
       // Painted live, from the unit's own transform and alpha.
@@ -989,7 +1013,7 @@ export function moduleThumbnail(m: Model, hp: number, px: number) {
   const g = c.getContext('2d')!
   g.scale(ppu, ppu)
   g.translate(pad - b.x0, pad - b.y0)
-  paintParts(g, parts, PALETTES[m.faction], lightFor(0), ppu)
+  paintParts(g, parts, PALETTES[m.faction], lightFor(0), ppu, false, false, m.long)
   const url = c.toDataURL('image/png')
   thumbs.set(key, { url, pad })
   return url
