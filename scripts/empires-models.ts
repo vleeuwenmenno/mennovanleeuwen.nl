@@ -44,7 +44,7 @@ for (const t of UNITS) {
   if (t.tier === 'station') {
     const techs = TECHS.filter((x) => x.faction === t.faction).map((x) => x.id)
     // With hybrid bases a station takes expansions too: every level with all of them built.
-    const exp = modulesFor('station').map((m) => m.id)
+    const exp = modulesFor('station', t.faction).map((m) => m.id)
     for (let lv = 1; lv <= STATIONS[t.faction].stages.length; lv++) {
       types.push(stationType(t.faction, lv, []))
       types.push(stationType(t.faction, lv, techs))
@@ -55,7 +55,7 @@ for (const t of UNITS) {
   // A yard with each of its expansions on its own, and with all of them.
   const works = worksOf(t)
   if (t.tier === 'yard' && works) {
-    const all = modulesFor(works).map((m) => m.id)
+    const all = modulesFor(works, t.faction).map((m) => m.id)
     for (const id of all) types.push(yardType(t.id, [id]))
     if (all.length > 1) types.push(yardType(t.id, all))
   }
