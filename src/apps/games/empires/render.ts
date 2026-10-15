@@ -419,6 +419,8 @@ export class Renderer {
   private aims = new Map<number, number>()
   /** The hulls drawn so far this frame, for shadows (reused, see shadowOver). */
   private hulls: Unit[] = []
+  /** The minimap's ship dots, by colour, as x, y, radius triples (reused each frame). */
+  private dots = new Map<string, number[]>()
   /** Yards (and stations) with a new ship still sitting in them on its way out, this frame. */
   private launchingFrom = new Set<number>()
   /** Selected escorts and the ships they escort, in pairs, for their tethers (reused). */
@@ -1283,7 +1285,13 @@ export class Renderer {
     // The hulls drawn so far, which the next ships may be over.
     const hulls = this.hulls
     hulls.length = 0
+    let fighterRings = false
     for (const u of shown) {
+      // Strike craft come last (drawRank): their team rings go down in one stroke per colour first.
+      if (!fighterRings && u.t.tier === 'fighter') {
+        fighterRings = true
+        if (view.rings) this.fighterRings(ctx, w, view, z, shown)
+      }
       const sh = hulls.length && isShip(u.t) && (FIGHTER_SHADOWS || u.t.tier !== 'fighter') ? this.shadowOver(u, hulls, z) : null
       this.drawUnit(ctx, u, w, z, view, sh)
       if (u.t.tier !== 'fighter' && !u.site) hulls.push(u)
@@ -2820,6 +2828,38 @@ export class Renderer {
     return sh
   }
 
+  /**
+   * The strike craft's team rings (see drawUnit), all at once: one path and one stroke per colour
+   * rather than one each, since a battle has a great many of them. The same ellipses, under the
+   * craft and over the bigger hulls, as when each was drawn with its craft.
+   */
+  private fighterRings(ctx: CanvasRenderingContext2D, w: World, view: View, z: number, shown: Unit[]) {
+    ctx.globalAlpha = 0.35
+    ctx.lineWidth = Math.max(1 / z, 1.2)
+    let from = shown.length
+    while (from > 0 && shown[from - 1].t.tier === 'fighter') from--
+    // Each colour once: the first craft of a colour draws all of that colour's.
+    for (let i = from; i < shown.length; i++) {
+      const rel = relColor(w, view.me, shown[i].owner)
+      let seen = false
+      for (let j = from; j < i && !seen; j++) seen = relColor(w, view.me, shown[j].owner) === rel
+      if (seen) continue
+      ctx.strokeStyle = rel
+      ctx.beginPath()
+      for (let j = i; j < shown.length; j++) {
+        const u = shown[j]
+        if (view.selected.has(u.id) || view.hover === u.id || relColor(w, view.me, u.owner) !== rel) continue
+        const size = Math.max(u.t.size, 9 / z)
+        const [sw, sh] = dims(u.t)
+        const rr = Math.max(sw, sh) * 0.5 * (size / u.t.size) + 2 / z
+        ctx.moveTo(u.x + rr, u.y)
+        ctx.ellipse(u.x, u.y, rr, rr * 0.92, 0, 0, Math.PI * 2)
+      }
+      ctx.stroke()
+    }
+    ctx.globalAlpha = 1
+  }
+
   private drawUnit(ctx: CanvasRenderingContext2D, u: Unit, w: World, z: number, view: View, shadow: Shadow | null = null) {
     const t = u.t
     const fac = FACTIONS[t.faction]
@@ -2863,10 +2903,10 @@ export class Renderer {
     }
 
     // Team ring: a faint ellipse in the relative colour, so allies and enemies of the same faction
-    // can be told apart.
-    if (view.rings && !sel && !hov) {
+    // can be told apart. (Strike craft have theirs drawn together, see fighterRings.)
+    if (view.rings && !sel && !hov && t.tier !== 'fighter') {
       ctx.strokeStyle = rel
-      ctx.globalAlpha = t.tier === 'fighter' ? 0.35 : 0.28
+      ctx.globalAlpha = 0.28
       ctx.lineWidth = Math.max(1 / z, 1.2)
       ctx.beginPath()
       const rr = Math.max(sw, sh) * 0.5 * k + 2 / z
@@ -3119,25 +3159,26 @@ export class Renderer {
     // A faint grid.
     ctx.strokeStyle = 'rgba(140,180,240,0.07)'
     ctx.lineWidth = 1
+    ctx.beginPath()
     for (let gx = 700; gx < w.w; gx += 700) {
-      ctx.beginPath()
       ctx.moveTo(X(gx), oy)
       ctx.lineTo(X(gx), oy + w.h * s)
-      ctx.stroke()
     }
     for (let gy = 680; gy < w.h; gy += 680) {
-      ctx.beginPath()
       ctx.moveTo(ox, Y(gy))
       ctx.lineTo(ox + w.w * s, Y(gy))
-      ctx.stroke()
     }
+    ctx.stroke()
     drawTerrainOverview(ctx, w.map, ox, oy, s)
+    // Every rock in one path: one fill rather than one each.
     ctx.fillStyle = 'rgba(150,150,165,0.4)'
+    ctx.beginPath()
     for (const r of w.rocks) {
-      ctx.beginPath()
-      ctx.arc(X(r.x), Y(r.y), Math.max(1, r.r * s * 0.8), 0, Math.PI * 2)
-      ctx.fill()
+      const rr = Math.max(1, r.r * s * 0.8)
+      ctx.moveTo(X(r.x) + rr, Y(r.y))
+      ctx.arc(X(r.x), Y(r.y), rr, 0, Math.PI * 2)
     }
+    ctx.fill()
     // Wrecks: small amber squares.
     ctx.fillStyle = '#f2c14a'
     for (const h of w.wrecks) ctx.fillRect(X(h.x) - 2, Y(h.y) - 2, 4, 4)
@@ -3203,10 +3244,21 @@ export class Renderer {
         continue
       }
       const big = u.t.tier === 'capital' ? 3.5 : u.t.tier === 'cruiser' ? 2.8 : u.t.tier === 'frigate' ? 2.3 : u.t.tier === 'gunship' ? 1.8 : 1.1
+      // Gathered by colour and drawn below, one fill per colour.
+      let at = this.dots.get(col)
+      if (!at) this.dots.set(col, (at = []))
+      at.push(x, y, big)
+    }
+    for (const [col, at] of this.dots) {
+      if (!at.length) continue
       ctx.fillStyle = col
       ctx.beginPath()
-      ctx.arc(x, y, big, 0, Math.PI * 2)
+      for (let i = 0; i < at.length; i += 3) {
+        ctx.moveTo(at[i] + at[i + 2], at[i + 1])
+        ctx.arc(at[i], at[i + 1], at[i + 2], 0, Math.PI * 2)
+      }
       ctx.fill()
+      at.length = 0
     }
     // The last alert pulses for a few seconds.
     if (alarm && w.time - alarm.t < 6) {

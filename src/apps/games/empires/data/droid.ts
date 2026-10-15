@@ -156,11 +156,13 @@ export const DROID: FactionData = {
     emblem: '/games/empires/world/emblem-droid.webp',
     rival: 'republic',
     sound: { turbo: 0.92 },
+    // The names on the faction sheet: dual and triple cannon turrets, flak, missile and point
+    // defence turrets, strike launchers.
     names: {
-      weapon: { laser: 'Blaster cannons', turbo: 'Plasma cannon', missile: 'Missiles', ion: 'Ion lance' },
-      mount: { turbo: 'Plasma cannon', flak: 'Flak turret', missile: 'Missile turret', ion: 'Ion lance' },
-      part: { dock: 'Salvage crane', sensor: 'Fire-control mast', refinery: 'Strip refinery' },
-      look: { triple: 'Triple battery', missileBox: 'Missile turret', pd: 'Point-defence flak' },
+      weapon: { laser: 'Blaster cannons', turbo: 'Heavy cannons', missile: 'Missiles', ion: 'Ion lance' },
+      mount: { turbo: 'Dual cannon turret', flak: 'Flak turret', missile: 'Missile turret', ion: 'Ion lance' },
+      part: { dock: 'Salvage crane', sensor: 'Fire-control mast', refinery: 'Strip refinery', engine: 'Engine module' },
+      look: { triple: 'Triple cannon turret', missileBox: 'Missile turret', pd: 'Point defence turret', strike: 'Strike launcher' },
       ability: { broadside: { name: 'Alpha strike', blurb: 'Overcharged batteries: its guns deal 60% more damage for 10 s.' } },
     },
   },

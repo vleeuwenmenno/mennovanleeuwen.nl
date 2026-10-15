@@ -28,7 +28,7 @@ export const HP_COLOR: Record<HardpointKind, string> = { turret: '#ffb347', shie
 /** What a hardpoint with an extra mount design (Hardpoint `look`) is called. */
 export const LOOK_NAME: Record<MountExtra, string> = {
   torpedo: 'Torpedo launcher', pd: 'Point defence', triple: 'Triple turret', missileBox: 'Missile box', strike: 'Strike cannon', railgun: 'Mass driver', beam: 'Beam emitter', quad: 'Quad gun',
-  spore: 'Spore cannon', acid: 'Acid sprayer', lance: 'Tendril lance', bioturret: 'Bio-turret', parasite: 'Parasite pod', regen: 'Regeneration node', engineSac: 'Engine sac', broodSac: 'Brood chamber', spine: 'Spine battery',
+  spore: 'Spore cannon', acid: 'Acid sprayer', lance: 'Tendril lance', bioturret: 'Bio-turret', parasite: 'Parasite pod', regen: 'Regeneration node', engineSac: 'Engine sac', broodSac: 'Brood chamber', spine: 'Spine array',
 }
 /** One hardpoint's name on a unit of faction `f`: turrets go by the gun they carry (or the mount
  * they have), each in the faction's own words where it has them (FactionInfo `names`). */

@@ -272,7 +272,7 @@ export type FactionInfo = {
  * the thing does.
  */
 export type FactionNames = {
-  /** Its guns by kind, in the Codex's weapon lists ('Plasma cannons' rather than 'Turbolaser'). */
+  /** Its guns by kind, in the Codex's weapon lists ('Heavy cannons' rather than 'Turbolaser'). */
   weapon?: Partial<Record<WeaponKind, string>>
   /** A turret by the gun on it, where the hardpoint has no `look` of its own ('Tendril lance'). */
   mount?: Partial<Record<WeaponKind, string>>
