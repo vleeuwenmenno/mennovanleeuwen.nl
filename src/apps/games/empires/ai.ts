@@ -168,7 +168,7 @@ export const PROFILES: Record<Profile, Style> = {
  * - the Swarm favours numbers and fast production (small, quickly grown ships; build-time research
  *   worth twice as much) and goes out with smaller waves.
  * `tiers` multiplies the profile's taste for each class, `wave` the fleet value it waits for before a
- * wave, `quick` how much it favours ships that are quick to build, `focus` the reach of its focus
+ * wave, `quick` how much it favours ships that are quick to build (a power, in quarters: see pow4), `focus` the reach of its focus
  * fire, `flank` whether fast ships go round the side, `build` the worth of build-time research.
  */
 type Doctrine = { tiers: Partial<Record<Tier, number>>; wave: number; quick: number; focus: number; flank: boolean; build: number }
@@ -626,11 +626,11 @@ export function pickShip(w: World, b: Brain, only?: (t: UnitType) => boolean): s
     // Living hulls mend themselves between fights: a little more staying power than the numbers say.
     if (t.regrow) v *= 1.1
     // Quick to build (the Swarm's way): ships out of the yard sooner count for more.
-    if (Doc.quick) v *= Math.pow(30 / Math.max(5, t.build), Doc.quick)
+    if (Doc.quick) v *= M.pow4(30 / Math.max(5, t.build), Doc.quick)
     // A mix rather than one kind: each one already flying makes the next a little less wanted.
     return v / (1 + 0.12 * count(t.id))
   }
-  const line = options.map((t) => (t.kind === 'support' || t.kind === 'repair' ? 0 : Math.pow(weight(t), 1.5)))
+  const line = options.map((t) => (t.kind === 'support' || t.kind === 'repair' ? 0 : M.pow4(weight(t), 1.5)))
   const top = Math.max(...line, 0.01)
   // Specialists by need, next to the best of the line ships: a repair tender for a fleet worth
   // mending, a squadron or two of repair craft once there are warships to look after.

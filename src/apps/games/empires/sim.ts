@@ -2662,7 +2662,8 @@ function expansions(w: World, dt: number) {
 const CELL = 320
 const key = (cx: number, cy: number) => cx + cy * 1000
 
-function buildGrid(w: World) {
+/** Files every living unit under its cell, for `near`. */
+export function buildGrid(w: World) {
   w.grid.clear()
   for (const u of w.units) {
     if (u.dead) continue
@@ -4251,12 +4252,12 @@ function tendTo(w: World, u: Unit, p: Unit, max: number, dt: number) {
   const want = Math.min(radius(p.t) + radius(t) + 30, t.support!.range * 0.6)
   const dx = u.x - p.x
   const dy = u.y - p.y
-  const d = Math.hypot(dx, dy) || 1
+  const d = M.hypot(dx, dy) || 1
   const sx = p.x + (dx / d) * want
   const sy = p.y + (dy / d) * want
   if (d > want + 40) {
     unsettle(u)
-    const off = Math.hypot(sx - u.x, sy - u.y)
+    const off = M.hypot(sx - u.x, sy - u.y)
     const wp = waypoint(w, u, sx, sy)
     const q = detour(w, u, wp.x, wp.y)
     steer(u, q.x, q.y, Math.min(max, p.v + off * 0.9 + 12), dt)

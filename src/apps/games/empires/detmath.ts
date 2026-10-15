@@ -90,6 +90,16 @@ export const hypot = (x: number, y: number) => Math.sqrt(x * x + y * y)
 
 /** The square of v: `v ** 2` is left to each engine, `v * v` is not. */
 export const sq = (v: number) => v * v
+/** `b` (0 or more) to the power `e`, for `e` a multiple of 1/4: only products and square roots,
+ * which every engine rounds the same, unlike Math.pow. */
+export function pow4(b: number, e: number) {
+  const q = Math.round(e * 4)
+  let out = 1
+  for (let i = 0; i < Math.floor(q / 4); i++) out *= b
+  if (q % 4 >= 2) out *= Math.sqrt(b)
+  if (q % 2) out *= Math.sqrt(Math.sqrt(b))
+  return out
+}
 
 const LN2_HI = 6.93147180369123816490e-1
 const LN2_LO = 1.90821492927058770002e-10

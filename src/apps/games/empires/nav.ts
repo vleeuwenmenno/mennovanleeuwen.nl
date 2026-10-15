@@ -10,7 +10,7 @@
 // by rocks, or inside one) is swapped for the nearest spot that can be reached: the ship goes as
 // near as it can get and stops there, rather than flying straight at the rocks.
 
-import { sq } from './detmath.ts'
+import { hypot, sq } from './detmath.ts'
 import type { Pt } from './maps.ts'
 export type { Pt }
 type Circle = { x: number; y: number; r: number }
@@ -156,7 +156,7 @@ export function crosses(soft: Circle[], ax: number, ay: number, bx: number, by: 
 
 /** The price of flying straight from a to b over `cost`, in cells. */
 function lineCost(g: NavGrid, cost: Float32Array, ax: number, ay: number, bx: number, by: number) {
-  const len = Math.hypot(bx - ax, by - ay)
+  const len = hypot(bx - ax, by - ay)
   const n = Math.max(1, Math.ceil(len / (CELL * 0.25)))
   const step = len / n / CELL
   let sum = 0
@@ -332,7 +332,7 @@ export function findPath(g: NavGrid, rocks: Circle[], clear: number, ax: number,
   spent.reverse()
   if (exact) {
     cells.push({ x: bx, y: by })
-    spent.push(cost[goal] + (Math.hypot(end.x - bx, end.y - by) / CELL) * (price ? price[goal] : 1))
+    spent.push(cost[goal] + (hypot(end.x - bx, end.y - by) / CELL) * (price ? price[goal] : 1))
   } else if (!cells.length) {
     // Already as near as it gets.
     return { pts: [end], short: true }
