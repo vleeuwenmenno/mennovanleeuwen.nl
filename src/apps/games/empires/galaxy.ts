@@ -5,7 +5,7 @@
 // an undefended planet is taken by staying in its orbit for a while. The galaxy runs in real time,
 // in seconds; a day is DAY seconds. No DOM, so headless sims can load it.
 
-import { PROFILES, PROFILE_IDS, type Difficulty, type Profile } from './ai.ts'
+import { DOCTRINE, PROFILES, PROFILE_IDS, type Difficulty, type Profile } from './ai.ts'
 import {
   FACTIONS, MODULE, MODULE_FX, REBUILD, RUSH, UNIT, WORKS_NAME, buildable, builtAt, needsModule, stationType, unitOf, yardOf, yardType,
   type FactionId, type ModuleId, type Tier, type UnitType, type Works,
@@ -2320,7 +2320,9 @@ function galaxyAi(g: Galaxy, o: number) {
       const can = buildable(s.faction).filter((t) => t.level <= p.station && t.cost <= s.credits - 300 && !yardLock(p, t))
       if (!can.length) break
       const rich = Math.min(1, s.credits / 6000)
-      const pick = can[Math.min(can.length - 1, Math.floor(Math.pow(roll(m), 0.6 - rich * 0.35) * can.length))]
+      // A side that wins by numbers (ai.ts DOCTRINE: the Swarm) leans to the smaller, quicker ships.
+      const lean = 1 + DOCTRINE[s.faction].quick * 1.2
+      const pick = can[Math.min(can.length - 1, Math.floor(Math.pow(roll(m), (0.6 - rich * 0.35) * lean) * can.length))]
       if (pick.tier === 'capital' && fleets.some((f) => f.ships.some((id) => UNIT[id].tier === 'capital'))) continue
       if (!yardRoom(g, o, p.id, pick.id)) continue
       if (!order(() => buildAt(g, o, p.id, pick.id))) break

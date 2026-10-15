@@ -8,6 +8,8 @@
 // STATIONS), so its modules can be placed exactly where data.ts puts them.
 
 import type { FactionId } from '../data.ts'
+import type { MountExtra } from '../data/kit.ts'
+export type { MountExtra } from '../data/kit.ts'
 
 export type Pt = [number, number]
 
@@ -18,8 +20,17 @@ export type Pt = [number, number]
  */
 export type Tone = 'hull' | 'hull2' | 'accent' | 'metal' | 'dark' | 'glass' | 'glow' | 'char' | 'ember' | 'aid' | 'trim'
 
-/** Surface detail drawn on top of a part and clipped to it. */
-export type Detail =
+/**
+ * Level of detail: the smallest on-screen size, in device pixels, of the whole thing a part or
+ * detail belongs to (a hull's long side; a mount's diameter), at which it is painted. Below it, it is
+ * left out of the bitmap: fine detail (panel lines, small lights, cell glows, greebles) only on big
+ * bitmaps, so small sizes keep their silhouette and colours. Left out: always painted. See the top
+ * of models/paint.ts.
+ */
+export type Lod = { minPx?: number }
+
+/** Surface detail drawn on top of a part and clipped to it (`minPx`: see Lod). */
+export type Detail = (
   /** A panel line: a thin darker stroke. */
   | { k: 'line'; pts: Pt[]; w?: number }
   /** An inlay or stripe in another tone, shaded with the part's facet (a red band on the shadow
@@ -27,6 +38,7 @@ export type Detail =
   | { k: 'shape'; pts: Pt[]; tone: Tone }
   /** Windows or running lights: small glowing squares that ignore the lighting. */
   | { k: 'lights'; pts: Pt[]; r: number; tone?: Tone }
+) & Lod
 
 /** Why a part can come off. `hp`: when that hardpoint is destroyed; `hull`: once the hull falls
  * below this share; `death`: only when the whole unit goes (fighter wings, for the fragments). */
@@ -68,6 +80,11 @@ export type Part = {
   /** False: leaves no burnt patch on the hull where it came off (a module's own parts, whose
    * socket shows the damage instead). */
   scar?: false
+  /** Only painted once the whole hull (or mount) is at least this many device pixels across: see
+   * Lod. A part left out this way still counts for picking, breaking and the outline in Workshop
+   * mode; it is only not painted. Give it to raised greebles and small fittings, not to anything
+   * that makes the silhouette (or to a part that carries an engine glow). */
+  minPx?: number
 }
 
 /**
@@ -77,6 +94,9 @@ export type Part = {
  * painted on their own (turrets turn to aim), one per hardpoint, in the unit's hardpoint order.
  */
 export type MountDesign = 'flak' | 'turbo' | 'ion' | 'shield' | 'hangar' | 'refinery' | 'dock' | 'sensor' | 'drill' | 'engine' | 'collar'
+/** Every design a mount can have: the common ones every faction draws, and the extras a faction may
+ * draw (see MountExtra in data/kit.ts, and models/mounts.ts for how a missing one falls back). */
+export type AnyDesign = MountDesign | MountExtra
 export type Mount = {
   /** The hardpoint's index in the unit's `hardpoints`. */
   hp: number
@@ -84,7 +104,7 @@ export type Mount = {
   y: number
   /** Radius in model units. */
   r: number
-  design: MountDesign
+  design: AnyDesign
   /** Turns to aim (weapons); otherwise it keeps the hull's heading. */
   turns: boolean
   /** Blown off when destroyed (flies away as debris, leaving a burnt socket); otherwise it stays

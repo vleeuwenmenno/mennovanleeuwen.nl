@@ -1698,6 +1698,17 @@ span.ew-teamtag {
   background: rgba(125, 255, 160, 0.12);
   color: #b8ffcb;
 }
+/* A unit's faction mechanics on its card (codexInfo.ts traits): a row of small chips. */
+.ew-deck .ew-traits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ew-deck .ew-traits .ew-tag {
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: help;
+}
 .ew-deck .ew-tag.is-enemy {
   background: rgba(255, 90, 80, 0.15);
   color: #ffc4be;
