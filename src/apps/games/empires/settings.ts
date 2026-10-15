@@ -195,8 +195,9 @@ export function useSettings() {
 export const actionFor = (keys: Record<Action, string>, key: string) => (Object.keys(keys) as Action[]).find((a) => keys[a] === key)
 
 // Settings → Apps → Games can ask the game to show its own settings or key bindings: the main menu
-// or the battle menu opens that panel when it shows, now or (for a window still opening) within a
-// few seconds. Asked for and not shown by then (the galaxy map has no such panel), it is dropped.
+// or the battle menu opens Settings when it shows (on the Keybinds tab, when the keys were asked
+// for), now or (for a window still opening) within a few seconds. Asked for and not shown by then
+// (the galaxy map has no such panel), it is dropped.
 export type AskedPanel = 'settings' | 'keys'
 let asked: { panel: AskedPanel; at: number } | null = null
 const askListeners = new Set<() => void>()

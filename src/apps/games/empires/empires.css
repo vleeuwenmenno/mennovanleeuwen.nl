@@ -201,8 +201,94 @@
   max-height: 100%;
   display: flex;
 }
-.ew-modal.is-wide {
+.ew-modal.is-wide,
+.ew-modal.is-settings {
   width: min(720px, 100%);
+}
+/* One height for every tab. The title and tabs stay put; the open page scrolls. */
+.ew-modal.is-settings {
+  height: min(560px, 100%);
+}
+.ew-modal.is-settings .ew-frame-in {
+  overflow: hidden;
+}
+.ew-settings {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.ew-set-tabs {
+  display: flex;
+  gap: 2px;
+  flex: none;
+  min-width: 0;
+  margin: 0 -16px;
+  padding: 0 12px;
+  border-bottom: 1px solid rgba(183, 154, 98, 0.28);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.ew-set-tabs::-webkit-scrollbar {
+  display: none;
+}
+.ew-deck .ew-set-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 0 auto;
+  min-height: 32px;
+  margin-bottom: -1px;
+  padding: 6px 12px 7px;
+  font-family: var(--ew-display);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ew-muted);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  white-space: nowrap;
+}
+.ew-deck .ew-set-tabs button:hover:not(:disabled) {
+  color: var(--ew-head);
+  background: none;
+  border-color: transparent;
+  border-bottom-color: rgba(242, 193, 74, 0.35);
+}
+.ew-deck .ew-set-tabs button.is-on {
+  color: var(--ew-head);
+  border-bottom-color: var(--ew-gold);
+  background: linear-gradient(0deg, rgba(242, 193, 74, 0.12), transparent 70%);
+  box-shadow: none;
+}
+.ew-set-page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+/* A phone-wide panel: a row's control drops under its label instead of running off the side. */
+@container (max-width: 719px) {
+  .ew-settings .ew-row {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .ew-settings .ew-row > .ew-seg,
+  .ew-settings .ew-row > .ew-range {
+    margin-left: auto;
+  }
+  .ew-settings .ew-row > .ew-range {
+    flex: 1 1 180px;
+  }
+  .ew-keys {
+    grid-template-columns: 1fr;
+  }
 }
 .ew-modal > .ew-frame {
   flex: 1;
@@ -3163,7 +3249,7 @@ span.ew-teamtag {
   gap: 6px;
 }
 .ew-bm-panels {
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: 1fr 1fr;
 }
 .ew-bm-danger {
   grid-template-columns: 1fr 1fr;

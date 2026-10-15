@@ -19,7 +19,7 @@ import { TAP_SLOP, isTouch, useCoarse } from './Touch'
 import './touch-menus.css'
 
 // Everything outside a battle: the main menu, the skirmish lobby (map, players, teams), and the
-// settings and key bindings, which the battle's own menu opens too.
+// settings, which the battle's own menu opens too. Key bindings live on the settings' Keybinds tab.
 
 export type SlotKind = 'you' | 'ai' | 'closed'
 /** One spawn point in the lobby: who plays there, as what, on which side. Team 0 is yours. An AI
@@ -186,8 +186,8 @@ export function Modal({ title, onClose, children, wide, className = '' }: { titl
 
 /**
  * The battle menu (Esc), with the battle paused behind it: where you are and how it's going, a big
- * Resume, quick switches for sound, speed and the fog grid, the panels, and restarting or leaving,
- * which each ask once more before they throw the battle away.
+ * Resume, quick switches for sound, speed and the fog grid, settings and how to play, and
+ * restarting or leaving, which each ask once more before they throw the battle away.
  */
 export function BattleMenu({ w, me, sound, speed, onSpeed, onResume, onPanel, onRestart, onExit, campaign = false, online = false }: {
   w: World
@@ -196,7 +196,7 @@ export function BattleMenu({ w, me, sound, speed, onSpeed, onResume, onPanel, on
   speed: number
   onSpeed: (s: number) => void
   onResume: () => void
-  onPanel: (panel: 'settings' | 'keys' | 'howto') => void
+  onPanel: (panel: 'settings' | 'howto') => void
   /** Left out in a campaign battle: it can't be fought again. */
   onRestart?: () => void
   onExit: () => void
@@ -206,8 +206,6 @@ export function BattleMenu({ w, me, sound, speed, onSpeed, onResume, onPanel, on
   online?: boolean
 }) {
   const s = useSettings()
-  // Fingers have no keys to bind, so the keybinds panel stays out of their way.
-  const coarse = useCoarse()
   const muted = empiresMuted.use()
   const [confirm, setConfirm] = useState<'restart' | 'exit' | null>(null)
   const p = w.players[me]
@@ -250,9 +248,8 @@ export function BattleMenu({ w, me, sound, speed, onSpeed, onResume, onPanel, on
               <Icon name="grid" size={16} /> Fog grid
             </button>
           </div>
-          <div className={`ew-bm-panels ${coarse ? 'is-touch' : ''}`}>
+          <div className="ew-bm-panels">
             <button className="ew-menu-btn" onClick={() => onPanel('settings')}><Icon name="gear" size={16} /> Settings</button>
-            {!coarse && <button className="ew-menu-btn" onClick={() => onPanel('keys')}><Icon name="keys" size={16} /> Keybinds</button>}
             <button className="ew-menu-btn" onClick={() => onPanel('howto')}><Icon name="help" size={16} /> How to play</button>
           </div>
           <LayoutSection />
@@ -446,7 +443,19 @@ function SoundTest({ sound }: { sound: EmpiresSound }) {
   )
 }
 
-export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
+/** Pages of the settings dialog. `pointer` pages are for a mouse and keyboard: a finger drags the
+ * view and has no keys to bind, so those tabs stay out of the way. */
+export type SettingsTab = 'sound' | 'controls' | 'camera' | 'gameplay' | 'keys' | 'multiplayer'
+const SETTINGS_TABS: { id: SettingsTab; label: string; pointer?: boolean }[] = [
+  { id: 'sound', label: 'Sound' },
+  { id: 'controls', label: 'Controls', pointer: true },
+  { id: 'camera', label: 'Camera', pointer: true },
+  { id: 'gameplay', label: 'Gameplay' },
+  { id: 'keys', label: 'Keybinds', pointer: true },
+  { id: 'multiplayer', label: 'Multiplayer' },
+]
+
+export function SettingsPanel({ sound, initial = 'sound' }: { sound: EmpiresSound; initial?: SettingsTab }) {
   const s = useSettings()
   // The sound's settings, which Settings → Apps → Games may change too.
   const vol = empiresVolume.use()
@@ -456,94 +465,148 @@ export function SettingsPanel({ sound }: { sound: EmpiresSound }) {
   // The page-wide frame timing box (Settings → Appearance), here too since a game on its own has no OS settings.
   const fps = performanceOverlayPref.use()
   const [testing, setTesting] = useState(false)
-  // Scroll speed and edge scrolling are for mice: a finger drags the view.
+  // Scroll speed, edge scrolling and key bindings are for a mouse and keyboard.
   const coarse = useCoarse()
+  const tabs = SETTINGS_TABS.filter((t) => !t.pointer || !coarse)
+  const [tab, setTab] = useState<SettingsTab>(tabs.some((t) => t.id === initial) ? initial : 'sound')
+  const tabsRef = useRef<HTMLDivElement>(null)
+  const pageRef = useRef<HTMLDivElement>(null)
   const set = (next: Partial<Settings>) => setSettings(next)
+  const pick = (id: SettingsTab) => {
+    if (id === tab) return
+    sound.click()
+    setTab(id)
+    if (pageRef.current) pageRef.current.scrollTop = 0
+  }
   return (
-    <div className="ew-form">
-      <h5>Sound</h5>
-      <label className="ew-row">
-        <span>Master volume</span>
-        <span className="ew-range">
-          <input type="range" min={0} max={1} step={0.05} value={vol} onChange={(e) => sound.setVolume(Number(e.target.value))} />
-          <b>{Math.round(vol * 100)}%</b>
-        </span>
-      </label>
-      {(
-        [
-          ['sfx', 'Battle'],
-          ['voice', 'Unit responses'],
-          ['ui', 'Interface and alerts'],
-          ['amb', 'Ambience'],
-          ['music', 'Music'],
-        ] as [Bus, string][]
-      ).map(([bus, label]) => (
-        <label key={bus} className="ew-row">
-          <span>{label}</span>
-          <span className="ew-range">
-            <input type="range" min={0} max={1} step={0.05} value={mix[bus]} onChange={(e) => sound.setMix(bus, Number(e.target.value))} />
-            <b>{Math.round(mix[bus] * 100)}%</b>
-          </span>
-        </label>
-      ))}
-      <div className="ew-row">
-        <span>Sound</span>
-        <Seg label="Sound effects" value={!muted} options={[[true, 'On'], [false, 'Off']]} onChange={(on) => sound.setMuted(!on)} />
+    <div className="ew-settings">
+      <div
+        className="ew-set-tabs"
+        role="tablist"
+        aria-label="Settings"
+        ref={tabsRef}
+        onKeyDown={(e) => {
+          const dir = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
+          if (!dir) return
+          e.preventDefault()
+          const i = tabs.findIndex((t) => t.id === tab)
+          const next = tabs[(i + dir + tabs.length) % tabs.length]
+          pick(next.id)
+          queueMicrotask(() => tabsRef.current?.querySelector<HTMLButtonElement>(`#ew-set-tab-${next.id}`)?.focus())
+        }}
+      >
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            id={`ew-set-tab-${t.id}`}
+            aria-selected={tab === t.id}
+            aria-controls="ew-set-page"
+            tabIndex={tab === t.id ? 0 : -1}
+            className={tab === t.id ? 'is-on' : ''}
+            onClick={() => pick(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
-      <div className="ew-row">
-        <span>Music</span>
-        <Seg label="Music" value={music} options={[[true, 'On'], [false, 'Off']]} onChange={(on) => sound.setMusic(on)} />
+      <div className="ew-set-page ew-form" role="tabpanel" id="ew-set-page" aria-labelledby={`ew-set-tab-${tab}`} ref={pageRef}>
+        {tab === 'sound' && (
+          <>
+            <label className="ew-row">
+              <span>Master volume</span>
+              <span className="ew-range">
+                <input type="range" min={0} max={1} step={0.05} value={vol} onChange={(e) => sound.setVolume(Number(e.target.value))} />
+                <b>{Math.round(vol * 100)}%</b>
+              </span>
+            </label>
+            {(
+              [
+                ['sfx', 'Battle'],
+                ['voice', 'Unit responses'],
+                ['ui', 'Interface and alerts'],
+                ['amb', 'Ambience'],
+                ['music', 'Music'],
+              ] as [Bus, string][]
+            ).map(([bus, label]) => (
+              <label key={bus} className="ew-row">
+                <span>{label}</span>
+                <span className="ew-range">
+                  <input type="range" min={0} max={1} step={0.05} value={mix[bus]} onChange={(e) => sound.setMix(bus, Number(e.target.value))} />
+                  <b>{Math.round(mix[bus] * 100)}%</b>
+                </span>
+              </label>
+            ))}
+            <div className="ew-row">
+              <span>Sound</span>
+              <Seg label="Sound effects" value={!muted} options={[[true, 'On'], [false, 'Off']]} onChange={(on) => sound.setMuted(!on)} />
+            </div>
+            <div className="ew-row">
+              <span>Music</span>
+              <Seg label="Music" value={music} options={[[true, 'On'], [false, 'Off']]} onChange={(on) => sound.setMusic(on)} />
+            </div>
+            <div className="ew-row">
+              <span>Day ends (conquest)</span>
+              <Seg label="Sound when a day ends in Galactic conquest" value={s.daySound} options={[[true, 'On'], [false, 'Off']]} onChange={(on) => set({ daySound: on })} />
+            </div>
+            <h5>Sound test</h5>
+            {testing ? <SoundTest sound={sound} /> : <button className="ew-soundtest-open" onClick={() => (sound.unlock(), setTesting(true))}>Play every sound in the game…</button>}
+          </>
+        )}
+        {tab === 'controls' && (
+          <>
+            <p className="ew-muted ew-small">The pointer at the edge of the screen moves the view.</p>
+            <div className="ew-row">
+              <span>Edge scrolling</span>
+              <Seg label="Edge scrolling" value={s.edgeScroll} options={[['off', 'Off'], ['fullscreen', 'Fullscreen only'], ['always', 'Always']]} onChange={(v) => set({ edgeScroll: v })} />
+            </div>
+          </>
+        )}
+        {tab === 'camera' && (
+          <>
+            <p className="ew-muted ew-small">How fast the view moves with the keys and with the screen edge. Arrow keys always move it.</p>
+            <label className="ew-row">
+              <span>Scroll speed</span>
+              <span className="ew-range">
+                <input type="range" min={0.4} max={2.5} step={0.1} value={s.cameraSpeed} onChange={(e) => set({ cameraSpeed: Number(e.target.value) })} />
+                <b>{s.cameraSpeed.toFixed(1)}×</b>
+              </span>
+            </label>
+          </>
+        )}
+        {tab === 'gameplay' && (
+          <>
+            <h5>Battlefield</h5>
+            <div className="ew-row">
+              <span>Health bars</span>
+              <Seg label="Health bars" value={s.bars} options={[['damaged', 'Damaged'], ['always', 'Always'], ['selected', 'Selected only']]} onChange={(v) => set({ bars: v })} />
+            </div>
+            <div className="ew-row">
+              <span>Team rings under ships</span>
+              <Seg label="Team rings" value={s.rings} options={[[true, 'On'], [false, 'Off']]} onChange={(v) => set({ rings: v })} />
+            </div>
+            <div className="ew-row">
+              <span>{coarse ? 'Weapon ranges of selected ships' : 'Show weapon ranges on hover'}</span>
+              <Seg label="Weapon ranges" value={s.ranges} options={[[true, 'On'], [false, 'Off']]} onChange={(v) => set({ ranges: v })} />
+            </div>
+            <div className="ew-row">
+              <span>Messages</span>
+              <Seg label="Messages" value={s.toasts} options={[[true, 'All'], [false, 'Alerts only']]} onChange={(v) => set({ toasts: v })} />
+            </div>
+            <div className="ew-row">
+              <span>Show FPS and frame time</span>
+              <Seg label="Show FPS and frame time" value={fps} options={[[true, 'On'], [false, 'Off']]} onChange={(v) => performanceOverlayPref.set(v)} />
+            </div>
+            <h5>Shipyard</h5>
+            <div className="ew-row">
+              <span>Ships the station isn't upgraded for</span>
+              <Seg label="Locked ships" value={s.lockedShips} options={[[false, 'Hide'], [true, 'Show greyed out']]} onChange={(v) => set({ lockedShips: v })} />
+            </div>
+          </>
+        )}
+        {tab === 'keys' && <KeybindsPanel />}
+        {tab === 'multiplayer' && <MpNameRow sound={sound} />}
       </div>
-      <div className="ew-row">
-        <span>Day ends (conquest)</span>
-        <Seg label="Sound when a day ends in Galactic conquest" value={s.daySound} options={[[true, 'On'], [false, 'Off']]} onChange={(on) => set({ daySound: on })} />
-      </div>
-      {!coarse && (
-        <>
-          <h5>Camera</h5>
-          <label className="ew-row">
-            <span>Scroll speed</span>
-            <span className="ew-range">
-              <input type="range" min={0.4} max={2.5} step={0.1} value={s.cameraSpeed} onChange={(e) => set({ cameraSpeed: Number(e.target.value) })} />
-              <b>{s.cameraSpeed.toFixed(1)}×</b>
-            </span>
-          </label>
-          <div className="ew-row">
-            <span>Edge scrolling</span>
-            <Seg label="Edge scrolling" value={s.edgeScroll} options={[['off', 'Off'], ['fullscreen', 'Fullscreen only'], ['always', 'Always']]} onChange={(v) => set({ edgeScroll: v })} />
-          </div>
-        </>
-      )}
-      <h5>Battlefield</h5>
-      <div className="ew-row">
-        <span>Health bars</span>
-        <Seg label="Health bars" value={s.bars} options={[['damaged', 'Damaged'], ['always', 'Always'], ['selected', 'Selected only']]} onChange={(v) => set({ bars: v })} />
-      </div>
-      <div className="ew-row">
-        <span>Team rings under ships</span>
-        <Seg label="Team rings" value={s.rings} options={[[true, 'On'], [false, 'Off']]} onChange={(v) => set({ rings: v })} />
-      </div>
-      <div className="ew-row">
-        <span>{coarse ? 'Weapon ranges of selected ships' : 'Show weapon ranges on hover'}</span>
-        <Seg label="Weapon ranges" value={s.ranges} options={[[true, 'On'], [false, 'Off']]} onChange={(v) => set({ ranges: v })} />
-      </div>
-      <div className="ew-row">
-        <span>Messages</span>
-        <Seg label="Messages" value={s.toasts} options={[[true, 'All'], [false, 'Alerts only']]} onChange={(v) => set({ toasts: v })} />
-      </div>
-      <div className="ew-row">
-        <span>Show FPS and frame time</span>
-        <Seg label="Show FPS and frame time" value={fps} options={[[true, 'On'], [false, 'Off']]} onChange={(v) => performanceOverlayPref.set(v)} />
-      </div>
-      <h5>Shipyard</h5>
-      <div className="ew-row">
-        <span>Ships the station isn't upgraded for</span>
-        <Seg label="Locked ships" value={s.lockedShips} options={[[false, 'Hide'], [true, 'Show greyed out']]} onChange={(v) => set({ lockedShips: v })} />
-      </div>
-      <h5>Multiplayer</h5>
-      <MpNameRow sound={sound} />
-      <h5>Sound test</h5>
-      {testing ? <SoundTest sound={sound} /> : <button className="ew-soundtest-open" onClick={() => (sound.unlock(), setTesting(true))}>Play every sound in the game…</button>}
     </div>
   )
 }
@@ -738,10 +801,14 @@ export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, 
   saves?: number
   initial?: MenuScreen
 }) {
-  const [panel, setPanel] = useState<'settings' | 'keys' | 'howto' | 'codex' | null>(null)
-  // Settings → Apps → Games asked for the game's settings or key bindings.
-  useAskedPanel(setPanel)
-  // Fingers get no keybinds, and the notes that are tooltips for a mouse as text.
+  const [panel, setPanel] = useState<'settings' | 'codex' | null>(null)
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('sound')
+  // Settings → Apps → Games asked for the game's settings, or for its key bindings (that tab).
+  useAskedPanel((asked) => {
+    setSettingsTab(asked === 'keys' ? 'keys' : 'sound')
+    setPanel('settings')
+  })
+  // Notes that are tooltips for a mouse, written out where a finger can't hover.
   const coarse = useCoarse()
   // The menu goes one level deep: single player or multiplayer, then the modes each one has.
   const [screen, setScreen] = useState<MenuScreen>(initial)
@@ -849,36 +916,18 @@ export function MainMenu({ sound, victories, onPlay, onMultiplayer, onConquest, 
           <button className="ew-menu-btn" onClick={click(() => setPanel('codex'))} data-tip="Every ship and structure of both sides: what they carry, what they cost and what they beat">
             <Icon name="codex" size={20} /> Codex
           </button>
-          <button className="ew-menu-btn" onClick={click(() => setPanel('settings'))}>
+          <button className="ew-menu-btn" onClick={click(() => { setSettingsTab('sound'); setPanel('settings') })}>
             <Icon name="gear" size={20} /> Settings
-          </button>
-          {!coarse && (
-            <button className="ew-menu-btn" onClick={click(() => setPanel('keys'))}>
-              <Icon name="menu" size={20} /> Keybinds
-            </button>
-          )}
-          <button className="ew-menu-btn" onClick={click(() => setPanel('howto'))}>
-            <Icon name="help" size={20} /> How to play
           </button>
         </Frame>}
         <p className="ew-muted ew-small">Victories: {victories}</p>
       </div>
       {panel === 'settings' && (
-        <Modal title="Settings" onClose={() => setPanel(null)}>
-          <SettingsPanel sound={sound} />
-        </Modal>
-      )}
-      {panel === 'keys' && (
-        <Modal title="Keybinds" onClose={() => setPanel(null)} wide>
-          <KeybindsPanel />
+        <Modal title="Settings" onClose={() => setPanel(null)} className="is-settings">
+          <SettingsPanel sound={sound} initial={settingsTab} />
         </Modal>
       )}
       {panel === 'codex' && <Codex sound={sound} onClose={() => setPanel(null)} />}
-      {panel === 'howto' && (
-        <Modal title="How to play" onClose={() => setPanel(null)}>
-          <HowToPlay />
-        </Modal>
-      )}
     </div>
   )
 }
