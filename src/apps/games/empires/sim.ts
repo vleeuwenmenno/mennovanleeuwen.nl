@@ -55,7 +55,13 @@ export type Order =
   | { k: 'construct'; id: number }
 
 /** Research multipliers for one ship, 1 meaning unchanged. */
-export type Mods = { hull: number; shield: number; regen: number; damage: number; speed: number; cooldown: number; range: number }
+export type Mods = {
+  hull: number; shield: number; regen: number; damage: number; speed: number; cooldown: number; range: number
+  // From research for the faction mechanics (TechEffect), each a multiplier, there only when some
+  // research changes it (and absent in units saved before them): damage to shields, a fire-control
+  // aura's bonus (added) and reach, a living hull's regrowth and its wait, a drain's bite and heal.
+  shieldDamage?: number; aura?: number; auraRadius?: number; regrow?: number; regrowDelay?: number; drain?: number; drainHeal?: number
+}
 
 /** A gun: its weapon, the hardpoint it sits on (-1 for the hull), reload, and what it shoots at.
  * `focus` is a target this one gun was told to fire on first. */
@@ -335,6 +341,8 @@ export const SHIELD_REBOOT = 2
 export const SALVAGE_RATE = 30
 export type Shot = {
   x: number; y: number; vx: number; vy: number; left: number; kind: WeaponKind; owner: Owner; target: number; hp: number; dmg: number; hit: boolean; sx: number; sy: number; age: number; from: number
+  /** How much harder it hits shields than its damage says (research, TechEffect shieldDamage): 1 when left out. */
+  sh?: number
 }
 
 export type SimEvent =
@@ -593,7 +601,36 @@ function modsFor(p: Player, t: UnitType): Mods {
   const e = techBonus(p, t.id)
   // The Armour works adds its plate to the hull research, rather than multiplying it.
   const plate = p.armour && plated(t) ? MODULE_FX.armour : 0
-  return { hull: 1 + (e.hull ?? 0) + plate, shield: 1 + (e.shield ?? 0), regen: 1 + (e.regen ?? 0), damage: 1 + (e.damage ?? 0), speed: 1 + (e.speed ?? 0), cooldown: 1 + (e.cooldown ?? 0), range: 1 + (e.range ?? 0) }
+  const mods: Mods = { hull: 1 + (e.hull ?? 0) + plate, shield: 1 + (e.shield ?? 0), regen: 1 + (e.regen ?? 0), damage: 1 + (e.damage ?? 0), speed: 1 + (e.speed ?? 0), cooldown: 1 + (e.cooldown ?? 0), range: 1 + (e.range ?? 0) }
+  // The faction mechanics' research: set only when some research changes them.
+  if (e.shieldDamage) mods.shieldDamage = 1 + e.shieldDamage
+  if (e.aura) mods.aura = e.aura
+  if (e.auraRadius) mods.auraRadius = 1 + e.auraRadius
+  if (e.regrow) mods.regrow = 1 + e.regrow
+  if (e.regrowDelay) mods.regrowDelay = Math.max(0, 1 + e.regrowDelay)
+  if (e.drain) mods.drain = 1 + e.drain
+  if (e.drainHeal) mods.drainHeal = 1 + e.drainHeal
+  return mods
+}
+/** A fire-control aura as it stands for `u`: its type's, with its research (TechEffect aura and
+ * auraRadius). Null for a unit without one. */
+export function auraOf(u: Unit): { radius: number; bonus: number } | null {
+  const f = u.t.fireControl
+  if (!f) return null
+  return { radius: f.radius * (u.mods.auraRadius ?? 1), bonus: f.bonus + (u.mods.aura ?? 0) }
+}
+/** A living hull's regrowth as it stands for `u`, with its research (TechEffect regrow and
+ * regrowDelay). Null for a unit without one. */
+export function regrowOf(u: Unit): { rate: number; delay: number } | null {
+  const g = u.t.regrow
+  if (!g) return null
+  return { rate: g.rate * (u.mods.regrow ?? 1), delay: g.delay * (u.mods.regrowDelay ?? 1) }
+}
+/** A drain aura as it stands for `u`, with its research (TechEffect drain and drainHeal). */
+export function drainOf(u: Unit): { radius: number; dps: number; heal: number } | null {
+  const d = u.t.drain
+  if (!d) return null
+  return { radius: d.radius, dps: d.dps * (u.mods.drain ?? 1), heal: d.heal * (u.mods.drainHeal ?? 1) }
 }
 const stationOf = (p: Player) => unitOf(p.faction, 'station').id
 /** Whether one of a unit's own hangars stands (a Strike hangar doesn't count: it only launches bombers). */
@@ -1598,7 +1635,8 @@ export function cmdBuild(w: World, owner: Owner, id: string, reserve = false, at
   const queue = (queueFor(w, owner, id, at) as { q: QueueItem[] }).q
   const price = shipPrice(w, id, reserve)
   spend(w, p, price, 'ships', reserve && price > t.cost ? `${t.name} (reinforcement)` : t.name)
-  const time = t.build * (1 + (techBonus(p, id).build ?? 0))
+  // Its own research, and the station's that speeds up every ship (TechEffect fleetBuild).
+  const time = t.build * Math.max(0.2, 1 + (techBonus(p, id).build ?? 0) + (techBonus(p, stationOf(p)).fleetBuild ?? 0))
   queue.push({ unit: id, left: time, total: time, ...(reserve ? { reserve: true } : {}), ...(price !== t.cost ? { paid: price } : {}) })
   return null
 }
@@ -2654,7 +2692,7 @@ function alarm(w: World, u: Unit) {
 
 /** One bolt landing. Shields soak it first (missiles slip most of it past), then the hardpoint it
  * was aimed at takes it, with half spilling into the hull; or the hull takes it all. */
-export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: number, fromX: number, fromY: number, by: Owner, shooter = 0) {
+export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: number, fromX: number, fromY: number, by: Owner, shooter = 0, shieldMul = 1) {
   if (u.dead) return
   // Shot by our own side (on orders): no alarm, and nobody to shoot back at.
   const own = !foes(w, by, u.owner)
@@ -2666,7 +2704,9 @@ export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: num
   let rest = dmg
   if (u.shield > 0) {
     // Missiles slip most of it past the shields; ion bites twice as deep into them.
-    const onShield = kind === 'missile' ? dmg * 0.35 : kind === 'ion' ? dmg * 2 : dmg
+    // (`shieldMul`: research that hits shields harder, TechEffect shieldDamage.)
+    const per = (kind === 'missile' ? 0.35 : kind === 'ion' ? 2 : 1) * shieldMul
+    const onShield = dmg * per
     const soaked = Math.min(u.shield, onShield)
     u.shield -= soaked
     if (u.shield <= 0) {
@@ -2675,7 +2715,8 @@ export function damage(w: World, u: Unit, dmg: number, kind: WeaponKind, hp: num
       if (u.t.tier === 'frigate' || u.t.tier === 'cruiser' || u.t.tier === 'capital' || u.t.tier === 'station' || u.t.tier === 'defense')
         w.events.push({ k: 'shieldsDown', owner: u.owner, x: u.x, y: u.y })
     }
-    rest -= kind === 'ion' ? soaked / 2 : soaked
+    // What the shields took used up that much of the shot (a missile's mostly slips past them).
+    rest -= kind === 'missile' ? soaked : soaked / (per || 1)
     u.shieldHit = w.time
     u.hitAngle = M.atan2(fromY - u.y, fromX - u.x)
   }
@@ -3385,6 +3426,7 @@ function fire(w: World, u: Unit, g: Gun, e: Unit) {
   w.shots.push({
     x: from.x, y: from.y, vx: (ax - from.x) / Math.max(t, 0.001), vy: (ay - from.y) / Math.max(t, 0.001), left: hit ? t : t * 1.6,
     kind: g.w.kind, owner: u.owner, target: e.id, hp, dmg, hit, sx: from.x, sy: from.y, age: 0, from: u.id,
+    ...(u.mods.shieldDamage ? { sh: u.mods.shieldDamage } : {}),
   })
   w.events.push({ k: 'fire', kind: g.w.kind, x: from.x, y: from.y, owner: u.owner, light: u.t.tier === 'fighter' })
 }
@@ -3489,7 +3531,7 @@ function moveShots(w: World, dt: number) {
     const e = w.byId.get(s.target)
     if (!e || e.dead) continue
     const shielded = e.shield > 0
-    damage(w, e, s.dmg, s.kind, s.hp, s.sx, s.sy, s.owner, s.from)
+    damage(w, e, s.dmg, s.kind, s.hp, s.sx, s.sy, s.owner, s.from, s.sh ?? 1)
     w.events.push({ k: 'hit', kind: s.kind, x: s.x, y: s.y, shield: shielded && s.kind !== 'missile', owner: e.owner })
   }
   w.shots = keep
@@ -4179,7 +4221,7 @@ function terrain(w: World, u: Unit, dt: number) {
  * `rate` of its full hull a second, as far as it can go (a rush-launched ship's unbuilt hull stays
  * unbuilt). Only the hull: modules are mended as ever. */
 function regrow(w: World, u: Unit, dt: number) {
-  const g = u.t.regrow!
+  const g = regrowOf(u)!
   if (w.time - u.lastHit < g.delay) return
   const cap = hullCap(u)
   if (u.hull < cap) u.hull = Math.min(cap, u.hull + u.hullMax * g.rate * dt)
@@ -4193,7 +4235,7 @@ function regrow(w: World, u: Unit, dt: number) {
  */
 function drains(w: World, dt: number) {
   for (const u of w.units) {
-    const d = u.t.drain
+    const d = u.t.drain ? drainOf(u) : null
     if (!d || u.dead || building(u) || u.site || u.launch) continue
     let took = 0
     near(w, u.x, u.y, d.radius, (e) => {
@@ -4226,7 +4268,7 @@ function controlBonus(w: World, u: Unit) {
   if (!isShip(u.t)) return 0
   let best = 0
   for (const a of fireControl) {
-    const f = a.t.fireControl!
+    const f = auraOf(a)!
     if (f.bonus > best && !a.dead && !foes(w, a.owner, u.owner) && d2(a.x, a.y, u.x, u.y) <= f.radius * f.radius) best = f.bonus
   }
   return best

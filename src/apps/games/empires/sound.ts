@@ -8,8 +8,11 @@ import { empiresMix, empiresMusic, empiresMuted, empiresVolume, type EmpiresBus,
 // acknowledgements and alerts), and the ambience. Battle sounds are panned and, further away,
 // quieter and muffled; everything gets a touch of a long, soft reverb.
 //
-// Crews answer orders over the radio: Republic ships with a squelch and clean military beeps,
-// droids with chattering square-wave bleeps.
+// Each faction has a set of its own (see SET): the Republic's clone crews answer over a squelchy
+// radio with clean military beeps, and its guns are the films' blasters and turbolasers; the
+// Confederacy is industrial and military, plasma guns and cannons with breeches clanking home and a
+// command net of relays and pulse tones; the Swarm is alive, spitting, pulsing and chittering, its
+// big ships groaning. The sound test (Menus.tsx) plays every faction's.
 
 
 export type Where = { pan: number; gain: number }
@@ -18,6 +21,14 @@ export type Where = { pan: number; gain: number }
 export type Bus = EmpiresBus
 const BUSES: Bus[] = ['sfx', 'voice', 'ui', 'amb', 'music']
 export type OrderKind = 'move' | 'attack' | 'attackMove' | 'patrol' | 'hold' | 'stop' | 'rally' | 'target'
+
+/** A faction's sound set: the Republic's, the Confederacy's machine-shop military ('forge') or the
+ * Swarm's living ships ('hive'). Picked by faction id: every sound of a side follows from it. */
+export type SoundSet = 'republic' | 'forge' | 'hive'
+export const SET: Record<FactionId, SoundSet> = { republic: 'republic', droid: 'forge', swarm: 'hive' }
+/** How a set's crews answer: clone crews over the radio, the Confederacy's command net, the Swarm's
+ * chitters. */
+const VOICE: Record<FactionId, 'crew' | 'net' | 'hive'> = { republic: 'crew', droid: 'net', swarm: 'hive' }
 
 // --- DSP ------------------------------------------------------------------------------------------------
 
@@ -336,7 +347,7 @@ const metal = (heavy: boolean): Recipe => (sr, r) => {
  * (no fizz on top), crackling debris, and for bigger ships the hull's plates shearing (a slow, low
  * ring of the wire) and secondary blasts rolling on. Capital ships groan as they break up. Size 0
  * is a fighter, 1 a frigate or cruiser, 2 a capital ship. */
-const explosion = (size: 0 | 1 | 2): Recipe => (sr, r) => {
+const explosion = (size: 0 | 1 | 2, organic = false): Recipe => (sr, r) => {
   const len = [0.5, 1.9, 3.6][size]
   const body = new Svf()
   const crk = new Svf()
@@ -346,7 +357,10 @@ const explosion = (size: 0 | 1 | 2): Recipe => (sr, r) => {
   const ringLp = new Svf()
   const pops = Array.from({ length: [10, 22, 40][size] }, () => [r() * len * 0.8, 0.3 + r() * 0.7] as const)
   const secondary = size === 2 ? [0.35 + r() * 0.2, 0.8 + r() * 0.3, 1.3 + r() * 0.4] : size === 1 ? [0.3 + r() * 0.2] : []
-  const shear = size ? wire(sr, len, { stages: 160, a: 0.96, loop: 0.08 + r() * 0.03, fb: 0.55, hiss: 0.4 }) : null
+  // A living hull tears rather than shears: no ringing plates, a wet splat and bubbling instead.
+  const shear = size && !organic ? wire(sr, len, { stages: 160, a: 0.96, loop: 0.08 + r() * 0.03, fb: 0.55, hiss: 0.4 }) : null
+  const splatF = new Svf()
+  const bubbles = organic ? Array.from({ length: [6, 14, 22][size] }, () => [r() * len * 0.6, 140 + r() * 260, 0.012 + r() * 0.025] as const) : []
   // A fighter's is a soft, airy pop: a quick thump without much pitch to it, or it reads as a knock.
   const f0 = [120, 130, 95][size] * (0.9 + r() * 0.2)
   const f1 = [48, 34, 26][size]
@@ -366,10 +380,15 @@ const explosion = (size: 0 | 1 | 2): Recipe => (sr, r) => {
     const plates = shear ? ringLp.run(shear[i], 900, 0.8, sr).low * ad(t, 0.02, len * 0.3) : 0
     // A dying capital ship's hull groans: a low, wavering tone sinking through a closing filter.
     const groan =
-      size === 2
+      size === 2 || (organic && size === 1)
         ? groanF.run(groanO.saw(glide(62, 34, t, len) * (1 + 0.03 * Math.sin(TAU * 1.7 * t)), sr), glide(420, 140, t, len), 1.2, sr).low * ad(t - 0.4, 0.5, 1.1)
         : 0
-    return soft(crack * 0.6 + roar * [1.6, 1.6, 1.6][size] + thoom * [0.55, 1.5, 1.9][size] + debris * [0.7, 0.45, 0.45][size] + plates * [0, 0.9, 1.1][size] + groan * 0.9)
+    let wet = 0
+    if (organic) {
+      wet = splatF.run(noise(), 700, 0.7, sr).low * ad(t, 0.002, [0.05, 0.2, 0.35][size])
+      for (const [at, f, l] of bubbles) wet += bubble(t, at, f, l) * 0.25
+    }
+    return soft(crack * (organic ? 0.2 : 0.6) + roar * [1.6, 1.6, 1.6][size] + thoom * [0.55, 1.5, 1.9][size] + debris * (organic ? 0.2 : [0.7, 0.45, 0.45][size]) + plates * [0, 0.9, 1.1][size] + groan * 0.9 + wet * 1.4)
   })
 }
 
@@ -457,6 +476,253 @@ const warpArrive = (big: boolean): Recipe => (sr, r) => {
   })
 }
 
+// The Confederacy: industrial and military ------------------------------------------------------------
+// Heavy machinery rather than droids: cannon breeches, orange plasma, relays and servos. No chatter.
+
+/** Short metal partials, struck once: a breech, a latch, a slide coming home. */
+function clank(sr: number, r: Rnd, f0: number, len: number) {
+  const fs = [1, 1.83, 2.71, 4.1].map((k) => f0 * k * (0.96 + r() * 0.08))
+  const os = fs.map(() => new Osc(r()))
+  const lp = new Svf()
+  return render(sr, len, (t) => {
+    const ring = os.reduce((s, o, k) => s + o.sin(fs[k], sr) * Math.exp(-t / (len * 0.25 / (1 + k * 0.6))) / (k + 1), 0)
+    const knock = lp.run(noise(), 2200, 0.8, sr).low * ad(t, 0.0004, 0.006)
+    return ring + knock * 1.4
+  })
+}
+
+/** A Confederacy fighter's plasma gun: a lower, harder zap than the Republic's, with a short hot
+ * sizzle on its front, held between 260 Hz and 2.2 kHz. */
+const forgePew: Recipe = (sr, r) => {
+  const o1 = new Osc(r())
+  const o2 = new Osc(r())
+  const bp = new Svf()
+  const hs = new Svf()
+  const lp = new Svf()
+  const hp = new Svf()
+  const f0 = 1100 * (0.94 + r() * 0.12)
+  return render(sr, 0.085, (t) => {
+    const fr = glide(f0, 260, t, 0.05)
+    const raw = o1.sqr(fr, sr) * 0.6 + o2.saw(fr * 0.5, sr) * 0.5
+    const zap = bp.run(raw + noise() * 0.2, glide(1900, 520, t, 0.05), 0.85, sr).band
+    const sizzle = hs.run(noise(), 1800, 0.6, sr).band * ad(t, 0.0003, 0.008)
+    const hot = soft((zap * 1.4 + sizzle * 0.9) * ad(t, 0.0004, 0.022) * 3)
+    const low = lp.run(hot, 2200, 0.7, sr).low
+    return low - hp.run(low, 260, 0.9, sr).low
+  })
+}
+
+/** A Confederacy warship's plasma bolt: a thick, falling square pair through a closing filter, with
+ * the breech clanking home under it. Darker than the Republic's laser cannon. */
+const forgeBolt: Recipe = (sr, r) => {
+  const o1 = new Osc(r())
+  const o2 = new Osc(r())
+  const f = new Svf()
+  const lp = new Svf()
+  const f0 = 880 * (0.92 + r() * 0.16)
+  const bolt = render(sr, 0.24, (t) => {
+    const fr = glide(f0, 140, t, 0.15)
+    const tone = o1.sqr(fr, sr) * 0.6 + o2.sqr(fr * 1.5, sr) * 0.25
+    const zap = f.run(tone + noise() * 0.1, glide(2600, 450, t, 0.15), 0.4, sr).band * ad(t, 0.002, 0.055)
+    return soft(lp.run(zap * 2.2, 2400, 0.7, sr).low)
+  })
+  return layers(sr, [{ data: bolt }, { data: clank(sr, r, 210, 0.12), gain: 0.28 }])
+}
+
+/** A Confederacy heavy gun: a cannon, not a turbolaser. A deep thump, a blast of dark noise and the
+ * breech sliding home in short metal partials. */
+const forgeCannon: Recipe = (sr, r) => {
+  const b = new Osc()
+  const body = new Svf()
+  const zf = new Svf()
+  const z = new Osc(r())
+  const f0 = 520 * (0.9 + r() * 0.2)
+  const blast = render(sr, 0.65, (t) => {
+    const thump = b.sin(glide(120, 32, t, 0.35), sr) * ad(t, 0.003, 0.22)
+    const roar = body.run(noise(), glide(1300, 180, t, 0.3), 0.7, sr).low * ad(t, 0.001, 0.09)
+    // A short plasma zap on top, so it still reads as a shot rather than a blast.
+    const zap = zf.run(z.saw(glide(f0, 90, t, 0.2), sr), glide(1800, 240, t, 0.2), 0.5, sr).band * ad(t, 0.002, 0.07)
+    return soft(thump * 1.6 + roar * 1.2 + zap * 0.9)
+  })
+  return layers(sr, [{ data: blast }, { data: clank(sr, r, 150, 0.3), gain: 0.35, at: 0.07 }])
+}
+
+/** Confederacy point defence: an autocannon's "chug", the flak crack over a lower, punchier body. */
+const forgeFlak: Recipe = (sr, r) => {
+  const hp = new Svf()
+  const lp = new Svf()
+  const o = new Osc()
+  const tone = 62 + r() * 20
+  return render(sr, 0.15, (t) => {
+    const crack = hp.run(noise(), 1700 + r() * 500, 0.9, sr).high * ad(t, 0.0005, 0.012)
+    const body = lp.run(noise(), 650, 0.6, sr).low * ad(t, 0.002, 0.05)
+    const chug = o.sin(glide(tone * 2.4, tone, t, 0.04), sr) * ad(t, 0.002, 0.06)
+    return soft(crack * 0.9 + body * 1.1 + chug * 1.3)
+  })
+}
+
+/** The Breaker's ion lance: a capacitor whining up, then a heavy, wobbling discharge with a crackle
+ * of arcs. Longer and deeper than the Republic's ion cannon. */
+const forgeLance: Recipe = (sr, r) => {
+  const w = new Osc(r())
+  const o1 = new Osc(r())
+  const o2 = new Osc(r())
+  const lp = new Svf()
+  const bp = new Svf()
+  const f0 = 170 * (0.92 + r() * 0.16)
+  return render(sr, 0.75, (t) => {
+    const whine = w.sin(glide(320, 1500, t, 0.14), sr) * (t < 0.15 ? Math.min(1, t / 0.12) * 0.35 : 0) * ad(t - 0.15, 0, 0.01)
+    const d = t - 0.13
+    const wob = 1 + 0.35 * Math.sin(TAU * 21 * t)
+    const tone = d < 0 ? 0 : lp.run(o1.saw(glide(f0, 46, d, 0.45), sr) + o2.sqr(glide(f0, 46, d, 0.45) * 1.01, sr) * 0.5, glide(1300, 220, d, 0.4), 1.4, sr).low * wob * ad(d, 0.004, 0.2)
+    const arcs = d < 0 ? 0 : bp.run(noise() * (r() < 0.07 ? 1 : 0.12), 1500, 1.1, sr).band * ad(d, 0.001, 0.14)
+    return soft(whine + tone * 1.6 + arcs * 0.8)
+  })
+}
+
+// The Swarm: living ships ---------------------------------------------------------------------------
+// Wet, organic and breathing: spit, pulses, spores and acid, chitters for voices, and the deep groans
+// of the big living hulls.
+
+/**
+ * A bubble's pop: a sine whose pitch rises as it decays (a bubble shrinking), started `at` seconds
+ * in. Stateless, so any recipe can sprinkle a few.
+ */
+function bubble(t: number, at: number, f0: number, len: number) {
+  const d = t - at
+  if (d < 0 || d > len * 6) return 0
+  return Math.sin(TAU * f0 * (d + (d * d) / (len * 2))) * Math.exp(-d / len) * Math.min(1, d / 0.0015)
+}
+
+/** A Swarm strike craft's spit: a short wet slap of noise with a quick downward blip. */
+const swarmSpit: Recipe = (sr, r) => {
+  const bp = new Svf()
+  const o = new Osc(r())
+  const lp = new Svf()
+  const f = 1400 * (0.9 + r() * 0.2)
+  return render(sr, 0.09, (t) => {
+    const slap = bp.run(noise(), glide(f, 480, t, 0.05), 0.7, sr).band * ad(t, 0.0006, 0.018)
+    const blip = o.sin(glide(700, 190, t, 0.035), sr) * ad(t, 0.001, 0.025)
+    return soft(lp.run(slap * 1.5 + blip * 0.9 + bubble(t, 0.012, 520, 0.012) * 0.4, 2400, 0.7, sr).low * 2)
+  })
+}
+
+/** A Swarm warship's bio-plasma pulse: a wet, vowel-like "bwop", a falling tone through two moving
+ * formants. */
+const swarmPulse: Recipe = (sr, r) => {
+  const o = new Osc(r())
+  const o2 = new Osc(r())
+  const f1 = new Svf()
+  const f2 = new Svf()
+  const f0 = 240 * (0.9 + r() * 0.2)
+  return render(sr, 0.24, (t) => {
+    const fr = glide(f0, 85, t, 0.16)
+    const src = o.saw(fr, sr) * 0.7 + o2.sin(fr * 0.5, sr) * 0.5
+    const a = f1.run(src, glide(800, 300, t, 0.14), 0.45, sr).band
+    const b = f2.run(src, glide(1500, 750, t, 0.14), 0.55, sr).band
+    return soft((a * 1.6 + b * 0.9) * ad(t, 0.003, 0.06) + bubble(t, 0.05, 380, 0.02) * 0.25)
+  })
+}
+
+/** A Swarm heavy weapon: a spore sac thudding off. A muffled deep thump, a wet splat and a short
+ * gurgle of bubbles. */
+const sporeThud: Recipe = (sr, r) => {
+  const b = new Osc()
+  const lp = new Svf()
+  const pops = Array.from({ length: 6 }, () => [0.08 + r() * 0.3, 200 + r() * 260, 0.012 + r() * 0.015] as const)
+  return render(sr, 0.6, (t) => {
+    const thump = b.sin(glide(95, 34, t, 0.3), sr) * ad(t, 0.004, 0.18)
+    const splat = lp.run(noise(), glide(1100, 260, t, 0.12), 0.7, sr).low * ad(t, 0.001, 0.05)
+    let gurgle = 0
+    for (const [at, f, len] of pops) gurgle += bubble(t, at, f, len)
+    return soft(thump * 1.7 + splat * 1.3 + gurgle * 0.35)
+  })
+}
+
+/** Swarm point defence: spore bursts, a few soft popping puffs close together. */
+const sporeBurst: Recipe = (sr, r) => {
+  const lp = new Svf()
+  const o = new Osc()
+  const puffs = Array.from({ length: 3 + Math.floor(r() * 2) }, (_, i) => i * 0.028 + r() * 0.012)
+  return render(sr, 0.17, (t) => {
+    let env = 0
+    for (const at of puffs) env += ad(t - at, 0.002, 0.016)
+    const puff = lp.run(noise(), 900, 0.7, sr).low * env
+    const pop = o.sin(glide(180, 90, t, 0.06), sr) * ad(t, 0.002, 0.03)
+    return soft(puff * 1.6 + pop * 0.6)
+  })
+}
+
+/** Acid (the Swarm's torpedoes and parasites): a hiss of high noise sizzling down, with a fizzing
+ * tail of tiny crackles. */
+const acidHiss: Recipe = (sr, r) => {
+  const bp = new Svf()
+  const hp = new Svf()
+  const snaps = Array.from({ length: 24 }, () => [0.04 + r() * 0.3, 0.3 + r() * 0.7] as const)
+  return render(sr, 0.38, (t) => {
+    let fizz = 0
+    for (const [at, g] of snaps) {
+      const d = t - at
+      if (d >= 0 && d < 0.002) fizz += noise() * g * (1 - d / 0.002)
+    }
+    const hiss = bp.run(noise(), glide(4800, 1700, t, 0.3), 0.5, sr).band * ad(t, 0.01, 0.12)
+    const v = hiss * 1.3 + fizz * 0.6
+    return soft(v - hp.run(v, 500, 0.8, sr).low)
+  })
+}
+
+/** A Swarm nerve pulse (its ion kind): a low throbbing wobble, felt more than heard. */
+const nervePulse: Recipe = (sr, r) => {
+  const o = new Osc(r())
+  const s = new Osc(r())
+  const lp = new Svf()
+  return render(sr, 0.5, (t) => {
+    const throb = 0.55 + 0.45 * Math.sin(TAU * 17 * t)
+    const tone = lp.run(o.saw(glide(150, 62, t, 0.35), sr), glide(900, 220, t, 0.3), 1.2, sr).low * throb
+    const sub = s.sin(glide(70, 40, t, 0.4), sr)
+    return soft((tone * 1.3 + sub * 0.8) * ad(t, 0.01, 0.16))
+  })
+}
+
+/** A living hull's groan: a slow, wavering low tone sinking through a closing filter, `len` long. */
+function groan(sr: number, r: Rnd, len: number, f0 = 58) {
+  const o = new Osc(r())
+  const o2 = new Osc(r())
+  const f = new Svf()
+  const rate = 1.2 + r() * 1.2
+  return render(sr, len, (t) => {
+    const fr = glide(f0, f0 * 0.62, t, len) * (1 + 0.04 * Math.sin(TAU * rate * t))
+    const v = o.saw(fr, sr) + o2.saw(fr * 1.007, sr) * 0.6
+    return f.run(v, glide(520, 150, t, len), 1.1, sr).low * Math.sin(Math.PI * Math.min(1, t / len)) ** 1.5
+  })
+}
+
+/** A bolt striking living tissue: a wet thud and a splat, no metal in it. */
+const wetHit = (heavy: boolean): Recipe => (sr, r) => {
+  const len = heavy ? 0.22 : 0.1
+  const lp = new Svf()
+  const o = new Osc()
+  const hp = new Svf()
+  return render(sr, len, (t) => {
+    const splat = lp.run(noise(), heavy ? 700 : 1000, 0.7, sr).low * ad(t, 0.0008, heavy ? 0.04 : 0.016)
+    const thud = o.sin(glide(heavy ? 120 : 190, heavy ? 55 : 110, t, 0.05), sr) * ad(t, 0.002, heavy ? 0.06 : 0.02)
+    const v = splat * 1.5 + thud * (heavy ? 1.2 : 0.6) + bubble(t, heavy ? 0.03 : 0.015, 300 + r() * 200, 0.015) * 0.3
+    return soft(v - hp.run(v, heavy ? 50 : 120, 0.8, sr).low)
+  })
+}
+
+/** A Swarm brood hatching: a fleshy squelch, bubbles, and a burst of chitters. */
+const hatch: Recipe = (sr, r) => {
+  const lp = new Svf()
+  const pops = Array.from({ length: 8 }, () => [r() * 0.3, 160 + r() * 300, 0.01 + r() * 0.02] as const)
+  const squelch = render(sr, 0.5, (t) => {
+    let g = 0
+    for (const [at, f, len] of pops) g += bubble(t, at, f, len)
+    return lp.run(noise(), glide(500, 1400, t, 0.3), 0.7, sr).low * Math.sin(Math.PI * Math.min(1, t / 0.45)) ** 2 + g * 0.3
+  })
+  return layers(sr, [{ data: squelch }, { data: chitter(sr, r, 'select'), gain: 0.5, at: 0.2 }])
+}
+
 // Interface and crew -----------------------------------------------------------------------------------
 
 /** A radio: band-limited and a little crunchy, like a comm channel. */
@@ -517,15 +783,92 @@ function chatter(sr: number, r: Rnd, count: number, contour: number, base = 380)
   return m
 }
 
+/**
+ * The Confederacy's command net: a relay's clack, then terse low pulse tones over a narrow, crunchy
+ * telemetry channel (bit-crushed, no squelch). Orders read as data bursts: rising pulses to move,
+ * hard falling ones to attack, one long low tone to hold.
+ */
+function commandNet(sr: number, r: Rnd, kind: OrderKind | 'select', base: number) {
+  const tunes: Record<OrderKind | 'select', [number, number][]> = {
+    select: [[0, 0.04], [7, 0.06]],
+    move: [[0, 0.04], [5, 0.04], [7, 0.06]],
+    attack: [[7, 0.035], [3, 0.035], [0, 0.07]],
+    attackMove: [[5, 0.04], [0, 0.06]],
+    patrol: [[0, 0.04], [7, 0.04], [0, 0.05]],
+    hold: [[0, 0.16]],
+    stop: [[-5, 0.05], [-5, 0.05]],
+    rally: [[0, 0.04], [12, 0.07]],
+    target: [[12, 0.025], [12, 0.025], [7, 0.025], [12, 0.08]],
+  }
+  const tones = melody(sr, base, tunes[kind], 'sqr', 0.018, true)
+  // Bit-crushed: held every few samples and stepped to a few levels, like a telemetry link.
+  const hold = 3 + Math.floor(r() * 2)
+  let held = 0
+  for (let i = 0; i < tones.length; i++) {
+    if (i % hold === 0) held = Math.round(tones[i] * 6) / 6
+    tones[i] = held
+  }
+  const bp = new Svf()
+  const relay = render(sr, 0.02, (t) => bp.run(noise(), 2600, 0.7, sr).band * ad(t, 0.0003, 0.003))
+  return layers(sr, [{ data: relay, gain: 0.8 }, { data: tones, gain: 0.7, at: 0.018 }])
+}
+
+/** A big Confederacy ship's servo whine, under its command net. */
+function servo(sr: number, r: Rnd, len: number) {
+  const o = new Osc(r())
+  const f = new Svf()
+  return render(sr, len, (t) => f.run(o.saw(glide(300, 520, t, len * 0.6), sr), 900, 0.8, sr).low * Math.sin(Math.PI * Math.min(1, t / len)))
+}
+
+/**
+ * Swarm chitters: a fast trill of clicks through a moving formant. A short chirrup to answer a
+ * selection, a hissing rattle to attack, a low purr to move.
+ */
+function chitter(sr: number, r: Rnd, kind: OrderKind | 'select', pitch = 1) {
+  const fierce = kind === 'attack' || kind === 'attackMove' || kind === 'target'
+  const calm = kind === 'move' || kind === 'patrol' || kind === 'rally' || kind === 'hold' || kind === 'stop'
+  const len = fierce ? 0.3 : calm ? 0.26 : 0.14
+  const rate = (fierce ? 75 : calm ? 34 : 55) * (0.9 + r() * 0.2) * pitch
+  const bp = new Svf()
+  const hs = new Svf()
+  const f0 = (calm ? 650 : 1700) * pitch
+  const f1 = (calm ? 480 : fierce ? 1300 : 2500) * pitch
+  return render(sr, len, (t) => {
+    // A click at every turn of the trill: a couple of milliseconds of noise.
+    const ph = (t * rate) % 1
+    const click = ph < 0.08 ? noise() * (1 - ph / 0.08) : 0
+    const trill = bp.run(click, glide(f0, f1, t, len), 0.35, sr).band
+    const hiss = fierce ? hs.run(noise(), 3200, 0.6, sr).band * 0.35 : 0
+    return soft((trill * 2.2 + hiss) * Math.sin(Math.PI * Math.min(1, t / len)))
+  })
+}
+
 /** A crew acknowledgement: what they say depends on the order and who they are. */
 const ack = (kind: OrderKind | 'select', faction: FactionId, tier: Tier = 'frigate'): Recipe => (sr, r) => {
   // Small craft answer higher and quicker, flagships lower.
   const shift = { fighter: 4, gunship: 2, frigate: 0, cruiser: -2, capital: -4, station: -5, mine: 0, defense: 0, yard: -3 }[tier]
-  // Each faction's crews have their own voice (FactionInfo `sound`): clone crews beep, droids chatter.
-  if (FACTIONS[faction].sound.voice === 'droid') {
-    const contour = { select: 0, move: 1, attack: -1, attackMove: -0.5, patrol: 0.5, hold: 0, stop: -1, rally: 1, target: 1.5 }[kind]
-    const count = kind === 'select' ? 2 + Math.floor(r() * 2) : 3 + Math.floor(r() * 2)
-    return radio(sr, chatter(sr, r, count, contour, 262 * semi(shift)), false)
+  const big = tier === 'cruiser' || tier === 'capital' || tier === 'station'
+  // Each faction's crews have their own voice (see VOICE): clone crews beep over a squelchy radio,
+  // the Confederacy's command net clacks and pulses, the Swarm chitters.
+  const voice = VOICE[faction]
+  if (voice === 'net') {
+    const msg = commandNet(sr, r, kind, 196 * semi(shift))
+    const net = radio(sr, msg, false)
+    if (!big) return net
+    // Big ships add a servo whine under it, the station a deep transformer hum.
+    const under = tier === 'station'
+      ? (() => {
+          const a = new Osc()
+          const b = new Osc()
+          return render(sr, net.length / sr, (t) => (a.sin(100, sr) + b.sin(200, sr) * 0.4) * Math.min(1, t / 0.02))
+        })()
+      : servo(sr, r, net.length / sr)
+    return layers(sr, [{ data: net }, { data: under, gain: 0.3 }])
+  }
+  if (voice === 'hive') {
+    const ch = chitter(sr, r, kind, semi(shift * 0.5))
+    // Cruisers and the Leviathan answer with a living ship's groan under the chitter.
+    return big ? layers(sr, [{ data: groan(sr, r, 0.7, tier === 'cruiser' ? 70 : 52), gain: 0.9 }, { data: ch, gain: 0.6, at: 0.05 }]) : ch
   }
   const tunes: Record<OrderKind | 'select', [number, number][]> = {
     select: [[7, 0.05], [12, 0.07]],
@@ -655,6 +998,8 @@ const drum = (sr: number) => {
 
 /** A ship rolls out of the yard: hangar doors, a gust, and the crew reporting in. Flagships get a horn. */
 const shipReady = (faction: FactionId, tier: Tier): Recipe => (sr, r) => {
+  // A Swarm ship is born, not launched: a birthing groan and its first chitter.
+  if (SET[faction] === 'hive') return layers(sr, [{ data: groan(sr, r, tier === 'capital' ? 1.4 : 0.8, tier === 'capital' ? 48 : 66), gain: 0.8 }, { data: hatch(sr, r), gain: 0.5, at: 0.1 }, { data: ack('select', faction, tier)(sr, r), gain: 0.7, at: 0.35 }])
   const parts = [{ data: metal(true)(sr, r), gain: 0.3 }, { data: launch(sr, r), gain: 0.5, at: 0.05 }, { data: ack('select', faction, tier)(sr, r), gain: 0.7, at: 0.3 }]
   if (tier === 'capital') parts.push({ data: brass(sr, 110, [[[0, 7, 12], 1.0]], 0.8), gain: 0.8, at: 0 })
   return layers(sr, parts)
@@ -718,7 +1063,7 @@ const swoosh = (open: boolean): Recipe => (sr) => {
   return render(sr, 0.25, (t) => bp.run(noise(), open ? glide(400, 1800, t, 0.2) : glide(1800, 400, t, 0.2), 0.4, sr).band * Math.sin(Math.PI * Math.min(1, t / 0.22)) ** 2)
 }
 
-const abilitySound = (id: AbilityId): Recipe => (sr, r) => {
+const abilitySound = (id: AbilityId, set: SoundSet = 'republic'): Recipe => (sr, r) => {
   if (id === 'shieldBoost') {
     const shimmer = bells(sr, 440, [0, 4, 7, 12, 16], 1.0, 0.04)
     return layers(sr, [{ data: shimmer }, { data: swoosh(true)(sr, r), gain: 0.6 }])
@@ -727,6 +1072,26 @@ const abilitySound = (id: AbilityId): Recipe => (sr, r) => {
     const o = new Osc()
     const charge = render(sr, 0.35, (t) => o.saw(glide(220, 900, t, 0.35), sr) * Math.min(1, t / 0.3) * 0.5)
     return layers(sr, [{ data: charge }, ...Array.from({ length: 8 }, (_, k) => ({ data: flak(sr, r), at: 0.32 + k * 0.07, gain: 0.7 }))])
+  }
+  if ((id === 'repairSwarm' || id === 'fieldRepair') && set === 'forge') {
+    // Welding torches crackling and ratchets turning: repair machinery, no bleeps.
+    const bp = new Svf()
+    const torch = render(sr, 1.0, (t) => bp.run(noise() * (Math.random() < 0.12 ? 1 : 0.2), 2400, 0.9, sr).band * Math.sin(Math.PI * Math.min(1, t / 0.95)))
+    const ratchet = render(sr, 0.5, (t) => ((t * 28) % 1 < 0.1 ? noise() : 0) * ad(t, 0.01, 0.3))
+    return layers(sr, [{ data: torch, gain: 0.7 }, { data: ratchet, gain: 0.5, at: 0.15 }, { data: clank(sr, r, 260, 0.15), gain: 0.4, at: 0.6 }])
+  }
+  if ((id === 'repairSwarm' || id === 'fieldRepair') && set === 'hive') {
+    // A slow, warm pulse of tissue knitting, with a few wet clicks.
+    const o = new Osc()
+    const swell = render(sr, 1.2, (t) => o.sin(110 + 8 * Math.sin(TAU * 0.8 * t), sr) * (0.5 + 0.5 * Math.sin(TAU * 3 * t)) * Math.sin(Math.PI * Math.min(1, t / 1.15)))
+    return layers(sr, [{ data: swell }, ...[0.2, 0.5, 0.8].map((at) => ({ data: wetHit(false)(sr, r), gain: 0.35, at }))])
+  }
+  if (id === 'launchSwarm' && set === 'hive') return layers(sr, Array.from({ length: 3 }, (_, k) => ({ data: hatch(sr, r), at: k * 0.16, gain: 0.8 })))
+  if (id === 'launchSwarm' && set === 'forge') {
+    const o = new Osc()
+    const f = new Svf()
+    const blip = render(sr, 0.3, (t) => f.run(o.sqr(t < 0.15 ? 440 : 330, sr), 1400, 0.6, sr).low * (t % 0.15 < 0.13 ? 1 : 0))
+    return layers(sr, [{ data: blip, gain: 0.5 }, ...Array.from({ length: 4 }, (_, k) => ({ data: launch(sr, r), at: 0.25 + k * 0.12, gain: 0.8 }))])
   }
   if (id === 'repairSwarm' || id === 'fieldRepair') {
     const chirps = Array.from({ length: 6 }, (_, k) => ({ data: chatter(sr, r, 3, 1, 520), at: k * 0.14, gain: 0.5 }))
@@ -748,6 +1113,13 @@ const abilitySound = (id: AbilityId): Recipe => (sr, r) => {
 /** Crew answers, interface sounds and abilities play at half the level they were first tuned at:
  * heard on every click, they were too loud next to the battle. */
 const UI_LEVEL = 0.5
+
+/** Each set's guns, by weapon kind; `light` is a strike craft's (and gunship's) guns. */
+const GUNS: Record<SoundSet, Record<WeaponKind | 'light', Recipe>> = {
+  republic: { light: fighterBlaster(false), laser: blaster(false), turbo: turbolaser, flak, missile, ion: ionShot },
+  forge: { light: forgePew, laser: forgeBolt, turbo: forgeCannon, flak: forgeFlak, missile, ion: forgeLance },
+  hive: { light: swarmSpit, laser: swarmPulse, turbo: sporeThud, flak: sporeBurst, missile: acidHiss, ion: nervePulse },
+}
 
 // --- Engine ---------------------------------------------------------------------------------------------
 
@@ -927,11 +1299,14 @@ export class EmpiresSound {
    * at a time so the page stays responsive, instead of hitching the first time each one plays. */
   async warm(faction: FactionId) {
     if (!this.ctx) return
+    // Every set's guns (a battle can have all three sides in it), then the rest.
+    const guns = (Object.keys(GUNS) as SoundSet[]).flatMap((set) => (Object.keys(GUNS[set]) as (WeaponKind | 'light')[]).map((k): [string, Recipe, number] => [`${k}-${set}`, GUNS[set][k], k === 'missile' || k === 'ion' ? 3 : 4]))
+    const hive = SET[faction] === 'hive'
     const jobs: [string, Recipe, number][] = [
-      ['pew-republic', fighterBlaster(false), 4], ['pew-droid', fighterBlaster(true), 4], ['laser-republic', blaster(false), 4], ['laser-droid', blaster(true), 4], ['turbo', turbolaser, 4], ['flak', flak, 4], ['missile', missile, 3], ['ion', ionShot, 3],
-      ['shield', shieldHit, 4], ['hull', impact(false), 4], ['hull-heavy', impact(true), 4],
-      ['boom0', explosion(0), 3], ['boom1', explosion(1), 3], ['boom2', explosion(2), 2],
-      ['hpdown', hardpointDown, 3], ['shdown', shieldsDown, 3], ['launch', launch, 3],
+      ...guns,
+      ['shield', shieldHit, 4], ['hull', impact(false), 4], ['hull-heavy', impact(true), 4], ['wet', wetHit(false), 4], ['wet-heavy', wetHit(true), 4],
+      ['boom0', explosion(0), 3], ['boom1', explosion(1), 3], ['boom2', explosion(2), 2], ['boom0-hive', explosion(0, true), 3], ['boom1-hive', explosion(1, true), 3], ['boom2-hive', explosion(2, true), 2],
+      ['hpdown', hardpointDown, 3], ['shdown', shieldsDown, 3], ['launch', launch, 3], ...(hive ? [['hatch', hatch, 3] as [string, Recipe, number]] : []),
       // Jumps: rendered ahead, so the first one in a battle doesn't stall a frame and come in late.
       [`warp-${Math.round(WARP_YARD * 10)}`, warpCharge(WARP_YARD), 2], [`warp-${Math.round(WARP_RESERVE * 10)}`, warpCharge(WARP_RESERVE), 2], ['arrive', warpArrive(false), 2], ['arriveBig', warpArrive(true), 2],
       ...Object.values(RETREAT_TIME).map((secs): [string, Recipe, number] => [`warp-${Math.round(secs * 10)}`, warpCharge(secs), 1]),
@@ -948,36 +1323,45 @@ export class EmpiresSound {
 
   // --- Battle ------------------------------------------------------------------------------------------
 
-  /** `light`: a fighter's guns, smaller and quieter than a warship's. */
+  /** `light`: a fighter's guns, smaller and quieter than a warship's. Each faction's guns sound its
+   * own (see GUNS); the rate limits are per kind of gun, whoever fires it. */
   fire(kind: WeaponKind, where: Where, faction: FactionId, light = false) {
     if (!this.ready()) return
     this.feel(kind === 'turbo' ? 0.4 : light ? 0.05 : 0.1, where)
     if (where.gain < 0.03) return
+    const set = SET[faction]
+    const play = (k: WeaponKind | 'light', o: { gain: number; verb?: number; rate?: number; takes?: number }) => this.play(`${k}-${set}`, GUNS[set][k], { where, ...o })
     if (kind === 'laser' && light) {
       // Dry: reverb would draw the snap out into a whoosh.
-      if (this.allow('pew', 4)) this.play(`pew-${faction}`, fighterBlaster(FACTIONS[faction].sound.blaster === 'droid'), { where, gain: 0.32, verb: 0.08, takes: 4 })
-    } else if (kind === 'laser' && this.allow('laser', 3)) this.play(`laser-${faction}`, blaster(FACTIONS[faction].sound.blaster === 'droid'), { where, gain: 0.5, takes: 4 })
-    else if (kind === 'turbo' && this.allow('turbo', 3, 0.1)) this.play('turbo', turbolaser, { where, gain: 0.8, rate: FACTIONS[faction].sound.turbo, takes: 4 })
-    else if (kind === 'flak' && this.allow('flak', 3)) this.play('flak', flak, { where, gain: 0.55, takes: 4 })
-    else if (kind === 'missile' && this.allow('missile', 2, 0.15)) this.play('missile', missile, { where, gain: 0.6 })
-    else if (kind === 'ion' && this.allow('ion', 2, 0.15)) this.play('ion', ionShot, { where, gain: 0.55, takes: 3 })
+      if (this.allow('pew', 4)) play('light', { gain: 0.32, verb: 0.08, takes: 4 })
+    } else if (kind === 'laser' && this.allow('laser', 3)) play('laser', { gain: 0.5, takes: 4 })
+    else if (kind === 'turbo' && this.allow('turbo', 3, 0.1)) play('turbo', { gain: set === 'republic' ? 0.8 : 0.7, rate: FACTIONS[faction].sound.turbo, takes: 4 })
+    else if (kind === 'flak' && this.allow('flak', 3)) play('flak', { gain: 0.55, takes: 4 })
+    else if (kind === 'missile' && this.allow('missile', 2, 0.15)) play('missile', { gain: set === 'hive' ? 0.45 : 0.6, takes: 3 })
+    else if (kind === 'ion' && this.allow('ion', 2, 0.15)) play('ion', { gain: 0.55, takes: 3 })
   }
 
-  hit(shield: boolean, heavy: boolean, where: Where) {
+  /** A shot landing; `faction`: whose ship it hit (a living hull thuds wetly instead of crunching). */
+  hit(shield: boolean, heavy: boolean, where: Where, faction?: FactionId) {
     if (!this.ready() || where.gain < 0.03) return
     if (shield) {
       if (this.allow('shield', 2, 0.1)) this.play('shield', shieldHit, { where, gain: 0.12, takes: 4 })
-    } else if (this.allow('hull', heavy ? 3 : 2, 0.1)) this.play(heavy ? 'hull-heavy' : 'hull', impact(heavy), { where, gain: heavy ? 0.6 : 0.3, verb: 0.15, takes: 4 })
+    } else if (this.allow('hull', heavy ? 3 : 2, 0.1)) {
+      if (faction && SET[faction] === 'hive') this.play(heavy ? 'wet-heavy' : 'wet', wetHit(heavy), { where, gain: heavy ? 0.55 : 0.3, verb: 0.15, takes: 4 })
+      else this.play(heavy ? 'hull-heavy' : 'hull', impact(heavy), { where, gain: heavy ? 0.6 : 0.3, verb: 0.15, takes: 4 })
+    }
   }
 
-  /** Size is the ship's size in world units: fighters ~30, capital ships ~380. */
-  boom(size: number, where: Where) {
+  /** Size is the ship's size in world units: fighters ~30, capital ships ~380. `faction`: whose it
+   * was (a living ship tears and groans rather than shearing). */
+  boom(size: number, where: Where, faction?: FactionId) {
     if (!this.ready()) return
     const cls = size > 200 ? 2 : size > 60 ? 1 : 0
     this.feel([0.6, 1.5, 4][cls], where)
     if (where.gain < 0.02) return
     if (!this.allow(`boom${cls}`, [4, 3, 2][cls], 0.15)) return
-    this.play(`boom${cls}`, explosion(cls), { where, gain: [0.6, 0.85, 1][cls], verb: 0.5, takes: cls === 2 ? 2 : 3 })
+    const hive = !!faction && SET[faction] === 'hive'
+    this.play(`boom${cls}${hive ? '-hive' : ''}`, explosion(cls, hive), { where, gain: [0.6, 0.85, 1][cls], verb: 0.5, takes: cls === 2 ? 2 : 3 })
   }
 
   /** A jump starting somewhere we can see or hear; it winds up for `secs`, until the ship drops out. */
@@ -994,20 +1378,28 @@ export class EmpiresSound {
     if (where.gain > 0.03 && this.allow(big ? 'arriveBig' : 'arrive', 3, 0.1)) this.play(big ? 'arriveBig' : 'arrive', warpArrive(big), { where, gain: big ? 0.45 : 0.35, verb: 0.5, takes: 2 })
   }
 
-  hardpointDown(where: Where) {
-    if (this.ready() && where.gain > 0.03 && this.allow('hpdown', 2, 0.2)) this.play('hpdown', hardpointDown, { where, gain: 0.8 })
+  /** `faction`: whose part it was (a Swarm organ bursts wetly). */
+  hardpointDown(where: Where, faction?: FactionId) {
+    if (!this.ready() || where.gain <= 0.03 || !this.allow('hpdown', 2, 0.2)) return
+    if (faction && SET[faction] === 'hive') this.play('hpdown-hive', (sr, r) => layers(sr, [{ data: wetHit(true)(sr, r) }, { data: explosion(0, true)(sr, r), gain: 0.6 }]), { where, gain: 0.8 })
+    else this.play('hpdown', hardpointDown, { where, gain: 0.8 })
   }
 
   shieldsDown(where: Where) {
     if (this.ready() && where.gain > 0.05 && this.allow('shdown', 1, 0.3)) this.play('shdown', shieldsDown, { where, gain: 0.35 })
   }
 
-  launch(where: Where) {
-    if (this.ready() && where.gain > 0.05 && this.allow('launch', 2, 0.2)) this.play('launch', launch, { where, gain: 0.5 })
+  /** Strike craft out of a hangar; a Swarm brood hatching. */
+  launch(where: Where, faction?: FactionId) {
+    if (!this.ready() || where.gain <= 0.05 || !this.allow('launch', 2, 0.2)) return
+    if (faction && SET[faction] === 'hive') this.play('hatch', hatch, { where, gain: 0.45 })
+    else this.play('launch', launch, { where, gain: 0.5 })
   }
 
-  ability(id: AbilityId, where?: Where) {
-    if (this.ready()) this.play(`ab-${id}`, abilitySound(id), { bus: 'voice', where, gain: 0.8 * UI_LEVEL, takes: 2 })
+  /** An ability used; `faction`: whose (each set does its repairs and launches its own way). */
+  ability(id: AbilityId, where?: Where, faction?: FactionId) {
+    const set = faction ? SET[faction] : 'republic'
+    if (this.ready()) this.play(`ab-${id}-${set}`, abilitySound(id, set), { bus: 'voice', where, gain: 0.8 * UI_LEVEL, takes: 2 })
   }
 
   // --- Crew and interface ---------------------------------------------------------------------------------

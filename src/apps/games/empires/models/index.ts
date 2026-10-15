@@ -1,11 +1,12 @@
 import { FACTION_IDS, STATIONS, UNITS, dims, stationType, type FactionId, type Tier, type UnitType } from '../data.ts'
 import { MODELS as droid } from './droid/index.ts'
 import { expansionParts } from './expansions.ts'
+import { drawnDesign } from './mounts.ts'
 import { circle, hash, inPart, inPoly, jagged, rng, seedOf } from './kit.ts'
 import { MODELS as republic } from './republic/index.ts'
 import type { FactionModels, ModelDef } from './spec.ts'
 import { MODELS as swarm } from './swarm/index.ts'
-import type { BreakKind, HullState, Model, Mount, MountDesign, Part, Pt, Scorch } from './types.ts'
+import type { AnyDesign, BreakKind, HullState, Model, Mount, MountDesign, Part, Pt, Scorch } from './types.ts'
 
 // Procedural models: which units have one, building a model for a unit type, its damage state, and
 // how it breaks apart when destroyed. No DOM here (see models/paint.ts for the drawing), so the
@@ -67,9 +68,10 @@ export function typeOfSprite(sprite: string): UnitType | null {
   return UNITS.find((u) => u.sprite === sprite && u.tier !== 'station') ?? null
 }
 
-/** Which mounts blow off by default: small flak turrets. Heavy guns, shield generators, hangars and
+/** Which mounts blow off by default: small flak turrets (and the extras of their size: point
+ * defence, quad guns, spore launchers, parasite pods). Heavy guns, shield generators, hangars and
  * station modules stay on the hull, wrecked. */
-const DETACH_BY_DEFAULT: MountDesign[] = ['flak']
+const DETACH_BY_DEFAULT: AnyDesign[] = ['flak', 'pd', 'quad', 'spore', 'parasite']
 
 export function buildModel(t: UnitType, style?: string): Model {
   const def = DEFS[t.id]
@@ -94,8 +96,11 @@ export function buildModel(t: UnitType, style?: string): Model {
   const grid = (gx: number, gy: number): Pt => [(gx / 10 - 0.5) * w, (gy / 10 - 0.5) * h]
   const mounts: Mount[] = t.hardpoints.map((hp, i) => {
     const [x, y] = grid(hp.x, hp.y)
-    const design: MountDesign = hp.art ?? (hp.kind === 'engine' ? 'engine' : hp.kind === 'turret' ? 'turbo' : (hp.kind as MountDesign))
-    const { scale = 1, ...over } = spec.mount?.(i) ?? {}
+    // Its own look (an extra design, see models/mounts.ts), else its art's, else its kind's; then the
+    // model's override; and an extra this faction doesn't draw becomes the common design nearest it.
+    const named: AnyDesign = hp.look ?? hp.art ?? (hp.kind === 'engine' ? 'engine' : hp.kind === 'turret' ? 'turbo' : (hp.kind as MountDesign))
+    const { scale = 1, design: picked, ...over } = spec.mount?.(i) ?? {}
+    const design = drawnDesign(picked ?? named, t.faction)
     // An expansion module is drawn as parts of the structure (base.ts): its mount is the collar
     // that shows the stump once it is shot off.
     if (hp.exp) return { hp: i, x, y, r: ((hp.s ?? 0.05) * long) / 2, design: 'collar' as const, turns: false, detach: false }

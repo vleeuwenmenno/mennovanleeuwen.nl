@@ -2351,7 +2351,7 @@ a touch screen the button is held for 0.6 s (a ring fills round it) so a stray t
   craft or engineers work on it (engineers ordered onto it, or idle ones nearby by themselves);
   several of them don't make it faster. Its unbuilt hull fills in and its parts go on one by one
   (whole) as it goes, free of credits. Ordinary repairs (the Drydock's 2.5%/s, repair docks, repair
-  tenders, Field repair, the repair swarm) mend battle damage but never the unbuilt hull
+  tenders, Field repair, Damage control) mend battle damage but never the unbuilt hull
   (`hullCap`), so rushing never gets a ship out finished sooner.
 - The yard can't rush again for `RUSH.cooldown` (120 s), and the next ship it starts takes
   `RUSH.slowdown` (25%) longer. `RUSH` in [`data.ts`](src/apps/games/empires/data.ts) holds the

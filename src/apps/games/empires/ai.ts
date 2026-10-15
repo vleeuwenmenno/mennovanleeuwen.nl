@@ -159,6 +159,26 @@ export const PROFILES: Record<Profile, Style> = {
     tiers: { gunship: 1.25, fighter: 1.2, capital: 0.85 }, yardDelay: 0, yardGuards: 1, cyardDelay: 75, modules: ['secondSlip', 'strikeHangar', 'sensorArray', 'drydock', 'armourWorks', 'fighterWing', 'shieldCore'], bail: 0.2, sally: 1.6,
   },
 }
+/**
+ * How each faction fights, on top of its admiral's profile (PROFILES):
+ * - the Republic as the profiles say;
+ * - the Confederacy concentrates its fire harder (its warships join a focus from further off, see
+ *   focusFire) and sends its fast warships round the flank of a goal (see waves), and likes its heavy
+ *   classes a little more;
+ * - the Swarm favours numbers and fast production (small, quickly grown ships; build-time research
+ *   worth twice as much) and goes out with smaller waves.
+ * `tiers` multiplies the profile's taste for each class, `wave` the fleet value it waits for before a
+ * wave, `quick` how much it favours ships that are quick to build, `focus` the reach of its focus
+ * fire, `flank` whether fast ships go round the side, `build` the worth of build-time research.
+ */
+type Doctrine = { tiers: Partial<Record<Tier, number>>; wave: number; quick: number; focus: number; flank: boolean; build: number }
+export const DOCTRINE: Record<FactionId, Doctrine> = {
+  republic: { tiers: {}, wave: 1, quick: 0, focus: 1, flank: false, build: 1 },
+  droid: { tiers: { cruiser: 1.1, capital: 1.15 }, wave: 1, quick: 0, focus: 1.3, flank: true, build: 1 },
+  swarm: { tiers: { fighter: 1.2, gunship: 1.2, cruiser: 0.9, capital: 0.85 }, wave: 0.85, quick: 0.35, focus: 1, flank: false, build: 2 },
+}
+const doctrineOf = (w: World, b: Brain) => DOCTRINE[w.players[b.o].faction] ?? DOCTRINE.republic
+
 /** The profile for a stored value: anything unknown (or missing, from before profiles) is Balanced. */
 export const profileOf = (v: unknown): Profile => (typeof v === 'string' && (PROFILE_IDS as string[]).includes(v) ? (v as Profile) : 'balanced')
 
@@ -227,6 +247,9 @@ export type Brain = {
   engWait: number
   /** No reinforcement bought before this (see reinforcements); absent in brains saved before them. */
   reinfAt?: number
+  /** The flagship it has settled on saving for, where its side has more than one (see flagshipFor);
+   * absent until it first wants one. */
+  flag?: string
 }
 
 /** How far from home something has to be before the AI calls a reinforcement in from hyperspace
@@ -357,6 +380,45 @@ const centre = (us: Unit[]) => ({ x: us.reduce((s, u) => s + u.x, 0) / Math.max(
 const warship = (u: Unit) => u.t.tier === 'frigate' || u.t.tier === 'cruiser' || u.t.tier === 'capital'
 /** Repair craft and engineers: they keep to their own work, out of the fighting. */
 const worker = (u: Unit) => u.t.kind === 'repair' || isEngineer(u.t)
+/** Whether a ship type carries a spinal gun (Weapon spinal): the whole ship turns to aim it. */
+const spinalOn = (t: UnitType) => t.weapons.some((x) => x.spinal) || t.hardpoints.some((h) => h.weapon?.spinal)
+
+/**
+ * The flagship it saves for. Most sides have one; where a side has more (the Confederacy's carrier
+ * battleship and its fire-control Tyrant), it settles on one when it first wants a flagship, drawn
+ * by what suits its fleet (a fire-control ship the more warships it has, a carrier a little more,
+ * the cheaper a little more), and keeps to it until one is out. Saving for its side's first
+ * flagship alone, the Confederacy never built a Tyrant.
+ */
+function flagshipFor(w: World, b: Brain): UnitType {
+  const p = w.players[b.o]
+  const all = buildable(p.faction).filter((t) => t.tier === 'capital' && (!t.tech || p.techs.includes(t.tech)))
+  if (all.length <= 1) return all[0] ?? unitOf(p.faction, 'capital')
+  const army = fleet(w, b.o).filter((u) => !u.parent)
+  // One flying or on order: nothing to settle until it's gone.
+  if (army.some((u) => u.t.tier === 'capital') || allQueued(w, b.o).some((q) => UNIT[q.unit].tier === 'capital')) {
+    b.flag = undefined
+    return all[0]
+  }
+  const kept = b.flag ? all.find((t) => t.id === b.flag) : undefined
+  if (kept) return kept
+  const warships = army.filter(warship).length
+  const weights = all.map((t) => (t.fireControl ? 1 + Math.min(1.5, warships / 5) : 1) * (t.carrier ? 1.2 : 1) * Math.sqrt(4000 / Math.max(1000, t.cost)))
+  // Drawn from a hash of the side and the clock, not the battle's dice: settling on a flagship
+  // leaves every other roll of the battle as it was.
+  const roll = ((Math.imul(b.o + 1, 2654435761) ^ Math.imul(Math.floor(w.time), 40503)) >>> 0) / 4294967296
+  let r = roll * weights.reduce((s, v) => s + v, 0)
+  let pick = all[all.length - 1]
+  for (let i = 0; i < all.length; i++) {
+    r -= weights[i]
+    if (r <= 0) {
+      pick = all[i]
+      break
+    }
+  }
+  b.flag = pick.id
+  return pick
+}
 
 function visibleEnemies(w: World, o: Owner, x: number, y: number, r: number) {
   const out: Unit[] = []
@@ -464,6 +526,7 @@ function foeMix(w: World, b: Brain): [UnitType, number][] {
 export function pickShip(w: World, b: Brain, only?: (t: UnitType) => boolean): string | null {
   const p = w.players[b.o]
   const S = PROFILES[b.profile]
+  const Doc = DOCTRINE[p.faction] ?? DOCTRINE.republic
   const options = buildable(p.faction).filter((t) => {
     if (only && !only(t)) return false
     const why = cantBuild(w, b.o, t.id)
@@ -500,14 +563,23 @@ export function pickShip(w: World, b: Brain, only?: (t: UnitType) => boolean): s
     if (t.tier === 'capital') v *= Math.min(1, armyValue / 5000)
     if (p.level >= 3 && (t.tier === 'fighter' || t.tier === 'gunship')) v *= 0.45
     if (p.level >= 4 && t.tier === 'frigate') v *= 0.7
-    return v * (S.tiers[t.tier] ?? 1)
+    return v * (S.tiers[t.tier] ?? 1) * (Doc.tiers[t.tier] ?? 1)
   }
   const weight = (t: UnitType) => {
     let v = tierPref(t) * (0.1 + eff.get(t)! / effMax)
     // Ion barely scratches a hull, whatever its numbers say: one ship to strip shields for every
     // few warships, and only against shields.
-    if (t.kind === 'ion') v *= (shielded > 0.4 ? 0.6 : 0.15) / (1 + count(t.id))
+    // (A spinal lance is its side's shield breaker of choice: worth a little more.)
+    if (t.kind === 'ion') v *= ((shielded > 0.4 ? 0.6 : 0.15) * (spinalOn(t) ? 1.5 : 1)) / (1 + count(t.id))
     if (t.kind === 'bomber') v *= 1 - small * 0.6
+    // A fire-control ship makes every warship round it hit harder: worth more the more there are.
+    if (t.fireControl) v *= 1 + Math.min(1.5, warships / 6) * t.fireControl.bonus * 4
+    // A drain ship heals the fleet it flies with: worth more with a fleet, one or two at most.
+    if (t.drain) v *= (army.length >= 5 ? 1.3 : 0.6) / (1 + 0.6 * count(t.id))
+    // Living hulls mend themselves between fights: a little more staying power than the numbers say.
+    if (t.regrow) v *= 1.1
+    // Quick to build (the Swarm's way): ships out of the yard sooner count for more.
+    if (Doc.quick) v *= Math.pow(30 / Math.max(5, t.build), Doc.quick)
     // A mix rather than one kind: each one already flying makes the next a little less wanted.
     return v / (1 + 0.12 * count(t.id))
   }
@@ -528,7 +600,11 @@ export function pickShip(w: World, b: Brain, only?: (t: UnitType) => boolean): s
 }
 
 /** How much each kind of research is worth per point of effect (0.25 hull is a quarter's worth). */
-const EFFECT_WORTH: Record<string, number> = { range: 1.4, hull: 1, shield: 0.9, regen: 0.3, damage: 1.1, cooldown: 1.1, speed: 0.35, build: 0.4, hangar: 0.9, repair: 0.7, mines: 0 }
+const EFFECT_WORTH: Record<string, number> = {
+  range: 1.4, hull: 1, shield: 0.9, regen: 0.3, damage: 1.1, cooldown: 1.1, speed: 0.35, build: 0.4, hangar: 0.9, repair: 0.7, mines: 0,
+  // The faction mechanics' research (see TechEffect): an aura's few points of bonus go a long way.
+  shieldDamage: 0.8, aura: 5, auraRadius: 0.6, regrow: 0.6, regrowDelay: 0.5, drain: 0.8, drainHeal: 0.5,
+}
 
 /**
  * The research worth doing next, or null: the station's refinery once there are mines to pay it
@@ -560,6 +636,9 @@ function pickTech(w: World, b: Brain, mines: number): Tech | null {
       if (e.mines) s = mines >= 2 ? 2.5 + mines : 0.3
       else if (e.damage) s = b.alarm >= 0 || (b.beaten >= 0 && w.time - b.beaten < 120) ? S.fortify * 2 : p.level >= 2 ? S.fortify : 0
       else if (e.repair) s = heavy ? 4 : warships >= 2 ? 1.2 : 0.2
+      // Every ship built faster: worth it with a fleet to build, the more so for a side that wins by
+      // numbers (DOCTRINE build).
+      else if (e.fleetBuild) s = (army.length >= 4 ? 1.6 : 0.5) * Math.abs(e.fleetBuild) * 10 * DOCTRINE[p.faction].build
     } else if (t.id === RUSH_TECH[p.faction]) {
       // Rushed construction is decided on its own (see think): not weighed against the upgrades.
       s = 0
@@ -568,7 +647,7 @@ function pickTech(w: World, b: Brain, mines: number): Tech | null {
       s = warships >= 2 || (st && st.hull < st.hullMax * 0.8) ? 0.6 + D.menders * 12 : 0
     } else {
       const have = flying.get(t.for) ?? 0
-      const worth = Object.entries(e).reduce((sum, [k, v]) => sum + Math.abs(v ?? 0) * (EFFECT_WORTH[k] ?? 0.5) * 4, 0)
+      const worth = Object.entries(e).reduce((sum, [k, v]) => sum + Math.abs(v ?? 0) * (EFFECT_WORTH[k] ?? 0.5) * (k === 'build' ? DOCTRINE[p.faction].build : 1) * 4, 0)
       s = (have / 1000) * worth * (600 / Math.max(300, t.cost))
     }
     s *= 0.9 + rand(w) * 0.2
@@ -773,7 +852,7 @@ export function think(w: World, b: Brain, dt: number) {
   // income, with a fleet worth guarding it and nothing attacking its base). With the fleet at its
   // limit it sends its cheapest warships home through hyperspace (part of their price comes back,
   // those not out with a wave first) to make room for it.
-  const flag = unitOf(p.faction, 'capital')
+  const flag = flagshipFor(w, b)
   const full = 'Fleet at its limit: capture beacons or upgrade the station'
   const flagWhy = w.hybrid && b.alarm < 0 && !saving && !yardSaving && armyValue >= 4000 && p.credits + p.income * 60 >= flag.cost ? cantBuild(w, o, flag.id) : 'no'
   const flagship = flagWhy === null || flagWhy === 'Not enough credits' || flagWhy === full
@@ -835,6 +914,18 @@ export function think(w: World, b: Brain, dt: number) {
         b.mending.push(u.id)
         mendingIds.add(u.id)
       }
+    }
+  }
+
+  // Living hulls (UnitType regrow) grow back out of the fight: one badly hurt and away from the
+  // rally point pulls back there, out of the wave, and rejoins once it has grown back (see
+  // b.mending), rather than fight on to the end. It needs no dock or repair craft.
+  for (const u of army) {
+    if (!u.t.regrow || u.t.tier === 'fighter' || mendingIds.has(u.id) || u.retreat > 0 || u.hull >= u.hullMax * Math.max(0.35, S.mendAt)) continue
+    if (d2(u, p.rally) < sq(mapDist(900))) continue
+    if (act(b, () => cmdMove(w, o, [u.id], p.rally.x, p.rally.y))) {
+      b.mending.push(u.id)
+      mendingIds.add(u.id)
     }
   }
 
@@ -907,7 +998,8 @@ export function think(w: World, b: Brain, dt: number) {
 
   // Scouts: a couple of fast ships keep the beacons ours.
   if (!b.attacking && b.scouts.size < 2 && w.time >= b.scoutWait) {
-    const spare = army.find((u) => (u.t.tier === 'gunship' || u.t.tier === 'frigate') && !b.scouts.has(u.id) && !raiders.has(u.id) && !mendingIds.has(u.id) && !guards.has(u.id))
+    // (A drain ship stays with the fleet: it's no use on its own.)
+    const spare = army.find((u) => (u.t.tier === 'gunship' || u.t.tier === 'frigate') && !u.t.drain && !b.scouts.has(u.id) && !raiders.has(u.id) && !mendingIds.has(u.id) && !guards.has(u.id))
     if (spare) b.scouts.add(spare.id)
   }
   // Early on, before there are spare warships, the starting fighters do the surveying.
@@ -967,7 +1059,7 @@ function raid(w: World, b: Brain, army: Unit[], st: Unit, enemySt: Unit, n: numb
   const p = w.players[o]
   if (b.raid.length < n) {
     const taken = new Set([...b.raid, ...b.scouts, ...b.mending, ...b.troops, ...b.guards, ...b.escort])
-    const spare = army.find((u) => (u.t.tier === 'gunship' || (u.t.tier === 'fighter' && !worker(u))) && u.t.kind !== 'support' && !taken.has(u.id))
+    const spare = army.find((u) => (u.t.tier === 'gunship' || (u.t.tier === 'fighter' && !worker(u))) && u.t.kind !== 'support' && !u.t.drain && !taken.has(u.id))
     if (spare) for (const u of army.filter((x) => x === spare || (spare.squad && x.squad === spare.squad))) b.raid.push(u.id)
   }
   const crew = b.raid.map((id) => w.byId.get(id)!).filter(Boolean)
@@ -1048,7 +1140,8 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
   let walls = 0
   for (const [wx, wy, g] of Object.values(b.walls)) if (enemySt && sq(wx - enemySt.x) + sq(wy - enemySt.y) < sq(rangeDist(1400))) walls += g
   const ahead = mainValue >= Math.max(seenFoes, walls) * S.edge
-  const ready = !calm && w.time - b.home >= S.rest && ((mainValue >= b.wave && ahead) || p.pop >= p.popCap - 2 || restless || joinAlly || counter)
+  const Doc = doctrineOf(w, b)
+  const ready = !calm && w.time - b.home >= S.rest && ((mainValue >= b.wave * Doc.wave && ahead) || p.pop >= p.popCap - 2 || restless || joinAlly || counter)
   if (!b.attacking) {
     if (!ready) {
       b.muster = -1
@@ -1147,10 +1240,42 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
   const storming = b.storm && goal === enemySt && !visibleEnemies(w, o, c.x, c.y, rangeDist(1150)).some((e) => e.t.tier !== 'fighter')
   if (D.focus && storming) stormFire(w, b, troops, enemySt!)
   else if (D.focus) focusFire(w, b, troops, c)
-  // The ships not yet on their way there go together, as one order.
+  // Drain ships (UnitType drain) keep in among the enemy with the wave: over its focus when that is
+  // near, else the middle of the wave.
+  const drainers = troops.filter((u) => u.t.drain)
+  if (drainers.length) {
+    const f = b.focus ? w.byId.get(b.focus) : undefined
+    const at = f && !f.dead && d2(f, c) < sq(rangeDist(1500)) ? f : c
+    const r = drainers[0].t.drain!.radius * 0.5
+    const lag = drainers.filter((u) => d2(u, at) > sq(r) && !(u.order.k === 'move' && d2(u.order, at) < sq(r * 0.6)))
+    if (lag.length) act(b, () => cmdMove(w, o, lag.map((u) => u.id), at.x, at.y))
+  }
+  // Flanking (DOCTRINE flank): the wave's fast warships go round to a spot beside the goal, on our
+  // side of it, and come in from there, where that is cheap: not while storming the station (its
+  // guns reach all round), and only to a spot on the map clear of nebulas and asteroid fields.
+  let flank: { x: number; y: number } | null = null
+  const speeds = troops.filter((u) => u.t.tier !== 'fighter').map((u) => u.t.speed).sort((a, z) => a - z)
+  const quick = speeds.length ? speeds[Math.floor(speeds.length / 2)] * 1.15 : Infinity
+  const flanker = (u: Unit) => !!flank && (u.t.tier === 'gunship' || u.t.tier === 'frigate') && !u.t.drain && u.t.speed >= quick && d2(u, flank) > sq(mapDist(450))
+  if (Doc.flank && goal !== enemySt && troops.length >= 4) {
+    const ax = goal.x - st.x
+    const ay = goal.y - st.y
+    const ad = M.hypot(ax, ay) || 1
+    const side = b.o % 2 ? 1 : -1
+    const off = mapDist(750)
+    const fx = goal.x + (-ay / ad) * off * side - (ax / ad) * off * 0.35
+    const fy = goal.y + (ax / ad) * off * side - (ay / ad) * off * 0.35
+    if (fx > 200 && fy > 200 && fx < w.w - 200 && fy < w.h - 200 && !inside(w.map.nebulas, fx, fy, 200) && !inside(w.map.fields, fx, fy, 200)) flank = { x: fx, y: fy }
+  }
+  // The ships not yet on their way there go together, as one order (the flankers as another).
   const go: number[] = []
+  const round: number[] = []
   for (const u of troops) {
-    if (u.order.k === 'attack') continue
+    if (u.order.k === 'attack' || u.t.drain) continue
+    if (flank && flanker(u)) {
+      if (u.order.k === 'idle' || (u.order.k === 'move' && d2(u.order, flank) > sq(400))) round.push(u.id)
+      continue
+    }
     // A move ends clear of the structure it was aimed at (see offRocks in sim.ts), so a big hull's
     // spot sits further from it: only a move really aimed elsewhere is given again.
     if (u.order.k === 'idle' || (u.order.k === 'move' && d2(u.order, goal) > sq(400 + radius(u.t)))) go.push(u.id)
@@ -1159,6 +1284,10 @@ function waves(w: World, b: Brain, D: Level, S: Style, st: Unit, enemySt: Unit |
     const x = goal.x + (rand(w) - 0.5) * 300
     const y = goal.y + (rand(w) - 0.5) * 300
     act(b, () => cmdMove(w, o, go, x, y, true))
+  }
+  if (round.length && flank) {
+    const at = flank
+    act(b, () => cmdMove(w, o, round, at.x, at.y, true))
   }
 }
 
@@ -1190,7 +1319,9 @@ function focusFire(w: World, b: Brain, troops: Unit[], c: { x: number; y: number
   if (!e) return
   const target = e
   // The warships near it that aren't on it yet (strike craft keep their own runs).
-  const shooters = troops.filter((u) => u.t.tier !== 'fighter' && !(u.order.k === 'attack' && u.order.id === target.id) && d2(u, target) < sq(rangeDist(1400)) && dpsVs(u.t, target.t.tier) > 0)
+  // (A side that concentrates its fire, DOCTRINE focus, pulls its warships in from further off.)
+  const reach = rangeDist(1400) * doctrineOf(w, b).focus
+  const shooters = troops.filter((u) => u.t.tier !== 'fighter' && !(u.order.k === 'attack' && u.order.id === target.id) && d2(u, target) < sq(reach) && dpsVs(u.t, target.t.tier) > 0)
   if (!shooters.length) return
   const gen = target.hps.length ? target.t.hardpoints.findIndex((h, i) => h.kind === 'shield' && target.hps[i].hp > 0) : -1
   const gun = target.hps.length ? target.t.hardpoints.findIndex((h, i) => h.kind === 'turret' && target.hps[i].hp > 0) : -1

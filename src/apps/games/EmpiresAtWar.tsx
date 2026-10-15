@@ -1060,7 +1060,7 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
     const ready = mySelection().filter((u) => u.t.ability && u.abilityCd <= 0)
     // Online the count isn't known yet: the abilities that are ready will fire.
     const n = order('ability', mySelection().map((u) => u.id), target) ?? ready.length
-    if (n) for (const id of new Set(ready.map((u) => u.t.ability!))) sound.ability(id)
+    if (n) for (const id of new Set(ready.map((u) => u.t.ability!))) sound.ability(id, undefined, myFaction)
     else if (mySelection().some((u) => u.t.ability)) {
       sound.error()
       if (ready.some((u) => u.t.ability === 'fieldRepair')) toast('Field repair: no damaged station or gunship-class ship nearby', 'bad')
@@ -1467,13 +1467,13 @@ function Battle({ win, setup, conquest, online, resume, onSnap, sound, onExit, o
       }
       for (const e of events) {
         if (e.k === 'fire') sound.fire(e.kind, where(e.x, e.y), w.players[e.owner].faction, e.light)
-        else if (e.k === 'hit') sound.hit(e.shield, e.kind === 'turbo' || e.kind === 'missile', where(e.x, e.y))
-        else if (e.k === 'boom') sound.boom(e.size, where(e.x, e.y))
+        else if (e.k === 'hit') sound.hit(e.shield, e.kind === 'turbo' || e.kind === 'missile', where(e.x, e.y), w.players[e.owner]?.faction)
+        else if (e.k === 'boom') sound.boom(e.size, where(e.x, e.y), w.players[e.owner]?.faction)
         else if (e.k === 'shieldsDown') sound.shieldsDown(where(e.x, e.y))
-        else if (e.k === 'launch') sound.launch(where(e.x, e.y))
-        else if (e.k === 'ability' && e.owner !== me) sound.ability(e.id, where(e.x, e.y))
+        else if (e.k === 'launch') sound.launch(where(e.x, e.y), w.players[e.owner]?.faction)
+        else if (e.k === 'ability' && e.owner !== me) sound.ability(e.id, where(e.x, e.y), w.players[e.owner]?.faction)
         else if (e.k === 'hpdown') {
-          sound.hardpointDown(where(e.x, e.y))
+          sound.hardpointDown(where(e.x, e.y), w.players[e.owner]?.faction)
           if (e.owner === me) toast(e.exp ? `${MODULE[e.exp].name} shot off: ${MODULE[e.exp].lost} Engineers weld it back.` : `${HP_NAME[e.what as HardpointKind]} destroyed on one of our ships`, 'bad', { x: e.x, y: e.y })
         } else if (e.k === 'built' && e.owner === me) {
           const t = UNIT[e.unit]
