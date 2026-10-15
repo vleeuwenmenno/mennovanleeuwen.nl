@@ -1,248 +1,210 @@
-import { along, box, chamfer, circle, halfHull, part, rect, sym, turn } from '../kit.ts'
-import * as classic from './craft.ts'
-import { dish, ellBand, engineBlock, eyes, lamps, mast, rivets, sail } from './craft.ts'
-import { calm, seat, type SeatLook } from '../proto.ts'
+import { along, circle, halfHull, part, rect, sym, thick } from '../kit.ts'
+import { hpAt, seat, type SeatLook } from '../proto.ts'
 import type { BuildCtx, ModelDef, ModelSpec } from '../spec.ts'
-import type { Detail, Part, Pt, Tone } from '../types.ts'
+import type { Detail, Part, Pt } from '../types.ts'
+import { across, ambers, antenna, armour, block, bridge, cells, engineModule, mark, nacelle, recess, seam, spine, windows } from './parts.ts'
 
-// The droid navy's warships at their size (sizes.ts), in the same calm style as the Republic's
-// (models/republic/warships.ts): big quiet plates over the gunmetal frames, a single row of rivets,
-// a few eyes and lamps, and one gun per hardpoint on its own seat, the hardpoints where its `layout`
-// (data/droid.ts) puts them.
+// The Confederacy's warships at their size (sizes.ts), each built round its weapons
+// (refs/confederacy.webp): the Breaker destroyer round its spinal ion lance, the Lancer frigate's
+// split bow, the Harrow cruiser's long spine between armoured gun pods, the Tyrant battleship's
+// fire-control tower, and the Dominator dreadnought, a massive multi-section assault ship. Every
+// gun sits on its own seat on a hardpoint where the faction's `layout` (data/droid.ts) puts it; the
+// turrets themselves are drawn by mounts.ts. Engines are external modules with square cyan nozzles.
 
-/** Droid seats: a gunmetal pad, a heavier sand-plated barbette with a rust band. */
-export const DROID_SEAT: SeatLook = { pad: 'metal', heavy: 'hull2', band: 'accent' }
+/** Confederacy seats: a dark charcoal pad, a gunmetal barbette with an orange band. */
+export const CONFED_SEAT: SeatLook = { pad: 'metal', heavy: 'hull2', band: 'accent' }
 
-/** A long plate either side of a spine, from y0 to y1, `w` half-wide: one rivet row, one rust strip. */
-function sidePlate(id: string, y0: number, y1: number, w: number, tone: Tone, z: number, more: Partial<Part> = {}): Part[] {
-  return sym(part(id, [[0, y0], [-w * 0.8, y0], [-w, y0 + 2.4], [-w, y1 - 2.4], [-w * 0.8, y1], [0, y1]], tone, z, {
-    slope: [-0.5, 0],
-    lift: 1,
-    details: [rivets([-w + 1.2, y0 + 3], [-w + 1.2, y1 - 3], 3), { k: 'shape', pts: rect(-w * 0.62, y0 + 2, w * 0.18, y1 - y0 - 4), tone: 'accent' }],
-    ...more,
-  }))
-}
+/** The seat under hardpoint `i`, a little wider than its turret. */
+const seatAt = (c: BuildCtx, i: number, z: number, heavy = false, k = 1.25) => seat(`seat${i}`, c, i, ((c.t.hardpoints[i].s ?? 0.05) * 100 * k) / 2, z, heavy, CONFED_SEAT)
 
-/** Triad gunship at 1.15×: the same three-armed droid, its surface quietened. */
-export const gunship: ModelDef = (c) => calm(classic.gunship(c))
+/** Every gun hardpoint's seat (engines have none). */
+const seats = (c: BuildCtx, z: number, heavy: (i: number) => boolean = () => false): Part[] =>
+  c.t.hardpoints.flatMap((h, i) => (h.kind === 'engine' ? [] : [seatAt(c, i, z, heavy(i))]))
+
+/** Orange capacitor bands across a lance or barrel at each y, `w` wide. */
+const capacitors = (x: number, w: number, ys: number[]): Detail[] => ys.map((y) => mark(rect(x - w / 2, y - 0.8, w, 1.6)))
+
+// --- Breaker destroyer --------------------------------------------------------------------------------
 
 /**
- * Disruptor frigate at 1.4×: a slim gunmetal spine with three long plates strung along it, the ion
- * cannon on a heavy barbette on the forward one, the shield generator amidships and the flak aft,
- * well apart; the great emitter dish at the nose with the ion spike glowing in it, a short sail and
- * vanes aft, two engine blocks.
+ * Breaker destroyer: a long line ship built round its weapon. The spinal ion lance runs down the
+ * keel from the bow, ringed with orange capacitor bands, between two short prongs and armoured
+ * housings; its muzzle at the very bow is shot off with the lance's hardpoint. Behind it the dual
+ * cannons and the shield generator sit down the spine, the flak aft between swept fins, two engine
+ * modules at the stern. The lance's hardpoint is a collar (the lance is the hull, fixed along the
+ * keel), showing a burnt stump once it is shot out.
  */
-export const ion: ModelDef = (c): ModelSpec => {
+export const breaker: ModelDef = (c): ModelSpec => {
+  const ex = (3.3 / 10 - 0.5) * c.w
   const parts: Part[] = [
-    part('spine', rect(-3, -40, 6, 80), 'metal', 1, { details: [...[-12, 10, 32].map((y): Detail => ({ k: 'line', pts: [[-3, y], [3, y]] }))] }),
-    ...sidePlate('plateA', -37, -15, 10.4, 'hull', 2),
-    ...sidePlate('plateB', -11, 6, 7.8, 'hull2', 2),
-    ...sidePlate('plateC', 10, 31, 7, 'hull', 2),
-    ...sym(part('vane', [[-6.6, 24], [-11, 28], [-11, 32], [-6.6, 31]], 'hull', 1.6, { slope: [-0.4, 0], detach: { hull: 0.4 } }), { slope: [0.4, 0], detach: { hull: 0.28 } }),
-    sail('sail', 0, 23, 36, 1.8, 3, 5, { detach: { hull: 0.34 } }),
-    engineBlock('podL', -6, 35, 49, 5.4, 0, 2, { detach: { hull: 0.16 } }),
-    engineBlock('podR', 5.7, 35, 49, 5.4, 1, 2, { detach: { hull: 0.1 } }),
-    part('dish', circle(0, -42.5, 11, 28, 6.6), 'hull2', 3, {
-      lift: 1.6,
-      facets: [{ pts: circle(0, -42.5, 11, 28, 6.6).filter(([, y]) => y <= -42.5), slope: [0, 0.4] }],
-      details: [{ k: 'shape', pts: circle(0, -42, 8.4, 24, 4.6), tone: 'metal' }, { k: 'shape', pts: circle(0, -41.5, 5, 18, 2.6), tone: 'dark' }],
-    }),
-    part('spike', [[0, -49.6], [1.2, -44], [0, -40.4], [-1.2, -44]], 'glow', 3.4, { glow: true, details: [lamps([[0, -44.5]], 1.1)] }),
-    seat('barbette', c, 0, 7.4, 2.4, true, DROID_SEAT),
-    seat('seat', c, 1, 4.4, 2.4, false, DROID_SEAT),
-    seat('seatAft', c, 2, 3.6, 2.4, false, DROID_SEAT),
-    mast('mast', [3.4, -5], [9.4, -9], 1, 3.6, { detach: { hull: 0.5 } }),
+    ...sym(part('hull', halfHull([[-40, 3], [-30, 6], [-12, 8], [6, 10], [22, 11.6], [36, 11.6], [44, 8]]), 'hull2', 1, { slope: [-0.5, 0], details: [seam([-6, -10], [-9.6, 20]), across(-11, 0, 22)] })),
+    ...sym(part('fin', [[-10, 26], [-13, 36], [-13, 42], [-9.6, 40]], 'hull', 1.4, { slope: [-0.4, 0.1], detach: { hull: 0.4 }, details: [mark([[-11.4, 31], [-12.8, 36], [-12.8, 38], [-11, 34]])] }), { detach: { hull: 0.28 } }),
+    ...sym(armour('pod', -9.4, 9, 4.6, 16, 1.6, { tone: 'hull', band: false, detach: { hull: 0.34 } }), { detach: { hull: 0.22 } }),
+    spine('spine', 0, -6, 38, 4.4, 1.8),
+    ...[0, 1].map((i) => engineModule(i ? 'engineR' : 'engineL', (i ? 1 : -1) * -ex, 38, 49.4, 6.6, i, 2)),
+    // The lance: prongs either side, armoured housings, the barrel ringed with capacitors.
+    ...sym(part('prong', [[-6.4, -26], [-5.6, -44], [-4.4, -48], [-3.4, -44], [-3, -26]], 'hull', 2.2, { lift: 0.8, slope: [-0.4, 0], details: [mark([[-5.4, -40], [-4.6, -43], [-4, -36], [-4.8, -34]])] })),
+    ...sym(armour('housing', -5.4, -16, 5, 20, 2.4, { tone: 'hull', band: true })),
+    part('lance', rect(-2, -46, 4, 42), 'dark', 2.6, { lift: 1, details: [...capacitors(0, 4, [-40, -34, -28, -22, -16, -10]), seam([0, -45], [0, -5]), ambers(along([0, -43], [0, -7], 7), 0.35)] }),
+    part('muzzle', block(0, -48, 5.4, 4.4, 1.4, 0.6), 'metal', 2.8, { lift: 1.2, detach: { hp: 0 }, details: [{ k: 'lights', pts: [[0, -49]], r: 0.9, tone: 'glow' }] }),
+    ...seats(c, 2.4, (i) => i === 1 || i === 2),
+    antenna('mast', [3.4, 18], [8, 12], 1, 3, { detach: { hull: 0.5 } }),
   ]
-  return { parts, breakStyle: 'bands' }
+  // The lance's hardpoint is drawn as the hull: a collar that shows only once it is shot out.
+  return { parts, breakStyle: 'bands', mount: (i) => (i === 0 ? { design: 'collar' } : i === 4 ? { detach: true } : undefined) }
 }
 
+// --- Lancer frigate -----------------------------------------------------------------------------------
+
 /**
- * Bulwark frigate at 1.4×: the line frigate. A long blue-grey spine with the heavy armoured bulb at
- * the front, its twin cannons on barbettes either side of its crown, the shield generator on the
- * spine behind it, a tall sail aft, the flak on its sponsons, a boxy engine block of three. A mast
- * and a dish bolted on one side of the bulb only.
+ * Lancer frigate: a split bow. Two long armoured booms reach forward either side of the central
+ * hull, a dual cannon on each boom's root; a cross brace joins them, the shield generator sits on
+ * the spine behind, flak on sponsons aft, side nacelles outboard, the bridge core near the stern
+ * and three engine modules. The boom tips come off as it is battered.
  */
-export const frigate: ModelDef = (c): ModelSpec => {
+export const lancer: ModelDef = (c): ModelSpec => {
+  const boom: Pt[] = [[-15, -44], [-10.6, -42], [-8, -30], [-8, 6], [-10, 14], [-18, 14], [-19.4, -18], [-17.6, -38]]
   const parts: Part[] = [
-    ...sym(part('spine', halfHull([[-18, 7.4], [-4, 7], [10, 7.6], [24, 8.6], [34, 10]]), 'hull2', 1, {
-      slope: [-0.5, 0],
-      details: [rivets([-6.4, -2], [-7.6, 30], 5), { k: 'line', pts: [[0, 6], [-7.6, 6]] }, { k: 'shape', pts: rect(-5, 8, 1.8, 18), tone: 'accent' }],
+    ...sym(nacelle('nacelle', -20.6, 14, 38, 6.6, -1, 0.8, { detach: { hull: 0.32 } }), { detach: { hull: 0.2 } }),
+    ...sym(part('hull', halfHull([[-26, 3], [-14, 7.4], [0, 9], [20, 11], [34, 10.4], [42, 8]]), 'hull2', 1, { slope: [-0.5, 0], details: [seam([-4, -10], [-6, 30]), across(-10, 0, 30)] })),
+    spine('spine', 0, -22, 30, 4, 1.2),
+    ...sym(part('boom', boom, 'hull', 1.6, {
+      lift: 1.4,
+      facets: [{ pts: [[-15, -44], [-17.6, -38], [-19.4, -18], [-18, 14], [-14, 14], [-14, -44]], slope: [-0.5, 0] }],
+      details: [mark([[-17.6, -2], [-19, -2], [-18.6, 10], [-17.2, 10]]), recess(rect(-15.6, -30, 4, 10)), seam([-8.6, 0], [-18.8, 0]), seam([-13, -40], [-13, 10])],
     })),
-    ...sym(part('sponson', chamfer(-10.6, 17.3, 9.6, 11, 2.4), 'metal', 1.4, { lift: 1.2, details: [{ k: 'shape', pts: rect(-15.4, 21.4, 9.6, 1.4), tone: 'accent' }] })),
-    ...sym(part('fin', [[-10, 26], [-18.6, 30], [-19.4, 36], [-10.6, 34]], 'hull', 1.2, { slope: [-0.4, 0.1], detach: { hull: 0.3 }, details: [{ k: 'shape', pts: [[-12, 27.5], [-18, 30.4], [-18.4, 32.4], [-12.2, 30]], tone: 'accent' }] }), { slope: [0.4, 0.1], detach: { hull: 0.2 } }),
-    engineBlock('block', 0, 34, 41, 24, undefined, 1.5),
-    engineBlock('pod0', -9.1, 37, 49.4, 7.2, 0, 2, { detach: { hull: 0.16 } }),
-    engineBlock('pod1', -0.2, 37, 50, 7.4, 1, 2),
-    engineBlock('pod2', 8.4, 37, 49.4, 7.2, 2, 2, { detach: { hull: 0.1 } }),
-    sail('sail', 0, -2, 30, 2.6, 3, 7, { detach: { hull: 0.28 } }),
-    // The forward bulb: a heavy armoured ball with a rust band at its waist and one seam round it.
-    part('bulb', circle(0, -31.5, 18.6, 40), 'hull', 2, {
-      sphere: true,
-      lift: 2,
-      details: [{ k: 'shape', pts: rect(-18.6, -22.4, 37.2, 2.4), tone: 'accent' }, { k: 'line', pts: [...circle(0, -31.5, 14.4, 32), circle(0, -31.5, 14.4, 32)[0]] }, eyes([[-3.4, -48.4], [3.4, -48.4]], 0.9)],
-    }),
-    ...sym(seat('barbette', c, 0, 3.7, 2.4, true, DROID_SEAT)),
-    seat('seat', c, 2, 4, 1.6, false, DROID_SEAT),
-    ...sym(seat('seatAft', c, 3, 3.1, 1.6, false, DROID_SEAT)),
-    mast('mast', [-12, -41], [-17.4, -47.4], 1.4, 3, { detach: { hull: 0.5 } }),
-    dish('dish', 14, -20, 3.2, 3, { detach: { hull: 0.38 } }),
+    ...sym(part('tip', [[-15, -50], [-10.4, -46], [-10.4, -42.6], [-15, -44], [-17.6, -38.6], [-17.2, -44]], 'hull', 2, { lift: 1.4, slope: [-0.3, -0.4], detach: { hull: 0.45 }, details: [mark([[-15, -48], [-12, -46], [-12, -44.4], [-15, -45.6]])] }), { detach: { hull: 0.3 } }),
+    part('brace', block(0, -10, 20, 7, 2), 'metal', 1.8, { lift: 1, details: [ambers(along([-6, -10], [6, -10], 4), 0.45)] }),
+    ...sym(armour('sponson', -14, 24, 9, 11, 1.8, { tone: 'hull', band: false })),
+    engineModule('engine0', -7, 38, 49, 6.6, 0, 2.2),
+    engineModule('engine1', 0, 39, 50, 7, 1, 2.2),
+    engineModule('engine2', 7, 38, 49, 6.6, 2, 2.2),
+    bridge('bridge', 0, 21, 10, 9, 2.4),
+    ...seats(c, 2.4, (i) => i < 2),
+    antenna('mast', [-3, 30], [-5, 37], 0.9, 3, { detach: { hull: 0.5 } }),
   ]
   return { parts, breakStyle: 'bands', mount: (i) => ({ detach: i >= 3 }) }
 }
 
+// --- Harrow cruiser -----------------------------------------------------------------------------------
+
 /**
- * Anvil cruiser at 1.7×: a tall narrow warship with a towering sail down its spine and, either side,
- * a long swept gun gallery: one recessed gun trench along its trailing edge instead of rows of
- * ports, and on it from the root out its light gun, its shield generator and its heavy cannon, well
- * apart; a fin standing at each tip. The bridge rises aft between two engine blocks, which are shot
- * off with their hardpoints.
+ * Harrow cruiser: a long central spine, exposed and ribbed, with two big armoured gun pods either
+ * side of it on struts, a heavy triple battery on each pod with a missile-cell array and flak
+ * behind it. The fore and aft batteries and the shield generator sit down the spine; two prongs at
+ * the bow, the bridge core aft, two engine modules (shot off with their hardpoints).
  */
-export const cruiser: ModelDef = (c): ModelSpec => {
-  const H = c.h / 2
-  const gallery: Pt[] = [[-6, -17], [-20, -12.6], [-31, -6.6], [-39, -1], [-47.6, 6.4], [-47.6, 15.6], [-40.6, 14], [-30, 6], [-18, 2.4], [-6, 2.6]]
+export const harrow: ModelDef = (c): ModelSpec => {
+  const pod = (s: number): Part[] => {
+    const x = s * 15
+    const id = s < 0 ? 'L' : 'R'
+    return [
+      part(`pod${id}`, block(x, 1, 12, 46, 3, 2), 'hull', 1.6, {
+        lift: 1.6,
+        facets: [{ pts: rect(x - 6, -22, 6, 46), slope: [-0.5, 0] }],
+        details: [mark(rect(x + s * 4.4 - 0.7, -18, 1.4, 34)), seam([x - 6, -14], [x + 6, -14]), seam([x - 6, 20], [x + 6, 20]), recess(rect(x - 3, 18, 6, 4))],
+      }),
+      part(`podNose${id}`, [[x - 6, -21], [x - 3, -29], [x + 3, -29], [x + 6, -21]], 'hull2', 1.8, { lift: 1.4, slope: [0, -0.5], detach: { hull: s < 0 ? 0.4 : 0.3 }, details: [mark([[x - 2.4, -27], [x + 2.4, -27], [x + 3.6, -24], [x - 3.6, -24]])] }),
+      part(`strutF${id}`, rect(s < 0 ? x + 5 : x - 10, -14, 5, 5), 'metal', 1.2),
+      part(`strutA${id}`, rect(s < 0 ? x + 5 : x - 10, 12, 5, 5), 'metal', 1.2),
+      cells(`cells${id}`, x, 5, 2, 2, 2, 2.2),
+    ]
+  }
   const parts: Part[] = [
-    ...sym(part('gallery', gallery, 'hull', 1, {
-      slope: [-0.25, -0.35],
+    ...sym(part('hull', halfHull([[-48, 2], [-44, 5], [-30, 7], [0, 8], [30, 8], [42, 7], [46, 5]]), 'hull2', 1, { slope: [-0.5, 0], details: [seam([-5.6, -30], [-5.6, 30])] })),
+    spine('spine', 0, -38, 34, 4.4, 1.4),
+    ...pod(-1),
+    ...pod(1),
+    ...sym(part('prong', [[-5, -30], [-4, -50], [-2.4, -47], [-1.6, -30]], 'hull', 1.8, { lift: 0.8, slope: [-0.4, 0], details: [mark([[-4, -42], [-3, -45], [-2.4, -40], [-3.4, -38]])] })),
+    engineModule('engineL', -6, 36, 49, 7, 0, 2, { detach: { hp: 7 } }),
+    engineModule('engineR', 6, 36, 49, 7, 1, 2, { detach: { hp: 8 } }),
+    bridge('bridge', 0, 30, 10, 8, 2.4),
+    ...seats(c, 2.4, (i) => i < 2),
+    antenna('mast', [3, 33], [7, 27], 0.9, 3, { detach: { hull: 0.5 } }),
+    antenna('mast2', [-3, -38], [-3, -44], 0.8, 2.6, { detach: { hull: 0.6 } }),
+  ]
+  return { parts, breakStyle: 'bands', mount: (i) => ({ detach: i === 4 || i === 5 }) }
+}
+
+// --- Tyrant battleship --------------------------------------------------------------------------------
+
+/**
+ * Tyrant battleship: fleet support, between the Harrow and the Dominator in size. A broad armoured
+ * hull with heavy side pods, and in its middle the fire-control tower that gives it its job: a tall
+ * stepped block banked with teal sensor windows, two dishes and an antenna array on top, a
+ * missile-cell array behind it. Four heavy batteries on the hull and pods, flak at the bow, two
+ * shield generators aft and two engine modules (shot off with their hardpoints).
+ */
+export const tyrant: ModelDef = (c): ModelSpec => {
+  const parts: Part[] = [
+    ...sym(part('hull', halfHull([[-48, 4], [-40, 10], [-24, 14], [0, 16], [24, 16], [38, 14], [46, 10]]), 'hull2', 1, { slope: [-0.5, 0], details: [seam([-10, -30], [-12, 30]), across(-16, 0, 18)] })),
+    ...sym(part('pod', block(-19, 6, 10, 42, 3, 2), 'hull', 1.6, {
       lift: 1.6,
-      details: [
-        { k: 'shape', pts: [[-8, -15], [-20, -11], [-31, -5], [-39, 0.5], [-45, 6.4], [-44.6, 8.6], [-38, 3], [-30, -2.2], [-19.6, -8], [-8, -12]], tone: 'accent' },
-        // The gun trench along the trailing edge, a few lamps in it.
-        { k: 'shape', pts: [[-9, 0.4], [-18, 0.2], [-30, 3.6], [-35, 7], [-36, 9], [-29.6, 5.8], [-18, 2], [-9, 2]], tone: 'dark' },
-        { k: 'lights', pts: [[-13, 1.2], [-22, 1.8], [-32, 6]], r: 0.4 },
-        rivets([-10, -14], [-42, 2.4], 5),
-      ],
-    }), { slope: [0.25, -0.35] }),
-    ...sym(sail('tipFin', -46, 3, 19, 1.6, 2, 5, { detach: { hull: 0.3 } }), { detach: { hull: 0.2 } }),
-    engineBlock('podL', -5.3, 18, H - 0.2, 7, 0, 1.6, { detach: { hp: 6 } }),
-    engineBlock('podR', 5.2, 18, H - 0.2, 7, 1, 1.6, { detach: { hp: 7 } }),
-    ...sym(part('spine', halfHull([[-H, 1], [-28, 3.8], [-18, 6], [0, 6.6], [16, 6.4], [24, 4.6]]), 'hull2', 2, {
-      slope: [-0.5, 0],
-      details: [{ k: 'shape', pts: [[-1.6, -28], [-3, -28], [-4, -12], [-1.6, -12]], tone: 'accent' }, { k: 'line', pts: [[0, 2], [-6.6, 2]] }, rivets([-5.2, -20], [-5.6, 18], 4)],
+      facets: [{ pts: rect(-24, -15, 5, 42), slope: [-0.5, 0] }],
+      details: [mark(rect(-23.2, -10, 1.4, 12)), seam([-24, 20], [-14, 20]), recess(rect(-21, 22, 4, 4))],
     })),
-    sail('sail', 0, -26, 14, 2.4, 3, 7),
-    ...sym(seat('barbette', c, 0, 3.4, 1.8, true, DROID_SEAT)),
-    ...sym(seat('seat', c, 2, 2.8, 1.8, false, DROID_SEAT)),
-    ...sym(seat('seatMid', c, 4, 3.1, 1.8, false, DROID_SEAT)),
-    part('bridge', chamfer(0, 15.6, 10, 9, 2.2), 'hull', 3.5, { lift: 2.4, facets: [{ pts: rect(-5, 11, 5, 9), slope: [-0.5, 0] }], details: [eyes(along([-2.4, 12.4], [2.4, 12.4], 3), 0.6), { k: 'shape', pts: rect(-5, 17, 10, 1.4), tone: 'accent' }] }),
-    mast('mast', [2, 12], [6, 5], 1, 4, { detach: { hull: 0.5 } }),
-    dish('dish', -12, -11, 2.4, 2.2, { detach: { hull: 0.4 } }),
-  ]
-  // The two lighter guns on the galleries are flak-sized: they blow off like flak.
-  return { parts, breakStyle: 'bands', mount: (i) => ({ detach: i === 2 || i === 3 }) }
-}
-
-/** The flagship at 2.5×, in both designs (the battle's ring, and the Codex's carrier). */
-export const capital: ModelDef = (c) => (c.style === 'carrier' ? carrierDesign(c) : ringDesign(c))
-
-/**
- * Gyre battleship, ring design: a great ring hull open at the front, broad plain segments with two
- * hangar slots each on its inner face and one rust band, the flak and the hangars round it and two
- * heavy guns out on its flanks; in its middle the core sphere with the other two heavy guns and the
- * shield generators on its crown, joined to the ring by spokes; four engine blocks at the back. When
- * it dies the core comes away whole and the ring breaks into segments.
- */
-function ringDesign(c: BuildCtx): ModelSpec {
-  const cx = 0
-  const cy = -2
-  const [rxo, ryo, rxi, ryi] = [36.4, 45.4, 19, 25]
-  const D = Math.PI / 180
-  const gap = 11 * D
-  const top = -90 * D
-  const span = (Math.PI * 2 - gap * 2) / 6
-  const parts: Part[] = []
-  for (let i = 0; i < 6; i++) {
-    const a0 = top + gap + span * i
-    const a1 = a0 + span
-    const mid = (a0 + a1) / 2
-    const slots: Detail[] = [0.3, 0.7].map((t) => {
-      const a = a0 + span * t
-      const x = cx + Math.cos(a) * (rxi + 2.4)
-      const y = cy + Math.sin(a) * (ryi + 2.4)
-      return { k: 'shape', pts: turn(box(x, y, 5, 2), a + Math.PI / 2, x, y), tone: 'dark' }
-    })
-    parts.push(part(`ring${i}`, ellBand(cx, cy, rxo, ryo, rxi, ryi, a0, a1, 10), i % 2 ? 'hull' : 'hull2', 1, {
+    ...sym(part('podNose', [[-24, -14], [-21, -22], [-17, -22], [-14, -14]], 'hull2', 1.8, { lift: 1.4, slope: [0, -0.5], detach: { hull: 0.38 } }), { detach: { hull: 0.28 } }),
+    ...sym(armour('bow', -7, -40, 6, 10, 1.6, { tone: 'hull', band: false })),
+    spine('spine', 0, -34, 40, 4, 1.4),
+    // The fire-control tower: a stepped block, banks of sensor windows, dishes and an array.
+    part('tower', block(0, -2, 15, 22, 4, 2), 'hull', 2.6, {
       lift: 2.4,
-      slope: [Math.cos(mid) * 0.42, Math.sin(mid) * 0.42],
-      details: [
-        ...slots,
-        { k: 'lights', pts: [0.3, 0.7].map((t) => { const a = a0 + span * t; return [cx + Math.cos(a) * (rxi + 2.4), cy + Math.sin(a) * (ryi + 2.4)] as Pt }), r: 0.5 },
-        { k: 'shape', pts: ellBand(cx, cy, rxo - 2, ryo - 2, rxo - 3.8, ryo - 3.8, a0 + span * 0.12, a1 - span * 0.12, 8), tone: 'accent' },
-        { k: 'line', pts: [[cx + Math.cos(a1) * rxi, cy + Math.sin(a1) * ryi], [cx + Math.cos(a1) * rxo, cy + Math.sin(a1) * ryo]] },
-      ],
-    }))
-  }
-  for (const s of [-1, 1]) {
-    const a = top - s * gap
-    const x = cx + Math.cos(a) * (rxo + rxi) * 0.5
-    const y = cy + Math.sin(a) * (ryo + ryi) * 0.5
-    parts.push(part(s < 0 ? 'jawL' : 'jawR', turn(chamfer(x, y - 2, 9, 8, 2), s * 0.25, x, y), 'metal', 1.6, { lift: 1.4, detach: { hull: s < 0 ? 0.3 : 0.2 }, details: [eyes([[x + s * 2, y - 4]], 0.6)] }))
-  }
-  // Seats round the ring: barbettes for the flank guns, pads for the flak and the hangars.
-  parts.push(
-    ...sym(seat('barbetteRing', c, 2, 3.3, 2.5, true, DROID_SEAT)),
-    ...sym(seat('seatFore', c, 4, 2.7, 2.5, false, DROID_SEAT)),
-    ...sym(seat('seatFlank', c, 6, 2.7, 2.5, false, DROID_SEAT)),
-    ...sym(seat('launchPad', c, 11, 4.6, 2.5, false, DROID_SEAT)),
-  )
-  parts.push(
-    part('spokeL', rect(-21, 2, 8, 6), 'metal', 0.8, { details: [{ k: 'line', pts: [[-21, 5], [-13, 5]] }] }),
-    part('spokeR', rect(13, 2, 8, 6), 'metal', 0.8, { details: [{ k: 'line', pts: [[13, 5], [21, 5]] }] }),
-    part('spokeB', rect(-4, 18, 8, 7), 'metal', 0.8),
-    engineBlock('block', 0, 38, 45, 30, undefined, 1.2),
-    engineBlock('pod0', -9.9, 39, 49, 5.6, 0, 1.4, { detach: { hull: 0.16 } }),
-    engineBlock('pod1', -3.6, 40, 50, 5.6, 1, 1.4),
-    engineBlock('pod2', 3.2, 40, 50, 5.6, 2, 1.4),
-    engineBlock('pod3', 9.7, 39, 49, 5.6, 3, 1.4, { detach: { hull: 0.1 } }),
-    // The core sphere: a rust equator, one seam, a few red eyes round its crown.
-    part('core', circle(0, 5, 14.6, 40), 'hull', 2, {
-      sphere: true,
-      details: [{ k: 'shape', pts: rect(-14.6, 13.6, 29.2, 2), tone: 'accent' }, { k: 'line', pts: [...circle(0, 5, 11.6, 32), circle(0, 5, 11.6, 32)[0]] }, eyes(along([-3.4, -8.4], [3.4, -8.4], 3), 0.6)],
+      facets: [{ pts: rect(-7.5, -13, 7.5, 22), slope: [-0.5, 0] }, { pts: rect(-3.5, -13, 7, 4), slope: [0, -0.5] }],
+      details: [recess(rect(-5, -9, 10, 3)), windows(along([-4, -7.5], [4, -7.5], 5), 0.4), mark(rect(-6, 5, 12, 1.4)), recess(rect(-4, 1, 8, 2.4)), windows(along([-3, 2.2], [3, 2.2], 4), 0.35)],
     }),
-    ...sym(seat('barbette', c, 0, 3.3, 2.6, true, DROID_SEAT)),
-    ...sym(seat('seat', c, 8, 3.5, 2.6, false, DROID_SEAT)),
-    mast('mastC', [0, -9], [0, -16], 0.9, 2.8, { detach: { hull: 0.55 } }),
-    mast('mastL', [-33, 18], [-37.4, 12], 1.2, 2.8, { detach: { hull: 0.45 } }),
-    dish('dish', 30, 24, 2.8, 2.8, { detach: { hull: 0.38 } }),
-  )
-  return { parts, breakStyle: 'ring', core: { x: 0, y: 5, r: 16.5 } }
+    part('crown', block(0, -4, 8, 8, 2), 'hull2', 2.9, { lift: 3, details: [windows([[0, -4]], 0.6), seam([-4, -4], [4, -4])] }),
+    ...sym(part('dish', circle(-5.4, -12, 2.4, 14), 'hull2', 3, { lift: 2.6, slope: [0.3, 0.3], detach: { hull: 0.5 }, details: [recess(circle(-5, -11.6, 1.2, 10))] }), { detach: { hull: 0.42 } }),
+    cells('cells', 0, 16, 3, 2, 2.2, 2.2),
+    engineModule('engineL', -7, 36, 49, 8, 0, 2, { detach: { hp: 8 } }),
+    engineModule('engineR', 7, 36, 49, 8, 1, 2, { detach: { hp: 9 } }),
+    bridge('bridge', 0, 32, 10, 7, 2.4),
+    ...seats(c, 2.4, (i) => i < 4),
+    antenna('array', [0, -8], [0, -16], 1, 3.2, { detach: { hull: 0.55 } }),
+  ]
+  return { parts, breakStyle: 'bands', cuts: 3, mount: (i) => ({ detach: i === 4 || i === 5 }) }
 }
 
+// --- Dominator dreadnought ----------------------------------------------------------------------------
+
 /**
- * Gyre battleship, carrier design: a broad carrier hull with one row of hangar slots down each flank
- * aft, a raised deck carrying the heavy guns and shield generators, the flank guns, flak and hangars
- * on the hull round it, a bulbous forward pod and a tall sail with the bridge on it.
+ * Dominator dreadnought: a massive multi-section assault vessel, the sheet's capital ship. Twin
+ * prongs at the bow with flak on them and the bridge core between their roots; forward armour
+ * wings carrying the mid batteries; a central hull of armour blocks with a missile-cell array down
+ * its middle, the shield generators either side of it; side nacelles with orange light strips and
+ * flak; the aft batteries, the hangar module and a cluster of five engine modules at the stern.
  */
-function carrierDesign(c: BuildCtx): ModelSpec {
-  const rows: [number, number][] = [[-50, 3], [-46, 9], [-40, 16.6], [-30, 23.6], [-18, 29.6], [-6, 32.4], [10, 32.4], [26, 30.6], [38, 27], [44, 20]]
-  const slots = (x0: number, x1: number, y0: number, y1: number, n: number): Detail[] =>
-    along([0, y0], [0, y1], n).flatMap(([, y]) => [{ k: 'shape' as const, pts: rect(x0, y - 1.2, x1 - x0, 2.4), tone: 'dark' as const }, { k: 'lights' as const, pts: [[(x0 + x1) / 2, y] as Pt], r: 0.45 }])
+export const dominator: ModelDef = (c): ModelSpec => {
+  const ex = [3, 4, 5, 6, 7].map((g) => (g / 10 - 0.5) * c.w)
   const parts: Part[] = [
-    ...sym(part('hull', halfHull(rows), 'hull', 0, {
-      slope: [-0.5, 0.05],
-      details: [
-        { k: 'shape', pts: [...rows.slice(2, 9).map(([y, w]) => [-w, y] as Pt), ...rows.slice(2, 9).map(([y, w]) => [-w + 2.4, y + 0.4] as Pt).reverse()], tone: 'accent' },
-        ...slots(-28, -20, 16, 32, 4),
-        rivets([-14, -30], [-26, -8], 4),
-      ],
+    ...sym(part('hull', halfHull([[-34, 8], [-24, 14], [-8, 18], [10, 20], [28, 19.4], [40, 16.4], [47, 12]]), 'hull2', 1, { slope: [-0.5, 0], details: [seam([-12, -20], [-16, 34]), across(-19, 0, 10), across(-19, 0, 30)] })),
+    ...sym(part('wing', [[-14, -24], [-28, -15], [-29, -3], [-16, 0]], 'hull', 1.4, {
+      lift: 1.4,
+      slope: [-0.4, -0.3],
+      details: [mark([[-26.4, -14], [-28.4, -12.6], [-28.6, -5], [-26.6, -4]]), seam([-16, -20], [-26, -6])],
     })),
-    ...sym(part('deck', halfHull([[-30, 4], [-20, 9], [0, 11.6], [22, 11], [32, 8]]), 'hull2', 1, { slope: [-0.45, 0], lift: 2, details: [{ k: 'line', pts: [[0, 20], [-11, 20]] }] })),
-    ...sym(part('fin', [[-27, 34], [-35.4, 36], [-35.6, 44], [-25, 42]], 'hull2', 0.8, { slope: [-0.4, 0.1], detach: { hull: 0.3 } }), { slope: [0.4, 0.1], detach: { hull: 0.2 } }),
-    engineBlock('block', 0, 37, 45, 30, undefined, 1.2),
-    engineBlock('pod0', -9.9, 38, 49, 5.6, 0, 1.4, { detach: { hull: 0.16 } }),
-    engineBlock('pod1', -3.6, 39, 50, 5.6, 1, 1.4),
-    engineBlock('pod2', 3.2, 39, 50, 5.6, 2, 1.4),
-    engineBlock('pod3', 9.7, 38, 49, 5.6, 3, 1.4, { detach: { hull: 0.1 } }),
-    part('pod', circle(0, -41.6, 8.4, 24), 'hull2', 2, { sphere: true, details: [{ k: 'shape', pts: rect(-8.4, -40, 16.8, 1.8), tone: 'accent' }, eyes(along([-3, -47], [3, -47], 3), 0.6)] }),
-    ...sym(seat('barbette', c, 0, 3.3, 2.2, true, DROID_SEAT)),
-    ...sym(seat('barbetteFlank', c, 2, 3.3, 1.2, true, DROID_SEAT)),
-    ...sym(seat('seat', c, 8, 3.5, 2.2, false, DROID_SEAT)),
-    ...sym(seat('seatFore', c, 4, 2.7, 1.2, false, DROID_SEAT)),
-    ...sym(seat('seatFlank', c, 6, 2.7, 1.2, false, DROID_SEAT)),
-    ...sym(seat('launchPad', c, 11, 4.6, 1.2, false, DROID_SEAT)),
-    sail('sail', 0, 12, 34, 2.6, 3, 7, { detach: { hull: 0.3 } }),
-    part('bridge', chamfer(0, 30, 9, 8, 2), 'hull', 3.5, { lift: 2.4, details: [eyes(along([-2.6, 27.6], [2.6, 27.6], 3), 0.6)] }),
-    mast('mast', [-4, 26], [-9, 19], 1, 3.6, { detach: { hull: 0.5 } }),
-    dish('dish', 22, -30, 3, 2, { detach: { hull: 0.38 } }),
+    ...sym(nacelle('nacelle', -27, -2, 30, 8, -1, 1.2)),
+    ...sym(part('nacelleTip', [[-30.4, 30], [-23.6, 30], [-24.4, 36], [-29.6, 36]], 'hull2', 1.3, { lift: 1, detach: { hull: 0.36 }, details: [{ k: 'lights', pts: [[-27, 34]], r: 1, tone: 'glow' }] }), { detach: { hull: 0.26 } }),
+    spine('spine', 0, -22, 40, 5, 1.6),
+    // The bow: twin prongs and the bridge core between their roots.
+    ...sym(part('prong', [[-10.6, -26], [-8, -48], [-6, -50], [-3.4, -44], [-3, -26]], 'hull', 2, {
+      lift: 1.4,
+      facets: [{ pts: [[-10.6, -26], [-8, -48], [-6.6, -49.4], [-6.8, -26]], slope: [-0.5, 0] }],
+      details: [mark([[-8.6, -34], [-7.4, -44], [-6.2, -44], [-6.8, -32]])],
+    })),
+    bridge('bridge', 0, -30, 8, 10, 2.4),
+    // Armour blocks down the flanks, the aft ones shot off as it is battered.
+    ...sym(armour('blockF', -16, 6, 7, 10, 2, { tone: 'hull' })),
+    ...sym(armour('blockA', -20, 13.6, 6, 8, 2, { tone: 'hull', band: false, detach: { hull: 0.3 } }), { detach: { hull: 0.2 } }),
+    ...sym(armour('blockS', -17, 34, 8, 9, 2, { tone: 'hull' })),
+    cells('cells', 0, -9, 2, 3, 2.4, 2.4),
+    ...ex.map((x, i) => engineModule(`engine${i}`, x, i === 2 ? 39 : i % 4 ? 38.4 : 37.6, i === 2 ? 50 : i % 4 ? 49.4 : 48.6, 5.4, i, 2.2, i === 2 ? { detach: { hp: 12 } } : i === 0 ? { detach: { hull: 0.16 } } : i === 4 ? { detach: { hull: 0.1 } } : {})),
+    ...seats(c, 2.6, (i) => i < 6),
+    ...sym(antenna('mast', [-4, -22], [-6, -28], 0.9, 3, { detach: { hull: 0.55 } }), { detach: { hull: 0.48 } }),
   ]
-  return { parts, breakStyle: 'bands', cuts: 3 }
+  return { parts, breakStyle: 'bands', cuts: 3, mount: (i) => ({ detach: i >= 6 && i < 10 }) }
 }
+
+/** Where hardpoint `i` sits (for the seats of designs that place more by it). */
+export const at = hpAt
+/** A thin girder between two points. */
+export const girder = (id: string, a: Pt, b: Pt, w: number, z: number): Part => part(id, thick([a, b], w), 'metal', z, { lift: 1 })
