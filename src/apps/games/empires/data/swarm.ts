@@ -289,7 +289,7 @@ export const SWARM: FactionData = {
   ships: [
     {
       id: 's-fighter', faction: 'swarm', tier: 'fighter', name: 'Stinger interceptor', blurb: 'Five darting predators to a brood. Fragile and cheap, they hatch fast, and their barbs and venom stings add up against big ships.',
-      sprite: 'swarm-fighter', aspect: 0.8, size: 26, hull: 38, shield: 0, regen: 0, speed: 265, turn: 4.5, pop: 1, cost: 220, build: 8, level: 1, squad: 5, sensor: 650,
+      sprite: 'swarm-fighter', aspect: 0.8, size: 26, hull: 42, shield: 0, regen: 0, speed: 265, turn: 4.5, pop: 1, cost: 220, build: 8, level: 1, squad: 5, sensor: 650,
       weapons: [laser(5, 230, 0.45), torpedo(14, 260)], hardpoints: [], engines: [[5, 9.1]],
       regrow: REGROW.craft,
     },
@@ -301,7 +301,7 @@ export const SWARM: FactionData = {
     },
     {
       id: 's-bomber', faction: 'swarm', tier: 'fighter', kind: 'bomber', name: 'Brood bomber', blurb: 'Bloated spore carriers, three to a brood. Cheap and fragile; their caustic spore sacs eat through big hulls.',
-      sprite: 'swarm-bomber', aspect: 0.95, size: 34, hull: 85, shield: 0, regen: 0, speed: 180, turn: 3, pop: 2, cost: 390, build: 12, level: 2, squad: 3, sensor: 620,
+      sprite: 'swarm-bomber', aspect: 0.95, size: 34, hull: 94, shield: 0, regen: 0, speed: 180, turn: 3, pop: 2, cost: 390, build: 12, level: 2, squad: 3, sensor: 620,
       weapons: [laser(4, 220, 0.6), torpedo(46, 230, 6)], hardpoints: [], engines: [[5, 9.2]],
       regrow: REGROW.craft,
       role: { role: 'Bomber', strong: ['cruisers', 'flagships', 'stations'], weak: ['fighters', 'gunships', 'frigates'] },
@@ -315,7 +315,7 @@ export const SWARM: FactionData = {
     },
     {
       id: 's-picket', faction: 'swarm', tier: 'fighter', kind: 'wing', name: 'Seeker picket', blurb: 'The Hive\'s own sentinels: six tiny seekers that guard it for free and hatch again when lost. Vicious at home, feeble far from it.',
-      sprite: 'swarm-picket', aspect: 0.9, size: 20, hull: 28, shield: 0, regen: 0, speed: 280, turn: 5, pop: 0, cost: 0, build: 0, level: 1, squad: 6, sensor: 640,
+      sprite: 'swarm-picket', aspect: 0.9, size: 20, hull: 31, shield: 0, regen: 0, speed: 280, turn: 5, pop: 0, cost: 0, build: 0, level: 1, squad: 6, sensor: 640,
       weapons: [laser(3.5, 210, 0.42)], hardpoints: [], engines: [[5, 9]],
       regrow: REGROW.craft,
       role: { role: 'Home defense', strong: ['fighters', 'bombers near the station'], weak: ['warships', 'being sent away from home'] },
@@ -328,10 +328,10 @@ export const SWARM: FactionData = {
       role: { role: 'Construction', strong: ['building yards', 'repairing structures'], weak: ['anything that shoots'] },
     },
     {
-      id: 's-corvette', faction: 'swarm', tier: 'gunship', kind: 'support', name: 'Leech corvette', blurb: 'A segmented support hunter. Its feeding tendrils drain the hull of every enemy near it, past their shields, and pass the biomass on to our wounded ships. Lightly armed; keep it close behind the line.',
+      id: 's-corvette', faction: 'swarm', tier: 'gunship', kind: 'support', name: 'Leech corvette', blurb: 'A segmented support hunter. Its feeding tendrils drain the hulls of the three enemies nearest it, past their shields, and pass the biomass on to our wounded ships. Lightly armed; keep it close behind the line.',
       sprite: 'swarm-corvette', aspect: 0.7, size: 84, hull: 600, shield: 0, regen: 0, speed: 140, turn: 1.8, pop: 2, cost: 520, build: 16, level: 2, squad: 1, sensor: 900,
       weapons: [laser(5, 260, 0.5)], hardpoints: [], engines: [[3.9, 9.4], [6.1, 9.4]],
-      drain: { radius: 420, dps: 6, heal: 1.4 },
+      drain: { radius: 420, dps: 6, heal: 1.4, targets: 3 },
       regrow: REGROW.ship,
       role: { role: 'Drain support', strong: ['long fights', 'shielded ships'], weak: ['fighters', 'anything that catches it alone'] },
     },
@@ -401,7 +401,7 @@ export const SWARM: FactionData = {
     tech('swarm', 's-repair', 's-re-wing', 'Mender strain', 'Breeds healers in the Hive Nexus: unlocks the Mender and its Field repair.', 300, 22, 1, {}),
     tech('swarm', 's-bomber', 's-bo-pods', 'Caustic spores', 'Brood spore sacs deal 25% more damage.', 500, 32, 2, { damage: 0.25 }),
     tech('swarm', 's-corvette', 's-co-coils', 'Engorged sacs', 'Leeches grow 30% more hull, so they live long enough to feed.', 550, 36, 2, { hull: 0.3 }),
-    tech('swarm', 's-corvette', 's-co-drain', 'Deeper tendrils', 'Leech tendrils bite 30% harder, and pass on 20% more of what they drain.', 600, 38, 2, { drain: 0.3, drainHeal: 0.2 }, ['s-co-coils']),
+    tech('swarm', 's-corvette', 's-co-drain', 'Deeper tendrils', 'Leech tendrils bite 30% harder, latch onto one more enemy at once, and pass on 20% more of what they drain.', 600, 38, 2, { drain: 0.3, drainHeal: 0.2, drainTargets: 1 }, ['s-co-coils']),
     tech('swarm', 's-frigate', 's-fr-plate', 'Chitin layering', 'Harvesters grow 25% more hull.', 550, 36, 2, { hull: 0.25 }),
     tech('swarm', 's-frigate', 's-fr-prong', 'Adaptive organs', 'Harvester weapon organs adapt to their prey: 20% more damage.', 600, 36, 2, { damage: 0.2 }, ['s-fr-plate']),
     tech('swarm', 's-destroyer', 's-de-barb', 'Barbed lance', 'Impaler lances grow hooked barbs that tear as they go in: 25% more damage.', 650, 38, 2, { damage: 0.25 }),

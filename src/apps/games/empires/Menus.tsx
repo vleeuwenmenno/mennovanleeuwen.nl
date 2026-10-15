@@ -805,7 +805,7 @@ export function HowToPlay() {
         <li>Expansions: the Command Station and both yards build modules onto themselves, one at a time, from the Expansions tab of their panel (and the tech tree). The station takes a Strike hangar (needed for bombers), a Sensor array and a Shield core; the Frigate Yard a Second slip (two ships at once), a Drydock (mends ships nearby) and an Armour works (more hull for every frigate and corvette); the Capital Yard a Capital slip (flagships) and a Fighter wing (its own defense wing). Each can be shot off: its feature stops until engineers weld it back for part of its price. A ruined yard loses its expansions.</li>
         <li>Big ships have hardpoints. Hover one and right-click a marker to target it: knock out shield generators first.</li>
         <li>Fighters beat cruisers and flagships, gunships beat fighters, frigates beat gunships, cruisers beat frigates.</li>
-        <li>Asteroid fields wear down frigates, cruisers and flagships flying through them (fighters and gunships dodge the rocks). Nebulas knock out shields and halve sensor range.</li>
+        <li>Asteroid fields wear down frigates, cruisers and flagships flying through them, the faster the harder: shields first, then hull, and a Swarm hull doesn't grow back while the rocks hit it (fighters and gunships dodge the rocks). Nebulas knock out shields and halve sensor range.</li>
         <li>Park warships next to a wreck to strip it for credits, as long as no enemy ships are there. Destroyed frigates, cruisers and flagships leave wrecks too.</li>
       </ul>
       <p className="ew-muted ew-small">

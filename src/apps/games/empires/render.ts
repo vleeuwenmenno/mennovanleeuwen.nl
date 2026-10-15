@@ -1,7 +1,7 @@
 import { CYARD_SOCKETS, FACTION_IDS, MODULE, STATION_SOCKETS, YARD_GANTRIES, YARD_SOCKETS, FACTIONS, REBUILD, SURVEY_RADIUS, UNIT, dims, isEngineer, isShip, type FactionId, type HardpointKind, type Tier, type UnitType, type WeaponKind } from './data'
 import { HP_COLOR, HP_ICON, hpName } from './icons'
 import { rng, type MapDef, type Nebula, type Patch, type Pt, type Rect } from './maps'
-import { RETREAT_TIME, atHome, auraOf, building, drainOf, escorts, foes, hpPos, hullCap, near, projecting, radius, regrowOf, SALVAGE_RANGE, sensorOf, shieldAuraOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
+import { RETREAT_TIME, atHome, auraOf, building, drainOf, escorts, foes, hpPos, hullCap, near, projecting, radius, regrowOf, calm, SALVAGE_RANGE, sensorOf, shieldAuraOf, shieldFull, shieldMax, shipPoint, type Owner, type SimEvent, type Unit, type World } from './sim'
 import { BREAK_WEIGHTS, breakPieces, hullState, modelFor, unitForSprite, wreckState, type HullState, type Model } from './models/index.ts'
 import { YARD_BERTHS } from './data'
 import { ModelFx } from './models/fx.ts'
@@ -1912,7 +1912,7 @@ export class Renderer {
    * pulsing over it in its side's colours. One glow sprite, drawn additively. */
   private drawRegrow(ctx: CanvasRenderingContext2D, u: Unit, w: World, size: number) {
     const g = regrowOf(u)
-    if (!g || u.hull >= hullCap(u) || w.time - u.lastHit < g.delay || building(u)) return
+    if (!g || u.hull >= hullCap(u) || calm(w, u) < g.delay || building(u)) return
     const pulse = 0.5 + 0.5 * Math.sin(this.clock * 3 + u.id)
     const r = size * 0.62
     ctx.globalCompositeOperation = 'lighter'
@@ -2044,8 +2044,8 @@ export class Renderer {
   }
 
   /**
-   * Drain auras (sim.ts drain): a tendril from the drain ship to each enemy in its reach that it
-   * sees (at most MECH.tendrils), wavering, with a bead of light running back along it; and heal
+   * Drain auras (sim.ts drain): a tendril from the drain ship to each enemy it bit this tick (its
+   * `drained`, at most MECH.tendrils), wavering, with a bead of light running back along it; and heal
    * sparks rising off our damaged ships in its reach, a few every MECH.sparkEvery seconds.
    */
   private drawDrains(ctx: CanvasRenderingContext2D, w: World, z: number, team: number, onScreen: (x: number, y: number, r?: number) => boolean, dt: number) {
@@ -2058,7 +2058,6 @@ export class Renderer {
       if (!onScreen(u.x, u.y, d.radius)) continue
       const col = FACTIONS[u.t.faction].bolt
       const heal = PALETTES[u.t.faction].engine
-      const theirs = w.players[u.owner].team
       let n = 0
       ctx.save()
       ctx.globalCompositeOperation = 'lighter'
@@ -2066,7 +2065,7 @@ export class Renderer {
       near(w, u.x, u.y, d.radius, (e) => {
         if (e === u) return
         if (foes(w, e.owner, u.owner)) {
-          if (n >= MECH.tendrils || !e.seen[theirs] || !e.seen[team]) return
+          if (n >= MECH.tendrils || !u.drained?.includes(e.id) || !e.seen[team]) return
           n++
           // A wavering curve: its middle swung to one side and back.
           const dx = e.x - u.x

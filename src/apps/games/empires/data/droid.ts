@@ -169,7 +169,7 @@ export const DROID: FactionData = {
   ships: [
     {
       id: 'd-fighter', faction: 'droid', tier: 'fighter', name: 'Talon interceptor', blurb: 'Fork-nosed interceptors, three to a squadron. The fastest strike craft in the sky: hard-hitting cannons and torpedoes, and no shields at all.',
-      sprite: 'droid-fighter', aspect: 0.8, size: 28, hull: 60, shield: 0, regen: 0, speed: 300, turn: 4.6, pop: 1, cost: 250, build: 9, level: 1, squad: 3, sensor: 680,
+      sprite: 'droid-fighter', aspect: 0.8, size: 28, hull: 66, shield: 0, regen: 0, speed: 300, turn: 4.6, pop: 1, cost: 250, build: 9, level: 1, squad: 3, sensor: 680,
       weapons: [laser(7.5, 230, 0.42), torpedo(24, 260)], hardpoints: [], engines: [[5, 9.4]],
     },
     {
@@ -186,7 +186,7 @@ export const DROID: FactionData = {
     },
     {
       id: 'd-bomber', faction: 'droid', tier: 'fighter', kind: 'bomber', name: 'Havoc bomber', blurb: 'Twin-fuselage bombers, two to a squadron, their ordnance slung outside the hull. Heavy shaped charges for capital ships and stations; easy prey for fighters.',
-      sprite: 'droid-bomber', aspect: 0.9, size: 40, hull: 135, shield: 15, regen: 2, speed: 192, turn: 2.8, pop: 2, cost: 440, build: 15, level: 2, squad: 2, sensor: 640,
+      sprite: 'droid-bomber', aspect: 0.9, size: 40, hull: 149, shield: 17, regen: 2, speed: 192, turn: 2.8, pop: 2, cost: 440, build: 15, level: 2, squad: 2, sensor: 640,
       weapons: [laser(5, 220, 0.6), torpedo(80, 250, 6)], hardpoints: [], engines: [[3.2, 9.4], [6.8, 9.4]],
       role: { role: 'Bomber', strong: ['cruisers', 'flagships', 'stations'], weak: ['fighters', 'gunships', 'frigates'] },
     },
@@ -198,7 +198,7 @@ export const DROID: FactionData = {
     },
     {
       id: 'd-picket', faction: 'droid', tier: 'fighter', kind: 'wing', name: 'Spectre picket', blurb: 'The Command Hub\'s own defense wing: five light pickets that guard it for free and launch again from its hangar when lost. Vicious at home, feeble far from it.',
-      sprite: 'droid-picket', aspect: 0.75, size: 22, hull: 30, shield: 0, regen: 0, speed: 290, turn: 5, pop: 0, cost: 0, build: 0, level: 1, squad: 5, sensor: 640,
+      sprite: 'droid-picket', aspect: 0.75, size: 22, hull: 33, shield: 0, regen: 0, speed: 290, turn: 5, pop: 0, cost: 0, build: 0, level: 1, squad: 5, sensor: 640,
       weapons: [laser(4.2, 215, 0.42)], hardpoints: [], engines: [[5, 9]],
       role: { role: 'Home defense', strong: ['fighters', 'bombers near the station'], weak: ['warships', 'being sent away from home'] },
     },

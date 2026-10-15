@@ -64,8 +64,8 @@ export type Mods = {
   // From research for the faction mechanics (TechEffect), each a multiplier, there only when some
   // research changes it (and absent in units saved before them): damage to shields, a fire-control
   // aura's bonus (added) and reach, a living hull's regrowth and its wait, a drain's bite and heal,
-  // a shield-projector aura's regen (added; its reach is auraRadius).
-  shieldDamage?: number; aura?: number; auraRadius?: number; regrow?: number; regrowDelay?: number; drain?: number; drainHeal?: number; shieldAura?: number
+  // a shield-projector aura's regen (added; its reach is auraRadius), a drain's extra targets (added).
+  shieldDamage?: number; aura?: number; auraRadius?: number; regrow?: number; regrowDelay?: number; drain?: number; drainHeal?: number; drainTargets?: number; shieldAura?: number
 }
 
 /** A gun: its weapon, the hardpoint it sits on (-1 for the hull), reload, and what it shoots at.
@@ -97,6 +97,9 @@ export type Unit = {
   target: number
   retarget: number
   lastHit: number
+  /** When rocks in an asteroid field last hit it (see terrain): not an attack, but a living hull
+   * waits from it as from a hit. Absent until it first flies through a field. */
+  scraped?: number
   /** Shield shimmer: time of the last shield hit and where it came from. */
   shieldHit: number
   /** When the shields last failed: they stay down for SHIELD_REBOOT seconds before recharging. */
@@ -137,6 +140,8 @@ export type Unit = {
   queue: Order[]
   /** Support ships: the ships they're repairing right now, for the repair beams. */
   mending: number[]
+  /** Drain ships: the enemies they bit this tick, for the tendrils. Absent until one first drains. */
+  drained?: number[]
   /** A repair craft on a Field repair run: the ship or station it is mending (0 when none). */
   aid: number
   /** Strike craft on a strafing run: pulling away after a pass, until far enough out to turn. */
@@ -619,6 +624,7 @@ function modsFor(p: Player, t: UnitType): Mods {
   if (regrowDelay) mods.regrowDelay = Math.max(0, 1 + regrowDelay)
   if (e.drain) mods.drain = 1 + e.drain
   if (e.drainHeal) mods.drainHeal = 1 + e.drainHeal
+  if (e.drainTargets) mods.drainTargets = e.drainTargets
   if (e.shieldAura) mods.shieldAura = e.shieldAura
   return mods
 }
@@ -646,11 +652,15 @@ export function regrowOf(u: Unit): { rate: number; delay: number } | null {
   if (!g) return null
   return { rate: g.rate * (u.mods.regrow ?? 1), delay: g.delay * (u.mods.regrowDelay ?? 1) }
 }
-/** A drain aura as it stands for `u`, with its research (TechEffect drain and drainHeal). */
-export function drainOf(u: Unit): { radius: number; dps: number; heal: number } | null {
+/** Seconds since anything last hurt `u`: an enemy's hit, or rocks in an asteroid field. A living
+ * hull grows back only once this is past its wait. */
+export const calm = (w: World, u: Unit) => w.time - Math.max(u.lastHit, u.scraped ?? -99)
+/** A drain aura as it stands for `u`, with its research (TechEffect drain, drainHeal and
+ * drainTargets, which adds to how many enemies it bites at once). */
+export function drainOf(u: Unit): { radius: number; dps: number; heal: number; targets: number } | null {
   const d = u.t.drain
   if (!d) return null
-  return { radius: d.radius, dps: d.dps * (u.mods.drain ?? 1), heal: d.heal * (u.mods.drainHeal ?? 1) }
+  return { radius: d.radius, dps: d.dps * (u.mods.drain ?? 1), heal: d.heal * (u.mods.drainHeal ?? 1), targets: d.targets + (u.mods.drainTargets ?? 0) }
 }
 const stationOf = (p: Player) => unitOf(p.faction, 'station').id
 /** Whether one of a unit's own hangars stands (a Strike hangar doesn't count: it only launches bombers). */
@@ -3859,21 +3869,14 @@ export const NEBULA_SENSOR = 0.5
 const NEBULA_DRAIN = 1.5
 /** Below this speed a ship is drifting, not ploughing through rocks. */
 const FIELD_MIN_SPEED = 10
-/** Share of a ship's full shields that rocks knock off per 1000 units flown through a field. A
- * capital crossing a typical field (about 800 units) loses around an eighth of its shields. */
-const FIELD_WEAR = 0.15
+/** Share of a ship's full shields that rocks knock off per 1000 units flown through a field (a
+ * ship with no shields: of half its hull). A big ship crossing a typical field (about 800 units)
+ * loses around a quarter of its shields; a Swarm hull, which has none, about an eighth of its hull. */
+export const FIELD_WEAR = 0.3
 /** Rocks scrape hulls but never finish a ship off: they stop at this share of the hull. */
 const FIELD_HULL_FLOOR = 0.15
 /** Only big ships are too clumsy to dodge the rocks; fighters and gunships weave through. */
 const CLUMSY: Partial<Record<Tier, true>> = { frigate: true, cruiser: true, capital: true }
-
-/**
- * Nebulas and asteroid fields acting on one unit this tick. A nebula drains the shields and keeps
- * them down (and `sensorOf` halves the sensors while `nebula` is set). A big ship moving through
- * an asteroid field takes a steady patter of hits, more the faster it goes: shields first, then
- * hull. Neither counts as being attacked, so no alarms and no kill credit. Returns true while the
- * terrain keeps the shields from recharging.
- */
 // --- Defense wings -----------------------------------------------------------------------------------
 
 /** A station's defense wing in a loose ring round it, as its carrier fighters would be: their
@@ -4345,6 +4348,15 @@ function tenders(w: World, dt: number) {
   }
 }
 
+/**
+ * Nebulas and asteroid fields acting on one unit this tick. A nebula drains the shields and keeps
+ * them down (and `sensorOf` halves the sensors while `nebula` is set). A big ship moving through
+ * an asteroid field takes a steady patter of hits, more the faster it goes: shields first, then
+ * hull. Neither counts as being attacked, so no alarms, no kill credit and nobody to shoot back at;
+ * but a living hull doesn't grow back while the rocks are hitting it (they set `scraped`, which
+ * restarts its wait like a hit: see calm). Returns true while the terrain keeps the shields from
+ * recharging.
+ */
 function terrain(w: World, u: Unit, dt: number) {
   const ship = isShip(u.t)
   u.nebula = ship && w.map.nebulas.length > 0 && inside(w.map.nebulas, u.x, u.y)
@@ -4358,6 +4370,7 @@ function terrain(w: World, u: Unit, dt: number) {
   u.shield -= soaked
   wear -= soaked
   if (wear > 0) u.hull = Math.max(Math.min(u.hull, u.hullMax * FIELD_HULL_FLOOR), u.hull - wear)
+  u.scraped = w.time
   return true
 }
 
@@ -4368,38 +4381,48 @@ function terrain(w: World, u: Unit, dt: number) {
 // spinal gun is a hardpoint weapon with an arc (see shoot and bearing). Each is off unless a unit
 // sets it, and none of them draws a random number, so every copy of a battle agrees.
 
-/** Living hulls (UnitType regrow): out of the fight for `delay` seconds, the hull grows back by
- * `rate` of its full hull a second, as far as it can go (a rush-launched ship's unbuilt hull stays
- * unbuilt). Only the hull: modules are mended as ever. */
+/** Living hulls (UnitType regrow): out of the fight for `delay` seconds (nothing has hit it, and no
+ * asteroid field's rocks either: see calm), the hull grows back by `rate` of its full hull a
+ * second, as far as it can go (a rush-launched ship's unbuilt hull stays unbuilt). Only the hull:
+ * modules are mended as ever. */
 function regrow(w: World, u: Unit, dt: number) {
   const g = regrowOf(u)!
-  if (w.time - u.lastHit < g.delay) return
+  if (calm(w, u) < g.delay) return
   const cap = hullCap(u)
   if (u.hull < cap) u.hull = Math.min(cap, u.hull + u.hullMax * g.rate * dt)
 }
 
 /**
- * Drain auras (UnitType drain): each one takes `dps` hull points a second off every enemy it can
- * see within `radius`, straight off the hull past shields and modules, and gives `heal` of what it
- * took to our damaged ships within `radius` (itself included), shared out evenly. What one can't
- * use (it's mended full) is lost, not passed on.
+ * Drain auras (UnitType drain): each one takes `dps` hull points a second off the `targets`
+ * nearest enemies it can see within `radius` (nearest first, ties by id, so every copy of the
+ * battle picks the same ones), straight off the hull past shields and modules, and gives `heal` of
+ * what it took to our damaged ships within `radius` (itself included), shared out evenly. What one
+ * can't use (it's mended full) is lost, not passed on.
  */
 function drains(w: World, dt: number) {
+  const prey: { e: Unit; d: number }[] = []
   for (const u of w.units) {
     const d = u.t.drain ? drainOf(u) : null
     if (!d || u.dead || building(u) || u.site || u.launch) continue
     let took = 0
-    near(w, u.x, u.y, d.radius, (e) => {
-      if (!foes(w, e.owner, u.owner) || !sees(w, u.owner, e) || planned(e)) return
+    prey.length = 0
+    u.drained = []
+    near(w, u.x, u.y, d.radius, (e, dd) => {
+      if (foes(w, e.owner, u.owner) && sees(w, u.owner, e) && !planned(e) && e.hull > 0) prey.push({ e, d: dd })
+    })
+    prey.sort((a, b) => a.d - b.d || a.e.id - b.e.id)
+    for (let i = 0; i < prey.length && i < d.targets; i++) {
+      const e = prey[i].e
       const bite = Math.min(e.hull, d.dps * dt)
-      if (bite <= 0) return
+      if (bite <= 0) continue
       took += bite
+      u.drained.push(e.id)
       e.lastHit = w.time
       e.hitBy = u.id
       alarm(w, e)
       e.hull -= bite
       if (e.hull <= 0) hullGone(w, e, false, u.owner, u.id)
-    })
+    }
     if (took <= 0 || d.heal <= 0) continue
     const hurt: Unit[] = []
     near(w, u.x, u.y, d.radius, (a) => {

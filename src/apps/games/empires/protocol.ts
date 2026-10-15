@@ -19,7 +19,7 @@ export const MP_PATH = '/api/empires/ws'
  * closing with OUTDATED_CODE, and the game asks the player to reload. Clients from before there was
  * a version send none: they count as version 1.
  */
-export const PROTOCOL = 4
+export const PROTOCOL = 5
 /** WebSocket close code for a client whose PROTOCOL isn't the server's. */
 export const OUTDATED_CODE = 4001
 export const CHAT_MAX = 240

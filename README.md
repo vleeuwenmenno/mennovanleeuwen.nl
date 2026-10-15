@@ -1750,11 +1750,13 @@ there.
 faction's data; all off unless a unit sets them, and none draws a random number):
 
 - `regrow` (`{ rate, delay }`): living hulls. Once `delay` seconds have passed since an enemy last
-  hit it, the hull grows back by `rate` of its full hull a second (0.02: 2%), as far as it can go.
+  hit it (or an asteroid field's rocks: flying through a field holds the regrowth off, so a living
+  hull can't cross one for free), the hull grows back by `rate` of its full hull a second (0.02: 2%), as far as it can go.
   A station gets it from a level on (`StationPlan.regrow`, with `level`).
-- `drain` (`{ radius, dps, heal }`): every enemy it sees within `radius` loses `dps` hull points a
-  second, straight off the hull past shields; `heal` of what it took (0.5: half) mends our damaged
-  ships within `radius`, shared evenly.
+- `drain` (`{ radius, dps, heal, targets }`): the `targets` nearest enemies it sees within `radius`
+  (nearest first, ties by unit id) lose `dps` hull points a second each, straight off the hull past
+  shields; `heal` of what it took (0.5: half) mends our damaged ships within `radius`, shared
+  evenly. The Leech bites 3 at once.
 - `fireControl` (`{ radius, bonus }`): our ships within `radius` deal `bonus` more damage (0.15:
   15%); auras don't stack, the best counts.
 - `shieldAura` (`{ radius, regen }`): a shield projector. Our ships within `radius`, itself
@@ -1772,7 +1774,9 @@ faction's data; all off unless a unit sets them, and none draws a random number)
 
 Radii are written at the old battlefield scale and stretched like gun ranges (and spread out with
 the fleet for the bigger hulls, as repair tenders are). `pnpm check:empires-mechanics` switches
-each one on for a test unit and checks what it does.
+each one on for a test unit and checks what it does, along with ships crossing an asteroid field (a
+Swarm hull loses hull and doesn't regrow inside; shields wear at `FIELD_WEAR`), the drain's target
+limit and the strike craft's toughness.
 
 The battle shows them (render.ts, in each side's bolt and engine colours): a drain ship's tendrils
 to the enemies it bites and heal sparks off the allies it mends, a fire-control ship's ring (and,
@@ -1787,14 +1791,14 @@ unit cards and their tips explain them (`traits` in
 fractions): on the unit type a tech is `for`, `shieldDamage` (its guns hit shields that much
 harder), `aura` (added to its fire-control bonus) and `auraRadius` (the reach of its fire-control
 or shield-projector aura), `shieldAura` (added to its shield projector's `regen`), `regrow` (faster
-regrowth) and `regrowDelay` (negative: a shorter wait), `drain` (its drain's dps) and `drainHeal`; on the
+regrowth) and `regrowDelay` (negative: a shorter wait), `drain` (its drain's dps), `drainHeal` and `drainTargets` (added to how many enemies it bites); on the
 station, `fleetBuild` (every ship of the faction built that much faster, -0.1 for 10%, on top of
 each ship's own `build` research), and `regrow`/`regrowDelay` there reach every living hull of the
 side, ships and structures, on top of their own. The AI weighs them like the rest. The research
 that uses them: the Confederacy's Shield breakers (Breaker, `shieldDamage`) and Fire-control net
 (Tyrant, `aura` and `auraRadius`), the Republic's Projector arrays and Wide-field emitters
 (Sentinel, `shieldAura` and `auraRadius`) and Fleet command (Resolute, `aura` and `auraRadius`), the Swarm's Rapid regrowth (Hive Nexus, for the whole Swarm), Swollen wombs (Broodmother, `regrow`),
-Deeper tendrils (Leech, `drain` and `drainHeal`) and Hive surge (Hive Nexus, `fleetBuild`).
+Deeper tendrils (Leech, `drain`, `drainHeal` and one more target) and Hive surge (Hive Nexus, `fleetBuild`).
 
 **Names per faction** (FactionInfo `names` in data/kit.ts): its guns by kind (`weapon`, the Codex's
 weapon lists), turrets by the gun on them (`mount`), its other hardpoints (`part`), its mount looks

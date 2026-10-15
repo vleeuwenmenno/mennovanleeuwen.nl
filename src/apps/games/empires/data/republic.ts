@@ -130,7 +130,7 @@ const STAGES = [
 const SHIPS: UnitType[] = [
   {
     id: 'r-fighter', faction: 'republic', tier: 'fighter', name: 'Lance interceptor', blurb: 'Clone fighters, three to a squadron. Lasers for dogfights, proton torpedoes that slip through capital shields.',
-    sprite: 'republic-fighter', aspect: 0.7, size: 30, hull: 55, shield: 20, regen: 2, speed: 270, turn: 4.2, pop: 1, cost: 260, build: 10, level: 1, squad: 3, sensor: 700,
+    sprite: 'republic-fighter', aspect: 0.7, size: 30, hull: 60, shield: 22, regen: 2, speed: 270, turn: 4.2, pop: 1, cost: 260, build: 10, level: 1, squad: 3, sensor: 700,
     weapons: [laser(7), torpedo(24)], hardpoints: [], engines: [[5, 9.6]],
   },
   {
@@ -144,7 +144,7 @@ const SHIPS: UnitType[] = [
   },
   {
     id: 'r-bomber', faction: 'republic', tier: 'fighter', kind: 'bomber', name: 'Hammer bomber', blurb: 'Armoured bombers, two to a squadron. Heavy proton bombs for capital ships and stations; easy prey for fighters.',
-    sprite: 'republic-bomber', aspect: 0.715, size: 42, hull: 150, shield: 40, regen: 3, speed: 165, turn: 2.6, pop: 2, cost: 450, build: 16, level: 2, squad: 2, sensor: 650,
+    sprite: 'republic-bomber', aspect: 0.715, size: 42, hull: 165, shield: 44, regen: 3, speed: 165, turn: 2.6, pop: 2, cost: 450, build: 16, level: 2, squad: 2, sensor: 650,
     weapons: [laser(5, 220, 0.6), torpedo(75, 240, 6)], hardpoints: [], engines: [[3.3, 9.6], [6.8, 9.6]],
     role: { role: 'Bomber', strong: ['cruisers', 'flagships', 'stations'], weak: ['fighters', 'gunships', 'frigates'] },
   },
@@ -156,7 +156,7 @@ const SHIPS: UnitType[] = [
   },
   {
     id: 'r-picket', faction: 'republic', tier: 'fighter', kind: 'wing', name: 'Aegis picket', blurb: 'The station\'s own defense wing: five light interceptors that guard it for free and come back from its hangar when lost. Fierce at home, feeble far from it.',
-    sprite: 'republic-picket', aspect: 0.767, size: 22, hull: 34, shield: 10, regen: 1, speed: 285, turn: 4.8, pop: 0, cost: 0, build: 0, level: 1, squad: 5, sensor: 650,
+    sprite: 'republic-picket', aspect: 0.767, size: 22, hull: 37, shield: 11, regen: 1, speed: 285, turn: 4.8, pop: 0, cost: 0, build: 0, level: 1, squad: 5, sensor: 650,
     weapons: [laser(4, 220, 0.45)], hardpoints: [], engines: [[5, 8.5]],
     role: { role: 'Home defense', strong: ['fighters', 'bombers near the station'], weak: ['warships', 'being sent away from home'] },
   },
